@@ -573,6 +573,15 @@ void put_psk_id(cont::WireWriter& out, const PreSharedKeyId& id) noexcept
     put_vector(out, id.nonce);
 }
 
+bool take_group_context(cont::WireReader& in, GroupContext& out) noexcept
+{
+    u16 version = 0U;
+    out         = {};
+    return in.take_u16(version) && version == kProtocolVersion && in.take_u16(out.cipher_suite) &&
+           take_vector(in, out.group_id) && in.take_u64(out.epoch) && take_vector(in, out.tree_hash) &&
+           take_vector(in, out.confirmed_transcript_hash) && take_vector(in, out.extensions);
+}
+
 bool take_psk_id(cont::WireReader& in, PreSharedKeyId& out) noexcept
 {
     u8 type = 0U;
@@ -740,6 +749,35 @@ CryptoError EpochSecrets::join(const CipherSuite& suite, cont::ConstSpan<u8> joi
     }
     m_hash_bytes = hash;
     return CryptoError::None;
+}
+
+CryptoError welcome_secret(const CipherSuite& suite, cont::ConstSpan<u8> joiner_secret,
+                           cont::ConstSpan<u8> psk_secret, cont::Span<u8> out) noexcept
+{
+    const usize hash = suite.hash_bytes();
+    if (!fits(suite) || joiner_secret.size() != hash || psk_secret.size() != hash || out.size() != hash)
+    {
+        return refuse(CryptoError::BadLength, out);
+    }
+    Scratch           member;
+    const CryptoError error = hkdf_extract(suite.kdf, joiner_secret, psk_secret, member.span(hash));
+    return passed(error == CryptoError::None ? derive_secret(suite, member.span(hash), "welcome", out) : error, out);
+}
+
+CryptoError welcome_key(const CipherSuite& suite, cont::ConstSpan<u8> welcome_secret, cont::Span<u8> key,
+                        cont::Span<u8> nonce) noexcept
+{
+    if (!fits(suite) || welcome_secret.size() != suite.hash_bytes() || key.size() != aead_key_bytes(suite.aead) ||
+        nonce.size() != kAeadNonceBytes)
+    {
+        return refuse(CryptoError::BadLength, key, nonce);
+    }
+    CryptoError error = expand_with_label(suite, welcome_secret, "key", {}, key);
+    if (error == CryptoError::None)
+    {
+        error = expand_with_label(suite, welcome_secret, "nonce", {}, nonce);
+    }
+    return error == CryptoError::None ? error : refuse(error, key, nonce);
 }
 
 CryptoError export_secret(const CipherSuite& suite, cont::ConstSpan<u8> exporter_secret, cont::StringView label,

@@ -844,6 +844,36 @@ AgreementSizes agreement_sizes(AlgorithmId algorithm) noexcept
     return entry != nullptr ? entry->sizes : AgreementSizes{};
 }
 
+CryptoError check_agreement_public_key(AlgorithmId algorithm, cont::ConstSpan<u8> peer_public) noexcept
+{
+    const AgreementAlgorithm* entry = find_entry(kAgreements, algorithm);
+    if (entry == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (peer_public.size() != entry->sizes.public_key)
+    {
+        return CryptoError::BadLength;
+    }
+    const ErrorScope errors;
+    if (entry->nid == 0)
+    {
+        // A public scalar: X25519 clears its low three bits, so the product is zero exactly for a point whose order
+        // divides 8 (on the curve or its twist).
+        constexpr u8 scalar[32] = {0x41U, 0x67U, 0x25U, 0x19U, 0x41U, 0x67U, 0x25U, 0x19U, 0x41U, 0x67U, 0x25U,
+                                   0x19U, 0x41U, 0x67U, 0x25U, 0x19U, 0x41U, 0x67U, 0x25U, 0x19U, 0x41U, 0x67U,
+                                   0x25U, 0x19U, 0x41U, 0x67U, 0x25U, 0x19U, 0x41U, 0x67U, 0x25U, 0x19U};
+        u8 product[32];
+        return X25519(product, scalar, peer_public.data()) == 1 ? CryptoError::None : CryptoError::WeakSecret;
+    }
+    const bssl::UniquePtr<EC_GROUP> group(EC_GROUP_new_by_curve_name(entry->nid));
+    if (!group)
+    {
+        return CryptoError::ProviderFailure;
+    }
+    return ec_point(group.get(), peer_public, entry->sizes.public_key) ? CryptoError::None : CryptoError::BadKey;
+}
+
 CryptoError AgreementKey::generate(AlgorithmId algorithm) noexcept
 {
     clear();

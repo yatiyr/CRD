@@ -185,6 +185,9 @@ struct GroupContext
 [[nodiscard]] usize group_context_bytes(const GroupContext& context) noexcept;
 // Writes the encoding, whose fields group_context_bytes accepted.
 void put_group_context(cont::WireWriter& out, const GroupContext& context) noexcept;
+// Takes one, its fields views of the input: false for a short input and a version other than mls10. The extensions'
+// syntax and meaning are the group's (mls_group.hpp).
+[[nodiscard]] bool take_group_context(cont::WireReader& in, GroupContext& out) noexcept;
 
 // A pre-shared key's identity (section 8.4): an external key's id, or a resumption key's usage, group and epoch; then
 // the nonce that makes each use distinct.
@@ -257,8 +260,10 @@ public:
     EpochSecrets(EpochSecrets&&)                 = delete;
     EpochSecrets& operator=(EpochSecrets&&)      = delete;
 
-    // Empty before a derivation succeeded.
+    // Empty before a derivation succeeded and after clear().
     [[nodiscard]] cont::ConstSpan<u8> get(EpochSecret which) const noexcept;
+    // Zeroes every secret.
+    void clear() noexcept { wipe(); }
 
     // A member's next epoch: joiner_secret = ExpandWithLabel(KDF.Extract(init_secret, commit_secret), "joiner",
     // group_context, Nh), then as `join`. `init_secret` is the previous epoch's Init (or a new group's random one);
@@ -279,6 +284,15 @@ private:
     u8    m_secrets[kEpochSecretCount][kMaxHashBytes] = {};
     usize m_hash_bytes                                = 0U;
 };
+
+// welcome_secret = DeriveSecret(KDF.Extract(joiner_secret, psk_secret), "welcome") (section 8): what a joiner derives
+// before it can read the GroupContext that `EpochSecrets::join` needs; both inputs and `out` Nh long.
+[[nodiscard]] CryptoError welcome_secret(const CipherSuite& suite, cont::ConstSpan<u8> joiner_secret,
+                                         cont::ConstSpan<u8> psk_secret, cont::Span<u8> out) noexcept;
+// The key and nonce that seal a Welcome's GroupInfo (section 12.4.3.1): ExpandWithLabel(welcome_secret, "key" and
+// "nonce", "", AEAD.Nk and AEAD.Nn); `key` is Nk and `nonce` Nn long.
+[[nodiscard]] CryptoError welcome_key(const CipherSuite& suite, cont::ConstSpan<u8> welcome_secret,
+                                      cont::Span<u8> key, cont::Span<u8> nonce) noexcept;
 
 // MLS-Exporter(label, context, out.size()) = ExpandWithLabel(DeriveSecret(exporter_secret, label), "exported",
 // Hash(context), length) (section 8.5).

@@ -6,7 +6,7 @@
 // of order and sent) in the suites of the profile; then the receive window against a restatement of section 9 (late,
 // replayed, dropped and too-distant generations, the deletion schedule, a window of none) and every refusal.
 
-#include "wycheproof.hpp"
+#include "mls_test_support.hpp"
 
 #include <crd/crypto/mls.hpp>
 
@@ -25,6 +25,7 @@ using crd::usize;
 using crd::containers::ConstSpan;
 using crd::containers::Span;
 using crd::containers::StringView;
+using crd::containers::WireReader;
 using crd::containers::WireWriter;
 using namespace crd::crypto;
 using namespace crd::crypto::test;
@@ -33,23 +34,6 @@ namespace mls  = crd::crypto::mls;
 namespace tree = crd::crypto::mls::tree;
 
 using mls::RatchetKind;
-
-JsonFile mls_vectors(const char* name)
-{
-    return JsonFile(vector_path(CRD_MLS_VECTORS_DIR, name));
-}
-
-const mls::CipherSuite& suite_of(u16 id)
-{
-    const mls::CipherSuite* suite = mls::cipher_suite(id);
-    REQUIRE(suite != nullptr);
-    return *suite;
-}
-
-Span<u8> span_of(Bytes& bytes)
-{
-    return Span<u8>(bytes.data(), bytes.size());
-}
 
 ConstSpan<u8> bytes_of(StringView text)
 {
@@ -467,6 +451,17 @@ TEST_CASE("MLS: the key schedule against the key-schedule vectors", "[crypto][ne
             mls::put_group_context(writer, context);
             CHECK(writer.written() == bytes);
             CHECK(equal(encoded, expected));
+            // The decoder reads it back field for field and nothing more.
+            WireReader        reader(encoded);
+            mls::GroupContext decoded;
+            REQUIRE(mls::take_group_context(reader, decoded));
+            CHECK(reader.done());
+            CHECK(decoded.cipher_suite == suite->id);
+            CHECK(decoded.epoch == e);
+            CHECK(equal(decoded.group_id, group_id));
+            CHECK(equal(decoded.tree_hash, tree_hash));
+            CHECK(equal(decoded.confirmed_transcript_hash, transcript));
+            CHECK(decoded.extensions.empty());
 
             // The first epoch from the initial init secret, each later one from this object's own init secret.
             const Bytes commit = vectors.hex(epoch, "commit_secret");
@@ -496,6 +491,23 @@ TEST_CASE("MLS: the key schedule against the key-schedule vectors", "[crypto][ne
                 INFO(secret.name);
                 CHECK(equal(member.get(secret.which), vectors.hex(epoch, secret.name)));
             }
+
+            // A joiner's welcome secret, before it can read the GroupContext, is the epoch's; its key and nonce are
+            // the ones ExpandWithLabel restated gives.
+            Bytes welcome = filled(suite->hash_bytes(), 0U);
+            REQUIRE(mls::welcome_secret(*suite, member.get(mls::EpochSecret::Joiner), psk, span_of(welcome)) ==
+                    CryptoError::None);
+            CHECK(equal(welcome, vectors.hex(epoch, "welcome_secret")));
+            Bytes welcome_key   = filled(aead_key_bytes(suite->aead), 0U);
+            Bytes welcome_nonce = filled(kAeadNonceBytes, 0U);
+            Bytes restated      = filled(aead_key_bytes(suite->aead), 0U);
+            REQUIRE(mls::welcome_key(*suite, welcome, span_of(welcome_key), span_of(welcome_nonce)) ==
+                    CryptoError::None);
+            REQUIRE(mls::expand_with_label(*suite, welcome, "key", {}, span_of(restated)) == CryptoError::None);
+            CHECK(equal(welcome_key, restated));
+            restated = filled(kAeadNonceBytes, 0U);
+            REQUIRE(mls::expand_with_label(*suite, welcome, "nonce", {}, span_of(restated)) == CryptoError::None);
+            CHECK(equal(welcome_nonce, restated));
 
             // A joiner from the Welcome's joiner secret reaches the same epoch.
             mls::EpochSecrets joiner;
@@ -660,6 +672,28 @@ TEST_CASE("MLS: a resumption key's PSKLabel, and the key schedule's refusals", "
     CHECK(epoch.get(mls::EpochSecret::Joiner).empty());
     CHECK(epoch.join(suite, secret, ConstSpan<u8>(secret.data(), 31U), context) == CryptoError::BadLength);
     CHECK(epoch.join(suite, ConstSpan<u8>(secret.data(), 31U), secret, context) == CryptoError::BadLength);
+    REQUIRE(epoch.advance(suite, secret, secret, secret, context) == CryptoError::None);
+    epoch.clear();
+    CHECK(epoch.get(mls::EpochSecret::Init).empty());
+    // The welcome secret's and key's lengths; a refusal zeroes the outputs.
+    Bytes welcome = filled(32U, 0x55U);
+    CHECK(mls::welcome_secret(suite, ConstSpan<u8>(secret.data(), 31U), secret, span_of(welcome)) ==
+          CryptoError::BadLength);
+    CHECK(all_zero(welcome));
+    CHECK(mls::welcome_secret(suite, secret, ConstSpan<u8>(secret.data(), 31U), span_of(welcome)) ==
+          CryptoError::BadLength);
+    CHECK(mls::welcome_secret(suite, secret, secret, Span<u8>(welcome.data(), 31U)) == CryptoError::BadLength);
+    Bytes aead_key   = filled(16U, 0x55U);
+    Bytes aead_nonce = filled(kAeadNonceBytes, 0x55U);
+    CHECK(mls::welcome_key(suite, secret, Span<u8>(aead_key.data(), 15U), span_of(aead_nonce)) ==
+          CryptoError::BadLength);
+    CHECK(all_zero(aead_nonce));
+    aead_nonce = filled(kAeadNonceBytes, 0x55U);
+    CHECK(mls::welcome_key(suite, secret, span_of(aead_key), Span<u8>(aead_nonce.data(), 11U)) ==
+          CryptoError::BadLength);
+    CHECK(all_zero(aead_key));
+    CHECK(mls::welcome_key(suite, ConstSpan<u8>(secret.data(), 31U), span_of(aead_key), span_of(aead_nonce)) ==
+          CryptoError::BadLength);
     // Every input is in the derivation: another commit secret, PSK secret or context gives another epoch.
     mls::EpochSecrets other;
     REQUIRE(epoch.advance(suite, secret, secret, secret, context) == CryptoError::None);

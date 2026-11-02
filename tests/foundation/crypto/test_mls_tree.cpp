@@ -6,7 +6,7 @@
 // Then groups that add, update, remove and commit at random, every member's tree, keys and commit secret compared at
 // every epoch against TreeKEM's invariant, and every refusal.
 
-#include "wycheproof.hpp"
+#include "mls_test_support.hpp"
 
 #include <crd/crypto/mls_tree.hpp>
 
@@ -30,33 +30,6 @@ using namespace crd::crypto;
 using namespace crd::crypto::test;
 namespace json = crd::assetio::json;
 namespace mls  = crd::crypto::mls;
-
-JsonFile mls_vectors(const char* name)
-{
-    return JsonFile(vector_path(CRD_MLS_VECTORS_DIR, name));
-}
-
-Span<u8> span_of(Bytes& bytes)
-{
-    return Span<u8>(bytes.data(), bytes.size());
-}
-
-ConstSpan<u8> view(const Bytes& bytes)
-{
-    return ConstSpan<u8>(bytes.data(), bytes.size());
-}
-
-// The suite of vector `v`, or null (with the check that it is one of the three outside the profile).
-const mls::CipherSuite* profile_suite(const JsonFile& vectors, u32 v)
-{
-    const u16               id    = static_cast<u16>(vectors.number(v, "cipher_suite"));
-    const mls::CipherSuite* suite = mls::cipher_suite(id);
-    if (suite == nullptr)
-    {
-        CHECK((id >= 4U && id <= 6U)); // X448, Ed448 and P-521: outside the profile
-    }
-    return suite;
-}
 
 Bytes encoded(const mls::RatchetTree& tree)
 {
@@ -196,94 +169,6 @@ Bytes unmerged_list(std::initializer_list<u32> leaves)
 }
 
 // ---- A member of a model group ----
-
-// A deterministic generator for the model groups' choices.
-class Choices
-{
-public:
-    explicit Choices(u64 seed) : m_state(seed) {}
-    u32 below(u32 bound)
-    {
-        m_state ^= m_state << 13U;
-        m_state ^= m_state >> 7U;
-        m_state ^= m_state << 17U;
-        return static_cast<u32>(m_state % bound);
-    }
-
-private:
-    u64 m_state;
-};
-
-// A member's long-term signer and its current leaf, whose fields view the member's own bytes.
-struct Identity
-{
-    SigningKey    signer;
-    Bytes         signature_key;
-    Bytes         hpke_private;
-    Bytes         hpke_public;
-    Bytes         credential;
-    Bytes         versions;
-    Bytes         suites;
-    Bytes         credentials;
-    Bytes         signature;
-    mls::LeafNode leaf;
-};
-
-Bytes random_of(usize size)
-{
-    Bytes out = filled(size, 0U);
-    REQUIRE(random_bytes(span_of(out)) == CryptoError::None);
-    return out;
-}
-
-// A fresh HPKE key pair for the identity (a random scalar, drawn again in the rare case it is out of range).
-void fresh_hpke(const mls::CipherSuite& suite, Identity& id)
-{
-    HpkeKey key;
-    do
-    {
-        id.hpke_private = random_of(hpke_sizes(suite.kem).private_key);
-    } while (key.from_private(suite.kem, view(id.hpke_private)) != CryptoError::None);
-    id.hpke_public = filled(hpke_sizes(suite.kem).public_key, 0U);
-    REQUIRE(key.public_key(span_of(id.hpke_public)) == CryptoError::None);
-}
-
-// The identity's leaf of `source`, signed (with the group and index for an update leaf).
-void sign_leaf(const mls::CipherSuite& suite, Identity& id, mls::LeafNodeSource source, ConstSpan<u8> group_id,
-               u32 index)
-{
-    id.leaf                        = {};
-    id.leaf.encryption_key         = view(id.hpke_public);
-    id.leaf.signature_key          = view(id.signature_key);
-    id.leaf.credential.type        = static_cast<u16>(mls::CredentialType::Basic);
-    id.leaf.credential.content     = view(id.credential);
-    id.leaf.capabilities.versions  = view(id.versions);
-    id.leaf.capabilities.cipher_suites = view(id.suites);
-    id.leaf.capabilities.credentials   = view(id.credentials);
-    id.leaf.source                 = source;
-    id.leaf.not_before             = 0U;
-    id.leaf.not_after              = ~u64{0};
-    id.signature                   = filled(signature_sizes(suite.signature).signature, 0U);
-    usize written                  = 0U;
-    REQUIRE(mls::sign_leaf_node(suite, id.signer, id.leaf, group_id, index, span_of(id.signature), written) ==
-            CryptoError::None);
-    id.signature.resize(written);
-    id.leaf.signature = view(id.signature);
-}
-
-void make_identity(const mls::CipherSuite& suite, Identity& id, u32 name)
-{
-    REQUIRE(id.signer.generate(suite.signature) == CryptoError::None);
-    id.signature_key = filled(signature_sizes(suite.signature).public_key, 0U);
-    REQUIRE(id.signer.public_key(span_of(id.signature_key)) == CryptoError::None);
-    id.credential  = filled(4U, 0U);
-    id.credential[3] = static_cast<u8>(name);
-    id.versions    = Bytes{0x00U, 0x01U};
-    id.suites      = Bytes{static_cast<u8>(suite.id >> 8U), static_cast<u8>(suite.id)};
-    id.credentials = Bytes{0x00U, 0x01U};
-    fresh_hpke(suite, id);
-    sign_leaf(suite, id, mls::LeafNodeSource::KeyPackage, {}, 0U);
-}
 
 struct Seat
 {

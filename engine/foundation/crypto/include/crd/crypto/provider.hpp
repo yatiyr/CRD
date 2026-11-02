@@ -259,6 +259,12 @@ struct AgreementSizes
 // All zero for anything but an implemented key agreement.
 [[nodiscard]] AgreementSizes agreement_sizes(AlgorithmId algorithm) noexcept;
 
+// Whether every agreement with `peer_public` can succeed, checked once when a long-lived key enters shared state (an
+// MLS leaf's or a node's HPKE key, which every later commit encrypts to): Unsupported for another algorithm,
+// BadLength for another length, BadKey for an EC point that is not uncompressed and on the curve, WeakSecret for an
+// X25519 key of small order (any clamped scalar times it is zero, so every agreement with it is all zero).
+[[nodiscard]] CryptoError check_agreement_public_key(AlgorithmId algorithm, cont::ConstSpan<u8> peer_public) noexcept;
+
 class AgreementKey
 {
 public:

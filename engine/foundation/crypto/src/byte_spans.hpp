@@ -1,7 +1,8 @@
 #pragma once
 
-// crd-crypto -- byte-span helpers the units of src/ share: the overlap test every operation with an output runs, and
-// the scratch buffer that lays out a labelled input (HPKE's and MLS's labels before a secret or a message). Private to
+// crd-crypto -- byte-span helpers the units of src/ share: the overlap test every operation with an output runs, byte
+// equality and order for public values (keys, identifiers; secrets compare with constant_time_equal), and the scratch
+// buffer that lays out a labelled input (HPKE's and MLS's labels before a secret or a message). Private to
 // engine/foundation/crypto/src; no provider header.
 
 #include <crd/containers/array.hpp>
@@ -9,6 +10,7 @@
 #include <crd/core/types.hpp>
 #include <crd/crypto/provider.hpp>
 
+#include <algorithm>
 #include <cstdint>
 
 namespace crd::crypto::detail
@@ -23,6 +25,26 @@ namespace crd::crypto::detail
     const auto a_begin = reinterpret_cast<std::uintptr_t>(a.data());
     const auto b_begin = reinterpret_cast<std::uintptr_t>(b.data());
     return a_begin < b_begin + b.size() && b_begin < a_begin + a.size();
+}
+
+// Whether two public byte strings are equal, and their lexicographic order.
+[[nodiscard]] inline bool same_bytes(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
+{
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin());
+}
+
+[[nodiscard]] inline bool bytes_less(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
+{
+    return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end());
+}
+
+// Whether two of `values` are the same bytes (sorted in place).
+[[nodiscard]] inline bool repeats(cont::Array<cont::ConstSpan<u8>>& values) noexcept
+{
+    cont::ConstSpan<u8>* begin = values.data();
+    cont::ConstSpan<u8>* end   = values.data() + values.size();
+    std::sort(begin, end, bytes_less);
+    return std::adjacent_find(begin, end, same_bytes) != end;
 }
 
 // Zeroes the outputs of a refused operation and returns its error: no partial or unauthenticated byte leaves a call.

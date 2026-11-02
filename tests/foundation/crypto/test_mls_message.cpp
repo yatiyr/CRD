@@ -7,7 +7,7 @@
 // Then PrivateMessage against a restatement of section 6.3 (both directions, the padding rule, hostile and replayed
 // messages), the framing rules of section 6, Padme, and every refusal.
 
-#include "wycheproof.hpp"
+#include "mls_test_support.hpp"
 
 #include <crd/crypto/mls_message.hpp>
 
@@ -36,16 +36,6 @@ using mls::ContentType;
 using mls::SenderType;
 using mls::WireFormat;
 
-JsonFile mls_vectors(const char* name)
-{
-    return JsonFile(vector_path(CRD_MLS_VECTORS_DIR, name));
-}
-
-Span<u8> span_of(Bytes& bytes)
-{
-    return Span<u8>(bytes.data(), bytes.size());
-}
-
 Bytes copy_of(ConstSpan<u8> bytes)
 {
     return Bytes(bytes.begin(), bytes.end());
@@ -59,18 +49,6 @@ Bytes joined(ConstSpan<u8> a, ConstSpan<u8> b)
         out.push_back(byte);
     }
     return out;
-}
-
-// The suite of vector `v`, or null (with the check that it is one of the three outside the profile).
-const mls::CipherSuite* profile_suite(const JsonFile& vectors, u32 v)
-{
-    const u16               id    = static_cast<u16>(vectors.number(v, "cipher_suite"));
-    const mls::CipherSuite* suite = mls::cipher_suite(id);
-    if (suite == nullptr)
-    {
-        CHECK((id >= 4U && id <= 6U)); // X448, Ed448 and P-521: outside the profile
-    }
-    return suite;
 }
 
 // A decoded message written back.

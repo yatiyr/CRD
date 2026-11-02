@@ -5,7 +5,7 @@
 // the key-schedule vectors; then direct paths, copaths and common ancestors against their definitions, malformed
 // headers and presence octets, and every refusal of the labelled operations.
 
-#include "wycheproof.hpp"
+#include "mls_test_support.hpp"
 
 #include <crd/crypto/mls.hpp>
 
@@ -32,11 +32,6 @@ namespace json = crd::assetio::json;
 namespace mls  = crd::crypto::mls;
 namespace tree = crd::crypto::mls::tree;
 
-JsonFile mls_vectors(const char* name)
-{
-    return JsonFile(vector_path(CRD_MLS_VECTORS_DIR, name));
-}
-
 std::optional<u32> optional_at(const JsonFile& file, u32 array, u32 index)
 {
     const u32 node = json::at(file.doc(), array, index);
@@ -46,13 +41,6 @@ std::optional<u32> optional_at(const JsonFile& file, u32 array, u32 index)
         return std::nullopt;
     }
     return static_cast<u32>(file.number(node));
-}
-
-const mls::CipherSuite& suite_of(u16 id)
-{
-    const mls::CipherSuite* suite = mls::cipher_suite(id);
-    REQUIRE(suite != nullptr);
-    return *suite;
 }
 
 // ---- Cipher suites ----

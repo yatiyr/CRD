@@ -453,6 +453,10 @@ TEST_CASE("Provider: X25519 against Wycheproof", "[crypto][net-2][wycheproof]")
             u8 secret[32];
             std::memset(secret, 0xAA, sizeof(secret));
             const CryptoError derived = key.derive(v.hex(test, "public"), secret);
+            // The check of a key alone agrees with an agreement's verdict: a key of small order is refused
+            // whatever the private key.
+            CHECK(check_agreement_public_key(AlgorithmId::X25519, v.hex(test, "public")) ==
+                  (derived == CryptoError::WeakSecret ? CryptoError::WeakSecret : CryptoError::None));
             if (v.flagged(test, "ZeroSharedSecret"))
             {
                 // Acceptable to Wycheproof, refused by Cerid: a contributory secret is required (RFC 8446 7.4.2).
@@ -513,6 +517,8 @@ TEST_CASE("Provider: ECDH over P-256 and P-384 against Wycheproof", "[crypto][ne
                 std::memset(secret, 0xAA, sizeof(secret));
                 const auto        out     = Span<u8>(secret, sizes.secret);
                 const CryptoError derived = key.derive(v.hex(test, "public"), out);
+                // The check of a key alone agrees with an agreement's verdict.
+                CHECK(check_agreement_public_key(alg, v.hex(test, "public")) == derived);
                 if (result == StringView("valid"))
                 {
                     REQUIRE(derived == CryptoError::None);
@@ -557,6 +563,9 @@ TEST_CASE("Provider: agreement keys generate, agree, move and refuse", "[crypto]
         CHECK(equal(sa, sb));
         CHECK_FALSE(all_zero(sa));
 
+        CHECK(check_agreement_public_key(alg, pa) == CryptoError::None);
+        CHECK(check_agreement_public_key(alg, Span<u8>(pub_a, sizes.public_key - 1U)) == CryptoError::BadLength);
+        CHECK(check_agreement_public_key(AlgorithmId::Ed25519, pa) == CryptoError::Unsupported);
         CHECK(alice.public_key(Span<u8>(pub_a, sizes.public_key - 1U)) == CryptoError::BadLength);
         CHECK(alice.derive(ConstSpan<u8>(pub_b, sizes.public_key - 1U), sa) == CryptoError::BadLength);
         CHECK(alice.derive(pb, Span<u8>(s_a, sizes.secret - 1U)) == CryptoError::BadLength);

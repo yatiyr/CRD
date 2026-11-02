@@ -1,0 +1,1257 @@
+// crd-crypto -- an MLS group, RFC 9420: extensions, leaf node and key package validation against a group, GroupInfo
+// and Welcome, a new group and joining one (NET.2; contract: docs/design/network-foundation.md#mls).
+#include <crd/crypto/mls_group.hpp>
+
+#include "byte_spans.hpp"
+#include "mls_detail.hpp"
+
+namespace crd::crypto::mls
+{
+namespace
+{
+using detail::LabelBuffer;
+using detail::refuse;
+using detail::repeats;
+using detail::same_bytes;
+
+constexpr cont::StringView kKeyPackageLabel = "KeyPackageTBS";
+constexpr cont::StringView kGroupInfoLabel  = "GroupInfoTBS";
+constexpr cont::StringView kWelcomeLabel    = "Welcome";
+constexpr cont::StringView kKeyPackageRef   = "MLS 1.0 KeyPackage Reference";
+
+// Lists this long are checked for repeats pair by pair; longer ones through a bitmap of the 16-bit codepoint space.
+constexpr usize kPairwiseEntries = 32U;
+
+u16 codepoint(cont::ConstSpan<u8> list, usize i) noexcept
+{
+    return static_cast<u16>(static_cast<u16>(list[2U * i] << 8U) | list[2U * i + 1U]);
+}
+
+// Visits each extension of an Extension list's body as visit(type, data), stopping at the first false; false for a
+// body that is not a sequence of extensions.
+template <typename Visit>
+bool each_extension(cont::ConstSpan<u8> body, Visit visit) noexcept
+{
+    cont::WireReader in(body);
+    while (!in.done())
+    {
+        u16                 type = 0U;
+        cont::ConstSpan<u8> data;
+        if (!in.take_u16(type) || !take_vector(in, data) || !visit(type, data))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The bits of the 16-bit codepoint space (8 KiB).
+class CodepointSet
+{
+public:
+    // Whether `value` was already in the set; adds it.
+    bool insert(u16 value) noexcept
+    {
+        u64&      word = m_words[value / 64U];
+        const u64 bit  = u64{1} << (value % 64U);
+        const bool had = (word & bit) != 0U;
+        word |= bit;
+        return had;
+    }
+    [[nodiscard]] bool has(u16 value) const noexcept
+    {
+        return (m_words[value / 64U] & (u64{1} << (value % 64U))) != 0U;
+    }
+    void erase(u16 value) noexcept { m_words[value / 64U] &= ~(u64{1} << (value % 64U)); }
+
+private:
+    u64 m_words[1024] = {};
+};
+
+// The sources section 7.3 admits for a leaf where it appears.
+bool source_admitted(LeafRole role, LeafNodeSource source) noexcept
+{
+    switch (role)
+    {
+    case LeafRole::KeyPackage:
+        return source == LeafNodeSource::KeyPackage;
+    case LeafRole::Update:
+        return source == LeafNodeSource::Update;
+    case LeafRole::Commit:
+        return source == LeafNodeSource::Commit;
+    case LeafRole::Tree:
+        return true;
+    }
+    return false;
+}
+
+// Whether `test` holds for every codepoint of a list's body.
+template <typename Test>
+bool every_codepoint(cont::ConstSpan<u8> list, Test test) noexcept
+{
+    for (usize i = 0U; i < list.size() / 2U; ++i)
+    {
+        if (!test(codepoint(list, i)))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Section 11.1: the capabilities support every extension, proposal and credential type the group requires.
+CryptoError check_required(cont::ConstSpan<u8> extensions, const Capabilities& capabilities) noexcept
+{
+    cont::ConstSpan<u8> data;
+    if (!find_extension(extensions, static_cast<u16>(ExtensionType::RequiredCapabilities), data))
+    {
+        return CryptoError::None;
+    }
+    RequiredCapabilities required;
+    if (!take_required_capabilities(data, required))
+    {
+        return CryptoError::Malformed;
+    }
+    const bool supported =
+        every_codepoint(required.extensions, [&](u16 type) { return supports_extension(capabilities, type); }) &&
+        every_codepoint(required.proposals, [&](u16 type) { return supports_proposal(capabilities, type); }) &&
+        every_codepoint(required.credentials, [&](u16 type) { return lists(capabilities.credentials, type); });
+    return supported ? CryptoError::None : CryptoError::Unsupported;
+}
+
+// A key no agreement in the suite's KEM can use is BadKey, whatever the check's reason.
+CryptoError check_node_key(const CipherSuite& suite, cont::ConstSpan<u8> key) noexcept
+{
+    const CryptoError error = check_agreement_public_key(suite.kem, key);
+    return error == CryptoError::None || error == CryptoError::ProviderFailure ? error : CryptoError::BadKey;
+}
+
+// KeyPackageTBS: the package's fields before its signature.
+usize key_package_tbs_bytes(const KeyPackage& package) noexcept
+{
+    return Size()
+        .fixed(4U)
+        .vector(package.init_key.size())
+        .field(leaf_node_bytes(package.leaf_node))
+        .vector(package.extensions.size())
+        .bytes();
+}
+
+void put_key_package_tbs(cont::WireWriter& out, const KeyPackage& package) noexcept
+{
+    out.put_u16(package.version);
+    out.put_u16(package.cipher_suite);
+    put_vector(out, package.init_key);
+    put_leaf_node(out, package.leaf_node);
+    put_vector(out, package.extensions);
+}
+
+// GroupInfoTBS: the GroupInfo's fields before its signature.
+usize group_info_tbs_bytes(const GroupInfo& info) noexcept
+{
+    return Size()
+        .field(group_context_bytes(info.context))
+        .vector(info.extensions.size())
+        .vector(info.confirmation_tag.size())
+        .fixed(4U)
+        .bytes();
+}
+
+void put_group_info_tbs(cont::WireWriter& out, const GroupInfo& info) noexcept
+{
+    put_group_context(out, info.context);
+    put_vector(out, info.extensions);
+    put_vector(out, info.confirmation_tag);
+    out.put_u32(info.signer);
+}
+
+// The public key of `private_key` in the suite's KEM is `public_key`.
+CryptoError check_private_key(const CipherSuite& suite, cont::ConstSpan<u8> private_key,
+                              cont::ConstSpan<u8> public_key) noexcept
+{
+    HpkeKey key;
+    u8      derived[kMaxNodeKeyBytes];
+    const usize bytes = hpke_sizes(suite.kem).public_key;
+    if (bytes == 0U || bytes > sizeof(derived) || key.from_private(suite.kem, private_key) != CryptoError::None ||
+        key.public_key(cont::Span<u8>(derived, bytes)) != CryptoError::None)
+    {
+        return CryptoError::BadKey;
+    }
+    return same_bytes(cont::ConstSpan<u8>(derived, bytes), public_key) ? CryptoError::None : CryptoError::BadKey;
+}
+
+// Reserves `bytes` bytes of the writer's output, zeroed, and returns them: room for a value computed once the
+// structure around it is laid out.
+cont::Span<u8> reserve(cont::WireWriter& writer, cont::Span<u8> buffer, usize bytes) noexcept
+{
+    const usize at = writer.written();
+    for (usize i = 0U; i < bytes; ++i)
+    {
+        writer.put_u8(0U);
+    }
+    return buffer.subspan(at, bytes);
+}
+
+cont::ConstSpan<u8> view(const cont::Array<u8>& bytes) noexcept
+{
+    return cont::ConstSpan<u8>(bytes.data(), bytes.size());
+}
+
+CryptoError copy_into(cont::ConstSpan<u8> bytes, cont::Array<u8>& out) noexcept
+{
+    out.clear();
+    if (!out.try_reserve(bytes.size()))
+    {
+        return CryptoError::ProviderFailure;
+    }
+    for (const u8 byte : bytes)
+    {
+        out.push_back(byte);
+    }
+    return CryptoError::None;
+}
+
+// Resizes a buffer that may hold secrets, zeroing what it held first.
+bool fresh_buffer(cont::Array<u8>& out, usize bytes) noexcept
+{
+    secure_zero(cont::Span<u8>(out.data(), out.size()));
+    out.clear();
+    if (!out.try_reserve(bytes))
+    {
+        return false;
+    }
+    out.resize(bytes);
+    return true;
+}
+} // namespace
+
+// ---- Extensions ----
+
+bool default_extension(u16 type) noexcept
+{
+    return type >= static_cast<u16>(ExtensionType::ApplicationId) &&
+           type <= static_cast<u16>(ExtensionType::ExternalSenders);
+}
+
+bool default_proposal(u16 type) noexcept
+{
+    return type >= static_cast<u16>(ProposalType::Add) &&
+           type <= static_cast<u16>(ProposalType::GroupContextExtensions);
+}
+
+bool lists(cont::ConstSpan<u8> codepoints, u16 value) noexcept
+{
+    return !every_codepoint(codepoints, [value](u16 listed) { return listed != value; });
+}
+
+bool supports_extension(const Capabilities& capabilities, u16 type) noexcept
+{
+    return default_extension(type) || lists(capabilities.extensions, type);
+}
+
+bool supports_proposal(const Capabilities& capabilities, u16 type) noexcept
+{
+    return default_proposal(type) || lists(capabilities.proposals, type);
+}
+
+bool extensions_distinct(cont::ConstSpan<u8> body) noexcept
+{
+    usize count = 0U;
+    if (!each_extension(body,
+                        [&count](u16, cont::ConstSpan<u8>)
+                        {
+                            ++count;
+                            return true;
+                        }))
+    {
+        return false;
+    }
+    if (count <= kPairwiseEntries)
+    {
+        u16   types[kPairwiseEntries] = {};
+        usize seen                    = 0U;
+        return each_extension(body,
+                              [&](u16 type, cont::ConstSpan<u8>)
+                              {
+                                  for (usize i = 0U; i < seen; ++i)
+                                  {
+                                      if (types[i] == type)
+                                      {
+                                          return false;
+                                      }
+                                  }
+                                  types[seen++] = type;
+                                  return true;
+                              });
+    }
+    CodepointSet types;
+    return each_extension(body, [&types](u16 type, cont::ConstSpan<u8>) { return !types.insert(type); });
+}
+
+bool find_extension(cont::ConstSpan<u8> body, u16 type, cont::ConstSpan<u8>& data) noexcept
+{
+    bool found = false;
+    data       = {};
+    each_extension(body,
+                   [&](u16 at, cont::ConstSpan<u8> bytes)
+                   {
+                       found = at == type;
+                       if (found)
+                       {
+                           data = bytes;
+                       }
+                       return !found;
+                   });
+    return found;
+}
+
+bool take_required_capabilities(cont::ConstSpan<u8> data, RequiredCapabilities& out) noexcept
+{
+    cont::WireReader in(data);
+    out = {};
+    return take_u16_list(in, out.extensions) && take_u16_list(in, out.proposals) &&
+           take_u16_list(in, out.credentials) && in.done();
+}
+
+usize required_capabilities_bytes(const RequiredCapabilities& required) noexcept
+{
+    const bool whole = required.extensions.size() % 2U == 0U && required.proposals.size() % 2U == 0U &&
+                       required.credentials.size() % 2U == 0U;
+    return whole ? Size()
+                       .vector(required.extensions.size())
+                       .vector(required.proposals.size())
+                       .vector(required.credentials.size())
+                       .bytes()
+                 : 0U;
+}
+
+void put_required_capabilities(cont::WireWriter& out, const RequiredCapabilities& required) noexcept
+{
+    put_vector(out, required.extensions);
+    put_vector(out, required.proposals);
+    put_vector(out, required.credentials);
+}
+
+bool take_external_sender(cont::WireReader& in, ExternalSender& out) noexcept
+{
+    out = {};
+    return take_vector(in, out.signature_key) && take_credential(in, out.credential);
+}
+
+usize external_sender_bytes(const ExternalSender& sender) noexcept
+{
+    return Size().vector(sender.signature_key.size()).field(credential_bytes(sender.credential)).bytes();
+}
+
+void put_external_sender(cont::WireWriter& out, const ExternalSender& sender) noexcept
+{
+    put_vector(out, sender.signature_key);
+    put_credential(out, sender.credential);
+}
+
+bool take_external_senders(cont::ConstSpan<u8> data, cont::ConstSpan<u8>& body) noexcept
+{
+    cont::WireReader in(data);
+    return take_list<ExternalSender>(in, body, take_external_sender) && in.done();
+}
+
+// ---- Leaf nodes and key packages against a group ----
+
+CryptoError check_leaf(const GroupContext& context, const LeafNode& leaf, LeafRole role, const LeafPolicy& policy,
+                       const AuthenticationService& authentication) noexcept
+{
+    const CipherSuite* suite = cipher_suite(context.cipher_suite);
+    if (suite == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (!source_admitted(role, leaf.source) || !extensions_distinct(leaf.extensions))
+    {
+        return CryptoError::Malformed;
+    }
+    const CryptoError key = check_node_key(*suite, leaf.encryption_key);
+    if (key != CryptoError::None)
+    {
+        return key;
+    }
+    if (!authentication.validate(leaf.credential, leaf.signature_key))
+    {
+        return CryptoError::Forged;
+    }
+    const Capabilities& capabilities = leaf.capabilities;
+    const auto          supported    = [&capabilities](u16 type, cont::ConstSpan<u8>)
+    { return supports_extension(capabilities, type); };
+    if (!lists(capabilities.credentials, leaf.credential.type) || !each_extension(leaf.extensions, supported) ||
+        !each_extension(context.extensions, supported))
+    {
+        return CryptoError::Unsupported;
+    }
+    const CryptoError required = check_required(context.extensions, capabilities);
+    if (required != CryptoError::None)
+    {
+        return required;
+    }
+    if (leaf.source == LeafNodeSource::KeyPackage && (role != LeafRole::Tree || policy.tree_lifetimes))
+    {
+        const bool within = leaf.not_before <= leaf.not_after &&
+                            leaf.not_after - leaf.not_before <= policy.max_lifetime && leaf.not_before <= policy.now &&
+                            policy.now <= leaf.not_after;
+        if (!within)
+        {
+            return CryptoError::Expired;
+        }
+    }
+    return CryptoError::None;
+}
+
+CryptoError check_credential_types(const RatchetTree& tree) noexcept
+{
+    // The types in use, each once; then each member's listed types marked in a second set and checked against them.
+    cont::Array<CodepointSet> sets;
+    cont::Array<u16>          in_use;
+    if (!sets.try_reserve(2U))
+    {
+        return CryptoError::ProviderFailure;
+    }
+    sets.resize(2U);
+    CodepointSet& used   = sets[0];
+    CodepointSet& listed = sets[1];
+    for (u32 leaf = 0U; leaf < tree.leaves(); ++leaf)
+    {
+        LeafNode node{};
+        if (tree.leaf_node(leaf, node) && !used.insert(node.credential.type))
+        {
+            if (!in_use.try_reserve(in_use.size() + 1U))
+            {
+                return CryptoError::ProviderFailure;
+            }
+            in_use.push_back(node.credential.type);
+        }
+    }
+    for (u32 leaf = 0U; leaf < tree.leaves(); ++leaf)
+    {
+        LeafNode node{};
+        if (!tree.leaf_node(leaf, node))
+        {
+            continue;
+        }
+        const cont::ConstSpan<u8> credentials = node.capabilities.credentials;
+        every_codepoint(credentials,
+                        [&listed](u16 type)
+                        {
+                            listed.insert(type);
+                            return true;
+                        });
+        bool all = true;
+        for (const u16 type : in_use)
+        {
+            all = all && listed.has(type);
+        }
+        every_codepoint(credentials,
+                        [&listed](u16 type)
+                        {
+                            listed.erase(type);
+                            return true;
+                        });
+        if (!all)
+        {
+            return CryptoError::Unsupported;
+        }
+    }
+    return CryptoError::None;
+}
+
+CryptoError sign_key_package(const CipherSuite& suite, const Signer& signer, const KeyPackage& package,
+                             cont::Span<u8> signature, usize& written) noexcept
+{
+    written           = 0U;
+    const usize bytes = key_package_tbs_bytes(package);
+    if (bytes == 0U)
+    {
+        return refuse(CryptoError::BadLength, signature);
+    }
+    LabelBuffer      tbs(bytes);
+    cont::WireWriter writer(tbs.span());
+    put_key_package_tbs(writer, package);
+    return sign_with_label(suite, signer, kKeyPackageLabel, tbs.span(), signature, written);
+}
+
+CryptoError check_key_package(const GroupContext& context, const KeyPackage& package,
+                              const SignatureVerifier& verifier, const AuthenticationService& authentication,
+                              const LeafPolicy& policy) noexcept
+{
+    const CipherSuite* suite = cipher_suite(package.cipher_suite);
+    if (suite == nullptr || package.version != kProtocolVersion || package.cipher_suite != context.cipher_suite)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (!extensions_distinct(package.extensions))
+    {
+        return CryptoError::Malformed;
+    }
+    const CryptoError leaf = check_leaf(context, package.leaf_node, LeafRole::KeyPackage, policy, authentication);
+    if (leaf != CryptoError::None)
+    {
+        return leaf;
+    }
+    const usize bytes = key_package_tbs_bytes(package);
+    if (bytes == 0U || verify_leaf_node(*suite, verifier, package.leaf_node, {}, 0U) != Verification::Valid)
+    {
+        return CryptoError::Forged;
+    }
+    LabelBuffer      tbs(bytes);
+    cont::WireWriter writer(tbs.span());
+    put_key_package_tbs(writer, package);
+    if (verify_with_label(*suite, verifier, package.leaf_node.signature_key, kKeyPackageLabel, tbs.span(),
+                          package.signature) != Verification::Valid)
+    {
+        return CryptoError::Forged;
+    }
+    if (same_bytes(package.init_key, package.leaf_node.encryption_key))
+    {
+        return CryptoError::BadKey;
+    }
+    return check_node_key(*suite, package.init_key);
+}
+
+CryptoError key_package_ref(const CipherSuite& suite, const KeyPackage& package, cont::Span<u8> out) noexcept
+{
+    const usize bytes = key_package_bytes(package);
+    if (bytes == 0U)
+    {
+        return refuse(CryptoError::BadLength, out);
+    }
+    LabelBuffer      encoding(bytes);
+    cont::WireWriter writer(encoding.span());
+    put_key_package(writer, package);
+    return ref_hash(suite, kKeyPackageRef, encoding.span(), out);
+}
+
+// ---- GroupInfo and Welcome ----
+
+bool take_group_info(cont::WireReader& in, GroupInfo& out) noexcept
+{
+    const cont::ConstSpan<u8> start = in.rest();
+    out                             = {};
+    if (!take_group_context(in, out.context) || !take_extensions(in, out.extensions) ||
+        !take_vector(in, out.confirmation_tag) || !in.take_u32(out.signer))
+    {
+        return false;
+    }
+    out.signed_fields = taken_since(start, in);
+    return take_vector(in, out.signature);
+}
+
+usize group_info_bytes(const GroupInfo& info) noexcept
+{
+    return Size().field(group_info_tbs_bytes(info)).vector(info.signature.size()).bytes();
+}
+
+void put_group_info(cont::WireWriter& out, const GroupInfo& info) noexcept
+{
+    put_group_info_tbs(out, info);
+    put_vector(out, info.signature);
+}
+
+CryptoError sign_group_info(const CipherSuite& suite, const Signer& signer, const GroupInfo& info,
+                            cont::Span<u8> signature, usize& written) noexcept
+{
+    written           = 0U;
+    const usize bytes = group_info_tbs_bytes(info);
+    if (bytes == 0U)
+    {
+        return refuse(CryptoError::BadLength, signature);
+    }
+    LabelBuffer      tbs(bytes);
+    cont::WireWriter writer(tbs.span());
+    put_group_info_tbs(writer, info);
+    return sign_with_label(suite, signer, kGroupInfoLabel, tbs.span(), signature, written);
+}
+
+Verification verify_group_info(const CipherSuite& suite, const SignatureVerifier& verifier,
+                               cont::ConstSpan<u8> public_key, const GroupInfo& info) noexcept
+{
+    const usize bytes = group_info_tbs_bytes(info);
+    if (bytes == 0U)
+    {
+        return Verification::Invalid;
+    }
+    LabelBuffer      tbs(bytes);
+    cont::WireWriter writer(tbs.span());
+    put_group_info_tbs(writer, info);
+    return verify_with_label(suite, verifier, public_key, kGroupInfoLabel, tbs.span(), info.signature);
+}
+
+bool take_group_secrets(cont::WireReader& in, GroupSecrets& out) noexcept
+{
+    out = {};
+    return take_vector(in, out.joiner_secret) && take_presence(in, out.has_path_secret) &&
+           (!out.has_path_secret || take_vector(in, out.path_secret)) &&
+           take_list<PreSharedKeyId>(in, out.psks, take_psk_id);
+}
+
+usize group_secrets_bytes(const GroupSecrets& secrets) noexcept
+{
+    Size size;
+    size.vector(secrets.joiner_secret.size()).fixed(1U);
+    if (secrets.has_path_secret)
+    {
+        size.vector(secrets.path_secret.size());
+    }
+    return size.vector(secrets.psks.size()).bytes();
+}
+
+void put_group_secrets(cont::WireWriter& out, const GroupSecrets& secrets) noexcept
+{
+    put_vector(out, secrets.joiner_secret);
+    out.put_u8(secrets.has_path_secret ? 1U : 0U);
+    if (secrets.has_path_secret)
+    {
+        put_vector(out, secrets.path_secret);
+    }
+    put_vector(out, secrets.psks);
+}
+
+bool take_encrypted_group_secrets(cont::WireReader& in, EncryptedGroupSecrets& out) noexcept
+{
+    out = {};
+    return take_vector(in, out.new_member) && take_hpke_ciphertext(in, out.encrypted_group_secrets);
+}
+
+bool take_welcome(cont::WireReader& in, Welcome& out) noexcept
+{
+    out = {};
+    return in.take_u16(out.cipher_suite) &&
+           take_list<EncryptedGroupSecrets>(in, out.secrets, take_encrypted_group_secrets) &&
+           take_vector(in, out.encrypted_group_info);
+}
+
+usize welcome_bytes(const Welcome& welcome) noexcept
+{
+    return Size().fixed(2U).vector(welcome.secrets.size()).vector(welcome.encrypted_group_info.size()).bytes();
+}
+
+void put_welcome(cont::WireWriter& out, const Welcome& welcome) noexcept
+{
+    out.put_u16(welcome.cipher_suite);
+    put_vector(out, welcome.secrets);
+    put_vector(out, welcome.encrypted_group_info);
+}
+
+namespace
+{
+// A secret of up to kMaxHashBytes on the stack, zeroed when it goes out of scope.
+class Secret
+{
+public:
+    Secret() noexcept = default;
+    ~Secret() noexcept { secure_zero(m_bytes); }
+    Secret(const Secret&)            = delete;
+    Secret& operator=(const Secret&) = delete;
+    Secret(Secret&&)                 = delete;
+    Secret& operator=(Secret&&)      = delete;
+
+    [[nodiscard]] cont::Span<u8> span(usize bytes) noexcept { return cont::Span<u8>(m_bytes, bytes); }
+
+private:
+    u8 m_bytes[kMaxHashBytes] = {};
+};
+
+// The GroupInfo's AEAD key and nonce of a joiner secret and a PSK secret.
+struct WelcomeSeal
+{
+    Secret  key;
+    Secret  nonce;
+    AeadKey aead;
+
+    [[nodiscard]] CryptoError init(const CipherSuite& suite, cont::ConstSpan<u8> joiner_secret,
+                                   cont::ConstSpan<u8> psk_secret) noexcept
+    {
+        Secret      secret;
+        const usize hash  = suite.hash_bytes();
+        const usize bytes = aead_key_bytes(suite.aead);
+        CryptoError error = welcome_secret(suite, joiner_secret, psk_secret, secret.span(hash));
+        if (error == CryptoError::None)
+        {
+            error = welcome_key(suite, secret.span(hash), key.span(bytes), nonce.span(kAeadNonceBytes));
+        }
+        return error == CryptoError::None ? aead.init(suite.aead, key.span(bytes)) : error;
+    }
+};
+} // namespace
+
+CryptoError seal_welcome(const CipherSuite& suite, cont::ConstSpan<u8> joiner_secret,
+                         cont::ConstSpan<PreSharedKey> psks, cont::ConstSpan<u8> group_info,
+                         cont::ConstSpan<WelcomeMember> members, cont::Array<u8>& out) noexcept
+{
+    out.clear();
+    const usize hash = suite.hash_bytes();
+    const usize npk  = hpke_sizes(suite.kem).public_key;
+    usize       ids  = 0U;
+    for (const PreSharedKey& psk : psks)
+    {
+        const usize bytes = psk_id_bytes(psk.id);
+        if (bytes == 0U)
+        {
+            return CryptoError::BadLength;
+        }
+        ids += bytes;
+    }
+    if (joiner_secret.size() != hash || hash == 0U || npk == 0U || vector_bytes(ids) == 0U)
+    {
+        return CryptoError::BadLength;
+    }
+    LabelBuffer      id_list(ids);
+    cont::WireWriter id_writer(id_list.span());
+    for (const PreSharedKey& psk : psks)
+    {
+        put_psk_id(id_writer, psk.id);
+    }
+    const auto secrets_of = [&](const WelcomeMember& member)
+    { return GroupSecrets{joiner_secret, !member.path_secret.empty(), member.path_secret, id_list.span()}; };
+    usize entries = 0U;
+    for (const WelcomeMember& member : members)
+    {
+        if (member.package.cipher_suite != suite.id)
+        {
+            return CryptoError::Unsupported;
+        }
+        if (!member.path_secret.empty() && member.path_secret.size() != hash)
+        {
+            return CryptoError::BadLength;
+        }
+        const usize sealed_secrets = group_secrets_bytes(secrets_of(member)) + kHpkeTagBytes;
+        entries += Size().vector(hash).vector(npk).vector(sealed_secrets).bytes();
+    }
+    const usize sealed = group_info.size() + kHpkeTagBytes;
+    const usize total  = Size().fixed(2U).vector(entries).vector(sealed).bytes();
+    cont::Array<usize> rooms; // per member: where its KEM output and its sealed GroupSecrets go
+    if (total == 0U)
+    {
+        return CryptoError::BadLength;
+    }
+    if (!out.try_reserve(total) || !rooms.try_reserve(2U * members.size()))
+    {
+        return CryptoError::ProviderFailure;
+    }
+    Secret      psk;
+    WelcomeSeal seal;
+    CryptoError error = psk_secret(suite, psks, psk.span(hash));
+    if (error == CryptoError::None)
+    {
+        error = seal.init(suite, joiner_secret, psk.span(hash));
+    }
+    // The layout first, each entry's reference written and its KEM output and ciphertext left as room: the
+    // GroupSecrets are sealed under the sealed GroupInfo, which comes last.
+    out.resize(total);
+    const cont::Span<u8> buffer(out.data(), out.size());
+    cont::WireWriter     writer(buffer);
+    writer.put_u16(suite.id);
+    put_varint(writer, entries);
+    for (usize i = 0U; error == CryptoError::None && i < members.size(); ++i)
+    {
+        put_varint(writer, hash);
+        error = key_package_ref(suite, members[i].package, reserve(writer, buffer, hash));
+        put_varint(writer, npk);
+        rooms.push_back(writer.written());
+        reserve(writer, buffer, npk);
+        const usize ciphertext = group_secrets_bytes(secrets_of(members[i])) + kHpkeTagBytes;
+        put_varint(writer, ciphertext);
+        rooms.push_back(writer.written());
+        reserve(writer, buffer, ciphertext);
+    }
+    if (error == CryptoError::None)
+    {
+        put_varint(writer, sealed);
+        const cont::Span<u8> info = reserve(writer, buffer, sealed);
+        error                     = seal.aead.seal(seal.nonce.span(kAeadNonceBytes), group_info, {}, info);
+        for (usize i = 0U; error == CryptoError::None && i < members.size(); ++i)
+        {
+            const GroupSecrets secrets = secrets_of(members[i]);
+            const usize        plain   = group_secrets_bytes(secrets);
+            LabelBuffer        encoded(plain);
+            cont::WireWriter   encoded_writer(encoded.span());
+            put_group_secrets(encoded_writer, secrets);
+            error = encrypt_with_label(suite, members[i].package.init_key, kWelcomeLabel, info, encoded.span(),
+                                       buffer.subspan(rooms[2U * i], npk),
+                                       buffer.subspan(rooms[2U * i + 1U], plain + kHpkeTagBytes));
+        }
+    }
+    if (error != CryptoError::None)
+    {
+        out.clear();
+    }
+    return error;
+}
+
+// ---- Opening a Welcome ----
+
+OpenedWelcome::~OpenedWelcome() noexcept
+{
+    wipe();
+}
+
+void OpenedWelcome::wipe() noexcept
+{
+    fresh_buffer(m_secrets_bytes, 0U);
+    fresh_buffer(m_info_bytes, 0U);
+    secure_zero(m_psk_secret);
+    m_secrets = {};
+    m_info    = {};
+    m_suite   = nullptr;
+}
+
+namespace
+{
+// The GroupSecrets' pre-shared keys (section 12.4.3.1), each held by the store, into `psks`: Malformed for an
+// identity named twice or a nonce not Nh long, Unsupported for a resumption key of usage reinit or branch, NotReady for
+// a key the store does not hold.
+CryptoError welcome_psks(const CipherSuite& suite, cont::ConstSpan<u8> list, const GroupStore& store,
+                         cont::Array<PreSharedKey>& psks) noexcept
+{
+    cont::Array<cont::ConstSpan<u8>> encodings;
+    cont::WireReader                 in(list);
+    while (!in.done())
+    {
+        const cont::ConstSpan<u8> start = in.rest();
+        PreSharedKey              psk;
+        if (!take_psk_id(in, psk.id) || psk.id.nonce.size() != suite.hash_bytes())
+        {
+            return CryptoError::Malformed;
+        }
+        if (psk.id.type == PskType::Resumption && psk.id.usage != ResumptionUsage::Application)
+        {
+            return CryptoError::Unsupported;
+        }
+        psk.secret = store.psk(psk.id);
+        if (psk.secret.empty())
+        {
+            return CryptoError::NotReady;
+        }
+        if (!psks.try_reserve(psks.size() + 1U) || !encodings.try_reserve(encodings.size() + 1U))
+        {
+            return CryptoError::ProviderFailure;
+        }
+        psks.push_back(psk);
+        encodings.push_back(taken_since(start, in));
+    }
+    return repeats(encodings) ? CryptoError::Malformed : CryptoError::None;
+}
+} // namespace
+
+CryptoError open_welcome(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont::ConstSpan<u8> init_private,
+                         const GroupStore& store, OpenedWelcome& out) noexcept
+{
+    out.wipe();
+    cont::WireReader in(welcome);
+    Welcome          message;
+    if (!take_welcome(in, message) || !in.done())
+    {
+        return CryptoError::Malformed;
+    }
+    const CipherSuite* suite = cipher_suite(message.cipher_suite);
+    if (suite == nullptr || message.cipher_suite != own.cipher_suite)
+    {
+        return CryptoError::Unsupported;
+    }
+    const usize hash = suite->hash_bytes();
+    Secret      reference;
+    CryptoError error = key_package_ref(*suite, own, reference.span(hash));
+    if (error != CryptoError::None)
+    {
+        return error;
+    }
+    // The first entry for this key package (section 12.4.3.1).
+    cont::WireReader      entries(message.secrets);
+    EncryptedGroupSecrets mine;
+    bool                  found = false;
+    while (!found && !entries.done())
+    {
+        found = take_encrypted_group_secrets(entries, mine) && same_bytes(mine.new_member, reference.span(hash));
+    }
+    if (!found)
+    {
+        return CryptoError::BadKey;
+    }
+    HpkeKey init;
+    if (check_private_key(*suite, init_private, own.init_key) != CryptoError::None ||
+        init.from_private(suite->kem, init_private) != CryptoError::None)
+    {
+        return CryptoError::BadKey;
+    }
+    const cont::ConstSpan<u8> sealed = mine.encrypted_group_secrets.ciphertext;
+    if (sealed.size() < kHpkeTagBytes)
+    {
+        return CryptoError::Forged;
+    }
+    if (!fresh_buffer(out.m_secrets_bytes, sealed.size() - kHpkeTagBytes))
+    {
+        return CryptoError::ProviderFailure;
+    }
+    error = decrypt_with_label(*suite, init, kWelcomeLabel, message.encrypted_group_info,
+                               mine.encrypted_group_secrets.kem_output, sealed,
+                               cont::Span<u8>(out.m_secrets_bytes.data(), out.m_secrets_bytes.size()));
+    cont::WireReader secrets(view(out.m_secrets_bytes));
+    if (error == CryptoError::None &&
+        (!take_group_secrets(secrets, out.m_secrets) || !secrets.done() ||
+         out.m_secrets.joiner_secret.size() != hash ||
+         (out.m_secrets.has_path_secret && out.m_secrets.path_secret.size() != hash)))
+    {
+        error = CryptoError::Malformed;
+    }
+    cont::Array<PreSharedKey> psks;
+    if (error == CryptoError::None)
+    {
+        error = welcome_psks(*suite, out.m_secrets.psks, store, psks);
+    }
+    if (error == CryptoError::None)
+    {
+        error = psk_secret(*suite, cont::ConstSpan<PreSharedKey>(psks.data(), psks.size()),
+                           cont::Span<u8>(out.m_psk_secret, hash));
+    }
+    // The GroupInfo, under the key and nonce of the joiner secret and the PSKs.
+    WelcomeSeal               seal;
+    const cont::ConstSpan<u8> info = message.encrypted_group_info;
+    if (error == CryptoError::None)
+    {
+        error = seal.init(*suite, out.m_secrets.joiner_secret, cont::ConstSpan<u8>(out.m_psk_secret, hash));
+    }
+    if (error == CryptoError::None && info.size() < kAeadTagBytes)
+    {
+        error = CryptoError::Forged;
+    }
+    if (error == CryptoError::None && !fresh_buffer(out.m_info_bytes, info.size() - kAeadTagBytes))
+    {
+        error = CryptoError::ProviderFailure;
+    }
+    if (error == CryptoError::None)
+    {
+        error = seal.aead.open(seal.nonce.span(kAeadNonceBytes), info, {},
+                               cont::Span<u8>(out.m_info_bytes.data(), out.m_info_bytes.size()));
+    }
+    cont::WireReader group_info(view(out.m_info_bytes));
+    if (error == CryptoError::None &&
+        (!take_group_info(group_info, out.m_info) || !group_info.done() ||
+         out.m_info.confirmation_tag.size() != hash || !extensions_distinct(out.m_info.extensions) ||
+         !extensions_distinct(out.m_info.context.extensions)))
+    {
+        error = CryptoError::Malformed;
+    }
+    if (error == CryptoError::None && out.m_info.context.cipher_suite != message.cipher_suite)
+    {
+        error = CryptoError::Unsupported;
+    }
+    if (error != CryptoError::None)
+    {
+        out.wipe();
+        return error;
+    }
+    out.m_suite = suite;
+    return CryptoError::None;
+}
+
+// ---- A member's group state ----
+
+Group::~Group() noexcept
+{
+    wipe();
+}
+
+void Group::wipe() noexcept
+{
+    m_suite  = nullptr;
+    m_config = {};
+    m_epoch  = 0U;
+    m_group_id.clear();
+    m_extensions.clear();
+    m_confirmed.clear();
+    m_interim.clear();
+    m_tree        = RatchetTree();
+    m_keys        = PathKeys();
+    m_secret_tree = SecretTree();
+    m_secrets.clear();
+}
+
+GroupContext Group::context() const noexcept
+{
+    if (!ready())
+    {
+        return {};
+    }
+    return GroupContext{m_suite->id,        view(m_group_id), m_epoch, m_tree.root_hash(), view(m_confirmed),
+                        view(m_extensions)};
+}
+
+CryptoError Group::own_bytes(cont::ConstSpan<u8> group_id, cont::ConstSpan<u8> extensions,
+                             cont::ConstSpan<u8> confirmed) noexcept
+{
+    CryptoError error = copy_into(group_id, m_group_id);
+    if (error == CryptoError::None)
+    {
+        error = copy_into(extensions, m_extensions);
+    }
+    return error == CryptoError::None ? copy_into(confirmed, m_confirmed) : error;
+}
+
+CryptoError Group::confirm(cont::ConstSpan<u8> tag) noexcept
+{
+    const usize hash = m_suite->hash_bytes();
+    if (!confirmation_tag_valid(*m_suite, m_secrets.get(EpochSecret::Confirmation), view(m_confirmed), tag))
+    {
+        return CryptoError::Forged;
+    }
+    if (!m_interim.try_reserve(hash))
+    {
+        return CryptoError::ProviderFailure;
+    }
+    m_interim.resize(hash);
+    return mls::interim_transcript_hash(*m_suite, view(m_confirmed), tag, cont::Span<u8>(m_interim.data(), hash));
+}
+
+CryptoError Group::create(const CipherSuite& suite, cont::ConstSpan<u8> group_id, cont::ConstSpan<u8> extensions,
+                          const LeafNode& creator, cont::ConstSpan<u8> leaf_private,
+                          const GroupConfig& config) noexcept
+{
+    wipe();
+    const CipherSuite* profile = cipher_suite(suite.id);
+    if (profile == nullptr || config.verifier == nullptr || config.authentication == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (!extensions_distinct(extensions) || vector_bytes(group_id.size()) == 0U)
+    {
+        return CryptoError::Malformed;
+    }
+    const GroupContext initial{profile->id, group_id, 0U, {}, {}, extensions};
+    CryptoError error = check_leaf(initial, creator, LeafRole::KeyPackage, config.policy, *config.authentication);
+    if (error == CryptoError::None &&
+        verify_leaf_node(*profile, *config.verifier, creator, {}, 0U) != Verification::Valid)
+    {
+        error = CryptoError::Forged;
+    }
+    if (error == CryptoError::None)
+    {
+        error = check_private_key(*profile, leaf_private, creator.encryption_key);
+    }
+    if (error == CryptoError::None)
+    {
+        error = m_tree.create(*profile, creator);
+    }
+    if (error == CryptoError::None)
+    {
+        error = m_keys.init(*profile, 0U, leaf_private);
+    }
+    if (error == CryptoError::None)
+    {
+        error = own_bytes(group_id, extensions, {});
+    }
+    // Epoch 0 from a fresh random init secret, with no commit or PSK secret (section 11).
+    const usize hash                = profile->hash_bytes();
+    const u8    zero[kMaxHashBytes] = {};
+    Secret      init;
+    Secret      tag;
+    if (error == CryptoError::None)
+    {
+        m_suite = profile;
+        error   = random_bytes(init.span(hash));
+    }
+    if (error == CryptoError::None)
+    {
+        const GroupContext context = this->context();
+        LabelBuffer        encoded(group_context_bytes(context));
+        cont::WireWriter   writer(encoded.span());
+        put_group_context(writer, context);
+        error = m_secrets.advance(*profile, init.span(hash), cont::ConstSpan<u8>(zero, hash),
+                                  cont::ConstSpan<u8>(zero, hash), encoded.span());
+    }
+    if (error == CryptoError::None)
+    {
+        error = confirmation_tag(*profile, m_secrets.get(EpochSecret::Confirmation), {}, tag.span(hash));
+    }
+    if (error == CryptoError::None)
+    {
+        error = confirm(tag.span(hash));
+    }
+    if (error == CryptoError::None)
+    {
+        error = m_secret_tree.init(*profile, m_secrets.get(EpochSecret::Encryption), 1U, config.window);
+    }
+    if (error != CryptoError::None)
+    {
+        wipe();
+        return error;
+    }
+    m_config = config;
+    return CryptoError::None;
+}
+
+namespace
+{
+// Section 7.3 over every member of a tree a member joins and section 12.1.8.1's external senders: each leaf's
+// check_leaf (role Tree), each parent's key usable, the credential types, and every external sender's credential.
+CryptoError check_members(const RatchetTree& tree, const GroupContext& context, const GroupConfig& config) noexcept
+{
+    CryptoError error = CryptoError::None;
+    for (u32 node = 0U; error == CryptoError::None && node < tree.node_count(); ++node)
+    {
+        LeafNode leaf{};
+        if (tree::level(node) == 0U)
+        {
+            error = tree.leaf_node(node / 2U, leaf)
+                        ? check_leaf(context, leaf, LeafRole::Tree, config.policy, *config.authentication)
+                        : CryptoError::None;
+        }
+        else if (!tree.blank(node))
+        {
+            error = check_node_key(tree.suite(), tree.encryption_key(node));
+        }
+    }
+    if (error == CryptoError::None)
+    {
+        error = check_credential_types(tree);
+    }
+    cont::ConstSpan<u8> data;
+    cont::ConstSpan<u8> senders;
+    if (error != CryptoError::None ||
+        !find_extension(context.extensions, static_cast<u16>(ExtensionType::ExternalSenders), data))
+    {
+        return error;
+    }
+    if (!take_external_senders(data, senders))
+    {
+        return CryptoError::Malformed;
+    }
+    cont::WireReader in(senders);
+    while (!in.done())
+    {
+        ExternalSender sender;
+        if (!take_external_sender(in, sender) ||
+            !config.authentication->validate(sender.credential, sender.signature_key))
+        {
+            return CryptoError::Forged;
+        }
+    }
+    return CryptoError::None;
+}
+
+// The leaf of `tree` identical to `own` (section 12.4.3.1): found by its encryption key, which a validated tree holds
+// once, then compared whole.
+bool find_own_leaf(const RatchetTree& tree, const LeafNode& own, u32& index) noexcept
+{
+    const usize bytes = leaf_node_bytes(own);
+    if (bytes == 0U)
+    {
+        return false;
+    }
+    LabelBuffer      encoded(bytes);
+    cont::WireWriter writer(encoded.span());
+    put_leaf_node(writer, own);
+    for (u32 leaf = 0U; leaf < tree.leaves(); ++leaf)
+    {
+        LeafNode node{};
+        if (tree.leaf_node(leaf, node) && same_bytes(node.encryption_key, own.encryption_key))
+        {
+            index = leaf;
+            return node.signed_fields.size() + vector_bytes(node.signature.size()) == bytes &&
+                   same_bytes(node.signed_fields, encoded.span().first(node.signed_fields.size())) &&
+                   same_bytes(node.signature, encoded.span().last(node.signature.size()));
+        }
+    }
+    return false;
+}
+} // namespace
+
+CryptoError Group::join(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont::ConstSpan<u8> init_private,
+                        cont::ConstSpan<u8> leaf_private, cont::ConstSpan<u8> ratchet_tree,
+                        const GroupConfig& config) noexcept
+{
+    wipe();
+    if (config.verifier == nullptr || config.authentication == nullptr || config.store == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    OpenedWelcome opened;
+    CryptoError   error = open_welcome(welcome, own, init_private, *config.store, opened);
+    if (error != CryptoError::None)
+    {
+        return error;
+    }
+    const CipherSuite&  suite   = opened.suite();
+    const GroupInfo&    info    = opened.group_info();
+    const GroupContext& context = info.context;
+    if (config.store->member_of(context.group_id))
+    {
+        return CryptoError::Replayed;
+    }
+    cont::ConstSpan<u8> tree_bytes = ratchet_tree;
+    if (tree_bytes.empty() &&
+        !find_extension(info.extensions, static_cast<u16>(ExtensionType::RatchetTree), tree_bytes))
+    {
+        return CryptoError::NotReady;
+    }
+    error = m_tree.decode(suite, tree_bytes);
+    LeafNode signer{};
+    if (error == CryptoError::None &&
+        (!same_bytes(m_tree.root_hash(), context.tree_hash) || !m_tree.leaf_node(info.signer, signer) ||
+         verify_group_info(suite, *config.verifier, signer.signature_key, info) != Verification::Valid))
+    {
+        error = CryptoError::Forged;
+    }
+    if (error == CryptoError::None)
+    {
+        error = m_tree.validate(*config.verifier, context.group_id);
+    }
+    if (error == CryptoError::None)
+    {
+        error = check_members(m_tree, context, config);
+    }
+    // The member's own leaf and keys, then the path secret's (section 12.4.3.1).
+    u32 leaf = 0U;
+    if (error == CryptoError::None && !find_own_leaf(m_tree, own.leaf_node, leaf))
+    {
+        error = CryptoError::BadKey;
+    }
+    if (error == CryptoError::None)
+    {
+        error = check_private_key(suite, leaf_private, own.leaf_node.encryption_key);
+    }
+    if (error == CryptoError::None)
+    {
+        error = m_keys.init(suite, leaf, leaf_private);
+    }
+    if (error == CryptoError::None && opened.secrets().has_path_secret)
+    {
+        const std::optional<u32> ancestor = tree::common_ancestor(2U * info.signer, 2U * leaf, m_tree.leaves());
+        error = ancestor && info.signer != leaf ? m_keys.implant(m_tree, *ancestor, opened.secrets().path_secret)
+                                                : CryptoError::Malformed;
+    }
+    if (error == CryptoError::None)
+    {
+        error = own_bytes(context.group_id, context.extensions, context.confirmed_transcript_hash);
+    }
+    if (error == CryptoError::None)
+    {
+        m_suite = &suite;
+        m_epoch = context.epoch;
+        LabelBuffer      encoded(group_context_bytes(context));
+        cont::WireWriter writer(encoded.span());
+        put_group_context(writer, context);
+        error = m_secrets.join(suite, opened.secrets().joiner_secret, opened.psk_secret(), encoded.span());
+    }
+    if (error == CryptoError::None)
+    {
+        error = confirm(info.confirmation_tag);
+    }
+    if (error == CryptoError::None)
+    {
+        error = m_secret_tree.init(suite, m_secrets.get(EpochSecret::Encryption), m_tree.leaves(), config.window);
+    }
+    if (error != CryptoError::None)
+    {
+        wipe();
+        return error;
+    }
+    m_config = config;
+    return CryptoError::None;
+}
+} // namespace crd::crypto::mls

@@ -12,14 +12,16 @@ namespace crd::crypto::mls
 {
 namespace
 {
+using detail::bytes_less;
 using detail::LabelBuffer;
 using detail::refuse;
+using detail::repeats;
+using detail::same_bytes;
 
 constexpr cont::StringView kLeafLabel = "LeafNodeTBS";
 constexpr cont::StringView kPathLabel = "UpdatePathNode";
 
-// The longest HPKE public key of the profile (an uncompressed P-384 point) and leaf signature (P-384 ECDSA in DER).
-constexpr usize kMaxNodeKeyBytes   = 97U;
+// The longest leaf signature of the profile (P-384 ECDSA in DER).
 constexpr usize kMaxSignatureBytes = 104U;
 
 // Occupancy bits of a subtree: whether it holds a non-blank node (its resolution is not empty) and a non-blank leaf
@@ -68,16 +70,6 @@ u32 child_toward(u32 parent, u32 node) noexcept
 u32 child_away(u32 parent, u32 node) noexcept
 {
     return node < parent ? right_of(parent) : left_of(parent);
-}
-
-bool same_bytes(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
-{
-    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin());
-}
-
-bool bytes_less(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
-{
-    return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end());
 }
 
 // Whether a sorted list of leaf indices holds one in `span`.
@@ -939,15 +931,6 @@ bool unmerged_lists(const ParentNode& node, u32 leaf) noexcept
         }
     }
     return false;
-}
-
-// Whether two of `keys` are the same bytes (sorted in place).
-bool repeats(cont::Array<cont::ConstSpan<u8>>& keys) noexcept
-{
-    cont::ConstSpan<u8>* begin = keys.data();
-    cont::ConstSpan<u8>* end   = keys.data() + keys.size();
-    std::sort(begin, end, bytes_less);
-    return std::adjacent_find(begin, end, same_bytes) != end;
 }
 } // namespace
 

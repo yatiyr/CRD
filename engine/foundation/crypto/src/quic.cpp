@@ -7,6 +7,7 @@
 
 #include <crd/crypto/quic.hpp>
 
+#include "byte_spans.hpp"
 #include "provider_internal.hpp"
 
 #include <openssl/aes.h>
@@ -591,6 +592,7 @@ CryptoError quic_retry_verify(QuicVersion version, cont::ConstSpan<u8> original_
 
 namespace
 {
+using detail::same_bytes;
 using provider_internal::label_of;
 
 constexpr char  kTokenNameInfo[]    = "cerid quic token name";
@@ -609,11 +611,6 @@ static_assert(kQuicTokenSaltBytes == kReplayIdBytes, "a token's salt is its repl
 bool address_ok(const QuicTokenPeer& peer) noexcept
 {
     return peer.address.size() == 4U || peer.address.size() == 16U;
-}
-
-bool same_bytes(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
-{
-    return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
 }
 
 void put_u64(u8* out, u64 value) noexcept

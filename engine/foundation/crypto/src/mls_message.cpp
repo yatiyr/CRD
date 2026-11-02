@@ -16,63 +16,6 @@ using detail::refuse;
 
 constexpr cont::StringView kContentLabel = "FramedContentTBS";
 
-// The total of a structure's fields; a field that cannot be encoded (0 bytes) makes it 0.
-class Size
-{
-public:
-    Size& fixed(usize bytes) noexcept
-    {
-        m_bytes += bytes;
-        return *this;
-    }
-    // A field sized by its own *_bytes or vector_bytes.
-    Size& field(usize bytes) noexcept
-    {
-        m_ok = m_ok && bytes != 0U;
-        m_bytes += bytes;
-        return *this;
-    }
-    Size& vector(usize length) noexcept { return field(vector_bytes(length)); }
-
-    [[nodiscard]] usize bytes() const noexcept { return m_ok ? m_bytes : 0U; }
-
-private:
-    usize m_bytes = 0U;
-    bool  m_ok    = true;
-};
-
-// The bytes a decoder took since `start` (the reader's rest() before it began), as a view of the input.
-cont::ConstSpan<u8> taken_since(cont::ConstSpan<u8> start, const cont::WireReader& in) noexcept
-{
-    return start.first(start.size() - in.rest().size());
-}
-
-// A list whose body is a sequence of `take` structures.
-template <typename T, typename Take>
-bool take_list(cont::WireReader& in, cont::ConstSpan<u8>& body, Take take) noexcept
-{
-    if (!take_vector(in, body))
-    {
-        return false;
-    }
-    cont::WireReader items(body);
-    while (!items.done())
-    {
-        T item{};
-        if (!take(items, item))
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-// A list of 16-bit codepoints.
-bool take_u16_list(cont::WireReader& in, cont::ConstSpan<u8>& body) noexcept
-{
-    return take_vector(in, body) && body.size() % 2U == 0U;
-}
-
 bool take_opaque(cont::WireReader& in, cont::ConstSpan<u8>& out) noexcept
 {
     return take_vector(in, out);
@@ -84,31 +27,7 @@ bool take_extension(cont::WireReader& in, cont::ConstSpan<u8>& data) noexcept
     return in.take_u16(type) && take_vector(in, data);
 }
 
-// ---- Credentials and capabilities ----
-
-bool take_credential(cont::WireReader& in, Credential& out) noexcept
-{
-    if (!in.take_u16(out.type) || out.type == 0U)
-    {
-        return false;
-    }
-    if (out.type == static_cast<u16>(CredentialType::X509))
-    {
-        return take_list<cont::ConstSpan<u8>>(in, out.content, take_opaque);
-    }
-    return take_vector(in, out.content);
-}
-
-usize credential_bytes(const Credential& credential) noexcept
-{
-    return credential.type == 0U ? 0U : Size().fixed(2U).vector(credential.content.size()).bytes();
-}
-
-void put_credential(cont::WireWriter& out, const Credential& credential) noexcept
-{
-    out.put_u16(credential.type);
-    put_vector(out, credential.content);
-}
+// ---- Capabilities ----
 
 bool take_capabilities(cont::WireReader& in, Capabilities& out) noexcept
 {
@@ -421,6 +340,32 @@ bool all_zero(cont::ConstSpan<u8> bytes) noexcept
     return any == 0U;
 }
 } // namespace
+
+// ---- Credentials (mls_detail.hpp) ----
+
+bool take_credential(cont::WireReader& in, Credential& out) noexcept
+{
+    if (!in.take_u16(out.type) || out.type == 0U)
+    {
+        return false;
+    }
+    if (out.type == static_cast<u16>(CredentialType::X509))
+    {
+        return take_list<cont::ConstSpan<u8>>(in, out.content, take_opaque);
+    }
+    return take_vector(in, out.content);
+}
+
+usize credential_bytes(const Credential& credential) noexcept
+{
+    return credential.type == 0U ? 0U : Size().fixed(2U).vector(credential.content.size()).bytes();
+}
+
+void put_credential(cont::WireWriter& out, const Credential& credential) noexcept
+{
+    out.put_u16(credential.type);
+    put_vector(out, credential.content);
+}
 
 // ---- The structures a message carries ----
 
