@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.parse
@@ -254,6 +255,42 @@ class Store(unittest.TestCase):
             self.assertIsNone(store.get('nothing.json'))
             with self.assertRaises(ValueError):
                 store.put('../escape.json', b'x')
+
+    def test_local_store_reads_never_meet_a_replacement(self):
+        # A reader racing a writer's rename saw Windows refuse the open (complete run 41342960677's orchestrator case
+        # read a build while the scheduler rewrote it); reads take the writers' lock, so every read sees one whole
+        # version. Two writer threads and one reader: every read is a whole value, none raises.
+        with tempfile.TemporaryDirectory() as scratch:
+            store = pipeline.LocalStore(scratch)
+            store.put_json('builds/1.json', {'n': 0, 'pad': 'x' * 4096})
+            stop = threading.Event()
+            errors = []
+
+            def write(base):
+                n = base
+                while not stop.is_set():
+                    store.put_json('builds/1.json', {'n': n, 'pad': 'x' * 4096})
+                    n += 2
+
+            writers = [threading.Thread(target=write, args=(base,)) for base in (1, 2)]
+            for writer in writers:
+                writer.start()
+            try:
+                deadline = time.monotonic() + 3.0
+                reads = 0
+                while time.monotonic() < deadline:
+                    try:
+                        value = store.get_json('builds/1.json')
+                        if value is None or len(value['pad']) != 4096:
+                            errors.append('partial or missing read: %r' % (value,))
+                    except (OSError, ValueError) as error:
+                        errors.append(repr(error))
+                    reads += 1
+            finally:
+                stop.set()
+                for writer in writers:
+                    writer.join()
+            self.assertEqual(errors[:5], [], '%d of %d reads failed' % (len(errors), reads))
 
     def test_gcs_store_speaks_the_json_api(self):
         calls = []

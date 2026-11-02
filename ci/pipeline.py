@@ -558,8 +558,10 @@ class LocalStore:
         return generation
 
     def get(self, name):
+        # Under the writers' lock: on Windows an open racing a writer's rename is refused (access denied).
         path = self._path(name)
-        return path.read_bytes() if path.is_file() else None
+        with self._locked(path):
+            return path.read_bytes() if path.is_file() else None
 
     def read(self, name):
         """(bytes or None, generation): a consistent snapshot for a later `write_if`."""
