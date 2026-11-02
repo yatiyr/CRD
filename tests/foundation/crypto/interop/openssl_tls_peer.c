@@ -8,7 +8,7 @@
  *                             [--ticket-key HEX] [--compression zstd|zlib|none] [--compressed-cert FILE]
  *                             [--dump-compressed FILE] [--alpn LIST] [--quic 1|2] [--parameters HEX]
  *                             [--suites LIST] [--ech-configs HEX] [--ech-grease 1] [--ech-pem FILE]
- *                             [--ech-previous-pem FILE]
+ *                             [--ech-previous-pem FILE] [--early-data N] [--early TEXT]
  *        crd-openssl-tls-peer --ech-generate NAME   (a new ECH key and its ECHConfigList for the public name NAME, in
  *                             the ECH PEM format of RFC 9934, on standard output)
  *   groups       OpenSSL's group list syntax (SSL_CTX_set1_groups_list; a '*' marks a group that gets a key share)
@@ -37,6 +37,12 @@
  *   ech-grease   a client without ECH configurations sends a GREASE ECH extension (SSL_OP_ECH_GREASE)
  *   ech-pem, ech-previous-pem  a server's ECH key and configuration in an RFC 9934 PEM file: a current one, sent as a
  *                retry configuration, or a previous one, still decrypted but not sent (OSSL_ECHSTORE_read_pem)
+ *   early-data   early data (0-RTT): a server's tickets allow N bytes of it (SSL_CTX_set_max_early_data; over QUIC
+ *                any amount, SSL_set_quic_tls_early_data_enabled) and it reads them (SSL_read_early_data), without
+ *                OpenSSL's anti-replay cache (its stateless tickets have none; Cerid's filter is under test); a QUIC
+ *                client enables it on a session that allows it
+ *   early        a client's early data: sent with SSL_write_early_data on a session that allows it, and once
+ *                established sent again as 1-RTT data when the server rejected it (before the ping)
  *
  * A server prefers its own group order (SSL_OP_CIPHER_SERVER_PREFERENCE), as a Cerid server does. The framing and the
  * script are crd-tls-peer's: 4-byte big-endian frame lengths, a client's first flight unasked,
@@ -226,7 +232,7 @@ static const unsigned char k_probe_payload[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 
 static const unsigned char k_probe_sample[16]  = {0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F, 0x60, 0x61,
                                                   0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69};
 
-/* The frame's level of an OpenSSL protection level, and back; -1 for the early level, which Cerid never uses. */
+/* The frame's level of an OpenSSL protection level, and back; -1 for the early level, which carries no CRYPTO data. */
 static int frame_level(uint32_t level)
 {
     return level == OSSL_RECORD_PROTECTION_LEVEL_NONE        ? 0
@@ -281,13 +287,17 @@ static int quic_secret(SSL* s, uint32_t level, int direction, const unsigned cha
 {
     (void)s;
     (void)arg;
-    if (frame_level(level) < 0 || secret_len > sizeof(g_secrets[0][0]) || direction < 0 || direction > 1)
+    if (level >= QUIC_LEVELS || secret_len > sizeof(g_secrets[0][0]) || direction < 0 || direction > 1)
     {
         return 0;
     }
     memcpy(g_secrets[level][direction], secret, secret_len);
     g_secret_size[level][direction] = secret_len;
-    *(direction == 1 ? &g_write_level : &g_read_level) = level;
+    /* The 0-RTT secret protects packets only: CRYPTO data stays at the levels it was at. */
+    if (level != OSSL_RECORD_PROTECTION_LEVEL_EARLY)
+    {
+        *(direction == 1 ? &g_write_level : &g_read_level) = level;
+    }
     return 1;
 }
 
@@ -446,13 +456,14 @@ static int quic_probe(const SSL_CIPHER* cipher, const unsigned char* secret, siz
 /* The probes of every secret held, named by level and by whose packets it protects. */
 static void quic_print_probes(SSL* ssl, int client)
 {
-    static const char* const k_levels[] = {"handshake", "application"};
+    static const char* const k_levels[] = {"handshake", "application", "early"};
     static const uint32_t    k_levels_of[] = {OSSL_RECORD_PROTECTION_LEVEL_HANDSHAKE,
-                                              OSSL_RECORD_PROTECTION_LEVEL_APPLICATION};
+                                              OSSL_RECORD_PROTECTION_LEVEL_APPLICATION,
+                                              OSSL_RECORD_PROTECTION_LEVEL_EARLY};
     const SSL_CIPHER*        cipher = SSL_get_current_cipher(ssl);
     int                      first  = 1;
     fputs("\"probes\": {", stderr);
-    for (int i = 0; i < 2 && cipher != NULL; ++i)
+    for (int i = 0; i < 3 && cipher != NULL; ++i)
     {
         for (int direction = 0; direction < 2; ++direction)
         {
@@ -632,6 +643,7 @@ static int usage(void)
 {
     fputs("usage: crd-openssl-tls-peer --role client|server --groups LIST --seed HEX [--pin HEX] [--name NAME] "
           "[--max-version 1.2] [--update requested|not-requested] [--session FILE] [--ticket-key HEX] "
+          "[--early-data N] [--early TEXT] "
           "[--compression zstd|zlib|none] [--compressed-cert FILE] [--dump-compressed FILE] [--alpn LIST] "
           "[--quic 1|2] [--parameters HEX] [--suites LIST] [--ech-configs HEX] [--ech-grease 1] [--ech-pem FILE] "
           "[--ech-previous-pem FILE]\n",
@@ -718,6 +730,8 @@ int main(int argc, char** argv)
     const char* compressed  = NULL;
     const char* dump        = NULL;
     const char* suites      = NULL;
+    const char* early       = NULL;
+    long        early_data  = 0;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         if (strcmp(argv[i], "--role") == 0)
@@ -807,6 +821,14 @@ int main(int argc, char** argv)
         {
             ech_previous_pem = argv[i + 1];
         }
+        else if (strcmp(argv[i], "--early-data") == 0 && atol(argv[i + 1]) > 0)
+        {
+            early_data = atol(argv[i + 1]);
+        }
+        else if (strcmp(argv[i], "--early") == 0)
+        {
+            early = argv[i + 1];
+        }
         else
         {
             return usage();
@@ -846,6 +868,19 @@ int main(int argc, char** argv)
         {
             return 1;
         }
+        if (early_data > 0)
+        {
+            SSL_CTX_set_options(context, SSL_OP_NO_ANTI_REPLAY);
+            if (!SSL_CTX_set_max_early_data(context, (uint32_t)early_data) ||
+                !SSL_CTX_set_recv_max_early_data(context, (uint32_t)early_data))
+            {
+                return 1;
+            }
+        }
+    }
+    else if (early != NULL && early_data > 0)
+    {
+        return usage();
     }
     if (ticket_key != NULL)
     {
@@ -933,7 +968,8 @@ int main(int argc, char** argv)
     BIO* outgoing = BIO_new(BIO_s_mem());
     if (ssl == NULL || incoming == NULL || outgoing == NULL || (g_quic_version != 0) != (g_parameters_size > 0) ||
         (g_quic_version != 0 && (!SSL_set_quic_tls_cbs(ssl, k_quic_callbacks, NULL) ||
-                                 !SSL_set_quic_tls_transport_params(ssl, g_parameters, g_parameters_size))))
+                                 !SSL_set_quic_tls_transport_params(ssl, g_parameters, g_parameters_size))) ||
+        (g_quic_version != 0 && !client && early_data > 0 && !SSL_set_quic_tls_early_data_enabled(ssl, 1)))
     {
         ERR_print_errors_fp(stderr);
         return 1;
@@ -954,10 +990,24 @@ int main(int argc, char** argv)
             return 1;
         }
         SSL_SESSION* offered = g_session_path != NULL ? take_session() : NULL;
+        const int    early_capable = offered != NULL && SSL_SESSION_get_max_early_data(offered) > 0;
         if (offered != NULL)
         {
             SSL_set_session(ssl, offered);
             SSL_SESSION_free(offered);
+        }
+        /* Early data on a session that allows it: over QUIC the 0-RTT keys only, over records the bytes too. */
+        if (early_capable && g_quic_version != 0 && early_data > 0 && !SSL_set_quic_tls_early_data_enabled(ssl, 1))
+        {
+            ERR_print_errors_fp(stderr);
+            return 1;
+        }
+        size_t early_written = 0;
+        if (early_capable && g_quic_version == 0 && early != NULL &&
+            SSL_write_early_data(ssl, early, strlen(early), &early_written) != 1)
+        {
+            ERR_print_errors_fp(stderr);
+            return 1;
         }
         const int started = SSL_do_handshake(ssl);
         if (started <= 0 && SSL_get_error(ssl, started) != SSL_ERROR_WANT_READ)
@@ -975,11 +1025,14 @@ int main(int argc, char** argv)
         SSL_set_accept_state(ssl);
     }
 
-    char   received[256] = {0};
-    size_t received_size = 0;
-    int    failed        = 0;
-    int    pinged        = 0;
-    size_t size          = 0;
+    char   received[256]       = {0};
+    size_t received_size       = 0;
+    char   early_received[256] = {0};
+    size_t early_size          = 0;
+    int    early_reading       = !client && g_quic_version == 0 && early_data > 0;
+    int    failed              = 0;
+    int    pinged              = 0;
+    size_t size                = 0;
     while (read_frame(&size))
     {
         if (g_quic_version != 0 ? !quic_take_frame(size)
@@ -987,7 +1040,26 @@ int main(int argc, char** argv)
         {
             return 1;
         }
-        if (!failed && !SSL_is_init_finished(ssl))
+        /* A server reads early data first, until its end (or until it knows none comes); the handshake follows. */
+        while (!failed && early_reading)
+        {
+            size_t    got    = 0;
+            const int result = SSL_read_early_data(ssl, early_received + early_size,
+                                                   sizeof(early_received) - 1 - early_size, &got);
+            if (result == SSL_READ_EARLY_DATA_SUCCESS)
+            {
+                early_size += got;
+                continue;
+            }
+            early_reading = 0;
+            if (result == SSL_READ_EARLY_DATA_ERROR)
+            {
+                early_reading = SSL_get_error(ssl, 0) == SSL_ERROR_WANT_READ;
+                failed        = !early_reading;
+                break;
+            }
+        }
+        if (!failed && !early_reading && !SSL_is_init_finished(ssl))
         {
             const int result = SSL_do_handshake(ssl);
             failed           = result <= 0 && SSL_get_error(ssl, result) != SSL_ERROR_WANT_READ;
@@ -1027,7 +1099,10 @@ int main(int argc, char** argv)
             }
             if (client && !pinged && !failed)
             {
-                pinged = SSL_write(ssl, k_ping, (int)(sizeof(k_ping) - 1)) > 0;
+                /* Early data the server rejected goes again, now as 1-RTT data. */
+                pinged = early == NULL || SSL_get_early_data_status(ssl) != SSL_EARLY_DATA_REJECTED ||
+                         SSL_write(ssl, early, (int)strlen(early)) > 0;
+                pinged = pinged && SSL_write(ssl, k_ping, (int)(sizeof(k_ping) - 1)) > 0;
                 if (pinged && update != NULL)
                 {
                     const int type = strcmp(update, "requested") == 0 ? SSL_KEY_UPDATE_REQUESTED
@@ -1100,7 +1175,16 @@ int main(int argc, char** argv)
         fputs("\", ", stderr);
         quic_print_probes(ssl, client);
     }
-    fprintf(stderr, "\"version\": \"%s\", \"received\": \"", SSL_get_version(ssl));
+    static const char* const k_early_status[] = {"not_sent", "rejected", "accepted"};
+    const int                early_status     = SSL_get_early_data_status(ssl);
+    fprintf(stderr, "\"early_status\": \"%s\", \"early_received\": \"",
+            early_status >= 0 && early_status <= 2 ? k_early_status[early_status] : "unknown");
+    for (size_t i = 0; i < early_size; ++i)
+    {
+        const char c = early_received[i];
+        fputc(c >= ' ' && c <= '~' && c != '"' && c != '\\' ? c : '?', stderr);
+    }
+    fprintf(stderr, "\", \"version\": \"%s\", \"received\": \"", SSL_get_version(ssl));
     for (size_t i = 0; i < received_size; ++i)
     {
         const char c = received[i];

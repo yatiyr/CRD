@@ -35,7 +35,15 @@
 //   tickets     a server issues one ticket with every connection, resumed ones included, sealed under its ticket key;
 //               a client hands the tickets it receives to the caller's ticket store and offers one, at most once, only
 //               to a connection of the context that received it. Resumption is psk_dhe_ke (a fresh key share, the
-//               hybrid group included); 0-RTT is off.
+//               hybrid group included).
+//   early data  0-RTT (RFC 9846 sections 2.3 and 8) is off unless both ends configure it. A server that allows it
+//               issues tickets that say so and opens each ticket once through its ReplayFilter (a ticket seen before,
+//               or a false positive, resumes nothing: the handshake runs in full); the provider refuses early data
+//               whose ticket age is off by more than kTlsMaxTicketAgeSkew, after a HelloRetryRequest and on another
+//               application protocol. Early bytes reach a server's caller only through read_early(), never read():
+//               they are replayable, and only operations their schema declares idempotent may run on them. A client
+//               sends them with send_early() up to its ticket's allowance; when its server refuses them they are gone,
+//               and the client sends them again after the handshake.
 //   certificates a client accepts its server's Certificate compressed (RFC 8879) with zstd or zlib; a server compresses
 //               its own once, at init(), with each algorithm it may use, and sends the smallest form its client
 //               accepts only when it is smaller than the plain message. A compressed Certificate is decoded into
@@ -58,6 +66,7 @@
 //               thread at a time. Sessions copy what they need, so a context may be cleared while they live.
 //   allocation  contexts, credentials and sessions allocate inside the provider at init() and while records flow.
 
+#include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
@@ -107,6 +116,14 @@ inline constexpr u16 kTlsCertificateCompression[] = {iana::kCertCompressionZstd,
 inline constexpr usize kTlsTicketKeyBytes        = 32U;
 inline constexpr u32   kTlsDefaultTicketLifetime = 172800U;
 inline constexpr u32   kTlsMaxTicketLifetime     = 604800U;
+
+// Early data (0-RTT): the bytes a Cerid server's tickets allow over records (the provider's 14,336, below one record's
+// 2^14, so 0-RTT data never comes near a key's usage limit); over QUIC a ticket allows any amount (0xffffffff, RFC 9001
+// section 4.6.1) and the transport's flow control bounds it. A server refuses early data whose client's ticket age is
+// more than kTlsMaxTicketAgeSkew seconds from its own (the provider's freshness check, RFC 9846 section 8.3).
+inline constexpr u32 kTlsEarlyDataBytes   = 14336U;
+inline constexpr u32 kTlsMaxTicketAgeSkew = 60U;
+inline constexpr u32 kQuicEarlyDataBytes  = 0xFFFFFFFFU;
 
 enum class TlsRole : u8
 {
@@ -158,6 +175,23 @@ enum class TlsEch : u8
 // "none", "accepted", "retry", "disabled", "refused".
 [[nodiscard]] cont::StringView tls_ech_name(TlsEch ech) noexcept;
 
+// What became of early data (0-RTT) on a connection (decision S17).
+enum class TlsEarlyData : u8
+{
+    None,     // not offered: no early data configured, no ticket that allows it, or a server whose client sent none
+    Offered,  // a client's, until its server answers: early bytes may be sent (send_early) under the 0-RTT keys
+    Accepted, // the server took the early data; on a server, read_early() returns it
+    Rejected, // the server refused it (all a client learns): another protocol, a HelloRetryRequest, another QUIC
+              // context, or a server without early data; the client sends the bytes again after the handshake
+    Replayed, // a server's: the offered ticket was not opened for the first time (its ReplayFilter), so the handshake
+              // ran in full
+    Stale,    // a server's: the client's ticket age is more than kTlsMaxTicketAgeSkew seconds off (the provider's
+              // freshness check)
+};
+
+// "none", "offered", "accepted", "rejected", "replayed", "stale".
+[[nodiscard]] cont::StringView tls_early_data_name(TlsEarlyData early) noexcept;
+
 // The AEADs in this CPU's order: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 with AES instructions,
 // ChaCha20-Poly1305 first without them (the "chosen by CPU capability" default of the provider policy).
 [[nodiscard]] cont::ConstSpan<AlgorithmId> tls_aead_preference() noexcept;
@@ -171,6 +205,7 @@ enum class TlsEch : u8
 [[nodiscard]] u16 tls_group_codepoint(AlgorithmId group) noexcept;
 [[nodiscard]] u16 tls_signature_codepoint(AlgorithmId signature) noexcept;
 
+class ReplayFilter;         // replay.hpp: a server's record of the tickets it has opened
 struct ProviderCertificate; // the provider's certificate object, defined only inside crd-crypto
 
 // A key and the self-signed certificate that carries it to the peer.
@@ -265,6 +300,9 @@ struct TlsBinding
 // domain and connections meant to be uncorrelated share none (T15). A ticket is a secret (its resumption key): the
 // store zeroes the tickets it drops and the bytes it handed out. A QUIC handshake keeps and takes its tickets under
 // its own binding, so a ticket of one transport is never offered on the other (the provider would not resume it).
+// The bytes are Cerid's ticket record: the early data the ticket allows and, over QUIC, the server's transport
+// parameters that 0-RTT keeps to (RFC 9000 section 7.4.1), beside the provider's session; a record that does not parse
+// is never offered.
 class TlsTicketStore
 {
 public:
@@ -323,6 +361,13 @@ struct TlsConfig
     // A client without ech_configs sends a GREASE ECH extension (RFC 9849 section 6.2), so its hellos look like those
     // that offer ECH; false only where no observer could tell the two apart anyway.
     bool ech_grease = true;
+    // Early data (0-RTT, decision S17), off unless set: a client sends it on a ticket whose server allows it; a server
+    // issues tickets that allow it and accepts it, opening each ticket once through `early_data_filter`, which it
+    // requires: a ReplayFilter that is ready, whose period covers the ticket lifetime and kTlsMaxTicketAgeSkew, shared
+    // by every session of the context and kept alive while they live (BadConfig otherwise, and for a filter without
+    // early data or on a client).
+    bool          early_data        = false;
+    ReplayFilter* early_data_filter = nullptr;
 };
 
 // The settings a session copies from its context.
@@ -343,6 +388,8 @@ struct TlsSettings
     u8          ticket_keys[2][kTlsTicketKeyBytes] = {}; // a server's: the sealing key, then the previous one
     u8          ticket_names[2][16]                = {}; // the keys' public names, which lead their tickets
     u32         ticket_key_count                   = 0U;
+    ReplayFilter* early_filter                     = nullptr; // a server's, when it accepts early data
+    bool        early_data                         = false;
     bool        ech_grease                         = false;
 };
 
@@ -433,6 +480,10 @@ public:
     // retried connection only (RFC 9849 section 6.1.6). Empty otherwise. Valid while the session lives.
     [[nodiscard]] cont::ConstSpan<u8> ech_retry_configs() const noexcept;
 
+    // What became of early data: on a client Offered from init() until its server answers, settled when the handshake
+    // ends; on a server settled from its ClientHello on.
+    [[nodiscard]] TlsEarlyData early_data() const noexcept { return m_early; }
+
     [[nodiscard]] TlsAlert alert_sent() const noexcept { return m_alert_sent; }
     [[nodiscard]] TlsAlert alert_received() const noexcept { return m_alert_received; }
 
@@ -464,6 +515,9 @@ protected:
     KeyId               m_peer_key;
     u64                 m_updates_sent     = 0U;
     u64                 m_updates_received = 0U;
+    u32                 m_early_allowance  = 0U; // a client's: the early bytes its offered ticket allows
+    u32                 m_early_sent       = 0U; // a client's: the early bytes sent
+    u32                 m_ticket_early     = 0U; // a client's: what the last NewSessionTicket allows
     u16                 m_certificate_compression = 0U;
     bool                m_hello_retry       = false;
     bool                m_resumed           = false;
@@ -473,7 +527,10 @@ protected:
     bool                m_ech_pending       = false; // a client given ECH configurations has not encrypted a hello
     bool                m_ech_retry         = false; // a client's ECH configurations are a rejection's retry ones
     bool                m_public_name       = false; // a server's client named one of its ECH public names only
+    bool                m_early_offered     = false; // a server's client offered early data
+    bool                m_ticket_replayed   = false; // a server's ReplayFilter refused the offered ticket
     TlsEch              m_ech               = TlsEch::None;
+    TlsEarlyData        m_early             = TlsEarlyData::None;
     TlsAlert            m_alert_sent;
     TlsAlert            m_alert_received;
 };
@@ -503,7 +560,8 @@ public:
 
     // Takes all of `bytes` (received from the peer) and runs the handshake as far as they allow. While the session
     // handshakes, an error moves it to Failed (PeerRefused, Failed or a client's EchRejected) with the alert waiting in
-    // the outgoing bytes. After the handshake the bytes wait for read(). Full when they would exceed
+    // the outgoing bytes. After the handshake the bytes wait for read(), and on a server that accepted early data, for
+    // read_early() until the handshake ends. Full when they would exceed
     // kTlsMaxBufferedBytes (nothing taken); NotReady in Idle and Failed; Closed after close_notify either way.
     [[nodiscard]] TlsError receive(cont::ConstSpan<u8> bytes) noexcept;
 
@@ -516,6 +574,21 @@ public:
     // and Closed once the peer's close_notify has been read.
     [[nodiscard]] TlsError send(cont::ConstSpan<u8> plaintext) noexcept;
     [[nodiscard]] TlsError read(cont::Span<u8> out, usize& written) noexcept;
+
+    // A client while early_data() is Offered: protects all of `plaintext` as early data behind its ClientHello, or
+    // nothing (Full when it would pass early_data_room() or the outgoing bound). The bytes are replayable: only
+    // operations their schema declares idempotent go here. NotReady in any other state.
+    [[nodiscard]] TlsError send_early(cont::ConstSpan<u8> plaintext) noexcept;
+
+    // The early bytes a client may still send: its ticket's allowance less what send_early() took; 0 unless Offered.
+    [[nodiscard]] u32 early_data_room() const noexcept;
+
+    // A server that accepted early data, until the handshake ends: the early bytes received so far, up to out.size()
+    // (0 when none waits). Early bytes come only from here, never from read(), and the handshake goes on only through
+    // here: once the client's early data has ended, a call completes the handshake (Established; what follows is
+    // read()'s), so the server calls it after each receive() until the session is Established. An error fails the
+    // session as receive() does. NotReady for a client and for a server that accepted no early data.
+    [[nodiscard]] TlsError read_early(cont::Span<u8> out, usize& written) noexcept;
 
     // Queues close_notify once the handshake is done; the session is Closed (Closed again when it was sent before, or
     // when the peer closed it during the handshake). NotReady before the handshake ends and after a failure: such a
@@ -540,6 +613,7 @@ private:
     friend struct TlsCallbacks;
 
     [[nodiscard]] TlsError advance() noexcept;
+    [[nodiscard]] TlsError established() noexcept;
     [[nodiscard]] TlsError rekey(bool request_peer) noexcept;
     [[nodiscard]] TlsError close_at_bound() noexcept;
     void                   flush() noexcept;
@@ -548,17 +622,21 @@ private:
     u64 m_key_update_records = 0U;
 };
 
-// The encryption levels whose CRYPTO data a QUIC handshake carries (RFC 9001 section 4.1.3). Initial packets are
-// protected by quic_initial_secret's keys, the others by the handshake's own secrets; 0-RTT is off (decision S6), so
-// the early data level never exists.
+// The encryption levels of a QUIC connection (RFC 9001 section 4.1.3). The first kQuicLevels carry CRYPTO data:
+// Initial packets are protected by quic_initial_secret's keys, the others by the handshake's own secrets. Early (0-RTT)
+// packets carry none (RFC 9000 section 12.4): the level has keys only, the client's (decision S17).
 enum class QuicLevel : u8
 {
     Initial,
     Handshake,
     Application,
+    Early,
 };
 
 inline constexpr usize kQuicLevels = 3U;
+
+// The bytes of a QUIC server's early data context: what 0-RTT depends on besides the ticket (RFC 9000 section 7.4.1).
+inline constexpr usize kQuicMaxEarlyDataContextBytes = 8192U;
 
 // The bytes of transport parameters a QUIC handshake sends (RFC 9000 section 18): far above any real set, whose
 // parameters encode in a few hundred bytes. Their encoding and checks are the transport's (crd-net, 4.2a); the
@@ -593,10 +671,15 @@ public:
     // A new handshake of `context`'s role sending `transport_parameters` (1 to kQuicMaxTransportParameterBytes, the
     // encoded parameters of this connection: a server's include the connection IDs RFC 9000 section 7.3
     // authenticates), replacing any previous one. A client's ClientHello is pending at the Initial level when init()
-    // returns. Tickets and ECH as TlsSession::init, tickets kept under this transport's binding. BadConfig for a
-    // context without an application protocol, missing or oversized parameters, and as TlsSession::init.
+    // returns. Tickets and ECH as TlsSession::init, tickets kept under this transport's binding, each with the server's
+    // transport parameters. A server whose context accepts early data names its `early_data_context` (1 to
+    // kQuicMaxEarlyDataContextBytes): the transport parameters a client remembers and the application protocol's
+    // settings, encoded the same way on every connection; its tickets accept 0-RTT only under the same context (RFC
+    // 9000 section 7.4.1). BadConfig for a context without an application protocol, missing or oversized parameters,
+    // an early data context missing, oversized or given where early data is not accepted, and as TlsSession::init.
     [[nodiscard]] TlsError init(const TlsContext& context, cont::ConstSpan<u8> transport_parameters,
-                                TlsTicketStore* tickets = nullptr, cont::ConstSpan<u8> ech_retry_configs = {}) noexcept;
+                                TlsTicketStore* tickets = nullptr, cont::ConstSpan<u8> ech_retry_configs = {},
+                                cont::ConstSpan<u8> early_data_context = {}) noexcept;
     void                   clear() noexcept;
 
     // Takes all of `bytes`, the CRYPTO data received at `level` continuing what was provided there before (the
@@ -609,7 +692,8 @@ public:
     [[nodiscard]] TlsError provide(QuicLevel level, cont::ConstSpan<u8> bytes) noexcept;
 
     // The CRYPTO data waiting to be sent at `level` (at most kTlsMaxBufferedBytes across the levels; a flight beyond it
-    // fails the handshake); take() moves up to out.size() bytes of it into `out`.
+    // fails the handshake); take() moves up to out.size() bytes of it into `out`. The Early level has none: provide()
+    // and take() refuse it with BadConfig, pending() and receive_limit() are 0.
     [[nodiscard]] usize    pending(QuicLevel level) const noexcept;
     [[nodiscard]] TlsError take(QuicLevel level, cont::Span<u8> out, usize& written) noexcept;
 
@@ -617,22 +701,29 @@ public:
     // more where the peer's Certificate may be long. 0 before init().
     [[nodiscard]] usize receive_limit(QuicLevel level) const noexcept;
 
-    // Whether the secret of `side`'s packets at `level` (Handshake or Application) is ready. A level's secret for
-    // writing comes before the peer's for reading, so a packet can always be acknowledged at its own level; a
+    // Whether the secret of `side`'s packets at `level` (Handshake, Application or Early) is ready. A level's secret
+    // for writing comes before the peer's for reading, so a packet can always be acknowledged at its own level; a
     // server's Application secret for writing comes before the client's Finished (half-RTT data: the client is not yet
-    // authenticated).
+    // authenticated). The Early secret is the client's only: a client's from init() while early_data() is Offered, a
+    // server's once it accepted; a client's is zeroed when its server refuses early data.
     [[nodiscard]] bool has_keys(QuicLevel level, QuicSide side) const noexcept;
 
     // Derives `side`'s packet and header protection keys at `level` for `version` (the connection's negotiated
     // version) from that secret, and zeroes the secret: each is handed out once, and QuicPacketKey::update derives
-    // every later key phase. NotReady when it is not ready (or was handed out), BadConfig for the Initial level (whose
-    // keys quic_initial_secret gives) and an unknown version.
+    // every later key phase (0-RTT has no key update: RFC 9001 section 6). NotReady when it is not ready (or was
+    // handed out), BadConfig for the Initial level (whose keys quic_initial_secret gives) and an unknown version.
     [[nodiscard]] TlsError derive_keys(QuicLevel level, QuicSide side, QuicVersion version, QuicPacketKey& packet,
                                        QuicHeaderKey& header) noexcept;
 
     // The peer's transport parameters as received (the transport decodes and checks them); empty until they arrive
     // (a server's with the ClientHello, a client's with EncryptedExtensions). Valid while the handshake lives.
     [[nodiscard]] cont::ConstSpan<u8> peer_transport_parameters() const noexcept;
+
+    // A client offering early data: the server's transport parameters from the connection that issued the ticket,
+    // which its 0-RTT packets keep to (RFC 9000 section 7.4.1); once the handshake accepts, the transport checks that
+    // peer_transport_parameters() lowers none of them. Empty when the handshake offers no ticket. Valid while the
+    // handshake lives.
+    [[nodiscard]] cont::ConstSpan<u8> remembered_transport_parameters() const noexcept;
 
     // The level alert_sent() was written at (the handshake's write level then): the transport's CONNECTION_CLOSE goes
     // at it (RFC 9001 section 4.8) and, before the handshake is confirmed, also at the lower levels its peer may still
@@ -651,8 +742,16 @@ private:
         AlgorithmId aead{};
     };
 
+    static constexpr usize kEarlySecrets = 2U; // m_secrets' Early row, whose secret is the client's only
+    static constexpr usize kNoSecret     = 3U;
+
+    // The row of m_secrets that holds `side`'s secret at `level`; kNoSecret for the Initial level and a server's Early.
+    [[nodiscard]] static usize secret_level(QuicLevel level, QuicSide side) noexcept;
+    static void                forget(Secret& secret) noexcept;
+
     ProviderBuffer* m_outgoing[kQuicLevels] = {};
-    Secret          m_secrets[2][2]; // [Handshake, Application][Client, Server]
+    Secret          m_secrets[3][2]; // [Handshake, Application, Early][Client, Server]
+    cont::Array<u8> m_remembered;    // a client's: its ticket's server transport parameters
     QuicLevel       m_alert_level = QuicLevel::Initial;
 };
 } // namespace crd::crypto

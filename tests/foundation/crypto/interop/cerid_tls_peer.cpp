@@ -6,7 +6,7 @@
 //                     [--tickets FILE] [--ticket-key HEX] [--previous-ticket-key HEX]
 //                     [--compression zstd|zlib|both|none] [--alpn LIST] [--quic 1|2] [--parameters HEX]
 //                     [--ech-configs HEX] [--ech-retry HEX] [--ech-grease 0|1] [--ech-key SEED:ID]
-//                     [--ech-previous SEED:ID]
+//                     [--ech-previous SEED:ID] [--early-data 0|1] [--early TEXT] [--early-context HEX]
 //        crd-tls-peer --public HEX     (prints the Ed25519 public key of a seed, for the pins)
 //        crd-tls-peer --ech-config SEED:ID  (prints the ECHConfigList of a Cerid server's ECH key, as hex)
 //   groups  register names: x25519mlkem768, secp256r1mlkem768, secp384r1mlkem1024, x25519, secp256r1, secp384r1
@@ -28,27 +28,36 @@
 //   ech-key, ech-previous  a server's current and previous ECH keys (TlsConfig::ech_keys, previous_ech_keys): the
 //           32-byte private key and the config_id (decimal) of each, every one published under the public name
 //           front.cerid.test with a maximum_name_length of 32
+//   early-data  TlsConfig::early_data (decision S17): a client offers 0-RTT on a ticket that allows it, a server issues
+//           such tickets and accepts it through a ReplayFilter of this process
+//   early   a client's early data: sent with send_early() when the session offers 0-RTT, and once established sent
+//           again as 1-RTT data when its server refused it (before the pings)
+//   early-context  a QUIC server's early data context (hex, at most 256 bytes; QuicHandshake::init)
 //
 // Frames on both streams are a 4-byte big-endian length and that many bytes of TLS records. A client writes its first
 // flight before reading; after that each end answers every frame it reads with exactly one frame (possibly empty).
 // Once established, a client sends "ping from cerid" (--pings times) and a server echoes every byte it reads. At the
 // end of input the end prints one JSON line on standard error with what it negotiated, whether it resumed, the key
 // updates each way, the algorithm of its compressed Certificate sent or received, what became of ECH (with a rejected
-// client's retry configurations) and what it read, and exits 0 (2 on a usage error).
+// client's retry configurations) and of early data (a server's with the early bytes read_early() returned) and what it
+// read, and exits 0 (2 on a usage error). A server that accepted early data reads it after each frame until its
+// handshake ends; it echoes 1-RTT bytes only.
 //
 // Over QUIC a frame carries CRYPTO data as pieces: a level byte (0 Initial, 1 Handshake, 2 Application), a 24-bit
 // big-endian length and that many bytes. No application data flows; the JSON line adds the application protocol, the
-// level of the alert sent, the peer's transport parameters and one probe per secret: a fixed packet sealed and a fixed
-// sample masked under the keys QuicHandshake::derive_keys makes from it, which crd-openssl-tls-peer computes through
-// OpenSSL.
+// level of the alert sent, the peer's transport parameters and one probe per secret (the client's 0-RTT secret
+// included): a fixed packet sealed and a fixed sample masked under the keys QuicHandshake::derive_keys makes from it,
+// which crd-openssl-tls-peer computes through OpenSSL.
 
 #include <crd/crypto/capability.hpp>
 #include <crd/crypto/provider.hpp>
+#include <crd/crypto/replay.hpp>
 #include <crd/crypto/tls.hpp>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 namespace
 {
@@ -299,13 +308,13 @@ bool provide_frame(QuicHandshake& handshake, usize size)
 // and the probe sample's mask under the keys derive_keys makes, as hex.
 void print_probes(QuicHandshake& handshake, QuicVersion version)
 {
-    constexpr QuicLevel   levels[]      = {QuicLevel::Handshake, QuicLevel::Application};
-    constexpr const char* level_names[] = {"handshake", "application"};
+    constexpr QuicLevel levels[] = {QuicLevel::Handshake, QuicLevel::Application, QuicLevel::Early};
+    constexpr const char* level_names[] = {"handshake", "application", "early"};
     constexpr QuicSide    sides[]       = {QuicSide::Client, QuicSide::Server};
     constexpr const char* side_names[]  = {"client", "server"};
     bool                  first         = true;
     std::fputs("\"probes\": {", stderr);
-    for (usize i = 0U; i < 2U; ++i)
+    for (usize i = 0U; i < 3U; ++i)
     {
         for (usize j = 0U; j < 2U; ++j)
         {
@@ -359,9 +368,10 @@ void print_common(const detail::TlsHandshakeState& state)
     print_alert("alert_sent", state.alert_sent());
     std::fputs(", ", stderr);
     print_alert("alert_received", state.alert_received());
-    std::fprintf(stderr, R"(, "certificate_compression": %u, "suite": "%s", "ech": "%s", "ech_retry": ")",
+    std::fprintf(stderr,
+                 R"(, "certificate_compression": %u, "suite": "%s", "ech": "%s", "early": "%s", "ech_retry": ")",
                  static_cast<unsigned>(state.certificate_compression()), suite_name(state.aead()),
-                 tls_ech_name(state.ech()).data());
+                 tls_ech_name(state.ech()).data(), tls_early_data_name(state.early_data()).data());
     print_hex(state.ech_retry_configs());
     // The exporter (RFC 9846 section 7.5) under a label and a context, and the world capability binding (its label,
     // no context): the other end's library must derive the same bytes.
@@ -380,10 +390,10 @@ void print_common(const detail::TlsHandshakeState& state)
 
 // A QUIC handshake over the frames: a client's first flight unasked, then one frame answering each frame read.
 int run_quic(const TlsContext& context, TlsTicketStore* tickets, bool client, QuicVersion version,
-             ConstSpan<u8> parameters, ConstSpan<u8> ech_retry)
+             ConstSpan<u8> parameters, ConstSpan<u8> ech_retry, ConstSpan<u8> early_context)
 {
     QuicHandshake handshake;
-    if (handshake.init(context, parameters, tickets, ech_retry) != TlsError::None)
+    if (handshake.init(context, parameters, tickets, ech_retry, early_context) != TlsError::None)
     {
         std::fputs("crd-tls-peer: the QUIC handshake could not be made\n", stderr);
         return 1;
@@ -419,7 +429,8 @@ int usage()
                "[--key-update-records N] [--pings N] [--update requested|not-requested] [--tickets FILE] "
                "[--ticket-key HEX] [--previous-ticket-key HEX] [--compression zstd|zlib|both|none] [--alpn LIST] "
                "[--quic 1|2] [--parameters HEX] [--ech-configs HEX] [--ech-retry HEX] [--ech-grease 0|1] "
-               "[--ech-key SEED:ID] [--ech-previous SEED:ID]\n",
+               "[--ech-key SEED:ID] [--ech-previous SEED:ID] [--early-data 0|1] [--early TEXT] "
+               "[--early-context HEX]\n",
                stderr);
     return 2;
 }
@@ -500,6 +511,10 @@ int main(int argc, char** argv)
     static TlsEchKey ech_keys[2][kTlsMaxEchKeys];
     const TlsEchKey* ech_lists[2][kTlsMaxEchKeys] = {};
     usize            ech_counts[2]                = {};
+    bool early_data = false;
+    const char* early = nullptr;
+    u8 early_context[256] = {};
+    usize early_context_bytes = 0U;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         const char* option = argv[i];
@@ -605,6 +620,22 @@ int main(int argc, char** argv)
         {
             ech_grease = value[0] == '1';
         }
+        else if (std::strcmp(option, "--early-data") == 0 &&
+                 (std::strcmp(value, "0") == 0 || std::strcmp(value, "1") == 0))
+        {
+            early_data = value[0] == '1';
+        }
+        else if (std::strcmp(option, "--early") == 0)
+        {
+            early = value;
+        }
+        else if (std::strcmp(option, "--early-context") == 0)
+        {
+            if (!parse_hex_bytes(value, early_context, sizeof(early_context), early_context_bytes))
+            {
+                return usage();
+            }
+        }
         else if ((std::strcmp(option, "--ech-key") == 0 || std::strcmp(option, "--ech-previous") == 0) &&
                  ech_counts[0] + ech_counts[1] < kTlsMaxEchKeys)
         {
@@ -656,7 +687,8 @@ int main(int argc, char** argv)
         (pin != nullptr && !parse_hex(pin, pin_bytes, sizeof(pin_bytes))) || (client && pin == nullptr) ||
         (ticket_key != nullptr && !parse_hex(ticket_key, key_bytes, sizeof(key_bytes))) ||
         (previous_key != nullptr && !parse_hex(previous_key, previous_bytes, sizeof(previous_bytes))) ||
-        (client && (ticket_key != nullptr || previous_key != nullptr)) || (!client && tickets != nullptr))
+        (client && (ticket_key != nullptr || previous_key != nullptr)) || (!client && tickets != nullptr) ||
+        (!client && early != nullptr))
     {
         return usage();
     }
@@ -696,6 +728,18 @@ int main(int argc, char** argv)
         config.signatures = kSignatures;
         config.pinned     = ConstSpan<KeyId>(&pinned, 1U);
     }
+    // A server's tickets are opened once through this process's filter, which covers their lifetime.
+    static ReplayFilter filter;
+    config.early_data = early_data;
+    if (early_data && !client)
+    {
+        if (filter.init(1024U, kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew,
+                        static_cast<u64>(std::time(nullptr))) != CryptoError::None)
+        {
+            return 1;
+        }
+        config.early_data_filter = &filter;
+    }
     TlsContext context;
     TlsSession session;
     FileStore  store(tickets != nullptr ? tickets : "");
@@ -708,7 +752,7 @@ int main(int argc, char** argv)
         }
         return run_quic(context, tickets != nullptr ? &store : nullptr, client,
                         quic == 1U ? QuicVersion::V1 : QuicVersion::V2, ConstSpan<u8>(parameters, parameter_bytes),
-                        ConstSpan<u8>(ech_retry, ech_retry_bytes));
+                        ConstSpan<u8>(ech_retry, ech_retry_bytes), ConstSpan<u8>(early_context, early_context_bytes));
     }
     if (context.init(config) != TlsError::None ||
         session.init(context, tickets != nullptr ? &store : nullptr, ConstSpan<u8>(ech_retry, ech_retry_bytes)) !=
@@ -718,9 +762,18 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    char  received[256] = {};
+    char received[256] = {};
     usize received_size = 0U;
-    bool  pinged        = false;
+    char early_received[256] = {};
+    usize early_size = 0U;
+    bool pinged = false;
+    const usize early_bytes = early != nullptr ? std::strlen(early) : 0U;
+    if (client && early != nullptr && session.early_data() == TlsEarlyData::Offered &&
+        session.send_early(ConstSpan<u8>(reinterpret_cast<const u8*>(early), early_bytes)) != TlsError::None)
+    {
+        std::fputs("crd-tls-peer: the early data could not be sent\n", stderr);
+        return 1;
+    }
     if (client && !write_frame(session))
     {
         return 1;
@@ -731,6 +784,19 @@ int main(int argc, char** argv)
         if (session.state() == TlsState::Handshaking || session.state() == TlsState::Established)
         {
             (void)session.receive(ConstSpan<u8>(g_frame, size));
+        }
+        // A server that accepted early data reads it as it comes; the read that finds its end completes the handshake.
+        while (!client && session.early_data() == TlsEarlyData::Accepted && session.state() == TlsState::Handshaking)
+        {
+            usize got = 0U;
+            if (session.read_early(Span<u8>(reinterpret_cast<u8*>(early_received) + early_size,
+                                            sizeof(early_received) - 1U - early_size),
+                                   got) != TlsError::None ||
+                got == 0U)
+            {
+                break;
+            }
+            early_size += got;
         }
         if (session.state() == TlsState::Established)
         {
@@ -749,7 +815,9 @@ int main(int argc, char** argv)
             }
             if (client && !pinged && session.state() == TlsState::Established)
             {
-                pinged = true;
+                // Early data the server refused goes again, now as 1-RTT data.
+                pinged = early == nullptr || session.early_data() != TlsEarlyData::Rejected ||
+                         session.send(ConstSpan<u8>(reinterpret_cast<const u8*>(early), early_bytes)) == TlsError::None;
                 for (u64 i = 0U; i < pings && pinged; ++i)
                 {
                     pinged = session.send(ConstSpan<u8>(reinterpret_cast<const u8*>(kPing), sizeof(kPing) - 1U)) ==
@@ -772,7 +840,13 @@ int main(int argc, char** argv)
                  static_cast<unsigned long long>(session.key_updates_sent()),
                  static_cast<unsigned long long>(session.key_updates_received()),
                  static_cast<unsigned long long>(session.key_update_records()));
-    std::fputs(R"("received": ")", stderr);
+    std::fputs(R"("early_received": ")", stderr);
+    for (usize i = 0U; i < early_size; ++i)
+    {
+        const char c = early_received[i];
+        std::fputc(c >= ' ' && c <= '~' && c != '"' && c != '\\' ? c : '?', stderr);
+    }
+    std::fputs(R"(", "received": ")", stderr);
     for (usize i = 0U; i < received_size; ++i)
     {
         const char c = received[i];

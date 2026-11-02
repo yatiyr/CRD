@@ -1910,11 +1910,16 @@ TEST_CASE("TLS: a ticket changed at rest or past its lifetime runs a full handsh
 
 TEST_CASE("TLS: a client keeps a ticket for the lifetime its server states", "[crypto][tls][net-2]")
 {
-    // The lifetime the provider reads back from the store's bytes; up to a second has passed since the ticket came.
-    const auto kept_lifetime = [](const Bytes& ticket) {
+    // The lifetime the provider reads back from the session in the store's ticket record (its version, no early data
+    // and no transport parameters over records, then the session); up to a second has passed since the ticket came.
+    const auto kept_lifetime = [](const Bytes& ticket)
+    {
+        REQUIRE(ticket.size() > 7U);
+        CHECK(ticket[0] == 1U);
+        CHECK(std::all_of(ticket.data() + 1, ticket.data() + 7, [](u8 byte) { return byte == 0U; }));
         const bssl::UniquePtr<SSL_CTX>     context(SSL_CTX_new(TLS_method()));
         const bssl::UniquePtr<SSL_SESSION> session(
-            SSL_SESSION_from_bytes(ticket.data(), ticket.size(), context.get()));
+            SSL_SESSION_from_bytes(ticket.data() + 7U, ticket.size() - 7U, context.get()));
         REQUIRE(session);
         return SSL_SESSION_get_timeout(session.get());
     };

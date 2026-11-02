@@ -20,7 +20,8 @@
 #   crd-fuzz-crypto-tls        TLS 1.3 sessions and QUIC handshakes fed hostile bytes (records, or CRYPTO data per
 #                              level) as a server and as a client: never established, only the documented answers,
 #                              failure is final, every buffer stays bounded and no client Application secret is
-#                              reached; and
+#                              reached; the same after a real resumption with early data (a client that offered it,
+#                              a server that accepted it and reads no forged early byte); and
 #                              compressed Certificates decoded only to reachable claims within the bound.
 crd_fuzz_target(crd-fuzz-crypto-capability
     SOURCES fuzz_capability.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-capability")

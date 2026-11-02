@@ -10,7 +10,10 @@
 // 9001; bit 0 as above) and the rest is CRYPTO data: pieces of a level byte (taken modulo three), a 16-bit length and
 // that many bytes, each provided at its level. With bit 4 set the session runs Encrypted Client Hello (RFC 9849): a
 // client given the rest as its ECHConfigList (a stream session and a QUIC handshake), or a server holding ECH keys fed
-// the rest as above.
+// the rest as above. With bit 5 set the session runs early data (0-RTT, decision S17), over records or, with bit 3,
+// over QUIC: a client resumes a real ticket of the early data server (a full connection in-process first) and offers
+// early data, then the rest is what its "server" sent; or a server accepts a real client's ticket and early data and
+// the rest is what that "client" sent after them.
 //
 // Oracles, none of them the provider's verdict on one call:
 //   * neither session is ever established: a server needs a Finished under keys derived from its own fresh share, and
@@ -32,6 +35,12 @@
 //     or sends a ClientHello whose outer encrypted_client_hello carries a 32-byte encapsulation and which names
 //     another server than its own, and no byte it sends at the Initial level holds its server's name;
 //   * a server holding ECH keys reports no ECH (it needs a client's Finished) whatever hello reaches it;
+//   * a ticket record a client's store hands out offers early data only when it is a record of a real session (no fixed
+//     input is), so the client offers none;
+//   * a client that offered early data stays Offered or is Rejected, never Accepted (that needs its server's Finished),
+//     sends early data only while Offered and holds its 0-RTT keys over QUIC only then; a server that accepted a real
+//     client's early data returns exactly that client's early bytes from read_early() and none more (no input holds
+//     the client's early keys), never from read(), and is never established;
 //   * a compressed Certificate decodes only for zstd or zlib, to a claim within [4, kTlsMaxCertificateBytes] that, for
 //     zlib, its bytes can reach (restated here: DEFLATE's 1032 bytes per byte between zlib's 6 framing bytes), and a
 //     refused claim leaves the output untouched; a zlib decoding carries the Adler-32 of its output (restated) and a
@@ -41,11 +50,13 @@
 #include <crd/compression/deflate.hpp>
 #include <crd/compression/zstd.hpp>
 #include <crd/crypto/provider.hpp>
+#include <crd/crypto/replay.hpp>
 #include <crd/crypto/tls.hpp>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <initializer_list>
 
 namespace
@@ -71,6 +82,9 @@ constexpr usize kQuicPiece = 3U; // a CRYPTO piece's level byte and 16-bit lengt
 constexpr const char* kPublicName = "front.cerid.test"; // the fuzz server's ECH public name
 constexpr u16         kEchVersion = 0xFE0DU;
 constexpr u8          kEchConfigIds[] = {1U, 2U};        // the fuzz server's current and previous ECH keys
+constexpr u8 kEarlyMessage[] = {'w', 'a', 'l', 'k', ' ', 'n', 'o', 'r', 't', 'h'}; // a real client's early data
+constexpr u8 kEarlyContext[] = {0x04U, 0x04U, 0x80U, 0x10U, 0x00U, 0x00U, 'g'};    // the QUIC early data context
+constexpr crd::u64 kEarlyPeriod = kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew;
 
 // The fuzz server's ticket key: the bytes 0x40, 0x41, ... 0x5F.
 struct TicketKey
@@ -119,6 +133,11 @@ struct Contexts
     TlsContext    quic_server;
     TlsContext    quic_client;
     TlsContext    ech_server;
+    ReplayFilter early_filter; // the early data servers', made afresh for every input
+    TlsContext early_server;
+    TlsContext early_client;
+    TlsContext quic_early_server;
+    TlsContext quic_early_client;
     bool          ready = false;
 
     Contexts() noexcept
@@ -162,7 +181,20 @@ struct Contexts
         }
         config.ech_keys          = {};
         config.previous_ech_keys = {};
+        config.early_data = true;
+        config.early_data_filter = &early_filter;
+        if (early_filter.init(16U, kEarlyPeriod, static_cast<crd::u64>(std::time(nullptr))) != CryptoError::None ||
+            early_server.init(config) != TlsError::None)
+        {
+            return;
+        }
         config.application_protocols = kProtocols;
+        if (quic_early_server.init(config) != TlsError::None)
+        {
+            return;
+        }
+        config.early_data = false;
+        config.early_data_filter = nullptr;
         const KeyId pin    = credential.key_id();
         config.role        = TlsRole::Client;
         config.credential  = nullptr;
@@ -170,7 +202,11 @@ struct Contexts
         config.signatures  = kSignatures;
         config.pinned      = ConstSpan<KeyId>(&pin, 1U);
         ready              = quic_client.init(config) == TlsError::None;
+        config.early_data = true;
+        ready = ready && quic_early_client.init(config) == TlsError::None;
         config.application_protocols = {};
+        ready = ready && early_client.init(config) == TlsError::None;
+        config.early_data = false;
         ready              = ready && client.init(config) == TlsError::None;
     }
 };
@@ -200,6 +236,110 @@ Contexts& contexts() noexcept
 {
     static Contexts instance;
     return instance;
+}
+
+// A client's store that keeps the newest real ticket its server issues and hands it out once.
+class KeepStore final : public TlsTicketStore
+{
+public:
+    void keep(const TlsBinding&, ConstSpan<u8> ticket) noexcept override
+    {
+        m_size = ticket.size() <= sizeof(m_ticket) ? ticket.size() : 0U;
+        std::memcpy(m_ticket, ticket.data(), m_size);
+    }
+
+    ConstSpan<u8> take(const TlsBinding&) noexcept override
+    {
+        const usize size = m_size;
+        m_size = 0U;
+        return ConstSpan<u8>(m_ticket, size);
+    }
+
+    [[nodiscard]] bool holds() const noexcept { return m_size != 0U; }
+
+private:
+    u8 m_ticket[8192] = {};
+    usize m_size = 0U;
+};
+
+u8 g_moved[kTlsMaxBufferedBytes];
+
+// Moves what one end waits to send to the other; false when either refuses.
+bool move(TlsSession& from, TlsSession& to) noexcept
+{
+    usize written = 0U;
+    return from.take(Span<u8>(g_moved), written) == TlsError::None &&
+           (written == 0U || to.receive(ConstSpan<u8>(g_moved, written)) == TlsError::None);
+}
+
+bool move(QuicHandshake& from, QuicHandshake& to) noexcept
+{
+    for (const QuicLevel level : {QuicLevel::Initial, QuicLevel::Handshake, QuicLevel::Application})
+    {
+        usize written = 0U;
+        if (from.take(level, Span<u8>(g_moved), written) != TlsError::None ||
+            (written != 0U && to.provide(level, ConstSpan<u8>(g_moved, written)) != TlsError::None))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// A real ticket of the early data server in `store`, over records or QUIC: a full connection in-process, after the
+// server's filter was made afresh.
+bool earn_ticket(KeepStore& store, bool quic) noexcept
+{
+    Contexts& shared = contexts();
+    if (shared.early_filter.init(16U, kEarlyPeriod, static_cast<crd::u64>(std::time(nullptr))) != CryptoError::None)
+    {
+        return false;
+    }
+    if (quic)
+    {
+        QuicHandshake client;
+        QuicHandshake server;
+        if (client.init(shared.quic_early_client, ConstSpan<u8>(kParameters), &store) != TlsError::None ||
+            server.init(shared.quic_early_server, ConstSpan<u8>(kParameters), nullptr, {},
+                        ConstSpan<u8>(kEarlyContext)) != TlsError::None)
+        {
+            return false;
+        }
+        // The server's ticket follows the client's Finished.
+        for (int round = 0; round < 8 && !store.holds(); ++round)
+        {
+            if (!move(client, server) || !move(server, client))
+            {
+                return false;
+            }
+        }
+        return store.holds();
+    }
+    TlsSession client;
+    TlsSession server;
+    if (client.init(shared.early_client, &store) != TlsError::None ||
+        server.init(shared.early_server) != TlsError::None)
+    {
+        return false;
+    }
+    for (int round = 0; round < 8 && server.state() != TlsState::Established; ++round)
+    {
+        if (!move(client, server) || !move(server, client))
+        {
+            return false;
+        }
+    }
+    u8 byte = 0U;
+    usize written = 0U;
+    return move(server, client) && client.read(Span<u8>(&byte, 1U), written) == TlsError::None && store.holds();
+}
+
+// The oracles of a client that offered early data, over records or QUIC (`keys`: it holds its 0-RTT keys).
+void check_early_client(const detail::TlsHandshakeState& state, bool keys) noexcept
+{
+    CRD_FUZZ_REQUIRE(state.early_data() == TlsEarlyData::Offered || state.early_data() == TlsEarlyData::Rejected);
+    CRD_FUZZ_REQUIRE(state.early_data() == TlsEarlyData::Offered || !keys);
+    CRD_FUZZ_REQUIRE(state.state() != TlsState::Established);
 }
 
 void drain(TlsSession& session) noexcept
@@ -262,8 +402,9 @@ void drain(QuicHandshake& handshake) noexcept
     CRD_FUZZ_REQUIRE(total <= kTlsMaxBufferedBytes);
 }
 
-// Provides `data`'s CRYPTO pieces to a QUIC handshake of `client`'s role, checking every answer.
-void feed_quic(QuicHandshake& handshake, bool client, ConstSpan<u8> data) noexcept
+// Provides `data`'s CRYPTO pieces to a QUIC handshake of `client`'s role, checking every answer. A handshake that
+// already read a real peer's hello holds that peer's transport parameters, `received`, whatever follows.
+void feed_quic(QuicHandshake& handshake, bool client, ConstSpan<u8> data, ConstSpan<u8> received = {}) noexcept
 {
     for (usize at = 0U; at + kQuicPiece <= data.size();)
     {
@@ -284,13 +425,19 @@ void feed_quic(QuicHandshake& handshake, bool client, ConstSpan<u8> data) noexce
         CRD_FUZZ_REQUIRE(handshake.state() == TlsState::Handshaking || handshake.state() == TlsState::Failed);
         CRD_FUZZ_REQUIRE(!handshake.alert_sent().present ||
                          static_cast<usize>(handshake.alert_level()) < kQuicLevels);
-        CRD_FUZZ_REQUIRE(handshake.peer_transport_parameters().size() <= data.size());
+        const ConstSpan<u8> parameters = handshake.peer_transport_parameters();
+        CRD_FUZZ_REQUIRE(received.empty() ? parameters.size() <= data.size()
+                                          : parameters.size() == received.size() &&
+                                                std::memcmp(parameters.data(), received.data(), received.size()) == 0);
         drain(handshake);
     }
     CRD_FUZZ_REQUIRE(!handshake.has_keys(QuicLevel::Application, client ? QuicSide::Server : QuicSide::Client));
     CRD_FUZZ_REQUIRE(!client || !handshake.has_keys(QuicLevel::Application, QuicSide::Client));
-    CRD_FUZZ_REQUIRE(handshake.group() == AlgorithmId{} && handshake.peer_key() == KeyId{});
-    for (const QuicLevel level : {QuicLevel::Handshake, QuicLevel::Application})
+    // A server that accepted a real client's early data settled its handshake's parameters then.
+    CRD_FUZZ_REQUIRE(handshake.early_data() == TlsEarlyData::Accepted ||
+                     (handshake.group() == AlgorithmId{} && handshake.peer_key() == KeyId{}));
+    CRD_FUZZ_REQUIRE(!handshake.has_keys(QuicLevel::Early, QuicSide::Server));
+    for (const QuicLevel level : {QuicLevel::Handshake, QuicLevel::Application, QuicLevel::Early})
     {
         for (const QuicSide side : {QuicSide::Client, QuicSide::Server})
         {
@@ -302,6 +449,109 @@ void feed_quic(QuicHandshake& handshake, bool client, ConstSpan<u8> data) noexce
             CRD_FUZZ_REQUIRE(packet.ready() == held && header.ready() == held && !handshake.has_keys(level, side));
         }
     }
+}
+
+// Early data over records: a client offering it on a real ticket and fed the rest as its server's bytes, or a server
+// that accepted a real client's early data fed the rest after it, `chunk` bytes at a time.
+void early_records(bool client, ConstSpan<u8> rest, usize chunk) noexcept
+{
+    const Contexts& shared = contexts();
+    KeepStore store;
+    CRD_FUZZ_REQUIRE(earn_ticket(store, false));
+    if (client)
+    {
+        TlsSession session;
+        CRD_FUZZ_REQUIRE(session.init(shared.early_client, &store) == TlsError::None);
+        CRD_FUZZ_REQUIRE(session.early_data() == TlsEarlyData::Offered);
+        CRD_FUZZ_REQUIRE(session.early_data_room() == kTlsEarlyDataBytes);
+        CRD_FUZZ_REQUIRE(session.send_early(ConstSpan<u8>(kEarlyMessage)) == TlsError::None);
+        drain(session);
+        feed(session, rest, chunk);
+        check_early_client(session, false);
+        const bool open = session.early_data() == TlsEarlyData::Offered && session.state() == TlsState::Handshaking;
+        CRD_FUZZ_REQUIRE(
+            session.early_data_room() ==
+            (session.early_data() == TlsEarlyData::Offered ? kTlsEarlyDataBytes - sizeof(kEarlyMessage) : 0U));
+        CRD_FUZZ_REQUIRE(session.send_early(ConstSpan<u8>(kEarlyMessage)) ==
+                         (open ? TlsError::None : TlsError::NotReady));
+        return;
+    }
+    TlsSession peer;
+    TlsSession session;
+    CRD_FUZZ_REQUIRE(peer.init(shared.early_client, &store) == TlsError::None);
+    CRD_FUZZ_REQUIRE(peer.send_early(ConstSpan<u8>(kEarlyMessage)) == TlsError::None);
+    CRD_FUZZ_REQUIRE(session.init(shared.early_server) == TlsError::None);
+    CRD_FUZZ_REQUIRE(move(peer, session));
+    CRD_FUZZ_REQUIRE(session.early_data() == TlsEarlyData::Accepted && session.resumed());
+    u8 early[sizeof(kEarlyMessage) + 1U] = {};
+    usize written = 0U;
+    CRD_FUZZ_REQUIRE(session.read_early(Span<u8>(early), written) == TlsError::None);
+    CRD_FUZZ_REQUIRE(written == sizeof(kEarlyMessage) && std::memcmp(early, kEarlyMessage, written) == 0);
+    drain(session);
+    for (usize at = 0U; at < rest.size();)
+    {
+        const usize size = chunk == 0U ? rest.size() - at : std::min(chunk, rest.size() - at);
+        const TlsState before = session.state();
+        const TlsError taken = session.receive(rest.subspan(at, size));
+        at += size;
+        CRD_FUZZ_REQUIRE(before != TlsState::Handshaking
+                             ? taken == (before == TlsState::Failed ? TlsError::NotReady : TlsError::Closed)
+                             : taken == TlsError::None || taken == TlsError::Full);
+        if (session.state() != TlsState::Handshaking)
+        {
+            continue;
+        }
+        // Whatever came, no more early byte can be read: only the real client holds its early keys.
+        const TlsError read = session.read_early(Span<u8>(early), written);
+        CRD_FUZZ_REQUIRE(written == 0U);
+        CRD_FUZZ_REQUIRE(read == TlsError::None || read == TlsError::Failed || read == TlsError::PeerRefused ||
+                         read == TlsError::Closed);
+        CRD_FUZZ_REQUIRE((read == TlsError::Failed || read == TlsError::PeerRefused) ==
+                         (session.state() == TlsState::Failed));
+        CRD_FUZZ_REQUIRE(session.state() != TlsState::Established);
+        drain(session);
+    }
+    u8 scratch[16] = {};
+    CRD_FUZZ_REQUIRE(session.read(Span<u8>(scratch), written) ==
+                     (session.state() == TlsState::Closed ? TlsError::Closed : TlsError::NotReady));
+    CRD_FUZZ_REQUIRE(session.send(ConstSpan<u8>(scratch)) ==
+                     (session.state() == TlsState::Closed ? TlsError::Closed : TlsError::NotReady));
+    CRD_FUZZ_REQUIRE(session.early_data() == TlsEarlyData::Accepted);
+}
+
+// Early data over QUIC: a client whose 0-RTT keys are ready on a real ticket, fed the rest as CRYPTO data; or a server
+// that accepted a real client's Initial with its early data, fed the rest after it.
+void early_quic(bool client, ConstSpan<u8> rest) noexcept
+{
+    const Contexts& shared = contexts();
+    KeepStore store;
+    CRD_FUZZ_REQUIRE(earn_ticket(store, true));
+    QuicHandshake handshake;
+    if (client)
+    {
+        CRD_FUZZ_REQUIRE(handshake.init(shared.quic_early_client, ConstSpan<u8>(kParameters), &store) ==
+                         TlsError::None);
+        CRD_FUZZ_REQUIRE(handshake.early_data() == TlsEarlyData::Offered);
+        CRD_FUZZ_REQUIRE(handshake.has_keys(QuicLevel::Early, QuicSide::Client));
+        const ConstSpan<u8> remembered = handshake.remembered_transport_parameters();
+        CRD_FUZZ_REQUIRE(remembered.size() == sizeof(kParameters) &&
+                         std::memcmp(remembered.data(), kParameters, sizeof(kParameters)) == 0);
+        drain(handshake);
+        // feed_quic derives every key it holds: the 0-RTT keys' check comes before it.
+        feed_quic(handshake, true, rest);
+        check_early_client(handshake, false);
+        return;
+    }
+    QuicHandshake peer;
+    CRD_FUZZ_REQUIRE(peer.init(shared.quic_early_client, ConstSpan<u8>(kParameters), &store) == TlsError::None);
+    CRD_FUZZ_REQUIRE(handshake.init(shared.quic_early_server, ConstSpan<u8>(kParameters), nullptr, {},
+                                    ConstSpan<u8>(kEarlyContext)) == TlsError::None);
+    CRD_FUZZ_REQUIRE(move(peer, handshake));
+    CRD_FUZZ_REQUIRE(handshake.early_data() == TlsEarlyData::Accepted && handshake.resumed());
+    CRD_FUZZ_REQUIRE(handshake.has_keys(QuicLevel::Early, QuicSide::Client));
+    drain(handshake);
+    feed_quic(handshake, false, rest, ConstSpan<u8>(kParameters));
+    CRD_FUZZ_REQUIRE(handshake.early_data() == TlsEarlyData::Accepted);
 }
 
 // Whether an ECHConfigList has RFC 9849 section 4's outer shape, restated: a 2-byte length holding exactly the rest,
@@ -404,6 +654,12 @@ void offer_ech(ConstSpan<u8> list) noexcept
     config.ech_configs = list;
     TlsContext     context;
     const TlsError made = context.init(config);
+    // No list is a client without ECH (its hellos carry a GREASE extension), which every context accepts.
+    if (list.empty())
+    {
+        CRD_FUZZ_REQUIRE(made == TlsError::None);
+        return;
+    }
     CRD_FUZZ_REQUIRE((made == TlsError::None) == ech_list_shaped(list));
     CRD_FUZZ_REQUIRE(made == TlsError::None || made == TlsError::BadConfig);
     if (made != TlsError::None)
@@ -521,6 +777,18 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     Contexts& shared = contexts();
     CRD_FUZZ_REQUIRE(shared.ready);
     const bool client = (data[0] & 1U) != 0U;
+    if ((data[0] & 32U) != 0U)
+    {
+        if ((data[0] & 8U) != 0U)
+        {
+            early_quic(client, ConstSpan<u8>(data + 2U, size - 2U));
+        }
+        else
+        {
+            early_records(client, ConstSpan<u8>(data + 2U, size - 2U), data[1]);
+        }
+        return 0;
+    }
     if ((data[0] & 16U) != 0U && client)
     {
         offer_ech(ConstSpan<u8>(data + 2U, size - 2U));
@@ -554,6 +822,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         drain(session);
         feed(session, {}, 0U);
         CRD_FUZZ_REQUIRE(store.kept == 0U && !session.resumed());
+        CRD_FUZZ_REQUIRE(session.early_data() == TlsEarlyData::None && session.early_data_room() == 0U);
         return 0;
     }
     CRD_FUZZ_REQUIRE(session.init(client ? shared.client : shared.server) == TlsError::None);
@@ -770,11 +1039,18 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     client_hello(resuming, 0U, 0U, true);
     sink.add("server-client-hello-with-a-forged-ticket", resuming.bytes, resuming.size);
 
-    // Tickets a client's store hands out: no serialized session, and one that ends early.
-    const u8 not_a_session[] = {3U, 0U, 0x30U, 0x82U, 0x01U, 0x00U, 0x02U, 0x01U, 0x01U};
+    // Ticket records a client's store hands out (version 1, the early data allowed, the transport parameters, the
+    // session): no serialized session, nothing at all, another version, parameters past the end, and no session.
+    const u8 not_a_session[] = {3U, 0U, 1U, 0U, 0U, 0x38U, 0U, 0U, 0U, 0x30U, 0x82U, 0x01U, 0x00U, 0x02U, 0x01U, 0x01U};
     sink.add("client-ticket-not-a-session", not_a_session, sizeof(not_a_session));
     const u8 empty_ticket[] = {3U, 0U};
     sink.add("client-empty-ticket", empty_ticket, sizeof(empty_ticket));
+    const u8 record_version[] = {3U, 0U, 2U, 0U, 0U, 0U, 0U, 0U, 0U, 0x30U, 0x03U, 0x02U, 0x01U, 0x01U};
+    sink.add("client-ticket-record-of-another-version", record_version, sizeof(record_version));
+    const u8 past_the_end[] = {3U, 0U, 1U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0x00U, 0x09U, 0x01U, 0x02U, 0x03U};
+    sink.add("client-ticket-record-parameters-past-the-end", past_the_end, sizeof(past_the_end));
+    const u8 no_session[] = {3U, 0U, 1U, 0U, 0U, 0x38U, 0U, 0U, 2U, 0x0FU, 0x00U};
+    sink.add("client-ticket-record-without-a-session", no_session, sizeof(no_session));
 
     Writer answer;
     server_hello(answer);
@@ -897,6 +1173,43 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     constexpr u8 key_update[] = {24U, 0U, 0U, 1U, 0U};
     quic("quic-server-handshake-level-first", 0U, {quic_hello_message}, 1U);
     quic("quic-client-key-update", 1U, {ConstSpan<u8>(key_update)}, 0U);
+    // Early data: what follows a real client's ClientHello and early data at its server (an application data record
+    // no key opens, a plaintext close_notify, another ClientHello, a ChangeCipherSpec, nothing), in pieces too, and
+    // what reaches a client that offered it (a ServerHello that resumes nothing, a handshake_failure alert); over QUIC
+    // a forged Finished at the Handshake level for the server and the ServerHello for the client.
+    Writer forged;
+    forged.put(32U);
+    forged.put(0U);
+    forged.put(23U);
+    forged.put16(0x0303U);
+    forged.put16(48U);
+    for (u8 i = 0U; i < 48U; ++i)
+    {
+        forged.put(static_cast<u8>(0x11U * i + 7U));
+    }
+    sink.add("early-server-forged-application-data", forged.bytes, forged.size);
+    forged.bytes[1] = 5U;
+    sink.add("early-server-forged-application-data-in-5-byte-pieces", forged.bytes, forged.size);
+    const u8 early_close[] = {32U, 0U, 21U, 0x03U, 0x03U, 0x00U, 0x02U, 0x01U, 0x00U};
+    sink.add("early-server-plaintext-close-notify", early_close, sizeof(early_close));
+    const u8 early_ccs[] = {32U, 0U, 20U, 0x03U, 0x03U, 0x00U, 0x01U, 0x01U};
+    sink.add("early-server-change-cipher-spec", early_ccs, sizeof(early_ccs));
+    Writer again;
+    client_hello(again, 32U, 0U);
+    sink.add("early-server-another-client-hello", again.bytes, again.size);
+    const u8 early_nothing[] = {32U, 0U};
+    sink.add("early-server-nothing", early_nothing, sizeof(early_nothing));
+    Writer early_answer;
+    server_hello(early_answer);
+    early_answer.bytes[0] = 33U;
+    sink.add("early-client-server-hello-without-a-psk", early_answer.bytes, early_answer.size);
+    const u8 early_alert[] = {33U, 0U, 21U, 0x03U, 0x03U, 0x00U, 0x02U, 0x02U, 0x28U};
+    sink.add("early-client-handshake-failure-alert", early_alert, sizeof(early_alert));
+    constexpr u8 forged_finished[] = {20U, 0U,  0U,  32U, 1U,  2U,  3U,  4U,  5U,  6U,  7U,  8U,
+                                      9U,  10U, 11U, 12U, 13U, 14U, 15U, 16U, 17U, 18U, 19U, 20U,
+                                      21U, 22U, 23U, 24U, 25U, 26U, 27U, 28U, 29U, 30U, 31U, 32U};
+    quic("early-quic-server-forged-finished", 32U, {ConstSpan<u8>(forged_finished)}, 1U);
+    quic("early-quic-client-server-hello-without-a-psk", 33U, {server_hello_message}, 0U);
     const u8 overlong[] = {8U, 0U, 0U, 0xFFU, 0xFFU, 1U, 0U, 0U, 9U};
     sink.add("quic-server-overlong-piece", overlong, sizeof(overlong));
 

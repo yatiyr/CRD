@@ -8,9 +8,17 @@
 // connection's ex_data slot and touch only the session's own copy of the settings.
 //
 // Tickets (decision S9) are sealed by the context's ticket AEAD method, not the provider's built-in ticket keys (which
-// rotate inside one process and cannot be shared): each ticket is the key's public name, a random 32-byte salt and the
-// session state sealed with AES-256-GCM under a key and nonce derived from the ticket key and that salt (HKDF-SHA256),
-// so every derived key seals one ticket and no count of tickets has to be shared across the servers of a fleet.
+// rotate inside one process and cannot be shared): each ticket is the key's public name, a random 32-byte salt, and its
+// issue time and the session state sealed with AES-256-GCM under a key and nonce derived from the ticket key and that
+// salt (HKDF-SHA256), so every derived key seals one ticket and no count of tickets has to be shared across the servers
+// of a fleet. A client keeps each ticket as Cerid's ticket record: a format version, the early data its
+// NewSessionTicket allows and the server's QUIC transport parameters before the provider's session.
+//
+// Early data (decision S17, RFC 9846 section 2.3) is the provider's 0-RTT. A server that accepts it opens each ticket
+// once: the first 16 bytes of the ticket's salt are its identifier in the context's ReplayFilter, filed by the sealed
+// issue time, and a ticket the filter has seen resumes nothing. Early bytes reach a server's caller through
+// read_early(), which peeks before it reads: bytes the provider returns while the handshake still runs are early ones,
+// and a peek that completed the handshake leaves the first 1-RTT bytes pending for read().
 //
 // Certificate compression (decision S10, RFC 8879) runs through the engine's codecs (crd-compression): a server's
 // compressed Certificate messages are made once at init() and held in the provider context's ex_data, so its sessions
@@ -27,6 +35,7 @@
 
 #include <crd/compression/deflate.hpp>
 #include <crd/compression/zstd.hpp>
+#include <crd/crypto/replay.hpp>
 
 #include <openssl/aead.h>
 #include <openssl/asn1.h>
@@ -44,6 +53,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstring>
+#include <ctime>
 #include <iterator>
 #include <new>
 #include <utility>
@@ -105,6 +115,7 @@ constexpr u8 kHelloRetryRandom[32] = {
 
 constexpr u8    kBadCertificate        = SSL_AD_BAD_CERTIFICATE; // a client's refusal of an unpinned server key
 constexpr u8    kServerHello           = 2U;      // HandshakeType server_hello
+constexpr u8    kNewSessionTicket      = 4U;      // HandshakeType new_session_ticket
 constexpr u8    kKeyUpdate             = 24U;     // HandshakeType key_update
 constexpr u8    kCompressedCertificate = 25U;     // HandshakeType compressed_certificate (RFC 8879)
 constexpr usize kCompressionAlgorithmAt = 4U;     // type (1), length (3), then the algorithm (2)
@@ -117,8 +128,11 @@ constexpr usize kMaxSignaturePublicKey = 2592U;   // ML-DSA-87's, the longest si
 constexpr usize kMaxCommonName         = 64U;     // ub-common-name (RFC 5280 appendix A)
 constexpr usize kTicketNameBytes       = 16U;     // a ticket key's public name, which leads its tickets
 constexpr usize kTicketSaltBytes       = 32U;     // a ticket's own random salt
+constexpr usize kTicketIssuedBytes     = 8U;      // a ticket's sealed issue time, in seconds since 1970
 constexpr usize kTicketHeaderBytes     = kTicketNameBytes + kTicketSaltBytes;
-constexpr usize kTicketOverhead        = kTicketHeaderBytes + kAeadTagBytes;
+constexpr usize kTicketOverhead        = kTicketHeaderBytes + kTicketIssuedBytes + kAeadTagBytes;
+constexpr u8    kTicketRecordVersion   = 1U;      // the format of a client's ticket record
+constexpr usize kTicketRecordHeader    = 7U;      // version (1), early data (4), parameters length (2)
 constexpr usize kCertificateEntryOverhead = 9U;   // request context (1), list (3), entry (3), extensions (2)
 constexpr usize kMinCertificateBytes   = 4U;      // an empty request context and an empty list
 constexpr usize kCompressedOverhead    = 8U;      // algorithm (2), uncompressed_length (3), compressed length (3)
@@ -159,8 +173,8 @@ EVP_HPKE_KEY* hpke_of(ProviderEchKey* key) noexcept
     return reinterpret_cast<EVP_HPKE_KEY*>(key);
 }
 
-// The provider's encryption level of a QUIC level, and the index of a provider level among QuicLevel (kQuicLevels for
-// the early data level, which never carries Cerid's CRYPTO data).
+// The provider's encryption level of a QUIC level, and the index of a provider level among the levels that carry
+// CRYPTO data (kQuicLevels for the early data level, which carries none).
 ssl_encryption_level_t encryption_level_of(QuicLevel level) noexcept
 {
     switch (level)
@@ -169,6 +183,8 @@ ssl_encryption_level_t encryption_level_of(QuicLevel level) noexcept
         return ssl_encryption_initial;
     case QuicLevel::Handshake:
         return ssl_encryption_handshake;
+    case QuicLevel::Early:
+        return ssl_encryption_early_data;
     case QuicLevel::Application:
         break;
     }
@@ -474,16 +490,89 @@ void zero_ticket_keys(TlsSettings& settings) noexcept
     secure_zero(cont::Span<u8>(&settings.ticket_keys[0][0], sizeof(settings.ticket_keys)));
 }
 
-// Offers a ticket the store handed back when it parses as a TLS 1.3 session of `binding` (the provider then also drops
-// one that expired); any other is dropped and the handshake runs in full. False only when the provider fails.
-bool offer_ticket(SSL* ssl, const TlsBinding& binding, cont::ConstSpan<u8> ticket) noexcept
+// The wall clock's seconds since 1970, which the provider's ticket ages read too.
+u64 unix_now() noexcept
 {
-    if (ticket.empty())
+    const std::time_t now = std::time(nullptr);
+    return now > 0 ? static_cast<u64>(now) : 0U;
+}
+
+// What a client's ticket record holds besides its format version (TlsTicketStore).
+struct TicketRecord
+{
+    u32 early = 0U;                 // the early data bytes the ticket allows
+    cont::ConstSpan<u8> parameters; // the server's QUIC transport parameters; empty over records
+    cont::ConstSpan<u8> session;    // the provider's session
+};
+
+// Reads a ticket record; false for any other bytes.
+bool read_ticket_record(cont::ConstSpan<u8> bytes, TicketRecord& record) noexcept
+{
+    CBS in;
+    CBS parameters;
+    uint8_t version = 0U;
+    uint32_t early = 0U;
+    CBS_init(&in, bytes.data(), bytes.size());
+    if (!CBS_get_u8(&in, &version) || version != kTicketRecordVersion || !CBS_get_u32(&in, &early) ||
+        !CBS_get_u16_length_prefixed(&in, &parameters) || CBS_len(&parameters) > kQuicMaxTransportParameterBytes ||
+        CBS_len(&in) == 0U)
+    {
+        return false;
+    }
+    record.early = early;
+    record.parameters = cont::ConstSpan<u8>(CBS_data(&parameters), CBS_len(&parameters));
+    record.session = cont::ConstSpan<u8>(CBS_data(&in), CBS_len(&in));
+    return true;
+}
+
+// The early data a NewSessionTicket message allows (its early_data extension, RFC 9846 section 4.6.1); 0 without one
+// and for a message that does not parse (the provider then refuses it).
+u32 ticket_early_data(cont::ConstSpan<u8> message) noexcept
+{
+    CBS in;
+    CBS body;
+    CBS skipped;
+    CBS extensions;
+    uint8_t type = 0U;
+    uint32_t lifetime = 0U;
+    uint32_t age_add = 0U;
+    CBS_init(&in, message.data(), message.size());
+    if (!CBS_get_u8(&in, &type) || type != kNewSessionTicket || !CBS_get_u24_length_prefixed(&in, &body) ||
+        !CBS_get_u32(&body, &lifetime) || !CBS_get_u32(&body, &age_add) ||
+        !CBS_get_u8_length_prefixed(&body, &skipped) || !CBS_get_u16_length_prefixed(&body, &skipped) ||
+        !CBS_get_u16_length_prefixed(&body, &extensions))
+    {
+        return 0U;
+    }
+    while (CBS_len(&extensions) != 0U)
+    {
+        uint16_t extension = 0U;
+        CBS data;
+        uint32_t early = 0U;
+        if (!CBS_get_u16(&extensions, &extension) || !CBS_get_u16_length_prefixed(&extensions, &data))
+        {
+            return 0U;
+        }
+        if (extension == TLSEXT_TYPE_early_data)
+        {
+            return CBS_get_u32(&data, &early) && CBS_len(&data) == 0U ? early : 0U;
+        }
+    }
+    return 0U;
+}
+
+// Offers the ticket of a record the store handed back when its session parses as a TLS 1.3 session of `binding` (the
+// provider then also drops one that expired); any other is dropped and the handshake runs in full. `offered` keeps
+// the record's parts (pointing into `ticket`) when it is offered. False only when the provider fails.
+bool offer_ticket(SSL* ssl, const TlsBinding& binding, cont::ConstSpan<u8> ticket, TicketRecord& offered) noexcept
+{
+    TicketRecord record;
+    if (ticket.empty() || !read_ticket_record(ticket, record))
     {
         return true;
     }
     const bssl::UniquePtr<SSL_SESSION> session(
-        SSL_SESSION_from_bytes(ticket.data(), ticket.size(), SSL_get_SSL_CTX(ssl)));
+        SSL_SESSION_from_bytes(record.session.data(), record.session.size(), SSL_get_SSL_CTX(ssl)));
     unsigned       length  = 0U;
     const uint8_t* context = session ? SSL_SESSION_get0_id_context(session.get(), &length) : nullptr;
     if (!session || SSL_SESSION_get_protocol_version(session.get()) != TLS1_3_VERSION ||
@@ -491,7 +580,12 @@ bool offer_ticket(SSL* ssl, const TlsBinding& binding, cont::ConstSpan<u8> ticke
     {
         return true;
     }
-    return SSL_set_session(ssl, session.get()) == 1;
+    if (SSL_set_session(ssl, session.get()) != 1)
+    {
+        return false;
+    }
+    offered = record;
+    return true;
 }
 
 // Zeroes a local copy of the ticket keys on every way out of its scope.
@@ -790,23 +884,48 @@ struct TlsCallbacks
         return SSL_TLSEXT_ERR_ALERT_FATAL;
     }
 
-    // A client hands each ticket its server issues to the session's store, serialized; without a store the ticket is
-    // ignored. The provider keeps its session object (0: no reference taken).
+    // A client hands each ticket its server issues to the session's store as a ticket record: the early data its
+    // NewSessionTicket allowed (the message observer read it just before), the server's QUIC transport parameters and
+    // the serialized session, built in one allocation of its exact size so no copy of the secret is left behind.
+    // Without a store the ticket is ignored. The provider keeps its session object (0: no reference taken).
     static int keep_ticket(SSL* ssl, SSL_SESSION* ticket) noexcept
     {
-        const detail::TlsHandshakeState* session = session_of(ssl);
+        detail::TlsHandshakeState* session = session_of(ssl);
         if (session == nullptr || session->m_tickets == nullptr)
         {
             return 0;
         }
-        uint8_t* bytes = nullptr;
-        size_t   size  = 0U;
-        if (SSL_SESSION_to_bytes(ticket, &bytes, &size) == 1)
+        const u32 early = session->m_ticket_early;
+        session->m_ticket_early = 0U;
+        const uint8_t* parameters = nullptr;
+        size_t parameter_bytes = 0U;
+        SSL_get_peer_quic_transport_params(ssl, &parameters, &parameter_bytes);
+        uint8_t* state = nullptr;
+        size_t state_bytes = 0U;
+        if (parameter_bytes > kQuicMaxTransportParameterBytes ||
+            SSL_SESSION_to_bytes(ticket, &state, &state_bytes) != 1)
         {
-            session->m_tickets->keep(session->m_settings.binding, cont::ConstSpan<u8>(bytes, size));
-            secure_zero(cont::Span<u8>(bytes, size));
-            OPENSSL_free(bytes);
+            return 0;
         }
+        const usize size = kTicketRecordHeader + parameter_bytes + state_bytes;
+        auto* record = static_cast<u8*>(OPENSSL_malloc(size));
+        if (record != nullptr)
+        {
+            record[0] = kTicketRecordVersion;
+            for (usize i = 0U; i < 4U; ++i)
+            {
+                record[1U + i] = static_cast<u8>(early >> (24U - 8U * i));
+            }
+            record[5] = static_cast<u8>(parameter_bytes >> 8U);
+            record[6] = static_cast<u8>(parameter_bytes);
+            std::copy(parameters, parameters + parameter_bytes, record + kTicketRecordHeader);
+            std::copy(state, state + state_bytes, record + kTicketRecordHeader + parameter_bytes);
+            session->m_tickets->keep(session->m_settings.binding, cont::ConstSpan<u8>(record, size));
+            secure_zero(cont::Span<u8>(record, size));
+            OPENSSL_free(record);
+        }
+        secure_zero(cont::Span<u8>(state, state_bytes));
+        OPENSSL_free(state);
         return 0;
     }
 
@@ -815,9 +934,9 @@ struct TlsCallbacks
         return kTicketOverhead;
     }
 
-    // Seals `in` (the session state) under the sealing key: the key's name, the salt, then the ciphertext and tag. The
-    // name only selects the key: any other name selects another key or none, and the salt derives the sealing key.
-    // `in` may be `out`, so the state moves into place before anything is written.
+    // Seals the issue time and `in` (the session state) under the sealing key: the key's name, the salt, then the
+    // ciphertext and tag. The name only selects the key: any other name selects another key or none, and the salt
+    // derives the sealing key. `in` may be `out`, so the state moves into place before anything is written.
     static int seal_ticket(SSL* ssl, uint8_t* out, size_t* out_len, size_t max_out_len, const uint8_t* in,
                            size_t in_len) noexcept
     {
@@ -829,15 +948,21 @@ struct TlsCallbacks
         }
         const TlsSettings&        settings = session->m_settings;
         u8* const                 body     = out + kTicketHeaderBytes;
+        const usize sealed = kTicketIssuedBytes + in_len;
         const cont::ConstSpan<u8> salt(out + kTicketNameBytes, kTicketSaltBytes);
-        std::memmove(body, in, in_len);
+        std::memmove(body + kTicketIssuedBytes, in, in_len);
+        const u64 issued = unix_now();
+        for (usize i = 0U; i < kTicketIssuedBytes; ++i)
+        {
+            body[i] = static_cast<u8>(issued >> (56U - 8U * i));
+        }
         std::memcpy(out, settings.ticket_names[0], kTicketNameBytes);
         AeadKey key;
         u8      nonce[kAeadNonceBytes];
         if (random_bytes(cont::Span<u8>(out + kTicketNameBytes, kTicketSaltBytes)) != CryptoError::None ||
             ticket_aead(cont::ConstSpan<u8>(settings.ticket_keys[0]), salt, key, nonce) != CryptoError::None ||
-            key.seal(cont::ConstSpan<u8>(nonce), cont::ConstSpan<u8>(body, in_len), {},
-                     cont::Span<u8>(body, in_len + kAeadTagBytes)) != CryptoError::None)
+            key.seal(cont::ConstSpan<u8>(nonce), cont::ConstSpan<u8>(body, sealed), {},
+                     cont::Span<u8>(body, sealed + kAeadTagBytes)) != CryptoError::None)
         {
             return 0;
         }
@@ -846,11 +971,14 @@ struct TlsCallbacks
     }
 
     // Opens a ticket sealed under the sealing key or the previous one. A ticket too short, under another key or forged
-    // is ignored (the handshake runs in full); only a provider failure fails the handshake.
+    // is ignored (the handshake runs in full); only a provider failure fails the handshake. A server that accepts early
+    // data opens each ticket once (S17): the ticket's identifier, the first kReplayIdBytes of its salt (random, and
+    // authenticated by the opening, as the salt derives the key), goes through the ReplayFilter by its sealed issue
+    // time, and a ticket the filter refuses is ignored too.
     static ssl_ticket_aead_result_t open_ticket(SSL* ssl, uint8_t* out, size_t* out_len, size_t max_out_len,
                                                 const uint8_t* in, size_t in_len) noexcept
     {
-        const detail::TlsHandshakeState* session = session_of(ssl);
+        detail::TlsHandshakeState* session = session_of(ssl);
         if (session == nullptr)
         {
             return ssl_ticket_aead_error;
@@ -892,7 +1020,20 @@ struct TlsCallbacks
         {
             return ssl_ticket_aead_error;
         }
-        *out_len = sealed - kAeadTagBytes;
+        u64 issued = 0U;
+        for (usize i = 0U; i < kTicketIssuedBytes; ++i)
+        {
+            issued = (issued << 8U) | out[i];
+        }
+        const usize state = sealed - kAeadTagBytes - kTicketIssuedBytes;
+        std::memmove(out, out + kTicketIssuedBytes, state);
+        if (settings.early_filter != nullptr &&
+            !settings.early_filter->first_use(cont::ConstSpan<u8>(salt, kReplayIdBytes), issued, unix_now()))
+        {
+            session->m_ticket_replayed = true;
+            return ssl_ticket_aead_ignore_ticket;
+        }
+        *out_len = state;
         return ssl_ticket_aead_success;
     }
 
@@ -960,9 +1101,10 @@ struct TlsCallbacks
     }
 
     // Records the first alert each way, notices a HelloRetryRequest (a ServerHello with the special random), counts
-    // the KeyUpdates each way, notes the algorithm of a compressed Certificate sent or received and notes that a
-    // client encrypted an inner ClientHello (the provider reports it only when its outer hello offers ECH). The
-    // provider reports a KeyUpdate it writes when it queues it, sealed under the old key.
+    // the KeyUpdates each way, notes the algorithm of a compressed Certificate sent or received, notes that a client
+    // encrypted an inner ClientHello (the provider reports it only when its outer hello offers ECH) and reads the
+    // early data a client's NewSessionTicket allows, which keep_ticket records next. The provider reports a KeyUpdate
+    // it writes when it queues it, sealed under the old key.
     static void observe(int is_write, int, int content_type, const void* buffer, size_t length, SSL* ssl,
                         void*) noexcept
     {
@@ -996,6 +1138,10 @@ struct TlsCallbacks
             session->m_certificate_compression =
                 static_cast<u16>((bytes[kCompressionAlgorithmAt] << 8U) | bytes[kCompressionAlgorithmAt + 1U]);
         }
+        else if (content_type == SSL3_RT_HANDSHAKE && is_write == 0 && length != 0U && bytes[0] == kNewSessionTicket)
+        {
+            session->m_ticket_early = ticket_early_data(cont::ConstSpan<u8>(bytes, length));
+        }
         else if (content_type == SSL3_RT_HANDSHAKE && length > kKeyUpdateRequestAt && bytes[0] == kKeyUpdate)
         {
             if (is_write != 0)
@@ -1014,8 +1160,8 @@ struct TlsCallbacks
         }
     }
 
-    // A server notes whether its client offers application protocols, before the name check reads it.
-    static ssl_select_cert_result_t note_protocols(const SSL_CLIENT_HELLO* hello) noexcept
+    // A server notes whether its client offers application protocols, before the name check reads it, and early data.
+    static ssl_select_cert_result_t note_hello(const SSL_CLIENT_HELLO* hello) noexcept
     {
         detail::TlsHandshakeState* session = session_of(hello->ssl);
         const uint8_t*             data    = nullptr;
@@ -1025,6 +1171,8 @@ struct TlsCallbacks
             session->m_protocol_offered = SSL_early_callback_ctx_extension_get(
                                               hello, TLSEXT_TYPE_application_layer_protocol_negotiation, &data,
                                               &length) == 1;
+            session->m_early_offered =
+                SSL_early_callback_ctx_extension_get(hello, TLSEXT_TYPE_early_data, &data, &length) == 1;
         }
         return ssl_select_cert_success;
     }
@@ -1140,12 +1288,61 @@ struct TlsCallbacks
         return true;
     }
 
-    // A client offers a ticket from its store under the connection's binding (offer_ticket); false when the provider
-    // fails.
-    static bool offer(SSL* ssl, const detail::TlsHandshakeState& state) noexcept
+    // A client offers a ticket from its store under the connection's binding (offer_ticket) and keeps the early data
+    // it allows; `parameters` is the record's server transport parameters, valid until the store's next call. False
+    // when the provider fails.
+    static bool offer(SSL* ssl, detail::TlsHandshakeState& state, cont::ConstSpan<u8>& parameters) noexcept
     {
-        return state.m_tickets == nullptr ||
-               offer_ticket(ssl, state.m_settings.binding, state.m_tickets->take(state.m_settings.binding));
+        TicketRecord offered;
+        if (state.m_tickets != nullptr &&
+            !offer_ticket(ssl, state.m_settings.binding, state.m_tickets->take(state.m_settings.binding), offered))
+        {
+            return false;
+        }
+        state.m_early_allowance = offered.early;
+        parameters = offered.parameters;
+        return true;
+    }
+
+    // What became of early data: a client that offered learns whether it was accepted when its handshake ends (a
+    // refusal that came during the handshake was noted then); a server, from its ClientHello on, reads its client's
+    // offer, its own ReplayFilter's refusal and the provider's reason.
+    static void settle_early(SSL* ssl, detail::TlsHandshakeState& state) noexcept
+    {
+        if (state.m_settings.role == TlsRole::Client)
+        {
+            if (state.m_early == TlsEarlyData::Offered)
+            {
+                state.m_early = SSL_early_data_accepted(ssl) == 1 ? TlsEarlyData::Accepted : TlsEarlyData::Rejected;
+            }
+            return;
+        }
+        if (!state.m_early_offered)
+        {
+            state.m_early = TlsEarlyData::None;
+        }
+        else if (state.m_ticket_replayed)
+        {
+            state.m_early = TlsEarlyData::Replayed;
+        }
+        else
+        {
+            switch (SSL_get_early_data_reason(ssl))
+            {
+            case ssl_early_data_unknown:
+                state.m_early = TlsEarlyData::None;
+                break;
+            case ssl_early_data_accepted:
+                state.m_early = TlsEarlyData::Accepted;
+                break;
+            case ssl_early_data_ticket_age_skew:
+                state.m_early = TlsEarlyData::Stale;
+                break;
+            default:
+                state.m_early = TlsEarlyData::Rejected;
+                break;
+            }
+        }
     }
 
     // What a finished handshake settled: its group and AEAD, ECH, a resumption and its peer key, and the application
@@ -1194,22 +1391,40 @@ struct TlsCallbacks
         return static_cast<QuicHandshake*>(session_of(ssl));
     }
 
-    // Keeps the secret of a Handshake or Application level, the peer's (read) or the handshake's own (write), for
-    // derive_keys(). The provider never yields an Initial secret, and 0-RTT is off (S6): an early data secret fails
-    // the handshake.
+    // Keeps the secret of a Handshake or Application level, the peer's (read) or the handshake's own (write), or the
+    // client's early data secret (a client's own, a server's to read), for derive_keys(). The provider never yields an
+    // Initial secret.
     static int keep_secret(SSL* ssl, ssl_encryption_level_t level, const SSL_CIPHER* cipher, const uint8_t* secret,
                            size_t length, bool own) noexcept
     {
         QuicHandshake*    handshake = quic_of(ssl);
         const AlgorithmId aead      = aead_of(cipher);
-        if (handshake == nullptr || aead == AlgorithmId{} || length == 0U || length > kQuicMaxSecretBytes ||
-            (level != ssl_encryption_handshake && level != ssl_encryption_application))
+        if (handshake == nullptr)
         {
             return 0;
         }
         const bool client = (handshake->m_settings.role == TlsRole::Client) == own;
-        QuicHandshake::Secret& kept =
-            handshake->m_secrets[level == ssl_encryption_handshake ? 0U : 1U][client ? 0U : 1U];
+        QuicLevel  quic   = QuicLevel::Initial;
+        switch (level)
+        {
+        case ssl_encryption_handshake:
+            quic = QuicLevel::Handshake;
+            break;
+        case ssl_encryption_application:
+            quic = QuicLevel::Application;
+            break;
+        case ssl_encryption_early_data:
+            quic = QuicLevel::Early;
+            break;
+        case ssl_encryption_initial:
+            break;
+        }
+        const usize at = QuicHandshake::secret_level(quic, client ? QuicSide::Client : QuicSide::Server);
+        if (aead == AlgorithmId{} || length == 0U || length > kQuicMaxSecretBytes || at == QuicHandshake::kNoSecret)
+        {
+            return 0;
+        }
+        QuicHandshake::Secret& kept = handshake->m_secrets[at][client ? 0U : 1U];
         std::memcpy(kept.bytes, secret, length);
         kept.size = static_cast<u8>(length);
         kept.aead = aead;
@@ -1400,6 +1615,20 @@ bool valid_ech(const TlsConfig& config) noexcept
 
 // The provider context's ECH data, owned by its ex_data slot from here on (freed with the provider context however
 // init() ends). Null when the provider fails.
+// Early data: a server that accepts it opens tickets through a ready ReplayFilter whose period covers a ticket's whole
+// lifetime and the provider's freshness window, so only a ticket the provider would accept no longer is ever too old
+// for the filter; a filter goes with a server's early data only.
+bool valid_early_data(const TlsConfig& config) noexcept
+{
+    if (config.early_data_filter == nullptr)
+    {
+        return !(config.early_data && config.role == TlsRole::Server);
+    }
+    const u64 lifetime = config.ticket_lifetime != 0U ? config.ticket_lifetime : kTlsDefaultTicketLifetime;
+    return config.early_data && config.role == TlsRole::Server && config.early_data_filter->ready() &&
+           config.early_data_filter->period() >= lifetime + kTlsMaxTicketAgeSkew;
+}
+
 EchContext* attach_ech(SSL_CTX* context) noexcept
 {
     void* storage = OPENSSL_zalloc(sizeof(EchContext));
@@ -1455,6 +1684,26 @@ cont::StringView tls_ech_name(TlsEch ech) noexcept
         return "refused";
     }
     return "unknown";
+}
+
+cont::StringView tls_early_data_name(TlsEarlyData early) noexcept
+{
+    switch (early)
+    {
+        case TlsEarlyData::None:
+            return "none";
+        case TlsEarlyData::Offered:
+            return "offered";
+        case TlsEarlyData::Accepted:
+            return "accepted";
+        case TlsEarlyData::Rejected:
+            return "rejected";
+        case TlsEarlyData::Replayed:
+            return "replayed";
+        case TlsEarlyData::Stale:
+            break;
+    }
+    return "stale";
 }
 
 cont::ConstSpan<AlgorithmId> tls_aead_preference() noexcept
@@ -1706,7 +1955,7 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
         (!config.previous_ticket_key.empty() &&
          (config.previous_ticket_key.size() != kTlsTicketKeyBytes || config.ticket_key.empty())) ||
         config.ticket_lifetime > kTlsMaxTicketLifetime || !valid_compression(config.certificate_compression) ||
-        !valid_ech(config))
+        !valid_ech(config) || !valid_early_data(config))
     {
         return TlsError::BadConfig;
     }
@@ -1722,6 +1971,8 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     settings.key_update_records = config.key_update_records;
     settings.max_key_updates    = config.max_key_updates != 0U ? config.max_key_updates : kTlsMaxKeyUpdates;
     settings.ech_grease         = !server && config.ech_grease;
+    settings.early_data = config.early_data;
+    settings.early_filter = config.early_data_filter;
     settings.binding = binding_of(config, config.credential != nullptr ? config.credential->key_id() : KeyId{});
     if (!protocols_of(config.application_protocols, settings))
     {
@@ -1773,6 +2024,8 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     }
     // Server preference orders the groups (the provider's TLS 1.3 AEAD choice follows the client, see tls.hpp).
     SSL_CTX_set_options(context.get(), SSL_OP_CIPHER_SERVER_PREFERENCE);
+    // Early data (S17): a client offers it on a ticket that allows it, a server issues such tickets and accepts it.
+    SSL_CTX_set_early_data_enabled(context.get(), config.early_data ? 1 : 0);
     // Tickets are stateless: a server keeps no session cache (no memory an unauthenticated peer could fill) and issues
     // one ticket per connection through its ticket method, valid for the configured lifetime and never longer than
     // seven days after the handshake that authenticated the peer (the provider's non-renewable authentication
@@ -1832,6 +2085,7 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     if (server)
     {
         SSL_CTX_set_tlsext_servername_callback(context.get(), &TlsCallbacks::check_name);
+        SSL_CTX_set_select_certificate_cb(context.get(), &TlsCallbacks::note_hello);
         uint8_t*                       der       = nullptr;
         const int                      der_bytes = i2d_X509(x509_of(config.credential->m_certificate), &der);
         const bssl::UniquePtr<uint8_t> owner(der);
@@ -1870,7 +2124,6 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
         }
         if (server)
         {
-            SSL_CTX_set_select_certificate_cb(context.get(), &TlsCallbacks::note_protocols);
             SSL_CTX_set_alpn_select_cb(context.get(), &TlsCallbacks::select_protocol, nullptr);
         }
     }
@@ -1933,6 +2186,9 @@ void detail::TlsHandshakeState::release() noexcept
     m_peer_key                = KeyId{};
     m_updates_sent            = 0U;
     m_updates_received        = 0U;
+    m_early_allowance = 0U;
+    m_early_sent = 0U;
+    m_ticket_early = 0U;
     m_certificate_compression = 0U;
     m_hello_retry             = false;
     m_resumed                 = false;
@@ -1942,7 +2198,10 @@ void detail::TlsHandshakeState::release() noexcept
     m_ech_pending             = false;
     m_ech_retry               = false;
     m_public_name             = false;
+    m_early_offered = false;
+    m_ticket_replayed = false;
     m_ech                     = TlsEch::None;
+    m_early = TlsEarlyData::None;
     m_alert_sent              = TlsAlert{};
     m_alert_received          = TlsAlert{};
 }
@@ -2031,7 +2290,8 @@ TlsError TlsSession::init(const TlsContext& context, TlsTicketStore* tickets,
     // An empty incoming buffer means "more bytes later", never the end of the stream.
     BIO_set_mem_eof_return(incoming.get(), -1);
     SSL_set_bio(ssl.get(), incoming.release(), outgoing.release());
-    if (!TlsCallbacks::offer(ssl.get(), *this))
+    cont::ConstSpan<u8> parameters;
+    if (!TlsCallbacks::offer(ssl.get(), *this, parameters))
     {
         clear();
         return TlsError::ProviderFailure;
@@ -2054,28 +2314,37 @@ TlsError TlsSession::advance() noexcept
 {
     SSL*      ssl    = ssl_of(m_session);
     const int result = SSL_do_handshake(ssl);
+    if (m_settings.role == TlsRole::Server)
+    {
+        TlsCallbacks::settle_early(ssl, *this);
+    }
     if (result == 1)
     {
-        const TlsError completed = TlsCallbacks::complete(ssl, *this);
-        if (completed != TlsError::None)
+        if (SSL_in_early_data(ssl) == 0)
         {
-            return fail(completed);
+            return established();
         }
-        const u64 limit      = tls_key_usage_limit(m_aead);
-        const u64 configured = m_settings.key_update_records;
-        m_key_update_records = configured != 0U && configured < limit ? configured : limit;
-        m_state              = TlsState::Established;
-        // A server's ticket waits in the provider until the server writes: it goes out with the handshake instead.
-        if (m_settings.role == TlsRole::Server)
+        // A client sent its ClientHello with early data allowed (send_early until its server answers); a server took
+        // its client's early data, after the checks of a finished handshake (its pins hold before a byte reaches the
+        // caller), and the handshake goes on through read_early().
+        if (m_settings.role == TlsRole::Client)
         {
-            flush();
+            m_early = TlsEarlyData::Offered;
+            return TlsError::None;
         }
-        return TlsError::None;
+        const TlsError checked = TlsCallbacks::complete(ssl, *this);
+        return checked != TlsError::None ? fail(checked) : TlsError::None;
     }
     switch (SSL_get_error(ssl, result))
     {
     case SSL_ERROR_WANT_READ:
         return TlsError::None;
+    case SSL_ERROR_EARLY_DATA_REJECTED:
+        // The server refused the client's early data: what it sent under it is gone, and the handshake goes on as one
+        // that offered none (the provider forgets every value it predicted).
+        m_early = TlsEarlyData::Rejected;
+        SSL_reset_early_data_reject(ssl);
+        return advance();
     case SSL_ERROR_ZERO_RETURN:
         // The peer's close_notify, after a user_canceled or not: it ended the handshake without a protocol failure.
         m_state = TlsState::Closed;
@@ -2087,6 +2356,27 @@ TlsError TlsSession::advance() noexcept
         }
         return fail(m_refused ? TlsError::PeerRefused : TlsError::Failed);
     }
+}
+
+TlsError TlsSession::established() noexcept
+{
+    SSL* ssl = ssl_of(m_session);
+    const TlsError completed = TlsCallbacks::complete(ssl, *this);
+    if (completed != TlsError::None)
+    {
+        return fail(completed);
+    }
+    TlsCallbacks::settle_early(ssl, *this);
+    const u64 limit = tls_key_usage_limit(m_aead);
+    const u64 configured = m_settings.key_update_records;
+    m_key_update_records = configured != 0U && configured < limit ? configured : limit;
+    m_state = TlsState::Established;
+    // A server's ticket waits in the provider until the server writes: it goes out with the handshake instead.
+    if (m_settings.role == TlsRole::Server)
+    {
+        flush();
+    }
+    return TlsError::None;
 }
 
 TlsError TlsSession::receive(cont::ConstSpan<u8> bytes) noexcept
@@ -2110,7 +2400,10 @@ TlsError TlsSession::receive(cont::ConstSpan<u8> bytes) noexcept
     {
         return fail(TlsError::ProviderFailure);
     }
-    return m_state == TlsState::Handshaking ? advance() : TlsError::None;
+    // A server reading its client's early data goes on through read_early(): the provider's handshake returns at once
+    // while early bytes wait.
+    const bool early_reading = m_settings.role == TlsRole::Server && m_early == TlsEarlyData::Accepted;
+    return m_state == TlsState::Handshaking && !early_reading ? advance() : TlsError::None;
 }
 
 usize TlsSession::pending() const noexcept
@@ -2187,6 +2480,89 @@ TlsError TlsSession::send(cont::ConstSpan<u8> plaintext) noexcept
         {
             return fail(TlsError::Failed);
         }
+    }
+    return TlsError::None;
+}
+
+TlsError TlsSession::send_early(cont::ConstSpan<u8> plaintext) noexcept
+{
+    if (m_settings.role != TlsRole::Client || m_state != TlsState::Handshaking || m_early != TlsEarlyData::Offered)
+    {
+        return TlsError::NotReady;
+    }
+    if (plaintext.empty())
+    {
+        return TlsError::None;
+    }
+    const usize records = (plaintext.size() + kMaxRecordPlaintext - 1U) / kMaxRecordPlaintext;
+    if (plaintext.size() > early_data_room() || plaintext.size() > kTlsMaxBufferedBytes ||
+        plaintext.size() + records * kRecordOverhead > kTlsMaxBufferedBytes - std::min(pending(), kTlsMaxBufferedBytes))
+    {
+        return TlsError::Full;
+    }
+    const ErrorScope errors;
+    const int size = static_cast<int>(plaintext.size());
+    if (SSL_write(ssl_of(m_session), plaintext.data(), size) != size)
+    {
+        return fail(TlsError::Failed);
+    }
+    m_early_sent += static_cast<u32>(plaintext.size());
+    return TlsError::None;
+}
+
+u32 TlsSession::early_data_room() const noexcept
+{
+    return m_settings.role == TlsRole::Client && m_early == TlsEarlyData::Offered ? m_early_allowance - m_early_sent
+                                                                                  : 0U;
+}
+
+TlsError TlsSession::read_early(cont::Span<u8> out, usize& written) noexcept
+{
+    written = 0U;
+    if (m_settings.role != TlsRole::Server || m_early != TlsEarlyData::Accepted)
+    {
+        return TlsError::NotReady;
+    }
+    if (m_state == TlsState::Established)
+    {
+        return TlsError::None;
+    }
+    if (m_state != TlsState::Handshaking)
+    {
+        return m_state == TlsState::Closed ? TlsError::Closed : TlsError::NotReady;
+    }
+    if (out.empty())
+    {
+        return TlsError::None;
+    }
+    // A peek runs the provider's read: bytes it returns while the handshake still runs are early data, which a read
+    // then takes; a peek that ran the rest of the handshake (the client's early data ended) leaves its 1-RTT bytes
+    // pending for read().
+    const ErrorScope errors;
+    SSL* ssl = ssl_of(m_session);
+    const int asked = static_cast<int>(std::min<usize>(out.size(), INT_MAX));
+    const int peeked = SSL_peek(ssl, out.data(), asked);
+    const int reason = peeked > 0 ? SSL_ERROR_NONE : SSL_get_error(ssl, peeked);
+    if (reason == SSL_ERROR_ZERO_RETURN)
+    {
+        m_state = TlsState::Closed;
+        return TlsError::Closed;
+    }
+    if (reason != SSL_ERROR_NONE && reason != SSL_ERROR_WANT_READ)
+    {
+        return fail(m_refused ? TlsError::PeerRefused : TlsError::Failed);
+    }
+    if (SSL_in_init(ssl) == 0)
+    {
+        return established();
+    }
+    if (peeked > 0)
+    {
+        if (SSL_read(ssl, out.data(), peeked) != peeked)
+        {
+            return fail(TlsError::Failed);
+        }
+        written = static_cast<usize>(peeked);
     }
     return TlsError::None;
 }
@@ -2337,22 +2713,48 @@ void QuicHandshake::clear() noexcept
     {
         for (Secret& secret : level)
         {
-            secure_zero(cont::Span<u8>(secret.bytes));
-            secret = Secret{};
+            forget(secret);
         }
     }
+    m_remembered.clear();
     m_alert_level = QuicLevel::Initial;
 }
 
+void QuicHandshake::forget(Secret& secret) noexcept
+{
+    secure_zero(cont::Span<u8>(secret.bytes));
+    secret = Secret{};
+}
+
+usize QuicHandshake::secret_level(QuicLevel level, QuicSide side) noexcept
+{
+    switch (level)
+    {
+        case QuicLevel::Handshake:
+            return 0U;
+        case QuicLevel::Application:
+            return 1U;
+        case QuicLevel::Early:
+            return side == QuicSide::Client ? kEarlySecrets : kNoSecret;
+        case QuicLevel::Initial:
+            break;
+    }
+    return kNoSecret;
+}
+
 TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> transport_parameters,
-                             TlsTicketStore* tickets, cont::ConstSpan<u8> ech_retry_configs) noexcept
+                             TlsTicketStore* tickets, cont::ConstSpan<u8> ech_retry_configs,
+                             cont::ConstSpan<u8> early_data_context) noexcept
 {
     clear();
     const ErrorScope     errors;
     bssl::UniquePtr<SSL> ssl;
     const TlsError       begun = TlsCallbacks::begin(context, tickets, ech_retry_configs, true, *this, ssl);
+    // A server that accepts early data names the context its tickets' 0-RTT depends on; nothing else names one.
+    const bool early_server = m_settings.role == TlsRole::Server && m_settings.early_data;
     if (begun != TlsError::None || transport_parameters.empty() ||
-        transport_parameters.size() > kQuicMaxTransportParameterBytes)
+        transport_parameters.size() > kQuicMaxTransportParameterBytes || early_data_context.empty() == early_server ||
+        early_data_context.size() > kQuicMaxEarlyDataContextBytes)
     {
         clear();
         return begun != TlsError::None ? begun : TlsError::BadConfig;
@@ -2364,15 +2766,20 @@ TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> tran
     // Tickets and the session ID context under the QUIC binding; the provider takes the quic_transport_parameters
     // extension's standard codepoint (57), never the drafts' 0xffa5.
     m_settings.binding = quic_binding_of(m_settings.binding);
+    cont::ConstSpan<u8> remembered;
     if (m_outgoing[0] == nullptr || m_outgoing[1] == nullptr || m_outgoing[2] == nullptr ||
         !SSL_set_quic_method(ssl.get(), &kQuicMethod) ||
         !SSL_set_quic_transport_params(ssl.get(), transport_parameters.data(), transport_parameters.size()) ||
         !SSL_set_session_id_context(ssl.get(), m_settings.binding.bytes, sizeof(m_settings.binding.bytes)) ||
-        !TlsCallbacks::offer(ssl.get(), *this))
+        (early_server &&
+         !SSL_set_quic_early_data_context(ssl.get(), early_data_context.data(), early_data_context.size())) ||
+        !TlsCallbacks::offer(ssl.get(), *this, remembered))
     {
         clear();
         return TlsError::ProviderFailure;
     }
+    m_remembered.resize(remembered.size());
+    std::copy(remembered.begin(), remembered.end(), m_remembered.data());
     m_session = reinterpret_cast<ProviderTlsSession*>(ssl.release());
     m_state   = TlsState::Handshaking;
     if (m_settings.role == TlsRole::Server)
@@ -2391,19 +2798,45 @@ TlsError QuicHandshake::advance() noexcept
 {
     SSL*      ssl    = ssl_of(m_session);
     const int result = SSL_do_handshake(ssl);
+    if (m_settings.role == TlsRole::Server)
+    {
+        TlsCallbacks::settle_early(ssl, *this);
+    }
     if (result == 1)
     {
+        // Early data: a client sent its ClientHello with its 0-RTT keys ready; a server accepted its client's early
+        // data after the checks of a finished handshake. Either way the handshake goes on.
+        const bool early = SSL_in_early_data(ssl) == 1;
+        if (early && m_settings.role == TlsRole::Client)
+        {
+            m_early = TlsEarlyData::Offered;
+            return TlsError::None;
+        }
         const TlsError completed = TlsCallbacks::complete(ssl, *this);
         if (completed != TlsError::None)
         {
             return fail(completed);
         }
-        m_state = TlsState::Established;
+        TlsCallbacks::settle_early(ssl, *this);
+        if (!early)
+        {
+            m_state = TlsState::Established;
+        }
         return TlsError::None;
     }
-    if (SSL_get_error(ssl, result) == SSL_ERROR_WANT_READ)
+    const int reason = SSL_get_error(ssl, result);
+    if (reason == SSL_ERROR_WANT_READ)
     {
         return TlsError::None;
+    }
+    if (reason == SSL_ERROR_EARLY_DATA_REJECTED)
+    {
+        // The server refused the client's 0-RTT packets: their keys go, and the handshake goes on as one that offered
+        // none (the transport sends their data again in 1-RTT packets).
+        forget(m_secrets[kEarlySecrets][0]);
+        m_early = TlsEarlyData::Rejected;
+        SSL_reset_early_data_reject(ssl);
+        return advance();
     }
     if (TlsCallbacks::ech_rejected(ssl, *this))
     {
@@ -2414,6 +2847,10 @@ TlsError QuicHandshake::advance() noexcept
 
 TlsError QuicHandshake::provide(QuicLevel level, cont::ConstSpan<u8> bytes) noexcept
 {
+    if (static_cast<usize>(level) >= kQuicLevels)
+    {
+        return TlsError::BadConfig;
+    }
     if (m_state != TlsState::Handshaking && m_state != TlsState::Established)
     {
         return TlsError::NotReady;
@@ -2450,7 +2887,11 @@ TlsError QuicHandshake::take(QuicLevel level, cont::Span<u8> out, usize& written
 {
     written           = 0U;
     const usize index = static_cast<usize>(level);
-    if (index >= kQuicLevels || m_outgoing[index] == nullptr)
+    if (index >= kQuicLevels)
+    {
+        return TlsError::BadConfig;
+    }
+    if (m_outgoing[index] == nullptr)
     {
         return TlsError::NotReady;
     }
@@ -2476,19 +2917,15 @@ usize QuicHandshake::receive_limit(QuicLevel level) const noexcept
 
 bool QuicHandshake::has_keys(QuicLevel level, QuicSide side) const noexcept
 {
-    if (level != QuicLevel::Handshake && level != QuicLevel::Application)
-    {
-        return false;
-    }
-    const usize at = level == QuicLevel::Handshake ? 0U : 1U;
-    return m_secrets[at][side == QuicSide::Client ? 0U : 1U].size != 0U;
+    const usize at = secret_level(level, side);
+    return at != kNoSecret && m_secrets[at][side == QuicSide::Client ? 0U : 1U].size != 0U;
 }
 
 TlsError QuicHandshake::derive_keys(QuicLevel level, QuicSide side, QuicVersion version, QuicPacketKey& packet,
                                     QuicHeaderKey& header) noexcept
 {
-    if ((level != QuicLevel::Handshake && level != QuicLevel::Application) ||
-        !quic_version_supported(static_cast<u32>(version)))
+    const usize at = secret_level(level, side);
+    if ((at == kNoSecret && level != QuicLevel::Early) || !quic_version_supported(static_cast<u32>(version)))
     {
         return TlsError::BadConfig;
     }
@@ -2496,7 +2933,6 @@ TlsError QuicHandshake::derive_keys(QuicLevel level, QuicSide side, QuicVersion 
     {
         return TlsError::NotReady;
     }
-    const usize               at     = level == QuicLevel::Handshake ? 0U : 1U;
     Secret&                   secret = m_secrets[at][side == QuicSide::Client ? 0U : 1U];
     const cont::ConstSpan<u8> bytes(secret.bytes, secret.size);
     if (packet.init(version, secret.aead, bytes) != CryptoError::None ||
@@ -2506,9 +2942,13 @@ TlsError QuicHandshake::derive_keys(QuicLevel level, QuicSide side, QuicVersion 
         header.clear();
         return TlsError::ProviderFailure;
     }
-    secure_zero(cont::Span<u8>(secret.bytes));
-    secret = Secret{};
+    forget(secret);
     return TlsError::None;
+}
+
+cont::ConstSpan<u8> QuicHandshake::remembered_transport_parameters() const noexcept
+{
+    return cont::ConstSpan<u8>(m_remembered.data(), m_remembered.size());
 }
 
 cont::ConstSpan<u8> QuicHandshake::peer_transport_parameters() const noexcept

@@ -45,6 +45,13 @@ ways, stale configurations rejected and retried with the configurations each lib
 keys, a server without ECH and GREASE both ways. Each outer ClientHello is read off the wire for the public name and
 its encrypted_client_hello, and the server name must appear in no byte the wire shows.
 
+Early data (0-RTT; RFC 9846 section 2.3, RFC 9001 section 4.6) runs both ways on resumption across processes: each
+library's early bytes accepted by the other's server and reported as early data (never as 1-RTT data), with the
+early_data extension read off the resumed ClientHello and the allowance the server's ticket states read off its
+NewSessionTicket where the wire shows it; refused by a server without early data and after a HelloRetryRequest, both
+ways, each client then sending its bytes again after the handshake; and over QUIC both ways, each end's 0-RTT secret
+probed beside the four others and equal, and a Cerid server refusing 0-RTT under another early data context.
+
 Usage: tls_interop.py --cerid <crd-tls-peer> --openssl <crd-openssl-tls-peer>
 """
 
@@ -99,6 +106,10 @@ GAME = 'cerid-game/1'
 QUIC_CLIENT_PARAMETERS = '0f04c1c2c3c40480100000'
 QUIC_SERVER_PARAMETERS = '0004aabbccdd0f02d1d2'
 QUIC_PROBES = ('handshake-client', 'handshake-server', 'application-client', 'application-server')
+EARLY_DATA = 42
+CERID_EARLY = 'early from cerid'
+OPENSSL_EARLY = 'early from openssl'
+EARLY_CONTEXTS = ('0480100000c1', '0480080000c1')  # two QUIC early data contexts: a lowered limit tells them apart
 NAME = 'a1234567890123456789012345678901234567890123456789.cerid.test'
 LONG_NAME = ('a1234567890123456789012345678901234567890123456789012345678.'
              'b12345678901234567890123456789012345678901234567890.cerid.test')
@@ -662,6 +673,7 @@ def cases(cerid_peer, openssl_peer):
     yield 'cerid client survives seeded corruptions of openssl\'s zstd and zlib forms', corrupted_forms
     yield from quic_cases(cerid_peer, openssl_peer, server_public, client_public, other_public)
     yield from ech_cases(cerid_peer, openssl_peer, server_public)
+    yield from early_cases(cerid_peer, openssl_peer, server_public)
 
 
 def quic_pieces(frame):
@@ -701,7 +713,7 @@ def check_quic_hello(frame, parameters, protocols):
 
 
 def check_quic(cerid_report, openssl_report, cerid_client, group, retry, protocol=GAME,
-               suite='TLS_AES_256_GCM_SHA384'):
+               suite='TLS_AES_256_GCM_SHA384', expected_probes=QUIC_PROBES):
     """Both ends established over QUIC with `group`, the same application protocol, each other's transport
     parameters, and the same probe for each of the four secrets: one end's keys open the other's packets."""
     for side, report in (('cerid', cerid_report), ('openssl', openssl_report)):
@@ -720,7 +732,7 @@ def check_quic(cerid_report, openssl_report, cerid_client, group, retry, protoco
            'transport parameters received: cerid %s, openssl %s' % (cerid_report.get('peer_parameters'),
                                                                     openssl_report.get('peer_parameters')))
     probes = cerid_report.get('probes', {})
-    expect(sorted(probes) == sorted(QUIC_PROBES) and probes == openssl_report.get('probes'),
+    expect(sorted(probes) == sorted(expected_probes) and probes == openssl_report.get('probes'),
            'the secrets disagree: cerid %s, openssl %s' % (probes, openssl_report.get('probes')))
     check_exporter(cerid_report, openssl_report)
 
@@ -1123,6 +1135,134 @@ def ech_cases(cerid_peer, openssl_peer, server_public):
         client, server, flights = cerid_client(['--ech-grease', '0'], [])
         expect(ech_offer(flights[0][1])[1] is None, 'cerid sent ECH with GREASE off')
     yield 'ECH: GREASE both ways, and none when switched off', grease
+
+
+def offers_early_data(flight):
+    """Whether the first ClientHello of a flight carries the early_data extension."""
+    kind, message = first_handshake(flight)
+    if kind != 1:
+        return False
+    at = 2 + 32
+    at += 1 + message[at]
+    at += 2 + struct.unpack('>H', message[at:at + 2])[0]
+    at += 1 + message[at]
+    end = at + 2 + struct.unpack('>H', message[at:at + 2])[0]
+    at += 2
+    while at + 4 <= end:
+        kind, length = struct.unpack('>HH', message[at:at + 4])
+        if kind == EARLY_DATA:
+            return True
+        at += 4 + length
+    return False
+
+
+def early_cases(cerid_peer, openssl_peer, server_public):
+    """Early data both ways, over records and over QUIC (decision S17)."""
+
+    def records(cerid_is_client, accepted, server_early=True, retry=False):
+        """A first connection leaves a ticket that allows early data; the second offers it. `accepted`: whether the
+        server takes it; else the client sends it again after the handshake."""
+        with tempfile.TemporaryDirectory() as scratch:
+            for second in (False, True):
+                server_allows = server_early or not second
+                if cerid_is_client:
+                    client_groups = ['secp256r1mlkem768', 'x25519mlkem768'] if retry else ['x25519mlkem768']
+                    client_command = cerid(cerid_peer, 'client', client_groups, CLIENT_SEED, server_public,
+                                           ['--tickets', os.path.join(scratch, 'tickets'), '--early-data', '1'] +
+                                           (['--early', CERID_EARLY] if second else []))
+                    server_command = openssl(openssl_peer, 'server', 'X25519MLKEM768', SERVER_SEED,
+                                             extra=['--ticket-key', TICKET_KEYS[0]] +
+                                             (['--early-data', '16384'] if server_allows else []))
+                else:
+                    client_groups = '*X25519MLKEM768:SecP384r1MLKEM1024' if retry else 'X25519MLKEM768'
+                    client_command = openssl(openssl_peer, 'client', client_groups, CLIENT_SEED, server_public,
+                                             extra=['--session', os.path.join(scratch, 'session')] +
+                                             (['--early', OPENSSL_EARLY] if second else []))
+                    server_command = cerid(cerid_peer, 'server', ['secp384r1mlkem1024'] if retry else
+                                           ['x25519mlkem768'], SERVER_SEED, None,
+                                           ['--ticket-key', TICKET_KEYS[0]] +
+                                           (['--early-data', '1'] if server_allows else []))
+                client, server, flights = run(client_command, server_command)
+                cerid_report, openssl_report = (client, server) if cerid_is_client else (server, client)
+                early = CERID_EARLY if cerid_is_client else OPENSSL_EARLY
+                ping = PING if cerid_is_client else OPENSSL_PING
+                group = 'secp384r1mlkem1024' if retry and not cerid_is_client else 'x25519mlkem768'
+                if not second:
+                    check_established(cerid_report, openssl_report, group, retry, ping)
+                    expect(not offers_early_data(flights[0][1]), 'a first ClientHello offered early data')
+                    continue
+                sent = ping if accepted else early + ping
+                check_established(cerid_report, openssl_report, group, retry, sent)
+                expect(client.get('resumed') and server.get('resumed'), 'the second connection did not resume')
+                expect(offers_early_data(flights[0][1]), 'the resumed ClientHello offers no early data')
+                cerid_early = cerid_report.get('early')
+                openssl_status = openssl_report.get('early_status')
+                if accepted:
+                    expect(cerid_early == 'accepted' and openssl_status == 'accepted',
+                           'early data: cerid %s, openssl %s' % (cerid_early, openssl_status))
+                    expect(server.get('early_received') == early,
+                           'the server read %r as early data' % server.get('early_received'))
+                else:
+                    expect(cerid_early == 'rejected' and openssl_status == 'rejected',
+                           'early data: cerid %s, openssl %s' % (cerid_early, openssl_status))
+                    expect(server.get('early_received') == '', 'a refusing server read %r as early data' %
+                           server.get('early_received'))
+
+    yield 'early data: cerid client, openssl server accepts it', lambda: records(True, True)
+    yield 'early data: openssl client, cerid server accepts it', lambda: records(False, True)
+    yield 'early data: an openssl server without it refuses the cerid client, which sends again', lambda: (
+        records(True, False, server_early=False))
+    yield 'early data: a cerid server without it refuses the openssl client, which sends again', lambda: (
+        records(False, False, server_early=False))
+    yield 'early data: an openssl server refuses it after a HelloRetryRequest', lambda: (
+        records(True, False, retry=True))
+    yield 'early data: a cerid server refuses it after a HelloRetryRequest', lambda: records(False, False, retry=True)
+
+    def quic(cerid_is_client, contexts, accepted):
+        """Over QUIC: the 0-RTT secret probed at both ends when the server accepts it."""
+        parameters = (['--quic', '1', '--alpn', GAME])
+        with tempfile.TemporaryDirectory() as scratch:
+            for second, context in ((False, contexts[0]), (True, contexts[1])):
+                if cerid_is_client:
+                    client_command = cerid(cerid_peer, 'client', ['x25519mlkem768'], CLIENT_SEED, server_public,
+                                           parameters + ['--parameters', QUIC_CLIENT_PARAMETERS, '--tickets',
+                                                         os.path.join(scratch, 'tickets'), '--early-data', '1'])
+                    server_command = openssl(openssl_peer, 'server', 'X25519MLKEM768', SERVER_SEED,
+                                             extra=parameters + ['--parameters', QUIC_SERVER_PARAMETERS,
+                                                                 '--ticket-key', TICKET_KEYS[1], '--early-data', '1'])
+                else:
+                    client_command = openssl(openssl_peer, 'client', 'X25519MLKEM768', CLIENT_SEED, server_public,
+                                             extra=parameters + ['--parameters', QUIC_CLIENT_PARAMETERS, '--session',
+                                                                 os.path.join(scratch, 'session'), '--early-data',
+                                                                 '1'])
+                    server_command = cerid(cerid_peer, 'server', ['x25519mlkem768'], SERVER_SEED, None,
+                                           parameters + ['--parameters', QUIC_SERVER_PARAMETERS, '--ticket-key',
+                                                         TICKET_KEYS[1], '--early-data', '1', '--early-context',
+                                                         context])
+                client, server, flights = run(client_command, server_command)
+                cerid_report, openssl_report = (client, server) if cerid_is_client else (server, client)
+                probes = QUIC_PROBES + (('early-client',) if second and accepted else ())
+                if second and not accepted:
+                    # The refused client made its 0-RTT keys; the refusing Cerid server never had any.
+                    expect('early-client' in client.get('probes', {}), 'the client made no 0-RTT keys')
+                    client['probes'].pop('early-client')
+                check_quic(cerid_report, openssl_report, cerid_is_client, 'x25519mlkem768', False,
+                           expected_probes=probes)
+                expect(offers_early_data([(who, quic_initial(frame)) for who, frame in flights][0][1]) == second,
+                       'the ClientHello offers early data: %s' % (not second))
+                if second:
+                    expect(client.get('resumed') and server.get('resumed'), 'the second connection did not resume')
+                    status = 'accepted' if accepted else 'rejected'
+                    expect(cerid_report.get('early') == status and openssl_report.get('early_status') == status,
+                           'early data: cerid %s, openssl %s' % (cerid_report.get('early'),
+                                                                 openssl_report.get('early_status')))
+
+    yield 'QUIC early data: cerid client, openssl server accepts it, 0-RTT keys equal', lambda: (
+        quic(True, (EARLY_CONTEXTS[0], EARLY_CONTEXTS[0]), True))
+    yield 'QUIC early data: openssl client, cerid server accepts it, 0-RTT keys equal', lambda: (
+        quic(False, (EARLY_CONTEXTS[0], EARLY_CONTEXTS[0]), True))
+    yield 'QUIC early data: a cerid server under another early data context refuses it', lambda: (
+        quic(False, EARLY_CONTEXTS, False))
 
 
 def main():

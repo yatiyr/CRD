@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <initializer_list>
 #include <thread>
 
 namespace
@@ -1086,8 +1087,24 @@ TEST_CASE("QUIC handshake: refusals before and outside the handshake", "[crypto]
     CHECK(client.handshake.derive_keys(QuicLevel::Handshake, QuicSide::Client, static_cast<QuicVersion>(0x0AU),
                                        packet, header) == TlsError::BadConfig);
     CHECK_FALSE(packet.ready());
-    CHECK(client.handshake.take(static_cast<QuicLevel>(3U), Span<u8>(out), written) == TlsError::NotReady);
-    CHECK(client.handshake.pending(static_cast<QuicLevel>(3U)) == 0U);
+    // The Early level and anything past it carry no CRYPTO data; a server never has the Early keys.
+    for (const QuicLevel level : {QuicLevel::Early, static_cast<QuicLevel>(4U)})
+    {
+        CHECK(client.handshake.take(level, Span<u8>(out), written) == TlsError::BadConfig);
+        CHECK(client.handshake.provide(level, ConstSpan<u8>(out, 1U)) == TlsError::BadConfig);
+        CHECK(client.handshake.pending(level) == 0U);
+        CHECK(client.handshake.receive_limit(level) == 0U);
+    }
+    CHECK(client.handshake.state() == TlsState::Established);
+    CHECK(client.handshake.derive_keys(QuicLevel::Early, QuicSide::Client, QuicVersion::V1, packet, header) ==
+          TlsError::NotReady);
+    CHECK(client.handshake.derive_keys(QuicLevel::Early, QuicSide::Server, QuicVersion::V1, packet, header) ==
+          TlsError::NotReady);
+    CHECK(client.handshake.derive_keys(static_cast<QuicLevel>(4U), QuicSide::Client, QuicVersion::V1, packet, header) ==
+          TlsError::BadConfig);
+    CHECK_FALSE(client.handshake.has_keys(QuicLevel::Early, QuicSide::Client));
+    CHECK(client.handshake.early_data() == TlsEarlyData::None);
+    CHECK(client.handshake.remembered_transport_parameters().empty());
 
     // clear() forgets everything; a second init() starts afresh.
     client.handshake.clear();
