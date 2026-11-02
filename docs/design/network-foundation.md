@@ -1227,7 +1227,8 @@ suite on the stack; an UpdatePath's up to 31 node keys take one allocation besid
     working-group vector holds a post-quantum suite).
     e. GREASE (section 13.5; decision M13).
     f. Live interoperability with MLSpp (M4, amended): the four shared suites, both libraries in each role.
-    g. Next: live OpenMLS interop (M4): the pinned Rust toolchain and OpenMLS 0.9.0's locked crates.
+    g. Live interoperability with OpenMLS (M4, amended): the three shared suites, both libraries in each role, the
+    pinned Rust toolchain and OpenMLS 0.9.2's locked crates; key packages checked as section 10 says (M13).
 
 **M5. The receive window** (RFC 9420 section 9.2 leaves its size to the application). OpenMLS's defaults: a receiver
 keeps the keys of the 5 generations below the next unconsumed one of each ratchet (late and reordered messages) and
@@ -1358,19 +1359,23 @@ sort by. The creator checks its own new group the same way before it returns the
 the prior group's id, and then the store's repeat check spares that id: the member takes no further part in the group
 the ReInit ended.
 
-**M13. GREASE** (RFC 9420 section 13.5). The fifteen reserved values 0x0A0A to 0xEAEA (`grease`, `random_grease`;
-0xFAFA is private use). A sender puts random ones where receivers ignore unknown values: Cerid adds an empty extension
-of a random GREASE type to every GroupInfo it signs (`GroupInfoOptions::grease`, on by default, none added beside an
+**M13. GREASE** (RFC 9420 section 13.5). The fifteen reserved values 0x0A0A to 0xEAEA (`grease`, `random_grease`; 0xFAFA
+is private use). A sender puts random ones where receivers ignore unknown values: Cerid adds an empty extension of a
+random GREASE type to every GroupInfo it signs (`GroupInfoOptions::grease`, on by default, none added beside an
 application's own), and an application adds them to its leaves' capabilities and extensions and its key packages'
-extensions, which the API takes as written (the tests' members all do). A receiver gives them no special processing:
-an unknown capability, a key package's or a GroupInfo's unknown extension is ignored, and a leaf extension of a GREASE
-type is accepted when its capabilities list it. Section 13.5 forbids them in a proposal's or a credential's type and in
-a GroupContext's extensions, and requires a client to compare its own capabilities without them: Cerid compares every
-leaf's capabilities against what a group requires or uses that way (`supports_extension`, `supports_proposal`,
-`supports_credential`), so a GREASE value is never supported. A group whose context or required capabilities name
-one, a GroupContextExtensions proposal adding one and a leaf whose credential type is one are refused (Unsupported)
-on both sides, though the sender's own capabilities list it, and a proposal of a GREASE type is a type this build does
-not implement.
+extensions, which the API takes as written (the tests' members all do), each extension of a type the leaf's capabilities
+list: section 10 makes that a MUST for a key package's extensions as section 7.2 does for a leaf's. `sign_key_package`
+signs a package as written (as `sign_leaf_node` does a leaf), and `check_key_package` refuses one with an unlisted
+extension type (Unsupported), as OpenMLS does: a committer that let one in would split a group whose other members check
+it on the Add (MLSpp's packages break the rule by construction: TP-11). A receiver gives them no special processing: an
+unknown capability and a GroupInfo's unknown extension are ignored, and a leaf's or a key package's extension of a
+GREASE type is accepted when the leaf's capabilities list it. Section 13.5 forbids them in a proposal's or a
+credential's type and in a GroupContext's extensions, and requires a client to compare its own capabilities without
+them: Cerid compares every leaf's capabilities against what a group requires or uses that way (`supports_extension`,
+`supports_proposal`, `supports_credential`), so a GREASE value is never supported. A group whose context or required
+capabilities name one, a GroupContextExtensions proposal adding one and a leaf whose credential type is one are refused
+(Unsupported) on both sides, though the sender's own capabilities list it, and a proposal of a GREASE type is a type
+this build does not implement.
 
 **M6. Padding** (RFC 9420 section 6.3 leaves its amount to the application). A PrivateMessageContent of L bytes is
 padded with Padmé (Nikitin et al., "Reducing Metadata Leakage from Encrypted Files and Communication with PURBs",
@@ -1389,13 +1394,16 @@ members and speaks one line protocol (`cerid_mls_peer.cpp`'s header), so the mem
 processes and every message one library makes the other processes; `mls_interop.py` is the delivery service and reads
 every message off the wire itself. **The post-quantum suites have no codepoint in common**: Cerid's are
 draft-ietf-mls-pq-ciphersuites-07's (M2), MLSpp's pinned main implements an earlier assignment (0x0008 to 0x000A over
-ML-KEM hybrids, with the HPKE KEM ids 0x0041, 0x0042, 0x0050, 0x0051 and X-Wing's 0x647A) and OpenMLS 0.9.0 provisional
+ML-KEM hybrids, with the HPKE KEM ids 0x0041, 0x0042, 0x0050, 0x0051 and X-Wing's 0x647A) and OpenMLS 0.9 provisional
 ones (0x004D to 0x004F and 0x0906, and no P-256 or P-384 hybrid). A codepoint is a suite's identity on the wire and in
 every hash, so no peer agrees through an alias without a non-standard codepoint in Cerid's table: the post-quantum
 suites interoperate once the peers take the draft's or IANA's codepoints (`mls.pq-ciphersuites` tracks both), and until
-then interoperability runs on the four RFC 9420 suites they share (0x0001, 0x0002, 0x0003, 0x0007). A third-party
+then interoperability runs on the RFC 9420 suites each peer shares with Cerid (MLSpp: 0x0001, 0x0002, 0x0003, 0x0007;
+OpenMLS's RustCrypto provider: 0x0001, 0x0002, 0x0003, P-384 being only in its post-quantum feature). A third-party
 peer's deviation is registered once and the driver keeps every other oracle (MLSpp:
-[TP-9](../third-party-defects.md#tp-9)).
+[TP-9](../third-party-defects.md#tp-9), [TP-11](../third-party-defects.md#tp-11); OpenMLS:
+[TP-10](../third-party-defects.md#tp-10)). TP-10 makes OpenMLS refuse every GREASE leaf and package extension and
+MLSpp puts one on each of its leaves, so the two peers never share a group: each meets Cerid alone.
 
 MLSpp (`crd-crypto-mls-interop-mlspp`, `CRD_BUILD_MLS_VS_MLSPP` on the complete-tier `linux-gcc-public-checks`
 lane; MLSpp built by its own CMake against the pinned OpenSSL 4.0): in each shared suite a group created by each
@@ -1408,7 +1416,21 @@ other's application data. Every message is first delivered with each authenticat
 membership and confirmation tags, a PrivateMessage's sender data and content: refused, the group unchanged), an
 application message again (refused as replayed) and one of the past epoch (refused); a committer refuses a key
 package of an endless lifetime (decision M8) and one of another suite. The driver reads every key package, Welcome
-(each entry addressed by the KeyPackageRef it computes) and GroupInfo off the wire, GREASE included.
+(each entry addressed by the KeyPackageRef it computes) and GroupInfo off the wire, GREASE included, and every key
+package's extensions listed by its capabilities (section 10).
+
+OpenMLS (`crd-crypto-mls-interop-openmls`, `CRD_BUILD_MLS_VS_OPENMLS` on the same lane): `crd-openmls-peer`, a Rust
+program over OpenMLS 0.9.2 and its RustCrypto provider (each member with its own provider and storage, OpenMLS keying a
+group's state by its id), linted by Clippy and built by `cargo build --locked` with the pinned Rust toolchain
+(`tools/rust-linux-x64`, `scripts/install-rust.py`) against the committed Cargo.lock (`tools/openmls-crates`: every
+crate from crates.io at the SHA-256 it names), with CARGO_HOME inside the build tree and the peer's own warnings
+errors. The same group script and
+hostile deliveries in each of the three suites, each library creating, handshakes public and private (forged content
+included: OpenMLS 0.9.2 spends no generation on it), the refusals of the endless and foreign key packages, and
+TP-10's reproduction: 18 cases. OpenMLS's group configuration fixes a group's outgoing handshake format, so the peer
+sets it before each proposal and commit and reads both (its mixed policies); its external commit removes the leaf of
+the joiner's signature key, so a resync joiner takes over its former member's signer and credential, and Cerid accepts
+the one commit that removes that leaf and adds the same key in a new one.
 
 Evidence: `test_mls_schedule.cpp` (every epoch of the key-schedule vectors in the four suites, five each: the
 GroupContext, the eleven secrets advanced in place and joined from the joiner secret, the external key and the

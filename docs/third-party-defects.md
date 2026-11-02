@@ -159,6 +159,32 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Retirement | When `forged_content_spends` fails because MLSpp's reader accepts the genuine message after the forgery (a newer pin), this entry and the script's exception for MLSpp's members are removed |
 | Row | [NET.2](ROADMAP.md#slice-net.2); evidence [the MLSpp interop session](sessions/2026-11-02-net-2-mls-interop-mlspp.md) |
 
+<a id="tp-10"></a>
+## TP-10: OpenMLS refuses the GREASE extensions a leaf's capabilities list
+
+| Field | Value |
+|---|---|
+| Component | OpenMLS 0.9.2 (`cmake/pins.json` `openmls-crates`, the crates.io release the committed Cargo.lock names): `Extension::extension_type` and `Capabilities::contains_extensions` |
+| Symptom | A key package whose leaf or package carries an extension of a GREASE type its capabilities list, as RFC 9420 sections 7.2, 10 and 13.5 require of one, is refused (`KeyPackageVerifyError::UnsupportedExtension`, `LeafNodeValidationError::UnsupportedExtensions`), and an OpenMLS member given such a leaf cannot create a group (`ExtensionsNotInCapabilities`). The decoder reads the extension's GREASE codepoint as `ExtensionType::Unknown(v)` and the capability's as `ExtensionType::Grease(v)`, which compare different. So OpenMLS accepts no key package of Cerid's or MLSpp's default shape, and MLSpp's members, each leaf of which carries one, can never join a group with an OpenMLS member |
+| Reproduction outside Cerid | `grease_extensions_refused` in [mls_interop.py](../tests/foundation/crypto/interop/mls_interop.py) (2026-11-02), in each of the three suites: an OpenMLS committer refuses a Cerid key package with listed GREASE extensions, and an OpenMLS member whose own leaf and package carry one (built by crd-openmls-peer, which links OpenMLS alone) cannot create a group ([session](sessions/2026-11-02-net-2-mls-interop-openmls.md#tp-10)) |
+| Affected | No test fails: `crd-crypto-mls-interop-openmls` asserts the reproduction, and in its groups no member, Cerid's or OpenMLS's, carries a GREASE leaf or package extension (the GREASE values in the capabilities' lists stay); MLSpp and OpenMLS share no group |
+| Engine handling | None is needed: Cerid accepts a listed GREASE extension (decision M13) and puts one on its members' leaves and packages unless the application leaves them out, as the interop peer does for groups with OpenMLS |
+| Retirement | When `grease_extensions_refused` fails because OpenMLS accepts the extensions (a newer lockfile), this entry, the peers' GREASE option for OpenMLS groups and the driver's exception are removed |
+| Row | [NET.2](ROADMAP.md#slice-net.2); evidence [the OpenMLS interop session](sessions/2026-11-02-net-2-mls-interop-openmls.md) |
+
+<a id="tp-11"></a>
+## TP-11: MLSpp leaves a key package's GREASE extensions out of its capabilities
+
+| Field | Value |
+|---|---|
+| Component | Cisco's MLSpp at the pinned commit `fc724c31` (`cmake/pins.json` `mlspp`): the `KeyPackage` constructor's `grease(extensions)` |
+| Symptom | The constructor adds a GREASE extension of a random type to the package after its leaf is signed, so the type is listed in the leaf's capabilities only by chance, though RFC 9420 section 10 says "Extensions included in the extensions or leaf_node.extensions fields MUST be included in the leaf_node.capabilities field". Cerid and OpenMLS refuse such a package, so a committer of either cannot add most MLSpp members, and a group that let one in would split on the Add between members that check and members that do not |
+| Reproduction outside Cerid | `unlisted_package_extensions` in [mls_interop.py](../tests/foundation/crypto/interop/mls_interop.py) (2026-11-02), in each of the four suites: crd-mlspp-peer returns each key package as MLSpp made it (`as_made`); the driver reads one with an unlisted package extension type off the wire, independently of both libraries, and a Cerid committer refuses it as `unsupported` ([session](sessions/2026-11-02-net-2-mls-interop-openmls.md#tp-11)) |
+| Affected | No test fails: crd-mlspp-peer retypes each unlisted GREASE package extension to a GREASE type the capabilities list (and no other package extension has) and signs the package again through MLSpp's public fields and `sign`, so every MLSpp member of the group scripts is added; the case above adds the adapted package of the same member |
+| Engine handling | Cerid refuses a package extension its leaf does not list (`check_key_package`, `Unsupported`), as section 10 requires and OpenMLS does |
+| Retirement | When `unlisted_package_extensions` fails because none of eight packages as MLSpp makes them carries an unlisted type (a newer pin), this entry and the peer's adaptation are removed |
+| Row | [NET.2](ROADMAP.md#slice-net.2); evidence [the OpenMLS interop session](sessions/2026-11-02-net-2-mls-interop-openmls.md) |
+
 ## The registered-failure gate
 
 `scripts/check-registered-failures.py --lane <preset> --junit <ctest --output-junit file> --ctest-exit <code>` reads
