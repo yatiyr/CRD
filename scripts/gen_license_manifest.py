@@ -63,12 +63,14 @@ def render(registry):
         elif entry.get('acquired_by'):
             source = f'pinned action {entry["acquired_by"]}'
         else:
-            url = entry.get('url') or entry.get('provenance') or ''
+            url = entry.get('url') or entry.get('provenance') or entry.get('manifest') or ''
             source = url.split('/')[2] if url.startswith('http') and url.count('/') >= 2 else url
         if entry.get('file'):
             payload = f'`{cell(entry["file"])}`'
         elif entry.get('files'):
             payload = ', '.join(f'`{cell(member)}`' for member in entry['files'])
+        elif entry.get('lockfile'):
+            payload = f'the crates `{cell(entry["lockfile"])}` names'
         else:
             payload = 'installed by the action'
         lines.append(f'| {cell(name)} | {cell(entry.get("version", ""))} | {cell(entry.get("license", ""))} | '

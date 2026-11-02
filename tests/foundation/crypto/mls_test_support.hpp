@@ -101,12 +101,15 @@ inline Bytes listing(const Bytes& list, u16 value)
     return out;
 }
 
-// An Extension list's body of one extension of a random GREASE type holding `data` (at most 63 bytes).
-inline Bytes grease_extension(const Bytes& data)
+// An Extension list's body of one extension of the GREASE `type` holding `data` (at most 63 bytes); empty for 0. A key
+// package's extension is of a type its leaf's capabilities list (section 10), so a member's own GREASE value.
+inline Bytes grease_extension(u16 type, const Bytes& data)
 {
-    u16 type = 0U;
-    REQUIRE(mls::random_grease(type) == CryptoError::None);
     REQUIRE(data.size() < 64U);
+    if (type == 0U)
+    {
+        return Bytes();
+    }
     Bytes out = {static_cast<u8>(type >> 8U), static_cast<u8>(type), static_cast<u8>(data.size())};
     for (const u8 byte : data)
     {
@@ -295,7 +298,7 @@ inline void make_joiner(const mls::CipherSuite& suite, Joiner& joiner, u32 name)
     joiner.package.cipher_suite = suite.id;
     joiner.package.init_key     = view(joiner.init_public);
     joiner.package.leaf_node    = joiner.id.leaf;
-    joiner.extensions           = grease_extension(random_of(8U));
+    joiner.extensions           = grease_extension(joiner.id.grease, random_of(8U));
     joiner.package.extensions   = view(joiner.extensions);
     sign_package(suite, joiner);
 }

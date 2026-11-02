@@ -190,9 +190,11 @@ struct LeafPolicy
                                            cont::Span<u8> signature, usize& written) noexcept;
 
 // Section 10.1's checks of a key package for the group of `context`: Unsupported for another version or cipher
-// suite, check_leaf's refusals for its leaf (role KeyPackage), Forged when the leaf's or the package's signature does
-// not verify under the leaf's signature key, BadKey when the init key is the leaf's encryption key or no agreement
-// can use it.
+// suite, check_leaf's refusals for its leaf (role KeyPackage), Unsupported for a package extension of a type the
+// leaf's capabilities do not list (section 10's MUST, GREASE types included: a group whose members check it, as
+// OpenMLS's do, would otherwise split on the Add), Forged when the leaf's or the package's signature does not verify
+// under the leaf's signature key, BadKey when the init key is the leaf's encryption key or no agreement can use it.
+// sign_key_package signs a package as written, as sign_leaf_node does a leaf.
 [[nodiscard]] CryptoError check_key_package(const GroupContext& context, const KeyPackage& package,
                                             const SignatureVerifier& verifier,
                                             const AuthenticationService& authentication,

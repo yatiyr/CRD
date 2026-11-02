@@ -2633,7 +2633,7 @@
       "id": "mls.protocol",
       "title": "The Messaging Layer Security protocol",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "crypto",
       "rows": [
         "NET.2",
@@ -2685,7 +2685,7 @@
         "tests/foundation/crypto/interop/mls_interop.py"
       ],
       "deprecation": null,
-      "note": "Cerid's own implementation over crd-crypto's providers (decision M1, docs/design/network-foundation.md#mls), in progress on NET.2; GREASE as section 13.5 says (decision M13). Since 2026-11-02 interoperable with Cisco's MLSpp (the pinned main, cmake/pins.json mlspp) in the four suites below, each library creating, adding, committing by value and by reference, removing, joining externally and resyncing in the other's groups (the crd-crypto-mls-interop-mlspp CTest, decision M4); OpenMLS is the next peer, after which the entry is implemented. The cipher suites of the profile (decision M2) were checked against RFC 9420 section 17.1 and IANA's MLS registry (updated 2025-11-17, read 2026-11-02); 0x0004 to 0x0006 (X448, Ed448, P-521) are outside it because no provider in the policy implements them."
+      "note": "Cerid's own implementation over crd-crypto's providers (decision M1, docs/design/network-foundation.md#mls), in progress on NET.2; GREASE as section 13.5 says (decision M13). Since 2026-11-02 interoperable with Cisco's MLSpp (the pinned main, cmake/pins.json mlspp) in the four suites below and with OpenMLS 0.9.2 (cmake/pins.json openmls-crates) in 0x0001 to 0x0003, each library creating, adding, committing by value and by reference, removing, joining externally and resyncing in the other's groups (the crd-crypto-mls-interop-mlspp and crd-crypto-mls-interop-openmls CTests, decision M4), the peers' deviations registered (TP-9, TP-10, TP-11), so the entry is implemented; key packages are checked as section 10 says (decision M13). The cipher suites of the profile (decision M2) were checked against RFC 9420 section 17.1 and IANA's MLS registry (updated 2025-11-17, read 2026-11-02); 0x0004 to 0x0006 (X448, Ed448, P-521) are outside it because no provider in the policy implements them."
     },
     {
       "id": "mls.architecture",

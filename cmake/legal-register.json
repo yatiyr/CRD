@@ -11628,7 +11628,7 @@
     "cerid-package": [
       {
         "release": null,
-        "inventory": "d5d60ad10a0f30babfadb9a68ef2e0ad6a100272a087b08841d02aa09e607785",
+        "inventory": "e9e4ba9391ec1a8551065c019e314c7329b067794fc57fb648599570470f3ed4",
         "reviewed": "2026-11-02",
         "findings": [
           {

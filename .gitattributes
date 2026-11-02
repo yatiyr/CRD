@@ -9,11 +9,13 @@
 *.c text eol=lf
 *.cu text eol=lf
 *.cuh text eol=lf
+*.rs text eol=lf
 *.cmake text eol=lf
 *.sh text eol=lf
 *.py text eol=lf
 *.ps1 text eol=lf
 *.toml text eol=lf
+Cargo.lock text eol=lf
 *.ckir text eol=lf
 *.ceir text eol=lf
 *.chir text eol=lf

@@ -94,6 +94,14 @@ option(CRD_BUILD_TLS_VS_OPENSSL "Build the TLS 1.3 interoperability test against
 # builds too. Linux only, never in a shipped build; the crd-crypto-mls-interop-mlspp CTest of the tree that turns it
 # on, locally and on the complete-tier linux-gcc-public-checks lane.
 option(CRD_BUILD_MLS_VS_MLSPP "Build the MLS interoperability test against MLSpp (Linux)" OFF)
+# The same test against OpenMLS (NET.2, decision M4): crd-openmls-peer, a Rust program over OpenMLS whose crates the
+# committed tests/foundation/crypto/interop/openmls_peer/Cargo.lock pins (cmake/pins.json tools/openmls-crates), built
+# by `cargo build --locked` with the pinned Rust toolchain (tools/rust-linux-x64: scripts/install-rust.py, which prints
+# the CRD_CARGO this configure reads from the environment) and CARGO_HOME inside the tree. Linux only, never in a
+# shipped build; the crd-crypto-mls-interop-openmls CTest, locally and on the complete-tier linux-gcc-public-checks
+# lane.
+option(CRD_BUILD_MLS_VS_OPENMLS "Build the MLS interoperability test against OpenMLS (Linux, the pinned Rust)" OFF)
+set(CRD_CARGO "$ENV{CRD_CARGO}" CACHE FILEPATH "The pinned Cargo (scripts/install-rust.py), for the OpenMLS peer")
 # The nn board's same-format peer: ggml's Q8_0 linears (runtime/examples/bench_nn_q8_vs_ggml.c) against the pinned ggml
 # release (cmake/pins.json ggml, fetched on demand into build/_deps) built by its own CMake as a separate project at the
 # host's ISA. Local only on Linux, never in CI or a shipped build; scripts/run_bench_nn.sh builds and runs it.
@@ -1279,7 +1287,7 @@ if(CRD_BUILD_HESAP_VS_NLOPT)
     crd_add_pinned_package(nlopt DOWNLOAD_ONLY YES)
 endif()
 
-# ----- The interoperability peers: OpenSSL 4.0 and MLSpp, built by tests/foundation/crypto (test-only) -----
+# ----- The interoperability peers: OpenSSL 4.0, MLSpp and OpenMLS, built by tests/foundation/crypto (test-only) -----
 # The TLS peer program is C; OpenSSL's Configure is Perl. MLSpp needs OpenSSL (its crypto) and nlohmann_json's CMake
 # package (its build only).
 if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP)
@@ -1293,6 +1301,16 @@ endif()
 if(CRD_BUILD_MLS_VS_MLSPP)
     crd_add_pinned_package(nlohmann_json DOWNLOAD_ONLY YES)
     crd_add_pinned_package(mlspp DOWNLOAD_ONLY YES)
+endif()
+if(CRD_BUILD_MLS_VS_OPENMLS)
+    if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+        message(FATAL_ERROR "[mls-vs-openmls] the MLS interoperability test needs Linux, CRD_BUILD_TESTS and the "
+                            "crypto module")
+    endif()
+    if(NOT EXISTS "${CRD_CARGO}")
+        message(FATAL_ERROR "[mls-vs-openmls] CRD_CARGO names no Cargo: install the pinned Rust toolchain with "
+                            "scripts/install-rust.py and configure with the CRD_CARGO it prints")
+    endif()
 endif()
 
 # ----- The nn board's ggml peer: the pinned release, built by runtime/CMakeLists.txt (bench-only) -----

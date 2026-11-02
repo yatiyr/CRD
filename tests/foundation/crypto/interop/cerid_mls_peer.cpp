@@ -1,14 +1,15 @@
 // crd-mls-peer -- MLS group members through crd-crypto's groups (RFC 9420), driven over its standard streams by
-// tests/foundation/crypto/interop/mls_interop.py against crd-mlspp-peer (MLSpp) (NET.2, decision M4;
-// docs/design/network-foundation.md#mls).
+// tests/foundation/crypto/interop/mls_interop.py against crd-mlspp-peer (MLSpp) and crd-openmls-peer (OpenMLS) (NET.2,
+// decision M4; docs/design/network-foundation.md#mls).
 //
 // The protocol both peers speak: each request is one line of tokens separated by single spaces, byte strings in
 // lowercase hex ("-" for none); each reply is one line, "ok" and key=value tokens, or "error" and the refusal's name
-// (crypto_error_name's here, MLSpp's exception text there, or a word of the peer's own). A process holds up to 16
-// members by name, each in at most one group.
-//   member NAME IDENTITY SUITE NOT_BEFORE NOT_AFTER  -> ok key_package=HEX
+// (crypto_error_name's here, the peer library's error text there, or a word of the peer's own). A process holds up
+// to 16 members by name, each in at most one group.
+//   member NAME IDENTITY SUITE NOT_BEFORE NOT_AFTER [GREASE]  -> ok key_package=HEX
 //       a new member: its basic credential's identity, its suite (a decimal codepoint), fresh signature, leaf and
-//       init keys, and its KeyPackage MLSMessage, the leaf living from NOT_BEFORE to NOT_AFTER (decimal seconds)
+//       init keys, and its KeyPackage MLSMessage, the leaf living from NOT_BEFORE to NOT_AFTER (decimal seconds) and
+//       and the key package each carrying a GREASE extension unless GREASE is 0 (OpenMLS refuses them: TP-10)
 //   create NAME GROUP_ID                  -> ok epoch=0
 //   join NAME WELCOME TREE                -> ok epoch=N      TREE "-": the tree of the GroupInfo's extension
 //   psk NAME ID SECRET                    -> ok              an external PSK the member holds
@@ -30,9 +31,10 @@
 // longer than 16 MiB or cut short.
 //
 // Cerid's members: capabilities listing mls10, their suite and basic credentials, each list with a GREASE value
-// (section 13.5), a GREASE leaf extension of the listed type and a GREASE key package extension; the Authentication
-// Service accepts every basic credential and a successor of the same identity; the store holds the external PSKs the
-// driver gives; every lifetime is judged at the process's clock under the default policy (decision M8).
+// (section 13.5), and (unless asked) a GREASE leaf extension and a GREASE key package extension of the listed type;
+// the Authentication Service accepts every basic credential and a successor of the same identity; the store holds the
+// external PSKs the driver gives; every lifetime is judged at the process's clock under the default policy (decision
+// M8).
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -392,14 +394,15 @@ CryptoError sign_into(const Member& member, bool package, Bytes& out)
     return error;
 }
 
-// member NAME IDENTITY SUITE NOT_BEFORE NOT_AFTER
-Outcome make_member(const StringView* tokens)
+// member NAME IDENTITY SUITE NOT_BEFORE NOT_AFTER [GREASE]
+Outcome make_member(const StringView* tokens, usize count)
 {
-    u64 suite_id   = 0U;
-    u64 not_before = 0U;
-    u64 not_after  = 0U;
+    u64 suite_id    = 0U;
+    u64 not_before  = 0U;
+    u64 not_after   = 0U;
+    u64 extension_grease_on = 1U;
     if (!number(tokens[3], 0xFFFFU, suite_id) || !number(tokens[4], ~u64{0}, not_before) ||
-        !number(tokens[5], ~u64{0}, not_after))
+        !number(tokens[5], ~u64{0}, not_after) || (count == 7U && !number(tokens[6], 1U, extension_grease_on)))
     {
         return "usage";
     }
@@ -436,10 +439,9 @@ Outcome make_member(const StringView* tokens)
     {
         m.name.push_back(static_cast<u8>(c));
     }
-    u16 suite_grease     = 0U;
-    u16 extension_grease = 0U;
+    u16 suite_grease      = 0U;
+    u16 extension_grease  = 0U;
     u16 credential_grease = 0U;
-    u16 package_grease   = 0U;
     m.signature_key.resize(signature_sizes(suite->signature).public_key);
     CryptoError error = m.signer.generate(suite->signature);
     error = error == CryptoError::None ? m.signer.public_key(span_of(m.signature_key)) : error;
@@ -448,22 +450,25 @@ Outcome make_member(const StringView* tokens)
     error = error == CryptoError::None ? listing(suite->id, m.suites, suite_grease) : error;
     error = error == CryptoError::None ? listing(0U, m.extension_types, extension_grease) : error;
     error = error == CryptoError::None ? listing(kBasic, m.credentials, credential_grease) : error;
-    error = error == CryptoError::None ? mls::random_grease(package_grease) : error;
     if (error != CryptoError::None)
     {
         return refused(error);
     }
-    // A GREASE leaf extension of the listed GREASE type holding one byte, and an empty GREASE key package extension.
+    // Unless asked otherwise, a GREASE leaf extension of the listed GREASE type holding one byte, and an empty key
+    // package extension of that type: section 10 has a package's extensions listed by its leaf's capabilities too.
     m.leaf_extensions.clear();
-    for (const u8 byte : {static_cast<u8>(extension_grease >> 8U), static_cast<u8>(extension_grease), u8{0x01U},
-                          u8{0x5AU}})
-    {
-        m.leaf_extensions.push_back(byte);
-    }
     m.package_extensions.clear();
-    for (const u8 byte : {static_cast<u8>(package_grease >> 8U), static_cast<u8>(package_grease), u8{0x00U}})
+    if (extension_grease_on == 1U)
     {
-        m.package_extensions.push_back(byte);
+        for (const u8 byte : {static_cast<u8>(extension_grease >> 8U), static_cast<u8>(extension_grease), u8{0x01U},
+                              u8{0x5AU}})
+        {
+            m.leaf_extensions.push_back(byte);
+        }
+        for (const u8 byte : {static_cast<u8>(extension_grease >> 8U), static_cast<u8>(extension_grease), u8{0x00U}})
+        {
+            m.package_extensions.push_back(byte);
+        }
     }
 
     m.leaf                            = {};
@@ -888,7 +893,7 @@ Outcome dispatch(const StringView* tokens, usize count)
     const StringView op = tokens[0];
     if (op == "member")
     {
-        return count == 6U ? make_member(tokens) : "usage";
+        return count == 6U || count == 7U ? make_member(tokens, count) : "usage";
     }
     if (count < 2U)
     {

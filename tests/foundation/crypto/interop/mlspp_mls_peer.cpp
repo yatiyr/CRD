@@ -17,10 +17,16 @@
 //                 verified), notes each Remove proposal's reference itself, and reads a commit's Removes, by value and
 //                 by reference; a removed member's state is dropped.
 //   external PSKs MLSpp's external join injects every PSK the joiner holds, so its psk= tokens name exactly those.
+//   key packages  MLSpp's KeyPackage adds GREASE extensions after its leaf is signed, of types the leaf's capabilities
+//                 need not list, though RFC 9420 section 10 requires them listed (TP-11, which Cerid and OpenMLS
+//                 refuse): the peer gives each such extension a GREASE type the capabilities list and none of the
+//                 package's other extensions has, and signs the package again, through MLSpp's public fields and sign;
+//                 `member` replies with the package as MLSpp made it too (as_made=HEX), which TP-11's case refuses.
 // An exception MLSpp throws is the request's refusal: "error refused:" and its message, spaces replaced.
 
 #include <mls/state.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -265,6 +271,51 @@ void adopt(Member& member, mls::State next)
     member.removal_count = 0U;
 }
 
+bool is_grease(uint16_t value)
+{
+    return (value & 0x0F0FU) == 0x0A0AU && value != 0xFAFAU;
+}
+
+bool has_extension(const mls::ExtensionList& list, uint16_t type)
+{
+    return std::ranges::any_of(list.extensions,
+                               [type](const mls::Extension& extension) { return extension.type == type; });
+}
+
+bool lists(const mls::Capabilities& capabilities, uint16_t type)
+{
+    return std::ranges::any_of(capabilities.extensions, [type](mls::Extension::Type listed) { return listed == type; });
+}
+
+// TP-11's adaptation: each GREASE package extension of a type the leaf's capabilities do not list takes a listed GREASE
+// type no other package extension has, and the package is signed again.
+void list_package_extensions(mls::KeyPackage& package, const mls::SignaturePrivateKey& sig_priv)
+{
+    const mls::Capabilities& capabilities = package.leaf_node.capabilities;
+    for (mls::Extension& extension : package.extensions.extensions)
+    {
+        if (!is_grease(extension.type) || lists(capabilities, extension.type))
+        {
+            continue;
+        }
+        bool retyped = false;
+        for (const mls::Extension::Type listed : capabilities.extensions)
+        {
+            if (is_grease(listed) && !has_extension(package.extensions, listed))
+            {
+                extension.type = listed;
+                retyped        = true;
+                break;
+            }
+        }
+        if (!retyped)
+        {
+            throw Refusal{"tp-11"};
+        }
+    }
+    package.sign(sig_priv);
+}
+
 // member NAME IDENTITY SUITE NOT_BEFORE NOT_AFTER
 void make_member(const std::string_view* tokens)
 {
@@ -302,8 +353,11 @@ void make_member(const std::string_view* tokens)
                              mls::Lifetime{number(tokens[4]), number(tokens[5])}, {}, *member.sig_priv);
     member.key_package.emplace(member.suite, member.init_priv->public_key, leaf, mls::ExtensionList{},
                                *member.sig_priv);
+    const bytes as_made = marshal_message(*member.key_package);
+    list_package_extensions(*member.key_package, *member.sig_priv);
     say("ok");
     say_hex("key_package", marshal_message(*member.key_package));
+    say_hex("as_made", as_made);
     free->emplace(std::move(member));
 }
 

@@ -65,6 +65,9 @@ node_spec.loader.exec_module(install_node)
 cuda_spec = importlib.util.spec_from_file_location('install_cuda', ROOT / 'scripts/install-cuda.py')
 install_cuda = importlib.util.module_from_spec(cuda_spec)
 cuda_spec.loader.exec_module(install_cuda)
+rust_spec = importlib.util.spec_from_file_location('install_rust', ROOT / 'scripts/install-rust.py')
+install_rust = importlib.util.module_from_spec(rust_spec)
+rust_spec.loader.exec_module(install_rust)
 mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
 install_mold = importlib.util.module_from_spec(mold_spec)
 mold_spec.loader.exec_module(install_mold)
@@ -2445,6 +2448,135 @@ class BuildPerformance(unittest.TestCase):
             self.assertTrue(spec['url'].endswith('/' + name) and spec['version'] in name)
         self.assertIn('cuda_nvcc-linux-x86_64-%s-archive.tar.xz' % install_cuda.compiler_version(pin), pin['files'])
         self.assertIn('scripts/install-cuda.py', check_pins.HELPERS)
+
+    def test_rust_installer_unpacks_each_component_directory_into_one_prefix(self):
+        def component(directory, name, directory_in_top, members, notice):
+            top = name + '-9.9.9-x/'
+            path = directory / (top.rstrip('/') + '.tar.xz')
+            files = {'install.sh': b'#!/bin/sh', 'components': name.encode(), 'LICENSE-MIT': notice,
+                     directory_in_top + '/manifest.in': name.encode()}
+            files.update({directory_in_top + '/' + member: data for member, data in members.items()})
+            with tarfile.open(path, 'w:xz') as package:
+                for member, data in files.items():
+                    info = tarfile.TarInfo(top + member)
+                    info.size, info.mode = len(data), 0o755
+                    package.addfile(info, io.BytesIO(data))
+            return path.name, {'component': name, 'version': '9.9.9', 'url': 'https://example.invalid/' + path.name,
+                               'sha256': pins_registry.sha256(path), 'top': top, 'root': top + directory_in_top + '/'}
+
+        def toolchain(directory, std_members=None):
+            directory.mkdir()
+            parts = [component(directory, 'rustc', 'rustc', {'bin/rustc': b'rustc', 'lib/rustlib/x/bin/lld': b'lld'},
+                               b'MIT rustc'),
+                     component(directory, 'rust-std', 'rust-std-x',
+                               std_members or {'lib/rustlib/x/lib/libstd.rlib': b'std'}, b'MIT std'),
+                     component(directory, 'cargo', 'cargo', {'bin/cargo': b'cargo'}, b'MIT cargo'),
+                     component(directory, 'clippy', 'clippy-preview',
+                               {'bin/cargo-clippy': b'cargo-clippy', 'bin/clippy-driver': b'driver'}, b'MIT clippy')]
+            return {'version': '9.9.9', 'binary': 'bin/rustc', 'notices': ['LICENSE-MIT'], 'omit': ['manifest.in'],
+                    'files': dict(parts), 'license': 'MIT OR Apache-2.0'}
+
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()):
+            root = Path(temp).resolve()
+            pin = toolchain(root / 'dl')
+            cargo = install_rust.install(root / 'rust', root / 'dl', pin=pin, check=False)
+            prefix = root / 'rust'
+            self.assertEqual(cargo, prefix / 'bin/cargo')
+            self.assertEqual((prefix / 'bin/rustc').read_bytes(), b'rustc', 'each component directory is the prefix')
+            self.assertEqual((prefix / 'lib/rustlib/x/lib/libstd.rlib').read_bytes(), b'std')
+            self.assertEqual((prefix / 'lib/rustlib/x/bin/lld').read_bytes(), b'lld', 'one rustlib from two archives')
+            for left_out in ('install.sh', 'components', 'manifest.in', 'LICENSE-MIT'):
+                self.assertFalse((prefix / left_out).exists(), left_out + ' is the installer\'s, not the tree\'s')
+            self.assertEqual((prefix / 'bin/cargo-clippy').read_bytes(), b'cargo-clippy')
+            for name, notice in (('rustc', b'MIT rustc'), ('rust-std', b'MIT std'), ('cargo', b'MIT cargo'),
+                                 ('clippy', b'MIT clippy')):
+                self.assertEqual((prefix / ('licenses/%s-9.9.9-x/LICENSE-MIT' % name)).read_bytes(), notice)
+            stamp = json.loads((prefix / install_rust.STAMP).read_text(encoding='utf-8'))
+            self.assertEqual(stamp['omit'], ['manifest.in'])
+            # Without the omission, the components' manifests clash in the prefix and the tree is refused.
+            with self.assertRaisesRegex(pins_registry.PinError, 'manifest.in differs'):
+                install_rust.install(root / 'clashed', root / 'dl', pin=dict(pin, omit=[]), check=False)
+            # A top that does not hold the root, and a member of the top below another directory, are refused.
+            name, spec = next(iter(pin['files'].items()))
+            for changed, message in ((dict(spec, top='other/'), 'must be a directory holding the root'),
+                                     (dict(spec, root=spec['top']), 'must be a directory holding the root')):
+                with self.assertRaisesRegex(pins_registry.PinError, message):
+                    install_rust.install(root / 'bad', root / 'dl', check=False,
+                                         pin=dict(pin, files=dict(pin['files'], **{name: changed})))
+            nested = toolchain(root / 'nested', std_members={'lib/rustlib/x/lib/libstd.rlib': b'std'})
+            name, spec = next((name, spec) for name, spec in nested['files'].items() if spec['component'] == 'rust-std')
+            with self.assertRaisesRegex(pins_registry.PinError, 'archive member outside'):
+                install_rust.install(root / 'outside', root / 'nested', check=False,
+                                     pin=dict(nested, files={name: dict(spec, root=spec['top'] + 'lib/')}))
+            without_clippy = {name: spec for name, spec in pin['files'].items() if spec['component'] != 'clippy'}
+            with self.assertRaisesRegex(pins_registry.PinError, 'has no bin/cargo-clippy, bin/clippy-driver'):
+                install_rust.install(root / 'no-clippy', root / 'dl', pin=dict(pin, files=without_clippy), check=False)
+            with self.assertRaisesRegex(pins_registry.PinError, 'must name bin/rustc'):
+                install_rust.install(root / 'binary', root / 'dl', pin=dict(pin, binary='bin/cargo'), check=False)
+            # rustc and the cargo beside it must both report the version.
+            for cargo_says, version in (('cargo 9.9.9 (abc 2026-01-01)\n', '9.9.9'),
+                                        ('cargo 9.9.8 (abc 2026-01-01)\n', 'rustc 9.9.9, cargo 9.9.8')):
+                def run(command, **_):
+                    said = 'rustc 9.9.9 (def 2026-01-01)\n' if command[0].endswith('rustc') else cargo_says
+                    return SimpleNamespace(stdout=said, returncode=0)
+                with patch.object(install_rust.subprocess, 'run', side_effect=run):
+                    self.assertEqual(install_rust.installed_version(prefix / 'bin/rustc'), version)
+            self.assertIsNone(install_rust.reported_version(prefix / 'bin/missing', 'rustc'))
+        pin = pins_registry.entry('tools', install_rust.PIN_NAME)
+        self.assertEqual(pin['binary'], install_rust.RUSTC)
+        self.assertEqual(pin['omit'], ['manifest.in'])
+        for name, spec in pin['files'].items():
+            self.assertEqual(spec['top'], name.removesuffix('.tar.xz') + '/')
+            self.assertTrue(spec['root'].startswith(spec['top']) and spec['root'] != spec['top'])
+            self.assertTrue(spec['url'].endswith('/' + name) and spec['version'] == pin['version'])
+        self.assertIn('scripts/install-rust.py', check_pins.HELPERS)
+
+    def test_a_crate_set_is_pinned_by_its_committed_lockfile(self):
+        crates_io = 'registry+https://github.com/rust-lang/crates.io-index'
+        good_sum = '0' * 64
+
+        def write(root, packages, requirement='"=1.2.3"'):
+            (root / 'Cargo.toml').write_text('[package]\nname = "peer"\n[dependencies]\nlib = %s\n' % requirement,
+                                             encoding='utf-8')
+            body = 'version = 4\n'
+            for package in packages:
+                body += '\n[[package]]\n' + ''.join('%s = "%s"\n' % item for item in package.items())
+            (root / 'Cargo.lock').write_text(body, encoding='utf-8')
+
+        entry = {'version': '1.2.3', 'crate': 'lib', 'lockfile': 'Cargo.lock', 'manifest': 'Cargo.toml',
+                 'license': 'MIT'}
+        own = {'name': 'peer', 'version': '0.1.0'}
+        lib = {'name': 'lib', 'version': '1.2.3', 'source': crates_io, 'checksum': good_sum}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write(root, [own, lib])
+            self.assertEqual(check_pins.validate_lockfile('set', entry, root), [])
+            for packages, requirement, message in (
+                    ([own, dict(lib, source='git+https://example.invalid/lib')], '"=1.2.3"', 'from crates.io'),
+                    ([own, {k: v for k, v in lib.items() if k != 'checksum'}], '"=1.2.3"', 'from crates.io'),
+                    ([own, dict(lib, checksum='abc')], '"=1.2.3"', 'from crates.io'),
+                    ([own, lib, {'name': 'other', 'version': '1.0.0'}], '"=1.2.3"', 'not the manifest'),
+                    ([own, lib], '"1.2.3"', 'must require lib = "=1.2.3"'),
+                    ([own, lib], '{ version = "=1.2.4" }', 'must require'),
+                    ([own, dict(lib, version='1.2.4')], '"=1.2.3"', 'does not resolve lib 1.2.3')):
+                write(root, packages, requirement)
+                problems = check_pins.validate_lockfile('set', entry, root)
+                self.assertTrue(any(message in problem for problem in problems), (message, problems))
+            write(root, [own, lib], '{ version = "=1.2.3", features = ["x"] }')
+            self.assertEqual(check_pins.validate_lockfile('set', entry, root), [])
+            (root / 'Cargo.lock').write_text('not toml [', encoding='utf-8')
+            self.assertIn('readable TOML', check_pins.validate_lockfile('set', entry, root)[0])
+            pins = {'tools': {'set': entry}}
+            write(root, [own, dict(lib, source='git+https://example.invalid/lib')])
+            self.assertTrue(any('from crates.io' in problem for problem in check_pins.validate_registry(pins, root)))
+        rust = {'tools': {'rust-linux-x64': {'version': '9.9.9'}}}
+        self.assertIn('workflow does not install Rust 9.9.9 through scripts/install-rust.py',
+                      check_pins.validate_workflow(rust, ''))
+        self.assertEqual([problem for problem in check_pins.validate_workflow(
+            rust, '- name: Install pinned Rust 9.9.9\n  run: python3 scripts/install-rust.py\n') if 'Rust' in problem],
+            [])
+        registered = pins_registry.entry('tools', 'openmls-crates')
+        self.assertEqual(check_pins.validate_lockfile('openmls-crates', registered), [])
 
     def test_clang_tidy_installer_keeps_the_resource_layout_and_checks_digests_count_and_version(self):
         with tempfile.TemporaryDirectory() as temp:

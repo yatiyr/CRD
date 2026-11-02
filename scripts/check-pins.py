@@ -12,6 +12,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PINS = ROOT / 'cmake/pins.json'
@@ -22,12 +23,13 @@ HELPERS = ('cmake/CPM.cmake', 'scripts/install-vulkan-sdk.py', 'scripts/install-
            'scripts/install-vulkan-validation.py', 'scripts/install-warp.py', 'scripts/install-sccache.py',
            'scripts/install-mold.py', 'scripts/install-genmc.py', 'scripts/install-clang-build-analyzer.py',
            'scripts/install-clang-tidy.py', 'scripts/install-ninja.py', 'scripts/install-sde.py',
-           'scripts/install-node.py', 'scripts/install-cuda.py',
+           'scripts/install-node.py', 'scripts/install-cuda.py', 'scripts/install-rust.py',
            'scripts/msvc-dev-env.py', 'scripts/pins.py')
 SCHEMA = 'cerid-pins/1'
 HEX64 = re.compile(r'^[0-9a-f]{64}$')
 HEX40 = re.compile(r'^[0-9a-f]{40}$')
 LITERAL_DIGEST = re.compile(r'\b[0-9a-f]{64}\b')
+CRATES_IO = 'registry+https://github.com/rust-lang/crates.io-index'
 FORBIDDEN_CMAKE = ('CPMAddPackage(', 'GIT_TAG', 'GITHUB_REPOSITORY', 'GITLAB_REPOSITORY', '"gh:', '"gl:')
 
 
@@ -35,7 +37,37 @@ def load(path):
     return json.loads(Path(path).read_text(encoding='utf-8'))
 
 
-def validate_registry(pins):
+def validate_lockfile(name, entry, root=ROOT):
+    """A crate set pinned by its committed Cargo.lock: every package with a source comes from crates.io with a 64-hex
+    checksum (no git, path or other registry source), the one without is the manifest's own package, and the manifest
+    requires the pinned crate at exactly the pinned version, which the lockfile resolves."""
+    problems = []
+    try:
+        lock = tomllib.loads((root / entry['lockfile']).read_text(encoding='utf-8'))
+        manifest = tomllib.loads((root / entry['manifest']).read_text(encoding='utf-8'))
+    except (KeyError, OSError, tomllib.TOMLDecodeError) as error:
+        return ['tool %s: its lockfile and manifest must be readable TOML (%s)' % (name, error)]
+    own = manifest.get('package', {}).get('name')
+    locked = lock.get('package', [])
+    for package in locked:
+        label = '%s %s' % (package.get('name'), package.get('version'))
+        if 'source' not in package:
+            if package.get('name') != own:
+                problems.append("tool %s: %s has no source and is not the manifest's package" % (name, label))
+        elif package['source'] != CRATES_IO or not HEX64.match(package.get('checksum', '')):
+            problems.append('tool %s: %s must come from crates.io with a 64-hex checksum' % (name, label))
+    crate = entry.get('crate')
+    required = manifest.get('dependencies', {}).get(crate)
+    required = required.get('version') if isinstance(required, dict) else required
+    if required != '=' + entry['version']:
+        problems.append('tool %s: the manifest must require %s = "=%s", not %r' % (name, crate, entry['version'],
+                                                                                   required))
+    if not any(package.get('name') == crate and package.get('version') == entry['version'] for package in locked):
+        problems.append('tool %s: the lockfile does not resolve %s %s' % (name, crate, entry['version']))
+    return problems
+
+
+def validate_registry(pins, root=ROOT):
     problems = []
     if pins.get('schema') != SCHEMA:
         problems.append('schema must be %s' % SCHEMA)
@@ -67,6 +99,8 @@ def validate_registry(pins):
         elif 'acquired_by' in entry:
             if entry['acquired_by'] not in pins.get('actions', {}):
                 problems.append('tool %s is acquired by an action outside the registry' % name)
+        elif 'lockfile' in entry:
+            problems += validate_lockfile(name, entry, root)
         else:
             for field in ('url', 'file', 'sha256'):
                 if not entry.get(field):
@@ -129,6 +163,9 @@ def validate_workflow(pins, text):
     llvm = tools.get('llvm', {}).get('version')
     if llvm and ('scripts/install-clang-tidy.py' not in text or ('LLVM %s' % llvm) not in text):
         problems.append('workflow does not install clang-tidy (LLVM %s) through scripts/install-clang-tidy.py' % llvm)
+    rust = tools.get('rust-linux-x64', {}).get('version')
+    if rust and ('scripts/install-rust.py' not in text or ('Rust %s' % rust) not in text):
+        problems.append('workflow does not install Rust %s through scripts/install-rust.py' % rust)
     ninja = tools.get('ninja-windows', {}).get('version')
     if ninja and ('scripts/install-ninja.py' not in text or ('Ninja %s' % ninja) not in text):
         problems.append('workflow does not install Ninja %s through scripts/install-ninja.py' % ninja)
@@ -190,7 +227,7 @@ def validate_tiers(pins, tiers):
 
 
 def validate(pins, workflow_text, cmake_text, tiers, root=ROOT):
-    return (validate_registry(pins) + validate_workflow(pins, workflow_text) + validate_cmake(pins, cmake_text)
+    return (validate_registry(pins, root) + validate_workflow(pins, workflow_text) + validate_cmake(pins, cmake_text)
             + validate_helpers(root) + validate_tiers(pins, tiers))
 
 

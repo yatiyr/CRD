@@ -539,6 +539,71 @@
       "license": "MIT",
       "note": "Node.js 24 LTS (Krypton, 2026-10-14), installed whole by scripts/install-node.py for the repository's npm tools, each run from a committed lockfile with every transitive SHA-512 integrity: the dashboard publisher (ci/dashboard/generate.py publish, wrangler) and the MCP Inspector of MCP-ADAPT.0's evidence (tests/tools/ceridc/mcp_inspector.py). Downloaded and hashed 2026-10-30; matches nodejs.org SHASUMS256.txt."
     },
+    "rust-linux-x64": {
+      "version": "1.99.1",
+      "binary": "bin/rustc",
+      "notices": [
+        "COPYRIGHT",
+        "LICENSE-APACHE",
+        "LICENSE-MIT",
+        "LICENSE-THIRD-PARTY"
+      ],
+      "omit": [
+        "manifest.in"
+      ],
+      "manifest": "https://static.rust-lang.org/dist/2026-10-15/channel-rust-stable.toml",
+      "files": {
+        "rustc-1.99.1-x86_64-unknown-linux-gnu.tar.xz": {
+          "component": "rustc",
+          "version": "1.99.1",
+          "url": "https://static.rust-lang.org/dist/rustc-1.99.1-x86_64-unknown-linux-gnu.tar.xz",
+          "size": 84098960,
+          "sha256": "2ff05ff9c08a90861e7f6e4065b40a8b87463b4576186fd613871c3e37f2091f",
+          "top": "rustc-1.99.1-x86_64-unknown-linux-gnu/",
+          "root": "rustc-1.99.1-x86_64-unknown-linux-gnu/rustc/"
+        },
+        "rust-std-1.99.1-x86_64-unknown-linux-gnu.tar.xz": {
+          "component": "rust-std",
+          "version": "1.99.1",
+          "url": "https://static.rust-lang.org/dist/rust-std-1.99.1-x86_64-unknown-linux-gnu.tar.xz",
+          "size": 31563228,
+          "sha256": "109b074225bf5b9ea3820890876bfdf4ed161adbfaf94b2b4b5984c85ee5d958",
+          "top": "rust-std-1.99.1-x86_64-unknown-linux-gnu/",
+          "root": "rust-std-1.99.1-x86_64-unknown-linux-gnu/rust-std-x86_64-unknown-linux-gnu/"
+        },
+        "cargo-1.99.1-x86_64-unknown-linux-gnu.tar.xz": {
+          "component": "cargo",
+          "version": "1.99.1",
+          "url": "https://static.rust-lang.org/dist/cargo-1.99.1-x86_64-unknown-linux-gnu.tar.xz",
+          "size": 10954816,
+          "sha256": "53f3521949404d595efb06a55c12c5658d4ed1c75566f33d3d514eaebe70bd8a",
+          "top": "cargo-1.99.1-x86_64-unknown-linux-gnu/",
+          "root": "cargo-1.99.1-x86_64-unknown-linux-gnu/cargo/"
+        },
+        "clippy-1.99.1-x86_64-unknown-linux-gnu.tar.xz": {
+          "component": "clippy",
+          "version": "1.99.1",
+          "url": "https://static.rust-lang.org/dist/clippy-1.99.1-x86_64-unknown-linux-gnu.tar.xz",
+          "size": 5254436,
+          "sha256": "458339712a058e52cc4522ff9ef8b59cd1ea1340312216cd94194c464a3f6dc5",
+          "top": "clippy-1.99.1-x86_64-unknown-linux-gnu/",
+          "root": "clippy-1.99.1-x86_64-unknown-linux-gnu/clippy-preview/"
+        }
+      },
+      "license": "MIT OR Apache-2.0",
+      "note": "Rust 1.99.1 (2026-10-15 stable), the compiler, standard library, Cargo and Clippy for Linux x64 from the Rust project's component archives (SHA-256 and sizes matched against the dated stable channel manifest, verified on download). scripts/install-rust.py unpacks each archive's component directory into one prefix (~/.cerid/tools/rust/<version>/linux-x64, the layout rustup installs: bin/rustc, bin/cargo, lib/rustlib/<target>), leaving the installer's script and metadata out and each archive's licences under licenses/<archive>/. It lints (cargo clippy, warnings as errors) and builds crd-openmls-peer, the OpenMLS member program of the MLS interoperability test (CRD_BUILD_MLS_VS_OPENMLS, NET.2 decision M4), whose crates are pinned by its committed Cargo.lock (tools/openmls-crates). Never an engine module or a shipped build. Pinned as a testing download under the user's approval of 2026-11-01."
+    },
+    "openmls-crates": {
+      "version": "0.9.2",
+      "crate": "openmls",
+      "lockfile": "tests/foundation/crypto/interop/openmls_peer/Cargo.lock",
+      "manifest": "tests/foundation/crypto/interop/openmls_peer/Cargo.toml",
+      "repository": "openmls/openmls",
+      "ref": "v0.9.2",
+      "commit": "8a8f83b4b61fc45f28facec25e914992b3465de6",
+      "license": "MIT",
+      "note": "OpenMLS 0.9.2 (2026-10-22, the release with GHSA-p276-g3f3-wwgh and GHSA-94v4-rg25-x625 fixed) with its RustCrypto provider and basic credentials: the crate set of crd-openmls-peer, the OpenMLS member program of the MLS interoperability test (CRD_BUILD_MLS_VS_OPENMLS, NET.2 decision M4). The committed Cargo.lock is the pin: every crate from crates.io at the version and SHA-256 it names, which `cargo build --locked` verifies on download, as npm ci does a committed package-lock (check-pins.py checks each entry names crates.io and a 64-hex checksum, and the manifest requires this version exactly). Built by the pinned Rust (tools/rust-linux-x64) into the build tree (CARGO_HOME there too); linked into no engine module and never shipped. OpenMLS is MIT (its LICENSE, read from the v0.9.2 archive, commit 8a8f83b4). The 147 crates the build compiles (of the 195 the lockfile resolves, the rest optional or for other targets) declare MIT, Apache-2.0 or either, but for BSD-3-Clause (curve25519-dalek, ed25519-dalek, x25519-dalek, subtle), MPL-2.0 (hpke-rs and its three providers), Unlicense OR MIT and Unicode-3.0 terms (read from each crate's manifest, 2026-11-02); none is redistributed, the program being test-only. Pinned as a testing download under the user's approval of 2026-11-01."
+    },
     "cuda-linux-x64": {
       "version": "13.3.1",
       "binary": "bin/nvcc",

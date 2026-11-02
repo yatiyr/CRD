@@ -919,6 +919,13 @@ jobs:
           python3 scripts/install-sde.py --destination "$RUNNER_TEMP/sde" --download-dir "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
           sudo sysctl -w kernel.yama.ptrace_scope=0
 
+      # The pinned Rust toolchain (tools/rust-linux-x64) builds crd-openmls-peer, the OpenMLS member program of the MLS
+      # interoperability test (CRD_BUILD_MLS_VS_OPENMLS): the configure reads CRD_CARGO, and cargo fetches the crates
+      # the committed Cargo.lock names, each checked against its SHA-256.
+      - name: Install pinned Rust 1.99.1
+        if: matrix.preset == 'linux-gcc-public-checks'
+        run: python3 scripts/install-rust.py --destination "$RUNNER_TEMP/rust" --download-dir "$RUNNER_TEMP/rust-dl" --github-env "$GITHUB_ENV"
+
       - name: Configure
         if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}

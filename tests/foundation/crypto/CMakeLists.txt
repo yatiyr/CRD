@@ -86,7 +86,6 @@ if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP)
     find_program(CRD_MAKE_PROGRAM NAMES make gmake REQUIRED)
     find_package(Threads REQUIRED)
     find_package(ZLIB REQUIRED)
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
     cmake_host_system_information(RESULT interop_jobs QUERY NUMBER_OF_LOGICAL_CORES)
     crd_pin(openssl_version packages openssl version)
     # The prefix names the version: a new pin builds afresh instead of keeping the stamps of the last one.
@@ -109,6 +108,9 @@ endif()
 # The TLS 1.3 and ECH interoperability test against OpenSSL (CRD_BUILD_TLS_VS_OPENSSL): crd-openssl-tls-peer links
 # OpenSSL alone, and tls_interop.py relays the two peers' records between their processes, or their CRYPTO data per
 # encryption level for the handshake over QUIC (OpenSSL's QUIC TLS interface against QuicHandshake).
+if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_MLS_VS_OPENMLS)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+endif()
 if(CRD_BUILD_TLS_VS_OPENSSL)
     add_executable(crd-openssl-tls-peer interop/openssl_tls_peer.c)
     add_dependencies(crd-openssl-tls-peer crd-openssl-peer-build)
@@ -126,11 +128,17 @@ if(CRD_BUILD_TLS_VS_OPENSSL)
     message(STATUS "[tls-vs-openssl] TLS 1.3 interoperability against OpenSSL ${openssl_version}")
 endif()
 
-# The MLS interoperability test against MLSpp (CRD_BUILD_MLS_VS_MLSPP; decision M4): crd-mls-peer's members over
-# crd-crypto and crd-mlspp-peer's over MLSpp create, join, propose, commit and protect in the same groups, relayed by
-# mls_interop.py. nlohmann_json installs its CMake package for MLSpp's configure; MLSpp builds by its own CMake against
-# the OpenSSL above (4.0, so with its post-quantum suites), its library and the three it links (bytes, tls_syntax,
-# hpke) only, without its tests. Its headers need the definitions its hpke library publishes for that OpenSSL.
+# The MLS interoperability tests (decision M4): crd-mls-peer's members over crd-crypto and a peer library's create,
+# join, propose, commit and protect in the same groups, relayed by mls_interop.py.
+if(CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_MLS_VS_OPENMLS)
+    add_executable(crd-mls-peer interop/cerid_mls_peer.cpp)
+    target_link_libraries(crd-mls-peer PRIVATE crd-crypto crd-core crd-containers)
+endif()
+
+# Against MLSpp (CRD_BUILD_MLS_VS_MLSPP): crd-mlspp-peer's members over MLSpp. nlohmann_json installs its CMake package
+# for MLSpp's configure; MLSpp builds by its own CMake against the OpenSSL above (4.0, so with its post-quantum
+# suites), its library and the three it links (bytes, tls_syntax, hpke) only, without its tests. Its headers need the
+# definitions its hpke library publishes for that OpenSSL.
 if(CRD_BUILD_MLS_VS_MLSPP)
     crd_pin(mlspp_commit packages mlspp commit)
     string(SUBSTRING "${mlspp_commit}" 0 8 mlspp_short)
@@ -167,12 +175,36 @@ if(CRD_BUILD_MLS_VS_MLSPP)
     target_link_libraries(crd-mlspp-peer PRIVATE ${mlspp_libraries} ${openssl_link})
     set_target_properties(crd-mlspp-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
-    add_executable(crd-mls-peer interop/cerid_mls_peer.cpp)
-    target_link_libraries(crd-mls-peer PRIVATE crd-crypto crd-core crd-containers)
-
     add_test(NAME crd-crypto-mls-interop-mlspp
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/mls_interop.py"
                      --cerid "$<TARGET_FILE:crd-mls-peer>" --mlspp "$<TARGET_FILE:crd-mlspp-peer>")
     set_tests_properties(crd-crypto-mls-interop-mlspp PROPERTIES TIMEOUT 600 LABELS "crypto;mls-interop")
     message(STATUS "[mls-vs-mlspp] MLS interoperability against MLSpp ${mlspp_short}")
+endif()
+
+# Against OpenMLS (CRD_BUILD_MLS_VS_OPENMLS): crd-openmls-peer's members over OpenMLS, a Cargo package linted by
+# Clippy and built with the pinned Rust toolchain (CRD_CARGO) by `cargo build --locked`, so every crate is the one
+# Cargo.lock names, verified by its SHA-256; CARGO_HOME (the crate downloads) and the target directory stay inside this
+# tree, and the peer's own warnings, the compiler's and Clippy's, fail the build. Cargo decides what to rebuild, so the
+# target always runs it.
+if(CRD_BUILD_MLS_VS_OPENMLS)
+    set(openmls_manifest "${CMAKE_CURRENT_SOURCE_DIR}/interop/openmls_peer/Cargo.toml")
+    set(openmls_target "${CMAKE_BINARY_DIR}/_deps/openmls-peer")
+    set(openmls_peer "${openmls_target}/release/crd-openmls-peer")
+    get_filename_component(rust_bin "${CRD_CARGO}" DIRECTORY)
+    set(cargo_env "${CMAKE_COMMAND}" -E env "CARGO_HOME=${CMAKE_BINARY_DIR}/_deps/cargo-home" "CARGO=${CRD_CARGO}"
+                  "RUSTC=${rust_bin}/rustc" "RUSTFLAGS=-D warnings")
+    set(cargo_args --locked --release --manifest-path "${openmls_manifest}" --target-dir "${openmls_target}")
+    add_custom_target(crd-openmls-peer ALL
+        COMMAND ${cargo_env} "${rust_bin}/cargo-clippy" clippy ${cargo_args} -- -D warnings
+        COMMAND ${cargo_env} "${CRD_CARGO}" build ${cargo_args}
+        BYPRODUCTS "${openmls_peer}"
+        COMMENT "[mls-vs-openmls] cargo clippy and cargo build --locked: crd-openmls-peer"
+        USES_TERMINAL
+        VERBATIM)
+    add_test(NAME crd-crypto-mls-interop-openmls
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/mls_interop.py"
+                     --cerid "$<TARGET_FILE:crd-mls-peer>" --openmls "${openmls_peer}")
+    set_tests_properties(crd-crypto-mls-interop-openmls PROPERTIES TIMEOUT 600 LABELS "crypto;mls-interop")
+    message(STATUS "[mls-vs-openmls] MLS interoperability against OpenMLS (Cargo.lock), Rust from ${rust_bin}")
 endif()

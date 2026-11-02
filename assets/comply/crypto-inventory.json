@@ -188,6 +188,20 @@
           ],
           "spec": "https://doi.org/10.1007/978-3-642-34931-7_28",
           "standard": true
+        },
+        {
+          "id": "mls.protocol",
+          "kind": "protocol",
+          "owner": "crypto",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "RFC 9420",
+          "standard": true
         }
       ],
       "algorithms": [

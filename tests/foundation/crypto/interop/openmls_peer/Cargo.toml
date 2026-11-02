@@ -1,0 +1,26 @@
+# crd-openmls-peer: MLS group members through OpenMLS, the peer of crd-mls-peer in mls_interop.py (NET.2, decision M4;
+# docs/design/network-foundation.md#mls). Built by tests/foundation/crypto/CMakeLists.txt (CRD_BUILD_MLS_VS_OPENMLS)
+# with the pinned Rust toolchain (cmake/pins.json tools/rust-linux-x64) and `cargo build --locked`: every crate comes
+# from crates.io at the version and SHA-256 the committed Cargo.lock names (tools/openmls-crates).
+[package]
+name = "crd-openmls-peer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "crd-openmls-peer"
+path = "src/main.rs"
+
+[dependencies]
+openmls = "=0.9.2"
+openmls_basic_credential = { version = "=0.6.0", features = ["clonable"] }
+openmls_rust_crypto = "=0.6.0"
+openmls_traits = "=0.6.0"
+
+[profile.release]
+debug = 1
+overflow-checks = true
+panic = "abort"

@@ -159,22 +159,31 @@ def install_member(pin, destination, archive=None, download_dir=None, label=None
     return output
 
 
-def tree_members(package, root):
-    """The tar archive's members below `root` (which must end in a slash), with the root stripped; any other member
-    is refused, so the archive cannot place a file beside the tree. Links sort last, so on Windows a link's target is
-    always extracted before it."""
+def tree_members(package, root, top=None):
+    """The tar archive's members below `root` (which must end in a slash), with the root stripped, and the files
+    directly in `top` (an installer's archive, whose top directory holds its component `root` beside the installer's
+    own files: its script, metadata and licences), named as in the top; any other member is refused, so the archive
+    cannot place a file beside the tree. Links sort last, so on Windows a link's target is always extracted before
+    it. Returns the members below the root and those beside it."""
     if not root.endswith('/'):
         raise PinError(f'the pinned root must end in a slash: {root}')
+    if top is not None and (not top.endswith('/') or not root.startswith(top) or root == top):
+        raise PinError(f'the pinned top {top} must be a directory holding the root {root}')
     members = []
+    beside = []
     for info in package.getmembers():
         name = info.name.rstrip('/')
-        if name == root.rstrip('/'):
+        if name == root.rstrip('/') or (top is not None and name == top.rstrip('/')):
             continue
-        if not name.startswith(root):
+        if name.startswith(root):
+            info.name = name[len(root):]
+            members.append(info)
+        elif top is not None and name.startswith(top) and '/' not in name[len(top):] and info.isfile():
+            info.name = name[len(top):]
+            beside.append(info)
+        else:
             raise PinError(f'archive member outside {root}: {info.name}')
-        info.name = name[len(root):]
-        members.append(info)
-    return sorted(members, key=lambda info: info.issym() or info.islnk())
+    return sorted(members, key=lambda info: info.issym() or info.islnk()), beside
 
 
 def tree_filter(member, path):
@@ -218,6 +227,21 @@ def notices_apart(members, notices, root):
     return members
 
 
+def part_members(package, part, pin):
+    """The members one archive of a pinned tree places, named as they land: those below the part's `root` but the
+    names the pin's `omit` lists (an installer's per-component file that would clash in the prefix), and the archive's
+    notices under `licenses/<archive top>/`. With a part `top`, the notices are its files beside the root and every
+    other such file (an installer's script and metadata) is left out; without one, they are the root's own top-level
+    files (notices_apart)."""
+    top = part.get('top')
+    members, beside = tree_members(package, part['root'], top)
+    notices = pin.get('notices', ())
+    members = [info for info in members if info.name not in pin.get('omit', ())]
+    if top is None:
+        return notices_apart(members, notices, part['root'])
+    return members + notices_apart([info for info in beside if info.name in notices], notices, top)
+
+
 def unplaced(package, members, staging, name):
     """`members` without those an earlier archive of the tree already placed; a path two archives both place must be
     the same directory, link or file in each, else the tree is refused."""
@@ -250,9 +274,9 @@ def install_tree(pin, destination, download_dir, binary, stamp, archive=None, la
     `binary` (a POSIX path inside the tree), unless a matching install is already there.
 
     A pin with `files` is one tree from several archives (tree_parts), each unpacked below its own root into the same
-    prefix, in the registry's order; a path two of them place must be identical in both, and the top-level files the
-    pin's `notices` names go to `licenses/<archive root>/` (notices_apart); the pin's `links` then add the relative
-    links its tools expect (link_inside_tree). Each archive is fetched (or
+    prefix, in the registry's order; a path two of them place must be identical in both, the top-level files the
+    pin's `notices` names go to `licenses/<archive top>/` and the names its `omit` lists stay out (part_members); the
+    pin's `links` then add the relative links its tools expect (link_inside_tree). Each archive is fetched (or
     verified) through fetch(); `archive` hands in the one archive of a single-archive pin. The tree is assembled
     beside the destination and renamed into place only when complete; a pin with `member_sha256` has that member's
     digest checked inside the tree; with `version_of` (a callable returning the version the binary reports, or None)
@@ -265,7 +289,7 @@ def install_tree(pin, destination, download_dir, binary, stamp, archive=None, la
     destination = Path(destination).resolve()
     digests = pin['sha256'] if 'files' not in pin else {part['file']: part['sha256'] for part in parts}
     expected = {'version': pin['version'], 'sha256': digests}
-    expected.update({key: pin[key] for key in ('notices', 'links') if key in pin})
+    expected.update({key: pin[key] for key in ('notices', 'omit', 'links') if key in pin})
     tool = destination / PurePosixPath(binary)
 
     def reported_version(path):
@@ -289,8 +313,7 @@ def install_tree(pin, destination, download_dir, binary, stamp, archive=None, la
     try:
         for part, path in zip(parts, verified):
             with tarfile.open(path, 'r:*', errorlevel=2) as package:
-                members = notices_apart(tree_members(package, part['root']), pin.get('notices', ()), part['root'])
-                members = unplaced(package, members, staging, path.name)
+                members = unplaced(package, part_members(package, part, pin), staging, path.name)
                 package.extractall(staging, members=members, filter=tree_filter)
         for name, target in pin.get('links', {}).items():
             link_inside_tree(staging, name, target)

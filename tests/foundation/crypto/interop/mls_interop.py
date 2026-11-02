@@ -1,34 +1,38 @@
 #!/usr/bin/env python3
-"""MLS interoperability of crd-crypto's groups with Cisco's MLSpp (NET.2, decision M4).
+"""MLS interoperability of crd-crypto's groups with Cisco's MLSpp and with OpenMLS (NET.2, decision M4).
 
-Runs crd-mls-peer (crd-crypto over AWS-LC) and crd-mlspp-peer (MLSpp over the pinned OpenSSL 4.0), each in its own
-process holding several members, and relays MLS messages between them as a delivery service would: the members of one
-group live in both processes, so every message one implementation makes the other processes (the protocol is in
-cerid_mls_peer.cpp's header). After every epoch every member reports its epoch, epoch authenticator, an exporter value,
-its tree hash and its roster, and all must be equal; every member then sends application data that every other member
-reads.
+Runs crd-mls-peer (crd-crypto over AWS-LC) and the peers given: crd-mlspp-peer (MLSpp over the pinned OpenSSL 4.0) and
+crd-openmls-peer (OpenMLS over its RustCrypto provider), each in its own process holding several members, and relays MLS
+messages between them as a delivery service would: the members of one group live in two processes, so every message one
+implementation makes the other processes (the protocol is in cerid_mls_peer.cpp's header). After every epoch every
+member reports its epoch, epoch authenticator, an exporter value, its tree hash and its roster, and all must be equal;
+every member then sends application data that every other member reads.
 
-Each of RFC 9420's suites both libraries implement (0x0001, 0x0002, 0x0003 and 0x0007; the post-quantum suites have
-no codepoint in common: decision M4) runs one group script twice, Cerid creating it and MLSpp creating it, with
-handshake messages as PublicMessages and as PrivateMessages. The roles alternate between the two implementations, so
-each operation runs both ways: creating a group and adding members by value with the tree in the Welcome; an Update
-and an Add proposed by members and committed by reference by a third with a path, the joiner fetching the tree; an
-Update and a Remove committed by reference, the removed member told so; an external PSK and an Add by value committed
-without a path; an empty commit; external joins from a GroupInfo carrying the tree and from one without it; and a
-member rejoining by external commit with the Remove of its former leaf (resync). Hostile input crosses the
-implementations too: every commit is first delivered with one byte flipped (refused, the group unchanged), an
-application message delivered again is refused, as is one from the previous epoch, and a key package claiming an
-endless lifetime or of another suite is refused by a committer.
+For each peer, each of RFC 9420's suites it and Cerid both implement (MLSpp: 0x0001, 0x0002, 0x0003 and 0x0007; OpenMLS:
+0x0001, 0x0002 and 0x0003; the post-quantum suites have no codepoint in common: decision M4) runs one group script
+twice, Cerid creating it and the peer creating it, with handshake messages as PublicMessages and as PrivateMessages.
+MLSpp and OpenMLS never share a group: OpenMLS refuses every leaf and key package carrying a GREASE extension (TP-10,
+which grease_extensions_refused reproduces), so none in a group with OpenMLS carries one, and MLSpp puts one on each of
+its own. The roles alternate between the two implementations, so each operation runs both ways: creating a group and
+adding members by value with the tree in the Welcome; an Update and an Add proposed by members and committed by
+reference by a third with a path, the joiner fetching the tree; an Update and a Remove committed by reference, the
+removed member told so; an external PSK and an Add by value committed without a path; an empty commit; external joins
+from a GroupInfo carrying the tree and from one without it; and a member rejoining by external commit with the Remove of
+its former leaf (resync). Hostile input crosses the implementations too: every commit is first delivered with one byte
+flipped (refused, the group unchanged), an application message delivered again is refused, as is one from the previous
+epoch, and a key package claiming an endless lifetime or of another suite is refused by a committer.
 
-Every message is also read off the wire independently of both libraries: the version and wire format of each
-MLSMessage (handshake messages in the format asked for, application data always private), each key package's suite,
-key lengths, identity, lifetime and GREASE values (RFC 9420 section 13.5: in its capabilities' lists, a leaf extension
-of a listed GREASE type and a key package extension), each Welcome's suite and one EncryptedGroupSecrets per new member
-addressed by the KeyPackageRef of its key package (RefHash, section 5.2, computed here) with an encapsulation of the
-suite's length, and each GroupInfo's GroupContext (suite, group, epoch and the tree hash every member reports), its
-ratchet_tree extension exactly when asked for, its external_pub where a joiner needs it and Cerid's GREASE extension.
+Every message is also read off the wire independently of the libraries: the version and wire format of each MLSMessage
+(handshake messages in the format asked for, application data always private), each key package's suite, key lengths,
+identity, lifetime and GREASE values (RFC 9420 section 13.5: in its capabilities' lists, and a leaf extension and a key
+package extension unless the group has OpenMLS), its extensions each of a type its capabilities list (sections 7.2 and
+10), each Welcome's suite and one EncryptedGroupSecrets per new member addressed by the KeyPackageRef of
+its key package (RefHash, section 5.2, computed here) with an encapsulation of the suite's length, and each GroupInfo's
+GroupContext (suite, group, epoch and the tree hash every member reports), its ratchet_tree extension exactly when asked
+for, its external_pub where a joiner needs it and Cerid's GREASE extension.
 
-Usage: mls_interop.py --cerid <crd-mls-peer> --mlspp <crd-mlspp-peer>
+Usage: mls_interop.py --cerid <crd-mls-peer> [--mlspp <crd-mlspp-peer>] [--openmls <crd-openmls-peer>]
+                      [--involving mlspp|openmls]
 """
 
 import argparse
@@ -38,8 +42,9 @@ import subprocess
 import sys
 import time
 
-# Suite -> (hash, Npk = Nenc): the suites both libraries implement.
+# Suite -> (hash, Npk = Nenc): the RFC 9420 suites Cerid implements, and those each peer implements too.
 SUITES = {1: ('sha256', 32), 2: ('sha256', 65), 3: ('sha256', 32), 7: ('sha384', 97)}
+IMPLEMENTS = {'mlspp': (1, 2, 3, 7), 'openmls': (1, 2, 3)}
 PUBLIC = 1
 PRIVATE = 2
 WELCOME = 3
@@ -50,6 +55,7 @@ COMMIT = 3
 RATCHET_TREE = 2
 EXTERNAL_PUB = 4
 BASIC = 1
+DEFAULT_EXTENSIONS = 5  # application_id to external_senders: never listed in capabilities (section 7.2)
 TWELVE_WEEKS = 12 * 7 * 24 * 3600
 EXPORTER_BYTES = 32
 
@@ -309,13 +315,16 @@ class Group:
         self.active = []      # the members in the group, in no particular order
         self.epoch = None
         self.last_info = None  # the GroupInfo of the current epoch, as read off the wire
+        self.grease = 'openmls' not in peers  # GREASE leaf and package extensions, which OpenMLS refuses (TP-10)
 
-    def member(self, name, kind, identity=None, lifetime=None, suite=None):
+    def member(self, name, kind, identity=None, lifetime=None, suite=None, grease=None):
         now = int(time.time())
         not_before, not_after = lifetime or (now - 3600, now - 3600 + TWELVE_WEEKS)
         identity = identity or name.encode()
         suite = suite or self.suite
-        reply = self.peers[kind].ask('member', name, identity.hex(), suite, not_before, not_after)
+        grease = self.grease if grease is None else grease
+        tokens = ('member', name, identity.hex(), suite, not_before, not_after) + (() if grease else (0,))
+        reply = self.peers[kind].ask(*tokens)
         package = bytes.fromhex(reply['key_package'])
         read = read_key_package(package)
         leaf = read['leaf']
@@ -329,9 +338,13 @@ class Group:
                'capabilities without mls10, the suite or basic credentials: %s' % leaf)
         for field in ('suites', 'extension_types', 'credentials'):
             expect(any(is_grease(value) for value in leaf[field]), '%s lists no GREASE %s' % (name, field))
-        expect(any(is_grease(kind_of) and kind_of in leaf['extension_types'] for kind_of, _ in leaf['extensions']),
-               '%s has no GREASE leaf extension of a listed type' % name)
-        expect(any(is_grease(kind_of) for kind_of, _ in read['extensions']), '%s has no GREASE package extension' % name)
+        for where, listed in (('leaf', leaf['extensions']), ('package', read['extensions'])):
+            greased = [kind_of for kind_of, _ in listed if is_grease(kind_of)]
+            expect(bool(greased) == grease, '%s has GREASE %s extensions %s, asked %s' % (name, where, greased, grease))
+        unlisted = [kind_of for kind_of, _ in read['extensions'] if kind_of > DEFAULT_EXTENSIONS and
+                    kind_of not in leaf['extension_types']]
+        expect(not unlisted, '%s has package extensions %s its capabilities do not list (section 10)' % (
+            name, unlisted))
         self.owner[name] = self.peers[kind]
         self.identity[name] = identity
         self.packages[name] = package
@@ -376,11 +389,11 @@ class Group:
         replies = {}
         for field, forged in forgeries(message, self.suite):
             for name in receivers:
-                mlspp = self.owner[name].kind == 'mlspp'
-                if (field == 'confirmation tag' and name in removed) or (mlspp and field == 'content'):
+                kind = self.owner[name].kind
+                if (field == 'confirmation tag' and name in removed) or (kind == 'mlspp' and field == 'content'):
                     continue
                 word = self.refuses(name, 'process', forged.hex())
-                expect(mlspp or word == 'forged', 'cerid refused a forged %s as %s' % (field, word))
+                expect(kind != 'cerid' or word == 'forged', 'cerid refused a forged %s as %s' % (field, word))
         for name in receivers:
             replies[name] = self.ask(name, 'process', message.hex())
         return wire_format, replies
@@ -505,13 +518,18 @@ class Group:
 
 
 
-def group_script(peers, suite, handshake, creator):
-    """The group script, each role played by the implementation the pattern gives it from the creator's."""
-    other = 'mlspp' if creator == 'cerid' else 'cerid'
-    kinds = {'alice': creator, 'bob': other, 'carol': other, 'dave': creator, 'erin': creator, 'frank': other,
-             'gina': creator}
+ROLES = ('alice', 'bob', 'carol', 'dave', 'erin', 'frank', 'gina')
+
+
+def pair_roles(creator, other):
+    """Two implementations: the roles alternate so each operation runs both ways."""
+    return dict(zip(ROLES, (creator, other, other, creator, creator, other, creator)))
+
+
+def group_script(peers, suite, handshake, kinds):
+    """The group script, each role played by the implementation `kinds` gives it."""
     group = Group(peers, suite, handshake)
-    tag = '%s-%s-%d' % (creator, handshake, suite)
+    tag = '%s-%s-%d' % ('-'.join(dict.fromkeys(kinds.values())), handshake, suite)
     name = {role: '%s-%s' % (role, tag) for role in kinds}
     name['bob again'] = 'bob-again-' + tag
 
@@ -563,27 +581,28 @@ def group_script(peers, suite, handshake, creator):
     group.exchange()
 
 
-def refused_packages(peers, suite):
-    """A committer refuses a key package claiming an endless lifetime (Cerid's default policy, decision M8) and one
-    of another suite (both libraries)."""
+def refused_packages(peers, suite, other):
+    """A committer refuses a key package claiming an endless lifetime (Cerid's default policy, decision M8; RFC 9420
+    section 7.2 leaves the bound to the application, and neither peer sets one) and one of another suite (every
+    library)."""
     group = Group(peers, suite, 'public')
-    tag = 'refusals-%d' % suite
+    tag = 'refusals-%s-%d' % (other, suite)
     other_suite = 3 if suite != 3 else 1
     group.member('creator-c-' + tag, 'cerid', identity=b'creator')
     group.create('creator-c-' + tag)
-    endless = group.member('endless-' + tag, 'mlspp', identity=b'endless', lifetime=(0, (1 << 64) - 1))
+    endless = group.member('endless-' + tag, other, identity=b'endless', lifetime=(0, (1 << 64) - 1))
     word = group.refuses('creator-c-' + tag, 'commit', 'public', 1, 1, 'add=' + endless.hex())
     expect(word == 'expired', 'cerid refused an endless key package as %s' % word)
-    foreign = group.member('foreign-m-' + tag, 'mlspp', identity=b'foreign', suite=other_suite)
+    foreign = group.member('foreign-p-' + tag, other, identity=b'foreign', suite=other_suite)
     word = group.refuses('creator-c-' + tag, 'commit', 'public', 1, 1, 'add=' + foreign.hex())
     expect(word == 'unsupported', 'cerid refused a key package of another suite as %s' % word)
     group.agree()
 
     group = Group(peers, suite, 'public')
-    group.member('creator-m-' + tag, 'mlspp', identity=b'creator')
-    group.create('creator-m-' + tag)
+    group.member('creator-p-' + tag, other, identity=b'creator')
+    group.create('creator-p-' + tag)
     foreign = group.member('foreign-c-' + tag, 'cerid', identity=b'foreign', suite=other_suite)
-    group.refuses('creator-m-' + tag, 'commit', 'public', 1, 1, 'add=' + foreign.hex())
+    group.refuses('creator-p-' + tag, 'commit', 'public', 1, 1, 'add=' + foreign.hex())
     group.agree()
 
 
@@ -616,10 +635,71 @@ def forged_content_spends(peers, suite):
     expect(reply['type'] == 'application' and as_bytes(reply['data']) == data, 'cerid read %s' % reply)
 
 
-def cases(cerid, mlspp):
-    def with_peers(body):
+SCRIPT = 'adds, proposals by reference, a removal, a PSK, an empty commit, external joins and a resync agree'
+
+
+def unlisted_package_extensions(peers, suite):
+    """TP-11's reproduction: MLSpp's KeyPackage adds GREASE extensions after its leaf is signed, of types the leaf's
+    capabilities need not list, though RFC 9420 section 10 requires them listed. Of a few key packages as MLSpp makes
+    them (crd-mlspp-peer's as_made), one carrying an unlisted type is read off the wire, and a Cerid committer refuses
+    it; the same member's package after the peer's adaptation (the extension retyped to a listed GREASE type, signed
+    again) is added. When MLSpp lists them, no package carries one, this case fails and the entry is retired."""
+    group = Group(peers, suite, 'public')
+    tag = 'tp11-%d' % suite
+    creator = 'creator-' + tag
+    group.member(creator, 'cerid', identity=b'creator')
+    group.create(creator)
+    now = int(time.time())
+    for attempt in range(8):
+        name = 'made-%d-%s' % (attempt, tag)
+        reply = peers['mlspp'].ask('member', name, b'made'.hex(), suite, now - 3600, now - 3600 + TWELVE_WEEKS)
+        made = bytes.fromhex(reply['as_made'])
+        read = read_key_package(made)
+        unlisted = [kind_of for kind_of, _ in read['extensions']
+                    if kind_of > DEFAULT_EXTENSIONS and kind_of not in read['leaf']['extension_types']]
+        if unlisted:
+            break
+    expect(unlisted, 'MLSpp listed the extensions of 8 key packages (TP-11 fixed?)')
+    word = group.refuses(creator, 'commit', 'public', 1, 1, 'add=' + made.hex())
+    expect(word == 'unsupported', 'cerid refused an unlisted package extension as %s' % word)
+    group.owner[name], group.identity[name] = peers['mlspp'], b'made'
+    group.packages[name] = bytes.fromhex(reply['key_package'])
+    group.commit(creator, adds=(name,))
+    group.exchange()
+
+
+def grease_extensions_refused(peers, suite):
+    """TP-10's reproduction: OpenMLS refuses GREASE extensions its capabilities list (RFC 9420 sections 7.2, 10 and
+    13.5): a Cerid key package whose leaf and package each carry one is refused by an OpenMLS committer, and an OpenMLS
+    member asked for them cannot create a group; the same Cerid member without them is added, and it commits an OpenMLS
+    member in turn. OpenMLS reads an extension's GREASE type as Unknown and the listed one as Grease, which it compares
+    as different. When OpenMLS accepts them, this case fails and the entry is retired."""
+    group = Group(peers, suite, 'public')
+    tag = 'tp10-%d' % suite
+    creator, greased, plain = 'creator-' + tag, 'greased-' + tag, 'plain-' + tag
+    group.member(creator, 'openmls', identity=b'creator')
+    group.create(creator)
+    package = group.member(greased, 'cerid', identity=b'greased', grease=True)
+    word = group.refuses(creator, 'commit', 'public', 1, 1, 'add=' + package.hex())
+    expect('UnsupportedExtension' in word, 'OpenMLS refused listed GREASE extensions as %s' % word)
+    own = 'own-' + tag
+    group.member(own, 'openmls', identity=b'own', grease=True)
+    word = group.refuses(own, 'create', os.urandom(16).hex())
+    expect('ExtensionsNotInCapabilities' in word, 'OpenMLS refused its own GREASE extensions as %s' % word)
+    group.member(plain, 'cerid', identity=b'plain')
+    group.commit(creator, adds=(plain,))
+    joiner = 'joiner-' + tag
+    group.member(joiner, 'openmls', identity=b'joiner')
+    group.commit(plain, adds=(joiner,))
+    group.exchange()
+
+
+def cases(paths):
+    """Each case's name, the implementations it runs and its body, for the peer programs in `paths` (kind -> path,
+    Cerid's included)."""
+    def with_peers(kinds, body):
         def run():
-            peers = {'cerid': Peer('cerid', cerid), 'mlspp': Peer('mlspp', mlspp)}
+            peers = {kind: Peer(kind, paths[kind]) for kind in kinds}
             try:
                 body(peers)
             finally:
@@ -627,30 +707,50 @@ def cases(cerid, mlspp):
                     peer.close()
         return run
 
-    for suite in SUITES:
-        for creator in ('cerid', 'mlspp'):
-            for handshake in ('public', 'private'):
-                yield ('suite 0x%04x, %s creates, %s handshake: adds, proposals by reference, a removal, a PSK, an '
-                       'empty commit, external joins and a resync agree' % (suite, creator, handshake),
-                       with_peers(lambda peers, s=suite, h=handshake, c=creator: group_script(peers, s, h, c)))
-        yield ('suite 0x%04x: endless and foreign key packages refused' % suite,
-               with_peers(lambda peers, s=suite: refused_packages(peers, s)))
-        yield ('suite 0x%04x: TP-9, MLSpp spends a generation on forged content, Cerid does not' % suite,
-               with_peers(lambda peers, s=suite: forged_content_spends(peers, s)))
+    def script(suite, handshake, roles):
+        return lambda peers: group_script(peers, suite, handshake, roles)
+
+    others = [kind for kind in IMPLEMENTS if kind in paths]
+    for other in others:
+        kinds = ('cerid', other)
+        for suite in IMPLEMENTS[other]:
+            for creator, joiner in (kinds, kinds[::-1]):
+                for handshake in ('public', 'private'):
+                    yield ('%s, suite 0x%04x, %s creates, %s handshake: %s' % (other, suite, creator, handshake,
+                                                                               SCRIPT),
+                           kinds, with_peers(kinds, script(suite, handshake, pair_roles(creator, joiner))))
+            yield ('%s, suite 0x%04x: endless and foreign key packages refused' % (other, suite), kinds,
+                   with_peers(kinds, lambda peers, s=suite, o=other: refused_packages(peers, s, o)))
+            if other == 'mlspp':
+                yield ('mlspp, suite 0x%04x: TP-9, MLSpp spends a generation on forged content, Cerid does not'
+                       % suite, kinds, with_peers(kinds, lambda peers, s=suite: forged_content_spends(peers, s)))
+                yield ('mlspp, suite 0x%04x: TP-11, MLSpp leaves package extensions unlisted, Cerid refuses them'
+                       % suite, kinds, with_peers(kinds, lambda peers, s=suite: unlisted_package_extensions(peers, s)))
+            if other == 'openmls':
+                yield ('openmls, suite 0x%04x: TP-10, OpenMLS refuses listed GREASE extensions' % suite, kinds,
+                       with_peers(kinds, lambda peers, s=suite: grease_extensions_refused(peers, s)))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--cerid', required=True)
-    parser.add_argument('--mlspp', required=True)
+    parser.add_argument('--mlspp', help='crd-mlspp-peer: the cases with MLSpp')
+    parser.add_argument('--openmls', help='crd-openmls-peer: the cases with OpenMLS')
+    parser.add_argument('--involving', choices=sorted(IMPLEMENTS), help='run only the cases this peer takes part in')
     parser.add_argument('--trace', action='store_true', help='print every request and the start of its reply')
     parser.add_argument('--only', help='run the cases whose name holds this text')
     args = parser.parse_args()
+    paths = {kind: path for kind, path in (('cerid', args.cerid), ('mlspp', args.mlspp), ('openmls', args.openmls))
+             if path}
+    if len(paths) == 1:
+        parser.error('name at least one peer: --mlspp or --openmls')
+    if args.involving and args.involving not in paths:
+        parser.error('--involving %s needs --%s' % (args.involving, args.involving))
     Peer.trace = args.trace
     failures = 0
     count = 0
-    for name, case in cases(args.cerid, args.mlspp):
-        if args.only and args.only not in name:
+    for name, kinds, case in cases(paths):
+        if (args.only and args.only not in name) or (args.involving and args.involving not in kinds):
             continue
         count += 1
         try:

@@ -997,11 +997,22 @@ TEST_CASE("MLS: a key package is checked as section 10.1 says", "[crypto][net-2]
     joiner.package.extensions  = view(twice);
     sign_package(suite, joiner);
     CHECK(check(joiner.package) == CryptoError::Malformed);
-    const Bytes unknown       = joined({view(extension(0x0A0AU, Bytes{9U})), view(extension(0xFF00U, {}))});
-    joiner.package.extensions = view(unknown); // unknown package extensions are ignored (section 13.4)
+    // Section 10: a package's extensions are of types its leaf's capabilities list (a default type needs no listing);
+    // an unknown one so listed is ignored (section 13.4), an unlisted one refused, GREASE types alike.
+    const u16   other_grease = joiner.id.grease == 0x0A0AU ? 0x1A1AU : 0x0A0AU;
+    const Bytes unknown      = joined({view(extension(joiner.id.grease, Bytes{9U})), view(extension(0x0001U, {}))});
+    joiner.package.extensions = view(unknown);
     sign_package(suite, joiner);
     CHECK(check(joiner.package) == CryptoError::None);
-    joiner.package.init_key = joiner.package.leaf_node.encryption_key;
+    for (const u16 unlisted_type : {u16{0xFF00U}, other_grease})
+    {
+        const Bytes unlisted      = joined({view(extension(joiner.id.grease, {})), view(extension(unlisted_type, {}))});
+        joiner.package.extensions = view(unlisted);
+        sign_package(suite, joiner);
+        CHECK(check(joiner.package) == CryptoError::Unsupported);
+    }
+    joiner.package.extensions = view(unknown);
+    joiner.package.init_key   = joiner.package.leaf_node.encryption_key;
     sign_package(suite, joiner);
     CHECK(check(joiner.package) == CryptoError::BadKey);
     Bytes off_curve           = joiner.init_public;

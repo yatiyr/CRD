@@ -319,7 +319,8 @@
             "cacheVariables": {
                 "CRD_PUBLIC_CHECKS": "ON",
                 "CRD_BUILD_TLS_VS_OPENSSL": "ON",
-                "CRD_BUILD_MLS_VS_MLSPP": "ON"
+                "CRD_BUILD_MLS_VS_MLSPP": "ON",
+                "CRD_BUILD_MLS_VS_OPENMLS": "ON"
             }
         },
         {

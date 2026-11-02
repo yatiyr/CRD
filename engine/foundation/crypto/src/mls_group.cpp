@@ -345,6 +345,17 @@ CryptoError check_psk_id(const CipherSuite& suite, const PreSharedKeyId& id) noe
     return id.nonce.size() == suite.hash_bytes() ? CryptoError::None : CryptoError::Malformed;
 }
 
+namespace
+{
+// Whether every extension of `extensions` is of a default type or one `capabilities` list (sections 7.2 and 10).
+bool extensions_listed(const Capabilities& capabilities, cont::ConstSpan<u8> extensions) noexcept
+{
+    const auto listed = [&capabilities](u16 type, cont::ConstSpan<u8>)
+    { return default_extension(type) || lists(capabilities.extensions, type); };
+    return each_extension(extensions, listed);
+}
+} // namespace
+
 CryptoError check_leaf(const GroupContext& context, const LeafNode& leaf, LeafRole role, const LeafPolicy& policy,
                        const AuthenticationService& authentication) noexcept
 {
@@ -369,9 +380,7 @@ CryptoError check_leaf(const GroupContext& context, const LeafNode& leaf, LeafRo
     // The leaf's own extensions are those its capabilities list, GREASE included (section 13.5); its credential type is
     // one they support.
     const Capabilities& capabilities = leaf.capabilities;
-    const auto          listed       = [&capabilities](u16 type, cont::ConstSpan<u8>)
-    { return default_extension(type) || lists(capabilities.extensions, type); };
-    if (!supports_credential(capabilities, leaf.credential.type) || !each_extension(leaf.extensions, listed))
+    if (!supports_credential(capabilities, leaf.credential.type) || !extensions_listed(capabilities, leaf.extensions))
     {
         return CryptoError::Unsupported;
     }
@@ -482,6 +491,11 @@ CryptoError check_key_package(const GroupContext& context, const KeyPackage& pac
     if (leaf != CryptoError::None)
     {
         return leaf;
+    }
+    // Section 10: the package's extensions too are those its leaf's capabilities list, GREASE included.
+    if (!extensions_listed(package.leaf_node.capabilities, package.extensions))
+    {
+        return CryptoError::Unsupported;
     }
     const usize bytes = key_package_tbs_bytes(package);
     if (bytes == 0U || verify_leaf_node(*suite, verifier, package.leaf_node, {}, 0U) != Verification::Valid)
