@@ -615,9 +615,16 @@ no longer exists fails the check.
   classical group with an honest server; injective agreement on the handshake secret and group both ways; the
   handshake secret and both traffic secrets stay secret unless the peer's key was revealed before the handshake ended
   (forward secrecy) or both kinds of key exchange are broken (the hybrid guarantee).
-- **Still to model**: the traffic key epochs after the handshake (key updates, S7), resumption and early data with
-  the single-use ticket filter (S9, S17), address validation tokens (S13), and the binding to the code by state
-  learning, which checks the implementation's state machine against the model's.
+- **The traffic key epochs** (`tls_key_update.spthy`, S7): one direction's chain from a traffic secret the handshake
+  model proves secret, records under the current key at their sequence number, KeyUpdates under the old key, and
+  either end's current key revealed at any time. Proven for chains of up to eight keys (Tamarin's induction over the
+  unbounded chain did not terminate): forward security of the updates (a key leaks only by its own or an earlier
+  key's reveal), records and KeyUpdates accepted only as sent at their sequence number unless their key or an
+  earlier one was revealed, and, as the guarantee's bound, no healing after a compromise. That a record is accepted
+  once is the adversarial-bytes test's (test_tls.cpp: a replayed, reordered or earlier-key record fails).
+- **Still to model**: the unbounded epoch chain, resumption and early data with the single-use ticket filter (S9,
+  S17), address validation tokens (S13), and the binding to the code by state learning, which checks the
+  implementation's state machine against the model's.
 
 <a id="tls-sessions"></a>
 ### TLS sessions

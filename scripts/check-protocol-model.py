@@ -27,6 +27,8 @@ MODELS = {
     'tls_handshake.spthy': ('handshake_completes', 'no_downgrade', 'client_authenticates_server',
                             'server_authenticates_client', 'handshake_secret', 'client_traffic_secret',
                             'server_traffic_secret'),
+    'tls_key_update.spthy': ('updates_complete', 'sender_epoch', 'receiver_epoch', 'root_secrecy', 'epoch_secrecy',
+                             'record_authentic', 'update_authentic', 'update_does_not_heal'),
 }
 RESULT = re.compile(r'^\s+(\w+) \((all-traces|exists-trace)\): (verified|falsified|analysis incomplete)\b', re.M)
 DESIGN = re.compile(r'Design: (\S+?)#([\w.-]+)')

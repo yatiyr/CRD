@@ -2025,6 +2025,57 @@ TEST_CASE("TLS: adversarial bytes fail the session with an alert and nothing els
         CHECK(server.session.state() == TlsState::Failed);
         CHECK(server.session.alert_sent().description == 20U); // bad_record_mac
     }
+    // The record sequence number is the AEAD nonce (tls_key_update.spthy leaves in-epoch order to this test): a genuine
+    // record replayed, delivered out of order, or replayed from the epoch before a KeyUpdate fails to open.
+    SECTION("an established session fed genuine records replayed, reordered or from an earlier key")
+    {
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, Options{});
+        establish(client, server);
+        const u8 first[] = {'o', 'n', 'e'};
+        const u8 second[] = {'t', 'w', 'o'};
+        REQUIRE(client.session.send(ConstSpan<u8>(first, sizeof(first))) == TlsError::None);
+        const Bytes one = drain(client.session);
+        REQUIRE(client.session.send(ConstSpan<u8>(second, sizeof(second))) == TlsError::None);
+        const Bytes two = drain(client.session);
+        const auto rejects = [&server](const Bytes& record)
+        {
+            REQUIRE(server.session.receive(ConstSpan<u8>(record.data(), record.size())) == TlsError::None);
+            u8 out[16];
+            usize written = 0U;
+            CHECK(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::Failed);
+            CHECK(written == 0U);
+            CHECK(server.session.state() == TlsState::Failed);
+            CHECK(server.session.alert_sent().description == 20U); // bad_record_mac
+        };
+        const auto reads = [&server](const Bytes& record, usize expected)
+        {
+            REQUIRE(server.session.receive(ConstSpan<u8>(record.data(), record.size())) == TlsError::None);
+            u8 out[16];
+            usize written = 0U;
+            REQUIRE(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+            CHECK(written == expected);
+        };
+        SECTION("replayed")
+        {
+            reads(one, sizeof(first));
+            rejects(one);
+        }
+        SECTION("reordered")
+        {
+            rejects(two);
+        }
+        SECTION("from the key before an update")
+        {
+            reads(one, sizeof(first));
+            reads(two, sizeof(second));
+            REQUIRE(client.session.update_keys(false) == TlsError::None);
+            reads(drain(client.session), 0U);
+            CHECK(server.session.key_updates_received() == 1U);
+            rejects(two);
+        }
+    }
 }
 
 namespace

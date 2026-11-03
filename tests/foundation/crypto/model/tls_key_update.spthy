@@ -1,0 +1,122 @@
+theory CeridTlsKeyUpdate
+begin
+
+/*
+ * The traffic key epochs of a Cerid TLS 1.3 session after its handshake: records under the current key and the
+ * KeyUpdate chain (decision S7). Checked in CI by scripts/check-protocol-model.py with the pinned Tamarin; every lemma
+ * below is expected to verify.
+ *
+ * Design: docs/design/network-foundation.md#tls-sessions
+ * Design: docs/design/network-foundation.md#protocol-model
+ *
+ * What is modelled:
+ *   - One direction of a session (the other is the same chain over the other traffic secret). Its root is a
+ *     traffic secret the handshake left secret: tls_handshake.spthy proves client_traffic_secret and
+ *     server_traffic_secret, so this theory starts from a fresh shared secret instead of repeating the handshake.
+ *   - The sender protects records under its current key; a KeyUpdate, itself protected under the current key,
+ *     moves both ends to the next key, kdf('traffic_upd', key) (RFC 8446 section 7.2's application_traffic_secret_N+1).
+ *   - The record layer over a reliable stream: each record carries its sequence number within the epoch, which a
+ *     KeyUpdate resets (S7), and the receiver accepts only the next one; this is TLS's implicit AEAD nonce.
+ *   - Either end's current key can be revealed at any time (a state compromise).
+ * Proven for chains of up to eight keys at either end (BoundedChain): key updates are forward secure (a key leaks
+ * only if it or an earlier key of its chain was revealed); records and KeyUpdates are accepted only as sent, at
+ * their sequence number, unless their key or an earlier one was revealed; and, as the bound of the guarantee, an
+ * update does not heal a compromise (no post-compromise security). That a record is accepted at most once is not
+ * proven here; test_tls.cpp's adversarial-bytes test holds it (a replayed, reordered or earlier-key record fails).
+ */
+
+builtins: symmetric-encryption, natural-numbers
+
+functions: kdf/2
+
+// The proofs cover chains of up to eight keys at either end (the root and seven updates); Tamarin's induction over
+// the unbounded chain did not terminate.
+restriction BoundedChain:
+    "All x #i. Key(kdf('traffic_upd', kdf('traffic_upd', kdf('traffic_upd', kdf('traffic_upd',
+        kdf('traffic_upd', kdf('traffic_upd', kdf('traffic_upd', kdf('traffic_upd', x))))))))) @ #i ==> F"
+
+// The root: a traffic secret only the two ends hold (the handshake model's traffic secret lemmas).
+rule Establish:
+    [ Fr(~sid), Fr(~k0) ]
+  --[ Established(~sid, ~k0), Epoch(~sid, ~k0), ReceiverEpoch(~sid, ~k0), Key(~k0) ]->
+    [ Sender(~sid, ~k0, %1), Receiver(~sid, ~k0, %1) ]
+
+rule SendRecord:
+    [ Sender(sid, k, %n), Fr(~m) ]
+  --[ SenderAt(sid, k), Sent(sid, k, %n, ~m) ]->
+    [ Sender(sid, k, %n %+ %1), Out(senc(<'record', %n, ~m>, k)) ]
+
+// The KeyUpdate is the last record under the old key; the sender's next record is the new key's first.
+rule SendUpdate:
+    [ Sender(sid, k, %n) ]
+  --[ SenderAt(sid, k), SentUpdate(sid, k, %n), Epoch(sid, kdf('traffic_upd', k)), Key(kdf('traffic_upd', k)) ]->
+    [ Sender(sid, kdf('traffic_upd', k), %1), Out(senc(<'key_update', %n>, k)) ]
+
+rule ReceiveRecord:
+    [ Receiver(sid, k, %n), In(senc(<'record', %n, m>, k)) ]
+  --[ ReceiverAt(sid, k), Accepted(sid, k, %n, m) ]->
+    [ Receiver(sid, k, %n %+ %1) ]
+
+rule ReceiveUpdate:
+    [ Receiver(sid, k, %n), In(senc(<'key_update', %n>, k)) ]
+  --[ ReceiverAt(sid, k), ReceivedUpdate(sid, k, %n), ReceiverEpoch(sid, kdf('traffic_upd', k)),
+      Key(kdf('traffic_upd', k)) ]->
+    [ Receiver(sid, kdf('traffic_upd', k), %1) ]
+
+// A state compromise reveals the current key. One rule per key shape (the fresh root, an updated key) keeps every
+// revealed term a key, so no deconstruction of it is left open.
+rule RevealSenderRoot:
+    [ Sender(sid, ~k0, %n) ] --[ SenderAt(sid, ~k0), RevEpoch(~k0) ]-> [ Sender(sid, ~k0, %n), Out(~k0) ]
+
+rule RevealSenderUpdated [no_derivcheck]:
+    let k = kdf('traffic_upd', kp) in
+    [ Sender(sid, k, %n) ] --[ SenderAt(sid, k), RevEpoch(k) ]-> [ Sender(sid, k, %n), Out(k) ]
+
+rule RevealReceiverRoot:
+    [ Receiver(sid, ~k0, %n) ] --[ ReceiverAt(sid, ~k0), RevEpoch(~k0) ]-> [ Receiver(sid, ~k0, %n), Out(~k0) ]
+
+rule RevealReceiverUpdated [no_derivcheck]:
+    let k = kdf('traffic_upd', kp) in
+    [ Receiver(sid, k, %n) ] --[ ReceiverAt(sid, k), RevEpoch(k) ]-> [ Receiver(sid, k, %n), Out(k) ]
+
+// Two updates, then a record accepted under the third key, with no key revealed.
+lemma updates_complete:
+  exists-trace
+    "Ex sid k0 m #e #a. Established(sid, k0) @ #e
+      & Accepted(sid, kdf('traffic_upd', kdf('traffic_upd', k0)), %1, m) @ #a
+      & not (Ex k #r. RevEpoch(k) @ #r)"
+
+// Each end only ever holds a key it entered as an epoch (the inductions that cut the record loops).
+lemma sender_epoch [use_induction, reuse]:
+    "All sid k #i. SenderAt(sid, k) @ #i ==> Ex #e. Epoch(sid, k) @ #e & #e < #i"
+
+lemma receiver_epoch [use_induction, reuse]:
+    "All sid k #i. ReceiverAt(sid, k) @ #i ==> Ex #e. ReceiverEpoch(sid, k) @ #e & #e < #i"
+
+// The root key leaks only by a reveal of the root itself.
+lemma root_secrecy [reuse]:
+    "All sid k0 #e #j. Established(sid, k0) @ #e & K(k0) @ #j ==> Ex #r. RevEpoch(k0) @ #r"
+
+// Forward security of the updates: a key of either end's chain is known only if that key or an earlier one of the
+// chain (a subterm of it) was revealed, so a compromise exposes no key the session used before it.
+lemma epoch_secrecy [reuse]:
+    "All x #i #j. Key(kdf('traffic_upd', x)) @ #i & K(kdf('traffic_upd', x)) @ #j ==>
+        Ex k2 #r. RevEpoch(k2) @ #r & (k2 = kdf('traffic_upd', x) | k2 << kdf('traffic_upd', x))"
+
+// Records are accepted only as the sender sent them, at their sequence number, unless their key or an earlier one
+// of its chain was revealed.
+lemma record_authentic:
+    "All sid k %n m #a. Accepted(sid, k, %n, m) @ #a ==>
+        (Ex #s. Sent(sid, k, %n, m) @ #s & #s < #a) | (Ex k2 #r. RevEpoch(k2) @ #r & (k2 = k | k2 << k))"
+
+// Only the sender moves the receiver to the next key, unless the current key or an earlier one was revealed.
+lemma update_authentic:
+    "All sid k %n #i. ReceivedUpdate(sid, k, %n) @ #i ==>
+        (Ex #s. SentUpdate(sid, k, %n) @ #s & #s < #i) | (Ex k2 #r. RevEpoch(k2) @ #r & (k2 = k | k2 << k))"
+
+// The bound: a key revealed in one epoch gives the adversary the next epoch's key (no post-compromise security).
+lemma update_does_not_heal:
+  exists-trace
+    "Ex k #r #j. RevEpoch(k) @ #r & K(kdf('traffic_upd', k)) @ #j"
+
+end
