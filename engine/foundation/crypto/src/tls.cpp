@@ -943,16 +943,13 @@ struct TlsCallbacks
     }
 
     // Takes the peer's key from its leaf certificate when the key is of an accepted algorithm and pinned: during a
-    // full handshake (verify_peer) and after a resumed one, whose ticket carried the certificate.
+    // full handshake (verify_peer) and after a resumed one, whose ticket carried the certificate. The leaf is the one
+    // the provider parsed with the Certificate message or the ticket (its X509 method keeps it with the session), so
+    // no handshake parses it twice.
     static bool pinned_peer(const SSL* ssl, detail::TlsHandshakeState& session) noexcept
     {
-        const STACK_OF(CRYPTO_BUFFER)* chain = SSL_get0_peer_certificates(ssl);
-        if (chain == nullptr || sk_CRYPTO_BUFFER_num(chain) == 0U)
-        {
-            return false;
-        }
-        const bssl::UniquePtr<X509> leaf(X509_parse_from_buffer(sk_CRYPTO_BUFFER_value(chain, 0U)));
-        const EVP_PKEY*             pkey = leaf ? X509_get0_pubkey(leaf.get()) : nullptr;
+        const X509*     leaf = SSL_get0_peer_certificate(ssl);
+        const EVP_PKEY* pkey = leaf != nullptr ? X509_get0_pubkey(leaf) : nullptr;
         const AlgorithmId algorithm = pkey != nullptr ? provider_internal::signature_algorithm_of(pkey) : AlgorithmId{};
         const TlsSettings& settings = session.m_settings;
         const AlgorithmId* accepted_end = settings.signatures + settings.signature_count;
@@ -1805,6 +1802,12 @@ bool compress_with(u16 algorithm, cont::ConstSpan<u8> plain, cont::Array<u8>& fo
 // compresses with the kept forms, smallest first, and with none when none is kept.
 TlsError compress_certificate(SSL_CTX* context, cont::ConstSpan<u8> der, cont::ConstSpan<u16> allowed) noexcept
 {
+    // No form to make without an algorithm, nor for a plain message above kTlsMaxCertificateBytes: a peer decodes
+    // none longer, compressed or not (RFC 8879 section 5), so the plain message is never built.
+    if (allowed.empty() || der.size() > kTlsMaxCertificateBytes - kCertificateEntryOverhead)
+    {
+        return TlsError::None;
+    }
     constexpr usize most  = std::size(kTlsCertificateCompression);
     const usize     size  = der.size() + kCertificateEntryOverhead;
     cont::Array<u8> message;

@@ -13,13 +13,21 @@
 
 namespace crd::crypto::provider_internal
 {
-// Clears the provider's error queue when a scope ends: a refused operation leaves no state behind on its thread.
+// Clears the provider's error queue when a scope ends: a refused operation leaves no state behind on its thread. An
+// empty queue is left as it is: clearing walks every slot of the thread's queue, a cost each record of a session paid
+// for nothing (the crypto boards, docs/bench/2026-11-03-net-2-crypto-boards.md).
 struct ErrorScope
 {
     ErrorScope() noexcept = default;
     ErrorScope(const ErrorScope&)            = delete;
     ErrorScope& operator=(const ErrorScope&) = delete;
-    ~ErrorScope() { ERR_clear_error(); }
+    ~ErrorScope()
+    {
+        if (ERR_peek_error() != 0U)
+        {
+            ERR_clear_error();
+        }
+    }
 };
 
 // The key objects hold the provider's EVP_PKEY behind the opaque ProviderKey: a pointer cast there and back, never
