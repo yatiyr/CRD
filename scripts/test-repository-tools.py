@@ -11571,6 +11571,8 @@ class RegisterIds(unittest.TestCase):
                       '    case AlgorithmId::Aes128Gcm:', header)  # one entry's values share a return
         self.assertIn('inline constexpr AlgorithmId kAlgorithmIds[] = {', header)
         self.assertIn('    case AlgorithmId::Aes128Gcm:\n        return "crypto.aes-gcm";', header)
+        self.assertIn('algorithm_name(AlgorithmId id) noexcept\n{\n    switch (id)\n    {\n    case AlgorithmId::MlDsa65:\n'
+                      '        return "ml-dsa-65";', header)  # the register's own name of each value
         self.assertIn('    PostQuantumSignature = 0x03U, // post-quantum signature', header)
         self.assertIn('    return static_cast<AlgorithmClass>(static_cast<u16>(id) >> 8U);', header)
         self.assertIn('inline constexpr u16 kGroupX25519mlkem768 = 0x11ECU;', header)

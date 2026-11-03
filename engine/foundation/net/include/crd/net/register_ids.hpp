@@ -64,6 +64,32 @@ inline constexpr ProtocolId kProtocolIds[] = {
     return "";
 }
 
+// The name the register gives `id` ("session-control"), by which reviewed text names it ("" for a
+// value outside the enumeration).
+[[nodiscard]] constexpr const char* protocol_name(ProtocolId id) noexcept
+{
+    switch (id)
+    {
+    case ProtocolId::SessionControl:
+        return "session-control";
+    case ProtocolId::Game:
+        return "game";
+    case ProtocolId::Project:
+        return "project";
+    case ProtocolId::MediaControl:
+        return "media-control";
+    case ProtocolId::CrashUpload:
+        return "crash-upload";
+    case ProtocolId::Agent:
+        return "agent";
+    case ProtocolId::Service:
+        return "service";
+    case ProtocolId::RelayAllocation:
+        return "relay-allocation";
+    }
+    return "";
+}
+
 // Cerid GREASE values reserved by cerid.negotiation: never assigned, sent by every build so that peers which
 // refuse unknown values fail in testing (RFC 8701 practice).
 inline constexpr u16 kGreaseIds[] = {

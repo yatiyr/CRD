@@ -4,6 +4,7 @@ add_executable(crd-ceridc-tests
     test_ceridc_diag.cpp # the diag verb: native, CLI verb, MCP tool and the real binary return the same bounded result
     test_ceridc_comply.cpp # COMPLY.0: the comply verb and the real binary answer the committed rule generations
     test_ceridc_screen.cpp # COMPLY.1: the screen verb and the real binary screen against sanctions lists
+    test_ceridc_policy.cpp # NET.2: the policy verb renders, joins and judges the crypto policy generation
 )
 
 target_link_libraries(crd-ceridc-tests PRIVATE
@@ -20,6 +21,7 @@ target_link_libraries(crd-ceridc-tests PRIVATE
     crd-ceir # DIAG.9a: SeededInputs::draw, to choose a failing seed independently of the commands
     crd-ceir-cook # DIAG.9a: decode_record, to compare an inspected record with replay.record's
     crd-kir # DIAG.9a: the device record fixture builds its kernels and writes them as CKIR text
+    crd-crypto # NET.2: the policy cases sign with provider keys and decode what the verb writes
     Catch2::Catch2WithMain
 )
 

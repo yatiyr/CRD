@@ -102,6 +102,56 @@ inline constexpr AlgorithmId kAlgorithmIds[] = {
     return "";
 }
 
+// The name the register gives `id` ("x25519-mlkem768"), by which reviewed text names it ("" for a
+// value outside the enumeration).
+[[nodiscard]] constexpr const char* algorithm_name(AlgorithmId id) noexcept
+{
+    switch (id)
+    {
+    case AlgorithmId::X25519Mlkem768:
+        return "x25519-mlkem768";
+    case AlgorithmId::Secp256r1Mlkem768:
+        return "secp256r1-mlkem768";
+    case AlgorithmId::Secp384r1Mlkem1024:
+        return "secp384r1-mlkem1024";
+    case AlgorithmId::X25519:
+        return "x25519";
+    case AlgorithmId::Secp256r1:
+        return "secp256r1";
+    case AlgorithmId::Secp384r1:
+        return "secp384r1";
+    case AlgorithmId::MlDsa44:
+        return "ml-dsa-44";
+    case AlgorithmId::MlDsa65:
+        return "ml-dsa-65";
+    case AlgorithmId::MlDsa87:
+        return "ml-dsa-87";
+    case AlgorithmId::Ed25519:
+        return "ed25519";
+    case AlgorithmId::EcdsaSecp256r1Sha256:
+        return "ecdsa-secp256r1-sha256";
+    case AlgorithmId::EcdsaSecp384r1Sha384:
+        return "ecdsa-secp384r1-sha384";
+    case AlgorithmId::Aes128Gcm:
+        return "aes-128-gcm";
+    case AlgorithmId::Aes256Gcm:
+        return "aes-256-gcm";
+    case AlgorithmId::Chacha20Poly1305:
+        return "chacha20-poly1305";
+    case AlgorithmId::HkdfSha256:
+        return "hkdf-sha256";
+    case AlgorithmId::HkdfSha384:
+        return "hkdf-sha384";
+    case AlgorithmId::MlKem768:
+        return "ml-kem-768";
+    case AlgorithmId::MlKem1024:
+        return "ml-kem-1024";
+    case AlgorithmId::Siphash24:
+        return "siphash-2-4";
+    }
+    return "";
+}
+
 // The class of an algorithm: the high byte of its identifier. An identifier decoded from bytes may
 // carry a class byte outside this enumeration; no code accepts one.
 enum class AlgorithmClass : u8

@@ -1,0 +1,131 @@
+# Cerid crypto policy generation 1: the reviewed source of the first signed generation (NET.2; layout and rules:
+# docs/design/network-foundation.md#policy-wire, the issue: #policy-issue). `ceridc policy body` renders it into the
+# bytes every trust key signs; `ceridc policy verify --source` proves a signed generation holds exactly this text's
+# content. The issue ceremony sets `issued` and `expires` to its day and commits the signed file beside this one.
+#
+# Fields: generation (1 or more), issued and expires (days, expiry at most 400 days after issue), offline_grace_days
+# (at most 90), [[minimum]] protocol/major/minor, and one [[rule]] per algorithm and scope. A rule names its algorithm
+# by its standards register name, its scope ("everywhere" or "cerid-services"), and its window in days (00:00:00 UTC):
+# accepted_from (default 1970-01-01), refused_from (default "never"), preferred_from (absent: never preferred) and
+# preferred_until (default refused_from). An algorithm without a rule is refused (decision 4), so every algorithm the
+# build implements has one.
+
+generation = 1
+issued = "2026-11-03"
+expires = "2027-11-03"
+offline_grace_days = 90
+
+# Key exchange: hybrids first (RFC 10024; X25519MLKEM768 preferred). Classical-only key exchange is refused for Cerid
+# services from 2026-11-01, before any generation was issued, so no Cerid service ever accepts it, and everywhere from
+# 2030-01-01 (NIST IR 8547: quantum-vulnerable key establishment deprecated after 2030; threat T04).
+[[rule]]
+algorithm = "x25519-mlkem768"
+scope = "everywhere"
+preferred_from = "1970-01-01"
+
+[[rule]]
+algorithm = "secp256r1-mlkem768"
+scope = "everywhere"
+
+[[rule]]
+algorithm = "secp384r1-mlkem1024"
+scope = "everywhere"
+
+[[rule]]
+algorithm = "x25519"
+scope = "everywhere"
+refused_from = "2030-01-01"
+
+[[rule]]
+algorithm = "secp256r1"
+scope = "everywhere"
+refused_from = "2030-01-01"
+
+[[rule]]
+algorithm = "secp384r1"
+scope = "everywhere"
+refused_from = "2030-01-01"
+
+[[rule]]
+algorithm = "x25519"
+scope = "cerid-services"
+refused_from = "2026-11-01"
+
+[[rule]]
+algorithm = "secp256r1"
+scope = "cerid-services"
+refused_from = "2026-11-01"
+
+[[rule]]
+algorithm = "secp384r1"
+scope = "cerid-services"
+refused_from = "2026-11-01"
+
+# Post-quantum key encapsulation (HPKE and MLS suites).
+[[rule]]
+algorithm = "ml-kem-768"
+scope = "everywhere"
+preferred_from = "1970-01-01"
+
+[[rule]]
+algorithm = "ml-kem-1024"
+scope = "everywhere"
+
+# Signatures: ML-DSA (FIPS 204) preferred; traditional signatures refused from 2036-01-01 (NIST IR 8547: disallowed
+# after 2035).
+[[rule]]
+algorithm = "ml-dsa-44"
+scope = "everywhere"
+preferred_from = "1970-01-01"
+
+[[rule]]
+algorithm = "ml-dsa-65"
+scope = "everywhere"
+preferred_from = "1970-01-01"
+
+[[rule]]
+algorithm = "ml-dsa-87"
+scope = "everywhere"
+preferred_from = "1970-01-01"
+
+[[rule]]
+algorithm = "ed25519"
+scope = "everywhere"
+refused_from = "2036-01-01"
+
+[[rule]]
+algorithm = "ecdsa-secp256r1-sha256"
+scope = "everywhere"
+refused_from = "2036-01-01"
+
+[[rule]]
+algorithm = "ecdsa-secp384r1-sha384"
+scope = "everywhere"
+refused_from = "2036-01-01"
+
+# Symmetric algorithms: the 256-bit AEADs preferred (margin against Grover's search).
+[[rule]]
+algorithm = "aes-128-gcm"
+scope = "everywhere"
+
+[[rule]]
+algorithm = "aes-256-gcm"
+scope = "everywhere"
+preferred_from = "1970-01-01"
+
+[[rule]]
+algorithm = "chacha20-poly1305"
+scope = "everywhere"
+preferred_from = "1970-01-01"
+
+[[rule]]
+algorithm = "hkdf-sha256"
+scope = "everywhere"
+
+[[rule]]
+algorithm = "hkdf-sha384"
+scope = "everywhere"
+
+[[rule]]
+algorithm = "siphash-2-4"
+scope = "everywhere"

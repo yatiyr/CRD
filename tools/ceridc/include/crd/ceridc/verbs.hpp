@@ -7,7 +7,7 @@
 // write). The CLI (main.cpp) and the MCP loop are thin shells over these functions — one implementation, two
 // transports (the Blender-MCP lesson: the surface is the product, the socket is plumbing).
 //
-// Verbs: import · cook · query · comply · screen · instantiate · sequence · render · export_timeline · inspect · diag.
+// Verbs: import · cook · query · comply · screen · policy · instantiate · sequence · render · export_timeline · inspect · diag.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
@@ -65,6 +65,26 @@ struct ScreenFlags
     const char* match = nullptr;  // --match: the match threshold in thousandths (default 950)
 };
 [[nodiscard]] crd::containers::String verb_screen(const ScreenFlags& flags, crd::memory::IAllocator* alloc);
+
+// NET.2: the crypto policy generation's issuing tool (contract: docs/design/network-foundation.md#policy-issue).
+//   body      render the reviewed source (TOML) into the bytes every trust key signs, written to `out`;
+//   assemble  join generations that sign one body (one signature each, as each signer wrote it) into one, at `out`;
+//   verify    judge a signed generation as an installation with the trust set (TOML) and floor would at `now`
+//             (YYYY-MM-DD or Unix seconds), and with `source` also that it holds exactly the source's content.
+// Every request and input is checked before the one file is written; the report lists the content and each rule's
+// status at `now` (verify) or the signatures (assemble).
+struct PolicyFlags
+{
+    const char* action = nullptr;               // body, assemble or verify
+    const char* source = nullptr;               // --source: the reviewed generation source (body; verify, optional)
+    const char* generation = nullptr;           // --generation: a signed generation (verify)
+    crd::containers::ConstSpan<const char*> in; // --in, repeated: the signed generations to join (assemble)
+    const char* trust = nullptr;                // --trust: the installation's trust set (verify)
+    const char* now = nullptr;                  // --now: YYYY-MM-DD or Unix seconds (verify)
+    const char* floor = nullptr;                // --floor: the newest generation ever accepted (verify; default 0)
+    const char* out = nullptr;                  // --out: the file written (body, assemble)
+};
+[[nodiscard]] crd::containers::String verb_policy(const PolicyFlags& flags, crd::memory::IAllocator* alloc);
 
 // Compose a scene: an entity instancing `asset_name` from the pack at `translate`, serialized as a SCEN
 // artifact. TRANSACTIONAL: unknown asset / non-finite transform rejects with NO file written; dry_run

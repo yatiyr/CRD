@@ -13,6 +13,7 @@ namespace
 using crd::u16;
 using crd::usize;
 using crd::crypto::algorithm_class;
+using crd::crypto::algorithm_name;
 using crd::crypto::algorithm_register_id;
 using crd::crypto::AlgorithmClass;
 using crd::crypto::AlgorithmId;
@@ -38,14 +39,19 @@ TEST_CASE("Register ids: every algorithm has a unique identifier, a class and it
         CHECK((static_cast<u16>(id) & 0xFFU) != 0U);
         const char* entry = algorithm_register_id(id);
         CHECK((std::strncmp(entry, "crypto.", 7U) == 0 || std::strncmp(entry, "tls.", 4U) == 0));
+        CHECK(std::strlen(algorithm_name(id)) > 0U);
         for (usize j = 0U; j < i; ++j)
         {
             CHECK(kAlgorithmIds[j] != id);
+            CHECK(std::strcmp(algorithm_name(kAlgorithmIds[j]), algorithm_name(id)) != 0);
         }
     }
     CHECK(std::strcmp(algorithm_register_id(AlgorithmId::X25519Mlkem768), "tls.hybrid-kex") == 0);
     CHECK(std::strcmp(algorithm_register_id(AlgorithmId::MlDsa87), "crypto.ml-dsa") == 0);
     CHECK(std::strcmp(algorithm_register_id(static_cast<AlgorithmId>(0x7F01U)), "") == 0);
+    CHECK(std::strcmp(algorithm_name(AlgorithmId::X25519Mlkem768), "x25519-mlkem768") == 0);
+    CHECK(std::strcmp(algorithm_name(AlgorithmId::EcdsaSecp256r1Sha256), "ecdsa-secp256r1-sha256") == 0);
+    CHECK(std::strcmp(algorithm_name(static_cast<AlgorithmId>(0x7F01U)), "") == 0);
 }
 
 TEST_CASE("Register ids: the class byte separates hybrids, traditional groups, signatures, KEMs and symmetric "

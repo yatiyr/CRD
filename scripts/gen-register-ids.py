@@ -130,7 +130,7 @@ def owned_codepoints(register, owner):
 
 def model(register, owner):
     """(enums, reserved, constants) of one owner in register order; enums maps each Cerid identifier registry the
-    owner uses to its (name, value, entry) members."""
+    owner uses to its (name, value, entry, register name) members."""
     enums, reserved, constants, names = {}, [], [], {}
     for entry, point in owned_codepoints(register, owner):
         where = f'{REGISTER}: {entry["id"]} codepoint {point["name"]!r}'
@@ -141,7 +141,7 @@ def model(register, owner):
             if registry == ALGORITHMS and (value >> 8 not in ALGORITHM_CLASSES or not value & 0xFF):
                 raise RegisterError(f'{where}: {point["value"]} is not a class byte of ALGORITHM_CLASSES followed by '
                                     'a nonzero number')
-            enums.setdefault(registry, []).append((camel(point['name']), value, entry['id']))
+            enums.setdefault(registry, []).append((camel(point['name']), value, entry['id'], point['name']))
         elif registry in RESERVED:
             name = RESERVED[registry]
             reserved.append((name, expand(where, point['value']), entry['id'], registry, point['value']))
@@ -164,7 +164,7 @@ def model(register, owner):
             raise RegisterError(f'{where}: constant {name.rpartition(":")[2]} is also generated for {names[name]}')
         names[name] = entry['id']
     for registry, members in enums.items():
-        values = [value for _, value, _ in members]
+        values = [value for _, value, *_ in members]
         if len(set(values)) != len(values):
             raise RegisterError(f'{REGISTER}: two {registry} share a value')
         if any(value in grease for value in values for _, grease, *_ in reserved):
@@ -201,19 +201,25 @@ def literal(ctype, kind, value):
 def render_enum(registry, members):
     """One Cerid identifier registry: its enumeration, its table and the register entry of each value."""
     enum, noun, what = ENUMS[registry]
-    width = max(len(name) for name, _, _ in members)
+    width = max(len(name) for name, *_ in members)
     lines = [f'// {registry}: {what}; never reused. 16 bits on the wire.',
              '// NOLINTNEXTLINE(performance-enum-size)', f'enum class {enum} : u16', '{']
-    lines += [f'    {name:<{width}} = 0x{value:04X}U, // {entry}' for name, value, entry in members]
+    lines += [f'    {name:<{width}} = 0x{value:04X}U, // {entry}' for name, value, entry, _ in members]
     lines += ['};', '', f'inline constexpr {enum} k{enum[:-2]}Ids[] = {{']
-    lines += [f'    {enum}::{name},' for name, _, _ in members]
+    lines += [f'    {enum}::{name},' for name, *_ in members]
     lines += ['};', '', '// The register entry that defines `id` ("" for a value outside the enumeration).',
               f'[[nodiscard]] constexpr const char* {noun}_register_id({enum} id) noexcept', '{',
               '    switch (id)', '    {']
-    for index, (name, _, entry) in enumerate(members):
+    for index, (name, _, entry, _) in enumerate(members):
         lines.append(f'    case {enum}::{name}:')
         if index + 1 == len(members) or members[index + 1][2] != entry:
             lines.append(f'        return "{entry}";')  # consecutive values of one entry share the return
+    lines += ['    }', '    return "";', '}', '',
+              f'// The name the register gives `id` ("{members[0][3]}"), by which reviewed text names it ("" for a',
+              '// value outside the enumeration).',
+              f'[[nodiscard]] constexpr const char* {noun}_name({enum} id) noexcept', '{', '    switch (id)', '    {']
+    for name, _, _, point in members:
+        lines += [f'    case {enum}::{name}:', f'        return "{point}";']
     lines += ['    }', '    return "";', '}', '']
     if registry == ALGORITHMS:
         width = max(len(name) for name, _, _ in ALGORITHM_CLASSES.values())

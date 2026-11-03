@@ -80,6 +80,11 @@ void print_usage()
         "                [--kind <individual|entity|vessel|aircraft> --name <n>... [--birth <date>]\n"
         "                [--country <cc>]... [--identifier <type:value>]...] [--review <n>] [--match <n>]\n"
         "                (sanctions and embargo screening: clear, review, unavailable or blocked, every hit)\n"
+        "  ceridc policy body --source <generation.policy.toml> --out <body>\n"
+        "  ceridc policy assemble --in <signed>... --out <generation>\n"
+        "  ceridc policy verify --generation <f> --trust <trust.toml> --now <YYYY-MM-DD|seconds> [--floor <n>]\n"
+        "                [--source <generation.policy.toml>]\n"
+        "                (the crypto policy generation: render the reviewed source, join its signatures, judge it)\n"
         "  ceridc instantiate --pack <p> --asset <name> [--x --y --z] --out <scene.scen> [--dry-run]\n"
         "  ceridc sequence --name <n> --clip-a <n> --frames-a <n> --clip-b <n> --frames-b <n>\n"
         "                  [--transition <frames>] --out-timl <f> --out-otio <f>\n"
@@ -343,6 +348,21 @@ int main(int argc, char* argv[])
         flags.review = flag_of(argc, argv, "--review", nullptr);
         flags.match = flag_of(argc, argv, "--match", nullptr);
         return emit(crd::ceridc::verb_screen(flags, &g_alloc));
+    }
+    if (std::strcmp(verb, "policy") == 0)
+    {
+        crd::containers::Array<const char*> in(&g_alloc);
+        flags_of(argc, argv, "--in", in);
+        crd::ceridc::PolicyFlags flags;
+        flags.action = argc >= 3 ? argv[2] : nullptr;
+        flags.source = flag_of(argc, argv, "--source", nullptr);
+        flags.generation = flag_of(argc, argv, "--generation", nullptr);
+        flags.in = crd::containers::ConstSpan<const char*>(in.data(), in.size());
+        flags.trust = flag_of(argc, argv, "--trust", nullptr);
+        flags.now = flag_of(argc, argv, "--now", nullptr);
+        flags.floor = flag_of(argc, argv, "--floor", nullptr);
+        flags.out = flag_of(argc, argv, "--out", nullptr);
+        return emit(crd::ceridc::verb_policy(flags, &g_alloc));
     }
     if (std::strcmp(verb, "instantiate") == 0)
     {

@@ -588,12 +588,569 @@
       "kind": "program",
       "title": "The ceridc program (tools/ceridc)",
       "packages": [
+        "aws-lc",
+        "pkcs11",
+        "tpm2-tss",
         "zstd"
       ],
-      "functions": [],
-      "confidentiality": false,
-      "entries": [],
-      "algorithms": []
+      "functions": [
+        "authentication",
+        "confidentiality",
+        "integrity",
+        "key-exchange",
+        "key-derivation"
+      ],
+      "confidentiality": true,
+      "entries": [
+        {
+          "id": "cerid.policy-generation",
+          "kind": "format",
+          "owner": "crypto",
+          "functions": [
+            "authentication"
+          ],
+          "spec": "docs/design/network-foundation.md#policy-wire",
+          "standard": false
+        },
+        {
+          "id": "cerid.key-store",
+          "kind": "format",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "spec": "docs/design/network-foundation.md#key-store",
+          "standard": false
+        },
+        {
+          "id": "freedesktop.secret-service",
+          "kind": "protocol",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "key-exchange"
+          ],
+          "spec": "https://specifications.freedesktop.org/secret-service-spec/0.2/",
+          "standard": true
+        },
+        {
+          "id": "tcg.tpm2",
+          "kind": "protocol",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality"
+          ],
+          "spec": "https://trustedcomputinggroup.org/resource/tpm-library-specification/",
+          "standard": true
+        },
+        {
+          "id": "oasis.pkcs11",
+          "kind": "protocol",
+          "owner": "crypto",
+          "functions": [
+            "integrity"
+          ],
+          "spec": "https://docs.oasis-open.org/pkcs11/pkcs11-spec/v3.2/os/pkcs11-spec-v3.2-os.html",
+          "standard": true
+        },
+        {
+          "id": "tls.hybrid-kex",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-exchange"
+          ],
+          "spec": "RFC 10024",
+          "standard": true
+        },
+        {
+          "id": "crypto.ecdh",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-exchange"
+          ],
+          "spec": "RFC 7748",
+          "standard": true
+        },
+        {
+          "id": "tls.ech",
+          "kind": "extension",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "key-exchange"
+          ],
+          "spec": "RFC 9849",
+          "standard": true
+        },
+        {
+          "id": "crypto.ml-dsa",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication"
+          ],
+          "spec": "FIPS 204",
+          "standard": true
+        },
+        {
+          "id": "crypto.eddsa",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication"
+          ],
+          "spec": "RFC 8032",
+          "standard": true
+        },
+        {
+          "id": "crypto.ecdsa",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication"
+          ],
+          "spec": "FIPS 186-5",
+          "standard": true
+        },
+        {
+          "id": "crypto.aes-gcm",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "spec": "RFC 5116",
+          "standard": true
+        },
+        {
+          "id": "crypto.chacha20-poly1305",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "spec": "RFC 8439",
+          "standard": true
+        },
+        {
+          "id": "crypto.hkdf",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-derivation"
+          ],
+          "spec": "RFC 5869",
+          "standard": true
+        },
+        {
+          "id": "crypto.hpke",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "RFC 9180",
+          "standard": true
+        },
+        {
+          "id": "crypto.hpke-pq",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "draft-ietf-hpke-pq",
+          "standard": true
+        },
+        {
+          "id": "crypto.hybrid-kems",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "draft-irtf-cfrg-concrete-hybrid-kems",
+          "standard": true
+        },
+        {
+          "id": "crypto.sha3",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-derivation"
+          ],
+          "spec": "FIPS 202",
+          "standard": true
+        },
+        {
+          "id": "mls.pq-ciphersuites",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "draft-ietf-mls-pq-ciphersuites",
+          "standard": true
+        },
+        {
+          "id": "crypto.ml-kem",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-exchange"
+          ],
+          "spec": "FIPS 203",
+          "standard": true
+        },
+        {
+          "id": "crypto.siphash",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "integrity"
+          ],
+          "spec": "https://doi.org/10.1007/978-3-642-34931-7_28",
+          "standard": true
+        },
+        {
+          "id": "mls.protocol",
+          "kind": "protocol",
+          "owner": "crypto",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "RFC 9420",
+          "standard": true
+        }
+      ],
+      "algorithms": [
+        {
+          "name": "x25519-mlkem768",
+          "value": "0x0101",
+          "class": "HybridKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            256,
+            9472
+          ],
+          "entry": "tls.hybrid-kex",
+          "spec": "RFC 10024",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "secp256r1-mlkem768",
+          "value": "0x0102",
+          "class": "HybridKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            256,
+            9472
+          ],
+          "entry": "tls.hybrid-kex",
+          "spec": "RFC 10024",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "secp384r1-mlkem1024",
+          "value": "0x0103",
+          "class": "HybridKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            384,
+            12544
+          ],
+          "entry": "tls.hybrid-kex",
+          "spec": "RFC 10024",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "x25519",
+          "value": "0x0201",
+          "class": "ClassicalKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.ecdh",
+          "spec": "RFC 7748",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "secp256r1",
+          "value": "0x0202",
+          "class": "ClassicalKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.ecdh",
+          "spec": "RFC 7748",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "secp384r1",
+          "value": "0x0203",
+          "class": "ClassicalKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            384
+          ],
+          "entry": "crypto.ecdh",
+          "spec": "RFC 7748",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ml-dsa-44",
+          "value": "0x0301",
+          "class": "PostQuantumSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            10496
+          ],
+          "entry": "crypto.ml-dsa",
+          "spec": "FIPS 204",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ml-dsa-65",
+          "value": "0x0302",
+          "class": "PostQuantumSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            15616
+          ],
+          "entry": "crypto.ml-dsa",
+          "spec": "FIPS 204",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ml-dsa-87",
+          "value": "0x0303",
+          "class": "PostQuantumSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            20736
+          ],
+          "entry": "crypto.ml-dsa",
+          "spec": "FIPS 204",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ed25519",
+          "value": "0x0401",
+          "class": "ClassicalSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.eddsa",
+          "spec": "RFC 8032",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ecdsa-secp256r1-sha256",
+          "value": "0x0402",
+          "class": "ClassicalSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.ecdsa",
+          "spec": "FIPS 186-5",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ecdsa-secp384r1-sha384",
+          "value": "0x0403",
+          "class": "ClassicalSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            384
+          ],
+          "entry": "crypto.ecdsa",
+          "spec": "FIPS 186-5",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "aes-128-gcm",
+          "value": "0x0501",
+          "class": "Aead",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "key_bits": [
+            128
+          ],
+          "entry": "crypto.aes-gcm",
+          "spec": "RFC 5116",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "aes-256-gcm",
+          "value": "0x0502",
+          "class": "Aead",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.aes-gcm",
+          "spec": "RFC 5116",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "chacha20-poly1305",
+          "value": "0x0503",
+          "class": "Aead",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.chacha20-poly1305",
+          "spec": "RFC 8439",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "hkdf-sha256",
+          "value": "0x0601",
+          "class": "Kdf",
+          "functions": [
+            "key-derivation"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.hkdf",
+          "spec": "RFC 5869",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "hkdf-sha384",
+          "value": "0x0602",
+          "class": "Kdf",
+          "functions": [
+            "key-derivation"
+          ],
+          "key_bits": [
+            384
+          ],
+          "entry": "crypto.hkdf",
+          "spec": "RFC 5869",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ml-kem-768",
+          "value": "0x0701",
+          "class": "Kem",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            9472
+          ],
+          "entry": "crypto.ml-kem",
+          "spec": "FIPS 203",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ml-kem-1024",
+          "value": "0x0702",
+          "class": "Kem",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            12544
+          ],
+          "entry": "crypto.ml-kem",
+          "spec": "FIPS 203",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "siphash-2-4",
+          "value": "0x0801",
+          "class": "Prf",
+          "functions": [
+            "integrity"
+          ],
+          "key_bits": [
+            128
+          ],
+          "entry": "crypto.siphash",
+          "spec": "https://doi.org/10.1007/978-3-642-34931-7_28",
+          "standard": true,
+          "owner": "crypto"
+        }
+      ]
     },
     {
       "id": "shader_cook",
