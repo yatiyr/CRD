@@ -158,7 +158,7 @@ public:
     void push_back(crd::f32 value);
     void push_back(bool value);
 
-    // Array iteration: `for (const auto& element : *node.as_array())`.
+    // Array iteration over a node checked with is_array(): `for (const auto& element : node)`.
     node*       begin() noexcept { return m_children.begin(); }
     node*       end() noexcept { return m_children.end(); }
     const node* begin() const noexcept { return m_children.begin(); }

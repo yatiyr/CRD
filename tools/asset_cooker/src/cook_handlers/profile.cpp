@@ -177,7 +177,7 @@ CookResult profile_handler(const CookContext& ctx)
                      static_cast<int>(ctx.source_path.size()), ctx.source_path.data());
         return result;
     }
-    const crd::toml::node& profile_array = *profile_array_node->as_array();
+    const crd::toml::node& profile_array = *profile_array_node; // an array of tables: its children are the elements
 
     for (const auto& node : profile_array)
     {
@@ -204,7 +204,7 @@ CookResult profile_handler(const CookContext& ctx)
         if (const crd::toml::node* preds = profile->get("predicate");
             preds != nullptr && preds->is_array_of_tables())
         {
-            for (const auto& pn : *preds->as_array())
+            for (const auto& pn : *preds)
             {
                 const crd::toml::node* pt = pn.as_table();
                 if (pt == nullptr)
@@ -253,7 +253,7 @@ CookResult profile_handler(const CookContext& ctx)
         crd::containers::Array<crd::resources::ResourceId> bundle(ctx.allocator);
         if (const crd::toml::node* bn = profile->get("bundle"); bn != nullptr && bn->is_array())
         {
-            for (const auto& en : *bn->as_array())
+            for (const auto& en : *bn)
             {
                 auto s = en.value<std::string_view>();
                 if (!s.has_value())
