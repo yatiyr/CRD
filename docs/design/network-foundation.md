@@ -617,11 +617,13 @@ no longer exists fails the check.
   (forward secrecy) or both kinds of key exchange are broken (the hybrid guarantee).
 - **The traffic key epochs** (`tls_key_update.spthy`, S7): one direction's chain from a traffic secret the handshake
   model proves secret, records under the current key at their sequence number, KeyUpdates under the old key, and
-  either end's current key revealed at any time. Proven for chains of up to eight keys (Tamarin's induction over the
-  unbounded chain did not terminate): forward security of the updates (a key leaks only by its own or an earlier
-  key's reveal), records and KeyUpdates accepted only as sent at their sequence number unless their key or an
-  earlier one was revealed, and, as the guarantee's bound, no healing after a compromise. That a record is accepted
-  once is the adversarial-bytes test's (test_tls.cpp: a replayed, reordered or earlier-key record fails).
+  either end's current key revealed at any time. The chain is unbounded: epoch e's key is a private `chain(root, e)`
+  and the adversary's one computation over it is HKDF-Expand-Label's step from a key it holds to the next, so the
+  induction runs over epochs (natural numbers). Proven for chains of any length: forward security of the updates (a
+  key leaks only by its own or an earlier key's reveal), records and KeyUpdates accepted only as sent at their epoch
+  and sequence number unless their key or an earlier one was revealed, and, as the guarantee's bound, no healing
+  after a compromise. That a record is accepted once is the adversarial-bytes test's (test_tls.cpp: a replayed,
+  reordered or earlier-key record fails).
 - **Resumption and early data** (`tls_resumption.spthy`, S9, S16, S17): tickets sealed under a ticket key with a
   fresh salt and sent under the session's traffic key, a client store that hands each ticket out once, psk_dhe_ke
   resumption with the binder and early data, the server's single-use ticket filter, and reveals of the ticket key,
@@ -644,8 +646,8 @@ no longer exists fails the check.
   once; a token from before the last rotation opens and one from before the last two never does; and, as the bound,
   a replayed Retry token is accepted again within its binding. Time (lifetimes, skew) and unlinkability are
   test_quic_token.cpp's.
-- **Still to model**: the unbounded epoch chain and the binding to the code by state learning, which checks the
-  implementation's state machine against the model's.
+- **Still to model**: the binding to the code by state learning, which checks the implementation's state machine
+  against the model's.
 
 <a id="tls-sessions"></a>
 ### TLS sessions
