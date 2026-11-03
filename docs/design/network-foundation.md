@@ -634,8 +634,18 @@ no longer exists fails the check.
   data was sent exposes it. One link of the chain is modelled: a resumed session issues tickets by the same rule, and
   its traffic secret lemmas give its master secret the guarantee the link assumes of a full session's, so the chain
   composes (Tamarin's unrolled chain did not terminate).
-- **Still to model**: the unbounded epoch chain, address validation tokens (S13), and the binding to the code by
-  state learning, which checks the implementation's state machine against the model's.
+- **Address validation** (`quic_address_validation.spthy`, S13, S16): addresses an adversary can send to from any
+  claimed source but read only where it owns the path, a fleet's token keys with rotation (the newest seals, the one
+  before it opens) and reveals, Retry and NEW_TOKEN tokens with their associated data as `token_associated` builds
+  it, validation by a token or by the handshake, NEW_TOKEN tokens published, and the single-use filter. Proven: an
+  address is validated only after a datagram the server sent there reached the client there, unless the adversary
+  owns that path or a token key leaked (no amplification toward a spoofed address); each kind is accepted only with
+  the kind, version, address and, for Retry, port and connection IDs it was minted for; a NEW_TOKEN token is accepted
+  once; a token from before the last rotation opens and one from before the last two never does; and, as the bound,
+  a replayed Retry token is accepted again within its binding. Time (lifetimes, skew) and unlinkability are
+  test_quic_token.cpp's.
+- **Still to model**: the unbounded epoch chain and the binding to the code by state learning, which checks the
+  implementation's state machine against the model's.
 
 <a id="tls-sessions"></a>
 ### TLS sessions
