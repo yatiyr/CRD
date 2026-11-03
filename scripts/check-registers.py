@@ -16,7 +16,8 @@ The guard fails, among the format errors, on:
     days after it was posted unless the IESG or the RFC Editor holds it, and a posted date known only to the month or
     year counts from the first day of that period;
   - a pinned RFC that the snapshot records as obsoleted;
-  - an entry or the register past its review date, or a source read after the snapshot or after today;
+  - an entry or the register past its review date, a source read after today, or an RFC's or draft's source read
+    after the snapshot (the only records the snapshot keeps);
   - a review schedule whose `next` is not the day review_due computes from its calendar and recorded runs (the
     scheduled re-research of scripts/register-review.py), or whose calendar names no event after the latest run, and
     in the legal domain a calendar event whose `reads` (the instruments its scan reads) names an unknown entry, one

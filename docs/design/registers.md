@@ -69,7 +69,8 @@ adds the fields [below](#legal-domain).
 - **Obsoleted pinned RFCs fail**; `obsoleted_by` names the replacement and is present exactly when the status is
   `obsoleted`.
 - **Withdrawn pinned documents fail**: a NIST publication or a paper that is `withdrawn` stays only as a watch entry.
-- **Overdue reviews fail**, per entry and for the register, as does a source read after the snapshot or after today.
+- **Overdue reviews fail**, per entry and for the register, as does a source read after today, or an RFC's or
+  draft's source read after the snapshot (the RFC Editor's and the datatracker's records are all it keeps).
 - **The schedule is computed, never typed.** `review.next` must be the day the schedule's calendar and runs owe; a
   calendar with no event after the latest run fails, so the light scans cannot silently stop.
 - **Owners and rows exist.** An owner is registered or named in `cmake/capability-owners.json`, which alone records

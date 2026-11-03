@@ -6806,6 +6806,12 @@ class Registers(RegisterFixture, unittest.TestCase):
         self.assert_fails(self.register([self.entry(spec=dict(spec, status='stable'))]),
                           "spec.status of a tcg must be one of ['published', 'review', 'withdrawn']")
 
+    def test_every_specification_kind_outside_the_snapshot_is_read_by_hand(self):
+        # A kind the snapshot keeps no record of is read on its own body's page by the scheduled review, so none is
+        # left unread.
+        self.assertEqual(set(registers.SPEC_STATUS) - registers.SNAPSHOT_TYPES - {'cerid'},
+                         set(register_review.MANUAL_SPECS))
+
     def test_overdue_reviews_and_future_reads_fail(self):
         self.assert_fails(self.register([self.entry(review='2026-10-30')]), 'review was due on 2026-10-30')
         self.assert_fails(self.register([self.entry(review='2027-01-01')]),

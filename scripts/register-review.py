@@ -100,6 +100,7 @@ MANUAL_SPECS = {
     'paper': ('whether the paper {ref} was withdrawn or superseded', '{ref}'),
     'freedesktop': ('the version and status of {ref} on specifications.freedesktop.org', '{ref}'),
     'tcg': ('the newest published version of {ref} on trustedcomputinggroup.org', '{ref}'),
+    'oasis': ('the newest OASIS Standard of {ref} on docs.oasis-open.org', '{ref}'),
 }
 CALENDAR_SOURCE = {
     'standards': ('https://www.ietf.org/meeting/upcoming/',
