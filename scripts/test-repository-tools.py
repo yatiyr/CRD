@@ -11114,13 +11114,15 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                  'verified': False}])
             self.write_tree(root, self.register(self.entries() + [awaiting]))
             tracker = json.loads(self.records()['draft-ietf-webtrans-http3'])
-            newer = json.dumps(dict(tracker, rev='17', rev_history=[{'rev': '17', 'published': '2026-12-01T08:00:00Z'}]))
+            history = [{'rev': '17', 'published': '2026-12-01T08:00:00Z'}]
+            newer = json.dumps(dict(tracker, rev='17', rev_history=history))
             self.fetched(root, self.records(webtransport=newer))
             report = root / 'docs' / 'review.md'
             code, output = self.tool(root, 'compare', '--fetched', str(root / 'fetched'), '--report', str(report))
             self.assertEqual(0, code, output)
-            self.assertIn('- quic.grease (NET-STD): re-read the codepoints awaiting IANA in draft-ietf-webtrans-http3-17;'
-                          ' a changed one is a switch of the implemented values', report.read_text(encoding='utf-8'))
+            self.assertIn('- quic.grease (NET-STD): re-read the codepoints awaiting IANA in '
+                          'draft-ietf-webtrans-http3-17; a changed one is a switch of the implemented values',
+                          report.read_text(encoding='utf-8'))
 
     def test_a_full_scan_reads_the_triggering_documents_and_records_its_re_research(self):
         with tempfile.TemporaryDirectory() as scratch:
