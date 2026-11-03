@@ -75,6 +75,9 @@ keyring_spec.loader.exec_module(install_gnome_keyring)
 swtpm_spec = importlib.util.spec_from_file_location('install_swtpm', ROOT / 'scripts/install-swtpm.py')
 install_swtpm = importlib.util.module_from_spec(swtpm_spec)
 swtpm_spec.loader.exec_module(install_swtpm)
+softhsm_spec = importlib.util.spec_from_file_location('install_softhsm', ROOT / 'scripts/install-softhsm.py')
+install_softhsm = importlib.util.module_from_spec(softhsm_spec)
+softhsm_spec.loader.exec_module(install_softhsm)
 mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
 install_mold = importlib.util.module_from_spec(mold_spec)
 mold_spec.loader.exec_module(install_mold)
@@ -2630,6 +2633,42 @@ class BuildPerformance(unittest.TestCase):
         self.assertIn('scripts/install-swtpm.py', check_pins.HELPERS)
         self.assertEqual(pins_registry.entry('packages', 'tpm2-tss')['version'], pin['files'][
             next(name for name in names if name.startswith('libtss2-esys-'))]['url'].split('_')[1].split('-')[0])
+
+    def test_softhsm_installer_unpacks_the_token_and_the_spy_into_one_prefix(self):
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()) as out:
+            root = Path(temp).resolve()
+            downloads = root / 'dl'
+            downloads.mkdir()
+            files = {}
+            for name, member in (('softhsm2_1.0-1_amd64.deb', 'usr/bin/softhsm2-util'),
+                                 ('opensc-pkcs11_2.0-1_amd64.deb', 'usr/lib/x86_64-linux-gnu/pkcs11-spy.so')):
+                (downloads / name).write_bytes(member.encode())
+                files[name] = {'url': 'https://example.invalid/' + name, 'size': len(member),
+                               'sha256': pins_registry.sha256(downloads / name)}
+            pin = {'version': '1.0-1', 'binary': 'usr/bin/softhsm2-util', 'files': files, 'license': 'BSD'}
+
+            def extract(package, prefix):
+                member = prefix / package.read_text()
+                member.parent.mkdir(parents=True, exist_ok=True)
+                member.write_bytes(b'elf')
+
+            util = install_softhsm.install(root / 'prefix', downloads, pin=pin, extract=extract,
+                                           version_of=lambda path: '1.0')
+            self.assertEqual(util, root / 'prefix/usr/bin/softhsm2-util')
+            self.assertIn(f'CRD_SOFTHSM={util}', out.getvalue())
+            self.assertTrue((root / 'prefix/usr/lib/x86_64-linux-gnu/pkcs11-spy.so').is_file())
+            with self.assertRaisesRegex(pins_registry.PinError, "reports '0.9'.*pins SoftHSM 1.0"):
+                install_softhsm.install(root / 'other', downloads, pin=pin, extract=extract,
+                                        version_of=lambda path: '0.9')
+            self.assertFalse((root / 'other').exists() or (root / 'other.partial').exists())
+        pin = pins_registry.entry('tools', install_softhsm.PIN_NAME)
+        self.assertEqual(pin['binary'], 'usr/bin/softhsm2-util')
+        names = sorted(pin['files'])
+        for package in ('softhsm2_', 'softhsm2-common_', 'libsofthsm2_', 'opensc-pkcs11_'):
+            self.assertTrue(any(name.startswith(package) for name in names), package)
+        for name, spec in pin['files'].items():
+            self.assertEqual(spec['url'], 'https://launchpad.net/ubuntu/+archive/primary/+files/' + name)
+        self.assertIn('scripts/install-softhsm.py', check_pins.HELPERS)
 
     def test_a_crate_set_is_pinned_by_its_committed_lockfile(self):
         crates_io = 'registry+https://github.com/rust-lang/crates.io-index'
@@ -6774,6 +6813,16 @@ class Registers(RegisterFixture, unittest.TestCase):
                           today='2026-12-16')
         future = {'ref': 'docs/research.md#n83', 'read': '2026-11-05', 'verified': True}
         self.assert_fails(self.register([self.entry(source=future)]), 'after the snapshot or today')
+        # The snapshot holds the RFC Editor's and the datatracker's records only: an RFC read after it fails, a
+        # specification of another body read after it but by today passes.
+        later = dict(future, read='2026-11-01')
+        self.assert_fails(self.register([self.entry(source=later)]), 'after the snapshot or today')
+        oasis = {'type': 'oasis', 'ref': 'https://docs.oasis-open.org/pkcs11/pkcs11-spec/v3.2/os/', 'revision': '3.2',
+                 'status': 'published'}
+        self.assertEqual(0, self.run_guard(self.register([self.entry(spec=oasis, source=later)]))[0])
+        self.assert_fails(self.register([self.entry(spec=oasis, source=future)]), 'after the snapshot or today')
+        self.assert_fails(self.register([self.entry(spec=dict(oasis, status='os'))]),
+                          "spec.status of a oasis must be one of ['committee', 'published', 'withdrawn']")
         self.assert_fails(self.register([self.entry(review='2026-12')]), 'review must be a YYYY-MM-DD date')
 
     def test_owners_rows_and_sources_must_exist(self):

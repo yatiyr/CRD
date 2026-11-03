@@ -97,8 +97,12 @@ SPEC_STATUS = {
     'paper': {'published', 'withdrawn'},
     'freedesktop': {'draft', 'stable', 'withdrawn'},
     'tcg': {'published', 'review', 'withdrawn'},
+    'oasis': {'published', 'committee', 'withdrawn'},
     'cerid': {'design', 'stable'},
 }
+# The specification kinds whose records the snapshot holds (the RFC Editor's and the datatracker's): an entry of these
+# is read no later than the snapshot it is checked against; any other is read from its own body's page, up to today.
+SNAPSHOT_TYPES = {'rfc', 'draft'}
 HELD_DRAFT = {'iesg', 'rfc-editor'}
 # The IANA registries with a "Recommended" column that the register holds codepoints of (RFC 9847, section 3): Y
 # (recommended), N (not evaluated or of limited applicability) or D (discouraged).
@@ -540,7 +544,8 @@ def entry_errors(entry, domain, register, context):
         errors += date_errors(where, 'source.read', source['read'])
         read = parse_day(source['read'])
         snapshot = parse_day(register.get('snapshot', {}).get('date'))
-        if read and (read > context.today or (snapshot and read > snapshot)):
+        in_snapshot = isinstance(entry.get('spec'), dict) and entry['spec'].get('type') in SNAPSHOT_TYPES
+        if read and (read > context.today or (in_snapshot and snapshot and read > snapshot)):
             errors.append(f'{where}: source.read {source["read"]} is after the snapshot or today')
         errors += reference_errors(where, 'source', source['ref'], context.root)
     errors += date_errors(where, 'review', entry.get('review'))

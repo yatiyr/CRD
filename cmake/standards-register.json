@@ -452,10 +452,11 @@
       "evidence": [
         "tests/foundation/crypto/test_key_store.cpp",
         "tests/foundation/crypto/fuzz/fuzz_key_store.cpp",
-        "tests/foundation/crypto/secret_service_session.py"
+        "tests/foundation/crypto/secret_service_session.py",
+        "tests/foundation/crypto/pkcs11_token_session.py"
       ],
       "deprecation": null,
-      "note": "AES-256-GCM under HKDF-SHA256 of the master key and a fresh salt per save, the header authenticated; the master key guarded by DPAPI or the TPM (tcg.tpm2) on Windows, the freedesktop Secret Service (freedesktop.secret-service) or the TPM on Linux, or the application's protector, replaced on revocation where the protector can forget the old one. Never on the wire."
+      "note": "AES-256-GCM under HKDF-SHA256 of the master key and a fresh salt per save, the header authenticated; the master key guarded by DPAPI or the TPM (tcg.tpm2) on Windows, the freedesktop Secret Service (freedesktop.secret-service) or the TPM on Linux, or the application's protector, replaced on revocation where the protector can forget the old one; ECDSA signature keys optionally held in a device that signs without releasing them (the TPM, or a PKCS #11 token: oasis.pkcs11). Never on the wire."
     },
     {
       "id": "freedesktop.secret-service",
@@ -521,6 +522,37 @@
       ],
       "deprecation": null,
       "note": "The key store's hardware protector (decision K11): on Windows a persisted, decrypt-only RSA-2048 key in the TPM per master key, through the Microsoft Platform Crypto Provider, wrapping the master key with RSA-OAEP and SHA-256 (RFC 8017) under a label that names the store; deleted to forget it. On Linux (decision K13) through the TCG's ESYS (tss2, loaded at run time): the master key, or a sign-only ECDSA key's TPM-wrapped blob, in a write-once owner NV index whose authorization derives from the reference's secret and the store's identifier, over a salted session with AES-128-CFB parameter encryption; deleted to forget. Windows' signing keys (K12) are persisted sign-only ECDSA keys of the provider. Proven on an Intel PTT TPM 2.0 (the 2026-11-03 sessions) and against the pinned swtpm 0.7.3 (tools/swtpm-linux-x64, crd-crypto-tpm-swtpm); a runner without a TPM skips those cases. The specification revision was taken from knowledge (verified false); the register review reads the TCG page."
+    },
+    {
+      "id": "oasis.pkcs11",
+      "title": "PKCS #11 Cryptographic Token Interface: the key store's token key device",
+      "kind": "protocol",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "oasis",
+        "ref": "https://docs.oasis-open.org/pkcs11/pkcs11-spec/v3.2/os/pkcs11-spec-v3.2-os.html",
+        "revision": "3.2",
+        "status": "published"
+      },
+      "cryptography": [
+        "integrity"
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#key-store",
+        "read": "2026-11-03",
+        "verified": true
+      },
+      "review": "2027-11-03",
+      "evidence": [
+        "tests/foundation/crypto/test_key_store.cpp",
+        "tests/foundation/crypto/pkcs11_token_session.py"
+      ],
+      "deprecation": null,
+      "note": "The key store's token key device (decision K14): compiled against the OASIS Standard's 3.2 headers (packages pkcs11), calling only the 2.40 function list of the module its caller names, loaded at run time. A sign-only ECDSA P-256 or P-384 pair per Hardware generation (private: token, private, sensitive, never extractable, checked after generation), found by a random CKA_ID, a CKA_LABEL naming the store and the curve; CKM_ECDSA on the digest; both halves destroyed to forget. One login attempt per device, none on a token that reports its PIN locked or on its final try. Proven against SoftHSM 2.6.1 (tools/softhsm-linux-x64, crd-crypto-pkcs11-softhsm) with OpenSC's pkcs11-spy recording the calls."
     },
     {
       "id": "ietf.grease",

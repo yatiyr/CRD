@@ -151,8 +151,8 @@ class Fixture(unittest.TestCase):
                                         'tests/core', 'tests/math', 'tests/fft', 'tests/render'])
         self.assertIn('8 of 8 configured (full configuration)', result.stdout)
         self.assertEqual(self.packages(),
-                         {'glfw', 'zstd', 'stb', 'cgltf', 'mikktspace', 'imgui', 'aws-lc', 'tpm2-tss', 'wycheproof',
-                          'mls-vectors', 'hpke-pq-vectors'})
+                         {'glfw', 'zstd', 'stb', 'cgltf', 'mikktspace', 'imgui', 'aws-lc', 'tpm2-tss', 'pkcs11',
+                          'wycheproof', 'mls-vectors', 'hpke-pq-vectors'})
 
     def test_selection_closes_over_dependencies_tests_and_packages(self):
         result = self.configure('-DCRD_MODULES=fft')

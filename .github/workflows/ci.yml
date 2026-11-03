@@ -944,6 +944,13 @@ jobs:
         if: matrix.preset == 'linux-gcc-public-checks'
         run: python3 scripts/install-swtpm.py --destination "$RUNNER_TEMP/swtpm" --download-dir "$RUNNER_TEMP/swtpm-dl" --github-env "$GITHUB_ENV"
 
+      # The pinned SoftHSM and OpenSC's pkcs11-spy (tools/softhsm-linux-x64) are the PKCS #11 token the key store's
+      # PKCS #11 device is tested against (CRD_BUILD_PKCS11_VS_SOFTHSM): four Ubuntu packages, each checked against its
+      # SHA-256 and unpacked without root; the configure reads CRD_SOFTHSM.
+      - name: Install pinned SoftHSM
+        if: matrix.preset == 'linux-gcc-public-checks'
+        run: python3 scripts/install-softhsm.py --destination "$RUNNER_TEMP/softhsm" --download-dir "$RUNNER_TEMP/softhsm-dl" --github-env "$GITHUB_ENV"
+
       - name: Configure
         if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}

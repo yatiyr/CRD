@@ -1344,6 +1344,14 @@ class Lane:
                              self.temp / 'swtpm-dl', '--github-env', self.env_file))
         self.merge()
 
+    def softhsm(self):
+        # The pinned SoftHSM and pkcs11-spy the PKCS #11 device is tested against; the configure reads CRD_SOFTHSM.
+        if not self.preset_step('Install pinned SoftHSM'):
+            return
+        self.run(self.helper('install-softhsm.py', '--destination', self.temp / 'softhsm', '--download-dir',
+                             self.temp / 'softhsm-dl', '--github-env', self.env_file))
+        self.merge()
+
     def apt(self):
         packages = APT_PACKAGES['arm64' if self.job == 'linux-arm64' else 'x64']
         missing = [] if self.run.dry else [p for p in packages if subprocess.run(
@@ -1688,7 +1696,7 @@ class Lane:
                      'sccache', 'configure', 'build', 'sccache_stats', 'inventory', 'test', 'bundle', 'upload'],
         'linux-gcc': ['checkout', 'reclaim_disk', 'python_version', 'ninja', 'apt', 'apt_census', 'vulkan_headers',
                       'vulkan_validation', 'cpm_cache', 'cold_before', 'sccache', 'sde', 'rust', 'gnome_keyring',
-                      'swtpm', 'configure', 'cold_after',
+                      'swtpm', 'softhsm', 'configure', 'cold_after',
                       'build', 'sccache_stats', 'inventory', 'console_checks', 'test', 'test_sse2', 'seeded_faults',
                       'genmc', 'bundle', 'upload'],
         'windows-shipping': ['checkout', 'python_version', 'ninja', 'msvc', 'adapters', 'cpm_cache', 'vulkan_sdk',
@@ -2117,7 +2125,8 @@ LANE_STEP_PHASES = {
     'Cold acquisition (empty package cache, pinned WARP)': 'cold_before',
     'Cold acquisition (empty package cache)': 'cold_before', 'Install pinned sccache': 'sccache',
     'Compiler cache service': 'sccache', 'Install pinned Intel SDE': 'sde', 'Install pinned Rust': 'rust',
-    'Install pinned gnome-keyring': 'gnome_keyring', 'Install pinned swtpm': 'swtpm', 'Configure': 'configure',
+    'Install pinned gnome-keyring': 'gnome_keyring', 'Install pinned swtpm': 'swtpm',
+    'Install pinned SoftHSM': 'softhsm', 'Configure': 'configure',
     'Configure with the compiler cache': 'configure', 'Cold acquisition (every pinned package acquired)': 'cold_after',
     'Build': 'build', 'Build the Debug sandbox profile': 'build', 'Compiler cache statistics': 'sccache_stats',
     'Test inventory': 'inventory', 'Test': 'test', 'Test at the sse2 level': 'test_sse2',

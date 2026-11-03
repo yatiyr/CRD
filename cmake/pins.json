@@ -90,6 +90,19 @@
       "provenance": "https://github.com/tpm2-software/tpm2-tss/releases/tag/4.0.1 (the tag's commit, the version of Ubuntu 24.04's tss2 libraries; its include/tss2 is byte for byte the release archive's, compared 2026-11-03)",
       "note": "The TCG TPM2 Software Stack 4.0.1: its public headers only (include/tss2: the TPM 2.0 types, ESYS, MU and the TCTI loader), which crd-crypto compiles its Linux TPM protector and device against (tpm_tss2.cpp, NET.2 decision K13); the libraries are never linked: crd-crypto loads the system's libtss2-esys.so.0, libtss2-tctildr.so.0 and libtss2-mu.so.0 at run time (the ESYS 3.0.2 ABI), so a system without them answers Unavailable. Fetched on Linux configures only. LICENSE read from the archive: BSD-2-Clause, (c) the tpm2-software contributors and Intel. Pinned as a build input under the user's approval of 2026-11-01 (docs/sessions/2026-11-03-net-2-tpm-linux.md)."
     },
+    "pkcs11": {
+      "version": "3.2",
+      "repository": "oasis-tcs/pkcs11",
+      "ref": "master",
+      "commit": "c55388c02702537876867ecda34601daa52b2df1",
+      "url": "https://github.com/oasis-tcs/pkcs11/archive/c55388c02702537876867ecda34601daa52b2df1.tar.gz",
+      "file": "pkcs11-c55388c0.tar.gz",
+      "sha256": "3f6834264cff34622addde00c8f11fcf23e3cd056819760b0322bbcf9bcb4c5f",
+      "size": 1330608,
+      "license": "OASIS-IPR (RF on RAND)",
+      "provenance": "https://docs.oasis-open.org/pkcs11/pkcs11-spec/v3.2/os/include/pkcs11-v3.2/ (the OASIS Standard of PKCS #11 3.2; the archive's published/3-02 headers are byte for byte those three files, compared 2026-11-03)",
+      "note": "The OASIS PKCS #11 Cryptographic Token Interface 3.2 headers (published/3-02: pkcs11.h, pkcs11f.h, pkcs11t.h), from the PKCS 11 Technical Committee's repository: crd-crypto compiles its PKCS #11 key device against them (pkcs11_device.cpp, NET.2 decision K14) and calls only the 2.40 function list (C_GetFunctionList), so every module from 2.20 on answers; nothing is linked: the device loads the module its caller names at run time. Fetched on every platform. Licence: the headers' own notice, distributed under the OASIS IPR Policy (the TC's RF on RAND mode), as is. Pinned as a build input under the user's approval of 2026-11-01 (docs/sessions/2026-11-03-net-2-pkcs11-device.md)."
+    },
     "mlspp": {
       "version": "0.1.0-fc724c31",
       "repository": "cisco/mlspp",
@@ -678,6 +691,35 @@
       },
       "license": "BSD-3-Clause AND BSD-2-Clause",
       "note": "Ubuntu 24.04's swtpm 0.7.3 and libtpms 0.9.3 (noble-updates), the TPM 2.0 simulator, and the tss2 4.0.1-7.1ubuntu5.1 libraries crd-crypto loads at run time (libtss2-esys, -sys, -mu, -tctildr and the swtpm TCTI) with the pcap TCTI that records the bus, from Launchpad's librarian, whose files are never removed (the same bytes the Ubuntu archive serves, checked 2026-11-03). The TPM the key store's Linux protector and device are tested against (NET.2 decision K13, CRD_BUILD_TPM_VS_SWTPM), unpacked by scripts/install-swtpm.py with dpkg-deb -x and run by tests/foundation/crypto/tpm_simulator_session.py; never linked or shipped. Licences from the packages' Debian copyright files: BSD-3-Clause (swtpm, libtpms) and BSD-2-Clause (tss2), which also list the TCG and IBM reference-code licences, CPL-1.0 and GPL-3 for parts of the sources and build scripts. Pinned as a testing download (pre-approved, user 2026-10-30)."
+    },
+    "softhsm-linux-x64": {
+      "version": "2.6.1-2.2ubuntu3",
+      "binary": "usr/bin/softhsm2-util",
+      "provenance": "https://launchpad.net/ubuntu/+source/softhsm2/2.6.1-2.2ubuntu3",
+      "files": {
+        "softhsm2_2.6.1-2.2ubuntu3_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/softhsm2_2.6.1-2.2ubuntu3_amd64.deb",
+          "size": 174554,
+          "sha256": "a15bf02be5d087c576d59ec16ea25b4a6302ed757d1c44d4295c79845be2d959"
+        },
+        "softhsm2-common_2.6.1-2.2ubuntu3_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/softhsm2-common_2.6.1-2.2ubuntu3_amd64.deb",
+          "size": 6198,
+          "sha256": "ccea2d087866ba44e3ff186c16f2cb88203546198df7bbfe07afc0595244dffc"
+        },
+        "libsofthsm2_2.6.1-2.2ubuntu3_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/libsofthsm2_2.6.1-2.2ubuntu3_amd64.deb",
+          "size": 265760,
+          "sha256": "438467b5602f4b936b7009eaf3a934eedbef6e9565a494a276e87739d89f0650"
+        },
+        "opensc-pkcs11_0.25.0~rc1-1ubuntu0.2_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/opensc-pkcs11_0.25.0~rc1-1ubuntu0.2_amd64.deb",
+          "size": 936072,
+          "sha256": "fa835a9bf4c50dfc4035557d51cc336f773c9ad5cf67770d3fe13859fb621c5b"
+        }
+      },
+      "license": "BSD-2-Clause AND LGPL-2.1-or-later",
+      "note": "Ubuntu 24.04's SoftHSM 2.6.1 (softhsm2, softhsm2-common, libsofthsm2), a PKCS #11 token in software, and OpenSC 0.25.0~rc1 (noble-updates) for its pkcs11-spy.so, a PKCS #11 module that records every call it passes to another, from Launchpad's librarian, whose files are never removed (the same bytes the Ubuntu archive serves, checked 2026-11-03). The token the key store's PKCS #11 device is tested against (NET.2 decision K14, CRD_BUILD_PKCS11_VS_SOFTHSM), unpacked by scripts/install-softhsm.py with dpkg-deb -x and run by tests/foundation/crypto/pkcs11_token_session.py; never linked or shipped. Both need only the system's libcrypto.so.3 (ldd, 2026-11-03). Licences from the packages' Debian copyright files: BSD-2-Clause (SoftHSM, with BSD-4-Clause, Expat, ISC and IBM notices for parts) and LGPL-2.1+ (OpenSC). Pinned as a testing download (pre-approved, user 2026-10-30)."
     },
     "openmls-crates": {
       "version": "0.9.2",

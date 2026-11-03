@@ -118,6 +118,13 @@ set(CRD_GNOME_KEYRING "$ENV{CRD_GNOME_KEYRING}" CACHE FILEPATH
 option(CRD_BUILD_TPM_VS_SWTPM "Test the TPM protector and device against the swtpm simulator (Linux)" OFF)
 set(CRD_SWTPM "$ENV{CRD_SWTPM}" CACHE FILEPATH
     "The pinned swtpm (scripts/install-swtpm.py), for the TPM protector's and device's tests")
+# The key store's PKCS #11 device against a PKCS #11 token (NET.2, decision K14): the pinned SoftHSM with OpenSC's
+# pkcs11-spy (tools/softhsm-linux-x64: scripts/install-softhsm.py, which prints the CRD_SOFTHSM this configure reads from
+# the environment), run by tests/foundation/crypto/pkcs11_token_session.py with a token of its own. Linux only, never
+# in a shipped build; the crd-crypto-pkcs11-softhsm CTest, locally and on the complete-tier linux-gcc-public-checks lane.
+option(CRD_BUILD_PKCS11_VS_SOFTHSM "Test the PKCS #11 key device against a SoftHSM token (Linux)" OFF)
+set(CRD_SOFTHSM "$ENV{CRD_SOFTHSM}" CACHE FILEPATH
+    "The pinned softhsm2-util (scripts/install-softhsm.py), for the PKCS #11 device's tests")
 # The nn board's same-format peer: ggml's Q8_0 linears (runtime/examples/bench_nn_q8_vs_ggml.c) against the pinned ggml
 # release (cmake/pins.json ggml, fetched on demand into build/_deps) built by its own CMake as a separate project at the
 # host's ISA. Local only on Linux, never in CI or a shipped build; scripts/run_bench_nn.sh builds and runs it.
@@ -613,8 +620,10 @@ crd_module(engine/foundation/compression engine/compression DEPENDS containers c
 # NET.2: the vetted provider (AWS-LC) behind crd-crypto's interface, TLS certificates compressed through the engine's
 # codecs, the key store's owner-only directory, lock and durable save through crd-platform; Wycheproof's, the MLS
 # working group's and the HPKE working group's post-quantum vectors are the tests' oracles, and the OpenSSL peer
-# decodes certificates with the pinned zstd; on Linux the TPM protector and device compile against tss2's headers
-crd_module(engine/foundation/crypto engine/crypto DEPENDS compression containers core platform PACKAGES aws-lc tpm2-tss
+# decodes certificates with the pinned zstd; on Linux the TPM protector and device compile against tss2's headers, and
+# the PKCS #11 key device against OASIS's on every platform
+crd_module(engine/foundation/crypto engine/crypto DEPENDS compression containers core platform
+    PACKAGES aws-lc tpm2-tss pkcs11
     TESTS foundation/crypto support/fuzz TEST_DEPENDS asset-io memory
     TEST_PACKAGES wycheproof mls-vectors hpke-pq-vectors zstd)
 crd_module(engine/foundation/net engine/net DEPENDS containers core TESTS foundation/net support/fuzz)
@@ -1188,6 +1197,14 @@ if("tpm2-tss" IN_LIST CRD_SELECTED_PACKAGES AND CMAKE_SYSTEM_NAME STREQUAL "Linu
     target_include_directories(tpm2-tss SYSTEM INTERFACE "${tpm2-tss_SOURCE_DIR}/include")
 endif()
 
+if("pkcs11" IN_LIST CRD_SELECTED_PACKAGES)
+    # The OASIS PKCS #11 3.2 headers (DOWNLOAD_ONLY, nothing built or linked): crd-crypto's PKCS #11 key device loads
+    # the module its caller names at run time (NET.2 decision K14), on every platform.
+    crd_add_pinned_package(pkcs11 DOWNLOAD_ONLY YES)
+    add_library(pkcs11 INTERFACE)
+    target_include_directories(pkcs11 SYSTEM INTERFACE "${pkcs11_SOURCE_DIR}/published/3-02")
+endif()
+
 if("stb" IN_LIST CRD_SELECTED_PACKAGES)
     # stb: single-header image/font/audio utilities (DOWNLOAD_ONLY — no cmake build).
     # Pin the previously checked-out revision: configure must not follow a moving branch.
@@ -1357,6 +1374,17 @@ if(CRD_BUILD_TPM_VS_SWTPM)
     if(NOT EXISTS "${CRD_SWTPM}")
         message(FATAL_ERROR "[tpm-vs-swtpm] CRD_SWTPM names no simulator: install the pinned swtpm with "
                             "scripts/install-swtpm.py and configure with the CRD_SWTPM it prints")
+    endif()
+endif()
+
+if(CRD_BUILD_PKCS11_VS_SOFTHSM)
+    if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+        message(FATAL_ERROR "[pkcs11-vs-softhsm] the PKCS #11 token tests need Linux, CRD_BUILD_TESTS and the crypto "
+                            "module")
+    endif()
+    if(NOT EXISTS "${CRD_SOFTHSM}")
+        message(FATAL_ERROR "[pkcs11-vs-softhsm] CRD_SOFTHSM names no softhsm2-util: install the pinned SoftHSM with "
+                            "scripts/install-softhsm.py and configure with the CRD_SOFTHSM it prints")
     endif()
 endif()
 

@@ -1,12 +1,12 @@
-// crd-crypto -- the key store (NET.2; docs/design/network-foundation.md#key-store, decisions K1 to K13): every kind
+// crd-crypto -- the key store (NET.2; docs/design/network-foundation.md#key-store, decisions K1 to K14): every kind
 // of key generated, imported, used, rotated, revoked and destroyed across reopenings; the master key replaced on
 // revocation so an earlier copy of the store no longer opens; an interrupted replacement completed by the next change;
 // every byte of a store file changed and refused; a damaged, truncated, older or substituted store refused; writers in
 // several threads ordered by the store's lock; a store erased; DPAPI and the TPM guarding the master key on Windows,
 // the Secret Service (under a pinned gnome-keyring, hidden from the default run) and the TPM through tss2 (under the
 // pinned swtpm: tpm_simulator_session.py) on Linux; a TLS credential from a stored signer; signature keys held in a
-// device (a simulated one everywhere, the TPM on Windows and Linux), signing their certificates and handshakes through
-// the provider's private-key method.
+// device (a simulated one everywhere, the TPM on Windows and Linux, a PKCS #11 token under the pinned SoftHSM:
+// pkcs11_token_session.py), signing their certificates and handshakes through the provider's private-key method.
 
 #include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
@@ -56,6 +56,22 @@ using Bytes = Array<u8>;
         return TpmConnection(StringView(tcti.data(), tcti.size()));
     }
     return TpmConnection();
+}
+
+// The PKCS #11 token the PKCS #11 cases reach: the module, token label and PIN pkcs11_token_session.py names in
+// CRD_PKCS11_MODULE, CRD_PKCS11_TOKEN and CRD_PKCS11_PIN (test values of a token made for the run); none otherwise.
+[[nodiscard]] Pkcs11Token test_pkcs11()
+{
+    String module;
+    String label;
+    String pin;
+    if (!crd::read_environment_text("CRD_PKCS11_MODULE", module) ||
+        !crd::read_environment_text("CRD_PKCS11_TOKEN", label) || !crd::read_environment_text("CRD_PKCS11_PIN", pin))
+    {
+        return Pkcs11Token();
+    }
+    return Pkcs11Token(StringView(module.data(), module.size()), StringView(label.data(), label.size()),
+                       ConstSpan<u8>(reinterpret_cast<const u8*>(pin.data()), pin.size()));
 }
 
 // A TPM reference's length and the positions of its parts: Windows' format, handle and wrapped key; Linux's format,
@@ -2262,4 +2278,236 @@ TEST_CASE("Key store: the TPM holds a store's signature keys and signs every han
     // Erasing the store deletes every TPM key it named: the last signer is Denied, and nothing is left behind.
     REQUIRE(store.erase() == CryptoError::None);
     CHECK(rotated.sign(ConstSpan<u8>(message), Span<u8>(out), length) == CryptoError::Denied);
+}
+
+TEST_CASE("Key store: the PKCS #11 device's contract", "[crypto][key-store]")
+{
+    const u8 pin[] = {'1', '2', '3', '4'};
+    // A token's fields, and every one out of range.
+    const Pkcs11Token named("libtoken.so", "cerid", ConstSpan<u8>(pin));
+    CHECK(named.usable());
+    CHECK(std::strcmp(named.module(), "libtoken.so") == 0);
+    CHECK(named.label() == StringView("cerid"));
+    CHECK(named.pin().size() == sizeof(pin));
+    CHECK(std::memcmp(named.pin().data(), pin, sizeof(pin)) == 0);
+    CHECK(Pkcs11Token("libtoken.so", "cerid", ConstSpan<u8>()).usable()); // a PIN pad's token
+    const String long_path(kPkcs11ModuleMaxBytes + 1U, 'm');
+    const String long_label(kPkcs11LabelBytes + 1U, 'l');
+    u8           long_pin[kPkcs11PinMaxBytes + 1U];
+    std::memset(long_pin, '7', sizeof(long_pin));
+    const char   embedded[] = {'l', 'i', 'b', '\0', 'x'};
+    CHECK(Pkcs11Token(StringView(long_path.data(), kPkcs11ModuleMaxBytes), "cerid", ConstSpan<u8>(pin)).usable());
+    CHECK_FALSE(Pkcs11Token(StringView(long_path.data(), long_path.size()), "cerid", ConstSpan<u8>(pin)).usable());
+    CHECK_FALSE(Pkcs11Token("", "cerid", ConstSpan<u8>(pin)).usable());
+    CHECK_FALSE(Pkcs11Token(StringView(embedded, sizeof(embedded)), "cerid", ConstSpan<u8>(pin)).usable());
+    CHECK(Pkcs11Token("libtoken.so", StringView(long_label.data(), kPkcs11LabelBytes), ConstSpan<u8>(pin)).usable());
+    CHECK_FALSE(
+        Pkcs11Token("libtoken.so", StringView(long_label.data(), long_label.size()), ConstSpan<u8>(pin)).usable());
+    CHECK_FALSE(Pkcs11Token("libtoken.so", "", ConstSpan<u8>(pin)).usable());
+    CHECK(Pkcs11Token("libtoken.so", "cerid", ConstSpan<u8>(long_pin, kPkcs11PinMaxBytes)).usable());
+    CHECK_FALSE(Pkcs11Token("libtoken.so", "cerid", ConstSpan<u8>(long_pin)).usable());
+    CHECK_FALSE(Pkcs11Token().usable());
+
+    // Every algorithm but ECDSA is refused before the token is asked, as are wrong lengths and references this device
+    // did not write; an unusable token, a module that is absent and a library that is no PKCS #11 module answer
+    // Unavailable.
+    const u8 store_id[kKeyStoreIdBytes] = {7, 7, 7};
+    u8       point[97];
+    u8       digest[48]    = {};
+    u8       signature[96] = {0x42};
+    Bytes    reference;
+#if CRD_OS_WINDOWS
+    const char* const not_pkcs11 = "kernel32.dll";
+#else
+    const char* const not_pkcs11 = "libc.so.6";
+#endif
+    const Pkcs11Token tokens[] = {Pkcs11Token(), Pkcs11Token("cerid-no-such-pkcs11-module", "cerid", ConstSpan<u8>(pin)),
+                                  Pkcs11Token(not_pkcs11, "cerid", ConstSpan<u8>(pin))};
+    for (const Pkcs11Token& token : tokens)
+    {
+        Pkcs11KeyDevice device(token);
+        CHECK(device.name() == StringView("pkcs11"));
+        CHECK_FALSE(Pkcs11KeyDevice::available(token));
+        CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::Ed25519, reference, Span<u8>(point, 32U)) ==
+              CryptoError::Unsupported);
+        CHECK(device.create(ConstSpan<u8>(store_id, 15U), AlgorithmId::EcdsaSecp256r1Sha256, reference,
+                            Span<u8>(point, 65U)) == CryptoError::BadLength);
+        CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference,
+                            Span<u8>(point, 97U)) == CryptoError::BadLength);
+        CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference,
+                            Span<u8>(point, 65U)) == CryptoError::Unavailable);
+        CHECK(reference.empty());
+        u8 foreign[17] = {1U, 1U};
+        CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign, 16U),
+                                 AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest, 32U),
+                                 Span<u8>(signature, 64U)) == CryptoError::Denied);
+        foreign[0] = 2U;
+        CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign), AlgorithmId::EcdsaSecp256r1Sha256,
+                                 ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Denied);
+        CHECK(signature[0] == 0U); // zeroed whatever the outcome
+        CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign), AlgorithmId::EcdsaSecp256r1Sha256,
+                                 ConstSpan<u8>(digest, 48U), Span<u8>(signature, 64U)) == CryptoError::BadLength);
+        CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign), AlgorithmId::EcdsaSecp384r1Sha384,
+                                 ConstSpan<u8>(digest, 48U), Span<u8>(signature, 64U)) == CryptoError::BadLength);
+        CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign), AlgorithmId::Ed25519,
+                                 ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Unsupported);
+        foreign[0] = 1U;
+        CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign), AlgorithmId::EcdsaSecp256r1Sha256,
+                                 ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Unavailable);
+        CHECK(device.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign, 16U)) == CryptoError::Denied);
+        CHECK(device.forget(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(foreign)) == CryptoError::Denied);
+        CHECK(device.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign)) == CryptoError::Unavailable);
+    }
+
+    // A store given an unreachable token fails a device key's generation (an absent device is not a curve it lacks,
+    // so HardwarePreferred does not hide it), while file keys are made as ever.
+    Pkcs11KeyDevice absent(tokens[1]);
+    TempStore       dir("pkcs11-device-unavailable");
+    TestProtector   protector;
+    KeyStore        store;
+    REQUIRE(store.create(dir.dir(), protector, &absent) == CryptoError::None);
+    CHECK(store.generate("p256", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwarePreferred, 1U) ==
+          CryptoError::Unavailable);
+    REQUIRE(store.generate("ed", AlgorithmId::Ed25519, PlacementRequest::HardwarePreferred, 1U) == CryptoError::None);
+    CHECK(info_of(store, "ed").placement == KeyPlacement::Software);
+}
+
+TEST_CASE("Key store: a PKCS #11 token holds a store's signature keys and signs every handshake", "[crypto][key-store]")
+{
+    if (!Pkcs11KeyDevice::available(test_pkcs11()))
+    {
+        // The token is the pinned SoftHSM's, made for the run by pkcs11_token_session.py (crd-crypto-pkcs11-softhsm).
+        SKIP("no PKCS #11 token named (CRD_PKCS11_MODULE, CRD_PKCS11_TOKEN, CRD_PKCS11_PIN)");
+    }
+    TempStore       dir("pkcs11-device");
+    TestProtector   protector;
+    Pkcs11KeyDevice token(test_pkcs11());
+    KeyStore        store;
+    REQUIRE(store.create(dir.dir(), protector, &token) == CryptoError::None);
+    const EraseOnExit erase_on_exit(store);
+    REQUIRE(store.generate("server", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwareRequired, 1U) ==
+            CryptoError::None);
+    CHECK(info_of(store, "server").placement == KeyPlacement::Hardware);
+    check_device_signs(store, "server");
+    REQUIRE(store.generate("p384", AlgorithmId::EcdsaSecp384r1Sha384, PlacementRequest::HardwareRequired, 1U) ==
+            CryptoError::None);
+    check_device_signs(store, "p384");
+
+    // The token signs a handshake through the private-key method.
+    StoredSigner signer;
+    REQUIRE(store.signer("server", signer) == CryptoError::None);
+    TlsCredential credential;
+    REQUIRE(credential.init(signer, "token.cerid.test") == TlsError::None);
+    const Handshake done = handshake(credential, nullptr);
+    CHECK(done.client == TlsState::Established);
+    CHECK(done.server == TlsState::Established);
+
+    // Several threads sign at once, each in a session of its own, under the user's one login.
+    std::thread        threads[3];
+    std::atomic<usize> valid{0U};
+    for (std::thread& thread : threads)
+    {
+        thread = std::thread(
+            [&]
+            {
+                for (usize i = 0U; i < 3U; ++i)
+                {
+                    u8       out[128];
+                    usize    length    = 0U;
+                    const u8 message[] = {'p', 'k', 'c', 's'};
+                    if (signer.sign(ConstSpan<u8>(message), Span<u8>(out), length) == CryptoError::None)
+                    {
+                        valid.fetch_add(1U);
+                    }
+                }
+            });
+    }
+    for (std::thread& thread : threads)
+    {
+        thread.join();
+    }
+    CHECK(valid.load() == 9U);
+
+    // The device binds each key to its store and its curve: a key's reference under another store's identifier, or
+    // for another curve, names nothing, and forgetting it there deletes nothing.
+    u8 store_id[kKeyStoreIdBytes];
+    u8 other[kKeyStoreIdBytes];
+    REQUIRE(random_bytes(Span<u8>(store_id)) == CryptoError::None);
+    REQUIRE(random_bytes(Span<u8>(other)) == CryptoError::None);
+    Bytes reference;
+    u8    point[65];
+    REQUIRE(token.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point)) ==
+            CryptoError::None);
+    const ForgetOnExit  forget_on_exit(token, ConstSpan<u8>(store_id), reference);
+    const ConstSpan<u8> named(reference.data(), reference.size());
+    CHECK(reference.size() == 17U);
+    CHECK(point[0] == 0x04U);
+    u8 digest[48] = {0x5A};
+    u8 raw[96];
+    CHECK(token.sign_digest(ConstSpan<u8>(other), named, AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest, 32U),
+                            Span<u8>(raw, 64U)) == CryptoError::Denied);
+    CHECK(token.sign_digest(ConstSpan<u8>(store_id), named, AlgorithmId::EcdsaSecp384r1Sha384, ConstSpan<u8>(digest),
+                            Span<u8>(raw)) == CryptoError::Denied);
+    CHECK(token.sign_digest(ConstSpan<u8>(store_id), named, AlgorithmId::EcdsaSecp256r1Sha256,
+                            ConstSpan<u8>(digest, 32U), Span<u8>(raw, 64U)) == CryptoError::None);
+    // The signature is r || s under the point the device gave out.
+    {
+        bssl::UniquePtr<EC_KEY> key(EC_KEY_new_by_curve_name(NID_X9_62_prime256v1));
+        REQUIRE(key);
+        bssl::UniquePtr<EC_POINT> q(EC_POINT_new(EC_KEY_get0_group(key.get())));
+        REQUIRE(q);
+        REQUIRE(EC_POINT_oct2point(EC_KEY_get0_group(key.get()), q.get(), point, sizeof(point), nullptr) == 1);
+        REQUIRE(EC_KEY_set_public_key(key.get(), q.get()) == 1);
+        bssl::UniquePtr<ECDSA_SIG> sig(ECDSA_SIG_new());
+        REQUIRE(sig);
+        BIGNUM* r = BN_bin2bn(raw, 32U, nullptr);
+        BIGNUM* s = BN_bin2bn(raw + 32U, 32U, nullptr);
+        REQUIRE(ECDSA_SIG_set0(sig.get(), r, s) == 1);
+        CHECK(ECDSA_do_verify(digest, 32U, sig.get(), key.get()) == 1);
+    }
+    CHECK(token.forget(ConstSpan<u8>(other), named) == CryptoError::None); // names nothing: nothing to delete
+    CHECK(token.sign_digest(ConstSpan<u8>(store_id), named, AlgorithmId::EcdsaSecp256r1Sha256,
+                            ConstSpan<u8>(digest, 32U), Span<u8>(raw, 64U)) == CryptoError::None);
+    CHECK(token.forget(ConstSpan<u8>(store_id), named) == CryptoError::None);
+    CHECK(token.sign_digest(ConstSpan<u8>(store_id), named, AlgorithmId::EcdsaSecp256r1Sha256,
+                            ConstSpan<u8>(digest, 32U), Span<u8>(raw, 64U)) == CryptoError::Denied);
+    CHECK(token.forget(ConstSpan<u8>(store_id), named) == CryptoError::None); // forgotten already
+
+    // Revoking generation 1 destroys its token key: the earlier signer, which still names it, is Denied.
+    StoredSigner rotated;
+    REQUIRE(store.rotate("server", 2U) == CryptoError::None);
+    REQUIRE(store.signer("server", rotated) == CryptoError::None);
+    REQUIRE(store.revoke("server", 1U, 3U) == CryptoError::None);
+    u8       out[128];
+    usize    length    = 0U;
+    const u8 message[] = {'g', 'o', 'n', 'e'};
+    CHECK(signer.sign(ConstSpan<u8>(message), Span<u8>(out), length) == CryptoError::Denied);
+    CHECK(rotated.sign(ConstSpan<u8>(message), Span<u8>(out), length) == CryptoError::None);
+    // Erasing the store destroys every token key it named (pkcs11_token_session.py then finds no object left).
+    REQUIRE(store.erase() == CryptoError::None);
+    CHECK(rotated.sign(ConstSpan<u8>(message), Span<u8>(out), length) == CryptoError::Denied);
+}
+
+TEST_CASE("Key store: a refused PIN is tried once", "[.pkcs11-wrong-pin]")
+{
+    // pkcs11_token_session.py names the token with a wrong PIN and counts the logins its spy records: exactly one.
+    Pkcs11KeyDevice token(test_pkcs11());
+    REQUIRE(Pkcs11KeyDevice::available(test_pkcs11()));
+    const u8 store_id[kKeyStoreIdBytes] = {9, 9};
+    Bytes    reference;
+    u8       point[65];
+    CHECK(token.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point)) ==
+          CryptoError::Denied);
+    CHECK(token.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point)) ==
+          CryptoError::Denied);
+    u8       named[17] = {1U, 2U};
+    const u8 digest[32] = {};
+    u8       raw[64];
+    CHECK(token.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp256r1Sha256,
+                            ConstSpan<u8>(digest), Span<u8>(raw)) == CryptoError::Denied);
+    CHECK(token.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(named)) == CryptoError::Denied);
+    // A copy of the device carries the refusal with it.
+    const Pkcs11KeyDevice copy(token);
+    CHECK(copy.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp256r1Sha256,
+                           ConstSpan<u8>(digest), Span<u8>(raw)) == CryptoError::Denied);
 }

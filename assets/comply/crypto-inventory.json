@@ -8,6 +8,7 @@
       "title": "The relocatable Cerid package: the engine libraries cmake --install exports as Cerid:: targets",
       "packages": [
         "aws-lc",
+        "pkcs11",
         "tpm2-tss",
         "zstd"
       ],
@@ -60,6 +61,16 @@
             "confidentiality"
           ],
           "spec": "https://trustedcomputinggroup.org/resource/tpm-library-specification/",
+          "standard": true
+        },
+        {
+          "id": "oasis.pkcs11",
+          "kind": "protocol",
+          "owner": "crypto",
+          "functions": [
+            "integrity"
+          ],
+          "spec": "https://docs.oasis-open.org/pkcs11/pkcs11-spec/v3.2/os/pkcs11-spec-v3.2-os.html",
           "standard": true
         },
         {

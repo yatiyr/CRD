@@ -185,6 +185,19 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Retirement | When `unlisted_package_extensions` fails because none of eight packages as MLSpp makes them carries an unlisted type (a newer pin), this entry and the peer's adaptation are removed |
 | Row | [NET.2](ROADMAP.md#slice-net.2); evidence [the OpenMLS interop session](sessions/2026-11-02-net-2-mls-interop-openmls.md) |
 
+<a id="tp-12"></a>
+## TP-12: OpenSC's pkcs11-spy loses 16 bytes in C_GetFunctionList
+
+| Field | Value |
+|---|---|
+| Component | OpenSC 0.25.0~rc1-1ubuntu0.2's `pkcs11-spy.so` (`cmake/pins.json` `softhsm-linux-x64`, Ubuntu 24.04's opensc-pkcs11 package), a testing instrument that records the PKCS #11 calls it passes to another module |
+| Symptom | LeakSanitizer reports a direct leak of 16 bytes `calloc`ed inside the spy's `C_GetFunctionList`, in any process that loads it and does not finalise it |
+| Reproduction outside Cerid | A C program built with `-fsanitize=address` that `dlopen`s the pinned `pkcs11-spy.so` (PKCS11SPY naming the pinned SoftHSM module), calls its `C_GetFunctionList` once and exits: the same 16-byte direct leak, its stack in the spy alone; the same program on `libsofthsm2.so` reports none ([session](sessions/2026-11-03-net-2-pkcs11-device.md#tp-12)) |
+| Affected | No hosted test: `crd-crypto-pkcs11-softhsm` runs on linux-gcc-public-checks, which has no sanitizer. Its `[.pkcs11-wrong-pin]` step through the spy, run by hand on linux-gcc-asan, reports the leak at exit; its `[key-store]` step, which loads SoftHSM directly, is clean there |
+| Engine handling | None is needed: the PKCS #11 device keeps a module initialised for the process by design (K14) and holds the function list the module returns; the leaked block is the spy's own, never handed to Cerid |
+| Retirement | When the reproduction reports no leak for a newer pinned OpenSC, this entry is removed |
+| Row | [NET.2](ROADMAP.md#slice-net.2); evidence [the PKCS #11 device session](sessions/2026-11-03-net-2-pkcs11-device.md) |
+
 ## The registered-failure gate
 
 `scripts/check-registered-failures.py --lane <preset> --junit <ctest --output-junit file> --ctest-exit <code>` reads

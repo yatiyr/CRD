@@ -24,8 +24,8 @@ HELPERS = ('cmake/CPM.cmake', 'scripts/install-vulkan-sdk.py', 'scripts/install-
            'scripts/install-mold.py', 'scripts/install-genmc.py', 'scripts/install-clang-build-analyzer.py',
            'scripts/install-clang-tidy.py', 'scripts/install-ninja.py', 'scripts/install-sde.py',
            'scripts/install-node.py', 'scripts/install-cuda.py', 'scripts/install-rust.py',
-           'scripts/install-gnome-keyring.py', 'scripts/install-swtpm.py', 'scripts/ubuntu_packages.py',
-           'scripts/msvc-dev-env.py', 'scripts/pins.py')
+           'scripts/install-gnome-keyring.py', 'scripts/install-swtpm.py', 'scripts/install-softhsm.py',
+           'scripts/ubuntu_packages.py', 'scripts/msvc-dev-env.py', 'scripts/pins.py')
 SCHEMA = 'cerid-pins/1'
 HEX64 = re.compile(r'^[0-9a-f]{64}$')
 HEX40 = re.compile(r'^[0-9a-f]{40}$')

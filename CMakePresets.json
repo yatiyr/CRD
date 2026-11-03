@@ -322,7 +322,8 @@
                 "CRD_BUILD_MLS_VS_MLSPP": "ON",
                 "CRD_BUILD_MLS_VS_OPENMLS": "ON",
                 "CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING": "ON",
-                "CRD_BUILD_TPM_VS_SWTPM": "ON"
+                "CRD_BUILD_TPM_VS_SWTPM": "ON",
+                "CRD_BUILD_PKCS11_VS_SOFTHSM": "ON"
             }
         },
         {

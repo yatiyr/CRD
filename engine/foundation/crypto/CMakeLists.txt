@@ -45,6 +45,9 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_include_directories(crd-crypto SYSTEM PRIVATE "$<TARGET_PROPERTY:tpm2-tss,INTERFACE_INCLUDE_DIRECTORIES>")
 endif()
 
+# NET.2 decision K14: the PKCS #11 key device compiles against OASIS's headers alone (the module is loaded at run time)
+target_include_directories(crd-crypto SYSTEM PRIVATE "$<TARGET_PROPERTY:pkcs11,INTERFACE_INCLUDE_DIRECTORIES>")
+
 target_compile_features(crd-crypto PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-crypto)
 

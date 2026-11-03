@@ -211,6 +211,16 @@ if(CRD_BUILD_TPM_VS_SWTPM)
     message(STATUS "[tpm-vs-swtpm] the TPM protector and device against ${CRD_SWTPM}")
 endif()
 
+# Against the pinned SoftHSM (CRD_BUILD_PKCS11_VS_SOFTHSM): crd-crypto-tests' key store cases with the PKCS #11 device
+# reaching a token of its own (pkcs11_token_session.py), which must be left empty, then a wrong PIN tried once.
+if(CRD_BUILD_PKCS11_VS_SOFTHSM)
+    add_test(NAME crd-crypto-pkcs11-softhsm
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/pkcs11_token_session.py"
+                     --softhsm "${CRD_SOFTHSM}" -- "$<TARGET_FILE:crd-crypto-tests>")
+    set_tests_properties(crd-crypto-pkcs11-softhsm PROPERTIES TIMEOUT 1200 LABELS "crypto;pkcs11")
+    message(STATUS "[pkcs11-vs-softhsm] the PKCS #11 device against ${CRD_SOFTHSM}")
+endif()
+
 # Against OpenMLS (CRD_BUILD_MLS_VS_OPENMLS): crd-openmls-peer's members over OpenMLS, a Cargo package linted by
 # Clippy and built with the pinned Rust toolchain (CRD_CARGO) by `cargo build --locked`, so every crate is the one
 # Cargo.lock names, verified by its SHA-256; CARGO_HOME (the crate downloads) and the target directory stay inside this

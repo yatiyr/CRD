@@ -36,6 +36,9 @@ inline constexpr usize kKeyPrivateMaxBytes    = 64U; // the longest private inpu
 inline constexpr usize kKeyDeviceReferenceMaxBytes = kKeyPrivateMaxBytes; // what names a device's key
 inline constexpr usize kDevicePublicKeyMaxBytes    = 97U; // the longest device key's public key: a P-384 point
 inline constexpr usize kTpmTctiMaxBytes            = 255U; // the longest tss2 TCTI configuration a TPM takes
+inline constexpr usize kPkcs11ModuleMaxBytes       = 1023U; // the longest path of a PKCS #11 module
+inline constexpr usize kPkcs11LabelBytes           = 32U;   // a PKCS #11 token's label (CK_TOKEN_INFO)
+inline constexpr usize kPkcs11PinMaxBytes          = 128U;  // the longest PIN a token is opened with
 
 // What guards a store's master key, weakest first (decision K2).
 enum class KeyProtection : u8
@@ -226,6 +229,65 @@ public:
 
 private:
     TpmConnection m_tpm;
+};
+
+// A PKCS #11 token (decision K14): its module, the path of the library a token's vendor ships (libsofthsm2.so,
+// opensc-pkcs11.so, an HSM's), loaded at run time; the label C_InitToken gave it (1 to kPkcs11LabelBytes bytes,
+// matched against every present token's blank-padded label: exactly one must match); and the user PIN, empty only for
+// a token with a protected authentication path (a PIN pad). The PIN is held in fixed storage and zeroed with the
+// object. Unusable, so every call through it answers Unavailable, when a field is out of range.
+class Pkcs11Token
+{
+public:
+    Pkcs11Token() noexcept = default; // names no token
+    Pkcs11Token(cont::StringView module, cont::StringView label, cont::ConstSpan<u8> pin) noexcept;
+    Pkcs11Token(const Pkcs11Token& other) noexcept            = default;
+    Pkcs11Token& operator=(const Pkcs11Token& other) noexcept = default;
+    ~Pkcs11Token() noexcept;
+
+    [[nodiscard]] const char*         module() const noexcept { return m_module; } // zero-terminated
+    [[nodiscard]] cont::StringView    label() const noexcept { return cont::StringView(m_label, m_label_bytes); }
+    [[nodiscard]] cont::ConstSpan<u8> pin() const noexcept { return cont::ConstSpan<u8>(m_pin, m_pin_bytes); }
+    [[nodiscard]] bool                usable() const noexcept { return m_usable; }
+
+private:
+    char  m_module[kPkcs11ModuleMaxBytes + 1U] = {};
+    char  m_label[kPkcs11LabelBytes]           = {};
+    u8    m_pin[kPkcs11PinMaxBytes]            = {};
+    usize m_label_bytes                        = 0U;
+    usize m_pin_bytes                          = 0U;
+    bool  m_usable                             = false;
+};
+
+// A PKCS #11 token as a key device (decision K14): "pkcs11". Each key is a sign-only ECDSA P-256 or P-384 pair the
+// token generates (private: token, private, sensitive, never extractable), its CKA_ID a random 16-byte handle and its
+// CKA_LABEL naming the store, so a reference finds a key only under its own store's identifier (the reference: a
+// format byte and the handle). A signature finds the private key by handle, label and curve and signs the digest with
+// CKM_ECDSA; forgetting destroys both halves. Every call runs under one process-wide lock (a token runs one command at
+// a time) in a session of its own, logging the user in when no session of the process has; a token is never logged
+// out, since that would log out every session of the process, and closes its login with its last session. A refused
+// PIN is tried once per device: every later call through it answers Denied without a login, as does a token that
+// reports its PIN locked, on its final try or due for a change, so the device never spends a token's last attempt.
+// Unsupported when the token lacks EC key generation, ECDSA or the curve, or refuses a sign-only, non-extractable key;
+// Unavailable when the module or the token cannot be reached. available() is whether the token answers now.
+class Pkcs11KeyDevice final : public KeyDevice
+{
+public:
+    explicit Pkcs11KeyDevice(const Pkcs11Token& token) noexcept : m_token(token) {}
+
+    [[nodiscard]] static bool available(const Pkcs11Token& token) noexcept;
+
+    [[nodiscard]] cont::StringView name() const noexcept override;
+    [[nodiscard]] CryptoError      create(cont::ConstSpan<u8> store_id, AlgorithmId algorithm, cont::Array<u8>& reference,
+                                          cont::Span<u8> public_key) noexcept override;
+    [[nodiscard]] CryptoError      sign_digest(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference,
+                                               AlgorithmId algorithm, cont::ConstSpan<u8> digest,
+                                               cont::Span<u8> signature) const noexcept override;
+    [[nodiscard]] CryptoError forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference) noexcept override;
+
+private:
+    Pkcs11Token  m_token;
+    mutable bool m_pin_refused = false; // under the process-wide PKCS #11 lock
 };
 
 enum class KeyKind : u8
