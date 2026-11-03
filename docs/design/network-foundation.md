@@ -2022,7 +2022,8 @@ Decisions (numbered for the tests and the fuzz oracle):
 - **The issue ceremony** is the key holders' act, never an agent's: the post-quantum key (ML-DSA-65; no token holds
   one, so it is a key store file key on an offline machine under a hardware protector) and the traditional key
   (ECDSA P-256 in a TPM or a PKCS #11 token, decision K12/K14) sign the rendered body, and the trust set and the
-  signed generation are committed beside the source.
+  signed generation are committed beside the source with the bootstrap header regenerated from them
+  (`python scripts/gen-policy-bootstrap.py`, then `python scripts/check-generated.py --refresh` on it; S24).
 
 Evidence: `test_ceridc_policy.cpp` (generation 1's rules and dates decoded from signed bytes; the hybrid pair's
 signatures judged current, in grace, expired, not yet issued and rolled back; a missing and a forged signature; a
@@ -2048,6 +2049,42 @@ protector), `test_register_ids.cpp` (every name present and distinct).
 Evidence: `test_policy.cpp` "a store starts from the persisted generation, then the bootstrap" (a fresh install, a
 floor above the bootstrap, the same generation twice, a newer bootstrap, a damaged persisted file, neither usable and
 nothing held).
+
+<a id="policy-state"></a>
+**S24. An installation's saved state and the build's bootstrap** (NET.2, threats T04 and T19; 2026-11-03).
+
+- **The bootstrap** is generated, never hand-written: `scripts/gen-policy-bootstrap.py` embeds the trust set
+  (`trust-set.toml`) and the newest `generation-<N>.policy` in `assets/crypto-policy/` as constexpr data
+  (`policy_bootstrap()`, [policy_state.hpp](../../engine/foundation/crypto/include/crd/crypto/policy_state.hpp)); the
+  `crd-crypto-policy-bootstrap-drift` CTest and `check-generated.py` hold the header to its inputs. Both stay empty
+  until the issue ceremony (S22) commits them, and a build without a trust set refuses every algorithm (fail closed).
+  The generator copies bytes and computes key identifiers only; crd-crypto's decoder stays the one reader (S22), and
+  `crd-crypto-tests` verifies every embedded generation under its trust set, the populated shape every lane through a
+  test trust set and generation 1 that `ceridc policy key`, `sign` and `assemble` made.
+- **The saved state** is one durable file in the installation's private directory (`policy-state`,
+  [durable_file.hpp](../../engine/foundation/platform/include/crd/platform/durable_file.hpp): checked, atomic, one
+  older save kept): format 1, the floor, the newest accepted generation. `PolicyInstallation::open` raises the store's
+  floor to the saved one (`PolicyStore::raise_floor`), then starts it from the saved generation and the bootstrap
+  (S23) and saves when the generation or the floor changed or the newest save was damaged. So a saved floor outlives
+  an expired generation: an older bootstrap cannot roll the installation back.
+- **Several processes** of one installation share it: every read and save runs under the directory's lock, and
+  `apply` first catches up with the floor and generation another process saved.
+- **Damage and failure.** A damaged newest save falls back to the older one (a bounded rollback within the
+  installation's own history); every save damaged, or a payload this build does not read, is read as none and the
+  bootstrap is saved over it. Write access to the installation's own directory is outside T19's boundary (it can
+  delete the file, which is a fresh install): what it can reach is the bootstrap, a signed generation within its own
+  dates. A save that fails keeps the adopted generation for the run and is reported (`Unsaved`); a restart starts from
+  the older save until the update channel delivers the generation again.
+- **Placement:** crd-crypto, beside `PolicyStore` and the key store's durable-file pattern; `PolicyStore` itself stays
+  free of I/O, so `ceridc policy verify` judges with the same code. Sessions take the installation's store when 4.2a
+  brings crd-net its transport.
+
+Evidence: `test_policy.cpp` (a raised floor; an installation saved, restarted and superseded by a newer bootstrap; two
+processes sharing a floor; a saved floor outliving an expired generation; the older save recovered, every save
+damaged, four unreadable payloads and a floor-only one; no directory, a file in its place and a state file that cannot
+be replaced; the test bootstrap verified under the provider and a forged signature refused; the build's empty
+bootstrap refusing everything), `test-repository-tools.py` `PolicyBootstrapHeaders` (the empty, trust-only and newest
+generation shapes, drift and every refused input).
 
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers
