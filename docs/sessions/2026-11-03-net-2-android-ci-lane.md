@@ -1,4 +1,7 @@
-# NET.2: the android job on the own CI
+# 2026-11-03: NET.2, the android job on the own CI (Track C batch 73)
+
+<!-- doc-role: evidence -->
+> Dated evidence; no live status. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 Date: 2026-11-03. Row: [NET.2](../ROADMAP.md#slice-net.2). Commit: 26c32908 (fix(ci)).
 
