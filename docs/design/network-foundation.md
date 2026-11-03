@@ -381,9 +381,9 @@ holds ECDSA. The decisions (numbered for the tests):
   operating system's per-user vault) or `Hardware` (sealed to a device). `PlatformKeyProtector` is DPAPI on Windows:
   user scope, `CRYPTPROTECT_UI_FORBIDDEN`, its entropy the label "cerid key store master 1" and the store's
   identifier, so a reference recovers only in its own store and only for its user; DPAPI cannot forget. On Linux it is
-  the Secret Service (K10), which can. `TpmKeyProtector` is `Hardware` protection (K11 on Windows, K13 on Linux); the
-  Keychain (macOS) is the next platform protector. On a platform without one a protector answers `Unavailable`, and the store is never
-  written unprotected.
+  the Secret Service (K10), which can, and on Android the Android Keystore (K15), which can too. `TpmKeyProtector` is
+  `Hardware` protection (K11 on Windows, K13 on Linux); the Keychain (macOS) is the next platform protector. On a
+  platform without one a protector answers `Unavailable`, and the store is never written unprotected.
 - **K3. One sealed file.** A store is a directory created owner-only (`create_private_directory`: mode 0700, or a
   protected DACL with one inheritable entry for the user) holding the file `keys`, a durable save of crd-platform
   (atomic replace, envelope checksums, no older generation kept so an erased key is not kept either), and the lock
@@ -555,6 +555,22 @@ holds ECDSA. The decisions (numbered for the tests):
   and P-384 keys, a TLS handshake, three concurrent signers, the store and curve bindings, revocation and erasure. The
   token must hold no object afterwards. A wrong PIN is then recorded by OpenSC's pkcs11-spy as exactly one refused
   `C_Login`.
+- **K15. The Android Keystore.** `PlatformKeyProtector` and `PlatformKeyDevice` are "android-keystore" on Android
+  (2026-11-03, the user's order that NET.2 proves them in the emulator). The Keystore is a Java API, so crd-crypto calls
+  it through the application's own Java VM: `JNI_GetCreatedJavaVMs` from libnativehelper (public NDK from API 31,
+  loaded at run time), the calling thread attached for the call when it is not and detached after, every local
+  reference in the call's frame, every Java exception cleared where it is raised (an `AEADBadTagException`,
+  `UnrecoverableKeyException` or `InvalidKeyException` is `Denied`, any other `Unavailable`). A process without a VM (a
+  plain executable) answers `Unavailable`. Each master key gets its own non-exportable AES-256-GCM key (encrypt and
+  decrypt only, the Keystore choosing every nonce) under the alias "cerid.master." and the store's identifier and a
+  random handle in hexadecimal; the associated data is "cerid key store master 1" and the store's identifier. The
+  reference is a format byte, the handle, the 12-byte nonce and the 48-byte wrapped key (77 bytes); forgetting deletes
+  the alias. A device key is a sign-only ECDSA pair (`DIGEST_NONE`: the store hashes) under "cerid.p256." or
+  "cerid.p384.", the store's identifier and a handle, so a key of the other curve or store is never found; its public
+  key is read from its X.509 SubjectPublicKeyInfo and its DER signatures become r || s (`ecdsa_public_of_spki`,
+  `ecdsa_raw_of`). Keys are made in StrongBox where the device has one (AES and P-256; StrongBox holds no P-384 key)
+  and in the TEE when it answers `StrongBoxUnavailableException`. The master key crosses into a Java byte array for one
+  call and is overwritten there before it returns.
 
 Evidence (2026-11-02, [session](../sessions/2026-11-02-net-2-key-store.md)): `test_key_store.cpp` (12 cases: every kind
 of key through its whole life, every refusal, every changed byte of a store, an older and a substituted store, writers

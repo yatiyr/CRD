@@ -11,7 +11,8 @@
 # public key encryption (hpke.hpp) and MLS (mls.hpp, its messages in mls_message.hpp, its ratchet tree in mls_tree.hpp
 # and its groups, proposals and commits in mls_group.hpp) and the key store (key_store.hpp: the sealed store of
 # long-term keys and shared secrets, its master key guarded by DPAPI or the TPM on Windows, the Secret Service or the
-# TPM on Linux (libdbus-1 and tss2 loaded at run time) or the application's protector). Contract:
+# TPM on Linux (libdbus-1 and tss2 loaded at run time), the Android Keystore on Android (through the application's
+# Java VM) or the application's protector). Contract:
 # docs/design/network-foundation.md#crypto, #agility, #policy-state, #provider, #key-store, #tls-sessions,
 # #quic-protection, #capability-tokens, #anti-replay, #early-data, #message-schemas, #hpke and #mls.
 

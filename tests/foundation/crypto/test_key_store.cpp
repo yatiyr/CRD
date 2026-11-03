@@ -1140,12 +1140,18 @@ TEST_CASE("Key store: the operating system's protector", "[crypto][key-store]")
     TestProtector stranger(true, "test");
     CHECK(reopened.open(dir.dir(), stranger) == CryptoError::Unsupported);
 #else
-    // A well-formed Secret Service reference (its format byte, then a handle), so only the vault can answer.
+    // A well-formed reference (its format byte, then a handle; on Android also the Keystore's nonce and the wrapped
+    // key), so only the vault can answer.
     Bytes reference;
-    reference.resize(1U + kKeyStoreIdBytes);
+    reference.resize(CRD_OS_ANDROID ? 1U + kKeyStoreIdBytes + 12U + kKeyStoreMasterBytes + 16U : 1U + kKeyStoreIdBytes);
     std::memset(reference.data(), 0x11, reference.size());
     reference[0] = 1U;
-#if CRD_OS_LINUX && !CRD_OS_ANDROID
+#if CRD_OS_ANDROID
+    // A plain executable has no Java VM, so the Keystore cannot be reached: every call is Unavailable. The Keystore
+    // itself is proven in an application process (the operating system's key device test below).
+    CHECK(platform.name() == StringView("android-keystore"));
+    CHECK(platform.forgets());
+#elif CRD_OS_LINUX
     // Without a session bus the Secret Service cannot be reached: every call is Unavailable. The vault itself is
     // proven under a pinned gnome-keyring ([secret-service], the crd-crypto-secret-service CTests).
     CHECK(platform.name() == StringView("secret-service"));
@@ -1889,6 +1895,25 @@ void check_device_signs(const KeyStore& store, StringView name)
     CHECK(signer.info().placement == KeyPlacement::Hardware);
     check_signs(store, name);
 }
+
+// Whether a device's r || s is a valid signature of `digest` under the uncompressed point it gave out.
+[[nodiscard]] bool raw_ecdsa_valid(AlgorithmId algorithm, ConstSpan<u8> point, ConstSpan<u8> digest, ConstSpan<u8> raw)
+{
+    const int nid = algorithm == AlgorithmId::EcdsaSecp256r1Sha256 ? NID_X9_62_prime256v1 : NID_secp384r1;
+    const usize field = raw.size() / 2U;
+    bssl::UniquePtr<EC_KEY> key(EC_KEY_new_by_curve_name(nid));
+    REQUIRE(key);
+    bssl::UniquePtr<EC_POINT> q(EC_POINT_new(EC_KEY_get0_group(key.get())));
+    REQUIRE(q);
+    REQUIRE(EC_POINT_oct2point(EC_KEY_get0_group(key.get()), q.get(), point.data(), point.size(), nullptr) == 1);
+    REQUIRE(EC_KEY_set_public_key(key.get(), q.get()) == 1);
+    bssl::UniquePtr<ECDSA_SIG> sig(ECDSA_SIG_new());
+    REQUIRE(sig);
+    BIGNUM* r = BN_bin2bn(raw.data(), field, nullptr);
+    BIGNUM* s = BN_bin2bn(raw.data() + field, field, nullptr);
+    REQUIRE(ECDSA_SIG_set0(sig.get(), r, s) == 1);
+    return ECDSA_do_verify(digest.data(), digest.size(), sig.get(), key.get()) == 1;
+}
 } // namespace
 
 TEST_CASE("Key store: device keys by placement, with their fallbacks and refusals", "[crypto][key-store]")
@@ -2469,20 +2494,8 @@ TEST_CASE("Key store: a PKCS #11 token holds a store's signature keys and signs 
     CHECK(token.sign_digest(ConstSpan<u8>(store_id), named, AlgorithmId::EcdsaSecp256r1Sha256,
                             ConstSpan<u8>(digest, 32U), Span<u8>(raw, 64U)) == CryptoError::None);
     // The signature is r || s under the point the device gave out.
-    {
-        bssl::UniquePtr<EC_KEY> key(EC_KEY_new_by_curve_name(NID_X9_62_prime256v1));
-        REQUIRE(key);
-        bssl::UniquePtr<EC_POINT> q(EC_POINT_new(EC_KEY_get0_group(key.get())));
-        REQUIRE(q);
-        REQUIRE(EC_POINT_oct2point(EC_KEY_get0_group(key.get()), q.get(), point, sizeof(point), nullptr) == 1);
-        REQUIRE(EC_KEY_set_public_key(key.get(), q.get()) == 1);
-        bssl::UniquePtr<ECDSA_SIG> sig(ECDSA_SIG_new());
-        REQUIRE(sig);
-        BIGNUM* r = BN_bin2bn(raw, 32U, nullptr);
-        BIGNUM* s = BN_bin2bn(raw + 32U, 32U, nullptr);
-        REQUIRE(ECDSA_SIG_set0(sig.get(), r, s) == 1);
-        CHECK(ECDSA_do_verify(digest, 32U, sig.get(), key.get()) == 1);
-    }
+    CHECK(raw_ecdsa_valid(AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(point), ConstSpan<u8>(digest, 32U),
+                          ConstSpan<u8>(raw, 64U)));
     CHECK(token.forget(ConstSpan<u8>(other), named) == CryptoError::None); // names nothing: nothing to delete
     CHECK(token.sign_digest(ConstSpan<u8>(store_id), named, AlgorithmId::EcdsaSecp256r1Sha256,
                             ConstSpan<u8>(digest, 32U), Span<u8>(raw, 64U)) == CryptoError::None);
@@ -2528,4 +2541,176 @@ TEST_CASE("Key store: a refused PIN is tried once", "[.pkcs11-wrong-pin]")
     const Pkcs11KeyDevice copy(token);
     CHECK(copy.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp256r1Sha256,
                            ConstSpan<u8>(digest), Span<u8>(raw)) == CryptoError::Denied);
+}
+
+TEST_CASE("Key store: the operating system's key device's contract", "[crypto][key-store]")
+{
+    PlatformKeyDevice device;
+    const u8 store_id[kKeyStoreIdBytes] = {7, 7, 7};
+    u8 point[97] = {0x42};
+    u8 digest[48] = {};
+    u8 signature[96] = {0x42};
+    u8 named[17] = {1U, 1U};
+    Bytes reference;
+    reference.push_back(1U);
+    CHECK_FALSE(PlatformKeyDevice::available()); // no Java VM in a plain executable, and no such device elsewhere
+#if CRD_OS_ANDROID
+    // Every algorithm but ECDSA is refused before the Keystore is asked, as are wrong lengths and references this
+    // device did not write; then, without a VM, every call answers Unavailable.
+    CHECK(device.name() == StringView("android-keystore"));
+    CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::Ed25519, reference, Span<u8>(point, 32U)) ==
+          CryptoError::Unsupported);
+    CHECK(reference.empty());
+    CHECK(device.create(ConstSpan<u8>(store_id, 15U), AlgorithmId::EcdsaSecp256r1Sha256, reference,
+                        Span<u8>(point, 65U)) == CryptoError::BadLength);
+    CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point)) ==
+          CryptoError::BadLength);
+    point[0] = 0x42U;
+    CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp384r1Sha384, reference, Span<u8>(point)) ==
+          CryptoError::Unavailable);
+    CHECK(point[0] == 0U);
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named, 16U), AlgorithmId::EcdsaSecp256r1Sha256,
+                             ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Denied);
+    named[0] = 2U;
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp256r1Sha256,
+                             ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Denied);
+    named[0] = 1U;
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp256r1Sha256,
+                             ConstSpan<u8>(digest, 48U), Span<u8>(signature, 64U)) == CryptoError::BadLength);
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::Ed25519,
+                             ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Unsupported);
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp384r1Sha384,
+                             ConstSpan<u8>(digest), Span<u8>(signature)) == CryptoError::Unavailable);
+    CHECK(device.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(named, 16U)) == CryptoError::Denied);
+    CHECK(device.forget(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(named)) == CryptoError::Denied);
+    CHECK(device.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(named)) == CryptoError::Unavailable);
+#else
+    CHECK(device.name() == StringView("unavailable"));
+    CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point, 65U)) ==
+          CryptoError::Unavailable);
+    CHECK(reference.empty());
+    CHECK(point[0] == 0U);
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp256r1Sha256,
+                             ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Unavailable);
+    CHECK(device.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(named)) == CryptoError::Unavailable);
+#endif
+    CHECK(signature[0] == 0U); // zeroed whatever the outcome
+
+    // A store given the device fails a device key's generation, while file keys are made as ever.
+    TempStore dir("platform-device-unavailable");
+    TestProtector protector;
+    KeyStore store;
+    REQUIRE(store.create(dir.dir(), protector, &device) == CryptoError::None);
+    CHECK(store.generate("p256", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwarePreferred, 1U) ==
+          CryptoError::Unavailable);
+    REQUIRE(store.generate("ed", AlgorithmId::Ed25519, PlacementRequest::HardwarePreferred, 1U) == CryptoError::None);
+    CHECK(info_of(store, "ed").placement == KeyPlacement::Software);
+}
+
+TEST_CASE("Key store: the Android Keystore guards a master key and holds a store's signature keys",
+          "[crypto][key-store]")
+{
+    if (!PlatformKeyDevice::available())
+    {
+        // Only an Android application process has a Java VM; this case is the Keystore's evidence in the emulator.
+        SKIP("no Android Keystore (an Android application process)");
+    }
+    // The protector: a master key wrapped by a Keystore key of its own, bound to its store and every reference byte.
+    PlatformKeyProtector vault;
+    REQUIRE(PlatformKeyProtector::available());
+    CHECK(vault.name() == StringView("android-keystore"));
+    CHECK(vault.forgets());
+    u8 store_id[kKeyStoreIdBytes];
+    u8 other[kKeyStoreIdBytes];
+    u8 master[kKeyStoreMasterBytes];
+    REQUIRE(random_bytes(Span<u8>(store_id)) == CryptoError::None);
+    REQUIRE(random_bytes(Span<u8>(other)) == CryptoError::None);
+    REQUIRE(random_bytes(Span<u8>(master)) == CryptoError::None);
+    Bytes reference;
+    REQUIRE(vault.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), reference) == CryptoError::None);
+    REQUIRE(reference.size() == 1U + kKeyStoreIdBytes + 12U + kKeyStoreMasterBytes + 16U);
+    const ConstSpan<u8> guarded(reference.data(), reference.size());
+    u8 recovered[kKeyStoreMasterBytes] = {};
+    REQUIRE(vault.recover(ConstSpan<u8>(store_id), guarded, Span<u8>(recovered)) == CryptoError::None);
+    CHECK(std::memcmp(recovered, master, sizeof(master)) == 0);
+    const auto denied = [&](ConstSpan<u8> id, const Bytes& changed)
+    {
+        std::memset(recovered, 0x55, sizeof(recovered));
+        const CryptoError result =
+            vault.recover(id, ConstSpan<u8>(changed.data(), changed.size()), Span<u8>(recovered));
+        return result == CryptoError::Denied && recovered[0] == 0U && recovered[31] == 0U;
+    };
+    CHECK(denied(ConstSpan<u8>(other), reference));
+    for (usize at = 0U; at < reference.size(); ++at)
+    {
+        Bytes changed = reference;
+        changed[at] ^= 0x01U; // the format, the handle (another alias), the nonce, the wrapped key and its tag
+        CHECK(denied(ConstSpan<u8>(store_id), changed));
+    }
+    Bytes shorter = reference;
+    shorter.pop_back();
+    CHECK(denied(ConstSpan<u8>(store_id), shorter));
+    CHECK(vault.recover(ConstSpan<u8>(store_id), guarded, Span<u8>(recovered, 16U)) == CryptoError::BadLength);
+    CHECK(vault.forget(ConstSpan<u8>(other), guarded) == CryptoError::None); // names nothing: nothing to delete
+    REQUIRE(vault.recover(ConstSpan<u8>(store_id), guarded, Span<u8>(recovered)) == CryptoError::None);
+    REQUIRE(vault.forget(ConstSpan<u8>(store_id), guarded) == CryptoError::None);
+    CHECK(denied(ConstSpan<u8>(store_id), reference)); // its key is gone, and the reference recovers nothing
+    CHECK(vault.forget(ConstSpan<u8>(store_id), guarded) == CryptoError::None);
+
+    // The device: P-256 (in StrongBox where the device has one) and P-384 keys, bound to their store and curve.
+    PlatformKeyDevice keystore;
+    for (const AlgorithmId algorithm : {AlgorithmId::EcdsaSecp256r1Sha256, AlgorithmId::EcdsaSecp384r1Sha384})
+    {
+        const bool p256 = algorithm == AlgorithmId::EcdsaSecp256r1Sha256;
+        const usize field = p256 ? 32U : 48U;
+        Bytes named;
+        u8 point[97];
+        REQUIRE(keystore.create(ConstSpan<u8>(store_id), algorithm, named, Span<u8>(point, 1U + 2U * field)) ==
+                CryptoError::None);
+        const ForgetOnExit forget_on_exit(keystore, ConstSpan<u8>(store_id), named);
+        const ConstSpan<u8> handle(named.data(), named.size());
+        CHECK(named.size() == 17U);
+        CHECK(point[0] == 0x04U);
+        u8 digest[48];
+        u8 raw[96];
+        REQUIRE(random_bytes(Span<u8>(digest)) == CryptoError::None);
+        REQUIRE(keystore.sign_digest(ConstSpan<u8>(store_id), handle, algorithm, ConstSpan<u8>(digest, field),
+                                     Span<u8>(raw, 2U * field)) == CryptoError::None);
+        CHECK(raw_ecdsa_valid(algorithm, ConstSpan<u8>(point, 1U + 2U * field), ConstSpan<u8>(digest, field),
+                              ConstSpan<u8>(raw, 2U * field)));
+        const AlgorithmId other_curve = p256 ? AlgorithmId::EcdsaSecp384r1Sha384 : AlgorithmId::EcdsaSecp256r1Sha256;
+        const usize other_field = p256 ? 48U : 32U;
+        CHECK(keystore.sign_digest(ConstSpan<u8>(store_id), handle, other_curve, ConstSpan<u8>(digest, other_field),
+                                   Span<u8>(raw, 2U * other_field)) == CryptoError::Denied);
+        CHECK(keystore.sign_digest(ConstSpan<u8>(other), handle, algorithm, ConstSpan<u8>(digest, field),
+                                   Span<u8>(raw, 2U * field)) == CryptoError::Denied);
+        CHECK(keystore.forget(ConstSpan<u8>(other), handle) == CryptoError::None); // names nothing
+        REQUIRE(keystore.forget(ConstSpan<u8>(store_id), handle) == CryptoError::None);
+        CHECK(keystore.sign_digest(ConstSpan<u8>(store_id), handle, algorithm, ConstSpan<u8>(digest, field),
+                                   Span<u8>(raw, 2U * field)) == CryptoError::Denied);
+    }
+
+    // A store under both: its master key in the Keystore, its device keys signing every handshake.
+    TempStore dir("android-keystore");
+    KeyStore store;
+    REQUIRE(store.create(dir.dir(), vault, &keystore) == CryptoError::None);
+    const EraseOnExit erase_on_exit(store);
+    CHECK(store.protection() == KeyProtection::Platform);
+    REQUIRE(store.generate("server", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwareRequired, 1U) ==
+            CryptoError::None);
+    CHECK(info_of(store, "server").placement == KeyPlacement::Hardware);
+    check_device_signs(store, "server");
+    REQUIRE(store.generate("p384", AlgorithmId::EcdsaSecp384r1Sha384, PlacementRequest::HardwareRequired, 1U) ==
+            CryptoError::None);
+    check_device_signs(store, "p384");
+    KeyStore reopened;
+    REQUIRE(reopened.open(dir.dir(), vault, &keystore) == CryptoError::None);
+    CHECK(same_infos(store, reopened));
+    StoredSigner signer;
+    REQUIRE(reopened.signer("server", signer) == CryptoError::None);
+    TlsCredential credential;
+    REQUIRE(credential.init(signer, "keystore.cerid.test") == TlsError::None);
+    const Handshake done = handshake(credential, nullptr);
+    CHECK(done.client == TlsState::Established);
+    CHECK(done.server == TlsState::Established);
 }

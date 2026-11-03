@@ -8,6 +8,8 @@
 // the process has and never logs out; the token closes the login with its last session. A key is a sign-only ECDSA
 // pair whose CKA_ID is a random handle and whose CKA_LABEL names the store, and every search names the handle, the
 // label and the curve, so another store's reference, or a key of another curve, is found nowhere.
+#include "byte_spans.hpp"
+
 #include <crd/crypto/key_store.hpp>
 #include <crd/platform/dynamic_library.hpp>
 
@@ -186,14 +188,8 @@ struct Curve
 // The label every key of the store carries: the prefix and the store's identifier in hexadecimal.
 void label_of(cont::ConstSpan<u8> store_id, char (&label)[kLabelBytes]) noexcept
 {
-    constexpr char digits[] = "0123456789abcdef";
     std::memcpy(label, kLabelPrefix, sizeof(kLabelPrefix) - 1U);
-    char* out = label + sizeof(kLabelPrefix) - 1U;
-    for (const u8 byte : store_id)
-    {
-        *out++ = digits[byte >> 4U];
-        *out++ = digits[byte & 0x0FU];
-    }
+    (void)detail::hex_into(store_id, label + sizeof(kLabelPrefix) - 1U);
 }
 
 [[nodiscard]] bool parse(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> bytes, u8 (&handle)[kHandleBytes]) noexcept

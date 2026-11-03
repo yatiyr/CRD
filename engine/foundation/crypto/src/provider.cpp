@@ -422,6 +422,53 @@ CryptoError ecdsa_der_of(AlgorithmId algorithm, cont::ConstSpan<u8> raw, cont::S
     }
     return CryptoError::None;
 }
+
+CryptoError ecdsa_raw_of(AlgorithmId algorithm, cont::ConstSpan<u8> der, cont::Span<u8> raw) noexcept
+{
+    secure_zero(raw);
+    const usize field = ecdsa_field_bytes(algorithm);
+    if (field == 0U)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (raw.size() != 2U * field)
+    {
+        return CryptoError::BadLength;
+    }
+    const ErrorScope                 errors;
+    const bssl::UniquePtr<ECDSA_SIG> signature(ECDSA_SIG_from_bytes(der.data(), der.size())); // strict DER, all of it
+    const BIGNUM*                    r = nullptr;
+    const BIGNUM*                    s = nullptr;
+    if (signature)
+    {
+        ECDSA_SIG_get0(signature.get(), &r, &s);
+    }
+    if (r == nullptr || s == nullptr || !BN_bn2bin_padded(raw.data(), field, r) ||
+        !BN_bn2bin_padded(raw.data() + field, field, s))
+    {
+        secure_zero(raw);
+        return CryptoError::ProviderFailure;
+    }
+    return CryptoError::None;
+}
+
+CryptoError ecdsa_public_of_spki(AlgorithmId algorithm, cont::ConstSpan<u8> spki, cont::Span<u8> out) noexcept
+{
+    secure_zero(out);
+    if (ecdsa_field_bytes(algorithm) == 0U)
+    {
+        return CryptoError::Unsupported;
+    }
+    const ErrorScope errors;
+    CBS              cbs;
+    CBS_init(&cbs, spki.data(), spki.size());
+    const bssl::UniquePtr<EVP_PKEY> pkey(EVP_parse_public_key(&cbs));
+    if (!pkey || CBS_len(&cbs) != 0U || signature_algorithm_of(pkey.get()) != algorithm)
+    {
+        return CryptoError::ProviderFailure;
+    }
+    return signature_public_bytes(pkey.get(), algorithm, out);
+}
 } // namespace provider_internal
 
 cont::StringView crypto_error_name(CryptoError error) noexcept

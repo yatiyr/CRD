@@ -2,7 +2,8 @@
 
 // crd-crypto -- byte-span helpers the units of src/ share: the overlap test every operation with an output runs, byte
 // equality and order for public values (keys, identifiers; secrets compare with constant_time_equal), and the scratch
-// buffer that lays out a labelled input (HPKE's and MLS's labels before a secret or a message). Private to
+// buffer that lays out a labelled input (HPKE's and MLS's labels before a secret or a message), and the hexadecimal
+// text that names a store's keys in a vault or device (the protectors and devices of the key store). Private to
 // engine/foundation/crypto/src; no provider header.
 
 #include <crd/containers/array.hpp>
@@ -53,6 +54,18 @@ inline CryptoError refuse(CryptoError error, cont::Span<u8> first, cont::Span<u8
     secure_zero(first);
     secure_zero(second);
     return error;
+}
+
+// `bytes` as lowercase hexadecimal, two characters each, written from `out` without a terminator; returns the end.
+template <typename Char> Char* hex_into(cont::ConstSpan<u8> bytes, Char* out) noexcept
+{
+    constexpr char digits[] = "0123456789abcdef";
+    for (const u8 byte : bytes)
+    {
+        *out++ = static_cast<Char>(digits[byte >> 4U]);
+        *out++ = static_cast<Char>(digits[byte & 0x0FU]);
+    }
+    return out;
 }
 
 // A string literal's bytes without its terminator: a KDF or signature label.

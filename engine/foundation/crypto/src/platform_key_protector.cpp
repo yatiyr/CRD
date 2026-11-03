@@ -1,5 +1,6 @@
-// crd-crypto -- the operating system's key protector (NET.2; contract: docs/design/network-foundation.md#key-store,
-// decision K2): DPAPI on Windows, nothing where no protector exists (the Secret Service's is secret_service.cpp).
+// crd-crypto -- the operating system's key protector and key device (NET.2; contract:
+// docs/design/network-foundation.md#key-store, decisions K2 and K15): DPAPI on Windows, nothing where no protector or
+// device exists (the Secret Service's protector is secret_service.cpp, the Android Keystore's android_keystore.cpp).
 
 #include <crd/core/platform.hpp>
 #include <crd/crypto/key_store.hpp>
@@ -140,7 +141,7 @@ CryptoError PlatformKeyProtector::forget(cont::ConstSpan<u8> /*store_id*/, cont:
 {
     return CryptoError::None; // nothing to destroy: forgets() is false
 }
-#elif !CRD_OS_LINUX || CRD_OS_ANDROID // Android has no Secret Service
+#elif !CRD_OS_LINUX
 bool PlatformKeyProtector::available() noexcept
 {
     return false;
@@ -171,6 +172,39 @@ CryptoError PlatformKeyProtector::recover(cont::ConstSpan<u8> /*store_id*/, cont
 }
 
 CryptoError PlatformKeyProtector::forget(cont::ConstSpan<u8> /*store_id*/, cont::ConstSpan<u8> /*reference*/) noexcept
+{
+    return CryptoError::Unavailable;
+}
+#endif
+
+#if !CRD_OS_ANDROID
+bool PlatformKeyDevice::available() noexcept
+{
+    return false;
+}
+
+cont::StringView PlatformKeyDevice::name() const noexcept
+{
+    return "unavailable";
+}
+
+CryptoError PlatformKeyDevice::create(cont::ConstSpan<u8> /*store_id*/, AlgorithmId /*algorithm*/,
+                                      cont::Array<u8>& reference, cont::Span<u8> public_key) noexcept
+{
+    reference.clear();
+    secure_zero(public_key);
+    return CryptoError::Unavailable;
+}
+
+CryptoError PlatformKeyDevice::sign_digest(cont::ConstSpan<u8> /*store_id*/, cont::ConstSpan<u8> /*reference*/,
+                                           AlgorithmId /*algorithm*/, cont::ConstSpan<u8> /*digest*/,
+                                           cont::Span<u8> signature) const noexcept
+{
+    secure_zero(signature);
+    return CryptoError::Unavailable;
+}
+
+CryptoError PlatformKeyDevice::forget(cont::ConstSpan<u8> /*store_id*/, cont::ConstSpan<u8> /*reference*/) noexcept
 {
     return CryptoError::Unavailable;
 }

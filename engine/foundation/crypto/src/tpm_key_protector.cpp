@@ -3,6 +3,8 @@
 // for one master key, and sign-only ECDSA keys it holds for a store's Hardware signature keys. Linux's, through tss2,
 // are tpm_tss2.cpp (decision K13); elsewhere every call is Unavailable.
 
+#include "byte_spans.hpp"
+
 #include <crd/core/platform.hpp>
 #include <crd/crypto/key_store.hpp>
 
@@ -49,7 +51,6 @@ constexpr usize kDeviceReferenceBytes = 1U + kHandleBytes;                 // th
 constexpr char  kLabelPrefix[]        = "cerid master 1";
 constexpr char  kNamePrefix[]         = "Cerid key store ";
 constexpr char  kSignerPrefix[]       = "Cerid signer    "; // as long as kNamePrefix: the names share one length
-constexpr char  kHexDigits[]          = "0123456789abcdef";
 static_assert(sizeof(kSignerPrefix) == sizeof(kNamePrefix), "protector and device key names share one length");
 
 // The OAEP label: the prefix, the store's identifier and a closing zero byte. A TPM ends a label that does not end in
@@ -59,16 +60,6 @@ constexpr usize kLabelBytes = sizeof(kLabelPrefix) - 1U + kKeyStoreIdBytes + 1U;
 static_assert(kLabelBytes <= 32U, "a TPM with SHA-256 alone takes labels of up to 32 bytes");
 // The persisted key's name: the prefix, the store's identifier and the handle in hex, a space between them.
 constexpr usize kNameChars = sizeof(kNamePrefix) - 1U + 2U * kKeyStoreIdBytes + 1U + 2U * kHandleBytes + 1U;
-
-wchar_t* hex_into(cont::ConstSpan<u8> bytes, wchar_t* out) noexcept
-{
-    for (const u8 byte : bytes)
-    {
-        *out++ = static_cast<wchar_t>(kHexDigits[byte >> 4U]);
-        *out++ = static_cast<wchar_t>(kHexDigits[byte & 0x0FU]);
-    }
-    return out;
-}
 
 void label_of(cont::ConstSpan<u8> store_id, u8 (&label)[kLabelBytes]) noexcept
 {
@@ -85,9 +76,9 @@ void name_of(const char (&prefix)[sizeof(kNamePrefix)], cont::ConstSpan<u8> stor
     {
         *out++ = static_cast<wchar_t>(prefix[i]);
     }
-    out    = hex_into(store_id, out);
+    out    = detail::hex_into(store_id, out);
     *out++ = L' ';
-    out    = hex_into(handle, out);
+    out    = detail::hex_into(handle, out);
     *out   = L'\0';
 }
 

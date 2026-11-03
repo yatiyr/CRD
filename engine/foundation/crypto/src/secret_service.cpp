@@ -9,6 +9,8 @@
 #include <crd/core/platform.hpp>
 
 #if CRD_OS_LINUX && !CRD_OS_ANDROID
+#include "byte_spans.hpp"
+
 #include <crd/crypto/key_store.hpp>
 #include <crd/platform/dynamic_library.hpp>
 
@@ -202,13 +204,7 @@ CryptoError error_of(const char* name) noexcept
 
 void hex_of(cont::ConstSpan<u8> bytes, char (&out)[kHexBytes]) noexcept
 {
-    constexpr char digits[] = "0123456789abcdef";
-    for (usize i = 0U; i < bytes.size(); ++i)
-    {
-        out[2U * i] = digits[bytes[i] >> 4U];
-        out[2U * i + 1U] = digits[bytes[i] & 0x0FU];
-    }
-    out[2U * bytes.size()] = '\0';
+    *detail::hex_into(bytes, out) = '\0';
 }
 
 // The attributes that find one master key: Cerid's schema, the store and the reference's handle.

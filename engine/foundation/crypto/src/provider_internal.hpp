@@ -2,7 +2,7 @@
 
 // crd-crypto -- what provider.cpp shares with tls.cpp: the provider's key objects behind the opaque ProviderKey, the
 // error-queue scope and a provider key's signature algorithm and public key in the interface's encoding. Private to
-// engine/foundation/crypto/src, the only directory that includes the provider's headers.
+// engine/foundation/crypto/src and its unit tests (test_provider.cpp checks the encodings a device answers in).
 
 #include <crd/crypto/provider.hpp>
 
@@ -85,6 +85,18 @@ inline ProviderKey* key_of(EVP_PKEY* pkey) noexcept
 // signature_sizes(algorithm).signature long); `written` is its length.
 [[nodiscard]] CryptoError ecdsa_der_of(AlgorithmId algorithm, cont::ConstSpan<u8> raw, cont::Span<u8> out,
                                        usize& written) noexcept;
+
+// The reverse, for a device that signs into DER (the Android Keystore): the Ecdsa-Sig-Value `der` as r || s into
+// `raw` (2 * ecdsa_field_bytes). ProviderFailure, with `raw` zeroed, for bytes that are not exactly one signature
+// whose r and s fit the curve's field.
+[[nodiscard]] CryptoError ecdsa_raw_of(AlgorithmId algorithm, cont::ConstSpan<u8> der, cont::Span<u8> raw) noexcept;
+
+// The public key of a device that reports it as a DER SubjectPublicKeyInfo (RFC 5280 section 4.1.2.7; the Android
+// Keystore's X.509 encoding) in the interface's encoding into `out` (signature_sizes(algorithm).public_key, an
+// uncompressed SEC 1 point). ProviderFailure, with `out` zeroed, for bytes that are not exactly one key of
+// `algorithm`.
+[[nodiscard]] CryptoError ecdsa_public_of_spki(AlgorithmId algorithm, cont::ConstSpan<u8> spki,
+                                               cont::Span<u8> out) noexcept;
 
 using detail::label_of;
 

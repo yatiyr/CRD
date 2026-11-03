@@ -90,12 +90,14 @@ protected:
     ~KeyProtector() noexcept                              = default;
 };
 
-// The operating system's protector for the calling user (decisions K2 and K10): DPAPI on Windows ("dpapi": user
+// The operating system's protector for the calling user (decisions K2, K10 and K15): DPAPI on Windows ("dpapi": user
 // scope, its entropy binding the store; it cannot forget), the freedesktop Secret Service on Linux ("secret-service":
 // an item in the default collection that the store's identifier and a random handle find, its secret passed over the
-// dh-ietf1024-sha256-aes128-cbc-pkcs7 transport; it forgets by deleting the item). Elsewhere every call answers
-// Unavailable. available() is whether the vault answers now: a Linux session without a bus or a Secret Service has
-// none.
+// dh-ietf1024-sha256-aes128-cbc-pkcs7 transport; it forgets by deleting the item), the Android Keystore on Android
+// ("android-keystore", decision K15: a non-exportable AES-256-GCM key of its own for each master key, which it wraps
+// with the store's identifier as associated data, reached through the application's Java VM; it forgets by deleting
+// the key). Elsewhere every call answers Unavailable. available() is whether the vault answers now: a Linux session
+// without a bus or a Secret Service, or an Android process without a Java VM, has none.
 class PlatformKeyProtector final : public KeyProtector
 {
 public:
@@ -230,6 +232,26 @@ public:
 
 private:
     TpmConnection m_tpm;
+};
+
+// The operating system's key store as a key device for the calling application (decision K15). On Android
+// "android-keystore": a sign-only ECDSA key the Android Keystore generates under an alias that names the store, the
+// curve and a random handle (the reference: a format byte and the handle), kept in the device's TEE or StrongBox
+// where it has one; it signs through the Java security API in the application's own Java VM and forgetting deletes
+// the alias. Elsewhere every call answers Unavailable. available() is whether the key store answers now: a process
+// without a Java VM (a plain executable) has none.
+class PlatformKeyDevice final : public KeyDevice
+{
+public:
+    [[nodiscard]] static bool available() noexcept;
+
+    [[nodiscard]] cont::StringView name() const noexcept override;
+    [[nodiscard]] CryptoError      create(cont::ConstSpan<u8> store_id, AlgorithmId algorithm, cont::Array<u8>& reference,
+                                          cont::Span<u8> public_key) noexcept override;
+    [[nodiscard]] CryptoError      sign_digest(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference,
+                                               AlgorithmId algorithm, cont::ConstSpan<u8> digest,
+                                               cont::Span<u8> signature) const noexcept override;
+    [[nodiscard]] CryptoError forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference) noexcept override;
 };
 
 // A PKCS #11 token (decision K14): its module, the path of the library a token's vendor ships (libsofthsm2.so,

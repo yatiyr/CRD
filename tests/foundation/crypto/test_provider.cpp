@@ -1,18 +1,23 @@
 // crd-crypto -- the provider interface (NET.2; docs/design/network-foundation.md#provider): every operation against
 // Project Wycheproof's vectors (the pinned C2SP/wycheproof testvectors_v1, read at run time) and RFC 8032's
 // deterministic signatures, every refusal and length rule, in-place and aliasing rules, zeroing on failure, keys
-// generated, moved and cleared, concurrent use of one key, and a policy generation signed by real ML-DSA and
-// Ed25519 keys through the production verifier.
+// generated, moved and cleared, concurrent use of one key, a policy generation signed by real ML-DSA and Ed25519
+// keys through the production verifier, and the encodings a device answers in (provider_internal.hpp).
 
+#include "../../../engine/foundation/crypto/src/provider_internal.hpp"
 #include "wycheproof.hpp"
 
 #include <crd/crypto/policy.hpp>
 #include <crd/crypto/provider.hpp>
 
-#include <catch2/catch_test_macros.hpp>
-
 #include <atomic>
+#include <catch2/catch_test_macros.hpp>
 #include <cstring>
+#include <openssl/bytestring.h>
+#include <openssl/ec.h>
+#include <openssl/ec_key.h>
+#include <openssl/evp.h>
+#include <openssl/nid.h>
 #include <thread>
 
 namespace
@@ -1224,5 +1229,102 @@ TEST_CASE("Provider: a policy generation signed by real ML-DSA-65 and Ed25519 ke
     CHECK(snapshot.status(AlgorithmId::X25519Mlkem768, now) == AlgorithmStatus::Preferred);
     CHECK(snapshot.status(static_cast<AlgorithmId>(0x01FFU), now) == AlgorithmStatus::Refused);
     CHECK(store.apply(ConstSpan<u8>(generation, size), now) == PolicyError::AlreadyCurrent);
+}
+
+TEST_CASE("Provider: a device's DER signature in the r || s form", "[crypto][net-2]")
+{
+    using provider_internal::ecdsa_der_of;
+    using provider_internal::ecdsa_raw_of;
+    for (const AlgorithmId algorithm : {AlgorithmId::EcdsaSecp256r1Sha256, AlgorithmId::EcdsaSecp384r1Sha384})
+    {
+        const usize field = algorithm == AlgorithmId::EcdsaSecp256r1Sha256 ? 32U : 48U;
+        // r with its top bit set (DER pads it with a zero byte), s with leading zero bytes (DER drops them).
+        u8 raw[96];
+        std::memset(raw, 0xC3, field);
+        std::memset(raw + field, 0x00, 3U);
+        std::memset(raw + field + 3U, 0x5A, field - 3U);
+        u8 der[110];
+        usize written = 0U;
+        REQUIRE(ecdsa_der_of(algorithm, ConstSpan<u8>(raw, 2U * field), Span<u8>(der), written) == CryptoError::None);
+        u8 back[96] = {};
+        REQUIRE(ecdsa_raw_of(algorithm, ConstSpan<u8>(der, written), Span<u8>(back, 2U * field)) == CryptoError::None);
+        CHECK(std::memcmp(back, raw, 2U * field) == 0);
+
+        // Anything but exactly one signature whose values fit the field is refused, and the output zeroed.
+        const auto refused = [&](ConstSpan<u8> bytes, CryptoError expected)
+        {
+            std::memset(back, 0x77, sizeof(back));
+            return ecdsa_raw_of(algorithm, bytes, Span<u8>(back, 2U * field)) == expected && back[0] == 0U &&
+                   back[2U * field - 1U] == 0U;
+        };
+        u8 longer[111];
+        std::memcpy(longer, der, written);
+        longer[written] = 0U;
+        CHECK(refused(ConstSpan<u8>(longer, written + 1U), CryptoError::ProviderFailure));
+        CHECK(refused(ConstSpan<u8>(der, written - 1U), CryptoError::ProviderFailure));
+        CHECK(refused(ConstSpan<u8>(), CryptoError::ProviderFailure));
+        CHECK(ecdsa_raw_of(algorithm, ConstSpan<u8>(der, written), Span<u8>(back, 2U * field - 1U)) ==
+              CryptoError::BadLength);
+    }
+    // A P-384 signature's values do not fit P-256's field; an algorithm without r and s is not one.
+    u8 raw[96];
+    std::memset(raw, 0x11, sizeof(raw));
+    u8 der[110];
+    usize written = 0U;
+    REQUIRE(ecdsa_der_of(AlgorithmId::EcdsaSecp384r1Sha384, ConstSpan<u8>(raw), Span<u8>(der), written) ==
+            CryptoError::None);
+    u8 back[64] = {0x77};
+    CHECK(ecdsa_raw_of(AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(der, written), Span<u8>(back)) ==
+          CryptoError::ProviderFailure);
+    CHECK(back[0] == 0U);
+    CHECK(ecdsa_raw_of(AlgorithmId::Ed25519, ConstSpan<u8>(der, written), Span<u8>(back)) == CryptoError::Unsupported);
+}
+
+TEST_CASE("Provider: a device's SubjectPublicKeyInfo as the interface's public key", "[crypto][net-2]")
+{
+    using provider_internal::ecdsa_public_of_spki;
+    // The DER SubjectPublicKeyInfo of a fresh key of `nid` into `spki` (its length) and its uncompressed point.
+    const auto fresh = [](int nid, Span<u8> spki, Span<u8> point) -> usize
+    {
+        bssl::UniquePtr<EVP_PKEY> pkey(EVP_PKEY_new());
+        bssl::UniquePtr<EC_KEY> key(EC_KEY_new_by_curve_name(nid));
+        REQUIRE((pkey && key && EC_KEY_generate_key(key.get()) == 1));
+        REQUIRE(EC_POINT_point2oct(EC_KEY_get0_group(key.get()), EC_KEY_get0_public_key(key.get()),
+                                   POINT_CONVERSION_UNCOMPRESSED, point.data(), point.size(), nullptr) == point.size());
+        REQUIRE(EVP_PKEY_assign_EC_KEY(pkey.get(), key.release()) == 1);
+        CBB cbb;
+        usize length = 0U;
+        REQUIRE(CBB_init_fixed(&cbb, spki.data(), spki.size()) == 1);
+        REQUIRE(EVP_marshal_public_key(&cbb, pkey.get()) == 1);
+        REQUIRE(CBB_finish(&cbb, nullptr, &length) == 1);
+        return length;
+    };
+    u8 spki256[128];
+    u8 spki384[128];
+    u8 point256[65];
+    u8 point384[97];
+    const usize length256 = fresh(NID_X9_62_prime256v1, Span<u8>(spki256), Span<u8>(point256));
+    const usize length384 = fresh(NID_secp384r1, Span<u8>(spki384), Span<u8>(point384));
+    u8 out[97] = {};
+    REQUIRE(ecdsa_public_of_spki(AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(spki256, length256),
+                                 Span<u8>(out, 65U)) == CryptoError::None);
+    CHECK(std::memcmp(out, point256, sizeof(point256)) == 0);
+    REQUIRE(ecdsa_public_of_spki(AlgorithmId::EcdsaSecp384r1Sha384, ConstSpan<u8>(spki384, length384), Span<u8>(out)) ==
+            CryptoError::None);
+    CHECK(std::memcmp(out, point384, sizeof(point384)) == 0);
+
+    // Another curve's key, a trailing byte, a cut key and a wrong length are refused with the output zeroed.
+    CHECK(ecdsa_public_of_spki(AlgorithmId::EcdsaSecp384r1Sha384, ConstSpan<u8>(spki256, length256), Span<u8>(out)) ==
+          CryptoError::ProviderFailure);
+    CHECK(out[0] == 0U);
+    spki256[length256] = 0U;
+    CHECK(ecdsa_public_of_spki(AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(spki256, length256 + 1U),
+                               Span<u8>(out, 65U)) == CryptoError::ProviderFailure);
+    CHECK(ecdsa_public_of_spki(AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(spki256, length256 - 1U),
+                               Span<u8>(out, 65U)) == CryptoError::ProviderFailure);
+    CHECK(ecdsa_public_of_spki(AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(spki256, length256),
+                               Span<u8>(out, 64U)) == CryptoError::BadLength);
+    CHECK(ecdsa_public_of_spki(AlgorithmId::Ed25519, ConstSpan<u8>(spki256, length256), Span<u8>(out, 32U)) ==
+          CryptoError::Unsupported);
 }
 } // namespace
