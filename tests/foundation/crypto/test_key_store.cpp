@@ -77,15 +77,13 @@ using Bytes = Array<u8>;
 // A TPM reference's length and the positions of its parts: Windows' format, handle and wrapped key; Linux's format,
 // index handle and secret.
 #if CRD_OS_WINDOWS
-constexpr usize kTpmReferenceBytes   = 1U + 16U + 256U;
-constexpr usize kTpmIdentityBytes    = 17U; // the format and the handle, which differ between protections
-constexpr usize kTpmChangedAt[]      = {1U, 16U, 17U, 100U, kTpmReferenceBytes - 1U};
-constexpr usize kTpmDeviceReference  = 1U + 16U;
+constexpr usize kTpmReferenceBytes = 1U + 16U + 256U;
+constexpr usize kTpmIdentityBytes  = 17U; // the format and the handle, which differ between protections
+constexpr usize kTpmChangedAt[]    = {1U, 16U, 17U, 100U, kTpmReferenceBytes - 1U};
 #else
-constexpr usize kTpmReferenceBytes   = 1U + 4U + 32U;
-constexpr usize kTpmIdentityBytes    = 5U;
-constexpr usize kTpmChangedAt[]      = {1U, 4U, 5U, 20U, kTpmReferenceBytes - 1U};
-constexpr usize kTpmDeviceReference  = kTpmReferenceBytes;
+constexpr usize kTpmReferenceBytes = 1U + 4U + 32U;
+constexpr usize kTpmIdentityBytes  = 5U;
+constexpr usize kTpmChangedAt[]    = {1U, 4U, 5U, 20U, kTpmReferenceBytes - 1U};
 #endif
 
 // A store directory under the system's scratch directory, removed with everything in it at the end of its scope.
@@ -1152,7 +1150,7 @@ TEST_CASE("Key store: the operating system's protector", "[crypto][key-store]")
     reference.resize(1U + kKeyStoreIdBytes);
     std::memset(reference.data(), 0x11, reference.size());
     reference[0] = 1U;
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX && !CRD_OS_ANDROID
     // Without a session bus the Secret Service cannot be reached: every call is Unavailable. The vault itself is
     // proven under a pinned gnome-keyring ([secret-service], the crd-crypto-secret-service CTests).
     CHECK(platform.name() == StringView("secret-service"));
@@ -1178,7 +1176,7 @@ TEST_CASE("Key store: the operating system's protector", "[crypto][key-store]")
     KeyStore  store;
     CHECK(store.create(dir.dir(), platform) == CryptoError::Unavailable);
     CHECK_FALSE(store.ready());
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX && !CRD_OS_ANDROID
     if (had_bus)
     {
         REQUIRE(::setenv("DBUS_SESSION_BUS_ADDRESS", bus.c_str(), 1) == 0);
@@ -1222,7 +1220,7 @@ TEST_CASE("Key store: the TPM protector's contract", "[crypto][key-store]")
     CHECK(tpm.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master, 31U), reference) == CryptoError::BadLength);
     CHECK(tpm.recover(ConstSpan<u8>(store_id), {}, Span<u8>(master, 16U)) == CryptoError::BadLength);
     CHECK(master[0] == 0U);
-#if CRD_OS_WINDOWS || CRD_OS_LINUX
+#if CRD_OS_WINDOWS || (CRD_OS_LINUX && !CRD_OS_ANDROID)
     CHECK(tpm.name() == StringView(CRD_OS_WINDOWS ? "tpm-pcp" : "tpm-tss2"));
     CHECK(tpm.forgets());
     // A reference this protector did not write is refused before the TPM is asked: empty, short, long, another format.
@@ -1244,7 +1242,7 @@ TEST_CASE("Key store: the TPM protector's contract", "[crypto][key-store]")
     CHECK(tpm.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign.data(), foreign.size())) == CryptoError::Denied);
     CHECK(tpm.forget(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(foreign.data(), foreign.size())) ==
           CryptoError::Denied);
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX && !CRD_OS_ANDROID
     // An index outside the owner's range of the TCG handle registry is never this protector's.
     foreign[0] = 1U;
     foreign[1] = 0x81U; // a persistent object's handle
@@ -1410,7 +1408,7 @@ TEST_CASE("Key store: the TPM protector keeps and forgets a master key", "[crypt
 // gnome-keyring daemon whose login collection the session made, unlocked ([secret-service]) or seeded and then locked
 // ([secret-service-locked]).
 
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX && !CRD_OS_ANDROID
 // The session's scratch directory, which the locked session shares between its two runs.
 [[nodiscard]] fs::Path session_scratch()
 {
@@ -1425,7 +1423,7 @@ constexpr u8 kSeededMaster[kKeyStoreMasterBytes] = {0x5E, 0xED};
 
 TEST_CASE("Key store: the Secret Service keeps, recovers and forgets a master key", "[.secret-service]")
 {
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX && !CRD_OS_ANDROID
     REQUIRE(PlatformKeyProtector::available());
     PlatformKeyProtector vault;
     CHECK(vault.name() == StringView("secret-service"));
@@ -1558,7 +1556,7 @@ TEST_CASE("Key store: the Secret Service keeps, recovers and forgets a master ke
 
 TEST_CASE("Key store: a master key seeded for the locked Secret Service", "[.secret-service-seed]")
 {
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX && !CRD_OS_ANDROID
     PlatformKeyProtector vault;
     Bytes                reference;
     REQUIRE(vault.protect(ConstSpan<u8>(kSeededStore), ConstSpan<u8>(kSeededMaster), reference) == CryptoError::None);
@@ -1570,7 +1568,7 @@ TEST_CASE("Key store: a master key seeded for the locked Secret Service", "[.sec
 
 TEST_CASE("Key store: a locked Secret Service is Denied, and prompts only where allowed", "[.secret-service-locked]")
 {
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX && !CRD_OS_ANDROID
     REQUIRE(PlatformKeyProtector::available());
     const Bytes reference = read_file(session_scratch() / "reference");
     const ConstSpan<u8> held(reference.data(), reference.size());
@@ -2124,7 +2122,7 @@ TEST_CASE("Key store: the TPM device's contract", "[crypto][key-store]")
     u8 point[97];
     u8 digest[48]    = {};
     u8 signature[96] = {0x42};
-#if CRD_OS_WINDOWS || CRD_OS_LINUX
+#if CRD_OS_WINDOWS || (CRD_OS_LINUX && !CRD_OS_ANDROID)
     CHECK(tpm.name() == StringView(CRD_OS_WINDOWS ? "tpm-pcp" : "tpm-tss2"));
     // Every algorithm but ECDSA is refused before the TPM is asked, as are wrong lengths and references this device
     // did not write.
@@ -2135,6 +2133,9 @@ TEST_CASE("Key store: the TPM device's contract", "[crypto][key-store]")
                      Span<u8>(point, 65U)) == CryptoError::BadLength);
     CHECK(tpm.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point, 97U)) ==
           CryptoError::BadLength);
+    // A device key's reference: Windows' format and key name; on Linux, a protector reference's layout.
+    constexpr usize kTpmDeviceReference = CRD_OS_WINDOWS ? 1U + 16U : kTpmReferenceBytes;
+
     u8 foreign[kTpmDeviceReference] = {1U, 1U};
     CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign, kTpmDeviceReference - 1U),
                           AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest, 32U),
@@ -2148,7 +2149,7 @@ TEST_CASE("Key store: the TPM device's contract", "[crypto][key-store]")
                           ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Unsupported);
     CHECK(tpm.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign)) == CryptoError::Denied);
     CHECK(tpm.forget(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(foreign)) == CryptoError::Denied);
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX && !CRD_OS_ANDROID
     // An index outside the owner's range is never this device's.
     foreign[0] = 1U;
     foreign[1] = 0x81U;
@@ -2158,6 +2159,10 @@ TEST_CASE("Key store: the TPM device's contract", "[crypto][key-store]")
 #endif
 #else
     CHECK(tpm.name() == StringView("unavailable"));
+    // Where no TPM is built in, a signature is refused and its buffer zeroed.
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(reference), AlgorithmId::EcdsaSecp256r1Sha256,
+                          ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Unavailable);
+    CHECK(signature[0] == 0U);
 #endif
     if (TpmKeyDevice::available(test_tpm()))
     {
