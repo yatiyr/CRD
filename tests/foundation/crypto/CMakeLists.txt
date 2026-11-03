@@ -68,6 +68,23 @@ target_compile_definitions(crd-crypto-tests PRIVATE
 crd_test_data(crd-crypto-tests "${wycheproof_SOURCE_DIR}/testvectors_v1" "${mls-vectors_SOURCE_DIR}/test-vectors"
     "${aws-lc_SOURCE_DIR}/crypto/hpke/test-vectors.json" "${hpke-pq-vectors_SOURCE_DIR}/test-vectors.json")
 
+# The PIV profile of the PKCS #11 device (decision K14): a module presenting one PIV card as Yubico's ykcs11 does
+# (piv_module.cpp), which the key store's PIV cases load. It is written to a directory without a configuration
+# subdirectory, so the path is one on every generator, and pushed to its mirror on Android.
+add_library(crd-crypto-piv-module MODULE piv_module.cpp)
+target_link_libraries(crd-crypto-piv-module PRIVATE crd-warnings pkcs11)
+target_compile_features(crd-crypto-piv-module PRIVATE cxx_std_20)
+set(_crd_piv_dir "${CMAKE_CURRENT_BINARY_DIR}/piv-module")
+set_target_properties(crd-crypto-piv-module PROPERTIES
+    OUTPUT_NAME crd-piv-module
+    LIBRARY_OUTPUT_DIRECTORY "$<1:${_crd_piv_dir}>"
+    RUNTIME_OUTPUT_DIRECTORY "$<1:${_crd_piv_dir}>")
+add_dependencies(crd-crypto-tests crd-crypto-piv-module)
+crd_test_device_path(_crd_piv_module
+    "${_crd_piv_dir}/${CMAKE_SHARED_MODULE_PREFIX}crd-piv-module${CMAKE_SHARED_MODULE_SUFFIX}")
+target_compile_definitions(crd-crypto-tests PRIVATE CRD_PIV_MODULE="${_crd_piv_module}")
+crd_test_data(crd-crypto-tests "${_crd_piv_dir}")
+
 # What tls_key_log_compiled() must answer (network foundation S19): derived here from the shipping condition, apart
 # from crd-crypto's own definition, so a shipping lane fails the moment key logging reaches a shipping build.
 target_compile_definitions(crd-crypto-tests PRIVATE "CRD_TEST_EXPECT_TLS_KEY_LOG=$<IF:${_crd_shipping},0,1>")

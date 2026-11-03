@@ -543,11 +543,33 @@ holds ECDSA. The decisions (numbered for the tests):
   handle and label both match, so another store's reference deletes nothing. Return values map to `Unsupported` (no
   EC generation or ECDSA, the curve, a template the token refuses), `Denied` (login, a key handle or a function the
   token does not permit), `StorageFailure` (the token is full) and `Unavailable` (no module, no single token of the
-  label, a removed or failing device). PIV tokens through Yubico's ykcs11 (read 2026-11-03: its `C_GenerateKeyPair`
-  needs the SO login, the management key, and a `CKA_ID` of 1 to 25 naming a fixed PIV slot; its `C_DestroyObject`
-  deletes a slot's certificate, not its key, which only a new key in the slot overwrites) need a PIV placement of
-  their own: the SO secret, a free retired key-management slot (`CKA_ID` 5 to 24, slots 82 to 95) and overwriting to
-  forget. That is the next slice; a YubiKey 5 is its one physical item. Evidence (2026-11-03,
+  label, a removed or failing device). **The PIV profile** (`Pkcs11Token::piv`, device "pkcs11-piv"): PIV cards
+  through Yubico's ykcs11 (read 2026-11-03 and 2026-11-04 in yubico-piv-tool 2.7.3's ykcs11.c, objects.c and
+  token.c: `C_GenerateKeyPair` needs the security officer's login, the management key in hexadecimal or the PIN of a
+  PIN-protected one, and takes the slot from the first byte of `CKA_ID`, 1 to 25; it ignores labels and usages and
+  writes the slot's certificate with the key; `C_DestroyObject` deletes a slot's certificate, never its key; the
+  last session closes the login). The token carries the security officer's secret beside the PIN, held and zeroed
+  the same way and tried once per device by the same rules (`CKF_SO_PIN_LOCKED`, `_FINAL_TRY`, `_TO_BE_CHANGED`
+  first). A key takes the first retired key-management slot (`CKA_ID` 5 to 24, PIV slots 82 to 95) that holds no
+  certificate (a token `CKO_CERTIFICATE`; ykcs11's attestation certificates are session objects), since PIV's data
+  model pairs every key in use with its certificate; none free is `StorageFailure`, and slots 1 to 4 and 25 are never
+  touched. After generation the key must read back made on the token (`CKA_LOCAL`, which this profile and the
+  Objects one both require: ykcs11 reports even an imported key sensitive and never extractable) and its point
+  well-formed, else the slot is overwritten at once. The reference is a format byte (2), the slot and a 16-byte tag:
+  SHA-256 over "cerid key store piv slot", the store's identifier, the slot and the slot's public key. Signing and
+  forgetting read the slot's public key and compare the tag in constant time before any login, so another store's
+  reference, or a slot another key has since taken, is `Denied` and spends nothing. Forgetting overwrites the slot
+  with a P-256 key nobody holds and deletes its certificate, which frees the slot. The card's key can also agree
+  keys (a PIV slot's capability, not a template's); the device never asks it to. Evidence (2026-11-04,
+  [session](../sessions/2026-11-04-net-2-piv-profile.md)): three cases of `test_key_store.cpp` on a PIV test card
+  (`tests/foundation/crypto/piv_module.cpp`, a PKCS #11 module that presents one card as ykcs11 does, its
+  cryptography the test's AWS-LC keys) on win-debug, linux-gcc-debug and linux-gcc-asan: the profile's bounds and
+  references, slots taken and freed around another application's, a TLS handshake, the store and slot bindings,
+  forgetting and reuse, erasure, a full card, and eleven refusals (the security officer's secret refused once and
+  never on its final try, a read-only session, no EC generation, a failing or removed card, an imported key, a
+  malformed point, a refused PIN, a short signature, a key that asks for the PIN each time); four source mutations
+  each caught. The SoftHSM run passes with `CKA_LOCAL` required. A YubiKey 5 against the real ykcs11 is the one
+  physical item. Evidence (2026-11-03,
   [session](../sessions/2026-11-03-net-2-pkcs11-device.md)): the PKCS #11 cases of `test_key_store.cpp`. The contract
   case runs on every lane: fields out of range, an absent module, a library that is no PKCS #11 module, every refusal
   before the token. `crd-crypto-pkcs11-softhsm` (tests/foundation/crypto/pkcs11_token_session.py) runs every key store

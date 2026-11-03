@@ -7,29 +7,15 @@
 // application (C_Logout in any session logs out all of them), so the device logs the user in only when no session of
 // the process has and never logs out; the token closes the login with its last session. A key is a sign-only ECDSA
 // pair whose CKA_ID is a random handle and whose CKA_LABEL names the store, and every search names the handle, the
-// label and the curve, so another store's reference, or a key of another curve, is found nowhere.
+// label and the curve, so another store's reference, or a key of another curve, is found nowhere. A PIV card (the Piv
+// profile, Yubico's ykcs11) has fixed slots instead: a key takes a free retired key-management slot under the security
+// officer's login, its reference carries a tag over the store, the slot and the slot's public key, and forgetting
+// overwrites the slot, since ykcs11 deletes a slot's certificate but never its key.
 #include "byte_spans.hpp"
+#include "cryptoki.hpp"
 
 #include <crd/crypto/key_store.hpp>
 #include <crd/platform/dynamic_library.hpp>
-
-// The five macros OASIS's header asks its includer to define, and the 1-byte packing Cryptoki uses on Windows.
-// NOLINTBEGIN(cppcoreguidelines-macro-usage, bugprone-macro-parentheses): the header's own interface
-#define CK_PTR *
-#define CK_DECLARE_FUNCTION(returnType, name) returnType name
-#define CK_DECLARE_FUNCTION_POINTER(returnType, name) returnType(*name)
-#define CK_CALLBACK_FUNCTION(returnType, name) returnType(*name)
-#ifndef NULL_PTR
-#define NULL_PTR nullptr
-#endif
-// NOLINTEND(cppcoreguidelines-macro-usage, bugprone-macro-parentheses)
-#if defined(_WIN32)
-#pragma pack(push, cryptoki, 1)
-#endif
-#include <pkcs11.h>
-#if defined(_WIN32)
-#pragma pack(pop, cryptoki)
-#endif
 
 #include <cstring>
 #include <mutex>
@@ -133,6 +119,8 @@ std::mutex& pkcs11_lock() noexcept
     case CKR_OBJECT_HANDLE_INVALID:
     case CKR_KEY_FUNCTION_NOT_PERMITTED:
     case CKR_ACTION_PROHIBITED:
+    case CKR_USER_TYPE_INVALID:        // ykcs11: a PIV generation or deletion without the security officer's login
+    case CKR_SESSION_READ_ONLY_EXISTS: // another session of the process keeps the security officer out
         return CryptoError::Denied;
     case CKR_DEVICE_MEMORY:
         return CryptoError::StorageFailure; // the token is full
@@ -141,6 +129,13 @@ std::mutex& pkcs11_lock() noexcept
     default:
         return CryptoError::Unavailable; // removed, faulted or not answering
     }
+}
+
+// Whether a login's answer refuses the secret it was given (a wrong, malformed or locked PIN or management key).
+[[nodiscard]] bool refuses(CK_RV rv) noexcept
+{
+    return rv == CKR_PIN_INCORRECT || rv == CKR_PIN_INVALID || rv == CKR_PIN_LEN_RANGE || rv == CKR_PIN_LOCKED ||
+           rv == CKR_PIN_EXPIRED || rv == CKR_ARGUMENTS_BAD;
 }
 
 // ---- Keys and references ----
@@ -258,9 +253,10 @@ public:
         return failure_of(rv);
     }
 
-    // The user's login: none when a session of the process holds it already; one attempt with the PIN otherwise,
-    // never on a token that reports its PIN locked, on its final try or due for a change, nor after `refused`.
-    [[nodiscard]] CryptoError login(const Pkcs11Token& token, bool& refused) noexcept
+    // The login of `user` (CKU_USER with the PIN, CKU_SO with the security officer's secret): none when a session of
+    // the process holds it already; one attempt otherwise, never on a token that reports that secret locked, on its
+    // final try or due for a change, nor after `refused`.
+    [[nodiscard]] CryptoError login(const Pkcs11Token& token, CK_USER_TYPE user, bool& refused) noexcept
     {
         CK_SESSION_INFO info{};
         const CK_RV     state = m_f->C_GetSessionInfo(m_session, &info);
@@ -268,37 +264,36 @@ public:
         {
             return failure_of(state);
         }
-        if (info.state == CKS_RO_USER_FUNCTIONS || info.state == CKS_RW_USER_FUNCTIONS)
+        const bool so = user == CKU_SO;
+        if (so ? info.state == CKS_RW_SO_FUNCTIONS
+               : info.state == CKS_RO_USER_FUNCTIONS || info.state == CKS_RW_USER_FUNCTIONS)
         {
             return CryptoError::None;
         }
-        constexpr CK_FLAGS spent  = CKF_USER_PIN_LOCKED | CKF_USER_PIN_FINAL_TRY | CKF_USER_PIN_TO_BE_CHANGED;
-        const bool         pad    = (m_flags & CKF_PROTECTED_AUTHENTICATION_PATH) != 0U;
-        if (refused || (m_flags & spent) != 0U || (m_flags & CKF_USER_PIN_INITIALIZED) == 0U ||
-            (token.pin().empty() && !pad))
+        const CK_FLAGS spent = so ? CKF_SO_PIN_LOCKED | CKF_SO_PIN_FINAL_TRY | CKF_SO_PIN_TO_BE_CHANGED
+                                  : CKF_USER_PIN_LOCKED | CKF_USER_PIN_FINAL_TRY | CKF_USER_PIN_TO_BE_CHANGED;
+        const cont::ConstSpan<u8> secret = so ? token.so_secret() : token.pin();
+        const bool                pad    = (m_flags & CKF_PROTECTED_AUTHENTICATION_PATH) != 0U;
+        if (refused || (m_flags & spent) != 0U || (!so && (m_flags & CKF_USER_PIN_INITIALIZED) == 0U) ||
+            (secret.empty() && !pad))
         {
             return CryptoError::Denied;
         }
-        u8 pin[kPkcs11PinMaxBytes];
-        std::memcpy(pin, token.pin().data(), token.pin().size());
-        const CK_RV rv = m_f->C_Login(m_session, CKU_USER, token.pin().empty() ? nullptr : pin,
-                                      static_cast<CK_ULONG>(token.pin().size()));
-        secure_zero(cont::Span<u8>(pin));
-        switch (rv)
+        u8 copy[kPkcs11PinMaxBytes];
+        std::memcpy(copy, secret.data(), secret.size());
+        const CK_RV rv =
+            m_f->C_Login(m_session, user, secret.empty() ? nullptr : copy, static_cast<CK_ULONG>(secret.size()));
+        secure_zero(cont::Span<u8>(copy));
+        if (rv == CKR_OK || rv == CKR_USER_ALREADY_LOGGED_IN)
         {
-        case CKR_OK:
-        case CKR_USER_ALREADY_LOGGED_IN:
             return CryptoError::None;
-        case CKR_PIN_INCORRECT:
-        case CKR_PIN_INVALID:
-        case CKR_PIN_LEN_RANGE:
-        case CKR_PIN_LOCKED:
-        case CKR_PIN_EXPIRED:
+        }
+        if (refuses(rv))
+        {
             refused = true;
             return CryptoError::Denied;
-        default:
-            return failure_of(rv);
         }
+        return failure_of(rv);
     }
 
     // Whether the token implements `mechanism` with `flag`.
@@ -355,15 +350,18 @@ template <typename Value> [[nodiscard]] CK_ATTRIBUTE attribute(CK_ATTRIBUTE_TYPE
     return CK_ATTRIBUTE{type, &value, static_cast<CK_ULONG>(sizeof(value))};
 }
 
-// Whether a generated private key is kept inside: sensitive and never extractable since its generation, and signing.
+// Whether a generated private key is kept inside: made on the token (CKA_LOCAL: ykcs11 reports every key sensitive
+// and never extractable, an imported one too), sensitive and never extractable since then, and signing.
 [[nodiscard]] bool kept_inside(const Conversation& token, CK_OBJECT_HANDLE key) noexcept
 {
+    CK_BBOOL     local             = CK_FALSE;
     CK_BBOOL     sensitive         = CK_FALSE;
     CK_BBOOL     extractable       = CK_TRUE;
     CK_BBOOL     always_sensitive  = CK_FALSE;
     CK_BBOOL     never_extractable = CK_FALSE;
     CK_BBOOL     signs             = CK_FALSE;
     CK_ATTRIBUTE read[]            = {
+        attribute(CKA_LOCAL, local),
         attribute(CKA_SENSITIVE, sensitive),
         attribute(CKA_EXTRACTABLE, extractable),
         attribute(CKA_ALWAYS_SENSITIVE, always_sensitive),
@@ -371,7 +369,7 @@ template <typename Value> [[nodiscard]] CK_ATTRIBUTE attribute(CK_ATTRIBUTE_TYPE
         attribute(CKA_SIGN, signs),
     };
     return token.f().C_GetAttributeValue(token.session(), key, read, sizeof(read) / sizeof(read[0])) == CKR_OK &&
-           sensitive == CK_TRUE && extractable == CK_FALSE && always_sensitive == CK_TRUE &&
+           local == CK_TRUE && sensitive == CK_TRUE && extractable == CK_FALSE && always_sensitive == CK_TRUE &&
            never_extractable == CK_TRUE && signs == CK_TRUE;
 }
 
@@ -389,108 +387,237 @@ template <typename Value> [[nodiscard]] CK_ATTRIBUTE attribute(CK_ATTRIBUTE_TYPE
     std::memcpy(point.data(), encoded + 2U, point.size());
     return true;
 }
-} // namespace
 
-Pkcs11Token::Pkcs11Token(cont::StringView module, cont::StringView label, cont::ConstSpan<u8> pin) noexcept
+// A sign-only pair of `curve` on the token: its CKA_ID `id` and, unless empty, its CKA_LABEL `label` (the label goes
+// last in both templates, so it is left out by count). ykcs11 takes the slot from the first byte of CKA_ID and ignores
+// the usages and the label.
+[[nodiscard]] CK_RV generate_pair(const Conversation& token, Curve& curve, cont::Span<u8> id, cont::Span<char> label,
+                                  CK_OBJECT_HANDLE& public_half, CK_OBJECT_HANDLE& private_half) noexcept
 {
-    if (module.empty() || module.size() > kPkcs11ModuleMaxBytes || label.empty() || label.size() > kPkcs11LabelBytes ||
-        pin.size() > kPkcs11PinMaxBytes || std::memchr(module.data(), '\0', module.size()) != nullptr)
-    {
-        return;
-    }
-    std::memcpy(m_module, module.data(), module.size());
-    std::memcpy(m_label, label.data(), label.size());
-    if (!pin.empty())
-    {
-        std::memcpy(m_pin, pin.data(), pin.size());
-    }
-    m_label_bytes = label.size();
-    m_pin_bytes   = pin.size();
-    m_usable      = true;
+    CK_OBJECT_CLASS public_class      = CKO_PUBLIC_KEY;
+    CK_OBJECT_CLASS private_class     = CKO_PRIVATE_KEY;
+    CK_KEY_TYPE     type              = CKK_EC;
+    CK_BBOOL        yes               = CK_TRUE;
+    CK_BBOOL        no                = CK_FALSE;
+    const CK_ULONG  id_bytes          = static_cast<CK_ULONG>(id.size());
+    const CK_ULONG  label_bytes       = static_cast<CK_ULONG>(label.size());
+    CK_ATTRIBUTE    public_template[] = {
+        attribute(CKA_CLASS, public_class),
+        attribute(CKA_KEY_TYPE, type),
+        attribute(CKA_TOKEN, yes),
+        attribute(CKA_PRIVATE, no),
+        attribute(CKA_VERIFY, yes),
+        attribute(CKA_ENCRYPT, no),
+        attribute(CKA_WRAP, no),
+        attribute(CKA_DERIVE, no),
+        curve.params(),
+        CK_ATTRIBUTE{CKA_ID, id.data(), id_bytes},
+        CK_ATTRIBUTE{CKA_LABEL, label.data(), label_bytes},
+    };
+    CK_ATTRIBUTE private_template[] = {
+        attribute(CKA_CLASS, private_class),
+        attribute(CKA_KEY_TYPE, type),
+        attribute(CKA_TOKEN, yes),
+        attribute(CKA_PRIVATE, yes),
+        attribute(CKA_SENSITIVE, yes),
+        attribute(CKA_EXTRACTABLE, no),
+        attribute(CKA_SIGN, yes),
+        attribute(CKA_DECRYPT, no),
+        attribute(CKA_UNWRAP, no),
+        attribute(CKA_DERIVE, no),
+        CK_ATTRIBUTE{CKA_ID, id.data(), id_bytes},
+        CK_ATTRIBUTE{CKA_LABEL, label.data(), label_bytes},
+    };
+    const CK_ULONG unlabelled = label.empty() ? 1U : 0U;
+    CK_MECHANISM   generation{CKM_EC_KEY_PAIR_GEN, nullptr, 0U};
+    return token.f().C_GenerateKeyPair(
+        token.session(), &generation, public_template, sizeof(public_template) / sizeof(public_template[0]) - unlabelled,
+        private_template, sizeof(private_template) / sizeof(private_template[0]) - unlabelled, &public_half,
+        &private_half);
 }
 
-Pkcs11Token::~Pkcs11Token() noexcept
+// ---- PIV slots (the Piv profile: Yubico's ykcs11) ----
+
+constexpr u8      kPivFormat         = 2U;
+constexpr usize   kPivTagBytes       = 16U;
+constexpr usize   kPivReferenceBytes = 2U + kPivTagBytes;
+constexpr CK_BYTE kPivFirstRetired   = 5U;  // PIV slot 82, the first retired key-management slot
+constexpr CK_BYTE kPivLastRetired    = 24U; // PIV slot 95, the last
+constexpr char    kPivTagLabel[]     = "cerid key store piv slot";
+
+// A PIV reference's tag: SHA-256 over the label, the store's identifier, the slot and the slot's public key, cut to
+// kPivTagBytes, so a reference names one key of one store in one slot.
+void piv_tag(cont::ConstSpan<u8> store_id, CK_BYTE slot, cont::ConstSpan<u8> point, u8 (&tag)[kPivTagBytes]) noexcept
 {
-    secure_zero(cont::Span<u8>(m_pin));
+    u8    input[sizeof(kPivTagLabel) - 1U + kKeyStoreIdBytes + 1U + kDevicePublicKeyMaxBytes];
+    usize used = sizeof(kPivTagLabel) - 1U;
+    std::memcpy(input, kPivTagLabel, used);
+    std::memcpy(input + used, store_id.data(), kKeyStoreIdBytes);
+    used += kKeyStoreIdBytes;
+    input[used++] = slot;
+    std::memcpy(input + used, point.data(), point.size());
+    used += point.size();
+    u8 digest[kSha256Bytes];
+    sha256(cont::ConstSpan<u8>(input, used), cont::Span<u8, kSha256Bytes>(digest, kSha256Bytes));
+    std::memcpy(tag, digest, kPivTagBytes);
 }
 
-bool Pkcs11KeyDevice::available(const Pkcs11Token& token) noexcept
+[[nodiscard]] bool parse_piv(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> bytes, CK_BYTE& slot,
+                             u8 (&tag)[kPivTagBytes]) noexcept
 {
-    const std::lock_guard<std::mutex> lock(pkcs11_lock());
-    Conversation                      conversation;
-    return conversation.open(token, false) == CryptoError::None;
+    if (store_id.size() != kKeyStoreIdBytes || bytes.size() != kPivReferenceBytes || bytes[0] != kPivFormat ||
+        bytes[1] < kPivFirstRetired || bytes[1] > kPivLastRetired)
+    {
+        return false;
+    }
+    slot = bytes[1];
+    std::memcpy(tag, bytes.data() + 2U, kPivTagBytes);
+    return true;
 }
 
-cont::StringView Pkcs11KeyDevice::name() const noexcept
+// The slot's certificate: the token object that marks a slot taken (ykcs11's attestation certificates are session
+// objects, and its C_DestroyObject deletes a slot's certificate, never its key). Up to one, into `found`.
+[[nodiscard]] CryptoError piv_certificate(const Conversation& token, CK_BYTE slot, CK_OBJECT_HANDLE& found,
+                                          CK_ULONG& count) noexcept
 {
-    return "pkcs11";
+    CK_OBJECT_CLASS certificate = CKO_CERTIFICATE;
+    CK_BBOOL        yes         = CK_TRUE;
+    CK_ATTRIBUTE    search[]    = {
+        attribute(CKA_CLASS, certificate),
+        attribute(CKA_TOKEN, yes),
+        attribute(CKA_ID, slot),
+    };
+    return token.find(search, sizeof(search) / sizeof(search[0]), &found, 1U, count);
 }
 
-CryptoError Pkcs11KeyDevice::create(cont::ConstSpan<u8> store_id, AlgorithmId algorithm, cont::Array<u8>& reference,
-                                    cont::Span<u8> public_key) noexcept
+// Whether `slot` holds the key of `curve` that `tag` names for the store: its public key read and the tag compared in
+// constant time.
+[[nodiscard]] bool piv_holds(const Conversation& token, cont::ConstSpan<u8> store_id, CK_BYTE slot, Curve& curve,
+                             const u8 (&tag)[kPivTagBytes]) noexcept
 {
-    reference.clear();
-    Curve curve = curve_of(algorithm);
-    if (curve.field == 0U)
+    CK_OBJECT_CLASS public_class = CKO_PUBLIC_KEY;
+    CK_KEY_TYPE     type         = CKK_EC;
+    CK_ATTRIBUTE    search[]     = {
+        attribute(CKA_CLASS, public_class),
+        attribute(CKA_KEY_TYPE, type),
+        attribute(CKA_ID, slot),
+        curve.params(),
+    };
+    CK_OBJECT_HANDLE     found[2];
+    CK_ULONG             count = 0U;
+    u8                   point[kDevicePublicKeyMaxBytes];
+    const cont::Span<u8> view(point, 1U + 2U * curve.field);
+    if (token.find(search, sizeof(search) / sizeof(search[0]), found, 2U, count) != CryptoError::None ||
+        count != 1U || !point_of(token, found[0], view))
     {
-        return CryptoError::Unsupported;
+        return false;
     }
-    if (store_id.size() != kKeyStoreIdBytes || public_key.size() != 1U + 2U * curve.field)
-    {
-        return CryptoError::BadLength;
-    }
-    const std::lock_guard<std::mutex> lock(pkcs11_lock());
-    Conversation                      token;
-    CryptoError                       result = token.open(m_token, true);
-    if (result == CryptoError::None &&
-        (!token.implements(CKM_EC_KEY_PAIR_GEN, CKF_GENERATE_KEY_PAIR) || !token.implements(CKM_ECDSA, CKF_SIGN)))
-    {
-        result = CryptoError::Unsupported;
-    }
+    u8 expected[kPivTagBytes];
+    piv_tag(store_id, slot, view, expected);
+    return constant_time_equal(cont::ConstSpan<u8>(expected), cont::ConstSpan<u8>(tag));
+}
+
+// Forgets `slot`'s key, under the security officer's login: a P-256 key nobody holds overwrites it, then the slot's
+// certificate goes, which frees the slot.
+[[nodiscard]] CryptoError piv_overwrite(const Conversation& token, CK_BYTE slot) noexcept
+{
+    Curve            curve        = curve_of(AlgorithmId::EcdsaSecp256r1Sha256);
+    u8               id[1]        = {slot};
+    CK_OBJECT_HANDLE public_half  = CK_INVALID_HANDLE;
+    CK_OBJECT_HANDLE private_half = CK_INVALID_HANDLE;
+    CryptoError      result       = failure_of(
+        generate_pair(token, curve, cont::Span<u8>(id), cont::Span<char>(), public_half, private_half));
+    CK_OBJECT_HANDLE found = CK_INVALID_HANDLE;
+    CK_ULONG         count = 0U;
     if (result == CryptoError::None)
     {
-        result = token.login(m_token, m_pin_refused);
+        result = piv_certificate(token, slot, found, count);
     }
-    u8 handle[kHandleBytes];
-    if (result == CryptoError::None)
+    if (result == CryptoError::None && count == 1U)
     {
-        result = random_bytes(cont::Span<u8>(handle));
+        result = failure_of(token.f().C_DestroyObject(token.session(), found));
     }
+    return result;
+}
+
+// A new key of `curve` in the first retired slot that holds no certificate; a key the card did not keep inside, or
+// answered with a malformed point, is overwritten at once.
+[[nodiscard]] CryptoError create_in_slot(const Conversation& token, cont::ConstSpan<u8> store_id, Curve& curve,
+                                         cont::Array<u8>& reference, cont::Span<u8> public_key) noexcept
+{
+    CK_BYTE slot = 0U;
+    for (CK_BYTE candidate = kPivFirstRetired; slot == 0U && candidate <= kPivLastRetired; ++candidate)
+    {
+        CK_OBJECT_HANDLE  found  = CK_INVALID_HANDLE;
+        CK_ULONG          count  = 0U;
+        const CryptoError result = piv_certificate(token, candidate, found, count);
+        if (result != CryptoError::None)
+        {
+            return result;
+        }
+        if (count == 0U)
+        {
+            slot = candidate;
+        }
+    }
+    if (slot == 0U)
+    {
+        return CryptoError::StorageFailure; // every retired slot holds a certificate
+    }
+    u8               id[1]        = {slot};
+    CK_OBJECT_HANDLE public_half  = CK_INVALID_HANDLE;
+    CK_OBJECT_HANDLE private_half = CK_INVALID_HANDLE;
+    CryptoError      result       = failure_of(
+        generate_pair(token, curve, cont::Span<u8>(id), cont::Span<char>(), public_half, private_half));
+    if (result != CryptoError::None)
+    {
+        return result;
+    }
+    public_key[0] = 0x04U;
+    if (!kept_inside(token, private_half))
+    {
+        result = CryptoError::Denied;
+    }
+    else if (!point_of(token, public_half, public_key))
+    {
+        result = CryptoError::ProviderFailure;
+    }
+    if (result != CryptoError::None)
+    {
+        (void)piv_overwrite(token, slot);
+        secure_zero(public_key);
+        return result;
+    }
+    u8 tag[kPivTagBytes];
+    piv_tag(store_id, slot, public_key, tag);
+    reference.resize(kPivReferenceBytes);
+    reference[0] = kPivFormat;
+    reference[1] = slot;
+    std::memcpy(reference.data() + 2U, tag, kPivTagBytes);
+    return CryptoError::None;
+}
+
+// A new key object of `curve` named by a random handle and the store's label; a key the token did not keep inside,
+// or answered with a malformed point, keeps neither half.
+[[nodiscard]] CryptoError create_object(const Conversation& token, cont::ConstSpan<u8> store_id, Curve& curve,
+                                        cont::Array<u8>& reference, cont::Span<u8> public_key) noexcept
+{
+    u8          handle[kHandleBytes];
+    CryptoError result = random_bytes(cont::Span<u8>(handle));
     if (result != CryptoError::None)
     {
         return result;
     }
     char label[kLabelBytes];
     label_of(store_id, label);
-    CK_OBJECT_CLASS public_class      = CKO_PUBLIC_KEY;
-    CK_OBJECT_CLASS private_class     = CKO_PRIVATE_KEY;
-    CK_KEY_TYPE     type              = CKK_EC;
-    CK_BBOOL        yes               = CK_TRUE;
-    CK_BBOOL        no                = CK_FALSE;
-    CK_ATTRIBUTE    public_template[] = {
-        attribute(CKA_CLASS, public_class), attribute(CKA_KEY_TYPE, type), attribute(CKA_TOKEN, yes),
-        attribute(CKA_PRIVATE, no),         attribute(CKA_VERIFY, yes),    attribute(CKA_ENCRYPT, no),
-        attribute(CKA_WRAP, no),            attribute(CKA_DERIVE, no),     curve.params(),
-        attribute(CKA_ID, handle),          attribute(CKA_LABEL, label),
-    };
-    CK_ATTRIBUTE private_template[] = {
-        attribute(CKA_CLASS, private_class), attribute(CKA_KEY_TYPE, type), attribute(CKA_TOKEN, yes),
-        attribute(CKA_PRIVATE, yes),         attribute(CKA_SENSITIVE, yes), attribute(CKA_EXTRACTABLE, no),
-        attribute(CKA_SIGN, yes),            attribute(CKA_DECRYPT, no),    attribute(CKA_UNWRAP, no),
-        attribute(CKA_DERIVE, no),           attribute(CKA_ID, handle),     attribute(CKA_LABEL, label),
-    };
-    CK_MECHANISM     generation{CKM_EC_KEY_PAIR_GEN, nullptr, 0U};
     CK_OBJECT_HANDLE public_half  = CK_INVALID_HANDLE;
     CK_OBJECT_HANDLE private_half = CK_INVALID_HANDLE;
-    const CK_RV      rv = token.f().C_GenerateKeyPair(
-        token.session(), &generation, public_template, sizeof(public_template) / sizeof(public_template[0]),
-        private_template, sizeof(private_template) / sizeof(private_template[0]), &public_half, &private_half);
-    result = failure_of(rv);
+    result = failure_of(
+        generate_pair(token, curve, cont::Span<u8>(handle), cont::Span<char>(label), public_half, private_half));
     if (result != CryptoError::None)
     {
         return result;
     }
-    // A token that made the key but did not keep it inside, or answers with a malformed point, keeps neither half.
     public_key[0] = 0x04U;
     if (!kept_inside(token, private_half))
     {
@@ -512,6 +639,96 @@ CryptoError Pkcs11KeyDevice::create(cont::ConstSpan<u8> store_id, AlgorithmId al
     std::memcpy(reference.data() + 1U, handle, kHandleBytes);
     return CryptoError::None;
 }
+} // namespace
+
+Pkcs11Token::Pkcs11Token(cont::StringView module, cont::StringView label, cont::ConstSpan<u8> pin) noexcept
+{
+    if (module.empty() || module.size() > kPkcs11ModuleMaxBytes || label.empty() || label.size() > kPkcs11LabelBytes ||
+        pin.size() > kPkcs11PinMaxBytes || std::memchr(module.data(), '\0', module.size()) != nullptr)
+    {
+        return;
+    }
+    std::memcpy(m_module, module.data(), module.size());
+    std::memcpy(m_label, label.data(), label.size());
+    if (!pin.empty())
+    {
+        std::memcpy(m_pin, pin.data(), pin.size());
+    }
+    m_label_bytes = label.size();
+    m_pin_bytes   = pin.size();
+    m_usable      = true;
+}
+
+Pkcs11Token Pkcs11Token::piv(cont::StringView module, cont::StringView label, cont::ConstSpan<u8> pin,
+                             cont::ConstSpan<u8> so_secret) noexcept
+{
+    Pkcs11Token token(module, label, pin);
+    if (!token.m_usable || so_secret.size() > kPkcs11PinMaxBytes)
+    {
+        token = Pkcs11Token();
+        return token;
+    }
+    if (!so_secret.empty())
+    {
+        std::memcpy(token.m_so, so_secret.data(), so_secret.size());
+    }
+    token.m_so_bytes = so_secret.size();
+    token.m_profile  = Pkcs11Profile::Piv;
+    return token;
+}
+
+Pkcs11Token::~Pkcs11Token() noexcept
+{
+    secure_zero(cont::Span<u8>(m_pin));
+    secure_zero(cont::Span<u8>(m_so));
+}
+
+bool Pkcs11KeyDevice::available(const Pkcs11Token& token) noexcept
+{
+    const std::lock_guard<std::mutex> lock(pkcs11_lock());
+    Conversation                      conversation;
+    return conversation.open(token, false) == CryptoError::None;
+}
+
+cont::StringView Pkcs11KeyDevice::name() const noexcept
+{
+    return m_token.profile() == Pkcs11Profile::Piv ? "pkcs11-piv" : "pkcs11";
+}
+
+CryptoError Pkcs11KeyDevice::create(cont::ConstSpan<u8> store_id, AlgorithmId algorithm, cont::Array<u8>& reference,
+                                    cont::Span<u8> public_key) noexcept
+{
+    reference.clear();
+    Curve curve = curve_of(algorithm);
+    if (curve.field == 0U)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (store_id.size() != kKeyStoreIdBytes || public_key.size() != 1U + 2U * curve.field)
+    {
+        return CryptoError::BadLength;
+    }
+    const bool                        piv = m_token.profile() == Pkcs11Profile::Piv;
+    const std::lock_guard<std::mutex> lock(pkcs11_lock());
+    Conversation                      token;
+    CryptoError                       result = token.open(m_token, true);
+    if (result == CryptoError::None &&
+        (!token.implements(CKM_EC_KEY_PAIR_GEN, CKF_GENERATE_KEY_PAIR) || !token.implements(CKM_ECDSA, CKF_SIGN)))
+    {
+        result = CryptoError::Unsupported;
+    }
+    if (result == CryptoError::None)
+    {
+        // A PIV card generates only under the security officer's login; other tokens under the user's.
+        result = piv ? token.login(m_token, CKU_SO, m_so_refused) : token.login(m_token, CKU_USER, m_pin_refused);
+    }
+    if (result != CryptoError::None)
+    {
+        return result;
+    }
+    return piv ? create_in_slot(token, store_id, curve, reference, public_key)
+               : create_object(token, store_id, curve, reference, public_key);
+}
 
 CryptoError Pkcs11KeyDevice::sign_digest(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference,
                                          AlgorithmId algorithm, cont::ConstSpan<u8> digest,
@@ -527,8 +744,11 @@ CryptoError Pkcs11KeyDevice::sign_digest(cont::ConstSpan<u8> store_id, cont::Con
     {
         return CryptoError::BadLength;
     }
-    u8 handle[kHandleBytes];
-    if (!parse(store_id, reference, handle))
+    const bool piv = m_token.profile() == Pkcs11Profile::Piv;
+    u8         handle[kHandleBytes];
+    CK_BYTE    slot = 0U;
+    u8         tag[kPivTagBytes];
+    if (piv ? !parse_piv(store_id, reference, slot, tag) : !parse(store_id, reference, handle))
     {
         return CryptoError::Denied; // not a reference this device wrote
     }
@@ -537,23 +757,33 @@ CryptoError Pkcs11KeyDevice::sign_digest(cont::ConstSpan<u8> store_id, cont::Con
     const std::lock_guard<std::mutex> lock(pkcs11_lock());
     Conversation                      token;
     CryptoError                       result = token.open(m_token, false);
+    // A PIV slot is checked against the tag before any login: another store's key, or a key that has since taken the
+    // slot, spends nothing.
+    if (result == CryptoError::None && piv && !piv_holds(token, store_id, slot, curve, tag))
+    {
+        result = CryptoError::Denied;
+    }
     if (result == CryptoError::None)
     {
-        result = token.login(m_token, m_pin_refused);
+        result = token.login(m_token, CKU_USER, m_pin_refused);
     }
     if (result != CryptoError::None)
     {
         return result;
     }
-    CK_OBJECT_CLASS  private_class = CKO_PRIVATE_KEY;
-    CK_KEY_TYPE      type          = CKK_EC;
-    CK_ATTRIBUTE     search[]      = {
-        attribute(CKA_CLASS, private_class), attribute(CKA_KEY_TYPE, type), attribute(CKA_ID, handle),
-        attribute(CKA_LABEL, label),         curve.params(),
+    CK_OBJECT_CLASS private_class = CKO_PRIVATE_KEY;
+    CK_KEY_TYPE     type          = CKK_EC;
+    CK_ATTRIBUTE    search[]      = {
+        attribute(CKA_CLASS, private_class),
+        attribute(CKA_KEY_TYPE, type),
+        curve.params(),
+        piv ? attribute(CKA_ID, slot) : attribute(CKA_ID, handle),
+        attribute(CKA_LABEL, label), // the Objects profile's only: last, so a PIV search leaves it out by count
     };
+    const CK_ULONG   terms = sizeof(search) / sizeof(search[0]) - (piv ? 1U : 0U);
     CK_OBJECT_HANDLE found[2];
     CK_ULONG         count = 0U;
-    result = token.find(search, sizeof(search) / sizeof(search[0]), found, 2U, count);
+    result                 = token.find(search, terms, found, 2U, count);
     if (result == CryptoError::None && count != 1U)
     {
         result = CryptoError::Denied; // forgotten, another store's or another curve's
@@ -579,7 +809,7 @@ CryptoError Pkcs11KeyDevice::sign_digest(cont::ConstSpan<u8> store_id, cont::Con
         rv = token.f().C_Login(token.session(), CKU_CONTEXT_SPECIFIC, pin,
                                static_cast<CK_ULONG>(m_token.pin().size()));
         secure_zero(cont::Span<u8>(pin));
-        if (rv == CKR_PIN_INCORRECT || rv == CKR_PIN_LOCKED)
+        if (refuses(rv))
         {
             m_pin_refused = true;
             return CryptoError::Denied;
@@ -606,6 +836,30 @@ CryptoError Pkcs11KeyDevice::sign_digest(cont::ConstSpan<u8> store_id, cont::Con
 
 CryptoError Pkcs11KeyDevice::forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference) noexcept
 {
+    if (m_token.profile() == Pkcs11Profile::Piv)
+    {
+        CK_BYTE slot = 0U;
+        u8      tag[kPivTagBytes];
+        if (!parse_piv(store_id, reference, slot, tag))
+        {
+            return CryptoError::Denied;
+        }
+        const std::lock_guard<std::mutex> lock(pkcs11_lock());
+        Conversation                      token;
+        CryptoError                       result = token.open(m_token, true);
+        if (result != CryptoError::None)
+        {
+            return result;
+        }
+        Curve p256 = curve_of(AlgorithmId::EcdsaSecp256r1Sha256);
+        Curve p384 = curve_of(AlgorithmId::EcdsaSecp384r1Sha384);
+        if (!piv_holds(token, store_id, slot, p256, tag) && !piv_holds(token, store_id, slot, p384, tag))
+        {
+            return CryptoError::None; // the slot holds no key of this reference: nothing to forget
+        }
+        result = token.login(m_token, CKU_SO, m_so_refused);
+        return result == CryptoError::None ? piv_overwrite(token, slot) : result;
+    }
     u8 handle[kHandleBytes];
     if (!parse(store_id, reference, handle))
     {
@@ -618,7 +872,7 @@ CryptoError Pkcs11KeyDevice::forget(cont::ConstSpan<u8> store_id, cont::ConstSpa
     CryptoError                       result = token.open(m_token, true);
     if (result == CryptoError::None)
     {
-        result = token.login(m_token, m_pin_refused);
+        result = token.login(m_token, CKU_USER, m_pin_refused);
     }
     // Both halves, and nothing else: an object is destroyed only when its handle and its store's label both match.
     CK_ATTRIBUTE     search[] = {attribute(CKA_ID, handle), attribute(CKA_LABEL, label)};

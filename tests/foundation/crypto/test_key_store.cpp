@@ -8,6 +8,7 @@
 // device (a simulated one everywhere, the TPM on Windows and Linux, a PKCS #11 token under the pinned SoftHSM:
 // pkcs11_token_session.py), signing their certificates and handshakes through the provider's private-key method.
 
+#include "piv_module.hpp"
 #include "temp_directory.hpp"
 
 #include <crd/core/environment.hpp>
@@ -15,6 +16,7 @@
 #include <crd/crypto/key_store.hpp>
 #include <crd/crypto/tls.hpp>
 #include <crd/platform/durable_file.hpp>
+#include <crd/platform/dynamic_library.hpp>
 #include <crd/platform/filesystem.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -30,6 +32,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace
 {
@@ -2715,3 +2718,387 @@ TEST_CASE("Key store: the Android Keystore guards a master key and holds a store
     CHECK(done.client == TlsState::Established);
     CHECK(done.server == TlsState::Established);
 }
+
+// ---- The PKCS #11 device's PIV profile (decision K14) on the PIV test card (piv_module.cpp) ----
+
+#if defined(CRD_PIV_MODULE) // the Android Keystore's APK compiles this file without the card
+namespace
+{
+// The card's cryptography: P-256 and P-384 keys in AWS-LC, kept for the card's life.
+struct PivKeys
+{
+    static constexpr int    kMax = 64;
+    bssl::UniquePtr<EC_KEY> keys[kMax];
+    int                     count = 0;
+};
+
+int piv_card_generate(void* context, unsigned field, unsigned char* point)
+{
+    PivKeys& keys = *static_cast<PivKeys*>(context);
+    if (keys.count == PivKeys::kMax)
+    {
+        return -1;
+    }
+    bssl::UniquePtr<EC_KEY> key(EC_KEY_new_by_curve_name(field == 32U ? NID_X9_62_prime256v1 : NID_secp384r1));
+    const usize             point_bytes = 1U + 2U * field;
+    if (!key || EC_KEY_generate_key(key.get()) != 1 ||
+        EC_POINT_point2oct(EC_KEY_get0_group(key.get()), EC_KEY_get0_public_key(key.get()),
+                           POINT_CONVERSION_UNCOMPRESSED, point, point_bytes, nullptr) != point_bytes)
+    {
+        return -1;
+    }
+    keys.keys[keys.count] = std::move(key);
+    return keys.count++;
+}
+
+int piv_card_sign(void* context, int key, const unsigned char* digest, unsigned long digest_bytes, unsigned char* signature,
+             unsigned long signature_bytes)
+{
+    PivKeys& keys = *static_cast<PivKeys*>(context);
+    if (key < 0 || key >= keys.count)
+    {
+        return -1;
+    }
+    bssl::UniquePtr<ECDSA_SIG> sig(ECDSA_do_sign(digest, digest_bytes, keys.keys[key].get()));
+    const usize                field = signature_bytes / 2U;
+    if (!sig || BN_bn2bin_padded(signature, field, ECDSA_SIG_get0_r(sig.get())) != 1 ||
+        BN_bn2bin_padded(signature + field, field, ECDSA_SIG_get0_s(sig.get())) != 1)
+    {
+        return -1;
+    }
+    return 0;
+}
+
+template <usize N> [[nodiscard]] ConstSpan<u8> secret_of(const char (&text)[N])
+{
+    return ConstSpan<u8>(reinterpret_cast<const u8*>(text), N - 1U);
+}
+
+// The PIV test card: the module the device loads, opened again for its controls, reset to an empty card that signs
+// with this object's keys.
+class PivCard
+{
+public:
+    PivCard() : m_library(crd::platform::DynamicLibrary::open(fs::Path(CRD_PIV_MODULE), false))
+    {
+        REQUIRE(m_library.is_valid());
+        m_reset  = m_library.resolve_as<CrdPivReset>("crd_piv_reset");
+        m_faults = m_library.resolve_as<CrdPivFaults>("crd_piv_faults");
+        m_occupy = m_library.resolve_as<CrdPivOccupy>("crd_piv_occupy");
+        m_read   = m_library.resolve_as<CrdPivRead>("crd_piv_read");
+        m_logins = m_library.resolve_as<CrdPivLogins>("crd_piv_logins");
+        REQUIRE((m_reset != nullptr && m_faults != nullptr && m_occupy != nullptr && m_read != nullptr &&
+                 m_logins != nullptr));
+        const CrdPivHooks hooks{&m_keys, &piv_card_generate, &piv_card_sign};
+        m_reset(&hooks);
+    }
+    PivCard(const PivCard&)            = delete;
+    PivCard& operator=(const PivCard&) = delete;
+    ~PivCard() { m_reset(nullptr); } // the card keeps no hook into this object's keys
+
+    [[nodiscard]] static Pkcs11Token token(ConstSpan<u8> so = secret_of(kCrdPivSo))
+    {
+        return Pkcs11Token::piv(CRD_PIV_MODULE, kCrdPivLabel, secret_of(kCrdPivPin), so);
+    }
+    void faults(unsigned bits) const { m_faults(bits); }
+    void occupy(unsigned id, int key, bool certificate) const { m_occupy(id, key, certificate ? 1 : 0); }
+    [[nodiscard]] CrdPivSlot slot(unsigned id) const
+    {
+        CrdPivSlot out{};
+        m_read(id, &out);
+        return out;
+    }
+    [[nodiscard]] CrdPivCounts logins() const
+    {
+        CrdPivCounts out{};
+        m_logins(&out);
+        return out;
+    }
+
+private:
+    crd::platform::DynamicLibrary m_library;
+    PivKeys                       m_keys;
+    CrdPivReset                   m_reset  = nullptr;
+    CrdPivFaults                  m_faults = nullptr;
+    CrdPivOccupy                  m_occupy = nullptr;
+    CrdPivRead                    m_read   = nullptr;
+    CrdPivLogins                  m_logins = nullptr;
+};
+
+constexpr u8 kPivStore[kKeyStoreIdBytes] = {0x51, 0x1F};
+constexpr u8 kPivOther[kKeyStoreIdBytes] = {0x52, 0x1F};
+
+[[nodiscard]] CryptoError piv_sign(const Pkcs11KeyDevice& device, ConstSpan<u8> store_id, const Bytes& reference,
+                                   AlgorithmId algorithm, Span<u8> raw)
+{
+    const u8 digest[48] = {0x5A, 0x17};
+    return device.sign_digest(store_id, ConstSpan<u8>(reference.data(), reference.size()), algorithm,
+                              ConstSpan<u8>(digest, raw.size() / 2U), raw);
+}
+} // namespace
+
+TEST_CASE("Key store: the PKCS #11 device's PIV profile and its references", "[crypto][key-store]")
+{
+    // The PIV token takes the security officer's secret beside the PIN, in the same bounds, and names the device.
+    const Pkcs11Token piv = PivCard::token();
+    CHECK(piv.usable());
+    CHECK(piv.profile() == Pkcs11Profile::Piv);
+    CHECK(piv.so_secret().size() == sizeof(kCrdPivSo) - 1U);
+    CHECK(Pkcs11Token("libtoken.so", "cerid", secret_of(kCrdPivPin)).profile() == Pkcs11Profile::Objects);
+    CHECK(Pkcs11Token("libtoken.so", "cerid", secret_of(kCrdPivPin)).so_secret().empty());
+    u8 long_secret[kPkcs11PinMaxBytes + 1U] = {};
+    CHECK(Pkcs11Token::piv("libtoken.so", "cerid", secret_of(kCrdPivPin), ConstSpan<u8>(long_secret, kPkcs11PinMaxBytes))
+              .usable());
+    CHECK_FALSE(Pkcs11Token::piv("libtoken.so", "cerid", secret_of(kCrdPivPin), ConstSpan<u8>(long_secret)).usable());
+    CHECK_FALSE(Pkcs11Token::piv("", "cerid", secret_of(kCrdPivPin), secret_of(kCrdPivSo)).usable());
+    CHECK(Pkcs11Token::piv("libtoken.so", "cerid", secret_of(kCrdPivPin), ConstSpan<u8>()).usable()); // a PIN pad
+    Pkcs11KeyDevice device(piv);
+    CHECK(device.name() == StringView("pkcs11-piv"));
+
+    // A PIV device reads only its own references (a format byte, a retired slot from 5 to 24, a 16-byte tag), and an
+    // Objects device none of them: each is Denied before the card is asked.
+    PivCard     card;
+    const usize asked = card.logins().user;
+    Pkcs11KeyDevice objects(Pkcs11Token(CRD_PIV_MODULE, kCrdPivLabel, secret_of(kCrdPivPin)));
+    u8              raw[64];
+    const u8        digest[32] = {};
+    u8              forged[18] = {2U, 5U};
+    const auto      refused    = [&](const KeyDevice& by, ConstSpan<u8> reference)
+    {
+        return by.sign_digest(ConstSpan<u8>(kPivStore), reference, AlgorithmId::EcdsaSecp256r1Sha256,
+                              ConstSpan<u8>(digest), Span<u8>(raw)) == CryptoError::Denied;
+    };
+    CHECK(refused(objects, ConstSpan<u8>(forged)));
+    CHECK(refused(device, ConstSpan<u8>(forged, 17U)));
+    forged[1] = 4U; // the fourth fixed slot (9e): never Cerid's
+    CHECK(refused(device, ConstSpan<u8>(forged)));
+    forged[1] = 25U; // the attestation slot (f9)
+    CHECK(refused(device, ConstSpan<u8>(forged)));
+    forged[1] = 24U;
+    forged[0] = 1U;
+    CHECK(refused(device, ConstSpan<u8>(forged)));
+    forged[0] = 2U; // a well-formed reference to an empty slot: Denied after the slot is read, before any login
+    CHECK(refused(device, ConstSpan<u8>(forged)));
+    CHECK(device.forget(ConstSpan<u8>(kPivStore), ConstSpan<u8>(forged, 17U)) == CryptoError::Denied);
+    CHECK(device.forget(ConstSpan<u8>(kPivStore, 15U), ConstSpan<u8>(forged)) == CryptoError::Denied);
+    CHECK(device.forget(ConstSpan<u8>(kPivStore), ConstSpan<u8>(forged)) == CryptoError::None); // names nothing
+    CHECK(card.logins().user == asked);
+    CHECK(card.logins().so == 0U);
+}
+
+TEST_CASE("Key store: a PIV card holds a store's keys in its free retired slots", "[crypto][key-store]")
+{
+    PivCard card;
+    // Slot 5 holds another application's key and certificate; slot 6 a key without its certificate, which PIV's data
+    // model counts as no key in use. Cerid takes slot 6 and leaves 1 to 4, 5 and 25 alone.
+    card.occupy(5U, 1000, true);
+    card.occupy(6U, 1001, false);
+    TempStore       dir("pkcs11-piv");
+    TestProtector   protector;
+    Pkcs11KeyDevice device(PivCard::token());
+    KeyStore        store;
+    REQUIRE(store.create(dir.dir(), protector, &device) == CryptoError::None);
+    REQUIRE(store.generate("server", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwareRequired, 1U) ==
+            CryptoError::None);
+    check_device_signs(store, "server");
+    REQUIRE(store.generate("p384", AlgorithmId::EcdsaSecp384r1Sha384, PlacementRequest::HardwareRequired, 1U) ==
+            CryptoError::None);
+    check_device_signs(store, "p384");
+    CHECK(card.slot(5U).key == 1000);
+    CHECK(card.slot(5U).certificate == 1);
+    CHECK(card.slot(6U).field == 32U);
+    CHECK(card.slot(6U).certificate == 1);
+    CHECK(card.slot(6U).generations == 1U);
+    CHECK(card.slot(7U).field == 48U);
+    for (const unsigned fixed : {1U, 2U, 3U, 4U, 25U})
+    {
+        CHECK(card.slot(fixed).key == -1);
+    }
+    CHECK(card.logins().so == 2U); // one security officer's login for each key
+
+    // The card signs a handshake through the private-key method.
+    StoredSigner signer;
+    REQUIRE(store.signer("server", signer) == CryptoError::None);
+    TlsCredential credential;
+    REQUIRE(credential.init(signer, "piv.cerid.test") == TlsError::None);
+    const Handshake done = handshake(credential, nullptr);
+    CHECK(done.client == TlsState::Established);
+    CHECK(done.server == TlsState::Established);
+
+    // A reference names one store's key in one slot: under another store's identifier, for the other curve, or once
+    // another key has taken the slot, it is Denied.
+    Bytes reference;
+    u8    point[65];
+    REQUIRE(device.create(ConstSpan<u8>(kPivStore), AlgorithmId::EcdsaSecp256r1Sha256, reference,
+                       Span<u8>(point)) == CryptoError::None);
+    REQUIRE(reference.size() == 18U);
+    CHECK(reference[0] == 2U);
+    CHECK(reference[1] == 8U);
+    u8 raw[96];
+    CHECK(piv_sign(device, ConstSpan<u8>(kPivOther), reference, AlgorithmId::EcdsaSecp256r1Sha256, Span<u8>(raw, 64U)) ==
+          CryptoError::Denied);
+    CHECK(piv_sign(device, ConstSpan<u8>(kPivStore), reference, AlgorithmId::EcdsaSecp384r1Sha384, Span<u8>(raw)) ==
+          CryptoError::Denied);
+    REQUIRE(piv_sign(device, ConstSpan<u8>(kPivStore), reference, AlgorithmId::EcdsaSecp256r1Sha256,
+                     Span<u8>(raw, 64U)) == CryptoError::None);
+    const u8 digest[32] = {0x5A, 0x17};
+    CHECK(raw_ecdsa_valid(AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(point), ConstSpan<u8>(digest),
+                          ConstSpan<u8>(raw, 64U)));
+
+    // Forgetting under another store's identifier touches nothing; under its own it overwrites the slot with a key
+    // nobody holds and deletes the certificate, so the slot is free again and the reference names nothing.
+    CHECK(device.forget(ConstSpan<u8>(kPivOther), ConstSpan<u8>(reference.data(), reference.size())) ==
+          CryptoError::None);
+    CHECK(card.slot(8U).generations == 1U);
+    CHECK(card.slot(8U).certificate == 1);
+    REQUIRE(device.forget(ConstSpan<u8>(kPivStore), ConstSpan<u8>(reference.data(), reference.size())) ==
+            CryptoError::None);
+    const CrdPivSlot forgotten = card.slot(8U);
+    CHECK(forgotten.generations == 2U);
+    CHECK(forgotten.certificate == 0);
+    CHECK(std::memcmp(forgotten.point, point, sizeof(point)) != 0);
+    CHECK(piv_sign(device, ConstSpan<u8>(kPivStore), reference, AlgorithmId::EcdsaSecp256r1Sha256,
+                   Span<u8>(raw, 64U)) == CryptoError::Denied);
+    const unsigned so_before = card.logins().so;
+    CHECK(device.forget(ConstSpan<u8>(kPivStore), ConstSpan<u8>(reference.data(), reference.size())) ==
+          CryptoError::None); // forgotten already: no login, no overwrite
+    CHECK(card.logins().so == so_before);
+    CHECK(card.slot(8U).generations == 2U);
+    Bytes again;
+    REQUIRE(device.create(ConstSpan<u8>(kPivStore), AlgorithmId::EcdsaSecp256r1Sha256, again,
+                       Span<u8>(point)) == CryptoError::None);
+    CHECK(again[1] == 8U); // the freed slot, taken again
+    CHECK(piv_sign(device, ConstSpan<u8>(kPivStore), reference, AlgorithmId::EcdsaSecp256r1Sha256,
+                   Span<u8>(raw, 64U)) == CryptoError::Denied); // the old reference does not name the new key
+    REQUIRE(device.forget(ConstSpan<u8>(kPivStore), ConstSpan<u8>(again.data(), again.size())) == CryptoError::None);
+
+    // Erasing the store overwrites and frees every slot it held.
+    REQUIRE(store.erase() == CryptoError::None);
+    for (const unsigned held : {6U, 7U})
+    {
+        CHECK(card.slot(held).certificate == 0);
+        CHECK(card.slot(held).generations == 2U);
+    }
+    CHECK(card.slot(5U).key == 1000);
+
+    // A card whose every retired slot holds a certificate has no room: StorageFailure, and nothing is overwritten.
+    for (unsigned id = 5U; id <= 24U; ++id)
+    {
+        card.occupy(id, static_cast<int>(2000U + id), true);
+    }
+    CHECK(device.create(ConstSpan<u8>(kPivStore), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point)) ==
+          CryptoError::StorageFailure);
+    CHECK(reference.empty());
+    CHECK(card.slot(24U).key == 2024);
+}
+
+TEST_CASE("Key store: a PIV card's refusals", "[crypto][key-store]")
+{
+    PivCard     card;
+    Bytes       reference;
+    u8          point[65];
+    u8          raw[64];
+    const auto  create = [&](Pkcs11KeyDevice& device)
+    {
+        return device.create(ConstSpan<u8>(kPivStore), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point));
+    };
+    Pkcs11KeyDevice device(PivCard::token());
+    REQUIRE(create(device) == CryptoError::None);
+    const Bytes held = reference;
+
+    SECTION("a security officer's secret on its final try is never spent")
+    {
+        card.faults(CrdPivSoFinalTry);
+        CHECK(create(device) == CryptoError::Denied);
+        CHECK(device.forget(ConstSpan<u8>(kPivStore), ConstSpan<u8>(held.data(), held.size())) == CryptoError::Denied);
+        CHECK(card.logins().so == 1U); // the first key's only
+        CHECK(card.slot(5U).generations == 1U);
+    }
+    SECTION("a refused security officer's secret is tried once, by the device and its copies")
+    {
+        card.faults(CrdPivSoRefused);
+        CHECK(create(device) == CryptoError::Denied);
+        CHECK(create(device) == CryptoError::Denied);
+        CHECK(device.forget(ConstSpan<u8>(kPivStore), ConstSpan<u8>(held.data(), held.size())) == CryptoError::Denied);
+        Pkcs11KeyDevice copy(device);
+        CHECK(create(copy) == CryptoError::Denied);
+        CHECK(card.logins().so == 2U);
+        // The user's PIN is another secret: the key still signs.
+        CHECK(piv_sign(device, ConstSpan<u8>(kPivStore), held, AlgorithmId::EcdsaSecp256r1Sha256, Span<u8>(raw)) ==
+              CryptoError::None);
+        CHECK(card.slot(5U).generations == 1U);
+    }
+    SECTION("a wrong security officer's secret is refused by the card")
+    {
+        Pkcs11KeyDevice wrong(PivCard::token(secret_of("0102030405060708010203040506070801020304050607FF")));
+        CHECK(create(wrong) == CryptoError::Denied);
+        CHECK(create(wrong) == CryptoError::Denied);
+        CHECK(card.logins().so == 2U);
+    }
+    SECTION("an empty security officer's secret without a PIN pad is never sent")
+    {
+        Pkcs11KeyDevice none(PivCard::token(ConstSpan<u8>()));
+        CHECK(create(none) == CryptoError::Denied);
+        CHECK(card.logins().so == 1U);
+    }
+    SECTION("a read-only session elsewhere keeps the security officer out without spending the secret")
+    {
+        card.faults(CrdPivReadOnlyExists);
+        CHECK(create(device) == CryptoError::Denied);
+        card.faults(0U);
+        CHECK(create(device) == CryptoError::None);
+    }
+    SECTION("a card without EC generation, failing or removed")
+    {
+        card.faults(CrdPivNoEcGeneration);
+        CHECK(create(device) == CryptoError::Unsupported);
+        card.faults(CrdPivGenerationFails);
+        CHECK(create(device) == CryptoError::Unavailable);
+        CHECK(card.slot(6U).generations == 0U);
+        card.faults(CrdPivRemoved);
+        CHECK_FALSE(Pkcs11KeyDevice::available(PivCard::token()));
+        CHECK(create(device) == CryptoError::Unavailable);
+        CHECK(piv_sign(device, ConstSpan<u8>(kPivStore), held, AlgorithmId::EcdsaSecp256r1Sha256, Span<u8>(raw)) ==
+              CryptoError::Unavailable);
+    }
+    SECTION("a key the card did not make, or answers with a malformed point, is overwritten at once")
+    {
+        card.faults(CrdPivImported);
+        CHECK(create(device) == CryptoError::Denied);
+        CHECK(reference.empty());
+        CHECK(card.slot(6U).generations == 2U);
+        CHECK(card.slot(6U).certificate == 0);
+        card.faults(CrdPivBadPoint);
+        CHECK(create(device) == CryptoError::ProviderFailure);
+        CHECK(card.slot(6U).generations == 4U);
+        CHECK(card.slot(6U).certificate == 0);
+        CHECK(point[0] == 0U);
+    }
+    SECTION("a refused PIN is tried once; a foreign reference spends none")
+    {
+        card.faults(CrdPivUserRefused);
+        CHECK(piv_sign(device, ConstSpan<u8>(kPivOther), held, AlgorithmId::EcdsaSecp256r1Sha256, Span<u8>(raw)) ==
+              CryptoError::Denied);
+        CHECK(card.logins().user == 0U);
+        CHECK(piv_sign(device, ConstSpan<u8>(kPivStore), held, AlgorithmId::EcdsaSecp256r1Sha256, Span<u8>(raw)) ==
+              CryptoError::Denied);
+        CHECK(piv_sign(device, ConstSpan<u8>(kPivStore), held, AlgorithmId::EcdsaSecp256r1Sha256, Span<u8>(raw)) ==
+              CryptoError::Denied);
+        CHECK(card.logins().user == 1U);
+        CHECK(raw[0] == 0U);
+    }
+    SECTION("a short signature, and a key that asks for the PIN at each signature")
+    {
+        card.faults(CrdPivShortSignature);
+        CHECK(piv_sign(device, ConstSpan<u8>(kPivStore), held, AlgorithmId::EcdsaSecp256r1Sha256, Span<u8>(raw)) ==
+              CryptoError::ProviderFailure);
+        card.faults(CrdPivAlwaysAuthenticate);
+        REQUIRE(piv_sign(device, ConstSpan<u8>(kPivStore), held, AlgorithmId::EcdsaSecp256r1Sha256, Span<u8>(raw)) ==
+                CryptoError::None);
+        CHECK(card.logins().context == 1U);
+        const u8 digest[32] = {0x5A, 0x17};
+        CHECK(raw_ecdsa_valid(AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(point), ConstSpan<u8>(digest),
+                              ConstSpan<u8>(raw)));
+    }
+}
+#endif
