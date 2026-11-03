@@ -249,10 +249,10 @@ TEST_CASE("TLS policy: a session offers and accepts only what its generation all
 
     SECTION("without a policy a server's configured order decides; under it the preferred hybrid leads")
     {
-        constexpr AlgorithmId kClassicalFirst[] = {AlgorithmId::X25519, AlgorithmId::X25519Mlkem768};
+        constexpr AlgorithmId classical_first[] = {AlgorithmId::X25519, AlgorithmId::X25519Mlkem768};
         Setup setup;
-        setup.client_groups = kClassicalFirst;
-        setup.server_groups = kClassicalFirst;
+        setup.client_groups = classical_first;
+        setup.server_groups = classical_first;
         Pair plain;
         configure(plain, setup);
         establish(plain);
@@ -273,10 +273,10 @@ TEST_CASE("TLS policy: a session offers and accepts only what its generation all
         PolicyContent content = accepting_all(2U);
         refuse(content, AlgorithmId::X25519Mlkem768);
         policy.apply(content);
-        constexpr AlgorithmId kHybrid[] = {AlgorithmId::X25519Mlkem768};
-        constexpr AlgorithmId kHybridOrP384[] = {AlgorithmId::X25519Mlkem768, AlgorithmId::Secp384r1};
+        constexpr AlgorithmId hybrid[] = {AlgorithmId::X25519Mlkem768};
+        constexpr AlgorithmId hybrid_or_p384[] = {AlgorithmId::X25519Mlkem768, AlgorithmId::Secp384r1};
         Setup setup;
-        setup.server_groups = kHybrid; // only the group the client's policy refuses
+        setup.server_groups = hybrid; // only the group the client's policy refuses
         setup.client_policy = &policy.store;
         Pair offered;
         configure(offered, setup);
@@ -284,8 +284,8 @@ TEST_CASE("TLS policy: a session offers and accepts only what its generation all
         CHECK(offered.client_session.state() == TlsState::Failed);
         CHECK(offered.server_session.state() == TlsState::Failed);
 
-        setup.client_groups = kHybrid; // a client without a policy offers only the group the server's refuses
-        setup.server_groups = kHybridOrP384;
+        setup.client_groups = hybrid; // a client without a policy offers only the group the server's refuses
+        setup.server_groups = hybrid_or_p384;
         setup.client_policy = nullptr;
         setup.server_policy = &policy.store;
         Pair accepted;
@@ -357,17 +357,17 @@ TEST_CASE("TLS policy: a session the generation leaves nothing to run on is refu
         CHECK(pair.client_session.state() == TlsState::Idle);
         CHECK(pair.client_session.pending() == 0U);
     };
-    constexpr AlgorithmId kChacha[] = {AlgorithmId::Chacha20Poly1305};
-    constexpr AlgorithmId kMlDsa[] = {AlgorithmId::MlDsa65};
-    constexpr AlgorithmId kX25519[] = {AlgorithmId::X25519};
+    constexpr AlgorithmId chacha[] = {AlgorithmId::Chacha20Poly1305};
+    constexpr AlgorithmId ml_dsa[] = {AlgorithmId::MlDsa65};
+    constexpr AlgorithmId x25519[] = {AlgorithmId::X25519};
     Setup no_aead;
-    no_aead.client_aeads = kChacha;
+    no_aead.client_aeads = chacha;
     refused_client(no_aead);
     Setup no_signature;
-    no_signature.client_accepts = kMlDsa;
+    no_signature.client_accepts = ml_dsa;
     refused_client(no_signature);
     Setup no_group;
-    no_group.client_groups = kX25519;
+    no_group.client_groups = x25519;
     refused_client(no_group);
 
     // A server whose own credential is refused serves nothing; the store's next generation lets it serve again.
@@ -399,10 +399,10 @@ TEST_CASE("TLS policy: Cerid service contexts follow their own rules first", "[c
         content.rules[content.rule_count++] = {classical, 0U, 0U, 0U, 1U, PolicyScope::CeridServices};
     }
     policy.apply(content);
-    constexpr AlgorithmId kClassical[] = {AlgorithmId::X25519, AlgorithmId::Secp256r1, AlgorithmId::Secp384r1};
+    constexpr AlgorithmId classical[] = {AlgorithmId::X25519, AlgorithmId::Secp256r1, AlgorithmId::Secp384r1};
     Setup setup;
-    setup.client_groups = kClassical;
-    setup.server_groups = kClassical;
+    setup.client_groups = classical;
+    setup.server_groups = classical;
     setup.client_policy = &policy.store;
     Pair everywhere;
     configure(everywhere, setup);
@@ -469,13 +469,13 @@ TEST_CASE("TLS policy: a generation applied while a session runs reaches it at i
           "[crypto][tls][net-2]")
 {
     // Both ends run on ChaCha20-Poly1305; the client's store then refuses it.
-    constexpr AlgorithmId kChacha[] = {AlgorithmId::Chacha20Poly1305};
+    constexpr AlgorithmId chacha[] = {AlgorithmId::Chacha20Poly1305};
     Policy client_policy;
     Policy server_policy;
     client_policy.apply(accepting_all(1U));
     server_policy.apply(accepting_all(1U));
     Setup setup;
-    setup.client_aeads = kChacha;
+    setup.client_aeads = chacha;
     setup.client_policy = &client_policy.store;
     setup.server_policy = &server_policy.store;
     PolicyContent disable = accepting_all(2U);
@@ -559,10 +559,10 @@ TEST_CASE("TLS policy: a QUIC handshake runs under the policy and its transport 
 {
     Policy policy;
     policy.apply(accepting_all(1U));
-    constexpr AlgorithmId kClassicalFirst[] = {AlgorithmId::X25519, AlgorithmId::X25519Mlkem768};
+    constexpr AlgorithmId classical_first[] = {AlgorithmId::X25519, AlgorithmId::X25519Mlkem768};
     Setup setup;
-    setup.client_groups = kClassicalFirst;
-    setup.server_groups = kClassicalFirst;
+    setup.client_groups = classical_first;
+    setup.server_groups = classical_first;
     setup.client_policy = &policy.store;
     setup.server_policy = &policy.store;
     setup.protocols = kGame;
@@ -574,14 +574,14 @@ TEST_CASE("TLS policy: a QUIC handshake runs under the policy and its transport 
     CHECK(client.check_policy() == TlsError::NotReady);
     REQUIRE(client.init(pair.client, ConstSpan<u8>(kClientParameters)) == TlsError::None);
     REQUIRE(server.init(pair.server, ConstSpan<u8>(kServerParameters)) == TlsError::None);
-    constexpr QuicLevel kLevels[] = {QuicLevel::Initial, QuicLevel::Handshake, QuicLevel::Application};
+    constexpr QuicLevel levels[] = {QuicLevel::Initial, QuicLevel::Handshake, QuicLevel::Application};
     for (int round = 0; round < 16; ++round)
     {
         usize moved = 0U;
         for (QuicHandshake* from : {&client, &server})
         {
             QuicHandshake* to = from == &client ? &server : &client;
-            for (const QuicLevel level : kLevels)
+            for (const QuicLevel level : levels)
             {
                 Bytes bytes;
                 bytes.resize(from->pending(level));

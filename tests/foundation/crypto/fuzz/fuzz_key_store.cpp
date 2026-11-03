@@ -446,10 +446,19 @@ private:
             return false;
         }
         const bool revoked = r.state == 2U;
-        const bool held_fits =
-            revoked ? priv.empty()
-                    : (hardware ? !priv.empty() && priv.size() <= 64U : priv.size() == private_length);
-        if (pub.size() != public_length || !held_fits)
+        usize held_min = private_length;
+        usize held_max = private_length;
+        if (revoked)
+        {
+            held_min = 0U;
+            held_max = 0U;
+        }
+        else if (hardware)
+        {
+            held_min = 1U;
+            held_max = 64U;
+        }
+        if (pub.size() != public_length || priv.size() < held_min || priv.size() > held_max)
         {
             return false;
         }
@@ -837,7 +846,11 @@ void changes(const u8* data, usize size)
         put(body, public_length, 2U);
         put(body, ConstSpan<u8>(pub.data(), pub.size()));
         // A device key's entry holds a 17-byte reference (a format byte and a handle) in place of its private input.
-        const usize held = item.state == 2U ? 0U : (item.hardware ? 17U : private_length);
+        usize held = item.hardware ? 17U : private_length;
+        if (item.state == 2U)
+        {
+            held = 0U;
+        }
         put(body, held, 1U);
         put(body, ConstSpan<u8>(priv, held));
     }

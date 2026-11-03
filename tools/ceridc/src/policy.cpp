@@ -154,12 +154,12 @@ void instant_text(crd::u64 seconds, char (&out)[32])
 
 void hex_text(cont::ConstSpan<crd::u8> bytes, cont::String& out)
 {
-    constexpr char kDigits[] = "0123456789abcdef";
+    constexpr char digits[] = "0123456789abcdef";
     out.clear();
     for (const crd::u8 byte : bytes)
     {
-        out.push_back(kDigits[byte >> 4U]);
-        out.push_back(kDigits[byte & 0x0FU]);
+        out.push_back(digits[byte >> 4U]);
+        out.push_back(digits[byte & 0x0FU]);
     }
 }
 

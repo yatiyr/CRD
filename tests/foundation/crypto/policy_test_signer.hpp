@@ -87,12 +87,12 @@ inline const TrustKey kTestTrust[] = {
 // everywhere and preferring the hybrid groups: the tests narrow it with refuse_rule() and prefer_rule().
 [[nodiscard]] inline PolicyContent accepting_all(u64 number, u64 issued) noexcept
 {
-    constexpr u64 kDay = 86400U;
+    constexpr u64 day = 86400U;
     PolicyContent content;
     content.generation    = number;
     content.issued        = issued;
-    content.expires       = issued + 30U * kDay;
-    content.offline_grace = static_cast<u32>(7U * kDay);
+    content.expires       = issued + 30U * day;
+    content.offline_grace = static_cast<u32>(7U * day);
     for (const AlgorithmId algorithm : kAlgorithmIds)
     {
         const bool hybrid = algorithm_class(algorithm) == AlgorithmClass::HybridKeyExchange;

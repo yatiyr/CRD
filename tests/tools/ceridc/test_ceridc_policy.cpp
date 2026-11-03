@@ -141,7 +141,7 @@ struct IssueKey
 
 void write_trust(const char* path, std::initializer_list<const IssueKey*> keys)
 {
-    constexpr char kDigits[] = "0123456789abcdef";
+    constexpr char digits[] = "0123456789abcdef";
     cont::String text;
     for (const IssueKey* key : keys)
     {
@@ -150,8 +150,8 @@ void write_trust(const char* path, std::initializer_list<const IssueKey*> keys)
         text += "\"\npublic_key = \"";
         for (const u8 byte : key->public_view())
         {
-            text.push_back(kDigits[byte >> 4U]);
-            text.push_back(kDigits[byte & 0x0FU]);
+            text.push_back(digits[byte >> 4U]);
+            text.push_back(digits[byte & 0x0FU]);
         }
         text += "\"\n\n";
     }

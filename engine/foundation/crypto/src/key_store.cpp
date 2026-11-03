@@ -695,11 +695,19 @@ CryptoError KeyStore::decode(cont::ConstSpan<u8> body, cont::Array<Entry>& entri
         // A Hardware key holds its device's reference (1 to kKeyDeviceReferenceMaxBytes) in place of a private input;
         // its public key is the one the device gave when it made the key, which only the identifier binds.
         const bool revoked = info.state == KeyState::Revoked;
-        const bool private_fits =
-            revoked ? priv.empty()
-                    : (hardware ? !priv.empty() && priv.size() <= kKeyDeviceReferenceMaxBytes
-                                : priv.size() == private_bytes(info.kind, info.algorithm));
-        if (pub.size() != public_bytes(info.kind, info.algorithm) || !private_fits)
+        usize held_min = private_bytes(info.kind, info.algorithm);
+        usize held_max = held_min;
+        if (revoked)
+        {
+            held_min = 0U;
+            held_max = 0U;
+        }
+        else if (hardware)
+        {
+            held_min = 1U;
+            held_max = kKeyDeviceReferenceMaxBytes;
+        }
+        if (pub.size() != public_bytes(info.kind, info.algorithm) || priv.size() < held_min || priv.size() > held_max)
         {
             return CryptoError::Malformed;
         }

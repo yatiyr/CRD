@@ -703,28 +703,28 @@ TEST_CASE("Policy: Cerid service sessions follow their own rules first", "[crypt
     REQUIRE(store.apply(encoded.view(), kT0) == PolicyError::None);
     const PolicySnapshot snapshot = store.snapshot();
 
-    constexpr PolicyScope kServices = PolicyScope::CeridServices;
+    constexpr PolicyScope services = PolicyScope::CeridServices;
     CHECK(snapshot.status(AlgorithmId::X25519, kT0) == AlgorithmStatus::Preferred);
-    CHECK(snapshot.status(AlgorithmId::X25519, kT0, kServices) == AlgorithmStatus::Accepted);
-    CHECK(snapshot.status(AlgorithmId::X25519, kT0 + 3U * kDay - 1U, kServices) == AlgorithmStatus::Accepted);
-    CHECK(snapshot.status(AlgorithmId::X25519, kT0 + 3U * kDay, kServices) == AlgorithmStatus::Refused);
+    CHECK(snapshot.status(AlgorithmId::X25519, kT0, services) == AlgorithmStatus::Accepted);
+    CHECK(snapshot.status(AlgorithmId::X25519, kT0 + 3U * kDay - 1U, services) == AlgorithmStatus::Accepted);
+    CHECK(snapshot.status(AlgorithmId::X25519, kT0 + 3U * kDay, services) == AlgorithmStatus::Refused);
     CHECK(snapshot.status(AlgorithmId::X25519, kT0 + 3U * kDay) == AlgorithmStatus::Preferred);
     CHECK(snapshot.status(AlgorithmId::X25519, kT0 + 10U * kDay) == AlgorithmStatus::Refused);
     // Without a services rule a service session follows the Everywhere rule; a services-only rule binds nothing else.
-    CHECK(snapshot.status(AlgorithmId::X25519Mlkem768, kT0, kServices) == AlgorithmStatus::Preferred);
-    CHECK(snapshot.status(AlgorithmId::Chacha20Poly1305, kT0 + 2U * kDay, kServices) == AlgorithmStatus::Preferred);
-    CHECK(snapshot.status(AlgorithmId::Aes128Gcm, kT0, kServices) == AlgorithmStatus::Accepted);
+    CHECK(snapshot.status(AlgorithmId::X25519Mlkem768, kT0, services) == AlgorithmStatus::Preferred);
+    CHECK(snapshot.status(AlgorithmId::Chacha20Poly1305, kT0 + 2U * kDay, services) == AlgorithmStatus::Preferred);
+    CHECK(snapshot.status(AlgorithmId::Aes128Gcm, kT0, services) == AlgorithmStatus::Accepted);
     CHECK(snapshot.status(AlgorithmId::Aes128Gcm, kT0) == AlgorithmStatus::Refused);
     // The unknown scope's rule stays signed but governs nothing in this build.
     CHECK(snapshot.status(AlgorithmId::Aes256Gcm, kT0) == AlgorithmStatus::Refused);
-    CHECK(snapshot.status(AlgorithmId::Aes256Gcm, kT0, kServices) == AlgorithmStatus::Refused);
+    CHECK(snapshot.status(AlgorithmId::Aes256Gcm, kT0, services) == AlgorithmStatus::Refused);
     CHECK(snapshot.status(AlgorithmId::Aes256Gcm, kT0, static_cast<PolicyScope>(7U)) == AlgorithmStatus::Refused);
     REQUIRE(snapshot.content().rule_count == 5U);
-    CHECK(snapshot.content().rules[3].scope == kServices);
+    CHECK(snapshot.content().rules[3].scope == services);
 
     // One rule per algorithm and scope; the same generation number with a rule moved to another scope conflicts.
     PolicyContent twice = content;
-    twice.rules[5] = {AlgorithmId::X25519, 0U, 0U, 0U, kNever, kServices};
+    twice.rules[5] = {AlgorithmId::X25519, 0U, 0U, 0U, kNever, services};
     CHECK(validate_content(twice) == PolicyError::DuplicateRule);
     PolicyContent moved = content;
     moved.rules[5].scope = PolicyScope::Everywhere;

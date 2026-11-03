@@ -2134,10 +2134,10 @@ TEST_CASE("Key store: the TPM device's contract", "[crypto][key-store]")
     CHECK(tpm.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point, 97U)) ==
           CryptoError::BadLength);
     // A device key's reference: Windows' format and key name; on Linux, a protector reference's layout.
-    constexpr usize kTpmDeviceReference = CRD_OS_WINDOWS ? 1U + 16U : kTpmReferenceBytes;
+    constexpr usize tpm_device_reference = CRD_OS_WINDOWS ? 1U + 16U : kTpmReferenceBytes;
 
-    u8 foreign[kTpmDeviceReference] = {1U, 1U};
-    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign, kTpmDeviceReference - 1U),
+    u8 foreign[tpm_device_reference] = {1U, 1U};
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign, tpm_device_reference - 1U),
                           AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest, 32U),
                           Span<u8>(signature, 64U)) == CryptoError::Denied);
     foreign[0] = 2U;

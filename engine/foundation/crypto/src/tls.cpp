@@ -2315,7 +2315,8 @@ TlsError TlsEchKey::init(cont::ConstSpan<u8> private_key, u8 config_id, cont::St
     for (usize i = 0U; i < aeads.size(); ++i)
     {
         suites[i] = hpke_codepoints({AlgorithmId::X25519, AlgorithmId::HkdfSha256, aeads[i]}).aead;
-        if (suites[i] == 0U || std::find(aeads.begin(), aeads.begin() + i, aeads[i]) != aeads.begin() + i)
+        const auto earlier_end = aeads.begin() + static_cast<std::ptrdiff_t>(i);
+        if (suites[i] == 0U || std::find(aeads.begin(), earlier_end, aeads[i]) != earlier_end)
         {
             return TlsError::BadConfig;
         }

@@ -1311,8 +1311,8 @@ void expect_aes_accepted(Endpoint& client, Endpoint& server, const Run& result, 
 TEST_CASE("TLS ECH: a key publishes the AEADs it is given, each with HKDF-SHA256", "[crypto][tls][ech][net-2]")
 {
     TlsEchKey               key;
-    constexpr AlgorithmId   kOne[] = {AlgorithmId::Aes256Gcm};
-    make_ech(key, 3U, 9U, kPublicName, 0U, kOne);
+    constexpr AlgorithmId   one[] = {AlgorithmId::Aes256Gcm};
+    make_ech(key, 3U, 9U, kPublicName, 0U, one);
     const ConstSpan<u8> config = key.config();
     REQUIRE(config.size() == 51U + kPublicName.size());
     CHECK(be16(config.data() + 41U) == 4U); // one pair
@@ -1334,12 +1334,12 @@ TEST_CASE("TLS ECH: a key publishes the AEADs it is given, each with HKDF-SHA256
 
     // No AEAD, more than three, one twice, or another algorithm.
     u8                    secret[kTlsEchKeyBytes] = {1U};
-    constexpr AlgorithmId kFour[]  = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm, AlgorithmId::Chacha20Poly1305,
-                                      AlgorithmId::Aes128Gcm};
-    constexpr AlgorithmId kTwice[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes128Gcm};
-    constexpr AlgorithmId kKdf[]   = {AlgorithmId::HkdfSha256};
-    for (const ConstSpan<AlgorithmId> aeads : {ConstSpan<AlgorithmId>(), ConstSpan<AlgorithmId>(kFour),
-                                               ConstSpan<AlgorithmId>(kTwice), ConstSpan<AlgorithmId>(kKdf)})
+    constexpr AlgorithmId four_aeads[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm, AlgorithmId::Chacha20Poly1305,
+                                          AlgorithmId::Aes128Gcm};
+    constexpr AlgorithmId twice[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes128Gcm};
+    constexpr AlgorithmId kdf_only[] = {AlgorithmId::HkdfSha256};
+    for (const ConstSpan<AlgorithmId> aeads : {ConstSpan<AlgorithmId>(), ConstSpan<AlgorithmId>(four_aeads),
+                                               ConstSpan<AlgorithmId>(twice), ConstSpan<AlgorithmId>(kdf_only)})
     {
         CHECK(key.init(ConstSpan<u8>(secret), 1U, kPublicName, 0U, aeads) == TlsError::BadConfig);
         CHECK_FALSE(key.ready());
@@ -1350,14 +1350,14 @@ TEST_CASE("TLS ECH: a key publishes the AEADs it is given, each with HKDF-SHA256
 TEST_CASE("TLS ECH: a client offers only the configurations its policy generation allows, preferred first",
           "[crypto][tls][ech][net-2]")
 {
-    constexpr AlgorithmId kAes128[] = {AlgorithmId::Aes128Gcm};
-    constexpr AlgorithmId kAes256[] = {AlgorithmId::Aes256Gcm};
+    constexpr AlgorithmId aes128_only[] = {AlgorithmId::Aes128Gcm};
+    constexpr AlgorithmId aes256_only[] = {AlgorithmId::Aes256Gcm};
     TlsEchKey             both;
     TlsEchKey             aes128;
     TlsEchKey             aes256;
     make_ech(both, 1U, 1U); // AES-128-GCM and ChaCha20-Poly1305
-    make_ech(aes128, 2U, 2U, kPublicName, 0U, kAes128);
-    make_ech(aes256, 3U, 3U, kPublicName, 0U, kAes256);
+    make_ech(aes128, 2U, 2U, kPublicName, 0U, aes128_only);
+    make_ech(aes256, 3U, 3U, kPublicName, 0U, aes256_only);
     const TlsEchKey* keys[] = {&both, &aes128, &aes256};
 
     struct Case
@@ -1469,13 +1469,13 @@ TEST_CASE("TLS ECH: a client the generation leaves no configuration, and a Cerid
 TEST_CASE("TLS ECH: retry configurations pass the client's policy, and a server publishing a refused suite is refused",
           "[crypto][tls][ech][net-2]")
 {
-    constexpr AlgorithmId kAes[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm};
+    constexpr AlgorithmId aes[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm};
     TlsEchKey             stale;
     TlsEchKey             current;
     TlsEchKey             current_aes;
-    make_ech(stale, 1U, 1U, kPublicName, 0U, kAes);
+    make_ech(stale, 1U, 1U, kPublicName, 0U, aes);
     make_ech(current, 2U, 2U); // publishes ChaCha20-Poly1305
-    make_ech(current_aes, 3U, 3U, kPublicName, 0U, kAes);
+    make_ech(current_aes, 3U, 3U, kPublicName, 0U, aes);
     const Bytes stale_list = list_of({&stale});
 
     crd::crypto::test::TestInstallation no_chacha;
