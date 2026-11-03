@@ -359,8 +359,8 @@ holds ECDSA. The decisions (numbered for the tests):
   operating system's per-user vault) or `Hardware` (sealed to a device). `PlatformKeyProtector` is DPAPI on Windows:
   user scope, `CRYPTPROTECT_UI_FORBIDDEN`, its entropy the label "cerid key store master 1" and the store's
   identifier, so a reference recovers only in its own store and only for its user; DPAPI cannot forget. On Linux it is
-  the Secret Service (K10), which can. `TpmKeyProtector` is `Hardware` protection (K11); the Keychain (macOS) is the
-  next platform protector. On a platform without one a protector answers `Unavailable`, and the store is never
+  the Secret Service (K10), which can. `TpmKeyProtector` is `Hardware` protection (K11 on Windows, K13 on Linux); the
+  Keychain (macOS) is the next platform protector. On a platform without one a protector answers `Unavailable`, and the store is never
   written unprotected.
 - **K3. One sealed file.** A store is a directory created owner-only (`create_private_directory`: mode 0700, or a
   protected DACL with one inheritable entry for the user) holding the file `keys`, a durable save of crd-platform
@@ -431,8 +431,7 @@ holds ECDSA. The decisions (numbered for the tests):
   store too): both `Denied`. `forget` deletes the key (`forgets()` is true, so K5 holds on Windows too; the provider
   keeps a key as a blob its TPM wraps, so a profile backup taken before the deletion still holds it). A store under it
   opens only on the machine whose TPM holds the key. `available()` opens the provider and reads its platform type.
-  Linux's protector through tss2, proven against a TPM simulator, is next; until then the class answers `Unavailable`
-  there. Evidence (2026-11-03, [session](../sessions/2026-11-03-net-2-tpm-protector.md)): the TPM cases of
+  Linux's is K13. Evidence (2026-11-03, [session](../sessions/2026-11-03-net-2-tpm-protector.md)): the TPM cases of
   `test_key_store.cpp` on this PC's Intel PTT TPM (a runner without one skips the hardware case), no TPM key left after
   the run, and a forget that deletes nothing caught.
 
@@ -456,10 +455,45 @@ holds ECDSA. The decisions (numbered for the tests):
   store's identifier and a random 16-byte handle (the reference: a format byte and the handle), its public key read
   once at creation; each signature opens its own key handle (the provider's handles are not documented as thread safe,
   and the TPM serialises its commands). The provider's user keys answer to any process of the user, as DPAPI does; the
-  TPM keeps them from leaving the machine. Elsewhere it answers `Unavailable`; tss2 on Linux is next. Evidence
+  TPM keeps them from leaving the machine. Linux's is K13; elsewhere it answers `Unavailable`. Evidence
   (2026-11-03, [session](../sessions/2026-11-03-net-2-tpm-signers.md)): the device cases of `test_key_store.cpp` (a
   simulated device on every lane; this PC's Intel PTT TPM holding P-256 and P-384 keys and signing a TLS handshake),
   five source mutations caught, and `crd-fuzz-crypto-key-store`'s restatement and model extended to device keys.
+
+- **K13. The TPM 2.0 on Linux.** `TpmKeyProtector` and `TpmKeyDevice` are "tpm-tss2" there, through the TCG's Enhanced
+  System API: libtss2-esys.so.0, libtss2-tctildr.so.0 and libtss2-mu.so.0 are loaded at run time and kept loaded,
+  compiled against the headers of the pinned tpm2-tss 4.0.1 (the ESYS 3.0.2 ABI of Ubuntu 24.04), so a system without
+  them or without a TPM answers `Unavailable`. `TpmConnection` names the TPM: a TCTI configuration of at most 255 bytes,
+  empty for tss2's default order (the kernel's resource manager first); Windows ignores it. Each call opens its own
+  TCTI and ESYS context under one process-wide lock, reads `TPM_PT_PERMANENT` and answers `Unavailable` when the owner
+  hierarchy has an authorization (so no failed owner authorization ever reaches the dictionary-attack logic: Linux
+  leaves it empty, an administrator who sets one opts out), creates the TCG ECC P-256 storage root template
+  transiently (one owner seed, one key) and starts an HMAC session salted to it with AES-128-CFB parameter encryption:
+  a master key written or read, an index's authorization and a key's authorization cross the bus encrypted (salting to
+  a storage root whose certificate is not checked defeats a passive bus observer, not an active interposer). What a
+  store keeps lives in an ordinary NV index at a random handle of the owner's range of the TCG handle registry
+  (0x01000000 to 0x013FFFFF; another handle on `TPM_RC_NV_DEFINED`, eight attempts; `TPM_RC_NV_SPACE` is
+  `StorageFailure`) with `AUTHREAD`, `AUTHWRITE`, `NO_DA` and `WRITEDEFINE`, written once in chunks of
+  `TPM_PT_NV_BUFFER_MAX` and write-locked; an index is used only when it is exactly that (SHA-256, no policy, written,
+  locked), so another owner's index at a reused handle is `Denied`. The protector's index holds the master key itself:
+  `forget` deletes it, and nothing outlives it (unlike K11's profile blob). The device's holds the TPM-wrapped private
+  and public areas (tss2's marshalling) of a sign-only ECDSA P-256 or P-384 key it created under the storage root
+  (`FIXEDTPM`, `FIXEDPARENT`, `SENSITIVEDATAORIGIN`, `USERWITHAUTH`, `NODA`, `SIGN_ENCRYPT`, ECDSA with the curve's
+  hash; a curve absent from `TPM_CAP_ECC_CURVES` is `Unsupported`); a signature reads the blob, checks its public area
+  against the template, loads it, signs the digest and flushes it. Every authorization is HMAC-SHA256 under the
+  reference's 32 random bytes of a label ("cerid tpm master 1", "cerid tpm signer index 1", "cerid tpm signer key 1")
+  and the store's identifier, so another store's identifier derives another value: `TPM_RC_BAD_AUTH`, `Denied`, and
+  (`NO_DA`, `NODA`) no dictionary-attack count. A reference is a format byte, the index's handle (in the owner's
+  range, or `Denied` unasked) and the secret: 37 bytes. `forget` reads one byte with the derived authorization before
+  `TPM2_NV_UndefineSpace` under the owner, so an index that is not this reference's is never deleted (`None`). Each
+  call creates the storage root: an ECC key generation in the TPM, the price of keeping no persistent handle (a TPM
+  holds few persistent objects, shared by the whole machine). tss2 writes its own warnings to stderr for refusals the
+  code expects (a forgotten index, another store's authorization); `TSS2_LOG` silences them, and the protector never
+  sets a library's environment. Evidence (2026-11-03, [session](../sessions/2026-11-03-net-2-tpm-linux.md)):
+  `crd-crypto-tpm-swtpm` (tests/foundation/crypto/tpm_simulator_session.py) runs every key store case against the
+  pinned swtpm 0.7.3 and tss2 libraries (tools/swtpm-linux-x64, scripts/install-swtpm.py), the TPM's protector and
+  device cases among them (a TLS handshake and three concurrent signers), then gives the owner hierarchy an
+  authorization and finds both `Unavailable`.
 
 Evidence (2026-11-02, [session](../sessions/2026-11-02-net-2-key-store.md)): `test_key_store.cpp` (12 cases: every kind
 of key through its whole life, every refusal, every changed byte of a store, an older and a substituted store, writers
