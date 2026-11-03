@@ -304,8 +304,21 @@ destroyed and are read-only, so shared across threads, after `init`. `provider_a
   that length). On a forged opening the provider zeroes the output (`EVP_AEAD_CTX_open` clears it on every failure,
   and the tests hold any provider to it). Seeds: ML-DSA's 32-byte xi, Ed25519's private key, the ECDSA scalar in
   [1, n - 1].
-- **P5. Symbols.** The package exports AWS-LC's libcrypto with its own symbol names, so a consumer that also links
-  OpenSSL or BoringSSL sees duplicate symbols; prefixing them (`BORINGSSL_PREFIX`) is a named remainder of NET.2.
+- **P5. Symbols.** Every symbol AWS-LC's libcrypto and libssl define for the linker carries the prefix `crd_awslc_`,
+  and their C++ lies in `bssl::crd_awslc` (AWS-LC's `BORINGSSL_PREFIX`, since 2026-11-03), so a program that links the
+  package beside OpenSSL, BoringSSL or another AWS-LC binds each call to its own library. The configure writes AWS-LC's
+  three renaming headers (C, assembly, NASM) from the committed `cmake/aws-lc-symbols.txt` with
+  `scripts/provider-prefix.py`, which reads ar archives of ELF, COFF and Mach-O objects itself (no Go, no first
+  unprefixed build), and names the prefix on every AWS-LC command and every unit that includes its headers, so an
+  existing tree rebuilds. The list is the union of every lane's definitions read from built libraries (Windows x64,
+  Linux GCC and Clang with ASan and TSan, Android x86_64 and arm64); a global struct whose C++ members AWS-LC defines
+  (`ssl_st`) is renamed by its tag, and `X25519`, which the engine's `AlgorithmId::X25519` shares, by a function-like
+  macro, so only its calls are renamed. A definition the linker merges (a COFF COMDAT of selection any, a weak C++
+  inline or template) never collides and is left alone; AWS-LC's weak `sdallocx` merges with jemalloc's on purpose.
+  The `crd-check-provider-symbols` CTest judges the built libraries on every lane: a definition without the prefix
+  fails it, naming the `collect` command that adds it. `crd-crypto-coexist-tests` links crd-crypto and the pinned
+  OpenSSL 4.0 into one program (with `CRD_BUILD_TLS_VS_OPENSSL`): both libraries' SHA-256 and AES-256-GCM agree,
+  OpenSSL completes its own TLS 1.3 connection, and crd-crypto's TLS and QUIC handshake tests run beside it.
 - **P6. The hybrid groups** (X25519MLKEM768, SecP256r1MLKEM768, SecP384r1MLKEM1024) run inside the provider's TLS
   stack ([TLS sessions](#tls-sessions)); `provider_algorithms()` lists them since 2026-11-01, when each key share was
   read off the wire against the groups' layout with the provider interface's own primitives and every group

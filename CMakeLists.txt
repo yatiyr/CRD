@@ -1023,6 +1023,28 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
     elseif(WIN32 AND _crd_arch_arm64 AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         list(APPEND _crd_awslc_options "OPENSSL_NO_ASM ON")
     endif()
+    # Provider decision P5: every symbol AWS-LC's libraries define carries the prefix crd_awslc_ (its C++ lies in
+    # bssl::crd_awslc), so a program linking Cerid's package beside OpenSSL, BoringSSL or another AWS-LC binds each
+    # call to its own library. The three renaming headers are written from the committed cmake/aws-lc-symbols.txt
+    # (AWS-LC's BORINGSSL_PREFIX_HEADERS route, so neither Go nor a first unprefixed build is needed), each only when
+    # its text changed; the crd-check-provider-symbols CTest judges the built libraries on every lane.
+    set(CRD_PROVIDER_PREFIX crd_awslc)
+    find_package(Python3 3.12 REQUIRED COMPONENTS Interpreter)
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/provider-prefix.py" headers
+                --symbols "${CMAKE_SOURCE_DIR}/cmake/aws-lc-symbols.txt" --prefix ${CRD_PROVIDER_PREFIX}
+                --out "${CMAKE_BINARY_DIR}/aws-lc-prefix"
+        RESULT_VARIABLE _crd_awslc_prefix_result OUTPUT_VARIABLE _crd_awslc_prefix_output
+        ERROR_VARIABLE _crd_awslc_prefix_output)
+    if(NOT _crd_awslc_prefix_result EQUAL 0)
+        message(FATAL_ERROR "scripts/provider-prefix.py headers failed: ${_crd_awslc_prefix_output}")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/cmake/aws-lc-symbols.txt"
+                                                                   "${CMAKE_SOURCE_DIR}/scripts/provider-prefix.py")
+    list(APPEND _crd_awslc_options "BORINGSSL_PREFIX ${CRD_PROVIDER_PREFIX}"
+                                   "BORINGSSL_PREFIX_HEADERS ${CMAKE_BINARY_DIR}/aws-lc-prefix")
+    unset(_crd_awslc_prefix_result)
+    unset(_crd_awslc_prefix_output)
     # As for zstd: AWS-LC's cmake_minimum_required leaves CMP0141 unset, so the MSVC debug-information form would
     # never reach its objects. Its range starts at 3.5, which CMake 4 reports as deprecated on every configure, so the
     # minimum is raised to 3.10 as for OpenBLAS (its range ends at 3.31, so no policy changes). AWS-LC warns on every
@@ -1086,6 +1108,9 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
     # with plain stores, so two threads hashing at once race (linux-clang-tsan, Keccak). Cerid's build never compiles
     # it: the definition leaves the directories of AWS-LC's libraries (its C, its assembly and NASM's definitions), and
     # NASM, which also reads it from AWS-LC's own NASM flags, undefines it after them. No configuration has the table.
+    # The symbol prefix (P5) is named on the command line of every AWS-LC unit and of every unit that includes its
+    # headers (crypto's build interface) as well as in its header: a unit built before the prefix found AWS-LC's empty
+    # stand-in headers, which its dependency record names, so only a changed command rebuilds it with the prefix.
     _crd_collect_build_targets("${aws-lc_SOURCE_DIR}" _crd_awslc_targets)
     foreach(_crd_awslc_target IN LISTS _crd_awslc_targets)
         get_target_property(_crd_awslc_type ${_crd_awslc_target} TYPE)
@@ -1093,6 +1118,7 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
             continue()
         endif()
         set_target_properties(${_crd_awslc_target} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE provider)
+        target_compile_definitions(${_crd_awslc_target} PRIVATE BORINGSSL_PREFIX=${CRD_PROVIDER_PREFIX})
         get_target_property(_crd_awslc_sources ${_crd_awslc_target} SOURCES)
         get_target_property(_crd_awslc_dir ${_crd_awslc_target} SOURCE_DIR)
         get_target_property(_crd_awslc_binary_dir ${_crd_awslc_target} BINARY_DIR)
@@ -1151,6 +1177,7 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
             target_compile_options(${_crd_awslc_target} PRIVATE ${_crd_awslc_levels})
         endif()
     endforeach()
+    target_compile_definitions(crypto INTERFACE "$<BUILD_INTERFACE:BORINGSSL_PREFIX=${CRD_PROVIDER_PREFIX}>")
     unset(_crd_awslc_sources)
     unset(_crd_awslc_source)
     unset(_crd_awslc_path)

@@ -174,7 +174,7 @@
         "tests/foundation/crypto/interop/"
       ],
       "built_when": {"option": "CRD_BUILD_TLS_VS_OPENSSL", "platform": "Linux"},
-      "why": "The TLS 1.3 interoperability test (the crd-crypto-tls-interop-openssl CTest): crd-tls-peer over crd-crypto and crd-openssl-tls-peer over the pinned OpenSSL 4.0 (cmake/pins.json openssl), built by its own Configure."
+      "why": "The TLS 1.3 interoperability test (the crd-crypto-tls-interop-openssl CTest): crd-tls-peer over crd-crypto and crd-openssl-tls-peer over the pinned OpenSSL 4.0 (cmake/pins.json openssl), built by its own Configure; and crd-crypto-coexist-tests, crd-crypto over its prefixed AWS-LC beside that OpenSSL in one program (the crd-crypto-openssl-coexist CTest, provider decision P5)."
     },
     {
       "paths": ["tests/foundation/crypto/interop/cerid_mls_peer.cpp"],

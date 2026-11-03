@@ -88,6 +88,12 @@ if(Python3_FOUND)
              COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/gen-policy-bootstrap.py" --check
                      --root "${CMAKE_SOURCE_DIR}")
     set_tests_properties(crd-crypto-policy-bootstrap-drift PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    # Every symbol the built AWS-LC libraries define carries the provider prefix (network foundation decision P5).
+    add_test(NAME crd-check-provider-symbols
+             COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/provider-prefix.py" check
+                     --symbols "${CMAKE_SOURCE_DIR}/cmake/aws-lc-symbols.txt" --prefix ${CRD_PROVIDER_PREFIX}
+                     "$<TARGET_FILE:crypto>" "$<TARGET_FILE:ssl>")
+    set_tests_properties(crd-check-provider-symbols PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 endif()
 
 # The policy decoder and store, the provider and the TLS sessions under the bounded fuzz harness, with their committed
@@ -145,6 +151,23 @@ if(CRD_BUILD_TLS_VS_OPENSSL)
                      --cerid "$<TARGET_FILE:crd-tls-peer>" --openssl "$<TARGET_FILE:crd-openssl-tls-peer>")
     set_tests_properties(crd-crypto-tls-interop-openssl PROPERTIES TIMEOUT 600 LABELS "crypto;tls-interop")
     message(STATUS "[tls-vs-openssl] TLS 1.3 interoperability against OpenSSL ${openssl_version}")
+
+    # Decision P5: crd-crypto over its prefixed AWS-LC and OpenSSL in one program. Only openssl_coexist.c sees
+    # OpenSSL's headers (an object library of its own); the program also runs crd-crypto's TLS and QUIC handshake
+    # tests, so both TLS stacks work side by side.
+    add_library(crd-openssl-coexist OBJECT interop/openssl_coexist.c)
+    add_dependencies(crd-openssl-coexist crd-openssl-peer-build)
+    target_include_directories(crd-openssl-coexist SYSTEM PRIVATE "${openssl_prefix}/install/include")
+    add_executable(crd-crypto-coexist-tests interop/test_openssl_coexist.cpp test_tls.cpp test_tls_early.cpp
+                                            test_tls_ech.cpp test_quic_handshake.cpp)
+    target_link_libraries(crd-crypto-coexist-tests PRIVATE crd-openssl-coexist crd-asset-io crd-compression crd-core
+                          crd-containers crd-crypto crd-memory crd-platform Catch2::Catch2WithMain crypto ssl
+                          ${openssl_link})
+    target_compile_definitions(crd-crypto-coexist-tests PRIVATE
+                               "CRD_TEST_EXPECT_TLS_KEY_LOG=$<IF:${_crd_shipping},0,1>")
+    set_target_properties(crd-crypto-coexist-tests PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    add_test(NAME crd-crypto-openssl-coexist COMMAND crd-crypto-coexist-tests)
+    set_tests_properties(crd-crypto-openssl-coexist PROPERTIES TIMEOUT 600 LABELS "crypto;tls-interop")
 endif()
 
 # The MLS interoperability tests (decision M4): crd-mls-peer's members over crd-crypto and a peer library's create,

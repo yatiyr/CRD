@@ -220,6 +220,9 @@ sanctions_spec.loader.exec_module(sanctions_import)
 review_spec = importlib.util.spec_from_file_location('register_review', ROOT / 'scripts/register-review.py')
 register_review = importlib.util.module_from_spec(review_spec)
 review_spec.loader.exec_module(register_review)
+provider_prefix_spec = importlib.util.spec_from_file_location('provider_prefix', ROOT / 'scripts/provider-prefix.py')
+provider_prefix = importlib.util.module_from_spec(provider_prefix_spec)
+provider_prefix_spec.loader.exec_module(provider_prefix)
 ab_spec = importlib.util.spec_from_file_location('ab_board', ROOT / 'scripts/ab-board.py')
 ab_board = importlib.util.module_from_spec(ab_spec)
 ab_spec.loader.exec_module(ab_board)
@@ -11769,6 +11772,247 @@ class PolicyBootstrapHeaders(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             self.assertEqual(0, policy_bootstrap.main(['--check']))
         self.assertIn('policy bootstrap current: 2 header(s)', output.getvalue())
+
+
+class ProviderPrefix(unittest.TestCase):
+    """scripts/provider-prefix.py (NET.2 decision P5): the provider's renaming headers written from the symbol list,
+    and the definitions of ar archives of ELF64, COFF (bigobj too) and Mach-O 64 objects read without a toolchain."""
+
+    @staticmethod
+    def member(name, data):
+        header = f'{name:<16}{0:<12}{0:<6}{0:<6}{644:<8}{len(data):<10}`\n'.encode('ascii')
+        return header + data + (b'\n' if len(data) % 2 else b'')
+
+    def archive(self, *objects, long_names=False, bsd=False):
+        """A GNU (long names in `//`), BSD (#1/ names) or short-named ar archive of the objects, with an index."""
+        parts = [b'!<arch>\n', self.member('/', b'\0\0\0\0')]
+        names = b''.join(f'member-object-{i}.o/\n'.encode() for i in range(len(objects)))
+        if long_names:
+            parts.append(self.member('//', names))
+        for index, data in enumerate(objects):
+            if bsd:
+                name = f'm{index}.o'.encode().ljust(8, b'\0')
+                parts.append(self.member(f'#1/{len(name)}', name + data))
+            elif long_names:
+                parts.append(self.member(f'/{names.index(f"member-object-{index}.o".encode())}', data))
+            else:
+                parts.append(self.member(f'o{index}.o/', data))
+        return b''.join(parts)
+
+    @staticmethod
+    def elf(symbols):
+        """An ELF64 object whose symbol table holds `symbols`: (name, binding, section index)."""
+        strings, entries = b'\0', [bytes(24)]
+        for name, binding, section in symbols:
+            entries.append(struct.pack('<IBBHQQ', len(strings), binding << 4 | 2, 0, section, 0, 0))
+            strings += name.encode() + b'\0'
+        table = b''.join(entries)
+        shoff = 64 + len(table) + len(strings)
+        pad = -shoff % 8
+        header = bytearray(64)
+        header[:7] = b'\x7fELF\x02\x01\x01'
+        struct.pack_into('<Q', header, 0x28, shoff + pad)
+        struct.pack_into('<HH', header, 0x3A, 64, 3)
+        sections = [bytes(64), struct.pack('<IIQQQQIIQQ', 0, 2, 0, 0, 64, len(table), 2, 1, 8, 24),
+                    struct.pack('<IIQQQQIIQQ', 0, 3, 0, 0, 64 + len(table), len(strings), 0, 0, 1, 0)]
+        return bytes(header) + table + strings + bytes(pad) + b''.join(sections)
+
+    @staticmethod
+    def coff(sections, symbols, bigobj=False):
+        """A COFF object: `sections` their characteristics, `symbols` (name, section number, storage class, the
+        COMDAT selection of a section definition or None)."""
+        entry = 20 if bigobj else 18
+        strings, table, count = b'', b'', 0
+        for name, section, storage, selection in symbols:
+            raw = name.encode()
+            if len(raw) > 8:
+                field = struct.pack('<II', 0, 4 + len(strings))
+                strings += raw + b'\0'
+            else:
+                field = raw.ljust(8, b'\0')
+            form = '<8sIiHBB' if bigobj else '<8sIhHBB'
+            table += struct.pack(form, field, 0, section, 0, storage, 1 if selection else 0)
+            count += 1
+            if selection:
+                aux = bytearray(entry)
+                aux[14] = selection
+                table += bytes(aux)
+                count += 1
+        headers = b''.join(struct.pack('<8sIIIIIIHHI', b'.text', 0, 0, 0, 0, 0, 0, 0, 0, flags) for flags in sections)
+        size = 56 if bigobj else 20
+        symtab = size + len(headers)
+        if bigobj:
+            header = struct.pack('<HHHHI16sIIIIIII', 0, 0xFFFF, 2, 0x8664, 0, provider_prefix.BIGOBJ_CLASS, 0, 0, 0, 0,
+                                 len(sections), symtab, count)
+        else:
+            header = struct.pack('<HHIIIHH', 0x8664, len(sections), 0, symtab, count, 0, 0)
+        return header + headers + table + struct.pack('<I', 4 + len(strings)) + strings
+
+    @staticmethod
+    def macho(symbols):
+        """A Mach-O 64 object: `symbols` (name, n_type, n_desc)."""
+        strings, table = b'\0', b''
+        for name, kind, desc in symbols:
+            table += struct.pack('<IBBHQ', len(strings), kind, 1, desc, 0)
+            strings += name.encode() + b'\0'
+        symoff = 32 + 24
+        command = struct.pack('<IIIIII', 2, 24, symoff, len(symbols), symoff + len(table), len(strings))
+        return struct.pack('<IiiIIIII', 0xFEEDFACF, 0x0100000C, 0, 1, 1, 24, 0, 0) + command + table + strings
+
+    def read(self, data):
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / 'lib.a'
+            path.write_bytes(data)
+            return sorted((name, kind) for _member, name, kind in provider_prefix.archive_symbols(path))
+
+    @staticmethod
+    def run_main(argv):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = provider_prefix.main(argv)
+        return code, output.getvalue()
+
+    def test_elf_definitions(self):
+        elf = self.elf([('crd_awslc_SHA256', 1, 1), ('local', 0, 1), ('memcpy', 1, 0), ('OPENSSL_hook', 2, 1),
+                        ('_ZN4bssl3fooEv', 2, 1), ('_ZN4bssl9crd_awslc3barEv', 10, 1),
+                        ('__odr_asan.crd_awslc_table', 1, 1)])
+        expected = [('OPENSSL_hook', 'weak'), ('_ZN4bssl3fooEv', 'merged'), ('_ZN4bssl9crd_awslc3barEv', 'merged'),
+                    ('crd_awslc_SHA256', 'strong'), ('crd_awslc_table', 'strong')]
+        for layout in ({}, {'long_names': True}, {'bsd': True}):
+            with self.subTest(layout=layout):
+                self.assertEqual(self.read(self.archive(elf, **layout)), expected)
+
+    def test_coff_definitions(self):
+        comdat = 0x60001020
+        for bigobj in (False, True):
+            with self.subTest(bigobj=bigobj):
+                coff = self.coff([0x60000020, comdat, comdat], [
+                    ('.text$mn', 2, 3, 2), ('vsnprintf', 2, 2, None),
+                    ('.text$mn', 3, 3, 1), ('a_long_function_name', 3, 2, None),
+                    ('plain', 1, 2, None), ('static', 1, 3, None), ('extern', 0, 2, None)], bigobj=bigobj)
+                self.assertEqual(self.read(self.archive(coff)),
+                                 [('a_long_function_name', 'strong'), ('plain', 'strong'), ('vsnprintf', 'merged')])
+
+    def test_macho_definitions(self):
+        macho = self.macho([('_crd_awslc_AES', 0x0F, 0), ('_inline', 0x0F, 0x80), ('__Z3foov', 0x0F, 0x80),
+                            ('_private', 0x0E, 0), ('_undefined', 0x01, 0), ('_stab', 0x24, 0)])
+        self.assertEqual(self.read(self.archive(macho)),
+                         [('_Z3foov', 'merged'), ('crd_awslc_AES', 'strong'), ('inline', 'weak')])
+        with self.assertRaisesRegex(provider_prefix.SymbolError, 'without the leading underscore'):
+            self.read(self.archive(self.macho([('bare', 0x0F, 0)])))
+
+    def test_unreadable_inputs_are_refused(self):
+        ltcg = struct.pack('<HHHH', 0, 0xFFFF, 1, 0x8664) + bytes(60)
+        imported = struct.pack('<HHHH', 0, 0xFFFF, 0, 0x8664) + bytes(20)
+        self.assertEqual(self.read(self.archive(imported)), [])
+        for data, message in ((ltcg, 'link-time IL'), (b'BC\xc0\xde' + bytes(16), 'LLVM bitcode'),
+                              (b'\x7fELF\x01\x01' + bytes(58), 'ELF64'), (b'????' + bytes(16), 'unknown object'),
+                              (self.elf([])[:70], 'truncated')):
+            with self.subTest(message=message), self.assertRaisesRegex(provider_prefix.SymbolError, message):
+                self.read(self.archive(data))
+        for data, message in ((b'plain text', 'not an ar archive'), (b'!<arch>\n' + b'x' * 70, 'malformed member'),
+                              (b'!<arch>\n' + self.member('a.o/', b'1234')[:-2], 'runs past the end')):
+            with self.subTest(message=message), self.assertRaisesRegex(provider_prefix.SymbolError, message):
+                self.read(data)
+
+    def test_cxx_scopes(self):
+        cases = {'_ZN4bssl9crd_awslc3fooEv': ['bssl', 'crd_awslc'], '_ZNK4bssl3Foo3getEv': ['bssl', 'Foo'],
+                 '_ZN16crd_awslc_ssl_stC2Ev': ['crd_awslc_ssl_st'],
+                 '_Z37tls_print_all_supported_cipher_suitesb': ['tls_print_all_supported_cipher_suites'],
+                 '_ZTVN4bssl9crd_awslc3FooE': ['bssl', 'crd_awslc'], '_ZNSt6vectorIiE9push_backEv': ['std'],
+                 '?f@crd_awslc@bssl@@YAXXZ': ['bssl', 'crd_awslc'], '??0ssl_st@@QEAA@PEAUssl_ctx_st@@@Z': ['ssl_st'],
+                 '??_Gfoo@bssl@@UEAAPEAXI@Z': ['bssl', 'foo'], '??$min@_K@std@@YAAEB_KAEB_K0@Z': [], '_Zbogus': []}
+        for name, scopes in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(provider_prefix.cxx_scopes(name), scopes)
+        self.assertTrue(provider_prefix.cxx_prefixed('??0crd_awslc_ssl_st@@QEAA@XZ', 'crd_awslc'))
+        self.assertTrue(provider_prefix.cxx_prefixed('_ZN4bssl9crd_awslc3fooEv', 'crd_awslc'))
+        self.assertFalse(provider_prefix.cxx_prefixed('_ZN4bssl3fooEv', 'crd_awslc'))
+        self.assertTrue(provider_prefix.cxx_prefixed('??$f@H@crd_awslc@bssl@@YAXXZ', 'crd_awslc'))
+
+    def test_collect_and_check(self):
+        unprefixed = self.archive(self.elf([
+            ('SHA256', 1, 1), ('OPENSSL_hook', 2, 1), ('sdallocx', 2, 1), ('__x86.get_pc_thunk.bx', 1, 1),
+            ('_ZN4bssl3fooEv', 1, 1), ('_ZN6ssl_stC2Ev', 1, 1), ('_ZN4bssl3BarC2Ev', 2, 1), ('_ZNSt3fooEv', 1, 1)]))
+        prefixed = self.archive(self.elf([
+            ('crd_awslc_SHA256', 1, 1), ('crd_awslc_OPENSSL_hook', 2, 1), ('sdallocx', 2, 1),
+            ('_ZN4bssl9crd_awslc3fooEv', 1, 1), ('_ZN16crd_awslc_ssl_stC2Ev', 1, 1), ('crd_awslc_extra', 1, 1)]))
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            listed, old, new = root / 'symbols.txt', root / 'old.a', root / 'new.a'
+            old.write_bytes(unprefixed)
+            new.write_bytes(prefixed)
+            code, output = self.run_main(['collect', '--symbols', str(listed), str(old)])
+            self.assertEqual((code, output.strip()), (0, f'{listed}: 3 symbols (3 added)'))
+            self.assertEqual(listed.read_text(encoding='utf-8').splitlines(),
+                             [provider_prefix.HEADER, 'OPENSSL_hook', 'SHA256', 'ssl_st'])
+            code, output = self.run_main(['collect', '--symbols', str(listed), '--prefix', 'crd_awslc', str(new)])
+            self.assertEqual((code, output.strip()), (0, f'{listed}: 4 symbols (1 added)'))
+            code, output = self.run_main(['check', '--symbols', str(listed), '--prefix', 'crd_awslc', str(new)])
+            self.assertEqual((code, output.strip()), (0, 'OK: 1 archive(s) define only crd_awslc_ symbols'))
+            code, output = self.run_main(['check', '--symbols', str(listed), '--prefix', 'crd_awslc', str(old)])
+            self.assertEqual(code, 1)
+            self.assertIn('defines SHA256, which the list names, without the prefix', output)
+            self.assertIn('defines the C++ symbol _ZN4bssl3fooEv outside bssl::crd_awslc', output)
+            self.assertIn('defines the C++ symbol _ZNSt3fooEv outside', output)
+            self.assertIn('defines no symbol with the prefix crd_awslc_', output)
+            for skipped in ('sdallocx', 'get_pc_thunk', 'BarC2Ev'):
+                self.assertNotIn(skipped, output)
+            old.write_bytes(self.archive(self.elf([('crd_awslc_a', 1, 1), ('fresh', 1, 1)])))
+            code, output = self.run_main(['check', '--symbols', str(listed), '--prefix', 'crd_awslc', str(old)])
+            self.assertEqual(code, 1)
+            self.assertIn('defines fresh without the prefix; add it to the list', output)
+            code, output = self.run_main(['check', '--symbols', str(listed), '--prefix', 'crd_awslc',
+                                          str(root / 'missing.a')])
+            self.assertEqual(code, 1)
+            self.assertIn('missing.a', output)
+
+    def test_list_and_prefix_are_checked(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            listed = Path(scratch) / 'symbols.txt'
+            for text, message in (('b\na\n', 'not sorted and unique'), ('a\na\n', 'not sorted and unique'),
+                                  ('a b\n', 'not a C identifier'), ('9a\n', 'not a C identifier')):
+                listed.write_text(text, encoding='utf-8')
+                with self.subTest(text=text):
+                    code, output = self.run_main(['headers', '--symbols', str(listed), '--prefix', 'p', '--out',
+                                                  scratch])
+                    self.assertEqual(code, 1)
+                    self.assertIn(message, output)
+            listed.write_text('# comment\na # trailing\n', encoding='utf-8')
+            code, output = self.run_main(['headers', '--symbols', str(listed), '--prefix', 'p-x', '--out', scratch])
+            self.assertEqual((code, output.strip()), (1, 'FAIL: the prefix is not a C identifier: p-x'))
+
+    def test_headers(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            listed, out = Path(scratch) / 'symbols.txt', Path(scratch) / 'out'
+            listed.write_text(f'{provider_prefix.HEADER}\nAES_encrypt\nSHA256\nX25519\n', encoding='utf-8')
+            argv = ['headers', '--symbols', str(listed), '--prefix', 'crd_awslc', '--out', str(out)]
+            code, output = self.run_main(argv)
+            self.assertEqual((code, output.strip()), (0, 'provider prefix crd_awslc: 3 symbols, 3 header(s) written'))
+            c = (out / 'openssl/boringssl_prefix_symbols.h').read_text(encoding='utf-8')
+            self.assertIn('#define BORINGSSL_PREFIX crd_awslc\n', c)
+            self.assertIn('#define BORINGSSL_ADD_PREFIX_INNER(a, b) a ## _ ## b\n', c)
+            self.assertIn('#define AES_encrypt BORINGSSL_ADD_PREFIX(BORINGSSL_PREFIX, AES_encrypt)\n'
+                          '#define SHA256 BORINGSSL_ADD_PREFIX(BORINGSSL_PREFIX, SHA256)\n'
+                          '#define X25519(...) BORINGSSL_ADD_PREFIX(BORINGSSL_PREFIX, X25519)(__VA_ARGS__)\n', c)
+            asm = (out / 'openssl/boringssl_prefix_symbols_asm.h').read_text(encoding='utf-8')
+            self.assertIn('#if !defined(__APPLE__)\n#include <openssl/boringssl_prefix_symbols.h>\n#else\n', asm)
+            self.assertIn('#define _SHA256 BORINGSSL_ADD_PREFIX_MAC_ASM(BORINGSSL_PREFIX, SHA256)\n', asm)
+            self.assertIn('#define BORINGSSL_ADD_PREFIX_INNER_MAC_ASM(a, b) _ ## a ## _ ## b\n', asm)
+            nasm = (out / 'openssl/boringssl_prefix_symbols_nasm.inc').read_text(encoding='utf-8')
+            self.assertIn('%ifidn __OUTPUT_FORMAT__, win32\n%xdefine _AES_encrypt _ %+ BORINGSSL_PREFIX %+ '
+                          '_AES_encrypt\n', nasm)
+            self.assertIn('%else\n%xdefine AES_encrypt BORINGSSL_PREFIX %+ _AES_encrypt\n', nasm)
+            self.assertTrue(nasm.endswith('%endif ; __OUTPUT_FORMAT__\n%endif ; BORINGSSL_PREFIX_SYMBOLS_NASM_INC\n'))
+            code, output = self.run_main(argv)
+            self.assertEqual((code, output.strip()), (0, 'provider prefix crd_awslc: 3 symbols, 0 header(s) written'))
+
+    def test_committed_list(self):
+        names = provider_prefix.read_list(ROOT / 'cmake/aws-lc-symbols.txt')
+        self.assertGreater(len(names), 4000)
+        for name in ('SHA256', 'SSL_new', 'EVP_AEAD_CTX_open', 'ssl_st', 'aes_hw_encrypt'):
+            self.assertIn(name, names)
+        self.assertFalse([name for name in names if name.startswith('crd_awslc_')])
 
 
 class AbBoard(unittest.TestCase):
