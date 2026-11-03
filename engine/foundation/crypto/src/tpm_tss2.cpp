@@ -13,7 +13,7 @@
 // (TPMA_NV_WRITEDEFINE), and forgetting deletes it after proving its authorization, so no other index is touched.
 #include <crd/core/platform.hpp>
 
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX && !CRD_OS_ANDROID
 #include <crd/crypto/key_store.hpp>
 #include <crd/platform/dynamic_library.hpp>
 

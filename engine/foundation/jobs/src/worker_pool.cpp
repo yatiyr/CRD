@@ -579,7 +579,11 @@ void pin_pool_to_pcores([[maybe_unused]] crd::containers::Array<std::thread>& wo
         cpu_set_t set;
         CPU_ZERO(&set);
         CPU_SET(static_cast<int>(cpu), &set);
+#if CRD_OS_ANDROID
+        (void)sched_setaffinity(pthread_gettid_np(h), sizeof(set), &set); // bionic has no pthread_setaffinity_np
+#else
         (void)pthread_setaffinity_np(h, sizeof(set), &set);
+#endif
     };
     pin(pthread_self(), order[0]);
     for (crd::u32 i = 1U; i < num_threads; ++i)

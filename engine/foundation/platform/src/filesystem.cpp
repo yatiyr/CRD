@@ -311,7 +311,11 @@ template <typename Duration>
         {
             return 0;
         }
+#if defined(_LIBCPP_VERSION)
+        const auto written = stdfs::file_time_type::clock::to_sys(tp); // libc++ has no clock_cast
+#else
         const auto written = std::chrono::clock_cast<std::chrono::system_clock>(tp);
+#endif
         const auto whole = std::chrono::floor<std::chrono::seconds>(written);
         constexpr i64 per_second = Duration{std::chrono::seconds{1}}.count();
         constexpr i64 most = std::numeric_limits<i64>::max();

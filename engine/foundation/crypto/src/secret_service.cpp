@@ -8,7 +8,7 @@
 // before a byte of it is read; libdbus validates the wire format itself.
 #include <crd/core/platform.hpp>
 
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX && !CRD_OS_ANDROID
 #include <crd/crypto/key_store.hpp>
 #include <crd/platform/dynamic_library.hpp>
 

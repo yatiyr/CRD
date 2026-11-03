@@ -46,6 +46,14 @@
 #error "Unsupported OS!"
 #endif
 
+/// 1 when the target is Android: a Linux kernel (CRD_OS_LINUX is 1) under bionic, without glibc's extensions, D-Bus
+/// or a TPM; 0 otherwise.
+#if defined(__ANDROID__)
+#define CRD_OS_ANDROID 1
+#else
+#define CRD_OS_ANDROID 0
+#endif
+
 /// 1 when the target architecture is x86-64; 0 otherwise.
 #if defined(_M_X64) || defined(__x86_64__)
 #define CRD_ARCH_X64 1

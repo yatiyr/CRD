@@ -498,7 +498,7 @@ CryptoError TpmKeyDevice::forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u
     }
     return delete_key(kSignerPrefix, store_id, reference.subspan(1U, kHandleBytes));
 }
-#elif !CRD_OS_LINUX
+#elif !CRD_OS_LINUX || CRD_OS_ANDROID // Android has no TPM
 bool TpmKeyProtector::available(const TpmConnection& /*tpm*/) noexcept
 {
     return false;

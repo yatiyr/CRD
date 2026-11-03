@@ -14,6 +14,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h> // RtlCaptureStackBackTrace
+#elif defined(__ANDROID__)
+#include <unwind.h> // _Unwind_Backtrace: bionic declares backtrace() only from API 33
 #elif __has_include(<execinfo.h>) // C++17 standard; tested directly instead of through a constant-like macro
 #include <execinfo.h> // backtrace
 #endif
@@ -44,6 +46,27 @@ crd::u32 capture_pcs(void** out, void* caller) noexcept
     crd::u32 got = 0U;
 #if defined(_WIN32)
     got = RtlCaptureStackBackTrace(0UL, capture_depth, tmp, nullptr);
+#elif defined(__ANDROID__)
+    struct Walk
+    {
+        void**   pcs;
+        crd::u32 cap;
+        crd::u32 got;
+    } walk{tmp, capture_depth, 0U};
+    (void)_Unwind_Backtrace(
+        [](_Unwind_Context* context, void* arg) -> _Unwind_Reason_Code
+        {
+            Walk* const     w  = static_cast<Walk*>(arg);
+            const uintptr_t pc = _Unwind_GetIP(context);
+            if (pc == 0U || w->got == w->cap)
+            {
+                return _URC_END_OF_STACK;
+            }
+            w->pcs[w->got++] = reinterpret_cast<void*>(pc);
+            return _URC_NO_REASON;
+        },
+        &walk);
+    got = walk.got;
 #elif __has_include(<execinfo.h>)
     const int frames = backtrace(tmp, static_cast<int>(capture_depth));
     got = frames > 0 ? static_cast<crd::u32>(frames) : 0U;

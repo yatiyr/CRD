@@ -482,6 +482,27 @@
             }
         },
         {
+            "name": "android-x86_64-debug",
+            "displayName": "Android x86_64 Debug (NDK; crd-crypto and its tests)",
+            "inherits": "base",
+            "generator": "Ninja",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            },
+            "toolchainFile": "$env{CRD_ANDROID_NDK}/build/cmake/android.toolchain.cmake",
+            "cacheVariables": {
+                "ANDROID_ABI": "x86_64",
+                "ANDROID_PLATFORM": "android-31",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CRD_ENABLE_ASSERTS": "ON",
+                "CRD_MODULES": "crypto",
+                "CRD_BUILD_BENCHMARKS": "OFF",
+                "CRD_BUILD_SANDBOX": "OFF"
+            }
+        },
+        {
             "name": "win-arm64-base",
             "hidden": true,
             "inherits": [

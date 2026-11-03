@@ -150,11 +150,11 @@ constexpr const char* kTemperatureSuffix[] = {"_kelvin", "_celsius", "_fahrenhei
 // ---------------------------------------------------------------------------
 
 template <typename T>
-crd::containers::String format_value_with_factor(T si_value, double factor, const char* suffix,
+crd::containers::String format_value_with_factor(T si_amount, double factor, const char* suffix,
                                                   const UnitPreferences& prefs,
                                                   crd::memory::IAllocator* alloc)
 {
-    const double display = static_cast<double>(si_value) / factor;
+    const double display = static_cast<double>(si_amount) / factor;
     char buf[64] = {};
     // IEEE 754 double carries at most 17 significant decimal digits; capping
     // here both reflects that and bounds snprintf output below buf size so

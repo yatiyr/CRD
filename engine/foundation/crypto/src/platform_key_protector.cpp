@@ -140,7 +140,7 @@ CryptoError PlatformKeyProtector::forget(cont::ConstSpan<u8> /*store_id*/, cont:
 {
     return CryptoError::None; // nothing to destroy: forgets() is false
 }
-#elif !CRD_OS_LINUX
+#elif !CRD_OS_LINUX || CRD_OS_ANDROID // Android has no Secret Service
 bool PlatformKeyProtector::available() noexcept
 {
     return false;
