@@ -14,6 +14,7 @@
 #include <crd/containers/wire_bytes.hpp>
 
 #include <cstring>
+#include <initializer_list>
 #include <utility>
 
 namespace crd::crypto
@@ -435,6 +436,44 @@ HpkeSizes hpke_sizes(AlgorithmId kem) noexcept
 bool hpke_supported(const HpkeSuite& suite) noexcept
 {
     return suite_kem(suite) != nullptr;
+}
+
+HpkeCodepoints hpke_codepoints(const HpkeSuite& suite) noexcept
+{
+    const Kem* kem = find_kem(suite.kem);
+    return {kem != nullptr ? kem->code : u16{0U}, kdf_id(suite.kdf), aead_id(suite.aead)};
+}
+
+bool hpke_suite_of(const HpkeCodepoints& codepoints, HpkeSuite& out) noexcept
+{
+    out = {};
+    for (const Kem& kem : kKems)
+    {
+        if (kem.code == codepoints.kem)
+        {
+            out.kem = kem.id;
+        }
+    }
+    for (const AlgorithmId algorithm : {AlgorithmId::HkdfSha256, AlgorithmId::HkdfSha384})
+    {
+        if (kdf_id(algorithm) == codepoints.kdf)
+        {
+            out.kdf = algorithm;
+        }
+    }
+    for (const AlgorithmId algorithm : {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm, AlgorithmId::Chacha20Poly1305})
+    {
+        if (aead_id(algorithm) == codepoints.aead)
+        {
+            out.aead = algorithm;
+        }
+    }
+    if (!hpke_supported(out))
+    {
+        out = {};
+        return false;
+    }
+    return true;
 }
 
 CryptoError hpke_check_public_key(AlgorithmId kem, cont::ConstSpan<u8> public_key) noexcept

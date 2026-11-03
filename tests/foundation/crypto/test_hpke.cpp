@@ -81,6 +81,21 @@ AlgorithmId aead_of(u64 id)
     }
 }
 
+// The vector's identifiers name `suite` through the public mapping both ways (hpke_codepoints, hpke_suite_of: what an
+// ECHConfig's suites are read with), checked against this file's own mapping above.
+void check_codepoints(const HpkeSuite& suite, u64 kem, u64 kdf, u64 aead)
+{
+    const HpkeCodepoints codepoints = hpke_codepoints(suite);
+    CHECK(codepoints.kem == kem);
+    CHECK(codepoints.kdf == kdf);
+    CHECK(codepoints.aead == aead);
+    HpkeSuite read;
+    REQUIRE(hpke_suite_of(codepoints, read));
+    CHECK(read.kem == suite.kem);
+    CHECK(read.kdf == suite.kdf);
+    CHECK(read.aead == suite.aead);
+}
+
 Bytes public_of(const HpkeKey& key)
 {
     Bytes out;
@@ -148,9 +163,16 @@ TEST_CASE("HPKE: RFC 9180's base-mode vectors", "[crypto][net-2][hpke]")
         if (!hpke_supported(suite))
         {
             // X448, P-521, HKDF-SHA512 and the export-only AEAD are outside the profile.
+            HpkeSuite read;
+            CHECK_FALSE(hpke_suite_of({static_cast<crd::u16>(vectors.number(v, "kem_id")),
+                                       static_cast<crd::u16>(vectors.number(v, "kdf_id")),
+                                       static_cast<crd::u16>(vectors.number(v, "aead_id"))},
+                                      read));
+            CHECK_FALSE(hpke_supported(read));
             ++outside;
             continue;
         }
+        check_codepoints(suite, vectors.number(v, "kem_id"), vectors.number(v, "kdf_id"), vectors.number(v, "aead_id"));
         ++in;
         // DeriveKeyPair for both key pairs, and the recipient's serialized private key.
         HpkeKey recipient;
@@ -548,6 +570,7 @@ TEST_CASE("HPKE: draft-ietf-hpke-pq's base-mode vectors", "[crypto][net-2][hpke]
             ++outside;
             continue;
         }
+        check_codepoints(suite, vectors.number(v, "kem_id"), vectors.number(v, "kdf_id"), vectors.number(v, "aead_id"));
         ++in;
         // DeriveKeyPair and the serialized private key give the vector's public key.
         HpkeKey derived;

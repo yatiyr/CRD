@@ -583,9 +583,21 @@ TEST_CASE("Policy: migration windows, the build's ceiling and unknown algorithms
     CHECK(snapshot.content().rules[1].algorithm == AlgorithmId::X25519);
     CHECK(snapshot.content().rules[2].algorithm == AlgorithmId::Chacha20Poly1305);
 
+    // A suite (HPKE's, MLS's) is judged whole: Refused when one algorithm is, Preferred when all are, else Accepted;
+    // an empty one is Refused.
+    const AlgorithmId preferred[] = {AlgorithmId::X25519, AlgorithmId::X25519Mlkem768};
+    const AlgorithmId mixed[]     = {AlgorithmId::X25519, AlgorithmId::Chacha20Poly1305};
+    const AlgorithmId refused[]   = {AlgorithmId::X25519, AlgorithmId::Aes256Gcm};
+    CHECK(snapshot.status(ConstSpan<AlgorithmId>(preferred), kT0) == AlgorithmStatus::Preferred);
+    CHECK(snapshot.status(ConstSpan<AlgorithmId>(mixed), kT0) == AlgorithmStatus::Accepted);
+    CHECK(snapshot.status(ConstSpan<AlgorithmId>(mixed), kT0 + 10U * kDay) == AlgorithmStatus::Refused);
+    CHECK(snapshot.status(ConstSpan<AlgorithmId>(refused), kT0) == AlgorithmStatus::Refused);
+    CHECK(snapshot.status(ConstSpan<AlgorithmId>(), kT0) == AlgorithmStatus::Refused);
+
     const PolicySnapshot empty;
     CHECK(empty.freshness(kT0) == Freshness::None);
     CHECK(empty.status(AlgorithmId::X25519Mlkem768, kT0) == AlgorithmStatus::Refused);
+    CHECK(empty.status(ConstSpan<AlgorithmId>(preferred), kT0) == AlgorithmStatus::Refused);
 }
 
 TEST_CASE("Policy: Cerid service sessions follow their own rules first", "[crypto][net-std]")

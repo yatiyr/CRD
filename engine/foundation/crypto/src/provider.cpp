@@ -469,6 +469,8 @@ cont::StringView crypto_error_name(CryptoError error) noexcept
         return "damaged";
     case CryptoError::StorageFailure:
         return "storage-failure";
+    case CryptoError::PolicyRefused:
+        return "policy-refused";
     }
     return "unknown";
 }

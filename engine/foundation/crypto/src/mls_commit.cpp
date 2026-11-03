@@ -341,6 +341,14 @@ CryptoError Group::stage_list(const Sender& committer, Plan& plan, StagedCommit&
         return CryptoError::Malformed;
     }
     staged.m_reinit = reinits != 0U;
+    // Decision M14: an epoch begins only under a suite the policy allows, the group's or, for a ReInit (how a group
+    // leaves a refused suite), the one it names; a suite outside the profile is reinit's to refuse.
+    const CipherSuite* governing = staged.m_reinit ? cipher_suite(plan.items[0].proposal.reinit.cipher_suite) : &suite;
+    const CryptoError  allowed   = governing != nullptr ? check_suite_policy(config, *governing) : CryptoError::None;
+    if (allowed != CryptoError::None)
+    {
+        return allowed;
+    }
 
     // Section 12.3: the new GroupContext's extensions, then Updates, Removes and Adds on a copy of the tree, each
     // proposal checked as section 12.1 says against the new extensions.
@@ -1663,6 +1671,10 @@ CryptoError Group::join_external(const Signer& signer, const LeafNode& leaf, con
     }
     const CipherSuite* suite = cipher_suite(info.context.cipher_suite);
     CryptoError        error = suite == nullptr ? CryptoError::Unsupported : check_config(config);
+    if (error == CryptoError::None)
+    {
+        error = check_suite_policy(config, *suite);
+    }
     if (error != CryptoError::None)
     {
         return error;

@@ -8,7 +8,11 @@
 // its epochs' messages: proposals, application data and commits received and sent, and a commit staged and merged
 // (5.2 and 12.1 to 12.4.2; mls_commit.cpp).
 //
-//   time        every lifetime check takes the caller's clock (LeafPolicy::now); nothing here reads one.
+//   time        every lifetime check takes the caller's clock (LeafPolicy::now, moved on by Group::set_now); nothing
+//               here reads one.
+//   policy      the installation's crypto policy governs the cipher suite (decision M14): a group is created or joined,
+//               and an epoch begins, only under a suite its generation allows at the caller's clock; a ReInit to an
+//               allowed suite is how a group leaves a refused one.
 //   identity    whether a credential binds acceptable identifiers to its key is the application's Authentication
 //               Service (section 5.3.1); which pre-shared keys and groups a member holds is its GroupStore.
 //   atomicity   a group that refuses a create or a join is left empty; a refused message changes nothing of the
@@ -27,6 +31,12 @@
 #include <crd/crypto/mls_tree.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/verifier.hpp>
+
+namespace crd::crypto
+{
+class PolicyStore;          // policy.hpp
+enum class PolicyScope : u8; // policy.hpp
+} // namespace crd::crypto
 
 namespace crd::crypto::mls
 {
@@ -373,7 +383,10 @@ inline constexpr u32 kDefaultPendingProposals = 256U;
 inline constexpr u32 kMaxPendingProposals     = 65536U;
 
 // What a group consults: the signature verifier, the Authentication Service and the member's store (each outliving
-// the group), the leaf policy, the secret tree's receive window and the bounds of decision M10.
+// the group), the leaf policy, the secret tree's receive window, the bounds of decision M10 and the installation's
+// crypto policy (decision M14): the store, outliving the group, and the scope of the group's sessions (Everywhere, or
+// CeridServices for a Cerid service's own groups); without a store (tests and tools only; a product always names
+// one) the suite is not checked, and a scope without one, or one this build does not know, is Unsupported.
 struct GroupConfig
 {
     const SignatureVerifier*     verifier       = nullptr;
@@ -383,7 +396,15 @@ struct GroupConfig
     RatchetWindow                window;
     u32                          resumption_epochs = kDefaultResumptionEpochs;
     u32                          pending_proposals = kDefaultPendingProposals;
+    const PolicyStore*           crypto_policy     = nullptr;
+    PolicyScope                  policy_scope{}; // PolicyScope::Everywhere
 };
+
+// Decision M14: None when `config` names no crypto policy or its generation allows, at `config.policy.now` in the
+// config's scope, every algorithm of `suite` (its KEM, KDF, AEAD and signature algorithm); PolicyRefused otherwise,
+// a store without a usable generation included. What a group checks before each epoch; an application choosing the
+// suite of its key packages asks it first.
+[[nodiscard]] CryptoError check_suite_policy(const GroupConfig& config, const CipherSuite& suite) noexcept;
 
 // One epoch of a member's state: what a Group holds, and what a StagedCommit derives for the next epoch.
 struct GroupEpoch
@@ -764,6 +785,10 @@ public:
     // for a commit staged for another group or epoch (the group moved on), NotReady for an empty one, ProviderFailure
     // when a ReInit cannot be kept (the group unchanged); `staged` is left empty either way.
     [[nodiscard]] CryptoError merge(StagedCommit& staged) noexcept;
+
+    // Moves the group's clock (LeafPolicy::now) to `now`: the lifetime checks of later leaves and decision M14's policy
+    // check of later epochs read it. A clock that would go back is ignored.
+    void set_now(u64 now) noexcept;
 
     // Whether a merged ReInit's commit ended the group (section 12.4.2): it sends and processes no more messages, keeps
     // its last epoch's secrets, and waits for the Welcome of the new group the ReInit names, which `reinit` creates and

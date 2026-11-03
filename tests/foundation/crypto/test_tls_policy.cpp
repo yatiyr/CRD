@@ -29,14 +29,9 @@ using crd::containers::ConstSpan;
 using crd::containers::Span;
 using crd::containers::StringView;
 using namespace crd::crypto;
-using crd::crypto::test::kTestSignatureBytes;
-using crd::crypto::test::kTestTrust;
-using crd::crypto::test::test_sign;
-using crd::crypto::test::TestVerifier;
 
 using Bytes = crd::containers::Array<u8>;
 
-constexpr u64 kDay = 86400U;
 constexpr const char* kServerName = "game.cerid.test";
 constexpr StringView kGame[] = {"cerid-game/1"};
 constexpr u8 kClientParameters[] = {0x04U, 0x04U, 0x80U, 0x10U, 0x00U, 0x00U};
@@ -54,70 +49,29 @@ u64 now_seconds()
     return static_cast<u64>(std::time(nullptr));
 }
 
-// Generation `number`, issued a minute ago and valid 30 days, accepting every algorithm of the register and preferring
-// the hybrid groups: the tests narrow it with refuse() and prefer().
+// Generation `number`, issued a minute ago, accepting every algorithm of the register and preferring the hybrid
+// groups: the tests narrow it with refuse() and prefer().
 PolicyContent accepting_all(u64 number)
 {
-    PolicyContent content;
-    content.generation = number;
-    content.issued = now_seconds() - 60U;
-    content.expires = content.issued + 30U * kDay;
-    content.offline_grace = 7U * kDay;
-    for (const AlgorithmId algorithm : kAlgorithmIds)
-    {
-        const bool hybrid = algorithm_class(algorithm) == AlgorithmClass::HybridKeyExchange;
-        content.rules[content.rule_count++] = {algorithm, 0U, 0U, hybrid ? kNever : 0U, kNever};
-    }
-    return content;
-}
-
-AlgorithmRule& rule_of(PolicyContent& content, AlgorithmId algorithm)
-{
-    for (u32 i = 0U; i < content.rule_count; ++i)
-    {
-        if (content.rules[i].algorithm == algorithm && content.rules[i].scope == PolicyScope::Everywhere)
-        {
-            return content.rules[i];
-        }
-    }
-    FAIL("no rule");
-    return content.rules[0];
+    return crd::crypto::test::accepting_all(number, now_seconds() - 60U);
 }
 
 void refuse(PolicyContent& content, AlgorithmId algorithm)
 {
-    rule_of(content, algorithm) = {algorithm, 0U, 0U, 0U, 1U}; // refused since 1970
+    crd::crypto::test::refuse_rule(content, algorithm);
 }
 
 void prefer(PolicyContent& content, AlgorithmId algorithm)
 {
-    rule_of(content, algorithm) = {algorithm, 0U, 0U, kNever, kNever};
+    crd::crypto::test::prefer_rule(content, algorithm);
 }
 
-// An installation's policy: the test trust set, a build that supports the whole register, and its store.
-struct Policy
+// An installation's policy whose generations apply now.
+struct Policy : crd::crypto::test::TestInstallation
 {
-    TestVerifier verifier;
-    PolicyStore store{
-        PolicyConfig{ConstSpan<TrustKey>(kTestTrust), &verifier, ConstSpan<AlgorithmId>(kAlgorithmIds), 0U}};
-
     void apply(const PolicyContent& content)
     {
-        u8 body[2048];
-        usize body_size = 0U;
-        REQUIRE(write_policy_body(content, body, body_size) == PolicyError::None);
-        const ConstSpan<u8> message(body, body_size);
-        u8 tags[2][kTestSignatureBytes];
-        KeySignature signatures[2];
-        for (u32 k = 0U; k < 2U; ++k)
-        {
-            test_sign(kTestTrust[k].algorithm, kTestTrust[k].public_key, message, tags[k]);
-            signatures[k] = {kTestTrust[k].id, kTestTrust[k].algorithm, ConstSpan<u8>(tags[k])};
-        }
-        u8 bytes[4096];
-        usize size = 0U;
-        REQUIRE(write_policy(message, ConstSpan<KeySignature>(signatures), bytes, size) == PolicyError::None);
-        REQUIRE(store.apply(ConstSpan<u8>(bytes, size), now_seconds()) == PolicyError::None);
+        REQUIRE(TestInstallation::apply(content, now_seconds()) == PolicyError::None);
     }
 };
 

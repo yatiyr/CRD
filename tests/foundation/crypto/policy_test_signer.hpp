@@ -82,4 +82,81 @@ inline const TrustKey kTestTrust[] = {
     {test_key_id(0x10U), AlgorithmId::MlDsa87, containers::ConstSpan<u8>(kPostQuantumPublic)},
     {test_key_id(0x20U), AlgorithmId::Ed25519, containers::ConstSpan<u8>(kClassicalPublic)},
 };
+
+// Generation `number` issued at `issued`, valid 30 days with 7 days' grace, accepting every algorithm of the register
+// everywhere and preferring the hybrid groups: the tests narrow it with refuse_rule() and prefer_rule().
+[[nodiscard]] inline PolicyContent accepting_all(u64 number, u64 issued) noexcept
+{
+    constexpr u64 kDay = 86400U;
+    PolicyContent content;
+    content.generation    = number;
+    content.issued        = issued;
+    content.expires       = issued + 30U * kDay;
+    content.offline_grace = static_cast<u32>(7U * kDay);
+    for (const AlgorithmId algorithm : kAlgorithmIds)
+    {
+        const bool hybrid = algorithm_class(algorithm) == AlgorithmClass::HybridKeyExchange;
+        content.rules[content.rule_count++] = {algorithm, 0U, 0U, hybrid ? kNever : 0U, kNever};
+    }
+    return content;
+}
+
+// Sets `algorithm`'s rule in `scope` (appended when the generation has none) to `rule`'s window.
+inline void set_rule(PolicyContent& content, AlgorithmRule rule) noexcept
+{
+    for (u32 i = 0U; i < content.rule_count; ++i)
+    {
+        if (content.rules[i].algorithm == rule.algorithm && content.rules[i].scope == rule.scope)
+        {
+            content.rules[i] = rule;
+            return;
+        }
+    }
+    content.rules[content.rule_count++] = rule;
+}
+
+// `algorithm` refused in `scope` since 1970, or from `from`; preferred there from 1970.
+inline void refuse_rule(PolicyContent& content, AlgorithmId algorithm, PolicyScope scope = PolicyScope::Everywhere,
+                        u64 from = 1U) noexcept
+{
+    set_rule(content, {algorithm, 0U, 0U, 0U, from, scope});
+}
+
+inline void prefer_rule(PolicyContent& content, AlgorithmId algorithm,
+                        PolicyScope scope = PolicyScope::Everywhere) noexcept
+{
+    set_rule(content, {algorithm, 0U, 0U, kNever, kNever, scope});
+}
+
+// A test installation: the test trust set, a build supporting the whole register, its store, and apply(), which signs
+// a generation with every trust key and applies it at `now`.
+struct TestInstallation
+{
+    TestVerifier verifier;
+    PolicyStore  store{PolicyConfig{containers::ConstSpan<TrustKey>(kTestTrust), &verifier,
+                                    containers::ConstSpan<AlgorithmId>(kAlgorithmIds), 0U}};
+
+    [[nodiscard]] PolicyError apply(const PolicyContent& content, u64 now) noexcept
+    {
+        u8          body[2048];
+        usize       body_size = 0U;
+        PolicyError error     = write_policy_body(content, body, body_size);
+        if (error != PolicyError::None)
+        {
+            return error;
+        }
+        const containers::ConstSpan<u8> message(body, body_size);
+        u8                              tags[2][kTestSignatureBytes];
+        KeySignature                    signatures[2];
+        for (u32 k = 0U; k < 2U; ++k)
+        {
+            test_sign(kTestTrust[k].algorithm, kTestTrust[k].public_key, message, tags[k]);
+            signatures[k] = {kTestTrust[k].id, kTestTrust[k].algorithm, containers::ConstSpan<u8>(tags[k])};
+        }
+        u8    bytes[4096];
+        usize size = 0U;
+        error      = write_policy(message, containers::ConstSpan<KeySignature>(signatures), bytes, size);
+        return error != PolicyError::None ? error : store.apply(containers::ConstSpan<u8>(bytes, size), now);
+    }
+};
 } // namespace crd::crypto::test

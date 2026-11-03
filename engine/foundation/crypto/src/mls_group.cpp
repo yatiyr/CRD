@@ -5,6 +5,10 @@
 #include "byte_spans.hpp"
 #include "mls_detail.hpp"
 
+#include <crd/crypto/policy.hpp>
+
+#include <algorithm>
+
 namespace crd::crypto::mls
 {
 namespace
@@ -1023,9 +1027,29 @@ void Group::wipe() noexcept
     fresh_buffer(m_reinit, 0U);
 }
 
+CryptoError check_suite_policy(const GroupConfig& config, const CipherSuite& suite) noexcept
+{
+    if (config.crypto_policy == nullptr)
+    {
+        return CryptoError::None;
+    }
+    const AlgorithmId algorithms[] = {suite.kem, suite.kdf, suite.aead, suite.signature};
+    const AlgorithmStatus status   = config.crypto_policy->snapshot().status(algorithms, config.policy.now,
+                                                                             config.policy_scope);
+    return status == AlgorithmStatus::Refused ? CryptoError::PolicyRefused : CryptoError::None;
+}
+
+void Group::set_now(u64 now) noexcept
+{
+    m_config.policy.now = std::max(m_config.policy.now, now);
+}
+
 CryptoError Group::check_config(const GroupConfig& config) const noexcept
 {
-    if (config.verifier == nullptr || config.authentication == nullptr)
+    const bool known_scope =
+        config.policy_scope == PolicyScope::Everywhere || config.policy_scope == PolicyScope::CeridServices;
+    if (config.verifier == nullptr || config.authentication == nullptr || !known_scope ||
+        (config.crypto_policy == nullptr && config.policy_scope != PolicyScope::Everywhere))
     {
         return CryptoError::Unsupported;
     }
@@ -1081,6 +1105,10 @@ CryptoError Group::create(const CipherSuite& suite, cont::ConstSpan<u8> group_id
     wipe();
     const CipherSuite* profile = cipher_suite(suite.id);
     CryptoError        error   = profile == nullptr ? CryptoError::Unsupported : check_config(config);
+    if (error == CryptoError::None)
+    {
+        error = check_suite_policy(config, *profile);
+    }
     if (error != CryptoError::None)
     {
         return error;
@@ -1267,6 +1295,10 @@ CryptoError Group::join(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont
     }
     OpenedWelcome opened;
     error = open_welcome(welcome, own, init_private, *config.store, prior, opened);
+    if (error == CryptoError::None)
+    {
+        error = check_suite_policy(config, opened.suite());
+    }
     if (error != CryptoError::None)
     {
         return error;

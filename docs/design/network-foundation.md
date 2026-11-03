@@ -1266,8 +1266,8 @@ The generation's rules ([policy wire](#policy-wire)) are enforced where keys are
   negotiated group, AEAD, peer key algorithm and credential against the store again (`check_policy`) and, when one
   is refused, queues close_notify and is Closed with `PolicyRefused`. QUIC has no TLS KeyUpdate: its transport
   calls `check_policy` before each `QuicPacketKey::update` and closes the connection on `PolicyRefused` (4.2a).
-- **Not yet under the policy:** the HPKE suite a client's ECH offer uses (the server's ECHConfig chooses it) and the
-  MLS cipher suites a group runs; both are NET.2 items that follow this decision.
+- **HPKE and MLS suites** follow the same generation: ECH's by [S21](#tls-ech-policy) and a group's cipher suite by
+  [M14](#mls-policy).
 
 Evidence: `test_tls_policy.cpp` (a server's preference following the generation; a preferred AEAD leading a
 client's offer; a refused group out of a client's offer and a server's acceptance; refused AEADs and a refused server key; every `PolicyRefused` before a byte, a
@@ -1276,6 +1276,31 @@ classical-only key exchange while other contexts accept it, and the scope's conf
 refused server key not resuming; a generation applied mid-session reaching it at its own key update, at the update
 `send()` makes and at the peer's, and an allowed one changing nothing; a QUIC handshake under the policy and its
 transport's check), `test_policy.cpp` and `crd-fuzz-crypto-policy` (scopes, format 2 and the N-1 reader).
+
+<a id="tls-ech-policy"></a>**S21. ECH's HPKE suites run under the policy generation**
+([tls.hpp](../../engine/foundation/crypto/include/crd/crypto/tls.hpp), threats T04 and T15, decision D7; 2026-11-03). A suite is judged as a whole: `PolicySnapshot::status` over its
+algorithms is Refused when one is, Preferred when all are, Accepted otherwise (an HPKE KEM is named as decision H2
+names it, so DHKEM(X25519) is X25519: classical-only key exchange).
+
+- **A client** given ECH configurations (its list or a server's retry configurations) hands the provider, at each
+  session's start, only those of version 0xfe0d whose KEM it implements (DHKEM(X25519, HKDF-SHA256)) and whose every
+  cipher suite it could pick (HKDF-SHA256 with AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305) the generation allows in
+  the context's scope: the provider, not Cerid, picks among a configuration's suites, so one refused suite drops the
+  configuration. The preferred configurations lead, each kind in the list's order. A client left with none is
+  `PolicyRefused` before a byte, as it would never send a hello without ECH; so once classical-only key exchange is
+  refused for Cerid services, a service client given ECH configurations starts nothing until its provider's ECH takes
+  a post-quantum KEM.
+- **A server** cannot steer the suite a client picks from what it publishes, so a server context whose ECH keys (the
+  previous ones included) publish a refused algorithm runs no session (`PolicyRefused`), as one with a refused
+  credential does. `TlsEchKey::init` therefore takes the AEADs a key publishes (one to three, AES-128-GCM and
+  ChaCha20-Poly1305 by default) and writes the ECHConfig itself; `hpke_codepoints` and `hpke_suite_of` map a suite to
+  the HPKE registries and back.
+
+Evidence: `test_tls_ech.cpp` (a key's AEAD list in its ECHConfig and its refusals; a client skipping a configuration
+with one refused suite, leading with a preferred one and keeping the list's order; a Cerid service client refused
+where another client offers ECH; every AEAD or the KDF refused; retry configurations filtered, refused and accepted;
+a server publishing a refused AEAD refused and one publishing allowed ones serving) and `test_policy.cpp` (the combined
+status).
 
 <a id="hpke"></a>
 ### Hybrid public key encryption
@@ -1656,6 +1681,24 @@ them: Cerid compares every leaf's capabilities against what a group requires or 
 capabilities name one, a GroupContextExtensions proposal adding one and a leaf whose credential type is one are refused
 (Unsupported) on both sides, though the sender's own capabilities list it, and a proposal of a GREASE type is a type
 this build does not implement.
+
+<a id="mls-policy"></a>**M14. A group's cipher suite runs under the policy generation** (threat T04, decision D7,
+[S20](#tls-policy); 2026-11-03). `GroupConfig::crypto_policy` names the installation's `PolicyStore` and `policy_scope`
+the group's scope (CeridServices for a Cerid service's own groups); a scope without a store, or one the build does not
+know, is Unsupported, and without a store (tests and tools) the suite is not checked. `check_suite_policy` judges the
+suite's KEM, KDF, AEAD and signature algorithm together at the group's clock (`LeafPolicy::now`, which
+`Group::set_now` moves forward only), and refuses with `PolicyRefused`:
+
+- `create`, `join` (after the Welcome opens and names the suite), `join_external`, and so `reinit` and `branch`;
+- every epoch: a commit the member makes and one it receives are staged only under an allowed suite, the group's or,
+  for a ReInit, the one it names. A ReInit to an allowed suite is how a group leaves a refused one; a ReInit to a
+  refused suite is refused. The current epoch's keys stay until it ends, as a TLS session's stay until its next key
+  update: application messages and proposals still flow.
+
+Evidence: `test_mls_policy.cpp` (creation, Welcome and external joins refused and allowed per scope, the scope's
+configuration refusals; a member's own and a received commit refused while application data flows; a ReInit to a
+refused suite refused and one to the hybrid suite ending the group, which is created again and joined under the
+generation; a dated refusal reaching the group when its clock passes the date, a clock that never goes back).
 
 **M6. Padding** (RFC 9420 section 6.3 leaves its amount to the application). A PrivateMessageContent of L bytes is
 padded with Padmé (Nikitin et al., "Reducing Metadata Leakage from Encrypted Files and Communication with PURBs",

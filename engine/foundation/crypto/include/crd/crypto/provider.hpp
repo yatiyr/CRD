@@ -55,11 +55,12 @@ enum class CryptoError : u8
     Denied,          // the protector would not recover a master key: another user's, a locked vault (key_store.hpp)
     Damaged,         // a key store's file fails its storage checks or its framing (key_store.hpp)
     StorageFailure,  // a key store's files could not be written, locked or created (key_store.hpp)
+    PolicyRefused,   // the installation's policy generation refuses an algorithm the operation runs on (mls_group.hpp)
 };
 
 // "none", "unsupported", "not-ready", "bad-length", "overlap", "bad-key", "forged", "weak-secret", "exhausted",
 // "provider-failure", "expired", "replayed", "out-of-window", "malformed", "not-found", "exists", "revoked",
-// "unavailable", "denied", "damaged", "storage-failure".
+// "unavailable", "denied", "damaged", "storage-failure", "policy-refused".
 [[nodiscard]] cont::StringView crypto_error_name(CryptoError error) noexcept;
 
 // The provider and its version ("AWS-LC 5.12.0").

@@ -33,7 +33,10 @@
 //     rest, tiled by ECHConfigs of a 2-byte version and length, one of version 0xfe0d (restated), at most
 //     kTlsMaxEchConfigListBytes; a session of an accepted context either refuses to start (BadConfig, nothing to send)
 //     or sends a ClientHello whose outer encrypted_client_hello carries a 32-byte encapsulation and which names
-//     another server than its own, and no byte it sends at the Initial level holds its server's name;
+//     another server than its own, and no byte it sends at the Initial level holds its server's name; under a
+//     generation refusing ChaCha20-Poly1305 (decision S21) a session refuses to start with PolicyRefused exactly when
+//     no configuration is left (restated: version 0xfe0d, DHKEM(X25519), a whole suite list with a suite the
+//     provider could pick and none of ChaCha20-Poly1305), and otherwise its hello never encrypts with it;
 //   * a server holding ECH keys reports no ECH (it needs a client's Finished) whatever hello reaches it;
 //   * a ticket record a client's store hands out offers early data only when it is a record of a real session (no fixed
 //     input is), so the client offers none;
@@ -45,6 +48,8 @@
 //     zlib, its bytes can reach (restated here: DEFLATE's 1032 bytes per byte between zlib's 6 framing bytes), and a
 //     refused claim leaves the output untouched; a zlib decoding carries the Adler-32 of its output (restated) and a
 //     decoding is the same twice.
+#include "../policy_test_signer.hpp"
+
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/compression/deflate.hpp>
@@ -138,6 +143,7 @@ struct Contexts
     TlsContext early_client;
     TlsContext quic_early_server;
     TlsContext quic_early_client;
+    crd::crypto::test::TestInstallation no_chacha; // a generation refusing ChaCha20-Poly1305 (decision S21)
     bool          ready = false;
 
     Contexts() noexcept
@@ -165,6 +171,13 @@ struct Contexts
         }
         config.application_protocols = kProtocols;
         if (quic_server.init(config) != TlsError::None)
+        {
+            return;
+        }
+        const auto    now        = static_cast<crd::u64>(std::time(nullptr));
+        PolicyContent generation = crd::crypto::test::accepting_all(1U, now - 60U);
+        crd::crypto::test::refuse_rule(generation, AlgorithmId::Chacha20Poly1305);
+        if (no_chacha.apply(generation, now) != PolicyError::None)
         {
             return;
         }
@@ -581,6 +594,52 @@ bool ech_list_shaped(ConstSpan<u8> list) noexcept
     return current;
 }
 
+// Decision S21 restated for a generation refusing ChaCha20-Poly1305 alone: whether a shaped `list` holds a
+// configuration a client may offer: version 0xfe0d, KEM DHKEM(X25519, HKDF-SHA256), a public key and a suite list of
+// whole 4-byte suites inside it, at least one suite of HKDF-SHA256 with AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305
+// (what the provider can pick), and none of those with ChaCha20-Poly1305.
+bool ech_list_allowed(ConstSpan<u8> list) noexcept
+{
+    for (usize at = 2U; at < list.size();)
+    {
+        const u16   version = static_cast<u16>((list[at] << 8U) | list[at + 1U]);
+        const usize length  = (usize{list[at + 2U]} << 8U) | list[at + 3U];
+        const u8*   config  = list.data() + at + 4U;
+        at += 4U + length;
+        if (version != kEchVersion || length < 5U || ((u16{config[1]} << 8U) | config[2]) != 0x0020U)
+        {
+            continue;
+        }
+        const usize key = (usize{config[3]} << 8U) | config[4];
+        if (length < 7U + key)
+        {
+            continue;
+        }
+        const usize suites = (usize{config[5U + key]} << 8U) | config[6U + key];
+        if (length < 7U + key + suites || suites % 4U != 0U)
+        {
+            continue;
+        }
+        bool pickable = false;
+        bool refused  = false;
+        for (usize s = 7U + key; s < 7U + key + suites; s += 4U)
+        {
+            const u16 kdf  = static_cast<u16>((config[s] << 8U) | config[s + 1U]);
+            const u16 aead = static_cast<u16>((config[s + 2U] << 8U) | config[s + 3U]);
+            if (kdf == 1U && aead >= 1U && aead <= 3U)
+            {
+                pickable = true;
+                refused  = refused || aead == 3U;
+            }
+        }
+        if (pickable && !refused)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool holds(ConstSpan<u8> bytes, const char* text) noexcept
 {
     const usize length = std::strlen(text);
@@ -595,10 +654,12 @@ bool holds(ConstSpan<u8> bytes, const char* text) noexcept
 }
 
 // A ClientHello message (handshake header first) read for ECH: whether it names `name` and carries an outer
-// encrypted_client_hello with a 32-byte encapsulation, restated from RFC 9846 section 4.1 and RFC 9849 section 5.
-bool hello_offers_ech(ConstSpan<u8> message, bool& names) noexcept
+// encrypted_client_hello with a 32-byte encapsulation, and its HPKE AEAD, restated from RFC 9846 section 4.1 and RFC
+// 9849 section 5.
+bool hello_offers_ech(ConstSpan<u8> message, bool& names, u16& aead) noexcept
 {
     names = false;
+    aead  = 0U;
     if (message.size() < 4U + 2U + 32U + 1U || message[0] != 1U)
     {
         return false;
@@ -633,6 +694,7 @@ bool hello_offers_ech(ConstSpan<u8> message, bool& names) noexcept
         if (type == kEchVersion && length >= 8U)
         {
             offered = body[0] == 0U && ((usize{body[6]} << 8U) | body[7]) == 32U;
+            aead    = static_cast<u16>((body[3] << 8U) | body[4]);
         }
         at += 4U + length;
     }
@@ -681,8 +743,33 @@ void offer_ech(ConstSpan<u8> list) noexcept
         CRD_FUZZ_REQUIRE(session.take(Span<u8>(flight), written) == TlsError::None);
         CRD_FUZZ_REQUIRE(written > 9U && flight[0] == 22U);
         bool names = true;
-        CRD_FUZZ_REQUIRE(hello_offers_ech(ConstSpan<u8>(flight + 5U, written - 5U), names));
+        u16  aead  = 0U;
+        CRD_FUZZ_REQUIRE(hello_offers_ech(ConstSpan<u8>(flight + 5U, written - 5U), names, aead));
         CRD_FUZZ_REQUIRE(!names && !holds(ConstSpan<u8>(flight, written), kName));
+    }
+
+    // Decision S21: the same list under a generation refusing ChaCha20-Poly1305.
+    TlsConfig narrowed  = config;
+    narrowed.policy     = &shared.no_chacha.store;
+    TlsContext governed;
+    CRD_FUZZ_REQUIRE(governed.init(narrowed) == TlsError::None);
+    TlsSession     filtered;
+    const TlsError kept = filtered.init(governed);
+    CRD_FUZZ_REQUIRE((kept == TlsError::PolicyRefused) == !ech_list_allowed(list));
+    CRD_FUZZ_REQUIRE(kept == TlsError::None || kept == TlsError::BadConfig || kept == TlsError::PolicyRefused);
+    if (kept == TlsError::None)
+    {
+        u8    flight[kMaxFlight];
+        usize written = 0U;
+        bool  names   = true;
+        u16   aead    = 0U;
+        CRD_FUZZ_REQUIRE(filtered.take(Span<u8>(flight), written) == TlsError::None && written > 9U);
+        CRD_FUZZ_REQUIRE(hello_offers_ech(ConstSpan<u8>(flight + 5U, written - 5U), names, aead));
+        CRD_FUZZ_REQUIRE(!names && aead != 3U);
+    }
+    else
+    {
+        CRD_FUZZ_REQUIRE(filtered.state() == TlsState::Idle && filtered.pending() == 0U);
     }
 
     config.application_protocols = kProtocols;
@@ -700,7 +787,8 @@ void offer_ech(ConstSpan<u8> list) noexcept
     CRD_FUZZ_REQUIRE(handshake.pending(QuicLevel::Initial) <= kMaxFlight);
     CRD_FUZZ_REQUIRE(handshake.take(QuicLevel::Initial, Span<u8>(initial), written) == TlsError::None);
     bool names = true;
-    CRD_FUZZ_REQUIRE(hello_offers_ech(ConstSpan<u8>(initial, written), names));
+    u16  aead  = 0U;
+    CRD_FUZZ_REQUIRE(hello_offers_ech(ConstSpan<u8>(initial, written), names, aead));
     CRD_FUZZ_REQUIRE(!names && !holds(ConstSpan<u8>(initial, written), kName));
 }
 

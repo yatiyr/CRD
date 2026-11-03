@@ -32,7 +32,9 @@
 // connection its ECHConfigList. What Cerid adds lives in the provider context's ex_data (EchContext): a client's list
 // and a server's public names, which the name check reads during handshakes that may outlive the TlsContext. A client
 // given a list proves its ClientHello encrypted an inner one (the provider reports it to the message observer) before
-// any byte leaves, so a list the provider cannot use never becomes a hello that reveals the server name.
+// any byte leaves, so a list the provider cannot use never becomes a hello that reveals the server name. Under a policy
+// store (decision S21) a client hands the provider only the configurations whose every suite it could pick the
+// generation allows, and a server whose keys publish a refused algorithm runs no session.
 //
 // RFC 9850 key logging (decision S19, threat T22) is the provider's key log callback, forwarded to the context's sink.
 // It exists only where CRD_TLS_KEY_LOG (this module's CMakeLists.txt) is 1: a shipping build sets it to 0, and the
@@ -43,6 +45,7 @@
 
 #include <crd/compression/deflate.hpp>
 #include <crd/compression/zstd.hpp>
+#include <crd/crypto/hpke.hpp>
 #include <crd/crypto/key_store.hpp>
 #include <crd/crypto/replay.hpp>
 
@@ -410,6 +413,88 @@ bool walk_ech_configs(cont::ConstSpan<u8> list, bool& current) noexcept
         current = current || version == iana::kTlsExtensionEncryptedClientHello; // RFC 9849 section 4
     }
     return true;
+}
+
+// Decision S21: the status under `snapshot` of one ECHConfig's contents for a client. Refused unless the provider can
+// use it, with DHKEM(X25519, HKDF-SHA256) (the only KEM its ECH takes) and a cipher suite of HKDF-SHA256 and an AEAD it
+// implements; otherwise the combined status of every such suite, since the provider, not Cerid, picks among them. A
+// suite it skips (another KDF or AEAD) is never picked and counts for nothing.
+AlgorithmStatus ech_config_status(CBS contents, const PolicySnapshot& snapshot, u64 now, PolicyScope scope) noexcept
+{
+    uint8_t  config_id = 0U;
+    uint16_t kem       = 0U;
+    CBS      public_key;
+    CBS      suites;
+    if (!CBS_get_u8(&contents, &config_id) || !CBS_get_u16(&contents, &kem) ||
+        !CBS_get_u16_length_prefixed(&contents, &public_key) || !CBS_get_u16_length_prefixed(&contents, &suites) ||
+        kem != iana::kHpkeKemDhkemX25519HkdfSha256)
+    {
+        return AlgorithmStatus::Refused;
+    }
+    AlgorithmStatus combined = AlgorithmStatus::Refused;
+    bool            usable   = false;
+    while (CBS_len(&suites) != 0U)
+    {
+        uint16_t kdf  = 0U;
+        uint16_t aead = 0U;
+        if (!CBS_get_u16(&suites, &kdf) || !CBS_get_u16(&suites, &aead))
+        {
+            return AlgorithmStatus::Refused;
+        }
+        HpkeSuite suite;
+        if (kdf != iana::kHpkeKdfHkdfSha256 || !hpke_suite_of({kem, kdf, aead}, suite))
+        {
+            continue;
+        }
+        const AlgorithmId     algorithms[] = {suite.kem, suite.kdf, suite.aead};
+        const AlgorithmStatus status       = snapshot.status(algorithms, now, scope);
+        combined                           = usable ? std::min(combined, status) : status;
+        usable                             = true;
+    }
+    return combined;
+}
+
+// Decision S21: writes into `out` (at least list.size() bytes) the ECHConfigList of the configurations of `list` (one
+// walk_ech_configs accepts) that a client may offer under `snapshot` at `now` in `scope`: version 0xfe0d, not refused,
+// the preferred ones first, each kind in the list's order. Returns its length, 0 when none is left.
+usize allowed_ech_configs(cont::ConstSpan<u8> list, const PolicySnapshot& snapshot, u64 now, PolicyScope scope,
+                          cont::Span<u8> out) noexcept
+{
+    usize written = 2U;
+    for (const AlgorithmStatus wanted : {AlgorithmStatus::Preferred, AlgorithmStatus::Accepted})
+    {
+        CBS cbs;
+        CBS configs;
+        CBS_init(&cbs, list.data(), list.size());
+        if (!CBS_get_u16_length_prefixed(&cbs, &configs))
+        {
+            return 0U;
+        }
+        while (CBS_len(&configs) != 0U)
+        {
+            const uint8_t* start   = CBS_data(&configs);
+            uint16_t       version = 0U;
+            CBS            contents;
+            if (!CBS_get_u16(&configs, &version) || !CBS_get_u16_length_prefixed(&configs, &contents))
+            {
+                return 0U;
+            }
+            const auto bytes = static_cast<usize>(CBS_data(&configs) - start);
+            if (version == iana::kTlsExtensionEncryptedClientHello &&
+                ech_config_status(contents, snapshot, now, scope) == wanted)
+            {
+                std::memcpy(out.data() + written, start, bytes);
+                written += bytes;
+            }
+        }
+    }
+    if (written == 2U)
+    {
+        return 0U;
+    }
+    out[0] = static_cast<u8>((written - 2U) >> 8U);
+    out[1] = static_cast<u8>(written - 2U);
+    return written;
 }
 
 // Each algorithm of `list` once, of one of the two classes, implemented by the provider; at most `bound` of them.
@@ -784,8 +869,24 @@ struct EchContext
     char names[kTlsMaxEchKeys][kTlsMaxNameBytes + 1U] = {};
     u32  name_bytes[kTlsMaxEchKeys]                   = {};
     u32  name_count                                   = 0U;
+    // A server's: every algorithm its ECH keys publish (the KEM, the KDF and each AEAD once), which decision S21
+    // checks at each session's start.
+    AlgorithmId published[2U + kTlsMaxEchAeads] = {};
+    u32         published_count                 = 0U;
 
     [[nodiscard]] cont::ConstSpan<u8> list() const noexcept { return cont::ConstSpan<u8>(configs, config_bytes); }
+    [[nodiscard]] cont::ConstSpan<AlgorithmId> publishes() const noexcept
+    {
+        return cont::ConstSpan<AlgorithmId>(published, published_count);
+    }
+
+    void publish(AlgorithmId algorithm) noexcept
+    {
+        if (std::find(published, published + published_count, algorithm) == published + published_count)
+        {
+            published[published_count++] = algorithm;
+        }
+    }
 
     [[nodiscard]] bool names_public(cont::StringView name) const noexcept
     {
@@ -1338,8 +1439,15 @@ struct TlsCallbacks
         {
             return TlsError::ProviderFailure;
         }
-        state.m_settings = settings;
-        const TlsError policy = restrict_to_policy(ssl.get(), state);
+        state.m_settings            = settings;
+        const EchContext*   ech     = ech_of(ssl.get());
+        cont::ConstSpan<u8> configs = retry;
+        if (configs.empty() && ech != nullptr)
+        {
+            configs = ech->list();
+        }
+        u8             allowed[kTlsMaxEchConfigListBytes];
+        const TlsError policy = restrict_to_policy(ssl.get(), state, ech, configs, allowed);
         if (policy != TlsError::None)
         {
             return policy;
@@ -1354,13 +1462,7 @@ struct TlsCallbacks
             return TlsError::None;
         }
         SSL_set_connect_state(ssl.get());
-        state.m_tickets = tickets;
-        const EchContext*         ech     = ech_of(ssl.get());
-        cont::ConstSpan<u8> configs = retry;
-        if (configs.empty() && ech != nullptr)
-        {
-            configs = ech->list();
-        }
+        state.m_tickets     = tickets;
         state.m_ech_retry   = !retry.empty();
         state.m_ech_pending = !configs.empty();
         SSL_set_enable_ech_grease(ssl.get(), configs.empty() && settings.ech_grease ? 1 : 0);
@@ -1374,8 +1476,11 @@ struct TlsCallbacks
 
     // Decision S20: the session's offer and acceptance under the policy snapshot it takes now. The groups, AEADs and
     // peer signature algorithms the generation refuses in the context's scope drop out, the preferred ones lead; a
-    // refused credential, or a list left empty, refuses the session before a byte is sent.
-    static TlsError restrict_to_policy(SSL* ssl, detail::TlsHandshakeState& state) noexcept
+    // refused credential, or a list left empty, refuses the session before a byte is sent. Decision S21: a client's
+    // ECH `configs` become those the generation allows, written into `allowed`, and a server whose ECH keys publish a
+    // refused algorithm is refused the same way.
+    static TlsError restrict_to_policy(SSL* ssl, detail::TlsHandshakeState& state, const EchContext* ech,
+                                       cont::ConstSpan<u8>& configs, cont::Span<u8> allowed) noexcept
     {
         TlsSettings& settings = state.m_settings;
         if (settings.policy == nullptr)
@@ -1398,6 +1503,20 @@ struct TlsCallbacks
         if (settings.group_count == 0U || settings.aead_count == 0U || (pinned && settings.signature_count == 0U))
         {
             return TlsError::PolicyRefused;
+        }
+        if (ech != nullptr && !ech->publishes().empty() &&
+            snapshot.status(ech->publishes(), now, scope) == AlgorithmStatus::Refused)
+        {
+            return TlsError::PolicyRefused;
+        }
+        if (!configs.empty())
+        {
+            const usize length = allowed_ech_configs(configs, snapshot, now, scope, allowed);
+            if (length == 0U)
+            {
+                return TlsError::PolicyRefused;
+            }
+            configs = cont::ConstSpan<u8>(allowed.data(), length);
         }
         u16 groups[kTlsMaxGroups];
         for (u32 i = 0U; i < settings.group_count; ++i)
@@ -2179,36 +2298,66 @@ void TlsEchKey::clear() noexcept
     m_config_bytes = 0U;
     m_name_bytes   = 0U;
     m_config_id    = 0U;
+    m_aead_count   = 0U;
     std::memset(m_name, 0, sizeof(m_name));
 }
 
 TlsError TlsEchKey::init(cont::ConstSpan<u8> private_key, u8 config_id, cont::StringView public_name,
-                         u8 max_name_length) noexcept
+                         u8 max_name_length, cont::ConstSpan<AlgorithmId> aeads) noexcept
 {
     clear();
-    if (private_key.size() != kTlsEchKeyBytes || !valid_public_name(public_name))
+    if (private_key.size() != kTlsEchKeyBytes || !valid_public_name(public_name) || aeads.empty() ||
+        aeads.size() > kTlsMaxEchAeads)
     {
         return TlsError::BadConfig;
     }
+    u16 suites[kTlsMaxEchAeads] = {};
+    for (usize i = 0U; i < aeads.size(); ++i)
+    {
+        suites[i] = hpke_codepoints({AlgorithmId::X25519, AlgorithmId::HkdfSha256, aeads[i]}).aead;
+        if (suites[i] == 0U || std::find(aeads.begin(), aeads.begin() + i, aeads[i]) != aeads.begin() + i)
+        {
+            return TlsError::BadConfig;
+        }
+    }
     const ErrorScope              errors;
     bssl::UniquePtr<EVP_HPKE_KEY> key(EVP_HPKE_KEY_new());
-    char                          name[kTlsMaxNameBytes + 1U] = {};
-    std::memcpy(name, public_name.data(), public_name.size());
-    uint8_t* config = nullptr;
-    size_t   length = 0U;
+    u8                            public_key[kTlsEchKeyBytes] = {};
+    size_t                        public_bytes                = 0U;
     if (!key ||
         !EVP_HPKE_KEY_init(key.get(), EVP_hpke_x25519_hkdf_sha256(), private_key.data(), private_key.size()) ||
-        !SSL_marshal_ech_config(&config, &length, config_id, key.get(), name, max_name_length))
+        !EVP_HPKE_KEY_public_key(key.get(), public_key, &public_bytes, sizeof(public_key)))
     {
         return TlsError::ProviderFailure;
     }
-    const bssl::UniquePtr<uint8_t> owner(config);
-    if (length > kTlsMaxEchConfigBytes)
+    // RFC 9849 section 4: version and length, then the HpkeKeyConfig (config_id, kem_id, public_key and the
+    // cipher_suites, each HKDF-SHA256 with one AEAD), maximum_name_length, public_name and no extensions.
+    bssl::ScopedCBB cbb;
+    CBB             contents;
+    CBB             child;
+    size_t          length = 0U;
+    bool            ok = CBB_init_fixed(cbb.get(), m_config, sizeof(m_config)) == 1 &&
+              CBB_add_u16(cbb.get(), iana::kTlsExtensionEncryptedClientHello) == 1 &&
+              CBB_add_u16_length_prefixed(cbb.get(), &contents) == 1 && CBB_add_u8(&contents, config_id) == 1 &&
+              CBB_add_u16(&contents, iana::kHpkeKemDhkemX25519HkdfSha256) == 1 &&
+              CBB_add_u16_length_prefixed(&contents, &child) == 1 &&
+              CBB_add_bytes(&child, public_key, public_bytes) == 1 &&
+              CBB_add_u16_length_prefixed(&contents, &child) == 1;
+    for (usize i = 0U; ok && i < aeads.size(); ++i)
     {
+        ok = CBB_add_u16(&child, iana::kHpkeKdfHkdfSha256) == 1 && CBB_add_u16(&child, suites[i]) == 1;
+    }
+    ok = ok && CBB_add_u8(&contents, max_name_length) == 1 && CBB_add_u8_length_prefixed(&contents, &child) == 1 &&
+         CBB_add_bytes(&child, reinterpret_cast<const uint8_t*>(public_name.data()), public_name.size()) == 1 &&
+         CBB_add_u16(&contents, 0U) == 1 && CBB_finish(cbb.get(), nullptr, &length) == 1;
+    if (!ok)
+    {
+        clear();
         return TlsError::ProviderFailure;
     }
-    std::memcpy(m_config, config, length);
-    std::memcpy(m_name, name, sizeof(name));
+    std::memcpy(m_name, public_name.data(), public_name.size());
+    std::copy(aeads.begin(), aeads.end(), m_aeads);
+    m_aead_count   = static_cast<u32>(aeads.size());
     m_config_bytes = static_cast<u32>(length);
     m_name_bytes   = static_cast<u32>(public_name.size());
     m_config_id    = config_id;
@@ -2502,6 +2651,12 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
                 }
                 std::memcpy(ech->names[ech->name_count], name.data(), name.size());
                 ech->name_bytes[ech->name_count++] = static_cast<u32>(name.size());
+                ech->publish(AlgorithmId::X25519);
+                ech->publish(AlgorithmId::HkdfSha256);
+                for (const AlgorithmId aead : key->aeads())
+                {
+                    ech->publish(aead);
+                }
             }
         }
         if (server && !SSL_CTX_set1_ech_keys(context.get(), keys.get()))

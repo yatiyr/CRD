@@ -479,6 +479,17 @@ AlgorithmStatus PolicySnapshot::status(AlgorithmId algorithm, u64 now, PolicySco
     return preferred ? AlgorithmStatus::Preferred : AlgorithmStatus::Accepted;
 }
 
+AlgorithmStatus PolicySnapshot::status(cont::ConstSpan<AlgorithmId> algorithms, u64 now,
+                                       PolicyScope scope) const noexcept
+{
+    AlgorithmStatus combined = algorithms.empty() ? AlgorithmStatus::Refused : AlgorithmStatus::Preferred;
+    for (const AlgorithmId algorithm : algorithms)
+    {
+        combined = std::min(combined, status(algorithm, now, scope));
+    }
+    return combined;
+}
+
 bool PolicySnapshot::allows_version(u16 protocol, u16 major, u16 minor) const noexcept
 {
     for (u32 i = 0U; i < m_content.minimum_count; ++i)

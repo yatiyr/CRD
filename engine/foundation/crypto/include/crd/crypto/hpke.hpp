@@ -61,6 +61,19 @@ struct HpkeSizes
 // Whether every algorithm of `suite` is in the profile.
 [[nodiscard]] bool hpke_supported(const HpkeSuite& suite) noexcept;
 
+// A suite's identifiers in IANA's HPKE KEM, KDF and AEAD registries (RFC 9180 section 7, draft-ietf-hpke-pq), each 0
+// for an algorithm outside the profile; hpke_suite_of reads them back, false (and `out` empty) unless all three are
+// in it. An ECHConfig names its suites this way (tls.hpp, decision S21).
+struct HpkeCodepoints
+{
+    u16 kem  = 0U;
+    u16 kdf  = 0U;
+    u16 aead = 0U;
+};
+
+[[nodiscard]] HpkeCodepoints hpke_codepoints(const HpkeSuite& suite) noexcept;
+[[nodiscard]] bool           hpke_suite_of(const HpkeCodepoints& codepoints, HpkeSuite& out) noexcept;
+
 // Whether every encapsulation to `public_key` can succeed, checked once when a long-lived key enters shared state (an
 // MLS leaf's, init or node key, which later commits encrypt to): Unsupported for a KEM outside the profile, BadLength
 // for another length, BadKey for an EC point or half off the curve or an ML-KEM key or half failing FIPS 203's input

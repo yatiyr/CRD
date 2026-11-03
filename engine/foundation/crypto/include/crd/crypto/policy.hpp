@@ -224,6 +224,10 @@ public:
     // of the rule `scope` follows; Preferred inside its preferred window; Accepted otherwise.
     [[nodiscard]] AlgorithmStatus status(AlgorithmId algorithm, u64 now,
                                          PolicyScope scope = PolicyScope::Everywhere) const noexcept;
+    // A suite's status, the algorithms it runs on together (an HPKE suite, an MLS cipher suite): Refused when one of
+    // them is, Preferred when every one is, Accepted otherwise; Refused for none.
+    [[nodiscard]] AlgorithmStatus status(cont::ConstSpan<AlgorithmId> algorithms, u64 now,
+                                         PolicyScope scope = PolicyScope::Everywhere) const noexcept;
 
     // Whether a session may use `major.minor` of `protocol`: true when the generation sets no minimum for it.
     [[nodiscard]] bool allows_version(u16 protocol, u16 major, u16 minor) const noexcept;

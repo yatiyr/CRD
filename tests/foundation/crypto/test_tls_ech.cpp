@@ -5,15 +5,18 @@
 // key and used for one retried connection, a second rejection refused, a server that turned ECH off, a rejection that
 // an unpinned server cannot authenticate and one under mutual authentication; key rotation; GREASE; the padding that
 // hides the server name's length; lists the client skips or cannot use; the public name refused as a destination of
-// its own; the same over QUIC; every configuration refusal; and RFC 9850 key logging, whose lines carry the inner
-// hello's random once ECH is accepted and the outer one's otherwise.
+// its own; the same over QUIC; every configuration refusal; RFC 9850 key logging, whose lines carry the inner hello's
+// random once ECH is accepted and the outer one's otherwise; and the policy generation over the HPKE suites (decision
+// S21): the AEADs a key publishes, the configurations a client offers under it, and a server publishing a refused one.
 //
 // The independent peer (OpenSSL 4.0's ECH) is tests/foundation/crypto/interop/tls_interop.py's.
 
 #include <crd/containers/array.hpp>
+#include <crd/crypto/policy.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
 
+#include "policy_test_signer.hpp"
 #include "tls_key_log.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -22,6 +25,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 #include <initializer_list>
 #include <iterator>
 
@@ -29,6 +33,7 @@ namespace
 {
 using crd::u16;
 using crd::u32;
+using crd::u64;
 using crd::u8;
 using crd::usize;
 using crd::containers::ConstSpan;
@@ -62,6 +67,7 @@ constexpr u16 kExtensionOuter        = 0xFD00U; // ech_outer_extensions, never i
 constexpr u16 kKemX25519             = 0x0020U;
 constexpr u16 kKdfSha256             = 0x0001U;
 constexpr u16 kAeadAes128Gcm         = 0x0001U;
+constexpr u16 kAeadAes256Gcm         = 0x0002U;
 constexpr u16 kAeadChacha20Poly1305  = 0x0003U;
 constexpr u8  kRecordChangeCipherSpec = 20U;
 constexpr u8  kRecordHandshake       = 22U;
@@ -84,8 +90,9 @@ void make_key(SigningKey& key, AlgorithmId algorithm, u8 salt)
     REQUIRE(key.from_seed(algorithm, ConstSpan<u8>(seed, signature_sizes(algorithm).seed)) == CryptoError::None);
 }
 
-// An ECH key from a fixed private key (`seed`), or a fresh one (0).
-void make_ech(TlsEchKey& key, u8 seed, u8 config_id, StringView name = kPublicName, u8 max_name_length = 0U)
+// An ECH key from a fixed private key (`seed`), or a fresh one (0), publishing `aeads`.
+void make_ech(TlsEchKey& key, u8 seed, u8 config_id, StringView name = kPublicName, u8 max_name_length = 0U,
+              ConstSpan<AlgorithmId> aeads = kTlsEchDefaultAeads)
 {
     u8 secret[kTlsEchKeyBytes];
     for (usize i = 0U; i < sizeof(secret); ++i)
@@ -96,7 +103,7 @@ void make_ech(TlsEchKey& key, u8 seed, u8 config_id, StringView name = kPublicNa
     {
         REQUIRE(random_bytes(Span<u8>(secret)) == CryptoError::None);
     }
-    REQUIRE(key.init(ConstSpan<u8>(secret), config_id, name, max_name_length) == TlsError::None);
+    REQUIRE(key.init(ConstSpan<u8>(secret), config_id, name, max_name_length, aeads) == TlsError::None);
 }
 
 Bytes list_of(std::initializer_list<const TlsEchKey*> keys)
@@ -235,6 +242,9 @@ struct Setup
     bool                        client_pins_server = true;
     AlgorithmId                 client_key{};            // mutual authentication when set
     ConstSpan<StringView>       protocols;
+    const PolicyStore*          client_policy = nullptr; // decision S21
+    const PolicyStore*          server_policy = nullptr;
+    PolicyScope                 client_scope  = PolicyScope::Everywhere;
     crd::crypto::test::KeyLog*  client_log = nullptr; // RFC 9850 key logs of each context (decision S19)
     crd::crypto::test::KeyLog*  server_log = nullptr;
 };
@@ -258,6 +268,8 @@ void configure(Endpoint& client, Endpoint& server, const Setup& setup)
     client_config.application_protocols = setup.protocols;
     client_config.ech_configs           = setup.client_ech;
     client_config.ech_grease            = setup.grease;
+    client_config.policy                = setup.client_policy;
+    client_config.policy_scope          = setup.client_scope;
     if (setup.client_log != nullptr)
     {
         setup.client_log->attach(client_config);
@@ -281,6 +293,7 @@ void configure(Endpoint& client, Endpoint& server, const Setup& setup)
     server_config.application_protocols = setup.protocols;
     server_config.ech_keys              = setup.server_keys;
     server_config.previous_ech_keys     = setup.previous_keys;
+    server_config.policy                = setup.server_policy;
     if (setup.server_log != nullptr)
     {
         setup.server_log->attach(server_config);
@@ -481,7 +494,8 @@ TEST_CASE("TLS ECH: a key publishes its ECHConfig as RFC 9849 section 4 lays it 
     {
         longest[i] = (i % 64U) == 63U ? '.' : 'a';
     }
-    REQUIRE(key.init(ConstSpan<u8>(secret), 1U, StringView(longest, sizeof(longest))) == TlsError::None);
+    REQUIRE(key.init(ConstSpan<u8>(secret), 1U, StringView(longest, sizeof(longest)), 0U, kAllAeads) ==
+            TlsError::None);
     CHECK(key.config().size() == kTlsMaxEchConfigBytes);
 
     // The list builder: no key, a key not ready, more than the bound, a buffer too small.
@@ -1259,5 +1273,266 @@ TEST_CASE("TLS ECH: key log lines carry the inner hello's random when ECH is acc
             REQUIRE(match != nullptr);
             CHECK(*match == client_log[i]);
         }
+    }
+}
+
+namespace
+{
+u64 now_seconds()
+{
+    return static_cast<u64>(std::time(nullptr));
+}
+
+// An installation whose generation, issued a minute ago, accepts the whole register but what `narrow` changes.
+template <typename Narrow>
+void apply_policy(crd::crypto::test::TestInstallation& installation, Narrow narrow)
+{
+    PolicyContent content = crd::crypto::test::accepting_all(1U, now_seconds() - 60U);
+    narrow(content);
+    REQUIRE(installation.apply(content, now_seconds()) == PolicyError::None);
+}
+
+// An accepted offer of configuration `config_id`, which lists AES only: the provider picks AES-128-GCM with or without
+// AES instructions.
+void expect_aes_accepted(Endpoint& client, Endpoint& server, const Run& result, u8 config_id)
+{
+    REQUIRE(client.session.state() == TlsState::Established);
+    REQUIRE(server.session.state() == TlsState::Established);
+    CHECK(client.session.ech() == TlsEch::Accepted);
+    CHECK(server.session.ech() == TlsEch::Accepted);
+    const Hello hello = read_stream_hello(result.first_flight);
+    CHECK(hello.config_id == config_id);
+    CHECK(hello.aead == kAeadAes128Gcm);
+    CHECK_FALSE(contains(result.client_bytes, kServerName));
+    exchange(client, server);
+}
+} // namespace
+
+TEST_CASE("TLS ECH: a key publishes the AEADs it is given, each with HKDF-SHA256", "[crypto][tls][ech][net-2]")
+{
+    TlsEchKey               key;
+    constexpr AlgorithmId   kOne[] = {AlgorithmId::Aes256Gcm};
+    make_ech(key, 3U, 9U, kPublicName, 0U, kOne);
+    const ConstSpan<u8> config = key.config();
+    REQUIRE(config.size() == 51U + kPublicName.size());
+    CHECK(be16(config.data() + 41U) == 4U); // one pair
+    CHECK(be16(config.data() + 43U) == kKdfSha256);
+    CHECK(be16(config.data() + 45U) == kAeadAes256Gcm);
+    REQUIRE(key.aeads().size() == 1U);
+    CHECK(key.aeads()[0] == AlgorithmId::Aes256Gcm);
+
+    // Every AEAD, in the order given; the default pair is AES-128-GCM then ChaCha20-Poly1305.
+    make_ech(key, 3U, 9U, kPublicName, 0U, kAllAeads);
+    REQUIRE(key.config().size() == 59U + kPublicName.size());
+    CHECK(be16(key.config().data() + 41U) == 12U);
+    CHECK(be16(key.config().data() + 49U) == kAeadAes256Gcm);
+    CHECK(be16(key.config().data() + 53U) == kAeadChacha20Poly1305);
+    make_ech(key, 3U, 9U);
+    CHECK(key.aeads().size() == 2U);
+    CHECK(be16(key.config().data() + 45U) == kAeadAes128Gcm);
+    CHECK(be16(key.config().data() + 49U) == kAeadChacha20Poly1305);
+
+    // No AEAD, more than three, one twice, or another algorithm.
+    u8                    secret[kTlsEchKeyBytes] = {1U};
+    constexpr AlgorithmId kFour[]  = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm, AlgorithmId::Chacha20Poly1305,
+                                      AlgorithmId::Aes128Gcm};
+    constexpr AlgorithmId kTwice[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes128Gcm};
+    constexpr AlgorithmId kKdf[]   = {AlgorithmId::HkdfSha256};
+    for (const ConstSpan<AlgorithmId> aeads : {ConstSpan<AlgorithmId>(), ConstSpan<AlgorithmId>(kFour),
+                                               ConstSpan<AlgorithmId>(kTwice), ConstSpan<AlgorithmId>(kKdf)})
+    {
+        CHECK(key.init(ConstSpan<u8>(secret), 1U, kPublicName, 0U, aeads) == TlsError::BadConfig);
+        CHECK_FALSE(key.ready());
+        CHECK(key.aeads().empty());
+    }
+}
+
+TEST_CASE("TLS ECH: a client offers only the configurations its policy generation allows, preferred first",
+          "[crypto][tls][ech][net-2]")
+{
+    constexpr AlgorithmId kAes128[] = {AlgorithmId::Aes128Gcm};
+    constexpr AlgorithmId kAes256[] = {AlgorithmId::Aes256Gcm};
+    TlsEchKey             both;
+    TlsEchKey             aes128;
+    TlsEchKey             aes256;
+    make_ech(both, 1U, 1U); // AES-128-GCM and ChaCha20-Poly1305
+    make_ech(aes128, 2U, 2U, kPublicName, 0U, kAes128);
+    make_ech(aes256, 3U, 3U, kPublicName, 0U, kAes256);
+    const TlsEchKey* keys[] = {&both, &aes128, &aes256};
+
+    struct Case
+    {
+        const char*      name;
+        Bytes            list;
+        AlgorithmId      refused;   // in the client's scope
+        AlgorithmId      preferred; // with X25519 and HKDF-SHA256
+        u8               offered;   // the config_id the hello carries
+        u16              aead;
+    };
+    Case cases[] = {
+        // The provider could pick ChaCha20-Poly1305 from the first, so a client refusing it skips the whole
+        // configuration even though AES-128-GCM is allowed.
+        {"refused suite skipped", list_of({&both, &aes256}), AlgorithmId::Chacha20Poly1305, AlgorithmId{}, 3U,
+         kAeadAes256Gcm},
+        {"every suite allowed", list_of({&both, &aes256}), AlgorithmId{}, AlgorithmId{}, 1U, expected_hpke_aead()},
+        {"preferred first", list_of({&aes128, &aes256}), AlgorithmId{}, AlgorithmId::Aes256Gcm, 3U, kAeadAes256Gcm},
+        {"accepted kept in order", list_of({&aes128, &aes256}), AlgorithmId::Aes256Gcm, AlgorithmId{}, 2U,
+         kAeadAes128Gcm},
+    };
+    for (const Case& test : cases)
+    {
+        CAPTURE(test.name);
+        crd::crypto::test::TestInstallation policy;
+        apply_policy(policy, [&](PolicyContent& content) {
+            if (test.refused != AlgorithmId{})
+            {
+                crd::crypto::test::refuse_rule(content, test.refused);
+            }
+            if (test.preferred != AlgorithmId{})
+            {
+                for (const AlgorithmId algorithm : {AlgorithmId::X25519, AlgorithmId::HkdfSha256, test.preferred})
+                {
+                    crd::crypto::test::prefer_rule(content, algorithm);
+                }
+            }
+        });
+        Endpoint client;
+        Endpoint server;
+        Setup    setup;
+        setup.client_ech    = span_of(test.list);
+        setup.server_keys   = ConstSpan<const TlsEchKey*>(keys);
+        setup.client_policy = &policy.store;
+        configure(client, server, setup);
+        const Run result = connect(client, server);
+        REQUIRE(client.session.state() == TlsState::Established);
+        CHECK(client.session.ech() == TlsEch::Accepted);
+        const Hello hello = read_stream_hello(result.first_flight);
+        CHECK(hello.config_id == test.offered);
+        CHECK(hello.aead == test.aead);
+        CHECK_FALSE(contains(result.client_bytes, kServerName));
+    }
+}
+
+TEST_CASE("TLS ECH: a client the generation leaves no configuration, and a Cerid service before 2030, are refused",
+          "[crypto][tls][ech][net-2]")
+{
+    TlsEchKey key;
+    make_ech(key, 1U, 1U);
+    const Bytes      list   = list_of({&key});
+    const TlsEchKey* keys[] = {&key};
+
+    // Classical-only key exchange refused for Cerid services only: DHKEM(X25519) is all the provider's ECH takes, so
+    // a service client given a list starts nothing, while every other client still offers it.
+    crd::crypto::test::TestInstallation policy;
+    apply_policy(policy, [](PolicyContent& content) {
+        crd::crypto::test::refuse_rule(content, AlgorithmId::X25519, PolicyScope::CeridServices);
+    });
+    for (const PolicyScope scope : {PolicyScope::CeridServices, PolicyScope::Everywhere})
+    {
+        CAPTURE(static_cast<int>(scope));
+        Endpoint client;
+        Endpoint server;
+        Setup    setup;
+        setup.client_ech    = span_of(list);
+        setup.server_keys   = ConstSpan<const TlsEchKey*>(keys);
+        setup.client_policy = &policy.store;
+        setup.client_scope  = scope;
+        configure(client, server, setup);
+        if (scope == PolicyScope::CeridServices)
+        {
+            CHECK(client.session.init(client.context) == TlsError::PolicyRefused);
+            CHECK(client.session.pending() == 0U);
+            continue;
+        }
+        const Run result = connect(client, server);
+        expect_accepted(client, server, result);
+    }
+
+    // Every AEAD of the list refused, and the provider's only KDF: nothing is left either way.
+    for (const AlgorithmId refused : {AlgorithmId::Aes128Gcm, AlgorithmId::HkdfSha256})
+    {
+        CAPTURE(algorithm_register_id(refused));
+        crd::crypto::test::TestInstallation narrow;
+        apply_policy(narrow, [&](PolicyContent& content) { crd::crypto::test::refuse_rule(content, refused); });
+        Endpoint client;
+        Endpoint server;
+        Setup    setup;
+        setup.client_ech    = span_of(list);
+        setup.server_keys   = ConstSpan<const TlsEchKey*>(keys);
+        setup.client_policy = &narrow.store;
+        configure(client, server, setup);
+        CHECK(client.session.init(client.context) == TlsError::PolicyRefused);
+        CHECK(client.session.pending() == 0U);
+    }
+}
+
+TEST_CASE("TLS ECH: retry configurations pass the client's policy, and a server publishing a refused suite is refused",
+          "[crypto][tls][ech][net-2]")
+{
+    constexpr AlgorithmId kAes[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm};
+    TlsEchKey             stale;
+    TlsEchKey             current;
+    TlsEchKey             current_aes;
+    make_ech(stale, 1U, 1U, kPublicName, 0U, kAes);
+    make_ech(current, 2U, 2U); // publishes ChaCha20-Poly1305
+    make_ech(current_aes, 3U, 3U, kPublicName, 0U, kAes);
+    const Bytes stale_list = list_of({&stale});
+
+    crd::crypto::test::TestInstallation no_chacha;
+    apply_policy(no_chacha, [](PolicyContent& content) {
+        crd::crypto::test::refuse_rule(content, AlgorithmId::Chacha20Poly1305);
+    });
+
+    // A rejected client's retry configurations are filtered as its own list is: the server's current key lists a
+    // refused suite, so the retried connection is refused; an allowed one is retried and accepted.
+    for (const bool allowed : {false, true})
+    {
+        CAPTURE(allowed);
+        const TlsEchKey* keys[] = {allowed ? &current_aes : &current};
+        Endpoint         client;
+        Endpoint         server;
+        Setup            setup;
+        setup.client_ech    = span_of(stale_list);
+        setup.server_keys   = ConstSpan<const TlsEchKey*>(keys);
+        setup.client_policy = &no_chacha.store;
+        configure(client, server, setup);
+        const Run rejected = connect(client, server);
+        expect_rejected(client, server, rejected, TlsEch::Retry);
+        const ConstSpan<u8> configs = client.session.ech_retry_configs();
+        const Bytes         retry(configs.begin(), configs.end());
+        REQUIRE_FALSE(retry.empty());
+        if (!allowed)
+        {
+            CHECK(client.session.init(client.context, nullptr, span_of(retry)) == TlsError::PolicyRefused);
+            CHECK(client.session.pending() == 0U);
+            continue;
+        }
+        const Run result = connect(client, server, span_of(retry));
+        expect_aes_accepted(client, server, result, 3U);
+    }
+
+    // A server whose keys (the previous ones included) publish a refused algorithm runs no session; one publishing
+    // only allowed suites runs them under the same generation.
+    for (const bool refused : {true, false})
+    {
+        CAPTURE(refused);
+        const TlsEchKey* keys[]     = {&current_aes};
+        const TlsEchKey* previous[] = {refused ? &current : &stale};
+        const Bytes      list       = list_of({&current_aes});
+        Endpoint         client;
+        Endpoint         server;
+        Setup            setup;
+        setup.client_ech    = span_of(list);
+        setup.server_keys   = ConstSpan<const TlsEchKey*>(keys);
+        setup.previous_keys = ConstSpan<const TlsEchKey*>(previous);
+        setup.server_policy = &no_chacha.store;
+        configure(client, server, setup);
+        if (refused)
+        {
+            CHECK(server.session.init(server.context) == TlsError::PolicyRefused);
+            continue;
+        }
+        const Run result = connect(client, server);
+        expect_aes_accepted(client, server, result, 3U);
     }
 }

@@ -60,7 +60,9 @@
 //               usable is BadConfig before anything is sent); a client without one sends a GREASE extension, so its
 //               hellos look alike. A server with ECH keys decrypts with its current and previous keys and answers a
 //               hello it cannot decrypt under the key's public name only for the client to authenticate its retry
-//               configurations; a rejected client reports them (EchRejected) for one retried connection.
+//               configurations; a rejected client reports them (EchRejected) for one retried connection. Under a
+//               policy store the HPKE suites are the generation's too (decision S21): a client offers only
+//               configurations whose every usable suite it allows, and a server publishing a refused one is refused.
 //   QUIC        a QuicHandshake runs the same handshake over QUIC (RFC 9001): CRYPTO data per encryption level instead
 //               of records, each level's secrets turned into QuicPacketKey and QuicHeaderKey, the transport parameters
 //               carried both ways and an application protocol required.
@@ -97,11 +99,15 @@ inline constexpr u8    kTlsAlertUserCanceled = 90U;    // RFC 9846 section 6.1
 inline constexpr u8    kTlsAlertNoApplicationProtocol = 120U; // RFC 7301 section 3.2
 
 // Encrypted Client Hello (RFC 9849, decision S14): an ECH key is a DHKEM(X25519, HKDF-SHA256) private key (RFC 9180);
-// its ECHConfig is 55 bytes and the public name; a client's ECHConfigList may also list configurations of other
-// versions and KEMs (with post-quantum public keys), which it skips.
+// its ECHConfig is 51 to 59 bytes (one to three cipher suites) and the public name; a client's ECHConfigList may also
+// list configurations of other versions and KEMs (with post-quantum public keys), which it skips.
 inline constexpr usize kTlsEchKeyBytes           = 32U;
 inline constexpr usize kTlsMaxEchKeys            = 4U;    // ECH keys of one server context, the previous ones included
-inline constexpr usize kTlsMaxEchConfigBytes     = 55U + kTlsMaxNameBytes;
+inline constexpr usize kTlsMaxEchAeads           = 3U;    // the HPKE AEADs one ECHConfig lists, each with HKDF-SHA256
+inline constexpr usize kTlsMaxEchConfigBytes     = 59U + kTlsMaxNameBytes;
+// The AEADs an ECHConfig lists unless told otherwise: AES-128-GCM, and ChaCha20-Poly1305 for a client without AES
+// instructions.
+inline constexpr AlgorithmId kTlsEchDefaultAeads[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Chacha20Poly1305};
 inline constexpr usize kTlsMaxEchConfigListBytes = 4096U;
 
 // The bound on a session's own key updates, 2^48-1 (RFC 9846 section 4.7.3), and the fewest records a sending key may
@@ -162,8 +168,9 @@ enum class TlsError : u8
                      // never carries data, and ech() tells what the client may do next
     ProviderFailure, // the provider failed (no memory, no randomness)
     PolicyRefused,   // the context's policy generation refuses every configured group, AEAD or peer signature
-                     // algorithm, or its own credential's (init), or, at a key update, an algorithm the session runs on
-                     // (the session is then closed with close_notify, decision S20)
+                     // algorithm, its own credential's, every ECH configuration a client was given or one a server
+                     // publishes (init), or, at a key update, an algorithm the session runs on (the session is then
+                     // closed with close_notify, decisions S20 and S21)
 };
 
 // "none", "bad-config", "not-ready", "full", "peer-refused", "failed", "closed", "ech-rejected", "provider-failure",
@@ -268,17 +275,25 @@ public:
     TlsEchKey& operator=(TlsEchKey&&)      = delete;
 
     // The key of `private_key` (kTlsEchKeyBytes drawn with random_bytes; the servers of a fleet share it, as they share
-    // a ticket key) published as ECHConfig `config_id`: DHKEM(X25519, HKDF-SHA256) with HKDF-SHA256 and AES-128-GCM or
-    // ChaCha20-Poly1305, `max_name_length` (the longest name served behind `public_name`, to which every client pads
-    // its inner server name; 0 when not known) and `public_name`, the DNS name of the server a rejected client
-    // authenticates, never one an IPv4 parser would read as an address (RFC 9849 section 6.1.7). BadConfig for a key
-    // of another length or another name; the private key may be zeroed afterwards.
+    // a ticket key) published as ECHConfig `config_id`: DHKEM(X25519, HKDF-SHA256) with HKDF-SHA256 and each of
+    // `aeads` in their order (1 to kTlsMaxEchAeads of AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, each once; every
+    // one a client may pick, so a policy refusing one refuses the key's servers, decision S21), `max_name_length` (the
+    // longest name served behind `public_name`, to which every client pads its inner server name; 0 when not known)
+    // and `public_name`, the DNS name of the server a rejected client authenticates, never one an IPv4 parser would
+    // read as an address (RFC 9849 section 6.1.7). BadConfig for a key of another length, another name or AEAD list;
+    // the private key may be zeroed afterwards.
     [[nodiscard]] TlsError init(cont::ConstSpan<u8> private_key, u8 config_id, cont::StringView public_name,
-                                u8 max_name_length = 0U) noexcept;
+                                u8                           max_name_length = 0U,
+                                cont::ConstSpan<AlgorithmId> aeads           = kTlsEchDefaultAeads) noexcept;
     void                   clear() noexcept;
 
     [[nodiscard]] bool ready() const noexcept { return m_key != nullptr; }
     [[nodiscard]] u8   config_id() const noexcept { return m_config_id; }
+    // The AEADs the ECHConfig lists; empty when not ready.
+    [[nodiscard]] cont::ConstSpan<AlgorithmId> aeads() const noexcept
+    {
+        return cont::ConstSpan<AlgorithmId>(m_aeads, m_aead_count);
+    }
 
     // The ECHConfig (version 0xfe0d); empty when not ready.
     [[nodiscard]] cont::ConstSpan<u8> config() const noexcept { return cont::ConstSpan<u8>(m_config, m_config_bytes); }
@@ -295,6 +310,8 @@ private:
     char            m_name[kTlsMaxNameBytes + 1U]   = {};
     u32             m_name_bytes                    = 0U;
     u8              m_config_id                     = 0U;
+    AlgorithmId     m_aeads[kTlsMaxEchAeads]        = {};
+    u32             m_aead_count                    = 0U;
 };
 
 // The ECHConfigList of `keys` in their order (RFC 9849 section 4): what a service publishes (the ech parameter of its
@@ -385,7 +402,8 @@ struct TlsConfig
     cont::ConstSpan<const TlsEchKey*> ech_keys;
     cont::ConstSpan<const TlsEchKey*> previous_ech_keys;
     // A client's ECHConfigList for its server (the service's published list, at most kTlsMaxEchConfigListBytes): each
-    // session offers ECH with the first configuration it supports, and refuses to start without one (BadConfig).
+    // session offers ECH with the first configuration it supports, and refuses to start without one (BadConfig; under
+    // a policy store PolicyRefused when the generation leaves none, decision S21).
     cont::ConstSpan<u8> ech_configs;
     // A client without ech_configs sends a GREASE ECH extension (RFC 9849 section 6.2), so its hellos look like those
     // that offer ECH; false only where no observer could tell the two apart anyway.
@@ -410,8 +428,10 @@ struct TlsConfig
     // as given: tests and tools only; a product always names its store). Each session takes a snapshot when it starts:
     // the groups, AEADs and peer signature algorithms the generation refuses at that time in `policy_scope` drop out of
     // its offer and its acceptance, the preferred ones lead in the configured order, and a session whose own credential
-    // is refused, or with nothing left of a list, is PolicyRefused. At each key update the session checks its
-    // negotiated group, AEAD, peer key and credential against the store again and closes when one is refused.
+    // is refused, or with nothing left of a list, is PolicyRefused. ECH's HPKE suites follow it too (decision S21): a
+    // client offers only the configurations whose every suite the provider could pick is allowed, the preferred ones
+    // first, and a server whose ECH keys publish a refused algorithm is refused. At each key update the session checks
+    // its negotiated group, AEAD, peer key and credential against the store again and closes when one is refused.
     const PolicyStore* policy       = nullptr;
     PolicyScope        policy_scope = PolicyScope::Everywhere; // CeridServices for a Cerid service's sessions
 };

@@ -42,7 +42,10 @@ struct Member
 class Model
 {
 public:
-    explicit Model(const mls::CipherSuite& suite_in, ConstSpan<u8> extensions = {}) : suite(suite_in)
+    // Every member's config names `crypto_policy` (decision M14; none by default).
+    explicit Model(const mls::CipherSuite& suite_in, ConstSpan<u8> extensions = {},
+                   const PolicyStore* crypto_policy = nullptr)
+        : suite(suite_in)
     {
         external_id     = Bytes{'e', 'x', 't'};
         external_secret = random_of(32U);
@@ -54,6 +57,7 @@ public:
             key.secret = external_secret;
             members[i].store.keys.push_back(key);
             members[i].config = mls::GroupConfig{&verifier, &authority, &members[i].store, timeless(), {}};
+            members[i].config.crypto_policy = crypto_policy;
         }
         group_id = random_of(16U);
         REQUIRE(members[0].group.create(suite, view(group_id), extensions, members[0].who.id.leaf,
