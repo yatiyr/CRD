@@ -2147,6 +2147,34 @@ be replaced; the test bootstrap verified under the provider and a forged signatu
 bootstrap refusing everything), `test-repository-tools.py` `PolicyBootstrapHeaders` (the empty, trust-only and newest
 generation shapes, drift and every refused input).
 
+<a id="policy-layers"></a>
+**S25. A product's policy layer over Cerid's** (NET.2, threats T04 and T19; user decision 2026-11-03, option C: "We
+must grant flexibility without making our system more complicated").
+
+- **Two layers, one mechanism.** Cerid's signed generation (its trust set, S22) is the floor of every product built on
+  Cerid. A product (a studio's game, app or server) may add its own generations under its own trust set, made with the
+  same `ceridc policy key`, `sign` and `assemble`; a product without one runs on Cerid's store alone. The product's
+  store is an ordinary `PolicyStore` whose `PolicyConfig::base` names Cerid's store, and its `PolicyInstallation`
+  saves its own state in its own directory: no second format, reader or tool.
+- **Only tightening.** An algorithm is usable only while both layers accept it at that time in that scope (each layer
+  resolving its own scope rule over its Everywhere rule), so the earlier refusal date wins; among what both accept the
+  product's status decides (its own preference order); a version runs only when both layers' minimums allow it. A
+  product rule that would accept what Cerid's layer refuses changes nothing and is reported
+  (`PolicySnapshot::loosenings`, `ceridc policy verify --base-generation --base-trust`).
+- **Each layer keeps its own** trust set, floor, rollback protection, expiry and grace. A layered snapshot's freshness
+  is the worse layer's; either layer without a generation, or expired past its grace, refuses everything. Two layers
+  at most: a base that has a base is a bad config (and a cycle of stores is never followed).
+- **Sessions read the composed answer only.** `PolicyStore::snapshot()` of a product store composes both layers, so
+  TLS, QUIC, ECH, MLS and capabilities change no line; a TLS session records both generations
+  (`policy_generation`, `base_policy_generation`). Cerid's own key ceremony (S22) is a one-time owner action before
+  the first release and does not hold NET.2's Done; tests use test keys.
+
+Evidence: `test_policy_layers.cpp` (every tightening, every attempted loosening and its report, scopes and minimums,
+either layer missing or expired, separate trust sets, floors and rollbacks, a remote disable through the base, three
+layers refused, a product installation's own saved state), `fuzz_policy.cpp` mode 2 (both layers' generation
+sequences against a model of the composition), `test_tls_policy.cpp` (a session under a product layer) and
+`test_ceridc_policy.cpp` (the layered verify and its refusals).
+
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers
 
