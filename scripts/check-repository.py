@@ -127,6 +127,17 @@ def root_artifact_errors(root):
     return errors
 
 
+def license_manifest_errors(root):
+    """The dependency license document rendered again from cmake/pins.json: a pin added without a re-render fails
+    here, before the hosted repository step."""
+    from gen_license_manifest import stale
+    registry = root / 'cmake' / 'pins.json'
+    out = root / 'docs' / 'generated' / 'dependency-licenses.md'
+    if registry.is_file() and stale(registry, out):
+        return [f'{out.relative_to(root).as_posix()} is stale; run scripts/gen_license_manifest.py']
+    return []
+
+
 def check(root=ROOT):
     errors = canonical_asset_errors(root)
     structure_file = root / 'cmake/project-structure.json'
@@ -141,7 +152,8 @@ def check(root=ROOT):
     authored_families = {name.split('/')[1] for name in structure.get('directories', [])
                         if name.startswith('engine/') and len(name.split('/')) == 2}
     errors.extend(root_artifact_errors(root))
-    modules = sorted((root / 'engine').glob('*/*/CMakeLists.txt'))
+    errors.extend(license_manifest_errors(root))
+    modules =sorted((root / 'engine').glob('*/*/CMakeLists.txt'))
     if not modules:
         errors.append('No engine modules found; layout scan did not exercise the source tree')
     cmake = (root / 'CMakeLists.txt').read_text(encoding='utf-8-sig')

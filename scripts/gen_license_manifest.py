@@ -93,17 +93,22 @@ def render(registry):
     return '\n'.join(lines)
 
 
+def stale(registry=REGISTRY, out=OUT):
+    """Whether the committed document differs from a fresh rendering of the registry (line endings aside)."""
+    committed = out.read_bytes().replace(b'\r\n', b'\n') if out.is_file() else b''
+    return committed != render(json.loads(registry.read_text(encoding='utf-8'))).encode('utf-8')
+
+
 def main(argv):
-    registry = json.loads(REGISTRY.read_text(encoding='utf-8'))
-    text = render(registry)
     if '--check' in argv:
-        committed = OUT.read_bytes().replace(b'\r\n', b'\n') if OUT.is_file() else b''
-        if committed != text.encode('utf-8'):
+        if stale():
             sys.stderr.write(f'gen_license_manifest: DRIFT -- {OUT.relative_to(ROOT).as_posix()} is stale; '
                              'run scripts/gen_license_manifest.py to refresh\n')
             return 1
         print(f'gen_license_manifest: {OUT.relative_to(ROOT).as_posix()} matches the registry')
         return 0
+    registry = json.loads(REGISTRY.read_text(encoding='utf-8'))
+    text = render(registry)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_bytes(text.encode('utf-8'))
     print(f'gen_license_manifest: wrote {OUT.relative_to(ROOT).as_posix()} ({len(registry["packages"])} packages, '

@@ -5199,6 +5199,25 @@ class Provenance(unittest.TestCase):
         committed = (ROOT / 'docs/generated/dependency-licenses.md').read_bytes().replace(b'\r\n', b'\n')
         self.assertEqual(license_manifest.render(registry).encode('utf-8'), committed)
         self.assertEqual(master.registry_map_errors(), [])
+        self.assertEqual(hygiene.license_manifest_errors(ROOT), [])
+
+    def test_a_pin_added_without_a_re_render_fails_the_repository_check(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'cmake').mkdir()
+            (root / 'docs/generated').mkdir(parents=True)
+            registry = json.loads((ROOT / 'cmake/pins.json').read_text(encoding='utf-8'))
+            (root / 'cmake/pins.json').write_text(json.dumps(registry), encoding='utf-8')
+            out = root / 'docs/generated/dependency-licenses.md'
+            out.write_bytes(license_manifest.render(registry).replace('\n', '\r\n').encode('utf-8'))
+            self.assertEqual(hygiene.license_manifest_errors(root), [])
+            name = next(iter(registry['tools']))
+            registry['tools'][name + '-copy'] = registry['tools'][name]
+            (root / 'cmake/pins.json').write_text(json.dumps(registry), encoding='utf-8')
+            self.assertEqual(hygiene.license_manifest_errors(root),
+                             ['docs/generated/dependency-licenses.md is stale; run scripts/gen_license_manifest.py'])
+            out.unlink()
+            self.assertEqual(len(hygiene.license_manifest_errors(root)), 1)
 
     def test_changed_bytes_unlisted_markers_missing_generators_and_owners_fail(self):
         with tempfile.TemporaryDirectory() as temp:
