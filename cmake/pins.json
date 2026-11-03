@@ -77,6 +77,19 @@
       "gated": "CRD_BUILD_MLS_VS_MLSPP",
       "note": "nlohmann/json 3.12.0 (released 2025-04-11, the newest release on 2026-11-02), a build dependency of MLSpp only: MLSpp's CMake requires its package (find_package(nlohmann_json)), which its own CMake installs, header-only, into the MLS interop test's build tree; no Cerid unit includes it. LICENSE.MIT read from the archive: MIT, (c) 2013-2025 Niels Lohmann. Pinned as a testing download under the user's approval of 2026-11-01 (docs/sessions/2026-11-02-net-2-mls-interop-mlspp.md)."
     },
+    "tpm2-tss": {
+      "version": "4.0.1",
+      "repository": "tpm2-software/tpm2-tss",
+      "ref": "4.0.1",
+      "commit": "8b404ee7e5886c71aa53accb4ad38823724f7b13",
+      "url": "https://github.com/tpm2-software/tpm2-tss/archive/8b404ee7e5886c71aa53accb4ad38823724f7b13.tar.gz",
+      "file": "tpm2-tss-8b404ee7.tar.gz",
+      "sha256": "bfb91bc4501e657457d0f76758d6b7a4b675e75aef845bf3c8b21bc0d08d72dc",
+      "size": 1134289,
+      "license": "BSD-2-Clause",
+      "provenance": "https://github.com/tpm2-software/tpm2-tss/releases/tag/4.0.1 (the tag's commit, the version of Ubuntu 24.04's tss2 libraries; its include/tss2 is byte for byte the release archive's, compared 2026-11-03)",
+      "note": "The TCG TPM2 Software Stack 4.0.1: its public headers only (include/tss2: the TPM 2.0 types, ESYS, MU and the TCTI loader), which crd-crypto compiles its Linux TPM protector and device against (tpm_tss2.cpp, NET.2 decision K13); the libraries are never linked: crd-crypto loads the system's libtss2-esys.so.0, libtss2-tctildr.so.0 and libtss2-mu.so.0 at run time (the ESYS 3.0.2 ABI), so a system without them answers Unavailable. Fetched on Linux configures only. LICENSE read from the archive: BSD-2-Clause, (c) the tpm2-software contributors and Intel. Pinned as a build input under the user's approval of 2026-11-01 (docs/sessions/2026-11-03-net-2-tpm-linux.md)."
+    },
     "mlspp": {
       "version": "0.1.0-fc724c31",
       "repository": "cisco/mlspp",
@@ -616,6 +629,55 @@
       },
       "license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
       "note": "Ubuntu 24.04's gnome-keyring 46.1 (noble-updates) and the GCR 3.41.2 libraries it needs beyond a stock system (libgck-1-0, libgcr-base-3-1), from Launchpad's librarian, whose files are never removed (the same bytes the Ubuntu archive serves, checked 2026-11-02). The Secret Service of the key store's Linux protector tests (NET.2 decision K10, CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING), unpacked by scripts/install-gnome-keyring.py with dpkg-deb -x and run in a session bus of its own; never linked or shipped. Licences from the packages' Debian copyright files: GPL-2+ (the daemon) and LGPL-2.1+ (GCK, GCR)."
+    },
+    "swtpm-linux-x64": {
+      "version": "0.7.3-0ubuntu5.24.04.1",
+      "binary": "usr/bin/swtpm",
+      "provenance": "https://launchpad.net/ubuntu/+source/swtpm/0.7.3-0ubuntu5.24.04.1",
+      "files": {
+        "swtpm_0.7.3-0ubuntu5.24.04.1_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/swtpm_0.7.3-0ubuntu5.24.04.1_amd64.deb",
+          "size": 53144,
+          "sha256": "cd1164c8ab70080ca4e93095ee1bdcdc94c8297eed29caf098ca2afd0fbbb540"
+        },
+        "libtpms0_0.9.3-0ubuntu4.24.04.1_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/libtpms0_0.9.3-0ubuntu4.24.04.1_amd64.deb",
+          "size": 372570,
+          "sha256": "83bd2f4f57189d6d0b8f019252b95c3034fd41dd00b9f2dddb67321537b4ed55"
+        },
+        "libtss2-esys-3.0.2-0t64_4.0.1-7.1ubuntu5.1_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/libtss2-esys-3.0.2-0t64_4.0.1-7.1ubuntu5.1_amd64.deb",
+          "size": 144732,
+          "sha256": "7ae4f9fdfd7b5221a294dd91b4f595f426b3c8aa7dc39be3e65824971e916fe2"
+        },
+        "libtss2-sys1t64_4.0.1-7.1ubuntu5.1_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/libtss2-sys1t64_4.0.1-7.1ubuntu5.1_amd64.deb",
+          "size": 35568,
+          "sha256": "0590ff8e5126ed3de8e8588ac3b538f4d32e3174c5480722d1e9f6389acf3c0d"
+        },
+        "libtss2-mu-4.0.1-0t64_4.0.1-7.1ubuntu5.1_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/libtss2-mu-4.0.1-0t64_4.0.1-7.1ubuntu5.1_amd64.deb",
+          "size": 63290,
+          "sha256": "9940a4de987536b357fde7a3137f7dc00a188ad744905af061b437ae22f7012b"
+        },
+        "libtss2-tctildr0t64_4.0.1-7.1ubuntu5.1_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/libtss2-tctildr0t64_4.0.1-7.1ubuntu5.1_amd64.deb",
+          "size": 15852,
+          "sha256": "a1a82302972894447398b3dfcee3a4d01273f615b2c11fb90de4323e8c4bc12f"
+        },
+        "libtss2-tcti-swtpm0t64_4.0.1-7.1ubuntu5.1_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/libtss2-tcti-swtpm0t64_4.0.1-7.1ubuntu5.1_amd64.deb",
+          "size": 14870,
+          "sha256": "23da903b6baf636d264b7739360392baf3e01e3459fc4f5dddd60518bec9e2a3"
+        },
+        "libtss2-tcti-pcap0t64_4.0.1-7.1ubuntu5.1_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/libtss2-tcti-pcap0t64_4.0.1-7.1ubuntu5.1_amd64.deb",
+          "size": 14754,
+          "sha256": "f9bb76bd601b6391e3f60eff48b0336ea6855ff1c9a7e53a739fa4972967fed2"
+        }
+      },
+      "license": "BSD-3-Clause AND BSD-2-Clause",
+      "note": "Ubuntu 24.04's swtpm 0.7.3 and libtpms 0.9.3 (noble-updates), the TPM 2.0 simulator, and the tss2 4.0.1-7.1ubuntu5.1 libraries crd-crypto loads at run time (libtss2-esys, -sys, -mu, -tctildr and the swtpm TCTI) with the pcap TCTI that records the bus, from Launchpad's librarian, whose files are never removed (the same bytes the Ubuntu archive serves, checked 2026-11-03). The TPM the key store's Linux protector and device are tested against (NET.2 decision K13, CRD_BUILD_TPM_VS_SWTPM), unpacked by scripts/install-swtpm.py with dpkg-deb -x and run by tests/foundation/crypto/tpm_simulator_session.py; never linked or shipped. Licences from the packages' Debian copyright files: BSD-3-Clause (swtpm, libtpms) and BSD-2-Clause (tss2), which also list the TCG and IBM reference-code licences, CPL-1.0 and GPL-3 for parts of the sources and build scripts. Pinned as a testing download (pre-approved, user 2026-10-30)."
     },
     "openmls-crates": {
       "version": "0.9.2",

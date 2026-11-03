@@ -1,6 +1,7 @@
 // crd-crypto -- the TPM 2.0 key protector and key device (NET.2; contract: docs/design/network-foundation.md#key-store,
 // decisions K11 and K12): on Windows, through the Platform Crypto Provider, a decrypt-only RSA-2048 key the TPM holds
-// for one master key, and sign-only ECDSA keys it holds for a store's Hardware signature keys; nothing elsewhere yet.
+// for one master key, and sign-only ECDSA keys it holds for a store's Hardware signature keys. Linux's, through tss2,
+// are tpm_tss2.cpp (decision K13); elsewhere every call is Unavailable.
 
 #include <crd/core/platform.hpp>
 #include <crd/crypto/key_store.hpp>
@@ -20,6 +21,22 @@
 
 namespace crd::crypto
 {
+TpmConnection::TpmConnection(cont::StringView tcti) noexcept
+{
+    if (tcti.size() > kTpmTctiMaxBytes)
+    {
+        m_usable = false;
+        return;
+    }
+    if (tcti.empty())
+    {
+        return; // tss2's default search
+    }
+    std::memcpy(m_tcti, tcti.data(), tcti.size());
+    m_tcti[tcti.size()] = '\0';
+    m_length            = tcti.size();
+}
+
 #if CRD_OS_WINDOWS
 namespace
 {
@@ -302,7 +319,7 @@ private:
 }
 } // namespace
 
-bool TpmKeyProtector::available() noexcept
+bool TpmKeyProtector::available(const TpmConnection& /*tpm*/) noexcept
 {
     Handle provider;
     if (!open_provider(provider))
@@ -396,9 +413,9 @@ CryptoError TpmKeyProtector::forget(cont::ConstSpan<u8> store_id, cont::ConstSpa
     return delete_key(kNamePrefix, store_id, reference.subspan(1U, kHandleBytes));
 }
 
-bool TpmKeyDevice::available() noexcept
+bool TpmKeyDevice::available(const TpmConnection& tpm) noexcept
 {
-    return TpmKeyProtector::available();
+    return TpmKeyProtector::available(tpm);
 }
 
 cont::StringView TpmKeyDevice::name() const noexcept
@@ -481,8 +498,8 @@ CryptoError TpmKeyDevice::forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u
     }
     return delete_key(kSignerPrefix, store_id, reference.subspan(1U, kHandleBytes));
 }
-#else
-bool TpmKeyProtector::available() noexcept
+#elif !CRD_OS_LINUX
+bool TpmKeyProtector::available(const TpmConnection& /*tpm*/) noexcept
 {
     return false;
 }
@@ -524,7 +541,7 @@ CryptoError TpmKeyProtector::forget(cont::ConstSpan<u8> /*store_id*/, cont::Cons
     return CryptoError::Unavailable;
 }
 
-bool TpmKeyDevice::available() noexcept
+bool TpmKeyDevice::available(const TpmConnection& /*tpm*/) noexcept
 {
     return false;
 }

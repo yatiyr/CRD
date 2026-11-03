@@ -23,7 +23,7 @@ set(CRD_MODULES_WITHOUT "" CACHE STRING
     "Modules the target cannot build yet; every module whose closure or test dependencies reach one is omitted")
 set(CRD_HOST_TOOLS_DIR "" CACHE PATH
     "Directory holding prebuilt host tools; when set, HOST modules are imported from it instead of built")
-set(CRD_KNOWN_PACKAGES glfw zstd aws-lc stb cgltf mikktspace wycheproof mls-vectors hpke-pq-vectors imgui)
+set(CRD_KNOWN_PACKAGES glfw zstd aws-lc tpm2-tss stb cgltf mikktspace wycheproof mls-vectors hpke-pq-vectors imgui)
 
 set_property(GLOBAL PROPERTY CRD_MODULE_NAMES "")
 set_property(GLOBAL PROPERTY CRD_MODULES_RESOLVED FALSE)
@@ -405,7 +405,7 @@ function(_crd_package_of item out_var)
         set(package glfw)
     elseif(item MATCHES "^(lib)?zstd_static$")
         set(package zstd)
-    elseif(item MATCHES "^(stb|cgltf|mikktspace)$")
+    elseif(item MATCHES "^(tpm2-tss|stb|cgltf|mikktspace)$")
         set(package "${item}")
     endif()
     set(${out_var} "${package}" PARENT_SCOPE)

@@ -937,6 +937,13 @@ jobs:
         if: matrix.preset == 'linux-gcc-public-checks'
         run: python3 scripts/install-gnome-keyring.py --destination "$RUNNER_TEMP/gnome-keyring" --download-dir "$RUNNER_TEMP/gnome-keyring-dl" --github-env "$GITHUB_ENV"
 
+      # The pinned swtpm and tss2 libraries (tools/swtpm-linux-x64) are the TPM 2.0 the key store's Linux protector and
+      # device are tested against (CRD_BUILD_TPM_VS_SWTPM): seven Ubuntu packages, each checked against its SHA-256 and
+      # unpacked without root; the configure reads CRD_SWTPM.
+      - name: Install pinned swtpm
+        if: matrix.preset == 'linux-gcc-public-checks'
+        run: python3 scripts/install-swtpm.py --destination "$RUNNER_TEMP/swtpm" --download-dir "$RUNNER_TEMP/swtpm-dl" --github-env "$GITHUB_ENV"
+
       - name: Configure
         if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}

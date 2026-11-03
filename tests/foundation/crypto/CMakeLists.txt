@@ -200,6 +200,17 @@ if(CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING)
     message(STATUS "[secret-service-vs-gnome-keyring] the Secret Service protector against ${CRD_GNOME_KEYRING}")
 endif()
 
+# Against the pinned swtpm (CRD_BUILD_TPM_VS_SWTPM): crd-crypto-tests' key store cases with the TPM protector and
+# device reaching a simulator of their own through tss2 (tpm_simulator_session.py), then a TPM whose owner hierarchy has
+# an authorization.
+if(CRD_BUILD_TPM_VS_SWTPM)
+    add_test(NAME crd-crypto-tpm-swtpm
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/tpm_simulator_session.py"
+                     --swtpm "${CRD_SWTPM}" -- "$<TARGET_FILE:crd-crypto-tests>")
+    set_tests_properties(crd-crypto-tpm-swtpm PROPERTIES TIMEOUT 1200 LABELS "crypto;tpm")
+    message(STATUS "[tpm-vs-swtpm] the TPM protector and device against ${CRD_SWTPM}")
+endif()
+
 # Against OpenMLS (CRD_BUILD_MLS_VS_OPENMLS): crd-openmls-peer's members over OpenMLS, a Cargo package linted by
 # Clippy and built with the pinned Rust toolchain (CRD_CARGO) by `cargo build --locked`, so every crate is the one
 # Cargo.lock names, verified by its SHA-256; CARGO_HOME (the crate downloads) and the target directory stay inside this

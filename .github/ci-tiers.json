@@ -50,6 +50,7 @@
     "Install pinned Intel SDE": {"presets": ["win-release", "linux-gcc-release"]},
     "Install pinned Rust": {"presets": ["linux-gcc-public-checks"]},
     "Install pinned gnome-keyring": {"presets": ["linux-gcc-public-checks"]},
+    "Install pinned swtpm": {"presets": ["linux-gcc-public-checks"]},
     "Test at the sse2 level": {"presets": ["win-debug", "linux-gcc-debug"]}
   },
   "classes": [

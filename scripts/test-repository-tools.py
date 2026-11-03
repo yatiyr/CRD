@@ -72,6 +72,9 @@ keyring_spec = importlib.util.spec_from_file_location('install_gnome_keyring',
                                                       ROOT / 'scripts/install-gnome-keyring.py')
 install_gnome_keyring = importlib.util.module_from_spec(keyring_spec)
 keyring_spec.loader.exec_module(install_gnome_keyring)
+swtpm_spec = importlib.util.spec_from_file_location('install_swtpm', ROOT / 'scripts/install-swtpm.py')
+install_swtpm = importlib.util.module_from_spec(swtpm_spec)
+swtpm_spec.loader.exec_module(install_swtpm)
 mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
 install_mold = importlib.util.module_from_spec(mold_spec)
 mold_spec.loader.exec_module(install_mold)
@@ -2586,6 +2589,47 @@ class BuildPerformance(unittest.TestCase):
         for name, spec in pin['files'].items():
             self.assertEqual(spec['url'], 'https://launchpad.net/ubuntu/+archive/primary/+files/' + name)
         self.assertIn('scripts/install-gnome-keyring.py', check_pins.HELPERS)
+
+    def test_swtpm_installer_unpacks_the_simulator_and_tss2_into_one_prefix(self):
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()) as out:
+            root = Path(temp).resolve()
+            downloads = root / 'dl'
+            downloads.mkdir()
+            files = {}
+            for name, member in (('swtpm_1.0-1_amd64.deb', 'usr/bin/swtpm'),
+                                 ('esys_1.0-1_amd64.deb', 'usr/lib/x86_64-linux-gnu/libtss2-esys.so.0')):
+                (downloads / name).write_bytes(member.encode())
+                files[name] = {'url': 'https://example.invalid/' + name, 'size': len(member),
+                               'sha256': pins_registry.sha256(downloads / name)}
+            pin = {'version': '1.0-1', 'binary': 'usr/bin/swtpm', 'files': files, 'license': 'BSD'}
+
+            def extract(package, prefix):
+                member = prefix / package.read_text()
+                member.parent.mkdir(parents=True, exist_ok=True)
+                member.write_bytes(b'elf')
+
+            swtpm = install_swtpm.install(root / 'prefix', downloads, pin=pin, extract=extract,
+                                          version_of=lambda path: '1.0')
+            self.assertEqual(swtpm, root / 'prefix/usr/bin/swtpm')
+            self.assertIn(f'CRD_SWTPM={swtpm}', out.getvalue())
+            self.assertTrue((root / 'prefix/usr/lib/x86_64-linux-gnu/libtss2-esys.so.0').is_file())
+            libraries = root / 'prefix/usr/lib/x86_64-linux-gnu'
+            self.assertEqual(install_swtpm.library_path(swtpm), f'{libraries}:{libraries / "swtpm"}')
+            with self.assertRaisesRegex(pins_registry.PinError, "reports '0.9'.*pins swtpm 1.0"):
+                install_swtpm.install(root / 'other', downloads, pin=pin, extract=extract,
+                                      version_of=lambda path: '0.9')
+            self.assertFalse((root / 'other').exists() or (root / 'other.partial').exists())
+        pin = pins_registry.entry('tools', install_swtpm.PIN_NAME)
+        self.assertEqual(pin['binary'], 'usr/bin/swtpm')
+        names = sorted(pin['files'])
+        for package in ('swtpm_', 'libtpms0_', 'libtss2-esys-', 'libtss2-sys1', 'libtss2-mu-', 'libtss2-tctildr0',
+                        'libtss2-tcti-swtpm0', 'libtss2-tcti-pcap0'):
+            self.assertTrue(any(name.startswith(package) for name in names), package)
+        for name, spec in pin['files'].items():
+            self.assertEqual(spec['url'], 'https://launchpad.net/ubuntu/+archive/primary/+files/' + name)
+        self.assertIn('scripts/install-swtpm.py', check_pins.HELPERS)
+        self.assertEqual(pins_registry.entry('packages', 'tpm2-tss')['version'], pin['files'][
+            next(name for name in names if name.startswith('libtss2-esys-'))]['url'].split('_')[1].split('-')[0])
 
     def test_a_crate_set_is_pinned_by_its_committed_lockfile(self):
         crates_io = 'registry+https://github.com/rust-lang/crates.io-index'

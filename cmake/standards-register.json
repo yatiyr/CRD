@@ -455,7 +455,7 @@
         "tests/foundation/crypto/secret_service_session.py"
       ],
       "deprecation": null,
-      "note": "AES-256-GCM under HKDF-SHA256 of the master key and a fresh salt per save, the header authenticated; the master key guarded by DPAPI or the TPM (tcg.tpm2) on Windows, the freedesktop Secret Service on Linux (freedesktop.secret-service) or the application's protector, replaced on revocation where the protector can forget the old one. Never on the wire."
+      "note": "AES-256-GCM under HKDF-SHA256 of the master key and a fresh salt per save, the header authenticated; the master key guarded by DPAPI or the TPM (tcg.tpm2) on Windows, the freedesktop Secret Service (freedesktop.secret-service) or the TPM on Linux, or the application's protector, replaced on revocation where the protector can forget the old one. Never on the wire."
     },
     {
       "id": "freedesktop.secret-service",
@@ -493,7 +493,7 @@
     },
     {
       "id": "tcg.tpm2",
-      "title": "TPM 2.0 Library: the key store's hardware protector through the Platform Crypto Provider",
+      "title": "TPM 2.0 Library: the key store's hardware protector and key device (the Platform Crypto Provider on Windows, tss2 on Linux)",
       "kind": "protocol",
       "state": "implemented",
       "owner": "crypto",
@@ -516,10 +516,11 @@
       },
       "review": "2027-05-03",
       "evidence": [
-        "tests/foundation/crypto/test_key_store.cpp"
+        "tests/foundation/crypto/test_key_store.cpp",
+        "tests/foundation/crypto/tpm_simulator_session.py"
       ],
       "deprecation": null,
-      "note": "The key store's hardware protector (decision K11): on Windows a persisted, decrypt-only RSA-2048 key in the TPM per master key, through the Microsoft Platform Crypto Provider, wrapping the master key with RSA-OAEP and SHA-256 (RFC 8017) under a label that names the store; deleted to forget it. Proven on an Intel PTT TPM 2.0 (the 2026-11-03 session); a runner without a TPM skips that case. The specification revision was taken from knowledge (verified false); the register review reads the TCG page. Linux's tss2 protector is next."
+      "note": "The key store's hardware protector (decision K11): on Windows a persisted, decrypt-only RSA-2048 key in the TPM per master key, through the Microsoft Platform Crypto Provider, wrapping the master key with RSA-OAEP and SHA-256 (RFC 8017) under a label that names the store; deleted to forget it. On Linux (decision K13) through the TCG's ESYS (tss2, loaded at run time): the master key, or a sign-only ECDSA key's TPM-wrapped blob, in a write-once owner NV index whose authorization derives from the reference's secret and the store's identifier, over a salted session with AES-128-CFB parameter encryption; deleted to forget. Windows' signing keys (K12) are persisted sign-only ECDSA keys of the provider. Proven on an Intel PTT TPM 2.0 (the 2026-11-03 sessions) and against the pinned swtpm 0.7.3 (tools/swtpm-linux-x64, crd-crypto-tpm-swtpm); a runner without a TPM skips those cases. The specification revision was taken from knowledge (verified false); the register review reads the TCG page."
     },
     {
       "id": "ietf.grease",

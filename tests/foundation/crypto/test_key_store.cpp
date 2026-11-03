@@ -1,11 +1,12 @@
-// crd-crypto -- the key store (NET.2; docs/design/network-foundation.md#key-store, decisions K1 to K12): every kind
+// crd-crypto -- the key store (NET.2; docs/design/network-foundation.md#key-store, decisions K1 to K13): every kind
 // of key generated, imported, used, rotated, revoked and destroyed across reopenings; the master key replaced on
 // revocation so an earlier copy of the store no longer opens; an interrupted replacement completed by the next change;
 // every byte of a store file changed and refused; a damaged, truncated, older or substituted store refused; writers in
-// several threads ordered by the store's lock; a store erased; DPAPI and the TPM guarding the master key on Windows and
-// the Secret Service on Linux (under a pinned gnome-keyring, hidden from the default run); a TLS credential from a
-// stored signer; signature keys held in a device (a simulated one everywhere, the TPM on Windows), signing their
-// certificates and handshakes through the provider's private-key method.
+// several threads ordered by the store's lock; a store erased; DPAPI and the TPM guarding the master key on Windows,
+// the Secret Service (under a pinned gnome-keyring, hidden from the default run) and the TPM through tss2 (under the
+// pinned swtpm: tpm_simulator_session.py) on Linux; a TLS credential from a stored signer; signature keys held in a
+// device (a simulated one everywhere, the TPM on Windows and Linux), signing their certificates and handshakes through
+// the provider's private-key method.
 
 #include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
@@ -44,6 +45,32 @@ using namespace crd::crypto;
 namespace fs = crd::platform::fs;
 
 using Bytes = Array<u8>;
+
+// The TPM the TPM cases reach: the simulator tpm_simulator_session.py names in CRD_TPM_TCTI, else the platform's own
+// (the Platform Crypto Provider on Windows, tss2's default search on Linux).
+[[nodiscard]] TpmConnection test_tpm()
+{
+    String tcti;
+    if (crd::read_environment_text("CRD_TPM_TCTI", tcti))
+    {
+        return TpmConnection(StringView(tcti.data(), tcti.size()));
+    }
+    return TpmConnection();
+}
+
+// A TPM reference's length and the positions of its parts: Windows' format, handle and wrapped key; Linux's format,
+// index handle and secret.
+#if CRD_OS_WINDOWS
+constexpr usize kTpmReferenceBytes   = 1U + 16U + 256U;
+constexpr usize kTpmIdentityBytes    = 17U; // the format and the handle, which differ between protections
+constexpr usize kTpmChangedAt[]      = {1U, 16U, 17U, 100U, kTpmReferenceBytes - 1U};
+constexpr usize kTpmDeviceReference  = 1U + 16U;
+#else
+constexpr usize kTpmReferenceBytes   = 1U + 4U + 32U;
+constexpr usize kTpmIdentityBytes    = 5U;
+constexpr usize kTpmChangedAt[]      = {1U, 4U, 5U, 20U, kTpmReferenceBytes - 1U};
+constexpr usize kTpmDeviceReference  = kTpmReferenceBytes;
+#endif
 
 // A store directory under the system's scratch directory, removed with everything in it at the end of its scope.
 class TempStore
@@ -1148,9 +1175,25 @@ TEST_CASE("Key store: the operating system's protector", "[crypto][key-store]")
 #endif
 }
 
+namespace
+{
+// The TPM's refusals when none answers.
+void unavailable_protector(TpmKeyProtector& tpm, ConstSpan<u8> store_id)
+{
+    u8    master[kKeyStoreMasterBytes] = {0x42};
+    Bytes reference;
+    CHECK(tpm.protect(store_id, ConstSpan<u8>(master), reference) == CryptoError::Unavailable);
+    CHECK(reference.empty());
+    TempStore dir("tpm-unavailable");
+    KeyStore  store;
+    CHECK(store.create(dir.dir(), tpm) == CryptoError::Unavailable);
+    CHECK_FALSE(store.ready());
+}
+} // namespace
+
 TEST_CASE("Key store: the TPM protector's contract", "[crypto][key-store]")
 {
-    TpmKeyProtector tpm;
+    TpmKeyProtector tpm(test_tpm());
     CHECK(tpm.protection() == KeyProtection::Hardware);
     CHECK(key_protection_name(tpm.protection()) == StringView("hardware"));
     const u8 store_id[kKeyStoreIdBytes]   = {1, 2, 3};
@@ -1163,13 +1206,13 @@ TEST_CASE("Key store: the TPM protector's contract", "[crypto][key-store]")
     CHECK(tpm.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master, 31U), reference) == CryptoError::BadLength);
     CHECK(tpm.recover(ConstSpan<u8>(store_id), {}, Span<u8>(master, 16U)) == CryptoError::BadLength);
     CHECK(master[0] == 0U);
-#if CRD_OS_WINDOWS
-    CHECK(tpm.name() == StringView("tpm-pcp"));
+#if CRD_OS_WINDOWS || CRD_OS_LINUX
+    CHECK(tpm.name() == StringView(CRD_OS_WINDOWS ? "tpm-pcp" : "tpm-tss2"));
     CHECK(tpm.forgets());
     // A reference this protector did not write is refused before the TPM is asked: empty, short, long, another format.
     Bytes foreign;
-    foreign.resize(1U + 16U + 256U);
-    std::memset(foreign.data(), 0x33, foreign.size());
+    foreign.resize(kTpmReferenceBytes);
+    std::memset(foreign.data(), 0x01, foreign.size());
     foreign[0] = 1U;
     u8 recovered[kKeyStoreMasterBytes];
     CHECK(tpm.recover(ConstSpan<u8>(store_id), {}, Span<u8>(recovered)) == CryptoError::Denied);
@@ -1185,32 +1228,96 @@ TEST_CASE("Key store: the TPM protector's contract", "[crypto][key-store]")
     CHECK(tpm.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign.data(), foreign.size())) == CryptoError::Denied);
     CHECK(tpm.forget(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(foreign.data(), foreign.size())) ==
           CryptoError::Denied);
+#if CRD_OS_LINUX
+    // An index outside the owner's range of the TCG handle registry is never this protector's.
+    foreign[0] = 1U;
+    foreign[1] = 0x81U; // a persistent object's handle
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign.data(), foreign.size()), Span<u8>(recovered)) ==
+          CryptoError::Denied);
+    foreign[1] = 0x01U;
+    foreign[2] = 0x40U; // the platform's NV range
+    CHECK(tpm.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign.data(), foreign.size())) == CryptoError::Denied);
+    // A TCTI configuration longer than any TPM takes names none.
+    char tcti[kTpmTctiMaxBytes + 1U];
+    std::memset(tcti, 'x', sizeof(tcti));
+    const TpmConnection unreachable(StringView(tcti, sizeof(tcti)));
+    CHECK_FALSE(unreachable.usable());
+    CHECK_FALSE(TpmKeyProtector::available(unreachable));
+    TpmKeyProtector nowhere(unreachable);
+    CHECK(nowhere.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), reference) == CryptoError::Unavailable);
+    CHECK(reference.empty());
+    CHECK(TpmConnection(StringView(tcti, kTpmTctiMaxBytes)).usable());
+    CHECK(TpmConnection().tcti() == nullptr);
+#endif
 #else
-    // No TPM protector here yet: every call that passes its length checks is Unavailable, and no store is made.
     CHECK(tpm.name() == StringView("unavailable"));
     CHECK_FALSE(tpm.forgets());
-    CHECK_FALSE(TpmKeyProtector::available());
-    master[0] = 0x42U;
-    CHECK(tpm.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), reference) == CryptoError::Unavailable);
-    CHECK(reference.empty());
-    CHECK(tpm.recover(ConstSpan<u8>(store_id), {}, Span<u8>(master)) == CryptoError::Unavailable);
-    CHECK(master[0] == 0U);
-    CHECK(tpm.forget(ConstSpan<u8>(store_id), {}) == CryptoError::Unavailable);
-    TempStore dir("tpm-unavailable");
-    KeyStore  store;
-    CHECK(store.create(dir.dir(), tpm) == CryptoError::Unavailable);
-    CHECK_FALSE(store.ready());
 #endif
+    if (!TpmKeyProtector::available(test_tpm()))
+    {
+        // No TPM answers here: every call that passes its length checks is Unavailable, and no store is made.
+        unavailable_protector(tpm, ConstSpan<u8>(store_id));
+    }
+}
+
+TEST_CASE("Key store: a TPM whose owner hierarchy has an authorization is Unavailable", "[.tpm-owner-auth]")
+{
+    // tpm_simulator_session.py gives the simulator's owner hierarchy an authorization before this run: the protector
+    // and the device refuse it before a command that would need the owner (no dictionary-attack attempt is made).
+    REQUIRE_FALSE(TpmKeyProtector::available(test_tpm()));
+    TpmKeyProtector tpm(test_tpm());
+    const u8        store_id[kKeyStoreIdBytes] = {9, 9, 9};
+    unavailable_protector(tpm, ConstSpan<u8>(store_id));
+    TpmKeyDevice device(test_tpm());
+    CHECK_FALSE(TpmKeyDevice::available(test_tpm()));
+    Bytes reference;
+    u8    point[65];
+    CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point)) ==
+          CryptoError::Unavailable);
+    CHECK(reference.empty());
+}
+
+TEST_CASE("Key store: nothing secret crosses the TPM's bus in the clear", "[.tpm-bus]")
+{
+    // tpm_simulator_session.py records this run's TPM traffic through tss2's pcap TCTI and searches the recording for
+    // the canary master key, which the salted session's parameter encryption must hide both ways (written and read).
+    REQUIRE(TpmKeyProtector::available(test_tpm()));
+    TpmKeyProtector tpm(test_tpm());
+    const u8        store_id[kKeyStoreIdBytes] = {0xB5, 0x05};
+    constexpr char  canary[]                   = "cerid-tpm-bus-canary-0123456789!";
+    static_assert(sizeof(canary) - 1U == kKeyStoreMasterBytes, "the canary is one master key long");
+    Bytes reference;
+    REQUIRE(tpm.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(reinterpret_cast<const u8*>(canary),
+                                                                kKeyStoreMasterBytes),
+                        reference) == CryptoError::None);
+    u8 recovered[kKeyStoreMasterBytes] = {};
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(reference.data(), reference.size()),
+                      Span<u8>(recovered)) == CryptoError::None);
+    CHECK(std::memcmp(recovered, canary, kKeyStoreMasterBytes) == 0);
+    CHECK(tpm.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(reference.data(), reference.size())) == CryptoError::None);
+    // A device key's authorization crosses the bus in its creation's first parameter, encrypted the same way.
+    TpmKeyDevice device(test_tpm());
+    Bytes        signer;
+    u8           point[65];
+    REQUIRE(device.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, signer, Span<u8>(point)) ==
+            CryptoError::None);
+    const ForgetOnExit forget_on_exit(device, ConstSpan<u8>(store_id), signer);
+    u8                 digest[32] = {0xD1};
+    u8                 raw[64];
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(signer.data(), signer.size()),
+                             AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest), Span<u8>(raw)) ==
+          CryptoError::None);
 }
 
 TEST_CASE("Key store: the TPM protector keeps and forgets a master key", "[crypto][key-store]")
 {
-    if (!TpmKeyProtector::available())
+    if (!TpmKeyProtector::available(test_tpm()))
     {
-        // A runner without a TPM; this case is the protector's evidence on a machine with one (the row's session note).
-        SKIP("no TPM 2.0 behind the Platform Crypto Provider");
+        // A runner without a TPM; this case is the protector's evidence on a machine with one (the row's session note)
+        // and under the pinned swtpm (crd-crypto-tpm-swtpm).
+        SKIP("no TPM 2.0 (the Platform Crypto Provider on Windows, tss2 on Linux)");
     }
-    TpmKeyProtector tpm;
+    TpmKeyProtector tpm(test_tpm());
     u8              store_id[kKeyStoreIdBytes];
     u8              other_id[kKeyStoreIdBytes];
     u8              master[kKeyStoreMasterBytes];
@@ -1219,7 +1326,7 @@ TEST_CASE("Key store: the TPM protector keeps and forgets a master key", "[crypt
     REQUIRE(random_bytes(Span<u8>(master)) == CryptoError::None);
     Bytes reference;
     REQUIRE(tpm.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), reference) == CryptoError::None);
-    REQUIRE(reference.size() == 1U + 16U + 256U);
+    REQUIRE(reference.size() == kTpmReferenceBytes);
     const ConstSpan<u8> held(reference.data(), reference.size());
     u8                  recovered[kKeyStoreMasterBytes] = {};
     CHECK(tpm.recover(ConstSpan<u8>(store_id), held, Span<u8>(recovered)) == CryptoError::None);
@@ -1229,8 +1336,9 @@ TEST_CASE("Key store: the TPM protector keeps and forgets a master key", "[crypt
     std::memset(recovered, 0x55, sizeof(recovered));
     CHECK(tpm.recover(ConstSpan<u8>(other_id), held, Span<u8>(recovered)) == CryptoError::Denied);
     CHECK(recovered[0] == 0U);
-    // Every part of the reference matters: the handle names the key, and OAEP refuses a changed wrapped key.
-    for (const usize at : {usize{1U}, usize{16U}, usize{17U}, usize{100U}, reference.size() - 1U})
+    // Every part of the reference matters: the handle names the key (or index), and OAEP refuses a changed wrapped
+    // key (a changed secret derives another authorization).
+    for (const usize at : kTpmChangedAt)
     {
         Bytes changed = reference;
         changed[at] ^= 0x01U;
@@ -1240,7 +1348,7 @@ TEST_CASE("Key store: the TPM protector keeps and forgets a master key", "[crypt
     // A second protection of the same master key is a new TPM key: both recover until each is forgotten.
     Bytes second;
     REQUIRE(tpm.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), second) == CryptoError::None);
-    CHECK(std::memcmp(second.data(), reference.data(), 17U) != 0);
+    CHECK(std::memcmp(second.data(), reference.data(), kTpmIdentityBytes) != 0);
     CHECK(tpm.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(second.data(), second.size())) == CryptoError::None);
     CHECK(tpm.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(second.data(), second.size()), Span<u8>(recovered)) ==
           CryptoError::Denied);
@@ -1558,7 +1666,8 @@ public:
                                           ConstSpan<u8> digest, Span<u8> signature) const noexcept override
     {
         signs.fetch_add(1U);
-        const Slot* slot = find(store_id, reference);
+        const usize at   = slot_of(store_id, reference);
+        const Slot* slot = at < kSlotCount ? &m_slots[at] : nullptr;
         if (fail_sign != CryptoError::None)
         {
             return fail_sign;
@@ -1592,10 +1701,10 @@ public:
         {
             return fail_forget;
         }
-        if (Slot* slot = const_cast<Slot*>(find(store_id, reference)); slot != nullptr)
+        if (const usize at = slot_of(store_id, reference); at < kSlotCount)
         {
-            EC_KEY_free(slot->key);
-            *slot = Slot{};
+            EC_KEY_free(m_slots[at].key);
+            m_slots[at] = Slot{};
         }
         return CryptoError::None;
     }
@@ -1649,24 +1758,27 @@ private:
         return nullptr;
     }
 
-    [[nodiscard]] const Slot* find(ConstSpan<u8> store_id, ConstSpan<u8> reference) const
+    // The slot holding the key `reference` names for the store; kSlotCount when none does.
+    [[nodiscard]] usize slot_of(ConstSpan<u8> store_id, ConstSpan<u8> reference) const
     {
         if (store_id.size() != kKeyStoreIdBytes || reference.size() != 17U || reference[0] != kTestDeviceFormat)
         {
-            return nullptr;
+            return kSlotCount;
         }
-        for (const Slot& slot : m_slots)
+        for (usize at = 0U; at < kSlotCount; ++at)
         {
+            const Slot& slot = m_slots[at];
             if (slot.key != nullptr && std::memcmp(slot.store, store_id.data(), kKeyStoreIdBytes) == 0 &&
                 std::memcmp(slot.handle, reference.data() + 1U, sizeof(slot.handle)) == 0)
             {
-                return &slot;
+                return at;
             }
         }
-        return nullptr;
+        return kSlotCount;
     }
 
-    Slot m_slots[32];
+    static constexpr usize kSlotCount = 32U;
+    Slot                   m_slots[kSlotCount];
 };
 
 // The listing of `name`'s `generation` (0: its Current one), which must exist.
@@ -1989,15 +2101,15 @@ TEST_CASE("Key store: a TLS credential from a device key signs its certificate a
 
 TEST_CASE("Key store: the TPM device's contract", "[crypto][key-store]")
 {
-    TpmKeyDevice tpm;
+    TpmKeyDevice tpm(test_tpm());
     const u8     store_id[kKeyStoreIdBytes] = {7, 7, 7};
     Bytes        reference;
     reference.push_back(1U);
     u8 point[97];
     u8 digest[48]    = {};
     u8 signature[96] = {0x42};
-#if CRD_OS_WINDOWS
-    CHECK(tpm.name() == StringView("tpm-pcp"));
+#if CRD_OS_WINDOWS || CRD_OS_LINUX
+    CHECK(tpm.name() == StringView(CRD_OS_WINDOWS ? "tpm-pcp" : "tpm-tss2"));
     // Every algorithm but ECDSA is refused before the TPM is asked, as are wrong lengths and references this device
     // did not write.
     CHECK(tpm.create(ConstSpan<u8>(store_id), AlgorithmId::Ed25519, reference, Span<u8>(point, 32U)) ==
@@ -2007,9 +2119,10 @@ TEST_CASE("Key store: the TPM device's contract", "[crypto][key-store]")
                      Span<u8>(point, 65U)) == CryptoError::BadLength);
     CHECK(tpm.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point, 97U)) ==
           CryptoError::BadLength);
-    u8 foreign[17] = {1U};
-    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign, 16U), AlgorithmId::EcdsaSecp256r1Sha256,
-                          ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Denied);
+    u8 foreign[kTpmDeviceReference] = {1U, 1U};
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign, kTpmDeviceReference - 1U),
+                          AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest, 32U),
+                          Span<u8>(signature, 64U)) == CryptoError::Denied);
     foreign[0] = 2U;
     CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign), AlgorithmId::EcdsaSecp256r1Sha256,
                           ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Denied);
@@ -2019,18 +2132,27 @@ TEST_CASE("Key store: the TPM device's contract", "[crypto][key-store]")
                           ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Unsupported);
     CHECK(tpm.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign)) == CryptoError::Denied);
     CHECK(tpm.forget(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(foreign)) == CryptoError::Denied);
+#if CRD_OS_LINUX
+    // An index outside the owner's range is never this device's.
+    foreign[0] = 1U;
+    foreign[1] = 0x81U;
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign), AlgorithmId::EcdsaSecp256r1Sha256,
+                          ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Denied);
+    CHECK(tpm.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign)) == CryptoError::Denied);
+#endif
 #else
-    // No TPM device here yet: every call is Unavailable, and a store given it fails a device key's generation (an
-    // absent device is not a curve it lacks, so HardwarePreferred does not hide it), while file keys are made as ever.
     CHECK(tpm.name() == StringView("unavailable"));
-    CHECK_FALSE(TpmKeyDevice::available());
+#endif
+    if (TpmKeyDevice::available(test_tpm()))
+    {
+        return;
+    }
+    // No TPM answers here: a key's creation is Unavailable, and a store given the device fails a device key's
+    // generation (an absent device is not a curve it lacks, so HardwarePreferred does not hide it), while file keys
+    // are made as ever.
     CHECK(tpm.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point, 65U)) ==
           CryptoError::Unavailable);
     CHECK(reference.empty());
-    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), {}, AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest, 32U),
-                          Span<u8>(signature, 64U)) == CryptoError::Unavailable);
-    CHECK(signature[0] == 0U);
-    CHECK(tpm.forget(ConstSpan<u8>(store_id), {}) == CryptoError::Unavailable);
     TempStore     dir("tpm-device-unavailable");
     TestProtector protector;
     KeyStore      store;
@@ -2041,19 +2163,19 @@ TEST_CASE("Key store: the TPM device's contract", "[crypto][key-store]")
           CryptoError::Unavailable);
     REQUIRE(store.generate("ed", AlgorithmId::Ed25519, PlacementRequest::HardwarePreferred, 1U) == CryptoError::None);
     CHECK(info_of(store, "ed").placement == KeyPlacement::Software);
-#endif
 }
 
 TEST_CASE("Key store: the TPM holds a store's signature keys and signs every handshake", "[crypto][key-store]")
 {
-    if (!TpmKeyDevice::available())
+    if (!TpmKeyDevice::available(test_tpm()))
     {
-        // A runner without a TPM; this case is the device's evidence on a machine with one (the row's session note).
-        SKIP("no TPM 2.0 behind the Platform Crypto Provider");
+        // A runner without a TPM; this case is the device's evidence on a machine with one (the row's session note)
+        // and under the pinned swtpm (crd-crypto-tpm-swtpm).
+        SKIP("no TPM 2.0 (the Platform Crypto Provider on Windows, tss2 on Linux)");
     }
     TempStore       dir("tpm-device");
-    TpmKeyProtector protector;
-    TpmKeyDevice    tpm;
+    TpmKeyProtector protector(test_tpm());
+    TpmKeyDevice    tpm(test_tpm());
     KeyStore        store;
     REQUIRE(store.create(dir.dir(), protector, &tpm) == CryptoError::None);
     const EraseOnExit erase_on_exit(store);

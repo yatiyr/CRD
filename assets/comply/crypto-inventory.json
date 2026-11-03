@@ -8,6 +8,7 @@
       "title": "The relocatable Cerid package: the engine libraries cmake --install exports as Cerid:: targets",
       "packages": [
         "aws-lc",
+        "tpm2-tss",
         "zstd"
       ],
       "functions": [

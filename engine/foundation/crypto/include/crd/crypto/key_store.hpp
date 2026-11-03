@@ -35,6 +35,7 @@ inline constexpr usize kKeyReferenceMaxBytes  = 4096U;
 inline constexpr usize kKeyPrivateMaxBytes    = 64U; // the longest private input: an ML-KEM seed d || z
 inline constexpr usize kKeyDeviceReferenceMaxBytes = kKeyPrivateMaxBytes; // what names a device's key
 inline constexpr usize kDevicePublicKeyMaxBytes    = 97U; // the longest device key's public key: a P-384 point
+inline constexpr usize kTpmTctiMaxBytes            = 255U; // the longest tss2 TCTI configuration a TPM takes
 
 // What guards a store's master key, weakest first (decision K2).
 enum class KeyProtection : u8
@@ -115,18 +116,42 @@ private:
     u32 m_prompt_milliseconds;
 };
 
-// The TPM 2.0 protector for the calling user (decision K11): on Windows "tpm-pcp", a decrypt-only RSA-2048 key the TPM
+// Which TPM 2.0 a protector or device talks to. On Linux a tss2 TCTI configuration ("device:/dev/tpmrm0",
+// "swtpm:host=127.0.0.1,port=2321"); empty (the default) lets tss2 search its own order, the kernel's resource manager
+// first. Windows has one TPM, behind the Platform Crypto Provider, and ignores it. A configuration longer than
+// kTpmTctiMaxBytes names no TPM: every call through it is Unavailable.
+class TpmConnection
+{
+public:
+    TpmConnection() noexcept = default;
+    explicit TpmConnection(cont::StringView tcti) noexcept;
+
+    // The configuration, zero-terminated; null when the default search applies or the configuration was too long.
+    [[nodiscard]] const char* tcti() const noexcept { return m_length == 0U ? nullptr : m_tcti; }
+    [[nodiscard]] bool        usable() const noexcept { return m_usable; }
+
+private:
+    char  m_tcti[kTpmTctiMaxBytes + 1U] = {};
+    usize m_length                      = 0U;
+    bool  m_usable                      = true;
+};
+
+// The TPM 2.0 protector for the calling user (decision K11). On Windows "tpm-pcp": a decrypt-only RSA-2048 key the TPM
 // creates for each master key through the Platform Crypto Provider, which wraps it with RSA-OAEP (SHA-256, the store's
-// identifier in the label); the reference holds the key's random handle and the wrapped key, never the public key. It
-// forgets by deleting the TPM key, so a copy of the store file opens nowhere once its master key is replaced; a store
-// it guards opens only on the machine whose TPM holds the key. Elsewhere every call answers Unavailable (Linux's tss2
-// protector is next). available() is whether a TPM answers behind the provider now.
+// identifier in the label); the reference holds the key's random handle and the wrapped key, never the public key. On
+// Linux "tpm-tss2" (decision K13): the master key itself in an NV index of the TPM's owner hierarchy, written once over
+// a salted, parameter-encrypted session and read only with an authorization derived from the reference's secret and
+// the store's identifier; the reference holds the index's handle and that secret. Either forgets by deleting what the
+// TPM holds, so a copy of the store file opens nowhere once its master key is replaced; a store it guards opens only on
+// the machine whose TPM holds the key. Elsewhere every call answers Unavailable. available() is whether a TPM answers
+// now (on Linux, one whose owner hierarchy has no authorization set: tss2 loaded, the TPM reached).
 class TpmKeyProtector final : public KeyProtector
 {
 public:
     TpmKeyProtector() noexcept = default;
+    explicit TpmKeyProtector(const TpmConnection& tpm) noexcept : m_tpm(tpm) {}
 
-    [[nodiscard]] static bool available() noexcept;
+    [[nodiscard]] static bool available(const TpmConnection& tpm = TpmConnection()) noexcept;
 
     [[nodiscard]] cont::StringView name() const noexcept override;
     [[nodiscard]] KeyProtection    protection() const noexcept override { return KeyProtection::Hardware; }
@@ -136,6 +161,9 @@ public:
     [[nodiscard]] CryptoError      recover(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference,
                                            cont::Span<u8> master) noexcept override;
     [[nodiscard]] CryptoError forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference) noexcept override;
+
+private:
+    TpmConnection m_tpm;
 };
 
 // A device that holds signature keys and signs with them without releasing them (decisions K8 and K12): a TPM, a
@@ -173,16 +201,20 @@ protected:
     ~KeyDevice() noexcept                           = default;
 };
 
-// The TPM 2.0 as a key device for the calling user (decision K12): on Windows "tpm-pcp", a persisted sign-only ECDSA
+// The TPM 2.0 as a key device for the calling user (decision K12). On Windows "tpm-pcp": a persisted sign-only ECDSA
 // key the TPM creates through the Platform Crypto Provider, named for the store and a random handle (the reference: a
-// format byte and the handle). Unsupported for a curve the TPM does not implement. Elsewhere every call answers
-// Unavailable (Linux's tss2 device is next). available() is whether a TPM answers behind the provider now.
+// format byte and the handle). On Linux "tpm-tss2" (decision K13): a sign-only ECDSA key the TPM creates under its
+// storage root, its TPM-wrapped blob kept in an NV index of the owner hierarchy, the key and the index authorized by
+// values derived from the reference's secret and the store's identifier (the reference: a format byte, the index's
+// handle and that secret); forgetting deletes the index. Unsupported for a curve the TPM does not implement. Elsewhere
+// every call answers Unavailable. available() is whether a TPM answers now.
 class TpmKeyDevice final : public KeyDevice
 {
 public:
     TpmKeyDevice() noexcept = default;
+    explicit TpmKeyDevice(const TpmConnection& tpm) noexcept : m_tpm(tpm) {}
 
-    [[nodiscard]] static bool available() noexcept;
+    [[nodiscard]] static bool available(const TpmConnection& tpm = TpmConnection()) noexcept;
 
     [[nodiscard]] cont::StringView name() const noexcept override;
     [[nodiscard]] CryptoError      create(cont::ConstSpan<u8> store_id, AlgorithmId algorithm, cont::Array<u8>& reference,
@@ -191,6 +223,9 @@ public:
                                                AlgorithmId algorithm, cont::ConstSpan<u8> digest,
                                                cont::Span<u8> signature) const noexcept override;
     [[nodiscard]] CryptoError forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference) noexcept override;
+
+private:
+    TpmConnection m_tpm;
 };
 
 enum class KeyKind : u8
