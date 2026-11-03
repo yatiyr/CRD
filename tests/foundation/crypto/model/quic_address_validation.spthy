@@ -1,0 +1,211 @@
+theory CeridQuicAddressValidation
+begin
+
+/*
+ * QUIC address validation with Retry and NEW_TOKEN tokens (decision S13, RFC 9000 section 8.1; NET.2's model clause).
+ * Checked in CI by scripts/check-protocol-model.py with the pinned Tamarin; every lemma below is expected to verify.
+ *
+ * Design: docs/design/network-foundation.md#address-validation
+ * Design: docs/design/network-foundation.md#anti-replay
+ * Design: docs/design/network-foundation.md#protocol-model
+ *
+ * What is modelled:
+ *   - Addresses: a datagram sent to an address reaches the client there, or the adversary when it owns the address or
+ *     its path (OnPath, at any time). Anyone sends any datagram to any address and claims any source address and port.
+ *     A client's own datagrams are public.
+ *   - A fleet's token keys (one server here stands for a fleet that shares them): a rotation adds a key; the newest
+ *     seals, the one before it only opens (QuicTokenKeys' window, as restrictions), and any key can be revealed at
+ *     any time.
+ *   - A token is its clear kind and salt and the claims sealed under the key derived from the fleet key and the salt.
+ *     The AEAD's associated data is sealed with the claims: the server rebuilds it from what it sees (the kind, the
+ *     version, the client's address; for a Retry token also its port and both connection IDs of the client's next
+ *     Initial) and opens only on a match, which is quic.cpp's token_associated. A Retry token's claims add the
+ *     original Destination Connection ID.
+ *   - A server answers an Initial without a token with a Retry, or validates the address by the handshake: the client
+ *     at the address echoes what the server sent there. A validated connection receives NEW_TOKEN tokens; their frames
+ *     are encrypted, but the model publishes each token (a client may hand its token on). A client sends its Initial
+ *     with a NEW_TOKEN token and the model ends there: a refused token leaves it a fresh client (ClientInitial), and
+ *     Tamarin did not terminate with the token's client continuing.
+ *   - A NEW_TOKEN token is accepted once (S16's ReplayFilter by the token's salt, SingleUseFilter below); a Retry
+ *     token has no filter, only its binding and lifetime.
+ * Outside the model: time. The Retry and NEW_TOKEN lifetimes and the clock skew are test_quic_token.cpp's ("lifetimes
+ * and the clock skew hold at their edges"); a token's unlinkability (an equivalence property) is its "carries no
+ * readable connection detail" case: the address and connection IDs are sealed or only authenticated.
+ * Proven: a server validates an address only after a datagram it sent there reached the client there, unless the
+ * adversary owns that address's path or a token key leaked (threats T01 to T03: no amplification toward a spoofed
+ * address); a token is accepted only with the kind, version, address and, for a Retry token, port and connection IDs
+ * it was minted for; a NEW_TOKEN token is accepted at most once; a token under the key before the last rotation still
+ * opens, and one minted before the last two rotations never does. The bound: a Retry token is accepted again when
+ * replayed with its binding (its 30-second lifetime limits it).
+ */
+
+builtins: symmetric-encryption
+
+functions: kdf/2
+
+// The ReplayFilter of a server: a NEW_TOKEN token's salt is accepted once.
+restriction SingleUseFilter:
+    "All S salt #i #j. FilterAccept(S, salt) @ #i & FilterAccept(S, salt) @ #j ==> #i = #j"
+
+// QuicTokenKeys' two keys: a token is sealed under the newest key and opens under it or the one before it.
+restriction SealsUnderNewest:
+    "All S k #i #c. SealsUnder(S, k) @ #i & KeyCreated(S, k) @ #c ==>
+        not (Ex k2 #c2. KeyCreated(S, k2) @ #c2 & #c < #c2 & #c2 < #i)"
+
+restriction OpensUnderTwoNewest:
+    "All S k #i #c. OpensUnder(S, k) @ #i & KeyCreated(S, k) @ #c ==>
+        not (Ex k2 k3 #c2 #c3. KeyCreated(S, k2) @ #c2 & KeyCreated(S, k3) @ #c3 & #c < #c2 & #c2 < #c3 & #c3 < #i)"
+
+// A fleet's key and each rotation's next key.
+rule FleetKey:
+    [ Fr(~k) ] --[ KeyCreated($S, ~k) ]-> [ !FleetKey($S, ~k) ]
+
+rule RevealKey:
+    [ !FleetKey(S, k) ] --[ RevKey(S, k) ]-> [ Out(k) ]
+
+rule OwnPath:
+    [ ] --[ OnPath($A) ]-> [ !Owned($A) ]
+
+rule ReadOwnedAddress:
+    [ ToAddress(A, m), !Owned(A) ] --[ Recv(A, m) ]-> [ Out(m) ]
+
+rule Inject:
+    [ In(<A, m>) ] --> [ ToAddress(A, m) ]
+
+rule ClientInitial:
+    [ Fr(~odcid), Fr(~scid) ] -->
+    [ ClientWait($S, $A, $P, $V, ~scid), Out(<'initial', $S, $A, $P, $V, ~odcid, ~scid, 'none'>) ]
+
+// A Retry: the token binds the client's address, port and version, its next Initial's connection IDs (the Retry's
+// Source Connection ID and the client's own) and carries the original Destination Connection ID.
+rule ServerRetry:
+    let header = <'retry', ~salt>
+        token = <header, senc(<'claims', odcid, <header, V, A, P, ~rscid, scid>>, kdf(k, ~salt))>
+        m = <'retry', S, ~rscid, scid, token>
+    in
+    [ In(<'initial', S, A, P, V, odcid, scid, 'none'>), !FleetKey(S, k), Fr(~salt), Fr(~rscid) ]
+  --[ SealsUnder(S, k), MintRetry(S, A, P, V, ~rscid, scid, odcid, ~salt), MintedUnder(S, k, ~salt), Sent(S, A, token),
+      SentTo(A, m) ]->
+    [ ToAddress(A, m) ]
+
+rule ClientRetry:
+    let m = <'retry', S, rscid, scid, token> in
+    [ ClientWait(S, A, P, V, scid), ToAddress(A, m) ]
+  --[ Recv(A, m), ReceivedAt(A, token) ]->
+    [ ClientConnecting(S, A, V), Out(<'initial', S, A, P, V, rscid, scid, token>) ]
+
+rule ServerAcceptRetry:
+    let header = <'retry', salt>
+        token = <header, senc(<'claims', odcid, <header, V, A, P, dcid, scid>>, kdf(k, salt))>
+    in
+    [ In(<'initial', S, A, P, V, dcid, scid, token>), !FleetKey(S, k) ]
+  --[ OpensUnder(S, k), AcceptedUnder(S, k, salt), AcceptRetry(S, A, P, V, dcid, scid, odcid, salt),
+      Validated(S, A) ]->
+    [ !Connection(S, A, V) ]
+
+// Without a valid token the server may validate by the handshake (any token that fails is ignored, section 8.1.3).
+rule ServerHandshake:
+    let m = <'handshake', S, ~c> in
+    [ In(<'initial', S, A, P, V, odcid, scid, token>), Fr(~c) ]
+  --[ Sent(S, A, ~c), SentTo(A, m) ]->
+    [ ServerHandshakeWait(S, A, V, ~c), ToAddress(A, m) ]
+
+rule ClientHandshake:
+    let m = <'handshake', S, c> in
+    [ ClientWait(S, A, P, V, scid), ToAddress(A, m) ]
+  --[ Recv(A, m), ReceivedAt(A, c) ]->
+    [ ClientConnecting(S, A, V), Out(<'handshake', S, A, c>) ]
+
+rule ServerHandshakeDone:
+    [ ServerHandshakeWait(S, A, V, c), In(<'handshake', S, A, c>) ] --[ Validated(S, A) ]-> [ !Connection(S, A, V) ]
+
+// A NEW_TOKEN token binds the client's address and version only (its port and connection IDs change).
+rule ServerNewToken:
+    let header = <'new_token', ~salt>
+        token = <header, senc(<'claims', <header, V, A>>, kdf(k, ~salt))>
+        m = <'new_token', S, token>
+    in
+    [ !Connection(S, A, V), !FleetKey(S, k), Fr(~salt) ]
+  --[ SealsUnder(S, k), MintNewToken(S, A, V, ~salt), MintedUnder(S, k, ~salt), Sent(S, A, token), SentTo(A, m) ]->
+    [ ToAddress(A, m), Out(token) ]
+
+rule ClientStoreToken:
+    let m = <'new_token', S, token> in
+    [ ClientConnecting(S, A, V), ToAddress(A, m) ] --[ Recv(A, m), ReceivedAt(A, token) ]->
+    [ ClientToken(S, A, V, token) ]
+
+rule ClientInitialWithToken:
+    [ ClientToken(S, A, V, token), Fr(~odcid), Fr(~scid) ] --[ Resend(token) ]->
+    [ Out(<'initial', S, A, $P, V, ~odcid, ~scid, token>) ]
+
+rule ServerAcceptNewToken:
+    let header = <'new_token', salt>
+        token = <header, senc(<'claims', <header, V, A>>, kdf(k, salt))>
+    in
+    [ In(<'initial', S, A, P, V, dcid, scid, token>), !FleetKey(S, k) ]
+  --[ OpensUnder(S, k), AcceptedUnder(S, k, salt), FilterAccept(S, salt), AcceptNewToken(S, A, V, salt),
+      Validated(S, A) ]->
+    [ !Connection(S, A, V) ]
+
+predicates:
+    KeyLeaked(S, #i) <=> Ex k #r. RevKey(S, k) @ #r & #r < #i
+
+// A datagram received at an address was sent there, or the adversary knew it; so was a token a client resends.
+lemma datagram_sources [sources]:
+    "(All A m #i. Recv(A, m) @ #i ==> (Ex #j. SentTo(A, m) @ #j & #j < #i) | (Ex #j. KU(m) @ #j & #j < #i))
+      & (All t #i. Resend(t) @ #i ==> (Ex S A #j. Sent(S, A, t) @ #j & #j < #i) | (Ex #j. KU(t) @ #j & #j < #i))"
+
+lemma retry_completes:
+  exists-trace
+    "Ex S A P V dcid scid odcid salt #i. AcceptRetry(S, A, P, V, dcid, scid, odcid, salt) @ #i
+      & not (Ex X k #r. RevKey(X, k) @ #r) & not (Ex X #r. OnPath(X) @ #r)"
+
+lemma new_token_completes:
+  exists-trace
+    "Ex S A V salt #i. AcceptNewToken(S, A, V, salt) @ #i
+      & not (Ex X k #r. RevKey(X, k) @ #r) & not (Ex X #r. OnPath(X) @ #r)"
+
+// A token key leaks only by its reveal.
+lemma key_secrecy [reuse]:
+    "All S k salt #i #j. MintedUnder(S, k, salt) @ #i & K(k) @ #j ==> Ex #r. RevKey(S, k) @ #r & #r < #j"
+
+// Each kind is accepted only as minted: the kind, version, address, and a Retry token's port, connection IDs and
+// original connection ID; nothing else opens unless a token key leaked.
+lemma retry_token_authentic:
+    "All S A P V dcid scid odcid salt #i. AcceptRetry(S, A, P, V, dcid, scid, odcid, salt) @ #i ==>
+        (Ex #j. MintRetry(S, A, P, V, dcid, scid, odcid, salt) @ #j & #j < #i) | KeyLeaked(S, #i)"
+
+lemma new_token_authentic:
+    "All S A V salt #i. AcceptNewToken(S, A, V, salt) @ #i ==>
+        (Ex #j. MintNewToken(S, A, V, salt) @ #j & #j < #i) | KeyLeaked(S, #i)"
+
+lemma new_token_once:
+    "All S A A2 V V2 salt #i #j. AcceptNewToken(S, A, V, salt) @ #i & AcceptNewToken(S, A2, V2, salt) @ #j ==> #i = #j"
+
+// No amplification toward a spoofed address: a validated address received what the server sent there.
+lemma address_validated [use_induction]:
+    "All S A #i. Validated(S, A) @ #i ==>
+        (Ex x #j #k. Sent(S, A, x) @ #j & ReceivedAt(A, x) @ #k & #k < #i)
+      | (Ex #r. OnPath(A) @ #r) | KeyLeaked(S, #i)"
+
+// Rotation: a token minted before the last rotation still opens (here a Retry token).
+lemma previous_key_opens:
+  exists-trace
+    "Ex S A P V dcid scid odcid salt k k2 #m #r #i. MintRetry(S, A, P, V, dcid, scid, odcid, salt) @ #m
+      & MintedUnder(S, k, salt) @ #m & KeyCreated(S, k2) @ #r & AcceptRetry(S, A, P, V, dcid, scid, odcid, salt) @ #i
+      & AcceptedUnder(S, k, salt) @ #i & #m < #r & #r < #i
+      & not (Ex X x #s. RevKey(X, x) @ #s) & not (Ex X #s. OnPath(X) @ #s)"
+
+// A token minted before the last two rotations never opens again, however it is presented.
+lemma retired_token_refused:
+    "All S k k2 k3 salt #m #c2 #c3 #i. MintedUnder(S, k, salt) @ #m & KeyCreated(S, k2) @ #c2
+      & KeyCreated(S, k3) @ #c3 & AcceptedUnder(S, k, salt) @ #i & #m < #c2 & #c2 < #c3 & #c3 < #i ==> F"
+
+// The bound: a Retry token replayed with its binding is accepted again (only its lifetime limits it).
+lemma retry_token_reusable:
+  exists-trace
+    "Ex S A P V dcid scid odcid salt #i #j. AcceptRetry(S, A, P, V, dcid, scid, odcid, salt) @ #i
+      & AcceptRetry(S, A, P, V, dcid, scid, odcid, salt) @ #j & not (#i = #j)
+      & not (Ex X k #r. RevKey(X, k) @ #r) & not (Ex X #r. OnPath(X) @ #r)"
+
+end

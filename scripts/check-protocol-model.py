@@ -24,6 +24,10 @@ ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / 'tests' / 'foundation' / 'crypto' / 'model'
 # Every model and the lemmas it must prove; Tamarin reports an exists-trace lemma "verified" when it found the trace.
 MODELS = {
+    'quic_address_validation.spthy': ('datagram_sources', 'retry_completes', 'new_token_completes', 'key_secrecy',
+                                      'retry_token_authentic', 'new_token_authentic', 'new_token_once',
+                                      'address_validated', 'previous_key_opens', 'retired_token_refused',
+                                      'retry_token_reusable'),
     'tls_handshake.spthy': ('handshake_completes', 'no_downgrade', 'client_authenticates_server',
                             'server_authenticates_client', 'handshake_secret', 'client_traffic_secret',
                             'server_traffic_secret'),
