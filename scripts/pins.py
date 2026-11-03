@@ -16,6 +16,7 @@ import os
 import platform
 import posixpath
 import shutil
+import stat
 import sys
 import tarfile
 import time
@@ -269,8 +270,68 @@ def link_inside_tree(staging, name, target):
     os.symlink(target, link, target_is_directory=(staging / PurePosixPath(resolved)).is_dir())
 
 
+class ZipTree:
+    """A zip archive read as a tar archive is by the tree helpers: getmembers() gives each entry as a TarInfo (a
+    directory, a regular file with its Unix mode, or a symbolic link whose target is the entry's content, as Info-ZIP
+    stores them), extractfile() reads one and extractall() places the members through the same filter. A tree pinned as
+    a zip (the Android NDK) is then checked and placed exactly as a tar one is."""
+
+    def __init__(self, path):
+        self._zip = zipfile.ZipFile(path)
+        self._entries = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self._zip.close()
+
+    def getmembers(self):
+        members = []
+        for entry in self._zip.infolist():
+            info = tarfile.TarInfo(entry.filename)
+            mode = entry.external_attr >> 16
+            info.mode = stat.S_IMODE(mode) or (0o755 if entry.is_dir() else 0o644)
+            if entry.is_dir():
+                info.type = tarfile.DIRTYPE
+            elif stat.S_ISLNK(mode):
+                info.type, info.linkname = tarfile.SYMTYPE, self._zip.read(entry).decode('utf-8')
+            else:
+                info.type, info.size = tarfile.REGTYPE, entry.file_size
+            self._entries[id(info)] = entry
+            members.append(info)
+        return members
+
+    def extractfile(self, info):
+        return self._zip.open(self._entries[id(info)])
+
+    def extractall(self, path, members, filter):  # noqa: A002 (tarfile's own keyword)
+        for original in members:
+            info = filter(original, str(path))
+            if info is None:
+                continue
+            target = Path(path) / PurePosixPath(info.name)
+            if info.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if info.issym():
+                os.symlink(info.linkname, target)
+            elif info.islnk():
+                os.link(Path(path) / PurePosixPath(info.linkname), target)
+            else:
+                with self.extractfile(original) as source, target.open('wb') as output:
+                    shutil.copyfileobj(source, output)
+                target.chmod(info.mode)
+
+
+def open_tree(path):
+    """A pinned tree's archive for the tree helpers: a zip through ZipTree, anything else through tarfile."""
+    return ZipTree(path) if zipfile.is_zipfile(path) else tarfile.open(path, 'r:*', errorlevel=2)
+
+
 def install_tree(pin, destination, download_dir, binary, stamp, archive=None, label=None, version_of=None):
-    """Install every member of `pin`'s tar archive below the pin's `root` into `destination` and return the
+    """Install every member of `pin`'s tar or zip archive below the pin's `root` into `destination` and return the
     `binary` (a POSIX path inside the tree), unless a matching install is already there.
 
     A pin with `files` is one tree from several archives (tree_parts), each unpacked below its own root into the same
@@ -312,7 +373,7 @@ def install_tree(pin, destination, download_dir, binary, stamp, archive=None, la
     staging.mkdir(parents=True)
     try:
         for part, path in zip(parts, verified):
-            with tarfile.open(path, 'r:*', errorlevel=2) as package:
+            with open_tree(path) as package:
                 members = unplaced(package, part_members(package, part, pin), staging, path.name)
                 package.extractall(staging, members=members, filter=tree_filter)
         for name, target in pin.get('links', {}).items():

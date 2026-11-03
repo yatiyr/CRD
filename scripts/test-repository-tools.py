@@ -18,6 +18,7 @@ import socket
 import struct
 import subprocess
 import sys
+import stat
 import tarfile
 import tempfile
 import time
@@ -78,6 +79,9 @@ swtpm_spec.loader.exec_module(install_swtpm)
 softhsm_spec = importlib.util.spec_from_file_location('install_softhsm', ROOT / 'scripts/install-softhsm.py')
 install_softhsm = importlib.util.module_from_spec(softhsm_spec)
 softhsm_spec.loader.exec_module(install_softhsm)
+ndk_spec = importlib.util.spec_from_file_location('install_android_ndk', ROOT / 'scripts/install-android-ndk.py')
+install_android_ndk = importlib.util.module_from_spec(ndk_spec)
+ndk_spec.loader.exec_module(install_android_ndk)
 mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
 install_mold = importlib.util.module_from_spec(mold_spec)
 mold_spec.loader.exec_module(install_mold)
@@ -2458,6 +2462,62 @@ class BuildPerformance(unittest.TestCase):
             self.assertTrue(spec['url'].endswith('/' + name) and spec['version'] in name)
         self.assertIn('cuda_nvcc-linux-x86_64-%s-archive.tar.xz' % install_cuda.compiler_version(pin), pin['files'])
         self.assertIn('scripts/install-cuda.py', check_pins.HELPERS)
+
+    def test_android_ndk_installer_unpacks_the_zip_with_modes_and_links(self):
+        def ndk(directory, extra=(), revision='30.0.1'):
+            directory.mkdir()
+            path = directory / 'android-ndk-rX-linux.zip'
+            with zipfile.ZipFile(path, 'w') as package:
+                def add(name, data, mode):
+                    info = zipfile.ZipInfo(name)
+                    info.external_attr = mode << 16
+                    package.writestr(info, data)
+                add('android-ndk-rX/', b'', stat.S_IFDIR | 0o755)
+                add('android-ndk-rX/source.properties', f'Pkg.Desc = Android NDK\nPkg.Revision = {revision}\n',
+                    stat.S_IFREG | 0o644)
+                add('android-ndk-rX/build/cmake/android.toolchain.cmake', b'# toolchain', stat.S_IFREG | 0o644)
+                add('android-ndk-rX/bin/clang-99', b'#!/bin/sh\n', stat.S_IFREG | 0o755)
+                add('android-ndk-rX/bin/clang', b'clang-99', stat.S_IFLNK | 0o777)
+                for name, data, mode in extra:
+                    add(name, data, mode)
+            return {'version': '30.0.1', 'url': 'https://example.invalid/' + path.name, 'file': path.name,
+                    'sha256': pins_registry.sha256(path), 'root': 'android-ndk-rX/', 'license': 'x'}
+
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()):
+            root = Path(temp).resolve()
+            pin = ndk(root / 'dl')
+            prefix = install_android_ndk.install(root / 'ndk', root / 'dl', pin=pin)
+            self.assertEqual(prefix, root / 'ndk')
+            self.assertEqual((prefix / 'build/cmake/android.toolchain.cmake').read_bytes(), b'# toolchain')
+            if not pins_registry.WINDOWS:
+                self.assertTrue(os.access(prefix / 'bin/clang-99', os.X_OK), 'a file keeps its executable mode')
+                self.assertFalse(os.access(prefix / 'source.properties', os.X_OK))
+                self.assertTrue((prefix / 'bin/clang').is_symlink())
+                self.assertEqual(os.readlink(prefix / 'bin/clang'), 'clang-99')
+            else:
+                self.assertEqual((prefix / 'bin/clang').read_bytes(), b'#!/bin/sh\n', 'a link becomes a hard link')
+            self.assertEqual(install_android_ndk.reported_version(prefix / install_android_ndk.TOOLCHAIN), '30.0.1')
+            # A matching stamp is reused.
+            (prefix / 'bin/clang-99').write_bytes(b'kept')
+            install_android_ndk.install(root / 'ndk', root / 'dl', pin=pin)
+            self.assertEqual((prefix / 'bin/clang-99').read_bytes(), b'kept')
+            # Another revision than the pin's, a member beside the root and a link out of the tree are refused, and
+            # nothing is left behind.
+            refused = (('old', {'revision': '29.0.1'}, "reports '29.0.1'"),
+                       ('beside', {'extra': [('other/file', b'x', stat.S_IFREG | 0o644)]}, 'archive member outside'),
+                       ('escape', {'extra': [('android-ndk-rX/bin/out', b'../../../etc/passwd', stat.S_IFLNK | 0o777)]},
+                        'outside the destination'))
+            for name, changes, message in refused:
+                bad = ndk(root / name, **changes)
+                with self.assertRaisesRegex((pins_registry.PinError, tarfile.TarError), message):
+                    install_android_ndk.install(root / ('to-' + name), root / name, pin=bad)
+                self.assertFalse((root / ('to-' + name)).exists() or (root / ('to-' + name + '.partial')).exists())
+            self.assertIsNone(install_android_ndk.reported_version(root / 'none/build/cmake/x.cmake'))
+        pin = pins_registry.entry('tools', install_android_ndk.PIN_NAME)
+        self.assertEqual(pin['root'], 'android-ndk-r30/')
+        self.assertTrue(pin['url'].endswith('/' + pin['file']) and pin['url'].startswith(
+            'https://dl.google.com/android/repository/'))
+        self.assertIn('scripts/install-android-ndk.py', check_pins.HELPERS)
 
     def test_rust_installer_unpacks_each_component_directory_into_one_prefix(self):
         def component(directory, name, directory_in_top, members, notice):

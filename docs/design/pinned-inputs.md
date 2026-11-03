@@ -87,6 +87,11 @@ from crates.io with a 64-hex checksum (no git, path or other registry), the one 
 lockfile resolves the pinned version; the build runs `cargo clippy` and `cargo build`, both `--locked`, with the pinned
 Cargo, warnings as errors and CARGO_HOME inside the build tree, so Cargo verifies each crate's SHA-256 on download and
 never resolves a newer one. The workflow must install Rust through install-rust.py, naming the version.
+[install-android-ndk.py](../../scripts/install-android-ndk.py) installs the Android NDK r30
+(`tools/android-ndk-linux-x64`) from Google's release zip, its size and SHA-1 matched against the SDK repository index
+on retrieval and its SHA-256 pinned; `pins.install_tree` reads a zip as it reads a tar (file modes and Info-ZIP
+symbolic links kept, the same filter refusing an escaping path or link) and the NDK's `source.properties` must name the
+pinned revision.
 Every whole-tree install goes through `pins.install_tree` (staging beside the destination, a stamp naming the pin's
 version, digests and layout, nothing outside each archive's root extracted). A tree of several archives unpacks them
 into one prefix and refuses a path two of them place differently; the pin's `notices` (each archive's `LICENSE`) go to
