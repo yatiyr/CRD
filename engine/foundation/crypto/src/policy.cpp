@@ -256,6 +256,8 @@ cont::StringView policy_error_name(PolicyError error) noexcept
         return "issued-before-current";
     case PolicyError::Expired:
         return "expired";
+    case PolicyError::Absent:
+        return "absent";
     }
     return "unknown";
 }
@@ -350,20 +352,26 @@ PolicyError write_policy_body(const PolicyContent& content, cont::Span<u8> out, 
     return PolicyError::None;
 }
 
-PolicyError write_policy(cont::ConstSpan<u8> body, cont::ConstSpan<KeySignature> signatures, cont::Span<u8> out,
-                         usize& written) noexcept
+PolicyError check_policy_body(cont::ConstSpan<u8> body) noexcept
 {
-    written = 0U;
-    PolicyMessage    parsed;
-    cont::WireReader reader(body);
+    PolicyMessage     parsed;
+    cont::WireReader  reader(body);
     const PolicyError valid = read_body(reader, parsed);
     if (valid != PolicyError::None)
     {
         return valid;
     }
-    if (!reader.done())
+    return reader.done() ? PolicyError::None : PolicyError::TrailingBytes;
+}
+
+PolicyError write_policy(cont::ConstSpan<u8> body, cont::ConstSpan<KeySignature> signatures, cont::Span<u8> out,
+                         usize& written) noexcept
+{
+    written = 0U;
+    const PolicyError valid = check_policy_body(body);
+    if (valid != PolicyError::None)
     {
-        return PolicyError::TrailingBytes;
+        return valid;
     }
     const PolicyError signed_ok = validate_signatures(signatures);
     if (signed_ok != PolicyError::None)
@@ -556,6 +564,20 @@ PolicyError PolicyStore::apply(cont::ConstSpan<u8> generation, u64 now) noexcept
     m_current.m_content = within_ceiling(content, m_config.supported);
     m_floor             = content.generation;
     return PolicyError::None;
+}
+
+PolicyStart PolicyStore::start(cont::ConstSpan<u8> persisted, cont::ConstSpan<u8> bootstrap, u64 now) noexcept
+{
+    PolicyStart started;
+    if (!persisted.empty())
+    {
+        started.persisted = apply(persisted, now);
+    }
+    if (!bootstrap.empty())
+    {
+        started.bootstrap = apply(bootstrap, now);
+    }
+    return started;
 }
 
 PolicySnapshot PolicyStore::snapshot() const noexcept

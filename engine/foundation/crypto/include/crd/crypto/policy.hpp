@@ -1,7 +1,7 @@
 #pragma once
 
-// crd-crypto -- signed crypto policy generations (NET-STD; contract: docs/design/network-foundation.md#agility and
-// #policy-wire).
+// crd-crypto -- signed crypto policy generations (NET-STD; contract: docs/design/network-foundation.md#agility,
+// #policy-wire and #policy-start).
 //
 // The algorithms a Cerid installation accepts are not compiled in: they are a policy generation, a signed artefact
 // that names every algorithm by its register identifier with a dated window, the minimum version of each Cerid
@@ -149,12 +149,13 @@ enum class PolicyError : u8
     NotYetIssued,         // issued more than kMaxIssueSkew after now
     IssuedBeforeCurrent,  // a newer number issued before the current generation
     Expired,              // past its expiry and its offline grace period
+    Absent,               // no generation was given (PolicyStore::start)
 };
 
 // "none", "bad-config", "buffer-too-small", "too-large", "truncated", "trailing-bytes", "bad-magic",
 // "unsupported-format", "bad-generation", "bad-dates", "bad-rule", "duplicate-rule", "duplicate-minimum", "unsigned",
 // "bad-signature-entry", "duplicate-signature", "missing-signature", "unsupported-signature", "bad-signature",
-// "rollback", "conflict", "already-current", "not-yet-issued", "issued-before-current", "expired".
+// "rollback", "conflict", "already-current", "not-yet-issued", "issued-before-current", "expired", "absent".
 [[nodiscard]] cont::StringView policy_error_name(PolicyError error) noexcept;
 
 [[nodiscard]] PolicyError validate_content(const PolicyContent& content) noexcept;
@@ -164,6 +165,9 @@ enum class PolicyError : u8
 
 // The body the signers sign: the magic, the format, the content.
 [[nodiscard]] PolicyError write_policy_body(const PolicyContent& content, cont::Span<u8> out, usize& written) noexcept;
+
+// Whether `body` is exactly one body as write_policy_body writes it: what a signer checks before it signs.
+[[nodiscard]] PolicyError check_policy_body(cont::ConstSpan<u8> body) noexcept;
 
 // A whole generation: `body` (as write_policy_body wrote it) followed by its signatures (1 to kMaxPolicySignatures,
 // each by another key).
@@ -238,6 +242,14 @@ private:
     PolicyContent m_content;
 };
 
+// What PolicyStore::start() did with each generation an installation holds when it starts: apply()'s answer, or
+// Absent for one it does not hold.
+struct PolicyStart
+{
+    PolicyError persisted = PolicyError::Absent;
+    PolicyError bootstrap = PolicyError::Absent;
+};
+
 // The installation's current generation. apply() and snapshot() may run on different threads.
 class PolicyStore
 {
@@ -248,6 +260,14 @@ public:
     // signatures are verified; every trust key's signature is verified before anything else is judged. On any
     // error the store is unchanged (AlreadyCurrent included).
     [[nodiscard]] PolicyError apply(cont::ConstSpan<u8> generation, u64 now) noexcept;
+
+    // A store's start (decision S23, #policy-start): the persisted generation (the newest one the installation
+    // accepted, saved with floor_generation()), then the build's bootstrap generation; an empty span is one it does
+    // not hold. A bootstrap newer than the persisted one supersedes it; an older one is a Rollback and the same one
+    // AlreadyCurrent, both harmless. So a floor above the bootstrap keeps the persisted generation, and a store is
+    // empty after start only when neither is usable (lost, expired past its grace, below the floor): every algorithm
+    // is then refused until a newer generation is applied.
+    [[nodiscard]] PolicyStart start(cont::ConstSpan<u8> persisted, cont::ConstSpan<u8> bootstrap, u64 now) noexcept;
 
     [[nodiscard]] PolicySnapshot snapshot() const noexcept;
 

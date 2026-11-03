@@ -411,6 +411,14 @@ TEST_CASE("Policy: the writers refuse what a reader would refuse", "[crypto][net
     trailing[0] = 'c';
     CHECK(write_policy(ConstSpan<u8>(trailing, body_size), ConstSpan<KeySignature>(signatures, 1U), out, written) ==
           PolicyError::BadMagic);
+
+    // What a signer checks before it signs: the body exactly, no more and no less.
+    CHECK(check_policy_body(message) == PolicyError::None);
+    CHECK(check_policy_body(ConstSpan<u8>(body, body_size - 1U)) == PolicyError::Truncated);
+    CHECK(check_policy_body(ConstSpan<u8>(trailing, body_size)) == PolicyError::BadMagic);
+    trailing[0] = body[0];
+    CHECK(check_policy_body(ConstSpan<u8>(trailing, body_size + 1U)) == PolicyError::TrailingBytes);
+    CHECK(check_policy_body(ConstSpan<u8>()) == PolicyError::Truncated);
 }
 
 TEST_CASE("Policy: the trust set is hybrid, distinct and complete", "[crypto][net-std]")
@@ -517,6 +525,78 @@ TEST_CASE("Policy: generation numbers only grow", "[crypto][net-std]")
     CHECK(restarted.apply(sign(base(9U, kT0 + kDay)).view(), kT0 + kDay) == PolicyError::None);
     CHECK(restarted.apply(sign(base(9U, kT0 + kDay)).view(), kT0 + kDay) == PolicyError::AlreadyCurrent);
     CHECK(restarted.floor_generation() == 9U);
+}
+
+TEST_CASE("Policy: a store starts from the persisted generation, then the bootstrap", "[crypto][net-std]")
+{
+    const TestVerifier verifier;
+    const Signed       persisted = sign(base(5U, kT0));
+    const ConstSpan<u8> none;
+    {
+        // A fresh installation: no persisted generation, the bootstrap is adopted.
+        PolicyStore       store(config(verifier));
+        const PolicyStart started = store.start(none, persisted.view(), kT0);
+        CHECK(started.persisted == PolicyError::Absent);
+        CHECK(started.bootstrap == PolicyError::None);
+        CHECK(store.snapshot().generation() == 5U);
+    }
+    {
+        // A floor above the bootstrap keeps the persisted generation; the older bootstrap is a harmless rollback.
+        PolicyStore       store(config(verifier, 5U));
+        const PolicyStart started = store.start(persisted.view(), sign(base(2U, kT0)).view(), kT0 + kDay);
+        CHECK(started.persisted == PolicyError::None);
+        CHECK(started.bootstrap == PolicyError::Rollback);
+        CHECK(store.snapshot().generation() == 5U);
+        CHECK(store.floor_generation() == 5U);
+    }
+    {
+        // The same generation persisted and built in.
+        PolicyStore       store(config(verifier, 5U));
+        const PolicyStart started = store.start(persisted.view(), persisted.view(), kT0);
+        CHECK(started.persisted == PolicyError::None);
+        CHECK(started.bootstrap == PolicyError::AlreadyCurrent);
+        CHECK(store.snapshot().generation() == 5U);
+    }
+    {
+        // A newer build's bootstrap supersedes the persisted generation.
+        PolicyStore       store(config(verifier, 5U));
+        const PolicyStart started = store.start(persisted.view(), sign(base(6U, kT0 + kDay)).view(), kT0 + kDay);
+        CHECK(started.persisted == PolicyError::None);
+        CHECK(started.bootstrap == PolicyError::None);
+        CHECK(store.snapshot().generation() == 6U);
+        CHECK(store.floor_generation() == 6U);
+    }
+    {
+        // A persisted generation lost or damaged: the bootstrap stands in when the floor allows it.
+        Signed damaged = persisted;
+        damaged.bytes[damaged.size - 1U] ^= 0x01U;
+        PolicyStore       store(config(verifier, 5U));
+        const PolicyStart started = store.start(damaged.view(), persisted.view(), kT0);
+        CHECK(started.persisted == PolicyError::BadSignature);
+        CHECK(started.bootstrap == PolicyError::None);
+        CHECK(store.snapshot().generation() == 5U);
+    }
+    {
+        // Neither usable: the persisted one expired past its grace, the bootstrap below the floor. The store stays
+        // empty and refuses everything until a newer generation arrives.
+        const u64         late = kT0 + 30U * kDay + 7U * kDay;
+        PolicyStore       store(config(verifier, 5U));
+        const PolicyStart started = store.start(persisted.view(), sign(base(4U, kT0)).view(), late);
+        CHECK(started.persisted == PolicyError::Expired);
+        CHECK(started.bootstrap == PolicyError::Rollback);
+        CHECK(store.snapshot().freshness(late) == Freshness::None);
+        CHECK(store.snapshot().status(AlgorithmId::X25519Mlkem768, late) == AlgorithmStatus::Refused);
+        CHECK(store.apply(sign(base(7U, late)).view(), late) == PolicyError::None);
+        CHECK(store.snapshot().status(AlgorithmId::X25519Mlkem768, late) == AlgorithmStatus::Preferred);
+    }
+    {
+        // Nothing held at all.
+        PolicyStore       store(config(verifier));
+        const PolicyStart started = store.start(none, none, kT0);
+        CHECK(started.persisted == PolicyError::Absent);
+        CHECK(started.bootstrap == PolicyError::Absent);
+        CHECK(store.snapshot().freshness(kT0) == Freshness::None);
+    }
 }
 
 TEST_CASE("Policy: issue skew, expiry and the offline grace period", "[crypto][net-std]")
@@ -820,6 +900,7 @@ TEST_CASE("Policy: error names are distinct and stable", "[crypto][net-std]")
         "not-yet-issued",
         "issued-before-current",
         "expired",
+        "absent",
     };
     constexpr usize count = sizeof(names) / sizeof(names[0]);
     for (usize i = 0U; i < count; ++i)
