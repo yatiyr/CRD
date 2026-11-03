@@ -136,6 +136,25 @@
       "route": "AMD CPU vendor cell: the dispatched kernel levels on real Zen 4 (avx512 through double-pumped units), complete tier."
     },
     {
+      "id": "gce-linux-x64-android-host",
+      "status": "active",
+      "kind": "VM",
+      "os": {"name": "Ubuntu", "version": "24.04 LTS"},
+      "cpu": {"model": "Intel Xeon Ice Lake (n2, nested virtualization)", "arch": "x86_64", "levels": ["portable", "sse2", "sse4.2", "avx2"]},
+      "gpu": {"vendor": "software", "model": "none", "apis": []},
+      "executor": "gce_vm",
+      "executor_config": {"machine_type": "n2-standard-8", "min_cpu_platform": "Intel Ice Lake", "nested_virtualization": true,
+                          "image_family": "cerid-ci-ubuntu-2404-x64-android",
+                          "base_image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64", "disk_gb": 150, "spot": true, "max_run_hours": 3},
+      "tier": "A",
+      "cost_class": "spot",
+      "cost_per_hour_usd": 0.12,
+      "ci_jobs": ["android"],
+      "features": ["build", "unit"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
+      "route": "Replaces the android job's ubuntu-24.04 hosted runner: builds the Android presets with the pinned NDK and runs their tests on the pinned emulator under KVM (scripts/android-device.py)."
+    },
+    {
       "id": "gce-linux-arm64-ampere",
       "status": "active",
       "kind": "VM",

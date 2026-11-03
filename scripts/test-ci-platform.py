@@ -22,6 +22,7 @@ import threading
 import time
 import unittest
 import urllib.parse
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'ci'))
@@ -509,7 +510,6 @@ class Plan(unittest.TestCase):
         self.assertEqual(pipeline.cerid_event({'CERID_CI_SOURCE': 'poll'})[0], 'push')
 
     def test_a_soft_failed_step_counts_as_passed_for_the_required_result(self):
-        from unittest import mock
         done = subprocess.CompletedProcess([], 0, 'soft_failed\n', '')
         with mock.patch.object(pipeline.subprocess, 'run', return_value=done) as run:
             self.assertEqual(pipeline.orchestrator_outcome('lane-x'), 'passed')
@@ -602,6 +602,50 @@ class Lanes(unittest.TestCase):
         self.assertTrue(any('annotate --context linux-gcc-release --style error --body-file' in t and
                             t.endswith('summary.md') for t in text))
         self.assertFalse(any('ci-evidence.py inventory' in t for t in text))
+
+    def test_android_lane_boots_the_emulator_and_always_collects_and_stops_it(self):
+        lane, commands = self.dry('android-x86_64-debug')
+        self.assertEqual(lane.device['id'], 'gce-linux-x64-android-host')
+        text = [' '.join(map(str, c['argv'])).replace('\\', '/') for c in commands]
+
+        def at(fragment):
+            return next(i for i, t in enumerate(text) if fragment in t)
+
+        self.assertLess(at('install-android-ndk.py'), at('cmake --preset android-x86_64-debug'))
+        self.assertLess(at('ls -l /dev/kvm'), at('android-device.py boot'))
+        self.assertLess(at('install-android-emulator.py --sdk'), at('android-device.py boot'))
+        self.assertLess(at('android-device.py boot'), at('ctest --preset android-x86_64-debug'))
+        self.assertLess(at('ctest --preset android-x86_64-debug'), at('adb logcat -d'))
+        self.assertLess(at('adb logcat -d'), at('android-device.py stop'))
+        bundle = text[at('ci-evidence.py bundle')]
+        self.assertNotIn('--packages', bundle)
+        self.assertNotIn('--adapters', bundle)
+
+        # A failed test still dumps the device log and shuts the emulator down before the evidence is bundled.
+        run = pipeline.Runner(environ={'PATH': ''}, dry=True, log=lambda *_: None)
+        lane = pipeline.Lane('android-x86_64-debug', lane.device, tiers=TIERS, run=run, temp=tempfile.mkdtemp())
+
+        def broken():
+            raise pipeline.LaneFailure(['ctest'], 8)
+
+        lane.test = broken
+        self.assertEqual(lane.execute(), 8)
+        text = [' '.join(map(str, c['argv'])) for c in run.commands]
+        self.assertTrue(any('logcat -d' in t for t in text))
+        self.assertTrue(any('android-device.py stop' in t for t in text))
+        self.assertEqual(lane.failed_phase, 'test')
+
+    def test_android_lane_refuses_a_kvm_device_closed_to_the_agent(self):
+        run = pipeline.Runner(environ={'PATH': ''}, dry=False, log=lambda *_: None)
+        device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-android-host']
+        lane = pipeline.Lane('android-x86_64-debug', device, tiers=TIERS, run=run, temp=tempfile.mkdtemp())
+        run_command = mock.patch.object(pipeline.Runner, '__call__', return_value=0)
+        with run_command, mock.patch.object(pipeline.os, 'access', return_value=False):
+            with self.assertRaises(pipeline.LaneFailure) as refused:
+                lane.kvm()
+        self.assertIn('/dev/kvm', str(refused.exception))
+        with run_command, mock.patch.object(pipeline.os, 'access', return_value=True):
+            lane.kvm()
 
     def test_per_test_cache_is_one_record_per_run(self):
         class CountingStore(pipeline.LocalStore):

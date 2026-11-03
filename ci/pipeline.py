@@ -1352,6 +1352,47 @@ class Lane:
                              self.temp / 'softhsm-dl', '--github-env', self.env_file))
         self.merge()
 
+    def android_ndk(self):
+        # The pinned NDK, never an image's: the Android presets read CRD_ANDROID_NDK.
+        self.run(self.helper('install-android-ndk.py', '--destination', self.temp / 'android-ndk', '--github-env',
+                             self.env_file))
+        self.merge()
+
+    def kvm(self):
+        # The emulator runs under KVM. The image provisioning puts the agent user in the kvm group, so the lane only
+        # proves the device is open to it; a closed device fails here, not as a boot timeout.
+        self.run(['ls', '-l', '/dev/kvm'])
+        if not self.run.dry and not os.access('/dev/kvm', os.R_OK | os.W_OK):
+            raise LaneFailure(['/dev/kvm is not readable and writable by the agent user'], 1)
+
+    def android_sdk(self):
+        return self.temp / 'android-sdk'
+
+    def android_emulator(self):
+        self.run(self.helper('install-android-emulator.py', '--sdk', self.android_sdk(), '--github-env',
+                             self.env_file))
+        self.merge()
+
+    def emulator_boot(self):
+        # android-device.py is the Android presets' CMAKE_CROSSCOMPILING_EMULATOR: discovery and every CTest command
+        # reach the device through ANDROID_SERIAL, which the boot writes.
+        self.run(self.helper('android-device.py', 'boot', '--log', self.temp / 'emulator.log', '--github-env',
+                             self.env_file))
+        self.merge()
+
+    def device_log(self):
+        # Always, as the hosted step: the device and emulator logs are evidence, and the emulator never outlives
+        # the lane.
+        logs = ROOT / self.build_dir / 'Testing/Temporary'
+        if not self.run.dry:
+            logs.mkdir(parents=True, exist_ok=True)
+        if self.env.get('ANDROID_SERIAL') or self.run.dry:
+            self.run([str(self.android_sdk() / 'platform-tools' / 'adb'), 'logcat', '-d'],
+                     stdout=logs / 'logcat.log', check=False)
+            self.run(self.helper('android-device.py', 'stop'), check=False)
+        if not self.run.dry and (self.temp / 'emulator.log').is_file():
+            shutil.copyfile(self.temp / 'emulator.log', logs / 'emulator.log')
+
     def apt(self):
         packages = APT_PACKAGES['arm64' if self.job == 'linux-arm64' else 'x64']
         missing = [] if self.run.dry else [p for p in packages if subprocess.run(
@@ -1544,9 +1585,9 @@ class Lane:
     def bundle(self):
         args = ['--preset', self.preset, '--build-dir', self.build_dir, '--outcome', self.status,
                 '--output', self.build_dir + '/evidence', '--summary', self.temp / 'summary.md']
-        if self.windows and self.job != 'windows-arm64':
+        if 'adapters' in self.PHASES[self.job]:
             args += ['--adapters', self.temp / 'adapters.txt']
-        if not self.windows:
+        if 'apt_census' in self.PHASES[self.job]:
             args += ['--packages', self.temp / 'packages.txt']
         if self.cached():
             args += ['--sccache-stats', self.temp / 'sccache.json']
@@ -1714,8 +1755,10 @@ class Lane:
                         'inventory', 'test', 'bundle', 'upload'],
         'windows-arm64': ['checkout', 'python_version', 'ninja', 'msvc', 'cpm_cache', 'configure', 'build',
                           'inventory', 'test', 'bundle', 'upload'],
+        'android': ['checkout', 'python_version', 'ninja', 'android_ndk', 'cpm_cache', 'configure', 'build', 'kvm',
+                    'android_emulator', 'emulator_boot', 'inventory', 'test', 'device_log', 'bundle', 'upload'],
     }
-    ALWAYS = ('sccache_stats', 'bundle', 'upload')
+    ALWAYS = ('sccache_stats', 'device_log', 'bundle', 'upload')
     UNLESS_CANCELLED = ('genmc',)
 
     def execute(self):
@@ -2137,7 +2180,9 @@ LANE_STEP_PHASES = {
     'Install pinned Vulkan headers and SPIRV-Reflect': 'vulkan_headers',
     'Install matching Vulkan validation layer': 'vulkan_validation',
     'Install clang-tidy (LLVM 20.1.8, pinned)': 'clang_tidy', 'Verify clang-tidy version': 'clang_tidy',
-    'Add LLVM to PATH': 'llvm_path',
+    'Add LLVM to PATH': 'llvm_path', 'Install the pinned Android NDK': 'android_ndk',
+    'Open KVM to the runner user': 'kvm', 'Install the pinned Android emulator kit': 'android_emulator',
+    'Boot the emulator': 'emulator_boot', 'Device log and shutdown': 'device_log',
 }
 FIXED_STEP_MAP = {
     'preflight': {

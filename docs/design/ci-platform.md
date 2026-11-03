@@ -548,6 +548,21 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `windows-arm64` | Test | `lane-<preset> (win-arm64-debug)` | Lane.test |
 | `windows-arm64` | Evidence bundle and summary | `lane-<preset> (win-arm64-debug)` | Lane.bundle |
 | `windows-arm64` | Preserve evidence | `lane-<preset> (win-arm64-debug)` | Lane.upload |
+| `android` | Checkout | `lane-<preset> (android-x86_64-debug)` | Lane.checkout |
+| `android` | Setup Python 3.12 | `lane-<preset> (android-x86_64-debug)` | Lane.python_version |
+| `android` | Install pinned Ninja 1.11.1 | `lane-<preset> (android-x86_64-debug)` | Lane.ninja |
+| `android` | Install the pinned Android NDK | `lane-<preset> (android-x86_64-debug)` | Lane.android_ndk |
+| `android` | Cache CPM downloads | `lane-<preset> (android-x86_64-debug)` | Lane.cpm_cache |
+| `android` | Configure | `lane-<preset> (android-x86_64-debug)` | Lane.configure |
+| `android` | Build | `lane-<preset> (android-x86_64-debug)` | Lane.build |
+| `android` | Open KVM to the runner user | `lane-<preset> (android-x86_64-debug)` | Lane.kvm |
+| `android` | Install the pinned Android emulator kit | `lane-<preset> (android-x86_64-debug)` | Lane.android_emulator |
+| `android` | Boot the emulator | `lane-<preset> (android-x86_64-debug)` | Lane.emulator_boot |
+| `android` | Test inventory | `lane-<preset> (android-x86_64-debug)` | Lane.inventory |
+| `android` | Test | `lane-<preset> (android-x86_64-debug)` | Lane.test |
+| `android` | Device log and shutdown | `lane-<preset> (android-x86_64-debug)` | Lane.device_log |
+| `android` | Evidence bundle and summary | `lane-<preset> (android-x86_64-debug)` | Lane.bundle |
+| `android` | Preserve evidence | `lane-<preset> (android-x86_64-debug)` | Lane.upload |
 | `required` | uses actions/checkout | `required` | agent checkout of the build commit |
 | `required` | uses actions/setup-python | `required` | the launcher image's Python 3.12 |
 | `required` | Every expected job ran and passed | `required` | pipeline.py conclude (ci-tier.py conclude rule) |
