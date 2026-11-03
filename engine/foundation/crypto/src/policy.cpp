@@ -2,8 +2,9 @@
 //
 //   body        magic "CRDPOLCY" | format u8 | generation u64 | issued u64 | expires u64 | offline grace u32
 //               | minimum count u8 | count x (protocol u16, major u16, minor u16)
-//               | rule count u8 | count x (algorithm u16, accepted from u64, preferred from u64, preferred until u64,
-//                                          refused from u64)
+//               | rule count u8 | count x (algorithm u16, scope u8, accepted from u64, preferred from u64,
+//                                          preferred until u64, refused from u64)
+//               (format 1, read only: no scope byte, every rule an Everywhere rule)
 //   signatures  count u8 | count x (key id 32 bytes, algorithm u16, length u16, length bytes)
 //
 // Every signature covers the body. Contract and rationale: docs/design/network-foundation.md#policy-wire.
@@ -23,7 +24,12 @@ using signed_artifact::saturating_add;
 
 constexpr usize kHeadBytes    = sizeof(kPolicyMagic) + 1U + 8U + 8U + 8U + 4U;
 constexpr usize kMinimumBytes = 6U;
-constexpr usize kRuleBytes    = 34U;
+constexpr usize kRuleBytes    = 35U;
+
+bool known_scope(PolicyScope scope) noexcept
+{
+    return scope == PolicyScope::Everywhere || scope == PolicyScope::CeridServices;
+}
 
 PolicyError validate_rule(const AlgorithmRule& rule) noexcept
 {
@@ -92,13 +98,15 @@ PolicyError read_body(cont::WireReader& reader, PolicyMessage& out) noexcept
     {
         AlgorithmRule& rule      = content.rules[i];
         u16            algorithm = 0U;
-        if (!reader.take_u16(algorithm) || !reader.take_u64(rule.accepted_from) ||
-            !reader.take_u64(rule.preferred_from) || !reader.take_u64(rule.preferred_until) ||
-            !reader.take_u64(rule.refused_from))
+        u8             scope     = 0U;
+        if (!reader.take_u16(algorithm) || (out.format >= 2U && !reader.take_u8(scope)) ||
+            !reader.take_u64(rule.accepted_from) || !reader.take_u64(rule.preferred_from) ||
+            !reader.take_u64(rule.preferred_until) || !reader.take_u64(rule.refused_from))
         {
             return PolicyError::Truncated;
         }
         rule.algorithm = static_cast<AlgorithmId>(algorithm);
+        rule.scope = static_cast<PolicyScope>(scope);
     }
     return validate_content(content);
 }
@@ -167,8 +175,9 @@ bool same_content(const PolicyContent& a, const PolicyContent& b) noexcept
     {
         const AlgorithmRule& x = a.rules[i];
         const AlgorithmRule& y = b.rules[i];
-        if (x.algorithm != y.algorithm || x.accepted_from != y.accepted_from || x.preferred_from != y.preferred_from ||
-            x.preferred_until != y.preferred_until || x.refused_from != y.refused_from)
+        if (x.algorithm != y.algorithm || x.scope != y.scope || x.accepted_from != y.accepted_from ||
+            x.preferred_from != y.preferred_from || x.preferred_until != y.preferred_until ||
+            x.refused_from != y.refused_from)
         {
             return false;
         }
@@ -176,14 +185,15 @@ bool same_content(const PolicyContent& a, const PolicyContent& b) noexcept
     return true;
 }
 
-// The generation as this build uses it: the rules of the algorithms it supports, in order.
+// The generation as this build uses it: the rules of the algorithms it supports in the scopes it knows, in order.
 PolicyContent within_ceiling(const PolicyContent& content, cont::ConstSpan<AlgorithmId> supported) noexcept
 {
     PolicyContent usable = content;
     usable.rule_count    = 0U;
     for (u32 i = 0U; i < content.rule_count; ++i)
     {
-        if (std::ranges::find(supported, content.rules[i].algorithm) != supported.end())
+        if (known_scope(content.rules[i].scope) &&
+            std::ranges::find(supported, content.rules[i].algorithm) != supported.end())
         {
             usable.rules[usable.rule_count++] = content.rules[i];
         }
@@ -284,7 +294,8 @@ PolicyError validate_content(const PolicyContent& content) noexcept
         }
         for (u32 j = 0U; j < i; ++j)
         {
-            if (content.rules[j].algorithm == content.rules[i].algorithm)
+            const AlgorithmRule& earlier = content.rules[j];
+            if (earlier.algorithm == content.rules[i].algorithm && earlier.scope == content.rules[i].scope)
             {
                 return PolicyError::DuplicateRule;
             }
@@ -329,6 +340,7 @@ PolicyError write_policy_body(const PolicyContent& content, cont::Span<u8> out, 
     {
         const AlgorithmRule& rule = content.rules[i];
         writer.put_u16(static_cast<u16>(rule.algorithm));
+        writer.put_u8(static_cast<u8>(rule.scope));
         writer.put_u64(rule.accepted_from);
         writer.put_u64(rule.preferred_from);
         writer.put_u64(rule.preferred_until);
@@ -441,28 +453,30 @@ Freshness PolicySnapshot::freshness(u64 now) const noexcept
     return now < saturating_add(m_content.expires, m_content.offline_grace) ? Freshness::Grace : Freshness::Expired;
 }
 
-AlgorithmStatus PolicySnapshot::status(AlgorithmId algorithm, u64 now) const noexcept
+AlgorithmStatus PolicySnapshot::status(AlgorithmId algorithm, u64 now, PolicyScope scope) const noexcept
 {
     const Freshness fresh = freshness(now);
     if (fresh != Freshness::Current && fresh != Freshness::Grace)
     {
         return AlgorithmStatus::Refused;
     }
+    // The scope's own rule wins over the Everywhere rule; the snapshot holds known scopes only.
+    const AlgorithmRule* governing = nullptr;
     for (u32 i = 0U; i < m_content.rule_count; ++i)
     {
         const AlgorithmRule& rule = m_content.rules[i];
-        if (rule.algorithm != algorithm)
+        if (rule.algorithm == algorithm && (rule.scope == scope || rule.scope == PolicyScope::Everywhere) &&
+            (governing == nullptr || rule.scope == scope))
         {
-            continue;
+            governing = &rule;
         }
-        if (now < rule.accepted_from || now >= rule.refused_from)
-        {
-            return AlgorithmStatus::Refused;
-        }
-        const bool preferred = now >= rule.preferred_from && now < rule.preferred_until;
-        return preferred ? AlgorithmStatus::Preferred : AlgorithmStatus::Accepted;
     }
-    return AlgorithmStatus::Refused;
+    if (governing == nullptr || now < governing->accepted_from || now >= governing->refused_from)
+    {
+        return AlgorithmStatus::Refused;
+    }
+    const bool preferred = now >= governing->preferred_from && now < governing->preferred_until;
+    return preferred ? AlgorithmStatus::Preferred : AlgorithmStatus::Accepted;
 }
 
 bool PolicySnapshot::allows_version(u16 protocol, u16 major, u16 minor) const noexcept

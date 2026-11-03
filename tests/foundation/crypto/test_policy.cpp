@@ -588,6 +588,118 @@ TEST_CASE("Policy: migration windows, the build's ceiling and unknown algorithms
     CHECK(empty.status(AlgorithmId::X25519Mlkem768, kT0) == AlgorithmStatus::Refused);
 }
 
+TEST_CASE("Policy: Cerid service sessions follow their own rules first", "[crypto][net-std]")
+{
+    // Classical X25519: every session accepts it until day 10 (base), Cerid services only until day 3; a services rule
+    // for ChaCha20-Poly1305 alone, which no other session follows; an AES-256-GCM rule in a scope no build knows yet.
+    const TestVerifier verifier;
+    PolicyStore store(config(verifier));
+    PolicyContent content = base(1U);
+    content.rules[4] = {AlgorithmId::X25519, kT0, kT0, kT0, kT0 + 3U * kDay, PolicyScope::CeridServices};
+    content.rules[5] = {AlgorithmId::Aes128Gcm, 0U, 0U, 0U, kNever, PolicyScope::CeridServices};
+    content.rules[6] = {AlgorithmId::Aes256Gcm, 0U, 0U, kNever, kNever, static_cast<PolicyScope>(7U)};
+    content.rule_count = 7U;
+    REQUIRE(validate_content(content) == PolicyError::None);
+    const Signed encoded = sign(content);
+    REQUIRE(encoded.size == body_size_of(content) + 1U + 2U * (kKeyIdBytes + 4U + kTestSignatureBytes));
+    PolicyMessage message;
+    REQUIRE(decode_policy(encoded.view(), message) == PolicyError::None);
+    for (u32 i = 0U; i < content.rule_count; ++i)
+    {
+        CHECK(message.content.rules[i].scope == content.rules[i].scope);
+    }
+    REQUIRE(store.apply(encoded.view(), kT0) == PolicyError::None);
+    const PolicySnapshot snapshot = store.snapshot();
+
+    constexpr PolicyScope kServices = PolicyScope::CeridServices;
+    CHECK(snapshot.status(AlgorithmId::X25519, kT0) == AlgorithmStatus::Preferred);
+    CHECK(snapshot.status(AlgorithmId::X25519, kT0, kServices) == AlgorithmStatus::Accepted);
+    CHECK(snapshot.status(AlgorithmId::X25519, kT0 + 3U * kDay - 1U, kServices) == AlgorithmStatus::Accepted);
+    CHECK(snapshot.status(AlgorithmId::X25519, kT0 + 3U * kDay, kServices) == AlgorithmStatus::Refused);
+    CHECK(snapshot.status(AlgorithmId::X25519, kT0 + 3U * kDay) == AlgorithmStatus::Preferred);
+    CHECK(snapshot.status(AlgorithmId::X25519, kT0 + 10U * kDay) == AlgorithmStatus::Refused);
+    // Without a services rule a service session follows the Everywhere rule; a services-only rule binds nothing else.
+    CHECK(snapshot.status(AlgorithmId::X25519Mlkem768, kT0, kServices) == AlgorithmStatus::Preferred);
+    CHECK(snapshot.status(AlgorithmId::Chacha20Poly1305, kT0 + 2U * kDay, kServices) == AlgorithmStatus::Preferred);
+    CHECK(snapshot.status(AlgorithmId::Aes128Gcm, kT0, kServices) == AlgorithmStatus::Accepted);
+    CHECK(snapshot.status(AlgorithmId::Aes128Gcm, kT0) == AlgorithmStatus::Refused);
+    // The unknown scope's rule stays signed but governs nothing in this build.
+    CHECK(snapshot.status(AlgorithmId::Aes256Gcm, kT0) == AlgorithmStatus::Refused);
+    CHECK(snapshot.status(AlgorithmId::Aes256Gcm, kT0, kServices) == AlgorithmStatus::Refused);
+    CHECK(snapshot.status(AlgorithmId::Aes256Gcm, kT0, static_cast<PolicyScope>(7U)) == AlgorithmStatus::Refused);
+    REQUIRE(snapshot.content().rule_count == 5U);
+    CHECK(snapshot.content().rules[3].scope == kServices);
+
+    // One rule per algorithm and scope; the same generation number with a rule moved to another scope conflicts.
+    PolicyContent twice = content;
+    twice.rules[5] = {AlgorithmId::X25519, 0U, 0U, 0U, kNever, kServices};
+    CHECK(validate_content(twice) == PolicyError::DuplicateRule);
+    PolicyContent moved = content;
+    moved.rules[5].scope = PolicyScope::Everywhere;
+    CHECK(store.apply(sign(moved).view(), kT0) == PolicyError::Conflict);
+    CHECK(store.apply(sign(content).view(), kT0) == PolicyError::AlreadyCurrent);
+}
+
+TEST_CASE("Policy: the N-1 reader takes format 1 generations as Everywhere rules", "[crypto][net-std]")
+{
+    // Format 1 is format 2 without the scope byte after each rule's algorithm.
+    const PolicyContent content = base(4U);
+    u8 body[2048];
+    usize size = 0U;
+    REQUIRE(write_policy_body(content, body, size) == PolicyError::None);
+    REQUIRE(body[8] == 2U);
+    const usize rules = 38U + 6U * content.minimum_count + 1U;
+    REQUIRE(size == rules + 35U * content.rule_count);
+    u8 older[2048];
+    usize at = rules;
+    std::memcpy(older, body, rules);
+    older[8] = 1U;
+    for (u32 i = 0U; i < content.rule_count; ++i)
+    {
+        const u8* rule = body + rules + 35U * i;
+        CHECK(rule[2] == static_cast<u8>(PolicyScope::Everywhere));
+        std::memcpy(older + at, rule, 2U);
+        std::memcpy(older + at + 2U, rule + 3U, 32U);
+        at += 34U;
+    }
+    const ConstSpan<u8> message(older, at);
+    u8 tags[2][kTestSignatureBytes];
+    KeySignature signatures[2];
+    for (u32 k = 0U; k < 2U; ++k)
+    {
+        test_sign(kTestTrust[k].algorithm, kTestTrust[k].public_key, message, tags[k]);
+        signatures[k] = {kTestTrust[k].id, kTestTrust[k].algorithm, ConstSpan<u8>(tags[k])};
+    }
+    Signed encoded;
+    REQUIRE(write_policy(message, ConstSpan<KeySignature>(signatures), encoded.bytes, encoded.size) ==
+            PolicyError::None);
+
+    PolicyMessage decoded;
+    REQUIRE(decode_policy(encoded.view(), decoded) == PolicyError::None);
+    CHECK(decoded.format == 1U);
+    CHECK(decoded.signed_bytes.size() == at);
+    REQUIRE(decoded.content.rule_count == content.rule_count);
+    for (u32 i = 0U; i < content.rule_count; ++i)
+    {
+        CHECK(decoded.content.rules[i].algorithm == content.rules[i].algorithm);
+        CHECK(decoded.content.rules[i].scope == PolicyScope::Everywhere);
+        CHECK(decoded.content.rules[i].accepted_from == content.rules[i].accepted_from);
+        CHECK(decoded.content.rules[i].refused_from == content.rules[i].refused_from);
+    }
+    // A truncated format 1 rule, and format 1 bytes read as format 2, are refused.
+    CHECK(decode(ConstSpan<u8>(encoded.bytes, at - 1U)) == PolicyError::Truncated);
+    Signed relabelled = encoded;
+    relabelled.bytes[8] = 2U;
+    CHECK(decode(relabelled.view()) != PolicyError::None);
+
+    const TestVerifier verifier;
+    PolicyStore store(config(verifier));
+    REQUIRE(store.apply(encoded.view(), kT0) == PolicyError::None);
+    CHECK(store.snapshot().status(AlgorithmId::X25519, kT0, PolicyScope::CeridServices) == AlgorithmStatus::Preferred);
+    // The same content again in format 2 is the current generation, not a conflict.
+    CHECK(store.apply(sign(content).view(), kT0) == PolicyError::AlreadyCurrent);
+}
+
 TEST_CASE("Policy: a remote disable reaches new sessions while running ones keep their snapshot", "[crypto][net-std]")
 {
     const TestVerifier verifier;

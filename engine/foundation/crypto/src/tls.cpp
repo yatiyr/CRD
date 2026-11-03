@@ -517,6 +517,57 @@ u64 unix_now() noexcept
     return now > 0 ? static_cast<u64>(now) : 0U;
 }
 
+// The provider's TLS 1.3 cipher suite list of `aeads`, each a known AEAD:
+// "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256" at most (75 bytes).
+struct SuiteList
+{
+    char text[96] = {};
+};
+
+bool suite_list_of(const AlgorithmId* aeads, usize count, SuiteList& out) noexcept
+{
+    usize length = 0U;
+    for (usize i = 0U; i < count; ++i)
+    {
+        const CipherSuite* suite = cipher_suite_of(aeads[i]);
+        if (suite == nullptr)
+        {
+            return false;
+        }
+        const cont::StringView name = suite->name;
+        if (length != 0U)
+        {
+            out.text[length++] = ':';
+        }
+        std::memcpy(out.text + length, name.data(), name.size());
+        length += name.size();
+    }
+    out.text[length] = '\0';
+    return true;
+}
+
+constexpr usize kMaxPolicyList = std::max({kTlsMaxGroups, kTlsMaxAeads, kTlsMaxSignatures});
+
+// Decision S20: keeps the algorithms of list[0, count) that `snapshot` does not refuse at `now` in `scope`, the
+// preferred ones first, each kind in the configured order; returns how many are left.
+u32 keep_allowed(const PolicySnapshot& snapshot, u64 now, PolicyScope scope, AlgorithmId* list, u32 count) noexcept
+{
+    AlgorithmId kept[kMaxPolicyList];
+    u32         left = 0U;
+    for (const AlgorithmStatus wanted : {AlgorithmStatus::Preferred, AlgorithmStatus::Accepted})
+    {
+        for (u32 i = 0U; i < count; ++i)
+        {
+            if (snapshot.status(list[i], now, scope) == wanted)
+            {
+                kept[left++] = list[i];
+            }
+        }
+    }
+    std::copy(kept, kept + left, list);
+    return left;
+}
+
 // What a client's ticket record holds besides its format version (TlsTicketStore).
 struct TicketRecord
 {
@@ -1287,6 +1338,11 @@ struct TlsCallbacks
             return TlsError::ProviderFailure;
         }
         state.m_settings = settings;
+        const TlsError policy = restrict_to_policy(ssl.get(), state);
+        if (policy != TlsError::None)
+        {
+            return policy;
+        }
         if (settings.role == TlsRole::Server)
         {
             if (early_server && !quic)
@@ -1313,6 +1369,53 @@ struct TlsCallbacks
         }
         return SSL_set_tlsext_host_name(ssl.get(), state.m_settings.server_name) == 1 ? TlsError::None
                                                                                       : TlsError::ProviderFailure;
+    }
+
+    // Decision S20: the session's offer and acceptance under the policy snapshot it takes now. The groups, AEADs and
+    // peer signature algorithms the generation refuses in the context's scope drop out, the preferred ones lead; a
+    // refused credential, or a list left empty, refuses the session before a byte is sent.
+    static TlsError restrict_to_policy(SSL* ssl, detail::TlsHandshakeState& state) noexcept
+    {
+        TlsSettings& settings = state.m_settings;
+        if (settings.policy == nullptr)
+        {
+            return TlsError::None;
+        }
+        const PolicySnapshot snapshot = settings.policy->snapshot();
+        const u64            now      = unix_now();
+        const PolicyScope    scope    = settings.policy_scope;
+        const bool           pinned   = settings.signature_count != 0U;
+        state.m_policy_generation     = snapshot.generation();
+        if (settings.credential_algorithm != AlgorithmId{} &&
+            snapshot.status(settings.credential_algorithm, now, scope) == AlgorithmStatus::Refused)
+        {
+            return TlsError::PolicyRefused;
+        }
+        settings.group_count     = keep_allowed(snapshot, now, scope, settings.groups, settings.group_count);
+        settings.aead_count      = keep_allowed(snapshot, now, scope, settings.aeads, settings.aead_count);
+        settings.signature_count = keep_allowed(snapshot, now, scope, settings.signatures, settings.signature_count);
+        if (settings.group_count == 0U || settings.aead_count == 0U || (pinned && settings.signature_count == 0U))
+        {
+            return TlsError::PolicyRefused;
+        }
+        u16 groups[kTlsMaxGroups];
+        for (u32 i = 0U; i < settings.group_count; ++i)
+        {
+            groups[i] = tls_group_codepoint(settings.groups[i]);
+        }
+        u16 schemes[kTlsMaxSignatures];
+        for (u32 i = 0U; i < settings.signature_count; ++i)
+        {
+            schemes[i] = tls_signature_codepoint(settings.signatures[i]);
+        }
+        SuiteList suites;
+        if (!suite_list_of(settings.aeads, settings.aead_count, suites) ||
+            !SSL_set1_group_ids(ssl, groups, settings.group_count) || !SSL_set_ciphersuites(ssl, suites.text) ||
+            (pinned && !SSL_set_verify_algorithm_prefs(ssl, schemes, settings.signature_count)))
+        {
+            return TlsError::ProviderFailure;
+        }
+        return TlsError::None;
     }
 
     // A client's first flight is out of the provider: a client given ECH configurations that encrypted no inner
@@ -1727,6 +1830,8 @@ cont::StringView tls_error_name(TlsError error) noexcept
         return "ech-rejected";
     case TlsError::ProviderFailure:
         return "provider-failure";
+    case TlsError::PolicyRefused:
+        return "policy-refused";
     }
     return "unknown";
 }
@@ -2182,7 +2287,9 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
         config.ticket_lifetime > kTlsMaxTicketLifetime || !valid_compression(config.certificate_compression) ||
         !valid_ech(config) || !valid_early_data(config) ||
         (config.key_log == nullptr && (config.key_log_user != nullptr || config.key_log_exporters)) ||
-        (config.key_log != nullptr && !tls_key_log_compiled()))
+        (config.key_log != nullptr && !tls_key_log_compiled()) ||
+        (config.policy == nullptr && config.policy_scope != PolicyScope::Everywhere) ||
+        (config.policy_scope != PolicyScope::Everywhere && config.policy_scope != PolicyScope::CeridServices))
     {
         return TlsError::BadConfig;
     }
@@ -2191,6 +2298,13 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     settings.role = config.role;
     std::copy(config.signatures.begin(), config.signatures.end(), settings.signatures);
     settings.signature_count = static_cast<u32>(config.signatures.size());
+    std::copy(config.groups.begin(), config.groups.end(), settings.groups);
+    settings.group_count = static_cast<u32>(config.groups.size());
+    std::copy(config.aeads.begin(), config.aeads.end(), settings.aeads);
+    settings.aead_count           = static_cast<u32>(config.aeads.size());
+    settings.credential_algorithm = config.credential != nullptr ? config.credential->algorithm() : AlgorithmId{};
+    settings.policy               = config.policy;
+    settings.policy_scope         = config.policy_scope;
     std::copy(config.pinned.begin(), config.pinned.end(), settings.pinned);
     settings.pin_count = static_cast<u32>(config.pinned.size());
     std::copy(config.server_name.begin(), config.server_name.end(), settings.server_name);
@@ -2224,23 +2338,10 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     {
         schemes[i] = tls_signature_codepoint(config.signatures[i]);
     }
-    // "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256" at most (75 bytes).
-    char  suites[96] = {};
-    usize length     = 0U;
-    for (const AlgorithmId aead : config.aeads)
+    SuiteList suites;
+    if (!suite_list_of(config.aeads.data(), config.aeads.size(), suites))
     {
-        const CipherSuite* suite = cipher_suite_of(aead);
-        if (suite == nullptr)
-        {
-            return TlsError::BadConfig;
-        }
-        const cont::StringView name = suite->name;
-        if (length != 0U)
-        {
-            suites[length++] = ':';
-        }
-        std::memcpy(suites + length, name.data(), name.size());
-        length += name.size();
+        return TlsError::BadConfig;
     }
 
     const ErrorScope          errors;
@@ -2248,7 +2349,7 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     if (!context || !SSL_CTX_set_min_proto_version(context.get(), TLS1_3_VERSION) ||
         !SSL_CTX_set_max_proto_version(context.get(), TLS1_3_VERSION) ||
         !SSL_CTX_set1_group_ids(context.get(), groups, config.groups.size()) ||
-        !SSL_CTX_set_ciphersuites(context.get(), suites))
+        !SSL_CTX_set_ciphersuites(context.get(), suites.text))
     {
         return TlsError::ProviderFailure;
     }
@@ -2440,6 +2541,7 @@ void detail::TlsHandshakeState::release() noexcept
     m_peer_key                = KeyId{};
     m_updates_sent            = 0U;
     m_updates_received        = 0U;
+    m_policy_generation = 0U;
     m_early_allowance = 0U;
     m_early_sent = 0U;
     m_ticket_early = 0U;
@@ -2464,6 +2566,30 @@ TlsError detail::TlsHandshakeState::fail(TlsError error) noexcept
 {
     m_state = TlsState::Failed;
     return error;
+}
+
+TlsError detail::TlsHandshakeState::check_policy() const noexcept
+{
+    if (m_state != TlsState::Established)
+    {
+        return TlsError::NotReady;
+    }
+    if (m_settings.policy == nullptr)
+    {
+        return TlsError::None;
+    }
+    const PolicySnapshot snapshot  = m_settings.policy->snapshot();
+    const u64            now       = unix_now();
+    const AlgorithmId    running[] = {m_group, m_aead, m_peer_algorithm, m_settings.credential_algorithm};
+    for (const AlgorithmId algorithm : running)
+    {
+        if (algorithm != AlgorithmId{} &&
+            snapshot.status(algorithm, now, m_settings.policy_scope) == AlgorithmStatus::Refused)
+        {
+            return TlsError::PolicyRefused;
+        }
+    }
+    return TlsError::None;
 }
 
 cont::ConstSpan<u8> detail::TlsHandshakeState::ech_retry_configs() const noexcept
@@ -2720,6 +2846,10 @@ TlsError TlsSession::send(cont::ConstSpan<u8> plaintext) noexcept
     {
         return close_at_bound();
     }
+    if (updates != 0U && check_policy() == TlsError::PolicyRefused)
+    {
+        return close_refused(); // before any record, so a refused send writes nothing
+    }
     for (usize at = 0U; at < plaintext.size(); at += kMaxRecordPlaintext)
     {
         if (records_under_key() >= per_key)
@@ -2847,6 +2977,10 @@ TlsError TlsSession::rekey(bool request_peer) noexcept
     {
         return close_at_bound();
     }
+    if (check_policy() == TlsError::PolicyRefused)
+    {
+        return close_refused();
+    }
     SSL* ssl = ssl_of(m_session);
     // A queued answer to the peer goes out first, or the provider would take this update for it.
     if (SSL_get_key_update_type(ssl) != SSL_KEY_UPDATE_NONE && !flush_key_update())
@@ -2871,6 +3005,18 @@ TlsError TlsSession::close_at_bound() noexcept
     }
     m_state = TlsState::Closed;
     return TlsError::Closed;
+}
+
+TlsError TlsSession::close_refused() noexcept
+{
+    // Decision S20: the policy now refuses what the session runs on. It ends cleanly at the key update rather than
+    // carry on under new keys of a refused algorithm.
+    if (SSL_shutdown(ssl_of(m_session)) < 0)
+    {
+        return fail(TlsError::Failed);
+    }
+    m_state = TlsState::Closed;
+    return TlsError::PolicyRefused;
 }
 
 TlsError TlsSession::update_keys(bool request_peer) noexcept
@@ -2900,14 +3046,21 @@ TlsError TlsSession::read(cont::Span<u8> out, usize& written) noexcept
         return TlsError::None;
     }
     const ErrorScope errors;
-    SSL*             ssl    = ssl_of(m_session);
-    const int        result = SSL_read(ssl, out.data(), static_cast<int>(std::min<usize>(out.size(), INT_MAX)));
-    const int        reason = result > 0 ? SSL_ERROR_NONE : SSL_get_error(ssl, result);
+    SSL*             ssl      = ssl_of(m_session);
+    const u64        received = m_updates_received;
+    const int        result   = SSL_read(ssl, out.data(), static_cast<int>(std::min<usize>(out.size(), INT_MAX)));
+    const int        reason   = result > 0 ? SSL_ERROR_NONE : SSL_get_error(ssl, result);
     if (reason != SSL_ERROR_NONE && reason != SSL_ERROR_WANT_READ && reason != SSL_ERROR_ZERO_RETURN)
     {
         return fail(TlsError::Failed);
     }
     written = result > 0 ? static_cast<usize>(result) : 0U;
+    // The peer updated its key: the session's next key update is the moment its policy is checked again (S20).
+    if (m_updates_received != received && reason != SSL_ERROR_ZERO_RETURN &&
+        check_policy() == TlsError::PolicyRefused)
+    {
+        return close_refused();
+    }
     // The provider queued its answer to a peer's update request: it goes out now when the outgoing bytes have room for
     // it, else ahead of the next record. An answer that reached max_key_updates ends the session after it.
     if (SSL_get_key_update_type(ssl) != SSL_KEY_UPDATE_NONE &&

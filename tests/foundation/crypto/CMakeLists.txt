@@ -29,6 +29,7 @@ add_executable(crd-crypto-tests
     test_tls.cpp
     test_tls_early.cpp
     test_tls_ech.cpp
+    test_tls_policy.cpp
 )
 
 target_link_libraries(crd-crypto-tests PRIVATE

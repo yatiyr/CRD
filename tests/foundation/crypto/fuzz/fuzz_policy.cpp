@@ -3,7 +3,7 @@
 // docs/design/test-instruments.md).
 //
 // Input. The first byte picks the mode, the rest is its data.
-//   0  a generation as bytes, decoded;
+//   0  a generation as bytes, decoded (format 2, and format 1 through the N-1 reader);
 //   1  a generated sequence: a floor, then up to eight generations whose content, signers and arrival times are read
 //      from the bytes, written by the writers, signed by the test signer and applied to one store.
 //
@@ -12,8 +12,9 @@
 //     decoder's exact result for every input, and an accepted generation's fields and views equal the restatement's;
 //   * a model of the contract's adoption rules (rollback before verification, every trust key's signature, conflict,
 //     issue skew, expiry with grace, issue order) decides every apply's exact result and the floor after it;
-//   * every snapshot's freshness, algorithm status and version minimums at the window and validity boundaries equal
-//     the model's, restated from the contract (the build's ceiling and ignore-unknown included).
+//   * every snapshot's freshness, algorithm status in each scope and version minimums at the window and validity
+//     boundaries equal the model's, restated from the contract (the build's ceiling, a scope's own rule over the
+//     Everywhere rule, and ignore-unknown for algorithms and scopes included).
 #include "../policy_test_signer.hpp"
 
 #include <crd/fuzz/harness.hpp>
@@ -69,7 +70,8 @@ struct Restated
     u16           algorithms[kMaxPolicySignatures] = {};
 };
 
-// The contract's validation order: generation, dates, counts, minimums, then each rule's window and uniqueness.
+// The contract's validation order: generation, dates, counts, minimums, then each rule's window and uniqueness in its
+// scope.
 PolicyError restate_content(const PolicyContent& c)
 {
     if (c.generation == 0U)
@@ -105,7 +107,7 @@ PolicyError restate_content(const PolicyContent& c)
         }
         for (u32 j = 0U; j < i; ++j)
         {
-            if (c.rules[j].algorithm == r.algorithm)
+            if (c.rules[j].algorithm == r.algorithm && c.rules[j].scope == r.scope)
             {
                 return PolicyError::DuplicateRule;
             }
@@ -138,10 +140,12 @@ Restated restate(const u8* d, usize n)
     {
         return fail(PolicyError::Truncated);
     }
-    if (d[8] != 1U)
+    if (d[8] != 1U && d[8] != 2U)
     {
         return fail(PolicyError::UnsupportedFormat);
     }
+    const usize rule_bytes = d[8] == 1U ? 34U : 35U; // format 2 adds the scope byte after the algorithm
+    const usize window = rule_bytes - 32U;
     if (n < 37U)
     {
         return fail(PolicyError::Truncated);
@@ -178,14 +182,19 @@ Restated restate(const u8* d, usize n)
     {
         return fail(PolicyError::TooLarge);
     }
-    if (n < at + 34U * c.rule_count)
+    if (n < at + rule_bytes * c.rule_count)
     {
         return fail(PolicyError::Truncated);
     }
-    for (u32 i = 0U; i < c.rule_count; ++i, at += 34U)
+    for (u32 i = 0U; i < c.rule_count; ++i, at += rule_bytes)
     {
-        c.rules[i] = {static_cast<AlgorithmId>(be16(d + at)), be64(d + at + 2U), be64(d + at + 10U),
-                      be64(d + at + 18U), be64(d + at + 26U)};
+        const PolicyScope scope = rule_bytes == 35U ? static_cast<PolicyScope>(d[at + 2U]) : PolicyScope::Everywhere;
+        c.rules[i] = {static_cast<AlgorithmId>(be16(d + at)),
+                      be64(d + at + window),
+                      be64(d + at + window + 8U),
+                      be64(d + at + window + 16U),
+                      be64(d + at + window + 24U),
+                      scope};
     }
     const PolicyError content = restate_content(c);
     if (content != PolicyError::None)
@@ -257,7 +266,7 @@ void decode_checked(const u8* data, usize size)
     }
     const PolicyContent& a = out.content;
     const PolicyContent& b = expected.content;
-    CRD_FUZZ_REQUIRE(out.format == 1U && a.generation == b.generation && a.issued == b.issued &&
+    CRD_FUZZ_REQUIRE(out.format == data[8] && a.generation == b.generation && a.issued == b.issued &&
                      a.expires == b.expires && a.offline_grace == b.offline_grace);
     CRD_FUZZ_REQUIRE(a.minimum_count == b.minimum_count && a.rule_count == b.rule_count);
     for (u32 i = 0U; i < a.minimum_count; ++i)
@@ -267,7 +276,7 @@ void decode_checked(const u8* data, usize size)
     }
     for (u32 i = 0U; i < a.rule_count; ++i)
     {
-        CRD_FUZZ_REQUIRE(a.rules[i].algorithm == b.rules[i].algorithm &&
+        CRD_FUZZ_REQUIRE(a.rules[i].algorithm == b.rules[i].algorithm && a.rules[i].scope == b.rules[i].scope &&
                          a.rules[i].accepted_from == b.rules[i].accepted_from &&
                          a.rules[i].preferred_from == b.rules[i].preferred_from &&
                          a.rules[i].preferred_until == b.rules[i].preferred_until &&
@@ -337,10 +346,12 @@ PolicyContent draw_content(Draw& draw)
         r.preferred_until = r.preferred_from + draw.next() * kHour;
         const u8 refused  = draw.next();
         r.refused_from    = refused == 255U ? kNever : r.preferred_until + refused * kHour;
-        if (draw.next() % 16U == 0U)
+        const u8 shape = draw.next();
+        if (shape % 16U == 0U)
         {
             r.preferred_from = r.preferred_until + 1U; // a window out of order
         }
+        r.scope = static_cast<PolicyScope>((shape / 16U) % 3U); // Everywhere, CeridServices or a scope yet unknown
     }
     return c;
 }
@@ -356,7 +367,24 @@ struct Encoded
     usize size        = 0U;
 };
 
-bool encode(const PolicyContent& content, u8 signers, Encoded& out)
+// The format 1 body of `body` (written by write_policy_body for Everywhere rules only): the scope bytes removed.
+usize to_format_1(const PolicyContent& content, u8* body, usize size)
+{
+    body[8] = 1U;
+    const usize at = 38U + 6U * content.minimum_count + 1U;
+    usize out = at;
+    for (u32 i = 0U; i < content.rule_count; ++i)
+    {
+        const usize rule = at + 35U * i;
+        std::memmove(body + out, body + rule, 2U);
+        std::memmove(body + out + 2U, body + rule + 3U, 32U);
+        out += 34U;
+    }
+    CRD_FUZZ_REQUIRE(out + content.rule_count == size);
+    return out;
+}
+
+bool encode(const PolicyContent& content, u8 signers, Encoded& out, bool format_1 = false)
 {
     u8    body[2048];
     usize body_size = 0U;
@@ -365,6 +393,10 @@ bool encode(const PolicyContent& content, u8 signers, Encoded& out)
     if (written != PolicyError::None)
     {
         return false;
+    }
+    if (format_1)
+    {
+        body_size = to_format_1(content, body, body_size);
     }
     KeySignature    signatures[2];
     u8              tags[2][kTestSignatureBytes];
@@ -418,8 +450,9 @@ bool same(const PolicyContent& a, const PolicyContent& b)
     {
         const AlgorithmRule& x = a.rules[i];
         const AlgorithmRule& y = b.rules[i];
-        if (x.algorithm != y.algorithm || x.accepted_from != y.accepted_from || x.preferred_from != y.preferred_from ||
-            x.preferred_until != y.preferred_until || x.refused_from != y.refused_from)
+        if (x.algorithm != y.algorithm || x.scope != y.scope || x.accepted_from != y.accepted_from ||
+            x.preferred_from != y.preferred_from || x.preferred_until != y.preferred_until ||
+            x.refused_from != y.refused_from)
         {
             return false;
         }
@@ -463,26 +496,39 @@ PolicyError expected_apply(Model& model, const PolicyContent& c, u8 signers, u64
     return PolicyError::None;
 }
 
-AlgorithmStatus expected_status(const Model& model, usize drawn, u64 t)
+// A scope's own rule governs it when the generation has one, else the Everywhere rule; rules of other scopes (an
+// unknown one included) never do.
+const AlgorithmRule* governing_rule(const PolicyContent& c, AlgorithmId algorithm, PolicyScope scope)
+{
+    for (u32 i = 0U; i < c.rule_count; ++i)
+    {
+        if (c.rules[i].algorithm == algorithm && c.rules[i].scope == scope)
+        {
+            return &c.rules[i];
+        }
+    }
+    for (u32 i = 0U; i < c.rule_count; ++i)
+    {
+        if (c.rules[i].algorithm == algorithm && c.rules[i].scope == PolicyScope::Everywhere)
+        {
+            return &c.rules[i];
+        }
+    }
+    return nullptr;
+}
+
+AlgorithmStatus expected_status(const Model& model, usize drawn, u64 t, PolicyScope scope)
 {
     if (!model.has || t >= model.current.expires + model.current.offline_grace || !kDrawnSupported[drawn])
     {
         return AlgorithmStatus::Refused;
     }
-    for (u32 i = 0U; i < model.current.rule_count; ++i)
+    const AlgorithmRule* r = governing_rule(model.current, kDrawn[drawn], scope);
+    if (r == nullptr || t < r->accepted_from || t >= r->refused_from)
     {
-        const AlgorithmRule& r = model.current.rules[i];
-        if (r.algorithm == kDrawn[drawn])
-        {
-            if (t < r.accepted_from || t >= r.refused_from)
-            {
-                return AlgorithmStatus::Refused;
-            }
-            return t >= r.preferred_from && t < r.preferred_until ? AlgorithmStatus::Preferred
-                                                                  : AlgorithmStatus::Accepted;
-        }
+        return AlgorithmStatus::Refused;
     }
-    return AlgorithmStatus::Refused;
+    return t >= r->preferred_from && t < r->preferred_until ? AlgorithmStatus::Preferred : AlgorithmStatus::Accepted;
 }
 
 Freshness expected_freshness(const PolicyContent& c, u64 t)
@@ -520,7 +566,9 @@ void check_snapshot(const Model& model, const PolicySnapshot& snapshot, u64 now)
         CRD_FUZZ_REQUIRE(snapshot.freshness(t) == expected_freshness(c, t));
         for (usize a = 0U; a < kDrawnCount; ++a)
         {
-            CRD_FUZZ_REQUIRE(snapshot.status(kDrawn[a], t) == expected_status(model, a, t));
+            CRD_FUZZ_REQUIRE(snapshot.status(kDrawn[a], t) == expected_status(model, a, t, PolicyScope::Everywhere));
+            CRD_FUZZ_REQUIRE(snapshot.status(kDrawn[a], t, PolicyScope::CeridServices) ==
+                             expected_status(model, a, t, PolicyScope::CeridServices));
         }
     }
     for (u16 protocol = 1U; protocol <= 3U; ++protocol)
@@ -621,8 +669,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     changed.bytes[0] = 'c';
     add(sink, "policy-bad-magic", 0U, changed.bytes, changed.size);
     changed = honest;
-    changed.bytes[8] = 2U;
+    changed.bytes[8] = kPolicyFormat + 1U;
     add(sink, "policy-future-format", 0U, changed.bytes, changed.size);
+    changed = honest;
+    changed.bytes[8] = 0U;
+    add(sink, "policy-format-0", 0U, changed.bytes, changed.size);
     changed = honest;
     changed.bytes[37] = 17U;
     add(sink, "policy-too-many-minimums", 0U, changed.bytes, changed.size);
@@ -642,6 +693,25 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     changed.bytes[body + 1U + kKeyIdBytes + 3U] = 0x01U;
     add(sink, "policy-oversized-signature", 0U, changed.bytes, changed.size);
 
+    // The same generation in format 1 (the N-1 reader), and in format 2 with a Cerid services rule refusing X25519 a
+    // day before every other session does, then that rule repeated (a duplicate in its scope).
+    static Encoded older;
+    if (encode(content, kPostQuantum | kClassical, older, true))
+    {
+        add(sink, "policy-format-1", 0U, older.bytes, older.size);
+    }
+    content.rules[2] = {AlgorithmId::X25519, kT0, kT0, kT0, kT0 + kDay, PolicyScope::CeridServices};
+    content.rule_count = 3U;
+    static Encoded scoped;
+    if (encode(content, kPostQuantum | kClassical, scoped))
+    {
+        add(sink, "policy-services-scope", 0U, scoped.bytes, scoped.size);
+    }
+    changed = scoped;
+    const usize rules = 38U + 6U + 1U;
+    changed.bytes[rules + 35U + 2U] = static_cast<u8>(PolicyScope::CeridServices); // rule 1 joins rule 2's scope
+    add(sink, "policy-duplicate-in-scope", 0U, changed.bytes, changed.size);
+
     // Generated sequences: honest growth, a rollback and a replay, a forged and a half-signed generation, an expired
     // one and one issued in the future.
     const u8 growth[] = {0U, 1U, 10U, 30U, 7U, 1U, 2U, 1U, 0U, 2U, 0U, 1U, 2U, 3U, 255U, 1U, 4U, 5U, 6U, 7U, 1U, 3U,
@@ -654,6 +724,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     add(sink, "sequence-forged-half-signed", 1U, forged, sizeof(forged));
     const u8 dated[] = {0U, 1U, 0U, 1U, 0U, 0U, 0U, 3U, 200U, 60U, 2U, 250U, 30U, 7U, 0U, 0U, 3U, 0U, 0U};
     add(sink, "sequence-expired-future", 1U, dated, sizeof(dated));
+    // Scopes: X25519 accepted everywhere until hour 72 but refused for Cerid services from hour 10, and a
+    // ChaCha20-Poly1305 rule in a scope no build knows yet, which governs nothing.
+    const u8 scopes[] = {0U, 1U, 0U, 30U, 7U, 0U, 3U, 1U, 0U,  0U,   24U, 48U, 1U, 1U, 0U, 0U,
+                         0U, 10U, 17U, 2U, 0U, 0U, 0U, 255U, 33U, 3U, 0U, 0U};
+    add(sink, "sequence-scopes", 1U, scopes, sizeof(scopes));
 
     // A whole lifecycle, one step per line (content, then signers and arrival): generation 1 adopted with a rule for
     // each drawn algorithm the build supports and one it does not; generation 1 again with other content (conflict);

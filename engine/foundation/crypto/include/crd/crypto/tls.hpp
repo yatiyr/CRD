@@ -161,9 +161,13 @@ enum class TlsError : u8
     EchRejected,     // a client's ECH offer was rejected and the server authenticated (by a pinned key): the session
                      // never carries data, and ech() tells what the client may do next
     ProviderFailure, // the provider failed (no memory, no randomness)
+    PolicyRefused,   // the context's policy generation refuses every configured group, AEAD or peer signature
+                     // algorithm, or its own credential's (init), or, at a key update, an algorithm the session runs on
+                     // (the session is then closed with close_notify, decision S20)
 };
 
-// "none", "bad-config", "not-ready", "full", "peer-refused", "failed", "closed", "ech-rejected", "provider-failure".
+// "none", "bad-config", "not-ready", "full", "peer-refused", "failed", "closed", "ech-rejected", "provider-failure",
+// "policy-refused".
 [[nodiscard]] cont::StringView tls_error_name(TlsError error) noexcept;
 
 // What became of Encrypted Client Hello in a handshake (RFC 9849).
@@ -402,6 +406,14 @@ struct TlsConfig
     TlsKeyLogSink key_log           = nullptr;
     void*         key_log_user      = nullptr;
     bool          key_log_exporters = false;
+    // The installation's crypto policy (decision S20; policy.hpp), outliving the context, or none (the configured lists
+    // as given: tests and tools only; a product always names its store). Each session takes a snapshot when it starts:
+    // the groups, AEADs and peer signature algorithms the generation refuses at that time in `policy_scope` drop out of
+    // its offer and its acceptance, the preferred ones lead in the configured order, and a session whose own credential
+    // is refused, or with nothing left of a list, is PolicyRefused. At each key update the session checks its
+    // negotiated group, AEAD, peer key and credential against the store again and closes when one is refused.
+    const PolicyStore* policy       = nullptr;
+    PolicyScope        policy_scope = PolicyScope::Everywhere; // CeridServices for a Cerid service's sessions
 };
 
 // The settings a session copies from its context.
@@ -410,6 +422,13 @@ struct TlsSettings
     TlsRole     role = TlsRole::Client;
     AlgorithmId signatures[kTlsMaxSignatures]{};
     u32         signature_count = 0U;
+    AlgorithmId groups[kTlsMaxGroups]{}; // as configured; a session keeps those its policy snapshot allows
+    u32         group_count = 0U;
+    AlgorithmId aeads[kTlsMaxAeads]{};
+    u32         aead_count = 0U;
+    AlgorithmId credential_algorithm{}; // AlgorithmId{} without a credential
+    PolicyScope policy_scope = PolicyScope::Everywhere;
+    const PolicyStore* policy = nullptr;
     KeyId       pinned[kTlsMaxPins];
     u32         pin_count = 0U;
     char        server_name[kTlsMaxNameBytes + 1U] = {};
@@ -537,6 +556,16 @@ public:
     [[nodiscard]] TlsError export_keying_material(cont::StringView label, cont::ConstSpan<u8> context,
                                                   cont::Span<u8> out) const noexcept;
 
+    // The policy generation the session started under (0 without a policy or before init()).
+    [[nodiscard]] u64 policy_generation() const noexcept { return m_policy_generation; }
+
+    // Established only (NotReady otherwise): whether the context's policy store still accepts, now, in the context's
+    // scope, the negotiated group (none on a resumption without a key share) and AEAD, the peer key's algorithm and
+    // the session's own credential's; None without a policy, PolicyRefused naming the first refused one. A stream
+    // session checks at each of its key updates (decision S20); a QUIC transport calls it before each
+    // QuicPacketKey::update and closes the connection on PolicyRefused.
+    [[nodiscard]] TlsError check_policy() const noexcept;
+
 protected:
     TlsHandshakeState() noexcept  = default;
     ~TlsHandshakeState() noexcept = default;
@@ -557,6 +586,7 @@ protected:
     KeyId               m_peer_key;
     u64                 m_updates_sent     = 0U;
     u64                 m_updates_received = 0U;
+    u64                 m_policy_generation = 0U;
     u32                 m_early_allowance  = 0U; // a client's: the early bytes its offered ticket allows
     u32                 m_early_sent       = 0U; // a client's: the early bytes sent
     u32                 m_ticket_early     = 0U; // a client's: what the last NewSessionTicket allows
@@ -620,7 +650,9 @@ public:
 
     // Established only. send() protects all of `plaintext` into the outgoing bytes or nothing (Full when they would
     // exceed the bound); read() returns the application data received so far, up to out.size() bytes (0 when none),
-    // and Closed once the peer's close_notify has been read.
+    // and Closed once the peer's close_notify has been read. Where a key update falls due (send() before its records,
+    // read() after the peer's KeyUpdate) and check_policy() refuses, the session queues close_notify and is Closed:
+    // PolicyRefused, with nothing of `plaintext` sent, or with the bytes read before it in `out`.
     [[nodiscard]] TlsError send(cont::ConstSpan<u8> plaintext) noexcept;
     [[nodiscard]] TlsError read(cont::Span<u8> out, usize& written) noexcept;
 
@@ -647,8 +679,9 @@ public:
     // Established only: updates the sending key now (a KeyUpdate in the outgoing bytes) and, with `request_peer`, asks
     // the peer to update its own, unless a request is already outstanding (RFC 9846 section 4.7.3: the peer has not
     // answered it yet; the session's own key still updates). Full when the outgoing bytes have no room for it; Closed
-    // when the update would reach max_key_updates, after close_notify was queued instead. send() updates the key by
-    // itself before key_update_records() records, and read() answers a peer's request.
+    // when the update would reach max_key_updates, and PolicyRefused when check_policy() refuses, after close_notify
+    // was queued instead. send() updates the key by itself before key_update_records() records, and read() answers a
+    // peer's request.
     [[nodiscard]] TlsError update_keys(bool request_peer) noexcept;
 
     // The key updates sent and received, the records (data and alerts) protected so far under the current sending
@@ -665,6 +698,7 @@ private:
     [[nodiscard]] TlsError established() noexcept;
     [[nodiscard]] TlsError rekey(bool request_peer) noexcept;
     [[nodiscard]] TlsError close_at_bound() noexcept;
+    [[nodiscard]] TlsError close_refused() noexcept;
     void                   flush() noexcept;
     [[nodiscard]] bool     flush_key_update() noexcept;
 

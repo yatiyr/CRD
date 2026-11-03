@@ -15,6 +15,8 @@
 //   windows     an algorithm is accepted in [accepted_from, refused_from) and preferred in [preferred_from,
 //               preferred_until); outside a window, or without a rule, it is refused. A generation that refuses an
 //               algorithm at once is the remote disable.
+//   scopes      a rule governs every session or only Cerid service sessions, which follow their own rule where the
+//               generation has one: the dated refusal of classical-only key exchange reaches Cerid services first.
 //   ceiling     a rule takes effect only for an algorithm the build's providers implement, so a generation can never
 //               enable what a reviewed build does not hold, while removals reach every build.
 //   freshness   a generation is current until it expires, usable for its offline grace period after that, and then
@@ -37,8 +39,8 @@ namespace crd::crypto
 {
 namespace cont = crd::containers;
 
-inline constexpr u8    kPolicyFormat        = 1U;          // the layout this build writes
-inline constexpr u8    kPolicyFormatOldest  = 1U;          // the oldest layout it reads (N-1 once layout 2 exists)
+inline constexpr u8    kPolicyFormat        = 2U;          // the layout this build writes (rules carry a scope)
+inline constexpr u8    kPolicyFormatOldest  = 1U;          // the oldest layout it reads (N-1: format 1, no scopes)
 inline constexpr u8    kPolicyMagic[8]      = {'C', 'R', 'D', 'P', 'O', 'L', 'C', 'Y'};
 inline constexpr usize kKeyIdBytes          = 32U;         // a key's identifier (the SHA-256 of its public key)
 inline constexpr u32   kMaxPolicyRules      = 32U;         // algorithm rules in one generation
@@ -59,8 +61,18 @@ struct KeyId
     friend bool operator==(const KeyId&, const KeyId&) = default;
 };
 
-// One algorithm's window; the bounds keep accepted_from <= preferred_from <= preferred_until <= refused_from and
-// accepted_from < refused_from. preferred_from == preferred_until: never preferred.
+// The sessions a rule governs (decision 9). A Cerid service session (TlsConfig::policy_scope) follows its algorithm's
+// CeridServices rule when the generation has one and the Everywhere rule otherwise; every other session follows the
+// Everywhere rule. A scope this build does not know decodes, stays signed and governs nothing here, so a later build
+// can add one. Format 1 rules are Everywhere rules.
+enum class PolicyScope : u8
+{
+    Everywhere    = 0U,
+    CeridServices = 1U,
+};
+
+// One algorithm's window in one scope; the bounds keep accepted_from <= preferred_from <= preferred_until <=
+// refused_from and accepted_from < refused_from. preferred_from == preferred_until: never preferred.
 struct AlgorithmRule
 {
     AlgorithmId algorithm{};
@@ -68,6 +80,7 @@ struct AlgorithmRule
     u64         preferred_from  = 0U;
     u64         preferred_until = 0U;
     u64         refused_from    = kNever;
+    PolicyScope scope = PolicyScope::Everywhere;
 };
 
 // The lowest version of a Cerid protocol (crd-net's ProtocolId) a session may negotiate.
@@ -78,7 +91,8 @@ struct MinimumVersion
     u16 minor    = 0U;
 };
 
-// What one generation says. Rules and minimums keep their order; each algorithm and each protocol appears once.
+// What one generation says. Rules and minimums keep their order; each algorithm appears once per scope and each
+// protocol once.
 struct PolicyContent
 {
     u64            generation    = 0U; // 1 or more
@@ -121,7 +135,7 @@ enum class PolicyError : u8
     BadGeneration,        // generation number 0
     BadDates,             // expiry not after issue, a lifetime or a grace period above its bound
     BadRule,              // algorithm 0 or a window out of order
-    DuplicateRule,        // an algorithm with two rules
+    DuplicateRule,        // an algorithm with two rules in one scope
     DuplicateMinimum,     // a protocol with two minimums
     Unsigned,             // no signature
     BadSignatureEntry,    // an empty signature
@@ -198,7 +212,7 @@ enum class AlgorithmStatus : u8
 };
 
 // One generation as a session holds it: a value, unaffected by later generations. Its rules are the generation's
-// rules for the algorithms the build supports, in the generation's order.
+// rules for the algorithms the build supports in the scopes it knows, in the generation's order.
 class PolicySnapshot
 {
 public:
@@ -206,9 +220,10 @@ public:
     [[nodiscard]] const PolicyContent& content() const noexcept { return m_content; }
     [[nodiscard]] Freshness            freshness(u64 now) const noexcept;
 
-    // Refused when the generation is missing or expired, the build lacks the algorithm or `now` is outside its
-    // window; Preferred inside its preferred window; Accepted otherwise.
-    [[nodiscard]] AlgorithmStatus status(AlgorithmId algorithm, u64 now) const noexcept;
+    // Refused when the generation is missing or expired, the build lacks the algorithm or `now` is outside the window
+    // of the rule `scope` follows; Preferred inside its preferred window; Accepted otherwise.
+    [[nodiscard]] AlgorithmStatus status(AlgorithmId algorithm, u64 now,
+                                         PolicyScope scope = PolicyScope::Everywhere) const noexcept;
 
     // Whether a session may use `major.minor` of `protocol`: true when the generation sets no minimum for it.
     [[nodiscard]] bool allows_version(u16 protocol, u16 major, u16 minor) const noexcept;
