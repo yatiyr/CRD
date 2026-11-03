@@ -129,7 +129,7 @@ class EndToEnd(unittest.TestCase):
             'mirrored': dict(repo_config, checkout='mirror', depth=1,
                              pipeline={'command': upload_command('cancel.json'), 'queue': 'e2e'})},
             'limits': {'lost_after_seconds': 30, 'cancel_grace_seconds': 20, 'idle_poll_seconds': 0.2}}
-        cls.log = scheduler.JsonLog(open(os.devnull, 'w'))
+        cls.log = scheduler.JsonLog(open(root / 'coordinator.log', 'w', encoding='utf-8'))
         mirror = triggers.Mirror(root / 'mirror')
         cls.c = scheduler.Coordinator(cls.store, config, secrets=scheduler.DirectorySecrets(secrets), log=cls.log,
                                       mirror=mirror)
@@ -185,10 +185,20 @@ class EndToEnd(unittest.TestCase):
             error.close()
             return error.code, json.loads(payload or b'{}') if not raw else payload
 
+    def build(self, number):
+        """The build's record; any other answer fails with the coordinator's log (a 500's trace goes there)."""
+        status, build = self.call('GET', '/api/builds/%d' % number)
+        if status != 200:
+            self.log.stream.flush()
+            coordinator = Path(self.scratch.name, 'coordinator.log').read_text(encoding='utf-8', errors='replace')
+            self.fail('GET build %d answered %d %s\ncoordinator:\n%s' % (number, status, json.dumps(build),
+                                                                        coordinator[-3000:]))
+        return build
+
     def wait_for(self, number, states, timeout=90):
         deadline = time.time() + timeout
         while time.time() < deadline:
-            _, build = self.call('GET', '/api/builds/%d' % number)
+            build = self.build(number)
             if build['state'] in states:
                 return build
             time.sleep(0.25)
@@ -242,7 +252,7 @@ class EndToEnd(unittest.TestCase):
         deadline = time.time() + 60
         sleeper = None
         while time.time() < deadline:
-            _, build = self.call('GET', '/api/builds/%d' % number)
+            build = self.build(number)
             sleeper = next((j for j in build['jobs'] if j['key'] == 'sleep'), None)
             if sleeper and sleeper['state'] == 'running':
                 _, log = self.call('GET', '/api/jobs/%s/log' % sleeper['id'])
