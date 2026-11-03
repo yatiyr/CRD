@@ -165,8 +165,10 @@ def instrumentation_exit(code, bundle):
 def instrument(args):
     adb = adb_command(args.serial)
     subprocess.run(adb + ['uninstall', args.package], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if subprocess.run(adb + ['install', '-t', str(args.apk)], stdout=subprocess.DEVNULL).returncode != 0:
-        print('adb install %s failed' % args.apk, file=sys.stderr)
+    installed = subprocess.run(adb + ['install', '-t', str(args.apk)], stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True)
+    if installed.returncode != 0:
+        print('adb install %s failed:\n%s' % (args.apk, installed.stdout), file=sys.stderr)
         return 1
     try:
         command = instrument_command(args.package, args.runner, args.arguments)

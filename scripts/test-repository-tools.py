@@ -2750,7 +2750,10 @@ class BuildPerformance(unittest.TestCase):
             with open(os.environ['FAKE_LOG'], 'a') as log:
                 log.write(' '.join(args) + '\\n')
             if args[0] == 'install':
-                sys.exit(0 if os.path.isfile(args[-1]) else 1)
+                if not os.path.isfile(args[-1]):
+                    print('INSTALL_FAILED_INVALID_APK')
+                    sys.exit(1)
+                sys.exit(0)
             if args[0] == 'shell' and args[1].startswith('am instrument'):
                 sys.stdout.write(open(os.environ['FAKE_RESULT']).read())
             elif args[0] == 'shell' and args[1].startswith('run-as'):
@@ -2793,6 +2796,7 @@ class BuildPerformance(unittest.TestCase):
             done, calls = instrument('', package_file=root / 'missing.apk')
             self.assertEqual((done.returncode, len(calls)), (1, 2))
             self.assertIn('adb install', done.stderr)
+            self.assertIn('INSTALL_FAILED_INVALID_APK', done.stderr)  # adb's reason, for a hosted run's audit
 
     def test_android_apk_packages_the_dex_and_library_reproducibly_and_checks_the_kit(self):
         with tempfile.TemporaryDirectory() as temp:
