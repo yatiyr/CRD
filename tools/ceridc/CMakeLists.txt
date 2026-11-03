@@ -42,5 +42,6 @@ target_compile_features(crd-ceridc PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-ceridc)
 
 add_executable(ceridc "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
-target_link_libraries(ceridc PRIVATE crd-ceridc crd-jobs) # crd-jobs: the diag and mcp verbs own the pool
+target_link_libraries(ceridc PRIVATE crd-ceridc crd-jobs # crd-jobs: the diag and mcp verbs own the pool
+                                     crd-crypto) # the policy verb's key store protector and device
 crd_enable_default_pch(ceridc)

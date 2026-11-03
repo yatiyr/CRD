@@ -5,17 +5,20 @@
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/crypto/key_store.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/diag_assets.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/diagnostic_host.hpp>
 #include <crd/platform/arguments.hpp>
+#include <crd/platform/filesystem.hpp>
 #include <crd/platform/standard_streams.hpp>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 
 namespace
 {
@@ -61,6 +64,74 @@ void flags_of(int argc, char** argv, const char* name, crd::containers::Array<co
     }
 }
 
+// The key store access of `policy key|sign`: the protector --protector names (platform, or tpm with --tcti) and the
+// device --device names (tpm, or pkcs11 with --module, --label and the PIN in --pin-file, never on the command line).
+struct PolicyKeys
+{
+    crd::crypto::PlatformKeyProtector           platform;
+    crd::crypto::TpmKeyProtector                tpm;
+    crd::crypto::TpmKeyDevice                   tpm_device;
+    std::optional<crd::crypto::Pkcs11KeyDevice> pkcs11;
+    crd::crypto::KeyProtector*                  protector = nullptr;
+    crd::crypto::KeyDevice*                     device    = nullptr;
+};
+
+[[nodiscard]] bool policy_keys(int argc, char** argv, PolicyKeys& keys)
+{
+    const char*                        protector = flag_of(argc, argv, "--protector", nullptr);
+    const char*                        device    = flag_of(argc, argv, "--device", nullptr);
+    const crd::crypto::TpmConnection   tpm(crd::containers::StringView(flag_of(argc, argv, "--tcti", "")));
+    keys.tpm        = crd::crypto::TpmKeyProtector(tpm);
+    keys.tpm_device = crd::crypto::TpmKeyDevice(tpm);
+    if (protector != nullptr && std::strcmp(protector, "platform") == 0)
+    {
+        keys.protector = &keys.platform;
+    }
+    else if (protector != nullptr && std::strcmp(protector, "tpm") == 0)
+    {
+        keys.protector = &keys.tpm;
+    }
+    else if (protector != nullptr)
+    {
+        std::fprintf(stderr, "ceridc policy: --protector must be platform or tpm\n");
+        return false;
+    }
+    if (device == nullptr)
+    {
+        return true;
+    }
+    if (std::strcmp(device, "tpm") == 0)
+    {
+        keys.device = &keys.tpm_device;
+        return true;
+    }
+    const char* module   = flag_of(argc, argv, "--module", nullptr);
+    const char* label    = flag_of(argc, argv, "--label", nullptr);
+    const char* pin_file = flag_of(argc, argv, "--pin-file", nullptr);
+    if (std::strcmp(device, "pkcs11") != 0 || module == nullptr || label == nullptr || pin_file == nullptr)
+    {
+        std::fprintf(stderr, "ceridc policy: --device must be tpm, or pkcs11 with --module, --label and --pin-file\n");
+        return false;
+    }
+    crd::containers::Array<crd::u8> pin(&g_alloc);
+    if (!crd::platform::fs::read_file_binary(crd::platform::fs::Path(crd::containers::StringView(pin_file)), pin))
+    {
+        std::fprintf(stderr, "ceridc policy: --pin-file is unreadable\n");
+        return false;
+    }
+    crd::usize length = pin.size();
+    while (length > 0U && (pin[length - 1U] == '\n' || pin[length - 1U] == '\r'))
+    {
+        --length; // the line end an editor or `echo` adds
+    }
+    keys.pkcs11.emplace(crd::crypto::Pkcs11Token(crd::containers::StringView(module),
+                                                 crd::containers::StringView(label),
+                                                 crd::containers::ConstSpan<crd::u8>(pin.data(), length)));
+    crd::crypto::secure_zero(crd::containers::Span<crd::u8>(pin.data(), pin.size()));
+    keys.device = &*keys.pkcs11;
+    return true;
+}
+
 [[nodiscard]] int emit(const crd::containers::String& report)
 {
     std::printf("%s\n", report.c_str());
@@ -84,6 +155,10 @@ void print_usage()
         "  ceridc policy assemble --in <signed>... --out <generation>\n"
         "  ceridc policy verify --generation <f> --trust <trust.toml> --now <YYYY-MM-DD|seconds> [--floor <n>]\n"
         "                [--source <generation.policy.toml>]\n"
+        "  ceridc policy key --store <dir> --name <key> --algorithm <register name> [--placement <p>] <keys>\n"
+        "  ceridc policy sign --store <dir> --name <key> (--source <f> | --body <f>) --out <signed> <keys>\n"
+        "                <keys>: --protector platform|tpm [--tcti <conf>] [--device tpm|pkcs11 [--module <so>\n"
+        "                --label <token> --pin-file <f>]]\n"
         "                (the crypto policy generation: render the reviewed source, join its signatures, judge it)\n"
         "  ceridc instantiate --pack <p> --asset <name> [--x --y --z] --out <scene.scen> [--dry-run]\n"
         "  ceridc sequence --name <n> --clip-a <n> --frames-a <n> --clip-b <n> --frames-b <n>\n"
@@ -362,6 +437,18 @@ int main(int argc, char* argv[])
         flags.now = flag_of(argc, argv, "--now", nullptr);
         flags.floor = flag_of(argc, argv, "--floor", nullptr);
         flags.out = flag_of(argc, argv, "--out", nullptr);
+        flags.body = flag_of(argc, argv, "--body", nullptr);
+        flags.store = flag_of(argc, argv, "--store", nullptr);
+        flags.name = flag_of(argc, argv, "--name", nullptr);
+        flags.algorithm = flag_of(argc, argv, "--algorithm", nullptr);
+        flags.placement = flag_of(argc, argv, "--placement", nullptr);
+        PolicyKeys keys;
+        if (!policy_keys(argc, argv, keys))
+        {
+            return 2;
+        }
+        flags.protector = keys.protector;
+        flags.device = keys.device;
         return emit(crd::ceridc::verb_policy(flags, &g_alloc));
     }
     if (std::strcmp(verb, "instantiate") == 0)

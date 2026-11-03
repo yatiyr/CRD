@@ -1,13 +1,15 @@
 // NET.2: `ceridc policy` renders the committed source of crypto policy generation 1 (assets/crypto-policy), joins
-// signatures made by real provider keys and judges the result as an installation would; the verb and the real binary
-// give the same bytes, and every malformed request, source, signed file and trust set is refused before any file is
-// written. Contract: docs/design/network-foundation.md#policy-issue.
+// signatures made by real provider keys and judges the result as an installation would; the key holders' keys are
+// made in and sign from crd-crypto's key store; the verb and the real binary give the same bytes, and every malformed
+// request, source, signed file and trust set is refused before any file is written. Contract:
+// docs/design/network-foundation.md#policy-issue.
 
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
+#include <crd/crypto/key_store.hpp>
 #include <crd/crypto/policy.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/memory/allocator.hpp>
@@ -16,6 +18,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 
 namespace
@@ -92,6 +95,13 @@ void write_bytes(const char* path, cont::ConstSpan<u8> bytes)
 void write_text(const char* path, cont::StringView text)
 {
     REQUIRE(fs::write_file_text(fs::Path(path), text));
+}
+
+cont::String read_text(const char* path)
+{
+    cont::String text;
+    REQUIRE(fs::read_file_text(fs::Path(path), text));
+    return text;
 }
 
 // One trust key of the issue: a fresh provider key and its public key.
@@ -192,6 +202,131 @@ struct Issue
         write_trust("trust.toml", {&post_quantum, &classical});
     }
 };
+
+// ---- The key holders' stored keys ----
+
+// The tests' protector: each store's master key in memory, behind a one-byte reference bound to the store.
+class MemoryProtector final : public crypto::KeyProtector
+{
+public:
+    explicit MemoryProtector(cont::StringView name = "memory") : m_name(name) {}
+
+    [[nodiscard]] cont::StringView name() const noexcept override { return m_name; }
+    [[nodiscard]] crypto::KeyProtection protection() const noexcept override
+    {
+        return crypto::KeyProtection::Application;
+    }
+    [[nodiscard]] bool forgets() const noexcept override { return false; }
+
+    [[nodiscard]] crypto::CryptoError protect(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> master,
+                                              cont::Array<u8>& reference) noexcept override
+    {
+        if (m_count == kHeld)
+        {
+            return crypto::CryptoError::ProviderFailure;
+        }
+        Held& held = m_held[m_count];
+        std::memcpy(held.store, store_id.data(), crypto::kKeyStoreIdBytes);
+        std::memcpy(held.master, master.data(), crypto::kKeyStoreMasterBytes);
+        reference.clear();
+        reference.push_back(static_cast<u8>(m_count++));
+        return crypto::CryptoError::None;
+    }
+
+    [[nodiscard]] crypto::CryptoError recover(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference,
+                                              cont::Span<u8> master) noexcept override
+    {
+        if (reference.size() != 1U || reference[0] >= m_count ||
+            std::memcmp(m_held[reference[0]].store, store_id.data(), crypto::kKeyStoreIdBytes) != 0)
+        {
+            crypto::secure_zero(master);
+            return crypto::CryptoError::Denied;
+        }
+        std::memcpy(master.data(), m_held[reference[0]].master, crypto::kKeyStoreMasterBytes);
+        return crypto::CryptoError::None;
+    }
+
+    [[nodiscard]] crypto::CryptoError forget(cont::ConstSpan<u8>, cont::ConstSpan<u8>) noexcept override
+    {
+        return crypto::CryptoError::None;
+    }
+
+private:
+    static constexpr usize kHeld = 32U;
+
+    struct Held
+    {
+        u8 store[crypto::kKeyStoreIdBytes] = {};
+        u8 master[crypto::kKeyStoreMasterBytes] = {};
+    };
+
+    cont::StringView m_name;
+    Held m_held[kHeld];
+    usize m_count = 0U;
+};
+
+cont::String key(crypto::KeyProtector* protector, const char* store, const char* name, const char* algorithm,
+                 const char* placement = nullptr)
+{
+    crd::ceridc::PolicyFlags flags;
+    flags.action = "key";
+    flags.store = store;
+    flags.name = name;
+    flags.algorithm = algorithm;
+    flags.placement = placement;
+    flags.protector = protector;
+    return crd::ceridc::verb_policy(flags, crd::memory::default_allocator());
+}
+
+cont::String sign(crypto::KeyProtector* protector, const char* store, const char* name, const char* source,
+                  const char* signed_body, const char* out)
+{
+    crd::ceridc::PolicyFlags flags;
+    flags.action = "sign";
+    flags.store = store;
+    flags.name = name;
+    flags.source = source;
+    flags.body = signed_body;
+    flags.out = out;
+    flags.protector = protector;
+    return crd::ceridc::verb_policy(flags, crd::memory::default_allocator());
+}
+
+// The text of the first "`field`":"..." of a report.
+cont::String json_text(const cont::String& report, cont::StringView field)
+{
+    cont::String needle("\"");
+    needle += field;
+    needle += "\":\"";
+    const cont::StringView view(report);
+    const usize at = view.find(cont::StringView(needle));
+    REQUIRE(at != cont::StringView::npos);
+    const usize begin = at + needle.size();
+    const usize end = view.find('"', begin);
+    REQUIRE(end != cont::StringView::npos);
+    return cont::String(view.substr(begin, end - begin));
+}
+
+// A trust set naming the keys the `key` reports describe, as their trust entries say.
+void write_trust_of(const char* path, std::initializer_list<const cont::String*> reports)
+{
+    cont::String text;
+    for (const cont::String* report : reports)
+    {
+        text += "[[key]]\nalgorithm = \"";
+        text += json_text(*report, "algorithm");
+        text += "\"\npublic_key = \"";
+        text += json_text(*report, "public_key");
+        text += "\"\n\n";
+    }
+    write_text(path, text);
+}
+
+void remove_tree(const char* path)
+{
+    (void)fs::remove_all(fs::Path(cont::StringView(path)));
+    REQUIRE_FALSE(fs::exists(fs::Path(cont::StringView(path))));
+}
 } // namespace
 
 TEST_CASE("policy body: generation 1 refuses classical-only key exchange for Cerid services, then everywhere from "
@@ -411,8 +546,80 @@ TEST_CASE("policy body: a malformed source is refused with its key and line, and
     CHECK(has(body(nullptr, "x.body"), "body needs --source and --out"));
     CHECK(has(body("missing.toml", "x.body"), R"("reason":"unreadable","file":"missing.toml")"));
     crd::ceridc::PolicyFlags flags;
-    flags.action = "sign";
+    flags.action = "seal";
     CHECK(has(crd::ceridc::verb_policy(flags, crd::memory::default_allocator()), "the action must be"));
+    flags.action = nullptr;
+    CHECK(has(crd::ceridc::verb_policy(flags, crd::memory::default_allocator()), "the action must be"));
+}
+
+TEST_CASE("policy key and sign: the key holders' stored keys issue generation 1", "[ceridc][policy][net-2]")
+{
+    remove_tree("keys-pq");
+    remove_tree("keys-classical");
+    MemoryProtector protector;
+    const cont::String pq = key(&protector, "keys-pq", "policy-pq", "ml-dsa-65");
+    INFO(pq.c_str());
+    CHECK(has(pq, R"("verb":"policy","ok":true,"action":"key","store":"keys-pq","protection":"application",)"
+                  R"("made":true,"signer":{"name":"policy-pq","generation":1,"algorithm":"ml-dsa-65",)"
+                  R"("placement":"software","key":")"));
+    CHECK(has(pq, R"("trust_entry":"[[key]]\nalgorithm = \"ml-dsa-65\"\npublic_key = \")"));
+    CHECK(json_text(pq, "public_key").size() == 2U * 1952U);
+    const cont::String classical = key(&protector, "keys-classical", "policy-ec", "ecdsa-secp256r1-sha256");
+    REQUIRE(has(classical, R"("ok":true)"));
+    CHECK(json_text(classical, "public_key").size() == 2U * 65U);
+
+    // Asked again, the store answers with the key it holds; another algorithm or placement under the name is refused.
+    const cont::String again = key(&protector, "keys-pq", "policy-pq", "ml-dsa-65", "hardware-preferred");
+    CHECK(has(again, R"("made":false)"));
+    CHECK(json_text(again, "public_key") == json_text(pq, "public_key"));
+    CHECK(has(key(&protector, "keys-pq", "policy-pq", "ml-dsa-87"), R"("reason":"name-holds-another-algorithm")"));
+    CHECK(has(key(&protector, "keys-pq", "policy-pq", "ml-dsa-65", "hardware-required"),
+              R"("reason":"name-holds-another-placement")"));
+    // Without a device no key is placed in hardware.
+    CHECK(has(key(&protector, "keys-pq", "policy-hw", "ecdsa-secp256r1-sha256", "hardware-required"),
+              R"("reason":"unsupported")"));
+
+    // Each holder signs the rendered body: from the source, or from the body file; joined, the pair verifies.
+    REQUIRE(has(body(kSource, "g1.body"), R"("ok":true)"));
+    const cont::String signed_pq = sign(&protector, "keys-pq", "policy-pq", kSource, nullptr, "pq-stored.signed");
+    INFO(signed_pq.c_str());
+    CHECK(has(signed_pq, R"("verb":"policy","ok":true,"action":"sign","out":"pq-stored.signed","bytes":)"));
+    CHECK(has(signed_pq, R"("generation":1,"signatures":[{"key":")"));
+    CHECK(json_text(signed_pq, "key") == json_text(pq, "key")); // the signature names the stored key
+    const cont::String signed_ec =
+        sign(&protector, "keys-classical", "policy-ec", nullptr, "g1.body", "ec-stored.signed");
+    REQUIRE(has(signed_ec, R"("ok":true)"));
+    REQUIRE(has(assemble({"pq-stored.signed", "ec-stored.signed"}, "stored.policy"), R"("ok":true)"));
+    write_trust_of("stored-trust.toml", {&pq, &classical});
+    const cont::String judged = verify("stored.policy", "stored-trust.toml", "2026-11-10", nullptr, kSource);
+    INFO(judged.c_str());
+    CHECK(has(judged, R"("ok":true,"action":"verify","error":"none")"));
+    CHECK_FALSE(has(judged, R"("trusted":false)"));
+
+    // Refusals, each before anything is written.
+    CHECK(has(key(nullptr, "keys-pq", "policy-pq", "ml-dsa-65"), "key needs"));
+    CHECK(has(key(&protector, "keys-pq", "policy-aead", "aes-256-gcm"), R"("reason":"not-a-signature-algorithm")"));
+    CHECK(has(key(&protector, "keys-pq", "policy-rsa", "rsa-2048"), R"("reason":"not-a-signature-algorithm")"));
+    CHECK(has(key(&protector, "keys-pq", "Bad Name", "ml-dsa-65"), R"("reason":"bad-key-name")"));
+    CHECK(has(key(&protector, "keys-pq", "policy-pq", "ml-dsa-65", "tpm"), "--placement must be"));
+    MemoryProtector stranger("stranger");
+    CHECK(has(key(&stranger, "keys-pq", "policy-pq", "ml-dsa-65"), R"("reason":"unsupported","file":"keys-pq")"));
+    CHECK(has(sign(&protector, "keys-pq", "policy-pq", kSource, "g1.body", "x.signed"), "sign needs"));
+    CHECK(has(sign(&protector, "keys-pq", "policy-pq", nullptr, nullptr, "x.signed"), "sign needs"));
+    CHECK(has(sign(nullptr, "keys-pq", "policy-pq", kSource, nullptr, "x.signed"), "sign needs"));
+    CHECK(has(sign(&protector, "keys-none", "policy-pq", kSource, nullptr, "x.signed"),
+              R"("reason":"not-found","file":"keys-none")"));
+    CHECK(has(sign(&protector, "keys-pq", "policy-none", kSource, nullptr, "x.signed"), R"("reason":"not-found")"));
+    write_text("junk.body", "not a policy body");
+    CHECK(has(sign(&protector, "keys-pq", "policy-pq", nullptr, "junk.body", "x.signed"),
+              R"("reason":"bad-magic","file":"junk.body")"));
+    CHECK(has(sign(&protector, "keys-pq", "policy-pq", nullptr, "missing.body", "x.signed"),
+              R"("reason":"unreadable","file":"missing.body")"));
+    write_variant("bad-source.policy.toml", "generation = 1", "generation = 0");
+    CHECK(has(sign(&protector, "keys-pq", "policy-pq", "bad-source.policy.toml", nullptr, "x.signed"),
+              R"("file":"bad-source.policy.toml")"));
+    CHECK_FALSE(fs::exists(fs::Path("x.signed")));
+    CHECK_FALSE(fs::exists(fs::Path("keys-none")));
 }
 
 TEST_CASE("policy: the real binary gives the verb's bytes", "[ceridc][policy][net-2]")
@@ -432,7 +639,56 @@ TEST_CASE("policy: the real binary gives the verb's bytes", "[ceridc][policy][ne
     const cont::String expected = body(kSource, "bin.body");
     CHECK(cont::StringView(out) == cont::StringView(expected));
 
-    (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" policy sign > policy_out.json%s)", kShellQuote, exe.c_str(),
+    (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" policy seal > policy_out.json%s)", kShellQuote, exe.c_str(),
                         kShellQuote);
     CHECK(std::system(cmd) != 0);
+    CHECK(has(read_text("policy_out.json"), "the action must be body, assemble, verify, key or sign"));
+    (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" policy key --protector vault > policy_out.json%s)", kShellQuote,
+                        exe.c_str(), kShellQuote);
+    CHECK(std::system(cmd) != 0); // an unknown protector is a usage error
+    (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" policy key --protector platform --device pkcs11 > out.json%s)",
+                        kShellQuote, exe.c_str(), kShellQuote);
+    CHECK(std::system(cmd) != 0); // a PKCS #11 device needs its module, label and PIN file
+}
+
+TEST_CASE("policy: the real binary keeps the key holders' keys under the operating system's protector",
+          "[ceridc][policy][net-2]")
+{
+    cont::String exe;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe)); // wired by CMake
+    remove_tree("os-keys-pq");
+    remove_tree("os-keys-ec");
+    char cmd[1024];
+    const auto run = [&](const char* arguments, const char* out)
+    {
+        (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" policy %s --protector platform > %s%s)", kShellQuote,
+                            exe.c_str(), arguments, out, kShellQuote);
+        (void)std::system(cmd); // the exit status is the report's "ok"
+        return read_text(out);
+    };
+    const cont::String pq = run("key --store os-keys-pq --name policy-pq --algorithm ml-dsa-65", "os_pq.json");
+    if (!crypto::PlatformKeyProtector::available())
+    {
+        // No vault answers here (a Linux session without a Secret Service): the store is refused, nothing is made.
+        CHECK(has(pq, R"("ok":false,"action":"key","reason":"unavailable")"));
+        CHECK_FALSE(fs::exists(fs::Path("os-keys-pq/keys")));
+        return;
+    }
+    REQUIRE(has(pq, R"("ok":true,"action":"key","store":"os-keys-pq","protection":"platform","made":true)"));
+    const cont::String ec =
+        run("key --store os-keys-ec --name policy-ec --algorithm ecdsa-secp256r1-sha256", "os_ec.json");
+    REQUIRE(has(ec, R"("ok":true)"));
+    char arguments[512];
+    (void)std::snprintf(arguments, sizeof(arguments),
+                        R"(sign --store os-keys-pq --name policy-pq --source "%s" --out os-pq.signed)", kSource);
+    REQUIRE(has(run(arguments, "os_sign_pq.json"), R"("ok":true,"action":"sign")"));
+    REQUIRE(has(body(kSource, "os.body"), R"("ok":true)"));
+    REQUIRE(has(run("sign --store os-keys-ec --name policy-ec --body os.body --out os-ec.signed", "os_sign_ec.json"),
+                R"("ok":true,"action":"sign")"));
+    REQUIRE(has(assemble({"os-pq.signed", "os-ec.signed"}, "os.policy"), R"("ok":true)"));
+    write_trust_of("os-trust.toml", {&pq, &ec});
+    const cont::String judged = verify("os.policy", "os-trust.toml", "2026-11-10", nullptr, kSource);
+    INFO(judged.c_str());
+    CHECK(has(judged, R"("ok":true,"action":"verify","error":"none")"));
+    CHECK_FALSE(has(judged, R"("trusted":false)"));
 }

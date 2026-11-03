@@ -1,12 +1,14 @@
 // ceridc policy -- the crypto policy generation's issuing tool (NET.2; contract:
 // docs/design/network-foundation.md#policy-issue). The layout and its checks, the store and the provider's
 // verification are crd-crypto's; these verbs read the reviewed source and the trust set, write and join the signed
-// bytes and report what an installation would decide.
+// bytes and report what an installation would decide. The key holders' keys live in crd-crypto's key store: `key`
+// makes one and prints its trust set entry, `sign` signs a body with it.
 
 #include <crd/assetio/json_write.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/comply/generation.hpp>
 #include <crd/containers/array.hpp>
+#include <crd/crypto/key_store.hpp>
 #include <crd/crypto/policy.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -16,6 +18,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <optional>
 #include <string_view>
 
@@ -40,6 +43,7 @@ constexpr crd::u64 kLastFormattable = 253402300799U;                // 9999-12-3
 constexpr const char* kScopes[] = {"everywhere", "cerid-services"}; // by PolicyScope value
 constexpr const char* kStatuses[] = {"refused", "accepted", "preferred"};
 constexpr const char* kFreshness[] = {"none", "current", "grace", "expired"};
+constexpr const char* kPlacements[] = {"software", "hardware"}; // by KeyPlacement value
 
 // Why a request or an input was refused: the reason, and for a file its key and line.
 struct Failure
@@ -615,6 +619,80 @@ void write_signatures(JsonWriter& w, const crypto::PolicyMessage& message, const
     return fs::write_file_binary(fs::Path(cont::StringView(path)), bytes);
 }
 
+// ---- The key holders' keys ----
+
+[[nodiscard]] bool placement_named(cont::StringView name, crypto::PlacementRequest& out)
+{
+    if (name.empty() || name == "software")
+    {
+        out = crypto::PlacementRequest::Software;
+        return true;
+    }
+    if (name == "hardware-preferred")
+    {
+        out = crypto::PlacementRequest::HardwarePreferred;
+        return true;
+    }
+    if (name == "hardware-required")
+    {
+        out = crypto::PlacementRequest::HardwareRequired;
+        return true;
+    }
+    return false;
+}
+
+// Whether a key kept at `kept` answers a request for `requested`.
+[[nodiscard]] bool placement_answers(crypto::PlacementRequest requested, crypto::KeyPlacement kept)
+{
+    switch (requested)
+    {
+    case crypto::PlacementRequest::Software:
+        return kept == crypto::KeyPlacement::Software;
+    case crypto::PlacementRequest::HardwareRequired:
+        return kept == crypto::KeyPlacement::Hardware;
+    case crypto::PlacementRequest::HardwarePreferred:
+        return true;
+    }
+    return false;
+}
+
+// A key's report, with the [[key]] entry read_trust reads for its trust set.
+void write_key(JsonWriter& w, const crypto::KeyInfo& info, cont::ConstSpan<crd::u8> public_key)
+{
+    char algorithm[32];
+    algorithm_text(info.algorithm, algorithm);
+    cont::String hex;
+    w.key("signer");
+    w.begin_object();
+    w.kv("name", info.name());
+    w.kv("generation", info.generation);
+    w.kv("algorithm", static_cast<const char*>(algorithm));
+    w.kv("placement", kPlacements[static_cast<crd::u8>(info.placement)]);
+    hex_text(cont::ConstSpan<crd::u8>(info.id.bytes), hex);
+    w.kv("key", cont::StringView(hex));
+    hex_text(public_key, hex);
+    w.kv("public_key", cont::StringView(hex));
+    cont::String entry("[[key]]\nalgorithm = \"");
+    entry += static_cast<const char*>(algorithm);
+    entry += "\"\npublic_key = \"";
+    entry += cont::StringView(hex);
+    entry += "\"\n";
+    w.kv("trust_entry", cont::StringView(entry));
+    w.end_object();
+}
+
+// The store at --store under the flags' protector and device; `create` makes one where there is none.
+[[nodiscard]] crypto::CryptoError open_store(const PolicyFlags& flags, bool create, crypto::KeyStore& store)
+{
+    const cont::StringView directory(flags.store);
+    const crypto::CryptoError opened = store.open(directory, *flags.protector, flags.device);
+    if (opened == crypto::CryptoError::NotFound && create)
+    {
+        return store.create(directory, *flags.protector, flags.device);
+    }
+    return opened;
+}
+
 // ---- The actions ----
 
 [[nodiscard]] cont::String policy_body(const PolicyFlags& flags, crd::memory::IAllocator* alloc)
@@ -794,6 +872,171 @@ void write_signatures(JsonWriter& w, const crypto::PolicyMessage& message, const
     w.end_object();
     return cont::String(w.str());
 }
+
+// A key holder's signature key: generation 1 of --name in the store at --store (made there when it has none), or the
+// key it already holds under that name, algorithm and placement; reported with its trust set entry.
+[[nodiscard]] cont::String policy_key(const PolicyFlags& flags, crd::memory::IAllocator* alloc)
+{
+    if (flags.store == nullptr || flags.name == nullptr || flags.algorithm == nullptr || flags.protector == nullptr)
+    {
+        return refuse(alloc, flags.action, "key needs --store, --name, --algorithm and a --protector");
+    }
+    AlgorithmId algorithm{};
+    crypto::KeyKind kind = crypto::KeyKind::Secret;
+    if (!algorithm_named(flags.algorithm, algorithm) || !crypto::key_kind_of(algorithm, kind) ||
+        kind != crypto::KeyKind::Signature)
+    {
+        return refuse(alloc, flags.action, "not-a-signature-algorithm");
+    }
+    crypto::PlacementRequest placement = crypto::PlacementRequest::Software;
+    if (!placement_named(cont::StringView(flags.placement != nullptr ? flags.placement : ""), placement))
+    {
+        return refuse(alloc, flags.action, "--placement must be software, hardware-preferred or hardware-required");
+    }
+    const cont::StringView name(flags.name);
+    if (!crypto::valid_key_name(name))
+    {
+        return refuse(alloc, flags.action, "bad-key-name");
+    }
+    crypto::KeyStore store;
+    crypto::CryptoError error = open_store(flags, true, store);
+    if (error != crypto::CryptoError::None)
+    {
+        return refuse(alloc, flags.action, crypto::crypto_error_name(error), flags.store);
+    }
+    const crypto::KeyInfo* info = store.find(name);
+    const bool made = info == nullptr;
+    if (made)
+    {
+        error = store.generate(name, algorithm, placement, static_cast<crd::u64>(std::time(nullptr)));
+        if (error != crypto::CryptoError::None)
+        {
+            return refuse(alloc, flags.action, crypto::crypto_error_name(error));
+        }
+        info = store.find(name);
+    }
+    if (info->algorithm != algorithm)
+    {
+        return refuse(alloc, flags.action, "name-holds-another-algorithm");
+    }
+    if (!placement_answers(placement, info->placement))
+    {
+        return refuse(alloc, flags.action, "name-holds-another-placement");
+    }
+    crd::u8 public_key[kMaxPublicKeyBytes];
+    const cont::Span<crd::u8> public_view(public_key, crypto::signature_sizes(algorithm).public_key);
+    error = store.public_key(name, info->generation, public_view);
+    if (error != crypto::CryptoError::None)
+    {
+        return refuse(alloc, flags.action, crypto::crypto_error_name(error));
+    }
+    JsonWriter w(alloc);
+    w.begin_object();
+    w.kv("verb", kVerb);
+    w.kv("ok", true);
+    w.kv("action", "key");
+    w.kv("store", flags.store);
+    w.kv("protection", crypto::key_protection_name(store.protection()));
+    w.kv("made", made);
+    write_key(w, *info, public_view);
+    w.end_object();
+    return cont::String(w.str());
+}
+
+// One key holder's signature: the body --source renders (or the body file --body) signed by --name of the store at
+// --store, written as a one-signature generation for assemble. The signature is checked under the stored public key
+// and the generation decoded before anything is written.
+[[nodiscard]] cont::String policy_sign(const PolicyFlags& flags, crd::memory::IAllocator* alloc)
+{
+    if (flags.store == nullptr || flags.name == nullptr || flags.out == nullptr || flags.protector == nullptr ||
+        (flags.source == nullptr) == (flags.body == nullptr))
+    {
+        return refuse(alloc, flags.action, "sign needs --store, --name, --out, a --protector and --source or --body");
+    }
+    cont::Array<crd::u8> body;
+    if (flags.source != nullptr)
+    {
+        PolicyContent content;
+        Failure failure;
+        if (!render_source(flags.source, content, body, failure))
+        {
+            return refuse(alloc, flags.action, failure, flags.source);
+        }
+    }
+    else if (!read_file(flags.body, crypto::kMaxPolicyBytes, body))
+    {
+        return refuse(alloc, flags.action, "unreadable", flags.body);
+    }
+    PolicyError policy = crypto::check_policy_body(cont::as_const_span(body));
+    if (policy != PolicyError::None)
+    {
+        return refuse(alloc, flags.action, crypto::policy_error_name(policy), flags.body); // nothing is signed
+    }
+    crypto::KeyStore store;
+    crypto::CryptoError error = open_store(flags, false, store);
+    if (error != crypto::CryptoError::None)
+    {
+        return refuse(alloc, flags.action, crypto::crypto_error_name(error), flags.store);
+    }
+    crypto::StoredSigner signer;
+    error = store.signer(cont::StringView(flags.name), signer);
+    if (error != crypto::CryptoError::None)
+    {
+        return refuse(alloc, flags.action, crypto::crypto_error_name(error));
+    }
+    crd::u8 public_key[kMaxPublicKeyBytes];
+    const cont::Span<crd::u8> public_view(public_key, crypto::signature_sizes(signer.algorithm()).public_key);
+    crd::u8 signature[crypto::kMaxSignatureBytes];
+    crd::usize signature_size = 0U;
+    const cont::ConstSpan<crd::u8> message = cont::as_const_span(body);
+    error = signer.public_key(public_view);
+    if (error == crypto::CryptoError::None)
+    {
+        error = signer.sign(message, cont::Span<crd::u8>(signature), signature_size);
+    }
+    if (error != crypto::CryptoError::None)
+    {
+        return refuse(alloc, flags.action, crypto::crypto_error_name(error));
+    }
+    const cont::ConstSpan<crd::u8> signed_view(signature, signature_size);
+    const crypto::ProviderVerifier verifier;
+    if (verifier.verify(signer.algorithm(), public_view, message, signed_view) != crypto::Verification::Valid)
+    {
+        return refuse(alloc, flags.action, "signature-does-not-verify");
+    }
+    const crypto::KeySignature entry{crypto::key_id_of(public_view), signer.algorithm(), signed_view};
+    cont::Array<crd::u8> generation;
+    generation.resize(crypto::kMaxPolicyBytes);
+    crd::usize written = 0U;
+    policy = crypto::write_policy(message, cont::ConstSpan<crypto::KeySignature>(&entry, 1U),
+                                  cont::Span<crd::u8>(generation.data(), generation.size()), written);
+    generation.resize(written);
+    crypto::PolicyMessage decoded;
+    if (policy == PolicyError::None)
+    {
+        policy = crypto::decode_policy(cont::as_const_span(generation), decoded);
+    }
+    if (policy != PolicyError::None)
+    {
+        return refuse(alloc, flags.action, crypto::policy_error_name(policy));
+    }
+    if (!write_out(flags.out, cont::as_const_span(generation)))
+    {
+        return refuse(alloc, flags.action, "unwritable", flags.out);
+    }
+    JsonWriter w(alloc);
+    w.begin_object();
+    w.kv("verb", kVerb);
+    w.kv("ok", true);
+    w.kv("action", "sign");
+    w.kv("out", flags.out);
+    write_digest(w, cont::as_const_span(generation));
+    w.kv("generation", decoded.content.generation);
+    write_signatures(w, decoded, nullptr);
+    write_key(w, signer.info(), public_view);
+    w.end_object();
+    return cont::String(w.str());
+}
 } // namespace
 
 cont::String verb_policy(const PolicyFlags& flags, crd::memory::IAllocator* alloc)
@@ -811,6 +1054,14 @@ cont::String verb_policy(const PolicyFlags& flags, crd::memory::IAllocator* allo
     {
         return policy_verify(flags, alloc);
     }
-    return refuse(alloc, flags.action, "the action must be body, assemble or verify");
+    if (action == "key")
+    {
+        return policy_key(flags, alloc);
+    }
+    if (action == "sign")
+    {
+        return policy_sign(flags, alloc);
+    }
+    return refuse(alloc, flags.action, "the action must be body, assemble, verify, key or sign");
 }
 } // namespace crd::ceridc

@@ -14,6 +14,12 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
+namespace crd::crypto
+{
+class KeyDevice;
+class KeyProtector;
+} // namespace crd::crypto
+
 namespace crd::perf
 {
 class DiagCommandService;
@@ -75,14 +81,21 @@ struct ScreenFlags
 // status at `now` (verify) or the signatures (assemble).
 struct PolicyFlags
 {
-    const char* action = nullptr;               // body, assemble or verify
-    const char* source = nullptr;               // --source: the reviewed generation source (body; verify, optional)
+    const char* action = nullptr;               // body, assemble, verify, key or sign
+    const char* source = nullptr;               // --source: the reviewed source (body, sign; verify: optional)
+    const char* body = nullptr;                 // --body: a rendered body, in place of --source (sign)
     const char* generation = nullptr;           // --generation: a signed generation (verify)
     crd::containers::ConstSpan<const char*> in; // --in, repeated: the signed generations to join (assemble)
     const char* trust = nullptr;                // --trust: the installation's trust set (verify)
     const char* now = nullptr;                  // --now: YYYY-MM-DD or Unix seconds (verify)
     const char* floor = nullptr;                // --floor: the newest generation ever accepted (verify; default 0)
-    const char* out = nullptr;                  // --out: the file written (body, assemble)
+    const char* out = nullptr;                  // --out: the file written (body, assemble, sign)
+    const char* store = nullptr;                // --store: the key holder's key store directory (key, sign)
+    const char* name = nullptr;                 // --name: the signature key's name in it (key, sign)
+    const char* algorithm = nullptr;            // --algorithm: its register name (key)
+    const char* placement = nullptr;            // --placement: software (default), hardware-preferred or -required
+    crd::crypto::KeyProtector* protector = nullptr; // guards the store's master key (key, sign; main: --protector)
+    crd::crypto::KeyDevice* device = nullptr;       // holds its Hardware keys (none: the sealed file; main: --device)
 };
 [[nodiscard]] crd::containers::String verb_policy(const PolicyFlags& flags, crd::memory::IAllocator* alloc);
 
