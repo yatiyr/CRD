@@ -718,6 +718,10 @@
         {
             "name": "win-arm64-debug",
             "configurePreset": "win-arm64-debug"
+        },
+        {
+            "name": "android-x86_64-debug",
+            "configurePreset": "android-x86_64-debug"
         }
     ],
     "testPresets": [

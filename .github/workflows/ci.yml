@@ -82,6 +82,7 @@ jobs:
       presets_windows_native: ${{ steps.tier.outputs.presets_windows_native }}
       presets_linux_arm64: ${{ steps.tier.outputs.presets_linux_arm64 }}
       presets_windows_arm64: ${{ steps.tier.outputs.presets_windows_arm64 }}
+      presets_android: ${{ steps.tier.outputs.presets_android }}
     env:
       # pull_request: the base branch tip. A push's base is chosen by the "Choose the comparison base" step.
       CRD_PR_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
@@ -1909,10 +1910,57 @@ jobs:
             build/**/Testing/Temporary/*.xml
           if-no-files-found: warn
 
+  # The Android lane (NET.2's Keystore protector): crd-crypto's closure and tests cross-compiled with the pinned NDK.
+  android:
+    needs: preflight
+    if: needs.preflight.outputs.presets_android != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.preflight.outputs.presets_android) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned Ninja 1.11.1
+        run: python scripts/install-ninja.py --destination "$RUNNER_TEMP/ninja" --github-path "$GITHUB_PATH"
+
+      # The pinned NDK, never the runner image's: install-android-ndk.py exports CRD_ANDROID_NDK for the preset.
+      - name: Install the pinned Android NDK
+        run: python scripts/install-android-ndk.py --destination "$RUNNER_TEMP/android-ndk" --github-env "$GITHUB_ENV"
+
+      - name: Cache CPM downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: cpm-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
+          restore-keys: |
+            cpm-${{ runner.os }}-${{ matrix.preset }}-
+            cpm-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} -- -k 0
+
   required:
     name: Required result
     needs: [preflight, repository, windows, clang-tidy, clang-cl, linux-gcc, windows-shipping, windows-clang-cl-shipping, linux-gcc-shipping, windows-native,
-      linux-arm64, windows-arm64]
+      linux-arm64, windows-arm64, android]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
