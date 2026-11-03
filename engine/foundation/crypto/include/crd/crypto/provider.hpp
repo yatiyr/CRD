@@ -66,6 +66,9 @@ enum class CryptoError : u8
 // The provider and its version ("AWS-LC 5.12.0").
 [[nodiscard]] cont::StringView provider_name() noexcept;
 
+// Whether the provider runs its own assembly: true on every lane (decision P3), behind its own CPU capability checks.
+[[nodiscard]] bool provider_assembly() noexcept;
+
 // The algorithms the provider implements, in identifier order: a policy's ceiling (PolicyConfig::supported).
 [[nodiscard]] cont::ConstSpan<AlgorithmId> provider_algorithms() noexcept;
 [[nodiscard]] bool                         provider_implements(AlgorithmId algorithm) noexcept;

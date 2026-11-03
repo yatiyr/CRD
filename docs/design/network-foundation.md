@@ -292,10 +292,12 @@ destroyed and are read-only, so shared across threads, after `init`. `provider_a
 - **P2. Randomness** is the provider's NIST SP 800-90A CTR_DRBG, seeded from the operating system's source with CPU
   jitter entropy as a second independent source and reseeded on fork; no other generator exists in the engine.
 - **P3. Assembly on every lane.** AWS-LC's own assembly (AES-NI, VAES, AVX2 and AVX-512 paths, ARMv8 crypto) runs on
-  Linux and Windows x64; Windows x64 assembles with the pinned NASM, acquired by the configure like every package.
-  Its Windows ARM64 assembly needs clang's assembler, so `cl.exe` ARM64 builds take the provider's portable C until
-  that lane assembles with clang (a named remainder of NET.2). Its above-floor code runs only behind its own CPU
-  capability checks, which the ISA isolation guard reviews ([ADR-0134](../decisions/0134-runtime-cpu-dispatch.md)).
+  Linux, Android and Windows; Windows x64 assembles with the pinned NASM, acquired by the configure like every
+  package, and Windows ARM64 with clang's integrated assembler: under `cl.exe` the configure names clang's GNU driver
+  (`--target=aarch64-pc-windows-msvc`; Visual Studio's LLVM, else an LLVM installation, else PATH) as its one ASM
+  compiler before any package enables the language, and fails without one. Its above-floor code runs only behind its
+  own CPU capability checks, which the ISA isolation guard reviews
+  ([ADR-0134](../decisions/0134-runtime-cpu-dispatch.md)).
 - **P4. Encodings.** ML-DSA keys and signatures as FIPS 204 encodes them, signed purely with an empty context and
   hedged; Ed25519 as RFC 8032; ECDSA public keys as uncompressed SEC 1 points and signatures as strict DER
   Ecdsa-Sig-Value (the TLS 1.3 and X.509 forms; BER and malleated forms are refused); X25519 as RFC 7748 with an

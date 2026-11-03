@@ -33,6 +33,8 @@ namespace json = crd::assetio::json;
 TEST_CASE("Provider: identity, the implemented set and error names", "[crypto][net-2]")
 {
     CHECK(provider_name() == StringView("AWS-LC 5.12.0"));
+    // Decision P3: no lane takes the provider's portable C (Windows ARM64 under cl.exe assembles with clang).
+    CHECK(provider_assembly());
     const ConstSpan<AlgorithmId> implemented = provider_algorithms();
     REQUIRE(implemented.size() == 20U);
     for (usize i = 0U; i < implemented.size(); ++i)

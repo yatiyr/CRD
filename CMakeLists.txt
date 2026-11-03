@@ -915,6 +915,43 @@ if("glfw" IN_LIST CRD_SELECTED_PACKAGES)
     endif()
 endif()
 
+# Provider decision P3 under cl.exe on Windows ARM64: AWS-LC's ARMv8 assembly (its win-aarch64 .S files) is written for
+# clang's integrated assembler, which cl.exe is not, so the configure's assembler is clang's GNU driver targeting the
+# MSVC ABI. A configure determines one ASM compiler for every directory at the first enable_language(ASM), which
+# zstd's project() below makes, so it is named here, before any package. Visual Studio's own LLVM comes first (on an
+# ARM64 host its native build before the emulated x64 one; an x64 host runs only x64), then an LLVM installation, then
+# PATH; a configure without clang fails rather than give the provider its portable C.
+if(WIN32 AND _crd_arch_arm64 AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+    if(NOT CMAKE_ASM_COMPILER)
+        # cl.exe lies in VC/Tools/MSVC/<version>/bin/Host<arch>/<arch>.
+        cmake_path(GET CMAKE_CXX_COMPILER PARENT_PATH _crd_cl_dir)
+        cmake_path(SET _crd_vc_tools NORMALIZE "${_crd_cl_dir}/../../../../..")
+        set(_crd_llvm_hosts x64)
+        if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$")
+            set(_crd_llvm_hosts ARM64 x64)
+        endif()
+        set(_crd_clang_hints "")
+        foreach(_crd_llvm_host IN LISTS _crd_llvm_hosts)
+            list(APPEND _crd_clang_hints "$ENV{VCINSTALLDIR}/Tools/Llvm/${_crd_llvm_host}/bin"
+                                         "${_crd_vc_tools}/Llvm/${_crd_llvm_host}/bin")
+        endforeach()
+        find_program(CRD_ASM_CLANG NAMES clang NO_CACHE HINTS ${_crd_clang_hints} "$ENV{ProgramFiles}/LLVM/bin")
+        if(NOT CRD_ASM_CLANG)
+            message(FATAL_ERROR "[crd] AWS-LC's Windows ARM64 assembly needs clang beside cl.exe (provider decision "
+                                "P3): install Visual Studio's C++ Clang Compiler for Windows "
+                                "(Microsoft.VisualStudio.Component.VC.Llvm.Clang) or LLVM, or put clang on PATH")
+        endif()
+        set(CMAKE_ASM_COMPILER "${CRD_ASM_CLANG}" CACHE FILEPATH "clang assembles AWS-LC's ARM64 code (P3)")
+        unset(_crd_cl_dir)
+        unset(_crd_vc_tools)
+        unset(_crd_llvm_hosts)
+        unset(_crd_llvm_host)
+        unset(_crd_clang_hints)
+    endif()
+    set(CMAKE_ASM_COMPILER_TARGET aarch64-pc-windows-msvc)
+    message(STATUS "[crd] AWS-LC's ARM64 assembly: ${CMAKE_ASM_COMPILER} --target=${CMAKE_ASM_COMPILER_TARGET}")
+endif()
+
 if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
     # zstd 1.5.7 declares cmake_minimum_required(VERSION 3.10) and then cmake_policy(VERSION 3.13.0), so no CMake
     # deprecates its configure; 1.5.5's 2.8.12 needed CMAKE_POLICY_VERSION_MINIMUM on CMake 4 and drew the deprecation
@@ -1011,17 +1048,14 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
     # public headers name no provider type, and only engine/foundation/crypto/src includes <openssl/...> (the
     # crypto.providers signatures refuse it elsewhere).
     # Its build reads the pregenerated assembly and error tables (no Perl, no Go) and never writes into the shared
-    # source cache. Windows x64 assembles with the pinned NASM, acquired like every package (cmake/pins.json);
-    # AWS-LC's Windows ARM64 assembly needs clang's assembler, so cl.exe builds there take the portable C (provider
-    # decision P3 of the contract), and every other lane runs AWS-LC's own assembly.
+    # source cache. Every lane runs AWS-LC's own assembly (provider decision P3 of the contract): Windows x64 assembles
+    # with the pinned NASM, acquired like every package (cmake/pins.json), and Windows ARM64 with clang (above).
     set(_crd_awslc_options
         "BUILD_TESTING OFF" "BUILD_TOOL OFF" "BUILD_LIBSSL ON" "DISABLE_GO ON" "DISABLE_PERL ON"
         "ENABLE_SOURCE_MODIFICATION OFF" "BUILD_SHARED_LIBS OFF")
     if(WIN32 AND _crd_arch_x64)
         crd_add_pinned_package(nasm DOWNLOAD_ONLY YES)
         set(NASM_EXECUTABLE "${nasm_SOURCE_DIR}/nasm.exe" CACHE FILEPATH "The pinned NASM (cmake/pins.json)" FORCE)
-    elseif(WIN32 AND _crd_arch_arm64 AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        list(APPEND _crd_awslc_options "OPENSSL_NO_ASM ON")
     endif()
     # Provider decision P5: every symbol AWS-LC's libraries define carries the prefix crd_awslc_ (its C++ lies in
     # bssl::crd_awslc), so a program linking Cerid's package beside OpenSSL, BoringSSL or another AWS-LC binds each

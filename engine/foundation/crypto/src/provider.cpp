@@ -14,6 +14,7 @@
 #include <openssl/bn.h>
 #include <openssl/bytestring.h>
 #include <openssl/cipher.h>
+#include <openssl/crypto.h>
 #include <openssl/curve25519.h>
 #include <openssl/digest.h>
 #include <openssl/ec.h>
@@ -478,6 +479,11 @@ cont::StringView crypto_error_name(CryptoError error) noexcept
 cont::StringView provider_name() noexcept
 {
     return AWSLC_VERSION_NAME " " AWSLC_VERSION_NUMBER_STRING;
+}
+
+bool provider_assembly() noexcept
+{
+    return CRYPTO_has_asm() == 1;
 }
 
 cont::ConstSpan<AlgorithmId> provider_algorithms() noexcept
