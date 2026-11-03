@@ -1990,6 +1990,39 @@ Decisions (numbered for the tests and the fuzz oracle):
    decodes, stays signed and governs nothing, so a later build can add one; a format 1 rule is an Everywhere rule.
    Sessions enforce the rules as [S20](#tls-policy) states.
 
+<a id="policy-issue"></a>
+### Issuing a generation
+
+**S22. The first generation and its issue** (NET.2, threats T04 and T19, decision D7; 2026-11-03).
+
+- **The reviewed source.** A generation is authored as TOML
+  ([generation-1.policy.toml](../../assets/crypto-policy/generation-1.policy.toml)) that names each algorithm by its
+  standards register name (`algorithm_name`, generated beside the identifiers) and each bound as a day at 00:00:00
+  UTC. Every key is known and every value checked; the content then passes `validate_content`, so a source the
+  decoder would refuse is refused before any byte is signed. Signers sign the body the source renders, nothing else.
+- **Generation 1's rules.** Every algorithm the build's providers implement has an Everywhere rule (an algorithm
+  without one is refused, decision 4): X25519MLKEM768, ML-KEM-768, ML-DSA, AES-256-GCM and ChaCha20-Poly1305 are
+  preferred. The dated refusals: classical-only key exchange (X25519, P-256, P-384) for Cerid services from
+  2026-11-01T00:00:00Z, before any generation was issued, so no Cerid service ever accepts it, and everywhere from
+  2030-01-01T00:00:00Z (NIST IR 8547's 2030 deprecation); traditional signatures (Ed25519, ECDSA) everywhere from
+  2036-01-01T00:00:00Z (disallowed after 2035). A later generation can only move these dates earlier without a
+  reviewed release (a removal); adding time is an addition (D7).
+- **The tool.** `ceridc policy body` renders the source; each signer signs the body and writes a one-signature
+  generation; `ceridc policy assemble` joins those of one body (a different body or a second signature by one key is
+  refused); `ceridc policy verify` judges the result with a trust set (TOML: each key's register name and public
+  key in lower-case hex), a floor and a time as `PolicyStore` would, reports each rule's status in its scope, and
+  with `--source` refuses a generation whose signed bytes are not exactly the source's body. The layout, the checks
+  and the verification stay crd-crypto's: the tool adds no second reader.
+- **The issue ceremony** is the key holders' act, never an agent's: the post-quantum key (ML-DSA-65; no token holds
+  one, so it is a key store file key on an offline machine under a hardware protector) and the traditional key
+  (ECDSA P-256 in a TPM or a PKCS #11 token, decision K12/K14) sign the rendered body, and the trust set and the
+  signed generation are committed beside the source.
+
+Evidence: `test_ceridc_policy.cpp` (generation 1's rules and dates decoded from signed bytes; the hybrid pair's
+signatures judged current, in grace, expired, not yet issued and rolled back; a missing and a forged signature; a
+one-key trust set; a source mismatch; every source, trust set and assembly refusal with its key and line; the real
+binary's bytes), `test_register_ids.cpp` (every name present and distinct).
+
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers
 
