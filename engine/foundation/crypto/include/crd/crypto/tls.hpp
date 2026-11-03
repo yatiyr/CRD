@@ -27,8 +27,10 @@
 //   key updates a session counts the records protected under its sending key and updates the key (KeyUpdate) before
 //               the negotiated AEAD's usage limit (RFC 9846 section 5.5), or sooner when configured; it counts the
 //               key updates each way, has at most one update_requested outstanding and never lets its own count pass
-//               max_key_updates (at most 2^48-1, RFC 9846 section 4.7.3): an update that would reach the bound closes
-//               the session instead. A receiver never enforces its peer's limits.
+//               max_key_updates (at most 2^48-1, RFC 9846 section 4.7.3): an update of its own that would reach the
+//               bound closes the session instead, keeping the last for a peer's request, which the provider answers
+//               unasked, and an answer that reaches it closes the session after it. A receiver never enforces its
+//               peer's limits.
 //   closure     a session never sends user_canceled (the provider has no warning alert to send, and a handshake is
 //               abandoned with clear()); a peer's user_canceled is ignored and its close_notify, during the handshake
 //               too, closes the session.

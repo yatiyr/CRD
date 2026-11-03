@@ -20,6 +20,7 @@ import subprocess
 import sys
 import stat
 import tarfile
+import random
 import tempfile
 import textwrap
 import time
@@ -86,6 +87,10 @@ tamarin_spec.loader.exec_module(install_tamarin)
 model_spec = importlib.util.spec_from_file_location('check_protocol_model', ROOT / 'scripts/check-protocol-model.py')
 protocol_model = importlib.util.module_from_spec(model_spec)
 model_spec.loader.exec_module(protocol_model)
+state_machine_spec = importlib.util.spec_from_file_location('check_state_machine',
+                                                            ROOT / 'scripts/check-state-machine.py')
+state_machine = importlib.util.module_from_spec(state_machine_spec)
+state_machine_spec.loader.exec_module(state_machine)
 ndk_spec = importlib.util.spec_from_file_location('install_android_ndk', ROOT / 'scripts/install-android-ndk.py')
 install_android_ndk = importlib.util.module_from_spec(ndk_spec)
 ndk_spec.loader.exec_module(install_android_ndk)
@@ -3123,6 +3128,96 @@ class BuildPerformance(unittest.TestCase):
         self.assertIn(f'--derivcheck-timeout={protocol_model.DERIVCHECK_SECONDS}', command)
         self.assertIn(f'--with-maude={Path("/t/maude")}', command)
         self.assertEqual(command[-3:], ['+RTS', '-N4', '-RTS'])
+
+    def test_state_learning_learns_random_machines_exactly(self):
+        # L* with the W-method recovers every machine up to equivalence, whatever its size and redundancy; the
+        # learned machine is minimal and canonically numbered, and its file reads back as the same machine.
+        for seed in range(12):
+            generator = random.Random(seed)
+            states, inputs = generator.randint(1, 30), ('a', 'b', 'c')
+            target = state_machine.Machine(inputs, {(q, x): (generator.choice('xyz'), generator.randrange(states))
+                                                    for q in range(states) for x in inputs})
+            oracle = state_machine.Oracle(lambda words: [target.run(word) for word in words])
+            learned = state_machine.learn(oracle, inputs, extra_states=1, random_words=100, seed=seed)
+            self.assertIsNone(state_machine.difference(learned, target), seed)
+            self.assertLessEqual(len(learned.states), states)
+            self.assertEqual(learned.canonical().transitions, learned.transitions)
+            with tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / 'm.mealy'
+                learned.write(path, ['header', ''])
+                self.assertEqual(state_machine.Machine.read(path).transitions, learned.transitions)
+                self.assertTrue(path.read_text(encoding='utf-8').startswith('# header\n#\ninputs a b c\n'))
+
+    def test_state_learning_finds_a_machine_beyond_random_words_by_its_counterexample(self):
+        # A combination lock: only "a b a b" reaches the state that answers differently. The W-method proves a
+        # hypothesis only against machines of at most `extra_states` more states: one hides the lock, four find it.
+        inputs = ('a', 'b')
+        lock = {(q, x): ('0', q + 1 if x == 'ab'[q % 2] else 0) for q in range(4) for x in inputs}
+        lock.update({(4, 'a'): ('1', 4), (4, 'b'): ('1', 4)})
+        target = state_machine.Machine(inputs, lock)
+        oracle = state_machine.Oracle(lambda words: [target.run(word) for word in words])
+        self.assertEqual(len(state_machine.learn(oracle, inputs, extra_states=1, random_words=0).states), 1)
+        learned = state_machine.learn(oracle, inputs, extra_states=4, random_words=0)
+        self.assertEqual(len(learned.states), 5)
+        self.assertIsNone(state_machine.difference(learned, target))
+        changed = dict(lock)
+        changed[(3, 'b')] = ('1', 4)
+        self.assertEqual(state_machine.difference(learned, state_machine.Machine(inputs, changed)),
+                         ('a', 'b', 'a', 'b'))
+
+    def test_state_learning_refuses_nondeterminism_and_bad_files(self):
+        cache = state_machine.Cache()
+        cache.put(('a', 'b'), ('x', 'y'))
+        self.assertEqual(cache.get(('a',)), ('x',))
+        self.assertIsNone(cache.get(('b',)))
+        with self.assertRaisesRegex(RuntimeError, 'nondeterministic'):
+            cache.put(('a', 'c'), ('z', 'y'))
+        oracle = state_machine.Oracle(lambda words: [('x',) for _ in words])
+        with self.assertRaisesRegex(RuntimeError, '1 outputs for 2 inputs'):
+            oracle.query(('a', 'b'))
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'm.mealy'
+            path.write_text('inputs a b\ns0 a / x -> s0\n', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'incomplete'):
+                state_machine.Machine.read(path)
+            path.write_text('inputs a\ns0 a x s0\n', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'not a transition'):
+                state_machine.Machine.read(path)
+
+    def test_tls_properties_reject_each_violation_with_its_shortest_witness(self):
+        # Each monitor on a one-path machine: the listed steps in order; any other input changes nothing.
+        def chain(steps):
+            transitions = {}
+            inputs = ('deliver', 'drop', 'replay', 'p_update_req', 's_update', 's_update_req')
+            now = 'I.I'
+            for state in range(len(steps) + 1):
+                symbol, output = steps[state] if state < len(steps) else (None, None)
+                for other in inputs:
+                    transitions[(state, other)] = (output, state + 1) if other == symbol else ('empty.' + now, state)
+                if output is not None:
+                    now = '.'.join(state_machine.tls_parts(output)[1:3])
+            return state_machine.Machine(inputs, transitions)
+
+        properties = state_machine.tls_properties(3)
+        names = lambda machine: [found[0] for found in state_machine.violations(machine, properties)]
+        self.assertEqual(names(chain([('deliver', 'ok.H.H'), ('deliver', 'ok.E.E')])), [])
+        self.assertEqual(names(chain([('deliver', 'ok.H.H'), ('drop', 'ok.H.E'), ('deliver', 'ok.E.Ed')])),
+                         ['records_authentic', 'handshake_in_order'])
+        self.assertEqual(names(chain([('deliver', 'ok.E.E'), ('replay', 'ok.E.Ed')])), ['records_authentic'])
+        self.assertEqual(names(chain([('deliver', 'fail.F50.F50'), ('deliver', 'ok.E.E')])),
+                         ['terminal'])
+        self.assertEqual(names(chain([('deliver', 'ok.E.E'), ('s_update', 'ok.E.EK'), ('s_update', 'ok.E.EK'),
+                                      ('s_update', 'ok.E.EK')])), ['update_bound'])
+        answered = [('deliver', 'ok.E.E'), ('s_update', 'ok.E.EK'), ('s_update', 'ok.E.EK'),
+                    ('p_update_req', 'ok.E.E')]
+        self.assertEqual(names(chain(answered + [('deliver', 'ok.C.CkKu')])), [])
+        self.assertEqual(names(chain(answered + [('deliver', 'ok.E.EkKu')])), ['update_bound'])
+        self.assertEqual(names(chain([('deliver', 'ok.E.E'), ('p_update_req', 'ok.E.E'), ('deliver', 'ok.E.Ek')])),
+                         ['requests_answered'])
+        self.assertEqual(names(chain([('deliver', 'ok.E.E'), ('s_update_req', 'ok.E.EKU'),
+                                      ('s_update_req', 'ok.E.EKU')])), ['requests_answered'])
+        witness = state_machine.violations(chain([('deliver', 'ok.E.E'), ('replay', 'ok.E.Ed')]), properties)[0]
+        self.assertEqual(witness[2], ('deliver', 'replay'))
 
     def test_a_crate_set_is_pinned_by_its_committed_lockfile(self):
         crates_io = 'registry+https://github.com/rust-lang/crates.io-index'

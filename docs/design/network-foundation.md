@@ -665,8 +665,42 @@ no longer exists fails the check.
   once; a token from before the last rotation opens and one from before the last two never does; and, as the bound,
   a replayed Retry token is accepted again within its binding. Time (lifetimes, skew) and unlinkability are
   test_quic_token.cpp's.
-- **Still to model**: the binding to the code by state learning, which checks the implementation's state machine
-  against the model's.
+- **The binding to the code** is [state learning](#state-learning): the implementation's machine, learned, holds the
+  lemmas' trace properties.
+
+<a id="state-learning"></a>
+### State learning
+
+The models prove the protocol; state learning proves that the code runs the protocol the models describe (protocol
+state fuzzing: de Ruiter and Poll, USENIX Security 2015; Fiterau-Brostean et al. for SSH and DTLS).
+[check-state-machine.py](../../scripts/check-state-machine.py) learns each end's `TlsSession` as a Mealy machine
+through `crd-crypto-tls-sul` (tests/foundation/crypto/state), a system under learning that maps abstract inputs onto
+a real session (the subject) and an honest peer of crd-crypto's, and their outcomes onto abstract outputs.
+
+- **The alphabet.** What the subject sends reaches the peer; what the peer sends waits in a queue the learner drives:
+  `deliver` it, `drop` it, `replay` the last delivery. The other inputs are each end's calls: data, a key update with
+  and without a request, close. The subject's update bound is 3, so the bound is part of the machine. An output is the
+  call's result, both ends' states (a failed end with the alert it sent) and what the step caused: data read, a
+  KeyUpdate received, an update made by the session itself. Forged handshake messages are outside this alphabet; the
+  fuzz harness and the adversarial-bytes tests carry them.
+- **Learning.** L* for Mealy machines with Rivest and Schapire's counterexample analysis, the W-method with one extra
+  state as the equivalence oracle (exact against every machine of at most one more state) and 2000 seeded random words
+  beside it; every answer is cached in a trie, a sample is asked again outside the cache, and a different answer is a
+  failure (a nondeterministic system is never learned).
+- **The reviewed machine.** Each end's learned machine is committed (`tls_server.mealy`, `tls_client.mealy`) after
+  review; a learned machine that differs fails with the shortest input word that tells the two apart, so every change
+  of behaviour is reviewed before `--write` accepts it.
+- **The properties**, run as monitors over the product of the learned machine and the monitor, each violation with its
+  shortest witness: `records_authentic` (record_authentic, update_authentic: data and KeyUpdates are accepted only
+  from a delivery in order, never from a replay or after a drop, and no data before the handshake ends),
+  `handshake_in_order` (handshake_completes and agreement: established only by the peer's flights in order),
+  `terminal` (a failed session keeps its alert; a closed one never reopens or reads), `update_bound` (fewer own updates
+  than the bound) and `requests_answered` (updates_complete: a requested update is answered, nothing else updates by
+  itself, and an end asks again only after its request was answered, RFC 9846 section 4.7.3).
+
+Evidence: the `crd-crypto-state-learning` CTest (every desktop lane); the learner's own tests in
+test-repository-tools.py (random machines learned exactly, a combination lock found only within the W-method's bound,
+nondeterminism and malformed files refused, each property's violation found with its shortest witness).
 
 <a id="tls-sessions"></a>
 ### TLS sessions
