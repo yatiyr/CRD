@@ -2013,6 +2013,12 @@ Decisions (numbered for the tests and the fuzz oracle):
   key in lower-case hex), a floor and a time as `PolicyStore` would, reports each rule's status in its scope, and
   with `--source` refuses a generation whose signed bytes are not exactly the source's body. The layout, the checks
   and the verification stay crd-crypto's: the tool adds no second reader.
+- **The key holders' keys** live in crd-crypto's key store, never in a loose file: `ceridc policy key` makes a
+  signature key in a store (`--protector platform|tpm`, `--device tpm|pkcs11` with the PIN read from a file, never
+  from the command line) or reports the one it holds under that name, algorithm and placement, with its `[[key]]`
+  trust set entry; `ceridc policy sign` checks the body (`check_policy_body`) before anything is signed, signs it
+  through `StoredSigner` (a device key's signature is checked by the device signer, every signature again under the
+  stored public key) and writes a one-signature generation for `assemble`.
 - **The issue ceremony** is the key holders' act, never an agent's: the post-quantum key (ML-DSA-65; no token holds
   one, so it is a key store file key on an offline machine under a hardware protector) and the traditional key
   (ECDSA P-256 in a TPM or a PKCS #11 token, decision K12/K14) sign the rendered body, and the trust set and the
@@ -2021,7 +2027,27 @@ Decisions (numbered for the tests and the fuzz oracle):
 Evidence: `test_ceridc_policy.cpp` (generation 1's rules and dates decoded from signed bytes; the hybrid pair's
 signatures judged current, in grace, expired, not yet issued and rolled back; a missing and a forged signature; a
 one-key trust set; a source mismatch; every source, trust set and assembly refusal with its key and line; the real
-binary's bytes), `test_register_ids.cpp` (every name present and distinct).
+binary's bytes; stored keys made, reported again and refused under another algorithm, placement or protector, signing
+from the source and from the body file, joined and verified; the real binary's ceremony under the operating system's
+protector), `test_register_ids.cpp` (every name present and distinct).
+
+<a id="policy-start"></a>
+**S23. A store's start: the persisted generation, then the bootstrap** (NET.2, threats T04 and T19; 2026-11-03).
+
+- **Two inputs.** An installation saves the newest generation it accepted beside its floor; every build embeds a
+  bootstrap generation (the newest one issued when it was built). `PolicyStore::start` applies the persisted one
+  first, then the bootstrap, and reports each answer (`PolicyStart`; `Absent` for one it does not hold).
+- **Why that order.** A bootstrap older than the persisted generation is refused as a rollback and the same one is
+  already current, both harmless; a newer one supersedes it. A floor above the bootstrap therefore keeps the
+  persisted generation instead of leaving an empty store, and a lost or damaged persisted file falls back to the
+  bootstrap when the floor allows it.
+- **Fail closed.** When neither is usable (the persisted one expired past its grace, the bootstrap below the floor)
+  the store stays empty and refuses every algorithm until a newer generation is applied: freshness is never traded
+  for availability.
+
+Evidence: `test_policy.cpp` "a store starts from the persisted generation, then the bootstrap" (a fresh install, a
+floor above the bootstrap, the same generation twice, a newer bootstrap, a damaged persisted file, neither usable and
+nothing held).
 
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers
