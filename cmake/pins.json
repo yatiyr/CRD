@@ -733,6 +733,42 @@
       "license": "LicenseRef-Android-SDK-License",
       "note": "Android NDK r30 (Pkg.Revision 30.0.16248370, the repository index's newest channel-0 NDK on 2026-11-03), Google's Linux x64 release zip. Its size and SHA-1 were matched against the SDK repository index (provenance) on retrieval, 2026-11-03, and its SHA-256 recorded here. scripts/install-android-ndk.py unpacks the archive's android-ndk-r30/ directory into ~/.cerid/tools/android-ndk/<version> (pins.install_tree's zip reader keeps file modes and the 39 symbolic links) and checks source.properties. It builds crd-crypto's Android closure and the Keystore protector's tests (NET.2). Never an engine module or a shipped build. Pinned as a testing SDK under the user's order of 2026-11-03."
     },
+    "android-platform-tools-linux": {
+      "version": "37.0.1",
+      "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip",
+      "file": "platform-tools_r37.0.1-linux.zip",
+      "sha256": "d230f13842f60f782a8645f9c813f8f845bf36089ea7289f28c48f17979313f1",
+      "size": 9054187,
+      "sha1": "477254aa5f903c15cf51001717bdf347fb6b53e0",
+      "root": "platform-tools/",
+      "provenance": "https://dl.google.com/android/repository/repository2-3.xml",
+      "license": "LicenseRef-Android-SDK-License",
+      "note": "Android SDK Platform-Tools 37.0.1 (the repository index's channel-0 release on 2026-11-03), Google's Linux zip; size and SHA-1 matched against the index (provenance) on retrieval, 2026-11-03, SHA-256 recorded here. Its adb drives the emulator for the Android test lane: scripts/install-android-emulator.py unpacks it into <sdk>/platform-tools and scripts/android-device.py runs every Android test program through it (NET.2). Never shipped. Pinned as a testing SDK under the user's order of 2026-11-03."
+    },
+    "android-emulator-linux-x64": {
+      "version": "37.2.13",
+      "url": "https://dl.google.com/android/repository/emulator-linux_x64-16740729.zip",
+      "file": "emulator-linux_x64-16740729.zip",
+      "sha256": "cbc7c3cfb83220b8a0f9c513fdab557712e74d339ec19ddffa43f23350ae9bdd",
+      "size": 349658551,
+      "sha1": "f41f9e31eb5ca64926603c03265c50bbc0ff4172",
+      "root": "emulator/",
+      "provenance": "https://dl.google.com/android/repository/repository2-3.xml",
+      "license": "LicenseRef-Android-SDK-License",
+      "note": "Android Emulator 37.2.13 (build 16740729, the repository index's channel-0 release on 2026-11-03), Google's Linux x64 zip; size and SHA-1 matched against the index (provenance) on retrieval, 2026-11-03, SHA-256 recorded here. scripts/install-android-emulator.py unpacks it into <sdk>/emulator and checks source.properties; scripts/android-device.py boots the pinned system image in it, headless, under KVM, for the Android test lane (NET.2). Never shipped. Pinned as a testing emulator under the user's order of 2026-11-03."
+    },
+    "android-system-image-31-x86_64": {
+      "version": "31-r05",
+      "url": "https://dl.google.com/android/repository/sys-img/android/x86_64-31_r05.zip",
+      "file": "x86_64-31_r05.zip",
+      "sha256": "f77492768c6449a20d101a2fc0f32865a0aca6067dae6de4e94073fbceda9bca",
+      "size": 657246510,
+      "sha1": "58bff3cb182c79bbfe3980fe77b87b51b9f7ad71",
+      "root": "x86_64/",
+      "provenance": "https://dl.google.com/android/repository/sys-img/android/sys-img2-3.xml",
+      "license": "LicenseRef-Android-SDK-License",
+      "note": "The Android 12 (API 31, the Android preset's ANDROID_PLATFORM floor) default AOSP x86_64 system image, revision 5 in the system-image index (provenance; its source.properties says Pkg.Revision 3), Google's zip; size and SHA-1 matched against the index on retrieval, 2026-11-03, SHA-256 recorded here. scripts/install-android-emulator.py unpacks it into <sdk>/system-images/android-31/default/x86_64, checks its API level, ABI and tag, and writes the AVD the Android test lane boots (NET.2: crd-crypto's tests and the Keystore protector). Never shipped. Pinned as a testing emulator image under the user's order of 2026-11-03."
+    },
     "openmls-crates": {
       "version": "0.9.2",
       "crate": "openmls",

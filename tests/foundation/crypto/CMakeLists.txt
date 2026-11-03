@@ -53,12 +53,18 @@ target_link_libraries(crd-crypto-tests PRIVATE
 
 # The pinned vectors are read from the package cache at run time (cmake/pins.json): Wycheproof's, the MLS working
 # group's (mls-vectors), RFC 9180's, which the pinned AWS-LC carries as crypto/hpke/test-vectors.json, and the HPKE
-# working group's post-quantum ones (hpke-pq-vectors).
+# working group's post-quantum ones (hpke-pq-vectors); on Android from their device mirrors, which the launcher pushes.
+crd_test_device_path(_crd_wycheproof "${wycheproof_SOURCE_DIR}")
+crd_test_device_path(_crd_mls_vectors "${mls-vectors_SOURCE_DIR}/test-vectors")
+crd_test_device_path(_crd_hpke_vectors "${aws-lc_SOURCE_DIR}/crypto/hpke/test-vectors.json")
+crd_test_device_path(_crd_hpke_pq_vectors "${hpke-pq-vectors_SOURCE_DIR}/test-vectors.json")
 target_compile_definitions(crd-crypto-tests PRIVATE
-    CRD_WYCHEPROOF_DIR="${wycheproof_SOURCE_DIR}"
-    CRD_MLS_VECTORS_DIR="${mls-vectors_SOURCE_DIR}/test-vectors"
-    CRD_HPKE_VECTORS="${aws-lc_SOURCE_DIR}/crypto/hpke/test-vectors.json"
-    CRD_HPKE_PQ_VECTORS="${hpke-pq-vectors_SOURCE_DIR}/test-vectors.json")
+    CRD_WYCHEPROOF_DIR="${_crd_wycheproof}"
+    CRD_MLS_VECTORS_DIR="${_crd_mls_vectors}"
+    CRD_HPKE_VECTORS="${_crd_hpke_vectors}"
+    CRD_HPKE_PQ_VECTORS="${_crd_hpke_pq_vectors}")
+crd_test_data(crd-crypto-tests "${wycheproof_SOURCE_DIR}/testvectors_v1" "${mls-vectors_SOURCE_DIR}/test-vectors"
+    "${aws-lc_SOURCE_DIR}/crypto/hpke/test-vectors.json" "${hpke-pq-vectors_SOURCE_DIR}/test-vectors.json")
 
 # What tls_key_log_compiled() must answer (network foundation S19): derived here from the shipping condition, apart
 # from crd-crypto's own definition, so a shipping lane fails the moment key logging reaches a shipping build.

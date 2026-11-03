@@ -35,6 +35,33 @@ function(_crd_uses_target out target wanted)
     set(${out} FALSE PARENT_SCOPE)
 endfunction()
 
+# Android test programs run on a booted emulator or device through scripts/android-device.py (exec, the targets'
+# CROSSCOMPILING_EMULATOR), which mirrors host path P at /data/local/tmp/cerid/host + P before the program runs.
+# crd_test_device_path(<out> <host path>) sets <out> to the path a test program reads <host path> at: the path itself
+# on the host, its mirror on Android. crd_test_data(<target> <host paths>...) has the launcher push those paths for
+# <target>'s every run; elsewhere it does nothing.
+function(crd_test_device_path OUTPUT HOST_PATH)
+    if(ANDROID)
+        set(${OUTPUT} "/data/local/tmp/cerid/host${HOST_PATH}" PARENT_SCOPE)
+    else()
+        set(${OUTPUT} "${HOST_PATH}" PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(crd_test_data TARGET)
+    if(NOT ANDROID)
+        return()
+    endif()
+    get_target_property(_launcher "${TARGET}" CROSSCOMPILING_EMULATOR)
+    if(NOT _launcher)
+        message(FATAL_ERROR "crd_test_data: ${TARGET} has no device launcher (CMAKE_CROSSCOMPILING_EMULATOR)")
+    endif()
+    foreach(_path IN LISTS ARGN)
+        list(APPEND _launcher --push "${_path}")
+    endforeach()
+    set_target_properties("${TARGET}" PROPERTIES CROSSCOMPILING_EMULATOR "${_launcher}")
+endfunction()
+
 function(_crd_test_quote OUTPUT VALUE)
     set(_equals "=")
     while("${VALUE}" MATCHES "]${_equals}]")

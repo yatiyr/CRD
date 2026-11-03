@@ -1026,6 +1026,13 @@
             "output": {
                 "outputOnFailure": true
             }
+        },
+        {
+            "name": "android-x86_64-debug",
+            "configurePreset": "android-x86_64-debug",
+            "output": {
+                "outputOnFailure": true
+            }
         }
     ],
     "vendor": {

@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **27** · tools: **36** · workflow actions: **6** · runner images: **5** · unpinned apt packages: **24**
+- packages: **27** · tools: **39** · workflow actions: **6** · runner images: **5** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -74,6 +74,9 @@
 | swtpm-linux-x64 | 0.7.3-0ubuntu5.24.04.1 | BSD-3-Clause AND BSD-2-Clause | launchpad.net | `swtpm_0.7.3-0ubuntu5.24.04.1_amd64.deb`, `libtpms0_0.9.3-0ubuntu4.24.04.1_amd64.deb`, `libtss2-esys-3.0.2-0t64_4.0.1-7.1ubuntu5.1_amd64.deb`, `libtss2-sys1t64_4.0.1-7.1ubuntu5.1_amd64.deb`, `libtss2-mu-4.0.1-0t64_4.0.1-7.1ubuntu5.1_amd64.deb`, `libtss2-tctildr0t64_4.0.1-7.1ubuntu5.1_amd64.deb`, `libtss2-tcti-swtpm0t64_4.0.1-7.1ubuntu5.1_amd64.deb`, `libtss2-tcti-pcap0t64_4.0.1-7.1ubuntu5.1_amd64.deb` |
 | softhsm-linux-x64 | 2.6.1-2.2ubuntu3 | BSD-2-Clause AND LGPL-2.1-or-later | launchpad.net | `softhsm2_2.6.1-2.2ubuntu3_amd64.deb`, `softhsm2-common_2.6.1-2.2ubuntu3_amd64.deb`, `libsofthsm2_2.6.1-2.2ubuntu3_amd64.deb`, `opensc-pkcs11_0.25.0~rc1-1ubuntu0.2_amd64.deb` |
 | android-ndk-linux-x64 | 30.0.16248370 | LicenseRef-Android-SDK-License | dl.google.com | `android-ndk-r30-linux.zip` |
+| android-platform-tools-linux | 37.0.1 | LicenseRef-Android-SDK-License | dl.google.com | `platform-tools_r37.0.1-linux.zip` |
+| android-emulator-linux-x64 | 37.2.13 | LicenseRef-Android-SDK-License | dl.google.com | `emulator-linux_x64-16740729.zip` |
+| android-system-image-31-x86_64 | 31-r05 | LicenseRef-Android-SDK-License | dl.google.com | `x86_64-31_r05.zip` |
 | openmls-crates | 0.9.2 | MIT | openmls/openmls (8a8f83b4b61f) | the crates `tests/foundation/crypto/interop/openmls_peer/Cargo.lock` names |
 | cuda-linux-x64 | 13.3.1 | LicenseRef-NVIDIA-CUDA-Toolkit-EULA | developer.download.nvidia.com | `cuda_nvcc-linux-x86_64-13.3.73-archive.tar.xz`, `cuda_crt-linux-x86_64-13.3.73-archive.tar.xz`, `libnvvm-linux-x86_64-13.3.73-archive.tar.xz`, `cuda_cudart-linux-x86_64-13.3.29-archive.tar.xz`, `cccl-linux-x86_64-13.3.3.4.1-archive.tar.xz`, `cuda_nvrtc-linux-x86_64-13.3.33-archive.tar.xz`, `libnvjitlink-linux-x86_64-13.3.33-archive.tar.xz`, `libcufft-linux-x86_64-12.3.0.29-archive.tar.xz`, `libcublas-linux-x86_64-13.6.0.2-archive.tar.xz` |
 | bake-python-windows | 3.12.10 | PSF-2.0 | www.python.org | `python-3.12.10-amd64.exe` |

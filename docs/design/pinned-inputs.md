@@ -91,7 +91,10 @@ never resolves a newer one. The workflow must install Rust through install-rust.
 (`tools/android-ndk-linux-x64`) from Google's release zip, its size and SHA-1 matched against the SDK repository index
 on retrieval and its SHA-256 pinned; `pins.install_tree` reads a zip as it reads a tar (file modes and Info-ZIP
 symbolic links kept, the same filter refusing an escaping path or link) and the NDK's `source.properties` must name the
-pinned revision.
+pinned revision. [install-android-emulator.py](../../scripts/install-android-emulator.py) installs the Android test
+lane's emulator kit the same way into one SDK root: platform-tools, the emulator (each must report its pinned
+revision) and the API 31 x86_64 system image (its API level, ABI and tag checked), and writes the AVD that
+[android-device.py](../../scripts/android-device.py) boots and runs the Android test programs on.
 Every whole-tree install goes through `pins.install_tree` (staging beside the destination, a stamp naming the pin's
 version, digests and layout, nothing outside each archive's root extracted). A tree of several archives unpacks them
 into one prefix and refuses a path two of them place differently; the pin's `notices` (each archive's `LICENSE`) go to

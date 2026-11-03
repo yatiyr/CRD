@@ -1910,7 +1910,8 @@ jobs:
             build/**/Testing/Temporary/*.xml
           if-no-files-found: warn
 
-  # The Android lane (NET.2's Keystore protector): crd-crypto's closure and tests cross-compiled with the pinned NDK.
+  # The Android lane (NET.2's Keystore protector): crd-crypto's closure and tests, cross-compiled with the pinned NDK and
+  # run on the pinned emulator.
   android:
     needs: preflight
     if: needs.preflight.outputs.presets_android != '[]'
@@ -1956,6 +1957,61 @@ jobs:
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }} -- -k 0
+
+      # The tests run on the pinned emulator under KVM: scripts/android-device.py is the preset's
+      # CMAKE_CROSSCOMPILING_EMULATOR, so discovery and every CTest command run on the device.
+      - name: Open KVM to the runner user
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"'             | sudo tee /etc/udev/rules.d/99-cerid-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install the pinned Android emulator kit
+        run: python scripts/install-android-emulator.py --sdk "$RUNNER_TEMP/android-sdk" --github-env "$GITHUB_ENV"
+
+      - name: Boot the emulator
+        run: python scripts/android-device.py boot --log "$RUNNER_TEMP/emulator.log" --github-env "$GITHUB_ENV"
+
+      - name: Test inventory
+        run: python3 scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
+
+      - name: Test
+        shell: bash
+        run: |
+          junit="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/Testing/Temporary/ctest-junit.xml"
+          set +e
+          python3 scripts/ci-evidence.py watch --build-dir build/${{ matrix.preset }} -- ctest --preset ${{ matrix.preset }}             --output-on-failure --no-tests=error --output-junit "$junit"
+          test_exit=$?
+          set -e
+          python3 scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit "$test_exit"
+
+      - name: Device log and shutdown
+        if: always()
+        run: |
+          mkdir -p build/${{ matrix.preset }}/Testing/Temporary
+          if [ -n "${ANDROID_SERIAL:-}" ]; then
+            "$ANDROID_SDK_ROOT/platform-tools/adb" logcat -d > build/${{ matrix.preset }}/Testing/Temporary/logcat.log || true
+            python scripts/android-device.py stop
+          fi
+          cp "$RUNNER_TEMP/emulator.log" build/${{ matrix.preset }}/Testing/Temporary/emulator.log || true
+
+      - name: Evidence bundle and summary
+        if: always()
+        shell: bash
+        run: |
+          python3 scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }}             --outcome "${{ job.status }}" --output build/${{ matrix.preset }}/evidence --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evidence-${{ matrix.preset }}
+          path: |
+            build/*/evidence/**
+            build/**/Testing/Temporary/*.log
+            build/**/Testing/Temporary/*.xml
+          if-no-files-found: warn
 
   required:
     name: Required result

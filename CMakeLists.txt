@@ -1603,6 +1603,12 @@ endif()
 
 if(CRD_BUILD_TESTS)
     enable_testing()
+    # Android test programs run on a booted emulator or device: scripts/android-device.py (exec) pushes each program
+    # and its data and returns the program's exit code; CTest and Catch2's discovery put it before every command.
+    if(ANDROID AND NOT CMAKE_CROSSCOMPILING_EMULATOR)
+        find_package(Python3 3.12 REQUIRED COMPONENTS Interpreter)
+        set(CMAKE_CROSSCOMPILING_EMULATOR "${Python3_EXECUTABLE};${CMAKE_SOURCE_DIR}/scripts/android-device.py;exec")
+    endif()
     add_subdirectory(tests)
 endif()
 crd_add_package_consumer_test()

@@ -21,6 +21,7 @@ import sys
 import stat
 import tarfile
 import tempfile
+import textwrap
 import time
 import tomllib
 import xml.etree.ElementTree as ET
@@ -82,6 +83,13 @@ softhsm_spec.loader.exec_module(install_softhsm)
 ndk_spec = importlib.util.spec_from_file_location('install_android_ndk', ROOT / 'scripts/install-android-ndk.py')
 install_android_ndk = importlib.util.module_from_spec(ndk_spec)
 ndk_spec.loader.exec_module(install_android_ndk)
+emulator_spec = importlib.util.spec_from_file_location('install_android_emulator',
+                                                   ROOT / 'scripts/install-android-emulator.py')
+install_android_emulator = importlib.util.module_from_spec(emulator_spec)
+emulator_spec.loader.exec_module(install_android_emulator)
+device_spec = importlib.util.spec_from_file_location('android_device', ROOT / 'scripts/android-device.py')
+android_device = importlib.util.module_from_spec(device_spec)
+device_spec.loader.exec_module(android_device)
 mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
 install_mold = importlib.util.module_from_spec(mold_spec)
 mold_spec.loader.exec_module(install_mold)
@@ -1443,7 +1451,7 @@ class PinnedInputs(unittest.TestCase):
         self.assertEqual(re.findall(r'runs-on:\s*\S*-latest', self.workflow), [])
         self.assertEqual(len(re.findall(r'uses:\s*actions/checkout@', self.workflow)),
                          self.workflow.count('persist-credentials: false'))
-        self.assertEqual(self.workflow.count("python-version: '3.12'"), 13)
+        self.assertEqual(self.workflow.count("python-version: '3.12'"), 14)
         for package in ('Catch2', 'glfw', 'zstd', 'aws-lc', 'nasm', 'wycheproof', 'mls-vectors', 'hpke-pq-vectors',
                         'stb', 'cgltf', 'MikkTSpace', 'imgui', 'eigen', 'OpenBLAS', 'boost', 'hptt', 'pocketfft',
                         'highway', 'tracy', 'nlopt'):
@@ -2518,6 +2526,148 @@ class BuildPerformance(unittest.TestCase):
         self.assertTrue(pin['url'].endswith('/' + pin['file']) and pin['url'].startswith(
             'https://dl.google.com/android/repository/'))
         self.assertIn('scripts/install-android-ndk.py', check_pins.HELPERS)
+
+    def test_android_emulator_installer_places_the_kit_in_an_sdk_root_and_writes_the_avd(self):
+        def kit(directory, image=None):
+            directory.mkdir()
+            image = dict({'AndroidVersion.ApiLevel': '31', 'SystemImage.Abi': 'x86_64', 'SystemImage.TagId': 'default',
+                          'Pkg.Revision': '3'}, **(image or {}))
+            members = {'android-platform-tools-linux': ('platform-tools', {'adb': b'adb'}, '37.0.1'),
+                       'android-emulator-linux-x64': ('emulator', {'emulator': b'emulator'}, '37.2.13'),
+                       'android-system-image-31-x86_64': ('x86_64', {'system.img': b'img'}, None)}
+            registry = {}
+            for name, (top, files, revision) in members.items():
+                path = directory / (name + '.zip')
+                properties = image if revision is None else {'Pkg.Revision': revision}
+                files = dict(files, **{'source.properties': ''.join('%s=%s\n' % kv for kv in properties.items())})
+                with zipfile.ZipFile(path, 'w') as package:
+                    for member, data in files.items():
+                        info = zipfile.ZipInfo(top + '/' + member)
+                        info.external_attr = (stat.S_IFREG | 0o755) << 16
+                        package.writestr(info, data)
+                registry[name] = {'version': revision or '31-r05', 'url': 'https://example.invalid/' + path.name,
+                                  'file': path.name, 'sha256': pins_registry.sha256(path), 'root': top + '/',
+                                  'license': 'x'}
+            return registry
+
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()) as out:
+            root = Path(temp).resolve()
+            registry = kit(root / 'dl')
+            sdk, home = install_android_emulator.install(root / 'sdk', root / 'dl', registry=registry)
+            self.assertEqual((sdk, home), (root / 'sdk', root / 'sdk/avd'))
+            self.assertEqual((sdk / 'platform-tools/adb').read_bytes(), b'adb')
+            self.assertEqual((sdk / 'emulator/emulator').read_bytes(), b'emulator')
+            self.assertTrue((sdk / install_android_emulator.IMAGE_DIR / 'system.img').is_file())
+            self.assertTrue((sdk / 'platforms').is_dir())
+            config = (home / 'cerid-api31-x86_64.avd/config.ini').read_text(encoding='utf-8')
+            self.assertIn('image.sysdir.1=system-images/android-31/default/x86_64/\n', config)
+            self.assertIn('abi.type=x86_64\n', config)
+            pointer = (home / 'cerid-api31-x86_64.ini').read_text(encoding='utf-8')
+            self.assertIn('path=%s\n' % (home / 'cerid-api31-x86_64.avd').as_posix(), pointer)
+            self.assertIn('ANDROID_SDK_ROOT=%s' % sdk, out.getvalue())
+            # An installed kit is reused; an image of another API level, ABI or tag and an emulator of another
+            # revision than the pin's are refused.
+            install_android_emulator.install(root / 'sdk', root / 'dl', registry=registry)
+            wrong = kit(root / 'dl-wrong', image={'SystemImage.TagId': 'google_apis'})
+            with self.assertRaisesRegex(pins_registry.PinError, 'google_apis'):
+                install_android_emulator.install(root / 'sdk-wrong', root / 'dl-wrong', registry=wrong)
+            old = kit(root / 'dl-old')
+            old['android-emulator-linux-x64']['version'] = '36.0.0'
+            with self.assertRaisesRegex(pins_registry.PinError, "reports '37.2.13'"):
+                install_android_emulator.install(root / 'sdk-old', root / 'dl-old', registry=old)
+        for name, _, _, _ in install_android_emulator.PARTS:
+            pin = pins_registry.entry('tools', name)
+            self.assertTrue(pin['url'].startswith('https://dl.google.com/android/repository/'))
+            self.assertTrue(pin['url'].endswith('/' + pin['file']) and pin['provenance'].endswith('.xml'))
+        self.assertIn('scripts/install-android-emulator.py', check_pins.HELPERS)
+
+    def test_android_device_mirrors_host_paths_and_composes_the_device_command(self):
+        self.assertEqual(str(android_device.mirror('/home/u/build/x')), '/data/local/tmp/cerid/host/home/u/build/x')
+        command = android_device.remote_command(android_device.mirror('/b/prog'), ['--list-tests', "it's"],
+                                                android_device.DEVICE_ROOT / 'cwd/abc', {'CRD_X': 'a b'})
+        self.assertEqual(command, "mkdir -p /data/local/tmp/cerid/cwd/abc /data/local/tmp/cerid/tmp && "
+                                  "cd /data/local/tmp/cerid/cwd/abc && export TMPDIR=/data/local/tmp/cerid/tmp "
+                                  "CRD_X='a b' && exec /data/local/tmp/cerid/host/b/prog --list-tests 'it'\"'\"'s'")
+        self.assertEqual(android_device.forwarded_environment({'CRD_X': '1', 'CRD_ANDROID_ADB': 'a', 'PATH': 'p'}),
+                         {'CRD_X': '1'})
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp)
+            (tree / 'a').write_bytes(b'1')
+            first = android_device.stamp(tree)
+            self.assertEqual(android_device.stamp(tree), first)
+            (tree / 'b').write_bytes(b'2')
+            self.assertNotEqual(android_device.stamp(tree), first)
+            single = android_device.stamp(tree / 'a')
+            (tree / 'a').write_bytes(b'11')
+            self.assertNotEqual(android_device.stamp(tree / 'a'), single)
+
+    @unittest.skipIf(os.name == 'nt', 'the Android launcher runs on Linux hosts (fcntl, a POSIX fake device)')
+    def test_android_device_exec_pushes_what_changed_and_returns_the_program_exit_code(self):
+        # A fake adb whose device is a directory: push copies under it, shell runs the command with the device root
+        # mapped there and none of the host's environment but PATH.
+        fake_adb = textwrap.dedent('''\
+            import os, shutil, subprocess, sys
+            root, args = os.environ['FAKE_DEVICE'], sys.argv[1:]
+            if args[0] == '-s':
+                args = args[2:]
+            if args[0] == 'push':
+                with open(os.environ['FAKE_LOG'], 'a') as log:
+                    log.write(args[2] + '\\n')
+                (shutil.copytree if os.path.isdir(args[1]) else shutil.copy2)(args[1], root + args[2])
+                sys.exit(0)
+            command = ' '.join(args[1:]).replace('/data/local/tmp/cerid', root + '/data/local/tmp/cerid')
+            sys.exit(subprocess.run(['sh', '-c', command], env={'PATH': os.environ['PATH']}).returncode)
+            ''')
+        program = textwrap.dedent('''\
+            #!/bin/sh
+            echo "args:$*"
+            echo "cwd:$(pwd)"
+            echo "tmp:$TMPDIR env:$CRD_X:${CRD_ANDROID_Y-unset}"
+            cat "$1/seed"
+            exit 7
+            ''')
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            (root / 'device').mkdir()
+            adb = root / 'adb'
+            adb.write_text('#!%s\n%s' % (sys.executable, fake_adb), encoding='utf-8')
+            adb.chmod(0o755)
+            prog = root / 'build/prog'
+            prog.parent.mkdir()
+            prog.write_text(program, encoding='utf-8')
+            prog.chmod(0o755)
+            corpus = root / 'corpus'
+            corpus.mkdir()
+            (corpus / 'seed').write_text('seed-1\n', encoding='utf-8')
+            data = root / 'data.txt'
+            data.write_text('data\n', encoding='utf-8')
+            log = root / 'pushes.log'
+            env = dict(os.environ, CRD_ANDROID_ADB=str(adb), FAKE_DEVICE=str(root / 'device'), FAKE_LOG=str(log),
+                       CRD_X='x', CRD_ANDROID_Y='y', ANDROID_SERIAL='emulator-5999', TMPDIR=str(root))
+
+            def run():
+                log.write_text('', encoding='utf-8')
+                result = subprocess.run([sys.executable, str(ROOT / 'scripts/android-device.py'), 'exec', '--push',
+                                         str(data), str(prog), str(corpus), 'plain'], cwd=root / 'build', env=env,
+                                        capture_output=True, text=True, timeout=60)
+                return result, log.read_text(encoding='utf-8').split()
+
+            result, pushed = run()
+            device = str(root / 'device') + '/data/local/tmp/cerid'
+            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertEqual(sorted(pushed), sorted(str(android_device.mirror(p)) for p in (prog, corpus, data)))
+            self.assertTrue((root / 'device' / str(android_device.mirror(data)).lstrip('/')).is_file())
+            lines = result.stdout.splitlines()
+            self.assertEqual(lines[0], 'args:%s/host%s plain' % (device, corpus))
+            self.assertTrue(lines[1].startswith('cwd:%s/cwd/' % device), lines[1])
+            self.assertEqual(lines[2], 'tmp:%s/tmp env:x:unset' % device)
+            self.assertEqual(lines[3], 'seed-1')
+            # Nothing changed: nothing is pushed. A changed corpus is pushed again, alone, and read anew.
+            self.assertEqual(run()[1], [])
+            (corpus / 'seed').write_text('seed-22\n', encoding='utf-8')
+            result, pushed = run()
+            self.assertEqual(pushed, [str(android_device.mirror(corpus))])
+            self.assertEqual(result.stdout.splitlines()[3], 'seed-22')
 
     def test_rust_installer_unpacks_each_component_directory_into_one_prefix(self):
         def component(directory, name, directory_in_top, members, notice):
