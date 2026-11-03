@@ -167,7 +167,7 @@ inspect::Refusal InspectHost::add_line_breakpoint(containers::StringView file, c
 }
 
 inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRecording recording,
-                                    const input::InputSource* inputs)
+                                    const input::InputSource* inputs, crd::u64 max_steps)
 {
     if (!m_loaded || !m_compiled.ok())
     {
@@ -219,7 +219,8 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRe
         // `record` stores it missing when the run made more reads than a record keeps (only known once it has ended).
         detail::record_inputs(needs, ReplayExecutorKind::Plan, /*host_inputs_held=*/true, m_rec_inputs, nullptr);
     }
-    m_inputs = inputs;
+    m_inputs    = inputs;
+    m_max_steps = max_steps;
     m_done.store(false, std::memory_order_release);
     m_thread = std::thread(
         [this]
@@ -232,12 +233,12 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRe
                 ReplayRecorder         rec(m_rec_trace, m_rec_max);
                 InputRecorder          reads(m_rec_trace, m_inputs);
                 const plan::RunControl observer = rec.control();
-                m_result = m_session.run(m_compiled.plan, run_args, &m_exec_alloc, &observer, reads.source());
+                m_result = m_session.run(m_compiled.plan, run_args, &m_exec_alloc, &observer, reads.source(), m_max_steps);
                 rec.finish(m_compiled.plan, m_result);
             }
             else
             {
-                m_result = m_session.run(m_compiled.plan, run_args, &m_exec_alloc, nullptr, m_inputs);
+                m_result = m_session.run(m_compiled.plan, run_args, &m_exec_alloc, nullptr, m_inputs, m_max_steps);
             }
             m_done.store(true, std::memory_order_release);
         });

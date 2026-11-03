@@ -252,9 +252,11 @@ public:
     // sees the instr a stop holds as well as every instr that runs through; a `Cancel` it returns cancels the run.
     // Its `cancel` flag is not read: the session's own flag is the run's. Null observes nothing. DIAG.9a: `inputs` is
     // the run's host input seam (input.hpp), called on the executing thread once per read; null answers no value.
+    // `max_steps` is the run's step budget (plan::run's).
     [[nodiscard]] plan::RunResult run(const plan::CompiledPlan& plan, containers::ConstSpan<i64> args,
                                       memory::IAllocator* alloc, const plan::RunControl* observer,
-                                      const input::InputSource* inputs = nullptr);
+                                      const input::InputSource* inputs    = nullptr,
+                                      crd::u64                  max_steps = plan::kDefaultMaxSteps);
     // Invoke through the reference interpreter. The session installs its step hook and cancel flag for the call and
     // removes both afterwards (an interpreter's own hooks and flag are replaced for that call).
     [[nodiscard]] exec::ExecResult invoke(exec::Interpreter& in, const Module& m, containers::StringView entry,

@@ -384,12 +384,12 @@ plan::RunResult Session::run(const plan::CompiledPlan& plan, containers::ConstSp
 }
 
 plan::RunResult Session::run(const plan::CompiledPlan& plan, containers::ConstSpan<i64> args, memory::IAllocator* alloc,
-                             const plan::RunControl* observer, const input::InputSource* inputs)
+                             const plan::RunControl* observer, const input::InputSource* inputs, crd::u64 max_steps)
 {
     begin_run(Executor::Plan);
     m_observer = (observer != nullptr && observer->safe_point != nullptr) ? observer : nullptr;
     const plan::RunControl control{&Session::on_plan, this, &m_cancel};
-    plan::RunResult        r = plan::run(plan, args, alloc, plan::RunHooks{}, &control, inputs);
+    plan::RunResult        r = plan::run(plan, args, alloc, plan::RunHooks{}, &control, inputs, max_steps);
     m_observer               = nullptr;
     end_run();
     return r;

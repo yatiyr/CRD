@@ -386,6 +386,7 @@ DiagStatus run_program_inspect(void* context, const DiagCall& call, DiagSnapshot
     script.actions   = cont::as_const_span(parsed.steps);
     script.max_stops = parsed.max_stops;
     script.wait_ms   = command->wait_ms;
+    script.max_steps = command->max_steps;
     script.cancel    = call.cancel;
     script.on_stop   = command->on_stop;
     script.user      = command->stop_user;

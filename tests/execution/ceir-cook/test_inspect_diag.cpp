@@ -71,6 +71,9 @@ constexpr const char* kEventAsset  = CRD_REPO_DIR "/assets/ceir/event_demo.ceir"
 // This case's own scratch file under the process scratch folder (the file root crd::test::scratch_root()).
 constexpr const char* kBrokenFile = "diag8c_inspect_broken.ceir";
 
+// A step budget no run spends while a test waits on it (2^48 steps take hours at any interpreter speed).
+constexpr crd::u64 kUnspentSteps = crd::u64{1} << 48U;
+
 void registrar(Context& ctx, void* /*user*/)
 {
     (void)crd::ceir::arith::register_arith_ops(ctx);
@@ -613,11 +616,13 @@ TEST_CASE("diag 8c: program.inspect bounds its stops and stops when cancelled", 
 
     SECTION("the caller's cancel while the program runs between stops ends it")
     {
-        // A loop far longer than the host's wait bound and no breakpoint: only the cancel can end it in time.
+        // A loop far longer than the host's wait bound and no breakpoint: only the cancel can end it in time. Its step
+        // budget is one no CPU spends before the cancel lands (the default one a release build spends in milliseconds).
         std::atomic<bool>     cancel{false};
         ProgramInspectCommand cmd;
         cmd.registrar = &registrar;
         cmd.wait_ms   = 5000U;
+        cmd.max_steps = kUnspentSteps;
         DiagCommandService svc(kExecute, rooted(kAssets), &root);
         REQUIRE(crd::ceir::cook::register_program_inspect(svc, cmd));
         std::atomic<bool> answered{false}; // a request refused before the run must not leave the raiser waiting
@@ -642,10 +647,12 @@ TEST_CASE("diag 8c: program.inspect bounds its stops and stops when cancelled", 
     SECTION("a run that outlasts the host's wait bound fails unfinished, and the service is not left holding it")
     {
         // DIAG.10b: no breakpoint, no cancel and a loop far longer than a 50 ms bound: the wait runs out, the answer
-        // says so, and the command's host cancels and joins the run before the next request.
+        // says so, and the command's host cancels and joins the run before the next request. The step budget outlasts
+        // the bound on every CPU: under the default one a release build ran out of steps first (win-release, 2026-11).
         ProgramInspectCommand cmd;
         cmd.registrar = &registrar;
         cmd.wait_ms   = 50U;
+        cmd.max_steps = kUnspentSteps;
         DiagCommandService svc(kExecute, rooted(kAssets), &root);
         REQUIRE(crd::ceir::cook::register_program_inspect(svc, cmd));
         const DiagArg    args[] = {{"args", "1000000000000"}};
@@ -663,6 +670,25 @@ TEST_CASE("diag 8c: program.inspect bounds its stops and stops when cancelled", 
         CHECK(again.status == DiagStatus::Ok);
         CHECK(has(view(again.json), R"("outcome":"finished",)"));
         CHECK(cmd.starts.load() == 2U);
+    }
+
+    SECTION("the host's step budget ends a run that outlasts it")
+    {
+        ProgramInspectCommand cmd;
+        cmd.registrar = &registrar;
+        cmd.max_steps = 64U;
+        DiagCommandService svc(kExecute, rooted(kAssets), &root);
+        REQUIRE(crd::ceir::cook::register_program_inspect(svc, cmd));
+        const DiagArg    args[] = {{"args", "1000"}};
+        const DiagResult r      = svc.execute(inspect_request(kFile, {args, 1U}));
+        INFO(r.json.c_str());
+        CHECK(r.status == DiagStatus::Ok);
+        CHECK(has(view(r.json), R"("outcome":"error","error":"fuel-exhausted",)"));
+
+        cmd.max_steps                 = crd::ceir::plan::kDefaultMaxSteps;
+        const DiagResult same_program = svc.execute(inspect_request(kFile, {args, 1U}));
+        INFO(same_program.json.c_str());
+        CHECK(has(view(same_program.json), R"("outcome":"finished",)"));
     }
 }
 

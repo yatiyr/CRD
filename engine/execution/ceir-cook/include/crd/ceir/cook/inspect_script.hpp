@@ -64,7 +64,8 @@ struct InspectScript
     // DIAG.9a: the execution's host input seam (null: none). It must outlive the host's execution: an Unfinished
     // script returns with the run still attached, so declare the source before the host. It is read on the executing
     // thread while this script allocates the report, so it must not use the report's allocator.
-    const input::InputSource*           inputs = nullptr;
+    const input::InputSource*           inputs    = nullptr;
+    crd::u64                            max_steps = plan::kDefaultMaxSteps; // the execution's step budget
 };
 
 // NOLINTNEXTLINE(performance-enum-size)

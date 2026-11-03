@@ -125,9 +125,11 @@ public:
     // thread. `NotBound` before a successful load, `Busy` while an execution is attached. `binds()` then reports how
     // every breakpoint resolved in this generation. `recording` records this execution (see RECORDING); a start
     // without it forgets the previous record. `inputs` is the execution's host input seam (see HOST INPUTS; null:
-    // none).
+    // none). `max_steps` is the execution's step budget; a record's replay runs at plan::kDefaultMaxSteps, so a run
+    // recorded at another budget replays only as far as that one allows.
     [[nodiscard]] inspect::Refusal start(containers::ConstSpan<crd::i64> args, HostRecording recording = {},
-                                         const input::InputSource* inputs = nullptr);
+                                         const input::InputSource* inputs    = nullptr,
+                                         crd::u64                  max_steps = plan::kDefaultMaxSteps);
 
     // The run record of the last execution started with recording, once it has ended (`out` is overwritten; its
     // arrays and strings allocate from their own allocators). Controller thread.
@@ -172,7 +174,8 @@ private:
     containers::Array<inspect::BindReport> m_binds;
     containers::Array<crd::i64>            m_args;
     plan::RunResult                        m_result;
-    const input::InputSource*              m_inputs = nullptr; // the execution's host input seam (the caller's)
+    const input::InputSource*              m_inputs    = nullptr; // the execution's host input seam (the caller's)
+    crd::u64                               m_max_steps = plan::kDefaultMaxSteps; // the execution's step budget
 
     // DIAG.9a: the recorded execution. The controller writes all but the trace at `start`; the executing thread
     // writes the trace (from m_exec_alloc); the controller reads it only after the execution has ended.

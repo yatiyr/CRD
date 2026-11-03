@@ -58,6 +58,7 @@ struct ProgramInspectCommand
     crd::u64     max_program_bytes = 16ULL * 1024ULL * 1024ULL; // a larger file is refused Oversized, unread
     crd::u32     max_stops_limit   = 256U;                       // the largest max_stops a request may ask for
     crd::u32     wait_ms           = kScriptDefaultWaitMs;       // the bound on every wait inside a run
+    crd::u64     max_steps         = plan::kDefaultMaxSteps;     // every run's step budget (a runaway loop's end)
     ScriptStopFn on_stop           = nullptr; // the host's observer of every recorded stop (e.g. a progress line)
     void*        stop_user         = nullptr;
 
