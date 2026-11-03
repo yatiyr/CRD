@@ -1,0 +1,204 @@
+theory CeridTlsResumption
+begin
+
+/*
+ * Resumption and early data of a Cerid TLS 1.3 session (decisions S9 and S17; NET.2's model clause). Checked in CI by
+ * scripts/check-protocol-model.py with the pinned Tamarin; every lemma below is expected to verify.
+ *
+ * Design: docs/design/network-foundation.md#tls-sessions
+ * Design: docs/design/network-foundation.md#anti-replay
+ * Design: docs/design/network-foundation.md#early-data
+ * Design: docs/design/network-foundation.md#protocol-model
+ *
+ * What is modelled:
+ *   - A full session's master secret, which tls_handshake.spthy's handshake_secret leaves secret; the session's
+ *     resumption secret and server traffic key derive from it. Either end's state can be revealed at any time.
+ *   - Tickets (S9): the server seals the client's name and the ticket's PSK (the resumption secret expanded under a
+ *     fresh ticket nonce) under the key its ticket key derives with a fresh salt, whose first bytes are the ticket's
+ *     identifier, and sends it in a NewSessionTicket under its traffic key. The client's ticket store hands each
+ *     ticket out once. A server's ticket key can be revealed at any time.
+ *   - Resumption with early data (S17), psk_dhe_ke only: a fresh key share, the binder over the ClientHello under the
+ *     PSK's early secret, early data under the client's early traffic key, then the 1-RTT key schedule from both the
+ *     PSK and the key exchange. The key share stands for the negotiated group, whose hybrid guarantee
+ *     tls_handshake.spthy proves; its secret can be revealed (BreakDh).
+ *   - A server that accepts early data opens each ticket once (S16's ReplayFilter by the ticket's identifier,
+ *     SingleUseFilter below); a ticket the filter has seen is ignored and the handshake runs in full, which
+ *     tls_handshake.spthy covers. The provider's other refusals (the ticket age, the context) only refuse more.
+ *   - One link of a resumption chain: a resumed session issues tickets from its own master secret by the same rule,
+ *     and client_traffic_secret and server_traffic_secret give that secret the guarantee this theory assumes of a
+ *     full session's, so the chain composes link by link (Tamarin's unrolled chain did not terminate).
+ * Proven: a ticket's PSK leaks only by its server's ticket key or a reveal of the session that issued it; early data
+ * is accepted at most once by a server unless its ticket key was revealed (a session compromise does not allow a
+ * replay), is accepted only as its client sent it and stays secret unless the PSK leaked; resumed sessions agree
+ * injectively both ways (the server's side unless the key exchange is broken too) and their traffic secrets are forward secret (psk_dhe_ke: a ticket key or session revealed
+ * after the handshake exposes nothing). The bound: early data has no forward secrecy (RFC 9846 section 2.3): a ticket
+ * key revealed after the early data was sent exposes it.
+ */
+
+builtins: diffie-hellman, symmetric-encryption
+
+functions: kdf/2, mac/2
+
+// The ReplayFilter of a server that accepts early data: a ticket identifier is opened once.
+restriction SingleUseFilter:
+    "All S id #i #j. FilterAccept(S, id) @ #i & FilterAccept(S, id) @ #j ==> #i = #j"
+
+restriction OneTicketKey:
+    "All S #i #j. TicketKeyOf(S) @ #i & TicketKeyOf(S) @ #j ==> #i = #j"
+
+// A server's ticket key (a fleet that shares one is one server for these lemmas).
+rule TicketKey:
+    [ Fr(~tk) ] --[ TicketKeyOf($S) ]-> [ !TicketKey($S, ~tk) ]
+
+rule RevealTicketKey:
+    [ !TicketKey(S, tk) ] --[ RevTicketKey(S) ]-> [ Out(tk) ]
+
+// A full handshake's session between C and S: both ends hold its master secret.
+rule Establish:
+    [ Fr(~ms) ] --[ FullSession(~ms) ]-> [ !ClientSession($C, $S, ~ms), !ServerSession($S, $C, ~ms) ]
+
+// A state compromise of either end reveals the session's master secret.
+rule RevealServerSession:
+    [ !ServerSession(S, C, ms) ] --[ RevSession(ms) ]-> [ Out(ms) ]
+
+rule RevealClientSession:
+    [ !ClientSession(C, S, ms) ] --[ RevSession(ms) ]-> [ Out(ms) ]
+
+rule BreakClientDh:
+    [ !ClientShare(nc, x) ] --[ BreakDh(nc) ]-> [ Out(x) ]
+
+rule BreakServerDh:
+    [ !ServerShare(ns, y) ] --[ BreakDh(ns) ]-> [ Out(y) ]
+
+// One NewSessionTicket, sealed under the ticket key's derived key and sent under the session's traffic key.
+rule IssueTicket:
+    let psk = kdf(kdf('res_master', ms), ~tn)
+        ticket = <~id, senc(<'ticket', C, psk>, kdf(tk, ~id))>
+    in
+    [ !ServerSession(S, C, ms), !TicketKey(S, tk), Fr(~tn), Fr(~id) ]
+  --[ Issued(S, C, ms, psk, ~id), IssuedTicket(ticket) ]->
+    [ Out(senc(<'new_session_ticket', ~tn, ticket>, kdf('server_ap', ms))) ]
+
+rule StoreTicket:
+    let psk = kdf(kdf('res_master', ms), tn) in
+    [ !ClientSession(C, S, ms), In(senc(<'new_session_ticket', tn, ticket>, kdf('server_ap', ms))) ]
+  --[ Stored(ticket) ]->
+    [ ClientTicket(C, S, ms, psk, ticket) ]
+
+// The client takes the ticket from its store (once), binds the ClientHello to the PSK and sends early data.
+rule ClientResume:
+    let es = kdf('early', psk)
+        ch0 = <'client_hello', ~nc, 'g'^~x, ticket>
+        ch = <ch0, mac(kdf('binder', es), ch0)>
+    in
+    [ ClientTicket(C, S, ms, psk, ticket), Fr(~nc), Fr(~x), Fr(~m) ]
+  --[ ClientEarly(C, S, ms, psk, ~m) ]->
+    [ ClientResumeWait(C, S, ms, psk, ~nc, ~x, ch), !ClientShare(~nc, ~x),
+      Out(<ch, senc(<'early_data', ~m>, kdf('client_early', <es, ch>))>) ]
+
+// The server opens the ticket once, checks the binder, accepts the early data and answers with its key share.
+rule ServerResume:
+    let ticket = <id, senc(<'ticket', C, psk>, kdf(tk, id))>
+        es = kdf('early', psk)
+        ch0 = <'client_hello', nc, X, ticket>
+        ch = <ch0, mac(kdf('binder', es), ch0)>
+        sh = <'server_hello', ~ns, 'g'^~y>
+        hs = kdf(<psk, X^~y>, <ch, sh>)
+        fin = mac(kdf('server_finished', hs), <ch, sh>)
+    in
+    [ !TicketKey(S, tk), In(<ch, senc(<'early_data', m>, kdf('client_early', <es, ch>))>), Fr(~ns), Fr(~y) ]
+  --[ FilterAccept(S, id), ServerOpened(S, C, psk, id), ServerEarly(S, C, psk, m), ServerRunning(S, C, hs) ]->
+    [ ServerResumeWait(S, C, psk, nc, ~ns, ch, sh, hs), !ServerShare(~ns, ~y),
+      Out(<sh, senc(<'server_flight', fin>, kdf('server_hs', hs))>) ]
+
+rule ClientFinish:
+    let sh = <'server_hello', ns, Y>
+        hs = kdf(<psk, Y^~x>, <ch, sh>)
+        fin = mac(kdf('server_finished', hs), <ch, sh>)
+        cfin = mac(kdf('client_finished', hs), <ch, sh, fin>)
+    in
+    [ ClientResumeWait(C, S, ms, psk, ~nc, ~x, ch), In(<sh, senc(<'server_flight', fin>, kdf('server_hs', hs))>) ]
+  --[ ClientCommit(C, S, ms, hs), ClientRunning(C, S, hs), ClientKey(C, S, ms, ~nc, ns, kdf('client_ap', hs)) ]->
+    [ Out(senc(<'client_flight', cfin>, kdf('client_hs', hs))) ]
+
+rule ServerFinish:
+    let fin = mac(kdf('server_finished', hs), <ch, sh>)
+        cfin = mac(kdf('client_finished', hs), <ch, sh, fin>)
+    in
+    [ ServerResumeWait(S, C, psk, nc, ns, ch, sh, hs), In(senc(<'client_flight', cfin>, kdf('client_hs', hs))) ]
+  --[ ServerCommit(S, C, psk, nc, ns, hs), ServerKey(S, C, psk, nc, ns, kdf('client_ap', hs)) ]->
+    [ ]
+
+predicates:
+    DhBroken(nc, ns) <=> (Ex #a. BreakDh(nc) @ #a) | (Ex #a. BreakDh(ns) @ #a),
+    // A PSK the server opened leaked before #i: by its ticket key, or by a reveal of the session that issued it.
+    ServerPskLeaked(S, C, psk, #i) <=> (Ex #r. RevTicketKey(S) @ #r & #r < #i)
+        | (Ex ms id #k #r. Issued(S, C, ms, psk, id) @ #k & RevSession(ms) @ #r & #r < #i)
+
+// The ticket a client stores is one its server issued, or one the adversary already knew.
+lemma ticket_sources [sources]:
+    "All t #i. Stored(t) @ #i ==> (Ex #j. IssuedTicket(t) @ #j & #j < #i) | (Ex #j. KU(t) @ #j & #j < #i)"
+
+lemma resumption_completes:
+  exists-trace
+    "Ex C S ms psk nc ns hs m #e #i #j. ServerEarly(S, C, psk, m) @ #e & ClientCommit(C, S, ms, hs) @ #i
+      & ServerCommit(S, C, psk, nc, ns, hs) @ #j
+      & not (Ex A #r. RevTicketKey(A) @ #r) & not (Ex x #r. RevSession(x) @ #r) & not (Ex n #r. BreakDh(n) @ #r)"
+
+// A ticket's PSK becomes known only after its server's ticket key or the session that issued it was revealed.
+lemma psk_secrecy [reuse]:
+    "All S C ms psk id #i #j. Issued(S, C, ms, psk, id) @ #i & K(psk) @ #j ==>
+        (Ex #r. RevTicketKey(S) @ #r & #r < #j) | (Ex #r. RevSession(ms) @ #r & #r < #j)"
+
+// A ticket a server opens is one it issued, unless its ticket key was revealed before.
+lemma opened_issued [reuse]:
+    "All S C psk id #i. ServerOpened(S, C, psk, id) @ #i ==>
+        (Ex ms #k. Issued(S, C, ms, psk, id) @ #k & #k < #i) | (Ex #r. RevTicketKey(S) @ #r & #r < #i)"
+
+// Early data is accepted at most once by a server unless its ticket key was revealed: a revealed session's PSK lets
+// the adversary send its own early data on the ticket, never have the same early data accepted twice.
+lemma early_data_once:
+    "All S C psk m #i #j. ServerEarly(S, C, psk, m) @ #i & ServerEarly(S, C, psk, m) @ #j ==>
+        #i = #j | (Ex #r. RevTicketKey(S) @ #r)"
+
+lemma early_data_authentic:
+    "All S C psk m #i. ServerEarly(S, C, psk, m) @ #i ==>
+        (Ex ms #j. ClientEarly(C, S, ms, psk, m) @ #j & #j < #i) | ServerPskLeaked(S, C, psk, #i)"
+
+lemma early_data_secrecy:
+    "All C S ms psk m #i. ClientEarly(C, S, ms, psk, m) @ #i ==>
+        not (Ex #j. K(m) @ #j) | (Ex #r. RevTicketKey(S) @ #r) | (Ex #r. RevSession(ms) @ #r)"
+
+// The bound: a ticket key revealed after the early data was sent exposes it (no forward secrecy for early data).
+lemma early_data_not_forward_secret:
+  exists-trace
+    "Ex C S ms psk m #i #r #j. ClientEarly(C, S, ms, psk, m) @ #i & RevTicketKey(S) @ #r & #i < #r & K(m) @ #j
+      & not (Ex x #s. RevSession(x) @ #s) & not (Ex n #s. BreakDh(n) @ #s)"
+
+// Injective agreement on the resumed handshake secret, unless the PSK leaked before the handshake ended.
+lemma client_authenticates_server:
+    "All C S ms hs #i. ClientCommit(C, S, ms, hs) @ #i ==>
+        (Ex #j. ServerRunning(S, C, hs) @ #j & #j < #i
+           & not (Ex C2 S2 ms2 #i2. ClientCommit(C2, S2, ms2, hs) @ #i2 & not (#i2 = #i)))
+      | (Ex #r. RevTicketKey(S) @ #r & #r < #i) | (Ex #r. RevSession(ms) @ #r & #r < #i)"
+
+// The server's side also allows a broken key exchange: Tamarin did not terminate on the lemma without it (an
+// adversary needs the PSK as well, so the disjunct only weakens what is proven, not what holds).
+lemma server_authenticates_client:
+    "All S C psk nc ns hs #i. ServerCommit(S, C, psk, nc, ns, hs) @ #i ==>
+        (Ex #j. ClientRunning(C, S, hs) @ #j & #j < #i
+           & not (Ex S2 C2 psk2 nc2 ns2 #i2. ServerCommit(S2, C2, psk2, nc2, ns2, hs) @ #i2 & not (#i2 = #i)))
+      | ServerPskLeaked(S, C, psk, #i) | DhBroken(nc, ns)"
+
+// psk_dhe_ke's forward secrecy: a resumed traffic secret leaks only if the PSK leaked before the handshake ended or
+// the key exchange is broken; a later reveal of the ticket key or the issuing session exposes nothing.
+lemma client_traffic_secret:
+    "All C S ms nc ns k #i. ClientKey(C, S, ms, nc, ns, k) @ #i ==>
+        not (Ex #j. K(k) @ #j) | (Ex #r. RevTicketKey(S) @ #r & #r < #i) | (Ex #r. RevSession(ms) @ #r & #r < #i)
+      | DhBroken(nc, ns)"
+
+lemma server_traffic_secret:
+    "All S C psk nc ns k #i. ServerKey(S, C, psk, nc, ns, k) @ #i ==>
+        not (Ex #j. K(k) @ #j) | ServerPskLeaked(S, C, psk, #i) | DhBroken(nc, ns)"
+
+end

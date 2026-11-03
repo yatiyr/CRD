@@ -29,7 +29,12 @@ MODELS = {
                             'server_traffic_secret'),
     'tls_key_update.spthy': ('updates_complete', 'sender_epoch', 'receiver_epoch', 'root_secrecy', 'epoch_secrecy',
                              'record_authentic', 'update_authentic', 'update_does_not_heal'),
+    'tls_resumption.spthy': ('ticket_sources', 'resumption_completes', 'psk_secrecy', 'opened_issued',
+                             'early_data_once', 'early_data_authentic', 'early_data_secrecy',
+                             'early_data_not_forward_secret', 'client_authenticates_server',
+                             'server_authenticates_client', 'client_traffic_secret', 'server_traffic_secret'),
 }
+DERIVCHECK_SECONDS = 120
 RESULT = re.compile(r'^\s+(\w+) \((all-traces|exists-trace)\): (verified|falsified|analysis incomplete)\b', re.M)
 DESIGN = re.compile(r'Design: (\S+?)#([\w.-]+)')
 
@@ -78,7 +83,9 @@ def design_failures(name, text, root=ROOT):
 def prove(tamarin, model, rts):
     """Run Tamarin over one model: (exit code, combined output)."""
     maude = Path(tamarin).parent / 'maude'
-    command = [str(tamarin), '--prove', f'--with-maude={maude}', str(model), '+RTS', *rts.split(), '-RTS']
+    # The derivation checks are part of wellformedness; Tamarin's default 5 s budget times them out on a busy host.
+    command = [str(tamarin), '--prove', f'--derivcheck-timeout={DERIVCHECK_SECONDS}', f'--with-maude={maude}',
+               str(model), '+RTS', *rts.split(), '-RTS']
     result = subprocess.run(command, capture_output=True, text=True)
     return result.returncode, result.stdout + result.stderr
 

@@ -2987,6 +2987,14 @@ class BuildPerformance(unittest.TestCase):
             self.assertEqual(protocol_model.design_failures(name, text), [])
             declared = set(re.findall(r'^lemma (\w+)', text, re.M))
             self.assertEqual(declared, set(protocol_model.MODELS[name]), name)
+        # The pinned Maude beside the binary and a derivation-check budget a busy host does not exhaust.
+        with patch.object(protocol_model.subprocess, 'run') as run:
+            run.return_value.returncode, run.return_value.stdout, run.return_value.stderr = 0, 'out', ''
+            self.assertEqual(protocol_model.prove(Path('/t/tamarin-prover'), Path('m.spthy'), '-N4'), (0, 'out'))
+            command = run.call_args.args[0]
+        self.assertIn(f'--derivcheck-timeout={protocol_model.DERIVCHECK_SECONDS}', command)
+        self.assertIn(f'--with-maude={Path("/t/maude")}', command)
+        self.assertEqual(command[-3:], ['+RTS', '-N4', '-RTS'])
 
     def test_a_crate_set_is_pinned_by_its_committed_lockfile(self):
         crates_io = 'registry+https://github.com/rust-lang/crates.io-index'
