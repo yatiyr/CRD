@@ -173,3 +173,28 @@ band: the rounds' spread). Gaps:
 
 Fixed on the way (this board found them): the error scope cleared an empty error queue on every call (80 ns a record),
 and the pin check parsed the peer's leaf certificate a second time on every handshake.
+
+## Rerun after the gap fixes
+
+Later on 2026-11-03, the TLS cases only (`--case tls-`), same machine, tree, CPU and harness; session:
+[board gaps](../sessions/2026-11-03-net-2-board-gaps.md). crd-crypto against direct AWS-LC:
+
+| key | cerid | aws-lc | speed ratio | verdict |
+|---|---|---|---|---|
+| tls-full/x25519 | 104966 | 108102 | 0.9703 [0.96-0.9823] | unresolved |
+| tls-full/x25519mlkem768 | 136472 | 139938 | 0.9826 [0.9719-0.99] | unresolved |
+| tls-resume/x25519mlkem768 | 112746 | 108975 | 1.032 [1.027-1.052] | faster |
+| tls-record/256 | 486.4 | 458.3 | 1.062 [1.057-1.074] | faster |
+| tls-record/16384 | 4262 | 4263 | 0.9987 [0.9934-1.005] | level |
+
+Against BoringSSL crd-crypto now wins every handshake by 1.40x to 1.50x (it loses records 1.22x and 1.43x: AES-GCM,
+above); against OpenSSL 4.0 it wins everything (2.1x to 2.5x handshakes, 1.15x and 1.13x records).
+The full handshakes are now 0.97x and 0.98x direct AWS-LC, unresolved at the 2% band with both intervals below 1
+(its X509 method parses every certificate as an X.509 object; crd-crypto's contexts use the buffers method). What is
+left, measured with `perf` call graphs, is crd-crypto's by design:
+
+- **Resumption** (1.03x, about 3.8 us): the client's ticket store holds bytes (decision S9), so the session is
+  serialised when kept and parsed when offered (about 2%), and the session's own setup (about 1%).
+- **256-byte records** (1.06x, about 28 ns): the received-bytes bound (`kTlsMaxBufferedBytes`), the key-update budget
+  and bound (decision S7) and the message observer that counts KeyUpdates and alerts, which the provider calls for
+  every record's header and inner type.
