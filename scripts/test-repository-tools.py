@@ -2601,6 +2601,19 @@ class BuildPerformance(unittest.TestCase):
             (tree / 'a').write_bytes(b'11')
             self.assertNotEqual(android_device.stamp(tree / 'a'), single)
 
+    def test_android_emulator_takes_the_pinned_sdk_under_both_names(self):
+        # A hosted runner's image sets ANDROID_HOME to its own SDK, which the emulator reads before ANDROID_SDK_ROOT
+        # (dispatch 41574979037: "Broken AVD system path"); the kit's root replaces it under both names.
+        sdk = Path('/k/sdk')
+        environment = android_device.emulator_environment(sdk, {'ANDROID_HOME': '/usr/local/lib/android/sdk',
+                                                                'PATH': 'p'})
+        self.assertEqual((environment['ANDROID_HOME'], environment['ANDROID_SDK_ROOT']), (str(sdk), str(sdk)))
+        self.assertEqual((environment['ANDROID_AVD_HOME'], environment['PATH']), (str(sdk / 'avd'), 'p'))
+        kept = android_device.emulator_environment(sdk, {'ANDROID_AVD_HOME': '/h/avd'})
+        self.assertEqual(kept['ANDROID_AVD_HOME'], '/h/avd')
+        self.assertEqual(install_android_emulator.environment_lines(sdk, Path('/h/avd')),
+                         f'ANDROID_HOME={sdk}\nANDROID_SDK_ROOT={sdk}\nANDROID_AVD_HOME={Path("/h/avd")}\n')
+
     @unittest.skipIf(os.name == 'nt', 'the Android launcher runs on Linux hosts (fcntl, a POSIX fake device)')
     def test_android_device_exec_pushes_what_changed_and_returns_the_program_exit_code(self):
         # A fake adb whose device is a directory: push copies under it, shell runs the command with the device root

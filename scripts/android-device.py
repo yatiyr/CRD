@@ -129,6 +129,14 @@ def run(args):
     return subprocess.run(adb + ['shell', command]).returncode
 
 
+def emulator_environment(sdk, environ):
+    """The emulator's environment: `sdk` as its SDK root under both names, since it takes ANDROID_HOME first and a
+    hosted runner's image sets ANDROID_HOME to an SDK without the pinned system image; the AVD home stays the one
+    given, else the installer's."""
+    return dict(environ, ANDROID_HOME=str(sdk), ANDROID_SDK_ROOT=str(sdk),
+                ANDROID_AVD_HOME=environ.get('ANDROID_AVD_HOME') or str(sdk / 'avd'))
+
+
 def booted(adb):
     result = subprocess.run(adb + ['shell', 'getprop', 'sys.boot_completed'], stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, text=True)
@@ -142,14 +150,16 @@ def boot(args):
     options = ['-avd', args.avd, '-port', str(args.port), '-no-window', '-no-audio', '-no-boot-anim', '-no-snapshot',
                '-gpu', 'swiftshader_indirect', '-accel', 'on', '-camera-back', 'none', '-camera-front', 'none']
     log = open(args.log, 'w') if args.log else subprocess.DEVNULL
-    environment = dict(os.environ, ANDROID_SDK_ROOT=str(sdk),
-                       ANDROID_AVD_HOME=os.environ.get('ANDROID_AVD_HOME') or str(sdk / 'avd'))
     emulator = subprocess.Popen([str(sdk / 'emulator' / 'emulator'), *options], stdin=subprocess.DEVNULL, stdout=log,
-                                stderr=subprocess.STDOUT, env=environment, start_new_session=True)
+                                stderr=subprocess.STDOUT, env=emulator_environment(sdk, os.environ),
+                                start_new_session=True)
     deadline = time.monotonic() + args.timeout
     while not booted(adb):
         if emulator.poll() is not None:
             print('the emulator exited %d before Android booted' % emulator.returncode, file=sys.stderr)
+            if args.log:
+                log.close()
+                sys.stderr.write(''.join(Path(args.log).read_text(errors='replace').splitlines(True)[-40:]))
             return 1
         if time.monotonic() > deadline:
             print('Android did not report boot completed within %d s' % args.timeout, file=sys.stderr)

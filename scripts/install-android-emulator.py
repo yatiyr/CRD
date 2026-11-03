@@ -8,8 +8,9 @@ SHA-1 the repository index lists) and unpacked by pins.install_tree into its pla
 `<sdk>/platform-tools`, `<sdk>/emulator` and `<sdk>/system-images/android-31/default/x86_64`, each beside a stamp, so a
 matching install is reused. platform-tools and the emulator must report the pinned Pkg.Revision; the image must
 report the API level, ABI and tag its place names. The AVD (`cerid-api31-x86_64`) goes under `<sdk>/avd` unless
-another home is given. Prints ANDROID_SDK_ROOT and ANDROID_AVD_HOME, which scripts/android-device.py reads (with
-`--github-env` also appended to that file). Only the test lanes use it (NET.2): never a shipped build. Linux x64
+another home is given. Prints ANDROID_HOME, ANDROID_SDK_ROOT and ANDROID_AVD_HOME, which scripts/android-device.py
+and the SDK's own tools read (with `--github-env` also appended to that file): the emulator takes ANDROID_HOME before
+ANDROID_SDK_ROOT, and a hosted runner's image sets ANDROID_HOME to its own SDK. Only the test lanes use it (NET.2): never a shipped build. Linux x64
 only: the registry pins no other host build.
 Contract: docs/design/pinned-inputs.md.
 """
@@ -87,9 +88,13 @@ def install(sdk=None, download_dir=None, avd_home=None, registry=None):
     (sdk / 'platforms').mkdir(exist_ok=True)
     avd_home = Path(avd_home or sdk / 'avd').resolve()
     write_avd(avd_home)
-    print(f'ANDROID_SDK_ROOT={sdk}')
-    print(f'ANDROID_AVD_HOME={avd_home}')
+    print(environment_lines(sdk, avd_home), end='')
     return sdk, avd_home
+
+
+def environment_lines(sdk, avd_home):
+    """The variables naming this kit to android-device.py and the SDK's tools, one `NAME=value` line each."""
+    return f'ANDROID_HOME={sdk}\nANDROID_SDK_ROOT={sdk}\nANDROID_AVD_HOME={avd_home}\n'
 
 
 def main(argv=None):
@@ -98,14 +103,15 @@ def main(argv=None):
     parser.add_argument('--download-dir', type=Path, help='where the verified archives are kept (default: <sdk>/dl; '
                         'an archive already there is verified instead of downloaded)')
     parser.add_argument('--avd-home', type=Path, help='where the AVD is written (default: <sdk>/avd)')
-    parser.add_argument('--github-env', type=Path, help='append ANDROID_SDK_ROOT and ANDROID_AVD_HOME to this file')
+    parser.add_argument('--github-env', type=Path,
+                        help='append ANDROID_HOME, ANDROID_SDK_ROOT and ANDROID_AVD_HOME to this file')
     args = parser.parse_args(argv)
     if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'AMD64'):
         parser.error('the registry pins the Android emulator kit for Linux x64 only')
     sdk, avd_home = install(args.sdk, args.download_dir, args.avd_home)
     if args.github_env:
         with args.github_env.open('a', encoding='utf-8') as env:
-            env.write(f'ANDROID_SDK_ROOT={sdk}\nANDROID_AVD_HOME={avd_home}\n')
+            env.write(environment_lines(sdk, avd_home))
     return 0
 
 
