@@ -40,9 +40,21 @@ which holds that fix) has 20 jobs passed and none failed. Dispatch 41542040132 (
 <a id="tp-12"></a>
 ## TP-12
 
-Under linux-gcc-asan the spy step reports 16 bytes lost inside pkcs11-spy's `C_GetFunctionList`; a C program that
-only loads the spy and calls that function reproduces it, SoftHSM alone does not. Registered as
-[TP-12](../third-party-defects.md#tp-12); no hosted lane runs the session under a sanitizer.
+Under linux-gcc-asan the spy step reports 16 bytes lost inside pkcs11-spy's `C_GetFunctionList`. This program
+reproduces it (`gcc -fsanitize=address -g r.c -o r -ldl`, then `PKCS11SPY=<prefix>/softhsm/libsofthsm2.so
+PKCS11SPY_OUTPUT=log ./r <prefix>/pkcs11-spy.so`, the prefix's `usr/lib/x86_64-linux-gnu`); on `libsofthsm2.so`
+itself it reports nothing. Registered as [TP-12](../third-party-defects.md#tp-12); no hosted lane runs the session
+under a sanitizer. `register-review.py` now plans a read of OASIS entries by hand (tested for every kind).
+
+```c
+#include <dlfcn.h>
+typedef unsigned long (*get_list)(void**);
+int main(int argc, char** argv)
+{
+    void* list = 0;
+    return (int)((get_list)dlsym(dlopen(argv[argc - 1], RTLD_NOW), "C_GetFunctionList"))(&list);
+}
+```
 
 ## Next
 
