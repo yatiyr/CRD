@@ -13,7 +13,8 @@
 //               keeps its public key and identifier. Revocation and destruction replace the master key, so a copy of
 //               an earlier store file cannot be opened once the protector forgets the old one (decision K5).
 //   writers     every change runs under the store's file lock on the newest store on disk and replaces the store
-//               file atomically; readers see one whole save. A KeyStore is read-only after open(): its lookups and
+//               file atomically; open() and refresh() read under the same lock (which they create in an existing
+//               directory), so readers see one whole save. A KeyStore is read-only after open(): its lookups and
 //               loads may run on several threads at once, its changes need the caller's exclusive access.
 //   secrets     the master key and every private input are zeroed when the store is closed or destroyed.
 

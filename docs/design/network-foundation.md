@@ -622,9 +622,20 @@ no longer exists fails the check.
   key's reveal), records and KeyUpdates accepted only as sent at their sequence number unless their key or an
   earlier one was revealed, and, as the guarantee's bound, no healing after a compromise. That a record is accepted
   once is the adversarial-bytes test's (test_tls.cpp: a replayed, reordered or earlier-key record fails).
-- **Still to model**: the unbounded epoch chain, resumption and early data with the single-use ticket filter (S9,
-  S17), address validation tokens (S13), and the binding to the code by state learning, which checks the
-  implementation's state machine against the model's.
+- **Resumption and early data** (`tls_resumption.spthy`, S9, S16, S17): tickets sealed under a ticket key with a
+  fresh salt and sent under the session's traffic key, a client store that hands each ticket out once, psk_dhe_ke
+  resumption with the binder and early data, the server's single-use ticket filter, and reveals of the ticket key,
+  either end's session state and either key share at any time. Proven: a PSK becomes known only after its ticket key
+  or issuing session was revealed; a server accepts the same early data at most once unless its ticket key was
+  revealed (a session reveal allows no replay); early data is accepted only as its client sent it and stays secret
+  unless its PSK leaked; injective agreement on the resumed handshake secret both ways (the server's side also
+  allows a broken key exchange: Tamarin did not terminate without that disjunct, which an attack needs together with
+  the PSK); both resumed traffic secrets are forward secret; and, as the bound, a ticket key revealed after the early
+  data was sent exposes it. One link of the chain is modelled: a resumed session issues tickets by the same rule, and
+  its traffic secret lemmas give its master secret the guarantee the link assumes of a full session's, so the chain
+  composes (Tamarin's unrolled chain did not terminate).
+- **Still to model**: the unbounded epoch chain, address validation tokens (S13), and the binding to the code by
+  state learning, which checks the implementation's state machine against the model's.
 
 <a id="tls-sessions"></a>
 ### TLS sessions
