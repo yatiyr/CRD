@@ -32,7 +32,7 @@ its eleven codepoints are draft-ietf-mls-pq-ciphersuites-07's (0x0010 to 0x0017,
 
 ## Evidence
 
-- `python scripts/test-repository-tools.py Registers RegisterReview`: 55 tests passed.
+- `python scripts/test-repository-tools.py Registers RegisterReview`: 52 tests passed; the whole file, 327 tests, passed (3 skipped).
 - The suites' own proof is unchanged: every MLS behavioural test runs in all eleven (batch 59, M3 layer 10d).
 
 ## Next
