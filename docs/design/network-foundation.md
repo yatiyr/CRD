@@ -1241,6 +1241,42 @@ at the client and at an accepting server only), `test_tls_ech.cpp` (the inner ra
 both ends when rejected) and `tls_interop.py` (each established connection's lines equal to OpenSSL 4.0's key log
 both ways, over records and QUIC, with ECH and with early data).
 
+<a id="tls-policy"></a>
+### The policy generation in sessions
+
+**S20. Every session runs under the installation's policy generation**
+([tls.hpp](../../engine/foundation/crypto/include/crd/crypto/tls.hpp), threats T04 and T05, decision D7; 2026-11-03).
+The generation's rules ([policy wire](#policy-wire)) are enforced where keys are agreed, not only stored:
+
+- **The store.** `TlsConfig::policy` names the installation's `PolicyStore` and `policy_scope` the sessions'
+  scope: `CeridServices` for a Cerid service's own links, `Everywhere` otherwise. A scope without a store, or one
+  this build does not know, is `BadConfig`. Without a store a context uses its lists as configured (tests and tools;
+  a product always names one).
+- **Each session takes a snapshot when it starts** (TlsSession and QuicHandshake alike) and keeps from the context's
+  groups, AEADs and peer signature algorithms those the generation does not refuse at that time in its scope, the
+  preferred ones first, each kind in the configured order, set on its own provider connection. So a refused
+  algorithm leaves a client's offer and a server's acceptance (a peer offering only it finds no common group, no
+  common AEAD or no signature the client verifies), a server's preference follows the generation, and a ticket whose
+  server key is of a refused algorithm resumes nothing (the pinned-key check reads the session's narrowed list). A
+  session whose own credential is refused, or with a list left empty, is `PolicyRefused` before a byte is sent; a
+  store without a usable generation refuses everything (freshness, decision 3 of the policy wire).
+- **Running sessions** keep their keys until their next key update (the live swap of [agility](#agility)). At that
+  moment, a stream session's own update (`update_keys`, or the one `send()` makes before its records, checked
+  before any record so a refused send writes nothing) and the peer's KeyUpdate (`read()`), the session checks its
+  negotiated group, AEAD, peer key algorithm and credential against the store again (`check_policy`) and, when one
+  is refused, queues close_notify and is Closed with `PolicyRefused`. QUIC has no TLS KeyUpdate: its transport
+  calls `check_policy` before each `QuicPacketKey::update` and closes the connection on `PolicyRefused` (4.2a).
+- **Not yet under the policy:** the HPKE suite a client's ECH offer uses (the server's ECHConfig chooses it) and the
+  MLS cipher suites a group runs; both are NET.2 items that follow this decision.
+
+Evidence: `test_tls_policy.cpp` (a server's preference following the generation; a refused group out of a client's
+offer and a server's acceptance; refused AEADs and a refused server key; every `PolicyRefused` before a byte, a
+refused credential serving again under the next generation and an empty store; Cerid service contexts refusing
+classical-only key exchange while other contexts accept it, and the scope's configuration refusals; a ticket of a
+refused server key not resuming; a generation applied mid-session reaching it at its own key update, at the update
+`send()` makes and at the peer's, and an allowed one changing nothing; a QUIC handshake under the policy and its
+transport's check), `test_policy.cpp` and `crd-fuzz-crypto-policy` (scopes, format 2 and the N-1 reader).
+
 <a id="hpke"></a>
 ### Hybrid public key encryption
 
@@ -1860,7 +1896,7 @@ big-endian.
 
 | Part | Layout |
 |---|---|
-| Body (signed) | magic `CRDPOLCY` (8 bytes), format (u8), generation (u64), issued, expires (u64 Unix seconds), offline grace (u32 seconds), minimum count (u8) and each protocol, major and minor (u16, u16, u16), rule count (u8) and each algorithm (u16) with accepted-from, preferred-from, preferred-until and refused-from (u64 each) |
+| Body (signed) | magic `CRDPOLCY` (8 bytes), format (u8, 2), generation (u64), issued, expires (u64 Unix seconds), offline grace (u32 seconds), minimum count (u8) and each protocol, major and minor (u16, u16, u16), rule count (u8) and each algorithm (u16), scope (u8) with accepted-from, preferred-from, preferred-until and refused-from (u64 each); format 1, read only, has no scope byte |
 | Signatures | count (u8), each key identifier (32 bytes, the SHA-256 of the public key), algorithm (u16), length (u16) and bytes |
 
 Every signature covers the body exactly as received. The magic separates the domain: no other Cerid signed artefact
@@ -1902,6 +1938,12 @@ Decisions (numbered for the tests and the fuzz oracle):
    Decoding is exact (a short field, a count or a length above its bound and a byte after the last field are each
    refused with their own error) and allocates nothing. The layout has its own format byte with an N-1 reader, as the
    negotiation's.
+9. **Scopes** (format 2, 2026-11-03). A rule governs every session (`Everywhere`, 0) or only Cerid service sessions
+   (`CeridServices`, 1); a service session follows its algorithm's services rule where the generation has one and the
+   Everywhere rule otherwise, which is how the dated refusal of classical-only key exchange reaches Cerid services
+   before every other session (T04). Each algorithm has at most one rule per scope. A scope the build does not know
+   decodes, stays signed and governs nothing, so a later build can add one; a format 1 rule is an Everywhere rule.
+   Sessions enforce the rules as [S20](#tls-policy) states.
 
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers

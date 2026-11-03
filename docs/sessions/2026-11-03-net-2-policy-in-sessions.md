@@ -26,13 +26,17 @@ The Android Keystore is the next slice.
   `PolicyRefused` for a refused credential, an emptied list or an empty store; `check_policy()` at every key update
   (own, the one `send()` makes before any record, the peer's), closing with close_notify; QUIC's transport calls it
   before each packet key update. The suite list builder is shared by contexts and sessions.
-- Tests: `test_tls_policy.cpp` (6 cases), `test_policy.cpp` (scopes, the N-1 reader), `crd-fuzz-crypto-policy`
-  (restated format 2 and format 1, a scope-aware model; seeds regenerated, the format 1 seed equal byte for byte to
-  the previous honest seed).
+- Tests: `test_tls_policy.cpp` (6 cases, 7 sections), `test_policy.cpp` (scopes, the N-1 reader) and
+  `crd-fuzz-crypto-policy` (restated format 2 and format 1, a scope-aware model; seeds regenerated, the format 1
+  seed equal byte for byte to the previous honest seed).
 
 ## Evidence
 
-- win-debug: `[tls],[net-std]` 87 cases and `[quic]` 13 cases passed; the whole of crd-crypto-tests: see below.
+- win-debug (MSVC): the whole of crd-crypto-tests, 275 cases (274 passed, 1 skipped, 1 447 674 assertions); the
+  policy corpus replayed (20 inputs).
+- linux-gcc-debug: `[tls],[net-std],[quic]` 100 cases passed, the corpus replayed; linux-gcc-release (LTO link
+  clean): the policy and TLS policy cases, 22 passed. GCC's `-Wunused-function` found an unused helper, now used by
+  the preferred-AEAD case.
 - Mutations, each caught: the credential check, the peer key update check, preferred-first ordering, the `send()`
   check (TLS tests); the scope's own rule (test_policy, the TLS scope test and the fuzz seed `sequence-scopes`).
 
