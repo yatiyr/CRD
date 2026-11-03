@@ -437,6 +437,8 @@ function(crd_add_isa_isolation_check)
     set(tools "")
     if(WIN32)
         set(os windows)
+    elseif(ANDROID)
+        set(os android) # the ABI's floor is SSE4.2 with POPCNT on x86_64
     else()
         set(os linux)
         # GCC's slim LTO objects list their symbols through the compiler's plugin (gcc-nm beside gcc-ar).

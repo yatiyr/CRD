@@ -11,8 +11,9 @@ with its level, each general object with its target and archive, and each image.
   ceiling  A kernel object holds no instruction above its level; an avx2 unit holds VEX code, an avx512 unit EVEX
            code, so a level flag that stops reaching its units fails too.
   floor    General code holds no instruction above the baseline: on x64 no VEX, EVEX, REX2 or XOP encoding and no
-           legacy instruction of a later level (SSE3 to SSE4.2, POPCNT, LZCNT, MOVBE, AES, SHA, XSAVE ...); on ARM64 no
-           SVE, SME, LSE or later-revision instruction.
+           legacy instruction of a later level (SSE3 to SSE4.2, POPCNT, LZCNT, MOVBE, AES, SHA, XSAVE ...) beyond what
+           the operating system's ABI requires of every CPU (OS_FLOOR); on ARM64 no SVE, SME, LSE or later-revision
+           instruction.
 
 Objects that hold link-time IL (MSVC /GL, clang ThinLTO bitcode, GCC slim LTO) are judged on the linked images: MSVC
 and clang-cl images through their /MAP map (each function's object, MSVC's jump tables in .text as data), ELF images
@@ -85,9 +86,11 @@ X64_OTHER = frozenset('''
     pclmulhqhqdq sha1msg1 sha1msg2 sha1nexte sha1rnds4 sha256msg1 sha256msg2 sha256rnds2 gf2p8affineqb
     gf2p8affineinvqb gf2p8mulb rdrand rdseed adcx adox xgetbv xsave xsave64 xsaveopt xsaveopt64 xsavec xsavec64 xsaves
     xsaves64 xrstor xrstor64 xrstors xrstors64 rdtscp rdpid clflushopt clwb prefetchw prefetchwt1'''.split())
-# Windows 8.1 and later require CMPXCHG16B, PREFETCHW and LAHF/SAHF of every x64 CPU, so they are inside the floor of
-# COFF code.
-WINDOWS_FLOOR = frozenset('cmpxchg16b prefetchw lahf sahf'.split())
+# The legacy instructions an operating system requires of every x64 CPU are inside the floor of its code: Windows 8.1
+# and later require CMPXCHG16B, PREFETCHW and LAHF/SAHF; Android's x86_64 ABI requires SSE4.2, POPCNT and CMPXCHG16B,
+# which the NDK's clang turns on for every unit (so its "portable" and "sse2" kernels hold SSE4.1 too).
+OS_FLOOR = {'windows': frozenset('cmpxchg16b prefetchw lahf sahf'.split()), 'linux': frozenset(),
+            'android': X64_V2 - frozenset('lahf sahf monitor mwait'.split())}
 X64_LEGACY = X64_V2 | X64_V3 | X64_OTHER
 # The legacy instructions each kernel level may hold; EVEX only at avx512, VEX from avx2.
 LEVEL_LEGACY = {'portable': frozenset(), 'sse2': frozenset(), 'sse42': X64_V2, 'avx2': X64_V2 | X64_V3,
@@ -353,9 +356,11 @@ def _owner_at(labels, offset):
     return labels[index][1] if index >= 0 else ''
 
 
-def scan_x64(text, coff, layout=None):
+def scan_x64(text, coff, layout=None, floor=None):
     """Every above-floor instruction of an x64 dump: (function, address, category, line). `layout` locates an MSVC
-    object's jump tables (_labels)."""
+    object's jump tables (_labels); `floor` is the operating system's (OS_FLOOR), by default the one of the dump's
+    object format."""
+    floor = OS_FLOOR['windows' if coff else 'linux'] if floor is None else floor
     labels, data = _labels(text, _LABEL_COFF if coff else _LABEL_ELF, layout)
     hits = []
     for match in (_ENCODED_COFF if coff else _ENCODED_ELF).finditer(text):
@@ -364,7 +369,7 @@ def scan_x64(text, coff, layout=None):
             hits.append((_owner_at(labels, match.start()), int(match.group(1), 16), kind, _line(text, match.start())))
     for match in (_LEGACY_LINE_COFF if coff else _LEGACY_LINE_ELF).finditer(text):
         mnemonic = match.group(2)
-        if coff and mnemonic in WINDOWS_FLOOR or _in_ranges(data, match.start()):
+        if mnemonic in floor or _in_ranges(data, match.start()):
             continue
         hits.append((_owner_at(labels, match.start()), int(match.group(1), 16), mnemonic, _line(text, match.start())))
     return hits
@@ -480,7 +485,7 @@ def _references(text, coff, symbol):
     return {_owner_at(labels, match.start()) for match in re.finditer(re.escape(symbol), text)}
 
 
-def disassemble(tools, paths, arch, coff, layouts):
+def disassemble(tools, paths, arch, coff, layouts, floor):
     """{path: (hits, references, decoded)}: each object's above-floor instructions, its guard-symbol functions and its
     number of decoded instructions."""
     if coff:
@@ -492,7 +497,7 @@ def disassemble(tools, paths, arch, coff, layouts):
         parts = _split_files(text, OBJDUMP_FILE, paths)
     results = {}
     for path, part in parts.items():
-        hits = scan_x64(part, coff, layouts.get(path)) if arch == 'x64' else scan_arm64(part, coff)
+        hits = scan_x64(part, coff, layouts.get(path), floor) if arch == 'x64' else scan_arm64(part, coff)
         guarded = _references(part, coff, '__isa_available') if arch == 'x64' and coff else set()
         results[path] = (hits, guarded, len(INSTRUCTION[(arch, coff)].findall(part)))
     return results
@@ -618,13 +623,13 @@ def judge_families(families, arch):
     return failures
 
 
-def judge_kernel_code(level, hits, coff, reviewed=None):
+def judge_kernel_code(level, hits, floor, reviewed=None):
     """Failures of a kernel object's instructions against its level; `reviewed(hit)` holds the reviewed runtime
     dispatch (the compiler's own, which tests __isa_available)."""
     base, _, feature = level.partition('_')
     legacy = LEVEL_LEGACY[base] | FEATURE_LEGACY.get(feature, frozenset())
     above = [hit for hit in hits if not (hit[2] in LEVEL_ENCODINGS[base] or hit[2] in legacy
-                                          or coff and hit[2] in WINDOWS_FLOOR or reviewed and reviewed(hit))]
+                                          or hit[2] in floor or reviewed and reviewed(hit))]
     return code_failures(f'above level {level}: ', above)
 
 
@@ -905,12 +910,12 @@ def judge_map_image(tools, image, map_path, owners, exceptions):
     return failures + code_failures(f'{image}: ', above)
 
 
-def judge_elf_image(tools, image, arch, exceptions, provided=frozenset()):
+def judge_elf_image(tools, image, arch, exceptions, provided=frozenset(), floor=frozenset()):
     """Failures of one ELF image: above-floor code outside the level namespaces and the providers' functions."""
     command = [tools['objdump'], '-d', '-w', '-C'] + (['-M', 'intel'] if arch == 'x64' else []) + [image]
     hits, decoded = [], 0
     for text in _stream(command, _LABEL_ELF):
-        hits += scan_x64(text, False) if arch == 'x64' else scan_arm64(text, False)
+        hits += scan_x64(text, False, floor=floor) if arch == 'x64' else scan_arm64(text, False)
         decoded += len(INSTRUCTION[(arch, False)].findall(text))
     above = [hit for hit in hits if not (LEVEL_NS.search(hit[0]) or hit[0] in provided
                                          or exceptions.allows(hit[2], hit[0], '', set()))]
@@ -956,9 +961,9 @@ def _exit_with_parent():
 
 def _object_work(args):
     """One batch of machine-code objects: symbols and disassembly."""
-    tools, paths, arch, coff = args
+    tools, paths, arch, coff, floor = args
     defined, layouts, code = symbols(tools, paths, coff)
-    return defined, code, disassemble(tools, paths, arch, coff, layouts)
+    return defined, code, disassemble(tools, paths, arch, coff, layouts, floor)
 
 
 def _il_work(args):
@@ -1017,6 +1022,7 @@ def run(args):
             unbuilt.append(path)
     formats = {path: object_format(path) for path in present if not path.lower().endswith('.res')}
     coff = args.os == 'windows'
+    floor = OS_FLOOR[args.os]
     tools = resolve_tools(args, coff)
     machine = [path for path, fmt in formats.items() if fmt in ('coff', 'elf')]
     il = [path for path, fmt in formats.items() if fmt not in ('coff', 'elf')]
@@ -1028,7 +1034,7 @@ def run(args):
     # Per family level (one object library, all its sources): its tables and the encodings its code holds.
     families = {}
     with concurrent.futures.ProcessPoolExecutor(max_workers=jobs, initializer=_exit_with_parent) as pool:
-        work = [(tools, batch, args.arch, coff) for batch in _batches(machine)]
+        work = [(tools, batch, args.arch, coff, floor) for batch in _batches(machine)]
         for defined, code, disassembly in pool.map(_object_work, work):
             for path, names in defined.items():
                 hits, guarded, decoded = disassembly[path]
@@ -1042,7 +1048,7 @@ def run(args):
                     level = kernels[path][0]
                     counts['kernel'] += 1
                     found, tables = judge_kernel_symbols(level, names, exceptions.kernel_symbols)
-                    found += (judge_kernel_code(level, hits, coff, reviewed) if args.arch == 'x64'
+                    found += (judge_kernel_code(level, hits, floor, reviewed) if args.arch == 'x64'
                               else judge_arm64_kernel_code(level, hits))
                     family = families.setdefault((object_library(path), level), [0, set()])
                     family[0] += tables
@@ -1077,7 +1083,8 @@ def run(args):
                         continue
                     futures.append(pool.submit(judge_map_image, tools, image, map_path, owners, exceptions))
                 else:
-                    futures.append(pool.submit(judge_elf_image, tools, image, args.arch, exceptions, provided))
+                    futures.append(pool.submit(judge_elf_image, tools, image, args.arch, exceptions, provided,
+                                               floor))
             for future in futures:
                 counts['images'] += 1
                 failures += future.result()
@@ -1100,7 +1107,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--manifest', required=True)
     parser.add_argument('--arch', choices=('x64', 'arm64'), required=True)
-    parser.add_argument('--os', choices=('windows', 'linux'), required=True)
+    parser.add_argument('--os', choices=tuple(OS_FLOOR), required=True)
     parser.add_argument('--exceptions', default=str(EXCEPTIONS))
     parser.add_argument('--gcc-nm', dest='gcc_nm', help="GCC's nm wrapper with the LTO plugin (default: gcc-nm)")
     parser.add_argument('--jobs', type=int)

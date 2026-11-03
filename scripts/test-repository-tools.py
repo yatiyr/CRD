@@ -6346,6 +6346,13 @@ class IsaIsolation(unittest.TestCase):
                '0000000000000010 <crd::g()>:\n  10:\tf0 48 0f c7 0e       \tlock cmpxchg16b OWORD PTR [rsi]\n')
         hits = [(function, kind) for function, _address, kind, _line in isa_isolation.scan_x64(elf, False)]
         self.assertEqual([('crd::f()', 'VEX'), ('crd::g()', 'cmpxchg16b')], hits)
+        android = ('0000000000000000 <crd::h()>:\n   0:\t66 0f 3a 22 c2 01    \tpinsrd xmm0,edx,0x1\n'
+                   '   6:\tf3 48 0f bd c7       \tlzcnt rax,rdi\n'
+                   '   b:\tf0 48 0f c7 0e       \tlock cmpxchg16b OWORD PTR [rsi]\n')
+        floor = isa_isolation.OS_FLOOR['android']
+        hits = [(f, kind) for f, _address, kind, _line in isa_isolation.scan_x64(android, False, floor=floor)]
+        self.assertEqual([('crd::h()', 'lzcnt')], hits)
+        self.assertEqual(3, len(isa_isolation.scan_x64(android, False)))
 
     def test_a_provider_is_left_out_of_elf_images(self):
         # nm over a provider archive: member headers, defined functions (global and local) and data.
@@ -6413,21 +6420,29 @@ class IsaIsolation(unittest.TestCase):
 
     def test_kernel_code_stays_within_its_level(self):
         judge = isa_isolation.judge_kernel_code
+        windows, linux = isa_isolation.OS_FLOOR['windows'], isa_isolation.OS_FLOOR['linux']
         vex = ('f', 0, 'VEX', 'vaddps')
-        self.assertEqual([], judge('avx2', [vex, ('f', 4, 'lzcnt', 'lzcnt'), ('f', 8, 'popcnt', 'popcnt')], True))
-        self.assertEqual(1, len(judge('avx2_avxvnni', [vex, ('f', 4, 'EVEX', 'vpdpbusd')], True)))
-        self.assertEqual([], judge('avx512', [('f', 0, 'EVEX', 'vaddps zmm0'), vex], True))
-        self.assertEqual(1, len(judge('avx2', [('f', 0, 'REX2', 'push2')], True)))
-        self.assertEqual([], judge('sse42', [('f', 0, 'pshufb', 'pshufb'), ('f', 4, 'popcnt', 'popcnt')], True))
-        self.assertEqual(1, len(judge('sse42', [('f', 0, 'EVEX', 'vaddps zmm0')], True)))
-        self.assertEqual(1, len(judge('sse2', [('f', 0, 'pshufb', 'pshufb')], True)))
+        self.assertEqual([], judge('avx2', [vex, ('f', 4, 'lzcnt', 'lzcnt'), ('f', 8, 'popcnt', 'popcnt')], windows))
+        self.assertEqual(1, len(judge('avx2_avxvnni', [vex, ('f', 4, 'EVEX', 'vpdpbusd')], windows)))
+        self.assertEqual([], judge('avx512', [('f', 0, 'EVEX', 'vaddps zmm0'), vex], windows))
+        self.assertEqual(1, len(judge('avx2', [('f', 0, 'REX2', 'push2')], windows)))
+        self.assertEqual([], judge('sse42', [('f', 0, 'pshufb', 'pshufb'), ('f', 4, 'popcnt', 'popcnt')], windows))
+        self.assertEqual(1, len(judge('sse42', [('f', 0, 'EVEX', 'vaddps zmm0')], windows)))
+        self.assertEqual(1, len(judge('sse2', [('f', 0, 'pshufb', 'pshufb')], windows)))
         clmul = ('f', 0, 'pclmulqdq', 'pclmulqdq xmm0, xmm1, 0')
-        self.assertEqual([], judge('sse42_pclmulqdq', [clmul, ('f', 4, 'crc32', 'crc32 rax, rcx')], True))
-        self.assertEqual(1, len(judge('sse42', [clmul], True)))
-        self.assertEqual([], judge('avx512_vpclmulqdq', [('f', 0, 'EVEX', 'vpclmulqdq zmm0')], True))
-        self.assertEqual([], judge('sse2', [('f', 0, 'cmpxchg16b', 'lock cmpxchg16b')], True))
-        self.assertEqual(1, len(judge('sse2', [('f', 0, 'cmpxchg16b', 'lock cmpxchg16b')], False)))
-        self.assertEqual([], judge('portable', [], True))
+        self.assertEqual([], judge('sse42_pclmulqdq', [clmul, ('f', 4, 'crc32', 'crc32 rax, rcx')], windows))
+        self.assertEqual(1, len(judge('sse42', [clmul], windows)))
+        self.assertEqual([], judge('avx512_vpclmulqdq', [('f', 0, 'EVEX', 'vpclmulqdq zmm0')], windows))
+        self.assertEqual([], judge('sse2', [('f', 0, 'cmpxchg16b', 'lock cmpxchg16b')], windows))
+        self.assertEqual(1, len(judge('sse2', [('f', 0, 'cmpxchg16b', 'lock cmpxchg16b')], linux)))
+        self.assertEqual([], judge('portable', [], windows))
+        # Android's x86_64 ABI floor is SSE4.2 with POPCNT: its sse2 kernels may hold SSE4.1, never LZCNT or VEX.
+        android = isa_isolation.OS_FLOOR['android']
+        self.assertEqual([], judge('sse2', [('f', 0, 'pinsrd', 'pinsrd'), ('f', 4, 'popcnt', 'popcnt')], android))
+        self.assertEqual([], judge('portable', [('f', 0, 'roundsd', 'roundsd'), ('f', 4, 'crc32', 'crc32')], android))
+        self.assertEqual(1, len(judge('sse2', [('f', 0, 'lzcnt', 'lzcnt')], android)))
+        self.assertEqual(1, len(judge('sse2', [('f', 0, 'VEX', 'vaddps')], android)))
+        self.assertEqual(1, len(judge('sse2', [('f', 0, 'lahf', 'lahf')], android)))
 
     def test_arm64_kernel_code_stays_within_its_feature(self):
         judge = isa_isolation.judge_arm64_kernel_code
