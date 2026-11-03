@@ -1,5 +1,5 @@
-# A test trust set (NET.2 #policy-state): the keys that signed generation-1.policy beside it, made with ceridc policy key
-# in a scratch key store; their private keys were not kept. Not trusted by any build.
+# A test trust set (NET.2 #policy-state): the keys that signed generation-1.policy beside it, made with ceridc
+# policy key in a scratch key store; their private keys were not kept. Not trusted by any build.
 
 [[key]]
 algorithm = "ml-dsa-65"

@@ -1,6 +1,6 @@
 #pragma once
 
-// crd-crypto -- an installation's crypto policy state (NET.2; contract: docs/design/network-foundation.md#policy-state).
+// crd-crypto -- an installation's crypto policy state (NET.2; docs/design/network-foundation.md#policy-state).
 //
 // What a Cerid installation keeps of its policy generations between runs, and what its build brings:
 //

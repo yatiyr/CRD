@@ -22,10 +22,10 @@ namespace fs = crd::platform::fs;
 // The saved state, one durable file (durable_file.hpp: its envelope checks the bytes) with one older save kept:
 //   format (u8, kStateFormat) | floor (u64) | generation length (u32, at most kMaxPolicyBytes) | generation
 // all big-endian, exact: any other payload is Damaged.
-constexpr char  kStateFileName[] = "policy-state";
-constexpr char  kLockFileName[]  = "policy-state.lock";
-constexpr u32   kStateKept       = 1U;
-constexpr u8    kStateFormat     = 1U;
+constexpr char  kStateFileName[]  = "policy-state";
+constexpr char  kLockFileName[]   = "policy-state.lock";
+constexpr u32   kStateKept        = 1U;
+constexpr u8    kStateFormat      = 1U;
 constexpr usize kStateHeaderBytes = 1U + 8U + 4U;
 
 struct SavedState

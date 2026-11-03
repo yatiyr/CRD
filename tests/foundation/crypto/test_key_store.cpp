@@ -2301,7 +2301,8 @@ TEST_CASE("Key store: the PKCS #11 device's contract", "[crypto][key-store]")
 #else
     const char* const not_pkcs11 = "libc.so.6";
 #endif
-    const Pkcs11Token tokens[] = {Pkcs11Token(), Pkcs11Token("cerid-no-such-pkcs11-module", "cerid", ConstSpan<u8>(pin)),
+    const Pkcs11Token tokens[] = {Pkcs11Token(),
+                                  Pkcs11Token("cerid-no-such-pkcs11-module", "cerid", ConstSpan<u8>(pin)),
                                   Pkcs11Token(not_pkcs11, "cerid", ConstSpan<u8>(pin))};
     for (const Pkcs11Token& token : tokens)
     {
