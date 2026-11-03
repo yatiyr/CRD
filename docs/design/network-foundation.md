@@ -495,6 +495,45 @@ holds ECDSA. The decisions (numbered for the tests):
   device cases among them (a TLS handshake and three concurrent signers), then gives the owner hierarchy an
   authorization and finds both `Unavailable`.
 
+- **K14. PKCS #11 tokens.** `Pkcs11KeyDevice` ("pkcs11") holds a store's ECDSA keys in any PKCS #11 token: an HSM, a
+  smart card or USB token through its vendor's module, SoftHSM. `Pkcs11Token` names the module (a library path, loaded
+  at run time through crd-platform's `DynamicLibrary`), the token's label (exactly one present token must carry it) and
+  the user PIN (fixed storage, zeroed with the object; empty only for a token with a protected authentication path).
+  crd-crypto compiles against the OASIS Standard's 3.2 headers (`packages/pkcs11`) and calls only the 2.40 function
+  list, so modules from 2.20 on answer. A module is initialised once per process (`CKF_OS_LOCKING_OK`; a module already
+  initialised by another user in the process is accepted) and never finalised or unloaded. One process-wide lock orders
+  every call and each call opens its own session. Login state belongs to the token and the whole application, and
+  `C_Logout` in any session logs all of them out, so the device logs the user in only when no session of the process
+  has, never logs out, and lets the token close the login with its last session. A PIN is tried once per device: a
+  refused one (`CKR_PIN_INCORRECT`, `_INVALID`, `_LEN_RANGE`, `_LOCKED`, `_EXPIRED`) makes every later call through
+  that device, and its copies, `Denied` without a login. A token that reports its PIN locked, on its final try or due
+  for a change is `Denied` before any login, so the device never spends a token's last attempt. A key is a
+  `CKM_EC_KEY_PAIR_GEN` pair: public `CKA_TOKEN`, verify only; private `CKA_TOKEN`, `CKA_PRIVATE`, `CKA_SENSITIVE`, not
+  `CKA_EXTRACTABLE`, sign only (no decrypt, unwrap or derive). Its `CKA_ID` is a random 16-byte handle and its
+  `CKA_LABEL` is "cerid key store " and the store's identifier in hexadecimal. After generation the private half must
+  read back sensitive, never extractable, always sensitive, never extractable since generation and signing; otherwise
+  both halves are destroyed and the change is `Denied`. The public key is the DER OCTET STRING of `CKA_EC_POINT` around
+  the curve's uncompressed point, every length checked (a token that answers otherwise: `ProviderFailure`, both halves
+  destroyed). The reference is a format byte and the handle: 17 bytes. A signature finds the private key by class,
+  type, handle, label and curve (`CKA_EC_PARAMS`), so another store's reference or a key of another curve is `Denied`.
+  It signs the digest with `CKM_ECDSA` (r || s, its length checked); a key the token makes reauthenticate
+  (`CKA_ALWAYS_AUTHENTICATE`) takes the PIN once more as `CKU_CONTEXT_SPECIFIC`. `forget` destroys every object whose
+  handle and label both match, so another store's reference deletes nothing. Return values map to `Unsupported` (no
+  EC generation or ECDSA, the curve, a template the token refuses), `Denied` (login, a key handle or a function the
+  token does not permit), `StorageFailure` (the token is full) and `Unavailable` (no module, no single token of the
+  label, a removed or failing device). PIV tokens through Yubico's ykcs11 (read 2026-11-03: its `C_GenerateKeyPair`
+  needs the SO login, the management key, and a `CKA_ID` of 1 to 25 naming a fixed PIV slot; its `C_DestroyObject`
+  deletes a slot's certificate, not its key, which only a new key in the slot overwrites) need a PIV placement of
+  their own: the SO secret, a free retired key-management slot (`CKA_ID` 5 to 24, slots 82 to 95) and overwriting to
+  forget. That is the next slice; a YubiKey 5 is its one physical item. Evidence (2026-11-03,
+  [session](../sessions/2026-11-03-net-2-pkcs11-device.md)): the PKCS #11 cases of `test_key_store.cpp`. The contract
+  case runs on every lane: fields out of range, an absent module, a library that is no PKCS #11 module, every refusal
+  before the token. `crd-crypto-pkcs11-softhsm` (tests/foundation/crypto/pkcs11_token_session.py) runs every key store
+  case against a fresh token of the pinned SoftHSM 2.6.1 (tools/softhsm-linux-x64, scripts/install-softhsm.py): P-256
+  and P-384 keys, a TLS handshake, three concurrent signers, the store and curve bindings, revocation and erasure. The
+  token must hold no object afterwards. A wrong PIN is then recorded by OpenSC's pkcs11-spy as exactly one refused
+  `C_Login`.
+
 Evidence (2026-11-02, [session](../sessions/2026-11-02-net-2-key-store.md)): `test_key_store.cpp` (12 cases: every kind
 of key through its whole life, every refusal, every changed byte of a store, an older and a substituted store, writers
 in four threads, DPAPI on Windows, a TLS credential from a stored signer), `test_private_directory.cpp` and
