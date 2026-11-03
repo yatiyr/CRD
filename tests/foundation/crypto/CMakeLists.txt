@@ -99,14 +99,14 @@ endif()
 
 # Protocol state learning (docs/design/network-foundation.md#state-learning): each end's TlsSession learned through
 # crd-crypto-tls-sul, held to its reviewed machine and to the models' properties. Runs where the program runs on the
-# build host.
+# build host; about 2 minutes on linux-gcc-debug, a sanitizer lane up to ten times that.
 add_executable(crd-crypto-tls-sul state/tls_sul.cpp)
 target_link_libraries(crd-crypto-tls-sul PRIVATE crd-crypto crd-core crd-containers)
 if(Python3_FOUND AND NOT CMAKE_CROSSCOMPILING)
     add_test(NAME crd-crypto-state-learning
              COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-state-machine.py"
                      --sul "$<TARGET_FILE:crd-crypto-tls-sul>")
-    set_tests_properties(crd-crypto-state-learning PROPERTIES TIMEOUT 1200 LABELS "crypto;state-learning"
+    set_tests_properties(crd-crypto-state-learning PROPERTIES TIMEOUT 3600 LABELS "crypto;state-learning"
                          ENVIRONMENT "PYTHONUTF8=1")
 endif()
 
