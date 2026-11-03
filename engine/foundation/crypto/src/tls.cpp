@@ -64,6 +64,7 @@
 #include <climits>
 #include <cstring>
 #include <ctime>
+#include <initializer_list>
 #include <iterator>
 #include <new>
 #include <utility>

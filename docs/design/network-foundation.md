@@ -1269,8 +1269,8 @@ The generation's rules ([policy wire](#policy-wire)) are enforced where keys are
 - **Not yet under the policy:** the HPKE suite a client's ECH offer uses (the server's ECHConfig chooses it) and the
   MLS cipher suites a group runs; both are NET.2 items that follow this decision.
 
-Evidence: `test_tls_policy.cpp` (a server's preference following the generation; a refused group out of a client's
-offer and a server's acceptance; refused AEADs and a refused server key; every `PolicyRefused` before a byte, a
+Evidence: `test_tls_policy.cpp` (a server's preference following the generation; a preferred AEAD leading a
+client's offer; a refused group out of a client's offer and a server's acceptance; refused AEADs and a refused server key; every `PolicyRefused` before a byte, a
 refused credential serving again under the next generation and an empty store; Cerid service contexts refusing
 classical-only key exchange while other contexts accept it, and the scope's configuration refusals; a ticket of a
 refused server key not resuming; a generation applied mid-session reaching it at its own key update, at the update
