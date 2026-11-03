@@ -200,6 +200,10 @@ registers_spec.loader.exec_module(registers)
 register_ids_spec = importlib.util.spec_from_file_location('gen_register_ids', ROOT / 'scripts/gen-register-ids.py')
 register_ids = importlib.util.module_from_spec(register_ids_spec)
 register_ids_spec.loader.exec_module(register_ids)
+policy_bootstrap_spec = importlib.util.spec_from_file_location('gen_policy_bootstrap',
+                                                               ROOT / 'scripts/gen-policy-bootstrap.py')
+policy_bootstrap = importlib.util.module_from_spec(policy_bootstrap_spec)
+policy_bootstrap_spec.loader.exec_module(policy_bootstrap)
 comply_rules_spec = importlib.util.spec_from_file_location('gen_comply_rules', ROOT / 'scripts/gen-comply-rules.py')
 comply_rules = importlib.util.module_from_spec(comply_rules_spec)
 comply_rules_spec.loader.exec_module(comply_rules)
@@ -11656,6 +11660,115 @@ class RegisterIds(unittest.TestCase):
         audio = [self.entry('media.x', 'audio', {'registry': 'QUIC Versions', 'name': 'x', 'value': '0x1'})]
         self.assert_refused(audio, 'registered owners audio own codepoints and have no output',
                             modules=('core', 'net', 'audio'))
+
+
+class PolicyBootstrapHeaders(unittest.TestCase):
+    """scripts/gen-policy-bootstrap.py: the trust set and newest signed generation of a directory embedded as constexpr
+    data (network foundation #policy-state), empty until they exist, and every unusable input refused."""
+
+    BUILD = 'engine/foundation/crypto/src/policy_bootstrap.hpp'
+    FIXTURE = 'tests/foundation/crypto/policy_bootstrap_fixture.hpp'
+    SOURCE = 'assets/crypto-policy'
+    PQ = 'ab' * 40
+    CLASSICAL = '04' + 'cd' * 64
+
+    @staticmethod
+    def trust(*keys):
+        return ''.join(f'[[key]]\nalgorithm = "{algorithm}"\npublic_key = "{public}"\n\n' for algorithm, public in keys)
+
+    def generate(self, files, check=False, headers=None):
+        """(exit code, output, {output path: text} of the headers present afterwards) over a fixture tree holding
+        `files` and the committed `headers`."""
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            ids = root / policy_bootstrap.REGISTER_IDS
+            ids.parent.mkdir(parents=True)
+            ids.write_text('    case AlgorithmId::MlDsa65:\n        return "ml-dsa-65";\n'
+                           '    case AlgorithmId::EcdsaSecp256r1Sha256:\n        return "ecdsa-secp256r1-sha256";\n',
+                           encoding='utf-8')
+            for relative, data in {**files, **(headers or {})}.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data if isinstance(data, bytes) else data.encode('utf-8'))
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = policy_bootstrap.main(['--root', str(root)] + (['--check'] if check else []))
+            written = {relative: (root / relative).read_text(encoding='utf-8')
+                       for relative in (self.BUILD, self.FIXTURE) if (root / relative).exists()}
+            return code, output.getvalue(), written
+
+    def header(self, files):
+        code, _, written = self.generate(files)
+        self.assertEqual(0, code)
+        return written[self.BUILD]
+
+    def pair(self):
+        return self.trust(('ml-dsa-65', self.PQ), ('ecdsa-secp256r1-sha256', self.CLASSICAL))
+
+    def test_an_empty_directory_yields_the_empty_bootstrap(self):
+        header = self.header({})
+        self.assertIn('inline constexpr PolicyBootstrap kBootstrap{};', header)
+        self.assertIn('(0 trust keys, no generation)', header)
+        self.assertNotIn('clang-format', header)
+
+    def test_a_trust_set_alone_is_embedded_without_a_generation(self):
+        header = self.header({f'{self.SOURCE}/trust-set.toml': self.pair()})
+        self.assertIn('     AlgorithmId::MlDsa65,', header)
+        self.assertIn('     AlgorithmId::EcdsaSecp256r1Sha256,', header)
+        self.assertIn('kBootstrap{cont::ConstSpan<TrustKey>(kTrust), {}, 0U};', header)
+        digest = hashlib.sha256(bytes.fromhex(self.PQ)).digest()
+        self.assertIn('    {KeyId{{' + ', '.join(f'0x{byte:02X}U' for byte in digest[:12]) + ',', header)
+        self.assertIn('// clang-format off', header)
+        self.assertTrue(all(len(line) <= 120 for line in header.splitlines()))
+
+    def test_the_newest_generation_is_embedded(self):
+        header = self.header({f'{self.SOURCE}/trust-set.toml': self.pair(),
+                              f'{self.SOURCE}/generation-2.policy': bytes(range(20)),
+                              f'{self.SOURCE}/generation-10.policy': b'\xfe\xff',
+                              f'{self.SOURCE}/generation-10.policy.toml': 'generation = 10\n'})
+        self.assertIn('inline constexpr u8 kGeneration[] = {\n    0xFEU, 0xFFU,\n};', header)
+        self.assertIn('cont::ConstSpan<u8>(kGeneration), 10U};', header)
+        self.assertIn('(2 trust keys, generation-10.policy)', header)
+
+    def test_check_passes_on_the_committed_bytes_and_fails_on_drift(self):
+        files = {f'{self.SOURCE}/trust-set.toml': self.pair()}
+        committed = self.generate(files)[2]
+        self.assertEqual(0, self.generate(files, check=True, headers=committed)[0])
+        drifted = {**committed, self.BUILD: committed[self.BUILD].replace('0xABU', '0xACU', 1)}
+        code, output, _ = self.generate(files, check=True, headers=drifted)
+        self.assertEqual(1, code)
+        self.assertIn(f'FAIL: {self.BUILD} differs from scripts/gen-policy-bootstrap.py', output)
+        code, output, _ = self.generate(files, check=True, headers={self.BUILD: committed[self.BUILD]})
+        self.assertEqual(1, code)
+        self.assertIn(f'FAIL: {self.FIXTURE} differs', output)
+
+    def assert_refused(self, files, message):
+        code, output, written = self.generate(files)
+        self.assertEqual(1, code)
+        self.assertIn(message, output)
+        self.assertEqual({}, written)
+
+    def test_unusable_inputs_are_refused(self):
+        trust = f'{self.SOURCE}/trust-set.toml'
+        self.assert_refused({f'{self.SOURCE}/generation-1.policy': b'\x01'}, 'has no trust-set.toml beside it')
+        self.assert_refused({trust: self.trust(('ml-dsa-65', self.PQ))}, 'a trust set holds 2 to 4')
+        self.assert_refused({trust: self.trust(*[('ml-dsa-65', f'{i:02x}') for i in range(5)])}, 'a trust set holds 2')
+        self.assert_refused({trust: self.trust(('ml-dsa-65', self.PQ), ('ed448', 'aa'))}, "unknown algorithm 'ed448'")
+        self.assert_refused({trust: self.trust(('ml-dsa-65', self.PQ), ('ml-dsa-65', 'AB'))}, 'not lower-case hex')
+        self.assert_refused({trust: self.trust(('ml-dsa-65', self.PQ), ('ml-dsa-65', 'abc'))}, 'not lower-case hex')
+        self.assert_refused({trust: self.trust(('ml-dsa-65', self.PQ), ('ml-dsa-65', self.PQ))}, 'a key appears twice')
+        self.assert_refused({trust: 'issuer = "x"\n' + self.pair()}, 'unknown key issuer')
+        self.assert_refused({trust: self.pair().replace('public_key', 'public', 1)}, 'exactly algorithm and public_key')
+        self.assert_refused({trust: 'key = [\n'}, 'trust-set.toml:')
+        self.assert_refused({trust: self.pair(), f'{self.SOURCE}/generation-1.policy': b''}, '0 bytes, not 1 to 32768')
+        self.assert_refused({trust: self.pair(), f'{self.SOURCE}/generation-1.policy': bytes(32769)},
+                            '32769 bytes, not 1 to 32768')
+
+    def test_the_committed_headers_are_current(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(0, policy_bootstrap.main(['--check']))
+        self.assertIn('policy bootstrap current: 2 header(s)', output.getvalue())
 
 
 class AbBoard(unittest.TestCase):

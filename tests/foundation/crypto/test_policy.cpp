@@ -1,12 +1,19 @@
 // crd-crypto -- signed crypto policy generations (NET-STD; docs/design/network-foundation.md#agility and
 // #policy-wire): the writers and the exact decoder, the hybrid trust set, monotonic adoption, dates and the offline
 // grace period, migration windows, the build's ceiling, the remote disable, live swap between sessions, protocol
-// minimums, ignore-unknown and every refusal.
+// minimums, ignore-unknown and every refusal; an installation's saved state (#policy-state: its generation and floor
+// across restarts and processes, damage and failed saves) and the generated bootstrap verified under its trust set.
 
+#include "policy_bootstrap_fixture.hpp"
 #include "policy_test_signer.hpp"
+#include "temp_directory.hpp"
 
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/crypto/policy.hpp>
+#include <crd/crypto/policy_state.hpp>
+#include <crd/crypto/provider.hpp>
+#include <crd/platform/durable_file.hpp>
+#include <crd/platform/filesystem.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -21,6 +28,7 @@ using crd::u32;
 using crd::u64;
 using crd::u8;
 using crd::usize;
+using crd::containers::Array;
 using crd::containers::ConstSpan;
 using crd::containers::Span;
 using crd::containers::WireWriter;
@@ -29,7 +37,9 @@ using crd::crypto::test::kTestSignatureBytes;
 using crd::crypto::test::kTestTrust;
 using crd::crypto::test::test_key_id;
 using crd::crypto::test::test_sign;
+using crd::crypto::test::TempDirectory;
 using crd::crypto::test::TestVerifier;
+namespace fs = crd::platform::fs;
 
 constexpr u64 kDay = 86400U;
 constexpr u64 kT0  = 1800000000U; // 2027-01-15
@@ -909,4 +919,295 @@ TEST_CASE("Policy: error names are distinct and stable", "[crypto][net-std]")
         CHECK(name == names[i]);
     }
     CHECK(policy_error_name(static_cast<PolicyError>(count)) == "unknown");
+}
+
+TEST_CASE("Policy: a raised floor refuses older generations and keeps the current one", "[crypto][net-std]")
+{
+    const TestVerifier verifier;
+    PolicyStore        store(config(verifier));
+    REQUIRE(store.apply(sign(base(5U)).view(), kT0) == PolicyError::None);
+    store.raise_floor(8U);
+    CHECK(store.floor_generation() == 8U);
+    CHECK(store.snapshot().generation() == 5U);
+    CHECK(store.apply(sign(base(7U)).view(), kT0) == PolicyError::Rollback);
+    store.raise_floor(3U); // never lowered
+    CHECK(store.floor_generation() == 8U);
+    CHECK(store.apply(sign(base(9U)).view(), kT0) == PolicyError::None);
+    CHECK(store.floor_generation() == 9U);
+}
+
+namespace
+{
+// The newest save of an installation's state: its durable-file generation (how many saves were made).
+u64 saves_of(const TempDirectory& dir)
+{
+    Array<u8> payload;
+    return fs::load_generation(dir.path() / "policy-state", 1U, payload).generation;
+}
+
+void flip_middle_byte(const fs::Path& path)
+{
+    Array<u8> bytes;
+    REQUIRE(fs::read_file_binary(path, bytes));
+    bytes[bytes.size() / 2U] ^= 0x10U;
+    REQUIRE(fs::write_file_binary(path, ConstSpan<u8>(bytes.data(), bytes.size())));
+}
+} // namespace
+
+TEST_CASE("Policy: an installation saves its generation and floor and starts from them", "[crypto][net-std]")
+{
+    const TestVerifier  verifier;
+    const TempDirectory dir("policy-state");
+    const Signed        five = sign(base(5U, kT0));
+    const Signed        six  = sign(base(6U, kT0 + kDay));
+    {
+        // A fresh installation adopts the bootstrap and saves it.
+        PolicyInstallation installation(config(verifier));
+        const PolicyOpen   opened = installation.open(dir.dir(), five.view(), kT0);
+        CHECK(opened.read == PolicyStateError::None);
+        CHECK_FALSE(opened.recovered);
+        CHECK(opened.start.persisted == PolicyError::Absent);
+        CHECK(opened.start.bootstrap == PolicyError::None);
+        CHECK(opened.saved == PolicyStateError::None);
+        CHECK(installation.store().snapshot().generation() == 5U);
+        CHECK(saves_of(dir) == 1U);
+
+        // A generation received at run time is adopted and saved; a refused one saves nothing.
+        PolicyStateError saved = PolicyStateError::NotOpen;
+        CHECK(installation.apply(six.view(), kT0 + kDay, saved) == PolicyError::None);
+        CHECK(saved == PolicyStateError::None);
+        CHECK(installation.apply(five.view(), kT0 + kDay, saved) == PolicyError::Rollback);
+        CHECK(saved == PolicyStateError::None);
+        CHECK(saves_of(dir) == 2U);
+    }
+    {
+        // A restart: the saved generation is current, the older bootstrap a harmless rollback, nothing to save.
+        PolicyInstallation installation(config(verifier));
+        const PolicyOpen   opened = installation.open(dir.dir(), five.view(), kT0 + kDay);
+        CHECK(opened.start.persisted == PolicyError::None);
+        CHECK(opened.start.bootstrap == PolicyError::Rollback);
+        CHECK(installation.store().snapshot().generation() == 6U);
+        CHECK(installation.store().floor_generation() == 6U);
+        CHECK(saves_of(dir) == 2U);
+    }
+    {
+        // A newer build's bootstrap supersedes the saved generation and is saved.
+        PolicyInstallation installation(config(verifier));
+        const PolicyOpen   opened = installation.open(dir.dir(), sign(base(7U, kT0 + kDay)).view(), kT0 + kDay);
+        CHECK(opened.start.persisted == PolicyError::None);
+        CHECK(opened.start.bootstrap == PolicyError::None);
+        CHECK(opened.saved == PolicyStateError::None);
+        CHECK(installation.store().snapshot().generation() == 7U);
+        CHECK(saves_of(dir) == 3U);
+    }
+}
+
+TEST_CASE("Policy: the processes of one installation share its floor", "[crypto][net-std]")
+{
+    const TestVerifier  verifier;
+    const TempDirectory dir("policy-shared");
+    const Signed        five = sign(base(5U, kT0));
+    PolicyInstallation  editor(config(verifier));
+    PolicyInstallation  game(config(verifier));
+    REQUIRE(editor.open(dir.dir(), five.view(), kT0).start.bootstrap == PolicyError::None);
+    const PolicyOpen joined = game.open(dir.dir(), five.view(), kT0);
+    CHECK(joined.start.persisted == PolicyError::None);
+    CHECK(joined.start.bootstrap == PolicyError::AlreadyCurrent);
+
+    // The editor adopts generation 7; the game, offered 6 later, first catches up with 7 and refuses 6.
+    PolicyStateError saved = PolicyStateError::NotOpen;
+    REQUIRE(editor.apply(sign(base(7U, kT0 + kDay)).view(), kT0 + kDay, saved) == PolicyError::None);
+    CHECK(game.apply(sign(base(6U, kT0 + kDay)).view(), kT0 + kDay, saved) == PolicyError::Rollback);
+    CHECK(game.store().snapshot().generation() == 7U);
+    CHECK(game.store().floor_generation() == 7U);
+}
+
+TEST_CASE("Policy: an installation's saved floor outlives an expired generation", "[crypto][net-std]")
+{
+    // Generation 5 expires past its grace; a build whose bootstrap is the older generation 4 cannot roll the
+    // installation back to it, so the store stays empty and refuses everything (fail closed, S23).
+    const TestVerifier  verifier;
+    const TempDirectory dir("policy-expired");
+    {
+        PolicyInstallation installation(config(verifier));
+        REQUIRE(installation.open(dir.dir(), sign(base(5U, kT0)).view(), kT0).start.bootstrap == PolicyError::None);
+    }
+    const u64          late = kT0 + 30U * kDay + 7U * kDay + 1U;
+    PolicyInstallation installation(config(verifier));
+    const PolicyOpen   opened = installation.open(dir.dir(), sign(base(4U, late)).view(), late);
+    CHECK(opened.start.persisted == PolicyError::Expired);
+    CHECK(opened.start.bootstrap == PolicyError::Rollback);
+    CHECK(opened.saved == PolicyStateError::None);
+    CHECK(installation.store().floor_generation() == 5U);
+    CHECK(installation.store().snapshot().status(AlgorithmId::X25519Mlkem768, late) == AlgorithmStatus::Refused);
+    CHECK(saves_of(dir) == 1U);
+}
+
+TEST_CASE("Policy: a damaged saved state falls back to the older save, then to the bootstrap", "[crypto][net-std]")
+{
+    const TestVerifier  verifier;
+    const Signed        five = sign(base(5U, kT0));
+    const ConstSpan<u8> none;
+    {
+        // The newest save damaged: the older one is read and saved again; the newer generation it lost arrives
+        // again through the update channel.
+        const TempDirectory dir("policy-recover");
+        {
+            PolicyInstallation installation(config(verifier));
+            REQUIRE(installation.open(dir.dir(), five.view(), kT0).saved == PolicyStateError::None);
+            PolicyStateError saved = PolicyStateError::NotOpen;
+            REQUIRE(installation.apply(sign(base(6U, kT0)).view(), kT0, saved) == PolicyError::None);
+        }
+        flip_middle_byte(dir.path() / "policy-state");
+        PolicyInstallation installation(config(verifier));
+        const PolicyOpen   opened = installation.open(dir.dir(), none, kT0);
+        CHECK(opened.read == PolicyStateError::None);
+        CHECK(opened.recovered);
+        CHECK(opened.start.persisted == PolicyError::None);
+        CHECK(opened.start.bootstrap == PolicyError::Absent);
+        CHECK(opened.saved == PolicyStateError::None);
+        CHECK(installation.store().snapshot().generation() == 5U);
+        CHECK(installation.store().floor_generation() == 5U);
+    }
+    {
+        // Every save damaged: read as none, and the bootstrap is adopted and saved over it.
+        const TempDirectory dir("policy-corrupt");
+        {
+            PolicyInstallation installation(config(verifier));
+            REQUIRE(installation.open(dir.dir(), five.view(), kT0).saved == PolicyStateError::None);
+        }
+        flip_middle_byte(dir.path() / "policy-state");
+        PolicyInstallation installation(config(verifier));
+        const PolicyOpen   opened = installation.open(dir.dir(), five.view(), kT0);
+        CHECK(opened.read == PolicyStateError::Damaged);
+        CHECK(opened.start.persisted == PolicyError::Absent);
+        CHECK(opened.start.bootstrap == PolicyError::None);
+        CHECK(opened.saved == PolicyStateError::None);
+        PolicyInstallation again(config(verifier));
+        CHECK(again.open(dir.dir(), none, kT0).read == PolicyStateError::None);
+        CHECK(again.store().snapshot().generation() == 5U);
+    }
+    // A save whose file checks pass but whose payload this build does not read: another format, a generation shorter
+    // than its length, one longer than kMaxPolicyBytes, trailing bytes.
+    const u8 payloads[][14] = {
+        {2U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 5U, 0U, 0U, 0U, 0U, 0U},
+        {1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 5U, 0U, 0U, 0U, 9U, 0U},
+        {1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 5U, 0U, 0U, 0x80U, 1U, 0U},
+        {1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 5U, 0U, 0U, 0U, 0U, 0U},
+    };
+    for (const auto& payload : payloads)
+    {
+        const TempDirectory dir("policy-payload");
+        REQUIRE(fs::create_private_directory(dir.path()));
+        REQUIRE(fs::save_generation(dir.path() / "policy-state", ConstSpan<u8>(payload), 1U).ok);
+        PolicyInstallation installation(config(verifier));
+        const PolicyOpen   opened = installation.open(dir.dir(), five.view(), kT0);
+        CHECK(opened.read == PolicyStateError::Damaged);
+        CHECK(opened.start.bootstrap == PolicyError::None);
+        CHECK(installation.store().floor_generation() == 5U);
+    }
+    {
+        // The shortest well-formed payload: floor 5, no generation.
+        const u8            floor_only[] = {1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 5U, 0U, 0U, 0U, 0U};
+        const TempDirectory dir("policy-floor");
+        REQUIRE(fs::create_private_directory(dir.path()));
+        REQUIRE(fs::save_generation(dir.path() / "policy-state", ConstSpan<u8>(floor_only), 1U).ok);
+        PolicyInstallation installation(config(verifier));
+        const PolicyOpen   opened = installation.open(dir.dir(), sign(base(4U)).view(), kT0);
+        CHECK(opened.read == PolicyStateError::None);
+        CHECK(opened.start.bootstrap == PolicyError::Rollback);
+        CHECK(installation.store().floor_generation() == 5U);
+    }
+}
+
+TEST_CASE("Policy: an installation that cannot read or save its state", "[crypto][net-std]")
+{
+    const TestVerifier verifier;
+    const Signed       five  = sign(base(5U, kT0));
+    PolicyStateError   saved = PolicyStateError::None;
+    {
+        // Not opened, or no directory: nothing is adopted and every algorithm is refused.
+        PolicyInstallation installation(config(verifier));
+        CHECK(installation.apply(five.view(), kT0, saved) == PolicyError::BadConfig);
+        CHECK(saved == PolicyStateError::NotOpen);
+        CHECK(installation.open("", five.view(), kT0).read == PolicyStateError::Unavailable);
+        const TempDirectory file("policy-file");
+        REQUIRE(fs::write_file_binary(file.path(), five.view()));
+        CHECK(installation.open(file.dir(), five.view(), kT0).read == PolicyStateError::Unavailable);
+        CHECK(installation.store().snapshot().freshness(kT0) == Freshness::None);
+        CHECK(installation.apply(five.view(), kT0, saved) == PolicyError::BadConfig);
+    }
+    {
+        // A state file that cannot be replaced (a directory in its place): the store adopts the generation for this
+        // run, and the failed save is reported.
+        const TempDirectory dir("policy-unsaved");
+        REQUIRE(fs::create_directories(dir.path() / "policy-state"));
+        PolicyInstallation installation(config(verifier));
+        const PolicyOpen   opened = installation.open(dir.dir(), five.view(), kT0);
+        CHECK(opened.start.bootstrap == PolicyError::None);
+        CHECK(opened.saved == PolicyStateError::Unsaved);
+        CHECK(installation.apply(sign(base(6U)).view(), kT0, saved) == PolicyError::None);
+        CHECK(saved == PolicyStateError::Unsaved);
+        CHECK(installation.store().snapshot().generation() == 6U);
+    }
+    CHECK(policy_state_error_name(PolicyStateError::None) == "none");
+    CHECK(policy_state_error_name(PolicyStateError::NotOpen) == "not-open");
+    CHECK(policy_state_error_name(PolicyStateError::Unavailable) == "unavailable");
+    CHECK(policy_state_error_name(PolicyStateError::Damaged) == "damaged");
+    CHECK(policy_state_error_name(PolicyStateError::Unsaved) == "unsaved");
+    CHECK(policy_state_error_name(static_cast<PolicyStateError>(5)) == "unknown");
+}
+
+namespace
+{
+// Starts a store from `bootstrap` alone on its day of issue, under the provider's verifier.
+void check_bootstrap(const PolicyBootstrap& bootstrap)
+{
+    for (const TrustKey& key : bootstrap.trust)
+    {
+        CHECK(key.id == key_id_of(key.public_key));
+    }
+    const ProviderVerifier verifier;
+    const PolicyConfig     trusted{bootstrap.trust, &verifier, provider_algorithms(), 0U};
+    REQUIRE(validate_config(trusted) == PolicyError::None);
+    PolicyMessage message;
+    REQUIRE(decode_policy(bootstrap.generation, message) == PolicyError::None);
+    const u64   issued = message.content.issued;
+    PolicyStore store(trusted);
+    CHECK(store.start({}, bootstrap.generation, issued).bootstrap == PolicyError::None);
+    CHECK(store.snapshot().generation() == bootstrap.number);
+    CHECK(store.snapshot().status(AlgorithmId::X25519Mlkem768, issued) == AlgorithmStatus::Preferred);
+
+    // One changed byte of a signature is refused.
+    Array<u8> forged;
+    forged.resize(bootstrap.generation.size());
+    std::memcpy(forged.data(), bootstrap.generation.data(), forged.size());
+    forged[forged.size() - 1U] ^= 0x01U;
+    PolicyStore other(trusted);
+    CHECK(other.apply(ConstSpan<u8>(forged.data(), forged.size()), issued) == PolicyError::BadSignature);
+}
+} // namespace
+
+TEST_CASE("Policy: a generated bootstrap verifies under its own trust set", "[crypto][net-std]")
+{
+    // The populated shape: a test trust set (ML-DSA-65 and ECDSA P-256) and generation 1 signed by it with ceridc.
+    REQUIRE(crd::crypto::test::bootstrap::kBootstrap.trust.size() == 2U);
+    check_bootstrap(crd::crypto::test::bootstrap::kBootstrap);
+
+    // The build's: empty until the key holders' ceremony commits it, and then held to the same checks. Without a
+    // trust set no generation is accepted, so an installation refuses every algorithm.
+    const PolicyBootstrap built = policy_bootstrap();
+    if (built.trust.empty())
+    {
+        CHECK(built.generation.empty());
+        const ProviderVerifier verifier;
+        const PolicyConfig     untrusted{built.trust, &verifier, provider_algorithms(), 0U};
+        CHECK(validate_config(untrusted) == PolicyError::BadConfig);
+        PolicyStore store(untrusted);
+        CHECK(store.apply(crd::crypto::test::bootstrap::kBootstrap.generation, kT0) == PolicyError::BadConfig);
+    }
+    else if (!built.generation.empty())
+    {
+        check_bootstrap(built);
+    }
 }

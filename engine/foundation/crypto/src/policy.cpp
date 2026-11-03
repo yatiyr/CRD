@@ -586,6 +586,12 @@ PolicySnapshot PolicyStore::snapshot() const noexcept
     return m_current;
 }
 
+void PolicyStore::raise_floor(u64 floor) noexcept
+{
+    const std::lock_guard<std::mutex> lock(m_mutex);
+    m_floor = std::max(m_floor, floor);
+}
+
 u64 PolicyStore::floor_generation() const noexcept
 {
     const std::lock_guard<std::mutex> lock(m_mutex);

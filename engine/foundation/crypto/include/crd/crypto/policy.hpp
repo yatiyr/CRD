@@ -269,6 +269,10 @@ public:
     // is then refused until a newer generation is applied.
     [[nodiscard]] PolicyStart start(cont::ConstSpan<u8> persisted, cont::ConstSpan<u8> bootstrap, u64 now) noexcept;
 
+    // Raises the floor to `floor` (never lowers it): the floor an installation saved beside its generation, or one
+    // another process of it saved since (decision S24, #policy-state). The current generation stays current.
+    void raise_floor(u64 floor) noexcept;
+
     [[nodiscard]] PolicySnapshot snapshot() const noexcept;
 
     // The newest generation number ever accepted, the configured floor included: what the caller persists.

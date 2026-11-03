@@ -1875,6 +1875,28 @@
       "sha256": "ea597c571126aeccec3ee17e8b08468010cece1d4ea8edc18b0d682212ee8c4a"
     },
     {
+      "path": "engine/foundation/crypto/src/policy_bootstrap.hpp",
+      "generator": "scripts/gen-policy-bootstrap.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-policy-bootstrap.py",
+        "--check"
+      ],
+      "sha256": "dc8d4f274407ecd429f3e821ab1f348aa5496417d36cc99191b80c34867145a3"
+    },
+    {
+      "path": "tests/foundation/crypto/policy_bootstrap_fixture.hpp",
+      "generator": "scripts/gen-policy-bootstrap.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-policy-bootstrap.py",
+        "--check"
+      ],
+      "sha256": "77253a89b18f4e3735bb3d6226ae354d5155b7d34a90e2053c49021e53d325c5"
+    },
+    {
       "path": "engine/foundation/core/src/text_fold_table.inc",
       "generator": "scripts/gen-text-fold.py",
       "status": "reproducible",

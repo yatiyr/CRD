@@ -82,6 +82,12 @@ if(Python3_FOUND)
              COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/gen-register-ids.py" --check
                      --root "${CMAKE_SOURCE_DIR}")
     set_tests_properties(crd-crypto-register-ids-drift PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    # The bootstrap headers are scripts/gen-policy-bootstrap.py's output for assets/crypto-policy (the build's) and
+    # tests/foundation/crypto/data/policy-bootstrap (the populated shape test_policy.cpp verifies).
+    add_test(NAME crd-crypto-policy-bootstrap-drift
+             COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/gen-policy-bootstrap.py" --check
+                     --root "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(crd-crypto-policy-bootstrap-drift PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 endif()
 
 # The policy decoder and store, the provider and the TLS sessions under the bounded fuzz harness, with their committed

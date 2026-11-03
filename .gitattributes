@@ -42,6 +42,7 @@ Cargo.lock text eol=lf
 *.3mf binary
 # Tensor and model test data: raw bytes, read as text by Git's detection when they hold no NUL byte
 *.bin binary
+*.policy binary
 *.npy binary
 *.npz binary
 *.safetensors binary

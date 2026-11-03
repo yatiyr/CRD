@@ -2,17 +2,18 @@
 # foundation owner that depends on no network code).
 #
 # Ships the algorithm identifiers generated from the NET-STD standards register (register_ids.hpp,
-# scripts/gen-register-ids.py), the signature verification interface and the signed, monotonic crypto policy
-# generations (NET-STD), and the provider interface over the pinned AWS-LC (provider.hpp, NET.2): randomness, AEAD,
-# HKDF, signatures, key agreement, key encapsulation and the table PRF, TLS 1.3 sessions over its TLS stack (tls.hpp),
-# whose certificates compress through crd-compression, QUIC packet protection and its handshake (quic.hpp, tls.hpp),
-# capabilities and message schemas (capability.hpp), anti-replay windows and filters (replay.hpp), hybrid public key
-# encryption (hpke.hpp) and MLS (mls.hpp, its messages in mls_message.hpp, its ratchet tree in mls_tree.hpp and its
-# groups, proposals and commits in mls_group.hpp) and the key store (key_store.hpp: the sealed store of long-term keys
-# and shared secrets, its master key guarded by DPAPI or the TPM on Windows, the Secret Service or the TPM on Linux
-# (libdbus-1 and tss2 loaded at run time) or the application's protector). Contract:
-# docs/design/network-foundation.md#crypto, #agility, #provider, #key-store, #tls-sessions, #quic-protection,
-# #capability-tokens, #anti-replay, #early-data, #message-schemas, #hpke and #mls.
+# scripts/gen-register-ids.py), the signature verification interface and the signed, monotonic crypto policy generations
+# (NET-STD) with an installation's saved policy state and the build's bootstrap (policy_state.hpp,
+# scripts/gen-policy-bootstrap.py), and the provider interface over the pinned AWS-LC (provider.hpp, NET.2): randomness,
+# AEAD, HKDF, signatures, key agreement, key encapsulation and the table PRF, TLS 1.3 sessions over its TLS stack
+# (tls.hpp), whose certificates compress through crd-compression, QUIC packet protection and its handshake (quic.hpp,
+# tls.hpp), capabilities and message schemas (capability.hpp), anti-replay windows and filters (replay.hpp), hybrid
+# public key encryption (hpke.hpp) and MLS (mls.hpp, its messages in mls_message.hpp, its ratchet tree in mls_tree.hpp
+# and its groups, proposals and commits in mls_group.hpp) and the key store (key_store.hpp: the sealed store of
+# long-term keys and shared secrets, its master key guarded by DPAPI or the TPM on Windows, the Secret Service or the
+# TPM on Linux (libdbus-1 and tss2 loaded at run time) or the application's protector). Contract:
+# docs/design/network-foundation.md#crypto, #agility, #policy-state, #provider, #key-store, #tls-sessions,
+# #quic-protection, #capability-tokens, #anti-replay, #early-data, #message-schemas, #hpke and #mls.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")

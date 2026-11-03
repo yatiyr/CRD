@@ -8,13 +8,14 @@
 // device (a simulated one everywhere, the TPM on Windows and Linux, a PKCS #11 token under the pinned SoftHSM:
 // pkcs11_token_session.py), signing their certificates and handshakes through the provider's private-key method.
 
+#include "temp_directory.hpp"
+
 #include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/crypto/key_store.hpp>
 #include <crd/crypto/tls.hpp>
 #include <crd/platform/durable_file.hpp>
 #include <crd/platform/filesystem.hpp>
-#include <crd/platform/threading.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -42,6 +43,7 @@ using crd::containers::Span;
 using crd::containers::String;
 using crd::containers::StringView;
 using namespace crd::crypto;
+using TempStore = crd::crypto::test::TempDirectory; // a store directory; its sealed file is "keys"
 namespace fs = crd::platform::fs;
 
 using Bytes = Array<u8>;
@@ -85,33 +87,6 @@ constexpr usize kTpmReferenceBytes = 1U + 4U + 32U;
 constexpr usize kTpmIdentityBytes  = 5U;
 constexpr usize kTpmChangedAt[]    = {1U, 4U, 5U, 20U, kTpmReferenceBytes - 1U};
 #endif
-
-// A store directory under the system's scratch directory, removed with everything in it at the end of its scope.
-class TempStore
-{
-public:
-    explicit TempStore(const char* tag)
-    {
-        static std::atomic<u32> serial{0U};
-        String                  leaf("crd_key_store_");
-        leaf.append(tag);
-        leaf.push_back('_');
-        leaf.append(std::to_string(crd::platform::threading::current_thread_id()));
-        leaf.push_back('_');
-        leaf.append(std::to_string(serial.fetch_add(1U)));
-        m_path = fs::temp_directory() / StringView(leaf.data(), leaf.size());
-        (void)fs::remove_all(m_path);
-    }
-    TempStore(const TempStore&)            = delete;
-    TempStore& operator=(const TempStore&) = delete;
-    ~TempStore() { (void)fs::remove_all(m_path); }
-
-    [[nodiscard]] StringView dir() const { return m_path.generic(); }
-    [[nodiscard]] fs::Path   file() const { return m_path / "keys"; }
-
-private:
-    fs::Path m_path;
-};
 
 // Erases a store when its scope ends, whatever the case's outcome, so a failed run leaves no key in a device or TPM.
 class EraseOnExit
@@ -257,13 +232,13 @@ private:
 [[nodiscard]] Bytes payload_of(const TempStore& store)
 {
     Bytes payload;
-    REQUIRE(fs::load_generation(store.file(), 0U, payload).status == fs::SaveStatus::Ok);
+    REQUIRE(fs::load_generation(store.path() / "keys", 0U, payload).status == fs::SaveStatus::Ok);
     return payload;
 }
 
 void write_payload(const TempStore& store, ConstSpan<u8> payload)
 {
-    REQUIRE(fs::save_generation(store.file(), payload, 0U).ok);
+    REQUIRE(fs::save_generation(store.path() / "keys", payload, 0U).ok);
 }
 
 void write_file(const fs::Path& path, const Bytes& bytes)
@@ -750,7 +725,7 @@ TEST_CASE("Key store: revocation erases the key and replaces the master key", "[
     REQUIRE(store.generate("identity", AlgorithmId::MlDsa65, PlacementRequest::Software, 1U) == CryptoError::None);
     REQUIRE(store.generate("tickets", AlgorithmId::Aes256Gcm, PlacementRequest::Software, 1U) == CryptoError::None);
     REQUIRE(store.rotate("identity", 2U) == CryptoError::None);
-    const Bytes before_revocation = read_file(dir.file());
+    const Bytes before_revocation = read_file(dir.path() / "keys");
     const KeyId first_id          = store.find("identity", 1U)->id;
     const Bytes first_public      = public_of(store, "identity", 1U);
     CHECK(protector.held() == 1U);
@@ -768,18 +743,18 @@ TEST_CASE("Key store: revocation erases the key and replaces the master key", "[
     CHECK(protector.held() == 1U); // the old master key forgotten
 
     // An earlier copy of the store file no longer opens: the master key it was sealed under is gone.
-    const Bytes after_revocation = read_file(dir.file());
-    write_file(dir.file(), before_revocation);
+    const Bytes after_revocation = read_file(dir.path() / "keys");
+    write_file(dir.path() / "keys", before_revocation);
     KeyStore old_copy;
     CHECK(old_copy.open(dir.dir(), protector) == CryptoError::Denied);
-    write_file(dir.file(), after_revocation);
+    write_file(dir.path() / "keys", after_revocation);
 
     // Revoking again changes nothing and writes nothing.
     const usize protects = protector.protects.load();
     REQUIRE(store.revoke("identity", 1U, 9U) == CryptoError::None);
     CHECK(store.find("identity", 1U)->changed == 3U);
     CHECK(protector.protects.load() == protects);
-    const Bytes unchanged = read_file(dir.file());
+    const Bytes unchanged = read_file(dir.path() / "keys");
     CHECK(unchanged.size() == after_revocation.size());
     CHECK(std::memcmp(unchanged.data(), after_revocation.data(), unchanged.size()) == 0);
 
@@ -890,12 +865,12 @@ TEST_CASE("Key store: erasing a store forgets its master keys and removes its fi
     protector.fail_forget = CryptoError::Unavailable;
     REQUIRE(store.revoke("a", 1U, 2U) == CryptoError::None);
     CHECK(protector.held() == 2U);
-    const Bytes copy = read_file(dir.file());
+    const Bytes copy = read_file(dir.path() / "keys");
 
     // A protector that will not forget now stops the erasure before anything is removed.
     CHECK(store.erase() == CryptoError::Unavailable);
     CHECK(store.ready());
-    CHECK(fs::exists(dir.file()));
+    CHECK(fs::exists(dir.path() / "keys"));
     protector.fail_forget = CryptoError::None;
 
     // Another process's newer save is the one erased; a stale store refuses (decision K6).
@@ -905,14 +880,14 @@ TEST_CASE("Key store: erasing a store forgets its master keys and removes its fi
     REQUIRE(store.erase() == CryptoError::None);
     CHECK_FALSE(store.ready());
     CHECK(protector.held() == 0U);
-    CHECK_FALSE(fs::exists(dir.file()));
+    CHECK_FALSE(fs::exists(dir.path() / "keys"));
     CHECK(other.erase() == CryptoError::NotFound);
 
     // No copy of the file opens again, and the directory takes a new store.
-    write_file(dir.file(), copy);
+    write_file(dir.path() / "keys", copy);
     KeyStore old_copy;
     CHECK(old_copy.open(dir.dir(), protector) == CryptoError::Denied);
-    REQUIRE(fs::remove_file(dir.file()));
+    REQUIRE(fs::remove_file(dir.path() / "keys"));
     REQUIRE(store.create(dir.dir(), protector) == CryptoError::None);
     CHECK(store.size() == 0U);
     CHECK(protector.held() == 1U);
@@ -923,7 +898,7 @@ TEST_CASE("Key store: erasing a store forgets its master keys and removes its fi
     KeyStore      kept;
     REQUIRE(kept.create(kept_dir.dir(), keeping) == CryptoError::None);
     REQUIRE(kept.erase() == CryptoError::None);
-    CHECK_FALSE(fs::exists(kept_dir.file()));
+    CHECK_FALSE(fs::exists(kept_dir.path() / "keys"));
 }
 
 TEST_CASE("Key store: every changed byte of a store is refused", "[crypto][key-store]")
@@ -978,9 +953,9 @@ TEST_CASE("Key store: every changed byte of a store is refused", "[crypto][key-s
 
     // The file's own envelope damaged: the durable save's checks refuse it.
     write_payload(dir, ConstSpan<u8>(payload.data(), payload.size()));
-    Bytes file = read_file(dir.file());
+    Bytes file = read_file(dir.path() / "keys");
     file[file.size() - 3U] ^= 0x80U;
-    write_file(dir.file(), file);
+    write_file(dir.path() / "keys", file);
     KeyStore damaged_file;
     CHECK(damaged_file.open(dir.dir(), protector) == CryptoError::Damaged);
 
@@ -997,11 +972,11 @@ TEST_CASE("Key store: an older or substituted store is refused by an open one", 
     KeyStore      store;
     REQUIRE(store.create(dir.dir(), protector) == CryptoError::None);
     REQUIRE(store.generate("a", AlgorithmId::Ed25519, PlacementRequest::Software, 1U) == CryptoError::None);
-    const Bytes older = read_file(dir.file());
+    const Bytes older = read_file(dir.path() / "keys");
     REQUIRE(store.revoke("a", 1U, 2U) == CryptoError::None);
 
     // The older save put back: an open store refuses to go back to it, and changes nothing.
-    write_file(dir.file(), older);
+    write_file(dir.path() / "keys", older);
     CHECK(store.refresh() == CryptoError::Replayed);
     CHECK(store.find("a", 1U)->state == KeyState::Revoked);
     CHECK(store.generate("b", AlgorithmId::Ed25519, PlacementRequest::Software, 3U) == CryptoError::Replayed);
@@ -1011,12 +986,12 @@ TEST_CASE("Key store: an older or substituted store is refused by an open one", 
     TempStore other("rollback-other");
     KeyStore  stranger;
     REQUIRE(stranger.create(other.dir(), protector) == CryptoError::None);
-    write_file(dir.file(), read_file(other.file()));
+    write_file(dir.path() / "keys", read_file(other.path() / "keys"));
     CHECK(store.refresh() == CryptoError::Forged);
     CHECK(store.rotate("a", 4U) == CryptoError::Forged);
 
     // Removed: NotFound.
-    REQUIRE(fs::remove_file(dir.file()));
+    REQUIRE(fs::remove_file(dir.path() / "keys"));
     CHECK(store.refresh() == CryptoError::NotFound);
 }
 
@@ -1381,13 +1356,13 @@ TEST_CASE("Key store: the TPM protector keeps and forgets a master key", "[crypt
     CHECK(store.protection() == KeyProtection::Hardware);
     REQUIRE(store.generate("identity", AlgorithmId::MlDsa65, PlacementRequest::Software, 1U) == CryptoError::None);
     REQUIRE(store.generate("tickets", AlgorithmId::Aes256Gcm, PlacementRequest::Software, 1U) == CryptoError::None);
-    const Bytes before_revocation = read_file(dir.file());
+    const Bytes before_revocation = read_file(dir.path() / "keys");
     REQUIRE(store.revoke("tickets", 1U, 2U) == CryptoError::None);
-    const Bytes after_revocation = read_file(dir.file());
-    write_file(dir.file(), before_revocation);
+    const Bytes after_revocation = read_file(dir.path() / "keys");
+    write_file(dir.path() / "keys", before_revocation);
     KeyStore old_copy;
     CHECK(old_copy.open(dir.dir(), tpm) == CryptoError::Denied);
-    write_file(dir.file(), after_revocation);
+    write_file(dir.path() / "keys", after_revocation);
     KeyStore reopened;
     REQUIRE(reopened.open(dir.dir(), tpm) == CryptoError::None);
     CHECK(same_infos(store, reopened));
@@ -1396,9 +1371,9 @@ TEST_CASE("Key store: the TPM protector keeps and forgets a master key", "[crypt
     KeyStore             stranger;
     CHECK(stranger.open(dir.dir(), platform) == CryptoError::Unsupported);
     // Erasing the store deletes its last TPM key: a copy of its file opens nowhere, and nothing is left behind.
-    const Bytes final_copy = read_file(dir.file());
+    const Bytes final_copy = read_file(dir.path() / "keys");
     REQUIRE(reopened.erase() == CryptoError::None);
-    write_file(dir.file(), final_copy);
+    write_file(dir.path() / "keys", final_copy);
     CHECK(old_copy.open(dir.dir(), tpm) == CryptoError::Denied);
 }
 
@@ -1537,13 +1512,13 @@ TEST_CASE("Key store: the Secret Service keeps, recovers and forgets a master ke
     REQUIRE(reopened.open(dir.dir(), vault) == CryptoError::None);
     CHECK(same_infos(store, reopened));
     check_signs(reopened, "identity");
-    const Bytes before_revocation = read_file(dir.file());
+    const Bytes before_revocation = read_file(dir.path() / "keys");
     REQUIRE(store.revoke("identity", 1U, 3U) == CryptoError::None);
-    const Bytes after_revocation = read_file(dir.file());
-    write_file(dir.file(), before_revocation);
+    const Bytes after_revocation = read_file(dir.path() / "keys");
+    write_file(dir.path() / "keys", before_revocation);
     KeyStore old_copy;
     CHECK(old_copy.open(dir.dir(), vault) == CryptoError::Denied);
-    write_file(dir.file(), after_revocation);
+    write_file(dir.path() / "keys", after_revocation);
     KeyStore current;
     REQUIRE(current.open(dir.dir(), vault) == CryptoError::None);
     check_signs(current, "identity");
