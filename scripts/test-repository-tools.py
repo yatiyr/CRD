@@ -6874,6 +6874,25 @@ class Registers(RegisterFixture, unittest.TestCase):
         done_item = [{'section': '2.1', 'item': 'i', 'mechanism': 'm', 'rows': ['DONE'], 'evidence': []}]
         self.assert_fails(self.register([self.entry()], checklist=done_item), 'checklist 2.1: every row is Done')
 
+    def test_a_drafts_codepoints_ship_before_iana_only_under_a_dated_awaiting_record(self):
+        unverified = [{'registry': 'QUIC Versions', 'name': 'v1', 'value': '0x00000001', 'verified': False}]
+        record = {'recorded': '2026-10-30', 'decision': 'docs/research.md#n83'}
+        shipped = dict(state='implemented', evidence=['tests/test_quic.cpp'], spec=self.DRAFT, codepoints=unverified)
+        self.assert_fails(self.register([self.entry(**shipped)]), 'or record awaiting_iana when the pinned draft')
+        code, output = self.run_guard(self.register([self.entry(**shipped, awaiting_iana=record)]))
+        self.assertEqual(0, code, output)
+        rfc = dict(shipped, spec={'type': 'rfc', 'ref': 'RFC 9000', 'status': 'current'})
+        self.assert_fails(self.register([self.entry(**rfc, awaiting_iana=record)]), "an RFC's are IANA's")
+        confirmed = dict(shipped, codepoints=[dict(unverified[0], verified=True)])
+        self.assert_fails(self.register([self.entry(**confirmed, awaiting_iana=record)]),
+                          'awaiting_iana with no unverified IANA codepoint; IANA confirmed them, drop it')
+        for broken, message in (({'recorded': '2026-11-02', 'decision': record['decision']}, 'is after today'),
+                                ({'recorded': '2026-10', 'decision': record['decision']}, 'must be a YYYY-MM-DD date'),
+                                ({'recorded': '2026-10-30'}, 'awaiting_iana has recorded (YYYY-MM-DD) and decision'),
+                                (dict(record, decision='docs/research.md#gone'), "has no anchor 'gone'"),
+                                (dict(record, decision='docs/none.md'), "'docs/none.md' does not exist")):
+            self.assert_fails(self.register([self.entry(**shipped, awaiting_iana=broken)]), message)
+
     def test_a_wrong_schema_or_an_empty_register_fails(self):
         self.assert_fails(self.register([self.entry()], schema='cerid-register/0'),
                           "schema must be 'cerid-register/1'")
@@ -11041,6 +11060,67 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertEqual(1, code, output)
             self.assertIn('IANA discourages secp224r1', output)
             self.assertNotIn('crypto.legacy', output)
+
+    def test_codepoints_awaiting_iana_are_expected_absent_switched_on_another_value_and_dropped_once_confirmed(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            record = {'recorded': '2026-11-03', 'decision': 'docs/research.md#n83'}
+            grease = {'registry': 'QUIC Transport Parameters', 'name': 'grease_quic_bit', 'value': '0x2ab2',
+                      'verified': False}
+            reset = {'registry': 'QUIC Transport Parameters', 'name': 'reset_stream_at', 'value': '0x17f7586d',
+                     'verified': False}
+            moved = {'registry': 'QUIC Transport Parameters', 'name': 'version_information', 'value': '0x12',
+                     'verified': False}
+            awaiting = self.entry(id='quic.grease', spec=self.DRAFT, review='2027-06-01', codepoints=[grease, reset],
+                                  awaiting_iana=record)
+            switched = self.entry(id='quic.version-info', spec=self.DRAFT, review='2027-06-01', codepoints=[moved],
+                                  awaiting_iana=record)
+            self.write_tree(root, self.register(self.entries() + [awaiting, switched]))
+            self.assertIn('quic.grease: 2 codepoints of draft-ietf-webtrans-http3 awaiting IANA since 2026-11-03 '
+                          '(docs/research.md#n83); every review checks them', self.tool(root, 'due')[1])
+            self.fetched(root, self.records())
+            report = root / 'docs' / 'review.md'
+            code, output = self.tool(root, 'compare', '--fetched', str(root / 'fetched'), '--report', str(report),
+                                     '--apply')
+            self.assertEqual(0, code, output)
+            text = report.read_text(encoding='utf-8')
+            self.assertIn('- quic.grease: QUIC Transport Parameters grease_quic_bit = 0x2ab2 confirmed by IANA\n', text)
+            self.assertNotIn('reset_stream_at', text)
+            self.assertIn('- quic.version-info (NET-STD): QUIC Transport Parameters version_information = 0x12, '
+                          'awaiting IANA since 2026-11-03 (docs/research.md#n83): IANA assigns version_information '
+                          "another value; switch it to IANA's value", text)
+            self.assertIn('## Triggers a full re-research\n\n- quic.version-info\n', text)
+            register = json.loads((root / 'cmake' / 'standards-register.json').read_text(encoding='utf-8'))
+            entries = {entry['id']: entry for entry in register['entries']}
+            self.assertEqual(record, entries['quic.grease']['awaiting_iana'])
+            self.assertNotIn('verified', entries['quic.grease']['codepoints'][0])
+
+            awaiting['codepoints'] = [grease]
+            self.write_tree(root, self.register(self.entries() + [awaiting]))
+            code, output = self.tool(root, 'compare', '--fetched', str(root / 'fetched'), '--report', str(report),
+                                     '--apply')
+            self.assertEqual(0, code, output)
+            self.assertIn('- quic.grease: IANA lists every codepoint awaiting it since 2026-11-03; awaiting_iana '
+                          'dropped', report.read_text(encoding='utf-8'))
+            register = json.loads((root / 'cmake' / 'standards-register.json').read_text(encoding='utf-8'))
+            self.assertNotIn('awaiting_iana', {entry['id']: entry for entry in register['entries']}['quic.grease'])
+
+    def test_a_new_revision_of_a_draft_awaiting_iana_asks_for_its_codepoints_to_be_re_read(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            awaiting = self.entry(id='quic.grease', spec=self.DRAFT, review='2027-06-01', awaiting_iana={
+                'recorded': '2026-11-03', 'decision': 'docs/research.md#n83'}, codepoints=[
+                {'registry': 'QUIC Transport Parameters', 'name': 'reset_stream_at', 'value': '0x17f7586d',
+                 'verified': False}])
+            self.write_tree(root, self.register(self.entries() + [awaiting]))
+            tracker = json.loads(self.records()['draft-ietf-webtrans-http3'])
+            newer = json.dumps(dict(tracker, rev='17', rev_history=[{'rev': '17', 'published': '2026-12-01T08:00:00Z'}]))
+            self.fetched(root, self.records(webtransport=newer))
+            report = root / 'docs' / 'review.md'
+            code, output = self.tool(root, 'compare', '--fetched', str(root / 'fetched'), '--report', str(report))
+            self.assertEqual(0, code, output)
+            self.assertIn('- quic.grease (NET-STD): re-read the codepoints awaiting IANA in draft-ietf-webtrans-http3-17;'
+                          ' a changed one is a switch of the implemented values', report.read_text(encoding='utf-8'))
 
     def test_a_full_scan_reads_the_triggering_documents_and_records_its_re_research(self):
         with tempfile.TemporaryDirectory() as scratch:

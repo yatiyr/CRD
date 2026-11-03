@@ -24,7 +24,9 @@ The guard fails, among the format errors, on:
     twice or one already read;
   - an owning module neither registered nor in the capability registry, an unknown ROADMAP row, a governed row no
     entry names, an entry still planned when every one of its rows is Done, an implemented entry without existing
-    evidence or with an unverified codepoint, a verified codepoint of a registry with a "Recommended" column
+    evidence or with an unverified codepoint (unless `awaiting_iana` records the dated decision to ship a pinned
+    draft's codepoints before IANA lists them; a record on an RFC, without an unverified codepoint, dated after today
+    or citing no existing decision fails), a verified codepoint of a registry with a "Recommended" column
     (RFC 9847) that does not record IANA's value, and a pinned entry with a codepoint IANA discourages ("D");
   - in the legal domain: a binding obligation (in force, not past its sunset, and applying to a live scope) without an
     active check; a primary source outside its jurisdiction's official hosts; an entry whose rows are all Done, or
@@ -80,7 +82,7 @@ PINNED = {'implemented', 'planned'}
 DOMAINS = {
     'standards': {
         'register_keys': {'checklist'},
-        'entry_keys': {'spec', 'codepoints', 'cryptography'},
+        'entry_keys': {'spec', 'codepoints', 'cryptography', 'awaiting_iana'},
         'kinds': {'protocol', 'extension', 'algorithm', 'format', 'guidance'},
     },
     'legal': {
@@ -300,9 +302,10 @@ def codepoint_errors(where, entry):
                 not all(isinstance(point.get(key), str) and point[key] for key in ('registry', 'name', 'value')):
             errors.append(f'{where}: codepoint {index} has a registry, a name, a value and an optional verified flag')
             continue
-        if entry.get('state') == 'implemented' and point.get('verified') is False:
+        if entry.get('state') == 'implemented' and point.get('verified') is False and 'awaiting_iana' not in entry:
             errors.append(f'{where}: implemented with the unverified codepoint {point["name"]} = {point["value"]}; '
-                          'verify it against the IANA registry first')
+                          'verify it against the IANA registry first, or record awaiting_iana when the pinned draft '
+                          'assigns it and IANA has not yet')
         errors += recommended_errors(where, entry, point)
         key_bits = point.get('key_bits')
         if point['registry'] != _ids.ALGORITHMS:
@@ -313,6 +316,30 @@ def codepoint_errors(where, entry):
                 not all(type(bits) is int and bits > 0 for bits in key_bits):
             errors.append(f'{where}: algorithm {point["name"]} names key_bits, the key length of each component in '
                           'bits (the cryptography inventory states them)')
+    return errors
+
+
+def awaiting_iana_errors(where, entry, context):
+    """`awaiting_iana`: the dated decision to implement the codepoints a pinned draft assigns before IANA lists them
+    (user order 2026-11-03). It needs a draft, at least one unverified IANA codepoint, a day not after today and an
+    existing decision; scripts/register-review.py drops it when IANA confirms the last of them and proposes the switch
+    when IANA assigns other values."""
+    record = entry.get('awaiting_iana')
+    if record is None:
+        return []
+    if not isinstance(record, dict) or set(record) != {'recorded', 'decision'} or \
+            not isinstance(record.get('decision'), str):
+        return [f'{where}: awaiting_iana has recorded (YYYY-MM-DD) and decision (a repository document#anchor)']
+    errors = date_errors(where, 'awaiting_iana.recorded', record['recorded'])
+    if not errors and parse_day(record['recorded']) > context.today:
+        errors.append(f'{where}: awaiting_iana.recorded {record["recorded"]} is after today')
+    errors += reference_errors(where, 'awaiting_iana.decision', record['decision'], context.root)
+    if not isinstance(entry.get('spec'), dict) or entry['spec'].get('type') != 'draft':
+        errors.append(f'{where}: awaiting_iana is for the codepoints a pinned draft assigns; an RFC\'s are IANA\'s')
+    codepoints = entry.get('codepoints') if isinstance(entry.get('codepoints'), list) else []
+    if not any(isinstance(point, dict) and point.get('verified') is False and
+               not str(point.get('registry', '')).startswith('Cerid ') for point in codepoints):
+        errors.append(f'{where}: awaiting_iana with no unverified IANA codepoint; IANA confirmed them, drop it')
     return errors
 
 
@@ -569,6 +596,7 @@ def entry_errors(entry, domain, register, context):
     if domain == 'standards':
         errors += spec_errors(where, entry, context)
         errors += codepoint_errors(where, entry)
+        errors += awaiting_iana_errors(where, entry, context)
         errors += cryptography_errors(where, entry)
     elif domain == 'legal':
         errors += legal_entry_errors(where, entry, register, context)

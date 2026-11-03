@@ -1538,6 +1538,10 @@ class Review:
                                    ([f'posted {spec["posted"]}'] if 'posted' in spec else []))
                 was = f'was {earlier}' if earlier else 'no revision recorded'
                 self.change(entry, f'{spec["ref"]}-{record["revision"]} posted {record["posted"]} ({was})', apply)
+                if entry.get('awaiting_iana') and record['revision'] != spec.get('revision'):
+                    self.proposals.append(f'{entry["id"]} ({", ".join(entry["rows"])}): re-read the codepoints '
+                                          f'awaiting IANA in {spec["ref"]}-{record["revision"]}; a changed one is a '
+                                          'switch of the implemented values')
         if record['status'] != spec['status']:
             def apply(target, record=record):
                 target['spec']['status'] = record['status']
@@ -1545,7 +1549,12 @@ class Review:
             self.status_changed(entry, spec['status'], record['status'])
 
     def judge_codepoints(self, entry, registries):
+        """Each IANA codepoint against its registry. An entry `awaiting_iana` ships a pinned draft's codepoints
+        before IANA lists them: their absence is expected, another value IANA assigns is a switch to propose (a wire
+        change, so a full re-research), and the record goes once IANA confirms the last of them."""
         document = document_of(entry['spec'].get('type'), entry['spec'].get('ref', ''))
+        awaiting = entry.get('awaiting_iana')
+        confirmed = set()
         for index, point in enumerate(entry.get('codepoints', [])):
             if point['registry'] not in IANA_REGISTRIES:
                 continue
@@ -1555,15 +1564,30 @@ class Review:
                 continue
             verdict, detail = judge_codepoint(point, records, document)
             if verdict == 'verified' and point.get('verified') is False:
+                confirmed.add(index)
                 def apply(target, index=index):
                     target['codepoints'][index].pop('verified')
                 self.change(entry, f'{point["registry"]} {point["name"]} = {point["value"]} confirmed by IANA{detail}',
                             apply)
             if verdict == 'verified' and point['registry'] in _registers.RECOMMENDED_REGISTRIES:
                 self.judge_recommended(entry, index, point, records)
+            elif verdict != 'verified' and awaiting and point.get('verified') is False:
+                if verdict != 'absent':
+                    self.triggers.append(entry['id'])
+                    self.proposals.append(f'{entry["id"]} ({", ".join(entry["rows"])}): {point["registry"]} '
+                                          f'{point["name"]} = {point["value"]}, awaiting IANA since '
+                                          f'{awaiting["recorded"]} ({awaiting["decision"]}): {detail}; switch it to '
+                                          "IANA's value, regenerate scripts/gen-register-ids.py and rerun the interop")
             elif verdict != 'verified':
                 self.proposals.append(f'{entry["id"]}: {point["registry"]} {point["name"]} = {point["value"]}: '
                                       f'{detail}; correct the register and regenerate scripts/gen-register-ids.py')
+        pending = [index for index, point in enumerate(entry.get('codepoints', []))
+                   if point.get('verified') is False and index not in confirmed]
+        if awaiting and confirmed and not pending:
+            def apply(target):
+                target.pop('awaiting_iana')
+            self.change(entry, f'IANA lists every codepoint awaiting it since {awaiting["recorded"]}; awaiting_iana '
+                        'dropped (the constants leave iana::unverified, so their users name the assigned ones)', apply)
 
     def judge_recommended(self, entry, index, point, records):
         """IANA's "Recommended" value of a confirmed codepoint (RFC 9847): recorded, and a pinned entry whose
@@ -1819,6 +1843,12 @@ def command_due(args, root):
     for event in review['calendar']:
         if not event['verified']:
             print(f'  calendar: {event["event"]} on {event["day"]} is unverified; the next review confirms it')
+    for entry in register['entries']:
+        if entry.get('awaiting_iana'):
+            pending = sum(point.get('verified') is False for point in entry.get('codepoints', []))
+            print(f'  {entry["id"]}: {pending} codepoints of {entry["spec"]["ref"]} awaiting IANA since '
+                  f'{entry["awaiting_iana"]["recorded"]} ({entry["awaiting_iana"]["decision"]}); every review checks '
+                  'them')
     latest = max(_registers.parse_day(run['day']) for run in review['runs'])
     for event in review['calendar']:
         if event.get('reads') and _registers.parse_day(event['day']) > latest:

@@ -2015,7 +2015,7 @@
         "scripts/gen-crypto-inventory.py",
         "--check"
       ],
-      "sha256": "1d6692cbf5495f81cce5a345bb4f3136beb46b2a3d8d6f3a94dd4e09059a794d"
+      "sha256": "8f63ab56720a9ce497961cbce475c0a689b01e39d408f86c7c283f7e96d61a6b"
     },
     {
       "path": "bench/gpu-compute/ckir_mlp_bwd_gen.cu",

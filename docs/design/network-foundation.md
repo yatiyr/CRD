@@ -1388,7 +1388,9 @@ and 0x0013 (MLKEM768-P256, ECDSA P-256; the same two), 0x0014 (MLKEM1024-P384, E
 0x0022 (X-Wing with ChaCha20-Poly1305 and ML-DSA-44, ML-KEM-768 with ML-DSA-65, ML-KEM-1024 with ML-DSA-87; SHA-384),
 ML-DSA signing purely with an empty context and its keys in FIPS 204's encoding, as the draft says. IANA does not list
 their codepoints yet, so the register keeps them unverified and the table names them through
-`iana::unverified`; the entry stays planned until IANA lists them. A post-quantum suite's keys and messages are an
+`iana::unverified`; since 2026-11-03 the entry is implemented under the register's dated `awaiting_iana` record
+(user order 2026-11-03, [registers](registers.md#awaiting-iana)), which switches to IANA's values when it lists
+them. A post-quantum suite's keys and messages are an
 order of magnitude larger: an HPKE public key or encapsulation of up to 1665 bytes (MLKEM1024-P384), and an ML-KEM's
 encapsulation is shorter than its public key (Nenc 1088 against Npk 1184 for ML-KEM-768), so every kem_output (an
 UpdatePath's, a Welcome's, an ExternalInit's) is sized by Nenc and every key by Npk; a signature public key of up to

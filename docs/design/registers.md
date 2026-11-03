@@ -55,7 +55,9 @@ publication that defines an algorithm no standards body publishes, such as SipHa
 page, `revision` its version, `status` `published`, `review` (in public review) or `withdrawn`) or `cerid`; `ref`; for a draft
 its `revision` and `posted` day, month or year; `status` in the snapshot; `obsoleted_by` for an obsoleted RFC),
 `codepoints` (IANA or Cerid registry, name, value; `verified: false` marks a value taken from knowledge;
-`recommended`, IANA's "Recommended" value, [below](#recommended-column)),
+`recommended`, IANA's "Recommended" value, [below](#recommended-column)), `awaiting_iana` (`recorded`, a day, and
+`decision`, a repository document and anchor: the dated decision to ship a pinned draft's codepoints before IANA lists
+them, [below](#awaiting-iana)),
 `cryptography` (the cryptographic functions the entry performs, [below](#crypto-classification)) and, at the
 register level, the RFC 7696 `checklist` (section, item, the Cerid mechanism, its rows and evidence). The legal domain
 adds the fields [below](#legal-domain).
@@ -77,6 +79,13 @@ adds the fields [below](#legal-domain).
   planned owners and the rows that create them; a governed row that no entry names fails, so the entries each networked row implements are on record.
 - **Finished work is proven.** An entry still `planned` when every one of its rows is Done fails; an `implemented`
   entry needs existing evidence and only verified codepoints; a checklist item whose rows are all Done needs evidence.
+- <a id="awaiting-iana"></a>**A draft's codepoints may ship before IANA lists them, on record.** User order
+  2026-11-03 (the MLS post-quantum suites): an `implemented` entry may keep unverified codepoints only under
+  `awaiting_iana`, which needs a pinned draft (an RFC's codepoints are IANA's), at least one unverified IANA codepoint,
+  a day not after today and an existing decision. The constants stay in `iana::unverified`. Every review checks them:
+  an absent codepoint is expected, another value IANA assigns is proposed as a switch and triggers a full
+  re-research (a wire change), a new draft revision asks for them to be re-read, and once IANA confirms the last one
+  the record is dropped, so the constants move to `iana` and their users must name the assigned ones.
 - <a id="recommended-column"></a>**IANA's recommendation is recorded.** The TLS Supported Groups, SignatureScheme
   and ExtensionType registries carry a "Recommended" column (RFC 9847): `Y` (recommended for its purpose), `N` (not
   evaluated, or of limited applicability) or `D` (discouraged). Every verified codepoint of those registries records

@@ -2525,7 +2525,7 @@
       "id": "mls.pq-ciphersuites",
       "title": "ML-KEM and hybrid cipher suites for MLS",
       "kind": "algorithm",
-      "state": "planned",
+      "state": "implemented",
       "owner": "crypto",
       "rows": [
         "NET.2"
@@ -2612,15 +2612,22 @@
           "verified": false
         }
       ],
+      "awaiting_iana": {
+        "recorded": "2026-11-03",
+        "decision": "docs/sessions/2026-11-03-net-2-mls-pq-awaiting-iana.md#decision"
+      },
       "source": {
         "ref": "docs/sessions/2026-11-02-net-2-hpke-pq.md",
         "read": "2026-11-02",
         "verified": true
       },
       "review": "2027-11-02",
-      "evidence": [],
+      "evidence": [
+        "tests/foundation/crypto/test_mls.cpp",
+        "tests/foundation/crypto/test_mls_commit.cpp"
+      ],
       "deprecation": null,
-      "note": "The post-quantum MLS cipher suites (decision M2) over crypto.hpke-pq's KEMs and the provider's ML-DSA (signed purely, empty context, as the draft says). Revision 07 (2026-11-01) was read on 2026-11-02; IANA's MLS registry (updated 2025-11-17) does not list the codepoints yet, so they stay unverified until it does. Since 2026-11-02 (M3 layer 10d) all eleven are in crd-crypto's suite table through iana::unverified and every MLS behavioural test runs in them (tests/foundation/crypto/test_mls*.cpp); the entry stays planned, as the register requires of unverified codepoints, until IANA lists them. No interop peer shares these codepoints (read 2026-11-02, decision M4): MLSpp's pinned main implements an earlier assignment (0x0008 to 0x000A) and OpenMLS 0.9.0 provisional ones (0x004D to 0x004F, 0x0906), so the post-quantum suites interoperate once the peers take the draft's or IANA's codepoints."
+      "note": "The post-quantum MLS cipher suites (decision M2) over crypto.hpke-pq's KEMs and the provider's ML-DSA (signed purely, empty context, as the draft says). Revision 07 (2026-11-01) was read on 2026-11-02; IANA's MLS registry (updated 2025-11-17) does not list the codepoints yet, so they stay unverified until it does. Since 2026-11-02 (M3 layer 10d) all eleven are in crd-crypto's suite table through iana::unverified and every MLS behavioural test runs in them (tests/foundation/crypto/test_mls*.cpp); since 2026-11-03 the entry is implemented awaiting IANA (user order 2026-11-03): scripts/register-review.py checks the codepoints at every review, proposes the switch when IANA assigns other values and drops awaiting_iana when IANA confirms them. No interop peer shares these codepoints (read 2026-11-02, decision M4): MLSpp's pinned main implements an earlier assignment (0x0008 to 0x000A) and OpenMLS 0.9.0 provisional ones (0x004D to 0x004F, 0x0906), so the post-quantum suites interoperate once the peers take the draft's or IANA's codepoints."
     },
     {
       "id": "crypto.ml-kem",

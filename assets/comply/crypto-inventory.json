@@ -214,6 +214,20 @@
           "standard": true
         },
         {
+          "id": "mls.pq-ciphersuites",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "draft-ietf-mls-pq-ciphersuites",
+          "standard": true
+        },
+        {
           "id": "crypto.ml-kem",
           "kind": "algorithm",
           "owner": "crypto",
