@@ -1529,6 +1529,7 @@ struct TlsCallbacks
         const PolicyScope    scope    = settings.policy_scope;
         const bool           pinned   = settings.signature_count != 0U;
         state.m_policy_generation     = snapshot.generation();
+        state.m_base_policy_generation = snapshot.base_generation();
         if (settings.credential_algorithm != AlgorithmId{} &&
             snapshot.status(settings.credential_algorithm, now, scope) == AlgorithmStatus::Refused)
         {
@@ -2737,6 +2738,7 @@ void detail::TlsHandshakeState::release() noexcept
     m_updates_sent            = 0U;
     m_updates_received        = 0U;
     m_policy_generation = 0U;
+    m_base_policy_generation = 0U;
     m_early_allowance = 0U;
     m_early_sent = 0U;
     m_ticket_early = 0U;

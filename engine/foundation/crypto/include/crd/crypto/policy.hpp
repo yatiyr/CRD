@@ -23,6 +23,13 @@
 //               expired: every algorithm is refused until a newer generation arrives.
 //   live swap   a session takes a PolicySnapshot when it starts and keeps it; applying a generation changes only what
 //               later snapshots hold.
+//   layers      a product (a studio's game, app or server) may add its own generations under its own trust set: a
+//               store whose PolicyConfig::base is Cerid's store (decision S25, #policy-layers). The product layer only
+//               tightens: an algorithm is usable only while both layers accept it in that scope, so the earlier
+//               refusal date wins; among what both accept the product's preference decides; a product rule that
+//               would accept what Cerid's layer refuses changes nothing and is reported (loosenings()). Each layer
+//               keeps its own trust set, floor, expiry and grace, and either one missing or expired refuses
+//               everything. A product without a layer runs on Cerid's store alone.
 //
 // Times are Unix seconds from the caller (the wall clock in a product, the seeded clock in NET-SIM). Decoding and
 // verification allocate nothing; decoded signatures view the decoded bytes.
@@ -177,6 +184,8 @@ enum class PolicyError : u8
 // Decode one generation; exact and bounded. On an error `out` holds no meaning.
 [[nodiscard]] PolicyError decode_policy(cont::ConstSpan<u8> bytes, PolicyMessage& out) noexcept;
 
+class PolicyStore;
+
 struct TrustKey
 {
     KeyId               id;
@@ -190,12 +199,15 @@ struct TrustKey
 //   supported         the algorithms this build's providers implement: no generation enables another.
 //   floor_generation  the newest generation the installation ever accepted (PolicyStore::floor_generation(),
 //                     persisted by the caller and passed back at start), so a restart cannot be rolled back.
+//   base              a product layer's: the store of the layer it tightens (Cerid's), which outlives this one and
+//                     tightens none itself (two layers at most); null for Cerid's own store.
 struct PolicyConfig
 {
     cont::ConstSpan<TrustKey>    trust;
     const SignatureVerifier*     verifier = nullptr;
     cont::ConstSpan<AlgorithmId> supported;
     u64                          floor_generation = 0U;
+    const PolicyStore*           base             = nullptr;
 };
 
 [[nodiscard]] PolicyError validate_config(const PolicyConfig& config) noexcept;
@@ -215,17 +227,34 @@ enum class AlgorithmStatus : u8
     Preferred,
 };
 
-// One generation as a session holds it: a value, unaffected by later generations. Its rules are the generation's
-// rules for the algorithms the build supports in the scopes it knows, in the generation's order.
+// A product rule that would accept what the base layer refuses (decision S25): it changes nothing, since an algorithm
+// runs only inside both layers' windows, and is reported. `base` is the rule the base layer governs that algorithm
+// and scope by, its algorithm 0 when the base layer has none (refused there at every time).
+struct PolicyLoosening
+{
+    AlgorithmRule rule;
+    AlgorithmRule base;
+};
+
+// One generation as a session holds it, with the base layer's generation under a product layer: a value, unaffected
+// by later generations. Its rules are the generation's rules for the algorithms the build supports in the scopes it
+// knows, in the generation's order. Every answer below is the composed one: a layered snapshot's freshness is the
+// worse layer's (None when either has no generation), an algorithm is Refused when either layer refuses it and
+// otherwise has the product layer's status, and a version is allowed when both layers allow it.
 class PolicySnapshot
 {
 public:
     [[nodiscard]] u64                  generation() const noexcept { return m_content.generation; }
     [[nodiscard]] const PolicyContent& content() const noexcept { return m_content; }
+    // The base layer's generation and content; 0 and empty for a snapshot of a store without a base.
+    [[nodiscard]] bool                 layered() const noexcept { return m_layered; }
+    [[nodiscard]] u64                  base_generation() const noexcept { return m_base.generation; }
+    [[nodiscard]] const PolicyContent& base_content() const noexcept { return m_base; }
     [[nodiscard]] Freshness            freshness(u64 now) const noexcept;
 
     // Refused when the generation is missing or expired, the build lacks the algorithm or `now` is outside the window
-    // of the rule `scope` follows; Preferred inside its preferred window; Accepted otherwise.
+    // of the rule `scope` follows; Preferred inside its preferred window; Accepted otherwise. Layered: Refused when
+    // the base layer refuses, the product layer's answer otherwise.
     [[nodiscard]] AlgorithmStatus status(AlgorithmId algorithm, u64 now,
                                          PolicyScope scope = PolicyScope::Everywhere) const noexcept;
     // A suite's status, the algorithms it runs on together (an HPKE suite, an MLS cipher suite): Refused when one of
@@ -233,13 +262,21 @@ public:
     [[nodiscard]] AlgorithmStatus status(cont::ConstSpan<AlgorithmId> algorithms, u64 now,
                                          PolicyScope scope = PolicyScope::Everywhere) const noexcept;
 
-    // Whether a session may use `major.minor` of `protocol`: true when the generation sets no minimum for it.
+    // Whether a session may use `major.minor` of `protocol`: true when the generation sets no minimum for it (and,
+    // layered, the base generation allows it too).
     [[nodiscard]] bool allows_version(u16 protocol, u16 major, u16 minor) const noexcept;
+
+    // The product rules that would loosen the base layer, in rule order: a window that opens before or closes after
+    // the base layer's window for its algorithm and scope, or one the base layer has no rule for. Writes the first
+    // out.size() and returns how many there are (0 without a base).
+    [[nodiscard]] u32 loosenings(cont::Span<PolicyLoosening> out) const noexcept;
 
 private:
     friend class PolicyStore;
 
     PolicyContent m_content;
+    PolicyContent m_base;
+    bool          m_layered = false;
 };
 
 // What PolicyStore::start() did with each generation an installation holds when it starts: apply()'s answer, or
@@ -273,7 +310,11 @@ public:
     // another process of it saved since (decision S24, #policy-state). The current generation stays current.
     void raise_floor(u64 floor) noexcept;
 
+    // This layer's current generation, composed with the base layer's current one when the store has a base.
     [[nodiscard]] PolicySnapshot snapshot() const noexcept;
+
+    // The store this one tightens (PolicyConfig::base).
+    [[nodiscard]] const PolicyStore* base() const noexcept { return m_config.base; }
 
     // The newest generation number ever accepted, the configured floor included: what the caller persists.
     [[nodiscard]] u64 floor_generation() const noexcept;

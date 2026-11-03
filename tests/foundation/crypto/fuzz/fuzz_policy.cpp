@@ -6,6 +6,8 @@
 //   0  a generation as bytes, decoded (format 2, and format 1 through the N-1 reader);
 //   1  a generated sequence: a floor, then up to eight generations whose content, signers and arrival times are read
 //      from the bytes, written by the writers, signed by the test signer and applied to one store.
+//   2  a layered sequence (decision S25): up to twelve such generations, each applied to Cerid's store or to a product
+//      store over it, as the bytes choose.
 //
 // Oracles, none of them the codec's or the store's own verdict:
 //   * an independent restatement of the layout, its bounds and the contract's validation order decides the
@@ -14,7 +16,10 @@
 //     issue skew, expiry with grace, issue order) decides every apply's exact result and the floor after it;
 //   * every snapshot's freshness, algorithm status in each scope and version minimums at the window and validity
 //     boundaries equal the model's, restated from the contract (the build's ceiling, a scope's own rule over the
-//     Everywhere rule, and ignore-unknown for algorithms and scopes included).
+//     Everywhere rule, and ignore-unknown for algorithms and scopes included);
+//   * a layered snapshot's freshness, statuses, version minimums and loosenings equal the composition restated from
+//     both layers' models: the worse freshness, Refused when the base refuses and the product's status otherwise,
+//     both minimums, and every product rule whose window leaves the base rule's (or has none) reported in order.
 #include "../policy_test_signer.hpp"
 
 #include <crd/fuzz/harness.hpp>
@@ -616,6 +621,140 @@ void generated_sequence(const u8* data, usize size)
     }
 }
 
+// ---- Layered sequences -----------------------------------------------------------------------------------------
+
+bool in_ceiling(const AlgorithmRule& rule)
+{
+    bool supported = false;
+    for (const AlgorithmId algorithm : kSupported)
+    {
+        supported = supported || algorithm == rule.algorithm;
+    }
+    return supported && (rule.scope == PolicyScope::Everywhere || rule.scope == PolicyScope::CeridServices);
+}
+
+Freshness expected_layered_freshness(const Model& base, const Model& product, u64 t)
+{
+    if (!base.has || !product.has)
+    {
+        return Freshness::None;
+    }
+    const Freshness a = expected_freshness(base.current, t);
+    const Freshness b = expected_freshness(product.current, t);
+    return static_cast<u8>(a) > static_cast<u8>(b) ? a : b;
+}
+
+bool expected_allows(const Model& model, u16 protocol, u16 major, u16 minor)
+{
+    for (u32 i = 0U; model.has && i < model.current.minimum_count; ++i)
+    {
+        const MinimumVersion& m = model.current.minimums[i];
+        if (m.protocol == protocol)
+        {
+            return major > m.major || (major == m.major && minor >= m.minor);
+        }
+    }
+    return true;
+}
+
+void check_layered(const Model& base, const Model& product, const PolicySnapshot& snapshot, u64 now)
+{
+    CRD_FUZZ_REQUIRE(snapshot.layered());
+    CRD_FUZZ_REQUIRE(snapshot.generation() == (product.has ? product.current.generation : 0U));
+    CRD_FUZZ_REQUIRE(snapshot.base_generation() == (base.has ? base.current.generation : 0U));
+    u64   times[2U * (4U + 3U * kMaxPolicyRules) + 1U] = {now};
+    usize count                                        = 1U;
+    for (const Model* model : {&base, &product})
+    {
+        if (!model->has)
+        {
+            continue;
+        }
+        const PolicyContent& c = model->current;
+        times[count++]         = c.expires - 1U;
+        times[count++]         = c.expires;
+        times[count++]         = c.expires + c.offline_grace - 1U;
+        times[count++]         = c.expires + c.offline_grace;
+        for (u32 i = 0U; i < c.rule_count; ++i)
+        {
+            times[count++] = c.rules[i].accepted_from;
+            times[count++] = c.rules[i].preferred_from;
+            times[count++] = c.rules[i].refused_from;
+        }
+    }
+    for (usize k = 0U; k < count; ++k)
+    {
+        const u64 t = times[k];
+        CRD_FUZZ_REQUIRE(snapshot.freshness(t) == expected_layered_freshness(base, product, t));
+        for (usize a = 0U; a < kDrawnCount; ++a)
+        {
+            for (const PolicyScope scope : {PolicyScope::Everywhere, PolicyScope::CeridServices})
+            {
+                const AlgorithmStatus floor = expected_status(base, a, t, scope);
+                const AlgorithmStatus own   = expected_status(product, a, t, scope);
+                CRD_FUZZ_REQUIRE(snapshot.status(kDrawn[a], t, scope) ==
+                                 (floor == AlgorithmStatus::Refused ? floor : own));
+            }
+        }
+    }
+    for (u16 protocol = 1U; protocol <= 3U; ++protocol)
+    {
+        for (u16 major = 0U; major < 3U; ++major)
+        {
+            for (u16 minor = 0U; minor < 3U; ++minor)
+            {
+                const bool allowed = expected_allows(base, protocol, major, minor) &&
+                                     expected_allows(product, protocol, major, minor);
+                CRD_FUZZ_REQUIRE(snapshot.allows_version(protocol, major, minor) == allowed);
+            }
+        }
+    }
+    PolicyLoosening found[kMaxPolicyRules];
+    const u32       reported = snapshot.loosenings(Span<PolicyLoosening>(found));
+    u32             expected = 0U;
+    for (u32 i = 0U; product.has && i < product.current.rule_count; ++i)
+    {
+        const AlgorithmRule& rule  = product.current.rules[i];
+        const AlgorithmRule* floor = base.has ? governing_rule(base.current, rule.algorithm, rule.scope) : nullptr;
+        const bool inside = floor != nullptr && rule.accepted_from >= floor->accepted_from &&
+                            rule.refused_from <= floor->refused_from;
+        if (!in_ceiling(rule) || inside)
+        {
+            continue;
+        }
+        CRD_FUZZ_REQUIRE(expected < reported);
+        CRD_FUZZ_REQUIRE(found[expected].rule.algorithm == rule.algorithm && found[expected].rule.scope == rule.scope);
+        CRD_FUZZ_REQUIRE(found[expected].base.algorithm == (floor != nullptr ? floor->algorithm : AlgorithmId{}));
+        ++expected;
+    }
+    CRD_FUZZ_REQUIRE(reported == expected);
+}
+
+void layered_sequence(const u8* data, usize size)
+{
+    Draw               draw(data, size);
+    const TestVerifier verifier;
+    Model              models[2];
+    PolicyStore        base({ConstSpan<TrustKey>(kTestTrust), &verifier, ConstSpan<AlgorithmId>(kSupported), 0U});
+    PolicyStore product({ConstSpan<TrustKey>(kTestTrust), &verifier, ConstSpan<AlgorithmId>(kSupported), 0U, &base});
+    PolicyStore* const stores[2] = {&base, &product};
+    for (u32 step = 0U; step < 12U && !draw.done(); ++step)
+    {
+        const u8            layer   = draw.next() % 2U;
+        const PolicyContent content = draw_content(draw);
+        const u8            signers = draw.next() % 8U;
+        const u64           now     = kT0 + draw.next() * kHour + (draw.next() % 64U) * kDay;
+        static Encoded      encoded;
+        if (!encode(content, signers, encoded))
+        {
+            continue;
+        }
+        const PolicyError want = expected_apply(models[layer], content, signers, now);
+        CRD_FUZZ_REQUIRE(stores[layer]->apply(ConstSpan<u8>(encoded.bytes, encoded.size), now) == want);
+        check_layered(models[0], models[1], product.snapshot(), now);
+    }
+}
+
 void add(crd::fuzz::SeedSink& sink, const char* name, u8 mode, const u8* data, usize size)
 {
     static u8 input[kMaxPolicyBytes + 1U];
@@ -631,13 +770,17 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     {
         return 0;
     }
-    if (data[0] % 2U == 0U)
+    switch (data[0] % 3U)
     {
+    case 0U:
         decode_checked(data + 1U, size - 1U);
-    }
-    else
-    {
+        break;
+    case 1U:
         generated_sequence(data + 1U, size - 1U);
+        break;
+    default:
+        layered_sequence(data + 1U, size - 1U);
+        break;
     }
     return 0;
 }
@@ -747,4 +890,22 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         1U, 0U, 30U, 7U, 0U, 0U, 3U, 8U, 5U,
     };
     add(sink, "sequence-lifecycle", 1U, lifecycle, sizeof(lifecycle));
+
+    // Layered, one step per line (a layer byte, 0 Cerid's and 1 the product's, then a step as above): Cerid's
+    // generation 1 (the hybrid preferred a day, X25519 refused from hour 200 and for Cerid services from hour 100,
+    // ChaCha20-Poly1305 from hour 10); the product's generation 1 (X25519 refused from hour 50, ChaCha20-Poly1305 from
+    // hour 0, a loosening, preferred two days, the hybrid refused for Cerid services from hour 5, protocol 3 at least
+    // 2.0); Cerid's generation 2 (X25519 alone, ten days); a forged product generation 2; the product's generation 2
+    // in Cerid's grace period; a product rollback.
+    const u8 layered[] = {
+        0U, 1U, 0U, 30U, 7U, 1U, 1U, 1U, 0U, 4U, 0U, 0U, 0U, 24U, 255U, 1U, 1U, 0U, 0U, 0U, 200U, 1U,
+        2U, 10U, 0U, 0U, 255U, 1U, 1U, 0U, 0U, 0U, 100U, 17U, 3U, 1U, 0U,
+        1U, 1U, 0U, 30U, 7U, 1U, 2U, 2U, 0U, 3U, 1U, 0U, 0U, 0U, 50U, 1U, 2U, 0U, 0U, 48U, 255U, 1U,
+        0U, 0U, 0U, 0U, 5U, 17U, 3U, 2U, 0U,
+        0U, 2U, 4U, 10U, 2U, 0U, 1U, 1U, 0U, 0U, 0U, 255U, 1U, 3U, 5U, 0U,
+        1U, 2U, 6U, 30U, 7U, 0U, 0U, 7U, 6U, 0U,
+        1U, 2U, 6U, 30U, 7U, 0U, 1U, 2U, 20U, 0U, 0U, 255U, 1U, 3U, 6U, 11U,
+        1U, 1U, 0U, 30U, 7U, 0U, 0U, 3U, 6U, 11U,
+    };
+    add(sink, "sequence-layered", 2U, layered, sizeof(layered));
 }

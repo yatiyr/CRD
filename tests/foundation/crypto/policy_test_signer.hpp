@@ -128,34 +128,58 @@ inline void prefer_rule(PolicyContent& content, AlgorithmId algorithm,
     set_rule(content, {algorithm, 0U, 0U, kNever, kNever, scope});
 }
 
-// A test installation: the test trust set, a build supporting the whole register, its store, and apply(), which signs
-// a generation with every trust key and applies it at `now`.
+// A product's two-key trust set (decision S25): its own keys, none of them Cerid's.
+inline constexpr u8 kProductPostQuantumPublic[] = {'p', 'r', 'o', 'd', '-', 'p', 'q'};
+inline constexpr u8 kProductClassicalPublic[]   = {'p', 'r', 'o', 'd', '-', 'e', 'c'};
+
+inline const TrustKey kProductTrust[] = {
+    {test_key_id(0x40U), AlgorithmId::MlDsa65, containers::ConstSpan<u8>(kProductPostQuantumPublic)},
+    {test_key_id(0x50U), AlgorithmId::EcdsaSecp256r1Sha256, containers::ConstSpan<u8>(kProductClassicalPublic)},
+};
+
+// `content` signed by every key of `trust` (at most kMaxTrustKeys) and written to `out`.
+[[nodiscard]] inline PolicyError sign_generation(containers::ConstSpan<TrustKey> trust, const PolicyContent& content,
+                                                 containers::Span<u8> out, usize& size) noexcept
+{
+    u8          body[2048];
+    usize       body_size = 0U;
+    PolicyError error     = write_policy_body(content, body, body_size);
+    if (error != PolicyError::None)
+    {
+        return error;
+    }
+    const containers::ConstSpan<u8> message(body, body_size);
+    u8                              tags[kMaxTrustKeys][kTestSignatureBytes];
+    KeySignature                    signatures[kMaxTrustKeys];
+    const usize                     count = trust.size() < kMaxTrustKeys ? trust.size() : kMaxTrustKeys;
+    for (usize k = 0U; k < count; ++k)
+    {
+        test_sign(trust[k].algorithm, trust[k].public_key, message, tags[k]);
+        signatures[k] = {trust[k].id, trust[k].algorithm, containers::ConstSpan<u8>(tags[k])};
+    }
+    return write_policy(message, containers::ConstSpan<KeySignature>(signatures, count), out, size);
+}
+
+// A test installation: a trust set (the test one by default), a build supporting the whole register, its store (a
+// product layer over `base` when one is given), and apply(), which signs a generation with every trust key and
+// applies it at `now`.
 struct TestInstallation
 {
-    TestVerifier verifier;
-    PolicyStore  store{PolicyConfig{containers::ConstSpan<TrustKey>(kTestTrust), &verifier,
-                                    containers::ConstSpan<AlgorithmId>(kAlgorithmIds), 0U}};
+    explicit TestInstallation(containers::ConstSpan<TrustKey> keys = containers::ConstSpan<TrustKey>(kTestTrust),
+                              const PolicyStore* base = nullptr) noexcept
+        : trust(keys), store(PolicyConfig{keys, &verifier, containers::ConstSpan<AlgorithmId>(kAlgorithmIds), 0U, base})
+    {
+    }
+
+    containers::ConstSpan<TrustKey> trust;
+    TestVerifier                    verifier;
+    PolicyStore                     store;
 
     [[nodiscard]] PolicyError apply(const PolicyContent& content, u64 now) noexcept
     {
-        u8          body[2048];
-        usize       body_size = 0U;
-        PolicyError error     = write_policy_body(content, body, body_size);
-        if (error != PolicyError::None)
-        {
-            return error;
-        }
-        const containers::ConstSpan<u8> message(body, body_size);
-        u8                              tags[2][kTestSignatureBytes];
-        KeySignature                    signatures[2];
-        for (u32 k = 0U; k < 2U; ++k)
-        {
-            test_sign(kTestTrust[k].algorithm, kTestTrust[k].public_key, message, tags[k]);
-            signatures[k] = {kTestTrust[k].id, kTestTrust[k].algorithm, containers::ConstSpan<u8>(tags[k])};
-        }
-        u8    bytes[4096];
-        usize size = 0U;
-        error      = write_policy(message, containers::ConstSpan<KeySignature>(signatures), bytes, size);
+        u8                bytes[4096];
+        usize             size  = 0U;
+        const PolicyError error = sign_generation(trust, content, bytes, size);
         return error != PolicyError::None ? error : store.apply(containers::ConstSpan<u8>(bytes, size), now);
     }
 };

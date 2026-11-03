@@ -154,7 +154,7 @@ void print_usage()
         "  ceridc policy body --source <generation.policy.toml> --out <body>\n"
         "  ceridc policy assemble --in <signed>... --out <generation>\n"
         "  ceridc policy verify --generation <f> --trust <trust.toml> --now <YYYY-MM-DD|seconds> [--floor <n>]\n"
-        "                [--source <generation.policy.toml>]\n"
+        "                [--source <generation.policy.toml>] [--base-generation <f> --base-trust <trust.toml>]\n"
         "  ceridc policy key --store <dir> --name <key> --algorithm <register name> [--placement <p>] <keys>\n"
         "  ceridc policy sign --store <dir> --name <key> (--source <f> | --body <f>) --out <signed> <keys>\n"
         "                <keys>: --protector platform|tpm [--tcti <conf>] [--device tpm|pkcs11 [--module <so>\n"
@@ -436,6 +436,8 @@ int main(int argc, char* argv[])
         flags.trust = flag_of(argc, argv, "--trust", nullptr);
         flags.now = flag_of(argc, argv, "--now", nullptr);
         flags.floor = flag_of(argc, argv, "--floor", nullptr);
+        flags.base_generation = flag_of(argc, argv, "--base-generation", nullptr);
+        flags.base_trust = flag_of(argc, argv, "--base-trust", nullptr);
         flags.out = flag_of(argc, argv, "--out", nullptr);
         flags.body = flag_of(argc, argv, "--body", nullptr);
         flags.store = flag_of(argc, argv, "--store", nullptr);

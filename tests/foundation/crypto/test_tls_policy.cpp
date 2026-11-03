@@ -389,6 +389,48 @@ TEST_CASE("TLS policy: a session the generation leaves nothing to run on is refu
     CHECK(none.client_session.init(none.client) == TlsError::PolicyRefused);
 }
 
+TEST_CASE("TLS policy: a product layer over Cerid's tightens what a session runs on (decision S25)",
+          "[crypto][tls][net-2][policy-layers]")
+{
+    Policy cerid;
+    cerid.apply(accepting_all(3U));
+    crd::crypto::test::TestInstallation product(ConstSpan<TrustKey>(crd::crypto::test::kProductTrust), &cerid.store);
+
+    // A product layer without a generation refuses every session, even under a current Cerid layer.
+    Setup setup;
+    setup.server_policy = &product.store;
+    Pair closed;
+    configure(closed, setup);
+    CHECK(closed.server_session.init(closed.server) == TlsError::PolicyRefused);
+
+    // The product refuses the first hybrid and prefers ChaCha20-Poly1305 among what both layers accept.
+    PolicyContent narrowed = accepting_all(1U);
+    refuse(narrowed, AlgorithmId::X25519Mlkem768);
+    prefer(narrowed, AlgorithmId::Chacha20Poly1305);
+    REQUIRE(product.apply(narrowed, now_seconds()) == PolicyError::None);
+    setup.client_policy = &product.store;
+    Pair pair;
+    configure(pair, setup);
+    establish(pair);
+    CHECK(pair.server_session.group() == AlgorithmId::Secp256r1Mlkem768);
+    CHECK(pair.client_session.aead() == AlgorithmId::Chacha20Poly1305);
+    CHECK(pair.server_session.policy_generation() == 1U);
+    CHECK(pair.server_session.base_policy_generation() == 3U);
+    CHECK(pair.server_session.check_policy() == TlsError::None);
+
+    // Cerid's remote disable of the next hybrid reaches the product's later sessions; the product cannot undo it.
+    PolicyContent disable = accepting_all(4U);
+    refuse(disable, AlgorithmId::Secp256r1Mlkem768);
+    cerid.apply(disable);
+    Pair later;
+    configure(later, setup);
+    establish(later);
+    CHECK(later.server_session.group() == AlgorithmId::Secp384r1Mlkem1024);
+    CHECK(later.server_session.base_policy_generation() == 4U);
+    // The running session's next check reads the new composed answer.
+    CHECK(pair.server_session.check_policy() == TlsError::PolicyRefused);
+}
+
 TEST_CASE("TLS policy: Cerid service contexts follow their own rules first", "[crypto][tls][net-2]")
 {
     // Classical-only key exchange refused for Cerid services, still accepted everywhere else.

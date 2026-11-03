@@ -585,6 +585,39 @@ void write_content(JsonWriter& w, const PolicyContent& content, const crypto::Po
     w.end_array();
 }
 
+// A product layer's rules that would accept what its base layer refuses (decision S25): they change nothing.
+void write_loosenings(JsonWriter& w, const crypto::PolicySnapshot& snapshot)
+{
+    crypto::PolicyLoosening found[crypto::kMaxPolicyRules];
+    const crd::u32 count = snapshot.loosenings(cont::Span<crypto::PolicyLoosening>(found));
+    char text[32];
+    w.key("loosenings");
+    w.begin_array();
+    for (crd::u32 i = 0U; i < count; ++i)
+    {
+        const crypto::PolicyLoosening& loosening = found[i];
+        w.begin_object();
+        algorithm_text(loosening.rule.algorithm, text);
+        w.kv("algorithm", static_cast<const char*>(text));
+        w.kv("scope", kScopes[static_cast<crd::u8>(loosening.rule.scope)]);
+        instant_text(loosening.rule.accepted_from, text);
+        w.kv("accepted_from", static_cast<const char*>(text));
+        instant_text(loosening.rule.refused_from, text);
+        w.kv("refused_from", static_cast<const char*>(text));
+        const bool governed = loosening.base.algorithm != crypto::AlgorithmId{};
+        w.kv("base_rule", governed);
+        if (governed)
+        {
+            instant_text(loosening.base.accepted_from, text);
+            w.kv("base_accepted_from", static_cast<const char*>(text));
+            instant_text(loosening.base.refused_from, text);
+            w.kv("base_refused_from", static_cast<const char*>(text));
+        }
+        w.end_object();
+    }
+    w.end_array();
+}
+
 void write_signatures(JsonWriter& w, const crypto::PolicyMessage& message, const TrustSet* trust)
 {
     char text[32];
@@ -845,9 +878,36 @@ void write_key(JsonWriter& w, const crypto::KeyInfo& info, cont::ConstSpan<crd::
             return refuse(alloc, flags.action, "source-mismatch", flags.source);
         }
     }
+    // A product layer (decision S25): the layer it tightens, judged first at the same time and under its own trust set.
+    const bool layered = flags.base_generation != nullptr || flags.base_trust != nullptr;
+    TrustSet base_trust;
+    cont::Array<crd::u8> base_bytes;
+    if (layered)
+    {
+        if (flags.base_generation == nullptr || flags.base_trust == nullptr)
+        {
+            return refuse(alloc, flags.action, "--base-generation and --base-trust go together");
+        }
+        if (!read_trust(flags.base_trust, base_trust, failure))
+        {
+            return refuse(alloc, flags.action, failure, flags.base_trust);
+        }
+        if (!read_file(flags.base_generation, crypto::kMaxPolicyBytes, base_bytes))
+        {
+            return refuse(alloc, flags.action, "unreadable", flags.base_generation);
+        }
+    }
     crypto::ProviderVerifier verifier;
+    const crypto::PolicyConfig base_config{cont::ConstSpan<crypto::TrustKey>(base_trust.keys, base_trust.count),
+                                           &verifier, crypto::provider_algorithms(), 0U};
+    if (layered && crypto::validate_config(base_config) != PolicyError::None)
+    {
+        return refuse(alloc, flags.action, crypto::policy_error_name(PolicyError::BadConfig), flags.base_trust);
+    }
+    crypto::PolicyStore base_store(base_config);
+    const PolicyError base_error = layered ? base_store.apply(cont::as_const_span(base_bytes), now) : PolicyError::None;
     const crypto::PolicyConfig config{cont::ConstSpan<crypto::TrustKey>(trust.keys, trust.count), &verifier,
-                                      crypto::provider_algorithms(), floor};
+                                      crypto::provider_algorithms(), floor, layered ? &base_store : nullptr};
     if (crypto::validate_config(config) != PolicyError::None)
     {
         return refuse(alloc, flags.action, crypto::policy_error_name(PolicyError::BadConfig), flags.trust);
@@ -859,15 +919,29 @@ void write_key(JsonWriter& w, const crypto::KeyInfo& info, cont::ConstSpan<crd::
     JsonWriter w(alloc);
     w.begin_object();
     w.kv("verb", kVerb);
-    w.kv("ok", error == PolicyError::None);
+    w.kv("ok", error == PolicyError::None && base_error == PolicyError::None);
     w.kv("action", "verify");
     w.kv("error", crypto::policy_error_name(error));
     instant_text(now, text);
     w.kv("now", static_cast<const char*>(text));
     w.kv("floor", store.floor_generation());
     w.kv("freshness", kFreshness[static_cast<crd::u8>(snapshot.freshness(now))]);
+    if (layered)
+    {
+        w.key("base");
+        w.begin_object();
+        w.kv("error", crypto::policy_error_name(base_error));
+        w.kv("generation", snapshot.base_generation());
+        w.kv("freshness", kFreshness[static_cast<crd::u8>(base_store.snapshot().freshness(now))]);
+        write_digest(w, cont::as_const_span(base_bytes));
+        w.end_object();
+    }
     write_digest(w, cont::as_const_span(bytes));
     write_content(w, message.content, error == PolicyError::None ? &snapshot : nullptr, now);
+    if (layered)
+    {
+        write_loosenings(w, snapshot);
+    }
     write_signatures(w, message, &trust);
     w.end_object();
     return cont::String(w.str());

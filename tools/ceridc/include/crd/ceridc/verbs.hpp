@@ -89,6 +89,8 @@ struct PolicyFlags
     const char* trust = nullptr;                // --trust: the installation's trust set (verify)
     const char* now = nullptr;                  // --now: YYYY-MM-DD or Unix seconds (verify)
     const char* floor = nullptr;                // --floor: the newest generation ever accepted (verify; default 0)
+    const char* base_generation = nullptr;      // --base-generation: the layer a product's tightens (verify, S25)
+    const char* base_trust = nullptr;           // --base-trust: that layer's trust set (verify, with the above)
     const char* out = nullptr;                  // --out: the file written (body, assemble, sign)
     const char* store = nullptr;                // --store: the key holder's key store directory (key, sign)
     const char* name = nullptr;                 // --name: the signature key's name in it (key, sign)

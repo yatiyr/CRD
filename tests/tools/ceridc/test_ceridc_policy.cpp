@@ -68,7 +68,8 @@ cont::String assemble(std::initializer_list<const char*> in, const char* out)
 }
 
 cont::String verify(const char* generation, const char* trust, const char* now, const char* floor = nullptr,
-                    const char* source = nullptr)
+                    const char* source = nullptr, const char* base_generation = nullptr,
+                    const char* base_trust = nullptr)
 {
     crd::ceridc::PolicyFlags flags;
     flags.action = "verify";
@@ -77,6 +78,8 @@ cont::String verify(const char* generation, const char* trust, const char* now, 
     flags.now = now;
     flags.floor = floor;
     flags.source = source;
+    flags.base_generation = base_generation;
+    flags.base_trust = base_trust;
     return crd::ceridc::verb_policy(flags, crd::memory::default_allocator());
 }
 
@@ -159,16 +162,32 @@ void write_trust(const char* path, std::initializer_list<const IssueKey*> keys)
 }
 
 // The committed source with `from` replaced by `to`, at `path`.
-void write_variant(const char* path, cont::StringView from, cont::StringView to)
+struct Change
+{
+    cont::StringView from;
+    cont::StringView to;
+};
+
+// Generation 1's source with the first occurrence of each change's text replaced, in order.
+void write_variant(const char* path, std::initializer_list<Change> changes)
 {
     cont::String text;
     REQUIRE(fs::read_file_text(fs::Path(kSource), text));
-    const usize at = cont::StringView(text).find(from);
-    REQUIRE(at != cont::StringView::npos);
-    cont::String changed(cont::StringView(text).substr(0U, at));
-    changed += to;
-    changed += cont::StringView(text).substr(at + from.size());
-    write_text(path, changed);
+    for (const Change& change : changes)
+    {
+        const usize at = cont::StringView(text).find(change.from);
+        REQUIRE(at != cont::StringView::npos);
+        cont::String changed(cont::StringView(text).substr(0U, at));
+        changed += change.to;
+        changed += cont::StringView(text).substr(at + change.from.size());
+        text = changed;
+    }
+    write_text(path, text);
+}
+
+void write_variant(const char* path, cont::StringView from, cont::StringView to)
+{
+    write_variant(path, {Change{from, to}});
 }
 
 // The rule generation 1 holds for `algorithm` in `scope`; null when it has none.
@@ -441,6 +460,60 @@ TEST_CASE("policy verify: the hybrid trust set's two signatures, judged as an in
     write_text("extra.toml", "[[key]]\nalgorithm = \"ed25519\"\npublic_key = \"0a\"\nlabel = \"x\"\n");
     CHECK(has(verify("g1.policy", "extra.toml", "2026-11-10"),
               R"("reason":"unknown-key","file":"extra.toml","key":"label","line":4)"));
+}
+
+TEST_CASE("policy verify: a product layer judged over Cerid's (decision S25)", "[ceridc][policy][net-2]")
+{
+    const Issue issue;
+    // The product's generation 1, under its own keys: Ed25519 refused from 2026-11-05 (a tightening) and X25519
+    // accepted until 2031 (a loosening of Cerid's 2030, which changes nothing).
+    write_variant("product.policy.toml", {Change{R"(refused_from = "2030-01-01")", R"(refused_from = "2031-01-01")"},
+                                          Change{R"(refused_from = "2036-01-01")", R"(refused_from = "2026-11-05")"}});
+    const IssueKey product_pq{AlgorithmId::MlDsa87};
+    const IssueKey product_classical{AlgorithmId::Ed25519};
+    REQUIRE(has(body("product.policy.toml", "p1.body"), R"("ok":true)"));
+    product_pq.sign("p1.body", "p1-pq.signed");
+    product_classical.sign("p1.body", "p1-classical.signed");
+    REQUIRE(has(assemble({"p1-pq.signed", "p1-classical.signed"}, "p1.policy"), R"("ok":true)"));
+    write_trust("product-trust.toml", {&product_pq, &product_classical});
+
+    const cont::String layered =
+        verify("p1.policy", "product-trust.toml", "2026-11-10", nullptr, nullptr, "g1.policy", "trust.toml");
+    INFO(layered.c_str());
+    CHECK(has(layered, R"("ok":true,"action":"verify","error":"none")"));
+    CHECK(has(layered, R"("freshness":"current","base":{"error":"none","generation":1,"freshness":"current",)"));
+    CHECK(has(layered, R"("refused_from":"2026-11-05T00:00:00Z","in_build":true,"status":"refused"})"));
+    CHECK(has(layered, R"("refused_from":"2031-01-01T00:00:00Z","in_build":true,"status":"accepted"})"));
+    CHECK(has(layered, R"("loosenings":[{"algorithm":"x25519","scope":"everywhere",)"
+                       R"("accepted_from":"1970-01-01T00:00:00Z","refused_from":"2031-01-01T00:00:00Z",)"
+                       R"("base_rule":true,"base_accepted_from":"1970-01-01T00:00:00Z",)"
+                       R"("base_refused_from":"2030-01-01T00:00:00Z"}])"));
+    // Judged alone, the product's generation has no base and reports no loosenings.
+    const cont::String alone = verify("p1.policy", "product-trust.toml", "2026-11-10");
+    CHECK(has(alone, R"("ok":true)"));
+    CHECK_FALSE(has(alone, R"("base":)"));
+    CHECK_FALSE(has(alone, R"("loosenings":)"));
+
+    // A base that does not verify under its trust set fails the layered judgement closed.
+    const cont::String unsigned_base =
+        verify("p1.policy", "product-trust.toml", "2026-11-10", nullptr, nullptr, "g1.policy", "product-trust.toml");
+    CHECK(has(unsigned_base, R"("ok":false,"action":"verify","error":"none")"));
+    CHECK(has(unsigned_base, R"("freshness":"none","base":{"error":"missing-signature","generation":0,)"));
+    CHECK(has(unsigned_base, R"("status":"refused"})"));
+    CHECK_FALSE(has(unsigned_base, R"("status":"accepted")"));
+
+    // The base's two flags go together; each file is read and its trust set held to the same rules.
+    CHECK(has(verify("p1.policy", "product-trust.toml", "2026-11-10", nullptr, nullptr, "g1.policy"),
+              "--base-generation and --base-trust go together"));
+    CHECK(has(verify("p1.policy", "product-trust.toml", "2026-11-10", nullptr, nullptr, nullptr, "trust.toml"),
+              "--base-generation and --base-trust go together"));
+    CHECK(has(verify("p1.policy", "product-trust.toml", "2026-11-10", nullptr, nullptr, "missing.policy",
+                     "trust.toml"),
+              R"("reason":"unreadable","file":"missing.policy")"));
+    write_trust("one-product.toml", {&product_pq});
+    CHECK(has(verify("p1.policy", "product-trust.toml", "2026-11-10", nullptr, nullptr, "g1.policy",
+                     "one-product.toml"),
+              R"("reason":"bad-config","file":"one-product.toml")"));
 }
 
 TEST_CASE("policy assemble: one body, each signer once, and every input decoded", "[ceridc][policy][net-2]")

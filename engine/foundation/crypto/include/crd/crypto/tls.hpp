@@ -576,8 +576,10 @@ public:
     [[nodiscard]] TlsError export_keying_material(cont::StringView label, cont::ConstSpan<u8> context,
                                                   cont::Span<u8> out) const noexcept;
 
-    // The policy generation the session started under (0 without a policy or before init()).
+    // The policy generation the session started under (0 without a policy or before init()), and under a product
+    // layer (decision S25) the base layer's generation composed with it (0 without one).
     [[nodiscard]] u64 policy_generation() const noexcept { return m_policy_generation; }
+    [[nodiscard]] u64 base_policy_generation() const noexcept { return m_base_policy_generation; }
 
     // Established only (NotReady otherwise): whether the context's policy store still accepts, now, in the context's
     // scope, the negotiated group (none on a resumption without a key share) and AEAD, the peer key's algorithm and
@@ -607,6 +609,7 @@ protected:
     u64                 m_updates_sent     = 0U;
     u64                 m_updates_received = 0U;
     u64                 m_policy_generation = 0U;
+    u64                 m_base_policy_generation = 0U;
     u32                 m_early_allowance  = 0U; // a client's: the early bytes its offered ticket allows
     u32                 m_early_sent       = 0U; // a client's: the early bytes sent
     u32                 m_ticket_early     = 0U; // a client's: what the last NewSessionTicket allows

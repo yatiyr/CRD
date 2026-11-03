@@ -200,6 +200,64 @@ PolicyContent within_ceiling(const PolicyContent& content, cont::ConstSpan<Algor
     }
     return usable;
 }
+
+Freshness layer_freshness(const PolicyContent& content, u64 now) noexcept
+{
+    if (content.generation == 0U)
+    {
+        return Freshness::None;
+    }
+    if (now < content.expires)
+    {
+        return Freshness::Current;
+    }
+    return now < saturating_add(content.expires, content.offline_grace) ? Freshness::Grace : Freshness::Expired;
+}
+
+// The rule `scope` follows: the scope's own rule wins over the Everywhere rule (a snapshot holds known scopes only).
+const AlgorithmRule* governing_rule(const PolicyContent& content, AlgorithmId algorithm, PolicyScope scope) noexcept
+{
+    const AlgorithmRule* governing = nullptr;
+    for (u32 i = 0U; i < content.rule_count; ++i)
+    {
+        const AlgorithmRule& rule = content.rules[i];
+        if (rule.algorithm == algorithm && (rule.scope == scope || rule.scope == PolicyScope::Everywhere) &&
+            (governing == nullptr || rule.scope == scope))
+        {
+            governing = &rule;
+        }
+    }
+    return governing;
+}
+
+AlgorithmStatus layer_status(const PolicyContent& content, AlgorithmId algorithm, u64 now, PolicyScope scope) noexcept
+{
+    const Freshness fresh = layer_freshness(content, now);
+    if (fresh != Freshness::Current && fresh != Freshness::Grace)
+    {
+        return AlgorithmStatus::Refused;
+    }
+    const AlgorithmRule* governing = governing_rule(content, algorithm, scope);
+    if (governing == nullptr || now < governing->accepted_from || now >= governing->refused_from)
+    {
+        return AlgorithmStatus::Refused;
+    }
+    const bool preferred = now >= governing->preferred_from && now < governing->preferred_until;
+    return preferred ? AlgorithmStatus::Preferred : AlgorithmStatus::Accepted;
+}
+
+bool layer_allows_version(const PolicyContent& content, u16 protocol, u16 major, u16 minor) noexcept
+{
+    for (u32 i = 0U; i < content.minimum_count; ++i)
+    {
+        const MinimumVersion& minimum = content.minimums[i];
+        if (minimum.protocol == protocol)
+        {
+            return major > minimum.major || (major == minimum.major && minor >= minimum.minor);
+        }
+    }
+    return true;
+}
 } // namespace
 
 cont::StringView policy_error_name(PolicyError error) noexcept
@@ -445,46 +503,30 @@ PolicyError validate_config(const PolicyConfig& config) noexcept
         post_quantum = post_quantum || algorithm_class(key.algorithm) == AlgorithmClass::PostQuantumSignature;
         traditional  = traditional || algorithm_class(key.algorithm) == AlgorithmClass::ClassicalSignature;
     }
-    return post_quantum && traditional ? PolicyError::None : PolicyError::BadConfig;
+    const bool layers = config.base == nullptr || config.base->base() == nullptr;
+    return post_quantum && traditional && layers ? PolicyError::None : PolicyError::BadConfig;
 }
 
 Freshness PolicySnapshot::freshness(u64 now) const noexcept
 {
-    if (m_content.generation == 0U)
+    const Freshness own = layer_freshness(m_content, now);
+    if (!m_layered)
     {
-        return Freshness::None;
+        return own;
     }
-    if (now < m_content.expires)
-    {
-        return Freshness::Current;
-    }
-    return now < saturating_add(m_content.expires, m_content.offline_grace) ? Freshness::Grace : Freshness::Expired;
+    // Freshness orders None < Current < Grace < Expired: the worse layer's, None when either has no generation.
+    const Freshness base = layer_freshness(m_base, now);
+    return own == Freshness::None || base == Freshness::None ? Freshness::None : std::max(own, base);
 }
 
+// Decision S25: the one composition. The base layer can only refuse; what it accepts runs at the product's status.
 AlgorithmStatus PolicySnapshot::status(AlgorithmId algorithm, u64 now, PolicyScope scope) const noexcept
 {
-    const Freshness fresh = freshness(now);
-    if (fresh != Freshness::Current && fresh != Freshness::Grace)
+    if (m_layered && layer_status(m_base, algorithm, now, scope) == AlgorithmStatus::Refused)
     {
         return AlgorithmStatus::Refused;
     }
-    // The scope's own rule wins over the Everywhere rule; the snapshot holds known scopes only.
-    const AlgorithmRule* governing = nullptr;
-    for (u32 i = 0U; i < m_content.rule_count; ++i)
-    {
-        const AlgorithmRule& rule = m_content.rules[i];
-        if (rule.algorithm == algorithm && (rule.scope == scope || rule.scope == PolicyScope::Everywhere) &&
-            (governing == nullptr || rule.scope == scope))
-        {
-            governing = &rule;
-        }
-    }
-    if (governing == nullptr || now < governing->accepted_from || now >= governing->refused_from)
-    {
-        return AlgorithmStatus::Refused;
-    }
-    const bool preferred = now >= governing->preferred_from && now < governing->preferred_until;
-    return preferred ? AlgorithmStatus::Preferred : AlgorithmStatus::Accepted;
+    return layer_status(m_content, algorithm, now, scope);
 }
 
 AlgorithmStatus PolicySnapshot::status(cont::ConstSpan<AlgorithmId> algorithms, u64 now,
@@ -500,15 +542,32 @@ AlgorithmStatus PolicySnapshot::status(cont::ConstSpan<AlgorithmId> algorithms, 
 
 bool PolicySnapshot::allows_version(u16 protocol, u16 major, u16 minor) const noexcept
 {
-    for (u32 i = 0U; i < m_content.minimum_count; ++i)
+    return layer_allows_version(m_content, protocol, major, minor) &&
+           (!m_layered || layer_allows_version(m_base, protocol, major, minor));
+}
+
+u32 PolicySnapshot::loosenings(cont::Span<PolicyLoosening> out) const noexcept
+{
+    if (!m_layered)
     {
-        const MinimumVersion& minimum = m_content.minimums[i];
-        if (minimum.protocol == protocol)
-        {
-            return major > minimum.major || (major == minimum.major && minor >= minimum.minor);
-        }
+        return 0U;
     }
-    return true;
+    u32 count = 0U;
+    for (u32 i = 0U; i < m_content.rule_count; ++i)
+    {
+        const AlgorithmRule& rule = m_content.rules[i];
+        const AlgorithmRule* base = governing_rule(m_base, rule.algorithm, rule.scope);
+        if (base != nullptr && rule.accepted_from >= base->accepted_from && rule.refused_from <= base->refused_from)
+        {
+            continue;
+        }
+        if (count < out.size())
+        {
+            out[count] = {rule, base != nullptr ? *base : AlgorithmRule{}};
+        }
+        ++count;
+    }
+    return count;
 }
 
 PolicyStore::PolicyStore(const PolicyConfig& config) noexcept : m_config(config), m_floor(config.floor_generation)
@@ -582,8 +641,22 @@ PolicyStart PolicyStore::start(cont::ConstSpan<u8> persisted, cont::ConstSpan<u8
 
 PolicySnapshot PolicyStore::snapshot() const noexcept
 {
-    const std::lock_guard<std::mutex> lock(m_mutex);
-    return m_current;
+    PolicySnapshot taken;
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        taken = m_current;
+    }
+    // Two layers at most (validate_config): a base with a base of its own composes nothing, so everything is refused
+    // (and a cycle of stores is never followed).
+    if (m_config.base != nullptr)
+    {
+        taken.m_layered = true;
+        if (m_config.base->base() == nullptr)
+        {
+            taken.m_base = m_config.base->snapshot().m_content;
+        }
+    }
+    return taken;
 }
 
 void PolicyStore::raise_floor(u64 floor) noexcept
