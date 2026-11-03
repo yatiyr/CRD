@@ -25,6 +25,8 @@ No completed run holds 255decba or later; the only failed job in the active runs
 - Scratch project with the same lookup, `cl.exe` as compiler and AWS-LC's debug `-g`: all 19 win-aarch64 `.S` files
   assemble in Debug and Release with VS 18's clang 20.1.8 (`clang -target aarch64-pc-windows-msvc ...`); every object
   is `coff-arm64` and its 127 external definitions all carry `crd_awslc_` (llvm-nm).
+  Packed into an ARM64 archive (llvm-lib), `provider-prefix.py check` reads it and passes: only `crd_awslc_`
+  symbols.
 - win-debug: the 290 `[crypto]` cases pass (1 skip as before), the provider case with `provider_assembly()`.
 - This PC has no MSVC ARM64 tools, so the link and run are hosted: the change tier's win-arm64-debug lane.
 
