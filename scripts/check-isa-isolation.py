@@ -88,7 +88,8 @@ X64_OTHER = frozenset('''
     xsaves64 xrstor xrstor64 xrstors xrstors64 rdtscp rdpid clflushopt clwb prefetchw prefetchwt1'''.split())
 # The legacy instructions an operating system requires of every x64 CPU are inside the floor of its code: Windows 8.1
 # and later require CMPXCHG16B, PREFETCHW and LAHF/SAHF; Android's x86_64 ABI requires SSE4.2, POPCNT and CMPXCHG16B,
-# which the NDK's clang turns on for every unit (so its "portable" and "sse2" kernels hold SSE4.1 too).
+# which the NDK's clang turns on for every unit (so its "portable" and "sse2" kernels hold SSE4.1 too); LAHF/SAHF
+# are outside that ABI and MONITOR/MWAIT are privileged.
 OS_FLOOR = {'windows': frozenset('cmpxchg16b prefetchw lahf sahf'.split()), 'linux': frozenset(),
             'android': X64_V2 - frozenset('lahf sahf monitor mwait'.split())}
 X64_LEGACY = X64_V2 | X64_V3 | X64_OTHER

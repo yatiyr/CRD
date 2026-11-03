@@ -665,7 +665,7 @@ TEST_CASE("policy: the real binary keeps the key holders' keys under the operati
     {
         (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" policy %s --protector platform > %s%s)", kShellQuote,
                             exe.c_str(), arguments, out, kShellQuote);
-        (void)std::system(cmd); // the exit status is the report's "ok"
+        CHECK(std::system(cmd) != -1); // the shell ran; the exit status is the report's "ok"
         return read_text(out);
     };
     const cont::String pq = run("key --store os-keys-pq --name policy-pq --algorithm ml-dsa-65", "os_pq.json");
