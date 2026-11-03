@@ -8,6 +8,8 @@
 
 #include "byte_spans.hpp"
 
+#include <crd/core/assert.hpp>
+
 #include <openssl/base.h>
 #include <openssl/err.h>
 
@@ -15,7 +17,10 @@ namespace crd::crypto::provider_internal
 {
 // Clears the provider's error queue when a scope ends: a refused operation leaves no state behind on its thread. An
 // empty queue is left as it is: clearing walks every slot of the thread's queue, a cost each record of a session paid
-// for nothing (the crypto boards, docs/bench/2026-11-03-net-2-crypto-boards.md).
+// for nothing (the crypto boards, docs/bench/2026-11-03-net-2-crypto-boards.md). A path whose every provider call
+// succeeded says so with succeeded(): a call that succeeds queues no error, so the scope skips even the look at the
+// queue (a thread-local lookup in the provider, each record's three cost about 10 ns), and an asserting build checks
+// that the queue is indeed empty.
 struct ErrorScope
 {
     ErrorScope() noexcept = default;
@@ -23,11 +28,20 @@ struct ErrorScope
     ErrorScope& operator=(const ErrorScope&) = delete;
     ~ErrorScope()
     {
+        if (m_succeeded)
+        {
+            CRD_ASSERT_MSG(ERR_peek_error() == 0U, "a provider call that succeeded queued an error");
+            return;
+        }
         if (ERR_peek_error() != 0U)
         {
             ERR_clear_error();
         }
     }
+    void succeeded() noexcept { m_succeeded = true; }
+
+private:
+    bool m_succeeded = false;
 };
 
 // The key objects hold the provider's EVP_PKEY behind the opaque ProviderKey: a pointer cast there and back, never

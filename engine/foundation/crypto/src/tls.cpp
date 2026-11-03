@@ -182,9 +182,9 @@ SSL* ssl_of(ProviderTlsSession* session) noexcept
     return reinterpret_cast<SSL*>(session);
 }
 
-X509* x509_of(ProviderCertificate* certificate) noexcept
+CRYPTO_BUFFER* buffer_of(ProviderCertificate* certificate) noexcept
 {
-    return reinterpret_cast<X509*>(certificate);
+    return reinterpret_cast<CRYPTO_BUFFER*>(certificate);
 }
 
 BIO* bio_of(ProviderBuffer* buffer) noexcept
@@ -921,6 +921,32 @@ const EchContext* ech_of(const SSL* ssl) noexcept
 {
     return static_cast<const EchContext*>(SSL_CTX_get_ex_data(SSL_get_SSL_CTX(ssl), ech_slot()));
 }
+
+constexpr CBS_ASN1_TAG kCertificateVersionTag = CBS_ASN1_CONSTRUCTED | CBS_ASN1_CONTEXT_SPECIFIC | 0U;
+
+// The key of a DER certificate (RFC 5280 section 4.1): its SubjectPublicKeyInfo, after the version, serial number,
+// signature algorithm, issuer, validity and subject, the fields the provider's handshake skipped the same way. Only
+// the key is read: the pin, not the certificate, is the trust.
+bssl::UniquePtr<EVP_PKEY> certificate_key(const CRYPTO_BUFFER* certificate) noexcept
+{
+    CBS der;
+    CBS body;
+    CBS fields;
+    CBS key;
+    CRYPTO_BUFFER_init_CBS(certificate, &der);
+    if (!CBS_get_asn1(&der, &body, CBS_ASN1_SEQUENCE) || CBS_len(&der) != 0U ||
+        !CBS_get_asn1(&body, &fields, CBS_ASN1_SEQUENCE) ||
+        !CBS_get_optional_asn1(&fields, nullptr, nullptr, kCertificateVersionTag) ||
+        !CBS_get_asn1(&fields, nullptr, CBS_ASN1_INTEGER) || !CBS_get_asn1(&fields, nullptr, CBS_ASN1_SEQUENCE) ||
+        !CBS_get_asn1(&fields, nullptr, CBS_ASN1_SEQUENCE) || !CBS_get_asn1(&fields, nullptr, CBS_ASN1_SEQUENCE) ||
+        !CBS_get_asn1(&fields, nullptr, CBS_ASN1_SEQUENCE) ||
+        !CBS_get_asn1_element(&fields, &key, CBS_ASN1_SEQUENCE))
+    {
+        return nullptr;
+    }
+    bssl::UniquePtr<EVP_PKEY> pkey(EVP_parse_public_key(&key));
+    return CBS_len(&key) == 0U ? std::move(pkey) : nullptr;
+}
 } // namespace
 
 bool detail::tls_decompress_certificate(u16 algorithm, cont::ConstSpan<u8> compressed,
@@ -943,14 +969,16 @@ struct TlsCallbacks
     }
 
     // Takes the peer's key from its leaf certificate when the key is of an accepted algorithm and pinned: during a
-    // full handshake (verify_peer) and after a resumed one, whose ticket carried the certificate. The leaf is the one
-    // the provider parsed with the Certificate message or the ticket (its X509 method keeps it with the session), so
-    // no handshake parses it twice.
+    // full handshake (verify_peer) and after a resumed one, whose ticket carried the certificate. The contexts use the
+    // provider's buffers method, so certificates stay DER bytes, with the session and in the ticket: no handshake
+    // parses one as an X.509 object, and the pin check reads only the leaf's key.
     static bool pinned_peer(const SSL* ssl, detail::TlsHandshakeState& session) noexcept
     {
-        const X509*     leaf = SSL_get0_peer_certificate(ssl);
-        const EVP_PKEY* pkey = leaf != nullptr ? X509_get0_pubkey(leaf) : nullptr;
-        const AlgorithmId algorithm = pkey != nullptr ? provider_internal::signature_algorithm_of(pkey) : AlgorithmId{};
+        const STACK_OF(CRYPTO_BUFFER)* chain = SSL_get0_peer_certificates(ssl);
+        const bssl::UniquePtr<EVP_PKEY> pkey(chain != nullptr && sk_CRYPTO_BUFFER_num(chain) != 0U
+                                                 ? certificate_key(sk_CRYPTO_BUFFER_value(chain, 0U))
+                                                 : nullptr);
+        const AlgorithmId algorithm = pkey ? provider_internal::signature_algorithm_of(pkey.get()) : AlgorithmId{};
         const TlsSettings& settings = session.m_settings;
         const AlgorithmId* accepted_end = settings.signatures + settings.signature_count;
         if (algorithm == AlgorithmId{} || std::find(settings.signatures, accepted_end, algorithm) == accepted_end)
@@ -959,7 +987,7 @@ struct TlsCallbacks
         }
         u8                   public_key[kMaxSignaturePublicKey];
         const cont::Span<u8> bytes(public_key, signature_sizes(algorithm).public_key);
-        if (provider_internal::signature_public_bytes(pkey, algorithm, bytes) != CryptoError::None)
+        if (provider_internal::signature_public_bytes(pkey.get(), algorithm, bytes) != CryptoError::None)
         {
             return false;
         }
@@ -1306,10 +1334,16 @@ struct TlsCallbacks
     // the KeyUpdates each way, notes the algorithm of a compressed Certificate sent or received, notes that a client
     // encrypted an inner ClientHello (the provider reports it only when its outer hello offers ECH) and reads the
     // early data a client's NewSessionTicket allows, which keep_ticket records next. The provider reports a KeyUpdate
-    // it writes when it queues it, sealed under the old key.
+    // it writes when it queues it, sealed under the old key. Every record also reports its header and its inner
+    // content type: those return before the session is looked up, a cost each record paid for nothing.
     static void observe(int is_write, int, int content_type, const void* buffer, size_t length, SSL* ssl,
                         void*) noexcept
     {
+        if (content_type != SSL3_RT_HANDSHAKE && content_type != SSL3_RT_ALERT &&
+            content_type != SSL3_RT_CLIENT_HELLO_INNER)
+        {
+            return;
+        }
         detail::TlsHandshakeState* session = session_of(ssl);
         if (session == nullptr)
         {
@@ -2128,7 +2162,7 @@ constexpr SSL_PRIVATE_KEY_METHOD kDeviceKeyMethod = {&device_sign, &device_decry
 // key identifier, signed by sign_certificate().
 [[nodiscard]] TlsError issue_certificate(EVP_PKEY* pkey, AlgorithmId algorithm, cont::StringView name,
                                          const DeviceSigner* device, KeyId& id,
-                                         bssl::UniquePtr<X509>& out) noexcept
+                                         bssl::UniquePtr<CRYPTO_BUFFER>& out) noexcept
 {
     u8                   public_key[kMaxSignaturePublicKey];
     const cont::Span<u8> bytes(public_key, signature_sizes(algorithm).public_key);
@@ -2188,8 +2222,12 @@ constexpr SSL_PRIVATE_KEY_METHOD kDeviceKeyMethod = {&device_sign, &device_decry
     {
         return TlsError::ProviderFailure;
     }
-    out = std::move(certificate);
-    return TlsError::None;
+    // The contexts take the certificate as its DER bytes (the provider's buffers method): no handshake parses it.
+    uint8_t*                       der       = nullptr;
+    const int                      der_bytes = i2d_X509(certificate.get(), &der);
+    const bssl::UniquePtr<uint8_t> owner(der);
+    out.reset(der_bytes > 0 ? CRYPTO_BUFFER_new(der, static_cast<usize>(der_bytes), nullptr) : nullptr);
+    return out ? TlsError::None : TlsError::ProviderFailure;
 }
 } // namespace
 
@@ -2200,7 +2238,7 @@ TlsCredential::~TlsCredential() noexcept
 
 void TlsCredential::clear() noexcept
 {
-    X509_free(x509_of(m_certificate));
+    CRYPTO_BUFFER_free(buffer_of(m_certificate));
     m_certificate = nullptr;
     m_key.reset();
     free_device(m_device);
@@ -2234,7 +2272,7 @@ TlsError TlsCredential::init(const StoredSigner& signer, cont::StringView name) 
         return TlsError::ProviderFailure;
     }
     const bssl::UniquePtr<EVP_PKEY> pkey(provider_internal::signature_public_pkey(algorithm, bytes));
-    bssl::UniquePtr<X509>           certificate;
+    bssl::UniquePtr<CRYPTO_BUFFER>  certificate;
     KeyId                           id;
     if (!pkey)
     {
@@ -2269,9 +2307,9 @@ TlsError TlsCredential::init(const SigningKey& key, cont::StringView name) noexc
     const ErrorScope      errors;
     const AlgorithmId     algorithm = key.algorithm();
     EVP_PKEY*             pkey      = pkey_of(key.m_key.get());
-    bssl::UniquePtr<X509> certificate;
-    KeyId                 id;
-    const TlsError        issued = issue_certificate(pkey, algorithm, name, nullptr, id, certificate);
+    bssl::UniquePtr<CRYPTO_BUFFER> certificate;
+    KeyId                          id;
+    const TlsError                 issued = issue_certificate(pkey, algorithm, name, nullptr, id, certificate);
     if (issued != TlsError::None)
     {
         return issued;
@@ -2499,7 +2537,7 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     }
 
     const ErrorScope          errors;
-    bssl::UniquePtr<SSL_CTX> context(SSL_CTX_new(TLS_method()));
+    bssl::UniquePtr<SSL_CTX> context(SSL_CTX_new(TLS_with_buffers_method()));
     if (!context || !SSL_CTX_set_min_proto_version(context.get(), TLS1_3_VERSION) ||
         !SSL_CTX_set_max_proto_version(context.get(), TLS1_3_VERSION) ||
         !SSL_CTX_set1_group_ids(context.get(), groups, config.groups.size()) ||
@@ -2561,19 +2599,8 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     {
         const TlsCredential& credential = *config.credential;
         const u16            scheme     = tls_signature_codepoint(credential.algorithm());
-        if (!SSL_CTX_use_certificate(context.get(), x509_of(credential.m_certificate)) ||
-            !SSL_CTX_set_signing_algorithm_prefs(context.get(), &scheme, 1U))
-        {
-            return TlsError::ProviderFailure;
-        }
-        if (credential.m_device == nullptr)
-        {
-            if (!SSL_CTX_use_PrivateKey(context.get(), pkey_of(credential.m_key.get())))
-            {
-                return TlsError::ProviderFailure;
-            }
-        }
-        else
+        CRYPTO_BUFFER* const chain[]    = {buffer_of(credential.m_certificate)};
+        if (credential.m_device != nullptr)
         {
             // The context keeps its own copy of the device signer, freed with it however init() ends.
             DeviceSigner* kept = copy_device(*credential.m_device);
@@ -2582,22 +2609,24 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
                 free_device(kept);
                 return TlsError::ProviderFailure;
             }
-            SSL_CTX_set_private_key_method(context.get(), &kDeviceKeyMethod);
+        }
+        EVP_PKEY* const                     key    = credential.m_device == nullptr ? pkey_of(credential.m_key.get())
+                                                                                   : nullptr;
+        const SSL_PRIVATE_KEY_METHOD* const method = credential.m_device != nullptr ? &kDeviceKeyMethod : nullptr;
+        if (!SSL_CTX_set_chain_and_key(context.get(), chain, 1U, key, method) ||
+            !SSL_CTX_set_signing_algorithm_prefs(context.get(), &scheme, 1U))
+        {
+            return TlsError::ProviderFailure;
         }
     }
     if (server)
     {
         SSL_CTX_set_tlsext_servername_callback(context.get(), &TlsCallbacks::check_name);
         SSL_CTX_set_select_certificate_cb(context.get(), &TlsCallbacks::note_hello);
-        uint8_t*                       der       = nullptr;
-        const int                      der_bytes = i2d_X509(x509_of(config.credential->m_certificate), &der);
-        const bssl::UniquePtr<uint8_t> owner(der);
-        if (der_bytes <= 0)
-        {
-            return TlsError::ProviderFailure;
-        }
-        const TlsError compressed = compress_certificate(
-            context.get(), cont::ConstSpan<u8>(der, static_cast<usize>(der_bytes)), config.certificate_compression);
+        const CRYPTO_BUFFER* certificate = buffer_of(config.credential->m_certificate);
+        const TlsError       compressed  = compress_certificate(
+            context.get(), cont::ConstSpan<u8>(CRYPTO_BUFFER_data(certificate), CRYPTO_BUFFER_len(certificate)),
+            config.certificate_compression);
         if (compressed != TlsError::None)
         {
             return compressed;
@@ -2930,8 +2959,8 @@ TlsError TlsSession::receive(cont::ConstSpan<u8> bytes) noexcept
     {
         return TlsError::Closed;
     }
-    const ErrorScope errors;
-    BIO*             incoming = SSL_get_rbio(ssl_of(m_session));
+    ErrorScope errors;
+    BIO*       incoming = SSL_get_rbio(ssl_of(m_session));
     if (bytes.size() > kTlsMaxBufferedBytes - BIO_pending(incoming))
     {
         return TlsError::Full;
@@ -2944,7 +2973,12 @@ TlsError TlsSession::receive(cont::ConstSpan<u8> bytes) noexcept
     // A server reading its client's early data goes on through read_early(): the provider's handshake returns at once
     // while early bytes wait.
     const bool early_reading = m_settings.role == TlsRole::Server && m_early == TlsEarlyData::Accepted;
-    return m_state == TlsState::Handshaking && !early_reading ? advance() : TlsError::None;
+    if (m_state == TlsState::Handshaking && !early_reading)
+    {
+        return advance();
+    }
+    errors.succeeded();
+    return TlsError::None;
 }
 
 usize TlsSession::pending() const noexcept
@@ -2959,18 +2993,19 @@ TlsError TlsSession::take(cont::Span<u8> out, usize& written) noexcept
     {
         return TlsError::NotReady;
     }
-    const usize count = std::min(out.size(), pending());
-    if (count == 0U)
+    if (out.empty())
     {
         return TlsError::None;
     }
-    const int read = BIO_read(SSL_get_wbio(ssl_of(m_session)), out.data(), static_cast<int>(count));
-    if (read != static_cast<int>(count))
+    // One read takes what the outgoing bytes hold, up to `out`; when they hold nothing it asks for a retry.
+    BIO*      outgoing = SSL_get_wbio(ssl_of(m_session));
+    const int read     = BIO_read(outgoing, out.data(), static_cast<int>(std::min<usize>(out.size(), INT_MAX)));
+    if (read > 0)
     {
-        return TlsError::ProviderFailure;
+        written = static_cast<usize>(read);
+        return TlsError::None;
     }
-    written = count;
-    return TlsError::None;
+    return BIO_should_retry(outgoing) ? TlsError::None : TlsError::ProviderFailure;
 }
 
 TlsError TlsSession::send(cont::ConstSpan<u8> plaintext) noexcept
@@ -3001,7 +3036,7 @@ TlsError TlsSession::send(cont::ConstSpan<u8> plaintext) noexcept
     {
         return TlsError::Full;
     }
-    const ErrorScope errors;
+    ErrorScope errors;
     if (updates != 0U && m_updates_sent + updates >= m_settings.max_key_updates)
     {
         return close_at_bound();
@@ -3012,7 +3047,7 @@ TlsError TlsSession::send(cont::ConstSpan<u8> plaintext) noexcept
     }
     for (usize at = 0U; at < plaintext.size(); at += kMaxRecordPlaintext)
     {
-        if (records_under_key() >= per_key)
+        if ((at == 0U ? used : records_under_key()) >= per_key)
         {
             const TlsError rotated = rekey(false);
             if (rotated != TlsError::None)
@@ -3026,6 +3061,7 @@ TlsError TlsSession::send(cont::ConstSpan<u8> plaintext) noexcept
             return fail(TlsError::Failed);
         }
     }
+    errors.succeeded();
     return TlsError::None;
 }
 
@@ -3205,11 +3241,11 @@ TlsError TlsSession::read(cont::Span<u8> out, usize& written) noexcept
     {
         return TlsError::None;
     }
-    const ErrorScope errors;
-    SSL*             ssl      = ssl_of(m_session);
-    const u64        received = m_updates_received;
-    const int        result   = SSL_read(ssl, out.data(), static_cast<int>(std::min<usize>(out.size(), INT_MAX)));
-    const int        reason   = result > 0 ? SSL_ERROR_NONE : SSL_get_error(ssl, result);
+    ErrorScope errors;
+    SSL*       ssl      = ssl_of(m_session);
+    const u64  received = m_updates_received;
+    const int  result   = SSL_read(ssl, out.data(), static_cast<int>(std::min<usize>(out.size(), INT_MAX)));
+    const int  reason   = result > 0 ? SSL_ERROR_NONE : SSL_get_error(ssl, result);
     if (reason != SSL_ERROR_NONE && reason != SSL_ERROR_WANT_READ && reason != SSL_ERROR_ZERO_RETURN)
     {
         return fail(TlsError::Failed);
@@ -3238,6 +3274,7 @@ TlsError TlsSession::read(cont::Span<u8> out, usize& written) noexcept
         const TlsError closed = close_at_bound();
         return written != 0U && closed == TlsError::Closed ? TlsError::None : closed;
     }
+    errors.succeeded();
     return TlsError::None;
 }
 

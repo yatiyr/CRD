@@ -15,6 +15,7 @@
 #include <crd/compression/deflate.hpp>
 #include <crd/compression/zstd.hpp>
 #include <crd/containers/array.hpp>
+#include <crd/core/assert.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
 
@@ -2024,6 +2025,101 @@ TEST_CASE("TLS: adversarial bytes fail the session with an alert and nothing els
         CHECK(server.session.state() == TlsState::Failed);
         CHECK(server.session.alert_sent().description == 20U); // bad_record_mac
     }
+}
+
+namespace
+{
+#if CRD_ENABLE_ASSERTS
+std::atomic<int> g_failed_asserts{0};
+
+int count_assert(const char* /*report*/)
+{
+    g_failed_asserts.fetch_add(1);
+    return 0;
+}
+
+// Counts failed assertions instead of reporting them while it lives; a REQUIRE that throws still removes it.
+struct CountedAsserts
+{
+    CountedAsserts() noexcept
+    {
+        g_failed_asserts.store(0);
+        crd::set_assert_platform_handler(&count_assert);
+    }
+    ~CountedAsserts() { crd::set_assert_platform_handler(nullptr); }
+    CountedAsserts(const CountedAsserts&)            = delete;
+    CountedAsserts& operator=(const CountedAsserts&) = delete;
+};
+#endif
+
+// A failed session, then records, key updates, a partial take and empty reads and takes on a fresh pair.
+void records_and_failure()
+{
+    u8    out[16];
+    usize written = 0U;
+    {
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, Options{});
+        establish(client, server);
+        const u8 hello[] = {'h', 'i'};
+        REQUIRE(client.session.send(ConstSpan<u8>(hello, sizeof(hello))) == TlsError::None);
+        Bytes record = drain(client.session);
+        record[record.size() - 1U] ^= 0x01U;
+        REQUIRE(server.session.receive(ConstSpan<u8>(record.data(), record.size())) == TlsError::None);
+        CHECK(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::Failed);
+    }
+    Options options;
+    options.client_key_records = kTlsMinKeyUpdateRecords;
+    Endpoint client;
+    Endpoint server;
+    setup(client, server, options);
+    establish(client, server);
+    exchange(client, server, 40000U); // three records, two of them after a key update
+    send_bytes(client.session, 10U);  // and a key update before each of these
+    CHECK(client.session.key_updates_sent() == 12U);
+
+    // A partial take leaves the rest for the next one, and the two parts are the records.
+    const usize pending = client.session.pending();
+    REQUIRE(client.session.take(Span<u8>(out, 5U), written) == TlsError::None);
+    CHECK(written == 5U);
+    CHECK(client.session.pending() == pending - 5U);
+    REQUIRE(server.session.receive(ConstSpan<u8>(out, 5U)) == TlsError::None);
+    REQUIRE(deliver(client.session, server.session) == TlsError::None);
+    CHECK(read_all(server.session).size() == 10U);
+
+    // Nothing to read and nothing to take: the provider asks for more bytes, which is no error.
+    CHECK(client.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    CHECK(written == 0U);
+    CHECK(client.session.take(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    CHECK(written == 0U);
+
+    // A requested update, answered as the request is read.
+    REQUIRE(server.session.update_keys(true) == TlsError::None);
+    REQUIRE(deliver(server.session, client.session) == TlsError::None);
+    CHECK(read_all(client.session).empty());
+    CHECK(client.session.pending() == kKeyUpdateRecord);
+    REQUIRE(deliver(client.session, server.session) == TlsError::None);
+    CHECK(read_all(server.session).empty());
+    exchange(client, server, 300U);
+}
+} // namespace
+
+// The record paths skip the look at the provider's error queue when every call in them succeeded, and an asserting
+// build checks there that the queue is empty (provider_internal.hpp's ErrorScope). A failed session goes first: what
+// its failure queued must be gone, or the records after it on this thread would find it.
+TEST_CASE("TLS: records, key updates and a failed session leave the provider's error queue empty",
+          "[crypto][tls][net-2]")
+{
+#if CRD_ENABLE_ASSERTS
+    {
+        const CountedAsserts counted;
+        records_and_failure();
+    }
+    CHECK(g_failed_asserts.load() == 0);
+#else
+    records_and_failure();
+#endif
 }
 
 namespace

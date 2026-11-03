@@ -223,7 +223,7 @@ enum class TlsEarlyData : u8
 [[nodiscard]] u16 tls_signature_codepoint(AlgorithmId signature) noexcept;
 
 class ReplayFilter;         // replay.hpp: a server's record of the tickets it has opened
-struct ProviderCertificate; // the provider's certificate object, defined only inside crd-crypto
+struct ProviderCertificate; // the provider's buffer of a certificate's DER bytes, defined only inside crd-crypto
 class StoredSigner;         // key_store.hpp
 class DeviceSigner;         // key_store.hpp
 
@@ -238,9 +238,9 @@ public:
     TlsCredential(TlsCredential&&)                 = delete;
     TlsCredential& operator=(TlsCredential&&)      = delete;
 
-    // Shares `key` (which may be cleared afterwards) and issues its certificate: X.509 v3, a random serial number,
-    // `name` as subject common name and DNS subjectAltName, valid from the provider's clock with no expiry
-    // (99991231235959Z, RFC 5280 section 4.1.2.5: trust and rotation come from the pins, never from the dates).
+    // Shares `key` (which may be cleared afterwards) and issues its certificate: X.509 v3, a serial number from the
+    // key's identifier, `name` as DNS subjectAltName (and subject common name when it fits), valid from the epoch with
+    // no expiry (99991231235959Z, RFC 5280 section 4.1.2.5: trust and rotation come from the pins, never the dates).
     [[nodiscard]] TlsError init(const SigningKey& key, cont::StringView name) noexcept;
     // The same for a key store's signature key (key_store.hpp): its Current generation as `signer` loaded it. A key a
     // device holds (decision K12) signs its certificate and every handshake through the device, by the provider's
