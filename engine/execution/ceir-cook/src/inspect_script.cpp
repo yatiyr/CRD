@@ -151,7 +151,8 @@ void run_inspect_script(InspectHost& host, const InspectScript& script, InspectR
         u32 index = 0U;
         (void)host.add_line_breakpoint(script.file, script.breaks[i], index); // not Busy: nothing runs yet
     }
-    if (const insp::Refusal r = host.start(script.args, script.record, script.inputs, script.max_steps); r != insp::Refusal::None)
+    if (const insp::Refusal r = host.start(script.args, script.record, script.inputs, script.max_steps);
+        r != insp::Refusal::None)
     {
         out.outcome = ScriptOutcome::NotStarted;
         out.refusal = r;

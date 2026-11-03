@@ -233,7 +233,8 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRe
                 ReplayRecorder         rec(m_rec_trace, m_rec_max);
                 InputRecorder          reads(m_rec_trace, m_inputs);
                 const plan::RunControl observer = rec.control();
-                m_result = m_session.run(m_compiled.plan, run_args, &m_exec_alloc, &observer, reads.source(), m_max_steps);
+                m_result =
+                    m_session.run(m_compiled.plan, run_args, &m_exec_alloc, &observer, reads.source(), m_max_steps);
                 rec.finish(m_compiled.plan, m_result);
             }
             else
