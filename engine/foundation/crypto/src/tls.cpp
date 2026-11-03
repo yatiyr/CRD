@@ -75,6 +75,9 @@
 #if !defined(CRD_TLS_KEY_LOG)
 #error "CRD_TLS_KEY_LOG comes from engine/foundation/crypto/CMakeLists.txt"
 #elif !CRD_TLS_KEY_LOG && (defined(__clang__) || defined(__GNUC__)) // clang-cl too: it defines __clang__
+// BORINGSSL_PREFIX makes both names renaming macros, and poisoning a macro is a warning: no call may remain anyway.
+#undef SSL_CTX_set_keylog_callback
+#undef SSL_CTX_get_keylog_callback
 #pragma GCC poison SSL_CTX_set_keylog_callback SSL_CTX_get_keylog_callback
 #elif !CRD_TLS_KEY_LOG && defined(_MSC_VER)
 #pragma deprecated(SSL_CTX_set_keylog_callback, SSL_CTX_get_keylog_callback) // C4995, an error under /WX
