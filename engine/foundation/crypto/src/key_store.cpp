@@ -502,7 +502,14 @@ CryptoError KeyStore::save(cont::ConstSpan<Entry> entries, u64 sequence, cont::C
                            cont::ConstSpan<u8> pending, cont::ConstSpan<u8> master) const noexcept
 {
     const cont::ConstSpan<u8> protector = bytes_of(m_protector->name());
-    usize                     body      = 4U;
+    // The bounds read_header() holds a store to, which every caller checked: the length fields cannot truncate a size
+    // and the payload's size cannot wrap.
+    if (protector.size() > kKeyProtectorNameBytes || reference.empty() || reference.size() > kKeyReferenceMaxBytes ||
+        pending.size() > kKeyReferenceMaxBytes || entries.size() > kKeyStoreMaxKeys)
+    {
+        return CryptoError::Malformed;
+    }
+    usize body = 4U;
     for (const Entry& entry : entries)
     {
         body += kEntryFixedBytes + entry.info.name_bytes + entry.public_key.size() + entry.private_bytes;
@@ -627,6 +634,18 @@ CryptoError KeyStore::read(cont::StringView directory, KeyProtector& protector, 
         return CryptoError::Forged;
     }
     return decode(body, out.entries);
+}
+
+// A save replaces the store's file in steps, so a read outside a change takes the lock that orders every change: a
+// writer in another thread or process never replaces the file under it.
+CryptoError KeyStore::read_locked(cont::StringView directory, KeyProtector& protector, Snapshot& out) const noexcept
+{
+    fs::FileLock lock;
+    if (!lock.acquire(file_in(directory, kLockFileName)))
+    {
+        return fs::is_file(file_in(directory, kStoreFileName)) ? CryptoError::StorageFailure : CryptoError::NotFound;
+    }
+    return read(directory, protector, out);
 }
 
 CryptoError KeyStore::decode(cont::ConstSpan<u8> body, cont::Array<Entry>& entries) noexcept
@@ -819,7 +838,7 @@ CryptoError KeyStore::open(cont::StringView directory, KeyProtector& protector, 
         return CryptoError::Unsupported;
     }
     Snapshot          snapshot;
-    const CryptoError read_error = read(directory, protector, snapshot);
+    const CryptoError read_error = read_locked(directory, protector, snapshot);
     if (read_error == CryptoError::None)
     {
         adopt(protector, directory, snapshot);
@@ -835,7 +854,7 @@ CryptoError KeyStore::refresh() noexcept
         return CryptoError::NotReady;
     }
     Snapshot          snapshot;
-    const CryptoError read_error = read(m_directory, *m_protector, snapshot);
+    const CryptoError read_error = read_locked(m_directory, *m_protector, snapshot);
     if (read_error != CryptoError::None)
     {
         return read_error;

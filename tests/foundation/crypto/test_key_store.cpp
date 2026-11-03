@@ -1013,6 +1013,26 @@ TEST_CASE("Key store: writers in several threads and stores are ordered by the l
     CHECK(same_infos(first, second));
     CHECK(second.generate("from-first", AlgorithmId::Ed25519, PlacementRequest::Software, 1U) == CryptoError::Exists);
 
+    // A read outside a change waits for the lock a change holds, since a save replaces the file in steps.
+    {
+        fs::FileLock held;
+        REQUIRE(held.acquire(dir.path() / "lock"));
+        std::atomic<bool> finished{false};
+        CryptoError       opened = CryptoError::NotReady;
+        std::thread       reader(
+            [&]()
+            {
+                KeyStore late;
+                opened = late.open(dir.dir(), protector);
+                finished.store(true);
+            });
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        CHECK_FALSE(finished.load());
+        held.release();
+        reader.join();
+        CHECK(opened == CryptoError::None);
+    }
+
     // Threads, each with its own store object, adding and rotating their own names: nothing is lost.
     constexpr usize threads = 4U;
     constexpr usize each    = 6U;

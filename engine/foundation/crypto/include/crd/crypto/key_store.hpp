@@ -527,6 +527,8 @@ private:
                                       const Entry*& out) const noexcept;
     [[nodiscard]] CryptoError  read(cont::StringView directory, KeyProtector& protector,
                                     Snapshot& out) const noexcept;
+    [[nodiscard]] CryptoError  read_locked(cont::StringView directory, KeyProtector& protector,
+                                           Snapshot& out) const noexcept;
     [[nodiscard]] CryptoError  same_store(const Snapshot& snapshot) const noexcept;
     void                       adopt(KeyProtector& protector, cont::StringView directory, Snapshot& snapshot) noexcept;
     [[nodiscard]] CryptoError  apply(Change& change) noexcept;
