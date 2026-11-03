@@ -584,7 +584,9 @@ TEST_CASE("policy key and sign: the key holders' stored keys issue generation 1"
     const cont::String signed_pq = sign(&protector, "keys-pq", "policy-pq", kSource, nullptr, "pq-stored.signed");
     INFO(signed_pq.c_str());
     CHECK(has(signed_pq, R"("verb":"policy","ok":true,"action":"sign","out":"pq-stored.signed","bytes":)"));
-    CHECK(has(signed_pq, R"("generation":1,"signatures":[{"key":")"));
+    CHECK(has(signed_pq, R"("generation":1,"issued":"2026-11-03T00:00:00Z","expires":"2027-11-03T00:00:00Z")"));
+    CHECK(has(signed_pq, R"({"algorithm":"x25519","scope":"cerid-services","accepted_from":"1970-01-01T00:00:00Z",)"));
+    CHECK(has(signed_pq, R"("signatures":[{"key":")"));
     CHECK(json_text(signed_pq, "key") == json_text(pq, "key")); // the signature names the stored key
     const cont::String signed_ec =
         sign(&protector, "keys-classical", "policy-ec", nullptr, "g1.body", "ec-stored.signed");

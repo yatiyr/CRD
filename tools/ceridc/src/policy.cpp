@@ -914,6 +914,10 @@ void write_key(JsonWriter& w, const crypto::KeyInfo& info, cont::ConstSpan<crd::
             return refuse(alloc, flags.action, crypto::crypto_error_name(error));
         }
         info = store.find(name);
+        if (info == nullptr)
+        {
+            return refuse(alloc, flags.action, crypto::crypto_error_name(crypto::CryptoError::NotFound));
+        }
     }
     if (info->algorithm != algorithm)
     {
@@ -1031,7 +1035,7 @@ void write_key(JsonWriter& w, const crypto::KeyInfo& info, cont::ConstSpan<crd::
     w.kv("action", "sign");
     w.kv("out", flags.out);
     write_digest(w, cont::as_const_span(generation));
-    w.kv("generation", decoded.content.generation);
+    write_content(w, decoded.content, nullptr, 0U); // what the key holder signed
     write_signatures(w, decoded, nullptr);
     write_key(w, signer.info(), public_view);
     w.end_object();
