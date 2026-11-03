@@ -88,6 +88,12 @@ option(CRD_BUILD_HESAP_VS_NLOPT "Build the COBYLA, NEWUOA and BOBYQA differentia
 # crd-crypto-tls-interop-openssl CTest of the tree that turns it on (tests/foundation/crypto/interop): locally, and on
 # the complete-tier linux-gcc-public-checks lane, whose preset turns it on.
 option(CRD_BUILD_TLS_VS_OPENSSL "Build the TLS 1.3 interoperability test against OpenSSL 4.0 (Linux)" OFF)
+# crd-crypto's boards (NET.2, docs/bench): crd-crypto-board times crd-crypto, the AWS-LC it wraps called directly, the
+# pinned BoringSSL release (cmake/pins.json boringssl, built by its own CMake as a separate project with its symbols
+# prefixed crd_bssl) and the OpenSSL 4.0 above, in one process on the same work. Linux only, never in a shipped build;
+# the crd-crypto-board-smoke CTest of the tree that turns it on (every case of every arm once, the cross-library
+# checks first), locally and on the complete-tier linux-gcc-public-checks lane; the boards run it in a release tree.
+option(CRD_BUILD_CRYPTO_VS_PEERS "Build the crypto boards against AWS-LC, BoringSSL and OpenSSL 4.0 (Linux)" OFF)
 # The MLS interoperability test (NET.2, decision M4): a Cerid member program (crd-mls-peer) against one over Cisco's
 # MLSpp (cmake/pins.json mlspp, with nlohmann_json for its build), both driven by tests/foundation/crypto/interop/
 # mls_interop.py. MLSpp builds by its own CMake as a separate project against the OpenSSL above, which this option
@@ -1390,16 +1396,20 @@ if(CRD_BUILD_HESAP_VS_NLOPT)
     crd_add_pinned_package(nlopt DOWNLOAD_ONLY YES)
 endif()
 
-# ----- The interoperability peers: OpenSSL 4.0, MLSpp and OpenMLS, built by tests/foundation/crypto (test-only) -----
-# The TLS peer program is C; OpenSSL's Configure is Perl. MLSpp needs OpenSSL (its crypto) and nlohmann_json's CMake
-# package (its build only).
-if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP)
+# ----- The interoperability and board peers: OpenSSL 4.0, BoringSSL, MLSpp and OpenMLS, built by
+# tests/foundation/crypto (test-only) -----
+# The TLS peer program and the boards' peer arms are C; OpenSSL's Configure is Perl. MLSpp needs OpenSSL (its crypto)
+# and nlohmann_json's CMake package (its build only).
+if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_CRYPTO_VS_PEERS)
     if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
-        message(FATAL_ERROR "[interop] the TLS and MLS interoperability tests need Linux, CRD_BUILD_TESTS and the "
-                            "crypto module")
+        message(FATAL_ERROR "[interop] the TLS and MLS interoperability tests and the crypto boards need Linux, "
+                            "CRD_BUILD_TESTS and the crypto module")
     endif()
     enable_language(C)
     crd_add_pinned_package(openssl DOWNLOAD_ONLY YES)
+endif()
+if(CRD_BUILD_CRYPTO_VS_PEERS)
+    crd_add_pinned_package(boringssl DOWNLOAD_ONLY YES)
 endif()
 if(CRD_BUILD_MLS_VS_MLSPP)
     crd_add_pinned_package(nlohmann_json DOWNLOAD_ONLY YES)

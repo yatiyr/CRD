@@ -287,8 +287,8 @@ destroyed and are read-only, so shared across threads, after `init`. `provider_a
   every algorithm of the register's identifiers and holds the TLS 1.3 stack with QUIC integration, ECH and certificate
   compression that the handshake slice needs, under Apache-2.0 and ISC terms. It is pinned as a package (5.12.0,
   `cmake/pins.json`), built from its pregenerated sources without Perl or Go, linked privately into `crd-crypto` only,
-  and exported link-only beside `Cerid::crypto`. BoringSSL (no releases), OpenSSL 3.5 (a Perl-driven build) and the
-  verified libraries (HACL*, libcrux: no TLS stack) are the alternatives the provider interface keeps open.
+  and exported link-only beside `Cerid::crypto`. BoringSSL, OpenSSL (a Perl-driven build) and the verified libraries
+  (HACL*, libcrux: no TLS stack) are the alternatives the provider interface keeps open.
 - **P2. Randomness** is the provider's NIST SP 800-90A CTR_DRBG, seeded from the operating system's source with CPU
   jitter entropy as a second independent source and reseeded on fork; no other generator exists in the engine.
 - **P3. Assembly on every lane.** AWS-LC's own assembly (AES-NI, VAES, AVX2 and AVX-512 paths, ARMv8 crypto) runs on
@@ -343,6 +343,13 @@ destroyed and are read-only, so shared across threads, after `init`. `provider_a
   128-bit secret key (T10). A table generates its key (`PrfKey::generate`); processes that must agree, such as the
   servers behind one load balancer, share one (`PrfKey::init`, k0 then k1 little-endian, the paper's byte order). A key
   that holds none answers `NotReady`, never a hash under a public key. The key and the hash allocate nothing.
+- **P9. Boards.** `crd-crypto-board` (`CRD_BUILD_CRYPTO_VS_PEERS`, Linux) times crd-crypto, AWS-LC called directly,
+  BoringSSL (a dated release, prefixed `crd_bssl`) and OpenSSL 4.0 in one process on the same work: AEAD sealing and
+  opening, an ephemeral X25519 agreement, ML-KEM-768, Ed25519, ECDSA P-256 and ML-DSA-65, and TLS 1.3 full handshakes,
+  resumptions and records with one profile on every arm, the records moved through the caller's buffer as a transport
+  would. Every arm's results are checked against every other's before anything is timed. The direct AWS-LC arm
+  measures crd-crypto's own cost: a gap to it is crd-crypto's to close; a gap to BoringSSL or OpenSSL with AWS-LC level
+  is the provider's, named on the board ([2026-11-03](../bench/2026-11-03-net-2-crypto-boards.md)).
 
 The oracle is Project Wycheproof (C2SP/wycheproof, pinned as a test package and read at run time): every AES-GCM,
 ChaCha20-Poly1305, HKDF, X25519, ECDH P-256 and P-384, Ed25519, ECDSA and ML-DSA vector (keygen from seed, verify,

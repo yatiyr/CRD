@@ -100,12 +100,13 @@ endif()
 # corpora.
 add_subdirectory(fuzz)
 
-# The interoperability peers' OpenSSL 4.0 (CRD_BUILD_TLS_VS_OPENSSL or CRD_BUILD_MLS_VS_MLSPP; Linux: locally, and on
-# the complete-tier linux-gcc-public-checks lane). OpenSSL builds by its own Configure in a separate project, static,
-# libraries only, with zstd (the pinned one the engine uses) and zlib (the system's) for certificate compression (RFC
-# 8879), so every program linking it links those too. The peers of each test meet only through its Python driver, each
-# in its own process (AWS-LC and OpenSSL share symbol names).
-if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP)
+# The interoperability and board peers' OpenSSL 4.0 (CRD_BUILD_TLS_VS_OPENSSL, CRD_BUILD_MLS_VS_MLSPP or
+# CRD_BUILD_CRYPTO_VS_PEERS; Linux: locally, and on the complete-tier linux-gcc-public-checks lane). OpenSSL builds by
+# its own Configure in a separate project, static, libraries only, with zstd (the pinned one the engine uses) and zlib
+# (the system's) for certificate compression (RFC 8879), so every program linking it links those too. The peers of each
+# interoperability test meet only through its Python driver, each in its own process; the coexistence test and the
+# boards link OpenSSL beside crd-crypto's prefixed AWS-LC (decision P5).
+if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_CRYPTO_VS_PEERS)
     include(ExternalProject)
     find_package(Perl REQUIRED)
     find_program(CRD_MAKE_PROGRAM NAMES make gmake REQUIRED)
@@ -168,6 +169,56 @@ if(CRD_BUILD_TLS_VS_OPENSSL)
     set_target_properties(crd-crypto-coexist-tests PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
     add_test(NAME crd-crypto-openssl-coexist COMMAND crd-crypto-coexist-tests)
     set_tests_properties(crd-crypto-openssl-coexist PROPERTIES TIMEOUT 600 LABELS "crypto;tls-interop")
+endif()
+
+# crd-crypto's boards (CRD_BUILD_CRYPTO_VS_PEERS, docs/bench): crd-crypto-board times crd-crypto and three peer arms in
+# one process. board/board_peer.c is compiled once per peer library against its own headers: AWS-LC's (the provider's
+# own targets, called directly), BoringSSL's and OpenSSL's. BoringSSL builds by its own CMake as a separate project from
+# its pregenerated sources, static, crypto and ssl only, with every symbol prefixed crd_bssl (BORINGSSL_PREFIX and its
+# checked-in prefix_symbols.h), so the three libraries of one family and OpenSSL bind each call to their own code. The
+# peer arms are Cerid's own C: they meet the engine's warning set (crd-warnings) beside the peers' headers.
+if(CRD_BUILD_CRYPTO_VS_PEERS)
+    crd_pin(boringssl_version packages boringssl version)
+    crd_pin(aws_lc_version packages aws-lc version)
+    set(boringssl_prefix "${CMAKE_BINARY_DIR}/_deps/boringssl-peer-${boringssl_version}")
+    set(boringssl_libraries "${boringssl_prefix}/build/libssl.a" "${boringssl_prefix}/build/libcrypto.a")
+    ExternalProject_Add(crd-boringssl-peer-build
+        SOURCE_DIR "${boringssl_SOURCE_DIR}"
+        PREFIX "${boringssl_prefix}"
+        BINARY_DIR "${boringssl_prefix}/build"
+        CMAKE_ARGS "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                   -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBORINGSSL_PREFIX=crd_bssl
+        BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --target crypto ssl --parallel ${interop_jobs}
+        INSTALL_COMMAND ""
+        BUILD_BYPRODUCTS ${boringssl_libraries})
+
+    add_library(crd-board-peer-awslc OBJECT board/board_peer.c)
+    target_link_libraries(crd-board-peer-awslc PRIVATE crd-warnings crypto ssl)
+    target_compile_definitions(crd-board-peer-awslc PRIVATE CRD_BOARD_PEER=crd_board_peer_awslc
+                               "CRD_BOARD_PEER_NAME=\"aws-lc\"" "CRD_BOARD_PEER_VERSION=\"${aws_lc_version}\"")
+    add_library(crd-board-peer-boringssl OBJECT board/board_peer.c)
+    target_link_libraries(crd-board-peer-boringssl PRIVATE crd-warnings)
+    add_dependencies(crd-board-peer-boringssl crd-boringssl-peer-build)
+    target_include_directories(crd-board-peer-boringssl SYSTEM PRIVATE "${boringssl_SOURCE_DIR}/include")
+    target_compile_definitions(crd-board-peer-boringssl PRIVATE BORINGSSL_PREFIX=crd_bssl
+                               CRD_BOARD_PEER=crd_board_peer_boringssl "CRD_BOARD_PEER_NAME=\"boringssl\""
+                               "CRD_BOARD_PEER_VERSION=\"${boringssl_version}\"")
+    add_library(crd-board-peer-openssl OBJECT board/board_peer.c)
+    target_link_libraries(crd-board-peer-openssl PRIVATE crd-warnings)
+    add_dependencies(crd-board-peer-openssl crd-openssl-peer-build)
+    target_include_directories(crd-board-peer-openssl SYSTEM PRIVATE "${openssl_prefix}/install/include")
+    target_compile_definitions(crd-board-peer-openssl PRIVATE CRD_BOARD_PEER=crd_board_peer_openssl
+                               "CRD_BOARD_PEER_NAME=\"openssl\"" "CRD_BOARD_PEER_VERSION=\"${openssl_version}\"")
+
+    add_executable(crd-crypto-board board/crypto_board.cpp)
+    target_link_libraries(crd-crypto-board PRIVATE crd-board-peer-awslc crd-board-peer-boringssl
+                          crd-board-peer-openssl crd-crypto crd-core crd-containers crypto ssl ${boringssl_libraries}
+                          ${openssl_link})
+    set_target_properties(crd-crypto-board PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    add_test(NAME crd-crypto-board-smoke COMMAND crd-crypto-board --quick)
+    set_tests_properties(crd-crypto-board-smoke PROPERTIES TIMEOUT 600 LABELS "crypto;board")
+    message(STATUS "[crypto-vs-peers] the crypto boards against AWS-LC ${aws_lc_version}, BoringSSL "
+                   "${boringssl_version} and OpenSSL ${openssl_version}")
 endif()
 
 # The MLS interoperability tests (decision M4): crd-mls-peer's members over crd-crypto and a peer library's create,

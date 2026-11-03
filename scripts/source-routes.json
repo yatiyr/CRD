@@ -177,6 +177,13 @@
       "why": "The TLS 1.3 interoperability test (the crd-crypto-tls-interop-openssl CTest): crd-tls-peer over crd-crypto and crd-openssl-tls-peer over the pinned OpenSSL 4.0 (cmake/pins.json openssl), built by its own Configure; and crd-crypto-coexist-tests, crd-crypto over its prefixed AWS-LC beside that OpenSSL in one program (the crd-crypto-openssl-coexist CTest, provider decision P5)."
     },
     {
+      "paths": [
+        "tests/foundation/crypto/board/"
+      ],
+      "built_when": {"option": "CRD_BUILD_CRYPTO_VS_PEERS", "platform": "Linux"},
+      "why": "crd-crypto's boards (NET.2, docs/bench): crd-crypto-board times crd-crypto and, through board_peer.c compiled once per library, AWS-LC called directly, the pinned BoringSSL (cmake/pins.json boringssl, prefixed crd_bssl) and OpenSSL 4.0 in one process (the crd-crypto-board-smoke CTest)."
+    },
+    {
       "paths": ["tests/foundation/crypto/interop/cerid_mls_peer.cpp"],
       "built_when": {"target": "crd-mls-peer", "platform": "Linux"},
       "why": "crd-mls-peer, Cerid's member program of the MLS interoperability tests (decision M4), built when either peer is (CRD_BUILD_MLS_VS_MLSPP or CRD_BUILD_MLS_VS_OPENMLS; the OpenMLS peer is a Cargo package, tests/foundation/crypto/interop/openmls_peer)."
