@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **28** · tools: **39** · workflow actions: **6** · runner images: **5** · unpinned apt packages: **24**
+- packages: **28** · tools: **40** · workflow actions: **6** · runner images: **5** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -74,6 +74,7 @@
 | gnome-keyring-linux-x64 | 46.1-2ubuntu0.2 | GPL-2.0-or-later AND LGPL-2.1-or-later | launchpad.net | `gnome-keyring_46.1-2ubuntu0.2_amd64.deb`, `libgck-1-0_3.41.2-1build3_amd64.deb`, `libgcr-base-3-1_3.41.2-1build3_amd64.deb` |
 | swtpm-linux-x64 | 0.7.3-0ubuntu5.24.04.1 | BSD-3-Clause AND BSD-2-Clause | launchpad.net | `swtpm_0.7.3-0ubuntu5.24.04.1_amd64.deb`, `libtpms0_0.9.3-0ubuntu4.24.04.1_amd64.deb`, `libtss2-esys-3.0.2-0t64_4.0.1-7.1ubuntu5.1_amd64.deb`, `libtss2-sys1t64_4.0.1-7.1ubuntu5.1_amd64.deb`, `libtss2-mu-4.0.1-0t64_4.0.1-7.1ubuntu5.1_amd64.deb`, `libtss2-tctildr0t64_4.0.1-7.1ubuntu5.1_amd64.deb`, `libtss2-tcti-swtpm0t64_4.0.1-7.1ubuntu5.1_amd64.deb`, `libtss2-tcti-pcap0t64_4.0.1-7.1ubuntu5.1_amd64.deb` |
 | softhsm-linux-x64 | 2.6.1-2.2ubuntu3 | BSD-2-Clause AND LGPL-2.1-or-later | launchpad.net | `softhsm2_2.6.1-2.2ubuntu3_amd64.deb`, `softhsm2-common_2.6.1-2.2ubuntu3_amd64.deb`, `libsofthsm2_2.6.1-2.2ubuntu3_amd64.deb`, `opensc-pkcs11_0.25.0~rc1-1ubuntu0.2_amd64.deb` |
+| tamarin-linux-x64 | 1.12.0 | GPL-3.0-only AND GPL-2.0-or-later | github.com | `tamarin-prover-1.12.0-linux64-ubuntu.tar.gz`, `Maude-3.5.1-linux-x86_64.zip` |
 | android-ndk-linux-x64 | 30.0.16248370 | LicenseRef-Android-SDK-License | dl.google.com | `android-ndk-r30-linux.zip` |
 | android-platform-tools-linux | 37.0.1 | LicenseRef-Android-SDK-License | dl.google.com | `platform-tools_r37.0.1-linux.zip` |
 | android-emulator-linux-x64 | 37.2.13 | LicenseRef-Android-SDK-License | dl.google.com | `emulator-linux_x64-16740729.zip` |

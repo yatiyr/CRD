@@ -25,6 +25,7 @@ HELPERS = ('cmake/CPM.cmake', 'scripts/install-vulkan-sdk.py', 'scripts/install-
            'scripts/install-clang-tidy.py', 'scripts/install-ninja.py', 'scripts/install-sde.py',
            'scripts/install-node.py', 'scripts/install-cuda.py', 'scripts/install-rust.py',
            'scripts/install-gnome-keyring.py', 'scripts/install-swtpm.py', 'scripts/install-softhsm.py',
+           'scripts/install-tamarin.py',
            'scripts/install-android-ndk.py', 'scripts/install-android-emulator.py',
            'scripts/ubuntu_packages.py', 'scripts/msvc-dev-env.py', 'scripts/pins.py')
 SCHEMA = 'cerid-pins/1'

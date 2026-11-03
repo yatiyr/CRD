@@ -735,6 +735,32 @@
       "license": "BSD-2-Clause AND LGPL-2.1-or-later",
       "note": "Ubuntu 24.04's SoftHSM 2.6.1 (softhsm2, softhsm2-common, libsofthsm2), a PKCS #11 token in software, and OpenSC 0.25.0~rc1 (noble-updates) for its pkcs11-spy.so, a PKCS #11 module that records every call it passes to another, from Launchpad's librarian, whose files are never removed (the same bytes the Ubuntu archive serves, checked 2026-11-03). The token the key store's PKCS #11 device is tested against (NET.2 decision K14, CRD_BUILD_PKCS11_VS_SOFTHSM), unpacked by scripts/install-softhsm.py with dpkg-deb -x and run by tests/foundation/crypto/pkcs11_token_session.py; never linked or shipped. Both need only the system's libcrypto.so.3 (ldd, 2026-11-03). Licences from the packages' Debian copyright files: BSD-2-Clause (SoftHSM, with BSD-4-Clause, Expat, ISC and IBM notices for parts) and LGPL-2.1+ (OpenSC). Pinned as a testing download (pre-approved, user 2026-10-30)."
     },
+    "tamarin-linux-x64": {
+      "version": "1.12.0",
+      "binary": "tamarin-prover",
+      "maude_version": "3.5.1",
+      "files": {
+        "tamarin-prover-1.12.0-linux64-ubuntu.tar.gz": {
+          "component": "tamarin-prover",
+          "version": "1.12.0",
+          "url": "https://github.com/tamarin-prover/tamarin-prover/releases/download/1.12.0/tamarin-prover-1.12.0-linux64-ubuntu.tar.gz",
+          "size": 13048539,
+          "sha256": "201be06f469e47cff554df6ca93db8366fc2c69d70c61fcbd1370a1074b469c6",
+          "root": ""
+        },
+        "Maude-3.5.1-linux-x86_64.zip": {
+          "component": "maude",
+          "version": "3.5.1",
+          "url": "https://github.com/maude-lang/Maude/releases/download/Maude3.5.1/Maude-3.5.1-linux-x86_64.zip",
+          "size": 2893486,
+          "sha256": "72ed1ca87e3b3d0dfc6ee1436baf154bf04c45ff97d521bec040c5e8dfc8f92c",
+          "root": ""
+        }
+      },
+      "provenance": "https://github.com/tamarin-prover/tamarin-prover/releases/tag/1.12.0 and https://github.com/maude-lang/Maude/releases/tag/Maude3.5.1",
+      "license": "GPL-3.0-only AND GPL-2.0-or-later",
+      "note": "The Tamarin prover 1.12.0 (its Linux x64 release binary) and the Maude 3.5.1 rewriting engine it runs on (Maude's Linux x86_64 release zip), unpacked into one directory: the protocol model checker of NET.2's model clause (tests/foundation/crypto/model, scripts/check-protocol-model.py). Each archive's SHA-256 matched the digest GitHub publishes for the release asset on retrieval, 2026-11-03, and is recorded here; scripts/install-tamarin.py installs them into ~/.cerid/tools/tamarin/<version> and requires `tamarin-prover --version` to report both pinned versions. A testing tool only: never linked into or shipped with Cerid."
+    },
     "android-ndk-linux-x64": {
       "version": "30.0.16248370",
       "url": "https://dl.google.com/android/repository/android-ndk-r30-linux.zip",

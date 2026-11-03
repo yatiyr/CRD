@@ -1352,6 +1352,14 @@ class Lane:
                              self.temp / 'softhsm-dl', '--github-env', self.env_file))
         self.merge()
 
+    def tamarin(self):
+        # The pinned Tamarin and Maude that prove the protocol models; the configure reads CRD_TAMARIN.
+        if not self.preset_step('Install pinned Tamarin'):
+            return
+        self.run(self.helper('install-tamarin.py', '--destination', self.temp / 'tamarin', '--download-dir',
+                             self.temp / 'tamarin-dl', '--github-env', self.env_file))
+        self.merge()
+
     def android_ndk(self):
         # The pinned NDK, never an image's: the Android presets read CRD_ANDROID_NDK.
         self.run(self.helper('install-android-ndk.py', '--destination', self.temp / 'android-ndk', '--github-env',
@@ -1737,7 +1745,7 @@ class Lane:
                      'sccache', 'configure', 'build', 'sccache_stats', 'inventory', 'test', 'bundle', 'upload'],
         'linux-gcc': ['checkout', 'reclaim_disk', 'python_version', 'ninja', 'apt', 'apt_census', 'vulkan_headers',
                       'vulkan_validation', 'cpm_cache', 'cold_before', 'sccache', 'sde', 'rust', 'gnome_keyring',
-                      'swtpm', 'softhsm', 'configure', 'cold_after',
+                      'swtpm', 'softhsm', 'tamarin', 'configure', 'cold_after',
                       'build', 'sccache_stats', 'inventory', 'console_checks', 'test', 'test_sse2', 'seeded_faults',
                       'genmc', 'bundle', 'upload'],
         'windows-shipping': ['checkout', 'python_version', 'ninja', 'msvc', 'adapters', 'cpm_cache', 'vulkan_sdk',
@@ -2169,7 +2177,7 @@ LANE_STEP_PHASES = {
     'Cold acquisition (empty package cache)': 'cold_before', 'Install pinned sccache': 'sccache',
     'Compiler cache service': 'sccache', 'Install pinned Intel SDE': 'sde', 'Install pinned Rust': 'rust',
     'Install pinned gnome-keyring': 'gnome_keyring', 'Install pinned swtpm': 'swtpm',
-    'Install pinned SoftHSM': 'softhsm', 'Configure': 'configure',
+    'Install pinned SoftHSM': 'softhsm', 'Install pinned Tamarin': 'tamarin', 'Configure': 'configure',
     'Configure with the compiler cache': 'configure', 'Cold acquisition (every pinned package acquired)': 'cold_after',
     'Build': 'build', 'Build the Debug sandbox profile': 'build', 'Compiler cache statistics': 'sccache_stats',
     'Test inventory': 'inventory', 'Test': 'test', 'Test at the sse2 level': 'test_sse2',

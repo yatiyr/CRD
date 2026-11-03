@@ -309,6 +309,16 @@ if(CRD_BUILD_PKCS11_VS_SOFTHSM)
     message(STATUS "[pkcs11-vs-softhsm] the PKCS #11 device against ${CRD_SOFTHSM}")
 endif()
 
+# NET.2's protocol model (CRD_BUILD_PROTOCOL_MODEL): every Tamarin model in model/ proven with the pinned Tamarin, each
+# lemma held to its expected verdict (scripts/check-protocol-model.py).
+if(CRD_BUILD_PROTOCOL_MODEL)
+    add_test(NAME crd-crypto-protocol-model
+             COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-protocol-model.py"
+                     --tamarin "${CRD_TAMARIN}")
+    set_tests_properties(crd-crypto-protocol-model PROPERTIES TIMEOUT 1800 RUN_SERIAL TRUE LABELS "crypto;model")
+    message(STATUS "[protocol-model] the protocol models with ${CRD_TAMARIN}")
+endif()
+
 # Against OpenMLS (CRD_BUILD_MLS_VS_OPENMLS): crd-openmls-peer's members over OpenMLS, a Cargo package linted by
 # Clippy and built with the pinned Rust toolchain (CRD_CARGO) by `cargo build --locked`, so every crate is the one
 # Cargo.lock names, verified by its SHA-256; CARGO_HOME (the crate downloads) and the target directory stay inside this

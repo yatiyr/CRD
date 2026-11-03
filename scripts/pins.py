@@ -161,13 +161,14 @@ def install_member(pin, destination, archive=None, download_dir=None, label=None
 
 
 def tree_members(package, root, top=None):
-    """The tar archive's members below `root` (which must end in a slash), with the root stripped, and the files
+    """The tar archive's members below `root` (which must end in a slash, or be empty for an archive whose members are
+    the tree itself, without a top directory), with the root stripped, and the files
     directly in `top` (an installer's archive, whose top directory holds its component `root` beside the installer's
     own files: its script, metadata and licences), named as in the top; any other member is refused, so the archive
     cannot place a file beside the tree. Links sort last, so on Windows a link's target is always extracted before
     it. Returns the members below the root and those beside it."""
-    if not root.endswith('/'):
-        raise PinError(f'the pinned root must end in a slash: {root}')
+    if root and not root.endswith('/'):
+        raise PinError(f'the pinned root must end in a slash or be empty: {root}')
     if top is not None and (not top.endswith('/') or not root.startswith(top) or root == top):
         raise PinError(f'the pinned top {top} must be a directory holding the root {root}')
     members = []

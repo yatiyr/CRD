@@ -131,6 +131,13 @@ set(CRD_SWTPM "$ENV{CRD_SWTPM}" CACHE FILEPATH
 option(CRD_BUILD_PKCS11_VS_SOFTHSM "Test the PKCS #11 key device against a SoftHSM token (Linux)" OFF)
 set(CRD_SOFTHSM "$ENV{CRD_SOFTHSM}" CACHE FILEPATH
     "The pinned softhsm2-util (scripts/install-softhsm.py), for the PKCS #11 device's tests")
+# NET.2's protocol model: the Tamarin models of tests/foundation/crypto/model proven with the pinned Tamarin and Maude
+# (tools/tamarin-linux-x64: scripts/install-tamarin.py, which prints the CRD_TAMARIN this configure reads from the
+# environment) by scripts/check-protocol-model.py. Linux only; the crd-crypto-protocol-model CTest, locally and on the
+# complete-tier linux-gcc-public-checks lane.
+option(CRD_BUILD_PROTOCOL_MODEL "Prove the protocol models with the pinned Tamarin (Linux)" OFF)
+set(CRD_TAMARIN "$ENV{CRD_TAMARIN}" CACHE FILEPATH
+    "The pinned tamarin-prover (scripts/install-tamarin.py), for the protocol models")
 # The nn board's same-format peer: ggml's Q8_0 linears (runtime/examples/bench_nn_q8_vs_ggml.c) against the pinned ggml
 # release (cmake/pins.json ggml, fetched on demand into build/_deps) built by its own CMake as a separate project at the
 # host's ISA. Local only on Linux, never in CI or a shipped build; scripts/run_bench_nn.sh builds and runs it.
@@ -1456,6 +1463,16 @@ if(CRD_BUILD_PKCS11_VS_SOFTHSM)
     if(NOT EXISTS "${CRD_SOFTHSM}")
         message(FATAL_ERROR "[pkcs11-vs-softhsm] CRD_SOFTHSM names no softhsm2-util: install the pinned SoftHSM with "
                             "scripts/install-softhsm.py and configure with the CRD_SOFTHSM it prints")
+    endif()
+endif()
+
+if(CRD_BUILD_PROTOCOL_MODEL)
+    if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+        message(FATAL_ERROR "[protocol-model] the protocol models need Linux, CRD_BUILD_TESTS and the crypto module")
+    endif()
+    if(NOT EXISTS "${CRD_TAMARIN}")
+        message(FATAL_ERROR "[protocol-model] CRD_TAMARIN names no tamarin-prover: install the pinned Tamarin with "
+                            "scripts/install-tamarin.py and configure with the CRD_TAMARIN it prints")
     endif()
 endif()
 

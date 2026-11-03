@@ -598,6 +598,27 @@ record layers, never by trust:
   accepted. ML-DSA certificates sign with the `mldsa44`/`mldsa65`/`mldsa87` schemes (`tls.ml-dsa`); NET.2 decides
   the classical companion (a dual certificate, or a composite scheme once one is registered).
 
+<a id="protocol-model"></a>
+### The protocol model
+
+NET.2's model clause: Tamarin models of Cerid's sessions in
+[tests/foundation/crypto/model](../../tests/foundation/crypto/model), proven in CI by
+[check-protocol-model.py](../../scripts/check-protocol-model.py) with the pinned Tamarin 1.12.0 and Maude 3.5.1
+(`tools/tamarin-linux-x64`, scripts/install-tamarin.py; the `crd-crypto-protocol-model` CTest on the
+linux-gcc-public-checks lane). Every lemma a model holds is listed in the checker and must verify; a wellformedness
+warning, an incomplete or falsified proof, a lemma added or removed unlisted, or a design anchor the model cites that
+no longer exists fails the check.
+
+- **The full handshake** (`tls_handshake.spthy`): the hybrid group with its classical companion (S3), keys pinned by
+  name and mutual authentication (S4, S5), ephemeral compromise split into a classical (X25519) and a post-quantum
+  (ML-KEM) break. Proven: the handshake completes; stripping the hybrid share cannot downgrade a client to the
+  classical group with an honest server; injective agreement on the handshake secret and group both ways; the
+  handshake secret and both traffic secrets stay secret unless the peer's key was revealed before the handshake ended
+  (forward secrecy) or both kinds of key exchange are broken (the hybrid guarantee).
+- **Still to model**: the traffic key epochs after the handshake (key updates, S7), resumption and early data with
+  the single-use ticket filter (S9, S17), address validation tokens (S13), and the binding to the code by state
+  learning, which checks the implementation's state machine against the model's.
+
 <a id="tls-sessions"></a>
 ### TLS sessions
 

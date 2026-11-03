@@ -20,6 +20,7 @@ Cargo.lock text eol=lf
 *.ceir text eol=lf
 *.chir text eol=lf
 *.chirgraph text eol=lf
+*.spthy text eol=lf
 
 # Config / docs
 *.json text eol=lf

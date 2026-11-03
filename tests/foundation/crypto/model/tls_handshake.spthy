@@ -1,0 +1,176 @@
+theory CeridTlsHandshake
+begin
+
+/*
+ * Cerid's TLS 1.3 full handshake (network foundation, the TLS 1.3 profile and decisions S3, S4 and S5; NET.2's model
+ * clause). Checked in CI by scripts/check-protocol-model.py with the pinned Tamarin; every lemma below is
+ * expected to verify.
+ *
+ * Design: docs/design/network-foundation.md#tls-13-profile
+ * Design: docs/design/network-foundation.md#tls-sessions
+ * Design: docs/design/network-foundation.md#protocol-model
+ *
+ * What is modelled:
+ *   - Hybrid key exchange (S3): the client offers X25519MLKEM768 (an X25519 share and an ML-KEM-768 encapsulation key)
+ *     and its classical companion (the X25519 share alone); a server that holds the hybrid group answers it, one that
+ *     receives no hybrid share answers classically. The handshake secret is derived from both halves.
+ *   - Pinned keys, mutual authentication (S4, S5): a peer is accepted only with the key pinned for its name; the
+ *     server's CertificateVerify signs the transcript, the client's covers it and the server's key.
+ *   - The traffic secrets both ends derive from the handshake secret.
+ * Ephemeral compromise is split by kind: BreakDh reveals an X25519 secret (a classical break), BreakKem an ML-KEM secret (a
+ * post-quantum break), so the secrecy lemmas state the hybrid guarantee: a session key leaks only with both kinds
+ * broken, or with the peer's long-term key revealed before the handshake ended (forward secrecy otherwise).
+ */
+
+builtins: diffie-hellman, signing, symmetric-encryption
+
+// ML-KEM as a key encapsulation: kenc(k, kpk(dk)) carries the shared secret k to the holder of dk. The honest parties
+// match the ciphertext's form; the adversary decapsulates with kdec. kdf is HKDF's role (a one-way PRF), mac HMAC's.
+functions: kpk/1, kenc/2, kdec/2, kdf/2, mac/2
+equations: kdec(kenc(k, kpk(dk)), dk) = k
+
+restriction Equality:
+    "All x y #i. Eq(x, y) @ #i ==> x = y"
+
+restriction OneKeyPerName:
+    "All A #i #j. Register(A) @ #i & Register(A) @ #j ==> #i = #j"
+
+// A party's signature key; its public key is pinned out of band by every peer (S4).
+rule Register:
+    [ Fr(~ltk) ]
+  --[ Register($A) ]->
+    [ !Ltk($A, ~ltk), !Pin($A, pk(~ltk)), Out(pk(~ltk)) ]
+
+rule RevealLtk:
+    [ !Ltk(A, ltk) ] --[ RevLtk(A) ]-> [ Out(ltk) ]
+
+rule BreakClientDh:
+    [ !ClientShares(nc, x, dk) ] --[ BreakDh(nc) ]-> [ Out(x) ]
+
+rule BreakClientKem:
+    [ !ClientShares(nc, x, dk) ] --[ BreakKem(nc) ]-> [ Out(dk) ]
+
+rule BreakServerDh:
+    [ !ServerShares(ns, y, ss) ] --[ BreakDh(ns) ]-> [ Out(y) ]
+
+rule BreakServerKem:
+    [ !ServerShares(ns, y, ss) ] --[ BreakKem(ns) ]-> [ Out(ss) ]
+
+// The ClientHello: a fresh nonce and fresh shares on every connection (the TLS 1.3 profile), both groups offered.
+rule ClientHello:
+    let ch = <'client_hello', ~nc, 'g'^~x, kpk(~dk)>
+    in
+    [ Fr(~nc), Fr(~x), Fr(~dk) ]
+  --[ ClientStart($C, $S, ~nc) ]->
+    [ ClientWait($C, $S, ~nc, ~x, ~dk, ch), !ClientShares(~nc, ~x, ~dk), Out(ch) ]
+
+// A server answers the hybrid group whenever the ClientHello carries its share (S3: the server's order decides).
+rule ServerHelloHybrid:
+    let ch = <'client_hello', nc, X, kp>
+        sh = <'server_hello', ~ns, 'g'^~y, 'hybrid', kenc(~ss, kp)>
+        hs = kdf(<X^~y, ~ss>, <ch, sh>)
+        cv = sign(<'server_cv', ch, sh, pk(~ltk)>, ~ltk)
+        fin = mac(kdf('server_finished', hs), <ch, sh, pk(~ltk), cv>)
+    in
+    [ In(ch), Fr(~ns), Fr(~y), Fr(~ss), !Ltk($S, ~ltk) ]
+  --[ ServerRunning($S, hs, 'hybrid') ]->
+    [ ServerWait($S, nc, ~ns, ch, sh, pk(~ltk), cv, hs), !ServerShares(~ns, ~y, ~ss),
+      Out(<sh, senc(<'server_flight', pk(~ltk), cv, fin>, kdf('server_hs', hs))>) ]
+
+// A ClientHello without the hybrid share (an attacker stripped it) is answered with the classical group.
+rule ServerHelloClassical:
+    let ch = <'client_hello_classical', nc, X>
+        sh = <'server_hello', ~ns, 'g'^~y, 'classical', 'none'>
+        hs = kdf(X^~y, <ch, sh>)
+        cv = sign(<'server_cv', ch, sh, pk(~ltk)>, ~ltk)
+        fin = mac(kdf('server_finished', hs), <ch, sh, pk(~ltk), cv>)
+    in
+    [ In(ch), Fr(~ns), Fr(~y), !Ltk($S, ~ltk) ]
+  --[ ServerRunning($S, hs, 'classical') ]->
+    [ ServerWait($S, nc, ~ns, ch, sh, pk(~ltk), cv, hs), !ServerShares(~ns, ~y, 'none'),
+      Out(<sh, senc(<'server_flight', pk(~ltk), cv, fin>, kdf('server_hs', hs))>) ]
+
+// The client accepts the server flight of either group from the key pinned for the name it expects, then sends its
+// own credential, CertificateVerify and Finished.
+rule ClientFinishHybrid:
+    let sh = <'server_hello', ns, Y, 'hybrid', kenc(ss, kpk(~dk))>
+        hs = kdf(<Y^~x, ss>, <ch, sh>)
+        fin = mac(kdf('server_finished', hs), <ch, sh, pkS, cv>)
+        ccv = sign(<'client_cv', ch, sh, pkS, cv, pk(~ltkC)>, ~ltkC)
+        cfin = mac(kdf('client_finished', hs), <ch, sh, pkS, cv, pk(~ltkC), ccv>)
+    in
+    [ ClientWait($C, $S, ~nc, ~x, ~dk, ch), !Pin($S, pkS), !Ltk($C, ~ltkC),
+      In(<sh, senc(<'server_flight', pkS, cv, fin>, kdf('server_hs', hs))>) ]
+  --[ Eq(verify(cv, <'server_cv', ch, sh, pkS>, pkS), true),
+      ClientCommit($C, $S, ~nc, ns, hs, 'hybrid'), ClientRunning($C, $S, hs),
+      ClientKey($C, $S, ~nc, ns, kdf('client_ap', hs)) ]->
+    [ Out(senc(<'client_flight', pk(~ltkC), ccv, cfin>, kdf('client_hs', hs))) ]
+
+rule ClientFinishClassical:
+    let sh = <'server_hello', ns, Y, 'classical', 'none'>
+        hs = kdf(Y^~x, <ch, sh>)
+        fin = mac(kdf('server_finished', hs), <ch, sh, pkS, cv>)
+        ccv = sign(<'client_cv', ch, sh, pkS, cv, pk(~ltkC)>, ~ltkC)
+        cfin = mac(kdf('client_finished', hs), <ch, sh, pkS, cv, pk(~ltkC), ccv>)
+    in
+    [ ClientWait($C, $S, ~nc, ~x, ~dk, ch), !Pin($S, pkS), !Ltk($C, ~ltkC),
+      In(<sh, senc(<'server_flight', pkS, cv, fin>, kdf('server_hs', hs))>) ]
+  --[ Eq(verify(cv, <'server_cv', ch, sh, pkS>, pkS), true),
+      ClientCommit($C, $S, ~nc, ns, hs, 'classical'), ClientRunning($C, $S, hs),
+      ClientKey($C, $S, ~nc, ns, kdf('client_ap', hs)) ]->
+    [ Out(senc(<'client_flight', pk(~ltkC), ccv, cfin>, kdf('client_hs', hs))) ]
+
+// The server accepts a client only with the key pinned for it (mutual authentication, S4).
+rule ServerFinish:
+    let cfin = mac(kdf('client_finished', hs), <ch, sh, pkS, cv, pkC, ccv>)
+    in
+    [ ServerWait($S, nc, ns, ch, sh, pkS, cv, hs), !Pin($C, pkC),
+      In(senc(<'client_flight', pkC, ccv, cfin>, kdf('client_hs', hs))) ]
+  --[ Eq(verify(ccv, <'client_cv', ch, sh, pkS, cv, pkC>, pkC), true),
+      ServerCommit($S, $C, hs), ServerKey($S, $C, nc, ns, kdf('client_ap', hs)) ]->
+    [ ]
+
+// Both kinds of key exchange broken for the session whose nonces are nc and ns.
+predicates:
+    HybridBroken(nc, ns) <=> ((Ex #a. BreakDh(nc) @ #a) | (Ex #a. BreakDh(ns) @ #a))
+                           & ((Ex #b. BreakKem(nc) @ #b) | (Ex #b. BreakKem(ns) @ #b))
+
+lemma handshake_completes:
+  exists-trace
+    "Ex C S nc ns hs #i #j. ClientCommit(C, S, nc, ns, hs, 'hybrid') @ #i & ServerCommit(S, C, hs) @ #j
+      & not (Ex A #k. RevLtk(A) @ #k) & not (Ex n #k. BreakDh(n) @ #k) & not (Ex n #k. BreakKem(n) @ #k)"
+
+// An attacker who strips the hybrid share cannot complete a classical handshake with an honest server: the server
+// signs the ClientHello it received, and the client checks the signature over the one it sent.
+lemma no_downgrade:
+    "All C S nc ns hs #i. ClientCommit(C, S, nc, ns, hs, 'classical') @ #i ==> Ex #r. RevLtk(S) @ #r & #r < #i"
+
+// Injective agreement on the handshake secret and the group, unless the server's key was revealed first.
+lemma client_authenticates_server:
+    "All C S nc ns hs g #i. ClientCommit(C, S, nc, ns, hs, g) @ #i ==>
+        (Ex #j. ServerRunning(S, hs, g) @ #j & #j < #i
+           & not (Ex C2 nc2 ns2 #i2. ClientCommit(C2, S, nc2, ns2, hs, g) @ #i2 & not (#i2 = #i)))
+      | (Ex #r. RevLtk(S) @ #r & #r < #i)"
+
+lemma server_authenticates_client:
+    "All S C hs #i. ServerCommit(S, C, hs) @ #i ==>
+        (Ex #j. ClientRunning(C, S, hs) @ #j & #j < #i
+           & not (Ex S2 #i2. ServerCommit(S2, C, hs) @ #i2 & not (#i2 = #i)))
+      | (Ex #r. RevLtk(C) @ #r & #r < #i)"
+
+// The handshake secret stays secret unless the server's key was revealed before the handshake ended or both kinds of
+// key exchange are broken.
+lemma handshake_secret [reuse]:
+    "All C S nc ns hs g #i. ClientCommit(C, S, nc, ns, hs, g) @ #i ==>
+        not (Ex #j. K(hs) @ #j) | (Ex #r. RevLtk(S) @ #r & #r < #i) | HybridBroken(nc, ns)"
+
+// The traffic secrets: the client's, and the server's for the client it authenticated.
+lemma client_traffic_secret:
+    "All C S nc ns k #i. ClientKey(C, S, nc, ns, k) @ #i ==>
+        not (Ex #j. K(k) @ #j) | (Ex #r. RevLtk(S) @ #r & #r < #i) | HybridBroken(nc, ns)"
+
+lemma server_traffic_secret:
+    "All S C nc ns k #i. ServerKey(S, C, nc, ns, k) @ #i ==>
+        not (Ex #j. K(k) @ #j) | (Ex #r. RevLtk(C) @ #r & #r < #i) | HybridBroken(nc, ns)"
+
+end

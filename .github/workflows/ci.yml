@@ -952,6 +952,13 @@ jobs:
         if: matrix.preset == 'linux-gcc-public-checks'
         run: python3 scripts/install-softhsm.py --destination "$RUNNER_TEMP/softhsm" --download-dir "$RUNNER_TEMP/softhsm-dl" --github-env "$GITHUB_ENV"
 
+      # The pinned Tamarin 1.12.0 and Maude 3.5.1 (tools/tamarin-linux-x64) prove NET.2's protocol models
+      # (CRD_BUILD_PROTOCOL_MODEL): two release archives, each checked against its SHA-256; the configure reads
+      # CRD_TAMARIN.
+      - name: Install pinned Tamarin
+        if: matrix.preset == 'linux-gcc-public-checks'
+        run: python3 scripts/install-tamarin.py --destination "$RUNNER_TEMP/tamarin" --download-dir "$RUNNER_TEMP/tamarin-dl" --github-env "$GITHUB_ENV"
+
       - name: Configure
         if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}

@@ -80,6 +80,12 @@ swtpm_spec.loader.exec_module(install_swtpm)
 softhsm_spec = importlib.util.spec_from_file_location('install_softhsm', ROOT / 'scripts/install-softhsm.py')
 install_softhsm = importlib.util.module_from_spec(softhsm_spec)
 softhsm_spec.loader.exec_module(install_softhsm)
+tamarin_spec = importlib.util.spec_from_file_location('install_tamarin', ROOT / 'scripts/install-tamarin.py')
+install_tamarin = importlib.util.module_from_spec(tamarin_spec)
+tamarin_spec.loader.exec_module(install_tamarin)
+model_spec = importlib.util.spec_from_file_location('check_protocol_model', ROOT / 'scripts/check-protocol-model.py')
+protocol_model = importlib.util.module_from_spec(model_spec)
+model_spec.loader.exec_module(protocol_model)
 ndk_spec = importlib.util.spec_from_file_location('install_android_ndk', ROOT / 'scripts/install-android-ndk.py')
 install_android_ndk = importlib.util.module_from_spec(ndk_spec)
 ndk_spec.loader.exec_module(install_android_ndk)
@@ -2899,6 +2905,88 @@ class BuildPerformance(unittest.TestCase):
         for name, spec in pin['files'].items():
             self.assertEqual(spec['url'], 'https://launchpad.net/ubuntu/+archive/primary/+files/' + name)
         self.assertIn('scripts/install-softhsm.py', check_pins.HELPERS)
+
+    def test_tamarin_installer_unpacks_two_rootless_archives_into_one_prefix(self):
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()) as out:
+            root = Path(temp).resolve()
+            downloads = root / 'dl'
+            downloads.mkdir()
+            with tarfile.open(downloads / 'tamarin.tar.gz', 'w:gz') as package:
+                info = tarfile.TarInfo('tamarin-prover')
+                info.size, info.mode = 3, 0o755
+                package.addfile(info, io.BytesIO(b'elf'))
+            with zipfile.ZipFile(downloads / 'maude.zip', 'w') as package:
+                for name in ('maude', 'prelude.maude'):
+                    entry = zipfile.ZipInfo(name)
+                    entry.external_attr = 0o755 << 16
+                    package.writestr(entry, name)
+            files = {name: {'url': 'https://example.invalid/' + name, 'sha256': pins_registry.sha256(downloads / name),
+                            'root': ''} for name in ('tamarin.tar.gz', 'maude.zip')}
+            pin = {'version': '1.0', 'maude_version': '3.0', 'binary': 'tamarin-prover', 'files': files,
+                   'license': 'GPL-3.0-only'}
+            tool = install_tamarin.install(root / 'prefix', downloads, pin=pin, check=False)
+            self.assertEqual(tool, root / 'prefix/tamarin-prover')
+            self.assertIn(f'CRD_TAMARIN={tool}', out.getvalue())
+            self.assertEqual((root / 'prefix/prelude.maude').read_text(), 'prelude.maude')
+            with tarfile.open(downloads / 'tamarin.tar.gz') as package, \
+                    self.assertRaisesRegex(pins_registry.PinError, 'must end in a slash or be empty'):
+                pins_registry.tree_members(package, 'bin')
+        # The version check names both programs: Tamarin's own version and the Maude it accepted.
+        report = ('maude tool: maude\n checking version: 3.5.1. OK.\n checking installation: OK.\n'
+                  'Generated from:\nTamarin version 1.12.0\nMaude version 3.5.1\n')
+        self.assertEqual(install_tamarin.reported_versions(report), ('1.12.0', '3.5.1'))
+        self.assertEqual(install_tamarin.reported_versions('no versions'), (None, None))
+        pin = {'maude_version': '3.5.1'}
+        for output, returncode, expected in ((report, 0, '1.12.0'),
+                                             (report.replace('3.5.1. OK', '3.4. OK'), 0, '1.12.0 with Maude 3.4'),
+                                             (report, 1, None)):
+            with patch.object(install_tamarin.subprocess, 'run',
+                              return_value=SimpleNamespace(stdout=output, stderr='', returncode=returncode)):
+                self.assertEqual(install_tamarin.version_of(pin)(Path('/t/tamarin-prover')), expected)
+        pin = pins_registry.entry('tools', install_tamarin.PIN_NAME)
+        self.assertEqual(pin['binary'], install_tamarin.TAMARIN)
+        self.assertEqual({spec['component'] for spec in pin['files'].values()}, {'tamarin-prover', 'maude'})
+        for name, spec in pin['files'].items():
+            self.assertTrue(spec['url'].startswith('https://github.com/') and spec['url'].endswith('/' + name))
+            self.assertIn(spec['version'], (pin['version'], pin['maude_version']))
+        self.assertIn('scripts/install-tamarin.py', check_pins.HELPERS)
+
+    def test_protocol_model_check_holds_every_lemma_to_its_verdict(self):
+        summary = ('summary of summaries:\n\nanalyzed: m.spthy\n\n'
+                   '  a (all-traces): verified (12 steps)\n  b (exists-trace): verified (5 steps)\n')
+        judge = protocol_model.judge
+        self.assertEqual(protocol_model.verdicts(summary), {'a': 'verified', 'b': 'verified'})
+        self.assertEqual(judge('m', summary, 0, ('a', 'b')), [])
+        self.assertEqual(judge('m', summary, 3, ('a', 'b')), ['m: tamarin-prover exited 3'])
+        self.assertEqual(judge('m', summary.replace('verified (5', 'falsified - found trace (5'), 0, ('a', 'b')),
+                         ['m: b is falsified'])
+        self.assertEqual(judge('m', summary.replace('verified (12 steps)', 'analysis incomplete (1 steps)'), 0,
+                               ('a', 'b')), ['m: a is analysis incomplete'])
+        self.assertEqual(judge('m', summary, 0, ('a', 'b', 'c')), ['m: the expected lemma c is missing'])
+        self.assertEqual(judge('m', summary, 0, ('a',)),
+                         ['m: the lemma b is not listed in check-protocol-model.py MODELS'])
+        self.assertEqual(judge('m', 'WARNING: 1 wellformedness check failed!\n' + summary, 0, ('a', 'b')),
+                         ['m: Tamarin reports a wellformedness warning'])
+        self.assertEqual(judge('m', 'no summary', 0, ('a',)), ['m: no proof summary in the output'])
+        # A model cites the design sections it formalizes, and each must exist.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'd.md').write_text('<a id="here"></a>\n', encoding='utf-8')
+            self.assertEqual(protocol_model.design_failures('m', '// Design: d.md#here', root), [])
+            self.assertEqual(protocol_model.design_failures('m', '// Design: d.md#gone', root),
+                             ['m: cites d.md#gone, which has no such anchor'])
+            self.assertEqual(protocol_model.design_failures('m', '// Design: e.md#here', root),
+                             ['m: cites e.md, which does not exist'])
+            self.assertEqual(protocol_model.design_failures('m', 'nothing', root),
+                             ['m: cites no design section (a "Design: docs/...#anchor" line)'])
+        # The committed models are the listed ones, each lemma they declare is listed, and their citations resolve.
+        present = sorted(path.name for path in protocol_model.MODEL_DIR.glob('*.spthy'))
+        self.assertEqual(present, sorted(protocol_model.MODELS))
+        for name in present:
+            text = (protocol_model.MODEL_DIR / name).read_text(encoding='utf-8')
+            self.assertEqual(protocol_model.design_failures(name, text), [])
+            declared = set(re.findall(r'^lemma (\w+)', text, re.M))
+            self.assertEqual(declared, set(protocol_model.MODELS[name]), name)
 
     def test_a_crate_set_is_pinned_by_its_committed_lockfile(self):
         crates_io = 'registry+https://github.com/rust-lang/crates.io-index'
