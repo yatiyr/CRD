@@ -809,6 +809,41 @@
       "license": "LicenseRef-Android-SDK-License",
       "note": "The Android 12 (API 31, the Android preset's ANDROID_PLATFORM floor) default AOSP x86_64 system image, revision 5 in the system-image index (provenance; its source.properties says Pkg.Revision 3), Google's zip; size and SHA-1 matched against the index on retrieval, 2026-11-03, SHA-256 recorded here. scripts/install-android-emulator.py unpacks it into <sdk>/system-images/android-31/default/x86_64, checks its API level, ABI and tag, and writes the AVD the Android test lane boots (NET.2: crd-crypto's tests and the Keystore protector). Never shipped. Pinned as a testing emulator image under the user's order of 2026-11-03."
     },
+    "android-build-tools-linux": {
+      "version": "37.0.0",
+      "url": "https://dl.google.com/android/repository/build-tools_r37_linux.zip",
+      "file": "build-tools_r37_linux.zip",
+      "sha256": "01af179347cbcd9c208b7f8171f7b21f6dd1d2f85bcd15e88caa51d5d7b86060",
+      "size": 66135704,
+      "sha1": "70954e99f4c3d9d46ee70fa32624672fe7cd6ebe",
+      "root": "android-37.0/",
+      "provenance": "https://dl.google.com/android/repository/repository2-3.xml",
+      "license": "LicenseRef-Android-SDK-License",
+      "note": "Android SDK Build-Tools 37.0.0 (the repository index's newest channel-0 release on 2026-11-03), Google's Linux zip; size and SHA-1 matched against the index (provenance) on retrieval, 2026-11-03, SHA-256 recorded here. scripts/install-android-emulator.py unpacks it into <sdk>/build-tools/37.0.0 and checks source.properties; scripts/android-app.py builds the Android test lane's instrumentation APK with its d8, aapt2, zipalign and apksigner (NET.2: the Keystore protector proven in an application process). Never shipped. Pinned as a testing SDK under the user's order of 2026-11-03."
+    },
+    "android-platform-31": {
+      "version": "31-r01",
+      "url": "https://dl.google.com/android/repository/platform-31_r01.zip",
+      "file": "platform-31_r01.zip",
+      "sha256": "1d69fe1d7f9788d82ff3a374faf4f6ccc9d1d372aa84a86b5bcfb517523b0b3f",
+      "size": 56475526,
+      "sha1": "ca5bcaa565cb37e9d287051d6dd0e49a5426ec29",
+      "root": "android-12/",
+      "provenance": "https://dl.google.com/android/repository/repository2-3.xml",
+      "license": "LicenseRef-Android-SDK-License",
+      "note": "The Android 12 SDK platform (API 31, revision 1, the Android preset's ANDROID_PLATFORM and the pinned system image's level), Google's zip; size and SHA-1 matched against the index (provenance) on retrieval, 2026-11-03, SHA-256 recorded here. scripts/install-android-emulator.py unpacks it into <sdk>/platforms/android-31 and checks its API level; its android.jar is the class path the instrumentation APK compiles and links against (NET.2). Never shipped. Pinned as a testing SDK under the user's order of 2026-11-03."
+    },
+    "temurin-jdk-21-linux-x64": {
+      "version": "21.0.13+9",
+      "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz",
+      "file": "OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz",
+      "sha256": "d7f5d5cf865a2902b70ff549b97586a7d3f234e016f041ab447ea740c7d66d1c",
+      "size": 207858352,
+      "root": "jdk-21.0.13+9/",
+      "provenance": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz.sha256.txt",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "note": "Eclipse Temurin JDK 21.0.13+9 (the newest Temurin 21 LTS release on 2026-11-03), Adoptium's Linux x64 tarball from its GitHub release; its SHA-256 matched the release's published .sha256.txt (provenance) on retrieval, 2026-11-03. scripts/install-android-emulator.py unpacks it into <sdk>/jdk and checks the release file's JAVA_RUNTIME_VERSION; its javac, keytool and java (for d8 and apksigner) build the Android test lane's instrumentation APK (NET.2). Never shipped, never the runner image's JDK. Pinned as a testing SDK under the user's order of 2026-11-03."
+    },
     "openmls-crates": {
       "version": "0.9.2",
       "crate": "openmls",

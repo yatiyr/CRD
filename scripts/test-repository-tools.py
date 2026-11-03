@@ -96,6 +96,9 @@ emulator_spec.loader.exec_module(install_android_emulator)
 device_spec = importlib.util.spec_from_file_location('android_device', ROOT / 'scripts/android-device.py')
 android_device = importlib.util.module_from_spec(device_spec)
 device_spec.loader.exec_module(android_device)
+apk_spec = importlib.util.spec_from_file_location('android_apk', ROOT / 'scripts/android-apk.py')
+android_apk = importlib.util.module_from_spec(apk_spec)
+apk_spec.loader.exec_module(android_apk)
 mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
 install_mold = importlib.util.module_from_spec(mold_spec)
 mold_spec.loader.exec_module(install_mold)
@@ -2545,20 +2548,29 @@ class BuildPerformance(unittest.TestCase):
             directory.mkdir()
             image = dict({'AndroidVersion.ApiLevel': '31', 'SystemImage.Abi': 'x86_64', 'SystemImage.TagId': 'default',
                           'Pkg.Revision': '3'}, **(image or {}))
-            members = {'android-platform-tools-linux': ('platform-tools', {'adb': b'adb'}, '37.0.1'),
-                       'android-emulator-linux-x64': ('emulator', {'emulator': b'emulator'}, '37.2.13'),
-                       'android-system-image-31-x86_64': ('x86_64', {'system.img': b'img'}, None)}
+            def listed(pairs):
+                return ''.join('%s=%s\n' % kv for kv in pairs.items())
+
+            revision = {'source.properties': 'Pkg.Revision=%s\n'}
+            members = {'android-platform-tools-linux': ('platform-tools', {'adb': b'adb'}, '37.0.1', revision),
+                       'android-emulator-linux-x64': ('emulator', {'emulator': b'emulator'}, '37.2.13', revision),
+                       'android-system-image-31-x86_64': ('x86_64', {'system.img': b'img'}, '31-r05',
+                                                          {'source.properties': listed(image)}),
+                       'android-build-tools-linux': ('android-37.0', {'aapt2': b'aapt2'}, '37.0.0', revision),
+                       'android-platform-31': ('android-12', {'android.jar': b'jar'}, '31-r01',
+                                               {'source.properties': 'AndroidVersion.ApiLevel=31\nPkg.Revision=1\n'}),
+                       'temurin-jdk-21-linux-x64': ('jdk-21', {'bin/javac': b'javac'}, '21.0.13+9',
+                                                    {'release': 'JAVA_RUNTIME_VERSION="%s-LTS"\n'})}
             registry = {}
-            for name, (top, files, revision) in members.items():
+            for name, (top, files, version, reports) in members.items():
                 path = directory / (name + '.zip')
-                properties = image if revision is None else {'Pkg.Revision': revision}
-                files = dict(files, **{'source.properties': ''.join('%s=%s\n' % kv for kv in properties.items())})
+                reports = {member: text.replace('%s', version) for member, text in reports.items()}
                 with zipfile.ZipFile(path, 'w') as package:
-                    for member, data in files.items():
+                    for member, data in dict(files, **reports).items():
                         info = zipfile.ZipInfo(top + '/' + member)
                         info.external_attr = (stat.S_IFREG | 0o755) << 16
                         package.writestr(info, data)
-                registry[name] = {'version': revision or '31-r05', 'url': 'https://example.invalid/' + path.name,
+                registry[name] = {'version': version, 'url': 'https://example.invalid/' + path.name,
                                   'file': path.name, 'sha256': pins_registry.sha256(path), 'root': top + '/',
                                   'license': 'x'}
             return registry
@@ -2571,8 +2583,13 @@ class BuildPerformance(unittest.TestCase):
             self.assertEqual((sdk / 'platform-tools/adb').read_bytes(), b'adb')
             self.assertEqual((sdk / 'emulator/emulator').read_bytes(), b'emulator')
             self.assertTrue((sdk / install_android_emulator.IMAGE_DIR / 'system.img').is_file())
-            self.assertTrue((sdk / 'platforms').is_dir())
-            config = (home / 'cerid-api31-x86_64.avd/config.ini').read_text(encoding='utf-8')
+            self.assertEqual((sdk / install_android_emulator.BUILD_TOOLS_DIR / 'aapt2').read_bytes(), b'aapt2')
+            self.assertEqual(install_android_emulator.reported_platform(sdk / 'platforms/android-31/android.jar'),
+                             '31-r01')
+            self.assertEqual(install_android_emulator.reported_jdk(sdk / 'jdk/bin/javac'), '21.0.13+9')
+            self.assertIsNone(install_android_emulator.reported_jdk(sdk / 'none/bin/javac'))
+            self.assertIsNone(install_android_emulator.reported_platform(sdk / 'none/android.jar'))
+            config =(home / 'cerid-api31-x86_64.avd/config.ini').read_text(encoding='utf-8')
             self.assertIn('image.sysdir.1=system-images/android-31/default/x86_64/\n', config)
             self.assertIn('abi.type=x86_64\n', config)
             pointer = (home / 'cerid-api31-x86_64.ini').read_text(encoding='utf-8')
@@ -2588,10 +2605,19 @@ class BuildPerformance(unittest.TestCase):
             old['android-emulator-linux-x64']['version'] = '36.0.0'
             with self.assertRaisesRegex(pins_registry.PinError, "reports '37.2.13'"):
                 install_android_emulator.install(root / 'sdk-old', root / 'dl-old', registry=old)
+            old = kit(root / 'dl-old-jdk')
+            old['temurin-jdk-21-linux-x64']['version'] = '21.0.12+8'
+            with self.assertRaisesRegex(pins_registry.PinError, "reports '21.0.13\\+9'"):
+                install_android_emulator.install(root / 'sdk-old-jdk', root / 'dl-old-jdk', registry=old)
+        # Google's SDK parts come from its repository, each matched against the index; the JDK from Adoptium's
+        # release, matched against its published digest.
         for name, _, _, _ in install_android_emulator.PARTS:
             pin = pins_registry.entry('tools', name)
-            self.assertTrue(pin['url'].startswith('https://dl.google.com/android/repository/'))
-            self.assertTrue(pin['url'].endswith('/' + pin['file']) and pin['provenance'].endswith('.xml'))
+            google = pin['url'].startswith('https://dl.google.com/android/repository/')
+            adoptium = pin['url'].startswith('https://github.com/adoptium/temurin21-binaries/releases/download/')
+            self.assertTrue(google or adoptium, name)
+            self.assertTrue(pin['url'].endswith('/' + pin['file']))
+            self.assertTrue(pin['provenance'].endswith('.xml' if google else pin['file'] + '.sha256.txt'))
         self.assertIn('scripts/install-android-emulator.py', check_pins.HELPERS)
 
     def test_android_device_mirrors_host_paths_and_composes_the_device_command(self):
@@ -2694,6 +2720,104 @@ class BuildPerformance(unittest.TestCase):
             result, pushed = run()
             self.assertEqual(pushed, [str(android_device.mirror(corpus))])
             self.assertEqual(result.stdout.splitlines()[3], 'seed-22')
+
+    def test_android_device_instrument_quotes_the_extras_and_trusts_only_an_agreeing_result(self):
+        command = android_device.instrument_command('cerid.test.keystore', '.KeyStoreRunner',
+                                                    ["a store's keys", '[android-keystore]', ''])
+        self.assertEqual(command, "am instrument -w -r -e argc 3 -e arg0 'a store'\"'\"'s keys' "
+                                  "-e arg1 '[android-keystore]' -e arg2 '' cerid.test.keystore/.KeyStoreRunner")
+        finished = 'INSTRUMENTATION_RESULT: exit=0\nINSTRUMENTATION_CODE: -1\n'
+        self.assertEqual(android_device.instrumentation_result(finished), (-1, {'exit': '0'}))
+        self.assertEqual(android_device.instrumentation_exit(-1, {'exit': '0'}), 0)
+        self.assertEqual(android_device.instrumentation_exit(0, {'exit': '3'}), 3)
+        # A result code that disagrees with the exit, a run that reported no exit (an exception before the case, a
+        # crash) and one that never finished are all failures.
+        self.assertIsNone(android_device.instrumentation_exit(-1, {'exit': '3'}))
+        self.assertIsNone(android_device.instrumentation_exit(0, {'exit': '0'}))
+        self.assertIsNone(android_device.instrumentation_exit(0, {'error': 'java.lang.UnsatisfiedLinkError'}))
+        crashed = 'INSTRUMENTATION_RESULT: shortMsg=Process crashed.\nINSTRUMENTATION_CODE: 0\n'
+        self.assertIsNone(android_device.instrumentation_exit(*android_device.instrumentation_result(crashed)))
+        self.assertIsNone(android_device.instrumentation_exit(*android_device.instrumentation_result('')))
+
+    @unittest.skipIf(os.name == 'nt', 'the Android launcher runs on Linux hosts (a POSIX fake device)')
+    def test_android_device_instrument_installs_runs_reports_and_uninstalls(self):
+        # A fake adb that logs each call and answers am instrument with the result the FAKE_RESULT file holds.
+        fake_adb = textwrap.dedent('''\
+            import os, sys
+            args = sys.argv[1:]
+            if args[0] == '-s':
+                args = args[2:]
+            with open(os.environ['FAKE_LOG'], 'a') as log:
+                log.write(' '.join(args) + '\\n')
+            if args[0] == 'install':
+                sys.exit(0 if os.path.isfile(args[-1]) else 1)
+            if args[0] == 'shell' and args[1].startswith('am instrument'):
+                sys.stdout.write(open(os.environ['FAKE_RESULT']).read())
+            elif args[0] == 'shell' and args[1].startswith('run-as'):
+                sys.stdout.write('All tests passed (9 assertions in 1 test case)\\n')
+            sys.exit(0)
+            ''')
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            adb = root / 'adb'
+            adb.write_text('#!%s\n%s' % (sys.executable, fake_adb), encoding='utf-8')
+            adb.chmod(0o755)
+            apk = root / 'app.apk'
+            apk.write_bytes(b'apk')
+            log, result_file = root / 'adb.log', root / 'result.txt'
+            env = dict(os.environ, CRD_ANDROID_ADB=str(adb), FAKE_LOG=str(log), FAKE_RESULT=str(result_file),
+                       ANDROID_SERIAL='emulator-5999')
+
+            def instrument(result, package_file=apk):
+                log.write_text('', encoding='utf-8')
+                result_file.write_text(result, encoding='utf-8')
+                done = subprocess.run([sys.executable, str(ROOT / 'scripts/android-device.py'), 'instrument', '--apk',
+                                       str(package_file), '--package', 'cerid.test.keystore', '--runner',
+                                       '.KeyStoreRunner', '--', '[android-keystore]'], env=env, capture_output=True,
+                                      text=True, timeout=60)
+                return done, log.read_text(encoding='utf-8').splitlines()
+
+            done, calls = instrument('INSTRUMENTATION_RESULT: exit=0\nINSTRUMENTATION_CODE: -1\n')
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertIn('All tests passed', done.stdout)
+            self.assertEqual([call.split()[0] for call in calls], ['uninstall', 'install', 'shell', 'shell',
+                                                                   'uninstall'])
+            self.assertIn("-e argc 1 -e arg0 '[android-keystore]' cerid.test.keystore/.KeyStoreRunner", calls[2])
+            self.assertEqual(calls[3], 'shell run-as cerid.test.keystore cat files/catch.txt')
+            done, _ = instrument('INSTRUMENTATION_RESULT: exit=2\nINSTRUMENTATION_CODE: 0\n')
+            self.assertEqual(done.returncode, 2)
+            # A crash still uninstalls the package and fails with am's own output.
+            done, calls = instrument('INSTRUMENTATION_RESULT: shortMsg=Process crashed.\nINSTRUMENTATION_CODE: 0\n')
+            self.assertEqual((done.returncode, calls[-1].split()[0]), (1, 'uninstall'))
+            self.assertIn('Process crashed', done.stderr)
+            done, calls = instrument('', package_file=root / 'missing.apk')
+            self.assertEqual((done.returncode, len(calls)), (1, 2))
+            self.assertIn('adb install', done.stderr)
+
+    def test_android_apk_packages_the_dex_and_library_reproducibly_and_checks_the_kit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            linked = root / 'linked.apk'
+            with zipfile.ZipFile(linked, 'w') as package:
+                package.writestr('AndroidManifest.xml', b'manifest')
+            (root / 'classes.dex').write_bytes(b'dex')
+            (root / 'libx.so').write_bytes(b'\x7fELF')
+            outputs = []
+            for name in ('one.apk', 'two.apk'):
+                android_apk.package(linked, root / 'classes.dex', root / 'libx.so', 'x86_64', root / name)
+                outputs.append((root / name).read_bytes())
+                os.utime(root / 'classes.dex', (0, 1_000_000_000))
+            self.assertEqual(outputs[0], outputs[1])
+            with zipfile.ZipFile(root / 'one.apk') as package:
+                self.assertEqual(package.namelist(), ['AndroidManifest.xml', 'classes.dex', 'lib/x86_64/libx.so'])
+                self.assertEqual(package.read('lib/x86_64/libx.so'), b'\x7fELF')
+            # An SDK root without the kit names every missing tool, from the installer's places.
+            kit = android_apk.Kit(root / 'sdk')
+            self.assertEqual(len(kit.missing()), 8)
+            self.assertTrue(str(kit.d8).replace('\\', '/').endswith('build-tools/%s/lib/d8.jar' %
+                                                                     install_android_emulator.BUILD_TOOLS))
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(android_apk.main(['check', '--sdk', str(root / 'sdk')]), 1)
 
     def test_rust_installer_unpacks_each_component_directory_into_one_prefix(self):
         def component(directory, name, directory_in_top, members, notice):

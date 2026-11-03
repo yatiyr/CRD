@@ -1959,6 +1959,11 @@ jobs:
             cpm-${{ runner.os }}-${{ matrix.preset }}-
             cpm-${{ runner.os }}-
 
+      # The kit boots the emulator and builds the Keystore's instrumentation APK (CRD_BUILD_ANDROID_KEYSTORE_APP), so
+      # the configure, which reads its ANDROID_HOME, comes after it.
+      - name: Install the pinned Android test kit
+        run: python scripts/install-android-emulator.py --sdk "$RUNNER_TEMP/android-sdk" --github-env "$GITHUB_ENV"
+
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
 
@@ -1973,9 +1978,6 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
-
-      - name: Install the pinned Android emulator kit
-        run: python scripts/install-android-emulator.py --sdk "$RUNNER_TEMP/android-sdk" --github-env "$GITHUB_ENV"
 
       - name: Boot the emulator
         run: python scripts/android-device.py boot --log "$RUNNER_TEMP/emulator.log" --github-env "$GITHUB_ENV"

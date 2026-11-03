@@ -570,7 +570,10 @@ holds ECDSA. The decisions (numbered for the tests):
   key is read from its X.509 SubjectPublicKeyInfo and its DER signatures become r || s (`ecdsa_public_of_spki`,
   `ecdsa_raw_of`). Keys are made in StrongBox where the device has one (AES and P-256; StrongBox holds no P-384 key)
   and in the TEE when it answers `StrongBoxUnavailableException`. The master key crosses into a Java byte array for one
-  call and is overwritten there before it returns.
+  call and is overwritten there before it returns. The proof runs where products run: an instrumentation APK (no
+  Gradle: the pinned JDK, build-tools and API 31 platform, scripts/android-apk.py) loads the key store case as a JNI
+  library in the app's own VM, uid and `untrusted_app` SELinux domain; `app_process` from a shell would run as shell
+  or root, which proves keystore2's permissions for the wrong caller (the crd-crypto-keystore-app CTest).
 
 Evidence (2026-11-02, [session](../sessions/2026-11-02-net-2-key-store.md)): `test_key_store.cpp` (12 cases: every kind
 of key through its whole life, every refusal, every changed byte of a store, an older and a substituted store, writers

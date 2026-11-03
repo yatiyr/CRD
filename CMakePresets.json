@@ -500,6 +500,7 @@
                 "CMAKE_BUILD_TYPE": "Debug",
                 "CRD_ENABLE_ASSERTS": "ON",
                 "CRD_MODULES": "crypto",
+                "CRD_BUILD_ANDROID_KEYSTORE_APP": "ON",
                 "CRD_BUILD_BENCHMARKS": "OFF",
                 "CRD_BUILD_SANDBOX": "OFF"
             }

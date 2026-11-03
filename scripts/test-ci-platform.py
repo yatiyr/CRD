@@ -613,6 +613,7 @@ class Lanes(unittest.TestCase):
 
         self.assertLess(at('install-android-ndk.py'), at('cmake --preset android-x86_64-debug'))
         self.assertLess(at('ls -l /dev/kvm'), at('android-device.py boot'))
+        self.assertLess(at('install-android-emulator.py --sdk'), at('cmake --preset android-x86_64-debug'))
         self.assertLess(at('install-android-emulator.py --sdk'), at('android-device.py boot'))
         self.assertLess(at('android-device.py boot'), at('ctest --preset android-x86_64-debug'))
         self.assertLess(at('ctest --preset android-x86_64-debug'), at('adb logcat -d'))

@@ -138,6 +138,14 @@ set(CRD_SOFTHSM "$ENV{CRD_SOFTHSM}" CACHE FILEPATH
 option(CRD_BUILD_PROTOCOL_MODEL "Prove the protocol models with the pinned Tamarin (Linux)" OFF)
 set(CRD_TAMARIN "$ENV{CRD_TAMARIN}" CACHE FILEPATH
     "The pinned tamarin-prover (scripts/install-tamarin.py), for the protocol models")
+# The Android Keystore's proof in an application process (NET.2, decision K15): crd-crypto-keystore-app, the key store
+# case as a JNI library, inside an instrumentation APK built by scripts/android-apk.py with the pinned JDK, build-tools
+# and API 31 platform from the Android test kit's SDK root (scripts/install-android-emulator.py prints the
+# ANDROID_HOME this configure reads), run on the emulator by scripts/android-device.py instrument (the
+# crd-crypto-keystore-app CTest). Android only, never in a shipped build; on the complete-tier android lane.
+option(CRD_BUILD_ANDROID_KEYSTORE_APP "Prove the Android Keystore in an instrumentation APK (Android)" OFF)
+set(CRD_ANDROID_SDK "$ENV{ANDROID_HOME}" CACHE PATH
+    "The pinned Android test kit's SDK root (scripts/install-android-emulator.py), for the Keystore's APK")
 # The nn board's same-format peer: ggml's Q8_0 linears (runtime/examples/bench_nn_q8_vs_ggml.c) against the pinned ggml
 # release (cmake/pins.json ggml, fetched on demand into build/_deps) built by its own CMake as a separate project at the
 # host's ISA. Local only on Linux, never in CI or a shipped build; scripts/run_bench_nn.sh builds and runs it.
@@ -1473,6 +1481,22 @@ if(CRD_BUILD_PROTOCOL_MODEL)
     if(NOT EXISTS "${CRD_TAMARIN}")
         message(FATAL_ERROR "[protocol-model] CRD_TAMARIN names no tamarin-prover: install the pinned Tamarin with "
                             "scripts/install-tamarin.py and configure with the CRD_TAMARIN it prints")
+    endif()
+endif()
+
+if(CRD_BUILD_ANDROID_KEYSTORE_APP)
+    if(NOT CRD_BUILD_TESTS OR NOT ANDROID OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+        message(FATAL_ERROR "[android-keystore-app] the Keystore's APK needs Android, CRD_BUILD_TESTS and the crypto "
+                            "module")
+    endif()
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/android-apk.py" check
+                            --sdk "${CRD_ANDROID_SDK}"
+                    RESULT_VARIABLE _crd_android_kit OUTPUT_VARIABLE _crd_android_kit_out
+                    ERROR_VARIABLE _crd_android_kit_out)
+    if(NOT _crd_android_kit EQUAL 0)
+        message(FATAL_ERROR "[android-keystore-app] CRD_ANDROID_SDK names no complete Android test kit: install it "
+                            "with scripts/install-android-emulator.py and configure with the ANDROID_HOME it prints: "
+                            "${_crd_android_kit_out}")
     endif()
 endif()
 

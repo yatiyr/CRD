@@ -5,7 +5,11 @@
         boot completed (`--github-env` appends ANDROID_SERIAL to that file);
   stop  shuts that emulator down and waits until adb no longer lists it;
   exec  runs a program on the device and returns its exit code: CMAKE_CROSSCOMPILING_EMULATOR for the Android preset,
-        so CTest and Catch2's discovery put it before every test command.
+        so CTest and Catch2's discovery put it before every test command;
+  instrument  installs an instrumentation APK (scripts/android-apk.py), runs it with Catch2's arguments as the extras
+        `argc` and `arg<i>`, prints the report it wrote to `files/catch.txt` (read through run-as, so the APK is
+        debuggable) and returns the run's `exit`; a run that never reports one (a crash, a missing library) fails with
+        am's own output. The package is uninstalled before and after, which also deletes its Keystore keys.
 
 exec mirrors host paths onto the device under one rule: host path P is read at MIRROR + P. The program, every
 `--push` path (a test's data, named by crd_test_data) and every argument that is an absolute path to an existing host
@@ -129,6 +133,55 @@ def run(args):
     return subprocess.run(adb + ['shell', command]).returncode
 
 
+def instrument_command(package, runner, arguments):
+    """The device shell command running `package`'s instrumentation `runner` with `arguments` as its extras."""
+    extras = ['-e argc %d' % len(arguments)]
+    extras += ['-e arg%d %s' % (i, shlex.quote(argument)) for i, argument in enumerate(arguments)]
+    return 'am instrument -w -r %s %s/%s' % (' '.join(extras), shlex.quote(package), shlex.quote(runner))
+
+
+def instrumentation_result(text):
+    """(INSTRUMENTATION_CODE or None, the result bundle) from `am instrument -w -r` output."""
+    code, bundle = None, {}
+    for line in text.splitlines():
+        key, _, value = line.partition(': ')
+        if key == 'INSTRUMENTATION_RESULT':
+            name, _, entry = value.partition('=')
+            bundle[name] = entry
+        elif key == 'INSTRUMENTATION_CODE' and value.strip().lstrip('-').isdigit():
+            code = int(value)
+    return code, bundle
+
+
+def instrumentation_exit(code, bundle):
+    """The run's exit code: its `exit` when the result code agrees with it (RESULT_OK, -1, exactly when it is 0)."""
+    exit_text = bundle.get('exit', '')
+    if code is None or not exit_text.lstrip('-').isdigit():
+        return None
+    exit_code = int(exit_text)
+    return exit_code if (code == -1) == (exit_code == 0) else None
+
+
+def instrument(args):
+    adb = adb_command(args.serial)
+    subprocess.run(adb + ['uninstall', args.package], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if subprocess.run(adb + ['install', '-t', str(args.apk)], stdout=subprocess.DEVNULL).returncode != 0:
+        print('adb install %s failed' % args.apk, file=sys.stderr)
+        return 1
+    try:
+        command = instrument_command(args.package, args.runner, args.arguments)
+        output = subprocess.run(adb + ['shell', command], stdout=subprocess.PIPE, text=True).stdout
+        report = shell(adb, 'run-as %s cat files/catch.txt' % shlex.quote(args.package), check=False).stdout
+    finally:
+        subprocess.run(adb + ['uninstall', args.package], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    sys.stdout.write(report or '')
+    exit_code = instrumentation_exit(*instrumentation_result(output))
+    if exit_code is None:
+        print('the instrumentation reported no exit code:\n' + output, file=sys.stderr)
+        return 1
+    return exit_code
+
+
 def emulator_environment(sdk, environ):
     """The emulator's environment: `sdk` as its SDK root under both names, since it takes ANDROID_HOME first and a
     hosted runner's image sets ANDROID_HOME to an SDK without the pinned system image; the AVD home stays the one
@@ -204,8 +257,16 @@ def main(argv=None):
     execute.add_argument('--push', action='append', default=[], help='a host path the program reads at its mirror')
     execute.add_argument('program')
     execute.add_argument('arguments', nargs=argparse.REMAINDER)
+    instrumented = commands.add_parser('instrument', help='run an instrumentation APK with Catch2 arguments')
+    instrumented.add_argument('--serial')
+    instrumented.add_argument('--apk', type=Path, required=True)
+    instrumented.add_argument('--package', required=True)
+    instrumented.add_argument('--runner', required=True, help='the instrumentation class, e.g. .KeyStoreRunner')
+    instrumented.add_argument('arguments', nargs=argparse.REMAINDER, help='Catch2 arguments, after --')
     args = parser.parse_args(argv)
-    return {'boot': boot, 'stop': stop, 'exec': run}[args.command](args)
+    if args.command == 'instrument' and args.arguments[:1] == ['--']:
+        args.arguments = args.arguments[1:]
+    return {'boot': boot, 'stop': stop, 'exec': run, 'instrument': instrument}[args.command](args)
 
 
 if __name__ == '__main__':

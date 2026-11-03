@@ -1763,8 +1763,8 @@ class Lane:
                         'inventory', 'test', 'bundle', 'upload'],
         'windows-arm64': ['checkout', 'python_version', 'ninja', 'msvc', 'cpm_cache', 'configure', 'build',
                           'inventory', 'test', 'bundle', 'upload'],
-        'android': ['checkout', 'python_version', 'ninja', 'android_ndk', 'cpm_cache', 'configure', 'build', 'kvm',
-                    'android_emulator', 'emulator_boot', 'inventory', 'test', 'device_log', 'bundle', 'upload'],
+        'android': ['checkout', 'python_version', 'ninja', 'android_ndk', 'cpm_cache', 'android_emulator', 'configure',
+                    'build', 'kvm', 'emulator_boot', 'inventory', 'test', 'device_log', 'bundle', 'upload'],
     }
     ALWAYS = ('sccache_stats', 'device_log', 'bundle', 'upload')
     UNLESS_CANCELLED = ('genmc',)
@@ -2189,7 +2189,7 @@ LANE_STEP_PHASES = {
     'Install matching Vulkan validation layer': 'vulkan_validation',
     'Install clang-tidy (LLVM 20.1.8, pinned)': 'clang_tidy', 'Verify clang-tidy version': 'clang_tidy',
     'Add LLVM to PATH': 'llvm_path', 'Install the pinned Android NDK': 'android_ndk',
-    'Open KVM to the runner user': 'kvm', 'Install the pinned Android emulator kit': 'android_emulator',
+    'Open KVM to the runner user': 'kvm', 'Install the pinned Android test kit': 'android_emulator',
     'Boot the emulator': 'emulator_boot', 'Device log and shutdown': 'device_log',
 }
 FIXED_STEP_MAP = {

@@ -2608,11 +2608,12 @@ TEST_CASE("Key store: the operating system's key device's contract", "[crypto][k
 }
 
 TEST_CASE("Key store: the Android Keystore guards a master key and holds a store's signature keys",
-          "[crypto][key-store]")
+          "[crypto][key-store][android-keystore]")
 {
     if (!PlatformKeyDevice::available())
     {
-        // Only an Android application process has a Java VM; this case is the Keystore's evidence in the emulator.
+        // Only an Android application process has a Java VM: this case is the Keystore's evidence in the emulator,
+        // run in the instrumentation APK (the crd-crypto-keystore-app CTest).
         SKIP("no Android Keystore (an Android application process)");
     }
     // The protector: a master key wrapped by a Keystore key of its own, bound to its store and every reference byte.

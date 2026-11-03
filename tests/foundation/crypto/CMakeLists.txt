@@ -320,6 +320,36 @@ if(CRD_BUILD_PROTOCOL_MODEL)
     message(STATUS "[protocol-model] the protocol models with ${CRD_TAMARIN}")
 endif()
 
+# The Android Keystore in an application process (CRD_BUILD_ANDROID_KEYSTORE_APP, decision K15): the key store's cases
+# as a JNI library (android/keystore_app_main.cpp) inside an instrumentation APK (android/, built and signed by
+# scripts/android-apk.py with the pinned kit), whose [android-keystore] case runs in the app's own Java VM, uid and
+# SELinux domain on the emulator (scripts/android-device.py instrument).
+if(CRD_BUILD_ANDROID_KEYSTORE_APP)
+    add_library(crd-crypto-keystore-app SHARED test_key_store.cpp android/keystore_app_main.cpp)
+    target_link_libraries(crd-crypto-keystore-app PRIVATE
+        crd-containers crd-core crd-crypto crd-memory crd-platform Catch2::Catch2 crypto ssl)
+    set(_crd_keystore_apk "${CMAKE_CURRENT_BINARY_DIR}/crd-crypto-keystore-app.apk")
+    set(_crd_keystore_java "${CMAKE_CURRENT_SOURCE_DIR}/android/java")
+    add_custom_command(OUTPUT "${_crd_keystore_apk}"
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/android-apk.py" build --sdk "${CRD_ANDROID_SDK}"
+                --manifest "${CMAKE_CURRENT_SOURCE_DIR}/android/AndroidManifest.xml" --java "${_crd_keystore_java}"
+                --library "$<TARGET_FILE:crd-crypto-keystore-app>" --abi ${ANDROID_ABI}
+                --min-api ${ANDROID_PLATFORM_LEVEL} --strip "${CMAKE_STRIP}"
+                --work "${CMAKE_CURRENT_BINARY_DIR}/keystore-app" --output "${_crd_keystore_apk}"
+        DEPENDS crd-crypto-keystore-app "${CMAKE_CURRENT_SOURCE_DIR}/android/AndroidManifest.xml"
+                "${_crd_keystore_java}/cerid/test/keystore/KeyStoreRunner.java"
+                "${CMAKE_SOURCE_DIR}/scripts/android-apk.py" "${CMAKE_SOURCE_DIR}/scripts/install-android-emulator.py"
+        COMMENT "Building the Android Keystore's instrumentation APK"
+        VERBATIM)
+    add_custom_target(crd-crypto-keystore-apk ALL DEPENDS "${_crd_keystore_apk}")
+    add_test(NAME crd-crypto-keystore-app
+             COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/android-device.py" instrument
+                     --apk "${_crd_keystore_apk}" --package cerid.test.keystore --runner .KeyStoreRunner
+                     -- "[android-keystore]")
+    set_tests_properties(crd-crypto-keystore-app PROPERTIES TIMEOUT 600 LABELS "crypto;android-keystore")
+    message(STATUS "[android-keystore-app] the Android Keystore in an instrumentation APK (${CRD_ANDROID_SDK})")
+endif()
+
 # Against OpenMLS (CRD_BUILD_MLS_VS_OPENMLS): crd-openmls-peer's members over OpenMLS, a Cargo package linted by
 # Clippy and built with the pinned Rust toolchain (CRD_CARGO) by `cargo build --locked`, so every crate is the one
 # Cargo.lock names, verified by its SHA-256; CARGO_HOME (the crate downloads) and the target directory stay inside this

@@ -92,9 +92,11 @@ never resolves a newer one. The workflow must install Rust through install-rust.
 on retrieval and its SHA-256 pinned; `pins.install_tree` reads a zip as it reads a tar (file modes and Info-ZIP
 symbolic links kept, the same filter refusing an escaping path or link) and the NDK's `source.properties` must name the
 pinned revision. [install-android-emulator.py](../../scripts/install-android-emulator.py) installs the Android test
-lane's emulator kit the same way into one SDK root: platform-tools, the emulator (each must report its pinned
+lane's kit the same way into one SDK root: platform-tools, the emulator (each must report its pinned
 revision) and the API 31 x86_64 system image (its API level, ABI and tag checked), and writes the AVD that
-[android-device.py](../../scripts/android-device.py) boots and runs the Android test programs on.
+[android-device.py](../../scripts/android-device.py) boots and runs the Android test programs on; then the build-tools
+37.0.0, the API 31 platform and the Temurin JDK 21 (its release file must name the pinned runtime version), with which
+[android-apk.py](../../scripts/android-apk.py) builds and signs the Keystore's instrumentation APK without Gradle.
 Every whole-tree install goes through `pins.install_tree` (staging beside the destination, a stamp naming the pin's
 version, digests and layout, nothing outside each archive's root extracted). A tree of several archives unpacks them
 into one prefix and refuses a path two of them place differently; the pin's `notices` (each archive's `LICENSE`) go to

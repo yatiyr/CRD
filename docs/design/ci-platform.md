@@ -554,10 +554,10 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `android` | Install pinned Ninja 1.11.1 | `lane-<preset> (android-x86_64-debug)` | Lane.ninja |
 | `android` | Install the pinned Android NDK | `lane-<preset> (android-x86_64-debug)` | Lane.android_ndk |
 | `android` | Cache CPM downloads | `lane-<preset> (android-x86_64-debug)` | Lane.cpm_cache |
+| `android` | Install the pinned Android test kit | `lane-<preset> (android-x86_64-debug)` | Lane.android_emulator |
 | `android` | Configure | `lane-<preset> (android-x86_64-debug)` | Lane.configure |
 | `android` | Build | `lane-<preset> (android-x86_64-debug)` | Lane.build |
 | `android` | Open KVM to the runner user | `lane-<preset> (android-x86_64-debug)` | Lane.kvm |
-| `android` | Install the pinned Android emulator kit | `lane-<preset> (android-x86_64-debug)` | Lane.android_emulator |
 | `android` | Boot the emulator | `lane-<preset> (android-x86_64-debug)` | Lane.emulator_boot |
 | `android` | Test inventory | `lane-<preset> (android-x86_64-debug)` | Lane.inventory |
 | `android` | Test | `lane-<preset> (android-x86_64-debug)` | Lane.test |

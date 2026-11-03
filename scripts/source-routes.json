@@ -178,6 +178,13 @@
     },
     {
       "paths": [
+        "tests/foundation/crypto/android/"
+      ],
+      "built_when": {"option": "CRD_BUILD_ANDROID_KEYSTORE_APP"},
+      "why": "The Android Keystore's instrumentation APK (the crd-crypto-keystore-app CTest, decision K15): the key store case as a JNI library, built only on the Android preset, which turns the option on."
+    },
+    {
+      "paths": [
         "tests/foundation/crypto/board/"
       ],
       "built_when": {"option": "CRD_BUILD_CRYPTO_VS_PEERS", "platform": "Linux"},
