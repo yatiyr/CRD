@@ -81,6 +81,7 @@ struct Dbus
     DBusMessage* (*connection_pop_message)(DBusConnection*) = nullptr;
     DBusMessage* (*connection_send_with_reply_and_block)(DBusConnection*, DBusMessage*, int, DBusError*) = nullptr;
     DBusMessage* (*message_new_method_call)(const char*, const char*, const char*, const char*) = nullptr;
+    DBusMessage* (*message_copy)(const DBusMessage*) = nullptr;
     void (*message_unref)(DBusMessage*) = nullptr;
     const char* (*message_get_signature)(DBusMessage*) = nullptr;
     const char* (*message_get_path)(DBusMessage*) = nullptr;
@@ -126,6 +127,7 @@ Dbus load_dbus() noexcept
         bind(l, d.connection_pop_message, "dbus_connection_pop_message") &&
         bind(l, d.connection_send_with_reply_and_block, "dbus_connection_send_with_reply_and_block") &&
         bind(l, d.message_new_method_call, "dbus_message_new_method_call") &&
+        bind(l, d.message_copy, "dbus_message_copy") &&
         bind(l, d.message_unref, "dbus_message_unref") &&
         bind(l, d.message_get_signature, "dbus_message_get_signature") &&
         bind(l, d.message_get_path, "dbus_message_get_path") &&
@@ -183,6 +185,8 @@ constexpr const char* kDeniedErrors[] = {
     "org.freedesktop.DBus.Error.AccessDenied",
     "org.freedesktop.DBus.Error.UnknownObject",
 };
+
+constexpr char kUnknownMethod[] = "org.freedesktop.DBus.Error.UnknownMethod";
 
 CryptoError error_of(const char* name) noexcept
 {
@@ -422,18 +426,28 @@ public:
         return CryptoError::None;
     }
 
-    // Sends a call and checks its reply's signature: the reply's arguments are then read without further checks.
+    // Sends a call and checks its reply's signature: the reply's arguments are then read without further checks. A
+    // service that answers UnknownMethod is asked once more, with a copy of the call: gnome-keyring 46 now and then
+    // answers so for a Secret Service method while other clients' calls run (four threads of the Secret Service test,
+    // about one call in two thousand), and a method it did not dispatch never ran. A second such answer stands
+    // (Unavailable: a service without the method).
     [[nodiscard]] CryptoError call(const Message& call, const char* signature, Message& reply) noexcept
     {
         if (call.get() == nullptr)
         {
             return CryptoError::ProviderFailure;
         }
-        DBusError error{};
-        dbus().error_init(&error);
-        reply.reset(dbus().connection_send_with_reply_and_block(m_connection, call.get(), kCallMilliseconds, &error));
-        const CryptoError answer = error.name != nullptr ? error_of(error.name) : CryptoError::None;
-        dbus().error_free(&error);
+        bool        unknown = false;
+        CryptoError answer  = send(call.get(), reply, unknown);
+        if (unknown)
+        {
+            const Message again(dbus().message_copy(call.get()));
+            if (again.get() == nullptr)
+            {
+                return CryptoError::ProviderFailure;
+            }
+            answer = send(again.get(), reply, unknown);
+        }
         if (answer != CryptoError::None || reply.get() == nullptr)
         {
             return answer != CryptoError::None ? answer : CryptoError::Unavailable;
@@ -668,6 +682,18 @@ public:
     }
 
 private:
+    // One round trip: the reply, or the error's answer; `unknown` when the error is UnknownMethod.
+    [[nodiscard]] CryptoError send(DBusMessage* message, Message& reply, bool& unknown) noexcept
+    {
+        DBusError error{};
+        dbus().error_init(&error);
+        reply.reset(dbus().connection_send_with_reply_and_block(m_connection, message, kCallMilliseconds, &error));
+        unknown = error.name != nullptr && std::strcmp(error.name, kUnknownMethod) == 0;
+        const CryptoError answer = error.name != nullptr ? error_of(error.name) : CryptoError::None;
+        dbus().error_free(&error);
+        return answer;
+    }
+
     [[nodiscard]] static DBusMessage* new_call(const char* path, const char* interface, const char* method) noexcept
     {
         return dbus().message_new_method_call(kService, path, interface, method);

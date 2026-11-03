@@ -1603,7 +1603,9 @@ constexpr u8 kTestDeviceFormat = 0x7EU;
 
 // A device of the tests: ECDSA keys in memory (the provider's EC keys), each named by a random handle bound to its
 // store, signing digests into r || s as a device does. It can refuse a curve, fail its calls, or sign with a key other
-// than the one named (a faulty or substituted device), and counts its keys and calls.
+// than the one named (a faulty or substituted device), and counts its keys and calls. sign_digest() runs on the
+// signers' threads, where no Catch2 assertion may run: it counts a call outside its contract, which the device's
+// destructor checks on the test's own thread.
 class TestDevice final : public KeyDevice
 {
 public:
@@ -1612,6 +1614,7 @@ public:
     TestDevice& operator=(const TestDevice&) = delete;
     ~TestDevice()
     {
+        CHECK(breaches.load() == 0U);
         for (Slot& slot : m_slots)
         {
             EC_KEY_free(slot.key);
@@ -1666,16 +1669,29 @@ public:
             return CryptoError::Denied;
         }
         const usize field = algorithm == AlgorithmId::EcdsaSecp384r1Sha384 ? 48U : 32U;
-        REQUIRE((digest.size() == field && signature.size() == 2U * field));
+        if (digest.size() != field || signature.size() != 2U * field)
+        {
+            breaches.fetch_add(1U);
+            return CryptoError::BadLength;
+        }
         EC_KEY* other = nullptr;
         if (wrong_key)
         {
             other = EC_KEY_new_by_curve_name(curve_nid(algorithm));
-            REQUIRE((other != nullptr && EC_KEY_generate_key(other) == 1));
+            if (other == nullptr || EC_KEY_generate_key(other) != 1)
+            {
+                EC_KEY_free(other);
+                breaches.fetch_add(1U);
+                return CryptoError::ProviderFailure;
+            }
         }
         ECDSA_SIG* made = ECDSA_do_sign(digest.data(), digest.size(), other != nullptr ? other : slot->key);
         EC_KEY_free(other);
-        REQUIRE(made != nullptr);
+        if (made == nullptr)
+        {
+            breaches.fetch_add(1U);
+            return CryptoError::ProviderFailure;
+        }
         const bool written =
             BN_bn2bin_padded(signature.data(), field, ECDSA_SIG_get0_r(made)) == 1 &&
             BN_bn2bin_padded(signature.data() + field, field, ECDSA_SIG_get0_s(made)) == 1;
@@ -1717,6 +1733,7 @@ public:
     usize              creates     = 0U;
     usize              forgets     = 0U;
     mutable std::atomic<usize> signs{0U};
+    mutable std::atomic<usize> breaches{0U}; // sign_digest() calls outside its contract, or its own failures
 
 private:
     struct Slot
