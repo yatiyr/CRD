@@ -8,7 +8,8 @@ Row: [NET.2](../ROADMAP.md#slice-net.2) (Partial). Design: [state learning](../d
 ## CI first
 
 Dispatch 41754591577 (f387ced1): win-clang-cl failed one test, `crd-crypto-state-learning`, on its 3600 s timeout
-with no output. Every other Windows job of the run was still running the same test. One cause, both halves fixed:
+with no output. The run's other Windows jobs were still running when this batch read it. One cause, both halves
+fixed:
 
 - **A deadlock.** `Sul.answer` wrote a whole batch (64 queries; the determinism recheck sent 200 at once) before it
   read any answer. The SUL answers each line as it reads it, so once the answers filled the stdout pipe the SUL
@@ -37,5 +38,5 @@ with no output. Every other Windows job of the run was still running the same te
 
 ## Next
 
-Audit the first completed hosted run with this commit: `crd-crypto-state-learning` on every Windows lane, win-asan
-and linux-clang-tsan included. Then HESAP-NET's next clause, FlexFEC parity per RFC 8627.
+Audit complete-tier dispatch 41778055691 (304f0432): `crd-crypto-state-learning` on every Windows lane, win-asan and
+linux-clang-tsan included. Check that 41754591577's other Windows jobs failed only this test. Then HESAP-NET's next clause, FlexFEC parity per RFC 8627.
