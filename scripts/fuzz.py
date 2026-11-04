@@ -85,6 +85,8 @@ TARGETS = {
                       'executable': 'tests/hesap-comms/fuzz/crd-fuzz-hesap-erasure'},
     'hesap-flexfec': {'corpus': 'tests/numerics/hesap-comms/fuzz/corpus-flexfec',
                       'executable': 'tests/hesap-comms/fuzz/crd-fuzz-hesap-flexfec'},
+    'hesap-red': {'corpus': 'tests/numerics/hesap-comms/fuzz/corpus-red',
+                  'executable': 'tests/hesap-comms/fuzz/crd-fuzz-hesap-red'},
 }
 LIMITS = {'max_len': 65536, 'timeout': 10, 'rss_limit_mb': 2048, 'malloc_limit_mb': 256}
 STAT_PATTERN = re.compile(r'^stat::(\w+):\s+(\d+)', re.MULTILINE)
@@ -145,6 +147,11 @@ def run_target(build, target, seconds, jobs, scratch, limits, extra):
         shutil.rmtree(working_corpus)
     shutil.copytree(committed, working_corpus)
     artifacts.mkdir(parents=True, exist_ok=True)
+    # A reused scratch keeps earlier findings, which this run's record does not claim (a finding written again counts:
+    # libFuzzer names it by its content), and drops the earlier workers' logs, whose statistics would add up here.
+    earlier = {path.name: path.stat().st_mtime_ns for path in artifacts_in(artifacts)}
+    for log in work.glob('fuzz-*.log'):
+        log.unlink()
     command = [str(program), str(working_corpus), f'-max_total_time={seconds}', '-print_final_stats=1',
                f'-artifact_prefix={artifacts.as_posix()}/', *limit_arguments(limits)]
     if jobs > 1:
@@ -163,7 +170,8 @@ def run_target(build, target, seconds, jobs, scratch, limits, extra):
     record = {'target': target, 'seconds': seconds, 'wall_seconds': wall, 'exit_code': result.returncode,
               'limits': limits, 'jobs': jobs, 'corpus_before': len(list(committed.iterdir())),
               'corpus_after': len(list(working_corpus.iterdir())),
-              'artifacts': [path.name for path in artifacts_in(artifacts)], 'stats': stats,
+              'artifacts': [path.name for path in artifacts_in(artifacts)
+                            if earlier.get(path.name) != path.stat().st_mtime_ns], 'stats': stats,
               'working_corpus': str(working_corpus), 'log': str(work / 'fuzzer.log')}
     return record
 

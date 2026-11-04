@@ -1,6 +1,7 @@
 // RFC 8627's FlexFEC parity (crd/hesap/comms/flexfec.hpp). The payload XOR runs on the dispatched GF(2^8) addition
 // (crd/hesap/comms/erasure_dispatch.hpp); the 8 bytes of recovery fields are XORed here.
 
+#include <crd/containers/wire_bytes.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/hesap/comms/erasure_dispatch.hpp>
 #include <crd/hesap/comms/flexfec.hpp>
@@ -18,35 +19,14 @@ using crd::u32;
 using crd::u64;
 using crd::u8;
 using crd::usize;
+using crd::containers::wire_load;
+using crd::containers::wire_store;
+using crd::containers::WireWriter;
 
 constexpr usize kRtpHeader = 12U;
 constexpr usize kMaxRtpPacket = kRtpHeader + 0xFFFFU;
 constexpr u32 kMaxSet = 255U; // the largest protected set of one block: L or D columns or rows, or 110 mask bits
 constexpr u32 kNone = 0xFFFFFFFFU;
-
-u16 load16(const u8* p) noexcept
-{
-    return static_cast<u16>((u32{p[0]} << 8U) | p[1]);
-}
-
-u32 load32(const u8* p) noexcept
-{
-    return (u32{p[0]} << 24U) | (u32{p[1]} << 16U) | (u32{p[2]} << 8U) | p[3];
-}
-
-void store16(u8* p, u32 v) noexcept
-{
-    p[0] = static_cast<u8>(v >> 8U);
-    p[1] = static_cast<u8>(v);
-}
-
-void store32(u8* p, u32 v) noexcept
-{
-    p[0] = static_cast<u8>(v >> 24U);
-    p[1] = static_cast<u8>(v >> 16U);
-    p[2] = static_cast<u8>(v >> 8U);
-    p[3] = static_cast<u8>(v);
-}
 
 bool mask_bit(const FlexFecBlock& b, u32 j) noexcept
 {
@@ -168,7 +148,7 @@ FlexFecStatus admit_packets(const FlexFecHeader& header, std::span<const u32> ss
         {
             return FlexFecStatus::NotRtp;
         }
-        const FlexFecStatus s = admit(header, ssrcs, load32(packet.data() + 8U), load16(packet.data() + 2U), seen);
+        const FlexFecStatus s = admit(header, ssrcs, wire_load<u32>(packet, 8U), wire_load<u16>(packet, 2U), seen);
         if (s != FlexFecStatus::Ok)
         {
             return s;
@@ -210,7 +190,7 @@ FlexFecStatus combine(std::span<const u8> bytes, const FlexFecHeader& header, Fo
     u8 fields[8];
     std::memcpy(fields, bytes.data(), sizeof(fields));
     for_each([&fields](std::span<const u8> p) noexcept { add_fields(fields, p); });
-    const usize y = load16(fields + 2U);
+    const usize y = wire_load<u16>(fields, 2U);
     if (bytes.size() - header.header_bytes < y)
     {
         return FlexFecStatus::Truncated;
@@ -222,9 +202,9 @@ FlexFecStatus combine(std::span<const u8> bytes, const FlexFecHeader& header, Fo
     u8* const packet = out.data();
     packet[0] = static_cast<u8>(0x80U | (fields[0] & 0x3FU));
     packet[1] = fields[1];
-    store16(packet + 2U, lost_sn);
+    wire_store<u16>(out, 2U, lost_sn);
     std::memcpy(packet + 4U, fields + 4U, 4U);
-    store32(packet + 8U, lost_ssrc);
+    wire_store<u32>(out, 8U, lost_ssrc);
     if (y != 0U)
     {
         std::memcpy(packet + kRtpHeader, bytes.data() + header.header_bytes, y);
@@ -240,14 +220,14 @@ FlexFecStatus combine(std::span<const u8> bytes, const FlexFecHeader& header, Fo
     return FlexFecStatus::Ok;
 }
 
-usize write_block(u8* p, FlexFecVariant variant, const FlexFecBlock& b) noexcept
+void write_block(WireWriter& w, FlexFecVariant variant, const FlexFecBlock& b) noexcept
 {
-    store16(p, b.sn_base);
+    w.put_u16(b.sn_base);
     if (variant == FlexFecVariant::Fixed)
     {
-        p[2] = b.columns;
-        p[3] = b.rows;
-        return 4U;
+        w.put_u8(b.columns);
+        w.put_u8(b.rows);
+        return;
     }
     const u32 width = mask_width(b);
     u32 first = width > 15U ? 0x8000U : 0U;
@@ -255,29 +235,27 @@ usize write_block(u8* p, FlexFecVariant variant, const FlexFecBlock& b) noexcept
     {
         first |= mask_bit(b, j) ? 1U << (14U - j) : 0U;
     }
-    store16(p + 2U, first);
+    w.put_u16(static_cast<u16>(first));
     if (width == 15U)
     {
-        return 4U;
+        return;
     }
     u32 second = width > 46U ? 0x80000000U : 0U;
     for (u32 j = 15U; j < 46U; ++j)
     {
         second |= mask_bit(b, j) ? 1U << (30U - (j - 15U)) : 0U;
     }
-    store32(p + 4U, second);
+    w.put_u32(second);
     if (width == 46U)
     {
-        return 8U;
+        return;
     }
     u64 third = 0U;
     for (u32 j = 46U; j < FlexFecHeader::kMaxMaskBits; ++j)
     {
         third |= mask_bit(b, j) ? u64{1U} << (63U - (j - 46U)) : 0U;
     }
-    store32(p + 8U, static_cast<u32>(third >> 32U));
-    store32(p + 12U, static_cast<u32>(third));
-    return 16U;
+    w.put_u64(third);
 }
 
 usize block_bytes(FlexFecVariant variant, const FlexFecBlock& b) noexcept
@@ -317,10 +295,10 @@ FlexFecStatus flexfec_parse(std::span<const u8> bytes, u32 stream_count, FlexFec
             return FlexFecStatus::Truncated;
         }
         h.variant = FlexFecVariant::Retransmission;
-        h.recovery = static_cast<u16>(load16(bytes.data()) & 0x3FFFU);
-        h.sequence = load16(bytes.data() + 2U);
-        h.ts_recovery = load32(bytes.data() + 4U);
-        h.ssrc = load32(bytes.data() + 8U);
+        h.recovery = static_cast<u16>(wire_load<u16>(bytes, 0U) & 0x3FFFU);
+        h.sequence = wire_load<u16>(bytes, 2U);
+        h.ts_recovery = wire_load<u32>(bytes, 4U);
+        h.ssrc = wire_load<u32>(bytes, 8U);
         h.header_bytes = kRtpHeader;
         header = h;
         return FlexFecStatus::Ok;
@@ -334,9 +312,9 @@ FlexFecStatus flexfec_parse(std::span<const u8> bytes, u32 stream_count, FlexFec
         return FlexFecStatus::WrongCount;
     }
     h.variant = f ? FlexFecVariant::Fixed : FlexFecVariant::Mask;
-    h.recovery = static_cast<u16>(load16(bytes.data()) & 0x3FFFU);
-    h.length_recovery = load16(bytes.data() + 2U);
-    h.ts_recovery = load32(bytes.data() + 4U);
+    h.recovery = static_cast<u16>(wire_load<u16>(bytes, 0U) & 0x3FFFU);
+    h.length_recovery = wire_load<u16>(bytes, 2U);
+    h.ts_recovery = wire_load<u32>(bytes, 4U);
     h.stream_count = stream_count;
     usize at = 8U;
     for (u32 i = 0U; i < stream_count; ++i)
@@ -346,7 +324,7 @@ FlexFecStatus flexfec_parse(std::span<const u8> bytes, u32 stream_count, FlexFec
         {
             return FlexFecStatus::Truncated;
         }
-        b.sn_base = load16(bytes.data() + at);
+        b.sn_base = wire_load<u16>(bytes, at);
         if (f)
         {
             b.columns = bytes[at + 2U];
@@ -358,7 +336,7 @@ FlexFecStatus flexfec_parse(std::span<const u8> bytes, u32 stream_count, FlexFec
             }
             continue;
         }
-        const u32 first = load16(bytes.data() + at + 2U);
+        const u32 first = wire_load<u16>(bytes, at + 2U);
         at += 4U;
         for (u32 j = 0U; j < 15U; ++j)
         {
@@ -373,7 +351,7 @@ FlexFecStatus flexfec_parse(std::span<const u8> bytes, u32 stream_count, FlexFec
             {
                 return FlexFecStatus::Truncated;
             }
-            const u32 second = load32(bytes.data() + at);
+            const u32 second = wire_load<u32>(bytes, at);
             at += 4U;
             for (u32 j = 15U; j < 46U; ++j)
             {
@@ -388,7 +366,7 @@ FlexFecStatus flexfec_parse(std::span<const u8> bytes, u32 stream_count, FlexFec
                 {
                     return FlexFecStatus::Truncated;
                 }
-                const u64 third = (u64{load32(bytes.data() + at)} << 32U) | load32(bytes.data() + at + 4U);
+                const u64 third = wire_load<u64>(bytes, at);
                 at += 8U;
                 for (u32 j = 46U; j < FlexFecHeader::kMaxMaskBits; ++j)
                 {
@@ -511,11 +489,12 @@ FlexFecStatus flexfec_encode(std::span<const std::span<const u8>> sources, std::
         add_fields(fec, p);
     }
     fec[0] = static_cast<u8>((fec[0] & 0x3FU) | (variant == FlexFecVariant::Fixed ? 0x40U : 0U));
-    usize at = 8U;
+    WireWriter blocks_out(out.subspan(8U, header_bytes - 8U));
     for (u32 i = 0U; i < header.stream_count; ++i)
     {
-        at += write_block(fec + at, variant, header.blocks[i]);
+        write_block(blocks_out, variant, header.blocks[i]);
     }
+    CRD_ASSERT(blocks_out.written() == header_bytes - 8U);
     const ErasureKernels& kernels = *erasure_kernels().table;
     for (const std::span<const u8> p : sources)
     {

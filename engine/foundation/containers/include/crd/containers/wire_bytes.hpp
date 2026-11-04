@@ -8,6 +8,8 @@
 //   WireReader  takes fields from received bytes; every take reports whether the bytes held the whole field and
 //               consumes nothing when they did not, so a decoder refuses a short message instead of reading past it.
 //               A taken byte range views the input.
+//   wire_load,  the integer at a fixed offset of a layout whose length the caller checked first (a header read in
+//   wire_store  place, a field patched after the rest was written); a field past the span stops the process.
 
 #include <crd/containers/span.hpp>
 #include <crd/core/assert.hpp>
@@ -15,6 +17,36 @@
 
 namespace crd::containers
 {
+// The big-endian integer of sizeof(T) bytes at byte `at` of `bytes`.
+template <typename T> [[nodiscard]] T wire_load(ConstSpan<u8> bytes, usize at) noexcept
+{
+    static_assert(std::is_unsigned_v<T>, "wire fields are unsigned integers");
+    if (at > bytes.size() || bytes.size() - at < sizeof(T))
+    {
+        CRD_FATAL("wire_load: a field past the span its layout checked");
+    }
+    u64 value = 0U;
+    for (usize i = 0U; i < sizeof(T); ++i)
+    {
+        value = (value << 8U) | bytes[at + i];
+    }
+    return static_cast<T>(value);
+}
+
+// Writes `value` as the big-endian integer of sizeof(T) bytes at byte `at` of `bytes`.
+template <typename T> void wire_store(Span<u8> bytes, usize at, T value) noexcept
+{
+    static_assert(std::is_unsigned_v<T>, "wire fields are unsigned integers");
+    if (at > bytes.size() || bytes.size() - at < sizeof(T))
+    {
+        CRD_FATAL("wire_store: a field past the span its layout sized");
+    }
+    for (usize i = 0U; i < sizeof(T); ++i)
+    {
+        bytes[at + i] = static_cast<u8>(static_cast<u64>(value) >> (8U * (sizeof(T) - 1U - i)));
+    }
+}
+
 class WireWriter
 {
 public:
@@ -98,13 +130,8 @@ private:
         {
             return false;
         }
-        u64 value = 0U;
-        for (usize i = 0U; i < sizeof(T); ++i)
-        {
-            value = (value << 8U) | m_in[m_at + i];
-        }
+        out = wire_load<T>(m_in, m_at);
         m_at += sizeof(T);
-        out = static_cast<T>(value);
         return true;
     }
 

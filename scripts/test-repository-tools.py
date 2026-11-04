@@ -5168,8 +5168,8 @@ class TestInstruments(unittest.TestCase):
                                                        'crypto-mls', 'crypto-mls-commit', 'crypto-mls-group',
                                                        'crypto-mls-message', 'crypto-mls-tree',
                                                        'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
-                                                       'hesap-erasure', 'hesap-flexfec', 'memory-allocators',
-                                                       'net-negotiation', 'perf-assets',
+                                                       'hesap-erasure', 'hesap-flexfec', 'hesap-red',
+                                                       'memory-allocators', 'net-negotiation', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload'])
         for name, target in fuzz_driver.TARGETS.items():
@@ -5198,6 +5198,34 @@ class TestInstruments(unittest.TestCase):
             with self.assertRaises(fuzz_driver.FuzzError):
                 fuzz_driver.targets_of('nope')
         self.assertEqual(fuzz_driver.targets_of('all'), list(fuzz_driver.TARGETS))
+
+    def test_fuzz_run_claims_only_the_findings_and_logs_it_wrote(self):
+        # A scratch reused from an earlier run keeps its findings and workers' logs; the new record names only what
+        # this run wrote (a finding written again included) and sums only this run's statistics.
+        with tempfile.TemporaryDirectory() as temp:
+            scratch = Path(temp)
+            work = scratch / 'hesap-red'
+            artifacts = work / 'artifacts'
+            artifacts.mkdir(parents=True)
+            for name in ('crash-old', 'crash-again'):
+                (artifacts / name).write_bytes(b'old')
+                os.utime(artifacts / name, ns=(1_000_000_000, 1_000_000_000))
+            (work / 'fuzz-7.log').write_text('stat::number_of_executed_units: 999\n', encoding='utf-8')
+
+            def fake_run(command, **_):
+                prefix = next(a for a in command if a.startswith('-artifact_prefix='))[len('-artifact_prefix='):]
+                (Path(prefix) / 'crash-new').write_bytes(b'new')
+                (Path(prefix) / 'crash-again').write_bytes(b'old')
+                (work / 'fuzz-0.log').write_text('stat::number_of_executed_units: 5\n', encoding='utf-8')
+                return subprocess.CompletedProcess(command, 1, '', '')
+
+            with patch.object(fuzz_driver, 'executable', return_value=Path('fuzzer')), \
+                    patch.object(fuzz_driver.subprocess, 'run', fake_run):
+                record = fuzz_driver.run_target(scratch, 'hesap-red', 1, 2, scratch, fuzz_driver.LIMITS, [])
+            self.assertEqual(record['artifacts'], ['crash-again', 'crash-new'])
+            self.assertEqual(record['stats']['number_of_executed_units'], 5)
+            self.assertFalse((work / 'fuzz-7.log').exists())
+            self.assertTrue((artifacts / 'crash-old').exists())
 
     def test_host_check_counts_every_report_and_unfinished_process(self):
         # DIAG.10a host separation: an event is any report line (with its stack head), and a process that died before

@@ -3016,7 +3016,7 @@
       "id": "fec.red",
       "title": "RTP payload for redundant audio data",
       "kind": "algorithm",
-      "state": "planned",
+      "state": "implemented",
       "owner": "hesap-comms",
       "rows": [
         "HESAP-NET"
@@ -3033,8 +3033,12 @@
         "verified": false
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "tests/numerics/hesap-comms/test_red.cpp",
+        "tests/numerics/hesap-comms/fuzz/fuzz_red.cpp"
+      ],
+      "deprecation": null,
+      "note": "RFC 2198's text was read in full on 2026-11-04 to implement it (docs/sessions/2026-11-04-hesap-net-red-and-interleavers.md; SHA-256 86c433f7fae8d5bcee1175f459a1afa14a40fc42730d62013df5e811ee739ce4). §3's 32-bit redundant header and 8-bit primary header, §7's example byte for byte; the writer keeps §3's different time intervals (no offset 0, no offset twice), the reader accepts what the format can express, and the payload types a block may carry are the session's (§5)."
     },
     {
       "id": "fec.raptorq",

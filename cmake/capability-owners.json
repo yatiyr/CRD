@@ -159,7 +159,7 @@
     },
     {
       "id": "containers.wire-bytes",
-      "summary": "Big-endian integers over byte spans: the bounded writer and reader of every Cerid wire and signed artefact layout.",
+      "summary": "Big-endian integers over byte spans: the bounded writer and reader of every Cerid wire and signed artefact layout, and the bounded load and store at a fixed offset.",
       "owner": "containers",
       "api": [
         "engine/foundation/containers/include/crd/containers/wire_bytes.hpp"
@@ -695,12 +695,14 @@
     },
     {
       "id": "numerics.erasure-codes",
-      "summary": "Packet erasure codes and their finite-field arithmetic: GF(2^8) of RFC 5510, the dispatched GF(2^8) dot product and addition, the RFC 5510 Reed-Solomon code, RFC 8627 FlexFEC parity with its iterative window decoder; fountain codes and interleavers join it (HESAP-NET).",
+      "summary": "Packet erasure codes and their finite-field arithmetic: GF(2^8) of RFC 5510, the dispatched GF(2^8) dot product and addition, the RFC 5510 Reed-Solomon code, RFC 8627 FlexFEC parity with its iterative window decoder, RFC 2198 redundant audio data, and the block and convolutional interleavers; fountain codes join it (HESAP-NET).",
       "owner": "hesap-comms",
       "api": [
         "engine/numerics/hesap-comms/include/crd/hesap/comms/erasure.hpp",
         "engine/numerics/hesap-comms/include/crd/hesap/comms/flexfec.hpp",
-        "engine/numerics/hesap-comms/include/crd/hesap/comms/gf256.hpp"
+        "engine/numerics/hesap-comms/include/crd/hesap/comms/gf256.hpp",
+        "engine/numerics/hesap-comms/include/crd/hesap/comms/interleave.hpp",
+        "engine/numerics/hesap-comms/include/crd/hesap/comms/red.hpp"
       ],
       "signatures": [
         {

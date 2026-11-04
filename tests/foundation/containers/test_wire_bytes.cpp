@@ -12,6 +12,8 @@ using crd::u8;
 using crd::usize;
 using crd::containers::ConstSpan;
 using crd::containers::Span;
+using crd::containers::wire_load;
+using crd::containers::wire_store;
 using crd::containers::WireReader;
 using crd::containers::WireWriter;
 
@@ -57,6 +59,29 @@ TEST_CASE("Wire bytes: every width round-trips at its bounds", "[containers][wir
     CHECK((a == 0xFFU && b == 0xFFFFU && c == 0xFFFFFFFFU && d == ~u64{0U}));
     CHECK(reader.done());
     CHECK(reader.consumed() == sizeof(bytes));
+}
+
+TEST_CASE("Wire bytes: a field at a fixed offset is read and patched in place", "[containers][wire-bytes]")
+{
+    u8 bytes[15] = {};
+    wire_store<u8>(Span<u8>(bytes), 0U, u8{0x01U});
+    wire_store<u16>(Span<u8>(bytes), 1U, u16{0x0203U});
+    wire_store<u32>(Span<u8>(bytes), 3U, 0x04050607U);
+    wire_store<u64>(Span<u8>(bytes), 7U, 0x08090A0B0C0D0E0FULL);
+    for (usize i = 0U; i < sizeof(bytes); ++i)
+    {
+        CHECK(bytes[i] == i + 1U);
+    }
+    const ConstSpan<u8> view(bytes);
+    CHECK(wire_load<u8>(view, 0U) == 0x01U);
+    CHECK(wire_load<u16>(view, 1U) == 0x0203U);
+    CHECK(wire_load<u32>(view, 3U) == 0x04050607U);
+    CHECK(wire_load<u64>(view, 7U) == 0x08090A0B0C0D0E0FULL);
+    CHECK(wire_load<u16>(view, 13U) == 0x0E0FU); // the last field the span holds
+
+    wire_store<u32>(Span<u8>(bytes), 11U, 0xFFFFFFFFU); // a patch touches only its own bytes
+    CHECK((bytes[10] == 11U && bytes[11] == 0xFFU && bytes[14] == 0xFFU));
+    CHECK(wire_load<u32>(view, 11U) == 0xFFFFFFFFU);
 }
 
 TEST_CASE("Wire bytes: a short read is refused and a byte range views the input", "[containers][wire-bytes]")
