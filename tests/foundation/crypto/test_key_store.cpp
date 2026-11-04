@@ -1142,6 +1142,25 @@ TEST_CASE("Key store: the operating system's protector", "[crypto][key-store]")
     check_signs(reopened, "identity");
     TestProtector stranger(true, "test");
     CHECK(reopened.open(dir.dir(), stranger) == CryptoError::Unsupported);
+#elif CRD_OS_MAC
+    // The Keychain is the user's own, so the default run asks it nothing: every refusal here comes before it is asked.
+    // The vault itself is proven in a scratch keychain ([platform-vault], the crd-crypto-keychain CTests).
+    CHECK(platform.name() == StringView("keychain"));
+    CHECK(platform.forgets());
+    Bytes reference;
+    CHECK(platform.protect(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(master), reference) == CryptoError::BadLength);
+    CHECK(platform.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master, 31U), reference) == CryptoError::BadLength);
+    CHECK(reference.empty());
+    u8 named[1U + kKeyStoreIdBytes] = {3U}; // a format neither keychain is
+    CHECK(platform.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(named), Span<u8>(master)) == CryptoError::Denied);
+    CHECK(master[0] == 0U);
+    named[0] = 1U;
+    CHECK(platform.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(named, 16U), Span<u8>(master)) ==
+          CryptoError::Denied);
+    CHECK(platform.recover(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(named), Span<u8>(master)) ==
+          CryptoError::BadLength);
+    CHECK(platform.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(named, 16U)) == CryptoError::Denied);
+    CHECK(platform.forget(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(named)) == CryptoError::Denied);
 #else
     // A well-formed reference (its format byte, then a handle; on Android also the Keystore's nonce and the wrapped
     // key), so only the vault can answer.
@@ -1156,7 +1175,7 @@ TEST_CASE("Key store: the operating system's protector", "[crypto][key-store]")
     CHECK(platform.forgets());
 #elif CRD_OS_LINUX
     // Without a session bus the Secret Service cannot be reached: every call is Unavailable. The vault itself is
-    // proven under a pinned gnome-keyring ([secret-service], the crd-crypto-secret-service CTests).
+    // proven under a pinned gnome-keyring ([platform-vault], the crd-crypto-secret-service CTests).
     CHECK(platform.name() == StringView("secret-service"));
     CHECK(platform.forgets());
     String bus;
@@ -1406,31 +1425,37 @@ TEST_CASE("Key store: the TPM protector keeps and forgets a master key", "[crypt
     CHECK(old_copy.open(dir.dir(), tpm) == CryptoError::Denied);
 }
 
-// ---- The Secret Service under a pinned gnome-keyring (tests/foundation/crypto/secret_service_session.py) ----
+// ---- The platform vault in a session of its own ----
 //
-// Hidden from the default run: the crd-crypto-secret-service CTests run them inside a session bus of their own with a
-// gnome-keyring daemon whose login collection the session made, unlocked ([secret-service]) or seeded and then locked
-// ([secret-service-locked]).
+// Hidden from the default run. On Linux the crd-crypto-secret-service CTests run them inside a session bus of their own
+// with a pinned gnome-keyring daemon whose login collection the session made (secret_service_session.py); on macOS the
+// crd-crypto-keychain CTests in a scratch keychain that is the default and only one (keychain_session.py). The vault
+// is unlocked ([platform-vault]) or seeded and then locked ([platform-vault-locked]).
 
-#if CRD_OS_LINUX && !CRD_OS_ANDROID
+#if (CRD_OS_LINUX && !CRD_OS_ANDROID) || CRD_OS_MAC
+#define CRD_TEST_PLATFORM_VAULT 1
+constexpr const char* kVaultName = CRD_OS_MAC ? "keychain" : "secret-service";
+
 // The session's scratch directory, which the locked session shares between its two runs.
 [[nodiscard]] fs::Path session_scratch()
 {
     String scratch;
-    REQUIRE(crd::read_environment_text("CRD_SECRET_SERVICE_SCRATCH", scratch));
+    REQUIRE(crd::read_environment_text("CRD_PLATFORM_VAULT_SCRATCH", scratch));
     return fs::Path(StringView(scratch.data(), scratch.size()));
 }
 
 constexpr u8 kSeededStore[kKeyStoreIdBytes]      = {0xC0, 0xFF, 0xEE};
 constexpr u8 kSeededMaster[kKeyStoreMasterBytes] = {0x5E, 0xED};
+#else
+#define CRD_TEST_PLATFORM_VAULT 0
 #endif
 
-TEST_CASE("Key store: the Secret Service keeps, recovers and forgets a master key", "[.secret-service]")
+TEST_CASE("Key store: the platform vault keeps, recovers and forgets a master key", "[.platform-vault]")
 {
-#if CRD_OS_LINUX && !CRD_OS_ANDROID
+#if CRD_TEST_PLATFORM_VAULT
     REQUIRE(PlatformKeyProtector::available());
     PlatformKeyProtector vault;
-    CHECK(vault.name() == StringView("secret-service"));
+    CHECK(vault.name() == StringView(kVaultName));
     CHECK(vault.forgets());
     const u8 store_id[kKeyStoreIdBytes]   = {1, 2, 3};
     const u8 other_id[kKeyStoreIdBytes]   = {9, 9, 9};
@@ -1482,8 +1507,8 @@ TEST_CASE("Key store: the Secret Service keeps, recovers and forgets a master ke
     CHECK(vault.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(reference.data(), reference.size())) ==
           CryptoError::None);
 
-    // Every call is its own transport session: 256 of them, so a shared value with a leading zero byte (once in 256)
-    // is all but certainly among them and the two sides' left padding agrees.
+    // On Linux every call is its own transport session: 256 of them, so a shared value with a leading zero byte (once
+    // in 256) is all but certainly among them and the two sides' left padding agrees.
     for (usize round = 0U; round < 256U; ++round)
     {
         REQUIRE(random_bytes(Span<u8>(master)) == CryptoError::None);
@@ -1495,7 +1520,7 @@ TEST_CASE("Key store: the Secret Service keeps, recovers and forgets a master ke
         REQUIRE(vault.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(kept.data(), kept.size())) == CryptoError::None);
     }
 
-    // Four threads at once, each call on its own connection.
+    // Four threads at once (on Linux each call on its own connection).
     std::atomic<u32> failures{0U};
     std::thread      threads[4];
     for (u32 t = 0U; t < 4U; ++t)
@@ -1529,9 +1554,9 @@ TEST_CASE("Key store: the Secret Service keeps, recovers and forgets a master ke
     }
     CHECK(failures.load() == 0U);
 
-    // A store under the Secret Service: created, reopened and used; a revocation replaces its master key and the
+    // A store under the vault: created, reopened and used; a revocation replaces its master key and the
     // vault forgets the old one, so an earlier copy of the store file no longer opens (decision K5).
-    TempStore dir("secret-service");
+    TempStore dir("platform-vault");
     KeyStore  store;
     REQUIRE(store.create(dir.dir(), vault) == CryptoError::None);
     CHECK(store.protection() == KeyProtection::Platform);
@@ -1554,25 +1579,25 @@ TEST_CASE("Key store: the Secret Service keeps, recovers and forgets a master ke
     TestProtector stranger(true, "test");
     CHECK(current.open(dir.dir(), stranger) == CryptoError::Unsupported);
 #else
-    SUCCEED("the Secret Service is Linux's protector");
+    SUCCEED("no platform vault session here");
 #endif
 }
 
-TEST_CASE("Key store: a master key seeded for the locked Secret Service", "[.secret-service-seed]")
+TEST_CASE("Key store: a master key seeded for the locked platform vault", "[.platform-vault-seed]")
 {
-#if CRD_OS_LINUX && !CRD_OS_ANDROID
+#if CRD_TEST_PLATFORM_VAULT
     PlatformKeyProtector vault;
     Bytes                reference;
     REQUIRE(vault.protect(ConstSpan<u8>(kSeededStore), ConstSpan<u8>(kSeededMaster), reference) == CryptoError::None);
     write_file(session_scratch() / "reference", reference);
 #else
-    SUCCEED("the Secret Service is Linux's protector");
+    SUCCEED("no platform vault session here");
 #endif
 }
 
-TEST_CASE("Key store: a locked Secret Service is Denied, and prompts only where allowed", "[.secret-service-locked]")
+TEST_CASE("Key store: a locked platform vault is Denied, and prompts only where allowed", "[.platform-vault-locked]")
 {
-#if CRD_OS_LINUX && !CRD_OS_ANDROID
+#if CRD_TEST_PLATFORM_VAULT
     REQUIRE(PlatformKeyProtector::available());
     const Bytes reference = read_file(session_scratch() / "reference");
     const ConstSpan<u8> held(reference.data(), reference.size());
@@ -1588,15 +1613,38 @@ TEST_CASE("Key store: a locked Secret Service is Denied, and prompts only where 
     CHECK(never.protect(ConstSpan<u8>(kSeededStore), ConstSpan<u8>(kSeededMaster), written) == CryptoError::Denied);
     CHECK(written.empty());
 
+#if CRD_OS_LINUX
     // Prompting allowed: the service's prompt runs, and with no prompter to answer it, it is dismissed (or the bound
-    // passes) and the call is Denied within its bound.
+    // passes) and the call is Denied within its bound. The Keychain bounds no prompt (decision K16): not asked there.
     PlatformKeyProtector prompting(10000U);
     const auto           started = std::chrono::steady_clock::now();
     CHECK(prompting.recover(ConstSpan<u8>(kSeededStore), held, Span<u8>(recovered)) == CryptoError::Denied);
     CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(20));
     CHECK(recovered[0] == 0U);
+#endif
 #else
-    SUCCEED("the Secret Service is Linux's protector");
+    SUCCEED("no platform vault session here");
+#endif
+}
+
+TEST_CASE("Key store: a Keychain whose file is gone is Unavailable", "[.platform-vault-absent]")
+{
+#if CRD_OS_MAC
+    // The session's default and only keychain names a file that no longer exists: no keychain answers.
+    CHECK_FALSE(PlatformKeyProtector::available());
+    PlatformKeyProtector vault;
+    const u8             store_id[kKeyStoreIdBytes]   = {4, 4, 4};
+    const u8             master[kKeyStoreMasterBytes] = {0x33};
+    Bytes                written;
+    written.push_back(1U);
+    CHECK(vault.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), written) == CryptoError::Unavailable);
+    CHECK(written.empty());
+    TempStore dir("keychain-absent");
+    KeyStore  store;
+    CHECK(store.create(dir.dir(), vault) == CryptoError::Unavailable);
+    CHECK_FALSE(store.ready());
+#else
+    SUCCEED("the Keychain is macOS's protector");
 #endif
 }
 
@@ -2556,7 +2604,9 @@ TEST_CASE("Key store: the operating system's key device's contract", "[crypto][k
     u8 named[17] = {1U, 1U};
     Bytes reference;
     reference.push_back(1U);
+#if !CRD_OS_MAC
     CHECK_FALSE(PlatformKeyDevice::available()); // no Java VM in a plain executable, and no such device elsewhere
+#endif
 #if CRD_OS_ANDROID
     // Every algorithm but ECDSA is refused before the Keystore is asked, as are wrong lengths and references this
     // device did not write; then, without a VM, every call answers Unavailable.
@@ -2584,6 +2634,41 @@ TEST_CASE("Key store: the operating system's key device's contract", "[crypto][k
                              ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Unsupported);
     CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp384r1Sha384,
                              ConstSpan<u8>(digest), Span<u8>(signature)) == CryptoError::Unavailable);
+    CHECK(device.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(named, 16U)) == CryptoError::Denied);
+    CHECK(device.forget(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(named)) == CryptoError::Denied);
+    CHECK(device.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(named)) == CryptoError::Unavailable);
+#elif CRD_OS_MAC
+    // Every curve but P-256 is refused before the enclave is asked (it holds no other), as are wrong lengths and
+    // references this device did not write (its own are of the data-protection keychain, format 2). An unsigned test
+    // program may keep no enclave key (the keychain entitlement is a signed application's), and a virtual machine
+    // has no enclave: either way a P-256 key is Unavailable.
+    CHECK(device.name() == StringView("secure-enclave"));
+    CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp384r1Sha384, reference, Span<u8>(point)) ==
+          CryptoError::Unsupported);
+    CHECK(reference.empty());
+    CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::Ed25519, reference, Span<u8>(point, 32U)) ==
+          CryptoError::Unsupported);
+    CHECK(device.create(ConstSpan<u8>(store_id, 15U), AlgorithmId::EcdsaSecp256r1Sha256, reference,
+                        Span<u8>(point, 65U)) == CryptoError::BadLength);
+    CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point)) ==
+          CryptoError::BadLength);
+    point[0] = 0x42U;
+    CHECK(device.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point, 65U)) ==
+          CryptoError::Unavailable);
+    CHECK(reference.empty());
+    CHECK(point[0] == 0U);
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp384r1Sha384,
+                             ConstSpan<u8>(digest), Span<u8>(signature)) == CryptoError::Unsupported);
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp256r1Sha256,
+                             ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Denied);
+    named[0] = 2U;
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named, 16U), AlgorithmId::EcdsaSecp256r1Sha256,
+                             ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Denied);
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp256r1Sha256,
+                             ConstSpan<u8>(digest), Span<u8>(signature, 64U)) == CryptoError::BadLength);
+    // A well-formed reference names no key the Keychain finds for this process: Denied.
+    CHECK(device.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(named), AlgorithmId::EcdsaSecp256r1Sha256,
+                             ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Denied);
     CHECK(device.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(named, 16U)) == CryptoError::Denied);
     CHECK(device.forget(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(named)) == CryptoError::Denied);
     CHECK(device.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(named)) == CryptoError::Unavailable);
@@ -2717,6 +2802,66 @@ TEST_CASE("Key store: the Android Keystore guards a master key and holds a store
     const Handshake done = handshake(credential, nullptr);
     CHECK(done.client == TlsState::Established);
     CHECK(done.server == TlsState::Established);
+}
+
+TEST_CASE("Key store: the Secure Enclave holds a store's P-256 keys", "[crypto][key-store][secure-enclave]")
+{
+#if CRD_OS_MAC
+    if (!PlatformKeyDevice::available())
+    {
+        SKIP("no Secure Enclave (a Mac with Apple silicon or a T2 chip; a virtual machine has none)");
+    }
+    PlatformKeyDevice enclave;
+    u8 store_id[kKeyStoreIdBytes];
+    u8 other[kKeyStoreIdBytes];
+    REQUIRE(random_bytes(Span<u8>(store_id)) == CryptoError::None);
+    REQUIRE(random_bytes(Span<u8>(other)) == CryptoError::None);
+    Bytes named;
+    u8 point[65];
+    const CryptoError made =
+        enclave.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, named, Span<u8>(point));
+    if (made == CryptoError::Unavailable)
+    {
+        SKIP("the enclave keeps a key only for a signed application with a keychain entitlement");
+    }
+    REQUIRE(made == CryptoError::None);
+    const ForgetOnExit forget_on_exit(enclave, ConstSpan<u8>(store_id), named);
+    const ConstSpan<u8> handle(named.data(), named.size());
+    CHECK(named.size() == 17U);
+    CHECK(named[0] == 2U);
+    CHECK(point[0] == 0x04U);
+    u8 digest[32];
+    u8 raw[64];
+    REQUIRE(random_bytes(Span<u8>(digest)) == CryptoError::None);
+    REQUIRE(enclave.sign_digest(ConstSpan<u8>(store_id), handle, AlgorithmId::EcdsaSecp256r1Sha256,
+                                ConstSpan<u8>(digest), Span<u8>(raw)) == CryptoError::None);
+    CHECK(raw_ecdsa_valid(AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(point), ConstSpan<u8>(digest),
+                          ConstSpan<u8>(raw)));
+    CHECK(enclave.sign_digest(ConstSpan<u8>(other), handle, AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest),
+                              Span<u8>(raw)) == CryptoError::Denied);
+    CHECK(enclave.forget(ConstSpan<u8>(other), handle) == CryptoError::None); // names nothing
+    REQUIRE(enclave.forget(ConstSpan<u8>(store_id), handle) == CryptoError::None);
+    CHECK(enclave.sign_digest(ConstSpan<u8>(store_id), handle, AlgorithmId::EcdsaSecp256r1Sha256,
+                              ConstSpan<u8>(digest), Span<u8>(raw)) == CryptoError::Denied);
+
+    // A store's P-256 keys in the enclave; a P-384 key it cannot hold goes to the file only where that is allowed.
+    TempStore dir("secure-enclave");
+    TestProtector protector;
+    KeyStore store;
+    REQUIRE(store.create(dir.dir(), protector, &enclave) == CryptoError::None);
+    const EraseOnExit erase_on_exit(store);
+    REQUIRE(store.generate("server", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwareRequired, 1U) ==
+            CryptoError::None);
+    CHECK(info_of(store, "server").placement == KeyPlacement::Hardware);
+    check_device_signs(store, "server");
+    CHECK(store.generate("wide", AlgorithmId::EcdsaSecp384r1Sha384, PlacementRequest::HardwareRequired, 1U) ==
+          CryptoError::Unsupported);
+    REQUIRE(store.generate("wide", AlgorithmId::EcdsaSecp384r1Sha384, PlacementRequest::HardwarePreferred, 1U) ==
+            CryptoError::None);
+    CHECK(info_of(store, "wide").placement == KeyPlacement::Software);
+#else
+    SUCCEED("the Secure Enclave is macOS's key device");
+#endif
 }
 
 // ---- The PKCS #11 device's PIV profile (decision K14) on the PIV test card (piv_module.cpp) ----

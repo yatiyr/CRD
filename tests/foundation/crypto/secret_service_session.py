@@ -7,11 +7,11 @@ survives the run. Inside it the pinned daemon (scripts/install-gnome-keyring.py,
 LD_LIBRARY_PATH) creates the login collection from a test password and becomes the Secret Service. No display is
 set, so no prompter can answer a prompt: a prompt the service shows is dismissed.
 
-  unlocked  the login collection stays unlocked: crd-crypto-tests "[secret-service]"
-  locked    "[secret-service-seed]" stores a master key, the collection is locked over the bus, then
-            "[secret-service-locked]" is refused without a prompt and with a dismissed one
+  unlocked  the login collection stays unlocked: crd-crypto-tests "[platform-vault]"
+  locked    "[platform-vault-seed]" stores a master key, the collection is locked over the bus, then
+            "[platform-vault-locked]" is refused without a prompt and with a dismissed one
 
-The tests find the scratch directory in CRD_SECRET_SERVICE_SCRATCH. Every daemon the session started is stopped
+The tests find the scratch directory in CRD_PLATFORM_VAULT_SCRATCH. Every daemon the session started is stopped
 before it returns; the result is the tests' own exit code.
 Contract: docs/design/network-foundation.md#key-store (decision K10).
 """
@@ -49,20 +49,20 @@ def inner(daemon, mode, tests):
         print('secret-service-session: the login collection did not start unlocked', file=sys.stderr)
         return 1
     if mode == 'unlocked':
-        return subprocess.run(tests + ['[secret-service]'], timeout=SECONDS).returncode
-    seeded = subprocess.run(tests + ['[secret-service-seed]'], timeout=SECONDS).returncode
+        return subprocess.run(tests + ['[platform-vault]'], timeout=SECONDS).returncode
+    seeded = subprocess.run(tests + ['[platform-vault-seed]'], timeout=SECONDS).returncode
     if seeded != 0:
         return seeded
     bus('/org/freedesktop/secrets', 'org.freedesktop.Secret.Service.Lock', 'array:objpath:' + LOGIN)
     if not locked():
         print('secret-service-session: the login collection did not lock', file=sys.stderr)
         return 1
-    return subprocess.run(tests + ['[secret-service-locked]'], timeout=SECONDS).returncode
+    return subprocess.run(tests + ['[platform-vault-locked]'], timeout=SECONDS).returncode
 
 
 def stop_daemons(daemon, scratch):
     """Stops every process of the pinned daemon whose environment names this session's scratch directory."""
-    marker = ('CRD_SECRET_SERVICE_SCRATCH=' + str(scratch)).encode()
+    marker = ('CRD_PLATFORM_VAULT_SCRATCH=' + str(scratch)).encode()
     for entry in Path('/proc').iterdir():
         if not entry.name.isdigit():
             continue
@@ -100,7 +100,7 @@ def main(argv=None):
             env[name] = str(path)
         libraries = Path(daemon).parents[1] / 'lib' / 'x86_64-linux-gnu'
         env['LD_LIBRARY_PATH'] = os.pathsep.join(filter(None, (str(libraries), env.get('LD_LIBRARY_PATH'))))
-        env['CRD_SECRET_SERVICE_SCRATCH'] = str(scratch)
+        env['CRD_PLATFORM_VAULT_SCRATCH'] = str(scratch)
         command = ['dbus-run-session', '--', sys.executable, str(Path(__file__).resolve()), '--daemon', daemon,
                    '--mode', args.mode, '--inner', '--'] + tests
         try:

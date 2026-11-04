@@ -382,7 +382,7 @@ holds ECDSA. The decisions (numbered for the tests):
   user scope, `CRYPTPROTECT_UI_FORBIDDEN`, its entropy the label "cerid key store master 1" and the store's
   identifier, so a reference recovers only in its own store and only for its user; DPAPI cannot forget. On Linux it is
   the Secret Service (K10), which can, and on Android the Android Keystore (K15), which can too. `TpmKeyProtector` is
-  `Hardware` protection (K11 on Windows, K13 on Linux); the Keychain (macOS) is the next platform protector. On a
+  `Hardware` protection (K11 on Windows, K13 on Linux); on macOS the Keychain is the platform protector (K16). On a
   platform without one a protector answers `Unavailable`, and the store is never written unprotected.
 - **K3. One sealed file.** A store is a directory created owner-only (`create_private_directory`: mode 0700, or a
   protected DACL with one inheritable entry for the user) holding the file `keys`, a durable save of crd-platform
@@ -596,6 +596,32 @@ holds ECDSA. The decisions (numbered for the tests):
   Gradle: the pinned JDK, build-tools and API 31 platform, scripts/android-apk.py) loads the key store case as a JNI
   library in the app's own VM, uid and `untrusted_app` SELinux domain; `app_process` from a shell would run as shell
   or root, which proves keystore2's permissions for the wrong caller (the crd-crypto-keystore-app CTest).
+- **K16. The Keychain and the Secure Enclave (macOS).** `PlatformKeyProtector` is "keychain" on macOS (2026-11-03, the
+  user's order that NET.2 proves it on GitHub's macOS runners): Security.framework's item interface (C over
+  CoreFoundation, no Objective-C). Each master key is a generic password item of the service "org.cerid.KeyStore.Master"
+  whose account is "cerid.master.", the store's identifier and a random 16-byte handle in hexadecimal, accessible only
+  while the Mac is unlocked and never in a backup or on another device (`WhenUnlockedThisDeviceOnly`). It goes into the
+  data-protection keychain when the process holds that keychain's entitlement (a signed application) and into the user's
+  default file keychain otherwise (an unsigned tool or test, told apart by `errSecMissingEntitlement`); the reference is
+  the format byte that names which (1 the file keychain, 2 the data-protection one) and the handle, so `recover` and
+  `forget` ask the keychain that holds it, and a reference of another store or handle finds nothing (`Denied`). `forget`
+  deletes the item (`forgets()` is true). By default no prompt is shown: a locked file keychain asks for its password
+  whatever `kSecUseAuthenticationUI` says (the macOS lane hung on it, 2026-11-04), so a file-keychain lookup searches
+  only the unlocked keychains of the user domain's search list and an item is added only while the default keychain is
+  unlocked (a locked one is `Denied`; `forget` that finds nothing while a locked keychain was left out is `Denied` too,
+  never None, or K5 would drop a reference whose key survives), and queries carry `kSecUseAuthenticationUIFail` (another
+  application's item is `Denied`). `PlatformKeyProtector(prompt_milliseconds)` lets the Keychain show its unlock or
+  access prompt; the Keychain offers no bound, so the call waits for the user's answer. No keychain (a daemon without a
+  user session, a default keychain whose file is gone) is `Unavailable`. `PlatformKeyDevice` is "secure-enclave": a
+  permanent P-256 key of the data-protection keychain made in the enclave (`kSecAttrTokenIDSecureEnclave`, usable for
+  signing only while the Mac is unlocked) under the application tag "cerid.p256.", the store's identifier and a handle
+  (the reference: format byte 2 and the handle); it signs digests (`ECDSASignatureDigestX962SHA256`, DER to r || s) and
+  forgetting deletes the key. The enclave holds P-256 alone, so P-384 is `Unsupported` (K12: a `HardwarePreferred` P-384
+  key goes to the file). `available()` makes an ephemeral enclave key. Proof: the macOS runner lane (`macos-x64-debug`)
+  runs the vault cases in a scratch keychain that is the user's default and only one for the run, unlocked, seeded then
+  locked, and with its file gone (keychain_session.py, the crd-crypto-keychain CTests). A virtual machine has no enclave
+  and an unsigned test keeps no enclave key, so the enclave's own keys need a real Mac with Apple silicon or a T2 chip
+  and a test signed with a keychain entitlement: the one physical item, named once.
 
 Evidence (2026-11-02, [session](../sessions/2026-11-02-net-2-key-store.md)): `test_key_store.cpp` (12 cases: every kind
 of key through its whole life, every refusal, every changed byte of a store, an older and a substituted store, writers

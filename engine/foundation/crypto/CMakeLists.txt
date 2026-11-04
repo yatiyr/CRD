@@ -45,6 +45,9 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # NET.2 decision K13: the TPM through tss2, whose headers alone are compiled against (its libraries are loaded at
     # run time); include directories only, so the relocatable package exports no tss2 target
     target_include_directories(crd-crypto SYSTEM PRIVATE "$<TARGET_PROPERTY:tpm2-tss,INTERFACE_INCLUDE_DIRECTORIES>")
+elseif(APPLE)
+    # NET.2 decision K16: the Keychain guards a master key and the Secure Enclave holds device keys
+    target_link_libraries(crd-crypto PRIVATE "-framework Security" "-framework CoreFoundation")
 endif()
 
 # NET.2 decision K14: the PKCS #11 key device compiles against OASIS's headers alone (the module is loaded at run time)

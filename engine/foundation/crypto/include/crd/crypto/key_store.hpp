@@ -96,14 +96,17 @@ protected:
 // dh-ietf1024-sha256-aes128-cbc-pkcs7 transport; it forgets by deleting the item), the Android Keystore on Android
 // ("android-keystore", decision K15: a non-exportable AES-256-GCM key of its own for each master key, which it wraps
 // with the store's identifier as associated data, reached through the application's Java VM; it forgets by deleting
-// the key). Elsewhere every call answers Unavailable. available() is whether the vault answers now: a Linux session
-// without a bus or a Secret Service, or an Android process without a Java VM, has none.
+// the key), the Keychain on macOS ("keychain", decision K16: a generic password item of the data-protection keychain
+// for a signed application, of the default file keychain otherwise; it forgets by deleting the item). Elsewhere every
+// call answers Unavailable. available() is whether the vault answers now: a Linux session without a bus or a Secret
+// Service, an Android process without a Java VM, or a macOS process without a keychain, has none.
 class PlatformKeyProtector final : public KeyProtector
 {
 public:
     // `prompt_milliseconds` 0 (the default) never lets the vault ask the user (a locked collection is then Denied);
     // otherwise the Secret Service may show its unlock or confirmation prompt and is waited for that long, a dismissed
-    // or unanswered prompt being Denied. DPAPI asks the user nothing either way.
+    // or unanswered prompt being Denied; the Keychain may show its prompt and is waited for until the user answers.
+    // DPAPI asks the user nothing either way.
     explicit PlatformKeyProtector(u32 prompt_milliseconds = 0U) noexcept : m_prompt_milliseconds(prompt_milliseconds) {}
 
     [[nodiscard]] static bool available() noexcept;
@@ -238,8 +241,11 @@ private:
 // "android-keystore": a sign-only ECDSA key the Android Keystore generates under an alias that names the store, the
 // curve and a random handle (the reference: a format byte and the handle), kept in the device's TEE or StrongBox
 // where it has one; it signs through the Java security API in the application's own Java VM and forgetting deletes
-// the alias. Elsewhere every call answers Unavailable. available() is whether the key store answers now: a process
-// without a Java VM (a plain executable) has none.
+// the alias. On macOS "secure-enclave" (decision K16): a permanent P-256 key the Secure Enclave makes under an
+// application tag that names the store and a random handle, which only a signed application with a keychain
+// entitlement may keep; the enclave holds no P-384 key (Unsupported). Elsewhere every call answers Unavailable.
+// available() is whether the key store answers now: a process without a Java VM (a plain executable) or a Mac
+// without an enclave (a virtual machine) has none.
 class PlatformKeyDevice final : public KeyDevice
 {
 public:

@@ -1,6 +1,7 @@
 // crd-crypto -- the operating system's key protector and key device (NET.2; contract:
 // docs/design/network-foundation.md#key-store, decisions K2 and K15): DPAPI on Windows, nothing where no protector or
-// device exists (the Secret Service's protector is secret_service.cpp, the Android Keystore's android_keystore.cpp).
+// device exists (the Secret Service's protector is secret_service.cpp, the Android Keystore's android_keystore.cpp,
+// the Keychain's and the Secure Enclave's keychain.cpp).
 
 #include <crd/core/platform.hpp>
 #include <crd/crypto/key_store.hpp>
@@ -141,7 +142,7 @@ CryptoError PlatformKeyProtector::forget(cont::ConstSpan<u8> /*store_id*/, cont:
 {
     return CryptoError::None; // nothing to destroy: forgets() is false
 }
-#elif !CRD_OS_LINUX
+#elif !CRD_OS_LINUX && !CRD_OS_MAC
 bool PlatformKeyProtector::available() noexcept
 {
     return false;
@@ -177,7 +178,7 @@ CryptoError PlatformKeyProtector::forget(cont::ConstSpan<u8> /*store_id*/, cont:
 }
 #endif
 
-#if !CRD_OS_ANDROID
+#if !CRD_OS_ANDROID && !CRD_OS_MAC
 bool PlatformKeyDevice::available() noexcept
 {
     return false;

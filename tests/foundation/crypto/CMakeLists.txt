@@ -319,6 +319,19 @@ if(CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING)
     message(STATUS "[secret-service-vs-gnome-keyring] the Secret Service protector against ${CRD_GNOME_KEYRING}")
 endif()
 
+# On macOS (decision K16): crd-crypto-tests' hidden platform vault cases in a scratch keychain that is the user's default
+# and only keychain for the run (keychain_session.py): unlocked, seeded and then locked, and with its file gone. Serial,
+# since the default keychain is the user's for every process.
+if(APPLE AND Python3_FOUND)
+    foreach(mode unlocked locked absent)
+        add_test(NAME crd-crypto-keychain-${mode}
+                 COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/keychain_session.py"
+                         --mode ${mode} -- "$<TARGET_FILE:crd-crypto-tests>")
+        set_tests_properties(crd-crypto-keychain-${mode} PROPERTIES TIMEOUT 600 RUN_SERIAL TRUE
+                             LABELS "crypto;keychain")
+    endforeach()
+endif()
+
 # Against the pinned swtpm (CRD_BUILD_TPM_VS_SWTPM): crd-crypto-tests' key store cases with the TPM protector and
 # device reaching a simulator of their own through tss2 (tpm_simulator_session.py), then a TPM whose owner hierarchy has
 # an authorization.
