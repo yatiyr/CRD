@@ -543,6 +543,16 @@
       "license": "Apache-2.0",
       "note": "Ninja 1.11.1, the version seanmiddleditch/gha-setup-ninja v5 installed by default before the workflow replaced that Node 20 action (2026-10-26); installed by scripts/install-ninja.py, which checks the archive, the binary and `ninja --version`. The release assets predate GitHub's recorded digests; the SHA-256 values were computed from the downloaded release files."
     },
+    "ninja-macos": {
+      "version": "1.11.1",
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.11.1/ninja-mac.zip",
+      "file": "ninja-mac.zip",
+      "sha256": "482ecb23c59ae3d4f158029112de172dd96bb0e97549c4b1ca32d8fad11f873e",
+      "member": "ninja",
+      "member_sha256": "bf491ae12a87a80cf73c39a37dbbb41f069930bf7da3e5bedc6d4ad027e48d5d",
+      "license": "Apache-2.0",
+      "note": "The same Ninja 1.11.1 release's macOS build (universal x86_64 and arm64) for the macOS lane (NET.2 decision K16, 2026-11-04); installed by scripts/install-ninja.py like the others. The release assets predate GitHub's recorded digests; the SHA-256 values were computed from the downloaded release file (277306 bytes)."
+    },
     "llvm": {
       "version": "20.1.8",
       "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz",
@@ -1030,7 +1040,8 @@
     "linux": "ubuntu-24.04",
     "windows-native": "windows-2025-vs2026",
     "linux-arm64": "ubuntu-24.04-arm",
-    "windows-arm64": "windows-11-arm"
+    "windows-arm64": "windows-11-arm",
+    "macos": "macos-15-intel"
   },
   "unpinned": {
     "apt": [

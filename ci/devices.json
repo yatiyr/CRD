@@ -535,8 +535,9 @@
       "planned_features": {"metal": "MAC.1", "app-launch": "MAC.2"},
       "features": ["shader-compile", "metal", "app-launch"],
       "device_commands": {"shader-compile": "python3 ci/pipeline.py probe macos"},
+      "ci_jobs": ["macos"],
       "accounts": ["rented-mac", "coordinator"],
-      "route": "The macOS probe (toolchain, Metal device and feature-set census) and xcrun metal compiles of the cooked Metal programs; the Metal provider waits for MAC.1."
+      "route": "The macOS probe (toolchain, Metal device and feature-set census) and xcrun metal compiles of the cooked Metal programs; the Metal provider waits for MAC.1. Replaces the macos job's macos-15-intel hosted runner: the x86-64 macos-x64-debug preset under Rosetta 2, and the Secure Enclave's own key cases where the test is signed with a keychain entitlement (NET.2 decision K16)."
     },
     {
       "id": "ios-simulator-iphone",

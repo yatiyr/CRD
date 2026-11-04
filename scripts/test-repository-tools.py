@@ -1472,7 +1472,7 @@ class PinnedInputs(unittest.TestCase):
         self.assertEqual(re.findall(r'runs-on:\s*\S*-latest', self.workflow), [])
         self.assertEqual(len(re.findall(r'uses:\s*actions/checkout@', self.workflow)),
                          self.workflow.count('persist-credentials: false'))
-        self.assertEqual(self.workflow.count("python-version: '3.12'"), 14)
+        self.assertEqual(self.workflow.count("python-version: '3.12'"), 15)
         for package in ('Catch2', 'glfw', 'zstd', 'aws-lc', 'nasm', 'wycheproof', 'mls-vectors', 'hpke-pq-vectors',
                         'stb', 'cgltf', 'MikkTSpace', 'imgui', 'eigen', 'OpenBLAS', 'boost', 'hptt', 'pocketfft',
                         'highway', 'tracy', 'nlopt'):
@@ -3365,13 +3365,15 @@ class BuildPerformance(unittest.TestCase):
                 with self.assertRaisesRegex(pins_registry.PinError, 'reports'):
                     install_ninja.install(root / 'version', archive=archive, pin=pin)
             self.assertEqual(list((root / 'version').iterdir()), [], 'a wrong version leaves nothing installed')
-        for name, member in (('ninja-windows', 'ninja.exe'), ('ninja-linux', 'ninja')):
+        for name, member in (('ninja-windows', 'ninja.exe'), ('ninja-linux', 'ninja'), ('ninja-macos', 'ninja')):
             pin = pins_registry.entry('tools', name)
             self.assertEqual(pin['member'], member)
             self.assertIn('/v%s/' % pin['version'], pin['url'])
             self.assertRegex(pin['member_sha256'], r'^[0-9a-f]{64}$')
-        self.assertEqual(pins_registry.entry('tools', 'ninja-windows')['version'],
-                         pins_registry.entry('tools', 'ninja-linux')['version'])
+            self.assertEqual(pin['version'], pins_registry.entry('tools', 'ninja-linux')['version'])
+        for host, name in (('Windows', 'ninja-windows'), ('Darwin', 'ninja-macos'), ('Linux', 'ninja-linux')):
+            with patch.object(install_ninja.platform, 'system', return_value=host):
+                self.assertEqual(install_ninja.tool(), name)
         self.assertIn('scripts/install-ninja.py', check_pins.HELPERS)
 
     def test_apt_installer_bounds_every_attempt_retries_and_names_each_outcome(self):
@@ -12137,8 +12139,10 @@ class ProviderPrefix(unittest.TestCase):
         return header + data + (b'\n' if len(data) % 2 else b'')
 
     def archive(self, *objects, long_names=False, bsd=False):
-        """A GNU (long names in `//`), BSD (#1/ names) or short-named ar archive of the objects, with an index."""
-        parts = [b'!<arch>\n', self.member('/', b'\0\0\0\0')]
+        """A GNU (long names in `//`), BSD (#1/ names, its index too, as macOS's ar writes it) or short-named ar
+        archive of the objects, with an index."""
+        index = b'__.SYMDEF SORTED'.ljust(24, b'\0')
+        parts = [b'!<arch>\n', self.member(f'#1/{len(index)}', index + bytes(8)) if bsd else self.member('/', bytes(4))]
         names = b''.join(f'member-object-{i}.o/\n'.encode() for i in range(len(objects)))
         if long_names:
             parts.append(self.member('//', names))

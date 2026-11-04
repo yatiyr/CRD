@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install the pinned Ninja (the build tool of every Ninja preset on the hosted lanes) from cmake/pins.json.
 
-The archive (tools/ninja-windows or tools/ninja-linux by host) is fetched through pins.fetch(), so it is verified
+The archive (tools/ninja-windows, tools/ninja-macos or tools/ninja-linux by host) is fetched through pins.fetch(), so it is verified
 before the final name exists; only the pinned member is extracted, its own SHA-256 is verified, and the binary must
 report the pinned version. Prints the directory to put on PATH; with --github-path it is also appended to that file
 (the workflow's $GITHUB_PATH). It replaced seanmiddleditch/gha-setup-ninja, which has no Node 24 release (2026-10-26).
@@ -16,12 +16,15 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pins  # noqa: E402
 
-TOOL = 'ninja-windows' if platform.system() == 'Windows' else 'ninja-linux'
+
+def tool():
+    """The host's pin: tools/ninja-windows, tools/ninja-macos or tools/ninja-linux."""
+    return {'Windows': 'ninja-windows', 'Darwin': 'ninja-macos'}.get(platform.system(), 'ninja-linux')
 
 
 def install(destination, archive=None, download_dir=None, pin=None, check=True):
     """Return the verified ninja path under `destination`."""
-    pin = pins.entry('tools', TOOL) if pin is None else pin
+    pin = pins.entry('tools', tool()) if pin is None else pin
     output = pins.install_member(pin, destination, archive, download_dir, label='ninja')
     if check:
         reported = subprocess.run([str(output), '--version'], capture_output=True, text=True, check=True).stdout.strip()

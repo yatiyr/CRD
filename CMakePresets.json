@@ -506,6 +506,27 @@
             }
         },
         {
+            "name": "macos-x64-debug",
+            "displayName": "macOS x64 Debug (Apple Clang; crd-crypto and its tests)",
+            "inherits": "base",
+            "generator": "Ninja",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            },
+            "cacheVariables": {
+                "CMAKE_OSX_ARCHITECTURES": "x86_64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "14.4",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CRD_ENABLE_ASSERTS": "ON",
+                "CRD_MODULES": "crypto",
+                "CRD_REPOSITORY_CHECKS": "OFF",
+                "CRD_BUILD_BENCHMARKS": "OFF",
+                "CRD_BUILD_SANDBOX": "OFF"
+            }
+        },
+        {
             "name": "win-arm64-base",
             "hidden": true,
             "inherits": [
@@ -725,6 +746,11 @@
         {
             "name": "android-x86_64-debug",
             "configurePreset": "android-x86_64-debug"
+        }
+,
+        {
+            "name": "macos-x64-debug",
+            "configurePreset": "macos-x64-debug"
         }
     ],
     "testPresets": [
@@ -1033,6 +1059,14 @@
         {
             "name": "android-x86_64-debug",
             "configurePreset": "android-x86_64-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        }
+,
+        {
+            "name": "macos-x64-debug",
+            "configurePreset": "macos-x64-debug",
             "output": {
                 "outputOnFailure": true
             }

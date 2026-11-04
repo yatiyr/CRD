@@ -1765,6 +1765,8 @@ class Lane:
                           'inventory', 'test', 'bundle', 'upload'],
         'android': ['checkout', 'python_version', 'ninja', 'android_ndk', 'cpm_cache', 'android_emulator', 'configure',
                     'build', 'kvm', 'emulator_boot', 'inventory', 'test', 'device_log', 'bundle', 'upload'],
+        'macos': ['checkout', 'python_version', 'ninja', 'cpm_cache', 'configure', 'build', 'inventory', 'test',
+                  'bundle', 'upload'],
     }
     ALWAYS = ('sccache_stats', 'device_log', 'bundle', 'upload')
     UNLESS_CANCELLED = ('genmc',)

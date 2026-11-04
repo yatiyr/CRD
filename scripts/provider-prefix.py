@@ -86,6 +86,8 @@ def archive_members(data, label):
             name = names[at:end].decode('utf-8', 'replace').rstrip('/')
         else:
             name = raw.rstrip('/')
+        if name in ARCHIVE_INDEXES:  # a BSD archive's index under a #1/ name, as macOS's ar writes it
+            continue
         members.append((name, body))
     return members
 

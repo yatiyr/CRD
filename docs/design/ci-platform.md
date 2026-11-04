@@ -564,6 +564,16 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `android` | Device log and shutdown | `lane-<preset> (android-x86_64-debug)` | Lane.device_log |
 | `android` | Evidence bundle and summary | `lane-<preset> (android-x86_64-debug)` | Lane.bundle |
 | `android` | Preserve evidence | `lane-<preset> (android-x86_64-debug)` | Lane.upload |
+| `macos` | Checkout | `lane-<preset> (macos-x64-debug)` | Lane.checkout |
+| `macos` | Setup Python 3.12 | `lane-<preset> (macos-x64-debug)` | Lane.python_version |
+| `macos` | Install pinned Ninja 1.11.1 | `lane-<preset> (macos-x64-debug)` | Lane.ninja |
+| `macos` | Cache CPM downloads | `lane-<preset> (macos-x64-debug)` | Lane.cpm_cache |
+| `macos` | Configure | `lane-<preset> (macos-x64-debug)` | Lane.configure |
+| `macos` | Build | `lane-<preset> (macos-x64-debug)` | Lane.build |
+| `macos` | Test inventory | `lane-<preset> (macos-x64-debug)` | Lane.inventory |
+| `macos` | Test | `lane-<preset> (macos-x64-debug)` | Lane.test |
+| `macos` | Evidence bundle and summary | `lane-<preset> (macos-x64-debug)` | Lane.bundle |
+| `macos` | Preserve evidence | `lane-<preset> (macos-x64-debug)` | Lane.upload |
 | `required` | uses actions/checkout | `required` | agent checkout of the build commit |
 | `required` | uses actions/setup-python | `required` | the launcher image's Python 3.12 |
 | `required` | Every expected job ran and passed | `required` | pipeline.py conclude (ci-tier.py conclude rule) |

@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **28** · tools: **43** · workflow actions: **6** · runner images: **5** · unpinned apt packages: **24**
+- packages: **28** · tools: **44** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -67,6 +67,7 @@
 | tracy-csvexport-windows | 0.14.1 | BSD-3-Clause | github.com | `windows-0.14.1.zip` |
 | ninja-windows | 1.11.1 | Apache-2.0 | github.com | `ninja-win.zip` |
 | ninja-linux | 1.11.1 | Apache-2.0 | github.com | `ninja-linux.zip` |
+| ninja-macos | 1.11.1 | Apache-2.0 | github.com | `ninja-mac.zip` |
 | llvm | 20.1.8 | Apache-2.0 WITH LLVM-exception | github.com | `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` |
 | genmc | 0.19.0 | Apache-2.0 OR MIT | MPI-SWS/genmc (9f6c4c0772d0) | `genmc-9f6c4c07.tar.gz` |
 | node-linux-x64 | 24.22.0 | MIT | nodejs.org | `node-v24.22.0-linux-x64.tar.xz` |
@@ -112,6 +113,7 @@
 | windows-native | `windows-2025-vs2026` |
 | linux-arm64 | `ubuntu-24.04-arm` |
 | windows-arm64 | `windows-11-arm` |
+| macos | `macos-15-intel` |
 
 ## Unpinned inputs
 
