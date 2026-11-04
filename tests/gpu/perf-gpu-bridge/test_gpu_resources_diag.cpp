@@ -7,7 +7,6 @@
 // values the fakes were built with. Responses are parsed with the JSON reader. A real Vulkan device case lives in the
 // Vulkan context suite (test_vulkan_gpu_resources_diag.cpp).
 
-#include <crd/assetio/json.hpp>
 #include <crd/core/budget_pressure.hpp>
 #include <crd/gpu/context.hpp>
 #include <crd/gpu/device_pressure.hpp>
@@ -16,6 +15,7 @@
 #include <crd/gpu/object_identity.hpp>
 #include <crd/gpu/queue_pressure.hpp>
 #include <crd/gpu/validation.hpp>
+#include <crd/json/json.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/gpu/gpu_resources_diag.hpp>
@@ -27,7 +27,7 @@
 namespace
 {
 namespace g    = crd::gpu;
-namespace json = crd::assetio::json;
+namespace json = crd::json;
 
 using crd::containers::StringView;
 using crd::perf::DiagAuthority;

@@ -96,6 +96,12 @@ OWN.1 records these owners (2026-10-31):
    package, so crd-perf's bundle files reach their owner (registered as `platform.windowing`; include paths and the
    `crd::platform` namespace unchanged, [ADR-0006's amendment](../decisions/0006-platform-v1.md)). The alternative,
    packaging GLFW behind crd-platform, would have shipped a window library to every diagnostic consumer.
+10. **The asynchronous reads and JSON** (2026-11-04) are their own modules. `AsyncFile` moved from crd-platform into
+    crd-platform-async (`io.async-reads`, [ADR-0041's amendment](../decisions/0041-platform-async-filesystem-io.md)),
+    so the OS boundary links no job system; the JSON reader and writer moved from crd-asset-io into crd-json
+    (`text.json`; namespace `crd::json`), below every reader, so ceridc, the diagnostic tests and the crypto vectors
+    link no geometry importer. Together they let crd-crypto's closure and tests build on the ARM64 lanes, where
+    crd-jobs has no fiber context yet (NET.2).
 
 ## Duplicate rows
 

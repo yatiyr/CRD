@@ -30,7 +30,7 @@ target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE
     crd-gpu-context-vulkan
     crd-perf                 # DIAG.6b(k): the profiler substrate for the real end-to-end bridge test
     crd-perf-gpu-bridge      # DIAG.6b(k): FrameGraphGpuBackend over a real VulkanFrameGraph (pulls crd-time transitively)
-    crd-asset-io             # the JSON reader that parses the gpu.resources diagnostic responses
+    crd-json                 # the JSON reader that parses the gpu.resources diagnostic responses
     crd-shader-cook          # D-007 D2: the offline cook (CKIR graph -> .crdr bundle) under test
     crd-jobs                 # D-007 D10: the fiber scheduler for the parallel-cook test (jobs::init/shutdown)
     crd-cooker               # GEO-1: the wave1 (.stl/.obj/.ply) asset cook handler (the import→cook→draw gate)

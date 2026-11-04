@@ -2,8 +2,8 @@
 // object model: Timeline → Stack("tracks") → Track → children (Clip/Gap/Transition), every time value through
 // the exact `time_from_f64` edge. Refusals NAME the schema; degradations COUNT in the diag — never silent.
 
-#include <crd/assetio/json.hpp>
 #include <crd/assetio/otio.hpp>
+#include <crd/json/json.hpp>
 
 #include <cstdio>
 #include <cstring>

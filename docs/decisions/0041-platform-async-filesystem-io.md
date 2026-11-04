@@ -164,6 +164,15 @@ tools, the cooker, and any caller that doesn't need the fiber-cooperative path. 
 - POSIX `aio` is the worst-case backend — it's slower and less reliable than `io_uring`. The
   fallback exists for old kernels (RHEL 8 era); production targets should use `io_uring`.
 
+## Amendment 2026-11-04: the asynchronous reads are their own module
+
+`AsyncFile` moved into `crd-platform-async` (`engine/foundation/platform-async`, capability `io.async-reads`), which
+links `crd-jobs`; `crd-platform` links no job system, so its closure and `crd-crypto`'s above it build on the ARM64
+lanes, where `crd-jobs` has no fiber context before JOBS-PORT.2. The raw positioned read both share is
+`crd/platform/detail/range_read.hpp`. Include path, the `crd::platform` namespace and the decisions above are unchanged;
+the module stays outside the relocatable package, whose diagnostic family reads no file asynchronously
+([session](../sessions/2026-11-04-net-2-arm64-closure.md); NET.2).
+
 ## References
 
 - `docs/phases/phase-2.6-resources.md` (v1d slice)

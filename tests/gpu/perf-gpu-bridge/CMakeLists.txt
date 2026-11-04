@@ -12,7 +12,7 @@ target_link_libraries(crd-perf-gpu-bridge-tests PRIVATE
     crd-gpu-context
     crd-perf
     crd-perf-gpu-bridge
-    crd-asset-io      # the JSON reader that parses the diagnostic responses
+    crd-json          # the JSON reader that parses the diagnostic responses
     Catch2::Catch2WithMain
 )
 

@@ -16,8 +16,8 @@ Start with [rendering foundation](rendering-foundation.md), [CEIR](ceir.md), [CH
 
 ## Current module inventory
 
-All <!-- fact:module-count -->110<!-- /fact --> registered modules are represented: the
-<!-- fact:engine-module-count -->103<!-- /fact --> engine modules below and the
+All <!-- fact:module-count -->112<!-- /fact --> registered modules are represented: the
+<!-- fact:engine-module-count -->105<!-- /fact --> engine modules below and the
 <!-- fact:other-module-count -->7<!-- /fact --> application and tool modules in the next table. Existing overview
 links retain their dated evidence; where no dedicated overview exists, the public source and CMake manifest are the
 direct entry points. The documentation validator holds
@@ -90,6 +90,7 @@ this map and the `crd_module()` registry in the root CMakeLists to the same set 
 | `hesap-wavelet` | [hesap-wavelet](hesap-wavelet.md) | [CMake](../../engine/numerics/hesap-wavelet/CMakeLists.txt) |
 | `imgui` | [imgui](imgui.md) | [CMake](../../engine/ui/imgui/CMakeLists.txt) |
 | `jobs` | [jobs](jobs.md) | [CMake](../../engine/foundation/jobs/CMakeLists.txt) |
+| `json` | [Public source](../../engine/foundation/json/include/) | [CMake](../../engine/foundation/json/CMakeLists.txt) |
 | `kir` | [Public source](../../engine/gpu/kir/include/) | [CMake](../../engine/gpu/kir/CMakeLists.txt) |
 | `kir-cuda` | [Public source](../../engine/gpu/kir-cuda/include/) | [CMake](../../engine/gpu/kir-cuda/CMakeLists.txt) |
 | `kir-dx12` | [Public source](../../engine/gpu/kir-dx12/include/) | [CMake](../../engine/gpu/kir-dx12/CMakeLists.txt) |
@@ -109,6 +110,7 @@ this map and the `crd_module()` registry in the root CMakeLists to the same set 
 | `perf-gpu-bridge` | [Public source](../../engine/gpu/perf-gpu-bridge/include/) | [CMake](../../engine/gpu/perf-gpu-bridge/CMakeLists.txt) |
 | `perf-ui` | [Public source](../../engine/ui/perf-ui/include/) | [CMake](../../engine/ui/perf-ui/CMakeLists.txt) |
 | `platform` | [platform](platform.md) | [CMake](../../engine/foundation/platform/CMakeLists.txt) |
+| `platform-async` | [Public source](../../engine/foundation/platform-async/include/) | [CMake](../../engine/foundation/platform-async/CMakeLists.txt) |
 | `platform-window` | [Public source](../../engine/foundation/platform-window/include/) | [CMake](../../engine/foundation/platform-window/CMakeLists.txt) |
 | `preset` | [Public source](../../engine/assets/preset/include/) | [CMake](../../engine/assets/preset/CMakeLists.txt) |
 | `profile` | [Public source](../../engine/foundation/profile/include/) | [CMake](../../engine/foundation/profile/CMakeLists.txt) |

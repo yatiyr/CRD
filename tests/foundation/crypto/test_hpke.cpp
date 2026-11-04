@@ -25,7 +25,7 @@ using crd::containers::ConstSpan;
 using crd::containers::Span;
 using namespace crd::crypto;
 using namespace crd::crypto::test;
-namespace json = crd::assetio::json;
+namespace json = crd::json;
 
 // The profile's algorithm for an RFC 9180 identifier; AlgorithmId{} outside it.
 AlgorithmId kem_of(u64 id)

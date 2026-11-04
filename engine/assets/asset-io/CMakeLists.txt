@@ -1,5 +1,6 @@
 # crd-asset-io — GEO-1/2/3 (D-007 rows 66-68): the import substrate.
-# GEO-3 adds: json.hpp/.cpp (OUR JSON parser) + gltf.hpp/.cpp (OUR glTF 2.0 geometry/material parser, replacing cgltf).
+# GEO-3 adds: gltf.hpp/.cpp (OUR glTF 2.0 geometry/material parser, replacing cgltf) over OUR JSON parser (crd-json
+# since 2026-11-04).
 #
 # OUR OWN external-format parsers (STL now; OBJ/PLY/glTF/3MF follow the GEO band) filling the `ImportedAsset`
 # intermediate model — the seam between "file bytes" and the decompose → condition → cook pipeline. Parsers are
@@ -27,4 +28,5 @@ target_link_libraries(crd-asset-io
         crd-geometry-primitives
         crd-geometry-bvh
         crd-geometry-mesh
+        crd-json # glTF and OTIO read and write JSON; gltf.hpp's and otio.hpp's callers see only the asset model
 )

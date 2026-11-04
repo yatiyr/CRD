@@ -193,6 +193,7 @@ crd_tests(rendering/render-pass render-pass)        # RAF-6 (D-007 "RAF band"): 
 crd_tests(rendering/render-graph render-graph)       # RAF-7 (D-007 "RAF band"): unified frame-graph runtime Gate 7
 crd_tests(foundation/time time)
 crd_tests(foundation/toml toml)
+crd_tests(foundation/json json)  # text.json: the JSON reader and writer, split from crd-asset-io
 crd_tests(foundation/perf perf)
 crd_tests(ui/perf-ui perf-ui)
 crd_tests(foundation/log log)
@@ -257,6 +258,7 @@ crd_tests(numerics/hesap-tensor hesap-tensor)
 crd_tests(foundation/containers containers)
 crd_tests(foundation/platform platform)
 crd_tests(foundation/platform-window platform-window)  # OWN.1: the window backend split from crd-platform
+crd_tests(foundation/platform-async platform-async)  # ADR-0041: the asynchronous reads split from crd-platform
 crd_tests(foundation/app app)
 crd_tests(foundation/config config)
 crd_tests(foundation/compression compression)  # OWN.1: raw DEFLATE, zlib and the zstd binding

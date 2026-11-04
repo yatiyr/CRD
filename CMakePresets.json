@@ -398,9 +398,9 @@
         {
             "name": "arm64-base",
             "hidden": true,
-            "description": "ARM64 lanes: crd-jobs has no ARM64 fiber context before JOBS-PORT.2, so they configure every module whose closure and tests avoid it (cmake/CrdModules.cmake)",
+            "description": "ARM64 lanes: they configure every module whose closure and tests avoid crd-jobs (no ARM64 fiber context before JOBS-PORT.2), crd-gpu-context-vulkan and crd-platform-window (the lanes install no Vulkan SDK or Wayland development files yet) (cmake/CrdModules.cmake); crd-platform and crd-crypto build there",
             "cacheVariables": {
-                "CRD_MODULES_WITHOUT": "jobs"
+                "CRD_MODULES_WITHOUT": "jobs,gpu-context-vulkan,platform-window"
             }
         },
         {

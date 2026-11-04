@@ -12,9 +12,9 @@ registrations are literal lines in the root `CMakeLists.txt` and `tests/CMakeLis
 
 ## Registration
 
-Every directory the build adds is a node: <!-- fact:engine-module-count -->103<!-- /fact --> engine modules,
+Every directory the build adds is a node: <!-- fact:engine-module-count -->105<!-- /fact --> engine modules,
 <!-- fact:host-tool-count -->5<!-- /fact --> host tools, `runtime`, `sandbox` and
-<!-- fact:test-directory-count -->114<!-- /fact --> test directories. Each node is one literal call, one per line,
+<!-- fact:test-directory-count -->116<!-- /fact --> test directories. Each node is one literal call, one per line,
 which the structure synchronizer and the hygiene guard parse:
 
 ```cmake
@@ -53,7 +53,7 @@ on `if(TARGET ...)`. The configure log prints the closure, tests, packages and o
 
 `CRD_MODULES_WITHOUT` (cache string, module names) keeps only the named modules whose `DEPENDS` closure, with their
 `TEST_DEPENDS` while tests build, holds none of the listed ones, and turns the configure into a selection. A target
-that cannot build a module yet uses it: the ARM64 lanes set `jobs`
+that cannot build a module yet uses it: the ARM64 lanes set `jobs,gpu-context-vulkan,platform-window`
 ([CI tiers](ci-tiers.md#arm64-lanes)). A test directory several modules own builds the parts whose targets exist
 (`tests/support/diag`'s jobs and perf specimens, the crash-capture specimen's fiber modes).
 

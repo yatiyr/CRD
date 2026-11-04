@@ -2,10 +2,10 @@
 // docs/design/registers.md#rule-generations and #screening). The stores, the decoders, the query and the screening
 // are crd-comply's; these verbs only validate the request, load the requested files and write the answer as JSON.
 
-#include <crd/assetio/json_write.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/comply/rules.hpp>
 #include <crd/comply/sanctions.hpp>
+#include <crd/json/json_write.hpp>
 #include <crd/platform/filesystem.hpp>
 
 #include <cstdio>
@@ -16,7 +16,7 @@ namespace
 {
 namespace comply = crd::comply;
 namespace cont = crd::containers;
-using crd::assetio::JsonWriter;
+using crd::json::JsonWriter;
 
 constexpr const char* kScopeStates[] = {"planned", "live"};
 constexpr const char* kRuleKinds[] = {"obligation", "user-action"};

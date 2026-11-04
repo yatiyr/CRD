@@ -19,7 +19,6 @@
 #include "../../execution/ceir-cook/device_replay_fixture.hpp"
 #include "mcp_test_support.hpp"
 
-#include <crd/assetio/json.hpp>
 #include <crd/ceir/input.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
@@ -27,6 +26,7 @@
 #include <crd/core/environment.hpp>
 #include <crd/core/fault_seam.hpp>
 #include <crd/jobs/jobs.hpp>
+#include <crd/json/json.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_manifest.hpp>
@@ -43,7 +43,7 @@
 #include <cstring>
 
 namespace fs   = crd::platform::fs;
-namespace json = crd::assetio::json;
+namespace json = crd::json;
 
 namespace
 {

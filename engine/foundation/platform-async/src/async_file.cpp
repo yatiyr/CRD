@@ -1,11 +1,10 @@
 #include <crd/platform/async_file.hpp>
 
-#include "filesystem_detail.hpp"
-
 #include <crd/containers/array.hpp>
 #include <crd/core/fault_seam.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/platform/detail/range_read.hpp>
 #include <crd/platform/filesystem.hpp>
 
 #include <cstring>

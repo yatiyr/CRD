@@ -4,10 +4,10 @@
 // process. Protocol faults answer as JSON-RPC errors; a verb's failure and a refused argument answer as tool results
 // with isError, so the model reads the reason and can correct the call. Contract: docs/design/agent-mcp.md.
 
-#include <crd/assetio/json.hpp>
-#include <crd/assetio/json_write.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/core/build_config.hpp>
+#include <crd/json/json.hpp>
+#include <crd/json/json_write.hpp>
 #include <crd/perf/diag_commands.hpp>
 
 #include <algorithm>
@@ -21,10 +21,10 @@ namespace crd::ceridc
 
 namespace
 {
-    using crd::assetio::JsonWriter;
+    using crd::json::JsonWriter;
     using crd::containers::String;
     using crd::containers::StringView;
-    namespace json = crd::assetio::json;
+    namespace json = crd::json;
 
     constexpr const char* kModernVersion = "2026-07-28";
     constexpr const char* kLegacyVersion = "2025-11-25";

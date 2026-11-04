@@ -2,8 +2,8 @@
 
 #include <crd/assetio/gltf_export.hpp>
 
-#include <crd/assetio/json_write.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/json/json_write.hpp>
 #include <cmath> // std::isfinite — the classification fn (the gltf.cpp idiom; the transcendental ban does not cover it)
 
 #include <cstring>
@@ -219,7 +219,7 @@ bool gltf_export_glb(const ExportAsset& asset, crd::containers::Array<crd::u8>& 
     }
 
     // ── the JSON chunk ───────────────────────────────────────────────────────────────────────────────────────────
-    JsonWriter j(alloc);
+    json::JsonWriter j(alloc);
     j.begin_object();
     j.key("asset");
     j.begin_object();

@@ -3,15 +3,15 @@
 // reference-NLE oracle). Keys emit in each schema's canonical alphabetical order (the OTIO lib's own layout) so
 // reference diffs stay readable.
 
-#include <crd/assetio/json_write.hpp>
 #include <crd/assetio/otio.hpp>
+#include <crd/json/json_write.hpp>
 
 namespace crd::assetio
 {
 
 namespace
 {
-    void write_rational_time(JsonWriter& w, const crd::time::RationalTime& t)
+    void write_rational_time(json::JsonWriter& w, const crd::time::RationalTime& t)
     {
         w.begin_object();
         w.kv("OTIO_SCHEMA", "RationalTime.1");
@@ -20,7 +20,7 @@ namespace
         w.end_object();
     }
 
-    void write_time_range(JsonWriter& w, const crd::time::TimeRange& r)
+    void write_time_range(json::JsonWriter& w, const crd::time::TimeRange& r)
     {
         w.begin_object();
         w.kv("OTIO_SCHEMA", "TimeRange.1");
@@ -31,7 +31,7 @@ namespace
         w.end_object();
     }
 
-    void write_available_range(JsonWriter& w, const ImportedMediaRef& ref)
+    void write_available_range(json::JsonWriter& w, const ImportedMediaRef& ref)
     {
         w.key("available_range");
         if (ref.has_available_range)
@@ -44,7 +44,7 @@ namespace
         }
     }
 
-    void write_media_ref(JsonWriter& w, const ImportedMediaRef& ref)
+    void write_media_ref(json::JsonWriter& w, const ImportedMediaRef& ref)
     {
         w.begin_object();
         switch (ref.kind)
@@ -86,7 +86,7 @@ namespace
         w.end_object();
     }
 
-    void write_markers(JsonWriter& w, const ImportedTimeline& tl, crd::u32 first, crd::u32 count)
+    void write_markers(json::JsonWriter& w, const ImportedTimeline& tl, crd::u32 first, crd::u32 count)
     {
         w.begin_array();
         for (crd::u32 i = 0; i < count; ++i)
@@ -106,7 +106,7 @@ namespace
         w.end_array();
     }
 
-    void write_effects(JsonWriter& w, const ImportedTimeline& tl, crd::u32 first, crd::u32 count)
+    void write_effects(json::JsonWriter& w, const ImportedTimeline& tl, crd::u32 first, crd::u32 count)
     {
         w.begin_array();
         for (crd::u32 i = 0; i < count; ++i)
@@ -138,7 +138,7 @@ namespace
         w.end_array();
     }
 
-    void write_item(JsonWriter& w, const ImportedTimeline& tl, const ImportedTimelineItem& item)
+    void write_item(json::JsonWriter& w, const ImportedTimeline& tl, const ImportedTimelineItem& item)
     {
         w.begin_object();
         switch (item.type)
@@ -211,7 +211,7 @@ namespace
 
 crd::containers::String otio_export(const ImportedTimeline& timeline, crd::memory::IAllocator* alloc)
 {
-    JsonWriter w(alloc);
+    json::JsonWriter w(alloc);
     w.begin_object();
     w.kv("OTIO_SCHEMA", "Timeline.1");
     w.key("global_start_time");

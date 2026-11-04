@@ -2,7 +2,6 @@ add_executable(crd-asset-io-tests
     test_condition.cpp
     test_gltf.cpp
     test_gltf_export.cpp # GEO-4: the exporter round-trip gate (our writer validated by our importer)
-    test_json.cpp
     test_xml.cpp # GEO-5: the XML parser gate (the OPC/3MF foundation)
     test_threemf.cpp # GEO-5 pt 3: 3MF import + the watertight export gate + the OPC round-trip through our ZIP
     test_obj.cpp

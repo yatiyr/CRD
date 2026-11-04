@@ -19,7 +19,7 @@
 
 #include <cstdio>
 
-namespace crd::assetio
+namespace crd::json
 {
 
 class JsonWriter
@@ -171,4 +171,4 @@ private:
     bool                    m_first = true;
 };
 
-} // namespace crd::assetio
+} // namespace crd::json

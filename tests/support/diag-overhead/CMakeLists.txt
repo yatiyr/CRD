@@ -19,6 +19,7 @@ set(_crd_overhead_libraries
     crd-ceir-cook
     crd-ceir-host
     crd-platform
+    crd-platform-async
     crd-resources
     crd-scene
     crd-scene-render

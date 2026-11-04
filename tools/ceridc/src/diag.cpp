@@ -10,7 +10,6 @@
 
 #include "host_dialects.hpp"
 
-#include <crd/assetio/json_write.hpp>
 #include <crd/ceir/cook/device_replay.hpp>
 #include <crd/ceir/cook/inspect_diag.hpp>
 #include <crd/ceir/cook/program_diag.hpp>
@@ -24,6 +23,7 @@
 #include <crd/ceir/gen/resource_ops.hpp>
 #include <crd/ceir/gen/task_ops.hpp>
 #include <crd/ceir/host/host_replay_diag.hpp>
+#include <crd/json/json_write.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/gpu/gpu_resources_diag.hpp>
@@ -83,7 +83,7 @@ crd::containers::String verb_diag_host(const DiagHostOptions& host, const crd::p
         host.grant != nullptr ? crd::containers::StringView{host.grant} : crd::containers::StringView{"read"};
     if (!crd::perf::parse_authority_list(grant_text, grant))
     {
-        crd::assetio::JsonWriter w(alloc);
+        crd::json::JsonWriter w(alloc);
         w.begin_object();
         w.kv("ok", false);
         w.kv("verb", "diag");
@@ -100,7 +100,7 @@ crd::containers::String verb_diag_host(const DiagHostOptions& host, const crd::p
     crd::perf::DiagCommandService service(grant, config, alloc);
     if (!bind_diag_commands(service))
     {
-        crd::assetio::JsonWriter w(alloc);
+        crd::json::JsonWriter w(alloc);
         w.begin_object();
         w.kv("ok", false);
         w.kv("verb", "diag");

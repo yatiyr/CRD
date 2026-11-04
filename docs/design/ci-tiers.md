@@ -58,8 +58,12 @@ The `linux-arm64` job (ubuntu-24.04-arm: GCC and Clang, debug and ASan with UBSa
 probe's arms run portable and neon (SIMD-DISPATCH, [session](../sessions/2026-10-28-simd-dispatch-neon-parity.md)).
 They use the images' toolchains (Ubuntu's ninja-build and gdb; the pinned x64 Ninja under emulation and
 `msvc-dev-env.py --arch arm64` on Windows) and no compiler cache. crd-jobs has no ARM64 fiber context before
-[JOBS-PORT.2](../ROADMAP.md#slice-jobs-port.2), so the presets set `CRD_MODULES_WITHOUT=jobs`
-([module registry](module-registry.md#selection)); they widen by themselves once it builds there.
+[JOBS-PORT.2](../ROADMAP.md#slice-jobs-port.2) and the lanes install no Vulkan SDK or Wayland development files, so
+the presets set `CRD_MODULES_WITHOUT=jobs,gpu-context-vulkan,platform-window`
+([module registry](module-registry.md#selection)). Since 2026-11-04 crd-platform links no job system (its
+asynchronous reads are crd-platform-async) and JSON is crd-json, so crd-platform, crd-crypto with AWS-LC's ARMv8
+assembly and their tests build and run there (NET.2,
+[session](../sessions/2026-11-04-net-2-arm64-closure.md)).
 `linux-gcc-arm64-asan` compiles without use-after-return detection, which GCC 13 makes about 30 times dearer on
 AArch64 than Clang ([TP-6](../third-party-defects.md#tp-6)); `linux-clang-arm64-asan` keeps it.
 

@@ -1,7 +1,8 @@
 #pragma once
 
-// json.hpp — GEO-3: OUR OWN JSON parser (RFC 8259) — the glTF substrate, and the engine's general machine-readable-text
-// parser going forward (GEO-11's CLI reports read with the same code). Zero 3rd-party, allocator-aware, span-based.
+// json.hpp — GEO-3: OUR OWN JSON parser (RFC 8259): the engine's machine-readable-text reader (glTF and OTIO, ceridc's
+// commands and reports, the crypto test vectors). Zero 3rd-party, allocator-aware, span-based. crd-json (capability
+// text.json) since 2026-11-04, below every reader, so a consumer of JSON links no asset importer.
 //
 // Design: a FLAT DOM — one `Array<JsonNode>` pool with first-child/next-sibling links (no per-node allocation), string
 // bytes (keys + values, escapes decoded, \uXXXX → UTF-8 incl. surrogate pairs) appended to one byte pool. Numbers parse
@@ -20,7 +21,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
-namespace crd::assetio::json
+namespace crd::json
 {
 
 inline constexpr crd::u32 kInvalid = 0xFFFFFFFFU;
@@ -89,4 +90,4 @@ struct JsonDoc
 [[nodiscard]] bool      str_value_eq(const JsonDoc& doc, crd::u32 node, const char* s) noexcept;
 [[nodiscard]] crd::u32  str_value(const JsonDoc& doc, crd::u32 node, char* buf, crd::u32 cap) noexcept;
 
-} // namespace crd::assetio::json
+} // namespace crd::json

@@ -13,6 +13,7 @@ target_link_libraries(crd-ceridc-tests PRIVATE
     crd-memory
     crd-platform
     crd-asset-io
+    crd-json
     crd-resources
     crd-ceridc
     crd-cooker

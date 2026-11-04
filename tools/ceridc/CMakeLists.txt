@@ -20,6 +20,7 @@ target_link_libraries(crd-ceridc
         crd-memory
         crd-platform
         crd-asset-io
+        crd-json        # the commands, the MCP session and every report
         crd-compression # OWN.1: import reads a 3MF package through the ZIP container
         crd-resources
         crd-scene

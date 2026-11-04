@@ -576,7 +576,7 @@ crd_module(engine/geometry/geometry-curves engine/geometry-curves
     TEST_DEPENDS perf time)
 # GEO-1 (D-007 row 66): OUR OWN external-format parsers (STL/OBJ/PLY/glTF/3MF) -> ImportedAsset seam -> decompose/cook
 crd_module(engine/assets/asset-io engine/asset-io
-    DEPENDS containers core geometry-bvh geometry-mesh geometry-primitives math memory time units
+    DEPENDS containers core geometry-bvh geometry-mesh geometry-primitives json math memory time units
     TESTS assets/asset-io TEST_DEPENDS compression resources TEST_PACKAGES mikktspace)
 crd_module(engine/numerics/hesap engine/hesap DEPENDS containers core math memory TESTS numerics/hesap)
 # v12; special functions + orthogonal polynomials (leaf; substrate for stats/quadrature/dsp); ADR-0094
@@ -609,6 +609,8 @@ crd_module(engine/numerics/hesap-amg engine/hesap-amg
     TESTS numerics/hesap-amg)
 crd_module(engine/foundation/containers engine/containers DEPENDS core memory TESTS foundation/containers)
 crd_module(engine/foundation/toml engine/toml DEPENDS containers core TESTS foundation/toml)
+# text.json: the engine's JSON reader and writer, below every reader (moved out of asset-io on 2026-11-04)
+crd_module(engine/foundation/json engine/json DEPENDS containers core memory TESTS foundation/json)
 # RAF-1 (D-007 "RAF band"): canonical render-asset identity/namespaces/diagnostics/deps (deps: core/containers/memory)
 crd_module(engine/rendering/render-asset-core engine/render-asset-core DEPENDS containers core memory
     TESTS rendering/render-asset-core)
@@ -626,8 +628,10 @@ crd_module(engine/rendering/render-graph engine/render-graph
     DEPENDS ceir-gpu containers core gpu-context memory render-asset-core render-pass TESTS rendering/render-graph
     TEST_DEPENDS gpu-context-dx12 gpu-context-vulkan)
 crd_module(engine/foundation/log engine/log DEPENDS containers core TESTS foundation/log)
-crd_module(engine/foundation/platform engine/platform DEPENDS containers core jobs log memory time
-    TESTS foundation/platform)
+crd_module(engine/foundation/platform engine/platform DEPENDS containers core log memory time TESTS foundation/platform)
+# ADR-0041 (amended 2026-11-04): the asynchronous reads, split from crd-platform so the OS boundary links no job system
+crd_module(engine/foundation/platform-async engine/platform-async DEPENDS containers core jobs memory platform
+    TESTS foundation/platform-async)
 # OWN.1: the platform layer's window backend (GLFW), split from crd-platform so the OS boundary links no window library
 crd_module(engine/foundation/platform-window engine/platform-window DEPENDS containers core log platform PACKAGES glfw
     TESTS foundation/platform-window)
@@ -645,7 +649,7 @@ crd_module(engine/foundation/compression engine/compression DEPENDS containers c
 # the PKCS #11 key device against OASIS's on every platform
 crd_module(engine/foundation/crypto engine/crypto DEPENDS compression containers core platform
     PACKAGES aws-lc tpm2-tss pkcs11
-    TESTS foundation/crypto support/fuzz TEST_DEPENDS asset-io memory
+    TESTS foundation/crypto support/fuzz TEST_DEPENDS json memory
     TEST_PACKAGES wycheproof mls-vectors hpke-pq-vectors zstd)
 crd_module(engine/foundation/net engine/net DEPENDS containers core TESTS foundation/net support/fuzz)
 crd_module(engine/foundation/comply engine/comply DEPENDS containers core toml TESTS foundation/comply support/fuzz
@@ -665,8 +669,8 @@ crd_module(engine/gpu/gpu-context engine/gpu-context DEPENDS containers core ren
 # ADR-0099 v17-i-a: headless Vulkan compute context
 crd_module(engine/gpu/gpu-context-vulkan engine/gpu-context-vulkan
     DEPENDS containers core gpu-context kir memory platform TESTS gpu/gpu-context-vulkan
-    TEST_DEPENDS asset-io asset_cooker ceir ceir-gpu draw frame-cook imgui perf perf-gpu-bridge scene-render shader-cook
-    vertex-cook TEST_PACKAGES imgui)
+    TEST_DEPENDS asset_cooker ceir ceir-gpu draw frame-cook imgui jobs json perf perf-gpu-bridge scene-render
+    shader-cook vertex-cook TEST_PACKAGES imgui)
 # ADR-0100 v17-i: second IComputeContext backend (D3D12); Windows-only
 crd_module(engine/gpu/gpu-context-dx12 engine/gpu-context-dx12 DEPENDS containers core gpu-context kir memory
     TESTS gpu/gpu-context-dx12 TEST_DEPENDS ceir ceir-gpu frame-cook perf perf-gpu-bridge shader-cook vertex-cook)
@@ -677,7 +681,7 @@ crd_module(engine/gpu/gpu-context-cuda engine/gpu-context-cuda DEPENDS container
 # keeping their mutual independence intact (no engine module depends back on it). It also owns the gpu.resources
 # diagnostic command, which hosts such as ceridc bind into their command service.
 crd_module(engine/gpu/perf-gpu-bridge engine/perf-gpu-bridge DEPENDS containers core gpu-context perf time
-    TESTS gpu/perf-gpu-bridge TEST_DEPENDS asset-io)
+    TESTS gpu/perf-gpu-bridge TEST_DEPENDS json)
 crd_module(engine/foundation/jobs engine/jobs DEPENDS containers core TESTS foundation/jobs support/diag)
 # depends on crd-jobs above + crd-hesap (declared earlier)
 crd_module(engine/numerics/hesap-sched engine/hesap-sched DEPENDS containers core hesap jobs memory
@@ -766,7 +770,7 @@ crd_module(engine/numerics/hesap-tensor engine/hesap-tensor
     DEPENDS compression containers core jobs math memory platform
     TESTS numerics/hesap-tensor TEST_DEPENDS hesap hesap-autodiff hesap-dense hesap-resources)
 crd_module(engine/assets/resources engine/resources DEPENDS compression containers core jobs log memory platform
-    TESTS assets/resources support/fuzz TEST_DEPENDS asset_cooker gpu-context gpu-context-vulkan perf)
+    platform-async TESTS assets/resources support/fuzz TEST_DEPENDS asset_cooker gpu-context gpu-context-vulkan perf)
 crd_module(engine/world/scene engine/scene
     DEPENDS containers core geometry-primitives geometry-spatial math memory resources
     TESTS foundation/stress world/scene TEST_DEPENDS preset profile)
@@ -812,8 +816,8 @@ crd_module(tools/asset_cooker HOST EXECUTABLES asset_cooker
     TESTS assets/scene_cooker assets/cooker)
 # GEO-11 (D-007 row 76): the agent surface — CLI verbs + MCP stdio server
 crd_module(tools/ceridc HOST EXECUTABLES ceridc
-    DEPENDS asset-io asset_cooker audio ceir ceir-cook ceir-host comply compression containers core crypto jobs memory
-    perf perf-gpu-bridge platform resources scene time timeline toml TESTS tools/ceridc support/fuzz)
+    DEPENDS asset-io asset_cooker audio ceir ceir-cook ceir-host comply compression containers core crypto jobs json
+    memory perf perf-gpu-bridge platform resources scene time timeline toml TESTS tools/ceridc support/fuzz)
 # D-007 D2: the offline shader-cook CLI (.kgph -> .crdr); ADR-0104
 crd_module(tools/shader-cook NAME shader_cook HOST EXECUTABLES shader_cook
     DEPENDS containers core kir memory platform resources shader-cook)

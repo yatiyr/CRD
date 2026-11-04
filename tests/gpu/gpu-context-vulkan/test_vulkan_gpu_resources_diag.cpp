@@ -7,7 +7,6 @@
 // Responses are parsed with the JSON reader. Device-gated: skips without a graphics-capable Vulkan device with shader
 // objects (the hosted Windows lanes); runs on lavapipe and on a real GPU.
 
-#include <crd/assetio/json.hpp>
 #include <crd/gpu/device_check.hpp>
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/identity_registry.hpp>
@@ -17,6 +16,7 @@
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
 #include <crd/gpu/vulkan_validation_capture.hpp>
+#include <crd/json/json.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/gpu/gpu_resources_diag.hpp>
@@ -26,7 +26,7 @@
 namespace
 {
 namespace g    = crd::gpu;
-namespace json = crd::assetio::json;
+namespace json = crd::json;
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 crd::memory::GrowableTlsfAllocator g_alloc{crd::usize{16} << 20U, nullptr, "vk-gpu-resources-diag"};

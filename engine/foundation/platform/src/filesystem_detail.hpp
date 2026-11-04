@@ -1,27 +1,15 @@
 #pragma once
 
-// crd-platform internal: the raw range read AsyncFile's completion job uses. Not part of the public surface.
+// crd-platform internal: the OS spelling of a path, shared by the file and durable-save units. The raw range read
+// crd-platform-async's AsyncFile uses is in crd/platform/detail/range_read.hpp. Not part of the public surface.
 
-#include <crd/core/types.hpp>
+#include <crd/platform/detail/range_read.hpp>
 #include <crd/platform/filesystem.hpp>
 
 #include <filesystem>
 
 namespace crd::platform::fs::detail
 {
-
-struct RangeRead
-{
-    bool     opened    = false; // the file opened and the seek to `offset` succeeded
-    crd::u64 delivered = 0U;     // bytes written to dst (fewer than asked when the file ended or the read failed)
-};
-
-// Read up to `size` bytes at `offset` straight into `dst`, without consulting the I/O fault seam (the caller already
-// did). Bytes past `delivered` are left as they were.
-[[nodiscard]] RangeRead read_range_into(const Path& path, crd::u64 offset, crd::u8* dst, crd::u64 size) noexcept;
-
-// Sleep for an injected completion delay.
-void sleep_for_injected_delay(crd::u64 ns) noexcept;
 
 // The OS spelling of `path` (UTF-16 on Windows). May throw (allocation), as std::filesystem::path does.
 [[nodiscard]] std::filesystem::path native_path(const Path& path);

@@ -31,7 +31,7 @@ using crd::containers::Span;
 using crd::containers::StringView;
 using namespace crd::crypto;
 using namespace crd::crypto::test;
-namespace json = crd::assetio::json;
+namespace json = crd::json;
 
 // ---- Provider identity and helpers ----
 

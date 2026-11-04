@@ -193,11 +193,10 @@
     },
     {
       "id": "io.files",
-      "summary": "File-system access, asynchronous file I/O, file watching and dynamic libraries.",
+      "summary": "File-system access, file watching and dynamic libraries.",
       "owner": "platform",
       "api": [
-        "engine/foundation/platform/include/crd/platform/filesystem.hpp",
-        "engine/foundation/platform/include/crd/platform/async_file.hpp"
+        "engine/foundation/platform/include/crd/platform/filesystem.hpp"
       ],
       "signatures": [
         {
@@ -215,6 +214,25 @@
           "why": "Counts the process's open descriptors through /proc/self/fd to judge an OS object's presence, a process probe rather than file access; crd-core sits below crd-platform."
         }
       ]
+    },
+    {
+      "id": "io.async-reads",
+      "summary": "Asynchronous file reads whose completions run as crd-jobs jobs (AsyncFile), each reporting how it ended and consulting the I/O fault seam.",
+      "owner": "platform-async",
+      "api": [
+        "engine/foundation/platform-async/include/crd/platform/async_file.hpp"
+      ],
+      "decision": "Split from crd-platform on 2026-11-04 (ADR-0041 amendment) so the OS boundary links no job system and crd-crypto's closure builds on the ARM64 lanes; header and namespace are unchanged, and the raw range read it shares with crd-platform is crd/platform/detail/range_read.hpp."
+    },
+    {
+      "id": "text.json",
+      "summary": "The engine's JSON (RFC 8259): the flat-DOM reader with its exact number grammar and UTF-8 checks, and the streaming writer.",
+      "owner": "json",
+      "api": [
+        "engine/foundation/json/include/crd/json/json.hpp",
+        "engine/foundation/json/include/crd/json/json_write.hpp"
+      ],
+      "decision": "Moved out of crd-asset-io on 2026-11-04, below every reader (glTF and OTIO, ceridc, the diagnostic tests, the crypto vectors), so a JSON consumer links no geometry importer and crd-crypto's tests build on the ARM64 lanes."
     },
     {
       "id": "diagnostics.hardware-identity",

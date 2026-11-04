@@ -48,6 +48,7 @@ target_link_libraries(crd-resources
         crd-compression # crdr.hpp names the zstd level its writer compresses at
     PRIVATE
         crd-jobs
+        crd-platform-async # AsyncFile: the streamed loads
 )
 
 target_compile_features(crd-resources PUBLIC cxx_std_20)

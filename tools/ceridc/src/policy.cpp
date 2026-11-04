@@ -4,13 +4,13 @@
 // bytes and report what an installation would decide. The key holders' keys live in crd-crypto's key store: `key`
 // makes one and prints its trust set entry, `sign` signs a body with it.
 
-#include <crd/assetio/json_write.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/comply/generation.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/crypto/key_store.hpp>
 #include <crd/crypto/policy.hpp>
 #include <crd/crypto/provider.hpp>
+#include <crd/json/json_write.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/toml/toml.hpp>
 
@@ -29,7 +29,7 @@ namespace
 namespace crypto = crd::crypto;
 namespace cont = crd::containers;
 namespace fs = crd::platform::fs;
-using crd::assetio::JsonWriter;
+using crd::json::JsonWriter;
 using crypto::AlgorithmId;
 using crypto::PolicyContent;
 using crypto::PolicyError;

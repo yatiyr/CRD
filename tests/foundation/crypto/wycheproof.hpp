@@ -4,9 +4,9 @@
 // CRD_WYCHEPROOF_DIR, the MLS working group's from CRD_MLS_VECTORS_DIR, RFC 9180's from CRD_HPKE_VECTORS) and the
 // byte helpers the suites share.
 
-#include <crd/assetio/json.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/json/json.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
@@ -72,37 +72,37 @@ public:
         INFO(path.c_str());
         Bytes bytes;
         REQUIRE(platform::fs::read_file_binary(platform::fs::Path(containers::StringView(path)), bytes));
-        REQUIRE(assetio::json::parse(containers::ConstSpan<u8>(bytes.data(), bytes.size()), m_doc));
+        REQUIRE(json::parse(containers::ConstSpan<u8>(bytes.data(), bytes.size()), m_doc));
     }
 
-    [[nodiscard]] const assetio::json::JsonDoc& doc() const { return m_doc; }
+    [[nodiscard]] const json::JsonDoc& doc() const { return m_doc; }
     [[nodiscard]] u32                           root() const { return m_doc.root; }
 
     [[nodiscard]] containers::StringView text(u32 node) const
     {
-        REQUIRE(node != assetio::json::kInvalid);
-        const assetio::json::JsonNode& n = m_doc.nodes[node];
-        REQUIRE(n.type == assetio::json::JsonType::String);
+        REQUIRE(node != json::kInvalid);
+        const json::JsonNode& n = m_doc.nodes[node];
+        REQUIRE(n.type == json::JsonType::String);
         return containers::StringView(m_doc.strings.data() + n.str_off, n.str_len);
     }
     [[nodiscard]] containers::StringView text(u32 object, const char* key) const
     {
-        return text(assetio::json::find(m_doc, object, key));
+        return text(json::find(m_doc, object, key));
     }
     [[nodiscard]] Bytes hex(u32 object, const char* key) const { return from_hex(text(object, key)); }
     [[nodiscard]] bool  has(u32 object, const char* key) const
     {
-        const u32 node = assetio::json::find(m_doc, object, key);
-        return node != assetio::json::kInvalid && m_doc.nodes[node].type != assetio::json::JsonType::Null;
+        const u32 node = json::find(m_doc, object, key);
+        return node != json::kInvalid && m_doc.nodes[node].type != json::JsonType::Null;
     }
-    [[nodiscard]] u64 number(u32 node) const { return static_cast<u64>(assetio::json::as_i64(m_doc, node, -1)); }
+    [[nodiscard]] u64 number(u32 node) const { return static_cast<u64>(json::as_i64(m_doc, node, -1)); }
     [[nodiscard]] u64 number(u32 object, const char* key) const
     {
-        return number(assetio::json::find(m_doc, object, key));
+        return number(json::find(m_doc, object, key));
     }
 
 private:
-    assetio::json::JsonDoc m_doc{memory::default_allocator()};
+    json::JsonDoc m_doc{memory::default_allocator()};
 };
 
 // The path of `name` in a pinned vector directory.
@@ -120,18 +120,18 @@ class Vectors : public JsonFile
 public:
     explicit Vectors(const char* name) : JsonFile(wycheproof_path(name))
     {
-        m_groups = assetio::json::find(doc(), root(), "testGroups");
-        REQUIRE(assetio::json::count_of(doc(), m_groups) > 0U);
+        m_groups = json::find(doc(), root(), "testGroups");
+        REQUIRE(json::count_of(doc(), m_groups) > 0U);
     }
 
     [[nodiscard]] u32 groups() const { return m_groups; }
 
     [[nodiscard]] bool flagged(u32 test, const char* flag) const
     {
-        const u32 flags = assetio::json::find(doc(), test, "flags");
-        for (u32 i = 0U; i < assetio::json::count_of(doc(), flags); ++i)
+        const u32 flags = json::find(doc(), test, "flags");
+        for (u32 i = 0U; i < json::count_of(doc(), flags); ++i)
         {
-            if (assetio::json::str_value_eq(doc(), assetio::json::at(doc(), flags, i), flag))
+            if (json::str_value_eq(doc(), json::at(doc(), flags, i), flag))
             {
                 return true;
             }
@@ -142,13 +142,13 @@ public:
     // Visits every test as f(group, test, result) with result "valid", "invalid" or "acceptable".
     template <typename F> void each(const F& f) const
     {
-        for (u32 g = 0U; g < assetio::json::count_of(doc(), m_groups); ++g)
+        for (u32 g = 0U; g < json::count_of(doc(), m_groups); ++g)
         {
-            const u32 group = assetio::json::at(doc(), m_groups, g);
-            const u32 tests = assetio::json::find(doc(), group, "tests");
-            for (u32 t = 0U; t < assetio::json::count_of(doc(), tests); ++t)
+            const u32 group = json::at(doc(), m_groups, g);
+            const u32 tests = json::find(doc(), group, "tests");
+            for (u32 t = 0U; t < json::count_of(doc(), tests); ++t)
             {
-                const u32 test = assetio::json::at(doc(), tests, t);
+                const u32 test = json::at(doc(), tests, t);
                 INFO("tcId " << number(test, "tcId"));
                 f(group, test, text(test, "result"));
             }
@@ -163,6 +163,6 @@ private:
         return path;
     }
 
-    u32 m_groups = assetio::json::kInvalid;
+    u32 m_groups = json::kInvalid;
 };
 } // namespace crd::crypto::test

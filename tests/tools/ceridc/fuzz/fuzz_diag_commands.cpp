@@ -49,12 +49,12 @@
 // not observed here; the root does not exist, so none of them opens anything.
 #include <crd/fuzz/harness.hpp>
 
-#include <crd/assetio/json.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/parse_float.hpp>
+#include <crd/json/json.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/fault_injection.hpp>
 #include <crd/perf/flight_commands.hpp>
@@ -84,7 +84,7 @@ using crd::perf::DiagAuthoritySet;
 using crd::perf::DiagRequest;
 using crd::perf::DiagResult;
 using crd::perf::DiagStatus;
-namespace json = crd::assetio::json;
+namespace json = crd::json;
 namespace perf = crd::perf;
 
 // The host's file root: a directory that must not exist (checked before the first input).

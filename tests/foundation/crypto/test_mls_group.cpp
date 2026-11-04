@@ -30,7 +30,7 @@ using crd::containers::WireReader;
 using crd::containers::WireWriter;
 using namespace crd::crypto;
 using namespace crd::crypto::test;
-namespace json = crd::assetio::json;
+namespace json = crd::json;
 namespace mls  = crd::crypto::mls;
 
 Bytes joined(std::initializer_list<ConstSpan<u8>> parts)

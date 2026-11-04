@@ -35,11 +35,11 @@ add_executable(crd-crypto-tests
 )
 
 target_link_libraries(crd-crypto-tests PRIVATE
-    crd-asset-io
     crd-compression
     crd-core
     crd-containers
     crd-crypto
+    crd-json # the Wycheproof, MLS and HPKE vectors
     crd-memory
     crd-platform
     Catch2::Catch2WithMain
@@ -192,7 +192,7 @@ if(CRD_BUILD_TLS_VS_OPENSSL)
     target_include_directories(crd-openssl-coexist SYSTEM PRIVATE "${openssl_prefix}/install/include")
     add_executable(crd-crypto-coexist-tests interop/test_openssl_coexist.cpp test_tls.cpp test_tls_early.cpp
                                             test_tls_ech.cpp test_quic_handshake.cpp)
-    target_link_libraries(crd-crypto-coexist-tests PRIVATE crd-openssl-coexist crd-asset-io crd-compression crd-core
+    target_link_libraries(crd-crypto-coexist-tests PRIVATE crd-openssl-coexist crd-compression crd-core
                           crd-containers crd-crypto crd-memory crd-platform Catch2::Catch2WithMain crypto ssl
                           ${openssl_link})
     target_compile_definitions(crd-crypto-coexist-tests PRIVATE

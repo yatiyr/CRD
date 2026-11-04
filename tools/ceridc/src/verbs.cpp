@@ -5,7 +5,6 @@
 #include "host_dialects.hpp"
 
 #include <crd/assetio/gltf.hpp>
-#include <crd/assetio/json_write.hpp>
 #include <crd/assetio/obj.hpp>
 #include <crd/assetio/otio.hpp>
 #include <crd/assetio/ply.hpp>
@@ -28,6 +27,7 @@
 #include <crd/ceir/provenance.hpp>
 #include <crd/compression/zip.hpp>
 #include <crd/cooker/cook_command.hpp>
+#include <crd/json/json_write.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/hdr_image.hpp>
@@ -52,7 +52,7 @@ namespace crd::ceridc
 
 namespace
 {
-    using crd::assetio::JsonWriter;
+    using crd::json::JsonWriter;
 
     [[nodiscard]] bool ends_with(const char* path, const char* suffix)
     {

@@ -1,18 +1,19 @@
-// tests/assets/asset-io/test_json.cpp — GEO-3: the owned JSON parser gates. RFC 8259 conformance on the surface glTF (and the
-// future agent-CLI reports) exercise: nesting, escapes incl. surrogate pairs, number forms, and the failure classes
-// (trailing junk, unterminated strings, depth bombs, lone surrogates) — no partial DOM ever escapes a failed parse.
+// tests/foundation/json/test_json.cpp — GEO-3: the owned JSON parser gates. RFC 8259 conformance on the surface glTF,
+// ceridc's reports and the crypto vectors exercise: nesting, escapes incl. surrogate pairs, number forms, and the
+// failure classes (trailing junk, unterminated strings, depth bombs, lone surrogates) — no partial DOM ever escapes a
+// failed parse.
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <crd/assetio/json.hpp>
-#include <crd/assetio/json_write.hpp>
+#include <crd/json/json.hpp>
+#include <crd/json/json_write.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
 
-namespace js = crd::assetio::json;
+namespace js = crd::json;
 
 namespace
 {
@@ -22,7 +23,7 @@ namespace
 }
 } // namespace
 
-TEST_CASE("assetio: JSON basics -- nesting, finds, typed reads", "[assetio][json]")
+TEST_CASE("json: basics -- nesting, finds, typed reads", "[json]")
 {
     crd::memory::TlsfAllocator alloc(4U << 20U);
     js::JsonDoc                doc(&alloc);
@@ -46,7 +47,7 @@ TEST_CASE("assetio: JSON basics -- nesting, finds, typed reads", "[assetio][json
     CHECK(js::as_f64(doc, js::find(doc, js::kInvalid, "x"), 7.5) == 7.5);
 }
 
-TEST_CASE("assetio: JSON string escapes incl. unicode surrogate pairs", "[assetio][json]")
+TEST_CASE("json: string escapes incl. unicode surrogate pairs", "[json]")
 {
     crd::memory::TlsfAllocator alloc(4U << 20U);
     js::JsonDoc                doc(&alloc);
@@ -58,7 +59,7 @@ TEST_CASE("assetio: JSON string escapes incl. unicode surrogate pairs", "[asseti
     CHECK(std::strcmp(buf, expect) == 0);
 }
 
-TEST_CASE("assetio: JSON failure classes -- no partial DOM survives", "[assetio][json]")
+TEST_CASE("json: failure classes -- no partial DOM survives", "[json]")
 {
     crd::memory::TlsfAllocator alloc(4U << 20U);
     js::JsonDoc                doc(&alloc);
@@ -87,7 +88,7 @@ TEST_CASE("assetio: JSON failure classes -- no partial DOM survives", "[assetio]
     CHECK_FALSE(js::parse(span_of(bomb), doc));
 }
 
-TEST_CASE("assetio: JSON numbers follow the RFC grammar exactly and are read whole", "[assetio][json][diag10a]")
+TEST_CASE("json: numbers follow the RFC grammar exactly and are read whole", "[json][diag10a]")
 {
     // DIAG.10a (crd-fuzz-ceridc-diag): a strtod over a 63-byte copy accepted forms outside the grammar, cut a longer
     // token short (so it read another number) and turned an overflow into infinity.
@@ -120,8 +121,7 @@ TEST_CASE("assetio: JSON numbers follow the RFC grammar exactly and are read who
     CHECK(js::as_i64(doc, js::at(doc, doc.root, 4), -7) == -2);
 }
 
-TEST_CASE("assetio: JSON strings are well-formed UTF-8; the writer never emits anything else",
-          "[assetio][json][diag10a]")
+TEST_CASE("json: strings are well-formed UTF-8; the writer never emits anything else", "[json][diag10a]")
 {
     crd::memory::TlsfAllocator alloc(4U << 20U);
     js::JsonDoc                doc(&alloc);
@@ -144,7 +144,7 @@ TEST_CASE("assetio: JSON strings are well-formed UTF-8; the writer never emits a
     CHECK_FALSE(js::str_value_eq(doc, js::find(doc, doc.root, "m"), "ping"));
 
     // The writer keeps well-formed sequences and writes every other byte as \ufffd, so its output parses.
-    crd::assetio::JsonWriter w(&alloc);
+    crd::json::JsonWriter w(&alloc);
     w.begin_object();
     w.kv("s", crd::containers::StringView{"a\xC3\xA9\xFF\xE2\x82z\xF0\x9F\x98\x80", 11U});
     w.end_object();
@@ -154,7 +154,7 @@ TEST_CASE("assetio: JSON strings are well-formed UTF-8; the writer never emits a
                     doc));
 }
 
-TEST_CASE("assetio: JSON empty containers + whitespace tolerance", "[assetio][json]")
+TEST_CASE("json: empty containers + whitespace tolerance", "[json]")
 {
     crd::memory::TlsfAllocator alloc(4U << 20U);
     js::JsonDoc                doc(&alloc);

@@ -1,7 +1,7 @@
 // gltf.cpp — GEO-3: the owned glTF 2.0 geometry/material parser. See gltf.hpp for the covered surface.
 
 #include <crd/assetio/gltf.hpp>
-#include <crd/assetio/json.hpp>
+#include <crd/json/json.hpp>
 
 #include <cmath>
 #include <cstring>
@@ -96,7 +96,7 @@ namespace crd::assetio
 namespace
 {
 
-namespace js = crd::assetio::json;
+namespace js = crd::json;
 
 // ── base64 (data-URI buffers) ───────────────────────────────────────────────────────────────────────────────────────────
 

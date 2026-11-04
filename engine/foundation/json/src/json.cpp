@@ -1,13 +1,13 @@
 // json.cpp — GEO-3: the owned JSON parser. See json.hpp for the design.
 
-#include <crd/assetio/json.hpp>
+#include <crd/json/json.hpp>
 
 #include <crd/core/utf8.hpp>
 
 #include <crd/core/parse_float.hpp> // the number's value, locale-independent
 #include <cstring>
 
-namespace crd::assetio::json
+namespace crd::json
 {
 namespace
 {
@@ -555,4 +555,4 @@ crd::u32 str_value(const JsonDoc& doc, crd::u32 node, char* buf, crd::u32 cap) n
     return len;
 }
 
-} // namespace crd::assetio::json
+} // namespace crd::json
