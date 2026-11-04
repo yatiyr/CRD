@@ -1433,7 +1433,7 @@ TEST_CASE("Key store: the TPM protector keeps and forgets a master key", "[crypt
 // is unlocked ([platform-vault]) or seeded and then locked ([platform-vault-locked]).
 
 #if (CRD_OS_LINUX && !CRD_OS_ANDROID) || CRD_OS_MAC
-#define CRD_TEST_PLATFORM_VAULT 1
+#define CRD_TEST_PLATFORM_VAULT
 constexpr const char* kVaultName = CRD_OS_MAC ? "keychain" : "secret-service";
 
 // The session's scratch directory, which the locked session shares between its two runs.
@@ -1446,13 +1446,11 @@ constexpr const char* kVaultName = CRD_OS_MAC ? "keychain" : "secret-service";
 
 constexpr u8 kSeededStore[kKeyStoreIdBytes]      = {0xC0, 0xFF, 0xEE};
 constexpr u8 kSeededMaster[kKeyStoreMasterBytes] = {0x5E, 0xED};
-#else
-#define CRD_TEST_PLATFORM_VAULT 0
 #endif
 
 TEST_CASE("Key store: the platform vault keeps, recovers and forgets a master key", "[.platform-vault]")
 {
-#if CRD_TEST_PLATFORM_VAULT
+#ifdef CRD_TEST_PLATFORM_VAULT
     REQUIRE(PlatformKeyProtector::available());
     PlatformKeyProtector vault;
     CHECK(vault.name() == StringView(kVaultName));
@@ -1585,7 +1583,7 @@ TEST_CASE("Key store: the platform vault keeps, recovers and forgets a master ke
 
 TEST_CASE("Key store: a master key seeded for the locked platform vault", "[.platform-vault-seed]")
 {
-#if CRD_TEST_PLATFORM_VAULT
+#ifdef CRD_TEST_PLATFORM_VAULT
     PlatformKeyProtector vault;
     Bytes                reference;
     REQUIRE(vault.protect(ConstSpan<u8>(kSeededStore), ConstSpan<u8>(kSeededMaster), reference) == CryptoError::None);
@@ -1597,7 +1595,7 @@ TEST_CASE("Key store: a master key seeded for the locked platform vault", "[.pla
 
 TEST_CASE("Key store: a locked platform vault is Denied, and prompts only where allowed", "[.platform-vault-locked]")
 {
-#if CRD_TEST_PLATFORM_VAULT
+#ifdef CRD_TEST_PLATFORM_VAULT
     REQUIRE(PlatformKeyProtector::available());
     const Bytes reference = read_file(session_scratch() / "reference");
     const ConstSpan<u8> held(reference.data(), reference.size());
