@@ -734,7 +734,9 @@ a real session (the subject) and an honest peer of crd-crypto's, and their outco
 - **Learning.** L* for Mealy machines with Rivest and Schapire's counterexample analysis, the W-method with one extra
   state as the equivalence oracle (exact against every machine of at most one more state) and 2000 seeded random words
   beside it; every answer is cached in a trie, a sample is asked again outside the cache, and a different answer is a
-  failure (a nondeterministic system is never learned).
+  failure (a nondeterministic system is never learned). Each query starts fresh sessions, so copies of the SUL
+  (`--jobs`, four in the CTest) share every batch, and the queries go in from a writer thread while the answers are
+  read, whatever the pipes' buffers.
 - **The reviewed machine.** Each end's learned machine is committed (`tls_server.mealy`, `tls_client.mealy`) after
   review; a learned machine that differs fails with the shortest input word that tells the two apart, so every change
   of behaviour is reviewed before `--write` accepts it.

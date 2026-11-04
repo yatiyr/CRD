@@ -23,6 +23,7 @@ import tarfile
 import random
 import tempfile
 import textwrap
+import threading
 import time
 import tomllib
 import xml.etree.ElementTree as ET
@@ -3183,6 +3184,47 @@ class BuildPerformance(unittest.TestCase):
             path.write_text('inputs a\ns0 a x s0\n', encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'not a transition'):
                 state_machine.Machine.read(path)
+
+    def test_state_learning_sul_streams_batches_larger_than_the_pipes(self):
+        # A batch far past both pipes' buffers (4 KiB on Windows, 64 KiB on Linux): the SUL answers each line as it
+        # reads it, so a driver that wrote the whole batch before reading would deadlock (seen on win-clang-cl).
+        echo = 'import sys\nfor line in sys.stdin:\n    sys.stdout.write(line)\n    sys.stdout.flush()\n'
+        first = 'import sys\nsys.stdout.write(sys.stdin.readline())\nsys.stdout.flush()\n'
+        words = [tuple(f'w{i}s{j}' for j in range(400)) for i in range(64)]
+        outcome = {}
+
+        def run(sul):
+            try:
+                outcome['answers'] = sul.answer(words)
+            except RuntimeError as error:
+                outcome['error'] = str(error)
+
+        for program in (echo, first):
+            outcome.clear()
+            sul = state_machine.Sul([sys.executable, '-c', program])
+            worker = threading.Thread(target=run, args=(sul,), daemon=True)
+            worker.start()
+            worker.join(120)
+            if worker.is_alive():
+                sul.process.kill()
+            self.assertFalse(worker.is_alive(), 'the SUL driver deadlocked')
+            sul.close()
+            if program == echo:
+                self.assertEqual(outcome.get('answers'), words)
+            else:
+                self.assertRegex(outcome.get('error', ''), r'the SUL ended \(exit 0\) on: w1s0 ')
+        # Copies of the SUL share each batch and give the answers back in its order, whatever the batch's size.
+        pool = state_machine.SulPool([sys.executable, '-c', echo], 3)
+        try:
+            for count in (0, 1, 2, 3, 7, 64):
+                self.assertEqual(pool.answer(words[:count]), words[:count])
+        finally:
+            pool.close()
+        pool = state_machine.SulPool([sys.executable, '-c', 'import sys\nsys.exit(3)\n'], 2)
+        with self.assertRaisesRegex(RuntimeError, r'the SUL ended \(exit 3\)'):
+            pool.answer(words[:4])
+        with self.assertRaisesRegex(RuntimeError, 'the SUL exited 3; the SUL exited 3'):
+            pool.close()
 
     def test_tls_properties_reject_each_violation_with_its_shortest_witness(self):
         # Each monitor on a one-path machine: the listed steps in order; any other input changes nothing.

@@ -116,14 +116,15 @@ endif()
 
 # Protocol state learning (docs/design/network-foundation.md#state-learning): each end's TlsSession learned through
 # crd-crypto-tls-sul, held to its reviewed machine and to the models' properties. Runs where the program runs on the
-# build host; about 2 minutes on linux-gcc-debug, a sanitizer lane up to ten times that.
+# build host, with four copies of the SUL sharing each batch of queries (ctest reserves four processors for it): 5.5
+# minutes on win-debug (23 with one copy; linux-gcc-debug took 2 with one), a sanitizer lane a few times that.
 add_executable(crd-crypto-tls-sul state/tls_sul.cpp)
 target_link_libraries(crd-crypto-tls-sul PRIVATE crd-crypto crd-core crd-containers)
 if(Python3_FOUND AND NOT CMAKE_CROSSCOMPILING)
     add_test(NAME crd-crypto-state-learning
              COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-state-machine.py"
-                     --sul "$<TARGET_FILE:crd-crypto-tls-sul>")
-    set_tests_properties(crd-crypto-state-learning PROPERTIES TIMEOUT 3600 LABELS "crypto;state-learning"
+                     --jobs 4 --sul "$<TARGET_FILE:crd-crypto-tls-sul>")
+    set_tests_properties(crd-crypto-state-learning PROPERTIES TIMEOUT 3600 PROCESSORS 4 LABELS "crypto;state-learning"
                          ENVIRONMENT "PYTHONUTF8=1")
 endif()
 
@@ -319,9 +320,9 @@ if(CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING)
     message(STATUS "[secret-service-vs-gnome-keyring] the Secret Service protector against ${CRD_GNOME_KEYRING}")
 endif()
 
-# On macOS (decision K16): crd-crypto-tests' hidden platform vault cases in a scratch keychain that is the user's default
-# and only keychain for the run (keychain_session.py): unlocked, seeded and then locked, and with its file gone. Serial,
-# since the default keychain is the user's for every process.
+# On macOS (decision K16): crd-crypto-tests' hidden platform vault cases in a scratch keychain that is the user's
+# default and only keychain for the run (keychain_session.py): unlocked, seeded and then locked, and with its file gone.
+# Serial, since the default keychain is the user's for every process.
 if(APPLE AND Python3_FOUND)
     foreach(mode unlocked locked absent)
         add_test(NAME crd-crypto-keychain-${mode}

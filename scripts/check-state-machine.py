@@ -19,17 +19,20 @@ docs/design/network-foundation.md#state-learning. The crd-crypto-state-learning 
   python3 scripts/check-state-machine.py --sul build/<preset>/bin/crd-crypto-tls-sul [--system tls-server] [--write]
 """
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import argparse
 import itertools
+import os
 import random
 import subprocess
 import sys
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE_DIR = ROOT / 'tests' / 'foundation' / 'crypto' / 'state'
-BATCH = 64  # queries written before their answers are read (each answer stays far below a pipe's buffer)
+BATCH = 64  # queries in flight at once: the SUL answers them while the later ones are still being written
 
 
 class Machine:
@@ -124,16 +127,17 @@ class Cache:
 class Oracle:
     """Membership queries through the cache; `answer` is a function from a list of words to their outputs."""
 
-    def __init__(self, answer):
+    def __init__(self, answer, batch=BATCH):
         self.answer = answer
+        self.batch = batch
         self.cache = Cache()
         self.queries = 0
         self.symbols = 0
 
     def ask(self, words):
         missing = list(dict.fromkeys(word for word in words if word and self.cache.get(word) is None))
-        for start in range(0, len(missing), BATCH):
-            batch = missing[start:start + BATCH]
+        for start in range(0, len(missing), self.batch):
+            batch = missing[start:start + self.batch]
             for word, outputs in zip(batch, self.answer(batch)):
                 if len(outputs) != len(word):
                     raise RuntimeError(f'{" ".join(word)}: {len(outputs)} outputs for {len(word)} inputs')
@@ -154,21 +158,62 @@ class Sul:
                                         encoding='utf-8', bufsize=1)
 
     def answer(self, words):
-        self.process.stdin.write(''.join(' '.join(word) + '\n' for word in words))
-        self.process.stdin.flush()
+        # The queries go in from a second thread while this one reads the answers: a batch can exceed both pipes'
+        # buffers (4 KiB on Windows), and writing all of it first would wait on a SUL that waits on its reader.
+        writer = threading.Thread(target=self._write, args=(''.join(' '.join(word) + '\n' for word in words),))
+        writer.start()
         answers = []
-        for word in words:
-            line = self.process.stdout.readline()
-            if not line:
-                raise RuntimeError(f'the SUL ended (exit {self.process.wait()}) on: {" ".join(word)}')
-            answers.append(tuple(line.split()))
+        try:
+            for word in words:
+                line = self.process.stdout.readline()
+                if not line:
+                    raise RuntimeError(f'the SUL ended (exit {self.process.wait()}) on: {" ".join(word)}')
+                answers.append(tuple(line.split()))
+        finally:
+            writer.join()
         return answers
 
+    def _write(self, text):
+        try:
+            self.process.stdin.write(text)
+            self.process.stdin.flush()
+        except OSError:
+            pass  # the SUL ended: the reader reports it with the word it ended on
+
     def close(self):
-        self.process.stdin.close()
+        try:
+            self.process.stdin.close()
+        except OSError:
+            pass  # a SUL that ended early left queries unwritten; its exit code below says why
         code = self.process.wait()
+        self.process.stdout.close()
         if code != 0:
             raise RuntimeError(f'the SUL exited {code}')
+
+
+class SulPool:
+    """Copies of one SUL answering a batch together. Each query starts fresh sessions, so the queries of a batch are
+    independent: the batch is dealt out in contiguous shares, one per copy, and the answers come back in its order."""
+
+    def __init__(self, command, jobs):
+        self.suls = [Sul(command) for _ in range(jobs)]
+        self.executor = ThreadPoolExecutor(jobs)
+
+    def answer(self, words):
+        share = max(1, -(-len(words) // len(self.suls)))
+        parts = [words[start:start + share] for start in range(0, len(words), share)]
+        return [answer for answers in self.executor.map(Sul.answer, self.suls, parts) for answer in answers]
+
+    def close(self):
+        self.executor.shutdown()
+        errors = []
+        for sul in self.suls:
+            try:
+                sul.close()
+            except RuntimeError as error:
+                errors.append(str(error))
+        if errors:
+            raise RuntimeError('; '.join(errors))
 
 
 def learn(oracle, inputs, extra_states=1, random_words=1000, seed=1):
@@ -399,13 +444,13 @@ def header(name, machine, oracle, seconds, extra_states):
             f'{oracle.queries} queries, {oracle.symbols} inputs, {seconds:.0f} s on the writing host.']
 
 
-def check_system(name, sul_path, extra_states, random_words, recheck, write):
+def check_system(name, sul_path, extra_states, random_words, recheck, write, jobs=1):
     arguments, machine_file, properties = SYSTEMS[name]
     start = time.monotonic()
-    sul = Sul([str(sul_path), *arguments])
+    sul = SulPool([str(sul_path), *arguments], jobs)
     alphabet = subprocess.run([str(sul_path), '--alphabet'], stdout=subprocess.PIPE, text=True, check=True)
     inputs = tuple(alphabet.stdout.split())
-    oracle = Oracle(sul.answer)
+    oracle = Oracle(sul.answer, BATCH * jobs)
     failures = []
     try:
         learned = learn(oracle, inputs, extra_states, random_words)
@@ -419,7 +464,7 @@ def check_system(name, sul_path, extra_states, random_words, recheck, write):
         sul.close()
     seconds = time.monotonic() - start
     print(f'[state-learning] {name}: {len(learned.states)} states, {oracle.queries} queries, '
-          f'{oracle.symbols} inputs, {seconds:.0f} s')
+          f'{oracle.symbols} inputs, {seconds:.0f} s with {jobs} SUL(s)')
     for prop, verdict, word, outputs in violations(learned, properties):
         failures.append(f'{name}: property {prop}: {verdict}\n  inputs:  {" ".join(word)}\n  outputs: '
                         f'{" ".join(outputs)}')
@@ -460,10 +505,12 @@ def main(argv=None):
     parser.add_argument('--random-words', type=int, default=2000, help='seeded random words beside the W-method')
     parser.add_argument('--recheck', type=int, default=200, help='answers asked again for determinism')
     parser.add_argument('--write', action='store_true', help='write the learned machines (after review)')
+    parser.add_argument('--jobs', type=int, default=os.cpu_count() or 1, help='SUL copies answering at once')
     args = parser.parse_args(argv)
     failures = []
     for name in args.system or sorted(SYSTEMS):
-        failures += check_system(name, args.sul, args.extra_states, args.random_words, args.recheck, args.write)
+        failures += check_system(name, args.sul, args.extra_states, args.random_words, args.recheck, args.write,
+                                 max(1, args.jobs))
     for failure in failures:
         print(f'[state-learning] FAIL {failure}')
     print('[state-learning] ' + ('FAIL' if failures else 'PASS'))
