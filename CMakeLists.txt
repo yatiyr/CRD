@@ -1154,6 +1154,14 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
     if(NOT TARGET crypto OR NOT TARGET ssl)
         message(FATAL_ERROR "The pinned AWS-LC's CMake no longer defines its crypto and ssl libraries (cmake/pins.json)")
     endif()
+    if(APPLE)
+        # Apple's clang searches /usr/local/include before every -isystem directory, and on an Intel Mac that is where
+        # Homebrew keeps OpenSSL's headers: under SYSTEM, <openssl/ssl.h> found OpenSSL's in AWS-LC's own units and in
+        # every unit that includes it (the macOS lane, 2026-11-04). AWS-LC's directories are therefore named with -I,
+        # searched first, and its headers still read as system headers by their prefix.
+        set_target_properties(crypto ssl PROPERTIES SYSTEM OFF)
+        target_compile_options(crypto PUBLIC "$<$<COMPILE_LANGUAGE:C,CXX>:--system-header-prefix=openssl/>")
+    endif()
     # No link-time IL in AWS-LC's objects: its static library mixes C with assembly, which link-time code generation
     # cannot hold together, and its assembly keeps its own -Wa,--noexecstack. Its above-floor code runs only behind its
     # own CPU capability checks (OPENSSL_cpuid_setup), so the ISA isolation guard treats it as a provider: its objects
@@ -1173,6 +1181,11 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
             continue()
         endif()
         set_target_properties(${_crd_awslc_target} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE provider)
+        if(APPLE)
+            # Its own units too, the renaming header's directory first (AWS-LC's include/ holds an empty stand-in).
+            target_include_directories(${_crd_awslc_target} BEFORE PRIVATE "${aws-lc_BINARY_DIR}/symbol_prefix_include"
+                                       "${aws-lc_SOURCE_DIR}/include")
+        endif()
         target_compile_definitions(${_crd_awslc_target} PRIVATE BORINGSSL_PREFIX=${CRD_PROVIDER_PREFIX})
         get_target_property(_crd_awslc_sources ${_crd_awslc_target} SOURCES)
         get_target_property(_crd_awslc_dir ${_crd_awslc_target} SOURCE_DIR)

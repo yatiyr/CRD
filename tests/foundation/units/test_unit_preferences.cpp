@@ -127,6 +127,18 @@ TEST_CASE("v0d-5 parse_length: 1.85_m -> Length32{1.85}", "[units][v0d-5][parse]
     REQUIRE(q->value == Catch::Approx(1.85F));
 }
 
+TEST_CASE("v0d-5 parse_length: whitespace before the suffix is trimmed", "[units][v0d-5][parse][length]")
+{
+    // The trim loop once tested a constant length and never returned for these.
+    const auto prefs = make_si_strict_prefs();
+    for (const char* text : {"1.85 _m", "1.85\t_m", "1.85 \t _m"})
+    {
+        const auto q = crd::units::parse_length<crd::f32>(crd::containers::StringView{text}, prefs);
+        REQUIRE(q.has_value());
+        CHECK(q->value == Catch::Approx(1.85F));
+    }
+}
+
 TEST_CASE("v0d-5 parse_length: 1850_mm -> Length32{1.85}", "[units][v0d-5][parse][length]")
 {
     const auto prefs = make_cad_prefs();

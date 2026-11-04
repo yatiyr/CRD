@@ -60,6 +60,18 @@
       "decision": "crd-platform, the process's boundary with its OS: every tool's main and the sandbox read their arguments through it, so a Turkish name or a fullwidth quote reaches a verb as it was passed. COMPLY.1, docs/sessions/2026-11-01-utf8-arguments-and-environment.md."
     },
     {
+      "id": "text.parse-float",
+      "summary": "The locale-independent parse of one decimal floating-point number (std::chars_format::general): std::from_chars where the standard library has it for floating point, a strtod_l reading in the C locale where it does not (Apple's libc++).",
+      "owner": "core",
+      "decision": "crd-core, below every reader (JSON, CEIR text, diagnostic commands): the libc++ fallback lives once, NET.2's macOS lane, docs/sessions/2026-11-04-net-2-macos-keychain.md.",
+      "api": [
+        "engine/foundation/core/include/crd/core/parse_float.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\bchars_format\\s*::\\s*(?:general|scientific|fixed|hex)\\b", "what": "a floating-point std::from_chars or std::to_chars format"}
+      ]
+    },
+    {
       "id": "hash.fnv1a",
       "summary": "FNV-1a hashing, 32- and 64-bit, over bytes and text (constant-expression capable), little-endian integer folds and the runtime word step: identities, cache keys and cooked-content hashes.",
       "owner": "core",

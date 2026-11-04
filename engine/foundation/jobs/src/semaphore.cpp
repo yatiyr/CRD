@@ -18,8 +18,11 @@
 #include <sched.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#elif CRD_OS_MAC
+#include <os/os_sync_wait_on_address.h> // macOS 14.4: the public wait-on-address interface (the preset's floor)
+#include <sched.h>
 #else
-#error "crd::jobs::detail::Semaphore: unsupported platform (crd-jobs is Windows + Linux, like its fiber asm)"
+#error "crd::jobs::detail::Semaphore: unsupported platform (crd-jobs is Windows, Linux and macOS, like its fiber asm)"
 #endif
 
 namespace crd::jobs::detail
@@ -62,7 +65,7 @@ bool Semaphore::spin_for_token(crd::u32 rounds) const noexcept
     return m_count.load(std::memory_order_relaxed) != 0U;
 }
 
-// The futex / WaitOnAddress word is the atomic count itself. Both kernels
+// The futex / WaitOnAddress / os_sync word is the atomic count itself. Every kernel
 // atomically re-check the word against the expected value (0) under their
 // internal lock before queueing the sleeper, which is what closes the
 // pre-sleep release window (see the class comment in semaphore.hpp).
@@ -125,6 +128,32 @@ void Semaphore::wake_one() noexcept
 void Semaphore::wake_all() noexcept
 {
     (void)futex_op(&m_count, FUTEX_WAKE_PRIVATE, static_cast<crd::u32>(INT_MAX), nullptr);
+}
+
+#elif CRD_OS_MAC
+
+// The process-private flags: the word lives in this process only. A waiter woken with no token, an EINTR, an EFAULT
+// or a timeout returns to the caller's retry loop, as on the other kernels; a wake with no waiter answers ENOENT.
+
+void Semaphore::wait_on_zero() noexcept
+{
+    (void)::os_sync_wait_on_address(&m_count, 0U, sizeof(crd::u32), OS_SYNC_WAIT_ON_ADDRESS_NONE);
+}
+
+void Semaphore::timed_wait_on_zero(crd::u32 ms) noexcept
+{
+    (void)::os_sync_wait_on_address_with_timeout(&m_count, 0U, sizeof(crd::u32), OS_SYNC_WAIT_ON_ADDRESS_NONE,
+                                                 OS_CLOCK_MACH_ABSOLUTE_TIME, static_cast<crd::u64>(ms) * 1000000U);
+}
+
+void Semaphore::wake_one() noexcept
+{
+    (void)::os_sync_wake_by_address_any(&m_count, sizeof(crd::u32), OS_SYNC_WAKE_BY_ADDRESS_NONE);
+}
+
+void Semaphore::wake_all() noexcept
+{
+    (void)::os_sync_wake_by_address_all(&m_count, sizeof(crd::u32), OS_SYNC_WAKE_BY_ADDRESS_NONE);
 }
 
 #endif

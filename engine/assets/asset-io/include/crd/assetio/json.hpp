@@ -10,7 +10,7 @@
 // partial DOM.
 //
 // DIAG.10a (the command-decoding fuzz target, crd-fuzz-ceridc-diag): a number must match the RFC grammar exactly (no
-// leading '+' or zero, no bare '.', an exponent with a digit) and is read whole by std::from_chars, locale-independent;
+// leading '+' or zero, no bare '.', an exponent with a digit) and is read whole by crd::parse_f64, locale-independent;
 // one a double cannot hold is refused, never clamped or cut. A string's raw bytes must be well-formed UTF-8
 // (crd/core/utf8.hpp). A decoded string may hold NUL (\u0000): compare it by its length (str_value_eq), never as a C
 // string.

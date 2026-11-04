@@ -348,7 +348,7 @@ bool reduced(ConstSpan<u8> key) noexcept
     for (usize i = 0U; i < polynomials * 384U; i += 3U)
     {
         const unsigned low  = key[i] | (key[i + 1U] & 0x0FU) << 8U;
-        const unsigned high = key[i + 1U] >> 4U | key[i + 2U] << 4U;
+        const unsigned high = static_cast<unsigned>(key[i + 1U]) >> 4U | static_cast<unsigned>(key[i + 2U]) << 4U;
         if (low >= 3329U || high >= 3329U)
         {
             return false;

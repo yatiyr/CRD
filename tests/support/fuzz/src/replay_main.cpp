@@ -39,10 +39,23 @@ struct Outcome
     crd::containers::String slowest_name;
 };
 
+// The file's bytes, or none when it cannot be read whole.
 [[nodiscard]] crd::containers::Array<std::uint8_t> read_file(const fs::path& path)
 {
-    std::ifstream stream(path, std::ios::binary);
-    return crd::containers::Array<std::uint8_t>((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    crd::containers::Array<std::uint8_t> bytes;
+    std::ifstream                        stream(path, std::ios::binary | std::ios::ate);
+    const std::streamoff                 size = stream ? static_cast<std::streamoff>(stream.tellg()) : -1;
+    if (size <= 0)
+    {
+        return bytes;
+    }
+    bytes.resize(static_cast<std::size_t>(size));
+    stream.seekg(0);
+    if (!stream.read(reinterpret_cast<char*>(bytes.data()), size))
+    {
+        bytes.clear();
+    }
+    return bytes;
 }
 
 void replay_one(const fs::path& path, bool verbose, Outcome& outcome)

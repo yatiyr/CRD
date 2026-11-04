@@ -54,6 +54,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/parse_float.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/fault_injection.hpp>
 #include <crd/perf/flight_commands.hpp>
@@ -62,7 +63,6 @@
 #include <initializer_list>
 
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -367,10 +367,9 @@ private:
                 ++m_p;
             }
         }
-        double     value = 0.0;
-        const auto res   = std::from_chars(reinterpret_cast<const char*>(first), reinterpret_cast<const char*>(m_p),
-                                           value, std::chars_format::general);
-        if (res.ec != std::errc{})
+        // The grammar was checked above, so a refusal is a value out of a double's range.
+        double value = 0.0;
+        if (!crd::parse_f64(reinterpret_cast<const char*>(first), reinterpret_cast<const char*>(m_p), value))
         {
             m_result.numbers_in_range = false;
         }

@@ -15,8 +15,8 @@ namespace crd::jobs::detail
 using SleepHook = void (*)(void* user) noexcept;
 
 // ---------------------------------------------------------------------------
-// Semaphore — the worker-sleep primitive, built directly on futex (Linux) /
-// WaitOnAddress (Windows) with the canonical expected==decision-value protocol.
+// Semaphore — the worker-sleep primitive, built directly on futex (Linux),
+// os_sync_wait_on_address (macOS) / WaitOnAddress (Windows) with the canonical expected==decision-value protocol.
 //
 // WHY THIS EXISTS (2026-07-02, the CI moat-test hang): std::counting_semaphore
 // on libstdc++ (GCC 13.3, the Ubuntu 24.04 CI runner) loses wakes under
@@ -63,8 +63,8 @@ using SleepHook = void (*)(void* user) noexcept;
 // consume in between, which the worker_loop structure (try_pop before every
 // wait) makes unreachable in practice.
 //
-// Platform scope matches crd-jobs itself (the fiber context switch is win64 +
-// lin64 asm): Windows + Linux only, enforced at compile time in semaphore.cpp.
+// Platform scope matches crd-jobs itself (the fiber context switch is the win64
+// and the SysV x86-64 asm): Windows, Linux and macOS, enforced in semaphore.cpp.
 // ---------------------------------------------------------------------------
 class Semaphore
 {

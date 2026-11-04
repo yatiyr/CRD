@@ -54,8 +54,11 @@ struct cpuid_feature
 };
 extern "C" const struct cpuid_feature* __x86_get_cpuid_feature_leaf(unsigned int) __attribute__((pure, weak));
 #endif
-#elif CRD_OS_MAC && CRD_ARCH_ARM64
+#elif CRD_OS_MAC
 #include <sys/sysctl.h>
+#if CRD_ARCH_X64
+#include <cpuid.h>
+#endif
 #endif
 
 namespace crd

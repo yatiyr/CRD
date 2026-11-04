@@ -22,6 +22,7 @@ namespace crd
 {
 namespace
 {
+#if CRD_OS_WINDOWS || CRD_OS_LINUX
 BudgetReading bounded_reading(crd::u64 capacity, crd::u64 in_use) noexcept
 {
     BudgetReading r;
@@ -50,6 +51,7 @@ crd::u64 raise_resident_peak(crd::u64 observed) noexcept
     }
     return peak;
 }
+#endif
 
 #if CRD_OS_LINUX
 // A /proc file read whole into `buffer` (NUL-terminated). False when it cannot be opened, read or does not fit.

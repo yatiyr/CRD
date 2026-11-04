@@ -1,4 +1,4 @@
-/* fiber_switch_lin64.S — Linux x86-64 SysV ABI fiber context switch
+/* fiber_switch_lin64.S — x86-64 SysV ABI fiber context switch (Linux ELF and macOS Mach-O)
  *
  * Signature: void fiber_switch(FiberContext* from, FiberContext* to)
  *   rdi = from  (pointer to FiberContext.rsp of the current fiber)
@@ -26,13 +26,20 @@
  *   [40..47]  R14
  *   [48..55]  R15
  *   [56..N ]  return address (saved by the original `call fiber_switch`)
+ *
+ * Mach-O spells a C symbol with a leading underscore and has no .type or .size; CRD_ASM_BEGIN/END hide both.
  */
 
-.text
-.globl  fiber_switch
-.type   fiber_switch, @function
+#if defined(__APPLE__)
+#define CRD_ASM_BEGIN(name) .globl _##name ; .p2align 4 ; _##name:
+#define CRD_ASM_END(name)
+#else
+#define CRD_ASM_BEGIN(name) .globl name ; .type name, @function ; name:
+#define CRD_ASM_END(name) .size name, .-name
+#endif
 
-fiber_switch:
+.text
+CRD_ASM_BEGIN(fiber_switch)
     /* Save callee-saved integer registers */
     push    %r15
     push    %r14
@@ -68,7 +75,7 @@ fiber_switch:
     /* Jump to the saved return address at the top of the new stack */
     ret
 
-.size fiber_switch, .-fiber_switch
+CRD_ASM_END(fiber_switch)
 
 /* crd_fiber_start — the first code a new fiber runs: fiber_switch's `ret` lands here on a fresh stack built by
  * fiber_init_stack, with R12 = the fiber entry function and R13 = the never-return safety net (fiber_abort).
@@ -82,10 +89,7 @@ fiber_switch:
  * Alignment: entered at RSP % 16 == 8 (the ret consumed the 16-aligned frame's return slot), so one 8-byte adjust
  * makes RSP % 16 == 0 before each call, and the callee starts at RSP % 16 == 8 as the SysV ABI requires.
  */
-.globl  crd_fiber_start
-.type   crd_fiber_start, @function
-
-crd_fiber_start:
+CRD_ASM_BEGIN(crd_fiber_start)
     .cfi_startproc
     .cfi_undefined rip
     xor     %ebp, %ebp
@@ -96,7 +100,7 @@ crd_fiber_start:
     ud2
     .cfi_endproc
 
-.size crd_fiber_start, .-crd_fiber_start
+CRD_ASM_END(crd_fiber_start)
 
 /*
  * Mark the stack as non-executable. Without this section, GNU ld emits

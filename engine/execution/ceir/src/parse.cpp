@@ -6,8 +6,9 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/parse_float.hpp>
 
-#include <charconv> // std::from_chars — allocation-free int/float parsing (the exact inverse of the printer's to_chars)
+#include <charconv> // std::from_chars — allocation-free integer parsing (the exact inverse of the printer's to_chars)
 
 namespace crd::ceir
 {
@@ -1486,9 +1487,8 @@ private:
 
     [[nodiscard]] AttrId float_from_word(containers::StringView run) noexcept
     {
-        f64        v   = 0.0;
-        const auto res = std::from_chars(run.data(), run.data() + run.size(), v, std::chars_format::general);
-        if (res.ec != std::errc{} || res.ptr != run.data() + run.size())
+        f64 v = 0.0;
+        if (!crd::parse_f64(run.data(), run.data() + run.size(), v))
         {
             fail("malformed float attribute");
             return {};

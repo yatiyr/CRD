@@ -117,6 +117,7 @@ each a `pending` entry or a listed review, all on OWN.1:
 | Capability → owner | Copies | Notes |
 |---|---|---|
 | hash.fnv1a → core | 33 engine files and 2 asset-cooker files, **moved** 2026-10-31 | see below; `sandbox`'s BVH-viewer fingerprint mixes the FNV constants into SplitMix64 and moves with the seed generators. |
+| text.parse-float → core | `asset-io/json.cpp`, `ceir/parse.cpp`, the ceridc diagnostic-command fuzz target, **moved** 2026-11-04 | each called `std::from_chars` for a double, which Apple's libc++ lacks; `crd::parse_f64` takes the strtod_l reading in the C locale there (NET.2's macOS lane). |
 | hash.combine → core | `lod/lod_asset.cpp`, `scene/archetype_graph.hpp`, **moved** 2026-10-31 | the golden-ratio combiner `h ^= v + 0x9E3779B97F4A7C15 + (h << 6) + (h >> 2)`, twice; see below. |
 | random.seed-generators → core | 11 files and core's own workload probe, **moved** 2026-10-31 | SplitMix64 in ceir, perf, core, hesap-eigen, three hesap-stats headers, containers' `hash_u64` finalizer and the sandbox; the MMIX LCG step in hesap-dense's SVD, hesap-fft's sparse FFT and hesap-iterative's IDR(s); bit-exact, see below. |
 | cpu.kernel-dispatch → core | `math/libm.hpp`, **moved** 2026-10-31 | read `__AVX2__` and `__FMA__` to choose the FMA instruction; it now reads crd-core's `CRD_TARGET_X64` and `CRD_TARGET_X64_FMA`, see below. |

@@ -8,7 +8,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#elif CRD_OS_LINUX
+#elif CRD_OS_LINUX || CRD_OS_MAC
 #include <sys/mman.h>
 #include <unistd.h>
 #else

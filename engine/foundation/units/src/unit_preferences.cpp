@@ -211,8 +211,12 @@ bool parse_value_with_suffix(crd::containers::StringView text,
                 {
                     buf[j] = text[j];
                 }
-                // Trim trailing whitespace before suffix start.
-                while (num_len > 0 && (buf[num_len - 1] == ' ' || buf[num_len - 1] == '\t')) {}
+                // Trim trailing whitespace before the suffix ("5 m"). The loop once tested a constant length, so such
+                // a value spun forever.
+                for (crd::usize len = num_len; len > 0 && (buf[len - 1] == ' ' || buf[len - 1] == '\t'); --len)
+                {
+                    buf[len - 1] = '\0';
+                }
                 char* end = nullptr;
                 const double v = std::strtod(buf, &end); // NOLINT(cert-err34-c)
                 if (end == buf)

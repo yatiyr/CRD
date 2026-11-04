@@ -40,6 +40,7 @@ OsProbeResult unavailable(const char* reason) noexcept
     return OsProbeResult{OsPresence::Unavailable, reason};
 }
 
+#if CRD_OS_WINDOWS || CRD_OS_LINUX
 // The verdict for `covered` reserved or mapped bytes of a `bytes`-long range.
 OsProbeResult coverage(crd::usize covered, crd::usize bytes) noexcept
 {
@@ -61,6 +62,7 @@ crd::usize overlap(crd::usize lo, crd::usize hi, crd::usize a, crd::usize b) noe
     const crd::usize to   = hi < b ? hi : b;
     return to > from ? to - from : 0U;
 }
+#endif
 
 #if CRD_OS_WINDOWS
 
@@ -439,6 +441,7 @@ OsProbeResult range_coverage(const void* base, crd::usize bytes, bool no_access_
     return coverage(covered, bytes);
 #else
     (void)no_access_only;
+    (void)hi;
     return unavailable("no address-space probe on this OS");
 #endif
 }

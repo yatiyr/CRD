@@ -4,159 +4,169 @@ include(CrdFuzz) # REPO.DEV.9: crd_fuzz_target() (replay CTest on every lane; li
 include(CrdWarp) # pinned app-local WARP staging (CRD_WARP_DLL), applied at the end of this file
 
 find_package(Python3 3.12 REQUIRED COMPONENTS Interpreter)
-add_test(NAME crd-repository-hygiene
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-repository.py")
-add_test(NAME crd-master-plan
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-master-plan.py")
-add_test(NAME crd-repository-tools
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-repository-tools.py")
-add_test(NAME crd-developer-workflow
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-dev-workflow.py")
-add_test(NAME crd-project-structure-sync
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync.py")
-add_test(NAME crd-build-profiles
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-native-build-profiles.py")
-add_test(NAME crd-module-selection
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-module-selection.py")
-# ADR-0135: the Cerid CI platform's registry, planner, lanes, executors, dashboard and parity table
-add_test(NAME crd-ci-platform
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-ci-platform.py")
-# ADR-0135 §12: the Cerid orchestrator's state machines, store, authentication, scheduler, agent and service
-add_test(NAME crd-ci-orchestrator
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-ci-orchestrator.py")
-# ADR-0135 §12: the coordinator and a real agent process on this host, a trivial pipeline end to end
-add_test(NAME crd-ci-orchestrator-e2e
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-ci-orchestrator-e2e.py")
-# DIAG.6c: verdict tests of the external sampling, counter-capability and debugger runbooks. They mock wpr, xperf,
-# perf and lldb, so they need neither the tools nor elevation and run on every host.
-add_test(NAME crd-diag-cpu-sampling-runbook
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-sample-cpu-wpr.py")
-add_test(NAME crd-diag-counters-capability
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-counters-capability.py")
-add_test(NAME crd-diag-debugger-recipes
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-debugger-recipes.py")
-add_test(NAME crd-diag-reverse-debug-recipes # DIAG.9c: every reverse-debugging verdict, without a debugger
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-reverse-debug-recipes.py")
-# DIAG.10b: every seeded-failure verdict, the registry against the tree and the suppression policy, without a build
-add_test(NAME crd-diag-seeded-faults
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-diag-seeded-faults.py")
-# DIAG.10b: every coverage verdict, the coverage registry and the nonreproduced-failure register, without a build
-add_test(NAME crd-diag-coverage
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-diag-coverage.py")
-# DIAG.11b: every overhead-board statistic and verdict, with fake measurement processes
-add_test(NAME crd-diag-overhead-verdicts
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-diag-overhead.py")
-# DIAG.11b clause (8): every verdict of the external sampling of the overhead workloads, wpr and xperf mocked
-add_test(NAME crd-diag-overhead-sampling-runbook
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-sample-overhead-wpr.py")
-add_test(NAME crd-ci-tiers
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-ci-tiers.py")
-add_test(NAME crd-pins
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-pins.py")
-add_test(NAME crd-generated-sources # REPO.DEV.10: every generated file named with its generator and bytes
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-generated.py")
-add_test(NAME crd-license-manifest # REPO.DEV.10: docs/generated/dependency-licenses.md follows cmake/pins.json
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/gen_license_manifest.py" --check)
-# The document validator walks about a thousand documents; on a native disk that is seconds, on a checkout read
-# through a 9p mount (WSL on a Windows drive) it measured 57 to 64 s and the former 60 s budget failed it honestly.
-# The budget is a ceiling against hangs, not a performance contract, so it covers the slowest supported instrument.
-set_tests_properties(crd-repository-hygiene crd-master-plan crd-repository-tools crd-ci-platform
-    crd-ci-orchestrator crd-ci-orchestrator-e2e PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONUTF8=1")
-set_tests_properties(crd-project-structure-sync PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
-set_tests_properties(crd-build-profiles PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
-set_tests_properties(crd-module-selection PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
-set_tests_properties(crd-ci-tiers crd-pins crd-license-manifest PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
-set_tests_properties(crd-generated-sources PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1") # hashes 14 MB of codelets
-set_tests_properties(crd-developer-workflow PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
-set_tests_properties(crd-diag-cpu-sampling-runbook crd-diag-counters-capability crd-diag-debugger-recipes
-    crd-diag-reverse-debug-recipes crd-diag-overhead-verdicts crd-diag-overhead-sampling-runbook
-    PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
-# The harness-tree check's teeth configure and build a real CONFIGURE_DEPENDS tree with this tree's own CMake and ninja,
-# so under CTest that case always runs (outside CTest it looks for both on PATH).
-if(CMAKE_GENERATOR MATCHES "Ninja")
-    set_property(TEST crd-diag-overhead-sampling-runbook APPEND PROPERTY ENVIRONMENT
-        "CRD_TEST_CMAKE=${CMAKE_COMMAND}" "CRD_TEST_NINJA=${CMAKE_MAKE_PROGRAM}")
-endif()
-# It reads the seeded sources through the checkout: 10 s through WSL's 9p mount, under 1 s on a native disk.
-set_tests_properties(crd-diag-seeded-faults crd-diag-coverage PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
-# DIAG.3a: every allocation result in shipped code is checked before it is used (a sub-budget allocator refuses by
-# returning nullptr), passed up to a caller that checks it, or a named heap site; it reads every source under engine/,
-# tools/, runtime/ and sandbox/ through the checkout.
-add_test(NAME crd-check-allocation-results
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-allocation-results.py" "${CMAKE_SOURCE_DIR}")
-set_tests_properties(crd-check-allocation-results PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
-# Every environment variable is read through crd/core/environment.hpp: no std::getenv, _dupenv_s or
-# GetEnvironmentVariable outside its reader, in any C-family source under the source-routes roots.
-add_test(NAME crd-check-environment-reads
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-environment-reads.py" "${CMAKE_SOURCE_DIR}")
-set_tests_properties(crd-check-environment-reads PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
-# Only frame owners reset the crd::jobs frame arenas: no crd::jobs::frame_reset under engine/ outside the jobs module.
-add_test(NAME crd-check-frame-resets
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-frame-resets.py" "${CMAKE_SOURCE_DIR}")
-set_tests_properties(crd-check-frame-resets PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
-# OWN.1 and OWN.2: every engine capability has one owning module (cmake/capability-owners.json); a registered
-# capability's signature in an engine source outside its owner fails unless the registry lists the file as pending a
-# move or allowed with the reason.
-add_test(NAME crd-check-capability-owners
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-capability-owners.py" --root "${CMAKE_SOURCE_DIR}")
-set_tests_properties(crd-check-capability-owners PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
-# ADR-0134 §8: only the board peer libraries (runtime/examples/peers/) include a peer header library (Eigen, Boost,
-# pocketfft), so no bench compiles a peer at the baseline ISA.
-add_test(NAME crd-check-peer-headers
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-peer-headers.py" "${CMAKE_SOURCE_DIR}")
-set_tests_properties(crd-check-peer-headers PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
-# NET-STD and COMPLY.0: the standards register (cmake/standards-register.json) holds no expired pinned draft, no
-# obsoleted pinned RFC and no overdue review; owners, rows, sources and evidence exist (docs/design/registers.md).
-add_test(NAME crd-check-registers
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-registers.py" --root "${CMAKE_SOURCE_DIR}")
-set_tests_properties(crd-check-registers PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
-# DIAG.11b clause (10): the investigation runbooks (docs/design/diagnostic-runbooks.md) against this tree: every
-# command, flag, diag command, artifact and example exists, and every test a runbook names (on the rows for this host)
-# is one this tree registers (it lists them with ctest --show-only); nothing publishes.
-get_property(_crd_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
-if(_crd_multi_config)
-    set(_crd_runbook_config --config "$<CONFIG>")
-else()
-    set(_crd_runbook_config "")
-endif()
-# A module selection registers part of the tests the runbook commands' full presets do, so it resolves none of them.
-get_property(_crd_runbook_modules GLOBAL PROPERTY CRD_MODULE_NAMES)
-get_property(_crd_runbook_selected GLOBAL PROPERTY CRD_SELECTED_MODULES)
-list(REMOVE_ITEM _crd_runbook_modules ${_crd_runbook_selected})
-if(_crd_runbook_modules)
-    list(JOIN _crd_runbook_modules "," _crd_runbook_omitted)
-    list(APPEND _crd_runbook_config --omitted-modules "${_crd_runbook_omitted}")
-endif()
-add_test(NAME crd-check-diag-runbooks
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-diag-runbooks.py" --build "${CMAKE_BINARY_DIR}"
-            ${_crd_runbook_config})
-set_tests_properties(crd-check-diag-runbooks PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
-if(CMAKE_GENERATOR MATCHES "^Visual Studio")
-    add_test(NAME crd-project-structure-native
-        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync-native.py"
-                --generator "${CMAKE_GENERATOR}")
-    set_tests_properties(crd-project-structure-native PROPERTIES TIMEOUT 180 ENVIRONMENT "PYTHONUTF8=1")
-    add_test(NAME crd-native-build-profiles
-        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-native-build-profiles.py"
-                --generator "${CMAKE_GENERATOR}")
-    set_tests_properties(crd-native-build-profiles PROPERTIES TIMEOUT 240 ENVIRONMENT "PYTHONUTF8=1")
-endif()
-# Every first-party C-family source is compiled by a target of this tree or named in scripts/source-routes.json with
-# the route that builds it, judged against what this tree compiles (its compile_commands.json): a test source that no
-# target lists never runs, and nothing else notices. A partial configuration (CRD_MODULES) omits whole modules, so the
-# guard runs on full configurations; the generators that write a compile database.
-if(CMAKE_EXPORT_COMPILE_COMMANDS AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles" AND NOT CRD_MODULE_SELECTION)
-    add_test(NAME crd-check-source-routes
-        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-source-routes.py" --build "${CMAKE_BINARY_DIR}")
-    set_tests_properties(crd-check-source-routes PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
-endif()
-# One optimization level per cl.exe/clang-cl command: cl.exe reports a second one as D9025, which /WX does not fail.
-# The generators that write compile_commands.json; Visual Studio keeps per-file settings in its projects instead.
-if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
-    add_test(NAME crd-check-compile-commands
-        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-compile-commands.py"
-                "${CMAKE_BINARY_DIR}/compile_commands.json")
-    set_tests_properties(crd-check-compile-commands PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONUTF8=1")
+# The repository's own guards and tool suites (source scans, registers, the CI platform and the developer tools): every
+# lane of the hosts that run them (Linux, Windows) and the Repository checks job. The macOS lane qualifies the engine's
+# closure there and turns them off (CRD_REPOSITORY_CHECKS); a macOS developer host is MAC.1's.
+option(CRD_REPOSITORY_CHECKS "Register the repository's guards and tool suites as CTests" ON)
+if(CRD_REPOSITORY_CHECKS)
+    add_test(NAME crd-repository-hygiene
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-repository.py")
+    add_test(NAME crd-master-plan
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-master-plan.py")
+    add_test(NAME crd-repository-tools
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-repository-tools.py")
+    add_test(NAME crd-developer-workflow
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-dev-workflow.py")
+    add_test(NAME crd-project-structure-sync
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync.py")
+    add_test(NAME crd-build-profiles
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-native-build-profiles.py")
+    add_test(NAME crd-module-selection
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-module-selection.py")
+    # ADR-0135: the Cerid CI platform's registry, planner, lanes, executors, dashboard and parity table
+    add_test(NAME crd-ci-platform
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-ci-platform.py")
+    # ADR-0135 §12: the Cerid orchestrator's state machines, store, authentication, scheduler, agent and service
+    add_test(NAME crd-ci-orchestrator
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-ci-orchestrator.py")
+    # ADR-0135 §12: the coordinator and a real agent process on this host, a trivial pipeline end to end
+    add_test(NAME crd-ci-orchestrator-e2e
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-ci-orchestrator-e2e.py")
+    # DIAG.6c: verdict tests of the external sampling, counter-capability and debugger runbooks. They mock wpr, xperf,
+    # perf and lldb, so they need neither the tools nor elevation and run on every host.
+    add_test(NAME crd-diag-cpu-sampling-runbook
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-sample-cpu-wpr.py")
+    add_test(NAME crd-diag-counters-capability
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-counters-capability.py")
+    add_test(NAME crd-diag-debugger-recipes
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-debugger-recipes.py")
+    add_test(NAME crd-diag-reverse-debug-recipes # DIAG.9c: every reverse-debugging verdict, without a debugger
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-reverse-debug-recipes.py")
+    # DIAG.10b: every seeded-failure verdict, the registry against the tree and the suppression policy, without a build
+    add_test(NAME crd-diag-seeded-faults
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-diag-seeded-faults.py")
+    # DIAG.10b: every coverage verdict, the coverage registry and the nonreproduced-failure register, without a build
+    add_test(NAME crd-diag-coverage
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-diag-coverage.py")
+    # DIAG.11b: every overhead-board statistic and verdict, with fake measurement processes
+    add_test(NAME crd-diag-overhead-verdicts
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-diag-overhead.py")
+    # DIAG.11b clause (8): every verdict of the external sampling of the overhead workloads, wpr and xperf mocked
+    add_test(NAME crd-diag-overhead-sampling-runbook
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-sample-overhead-wpr.py")
+    add_test(NAME crd-ci-tiers
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-ci-tiers.py")
+    add_test(NAME crd-pins
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-pins.py")
+    add_test(NAME crd-generated-sources # REPO.DEV.10: every generated file named with its generator and bytes
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-generated.py")
+    add_test(NAME crd-license-manifest # REPO.DEV.10: docs/generated/dependency-licenses.md follows cmake/pins.json
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/gen_license_manifest.py" --check)
+    # The document validator walks about a thousand documents; on a native disk that is seconds, on a checkout read
+    # through a 9p mount (WSL on a Windows drive) it measured 57 to 64 s and the former 60 s budget failed it honestly.
+    # The budget is a ceiling against hangs, not a performance contract, so it covers the slowest supported instrument.
+    set_tests_properties(crd-repository-hygiene crd-master-plan crd-repository-tools crd-ci-platform
+        crd-ci-orchestrator crd-ci-orchestrator-e2e PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONUTF8=1")
+    set_tests_properties(crd-project-structure-sync PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
+    set_tests_properties(crd-build-profiles PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
+    set_tests_properties(crd-module-selection PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    set_tests_properties(crd-ci-tiers crd-pins crd-license-manifest PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
+    # It hashes 14 MB of codelets.
+    set_tests_properties(crd-generated-sources PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    set_tests_properties(crd-developer-workflow PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
+    set_tests_properties(crd-diag-cpu-sampling-runbook crd-diag-counters-capability crd-diag-debugger-recipes
+        crd-diag-reverse-debug-recipes crd-diag-overhead-verdicts crd-diag-overhead-sampling-runbook
+        PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
+    # The harness-tree check's teeth configure and build a real CONFIGURE_DEPENDS tree with this tree's own CMake and
+    # ninja, so under CTest that case always runs (outside CTest it looks for both on PATH).
+    if(CMAKE_GENERATOR MATCHES "Ninja")
+        set_property(TEST crd-diag-overhead-sampling-runbook APPEND PROPERTY ENVIRONMENT
+            "CRD_TEST_CMAKE=${CMAKE_COMMAND}" "CRD_TEST_NINJA=${CMAKE_MAKE_PROGRAM}")
+    endif()
+    # It reads the seeded sources through the checkout: 10 s through WSL's 9p mount, under 1 s on a native disk.
+    set_tests_properties(crd-diag-seeded-faults crd-diag-coverage PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    # DIAG.3a: every allocation result in shipped code is checked before it is used (a sub-budget allocator refuses by
+    # returning nullptr), passed up to a caller that checks it, or a named heap site; it reads every source under
+    # engine/, tools/, runtime/ and sandbox/ through the checkout.
+    add_test(NAME crd-check-allocation-results
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-allocation-results.py" "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(crd-check-allocation-results PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    # Every environment variable is read through crd/core/environment.hpp: no std::getenv, _dupenv_s or
+    # GetEnvironmentVariable outside its reader, in any C-family source under the source-routes roots.
+    add_test(NAME crd-check-environment-reads
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-environment-reads.py" "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(crd-check-environment-reads PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    # Only frame owners reset the crd::jobs frame arenas: no crd::jobs::frame_reset under engine/ outside the jobs
+    # module.
+    add_test(NAME crd-check-frame-resets
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-frame-resets.py" "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(crd-check-frame-resets PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    # OWN.1 and OWN.2: every engine capability has one owning module (cmake/capability-owners.json); a registered
+    # capability's signature in an engine source outside its owner fails unless the registry lists the file as pending a
+    # move or allowed with the reason.
+    add_test(NAME crd-check-capability-owners
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-capability-owners.py"
+                --root "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(crd-check-capability-owners PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    # ADR-0134 §8: only the board peer libraries (runtime/examples/peers/) include a peer header library (Eigen, Boost,
+    # pocketfft), so no bench compiles a peer at the baseline ISA.
+    add_test(NAME crd-check-peer-headers
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-peer-headers.py" "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(crd-check-peer-headers PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    # NET-STD and COMPLY.0: the standards register (cmake/standards-register.json) holds no expired pinned draft, no
+    # obsoleted pinned RFC and no overdue review; owners, rows, sources and evidence exist (docs/design/registers.md).
+    add_test(NAME crd-check-registers
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-registers.py" --root "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(crd-check-registers PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    # DIAG.11b clause (10): the investigation runbooks (docs/design/diagnostic-runbooks.md) against this tree: every
+    # command, flag, diag command, artifact and example exists, and every test a runbook names (on the rows for this
+    # host) is one this tree registers (it lists them with ctest --show-only); nothing publishes.
+    get_property(_crd_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if(_crd_multi_config)
+        set(_crd_runbook_config --config "$<CONFIG>")
+    else()
+        set(_crd_runbook_config "")
+    endif()
+    # A module selection registers part of the tests the runbook commands' full presets do, so it resolves none of them.
+    get_property(_crd_runbook_modules GLOBAL PROPERTY CRD_MODULE_NAMES)
+    get_property(_crd_runbook_selected GLOBAL PROPERTY CRD_SELECTED_MODULES)
+    list(REMOVE_ITEM _crd_runbook_modules ${_crd_runbook_selected})
+    if(_crd_runbook_modules)
+        list(JOIN _crd_runbook_modules "," _crd_runbook_omitted)
+        list(APPEND _crd_runbook_config --omitted-modules "${_crd_runbook_omitted}")
+    endif()
+    add_test(NAME crd-check-diag-runbooks
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-diag-runbooks.py" --build "${CMAKE_BINARY_DIR}"
+                ${_crd_runbook_config})
+    set_tests_properties(crd-check-diag-runbooks PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    if(CMAKE_GENERATOR MATCHES "^Visual Studio")
+        add_test(NAME crd-project-structure-native
+            COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync-native.py"
+                    --generator "${CMAKE_GENERATOR}")
+        set_tests_properties(crd-project-structure-native PROPERTIES TIMEOUT 180 ENVIRONMENT "PYTHONUTF8=1")
+        add_test(NAME crd-native-build-profiles
+            COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-native-build-profiles.py"
+                    --generator "${CMAKE_GENERATOR}")
+        set_tests_properties(crd-native-build-profiles PROPERTIES TIMEOUT 240 ENVIRONMENT "PYTHONUTF8=1")
+    endif()
+    # Every first-party C-family source is compiled by a target of this tree or named in scripts/source-routes.json with
+    # the route that builds it, judged against what this tree compiles (its compile_commands.json): a test source that
+    # no target lists never runs, and nothing else notices. A partial configuration (CRD_MODULES) omits whole modules,
+    # so the guard runs on full configurations; the generators that write a compile database.
+    if(CMAKE_EXPORT_COMPILE_COMMANDS AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles" AND NOT CRD_MODULE_SELECTION)
+        add_test(NAME crd-check-source-routes
+            COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-source-routes.py"
+                    --build "${CMAKE_BINARY_DIR}")
+        set_tests_properties(crd-check-source-routes PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    endif()
+    # One optimization level per cl.exe/clang-cl command: cl.exe reports a second one as D9025, which /WX does not fail.
+    # The generators that write compile_commands.json; Visual Studio keeps per-file settings in its projects instead.
+    if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
+        add_test(NAME crd-check-compile-commands
+            COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-compile-commands.py"
+                    "${CMAKE_BINARY_DIR}/compile_commands.json")
+        set_tests_properties(crd-check-compile-commands PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONUTF8=1")
+    endif()
 endif()
 
 # Header-only test utilities (ULP compare, GPU determinism check) — must

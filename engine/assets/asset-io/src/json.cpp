@@ -4,9 +4,8 @@
 
 #include <crd/core/utf8.hpp>
 
-#include <charconv> // std::from_chars: the number's value, locale-independent
+#include <crd/core/parse_float.hpp> // the number's value, locale-independent
 #include <cstring>
-#include <system_error>
 
 namespace crd::assetio::json
 {
@@ -199,7 +198,7 @@ struct Parser
         return q < stop && *q >= '0' && *q <= '9';
     }
 
-    // The RFC 8259 number grammar, -?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)?, then the value by std::from_chars
+    // The RFC 8259 number grammar, -?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)?, then the value by crd::parse_f64
     // (locale-independent, every digit read). A leading '+' or zero, a bare '.', a missing exponent digit and a
     // magnitude a double cannot hold (out of range either way) are refused; nothing is cut short or clamped.
     [[nodiscard]] bool parse_number(crd::f64& out)
@@ -260,8 +259,7 @@ struct Parser
         const char* const first = reinterpret_cast<const char*>(p);
         const char* const last  = reinterpret_cast<const char*>(q);
         crd::f64          value = 0.0;
-        const auto        res   = std::from_chars(first, last, value, std::chars_format::general);
-        if (res.ec != std::errc{} || res.ptr != last)
+        if (!crd::parse_f64(first, last, value))
         {
             fail();
             return false;
