@@ -28,8 +28,14 @@ along two edges that were wrong ownership, not real needs.
 
 ## Evidence
 
-- WSL linux-gcc-debug with the ARM64 exclusion (`~/cerid-nojobs-build`): the module closure went from 36 to 42 of
-  112 modules, crypto among them; the tree built and its CTests passed (see the row for counts).
+- WSL linux-gcc-debug with the ARM64 exclusion (`~/cerid-nojobs-build`): the closure went from 36 to 42 of 112
+  modules, crypto among them; the tree built and 3319 of its 3320 CTests passed (crd-master-plan failed only while
+  this row's documents were mid-edit; it passes now).
+- win-debug, full configuration: the module registry check passes after declaring the Vulkan tests' jobs; json (6),
+  asset-io (48), platform (60), platform-async (6), resources (142), crypto (320 of 321), ceridc (46) and its fuzz
+  replay, perf-gpu-bridge (16), diag-overhead (28) and the 22 `crd-no-*`/`crd-check*`/diag guards pass. The one
+  crypto miss was crd-crypto-state-learning without its SUL built; rebuilt, its learning run outlasted a 30-minute
+  local window (CTest allows 3600 s) and is left to the hosted lanes, as it touches neither moved module.
 
 ## Next
 
