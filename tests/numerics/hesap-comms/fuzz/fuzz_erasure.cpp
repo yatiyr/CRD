@@ -323,7 +323,11 @@ usize read_count(Reader& r, u32 k)
         return raw % (kMaxN + 2U);
     }
     const u32 delta = raw & 3U;
-    return (raw & 0x40U) != 0U ? (k > delta ? k - delta : 0U) : k + delta;
+    if ((raw & 0x40U) == 0U)
+    {
+        return k + delta;
+    }
+    return k > delta ? k - delta : 0U;
 }
 
 // ---- Modes --------------------------------------------------------------------------------------------------------

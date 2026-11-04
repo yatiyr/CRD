@@ -24,21 +24,34 @@ namespace
 {
 
 constexpr u8 kSentinel = 0xA5U;
+constexpr usize kMaxSymbol = 8U; // the widest symbol a case uses, which bounds the tag loops for GCC's -O3
 
-// A symbol of `bytes` bytes naming its index: the index + 1 little-endian, then the index's low byte repeated.
+// Byte i of the symbol naming `index`: the index + 1 little-endian, then the index's low byte repeated.
+u8 tag_byte(usize i, u64 index)
+{
+    return i < 4U ? static_cast<u8>((index + 1U) >> (8U * i)) : static_cast<u8>(index);
+}
+
 void tag(u8* symbol, usize bytes, u64 index)
 {
-    for (usize i = 0U; i < bytes; ++i)
+    REQUIRE(bytes <= kMaxSymbol);
+    for (usize i = 0U; i < bytes && i < kMaxSymbol; ++i)
     {
-        symbol[i] = i < 4U ? static_cast<u8>((index + 1U) >> (8U * i)) : static_cast<u8>(index);
+        symbol[i] = tag_byte(i, index);
     }
 }
 
 bool is_tag(const u8* symbol, usize bytes, u64 index)
 {
-    u8 want[8];
-    tag(want, bytes, index);
-    return std::memcmp(symbol, want, bytes) == 0;
+    REQUIRE(bytes <= kMaxSymbol);
+    for (usize i = 0U; i < bytes && i < kMaxSymbol; ++i)
+    {
+        if (symbol[i] != tag_byte(i, index))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool is_zero(const u8* symbol, usize bytes)
@@ -87,25 +100,27 @@ TEST_CASE("Interleave: every block shape up to 12 x 12 is a permutation the dein
             }
             for (const usize symbol : {usize{1U}, usize{3U}})
             {
-                Bytes in;
-                Bytes sent;
-                Bytes back;
-                in.resize(n * symbol);
-                sent.resize(n * symbol, kSentinel);
-                back.resize(n * symbol, kSentinel);
+                // Buffers of the largest block, and a byte past it.
+                u8 in[(12U * 12U * 3U) + 1U];
+                u8 sent[sizeof(in)];
+                u8 back[sizeof(in)];
+                const usize bytes = n * symbol;
+                std::memset(sent, kSentinel, sizeof(sent));
+                std::memset(back, kSentinel, sizeof(back));
                 for (u64 i = 0U; i < n; ++i)
                 {
-                    tag(in.data() + (i * symbol), symbol, i);
+                    tag(in + (i * symbol), symbol, i);
                 }
-                REQUIRE(hc::block_interleave(std::span<const u8>(in.data(), in.size()),
-                                             std::span<u8>(sent.data(), sent.size()), rows, columns, symbol));
+                REQUIRE(hc::block_interleave(std::span<const u8>(in, bytes), std::span<u8>(sent, bytes), rows, columns,
+                                             symbol));
                 for (u64 i = 0U; i < n; ++i)
                 {
-                    CHECK(is_tag(sent.data() + (hc::block_interleave_position(rows, columns, i) * symbol), symbol, i));
+                    CHECK(is_tag(sent + (hc::block_interleave_position(rows, columns, i) * symbol), symbol, i));
                 }
-                REQUIRE(hc::block_deinterleave(std::span<const u8>(sent.data(), sent.size()),
-                                               std::span<u8>(back.data(), back.size()), rows, columns, symbol));
-                CHECK(std::memcmp(back.data(), in.data(), in.size()) == 0);
+                CHECK(sent[bytes] == kSentinel);
+                REQUIRE(hc::block_deinterleave(std::span<const u8>(sent, bytes), std::span<u8>(back, bytes), rows,
+                                               columns, symbol));
+                CHECK(std::memcmp(back, in, bytes) == 0);
             }
         }
     }
@@ -138,7 +153,7 @@ TEST_CASE("Interleave: a burst of n*R positions costs each row of a block at mos
     }
 }
 
-TEST_CASE("Interleave: a malformed block is refused and nothing is written", "[hesap][interleave]")
+TEST_CASE("Interleave: a malformed or overlapping block is refused and nothing is written", "[hesap][interleave]")
 {
     u8 in[12] = {};
     u8 out[12];
@@ -151,6 +166,16 @@ TEST_CASE("Interleave: a malformed block is refused and nothing is written", "[h
     CHECK_FALSE(hc::block_deinterleave(in, std::span<u8>(out, 11U), 3U, 4U, 1U));     // short output
     CHECK_FALSE(hc::block_deinterleave(in, out, 1U, 1U, 1U));
     for (const u8 b : out)
+    {
+        CHECK(b == kSentinel);
+    }
+    // Overlapping buffers: the same bytes, and a shift by one symbol either way.
+    u8 shared[16];
+    std::memset(shared, kSentinel, sizeof(shared));
+    CHECK_FALSE(hc::block_interleave(std::span<const u8>(shared, 12U), std::span<u8>(shared, 12U), 3U, 4U, 1U));
+    CHECK_FALSE(hc::block_interleave(std::span<const u8>(shared, 12U), std::span<u8>(shared + 1, 12U), 3U, 4U, 1U));
+    CHECK_FALSE(hc::block_deinterleave(std::span<const u8>(shared + 1, 12U), std::span<u8>(shared, 12U), 3U, 4U, 1U));
+    for (const u8 b : shared)
     {
         CHECK(b == kSentinel);
     }
@@ -211,9 +236,9 @@ TEST_CASE("Interleave: every convolutional interleaver up to 8 branches and dept
                     wire.resize(total * symbol);
                     for (u64 t = 0U; t < total; ++t)
                     {
-                        u8 in[7];
-                        u8 sent[7];
-                        u8 out[7];
+                        u8 in[kMaxSymbol];
+                        u8 sent[kMaxSymbol];
+                        u8 out[kMaxSymbol];
                         tag(in, symbol, t);
                         u8* const sent_at = in_place ? in : sent;
                         tx.push(std::span<const u8>(in, symbol), std::span<u8>(sent_at, symbol));

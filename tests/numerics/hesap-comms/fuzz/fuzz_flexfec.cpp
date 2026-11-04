@@ -71,7 +71,7 @@ struct Bits
     usize bytes;
     usize at = 0U; // in bits
 
-    bool has(usize count) const { return (at + count) <= bytes * 8U; }
+    [[nodiscard]] bool has(usize count) const { return (at + count) <= bytes * 8U; }
 
     u64 take(u32 count)
     {
@@ -362,7 +362,8 @@ void encode_request(Reader r)
         const FlexFecBlock& b = blocks[s];
         const bool wide = b.mask[1] != 0U || (b.mask[0] >> 15U) != 0U;
         const bool widest = b.mask[1] != 0U || (b.mask[0] >> 46U) != 0U;
-        header_bytes += fixed || !wide ? 4U : (widest ? 16U : 8U);
+        const usize mask_bytes = widest ? 16U : 8U;
+        header_bytes += fixed || !wide ? 4U : mask_bytes;
     }
     usize room = header_bytes + longest;
     if (want == FlexFecStatus::Ok)
@@ -457,15 +458,15 @@ void window_request(Reader r)
     const u32 l = 1U + (r.next() % kMaxL);
     const u32 d = 1U + (r.next() % kMaxD);
     const u16 base = static_cast<u16>((u32{r.next()} << 8U) | r.next());
-    constexpr u32 kSsrc = 0x77U;
+    constexpr u32 stream_ssrc = 0x77U;
     Lcg lcg{(u64{r.next()} << 8U) | r.next()};
     const u32 total = l * d;
     for (u32 k = 0U; k < total; ++k)
     {
-        make_packet(k, kSsrc, static_cast<u16>(base + k), r.next() % (kMaxPayload + 1U), lcg);
+        make_packet(k, stream_ssrc, static_cast<u16>(base + k), r.next() % (kMaxPayload + 1U), lcg);
     }
     // Row repairs (L, D = 1 when columns follow, else D = 0), then column repairs (L, D) when D > 1.
-    const u32 ssrc[1] = {kSsrc};
+    const u32 ssrc[1] = {stream_ssrc};
     u32 sets[kMaxL + kMaxD][kMaxL > kMaxD ? kMaxL : kMaxD];
     u32 set_sizes[kMaxL + kMaxD];
     u32 repairs = 0U;
@@ -548,7 +549,7 @@ void window_request(Reader r)
             }
         }
     }
-    const FlexFecStream stream[1] = {{kSsrc, base, {slots, total}}};
+    const FlexFecStream stream[1] = {{stream_ssrc, base, {slots, total}}};
     CRD_FUZZ_REQUIRE(flexfec_recover_window(stream, {list, listed}) == expected);
     for (u32 k = 0U; k < total; ++k)
     {

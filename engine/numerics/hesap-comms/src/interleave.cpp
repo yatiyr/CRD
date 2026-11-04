@@ -31,8 +31,7 @@ bool block_shape(std::span<const u8> in, std::span<u8> out, u32 rows, u32 column
     {
         return false;
     }
-    CRD_ASSERT(disjoint(in, out));
-    return true;
+    return disjoint(in, out);
 }
 
 // Moves symbol i of `in` to place map(i) of `out`.

@@ -148,7 +148,7 @@ void parse_request(Reader r)
         b.offset = 0x5555U;
         b.timestamp = 0x55555555U;
     }
-    Restated want[kMaxRoom];
+    Restated want[kMaxRoom] = {};
     u32 want_count = 0U;
     const RedStatus want_status = restated_parse(r.data, r.size, room, want, want_count);
     u32 count = 99U;
@@ -184,7 +184,7 @@ void encode_request(Reader r)
 {
     const u32 levels = r.next() % (kMaxRedundant + 1U);
     RedBlock blocks[kMaxRedundant];
-    u32 types[kMaxRedundant];
+    u32 types[kMaxRedundant] = {};
     usize used = 0U;
     for (u32 i = 0U; i < levels; ++i)
     {
@@ -237,8 +237,12 @@ void encode_request(Reader r)
     {
         need += 4U + blocks[i].data.size();
     }
-    const usize short_by = slack < 32U ? slack % 4U + 1U : 0U;
-    const usize room = short_by != 0U ? (need >= short_by ? need - short_by : 0U) : need + (slack - 32U);
+    usize room = need + (slack >= 32U ? slack - 32U : 0U);
+    if (slack < 32U)
+    {
+        const usize short_by = (slack % 4U) + 1U;
+        room = need > short_by ? need - short_by : 0U;
+    }
     if (want == RedStatus::Ok && room < need)
     {
         want = RedStatus::NoSpace;

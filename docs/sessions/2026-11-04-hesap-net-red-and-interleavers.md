@@ -40,7 +40,11 @@ a flag macro tested with `#ifdef`, and clang-tidy 20.1.8 passes the file against
   - refusing lengths that exactly fill the payload: 3 unit cases and the fuzz parse oracle fail;
   - dropping the offset-0 refusal: unit cases and the fuzz encode oracle fail;
   - losing the input on the in-place convolutional path: the run stopped at its cap of 30 failed checks.
-- linux-gcc-debug (WSL): 1068 CTests passed, no warnings.
+- linux-gcc-debug (WSL): 1068 CTests passed, no warnings. linux-gcc-release (LTO, -Werror) found three defects,
+  fixed in the follow-up commit: an assert-only helper unused in release (an overlap is now a refusal) and two
+  -Wstringop-overflow tag loops in the test; 61 cases and the three corpora then pass.
+- clang-tidy 20.1.8 (win-tidy) over every C++ source changed since f387ced1: clean after fixing batch 94-97
+  findings in hesap-comms (nested conditionals, local constant names, a missing [[nodiscard]], a hand loop).
 - linux-clang-fuzz, `fuzz.py run`: hesap-red ran 300 s at 2 jobs, 16.4M executions, no finding. hesap-flexfec
   (after the wire-bytes move) ran 120 s, 3.8M executions; its only "finding" was batch 97's stale artifact, which led to
   the fuzz.py fix above.

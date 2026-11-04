@@ -7,6 +7,7 @@
 #include <crd/hesap/comms/flexfec.hpp>
 #include <crd/hesap/stats/philox.hpp>
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
 #include <initializer_list>
@@ -45,14 +46,7 @@ bool same(std::span<const u8> a, std::span<const u8> b)
 
 bool untouched(const Bytes& out)
 {
-    for (const u8 b : out)
-    {
-        if (b != kSentinel)
-        {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(out, [](u8 b) { return b == kSentinel; });
 }
 
 // An RTP version 2 packet of `payload` bytes after the fixed header, its P, X, CC, M and PT bits and its other

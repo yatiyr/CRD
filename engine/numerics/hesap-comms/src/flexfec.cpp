@@ -38,7 +38,11 @@ u32 mask_width(const FlexFecBlock& b) noexcept
 {
     const u32 top = b.mask[1] != 0U ? 64U + 63U - static_cast<u32>(std::countl_zero(b.mask[1]))
                                     : 63U - static_cast<u32>(std::countl_zero(b.mask[0]));
-    return top < 15U ? 15U : (top < 46U ? 46U : 110U);
+    if (top < 15U)
+    {
+        return 15U;
+    }
+    return top < 46U ? 46U : 110U;
 }
 
 bool mask_valid(const FlexFecBlock& b) noexcept
@@ -265,7 +269,11 @@ usize block_bytes(FlexFecVariant variant, const FlexFecBlock& b) noexcept
         return 4U;
     }
     const u32 width = mask_width(b);
-    return width == 15U ? 4U : (width == 46U ? 8U : 16U);
+    if (width == 15U)
+    {
+        return 4U;
+    }
+    return width == 46U ? 8U : 16U;
 }
 
 void set_mask_bit(FlexFecBlock& b, u32 j) noexcept

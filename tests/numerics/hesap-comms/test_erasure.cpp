@@ -313,20 +313,20 @@ TEST_CASE("erasure kernels: every level the host runs gives the scalar dot produ
     // Up to nine outputs (two groups of four and one, and every shorter group) of up to seven sources, every length
     // from 0 to 300 (every vector count and remainder of each level), and 2100 and 2111 bytes (the SSE2 body's two
     // whole 1 KiB tiles and a partial one), from odd offsets, accumulating and not.
-    constexpr usize kMaxOut = 9U;
-    constexpr usize kMaxSrc = 7U;
-    constexpr usize kMaxBytes = 2111U;
+    constexpr usize max_out = 9U;
+    constexpr usize max_src = 7U;
+    constexpr usize max_bytes = 2111U;
     Array<Bytes> src;
-    for (usize j = 0U; j < kMaxSrc; ++j)
+    for (usize j = 0U; j < max_src; ++j)
     {
-        src.push_back(random_bytes(rng, kMaxBytes + 3U));
+        src.push_back(random_bytes(rng, max_bytes + 3U));
     }
-    Bytes coef = random_bytes(rng, kMaxOut * kMaxSrc);
+    Bytes coef = random_bytes(rng, max_out * max_src);
     coef[0] = 0U;
     coef[1] = 1U;
     coef[2] = 0xFFU;
     Array<hc::GfCoefficient> rows;
-    rows.resize(kMaxOut * kMaxSrc);
+    rows.resize(max_out * max_src);
     Array<usize> lengths;
     for (usize n = 0U; n <= 300U; ++n)
     {
@@ -344,20 +344,20 @@ TEST_CASE("erasure kernels: every level the host runs gives the scalar dot produ
         ++ran;
         INFO("level " << crd::cpu_level_name(level.level));
         usize bad = 0U;
-        for (usize outs = 1U; outs <= kMaxOut; outs += (outs < 5U ? 1U : 4U))
+        for (usize outs = 1U; outs <= max_out; outs += (outs < 5U ? 1U : 4U))
         {
-            for (usize count = 0U; count <= kMaxSrc; count += (count < 3U ? 1U : 4U))
+            for (usize count = 0U; count <= max_src; count += (count < 3U ? 1U : 4U))
             {
                 for (usize g = 0U; g < outs; ++g)
                 {
                     for (usize j = 0U; j < count; ++j)
                     {
-                        rows[(g * count) + j] = hc::gf256_expand(coef[(g * kMaxSrc) + j]);
+                        rows[(g * count) + j] = hc::gf256_expand(coef[(g * max_src) + j]);
                     }
                 }
                 for (const usize bytes : lengths)
                 {
-                    const u8* sources[kMaxSrc];
+                    const u8* sources[max_src];
                     for (usize j = 0U; j < count; ++j)
                     {
                         sources[j] = src[j].data() + 1U + (j & 1U);
@@ -366,7 +366,7 @@ TEST_CASE("erasure kernels: every level the host runs gives the scalar dot produ
                     {
                         Array<Bytes> out;
                         Array<Bytes> want;
-                        u8* outputs[kMaxOut];
+                        u8* outputs[max_out];
                         for (usize g = 0U; g < outs; ++g)
                         {
                             out.push_back(filled(bytes + 2U, 0U));
@@ -380,7 +380,7 @@ TEST_CASE("erasure kernels: every level the host runs gives the scalar dot produ
                                 u8 acc = accumulate ? out[g][i + 1U] : u8{0U};
                                 for (usize j = 0U; j < count; ++j)
                                 {
-                                    acc = static_cast<u8>(acc ^ hc::gf256_mul(coef[(g * kMaxSrc) + j], sources[j][i]));
+                                    acc = static_cast<u8>(acc ^ hc::gf256_mul(coef[(g * max_src) + j], sources[j][i]));
                                 }
                                 want[g][i] = acc;
                             }

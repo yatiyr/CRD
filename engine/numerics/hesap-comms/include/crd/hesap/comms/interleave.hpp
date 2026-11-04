@@ -37,7 +37,7 @@ namespace crd::hesap::comms
 
 // Moves the rows·columns symbols of `in` (symbol_bytes each, row by row) into `out` in sending order; the
 // deinterleaver moves them back. False, writing nothing, when rows, columns or symbol_bytes is 0, `in` is not
-// rows·columns symbols or `out` is shorter. `in` and `out` do not overlap.
+// rows·columns symbols, `out` is shorter or the two overlap.
 [[nodiscard]] bool block_interleave(std::span<const crd::u8> in, std::span<crd::u8> out, crd::u32 rows,
                                     crd::u32 columns, crd::usize symbol_bytes) noexcept;
 [[nodiscard]] bool block_deinterleave(std::span<const crd::u8> in, std::span<crd::u8> out, crd::u32 rows,
