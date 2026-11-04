@@ -3286,7 +3286,8 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   `geometry.mesh` (a two-leaf BVH raycast and a culled miss), the geometry answers closed forms of exact dyadic inputs
   evaluated at compile time; `hesap.autodiff`, `hesap.stats`, `hesap.special`, `hesap.direct`, `hesap.sparse`,
   `hesap.dense`, `hesap.fft`, `hesap.tensor` and `eylem.rigid3d` (each row's session in
-  [HW-RESILIENCE.3](../ROADMAP.md#slice-hw-resilience.3)). Every dispatched family resolves through its check.
+  [HW-RESILIENCE.3](../ROADMAP.md#slice-hw-resilience.3)), and `hesap.erasure` (the GF(2^8) dot product of five
+  outputs over three 141-byte sources, then an accumulating pass that must give zero; [HESAP-NET](../ROADMAP.md#slice-hesap-net)). Every dispatched family resolves through its check.
 - GPU device checks (`crd/gpu/device_check.hpp`): before a backend hands out a device on an adapter it runs the
   known-answer kernel `crd/kir/ckir_device_check.hpp` (one CKIR compute kernel, two workgroups of 64: f32 multiply,
   add and subtract, a workgroup-memory exchange across a barrier, a barrier-separated tree sum and a u32
