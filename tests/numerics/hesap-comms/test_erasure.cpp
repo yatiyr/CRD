@@ -402,6 +402,44 @@ TEST_CASE("erasure kernels: every level the host runs gives the scalar dot produ
     CHECK(ran >= 1U);
 }
 
+TEST_CASE("erasure kernels: every level the host runs adds regions as XOR", "[erasure][kernels]")
+{
+    crd::hesap::stats::PhiloxRng rng(2026, 12);
+    // Every length from 0 to 300 and 2111 bytes, the output and source at each pair of offsets 0 to 2.
+    const Bytes src = random_bytes(rng, 2111U + 3U);
+    const Bytes base = random_bytes(rng, 2111U + 4U);
+    usize ran = 0U;
+    for (const KernelLevel<ErasureKernels>& level : hc::erasure_kernel_levels())
+    {
+        if (!crd::test::kernel_level_runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        INFO("level " << crd::cpu_level_name(level.level));
+        usize bad = 0U;
+        for (usize bytes = 0U; bytes <= 2111U; bytes += (bytes < 300U ? 1U : 2111U - 300U))
+        {
+            for (usize so = 0U; so < 3U; ++so)
+            {
+                for (usize oo = 0U; oo < 3U; ++oo)
+                {
+                    Bytes out = base;
+                    level.table->add(out.data() + oo + 1U, src.data() + so, bytes);
+                    for (usize i = 0U; i < out.size(); ++i)
+                    {
+                        const bool inside = i >= oo + 1U && i < oo + 1U + bytes;
+                        const u8 want = inside ? static_cast<u8>(base[i] ^ src[so + i - oo - 1U]) : base[i];
+                        bad += out[i] == want ? 0U : 1U;
+                    }
+                }
+            }
+        }
+        CHECK(bad == 0U);
+    }
+    CHECK(ran >= 1U);
+}
+
 TEST_CASE("erasure kernels: the process runs the level its selection allows", "[erasure][kernels]")
 {
     const crd::CpuSelection& s = crd::cpu_selection();
@@ -428,6 +466,12 @@ void dot_tail_off(const hc::GfCoefficient* c, const u8* const* sources, usize co
     }
 }
 
+// The portable addition with its last byte left out.
+void add_short(u8* output, const u8* source, usize bytes) noexcept
+{
+    hc::kErasureKernelsPortable.add(output, source, bytes == 0U ? 0U : bytes - 1U);
+}
+
 } // namespace
 
 TEST_CASE("erasure self-check: every table the host runs passes, and a wrong one fails", "[erasure][kernels]")
@@ -440,6 +484,9 @@ TEST_CASE("erasure self-check: every table the host runs passes, and a wrong one
     ErasureKernels wrong = hc::kErasureKernelsPortable;
     wrong.dot = &dot_tail_off;
     CHECK(routine_of(hc::erasure_self_check(wrong)) == "dot");
+    wrong = hc::kErasureKernelsPortable;
+    wrong.add = &add_short;
+    CHECK(routine_of(hc::erasure_self_check(wrong)) == "add");
 }
 
 TEST_CASE("reed-solomon: GM is RFC 5510's V(k,k)^-1 V(k,n), systematic", "[erasure]")

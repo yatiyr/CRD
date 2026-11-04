@@ -120,6 +120,31 @@ bool dot_known(const ErasureKernels& table) noexcept
     return differ == 0U;
 }
 
+// GF(2^8) addition over the same 141 bytes (whole vectors and a scalar remainder at every level) from odd offsets:
+// source 0 added into source 1 gives their XOR, and adding source 0 again restores source 1.
+bool add_known(const ErasureKernels& table) noexcept
+{
+    u8 source[kBytes + 1U];
+    u8 out[kBytes + 1U];
+    for (usize i = 0U; i < kBytes; ++i)
+    {
+        source[i + 1U] = source_byte(0U, i);
+        out[i + 1U] = source_byte(1U, i);
+    }
+    table.add(out + 1U, source + 1U, kBytes);
+    u8 differ = 0U;
+    for (usize i = 0U; i < kBytes; ++i)
+    {
+        differ = static_cast<u8>(differ | (out[i + 1U] ^ source_byte(0U, i) ^ source_byte(1U, i)));
+    }
+    table.add(out + 1U, source + 1U, kBytes);
+    for (usize i = 0U; i < kBytes; ++i)
+    {
+        differ = static_cast<u8>(differ | (out[i + 1U] ^ source_byte(1U, i)));
+    }
+    return differ == 0U;
+}
+
 void resolve_erasure() noexcept
 {
     (void)erasure_kernels();
@@ -132,7 +157,11 @@ const crd::KernelFamilyListing kListing{g_family};
 
 const char* erasure_self_check(const ErasureKernels& table) noexcept
 {
-    return dot_known(table) ? nullptr : "dot";
+    if (!dot_known(table))
+    {
+        return "dot";
+    }
+    return add_known(table) ? nullptr : "add";
 }
 
 std::span<const KernelLevel<ErasureKernels>> erasure_kernel_levels() noexcept

@@ -7,7 +7,8 @@
 // group of four outputs. SSE2 has no byte shuffle: its body multiplies bit by bit, c·x as the XOR over the bits b of
 // x of c·2^b, each selected by the sign mask of x shifted left by 7 - b; it accumulates one output and one source at a
 // time over a tile of up to 1 KiB, so the eight broadcast products c·2^b are set once per tile. The portable body and
-// every scalar remainder look the nibbles up. All bodies give the same bytes.
+// every scalar remainder look the nibbles up. GF(2^8) addition is a vector XOR at each level. All bodies give the same
+// bytes.
 
 #include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
@@ -50,7 +51,21 @@ void dot_bytes(const GfCoefficient* coefficients, const u8* const* sources, usiz
     }
 }
 
+// Bytes [first, bytes) of output ^= source.
+void add_bytes(u8* output, const u8* source, usize first, usize bytes) noexcept
+{
+    for (usize i = first; i < bytes; ++i)
+    {
+        output[i] = static_cast<u8>(output[i] ^ source[i]);
+    }
+}
+
 #if CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_PORTABLE
+
+void add(u8* output, const u8* source, usize bytes) noexcept
+{
+    add_bytes(output, source, 0U, bytes);
+}
 
 void dot(const GfCoefficient* coefficients, const u8* const* sources, usize count, u8* const* outputs,
          usize output_count, usize bytes, bool accumulate) noexcept
@@ -61,6 +76,18 @@ void dot(const GfCoefficient* coefficients, const u8* const* sources, usize coun
 #elif CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_SSE2
 
 constexpr usize kTile = 1024U;
+
+void add(u8* output, const u8* source, usize bytes) noexcept
+{
+    const usize vector_bytes = bytes & ~usize{15U};
+    for (usize i = 0U; i < vector_bytes; i += 16U)
+    {
+        const __m128i x = _mm_loadu_si128(reinterpret_cast<const __m128i*>(source + i));
+        const __m128i y = _mm_loadu_si128(reinterpret_cast<const __m128i*>(output + i));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(output + i), _mm_xor_si128(x, y));
+    }
+    add_bytes(output, source, vector_bytes, bytes);
+}
 
 void dot(const GfCoefficient* coefficients, const u8* const* sources, usize count, u8* const* outputs,
          usize output_count, usize bytes, bool accumulate) noexcept
@@ -170,6 +197,16 @@ struct Lanes
 
 using V = Lanes::V;
 
+void add(u8* output, const u8* source, usize bytes) noexcept
+{
+    const usize vector_bytes = bytes - (bytes % Lanes::kBytes);
+    for (usize i = 0U; i < vector_bytes; i += Lanes::kBytes)
+    {
+        Lanes::store(output + i, Lanes::bxor(Lanes::load(output + i), Lanes::load(source + i)));
+    }
+    add_bytes(output, source, vector_bytes, bytes);
+}
+
 // G outputs (row g at coefficients + g * count), one vector column at a time.
 template <usize G>
 void dot_group(const GfCoefficient* coefficients, const u8* const* sources, usize count, u8* const* outputs,
@@ -236,6 +273,6 @@ void dot(const GfCoefficient* coefficients, const u8* const* sources, usize coun
 namespace crd::hesap::comms
 {
 
-const ErasureKernels CRD_KERNEL_TABLE(kErasureKernels) = {&CRD_MATH_LEVEL_NS::dot};
+const ErasureKernels CRD_KERNEL_TABLE(kErasureKernels) = {&CRD_MATH_LEVEL_NS::dot, &CRD_MATH_LEVEL_NS::add};
 
 } // namespace crd::hesap::comms

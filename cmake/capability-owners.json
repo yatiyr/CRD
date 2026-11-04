@@ -695,10 +695,11 @@
     },
     {
       "id": "numerics.erasure-codes",
-      "summary": "Packet erasure codes and their finite-field arithmetic: GF(2^8) of RFC 5510, the dispatched GF(2^8) dot product, the RFC 5510 Reed-Solomon code; FlexFEC parity, fountain codes and interleavers join it (HESAP-NET).",
+      "summary": "Packet erasure codes and their finite-field arithmetic: GF(2^8) of RFC 5510, the dispatched GF(2^8) dot product and addition, the RFC 5510 Reed-Solomon code, RFC 8627 FlexFEC parity with its iterative window decoder; fountain codes and interleavers join it (HESAP-NET).",
       "owner": "hesap-comms",
       "api": [
         "engine/numerics/hesap-comms/include/crd/hesap/comms/erasure.hpp",
+        "engine/numerics/hesap-comms/include/crd/hesap/comms/flexfec.hpp",
         "engine/numerics/hesap-comms/include/crd/hesap/comms/gf256.hpp"
       ],
       "signatures": [

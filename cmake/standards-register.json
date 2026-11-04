@@ -2988,7 +2988,7 @@
       "id": "fec.flexfec",
       "title": "RTP payload format for flexible forward error correction",
       "kind": "algorithm",
-      "state": "planned",
+      "state": "implemented",
       "owner": "hesap-comms",
       "rows": [
         "HESAP-NET"
@@ -3005,8 +3005,12 @@
         "verified": false
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "tests/numerics/hesap-comms/test_flexfec.cpp",
+        "tests/numerics/hesap-comms/fuzz/fuzz_flexfec.cpp"
+      ],
+      "deprecation": null,
+      "note": "RFC 8627's text was read in full on 2026-11-04 to implement it (docs/sessions/2026-11-04-hesap-net-flexfec.md). Masks of 15, 46 and 110 bits (k = 1 before another block), fixed L columns by D rows and retransmissions, several streams per repair packet, and the iterative decoder of §6.3.4 as a peeling over masks, rows and columns alike. §6.3.2 names the first 64 header bits, which would XOR the sequence number into the length; both directions follow §6.2 and Figure 12, which skip it."
     },
     {
       "id": "fec.red",

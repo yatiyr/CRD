@@ -5168,7 +5168,7 @@ class TestInstruments(unittest.TestCase):
                                                        'crypto-mls', 'crypto-mls-commit', 'crypto-mls-group',
                                                        'crypto-mls-message', 'crypto-mls-tree',
                                                        'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
-                                                       'hesap-erasure', 'memory-allocators',
+                                                       'hesap-erasure', 'hesap-flexfec', 'memory-allocators',
                                                        'net-negotiation', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload'])

@@ -4,6 +4,7 @@ add_executable(crd-hesap-comms-tests
     test_sync.cpp
     test_equalizer.cpp
     test_erasure.cpp
+    test_flexfec.cpp
     test_channel.cpp
     test_ofdm.cpp
     test_cli.cpp
