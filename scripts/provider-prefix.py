@@ -32,9 +32,10 @@ HEADER = '# AWS-LC symbols renamed by the provider prefix (NET.2 decision P5): s
 # Names AWS-LC defines to merge with another library's on purpose (util/read_symbols.go): its weak sdallocx binds to
 # jemalloc's when that is linked.
 INTENDED_MERGES = frozenset({'sdallocx'})
-# Toolchain symbols that a compiler emits into the provider's objects (util/read_symbols.go): x86 PIC thunks and
-# DWARF labels.
-TOOLCHAIN_PREFIXES = ('__x86.get_pc_thunk.', 'DW.')
+# Toolchain symbols that a compiler emits into the provider's objects (util/read_symbols.go): x86 PIC thunks, DWARF
+# labels, and Clang AddressSanitizer's flag that an image's globals are registered (a hidden common symbol in every
+# instrumented ELF object, one per image after the link; Mach-O's commons read as undefined and are skipped).
+TOOLCHAIN_PREFIXES = ('__x86.get_pc_thunk.', 'DW.', '___asan_globals_registered')
 # Symbols a sanitizer derives from a global's name (AddressSanitizer's ODR indicator): judged by that name, whose
 # prefix they carry.
 DERIVED_PREFIXES = ('__odr_asan.',)

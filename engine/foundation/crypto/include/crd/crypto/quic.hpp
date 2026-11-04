@@ -29,6 +29,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/register_ids.hpp>
@@ -137,7 +138,11 @@ inline constexpr usize kQuicHeaderStateBytes = 256U; // the provider's expanded 
 
 // One direction's header protection key, derived from the first traffic secret of an encryption level with "quic hp"
 // ("quicv2 hp") and kept across key updates (RFC 9001 section 5.4): AES-ECB on the sample for the AES-GCM suites,
-// ChaCha20 with the sample as counter and nonce for ChaCha20-Poly1305.
+// ChaCha20 with the sample as counter and nonce for ChaCha20-Poly1305. (MSVC C4324 as for AeadKey.)
+#if CRD_COMPILER_MSVC
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 class QuicHeaderKey
 {
 public:
@@ -173,6 +178,9 @@ private:
     alignas(16) u8 m_state[kQuicHeaderStateBytes] = {};
     AlgorithmId m_algorithm{};
 };
+#if CRD_COMPILER_MSVC
+#pragma warning(pop)
+#endif
 
 // The bytes (1 to 4) a sender encodes packet number `packet_number` in when the largest packet its peer acknowledged
 // is `largest_acked` (`acknowledged` false before any): enough for twice the unacknowledged range (RFC 9000 section

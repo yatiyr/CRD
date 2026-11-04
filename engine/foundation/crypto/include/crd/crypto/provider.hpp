@@ -21,6 +21,7 @@
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/crypto/policy.hpp>
 #include <crd/crypto/register_ids.hpp>
@@ -100,6 +101,12 @@ inline constexpr usize kAeadStateBytes = 584U; // the provider's context, held i
 // The key length of an AEAD the provider implements (16 or 32); 0 for anything else.
 [[nodiscard]] usize aead_key_bytes(AlgorithmId algorithm) noexcept;
 
+// MSVC C4324 (structure padded due to alignment specifier): the provider's context needs its 16-byte alignment, and
+// the padding after it is the point. ARM64 MSVC reports it here; the x64 compiler does not.
+#if CRD_COMPILER_MSVC
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 class AeadKey
 {
 public:
@@ -133,6 +140,9 @@ private:
     AlgorithmId m_algorithm{};
     bool        m_ready = false;
 };
+#if CRD_COMPILER_MSVC
+#pragma warning(pop)
+#endif
 
 // ---- Key derivation (HKDF, RFC 5869, with SHA-256 or SHA-384) ----
 

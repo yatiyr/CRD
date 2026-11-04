@@ -12360,9 +12360,11 @@ class ProviderPrefix(unittest.TestCase):
     def test_collect_and_check(self):
         unprefixed = self.archive(self.elf([
             ('SHA256', 1, 1), ('OPENSSL_hook', 2, 1), ('sdallocx', 2, 1), ('__x86.get_pc_thunk.bx', 1, 1),
+            ('___asan_globals_registered', 1, 0xFFF2),
             ('_ZN4bssl3fooEv', 1, 1), ('_ZN6ssl_stC2Ev', 1, 1), ('_ZN4bssl3BarC2Ev', 2, 1), ('_ZNSt3fooEv', 1, 1)]))
         prefixed = self.archive(self.elf([
             ('crd_awslc_SHA256', 1, 1), ('crd_awslc_OPENSSL_hook', 2, 1), ('sdallocx', 2, 1),
+            ('___asan_globals_registered', 1, 0xFFF2),
             ('_ZN4bssl9crd_awslc3fooEv', 1, 1), ('_ZN16crd_awslc_ssl_stC2Ev', 1, 1), ('crd_awslc_extra', 1, 1)]))
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
@@ -12383,7 +12385,7 @@ class ProviderPrefix(unittest.TestCase):
             self.assertIn('defines the C++ symbol _ZN4bssl3fooEv outside bssl::crd_awslc', output)
             self.assertIn('defines the C++ symbol _ZNSt3fooEv outside', output)
             self.assertIn('defines no symbol with the prefix crd_awslc_', output)
-            for skipped in ('sdallocx', 'get_pc_thunk', 'BarC2Ev'):
+            for skipped in ('sdallocx', 'get_pc_thunk', 'BarC2Ev', 'asan_globals_registered'):
                 self.assertNotIn(skipped, output)
             old.write_bytes(self.archive(self.elf([('crd_awslc_a', 1, 1), ('fresh', 1, 1)])))
             code, output = self.run_main(['check', '--symbols', str(listed), '--prefix', 'crd_awslc', str(old)])
