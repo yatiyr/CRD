@@ -71,6 +71,11 @@ option(CRD_BUILD_HESAP_VS_BOOST "Build the special-function, distribution, inter
 # build/_deps) as the crd-bench-hptt-peer library that bench_permute links. Local only on x64 Linux, never in CI or a
 # shipped build; scripts/run_permute_bench.sh builds and runs it per CPU level.
 option(CRD_BUILD_HESAP_VS_HPTT "Build bench_permute against HPTT's plans of every element type (local-only)" OFF)
+# The erasure-code oracle (HESAP-NET): hesap-comms' Reed-Solomon code against Intel ISA-L's portable GF(2^8) code
+# (cmake/pins.json isa-l, fetched on demand into build/_deps; erasure_code/ec_base.c compiled as crd-isal-base-peer).
+# Never in a shipped build; the crd-hesap-erasure-isal-tests of the tree that turns it on, locally and on the
+# complete-tier linux-gcc-public-checks lane.
+option(CRD_BUILD_ERASURE_VS_ISAL "Build the Reed-Solomon oracle against Intel ISA-L's portable code" OFF)
 # The dispatch-cost board (ADR-0134 §8): a crd kernel table's call against Google Highway's HWY_DYNAMIC_DISPATCH, from
 # the pinned Highway release (cmake/pins.json highway, fetched on demand into build/_deps) built by its own CMake, as
 # the crd-bench-highway-peer library that bench_dispatch_cost links. Local only, never in CI or a shipped build;
@@ -755,7 +760,7 @@ crd_module(engine/numerics/hesap-wavelet engine/hesap-wavelet DEPENDS containers
     TESTS numerics/hesap-wavelet)
 # v11c; COMMS/SDR — modulation/sync/equalizers/OFDM (depends on hesap-dsp/fft/stats); ADR-0093
 crd_module(engine/numerics/hesap-comms engine/hesap-comms
-    DEPENDS containers core hesap hesap-dsp hesap-fft hesap-stats math memory TESTS numerics/hesap-comms)
+    DEPENDS containers core hesap hesap-dsp hesap-fft hesap-stats math memory TESTS numerics/hesap-comms support/fuzz)
 # v13; INTERPOLATION — 1-D piecewise/spline/poly/rational + scattered N-D; ADR-0095
 crd_module(engine/numerics/hesap-interp engine/hesap-interp
     DEPENDS containers core geometry-delaunay hesap hesap-dense hesap-fft math memory TESTS numerics/hesap-interp)
@@ -1535,6 +1540,15 @@ endif()
 # ----- The FFT and DCT boards' pocketfft peer: the pinned header, built by runtime/CMakeLists.txt (bench-only) -----
 if(CRD_BUILD_HESAP_VS_FFT_REFS)
     crd_add_pinned_package(pocketfft DOWNLOAD_ONLY YES)
+endif()
+
+# ----- The erasure-code oracle's ISA-L peer: its portable sources, built by tests/numerics/hesap-comms -----
+if(CRD_BUILD_ERASURE_VS_ISAL)
+    if(NOT CRD_BUILD_TESTS)
+        message(FATAL_ERROR "[erasure-vs-isal] the ISA-L oracle needs CRD_BUILD_TESTS")
+    endif()
+    enable_language(C)
+    crd_add_pinned_package(isa-l DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The dispatch-cost board's peer: Highway's library from its own CMake (bench-only) -----

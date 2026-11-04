@@ -81,6 +81,8 @@ TARGETS = {
                      'executable': 'tests/comply/fuzz/crd-fuzz-comply-rules'},
     'comply-sanctions': {'corpus': 'tests/foundation/comply/fuzz/corpus/sanctions',
                          'executable': 'tests/comply/fuzz/crd-fuzz-comply-sanctions'},
+    'hesap-erasure': {'corpus': 'tests/numerics/hesap-comms/fuzz/corpus',
+                      'executable': 'tests/hesap-comms/fuzz/crd-fuzz-hesap-erasure'},
 }
 LIMITS = {'max_len': 65536, 'timeout': 10, 'rss_limit_mb': 2048, 'malloc_limit_mb': 256}
 STAT_PATTERN = re.compile(r'^stat::(\w+):\s+(\d+)', re.MULTILINE)

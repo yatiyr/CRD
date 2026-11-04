@@ -20,6 +20,9 @@
 namespace crd::hesap::comms
 {
 
+// A refused request reports its first fault in this order: the counts; then each received symbol (or repair index)
+// in order, its range before a repeat of an earlier one; then each lost index in order, its range, a repeat, then
+// whether it was received.
 enum class ErasureStatus : crd::u8
 {
     Ok,

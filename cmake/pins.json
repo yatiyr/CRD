@@ -279,6 +279,19 @@
       "gated": "CRD_BUILD_HESAP_VS_FFT_REFS",
       "note": "pocketfft's C++ header (the cpp branch's head on 2026-10-31; the project tags no release), compiled only into crd-bench-pocketfft-peer, the FFT and DCT boards' peer library, without its thread pool; never into an engine module or a default build. Before this pin the boards read an unversioned copy from ~/fft_refs (header SHA-256 prefix 2e88a5b0addf); this commit's header is 518a95c552ae. LICENSE.md read from the archive: BSD-3-Clause, (c) 2010-2018 Max-Planck-Society."
     },
+    "isa-l": {
+      "version": "2.32.1",
+      "repository": "intel/isa-l",
+      "ref": "v2.32.1",
+      "commit": "7c3479e0a9dac17f448603ec1ad64c7c625f530c",
+      "url": "https://github.com/intel/isa-l/archive/7c3479e0a9dac17f448603ec1ad64c7c625f530c.tar.gz",
+      "file": "isa-l-7c3479e0.tar.gz",
+      "sha256": "591b0d3e6a679286493fd01eaae7d6de922cbdcf6c02d4ebe6f1a8ef53600f6f",
+      "size": 843144,
+      "license": "BSD-3-Clause",
+      "gated": "CRD_BUILD_ERASURE_VS_ISAL",
+      "note": "Intel's ISA-L 2.32.1 (released 2026-07-01), the erasure-code peer of hesap-comms' Reed-Solomon code (HESAP-NET). erasure_code/ec_base.c, its portable GF(2^8) arithmetic (gf_mul over its own logarithm tables of 0x11D), matrix inversion and ec_encode_data_base, is compiled only into crd-isal-base-peer for the crd-hesap-erasure-isal-tests oracle; never into an engine module or a default build. LICENSE read from the archive: BSD-3-Clause, (c) 2011-2024 Intel Corporation. Pinned as a testing download under the user's approval of 2026-11-01 (docs/sessions/2026-11-04-hesap-net-fuzz-and-isal-oracle.md)."
+    },
     "highway": {
       "version": "1.4.0",
       "repository": "google/highway",
