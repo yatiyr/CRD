@@ -123,7 +123,7 @@ struct Lanes
     static V high_nibbles(V x) noexcept { return _mm256_and_si256(_mm256_srli_epi64(x, 4), _mm256_set1_epi8(0x0F)); }
     static V table(const u8* t) noexcept
     {
-        return _mm256_broadcastsi128_si256(_mm_load_si128(reinterpret_cast<const __m128i*>(t)));
+        return _mm256_broadcastsi128_si256(_mm_loadu_si128(reinterpret_cast<const __m128i*>(t)));
     }
     static V lookup(V t, V index) noexcept { return _mm256_shuffle_epi8(t, index); }
     static V bxor(V a, V b) noexcept { return _mm256_xor_si256(a, b); }
@@ -142,7 +142,7 @@ struct Lanes
     static V high_nibbles(V x) noexcept { return _mm512_and_si512(_mm512_srli_epi64(x, 4), _mm512_set1_epi8(0x0F)); }
     static V table(const u8* t) noexcept
     {
-        return _mm512_broadcast_i32x4(_mm_load_si128(reinterpret_cast<const __m128i*>(t)));
+        return _mm512_broadcast_i32x4(_mm_loadu_si128(reinterpret_cast<const __m128i*>(t)));
     }
     static V lookup(V t, V index) noexcept { return _mm512_shuffle_epi8(t, index); }
     static V bxor(V a, V b) noexcept { return _mm512_xor_si512(a, b); }
