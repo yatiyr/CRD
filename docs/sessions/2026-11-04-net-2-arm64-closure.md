@@ -42,3 +42,5 @@ along two edges that were wrong ownership, not real needs.
 Audit 41754591577 and the complete-tier dispatch at this batch's head: win-arm64-debug's configure line
 `[crd] AWS-LC's ARM64 assembly: ... --target=aarch64-pc-windows-msvc`, and crd-crypto-tests on win-arm64-debug,
 linux-gcc-arm64-debug/-asan and linux-clang-arm64-debug/-asan. Their pass closes NET.2.
+Found on the way: hesap's CLI keeps a second JSON writer (`crd/hesap/cli/json_writer.hpp`, with a pretty mode the MCP
+descriptors use); it merges into crd-json's writer next batch, so `text.json` has one implementation.
