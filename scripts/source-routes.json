@@ -159,6 +159,11 @@
       "why": "The Reed-Solomon oracle and board against Intel ISA-L (crd-hesap-erasure-isal-tests, crd-hesap-erasure-board, HESAP-NET), against the pinned release fetched at configure time only when the option is on."
     },
     {
+      "paths": ["tests/numerics/hesap-comms/test_erasure_openfec.cpp", "tests/numerics/hesap-comms/openfec_peer.c"],
+      "built_when": {"option": "CRD_BUILD_ERASURE_VS_OPENFEC"},
+      "why": "The Reed-Solomon oracle against OpenFEC (crd-hesap-erasure-openfec-tests, HESAP-NET), against the pinned release fetched at configure time only when the option is on; the complete-tier linux-gcc-public-checks lane turns it on."
+    },
+    {
       "paths": ["runtime/examples/bench_hesap_lbfgs_vs_reference.cpp"],
       "built_when": {"option": "CRD_BUILD_HESAP_VS_LBFGS"},
       "why": "The L-BFGS bench against liblbfgs, a local oracle (scripts/setup-lbfgs-ref.sh)."

@@ -77,6 +77,9 @@ option(CRD_BUILD_HESAP_VS_HPTT "Build bench_permute against HPTT's plans of ever
 # Never in a shipped build; the crd-hesap-erasure-isal-tests and crd-hesap-erasure-board-smoke CTests of the tree that
 # turns it on, locally and on the complete-tier linux-gcc-public-checks lane; the board runs in a release tree.
 option(CRD_BUILD_ERASURE_VS_ISAL "Build the Reed-Solomon oracle and board against Intel ISA-L" OFF)
+# RFC 5510's other reference: OpenFEC's Reed-Solomon codec (cmake/pins.json openfec), as crd-openfec-peer. Never in a
+# shipped build; the crd-hesap-erasure-openfec-tests CTests of the tree that turns it on, on the same lane.
+option(CRD_BUILD_ERASURE_VS_OPENFEC "Build the Reed-Solomon oracle against OpenFEC" OFF)
 set(CRD_NASM "$ENV{CRD_NASM}" CACHE FILEPATH "The pinned NASM on Linux (scripts/install-nasm.py), for ISA-L's assembly")
 # The dispatch-cost board (ADR-0134 §8): a crd kernel table's call against Google Highway's HWY_DYNAMIC_DISPATCH, from
 # the pinned Highway release (cmake/pins.json highway, fetched on demand into build/_deps) built by its own CMake, as
@@ -1569,6 +1572,15 @@ if(CRD_BUILD_ERASURE_VS_ISAL)
     if(CRD_ISAL_ASSEMBLY)
         enable_language(ASM_NASM)
     endif()
+endif()
+
+# ----- The erasure-code oracle's OpenFEC peer: its sources, built by tests/numerics/hesap-comms -----
+if(CRD_BUILD_ERASURE_VS_OPENFEC)
+    if(NOT CRD_BUILD_TESTS)
+        message(FATAL_ERROR "[erasure-vs-openfec] the OpenFEC oracle needs CRD_BUILD_TESTS")
+    endif()
+    enable_language(C)
+    crd_add_pinned_package(openfec DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The dispatch-cost board's peer: Highway's library from its own CMake (bench-only) -----

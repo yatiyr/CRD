@@ -61,3 +61,36 @@ if(CRD_BUILD_ERASURE_VS_ISAL)
     add_test(NAME crd-hesap-erasure-board-smoke COMMAND crd-hesap-erasure-board --quick)
     set_tests_properties(crd-hesap-erasure-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
 endif()
+
+# HESAP-NET's OpenFEC peer (CRD_BUILD_ERASURE_VS_OPENFEC, the root CMakeLists): the pinned release's Reed-Solomon codec
+# over GF(2^m), compiled as crd-openfec-peer with the profile its own build generates (no assembly option).
+if(CRD_BUILD_ERASURE_VS_OPENFEC)
+    set(openfec_rs "${openfec_SOURCE_DIR}/src/lib_stable/reed-solomon_gf_2_m")
+    # OpenFEC's codec profile names its generated header as ../../lib_common/of_build_config.h, its own source
+    # directory: the downloaded tree stays read only, so an empty directory two levels down resolves that spelling
+    # to the binary tree.
+    set(openfec_config "${CMAKE_CURRENT_BINARY_DIR}/openfec-config")
+    set(ASSEMBLY_SSE_OPT OFF)
+    configure_file("${openfec_SOURCE_DIR}/src/lib_common/of_build_config.h.in"
+                   "${openfec_config}/lib_common/of_build_config.h")
+    file(MAKE_DIRECTORY "${openfec_config}/profile/codec")
+    add_library(crd-openfec-peer STATIC
+        openfec_peer.c
+        "${openfec_SOURCE_DIR}/src/lib_common/of_mem.c"
+        "${openfec_rs}/of_reed-solomon_gf_2_m_api.c"
+        "${openfec_rs}/galois_field_codes_utils/of_galois_field_code.c"
+        "${openfec_rs}/galois_field_codes_utils/algebra_2_4.c"
+        "${openfec_rs}/galois_field_codes_utils/algebra_2_8.c")
+    target_include_directories(crd-openfec-peer PRIVATE
+        "${openfec_config}/lib_common" "${openfec_config}/profile/codec" "${openfec_SOURCE_DIR}/src/lib_common"
+        "${openfec_rs}")
+    # Its own build derives the endianness from a CMake probe; every Cerid target is little-endian.
+    target_compile_definitions(crd-openfec-peer PRIVATE OF_USE_REED_SOLOMON_2_M_CODEC OPENFEC_LITTLE_ENDIAN)
+    target_compile_options(crd-openfec-peer PRIVATE $<$<C_COMPILER_ID:GNU,Clang>:-w>)
+    set_target_properties(crd-openfec-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+
+    add_executable(crd-hesap-erasure-openfec-tests test_erasure_openfec.cpp)
+    target_link_libraries(crd-hesap-erasure-openfec-tests PRIVATE
+        crd-core crd-containers crd-hesap-comms crd-hesap-stats crd-openfec-peer Catch2::Catch2WithMain)
+    crd_discover_tests(crd-hesap-erasure-openfec-tests)
+endif()

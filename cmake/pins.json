@@ -292,6 +292,20 @@
       "gated": "CRD_BUILD_ERASURE_VS_ISAL",
       "note": "Intel's ISA-L 2.32.1 (released 2026-07-01), the erasure-code peer of hesap-comms' Reed-Solomon code (HESAP-NET). erasure_code/ec_base.c, its portable GF(2^8) arithmetic (gf_mul over its own logarithm tables of 0x11D), matrix inversion and ec_encode_data_base, and on x86-64 its assembly and dispatch (assembled by the pinned NASM) are compiled only into crd-isal-peer for the crd-hesap-erasure-isal-tests oracle and crd-hesap-erasure-board; never into an engine module or a default build. LICENSE read from the archive: BSD-3-Clause, (c) 2011-2024 Intel Corporation. Pinned as a testing download under the user's approval of 2026-11-01 (docs/sessions/2026-11-04-hesap-net-fuzz-and-isal-oracle.md)."
     },
+    "openfec": {
+      "version": "1.4.2.12",
+      "repository": "roc-streaming/openfec",
+      "ref": "v1.4.2.12",
+      "commit": "e549f3b8ba54a7d6e2aaefdd1cdd4c73ef32000c",
+      "url": "https://github.com/roc-streaming/openfec/archive/e549f3b8ba54a7d6e2aaefdd1cdd4c73ef32000c.tar.gz",
+      "file": "openfec-e549f3b8.tar.gz",
+      "sha256": "819bdb0ae42e8e5736c5e1135d33e68adadac6c224856dbd97ab8c6fc087e2a4",
+      "size": 1114739,
+      "license": "CeCILL-C",
+      "gated": "CRD_BUILD_ERASURE_VS_OPENFEC",
+      "provenance": "INRIA's OpenFEC 1.4.2, the codec of RFC 5510's authors, through the fork that maintains it: openfec.org is a parked domain with no archive (checked 2026-11-06), and roc-streaming/openfec's tag v1.4.2.12 names this commit (2025-04-16)",
+      "note": "The second reference of hesap-comms' Reed-Solomon code (HESAP-NET). src/lib_stable/reed-solomon_gf_2_m with its Galois field utilities, compiled as crd-openfec-peer on the complete-tier linux-gcc-public-checks lane (it uses C variable-length arrays, so no MSVC lane); never in an engine module or a default build. LICENCE_CeCILL-C_V1-en.txt read from the archive."
+    },
     "highway": {
       "version": "1.4.0",
       "repository": "google/highway",
