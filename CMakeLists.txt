@@ -80,6 +80,12 @@ option(CRD_BUILD_ERASURE_VS_ISAL "Build the Reed-Solomon oracle and board agains
 # RFC 5510's other reference: OpenFEC's Reed-Solomon codec (cmake/pins.json openfec), as crd-openfec-peer. Never in a
 # shipped build; the crd-hesap-erasure-openfec-tests CTests of the tree that turns it on, on the same lane.
 option(CRD_BUILD_ERASURE_VS_OPENFEC "Build the Reed-Solomon oracle against OpenFEC" OFF)
+# HESAP-NET's estimators against libwebrtc: its own goog_cc and remote_bitrate_estimator files
+# (tools/webrtc-bwe-sources: scripts/install-webrtc-bwe.py, which prints the CRD_WEBRTC_BWE this configure reads), as
+# crd-webrtc-bwe-peer with the plumbing shimmed. Never in a shipped build; crd-hesap-estimators-webrtc-tests and
+# crd-hesap-estimators-board of the tree that turns it on.
+option(CRD_BUILD_ESTIMATORS_VS_WEBRTC "Build the network estimators' oracle and board against libwebrtc" OFF)
+set(CRD_WEBRTC_BWE "$ENV{CRD_WEBRTC_BWE}" CACHE PATH "The pinned libwebrtc estimators (scripts/install-webrtc-bwe.py)")
 set(CRD_NASM "$ENV{CRD_NASM}" CACHE FILEPATH "The pinned NASM on Linux (scripts/install-nasm.py), for ISA-L's assembly")
 # The dispatch-cost board (ADR-0134 §8): a crd kernel table's call against Google Highway's HWY_DYNAMIC_DISPATCH, from
 # the pinned Highway release (cmake/pins.json highway, fetched on demand into build/_deps) built by its own CMake, as
@@ -767,7 +773,7 @@ crd_module(engine/numerics/hesap-wavelet engine/hesap-wavelet DEPENDS containers
 crd_module(engine/numerics/hesap-comms engine/hesap-comms
     DEPENDS containers core hesap hesap-dsp hesap-fft hesap-stats math memory TESTS numerics/hesap-comms)
 # HESAP-NET; network and media math, jobs-free because crd-net links it (ADR-0065 §29)
-crd_module(engine/numerics/hesap-net engine/hesap-net DEPENDS containers core TESTS numerics/hesap-net support/fuzz)
+crd_module(engine/numerics/hesap-net engine/hesap-net DEPENDS containers core math TESTS numerics/hesap-net support/fuzz)
 # v13; INTERPOLATION — 1-D piecewise/spline/poly/rational + scattered N-D; ADR-0095
 crd_module(engine/numerics/hesap-interp engine/hesap-interp
     DEPENDS containers core geometry-delaunay hesap hesap-dense hesap-fft math memory TESTS numerics/hesap-interp)
@@ -1583,6 +1589,17 @@ if(CRD_BUILD_ERASURE_VS_OPENFEC)
     endif()
     enable_language(C)
     crd_add_pinned_package(openfec DOWNLOAD_ONLY YES)
+endif()
+
+# ----- The network estimators' libwebrtc peer: its files, built by tests/numerics/hesap-net -----
+if(CRD_BUILD_ESTIMATORS_VS_WEBRTC)
+    if(NOT CRD_BUILD_TESTS)
+        message(FATAL_ERROR "[estimators-vs-webrtc] the libwebrtc oracle needs CRD_BUILD_TESTS")
+    endif()
+    if(NOT EXISTS "${CRD_WEBRTC_BWE}/modules/congestion_controller/goog_cc/trendline_estimator.cc")
+        message(FATAL_ERROR "[estimators-vs-webrtc] CRD_WEBRTC_BWE names no libwebrtc tree: install the pinned files "
+                            "with scripts/install-webrtc-bwe.py and configure with the CRD_WEBRTC_BWE it prints")
+    endif()
 endif()
 
 # ----- The dispatch-cost board's peer: Highway's library from its own CMake (bench-only) -----

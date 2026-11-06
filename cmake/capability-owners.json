@@ -694,6 +694,23 @@
       ]
     },
     {
+      "id": "numerics.network-estimators",
+      "summary": "The network path estimators and clock filters: RFC 9002 and RFC 6298 round-trip time, RFC 3550 interarrival jitter, Google Congestion Control's packet groups, trendline and Kalman delay filters with their adaptive overuse threshold, the windowed extremum and delivery rate of BBR and the Bayesian acknowledged rate; clock-offset and drift filters join it (HESAP-NET).",
+      "owner": "hesap-net",
+      "api": [
+        "engine/numerics/hesap-net/include/crd/hesap/net/delay_trend.hpp",
+        "engine/numerics/hesap-net/include/crd/hesap/net/jitter.hpp",
+        "engine/numerics/hesap-net/include/crd/hesap/net/rate.hpp",
+        "engine/numerics/hesap-net/include/crd/hesap/net/rtt.hpp"
+      ],
+      "consumers": [
+        "NET-PATH",
+        "NET-LIVE",
+        "NET-TIME",
+        "4.2c"
+      ]
+    },
+    {
       "id": "numerics.erasure-codes",
       "summary": "Packet erasure codes and their finite-field arithmetic: GF(2^8) of RFC 5510, the dispatched GF(2^8) dot product and addition, the RFC 5510 Reed-Solomon code, RFC 8627 FlexFEC parity with its iterative window decoder, RFC 2198 redundant audio data, and the block and convolutional interleavers; fountain codes join it (HESAP-NET).",
       "owner": "hesap-net",

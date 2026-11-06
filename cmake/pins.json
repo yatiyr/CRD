@@ -1048,6 +1048,155 @@
       "sha256": "ebee3a513540b4cc91abc4e64853a4e5fa00a6f57402ee277626312eb8d16e9f",
       "license": "Apache-2.0",
       "note": "Google's NVIDIA driver installer for Compute Engine Windows machines, commit-addressed; the own-CI Windows GPU image bake runs it. The driver it downloads is the one Google publishes for the machine's GPU; the image census records the installed driver. Downloaded and hashed 2026-10-31."
+    },
+    "webrtc-bwe-sources": {
+      "version": "branch-heads/8147",
+      "commit": "84b14960eb46b26499b565fba42a581814f137f7",
+      "provenance": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7",
+      "files": {
+        "LICENSE": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/LICENSE?format=TEXT",
+          "size": 2016,
+          "sha256": "ac6f574357e9586a9338e99e50af03f0841b978530da7e1ef79d2cf334f76f41"
+        },
+        "PATENTS": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/PATENTS?format=TEXT",
+          "size": 1852,
+          "sha256": "e2e3339eea68aea3b671a24b577d1570041c85351295d5d7f212146a04b7290b"
+        },
+        "modules/congestion_controller/goog_cc/trendline_estimator.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/congestion_controller/goog_cc/trendline_estimator.cc?format=TEXT",
+          "size": 16036,
+          "sha256": "1d87d82ed06f88d1d368189e33b72253b63ff94e363c63ffc6e46c344dc2d764"
+        },
+        "modules/congestion_controller/goog_cc/trendline_estimator.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/congestion_controller/goog_cc/trendline_estimator.h?format=TEXT",
+          "size": 5588,
+          "sha256": "ab1ba248420c50c6554245510dcd3cff9045e40d4e1dc512ceb3ad2277a663bc"
+        },
+        "modules/congestion_controller/goog_cc/bitrate_estimator.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/congestion_controller/goog_cc/bitrate_estimator.cc?format=TEXT",
+          "size": 8816,
+          "sha256": "9feccddf9c30903d798d756cfa2da359bc339647a1caf692ab55d3320608e264"
+        },
+        "modules/congestion_controller/goog_cc/bitrate_estimator.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/congestion_controller/goog_cc/bitrate_estimator.h?format=TEXT",
+          "size": 3072,
+          "sha256": "852f7508a1f031462d9bb87917a37d63cbd4b9ba4df7f0b7c261217c562bfb73"
+        },
+        "modules/congestion_controller/goog_cc/inter_arrival_delta.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/congestion_controller/goog_cc/inter_arrival_delta.cc?format=TEXT",
+          "size": 7732,
+          "sha256": "720248c3e78ea00b7e9f3d844c45faa4760e623d9512a7b82cdcd29159a52547"
+        },
+        "modules/congestion_controller/goog_cc/inter_arrival_delta.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/congestion_controller/goog_cc/inter_arrival_delta.h?format=TEXT",
+          "size": 4664,
+          "sha256": "00c461f3dc53ba77309e5d36714311f33afa41fb06145836f8884e1701209400"
+        },
+        "modules/congestion_controller/goog_cc/delay_increase_detector_interface.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/congestion_controller/goog_cc/delay_increase_detector_interface.h?format=TEXT",
+          "size": 2116,
+          "sha256": "85d2c9f39a9e0267ae7ab440973aa06dbb3ec2378d522a3eb970500f5fa0183a"
+        },
+        "modules/remote_bitrate_estimator/overuse_estimator.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/remote_bitrate_estimator/overuse_estimator.cc?format=TEXT",
+          "size": 6372,
+          "sha256": "b468b36be4401ac8569c94d272e2a52337bc5cae3dc55831ca72c887afe2835d"
+        },
+        "modules/remote_bitrate_estimator/overuse_estimator.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/remote_bitrate_estimator/overuse_estimator.h?format=TEXT",
+          "size": 2884,
+          "sha256": "f2b9f39d451bb5f8a171ddaf91f4c6a96a33d1770fc3daa6c3dd5602769c96d2"
+        },
+        "modules/remote_bitrate_estimator/overuse_detector.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/remote_bitrate_estimator/overuse_detector.cc?format=TEXT",
+          "size": 3948,
+          "sha256": "e11b3f292d0fad29c25cf24cf2c84132ff21fe2ccbab366ce4f5650cb22d9f76"
+        },
+        "modules/remote_bitrate_estimator/overuse_detector.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/remote_bitrate_estimator/overuse_detector.h?format=TEXT",
+          "size": 2512,
+          "sha256": "4ed209ac953803b58a257fd1f45b7db0d71169a70fb6ea3d5bd7011c50a94611"
+        },
+        "api/network_state_predictor.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/api/network_state_predictor.h?format=TEXT",
+          "size": 2224,
+          "sha256": "e3c0d35ba393c0a124a508c326a444234bfa585f8350fddcf652e1e1c549b7a7"
+        },
+        "api/transport/bandwidth_usage.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/api/transport/bandwidth_usage.h?format=TEXT",
+          "size": 912,
+          "sha256": "90f33d28e0ccf805d7617d668ee96039e6095f84c3e34f443e2ee0be11f214ca"
+        },
+        "api/units/data_rate.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/api/units/data_rate.h?format=TEXT",
+          "size": 7144,
+          "sha256": "46984be084703d777dd69f60c6dc896f31451b1af80e5eb2d5951c4bdd522b05"
+        },
+        "api/units/data_size.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/api/units/data_size.h?format=TEXT",
+          "size": 2260,
+          "sha256": "f9048aa6f21e6e273a978e59e0a9dc993a379675e00bd4a957e6d223cde815e9"
+        },
+        "api/units/frequency.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/api/units/frequency.h?format=TEXT",
+          "size": 4136,
+          "sha256": "5aa7bbfab520d63f1ac86cdf8d5609040d436144ce9e1c493e2aaf118b7cfd36"
+        },
+        "api/units/time_delta.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/api/units/time_delta.h?format=TEXT",
+          "size": 4260,
+          "sha256": "1685daf912d22811d197d71bd3c089a415f15b9e7de50ce0955b5c71e2ea1f09"
+        },
+        "api/units/timestamp.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/api/units/timestamp.h?format=TEXT",
+          "size": 5860,
+          "sha256": "d8f1b3f7c24206fff490a0641eb33c51882ea4683ee91a3719fc2d55a4c3f7bf"
+        },
+        "rtc_base/units/unit_base.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/units/unit_base.h?format=TEXT",
+          "size": 14352,
+          "sha256": "f6bd59b18a5a58b78dbdae733e4687083896ac345a406c7af6b6fc5817a47d34"
+        },
+        "rtc_base/numerics/divide_round.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/numerics/divide_round.h?format=TEXT",
+          "size": 2408,
+          "sha256": "afd84e2545c1b8610575d9b144f548b93ccab2191565e0c43b74287822a109f4"
+        },
+        "rtc_base/numerics/safe_compare.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/numerics/safe_compare.h?format=TEXT",
+          "size": 8852,
+          "sha256": "7335405b7b20a683391e890433ca7278552e657df4aa85619cd4e5afbe2cef62"
+        },
+        "rtc_base/numerics/safe_conversions.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/numerics/safe_conversions.h?format=TEXT",
+          "size": 3416,
+          "sha256": "7834cb62fca5fc405e4fd62022c8f16d324bc95b09925b1f1baca635045448de"
+        },
+        "rtc_base/numerics/safe_conversions_impl.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/numerics/safe_conversions_impl.h?format=TEXT",
+          "size": 10244,
+          "sha256": "f8b938cf934d6536cc7cb18307a2f857fea9cd3e1176c18830b78ff33f2f48f3"
+        },
+        "rtc_base/numerics/safe_minmax.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/numerics/safe_minmax.h?format=TEXT",
+          "size": 18336,
+          "sha256": "14ca7affc2fd69b434a38545b0456506edd4d72d1b8e89d99811affc950190d5"
+        },
+        "rtc_base/type_traits.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/type_traits.h?format=TEXT",
+          "size": 5580,
+          "sha256": "9d45a7e6184bf2383f35f9e2ba6cf5a9d177af83524db6c44153897ca98578dd"
+        },
+        "rtc_base/system/rtc_export.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/system/rtc_export.h?format=TEXT",
+          "size": 1568,
+          "sha256": "788f63bd45bcba142a5aa65b455fd3c559948dc0c36a34d5348f3e9e40e748ba"
+        }
+      },
+      "license": "BSD-3-Clause",
+      "note": "The newest release branch of libwebrtc on 2026-11-07, file by file through Gitiles' format=TEXT: its source archives change bytes on every request (checked 2026-11-07), and the SHA-256 and size are those of the base64 text, decoded by scripts/install-webrtc-bwe.py. The goog_cc and remote_bitrate_estimator estimators with the units they use, compiled with tests/numerics/hesap-net/webrtc-shim's plumbing as crd-webrtc-bwe-peer on the complete-tier linux-gcc-public-checks lane: the bit-exact oracle and board of hesap-net's delay trend and acknowledged rate (HESAP-NET, CRD_BUILD_ESTIMATORS_VS_WEBRTC); never in an engine module or a default build. LICENSE and PATENTS read from the tree. Pinned as a testing download (pre-approved, user 2026-10-30)."
     }
   },
   "actions": {

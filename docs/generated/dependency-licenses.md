@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **30** · tools: **45** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **30** · tools: **46** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -95,6 +95,7 @@
 | bake-cmake-linux-arm64 | 4.4.5 | BSD-3-Clause | github.com | `cmake-4.4.5-linux-aarch64.tar.gz` |
 | bake-vs-buildtools-windows | 18 (stable channel bootstrapper) | Microsoft Visual Studio Build Tools license terms | download.visualstudio.microsoft.com | `vs_BuildTools.exe` |
 | bake-gpu-driver-installer-windows | 9a05b735a56c45d87788720ed18ccca7205d224b | Apache-2.0 | raw.githubusercontent.com | `install_gpu_driver.ps1` |
+| webrtc-bwe-sources | branch-heads/8147 | BSD-3-Clause | webrtc.googlesource.com | `LICENSE`, `PATENTS`, `modules/congestion_controller/goog_cc/trendline_estimator.cc`, `modules/congestion_controller/goog_cc/trendline_estimator.h`, `modules/congestion_controller/goog_cc/bitrate_estimator.cc`, `modules/congestion_controller/goog_cc/bitrate_estimator.h`, `modules/congestion_controller/goog_cc/inter_arrival_delta.cc`, `modules/congestion_controller/goog_cc/inter_arrival_delta.h`, `modules/congestion_controller/goog_cc/delay_increase_detector_interface.h`, `modules/remote_bitrate_estimator/overuse_estimator.cc`, `modules/remote_bitrate_estimator/overuse_estimator.h`, `modules/remote_bitrate_estimator/overuse_detector.cc`, `modules/remote_bitrate_estimator/overuse_detector.h`, `api/network_state_predictor.h`, `api/transport/bandwidth_usage.h`, `api/units/data_rate.h`, `api/units/data_size.h`, `api/units/frequency.h`, `api/units/time_delta.h`, `api/units/timestamp.h`, `rtc_base/units/unit_base.h`, `rtc_base/numerics/divide_round.h`, `rtc_base/numerics/safe_compare.h`, `rtc_base/numerics/safe_conversions.h`, `rtc_base/numerics/safe_conversions_impl.h`, `rtc_base/numerics/safe_minmax.h`, `rtc_base/type_traits.h`, `rtc_base/system/rtc_export.h` |
 
 ## Workflow actions (pinned to a reviewed commit)
 

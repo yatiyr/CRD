@@ -1565,7 +1565,7 @@ CRC-32/IEEE, CRC32C and 64-bit hash family is foundation-owned (HW-RESILIENCE.1,
 foundation module, needs it and may not depend on crd-hesap.
 
 **Amendment (2026-11-07), one home for the network math.** The packet codes moved from `hesap-comms` into a new
-`crd-hesap-net` on crd-core and crd-containers only, and the estimators, clock filters, dead-reckoning and rewind
+`crd-hesap-net` on crd-core, crd-containers and crd-math only, and the estimators, clock filters, dead-reckoning and rewind
 kernels and quantisation helpers join it instead of `hesap-stats` and `hesap-interp`. `crd-net` links it, and all three
 named homes reach crd-jobs (`hesap-comms` through hesap-dsp and hesap-fft, `hesap-stats` through its parallel
 resampling, hesap-dense and hesap-special, `hesap-interp` through hesap-dense and hesap-fft), which has no ARM64 fiber

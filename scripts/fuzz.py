@@ -87,6 +87,8 @@ TARGETS = {
                       'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-flexfec'},
     'hesap-red': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus-red',
                   'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-red'},
+    'hesap-estimators': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus-estimators',
+                         'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-estimators'},
 }
 LIMITS = {'max_len': 65536, 'timeout': 10, 'rss_limit_mb': 2048, 'malloc_limit_mb': 256}
 STAT_PATTERN = re.compile(r'^stat::(\w+):\s+(\d+)', re.MULTILINE)

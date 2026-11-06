@@ -82,6 +82,9 @@ swtpm_spec.loader.exec_module(install_swtpm)
 softhsm_spec = importlib.util.spec_from_file_location('install_softhsm', ROOT / 'scripts/install-softhsm.py')
 install_softhsm = importlib.util.module_from_spec(softhsm_spec)
 softhsm_spec.loader.exec_module(install_softhsm)
+webrtc_bwe_spec = importlib.util.spec_from_file_location('install_webrtc_bwe', ROOT / 'scripts/install-webrtc-bwe.py')
+install_webrtc_bwe = importlib.util.module_from_spec(webrtc_bwe_spec)
+webrtc_bwe_spec.loader.exec_module(install_webrtc_bwe)
 nasm_spec = importlib.util.spec_from_file_location('install_nasm', ROOT / 'scripts/install-nasm.py')
 install_nasm = importlib.util.module_from_spec(nasm_spec)
 nasm_spec.loader.exec_module(install_nasm)
@@ -3043,6 +3046,41 @@ class BuildPerformance(unittest.TestCase):
             self.assertEqual(spec['url'], 'https://launchpad.net/ubuntu/+archive/primary/+files/' + name)
         self.assertIn('scripts/install-softhsm.py', check_pins.HELPERS)
 
+    def test_webrtc_bwe_installer_decodes_every_verified_file_and_reuses_a_matching_tree(self):
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()) as out:
+            root = Path(temp).resolve()
+            downloads = root / 'dl'
+            (downloads / 'api/units').mkdir(parents=True)
+            encoded = {'LICENSE': base64.b64encode(b'license'), 'api/units/data_rate.h': base64.b64encode(b'#pragma once')}
+            files = {}
+            for name, text in encoded.items():
+                (downloads / name).write_bytes(text)
+                files[name] = {'url': 'https://example.invalid/' + name, 'size': len(text),
+                               'sha256': pins_registry.sha256(downloads / name)}
+            pin = {'version': 'branch-heads/1', 'commit': '0' * 40, 'files': files, 'license': 'BSD-3-Clause'}
+
+            tree = install_webrtc_bwe.install(root / 'tree', downloads, pin=pin)
+            self.assertEqual(tree, root / 'tree')
+            self.assertEqual((tree / 'api/units/data_rate.h').read_bytes(), b'#pragma once')
+            self.assertEqual((tree / 'LICENSE').read_bytes(), b'license')
+            self.assertIn(f'CRD_WEBRTC_BWE={tree}', out.getvalue())
+            self.assertFalse((root / 'tree.partial').exists())
+
+            # A matching stamp reuses the tree without touching a download; a changed pin refetches and is verified.
+            (downloads / 'LICENSE').unlink()
+            self.assertEqual(install_webrtc_bwe.install(root / 'tree', downloads, pin=pin), tree)
+            (downloads / 'LICENSE').write_bytes(b'tampered')
+            changed = copy.deepcopy(pin)
+            changed['commit'] = '1' * 40
+            with self.assertRaises(pins_registry.PinError):
+                install_webrtc_bwe.install(root / 'tree', downloads, pin=changed)
+            self.assertEqual((tree / 'LICENSE').read_bytes(), b'license')
+        pin = pins_registry.entry('tools', install_webrtc_bwe.PIN_NAME)
+        self.assertRegex(pin['commit'], '^[0-9a-f]{40}$')
+        for name, spec in pin['files'].items():
+            self.assertTrue(spec['url'].startswith('https://webrtc.googlesource.com/src/+/' + pin['commit'] + '/' + name))
+            self.assertTrue(spec['url'].endswith('?format=TEXT'))
+
     def test_nasm_installer_unpacks_the_assembler_and_checks_its_version(self):
         with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()) as out:
             root = Path(temp).resolve()
@@ -5206,7 +5244,7 @@ class TestInstruments(unittest.TestCase):
                                                        'crypto-mls', 'crypto-mls-commit', 'crypto-mls-group',
                                                        'crypto-mls-message', 'crypto-mls-tree',
                                                        'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
-                                                       'hesap-erasure', 'hesap-flexfec', 'hesap-red',
+                                                       'hesap-erasure', 'hesap-estimators', 'hesap-flexfec', 'hesap-red',
                                                        'memory-allocators', 'net-negotiation', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload'])

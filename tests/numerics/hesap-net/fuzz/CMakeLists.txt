@@ -9,9 +9,13 @@
 #                            peeling of the index sets.
 #   crd-fuzz-hesap-red       RFC 2198's redundant audio data: payloads against a reader restated bit by bit, and
 #                            written packets against the payload built bit by bit and their read-back.
+#   crd-fuzz-hesap-estimators  The RTT, jitter, delay-trend and rate estimators on any feedback and clock a peer can
+#                            send: restated bounds and updates, every state finite, refusals that change nothing.
 crd_fuzz_target(crd-fuzz-hesap-erasure
     SOURCES fuzz_erasure.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 crd_fuzz_target(crd-fuzz-hesap-flexfec
     SOURCES fuzz_flexfec.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-flexfec")
 crd_fuzz_target(crd-fuzz-hesap-red
     SOURCES fuzz_red.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-red")
+crd_fuzz_target(crd-fuzz-hesap-estimators
+    SOURCES fuzz_estimators.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-estimators")

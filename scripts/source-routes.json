@@ -164,6 +164,11 @@
       "why": "The Reed-Solomon oracle against OpenFEC (crd-hesap-erasure-openfec-tests, HESAP-NET), against the pinned release fetched at configure time only when the option is on; the complete-tier linux-gcc-public-checks lane turns it on."
     },
     {
+      "paths": ["tests/numerics/hesap-net/test_estimators_webrtc.cpp", "tests/numerics/hesap-net/estimators_board.cpp"],
+      "built_when": {"option": "CRD_BUILD_ESTIMATORS_VS_WEBRTC"},
+      "why": "The bit-exact oracle and board of the delay trend and acknowledged rate against libwebrtc (crd-hesap-estimators-webrtc-tests, crd-hesap-estimators-board, HESAP-NET), against the pinned files scripts/install-webrtc-bwe.py installs; the complete-tier linux-gcc-public-checks lane turns it on."
+    },
+    {
       "paths": ["runtime/examples/bench_hesap_lbfgs_vs_reference.cpp"],
       "built_when": {"option": "CRD_BUILD_HESAP_VS_LBFGS"},
       "why": "The L-BFGS bench against liblbfgs, a local oracle (scripts/setup-lbfgs-ref.sh)."

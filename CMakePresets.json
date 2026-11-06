@@ -327,7 +327,8 @@
                 "CRD_BUILD_PKCS11_VS_SOFTHSM": "ON",
                 "CRD_BUILD_PROTOCOL_MODEL": "ON",
                 "CRD_BUILD_ERASURE_VS_ISAL": "ON",
-                "CRD_BUILD_ERASURE_VS_OPENFEC": "ON"
+                "CRD_BUILD_ERASURE_VS_OPENFEC": "ON",
+                "CRD_BUILD_ESTIMATORS_VS_WEBRTC": "ON"
             }
         },
         {

@@ -3,6 +3,7 @@ add_executable(crd-hesap-net-tests
     test_flexfec.cpp
     test_red.cpp
     test_interleave.cpp
+    test_estimators.cpp
 )
 
 target_link_libraries(crd-hesap-net-tests PRIVATE
@@ -83,4 +84,35 @@ if(CRD_BUILD_ERASURE_VS_OPENFEC)
     target_link_libraries(crd-hesap-erasure-openfec-tests PRIVATE
         crd-core crd-containers crd-hesap-net crd-openfec-peer Catch2::Catch2WithMain)
     crd_discover_tests(crd-hesap-erasure-openfec-tests)
+endif()
+
+# HESAP-NET's libwebrtc peer (CRD_BUILD_ESTIMATORS_VS_WEBRTC, the root CMakeLists): the pinned branch's estimator and
+# unit files verbatim, webrtc-shim/ only for their checks, logging and field-trial parsing and their one pow, the
+# engine's. It takes the engine's floating-point contract, so the two sides round alike.
+# crd-hesap-estimators-webrtc-tests holds the delay trend and
+# acknowledged rate to it bit for bit; crd-hesap-estimators-board times the two.
+if(CRD_BUILD_ESTIMATORS_VS_WEBRTC)
+    set(webrtc_estimators "${CRD_WEBRTC_BWE}/modules")
+    add_library(crd-webrtc-bwe-peer STATIC
+        "${webrtc_estimators}/congestion_controller/goog_cc/bitrate_estimator.cc"
+        "${webrtc_estimators}/congestion_controller/goog_cc/inter_arrival_delta.cc"
+        "${webrtc_estimators}/congestion_controller/goog_cc/trendline_estimator.cc"
+        "${webrtc_estimators}/remote_bitrate_estimator/overuse_detector.cc"
+        "${webrtc_estimators}/remote_bitrate_estimator/overuse_estimator.cc")
+    target_include_directories(crd-webrtc-bwe-peer SYSTEM PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/webrtc-shim" "${CRD_WEBRTC_BWE}")
+    target_link_libraries(crd-webrtc-bwe-peer PUBLIC crd-math)
+    target_compile_features(crd-webrtc-bwe-peer PUBLIC cxx_std_20)
+    target_compile_options(crd-webrtc-bwe-peer PRIVATE ${CRD_FP_CONTRACT_OPTIONS} $<$<CXX_COMPILER_ID:GNU,Clang>:-w>)
+    set_target_properties(crd-webrtc-bwe-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+
+    add_executable(crd-hesap-estimators-webrtc-tests test_estimators_webrtc.cpp)
+    target_link_libraries(crd-hesap-estimators-webrtc-tests PRIVATE
+        crd-core crd-containers crd-hesap-net crd-webrtc-bwe-peer Catch2::Catch2WithMain)
+    crd_discover_tests(crd-hesap-estimators-webrtc-tests)
+
+    add_executable(crd-hesap-estimators-board estimators_board.cpp)
+    target_link_libraries(crd-hesap-estimators-board PRIVATE crd-core crd-containers crd-hesap-net crd-webrtc-bwe-peer)
+    add_test(NAME crd-hesap-estimators-board-smoke COMMAND crd-hesap-estimators-board --quick)
+    set_tests_properties(crd-hesap-estimators-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
 endif()

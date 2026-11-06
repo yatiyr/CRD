@@ -1,7 +1,9 @@
 # crd-hesap-net -- the network and media math of HESAP-NET: packet erasure codes (RFC 5510 Reed-Solomon, RFC 8627
-# FlexFEC, RFC 2198 RED, interleavers) with the dispatched GF(2^8) kernels (ADR-0065 §29 amendment of 2026-11-07).
+# FlexFEC, RFC 2198 RED, interleavers) with the dispatched GF(2^8) kernels, and the RTT, jitter, delay-trend and rate
+# estimators (ADR-0065 §29 amendment of 2026-11-07).
 #
-# Its one rule is its closure: crd-net links it, so it stays on crd-core and crd-containers and reaches no job system.
+# Its one rule is its closure: crd-net links it, so it stays on crd-core, crd-containers and crd-math and reaches no
+# job system.
 # hesap-comms, hesap-stats and hesap-interp all reach crd-jobs (through hesap-dsp, hesap-fft, hesap-dense and
 # hesap-special), which has no ARM64 fiber context before JOBS-PORT.2, and a network client links no FFT.
 
@@ -20,6 +22,7 @@ target_link_libraries(crd-hesap-net
         crd-core
         crd-containers
     PRIVATE
+        crd-math
         crd-warnings
 )
 
