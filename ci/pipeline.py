@@ -1361,6 +1361,15 @@ class Lane:
                              self.temp / 'tamarin-dl', '--github-env', self.env_file))
         self.merge()
 
+    def nasm(self):
+        # The pinned NASM that assembles ISA-L's erasure code for HESAP-NET's oracle and board; the configure reads
+        # CRD_NASM.
+        if not self.preset_step('Install pinned NASM'):
+            return
+        self.run(self.helper('install-nasm.py', '--destination', self.temp / 'nasm', '--download-dir',
+                             self.temp / 'nasm-dl', '--github-env', self.env_file))
+        self.merge()
+
     def android_ndk(self):
         # The pinned NDK, never an image's: the Android presets read CRD_ANDROID_NDK.
         self.run(self.helper('install-android-ndk.py', '--destination', self.temp / 'android-ndk', '--github-env',
@@ -1746,7 +1755,7 @@ class Lane:
                      'sccache', 'configure', 'build', 'sccache_stats', 'inventory', 'test', 'bundle', 'upload'],
         'linux-gcc': ['checkout', 'reclaim_disk', 'python_version', 'ninja', 'apt', 'apt_census', 'vulkan_headers',
                       'vulkan_validation', 'cpm_cache', 'cold_before', 'sccache', 'sde', 'rust', 'gnome_keyring',
-                      'swtpm', 'softhsm', 'tamarin', 'configure', 'cold_after',
+                      'swtpm', 'softhsm', 'tamarin', 'nasm', 'configure', 'cold_after',
                       'build', 'sccache_stats', 'inventory', 'console_checks', 'test', 'test_sse2', 'seeded_faults',
                       'genmc', 'bundle', 'upload'],
         'windows-shipping': ['checkout', 'python_version', 'ninja', 'msvc', 'adapters', 'cpm_cache', 'vulkan_sdk',
@@ -2180,7 +2189,8 @@ LANE_STEP_PHASES = {
     'Cold acquisition (empty package cache)': 'cold_before', 'Install pinned sccache': 'sccache',
     'Compiler cache service': 'sccache', 'Install pinned Intel SDE': 'sde', 'Install pinned Rust': 'rust',
     'Install pinned gnome-keyring': 'gnome_keyring', 'Install pinned swtpm': 'swtpm',
-    'Install pinned SoftHSM': 'softhsm', 'Install pinned Tamarin': 'tamarin', 'Configure': 'configure',
+    'Install pinned SoftHSM': 'softhsm', 'Install pinned Tamarin': 'tamarin', 'Install pinned NASM': 'nasm',
+    'Configure': 'configure',
     'Configure with the compiler cache': 'configure', 'Cold acquisition (every pinned package acquired)': 'cold_after',
     'Build': 'build', 'Build the Debug sandbox profile': 'build', 'Compiler cache statistics': 'sccache_stats',
     'Test inventory': 'inventory', 'Test': 'test', 'Test at the sse2 level': 'test_sse2',
