@@ -36,9 +36,9 @@ INTENDED_MERGES = frozenset({'sdallocx'})
 # labels, and Clang AddressSanitizer's flag that an image's globals are registered (a hidden common symbol in every
 # instrumented ELF object, one per image after the link; Mach-O's commons read as undefined and are skipped).
 TOOLCHAIN_PREFIXES = ('__x86.get_pc_thunk.', 'DW.', '___asan_globals_registered')
-# Symbols a sanitizer derives from a global's name (AddressSanitizer's ODR indicator): judged by that name, whose
-# prefix they carry.
-DERIVED_PREFIXES = ('__odr_asan.',)
+# Symbols a sanitizer derives from a global's name (AddressSanitizer's ODR indicator, spelled by Clang's version and
+# target): judged by that name, whose prefix they carry.
+DERIVED_PREFIXES = ('__odr_asan.', '__odr_asan_gen_')
 # Functions renamed only where they are called (a function-like macro): the engine uses the same names for its own
 # identifiers in units that include AWS-LC's headers (AlgorithmId::X25519). A use of one without a call would keep the
 # unprefixed name and fail the link, never bind silently.

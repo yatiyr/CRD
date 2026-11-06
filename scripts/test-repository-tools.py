@@ -12302,9 +12302,9 @@ class ProviderPrefix(unittest.TestCase):
     def test_elf_definitions(self):
         elf = self.elf([('crd_awslc_SHA256', 1, 1), ('local', 0, 1), ('memcpy', 1, 0), ('OPENSSL_hook', 2, 1),
                         ('_ZN4bssl3fooEv', 2, 1), ('_ZN4bssl9crd_awslc3barEv', 10, 1),
-                        ('__odr_asan.crd_awslc_table', 1, 1)])
+                        ('__odr_asan.crd_awslc_table', 1, 1), ('__odr_asan_gen_crd_awslc_it', 1, 1)])
         expected = [('OPENSSL_hook', 'weak'), ('_ZN4bssl3fooEv', 'merged'), ('_ZN4bssl9crd_awslc3barEv', 'merged'),
-                    ('crd_awslc_SHA256', 'strong'), ('crd_awslc_table', 'strong')]
+                    ('crd_awslc_SHA256', 'strong'), ('crd_awslc_it', 'strong'), ('crd_awslc_table', 'strong')]
         for layout in ({}, {'long_names': True}, {'bsd': True}):
             with self.subTest(layout=layout):
                 self.assertEqual(self.read(self.archive(elf, **layout)), expected)
