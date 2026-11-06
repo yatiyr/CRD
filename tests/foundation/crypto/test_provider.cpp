@@ -938,23 +938,34 @@ TEST_CASE("Provider: one verifier and one key serve several threads", "[crypto][
     pub.resize(signature_sizes(AlgorithmId::MlDsa65).public_key);
     REQUIRE(key.public_key(pub) == CryptoError::None);
     const u8         message[] = {'t', 'h', 'r', 'e', 'a', 'd', 's'};
-    std::atomic<u32> failures{0U};
-    std::thread      threads[4];
-    for (std::thread& thread : threads)
+    // Each thread's first fault; Catch2's assertions are for this thread, after the joins.
+    struct Fault
     {
-        thread = std::thread(
-            [&]
+        u32          iteration = 8U;
+        CryptoError  signing   = CryptoError::None;
+        Verification checked   = Verification::Valid;
+    };
+    Fault       faults[4];
+    std::thread threads[4];
+    for (usize t = 0U; t < 4U; ++t)
+    {
+        threads[t] = std::thread(
+            [&, t]
             {
                 Bytes sig;
                 sig.resize(signature_sizes(AlgorithmId::MlDsa65).signature);
-                for (u32 i = 0U; i < 8U; ++i)
+                for (u32 i = 0U; i < 8U && faults[t].iteration == 8U; ++i)
                 {
                     usize written = 0U;
-                    if (key.sign(message, sig, written) != CryptoError::None ||
-                        verifier.verify(AlgorithmId::MlDsa65, pub, message, ConstSpan<u8>(sig.data(), written)) !=
-                            Verification::Valid)
+                    faults[t].signing = key.sign(message, sig, written);
+                    if (faults[t].signing == CryptoError::None)
                     {
-                        failures.fetch_add(1U);
+                        faults[t].checked =
+                            verifier.verify(AlgorithmId::MlDsa65, pub, message, ConstSpan<u8>(sig.data(), written));
+                    }
+                    if (faults[t].signing != CryptoError::None || faults[t].checked != Verification::Valid)
+                    {
+                        faults[t].iteration = i;
                     }
                 }
             });
@@ -963,7 +974,12 @@ TEST_CASE("Provider: one verifier and one key serve several threads", "[crypto][
     {
         thread.join();
     }
-    CHECK(failures.load() == 0U);
+    for (const Fault& fault : faults)
+    {
+        INFO("iteration " << fault.iteration);
+        CHECK(static_cast<int>(fault.signing) == static_cast<int>(CryptoError::None));
+        CHECK(static_cast<int>(fault.checked) == static_cast<int>(Verification::Valid));
+    }
 }
 
 // ---- The Secret Service transport ----
