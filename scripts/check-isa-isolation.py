@@ -49,7 +49,8 @@ SCHEMA = 'cerid-isa-isolation/1'
 SUFFIX = {'portable': 'Portable', 'sse2': 'Sse2', 'sse42': 'Sse42', 'avx2': 'Avx2', 'avx512': 'Avx512',
           'neon': 'Neon', 'avx2_avxvnni': 'Avx2AvxVnni', 'avx512_avx512vnni': 'Avx512Avx512Vnni',
           'sse42_pclmulqdq': 'Sse42Pclmulqdq', 'avx2_vpclmulqdq': 'Avx2Vpclmulqdq',
-          'avx512_vpclmulqdq': 'Avx512Vpclmulqdq', 'neon_crc32': 'NeonCrc32', 'neon_pmull': 'NeonPmull'}
+          'avx512_vpclmulqdq': 'Avx512Vpclmulqdq', 'avx2_gfni': 'Avx2Gfni',
+          'avx512_gfni': 'Avx512Gfni', 'neon_crc32': 'NeonCrc32', 'neon_pmull': 'NeonPmull'}
 _NS = '|'.join(sorted(SUFFIX, key=len, reverse=True))
 
 

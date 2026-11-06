@@ -46,5 +46,5 @@ crd_enable_default_pch(crd-hesap-comms)
 
 # HESAP-NET: the GF(2^8) dot product of the RFC 5510 Reed-Solomon code, one body per CPU level (ADR-0134);
 # src/erasure_kernel_dispatch.cpp lists them.
-crd_add_cpu_kernels(crd-hesap-comms NAME erasure LEVELS portable sse2 avx2 avx512 neon
+crd_add_cpu_kernels(crd-hesap-comms NAME erasure LEVELS portable sse2 avx2 avx512 neon VARIANTS avx2+gfni avx512+gfni
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/erasure_kernels.cpp")

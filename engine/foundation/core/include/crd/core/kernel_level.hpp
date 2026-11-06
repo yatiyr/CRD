@@ -54,6 +54,18 @@
 #define CRD_MATH_LEVEL_NS avx512_vpclmulqdq
 #define CRD_KERNEL_LEVEL_SUFFIX Avx512Vpclmulqdq
 #endif
+#elif defined(CRD_KERNEL_FEATURE_GFNI)
+#if !defined(CRD_KERNEL_LEVEL) || (CRD_KERNEL_LEVEL != CRD_KERNEL_LEVEL_AVX2 && CRD_KERNEL_LEVEL != CRD_KERNEL_LEVEL_AVX512)
+#error "GFNI is a feature variant of the avx2 and avx512 levels"
+#endif
+#define CRD_KERNEL_HAS_GFNI 1
+#if CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_AVX2
+#define CRD_MATH_LEVEL_NS avx2_gfni
+#define CRD_KERNEL_LEVEL_SUFFIX Avx2Gfni
+#else
+#define CRD_MATH_LEVEL_NS avx512_gfni
+#define CRD_KERNEL_LEVEL_SUFFIX Avx512Gfni
+#endif
 #elif defined(CRD_KERNEL_FEATURE_CRC32)
 #if !defined(CRD_KERNEL_LEVEL) || CRD_KERNEL_LEVEL != CRD_KERNEL_LEVEL_NEON
 #error "CRC32 is a feature variant of the neon level"
@@ -103,6 +115,9 @@
 #endif
 #if !defined(CRD_KERNEL_HAS_VPCLMULQDQ)
 #define CRD_KERNEL_HAS_VPCLMULQDQ 0
+#endif
+#if !defined(CRD_KERNEL_HAS_GFNI)
+#define CRD_KERNEL_HAS_GFNI 0
 #endif
 #if !defined(CRD_KERNEL_HAS_CRC32)
 #define CRD_KERNEL_HAS_CRC32 0

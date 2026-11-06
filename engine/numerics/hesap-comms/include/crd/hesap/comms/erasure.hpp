@@ -9,11 +9,13 @@
 // decoding interpolates through the k received points. Both use barycentric weights, O(k^2) once per block shape or
 // erasure pattern and O(k) per coefficient column, instead of the RFC's Gauss-Jordan inversion; the bytes are the
 // RFC's, which the tests hold to the literal matrix product. The regions go through the dispatched GF(2^8) dot product
-// (crd/hesap/comms/erasure_dispatch.hpp). Nothing allocates.
+// (crd/hesap/comms/erasure_dispatch.hpp). An encoder of many blocks of one repair set keeps the expanded coefficients
+// (prepare_encode, encode_prepared), which costs a datagram-sized block a quarter of its encode. Nothing allocates.
 
 #pragma once
 
 #include <crd/core/types.hpp>
+#include <crd/hesap/comms/erasure_kernels.hpp>
 
 #include <span>
 
@@ -52,8 +54,8 @@ public:
     // A block of k source symbols and n encoding symbols; valid(k, n) must hold.
     ReedSolomonCode(crd::u32 k, crd::u32 n) noexcept;
 
-    [[nodiscard]] crd::u32 source_count() const noexcept { return k_; }
-    [[nodiscard]] crd::u32 symbol_count() const noexcept { return n_; }
+    [[nodiscard]] crd::u32 source_count() const noexcept { return m_k; }
+    [[nodiscard]] crd::u32 symbol_count() const noexcept { return m_n; }
 
     // GM's entry in row i < k and column j < n.
     [[nodiscard]] crd::u8 coefficient(crd::u32 i, crd::u32 j) const noexcept;
@@ -62,15 +64,26 @@ public:
     [[nodiscard]] ErasureStatus encode(std::span<const crd::u8* const> sources, std::span<const crd::u32> repair,
                                        std::span<crd::u8* const> outputs, crd::usize bytes) const noexcept;
 
+    // rows = the expanded coefficients of `repair` for encode_prepared, repair.size() * k entries, under encode's
+    // refusals of the indices. Nothing is written unless the result is Ok.
+    [[nodiscard]] ErasureStatus prepare_encode(std::span<const crd::u32> repair,
+                                               std::span<GfCoefficient> rows) const noexcept;
+
+    // outputs[q] = encode's symbol repair[q] of the `repair` that prepared `rows`: WrongCount unless there are k
+    // sources and outputs.size() * k rows.
+    [[nodiscard]] ErasureStatus encode_prepared(std::span<const GfCoefficient> rows,
+                                                std::span<const crd::u8* const> sources,
+                                                std::span<crd::u8* const> outputs, crd::usize bytes) const noexcept;
+
     // From exactly k received encoding symbols with distinct indices, outputs[q] = source symbol lost[q], each index
     // below k, not received and not asked for twice. Nothing is written unless the result is Ok.
     [[nodiscard]] ErasureStatus decode(std::span<const ErasureSymbol> received, std::span<const crd::u32> lost,
                                        std::span<crd::u8* const> outputs, crd::usize bytes) const noexcept;
 
 private:
-    crd::u32 k_;
-    crd::u32 n_;
-    crd::u8 weight_logs_[kMaxSymbols]; // log of each source point's weight 1 / prod_{m != l} (alpha^l - alpha^m)
+    crd::u32 m_k;
+    crd::u32 m_n;
+    crd::u8 m_weight_logs[kMaxSymbols]; // log of each source point's weight 1 / prod_{m != l} (alpha^l - alpha^m)
 };
 
 } // namespace crd::hesap::comms

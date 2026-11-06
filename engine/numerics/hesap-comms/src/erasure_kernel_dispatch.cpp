@@ -29,8 +29,14 @@ constexpr KernelLevel<ErasureKernels> kLevels[] = {
 #if CRD_KERNEL_BUILT(CRD_KERNELS_ERASURE, AVX2)
     {crd::CpuLevel::Avx2, &kErasureKernelsAvx2, {}},
 #endif
+#if CRD_KERNELS_ERASURE_AVX2_GFNI
+    {crd::CpuLevel::Avx2, &kErasureKernelsAvx2Gfni, crd::CpuFeatureSet{}.with(crd::CpuFeature::Gfni)},
+#endif
 #if CRD_KERNEL_BUILT(CRD_KERNELS_ERASURE, AVX512)
     {crd::CpuLevel::Avx512, &kErasureKernelsAvx512, {}},
+#endif
+#if CRD_KERNELS_ERASURE_AVX512_GFNI
+    {crd::CpuLevel::Avx512, &kErasureKernelsAvx512Gfni, crd::CpuFeatureSet{}.with(crd::CpuFeature::Gfni)},
 #endif
 #if CRD_KERNEL_BUILT(CRD_KERNELS_ERASURE, NEON)
     {crd::CpuLevel::Neon, &kErasureKernelsNeon, {}},

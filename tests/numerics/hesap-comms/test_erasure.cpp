@@ -12,6 +12,7 @@
 #include <crd/hesap/comms/gf256.hpp>
 #include <crd/hesap/stats/philox.hpp>
 
+#include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
 #include <string_view>
@@ -259,6 +260,13 @@ TEST_CASE("gf256: multiplication, inverse, division and expansion over every pai
             const u8 p = hc::gf256_mul(static_cast<u8>(a), static_cast<u8>(b));
             bad += p == reference_mul(static_cast<u8>(a), static_cast<u8>(b)) ? 0U : 1U;
             bad += p == static_cast<u8>(e.lo[b & 15U] ^ e.hi[b >> 4U]) ? 0U : 1U;
+            u32 through_matrix = 0U; // GF2P8AFFINEQB's definition: bit i is the parity of byte 7 - i AND b
+            for (u32 i = 0U; i < 8U; ++i)
+            {
+                const u32 row = static_cast<u32>(e.affine >> ((7U - i) * 8U)) & 0xFFU & b;
+                through_matrix |= static_cast<u32>(std::popcount(row) & 1) << i;
+            }
+            bad += p == through_matrix ? 0U : 1U;
             if (b != 0U)
             {
                 bad += hc::gf256_mul(hc::gf256_div(static_cast<u8>(a), static_cast<u8>(b)), static_cast<u8>(b)) ==
@@ -277,6 +285,95 @@ TEST_CASE("gf256: multiplication, inverse, division and expansion over every pai
     static_assert(hc::gf256_inv(1U) == 1U && hc::gf256_div(0U, 7U) == 0U);
 }
 
+TEST_CASE("Reed-Solomon: prepared rows encode exactly as encode does, and refuse what it refuses", "[erasure]")
+{
+    crd::hesap::stats::PhiloxRng rng(2026, 14);
+    for (const auto& [k, n] : {std::pair<u32, u32>{1U, 2U}, {4U, 6U}, {10U, 14U}, {33U, 37U}, {64U, 80U}, {200U, 255U}})
+    {
+        const ReedSolomonCode code(k, n);
+        const u32 r = n - k;
+        for (const usize bytes : {usize{0U}, usize{1U}, usize{31U}, usize{64U}, usize{1200U}})
+        {
+            INFO("k " << k << " n " << n << " bytes " << bytes);
+            Array<Bytes> sources;
+            Array<const u8*> source_ptrs;
+            for (u32 i = 0U; i < k; ++i)
+            {
+                sources.push_back(random_bytes(rng, bytes));
+            }
+            for (u32 i = 0U; i < k; ++i)
+            {
+                source_ptrs.push_back(sources[i].data());
+            }
+            Array<u32> repair;
+            Array<Bytes> cold;
+            Array<Bytes> warm;
+            Array<u8*> cold_ptrs;
+            Array<u8*> warm_ptrs;
+            for (u32 q = 0U; q < r; ++q)
+            {
+                repair.push_back(n - 1U - q); // any order
+                cold.push_back(filled(bytes, 0U));
+                warm.push_back(filled(bytes, 0xA5U));
+            }
+            for (u32 q = 0U; q < r; ++q)
+            {
+                cold_ptrs.push_back(cold[q].data());
+                warm_ptrs.push_back(warm[q].data());
+            }
+            Array<hc::GfCoefficient> rows;
+            rows.resize(usize{r} * k);
+            const std::span<const u8* const> source_span(source_ptrs.data(), source_ptrs.size());
+            const std::span<u8* const> warm_span(warm_ptrs.data(), warm_ptrs.size());
+            REQUIRE(code.encode(source_span, {repair.data(), repair.size()}, {cold_ptrs.data(), cold_ptrs.size()},
+                                bytes) == ErasureStatus::Ok);
+            REQUIRE(code.prepare_encode({repair.data(), repair.size()}, {rows.data(), rows.size()}) == ErasureStatus::Ok);
+            REQUIRE(code.encode_prepared({rows.data(), rows.size()}, source_span, warm_span, bytes) == ErasureStatus::Ok);
+            usize bad = 0U;
+            for (u32 q = 0U; q < r; ++q)
+            {
+                bad += bytes == 0U || std::memcmp(cold[q].data(), warm[q].data(), bytes) == 0 ? 0U : 1U;
+            }
+            CHECK(bad == 0U);
+        }
+    }
+
+    const ReedSolomonCode code(4U, 6U);
+    hc::GfCoefficient rows[8];
+    const hc::GfCoefficient untouched = hc::gf256_expand(0x53U);
+    for (hc::GfCoefficient& row : rows)
+    {
+        row = untouched;
+    }
+    const u32 good[] = {4U, 5U};
+    const u32 low[] = {3U, 5U};
+    const u32 high[] = {4U, 6U};
+    const u32 twice[] = {5U, 5U};
+    CHECK(code.prepare_encode(good, std::span<hc::GfCoefficient>(rows, 7U)) == ErasureStatus::WrongCount);
+    CHECK(code.prepare_encode(low, rows) == ErasureStatus::IndexOutOfRange);
+    CHECK(code.prepare_encode(high, rows) == ErasureStatus::IndexOutOfRange);
+    CHECK(code.prepare_encode(twice, rows) == ErasureStatus::DuplicateIndex);
+    usize changed = 0U;
+    for (const hc::GfCoefficient& row : rows)
+    {
+        changed += std::memcmp(&row, &untouched, sizeof(row)) == 0 ? 0U : 1U;
+    }
+    CHECK(changed == 0U);
+
+    REQUIRE(code.prepare_encode(good, rows) == ErasureStatus::Ok);
+    u8 out_bytes[2][3] = {{1U, 2U, 3U}, {4U, 5U, 6U}};
+    u8* const outs[] = {out_bytes[0], out_bytes[1]};
+    const u8 data[3] = {7U, 8U, 9U};
+    const u8* const four[] = {data, data, data, data};
+    const u8* const three[] = {data, data, data};
+    CHECK(code.encode_prepared(rows, three, outs, 3U) == ErasureStatus::WrongCount);
+    CHECK(code.encode_prepared(std::span<const hc::GfCoefficient>(rows, 7U), four, outs, 3U) ==
+          ErasureStatus::WrongCount);
+    CHECK(out_bytes[0][0] == 1U);
+    CHECK(out_bytes[1][2] == 6U);
+    CHECK(code.encode_prepared(rows, four, outs, 3U) == ErasureStatus::Ok);
+}
+
 TEST_CASE("erasure kernels: the archive holds portable and each body level the build compiles", "[erasure][kernels]")
 {
     const auto levels = hc::erasure_kernel_levels();
@@ -287,20 +384,23 @@ TEST_CASE("erasure kernels: the archive holds portable and each body level the b
     bool avx2 = false;
     bool avx512 = false;
     bool neon = false;
+    int gfni = 0;
     for (usize i = 0U; i < levels.size(); ++i)
     {
         CHECK(levels[i].table != nullptr);
         CHECK(static_cast<int>(levels[i].level) <= CRD_TEST_KERNEL_LEVELS_TOP);
         if (i > 0U)
         {
-            CHECK(static_cast<int>(levels[i - 1U].level) < static_cast<int>(levels[i].level));
+            CHECK(static_cast<int>(levels[i - 1U].level) <= static_cast<int>(levels[i].level));
         }
         sse2 = sse2 || levels[i].level == CpuLevel::Sse2;
         avx2 = avx2 || levels[i].level == CpuLevel::Avx2;
         avx512 = avx512 || levels[i].level == CpuLevel::Avx512;
         neon = neon || levels[i].level == CpuLevel::Neon;
+        gfni += levels[i].features.has(crd::CpuFeature::Gfni) ? 1 : 0;
     }
     const bool x64 = arch == crd::CpuArch::X64;
+    CHECK(gfni == (x64 ? (avx2 ? 1 : 0) + (avx512 ? 1 : 0) : 0));
     CHECK(sse2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse2)));
     CHECK(avx2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2)));
     CHECK(avx512 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx512)));

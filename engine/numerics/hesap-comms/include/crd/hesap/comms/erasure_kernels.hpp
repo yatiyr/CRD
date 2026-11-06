@@ -10,12 +10,14 @@
 namespace crd::hesap::comms
 {
 
-// One GF(2^8) coefficient c, expanded for byte-shuffle multiplication (crd/hesap/comms/gf256.hpp, gf256_expand):
-// lo[x] = c·x and hi[x] = c·(x << 4) for x < 16, so c·b = lo[b & 15] ^ hi[b >> 4] for every byte b.
-struct alignas(16) GfCoefficient
+// One GF(2^8) coefficient c, expanded for its multiplications (crd/hesap/comms/gf256.hpp, gf256_expand): lo[x] = c·x and
+// hi[x] = c·(x << 4) for x < 16, so c·b = lo[b & 15] ^ hi[b >> 4] for every byte b; `affine` is the bit matrix of c for
+// GF2P8AFFINEQB: bit b of its byte 7 - i is bit i of c·2^b.
+struct GfCoefficient
 {
     crd::u8 lo[16];
     crd::u8 hi[16];
+    crd::u64 affine;
 };
 
 struct ErasureKernels
@@ -37,6 +39,8 @@ extern const ErasureKernels kErasureKernelsPortable;
 extern const ErasureKernels kErasureKernelsSse2;
 extern const ErasureKernels kErasureKernelsAvx2;
 extern const ErasureKernels kErasureKernelsAvx512;
+extern const ErasureKernels kErasureKernelsAvx2Gfni;
+extern const ErasureKernels kErasureKernelsAvx512Gfni;
 extern const ErasureKernels kErasureKernelsNeon;
 
 } // namespace crd::hesap::comms

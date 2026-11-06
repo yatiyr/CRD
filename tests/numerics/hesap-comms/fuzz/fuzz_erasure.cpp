@@ -483,6 +483,19 @@ void encode_request(Reader r)
     {
         CRD_FUZZ_REQUIRE(std::memcmp(g_out[q], g_codeword[repair[q]], shape.bytes) == 0);
     }
+    // The prepared path gives the same bytes and refuses rows that do not fit.
+    static GfCoefficient rows[usize{kMaxN} * kMaxN];
+    const usize row_count = repair_count * shape.k;
+    CRD_FUZZ_REQUIRE(code.prepare_encode({repair, repair_count}, {rows, row_count + 1U}) == ErasureStatus::WrongCount);
+    CRD_FUZZ_REQUIRE(code.prepare_encode({repair, repair_count}, {rows, row_count}) == ErasureStatus::Ok);
+    fill_outputs(kMaxN);
+    CRD_FUZZ_REQUIRE(code.encode_prepared({rows, row_count}, {sources, source_count}, {outputs, repair_count},
+                                          shape.bytes) == ErasureStatus::Ok);
+    CRD_FUZZ_REQUIRE(untouched(repair_count, shape.bytes));
+    for (usize q = 0U; q < repair_count; ++q)
+    {
+        CRD_FUZZ_REQUIRE(std::memcmp(g_out[q], g_codeword[repair[q]], shape.bytes) == 0);
+    }
 }
 
 // Kernel requests: at most 40 sources and 9 outputs of up to 600 bytes, each region at its own offset in [0, 64).

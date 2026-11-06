@@ -18,9 +18,27 @@ using crd::u8;
 using crd::usize;
 
 // One dot call covers at most four outputs (one register group of the shuffle levels) and 32 sources, so its
-// expanded coefficients take 4 KiB of stack; longer source lists accumulate chunk by chunk.
+// expanded coefficients take 5 KiB of stack; longer source lists accumulate chunk by chunk.
 constexpr usize kOutputChunk = 4U;
 constexpr usize kSourceChunk = 32U;
+
+// Every coefficient expanded at compile time, so a block's encode or decode only copies them.
+struct ExpandedCoefficients
+{
+    GfCoefficient of[256];
+};
+
+constexpr ExpandedCoefficients make_expanded_coefficients() noexcept
+{
+    ExpandedCoefficients expanded{};
+    for (u32 c = 0U; c < 256U; ++c)
+    {
+        expanded.of[c] = gf256_expand(static_cast<u8>(c));
+    }
+    return expanded;
+}
+
+constexpr ExpandedCoefficients kExpanded = make_expanded_coefficients();
 
 // The point of encoding symbol `index` < 255.
 u8 point(u32 index) noexcept
@@ -89,6 +107,24 @@ struct IndexSet
     }
 };
 
+// Each repair index in [k, n), none twice.
+ErasureStatus check_repair(std::span<const u32> repair, u32 k, u32 n) noexcept
+{
+    IndexSet seen;
+    for (const u32 j : repair)
+    {
+        if (j < k || j >= n)
+        {
+            return ErasureStatus::IndexOutOfRange;
+        }
+        if (!seen.insert(j))
+        {
+            return ErasureStatus::DuplicateIndex;
+        }
+    }
+    return ErasureStatus::Ok;
+}
+
 // outputs[q] = sum_t coefficient(q, t)·inputs[t] over `count` inputs, for `targets` outputs at the points
 // x_q = alpha^targets[q], with inputs at the points alpha^indices[t] whose weight logarithms are `weights`.
 void interpolate(const u8* const* inputs, const u32* indices, const u8* weights, usize count, const u32* targets,
@@ -111,8 +147,8 @@ void interpolate(const u8* const* inputs, const u32* indices, const u8* weights,
             {
                 for (usize s = 0U; s < ns; ++s)
                 {
-                    rows[(q * ns) + s] = gf256_expand(
-                        lagrange(node_logs[q], weights[s0 + s], targets[q0 + q], indices[s0 + s]));
+                    rows[(q * ns) + s] =
+                        kExpanded.of[lagrange(node_logs[q], weights[s0 + s], targets[q0 + q], indices[s0 + s])];
                 }
             }
             kernels.dot(rows, inputs + s0, ns, outputs + q0, nq, bytes, s0 != 0U);
@@ -122,7 +158,7 @@ void interpolate(const u8* const* inputs, const u32* indices, const u8* weights,
 
 } // namespace
 
-ReedSolomonCode::ReedSolomonCode(u32 k, u32 n) noexcept : k_(k), n_(n), weight_logs_{}
+ReedSolomonCode::ReedSolomonCode(u32 k, u32 n) noexcept : m_k(k), m_n(n), m_weight_logs{}
 {
     CRD_ASSERT(valid(k, n));
     u32 indices[kMaxSymbols];
@@ -130,56 +166,88 @@ ReedSolomonCode::ReedSolomonCode(u32 k, u32 n) noexcept : k_(k), n_(n), weight_l
     {
         indices[i] = i;
     }
-    weight_logs(indices, k, weight_logs_);
+    weight_logs(indices, k, m_weight_logs);
 }
 
 u8 ReedSolomonCode::coefficient(u32 i, u32 j) const noexcept
 {
-    CRD_ASSERT(i < k_ && j < n_);
-    if (j < k_)
+    CRD_ASSERT(i < m_k && j < m_n);
+    if (j < m_k)
     {
         return i == j ? u8{1U} : u8{0U};
     }
     u64 node = 0U;
-    for (u32 m = 0U; m < k_; ++m)
+    for (u32 m = 0U; m < m_k; ++m)
     {
         node += difference_log(j, m);
     }
-    return lagrange(static_cast<u32>(node % kGf256Order), weight_logs_[i], j, i);
+    return lagrange(static_cast<u32>(node % kGf256Order), m_weight_logs[i], j, i);
 }
 
 ErasureStatus ReedSolomonCode::encode(std::span<const u8* const> sources, std::span<const u32> repair,
                                       std::span<u8* const> outputs, usize bytes) const noexcept
 {
-    if (sources.size() != k_ || repair.size() != outputs.size())
+    if (sources.size() != m_k || repair.size() != outputs.size())
     {
         return ErasureStatus::WrongCount;
     }
-    IndexSet seen;
-    for (const u32 j : repair)
+    const ErasureStatus status = check_repair(repair, m_k, m_n);
+    if (status != ErasureStatus::Ok)
     {
-        if (j < k_ || j >= n_)
-        {
-            return ErasureStatus::IndexOutOfRange;
-        }
-        if (!seen.insert(j))
-        {
-            return ErasureStatus::DuplicateIndex;
-        }
+        return status;
     }
     u32 indices[kMaxSymbols];
-    for (u32 i = 0U; i < k_; ++i)
+    for (u32 i = 0U; i < m_k; ++i)
     {
         indices[i] = i;
     }
-    interpolate(sources.data(), indices, weight_logs_, k_, repair.data(), outputs.data(), repair.size(), bytes);
+    interpolate(sources.data(), indices, m_weight_logs, m_k, repair.data(), outputs.data(), repair.size(), bytes);
+    return ErasureStatus::Ok;
+}
+
+ErasureStatus ReedSolomonCode::prepare_encode(std::span<const u32> repair,
+                                              std::span<GfCoefficient> rows) const noexcept
+{
+    if (rows.size() != repair.size() * m_k)
+    {
+        return ErasureStatus::WrongCount;
+    }
+    const ErasureStatus status = check_repair(repair, m_k, m_n);
+    if (status != ErasureStatus::Ok)
+    {
+        return status;
+    }
+    u32 indices[kMaxSymbols];
+    for (u32 i = 0U; i < m_k; ++i)
+    {
+        indices[i] = i;
+    }
+    for (usize q = 0U; q < repair.size(); ++q)
+    {
+        const u32 node_log = node_polynomial_log(repair[q], indices, m_k);
+        for (u32 s = 0U; s < m_k; ++s)
+        {
+            rows[(q * m_k) + s] = kExpanded.of[lagrange(node_log, m_weight_logs[s], repair[q], s)];
+        }
+    }
+    return ErasureStatus::Ok;
+}
+
+ErasureStatus ReedSolomonCode::encode_prepared(std::span<const GfCoefficient> rows, std::span<const u8* const> sources,
+                                               std::span<u8* const> outputs, usize bytes) const noexcept
+{
+    if (sources.size() != m_k || rows.size() != outputs.size() * m_k)
+    {
+        return ErasureStatus::WrongCount;
+    }
+    erasure_kernels().table->dot(rows.data(), sources.data(), m_k, outputs.data(), outputs.size(), bytes, false);
     return ErasureStatus::Ok;
 }
 
 ErasureStatus ReedSolomonCode::decode(std::span<const ErasureSymbol> received, std::span<const u32> lost,
                                       std::span<u8* const> outputs, usize bytes) const noexcept
 {
-    if (received.size() != k_ || lost.size() != outputs.size())
+    if (received.size() != m_k || lost.size() != outputs.size())
     {
         return ErasureStatus::WrongCount;
     }
@@ -188,7 +256,7 @@ ErasureStatus ReedSolomonCode::decode(std::span<const ErasureSymbol> received, s
     const u8* inputs[kMaxSymbols];
     for (usize t = 0U; t < received.size(); ++t)
     {
-        if (received[t].index >= n_)
+        if (received[t].index >= m_n)
         {
             return ErasureStatus::IndexOutOfRange;
         }
@@ -202,7 +270,7 @@ ErasureStatus ReedSolomonCode::decode(std::span<const ErasureSymbol> received, s
     IndexSet asked;
     for (const u32 i : lost)
     {
-        if (i >= k_)
+        if (i >= m_k)
         {
             return ErasureStatus::IndexOutOfRange;
         }
@@ -220,8 +288,8 @@ ErasureStatus ReedSolomonCode::decode(std::span<const ErasureSymbol> received, s
         return ErasureStatus::Ok;
     }
     u8 weights[kMaxSymbols];
-    weight_logs(indices, k_, weights);
-    interpolate(inputs, indices, weights, k_, lost.data(), outputs.data(), lost.size(), bytes);
+    weight_logs(indices, m_k, weights);
+    interpolate(inputs, indices, weights, m_k, lost.data(), outputs.data(), lost.size(), bytes);
     return ErasureStatus::Ok;
 }
 

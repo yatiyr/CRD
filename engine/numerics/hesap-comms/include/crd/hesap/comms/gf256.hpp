@@ -74,7 +74,8 @@ inline constexpr Gf256Tables kGf256 = make_gf256_tables();
     return kGf256.exp[e % kGf256Order];
 }
 
-// c expanded for the dot kernel (crd/hesap/comms/erasure_kernels.hpp): the products with every low and high nibble.
+// c expanded for the dot kernel (crd/hesap/comms/erasure_kernels.hpp): the products with every low and high nibble and
+// the bit matrix of the product.
 [[nodiscard]] constexpr GfCoefficient gf256_expand(crd::u8 c) noexcept
 {
     GfCoefficient e{};
@@ -82,6 +83,14 @@ inline constexpr Gf256Tables kGf256 = make_gf256_tables();
     {
         e.lo[x] = gf256_mul(c, static_cast<crd::u8>(x));
         e.hi[x] = gf256_mul(c, static_cast<crd::u8>(x << 4U));
+    }
+    for (crd::u32 b = 0U; b < 8U; ++b)
+    {
+        const crd::u32 product = gf256_mul(c, static_cast<crd::u8>(1U << b));
+        for (crd::u32 i = 0U; i < 8U; ++i)
+        {
+            e.affine |= crd::u64{(product >> i) & 1U} << (((7U - i) * 8U) + b);
+        }
     }
     return e;
 }
