@@ -1,4 +1,4 @@
-// Interleavers against burst loss (HESAP-NET, capability numerics.erasure-codes, owner crd-hesap-comms).
+// Interleavers against burst loss (HESAP-NET, capability numerics.erasure-codes, owner crd-hesap-net).
 //
 // A burst of consecutive losses on the wire takes consecutive symbols of one codeword unless the sender reorders
 // them; an interleaver spreads a burst over many codewords, each of which an erasure code (erasure.hpp, flexfec.hpp)
@@ -21,7 +21,7 @@
 
 #include <span>
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 
 // The sending position of symbol `index` of a rows x columns block, and the symbol at a sending position.
@@ -81,4 +81,4 @@ private:
     Role m_role = Role::Interleave;
 };
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net

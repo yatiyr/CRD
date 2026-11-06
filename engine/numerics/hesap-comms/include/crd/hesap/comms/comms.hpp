@@ -5,8 +5,7 @@
 //
 // Digital communications / software-defined-radio on top of crd-hesap-dsp:
 // modulation, pulse shaping, timing + carrier recovery, equalization, channel
-// models, OFDM, and the packet erasure codes of HESAP-NET (RFC 5510 Reed-Solomon
-// over GF(2^8)). Own module (a DAW links crd-hesap-dsp, not comms).
+// models and OFDM. Own module (a DAW links crd-hesap-dsp, not comms); packet codes are crd-hesap-net's.
 //
 // Gold standard: liquid-dsp 1.6.0 + theoretical AWGN BER curves. Honest gate:
 // modem correctness = Gray property + noise-free round-trip + BER-vs-theory +
@@ -17,9 +16,7 @@
 #include <crd/hesap/comms/carrier.hpp>
 #include <crd/hesap/comms/channel.hpp>
 #include <crd/hesap/comms/equalizer.hpp>
-#include <crd/hesap/comms/erasure.hpp>
 #include <crd/hesap/comms/framing.hpp>
-#include <crd/hesap/comms/gf256.hpp>
 #include <crd/hesap/comms/loop.hpp>
 #include <crd/hesap/comms/modulation.hpp>
 #include <crd/hesap/comms/ofdm.hpp>

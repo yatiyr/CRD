@@ -7,10 +7,11 @@
 //   * every repair symbol against each ISA-L encoder this CPU runs (isal_arms.h) over GM's repair columns;
 //   * every recovered source against each of them over ISA-L's inverse of the received columns of GM.
 
+#include "seeded_words.hpp"
+
 #include <crd/containers/array.hpp>
-#include <crd/hesap/comms/erasure.hpp>
-#include <crd/hesap/comms/gf256.hpp>
-#include <crd/hesap/stats/philox.hpp>
+#include <crd/hesap/net/erasure.hpp>
+#include <crd/hesap/net/gf256.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
@@ -19,13 +20,13 @@
 
 #include "isal_arms.h"
 
-namespace hc = crd::hesap::comms;
+namespace hn = crd::hesap::net;
 using crd::u32;
 using crd::u8;
 using crd::usize;
-using hc::ErasureStatus;
-using hc::ErasureSymbol;
-using hc::ReedSolomonCode;
+using hn::ErasureStatus;
+using hn::ErasureSymbol;
+using hn::ReedSolomonCode;
 using Bytes = crd::containers::Array<u8>;
 
 namespace
@@ -42,7 +43,7 @@ constexpr Shape kShapes[] = {{1U, 1U},    {1U, 2U},    {2U, 3U},     {3U, 7U},  
                              {255U, 255U}};
 constexpr usize kLengths[] = {1U, 15U, 64U, 1000U, 1500U};
 
-Bytes random_bytes(crd::hesap::stats::PhiloxRng& rng, usize n)
+Bytes random_bytes(SeededWords& rng, usize n)
 {
     Bytes out;
     out.resize(n);
@@ -134,11 +135,11 @@ TEST_CASE("ISA-L oracle: the field's products and inverses are ISA-L's", "[erasu
         {
             const u8 x = static_cast<u8>(a);
             const u8 y = static_cast<u8>(b);
-            bad += hc::gf256_mul(x, y) != gf_mul(x, y) ? 1U : 0U;
+            bad += hn::gf256_mul(x, y) != gf_mul(x, y) ? 1U : 0U;
         }
         if (a != 0U)
         {
-            bad += hc::gf256_inv(static_cast<u8>(a)) != gf_inv(static_cast<u8>(a)) ? 1U : 0U;
+            bad += hn::gf256_inv(static_cast<u8>(a)) != gf_inv(static_cast<u8>(a)) ? 1U : 0U;
         }
     }
     CHECK(bad == 0U);
@@ -183,7 +184,7 @@ TEST_CASE("ISA-L oracle: GM is V(k,k)^-1 V(k,n) under ISA-L's arithmetic and inv
 
 TEST_CASE("ISA-L oracle: repair symbols are ec_encode_data_base over GM's repair columns", "[erasure][isal]")
 {
-    crd::hesap::stats::PhiloxRng rng(2026, 21);
+    SeededWords rng(2026, 21);
     for (const Shape shape : kShapes)
     {
         const u32 k = shape.k;
@@ -240,7 +241,7 @@ TEST_CASE("ISA-L oracle: repair symbols are ec_encode_data_base over GM's repair
 
 TEST_CASE("ISA-L oracle: recovered sources are ISA-L's inverse of the received columns of GM", "[erasure][isal]")
 {
-    crd::hesap::stats::PhiloxRng rng(2026, 22);
+    SeededWords rng(2026, 22);
     constexpr usize kBytes = 333U;
     for (const Shape shape : kShapes)
     {

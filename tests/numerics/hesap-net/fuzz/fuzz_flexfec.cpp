@@ -1,4 +1,4 @@
-// crd-fuzz-hesap-flexfec: hesap-comms' FlexFEC parity (RFC 8627; HESAP-NET; crd/hesap/comms/flexfec.hpp) under the
+// crd-fuzz-hesap-flexfec: hesap-net' FlexFEC parity (RFC 8627; HESAP-NET; crd/hesap/net/flexfec.hpp) under the
 // bounded fuzz harness (REPO.DEV.9; docs/design/test-instruments.md).
 //
 // Input. The first byte picks the mode, the rest is its data.
@@ -17,7 +17,7 @@
 //     original, and nothing else.
 #include <crd/fuzz/harness.hpp>
 
-#include <crd/hesap/comms/flexfec.hpp>
+#include <crd/hesap/net/flexfec.hpp>
 
 #include <cstring>
 #include <initializer_list>
@@ -29,7 +29,7 @@ using crd::u32;
 using crd::u64;
 using crd::u8;
 using crd::usize;
-using namespace crd::hesap::comms;
+using namespace crd::hesap::net;
 
 constexpr u8 kSentinel = 0xA5U;
 constexpr usize kMaxPayload = 48U;

@@ -81,12 +81,12 @@ TARGETS = {
                      'executable': 'tests/comply/fuzz/crd-fuzz-comply-rules'},
     'comply-sanctions': {'corpus': 'tests/foundation/comply/fuzz/corpus/sanctions',
                          'executable': 'tests/comply/fuzz/crd-fuzz-comply-sanctions'},
-    'hesap-erasure': {'corpus': 'tests/numerics/hesap-comms/fuzz/corpus',
-                      'executable': 'tests/hesap-comms/fuzz/crd-fuzz-hesap-erasure'},
-    'hesap-flexfec': {'corpus': 'tests/numerics/hesap-comms/fuzz/corpus-flexfec',
-                      'executable': 'tests/hesap-comms/fuzz/crd-fuzz-hesap-flexfec'},
-    'hesap-red': {'corpus': 'tests/numerics/hesap-comms/fuzz/corpus-red',
-                  'executable': 'tests/hesap-comms/fuzz/crd-fuzz-hesap-red'},
+    'hesap-erasure': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus',
+                      'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-erasure'},
+    'hesap-flexfec': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus-flexfec',
+                      'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-flexfec'},
+    'hesap-red': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus-red',
+                  'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-red'},
 }
 LIMITS = {'max_len': 65536, 'timeout': 10, 'rss_limit_mb': 2048, 'malloc_limit_mb': 256}
 STAT_PATTERN = re.compile(r'^stat::(\w+):\s+(\d+)', re.MULTILINE)

@@ -2989,7 +2989,7 @@
       "title": "RTP payload format for flexible forward error correction",
       "kind": "algorithm",
       "state": "implemented",
-      "owner": "hesap-comms",
+      "owner": "hesap-net",
       "rows": [
         "HESAP-NET"
       ],
@@ -3006,8 +3006,8 @@
       },
       "review": "2027-10-27",
       "evidence": [
-        "tests/numerics/hesap-comms/test_flexfec.cpp",
-        "tests/numerics/hesap-comms/fuzz/fuzz_flexfec.cpp"
+        "tests/numerics/hesap-net/test_flexfec.cpp",
+        "tests/numerics/hesap-net/fuzz/fuzz_flexfec.cpp"
       ],
       "deprecation": null,
       "note": "RFC 8627's text was read in full on 2026-11-04 to implement it (docs/sessions/2026-11-04-hesap-net-flexfec.md). Masks of 15, 46 and 110 bits (k = 1 before another block), fixed L columns by D rows and retransmissions, several streams per repair packet, and the iterative decoder of §6.3.4 as a peeling over masks, rows and columns alike. §6.3.2 names the first 64 header bits, which would XOR the sequence number into the length; both directions follow §6.2 and Figure 12, which skip it."
@@ -3017,7 +3017,7 @@
       "title": "RTP payload for redundant audio data",
       "kind": "algorithm",
       "state": "implemented",
-      "owner": "hesap-comms",
+      "owner": "hesap-net",
       "rows": [
         "HESAP-NET"
       ],
@@ -3034,8 +3034,8 @@
       },
       "review": "2027-10-27",
       "evidence": [
-        "tests/numerics/hesap-comms/test_red.cpp",
-        "tests/numerics/hesap-comms/fuzz/fuzz_red.cpp"
+        "tests/numerics/hesap-net/test_red.cpp",
+        "tests/numerics/hesap-net/fuzz/fuzz_red.cpp"
       ],
       "deprecation": null,
       "note": "RFC 2198's text was read in full on 2026-11-04 to implement it (docs/sessions/2026-11-04-hesap-net-red-and-interleavers.md; SHA-256 86c433f7fae8d5bcee1175f459a1afa14a40fc42730d62013df5e811ee739ce4). §3's 32-bit redundant header and 8-bit primary header, §7's example byte for byte; the writer keeps §3's different time intervals (no offset 0, no offset twice), the reader accepts what the format can express, and the payload types a block may carry are the session's (§5)."
@@ -3045,7 +3045,7 @@
       "title": "RaptorQ forward error correction",
       "kind": "algorithm",
       "state": "planned",
-      "owner": "hesap-comms",
+      "owner": "hesap-net",
       "rows": [
         "HESAP-NET"
       ],

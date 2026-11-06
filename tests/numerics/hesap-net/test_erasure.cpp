@@ -1,16 +1,16 @@
 // HESAP-NET's packet erasure codes: GF(2^8) of RFC 5510 §8.1 against a carry-less reference multiply, the dispatched
-// dot product at every level the host runs against the scalar product (crd-hesap-comms-kernels-at-<level> runs the
+// dot product at every level the host runs against the scalar product (crd-hesap-net-kernels-at-<level> runs the
 // [kernels] cases under each forced level), and the RFC 5510 Reed-Solomon code against the RFC's literal matrices:
 // GM = V(k,k)^-1 V(k,n) by Gauss-Jordan inversion, encoding as s × GM, and recovery from every k-subset of small codes.
 
 #include "kernel_levels.hpp"
+#include "seeded_words.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
-#include <crd/hesap/comms/erasure.hpp>
-#include <crd/hesap/comms/erasure_dispatch.hpp>
-#include <crd/hesap/comms/gf256.hpp>
-#include <crd/hesap/stats/philox.hpp>
+#include <crd/hesap/net/erasure.hpp>
+#include <crd/hesap/net/erasure_dispatch.hpp>
+#include <crd/hesap/net/gf256.hpp>
 
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
@@ -18,16 +18,16 @@
 #include <string_view>
 #include <utility>
 
-namespace hc = crd::hesap::comms;
+namespace hn = crd::hesap::net;
 using crd::CpuLevel;
 using crd::KernelLevel;
 using crd::u32;
 using crd::u8;
 using crd::usize;
-using hc::ErasureKernels;
-using hc::ErasureStatus;
-using hc::ErasureSymbol;
-using hc::ReedSolomonCode;
+using hn::ErasureKernels;
+using hn::ErasureStatus;
+using hn::ErasureSymbol;
+using hn::ReedSolomonCode;
 template <typename T> using Array = crd::containers::Array<T>;
 using Bytes = Array<u8>;
 
@@ -72,7 +72,7 @@ Bytes filled(usize n, u8 fill)
     return v;
 }
 
-Bytes random_bytes(crd::hesap::stats::PhiloxRng& rng, usize n)
+Bytes random_bytes(SeededWords& rng, usize n)
 {
     Bytes v = filled(n, 0U);
     for (u8& b : v)
@@ -96,7 +96,7 @@ Bytes rfc_generator_matrix(u32 k, u32 n)
     {
         for (u32 j = 0U; j < n; ++j)
         {
-            v[(static_cast<usize>(i) * n) + j] = hc::gf256_alpha_pow(static_cast<crd::u64>(i) * j);
+            v[(static_cast<usize>(i) * n) + j] = hn::gf256_alpha_pow(static_cast<crd::u64>(i) * j);
         }
     }
     // [V(k,k) | I] -> [I | V(k,k)^-1].
@@ -123,10 +123,10 @@ Bytes rfc_generator_matrix(u32 k, u32 n)
             a[(col * w) + c] = a[(pivot * w) + c];
             a[(pivot * w) + c] = t;
         }
-        const u8 inv = hc::gf256_inv(a[(col * w) + col]);
+        const u8 inv = hn::gf256_inv(a[(col * w) + col]);
         for (usize c = 0U; c < w; ++c)
         {
-            a[(col * w) + c] = hc::gf256_mul(a[(col * w) + c], inv);
+            a[(col * w) + c] = hn::gf256_mul(a[(col * w) + c], inv);
         }
         for (u32 r = 0U; r < k; ++r)
         {
@@ -135,7 +135,7 @@ Bytes rfc_generator_matrix(u32 k, u32 n)
             {
                 for (usize c = 0U; c < w; ++c)
                 {
-                    a[(r * w) + c] = static_cast<u8>(a[(r * w) + c] ^ hc::gf256_mul(f, a[(col * w) + c]));
+                    a[(r * w) + c] = static_cast<u8>(a[(r * w) + c] ^ hn::gf256_mul(f, a[(col * w) + c]));
                 }
             }
         }
@@ -148,7 +148,7 @@ Bytes rfc_generator_matrix(u32 k, u32 n)
             u8 acc = 0U;
             for (u32 l = 0U; l < k; ++l)
             {
-                acc = static_cast<u8>(acc ^ hc::gf256_mul(a[(i * w) + k + l], v[(static_cast<usize>(l) * n) + j]));
+                acc = static_cast<u8>(acc ^ hn::gf256_mul(a[(i * w) + k + l], v[(static_cast<usize>(l) * n) + j]));
             }
             gm[(static_cast<usize>(i) * n) + j] = acc;
         }
@@ -162,7 +162,7 @@ struct Block
     Array<Bytes> symbols; // n encoding symbols, the first k the sources
 };
 
-Block rfc_block(const Bytes& gm, u32 k, u32 n, usize bytes, crd::hesap::stats::PhiloxRng& rng)
+Block rfc_block(const Bytes& gm, u32 k, u32 n, usize bytes, SeededWords& rng)
 {
     Block b;
     for (u32 i = 0U; i < k; ++i)
@@ -177,7 +177,7 @@ Block rfc_block(const Bytes& gm, u32 k, u32 n, usize bytes, crd::hesap::stats::P
             u8 acc = 0U;
             for (u32 i = 0U; i < k; ++i)
             {
-                acc = static_cast<u8>(acc ^ hc::gf256_mul(b.symbols[i][u], gm[(static_cast<usize>(i) * n) + j]));
+                acc = static_cast<u8>(acc ^ hn::gf256_mul(b.symbols[i][u], gm[(static_cast<usize>(i) * n) + j]));
             }
             e[u] = acc;
         }
@@ -234,17 +234,17 @@ std::string_view routine_of(const char* routine)
 
 TEST_CASE("gf256: the tables are RFC 5510's field with alpha = 2", "[erasure]")
 {
-    CHECK(hc::kGf256.exp[0] == 1U);
-    CHECK(hc::gf256_alpha_pow(255U) == 1U);
+    CHECK(hn::kGf256.exp[0] == 1U);
+    CHECK(hn::gf256_alpha_pow(255U) == 1U);
     bool seen[256] = {};
     for (u32 e = 0U; e < 255U; ++e)
     {
-        const u8 x = hc::gf256_alpha_pow(e);
+        const u8 x = hn::gf256_alpha_pow(e);
         CHECK(x == reference_pow(2U, e));
         CHECK_FALSE(seen[x]); // alpha is primitive: its 255 powers are the 255 nonzero bytes
         seen[x] = true;
-        CHECK(hc::kGf256.log[x] == e);
-        CHECK(hc::kGf256.exp[e + 255U] == x);
+        CHECK(hn::kGf256.log[x] == e);
+        CHECK(hn::kGf256.exp[e + 255U] == x);
     }
     CHECK_FALSE(seen[0]);
 }
@@ -254,10 +254,10 @@ TEST_CASE("gf256: multiplication, inverse, division and expansion over every pai
     usize bad = 0U;
     for (u32 a = 0U; a < 256U; ++a)
     {
-        const hc::GfCoefficient e = hc::gf256_expand(static_cast<u8>(a));
+        const hn::GfCoefficient e = hn::gf256_expand(static_cast<u8>(a));
         for (u32 b = 0U; b < 256U; ++b)
         {
-            const u8 p = hc::gf256_mul(static_cast<u8>(a), static_cast<u8>(b));
+            const u8 p = hn::gf256_mul(static_cast<u8>(a), static_cast<u8>(b));
             bad += p == reference_mul(static_cast<u8>(a), static_cast<u8>(b)) ? 0U : 1U;
             bad += p == static_cast<u8>(e.lo[b & 15U] ^ e.hi[b >> 4U]) ? 0U : 1U;
             u32 through_matrix = 0U; // GF2P8AFFINEQB's definition: bit i is the parity of byte 7 - i AND b
@@ -269,7 +269,7 @@ TEST_CASE("gf256: multiplication, inverse, division and expansion over every pai
             bad += p == through_matrix ? 0U : 1U;
             if (b != 0U)
             {
-                bad += hc::gf256_mul(hc::gf256_div(static_cast<u8>(a), static_cast<u8>(b)), static_cast<u8>(b)) ==
+                bad += hn::gf256_mul(hn::gf256_div(static_cast<u8>(a), static_cast<u8>(b)), static_cast<u8>(b)) ==
                                a
                            ? 0U
                            : 1U;
@@ -277,17 +277,17 @@ TEST_CASE("gf256: multiplication, inverse, division and expansion over every pai
         }
         if (a != 0U)
         {
-            bad += hc::gf256_mul(static_cast<u8>(a), hc::gf256_inv(static_cast<u8>(a))) == 1U ? 0U : 1U;
+            bad += hn::gf256_mul(static_cast<u8>(a), hn::gf256_inv(static_cast<u8>(a))) == 1U ? 0U : 1U;
         }
     }
     CHECK(bad == 0U);
-    static_assert(hc::gf256_mul(0x80U, 2U) == 0x1DU, "x^8 reduces to x^4 + x^3 + x^2 + 1");
-    static_assert(hc::gf256_inv(1U) == 1U && hc::gf256_div(0U, 7U) == 0U);
+    static_assert(hn::gf256_mul(0x80U, 2U) == 0x1DU, "x^8 reduces to x^4 + x^3 + x^2 + 1");
+    static_assert(hn::gf256_inv(1U) == 1U && hn::gf256_div(0U, 7U) == 0U);
 }
 
 TEST_CASE("Reed-Solomon: prepared rows encode exactly as encode does, and refuse what it refuses", "[erasure]")
 {
-    crd::hesap::stats::PhiloxRng rng(2026, 14);
+    SeededWords rng(2026, 14);
     for (const auto& [k, n] : {std::pair<u32, u32>{1U, 2U}, {4U, 6U}, {10U, 14U}, {33U, 37U}, {64U, 80U}, {200U, 255U}})
     {
         const ReedSolomonCode code(k, n);
@@ -321,7 +321,7 @@ TEST_CASE("Reed-Solomon: prepared rows encode exactly as encode does, and refuse
                 cold_ptrs.push_back(cold[q].data());
                 warm_ptrs.push_back(warm[q].data());
             }
-            Array<hc::GfCoefficient> rows;
+            Array<hn::GfCoefficient> rows;
             rows.resize(usize{r} * k);
             const std::span<const u8* const> source_span(source_ptrs.data(), source_ptrs.size());
             const std::span<u8* const> warm_span(warm_ptrs.data(), warm_ptrs.size());
@@ -339,9 +339,9 @@ TEST_CASE("Reed-Solomon: prepared rows encode exactly as encode does, and refuse
     }
 
     const ReedSolomonCode code(4U, 6U);
-    hc::GfCoefficient rows[8];
-    const hc::GfCoefficient untouched = hc::gf256_expand(0x53U);
-    for (hc::GfCoefficient& row : rows)
+    hn::GfCoefficient rows[8];
+    const hn::GfCoefficient untouched = hn::gf256_expand(0x53U);
+    for (hn::GfCoefficient& row : rows)
     {
         row = untouched;
     }
@@ -349,12 +349,12 @@ TEST_CASE("Reed-Solomon: prepared rows encode exactly as encode does, and refuse
     const u32 low[] = {3U, 5U};
     const u32 high[] = {4U, 6U};
     const u32 twice[] = {5U, 5U};
-    CHECK(code.prepare_encode(good, std::span<hc::GfCoefficient>(rows, 7U)) == ErasureStatus::WrongCount);
+    CHECK(code.prepare_encode(good, std::span<hn::GfCoefficient>(rows, 7U)) == ErasureStatus::WrongCount);
     CHECK(code.prepare_encode(low, rows) == ErasureStatus::IndexOutOfRange);
     CHECK(code.prepare_encode(high, rows) == ErasureStatus::IndexOutOfRange);
     CHECK(code.prepare_encode(twice, rows) == ErasureStatus::DuplicateIndex);
     usize changed = 0U;
-    for (const hc::GfCoefficient& row : rows)
+    for (const hn::GfCoefficient& row : rows)
     {
         changed += std::memcmp(&row, &untouched, sizeof(row)) == 0 ? 0U : 1U;
     }
@@ -367,7 +367,7 @@ TEST_CASE("Reed-Solomon: prepared rows encode exactly as encode does, and refuse
     const u8* const four[] = {data, data, data, data};
     const u8* const three[] = {data, data, data};
     CHECK(code.encode_prepared(rows, three, outs, 3U) == ErasureStatus::WrongCount);
-    CHECK(code.encode_prepared(std::span<const hc::GfCoefficient>(rows, 7U), four, outs, 3U) ==
+    CHECK(code.encode_prepared(std::span<const hn::GfCoefficient>(rows, 7U), four, outs, 3U) ==
           ErasureStatus::WrongCount);
     CHECK(out_bytes[0][0] == 1U);
     CHECK(out_bytes[1][2] == 6U);
@@ -376,7 +376,7 @@ TEST_CASE("Reed-Solomon: prepared rows encode exactly as encode does, and refuse
 
 TEST_CASE("erasure kernels: the archive holds portable and each body level the build compiles", "[erasure][kernels]")
 {
-    const auto levels = hc::erasure_kernel_levels();
+    const auto levels = hn::erasure_kernel_levels();
     REQUIRE(!levels.empty());
     CHECK(levels[0].level == CpuLevel::Portable);
     const crd::CpuArch arch = crd::cpu_selection().arch;
@@ -409,7 +409,7 @@ TEST_CASE("erasure kernels: the archive holds portable and each body level the b
 
 TEST_CASE("erasure kernels: every level the host runs gives the scalar dot product", "[erasure][kernels]")
 {
-    crd::hesap::stats::PhiloxRng rng(2026, 11);
+    SeededWords rng(2026, 11);
     // Up to nine outputs (two groups of four and one, and every shorter group) of up to seven sources, every length
     // from 0 to 300 (every vector count and remainder of each level), and 2100 and 2111 bytes (the SSE2 body's two
     // whole 1 KiB tiles and a partial one), from odd offsets, accumulating and not.
@@ -425,7 +425,7 @@ TEST_CASE("erasure kernels: every level the host runs gives the scalar dot produ
     coef[0] = 0U;
     coef[1] = 1U;
     coef[2] = 0xFFU;
-    Array<hc::GfCoefficient> rows;
+    Array<hn::GfCoefficient> rows;
     rows.resize(max_out * max_src);
     Array<usize> lengths;
     for (usize n = 0U; n <= 300U; ++n)
@@ -435,7 +435,7 @@ TEST_CASE("erasure kernels: every level the host runs gives the scalar dot produ
     lengths.push_back(2100U);
     lengths.push_back(2111U);
     usize ran = 0U;
-    for (const KernelLevel<ErasureKernels>& level : hc::erasure_kernel_levels())
+    for (const KernelLevel<ErasureKernels>& level : hn::erasure_kernel_levels())
     {
         if (!crd::test::kernel_level_runs_here(level))
         {
@@ -452,7 +452,7 @@ TEST_CASE("erasure kernels: every level the host runs gives the scalar dot produ
                 {
                     for (usize j = 0U; j < count; ++j)
                     {
-                        rows[(g * count) + j] = hc::gf256_expand(coef[(g * max_src) + j]);
+                        rows[(g * count) + j] = hn::gf256_expand(coef[(g * max_src) + j]);
                     }
                 }
                 for (const usize bytes : lengths)
@@ -480,7 +480,7 @@ TEST_CASE("erasure kernels: every level the host runs gives the scalar dot produ
                                 u8 acc = accumulate ? out[g][i + 1U] : u8{0U};
                                 for (usize j = 0U; j < count; ++j)
                                 {
-                                    acc = static_cast<u8>(acc ^ hc::gf256_mul(coef[(g * max_src) + j], sources[j][i]));
+                                    acc = static_cast<u8>(acc ^ hn::gf256_mul(coef[(g * max_src) + j], sources[j][i]));
                                 }
                                 want[g][i] = acc;
                             }
@@ -504,12 +504,12 @@ TEST_CASE("erasure kernels: every level the host runs gives the scalar dot produ
 
 TEST_CASE("erasure kernels: every level the host runs adds regions as XOR", "[erasure][kernels]")
 {
-    crd::hesap::stats::PhiloxRng rng(2026, 12);
+    SeededWords rng(2026, 12);
     // Every length from 0 to 300 and 2111 bytes, the output and source at each pair of offsets 0 to 2.
     const Bytes src = random_bytes(rng, 2111U + 3U);
     const Bytes base = random_bytes(rng, 2111U + 4U);
     usize ran = 0U;
-    for (const KernelLevel<ErasureKernels>& level : hc::erasure_kernel_levels())
+    for (const KernelLevel<ErasureKernels>& level : hn::erasure_kernel_levels())
     {
         if (!crd::test::kernel_level_runs_here(level))
         {
@@ -543,8 +543,8 @@ TEST_CASE("erasure kernels: every level the host runs adds regions as XOR", "[er
 TEST_CASE("erasure kernels: the process runs the level its selection allows", "[erasure][kernels]")
 {
     const crd::CpuSelection& s = crd::cpu_selection();
-    const KernelLevel<ErasureKernels>& chosen = hc::erasure_kernels();
-    CHECK(&chosen == &crd::select_kernel_level<ErasureKernels>(hc::erasure_kernel_levels(), s.selected,
+    const KernelLevel<ErasureKernels>& chosen = hn::erasure_kernels();
+    CHECK(&chosen == &crd::select_kernel_level<ErasureKernels>(hn::erasure_kernel_levels(), s.selected,
                                                                s.kernel_features, crd::kernel_level_cap()));
     const crd::KernelFamily* family = crd::test::kernel_family("hesap.erasure");
     REQUIRE(family != nullptr);
@@ -556,10 +556,10 @@ namespace
 {
 
 // The portable dot product with the last byte of the last output flipped.
-void dot_tail_off(const hc::GfCoefficient* c, const u8* const* sources, usize count, u8* const* outputs, usize nout,
+void dot_tail_off(const hn::GfCoefficient* c, const u8* const* sources, usize count, u8* const* outputs, usize nout,
                   usize bytes, bool accumulate) noexcept
 {
-    hc::kErasureKernelsPortable.dot(c, sources, count, outputs, nout, bytes, accumulate);
+    hn::kErasureKernelsPortable.dot(c, sources, count, outputs, nout, bytes, accumulate);
     if (!accumulate && nout != 0U && bytes != 0U)
     {
         outputs[nout - 1U][bytes - 1U] ^= 1U;
@@ -569,7 +569,7 @@ void dot_tail_off(const hc::GfCoefficient* c, const u8* const* sources, usize co
 // The portable addition with its last byte left out.
 void add_short(u8* output, const u8* source, usize bytes) noexcept
 {
-    hc::kErasureKernelsPortable.add(output, source, bytes == 0U ? 0U : bytes - 1U);
+    hn::kErasureKernelsPortable.add(output, source, bytes == 0U ? 0U : bytes - 1U);
 }
 
 } // namespace
@@ -577,16 +577,16 @@ void add_short(u8* output, const u8* source, usize bytes) noexcept
 TEST_CASE("erasure self-check: every table the host runs passes, and a wrong one fails", "[erasure][kernels]")
 {
     const crd::test::SelfCheckRun run =
-        crd::test::self_check_levels(hc::erasure_kernel_levels(), &hc::erasure_self_check);
+        crd::test::self_check_levels(hn::erasure_kernel_levels(), &hn::erasure_self_check);
     INFO("first failure " << crd::cpu_level_name(run.level) << " " << routine_of(run.routine));
     CHECK(run.failed == 0U);
     CHECK(run.ran >= 1U);
-    ErasureKernels wrong = hc::kErasureKernelsPortable;
+    ErasureKernels wrong = hn::kErasureKernelsPortable;
     wrong.dot = &dot_tail_off;
-    CHECK(routine_of(hc::erasure_self_check(wrong)) == "dot");
-    wrong = hc::kErasureKernelsPortable;
+    CHECK(routine_of(hn::erasure_self_check(wrong)) == "dot");
+    wrong = hn::kErasureKernelsPortable;
     wrong.add = &add_short;
-    CHECK(routine_of(hc::erasure_self_check(wrong)) == "add");
+    CHECK(routine_of(hn::erasure_self_check(wrong)) == "add");
 }
 
 TEST_CASE("reed-solomon: GM is RFC 5510's V(k,k)^-1 V(k,n), systematic", "[erasure]")
@@ -626,7 +626,7 @@ TEST_CASE("reed-solomon: GM is RFC 5510's V(k,k)^-1 V(k,n), systematic", "[erasu
 
 TEST_CASE("reed-solomon: repair symbols are s x GM, and any k of n recover the block", "[erasure]")
 {
-    crd::hesap::stats::PhiloxRng rng(2026, 12);
+    SeededWords rng(2026, 12);
     // Every k-subset of the small codes, both of whose sizes make a lost-source count of every size.
     const u32 small[][2] = {{1U, 4U}, {3U, 7U}, {4U, 8U}, {5U, 10U}};
     for (const auto& shape : small)
@@ -681,7 +681,7 @@ TEST_CASE("reed-solomon: repair symbols are s x GM, and any k of n recover the b
 
 TEST_CASE("reed-solomon: wide blocks encode in any order and decode random erasure patterns", "[erasure]")
 {
-    crd::hesap::stats::PhiloxRng rng(2026, 13);
+    SeededWords rng(2026, 13);
     const u32 shapes[][2] = {{1U, 255U}, {33U, 70U}, {100U, 255U}, {200U, 255U}, {255U, 255U}};
     for (const auto& shape : shapes)
     {

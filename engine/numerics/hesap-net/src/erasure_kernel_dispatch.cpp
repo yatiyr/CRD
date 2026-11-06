@@ -2,10 +2,10 @@
 // runs (SIMD-DISPATCH).
 
 #include <crd/core/kernel_level.hpp>
-#include <crd/hesap/comms/erasure_dispatch.hpp>
-#include <crd/hesap/comms/gf256.hpp>
+#include <crd/hesap/net/erasure_dispatch.hpp>
+#include <crd/hesap/net/gf256.hpp>
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 namespace
 {
@@ -182,4 +182,4 @@ const KernelLevel<ErasureKernels>& erasure_kernels() noexcept
     return selected;
 }
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net

@@ -10,8 +10,8 @@
 #   crd-fuzz-hesap-red       RFC 2198's redundant audio data: payloads against a reader restated bit by bit, and
 #                            written packets against the payload built bit by bit and their read-back.
 crd_fuzz_target(crd-fuzz-hesap-erasure
-    SOURCES fuzz_erasure.cpp LIBRARIES crd-hesap-comms crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+    SOURCES fuzz_erasure.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 crd_fuzz_target(crd-fuzz-hesap-flexfec
-    SOURCES fuzz_flexfec.cpp LIBRARIES crd-hesap-comms crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-flexfec")
+    SOURCES fuzz_flexfec.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-flexfec")
 crd_fuzz_target(crd-fuzz-hesap-red
-    SOURCES fuzz_red.cpp LIBRARIES crd-hesap-comms crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-red")
+    SOURCES fuzz_red.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-red")

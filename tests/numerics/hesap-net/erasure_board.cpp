@@ -1,4 +1,4 @@
-// crd-hesap-erasure-board -- hesap-comms' Reed-Solomon code against Intel ISA-L (HESAP-NET; docs/bench,
+// crd-hesap-erasure-board -- hesap-net' Reed-Solomon code against Intel ISA-L (HESAP-NET; docs/bench,
 // CRD_BUILD_ERASURE_VS_ISAL): both timed in one process on the same aligned buffers, at datagram and storage symbol
 // sizes. `encode` makes r repair symbols from what an application keeps per shape (hesap's prepared rows, ISA-L's
 // tables); `encode-cold` forms those in every call. `decode` recovers r lost sources from k received symbols with the
@@ -17,8 +17,8 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
-#include <crd/hesap/comms/erasure.hpp>
-#include <crd/hesap/comms/erasure_dispatch.hpp>
+#include <crd/hesap/net/erasure.hpp>
+#include <crd/hesap/net/erasure_dispatch.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -34,7 +34,7 @@
 namespace
 {
 
-namespace hc = crd::hesap::comms;
+namespace hn = crd::hesap::net;
 using crd::u32;
 using crd::u64;
 using crd::u8;
@@ -89,8 +89,8 @@ public:
                 generator_[(usize{j} * shape.k) + i] = code_.coefficient(i, j);
             }
         }
-        const hc::ErasureStatus made = code_.encode(source_views(), repair_indices_, repair_, shape.bytes);
-        if (made != hc::ErasureStatus::Ok)
+        const hn::ErasureStatus made = code_.encode(source_views(), repair_indices_, repair_, shape.bytes);
+        if (made != hn::ErasureStatus::Ok)
         {
             std::fprintf(stderr, "crd-hesap-erasure-board: the reference repair symbols were refused\n");
             std::exit(1);
@@ -100,20 +100,20 @@ public:
             const u32 index = t < shape.k - shape.r ? shape.r + t : shape.k + (t - (shape.k - shape.r));
             indices_.push_back(index);
             const u8* const data = index < shape.k ? sources_[index] : repair_[index - shape.k];
-            received_.push_back(hc::ErasureSymbol{index, data});
+            received_.push_back(hn::ErasureSymbol{index, data});
             received_data_.push_back(const_cast<u8*>(data));
         }
     }
 
     [[nodiscard]] const Shape& shape() const noexcept { return shape_; }
-    [[nodiscard]] const hc::ReedSolomonCode& code() const noexcept { return code_; }
+    [[nodiscard]] const hn::ReedSolomonCode& code() const noexcept { return code_; }
     [[nodiscard]] std::span<const u8* const> source_views() const noexcept
     {
         return {const_cast<const u8* const*>(sources_.data()), sources_.size()};
     }
     [[nodiscard]] std::span<const u32> repair_indices() const noexcept { return repair_indices_; }
     [[nodiscard]] std::span<const u32> lost() const noexcept { return lost_; }
-    [[nodiscard]] std::span<const hc::ErasureSymbol> received() const noexcept { return received_; }
+    [[nodiscard]] std::span<const hn::ErasureSymbol> received() const noexcept { return received_; }
     [[nodiscard]] std::span<u8* const> outputs() const noexcept { return outputs_; }
     [[nodiscard]] unsigned char** source_data() noexcept { return sources_.data(); }
     [[nodiscard]] unsigned char** received_data() noexcept { return received_data_.data(); }
@@ -135,7 +135,7 @@ public:
 
 private:
     Shape shape_;
-    hc::ReedSolomonCode code_;
+    hn::ReedSolomonCode code_;
     Bytes storage_;
     Bytes generator_;
     crd::containers::Array<u8*> sources_;
@@ -145,7 +145,7 @@ private:
     crd::containers::Array<u32> repair_indices_;
     crd::containers::Array<u32> lost_;
     crd::containers::Array<u32> indices_;
-    crd::containers::Array<hc::ErasureSymbol> received_;
+    crd::containers::Array<hn::ErasureSymbol> received_;
 };
 
 // One side: hesap's code (`isal` null) or one ISA-L arm, with what it keeps per shape.
@@ -155,7 +155,7 @@ struct Arm
 
     char name[32] = {};
     const crd_isal_arm* isal = nullptr;
-    crd::containers::Array<hc::GfCoefficient> rows;
+    crd::containers::Array<hn::GfCoefficient> rows;
     Bytes tables;
     Bytes scratch;
 };
@@ -166,7 +166,7 @@ void prepare(Arm& arm, Block& block)
     if (arm.isal == nullptr)
     {
         arm.rows.resize(usize{shape.k} * shape.r);
-        if (block.code().prepare_encode(block.repair_indices(), arm.rows) != hc::ErasureStatus::Ok)
+        if (block.code().prepare_encode(block.repair_indices(), arm.rows) != hn::ErasureStatus::Ok)
         {
             std::exit(1);
         }
@@ -185,9 +185,9 @@ void encode(Arm& arm, Block& block, u64 ops)
     {
         if (arm.isal == nullptr)
         {
-            const hc::ErasureStatus status =
+            const hn::ErasureStatus status =
                 block.code().encode_prepared(arm.rows, block.source_views(), block.outputs(), shape.bytes);
-            if (status != hc::ErasureStatus::Ok)
+            if (status != hn::ErasureStatus::Ok)
             {
                 std::exit(1);
             }
@@ -207,9 +207,9 @@ void encode_cold(Arm& arm, Block& block, u64 ops)
     {
         if (arm.isal == nullptr)
         {
-            const hc::ErasureStatus status =
+            const hn::ErasureStatus status =
                 block.code().encode(block.source_views(), block.repair_indices(), block.outputs(), shape.bytes);
-            if (status != hc::ErasureStatus::Ok)
+            if (status != hn::ErasureStatus::Ok)
             {
                 std::exit(1);
             }
@@ -232,9 +232,9 @@ void decode(Arm& arm, Block& block, u64 ops)
     {
         if (arm.isal == nullptr)
         {
-            const hc::ErasureStatus status =
+            const hn::ErasureStatus status =
                 block.code().decode(block.received(), block.lost(), block.outputs(), shape.bytes);
-            if (status != hc::ErasureStatus::Ok)
+            if (status != hn::ErasureStatus::Ok)
             {
                 std::exit(1);
             }
@@ -381,7 +381,7 @@ int main(int argc, char** argv)
     const Options options = parse(argc, argv);
     crd::containers::Array<Arm> arms;
     arms.push_back(Arm());
-    const crd::KernelLevel<hc::ErasureKernels>& level = hc::erasure_kernels();
+    const crd::KernelLevel<hn::ErasureKernels>& level = hn::erasure_kernels();
     std::snprintf(arms.back().name, sizeof(arms.back().name), "cerid-%s%s", crd::cpu_level_name(level.level),
                   level.features.has(crd::CpuFeature::Gfni) ? "-gfni" : "");
     for (unsigned a = 0U; a < crd_isal_arm_count; ++a)

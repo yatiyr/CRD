@@ -12,23 +12,24 @@
 // The difference is held too: the real codec's repair symbols are the Lagrange form of its own point set, computed here
 // with hesap's field, and the real decoder recovers from them, so the difference is the points and not a misuse.
 
+#include "seeded_words.hpp"
+
 #include <crd/containers/array.hpp>
-#include <crd/hesap/comms/erasure.hpp>
-#include <crd/hesap/comms/gf256.hpp>
-#include <crd/hesap/stats/philox.hpp>
+#include <crd/hesap/net/erasure.hpp>
+#include <crd/hesap/net/gf256.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
 
 #include "openfec_peer.h"
 
-namespace hc = crd::hesap::comms;
+namespace hn = crd::hesap::net;
 using crd::u32;
 using crd::u8;
 using crd::usize;
-using hc::ErasureStatus;
-using hc::ErasureSymbol;
-using hc::ReedSolomonCode;
+using hn::ErasureStatus;
+using hn::ErasureSymbol;
+using hn::ReedSolomonCode;
 using Bytes = crd::containers::Array<u8>;
 
 namespace
@@ -43,7 +44,7 @@ struct Shape
 constexpr Shape kShapes[] = {{2U, 3U},   {3U, 7U},     {10U, 14U},   {16U, 24U},   {32U, 48U},
                              {64U, 96U}, {100U, 200U}, {128U, 255U}, {200U, 255U}, {254U, 255U}};
 
-Bytes random_bytes(crd::hesap::stats::PhiloxRng& rng, usize n)
+Bytes random_bytes(SeededWords& rng, usize n)
 {
     Bytes out;
     out.resize(n);
@@ -57,7 +58,7 @@ Bytes random_bytes(crd::hesap::stats::PhiloxRng& rng, usize n)
 // OpenFEC's point of symbol j: 0, then alpha^(j - 1).
 u8 openfec_point(u32 j)
 {
-    return j == 0U ? u8{0U} : hc::gf256_alpha_pow(j - 1U);
+    return j == 0U ? u8{0U} : hn::gf256_alpha_pow(j - 1U);
 }
 
 // The Lagrange basis polynomial of source i over OpenFEC's first k points, at symbol j's point: its generator entry.
@@ -69,11 +70,11 @@ u8 openfec_coefficient(u32 k, u32 i, u32 j)
     {
         if (m != i)
         {
-            numerator = hc::gf256_mul(numerator, openfec_point(j) ^ openfec_point(m));
-            denominator = hc::gf256_mul(denominator, openfec_point(i) ^ openfec_point(m));
+            numerator = hn::gf256_mul(numerator, openfec_point(j) ^ openfec_point(m));
+            denominator = hn::gf256_mul(denominator, openfec_point(i) ^ openfec_point(m));
         }
     }
-    return hc::gf256_div(numerator, denominator);
+    return hn::gf256_div(numerator, denominator);
 }
 
 } // namespace
@@ -85,16 +86,16 @@ TEST_CASE("OpenFEC oracle: the field's products and inverses are OpenFEC's", "[e
     {
         for (u32 b = 0U; b < 256U; ++b)
         {
-            differing += hc::gf256_mul(static_cast<u8>(a), static_cast<u8>(b))
+            differing += hn::gf256_mul(static_cast<u8>(a), static_cast<u8>(b))
                                  == crd_openfec_mul(static_cast<u8>(a), static_cast<u8>(b))
                              ? 0U
                              : 1U;
         }
         if (a != 0U)
         {
-            differing += hc::gf256_inv(static_cast<u8>(a)) == crd_openfec_inv(static_cast<u8>(a)) ? 0U : 1U;
+            differing += hn::gf256_inv(static_cast<u8>(a)) == crd_openfec_inv(static_cast<u8>(a)) ? 0U : 1U;
         }
-        differing += hc::gf256_alpha_pow(a) == crd_openfec_alpha_pow(a) ? 0U : 1U;
+        differing += hn::gf256_alpha_pow(a) == crd_openfec_alpha_pow(a) ? 0U : 1U;
     }
     CHECK(differing == 0U);
 }
@@ -145,7 +146,7 @@ TEST_CASE("OpenFEC oracle: RFC 5510's GM under OpenFEC's inversion and multiplic
 
 TEST_CASE("OpenFEC oracle: recovered sources are OpenFEC's inverse of the received columns of GM", "[erasure][openfec]")
 {
-    crd::hesap::stats::PhiloxRng rng(2026, 31);
+    SeededWords rng(2026, 31);
     constexpr usize kBytes = 333U;
     for (const Shape shape : kShapes)
     {
@@ -242,7 +243,7 @@ TEST_CASE("OpenFEC oracle: recovered sources are OpenFEC's inverse of the receiv
 
 TEST_CASE("OpenFEC oracle: the real codec evaluates at {0, alpha^i}, not at RFC 5510's points", "[erasure][openfec]")
 {
-    crd::hesap::stats::PhiloxRng rng(2026, 32);
+    SeededWords rng(2026, 32);
     constexpr usize kBytes = 200U;
     for (const Shape shape : kShapes)
     {
@@ -287,8 +288,8 @@ TEST_CASE("OpenFEC oracle: the real codec evaluates at {0, alpha^i}, not at RFC 
                 u8 rfc = 0U;
                 for (u32 i = 0U; i < k; ++i)
                 {
-                    lagrange ^= hc::gf256_mul(row[i], sources[i][b]);
-                    rfc ^= hc::gf256_mul(rfc_row[i], sources[i][b]);
+                    lagrange ^= hn::gf256_mul(row[i], sources[i][b]);
+                    rfc ^= hn::gf256_mul(rfc_row[i], sources[i][b]);
                 }
                 differing += lagrange == out[b] ? 0U : 1U;
                 rfc_differs += rfc == out[b] ? 0U : 1U;

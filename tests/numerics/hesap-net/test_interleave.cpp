@@ -4,19 +4,19 @@
 // spread of one commutator turn, and every refusal with nothing written or bound.
 
 #include <crd/containers/array.hpp>
-#include <crd/hesap/comms/interleave.hpp>
+#include <crd/hesap/net/interleave.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
 #include <limits>
 #include <span>
 
-namespace hc = crd::hesap::comms;
+namespace hn = crd::hesap::net;
 using crd::u32;
 using crd::u64;
 using crd::u8;
 using crd::usize;
-using hc::ConvolutionalInterleaver;
+using hn::ConvolutionalInterleaver;
 using Bytes = crd::containers::Array<u8>;
 using Role = ConvolutionalInterleaver::Role;
 
@@ -72,11 +72,11 @@ TEST_CASE("Interleave: a 2 x 3 block is sent column by column", "[hesap][interle
 {
     const u8 in[] = {0U, 1U, 2U, 3U, 4U, 5U};
     u8 out[6] = {};
-    REQUIRE(hc::block_interleave(in, out, 2U, 3U, 1U));
+    REQUIRE(hn::block_interleave(in, out, 2U, 3U, 1U));
     const u8 sent[] = {0U, 3U, 1U, 4U, 2U, 5U};
     CHECK(std::memcmp(out, sent, sizeof(sent)) == 0);
     u8 back[6] = {};
-    REQUIRE(hc::block_deinterleave(out, back, 2U, 3U, 1U));
+    REQUIRE(hn::block_deinterleave(out, back, 2U, 3U, 1U));
     CHECK(std::memcmp(back, in, sizeof(in)) == 0);
 }
 
@@ -91,12 +91,12 @@ TEST_CASE("Interleave: every block shape up to 12 x 12 is a permutation the dein
             bool hit[144] = {};
             for (u64 i = 0U; i < n; ++i)
             {
-                const u64 p = hc::block_interleave_position(rows, columns, i);
+                const u64 p = hn::block_interleave_position(rows, columns, i);
                 REQUIRE(p < n);
                 CHECK_FALSE(hit[p]);
                 hit[p] = true;
                 CHECK(p == ((i % columns) * rows) + (i / columns)); // row i / C, column i % C
-                CHECK(hc::block_interleave_index(rows, columns, p) == i);
+                CHECK(hn::block_interleave_index(rows, columns, p) == i);
             }
             for (const usize symbol : {usize{1U}, usize{3U}})
             {
@@ -111,14 +111,14 @@ TEST_CASE("Interleave: every block shape up to 12 x 12 is a permutation the dein
                 {
                     tag(in + (i * symbol), symbol, i);
                 }
-                REQUIRE(hc::block_interleave(std::span<const u8>(in, bytes), std::span<u8>(sent, bytes), rows, columns,
+                REQUIRE(hn::block_interleave(std::span<const u8>(in, bytes), std::span<u8>(sent, bytes), rows, columns,
                                              symbol));
                 for (u64 i = 0U; i < n; ++i)
                 {
-                    CHECK(is_tag(sent + (hc::block_interleave_position(rows, columns, i) * symbol), symbol, i));
+                    CHECK(is_tag(sent + (hn::block_interleave_position(rows, columns, i) * symbol), symbol, i));
                 }
                 CHECK(sent[bytes] == kSentinel);
-                REQUIRE(hc::block_deinterleave(std::span<const u8>(sent, bytes), std::span<u8>(back, bytes), rows,
+                REQUIRE(hn::block_deinterleave(std::span<const u8>(sent, bytes), std::span<u8>(back, bytes), rows,
                                                columns, symbol));
                 CHECK(std::memcmp(back, in, bytes) == 0);
             }
@@ -141,7 +141,7 @@ TEST_CASE("Interleave: a burst of n*R positions costs each row of a block at mos
                     u32 lost[8] = {};
                     for (u64 p = start; p < start + length; ++p)
                     {
-                        ++lost[hc::block_interleave_index(rows, columns, p) / columns];
+                        ++lost[hn::block_interleave_index(rows, columns, p) / columns];
                     }
                     for (u32 r = 0U; r < rows; ++r)
                     {
@@ -158,13 +158,13 @@ TEST_CASE("Interleave: a malformed or overlapping block is refused and nothing i
     u8 in[12] = {};
     u8 out[12];
     std::memset(out, kSentinel, sizeof(out));
-    CHECK_FALSE(hc::block_interleave(in, out, 0U, 3U, 1U));
-    CHECK_FALSE(hc::block_interleave(in, out, 3U, 0U, 1U));
-    CHECK_FALSE(hc::block_interleave(in, out, 3U, 4U, 0U));
-    CHECK_FALSE(hc::block_interleave(in, out, 3U, 3U, 1U));                           // 12 bytes are not 9 symbols
-    CHECK_FALSE(hc::block_interleave(std::span<const u8>(in, 11U), out, 2U, 2U, 3U)); // nor 11 bytes 4 of 3
-    CHECK_FALSE(hc::block_deinterleave(in, std::span<u8>(out, 11U), 3U, 4U, 1U));     // short output
-    CHECK_FALSE(hc::block_deinterleave(in, out, 1U, 1U, 1U));
+    CHECK_FALSE(hn::block_interleave(in, out, 0U, 3U, 1U));
+    CHECK_FALSE(hn::block_interleave(in, out, 3U, 0U, 1U));
+    CHECK_FALSE(hn::block_interleave(in, out, 3U, 4U, 0U));
+    CHECK_FALSE(hn::block_interleave(in, out, 3U, 3U, 1U));                           // 12 bytes are not 9 symbols
+    CHECK_FALSE(hn::block_interleave(std::span<const u8>(in, 11U), out, 2U, 2U, 3U)); // nor 11 bytes 4 of 3
+    CHECK_FALSE(hn::block_deinterleave(in, std::span<u8>(out, 11U), 3U, 4U, 1U));     // short output
+    CHECK_FALSE(hn::block_deinterleave(in, out, 1U, 1U, 1U));
     for (const u8 b : out)
     {
         CHECK(b == kSentinel);
@@ -172,9 +172,9 @@ TEST_CASE("Interleave: a malformed or overlapping block is refused and nothing i
     // Overlapping buffers: the same bytes, and a shift by one symbol either way.
     u8 shared[16];
     std::memset(shared, kSentinel, sizeof(shared));
-    CHECK_FALSE(hc::block_interleave(std::span<const u8>(shared, 12U), std::span<u8>(shared, 12U), 3U, 4U, 1U));
-    CHECK_FALSE(hc::block_interleave(std::span<const u8>(shared, 12U), std::span<u8>(shared + 1, 12U), 3U, 4U, 1U));
-    CHECK_FALSE(hc::block_deinterleave(std::span<const u8>(shared + 1, 12U), std::span<u8>(shared, 12U), 3U, 4U, 1U));
+    CHECK_FALSE(hn::block_interleave(std::span<const u8>(shared, 12U), std::span<u8>(shared, 12U), 3U, 4U, 1U));
+    CHECK_FALSE(hn::block_interleave(std::span<const u8>(shared, 12U), std::span<u8>(shared + 1, 12U), 3U, 4U, 1U));
+    CHECK_FALSE(hn::block_deinterleave(std::span<const u8>(shared + 1, 12U), std::span<u8>(shared, 12U), 3U, 4U, 1U));
     for (const u8 b : shared)
     {
         CHECK(b == kSentinel);

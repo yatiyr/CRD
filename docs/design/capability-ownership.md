@@ -102,6 +102,10 @@ OWN.1 records these owners (2026-10-31):
     (`text.json`; namespace `crd::json`), below every reader, so ceridc, the diagnostic tests and the crypto vectors
     link no geometry importer. Together they let crd-crypto's closure and tests build on the ARM64 lanes, where
     crd-jobs has no fiber context yet (NET.2).
+11. **The network math** (2026-11-07) is its own jobs-free module. `numerics.erasure-codes` moved from hesap-comms into
+    crd-hesap-net, which HESAP-NET's estimators, dead-reckoning and rewind kernels and quantisation helpers join: all
+    three homes the row first named (hesap-comms, hesap-stats, hesap-interp) reach crd-jobs, which crd-net may not
+    ([ADR-0065 §29's amendment](../decisions/0065-hesap-numerical-substrate.md)).
 
 ## Duplicate rows
 

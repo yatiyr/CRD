@@ -1,15 +1,15 @@
-// RFC 8627's FlexFEC parity (crd/hesap/comms/flexfec.hpp). The payload XOR runs on the dispatched GF(2^8) addition
-// (crd/hesap/comms/erasure_dispatch.hpp); the 8 bytes of recovery fields are XORed here.
+// RFC 8627's FlexFEC parity (crd/hesap/net/flexfec.hpp). The payload XOR runs on the dispatched GF(2^8) addition
+// (crd/hesap/net/erasure_dispatch.hpp); the 8 bytes of recovery fields are XORed here.
 
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/core/assert.hpp>
-#include <crd/hesap/comms/erasure_dispatch.hpp>
-#include <crd/hesap/comms/flexfec.hpp>
+#include <crd/hesap/net/erasure_dispatch.hpp>
+#include <crd/hesap/net/flexfec.hpp>
 
 #include <bit>
 #include <cstring>
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 namespace
 {
@@ -691,4 +691,4 @@ u32 flexfec_recover_window(std::span<const FlexFecStream> streams, std::span<con
     return recovered;
 }
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net

@@ -696,13 +696,13 @@
     {
       "id": "numerics.erasure-codes",
       "summary": "Packet erasure codes and their finite-field arithmetic: GF(2^8) of RFC 5510, the dispatched GF(2^8) dot product and addition, the RFC 5510 Reed-Solomon code, RFC 8627 FlexFEC parity with its iterative window decoder, RFC 2198 redundant audio data, and the block and convolutional interleavers; fountain codes join it (HESAP-NET).",
-      "owner": "hesap-comms",
+      "owner": "hesap-net",
       "api": [
-        "engine/numerics/hesap-comms/include/crd/hesap/comms/erasure.hpp",
-        "engine/numerics/hesap-comms/include/crd/hesap/comms/flexfec.hpp",
-        "engine/numerics/hesap-comms/include/crd/hesap/comms/gf256.hpp",
-        "engine/numerics/hesap-comms/include/crd/hesap/comms/interleave.hpp",
-        "engine/numerics/hesap-comms/include/crd/hesap/comms/red.hpp"
+        "engine/numerics/hesap-net/include/crd/hesap/net/erasure.hpp",
+        "engine/numerics/hesap-net/include/crd/hesap/net/flexfec.hpp",
+        "engine/numerics/hesap-net/include/crd/hesap/net/gf256.hpp",
+        "engine/numerics/hesap-net/include/crd/hesap/net/interleave.hpp",
+        "engine/numerics/hesap-net/include/crd/hesap/net/red.hpp"
       ],
       "signatures": [
         {

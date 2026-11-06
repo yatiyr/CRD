@@ -27,7 +27,7 @@ Row: [HESAP-NET](../ROADMAP.md#slice-hesap-net). Session: [ISA-L board](../sessi
 ## Harness
 
 ```
-B=$TREE/tests/hesap-comms/crd-hesap-erasure-board
+B=$TREE/tests/hesap-net/crd-hesap-erasure-board
 python3 scripts/ab-board.py --cmd gfni="$B --rounds 5" --cmd avx2="env CRD_CPU_LEVEL=avx2 $B --rounds 5" \
   --arm cerid-gfni='gfni:^cerid-avx2-gfni (?P<key>\S+) (?P<value>\S+)$' \
   --arm cerid-avx2='avx2:^cerid-avx2 (?P<key>\S+) (?P<value>\S+)$' \

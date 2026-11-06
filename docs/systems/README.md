@@ -16,8 +16,8 @@ Start with [rendering foundation](rendering-foundation.md), [CEIR](ceir.md), [CH
 
 ## Current module inventory
 
-All <!-- fact:module-count -->112<!-- /fact --> registered modules are represented: the
-<!-- fact:engine-module-count -->105<!-- /fact --> engine modules below and the
+All <!-- fact:module-count -->113<!-- /fact --> registered modules are represented: the
+<!-- fact:engine-module-count -->106<!-- /fact --> engine modules below and the
 <!-- fact:other-module-count -->7<!-- /fact --> application and tool modules in the next table. Existing overview
 links retain their dated evidence; where no dedicated overview exists, the public source and CMake manifest are the
 direct entry points. The documentation validator holds
@@ -76,6 +76,7 @@ this map and the `crd_module()` registry in the root CMakeLists to the same set 
 | `hesap-interp` | [hesap-interp](hesap-interp.md) | [CMake](../../engine/numerics/hesap-interp/CMakeLists.txt) |
 | `hesap-iterative` | [Public source](../../engine/numerics/hesap-iterative/include/) | [CMake](../../engine/numerics/hesap-iterative/CMakeLists.txt) |
 | `hesap-motion` | [hesap-motion](hesap-motion.md) | [CMake](../../engine/numerics/hesap-motion/CMakeLists.txt) |
+| `hesap-net` | [Public source](../../engine/numerics/hesap-net/include/) | [CMake](../../engine/numerics/hesap-net/CMakeLists.txt) |
 | `hesap-ode` | [hesap-ode](hesap-ode.md) | [CMake](../../engine/numerics/hesap-ode/CMakeLists.txt) |
 | `hesap-opt` | [hesap-opt](hesap-opt.md) | [CMake](../../engine/numerics/hesap-opt/CMakeLists.txt) |
 | `hesap-ordering` | [hesap-ordering](hesap-ordering.md) | [CMake](../../engine/numerics/hesap-ordering/CMakeLists.txt) |

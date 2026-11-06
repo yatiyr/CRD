@@ -1,16 +1,16 @@
 // The table of the erasure-code kernels (HESAP-NET; SIMD-DISPATCH, ADR-0134 §5): one per CPU level the kernel unit is
-// built for (engine/numerics/hesap-comms/kernels/erasure_kernels.cpp), resolved by erasure_kernels() in
-// crd/hesap/comms/erasure_dispatch.hpp. The header holds only data declarations, so a kernel unit compiles nothing from
+// built for (engine/numerics/hesap-net/kernels/erasure_kernels.cpp), resolved by erasure_kernels() in
+// crd/hesap/net/erasure_dispatch.hpp. The header holds only data declarations, so a kernel unit compiles nothing from
 // it. Every level gives the same bytes: GF(2^8) arithmetic is exact.
 
 #pragma once
 
 #include <crd/core/types.hpp>
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 
-// One GF(2^8) coefficient c, expanded for its multiplications (crd/hesap/comms/gf256.hpp, gf256_expand): lo[x] = c·x and
+// One GF(2^8) coefficient c, expanded for its multiplications (crd/hesap/net/gf256.hpp, gf256_expand): lo[x] = c·x and
 // hi[x] = c·(x << 4) for x < 16, so c·b = lo[b & 15] ^ hi[b >> 4] for every byte b; `affine` is the bit matrix of c for
 // GF2P8AFFINEQB: bit b of its byte 7 - i is bit i of c·2^b.
 struct GfCoefficient
@@ -43,4 +43,4 @@ extern const ErasureKernels kErasureKernelsAvx2Gfni;
 extern const ErasureKernels kErasureKernelsAvx512Gfni;
 extern const ErasureKernels kErasureKernelsNeon;
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net

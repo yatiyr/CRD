@@ -1563,3 +1563,12 @@ The 2026-10-27 research
 `crd-net`, NET-TIME, NET-LIVE and 4.2c consume them and add no numerics of their own. Checksums are not hesap's: the
 CRC-32/IEEE, CRC32C and 64-bit hash family is foundation-owned (HW-RESILIENCE.1, OWN.1), because crd-perf, a
 foundation module, needs it and may not depend on crd-hesap.
+
+**Amendment (2026-11-07), one home for the network math.** The packet codes moved from `hesap-comms` into a new
+`crd-hesap-net` on crd-core and crd-containers only, and the estimators, clock filters, dead-reckoning and rewind
+kernels and quantisation helpers join it instead of `hesap-stats` and `hesap-interp`. `crd-net` links it, and all three
+named homes reach crd-jobs (`hesap-comms` through hesap-dsp and hesap-fft, `hesap-stats` through its parallel
+resampling, hesap-dense and hesap-special, `hesap-interp` through hesap-dense and hesap-fft), which has no ARM64 fiber
+context before [JOBS-PORT.2](../ROADMAP.md#slice-jobs-port.2); a network client should not link an FFT on any target.
+`hesap-comms` stays modulation and OFDM again, as §27 said. The seeded loss and delay models NET-DEBUG conditions links
+with stay an open placement until that clause: `random.engines` owns the distributions, in the same unreachable closure.

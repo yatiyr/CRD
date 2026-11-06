@@ -1,4 +1,4 @@
-// crd-fuzz-hesap-red: hesap-comms' redundant audio data (RFC 2198; HESAP-NET; crd/hesap/comms/red.hpp) under the
+// crd-fuzz-hesap-red: hesap-net' redundant audio data (RFC 2198; HESAP-NET; crd/hesap/net/red.hpp) under the
 // bounded fuzz harness (REPO.DEV.9; docs/design/test-instruments.md).
 //
 // Input. The first byte picks the mode, the rest is its data.
@@ -13,7 +13,7 @@
 //   * an accepted write equals the payload built here bit by bit, writes nothing past it, and reads back to its
 //     blocks.
 #include <crd/fuzz/harness.hpp>
-#include <crd/hesap/comms/red.hpp>
+#include <crd/hesap/net/red.hpp>
 
 #include <cstring>
 #include <initializer_list>
@@ -24,7 +24,7 @@ using crd::u16;
 using crd::u32;
 using crd::u8;
 using crd::usize;
-using namespace crd::hesap::comms;
+using namespace crd::hesap::net;
 
 constexpr u8 kSentinel = 0xA5U;
 constexpr u32 kMaxRoom = 8U;

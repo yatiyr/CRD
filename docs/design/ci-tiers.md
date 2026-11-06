@@ -63,7 +63,8 @@ the presets set `CRD_MODULES_WITHOUT=jobs,gpu-context-vulkan,platform-window`
 ([module registry](module-registry.md#selection)). Since 2026-11-04 crd-platform links no job system (its
 asynchronous reads are crd-platform-async) and JSON is crd-json, so crd-platform, crd-crypto with AWS-LC's ARMv8
 assembly and their tests build and run there (NET.2,
-[session](../sessions/2026-11-04-net-2-arm64-closure.md)).
+[session](../sessions/2026-11-04-net-2-arm64-closure.md)). crd-hesap-net, with the NEON bodies of `hesap.erasure`, joined them on 2026-11-07
+([session](../sessions/2026-11-07-hesap-net-module.md)).
 `linux-gcc-arm64-asan` compiles without use-after-return detection, which GCC 13 makes about 30 times dearer on
 AArch64 than Clang ([TP-6](../third-party-defects.md#tp-6)); `linux-clang-arm64-asan` keeps it.
 

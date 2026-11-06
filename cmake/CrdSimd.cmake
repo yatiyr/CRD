@@ -158,7 +158,7 @@ endif()
 # The features a level's variant may add (ADR-0134 §1): the levels each extends and its flags (cl compiles every
 # intrinsic at any /arch and has no such flag). PCLMULQDQ and VPCLMULQDQ are in no psABI level, and ARM64's CRC32 and
 # PMULL are optional in ARMv8.0, so the CRC instruction and carry-less multiply bodies (crd-containers' checksum family)
-# are variants; the pmull variant selects on CRC32 too. GFNI is in no psABI level either (hesap-comms' erasure family).
+# are variants; the pmull variant selects on CRC32 too. GFNI is in no psABI level either (hesap-net's erasure family).
 set(_CRD_KERNEL_FEATURE_LEVEL_avxvnni avx2)
 set(_CRD_KERNEL_FEATURE_LEVEL_avx512vnni avx512)
 set(_CRD_KERNEL_FEATURE_LEVEL_pclmulqdq sse42)

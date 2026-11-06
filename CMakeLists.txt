@@ -71,7 +71,7 @@ option(CRD_BUILD_HESAP_VS_BOOST "Build the special-function, distribution, inter
 # build/_deps) as the crd-bench-hptt-peer library that bench_permute links. Local only on x64 Linux, never in CI or a
 # shipped build; scripts/run_permute_bench.sh builds and runs it per CPU level.
 option(CRD_BUILD_HESAP_VS_HPTT "Build bench_permute against HPTT's plans of every element type (local-only)" OFF)
-# The erasure-code oracle and board (HESAP-NET): hesap-comms' Reed-Solomon code against Intel ISA-L (cmake/pins.json
+# The erasure-code oracle and board (HESAP-NET): hesap-net's Reed-Solomon code against Intel ISA-L (cmake/pins.json
 # isa-l, fetched on demand into build/_deps), as crd-isal-peer: its portable GF(2^8) code (erasure_code/ec_base.c)
 # and, on x86-64, its assembly (every ISA body and the dispatched ec_encode_data), assembled by the pinned NASM: nasm.exe on Windows (cmake/pins.json nasm), CRD_NASM on Linux (scripts/install-nasm.py prints it).
 # Never in a shipped build; the crd-hesap-erasure-isal-tests and crd-hesap-erasure-board-smoke CTests of the tree that
@@ -765,7 +765,9 @@ crd_module(engine/numerics/hesap-wavelet engine/hesap-wavelet DEPENDS containers
     TESTS numerics/hesap-wavelet)
 # v11c; COMMS/SDR — modulation/sync/equalizers/OFDM (depends on hesap-dsp/fft/stats); ADR-0093
 crd_module(engine/numerics/hesap-comms engine/hesap-comms
-    DEPENDS containers core hesap hesap-dsp hesap-fft hesap-stats math memory TESTS numerics/hesap-comms support/fuzz)
+    DEPENDS containers core hesap hesap-dsp hesap-fft hesap-stats math memory TESTS numerics/hesap-comms)
+# HESAP-NET; network and media math, jobs-free because crd-net links it (ADR-0065 §29)
+crd_module(engine/numerics/hesap-net engine/hesap-net DEPENDS containers core TESTS numerics/hesap-net support/fuzz)
 # v13; INTERPOLATION — 1-D piecewise/spline/poly/rational + scattered N-D; ADR-0095
 crd_module(engine/numerics/hesap-interp engine/hesap-interp
     DEPENDS containers core geometry-delaunay hesap hesap-dense hesap-fft math memory TESTS numerics/hesap-interp)
@@ -1547,7 +1549,7 @@ if(CRD_BUILD_HESAP_VS_FFT_REFS)
     crd_add_pinned_package(pocketfft DOWNLOAD_ONLY YES)
 endif()
 
-# ----- The erasure-code oracle's ISA-L peer: its sources, built by tests/numerics/hesap-comms -----
+# ----- The erasure-code oracle's ISA-L peer: its sources, built by tests/numerics/hesap-net -----
 # ISA-L's x86-64 assembly is NASM's: Windows x64 takes the pinned nasm.exe (the one AWS-LC assembles with), Linux the
 # pinned CRD_NASM. Other targets build the portable peer alone.
 if(CRD_BUILD_ERASURE_VS_ISAL)
@@ -1574,7 +1576,7 @@ if(CRD_BUILD_ERASURE_VS_ISAL)
     endif()
 endif()
 
-# ----- The erasure-code oracle's OpenFEC peer: its sources, built by tests/numerics/hesap-comms -----
+# ----- The erasure-code oracle's OpenFEC peer: its sources, built by tests/numerics/hesap-net -----
 if(CRD_BUILD_ERASURE_VS_OPENFEC)
     if(NOT CRD_BUILD_TESTS)
         message(FATAL_ERROR "[erasure-vs-openfec] the OpenFEC oracle needs CRD_BUILD_TESTS")

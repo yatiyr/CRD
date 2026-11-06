@@ -7,9 +7,9 @@
 
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
-#include <crd/hesap/comms/erasure_kernels.hpp>
+#include <crd/hesap/net/erasure_kernels.hpp>
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 
 inline constexpr crd::u32 kGf256Polynomial = 0x11DU;
@@ -74,7 +74,7 @@ inline constexpr Gf256Tables kGf256 = make_gf256_tables();
     return kGf256.exp[e % kGf256Order];
 }
 
-// c expanded for the dot kernel (crd/hesap/comms/erasure_kernels.hpp): the products with every low and high nibble and
+// c expanded for the dot kernel (crd/hesap/net/erasure_kernels.hpp): the products with every low and high nibble and
 // the bit matrix of the product.
 [[nodiscard]] constexpr GfCoefficient gf256_expand(crd::u8 c) noexcept
 {
@@ -95,4 +95,4 @@ inline constexpr Gf256Tables kGf256 = make_gf256_tables();
     return e;
 }
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net

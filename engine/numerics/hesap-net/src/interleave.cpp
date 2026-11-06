@@ -1,13 +1,13 @@
-// The block and convolutional interleavers (crd/hesap/comms/interleave.hpp).
+// The block and convolutional interleavers (crd/hesap/net/interleave.hpp).
 
 #include <crd/core/assert.hpp>
-#include <crd/hesap/comms/interleave.hpp>
+#include <crd/hesap/net/interleave.hpp>
 
 #include <cstdint>
 #include <cstring>
 #include <limits>
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 namespace
 {
@@ -165,4 +165,4 @@ void ConvolutionalInterleaver::push(std::span<const u8> in, std::span<u8> out) n
     }
 }
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net

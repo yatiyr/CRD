@@ -1,5 +1,5 @@
-// crd-fuzz-hesap-erasure: hesap-comms' Reed-Solomon erasure code and its dispatched GF(2^8) kernels (HESAP-NET;
-// crd/hesap/comms/erasure.hpp) under the bounded fuzz harness (REPO.DEV.9; docs/design/test-instruments.md).
+// crd-fuzz-hesap-erasure: hesap-net' Reed-Solomon erasure code and its dispatched GF(2^8) kernels (HESAP-NET;
+// crd/hesap/net/erasure.hpp) under the bounded fuzz harness (REPO.DEV.9; docs/design/test-instruments.md).
 //
 // Input. The first byte picks the mode, the rest is its data.
 //   0  a decode request: k, n, the symbol length, the received indices and the lost indices are read from the bytes,
@@ -20,9 +20,9 @@
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/core/kernel_dispatch.hpp>
-#include <crd/hesap/comms/erasure.hpp>
-#include <crd/hesap/comms/erasure_dispatch.hpp>
-#include <crd/hesap/comms/gf256.hpp>
+#include <crd/hesap/net/erasure.hpp>
+#include <crd/hesap/net/erasure_dispatch.hpp>
+#include <crd/hesap/net/gf256.hpp>
 
 #include <cstring>
 #include <initializer_list>
@@ -33,7 +33,7 @@ using crd::u32;
 using crd::u64;
 using crd::u8;
 using crd::usize;
-using namespace crd::hesap::comms;
+using namespace crd::hesap::net;
 
 constexpr u32 kMaxN = ReedSolomonCode::kMaxSymbols;
 constexpr usize kMaxSymbolBytes = 24U;

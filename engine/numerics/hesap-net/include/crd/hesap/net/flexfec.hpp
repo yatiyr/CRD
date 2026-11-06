@@ -1,4 +1,4 @@
-// FlexFEC parity (RFC 8627; HESAP-NET, capability numerics.erasure-codes, owner crd-hesap-comms).
+// FlexFEC parity (RFC 8627; HESAP-NET, capability numerics.erasure-codes, owner crd-hesap-net).
 //
 // A repair packet protects a set of RTP source packets of one or more streams. Its FEC header and repair payload are
 // the XOR of the sources' bit strings (§6.2): the first 16 bits of the RTP header, the packet length minus 12 as a
@@ -24,7 +24,7 @@
 
 #include <span>
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 
 // A refused request reports its first fault in this order. Parsing: the first byte (Truncated) and its R and F bits
@@ -134,4 +134,4 @@ struct FlexFecRepair
 crd::u32 flexfec_recover_window(std::span<const FlexFecStream> streams,
                                 std::span<const FlexFecRepair> repairs) noexcept;
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net

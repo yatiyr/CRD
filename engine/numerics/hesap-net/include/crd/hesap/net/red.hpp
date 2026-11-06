@@ -1,4 +1,4 @@
-// Redundant audio data (RFC 2198; HESAP-NET, capability numerics.erasure-codes, owner crd-hesap-comms).
+// Redundant audio data (RFC 2198; HESAP-NET, capability numerics.erasure-codes, owner crd-hesap-net).
 //
 // A RED payload (the bytes after an RTP header whose payload type is the session's RED type) carries earlier media
 // as redundant blocks and the packet's own media, the primary, last. Each redundant block has a 4-byte header (§3):
@@ -19,7 +19,7 @@
 
 #include <span>
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 
 // A refused request reports its first fault in this order. Parsing: each header in turn, its bytes (Truncated) and
@@ -59,4 +59,4 @@ struct RedBlock
                                    std::span<const crd::u8> primary, std::span<crd::u8> out,
                                    crd::usize& written) noexcept;
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net

@@ -1,6 +1,6 @@
-// Packet erasure codes (HESAP-NET; capability numerics.erasure-codes, owner crd-hesap-comms).
+// Packet erasure codes (HESAP-NET; capability numerics.erasure-codes, owner crd-hesap-net).
 //
-// ReedSolomonCode is RFC 5510 §8's systematic Reed-Solomon code over GF(2^8) (crd/hesap/comms/gf256.hpp): a block of
+// ReedSolomonCode is RFC 5510 §8's systematic Reed-Solomon code over GF(2^8) (crd/hesap/net/gf256.hpp): a block of
 // k source symbols has n encoding symbols, k <= n <= 255, of which the first k are the sources and the rest repair
 // symbols, and any k of the n recover the block. Every symbol of a block is `bytes` long; the RFC's virtual zero
 // padding of a short final source symbol is the caller's. The generator matrix is GM = V(k,k)^-1 V(k,n) with
@@ -9,17 +9,17 @@
 // decoding interpolates through the k received points. Both use barycentric weights, O(k^2) once per block shape or
 // erasure pattern and O(k) per coefficient column, instead of the RFC's Gauss-Jordan inversion; the bytes are the
 // RFC's, which the tests hold to the literal matrix product. The regions go through the dispatched GF(2^8) dot product
-// (crd/hesap/comms/erasure_dispatch.hpp). An encoder of many blocks of one repair set keeps the expanded coefficients
+// (crd/hesap/net/erasure_dispatch.hpp). An encoder of many blocks of one repair set keeps the expanded coefficients
 // (prepare_encode, encode_prepared), which costs a datagram-sized block a quarter of its encode. Nothing allocates.
 
 #pragma once
 
 #include <crd/core/types.hpp>
-#include <crd/hesap/comms/erasure_kernels.hpp>
+#include <crd/hesap/net/erasure_kernels.hpp>
 
 #include <span>
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 
 // A refused request reports its first fault in this order: the counts; then each received symbol (or repair index)
@@ -86,4 +86,4 @@ private:
     crd::u8 m_weight_logs[kMaxSymbols]; // log of each source point's weight 1 / prod_{m != l} (alpha^l - alpha^m)
 };
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net

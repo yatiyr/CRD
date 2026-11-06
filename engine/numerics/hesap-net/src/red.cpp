@@ -1,9 +1,9 @@
-// RFC 2198's redundant audio data (crd/hesap/comms/red.hpp): headers through the wire-bytes load and writer.
+// RFC 2198's redundant audio data (crd/hesap/net/red.hpp): headers through the wire-bytes load and writer.
 
 #include <crd/containers/wire_bytes.hpp>
-#include <crd/hesap/comms/red.hpp>
+#include <crd/hesap/net/red.hpp>
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 namespace
 {
@@ -138,4 +138,4 @@ RedStatus red_encode(std::span<const RedBlock> redundant, u8 primary_type, std::
     return RedStatus::Ok;
 }
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net

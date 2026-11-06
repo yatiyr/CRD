@@ -3,9 +3,10 @@
 // streams, sequence numbers across the wrap, retransmissions, §6.3.4's iterative example (Figures 16 to 18) and the
 // patterns §1.1.4 says 2-D parity cannot repair (Figures 7 and 8), and every refusal in its order.
 
+#include "seeded_words.hpp"
+
 #include <crd/containers/array.hpp>
-#include <crd/hesap/comms/flexfec.hpp>
-#include <crd/hesap/stats/philox.hpp>
+#include <crd/hesap/net/flexfec.hpp>
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -13,16 +14,16 @@
 #include <initializer_list>
 #include <span>
 
-namespace hc = crd::hesap::comms;
+namespace hn = crd::hesap::net;
 using crd::u16;
 using crd::u32;
 using crd::u64;
 using crd::u8;
 using crd::usize;
-using hc::FlexFecBlock;
-using hc::FlexFecHeader;
-using hc::FlexFecStatus;
-using hc::FlexFecVariant;
+using hn::FlexFecBlock;
+using hn::FlexFecHeader;
+using hn::FlexFecStatus;
+using hn::FlexFecVariant;
 template <typename T> using Array = crd::containers::Array<T>;
 using Bytes = Array<u8>;
 using Packet = std::span<const u8>;
@@ -51,7 +52,7 @@ bool untouched(const Bytes& out)
 
 // An RTP version 2 packet of `payload` bytes after the fixed header, its P, X, CC, M and PT bits and its other
 // bytes drawn from the stream.
-Bytes rtp_packet(crd::hesap::stats::PhiloxRng& rng, u32 ssrc, u16 sequence, usize payload)
+Bytes rtp_packet(SeededWords& rng, u32 ssrc, u16 sequence, usize payload)
 {
     Bytes p = filled(12U + payload, 0U);
     for (u8& b : p)
@@ -134,9 +135,9 @@ Repair encode(std::span<const Packet> sources, std::span<const u32> ssrcs, FlexF
     Repair r;
     r.bytes = filled(FlexFecHeader::kMaxBytes + 2000U, kSentinel);
     usize written = 0U;
-    REQUIRE(hc::flexfec_encode(sources, ssrcs, variant, blocks, r.bytes, written) == FlexFecStatus::Ok);
+    REQUIRE(hn::flexfec_encode(sources, ssrcs, variant, blocks, r.bytes, written) == FlexFecStatus::Ok);
     r.bytes.resize(written);
-    REQUIRE(hc::flexfec_parse(r.bytes, static_cast<u32>(ssrcs.size()), r.header) == FlexFecStatus::Ok);
+    REQUIRE(hn::flexfec_parse(r.bytes, static_cast<u32>(ssrcs.size()), r.header) == FlexFecStatus::Ok);
     return r;
 }
 
@@ -158,7 +159,7 @@ bool recovers_each(const Repair& repair, std::span<const u32> ssrcs, std::span<c
         const u16 sequence = static_cast<u16>((want[2] << 8U) | want[3]);
         Bytes out = filled(want.size() + 5U, kSentinel);
         usize written = 0U;
-        if (hc::flexfec_recover(repair.bytes, repair.header, ssrcs, received, ssrc, sequence, out, written) !=
+        if (hn::flexfec_recover(repair.bytes, repair.header, ssrcs, received, ssrc, sequence, out, written) !=
                 FlexFecStatus::Ok ||
             written != want.size() || !same({out.data(), written}, want) || out[written] != kSentinel)
         {
@@ -172,7 +173,7 @@ bool recovers_each(const Repair& repair, std::span<const u32> ssrcs, std::span<c
 
 TEST_CASE("flexfec: the flexible mask is Figure 12's, 15, 46 or 110 bits with k = 1 before another block", "[flexfec]")
 {
-    crd::hesap::stats::PhiloxRng rng(8627, 1);
+    SeededWords rng(8627, 1);
     const u32 ssrc[1] = {0x11223344U};
     struct Case
     {
@@ -195,7 +196,7 @@ TEST_CASE("flexfec: the flexible mask is Figure 12's, 15, 46 or 110 bits with k 
         probe.variant = FlexFecVariant::Mask;
         probe.stream_count = 1U;
         probe.blocks[0] = c.block;
-        const u32 n = hc::flexfec_protected(probe, 0U, sequences);
+        const u32 n = hn::flexfec_protected(probe, 0U, sequences);
         for (u32 i = 0U; i < n; ++i)
         {
             packets.push_back(rtp_packet(rng, ssrc[0], sequences[i], 20U + (7U * i)));
@@ -223,7 +224,7 @@ TEST_CASE("flexfec: the flexible mask is Figure 12's, 15, 46 or 110 bits with k 
 
 TEST_CASE("flexfec: L and D are Figure 13's, rows for D <= 1 and columns for D > 1", "[flexfec]")
 {
-    crd::hesap::stats::PhiloxRng rng(8627, 2);
+    SeededWords rng(8627, 2);
     const u32 ssrc[1] = {7U};
     struct Case
     {
@@ -242,7 +243,7 @@ TEST_CASE("flexfec: L and D are Figure 13's, rows for D <= 1 and columns for D >
         probe.stream_count = 1U;
         probe.blocks[0] = blocks[0];
         u16 sequences[255];
-        REQUIRE(hc::flexfec_protected(probe, 0U, sequences) == c.count);
+        REQUIRE(hn::flexfec_protected(probe, 0U, sequences) == c.count);
         Array<Bytes> packets;
         Array<Packet> sources;
         for (u32 i = 0U; i < c.count; ++i)
@@ -267,7 +268,7 @@ TEST_CASE("flexfec: L and D are Figure 13's, rows for D <= 1 and columns for D >
 
 TEST_CASE("flexfec: one repair packet over several streams, across the sequence number wrap", "[flexfec]")
 {
-    crd::hesap::stats::PhiloxRng rng(8627, 3);
+    SeededWords rng(8627, 3);
     const u32 ssrcs[3] = {0xA0000001U, 0xB0000002U, 0xC0000003U};
     const FlexFecBlock masks[3] = {mask_block(65530U, {0U, 3U, 5U, 6U, 9U}), mask_block(17U, {1U, 30U}),
                                    mask_block(0U, {100U, 109U})};
@@ -283,7 +284,7 @@ TEST_CASE("flexfec: one repair packet over several streams, across the sequence 
             probe.stream_count = 1U;
             probe.blocks[0] = blocks[s];
             u16 sequences[255];
-            const u32 n = hc::flexfec_protected(probe, 0U, sequences);
+            const u32 n = hn::flexfec_protected(probe, 0U, sequences);
             for (u32 i = 0U; i < n; ++i)
             {
                 packets.push_back(rtp_packet(rng, ssrcs[s], sequences[i], rng.next_u32() % 1400U));
@@ -306,7 +307,7 @@ TEST_CASE("flexfec: one repair packet over several streams, across the sequence 
 
 TEST_CASE("flexfec: packets of the fixed header only, and a retransmission, round-trip", "[flexfec]")
 {
-    crd::hesap::stats::PhiloxRng rng(8627, 4);
+    SeededWords rng(8627, 4);
     const u32 ssrc[1] = {99U};
     const Bytes a = rtp_packet(rng, 99U, 10U, 0U);
     const Bytes b = rtp_packet(rng, 99U, 11U, 0U);
@@ -321,16 +322,16 @@ TEST_CASE("flexfec: packets of the fixed header only, and a retransmission, roun
     const Packet one[1] = {c};
     Bytes rtx = filled(400U, kSentinel);
     usize written = 0U;
-    REQUIRE(hc::flexfec_encode(one, {}, FlexFecVariant::Retransmission, {}, rtx, written) == FlexFecStatus::Ok);
+    REQUIRE(hn::flexfec_encode(one, {}, FlexFecVariant::Retransmission, {}, rtx, written) == FlexFecStatus::Ok);
     rtx.resize(written);
     CHECK(same(rtx, c));
     FlexFecHeader h;
-    REQUIRE(hc::flexfec_parse(rtx, 0U, h) == FlexFecStatus::Ok);
+    REQUIRE(hn::flexfec_parse(rtx, 0U, h) == FlexFecStatus::Ok);
     CHECK(h.variant == FlexFecVariant::Retransmission);
     CHECK(h.sequence == 777U);
     CHECK(h.ssrc == 0x01020304U);
     Bytes out = filled(c.size(), kSentinel);
-    REQUIRE(hc::flexfec_recover(rtx, h, {}, {}, 0x01020304U, 777U, out, written) == FlexFecStatus::Ok);
+    REQUIRE(hn::flexfec_recover(rtx, h, {}, {}, 0x01020304U, 777U, out, written) == FlexFecStatus::Ok);
     CHECK(same({out.data(), written}, c));
 }
 
@@ -347,7 +348,7 @@ struct Block2d
     Array<Bytes> columns;
 };
 
-Block2d block_2d(crd::hesap::stats::PhiloxRng& rng)
+Block2d block_2d(SeededWords& rng)
 {
     Block2d b;
     for (u32 k = 1U; k <= 12U; ++k)
@@ -380,7 +381,7 @@ u32 run_window(const Block2d& b, std::initializer_list<u32> lost, std::initializ
     {
         buffers.push_back(filled(1600U, kSentinel));
     }
-    hc::FlexFecSlot slots[14]; // sequence numbers 1000 .. 1013: 1000 and 1013 lie outside the block
+    hn::FlexFecSlot slots[14]; // sequence numbers 1000 .. 1013: 1000 and 1013 lie outside the block
     for (u32 i = 0U; i < 14U; ++i)
     {
         slots[i].data = buffers[i].data();
@@ -399,7 +400,7 @@ u32 run_window(const Block2d& b, std::initializer_list<u32> lost, std::initializ
         }
     }
     const u32 ssrc[1] = {Block2d::kSsrc};
-    Array<hc::FlexFecRepair> repairs;
+    Array<hn::FlexFecRepair> repairs;
     for (u32 i = 1U; i <= 7U; ++i)
     {
         const u32 id = i <= 3U ? i : 10U + (i - 3U);
@@ -413,8 +414,8 @@ u32 run_window(const Block2d& b, std::initializer_list<u32> lost, std::initializ
             repairs.push_back({i <= 3U ? Packet(b.rows[i - 1U]) : Packet(b.columns[i - 4U]), ssrc});
         }
     }
-    const hc::FlexFecStream streams[1] = {{Block2d::kSsrc, 1000U, slots}};
-    const u32 recovered = hc::flexfec_recover_window(streams, repairs);
+    const hn::FlexFecStream streams[1] = {{Block2d::kSsrc, 1000U, slots}};
+    const u32 recovered = hn::flexfec_recover_window(streams, repairs);
     exact = !slots[0].present && !slots[13].present;
     for (u32 k = 1U; k <= 12U; ++k)
     {
@@ -430,7 +431,7 @@ u32 run_window(const Block2d& b, std::initializer_list<u32> lost, std::initializ
 
 TEST_CASE("flexfec: the iterative decoder repairs Figure 16 in two rounds and fails Figures 7 and 8", "[flexfec]")
 {
-    crd::hesap::stats::PhiloxRng rng(8627, 5);
+    SeededWords rng(8627, 5);
     const Block2d b = block_2d(rng);
     bool exact = false;
     // Figure 16: 1, 2, 10 and 11 lost; rows and columns recover 1 and 11, then 2 and 10.
@@ -453,7 +454,7 @@ TEST_CASE("flexfec: the iterative decoder repairs Figure 16 in two rounds and fa
 
 TEST_CASE("flexfec: the window decoder ignores malformed repairs, members outside it and short slots", "[flexfec]")
 {
-    crd::hesap::stats::PhiloxRng rng(8627, 6);
+    SeededWords rng(8627, 6);
     const Bytes p0 = rtp_packet(rng, 1U, 100U, 30U);
     const Bytes p1 = rtp_packet(rng, 1U, 101U, 500U);
     const Packet sources[2] = {p0, p1};
@@ -462,26 +463,26 @@ TEST_CASE("flexfec: the window decoder ignores malformed repairs, members outsid
     const Repair r = encode(sources, ssrc, FlexFecVariant::Fixed, blocks);
     Bytes buffer0 = filled(1000U, kSentinel);
     Bytes buffer1 = filled(1000U, kSentinel);
-    hc::FlexFecSlot slots[2];
+    hn::FlexFecSlot slots[2];
     slots[0] = {buffer0.data(), buffer0.size(), p0.size(), true};
     std::memcpy(buffer0.data(), p0.data(), p0.size());
     slots[1] = {buffer1.data(), 100U, 0U, false}; // too short for the 512-byte packet
-    const hc::FlexFecStream streams[1] = {{1U, 100U, slots}};
+    const hn::FlexFecStream streams[1] = {{1U, 100U, slots}};
     Bytes reserved = r.bytes;
     reserved[0] = static_cast<u8>(reserved[0] | 0x80U); // R=1, F=1
     const u32 two[2] = {1U, 1U};
-    const hc::FlexFecRepair bad[3] = {{reserved, ssrc}, {r.bytes, two}, {r.bytes, ssrc}};
-    CHECK(hc::flexfec_recover_window(streams, bad) == 0U);
+    const hn::FlexFecRepair bad[3] = {{reserved, ssrc}, {r.bytes, two}, {r.bytes, ssrc}};
+    CHECK(hn::flexfec_recover_window(streams, bad) == 0U);
     CHECK(!slots[1].present);
     slots[1].capacity = buffer1.size();
-    const hc::FlexFecStream shifted[1] = {{1U, 101U, {slots + 1U, 1U}}}; // packet 100 outside the window
-    CHECK(hc::flexfec_recover_window(shifted, bad) == 0U);
-    CHECK(hc::flexfec_recover_window(streams, bad) == 1U);
+    const hn::FlexFecStream shifted[1] = {{1U, 101U, {slots + 1U, 1U}}}; // packet 100 outside the window
+    CHECK(hn::flexfec_recover_window(shifted, bad) == 0U);
+    CHECK(hn::flexfec_recover_window(streams, bad) == 1U);
     CHECK(same({slots[1].data, slots[1].length}, p1));
     // A retransmission fills its slot; a second copy of it does nothing.
     slots[1].present = false;
-    const hc::FlexFecRepair rtx[2] = {{p1, {}}, {p1, {}}};
-    CHECK(hc::flexfec_recover_window(streams, rtx) == 1U);
+    const hn::FlexFecRepair rtx[2] = {{p1, {}}, {p1, {}}};
+    CHECK(hn::flexfec_recover_window(streams, rtx) == 1U);
     CHECK(same({slots[1].data, slots[1].length}, p1));
 }
 
@@ -489,44 +490,44 @@ TEST_CASE("flexfec: malformed headers are refused in their order", "[flexfec]")
 {
     FlexFecHeader h;
     const u8 empty[1] = {0U};
-    CHECK(hc::flexfec_parse({empty, 0U}, 1U, h) == FlexFecStatus::Truncated);
+    CHECK(hn::flexfec_parse({empty, 0U}, 1U, h) == FlexFecStatus::Truncated);
     const u8 rf[12] = {0xC0U};
-    CHECK(hc::flexfec_parse({rf, 1U}, 1U, h) == FlexFecStatus::Reserved);
+    CHECK(hn::flexfec_parse({rf, 1U}, 1U, h) == FlexFecStatus::Reserved);
     const u8 rtx[11] = {0x80U};
-    CHECK(hc::flexfec_parse(rtx, 1U, h) == FlexFecStatus::Truncated);
+    CHECK(hn::flexfec_parse(rtx, 1U, h) == FlexFecStatus::Truncated);
     const u8 shortest[7] = {0x00U};
-    CHECK(hc::flexfec_parse(shortest, 1U, h) == FlexFecStatus::Truncated);
+    CHECK(hn::flexfec_parse(shortest, 1U, h) == FlexFecStatus::Truncated);
     // Mask: 0x4001 after SN base 5, with k = 1 chains a second block that is missing, then a third.
     const u8 mask15[12] = {0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x05U, 0x40U, 0x01U};
-    CHECK(hc::flexfec_parse(mask15, 0U, h) == FlexFecStatus::WrongCount);
-    CHECK(hc::flexfec_parse(mask15, 16U, h) == FlexFecStatus::WrongCount);
-    CHECK(hc::flexfec_parse(mask15, 1U, h) == FlexFecStatus::Ok);
-    CHECK(hc::flexfec_parse(mask15, 2U, h) == FlexFecStatus::Truncated);
-    CHECK(hc::flexfec_parse({mask15, 11U}, 1U, h) == FlexFecStatus::Truncated);
+    CHECK(hn::flexfec_parse(mask15, 0U, h) == FlexFecStatus::WrongCount);
+    CHECK(hn::flexfec_parse(mask15, 16U, h) == FlexFecStatus::WrongCount);
+    CHECK(hn::flexfec_parse(mask15, 1U, h) == FlexFecStatus::Ok);
+    CHECK(hn::flexfec_parse(mask15, 2U, h) == FlexFecStatus::Truncated);
+    CHECK(hn::flexfec_parse({mask15, 11U}, 1U, h) == FlexFecStatus::Truncated);
     const u8 chained[24] = {0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x05U, 0xC0U, 0x00U,
                             0x80U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x01U};
-    CHECK(hc::flexfec_parse({chained, 15U}, 1U, h) == FlexFecStatus::Truncated);
-    CHECK(hc::flexfec_parse({chained, 23U}, 1U, h) == FlexFecStatus::Truncated);
-    CHECK(hc::flexfec_parse(chained, 1U, h) == FlexFecStatus::Ok);
+    CHECK(hn::flexfec_parse({chained, 15U}, 1U, h) == FlexFecStatus::Truncated);
+    CHECK(hn::flexfec_parse({chained, 23U}, 1U, h) == FlexFecStatus::Truncated);
+    CHECK(hn::flexfec_parse(chained, 1U, h) == FlexFecStatus::Ok);
     CHECK(h.header_bytes == 24U);
     CHECK(h.blocks[0].mask[0] == 1U);
     CHECK(h.blocks[0].mask[1] == (u64{1U} << 45U)); // bit 109
     const u8 zero_mask[12] = {0x00U};
-    CHECK(hc::flexfec_parse(zero_mask, 1U, h) == FlexFecStatus::Reserved);
+    CHECK(hn::flexfec_parse(zero_mask, 1U, h) == FlexFecStatus::Reserved);
     // Fixed: L = 0 is reserved whatever D is.
     u8 fixed[12] = {0x40U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x05U, 0x00U, 0x00U};
-    CHECK(hc::flexfec_parse(fixed, 1U, h) == FlexFecStatus::Reserved);
+    CHECK(hn::flexfec_parse(fixed, 1U, h) == FlexFecStatus::Reserved);
     fixed[11] = 3U;
-    CHECK(hc::flexfec_parse(fixed, 1U, h) == FlexFecStatus::Reserved);
+    CHECK(hn::flexfec_parse(fixed, 1U, h) == FlexFecStatus::Reserved);
     fixed[10] = 1U;
     fixed[11] = 0U;
-    CHECK(hc::flexfec_parse(fixed, 1U, h) == FlexFecStatus::Ok);
+    CHECK(hn::flexfec_parse(fixed, 1U, h) == FlexFecStatus::Ok);
     CHECK(h.variant == FlexFecVariant::Fixed);
 }
 
 TEST_CASE("flexfec: malformed encodes and recoveries are refused in their order and write nothing", "[flexfec]")
 {
-    crd::hesap::stats::PhiloxRng rng(8627, 7);
+    SeededWords rng(8627, 7);
     const Bytes a = rtp_packet(rng, 5U, 20U, 40U);
     const Bytes b = rtp_packet(rng, 5U, 21U, 90U);
     const Bytes c = rtp_packet(rng, 5U, 23U, 10U);
@@ -582,14 +583,14 @@ TEST_CASE("flexfec: malformed encodes and recoveries are refused in their order 
         INFO(k.what);
         Bytes out = filled(k.room, kSentinel);
         usize written = 7U;
-        CHECK(hc::flexfec_encode(k.sources, k.ssrcs, k.variant, k.blocks, out, written) == k.want);
+        CHECK(hn::flexfec_encode(k.sources, k.ssrcs, k.variant, k.blocks, out, written) == k.want);
         CHECK(untouched(out));
         CHECK(written == 7U);
     }
     // Exactly enough room is enough.
     Bytes exact = filled(12U + 90U, kSentinel);
     usize written = 0U;
-    CHECK(hc::flexfec_encode(ab, ssrc, FlexFecVariant::Fixed, row, exact, written) == FlexFecStatus::Ok);
+    CHECK(hn::flexfec_encode(ab, ssrc, FlexFecVariant::Fixed, row, exact, written) == FlexFecStatus::Ok);
     CHECK(written == exact.size());
 
     const Repair r = encode(ab, ssrc, FlexFecVariant::Fixed, row);
@@ -625,18 +626,18 @@ TEST_CASE("flexfec: malformed encodes and recoveries are refused in their order 
         INFO(k.what);
         Bytes out = filled(k.room, kSentinel);
         usize got = 7U;
-        CHECK(hc::flexfec_recover({r.bytes.data(), k.bytes}, r.header, k.ssrcs, k.received, k.lost_ssrc,
+        CHECK(hn::flexfec_recover({r.bytes.data(), k.bytes}, r.header, k.ssrcs, k.received, k.lost_ssrc,
                                   k.lost_sequence, out, got) == k.want);
         CHECK(untouched(out));
         CHECK(got == 7U);
     }
     // A retransmission recovers only its own packet, from nothing else.
     FlexFecHeader h;
-    REQUIRE(hc::flexfec_parse(a, 0U, h) == FlexFecStatus::Ok);
+    REQUIRE(hn::flexfec_parse(a, 0U, h) == FlexFecStatus::Ok);
     Bytes out = filled(a.size(), kSentinel);
-    CHECK(hc::flexfec_recover({a.data(), 11U}, h, {}, {}, 5U, 20U, out, written) == FlexFecStatus::Truncated);
-    CHECK(hc::flexfec_recover(a, h, {}, with_b, 5U, 20U, out, written) == FlexFecStatus::WrongCount);
-    CHECK(hc::flexfec_recover(a, h, {}, {}, 5U, 21U, out, written) == FlexFecStatus::NotProtected);
-    CHECK(hc::flexfec_recover(a, h, {}, {}, 5U, 20U, {out.data(), a.size() - 1U}, written) == FlexFecStatus::NoSpace);
+    CHECK(hn::flexfec_recover({a.data(), 11U}, h, {}, {}, 5U, 20U, out, written) == FlexFecStatus::Truncated);
+    CHECK(hn::flexfec_recover(a, h, {}, with_b, 5U, 20U, out, written) == FlexFecStatus::WrongCount);
+    CHECK(hn::flexfec_recover(a, h, {}, {}, 5U, 21U, out, written) == FlexFecStatus::NotProtected);
+    CHECK(hn::flexfec_recover(a, h, {}, {}, 5U, 20U, {out.data(), a.size() - 1U}, written) == FlexFecStatus::NoSpace);
     CHECK(untouched(out));
 }

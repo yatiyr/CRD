@@ -1,4 +1,4 @@
-// The erasure-code kernels of crd/hesap/comms/erasure_kernels.hpp, compiled once per CPU level by crd_add_cpu_kernels
+// The erasure-code kernels of crd/hesap/net/erasure_kernels.hpp, compiled once per CPU level by crd_add_cpu_kernels
 // (../CMakeLists.txt, ADR-0134 §5). Everything here lives in the level's namespace (CRD_MATH_LEVEL_NS) and reads only
 // the expanded coefficients, so no function of this unit is shared with general code or with another level.
 //
@@ -13,7 +13,7 @@
 
 #include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
-#include <crd/hesap/comms/erasure_kernels.hpp>
+#include <crd/hesap/net/erasure_kernels.hpp>
 
 #if CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_SSE2
 #include <emmintrin.h>
@@ -23,7 +23,7 @@
 #include <arm_neon.h>
 #endif
 
-namespace crd::hesap::comms::inline CRD_MATH_LEVEL_NS
+namespace crd::hesap::net::inline CRD_MATH_LEVEL_NS
 {
 namespace
 {
@@ -445,11 +445,11 @@ void dot(const GfCoefficient* coefficients, const u8* const* sources, usize coun
 #endif
 
 } // namespace
-} // namespace crd::hesap::comms::inline CRD_MATH_LEVEL_NS
+} // namespace crd::hesap::net::inline CRD_MATH_LEVEL_NS
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 
 const ErasureKernels CRD_KERNEL_TABLE(kErasureKernels) = {&CRD_MATH_LEVEL_NS::dot, &CRD_MATH_LEVEL_NS::add};
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net

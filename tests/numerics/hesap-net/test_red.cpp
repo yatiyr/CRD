@@ -2,22 +2,23 @@
 // timestamps across the wrap, several levels of redundancy, a primary alone, random round trips, and every refusal
 // in its order with nothing written.
 
+#include "seeded_words.hpp"
+
 #include <crd/containers/array.hpp>
-#include <crd/hesap/comms/red.hpp>
-#include <crd/hesap/stats/philox.hpp>
+#include <crd/hesap/net/red.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
 #include <initializer_list>
 #include <span>
 
-namespace hc = crd::hesap::comms;
+namespace hn = crd::hesap::net;
 using crd::u16;
 using crd::u32;
 using crd::u8;
 using crd::usize;
-using hc::RedBlock;
-using hc::RedStatus;
+using hn::RedBlock;
+using hn::RedStatus;
 using Bytes = crd::containers::Array<u8>;
 
 namespace
@@ -75,7 +76,7 @@ RedBlock marked()
 
 RedStatus parse(const Bytes& payload, u32 timestamp, std::span<RedBlock> blocks, u32& count)
 {
-    return hc::red_parse(std::span<const u8>(payload.data(), payload.size()), timestamp, blocks, count);
+    return hn::red_parse(std::span<const u8>(payload.data(), payload.size()), timestamp, blocks, count);
 }
 
 } // namespace
@@ -91,10 +92,10 @@ TEST_CASE("RED: section 7's DVI4 packet with one LPC redundancy is written and r
     Bytes out;
     out.resize(5U + 14U + 84U + 8U, kSentinel);
     usize written = 0U;
-    REQUIRE(hc::red_encode(blocks, 5U, std::span<const u8>(dvi.data(), dvi.size()),
+    REQUIRE(hn::red_encode(blocks, 5U, std::span<const u8>(dvi.data(), dvi.size()),
                            std::span<u8>(out.data(), out.size()), written) == RedStatus::Ok);
     REQUIRE(written == 5U + 14U + 84U);
-    CHECK(hc::red_bytes(blocks, dvi.size()) == written);
+    CHECK(hn::red_bytes(blocks, dvi.size()) == written);
     const u8 header[] = {0x87U, 0x02U, 0x80U, 0x0EU, 0x05U};
     CHECK(std::memcmp(out.data(), header, sizeof(header)) == 0);
     CHECK(std::memcmp(out.data() + 5U, lpc.data(), lpc.size()) == 0);
@@ -103,7 +104,7 @@ TEST_CASE("RED: section 7's DVI4 packet with one LPC redundancy is written and r
 
     RedBlock read[4];
     u32 count = 0U;
-    REQUIRE(hc::red_parse(std::span<const u8>(out.data(), written), 48000U, read, count) == RedStatus::Ok);
+    REQUIRE(hn::red_parse(std::span<const u8>(out.data(), written), 48000U, read, count) == RedStatus::Ok);
     REQUIRE(count == 2U);
     CHECK((read[0].payload_type == 7U && read[0].offset == 160U && read[0].timestamp == 48000U - 160U));
     CHECK(same(read[0].data, std::span<const u8>(lpc.data(), lpc.size())));
@@ -117,7 +118,7 @@ TEST_CASE("RED: a primary alone is one header byte, and may be empty", "[hesap][
     const Bytes media = counting(3U, 1U);
     u8 out[4] = {};
     usize written = 0U;
-    REQUIRE(hc::red_encode({}, 111U, std::span<const u8>(media.data(), media.size()), out, written) == RedStatus::Ok);
+    REQUIRE(hn::red_encode({}, 111U, std::span<const u8>(media.data(), media.size()), out, written) == RedStatus::Ok);
     CHECK(written == 4U);
     CHECK((out[0] == 111U && out[1] == 1U && out[3] == 3U));
 
@@ -125,7 +126,7 @@ TEST_CASE("RED: a primary alone is one header byte, and may be empty", "[hesap][
     u32 count = 0U;
     REQUIRE(parse(bytes_of({0x6FU}), 7U, read, count) == RedStatus::Ok);
     CHECK((count == 1U && read[0].payload_type == 0x6FU && read[0].timestamp == 7U && read[0].data.empty()));
-    REQUIRE(hc::red_encode({}, 0U, {}, std::span<u8>(out, 1U), written) == RedStatus::Ok);
+    REQUIRE(hn::red_encode({}, 0U, {}, std::span<u8>(out, 1U), written) == RedStatus::Ok);
     CHECK((written == 1U && out[0] == 0U));
 }
 
@@ -136,9 +137,9 @@ TEST_CASE("RED: the header's fields reach their bounds and timestamps wrap", "[h
     const Bytes media = counting(9U, 0xC0U);
     const RedBlock blocks[] = {redundant(127U, RedBlock::kMaxOffset, longest), redundant(0U, 1U, empty)};
     Bytes out;
-    out.resize(hc::red_bytes(blocks, media.size()), kSentinel);
+    out.resize(hn::red_bytes(blocks, media.size()), kSentinel);
     usize written = 0U;
-    REQUIRE(hc::red_encode(blocks, 127U, std::span<const u8>(media.data(), media.size()),
+    REQUIRE(hn::red_encode(blocks, 127U, std::span<const u8>(media.data(), media.size()),
                            std::span<u8>(out.data(), out.size()), written) == RedStatus::Ok);
     REQUIRE(written == 4U + 4U + 1U + 1023U + 9U);
     const u8 header[] = {0xFFU, 0xFFU, 0xFFU, 0xFFU, 0x80U, 0x00U, 0x04U, 0x00U, 0x7FU};
@@ -166,11 +167,11 @@ TEST_CASE("RED: several levels of redundancy keep their order", "[hesap][red]")
     const RedBlock blocks[] = {redundant(9U, 960U, a), redundant(10U, 640U, b), redundant(11U, 320U, c)};
     u8 out[64];
     usize written = 0U;
-    REQUIRE(hc::red_encode(blocks, 12U, std::span<const u8>(media.data(), media.size()), out, written) ==
+    REQUIRE(hn::red_encode(blocks, 12U, std::span<const u8>(media.data(), media.size()), out, written) ==
             RedStatus::Ok);
     RedBlock read[4];
     u32 count = 0U;
-    REQUIRE(hc::red_parse(std::span<const u8>(out, written), 1000U, read, count) == RedStatus::Ok);
+    REQUIRE(hn::red_parse(std::span<const u8>(out, written), 1000U, read, count) == RedStatus::Ok);
     REQUIRE(count == 4U);
     const Bytes* const data[] = {&a, &b, &c, &media};
     const u32 timestamps[] = {40U, 360U, 680U, 1000U};
@@ -184,7 +185,7 @@ TEST_CASE("RED: several levels of redundancy keep their order", "[hesap][red]")
 
 TEST_CASE("RED: random packets round-trip through the writer and the reader", "[hesap][red]")
 {
-    crd::hesap::stats::PhiloxRng rng(2198, 1);
+    SeededWords rng(2198, 1);
     for (u32 round = 0U; round < 500U; ++round)
     {
         const u32 levels = rng.next_u32() % 6U;
@@ -200,9 +201,9 @@ TEST_CASE("RED: random packets round-trip through the writer and the reader", "[
         const u8 type = static_cast<u8>(rng.next_u32() & 0x7FU);
         const std::span<const RedBlock> list(blocks, levels);
         Bytes out;
-        out.resize(hc::red_bytes(list, media.size()));
+        out.resize(hn::red_bytes(list, media.size()));
         usize written = 0U;
-        REQUIRE(hc::red_encode(list, type, std::span<const u8>(media.data(), media.size()),
+        REQUIRE(hn::red_encode(list, type, std::span<const u8>(media.data(), media.size()),
                                std::span<u8>(out.data(), out.size()), written) == RedStatus::Ok);
         REQUIRE(written == out.size());
         RedBlock read[6];
@@ -308,7 +309,7 @@ TEST_CASE("RED: the writer refuses fields out of range, repeated intervals and s
         u8 out[1100];
         std::memset(out, kSentinel, sizeof(out));
         usize written = 99U;
-        CHECK(hc::red_encode(std::span<const RedBlock>(c.blocks, c.count), c.primary_type,
+        CHECK(hn::red_encode(std::span<const RedBlock>(c.blocks, c.count), c.primary_type,
                              std::span<const u8>(media.data(), media.size()), out, written) == c.want);
         CHECK(written == 99U);
         for (const u8 b : out)
@@ -317,19 +318,19 @@ TEST_CASE("RED: the writer refuses fields out of range, repeated intervals and s
         }
     }
     const RedBlock blocks[] = {redundant(7U, 160U, small)};
-    const usize need = hc::red_bytes(blocks, media.size());
+    const usize need = hn::red_bytes(blocks, media.size());
     REQUIRE(need == 4U + 1U + 4U + 6U);
     u8 out[32];
     std::memset(out, kSentinel, sizeof(out));
     usize written = 0U;
-    CHECK(hc::red_encode(blocks, 5U, std::span<const u8>(media.data(), media.size()), std::span<u8>(out, need - 1U),
+    CHECK(hn::red_encode(blocks, 5U, std::span<const u8>(media.data(), media.size()), std::span<u8>(out, need - 1U),
                          written) == RedStatus::NoSpace);
     CHECK(written == 0U);
     for (const u8 b : out)
     {
         CHECK(b == kSentinel);
     }
-    CHECK(hc::red_encode(blocks, 5U, std::span<const u8>(media.data(), media.size()), std::span<u8>(out, need),
+    CHECK(hn::red_encode(blocks, 5U, std::span<const u8>(media.data(), media.size()), std::span<u8>(out, need),
                          written) == RedStatus::Ok);
     CHECK((written == need && out[need] == kSentinel));
 }

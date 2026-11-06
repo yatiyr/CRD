@@ -1,13 +1,13 @@
-// RFC 5510 §8's systematic Reed-Solomon code over GF(2^8) (crd/hesap/comms/erasure.hpp). The Lagrange coefficients are
+// RFC 5510 §8's systematic Reed-Solomon code over GF(2^8) (crd/hesap/net/erasure.hpp). The Lagrange coefficients are
 // formed in the logarithm domain: every factor is a difference of two distinct points alpha^a - alpha^b, never zero,
 // so a product is the exponent of a sum of logarithms modulo 255.
 
 #include <crd/core/assert.hpp>
-#include <crd/hesap/comms/erasure.hpp>
-#include <crd/hesap/comms/erasure_dispatch.hpp>
-#include <crd/hesap/comms/gf256.hpp>
+#include <crd/hesap/net/erasure.hpp>
+#include <crd/hesap/net/erasure_dispatch.hpp>
+#include <crd/hesap/net/gf256.hpp>
 
-namespace crd::hesap::comms
+namespace crd::hesap::net
 {
 namespace
 {
@@ -293,4 +293,4 @@ ErasureStatus ReedSolomonCode::decode(std::span<const ErasureSymbol> received, s
     return ErasureStatus::Ok;
 }
 
-} // namespace crd::hesap::comms
+} // namespace crd::hesap::net
