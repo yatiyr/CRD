@@ -491,7 +491,8 @@ class LocalStore:
 
     def _path(self, name):
         base = self.root.resolve()
-        path = (base / name).resolve()
+        # Windows' realpath keeps the extended form of a file replaced between its two lookups (a concurrent put).
+        path = Path(str((base / name).resolve()).removeprefix('\\\\?\\'))
         if not path.is_relative_to(base) or path == base:
             raise ValueError('store path escapes the store: %s' % name)
         if path.relative_to(base).parts[0] == self.CAS:

@@ -257,6 +257,23 @@ class Store(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.put('../escape.json', b'x')
 
+    def test_local_store_path_survives_a_file_replaced_during_resolve(self):
+        # Complete run 41797302943: ntpath.realpath keeps the \\?\ form when the file is replaced between its two
+        # lookups, and the store took that for an escape. The other root's file is still refused.
+        with tempfile.TemporaryDirectory() as scratch:
+            store = pipeline.LocalStore(Path(scratch) / 'store')
+            store.put('a/b.json', b'x')
+            real_resolve = Path.resolve
+
+            def extended(path, *args, **kwargs):
+                resolved = real_resolve(path, *args, **kwargs)
+                return Path('\\\\?\\' + str(resolved)) if resolved.name.endswith('.json') else resolved
+
+            with mock.patch.object(Path, 'resolve', extended):
+                self.assertEqual(store.get('a/b.json'), b'x')
+                with self.assertRaises(ValueError):
+                    store.get('../other.json')
+
     def test_local_store_reads_never_meet_a_replacement(self):
         # A reader racing a writer's rename saw Windows refuse the open (complete run 41342960677's orchestrator case
         # read a build while the scheduler rewrote it); reads take the writers' lock, so every read sees one whole
