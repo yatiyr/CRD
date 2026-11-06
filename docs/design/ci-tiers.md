@@ -178,6 +178,7 @@ evidence, and the required aggregate fails when any leg does.
 | Lane | Bound | Shards | Why |
 |---|---|---|---|
 | `linux-clang-tsan` | 4 | 1 | TSan's per-case cost |
+| `win-debug` (and its sse2 arm) | 3 of 4 CPUs | 1 | 0294cdef: 9,897 cases, 12,508 s serial; the sse2 arm then needs about 110 min, so three of four runs hit the cap inside it (longest case 894 s) |
 | `win-asan` | 3 of 4 CPUs | 2 | e496d16c: 8,106 cases, 20,031 s serial; c2645814: the bounded Test step took 292 min and the job 315 min, under an hour from the cap ([session](../sessions/2026-11-01-diag-ci-asan-shards.md)) |
 | `linux-gcc-asan` | 3 of 4 CPUs | 2 | c2645814: stopped at the cap after 6,811 of 8,766 cases in 20,331 s serial (about 26,000 s for all) ([session](../sessions/2026-11-01-diag-ci-asan-shards.md)) |
 

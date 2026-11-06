@@ -760,6 +760,9 @@
             "configurePreset": "win-debug",
             "output": {
                 "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 3
             }
         },
         {
@@ -772,6 +775,9 @@
                 "exclude": {
                     "name": "-kernels-at-|^crd-check-|^crd-no-"
                 }
+            },
+            "execution": {
+                "jobs": 3
             },
             "environment": {
                 "CRD_CPU_LEVEL": "sse2"
