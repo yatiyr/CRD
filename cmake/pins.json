@@ -290,7 +290,7 @@
       "size": 843144,
       "license": "BSD-3-Clause",
       "gated": "CRD_BUILD_ERASURE_VS_ISAL",
-      "note": "Intel's ISA-L 2.32.1 (released 2026-07-01), the erasure-code peer of hesap-comms' Reed-Solomon code (HESAP-NET). erasure_code/ec_base.c, its portable GF(2^8) arithmetic (gf_mul over its own logarithm tables of 0x11D), matrix inversion and ec_encode_data_base, is compiled only into crd-isal-base-peer for the crd-hesap-erasure-isal-tests oracle; never into an engine module or a default build. LICENSE read from the archive: BSD-3-Clause, (c) 2011-2024 Intel Corporation. Pinned as a testing download under the user's approval of 2026-11-01 (docs/sessions/2026-11-04-hesap-net-fuzz-and-isal-oracle.md)."
+      "note": "Intel's ISA-L 2.32.1 (released 2026-07-01), the erasure-code peer of hesap-comms' Reed-Solomon code (HESAP-NET). erasure_code/ec_base.c, its portable GF(2^8) arithmetic (gf_mul over its own logarithm tables of 0x11D), matrix inversion and ec_encode_data_base, and on x86-64 its assembly and dispatch (assembled by the pinned NASM) are compiled only into crd-isal-peer for the crd-hesap-erasure-isal-tests oracle and crd-hesap-erasure-board; never into an engine module or a default build. LICENSE read from the archive: BSD-3-Clause, (c) 2011-2024 Intel Corporation. Pinned as a testing download under the user's approval of 2026-11-01 (docs/sessions/2026-11-04-hesap-net-fuzz-and-isal-oracle.md)."
     },
     "highway": {
       "version": "1.4.0",
@@ -757,6 +757,20 @@
       },
       "license": "BSD-2-Clause AND LGPL-2.1-or-later",
       "note": "Ubuntu 24.04's SoftHSM 2.6.1 (softhsm2, softhsm2-common, libsofthsm2), a PKCS #11 token in software, and OpenSC 0.25.0~rc1 (noble-updates) for its pkcs11-spy.so, a PKCS #11 module that records every call it passes to another, from Launchpad's librarian, whose files are never removed (the same bytes the Ubuntu archive serves, checked 2026-11-03). The token the key store's PKCS #11 device is tested against (NET.2 decision K14, CRD_BUILD_PKCS11_VS_SOFTHSM), unpacked by scripts/install-softhsm.py with dpkg-deb -x and run by tests/foundation/crypto/pkcs11_token_session.py; never linked or shipped. Both need only the system's libcrypto.so.3 (ldd, 2026-11-03). Licences from the packages' Debian copyright files: BSD-2-Clause (SoftHSM, with BSD-4-Clause, Expat, ISC and IBM notices for parts) and LGPL-2.1+ (OpenSC). Pinned as a testing download (pre-approved, user 2026-10-30)."
+    },
+    "nasm-linux-x64": {
+      "version": "2.16.01-1build1",
+      "binary": "usr/bin/nasm",
+      "provenance": "https://launchpad.net/ubuntu/+source/nasm/2.16.01-1",
+      "files": {
+        "nasm_2.16.01-1build1_amd64.deb": {
+          "url": "https://launchpad.net/ubuntu/+archive/primary/+files/nasm_2.16.01-1build1_amd64.deb",
+          "size": 458884,
+          "sha256": "22eede0f2dd62343b0298182f62f7485704fe02f166395b02c92a8883377e0b3"
+        }
+      },
+      "license": "BSD-2-Clause",
+      "note": "Ubuntu 24.04's NASM 2.16.01 (noble release pocket), from Launchpad's librarian, whose files are never removed; the SHA-256 and size are the ones Launchpad's API records for the publication (binaryFileUrls with include_meta, checked 2026-11-04). The assembler of ISA-L's x86-64 erasure code on Linux (HESAP-NET, CRD_BUILD_ERASURE_VS_ISAL: the assembly peer of the Reed-Solomon oracle and of crd-hesap-erasure-board), unpacked by scripts/install-nasm.py with dpkg-deb -x; never linked or shipped. Needs only libc (ldd, 2026-11-04). Licence from the package's Debian copyright file: BSD-2-Clause (NASM; the Debian packaging is GPL-2.0-or-later and none of it is installed as code). ISA-L 2.32.1 needs NASM 2.14.01 or later. Pinned as a testing download (pre-approved, user 2026-10-30)."
     },
     "tamarin-linux-x64": {
       "version": "1.12.0",

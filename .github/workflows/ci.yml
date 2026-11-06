@@ -960,6 +960,12 @@ jobs:
         if: matrix.preset == 'linux-gcc-public-checks'
         run: python3 scripts/install-tamarin.py --destination "$RUNNER_TEMP/tamarin" --download-dir "$RUNNER_TEMP/tamarin-dl" --github-env "$GITHUB_ENV"
 
+      # The pinned NASM (tools/nasm-linux-x64) assembles ISA-L's x86-64 erasure code for HESAP-NET's oracle and board
+      # (CRD_BUILD_ERASURE_VS_ISAL): one package checked against its SHA-256; the configure reads CRD_NASM.
+      - name: Install pinned NASM
+        if: matrix.preset == 'linux-gcc-public-checks'
+        run: python3 scripts/install-nasm.py --destination "$RUNNER_TEMP/nasm" --download-dir "$RUNNER_TEMP/nasm-dl" --github-env "$GITHUB_ENV"
+
       - name: Configure
         if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}

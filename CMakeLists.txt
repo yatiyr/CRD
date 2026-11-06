@@ -71,11 +71,13 @@ option(CRD_BUILD_HESAP_VS_BOOST "Build the special-function, distribution, inter
 # build/_deps) as the crd-bench-hptt-peer library that bench_permute links. Local only on x64 Linux, never in CI or a
 # shipped build; scripts/run_permute_bench.sh builds and runs it per CPU level.
 option(CRD_BUILD_HESAP_VS_HPTT "Build bench_permute against HPTT's plans of every element type (local-only)" OFF)
-# The erasure-code oracle (HESAP-NET): hesap-comms' Reed-Solomon code against Intel ISA-L's portable GF(2^8) code
-# (cmake/pins.json isa-l, fetched on demand into build/_deps; erasure_code/ec_base.c compiled as crd-isal-base-peer).
-# Never in a shipped build; the crd-hesap-erasure-isal-tests of the tree that turns it on, locally and on the
-# complete-tier linux-gcc-public-checks lane.
-option(CRD_BUILD_ERASURE_VS_ISAL "Build the Reed-Solomon oracle against Intel ISA-L's portable code" OFF)
+# The erasure-code oracle and board (HESAP-NET): hesap-comms' Reed-Solomon code against Intel ISA-L (cmake/pins.json
+# isa-l, fetched on demand into build/_deps), as crd-isal-peer: its portable GF(2^8) code (erasure_code/ec_base.c)
+# and, on x86-64, its assembly (every ISA body and the dispatched ec_encode_data), assembled by the pinned NASM: nasm.exe on Windows (cmake/pins.json nasm), CRD_NASM on Linux (scripts/install-nasm.py prints it).
+# Never in a shipped build; the crd-hesap-erasure-isal-tests and crd-hesap-erasure-board-smoke CTests of the tree that
+# turns it on, locally and on the complete-tier linux-gcc-public-checks lane; the board runs in a release tree.
+option(CRD_BUILD_ERASURE_VS_ISAL "Build the Reed-Solomon oracle and board against Intel ISA-L" OFF)
+set(CRD_NASM "$ENV{CRD_NASM}" CACHE FILEPATH "The pinned NASM on Linux (scripts/install-nasm.py), for ISA-L's assembly")
 # The dispatch-cost board (ADR-0134 §8): a crd kernel table's call against Google Highway's HWY_DYNAMIC_DISPATCH, from
 # the pinned Highway release (cmake/pins.json highway, fetched on demand into build/_deps) built by its own CMake, as
 # the crd-bench-highway-peer library that bench_dispatch_cost links. Local only, never in CI or a shipped build;
@@ -1542,13 +1544,31 @@ if(CRD_BUILD_HESAP_VS_FFT_REFS)
     crd_add_pinned_package(pocketfft DOWNLOAD_ONLY YES)
 endif()
 
-# ----- The erasure-code oracle's ISA-L peer: its portable sources, built by tests/numerics/hesap-comms -----
+# ----- The erasure-code oracle's ISA-L peer: its sources, built by tests/numerics/hesap-comms -----
+# ISA-L's x86-64 assembly is NASM's: Windows x64 takes the pinned nasm.exe (the one AWS-LC assembles with), Linux the
+# pinned CRD_NASM. Other targets build the portable peer alone.
 if(CRD_BUILD_ERASURE_VS_ISAL)
     if(NOT CRD_BUILD_TESTS)
         message(FATAL_ERROR "[erasure-vs-isal] the ISA-L oracle needs CRD_BUILD_TESTS")
     endif()
     enable_language(C)
     crd_add_pinned_package(isa-l DOWNLOAD_ONLY YES)
+    set(CRD_ISAL_ASSEMBLY OFF)
+    if(_crd_arch_x64 AND WIN32)
+        crd_add_pinned_package(nasm DOWNLOAD_ONLY YES)
+        set(CMAKE_ASM_NASM_COMPILER "${nasm_SOURCE_DIR}/nasm.exe")
+        set(CRD_ISAL_ASSEMBLY ON)
+    elseif(_crd_arch_x64 AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        if(NOT EXISTS "${CRD_NASM}")
+            message(FATAL_ERROR "[erasure-vs-isal] CRD_NASM names no nasm: install the pinned NASM with "
+                                "scripts/install-nasm.py and configure with the CRD_NASM it prints")
+        endif()
+        set(CMAKE_ASM_NASM_COMPILER "${CRD_NASM}")
+        set(CRD_ISAL_ASSEMBLY ON)
+    endif()
+    if(CRD_ISAL_ASSEMBLY)
+        enable_language(ASM_NASM)
+    endif()
 endif()
 
 # ----- The dispatch-cost board's peer: Highway's library from its own CMake (bench-only) -----

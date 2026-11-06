@@ -82,6 +82,9 @@ swtpm_spec.loader.exec_module(install_swtpm)
 softhsm_spec = importlib.util.spec_from_file_location('install_softhsm', ROOT / 'scripts/install-softhsm.py')
 install_softhsm = importlib.util.module_from_spec(softhsm_spec)
 softhsm_spec.loader.exec_module(install_softhsm)
+nasm_spec = importlib.util.spec_from_file_location('install_nasm', ROOT / 'scripts/install-nasm.py')
+install_nasm = importlib.util.module_from_spec(nasm_spec)
+nasm_spec.loader.exec_module(install_nasm)
 tamarin_spec = importlib.util.spec_from_file_location('install_tamarin', ROOT / 'scripts/install-tamarin.py')
 install_tamarin = importlib.util.module_from_spec(tamarin_spec)
 tamarin_spec.loader.exec_module(install_tamarin)
@@ -3039,6 +3042,41 @@ class BuildPerformance(unittest.TestCase):
         for name, spec in pin['files'].items():
             self.assertEqual(spec['url'], 'https://launchpad.net/ubuntu/+archive/primary/+files/' + name)
         self.assertIn('scripts/install-softhsm.py', check_pins.HELPERS)
+
+    def test_nasm_installer_unpacks_the_assembler_and_checks_its_version(self):
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()) as out:
+            root = Path(temp).resolve()
+            downloads = root / 'dl'
+            downloads.mkdir()
+            name = 'nasm_1.0-1_amd64.deb'
+            (downloads / name).write_bytes(b'usr/bin/nasm')
+            files = {name: {'url': 'https://example.invalid/' + name, 'size': 12,
+                            'sha256': pins_registry.sha256(downloads / name)}}
+            pin = {'version': '1.0-1', 'binary': 'usr/bin/nasm', 'files': files, 'license': 'BSD-2-Clause'}
+
+            def extract(package, prefix):
+                member = prefix / package.read_text()
+                member.parent.mkdir(parents=True, exist_ok=True)
+                member.write_bytes(b'elf')
+
+            nasm = install_nasm.install(root / 'prefix', downloads, pin=pin, extract=extract,
+                                        version_of=lambda path: '1.0')
+            self.assertEqual(nasm, root / 'prefix/usr/bin/nasm')
+            self.assertIn(f'CRD_NASM={nasm}', out.getvalue())
+            with self.assertRaisesRegex(pins_registry.PinError, "reports '0.9'.*pins NASM 1.0"):
+                install_nasm.install(root / 'other', downloads, pin=pin, extract=extract,
+                                     version_of=lambda path: '0.9')
+            self.assertFalse((root / 'other').exists() or (root / 'other.partial').exists())
+        with patch.object(install_nasm.subprocess, 'run') as run:
+            run.return_value = subprocess.CompletedProcess([], 0, 'NASM version 2.16.01 compiled on Jan  1 2024\n', '')
+            self.assertEqual(install_nasm.reported_version('nasm'), '2.16.01')
+            run.return_value = subprocess.CompletedProcess([], 1, '', 'no')
+            self.assertIsNone(install_nasm.reported_version('nasm'))
+        pin = pins_registry.entry('tools', install_nasm.PIN_NAME)
+        self.assertEqual((pin['binary'], pin['version'].split('-')[0]), ('usr/bin/nasm', '2.16.01'))
+        for name, spec in pin['files'].items():
+            self.assertEqual(spec['url'], 'https://launchpad.net/ubuntu/+archive/primary/+files/' + name)
+        self.assertIn('scripts/install-nasm.py', check_pins.HELPERS)
 
     def test_tamarin_installer_unpacks_two_rootless_archives_into_one_prefix(self):
         with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()) as out:

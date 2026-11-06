@@ -153,9 +153,10 @@
       "why": "The overhead harness's Tracy peer (crd-diag-overhead-tracy, DIAG.11b clause (8)), against the pinned Tracy client fetched at configure time only when the option is on."
     },
     {
-      "paths": ["tests/numerics/hesap-comms/test_erasure_isal.cpp"],
+      "paths": ["tests/numerics/hesap-comms/test_erasure_isal.cpp", "tests/numerics/hesap-comms/isal_arms.c",
+                "tests/numerics/hesap-comms/erasure_board.cpp"],
       "built_when": {"option": "CRD_BUILD_ERASURE_VS_ISAL"},
-      "why": "The Reed-Solomon oracle against Intel ISA-L's portable erasure code (crd-hesap-erasure-isal-tests, HESAP-NET), against the pinned release fetched at configure time only when the option is on."
+      "why": "The Reed-Solomon oracle and board against Intel ISA-L (crd-hesap-erasure-isal-tests, crd-hesap-erasure-board, HESAP-NET), against the pinned release fetched at configure time only when the option is on."
     },
     {
       "paths": ["runtime/examples/bench_hesap_lbfgs_vs_reference.cpp"],

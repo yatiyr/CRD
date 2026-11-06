@@ -1,11 +1,11 @@
-// HESAP-NET's Reed-Solomon code against Intel ISA-L's portable erasure code (CRD_BUILD_ERASURE_VS_ISAL;
-// cmake/pins.json isa-l, erasure_code/ec_base.c compiled as crd-isal-base-peer). ISA-L's field (gf_mul and gf_inv over
-// its own logarithm tables of 0x11D) and its Gauss-Jordan inversion (gf_invert_matrix) are an implementation written
-// apart from hesap's, so every byte below is held to a second party:
+// HESAP-NET's Reed-Solomon code against Intel ISA-L's erasure code (CRD_BUILD_ERASURE_VS_ISAL; cmake/pins.json isa-l,
+// its erasure_code/ec_base.c and on x86-64 its assembly, compiled as crd-isal-peer). ISA-L's field
+// (gf_mul and gf_inv over its own logarithm tables of 0x11D) and its Gauss-Jordan inversion (gf_invert_matrix) are an
+// implementation written apart from hesap's, so every byte below is held to a second party:
 //   * every product and inverse of the field;
 //   * the generator matrix GM = V(k,k)^-1 V(k,n) of RFC 5510 §8.2 formed with ISA-L's arithmetic and inversion;
-//   * every repair symbol against ec_encode_data_base over GM's repair columns;
-//   * every recovered source against ec_encode_data_base over ISA-L's inverse of the received columns of GM.
+//   * every repair symbol against each ISA-L encoder this CPU runs (isal_arms.h) over GM's repair columns;
+//   * every recovered source against each of them over ISA-L's inverse of the received columns of GM.
 
 #include <crd/containers/array.hpp>
 #include <crd/hesap/comms/erasure.hpp>
@@ -16,6 +16,8 @@
 #include <cstring>
 
 #include <erasure_code.h>
+
+#include "isal_arms.h"
 
 namespace hc = crd::hesap::comms;
 using crd::u32;
@@ -71,19 +73,57 @@ u8 isal_alpha_pow(u32 e)
     return powers.of[e % 255U];
 }
 
-// out = ISA-L's ec_encode_data_base of `rows` (row-major, rows x count) over `inputs`.
-void isal_encode(const Bytes& rows, usize row_count, usize count, unsigned char** inputs, unsigned char** outputs,
-                 usize bytes)
+// The number of ISA-L encoders this CPU runs whose product of `rows` (row-major, rows x count) over `inputs` differs
+// from `expected` (row_count outputs of `bytes`); each such arm is named with its first differing output.
+usize isal_mismatches(const Bytes& rows, usize row_count, usize count, unsigned char** inputs,
+                      const crd::containers::Array<Bytes>& expected, usize bytes)
 {
     Bytes tables;
     tables.resize(32U * row_count * count);
-    Bytes matrix = rows;
-    ec_init_tables_base(static_cast<int>(count), static_cast<int>(row_count), matrix.data(), tables.data());
-    ec_encode_data_base(static_cast<int>(bytes), static_cast<int>(count), static_cast<int>(row_count), tables.data(),
-                        inputs, outputs);
+    crd::containers::Array<Bytes> theirs;
+    crd::containers::Array<unsigned char*> outputs;
+    for (usize q = 0U; q < row_count; ++q)
+    {
+        theirs.push_back(Bytes{});
+        theirs.back().resize(bytes);
+    }
+    for (usize q = 0U; q < row_count; ++q)
+    {
+        outputs.push_back(theirs[q].data());
+    }
+    usize bad = 0U;
+    for (unsigned a = 0U; a < crd_isal_arm_count; ++a)
+    {
+        const crd_isal_arm& arm = crd_isal_arms[a];
+        if (!crd_isal_arm_runs(arm))
+        {
+            continue;
+        }
+        Bytes matrix = rows;
+        arm.tables(static_cast<int>(count), static_cast<int>(row_count), matrix.data(), tables.data());
+        arm.encode(static_cast<int>(bytes), static_cast<int>(count), static_cast<int>(row_count), tables.data(),
+                   inputs, outputs.data());
+        for (usize q = 0U; q < row_count; ++q)
+        {
+            if (std::memcmp(theirs[q].data(), expected[q].data(), bytes) != 0)
+            {
+                UNSCOPED_INFO("ISA-L arm " << arm.name << " differs at output " << q);
+                ++bad;
+                break;
+            }
+        }
+    }
+    return bad;
 }
 
 } // namespace
+
+TEST_CASE("ISA-L oracle: the peer holds its portable arm and, with its assembly, every ISA body", "[erasure][isal]")
+{
+    CHECK(crd_isal_arm_count == (CRD_ISAL_ASSEMBLY != 0 ? 8U : 1U));
+    CHECK(crd_isal_arm_runs(crd_isal_arms[0]));
+    CHECK(crd_isal_arm_runs(crd_isal_arms[crd_isal_arm_count - 1U]));
+}
 
 TEST_CASE("ISA-L oracle: the field's products and inverses are ISA-L's", "[erasure][isal]")
 {
@@ -168,11 +208,9 @@ TEST_CASE("ISA-L oracle: repair symbols are ec_encode_data_base over GM's repair
             INFO("k " << k << " n " << n << " bytes " << bytes);
             crd::containers::Array<Bytes> sources;
             crd::containers::Array<Bytes> ours;
-            crd::containers::Array<Bytes> theirs;
             crd::containers::Array<const u8*> source_ptrs;
             crd::containers::Array<unsigned char*> isal_sources;
             crd::containers::Array<u8*> our_ptrs;
-            crd::containers::Array<unsigned char*> their_ptrs;
             crd::containers::Array<u32> repair;
             for (u32 i = 0U; i < k; ++i)
             {
@@ -182,8 +220,6 @@ TEST_CASE("ISA-L oracle: repair symbols are ec_encode_data_base over GM's repair
             {
                 ours.push_back(Bytes{});
                 ours.back().resize(bytes);
-                theirs.push_back(Bytes{});
-                theirs.back().resize(bytes);
                 repair.push_back(k + l);
             }
             for (u32 i = 0U; i < k; ++i)
@@ -194,17 +230,10 @@ TEST_CASE("ISA-L oracle: repair symbols are ec_encode_data_base over GM's repair
             for (u32 l = 0U; l < r; ++l)
             {
                 our_ptrs.push_back(ours[l].data());
-                their_ptrs.push_back(theirs[l].data());
             }
             REQUIRE(code.encode({source_ptrs.data(), source_ptrs.size()}, {repair.data(), repair.size()},
                                 {our_ptrs.data(), our_ptrs.size()}, bytes) == ErasureStatus::Ok);
-            isal_encode(rows, r, k, isal_sources.data(), their_ptrs.data(), bytes);
-            usize bad = 0U;
-            for (u32 l = 0U; l < r; ++l)
-            {
-                bad += std::memcmp(ours[l].data(), theirs[l].data(), bytes) != 0 ? 1U : 0U;
-            }
-            CHECK(bad == 0U);
+            CHECK(isal_mismatches(rows, r, k, isal_sources.data(), ours, bytes) == 0U);
         }
     }
 }
@@ -299,28 +328,21 @@ TEST_CASE("ISA-L oracle: recovered sources are ISA-L's inverse of the received c
                 std::memcpy(rows.data() + (q * k), inverse.data() + (usize{lost[q]} * k), k);
             }
             crd::containers::Array<Bytes> ours;
-            crd::containers::Array<Bytes> theirs;
             crd::containers::Array<u8*> our_ptrs;
-            crd::containers::Array<unsigned char*> their_ptrs;
             for (usize q = 0U; q < lost.size(); ++q)
             {
                 ours.push_back(Bytes{});
                 ours.back().resize(kBytes);
-                theirs.push_back(Bytes{});
-                theirs.back().resize(kBytes);
             }
             for (usize q = 0U; q < lost.size(); ++q)
             {
                 our_ptrs.push_back(ours[q].data());
-                their_ptrs.push_back(theirs[q].data());
             }
             REQUIRE(code.decode({received.data(), received.size()}, {lost.data(), lost.size()},
                                 {our_ptrs.data(), our_ptrs.size()}, kBytes) == ErasureStatus::Ok);
-            isal_encode(rows, lost.size(), k, isal_inputs.data(), their_ptrs.data(), kBytes);
-            usize bad = 0U;
+            usize bad = isal_mismatches(rows, lost.size(), k, isal_inputs.data(), ours, kBytes);
             for (usize q = 0U; q < lost.size(); ++q)
             {
-                bad += std::memcmp(ours[q].data(), theirs[q].data(), kBytes) != 0 ? 1U : 0U;
                 bad += std::memcmp(ours[q].data(), block[lost[q]].data(), kBytes) != 0 ? 1U : 0U;
             }
             CHECK(bad == 0U);
