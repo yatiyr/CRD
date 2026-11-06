@@ -16,6 +16,11 @@ Rows: [NET.2](../ROADMAP.md#slice-net.2) (Done), [HESAP-NET](../ROADMAP.md#slice
     hosted run yet; 42282917539 at 474a37f8 is running (13 of 32 jobs done, none failed, when this was written).
 - linux-gcc-asan's mikktspace failure in the same run is the registered TP-5.
 - The row closes through the user-order override, as NET.1 does.
+- The flip's register duties: `tls.v13`, `pki.ml-dsa`, `tls.ml-dsa`, `mls.architecture`, `ietf.algorithm-agility`, RFC 7696
+  items 2.2, 2.4, 2.5, 2.8 and `eu.dual-use` are implemented with evidence. The two new TLS entries reach the inventories,
+  so cerid-package's and ceridc's classifications were restated (the same answers); counsel stays open, its one review
+  entry unchanged. The first push missed these: `crd-check-registers` caught it in the guard run before handover, and this
+  fix followed within the batch.
 
 ## OpenFEC
 

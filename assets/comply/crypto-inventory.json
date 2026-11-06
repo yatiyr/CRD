@@ -74,6 +74,20 @@
           "standard": true
         },
         {
+          "id": "tls.v13",
+          "kind": "protocol",
+          "owner": "crypto",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "RFC 9846",
+          "standard": true
+        },
+        {
           "id": "tls.hybrid-kex",
           "kind": "algorithm",
           "owner": "crypto",
@@ -102,6 +116,26 @@
             "key-exchange"
           ],
           "spec": "RFC 9849",
+          "standard": true
+        },
+        {
+          "id": "pki.ml-dsa",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication"
+          ],
+          "spec": "RFC 9881",
+          "standard": true
+        },
+        {
+          "id": "tls.ml-dsa",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication"
+          ],
+          "spec": "draft-ietf-tls-mldsa",
           "standard": true
         },
         {
@@ -655,6 +689,20 @@
           "standard": true
         },
         {
+          "id": "tls.v13",
+          "kind": "protocol",
+          "owner": "crypto",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "RFC 9846",
+          "standard": true
+        },
+        {
           "id": "tls.hybrid-kex",
           "kind": "algorithm",
           "owner": "crypto",
@@ -683,6 +731,26 @@
             "key-exchange"
           ],
           "spec": "RFC 9849",
+          "standard": true
+        },
+        {
+          "id": "pki.ml-dsa",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication"
+          ],
+          "spec": "RFC 9881",
+          "standard": true
+        },
+        {
+          "id": "tls.ml-dsa",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication"
+          ],
+          "spec": "draft-ietf-tls-mldsa",
           "standard": true
         },
         {

@@ -587,7 +587,7 @@
       "id": "ietf.algorithm-agility",
       "title": "Guidelines for cryptographic algorithm agility (BCP 201)",
       "kind": "guidance",
-      "state": "planned",
+      "state": "implemented",
       "owner": "crypto",
       "rows": [
         "NET-STD",
@@ -605,7 +605,7 @@
         "verified": false
       },
       "review": "2027-10-27",
-      "evidence": [],
+      "evidence": ["tests/foundation/crypto/test_policy.cpp", "tests/foundation/crypto/test_register_ids.cpp"],
       "deprecation": null
     },
     {
@@ -1533,7 +1533,7 @@
       "id": "tls.v13",
       "title": "The Transport Layer Security protocol version 1.3",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "crypto",
       "rows": [
         "NET.2"
@@ -1916,7 +1916,7 @@
       "id": "pki.ml-dsa",
       "title": "ML-DSA in the Internet X.509 public key infrastructure",
       "kind": "algorithm",
-      "state": "planned",
+      "state": "implemented",
       "owner": "crypto",
       "rows": [
         "NET.2"
@@ -1952,14 +1952,14 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
+      "evidence": ["tests/foundation/crypto/test_tls.cpp", "tests/foundation/crypto/interop/tls_interop.py"],
       "deprecation": null
     },
     {
       "id": "tls.ml-dsa",
       "title": "ML-DSA signature schemes for TLS 1.3",
       "kind": "algorithm",
-      "state": "planned",
+      "state": "implemented",
       "owner": "crypto",
       "rows": [
         "NET.2"
@@ -2000,7 +2000,7 @@
         "verified": true
       },
       "review": "2027-11-01",
-      "evidence": [],
+      "evidence": ["tests/foundation/crypto/test_tls.cpp", "tests/foundation/crypto/interop/tls_interop.py"],
       "deprecation": null,
       "note": "The TLS 1.3 signature schemes of the ML-DSA service certificates the crypto policy pins (pki.ml-dsa, RFC 9881); the 2026-11-01 full re-research found the gap."
     },
@@ -2835,7 +2835,7 @@
       "id": "mls.architecture",
       "title": "The Messaging Layer Security architecture",
       "kind": "guidance",
-      "state": "planned",
+      "state": "implemented",
       "owner": "crypto",
       "rows": [
         "NET.2"
@@ -2852,7 +2852,7 @@
         "verified": false
       },
       "review": "2027-10-27",
-      "evidence": [],
+      "evidence": ["tests/foundation/crypto/test_mls_group.cpp", "tests/foundation/crypto/test_mls_external.cpp", "tests/foundation/crypto/interop/mls_interop.py"],
       "deprecation": null
     },
     {
@@ -3162,7 +3162,7 @@
       "rows": [
         "NET.2"
       ],
-      "evidence": []
+      "evidence": ["tests/foundation/crypto/test_provider.cpp", "tests/foundation/crypto/test_tls.cpp", "tests/foundation/crypto/test_policy.cpp"]
     },
     {
       "section": "2.3",
@@ -3184,7 +3184,7 @@
         "NET-STD",
         "NET.2"
       ],
-      "evidence": []
+      "evidence": ["tests/foundation/crypto/test_tls.cpp", "tests/foundation/crypto/interop/tls_interop.py"]
     },
     {
       "section": "2.5",
@@ -3193,7 +3193,7 @@
       "rows": [
         "NET.2"
       ],
-      "evidence": []
+      "evidence": ["tests/foundation/crypto/test_policy.cpp", "tests/foundation/crypto/test_policy_layers.cpp", "tests/foundation/crypto/test_tls.cpp"]
     },
     {
       "section": "2.6",
@@ -3222,7 +3222,7 @@
       "rows": [
         "NET.2"
       ],
-      "evidence": []
+      "evidence": ["tests/foundation/crypto/test_tls.cpp"]
     }
   ]
 }
