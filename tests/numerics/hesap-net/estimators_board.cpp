@@ -24,6 +24,7 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #define private public

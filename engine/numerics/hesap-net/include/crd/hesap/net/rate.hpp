@@ -39,6 +39,8 @@ struct AtMost
 // The best sample of the last `window` time units, and the second and third best of its later parts that replace it
 // when it ages out. best() is a sample of the window and never better than the window's true best; a sample worse
 // than the three held can be lost while it is the true best of a later part of the window, the filter's known bound.
+// The refreshes test the held samples' times, as Linux's lib/win_minmax.c does; quiche tests their values, which differs
+// only when different samples tie.
 template <class T, class AsGood>
 class WindowedFilter
 {

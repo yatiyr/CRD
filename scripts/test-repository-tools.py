@@ -3072,9 +3072,20 @@ class BuildPerformance(unittest.TestCase):
             (downloads / 'LICENSE').write_bytes(b'tampered')
             changed = copy.deepcopy(pin)
             changed['commit'] = '1' * 40
+            waits = []
             with self.assertRaises(pins_registry.PinError):
-                install_webrtc_bwe.install(root / 'tree', downloads, pin=changed)
+                install_webrtc_bwe.install(root / 'tree', downloads, pin=changed, sleep=waits.append)
+            self.assertEqual(waits, list(install_webrtc_bwe.MISMATCH_WAITS))
             self.assertEqual((tree / 'LICENSE').read_bytes(), b'license')
+
+            # A page instead of the file is retried, and a later good answer is taken.
+            (downloads / 'LICENSE').write_bytes(base64.b64encode(b'license'))
+            good = downloads / 'LICENSE'
+            answers = [pins_registry.PinError('a page'), good, downloads / 'api/units/data_rate.h']
+            with patch.object(install_webrtc_bwe.pins, 'fetch', side_effect=answers) as fetch:
+                install_webrtc_bwe.install(root / 'retried', downloads, pin=changed, sleep=waits.append)
+            self.assertEqual(fetch.call_count, 3)
+            self.assertEqual((root / 'retried/LICENSE').read_bytes(), b'license')
         pin = pins_registry.entry('tools', install_webrtc_bwe.PIN_NAME)
         self.assertRegex(pin['commit'], '^[0-9a-f]{40}$')
         for name, spec in pin['files'].items():

@@ -4,7 +4,9 @@
 webrtc.googlesource.com regenerates its source archives with different bytes on every request, so the pin names each
 file at a fixed commit through Gitiles' `?format=TEXT`, a stable base64 of the blob; each download is verified by its
 SHA-256 and decoded into a staging directory that replaces the destination only when all of them are in, with a stamp
-that lets a matching install be reused. The destination goes under `~/.cerid/tools/webrtc-bwe/<commit>` by default.
+that lets a matching install be reused. Gitiles can answer a burst of requests with a page of its own under status 200,
+so a digest mismatch on a download is retried after a wait, a bounded number of times. The destination goes under
+`~/.cerid/tools/webrtc-bwe/<commit>` by default.
 Prints CRD_WEBRTC_BWE=<directory>, which a CRD_BUILD_ESTIMATORS_VS_WEBRTC configure reads (`--github-env` also appends
 it to that file): the oracle and board of hesap-net's estimators (HESAP-NET); never linked or shipped.
 Contract: docs/design/pinned-inputs.md.
@@ -15,12 +17,14 @@ import base64
 import json
 import shutil
 import sys
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pins  # noqa: E402
 
 PIN_NAME = 'webrtc-bwe-sources'
 STAMP = 'cerid-webrtc-bwe.json'
+MISMATCH_WAITS = (30, 120)
 
 
 def default_destination(pin):
@@ -31,7 +35,18 @@ def default_download_dir(pin):
     return Path.home() / '.cerid' / 'tools' / 'webrtc-bwe' / 'dl' / pin['commit'][:12]
 
 
-def install(destination=None, download_dir=None, pin=None):
+def fetched(name, spec, download_dir, sleep):
+    """The verified download of one file; pins.download has already removed a mismatching one."""
+    for wait in MISMATCH_WAITS:
+        try:
+            return pins.fetch(None, download_dir, url=spec['url'], sha=spec['sha256'], file=name, label=name)
+        except pins.PinError as error:
+            print(f'{name}: {error}; retrying in {wait} s', file=sys.stderr)
+            sleep(wait)
+    return pins.fetch(None, download_dir, url=spec['url'], sha=spec['sha256'], file=name, label=name)
+
+
+def install(destination=None, download_dir=None, pin=None, sleep=time.sleep):
     """Return the source tree under `destination`, fetching and decoding its files unless a matching one is present."""
     pin = pins.entry('tools', PIN_NAME) if pin is None else pin
     destination = Path(destination or default_destination(pin))
@@ -44,7 +59,7 @@ def install(destination=None, download_dir=None, pin=None):
     staging = destination.with_name(destination.name + '.partial')
     shutil.rmtree(staging, ignore_errors=True)
     for name, spec in pin['files'].items():
-        encoded = pins.fetch(None, download_dir, url=spec['url'], sha=spec['sha256'], file=name, label=name)
+        encoded = fetched(name, spec, download_dir, sleep)
         member = staging / name
         member.parent.mkdir(parents=True, exist_ok=True)
         member.write_bytes(base64.b64decode(encoded.read_bytes(), validate=True))
