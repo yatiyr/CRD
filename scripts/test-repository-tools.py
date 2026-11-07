@@ -9636,6 +9636,17 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                '<record><value>0x0807</value><description>ed25519</description><recommended>Y</recommended>'
                '<xref type="rfc" data="rfc9846"/></record></registry></registry>')
 
+
+    @staticmethod
+    def checked_after_review(root, day):
+        """The guard's errors by domain once every jurisdiction a read changed has been reviewed, as a reader must."""
+        path = root / 'cmake' / 'legal-register.json'
+        legal = json.loads(path.read_text(encoding='utf-8'))
+        for code, rules in comply_rules.rules_by_jurisdiction(legal).items():
+            record = legal.get('rule_generations', {}).get(code)
+            if comply_rules.digest(comply_rules.render(code, record['generation'], legal, rules)) != record['sha256']:
+                comply_rules.review(root, legal, code, day)
+        return {domain: errors for domain, _, errors in registers.check(root, day)}
     def register(self, entries, **changes):
         """The fixture register with IETF 128 on its calendar, so a run on the fixture's day still owes a scan."""
         calendar = self.schedule()['calendar'] + [{'event': 'IETF 128', 'day': '2027-03-26', 'scan': 'light',
@@ -9826,7 +9837,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertNotIn('eu.gdpr.principles', text)
             register = json.loads((root / 'cmake' / 'legal-register.json').read_text(encoding='utf-8'))
             self.assertEqual('docs/legal-review.md', register['review']['runs'][-1]['ref'])
-            legal_errors = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            legal_errors = self.checked_after_review(root, datetime.date(2026, 12, 16))
             self.assertEqual([], legal_errors['legal'])
             code, output = self.tool(root, *argv, 'record', '--scan', 'light', '--ref', 'docs/research.md#n83',
                                      '--day', '2026-12-17', '--trigger', 'eu.gdpr.rights', today='2026-12-17')
@@ -9901,7 +9912,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertEqual([{'event': 'Second quarter', 'day': '2027-06-30', 'scan': 'light', 'verified': True},
                               dict(calendar[1], reads=['platform.apple'])], register['review']['calendar'],
                              'a reading recorded leaves the scans that scheduled it')
-            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            checked = self.checked_after_review(root, datetime.date(2026, 12, 16))
             self.assertEqual([], checked['legal'])
             code, output = self.tool(root, *argv, 'compare', *fetched, '--report', str(report))
             self.assertEqual(0, code, output)
@@ -10037,7 +10048,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertEqual({'version': '02024R1689-20260727 + 32025R0327', 'read': '2026-11-01', 'sha256':
                               hashlib.sha256(b'<html><p>Regulation (EU) 2024/1689</p></html>').hexdigest()},
                              entries['eu.ai.literacy']['instrument']['consolidated'])
-            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 11, 1))}
+            checked = self.checked_after_review(root, datetime.date(2026, 11, 1))
             self.assertEqual([], checked['legal'])
 
     @staticmethod
@@ -10473,7 +10484,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertEqual({'version': '2014-11-27/29188 at 2022-08-23 (RG 31932)', 'read': '2026-12-16',
                               'sha256': hashlib.sha256(routes['Iframe?MevzuatTur=7&MevzuatNo=20237']).hexdigest()},
                              entries['tr.6502.distance-contracts-regulation']['instrument']['consolidated'])
-            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            checked = self.checked_after_review(root, datetime.date(2026, 12, 16))
             self.assertEqual([], checked['legal'])
 
     # The Official Gazette's day page (the pages of 2017 and 2025, 2026-11-01): windows-1254, its heading, and one link
@@ -10603,7 +10614,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertEqual({'version': '2025-12-25/33118 No. 10767 as published', 'read': '2026-12-16',
                               'sha256': hashlib.sha256(pdf).hexdigest()},
                              entries['tr.7194.rate-decision']['instrument']['consolidated'])
-            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            checked = self.checked_after_review(root, datetime.date(2026, 12, 16))
             self.assertEqual([], checked['legal'])
 
     # The Federal Register's record and raw text of an Executive order (the 2026-11-01 reads, cut to the fields read).
@@ -10708,7 +10719,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertEqual({'version': version, 'read': '2026-12-16',
                               'sha256': hashlib.sha256(self.FR_TEXT.encode()).hexdigest()},
                              entries['us.eo-14068']['instrument']['consolidated'])
-            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            checked = self.checked_after_review(root, datetime.date(2026, 12, 16))
             self.assertEqual([], checked['legal'])
             # A later order amending it is a new version: the next scan reads the amendment.
             routes['api/v1/documents/2022-05554.json'] = json.dumps(dict(
@@ -10834,7 +10845,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             entries = {entry['id']: entry for entry in json.loads(path.read_text(encoding='utf-8'))['entries']}
             self.assertEqual({'version': version, 'read': '2026-12-16', 'sha256': digest},
                              entries['eu.restrictive-measures']['instrument']['consolidated'])
-            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            checked = self.checked_after_review(root, datetime.date(2026, 12, 16))
             self.assertEqual([], checked['legal'])
 
             def judged(index, day):
@@ -11254,17 +11265,17 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             entries = {entry['id']: entry for entry in legal['entries']}
             self.assertEqual({'version': version, 'read': '2026-12-16', 'sha256': digest},
                              entries['un.dprk']['instrument']['consolidated'])
-            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            checked = self.checked_after_review(root, datetime.date(2026, 12, 16))
             self.assertEqual([], checked['legal'])
             # The guard holds a resolution to its name and to the symbol it was read as.
             entries['un.dprk']['instrument']['name'] = 'Security Council resolution 1874 (2009)'
             path.write_text(json.dumps(legal), encoding='utf-8')
-            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            checked = self.checked_after_review(root, datetime.date(2026, 12, 16))
             self.assertEqual([f"legal entry un.dprk: read as '{version}', which is not Security Council resolution "
                               '1874 (2009)'], checked['legal'])
             entries['un.dprk']['instrument']['name'] = 'Resolution 1718'
             path.write_text(json.dumps(legal), encoding='utf-8')
-            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            checked = self.checked_after_review(root, datetime.date(2026, 12, 16))
             self.assertEqual(['legal entry un.dprk: a resolution is named "Security Council resolution <number> '
                               '(<year>)"'], checked['legal'])
             entries['un.dprk']['instrument']['name'] = 'Security Council resolution 1718 (2006)'
