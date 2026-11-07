@@ -1865,9 +1865,7 @@ TEST_CASE("v5d-h MultifrontalLDLt: big MULTIFRONT indefinite solves (default set
         REQUIRE(ldlt.front_count() > 1); // genuinely multifrontal
         CHECK(indef_solve_residual(a, ldlt, n, &alloc) < 1e-9);
     }
-    // (2) Relaxed-front amalgamation ON (the EXPERIMENTAL knob, default-off): reconstruction-correct here (the
-    // amalgamate_fronts merged structure still factors + solves). It explodes fill on bigger 3D (the OOM that
-    // gates it off by default — needs the CHOLMOD zrelax incremental merge); kept tested at this safe scale.
+    // (2) A large unconditional amalgamation: the merged structure still factors and solves.
     {
         dir::MultifrontalLDLT<double> ldlt(&alloc);
         ldlt.set_amalgamation_relax(32);

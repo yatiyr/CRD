@@ -15,180 +15,112 @@ namespace crd::hesap::direct
 {
 namespace
 {
-// v5d-h RELAXED-FRONT AMALGAMATION — a faithful port of CHOLMOD's `cholmod_super_symbolic` relaxed merge (the
-// lever that closes the front-overhead gap vs MUMPS: fundamental supernodes leave ~n tiny SINGLETON fronts
-// running scalar/BLAS-2 + per-front assembly overhead, while CHOLMOD/MUMPS merge them into far fewer FAT
-// BLAS-3 fronts with bigger fully-summed blocks ⇒ fewer delays). It merges ADJACENT fronts s and s+1 (chains
-// in the supernode etree, tracked by union-find) ONLY when the new explicit zeros stay within the graduated
-// nrelax/zrelax bound — so it is FILL-AWARE and never collapses sparse siblings into a dense front (that
-// exploded the fill → OOM; the earlier subtree-collapse was the wrong model). nrelax/zrelax = CHOLMOD defaults.
-// Merged front rows = [the chain's contiguous pivots] ++ [the chain TOP's contribution block] (the top's CB is
-// the union of all members' external CBs by the etree fill-propagation theorem). Pure function of the pattern
-// ⇒ deterministic ⇒ the moat holds.
+// RELAXED-FRONT AMALGAMATION (v5d-h). Fundamental supernodes leave many tiny fronts, each paying scalar kernels and an
+// assembly; merging a child front into its parent trades explicit zeros for fewer, fatter BLAS-3 fronts (C. Ashcraft,
+// R. Grimes, The influence of relaxed supernode partitions on the multifrontal method, ACM TOMS 15, 1989; I. Duff, J. Reid,
+// The multifrontal solution of indefinite sparse symmetric linear equations, ACM TOMS 9, 1983).
+//
+// Fronts arrive in postorder, so the subtrees of a front lie just below it on a stack of groups: the group beneath the
+// top one may join it exactly when its parent is a member of the top group. A merged front is the group's contiguous
+// pivots and its top member's contribution block, which contains every member's by the elimination tree's containment.
+// A pure function of the pattern, so deterministic.
+struct FrontGroup
+{
+    crd::u32 first = 0;
+    crd::u32 top = 0;
+    crd::u32 pivots = 0;
+    crd::u64 member_storage = 0; // What the members would store apart; the merged front's excess over it is zeros.
+};
+
+[[nodiscard]] crd::u64 front_storage(crd::u64 pivots, crd::u64 rows)
+{
+    return (pivots * rows) - (pivots * (pivots - 1U) / 2U);
+}
+
+// The share of a merged front that may be explicit zeros: generous while a front is small and its overhead outweighs
+// its arithmetic, and falling off quickly as the cost of a zero grows with the front.
+[[nodiscard]] double allowed_zero_share(crd::u32 pivots)
+{
+    const double scaled = static_cast<double>(pivots) / 24.0;
+    const double squared = scaled * scaled;
+    return 0.05 + (0.75 / (1.0 + (squared * squared)));
+}
+
+// `relax` is the pivot count below which a merge is taken whatever it fills.
 MultifrontalSymbolic amalgamate_fronts(const MultifrontalSymbolic& mf, crd::u32 relax, crd::memory::IAllocator* alloc)
 {
-    const crd::u32 nf = mf.nfront;
-    const crd::u32 n = mf.n;
+    const crd::u32 fronts = mf.nfront;
+    crd::containers::Array<FrontGroup> groups(alloc);
+    for (crd::u32 front = 0; front < fronts; ++front)
+    {
+        const crd::u32 rows = mf.row_ptr[front + 1] - mf.row_ptr[front];
+        FrontGroup current{front, front, mf.npiv(front), front_storage(mf.npiv(front), rows)};
+        const crd::u64 contribution = rows - mf.npiv(front);
+        while (!groups.empty())
+        {
+            const FrontGroup& below = groups[groups.size() - 1U];
+            const crd::u32 parent = mf.front_parent[below.top];
+            if (parent < current.first || parent > current.top)
+            {
+                break;
+            }
+            const crd::u32 pivots = below.pivots + current.pivots;
+            const crd::u64 members = below.member_storage + current.member_storage;
+            const crd::u64 merged = front_storage(pivots, pivots + contribution);
+            const double zero_share = (static_cast<double>(merged) - static_cast<double>(members)) /
+                                      static_cast<double>(merged);
+            if (pivots > relax && zero_share > allowed_zero_share(pivots))
+            {
+                break;
+            }
+            current.first = below.first;
+            current.pivots = pivots;
+            current.member_storage = members;
+            groups.pop_back();
+        }
+        groups.push_back(current);
+    }
+
+    crd::containers::Array<crd::u32> group_of(alloc);
+    group_of.resize(fronts);
+    for (crd::u32 group = 0; group < groups.size(); ++group)
+    {
+        for (crd::u32 front = groups[group].first; front <= groups[group].top; ++front)
+        {
+            group_of[front] = group;
+        }
+    }
+
+    const crd::u32 group_count = static_cast<crd::u32>(groups.size());
     MultifrontalSymbolic out(alloc);
-    out.n = n;
-    if (nf == 0 || relax <= 1)
-    {
-        out.nfront = nf;
-        out.pivot_first = mf.pivot_first;
-        out.front_parent = mf.front_parent;
-        out.row_ptr = mf.row_ptr;
-        out.row_idx = mf.row_idx;
-        out.col_ptr = mf.col_ptr;
-        out.col_idx = mf.col_idx;
-        return out;
-    }
-    constexpr crd::u32 empty_id = 0xFFFFFFFFU;
-    const crd::u32 nrelax0 = (relax < 2) ? 4U : relax; // merge unconditionally if merged front cols ≤ this
-    constexpr crd::u32 nrelax1 = 16;
-    constexpr crd::u32 nrelax2 = 48;
-    constexpr double zrelax0 = 0.8;
-    constexpr double zrelax1 = 0.1;
-    constexpr double zrelax2 = 0.05;
-    crd::containers::Array<crd::u32> merged(alloc); // merged[s] = the front s was merged into (empty_id = live)
-    crd::containers::Array<crd::u32> nscol(alloc);  // # columns in the (relaxed) supernode rooted at s
-    crd::containers::Array<crd::u32> snz(alloc);     // # rows in the (relaxed) front's leading column
-    crd::containers::Array<crd::u64> zeros(alloc);   // cumulative explicit zeros in the relaxed front
-    merged.resize(nf);
-    nscol.resize(nf);
-    snz.resize(nf);
-    zeros.resize(nf);
-    for (crd::u32 s = 0; s < nf; ++s)
-    {
-        merged[s] = empty_id;
-        nscol[s] = mf.npiv(s);
-        snz[s] = mf.row_ptr[s + 1] - mf.row_ptr[s]; // entries in s's leading column = its front's row count
-        zeros[s] = 0;
-    }
-    // Merge ADJACENT fronts s and s+1 — and ONLY when s+1 is s's CURRENT parent (a chain; union-find path
-    // compression tracks the parent as lower fronts merge) — when the new explicit zeros stay within the
-    // graduated zrelax bound. Fill-aware ⇒ it merges the nested separator chains into fat BLAS-3 fronts and
-    // NEVER collapses sparse siblings into a dense front (that exploded the fill). Process s high→low.
-    for (crd::u32 s = nf - 1; s-- > 0;) // s = nf-2 downto 0
-    {
-        const crd::u32 par = mf.front_parent[s];
-        if (par >= nf)
-        {
-            continue; // s is a root
-        }
-        crd::u32 ss = par; // find s's current parent (compress the path through dead/merged fronts)
-        while (merged[ss] != empty_id)
-        {
-            ss = merged[ss];
-        }
-        const crd::u32 sparent = ss;
-        for (ss = par; merged[ss] != empty_id;)
-        {
-            const crd::u32 snext = merged[ss];
-            merged[ss] = sparent;
-            ss = snext;
-        }
-        if (sparent != s + 1)
-        {
-            continue; // not adjacent ⇒ no merge (keeps relaxed supernodes contiguous column ranges)
-        }
-        const crd::u32 nscol0 = nscol[s];
-        const crd::u32 nscol1 = nscol[s + 1];
-        const crd::u32 ns = nscol0 + nscol1;
-        crd::u64 totzeros = zeros[s + 1];
-        bool merge = false;
-        if (ns <= nrelax0)
-        {
-            merge = true;
-        }
-        else
-        {
-            // newzeros = nscol0·(snz[s+1] + nscol0 − snz[s]) ≥ 0 (s's CB ⊆ s+1's front ⇒ snz[s]−nscol0 ≤ snz[s+1]).
-            const crd::u64 ext = static_cast<crd::u64>(snz[s + 1]) + nscol0;
-            const crd::u64 newzeros = (ext > snz[s]) ? static_cast<crd::u64>(nscol0) * (ext - snz[s]) : 0U;
-            if (newzeros == 0)
-            {
-                merge = true;
-            }
-            else
-            {
-                const crd::u64 totz = totzeros + newzeros;
-                const crd::u64 totsize = static_cast<crd::u64>(ns) * (ns + 1) / 2 +
-                                         static_cast<crd::u64>(ns) * (snz[s + 1] - nscol1);
-                const double z = static_cast<double>(totz) / static_cast<double>(totsize);
-                merge = (ns <= nrelax1 && z < zrelax0) || (ns <= nrelax2 && z < zrelax1) || (z < zrelax2);
-                totzeros = totz;
-            }
-        }
-        if (merge)
-        {
-            zeros[s] = totzeros;
-            merged[s + 1] = s;
-            snz[s] = nscol0 + snz[s + 1];
-            nscol[s] += nscol[s + 1];
-        }
-    }
-    // Build the relaxed fronts. Each LIVE front (merged[s]==empty) is a representative spanning the contiguous
-    // front range [s, e) up to the next live front e; its TOP (parent-most member) is e-1, whose CB is the
-    // merged front's CB (etree fill-propagation: every member's external connection also reaches the chain top).
-    crd::containers::Array<crd::u32> new_id(alloc);
-    new_id.resize(nf);
-    crd::u32 newnf = 0;
-    for (crd::u32 s = 0; s < nf; ++s)
-    {
-        new_id[s] = (merged[s] == empty_id) ? newnf++ : empty_id;
-    }
-    crd::containers::Array<crd::u32> rep(alloc); // rep[f] = live representative of f's group (lowest index)
-    rep.resize(nf);
-    for (crd::u32 f = 0; f < nf; ++f)
-    {
-        crd::u32 r = f;
-        while (merged[r] != empty_id)
-        {
-            r = merged[r];
-        }
-        rep[f] = r;
-    }
-    out.nfront = newnf;
-    out.pivot_first.resize(static_cast<crd::usize>(newnf) + 1);
-    out.front_parent.resize(newnf);
-    out.row_ptr.resize(static_cast<crd::usize>(newnf) + 1);
-    out.col_ptr.resize(static_cast<crd::usize>(newnf) + 1);
+    out.n = mf.n;
+    out.nfront = group_count;
+    out.pivot_first.resize(static_cast<crd::usize>(group_count) + 1);
+    out.front_parent.resize(group_count);
+    out.row_ptr.resize(static_cast<crd::usize>(group_count) + 1);
+    out.col_ptr.resize(static_cast<crd::usize>(group_count) + 1);
     out.row_ptr[0] = 0;
     out.col_ptr[0] = 0;
-    crd::u32 g = 0;
-    for (crd::u32 s = 0; s < nf; ++s)
+    for (crd::u32 group = 0; group < group_count; ++group)
     {
-        if (merged[s] != empty_id)
+        const crd::u32 top = groups[group].top;
+        out.pivot_first[group] = mf.pivot_first[groups[group].first];
+        for (crd::u32 pivot = mf.pivot_first[groups[group].first]; pivot < mf.pivot_first[top + 1]; ++pivot)
         {
-            continue; // only live representatives build a new front
+            out.row_idx.push_back(pivot);
+            out.col_idx.push_back(pivot);
         }
-        crd::u32 e = s + 1;
-        while (e < nf && merged[e] != empty_id)
+        for (crd::u32 entry = mf.row_ptr[top] + mf.npiv(top); entry < mf.row_ptr[top + 1]; ++entry)
         {
-            ++e;
+            out.row_idx.push_back(mf.row_idx[entry]);
+            out.col_idx.push_back(mf.row_idx[entry]);
         }
-        const crd::u32 top = e - 1; // parent-most member of the chain group [s, e)
-        const crd::u32 first = mf.pivot_first[s];
-        const crd::u32 endp = mf.pivot_first[e];
-        out.pivot_first[g] = first;
-        for (crd::u32 c = first; c < endp; ++c) // merged fully-summed pivots (contiguous, ascending)
-        {
-            out.row_idx.push_back(c);
-            out.col_idx.push_back(c);
-        }
-        const crd::u32 cb0 = mf.row_ptr[top] + mf.npiv(top); // the top front's CB = the merged front's CB
-        for (crd::u32 q = cb0; q < mf.row_ptr[top + 1]; ++q)
-        {
-            out.row_idx.push_back(mf.row_idx[q]);
-            out.col_idx.push_back(mf.row_idx[q]);
-        }
-        out.row_ptr[g + 1] = static_cast<crd::u32>(out.row_idx.size());
-        out.col_ptr[g + 1] = static_cast<crd::u32>(out.col_idx.size());
-        const crd::u32 par = mf.front_parent[top];
-        out.front_parent[g] = (par >= nf) ? ordering::kNoParent : new_id[rep[par]];
-        ++g;
+        out.row_ptr[group + 1] = static_cast<crd::u32>(out.row_idx.size());
+        out.col_ptr[group + 1] = static_cast<crd::u32>(out.col_idx.size());
+        const crd::u32 parent = mf.front_parent[top];
+        out.front_parent[group] = parent >= fronts ? ordering::kNoParent : group_of[parent];
     }
-    out.pivot_first[newnf] = n;
+    out.pivot_first[group_count] = mf.n;
     return out;
 }
 } // namespace
@@ -205,7 +137,7 @@ MultifrontalSymbolic build_ldlt_symbolic(const sparse::SparsePattern& a, crd::me
     MultifrontalSymbolic mf = build_symmetric_multifrontal_symbolic(a, alloc);
     if (relax > 1)
     {
-        return amalgamate_fronts(mf, relax, alloc); // EXPERIMENTAL (default OFF — see m_amalg_relax)
+        return amalgamate_fronts(mf, relax, alloc);
     }
     return mf;
 }

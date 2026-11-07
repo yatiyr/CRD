@@ -134,9 +134,9 @@ public:
     // of looser element growth (validate via the solve residual). Set BEFORE factorize. Moat-safe (static).
     void set_pivot_threshold(double alpha) noexcept { m_pivot_alpha = alpha; }
 
-    // Relaxed-front amalgamation parameter (v5d-h): collapse each maximal subtree with ≤ relax pivots into one
-    // front (the MUMPS-class lever — fat BLAS-3 fronts vs tiny fundamental-supernode singletons). Set BEFORE
-    // factorize. relax ≤ 1 ⇒ fundamental supernodes (no amalgamation). Deterministic ⇒ the moat holds.
+    // Relaxed-front amalgamation parameter (v5d-h): the pivot count up to which a child front joins its parent whatever
+    // it fills (the fat BLAS-3 fronts against tiny fundamental-supernode singletons). Set BEFORE factorize. relax <= 1 is
+    // fundamental supernodes, no amalgamation. Deterministic, so the moat holds.
     void set_amalgamation_relax(crd::u32 relax) noexcept { m_amalg_relax = relax; }
 
     [[nodiscard]] bool solve(crd::containers::Span<T> rhs, crd::usize nrhs) const override; // v5d-d
@@ -190,9 +190,8 @@ private:
     // by the solve's iterative refinement + backward-error guard (accurate-or-flagged). Textbook BK = 0.64
     // (kBunchKaufmanAlpha); raise via set_pivot_threshold for ill-conditioned systems if IR fails to converge.
     double m_pivot_alpha = 0.001;
-    // Relaxed-front amalgamation parameter (v5d-h) = CHOLMOD's nrelax0 (merge adjacent chain fronts with ≤ this
-    // many combined cols unconditionally; bigger merges via the fill-aware zrelax test). Default 4 = CHOLMOD's
-    // default — fat BLAS-3 fronts vs tiny fundamental-supernode singletons, fill-bounded (no OOM). 1 ⇒ off.
+    // Relaxed-front amalgamation parameter (v5d-h): fronts merge unconditionally up to this many pivots, and past it
+    // by the zero share amalgamate_fronts allows. 1 is off.
     crd::u32 m_amalg_relax = 4;
     crd::usize m_info = 0; // 0 = ok; else (unresolved-pivot global index + 1) — factor INVALID (singular)
     bool m_hermitian = false; // LDLᴴ (true) vs LDLᵀ (false); always false for real T
