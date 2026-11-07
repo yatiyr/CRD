@@ -93,6 +93,10 @@ option(CRD_BUILD_CLOCK_VS_NTPD "Build the clock filter's oracle against ntpd" OF
 # (cmake/pins.json networked-physics-snapshot), fetched on demand. Never in a shipped build;
 # crd-hesap-quantize-peer-tests and crd-hesap-quantize-board of the tree that turns it on.
 option(CRD_BUILD_QUANTIZE_VS_PEERS "Build the quantisation oracle and board against its two peers" OFF)
+# HESAP-NET's interpolation against the same Snapshot.h and vectorial's quat4f.h from the same commit (cmake/pins.json
+# vectorial-quat4f), fetched on demand. Never in a shipped build; crd-hesap-motion-peer-tests and crd-hesap-motion-board
+# of the tree that turns it on.
+option(CRD_BUILD_MOTION_VS_PEERS "Build the replicated-motion oracle and board against its peer" OFF)
 set(CRD_NASM "$ENV{CRD_NASM}" CACHE FILEPATH "The pinned NASM on Linux (scripts/install-nasm.py), for ISA-L's assembly")
 # The dispatch-cost board (ADR-0134 §8): a crd kernel table's call against Google Highway's HWY_DYNAMIC_DISPATCH, from
 # the pinned Highway release (cmake/pins.json highway, fetched on demand into build/_deps) built by its own CMake, as
@@ -1615,6 +1619,19 @@ if(CRD_BUILD_QUANTIZE_VS_PEERS)
     crd_add_pinned_package(serialize DOWNLOAD_ONLY YES)
     crd_add_pinned_package(networked-physics-snapshot DOWNLOAD_ONLY YES DOWNLOAD_NO_EXTRACT YES)
     set(CRD_NETWORKED_PHYSICS_SNAPSHOT "${networked-physics-snapshot_SOURCE_DIR}/Snapshot.h")
+endif()
+
+# ----- The replicated-motion peer: its files, built by tests/numerics/hesap-net -----
+if(CRD_BUILD_MOTION_VS_PEERS)
+    if(NOT CRD_BUILD_TESTS)
+        message(FATAL_ERROR "[motion-vs-peers] the replicated-motion oracle needs CRD_BUILD_TESTS")
+    endif()
+    if(NOT CRD_BUILD_QUANTIZE_VS_PEERS)
+        crd_add_pinned_package(networked-physics-snapshot DOWNLOAD_ONLY YES DOWNLOAD_NO_EXTRACT YES)
+        set(CRD_NETWORKED_PHYSICS_SNAPSHOT "${networked-physics-snapshot_SOURCE_DIR}/Snapshot.h")
+    endif()
+    crd_add_pinned_package(vectorial-quat4f DOWNLOAD_ONLY YES DOWNLOAD_NO_EXTRACT YES)
+    set(CRD_VECTORIAL_QUAT4F "${vectorial-quat4f_SOURCE_DIR}/quat4f.h")
 endif()
 
 # ----- The network estimators' libwebrtc peer: its files, built by tests/numerics/hesap-net -----

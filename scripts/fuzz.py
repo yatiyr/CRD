@@ -91,6 +91,8 @@ TARGETS = {
                          'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-estimators'},
     'hesap-clock': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus-clock',
                     'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-clock'},
+    'hesap-motion': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus-motion',
+                     'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-motion'},
     'hesap-quantize': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus-quantize',
                        'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-quantize'},
 }

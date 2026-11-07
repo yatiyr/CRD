@@ -1,3 +1,49 @@
+# HESAP-NET's replicated-motion peer (CRD_BUILD_MOTION_VS_PEERS, the root CMakeLists): the snapshot interpolators cut
+# verbatim from the pinned Snapshot.h and nlerp and slerp from the pinned quat4f.h, with the engine's floating-point
+# contract. crd-hesap-motion-peer-tests holds hesap-net to them bit for bit; crd-hesap-motion-board times them.
+if(CRD_BUILD_MOTION_VS_PEERS)
+    file(READ "${CRD_NETWORKED_PHYSICS_SNAPSHOT}" snapshot_header)
+    string(FIND "${snapshot_header}" "static void InterpolateSnapshot_Linear(" interpolation_slice_begin)
+    string(FIND "${snapshot_header}" "struct Snapshot\n{" interpolation_slice_end)
+    if(interpolation_slice_begin EQUAL -1 OR interpolation_slice_end LESS_EQUAL interpolation_slice_begin)
+        message(FATAL_ERROR "[motion-vs-peers] the interpolators not found in ${CRD_NETWORKED_PHYSICS_SNAPSHOT}")
+    endif()
+    math(EXPR interpolation_slice_length "${interpolation_slice_end} - ${interpolation_slice_begin}")
+    string(SUBSTRING "${snapshot_header}" ${interpolation_slice_begin} ${interpolation_slice_length} interpolation_slice)
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/motion-slice/networked_physics_interpolation_slice.inc"
+         CONTENT "${interpolation_slice}" @ONLY)
+
+    file(READ "${CRD_VECTORIAL_QUAT4F}" quat4f_header)
+    string(FIND "${quat4f_header}" "static inline quat4f nlerp(" quat4f_slice_begin)
+    string(FIND "${quat4f_header}" "static inline quat4f multiply(" quat4f_slice_end)
+    if(quat4f_slice_begin EQUAL -1 OR quat4f_slice_end LESS_EQUAL quat4f_slice_begin)
+        message(FATAL_ERROR "[motion-vs-peers] nlerp and slerp not found in ${CRD_VECTORIAL_QUAT4F}")
+    endif()
+    math(EXPR quat4f_slice_length "${quat4f_slice_end} - ${quat4f_slice_begin}")
+    string(SUBSTRING "${quat4f_header}" ${quat4f_slice_begin} ${quat4f_slice_length} quat4f_slice)
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/motion-slice/vectorial_quat4f_slice.inc"
+         CONTENT "${quat4f_slice}" @ONLY)
+
+    add_library(crd-motion-peers STATIC motion_peers.cpp)
+    target_include_directories(crd-motion-peers PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/motion-slice")
+    target_include_directories(crd-motion-peers PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_features(crd-motion-peers PUBLIC cxx_std_20)
+    target_compile_options(crd-motion-peers PRIVATE ${CRD_FP_CONTRACT_OPTIONS} $<$<CXX_COMPILER_ID:GNU,Clang>:-w>)
+    set_target_properties(crd-motion-peers PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+
+    add_executable(crd-hesap-motion-peer-tests test_motion_peers.cpp)
+    target_link_libraries(crd-hesap-motion-peer-tests PRIVATE
+        crd-core crd-containers crd-hesap-net crd-motion-peers Catch2::Catch2WithMain)
+    target_include_directories(crd-hesap-motion-peer-tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/tests/support/kernel-levels")
+    crd_discover_tests(crd-hesap-motion-peer-tests)
+
+    add_executable(crd-hesap-motion-board motion_board.cpp)
+    target_link_libraries(crd-hesap-motion-board PRIVATE crd-core crd-containers crd-hesap-net crd-motion-peers)
+    target_include_directories(crd-hesap-motion-board PRIVATE "${PROJECT_SOURCE_DIR}/tests/support/kernel-levels")
+    add_test(NAME crd-hesap-motion-board-smoke COMMAND crd-hesap-motion-board --quick)
+    set_tests_properties(crd-hesap-motion-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
+endif()
 add_executable(crd-hesap-net-tests
     test_erasure.cpp
     test_flexfec.cpp
@@ -6,6 +52,7 @@ add_executable(crd-hesap-net-tests
     test_estimators.cpp
     test_clock.cpp
     test_quantize.cpp
+    test_motion.cpp
 )
 
 target_link_libraries(crd-hesap-net-tests PRIVATE
@@ -14,6 +61,9 @@ target_link_libraries(crd-hesap-net-tests PRIVATE
     crd-hesap-net
     Catch2::Catch2WithMain
 )
+
+# test_motion.cpp restates the kernels' expressions, whose bits assume no contraction, as the kernels' own units do.
+target_compile_options(crd-hesap-net-tests PRIVATE ${CRD_FP_CONTRACT_OPTIONS})
 
 crd_enable_default_pch(crd-hesap-net-tests)
 

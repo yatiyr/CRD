@@ -330,7 +330,8 @@
                 "CRD_BUILD_ERASURE_VS_OPENFEC": "ON",
                 "CRD_BUILD_ESTIMATORS_VS_WEBRTC": "ON",
                 "CRD_BUILD_CLOCK_VS_NTPD": "ON",
-                "CRD_BUILD_QUANTIZE_VS_PEERS": "ON"
+                "CRD_BUILD_QUANTIZE_VS_PEERS": "ON",
+                "CRD_BUILD_MOTION_VS_PEERS": "ON"
             }
         },
         {

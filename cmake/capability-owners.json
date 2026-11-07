@@ -694,6 +694,20 @@
       ]
     },
     {
+      "id": "numerics.motion-sampling",
+      "summary": "Sampling replicated motion: interpolation, cubic Hermite, extrapolation, nlerp and slerp as dispatched batches, bit-exact with networked-physics' snapshot interpolation where that reference is defined, and the rewind history a server's lag compensation and a client's playout delay sample within declared limits.",
+      "owner": "hesap-net",
+      "api": [
+        "engine/numerics/hesap-net/include/crd/hesap/net/motion.hpp",
+        "engine/numerics/hesap-net/include/crd/hesap/net/rewind.hpp"
+      ],
+      "consumers": [
+        "4.2c",
+        "NET-LIVE",
+        "NET-SCALE"
+      ]
+    },
+    {
       "id": "numerics.quantization",
       "summary": "Quantisation of replicated state on the wire: bounded floats of the fewest bits a resolution takes and smallest-three quaternions, bit-exact with mas-bandwidth/serialize and networked-physics and dispatched per CPU level.",
       "owner": "hesap-net",

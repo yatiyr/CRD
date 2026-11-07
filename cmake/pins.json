@@ -330,6 +330,19 @@
       "provenance": "Glenn Fiedler's GDC 2015 networked physics demo, the source of the smallest-three method, at the repository's last commit; one file, because the repository's assets and libraries weigh 350 MB (read 2026-11-07)",
       "note": "The reference of hesap-net's smallest-three quaternions (HESAP-NET): compressed_quaternion and compressed_quaternion_64, cut verbatim from src/game/Snapshot.h at configure time and compiled by tests/numerics/hesap-net/quantize_peers.cpp on its few stand-ins; never in a shipped build."
     },
+    "vectorial-quat4f": {
+      "version": "fe19b74b",
+      "repository": "mas-bandwidth/networked-physics-gdc-2015",
+      "commit": "fe19b74bf78ae0a11a6748eab229ae9c232c2690",
+      "url": "https://raw.githubusercontent.com/mas-bandwidth/networked-physics-gdc-2015/fe19b74bf78ae0a11a6748eab229ae9c232c2690/external/vectorial/quat4f.h",
+      "file": "quat4f.h",
+      "sha256": "69fdc7e439b1187c6abbafea5cb972245a8508eb0fdf438af1a760e4fdb36fc2",
+      "size": 4028,
+      "license": "BSD-2-Clause",
+      "gated": "CRD_BUILD_MOTION_VS_PEERS",
+      "provenance": "Mikko Lehtonen's vectorial as the GDC 2015 networked physics demo carries it, at the commit of Snapshot.h above; one file, as that pin is (read 2026-11-07)",
+      "note": "The reference of hesap-net's nlerp and slerp (HESAP-NET): both cut verbatim from external/vectorial/quat4f.h at configure time and compiled by tests/numerics/hesap-net/motion_peers.cpp on stand-ins with the arithmetic of vectorial's scalar backend; never in a shipped build."
+    },
     "openfec": {
       "version": "1.4.2.12",
       "repository": "roc-streaming/openfec",

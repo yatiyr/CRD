@@ -1,7 +1,7 @@
 # crd-hesap-net -- the network and media math of HESAP-NET: packet erasure codes (RFC 5510 Reed-Solomon, RFC 8627
 # FlexFEC, RFC 2198 RED, interleavers) with the dispatched GF(2^8) kernels, the RTT, jitter, delay-trend and rate
-# estimators, the clock offset and drift filters and the quantisation of replicated state (ADR-0065 §29 amendment of
-# 2026-11-07).
+# estimators, the clock offset and drift filters, the quantisation of replicated state and its sampling between and
+# past snapshots (ADR-0065 §29 amendment of 2026-11-07).
 #
 # Its one rule is its closure: crd-net links it, so it stays on crd-core, crd-containers and crd-math and reaches no
 # job system.
@@ -38,3 +38,8 @@ crd_add_cpu_kernels(crd-hesap-net NAME erasure LEVELS portable sse2 avx2 avx512 
 # lists them.
 crd_add_cpu_kernels(crd-hesap-net NAME quantize LEVELS portable sse2 avx2 avx512 neon INCLUDES crd-math
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/quantize_kernels.cpp")
+
+# Interpolation and extrapolation of replicated state, one body over each CPU level's lanes;
+# src/motion_kernel_dispatch.cpp lists them.
+crd_add_cpu_kernels(crd-hesap-net NAME motion LEVELS portable sse2 avx2 avx512 neon INCLUDES crd-math
+                    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/motion_kernels.cpp")
