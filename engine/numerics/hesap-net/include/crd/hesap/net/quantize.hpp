@@ -233,11 +233,15 @@ namespace detail
         c = c / length;
     }
     const crd::f32 big = std::sqrt(over ? 0.0F : remainder);
+    // The largest goes back at its index; the other three fill the rest in order.
     const auto index = static_cast<crd::u32>((word >> (3U * bits)) & 3U);
-    xyzw[0] = (index == 0U) ? big : a;
-    xyzw[1] = (index == 0U) ? a : ((index == 1U) ? big : b);
-    xyzw[2] = (index == 3U) ? c : ((index == 2U) ? big : b);
-    xyzw[3] = (index == 3U) ? big : c;
+    const crd::f32 others[3] = {a, b, c};
+    crd::u32 next = 0U;
+    for (crd::u32 slot = 0U; slot < 4U; ++slot)
+    {
+        xyzw[slot] = (slot == index) ? big : others[next];
+        next += (slot == index) ? 0U : 1U;
+    }
     return !(remainder < format.smallest_remainder) && (word >> smallest_three_word_bits(format)) == 0U;
 }
 

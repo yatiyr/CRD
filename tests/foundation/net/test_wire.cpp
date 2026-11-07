@@ -549,12 +549,12 @@ TEST_CASE("Older and newer writers read as the schema's revisions say", "[net][w
 
 TEST_CASE("An extensible struct's length takes the bytes its body needs", "[net][wire]")
 {
-    static const u8 data[300] = {};
+    static const u8 kZeros[300] = {};
     for (const usize size : {usize{0}, usize{120}, usize{127}, usize{128}, usize{300}})
     {
         LongBody message{};
         message.before    = 5U;
-        message.body.data = ConstSpan<u8>(data, size);
+        message.body.data = ConstSpan<u8>(kZeros, size);
         message.after     = 17U;
         u8         out[512] = {};
         const auto wire     = encoded(message, kMinor, out, sizeof(out));

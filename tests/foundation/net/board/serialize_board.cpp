@@ -109,7 +109,11 @@ void normalize(float* q)
 
 float clamp(float value, float low, float high)
 {
-    return value < low ? low : (value > high ? high : value);
+    if (value < low)
+    {
+        return low;
+    }
+    return (value > high) ? high : value;
 }
 
 void make_world(Rng& rng, PlainSnapshot& world)
@@ -361,7 +365,7 @@ const PeerArm kCrdArm{"crd-net (generated)", "bits; schema bounds, smallest thre
 
 // ---- Agreement: each arm's decoded message against the source (and crd-net's against serialize's) ------------------
 
-enum class Law
+enum class Law : u8
 {
     Exact,     // natural types: every float comes back as it went
     Rounded,   // serialize's and crd-net's: a float within half a step, the smallest three within its error
@@ -619,31 +623,31 @@ int main(int argc, char** argv)
     const PeerArm* const arms[] = {&kCrdArm, &serialize_board::kSerializeArm, &serialize_board::kBitseryArm,
                                    &serialize_board::kZppBitsArm, &serialize_board::kProtozeroArm};
     const Law laws[] = {Law::Rounded, Law::Rounded, Law::Truncated, Law::Exact, Law::Exact};
-    constexpr usize kArms = sizeof(arms) / sizeof(arms[0]);
+    constexpr usize arm_count = sizeof(arms) / sizeof(arms[0]);
 
     Array<u8> slots;
     slots.resize(most * kSlotBytes);
     Array<usize> sizes;
     sizes.resize(most);
-    Array<PlainSnapshot> snapshot_out[kArms];
-    Array<PlainCommand> command_out[kArms];
-    Array<PlainChat> chat_out[kArms];
-    for (usize a = 0U; a < kArms; ++a)
+    Array<PlainSnapshot> snapshot_out[arm_count];
+    Array<PlainCommand> command_out[arm_count];
+    Array<PlainChat> chat_out[arm_count];
+    for (usize a = 0U; a < arm_count; ++a)
     {
         snapshot_out[a].resize(ticks);
         command_out[a].resize(commands);
         chat_out[a].resize(chats);
     }
-    Cost snapshot_cost[kArms];
-    Cost command_cost[kArms];
-    Cost chat_cost[kArms];
+    Cost snapshot_cost[arm_count];
+    Cost command_cost[arm_count];
+    Cost chat_cost[arm_count];
     bool failed = false;
-    bool strict[kArms] = {};
+    bool strict[arm_count] = {};
     u8 scratch[kSlotBytes + 1U];
 
     // Untimed: each arm once, so a first call's one-time work (crd-net's kernel resolution and its self-check, a
     // library's tables) is no round's.
-    for (usize a = 0U; a < kArms; ++a)
+    for (usize a = 0U; a < arm_count; ++a)
     {
         const usize size = arms[a]->encode_snapshot(snapshots[0], scratch, kSlotBytes);
         g_sink = g_sink + size + (arms[a]->decode_snapshot(scratch, size, snapshot_out[a][0]) ? 1U : 0U);
@@ -651,7 +655,7 @@ int main(int argc, char** argv)
 
     for (u32 round = 0U; round < rounds; ++round)
     {
-        for (usize a = 0U; a < kArms; ++a)
+        for (usize a = 0U; a < arm_count; ++a)
         {
             const PeerArm& arm = *arms[a];
             bool arm_failed = false;
@@ -674,7 +678,7 @@ int main(int argc, char** argv)
         }
     }
 
-    for (usize a = 0U; a < kArms; ++a)
+    for (usize a = 0U; a < arm_count; ++a)
     {
         const char* kind = nullptr;
         usize at = 0U;
@@ -721,11 +725,11 @@ int main(int argc, char** argv)
 
     std::printf("| Message | Arm | bytes | bytes / crd-net | encode ns | decode ns | encode / crd-net | "
                 "decode / crd-net | allocations |\n|---|---|---|---|---|---|---|---|---|\n");
-    print_costs("snapshot, 64 entities", ticks, arms, snapshot_cost, kArms);
-    print_costs("input command", commands, arms, command_cost, kArms);
-    print_costs("chat", chats, arms, chat_cost, kArms);
+    print_costs("snapshot, 64 entities", ticks, arms, snapshot_cost, arm_count);
+    print_costs("input command", commands, arms, command_cost, arm_count);
+    print_costs("chat", chats, arms, chat_cost, arm_count);
     std::printf("\nArms: ");
-    for (usize a = 0U; a < kArms; ++a)
+    for (usize a = 0U; a < arm_count; ++a)
     {
         std::printf("%s%s (%s; a snapshot cut or extended by a byte: %s)", a == 0U ? "" : "; ", arms[a]->name,
                     arms[a]->format, strict[a] ? "refused" : "accepted");

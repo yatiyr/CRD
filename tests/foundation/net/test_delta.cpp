@@ -618,6 +618,7 @@ TEST_CASE("Every damaged delta is refused or rebuilds a valid message, and trunc
 {
     cont::Array<Entity> from{entity(1U), entity(3U), entity(8U)};
     cont::Array<Entity> to = from;
+    REQUIRE(to.data() != nullptr); // what GCC's link-time -Wnull-dereference cannot see of a copy
     to[0].pose.x = 77;
     to[1].tag = "tag";
     to[1].has_tag = true;
