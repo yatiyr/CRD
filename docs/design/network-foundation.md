@@ -1418,7 +1418,7 @@ from one authored schema through `scripts/gen-wire-schemas.py`; nothing hand-wri
   with the C++ it emits, computes known answers: `test_wire.cpp` holds the generated encoder and decoder to its bytes and
   its verdicts on damaged messages at every minor, older and newer writers included.
 
-Later slices of [NET.3](../ROADMAP.md#slice-net.3): baseline deltas with a changed-field mask; dictionary compression for reliable streams and entropy coding for snapshots
+Later slices of [NET.3](../ROADMAP.md#slice-net.3): [baseline deltas](#baseline-deltas) landed; dictionary compression for reliable streams and entropy coding for snapshots
 through crd-compression (ratio and output caps, T09); padding policies (T15); the plaintext integrity hash and state-hash
 exchange (T12); the budget board. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
 a schema with quantised fields links `crd-net-quantized`, whose header sits outside crd-net's installed headers.
@@ -1481,6 +1481,57 @@ transport hands these functions a stream's or a datagram's plaintext after S4 an
   hostile path (loss to 30%, duplication, reordering) delivering each message intact at most once; quotas under threads.
   `crd-fuzz-net-admission`: a restated layout and rule decide every verdict and frame, splits read as whole does, every budget
   comes back. Source mutations, each caught ([session](../sessions/2026-11-07-net-3-admission.md)).
+
+<a id="baseline-deltas"></a>
+### Baseline deltas
+
+**S28. What changed since a message both sides hold** (NET.3, threats T07, T09 and T12;
+[delta.hpp](../../engine/foundation/net/include/crd/net/delta.hpp)). A message the schema declares `delta` travels as the
+fields that differ from a baseline. The codec works on encoded bytes, not values: the baseline is the very bytes the receiver
+holds, so a quantised field compares by its code and is never quantised twice, unchanged fields need no re-encoding, and a
+receiver rebuilds one ordinary encoding of the message that the generated decoder then validates and views, so a delta adds no
+second decoder and no lifetime on a baseline. The generator writes one table per message and one interpreter (`delta_encode`,
+`delta_apply`) walks them. No allocation.
+
+- **The layout.** Each field a writer's revision has gets one changed bit before it, in field order, so a newer writer's
+  fields land after everything an older reader knows and revisions compose as they do for messages. A changed optional then
+  says whether it is present, and a value that appears travels whole. A changed fixed-width field is its new code, a changed
+  single bit nothing more (its bit is its news), a changed varint its value, bytes and text their whole field. A field declaring
+  `delta_group` sends the difference instead: wrapped to the field's width and folded so a small step either way is a small
+  number, in groups of that many bits. A plain struct recurses. An extensible struct aligns and carries its delta's length, so an
+  older reader steps over what it does not know.
+- **Lists.** By position: the count, a changed bit per shared element, then new elements whole. With `delta_key` the list is a
+  map: the head field of a plain struct, a uint, range or varuint, ascends strictly (encoders and decoders refuse anything else,
+  `KeyOrder`). A merge walks both sides: `0` keep, `10` changed (the key costs nothing), `110` insert, `111` remove, and once
+  either side runs out what is left needs no operation. An insertion must stand below the next old key and above everything
+  already passed, so a removal followed by re-inserting the key has no encoding.
+- **One delta has one encoding.** A field said to have changed that has not is `Unchanged`, at every kind and depth; every
+  number is shortest-form and every padding bit zero. A delta of nothing is legal and is the bits it takes to say so. A reader
+  older than its writer takes what it knows and ignores the rest, and its result decodes at the writer's revision.
+- **Hostile input.** Work is linear in the baseline and the delta: every element costs a delta bit or consumes baseline. What
+  comes out passes the generated decoder before anything keeps it. Output is held to the message's most by the fixed room it is
+  written into; the reader's charge for what a small delta expands to joins the decompression quota with the next slice.
+- **The frame's body.** `[sequence, 16 bits][distance back to the baseline, varuint, zero for a whole message][hash of the whole
+  message, 32 bits][delta or message]`. A delta message's description bounds this body, so admission (S27) needs no new rule;
+  `write_frame` and `decode_frame` refuse a delta message, whose body only `DeltaWriter` and `DeltaReader` read.
+- **Baselines.** `BaselineStore` keeps encoded messages by sequence in memory fixed at construction: a ring of bytes and a table
+  of slots, the oldest given up. `DeltaWriter` (one per peer and stream) sends what changed since the newest message the peer
+  acknowledged that the store still holds, or the whole message when there is none or the delta is no smaller, which also bounds
+  how long it spends: past the message's size it gives up. A server encodes a tick once and one store serves every client.
+  `DeltaReader` drops what is not newer than what it has, so a repeat or an overtaken delta costs nothing. `BaselineAck` on
+  session control names what it holds; an acknowledgement of something never written, or older than the newest, changes nothing.
+- **Recovery needs no message.** A writer only ever uses a baseline its peer acknowledged and the reader acknowledges only what it
+  kept, so loss, reordering and repeats leave the two agreeing on some baseline; if the reader has since given it up it says
+  `MissingBaseline` while its acknowledgement of its newest message moves the writer on, or the writer has given that one up too
+  and sends the message whole.
+- **Integrity.** The hash is taken over the whole message at the writer and checked on what the reader rebuilt, so it catches a
+  writer's memory fault or a baseline that differs, which the AEAD tag cannot see (`Mismatch`: nothing delivered or kept). A
+  reader older than its writer cannot rebuild the fields it lacks, so it validates what it rebuilt instead.
+- **Evidence.** The generator's reference interpreter computes values, not bits, and shares no code with the C++: bytes and
+  verdicts for every message at every revision, damaged deltas and rebuilt messages included. `test_delta.cpp` spells each form's
+  exact bits and each refusal, and runs writers and readers on a path with up to 70% loss, repeats and reordering.
+  `crd-fuzz-wire-delta-test`: a rebuilt message's delta is the input, and any two messages' delta rebuilds the second.
+  `crd-fuzz-net-delta-stream`: any bodies, and a script of deliveries ([session](../sessions/2026-11-07-net-3-baseline-deltas.md)).
 
 <a id="key-logging"></a>
 ### Key logging
