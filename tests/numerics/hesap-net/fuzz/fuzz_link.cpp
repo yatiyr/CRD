@@ -572,7 +572,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
 
 void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
 {
-    const i64 far = std::numeric_limits<i64>::max();
+    constexpr i64 far = std::numeric_limits<i64>::max();
     Seed(0U).u32s({42949673U, 0U, 7U}).words(sink, "random");
     Seed(0U).u32s({0xFFFFFFFFU, 0xFFFFFFFFU, 7U}).words(sink, "random-full");
     Seed(0U).u32s({429496729U, 1073741824U, 7U}).words(sink, "random-correlated");
@@ -597,7 +597,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         .i16s({-16384, -1, 8192, 32767})
         .words(sink, "delay-table");
     Seed(4U).i64s({-far}).i32s({std::numeric_limits<i32>::max()}).u32s({0U}).u8s({0U}).words(sink, "delay-extremes");
-    const auto process = [far](u8 shape, i64 mean, i64 deviation, f64 correlation, f64 tail) -> Seed
+    const auto process = [](u8 shape, i64 mean, i64 deviation, f64 correlation, f64 tail) -> Seed
     {
         Seed seed(5U);
         seed.u8s({shape}).i64s({mean, deviation}).f64s({correlation, tail, 0.75}).i64s({0, far});
