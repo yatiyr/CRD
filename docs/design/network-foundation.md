@@ -1418,9 +1418,9 @@ from one authored schema through `scripts/gen-wire-schemas.py`; nothing hand-wri
   with the C++ it emits, computes known answers: `test_wire.cpp` holds the generated encoder and decoder to its bytes and
   its verdicts on damaged messages at every minor, older and newer writers included.
 
-Later slices of [NET.3](../ROADMAP.md#slice-net.3): [baseline deltas](#baseline-deltas) landed; dictionary compression for reliable streams and entropy coding for snapshots
-through crd-compression (ratio and output caps, T09); padding policies (T15); the plaintext integrity hash and state-hash
-exchange (T12); the budget board. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
+Later slices of [NET.3](../ROADMAP.md#slice-net.3): [baseline deltas](#baseline-deltas), [the integrity hash](#integrity-hash),
+[padding](#padding) and [the state-hash exchange](#state-hashes) landed; dictionary compression for reliable streams and
+entropy coding for snapshots through crd-compression (ratio and output caps, T09); the budget board. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
 a schema with quantised fields links `crd-net-quantized`, whose header sits outside crd-net's installed headers.
 
 <a id="frames"></a>
@@ -1434,11 +1434,12 @@ transport hands these functions a stream's or a datagram's plaintext after S4 an
 
 - **The layout.** Every number is the wire formats' 7-bit varuint, shortest form only. A carrier names its route once: the
   channel's number in the session's flat table of its schemas' channels, times four, plus the form (one byte for up to 32
-  channels). A stream is that route, then `[message][length][object?][body]` frames. A datagram is the route, then one
-  message running to its end (form Whole, no length), two or more sized frames (Listed: one is Whole's, so one message has
-  one encoding), or one fragment (`[message][total][object?][chunk][sequence][index][piece]`). The object is there only
-  when the message has an operation bit. The length comes before it so a reader can step over a message a newer writer
-  added, whose description it lacks.
+  channels). A stream is that route, then `[message][length][object?][hash?][body]` frames. A datagram is the route, then
+  one message running to its end (form Whole, no length), two or more sized frames (Listed: one is Whole's, so one message
+  has one encoding), or one fragment (`[message][total][object?][hash?][chunk][sequence][index][piece]`). The object is
+  there only when the message has an operation bit, the hash as [S29](#integrity-hash) says. The length counts everything
+  after itself, so a reader can step over a message a newer writer added, whose description it lacks; a length shorter
+  than the object and hash it was read past is `Malformed`.
 - **Order.** A stream or datagram refusal costs at most one header read: route and carrier, the principal's datagrams, the
   message's description by binary search, its revision and channel, the declared length against its least and most (a newer
   writer may pass this reader's most, never the channel's). Then S6 and S7.
@@ -1466,7 +1467,7 @@ transport hands these functions a stream's or a datagram's plaintext after S4 an
   sender's side of the same rule: over its share a reliable message waits and an unreliable one is shed.
 - **Reassembly.** A frame all in hand is a view of the input, copying nothing. Only one that arrives in pieces takes a
   buffer, of exactly its declared length, from an injected allocator's `try_allocate`, after S6 and S7: a refused message
-  costs no memory, and an allocator's refusal holds the reader back. A header split across reads waits in 20 bytes of carry
+  costs no memory, and an allocator's refusal holds the reader back. A header split across reads waits in 24 bytes of carry
   (its numbers have bounded widths). Fragments carry their message's whole description in each piece, so any may arrive
   first, and hold to one shape: at least two pieces, at most 256, a chunk of at least 64 bytes, each piece exactly a
   chunk or what is left, so overlaps do not exist and a slot is a fixed bitmap. A slot pool bounds the messages in pieces;
@@ -1532,6 +1533,84 @@ second decoder and no lifetime on a baseline. The generator writes one table per
   exact bits and each refusal, and runs writers and readers on a path with up to 70% loss, repeats and reordering.
   `crd-fuzz-wire-delta-test`: a rebuilt message's delta is the input, and any two messages' delta rebuilds the second.
   `crd-fuzz-net-delta-stream`: any bodies, and a script of deliveries ([session](../sessions/2026-11-07-net-3-baseline-deltas.md)).
+
+S29 to S31 hold to `test_frame_integrity.cpp` and `test_state_hash.cpp`, and to `crd-fuzz-net-admission`'s restated layout and
+`crd-fuzz-net-state-hash` ([session](../sessions/2026-11-07-net-3-integrity-padding.md)).
+
+<a id="integrity-hash"></a>
+### The plaintext integrity hash
+
+**S29. What the AEAD tag cannot see** (NET.3, threat T12; [P-15](../research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#p-15);
+[frame.hpp](../../engine/foundation/net/include/crd/net/frame.hpp)). The tag proves a packet arrived as it was sealed. A sender's
+memory or pipeline fault is sealed as valid, so a frame also carries a hash taken at serialisation and checked after decryption.
+
+- **The field.** 32 bits, most significant first, after the object: the low half of XXH3-64 over the body, seeded with
+  `(message << 32) ^ object`, so a fault in the header's numbers shows too. Its width is fixed, so `write_frame` encodes behind a
+  header of known size and fills it in after. A fragment carries its whole message's hash in every piece, like the rest of
+  the message's description; a piece that names another is `FragmentConflict`.
+- **Who has one.** `frame_shape()` decides from the channel and the message. A channel has it unless it declares
+  `"integrity": false`, which only a Media channel may (the generator refuses any other): a codec's bitstream conceals its own
+  errors, and 4 bytes are a large share of a 60-byte voice frame. A delta message has none: [S28](#baseline-deltas)'s body hashes
+  the whole message it rebuilds, which also covers the delta.
+- **When.** After S7, once the whole body is here: a view of the input, a stream's buffer at its last byte, a fragmented message
+  at its last piece. Nothing has decoded it. It costs the XXH3 of bytes already admitted and charged.
+- **What a mismatch does.** `IntegrityFailed`, counted, with the frame's pending place, reservation and buffer given back and
+  nothing delivered. An unreliable channel drops it, and a Listed datagram reads on, its lengths having framed the rest. A
+  reliable channel closes (GoAway ProtocolError): it cannot lose a message its sender believes delivered.
+
+<a id="padding"></a>
+### Padding
+
+**S30. What a packet's size says** (NET.3, threat T15; [frame.hpp](../../engine/foundation/net/include/crd/net/frame.hpp)). Every
+channel states `padding_block` in its schema (the generator refuses a channel without one, and anything but zero or at least
+16). Traffic pads to the next multiple, so lengths inside a block look alike. What a block is worth depends on the class; these
+are the values a schema starts from:
+
+| Class | Block | Why |
+|---|---|---|
+| Control | 128 | Renewals and generation handshakes are rare, and their sizes name what happened |
+| Transaction | 256 | The size of an edit or an idempotency record says what was edited |
+| Event | 64 | Chat lengths |
+| Input | 32 | Which inputs a player pressed, at small cost per packet |
+| Media | 32 | Variable-rate voice sizes leak speech; constant-rate Opus needs none |
+| Bulk | 4096 | An asset's size identifies it |
+| State | 0 | Bandwidth dominates, and a snapshot's size says little the server does not already show |
+
+- **A path that controls its packets** (QUIC's PADDING frames, TLS record padding, raw UDP) pads each packet to `padded_size()`,
+  with the largest block among the channels whose frames it holds, at most the path's room. It costs no reader anything and
+  covers what the packet shares with acknowledgements and other channels. [4.2a](../ROADMAP.md#slice-4.2a)'s packet assembly calls it.
+- **A path that does not** (a browser's WebTransport, WebSocket and data channels: [no path control](#browsers)) pads in band, and
+  a native reader reads it the same on every path.
+  - A datagram: `pad_datagram()` puts `route(Padded)[count][count zeros]` before the datagram's own route and frames, moving them
+    behind it, towards the same size. `open_datagram` takes it off, so the frames below it change nothing. It is refused
+    (`BadPadding`) on a channel that declares no block, with a set bit, a count of two blocks or more, or an inner route that is
+    Padded again or names another channel.
+  - A stream: `write_stream_padding()` writes message zero, which no schema has (identifiers start at one), as
+    `[0][length][length zeros]`, bringing the bytes about to be flushed to a multiple. The reader checks the zeros in pieces and
+    steps over them without a buffer; a set bit or a length of two blocks closes the stream. On a channel that declares no block
+    message zero stays `UnknownMessage`.
+- **Padding is not free.** Its bytes are charged to the channel and the principal: a stream's frame as it arrives, held back like
+  any frame when a gate is closed, and a datagram's prefix after its checks, so the gates close the frame behind it. A reader
+  never requires padding: it protects the sender's own traffic.
+
+<a id="state-hashes"></a>
+### State hashes
+
+**S31. Finding the first difference** (NET.3, threat T12; [state_hash.hpp](../../engine/foundation/net/include/crd/net/state_hash.hpp)).
+Peers of a lockstep or rollback session report what they confirmed with `StateHash{step, hash, chain}` on session control.
+[4.2c](../ROADMAP.md#slice-4.2c)'s policies supply the hashes and choose the steps; what a divergence does is
+[HW-RESILIENCE.3](../ROADMAP.md#slice-hw-resilience.3)'s. `StateHashExchange` compares them, in memory fixed at construction.
+
+- **The chain.** `chain = XXH3-64(step, hash little-endian; seed: the chain before)`, from zero. One message confirms everything
+  recorded before it, so a report may be sparse: agreement at a step means agreement on every step up to it.
+- **Order.** A report and its step arrive in either order, and a peer ahead of this side waits in a fixed ring, the oldest giving way
+  (counted), since a later chain covers it. A report of a step this side gave up or never recorded is `NotHeld` and changes
+  nothing; a repeat or a step going back is `Stale`. Reports cost at most one binary search each, and each report is compared once.
+- **The verdict.** The first difference is said exactly once, as `Diverged`, naming the newest step agreed, the step that showed it
+  and both hashes: the hashes differ at that step, or only the chain does, so a step in between did. Nothing is compared after it,
+  while records still produce reports so the peer sees it too. `restart()` starts both sides over after a resynchronisation.
+- **Evidence.** `test_state_hash.cpp`, and `crd-fuzz-net-state-hash`: an unbounded restatement decides every verdict, chain and
+  divergence of any script of records and honest or damaged reports.
 
 <a id="key-logging"></a>
 ### Key logging
