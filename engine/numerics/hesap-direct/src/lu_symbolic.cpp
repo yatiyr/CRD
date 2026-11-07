@@ -28,50 +28,58 @@ constexpr crd::u32 kLuPanelTallRows = 64;  // L-column height at/above which the
     return lead_col_height >= kLuPanelTallRows ? kLuPanelWide : kLuPanelNarrow;
 }
 
-// Pattern-only Gilbert-Peierls reachability with Eisenstat-Liu SYMMETRIC PRUNING — the symbolic
-// twin of sparse_lu.cpp's `lu_dfs`. Iterative DFS on the PARTIAL L's directed graph: `pinv[j]` =
-// the pivot step (= L column) at which original row j was eliminated, or < 0 if not yet (a source).
-// Pushes every visited node onto xi[--top] in topological order; the unit diagonal (first entry of
-// each L column) is skipped via lp[col]+1. `lpend[c]` is the PRUNED end of L column c's scan range
-// (set by `prune` once a symmetric nonzero pair is found) — traversing only [lp[c]+1, lpend[c])
-// instead of the full column turns the reachability from O(flops) into O(fill) (KLU/SuperLU). The
-// transitive closure is unchanged (Eisenstat-Liu), so the emitted structure is identical.
+// Pattern-only reachability of one start row through the graph of the partial L (Gilbert and
+// Peierls, "Sparse partial pivoting in time proportional to arithmetic operations", 1988), the
+// symbolic twin of sparse_lu.cpp's `lu_dfs`. `pinv[r]` is the L column created when original
+// row r was chosen as a pivot, or <0 while r is unpivoted (such a row has no outgoing edges).
+// The walk is iterative: xi[0..level] is the current path and `cursor[d]` the next L entry to
+// examine for the path node at depth d. Finished rows fill xi[--top] downwards, and the caller
+// reads xi[top..n) as a topological order. Each L column's first entry is its unit diagonal
+// and is never followed. `lpend[c]` is the PRUNED end of column c's scan range, set once an
+// Eisenstat-Liu symmetric pair is found (Eisenstat and Liu, "Exploiting structural symmetry in
+// a sparse partial pivoting code", 1993): scanning only [lp[c]+1, lpend[c]) instead of the
+// whole column turns the reachability from O(flops) into O(fill) without changing the closure,
+// so the emitted structure is identical. Returns the new `top`.
 [[nodiscard]] crd::u32 lu_dfs_pattern(crd::u32 jstart, const crd::u32* lp, const crd::u32* lpend, const crd::u32* li,
-                                      const crd::i32* pinv, crd::u32 top, crd::u32* xi, crd::u32* pstack,
+                                      const crd::i32* pinv, crd::u32 top, crd::u32* xi, crd::u32* cursor,
                                       crd::u8* marked) noexcept
 {
-    crd::i32 head = 0;
-    xi[0] = jstart;
-    while (head >= 0)
+    const auto first_edge = [&](crd::u32 row) noexcept -> crd::u32
     {
-        const crd::u32 j = xi[static_cast<crd::u32>(head)];
-        const crd::i32 jnew = pinv[j]; // L column for node j (<0 ⇒ unpivoted source)
-        if (marked[j] == 0)
+        const crd::i32 col = pinv[row];
+        return col < 0 ? 0U : lp[static_cast<crd::u32>(col)] + 1U;
+    };
+    crd::u32 level = 0;
+    xi[0] = jstart;
+    marked[jstart] = 1;
+    cursor[0] = first_edge(jstart);
+    for (;;)
+    {
+        const crd::u32 row = xi[level];
+        const crd::i32 col = pinv[row];
+        const crd::u32 edge_end = col < 0 ? 0U : lpend[static_cast<crd::u32>(col)];
+        crd::u32 e = cursor[level];
+        while (e < edge_end && marked[li[e]] != 0)
         {
-            marked[j] = 1;
-            pstack[head] = (jnew < 0) ? 0U : (lp[static_cast<crd::u32>(jnew)] + 1U); // +1 skips the unit diagonal
+            ++e;
         }
-        bool done = true;
-        const crd::u32 pend = (jnew < 0) ? 0U : lpend[static_cast<crd::u32>(jnew)]; // pruned scan end
-        for (crd::u32 p = pstack[head]; p < pend; ++p)
+        if (e < edge_end)
         {
-            const crd::u32 i = li[p]; // neighbour (original row)
-            if (marked[i] != 0)
-            {
-                continue;
-            }
-            pstack[head] = p; // pause node j here
-            xi[++head] = i;   // descend into i
-            done = false;
-            break;
+            const crd::u32 next = li[e];
+            cursor[level] = e + 1;
+            marked[next] = 1;
+            ++level;
+            xi[level] = next;
+            cursor[level] = first_edge(next);
+            continue;
         }
-        if (done)
+        xi[--top] = row; // every neighbour is done: this row is finished
+        if (level == 0)
         {
-            --head;
-            xi[--top] = j; // node j finished → output (topological order)
+            return top;
         }
+        --level;
     }
-    return top;
 }
 
 // Supernode partition over columns by EXACT structural nesting (SuperLU fundamental supernodes).
