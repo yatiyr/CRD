@@ -819,6 +819,18 @@ class BenchMachine(unittest.TestCase):
     """ci/bench_vm.py: the optimization track's machine runs only on demand, holds no credential and keeps the
     exit status of a detached command."""
 
+    def test_fetch_names_a_home_path_without_the_tilde_no_far_shell_expands(self):
+        calls = []
+
+        def runner(args, **kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0, '', '')
+
+        vm = bench_vm.BenchVm(runner=runner, which=lambda name: '/usr/bin/gcloud', sleep=lambda s: None)
+        with tempfile.TemporaryDirectory() as local:
+            vm.fetch('~/out/board.txt', local)
+        self.assertIn('%s:out/board.txt' % bench_vm.NAME, calls[0])
+
     def test_a_one_run_machine_deletes_itself_and_keeps_running(self):
         command = bench_vm.create_command(3)
         flags = dict(zip(command, command[1:]))

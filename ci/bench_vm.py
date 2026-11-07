@@ -260,6 +260,8 @@ class BenchVm:
 
     def fetch(self, remote, local):
         Path(local).mkdir(parents=True, exist_ok=True)
+        # No shell reads the path on the far side, and pscp takes `~` literally; a relative path starts at home.
+        remote = remote.removeprefix('~/')
         self.gcloud(['compute', 'scp', '--recurse', '%s:%s' % (NAME, remote), str(local), *where(),
                      '--tunnel-through-iap', '--quiet'])
         return str(local)

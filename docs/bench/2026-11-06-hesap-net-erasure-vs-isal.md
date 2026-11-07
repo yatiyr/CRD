@@ -22,7 +22,7 @@ Row: [HESAP-NET](../ROADMAP.md#slice-hesap-net). Session: [ISA-L board](../sessi
   the whole per-pattern work on each side (hesap's barycentric weights; ISA-L's `gf_invert_matrix`, table build and
   encode). After every batch the outputs are compared with the reference bytes; a mismatch exits 1.
 - avx512 throughput is not measured: this CPU has none and SDE is an emulator. SDE (icx, skx) proves those bodies' bytes
-  only ([session](../sessions/2026-11-06-hesap-net-erasure-board.md)); the real measurement is named on the row.
+  only ([session](../sessions/2026-11-06-hesap-net-erasure-board.md)); the real measurement is the [AVX-512 board](2026-11-07-hesap-net-avx512.md).
 
 ## Harness
 

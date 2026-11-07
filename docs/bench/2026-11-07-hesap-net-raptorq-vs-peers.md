@@ -39,6 +39,7 @@ sources: a plan for the rows received, the intermediate symbols, the lost source
 
 The one row behind is K = 10, where nanorq leads by 3% to 7% on an encoder's plan. There u = 15 of L = 27 columns are dense, and
 the block's cost is the u^2 products, in which neither code has an advantage. On a decoder's rows, with u = 12, hesap leads.
+On AVX-512 that row is 0.79x and not yet explained: [AVX-512 board](2026-11-07-hesap-net-avx512.md).
 
 ## Memory
 

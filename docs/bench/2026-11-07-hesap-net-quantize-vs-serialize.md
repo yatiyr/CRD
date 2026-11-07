@@ -44,5 +44,5 @@ The two runs agree within 0.1 ns on every arm above 1 ns.
 - The decode's gain is small: each word's four fields and each quaternion's four components move through scalar code, since
   a word is 64 bits and the lanes 32. The peer also returns NaN where a word passes length one, at two bits and for every
   hostile word, and has no refusal; hesap's decode pays for both.
-- No heap on any arm. The AVX-512 bytes are proven under SDE; its throughput waits for a real AVX-512 machine, as for the
-  erasure kernels.
+- No heap on any arm. AVX-512's throughput, and the clamp fix that run led to, are on the
+  [AVX-512 board](2026-11-07-hesap-net-avx512.md); this table predates that fix.
