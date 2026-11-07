@@ -33,6 +33,7 @@ MAX_DEPTH = 8
 MAX_MESSAGE_BYTES = 0xFFFFFFFF
 MINORS_PAST_SCHEMA = 2  # the fuzz target and the vectors also read as writers this far ahead
 DELTA_HEADER_MAX_BYTES = 9  # crd/net/delta.hpp's kDeltaHeaderMaxBytes
+DELTA_EXPANDED_MAX_BYTES = 5  # crd/net/delta.hpp's kDeltaExpandedMaxBytes
 MIN_PADDING_BLOCK = 16  # a smaller block hides almost nothing and costs a padding header on most datagrams
 
 OUTPUTS = [
@@ -56,10 +57,20 @@ OUTPUTS = [
         'fuzz': 'tests/foundation/net/fuzz/fuzz_wire_delta_test.cpp',
         'vectors': 'tests/foundation/net/generated/delta_test_vectors.inc',
     },
+    {
+        'schema': 'tests/foundation/net/schemas/coding_test.json',
+        'header': 'tests/foundation/net/generated/coding_test.hpp',
+        'include': 'generated/coding_test.hpp',
+    },
 ]
 
 SCOPE_KINDS = {'transport': 0, 'World': 1, 'Project': 2, 'Room': 3, 'Upload': 4, 'Tool': 5, 'Service': 6}
 CHANNEL_CLASSES = ('Control', 'Input', 'State', 'Event', 'Transaction', 'Bulk', 'Media')
+# Control and Transaction traffic mixes credentials and peer-chosen bytes, and a coded size can show how they relate; a
+# Media body is already a codec's output (network foundation S32).
+CODED_CLASSES = ('Input', 'State', 'Event', 'Bulk')
+CODEC_KINDS = {'dictionary': 'Dictionary', 'entropy': 'Entropy'}
+MODEL_HASH = re.compile(r'^[0-9a-f]{16}$')
 NAME = re.compile(r'^[a-z][a-z0-9_]*$')
 TYPE_NAME = re.compile(r'^[A-Z][A-Za-z0-9]*$')
 CPP_KEYWORDS = {'alignas', 'alignof', 'auto', 'bool', 'break', 'case', 'catch', 'char', 'class', 'const', 'continue',
@@ -1608,8 +1619,29 @@ class Schema:
                     f'{self.label}: channel {name}: padding_block is 0 or from {MIN_PADDING_BLOCK}')
             require(spec.get('integrity', True) is True or (spec['integrity'] is False and spec['class'] == 'Media'),
                     f'{self.label}: channel {name}: integrity is only a Media channel\'s to turn off')
+            self.parse_models(name, spec)
             self.channels.append(spec)
         require(self.channels, f'{self.label}: no channel')
+
+    def parse_models(self, name, spec):
+        models = spec.get('models', [])
+        require(isinstance(models, list), f'{self.label}: channel {name}: models is a list')
+        if not models:
+            return
+        require(self.kind != 'transport', f'{self.label}: channel {name}: a transport schema codes nothing')
+        require(spec['class'] in CODED_CLASSES, f'{self.label}: channel {name}: a {spec["class"]} channel codes nothing')
+        previous = -1
+        for model in models:
+            since = model.get('since')
+            require(isinstance(since, int) and previous < since <= self.minor,
+                    f'{self.label}: channel {name}: a model\'s since ascends and stays within the revision')
+            previous = since
+            require(model.get('kind') in CODEC_KINDS, f'{self.label}: channel {name}: model kind {model.get("kind")!r}')
+            require(isinstance(model.get('hash'), str) and MODEL_HASH.match(model['hash']),
+                    f'{self.label}: channel {name}: a model\'s hash is its source\'s XXH3-64 in 16 hex digits')
+            ratio = model.get('max_ratio')
+            require(isinstance(ratio, int) and 2 <= ratio < 65536,
+                    f'{self.label}: channel {name}: a model\'s max_ratio is from 2 to 65535')
 
     def parse_messages(self, document):
         ids = set()
@@ -1680,9 +1712,10 @@ class Schema:
 
     def check_channel_bounds(self):
         for message in self.messages:
-            bytes_at_most = (message['type'].max_bits + 7) // 8 + (DELTA_HEADER_MAX_BYTES if message['delta'] else 0)
-            require(bytes_at_most <= MAX_MESSAGE_BYTES, f'{self.label}: {message["name"]} too large')
             channel = self.channels[message['channel']]
+            header = DELTA_HEADER_MAX_BYTES + (DELTA_EXPANDED_MAX_BYTES if channel.get('models') else 0)
+            bytes_at_most = (message['type'].max_bits + 7) // 8 + (header if message['delta'] else 0)
+            require(bytes_at_most <= MAX_MESSAGE_BYTES, f'{self.label}: {message["name"]} too large')
             require(bytes_at_most <= channel['max_message_bytes'],
                     f'{self.label}: {message["name"]} takes up to {bytes_at_most} bytes, above channel '
                     f'{channel["name"]}\'s {channel["max_message_bytes"]}')
@@ -1690,7 +1723,10 @@ class Schema:
     def layout_digest(self, minor):
         layout = [[m['id'], m['type'].layout(minor)] + ([True] if m['delta'] else [])
                   for m in self.messages if m['since'] <= minor]
-        text = json.dumps([self.major, layout], sort_keys=True, separators=(',', ':'))
+        # A model is part of its revision: both ends of that revision must hold the same one.
+        codecs = [[channel['name'], model['since'], model['kind'], model['hash'], model['max_ratio']]
+                  for channel in self.channels for model in channel.get('models', []) if model['since'] <= minor]
+        text = json.dumps([self.major, layout] + ([codecs] if codecs else []), sort_keys=True, separators=(',', ':'))
         return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
     def check_history(self):
@@ -1914,11 +1950,15 @@ def delta_tables(schema):
     return lines
 
 
-def message_bounds(message):
-    """A message's frame body bounds: a delta message's body is a header and the smaller of its delta or itself."""
+def message_bounds(schema, message):
+    """A message's frame body bounds: a delta message's body is a header and the smaller of its delta or itself. A
+    frame's bounds hold what it decodes to, but a delta codes its own payload, so on a coded channel its body can be as
+    small as the coder's output."""
     item = message['type']
     if not message['delta']:
         return f'{item.name}Codec::kMinBytes', f'{item.name}Codec::kMaxBytes'
+    if schema.channels[message['channel']].get('models'):
+        return 'kDeltaHeaderMinBytes + 1U', f'kDeltaHeaderMaxBytes + kDeltaExpandedMaxBytes + {item.name}Codec::kMaxBytes'
     least_delta = (sum(1 for field in item.fields if field.since == 0) + 7) // 8
     return (f'kDeltaHeaderMinBytes + {min(least_delta, (item.min_bits + 7) // 8)}U',
             f'kDeltaHeaderMaxBytes + {item.name}Codec::kMaxBytes')
@@ -1947,20 +1987,27 @@ def header_text(schema, entry):
     for item in schema.ordered_structs():
         lines += struct_lines(item, schema, message_by_type.get(item.name))
 
+    for index, spec in enumerate(schema.channels):
+        if spec.get('models'):
+            lines += [f'inline constexpr CodecDesc kChannel{index}Codecs[] = {{']
+            lines += [f'    {{{model["since"]}U, CodecKind::{CODEC_KINDS[model["kind"]]}, {model["max_ratio"]}U, '
+                      f'0x{model["hash"]}ULL}},' for model in spec['models']]
+            lines += ['};', '']
     lines += ['inline constexpr ChannelDesc kChannels[] = {']
-    for spec in schema.channels:
+    for index, spec in enumerate(schema.channels):
         fields = [f'"{spec["name"]}"', f'ChannelClass::{spec["class"]}',
                   'true' if spec.get('reliable') else 'false', 'true' if spec.get('ordered') else 'false',
                   'true' if spec.get('idempotent') else 'false', f'{spec["priority"]}U',
                   f'{spec["max_message_bytes"]}U', f'{spec["messages_per_s"]}U', f'{spec["bytes_per_s"]}ULL',
                   f'{spec["padding_block"]}U', 'true' if spec.get('integrity', True) else 'false']
-        lines += ['    {' + ', '.join(fields[:6]) + ',', '     ' + ', '.join(fields[6:]) + '},']
+        codecs = [f'kChannel{index}Codecs, {len(spec["models"])}U'] if spec.get('models') else []
+        lines += ['    {' + ', '.join(fields[:6]) + ',', '     ' + ', '.join(fields[6:] + codecs) + '},']
     lines += ['};', '']
     lines += delta_tables(schema)
     lines += ['inline constexpr MessageDesc kMessages[] = {']
     for message in schema.messages:
         item = message['type']
-        least, most = message_bounds(message)
+        least, most = message_bounds(schema, message)
         layout = f'&k{item.name}Layout' if message['delta'] else 'nullptr'
         lines.append(f'    {{"{message["name"]}", {message["id"]}U, {message["channel"]}U, {message["since"]}U, '
                      f'{message["operation"]}ULL, {least},')
@@ -2258,7 +2305,9 @@ def vectors_text(schema, entry, values_per_minor=5, mutations_per_value=4):
 def outputs_for(root, entry):
     document = json.loads((root / entry['schema']).read_text(encoding='utf-8'))
     schema = Schema(document, entry['schema'])
-    out = {entry['header']: header_text(schema, entry), entry['fuzz']: fuzz_text(schema, entry)}
+    out = {entry['header']: header_text(schema, entry)}
+    if 'fuzz' in entry:
+        out[entry['fuzz']] = fuzz_text(schema, entry)
     if 'vectors' in entry:
         out[entry['vectors']] = vectors_text(schema, entry)
     for path, text in out.items():

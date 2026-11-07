@@ -3,6 +3,7 @@
 # (crd-crypto), frames, admission, quotas and reassembly, integrity hashes and padding, state hashes and baseline deltas.
 add_executable(crd-net-tests
     test_admission.cpp
+    test_coded_frames.cpp
     test_delta.cpp
     test_frame_integrity.cpp
     test_negotiation.cpp
@@ -15,6 +16,7 @@ target_include_directories(crd-net-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 target_link_libraries(crd-net-tests PRIVATE
     crd-core
+    crd-compression
     crd-containers
     crd-crypto
     crd-net

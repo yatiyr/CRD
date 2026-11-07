@@ -5,16 +5,17 @@
 // shortest form only, so one frame has one encoding. Nothing here allocates or keeps state; admission decides what a
 // header it reads may cost.
 //
-//   stream      route (form Whole), then [message][length][object?][hash?][body] ...
-//   datagram    route (form Whole):    [message][object?][hash?][body to the end]
-//               route (form Listed):   [message][length][object?][hash?][body], at least two of them, to the end
-//               route (form Fragment): [message][total][object?][hash?][chunk][sequence][index][chunk bytes to the end]
+//   stream      route (form Whole), then [message][length][object?][hash?][expanded?][body] ...
+//   datagram    route (form Whole):    [message][object?][hash?][expanded?][body to the end]
+//               route (form Listed):   [message][length][object?][hash?][expanded?][body], at least two, to the end
+//               route (form Fragment): [message][total][object?][hash?][expanded?][chunk][sequence][index][chunk bytes]
 //               route (form Padded):   [count][count zero bytes], then the datagram's own route and frames
 //
 // The object is there only when the message has an operation bit (a transport message authorizes nothing), the hash
-// unless the message's channel or its delta body makes it redundant. The length counts everything after itself, so that
-// a reader can step over a message a newer writer added, whose description it does not have. Message zero is no
-// message: on a channel that declares padding it is a stream's padding, [0][length][length zero bytes].
+// unless the message's channel or its delta body makes it redundant, and the expanded size only where the channel codes
+// its bodies (zero: this body is stored as it is). The length counts everything after itself, so that a reader can step
+// over a message a newer writer added, whose description it does not have. Message zero is no message: on a channel
+// that declares padding it is a stream's padding, [0][length][length zero bytes].
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
@@ -44,7 +45,8 @@ struct FrameHeader
     u32 message = 0U;
     u32 length = 0U;
     u64 object = 0U;
-    u32 hash = 0U;     // frame_hash() of the body: of the whole message, for a fragment
+    u32 hash = 0U;     // frame_hash() of the body as it is decoded: of the whole message, for a fragment
+    u32 expanded = 0U; // what a coded body expands to; zero for a body stored as it is
     u32 chunk = 0U;    // a fragment's size, the last one's being what is left
     u64 sequence = 0U; // which message of its channel the fragment belongs to
     u32 index = 0U;    // which piece of it
@@ -55,6 +57,7 @@ struct FrameShape
 {
     bool object = false;
     bool hash = false;
+    bool expanded = false;
 };
 
 enum class HeaderForm : u8
@@ -73,8 +76,8 @@ enum class FrameRead : u8
 
 inline constexpr usize kMaxRouteBytes = 5U;
 inline constexpr usize kFrameHashBytes = 4U;
-// The most a frame holds between its length and its body: a 64-bit object and the hash.
-inline constexpr usize kMaxFrameTailBytes = 10U + kFrameHashBytes;
+// The most a frame holds between its length and its body: a 64-bit object, the hash and a 32-bit expanded size.
+inline constexpr usize kMaxFrameTailBytes = 10U + kFrameHashBytes + 5U;
 // The most a stream frame's header takes: a 32-bit message and length, and its tail.
 inline constexpr usize kMaxFrameHeaderBytes = 5U + 5U + kMaxFrameTailBytes;
 // The most a fragment's header takes, with its route.
@@ -101,8 +104,8 @@ inline constexpr u32 kPaddingMessage = 0U;
 // what a reader needs to step over a message it has no description of.
 [[nodiscard]] FrameRead read_frame_number(cont::ConstSpan<u8> bytes, u32& number, usize& consumed) noexcept;
 
-// The rest of a header, after the message and any length. Fills object, hash, chunk, sequence and index as `form` and
-// `shape` have them. A Sized header's body is its length less what this consumed.
+// The rest of a header, after the message and any length. Fills object, hash, expanded, chunk, sequence and index as
+// `form` and `shape` have them. A Sized header's body is its length less what this consumed.
 [[nodiscard]] FrameRead read_frame_tail(cont::ConstSpan<u8> bytes, HeaderForm form, FrameShape shape,
                                         FrameHeader& header, usize& consumed) noexcept;
 

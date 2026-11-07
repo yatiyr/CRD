@@ -347,10 +347,11 @@
     },
     {
       "id": "compression.codecs",
-      "summary": "Lossless compression codecs: raw DEFLATE and inflate, the zstd binding with trained dictionaries, and the GDeflate CPU paths of the crdr v2 chunks.",
+      "summary": "Lossless compression codecs: raw DEFLATE and inflate, the zstd binding with trained dictionaries and static contexts for small messages, the static entropy coder for bit-packed messages, and the GDeflate CPU paths of the crdr v2 chunks.",
       "owner": "compression",
       "api": [
         "engine/foundation/compression/include/crd/compression/deflate.hpp",
+        "engine/foundation/compression/include/crd/compression/entropy.hpp",
         "engine/foundation/compression/include/crd/compression/zstd.hpp"
       ],
       "signatures": [
@@ -835,10 +836,11 @@
     },
     {
       "id": "network.admission",
-      "summary": "Frames, bounded admission stages S6 and S7, baseline deltas, the plaintext integrity hash, padding and the state-hash exchange: the route and frame headers, virtual-scheduling rate gates and gauges in integer time, per-principal quotas and send budgets, S18's verdict before any decode, and stream and fragment reassembly into buffers the quota has reserved (network foundation S27 to S31).",
+      "summary": "Frames, bounded admission stages S6 and S7, baseline deltas, coded bodies under per-channel models, the plaintext integrity hash, padding and the state-hash exchange: the route and frame headers, virtual-scheduling rate gates and gauges in integer time, per-principal quotas and send budgets, S18's verdict before any decode, and stream and fragment reassembly into buffers the quota has reserved (network foundation S27 to S32).",
       "owner": "net",
       "api": [
         "engine/foundation/net/include/crd/net/admission.hpp",
+        "engine/foundation/net/include/crd/net/coding.hpp",
         "engine/foundation/net/include/crd/net/delta.hpp",
         "engine/foundation/net/include/crd/net/state_hash.hpp",
         "engine/foundation/net/include/crd/net/frame.hpp",

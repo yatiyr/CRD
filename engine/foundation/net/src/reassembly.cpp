@@ -521,8 +521,8 @@ FrameStep DatagramAssembler::read_fragment(DatagramCursor& cursor, crypto::Deliv
         }
     }
     else if (slot->frame.message != parsed.message || slot->frame.object != header.object ||
-             slot->frame.length != header.length || slot->frame.hash != header.hash || slot->chunk != header.chunk ||
-             slot->delivery != delivery)
+             slot->frame.length != header.length || slot->frame.hash != header.hash ||
+             slot->frame.expanded != header.expanded || slot->chunk != header.chunk || slot->delivery != delivery)
     {
         step.verdict = AdmitVerdict::FragmentConflict;
         return conclude(step);

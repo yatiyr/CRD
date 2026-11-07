@@ -12,6 +12,7 @@
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+#include <crd/net/coding.hpp>
 #include <crd/net/wire.hpp>
 
 namespace crd::memory
@@ -127,9 +128,11 @@ private:
 };
 
 // A delta frame's body: [sequence, 16 bits][distance back to its baseline, zero for a whole message][hash of the whole
-// message, 32 bits][the delta or the message]. Every number is big-endian or the wire formats' 7-bit varuint.
+// message, 32 bits][expanded size, where the channel codes][the delta or the message, coded unless that size is zero].
+// Every number is big-endian or the wire formats' 7-bit varuint.
 inline constexpr usize kDeltaHeaderMinBytes = 7U;
 inline constexpr usize kDeltaHeaderMaxBytes = 9U;
+inline constexpr usize kDeltaExpandedMaxBytes = 5U;
 
 // The sequence nearest `expected` with these low 16 bits (the rule of RFC 9000's packet numbers), at or above zero.
 [[nodiscard]] u64 delta_expand_sequence(u64 expected, u16 low) noexcept;
@@ -139,12 +142,13 @@ inline constexpr usize kDeltaHeaderMaxBytes = 9U;
 class DeltaWriter
 {
 public:
-    DeltaWriter(const wire::DeltaLayout& layout, const BaselineStore& store) noexcept : m_layout(layout), m_store(store)
+    DeltaWriter(const wire::DeltaLayout& layout, const BaselineStore& store, const BodyCoding& coding = {}) noexcept
+        : m_layout(layout), m_store(store), m_coding(coding)
     {
     }
 
     // Writes the frame body of the store's message `sequence`, encoded at `minor`. A sequence must rise; OutOfRange
-    // when it does not, or the store does not hold it.
+    // when it does not, or the store does not hold it. A coded channel needs kDeltaExpandedMaxBytes of room besides.
     [[nodiscard]] wire::WireError write(u64 sequence, u16 minor, cont::Span<u8> out, usize& written) noexcept;
 
     // The peer holds this sequence (BaselineAck). One that does not advance, or that was never written, changes
@@ -155,8 +159,12 @@ public:
     [[nodiscard]] u64 delta_frames() const noexcept { return m_deltas; }
 
 private:
+    // Finishes a body whose payload waits `reserve` bytes behind its header; returns its size.
+    [[nodiscard]] usize seal(usize header, usize reserve, usize payload, cont::Span<u8> out) noexcept;
+
     const wire::DeltaLayout& m_layout;
     const BaselineStore& m_store;
+    BodyCoding m_coding;
     u64 m_last = 0U;
     u64 m_acked = 0U;
     bool m_wrote = false;
@@ -173,20 +181,25 @@ enum class DeltaRead : u8
     Malformed,       // refused; `error` says why
     Mismatch,        // the rebuilt message is not the one its writer hashed: nothing is delivered or kept
     Full,            // the store cannot keep it
+    Throttled,       // Admission::read_delta() only: a byte gate is closed; the frame has not been read
 };
 
-inline constexpr usize kDeltaReadCount = static_cast<usize>(DeltaRead::Full) + 1U;
+inline constexpr usize kDeltaReadCount = static_cast<usize>(DeltaRead::Throttled) + 1U;
 
 // The receiver's side, one per delta stream. `store` is its own.
 class DeltaReader
 {
 public:
-    DeltaReader(const wire::DeltaLayout& layout, BaselineStore& store, memory::IAllocator& allocator) noexcept;
+    DeltaReader(const wire::DeltaLayout& layout, BaselineStore& store, memory::IAllocator& allocator,
+                const BodyCoding& coding = {}) noexcept;
     ~DeltaReader();
     DeltaReader(const DeltaReader&) = delete;
     DeltaReader& operator=(const DeltaReader&) = delete;
 
-    [[nodiscard]] bool ready() const noexcept { return m_scratch != nullptr && m_store.ready(); }
+    [[nodiscard]] bool ready() const noexcept
+    {
+        return m_scratch != nullptr && m_store.ready() && (m_coding.model == nullptr || m_decoded != nullptr);
+    }
 
     // Reads one frame body, written at `writer_minor`. On Delivered, `message` views the store's copy of the whole
     // message, valid until the next read, and the generated decoder reads it at `writer_minor`. `error` says what a
@@ -201,6 +214,9 @@ public:
 
     [[nodiscard]] u64 count(DeltaRead verdict) const noexcept { return m_counts[static_cast<usize>(verdict)]; }
 
+    // The most the last read() expanded a body to: what admission charges for it.
+    [[nodiscard]] u32 expanded_bytes() const noexcept { return m_expanded; }
+
 private:
     [[nodiscard]] DeltaRead read_body(cont::ConstSpan<u8> body, u16 writer_minor, cont::ConstSpan<u8>& message,
                                       wire::WireError& error) noexcept;
@@ -208,7 +224,10 @@ private:
     const wire::DeltaLayout& m_layout;
     BaselineStore& m_store;
     memory::IAllocator& m_allocator;
+    BodyCoding m_coding;
     u8* m_scratch = nullptr;
+    u8* m_decoded = nullptr;
+    u32 m_expanded = 0U;
     u64 m_newest = 0U;
     bool m_any = false;
     u64 m_counts[kDeltaReadCount] = {};

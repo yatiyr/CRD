@@ -358,10 +358,11 @@ TEST_CASE("Frames: each header form's known bytes", "[net][frames]")
     widest.message = 0xFFFFFFFFU;
     widest.length = 0xFFFFFFFFU - static_cast<u32>(crd::net::kMaxFrameTailBytes);
     widest.object = ~u64{0};
-    CHECK(write_frame_header(HeaderForm::Sized, FrameShape{true, true}, widest, out) == kMaxFrameHeaderBytes);
+    widest.expanded = 0xFFFFFFFFU;
+    CHECK(write_frame_header(HeaderForm::Sized, FrameShape{true, true, true}, widest, out) == kMaxFrameHeaderBytes);
     // A length that with the tail passes what the number holds has no header.
     widest.length += 1U;
-    CHECK(write_frame_header(HeaderForm::Sized, FrameShape{true, true}, widest, out) == 0U);
+    CHECK(write_frame_header(HeaderForm::Sized, FrameShape{true, true, true}, widest, out) == 0U);
 }
 
 TEST_CASE("Frames: a fragment's shape", "[net][frames]")

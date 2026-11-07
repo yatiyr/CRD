@@ -5273,12 +5273,12 @@ class TestInstruments(unittest.TestCase):
     def test_fuzz_driver_bounds_every_run_and_names_its_corpora(self):
         self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-differential', 'ceir-record', 'ceir-text',
                                                        'ceridc-diag', 'ckir-binary', 'ckir-text', 'comply-rules',
-                                                       'comply-sanctions', 'crypto-capability', 'crypto-key-store',
+                                                       'comply-sanctions', 'compression-messages', 'crypto-capability', 'crypto-key-store',
                                                        'crypto-mls', 'crypto-mls-commit', 'crypto-mls-group',
                                                        'crypto-mls-message', 'crypto-mls-tree',
                                                        'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
                                                        'hesap-clock', 'hesap-erasure', 'hesap-estimators', 'hesap-flexfec', 'hesap-link', 'hesap-motion', 'hesap-quantize', 'hesap-raptorq', 'hesap-red',
-                                                       'memory-allocators', 'net-admission', 'net-delta-stream', 'net-negotiation', 'net-state-hash', 'perf-assets',
+                                                       'memory-allocators', 'net-admission', 'net-coded-frames', 'net-delta-stream', 'net-negotiation', 'net-state-hash', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload', 'wire-delta-test', 'wire-session-control', 'wire-test'])
         for name, target in fuzz_driver.TARGETS.items():

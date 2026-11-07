@@ -154,7 +154,7 @@ struct PrincipalQuota
     SharedRateGate budget_bytes;
 
     Gauge streams;
-    Gauge reassembly;
+    Gauge reassembly; // bytes held for frames: partial messages, and coded bodies' room to decode into
     Gauge pending;
     Gauge objects; // what the capability's `objects` budget bounds: an operation that creates or holds one takes it
 };

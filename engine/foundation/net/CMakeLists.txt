@@ -22,6 +22,8 @@ target_link_libraries(crd-net
         crd-containers
         crd-crypto # S7 asks S18's verdict (authorize_operation)
         crd-memory # reassembly buffers come from an injected allocator
+    PRIVATE
+        crd-compression # coded bodies: coding.hpp's models and coder
 )
 
 target_compile_features(crd-net PUBLIC cxx_std_20)

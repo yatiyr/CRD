@@ -13,6 +13,14 @@ crd_fuzz_target(crd-fuzz-net-negotiation
 crd_fuzz_target(crd-fuzz-net-admission
     SOURCES fuzz_admission.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-admission")
 
+# Coded frames (NET.3).
+#   crd-fuzz-net-coded-frames   any header and body on coded channels, against a restated rule of what a coded frame may
+#                               declare, costs and delivers: every budget given back, and only a body its writer hashed
+#                               delivered.
+crd_fuzz_target(crd-fuzz-net-coded-frames
+    SOURCES fuzz_coded_frames.cpp LIBRARIES crd-net crd-compression
+    CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-coded-frames")
+
 # State hashes (NET.3).
 #   crd-fuzz-net-state-hash   any script of records and reports against an unbounded restatement of the exchange.
 crd_fuzz_target(crd-fuzz-net-state-hash

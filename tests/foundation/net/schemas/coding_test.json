@@ -1,0 +1,90 @@
+{
+  "format": "cerid-wire-schema/1",
+  "name": "coding_test",
+  "about": "Coded bodies: a reliable channel's dictionary, then entropy from its next minor, and a snapshot channel's entropy model under a delta message, for their tests.",
+  "id": "7d2a51c3e80f4b96a1c7f3d29e6b0a44",
+  "kind": "World",
+  "revision": {"major": 1, "minor": 1},
+  "history": {
+    "0": "e1245f7f57eb99139a6d2dd608832f3476eee5e74c7caca85a662cd646d11e7a",
+    "1": "40f144df744ccbbf16dbb8593f1ff2f2b6b4bc40540d082bbd59aaed537b2af4"
+  },
+  "operations": {
+    "post": {"bit": 0},
+    "sync": {"bit": 1, "idempotent": true}
+  },
+  "channels": [
+    {
+      "name": "event",
+      "class": "Event",
+      "reliable": true,
+      "ordered": true,
+      "priority": 2,
+      "max_message_bytes": 20000,
+      "messages_per_s": 1000,
+      "bytes_per_s": 100000000,
+      "padding_block": 64,
+      "models": [
+        {"since": 0, "kind": "dictionary", "hash": "869106d3867138d3", "max_ratio": 512},
+        {"since": 1, "kind": "entropy", "hash": "5788764aa5fe307e", "max_ratio": 64}
+      ]
+    },
+    {
+      "name": "state",
+      "class": "State",
+      "idempotent": true,
+      "priority": 3,
+      "max_message_bytes": 60000,
+      "messages_per_s": 1000,
+      "bytes_per_s": 100000000,
+      "padding_block": 0,
+      "models": [
+        {"since": 0, "kind": "entropy", "hash": "6d3632b1a98c5ac0", "max_ratio": 64}
+      ]
+    }
+  ],
+  "structs": {
+    "Body": {
+      "fields": [
+        {"name": "id", "type": "uint", "bits": 16},
+        {"name": "x", "type": "range", "min": 0, "max": 262143, "delta_group": 4},
+        {"name": "y", "type": "range", "min": 0, "max": 262143, "delta_group": 4},
+        {"name": "z", "type": "range", "min": 0, "max": 262143, "delta_group": 4},
+        {"name": "spin", "type": "uint", "bits": 29, "delta_group": 4},
+        {"name": "flags", "type": "uint", "bits": 4}
+      ]
+    }
+  },
+  "messages": [
+    {
+      "name": "Note",
+      "id": 1,
+      "channel": "event",
+      "operation": "post",
+      "fields": [
+        {"name": "serial", "type": "varuint", "max": 4294967295},
+        {"name": "text", "type": "text", "max": 8000}
+      ]
+    },
+    {
+      "name": "World",
+      "id": 2,
+      "channel": "state",
+      "operation": "sync",
+      "delta": true,
+      "fields": [
+        {"name": "tick", "type": "varuint", "max": 4294967295, "delta_group": 3},
+        {"name": "bodies", "type": "list", "of": {"type": "Body"}, "max": 2000, "delta_key": "id"}
+      ]
+    },
+    {
+      "name": "Glance",
+      "id": 3,
+      "channel": "state",
+      "operation": "sync",
+      "fields": [
+        {"name": "blob", "type": "bytes", "max": 4000}
+      ]
+    }
+  ]
+}

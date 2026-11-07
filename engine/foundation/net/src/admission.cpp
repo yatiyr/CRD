@@ -2,6 +2,7 @@
 
 #include <crd/memory/allocator.hpp>
 #include <crd/net/admission.hpp>
+#include <crd/net/delta.hpp>
 
 #include <cstring>
 
@@ -20,6 +21,36 @@ constexpr u8 kTransportKind = 0U;
 [[nodiscard]] bool same_identifier(const u8 (&wire_id)[16], const crypto::CapabilityId& authorized) noexcept
 {
     return std::memcmp(wire_id, authorized.bytes, sizeof(wire_id)) == 0;
+}
+
+[[nodiscard]] const BodyModel* find_model(cont::ConstSpan<const BodyModel*> models,
+                                          const wire::CodecDesc& codec) noexcept
+{
+    for (const BodyModel* model : models)
+    {
+        if (model != nullptr && model->ready() && model->kind() == codec.kind && model->hash() == codec.model)
+        {
+            return model;
+        }
+    }
+    return nullptr;
+}
+
+// Whether every model the schema's channels declare is held, with a coder to use them.
+[[nodiscard]] bool models_held(const SessionSchema& schema, bool transport) noexcept
+{
+    for (const wire::ChannelDesc& channel : schema.wire->channels)
+    {
+        for (u16 index = 0U; index < channel.codec_count; ++index)
+        {
+            if (transport || schema.coder == nullptr || !schema.coder->ready() ||
+                find_model(schema.models, channel.codecs[index]) == nullptr)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 } // namespace
 
@@ -99,6 +130,8 @@ cont::StringView admit_verdict_name(AdmitVerdict verdict) noexcept
             return "padding-frame";
         case AdmitVerdict::BadPadding:
             return "bad-padding";
+        case AdmitVerdict::BadExpansion:
+            return "bad-expansion";
     }
     return "unknown";
 }
@@ -136,6 +169,7 @@ AdmitAction admit_action(AdmitVerdict verdict, bool reliable) noexcept
         case AdmitVerdict::BadFragment:
         case AdmitVerdict::IntegrityFailed: // a reliable channel cannot lose what its sender believes delivered
         case AdmitVerdict::BadPadding:
+        case AdmitVerdict::BadExpansion:
             return reliable ? AdmitAction::Close : AdmitAction::Skip;
         case AdmitVerdict::NewerMessage:
         case AdmitVerdict::StreamLimit:
@@ -171,7 +205,7 @@ bool Admission::bind(cont::ConstSpan<SessionSchema> schemas) noexcept
             return false;
         }
         const bool transport = schema.wire->kind == kTransportKind;
-        if (transport != (schema.authorized == nullptr))
+        if (transport != (schema.authorized == nullptr) || !models_held(schema, transport))
         {
             return false;
         }
@@ -199,6 +233,8 @@ bool Admission::bind(cont::ConstSpan<SessionSchema> schemas) noexcept
         state = SchemaState{};
         state.wire = schema.wire;
         state.authorized = schema.authorized;
+        state.models = schema.models;
+        state.coder = schema.coder;
         state.first_channel = m_channel_count;
         for (usize index = 0U; index < schema.wire->channels.size(); ++index)
         {
@@ -233,6 +269,12 @@ bool Admission::announce(cont::ConstSpan<u8> schema_id, u16 major, u16 writer_mi
         }
         schema.writer_minor = writer_minor;
         schema.announced = true;
+        for (usize index = 0U; index < schema.wire->channels.size(); ++index)
+        {
+            ChannelState& channel = m_channels[schema.first_channel + index];
+            channel.codec = wire::codec_at(*channel.desc, writer_minor);
+            channel.model = (channel.codec != nullptr) ? find_model(schema.models, *channel.codec) : nullptr;
+        }
         return true;
     }
     return false;
@@ -241,6 +283,16 @@ bool Admission::announce(cont::ConstSpan<u8> schema_id, u16 major, u16 writer_mi
 void Admission::set_capability(const crypto::Capability* capability) noexcept
 {
     m_capability = capability;
+}
+
+BodyCoding Admission::coding(u32 number) const noexcept
+{
+    const ChannelState& state = m_channels[number];
+    if (state.model == nullptr)
+    {
+        return BodyCoding{};
+    }
+    return BodyCoding{state.model, m_schemas[state.slot].coder, state.codec->max_ratio, state.desc->max_message_bytes};
 }
 
 u32 Admission::channel_number(u32 schema_slot, u32 channel_index) const noexcept
@@ -406,7 +458,7 @@ AdmitVerdict Admission::read_frame(u32 channel, HeaderForm form, cont::ConstSpan
         return AdmitVerdict::OtherChannel;
     }
 
-    const FrameShape shape = frame_shape(desc, *message);
+    const FrameShape shape = frame_shape(desc, *message, state.model != nullptr);
     read = read_frame_tail(bytes.subspan(at), form, shape, parsed.header, used);
     if (read != FrameRead::Ok)
     {
@@ -428,15 +480,21 @@ AdmitVerdict Admission::read_frame(u32 channel, HeaderForm form, cont::ConstSpan
         }
         parsed.header.length -= static_cast<u32>(used);
     }
-    if (parsed.header.length < message->min_bytes)
+    // The message's bounds hold what it decodes to. A coded body also has to be one a writer could have sent.
+    const u32 plain = (parsed.header.expanded != 0U) ? parsed.header.expanded : parsed.header.length;
+    if (parsed.header.expanded != 0U &&
+        !expansion_holds(parsed.header.length, parsed.header.expanded, state.codec->max_ratio))
+    {
+        return AdmitVerdict::BadExpansion;
+    }
+    if (plain < message->min_bytes)
     {
         return AdmitVerdict::Undersized;
     }
     // A newer writer may have appended fields past this reader's most; the channel's most still holds for every
     // revision.
-    const bool over_message = !newer && parsed.header.length > message->max_bytes;
-    return (over_message || parsed.header.length > desc.max_message_bytes) ? AdmitVerdict::Oversized
-                                                                           : AdmitVerdict::Admitted;
+    const bool over_message = !newer && plain > message->max_bytes;
+    return (over_message || plain > desc.max_message_bytes) ? AdmitVerdict::Oversized : AdmitVerdict::Admitted;
 }
 
 GateRule Admission::gate_rule(u64 per_second) const noexcept
@@ -481,7 +539,11 @@ AdmitVerdict Admission::admit(u32 channel, const ParsedFrame& parsed, crypto::De
     const SchemaState& schema = m_schemas[state.slot];
     const wire::ChannelDesc& desc = *state.desc;
     const wire::MessageDesc& message = *parsed.message;
-    const u32 bytes = parsed.header.length;
+    const u32 length = parsed.header.length;
+    const u32 expanded = parsed.header.expanded;
+    // A coded frame costs what it expands to, which is what everything after this handles, so a ratio buys no budget.
+    const u32 bytes = (expanded != 0U) ? expanded : length;
+    const u64 held = u64{reassembled ? length : 0U} + expanded;
     const QuotaLimits& limits = m_quota.limits;
 
     // S6, in order, spending nothing until all of it holds. A priority 0 channel keeps its own gates and is charged to
@@ -522,7 +584,7 @@ AdmitVerdict Admission::admit(u32 channel, const ParsedFrame& parsed, crypto::De
     {
         return AdmitVerdict::PendingFull;
     }
-    if (reassembled && !m_quota.reassembly.try_add(bytes, priority_limit(limits.reassembly_bytes, desc.priority)))
+    if (held != 0U && !m_quota.reassembly.try_add(held, priority_limit(limits.reassembly_bytes, desc.priority)))
     {
         m_quota.pending.release(1U);
         return AdmitVerdict::ReassemblyFull;
@@ -544,10 +606,7 @@ AdmitVerdict Admission::admit(u32 channel, const ParsedFrame& parsed, crypto::De
     if (verdict != AdmitVerdict::Admitted)
     {
         m_quota.pending.release(1U);
-        if (reassembled)
-        {
-            m_quota.reassembly.release(bytes);
-        }
+        m_quota.reassembly.release(held);
         return verdict;
     }
 
@@ -557,10 +616,22 @@ AdmitVerdict Admission::admit(u32 channel, const ParsedFrame& parsed, crypto::De
     step.frame.object = parsed.header.object;
     step.frame.channel = channel;
     step.frame.writer_minor = schema.writer_minor;
-    step.frame.length = bytes;
+    step.frame.length = length;
     step.frame.hash = parsed.header.hash;
     step.frame.hashed = parsed.hashed;
     step.frame.reassembled = reassembled;
+    step.frame.expanded = expanded;
+    if (expanded != 0U)
+    {
+        step.frame.expansion = allocate_buffer(expanded);
+        if (step.frame.expansion == nullptr)
+        {
+            finish(step.frame);
+            step.frame = AdmittedFrame{};
+            step.retry_at_ns = kNeverNs;
+            return AdmitVerdict::NoMemory;
+        }
+    }
     return AdmitVerdict::Admitted;
 }
 
@@ -577,52 +648,146 @@ bool Admission::charge_stepped_over(const ParsedFrame& parsed, u64 now_ns, u64& 
     return true;
 }
 
-AdmitVerdict Admission::charge_padding(u32 channel, u32 bytes, u64 now_ns, u64& retry_at_ns) noexcept
+AdmitVerdict Admission::byte_gates(const ChannelState& state, u64 operation, u64 now_ns,
+                                   u64& retry_at_ns) const noexcept
 {
-    ChannelState& state = m_channels[channel];
-    const GateRule channel_bytes = gate_rule(state.desc->bytes_per_s);
-    const GateRule principal_bytes = gate_rule(m_quota.limits.bytes_per_s);
-    u64 open = state.bytes.open_at(channel_bytes);
+    u64 open = state.bytes.open_at(gate_rule(state.desc->bytes_per_s));
     if (open > now_ns)
     {
         retry_at_ns = open;
         return AdmitVerdict::ChannelBytes;
     }
-    open = (state.desc->priority == 0U) ? 0U : m_quota.bytes.open_at(principal_bytes);
+    open = (state.desc->priority == 0U) ? 0U : m_quota.bytes.open_at(gate_rule(m_quota.limits.bytes_per_s));
     if (open > now_ns)
     {
         retry_at_ns = open;
         return AdmitVerdict::PrincipalBytes;
     }
-    state.bytes.charge(bytes, channel_bytes, now_ns);
-    m_quota.bytes.charge(bytes, principal_bytes, now_ns);
+    if (operation != 0U && m_capability != nullptr)
+    {
+        open = m_quota.budget_bytes.open_at(gate_rule(m_capability->grant.budget.bytes_per_second));
+        if (open > now_ns)
+        {
+            retry_at_ns = open;
+            return AdmitVerdict::BudgetBytes;
+        }
+    }
     return AdmitVerdict::Admitted;
+}
+
+void Admission::charge_bytes(ChannelState& state, u64 operation, u32 bytes, u64 now_ns) noexcept
+{
+    state.bytes.charge(bytes, gate_rule(state.desc->bytes_per_s), now_ns);
+    m_quota.bytes.charge(bytes, gate_rule(m_quota.limits.bytes_per_s), now_ns);
+    if (operation != 0U && m_capability != nullptr)
+    {
+        m_quota.budget_bytes.charge(bytes, gate_rule(m_capability->grant.budget.bytes_per_second), now_ns);
+    }
+}
+
+AdmitVerdict Admission::charge_padding(u32 channel, u32 bytes, u64 now_ns, u64& retry_at_ns) noexcept
+{
+    ChannelState& state = m_channels[channel];
+    const AdmitVerdict verdict = byte_gates(state, 0U, now_ns, retry_at_ns);
+    if (verdict == AdmitVerdict::Admitted)
+    {
+        charge_bytes(state, 0U, bytes, now_ns);
+    }
+    return verdict;
+}
+
+DeltaRead Admission::read_delta(const AdmittedFrame& frame, DeltaReader& reader, u64 now_ns, u64& retry_at_ns,
+                                cont::ConstSpan<u8>& message, wire::WireError& error) noexcept
+{
+    ChannelState& state = m_channels[frame.channel];
+    const u64 operation = frame.message->operation;
+    const AdmitVerdict gate = byte_gates(state, operation, now_ns, retry_at_ns);
+    if (gate != AdmitVerdict::Admitted)
+    {
+        count_verdict(gate);
+        return DeltaRead::Throttled;
+    }
+    const DeltaRead read = reader.read(frame.body, frame.writer_minor, message, error);
+    // admit() charged the body as it arrived.
+    const u32 expanded = reader.expanded_bytes();
+    if (expanded > frame.length)
+    {
+        charge_bytes(state, operation, expanded - frame.length, now_ns);
+    }
+    return read;
 }
 
 void Admission::open_body(FrameStep& step, cont::ConstSpan<u8> body) noexcept
 {
     AdmittedFrame& frame = step.frame;
-    if (frame.hashed && frame_hash(frame.message->id, frame.object, body) != frame.hash)
+    const auto refuse = [&](AdmitVerdict verdict) noexcept
     {
         finish(frame);
         frame = AdmittedFrame{};
-        step.verdict = AdmitVerdict::IntegrityFailed;
+        step.verdict = verdict;
+    };
+    cont::ConstSpan<u8> plain = body;
+    if (frame.expanded != 0U)
+    {
+        const ChannelState& state = m_channels[frame.channel];
+        const cont::Span<u8> out(frame.expansion, frame.expanded);
+        if (!m_schemas[state.slot].coder->decode(*state.model, body, out))
+        {
+            refuse(AdmitVerdict::BadExpansion);
+            return;
+        }
+        plain = out;
+    }
+    if (frame.hashed && frame_hash(frame.message->id, frame.object, plain) != frame.hash)
+    {
+        refuse(AdmitVerdict::IntegrityFailed);
         return;
     }
-    frame.body = body;
+    frame.body = plain;
 }
 
 void Admission::finish(const AdmittedFrame& frame) noexcept
 {
     m_quota.pending.release(1U);
-    if (frame.reassembled)
+    m_quota.reassembly.release(u64{frame.reassembled ? frame.length : 0U} + frame.expanded);
+    m_allocator.deallocate(frame.buffer);
+    m_allocator.deallocate(frame.expansion);
+}
+
+wire::WireError write_coded_body(const wire::ChannelDesc& channel, const wire::MessageDesc& message,
+                                 const BodyCoding& coding, HeaderForm form, u64 object, cont::ConstSpan<u8> plain,
+                                 cont::Span<u8> out, usize& written) noexcept
+{
+    written = 0U;
+    if (out.size() < kMaxFrameHeaderBytes)
     {
-        m_quota.reassembly.release(frame.length);
+        return wire::WireError::NoRoom;
     }
-    if (frame.buffer != nullptr)
+    // The header's size depends on what coding gives, so the body waits behind the largest header there can be.
+    const cont::Span<u8> room = out.subspan(kMaxFrameHeaderBytes);
+    const usize coded = coding.coder->encode(*coding.model, coding.max_ratio, plain, room);
+    const cont::ConstSpan<u8> body = (coded != 0U) ? cont::ConstSpan<u8>(room.first(coded)) : plain;
+    if (room.size() < body.size())
     {
-        m_allocator.deallocate(frame.buffer);
+        return wire::WireError::NoRoom;
     }
+    const FrameShape shape = frame_shape(channel, message, true);
+    FrameHeader header;
+    header.message = message.id;
+    header.length = static_cast<u32>(body.size());
+    header.object = object;
+    header.expanded = (coded != 0U) ? static_cast<u32>(plain.size()) : 0U;
+    if (shape.hash)
+    {
+        header.hash = frame_hash(message.id, object, plain);
+    }
+    const usize used = write_frame_header(form, shape, header, out);
+    if (!body.empty())
+    {
+        std::memmove(out.data() + used, body.data(), body.size());
+    }
+    written = used + body.size();
+    return wire::WireError::Ok;
 }
 
 u8* Admission::allocate_buffer(u32 bytes) noexcept

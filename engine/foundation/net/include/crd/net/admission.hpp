@@ -11,6 +11,7 @@
 // what the quota has already reserved, and time arrives as an argument (network foundation, Transport).
 
 #include <crd/crypto/capability.hpp>
+#include <crd/net/coding.hpp>
 #include <crd/net/frame.hpp>
 #include <crd/net/quota.hpp>
 #include <crd/net/wire.hpp>
@@ -22,6 +23,9 @@ class IAllocator;
 
 namespace crd::net
 {
+
+class DeltaReader;
+enum class DeltaRead : u8;
 
 enum class AdmitVerdict : u8
 {
@@ -66,9 +70,10 @@ enum class AdmitVerdict : u8
     IntegrityFailed, // the body is not what its writer hashed: nothing reads it
     PaddingFrame,    // a stream's padding: nothing to deliver
     BadPadding,      // padding that is not zero, or larger than its channel's block allows
+    BadExpansion,    // a coded body past its channel's ratio, or one that does not decode to its declared size
 };
 
-inline constexpr usize kAdmitVerdictCount = static_cast<usize>(AdmitVerdict::BadPadding) + 1U;
+inline constexpr usize kAdmitVerdictCount = static_cast<usize>(AdmitVerdict::BadExpansion) + 1U;
 
 // "admitted", "need-more", "malformed", ... one name per verdict.
 [[nodiscard]] cont::StringView admit_verdict_name(AdmitVerdict verdict) noexcept;
@@ -90,11 +95,14 @@ enum class AdmitAction : u8
 [[nodiscard]] AdmitAction admit_action(AdmitVerdict verdict, bool reliable) noexcept;
 
 // One schema of a session. A schema above S18 has the verified artefact of its own identifier, kind and major; a
-// transport schema has none. Both outlive the Admission.
+// transport schema has none. A schema whose channels declare models has each of them, compiled, and the loop's coder.
+// All of them outlive the Admission.
 struct SessionSchema
 {
     const wire::WireSchema* wire = nullptr;
     const crypto::AuthorizedSchema* authorized = nullptr;
+    cont::ConstSpan<const BodyModel*> models = {};
+    BodyCoder* coder = nullptr;
 };
 
 inline constexpr usize kMaxSessionSchemas = 4U;
@@ -107,6 +115,8 @@ struct ChannelState
     u32 index = 0U; // within its schema
     RateGate messages;
     RateGate bytes;
+    const wire::CodecDesc* codec = nullptr; // what it codes with at the session's revisions, once they are known
+    const BodyModel* model = nullptr;
 };
 
 // A frame that passed S6 and S7.
@@ -123,6 +133,8 @@ struct AdmittedFrame
     cont::ConstSpan<u8> body; // the input's bytes, or `buffer`'s
     bool reassembled = false; // it holds a reservation of the principal's reassembly quota
     u8* buffer = nullptr;     // its buffer, once allocated; finish() frees it
+    u32 expanded = 0U;        // a coded body's size once decoded: it holds a reservation of that too
+    u8* expansion = nullptr;  // where it decodes to; finish() frees it
 };
 
 // The result of one read.
@@ -154,11 +166,13 @@ struct ParsedFrame
     bool hashed = false;
 };
 
-// What a message's header holds on its channel. A delta body hashes the message it rebuilds, so it needs no second one.
-[[nodiscard]] constexpr FrameShape frame_shape(const wire::ChannelDesc& channel,
-                                               const wire::MessageDesc& message) noexcept
+// What a message's header holds on its channel, `coded` saying whether the channel codes at the session's revisions. A
+// delta body hashes the message it rebuilds and codes its own payload, so its header needs neither.
+[[nodiscard]] constexpr FrameShape frame_shape(const wire::ChannelDesc& channel, const wire::MessageDesc& message,
+                                               bool coded = false) noexcept
 {
-    return FrameShape{message.operation != 0U, channel.integrity && message.delta == nullptr};
+    return FrameShape{message.operation != 0U, channel.integrity && message.delta == nullptr,
+                      coded && message.delta == nullptr};
 }
 
 class Admission
@@ -170,13 +184,14 @@ public:
 
     // The session's schemas, in the order that gives their channels' flat numbers. False, binding nothing, for more
     // than kMaxSessionSchemas, too little channel storage, a missing schema, a schema above S18 without its own
-    // verified artefact or a transport schema with one.
+    // verified artefact, a transport schema with one or with models, or a declared model not held or with no coder.
     [[nodiscard]] bool bind(cont::ConstSpan<SessionSchema> schemas) noexcept;
 
     // The revision the peer writes of a schema (RevisionAnnounce). False for a schema the session does not hold,
     // another major, or a second announcement that differs: the session then ends with GoAway RevisionRefused. A
     // transport schema is readable before its announcement, at its first minor revision, which is how the announcement
-    // itself travels; a schema above S18 is not.
+    // itself travels; a schema above S18 is not. It settles what the schema's channels code with: the newest model of
+    // the lower of the two revisions.
     [[nodiscard]] bool announce(cont::ConstSpan<u8> schema_id, u16 major, u16 writer_minor) noexcept;
 
     // The capability this session presents, verified, or null when none is current. The session withdraws it when it
@@ -189,6 +204,9 @@ public:
     [[nodiscard]] u32 channel_count() const noexcept { return m_channel_count; }
 
     [[nodiscard]] const ChannelState& channel(u32 number) const noexcept { return m_channels[number]; }
+
+    // What a channel's writers and readers code with at the session's revisions.
+    [[nodiscard]] BodyCoding coding(u32 number) const noexcept;
 
     // A stream's preamble has been read: whether the route may open a stream, taking one of the principal's streams.
     [[nodiscard]] AdmitVerdict open_stream(const Route& route) noexcept;
@@ -221,9 +239,16 @@ public:
     // spending nothing, with `retry_at_ns` saying until when.
     [[nodiscard]] AdmitVerdict charge_padding(u32 channel, u32 bytes, u64 now_ns, u64& retry_at_ns) noexcept;
 
-    // The admitted frame's whole body is here: fills step.frame.body when it is what its writer hashed. When it is not,
-    // gives back what the frame holds and makes the step IntegrityFailed.
+    // The admitted frame's whole body is here: decodes it when it is coded and fills step.frame.body when it is what
+    // its writer hashed. When it is not, gives back what the frame holds and makes the step BadExpansion or
+    // IntegrityFailed.
     void open_body(FrameStep& step, cont::ConstSpan<u8> body) noexcept;
+
+    // Reads an admitted frame's delta body. What it rebuilds cannot be declared, so a closed byte gate holds it back
+    // first (Throttled, with `retry_at_ns`, reading the same frame again then) and what it did expand to is charged
+    // after, paid for by the wait that follows. The rest is DeltaReader::read().
+    [[nodiscard]] DeltaRead read_delta(const AdmittedFrame& frame, DeltaReader& reader, u64 now_ns, u64& retry_at_ns,
+                                       cont::ConstSpan<u8>& message, wire::WireError& error) noexcept;
 
     // Gives back what an admitted frame holds: its place among the pending messages and its buffer. The caller has
     // decoded and executed it, or dropped it.
@@ -245,12 +270,18 @@ private:
     {
         const wire::WireSchema* wire = nullptr;
         const crypto::AuthorizedSchema* authorized = nullptr;
+        cont::ConstSpan<const BodyModel*> models;
+        BodyCoder* coder = nullptr;
         u16 writer_minor = 0U;
         bool announced = false;
         u32 first_channel = 0U;
     };
 
     [[nodiscard]] GateRule gate_rule(u64 per_second) const noexcept;
+    // The byte gates a frame of `operation` passes: the first that is closed, with `retry_at_ns`, or Admitted.
+    [[nodiscard]] AdmitVerdict byte_gates(const ChannelState& state, u64 operation, u64 now_ns,
+                                          u64& retry_at_ns) const noexcept;
+    void charge_bytes(ChannelState& state, u64 operation, u32 bytes, u64 now_ns) noexcept;
     [[nodiscard]] AdmitVerdict take_padding(u32 channel, cont::ConstSpan<u8> bytes, u64 now_ns,
                                             DatagramCursor& cursor) noexcept;
     [[nodiscard]] AdmitVerdict authorize(const SchemaState& schema, const wire::ChannelDesc& channel,
@@ -303,6 +334,41 @@ template <typename M>
     }
     written = used + body;
     return wire::WireError::Ok;
+}
+
+// Writes one Sized or ToEnd frame of `plain`, the encoding of a message on `channel`, coded when that pays, its hash
+// taken over `plain`. A header's size depends on the coded body's, so `out` needs kMaxFrameHeaderBytes on top of the
+// body.
+[[nodiscard]] wire::WireError write_coded_body(const wire::ChannelDesc& channel, const wire::MessageDesc& message,
+                                               const BodyCoding& coding, HeaderForm form, u64 object,
+                                               cont::ConstSpan<u8> plain, cont::Span<u8> out, usize& written) noexcept;
+
+// write_frame() on a channel that may code its bodies: `coding` is Admission::coding() of its channel, and empty just
+// writes the frame.
+template <typename M>
+[[nodiscard]] inline wire::WireError write_frame(const wire::WireSchema& schema, const BodyCoding& coding,
+                                                 HeaderForm form, const M& message, u16 minor, u64 object,
+                                                 cont::Span<u8> out, usize& written) noexcept
+{
+    if (coding.model == nullptr)
+    {
+        return write_frame(schema, form, message, minor, object, out, written);
+    }
+    written = 0U;
+    const wire::MessageDesc* found = wire::find_message(schema, M::WireCodec::kMessageId);
+    if (found == nullptr || found->delta != nullptr)
+    {
+        return wire::WireError::OutOfRange;
+    }
+    usize plain = 0U;
+    const cont::Span<u8> scratch = coding.coder->scratch();
+    const wire::WireError error = wire::encode(message, minor, scratch, plain);
+    if (error != wire::WireError::Ok)
+    {
+        return error;
+    }
+    return write_coded_body(schema.channels[found->channel], *found, coding, form, object, scratch.first(plain), out,
+                            written);
 }
 
 // Decodes an admitted frame's body as message type M, written at the revision its writer announced. A frame of another

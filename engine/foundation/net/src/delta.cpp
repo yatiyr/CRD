@@ -993,7 +993,8 @@ wire::WireError DeltaWriter::write(u64 sequence, u16 minor, cont::Span<u8> out, 
     {
         return wire::WireError::OutOfRange;
     }
-    if (out.size() < kDeltaHeaderMaxBytes)
+    const usize reserve = (m_coding.model != nullptr) ? kDeltaExpandedMaxBytes : 0U;
+    if (out.size() < kDeltaHeaderMaxBytes + reserve)
     {
         return wire::WireError::NoRoom;
     }
@@ -1013,13 +1014,13 @@ wire::WireError DeltaWriter::write(u64 sequence, u16 minor, cont::Span<u8> out, 
         const u64 distance = sequence - m_acked;
         const usize header = put_header(distance);
         // Past the message's size plus the room the rebuild needs, the delta has lost: stop there.
-        const cont::Span<u8> room = out.subspan(header);
+        const cont::Span<u8> room = out.subspan(header + reserve);
         const usize limit = std::min(room.size(), current.size() + wire::kDeltaSlackBytes);
         usize size = 0U;
         const wire::WireError error = wire::delta_encode(m_layout, baseline, current, minor, room.first(limit), size);
         if (error == wire::WireError::Ok && size < current.size())
         {
-            written = header + size;
+            written = seal(header, reserve, size, out);
             m_last = sequence;
             m_wrote = true;
             ++m_deltas;
@@ -1032,19 +1033,43 @@ wire::WireError DeltaWriter::write(u64 sequence, u16 minor, cont::Span<u8> out, 
     }
 
     const usize header = put_header(0U);
-    if (out.size() - header < current.size())
+    if (out.size() - header - reserve < current.size())
     {
         return wire::WireError::NoRoom;
     }
     if (!current.empty())
     {
-        std::memcpy(out.data() + header, current.data(), current.size());
+        std::memcpy(out.data() + header + reserve, current.data(), current.size());
     }
-    written = header + current.size();
+    written = seal(header, reserve, current.size(), out);
     m_last = sequence;
     m_wrote = true;
     ++m_whole;
     return wire::WireError::Ok;
+}
+
+usize DeltaWriter::seal(usize header, usize reserve, usize payload, cont::Span<u8> out) noexcept
+{
+    if (reserve == 0U)
+    {
+        return header + payload;
+    }
+    const cont::ConstSpan<u8> plain(out.data() + header + reserve, payload);
+    const cont::Span<u8> scratch = m_coding.coder->scratch();
+    const usize coded = m_coding.coder->encode(*m_coding.model, m_coding.max_ratio, plain, scratch);
+    cont::BitWriter w(out.subspan(header));
+    wire::wire_put_varuint(w, (coded != 0U) ? payload : 0U, kDeltaDistanceGroup);
+    const usize at = header + w.finish();
+    if (coded != 0U)
+    {
+        std::memcpy(out.data() + at, scratch.data(), coded);
+        return at + coded;
+    }
+    if (payload != 0U)
+    {
+        std::memmove(out.data() + at, plain.data(), payload);
+    }
+    return at + payload;
 }
 
 void DeltaWriter::on_ack(u16 sequence) noexcept
@@ -1062,28 +1087,33 @@ void DeltaWriter::on_ack(u16 sequence) noexcept
     m_has_ack = true;
 }
 
-DeltaReader::DeltaReader(const wire::DeltaLayout& layout, BaselineStore& store, memory::IAllocator& allocator) noexcept
-    : m_layout(layout), m_store(store), m_allocator(allocator)
+DeltaReader::DeltaReader(const wire::DeltaLayout& layout, BaselineStore& store, memory::IAllocator& allocator,
+                         const BodyCoding& coding) noexcept
+    : m_layout(layout), m_store(store), m_allocator(allocator), m_coding(coding)
 {
     void* const scratch = allocator.try_allocate(layout.max_bytes + wire::kDeltaSlackBytes, 1U);
     if (scratch != nullptr)
     {
         m_scratch = static_cast<u8*>(scratch);
     }
+    void* const decoded = (coding.model != nullptr) ? allocator.try_allocate(coding.max_bytes, 1U) : nullptr;
+    if (decoded != nullptr)
+    {
+        m_decoded = static_cast<u8*>(decoded);
+    }
 }
 
 DeltaReader::~DeltaReader()
 {
-    if (m_scratch != nullptr)
-    {
-        m_allocator.deallocate(m_scratch);
-    }
+    m_allocator.deallocate(m_scratch);
+    m_allocator.deallocate(m_decoded);
 }
 
 DeltaRead DeltaReader::read(cont::ConstSpan<u8> body, u16 writer_minor, cont::ConstSpan<u8>& message,
                             wire::WireError& error) noexcept
 {
     error = wire::WireError::Ok;
+    m_expanded = 0U;
     const DeltaRead verdict = read_body(body, writer_minor, message, error);
     ++m_counts[static_cast<usize>(verdict)];
     return verdict;
@@ -1118,21 +1148,43 @@ DeltaRead DeltaReader::read_body(cont::ConstSpan<u8> body, u16 writer_minor, con
     {
         return DeltaRead::Stale;
     }
+    u64 expanded = 0U;
+    if (m_coding.model != nullptr)
+    {
+        error = wire::wire_take_varuint(r, kDeltaDistanceGroup, m_coding.max_bytes, expanded);
+        if (error != wire::WireError::Ok)
+        {
+            return DeltaRead::Malformed;
+        }
+    }
     cont::ConstSpan<u8> payload;
     if (!r.take_bytes(static_cast<usize>(r.bits_left() / 8U), payload))
     {
         error = wire::WireError::Truncated;
         return DeltaRead::Malformed;
     }
+    cont::ConstSpan<u8> baseline;
+    if (distance != 0U && !m_store.find(sequence - distance, baseline))
+    {
+        return DeltaRead::MissingBaseline;
+    }
+    if (expanded != 0U)
+    {
+        // Nothing is decoded for a frame the checks above drop.
+        const cont::Span<u8> decoded(m_decoded, static_cast<usize>(expanded));
+        if (!expansion_holds(payload.size(), expanded, m_coding.max_ratio) ||
+            !m_coding.coder->decode(*m_coding.model, payload, decoded))
+        {
+            error = wire::WireError::BadCoding;
+            return DeltaRead::Malformed;
+        }
+        payload = decoded;
+        m_expanded = static_cast<u32>(expanded);
+    }
 
     cont::ConstSpan<u8> whole = payload;
     if (distance != 0U)
     {
-        cont::ConstSpan<u8> baseline;
-        if (!m_store.find(sequence - distance, baseline))
-        {
-            return DeltaRead::MissingBaseline;
-        }
         usize size = 0U;
         const usize room = m_layout.max_bytes + wire::kDeltaSlackBytes;
         error = wire::delta_apply(m_layout, baseline, payload, writer_minor, cont::Span<u8>(m_scratch, room), size);
@@ -1141,6 +1193,7 @@ DeltaRead DeltaReader::read_body(cont::ConstSpan<u8> body, u16 writer_minor, con
             return DeltaRead::Malformed;
         }
         whole = cont::ConstSpan<u8>(m_scratch, size);
+        m_expanded = std::max(m_expanded, static_cast<u32>(size));
     }
     error = m_layout.validate(whole, writer_minor);
     if (error != wire::WireError::Ok)

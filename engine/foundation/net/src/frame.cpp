@@ -115,6 +115,10 @@ FrameRead read_frame_tail(cont::ConstSpan<u8> bytes, HeaderForm form, FrameShape
         read = r.take(kFrameHashBytes * 8U, hash) ? FrameRead::Ok : FrameRead::Short;
         header.hash = static_cast<u32>(hash);
     }
+    if (shape.expanded)
+    {
+        read = (read == FrameRead::Ok) ? take_u32(r, header.expanded) : read;
+    }
     if (form == HeaderForm::Fragment)
     {
         read = (read == FrameRead::Ok) ? take_u32(r, header.chunk) : read;
@@ -134,7 +138,8 @@ usize write_frame_header(HeaderForm form, FrameShape shape, const FrameHeader& h
         u64 length = header.length;
         if (form == HeaderForm::Sized)
         {
-            length += (shape.object ? number_bytes(header.object) : 0U) + (shape.hash ? kFrameHashBytes : 0U);
+            length += (shape.object ? number_bytes(header.object) : 0U) + (shape.hash ? kFrameHashBytes : 0U) +
+                      (shape.expanded ? number_bytes(header.expanded) : 0U);
         }
         if (length > kMaxU32)
         {
@@ -149,6 +154,10 @@ usize write_frame_header(HeaderForm form, FrameShape shape, const FrameHeader& h
     if (shape.hash)
     {
         w.put(header.hash, kFrameHashBytes * 8U);
+    }
+    if (shape.expanded)
+    {
+        wire::wire_put_varuint(w, header.expanded, kGroup);
     }
     if (form == HeaderForm::Fragment)
     {

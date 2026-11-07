@@ -95,6 +95,54 @@ class Refusals(SchemaCase):
             document['channels'][0][key] = value
             self.refused(document, words)
 
+    def test_channel_models(self):
+        good = {'since': 0, 'kind': 'entropy', 'hash': '0123456789abcdef', 'max_ratio': 16}
+
+        def coded(class_name='Event', kind='World', models=None):
+            document = dict(base(), kind=kind, operations={'go': {'bit': 0}})
+            if kind == 'transport':
+                del document['operations']
+            document['channels'][0].update({'class': class_name, 'models': [good] if models is None else models})
+            document['messages'][0]['operation'] = 'go' if kind != 'transport' else None
+            if kind == 'transport':
+                del document['messages'][0]['operation']
+            return document
+
+        schema = build(coded())
+        self.assertIn('kChannel0Codecs', gen.header_text(schema, {'schema': 's', 'include': 'i'}))
+        self.assertIn('CodecKind::Entropy, 16U, 0x0123456789abcdefULL',
+                      gen.header_text(schema, {'schema': 's', 'include': 'i'}))
+        for class_name in ('Control', 'Transaction', 'Media'):
+            self.refused(coded(class_name), 'codes nothing')
+        self.refused(coded(kind='transport'), 'codes nothing')
+        for change, words in (({'kind': 'other'}, 'model kind'), ({'hash': 'XYZ'}, 'hash'), ({'hash': 7}, 'hash'),
+                              ({'max_ratio': 1}, 'max_ratio'), ({'max_ratio': 65536}, 'max_ratio'),
+                              ({'since': 1}, 'since'), ({'since': None}, 'since')):
+            self.refused(coded(models=[dict(good, **change)]), words)
+        self.refused(coded(models=[good, good]), 'since')
+        self.refused(coded(models={}), 'models')
+
+        # A model is part of its revision's digest, and a channel without one leaves the digest as it was.
+        document = coded()
+        digest = build(document).layout_digest(0)
+        self.assertNotEqual(digest, build(coded(models=[dict(good, hash='fedcba9876543210')])).layout_digest(0))
+        self.assertNotEqual(digest, build(coded(models=[dict(good, max_ratio=17)])).layout_digest(0))
+        plain = coded(models=[])
+        self.assertNotEqual(digest, build(plain).layout_digest(0))
+
+    def test_coded_delta_bounds(self):
+        # A coded delta body may be as small as the coder's output, and takes the expanded size on top of its header.
+        document = dict(base(), kind='World', operations={'go': {'bit': 0, 'idempotent': True}})
+        document['channels'][0].update({'class': 'State', 'idempotent': True, 'models': [
+            {'since': 0, 'kind': 'entropy', 'hash': '0123456789abcdef', 'max_ratio': 16}]})
+        document['messages'][0].update({'operation': 'go', 'delta': True, 'fields': [
+            {'name': 'a', 'type': 'uint', 'bits': 64}, {'name': 'b', 'type': 'uint', 'bits': 64}]})
+        text = gen.header_text(build(document), {'schema': 's', 'include': 'i'})
+        self.assertIn('kDeltaHeaderMinBytes + 1U', text)
+        self.assertIn('kDeltaHeaderMaxBytes + kDeltaExpandedMaxBytes + OnlyCodec::kMaxBytes', text)
+        document['channels'][0]['max_message_bytes'] = 16 + gen.DELTA_HEADER_MAX_BYTES
+        self.refused(document, 'above channel')
+
     def test_message_ids_names_and_channel(self):
         document = base()
         document['messages'].append(copy.deepcopy(document['messages'][0]))
@@ -356,7 +404,7 @@ class Deltas(SchemaCase):
         self.refused(document, 'above channel')
         document_fits['channels'][0]['max_message_bytes'] = 110
         schema = build(document_fits)
-        least, most = gen.message_bounds(schema.messages[0])
+        least, most = gen.message_bounds(schema, schema.messages[0])
         self.assertEqual(least, 'kDeltaHeaderMinBytes + 1U')
         self.assertIn('kDeltaHeaderMaxBytes', most)
         self.assertIn('kOnlyLayout', gen.header_text(schema, {'schema': 'x'}))

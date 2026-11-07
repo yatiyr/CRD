@@ -38,6 +38,7 @@ enum class WireError : u8
     BadRevision,   // encoding: a minor revision newer than the schema's
     Unchanged,     // a baseline delta says a field changed that did not: a second encoding of one message
     KeyOrder,      // the keys of a keyed list do not ascend strictly
+    BadCoding,     // a coded payload past its ratio, or one that does not decode to its declared size
 };
 
 // The channel classes of the design's table.
@@ -50,6 +51,23 @@ enum class ChannelClass : u8
     Transaction,
     Bulk,
     Media,
+};
+
+// How a channel's bodies are coded from a minor revision on (network foundation S32).
+enum class CodecKind : u8
+{
+    Dictionary, // a zstd frame against a dictionary both ends hold
+    Entropy,    // an entropy coding under a model both ends hold
+};
+
+// One model of a channel. Both ends code at the newest model the lower of their two revisions has, so the choice costs
+// nothing on the wire and an older peer is never sent what it cannot read.
+struct CodecDesc
+{
+    u16 since = 0U;
+    CodecKind kind{};
+    u16 max_ratio = 0U; // what a coded body may expand by; a writer stores what would pass it
+    u64 model = 0U;     // XXH3-64 of the model's source
 };
 
 // What a channel declares in its authored schema; admission enforces it. A rate or byte budget of zero is no message
@@ -67,7 +85,24 @@ struct ChannelDesc
     u64              bytes_per_s       = 0U;
     u16              padding_block     = 0U; // its traffic pads to a multiple of this; zero pads nothing
     bool             integrity         = true; // its frames carry frame_hash(); only a Media channel declares otherwise
+    const CodecDesc* codecs = nullptr;         // ascending by `since`; a channel without any codes nothing
+    u16 codec_count = 0U;
 };
+
+// The model a channel codes with when its peer writes `minor`: its table stops at this end's revision, so this is the
+// newest of the lower of the two. Null when none has begun yet.
+[[nodiscard]] constexpr const CodecDesc* codec_at(const ChannelDesc& channel, u16 minor) noexcept
+{
+    const CodecDesc* found = nullptr;
+    for (u16 index = 0U; index < channel.codec_count; ++index)
+    {
+        if (channel.codecs[index].since <= minor)
+        {
+            found = &channel.codecs[index];
+        }
+    }
+    return found;
+}
 
 struct DeltaLayout;
 
