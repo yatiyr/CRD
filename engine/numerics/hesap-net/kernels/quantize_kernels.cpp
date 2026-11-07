@@ -12,6 +12,7 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/net/quantize_kernels.hpp>
 #include <crd/math/simd/convert.hpp>
+#include <crd/math/simd/interleave4.hpp>
 #include <crd/math/simd/vec4f.hpp>
 #include <crd/math/simd/vec4i.hpp>
 
@@ -159,18 +160,11 @@ usize bounded_decode(const BoundedFloat& format, const u32* codes, usize count, 
 
 CRD_FORCEINLINE void smallest_three_encode_block(const SmallestThree& format, const f32* xyzw, u64* words) noexcept
 {
-    f32 plane[4][kLanes];
-    for (usize lane = 0U; lane < kLanes; ++lane)
-    {
-        plane[0][lane] = xyzw[(4U * lane) + 0U];
-        plane[1][lane] = xyzw[(4U * lane) + 1U];
-        plane[2][lane] = xyzw[(4U * lane) + 2U];
-        plane[3][lane] = xyzw[(4U * lane) + 3U];
-    }
-    const F x = F::load(plane[0]);
-    const F y = F::load(plane[1]);
-    const F z = F::load(plane[2]);
-    const F w = F::load(plane[3]);
+    F x;
+    F y;
+    F z;
+    F w;
+    crd::math::simd::load_interleaved4(xyzw, x, y, z, w);
 
     // The first of the largest, by a strict comparison in x, y, z, w order; a NaN never wins.
     const F is_y = cmp_gt(abs(y), abs(x));

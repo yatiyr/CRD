@@ -12,6 +12,7 @@
 #include <crd/math/power.hpp>
 #include <crd/math/select.hpp>
 #include <crd/math/simd/convert.hpp>
+#include <crd/math/simd/interleave4.hpp>
 #include <crd/math/simd/mat4f.hpp>
 #include <crd/math/simd/quatf.hpp>
 #include <crd/math/simd/transcendental.hpp>
@@ -479,6 +480,43 @@ usize v8_deinterleave(const Input& in, u64* out) noexcept
         n += put(im, out + n);
     }
     return n;
+}
+// Four channels of each width, read as planes and written back with the channels turned, so each order shows.
+template <class V> usize interleave4_round_trip(const f32* in, u64* out) noexcept
+{
+    constexpr usize elements = sizeof(V) / sizeof(f32);
+    usize n = 0;
+    for (usize i = 0; i + (4U * elements) <= kLanes; i += 4U * elements)
+    {
+        V x;
+        V y;
+        V z;
+        V w;
+        s::load_interleaved4(in + i, x, y, z, w);
+        n += put(x, out + n);
+        n += put(y, out + n);
+        n += put(z, out + n);
+        n += put(w, out + n);
+        f32 t[4U * elements];
+        s::store_interleaved4(t, w, x, z, y);
+        for (const f32 value : t)
+        {
+            n += put(value, out + n);
+        }
+    }
+    return n;
+}
+usize v4_interleave4(const Input& in, u64* out) noexcept
+{
+    return interleave4_round_trip<Vec4f>(in.a, out);
+}
+usize v8_interleave4(const Input& in, u64* out) noexcept
+{
+    return interleave4_round_trip<Vec8f>(in.a, out);
+}
+usize v16_interleave4(const Input& in, u64* out) noexcept
+{
+    return interleave4_round_trip<Vec16f>(in.a, out);
 }
 usize v8_complex(const Input& in, u64* out) noexcept
 {
@@ -1240,6 +1278,9 @@ constexpr Op kVectorOps[] = {
     {"vec8f deinterleave and vec16f split", Compare::Bits, &v8_deinterleave},
     {"vec8f complex (de)interleave", Compare::Bits, &v8_complex},
     {"vec16f complex (de)interleave", Compare::Bits, &v16_complex},
+    {"vec4f four channels (de)interleaved", Compare::Bits, &v4_interleave4},
+    {"vec8f four channels (de)interleaved", Compare::Bits, &v8_interleave4},
+    {"vec16f four channels (de)interleaved", Compare::Bits, &v16_interleave4},
     {"vec4d arithmetic", Compare::F64Value, &F64<Vec4d>::arith},
     {"vec8d arithmetic", Compare::F64Value, &F64<Vec8d>::arith},
     {"vec4d negate/abs/select", Compare::Bits, &F64<Vec4d>::neg_abs},
