@@ -1419,7 +1419,7 @@ from one authored schema through `scripts/gen-wire-schemas.py`; nothing hand-wri
   its verdicts on damaged messages at every minor, older and newer writers included.
 
 Later slices of [NET.3](../ROADMAP.md#slice-net.3): [baseline deltas](#baseline-deltas), [the integrity hash](#integrity-hash),
-[padding](#padding), [the state-hash exchange](#state-hashes) and [coded bodies](#body-coding) with the tool that trains their models landed; the budget board remains. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
+[padding](#padding), [the state-hash exchange](#state-hashes) and [coded bodies](#body-coding) with the tool that trains their models landed, and the serializer budget board ([2026-11-08](../bench/2026-11-08-net-3-serializers.md)); a cheaper validating pass, cheaper deltas and two more peers remain. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
 a schema with quantised fields links `crd-net-quantized`, whose header sits outside crd-net's installed headers.
 
 <a id="frames"></a>
