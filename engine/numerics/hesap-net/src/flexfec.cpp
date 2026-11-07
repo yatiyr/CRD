@@ -182,6 +182,39 @@ u32 total_set(const FlexFecHeader& header) noexcept
 }
 
 // XORs the recovery fields (the first 16 bits, the length minus 12 and the timestamp) of `packet` into `fields`.
+// A repair payload's XOR of its packets' payloads: a run of equal lengths, the usual case, is one pass of the kernel.
+class PayloadSum
+{
+public:
+    explicit PayloadSum(u8* output) noexcept : m_kernels(*erasure_kernels().table), m_output(output) {}
+
+    void add(const u8* payload, usize length) noexcept
+    {
+        if (length != m_length || m_count == kRun)
+        {
+            flush();
+            m_length = length;
+        }
+        m_payloads[m_count] = payload;
+        ++m_count;
+    }
+
+    void flush() noexcept
+    {
+        m_kernels.sum(m_output, m_payloads, m_count, m_length, true);
+        m_count = 0U;
+    }
+
+private:
+    static constexpr usize kRun = 16U;
+
+    const ErasureKernels& m_kernels;
+    u8* m_output;
+    usize m_length = 0U;
+    usize m_count = 0U;
+    const u8* m_payloads[kRun];
+};
+
 void add_fields(u8* fields, std::span<const u8> packet) noexcept
 {
     const u32 length = static_cast<u32>(packet.size() - kRtpHeader);
@@ -223,13 +256,14 @@ FlexFecStatus combine(std::span<const u8> bytes, const FlexFecHeader& header, Fo
     {
         std::memcpy(packet + kRtpHeader, bytes.data() + header.header_bytes, y);
     }
-    const ErasureKernels& kernels = *erasure_kernels().table;
+    PayloadSum sum(packet + kRtpHeader);
     for_each(
-        [packet, y, &kernels](std::span<const u8> p) noexcept
+        [&sum, y](std::span<const u8> p) noexcept
         {
             const usize length = p.size() - kRtpHeader;
-            kernels.add(packet + kRtpHeader, p.data() + kRtpHeader, length < y ? length : y);
+            sum.add(p.data() + kRtpHeader, length < y ? length : y);
         });
+    sum.flush();
     written = kRtpHeader + y;
     return FlexFecStatus::Ok;
 }
@@ -506,11 +540,12 @@ FlexFecStatus flexfec_encode(std::span<const std::span<const u8>> sources, std::
         write_block(blocks_out, variant, header.blocks[i]);
     }
     CRD_ASSERT(blocks_out.written() == header_bytes - 8U);
-    const ErasureKernels& kernels = *erasure_kernels().table;
+    PayloadSum sum(fec + header_bytes);
     for (const std::span<const u8> p : sources)
     {
-        kernels.add(fec + header_bytes, p.data() + kRtpHeader, p.size() - kRtpHeader);
+        sum.add(p.data() + kRtpHeader, p.size() - kRtpHeader);
     }
+    sum.flush();
     written = header_bytes + y;
     return FlexFecStatus::Ok;
 }

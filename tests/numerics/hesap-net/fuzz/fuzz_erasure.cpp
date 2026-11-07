@@ -587,6 +587,27 @@ void kernel_request(Reader r)
                 CRD_FUZZ_REQUIRE(inside || g_kernel_out[g][b] == kSentinel);
             }
         }
+        // The sum of the same sources into the first output, against a byte loop.
+        if (output_count != 0U)
+        {
+            std::memset(g_kernel_out[0], kSentinel, sizeof(g_kernel_out[0]));
+            std::memcpy(outputs[0], g_kernel_prior[0], bytes);
+            level.table->sum(outputs[0], sources, count, bytes, accumulate);
+            for (usize i = 0U; i < bytes; ++i)
+            {
+                u8 want = accumulate ? g_kernel_prior[0][i] : u8{0U};
+                for (usize j = 0U; j < count; ++j)
+                {
+                    want = static_cast<u8>(want ^ sources[j][i]);
+                }
+                CRD_FUZZ_REQUIRE(outputs[0][i] == want);
+            }
+            for (usize b = 0U; b < sizeof(g_kernel_out[0]); ++b)
+            {
+                const bool inside = b >= output_offset[0] && b < output_offset[0] + bytes;
+                CRD_FUZZ_REQUIRE(inside || g_kernel_out[0][b] == kSentinel);
+            }
+        }
     }
 }
 

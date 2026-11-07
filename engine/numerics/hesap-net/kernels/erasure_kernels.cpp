@@ -56,20 +56,29 @@ void dot_bytes(const GfCoefficient* coefficients, const u8* const* sources, usiz
 
 #endif
 
-// Bytes [first, bytes) of output ^= source.
-void add_bytes(u8* output, const u8* source, usize first, usize bytes) noexcept
+#if CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_PORTABLE || CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_SSE2
+
+// Bytes [first, bytes) of the output as the sum of the sources.
+void sum_bytes(u8* output, const u8* const* sources, usize count, usize first, usize bytes, bool accumulate) noexcept
 {
     for (usize i = first; i < bytes; ++i)
     {
-        output[i] = static_cast<u8>(output[i] ^ source[i]);
+        u8 acc = accumulate ? output[i] : u8{0U};
+        for (usize j = 0U; j < count; ++j)
+        {
+            acc = static_cast<u8>(acc ^ sources[j][i]);
+        }
+        output[i] = acc;
     }
 }
 
+#endif
+
 #if CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_PORTABLE
 
-void add(u8* output, const u8* source, usize bytes) noexcept
+void sum(u8* output, const u8* const* sources, usize count, usize bytes, bool accumulate) noexcept
 {
-    add_bytes(output, source, 0U, bytes);
+    sum_bytes(output, sources, count, 0U, bytes, accumulate);
 }
 
 void dot(const GfCoefficient* coefficients, const u8* const* sources, usize count, u8* const* outputs,
@@ -82,16 +91,19 @@ void dot(const GfCoefficient* coefficients, const u8* const* sources, usize coun
 
 constexpr usize kTile = 1024U;
 
-void add(u8* output, const u8* source, usize bytes) noexcept
+void sum(u8* output, const u8* const* sources, usize count, usize bytes, bool accumulate) noexcept
 {
     const usize vector_bytes = bytes & ~usize{15U};
     for (usize i = 0U; i < vector_bytes; i += 16U)
     {
-        const __m128i x = _mm_loadu_si128(reinterpret_cast<const __m128i*>(source + i));
-        const __m128i y = _mm_loadu_si128(reinterpret_cast<const __m128i*>(output + i));
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(output + i), _mm_xor_si128(x, y));
+        __m128i acc = accumulate ? _mm_loadu_si128(reinterpret_cast<const __m128i*>(output + i)) : _mm_setzero_si128();
+        for (usize j = 0U; j < count; ++j)
+        {
+            acc = _mm_xor_si128(acc, _mm_loadu_si128(reinterpret_cast<const __m128i*>(sources[j] + i)));
+        }
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(output + i), acc);
     }
-    add_bytes(output, source, vector_bytes, bytes);
+    sum_bytes(output, sources, count, vector_bytes, bytes, accumulate);
 }
 
 void dot(const GfCoefficient* coefficients, const u8* const* sources, usize count, u8* const* outputs,
@@ -254,14 +266,73 @@ struct Lanes
 
 using V = Lanes::V;
 
-void add(u8* output, const u8* source, usize bytes) noexcept
+// M vector columns of the output from byte i.
+template <usize M>
+inline void sum_columns(u8* output, const u8* const* sources, usize count, usize i, bool accumulate) noexcept
 {
-    const usize vector_bytes = bytes - (bytes % Lanes::kBytes);
-    for (usize i = 0U; i < vector_bytes; i += Lanes::kBytes)
+    V acc[M];
+    for (usize m = 0U; m < M; ++m)
     {
-        Lanes::store(output + i, Lanes::bxor(Lanes::load(output + i), Lanes::load(source + i)));
+        acc[m] = accumulate ? Lanes::load(output + i + (m * Lanes::kBytes)) : Lanes::zero();
     }
-    add_bytes(output, source, vector_bytes, bytes);
+    for (usize j = 0U; j < count; ++j)
+    {
+        const u8* const source = sources[j] + i;
+        for (usize m = 0U; m < M; ++m)
+        {
+            acc[m] = Lanes::bxor(acc[m], Lanes::load(source + (m * Lanes::kBytes)));
+        }
+    }
+    for (usize m = 0U; m < M; ++m)
+    {
+        Lanes::store(output + i + (m * Lanes::kBytes), acc[m]);
+    }
+}
+
+void sum(u8* output, const u8* const* sources, usize count, usize bytes, bool accumulate) noexcept
+{
+    constexpr usize kSumColumns = 4U;
+    constexpr usize wide = kSumColumns * Lanes::kBytes;
+    const usize tail = bytes % Lanes::kBytes;
+    const usize vector_bytes = bytes - tail;
+    usize i = 0U;
+    if (count == 1U && accumulate)
+    {
+        // One addition, FlexFEC's: a tight loop leaves nothing for the columns to gain.
+        const u8* const source = sources[0];
+        for (; i < vector_bytes; i += Lanes::kBytes)
+        {
+            Lanes::store(output + i, Lanes::bxor(Lanes::load(output + i), Lanes::load(source + i)));
+        }
+        for (; i < bytes; ++i)
+        {
+            output[i] = static_cast<u8>(output[i] ^ source[i]);
+        }
+        return;
+    }
+    for (; i + wide <= vector_bytes; i += wide)
+    {
+        sum_columns<kSumColumns>(output, sources, count, i, accumulate);
+    }
+    for (; i < vector_bytes; i += Lanes::kBytes)
+    {
+        sum_columns<1U>(output, sources, count, i, accumulate);
+    }
+    if (tail == 0U)
+    {
+        return;
+    }
+    if (!accumulate && vector_bytes != 0U)
+    {
+        sum_columns<1U>(output, sources, count, bytes - Lanes::kBytes, false);
+        return;
+    }
+    V acc = accumulate ? Lanes::load_short(output + vector_bytes, tail) : Lanes::zero();
+    for (usize j = 0U; j < count; ++j)
+    {
+        acc = Lanes::bxor(acc, Lanes::load_short(sources[j] + vector_bytes, tail));
+    }
+    Lanes::store_short(output + vector_bytes, acc, tail);
 }
 
 #if CRD_KERNEL_HAS_GFNI
@@ -450,6 +521,6 @@ void dot(const GfCoefficient* coefficients, const u8* const* sources, usize coun
 namespace crd::hesap::net
 {
 
-const ErasureKernels CRD_KERNEL_TABLE(kErasureKernels) = {&CRD_MATH_LEVEL_NS::dot, &CRD_MATH_LEVEL_NS::add};
+const ErasureKernels CRD_KERNEL_TABLE(kErasureKernels) = {&CRD_MATH_LEVEL_NS::dot, &CRD_MATH_LEVEL_NS::sum};
 
 } // namespace crd::hesap::net

@@ -26,15 +26,20 @@ using namespace crd::hesap::net;
 template <typename T> using Array = crd::containers::Array<T>;
 using Bytes = Array<u8>;
 
-Bytes zeros(usize size)
+Bytes filled(usize size, u8 value)
 {
     Bytes bytes;
     bytes.resize(size);
     if (size != 0U)
     {
-        std::memset(bytes.data(), 0, size);
+        std::memset(bytes.data(), value, size);
     }
     return bytes;
+}
+
+Bytes zeros(usize size)
+{
+    return filled(size, 0U);
 }
 
 Bytes random_bytes(SeededWords& words, usize size)
@@ -102,8 +107,9 @@ struct Plan
 
     RaptorqStatus solve(std::span<const u8* const> symbols, usize bytes, Bytes& intermediate) const
     {
-        intermediate = zeros(usize{solver.parameters().l} * bytes);
-        Bytes scratch = zeros(solver.solve_scratch_bytes(bytes));
+        // Both start as garbage: solve owes nothing to memory a caller reuses.
+        intermediate = filled(usize{solver.parameters().l} * bytes, 0xA5U);
+        Bytes scratch = filled(solver.solve_scratch_bytes(bytes), 0x5AU);
         return solver.solve(symbols, bytes, intermediate, scratch);
     }
 };

@@ -29,9 +29,17 @@ struct ErasureKernels
     void (*dot)(const GfCoefficient* coefficients, const crd::u8* const* sources, crd::usize count,
                 crd::u8* const* outputs, crd::usize output_count, crd::usize bytes, bool accumulate) noexcept;
 
-    // output[i] ^= source[i] for i < bytes: GF(2^8) addition, the parity of RFC 8627's FlexFEC (any alignment; the
-    // regions may not overlap unless they are the same).
-    void (*add)(crd::u8* output, const crd::u8* source, crd::usize bytes) noexcept;
+    // output[i] = (accumulate ? output[i] : 0) ^ XOR over j < count of sources[j][i] for i < bytes: GF(2^8) addition in
+    // one pass, each vector of the output stored once however many sources it sums (any alignment; the output may not
+    // overlap a source unless accumulating and they are the same).
+    void (*sum)(crd::u8* output, const crd::u8* const* sources, crd::usize count, crd::usize bytes,
+                bool accumulate) noexcept;
+
+    // output[i] ^= source[i] for i < bytes: the parity of RFC 8627's FlexFEC.
+    void add(crd::u8* output, const crd::u8* source, crd::usize bytes) const noexcept
+    {
+        sum(output, &source, 1U, bytes, true);
+    }
 };
 
 // The levels with a body; the dispatcher refuses a build that compiles any other.

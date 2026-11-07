@@ -126,27 +126,30 @@ bool dot_known(const ErasureKernels& table) noexcept
     return differ == 0U;
 }
 
-// GF(2^8) addition over the same 141 bytes (whole vectors and a scalar remainder at every level) from odd offsets:
-// source 0 added into source 1 gives their XOR, and adding source 0 again restores source 1.
-bool add_known(const ErasureKernels& table) noexcept
+// GF(2^8) addition over the same 141 bytes (whole vectors and a scalar remainder at every level) from odd offsets: the
+// sum of the three sources, and accumulating the sum of two of them again leaves the third.
+bool sum_known(const ErasureKernels& table) noexcept
 {
-    u8 source[kBytes + 1U];
-    u8 out[kBytes + 1U];
-    for (usize i = 0U; i < kBytes; ++i)
+    u8 sources[kSources][kBytes + 1U];
+    for (usize j = 0U; j < kSources; ++j)
     {
-        source[i + 1U] = source_byte(0U, i);
-        out[i + 1U] = source_byte(1U, i);
+        for (usize i = 0U; i < kBytes; ++i)
+        {
+            sources[j][i + 1U] = source_byte(j, i);
+        }
     }
-    table.add(out + 1U, source + 1U, kBytes);
+    const u8* source_rows[kSources] = {sources[0] + 1U, sources[1] + 1U, sources[2] + 1U};
+    u8 out[kBytes + 1U];
+    table.sum(out + 1U, source_rows, kSources, kBytes, false);
     u8 differ = 0U;
     for (usize i = 0U; i < kBytes; ++i)
     {
-        differ = static_cast<u8>(differ | (out[i + 1U] ^ source_byte(0U, i) ^ source_byte(1U, i)));
+        differ = static_cast<u8>(differ | (out[i + 1U] ^ source_byte(0U, i) ^ source_byte(1U, i) ^ source_byte(2U, i)));
     }
-    table.add(out + 1U, source + 1U, kBytes);
+    table.sum(out + 1U, source_rows, 2U, kBytes, true);
     for (usize i = 0U; i < kBytes; ++i)
     {
-        differ = static_cast<u8>(differ | (out[i + 1U] ^ source_byte(1U, i)));
+        differ = static_cast<u8>(differ | (out[i + 1U] ^ source_byte(2U, i)));
     }
     return differ == 0U;
 }
@@ -167,7 +170,7 @@ const char* erasure_self_check(const ErasureKernels& table) noexcept
     {
         return "dot";
     }
-    return add_known(table) ? nullptr : "add";
+    return sum_known(table) ? nullptr : "sum";
 }
 
 std::span<const KernelLevel<ErasureKernels>> erasure_kernel_levels() noexcept

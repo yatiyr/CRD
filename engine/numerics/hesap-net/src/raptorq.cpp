@@ -88,30 +88,19 @@ struct Carver
     }
 };
 
-// output = (output when accumulating) + the sum of coefficient[i]*source[i], in batches of the kernel's rows. A
-// coefficient of one, all a binary row's are, is an addition.
-class DotBatch
+// output = the sum of sources, in one pass of the kernel per batch, each vector stored once a pass. A copy or zeroing
+// before additions costs far more than its bytes: the wide load of what it just wrote cannot forward from its smaller
+// stores, and that stall held RaptorQ's small blocks behind nanorq (bench/2026-11-07-hesap-net-raptorq-vs-peers.md).
+class SumBatch
 {
 public:
-    DotBatch(const ErasureKernels& kernels, u8* output, usize bytes, bool accumulate) noexcept
-        : m_kernels(kernels), m_output(output), m_bytes(bytes), m_written(accumulate)
+    SumBatch(const ErasureKernels& kernels, u8* output, usize bytes) noexcept
+        : m_kernels(kernels), m_output(output), m_bytes(bytes)
     {
     }
 
-    void add(u8 coefficient, const u8* source) noexcept
+    void add(const u8* source) noexcept
     {
-        if (coefficient == 1U && m_written)
-        {
-            m_kernels.add(m_output, source, m_bytes);
-            return;
-        }
-        if (coefficient == 1U && m_count == 0U)
-        {
-            std::memcpy(m_output, source, m_bytes);
-            m_written = true;
-            return;
-        }
-        m_row[m_count] = gf256_expanded(coefficient);
         m_sources[m_count] = source;
         ++m_count;
         if (m_count == kDotBatch)
@@ -124,9 +113,19 @@ public:
     {
         if (m_count != 0U)
         {
-            m_kernels.dot(m_row, m_sources, m_count, &m_output, 1U, m_bytes, m_written);
+            m_kernels.sum(m_output, m_sources, m_count, m_bytes, m_written);
             m_written = true;
             m_count = 0U;
+        }
+    }
+
+    // The sum of what was added, zero when nothing was.
+    void finish() noexcept
+    {
+        flush();
+        if (!m_written)
+        {
+            std::memset(m_output, 0, m_bytes);
         }
     }
 
@@ -134,10 +133,78 @@ private:
     const ErasureKernels& m_kernels;
     u8* m_output;
     usize m_bytes;
+    bool m_written = false;
+    usize m_count = 0U;
+    const u8* m_sources[kDotBatch];
+};
+
+// output = (output when accumulating) + the sum of coefficient[i]*source[i], in batches of the kernel's rows. A
+// coefficient of one, all a binary row's are, is an addition, summed last.
+class DotBatch
+{
+public:
+    DotBatch(const ErasureKernels& kernels, u8* output, usize bytes, bool accumulate) noexcept
+        : m_kernels(kernels), m_output(output), m_bytes(bytes), m_written(accumulate)
+    {
+    }
+
+    void add(u8 coefficient, const u8* source) noexcept
+    {
+        if (coefficient == 1U)
+        {
+            m_ones[m_one_count] = source;
+            ++m_one_count;
+            if (m_one_count == kDotBatch)
+            {
+                flush_ones();
+            }
+            return;
+        }
+        m_row[m_count] = gf256_expanded(coefficient);
+        m_sources[m_count] = source;
+        ++m_count;
+        if (m_count == kDotBatch)
+        {
+            flush_products();
+        }
+    }
+
+    void flush() noexcept
+    {
+        flush_products();
+        flush_ones();
+    }
+
+private:
+    void flush_products() noexcept
+    {
+        if (m_count != 0U)
+        {
+            m_kernels.dot(m_row, m_sources, m_count, &m_output, 1U, m_bytes, m_written);
+            m_written = true;
+            m_count = 0U;
+        }
+    }
+
+    void flush_ones() noexcept
+    {
+        if (m_one_count != 0U)
+        {
+            m_kernels.sum(m_output, m_ones, m_one_count, m_bytes, m_written);
+            m_written = true;
+            m_one_count = 0U;
+        }
+    }
+
+    const ErasureKernels& m_kernels;
+    u8* m_output;
+    usize m_bytes;
     bool m_written; // whether the output holds a value to add to
     usize m_count = 0U;
+    usize m_one_count = 0U;
     GfCoefficient m_row[kDotBatch];
     const u8* m_sources[kDotBatch];
+    const u8* m_ones[kDotBatch];
 };
 
 // f(column) for every intermediate symbol of a tuple, the LT symbols then the PI symbols (§5.3.5.3).
@@ -367,12 +434,12 @@ RaptorqTuple raptorq_tuple(const RaptorqParameters& p, u32 isi) noexcept
 
 void raptorq_symbol(const RaptorqParameters& p, const u8* intermediate, usize bytes, u32 isi, u8* output) noexcept
 {
-    const ErasureKernels& kernels = *erasure_kernels().table;
     if (bytes != 0U)
     {
-        std::memset(output, 0, bytes);
-        for_each_column(p, raptorq_tuple(p, isi), [&](u32 column) noexcept
-                        { kernels.add(output, intermediate + (usize{column} * bytes), bytes); });
+        SumBatch batch(*erasure_kernels().table, output, bytes);
+        for_each_column(p, raptorq_tuple(p, isi),
+                        [&](u32 column) noexcept { batch.add(intermediate + (usize{column} * bytes)); });
+        batch.finish();
     }
 }
 
@@ -1086,36 +1153,36 @@ RaptorqStatus RaptorqSolver::solve(std::span<const u8* const> symbols, usize byt
         const u32 index = row - p.s;
         return row >= p.s && index < m_received ? symbols[index] : nullptr;
     };
-    const auto load = [&](u8* out, u32 row) noexcept
+    // out = the row's symbol, zero when it is a constraint's, plus the intermediate symbols of its entries up to end.
+    const auto row_sum = [&](u8* out, u32 row, u32 end) noexcept
     {
+        SumBatch batch(kernels, out, bytes);
         const u8* const source = symbol_of(row);
         if (source != nullptr)
         {
-            std::memcpy(out, source, bytes);
+            batch.add(source);
         }
-        else
+        for (u32 e = m_row_start[row]; e < end; ++e)
         {
-            std::memset(out, 0, bytes);
+            batch.add(c + (usize{m_row_columns[e]} * bytes));
         }
+        batch.finish();
     };
 
     // y = V1^-1·D1, in the diagonal columns' symbols.
     for (u32 t = 0U; t < m_chosen; ++t)
     {
         const u32 row = m_chosen_row[t];
-        u8* const out = c + (usize{m_chosen_column[t]} * bytes);
-        load(out, row);
-        for (u32 e = m_row_start[row]; e < m_row_split[row]; ++e)
-        {
-            kernels.add(out, c + (usize{m_row_columns[e]} * bytes), bytes);
-        }
+        row_sum(c + (usize{m_chosen_column[t]} * bytes), row, m_row_split[row]);
     }
 
     // D2 - V2·y: the binary pivots directly, the HDPC pivots through MT·GAMMA's recurrence over y.
     u32 hdpc_slot[kMaxHdpcRows];
+    bool hdpc_written[kMaxHdpcRows];
     for (u32 h = 0U; h < p.h; ++h)
     {
         hdpc_slot[h] = kNoRow;
+        hdpc_written[h] = false;
     }
     for (u32 j = 0U; j < m_u; ++j)
     {
@@ -1124,16 +1191,11 @@ RaptorqStatus RaptorqSolver::solve(std::span<const u8* const> symbols, usize byt
         if (schur >= binary_left)
         {
             hdpc_slot[schur - binary_left] = j;
-            std::memset(out, 0, bytes);
         }
         else
         {
             const u32 row = m_schur_row[schur];
-            load(out, row);
-            for (u32 e = m_row_start[row]; e < m_row_split[row]; ++e)
-            {
-                kernels.add(out, c + (usize{m_row_columns[e]} * bytes), bytes);
-            }
+            row_sum(out, row, m_row_split[row]);
         }
     }
     const u32 lt_and_ldpc = p.k_prime + p.s;
@@ -1152,15 +1214,15 @@ RaptorqStatus RaptorqSolver::solve(std::span<const u8* const> symbols, usize byt
         }
         if (column + 1U < lt_and_ldpc)
         {
-            const u32 first = hdpc_slot[m_hdpc_first[column]];
-            const u32 second = hdpc_slot[m_hdpc_second[column]];
-            if (first != kNoRow)
+            const u32 rows[2] = {m_hdpc_first[column], m_hdpc_second[column]};
+            for (const u32 h : rows)
             {
-                kernels.add(right_side + (usize{first} * bytes), z, bytes);
-            }
-            if (second != kNoRow)
-            {
-                kernels.add(right_side + (usize{second} * bytes), z, bytes);
+                if (hdpc_slot[h] != kNoRow)
+                {
+                    const u8* last = z;
+                    kernels.sum(right_side + (usize{hdpc_slot[h]} * bytes), &last, 1U, bytes, hdpc_written[h]);
+                    hdpc_written[h] = true;
+                }
             }
         }
         else
@@ -1172,7 +1234,7 @@ RaptorqStatus RaptorqSolver::solve(std::span<const u8* const> symbols, usize byt
                     const GfCoefficient& power = gf256_expanded(gf256_alpha_pow(h));
                     const u8* last = z;
                     u8* out = right_side + (usize{hdpc_slot[h]} * bytes);
-                    kernels.dot(&power, &last, 1U, &out, 1U, bytes, true);
+                    kernels.dot(&power, &last, 1U, &out, 1U, bytes, hdpc_written[h]);
                 }
             }
         }
@@ -1215,12 +1277,7 @@ RaptorqStatus RaptorqSolver::solve(std::span<const u8* const> symbols, usize byt
     for (u32 t = 0U; t < m_chosen; ++t)
     {
         const u32 row = m_chosen_row[t];
-        u8* const out = c + (usize{m_chosen_column[t]} * bytes);
-        load(out, row);
-        for (u32 e = m_row_start[row]; e < m_row_end[row]; ++e)
-        {
-            kernels.add(out, c + (usize{m_row_columns[e]} * bytes), bytes);
-        }
+        row_sum(c + (usize{m_chosen_column[t]} * bytes), row, m_row_end[row]);
     }
     return RaptorqStatus::Ok;
 }

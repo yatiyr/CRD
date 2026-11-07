@@ -18,6 +18,7 @@
 #include <crd/hesap/net/raptorq.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -51,14 +52,41 @@ Bytes sized(usize size)
     return bytes;
 }
 
+// Symbols on 64-byte lines, as raptorq.hpp asks of a caller (nanorq aligns its own).
+class LinedBytes
+{
+public:
+    LinedBytes() = default;
+    explicit LinedBytes(usize size) { resize(size); }
+    LinedBytes(const LinedBytes&) = delete;
+    LinedBytes& operator=(const LinedBytes&) = delete;
+
+    void resize(usize size)
+    {
+        m_storage = sized(size + 64U);
+        const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(m_storage.data());
+        m_data = m_storage.data() + ((64U - (address % 64U)) % 64U);
+        m_size = size;
+    }
+
+    [[nodiscard]] u8* data() const { return m_data; }
+    [[nodiscard]] usize size() const { return m_size; }
+    [[nodiscard]] std::span<u8> span() const { return {m_data, m_size}; }
+
+private:
+    Bytes m_storage;
+    u8* m_data = nullptr;
+    usize m_size = 0U;
+};
+
 // hesap's plan in memory kept from run to run, as a caller's would be.
 struct Ours
 {
     hn::RaptorqSolver solver;
     Bytes structure;
     Bytes factors;
-    Bytes scratch;
-    Bytes c;
+    LinedBytes scratch;
+    LinedBytes c;
     crd::u64 plan_bytes = 0U;
 
     void size_for(usize structure_bytes)
@@ -83,12 +111,12 @@ struct Ours
         const usize scratch_bytes = solver.solve_scratch_bytes(kSymbol);
         if (scratch_bytes > scratch.size())
         {
-            scratch = sized(scratch_bytes);
+            scratch.resize(scratch_bytes);
         }
         const usize c_bytes = usize{solver.parameters().l} * kSymbol;
         if (c_bytes > c.size())
         {
-            c = sized(c_bytes);
+            c.resize(c_bytes);
         }
     }
 
@@ -114,7 +142,7 @@ struct Ours
 
     void solve(std::span<const u8* const> symbols)
     {
-        if (solver.solve(symbols, kSymbol, c, scratch) != hn::RaptorqStatus::Ok)
+        if (solver.solve(symbols, kSymbol, c.span(), scratch.span()) != hn::RaptorqStatus::Ok)
         {
             fail("hesap solve", k());
         }
@@ -184,10 +212,10 @@ int main(int argc, char** argv)
     for (const u32 k : sizes)
     {
         SeededWords words(0x6330U, k);
-        Bytes block = sized(usize{k} * kSymbol);
+        LinedBytes block(usize{k} * kSymbol);
         for (usize i = 0U; i < block.size(); ++i)
         {
-            block[i] = static_cast<u8>(words.next_u32() >> 24U);
+            block.data()[i] = static_cast<u8>(words.next_u32() >> 24U);
         }
         Array<const u8*> sources;
         for (u32 i = 0U; i < k; ++i)
@@ -202,8 +230,8 @@ int main(int argc, char** argv)
         }
 
         const u32 repair_count = (k * 15U + 99U) / 100U;
-        Bytes expected = sized(usize{repair_count} * kSymbol);
-        Bytes out = sized(usize{repair_count} * kSymbol);
+        LinedBytes expected(usize{repair_count} * kSymbol);
+        LinedBytes out(usize{repair_count} * kSymbol);
 
         Ours ours;
         ours.encoder(k);
@@ -266,7 +294,7 @@ int main(int argc, char** argv)
         crd_nanorq_plan* const nanorq_plan = crd_nanorq_plan_new(k, kSymbol, nullptr, nullptr, 0U);
         void* const crate_plan = crd_raptorq_crate_plan_new(k);
         Bytes decoded = sized(usize{k} * kSymbol);
-        Bytes lost_symbols = sized(usize{lost} * kSymbol);
+        LinedBytes lost_symbols(usize{lost} * kSymbol);
 
         const auto produce = [&]()
         {

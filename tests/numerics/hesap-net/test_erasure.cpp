@@ -502,11 +502,12 @@ TEST_CASE("erasure kernels: every level the host runs gives the scalar dot produ
     CHECK(ran >= 1U);
 }
 
-TEST_CASE("erasure kernels: every level the host runs adds regions as XOR", "[erasure][kernels]")
+TEST_CASE("erasure kernels: every level the host runs sums regions as XOR", "[erasure][kernels]")
 {
     SeededWords rng(2026, 12);
-    // Every length from 0 to 300 and 2111 bytes, the output and source at each pair of offsets 0 to 2.
-    const Bytes src = random_bytes(rng, 2111U + 3U);
+    // Every length from 0 to 300 and 2111 bytes, the output and sources at each pair of offsets 0 to 2, of no to five
+    // sources (past the wide columns' groups), accumulating and not, and the single-source addition.
+    const Bytes src = random_bytes(rng, 5U * (2111U + 3U));
     const Bytes base = random_bytes(rng, 2111U + 4U);
     usize ran = 0U;
     for (const KernelLevel<ErasureKernels>& level : hn::erasure_kernel_levels())
@@ -524,12 +525,40 @@ TEST_CASE("erasure kernels: every level the host runs adds regions as XOR", "[er
             {
                 for (usize oo = 0U; oo < 3U; ++oo)
                 {
+                    const u8* sources[5];
+                    for (usize j = 0U; j < 5U; ++j)
+                    {
+                        sources[j] = src.data() + (j * (2111U + 3U)) + ((so + j) % 3U);
+                    }
+                    const usize checked = oo + 1U + bytes + 64U < base.size() ? oo + 1U + bytes + 64U : base.size();
+                    for (const usize count : {usize{0U}, usize{1U}, usize{2U}, usize{5U}})
+                    {
+                        for (const bool accumulate : {false, true})
+                        {
+                            Bytes out = base;
+                            level.table->sum(out.data() + oo + 1U, sources, count, bytes, accumulate);
+                            for (usize i = 0U; i < checked; ++i)
+                            {
+                                const bool inside = i >= oo + 1U && i < oo + 1U + bytes;
+                                u8 want = base[i];
+                                if (inside)
+                                {
+                                    want = accumulate ? want : u8{0U};
+                                    for (usize j = 0U; j < count; ++j)
+                                    {
+                                        want = static_cast<u8>(want ^ sources[j][i - oo - 1U]);
+                                    }
+                                }
+                                bad += out[i] == want ? 0U : 1U;
+                            }
+                        }
+                    }
                     Bytes out = base;
-                    level.table->add(out.data() + oo + 1U, src.data() + so, bytes);
-                    for (usize i = 0U; i < out.size(); ++i)
+                    level.table->add(out.data() + oo + 1U, sources[0], bytes);
+                    for (usize i = 0U; i < checked; ++i)
                     {
                         const bool inside = i >= oo + 1U && i < oo + 1U + bytes;
-                        const u8 want = inside ? static_cast<u8>(base[i] ^ src[so + i - oo - 1U]) : base[i];
+                        const u8 want = inside ? static_cast<u8>(base[i] ^ sources[0][i - oo - 1U]) : base[i];
                         bad += out[i] == want ? 0U : 1U;
                     }
                 }
@@ -566,10 +595,10 @@ void dot_tail_off(const hn::GfCoefficient* c, const u8* const* sources, usize co
     }
 }
 
-// The portable addition with its last byte left out.
-void add_short(u8* output, const u8* source, usize bytes) noexcept
+// The portable sum with its last byte left out.
+void sum_short(u8* output, const u8* const* sources, usize count, usize bytes, bool accumulate) noexcept
 {
-    hn::kErasureKernelsPortable.add(output, source, bytes == 0U ? 0U : bytes - 1U);
+    hn::kErasureKernelsPortable.sum(output, sources, count, bytes == 0U ? 0U : bytes - 1U, accumulate);
 }
 
 } // namespace
@@ -585,8 +614,8 @@ TEST_CASE("erasure self-check: every table the host runs passes, and a wrong one
     wrong.dot = &dot_tail_off;
     CHECK(routine_of(hn::erasure_self_check(wrong)) == "dot");
     wrong = hn::kErasureKernelsPortable;
-    wrong.add = &add_short;
-    CHECK(routine_of(hn::erasure_self_check(wrong)) == "add");
+    wrong.sum = &sum_short;
+    CHECK(routine_of(hn::erasure_self_check(wrong)) == "sum");
 }
 
 TEST_CASE("reed-solomon: GM is RFC 5510's V(k,k)^-1 V(k,n), systematic", "[erasure]")
