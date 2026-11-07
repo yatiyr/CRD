@@ -298,10 +298,10 @@
       "file": "ntp-4.2.8p18.tar.gz",
       "sha256": "cf84c5f3fb1a295284942624d823fffa634144e096cfc4f9969ac98ef5f468e5",
       "size": 7210799,
-      "license": "NTP",
+      "license": "NTP AND BSD-2-Clause",
       "gated": "CRD_BUILD_CLOCK_VS_NTPD",
       "provenance": "The Network Time Foundation's release of the RFC 5905 reference implementation; the SHA-256 is the one it publishes beside the tarball (read 2026-11-07)",
-      "note": "The reference of hesap-net's clock filter (HESAP-NET): clock_filter() cut verbatim from ntpd/ntp_proto.c at configure time and compiled on tests/numerics/hesap-net/ntpd_peer.c's stand-ins, as crd-ntpd-peer on the complete-tier linux-gcc-public-checks lane; never in an engine module or a default build. COPYRIGHT read from the archive. Pinned as a testing download (pre-approved, user 2026-10-30)."
+      "note": "The reference of hesap-net's clock filter (HESAP-NET): clock_filter() cut verbatim from ntpd/ntp_proto.c at configure time and compiled on tests/numerics/hesap-net/ntpd_peer.c's stand-ins, as crd-ntpd-peer on the complete-tier linux-gcc-public-checks lane; never in an engine module or a default build. COPYRIGHT read from the archive: the University of Delaware's notice and the Network Time Foundation's two-clause terms. Pinned as a testing download (pre-approved, user 2026-10-30)."
     },
     "openfec": {
       "version": "1.4.2.12",
@@ -1257,7 +1257,7 @@
         }
       },
       "license": "BSD-3-Clause",
-      "note": "The newest release branch of libwebrtc on 2026-11-07, file by file through Gitiles' format=TEXT: its source archives change bytes on every request (checked 2026-11-07), and the SHA-256 and size are those of the base64 text, decoded by scripts/install-webrtc-bwe.py. The goog_cc and remote_bitrate_estimator estimators with the units they use, compiled with tests/numerics/hesap-net/webrtc-shim's plumbing as crd-webrtc-bwe-peer on the complete-tier linux-gcc-public-checks lane: the bit-exact oracle and board of hesap-net's delay trend and acknowledged rate (HESAP-NET, CRD_BUILD_ESTIMATORS_VS_WEBRTC); never in an engine module or a default build. LICENSE and PATENTS read from the tree. Pinned as a testing download (pre-approved, user 2026-10-30)."
+      "note": "The newest release branch of libwebrtc on 2026-11-07, file by file through Gitiles' format=TEXT: its source archives change bytes on every request (checked 2026-11-07), and the SHA-256 and size are those of the base64 text, decoded by scripts/install-webrtc-bwe.py. The goog_cc and remote_bitrate_estimator estimators with the units they use, compiled with tests/numerics/hesap-net/webrtc-shim's plumbing as crd-webrtc-bwe-peer on the complete-tier linux-gcc-public-checks lane: the bit-exact oracle and board of hesap-net's delay trend and acknowledged rate, with rtc_base's RTP to NTP estimator and timestamp aligner for its media clock pair (HESAP-NET, CRD_BUILD_ESTIMATORS_VS_WEBRTC); never in an engine module or a default build. LICENSE and PATENTS read from the tree. Pinned as a testing download (pre-approved, user 2026-10-30)."
     }
   },
   "actions": {

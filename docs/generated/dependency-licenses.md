@@ -39,7 +39,7 @@
 | hptt | 9425386 | BSD-3-Clause | springer13/hptt @ `942538649b51ff14403a0c73a35d9825eab2d7de` (942538649b51) | `hptt-94253864.tar.gz` |
 | pocketfft | 4d865cb | BSD-3-Clause | mreineck/pocketfft @ `4d865cba24359b05b37da4e75aee24498c3b78e7` (4d865cba2435) | `pocketfft-4d865cba.tar.gz` |
 | isa-l | 2.32.1 | BSD-3-Clause | intel/isa-l @ `v2.32.1` (7c3479e0a9da) | `isa-l-7c3479e0.tar.gz` |
-| ntp | 4.2.8p18 | NTP | https://downloads.nwtime.org/ntp/4.2.8/ntp-4.2.8p18.tar.gz | `ntp-4.2.8p18.tar.gz` |
+| ntp | 4.2.8p18 | NTP AND BSD-2-Clause | https://downloads.nwtime.org/ntp/4.2.8/ntp-4.2.8p18.tar.gz | `ntp-4.2.8p18.tar.gz` |
 | openfec | 1.4.2.12 | CeCILL-C | roc-streaming/openfec @ `v1.4.2.12` (e549f3b8ba54) | `openfec-e549f3b8.tar.gz` |
 | highway | 1.4.0 | Apache-2.0 OR BSD-3-Clause | google/highway @ `1.4.0` (2607d3b5b011) | `highway-2607d3b5.tar.gz` |
 | tracy | 0.14.1 | BSD-3-Clause | wolfpld/tracy @ `v0.14.1` (30997d5ca6bb) | `tracy-30997d5c.tar.gz` |
