@@ -28,6 +28,16 @@ constexpr usize kMaxRtpPacket = kRtpHeader + 0xFFFFU;
 constexpr u32 kMaxSet = 255U; // the largest protected set of one block: L or D columns or rows, or 110 mask bits
 constexpr u32 kNone = 0xFFFFFFFFU;
 
+u64 reversed(u64 v) noexcept
+{
+    v = ((v >> 1U) & 0x5555555555555555ULL) | ((v & 0x5555555555555555ULL) << 1U);
+    v = ((v >> 2U) & 0x3333333333333333ULL) | ((v & 0x3333333333333333ULL) << 2U);
+    v = ((v >> 4U) & 0x0F0F0F0F0F0F0F0FULL) | ((v & 0x0F0F0F0F0F0F0F0FULL) << 4U);
+    v = ((v >> 8U) & 0x00FF00FF00FF00FFULL) | ((v & 0x00FF00FF00FF00FFULL) << 8U);
+    v = ((v >> 16U) & 0x0000FFFF0000FFFFULL) | ((v & 0x0000FFFF0000FFFFULL) << 16U);
+    return (v >> 32U) | (v << 32U);
+}
+
 bool mask_bit(const FlexFecBlock& b, u32 j) noexcept
 {
     return ((b.mask[j >> 6U] >> (j & 63U)) & 1U) != 0U;
@@ -234,32 +244,18 @@ void write_block(WireWriter& w, FlexFecVariant variant, const FlexFecBlock& b) n
         return;
     }
     const u32 width = mask_width(b);
-    u32 first = width > 15U ? 0x8000U : 0U;
-    for (u32 j = 0U; j < 15U; ++j)
-    {
-        first |= mask_bit(b, j) ? 1U << (14U - j) : 0U;
-    }
-    w.put_u16(static_cast<u16>(first));
+    const u64 top = reversed(b.mask[0]);
+    w.put_u16(static_cast<u16>((top >> 49U) | (width > 15U ? 0x8000U : 0U)));
     if (width == 15U)
     {
         return;
     }
-    u32 second = width > 46U ? 0x80000000U : 0U;
-    for (u32 j = 15U; j < 46U; ++j)
-    {
-        second |= mask_bit(b, j) ? 1U << (30U - (j - 15U)) : 0U;
-    }
-    w.put_u32(second);
+    w.put_u32(static_cast<u32>((top >> 18U) & 0x7FFFFFFFU) | (width > 46U ? 0x80000000U : 0U));
     if (width == 46U)
     {
         return;
     }
-    u64 third = 0U;
-    for (u32 j = 46U; j < FlexFecHeader::kMaxMaskBits; ++j)
-    {
-        third |= mask_bit(b, j) ? u64{1U} << (63U - (j - 46U)) : 0U;
-    }
-    w.put_u64(third);
+    w.put_u64((top << 46U) | (reversed(b.mask[1]) >> 18U));
 }
 
 usize block_bytes(FlexFecVariant variant, const FlexFecBlock& b) noexcept
@@ -276,9 +272,61 @@ usize block_bytes(FlexFecVariant variant, const FlexFecBlock& b) noexcept
     return width == 46U ? 8U : 16U;
 }
 
-void set_mask_bit(FlexFecBlock& b, u32 j) noexcept
+// One block as read, kept apart from a caller's header until every block has passed. The mask bits run as on the wire,
+// each part after its K bit: j = 0 in the top bit of `top`, j = 64 in the top bit of `rest`.
+struct ReadBlock
 {
-    b.mask[j >> 6U] |= u64{1U} << (j & 63U);
+    u64 top;
+    u64 rest;
+    u16 sn_base;
+    u8 columns;
+    u8 rows;
+};
+
+// Reads the block at `at` and moves past it; on a fault `b` and `at` mean nothing.
+FlexFecStatus read_block(std::span<const u8> bytes, bool fixed, usize& at, ReadBlock& b) noexcept
+{
+    if (bytes.size() - at < 4U)
+    {
+        return FlexFecStatus::Truncated;
+    }
+    b.sn_base = wire_load<u16>(bytes, at);
+    b.rest = 0U;
+    if (fixed)
+    {
+        b.top = 0U;
+        b.columns = bytes[at + 2U];
+        b.rows = bytes[at + 3U];
+        at += 4U;
+        return b.columns == 0U ? FlexFecStatus::Reserved : FlexFecStatus::Ok;
+    }
+    b.columns = 0U;
+    b.rows = 0U;
+    const u32 first = wire_load<u16>(bytes, at + 2U);
+    at += 4U;
+    b.top = u64{first & 0x7FFFU} << 49U;
+    if ((first & 0x8000U) != 0U)
+    {
+        if (bytes.size() - at < 4U)
+        {
+            return FlexFecStatus::Truncated;
+        }
+        const u32 second = wire_load<u32>(bytes, at);
+        at += 4U;
+        b.top |= u64{second & 0x7FFFFFFFU} << 18U;
+        if ((second & 0x80000000U) != 0U)
+        {
+            if (bytes.size() - at < 8U)
+            {
+                return FlexFecStatus::Truncated;
+            }
+            const u64 third = wire_load<u64>(bytes, at);
+            at += 8U;
+            b.top |= third >> 46U;
+            b.rest = third << 18U;
+        }
+    }
+    return (b.top | b.rest) != 0U ? FlexFecStatus::Ok : FlexFecStatus::Reserved;
 }
 
 } // namespace
@@ -295,20 +343,20 @@ FlexFecStatus flexfec_parse(std::span<const u8> bytes, u32 stream_count, FlexFec
     {
         return FlexFecStatus::Reserved;
     }
-    FlexFecHeader h;
     if (r)
     {
         if (bytes.size() < kRtpHeader)
         {
             return FlexFecStatus::Truncated;
         }
-        h.variant = FlexFecVariant::Retransmission;
-        h.recovery = static_cast<u16>(wire_load<u16>(bytes, 0U) & 0x3FFFU);
-        h.sequence = wire_load<u16>(bytes, 2U);
-        h.ts_recovery = wire_load<u32>(bytes, 4U);
-        h.ssrc = wire_load<u32>(bytes, 8U);
-        h.header_bytes = kRtpHeader;
-        header = h;
+        header.variant = FlexFecVariant::Retransmission;
+        header.recovery = static_cast<u16>(wire_load<u16>(bytes, 0U) & 0x3FFFU);
+        header.length_recovery = 0U;
+        header.sequence = wire_load<u16>(bytes, 2U);
+        header.ts_recovery = wire_load<u32>(bytes, 4U);
+        header.ssrc = wire_load<u32>(bytes, 8U);
+        header.stream_count = 0U;
+        header.header_bytes = kRtpHeader;
         return FlexFecStatus::Ok;
     }
     if (bytes.size() < 8U)
@@ -319,79 +367,34 @@ FlexFecStatus flexfec_parse(std::span<const u8> bytes, u32 stream_count, FlexFec
     {
         return FlexFecStatus::WrongCount;
     }
-    h.variant = f ? FlexFecVariant::Fixed : FlexFecVariant::Mask;
-    h.recovery = static_cast<u16>(wire_load<u16>(bytes, 0U) & 0x3FFFU);
-    h.length_recovery = wire_load<u16>(bytes, 2U);
-    h.ts_recovery = wire_load<u32>(bytes, 4U);
-    h.stream_count = stream_count;
+    // A refusal writes nothing, so every block is read before the first is kept.
+    ReadBlock blocks[FlexFecHeader::kMaxStreams]; // NOLINT(cppcoreguidelines-pro-type-member-init): read before use
     usize at = 8U;
     for (u32 i = 0U; i < stream_count; ++i)
     {
-        FlexFecBlock& b = h.blocks[i];
-        if (bytes.size() - at < 4U)
+        const FlexFecStatus status = read_block(bytes, f, at, blocks[i]);
+        if (status != FlexFecStatus::Ok)
         {
-            return FlexFecStatus::Truncated;
-        }
-        b.sn_base = wire_load<u16>(bytes, at);
-        if (f)
-        {
-            b.columns = bytes[at + 2U];
-            b.rows = bytes[at + 3U];
-            at += 4U;
-            if (b.columns == 0U)
-            {
-                return FlexFecStatus::Reserved;
-            }
-            continue;
-        }
-        const u32 first = wire_load<u16>(bytes, at + 2U);
-        at += 4U;
-        for (u32 j = 0U; j < 15U; ++j)
-        {
-            if (((first >> (14U - j)) & 1U) != 0U)
-            {
-                set_mask_bit(b, j);
-            }
-        }
-        if ((first & 0x8000U) != 0U)
-        {
-            if (bytes.size() - at < 4U)
-            {
-                return FlexFecStatus::Truncated;
-            }
-            const u32 second = wire_load<u32>(bytes, at);
-            at += 4U;
-            for (u32 j = 15U; j < 46U; ++j)
-            {
-                if (((second >> (30U - (j - 15U))) & 1U) != 0U)
-                {
-                    set_mask_bit(b, j);
-                }
-            }
-            if ((second & 0x80000000U) != 0U)
-            {
-                if (bytes.size() - at < 8U)
-                {
-                    return FlexFecStatus::Truncated;
-                }
-                const u64 third = wire_load<u64>(bytes, at);
-                at += 8U;
-                for (u32 j = 46U; j < FlexFecHeader::kMaxMaskBits; ++j)
-                {
-                    if (((third >> (63U - (j - 46U))) & 1U) != 0U)
-                    {
-                        set_mask_bit(b, j);
-                    }
-                }
-            }
-        }
-        if (!mask_valid(b))
-        {
-            return FlexFecStatus::Reserved;
+            return status;
         }
     }
-    h.header_bytes = at;
-    header = h;
+    header.variant = f ? FlexFecVariant::Fixed : FlexFecVariant::Mask;
+    header.recovery = static_cast<u16>(wire_load<u16>(bytes, 0U) & 0x3FFFU);
+    header.length_recovery = wire_load<u16>(bytes, 2U);
+    header.ts_recovery = wire_load<u32>(bytes, 4U);
+    header.sequence = 0U;
+    header.ssrc = 0U;
+    header.stream_count = stream_count;
+    header.header_bytes = at;
+    for (u32 i = 0U; i < stream_count; ++i)
+    {
+        FlexFecBlock& kept = header.blocks[i];
+        kept.sn_base = blocks[i].sn_base;
+        kept.columns = blocks[i].columns;
+        kept.rows = blocks[i].rows;
+        kept.mask[0] = reversed(blocks[i].top);
+        kept.mask[1] = reversed(blocks[i].rest);
+    }
     return FlexFecStatus::Ok;
 }
 

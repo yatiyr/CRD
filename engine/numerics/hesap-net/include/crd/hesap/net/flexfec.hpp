@@ -80,7 +80,7 @@ struct FlexFecHeader
 };
 
 // Reads a FEC header from `bytes` (after the repair packet's RTP header) protecting `stream_count` streams, the
-// repair packet's CSRC count; a retransmission ignores it.
+// repair packet's CSRC count; a retransmission ignores it. Blocks past the header's stream count stay as they were.
 [[nodiscard]] FlexFecStatus flexfec_parse(std::span<const crd::u8> bytes, crd::u32 stream_count,
                                           FlexFecHeader& header) noexcept;
 

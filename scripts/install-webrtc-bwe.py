@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the pinned source files of libwebrtc's bandwidth estimators (tools/webrtc-bwe-sources in cmake/pins.json).
+"""Install the pinned source files of libwebrtc's estimators and FEC (tools/webrtc-bwe-sources in cmake/pins.json).
 
 webrtc.googlesource.com regenerates its source archives with different bytes on every request, so the pin names each
 file at a fixed commit through Gitiles' `?format=TEXT`, a stable base64 of the blob; each download is verified by its
@@ -8,7 +8,7 @@ that lets a matching install be reused. Gitiles can answer a burst of requests w
 so a digest mismatch on a download is retried after a wait, a bounded number of times. The destination goes under
 `~/.cerid/tools/webrtc-bwe/<commit>` by default.
 Prints CRD_WEBRTC_BWE=<directory>, which a CRD_BUILD_ESTIMATORS_VS_WEBRTC configure reads (`--github-env` also appends
-it to that file): the oracle and board of hesap-net's estimators (HESAP-NET); never linked or shipped.
+it to that file): the oracles and boards of hesap-net's estimators and packet codes (HESAP-NET); never linked or shipped.
 Contract: docs/design/pinned-inputs.md.
 """
 from pathlib import Path

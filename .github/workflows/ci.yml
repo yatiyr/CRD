@@ -966,8 +966,8 @@ jobs:
         if: matrix.preset == 'linux-gcc-public-checks'
         run: python3 scripts/install-nasm.py --destination "$RUNNER_TEMP/nasm" --download-dir "$RUNNER_TEMP/nasm-dl" --github-env "$GITHUB_ENV"
 
-      # The pinned libwebrtc estimator files (tools/webrtc-bwe-sources) are the oracle and the board of HESAP-NET's
-      # delay trend, acknowledged rate and media clock pair (CRD_BUILD_ESTIMATORS_VS_WEBRTC): each file checked against
+      # The pinned libwebrtc files (tools/webrtc-bwe-sources) are the oracles and boards of HESAP-NET's delay trend,
+      # acknowledged rate, media clock pair, FlexFEC and RED (CRD_BUILD_ESTIMATORS_VS_WEBRTC): each file checked against
       # its SHA-256; the configure reads CRD_WEBRTC_BWE.
       - name: Install pinned libwebrtc estimators
         if: matrix.preset == 'linux-gcc-public-checks'

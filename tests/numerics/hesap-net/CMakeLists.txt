@@ -259,6 +259,41 @@ if(CRD_BUILD_ESTIMATORS_VS_WEBRTC)
     target_link_libraries(crd-hesap-estimators-board PRIVATE crd-core crd-containers crd-hesap-net crd-webrtc-bwe-peer)
     add_test(NAME crd-hesap-estimators-board-smoke COMMAND crd-hesap-estimators-board --quick)
     set_tests_properties(crd-hesap-estimators-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
+
+    # The same branch's FEC codec, its RFC 8627 header reader and writer and NetEq's RED splitter, webrtc-shim/ for
+    # Abseil's small pieces and the large headers they name for a constant or an unused member.
+    # crd-hesap-flexfec-webrtc-tests holds FlexFEC and RED to them; crd-hesap-flexfec-board times the two.
+    set(webrtc_fec "${webrtc_estimators}/rtp_rtcp/source")
+    add_library(crd-webrtc-fec-peer STATIC
+        "${webrtc_fec}/fec_private_tables_bursty.cc"
+        "${webrtc_fec}/fec_private_tables_random.cc"
+        "${webrtc_fec}/flexfec_03_header_reader_writer.cc"
+        "${webrtc_fec}/flexfec_header_reader_writer.cc"
+        "${webrtc_fec}/forward_error_correction.cc"
+        "${webrtc_fec}/forward_error_correction_internal.cc"
+        "${webrtc_fec}/ulpfec_header_reader_writer.cc"
+        "${webrtc_estimators}/audio_coding/neteq/packet.cc"
+        "${webrtc_estimators}/audio_coding/neteq/red_payload_splitter.cc"
+        "${CRD_WEBRTC_BWE}/rtc_base/copy_on_write_buffer.cc"
+        "${CRD_WEBRTC_BWE}/rtc_base/ref_counter.cc"
+        "${CRD_WEBRTC_BWE}/rtc_base/zero_memory.cc")
+    target_include_directories(crd-webrtc-fec-peer SYSTEM PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/webrtc-shim" "${CRD_WEBRTC_BWE}")
+    target_link_libraries(crd-webrtc-fec-peer PUBLIC crd-math)
+    target_compile_features(crd-webrtc-fec-peer PUBLIC cxx_std_20)
+    target_compile_definitions(crd-webrtc-fec-peer PUBLIC WEBRTC_POSIX)
+    target_compile_options(crd-webrtc-fec-peer PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-w>)
+    set_target_properties(crd-webrtc-fec-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+
+    add_executable(crd-hesap-flexfec-webrtc-tests test_flexfec_webrtc.cpp)
+    target_link_libraries(crd-hesap-flexfec-webrtc-tests PRIVATE
+        crd-core crd-containers crd-hesap-net crd-webrtc-fec-peer Catch2::Catch2WithMain)
+    crd_discover_tests(crd-hesap-flexfec-webrtc-tests)
+
+    add_executable(crd-hesap-flexfec-board flexfec_board.cpp)
+    target_link_libraries(crd-hesap-flexfec-board PRIVATE crd-core crd-containers crd-hesap-net crd-webrtc-fec-peer)
+    add_test(NAME crd-hesap-flexfec-board-smoke COMMAND crd-hesap-flexfec-board --quick)
+    set_tests_properties(crd-hesap-flexfec-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
 endif()
 
 # HESAP-NET's ntpd peer (CRD_BUILD_CLOCK_VS_NTPD, the root CMakeLists): the pinned release's clock_filter(), cut

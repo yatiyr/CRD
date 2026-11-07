@@ -3,6 +3,7 @@
 // streams, sequence numbers across the wrap, retransmissions, §6.3.4's iterative example (Figures 16 to 18) and the
 // patterns §1.1.4 says 2-D parity cannot repair (Figures 7 and 8), and every refusal in its order.
 
+#include "fec_packets.hpp"
 #include "seeded_words.hpp"
 
 #include <crd/containers/array.hpp>
@@ -48,25 +49,6 @@ bool same(std::span<const u8> a, std::span<const u8> b)
 bool untouched(const Bytes& out)
 {
     return std::ranges::all_of(out, [](u8 b) { return b == kSentinel; });
-}
-
-// An RTP version 2 packet of `payload` bytes after the fixed header, its P, X, CC, M and PT bits and its other
-// bytes drawn from the stream.
-Bytes rtp_packet(SeededWords& rng, u32 ssrc, u16 sequence, usize payload)
-{
-    Bytes p = filled(12U + payload, 0U);
-    for (u8& b : p)
-    {
-        b = static_cast<u8>(rng.next_u32());
-    }
-    p[0] = static_cast<u8>(0x80U | (p[0] & 0x3FU));
-    p[2] = static_cast<u8>(sequence >> 8U);
-    p[3] = static_cast<u8>(sequence);
-    p[8] = static_cast<u8>(ssrc >> 24U);
-    p[9] = static_cast<u8>(ssrc >> 16U);
-    p[10] = static_cast<u8>(ssrc >> 8U);
-    p[11] = static_cast<u8>(ssrc);
-    return p;
 }
 
 FlexFecBlock mask_block(u16 sn_base, std::initializer_list<u32> bits)

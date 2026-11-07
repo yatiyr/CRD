@@ -1356,10 +1356,185 @@
           "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/system_wrappers/include/ntp_time.h?format=TEXT",
           "size": 6540,
           "sha256": "eb18087650c0cd48a5d9d217c35d64cb5fad5d8d1abfa9267d0cbaf8921dfe09"
+        },
+        "api/make_ref_counted.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/api/make_ref_counted.h?format=TEXT",
+          "size": 6196,
+          "sha256": "1d0250049330cfaa3f4287898b9062a620536221d0e209e78ebcc6bedeaaf643"
+        },
+        "api/ref_count.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/api/ref_count.h?format=TEXT",
+          "size": 3932,
+          "sha256": "22bbbf8d3e357157b41bcf5c90b211ec2e57c2bc12c3e6f48c8fa0c5bf73cb5c"
+        },
+        "api/scoped_refptr.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/api/scoped_refptr.h?format=TEXT",
+          "size": 7948,
+          "sha256": "3f26004ef1e67875175cff580dcb33c9ceac9ff7b2dd096d857a15c26f2e8042"
+        },
+        "modules/audio_coding/neteq/packet.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/audio_coding/neteq/packet.cc?format=TEXT",
+          "size": 1340,
+          "sha256": "16ed47c909aa6c332c8eb12b186d08196ee437722a7c7b5214d36d248f982ab0"
+        },
+        "modules/audio_coding/neteq/packet.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/audio_coding/neteq/packet.h?format=TEXT",
+          "size": 6268,
+          "sha256": "db71c921a19aa49721cfd33315172197ecf8e17c496d7f76b436f305dceac1df"
+        },
+        "modules/audio_coding/neteq/red_payload_splitter.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/audio_coding/neteq/red_payload_splitter.cc?format=TEXT",
+          "size": 9640,
+          "sha256": "6e1929496bb052662297fc4d2f8d5945c61b0f687a1c0d84742c06cde3bbb9eb"
+        },
+        "modules/audio_coding/neteq/red_payload_splitter.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/audio_coding/neteq/red_payload_splitter.h?format=TEXT",
+          "size": 2776,
+          "sha256": "e71cb4a049139c1020998db0e69ec73599850dded9b10bf7ef3b5a338bafba44"
+        },
+        "modules/include/module_common_types_public.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/include/module_common_types_public.h?format=TEXT",
+          "size": 3164,
+          "sha256": "b7e400cd4f904b3601a7d2f2ab8b26181fb6ccc7b89ab5f90be5356a7abe23c2"
+        },
+        "modules/include/module_fec_types.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/include/module_fec_types.h?format=TEXT",
+          "size": 1476,
+          "sha256": "e45ba7596dbed632642f55f2ef6836595f2b017bc80c6858fa8e4331ed6641af"
+        },
+        "modules/rtp_rtcp/source/byte_io.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/byte_io.h?format=TEXT",
+          "size": 17224,
+          "sha256": "f98fe89993ad00e3d74e40db5d3189d0c1ff803f42550aa58f6840d10be8ae25"
+        },
+        "modules/rtp_rtcp/source/fec_private_tables_bursty.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/fec_private_tables_bursty.cc?format=TEXT",
+          "size": 14740,
+          "sha256": "f2f65b87c278e385d4e1354f2936837ad955132293c071cfcd7b1060be3db10f"
+        },
+        "modules/rtp_rtcp/source/fec_private_tables_bursty.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/fec_private_tables_bursty.h?format=TEXT",
+          "size": 3052,
+          "sha256": "a1b3d926d686597be0337bc3bc863e6062b2a4c9a941c6322e468c77ed32064b"
+        },
+        "modules/rtp_rtcp/source/fec_private_tables_random.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/fec_private_tables_random.cc?format=TEXT",
+          "size": 14768,
+          "sha256": "8c5874e4f872420036d6635139e31ef96166218130128118d9160a728a214761"
+        },
+        "modules/rtp_rtcp/source/fec_private_tables_random.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/fec_private_tables_random.h?format=TEXT",
+          "size": 2144,
+          "sha256": "3ad9b1726fe23f8c1d87f3baa7b422188eed0f871b07d5c6884158127dddea0f"
+        },
+        "modules/rtp_rtcp/source/flexfec_03_header_reader_writer.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/flexfec_03_header_reader_writer.cc?format=TEXT",
+          "size": 18752,
+          "sha256": "c49bb112d2d8c511e231f02771ed85edc57d780d76c1d9549c29552fd36ddb78"
+        },
+        "modules/rtp_rtcp/source/flexfec_03_header_reader_writer.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/flexfec_03_header_reader_writer.h?format=TEXT",
+          "size": 5284,
+          "sha256": "c3799760b1433bba8de2b688742acdac9f01d0fc3f7bc91d6f59a23c0e143336"
+        },
+        "modules/rtp_rtcp/source/flexfec_header_reader_writer.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/flexfec_header_reader_writer.cc?format=TEXT",
+          "size": 18948,
+          "sha256": "d0ab08fab386e2028f01479f22fbfd9752e4296526caa7d7fbb3ae6332c6b562"
+        },
+        "modules/rtp_rtcp/source/flexfec_header_reader_writer.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/flexfec_header_reader_writer.h?format=TEXT",
+          "size": 3580,
+          "sha256": "a0e53d43b03a3d51d461fbfef969ea5fd6d5e5626aae5f18700595a48ee24327"
+        },
+        "modules/rtp_rtcp/source/forward_error_correction.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/forward_error_correction.cc?format=TEXT",
+          "size": 44752,
+          "sha256": "62d5663ae852193bc5e6d61e445207b5eef3236286f96108a239f33c905097a2"
+        },
+        "modules/rtp_rtcp/source/forward_error_correction.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/forward_error_correction.h?format=TEXT",
+          "size": 24344,
+          "sha256": "65ab2a96cb56e630408180390c38350bc52518ac09ec43ee6a4a2d58a9643cf1"
+        },
+        "modules/rtp_rtcp/source/forward_error_correction_internal.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/forward_error_correction_internal.cc?format=TEXT",
+          "size": 28612,
+          "sha256": "d0cdca7dc79c323d766ee8a4b8e2feddf1ee1c4e2a2c3c82ec2a88f5bd118236"
+        },
+        "modules/rtp_rtcp/source/forward_error_correction_internal.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/forward_error_correction_internal.h?format=TEXT",
+          "size": 7100,
+          "sha256": "b995570e1cf231255c426d8081876c4076a6b8481fcd8f11a92d4096a7479440"
+        },
+        "modules/rtp_rtcp/source/ulpfec_header_reader_writer.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/ulpfec_header_reader_writer.cc?format=TEXT",
+          "size": 7612,
+          "sha256": "7d6ee2d47b3994bd7eedd2ffa3996576bb50915fb07e16a65c7f5fdd12bfd790"
+        },
+        "modules/rtp_rtcp/source/ulpfec_header_reader_writer.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/modules/rtp_rtcp/source/ulpfec_header_reader_writer.h?format=TEXT",
+          "size": 3496,
+          "sha256": "81d9849258d4dd956673d883a9da39f8340ebc8f1a9b211c77b620705a6606ee"
+        },
+        "rtc_base/buffer.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/buffer.h?format=TEXT",
+          "size": 23112,
+          "sha256": "c9f8f00e54b72a4c5e1980a4c801615c4a74cb61c7000b4b0b39fcd849f90e26"
+        },
+        "rtc_base/byte_order.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/byte_order.h?format=TEXT",
+          "size": 7612,
+          "sha256": "1ecef00a05004397faa67297584b56d70ce2e42c70662d235892d49f1570fb6f"
+        },
+        "rtc_base/copy_on_write_buffer.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/copy_on_write_buffer.cc?format=TEXT",
+          "size": 6288,
+          "sha256": "762e0450143f9fd2046a4c8ee354bce3f49d2d7ffeef031c4428ece1dd27d9b7"
+        },
+        "rtc_base/copy_on_write_buffer.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/copy_on_write_buffer.h?format=TEXT",
+          "size": 12568,
+          "sha256": "c5e30fd50a1c7d0d335ac47a22cc48191d12c53fcc841894c8b6ba666733b535"
+        },
+        "rtc_base/ref_counted_object.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/ref_counted_object.h?format=TEXT",
+          "size": 3864,
+          "sha256": "8a546b5556b5108cc328d89bec800d295008fb9509d6e4d2c46420aa3b87cc44"
+        },
+        "rtc_base/ref_counter.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/ref_counter.h?format=TEXT",
+          "size": 3988,
+          "sha256": "69cded7c4404bec4667456af9192cccd1cf4afcef1a85d8b37a380225a46d59b"
+        },
+        "rtc_base/span_helpers.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/span_helpers.h?format=TEXT",
+          "size": 3080,
+          "sha256": "5acfeacac48358b1ad9162a0b2163f768ae3f61ae2ee74f7bcbf116a55d3c407"
+        },
+        "rtc_base/system/arch.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/system/arch.h?format=TEXT",
+          "size": 4220,
+          "sha256": "7c5013fd893dbfefdded99595f7107094ce5368544f308f93f1b4de9482021a4"
+        },
+        "rtc_base/zero_memory.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/zero_memory.h?format=TEXT",
+          "size": 1388,
+          "sha256": "845a347bdc34da14737154eff5d972c84d9a1f3b7042627c05e4540253535865"
+        },
+        "rtc_base/ref_counter.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/ref_counter.cc?format=TEXT",
+          "size": 1276,
+          "sha256": "dab6d9e97a015722fcb29d95a4ee1e5a4abee8c970d4c69c55d0fb155ce56b5d"
+        },
+        "rtc_base/zero_memory.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/zero_memory.cc?format=TEXT",
+          "size": 1536,
+          "sha256": "bddeb367725c259711007425984ffc5d9ec678e61917beb54a3e5bee926ccd3c"
         }
       },
       "license": "BSD-3-Clause",
-      "note": "The newest release branch of libwebrtc on 2026-11-07, file by file through Gitiles' format=TEXT: its source archives change bytes on every request (checked 2026-11-07), and the SHA-256 and size are those of the base64 text, decoded by scripts/install-webrtc-bwe.py. The goog_cc and remote_bitrate_estimator estimators with the units they use, compiled with tests/numerics/hesap-net/webrtc-shim's plumbing as crd-webrtc-bwe-peer on the complete-tier linux-gcc-public-checks lane: the bit-exact oracle and board of hesap-net's delay trend and acknowledged rate, with rtc_base's RTP to NTP estimator and timestamp aligner for its media clock pair (HESAP-NET, CRD_BUILD_ESTIMATORS_VS_WEBRTC); never in an engine module or a default build. LICENSE and PATENTS read from the tree. Pinned as a testing download (pre-approved, user 2026-10-30)."
+      "note": "The newest release branch of libwebrtc on 2026-11-07, file by file through Gitiles' format=TEXT: its source archives change bytes on every request (checked 2026-11-07), and the SHA-256 and size are those of the base64 text, decoded by scripts/install-webrtc-bwe.py. The goog_cc and remote_bitrate_estimator estimators with the units they use, compiled with tests/numerics/hesap-net/webrtc-shim's plumbing as crd-webrtc-bwe-peer on the complete-tier linux-gcc-public-checks lane: the bit-exact oracle and board of hesap-net's delay trend and acknowledged rate, with rtc_base's RTP to NTP estimator and timestamp aligner for its media clock pair; rtp_rtcp's FEC codec with its RFC 8627 header reader and writer and NetEq's RED splitter, as crd-webrtc-fec-peer, for its FlexFEC and RED (HESAP-NET, CRD_BUILD_ESTIMATORS_VS_WEBRTC); never in an engine module or a default build. LICENSE and PATENTS read from the tree. Pinned as a testing download (pre-approved, user 2026-10-30)."
     }
   },
   "actions": {

@@ -189,9 +189,9 @@
       "why": "The bit-exact oracle and board of the clock filter against ntpd's clock_filter() (crd-hesap-clock-ntpd-tests, crd-hesap-clock-board, HESAP-NET), against the pinned release fetched at configure time only when the option is on; the complete-tier linux-gcc-public-checks lane turns it on."
     },
     {
-      "paths": ["tests/numerics/hesap-net/test_estimators_webrtc.cpp", "tests/numerics/hesap-net/estimators_board.cpp"],
+      "paths": ["tests/numerics/hesap-net/test_estimators_webrtc.cpp", "tests/numerics/hesap-net/estimators_board.cpp", "tests/numerics/hesap-net/test_flexfec_webrtc.cpp", "tests/numerics/hesap-net/flexfec_board.cpp"],
       "built_when": {"option": "CRD_BUILD_ESTIMATORS_VS_WEBRTC"},
-      "why": "The bit-exact oracle and board of the delay trend and acknowledged rate against libwebrtc (crd-hesap-estimators-webrtc-tests, crd-hesap-estimators-board, HESAP-NET), against the pinned files scripts/install-webrtc-bwe.py installs; the complete-tier linux-gcc-public-checks lane turns it on."
+      "why": "The bit-exact oracles and boards of the delay trend and acknowledged rate and of FlexFEC and RED against libwebrtc (crd-hesap-estimators-webrtc-tests, crd-hesap-estimators-board, crd-hesap-flexfec-webrtc-tests, crd-hesap-flexfec-board, HESAP-NET), against the pinned files scripts/install-webrtc-bwe.py installs; the complete-tier linux-gcc-public-checks lane turns it on."
     },
     {
       "paths": ["runtime/examples/bench_hesap_lbfgs_vs_reference.cpp"],

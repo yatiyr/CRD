@@ -80,10 +80,10 @@ option(CRD_BUILD_ERASURE_VS_ISAL "Build the Reed-Solomon oracle and board agains
 # RFC 5510's other reference: OpenFEC's Reed-Solomon codec (cmake/pins.json openfec), as crd-openfec-peer. Never in a
 # shipped build; the crd-hesap-erasure-openfec-tests CTests of the tree that turns it on, on the same lane.
 option(CRD_BUILD_ERASURE_VS_OPENFEC "Build the Reed-Solomon oracle against OpenFEC" OFF)
-# HESAP-NET's estimators against libwebrtc: its own goog_cc, remote_bitrate_estimator and clock mapping files
-# (tools/webrtc-bwe-sources: scripts/install-webrtc-bwe.py, which prints the CRD_WEBRTC_BWE this configure reads), as
-# crd-webrtc-bwe-peer with the plumbing shimmed. Never in a shipped build; crd-hesap-estimators-webrtc-tests and
-# crd-hesap-estimators-board of the tree that turns it on.
+# HESAP-NET's estimators and packet codes against libwebrtc: its own goog_cc, remote_bitrate_estimator, clock mapping,
+# FEC and RED files (tools/webrtc-bwe-sources: scripts/install-webrtc-bwe.py, which prints the CRD_WEBRTC_BWE this
+# configure reads), as crd-webrtc-bwe-peer and crd-webrtc-fec-peer with the plumbing shimmed. Never in a shipped build;
+# crd-hesap-estimators-webrtc-tests, crd-hesap-flexfec-webrtc-tests and their boards of the tree that turns it on.
 option(CRD_BUILD_ESTIMATORS_VS_WEBRTC "Build the network estimators' oracle and board against libwebrtc" OFF)
 set(CRD_WEBRTC_BWE "$ENV{CRD_WEBRTC_BWE}" CACHE PATH "The pinned libwebrtc estimators (scripts/install-webrtc-bwe.py)")
 # HESAP-NET's clock filter against ntpd: clock_filter() cut verbatim from the pinned release's ntp_proto.c (cmake/pins.json

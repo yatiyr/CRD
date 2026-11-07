@@ -43,4 +43,8 @@ struct FatalStream : AnyStream
 #define RTC_DCHECK_LE(a, b) RTC_DCHECK(true)
 #define RTC_DCHECK_LT(a, b) RTC_DCHECK(true)
 #define RTC_DCHECK_EQ(a, b) RTC_DCHECK(true)
-#define RTC_DCHECK_NOTREACHED() (void)0
+#define RTC_DCHECK_NOTREACHED() RTC_DCHECK(true)
+#define RTC_DCHECK_NE(a, b) RTC_DCHECK(true)
+#define RTC_CHECK_EQ(a, b) RTC_CHECK((a) == (b))
+#define RTC_CHECK_LE(a, b) RTC_CHECK((a) <= (b))
+#define RTC_CHECK_LT(a, b) RTC_CHECK((a) < (b))
