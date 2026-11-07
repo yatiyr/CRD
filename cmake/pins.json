@@ -292,6 +292,17 @@
       "gated": "CRD_BUILD_ERASURE_VS_ISAL",
       "note": "Intel's ISA-L 2.32.1 (released 2026-07-01), the erasure-code peer of hesap-net's Reed-Solomon code (HESAP-NET). erasure_code/ec_base.c, its portable GF(2^8) arithmetic (gf_mul over its own logarithm tables of 0x11D), matrix inversion and ec_encode_data_base, and on x86-64 its assembly and dispatch (assembled by the pinned NASM) are compiled only into crd-isal-peer for the crd-hesap-erasure-isal-tests oracle and crd-hesap-erasure-board; never into an engine module or a default build. LICENSE read from the archive: BSD-3-Clause, (c) 2011-2024 Intel Corporation. Pinned as a testing download under the user's approval of 2026-11-01 (docs/sessions/2026-11-04-hesap-net-fuzz-and-isal-oracle.md)."
     },
+    "ntp": {
+      "version": "4.2.8p18",
+      "url": "https://downloads.nwtime.org/ntp/4.2.8/ntp-4.2.8p18.tar.gz",
+      "file": "ntp-4.2.8p18.tar.gz",
+      "sha256": "cf84c5f3fb1a295284942624d823fffa634144e096cfc4f9969ac98ef5f468e5",
+      "size": 7210799,
+      "license": "NTP",
+      "gated": "CRD_BUILD_CLOCK_VS_NTPD",
+      "provenance": "The Network Time Foundation's release of the RFC 5905 reference implementation; the SHA-256 is the one it publishes beside the tarball (read 2026-11-07)",
+      "note": "The reference of hesap-net's clock filter (HESAP-NET): clock_filter() cut verbatim from ntpd/ntp_proto.c at configure time and compiled on tests/numerics/hesap-net/ntpd_peer.c's stand-ins, as crd-ntpd-peer on the complete-tier linux-gcc-public-checks lane; never in an engine module or a default build. COPYRIGHT read from the archive. Pinned as a testing download (pre-approved, user 2026-10-30)."
+    },
     "openfec": {
       "version": "1.4.2.12",
       "repository": "roc-streaming/openfec",
@@ -1193,6 +1204,56 @@
           "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/system/rtc_export.h?format=TEXT",
           "size": 1568,
           "sha256": "788f63bd45bcba142a5aa65b455fd3c559948dc0c36a34d5348f3e9e40e748ba"
+        },
+        "rtc_base/rtp_to_ntp_estimator.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/rtp_to_ntp_estimator.h?format=TEXT",
+          "size": 3112,
+          "sha256": "3768915f1f2ae94037346c0763aae86bc2394bba2629b097140e008f9ce170dd"
+        },
+        "rtc_base/rtp_to_ntp_estimator.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/rtp_to_ntp_estimator.cc?format=TEXT",
+          "size": 6588,
+          "sha256": "48e1424c61772a0c31b9d9e0d0189d9f9efca9e782af6e60bc8c49a58f1d6122"
+        },
+        "rtc_base/timestamp_aligner.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/timestamp_aligner.h?format=TEXT",
+          "size": 5164,
+          "sha256": "3d9e05443e9e6d80ee69bec67f5ecf852f41aefb9e12bb193add618316a6a54b"
+        },
+        "rtc_base/timestamp_aligner.cc": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/timestamp_aligner.cc?format=TEXT",
+          "size": 7812,
+          "sha256": "cc57367da9bd23dc530bcb59a996720ca75a3f91880f60a6d64ea1d3fd27af22"
+        },
+        "rtc_base/time_utils.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/time_utils.h?format=TEXT",
+          "size": 6752,
+          "sha256": "6275c6336b0e9d86b4cfeb24391480a06f76441535c845b977626c615aeadea9"
+        },
+        "rtc_base/numerics/sequence_number_unwrapper.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/numerics/sequence_number_unwrapper.h?format=TEXT",
+          "size": 880,
+          "sha256": "7cf51f21f84830e7ded75abafd3a8f68e51496259b01e812d8022a704a7c7ccd"
+        },
+        "api/numerics/sequence_number_unwrapper.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/api/numerics/sequence_number_unwrapper.h?format=TEXT",
+          "size": 3156,
+          "sha256": "f62b4f4909ab9dc245b6c6e4d66b58511aa18b54dad3fb9f295d77be262449b5"
+        },
+        "rtc_base/numerics/sequence_number_util.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/numerics/sequence_number_util.h?format=TEXT",
+          "size": 3856,
+          "sha256": "955d96abc3eef0be9bed601fcce6cb28e59f32ffcab1db97f1726c2a4a561e86"
+        },
+        "rtc_base/numerics/mod_ops.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/rtc_base/numerics/mod_ops.h?format=TEXT",
+          "size": 5912,
+          "sha256": "eb11a892e65a38d78ee044964dc00fb0a74faca75c8f670a5ac29fae8fcc639b"
+        },
+        "system_wrappers/include/ntp_time.h": {
+          "url": "https://webrtc.googlesource.com/src/+/84b14960eb46b26499b565fba42a581814f137f7/system_wrappers/include/ntp_time.h?format=TEXT",
+          "size": 6540,
+          "sha256": "eb18087650c0cd48a5d9d217c35d64cb5fad5d8d1abfa9267d0cbaf8921dfe09"
         }
       },
       "license": "BSD-3-Clause",

@@ -86,6 +86,9 @@ option(CRD_BUILD_ERASURE_VS_OPENFEC "Build the Reed-Solomon oracle against OpenF
 # crd-hesap-estimators-board of the tree that turns it on.
 option(CRD_BUILD_ESTIMATORS_VS_WEBRTC "Build the network estimators' oracle and board against libwebrtc" OFF)
 set(CRD_WEBRTC_BWE "$ENV{CRD_WEBRTC_BWE}" CACHE PATH "The pinned libwebrtc estimators (scripts/install-webrtc-bwe.py)")
+# HESAP-NET's clock filter against ntpd: clock_filter() cut verbatim from the pinned release's ntp_proto.c (cmake/pins.json
+# ntp), as crd-ntpd-peer. Never in a shipped build; crd-hesap-clock-ntpd-tests of the tree that turns it on.
+option(CRD_BUILD_CLOCK_VS_NTPD "Build the clock filter's oracle against ntpd" OFF)
 set(CRD_NASM "$ENV{CRD_NASM}" CACHE FILEPATH "The pinned NASM on Linux (scripts/install-nasm.py), for ISA-L's assembly")
 # The dispatch-cost board (ADR-0134 §8): a crd kernel table's call against Google Highway's HWY_DYNAMIC_DISPATCH, from
 # the pinned Highway release (cmake/pins.json highway, fetched on demand into build/_deps) built by its own CMake, as
@@ -1589,6 +1592,15 @@ if(CRD_BUILD_ERASURE_VS_OPENFEC)
     endif()
     enable_language(C)
     crd_add_pinned_package(openfec DOWNLOAD_ONLY YES)
+endif()
+
+# ----- The clock filter oracle's ntpd peer: its release, cut and built by tests/numerics/hesap-net -----
+if(CRD_BUILD_CLOCK_VS_NTPD)
+    if(NOT CRD_BUILD_TESTS)
+        message(FATAL_ERROR "[clock-vs-ntpd] the ntpd oracle needs CRD_BUILD_TESTS")
+    endif()
+    enable_language(C)
+    crd_add_pinned_package(ntp DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The network estimators' libwebrtc peer: its files, built by tests/numerics/hesap-net -----

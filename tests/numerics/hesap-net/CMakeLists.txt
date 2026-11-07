@@ -4,6 +4,7 @@ add_executable(crd-hesap-net-tests
     test_red.cpp
     test_interleave.cpp
     test_estimators.cpp
+    test_clock.cpp
 )
 
 target_link_libraries(crd-hesap-net-tests PRIVATE
@@ -89,8 +90,8 @@ endif()
 # HESAP-NET's libwebrtc peer (CRD_BUILD_ESTIMATORS_VS_WEBRTC, the root CMakeLists): the pinned branch's estimator and
 # unit files verbatim, webrtc-shim/ only for their checks, logging and field-trial parsing and their one pow, the
 # engine's. It takes the engine's floating-point contract, so the two sides round alike.
-# crd-hesap-estimators-webrtc-tests holds the delay trend and
-# acknowledged rate to it bit for bit; crd-hesap-estimators-board times the two.
+# crd-hesap-estimators-webrtc-tests holds the delay trend, the acknowledged rate, the media clock map and the capture
+# aligner to it bit for bit; crd-hesap-estimators-board times the estimators, crd-hesap-clock-board the clock pair.
 if(CRD_BUILD_ESTIMATORS_VS_WEBRTC)
     set(webrtc_estimators "${CRD_WEBRTC_BWE}/modules")
     add_library(crd-webrtc-bwe-peer STATIC
@@ -98,7 +99,9 @@ if(CRD_BUILD_ESTIMATORS_VS_WEBRTC)
         "${webrtc_estimators}/congestion_controller/goog_cc/inter_arrival_delta.cc"
         "${webrtc_estimators}/congestion_controller/goog_cc/trendline_estimator.cc"
         "${webrtc_estimators}/remote_bitrate_estimator/overuse_detector.cc"
-        "${webrtc_estimators}/remote_bitrate_estimator/overuse_estimator.cc")
+        "${webrtc_estimators}/remote_bitrate_estimator/overuse_estimator.cc"
+        "${CRD_WEBRTC_BWE}/rtc_base/rtp_to_ntp_estimator.cc"
+        "${CRD_WEBRTC_BWE}/rtc_base/timestamp_aligner.cc")
     target_include_directories(crd-webrtc-bwe-peer SYSTEM PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/webrtc-shim" "${CRD_WEBRTC_BWE}")
     target_link_libraries(crd-webrtc-bwe-peer PUBLIC crd-math)
@@ -115,4 +118,41 @@ if(CRD_BUILD_ESTIMATORS_VS_WEBRTC)
     target_link_libraries(crd-hesap-estimators-board PRIVATE crd-core crd-containers crd-hesap-net crd-webrtc-bwe-peer)
     add_test(NAME crd-hesap-estimators-board-smoke COMMAND crd-hesap-estimators-board --quick)
     set_tests_properties(crd-hesap-estimators-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
+endif()
+
+# HESAP-NET's ntpd peer (CRD_BUILD_CLOCK_VS_NTPD, the root CMakeLists): the pinned release's clock_filter(), cut
+# verbatim from ntpd/ntp_proto.c here and compiled on ntpd_peer.c's few stand-ins, with the engine's floating-point contract.
+# crd-hesap-clock-ntpd-tests holds ClockFilter to it bit for bit; crd-hesap-clock-board, with the libwebrtc peer, times
+# them and reports the accuracy on the simulated paths.
+if(CRD_BUILD_CLOCK_VS_NTPD)
+    file(READ "${ntp_SOURCE_DIR}/ntpd/ntp_proto.c" ntp_proto)
+    string(FIND "${ntp_proto}" "/*\n * clock_filter - add incoming" ntp_slice_begin)
+    string(FIND "${ntp_proto}" "/*\n * clock_select - find" ntp_slice_end)
+    if(ntp_slice_begin EQUAL -1 OR ntp_slice_end LESS_EQUAL ntp_slice_begin)
+        message(FATAL_ERROR "[clock-vs-ntpd] clock_filter() not found in ${ntp_SOURCE_DIR}/ntpd/ntp_proto.c")
+    endif()
+    math(EXPR ntp_slice_length "${ntp_slice_end} - ${ntp_slice_begin}")
+    string(SUBSTRING "${ntp_proto}" ${ntp_slice_begin} ${ntp_slice_length} ntp_slice)
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ntpd-slice/ntpd_clock_filter_slice.inc"
+         CONTENT "${ntp_slice}" @ONLY)
+
+    add_library(crd-ntpd-peer STATIC ntpd_peer.c)
+    target_include_directories(crd-ntpd-peer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/ntpd-slice")
+    target_include_directories(crd-ntpd-peer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_options(crd-ntpd-peer PRIVATE ${CRD_FP_CONTRACT_OPTIONS} $<$<C_COMPILER_ID:GNU,Clang>:-w>)
+    target_link_libraries(crd-ntpd-peer PRIVATE m)
+    set_target_properties(crd-ntpd-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+
+    add_executable(crd-hesap-clock-ntpd-tests test_clock_ntpd.cpp)
+    target_link_libraries(crd-hesap-clock-ntpd-tests PRIVATE
+        crd-core crd-containers crd-hesap-net crd-ntpd-peer Catch2::Catch2WithMain)
+    crd_discover_tests(crd-hesap-clock-ntpd-tests)
+
+    if(CRD_BUILD_ESTIMATORS_VS_WEBRTC)
+        add_executable(crd-hesap-clock-board clock_board.cpp)
+        target_link_libraries(crd-hesap-clock-board PRIVATE
+            crd-core crd-containers crd-hesap-net crd-ntpd-peer crd-webrtc-bwe-peer)
+        add_test(NAME crd-hesap-clock-board-smoke COMMAND crd-hesap-clock-board --quick)
+        set_tests_properties(crd-hesap-clock-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
+    endif()
 endif()

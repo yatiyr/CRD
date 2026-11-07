@@ -106,7 +106,7 @@ OWN.1 records these owners (2026-10-31):
     crd-hesap-net, which HESAP-NET's estimators, dead-reckoning and rewind kernels and quantisation helpers join: all
     three homes the row first named (hesap-comms, hesap-stats, hesap-interp) reach crd-jobs, which crd-net may not
     ([ADR-0065 §29's amendment](../decisions/0065-hesap-numerical-substrate.md)).
-    `numerics.network-estimators` (RTT, jitter, delay trend, rate; clock filters to come) is its second capability.
+    `numerics.network-estimators` (RTT, jitter, delay trend, rate, clock offset and drift) is its second capability.
 
 ## Duplicate rows
 

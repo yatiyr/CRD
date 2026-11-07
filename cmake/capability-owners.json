@@ -695,9 +695,10 @@
     },
     {
       "id": "numerics.network-estimators",
-      "summary": "The network path estimators and clock filters: RFC 9002 and RFC 6298 round-trip time, RFC 3550 interarrival jitter, Google Congestion Control's packet groups, trendline and Kalman delay filters with their adaptive overuse threshold, the windowed extremum and delivery rate of BBR and the Bayesian acknowledged rate; clock-offset and drift filters join it (HESAP-NET).",
+      "summary": "The network path estimators and clock filters: RFC 9002 and RFC 6298 round-trip time, RFC 3550 interarrival jitter, Google Congestion Control's packet groups, trendline and Kalman delay filters with their adaptive overuse threshold, the windowed extremum and delivery rate of BBR, the Bayesian acknowledged rate; RFC 5905's exchange and minimum-delay clock filter, the regression drift filter and the tracker that composes them, the RTP to NTP clock line and the capture clock aligner (HESAP-NET).",
       "owner": "hesap-net",
       "api": [
+        "engine/numerics/hesap-net/include/crd/hesap/net/clock.hpp",
         "engine/numerics/hesap-net/include/crd/hesap/net/delay_trend.hpp",
         "engine/numerics/hesap-net/include/crd/hesap/net/jitter.hpp",
         "engine/numerics/hesap-net/include/crd/hesap/net/rate.hpp",
