@@ -5,9 +5,11 @@
 //   decode        15% of the sources lost: a plan for the received rows, the intermediate symbols, the lost sources
 // The first number of a block's own cost is its plan, which the planned row leaves out; the decode rows always pay it.
 //
-// Usage: crd-hesap-raptorq-board [--rounds N] [--quick]
-//   rounds  interleaved rounds of every arm; the best of them is reported (default 7)
-//   quick   one round over small blocks (the smoke CTest)
+// Usage: crd-hesap-raptorq-board [--rounds N] [--quick] [--k K] [--planned]
+//   rounds   interleaved rounds of every arm; the best of them is reported (default 7)
+//   quick    one round over small blocks (the smoke CTest)
+//   k        this block size alone
+//   planned  the planned arms alone, so a profile of the run holds nothing else
 
 #include "raptorq_peers.h"
 #include "seeded_words.hpp"
@@ -150,6 +152,8 @@ int main(int argc, char** argv)
 {
     u32 rounds = 7U;
     bool quick = false;
+    bool only_planned = false;
+    u32 only_k = 0U;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--quick") == 0)
@@ -161,11 +165,21 @@ int main(int argc, char** argv)
         {
             rounds = static_cast<u32>(std::strtoul(argv[++i], nullptr, 10));
         }
+        else if (std::strcmp(argv[i], "--k") == 0 && i + 1 < argc)
+        {
+            only_k = static_cast<u32>(std::strtoul(argv[++i], nullptr, 10));
+        }
+        else if (std::strcmp(argv[i], "--planned") == 0)
+        {
+            only_planned = true;
+        }
     }
 
     const u32 full[] = {10U, 101U, 1000U, 10000U, 50000U};
     const u32 small[] = {10U, 101U};
-    const std::span<const u32> sizes = quick ? std::span<const u32>(small) : std::span<const u32>(full);
+    const std::span<const u32> sizes = only_k != 0U ? std::span<const u32>(&only_k, 1U)
+                                       : quick      ? std::span<const u32>(small)
+                                                    : std::span<const u32>(full);
 
     for (const u32 k : sizes)
     {
@@ -271,8 +285,34 @@ int main(int argc, char** argv)
             std::memset(out.data(), 0, out.size());
         };
 
+        const auto planned_arms = [&]()
+        {
+            timed(planned.hesap,
+                  [&]()
+                  {
+                      ours.solve(sources);
+                      produce();
+                  });
+            check("hesap planned");
+            timed(planned.nanorq,
+                  [&]()
+                  {
+                      crd_nanorq_run(nanorq_plan, sources.data());
+                      for (u32 i = 0U; i < repair_count; ++i)
+                      {
+                          crd_nanorq_symbol(nanorq_plan, k + i, out.data() + (usize{i} * kSymbol));
+                      }
+                  });
+            check("nanorq planned");
+        };
+
         for (u32 round = 0U; round < rounds; ++round)
         {
+            if (only_planned)
+            {
+                planned_arms();
+                continue;
+            }
             timed(encode.hesap,
                   [&]()
                   {
@@ -302,23 +342,7 @@ int main(int argc, char** argv)
                   });
             check("crate encode");
 
-            timed(planned.hesap,
-                  [&]()
-                  {
-                      ours.solve(sources);
-                      produce();
-                  });
-            check("hesap planned");
-            timed(planned.nanorq,
-                  [&]()
-                  {
-                      crd_nanorq_run(nanorq_plan, sources.data());
-                      for (u32 i = 0U; i < repair_count; ++i)
-                      {
-                          crd_nanorq_symbol(nanorq_plan, k + i, out.data() + (usize{i} * kSymbol));
-                      }
-                  });
-            check("nanorq planned");
+            planned_arms();
             timed(planned.crate, [&]()
                   { crd_raptorq_crate_repair(crate_plan, block.data(), k, kSymbol, 0U, repair_count, out.data()); });
             check("crate planned");
@@ -376,9 +400,15 @@ int main(int argc, char** argv)
         crd_nanorq_plan_free(nanorq_plan);
         crd_raptorq_crate_plan_free(crate_plan);
 
-        print_row("encode", k, encode);
+        if (!only_planned)
+        {
+            print_row("encode", k, encode);
+        }
         print_row("planned", k, planned);
-        print_row("decode", k, decode);
+        if (!only_planned)
+        {
+            print_row("decode", k, decode);
+        }
         std::printf(
             "         K=%-6u L=%u P=%u: inactivated %u at the encoder, %u at the decoder; plans of %llu and %llu "
             "bytes\n",
