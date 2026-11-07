@@ -64,3 +64,22 @@ between the runs on the busy host (crd-net 18.0 and 18.3 ns in run 1).
   time for its keys (commit 8d2367f2).
 - **Deltas cost CPU.** Encoding a delta takes 5.2x a whole message's encode and applying one 3.2x its decode: S28's
   layout walk interprets every field from descriptors.
+
+## Decode into storage and the check pass (later the same day)
+
+Same machine and tree, two runs of `--rounds 25` ([session](../sessions/2026-11-08-net-3-one-pass-decode.md)). The
+crd-net arm now gives its lists storage (`WireList::into`): each element is decoded once as it is validated. A sixth
+arm, "crd-net, lists viewed", is the same codec without storage: its validating pass runs the generated `check`, which
+rebuilds no float or quaternion, and the walk decodes.
+
+| Message | crd-net, into storage | lists viewed | serialize | crd-net / serialize |
+|---|---|---|---|---|
+| snapshot, decode ns (runs 1, 2) | 1203.9, 1137.6 | 1749.3, 1676.6 | 1116.8, 1092.3 | 1.08x, 1.04x |
+| snapshot, encode ns | 1506.4, 1457.5 | 1533.1, 1455.4 | 1897.9, 1836.5 | 0.79x, 0.79x |
+| chat, decode ns | 57.7, 53.5 | 64.6, 62.1 | 84.5, 84.1 | 0.68x, 0.64x |
+| input command, decode ns | 15.3, 12.4 | 16.9, 13.7 | 13.1, 10.7 | 1.17x, 1.16x |
+
+- The snapshot decode went from 1.78x serialize's to 1.04x to 1.08x, every value still equal to serialize's bit for
+  bit, nothing allocated. The check pass alone takes the viewed form from 1.78x (1936 ns) to 1.45x.
+- The last 4% to 8% is not yet attributed. The first candidate is the reader: each field reloads an unaligned word at
+  its bit position and checks the bound twice, where serialize shifts a scratch word it refills once per 32 bits.

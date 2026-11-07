@@ -1412,7 +1412,11 @@ from one authored schema through `scripts/gen-wire-schemas.py`; nothing hand-wri
   (`WireSchema`), so the signed schema and the code cannot disagree on what exists.
 - **Decoding.** Linear in the bytes, no allocation: every element takes at least one bit, so a claimed count cannot
   multiply work. Bytes and text are spans of the input, and a list keeps where its validated elements lie and re-reads
-  them when walked.
+  them when walked; its validating pass runs each element codec's generated `check`, the decode's verdict without the
+  floats and quaternions it would rebuild (hesap-net's `bounded_valid` and `smallest_three_valid` share the decode's
+  arithmetic, so the verdicts agree on every word). A list given storage (`WireList::into`, kept across decodes and
+  through struct fields) is decoded once into it as it is validated; the elements are the caller's only when the whole
+  message is accepted, and a list longer than the storage is viewed as without it (2026-11-08).
 - **Admission** is [S27](#frames).
 - **Evidence.** Each schema gets a generated fuzz target. The generator's reference interpreter, which shares no code
   with the C++ it emits, computes known answers: `test_wire.cpp` holds the generated encoder and decoder to its bytes and
