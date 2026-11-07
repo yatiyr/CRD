@@ -26,6 +26,7 @@ lanes, older than its fix 57c19b1e. Dispatch 42360379686 (8e86cf8f) is still run
   i9-14900K 1.22x to 2.05x in the clean run. FlexFEC 2.41x to 3.55x (was 1.92x to 3.35x).
 - linux-gcc-release, levels native, avx2, sse2 and portable: `crd-hesap-net-tests`, `crd-hesap-raptorq-peer-tests` (nanorq and the
   raptorq crate), `crd-hesap-flexfec-webrtc-tests` (libwebrtc) all pass, bytes unchanged.
+- linux-clang-tsan and win-debug (MSVC): `crd-hesap-net-tests [erasure],[raptorq],[flexfec]` pass; 21 CTest guards pass.
 - 19 mutations of the kernel, solver and FlexFEC callers: all caught. Two survived at first because the tests' memory was zero, so
   `solve` now runs on garbage intermediate and scratch memory in every test, which caught them.
 - libFuzzer on linux-clang-fuzz, 100 s each with the sum in `crd-fuzz-hesap-erasure`'s kernel requests: erasure 8,978, raptorq 171,057
@@ -38,4 +39,5 @@ deleted with its disk this batch; raw files were fetched first. Only the stopped
 
 ## Next
 
-Read 42360379686 for the row's four remaining peers and the fuzz fix, then close HESAP-NET; NET.3.
+A hosted run containing 73265345 for the NEON body of `sum`, which no lane has compiled yet; 42360379686 for the row's four remaining
+peers and the fuzz fix; then close HESAP-NET. NET.3.
