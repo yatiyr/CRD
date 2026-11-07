@@ -160,6 +160,11 @@ void print_usage()
         "                <keys>: --protector platform|tpm [--tcti <conf>] [--device tpm|pkcs11 [--module <so>\n"
         "                --label <token> --pin-file <f>]]\n"
         "                (the crypto policy generation: render the reviewed source, join its signatures, judge it)\n"
+        "  ceridc model train --kind entropy|dictionary --samples <dir> --out <model> [--dictionary-bytes <n>]\n"
+        "                [--max-message-bytes <n>] [--holdout <n>]\n"
+        "  ceridc model measure --kind entropy|dictionary --samples <dir> --model <f> [--max-message-bytes <n>]\n"
+        "                (a channel's body model: train or measure it on messages, one per file, and print the\n"
+        "                hash and the models entry the schema pins)\n"
         "  ceridc instantiate --pack <p> --asset <name> [--x --y --z] --out <scene.scen> [--dry-run]\n"
         "  ceridc sequence --name <n> --clip-a <n> --frames-a <n> --clip-b <n> --frames-b <n>\n"
         "                  [--transition <frames>] --out-timl <f> --out-otio <f>\n"
@@ -452,6 +457,19 @@ int main(int argc, char* argv[])
         flags.protector = keys.protector;
         flags.device = keys.device;
         return emit(crd::ceridc::verb_policy(flags, &g_alloc));
+    }
+    if (std::strcmp(verb, "model") == 0)
+    {
+        crd::ceridc::ModelFlags flags;
+        flags.action = argc >= 3 ? argv[2] : nullptr;
+        flags.kind = flag_of(argc, argv, "--kind", nullptr);
+        flags.samples = flag_of(argc, argv, "--samples", nullptr);
+        flags.out = flag_of(argc, argv, "--out", nullptr);
+        flags.model = flag_of(argc, argv, "--model", nullptr);
+        flags.dictionary_bytes = flag_of(argc, argv, "--dictionary-bytes", nullptr);
+        flags.max_message_bytes = flag_of(argc, argv, "--max-message-bytes", nullptr);
+        flags.holdout = flag_of(argc, argv, "--holdout", nullptr);
+        return emit(crd::ceridc::verb_model(flags, &g_alloc));
     }
     if (std::strcmp(verb, "instantiate") == 0)
     {

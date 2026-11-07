@@ -37,6 +37,7 @@ target_link_libraries(crd-ceridc
         crd-comply    # COMPLY.0 and COMPLY.1: the comply verb's rule query and the screen verb's screening
         crd-crypto    # NET.2: the policy verb writes, joins and judges crypto policy generations
         crd-toml      # NET.2: the policy verb reads the reviewed generation source and the trust set
+        crd-net       # NET.3: the model verb trains a channel's body models and codes samples as its writer would
 )
 
 target_compile_features(crd-ceridc PUBLIC cxx_std_20)

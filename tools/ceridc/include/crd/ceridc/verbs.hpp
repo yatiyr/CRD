@@ -101,6 +101,26 @@ struct PolicyFlags
 };
 [[nodiscard]] crd::containers::String verb_policy(const PolicyFlags& flags, crd::memory::IAllocator* alloc);
 
+// NET.3: a channel's body model (contract: docs/design/network-foundation.md#body-coding). The samples are a directory
+// of files, one message each, holding exactly what the channel codes: an encoded message, or a delta's payload.
+//   train    train a model of `kind` on the samples, every `holdout`th file by name held out, and write it to `out`;
+//   measure  code every sample with the model at `model`.
+// Both code each sample as a channel's writer would, decode it back, and report the model's hash, what was sent in
+// and out of the training set, and the schema's models entry. Every request and input is checked before `out` is
+// written, so a refused train writes nothing.
+struct ModelFlags
+{
+    const char* action = nullptr;            // train or measure
+    const char* kind = nullptr;              // --kind: entropy or dictionary
+    const char* samples = nullptr;           // --samples: the directory of messages
+    const char* out = nullptr;               // --out: the model a train writes
+    const char* model = nullptr;             // --model: the model a measure reads (a dictionary may be raw content)
+    const char* dictionary_bytes = nullptr;  // --dictionary-bytes: a trained dictionary's room (default 4096)
+    const char* max_message_bytes = nullptr; // --max-message-bytes: the channel's most (default: the largest sample)
+    const char* holdout = nullptr;           // --holdout: every nth sample measured, not trained on (default 5; 0: none)
+};
+[[nodiscard]] crd::containers::String verb_model(const ModelFlags& flags, crd::memory::IAllocator* alloc);
+
 // Compose a scene: an entity instancing `asset_name` from the pack at `translate`, serialized as a SCEN
 // artifact. TRANSACTIONAL: unknown asset / non-finite transform rejects with NO file written; dry_run
 // validates and reports without writing.

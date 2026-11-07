@@ -5,6 +5,9 @@
 // makes one and prints its trust set entry, `sign` signs a body with it.
 
 #include <crd/ceridc/verbs.hpp>
+
+#include "decimal.hpp"
+
 #include <crd/comply/generation.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/crypto/key_store.hpp>
@@ -106,27 +109,6 @@ struct Failure
     const std::chrono::year_month_day civil{std::chrono::year{static_cast<int>(day / 10000U)},
                                             std::chrono::month{(day / 100U) % 100U}, std::chrono::day{day % 100U}};
     out = static_cast<crd::u64>(std::chrono::sys_days(civil).time_since_epoch().count()) * kDaySeconds;
-    return true;
-}
-
-// A decimal u64 of 1 to 20 digits that does not overflow.
-[[nodiscard]] bool read_decimal(cont::StringView text, crd::u64& out)
-{
-    if (text.empty() || text.size() > 20U)
-    {
-        return false;
-    }
-    crd::u64 value = 0U;
-    for (const char c : text)
-    {
-        const crd::u64 digit = static_cast<crd::u64>(c - '0');
-        if (c < '0' || c > '9' || value > (~crd::u64{0U} - digit) / 10U)
-        {
-            return false;
-        }
-        value = (value * 10U) + digit;
-    }
-    out = value;
     return true;
 }
 

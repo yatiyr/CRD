@@ -5,6 +5,7 @@ add_executable(crd-ceridc-tests
     test_ceridc_comply.cpp # COMPLY.0: the comply verb and the real binary answer the committed rule generations
     test_ceridc_screen.cpp # COMPLY.1: the screen verb and the real binary screen against sanctions lists
     test_ceridc_policy.cpp # NET.2: the policy verb renders, joins and judges the crypto policy generation
+    test_ceridc_model.cpp # NET.3: the model verb trains and measures a channel's body models
 )
 
 target_link_libraries(crd-ceridc-tests PRIVATE
@@ -23,11 +24,14 @@ target_link_libraries(crd-ceridc-tests PRIVATE
     crd-ceir-cook # DIAG.9a: decode_record, to compare an inspected record with replay.record's
     crd-kir # DIAG.9a: the device record fixture builds its kernels and writes them as CKIR text
     crd-crypto # NET.2: the policy cases sign with provider keys and decode what the verb writes
+    crd-net # NET.3: the model cases load what the verb writes and code the samples themselves
     Catch2::Catch2WithMain
 )
 
 # DIAG.8b: the inspect gate runs the committed authored program assets/ceir/inspect_demo.ceir.
 target_compile_definitions(crd-ceridc-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
+# NET.3: the model cases train on the coded-frame tests' samples and compare with the models their schema pins.
+target_include_directories(crd-ceridc-tests PRIVATE "${CMAKE_SOURCE_DIR}/tests/foundation/net")
 
 crd_enable_default_pch(crd-ceridc-tests)
 

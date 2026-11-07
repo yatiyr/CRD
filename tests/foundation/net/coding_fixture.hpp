@@ -123,10 +123,10 @@ private:
     return source;
 }
 
-// The state channel's entropy model, from the deltas of a simulated world.
-[[nodiscard]] inline Bytes state_entropy_source()
+// What the state channel codes: the deltas of a simulated world, a tick at a time.
+[[nodiscard]] inline crd::containers::Array<Bytes> state_delta_samples()
 {
-    crd::compression::EntropyTrainer trainer;
+    crd::containers::Array<Bytes> samples;
     SimulatedWorld world(200U, 1234U);
     Bytes previous = world.tick();
     Bytes room;
@@ -139,9 +139,20 @@ private:
                                cont::ConstSpan<u8>(current.data(), current.size()), coding::kMinor,
                                cont::Span<u8>(room.data(), room.size()), written) == wire::WireError::Ok)
         {
-            trainer.add(cont::ConstSpan<u8>(room.data(), written));
+            samples.push_back(bytes_of(cont::ConstSpan<u8>(room.data(), written)));
         }
         previous = current;
+    }
+    return samples;
+}
+
+// The state channel's entropy model, from those deltas.
+[[nodiscard]] inline Bytes state_entropy_source()
+{
+    crd::compression::EntropyTrainer trainer;
+    for (const Bytes& sample : state_delta_samples())
+    {
+        trainer.add(cont::ConstSpan<u8>(sample.data(), sample.size()));
     }
     Bytes source;
     source.resize(crd::compression::kEntropyModelBytes);
