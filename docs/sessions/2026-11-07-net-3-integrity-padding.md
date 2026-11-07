@@ -31,13 +31,13 @@ never showed. The length now counts everything after itself. The regression test
 
 ## Evidence
 
-- `crd-net-tests`, the whole target: 313,321 assertions in 108 cases on linux-gcc-debug, linux-gcc-asan and MSVC win-debug; the
+- `crd-net-tests`, the whole target: 313,321 assertions in 108 cases on linux-gcc-debug and linux-gcc-asan, one more on MSVC win-debug; the
   frame, integrity, padding, state-hash and stream tags on linux-clang-tsan. They spell every header form's bytes, flip every bit of a
   hash and body whole and in pieces, pad every size up to 300 bytes to its exact multiple, and refuse each bad padding.
 - libFuzzer on linux-clang-fuzz: `crd-fuzz-net-admission` 461,153 executions in 120 s (a restated layout, hash and padding; lives with
   flipped pieces), `crd-fuzz-net-state-hash` 4,424,565 in 60 s, no artifact. The committed corpora replay clean on linux-gcc-asan.
 - `test-wire-schemas.py`: the new refusals. Strict clang-tidy 20 clean on the changed sources and new tests.
-- 253 source mutations of the changed functions (221 caught at the last round, then 3 more by new tests). The first round's real gaps are now tests (exact padded sizes, room at every
+- 253 source mutations of the changed functions (last round: 221 caught, 25 survived, 7 did not compile; tests aimed at three of the survivors came after it and those three were not rerun). The first round's real gaps are now tests (exact padded sizes, room at every
   size, rings of odd sizes past their wrap, step zero after a restart, priority zero's exemption, a newer message at the channel's
   most) and two checks no input reached are gone. What survives is initial values always overwritten and equal-branch comparisons.
 
