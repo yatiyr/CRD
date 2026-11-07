@@ -20,6 +20,8 @@
 #   crd-fuzz-hesap-quantize  Bounded floats and smallest-three quaternions on any format, value and word a peer can
 #                            send: formats against their restated conditions, every level bit for bit, every decoded
 #                            word unit length and refused exactly as restated.
+#   crd-fuzz-hesap-link      The loss and delay models on any setting and word: netem's machines and tabledist restated,
+#                            refusals as restated and writing nothing, delays within their bounds and reproducible.
 crd_fuzz_target(crd-fuzz-hesap-erasure
     SOURCES fuzz_erasure.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 crd_fuzz_target(crd-fuzz-hesap-flexfec
@@ -34,3 +36,5 @@ crd_fuzz_target(crd-fuzz-hesap-quantize
     SOURCES fuzz_quantize.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quantize")
 crd_fuzz_target(crd-fuzz-hesap-motion
     SOURCES fuzz_motion.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-motion")
+crd_fuzz_target(crd-fuzz-hesap-link
+    SOURCES fuzz_link.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-link")

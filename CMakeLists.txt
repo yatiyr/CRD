@@ -98,6 +98,10 @@ option(CRD_BUILD_QUANTIZE_VS_PEERS "Build the quantisation oracle and board agai
 # build; crd-hesap-motion-peer-tests, crd-hesap-dead-reckoning-peer-tests and their boards
 # of the tree that turns it on.
 option(CRD_BUILD_MOTION_VS_PEERS "Build the replicated-motion oracle and board against its peer" OFF)
+# HESAP-NET's link models against Linux's netem (cmake/pins.json sch-netem, the one source file) and iproute2's table
+# generators (cmake/pins.json iproute2), fetched on demand. Never in a shipped build; crd-hesap-link-netem-tests and
+# crd-hesap-link-board run on the complete-tier linux-gcc-public-checks lane.
+option(CRD_BUILD_LINK_VS_NETEM "Build the link-model oracle and board against netem" OFF)
 set(CRD_NASM "$ENV{CRD_NASM}" CACHE FILEPATH "The pinned NASM on Linux (scripts/install-nasm.py), for ISA-L's assembly")
 # The dispatch-cost board (ADR-0134 §8): a crd kernel table's call against Google Highway's HWY_DYNAMIC_DISPATCH, from
 # the pinned Highway release (cmake/pins.json highway, fetched on demand into build/_deps) built by its own CMake, as
@@ -1635,6 +1639,17 @@ if(CRD_BUILD_MOTION_VS_PEERS)
     set(CRD_VECTORIAL_QUAT4F "${vectorial-quat4f_SOURCE_DIR}/quat4f.h")
     crd_add_pinned_package(kdis DOWNLOAD_ONLY YES)
     set(CRD_KDIS_SOURCE "${kdis_SOURCE_DIR}")
+endif()
+
+# ----- The link models' netem peer: its source and iproute2's generators, built by tests/numerics/hesap-net -----
+if(CRD_BUILD_LINK_VS_NETEM)
+    if(NOT CRD_BUILD_TESTS)
+        message(FATAL_ERROR "[link-vs-netem] the link-model oracle needs CRD_BUILD_TESTS")
+    endif()
+    crd_add_pinned_package(sch-netem DOWNLOAD_ONLY YES DOWNLOAD_NO_EXTRACT YES)
+    set(CRD_NETEM_SOURCE "${sch-netem_SOURCE_DIR}/sch_netem.c")
+    crd_add_pinned_package(iproute2 DOWNLOAD_ONLY YES)
+    set(CRD_IPROUTE2_SOURCE "${iproute2_SOURCE_DIR}")
 endif()
 
 # ----- The network estimators' libwebrtc peer: its files, built by tests/numerics/hesap-net -----

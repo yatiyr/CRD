@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **35** · tools: **46** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **37** · tools: **46** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -40,6 +40,8 @@
 | pocketfft | 4d865cb | BSD-3-Clause | mreineck/pocketfft @ `4d865cba24359b05b37da4e75aee24498c3b78e7` (4d865cba2435) | `pocketfft-4d865cba.tar.gz` |
 | isa-l | 2.32.1 | BSD-3-Clause | intel/isa-l @ `v2.32.1` (7c3479e0a9da) | `isa-l-7c3479e0.tar.gz` |
 | ntp | 4.2.8p18 | NTP AND BSD-2-Clause | https://downloads.nwtime.org/ntp/4.2.8/ntp-4.2.8p18.tar.gz | `ntp-4.2.8p18.tar.gz` |
+| sch-netem | 6.12 | GPL-2.0-or-later | torvalds/linux @ `v6.12` (adc218676eef) | `sch_netem.c` |
+| iproute2 | 6.12.0 | GPL-2.0-or-later AND NIST-PD | https://mirrors.edge.kernel.org/pub/linux/utils/net/iproute2/iproute2-6.12.0.tar.xz | `iproute2-6.12.0.tar.xz` |
 | serialize | 2.1.3 | BSD-3-Clause | mas-bandwidth/serialize @ `v2.1.3` (7bf1877b38cf) | `serialize-7bf1877b.tar.gz` |
 | networked-physics-snapshot | fe19b74b | BSD-3-Clause | mas-bandwidth/networked-physics-gdc-2015 (fe19b74bf78a) | `Snapshot.h` |
 | vectorial-quat4f | fe19b74b | BSD-2-Clause | mas-bandwidth/networked-physics-gdc-2015 (fe19b74bf78a) | `quat4f.h` |

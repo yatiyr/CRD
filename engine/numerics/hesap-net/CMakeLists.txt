@@ -1,12 +1,14 @@
 # crd-hesap-net -- the network and media math of HESAP-NET: packet erasure codes (RFC 5510 Reed-Solomon, RFC 8627
 # FlexFEC, RFC 2198 RED, interleavers) with the dispatched GF(2^8) kernels, the RTT, jitter, delay-trend and rate
-# estimators, the clock offset and drift filters, the quantisation of replicated state and its sampling between and
-# past snapshots (ADR-0065 §29 amendment of 2026-11-07).
+# estimators, the clock offset and drift filters, the quantisation of replicated state, its sampling between and past
+# snapshots, and the loss and delay models of a simulated link (ADR-0065 §29 amendment of 2026-11-07).
 #
 # Its one rule is its closure: crd-net links it, so it stays on crd-core, crd-containers and crd-math and reaches no
 # job system.
 # hesap-comms, hesap-stats and hesap-interp all reach crd-jobs (through hesap-dsp, hesap-fft, hesap-dense and
-# hesap-special), which has no ARM64 fiber context before JOBS-PORT.2, and a network client links no FFT.
+# hesap-special), which has no ARM64 fiber context before JOBS-PORT.2, and a network client links no FFT. Of two of them
+# it reads headers and links nothing (the Philox precedent, ADR-0096 §1): the Philox stream and normal sampler of
+# hesap-stats, whose bulk fill it never calls, and hesap-special's erfc, a template on crd-math.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -16,14 +18,17 @@ add_library(crd-hesap-net STATIC ${SOURCES} ${HEADERS})
 target_include_directories(crd-hesap-net
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_SOURCE_DIR}/engine/numerics/hesap-stats/include"
+    PRIVATE
+        "${CMAKE_SOURCE_DIR}/engine/numerics/hesap-special/include"
 )
 
 target_link_libraries(crd-hesap-net
     PUBLIC
         crd-core
         crd-containers
-    PRIVATE
         crd-math
+    PRIVATE
         crd-warnings
 )
 

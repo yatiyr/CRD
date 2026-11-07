@@ -89,6 +89,7 @@ add_executable(crd-hesap-net-tests
     test_quantize.cpp
     test_motion.cpp
     test_dead_reckoning.cpp
+    test_link_models.cpp
 )
 
 target_link_libraries(crd-hesap-net-tests PRIVATE
@@ -281,4 +282,61 @@ if(CRD_BUILD_QUANTIZE_VS_PEERS)
     target_include_directories(crd-hesap-quantize-board PRIVATE "${PROJECT_SOURCE_DIR}/tests/support/kernel-levels")
     add_test(NAME crd-hesap-quantize-board-smoke COMMAND crd-hesap-quantize-board --quick)
     set_tests_properties(crd-hesap-quantize-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
+endif()
+
+# HESAP-NET's netem peer (CRD_BUILD_LINK_VS_NETEM, the root CMakeLists): the loss, delay and slot functions cut verbatim
+# from the pinned net/sched/sch_netem.c and compiled on netem_peer.c's stand-ins, and iproute2's own table generators, run
+# once to write their tables. crd-hesap-link-netem-tests holds hesap-net to them bit for bit; crd-hesap-link-board times
+# them.
+if(CRD_BUILD_LINK_VS_NETEM)
+    file(READ "${CRD_NETEM_SOURCE}" netem_source)
+    string(FIND "${netem_source}" "/* init_crandom - initialize" netem_models_begin)
+    string(FIND "${netem_source}" "static u64 packet_time_ns(" netem_models_end)
+    string(FIND "${netem_source}" "/* Delay the next round with a new future slot" netem_slot_begin)
+    string(FIND "${netem_source}" "static struct sk_buff *netem_peek(" netem_slot_end)
+    if(netem_models_begin EQUAL -1 OR netem_models_end LESS_EQUAL netem_models_begin OR
+       netem_slot_begin EQUAL -1 OR netem_slot_end LESS_EQUAL netem_slot_begin)
+        message(FATAL_ERROR "[link-vs-netem] the models not found in ${CRD_NETEM_SOURCE}")
+    endif()
+    math(EXPR netem_models_length "${netem_models_end} - ${netem_models_begin}")
+    string(SUBSTRING "${netem_source}" ${netem_models_begin} ${netem_models_length} netem_models_slice)
+    math(EXPR netem_slot_length "${netem_slot_end} - ${netem_slot_begin}")
+    string(SUBSTRING "${netem_source}" ${netem_slot_begin} ${netem_slot_length} netem_slot_slice)
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/netem-slice/netem_models_slice.inc"
+         CONTENT "${netem_models_slice}" @ONLY)
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/netem-slice/netem_slot_slice.inc"
+         CONTENT "${netem_slot_slice}" @ONLY)
+
+    add_library(crd-netem-peer STATIC netem_peer.c)
+    target_include_directories(crd-netem-peer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/netem-slice")
+    target_include_directories(crd-netem-peer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_options(crd-netem-peer PRIVATE $<$<C_COMPILER_ID:GNU,Clang>:-w>)
+    set_target_properties(crd-netem-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+
+    set(netem_table_dir "${CMAKE_CURRENT_BINARY_DIR}/netem-tables")
+    set(netem_tables "")
+    foreach(table normal pareto paretonormal)
+        add_executable(crd-netem-table-${table} "${CRD_IPROUTE2_SOURCE}/netem/${table}.c")
+        target_compile_options(crd-netem-table-${table} PRIVATE $<$<C_COMPILER_ID:GNU,Clang>:-w>)
+        target_link_libraries(crd-netem-table-${table} PRIVATE m)
+        set_target_properties(crd-netem-table-${table} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+        add_custom_command(OUTPUT "${netem_table_dir}/${table}.dist"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${netem_table_dir}"
+            COMMAND crd-netem-table-${table} > "${netem_table_dir}/${table}.dist"
+            DEPENDS crd-netem-table-${table})
+        list(APPEND netem_tables "${netem_table_dir}/${table}.dist")
+    endforeach()
+    add_custom_target(crd-netem-tables DEPENDS ${netem_tables})
+
+    add_executable(crd-hesap-link-netem-tests test_link_netem.cpp)
+    target_link_libraries(crd-hesap-link-netem-tests PRIVATE
+        crd-core crd-containers crd-hesap-net crd-netem-peer Catch2::Catch2WithMain)
+    target_compile_definitions(crd-hesap-link-netem-tests PRIVATE CRD_NETEM_TABLE_DIR="${netem_table_dir}")
+    add_dependencies(crd-hesap-link-netem-tests crd-netem-tables)
+    crd_discover_tests(crd-hesap-link-netem-tests)
+
+    add_executable(crd-hesap-link-board link_board.cpp)
+    target_link_libraries(crd-hesap-link-board PRIVATE crd-core crd-containers crd-hesap-net crd-netem-peer)
+    add_test(NAME crd-hesap-link-board-smoke COMMAND crd-hesap-link-board --quick)
+    set_tests_properties(crd-hesap-link-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
 endif()
