@@ -1240,7 +1240,7 @@ struct PlainCodec
 
 inline constexpr ChannelDesc kChannels[] = {
     {"state", ChannelClass::State, false, false, true, 3U,
-     200000U, 60U, 2000000ULL, 0U},
+     200000U, 60U, 2000000ULL, 0U, true},
 };
 
 inline constexpr DeltaField kPoseDelta[] = {

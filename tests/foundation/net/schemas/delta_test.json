@@ -21,7 +21,8 @@
       "priority": 3,
       "max_message_bytes": 200000,
       "messages_per_s": 60,
-      "bytes_per_s": 2000000
+      "bytes_per_s": 2000000,
+      "padding_block": 0
     }
   ],
   "enums": {

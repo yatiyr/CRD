@@ -65,7 +65,8 @@ struct ChannelDesc
     u32              max_message_bytes = 0U;
     u32              messages_per_s    = 0U;
     u64              bytes_per_s       = 0U;
-    u16              padding_block     = 0U; // datagrams pad to a multiple of this; zero pads nothing
+    u16              padding_block     = 0U; // its traffic pads to a multiple of this; zero pads nothing
+    bool             integrity         = true; // its frames carry frame_hash(); only a Media channel declares otherwise
 };
 
 struct DeltaLayout;

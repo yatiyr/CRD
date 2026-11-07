@@ -24,7 +24,8 @@
       "priority": 0,
       "max_message_bytes": 60000,
       "messages_per_s": 100,
-      "bytes_per_s": 1000000
+      "bytes_per_s": 1000000,
+      "padding_block": 0
     },
     {
       "name": "state",

@@ -65,6 +65,8 @@ TARGETS = {
                         'executable': 'tests/net/fuzz/crd-fuzz-wire-delta-test'},
     'net-delta-stream': {'corpus': 'tests/foundation/net/fuzz/corpus-delta-stream',
                          'executable': 'tests/net/fuzz/crd-fuzz-net-delta-stream'},
+    'net-state-hash': {'corpus': 'tests/foundation/net/fuzz/corpus-state-hash',
+                       'executable': 'tests/net/fuzz/crd-fuzz-net-state-hash'},
     'crypto-capability': {'corpus': 'tests/foundation/crypto/fuzz/corpus-capability',
                           'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-capability'},
     'crypto-key-store': {'corpus': 'tests/foundation/crypto/fuzz/corpus-key-store',

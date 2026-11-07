@@ -9,12 +9,14 @@
 //   2  a generated life: fragments of generated messages, lost, repeated and reordered as the input says.
 //
 // Oracles, none of them admission's own verdict:
-//   * an independent restatement of the frame layout and the admission rule, with open budgets, decides the verdict and
-//     the object, length and body of every frame of a stream or a datagram;
+//   * an independent restatement of the frame layout, the hash, padding and the admission rule, with open budgets,
+//   decides
+//     the verdict and the object, length and body of every frame of a stream or a datagram;
 //   * a stream read at any split gives exactly the frames it gives read whole, with no buffer when read whole;
-//   * a generated message is delivered at most once, with exactly its bytes, and never one a refused first piece
-//   opened;
+//   * a generated message is delivered at most once, with exactly its bytes, whatever bit a hostile path flipped in a
+//     hashed channel's pieces, and never one a refused first piece opened;
 //   * every quota, pending place, stream and buffer comes back, whatever happened; a refused frame takes no buffer.
+#include <crd/containers/checksum.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/net/reassembly.hpp>
@@ -57,16 +59,21 @@ using crd::net::wire::WireSchema;
 constexpr u64 kWide = 1ULL << 40U;
 
 constexpr ChannelDesc kChannels[] = {
-    {"control", ChannelClass::Control, true, true, false, 0U, 4000U, 1U << 30U, kWide, 0U},
-    {"bulk", ChannelClass::Bulk, true, false, false, 4U, 4000U, 1U << 30U, kWide, 0U},
-    {"state", ChannelClass::State, false, false, true, 3U, 4000U, 1U << 30U, kWide, 0U},
-    {"media", ChannelClass::Media, false, false, false, 5U, 4000U, 1U << 30U, kWide, 0U},
+    {"control", ChannelClass::Control, true, true, false, 0U, 4000U, 1U << 30U, kWide, 0U, false},
+    {"bulk", ChannelClass::Bulk, true, false, false, 4U, 4000U, 1U << 30U, kWide, 0U, false},
+    {"state", ChannelClass::State, false, false, true, 3U, 4000U, 1U << 30U, kWide, 0U, false},
+    {"media", ChannelClass::Media, false, false, false, 5U, 4000U, 1U << 30U, kWide, 0U, false},
+    {"sealed", ChannelClass::Event, true, false, false, 2U, 4000U, 1U << 30U, kWide, 32U, true},
+    {"gram", ChannelClass::Input, false, false, false, 2U, 4000U, 1U << 30U, kWide, 32U, true},
 };
+
+constexpr u64 kChannelCount = 6U;
 
 constexpr MessageDesc kMessages[] = {
     {"Hello", 1U, 0U, 0U, 1ULL, 2U, 100U},  {"Late", 2U, 0U, 1U, 1ULL, 0U, 100U},
     {"Blob", 3U, 1U, 0U, 2ULL, 0U, 4000U},  {"Snapshot", 4U, 2U, 0U, 4ULL, 0U, 3000U},
-    {"Voice", 5U, 3U, 0U, 8ULL, 1U, 4000U}, {"Wide", 200U, 0U, 0U, 16ULL, 0U, 50U},
+    {"Voice", 5U, 3U, 0U, 8ULL, 1U, 4000U}, {"Sealed", 6U, 4U, 0U, 8ULL, 0U, 4000U},
+    {"Gram", 7U, 5U, 0U, 8ULL, 0U, 4000U},  {"Wide", 200U, 0U, 0U, 16ULL, 0U, 50U},
 };
 
 constexpr WireSchema kSchema{
@@ -282,6 +289,13 @@ RestatedFrame restated_read(const u8* data, usize size, u32 channel, bool sized,
     }
     out.message = static_cast<u32>(message);
     out.length = static_cast<u32>(length);
+    const ChannelDesc& desc = kChannels[channel];
+    if (message == 0U && sized && desc.reliable && desc.padding_block != 0U)
+    {
+        out.header = at;
+        out.verdict = (length < u64{2} * desc.padding_block) ? AdmitVerdict::PaddingFrame : AdmitVerdict::BadPadding;
+        return out;
+    }
     const MessageDesc* described = restated_find(message);
     const bool newer = shape.writer_minor > kSchemaMinor;
     if (described == nullptr)
@@ -294,7 +308,7 @@ RestatedFrame restated_read(const u8* data, usize size, u32 channel, bool sized,
         else
         {
             out.verdict =
-                (length > kChannels[channel].max_message_bytes) ? AdmitVerdict::Oversized : AdmitVerdict::NewerMessage;
+                (length > u64{desc.max_message_bytes} + 14U) ? AdmitVerdict::Oversized : AdmitVerdict::NewerMessage;
         }
         return out;
     }
@@ -308,6 +322,7 @@ RestatedFrame restated_read(const u8* data, usize size, u32 channel, bool sized,
         out.verdict = AdmitVerdict::OtherChannel;
         return out;
     }
+    const usize tail_at = at;
     if (described->operation != 0U)
     {
         taken = restated_number(data + at, size - at, ~u64{0}, out.object);
@@ -318,12 +333,32 @@ RestatedFrame restated_read(const u8* data, usize size, u32 channel, bool sized,
         }
         at += static_cast<usize>(taken);
     }
+    u32 hash = 0U;
+    if (desc.integrity)
+    {
+        if (size - at < 4U)
+        {
+            out.verdict = short_input;
+            return out;
+        }
+        hash = (u32{data[at]} << 24U) | (u32{data[at + 1U]} << 16U) | (u32{data[at + 2U]} << 8U) | data[at + 3U];
+        at += 4U;
+    }
     out.header = at;
     if (!sized)
     {
         length = size - at;
-        out.length = static_cast<u32>(length);
     }
+    else if (at - tail_at > length)
+    {
+        out.verdict = AdmitVerdict::Malformed;
+        return out;
+    }
+    else
+    {
+        length -= at - tail_at;
+    }
+    out.length = static_cast<u32>(length);
     if (length < described->min_bytes)
     {
         out.verdict = AdmitVerdict::Undersized;
@@ -335,8 +370,27 @@ RestatedFrame restated_read(const u8* data, usize size, u32 channel, bool sized,
     else
     {
         out.verdict = restated_authority(*described, out.object, shape);
+        if (out.verdict == AdmitVerdict::Admitted && desc.integrity && size - at >= length)
+        {
+            const u64 seed = (message << 32U) ^ out.object;
+            const u64 whole = crd::containers::xxh3_64(ConstSpan<u8>(data + at, static_cast<usize>(length)), seed);
+            out.verdict = (static_cast<u32>(whole) == hash) ? out.verdict : AdmitVerdict::IntegrityFailed;
+        }
     }
     return out;
+}
+
+// Whether `size` bytes hold no set bit.
+bool all_zero(const u8* data, usize size)
+{
+    for (usize i = 0U; i < size; ++i)
+    {
+        if (data[i] != 0U)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 // What one reading of a stream delivered and refused.
@@ -419,7 +473,7 @@ Trace model_stream(const Shape& shape, const u8* data, usize size)
         return trace;
     }
     const u64 channel = route >> 2U;
-    if (channel >= 4U)
+    if (channel >= kChannelCount)
     {
         trace.closed_by = AdmitVerdict::BadChannel;
         return trace;
@@ -437,7 +491,18 @@ Trace model_stream(const Shape& shape, const u8* data, usize size)
         {
             return trace;
         }
-        if (frame.verdict == AdmitVerdict::Admitted)
+        if (frame.verdict == AdmitVerdict::PaddingFrame)
+        {
+            const usize left = size - at - frame.header;
+            const usize held = (left < frame.length) ? left : frame.length;
+            if (!all_zero(data + at + frame.header, held))
+            {
+                trace.closed_by = AdmitVerdict::BadPadding;
+                return trace;
+            }
+            at += frame.header + held;
+        }
+        else if (frame.verdict == AdmitVerdict::Admitted)
         {
             const usize left = size - at - frame.header;
             if (left < frame.length)
@@ -514,14 +579,14 @@ void check_datagram(const Shape& shape, const u8* data, usize size)
         const AdmitVerdict opened = session.admission.open_datagram(ConstSpan<u8>(data, size), 0U, cursor);
 
         u64 route = 0U;
-        const int taken = restated_number(data, size, 0x3FFFFFFFFULL, route);
-        if (taken <= 0 || (route & 3U) == 3U)
+        int taken = restated_number(data, size, 0x3FFFFFFFFULL, route);
+        if (taken <= 0)
         {
             CRD_FUZZ_REQUIRE(opened == AdmitVerdict::Malformed);
             return;
         }
         const u64 channel = route >> 2U;
-        if (channel >= 4U)
+        if (channel >= kChannelCount)
         {
             CRD_FUZZ_REQUIRE(opened == AdmitVerdict::BadChannel);
             return;
@@ -530,6 +595,34 @@ void check_datagram(const Shape& shape, const u8* data, usize size)
         {
             CRD_FUZZ_REQUIRE(opened == AdmitVerdict::WrongCarrier);
             return;
+        }
+        if ((route & 3U) == 3U)
+        {
+            // [count][count zeros], then the datagram's own route on the same channel.
+            const u64 block = kChannels[channel].padding_block;
+            usize padded = static_cast<usize>(taken);
+            u64 count = 0U;
+            taken = restated_number(data + padded, size - padded, 0xFFFFFFFFU, count);
+            bool holds = block != 0U && taken > 0 && count < 2U * block && count <= size - padded - taken;
+            if (holds)
+            {
+                padded += static_cast<usize>(taken);
+                holds = all_zero(data + padded, static_cast<usize>(count));
+                padded += static_cast<usize>(count);
+            }
+            u64 inner = 0U;
+            if (holds)
+            {
+                taken = restated_number(data + padded, size - padded, 0x3FFFFFFFFULL, inner);
+                holds = taken > 0 && (inner >> 2U) == channel && (inner & 3U) != 3U;
+            }
+            if (!holds)
+            {
+                CRD_FUZZ_REQUIRE(opened == AdmitVerdict::BadPadding);
+                return;
+            }
+            route = inner;
+            taken += static_cast<int>(padded);
         }
         CRD_FUZZ_REQUIRE(opened == AdmitVerdict::Admitted);
         CRD_FUZZ_REQUIRE(cursor.route.channel == channel);
@@ -635,7 +728,9 @@ void check_life(const Shape& shape, const u8* data, usize size)
     Words words{data, size};
     Session session(shape);
     {
-        constexpr u32 channel = 3U; // media
+        const bool hashed = (words.next() & 1U) != 0U;
+        const u32 channel = hashed ? 5U : 3U; // gram or media
+        const crd::net::FrameShape frame_shape{true, hashed};
         FragmentSlot slots[4];
         DatagramAssembler assembler(session.admission, channel, slots, 50U);
 
@@ -668,11 +763,12 @@ void check_life(const Shape& shape, const u8* data, usize size)
                 body[offset] = body_byte(sequence, offset);
             }
             FrameHeader header;
-            header.message = 5U;
+            header.message = hashed ? 7U : 5U;
             header.length = total;
             header.object = sequence;
             header.chunk = chunk;
             header.sequence = sequence;
+            header.hash = hashed ? crd::net::frame_hash(header.message, sequence, ConstSpan<u8>(body, total)) : 0U;
             for (u32 piece = 0U; piece < pieces; ++piece)
             {
                 const u32 rule = words.next();
@@ -691,9 +787,14 @@ void check_life(const Shape& shape, const u8* data, usize size)
                 now += (rule >> 12U);
                 for (u32 copy = 0U; copy < copies; ++copy)
                 {
-                    const usize written = crd::net::write_fragment(channel, true, header, ConstSpan<u8>(body, total),
-                                                                   Span<u8>(datagram, sizeof(datagram)));
+                    const usize written = crd::net::write_fragment(
+                        channel, frame_shape, header, ConstSpan<u8>(body, total), Span<u8>(datagram, sizeof(datagram)));
                     CRD_FUZZ_REQUIRE(written != 0U);
+                    // A path that flips a bit of a piece's bytes, which only the hash can see.
+                    if (hashed && (rule & 0x30U) == 0x30U)
+                    {
+                        datagram[written - 1U] = static_cast<u8>(datagram[written - 1U] ^ 0x10U);
+                    }
                     DatagramCursor cursor;
                     CRD_FUZZ_REQUIRE(session.admission.open_datagram(ConstSpan<u8>(datagram, written), now, cursor) ==
                                      AdmitVerdict::Admitted);
@@ -702,6 +803,7 @@ void check_life(const Shape& shape, const u8* data, usize size)
                     CRD_FUZZ_REQUIRE(step.verdict != AdmitVerdict::BadFragment);
                     CRD_FUZZ_REQUIRE(step.verdict != AdmitVerdict::Malformed);
                     CRD_FUZZ_REQUIRE(step.verdict != AdmitVerdict::FragmentConflict);
+                    CRD_FUZZ_REQUIRE(hashed || step.verdict != AdmitVerdict::IntegrityFailed);
                     if (!admitted)
                     {
                         CRD_FUZZ_REQUIRE(step.action != AdmitAction::Deliver);
@@ -755,7 +857,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
 {
     // After the mode and the shape, a stream's input is its split count, its splits, its route and its frames.
     // The control channel in pieces: Hello, Late, then a message of another channel.
-    const u8 stream[] = {0U, 1U, 3U, 1U, 2U, 5U, 0U, 1U, 2U, 3U, 0xAAU, 0xBBU, 2U, 0U, 3U, 3U, 2U, 1U, 7U, 8U};
+    const u8 stream[] = {0U, 1U, 3U, 1U, 2U, 5U, 0U, 1U, 3U, 3U, 0xAAU, 0xBBU, 2U, 1U, 3U, 3U, 3U, 1U, 7U, 8U};
     sink.add("stream-control", stream, sizeof(stream));
     // The bulk channel in small pieces, with a body that never completes.
     const u8 split[] = {0U, 1U, 3U, 5U, 4U, 3U, 4U, 3U, 0xFFU, 0x01U, 9U, 1U, 2U, 3U};
@@ -764,14 +866,14 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     const u8 newer[] = {0U, 2U, 0U, 0U, 77U, 2U, 9U, 9U, 1U, 2U, 3U, 0xAAU, 0xBBU};
     sink.add("stream-newer", newer, sizeof(newer));
     // No capability; early data.
-    const u8 refused[] = {0U, 5U, 0U, 0U, 1U, 2U, 3U, 0xAAU, 0xBBU};
+    const u8 refused[] = {0U, 5U, 0U, 0U, 1U, 3U, 3U, 0xAAU, 0xBBU};
     sink.add("stream-no-capability", refused, sizeof(refused));
-    const u8 early[] = {0U, 0x21U, 0U, 0U, 1U, 2U, 3U, 0xAAU, 0xBBU};
+    const u8 early[] = {0U, 0x21U, 0U, 0U, 1U, 3U, 3U, 0xAAU, 0xBBU};
     sink.add("stream-early", early, sizeof(early));
     // Whole, listed and fragmented datagrams on state and media.
     const u8 whole[] = {1U, 1U, 8U, 4U, 3U, 1U, 2U, 3U};
     sink.add("datagram-whole", whole, sizeof(whole));
-    const u8 listed[] = {1U, 1U, 9U, 4U, 1U, 3U, 0xAAU, 4U, 2U, 4U, 0xBBU, 0xCCU};
+    const u8 listed[] = {1U, 1U, 9U, 4U, 2U, 3U, 0xAAU, 4U, 3U, 4U, 0xBBU, 0xCCU};
     sink.add("datagram-listed", listed, sizeof(listed));
     u8 fragment[100] = {1U, 1U, 14U, 5U, 0xC8U, 1U, 3U, 64U, 2U, 0U};
     sink.add("datagram-fragment", fragment, 10U + 64U);
@@ -790,4 +892,50 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     u8 denied[64] = {2U, 9U};
     std::memset(denied + 2U, 2, sizeof(denied) - 2U);
     sink.add("life-denied", denied, sizeof(denied));
+
+    // The hash and padding: a sealed stream with a padding frame before a frame whose hash is right, then with a
+    // flipped bit, in pieces.
+    const u8 note[] = {1U, 2U, 3U};
+    const u32 note_hash = crd::net::frame_hash(6U, 3U, ConstSpan<u8>(note, sizeof(note)));
+    const u8 hash_0 = static_cast<u8>(note_hash >> 24U);
+    const u8 hash_1 = static_cast<u8>(note_hash >> 16U);
+    const u8 hash_2 = static_cast<u8>(note_hash >> 8U);
+    const u8 hash_3 = static_cast<u8>(note_hash);
+    u8 sealed[] = {0U, 1U, 2U, 3U, 2U, 16U, 0U, 3U, 0U, 0U, 0U, 6U, 8U, 3U, hash_0, hash_1, hash_2, hash_3, 1U, 2U, 3U};
+    sink.add("stream-sealed", sealed, sizeof(sealed));
+    sealed[sizeof(sealed) - 1U] = static_cast<u8>(sealed[sizeof(sealed) - 1U] ^ 1U);
+    sink.add("stream-sealed-flipped", sealed, sizeof(sealed));
+    const u8 gram_note[] = {7U, 8U};
+    const u32 gram_hash = crd::net::frame_hash(7U, 3U, ConstSpan<u8>(gram_note, sizeof(gram_note)));
+    // A padded datagram on the gram channel holding a whole message with its hash; and listed, unpadded.
+    const u8 padded[] = {1U,
+                         1U,
+                         23U,
+                         2U,
+                         0U,
+                         0U,
+                         20U,
+                         7U,
+                         3U,
+                         static_cast<u8>(gram_hash >> 24U),
+                         static_cast<u8>(gram_hash >> 16U),
+                         static_cast<u8>(gram_hash >> 8U),
+                         static_cast<u8>(gram_hash),
+                         7U,
+                         8U};
+    sink.add("datagram-padded", padded, sizeof(padded));
+    const u8 padding_set[] = {1U, 1U, 23U, 2U, 0U, 1U, 20U};
+    sink.add("datagram-padding-set", padding_set, sizeof(padding_set));
+    // Lives on the hashed channel: kept, and hostile with flipped pieces.
+    u8 sealed_life[96] = {2U, 1U, 0U, 1U};
+    for (usize i = 4U; i < sizeof(sealed_life); ++i)
+    {
+        sealed_life[i] = (i % 2U == 0U) ? 0U : 2U;
+    }
+    sink.add("life-hashed", sealed_life, sizeof(sealed_life));
+    for (usize i = 4U; i < sizeof(sealed_life); ++i)
+    {
+        sealed_life[i] = static_cast<u8>((i * 53U) + 0x32U);
+    }
+    sink.add("life-hashed-hostile", sealed_life, sizeof(sealed_life));
 }

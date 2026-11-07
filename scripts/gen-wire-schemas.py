@@ -33,6 +33,7 @@ MAX_DEPTH = 8
 MAX_MESSAGE_BYTES = 0xFFFFFFFF
 MINORS_PAST_SCHEMA = 2  # the fuzz target and the vectors also read as writers this far ahead
 DELTA_HEADER_MAX_BYTES = 9  # crd/net/delta.hpp's kDeltaHeaderMaxBytes
+MIN_PADDING_BLOCK = 16  # a smaller block hides almost nothing and costs a padding header on most datagrams
 
 OUTPUTS = [
     {
@@ -1602,8 +1603,11 @@ class Schema:
                 require(isinstance(spec.get(key), int) and spec[key] > 0, f'{self.label}: channel {name}: {key}')
             require(isinstance(spec.get('priority'), int) and 0 <= spec['priority'] < 256,
                     f'{self.label}: channel {name}: priority')
-            require(isinstance(spec.get('padding_block', 0), int) and 0 <= spec.get('padding_block', 0) < 65536,
-                    f'{self.label}: channel {name}: padding_block')
+            block = spec.get('padding_block')
+            require(isinstance(block, int) and (block == 0 or MIN_PADDING_BLOCK <= block < 65536),
+                    f'{self.label}: channel {name}: padding_block is 0 or from {MIN_PADDING_BLOCK}')
+            require(spec.get('integrity', True) is True or (spec['integrity'] is False and spec['class'] == 'Media'),
+                    f'{self.label}: channel {name}: integrity is only a Media channel\'s to turn off')
             self.channels.append(spec)
         require(self.channels, f'{self.label}: no channel')
 
@@ -1949,7 +1953,7 @@ def header_text(schema, entry):
                   'true' if spec.get('reliable') else 'false', 'true' if spec.get('ordered') else 'false',
                   'true' if spec.get('idempotent') else 'false', f'{spec["priority"]}U',
                   f'{spec["max_message_bytes"]}U', f'{spec["messages_per_s"]}U', f'{spec["bytes_per_s"]}ULL',
-                  f'{spec.get("padding_block", 0)}U']
+                  f'{spec["padding_block"]}U', 'true' if spec.get('integrity', True) else 'false']
         lines += ['    {' + ', '.join(fields[:6]) + ',', '     ' + ', '.join(fields[6:]) + '},']
     lines += ['};', '']
     lines += delta_tables(schema)

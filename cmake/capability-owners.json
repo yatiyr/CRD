@@ -835,11 +835,12 @@
     },
     {
       "id": "network.admission",
-      "summary": "Frames, bounded admission stages S6 and S7 and baseline deltas: the route and frame headers, virtual-scheduling rate gates and gauges in integer time, per-principal quotas and send budgets, S18's verdict before any decode, and stream and fragment reassembly into buffers the quota has reserved (network foundation S27).",
+      "summary": "Frames, bounded admission stages S6 and S7, baseline deltas, the plaintext integrity hash, padding and the state-hash exchange: the route and frame headers, virtual-scheduling rate gates and gauges in integer time, per-principal quotas and send budgets, S18's verdict before any decode, and stream and fragment reassembly into buffers the quota has reserved (network foundation S27 to S31).",
       "owner": "net",
       "api": [
         "engine/foundation/net/include/crd/net/admission.hpp",
         "engine/foundation/net/include/crd/net/delta.hpp",
+        "engine/foundation/net/include/crd/net/state_hash.hpp",
         "engine/foundation/net/include/crd/net/frame.hpp",
         "engine/foundation/net/include/crd/net/quota.hpp",
         "engine/foundation/net/include/crd/net/reassembly.hpp"

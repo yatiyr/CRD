@@ -44,6 +44,7 @@ private:
         Header,
         Body,
         StepOver,
+        Padding,
         Closed,
     };
 
@@ -53,6 +54,7 @@ private:
                                        u64 now_ns) noexcept;
     [[nodiscard]] FrameStep read_body(cont::ConstSpan<u8> bytes) noexcept;
     [[nodiscard]] usize skip_bytes(cont::ConstSpan<u8> bytes) noexcept;
+    [[nodiscard]] FrameStep read_padding(cont::ConstSpan<u8> bytes, FrameStep step) noexcept;
     [[nodiscard]] FrameStep conclude(FrameStep step) noexcept;
 
     Admission& m_admission;
@@ -63,7 +65,7 @@ private:
     u8 m_carry[kMaxFrameHeaderBytes] = {}; // a header split across feeds
     usize m_carried = 0U;
     u32 m_filled = 0U; // of a frame being reassembled
-    u32 m_skip = 0U;   // bytes left of a refused frame
+    u32 m_skip = 0U;   // bytes left of a refused frame or of padding
     AdmittedFrame m_frame;
 };
 

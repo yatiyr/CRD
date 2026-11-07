@@ -23,7 +23,7 @@ def base():
         'id': '0123456789abcdef0123456789abcdef',
         'kind': 'transport',
         'revision': {'major': 1, 'minor': 0},
-        'channels': [{'name': 'one', 'class': 'Control', 'priority': 0, 'max_message_bytes': 100000,
+        'channels': [{'name': 'one', 'class': 'Control', 'priority': 0, 'padding_block': 0, 'max_message_bytes': 100000,
                       'messages_per_s': 10, 'bytes_per_s': 100}],
         'messages': [{'name': 'Only', 'id': 1, 'channel': 'one', 'fields': [{'name': 'a', 'type': 'uint', 'bits': 3}]}],
     }
@@ -88,7 +88,9 @@ class Refusals(SchemaCase):
         self.refused(dict(base(), channels=[]), 'no channel')
         for key, value, words in (('class', 'Nope', 'class'), ('max_message_bytes', 0, 'max_message_bytes'),
                                   ('messages_per_s', 0, 'messages_per_s'), ('bytes_per_s', -1, 'bytes_per_s'),
-                                  ('priority', 256, 'priority'), ('padding_block', 70000, 'padding_block')):
+                                  ('priority', 256, 'priority'), ('padding_block', 70000, 'padding_block'),
+                                  ('padding_block', 15, 'padding_block'), ('padding_block', None, 'padding_block'),
+                                  ('integrity', False, 'integrity'), ('integrity', 0, 'integrity')):
             document = base()
             document['channels'][0][key] = value
             self.refused(document, words)

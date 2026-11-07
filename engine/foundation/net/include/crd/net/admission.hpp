@@ -62,9 +62,13 @@ enum class AdmitVerdict : u8
     StaleFragment,     // of a message already delivered, abandoned or superseded
     DuplicateFragment, // a piece already stored
     FragmentConflict,  // a piece that disagrees with what its message's first piece said
+    // After the stages.
+    IntegrityFailed, // the body is not what its writer hashed: nothing reads it
+    PaddingFrame,    // a stream's padding: nothing to deliver
+    BadPadding,      // padding that is not zero, or larger than its channel's block allows
 };
 
-inline constexpr usize kAdmitVerdictCount = static_cast<usize>(AdmitVerdict::FragmentConflict) + 1U;
+inline constexpr usize kAdmitVerdictCount = static_cast<usize>(AdmitVerdict::BadPadding) + 1U;
 
 // "admitted", "need-more", "malformed", ... one name per verdict.
 [[nodiscard]] cont::StringView admit_verdict_name(AdmitVerdict verdict) noexcept;
@@ -114,6 +118,8 @@ struct AdmittedFrame
     u32 channel = 0U; // in the session's flat table
     u16 writer_minor = 0U;
     u32 length = 0U;
+    u32 hash = 0U;
+    bool hashed = false;
     cont::ConstSpan<u8> body; // the input's bytes, or `buffer`'s
     bool reassembled = false; // it holds a reservation of the principal's reassembly quota
     u8* buffer = nullptr;     // its buffer, once allocated; finish() frees it
@@ -145,7 +151,15 @@ struct ParsedFrame
     const wire::MessageDesc* message = nullptr;
     FrameHeader header;
     usize header_bytes = 0U;
+    bool hashed = false;
 };
+
+// What a message's header holds on its channel. A delta body hashes the message it rebuilds, so it needs no second one.
+[[nodiscard]] constexpr FrameShape frame_shape(const wire::ChannelDesc& channel,
+                                               const wire::MessageDesc& message) noexcept
+{
+    return FrameShape{message.operation != 0U, channel.integrity && message.delta == nullptr};
+}
 
 class Admission
 {
@@ -182,13 +196,13 @@ public:
     // Gives back what open_stream() took.
     void close_stream() noexcept;
 
-    // Reads a datagram's route, charges the principal's datagrams and checks the carrier; the frames follow through the
-    // channel's DatagramAssembler.
+    // Reads a datagram's route, charges the principal's datagrams and checks the carrier, and takes off any padding,
+    // charged to the channel and the principal as bytes; the frames follow through the channel's DatagramAssembler.
     [[nodiscard]] AdmitVerdict open_datagram(cont::ConstSpan<u8> bytes, u64 now_ns, DatagramCursor& cursor) noexcept;
 
     // Reads a header on `channel` and holds its length to the message and the channel. Costs nothing and spends
     // nothing. Short input on HeaderForm::Sized is NeedMore. A message a newer writer added comes back NewerMessage
-    // with the length to step over.
+    // with the length to step over, and a stream's padding PaddingFrame with the length that is all zero.
     [[nodiscard]] AdmitVerdict read_frame(u32 channel, HeaderForm form, cont::ConstSpan<u8> bytes,
                                           ParsedFrame& parsed) const noexcept;
 
@@ -202,6 +216,14 @@ public:
     // Charges the bytes of a message stepped over as NewerMessage; false, spending nothing, when the principal's gate
     // is closed, and `retry_at_ns` says until when.
     [[nodiscard]] bool charge_stepped_over(const ParsedFrame& parsed, u64 now_ns, u64& retry_at_ns) noexcept;
+
+    // Charges a stream's padding frame as bytes of its channel and its principal. Admitted, or the gate that is closed,
+    // spending nothing, with `retry_at_ns` saying until when.
+    [[nodiscard]] AdmitVerdict charge_padding(u32 channel, u32 bytes, u64 now_ns, u64& retry_at_ns) noexcept;
+
+    // The admitted frame's whole body is here: fills step.frame.body when it is what its writer hashed. When it is not,
+    // gives back what the frame holds and makes the step IntegrityFailed.
+    void open_body(FrameStep& step, cont::ConstSpan<u8> body) noexcept;
 
     // Gives back what an admitted frame holds: its place among the pending messages and its buffer. The caller has
     // decoded and executed it, or dropped it.
@@ -229,6 +251,8 @@ private:
     };
 
     [[nodiscard]] GateRule gate_rule(u64 per_second) const noexcept;
+    [[nodiscard]] AdmitVerdict take_padding(u32 channel, cont::ConstSpan<u8> bytes, u64 now_ns,
+                                            DatagramCursor& cursor) noexcept;
     [[nodiscard]] AdmitVerdict authorize(const SchemaState& schema, const wire::ChannelDesc& channel,
                                          const wire::MessageDesc& message, u64 object,
                                          crypto::Delivery delivery) const noexcept;
@@ -243,8 +267,9 @@ private:
     u64 m_counts[kAdmitVerdictCount] = {};
 };
 
-// Writes `message` at `minor` as one Sized or ToEnd frame: its header, then its fields. On any refusal `written` is
-// zero. A message the schema does not list is OutOfRange, and so is a delta message, whose body DeltaWriter writes.
+// Writes `message` at `minor` as one Sized or ToEnd frame: its header, hashed over its fields, then its fields. On any
+// refusal `written` is zero. A message the schema does not list is OutOfRange, and so is a delta message, whose body
+// DeltaWriter writes.
 template <typename M>
 [[nodiscard]] inline wire::WireError write_frame(const wire::WireSchema& schema, HeaderForm form, const M& message,
                                                  u16 minor, u64 object, cont::Span<u8> out, usize& written) noexcept
@@ -259,18 +284,25 @@ template <typename M>
     header.message = found->id;
     header.length = static_cast<u32>(wire::encoded_bytes(message, minor));
     header.object = object;
-    const usize used = write_frame_header(form, found->operation != 0U, header, out);
+    const FrameShape shape = frame_shape(schema.channels[found->channel], *found);
+    const usize used = write_frame_header(form, shape, header, out);
     if (used == 0U)
     {
         return wire::WireError::NoRoom;
     }
     usize body = 0U;
     const wire::WireError error = wire::encode(message, minor, out.subspan(used), body);
-    if (error == wire::WireError::Ok)
+    if (error != wire::WireError::Ok)
     {
-        written = used + body;
+        return error;
     }
-    return error;
+    if (shape.hash)
+    {
+        header.hash = frame_hash(header.message, object, cont::ConstSpan<u8>(out.data() + used, body));
+        static_cast<void>(write_frame_header(form, shape, header, out)); // the same size: only the hash differs
+    }
+    written = used + body;
+    return wire::WireError::Ok;
 }
 
 // Decodes an admitted frame's body as message type M, written at the revision its writer announced. A frame of another

@@ -49,6 +49,8 @@ FrameStep StreamAssembler::feed(cont::ConstSpan<u8> bytes, crypto::Delivery deli
             step.consumed = skip_bytes(bytes);
             return conclude(step);
         }
+        case State::Padding:
+            return read_padding(bytes, FrameStep{});
         case State::Closed:
             break;
     }
@@ -141,6 +143,22 @@ FrameStep StreamAssembler::read_frame(cont::ConstSpan<u8> view, cont::ConstSpan<
         step.consumed += skip_bytes(bytes.subspan(header_from_input));
         return conclude(step);
     }
+    if (step.verdict == AdmitVerdict::PaddingFrame)
+    {
+        const u32 bytes_held = static_cast<u32>(parsed.header_bytes) + parsed.header.length;
+        const AdmitVerdict charged = m_admission.charge_padding(m_channel, bytes_held, now_ns, step.retry_at_ns);
+        if (charged != AdmitVerdict::Admitted)
+        {
+            step.verdict = charged;
+            return conclude(step);
+        }
+        const usize header_from_input = parsed.header_bytes - m_carried;
+        step.consumed = header_from_input;
+        m_carried = 0U;
+        m_skip = parsed.header.length;
+        m_state = State::Padding;
+        return read_padding(bytes.subspan(header_from_input), step);
+    }
     if (step.verdict != AdmitVerdict::Admitted)
     {
         return conclude(step);
@@ -177,7 +195,7 @@ FrameStep StreamAssembler::read_frame(cont::ConstSpan<u8> view, cont::ConstSpan<
     }
     else if (!reassembled)
     {
-        step.frame.body = rest.first(length);
+        m_admission.open_body(step, rest.first(length));
         step.consumed += length;
     }
     else
@@ -208,11 +226,29 @@ FrameStep StreamAssembler::read_body(cont::ConstSpan<u8> bytes) noexcept
     step.consumed = take;
     if (m_filled == m_frame.length)
     {
-        m_frame.body = cont::ConstSpan<u8>(m_frame.buffer, m_frame.length);
         step.frame = m_frame;
         step.verdict = AdmitVerdict::Admitted;
         m_state = State::Header;
+        m_admission.open_body(step, cont::ConstSpan<u8>(m_frame.buffer, m_frame.length));
     }
+    return conclude(step);
+}
+
+FrameStep StreamAssembler::read_padding(cont::ConstSpan<u8> bytes, FrameStep step) noexcept
+{
+    const usize take = std::min(bytes.size(), static_cast<usize>(m_skip));
+    for (const u8 byte : bytes.first(take))
+    {
+        if (byte != 0U)
+        {
+            step.verdict = AdmitVerdict::BadPadding;
+            return conclude(step);
+        }
+    }
+    m_skip -= static_cast<u32>(take);
+    step.consumed += take;
+    step.verdict = AdmitVerdict::PaddingFrame;
+    m_state = (m_skip == 0U) ? State::Header : State::Padding;
     return conclude(step);
 }
 
@@ -261,6 +297,7 @@ FrameStep DatagramAssembler::next(DatagramCursor& cursor, crypto::Delivery deliv
         case RouteForm::Listed:
             return read_listed(cursor, delivery, now_ns);
         case RouteForm::Fragment:
+        case RouteForm::Padded: // open_datagram() has taken padding off: a cursor never holds this form
             break;
     }
     return read_fragment(cursor, delivery, now_ns);
@@ -282,7 +319,7 @@ FrameStep DatagramAssembler::read_whole(DatagramCursor& cursor, crypto::Delivery
     step.verdict = m_admission.admit(m_channel, parsed, delivery, now_ns, false, step);
     if (step.verdict == AdmitVerdict::Admitted)
     {
-        step.frame.body = bytes.subspan(parsed.header_bytes);
+        m_admission.open_body(step, bytes.subspan(parsed.header_bytes));
     }
     return conclude(step);
 }
@@ -317,7 +354,7 @@ FrameStep DatagramAssembler::read_listed(DatagramCursor& cursor, crypto::Deliver
         step.verdict = m_admission.admit(m_channel, parsed, delivery, now_ns, false, step);
         if (step.verdict == AdmitVerdict::Admitted)
         {
-            step.frame.body = bytes.subspan(parsed.header_bytes, parsed.header.length);
+            m_admission.open_body(step, bytes.subspan(parsed.header_bytes, parsed.header.length));
         }
     }
     return conclude(step);
@@ -484,7 +521,8 @@ FrameStep DatagramAssembler::read_fragment(DatagramCursor& cursor, crypto::Deliv
         }
     }
     else if (slot->frame.message != parsed.message || slot->frame.object != header.object ||
-             slot->frame.length != header.length || slot->chunk != header.chunk || slot->delivery != delivery)
+             slot->frame.length != header.length || slot->frame.hash != header.hash || slot->chunk != header.chunk ||
+             slot->delivery != delivery)
     {
         step.verdict = AdmitVerdict::FragmentConflict;
         return conclude(step);
@@ -507,8 +545,8 @@ FrameStep DatagramAssembler::read_fragment(DatagramCursor& cursor, crypto::Deliv
     }
 
     step.frame = slot->frame;
-    step.frame.body = cont::ConstSpan<u8>(step.frame.buffer, step.frame.length);
     step.verdict = AdmitVerdict::Admitted;
+    m_admission.open_body(step, cont::ConstSpan<u8>(slot->frame.buffer, slot->frame.length));
     const u64 done = slot->sequence;
     *slot = FragmentSlot{};
     mark_done(done);

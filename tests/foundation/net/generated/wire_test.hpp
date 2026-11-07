@@ -1619,9 +1619,9 @@ struct QuantizedCodec
 
 inline constexpr ChannelDesc kChannels[] = {
     {"control", ChannelClass::Control, true, true, false, 0U,
-     60000U, 100U, 1000000ULL, 0U},
+     60000U, 100U, 1000000ULL, 0U, true},
     {"state", ChannelClass::State, false, false, true, 3U,
-     1200U, 60U, 200000ULL, 64U},
+     1200U, 60U, 200000ULL, 64U, true},
 };
 
 inline constexpr MessageDesc kMessages[] = {

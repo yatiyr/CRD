@@ -93,6 +93,12 @@ cont::StringView admit_verdict_name(AdmitVerdict verdict) noexcept
             return "duplicate-fragment";
         case AdmitVerdict::FragmentConflict:
             return "fragment-conflict";
+        case AdmitVerdict::IntegrityFailed:
+            return "integrity-failed";
+        case AdmitVerdict::PaddingFrame:
+            return "padding-frame";
+        case AdmitVerdict::BadPadding:
+            return "bad-padding";
     }
     return "unknown";
 }
@@ -105,6 +111,7 @@ AdmitAction admit_action(AdmitVerdict verdict, bool reliable) noexcept
             return AdmitAction::Deliver;
         case AdmitVerdict::NeedMore:
         case AdmitVerdict::Buffered:
+        case AdmitVerdict::PaddingFrame:
             return AdmitAction::Continue;
         case AdmitVerdict::ChannelMessages:
         case AdmitVerdict::ChannelBytes:
@@ -127,6 +134,8 @@ AdmitAction admit_action(AdmitVerdict verdict, bool reliable) noexcept
         case AdmitVerdict::Undersized:
         case AdmitVerdict::Oversized:
         case AdmitVerdict::BadFragment:
+        case AdmitVerdict::IntegrityFailed: // a reliable channel cannot lose what its sender believes delivered
+        case AdmitVerdict::BadPadding:
             return reliable ? AdmitAction::Close : AdmitAction::Skip;
         case AdmitVerdict::NewerMessage:
         case AdmitVerdict::StreamLimit:
@@ -288,10 +297,53 @@ AdmitVerdict Admission::open_datagram(cont::ConstSpan<u8> bytes, u64 now_ns, Dat
         return refuse(AdmitVerdict::PrincipalDatagrams);
     }
     m_quota.datagrams.charge(1U, rule, now_ns);
-    cursor.bytes = bytes;
     cursor.at = consumed;
     cursor.more = true;
     cursor.first = true;
+    if (cursor.route.form == RouteForm::Padded)
+    {
+        // One read of at most two blocks, charged. The gates close the next frame, not this one.
+        const AdmitVerdict padding = take_padding(cursor.route.channel, bytes, now_ns, cursor);
+        if (padding != AdmitVerdict::Admitted)
+        {
+            return refuse(padding);
+        }
+    }
+    cursor.bytes = bytes;
+    return AdmitVerdict::Admitted;
+}
+
+AdmitVerdict Admission::take_padding(u32 channel, cont::ConstSpan<u8> bytes, u64 now_ns,
+                                     DatagramCursor& cursor) noexcept
+{
+    ChannelState& state = m_channels[channel];
+    u32 count = 0U;
+    usize used = 0U;
+    const cont::ConstSpan<u8> rest = bytes.subspan(cursor.at);
+    if (read_frame_number(rest, count, used) != FrameRead::Ok ||
+        !padding_count_holds(count, state.desc->padding_block) || count > rest.size() - used)
+    {
+        return AdmitVerdict::BadPadding;
+    }
+    for (const u8 byte : rest.subspan(used, count))
+    {
+        if (byte != 0U)
+        {
+            return AdmitVerdict::BadPadding;
+        }
+    }
+    const usize at = cursor.at + used + count;
+    Route inner;
+    usize inner_bytes = 0U;
+    if (read_route(bytes.subspan(at), inner, inner_bytes) != FrameRead::Ok || inner.channel != channel ||
+        inner.form == RouteForm::Padded)
+    {
+        return AdmitVerdict::BadPadding;
+    }
+    state.bytes.charge(static_cast<u32>(at), gate_rule(state.desc->bytes_per_s), now_ns);
+    m_quota.bytes.charge(static_cast<u32>(at), gate_rule(m_quota.limits.bytes_per_s), now_ns);
+    cursor.route = inner;
+    cursor.at = at + inner_bytes;
     return AdmitVerdict::Admitted;
 }
 
@@ -325,6 +377,13 @@ AdmitVerdict Admission::read_frame(u32 channel, HeaderForm form, cont::ConstSpan
     {
         return AdmitVerdict::Unannounced;
     }
+    if (parsed.header.message == kPaddingMessage && form == HeaderForm::Sized && desc.reliable &&
+        desc.padding_block != 0U)
+    {
+        parsed.header_bytes = at;
+        return padding_count_holds(parsed.header.length, desc.padding_block) ? AdmitVerdict::PaddingFrame
+                                                                             : AdmitVerdict::BadPadding;
+    }
 
     const wire::MessageDesc* message = wire::find_message(*schema.wire, parsed.header.message);
     const bool newer = schema.writer_minor > schema.wire->minor;
@@ -335,11 +394,8 @@ AdmitVerdict Admission::read_frame(u32 channel, HeaderForm form, cont::ConstSpan
             return AdmitVerdict::UnknownMessage;
         }
         parsed.header_bytes = at;
-        if (parsed.header.length > desc.max_message_bytes)
-        {
-            return AdmitVerdict::Oversized;
-        }
-        return AdmitVerdict::NewerMessage;
+        return (parsed.header.length > u64{desc.max_message_bytes} + kMaxFrameTailBytes) ? AdmitVerdict::Oversized
+                                                                                         : AdmitVerdict::NewerMessage;
     }
     if (message->since > schema.writer_minor)
     {
@@ -350,17 +406,27 @@ AdmitVerdict Admission::read_frame(u32 channel, HeaderForm form, cont::ConstSpan
         return AdmitVerdict::OtherChannel;
     }
 
-    read = read_frame_tail(bytes.subspan(at), form, message->operation != 0U, parsed.header, used);
+    const FrameShape shape = frame_shape(desc, *message);
+    read = read_frame_tail(bytes.subspan(at), form, shape, parsed.header, used);
     if (read != FrameRead::Ok)
     {
         return read_refusal(read, form);
     }
     parsed.header_bytes = at + used;
     parsed.message = message;
+    parsed.hashed = shape.hash;
 
     if (form == HeaderForm::ToEnd)
     {
         parsed.header.length = static_cast<u32>(bytes.size() - parsed.header_bytes); // a datagram is far below 4 GiB
+    }
+    else if (form == HeaderForm::Sized)
+    {
+        if (used > parsed.header.length)
+        {
+            return AdmitVerdict::Malformed; // the length counts what it was just read past
+        }
+        parsed.header.length -= static_cast<u32>(used);
     }
     if (parsed.header.length < message->min_bytes)
     {
@@ -492,6 +558,8 @@ AdmitVerdict Admission::admit(u32 channel, const ParsedFrame& parsed, crypto::De
     step.frame.channel = channel;
     step.frame.writer_minor = schema.writer_minor;
     step.frame.length = bytes;
+    step.frame.hash = parsed.header.hash;
+    step.frame.hashed = parsed.hashed;
     step.frame.reassembled = reassembled;
     return AdmitVerdict::Admitted;
 }
@@ -507,6 +575,41 @@ bool Admission::charge_stepped_over(const ParsedFrame& parsed, u64 now_ns, u64& 
     }
     m_quota.bytes.charge(parsed.header.length, rule, now_ns);
     return true;
+}
+
+AdmitVerdict Admission::charge_padding(u32 channel, u32 bytes, u64 now_ns, u64& retry_at_ns) noexcept
+{
+    ChannelState& state = m_channels[channel];
+    const GateRule channel_bytes = gate_rule(state.desc->bytes_per_s);
+    const GateRule principal_bytes = gate_rule(m_quota.limits.bytes_per_s);
+    u64 open = state.bytes.open_at(channel_bytes);
+    if (open > now_ns)
+    {
+        retry_at_ns = open;
+        return AdmitVerdict::ChannelBytes;
+    }
+    open = (state.desc->priority == 0U) ? 0U : m_quota.bytes.open_at(principal_bytes);
+    if (open > now_ns)
+    {
+        retry_at_ns = open;
+        return AdmitVerdict::PrincipalBytes;
+    }
+    state.bytes.charge(bytes, channel_bytes, now_ns);
+    m_quota.bytes.charge(bytes, principal_bytes, now_ns);
+    return AdmitVerdict::Admitted;
+}
+
+void Admission::open_body(FrameStep& step, cont::ConstSpan<u8> body) noexcept
+{
+    AdmittedFrame& frame = step.frame;
+    if (frame.hashed && frame_hash(frame.message->id, frame.object, body) != frame.hash)
+    {
+        finish(frame);
+        frame = AdmittedFrame{};
+        step.verdict = AdmitVerdict::IntegrityFailed;
+        return;
+    }
+    frame.body = body;
 }
 
 void Admission::finish(const AdmittedFrame& frame) noexcept

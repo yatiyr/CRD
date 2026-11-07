@@ -3,6 +3,8 @@
 // stages' order, what a refusal spends and reserves, every split of a stream, a hostile datagram path, and shared
 // quotas under threads.
 
+#include "admission_fixture.hpp"
+
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/net/reassembly.hpp>
 #include <crd/net/wire/session_control.hpp>
@@ -41,6 +43,7 @@ using crd::net::fragment_shape_holds;
 using crd::net::FragmentSlot;
 using crd::net::FrameHeader;
 using crd::net::FrameRead;
+using crd::net::FrameShape;
 using crd::net::FrameStep;
 using crd::net::gate_after;
 using crd::net::gate_cost_ns;
@@ -71,6 +74,9 @@ using crd::net::write_fragment;
 using crd::net::write_frame;
 using crd::net::write_frame_header;
 using crd::net::write_route;
+using crd::net::test::authorized_for;
+using crd::net::test::Buffers;
+using crd::net::test::capability_for;
 using crd::net::wire::ChannelClass;
 using crd::net::wire::ChannelDesc;
 using crd::net::wire::MessageDesc;
@@ -86,13 +92,13 @@ constexpr u64 kSecond = kNanosPerSecond;
 
 // A schema whose bounds are the tests' to choose; admission reads nothing else of it.
 constexpr ChannelDesc kChannels[] = {
-    {"control", ChannelClass::Control, true, true, false, 0U, 1000U, 10U, 10000U, 0U},
-    {"state", ChannelClass::State, false, false, true, 3U, 2000U, 100U, 1000000U, 0U},
-    {"media", ChannelClass::Media, false, false, false, 5U, 100000U, 1000U, 100000000U, 0U},
-    {"bulk", ChannelClass::Bulk, true, false, false, 4U, 100000U, 1000U, 100000000U, 0U},
-    {"silent", ChannelClass::Event, true, false, false, 2U, 1000U, 0U, 1000U, 0U},
-    {"voiceless", ChannelClass::Event, true, false, false, 2U, 1000U, 1000U, 0U, 0U},
-    {"narrow", ChannelClass::Event, true, false, false, 2U, 1000U, 1000U, 100U, 0U},
+    {"control", ChannelClass::Control, true, true, false, 0U, 1000U, 10U, 10000U, 0U, false},
+    {"state", ChannelClass::State, false, false, true, 3U, 2000U, 100U, 1000000U, 0U, false},
+    {"media", ChannelClass::Media, false, false, false, 5U, 100000U, 1000U, 100000000U, 0U, false},
+    {"bulk", ChannelClass::Bulk, true, false, false, 4U, 100000U, 1000U, 100000000U, 0U, false},
+    {"silent", ChannelClass::Event, true, false, false, 2U, 1000U, 0U, 1000U, 0U, false},
+    {"voiceless", ChannelClass::Event, true, false, false, 2U, 1000U, 1000U, 0U, 0U, false},
+    {"narrow", ChannelClass::Event, true, false, false, 2U, 1000U, 1000U, 100U, 0U, false},
 };
 
 constexpr MessageDesc kMessages[] = {
@@ -116,8 +122,8 @@ constexpr WireSchema kGame{
 };
 
 constexpr ChannelDesc kTransportChannels[] = {
-    {"control", ChannelClass::Control, true, true, false, 0U, 1000U, 1000U, 100000U, 0U},
-    {"event", ChannelClass::Event, true, false, false, 1U, 1000U, 1000U, 100000U, 0U},
+    {"control", ChannelClass::Control, true, true, false, 0U, 1000U, 1000U, 100000U, 0U, false},
+    {"event", ChannelClass::Event, true, false, false, 1U, 1000U, 1000U, 100000U, 0U, false},
 };
 
 constexpr MessageDesc kTransportMessages[] = {
@@ -150,69 +156,6 @@ constexpr u32 kNarrow = 6U;
 // A little credit: each gate takes a few messages at once, and the tests' narrow gates close after one.
 constexpr u64 kCredit = kSecond / 100U;
 
-AuthorizedSchema authorized_for(const WireSchema& wire)
-{
-    AuthorizedSchema schema;
-    schema.schema.kind = static_cast<ScopeKind>(wire.kind);
-    std::memcpy(schema.schema.schema.bytes, wire.id, sizeof(wire.id));
-    schema.schema.major = wire.major;
-    schema.schema.minor = wire.minor;
-    schema.schema.audience.bytes[0] = 7U;
-    schema.schema.operations = wire.operations;
-    schema.schema.idempotent = wire.idempotent;
-    return schema;
-}
-
-Capability capability_for(const AuthorizedSchema& schema, u64 operations = ~u64{0})
-{
-    Capability capability;
-    capability.audience = schema.schema.audience;
-    capability.grant.kind = schema.schema.kind;
-    capability.grant.operations = operations;
-    capability.grant.budget.operations_per_second = 1000000U;
-    capability.grant.budget.bytes_per_second = 1000000000ULL;
-    capability.grant.budget.objects = 100U;
-    return capability;
-}
-
-// A counting allocator: every buffer a test does not expect shows, and any request can be refused.
-class Buffers final : public IAllocator
-{
-public:
-    Buffers() : m_heap(4U * 1024U * 1024U) {}
-
-    void* allocate(usize size, usize alignment) override { return try_allocate(size, alignment); }
-
-    void deallocate(void* p) noexcept override
-    {
-        if (p != nullptr)
-        {
-            --live;
-            m_heap.deallocate(p);
-        }
-    }
-
-    bool owns(const void* p) const noexcept override { return m_heap.owns(p); }
-
-    void* try_allocate(usize size, usize alignment) override
-    {
-        if (refuse_all)
-        {
-            return nullptr;
-        }
-        ++total;
-        ++live;
-        return m_heap.try_allocate(size, alignment);
-    }
-
-    bool refuse_all = false;
-    u32 total = 0U;
-    u32 live = 0U;
-
-private:
-    TlsfAllocator m_heap;
-};
-
 // One session over kGame, with room to be surprised.
 struct Session
 {
@@ -241,7 +184,8 @@ usize put_frame(Span<u8> out, usize at, const MessageDesc& message, u64 object, 
     header.message = message.id;
     header.length = length;
     header.object = object;
-    const usize used = write_frame_header(HeaderForm::Sized, message.operation != 0U, header, out.subspan(at));
+    const usize used =
+        write_frame_header(HeaderForm::Sized, FrameShape{message.operation != 0U, false}, header, out.subspan(at));
     REQUIRE(used != 0U);
     std::memset(out.data() + at + used, fill, length);
     return at + used + length;
@@ -276,7 +220,8 @@ usize put_whole(Span<u8> out, u32 channel, const MessageDesc& message, u64 objec
     FrameHeader header;
     header.message = message.id;
     header.object = object;
-    const usize used = write_frame_header(HeaderForm::ToEnd, message.operation != 0U, header, out.subspan(route));
+    const usize used =
+        write_frame_header(HeaderForm::ToEnd, FrameShape{message.operation != 0U, false}, header, out.subspan(route));
     REQUIRE(used != 0U);
     std::memset(out.data() + route + used, fill, length);
     return route + used + length;
@@ -334,8 +279,9 @@ TEST_CASE("Frames: a route's known bytes and its refusals", "[net][frames]")
     CHECK(read_route(ConstSpan<u8>(out, 1U), route, used) == FrameRead::Short);
     CHECK(read_route(ConstSpan<u8>(out, 0U), route, used) == FrameRead::Short);
 
-    const u8 both_forms[] = {3U};
-    CHECK(read_route(both_forms, route, used) == FrameRead::Malformed);
+    const u8 padded[] = {3U};
+    REQUIRE(read_route(padded, route, used) == FrameRead::Ok);
+    CHECK(route.form == RouteForm::Padded);
     const u8 overlong[] = {0x81U, 0U};
     CHECK(read_route(overlong, route, used) == FrameRead::Malformed);
     const u8 too_wide[] = {0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0U};
@@ -360,25 +306,26 @@ TEST_CASE("Frames: each header form's known bytes", "[net][frames]")
 
     u8 out[64];
     {
-        const usize used = write_frame_header(HeaderForm::Sized, true, header, out);
-        const u8 expected[] = {0xACU, 2U, 2U, 5U};
+        // The length counts everything after itself: the object and the body.
+        const usize used = write_frame_header(HeaderForm::Sized, FrameShape{true, false}, header, out);
+        const u8 expected[] = {0xACU, 2U, 3U, 5U};
         REQUIRE(used == sizeof(expected));
         CHECK(std::memcmp(out, expected, used) == 0);
     }
     {
-        const usize used = write_frame_header(HeaderForm::Sized, false, header, out);
+        const usize used = write_frame_header(HeaderForm::Sized, FrameShape{false, false}, header, out);
         const u8 expected[] = {0xACU, 2U, 2U};
         REQUIRE(used == sizeof(expected));
         CHECK(std::memcmp(out, expected, used) == 0);
     }
     {
-        const usize used = write_frame_header(HeaderForm::ToEnd, true, header, out);
+        const usize used = write_frame_header(HeaderForm::ToEnd, FrameShape{true, false}, header, out);
         const u8 expected[] = {0xACU, 2U, 5U};
         REQUIRE(used == sizeof(expected));
         CHECK(std::memcmp(out, expected, used) == 0);
     }
     {
-        const usize used = write_frame_header(HeaderForm::Fragment, true, header, out);
+        const usize used = write_frame_header(HeaderForm::Fragment, FrameShape{true, false}, header, out);
         const u8 expected[] = {0xACU, 2U, 2U, 5U, 0x80U, 1U, 9U, 1U};
         REQUIRE(used == sizeof(expected));
         CHECK(std::memcmp(out, expected, used) == 0);
@@ -389,8 +336,8 @@ TEST_CASE("Frames: each header form's known bytes", "[net][frames]")
         CHECK(number == 300U);
         CHECK(consumed == 2U);
         FrameHeader tail;
-        REQUIRE(read_frame_tail(ConstSpan<u8>(out + 3U, used - 3U), HeaderForm::Fragment, true, tail, consumed) ==
-                FrameRead::Ok);
+        REQUIRE(read_frame_tail(ConstSpan<u8>(out + 3U, used - 3U), HeaderForm::Fragment, FrameShape{true, false}, tail,
+                                consumed) == FrameRead::Ok);
         CHECK(consumed == used - 3U);
         CHECK(tail.object == 5U);
         CHECK(tail.chunk == 128U);
@@ -399,19 +346,22 @@ TEST_CASE("Frames: each header form's known bytes", "[net][frames]")
         // Every proper prefix of the tail is short.
         for (usize size = 0U; size < used - 3U; ++size)
         {
-            CHECK(read_frame_tail(ConstSpan<u8>(out + 3U, size), HeaderForm::Fragment, true, tail, consumed) ==
-                  FrameRead::Short);
+            CHECK(read_frame_tail(ConstSpan<u8>(out + 3U, size), HeaderForm::Fragment, FrameShape{true, false}, tail,
+                                  consumed) == FrameRead::Short);
         }
     }
 
-    CHECK(write_frame_header(HeaderForm::Sized, true, header, Span<u8>(out, 3U)) == 0U);
+    CHECK(write_frame_header(HeaderForm::Sized, FrameShape{true, false}, header, Span<u8>(out, 3U)) == 0U);
 
     // The widest stream header is the carry's size, and a header is whole by then.
     FrameHeader widest;
     widest.message = 0xFFFFFFFFU;
-    widest.length = 0xFFFFFFFFU;
+    widest.length = 0xFFFFFFFFU - static_cast<u32>(crd::net::kMaxFrameTailBytes);
     widest.object = ~u64{0};
-    CHECK(write_frame_header(HeaderForm::Sized, true, widest, out) == kMaxFrameHeaderBytes);
+    CHECK(write_frame_header(HeaderForm::Sized, FrameShape{true, true}, widest, out) == kMaxFrameHeaderBytes);
+    // A length that with the tail passes what the number holds has no header.
+    widest.length += 1U;
+    CHECK(write_frame_header(HeaderForm::Sized, FrameShape{true, true}, widest, out) == 0U);
 }
 
 TEST_CASE("Frames: a fragment's shape", "[net][frames]")
@@ -440,19 +390,19 @@ TEST_CASE("Frames: a fragment's shape", "[net][frames]")
     header.message = 4U;
     header.length = 100U;
     header.chunk = 64U;
-    CHECK(write_fragment(2U, true, header, body, out) != 0U);
+    CHECK(write_fragment(2U, FrameShape{true, false}, header, body, out) != 0U);
     header.index = 1U;
-    CHECK(write_fragment(2U, true, header, body, out) != 0U);
+    CHECK(write_fragment(2U, FrameShape{true, false}, header, body, out) != 0U);
     header.index = 2U;
-    CHECK(write_fragment(2U, true, header, body, out) == 0U); // past the last
+    CHECK(write_fragment(2U, FrameShape{true, false}, header, body, out) == 0U); // past the last
     header.index = 0U;
     header.length = 99U;
-    CHECK(write_fragment(2U, true, header, body, out) == 0U); // not the body's size
+    CHECK(write_fragment(2U, FrameShape{true, false}, header, body, out) == 0U); // not the body's size
     header.length = 100U;
     header.chunk = 0U;
-    CHECK(write_fragment(2U, true, header, body, out) == 0U);
+    CHECK(write_fragment(2U, FrameShape{true, false}, header, body, out) == 0U);
     header.chunk = 64U;
-    CHECK(write_fragment(2U, true, header, body, Span<u8>(out, 20U)) == 0U); // no room
+    CHECK(write_fragment(2U, FrameShape{true, false}, header, body, Span<u8>(out, 20U)) == 0U); // no room
 }
 
 // ---- Gates, gauges and priorities --------------------------------------------------------------------------------
@@ -776,7 +726,7 @@ TEST_CASE("Admission: each frame refusal on a stream, and what it asks of the ca
         header.message = c.message;
         header.length = c.length;
         header.object = 1U;
-        const usize used = write_frame_header(HeaderForm::Sized, true, header, bytes);
+        const usize used = write_frame_header(HeaderForm::Sized, FrameShape{true, false}, header, bytes);
         std::memset(bytes + used, 1, c.length);
         const FrameStep step = assembler.feed(ConstSpan<u8>(bytes, used + c.length), Delivery::Established, 0U);
         CHECK(step.verdict == c.verdict);
@@ -874,7 +824,7 @@ TEST_CASE("Admission: a message's revision and a newer writer", "[net][admission
     FrameHeader unknown;
     unknown.message = 77U;
     unknown.length = 5U;
-    usize size = write_frame_header(HeaderForm::Sized, false, unknown, bytes);
+    usize size = write_frame_header(HeaderForm::Sized, FrameShape{false, false}, unknown, bytes);
     std::memset(bytes + size, 0xEE, 5U);
     size += 5U;
     const usize longer_at = size;
@@ -891,7 +841,7 @@ TEST_CASE("Admission: a message's revision and a newer writer", "[net][admission
     admission.finish(step.frame);
 
     // A newer message split across feeds costs nothing to step over.
-    const usize head = write_frame_header(HeaderForm::Sized, false, unknown, bytes);
+    const usize head = write_frame_header(HeaderForm::Sized, FrameShape{false, false}, unknown, bytes);
     step = assembler.feed(ConstSpan<u8>(bytes, head), Delivery::Established, 0U);
     CHECK(step.verdict == AdmitVerdict::NewerMessage);
     step = assembler.feed(ConstSpan<u8>(bytes, 3U), Delivery::Established, 0U);
@@ -910,14 +860,23 @@ TEST_CASE("Admission: a message's revision and a newer writer", "[net][admission
         long_hello.message = kHello.id;
         long_hello.length = 1001U;
         long_hello.object = 1U;
-        const usize head_only = write_frame_header(HeaderForm::Sized, true, long_hello, bytes);
+        const usize head_only = write_frame_header(HeaderForm::Sized, FrameShape{true, false}, long_hello, bytes);
         const FrameStep refused = known.feed(ConstSpan<u8>(bytes, head_only), Delivery::Established, 0U);
         CHECK(refused.verdict == AdmitVerdict::Oversized);
         CHECK(over != 0U);
     }
 
-    unknown.length = 1001U;
-    const usize too_long = write_frame_header(HeaderForm::Sized, false, unknown, bytes);
+    // A newer message's length counts its header's tail too, which the channel's most does not.
+    {
+        StreamAssembler at_most(admission);
+        open(at_most, kControl);
+        unknown.length = 1000U + static_cast<u32>(crd::net::kMaxFrameTailBytes);
+        const usize widest = write_frame_header(HeaderForm::Sized, FrameShape{false, false}, unknown, bytes);
+        CHECK(at_most.feed(ConstSpan<u8>(bytes, widest), Delivery::Established, 0U).verdict ==
+              AdmitVerdict::NewerMessage);
+    }
+    unknown.length = 1000U + static_cast<u32>(crd::net::kMaxFrameTailBytes) + 1U;
+    const usize too_long = write_frame_header(HeaderForm::Sized, FrameShape{false, false}, unknown, bytes);
     step = assembler.feed(ConstSpan<u8>(bytes, too_long), Delivery::Established, 0U);
     CHECK(step.verdict == AdmitVerdict::Oversized);
     CHECK(step.action == AdmitAction::Close);
@@ -935,7 +894,7 @@ TEST_CASE("Admission: a message's revision and a newer writer", "[net][admission
     StreamAssembler narrow_assembler(narrow_admission);
     open(narrow_assembler, kControl);
     unknown.length = 20U;
-    const usize head2 = write_frame_header(HeaderForm::Sized, false, unknown, bytes);
+    const usize head2 = write_frame_header(HeaderForm::Sized, FrameShape{false, false}, unknown, bytes);
     step = narrow_assembler.feed(ConstSpan<u8>(bytes, head2), Delivery::Established, 0U);
     CHECK(step.verdict == AdmitVerdict::NewerMessage);
     step = narrow_assembler.feed(ConstSpan<u8>(bytes, 20U), Delivery::Established, 0U);
@@ -1427,6 +1386,7 @@ TEST_CASE("Streams: a route in two pieces, on a session of many channels", "[net
         channel.max_message_bytes = 100U;
         channel.messages_per_s = 100U;
         channel.bytes_per_s = 10000U;
+        channel.integrity = false;
     }
     static const MessageDesc kOnChannel[] = {{"Ping", 1U, 33U, 0U, 0ULL, 0U, 100U}};
     WireSchema schema = kTransport;
@@ -1641,7 +1601,8 @@ usize put_fragment(Span<u8> out, u32 channel, const MessageDesc& message, u64 ob
     header.chunk = chunk;
     header.sequence = sequence;
     header.index = index;
-    const usize used = write_fragment(channel, message.operation != 0U, header, ConstSpan<u8>(body, total), out);
+    const usize used =
+        write_fragment(channel, FrameShape{message.operation != 0U, false}, header, ConstSpan<u8>(body, total), out);
     REQUIRE(used != 0U);
     return used;
 }
@@ -1886,7 +1847,8 @@ TEST_CASE("Datagrams: a fragment no encoder writes", "[net][datagram]")
         header.chunk = chunk;
         header.sequence = 1U;
         header.index = index;
-        route += write_frame_header(HeaderForm::Fragment, true, header, Span<u8>(bytes + route, sizeof(bytes) - route));
+        route += write_frame_header(HeaderForm::Fragment, FrameShape{true, false}, header,
+                                    Span<u8>(bytes + route, sizeof(bytes) - route));
         return media.read(ConstSpan<u8>(bytes, route + piece)).verdict;
     };
     CHECK(send(1000U, 400U, 3U, 200U) == AdmitVerdict::BadFragment);
@@ -2299,9 +2261,10 @@ TEST_CASE("Frames: the generated schema's writer agrees with admission's reader"
             WireError::Ok);
     CHECK(written > 3U);
     CHECK(out[0] == 1U); // the message
-    CHECK(out[1] == crd::net::wire::encoded_bytes(scalars, test_schema::kMinor));
+    // The length counts the object and the hash too.
+    CHECK(out[1] == crd::net::wire::encoded_bytes(scalars, test_schema::kMinor) + 1U + crd::net::kFrameHashBytes);
     CHECK(out[2] == 77U); // its object: it has an operation
-    CHECK(written == 3U + out[1]);
+    CHECK(written == 2U + out[1]);
 
     // Too little room, at each boundary, writes nothing.
     for (usize size = 0U; size < written; ++size)

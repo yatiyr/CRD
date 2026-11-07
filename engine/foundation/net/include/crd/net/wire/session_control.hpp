@@ -603,7 +603,7 @@ struct BaselineAckCodec
 
 inline constexpr ChannelDesc kChannels[] = {
     {"control", ChannelClass::Control, true, true, false, 0U,
-     170000U, 64U, 262144ULL, 0U},
+     170000U, 64U, 262144ULL, 128U, true},
 };
 
 inline constexpr MessageDesc kMessages[] = {
