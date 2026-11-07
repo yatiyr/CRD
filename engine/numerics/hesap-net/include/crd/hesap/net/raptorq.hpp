@@ -19,8 +19,8 @@
 // of blocks of one K and one set of ESIs: an encoder's, for a K, solves every block of that K.
 //
 // Symbols may sit at any alignment, but a vector crossing a cache line costs two: a caller who wants the speed of
-// bench/2026-11-07-hesap-net-raptorq-vs-peers.md puts the sources, `intermediate`, `scratch` and the outputs on 64-byte
-// lines (1.35x on AVX-512 at K = 10, against an 8-byte skew).
+// docs/bench/2026-11-07-hesap-net-raptorq-stalls.md puts the sources, `intermediate`, `scratch` and the outputs on
+// 64-byte lines (1.36x on AVX-512 at K = 10, against an 8-byte skew).
 //
 // Nothing allocates. analyze takes memory for the sparse matrix, sized exactly by structure_bytes. Only then is u
 // known, so factor takes memory sized by factor_bytes, and solve its scratch sized by solve_scratch_bytes. With the K'

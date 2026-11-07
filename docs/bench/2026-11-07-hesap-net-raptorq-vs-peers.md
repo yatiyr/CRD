@@ -41,6 +41,9 @@ The one row behind is K = 10, where nanorq leads by 3% to 7% on an encoder's pla
 the block's cost is the u^2 products, in which neither code has an advantage. On a decoder's rows, with u = 12, hesap leads.
 On AVX-512 that row is 0.79x and not yet explained: [AVX-512 board](2026-11-07-hesap-net-avx512.md).
 
+Later the same day: these tables predate the [stall fix](2026-11-07-hesap-net-raptorq-stalls.md), which took every row ahead, this
+one to 1.28x and AVX-512's 0.79x to 1.26x.
+
 ## Memory
 
 hesap's plan, and everything beyond the symbols except a scratch of u + 2 symbols: nothing on the heap.

@@ -90,7 +90,7 @@ struct Carver
 
 // output = the sum of sources, in one pass of the kernel per batch, each vector stored once a pass. A copy or zeroing
 // before additions costs far more than its bytes: the wide load of what it just wrote cannot forward from its smaller
-// stores, and that stall held RaptorQ's small blocks behind nanorq (bench/2026-11-07-hesap-net-raptorq-vs-peers.md).
+// stores, and that stall held RaptorQ's small blocks behind nanorq (docs/bench/2026-11-07-hesap-net-raptorq-stalls.md).
 class SumBatch
 {
 public:
