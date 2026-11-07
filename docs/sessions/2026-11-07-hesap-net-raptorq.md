@@ -34,8 +34,8 @@ and linux-gcc-public-checks passes the libwebrtc, ntpd and networked-physics pee
   block past the object's last symbol reported an offset past the end. It now starts at the end.
 - 44 teeth, all caught, with the peers out of the loop. Five first survived (size slack, Z and N at their exact bounds, the 255
   block limit, the ESI's top bit), so the tests gained sentinels past each span and those exact cases.
-- [Board](../bench/2026-11-07-hesap-net-raptorq-vs-peers.md): 1.12x to 1.47x the best peer on K from 101 to 50000 and on every
-  decode, 3% to 7% behind nanorq on the encoder's K = 10, explained there. Plans of 2.8 KB to 11 MB, no heap.
+- [Board](../bench/2026-11-07-hesap-net-raptorq-vs-peers.md): 1.12x to 1.47x the best peer on K from 101 to 50000; at K = 10, 1.08x
+  to 1.14x on decode and 3% to 7% behind nanorq on the encoder, explained there. Plans of 2.8 KB to 11 MB, no heap.
 - clang-tidy clean on win-debug's files and the peer lane's two. crd-check-* guards and crd-ci-platform pass on linux-gcc-debug.
 
 ## Next
