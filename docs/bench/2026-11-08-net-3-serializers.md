@@ -61,6 +61,6 @@ between the runs on the busy host (crd-net 18.0 and 18.3 ns in run 1).
   float and quaternion it then throws away. Commands decode at 1.26x serialize's, chat at 0.62x.
 - **Before this batch** the same board measured crd-net's snapshot encode at 2865 ns and decode at 8670 ns: a
   quaternion field went through hesap-net's dispatched batch with a count of one, and a keyed list was walked a third
-  time for its keys (commit 8e23fb27).
+  time for its keys (commit 8d2367f2).
 - **Deltas cost CPU.** Encoding a delta takes 5.2x a whole message's encode and applying one 3.2x its decode: S28's
   layout walk interprets every field from descriptors.
