@@ -1419,8 +1419,7 @@ from one authored schema through `scripts/gen-wire-schemas.py`; nothing hand-wri
   its verdicts on damaged messages at every minor, older and newer writers included.
 
 Later slices of [NET.3](../ROADMAP.md#slice-net.3): [baseline deltas](#baseline-deltas), [the integrity hash](#integrity-hash),
-[padding](#padding) and [the state-hash exchange](#state-hashes) landed; dictionary compression for reliable streams and
-entropy coding for snapshots through crd-compression (ratio and output caps, T09); the budget board. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
+[padding](#padding), [the state-hash exchange](#state-hashes) and [coded bodies](#body-coding) landed; the budget board remains. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
 a schema with quantised fields links `crd-net-quantized`, whose header sits outside crd-net's installed headers.
 
 <a id="frames"></a>
@@ -1434,10 +1433,11 @@ transport hands these functions a stream's or a datagram's plaintext after S4 an
 
 - **The layout.** Every number is the wire formats' 7-bit varuint, shortest form only. A carrier names its route once: the
   channel's number in the session's flat table of its schemas' channels, times four, plus the form (one byte for up to 32
-  channels). A stream is that route, then `[message][length][object?][hash?][body]` frames. A datagram is the route, then
+  channels). A stream is that route, then `[message][length][object?][hash?][expanded?][body]` frames. A datagram is the route, then
   one message running to its end (form Whole, no length), two or more sized frames (Listed: one is Whole's, so one message
-  has one encoding), or one fragment (`[message][total][object?][hash?][chunk][sequence][index][piece]`). The object is
-  there only when the message has an operation bit, the hash as [S29](#integrity-hash) says. The length counts everything
+  has one encoding), or one fragment (`[message][total][object?][hash?][expanded?][chunk][sequence][index][piece]`). The object is
+  there only when the message has an operation bit, the hash as [S29](#integrity-hash) says, the expanded size as
+  [S32](#body-coding) says. The length counts everything
   after itself, so a reader can step over a message a newer writer added, whose description it lacks; a length shorter
   than the object and hash it was read past is `Malformed`.
 - **Order.** A stream or datagram refusal costs at most one header read: route and carrier, the principal's datagrams, the
@@ -1467,7 +1467,7 @@ transport hands these functions a stream's or a datagram's plaintext after S4 an
   sender's side of the same rule: over its share a reliable message waits and an unreliable one is shed.
 - **Reassembly.** A frame all in hand is a view of the input, copying nothing. Only one that arrives in pieces takes a
   buffer, of exactly its declared length, from an injected allocator's `try_allocate`, after S6 and S7: a refused message
-  costs no memory, and an allocator's refusal holds the reader back. A header split across reads waits in 24 bytes of carry
+  costs no memory, and an allocator's refusal holds the reader back. A header split across reads waits in 29 bytes of carry
   (its numbers have bounded widths). Fragments carry their message's whole description in each piece, so any may arrive
   first, and hold to one shape: at least two pieces, at most 256, a chunk of at least 64 bytes, each piece exactly a
   chunk or what is left, so overlaps do not exist and a slot is a fixed bitmap. A slot pool bounds the messages in pieces;
@@ -1511,7 +1511,7 @@ second decoder and no lifetime on a baseline. The generator writes one table per
   older than its writer takes what it knows and ignores the rest, and its result decodes at the writer's revision.
 - **Hostile input.** Work is linear in the baseline and the delta: every element costs a delta bit or consumes baseline. What
   comes out passes the generated decoder before anything keeps it. Output is held to the message's most by the fixed room it is
-  written into; the reader's charge for what a small delta expands to joins the decompression quota with the next slice.
+  written into, and [S32](#body-coding) charges what a small delta expands to.
 - **The frame's body.** `[sequence, 16 bits][distance back to the baseline, varuint, zero for a whole message][hash of the whole
   message, 32 bits][delta or message]`. A delta message's description bounds this body, so admission (S27) needs no new rule;
   `write_frame` and `decode_frame` refuse a delta message, whose body only `DeltaWriter` and `DeltaReader` read.
@@ -1611,6 +1611,59 @@ Peers of a lockstep or rollback session report what they confirmed with `StateHa
   while records still produce reports so the peer sees it too. `restart()` starts both sides over after a resynchronisation.
 - **Evidence.** `test_state_hash.cpp`, and `crd-fuzz-net-state-hash`: an unbounded restatement decides every verdict, chain and
   divergence of any script of records and honest or damaged reports.
+
+<a id="body-coding"></a>
+### Coded bodies
+
+**S32. Dictionaries and entropy coding, under caps** (NET.3, threats T09 and T15;
+[coding.hpp](../../engine/foundation/net/include/crd/net/coding.hpp),
+[entropy.hpp](../../engine/foundation/compression/include/crd/compression/entropy.hpp),
+[zstd.hpp](../../engine/foundation/compression/include/crd/compression/zstd.hpp)). A channel may declare models, and its bodies
+then travel coded when that pays. The codecs are crd-compression's (capability `compression.codecs`); crd-net binds them to
+channels.
+
+- **What a schema says.** `models` on a channel: from which minor (`since`), the kind (`dictionary` or `entropy`), the XXH3-64 of
+  the model's source and `max_ratio`. They join their revision's layout digest, so both ends of a revision hold the same model.
+  Both ends code with the newest model of the lower of their two revisions: it costs nothing on the wire, and an older peer is
+  never sent what it cannot read. A product ships a better model as a new minor. `bind()` refuses a session that does not hold
+  every declared model, by hash and kind, with a coder to use them. A channel with no model at a revision has no coded frames at it.
+- **One message at a time, against a fixed model.** Nothing is kept between messages, for three reasons. A shared window would tie
+  each frame to every frame before it, and admission must be free to refuse one (S7) or step over one (a newer writer's) without
+  reading it. Compressing under encryption leaks through sizes (CRIME, BREACH) when a window mixes a secret with bytes an attacker
+  chose; here a window holds one message and a public model. And a session keeps no window's memory, so a million idle sessions
+  cost none. What is left is an oracle inside one message, so the generator refuses models on Control and Transaction channels, which
+  mix credentials and peer-chosen bytes, on Media, whose bodies are a codec's output, and on a transport schema. Padding (S30)
+  counts what is sent, after coding.
+- **Two kinds.** A dictionary is zstd against a dictionary both ends hold (`zstd_train_dictionary`), for what a reliable channel
+  carries: frames without a magic number, content size, dictionary identifier or checksum, all memory static (`ZstdDictionary`,
+  `ZstdMessageCoder`). Entropy is a range variant of asymmetric numeral systems (Duda, arXiv:1311.2540) with a model trained once
+  (`EntropyTrainer`), for small bit-packed bodies: 12-bit frequencies in four contexts chosen by the byte before (zero, below 16, low
+  nibble zero, other), one state of three bytes, no allocation. A coded message has one encoding: a decode must end on the starting
+  state with every byte used. One state rather than an interleaved pair because a second state costs three more bytes on every
+  datagram, and a snapshot's message is far too short to gain from it. On simulated snapshot deltas of 56 bytes a frame, in a scratch
+  run with the model trained on other ticks: order-0 0.71, whole order-1 0.70, four contexts 0.62, and zstd with a 4 KiB dictionary
+  1.08, whose tables and block headers a message this small never repays.
+- **The frame.** `[expanded]` after the hash, on a channel coding at the session's revisions: what the body decodes to, or zero
+  for a body stored as it is, which stays a view of the input. A writer stores a body that coding did not make smaller or that
+  would pass the ratio. The hash (S29) is over the message, not the bytes that carried it, so it also covers the decode.
+- **Caps before anything is reserved (T09).** `read_frame` holds a coded body to being smaller than what it declares and within
+  `max_ratio` (`BadExpansion`), and what it declares to the message's least and most, a newer writer to the channel's most
+  (`Undersized`, `Oversized`). That costs one header read: no gate spent, no buffer.
+- **What it costs (S6).** A coded frame costs what it expands to on the channel's, the principal's and the capability's byte gates,
+  so a ratio buys no budget. Its output is reserved from the principal's held bytes alongside reassembly, and its buffer of exactly
+  that size is allocated after S7 passes, so a refused frame costs no memory and an allocator's refusal holds the reader back.
+  Decoding must produce exactly the declared size. `BadExpansion` closes a reliable channel and drops on an unreliable one.
+- **Deltas.** A delta message keeps its own body (S28), `[sequence][distance][hash][expanded][payload]`: the header's numbers
+  and hash are incompressible, so only the payload is coded, whole messages too. A reader decodes nothing for a `Stale` frame or a
+  `MissingBaseline` one. What a delta rebuilds cannot be declared without spending bytes on every frame, and its work is bounded by
+  the message's most anyway, so `Admission::read_delta` holds a closed byte gate first (`Throttled`, the same frame read again at
+  `retry_at_ns`) and charges what it did expand to afterwards, paid by the wait that follows.
+- **Evidence.** `test_entropy.cpp`: bytes from `scripts/gen-entropy-vectors.py`, a restatement sharing no code, every state a
+  one-byte message can decode from, the cost held within 1% of the model's entropy. `test_zstd_messages.cpp`. `test_coded_frames.cpp`:
+  each form at every split, each cap at its boundary with what it spends, gates charged the expanded size, every byte of a coded frame
+  flipped, bind's refusals, deltas on a path with loss, repeats and overtaking. `crd-fuzz-compression-messages` and
+  `crd-fuzz-net-coded-frames`: a restated header rule and decode decide every verdict, every budget comes back
+  ([session](../sessions/2026-11-07-net-3-coded-bodies.md)).
 
 <a id="key-logging"></a>
 ### Key logging
