@@ -1,8 +1,8 @@
-// HESAP-NET's link models against their published laws: the chance arithmetic by hand, every transition of the chains
-// on scripted words with a word on each threshold, the stationary laws and burst lengths in closed form, the delay
-// shapes by a Kolmogorov-Smirnov distance from their own CDFs and their correlation by Sheppard's formula, the medium
-// grants' budgets, gaps and lapses, and one digest per model that every lane must reproduce. crd-hesap-link-netem-tests
-// sets the same laws on the running kernel's netem and compares the two statistically.
+// HESAP-NET's link models against restated expectations: the fixed point by hand, the chains' stationary laws and burst
+// lengths in closed form, every state's transitions on scripted words with a word on each threshold, the table
+// arithmetic by hand, the delay shapes' laws by a Kolmogorov-Smirnov distance from their own CDFs and their correlation
+// by Sheppard's formula, the medium grants' budgets, gaps and lapses, and one digest per model that every lane must
+// reproduce. The running kernel's netem is the oracle of crd-hesap-link-netem-tests, by `tc` in a private namespace.
 
 #include "link_laws.hpp"
 
@@ -19,6 +19,8 @@
 namespace hn = crd::hesap::net;
 using Catch::Approx;
 using crd::f64;
+using crd::i16;
+using crd::i32;
 using crd::i64;
 using crd::u32;
 using crd::u64;
@@ -28,11 +30,13 @@ using hn::DelayOptions;
 using hn::DelayProcess;
 using hn::DelayShape;
 using link_laws::mix_deviation;
+using link_laws::mix_weight;
 using link_laws::pareto_standard;
 
 namespace
 {
 
+constexpr u32 kOne = 0xFFFFFFFFU;
 constexpr f64 kPi = 3.14159265358979323846;
 constexpr i64 kMean = 40'000'000;
 constexpr i64 kDeviation = 8'000'000;
@@ -88,7 +92,8 @@ template <typename Quantile> [[nodiscard]] f64 rank_of(f64 y, const Quantile& qu
         case DelayShape::Pareto:
             return rank_of(x, [tail](f64 z) { return pareto_standard(z, tail); });
         case DelayShape::ParetoNormal:
-            return rank_of(x, [tail, mix](f64 z) { return ((0.25 * z) + (0.75 * pareto_standard(z, tail))) / mix; });
+            return rank_of(x, [tail, mix](f64 z)
+                           { return ((0.25 * z) + (mix_weight() * pareto_standard(z, tail))) / mix; });
         case DelayShape::Table:
             break;
     }
@@ -120,7 +125,7 @@ constexpr Shape kShapes[] = {{DelayShape::Uniform, "uniform"},
     return options;
 }
 
-template <typename Words> [[nodiscard]] u32 lost_of(hn::LossChain& model, Words& words, u32 packets)
+template <typename Words> [[nodiscard]] u32 lost_of(hn::LossModel& model, Words& words, u32 packets)
 {
     u32 lost = 0U;
     for (u32 i = 0U; i < packets; ++i)
@@ -137,103 +142,149 @@ template <typename Words> [[nodiscard]] u32 lost_of(hn::LossChain& model, Words&
 
 } // namespace
 
-TEST_CASE("link models: a chance is a count of words below it", "[link-models]")
+TEST_CASE("link models: a chance is iproute2's rint of the fraction", "[link-models]")
 {
     CHECK(hn::link_chance(0.0) == 0U);
-    CHECK(hn::link_chance(-1.0) == 0U);
+    CHECK(hn::link_chance(1.0) == kOne);
+    CHECK(hn::link_chance(-0.5) == 0U);
+    CHECK(hn::link_chance(1.5) == kOne);
     CHECK(hn::link_chance(std::numeric_limits<f64>::quiet_NaN()) == 0U);
-    CHECK(hn::link_chance(1.0) == hn::kLinkCertain);
-    CHECK(hn::link_chance(2.0) == hn::kLinkCertain);
-    CHECK(hn::link_chance(0.5) == u64{1} << 31U);
-    CHECK(hn::link_chance(0.25) == u64{1} << 30U);
-    CHECK(hn::link_chance(std::ldexp(1.0, -32)) == 1U);
-    CHECK(hn::link_chance(std::ldexp(1.0, -33)) == 0U); // A tie goes to the even count.
-    CHECK(hn::link_chance(std::ldexp(3.0, -33)) == 2U);
+    CHECK(hn::link_chance(std::numeric_limits<f64>::infinity()) == kOne);
+    CHECK(hn::link_chance(0.01) == 42949673U);
+    CHECK(hn::link_chance(0.5) == 2147483648U); // 2147483647.5 rounds to even.
+    for (u32 i = 0U; i <= 1000U; ++i)
+    {
+        const f64 fraction = static_cast<f64>(i) / 1000.0;
+        CHECK(hn::link_chance(fraction) == static_cast<u32>(std::rint(fraction * 4294967295.0)));
+    }
 }
 
-TEST_CASE("link models: independent loss", "[link-models]")
+TEST_CASE("link models: the correlated word weighs the last answer", "[link-models]")
 {
-    SECTION("the fate word decides, the move word does nothing, and a word on the chance is not below it")
+    const u32 words[] = {7U, 1000U, 2000U, 3000U, kOne, 0U};
+    Script script{words, 6U};
+    hn::CorrelatedDraw draw;
+
+    SECTION("no correlation passes every word through; init still draws one")
     {
-        constexpr u32 words[] = {0U, 99U, 0xFFFFFFFFU, 100U, 7U, 101U};
-        Script script{words, 6U};
-        hn::LossChain chain;
-        chain.set_independent(100U);
-        CHECK(chain.next(script));
-        CHECK_FALSE(chain.next(script));
-        CHECK_FALSE(chain.next(script));
-        CHECK(script.used == 6U);
+        draw.init(0U, script);
+        CHECK(script.used == 1U);
+        CHECK(draw.next(script) == 1000U);
+        CHECK(draw.next(script) == 2000U);
     }
-    SECTION("never and certain hold at the ends of the word range")
+    SECTION("the full chance repeats the first word for ever")
     {
-        constexpr u32 words[] = {0U, 0U, 0U, 0xFFFFFFFFU};
+        draw.init(kOne, script);
+        CHECK(draw.next(script) == 7U);
+        CHECK(draw.next(script) == 7U);
+    }
+    SECTION("half is the mean of the word and the last answer")
+    {
+        draw.init(0x7FFFFFFFU, script);
+        CHECK(draw.next(script) == (1000U + 7U) / 2U);
+        CHECK(draw.next(script) == (2000U + ((1000U + 7U) / 2U)) / 2U);
+    }
+    SECTION("the weight of the last answer is the correlation's chance plus one")
+    {
+        const u32 extreme[] = {0U, kOne, 0U};
+        Script zeros{extreme, 3U};
+        draw.init(0x7FFFFFFFU, zeros);
+        CHECK(draw.next(zeros) == 0x7FFFFFFFU);      // 2^32 - 1 weighed 2^31 of 2^32, not 2^31 + 1.
+        CHECK(draw.next(zeros) == 0x7FFFFFFFU / 2U); // Half of that, the fresh word being zero.
+    }
+    SECTION("the extreme words stay in range")
+    {
+        draw.init(0xFFFFFFFEU, script);
+        (void)draw.next(script);
+        (void)draw.next(script);
+        (void)draw.next(script);
+        const u32 at_one = draw.next(script);
+        CHECK(at_one >= 7U);
+        CHECK(draw.next(script) <= at_one);
+    }
+}
+
+TEST_CASE("link models: random loss on chance arithmetic", "[link-models]")
+{
+    SECTION("no model and a chance of zero lose nothing and draw nothing")
+    {
+        Script nothing{nullptr, 0U};
+        hn::LossModel none;
+        CHECK_FALSE(none.next(nothing));
+        const u32 first[] = {5U};
+        Script one{first, 1U};
+        hn::LossModel zero;
+        zero.set_random(0U, 0U, one);
+        CHECK(one.used == 1U);
+        CHECK_FALSE(zero.next(one));
+        CHECK(one.used == 1U);
+    }
+    SECTION("the comparison includes the chance itself, and the full chance loses every packet")
+    {
+        const u32 words[] = {0U, 100U, 101U, kOne};
         Script script{words, 4U};
-        hn::LossChain chain;
-        chain.set_independent(0U);
-        CHECK_FALSE(chain.next(script));
-        chain.set_independent(hn::kLinkCertain);
-        CHECK(chain.next(script));
+        hn::LossModel model;
+        model.set_random(100U, 0U, script);
+        CHECK(model.next(script));
+        CHECK_FALSE(model.next(script));
+        hn::LossModel all;
+        Script any{words, 4U};
+        all.set_random(kOne, 0U, any);
+        CHECK(all.next(any));
+        CHECK(all.next(any));
+        CHECK(all.next(any));
     }
-    SECTION("default-constructed loses nothing, on two words a packet")
+    SECTION("the long-run rate is the chance")
     {
-        constexpr u32 words[] = {0U, 0U};
-        Script script{words, 2U};
-        hn::LossChain chain;
-        CHECK_FALSE(chain.next(script));
-        CHECK(script.used == 2U);
-    }
-    SECTION("the rate")
-    {
-        PhiloxRng rng(11U, 1U);
-        hn::LossChain chain;
-        chain.set_independent(hn::link_chance(0.02));
-        constexpr u32 packets = 2'000'000U;
-        CHECK(static_cast<f64>(lost_of(chain, rng, packets)) / packets == Approx(0.02).margin(5e-4));
+        for (const f64 rate : {0.001, 0.01, 0.1, 0.5, 0.9})
+        {
+            PhiloxRng rng(11U, 3U);
+            hn::LossModel model;
+            model.set_random(hn::link_chance(rate), 0U, rng);
+            constexpr u32 packets = 2'000'000U;
+            const u32 lost = lost_of(model, rng, packets);
+            CHECK(std::abs((static_cast<f64>(lost) / packets) - rate) < 4.0 * std::sqrt(rate * (1.0 - rate) / packets));
+        }
     }
 }
 
-TEST_CASE("link models: Gilbert-Elliott moves, then the packet takes the state it is in", "[link-models]")
+TEST_CASE("link models: Gilbert-Elliott moves first and the packet takes the old state", "[link-models]")
 {
-    const hn::GilbertElliottChances chances{.to_bad = 10U, .to_good = 20U, .lost_in_good = 30U, .lost_in_bad = 40U};
-    SECTION("every transition and fate, a word on each threshold")
+    SECTION("each branch on scripted words")
     {
-        constexpr u32 words[] = {
-            10U, 29U, // Good stays on a word at to_bad, and a fate word under lost_in_good loses.
-            10U, 30U, // A fate word at it survives.
-            9U,  39U, // Below to_bad moves to bad, and the packet takes bad's chance.
-            20U, 40U, // Bad stays on a word at to_good; a fate word at lost_in_bad survives.
-            19U, 29U, // Below to_good moves to good; good's chance applies.
+        hn::LossModel model;
+        model.set_gilbert_elliott({100U, 200U, 300U, 400U});
+        const u32 words[] = {
+            100U, 400U, // good stays: not below p; not below lost_good, kept
+            100U, 399U, // good stays: lost
+            99U,  400U, // good to bad: kept, this packet took the good state
+            199U, 301U, // bad to good: lost, this packet took the bad state
+            99U,  399U, // good to bad: lost in good
+            200U, 300U, // bad stays: 300 is not past survive_bad, kept
+            200U, 450U  // bad stays: lost, where the good state would keep it
         };
-        Script script{words, 10U};
-        hn::LossChain chain;
-        chain.set_gilbert_elliott(chances);
-        CHECK(chain.next(script));
-        CHECK_FALSE(chain.next(script));
-        CHECK(chain.next(script));
-        CHECK_FALSE(chain.next(script));
-        CHECK(chain.next(script));
+        const bool expected[] = {false, true, false, true, true, false, true};
+        Script script{words, 14U};
+        for (const bool lost : expected)
+        {
+            CHECK(model.next(script) == lost);
+        }
+        CHECK(script.used == 14U);
     }
-    SECTION("a new setting starts in the good state")
+    SECTION("the stationary rate of the full chain")
     {
-        constexpr u32 words[] = {0U, 0xFFFFFFFFU, 0xFFFFFFFFU, 35U};
-        Script script{words, 4U};
-        hn::LossChain chain;
-        chain.set_gilbert_elliott(chances);
-        CHECK_FALSE(chain.next(script)); // Now bad.
-        chain.set_gilbert_elliott(chances);
-        CHECK_FALSE(chain.next(script)); // 35 is below bad's 40 and not below good's 30.
-    }
-    SECTION("the stationary loss of the full four-parameter chain")
-    {
-        // pi_bad = p / (p + r), so the loss is pi_good (1 - k) + pi_bad (1 - h) (Elliott 1963).
-        PhiloxRng rng(21U, 2U);
-        hn::LossChain chain;
-        chain.set_gilbert_elliott(
-            {hn::link_chance(0.05), hn::link_chance(0.3), hn::link_chance(0.01), hn::link_chance(0.7)});
+        const f64 p = 0.02;
+        const f64 r = 0.3;
+        const f64 h = 0.4;
+        const f64 lost_good = 0.002;
+        hn::LossModel model;
+        model.set_gilbert_elliott(
+            {hn::link_chance(p), hn::link_chance(r), hn::link_chance(h), hn::link_chance(lost_good)});
+        PhiloxRng rng(21U, 1U);
         constexpr u32 packets = 4'000'000U;
-        const f64 pi_bad = 0.05 / 0.35;
-        const f64 expected = ((1.0 - pi_bad) * 0.01) + (pi_bad * 0.7);
-        CHECK(static_cast<f64>(lost_of(chain, rng, packets)) / packets == Approx(expected).margin(1e-3));
+        const u32 lost = lost_of(model, rng, packets);
+        const f64 bad = p / (p + r);
+        CHECK(static_cast<f64>(lost) / packets == Approx((bad * (1.0 - h)) + ((1.0 - bad) * lost_good)).margin(4e-4));
     }
 }
 
@@ -249,23 +300,22 @@ TEST_CASE("link models: a simple Gilbert chain by what it means", "[link-models]
         CHECK_FALSE(hn::gilbert_from_rate_and_burst(0.1, 0.5, out));
         CHECK_FALSE(hn::gilbert_from_rate_and_burst(0.1, nan, out));
         CHECK_FALSE(hn::gilbert_from_rate_and_burst(0.9, 1.0, out)); // An entry chance of 9 is no chance.
-        CHECK_FALSE(hn::gilbert_from_rate_and_correlation(-0.1, 0.5, out));
         CHECK_FALSE(hn::gilbert_from_rate_and_correlation(1.0, 0.5, out));
-        CHECK_FALSE(hn::gilbert_from_rate_and_correlation(nan, 0.5, out));
-        CHECK_FALSE(hn::gilbert_from_rate_and_correlation(0.1, -0.1, out));
         CHECK_FALSE(hn::gilbert_from_rate_and_correlation(0.1, 1.0, out));
-        CHECK_FALSE(hn::gilbert_from_rate_and_correlation(0.1, nan, out));
-        CHECK((out.to_bad == 1U && out.to_good == 2U && out.lost_in_good == 3U && out.lost_in_bad == 4U));
+        CHECK_FALSE(hn::gilbert_from_rate_and_correlation(0.1, -0.1, out));
+        CHECK_FALSE(hn::gilbert_from_rate_and_correlation(nan, 0.5, out));
+        CHECK(out.p == 1U);
+        CHECK(out.lost_good == 4U);
     }
-    SECTION("the asked rate and burst")
+    SECTION("the asked rate and mean burst")
     {
         hn::GilbertElliottChances chances;
         REQUIRE(hn::gilbert_from_rate_and_burst(0.03, 4.0, chances));
-        CHECK(chances.to_good == hn::link_chance(0.25));
-        CHECK(chances.to_bad == hn::link_chance(0.03 * 0.25 / 0.97));
-        hn::LossChain chain;
-        chain.set_gilbert_elliott(chances);
-        PhiloxRng rng(31U, 1U);
+        CHECK(chances.survive_bad == 0U);
+        CHECK(chances.lost_good == 0U);
+        hn::LossModel model;
+        model.set_gilbert_elliott(chances);
+        PhiloxRng rng(31U, 2U);
         constexpr u32 packets = 4'000'000U;
         u32 lost = 0U;
         u32 bursts = 0U;
@@ -273,7 +323,7 @@ TEST_CASE("link models: a simple Gilbert chain by what it means", "[link-models]
         u32 run = 0U;
         for (u32 i = 0U; i < packets; ++i)
         {
-            if (chain.next(rng))
+            if (model.next(rng))
             {
                 ++lost;
                 ++run;
@@ -295,8 +345,8 @@ TEST_CASE("link models: a simple Gilbert chain by what it means", "[link-models]
         {
             hn::GilbertElliottChances chances;
             REQUIRE(hn::gilbert_from_rate_and_correlation(0.05, correlation, chances));
-            hn::LossChain chain;
-            chain.set_gilbert_elliott(chances);
+            hn::LossModel model;
+            model.set_gilbert_elliott(chances);
             PhiloxRng rng(41U, 2U);
             constexpr u32 packets = 4'000'000U;
             u64 lost = 0U;
@@ -304,7 +354,7 @@ TEST_CASE("link models: a simple Gilbert chain by what it means", "[link-models]
             bool last = false;
             for (u32 i = 0U; i < packets; ++i)
             {
-                const bool now = chain.next(rng);
+                const bool now = model.next(rng);
                 lost += now ? 1U : 0U;
                 both += (now && last) ? 1U : 0U;
                 last = now;
@@ -319,79 +369,142 @@ TEST_CASE("link models: a simple Gilbert chain by what it means", "[link-models]
 
 TEST_CASE("link models: the four-state chain", "[link-models]")
 {
-    SECTION("refusals change nothing")
+    SECTION("a state's chances past one are refused and change nothing")
     {
-        hn::LossChain chain;
-        chain.set_independent(hn::kLinkCertain);
-        hn::FourStateChances chances;
-        chances.p13 = hn::kLinkCertain;
-        chances.p14 = 1U;
-        CHECK_FALSE(chain.set_four_state(chances));
-        chances = {};
-        chances.p31 = hn::kLinkCertain;
-        chances.p32 = 1U;
-        CHECK_FALSE(chain.set_four_state(chances));
-        chances = {};
-        chances.p23 = hn::kLinkCertain + 1U;
-        CHECK_FALSE(chain.set_four_state(chances));
-        chances = {};
-        chances.p13 = ~u64{0};
-        chances.p14 = 2U; // A sum that would wrap is refused on the chance itself.
-        CHECK_FALSE(chain.set_four_state(chances));
-        constexpr u32 words[] = {0U, 0U};
-        Script script{words, 2U};
-        CHECK(chain.next(script)); // Still the independent setting.
+        hn::LossModel model;
+        CHECK_FALSE(model.set_four_state({kOne, 0U, 0U, 0U, 2U}));
+        CHECK_FALSE(model.set_four_state({0U, kOne, 2U, 0U, 0U}));
+        Script nothing{nullptr, 0U};
+        CHECK_FALSE(model.next(nothing)); // Still no model.
+        CHECK(model.set_four_state({kOne, 1U, kOne, kOne, 1U}));
     }
-    SECTION("outgoing sums of exactly one are allowed")
+    SECTION("two chances of a half sum to exactly one, with no wrap")
     {
-        hn::LossChain chain;
-        const u64 half = u64{1} << 31U;
-        CHECK(chain.set_four_state({.p13 = half, .p14 = half, .p31 = half, .p32 = half}));
-    }
-    SECTION("every transition, a word on each threshold")
-    {
-        const hn::FourStateChances chances{.p13 = 100U, .p14 = 50U, .p23 = 70U, .p31 = 200U, .p32 = 30U};
-        // Each pair is a move word and a fate word. The states lose or keep with certainty, so the fate word is free.
-        constexpr u32 words[] = {
-            150U,        0xFFFFFFFFU, // 1 stays at p13 + p14.
-            99U,         0xFFFFFFFFU, // 1 to 3 below p13: lost.
-            230U,        0xFFFFFFFFU, // 3 stays at p31 + p32: lost.
-            229U,        0xFFFFFFFFU, // 3 to 2 below p31 + p32: received.
-            70U,         0U,          // 2 stays at p23: received, and fate word 0 changes nothing.
-            69U,         0xFFFFFFFFU, // 2 to 3 below p23: lost.
-            199U,        0U,          // 3 to 1 below p31: received.
-            100U,        0xFFFFFFFFU, // 1 to 4 from p13 up: lost alone.
-            0xFFFFFFFFU, 0U,          // 4 back to 1 whatever the word: received.
+        const u32 half = hn::link_chance(0.5);
+        hn::LossModel model;
+        REQUIRE(model.set_four_state({half, half, half, 0U, half}));
+        const u32 words[] = {
+            half + 5U, // past p14, within the sum of one: to lost in burst
+            half + 5U, // past p32, within the sum of one: to TX gap
+            kOne,      // past p14, within the sum: to lost in burst
+            kOne,      // past p32, within the sum: to TX gap, never stuck lost
         };
-        Script script{words, 18U};
-        hn::LossChain chain;
-        REQUIRE(chain.set_four_state(chances));
-        const bool expected[] = {false, true, true, false, false, true, false, true, false};
+        Script script{words, 4U};
+        CHECK(model.next(script));
+        CHECK_FALSE(model.next(script));
+        CHECK(model.next(script));
+        CHECK_FALSE(model.next(script));
+    }
+    SECTION("every transition on scripted words, with a word on each threshold")
+    {
+        // p14 100, p13 100 (TX in gap: below 100 lost in gap; 101 to 199 lost in burst); p23 50; p32 300, p31 100.
+        hn::LossModel model;
+        REQUIRE(model.set_four_state({100U, 100U, 300U, 50U, 100U}));
+        const u32 words[] = {
+            5000U, // TX gap stays
+            100U,  // on p14: nothing moves
+            200U,  // on p13 + p14: nothing moves
+            99U,   // to lost in gap: lost
+            0U,    // lost in gap back to TX gap, whatever the word: kept
+            199U,  // to lost in burst: lost
+            300U,  // on p32: nothing moves, and this packet is kept in the lost state
+            400U,  // on p31 + p32: same
+            401U,  // stays lost: lost
+            299U,  // to TX burst: kept
+            50U,   // not below p23: stays TX burst, kept
+            49U,   // to lost in burst: lost
+            301U,  // above p32, below the sum: to TX gap, kept
+            99U,   // the chain is back in TX gap: to lost in gap
+        };
+        const bool expected[] = {false, false, false, true,  false, true,  false,
+                                 false, true,  false, false, true,  false, true};
+        Script script{words, 14U};
         for (const bool lost : expected)
         {
-            CHECK(chain.next(script) == lost);
+            CHECK(model.next(script) == lost);
         }
-        CHECK(script.used == 18U);
+        CHECK(script.used == 14U);
     }
-    SECTION("the stationary law")
+    SECTION("the stationary rate")
     {
-        // From the balance equations of the chain: pi_4 = p14 pi_1, pi_1 p13 = p31 pi_3, pi_2 p23 = p32 pi_3.
         const f64 p13 = 0.02;
-        const f64 p14 = 0.005;
-        const f64 p23 = 0.2;
         const f64 p31 = 0.4;
         const f64 p32 = 0.3;
-        const f64 pi_1_per_3 = p31 / p13;
-        const f64 pi_2_per_3 = p32 / p23;
-        const f64 pi_4_per_3 = p14 * pi_1_per_3;
-        const f64 pi_3 = 1.0 / (1.0 + pi_1_per_3 + pi_2_per_3 + pi_4_per_3);
-        const f64 expected = pi_3 * (1.0 + pi_4_per_3);
-        hn::LossChain chain;
-        REQUIRE(chain.set_four_state({hn::link_chance(p13), hn::link_chance(p14), hn::link_chance(p23),
-                                      hn::link_chance(p31), hn::link_chance(p32)}));
-        PhiloxRng rng(51U, 3U);
+        const f64 p23 = 0.2;
+        const f64 p14 = 0.005;
+        hn::LossModel model;
+        REQUIRE(model.set_four_state({hn::link_chance(p13), hn::link_chance(p31), hn::link_chance(p32),
+                                      hn::link_chance(p23), hn::link_chance(p14)}));
+        PhiloxRng rng(51U, 4U);
         constexpr u32 packets = 4'000'000U;
-        CHECK(static_cast<f64>(lost_of(chain, rng, packets)) / packets == Approx(expected).margin(2e-3));
+        const u32 lost = lost_of(model, rng, packets);
+        // Balance, relative to pi1: pi4 = p14; pi3 p31 = p13; pi2 p23 = pi3 p32.
+        const f64 pi3 = p13 / p31;
+        const f64 pi4 = p14;
+        const f64 pi2 = pi3 * p32 / p23;
+        CHECK(static_cast<f64>(lost) / packets == Approx((pi3 + pi4) / (1.0 + pi2 + pi3 + pi4)).margin(5e-4));
+    }
+}
+
+TEST_CASE("link models: netem's table arithmetic", "[link-models]")
+{
+    const i16 table[] = {-16384, -1, 0, 1, 8192, 32767};
+    const crd::containers::ConstSpan<i16> none{};
+    const crd::containers::ConstSpan<i16> entries{table, 6U};
+    hn::CorrelatedDraw draw;
+
+    SECTION("no deviation is the mean and draws nothing")
+    {
+        Script script{nullptr, 0U};
+        CHECK(hn::netem_delay(123, 0, draw, script, entries) == 123);
+        CHECK(hn::netem_delay(123, -5, draw, script, none) == 123);
+    }
+    SECTION("uniform covers exactly the half-open range")
+    {
+        const u32 words[] = {0U, 19U, 20U, 39U, 40U, kOne};
+        Script script{words, 6U};
+        CHECK(hn::netem_delay(100, 20, draw, script, none) == 80);
+        CHECK(hn::netem_delay(100, 20, draw, script, none) == 99);
+        CHECK(hn::netem_delay(100, 20, draw, script, none) == 100);
+        CHECK(hn::netem_delay(100, 20, draw, script, none) == 119);
+        CHECK(hn::netem_delay(100, 20, draw, script, none) == 80);
+        CHECK(hn::netem_delay(100, 20, draw, script, none) == 80 + static_cast<i64>(kOne % 40U));
+    }
+    SECTION("the largest deviation does not divide by nothing or wrap")
+    {
+        const u32 words[] = {kOne};
+        Script script{words, 1U};
+        const i32 largest = std::numeric_limits<i32>::max();
+        CHECK(hn::netem_delay(0, largest, draw, script, none) == static_cast<i64>(kOne % 0xFFFFFFFEU) - largest);
+    }
+    SECTION("a table entry scales the deviation, rounding away from zero")
+    {
+        // The deviation is 10000, 1 x 8192 + 1808, and word i picks entry i.
+        const u32 words[] = {0U, 1U, 2U, 3U, 4U, 5U, 6U};
+        Script script{words, 7U};
+        const i64 expected[] = {
+            1000 + ((1808 * -16384 - 4096) / 8192) - 16384, // -3616.5 rounds to -3617 of the remainder
+            1000 + ((-1808 - 4096) / 8192) - 1,
+            1000 + (4096 / 8192),
+            1000 + ((1808 + 4096) / 8192) + 1,
+            1000 + ((1808 * 8192 + 4096) / 8192) + 8192,
+            1000 + ((1808 * 32767 + 4096) / 8192) + 32767,
+        };
+        for (const i64 value : expected)
+        {
+            CHECK(hn::netem_delay(1000, 10000, draw, script, entries) == value);
+        }
+        CHECK(hn::netem_delay(1000, 10000, draw, script, entries) == expected[0]); // Word 6 wraps the table.
+    }
+    SECTION("means are held in range so the sums cannot wrap")
+    {
+        const u32 words[] = {0U, kOne};
+        Script script{words, 2U};
+        CHECK(hn::netem_delay(std::numeric_limits<i64>::max(), 0, draw, script, none) == hn::kMaxLinkDelayNs);
+        CHECK(hn::netem_delay(std::numeric_limits<i64>::min(), 0, draw, script, none) == -hn::kMaxLinkDelayNs);
+        CHECK(hn::netem_delay(std::numeric_limits<i64>::min(), 7, draw, script, entries) < 0);
+        CHECK(hn::netem_delay(std::numeric_limits<i64>::max(), std::numeric_limits<i32>::max(), draw, script, none) >
+              0);
     }
 }
 
@@ -464,18 +577,6 @@ TEST_CASE("link models: DelayProcess refuses what has no law", "[link-models]")
     options.pareto_share = std::numeric_limits<f64>::quiet_NaN();
     CHECK(refused(options));
     options.pareto_share = 1.0;
-    CHECK(process.init(options));
-    options = good;
-    options.shape = DelayShape::Table;
-    CHECK(refused(options)); // No table.
-    const i64 descending[] = {2, 1};
-    options.table = crd::containers::ConstSpan<i64>{descending, 2U};
-    CHECK(refused(options));
-    const i64 too_far[] = {0, hn::kMaxLinkDelayNs + 1};
-    options.table = crd::containers::ConstSpan<i64>{too_far, 2U};
-    CHECK(refused(options));
-    const i64 flat[] = {5, 5};
-    options.table = crd::containers::ConstSpan<i64>{flat, 2U};
     CHECK(process.init(options));
 }
 
@@ -631,6 +732,112 @@ TEST_CASE("link models: init restarts the correlation", "[link-models]")
     (void)normal.next();
     const f64 fresh = static_cast<f64>(kMean) + (static_cast<f64>(kDeviation) * normal.next());
     CHECK(process.next() == static_cast<i64>(std::rint(fresh)));
+}
+
+TEST_CASE("link models: netem's slots", "[link-models]")
+{
+    const u32 words[] = {0U, 0x80000000U, kOne, 0U, 0x40000000U, 0U, 0U, 0U};
+
+    SECTION("bad options are refused and change nothing")
+    {
+        hn::SlotGate gate;
+        hn::SlotOptions options;
+        options.min_delay_ns = -1;
+        CHECK_FALSE(gate.init(options, 0));
+        options.min_delay_ns = 10;
+        options.max_delay_ns = 9;
+        CHECK_FALSE(gate.init(options, 0));
+        options.max_delay_ns = 10;
+        options.max_packets = -1;
+        CHECK_FALSE(gate.init(options, 0));
+        options.max_packets = 0;
+        options.max_bytes = -1;
+        CHECK_FALSE(gate.init(options, 0));
+        options.max_bytes = 0;
+        options.dist_deviation_ns = -1;
+        CHECK_FALSE(gate.init(options, 0));
+        CHECK_FALSE(gate.active());
+    }
+    SECTION("no delays leave the gate open and draw nothing")
+    {
+        hn::SlotGate gate;
+        REQUIRE(gate.init(hn::SlotOptions{}, 5));
+        Script script{nullptr, 0U};
+        CHECK_FALSE(gate.active());
+        CHECK(gate.admit(5, 5, 1500U, script));
+        CHECK_FALSE(gate.admit(5, 6, 1500U, script));
+    }
+    SECTION("packets leave in a slot until a budget ends it, and the gap is drawn on the span")
+    {
+        hn::SlotGate gate;
+        hn::SlotOptions options;
+        options.min_delay_ns = 1000;
+        options.max_delay_ns = 3000;
+        options.max_packets = 2;
+        REQUIRE(gate.init(options, 100));
+        Script script{words, 8U};
+        CHECK(gate.active());
+        CHECK(gate.next_open_ns() == 100);
+        CHECK_FALSE(
+            gate.admit(100, 101, 10U, script)); // Not due; the slot is over by its due time, so a new one opens.
+        CHECK(gate.next_open_ns() == 100 + 1000);
+        CHECK(script.used == 1U);
+        CHECK_FALSE(gate.admit(1099, 1000, 10U, script));
+        CHECK(gate.admit(1100, 1000, 10U, script));
+        CHECK(gate.next_open_ns() == 1100);
+        CHECK(gate.admit(1100, 1000, 10U, script)); // The second packet spends the budget.
+        CHECK(gate.next_open_ns() == 1100 + 1000 + 1000);
+        CHECK(script.used == 2U);
+        CHECK_FALSE(gate.admit(3099, 1000, 10U, script));
+        CHECK(gate.admit(3100, 1000, 10U, script));
+        CHECK(gate.admit(3100, 1000, 10U, script));
+        CHECK(gate.next_open_ns() == 3100 + 1000 + 1999); // The word 2^32 - 1 stops short of the maximum.
+    }
+    SECTION("the byte budget ends a slot too")
+    {
+        hn::SlotGate gate;
+        hn::SlotOptions options;
+        options.min_delay_ns = 10;
+        options.max_delay_ns = 10;
+        options.max_bytes = 3000;
+        REQUIRE(gate.init(options, 0));
+        Script script{words, 8U};
+        CHECK(gate.admit(0, 0, 1500U, script));
+        CHECK(gate.next_open_ns() == 0);
+        CHECK(gate.admit(0, 0, 1500U, script));
+        CHECK(gate.next_open_ns() == 10);
+    }
+    SECTION("a table draws the gap")
+    {
+        const i16 table[] = {8192, 16384};
+        hn::SlotGate gate;
+        hn::SlotOptions options;
+        options.table = crd::containers::ConstSpan<i16>{table, 2U};
+        options.dist_mean_ns = 500;
+        options.dist_deviation_ns = 100;
+        options.max_packets = 1;
+        REQUIRE(gate.init(options, 0));
+        const u32 picks[] = {1U};
+        Script script{picks, 1U};
+        CHECK(gate.admit(0, 0, 1U, script));
+        CHECK(gate.next_open_ns() == 700);
+    }
+    SECTION("a span past 32 bits and a far clock do not wrap")
+    {
+        hn::SlotGate gate;
+        hn::SlotOptions options;
+        options.max_delay_ns = std::numeric_limits<i64>::max();
+        options.max_packets = 1;
+        const i64 now = std::numeric_limits<i64>::max() - 10;
+        REQUIRE(gate.init(options, now));
+        const u32 top[] = {kOne, 0x80000000U};
+        Script script{top, 2U};
+        CHECK(gate.admit(now, now, 1U, script));
+        CHECK(gate.next_open_ns() == std::numeric_limits<i64>::max());
+        REQUIRE(gate.init(options, 0));
+        CHECK(gate.admit(0, 0, 1U, script));
+        CHECK(gate.next_open_ns() == std::numeric_limits<i64>::max() / 2);
+    }
 }
 
 TEST_CASE("link models: a table delay reads its measured law at the driving rank", "[link-models]")
@@ -853,35 +1060,35 @@ TEST_CASE("link models: a run is a pure function of seed and stream, on every la
 {
     // These digests pin every word and every rounded delay across compilers, kernel levels and platforms.
     constexpr u32 steps = 200000U;
-    const auto loss_digest = [](hn::LossChain& chain, PhiloxRng& rng)
+    const auto loss_digest = [](hn::LossModel& model, PhiloxRng& rng)
     {
         u64 digest = 0xCBF29CE484222325ULL;
         for (u32 i = 0U; i < steps; ++i)
         {
-            digest = digest_step(digest, chain.next(rng) ? 1U : 0U);
+            digest = digest_step(digest, model.next(rng) ? 1U : 0U);
         }
         return digest;
     };
 
-    PhiloxRng independent_rng(1234U, 1U);
-    hn::LossChain independent;
-    independent.set_independent(hn::link_chance(0.1));
-    CHECK(loss_digest(independent, independent_rng) == 0xa91baa204ae5f92fULL);
+    PhiloxRng random_rng(1234U, 1U);
+    hn::LossModel random;
+    random.set_random(hn::link_chance(0.1), hn::link_chance(0.25), random_rng);
+    CHECK(loss_digest(random, random_rng) == 0x63f0c425893e020fULL);
 
     PhiloxRng chain_rng(1234U, 2U);
-    hn::LossChain chain;
+    hn::LossModel chain;
     chain.set_gilbert_elliott(
-        {hn::link_chance(0.05), hn::link_chance(0.3), hn::link_chance(0.01), hn::link_chance(0.9)});
-    CHECK(loss_digest(chain, chain_rng) == 0xfb011f0f791eb1c5ULL);
+        {hn::link_chance(0.05), hn::link_chance(0.3), hn::link_chance(0.1), hn::link_chance(0.01)});
+    CHECK(loss_digest(chain, chain_rng) == 0xc81e7bea2b14621aULL);
 
     PhiloxRng four_rng(1234U, 3U);
-    hn::LossChain four;
-    REQUIRE(four.set_four_state({hn::link_chance(0.02), hn::link_chance(0.005), hn::link_chance(0.2),
-                                 hn::link_chance(0.4), hn::link_chance(0.3)}));
-    CHECK(loss_digest(four, four_rng) == 0xda61dc79c272f5deULL);
+    hn::LossModel four;
+    REQUIRE(four.set_four_state({hn::link_chance(0.02), hn::link_chance(0.4), hn::link_chance(0.3),
+                                 hn::link_chance(0.2), hn::link_chance(0.005)}));
+    CHECK(loss_digest(four, four_rng) == 0x6f58aa3ac9f6a38bULL);
 
     const u64 expected[] = {0xa3507cf3cfb9e2efULL, 0xddb571acff457c98ULL, 0x7581afafbed2335fULL, 0xb7835fd681ca003aULL,
-                            0x8fd890ab47a6ca8bULL};
+                            0x575c08771ef139aaULL};
     usize index = 0U;
     for (const Shape& shape : kShapes)
     {

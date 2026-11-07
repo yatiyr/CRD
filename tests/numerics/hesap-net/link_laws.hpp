@@ -17,6 +17,12 @@ namespace link_laws
     return (std::pow(0.5 * std::erfc(z * std::sqrt(0.5)), -1.0 / tail) - mean) / deviation;
 }
 
+// The weight of the standard Pareto in the tc mix: paretonormal.c's 3/4 of pareto.c's scale of 4/3, in standard units.
+[[nodiscard]] inline crd::f64 mix_weight()
+{
+    return 0.75 * 2.0 / std::sqrt(3.0);
+}
+
 [[nodiscard]] inline crd::f64 mix_deviation(crd::f64 tail)
 {
     constexpr int steps = 200000;
@@ -29,7 +35,7 @@ namespace link_laws
         const crd::f64 density = std::exp(-0.5 * z * z) / std::sqrt(2.0 * pi);
         covariance += z * pareto_standard(z, tail) * density * (2.0 * range / steps);
     }
-    return std::sqrt(0.0625 + 0.5625 + (2.0 * 0.25 * 0.75 * covariance));
+    return std::sqrt(0.0625 + (mix_weight() * mix_weight()) + (2.0 * 0.25 * mix_weight() * covariance));
 }
 
 } // namespace link_laws

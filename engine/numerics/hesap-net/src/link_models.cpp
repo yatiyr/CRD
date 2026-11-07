@@ -10,10 +10,15 @@ namespace crd::hesap::net
 namespace
 {
 
-constexpr crd::f64 kChanceUnits = 4294967296.0;
+constexpr crd::f64 kChanceOne = 4294967295.0;
 constexpr crd::f64 kSqrtHalf = 0.70710678118654752440;
 constexpr crd::f64 kSqrtThree = 1.73205080756887729353;
 constexpr crd::f64 kInverseSqrtTwoPi = 0.39894228040143267794;
+// The tc mix takes a share (three quarters) of a Pareto that iproute2's pareto.c scales by 4/3 at tail 3; in standard
+// units (mean zero, deviation one) that is the share times this scale times the standard Pareto. Keeping it makes the
+// mix at the default share and tail 3 the law of the `paretonormal` table, up to the one scale that gives it a
+// deviation of one.
+constexpr crd::f64 kMixParetoScale = 1.15470053837925152902;
 
 // The chance a standard normal lies above `gaussian`.
 [[nodiscard]] crd::f64 survival(crd::f64 gaussian) noexcept
@@ -77,7 +82,7 @@ constexpr crd::f64 kInverseSqrtTwoPi = 0.39894228040143267794;
 
 } // namespace
 
-LinkChance link_chance(crd::f64 fraction) noexcept
+crd::u32 link_chance(crd::f64 fraction) noexcept
 {
     if (!(fraction > 0.0))
     {
@@ -85,29 +90,9 @@ LinkChance link_chance(crd::f64 fraction) noexcept
     }
     if (fraction >= 1.0)
     {
-        return kLinkCertain;
+        return 0xFFFFFFFFU;
     }
-    return static_cast<LinkChance>(crd::math::nearbyint(fraction * kChanceUnits));
-}
-
-bool LossChain::set_four_state(const FourStateChances& chances) noexcept
-{
-    const bool within = chances.p13 <= kLinkCertain && chances.p14 <= kLinkCertain && chances.p23 <= kLinkCertain &&
-                        chances.p31 <= kLinkCertain && chances.p32 <= kLinkCertain;
-    if (!within || chances.p13 + chances.p14 > kLinkCertain || chances.p31 + chances.p32 > kLinkCertain)
-    {
-        return false;
-    }
-    constexpr crd::u8 received_gap = 0U;
-    constexpr crd::u8 received_burst = 1U;
-    constexpr crd::u8 lost_burst = 2U;
-    constexpr crd::u8 lost_gap = 3U;
-    m_states[received_gap] = State{chances.p13, chances.p13 + chances.p14, 0U, lost_burst, lost_gap};
-    m_states[received_burst] = State{chances.p23, 0U, 0U, lost_burst, 0U};
-    m_states[lost_burst] = State{chances.p31, chances.p31 + chances.p32, kLinkCertain, received_gap, received_burst};
-    m_states[lost_gap] = State{kLinkCertain, 0U, kLinkCertain, received_gap, 0U};
-    m_at = received_gap;
-    return true;
+    return static_cast<crd::u32>(crd::math::nearbyint(fraction * kChanceOne));
 }
 
 bool gilbert_from_rate_and_burst(crd::f64 loss, crd::f64 mean_burst, GilbertElliottChances& out) noexcept
@@ -116,13 +101,13 @@ bool gilbert_from_rate_and_burst(crd::f64 loss, crd::f64 mean_burst, GilbertElli
     {
         return false;
     }
-    const crd::f64 to_good = 1.0 / mean_burst;
-    const crd::f64 to_bad = loss * to_good / (1.0 - loss);
-    if (!(to_bad <= 1.0))
+    const crd::f64 r = 1.0 / mean_burst;
+    const crd::f64 p = loss * r / (1.0 - loss);
+    if (!(p <= 1.0))
     {
         return false;
     }
-    out = GilbertElliottChances{link_chance(to_bad), link_chance(to_good), 0U, kLinkCertain};
+    out = GilbertElliottChances{link_chance(p), link_chance(r), 0U, 0U};
     return true;
 }
 
@@ -133,7 +118,7 @@ bool gilbert_from_rate_and_correlation(crd::f64 loss, crd::f64 correlation, Gilb
         return false;
     }
     out = GilbertElliottChances{link_chance(loss * (1.0 - correlation)),
-                                link_chance((1.0 - loss) * (1.0 - correlation)), 0U, kLinkCertain};
+                                link_chance((1.0 - loss) * (1.0 - correlation)), 0U, 0U};
     return true;
 }
 
@@ -169,9 +154,10 @@ bool DelayProcess::init(const DelayOptions& options) noexcept
         {
             // The mix's own deviation, so `deviation_ns` means what it does in every other shape.
             const crd::f64 covariance = normal_pareto_covariance(tail, m_shape_a, m_shape_b);
-            const crd::f64 share = options.pareto_share;
-            const crd::f64 rest = 1.0 - share;
-            m_shape_c = crd::math::sqrt((rest * rest) + (share * share) + (2.0 * rest * share * covariance));
+            m_mix_normal = 1.0 - options.pareto_share;
+            m_mix_pareto = options.pareto_share * kMixParetoScale;
+            m_shape_c = crd::math::sqrt((m_mix_normal * m_mix_normal) + (m_mix_pareto * m_mix_pareto) +
+                                        (2.0 * m_mix_normal * m_mix_pareto * covariance));
         }
     }
     return true;
@@ -208,10 +194,10 @@ crd::i64 DelayProcess::next() noexcept
             {
                 const crd::f64 tail_rank = crd::math::pow(survival(m_gaussian), -1.0 / m_options.pareto_tail);
                 const crd::f64 pareto = (tail_rank - m_shape_a) / m_shape_b;
-                const crd::f64 share = m_options.pareto_share;
-                delay = mean + (deviation * (m_options.shape == DelayShape::Pareto
-                                                 ? pareto
-                                                 : (((1.0 - share) * m_gaussian) + (share * pareto)) / m_shape_c));
+                delay =
+                    mean + (deviation * (m_options.shape == DelayShape::Pareto
+                                             ? pareto
+                                             : ((m_mix_normal * m_gaussian) + (m_mix_pareto * pareto)) / m_shape_c));
                 break;
             }
             case DelayShape::Table:

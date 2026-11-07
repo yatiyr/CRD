@@ -173,12 +173,12 @@ template <typename Setting> [[nodiscard]] crd::containers::Array<bool> model_fat
 {
     crd::containers::Array<bool> lost(packets);
     lost.resize(packets);
-    hn::LossChain chain;
-    setting(chain);
+    hn::LossModel model;
     crd::hesap::stats::PhiloxRng rng(0xC0FFEEU, 1U);
+    setting(model, rng);
     for (u32 i = 0U; i < packets; ++i)
     {
-        lost[i] = chain.next(rng);
+        lost[i] = model.next(rng);
     }
     return lost;
 }
@@ -350,8 +350,8 @@ TEST_CASE("netem comparison: independent loss", "[link-netem]")
 {
     set_netem("loss 5%");
     const LossStats kernel = loss_stats(kernel_fates(kPackets));
-    const LossStats model =
-        loss_stats(model_fates(kPackets, [](hn::LossChain& chain) { chain.set_independent(hn::link_chance(0.05)); }));
+    const LossStats model = loss_stats(
+        model_fates(kPackets, [](hn::LossModel& loss, auto& rng) { loss.set_random(hn::link_chance(0.05), 0U, rng); }));
     INFO("kernel " << kernel.rate << " model " << model.rate);
     CHECK(std::abs(kernel.rate - model.rate) < 0.0015);
     compare_runs(kernel, model);
@@ -365,9 +365,9 @@ TEST_CASE("netem comparison: a simple Gilbert chain", "[link-netem]")
     std::snprintf(law, sizeof(law), "loss gemodel %.6f%% %.6f%% 100%% 0%%", percent(to_bad), percent(to_good));
     set_netem(law);
     const LossStats kernel = loss_stats(kernel_fates(kPackets));
-    const LossStats model = loss_stats(model_fates(
-        kPackets, [](hn::LossChain& chain)
-        { chain.set_gilbert_elliott({hn::link_chance(to_bad), hn::link_chance(to_good), 0U, hn::kLinkCertain}); }));
+    const LossStats model = loss_stats(
+        model_fates(kPackets, [](hn::LossModel& loss, auto&)
+                    { loss.set_gilbert_elliott({hn::link_chance(to_bad), hn::link_chance(to_good), 0U, 0U}); }));
     INFO("kernel " << kernel.rate << " model " << model.rate);
     CHECK(std::abs(kernel.rate - model.rate) < 0.004);
     compare_runs(kernel, model);
@@ -386,10 +386,10 @@ TEST_CASE("netem comparison: the full Gilbert-Elliott chain", "[link-netem]")
     const LossStats kernel = loss_stats(kernel_fates(kPackets));
     const LossStats model = loss_stats(
         model_fates(kPackets,
-                    [](hn::LossChain& chain)
+                    [](hn::LossModel& loss, auto&)
                     {
-                        chain.set_gilbert_elliott({hn::link_chance(to_bad), hn::link_chance(to_good),
-                                                   hn::link_chance(lost_in_good), hn::link_chance(lost_in_bad)});
+                        loss.set_gilbert_elliott({hn::link_chance(to_bad), hn::link_chance(to_good),
+                                                  hn::link_chance(1.0 - lost_in_bad), hn::link_chance(lost_in_good)});
                     }));
     INFO("kernel " << kernel.rate << " model " << model.rate);
     CHECK(std::abs(kernel.rate - model.rate) < 0.004);
@@ -410,10 +410,10 @@ TEST_CASE("netem comparison: the four-state chain", "[link-netem]")
     const LossStats kernel = loss_stats(kernel_fates(kPackets));
     const LossStats model = loss_stats(
         model_fates(kPackets,
-                    [](hn::LossChain& chain)
+                    [](hn::LossModel& loss, auto&)
                     {
-                        REQUIRE(chain.set_four_state({hn::link_chance(p13), hn::link_chance(p14), hn::link_chance(p23),
-                                                      hn::link_chance(p31), hn::link_chance(p32)}));
+                        REQUIRE(loss.set_four_state({hn::link_chance(p13), hn::link_chance(p31), hn::link_chance(p32),
+                                                     hn::link_chance(p23), hn::link_chance(p14)}));
                     }));
     INFO("kernel " << kernel.rate << " model " << model.rate);
     CHECK(std::abs(kernel.rate - model.rate) < 0.004);

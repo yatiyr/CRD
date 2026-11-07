@@ -32,16 +32,15 @@ template <typename Work> [[nodiscard]] double timed_ns(u32 packets, double best,
     return each < best ? each : best;
 }
 
-[[nodiscard]] double chain_round(hn::LossChain& chain, u32 packets, double best)
+[[nodiscard]] double chain_round(hn::LossModel& model, Rng& rng, u32 packets, double best)
 {
-    Rng rng(601U, 1U);
     u32 lost = 0U;
     const double time = timed_ns(packets, best,
                                  [&]
                                  {
                                      for (u32 i = 0U; i < packets; ++i)
                                      {
-                                         lost += chain.next(rng) ? 1U : 0U;
+                                         lost += model.next(rng) ? 1U : 0U;
                                      }
                                  });
     // A chain whose answers are thrown away is timing nothing.
@@ -86,8 +85,8 @@ int main(int argc, char** argv)
     {
         return 1;
     }
-    const hn::FourStateChances four_chances{hn::link_chance(0.02), hn::link_chance(0.005), hn::link_chance(0.2),
-                                            hn::link_chance(0.4), hn::link_chance(0.3)};
+    const hn::FourStateChances four_chances{hn::link_chance(0.02), hn::link_chance(0.4), hn::link_chance(0.3),
+                                            hn::link_chance(0.2), hn::link_chance(0.005)};
     hn::MediumGrantOptions grant_options;
     grant_options.gap.mean_ns = 10'000;
     grant_options.packets = 4U;
@@ -95,16 +94,17 @@ int main(int argc, char** argv)
 
     for (u32 round = 0U; round < rounds; ++round)
     {
-        hn::LossChain chain;
-        chain.set_independent(hn::link_chance(0.01));
-        independent_best = chain_round(chain, packets, independent_best);
-        chain.set_gilbert_elliott(gilbert);
-        gilbert_best = chain_round(chain, packets, gilbert_best);
-        if (!chain.set_four_state(four_chances))
+        Rng loss_rng(601U, 1U);
+        hn::LossModel model;
+        model.set_random(hn::link_chance(0.01), 0U, loss_rng);
+        independent_best = chain_round(model, loss_rng, packets, independent_best);
+        model.set_gilbert_elliott(gilbert);
+        gilbert_best = chain_round(model, loss_rng, packets, gilbert_best);
+        if (!model.set_four_state(four_chances))
         {
             return 1;
         }
-        four_best = chain_round(chain, packets, four_best);
+        four_best = chain_round(model, loss_rng, packets, four_best);
 
         Rng rng(601U, 2U);
         hn::MediumGrants grants(rng);
