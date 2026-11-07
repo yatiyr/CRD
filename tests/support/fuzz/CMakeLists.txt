@@ -5,6 +5,9 @@
 # the base substrate, so a fuzz executable's link set is the target's own module plus core/containers/memory.
 add_library(crd-fuzz-harness INTERFACE)
 target_include_directories(crd-fuzz-harness INTERFACE include)
+# A target's oracles restate the engine's arithmetic, so they round as the engine does: left alone, Clang on ARM64 fuses
+# `a + b * c` into one FMA even at -O0 and an oracle disagrees with the kernels it holds.
+target_compile_options(crd-fuzz-harness INTERFACE ${CRD_FP_CONTRACT_OPTIONS})
 target_link_libraries(crd-fuzz-harness INTERFACE
     crd-core
     crd-containers
