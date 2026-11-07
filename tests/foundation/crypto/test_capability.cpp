@@ -1201,16 +1201,31 @@ TEST_CASE("Capabilities: verification and revocation run on several threads at o
     }
     std::atomic<u32> applied{0U};
     std::atomic<u32> verified{0U};
-    std::thread      revoker([&] {
-        for (const Bytes& generation : generations)
+    // The first refusal, and what the same generation answers straight after; assertions stay on this thread.
+    CapabilityError first_refusal = CapabilityError::None;
+    CapabilityError at_once_again = CapabilityError::None;
+    std::thread revoker(
+        [&]
         {
-            if (world.authority->apply_revocations(ConstSpan<u8>(generation.data(), generation.size()),
-                                                   world.snapshot, kT0) == CapabilityError::None)
+            const auto apply = [&](const Bytes& generation)
             {
-                applied.fetch_add(1U);
+                return world.authority->apply_revocations(ConstSpan<u8>(generation.data(), generation.size()),
+                                                          world.snapshot, kT0);
+            };
+            for (const Bytes& generation : generations)
+            {
+                const CapabilityError result = apply(generation);
+                if (result == CapabilityError::None)
+                {
+                    applied.fetch_add(1U);
+                }
+                else if (first_refusal == CapabilityError::None)
+                {
+                    first_refusal = result;
+                    at_once_again = apply(generation);
+                }
             }
-        }
-    });
+        });
     std::thread threads[4];
     for (std::thread& thread : threads)
     {
@@ -1230,6 +1245,8 @@ TEST_CASE("Capabilities: verification and revocation run on several threads at o
         thread.join();
     }
     revoker.join();
+    INFO("first refusal " << capability_error_name(first_refusal) << ", at once again "
+                          << capability_error_name(at_once_again));
     CHECK(applied.load() == generation_count);
     CHECK(verified.load() == 100U);
     CHECK(world.authority->revocation_floor() == 1U + generation_count);

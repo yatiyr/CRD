@@ -944,6 +944,7 @@ TEST_CASE("Provider: one verifier and one key serve several threads", "[crypto][
         u32          iteration = 8U;
         CryptoError  signing   = CryptoError::None;
         Verification checked   = Verification::Valid;
+        Verification again = Verification::Valid; // the same signature at once, when the first answer was not Valid
     };
     Fault       faults[4];
     std::thread threads[4];
@@ -963,6 +964,11 @@ TEST_CASE("Provider: one verifier and one key serve several threads", "[crypto][
                         faults[t].checked =
                             verifier.verify(AlgorithmId::MlDsa65, pub, message, ConstSpan<u8>(sig.data(), written));
                     }
+                    if (faults[t].signing == CryptoError::None && faults[t].checked != Verification::Valid)
+                    {
+                        faults[t].again =
+                            verifier.verify(AlgorithmId::MlDsa65, pub, message, ConstSpan<u8>(sig.data(), written));
+                    }
                     if (faults[t].signing != CryptoError::None || faults[t].checked != Verification::Valid)
                     {
                         faults[t].iteration = i;
@@ -976,7 +982,7 @@ TEST_CASE("Provider: one verifier and one key serve several threads", "[crypto][
     }
     for (const Fault& fault : faults)
     {
-        INFO("iteration " << fault.iteration);
+        INFO("iteration " << fault.iteration << ", at once again " << static_cast<int>(fault.again));
         CHECK(static_cast<int>(fault.signing) == static_cast<int>(CryptoError::None));
         CHECK(static_cast<int>(fault.checked) == static_cast<int>(Verification::Valid));
     }
