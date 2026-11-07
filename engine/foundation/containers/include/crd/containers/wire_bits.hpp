@@ -149,7 +149,7 @@ public:
 private:
     void flush_word() noexcept
     {
-        if (!m_overflowed && m_out.size() - m_at >= sizeof(u64))
+        if (!m_overflowed && m_at + sizeof(u64) <= m_out.size())
         {
             wire_bits_detail::store_big_endian_u64(m_out.data() + m_at, m_pending);
             m_at += sizeof(u64);
@@ -278,7 +278,7 @@ private:
     {
         const u64 byte  = at / 8U;
         const u32 shift = static_cast<u32>(at & 7U);
-        if ((m_end / 8U) - byte >= sizeof(u64))
+        if (byte + sizeof(u64) <= m_end / 8U)
         {
             const u64 word = wire_bits_detail::load_big_endian_u64(m_data + byte) << shift;
             if (bits + shift <= 64U)
