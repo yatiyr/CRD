@@ -322,7 +322,7 @@
       "repository": "mas-bandwidth/networked-physics-gdc-2015",
       "commit": "fe19b74bf78ae0a11a6748eab229ae9c232c2690",
       "url": "https://raw.githubusercontent.com/mas-bandwidth/networked-physics-gdc-2015/fe19b74bf78ae0a11a6748eab229ae9c232c2690/src/game/Snapshot.h",
-      "file": "networked-physics-Snapshot-fe19b74b.h",
+      "file": "Snapshot.h",
       "sha256": "f193d58d2bf4468609b8dc8f11bcec9437947ddd8f21f56e8505a776f19a5653",
       "size": 47932,
       "license": "BSD-3-Clause",

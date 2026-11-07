@@ -13,7 +13,8 @@ Row: [HESAP-NET](../ROADMAP.md#slice-hesap-net) (stays Partial). Track C batch 1
   a read's changed rules. The first push of that guard left `test-repository-tools.py` failing for 8 tests; 72674452 fixed it.
 - Push run 42282917539 (474a37f8): win-debug finished in 3 h 27 under the cap and linux-clang-arm64-asan passed, so both of batch 99's
   fixes are confirmed. Its one failure is B14-d (CKIR NRC on Vulkan) timing out under linux-clang-tsan: not this track's, recorded.
-- No completed run contains ac88bfed or later: the NEON arm and the libwebrtc and ntpd installs stay open.
+- No completed run contains ac88bfed or later: the NEON arm and the libwebrtc, ntpd, serialize and Snapshot.h installs stay open
+  (dispatch 42328203363 at 9a058d80 will show them).
 
 ## What landed, `quantize.hpp` in crd-hesap-net (capability `numerics.quantization`), no allocation
 
