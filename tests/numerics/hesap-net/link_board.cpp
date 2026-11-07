@@ -1,15 +1,11 @@
-// crd-hesap-link-board: nanoseconds per packet of hesap-net's link models against Linux's netem, the pinned
-// net/sched/sch_netem.c's own functions, on the same words. Each arm's decisions are summed and compared with the
-// peer's, so a faster wrong answer fails. The analytic delay shapes have no peer: netem draws from a table, so their
-// rows say what the exact marginal law costs beside it.
+// crd-hesap-link-board: nanoseconds per packet of hesap-net's link models, on the Philox stream production draws from.
+// No peer: netem runs in the kernel behind a qdisc and has no comparable loop of its own, so crd-hesap-link-netem-tests
+// compares its laws and this says what each model costs a simulated packet.
 //
 // Usage: crd-hesap-link-board [--rounds N] [--quick]
 //   rounds  interleaved rounds of every arm; the best of them is reported (default 25)
 //   quick   one round over few packets (the smoke CTest)
 
-#include "netem_peer.h"
-
-#include <crd/containers/array.hpp>
 #include <crd/hesap/net/link_models.hpp>
 
 #include <chrono>
@@ -19,30 +15,14 @@
 #include <limits>
 
 namespace hn = crd::hesap::net;
-using crd::f64;
-using crd::i16;
 using crd::i64;
 using crd::u32;
-using crd::usize;
 
 namespace
 {
 
 using Clock = std::chrono::steady_clock;
-
-struct CycleWords
-{
-    const u32* words;
-    usize count;
-    usize used = 0U;
-
-    u32 next_u32()
-    {
-        const u32 word = words[used % count];
-        ++used;
-        return word;
-    }
-};
+using Rng = crd::hesap::stats::PhiloxRng;
 
 template <typename Work> [[nodiscard]] double timed_ns(u32 packets, double best, const Work& work)
 {
@@ -52,14 +32,24 @@ template <typename Work> [[nodiscard]] double timed_ns(u32 packets, double best,
     return each < best ? each : best;
 }
 
-void require_same(const char* arm, i64 ours, i64 netem)
+[[nodiscard]] double chain_round(hn::LossChain& chain, u32 packets, double best)
 {
-    if (ours != netem)
+    Rng rng(601U, 1U);
+    u32 lost = 0U;
+    const double time = timed_ns(packets, best,
+                                 [&]
+                                 {
+                                     for (u32 i = 0U; i < packets; ++i)
+                                     {
+                                         lost += chain.next(rng) ? 1U : 0U;
+                                     }
+                                 });
+    // A chain whose answers are thrown away is timing nothing.
+    if (lost > packets)
     {
-        std::fprintf(stderr, "%s: ours %lld, netem %lld\n", arm, static_cast<long long>(ours),
-                     static_cast<long long>(netem));
         std::exit(1);
     }
+    return time;
 }
 
 } // namespace
@@ -86,126 +76,79 @@ int main(int argc, char** argv)
         }
     }
 
-    const usize word_count = usize{4U} * packets;
-    crd::containers::Array<u32> words(word_count);
-    words.resize(word_count);
-    crd::hesap::stats::PhiloxRng source(601U, 1U);
-    for (usize i = 0U; i < word_count; ++i)
+    constexpr double far = std::numeric_limits<double>::max();
+    double independent_best = far;
+    double gilbert_best = far;
+    double four_best = far;
+    double grants_best = far;
+    hn::GilbertElliottChances gilbert;
+    if (!hn::gilbert_from_rate_and_burst(0.03, 4.0, gilbert))
     {
-        words[i] = source.next_u32();
+        return 1;
     }
-    crd::containers::Array<i16> table(16U);
-    for (int i = -8; i < 8; ++i)
-    {
-        table.push_back(static_cast<i16>(i * 1024));
-    }
-
-    struct Best
-    {
-        double ours = std::numeric_limits<double>::max();
-        double netem = std::numeric_limits<double>::max();
-    };
-    Best random;
-    Best chain;
-    Best four;
-    Best delay;
-    const u32 chance = hn::link_chance(0.01);
-    const hn::GilbertElliottChances chain_chances{hn::link_chance(0.05), hn::link_chance(0.3), hn::link_chance(0.1),
-                                                  hn::link_chance(0.01)};
-    const hn::FourStateChances four_chances{hn::link_chance(0.02), hn::link_chance(0.4), hn::link_chance(0.3),
-                                            hn::link_chance(0.2), hn::link_chance(0.005)};
-    const auto ours_run = [&packets](hn::LossModel& model, CycleWords& ours)
-    {
-        i64 lost = 0;
-        for (u32 i = 0U; i < packets; ++i)
-        {
-            lost += model.next(ours) ? 1 : 0;
-        }
-        return lost;
-    };
+    const hn::FourStateChances four_chances{hn::link_chance(0.02), hn::link_chance(0.005), hn::link_chance(0.2),
+                                            hn::link_chance(0.4), hn::link_chance(0.3)};
+    hn::MediumGrantOptions grant_options;
+    grant_options.gap.mean_ns = 10'000;
+    grant_options.packets = 4U;
+    grant_options.hold_ns = 5000;
 
     for (u32 round = 0U; round < rounds; ++round)
     {
-        i64 ours_sum = 0;
-        i64 netem_sum = 0;
-
-        CycleWords ours{words.data(), word_count};
-        hn::LossModel model;
-        model.set_random(chance, 0U, ours);
-        random.ours = timed_ns(packets, random.ours, [&] { ours_sum = ours_run(model, ours); });
-        crd_netem_set_words(words.data(), word_count);
-        crd_netem_loss_random(chance, 0U);
-        random.netem = timed_ns(packets, random.netem, [&] { netem_sum = crd_netem_loss_run(packets); });
-        require_same("random", ours_sum, netem_sum);
-
-        ours = CycleWords{words.data(), word_count};
-        model = hn::LossModel{};
-        model.set_gilbert_elliott(chain_chances);
-        chain.ours = timed_ns(packets, chain.ours, [&] { ours_sum = ours_run(model, ours); });
-        crd_netem_set_words(words.data(), word_count);
-        crd_netem_loss_gilbert_elliott(chain_chances.p, chain_chances.r, chain_chances.survive_bad,
-                                       chain_chances.lost_good);
-        chain.netem = timed_ns(packets, chain.netem, [&] { netem_sum = crd_netem_loss_run(packets); });
-        require_same("gilbert-elliott", ours_sum, netem_sum);
-
-        ours = CycleWords{words.data(), word_count};
-        model = hn::LossModel{};
-        if (!model.set_four_state(four_chances))
+        hn::LossChain chain;
+        chain.set_independent(hn::link_chance(0.01));
+        independent_best = chain_round(chain, packets, independent_best);
+        chain.set_gilbert_elliott(gilbert);
+        gilbert_best = chain_round(chain, packets, gilbert_best);
+        if (!chain.set_four_state(four_chances))
         {
             return 1;
         }
-        four.ours = timed_ns(packets, four.ours, [&] { ours_sum = ours_run(model, ours); });
-        crd_netem_set_words(words.data(), word_count);
-        crd_netem_loss_four_state(four_chances.p13, four_chances.p31, four_chances.p32, four_chances.p23,
-                                  four_chances.p14);
-        four.netem = timed_ns(packets, four.netem, [&] { netem_sum = crd_netem_loss_run(packets); });
-        require_same("four-state", ours_sum, netem_sum);
+        four_best = chain_round(chain, packets, four_best);
 
-        ours = CycleWords{words.data(), word_count};
-        hn::CorrelatedDraw draw;
-        draw.init(0U, ours);
-        const crd::containers::ConstSpan<i16> entries{table.data(), table.size()};
-        delay.ours = timed_ns(packets, delay.ours,
-                              [&]
-                              {
-                                  ours_sum = 0;
-                                  for (u32 i = 0U; i < packets; ++i)
-                                  {
-                                      ours_sum += hn::netem_delay(40'000'000, 8'000'000, draw, ours, entries);
-                                  }
-                              });
-        crd_netem_set_words(words.data(), word_count);
-        crd_netem_delay_table(table.data(), static_cast<u32>(table.size()));
-        crd_netem_delay_correlation(0U);
-        delay.netem =
-            timed_ns(packets, delay.netem, [&] { netem_sum = crd_netem_delay_run(40'000'000, 8'000'000, packets); });
-        require_same("table delay", ours_sum, netem_sum);
+        Rng rng(601U, 2U);
+        hn::MediumGrants grants(rng);
+        if (!grants.init(grant_options, 0))
+        {
+            return 1;
+        }
+        i64 sum = 0;
+        grants_best = timed_ns(packets, grants_best,
+                               [&]
+                               {
+                                   for (u32 i = 0U; i < packets; ++i)
+                                   {
+                                       sum ^= grants.depart(i64{i} * 1000, 1200U);
+                                   }
+                               });
+        if (sum == 0x7FFFFFFFFFFFFFFFLL)
+        {
+            return 1;
+        }
     }
 
-    std::printf("| Model | netem ns | hesap ns | ratio |\n|---|---|---|---|\n");
-    const auto row = [](const char* name, const Best& best)
-    {
-        std::printf("| %s | %.2f | %.2f | %.2fx |\n", name, best.netem, best.ours, best.netem / best.ours);
-    };
-    row("loss random 1%", random);
-    row("Gilbert-Elliott", chain);
-    row("four states", four);
-    row("table delay", delay);
+    std::printf("| Model | ns per packet |\n|---|---|\n");
+    std::printf("| independent loss | %.2f |\n", independent_best);
+    std::printf("| Gilbert-Elliott | %.2f |\n", gilbert_best);
+    std::printf("| four states | %.2f |\n", four_best);
+    std::printf("| medium grants | %.2f |\n", grants_best);
 
     struct ShapeRow
     {
         const char* name;
         hn::DelayShape shape;
     };
+    const i64 measured[] = {10'000, 20'000, 25'000, 40'000, 90'000};
     std::printf("\n| Exact law | ns, correlation 0 | ns, correlation 0.5 |\n|---|---|---|\n");
     const ShapeRow shapes[] = {{"uniform", hn::DelayShape::Uniform},
                                {"normal", hn::DelayShape::Normal},
                                {"log-normal", hn::DelayShape::LogNormal},
                                {"Pareto", hn::DelayShape::Pareto},
-                               {"Pareto-normal", hn::DelayShape::ParetoNormal}};
+                               {"Pareto-normal", hn::DelayShape::ParetoNormal},
+                               {"table", hn::DelayShape::Table}};
     for (const ShapeRow& shape : shapes)
     {
-        double best[2] = {std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
+        double best[2] = {far, far};
         for (u32 round = 0U; round < rounds; ++round)
         {
             for (int arm = 0; arm < 2; ++arm)
@@ -215,7 +158,8 @@ int main(int argc, char** argv)
                 options.mean_ns = 40'000'000;
                 options.deviation_ns = 8'000'000;
                 options.correlation = arm == 0 ? 0.0 : 0.5;
-                crd::hesap::stats::PhiloxRng rng(602U, 2U);
+                options.table = crd::containers::ConstSpan<i64>{measured, 5U};
+                Rng rng(602U, 2U);
                 hn::DelayProcess process(rng);
                 if (!process.init(options))
                 {

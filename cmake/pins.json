@@ -36,6 +36,7 @@
       "file": "zstd-f8745da6.tar.gz",
       "sha256": "4b0bd1f0cfb25e61b9103c35f27395530ff5b4c0d2513a00fd745849e85ea52c",
       "license": "BSD-3-Clause OR GPL-2.0-only",
+      "license_taken": "BSD-3-Clause",
       "patches": [
         "zstd-huf-is-sorted-unused",
         "zstd-lazy-is-aligned-unused"
@@ -303,20 +304,6 @@
       "provenance": "The Network Time Foundation's release of the RFC 5905 reference implementation; the SHA-256 is the one it publishes beside the tarball (read 2026-11-07)",
       "note": "The reference of hesap-net's clock filter (HESAP-NET): clock_filter() cut verbatim from ntpd/ntp_proto.c at configure time and compiled on tests/numerics/hesap-net/ntpd_peer.c's stand-ins, as crd-ntpd-peer on the complete-tier linux-gcc-public-checks lane; never in an engine module or a default build. COPYRIGHT read from the archive: the University of Delaware's notice and the Network Time Foundation's two-clause terms. Pinned as a testing download (pre-approved, user 2026-10-30)."
     },
-    "sch-netem": {
-      "version": "6.12",
-      "repository": "torvalds/linux",
-      "ref": "v6.12",
-      "commit": "adc218676eef25575469234709c2d87185ca223a",
-      "url": "https://raw.githubusercontent.com/torvalds/linux/adc218676eef25575469234709c2d87185ca223a/net/sched/sch_netem.c",
-      "file": "sch_netem.c",
-      "sha256": "9707ac6f97323816dbcafdfb8637b8153041c1f1669926defc40978ce04ab25f",
-      "size": 32764,
-      "license": "GPL-2.0-or-later",
-      "gated": "CRD_BUILD_LINK_VS_NETEM",
-      "provenance": "Linux's network emulator at the v6.12 long-term release's tag; one file, because the kernel weighs over a gigabyte (read 2026-11-07)",
-      "note": "The reference of hesap-net's loss and delay models (HESAP-NET): init_crandom to tabledist and get_slot_next, cut verbatim from net/sched/sch_netem.c at configure time and compiled on tests/numerics/hesap-net/netem_peer.c's stand-ins, as crd-netem-peer on the complete-tier linux-gcc-public-checks lane; a test program that is never distributed, never in an engine module or a shipped build. Pinned as a testing download (pre-approved, user 2026-10-30)."
-    },
     "nanorq": {
       "version": "0-7d52fbeb",
       "repository": "sleepybishop/nanorq",
@@ -329,17 +316,6 @@
       "gated": "CRD_BUILD_RAPTORQ_VS_PEERS",
       "provenance": "The head of sleepybishop/nanorq's stable branch (2026-10-25, performance fixes and tweaks #28); the project tags no releases. LICENSE read from the archive",
       "note": "A C implementation of RFC 6330 and the first peer of hesap-net's RaptorQ code (HESAP-NET): lib/ and deps/obl compiled as crd-raptorq-peers on the complete-tier linux-gcc-public-checks lane (GCC's target attributes and cpu checks, so no MSVC lane); never in an engine module or a default build."
-    },
-    "iproute2": {
-      "version": "6.12.0",
-      "url": "https://mirrors.edge.kernel.org/pub/linux/utils/net/iproute2/iproute2-6.12.0.tar.xz",
-      "file": "iproute2-6.12.0.tar.xz",
-      "sha256": "bbd141ef7b5d0127cc2152843ba61f274dc32814fa3e0f13e7d07a080bef53d9",
-      "size": 925392,
-      "license": "GPL-2.0-or-later AND NIST-PD",
-      "gated": "CRD_BUILD_LINK_VS_NETEM",
-      "provenance": "The kernel.org release of iproute2 at the same version as the netem source beside it (read 2026-11-07)",
-      "note": "The distribution tables of netem's delay (HESAP-NET): netem/normal.c, pareto.c and paretonormal.c, public-domain NIST generators, built and run by tests/numerics/hesap-net/CMakeLists.txt to write the tables crd-hesap-link-netem-tests reads; never in a shipped build. Pinned as a testing download (pre-approved, user 2026-10-30)."
     },
     "serialize": {
       "version": "2.1.3",

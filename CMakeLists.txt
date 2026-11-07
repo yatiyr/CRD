@@ -98,10 +98,10 @@ option(CRD_BUILD_QUANTIZE_VS_PEERS "Build the quantisation oracle and board agai
 # build; crd-hesap-motion-peer-tests, crd-hesap-dead-reckoning-peer-tests and their boards
 # of the tree that turns it on.
 option(CRD_BUILD_MOTION_VS_PEERS "Build the replicated-motion oracle and board against its peer" OFF)
-# HESAP-NET's link models against Linux's netem (cmake/pins.json sch-netem, the one source file) and iproute2's table
-# generators (cmake/pins.json iproute2), fetched on demand. Never in a shipped build; crd-hesap-link-netem-tests and
+# HESAP-NET's link models against the running kernel's netem, by `tc` in a private network namespace: a statistical
+# comparison that reads, cuts and fetches no netem source (Linux-only; off by default). crd-hesap-link-netem-tests and
 # crd-hesap-link-board run on the complete-tier linux-gcc-public-checks lane.
-option(CRD_BUILD_LINK_VS_NETEM "Build the link-model oracle and board against netem" OFF)
+option(CRD_BUILD_LINK_VS_NETEM "Build the link models' statistical comparison with the kernel's netem and their board" OFF)
 # HESAP-NET's RaptorQ code against nanorq (cmake/pins.json nanorq) and the raptorq crate (tools/raptorq-crates, built with
 # the pinned Rust, CRD_CARGO). Never in a shipped build; crd-hesap-raptorq-peer-tests and crd-hesap-raptorq-board run on
 # the complete-tier linux-gcc-public-checks lane.
@@ -1646,15 +1646,9 @@ if(CRD_BUILD_MOTION_VS_PEERS)
     set(CRD_KDIS_SOURCE "${kdis_SOURCE_DIR}")
 endif()
 
-# ----- The link models' netem peer: its source and iproute2's generators, built by tests/numerics/hesap-net -----
-if(CRD_BUILD_LINK_VS_NETEM)
-    if(NOT CRD_BUILD_TESTS)
-        message(FATAL_ERROR "[link-vs-netem] the link-model oracle needs CRD_BUILD_TESTS")
-    endif()
-    crd_add_pinned_package(sch-netem DOWNLOAD_ONLY YES DOWNLOAD_NO_EXTRACT YES)
-    set(CRD_NETEM_SOURCE "${sch-netem_SOURCE_DIR}/sch_netem.c")
-    crd_add_pinned_package(iproute2 DOWNLOAD_ONLY YES)
-    set(CRD_IPROUTE2_SOURCE "${iproute2_SOURCE_DIR}")
+# ----- The link models' comparison with the running kernel's netem (tests/numerics/hesap-net) -----
+if(CRD_BUILD_LINK_VS_NETEM AND NOT CRD_BUILD_TESTS)
+    message(FATAL_ERROR "[link-vs-netem] the link-model comparison needs CRD_BUILD_TESTS")
 endif()
 
 # ----- The RaptorQ peers: nanorq's sources and the Cargo package, built by tests/numerics/hesap-net -----

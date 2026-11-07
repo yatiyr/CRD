@@ -706,7 +706,7 @@
     },
     {
       "id": "numerics.link-models",
-      "summary": "Loss and delay of a simulated link on the seeded Philox stream: netem's random, Gilbert-Elliott and four-state loss, correlated word, table delay and slots, bit-exact with sch_netem.c, and delay shapes with an exact marginal law at any correlation, for NET-SIM and NET-DEBUG.",
+      "summary": "Loss and delay of a simulated link on the seeded Philox stream: independent, Gilbert-Elliott and four-state loss from their published models, delay shapes with an exact marginal law at any correlation, measured delay tables and shared-medium grants, for NET-SIM and NET-DEBUG.",
       "owner": "hesap-net",
       "api": [
         "engine/numerics/hesap-net/include/crd/hesap/net/link_models.hpp"

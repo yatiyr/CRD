@@ -58,12 +58,12 @@ unresolved or a design gate is unaccepted. Never invent approval or tool results
 - Implemented research gets an educative [recipe](docs/recipes/README.md): parameters, units, ranges, cited math,
   pitfalls, code and benchmark links; paper divergences are numbered decisions in the ADR/system reference.
 - Every benchmark board goes in [bench](docs/bench/README.md) **at measurement time**, with every required peer
-  (scipy, MATLAB, Boost, GSL where applicable) and every loss. Run boards on a busy host with `--allow-contended`:
+  (scipy, MATLAB, Boost, GSL) and every loss. Run boards on a busy host with `--allow-contended`:
   record the contention and judge by ratios of interleaved arms against peers and the pre-row engine. A tie or loss
   cannot close a full-victory contract.
-- Downloads: testing tools, SDKs, emulators and peer libraries for local or CI testing are pre-approved (user,
-  2026-10-30); pin each in `cmake/pins.json`, unpacked into its own directory. Ask first for anything paid,
-  non-testing or licence-restricted. Accounts, billing and credentials are user actions.
+- Downloads: testing tools, SDKs, emulators and peer libraries are pre-approved (user, 2026-10-30); pin each in
+  `cmake/pins.json`, own directory. Ask first for paid, non-testing or licence-restricted. Accounts, billing and
+  credentials are user actions. No GPL-derived code: [copyleft](docs/design/pinned-inputs.md#copyleft).
 
 ## Completion and verification
 

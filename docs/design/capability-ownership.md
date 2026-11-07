@@ -109,7 +109,7 @@ OWN.1 records these owners (2026-10-31):
     `numerics.network-estimators` (RTT, jitter, delay trend, rate, clock offset and drift) is its second capability.
     `numerics.quantization` (bounded floats, smallest-three quaternions) is its third, `numerics.motion-sampling`
     (interpolation, extrapolation, rewind history, IEEE 1278.1 dead reckoning, projective velocity blending) its fourth,
-    `numerics.link-models` (netem's loss, delay and slots, exact delay laws on the Philox stream) its fifth, reading
+    `numerics.link-models` (published loss chains, exact delay laws and shared-medium grants on the Philox stream) its fifth, reading
     hesap-stats' Philox and normal sampler and hesap-special's erfc as headers, linking neither.
 
 ## Duplicate rows

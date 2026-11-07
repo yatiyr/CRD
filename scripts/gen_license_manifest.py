@@ -53,7 +53,10 @@ def render(registry):
             parts.append(f'@ `{entry["ref"]}`')
         if entry.get('commit'):
             parts.append(f'({entry["commit"][:12]})')
-        lines.append(f'| {cell(name)} | {cell(entry.get("version", ""))} | {cell(entry.get("license", ""))} | '
+        license_text = entry.get('license', '')
+        if entry.get('license_taken'):
+            license_text += f', taken under {entry["license_taken"]}'
+        lines.append(f'| {cell(name)} | {cell(entry.get("version", ""))} | {cell(license_text)} | '
                      f'{cell(" ".join(parts))} | `{cell(entry.get("file", ""))}` |')
     lines += ['', '## Tools (installers, SDK members and helpers, verified by digest)', '',
               '| Tool | Version | License | Source | File |', '|---|---|---|---|---|']

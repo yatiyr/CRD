@@ -1469,6 +1469,28 @@ class PinnedInputs(unittest.TestCase):
         cls.cmake = (ROOT / 'CMakeLists.txt').read_text(encoding='utf-8-sig')
         cls.tiers = json.loads((ROOT / '.github/ci-tiers.json').read_text(encoding='utf-8'))
 
+    def test_copyleft_packages_are_refused_unless_a_permissive_option_or_a_gated_comparison(self):
+        cmake = 'option(CRD_PEER "a peer" OFF)\noption(CRD_ON "on" ON)\n'
+        def problems(**fields):
+            entry = {'license': 'GPL-2.0-or-later'}
+            entry.update(fields)
+            return check_pins.validate_copyleft({'packages': {'peer': entry}}, cmake)
+        self.assertEqual(problems(license='MIT'), [])
+        for family in ('GPL-2.0-only', 'LGPL-2.1-or-later', 'AGPL-3.0-only', 'MIT AND GPL-3.0-only',
+                       'GPL-2.0-only OR LGPL-3.0-only'):
+            self.assertIn('gated test comparison', problems(license=family)[0], family)
+        self.assertEqual(problems(copyleft='test-comparison', gated='CRD_PEER'), [])
+        self.assertIn('gated test comparison', problems(copyleft='test-comparison')[0])
+        self.assertIn('gated test comparison', problems(gated='CRD_PEER')[0])
+        self.assertIn('OFF by default', problems(copyleft='test-comparison', gated='CRD_ON')[0])
+        self.assertIn('OFF by default', problems(copyleft='test-comparison', gated='CRD_MISSING')[0])
+        either = 'BSD-3-Clause OR GPL-2.0-only'
+        self.assertEqual(problems(license=either, license_taken='BSD-3-Clause'), [])
+        self.assertIn('license_taken', problems(license=either)[0])
+        self.assertIn('license_taken', problems(license=either, license_taken='GPL-2.0-only')[0])
+        self.assertIn('GPL-family licences only', problems(license='MIT', license_taken='MIT')[0])
+        self.assertIn('GPL-family licences only', problems(license='MIT', copyleft='test-comparison')[0])
+
     def test_registry_workflow_build_and_helpers_agree(self):
         self.assertEqual(check_pins.validate(self.pins, self.workflow, self.cmake, self.tiers), [])
         self.assertEqual(re.findall(r'uses:\s*\S+@v\d', self.workflow), [])

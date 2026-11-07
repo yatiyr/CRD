@@ -2,19 +2,18 @@
 #include <crd/hesap/special/erf.hpp>
 #include <crd/math/cmath.hpp>
 
+#include <limits>
+
 namespace crd::hesap::net
 {
 
 namespace
 {
 
-constexpr crd::f64 kChanceOne = 4294967295.0;
+constexpr crd::f64 kChanceUnits = 4294967296.0;
 constexpr crd::f64 kSqrtHalf = 0.70710678118654752440;
 constexpr crd::f64 kSqrtThree = 1.73205080756887729353;
 constexpr crd::f64 kInverseSqrtTwoPi = 0.39894228040143267794;
-// iproute2's pareto.c scales a Pareto of tail 3 by 4/3, which is this times its standard form; pareto_normal keeps that
-// weight, so its law at tail 3 is netem's paretonormal.dist up to the one scale that gives it a deviation of one.
-constexpr crd::f64 kNetemParetoWeight = 0.75 * 1.15470053837925152902;
 
 // The chance a standard normal lies above `gaussian`.
 [[nodiscard]] crd::f64 survival(crd::f64 gaussian) noexcept
@@ -46,9 +45,39 @@ constexpr crd::f64 kNetemParetoWeight = 0.75 * 1.15470053837925152902;
     return value >= -kMaxLinkDelayNs && value <= kMaxLinkDelayNs;
 }
 
+[[nodiscard]] bool usable_table(crd::containers::ConstSpan<crd::i64> table) noexcept
+{
+    if (table.empty())
+    {
+        return false;
+    }
+    for (crd::usize i = 0U; i < table.size(); ++i)
+    {
+        if (!within_delay_range(table[i]) || (i != 0U && table[i] < table[i - 1U]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The value of an ascending table of equally spaced ranks at a rank in [0, 1].
+[[nodiscard]] crd::f64 table_at(crd::containers::ConstSpan<crd::i64> table, crd::f64 rank) noexcept
+{
+    const crd::f64 position = rank * static_cast<crd::f64>(table.size() - 1U);
+    const crd::usize below = static_cast<crd::usize>(position);
+    if (below + 1U >= table.size())
+    {
+        return static_cast<crd::f64>(table[table.size() - 1U]);
+    }
+    const crd::f64 low = static_cast<crd::f64>(table[below]);
+    const crd::f64 high = static_cast<crd::f64>(table[below + 1U]);
+    return low + ((position - static_cast<crd::f64>(below)) * (high - low));
+}
+
 } // namespace
 
-crd::u32 link_chance(crd::f64 fraction) noexcept
+LinkChance link_chance(crd::f64 fraction) noexcept
 {
     if (!(fraction > 0.0))
     {
@@ -56,9 +85,29 @@ crd::u32 link_chance(crd::f64 fraction) noexcept
     }
     if (fraction >= 1.0)
     {
-        return 0xFFFFFFFFU;
+        return kLinkCertain;
     }
-    return static_cast<crd::u32>(crd::math::nearbyint(fraction * kChanceOne));
+    return static_cast<LinkChance>(crd::math::nearbyint(fraction * kChanceUnits));
+}
+
+bool LossChain::set_four_state(const FourStateChances& chances) noexcept
+{
+    const bool within = chances.p13 <= kLinkCertain && chances.p14 <= kLinkCertain && chances.p23 <= kLinkCertain &&
+                        chances.p31 <= kLinkCertain && chances.p32 <= kLinkCertain;
+    if (!within || chances.p13 + chances.p14 > kLinkCertain || chances.p31 + chances.p32 > kLinkCertain)
+    {
+        return false;
+    }
+    constexpr crd::u8 received_gap = 0U;
+    constexpr crd::u8 received_burst = 1U;
+    constexpr crd::u8 lost_burst = 2U;
+    constexpr crd::u8 lost_gap = 3U;
+    m_states[received_gap] = State{chances.p13, chances.p13 + chances.p14, 0U, lost_burst, lost_gap};
+    m_states[received_burst] = State{chances.p23, 0U, 0U, lost_burst, 0U};
+    m_states[lost_burst] = State{chances.p31, chances.p31 + chances.p32, kLinkCertain, received_gap, received_burst};
+    m_states[lost_gap] = State{kLinkCertain, 0U, kLinkCertain, received_gap, 0U};
+    m_at = received_gap;
+    return true;
 }
 
 bool gilbert_from_rate_and_burst(crd::f64 loss, crd::f64 mean_burst, GilbertElliottChances& out) noexcept
@@ -67,13 +116,13 @@ bool gilbert_from_rate_and_burst(crd::f64 loss, crd::f64 mean_burst, GilbertElli
     {
         return false;
     }
-    const crd::f64 r = 1.0 / mean_burst;
-    const crd::f64 p = loss * r / (1.0 - loss);
-    if (!(p <= 1.0))
+    const crd::f64 to_good = 1.0 / mean_burst;
+    const crd::f64 to_bad = loss * to_good / (1.0 - loss);
+    if (!(to_bad <= 1.0))
     {
         return false;
     }
-    out = GilbertElliottChances{link_chance(p), link_chance(r), 0U, 0U};
+    out = GilbertElliottChances{link_chance(to_bad), link_chance(to_good), 0U, kLinkCertain};
     return true;
 }
 
@@ -84,7 +133,7 @@ bool gilbert_from_rate_and_correlation(crd::f64 loss, crd::f64 correlation, Gilb
         return false;
     }
     out = GilbertElliottChances{link_chance(loss * (1.0 - correlation)),
-                                link_chance((1.0 - loss) * (1.0 - correlation)), 0U, 0U};
+                                link_chance((1.0 - loss) * (1.0 - correlation)), 0U, kLinkCertain};
     return true;
 }
 
@@ -95,7 +144,9 @@ bool DelayProcess::init(const DelayOptions& options) noexcept
     if (!within_delay_range(options.mean_ns) || !within_delay_range(options.deviation_ns) || options.deviation_ns < 0 ||
         !(options.correlation >= 0.0 && options.correlation < 1.0) || options.floor_ns > options.ceiling_ns ||
         (options.shape == DelayShape::LogNormal && has_deviation && options.mean_ns <= 0) ||
-        (pareto_shape && !(options.pareto_tail > 2.0 && options.pareto_tail <= 1e6)))
+        (pareto_shape && !(options.pareto_tail > 2.0 && options.pareto_tail <= 1e6)) ||
+        (options.shape == DelayShape::ParetoNormal && !(options.pareto_share >= 0.0 && options.pareto_share <= 1.0)) ||
+        (options.shape == DelayShape::Table && !usable_table(options.table)))
     {
         return false;
     }
@@ -118,8 +169,9 @@ bool DelayProcess::init(const DelayOptions& options) noexcept
         {
             // The mix's own deviation, so `deviation_ns` means what it does in every other shape.
             const crd::f64 covariance = normal_pareto_covariance(tail, m_shape_a, m_shape_b);
-            m_shape_c = crd::math::sqrt(
-                (0.0625 + (kNetemParetoWeight * kNetemParetoWeight) + (2.0 * 0.25 * kNetemParetoWeight * covariance)));
+            const crd::f64 share = options.pareto_share;
+            const crd::f64 rest = 1.0 - share;
+            m_shape_c = crd::math::sqrt((rest * rest) + (share * share) + (2.0 * rest * share * covariance));
         }
     }
     return true;
@@ -134,7 +186,11 @@ crd::i64 DelayProcess::next() noexcept
     const crd::f64 mean = static_cast<crd::f64>(m_options.mean_ns);
     const crd::f64 deviation = static_cast<crd::f64>(m_options.deviation_ns);
     crd::f64 delay = mean;
-    if (m_options.deviation_ns != 0)
+    if (m_options.shape == DelayShape::Table)
+    {
+        delay = table_at(m_options.table, 1.0 - survival(m_gaussian));
+    }
+    else if (m_options.deviation_ns != 0)
     {
         switch (m_options.shape)
         {
@@ -152,11 +208,14 @@ crd::i64 DelayProcess::next() noexcept
             {
                 const crd::f64 tail_rank = crd::math::pow(survival(m_gaussian), -1.0 / m_options.pareto_tail);
                 const crd::f64 pareto = (tail_rank - m_shape_a) / m_shape_b;
+                const crd::f64 share = m_options.pareto_share;
                 delay = mean + (deviation * (m_options.shape == DelayShape::Pareto
                                                  ? pareto
-                                                 : ((0.25 * m_gaussian) + (kNetemParetoWeight * pareto)) / m_shape_c));
+                                                 : (((1.0 - share) * m_gaussian) + (share * pareto)) / m_shape_c));
                 break;
             }
+            case DelayShape::Table:
+                break;
         }
     }
     if (!(delay < static_cast<crd::f64>(m_options.ceiling_ns)))
@@ -168,6 +227,49 @@ crd::i64 DelayProcess::next() noexcept
         return m_options.floor_ns;
     }
     return static_cast<crd::i64>(crd::math::nearbyint(delay));
+}
+
+bool MediumGrants::init(const MediumGrantOptions& options, crd::i64 now_ns) noexcept
+{
+    if (options.hold_ns < 0 || options.gap.floor_ns < 0 || !m_gap.init(options.gap))
+    {
+        return false;
+    }
+    constexpr crd::u64 unlimited = std::numeric_limits<crd::u64>::max();
+    m_hold_ns = options.hold_ns;
+    m_packet_budget = options.packets == 0U ? unlimited : options.packets;
+    m_byte_budget = options.bytes == 0U ? unlimited : options.bytes;
+    m_packets_left = m_packet_budget;
+    m_bytes_left = m_byte_budget;
+    m_grant_ns = now_ns;
+    return true;
+}
+
+void MediumGrants::open_after(crd::i64 from_ns) noexcept
+{
+    const crd::i64 gap = m_gap.next();
+    constexpr crd::i64 far = std::numeric_limits<crd::i64>::max();
+    m_grant_ns = from_ns > far - gap ? far : from_ns + gap;
+    m_packets_left = m_packet_budget;
+    m_bytes_left = m_byte_budget;
+}
+
+crd::i64 MediumGrants::depart(crd::i64 ready_ns, crd::u32 bytes) noexcept
+{
+    crd::i64 leaves = ready_ns > m_grant_ns ? ready_ns : m_grant_ns;
+    const crd::u64 into_grant = static_cast<crd::u64>(leaves) - static_cast<crd::u64>(m_grant_ns);
+    if (m_hold_ns != 0 && into_grant >= static_cast<crd::u64>(m_hold_ns))
+    {
+        open_after(ready_ns);
+        leaves = m_grant_ns;
+    }
+    --m_packets_left;
+    m_bytes_left = bytes < m_bytes_left ? m_bytes_left - bytes : 0U;
+    if (m_packets_left == 0U || m_bytes_left == 0U)
+    {
+        open_after(leaves);
+    }
+    return leaves;
 }
 
 } // namespace crd::hesap::net

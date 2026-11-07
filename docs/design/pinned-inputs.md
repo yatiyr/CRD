@@ -36,8 +36,24 @@ tooling test. It fails when an entry lacks a field or a well-formed digest, when
 its commit, when a declared patch spec is missing, when the workflow references an action by anything but its
 pinned commit (with the `# <ref>` comment), runs on a label outside the registry, checks out with persisted
 credentials, names a tool version the registry does not, or fetches from an SDK or raw-file host directly, when the
-root build file acquires a package outside `crd_add_pinned_package()` or omits a registered one, and when a helper
-or the workflow carries a literal digest.
+root build file acquires a package outside `crd_add_pinned_package()` or omits a registered one, when a helper
+or the workflow carries a literal digest, and when a GPL-family package breaks the [copyleft](#copyleft) rule.
+
+## Copyleft
+
+No code in Cerid derives from GPL, LGPL or AGPL code (user order, 2026-11-07). The engine, the tools and the committed
+tests, shims and test data hold no copied expression, structure, naming, comment or table from such a project. A model
+such a project also implements is written from its published sources (papers, RFCs, formulas), with any table generated
+by Cerid. Agreement with a copyleft implementation is never a reason to keep a line: where exact agreement would need
+copied structure, exact agreement goes and the implementation is compared statistically, held to the published law.
+
+A copyleft project may be a comparison: off by default, never shipped, nothing of its text committed, at arm's length
+where it can be. `crd-hesap-link-netem-tests` is the example, driving the running kernel's netem through `tc`.
+[check-pins.py](../../scripts/check-pins.py) refuses a GPL-family package unless its entry names the permissive option
+it takes (`license_taken`; zstd is taken under BSD-3-Clause) or it is a test comparison (`"copyleft": "test-comparison"`
+behind a `gated` option that is off by default). Entries of `tools` run as separate programs, never linked or shipped,
+and stay outside that rule; so do the apt-installed benchmark peers behind their off-by-default options
+(`CRD_BUILD_HESAP_VS_CHOLMOD` and its kind), which link a library and copy nothing from it.
 
 ## Acquisition
 

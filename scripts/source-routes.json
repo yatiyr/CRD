@@ -179,9 +179,9 @@
       "why": "The bit-exact oracle and board of the RaptorQ code against nanorq and the raptorq crate (crd-hesap-raptorq-peer-tests, crd-hesap-raptorq-board, HESAP-NET), against the pinned sources fetched at configure time on the complete-tier linux-gcc-public-checks lane"
     },
     {
-      "paths": ["tests/numerics/hesap-net/test_link_netem.cpp", "tests/numerics/hesap-net/link_board.cpp", "tests/numerics/hesap-net/netem_peer.c"],
+      "paths": ["tests/numerics/hesap-net/test_link_netem.cpp", "tests/numerics/hesap-net/link_board.cpp"],
       "built_when": {"option": "CRD_BUILD_LINK_VS_NETEM"},
-      "why": "The bit-exact oracle and board of the link models against Linux's netem (crd-hesap-link-netem-tests, crd-hesap-link-board, HESAP-NET), against the pinned source fetched at configure time only when the option is on; a test program that is never distributed."
+      "why": "The statistical comparison of the link models with the running kernel's netem and their board (crd-hesap-link-netem-tests, crd-hesap-link-board, HESAP-NET): Linux-only, through tc in a private network namespace; no netem source is read or compiled."
     },
     {
       "paths": ["tests/numerics/hesap-net/test_clock_ntpd.cpp", "tests/numerics/hesap-net/clock_board.cpp", "tests/numerics/hesap-net/ntpd_peer.c"],

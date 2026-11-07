@@ -20,8 +20,9 @@
 #   crd-fuzz-hesap-quantize  Bounded floats and smallest-three quaternions on any format, value and word a peer can
 #                            send: formats against their restated conditions, every level bit for bit, every decoded
 #                            word unit length and refused exactly as restated.
-#   crd-fuzz-hesap-link      The loss and delay models on any setting and word: netem's machines and tabledist restated,
-#                            refusals as restated and writing nothing, delays within their bounds and reproducible.
+#   crd-fuzz-hesap-link      The loss chains, delay shapes and medium grants on any setting and word: the chains restated
+#                            as a transition matrix, refusals as restated and writing nothing, delays within their bounds
+#                            and reproducible, departures in order and budgets respected.
 #   crd-fuzz-hesap-raptorq   RFC 6330's RaptorQ on any ESIs and object parameters: refusals as restated, the solver's verdict
 #                            against the rank of the literal matrix A, its answer against the encoder's and every symbol,
 #                            the payload ID and OTI bit by bit, the object's blocks and sub-symbols covering it exactly.

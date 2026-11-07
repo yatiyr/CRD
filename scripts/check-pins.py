@@ -5,7 +5,8 @@ Contract: docs/design/pinned-inputs.md. `cmake/pins.json` is the only place a ve
 This guard fails when an entry is incomplete, when a workflow file references an action by anything but its pinned
 commit, runs on an unpinned runner label, checks out with persisted credentials or acquires a tool directly, when the
 CI workflow names a tool version the registry does not, when the root build file acquires a package outside the
-registry, when a helper carries a literal digest, or when a declared patch spec is missing.
+registry, when a helper carries a literal digest, when a declared patch spec is missing, or when a GPL-family package
+is neither taken under a permissive option nor an off-by-default test comparison (the Copyleft section there).
 """
 from pathlib import Path
 import argparse
@@ -33,6 +34,7 @@ HEX64 = re.compile(r'^[0-9a-f]{64}$')
 HEX40 = re.compile(r'^[0-9a-f]{40}$')
 LITERAL_DIGEST = re.compile(r'\b[0-9a-f]{64}\b')
 CRATES_IO = 'registry+https://github.com/rust-lang/crates.io-index'
+GPL_FAMILY = re.compile(r'\b(?:A|L)?GPL\b', re.IGNORECASE)
 FORBIDDEN_CMAKE = ('CPMAddPackage(', 'GIT_TAG', 'GITHUB_REPOSITORY', 'GITLAB_REPOSITORY', '"gh:', '"gl:')
 
 
@@ -67,6 +69,34 @@ def validate_lockfile(name, entry, root=ROOT):
                                                                                    required))
     if not any(package.get('name') == crate and package.get('version') == entry['version'] for package in locked):
         problems.append('tool %s: the lockfile does not resolve %s %s' % (name, crate, entry['version']))
+    return problems
+
+
+def validate_copyleft(pins, cmake_text):
+    """Cerid holds no GPL-derived code, so a package whose licence names the GPL family is one of two things: an `OR`
+    expression whose entry names the permissive alternative it takes (`license_taken`), or a test comparison, marked
+    `"copyleft": "test-comparison"` and behind a `gated` CMake option that is off by default. `tools` run as separate
+    programs, never linked or shipped, and stay outside this rule."""
+    problems = []
+    for name, entry in pins.get('packages', {}).items():
+        license_text = entry.get('license', '')
+        alternatives = [part.strip() for part in license_text.split(' OR ')]
+        permissive = [part for part in alternatives if not GPL_FAMILY.search(part)]
+        if not GPL_FAMILY.search(license_text):
+            if 'license_taken' in entry or 'copyleft' in entry:
+                problems.append('package %s: license_taken and copyleft are for GPL-family licences only' % name)
+            continue
+        if permissive:
+            if entry.get('license_taken') not in permissive:
+                problems.append('package %s: "%s" must name the permissive option it takes in license_taken' %
+                                (name, license_text))
+            continue
+        gate = entry.get('gated', '')
+        if entry.get('copyleft') != 'test-comparison' or not gate:
+            problems.append('package %s: a GPL-family package must be a gated test comparison ("copyleft": '
+                            '"test-comparison"), never a dependency' % name)
+        elif not re.search(r'option\(%s\b[^\n]*\bOFF\)' % re.escape(gate), cmake_text):
+            problems.append('package %s: its gate %s must be a CMake option that is OFF by default' % (name, gate))
     return problems
 
 
@@ -230,7 +260,8 @@ def validate_tiers(pins, tiers):
 
 
 def validate(pins, workflow_text, cmake_text, tiers, root=ROOT):
-    return (validate_registry(pins, root) + validate_workflow(pins, workflow_text) + validate_cmake(pins, cmake_text)
+    return (validate_registry(pins, root) + validate_copyleft(pins, cmake_text) +
+            validate_workflow(pins, workflow_text) + validate_cmake(pins, cmake_text)
             + validate_helpers(root) + validate_tiers(pins, tiers))
 
 

@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **38** · tools: **47** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **36** · tools: **47** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -17,7 +17,7 @@
 |---|---|---|---|---|
 | Catch2 | 3.7.1 | BSL-1.0 | catchorg/Catch2 @ `v3.7.1` (fa43b77429ba) | `Catch2-fa43b774.tar.gz` |
 | glfw | 3.4 | Zlib | glfw/glfw @ `3.4` (7b6aead9fb88) | `glfw-7b6aead9.tar.gz` |
-| zstd | 1.5.7 | BSD-3-Clause OR GPL-2.0-only | facebook/zstd @ `v1.5.7` (f8745da6ff1a) | `zstd-f8745da6.tar.gz` |
+| zstd | 1.5.7 | BSD-3-Clause OR GPL-2.0-only, taken under BSD-3-Clause | facebook/zstd @ `v1.5.7` (f8745da6ff1a) | `zstd-f8745da6.tar.gz` |
 | aws-lc | 5.12.0 | Apache-2.0 AND ISC AND MIT AND BSD-3-Clause | aws/aws-lc @ `v5.12.0` (cd481c207e38) | `aws-lc-cd481c20.tar.gz` |
 | openssl | 4.0.3 | Apache-2.0 | https://www.openssl.org/source/openssl-4.0.3.tar.gz | `openssl-4.0.3.tar.gz` |
 | boringssl | 0.20261020.0 | Apache-2.0 | google/boringssl @ `0.20261020.0` (d3bf4795ad5b) | `boringssl-d3bf4795.tar.gz` |
@@ -40,9 +40,7 @@
 | pocketfft | 4d865cb | BSD-3-Clause | mreineck/pocketfft @ `4d865cba24359b05b37da4e75aee24498c3b78e7` (4d865cba2435) | `pocketfft-4d865cba.tar.gz` |
 | isa-l | 2.32.1 | BSD-3-Clause | intel/isa-l @ `v2.32.1` (7c3479e0a9da) | `isa-l-7c3479e0.tar.gz` |
 | ntp | 4.2.8p18 | NTP AND BSD-2-Clause | https://downloads.nwtime.org/ntp/4.2.8/ntp-4.2.8p18.tar.gz | `ntp-4.2.8p18.tar.gz` |
-| sch-netem | 6.12 | GPL-2.0-or-later | torvalds/linux @ `v6.12` (adc218676eef) | `sch_netem.c` |
 | nanorq | 0-7d52fbeb | MIT | sleepybishop/nanorq (7d52fbebdc89) | `nanorq-7d52fbeb.tar.gz` |
-| iproute2 | 6.12.0 | GPL-2.0-or-later AND NIST-PD | https://mirrors.edge.kernel.org/pub/linux/utils/net/iproute2/iproute2-6.12.0.tar.xz | `iproute2-6.12.0.tar.xz` |
 | serialize | 2.1.3 | BSD-3-Clause | mas-bandwidth/serialize @ `v2.1.3` (7bf1877b38cf) | `serialize-7bf1877b.tar.gz` |
 | networked-physics-snapshot | fe19b74b | BSD-3-Clause | mas-bandwidth/networked-physics-gdc-2015 (fe19b74bf78a) | `Snapshot.h` |
 | vectorial-quat4f | fe19b74b | BSD-2-Clause | mas-bandwidth/networked-physics-gdc-2015 (fe19b74bf78a) | `quat4f.h` |

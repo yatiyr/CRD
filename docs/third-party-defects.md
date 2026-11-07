@@ -10,7 +10,8 @@
 is ok and we are sure of it then we let it be"). A warning, failure or defect proven to come from a provider, runtime
 or tool and not from Cerid code is recorded here once and then left alone: no patches to it, no tracing through its
 upstream source, no upstream bug reports and no account actions asked of the user. It never holds a row open. The work
-goes into proving Cerid's own side correct; the admission rules below are that proof.
+goes into proving Cerid's own side correct; the admission rules below are that proof. What Cerid may take from third
+parties at all is the [copyleft](design/pinned-inputs.md#copyleft) rule's business.
 
 An entry is admitted only with, in this order: a reproduction that contains no Cerid code, or a faulting stack with
 no Cerid frame on memory the engine did not allocate; the exact affected tests and lanes; the engine handling that

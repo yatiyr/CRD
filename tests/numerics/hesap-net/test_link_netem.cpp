@@ -1,426 +1,446 @@
-// hesap-net's link models against Linux's netem, the pinned net/sched/sch_netem.c's own functions on the same words:
-// every loss decision, every delay and every slot, bit for bit, with the words consumed counted too, on the Philox
-// stream and on scripted words that sit on each threshold. The analytic delay shapes are then held to iproute2's own
-// distribution tables, built here from the pinned release's generators, and the correlated word's lost rate is
-// measured.
-
-#include "link_laws.hpp"
-#include "netem_peer.h"
+// crd-hesap-link-netem-tests: hesap-net's link models against the running kernel's netem, statistically and at arm's
+// length. No netem source is read, cut or compiled: `tc` sets a law on the loopback of a private network namespace
+// (CTest runs this under `unshare -Urn`), numbered datagrams cross it, and what arrives is compared with what the model
+// answers for the same law. The kernel draws its own randomness, so every bound here is on a sampling distribution, set
+// where a false alarm is about one in a million.
+//
+// netem is GPL-2.0, which is why this is a comparison and nothing more: see "Copyleft" in docs/design/pinned-inputs.md.
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/net/link_models.hpp>
 
 #include <algorithm>
-#include <catch2/catch_approx.hpp>
+#include <arpa/inet.h>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <limits>
+#include <cstring>
+#include <ctime>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 namespace hn = crd::hesap::net;
-using Catch::Approx;
 using crd::f64;
-using crd::i16;
-using crd::i32;
 using crd::i64;
 using crd::u32;
 using crd::u64;
 using crd::usize;
-using crd::hesap::stats::PhiloxRng;
 
 namespace
 {
 
-constexpr u32 kOne = 0xFFFFFFFFU;
+// Far enough past the sends of one run that the lost and the late are told apart.
+constexpr int kDrainMs = 300;
+constexpr u32 kRunBins = 9U; // Runs of 1 to 8 and the rest.
 
-using Words = crd::containers::Array<u32>;
-
-// The same array the peer reads, in the same cycle.
-struct CycleWords
+void shell(const char* command)
 {
-    const u32* words;
-    usize count;
-    usize used = 0U;
+    INFO(command);
+    REQUIRE(std::system(command) == 0);
+}
 
-    u32 next_u32()
+void set_netem(const char* law)
+{
+    static const int ready = []
     {
-        const u32 word = words[used % count];
-        ++used;
-        return word;
+        return std::system("ip link set lo up");
+    }();
+    REQUIRE(ready == 0);
+    char command[256];
+    std::snprintf(command, sizeof(command), "tc qdisc replace dev lo root netem limit 1000000 %s", law);
+    shell(command);
+}
+
+class Loopback
+{
+public:
+    Loopback()
+    {
+        m_receive = socket(AF_INET, SOCK_DGRAM, 0);
+        m_send = socket(AF_INET, SOCK_DGRAM, 0);
+        REQUIRE((m_receive >= 0 && m_send >= 0));
+        const int on = 1;
+        const int large = 64 * 1024 * 1024;
+        REQUIRE(setsockopt(m_receive, SOL_SOCKET, SO_TIMESTAMPNS, &on, sizeof(on)) == 0);
+        REQUIRE(setsockopt(m_receive, SOL_SOCKET, SO_RCVBUF, &large, sizeof(large)) == 0);
+        m_address.sin_family = AF_INET;
+        m_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        REQUIRE(bind(m_receive, reinterpret_cast<const sockaddr*>(&m_address), sizeof(m_address)) == 0);
+        socklen_t length = sizeof(m_address);
+        REQUIRE(getsockname(m_receive, reinterpret_cast<sockaddr*>(&m_address), &length) == 0);
     }
+
+    Loopback(const Loopback&) = delete;
+    Loopback& operator=(const Loopback&) = delete;
+
+    ~Loopback()
+    {
+        close(m_receive);
+        close(m_send);
+    }
+
+    void send(u32 number)
+    {
+        const ssize_t sent = sendto(m_send, &number, sizeof(number), 0, reinterpret_cast<const sockaddr*>(&m_address),
+                                    sizeof(m_address));
+        REQUIRE(sent == static_cast<ssize_t>(sizeof(number)));
+    }
+
+    // One waiting datagram's number and its arrival stamp, or false after `wait_ms` with none.
+    [[nodiscard]] bool receive(u32& number, i64& arrived_ns, int wait_ms)
+    {
+        if (wait_ms != 0 && wait_ms != m_wait_ms)
+        {
+            const timeval timeout{wait_ms / 1000, (wait_ms % 1000) * 1000};
+            REQUIRE(setsockopt(m_receive, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
+            m_wait_ms = wait_ms;
+        }
+        alignas(cmsghdr) char control[128];
+        iovec part{&number, sizeof(number)};
+        msghdr message{};
+        message.msg_iov = &part;
+        message.msg_iovlen = 1;
+        message.msg_control = control;
+        message.msg_controllen = sizeof(control);
+        if (recvmsg(m_receive, &message, wait_ms == 0 ? MSG_DONTWAIT : 0) < 0)
+        {
+            return false;
+        }
+        for (cmsghdr* item = CMSG_FIRSTHDR(&message); item != nullptr; item = CMSG_NXTHDR(&message, item))
+        {
+            if (item->cmsg_level == SOL_SOCKET && item->cmsg_type == SCM_TIMESTAMPNS)
+            {
+                timespec stamp{};
+                std::memcpy(&stamp, CMSG_DATA(item), sizeof(stamp));
+                arrived_ns = (i64{stamp.tv_sec} * 1'000'000'000) + stamp.tv_nsec;
+            }
+        }
+        return true;
+    }
+
+private:
+    int m_receive = -1;
+    int m_send = -1;
+    int m_wait_ms = 0;
+    sockaddr_in m_address{};
 };
 
-[[nodiscard]] Words philox_words(u64 seed, u64 stream, usize count)
+[[nodiscard]] i64 now_ns()
 {
-    Words words(count);
-    words.resize(count);
-    PhiloxRng rng(seed, stream);
-    for (usize i = 0U; i < count; ++i)
-    {
-        words[i] = rng.next_u32();
-    }
-    return words;
+    timespec stamp{};
+    REQUIRE(clock_gettime(CLOCK_REALTIME, &stamp) == 0);
+    return (i64{stamp.tv_sec} * 1'000'000'000) + stamp.tv_nsec;
 }
 
-// Words that land on each threshold, one either side of it, and on the ends of the range.
-[[nodiscard]] Words threshold_words(std::initializer_list<u32> thresholds, usize count, u64 seed)
+void wait_until(i64 when_ns)
 {
-    Words candidates;
-    for (const u32 threshold : thresholds)
+    while (now_ns() < when_ns)
     {
-        candidates.push_back(threshold);
-        candidates.push_back(threshold + 1U);
-        candidates.push_back(threshold - 1U);
     }
-    candidates.push_back(0U);
-    candidates.push_back(kOne);
-    Words words(count);
-    words.resize(count);
-    PhiloxRng rng(seed, 77U);
-    for (usize i = 0U; i < count; ++i)
-    {
-        words[i] = candidates[rng.next_below(candidates.size())];
-    }
-    return words;
 }
 
-void hold_loss_to_netem(hn::LossModel& model, CycleWords& ours, u32 packets)
+// Which of `packets` datagrams the current netem setting drops.
+[[nodiscard]] crd::containers::Array<bool> kernel_fates(u32 packets)
 {
-    u32 lost = 0U;
+    crd::containers::Array<bool> lost(packets);
+    lost.resize(packets);
+    std::fill(lost.begin(), lost.end(), true);
+    Loopback link;
+    const auto take = [&](int wait_ms)
+    {
+        u32 number = 0U;
+        i64 arrived = 0;
+        while (link.receive(number, arrived, wait_ms))
+        {
+            REQUIRE(number < packets);
+            lost[number] = false;
+        }
+    };
     for (u32 i = 0U; i < packets; ++i)
     {
-        const bool ours_lost = model.next(ours);
-        const bool netem_lost = crd_netem_loss_event();
-        lost += netem_lost ? 1U : 0U;
-        if (ours_lost != netem_lost || ours.used != crd_netem_words_used())
-        {
-            FAIL_CHECK("packet " << i << ": ours " << ours_lost << " netem " << netem_lost << ", words " << ours.used
-                                 << " and " << crd_netem_words_used());
-            return;
-        }
+        link.send(i);
+        take(0);
     }
-    SUCCEED("lost " << lost << " of " << packets);
+    take(kDrainMs);
+    return lost;
 }
 
-// A distribution table as get_distribution() reads a .dist file.
-[[nodiscard]] crd::containers::Array<i16> read_table(const char* name)
+template <typename Setting> [[nodiscard]] crd::containers::Array<bool> model_fates(u32 packets, const Setting& setting)
 {
-    crd::containers::Array<i16> table;
-    char path[1024];
-    std::snprintf(path, sizeof(path), "%s/%s.dist", CRD_NETEM_TABLE_DIR, name);
-    std::FILE* file = std::fopen(path, "r");
-    REQUIRE(file != nullptr);
-    char line[512];
-    while (std::fgets(line, sizeof(line), file) != nullptr)
+    crd::containers::Array<bool> lost(packets);
+    lost.resize(packets);
+    hn::LossChain chain;
+    setting(chain);
+    crd::hesap::stats::PhiloxRng rng(0xC0FFEEU, 1U);
+    for (u32 i = 0U; i < packets; ++i)
     {
-        if (line[0] == '#')
+        lost[i] = chain.next(rng);
+    }
+    return lost;
+}
+
+struct LossStats
+{
+    f64 rate = 0.0;
+    u64 runs[kRunBins] = {};
+    u64 gaps[kRunBins] = {};
+    u64 run_count = 0U;
+    u64 gap_count = 0U;
+};
+
+[[nodiscard]] LossStats loss_stats(const crd::containers::Array<bool>& lost)
+{
+    LossStats stats;
+    u64 lost_count = 0U;
+    usize start = 0U;
+    while (start < lost.size())
+    {
+        usize end = start;
+        while (end < lost.size() && lost[end] == lost[start])
+        {
+            ++end;
+        }
+        const u64 length = end - start;
+        const u64 bin = std::min<u64>(length, kRunBins) - 1U;
+        if (lost[start])
+        {
+            lost_count += length;
+            ++stats.runs[bin];
+            ++stats.run_count;
+        }
+        else
+        {
+            ++stats.gaps[bin];
+            ++stats.gap_count;
+        }
+        start = end;
+    }
+    stats.rate = static_cast<f64>(lost_count) / static_cast<f64>(lost.size());
+    return stats;
+}
+
+// Pearson's statistic of two samples of the same bins. A bin thin on both sides joins the next.
+[[nodiscard]] f64 two_sample_chi_square(const u64* first, const u64* second, u32 bins, u64 first_total,
+                                        u64 second_total, u32& degrees)
+{
+    const f64 k1 = std::sqrt(static_cast<f64>(second_total) / static_cast<f64>(first_total));
+    const f64 k2 = 1.0 / k1;
+    f64 sum = 0.0;
+    u64 held_first = 0U;
+    u64 held_second = 0U;
+    degrees = 0U;
+    for (u32 bin = 0U; bin < bins; ++bin)
+    {
+        held_first += first[bin];
+        held_second += second[bin];
+        if (held_first + held_second < 20U && bin + 1U != bins)
         {
             continue;
         }
-        char* at = line;
-        char* after = nullptr;
-        for (long value = std::strtol(at, &after, 10); after != at; value = std::strtol(at, &after, 10))
-        {
-            table.push_back(static_cast<i16>(value));
-            at = after;
-        }
+        const f64 difference = (k1 * static_cast<f64>(held_first)) - (k2 * static_cast<f64>(held_second));
+        sum += difference * difference / static_cast<f64>(held_first + held_second);
+        ++degrees;
+        held_first = 0U;
+        held_second = 0U;
     }
-    std::fclose(file);
-    return table;
+    degrees = degrees == 0U ? 0U : degrees - 1U;
+    return sum;
 }
 
-constexpr u32 kPackets = 400000U;
+// The chi-square upper tail at about one in a million, by Wilson-Hilferty.
+[[nodiscard]] f64 chi_square_bound(u32 degrees)
+{
+    const f64 v = static_cast<f64>(degrees == 0U ? 1U : degrees);
+    const f64 term = 1.0 - (2.0 / (9.0 * v)) + (4.75 * std::sqrt(2.0 / (9.0 * v)));
+    return v * term * term * term;
+}
+
+void compare_runs(const LossStats& kernel, const LossStats& model)
+{
+    u32 degrees = 0U;
+    const f64 runs =
+        two_sample_chi_square(kernel.runs, model.runs, kRunBins, kernel.run_count, model.run_count, degrees);
+    INFO("loss runs: chi-square " << runs << " on " << degrees << " degrees");
+    CHECK(runs < chi_square_bound(degrees));
+    const f64 gaps =
+        two_sample_chi_square(kernel.gaps, model.gaps, kRunBins, kernel.gap_count, model.gap_count, degrees);
+    INFO("received runs: chi-square " << gaps << " on " << degrees << " degrees");
+    CHECK(gaps < chi_square_bound(degrees));
+}
+
+constexpr u32 kPackets = 1'000'000U;
+
+[[nodiscard]] f64 percent(f64 fraction)
+{
+    return fraction * 100.0;
+}
+
+// The sorted one-way delays of `packets` datagrams, paced so the kernel's timers are the only queue.
+[[nodiscard]] crd::containers::Array<f64> kernel_delays(u32 packets)
+{
+    crd::containers::Array<i64> sent(packets);
+    sent.resize(packets);
+    crd::containers::Array<f64> delays(packets);
+    Loopback link;
+    const i64 pace_ns = 200'000;
+    const auto take = [&](int wait_ms)
+    {
+        u32 index = 0U;
+        i64 arrived = 0;
+        while (link.receive(index, arrived, wait_ms))
+        {
+            REQUIRE(index < packets);
+            delays.push_back(static_cast<f64>(arrived - sent[index]));
+        }
+    };
+    i64 next = now_ns();
+    for (u32 i = 0U; i < packets; ++i)
+    {
+        wait_until(next);
+        sent[i] = now_ns();
+        link.send(i);
+        take(0);
+        next += pace_ns;
+    }
+    take(kDrainMs);
+    std::sort(delays.begin(), delays.end());
+    return delays;
+}
+
+[[nodiscard]] crd::containers::Array<f64> model_delays(const hn::DelayOptions& options, u32 packets)
+{
+    crd::hesap::stats::PhiloxRng rng(0xBEEFU, 2U);
+    hn::DelayProcess process(rng);
+    REQUIRE(process.init(options));
+    crd::containers::Array<f64> delays(packets);
+    delays.resize(packets);
+    for (u32 i = 0U; i < packets; ++i)
+    {
+        delays[i] = static_cast<f64>(process.next());
+    }
+    std::sort(delays.begin(), delays.end());
+    return delays;
+}
+
+[[nodiscard]] f64 quantile(const crd::containers::Array<f64>& sorted, f64 rank)
+{
+    return sorted[static_cast<usize>(rank * static_cast<f64>(sorted.size() - 1U))];
+}
+
+constexpr f64 kKernelOverheadNs = 300'000.0; // What a loaded machine's timers and softirqs may add beside the law.
+
+void compare_delays(const crd::containers::Array<f64>& kernel, const crd::containers::Array<f64>& model, f64 spread_ns)
+{
+    REQUIRE(kernel.size() > (model.size() * 99U) / 100U);
+    for (const f64 rank : {0.1, 0.25, 0.5, 0.75, 0.9})
+    {
+        INFO("rank " << rank << ": kernel " << quantile(kernel, rank) << " ns, model " << quantile(model, rank)
+                     << " ns");
+        CHECK(std::abs(quantile(kernel, rank) - quantile(model, rank)) < (spread_ns * 0.08) + kKernelOverheadNs);
+    }
+}
 
 } // namespace
 
-TEST_CASE("netem: every loss decision and word, bit for bit", "[link-netem]")
+TEST_CASE("netem comparison: independent loss", "[link-netem]")
 {
-    struct Random
-    {
-        f64 chance;
-        f64 correlation;
-    };
-    SECTION("random, with and without correlation")
-    {
-        for (const Random setting : {Random{0.0, 0.0}, Random{0.01, 0.0}, Random{0.1, 0.0}, Random{1.0, 0.0},
-                                     Random{0.01, 0.25}, Random{0.3, 0.75}, Random{0.5, 1.0}})
-        {
-            const Words words = philox_words(101U, 1U, kPackets);
-            crd_netem_set_words(words.data(), words.size());
-            crd_netem_loss_random(hn::link_chance(setting.chance), hn::link_chance(setting.correlation));
-            CycleWords ours{words.data(), words.size()};
-            hn::LossModel model;
-            model.set_random(hn::link_chance(setting.chance), hn::link_chance(setting.correlation), ours);
-            hold_loss_to_netem(model, ours, kPackets);
-        }
-    }
-    SECTION("Gilbert-Elliott")
-    {
-        const hn::GilbertElliottChances settings[] = {
-            {hn::link_chance(0.05), hn::link_chance(0.3), 0U, 0U},
-            {hn::link_chance(0.05), hn::link_chance(0.3), hn::link_chance(0.2), hn::link_chance(0.01)},
-            {hn::link_chance(1.0), hn::link_chance(1.0), hn::link_chance(0.5), hn::link_chance(0.5)},
-            {0U, 0U, kOne, 0U},
-        };
-        for (const hn::GilbertElliottChances& chances : settings)
-        {
-            const Words words = philox_words(102U, 2U, kPackets);
-            crd_netem_set_words(words.data(), words.size());
-            crd_netem_loss_gilbert_elliott(chances.p, chances.r, chances.survive_bad, chances.lost_good);
-            CycleWords ours{words.data(), words.size()};
-            hn::LossModel model;
-            model.set_gilbert_elliott(chances);
-            hold_loss_to_netem(model, ours, kPackets);
-        }
-    }
-    SECTION("Gilbert-Elliott, words on the thresholds")
-    {
-        const hn::GilbertElliottChances chances{1000U, 2000U, 3000U, 4000U};
-        const Words words = threshold_words({1000U, 2000U, 3000U, 4000U}, kPackets, 103U);
-        crd_netem_set_words(words.data(), words.size());
-        crd_netem_loss_gilbert_elliott(chances.p, chances.r, chances.survive_bad, chances.lost_good);
-        CycleWords ours{words.data(), words.size()};
-        hn::LossModel model;
-        model.set_gilbert_elliott(chances);
-        hold_loss_to_netem(model, ours, kPackets);
-    }
-    SECTION("four states")
-    {
-        const hn::FourStateChances settings[] = {
-            {hn::link_chance(0.02), hn::link_chance(0.4), hn::link_chance(0.3), hn::link_chance(0.2),
-             hn::link_chance(0.005)},
-            {hn::link_chance(0.1), hn::link_chance(0.9), 0U, 0U, 0U},
-            {hn::link_chance(0.5), hn::link_chance(0.25), hn::link_chance(0.75), hn::link_chance(1.0),
-             hn::link_chance(0.25)},
-        };
-        for (const hn::FourStateChances& chances : settings)
-        {
-            const Words words = philox_words(104U, 3U, kPackets);
-            crd_netem_set_words(words.data(), words.size());
-            crd_netem_loss_four_state(chances.p13, chances.p31, chances.p32, chances.p23, chances.p14);
-            CycleWords ours{words.data(), words.size()};
-            hn::LossModel model;
-            REQUIRE(model.set_four_state(chances));
-            hold_loss_to_netem(model, ours, kPackets);
-        }
-    }
-    SECTION("four states, words on the thresholds and their sums")
-    {
-        const hn::FourStateChances chances{1000U, 2000U, 3000U, 500U, 700U};
-        const Words words = threshold_words({1000U, 2000U, 3000U, 500U, 700U, 1700U, 5000U}, kPackets, 105U);
-        crd_netem_set_words(words.data(), words.size());
-        crd_netem_loss_four_state(chances.p13, chances.p31, chances.p32, chances.p23, chances.p14);
-        CycleWords ours{words.data(), words.size()};
-        hn::LossModel model;
-        REQUIRE(model.set_four_state(chances));
-        hold_loss_to_netem(model, ours, kPackets);
-    }
+    set_netem("loss 5%");
+    const LossStats kernel = loss_stats(kernel_fates(kPackets));
+    const LossStats model =
+        loss_stats(model_fates(kPackets, [](hn::LossChain& chain) { chain.set_independent(hn::link_chance(0.05)); }));
+    INFO("kernel " << kernel.rate << " model " << model.rate);
+    CHECK(std::abs(kernel.rate - model.rate) < 0.0015);
+    compare_runs(kernel, model);
 }
 
-TEST_CASE("netem: every delay, bit for bit, on each of iproute2's tables", "[link-netem]")
+TEST_CASE("netem comparison: a simple Gilbert chain", "[link-netem]")
 {
-    const crd::containers::Array<i16> normal = read_table("normal");
-    const crd::containers::Array<i16> pareto = read_table("pareto");
-    const crd::containers::Array<i16> mix = read_table("paretonormal");
-    REQUIRE(normal.size() == 4096U);
-    REQUIRE(pareto.size() == 4096U);
-    REQUIRE(mix.size() == 4096U);
+    constexpr f64 to_bad = 0.0103;
+    constexpr f64 to_good = 0.25;
+    char law[128];
+    std::snprintf(law, sizeof(law), "loss gemodel %.6f%% %.6f%% 100%% 0%%", percent(to_bad), percent(to_good));
+    set_netem(law);
+    const LossStats kernel = loss_stats(kernel_fates(kPackets));
+    const LossStats model = loss_stats(model_fates(
+        kPackets, [](hn::LossChain& chain)
+        { chain.set_gilbert_elliott({hn::link_chance(to_bad), hn::link_chance(to_good), 0U, hn::kLinkCertain}); }));
+    INFO("kernel " << kernel.rate << " model " << model.rate);
+    CHECK(std::abs(kernel.rate - model.rate) < 0.004);
+    compare_runs(kernel, model);
+}
 
-    struct Table
-    {
-        const i16* entries;
-        u32 size;
-    };
-    const Table tables[] = {{nullptr, 0U}, {normal.data(), 4096U}, {pareto.data(), 4096U}, {mix.data(), 4096U}};
-    const i64 means[] = {0, 1, 40'000'000, -5000, i64{1} << 40U};
-    const i32 deviations[] = {0, 1, 8191, 8192, 8193, 123456, 8'000'000, std::numeric_limits<i32>::max()};
-
-    for (const Table& table : tables)
-    {
-        for (const f64 correlation : {0.0, 0.25, 0.9})
-        {
-            for (const i64 mean : means)
-            {
-                for (const i32 deviation : deviations)
-                {
-                    const Words words = philox_words(201U, 4U, 4096U);
-                    crd_netem_set_words(words.data(), words.size());
-                    crd_netem_delay_table(table.entries, table.size);
-                    crd_netem_delay_correlation(hn::link_chance(correlation));
-                    CycleWords ours{words.data(), words.size()};
-                    hn::CorrelatedDraw draw;
-                    draw.init(hn::link_chance(correlation), ours);
-                    const crd::containers::ConstSpan<i16> entries{table.entries, table.size};
-                    bool same = true;
-                    for (u32 i = 0U; i < 4000U; ++i)
+TEST_CASE("netem comparison: the full Gilbert-Elliott chain", "[link-netem]")
+{
+    constexpr f64 to_bad = 0.02;
+    constexpr f64 to_good = 0.2;
+    constexpr f64 lost_in_good = 0.01;
+    constexpr f64 lost_in_bad = 0.6;
+    char law[128];
+    std::snprintf(law, sizeof(law), "loss gemodel %.6f%% %.6f%% %.6f%% %.6f%%", percent(to_bad), percent(to_good),
+                  percent(lost_in_bad), percent(lost_in_good));
+    set_netem(law);
+    const LossStats kernel = loss_stats(kernel_fates(kPackets));
+    const LossStats model = loss_stats(
+        model_fates(kPackets,
+                    [](hn::LossChain& chain)
                     {
-                        same =
-                            same &&
-                            hn::netem_delay(mean, deviation, draw, ours, entries) == crd_netem_delay(mean, deviation) &&
-                            ours.used == crd_netem_words_used();
-                    }
-                    CHECK(same);
-                }
-            }
-        }
-    }
-    crd_netem_delay_table(nullptr, 0U);
+                        chain.set_gilbert_elliott({hn::link_chance(to_bad), hn::link_chance(to_good),
+                                                   hn::link_chance(lost_in_good), hn::link_chance(lost_in_bad)});
+                    }));
+    INFO("kernel " << kernel.rate << " model " << model.rate);
+    CHECK(std::abs(kernel.rate - model.rate) < 0.004);
+    compare_runs(kernel, model);
 }
 
-TEST_CASE("netem: every slot, bit for bit", "[link-netem]")
+TEST_CASE("netem comparison: the four-state chain", "[link-netem]")
 {
-    const crd::containers::Array<i16> normal = read_table("normal");
-    struct Setting
-    {
-        i64 min_delay;
-        i64 max_delay;
-        i32 max_packets;
-        i32 max_bytes;
-        i64 dist_delay;
-        i32 dist_jitter;
-        bool table;
-    };
-    const Setting settings[] = {
-        {0, 0, 0, 0, 0, 0, false},
-        {1000, 1000, 1, 0, 0, 0, false},
-        {800'000, 7'000'000, 8, 0, 0, 0, false},
-        {800'000, 7'000'000, 0, 6000, 0, 0, false},
-        {1, 1'000'000'000, 3, 3000, 0, 0, false},
-        {0, 0, 4, 9000, 5'000'000, 1'000'000, true},
-    };
-    for (const Setting& setting : settings)
-    {
-        const Words words = philox_words(301U, 5U, 65536U);
-        crd_netem_set_words(words.data(), words.size());
-        crd_netem_delay_table(setting.table ? normal.data() : nullptr, setting.table ? 4096U : 0U);
-        constexpr i64 start = 1'000'000;
-        crd_netem_slot_init(setting.min_delay, setting.max_delay, setting.max_packets, setting.max_bytes,
-                            setting.dist_delay, setting.dist_jitter, start);
-        hn::SlotOptions options;
-        options.min_delay_ns = setting.min_delay;
-        options.max_delay_ns = setting.max_delay;
-        options.max_packets = setting.max_packets;
-        options.max_bytes = setting.max_bytes;
-        options.dist_mean_ns = setting.dist_delay;
-        options.dist_deviation_ns = setting.dist_jitter;
-        if (setting.table)
-        {
-            options.table = crd::containers::ConstSpan<i16>{normal.data(), 4096U};
-        }
-        hn::SlotGate gate;
-        REQUIRE(gate.init(options, start));
-
-        CycleWords ours{words.data(), words.size()};
-        PhiloxRng schedule(302U, 6U);
-        i64 now = start;
-        i64 due = start;
-        bool same = true;
-        for (u32 i = 0U; i < 200000U && same; ++i)
-        {
-            now += static_cast<i64>(schedule.next_below(400'000U));
-            const u32 bytes = 40U + static_cast<u32>(schedule.next_below(1460U));
-            const bool ours_left = gate.admit(now, due, bytes, ours);
-            const bool netem_left = crd_netem_slot_admit(static_cast<u64>(now), static_cast<u64>(due), bytes);
-            same = ours_left == netem_left && ours.used == crd_netem_words_used() &&
-                   (!gate.active() || static_cast<u64>(gate.next_open_ns()) == crd_netem_slot_next());
-            if (ours_left)
-            {
-                due = now + static_cast<i64>(schedule.next_below(800'000U));
-            }
-        }
-        CHECK(same);
-    }
-    crd_netem_delay_table(nullptr, 0U);
+    constexpr f64 p13 = 0.02;
+    constexpr f64 p14 = 0.005;
+    constexpr f64 p23 = 0.2;
+    constexpr f64 p31 = 0.4;
+    constexpr f64 p32 = 0.3;
+    char law[128];
+    std::snprintf(law, sizeof(law), "loss state %.6f%% %.6f%% %.6f%% %.6f%% %.6f%%", percent(p13), percent(p31),
+                  percent(p32), percent(p23), percent(p14));
+    set_netem(law);
+    const LossStats kernel = loss_stats(kernel_fates(kPackets));
+    const LossStats model = loss_stats(
+        model_fates(kPackets,
+                    [](hn::LossChain& chain)
+                    {
+                        REQUIRE(chain.set_four_state({hn::link_chance(p13), hn::link_chance(p14), hn::link_chance(p23),
+                                                      hn::link_chance(p31), hn::link_chance(p32)}));
+                    }));
+    INFO("kernel " << kernel.rate << " model " << model.rate);
+    CHECK(std::abs(kernel.rate - model.rate) < 0.004);
+    compare_runs(kernel, model);
 }
 
-TEST_CASE("netem: the analytic shapes have the laws of iproute2's tables", "[link-netem]")
+TEST_CASE("netem comparison: uniform and normal delay", "[link-netem]")
 {
-    constexpr usize samples_wanted = usize{1} << 20U;
-    constexpr i64 mean_ns = 400'000'000;
-    constexpr i64 deviation_ns = 8'000'000;
-
-    struct Case
+    constexpr u32 packets = 10'000U;
+    constexpr i64 mean_ns = 20'000'000;
+    constexpr i64 half_width_ns = 6'000'000;
+    SECTION("uniform")
     {
-        const char* table;
-        hn::DelayShape shape;
-        f64 unit;
-    };
-    const Case cases[] = {{"normal", hn::DelayShape::Normal, 1.0},
-                          {"pareto", hn::DelayShape::Pareto, 2.0 / std::sqrt(3.0)},
-                          {"paretonormal", hn::DelayShape::ParetoNormal, link_laws::mix_deviation(3.0)}};
-    for (const Case& shape_case : cases)
-    {
-        const crd::containers::Array<i16> table = read_table(shape_case.table);
-        crd::containers::Array<i16> sorted(table);
-        std::sort(sorted.begin(), sorted.end());
-
+        set_netem("delay 20ms 6ms");
         hn::DelayOptions options;
-        options.shape = shape_case.shape;
+        options.shape = hn::DelayShape::Uniform;
         options.mean_ns = mean_ns;
-        options.deviation_ns = deviation_ns;
-        options.floor_ns = 0;
-        PhiloxRng rng(401U, 7U);
-        hn::DelayProcess process(rng);
-        REQUIRE(process.init(options));
-        crd::containers::Array<f64> samples(samples_wanted);
-        samples.resize(samples_wanted);
-        for (usize i = 0U; i < samples_wanted; ++i)
-        {
-            samples[i] =
-                (static_cast<f64>(process.next()) - static_cast<f64>(mean_ns)) / static_cast<f64>(deviation_ns);
-        }
-        std::sort(samples.begin(), samples.end());
-
-        // netem's tables are the laws at their own scale: the normal's is one, Pareto's 2 / sqrt(3), the mix's its own
-        // deviation. Pareto's part of a table stops at 4 of its units, a rank of 0.989 and past it, so ranks stop
-        // short.
-        const f64 count = static_cast<f64>(sorted.size());
-        INFO(shape_case.table << " unit " << shape_case.unit);
-
-        f64 worst = 0.0;
-        for (usize i = 0U; i < (sorted.size() * 985U) / 1000U; ++i)
-        {
-            const f64 x = static_cast<f64>(sorted[i]) / hn::kNetemTableScale;
-            const f64* found = std::lower_bound(samples.begin(), samples.end(), x / shape_case.unit);
-            const f64 ours = static_cast<f64>(found - samples.begin()) / static_cast<f64>(samples_wanted);
-            worst = std::max(worst, std::abs(ours - (static_cast<f64>(i) / count)));
-        }
-        // One table step and the samples' KS at one in a thousand.
-        CHECK(worst < (2.0 / count) + (1.95 / std::sqrt(static_cast<f64>(samples_wanted))));
+        options.deviation_ns = static_cast<i64>(static_cast<f64>(half_width_ns) / std::sqrt(3.0));
+        compare_delays(kernel_delays(packets), model_delays(options, packets), static_cast<f64>(half_width_ns));
     }
-}
-
-TEST_CASE("netem: its correlated word loses the rate it was asked for, and the chain keeps it", "[link-netem]")
-{
-    constexpr u32 many_packets = 4'000'000U;
-    constexpr f64 asked = 0.01;
-    constexpr f64 correlation = 0.25;
-
-    PhiloxRng netem_rng(501U, 8U);
-    hn::LossModel netem_style;
-    netem_style.set_random(hn::link_chance(asked), hn::link_chance(correlation), netem_rng);
-    u32 netem_lost = 0U;
-    for (u32 i = 0U; i < many_packets; ++i)
+    SECTION("normal, from the distribution table iproute2 installs")
     {
-        netem_lost += netem_style.next(netem_rng) ? 1U : 0U;
+        set_netem("delay 20ms 4ms distribution normal");
+        hn::DelayOptions options;
+        options.shape = hn::DelayShape::Normal;
+        options.mean_ns = mean_ns;
+        options.deviation_ns = 4'000'000;
+        compare_delays(kernel_delays(packets), model_delays(options, packets), 4'000'000.0);
     }
-
-    PhiloxRng chain_rng(501U, 9U);
-    hn::GilbertElliottChances chances;
-    REQUIRE(hn::gilbert_from_rate_and_correlation(asked, correlation, chances));
-    hn::LossModel chain;
-    chain.set_gilbert_elliott(chances);
-    u32 chain_lost = 0U;
-    for (u32 i = 0U; i < many_packets; ++i)
-    {
-        chain_lost += chain.next(chain_rng) ? 1U : 0U;
-    }
-
-    const f64 netem_rate = static_cast<f64>(netem_lost) / many_packets;
-    const f64 chain_rate = static_cast<f64>(chain_lost) / many_packets;
-    INFO("asked " << asked << ", netem's word " << netem_rate << ", the chain " << chain_rate);
-    CHECK(netem_rate < 0.7 * asked);
-    CHECK(chain_rate == Approx(asked).margin(3e-4));
 }
