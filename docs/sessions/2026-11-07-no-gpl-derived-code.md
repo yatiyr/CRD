@@ -49,7 +49,8 @@ FFTW, TetGen and CGAL appear only as comparison peers. Copyleft pins left are `t
 - `crd-hesap-link-netem` against the running kernel's netem: independent, simple and full Gilbert-Elliott, four states (a
   million packets each, chi-square on loss and received runs at about 1e-6) and uniform and normal delay (quantiles).
 - `crd-fuzz-hesap-link` rewritten and reseeded: 8.2 million ASan and UBSan executions, no finding.
-- Teeth: 16 of 18 caught; two are equivalent mutants (a lapse's `leaves` equals `ready_ns`; equal bytes give zero either way).
+- Teeth: 15 of 18 caught; two are equivalent mutants (a lapse's `leaves` equals `ready_ns`; equal bytes give zero either
+  way) and one did not compile (removing the clock's saturation left an unused constant).
 - [Board](../bench/2026-11-07-hesap-net-link-models.md). `crd-pins` refuses a GPL-family package that is neither a named
   permissive option nor a gated comparison, with its test.
 - The amalgamation rewrite (Ashcraft and Grimes 1989, Duff and Reid 1983), natural-order 16^3 stencil, new against old at
