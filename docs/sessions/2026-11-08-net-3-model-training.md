@@ -13,6 +13,13 @@ Dispatch 42413677756 (d7b506c8): win-clang-cl, linux-clang-tsan and both clang A
 `fuzz_link.cpp` (`-Wunused-lambda-capture` on `far`, a capture 3dda87d6 kept from 3f34263b). Fixed and pushed first
 (2e5c900a): `far` is `constexpr` and the lambda captures nothing, as the same file's `later` already did on every lane.
 Rebuilt and replayed on linux-clang-fuzz. Those lanes ran none of their tests, so the coded bodies wait for the next run.
+The same run's linux-gcc-release failed to link crd-containers-tests and crd-net-tests: GCC 13.3's link-time
+`-Warray-bounds` read `BitReader::read_at`'s guard `(m_end / 8) - byte >= 8` as passable on a 1- and 3-byte input.
+Both word paths now test `offset + 8 <= end` (8d5c9e63); the old form fails the same link here, the new one links, and
+both suites pass on linux-gcc-release (34,568 and 320,876 assertions) and linux-gcc-debug with the wire corpora.
+During those runs `crd-check-registers` died twice of SIGSEGV inside python3.12 itself (kernel: faults at two
+unrelated addresses on CPUs 17 and 7), then passed 12 runs alone and 16 under load: this host's known misexecution.
+Dispatch 42416903705 (aee27feb) holds the model tool; this fix follows it.
 
 ## What landed
 
