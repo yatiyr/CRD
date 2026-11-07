@@ -765,7 +765,9 @@ wire::WireError write_coded_body(const wire::ChannelDesc& channel, const wire::M
     }
     // The header's size depends on what coding gives, so the body waits behind the largest header there can be.
     const cont::Span<u8> room = out.subspan(kMaxFrameHeaderBytes);
-    const usize coded = coding.coder->encode(*coding.model, coding.max_ratio, plain, room);
+    // An empty coding (a channel with no model, or one whose model or coder could not start) travels stored.
+    const bool codes = coding.model != nullptr && coding.coder != nullptr;
+    const usize coded = codes ? coding.coder->encode(*coding.model, coding.max_ratio, plain, room) : 0U;
     const cont::ConstSpan<u8> body = (coded != 0U) ? cont::ConstSpan<u8>(room.first(coded)) : plain;
     if (room.size() < body.size())
     {

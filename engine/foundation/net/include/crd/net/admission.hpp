@@ -337,8 +337,8 @@ template <typename M>
 }
 
 // Writes one Sized or ToEnd frame of `plain`, the encoding of a message on `channel`, coded when that pays, its hash
-// taken over `plain`. A header's size depends on the coded body's, so `out` needs kMaxFrameHeaderBytes on top of the
-// body.
+// taken over `plain`; an empty `coding` writes it stored. A header's size depends on the coded body's, so `out` needs
+// kMaxFrameHeaderBytes on top of the body.
 [[nodiscard]] wire::WireError write_coded_body(const wire::ChannelDesc& channel, const wire::MessageDesc& message,
                                                const BodyCoding& coding, HeaderForm form, u64 object,
                                                cont::ConstSpan<u8> plain, cont::Span<u8> out, usize& written) noexcept;

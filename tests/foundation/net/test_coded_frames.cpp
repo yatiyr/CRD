@@ -379,6 +379,28 @@ TEST_CASE("Coded frames: a body that does not pay travels as it is, and is a vie
                         coding::kMinor, kObject, Span<u8>(out.data(), out.size()), written) == WireError::Ok);
     CHECK(written > blob.size());
     CHECK(written < blob.size() + 16U);
+
+    // An empty coding, or one missing its model or its coder, writes stored a body coding would shrink.
+    const Bytes text = plain_of(note_of(spaced_text(700U)));
+    const BodyCoding live = session.admission.coding(kCodedEvent);
+    REQUIRE(live.model != nullptr);
+    BodyCoding no_coder = live;
+    no_coder.coder = nullptr;
+    BodyCoding no_model = live;
+    no_model.model = nullptr;
+    for (const BodyCoding& empty : {BodyCoding{}, no_coder, no_model})
+    {
+        Bytes stored;
+        stored.resize(text.size() + crd::net::kMaxFrameHeaderBytes);
+        REQUIRE(crd::net::write_coded_body(coding::kChannels[kCodedEvent], coding::kMessages[0], empty,
+                                           HeaderForm::Sized, kObject, ConstSpan<u8>(text.data(), text.size()),
+                                           Span<u8>(stored.data(), stored.size()), written) == WireError::Ok);
+        const ReadHeader read = read_sized(ConstSpan<u8>(stored.data(), written),
+                                           frame_shape(coding::kChannels[kCodedEvent], coding::kMessages[0], true));
+        CHECK(read.tail.expanded == 0U);
+        CHECK(written - read.head_bytes == text.size());
+        CHECK(std::memcmp(stored.data() + read.head_bytes, text.data(), text.size()) == 0);
+    }
 }
 
 TEST_CASE("Coded frames: what a writer refuses", "[net][coding]")
