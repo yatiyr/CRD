@@ -323,8 +323,9 @@ TEST_CASE("clock drift: the line is the weighted normal equations' with the prio
             const double uncertainty = 1e-4 + (1e-6 * static_cast<double>(words.next_u32() % 1000U));
             REQUIRE(drift.add(time, offset, uncertainty));
             xs.push_back(static_cast<long double>(time) / 1e9L);
-            ys.push_back(offset);
-            ws.push_back(1.0L / (static_cast<long double>(uncertainty) * uncertainty));
+            ys.push_back(static_cast<long double>(offset));
+            const auto real_uncertainty = static_cast<long double>(uncertainty);
+            ws.push_back(1.0L / (real_uncertainty * real_uncertainty));
         }
         long double sum_w = 0.0L;
         long double sum_x = 0.0L;
@@ -752,7 +753,9 @@ TEST_CASE("clock tracker: exchanges at the ends of the clock range stay finite",
     for (u32 i = 0U; i < 20000U; ++i)
     {
         at += kSecond / 8;
-        const i64 peer = ends[words.next_u32() % 7U] + static_cast<i64>(words.next_u32() % 1000U);
+        const i64 end = ends[words.next_u32() % 7U];
+        const i64 inward = static_cast<i64>(words.next_u32() % 1000U);
+        const i64 peer = (end < 0) ? end + inward : end - inward; // Stays at the end, in range.
         const i64 rtt = static_cast<i64>(words.next_u32() % 100'000'000U);
         (void)tracker.on_exchange(at - rtt, peer, peer, at, kSecond);
         CHECK(std::isfinite(tracker.frequency()));
