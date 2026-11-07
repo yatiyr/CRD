@@ -1413,18 +1413,74 @@ from one authored schema through `scripts/gen-wire-schemas.py`; nothing hand-wri
 - **Decoding.** Linear in the bytes, no allocation: every element takes at least one bit, so a claimed count cannot
   multiply work. Bytes and text are spans of the input, and a list keeps where its validated elements lie and re-reads
   them when walked.
-- **Admission** (next slice of this row): a frame names its message and object before its body. S6 checks the declared
-  length against `MessageDesc`, the channel and the principal's quota before any buffer is reserved; S7 asks
-  `authorize_operation` with the message's operation bit, the object and the `Delivery` before the decoder reads a field.
+- **Admission** is [S27](#frames).
 - **Evidence.** Each schema gets a generated fuzz target. The generator's reference interpreter, which shares no code
   with the C++ it emits, computes known answers: `test_wire.cpp` holds the generated encoder and decoder to its bytes and
   its verdicts on damaged messages at every minor, older and newer writers included.
 
-Later slices of [NET.3](../ROADMAP.md#slice-net.3): frames and admission S6 and S7, quotas, reassembly and backpressure;
-baseline deltas with a changed-field mask; dictionary compression for reliable streams and entropy coding for snapshots
+Later slices of [NET.3](../ROADMAP.md#slice-net.3): baseline deltas with a changed-field mask; dictionary compression for reliable streams and entropy coding for snapshots
 through crd-compression (ratio and output caps, T09); padding policies (T15); the plaintext integrity hash and state-hash
 exchange (T12); the budget board. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
 a schema with quantised fields links `crd-net-quantized`, whose header sits outside crd-net's installed headers.
+
+<a id="frames"></a>
+### Frames and admission
+
+**S27. Frames, stages S6 and S7, quotas and reassembly** (NET.3, threats T07, T09 and T11;
+[frame.hpp](../../engine/foundation/net/include/crd/net/frame.hpp),
+[admission.hpp](../../engine/foundation/net/include/crd/net/admission.hpp),
+[reassembly.hpp](../../engine/foundation/net/include/crd/net/reassembly.hpp)). No socket and no session here: 4.2a's
+transport hands these functions a stream's or a datagram's plaintext after S4 and S5, and the time.
+
+- **The layout.** Every number is the wire formats' 7-bit varuint, shortest form only. A carrier names its route once: the
+  channel's number in the session's flat table of its schemas' channels, times four, plus the form (one byte for up to 32
+  channels). A stream is that route, then `[message][length][object?][body]` frames. A datagram is the route, then one
+  message running to its end (form Whole, no length), two or more sized frames (Listed: one is Whole's, so one message has
+  one encoding), or one fragment (`[message][total][object?][chunk][sequence][index][piece]`). The object is there only
+  when the message has an operation bit. The length comes before it so a reader can step over a message a newer writer
+  added, whose description it lacks.
+- **Order.** A stream or datagram refusal costs at most one header read: route and carrier, the principal's datagrams, the
+  message's description by binary search, its revision and channel, the declared length against its least and most (a newer
+  writer may pass this reader's most, never the channel's). Then S6 and S7.
+- **S6.** The channel's messages and bytes, the principal's messages and bytes, the capability's operations and bytes, each
+  a virtual-scheduling gate; then the principal's pending messages; then, for a frame that really arrives in pieces, its
+  length from the principal's reassembly quota. Nothing is spent until all of it holds, so a refusal here can be retried
+  and says when (`retry_at_ns`). A rate of zero is none at all. A gate is one 64-bit next-arrival time: exact on a simulated
+  clock and in integer nanoseconds, a message larger than the credit passes a clear gate and pays by the wait.
+- **S7.** Everything has been charged: refused traffic is not free. A schema above S18 needs its verified artefact (checked
+  against the generated identifier, kind and major at `bind()`) and a current capability, or `NoCapability`, then
+  `authorize_operation` with the message's bit, the object and the `Delivery`. A transport schema runs below S18 only for
+  a message with no operation on a control channel; anything else is `Undeclared`. Nothing has read a field of the body, and
+  on a refusal nothing will: it gives back its pending place and reservation, and no buffer ever existed. The session
+  withdraws a capability that expires or is revoked (`set_capability(nullptr)`); a renewal keeps what was spent.
+- **Actions.** Every verdict is counted and none answers the peer. A reliable channel cannot lose what it declared: a limit
+  holds its reader back (`Wait`, nothing consumed, so flow control reaches the sender), broken framing or a broken protocol
+  ends the session (`Close`, GoAway ProtocolError), and an S7 refusal or a newer message is stepped over (`Skip`, by its
+  length, with no buffer). An unreliable channel only drops. A refused stream is the stream's own end, not the session's.
+<a id="quotas"></a>
+- **Quotas.** One `PrincipalQuota` per principal across its sessions and loops, every counter atomic: streams, datagrams,
+  messages, bytes, reassembly bytes, pending messages, the capability's budget and its objects. Priorities keep headroom:
+  a limit leaves a channel the whole at priority 0 and an eighth less for each step down, so lower classes fill first and
+  overload sheds them first. Priority 0 keeps its own channel gates but the principal's other traffic
+  cannot close it (it is charged all the same): a session at its budget can still renew its capability. `SendBudget` is the
+  sender's side of the same rule: over its share a reliable message waits and an unreliable one is shed.
+- **Reassembly.** A frame all in hand is a view of the input, copying nothing. Only one that arrives in pieces takes a
+  buffer, of exactly its declared length, from an injected allocator's `try_allocate`, after S6 and S7: a refused message
+  costs no memory, and an allocator's refusal holds the reader back. A header split across reads waits in 20 bytes of carry
+  (its numbers have bounded widths). Fragments carry their message's whole description in each piece, so any may arrive
+  first, and hold to one shape: at least two pieces, at most 256, a chunk of at least 64 bytes, each piece exactly a
+  chunk or what is left, so overlaps do not exist and a slot is a fixed bitmap. A slot pool bounds the messages in pieces;
+  the oldest gives way to a newer one, a timeout gives it up, a State channel's newest message supersedes every older one, and
+  a window of 64 sequences keeps a finished or given-up message from opening again. Every piece must agree with its first
+  (message, object, total, chunk, delivery) or it is dropped; a repeat is written once.
+- **Revisions.** A transport schema is readable before its announcement, at its first minor, which is how
+  `RevisionAnnounce` travels (so it is always written at minor 0); a schema above S18 reads nothing before its announcement,
+  and a second announcement that differs ends the session.
+- **Evidence.** `test_admission.cpp`: known bytes of every header form; each refusal at its boundary with what it spends; a
+  stream at every split against the generated session control messages and their decoders, zero copies when whole; a
+  hostile path (loss to 30%, duplication, reordering) delivering each message intact at most once; quotas under threads.
+  `crd-fuzz-net-admission`: a restated layout and rule decide every verdict and frame, splits read as whole does, every budget
+  comes back. Source mutations, each caught ([session](../sessions/2026-11-07-net-3-admission.md)).
 
 <a id="key-logging"></a>
 ### Key logging
