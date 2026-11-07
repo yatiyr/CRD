@@ -57,6 +57,7 @@
     "Install pinned swtpm": {"presets": ["linux-gcc-public-checks"]},
     "Install pinned SoftHSM": {"presets": ["linux-gcc-public-checks"]},
     "Install pinned NASM": {"presets": ["linux-gcc-public-checks"]},
+    "Install pinned libwebrtc estimators": {"presets": ["linux-gcc-public-checks"]},
     "Install pinned Tamarin": {"presets": ["linux-gcc-public-checks"]},
     "Test at the sse2 level": {"presets": ["win-debug", "linux-gcc-debug"]}
   },
