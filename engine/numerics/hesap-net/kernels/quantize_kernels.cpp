@@ -25,6 +25,7 @@
 #include <crd/math/simd/vec16i.hpp>
 #endif
 
+#include <cstdint>
 #include <cstring>
 
 namespace crd::hesap::net::inline CRD_MATH_LEVEL_NS
@@ -71,15 +72,14 @@ CRD_FORCEINLINE void store_i32(I lanes, u32* out) noexcept
     std::memcpy(out, raw, sizeof(raw));
 }
 
-// [0, top] of a normalised value, NaN at 0, rounded by adding a half after the product has rounded and cut to the top.
+// [0, top] of a normalised value, rounded by adding a half after the product has rounded and cut to the top. NaN goes
+// to 0 because max answers its second operand on a NaN; that answer on two zeros is harmless, -0 and 0 both round to 0.
 CRD_FORCEINLINE I code_of(F normal, F top) noexcept
 {
-    const F zero = F::zero();
-    F clamped = select(cmp_ge(normal, zero), normal, zero);
-    clamped = select(cmp_le(clamped, F::one()), clamped, F::one());
+    const F clamped = min(max(normal, F::zero()), F::one());
     const F scaled = clamped * top;
     const F rounded = scaled + F(0.5F);
-    return crd::math::simd::convert_truncate(select(cmp_gt(rounded, top), top, rounded));
+    return crd::math::simd::convert_truncate(min(rounded, top));
 }
 
 CRD_FORCEINLINE void bounded_encode_block(const BoundedFloat& format, const f32* values, u32* codes) noexcept
@@ -88,8 +88,10 @@ CRD_FORCEINLINE void bounded_encode_block(const BoundedFloat& format, const f32*
     store_i32(code_of(normal, F(static_cast<f32>(format.max_code))), codes);
 }
 
-void bounded_encode(const BoundedFloat& format, const f32* values, usize count, u32* codes) noexcept
+// A store through codes may alias the shared format's u32 field, so a local copy keeps its broadcasts out of the loop.
+void bounded_encode(const BoundedFloat& shared, const f32* values, usize count, u32* codes) noexcept
 {
+    const BoundedFloat format = shared;
     usize i = 0U;
     for (; i + kLanes <= count; i += kLanes)
     {
@@ -105,16 +107,18 @@ void bounded_encode(const BoundedFloat& format, const f32* values, usize count, 
     }
 }
 
-// The refused lanes of the block, each -1. A code past 2^31 is a negative lane, so both comparisons are needed;
-// max_code is below 2^24.
+// The refused lanes of the block, each -1: an unsigned comparison, one signed compare past the sign flip of both sides.
 CRD_FORCEINLINE I bounded_decode_block(const BoundedFloat& format, const u32* codes, f32* values) noexcept
 {
     const I code = load_i32(codes);
-    const I bad = cmp_gt(code, I(static_cast<i32>(format.max_code))) | cmp_gt(I::zero(), code);
+    const I sign(INT32_MIN);
+    const I bad = cmp_gt(code ^ sign, I(static_cast<i32>(format.max_code)) ^ sign);
     const F normal = crd::math::simd::convert_to_float(code) / F(static_cast<f32>(format.max_code));
     const F scaled = normal * F(format.delta);
     const F value = scaled + F(format.min);
-    select(crd::math::simd::bitcast_to_float(bad), F(format.min), value).store(values);
+    const I blended = (bad & crd::math::simd::bitcast_to_int(F(format.min))) |
+                      and_not(bad, crd::math::simd::bitcast_to_int(value));
+    crd::math::simd::bitcast_to_float(blended).store(values);
     return bad;
 }
 
@@ -130,8 +134,9 @@ CRD_FORCEINLINE I bounded_decode_block(const BoundedFloat& format, const u32* co
     return total;
 }
 
-usize bounded_decode(const BoundedFloat& format, const u32* codes, usize count, f32* values) noexcept
+usize bounded_decode(const BoundedFloat& shared, const u32* codes, usize count, f32* values) noexcept
 {
+    const BoundedFloat format = shared;
     // Each lane counts down its refusals; folded every 2^30 values, so no lane can wrap whatever the batch's length.
     I refused = I::zero();
     usize total = 0U;
