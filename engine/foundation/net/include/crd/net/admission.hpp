@@ -337,14 +337,14 @@ template <typename M>
 }
 
 // Writes one Sized or ToEnd frame of `plain`, the encoding of a message on `channel`, coded when that pays, its hash
-// taken over `plain`; an empty `coding` writes it stored. A header's size depends on the coded body's, so `out` needs
-// kMaxFrameHeaderBytes on top of the body.
+// taken over `plain`. With no model in `coding` the frame is write_frame()'s; with a model and no coder its body
+// travels stored. A header's size depends on the coded body's, so `out` needs kMaxFrameHeaderBytes on top of the body.
 [[nodiscard]] wire::WireError write_coded_body(const wire::ChannelDesc& channel, const wire::MessageDesc& message,
                                                const BodyCoding& coding, HeaderForm form, u64 object,
                                                cont::ConstSpan<u8> plain, cont::Span<u8> out, usize& written) noexcept;
 
-// write_frame() on a channel that may code its bodies: `coding` is Admission::coding() of its channel, and empty just
-// writes the frame.
+// write_frame() on a channel that may code its bodies: `coding` is Admission::coding() of its channel, and with no
+// model just writes the frame.
 template <typename M>
 [[nodiscard]] inline wire::WireError write_frame(const wire::WireSchema& schema, const BodyCoding& coding,
                                                  HeaderForm form, const M& message, u16 minor, u64 object,
@@ -360,8 +360,15 @@ template <typename M>
     {
         return wire::WireError::OutOfRange;
     }
+    if (out.size() < kMaxFrameHeaderBytes)
+    {
+        return wire::WireError::NoRoom;
+    }
+    // With no coder there is no scratch: the message is encoded where its stored body may go, behind the largest
+    // header, and write_coded_body() moves it to sit behind the header it writes.
     usize plain = 0U;
-    const cont::Span<u8> scratch = coding.coder->scratch();
+    const cont::Span<u8> scratch =
+        (coding.coder != nullptr) ? coding.coder->scratch() : out.subspan(kMaxFrameHeaderBytes);
     const wire::WireError error = wire::encode(message, minor, scratch, plain);
     if (error != wire::WireError::Ok)
     {

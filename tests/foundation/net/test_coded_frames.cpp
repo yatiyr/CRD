@@ -380,27 +380,53 @@ TEST_CASE("Coded frames: a body that does not pay travels as it is, and is a vie
     CHECK(written > blob.size());
     CHECK(written < blob.size() + 16U);
 
-    // An empty coding, or one missing its model or its coder, writes stored a body coding would shrink.
-    const Bytes text = plain_of(note_of(spaced_text(700U)));
+    // Without a model the frame is the uncoded write_frame()'s; with a model and no coder (none could start) it keeps
+    // the coded header and its body travels stored, which the session admits. Either way, through both writers.
+    const coding::Note long_note = note_of(spaced_text(700U));
+    const Bytes text = plain_of(long_note);
+    Bytes uncoded;
+    uncoded.resize(text.size() + crd::net::kMaxFrameHeaderBytes);
+    usize uncoded_bytes = 0U;
+    REQUIRE(write_frame(coding::kSchema, HeaderForm::Sized, long_note, coding::kMinor, kObject,
+                        Span<u8>(uncoded.data(), uncoded.size()), uncoded_bytes) == WireError::Ok);
     const BodyCoding live = session.admission.coding(kCodedEvent);
     REQUIRE(live.model != nullptr);
     BodyCoding no_coder = live;
     no_coder.coder = nullptr;
     BodyCoding no_model = live;
     no_model.model = nullptr;
-    for (const BodyCoding& empty : {BodyCoding{}, no_coder, no_model})
+    for (const BodyCoding& partial : {BodyCoding{}, no_model, no_coder})
     {
         Bytes stored;
         stored.resize(text.size() + crd::net::kMaxFrameHeaderBytes);
-        REQUIRE(crd::net::write_coded_body(coding::kChannels[kCodedEvent], coding::kMessages[0], empty,
+        REQUIRE(crd::net::write_coded_body(coding::kChannels[kCodedEvent], coding::kMessages[0], partial,
                                            HeaderForm::Sized, kObject, ConstSpan<u8>(text.data(), text.size()),
                                            Span<u8>(stored.data(), stored.size()), written) == WireError::Ok);
+        Bytes framed;
+        framed.resize(stored.size());
+        usize framed_bytes = 0U;
+        REQUIRE(write_frame(coding::kSchema, partial, HeaderForm::Sized, long_note, coding::kMinor, kObject,
+                            Span<u8>(framed.data(), framed.size()), framed_bytes) == WireError::Ok);
+        REQUIRE(framed_bytes == written);
+        CHECK(std::memcmp(framed.data(), stored.data(), written) == 0);
+        if (partial.model == nullptr)
+        {
+            REQUIRE(written == uncoded_bytes);
+            CHECK(std::memcmp(stored.data(), uncoded.data(), written) == 0);
+            continue;
+        }
         const ReadHeader read = read_sized(ConstSpan<u8>(stored.data(), written),
                                            frame_shape(coding::kChannels[kCodedEvent], coding::kMessages[0], true));
         CHECK(read.tail.expanded == 0U);
         CHECK(written - read.head_bytes == text.size());
         CHECK(std::memcmp(stored.data() + read.head_bytes, text.data(), text.size()) == 0);
+        OpenStream reader(session);
+        const NoteRead back = read_note(session, reader, ConstSpan<u8>(stored.data(), written), written);
+        CHECK(back.serial == long_note.serial);
+        CHECK(back.text ==
+              bytes_of(ConstSpan<u8>(reinterpret_cast<const u8*>(long_note.text.data()), long_note.text.size())));
     }
+    session.check_all_given_back();
 }
 
 TEST_CASE("Coded frames: what a writer refuses", "[net][coding]")
