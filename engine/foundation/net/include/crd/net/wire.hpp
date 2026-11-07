@@ -93,6 +93,31 @@ struct WireSchema
     cont::ConstSpan<MessageDesc> messages;
 };
 
+// A message's description by identifier: the generated tables ascend, so a claimed identifier costs a binary search.
+[[nodiscard]] constexpr const MessageDesc* find_message(const WireSchema& schema, u32 id) noexcept
+{
+    usize low = 0U;
+    usize high = schema.messages.size();
+    while (low < high)
+    {
+        const usize middle = low + ((high - low) / 2U);
+        const u32 found = schema.messages[middle].id;
+        if (found == id)
+        {
+            return &schema.messages[middle];
+        }
+        if (found < id)
+        {
+            low = middle + 1U;
+        }
+        else
+        {
+            high = middle;
+        }
+    }
+    return nullptr;
+}
+
 // ---- Scalars: every put takes a checked value, every take reports what refused it. ----
 
 [[nodiscard]] constexpr WireError wire_error(bool ok, WireError error) noexcept

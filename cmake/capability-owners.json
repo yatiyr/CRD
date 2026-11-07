@@ -821,7 +821,7 @@
     },
     {
       "id": "network.transport",
-      "summary": "Sockets, transport, sessions, channels, bounded admission, wire negotiation with GREASE, link conditioning, NAT traversal, the client side of relays and capture: no other module opens a socket (network foundation D1).",
+      "summary": "Sockets, transport, sessions, channels, wire negotiation with GREASE, link conditioning, NAT traversal, the client side of relays and capture: no other module opens a socket (network foundation D1). It admits through network.admission.",
       "owner": "net",
       "api": [
         "engine/foundation/net/include/crd/net/negotiation.hpp",
@@ -832,6 +832,20 @@
         {"regex": "#\\s*include\\s*<(?:winsock2|ws2tcpip|mswsock|sys/socket|netinet/(?:in|tcp|udp)|arpa/inet|netdb)\\.h>", "what": "a socket header"}
       ],
       "decision": "docs/design/network-foundation.md D1: one owner for every path that can reach another machine. NET-STD's negotiation codec created the module (2026-10-31); 4.2a adds the transport."
+    },
+    {
+      "id": "network.admission",
+      "summary": "Frames and bounded admission stages S6 and S7: the route and frame headers, virtual-scheduling rate gates and gauges in integer time, per-principal quotas and send budgets, S18's verdict before any decode, and stream and fragment reassembly into buffers the quota has reserved (network foundation S27).",
+      "owner": "net",
+      "api": [
+        "engine/foundation/net/include/crd/net/admission.hpp",
+        "engine/foundation/net/include/crd/net/frame.hpp",
+        "engine/foundation/net/include/crd/net/quota.hpp",
+        "engine/foundation/net/include/crd/net/reassembly.hpp"
+      ],
+      "consumers": [
+        "4.2a"
+      ]
     },
     {
       "id": "network.wire-formats",

@@ -1485,9 +1485,9 @@ def header_text(schema, entry):
         lines += ['};', '']
         lines += [f'[[nodiscard]] constexpr bool enum_known({enum.name} value, [[maybe_unused]] u16 minor) noexcept',
                   '{', '    switch (value)', '    {']
-        for name, _, since in enum.values:
-            lines += [f'    case {enum.name}::{name}:',
-                      '        return true;' if since == 0 else f'        return minor >= {since}U;']
+        for since in sorted({value[2] for value in enum.values}):
+            lines += [f'    case {enum.name}::{name}:' for name, _, added in enum.values if added == since]
+            lines.append('        return true;' if since == 0 else f'        return minor >= {since}U;')
         lines += ['    default:', '        return false;', '    }', '}', '']
     message_by_type = {m['type'].name: m for m in schema.messages}
     for item in schema.ordered_structs():

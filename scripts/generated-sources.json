@@ -1886,7 +1886,7 @@
         "scripts/gen-wire-schemas.py",
         "--check"
       ],
-      "sha256": "b4ef9d40800f14c4171e0b49a8b780d497ac552c4aa969ec4220db12c3710978"
+      "sha256": "a78f42c70bbfaee9a29b93eaed3a1c46c5c36659fa79f240072ef6b3753a0fba"
     },
     {
       "path": "tests/foundation/net/fuzz/fuzz_wire_session_control.cpp",
@@ -1919,7 +1919,7 @@
         "scripts/gen-wire-schemas.py",
         "--check"
       ],
-      "sha256": "ad6e34b5a12ea7f6e2c99e9b113eb7ba55d7951a16913b51b49f111f1aadedd7"
+      "sha256": "9acc8534512eefb32afe97f922fff6a9fc0ea7d6dd43e7fb88ee41980bbcec33"
     },
     {
       "path": "tests/foundation/net/generated/wire_test_vectors.inc",

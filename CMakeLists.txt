@@ -687,8 +687,8 @@ crd_module(engine/foundation/crypto engine/crypto DEPENDS compression containers
     PACKAGES aws-lc tpm2-tss pkcs11
     TESTS foundation/crypto support/fuzz TEST_DEPENDS json memory
     TEST_PACKAGES wycheproof mls-vectors hpke-pq-vectors zstd)
-crd_module(engine/foundation/net engine/net DEPENDS containers core hesap-net TESTS foundation/net support/fuzz
-    TEST_DEPENDS crypto)
+crd_module(engine/foundation/net engine/net DEPENDS containers core crypto hesap-net memory
+    TESTS foundation/net support/fuzz)
 crd_module(engine/foundation/comply engine/comply DEPENDS containers core toml TESTS foundation/comply support/fuzz
     TEST_DEPENDS platform)
 crd_module(engine/ui/imgui engine/imgui

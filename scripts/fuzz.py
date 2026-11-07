@@ -55,6 +55,8 @@ TARGETS = {
                           'executable': 'tests/memory/fuzz/crd-fuzz-memory-allocators'},
     'net-negotiation': {'corpus': 'tests/foundation/net/fuzz/corpus',
                         'executable': 'tests/net/fuzz/crd-fuzz-net-negotiation'},
+    'net-admission': {'corpus': 'tests/foundation/net/fuzz/corpus-admission',
+                      'executable': 'tests/net/fuzz/crd-fuzz-net-admission'},
     'wire-session-control': {'corpus': 'tests/foundation/net/fuzz/corpus-wire-session-control',
                              'executable': 'tests/net/fuzz/crd-fuzz-wire-session-control'},
     'wire-test': {'corpus': 'tests/foundation/net/fuzz/corpus-wire-test',

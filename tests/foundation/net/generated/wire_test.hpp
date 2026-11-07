@@ -26,9 +26,7 @@ enum class Mode : u8
     switch (value)
     {
     case Mode::Off:
-        return true;
     case Mode::On:
-        return true;
     case Mode::Auto:
         return true;
     case Mode::Later:

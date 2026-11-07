@@ -30,17 +30,11 @@ enum class GoAwayReason : u8
     switch (value)
     {
     case GoAwayReason::Done:
-        return true;
     case GoAwayReason::Overloaded:
-        return true;
     case GoAwayReason::Maintenance:
-        return true;
     case GoAwayReason::Banned:
-        return true;
     case GoAwayReason::PolicyRefused:
-        return true;
     case GoAwayReason::RevisionRefused:
-        return true;
     case GoAwayReason::ProtocolError:
         return true;
     default:

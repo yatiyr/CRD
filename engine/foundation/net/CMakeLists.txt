@@ -2,9 +2,9 @@
 #
 # Ships the version and extension negotiation every Cerid wire protocol carries (NET-STD): offers, answers, GREASE
 # in every build, ignore-unknown, downgrade detection and the transcript bytes the handshake binds, with the
-# identifiers generated from the standards register (register_ids.hpp, scripts/gen-register-ids.py). Transport,
-# sessions, channels and admission land here with 4.2a and the NETCRASH rows. Contract:
-# docs/design/network-foundation.md#negotiation.
+# identifiers generated from the standards register (register_ids.hpp, scripts/gen-register-ids.py), and the generated
+# wire formats (NET.3) with their frames, admission stages S6 and S7, quotas and reassembly. Transport and sessions land
+# here with 4.2a and the NETCRASH rows. Contract: docs/design/network-foundation.md.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -20,6 +20,8 @@ target_link_libraries(crd-net
     PUBLIC
         crd-core
         crd-containers
+        crd-crypto # S7 asks S18's verdict (authorize_operation)
+        crd-memory # reassembly buffers come from an injected allocator
 )
 
 target_compile_features(crd-net PUBLIC cxx_std_20)

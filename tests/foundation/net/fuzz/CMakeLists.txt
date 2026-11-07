@@ -6,6 +6,13 @@
 crd_fuzz_target(crd-fuzz-net-negotiation
     SOURCES fuzz_negotiation.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 
+# Frames and admission (NET.3).
+#   crd-fuzz-net-admission   any bytes on a stream and in datagrams, against a restated frame layout and admission rule; a
+#                            stream at every split reading as it reads whole; fragments of generated messages on a hostile
+#                            path; every budget given back.
+crd_fuzz_target(crd-fuzz-net-admission
+    SOURCES fuzz_admission.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-admission")
+
 # The generated wire formats (NET.3): scripts/gen-wire-schemas.py writes one target per schema.
 #   crd-fuzz-wire-session-control   every message of the session control channel's generated decoder.
 #   crd-fuzz-wire-test              every field type, shape and revision rule of the schema language.
