@@ -1419,7 +1419,7 @@ from one authored schema through `scripts/gen-wire-schemas.py`; nothing hand-wri
   its verdicts on damaged messages at every minor, older and newer writers included.
 
 Later slices of [NET.3](../ROADMAP.md#slice-net.3): [baseline deltas](#baseline-deltas), [the integrity hash](#integrity-hash),
-[padding](#padding), [the state-hash exchange](#state-hashes) and [coded bodies](#body-coding) landed; the budget board remains. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
+[padding](#padding), [the state-hash exchange](#state-hashes) and [coded bodies](#body-coding) with the tool that trains their models landed; the budget board remains. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
 a schema with quantised fields links `crd-net-quantized`, whose header sits outside crd-net's installed headers.
 
 <a id="frames"></a>
@@ -1658,12 +1658,27 @@ channels.
   `MissingBaseline` one. What a delta rebuilds cannot be declared without spending bytes on every frame, and its work is bounded by
   the message's most anyway, so `Admission::read_delta` holds a closed byte gate first (`Throttled`, the same frame read again at
   `retry_at_ns`) and charges what it did expand to afterwards, paid by the wait that follows.
+- **Training a model.** `ceridc model train --kind entropy|dictionary --samples <dir> --out <model>` trains on a
+  directory of messages, one per file in name order, holding exactly what the channel codes (an encoded message, or a
+  delta's payload as `delta_encode` writes it): `EntropyTrainer` for entropy, `zstd_train_dictionary` into
+  `--dictionary-bytes` (default 4096, from 256 to 1 MiB) for a dictionary. Every `--holdout`th file (default 5; 0 for
+  none) is left out of training and measured apart, so the report says what the model does on messages it never saw.
+  `ceridc model measure --model <f>` measures any model, a raw dictionary included. Both load the model through
+  `BodyModel`, code every sample with `BodyCoder` exactly as a writer would (stored as it is when coding does not make
+  it smaller), decode each back, and print the hash, the bytes sent against the plain bytes in each set, the widest
+  ratio, and the schema's `models` entry with `max_ratio` the least power of two above that ratio (a message coded
+  wider is only stored); a dictionary trained on less than ten sample bytes per byte of room, which zstd asks for, is
+  reported `small-corpus`. The model is written last, whole or not at all; every refusal is typed and writes nothing.
+  Samples are bounded (64 MiB a message, 1 GiB together); a run trains once, so the same samples give the same bytes.
 - **Evidence.** `test_entropy.cpp`: bytes from `scripts/gen-entropy-vectors.py`, a restatement sharing no code, every state a
   one-byte message can decode from, the cost held within 1% of the model's entropy. `test_zstd_messages.cpp`. `test_coded_frames.cpp`:
   each form at every split, each cap at its boundary with what it spends, gates charged the expanded size, every byte of a coded frame
   flipped, bind's refusals, deltas on a path with loss, repeats and overtaking. `crd-fuzz-compression-messages` and
   `crd-fuzz-net-coded-frames`: a restated header rule and decode decide every verdict, every budget comes back
-  ([session](../sessions/2026-11-07-net-3-coded-bodies.md)).
+  ([session](../sessions/2026-11-07-net-3-coded-bodies.md)). `test_ceridc_model.cpp`: trained on the coded-frame tests'
+  deltas the tool writes the model `coding_test.json` pins, byte for byte; a measured raw dictionary reports the hash
+  that schema pins; sent bytes equal crd-net's coder's; training is deterministic; each refusal, and the real binary
+  ([session](../sessions/2026-11-08-net-3-model-training.md)).
 
 <a id="key-logging"></a>
 ### Key logging
