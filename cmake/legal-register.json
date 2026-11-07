@@ -11539,9 +11539,9 @@
       "sha256": "425623c09ba0917afbba2a92ae58714ac8c2fb2e606655ab42025055fe4e798d"
     },
     "EU": {
-      "generation": 10,
-      "reviewed": "2026-11-01",
-      "sha256": "9c6fc57e26e2c01a86b8bee1fac2b3b74703af34472f322c188368c287104a98"
+      "generation": 11,
+      "reviewed": "2026-11-07",
+      "sha256": "971159f7c7615f307825920c3b6fefdce91105535db596ac06e6ebb5cf0acac8"
     },
     "GB": {
       "generation": 8,

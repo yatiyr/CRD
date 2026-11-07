@@ -8079,6 +8079,17 @@ class ComplyRules(RegisterFixture, unittest.TestCase):
             code, output = self.guard(root, '2026-11-01')
             self.assertIn("TR's generation assets/comply/tr.rules.toml is missing", output)
 
+    def test_the_guard_refuses_a_register_change_no_generation_reviewed(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.tree(scratch, self.legal())
+            legal = json.loads((root / 'cmake/legal-register.json').read_text(encoding='utf-8'))
+            legal['entries'][0]['state'] = 'implemented' if legal['entries'][0]['state'] == 'planned' else 'planned'
+            (root / 'cmake/legal-register.json').write_text(json.dumps(legal), encoding='utf-8')
+            code, output = self.guard(root, '2026-11-01')
+            self.assertEqual(1, code)
+            self.assertIn("legal register: rule_generations: TR's rules changed since generation 1 was reviewed; "
+                          'review them with python scripts/gen-comply-rules.py --review TR', output)
+
     def test_the_guard_wants_one_well_formed_record_per_jurisdiction_with_rules(self):
         legal = self.legal()
         with tempfile.TemporaryDirectory() as scratch:

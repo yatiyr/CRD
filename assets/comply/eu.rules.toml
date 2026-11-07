@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review EU
 format = "cerid-rules/1"
 jurisdiction = "EU"
-generation = 10
+generation = 11
 register = "2026-11-01"
 
 [[scope]]
@@ -493,7 +493,7 @@ rows = ["COMPLY.7", "A11Y-GAME", "WEB.5", "STORE.2", "STORE.3"]
 id = "eu.dual-use"
 kind = "obligation"
 topic = "export-control"
-state = "planned"
+state = "implemented"
 title = "EU dual-use regulation: cryptography"
 instrument = "Regulation (EU) 2021/821 (dual-use items)"
 article = "Annex I Category 5 Part 2 and the cryptography note"

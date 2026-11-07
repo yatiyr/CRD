@@ -36,9 +36,9 @@ The guard fails, among the format errors, on:
     classification whose counsel is needed and not yet reviewed) that no open counsel review asks about, an open
     review asking about an item whose counsel is not outstanding, and a counsel answer that no answered review records
     (counsel never blocks implementation or a row: it is a dated, named review in `counsel_reviews`); and a rule
-    generation (assets/comply/<code>.rules.toml, scripts/gen-comply-rules.py) whose bytes differ from the digest its
-    review recorded in `rule_generations`, a jurisdiction with rules and no reviewed generation, or a record for a
-    jurisdiction without rules;
+    generation (assets/comply/<code>.rules.toml, scripts/gen-comply-rules.py) whose bytes, or whose rules as the
+    register now renders them, differ from the digest its review recorded in `rule_generations`, a jurisdiction with
+    rules and no reviewed generation, or a record for a jurisdiction without rules;
   - the cryptography of every standards entry (`cryptography`, which an algorithm's class fixes, and each algorithm's
     `key_bits`) and, in the legal domain (COMPLY.1), an export whose cryptography inventory (recomputed by
     scripts/gen-crypto-inventory.py from the build and the standards register) differs from the one its head
@@ -774,6 +774,14 @@ def review_errors(where, domain, review, entries, context):
     return errors
 
 
+def rendered_differs(code, record, register, rules):
+    """The register's rules no longer render to the reviewed bytes; a rule that cannot render is its entry's error."""
+    try:
+        return _rules.digest(_rules.render(code, record['generation'], register, rules)) != record['sha256']
+    except (KeyError, TypeError, _rules.RuleError):
+        return False
+
+
 def rule_generation_errors(register, context):
     """Every jurisdiction with rules has a reviewed generation whose committed file is the one reviewed."""
     where = 'legal register: rule_generations'
@@ -781,13 +789,14 @@ def rule_generation_errors(register, context):
     if not isinstance(records, dict):
         return [f'{where} maps each jurisdiction with rules to its reviewed generation']
     try:
-        holding = set(_rules.rules_by_jurisdiction(register))
+        holding = _rules.rules_by_jurisdiction(register)
     except (KeyError, TypeError):
         return []  # the entry errors name the malformed entry
     errors = [f'{where}: {code} has rules but no reviewed generation; review them with python '
-              f'{_rules.GENERATOR} --review {code}' for code in sorted(holding - set(records))]
-    errors += [f'{where}: {code} holds no rule, so it has no generation' for code in sorted(set(records) - holding)]
-    for code in sorted(holding & set(records)):
+              f'{_rules.GENERATOR} --review {code}' for code in sorted(set(holding) - set(records))]
+    errors += [f'{where}: {code} holds no rule, so it has no generation'
+               for code in sorted(set(records) - set(holding))]
+    for code in sorted(set(holding) & set(records)):
         record = records[code]
         keys = set(record) if isinstance(record, dict) else set()
         if keys != {'generation', 'reviewed', 'sha256'} or type(record['generation']) is not int or \
@@ -805,6 +814,9 @@ def rule_generation_errors(register, context):
         elif hashlib.sha256(path.read_bytes()).hexdigest() != record['sha256']:
             errors.append(f'{where}: {_rules.file_name(code)} changed since generation {record["generation"]} was '
                           f'reviewed; review it with python {_rules.GENERATOR} --review {code}')
+        elif rendered_differs(code, record, register, holding[code]):
+            errors.append(f'{where}: {code}\'s rules changed since generation {record["generation"]} was reviewed; '
+                          f'review them with python {_rules.GENERATOR} --review {code}')
     return errors
 
 

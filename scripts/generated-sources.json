@@ -1949,7 +1949,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "9c6fc57e26e2c01a86b8bee1fac2b3b74703af34472f322c188368c287104a98"
+      "sha256": "971159f7c7615f307825920c3b6fefdce91105535db596ac06e6ebb5cf0acac8"
     },
     {
       "path": "assets/comply/gb.rules.toml",
