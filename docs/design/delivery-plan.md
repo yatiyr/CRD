@@ -320,7 +320,7 @@ qualifies on available and software adapters (hardware split; QUAL.1-HW in P40).
 
 ### P21 Input, windows and the owned UI (crd-ui) with the CR-D007 shell
 
-Rows in order: I2D-0, INPUT.1, INPUT.2, INPUT.3, INPUT.4, INPUT.5, INPUT, WINDOW.1, WINDOW.2, WINDOW.3, MAINT-4, WINDOW,
+Rows in order: I2D-0, INPUT.1, INPUT.2, INPUT.3, INPUT.4, INPUT.5, INPUT, WINDOW.1, WINDOW.2, WINDOW.3, MAINT-4, WINDOW, WINDOW-OWN,
 I2D-1.a, I2D-1.b, I2D-1.c, I2D-1, I2D-2.a, I2D-2.b, I2D-2.c, I2D-2.d, I2D-2, I2D-3.a, I2D-3.b, I2D-3.c, COMPLY.7,
 I2D-3.d, I2D-3.e, I2D-3, I2D-4.a, I2D-4.b, I2D-4.c, I2D-4, I2D-5.a, I2D-5.b, I2D-5.c, I2D-5.d, I2D-5, I2D-6.a, I2D-6.b,
 I2D-6.c, I2D-6.d, I2D-6, I18N.1, I2D-7.a, I2D-7.b, I2D-7.c, I2D-7.d, I2D-7, I2D-8.a, I2D-8.b, I2D-8.c, I2D-8.d, I2D-8.e,
@@ -342,7 +342,7 @@ editor.
 
 ### P23 CR-D007 editor, agent control, guarded crash fixing, native authoring, onboarding
 
-Rows in order: EDITOR.1, VCS.2, EDITOR.2, EDITOR.3, EDITOR.4, EDITOR.5, SHIP.1, SHIP.2, SHIP.3, EDITOR.6, EDITOR.7,
+Rows in order: EDITOR.1, VCS.2, EDITOR.2, EDITOR.3, EDITOR.4, EDITOR.5, SHIP.1, SHIP.2, ZSTD-OWN, SHIP.3, EDITOR.6, EDITOR.7,
 SHIP.4, SHIP.5, DEBT-2, EDITOR, AGENT.4, AGENT.5, AGENT-BENCH, AGENT, NATIVE.1, NATIVE.2, NATIVE, CEIR-JIT.3, 6.3, DX.1,
 DX.2, DX.3, DX.4.
 
