@@ -41,11 +41,17 @@ or the workflow carries a literal digest, and when a GPL-family package breaks t
 
 ## Copyleft
 
-No code in Cerid derives from GPL, LGPL or AGPL code (user order, 2026-11-07). The engine, the tools and the committed
+Every line in Cerid is either Cerid's own text or comes from a source that lets Cerid change and use it freely in a
+closed, sold product, keeping only its notice (user order, 2026-11-07). No code derives from GPL, LGPL, AGPL or MPL code,
+from proprietary text such as Numerical Recipes, or from a source with no clear licence; any found is rewritten with no
+regression in correctness or speed. The engine, the tools and the committed
 tests, shims and test data hold no copied expression, structure, naming, comment or table from such a project. A model
 such a project also implements is written from its published sources (papers, RFCs, formulas), with any table generated
 by Cerid. Agreement with a copyleft implementation is never a reason to keep a line: where exact agreement would need
 copied structure, exact agreement goes and the implementation is compared statistically, held to the published law.
+
+New code is our own text by default. Code that follows a permissive source (MIT, BSD, Apache-2.0, BSL-1.0, public domain)
+may stay: its header names the source and licence, and the source's notice is kept.
 
 A copyleft project may be a comparison: off by default, never shipped, nothing of its text committed, at arm's length
 where it can be. `crd-hesap-link-netem-tests` is the example, driving the running kernel's netem through `tc`.

@@ -64,8 +64,8 @@ unresolved or a design gate is unaccepted. Never invent approval or tool results
 - Downloads: testing tools, SDKs, emulators and peer libraries are pre-approved; pin each in
   `cmake/pins.json`, own directory. Ask first for paid, non-testing or licence-restricted. Accounts, billing and
   credentials are user actions.
-- **Never copy code.** Any algorithm is allowed and may match another's results, but we write the text ourselves: no
-  pasting or translating other projects' code ([rule](docs/design/pinned-inputs.md#copyleft)).
+- **Write our own code.** Any algorithm may match others' results. Other text needs a licence
+  keeping Cerid closed and free to change it; else rewrite, no regression ([rule](docs/design/pinned-inputs.md#copyleft)).
 
 ## Completion and verification
 
