@@ -47,3 +47,8 @@ endif()
 
 # The negotiation decoder and handshake under the bounded fuzz harness, with its committed corpus.
 add_subdirectory(fuzz)
+
+# NET.3's serializer budget board against its pinned peers (CRD_BUILD_SERIALIZE_VS_PEERS, the root CMakeLists).
+if(CRD_BUILD_SERIALIZE_VS_PEERS)
+    add_subdirectory(board)
+endif()

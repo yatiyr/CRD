@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **36** · tools: **47** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **39** · tools: **47** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -42,6 +42,9 @@
 | ntp | 4.2.8p18 | NTP AND BSD-2-Clause | https://downloads.nwtime.org/ntp/4.2.8/ntp-4.2.8p18.tar.gz | `ntp-4.2.8p18.tar.gz` |
 | nanorq | 0-7d52fbeb | MIT | sleepybishop/nanorq (7d52fbebdc89) | `nanorq-7d52fbeb.tar.gz` |
 | serialize | 2.1.3 | BSD-3-Clause | mas-bandwidth/serialize @ `v2.1.3` (7bf1877b38cf) | `serialize-7bf1877b.tar.gz` |
+| bitsery | 5.2.5 | MIT | fraillt/bitsery @ `v5.2.5` (9bebfd4911b8) | `bitsery-9bebfd49.tar.gz` |
+| zpp_bits | 4.7.6 | MIT | eyalz800/zpp_bits @ `v4.7.6` (4a57ecd68a48) | `zpp_bits-4a57ecd6.tar.gz` |
+| protozero | 1.8.2 | BSD-2-Clause | mapbox/protozero @ `v1.8.2` (af2f6e274e0a) | `protozero-af2f6e27.tar.gz` |
 | networked-physics-snapshot | fe19b74b | BSD-3-Clause | mas-bandwidth/networked-physics-gdc-2015 (fe19b74bf78a) | `Snapshot.h` |
 | vectorial-quat4f | fe19b74b | BSD-2-Clause | mas-bandwidth/networked-physics-gdc-2015 (fe19b74bf78a) | `quat4f.h` |
 | kdis | 97f8e86a | BSD-2-Clause | karljj1/kdis (97f8e86a4c68) | `kdis-97f8e86a.tar.gz` |

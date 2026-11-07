@@ -93,6 +93,8 @@ option(CRD_BUILD_CLOCK_VS_NTPD "Build the clock filter's oracle against ntpd" OF
 # (cmake/pins.json networked-physics-snapshot), fetched on demand. Never in a shipped build;
 # crd-hesap-quantize-peer-tests and crd-hesap-quantize-board of the tree that turns it on.
 option(CRD_BUILD_QUANTIZE_VS_PEERS "Build the quantisation oracle and board against its two peers" OFF)
+# NET.3's serializer budget board (tests/foundation/net/board), which also needs the quantisation peers above.
+option(CRD_BUILD_SERIALIZE_VS_PEERS "Build the serializer budget board against its four peers" OFF)
 # HESAP-NET's interpolation against the same Snapshot.h and vectorial's quat4f.h from the same commit (cmake/pins.json
 # vectorial-quat4f) and its dead reckoning against KDIS (cmake/pins.json kdis), fetched on demand. Never in a shipped
 # build; crd-hesap-motion-peer-tests, crd-hesap-dead-reckoning-peer-tests and their boards
@@ -1629,6 +1631,38 @@ if(CRD_BUILD_QUANTIZE_VS_PEERS)
     crd_add_pinned_package(serialize DOWNLOAD_ONLY YES)
     crd_add_pinned_package(networked-physics-snapshot DOWNLOAD_ONLY YES DOWNLOAD_NO_EXTRACT YES)
     set(CRD_NETWORKED_PHYSICS_SNAPSHOT "${networked-physics-snapshot_SOURCE_DIR}/Snapshot.h")
+
+    # The compressed_quaternion structs cut verbatim from Snapshot.h, and with serialize.h and their stand-ins
+    # (tests/numerics/hesap-net/networked_physics.hpp) one target of peer code, here because two test trees use it:
+    # the quantisation peers and NET.3's serializer board.
+    file(READ "${CRD_NETWORKED_PHYSICS_SNAPSHOT}" snapshot_header)
+    string(FIND "${snapshot_header}" "template <int bits> struct compressed_quaternion\n" quaternion_slice_begin)
+    string(FIND "${snapshot_header}" "template <typename Stream> inline void serialize_compressed_quaternion("
+           quaternion_slice_end)
+    if(quaternion_slice_begin EQUAL -1 OR quaternion_slice_end LESS_EQUAL quaternion_slice_begin)
+        message(FATAL_ERROR "[quantize-vs-peers] compressed_quaternion not found in ${CRD_NETWORKED_PHYSICS_SNAPSHOT}")
+    endif()
+    math(EXPR quaternion_slice_length "${quaternion_slice_end} - ${quaternion_slice_begin}")
+    string(SUBSTRING "${snapshot_header}" ${quaternion_slice_begin} ${quaternion_slice_length} quaternion_slice)
+    set(quaternion_slice_dir "${CMAKE_BINARY_DIR}/_deps/networked-physics-slice")
+    file(CONFIGURE OUTPUT "${quaternion_slice_dir}/networked_physics_quaternion_slice.inc"
+         CONTENT "${quaternion_slice}" @ONLY)
+    add_library(crd-networked-physics-peer INTERFACE)
+    target_include_directories(crd-networked-physics-peer INTERFACE
+        "${PROJECT_SOURCE_DIR}/tests/numerics/hesap-net" "${quaternion_slice_dir}")
+    target_include_directories(crd-networked-physics-peer SYSTEM INTERFACE "${serialize_SOURCE_DIR}")
+endif()
+
+# ----- NET.3's serializer budget board: its peers, built by tests/foundation/net/board. serialize and the cut
+# quaternion come from the quantisation peers' target (crd-networked-physics-peer). -----
+if(CRD_BUILD_SERIALIZE_VS_PEERS)
+    if(NOT CRD_BUILD_TESTS OR NOT CRD_BUILD_QUANTIZE_VS_PEERS)
+        message(FATAL_ERROR
+            "[serialize-vs-peers] the serializer board needs CRD_BUILD_TESTS and CRD_BUILD_QUANTIZE_VS_PEERS")
+    endif()
+    crd_add_pinned_package(bitsery DOWNLOAD_ONLY YES)
+    crd_add_pinned_package(zpp_bits DOWNLOAD_ONLY YES)
+    crd_add_pinned_package(protozero DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The replicated-motion peer: its files, built by tests/numerics/hesap-net -----

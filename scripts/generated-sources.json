@@ -19,7 +19,7 @@
         "scripts/gen_license_manifest.py",
         "--check"
       ],
-      "sha256": "83c53f78e5880320e48d56ac00b3b06064f38095aa6d8f156987b2cf9600e6b6"
+      "sha256": "2d94677354d0aa25c45b50aa3efcaf8d88e8b42837881dea5e86e2ac6a68958c"
     },
     {
       "path": "docs/generated/gpu-platform-capability-matrix.md",
@@ -1964,6 +1964,17 @@
         "--check"
       ],
       "sha256": "0f260ca0e811e46f2a14a6716076326e734b513267fc09b2ab501799ef2698f6"
+    },
+    {
+      "path": "tests/foundation/net/generated/serialize_board.hpp",
+      "generator": "scripts/gen-wire-schemas.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-wire-schemas.py",
+        "--check"
+      ],
+      "sha256": "9dcd0116ae946a958986a8fe3f88636afd9f4d79f25024a946e8471acf4910fb"
     },
     {
       "path": "tests/foundation/net/generated/delta_test.hpp",

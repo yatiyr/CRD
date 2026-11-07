@@ -329,7 +329,49 @@
       "license": "BSD-3-Clause",
       "gated": "CRD_BUILD_QUANTIZE_VS_PEERS",
       "provenance": "Glenn Fiedler's serialize, the bit stream library of yojimbo, at its release tag (read 2026-11-07)",
-      "note": "The reference of hesap-net's bounded floats (HESAP-NET): compressed_float, whose two roundings its STANDARD.md makes normative. serialize.h as released, compiled by tests/numerics/hesap-net/quantize_peers.cpp only; never in a shipped build."
+      "note": "The reference of hesap-net's bounded floats (HESAP-NET): compressed_float, whose two roundings its STANDARD.md makes normative. serialize.h as released, compiled by tests/numerics/hesap-net/quantize_peers.cpp and NET.3's serializer board (tests/foundation/net/board) only; never in a shipped build."
+    },
+    "bitsery": {
+      "version": "5.2.5",
+      "repository": "fraillt/bitsery",
+      "ref": "v5.2.5",
+      "commit": "9bebfd4911b8ef52c5a67754ccb87a8fd5223414",
+      "url": "https://github.com/fraillt/bitsery/archive/9bebfd4911b8ef52c5a67754ccb87a8fd5223414.tar.gz",
+      "file": "bitsery-9bebfd49.tar.gz",
+      "sha256": "12d653cf59b53a5c1e536dad34642c8134b5d4785c13572b8b65b092d7933b28",
+      "size": 118614,
+      "license": "MIT",
+      "gated": "CRD_BUILD_SERIALIZE_VS_PEERS",
+      "provenance": "Mindaugas Vinkelis' bitsery, the header-only bit-packing serializer for games, at its latest release tag (read 2026-11-08)",
+      "note": "A bit-packing peer of NET.3's serializer budget board: include/ compiled by tests/foundation/net/board/peer_bitsery.cpp only; never in a shipped build."
+    },
+    "zpp_bits": {
+      "version": "4.7.6",
+      "repository": "eyalz800/zpp_bits",
+      "ref": "v4.7.6",
+      "commit": "4a57ecd68a481c2cd6e7ee94aaf83282a735fded",
+      "url": "https://github.com/eyalz800/zpp_bits/archive/4a57ecd68a481c2cd6e7ee94aaf83282a735fded.tar.gz",
+      "file": "zpp_bits-4a57ecd6.tar.gz",
+      "sha256": "8ad927992b59fcd989cf76510fd13cc888482ae6ad439c28632e3212f0c5e34d",
+      "size": 317659,
+      "license": "MIT",
+      "gated": "CRD_BUILD_SERIALIZE_VS_PEERS",
+      "provenance": "Eyal Z's zpp_bits, the C++20 byte serializer that leads the published serializer benchmarks, at its latest release tag (read 2026-11-08)",
+      "note": "A byte-oriented peer of NET.3's serializer budget board: zpp_bits.h compiled by tests/foundation/net/board/peer_zpp_bits.cpp only; never in a shipped build."
+    },
+    "protozero": {
+      "version": "1.8.2",
+      "repository": "mapbox/protozero",
+      "ref": "v1.8.2",
+      "commit": "af2f6e274e0a873a00e34d8c9ab99fca76898047",
+      "url": "https://github.com/mapbox/protozero/archive/af2f6e274e0a873a00e34d8c9ab99fca76898047.tar.gz",
+      "file": "protozero-af2f6e27.tar.gz",
+      "sha256": "d7548d78dcd297e4a492577c6a5ddf28b91716152b9830caf4100e5f3d405d0d",
+      "size": 1127726,
+      "license": "BSD-2-Clause",
+      "gated": "CRD_BUILD_SERIALIZE_VS_PEERS",
+      "provenance": "Mapbox's protozero, a minimal header-only codec of protobuf's wire format, at its latest release tag (read 2026-11-08)",
+      "note": "The protobuf-format peer of NET.3's serializer budget board: include/ compiled by tests/foundation/net/board/peer_protozero.cpp only; never in a shipped build."
     },
     "networked-physics-snapshot": {
       "version": "fe19b74b",

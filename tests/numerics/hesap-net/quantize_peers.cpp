@@ -1,60 +1,11 @@
-// The two peers of quantize_peers.hpp. serialize.h is included as the release ships it. The compressed_quaternion
-// structs are cut verbatim from the pinned networked-physics Snapshot.h at configure time (tests/numerics/hesap-net/
-// CMakeLists.txt) and compile on the few stand-ins below; `quat4f` holds the four floats, and `normalize` is the
-// identity because that source's is an SSE reciprocal square root estimate, which differs by CPU and no wire carries.
+// The two peers of quantize_peers.hpp: serialize.h as the release ships it and the compressed_quaternion structs cut
+// from the pinned networked-physics Snapshot.h, both through networked_physics.hpp.
 //
 // Built with the engine's floating-point contract (no contraction), as both sources require of a conforming build.
 
 #include "quantize_peers.hpp"
 
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): the release header reads this macro.
-#define SERIALIZE_ENABLE_TESTS 0
-#include <cmath>
-#include <cstdint>
-#include <cstring>
-#include <serialize.h>
-
-namespace vectorial
-{
-
-// NOLINTNEXTLINE(readability-identifier-naming): the name the cut source spells.
-struct quat4f
-{
-    float v[4];
-
-    quat4f() = default;
-
-    quat4f(float x, float y, float z, float w) : v{x, y, z, w} {}
-
-    void store(float* out) const { std::memcpy(out, v, sizeof(v)); }
-
-    static quat4f identity() { return quat4f(0.0F, 0.0F, 0.0F, 1.0F); }
-};
-
-inline quat4f normalize(const quat4f& q)
-{
-    return q;
-}
-
-} // namespace vectorial
-
-namespace math
-{
-
-inline float floor(float value)
-{
-    return std::floor(value);
-}
-
-} // namespace math
-
-// Peer code runs only on well-formed bit widths.
-#define CORE_ASSERT(condition)
-// The structs' bit stream members are never instantiated here.
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage,bugprone-macro-parentheses): a declaration the cut source spells.
-#define PROTOCOL_SERIALIZE_OBJECT(stream) template <typename Stream> bool Serialize(Stream& stream)
-
-#include "networked_physics_quaternion_slice.inc"
+#include "networked_physics.hpp"
 
 namespace quantize_peers
 {

@@ -1,0 +1,123 @@
+{
+  "format": "cerid-wire-schema/1",
+  "name": "serialize_board",
+  "about": "The serializer budget board's messages (NET.3): a game snapshot, an input command and a chat event, as a shooter or an MMO zone sends them.",
+  "id": "5e2b7d0c9a4f41b3b6c8d1e2f3a4b5c6",
+  "kind": "World",
+  "revision": {"major": 1, "minor": 0},
+  "history": {
+    "0": "09803bf634df78c875a2fef55678e99ddca392e98c3fbeef627631e8ad3165c5"
+  },
+  "operations": {
+    "play": {"bit": 0, "idempotent": true}
+  },
+  "channels": [
+    {
+      "name": "state",
+      "class": "State",
+      "idempotent": true,
+      "priority": 3,
+      "max_message_bytes": 4096,
+      "messages_per_s": 60,
+      "bytes_per_s": 400000,
+      "padding_block": 0
+    },
+    {
+      "name": "input",
+      "class": "Input",
+      "idempotent": true,
+      "priority": 4,
+      "max_message_bytes": 64,
+      "messages_per_s": 128,
+      "bytes_per_s": 8192,
+      "padding_block": 0
+    },
+    {
+      "name": "chat",
+      "class": "Event",
+      "idempotent": false,
+      "priority": 1,
+      "max_message_bytes": 512,
+      "messages_per_s": 4,
+      "bytes_per_s": 4096,
+      "padding_block": 0
+    }
+  ],
+  "enums": {
+    "Stance": {
+      "bits": 2,
+      "values": [
+        {"name": "Idle", "value": 0},
+        {"name": "Walk", "value": 1},
+        {"name": "Run", "value": 2},
+        {"name": "Crouch", "value": 3}
+      ]
+    },
+    "Room": {
+      "bits": 2,
+      "values": [
+        {"name": "All", "value": 0},
+        {"name": "Team", "value": 1},
+        {"name": "Squad", "value": 2},
+        {"name": "Whisper", "value": 3}
+      ]
+    }
+  },
+  "structs": {
+    "Entity": {
+      "fields": [
+        {"name": "id", "type": "range", "min": 0, "max": 1023},
+        {"name": "x", "type": "bounded", "min": -512.0, "max": 512.0, "resolution": 0.001, "delta_group": 3},
+        {"name": "y", "type": "bounded", "min": -512.0, "max": 512.0, "resolution": 0.001, "delta_group": 3},
+        {"name": "z", "type": "bounded", "min": -512.0, "max": 512.0, "resolution": 0.001, "delta_group": 3},
+        {"name": "turn", "type": "quaternion", "bits": 9},
+        {"name": "vx", "type": "bounded", "min": -32.0, "max": 32.0, "resolution": 0.01, "delta_group": 3},
+        {"name": "vy", "type": "bounded", "min": -32.0, "max": 32.0, "resolution": 0.01, "delta_group": 3},
+        {"name": "vz", "type": "bounded", "min": -32.0, "max": 32.0, "resolution": 0.01, "delta_group": 3},
+        {"name": "health", "type": "range", "min": 0, "max": 100},
+        {"name": "stance", "type": "Stance"},
+        {"name": "firing", "type": "bool"},
+        {"name": "target", "type": "range", "min": 0, "max": 1023, "optional": true}
+      ]
+    }
+  },
+  "messages": [
+    {
+      "name": "Snapshot",
+      "id": 1,
+      "channel": "state",
+      "operation": "play",
+      "delta": true,
+      "fields": [
+        {"name": "tick", "type": "varuint", "max": 4294967295, "group": 7, "delta_group": 2},
+        {"name": "entities", "type": "list", "of": {"type": "Entity"}, "max": 64, "delta_key": "id"}
+      ]
+    },
+    {
+      "name": "Command",
+      "id": 2,
+      "channel": "input",
+      "operation": "play",
+      "fields": [
+        {"name": "tick", "type": "varuint", "max": 4294967295, "group": 7},
+        {"name": "buttons", "type": "uint", "bits": 16},
+        {"name": "yaw", "type": "bounded", "min": -180.0, "max": 180.0, "resolution": 0.01},
+        {"name": "pitch", "type": "bounded", "min": -90.0, "max": 90.0, "resolution": 0.01},
+        {"name": "move_x", "type": "range", "min": -127, "max": 127},
+        {"name": "move_y", "type": "range", "min": -127, "max": 127}
+      ]
+    },
+    {
+      "name": "Chat",
+      "id": 3,
+      "channel": "chat",
+      "operation": "play",
+      "fields": [
+        {"name": "sender", "type": "range", "min": 0, "max": 1023},
+        {"name": "room", "type": "Room"},
+        {"name": "text", "type": "text", "max": 200},
+        {"name": "mentions", "type": "list", "of": {"type": "range", "min": 0, "max": 1023}, "max": 8}
+      ]
+    }
+  ]
+}

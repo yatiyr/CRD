@@ -62,6 +62,11 @@ OUTPUTS = [
         'header': 'tests/foundation/net/generated/coding_test.hpp',
         'include': 'generated/coding_test.hpp',
     },
+    {
+        'schema': 'tests/foundation/net/schemas/serialize_board.json',
+        'header': 'tests/foundation/net/generated/serialize_board.hpp',
+        'include': 'generated/serialize_board.hpp',
+    },
 ]
 
 SCOPE_KINDS = {'transport': 0, 'World': 1, 'Project': 2, 'Room': 3, 'Upload': 4, 'Tool': 5, 'Service': 6}

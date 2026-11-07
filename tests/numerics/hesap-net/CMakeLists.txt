@@ -334,24 +334,12 @@ if(CRD_BUILD_CLOCK_VS_NTPD)
 endif()
 
 # HESAP-NET's quantisation peers (CRD_BUILD_QUANTIZE_VS_PEERS, the root CMakeLists): serialize.h as released and the
-# compressed_quaternion structs cut verbatim from the pinned Snapshot.h, with the engine's floating-point contract.
+# compressed_quaternion structs cut verbatim from the pinned Snapshot.h (crd-networked-physics-peer, made there), with
+# the engine's floating-point contract.
 # crd-hesap-quantize-peer-tests holds hesap-net to them bit for bit; crd-hesap-quantize-board times them.
 if(CRD_BUILD_QUANTIZE_VS_PEERS)
-    file(READ "${CRD_NETWORKED_PHYSICS_SNAPSHOT}" snapshot_header)
-    string(FIND "${snapshot_header}" "template <int bits> struct compressed_quaternion\n" quaternion_slice_begin)
-    string(FIND "${snapshot_header}" "template <typename Stream> inline void serialize_compressed_quaternion("
-           quaternion_slice_end)
-    if(quaternion_slice_begin EQUAL -1 OR quaternion_slice_end LESS_EQUAL quaternion_slice_begin)
-        message(FATAL_ERROR "[quantize-vs-peers] compressed_quaternion not found in ${CRD_NETWORKED_PHYSICS_SNAPSHOT}")
-    endif()
-    math(EXPR quaternion_slice_length "${quaternion_slice_end} - ${quaternion_slice_begin}")
-    string(SUBSTRING "${snapshot_header}" ${quaternion_slice_begin} ${quaternion_slice_length} quaternion_slice)
-    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/quantize-slice/networked_physics_quaternion_slice.inc"
-         CONTENT "${quaternion_slice}" @ONLY)
-
     add_library(crd-quantize-peers STATIC quantize_peers.cpp)
-    target_include_directories(crd-quantize-peers PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/quantize-slice")
-    target_include_directories(crd-quantize-peers SYSTEM PRIVATE "${serialize_SOURCE_DIR}")
+    target_link_libraries(crd-quantize-peers PRIVATE crd-networked-physics-peer)
     target_include_directories(crd-quantize-peers PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_features(crd-quantize-peers PUBLIC cxx_std_20)
     target_compile_options(crd-quantize-peers PRIVATE ${CRD_FP_CONTRACT_OPTIONS} $<$<CXX_COMPILER_ID:GNU,Clang>:-w>)

@@ -1,0 +1,64 @@
+// The serializer board's messages in protobuf (peer_protozero.cpp writes and reads this format); crd-net's are
+// tests/foundation/net/schemas/serialize_board.json.
+syntax = "proto3";
+
+package serialize_board;
+
+enum Stance
+{
+    IDLE = 0;
+    WALK = 1;
+    RUN = 2;
+    CROUCH = 3;
+}
+
+enum Room
+{
+    ALL = 0;
+    TEAM = 1;
+    SQUAD = 2;
+    WHISPER = 3;
+}
+
+message Entity
+{
+    uint32 id = 1;
+    float x = 2;
+    float y = 3;
+    float z = 4;
+    float qx = 5;
+    float qy = 6;
+    float qz = 7;
+    float qw = 8;
+    float vx = 9;
+    float vy = 10;
+    float vz = 11;
+    uint32 health = 12;
+    Stance stance = 13;
+    bool firing = 14;
+    optional uint32 target = 15;
+}
+
+message Snapshot
+{
+    uint32 tick = 1;
+    repeated Entity entities = 2;
+}
+
+message Command
+{
+    uint32 tick = 1;
+    uint32 buttons = 2;
+    float yaw = 3;
+    float pitch = 4;
+    sint32 move_x = 5;
+    sint32 move_y = 6;
+}
+
+message Chat
+{
+    uint32 sender = 1;
+    Room room = 2;
+    string text = 3;
+    repeated uint32 mentions = 4;
+}
