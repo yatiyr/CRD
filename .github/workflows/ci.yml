@@ -970,9 +970,10 @@ jobs:
       # network namespace needs Ubuntu's restriction on unprivileged user namespaces lifted and the qdisc's module loaded.
       - name: Allow netem in a user namespace
         if: matrix.preset == 'linux-gcc-public-checks'
+        timeout-minutes: 15
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sudo modprobe sch_netem || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe sch_netem; }
+          sudo modprobe sch_netem || { python scripts/install-apt-packages.py "linux-modules-extra-$(uname -r)" && sudo modprobe sch_netem; }
 
       # The pinned libwebrtc files (tools/webrtc-bwe-sources) are the oracles and boards of HESAP-NET's delay trend,
       # acknowledged rate, media clock pair, FlexFEC and RED (CRD_BUILD_ESTIMATORS_VS_WEBRTC): each file checked against
