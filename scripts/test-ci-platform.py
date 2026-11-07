@@ -830,8 +830,8 @@ class BenchMachine(unittest.TestCase):
 
         def runner(args, **kwargs):
             calls.append(args)
-            found = 'describe' in args and len(calls) > 1
-            return subprocess.CompletedProcess(args, 0 if found else 1, '{}', '')
+            absent = 'describe' in args
+            return subprocess.CompletedProcess(args, 1 if absent else 0, '', '')
 
         vm = bench_vm.BenchVm(runner=runner, which=lambda name: '/usr/bin/gcloud', sleep=lambda s: None)
         vm.wait_ssh = lambda: None
