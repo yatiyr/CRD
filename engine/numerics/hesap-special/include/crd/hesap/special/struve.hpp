@@ -4,10 +4,10 @@
 //   H_ν(x) = Σ_{m≥0} (−1)^m (x/2)^{2m+ν+1} / (Γ(m+3/2)Γ(m+ν+3/2))   (alternating ⇒ cancels for large x)
 //   L_ν(x) = Σ_{m≥0}        (x/2)^{2m+ν+1} / (Γ(m+3/2)Γ(m+ν+3/2))   (all-positive ⇒ accurate everywhere)
 // H_ν: ascending series for x < 16; for larger x the asymptotic H_ν = Y_ν + (1/π)Σ Γ(m+½)/Γ(ν−m+½)(x/2)^{ν−2m−1}
-// (DLMF 11.6.1, optimal truncation), reusing the bessjy Y_ν already in this module. Gated vs scipy.special.struve /
-// modstruve to <1e-12 (H crossover x≈12–16 ~1e-10, documented). Internals f64.
+// (DLMF 11.6.1, optimal truncation), reusing the bes_jy_core Y_ν already in this module. Gated vs scipy.special.struve
+// / modstruve to <1e-12 (H crossover x≈12–16 ~1e-10, documented). Internals f64.
 
-#include <crd/hesap/special/bessel.hpp> // detail::bessjy (Y_ν for the H asymptotic)
+#include <crd/hesap/special/bessel.hpp> // detail::bes_jy_core (Y_ν for the H asymptotic)
 #include <crd/hesap/special/gamma.hpp>
 
 #include <crd/math/cmath.hpp>
@@ -40,11 +40,7 @@ namespace detail
     {
         return struve_series(nu, x, -1.0);
     }
-    double rj = 0.0;
-    double ry = 0.0;
-    double rjp = 0.0;
-    double ryp = 0.0;
-    bessjy(x, nu, rj, ry, rjp, ryp); // Y_ν
+    const double ry = bes_jy_core(x, nu).y; // Y_ν
     const double half = 0.5 * x;
     double asum = 0.0;
     double prev = 1e300;

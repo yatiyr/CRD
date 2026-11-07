@@ -2,8 +2,10 @@
 
 // crd-hesap-special v12-b — Airy Ai/Bi (+ derivatives) and Kelvin ber/bei/ker/kei.
 //
-// Airy via the Bessel connection (NR §6.7 `airy`): with ζ = (2/3)|x|^{3/2}, Ai/Bi reduce to K_{1/3},I_{1/3} (x>0) or
-// J_{±1/3},Y_{±1/3} (x<0) of order 1/3 and 2/3 — riding the gold-standard `bessjy`/`bessik` core. Exact at x=0.
+// Airy via the Bessel connection (DLMF §9.6), the route Numerical Recipes §6.7 `airy` also takes: with
+// ζ = (2/3)|x|^{3/2}, Ai/Bi reduce to K_{1/3},I_{±1/3} (x>0) or J_{±1/3} (x<0) of order 1/3 and 2/3 — riding the
+// gold-standard bes_ik_core/bes_jy_core of bessel.hpp. The branch formulas below are written from DLMF 9.6.2–9.6.9 and
+// the reflections I_{−ν} (DLMF 10.27.2) and J_{−ν} (DLMF 10.2.3). Exact at x=0.
 // Kelvin ber/bei/ker/kei via their ascending series (exact factorial coefficients + digamma for the 2nd-kind ψ
 // terms); accurate for moderate |x| (the common regime), gated vs scipy. All gated vs scipy.special (airy, ker/kei…).
 
@@ -20,8 +22,9 @@ namespace detail
 inline constexpr double kAiInvRt3 = 0.577350269189625764509148780501957456; // 1/√3
 inline constexpr double kAiThird = 1.0 / 3.0;
 inline constexpr double kAiTwoThird = 2.0 / 3.0;
-inline constexpr double kAi0 = 0.355028053887817239260063186004183682;   // Ai(0)  = 3^{-2/3}/Γ(2/3)
-inline constexpr double kAip0 = -0.258819403792806798405183560189525976; // Ai'(0) = −3^{-1/3}/Γ(1/3)
+inline constexpr double kAiSinThird = 0.866025403784438646763723170752936183; // sin(π/3) = sin(2π/3) = √3/2
+inline constexpr double kAi0 = 0.355028053887817239260063186004183682;        // Ai(0)  = 3^{-2/3}/Γ(2/3)
+inline constexpr double kAip0 = -0.258819403792806798405183560189525976;      // Ai'(0) = −3^{-1/3}/Γ(1/3)
 
 // Ai, Bi, Ai', Bi' at once.
 inline void airy_all(double x, double& ai, double& bi, double& aip, double& bip) noexcept
@@ -68,32 +71,42 @@ inline void airy_all(double x, double& ai, double& bi, double& aip, double& bip)
         return;
     }
     const double rootx = crd::math::sqrt(absx);
-    const double z = kAiTwoThird * absx * rootx;
+    const double zeta = kAiTwoThird * absx * rootx; // ζ = (2/3)|x|^{3/2}
     if (x > 0.0)
     {
-        double ri = 0.0;
-        double rk = 0.0;
-        double rip = 0.0;
-        double rkp = 0.0;
-        bessik(z, kAiThird, ri, rk, rip, rkp);
-        ai = rootx * kAiInvRt3 * rk / kBesPi;
-        bi = rootx * (rk / kBesPi + 2.0 * kAiInvRt3 * ri);
-        bessik(z, kAiTwoThird, ri, rk, rip, rkp);
-        aip = -x * kAiInvRt3 * rk / kBesPi;
-        bip = x * (rk / kBesPi + 2.0 * kAiInvRt3 * ri);
+        // DLMF 9.6.2–9.6.5 for ζ = (2/3)x^{3/2}:
+        //   Ai = (1/π)√(x/3) K_{1/3},          Ai' = −(x/(π√3)) K_{2/3},
+        //   Bi = √(x/3) (I_{−1/3} + I_{1/3}),  Bi' = (x/√3) (I_{−2/3} + I_{2/3}).
+        // I_{−ν} is not computed by the core; DLMF 10.27.2 gives I_{−ν} = I_ν + (2/π) sin(νπ) K_ν, and sin(νπ) is
+        // √3/2 for both ν = 1/3 and ν = 2/3.
+        const BesIK third = bes_ik_core(zeta, kAiThird);
+        const BesIK two = bes_ik_core(zeta, kAiTwoThird);
+        const double i_neg_third = third.i + (2.0 / kBesPi) * kAiSinThird * third.k;
+        const double i_neg_two = two.i + (2.0 / kBesPi) * kAiSinThird * two.k;
+        const double root_x_third = rootx * kAiInvRt3; // √(x/3)
+        const double x_over_rt3 = x * kAiInvRt3;       // x/√3
+        ai = root_x_third * third.k / kBesPi;
+        aip = -x_over_rt3 * two.k / kBesPi;
+        bi = root_x_third * (i_neg_third + third.i);
+        bip = x_over_rt3 * (i_neg_two + two.i);
     }
     else if (x < 0.0)
     {
-        double rj = 0.0;
-        double ry = 0.0;
-        double rjp = 0.0;
-        double ryp = 0.0;
-        bessjy(z, kAiThird, rj, ry, rjp, ryp);
-        ai = 0.5 * rootx * (rj - kAiInvRt3 * ry);
-        bi = -0.5 * rootx * (ry + kAiInvRt3 * rj);
-        bessjy(z, kAiTwoThird, rj, ry, rjp, ryp);
-        aip = 0.5 * absx * (kAiInvRt3 * ry + rj);
-        bip = 0.5 * absx * (kAiInvRt3 * rj - ry);
+        // DLMF 9.6.6–9.6.9 for z = −x > 0 and ζ = (2/3)z^{3/2}:
+        //   Ai(−z) = (√z/3) (J_{1/3} + J_{−1/3}),          Ai'(−z) = (z/3) (J_{2/3} − J_{−2/3}),
+        //   Bi(−z) = √(z/3) (J_{−1/3} − J_{1/3}),          Bi'(−z) = (z/√3) (J_{−2/3} + J_{2/3}).
+        // J_{−ν} comes from the reflection J_{−ν} = cos(νπ) J_ν − sin(νπ) Y_ν (DLMF 10.2.3 with 10.2.4's Y), where
+        // cos(π/3) = ½, cos(2π/3) = −½ and sin is √3/2 for both orders.
+        const BesJY third = bes_jy_core(zeta, kAiThird);
+        const BesJY two = bes_jy_core(zeta, kAiTwoThird);
+        const double j_neg_third = 0.5 * third.j - kAiSinThird * third.y;
+        const double j_neg_two = -0.5 * two.j - kAiSinThird * two.y;
+        const double root_z_third = rootx * kAiInvRt3; // √(z/3)
+        const double z_over_rt3 = absx * kAiInvRt3;    // z/√3
+        ai = (rootx / 3.0) * (third.j + j_neg_third);
+        aip = (absx / 3.0) * (two.j - j_neg_two);
+        bi = root_z_third * (j_neg_third - third.j);
+        bip = z_over_rt3 * (j_neg_two + two.j);
     }
     else
     {
@@ -216,7 +229,8 @@ inline void kelvin_all(double x, double& ber, double& bei, double& ker, double& 
         term_bi *= -t * t / (e2k * e2k);
         sbei += term_bi;
         skei += digamma(2.0 * k + 2.0) * term_bi;
-        if (crd::math::fabs(term_br) + crd::math::fabs(term_bi) < 1e-18 * (crd::math::fabs(sber) + crd::math::fabs(sbei)))
+        if (crd::math::fabs(term_br) + crd::math::fabs(term_bi) <
+            1e-18 * (crd::math::fabs(sber) + crd::math::fabs(sbei)))
         {
             break;
         }

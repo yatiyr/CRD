@@ -2,13 +2,16 @@
 
 // crd-hesap-special v12-b — Bessel & Hankel functions (real order, real argument), gold-standard.
 //
-// Cylindrical J_ν, Y_ν, I_ν, K_ν (+ derivatives) via the STEED/TEMME method (Numerical Recipes §6.7 `bessjy`/`bessik`,
-// the same algorithm GSL and Boost build on): CF1 (Lentz continued fraction) for the logarithmic derivative, downward
-// recurrence to a base order μ ∈ [−½,½], then either Temme's power series (x small) or Steed's CF2 (x large) for the
-// base values, normalised by the Wronskian, then upward recurrence in order. No fragile rational-coefficient tables —
-// only continued fractions + a tiny Chebyshev fit for the Γ-ratios near μ=0. Accurate to ~1e-14 over the whole range.
-// Spherical j_n/y_n (closed-form recurrence), Hankel H^(1,2) = J ± iY. Internals compute in f64; the public templates
-// cast for f32. Gated vs scipy.special (jv/yv/iv/kv/spherical_jn/yn) to <1e-13.
+// Cylindrical J_ν, Y_ν, I_ν, K_ν (+ derivatives) by the Steed/Temme method (Temme 1975, J. Comp. Phys. 19 for K; Temme
+// 1976, J. Comput. Phys. 21 for Y; Barnett, Feng, Steed and Goldfarb 1974; Thompson and Barnett 1986; DLMF chapter 10),
+// organised the way Numerical Recipes §6.7 organises `bessjy`/`bessik`. The code text below is Cerid's own, written
+// from those papers; the Chebyshev table of bes_temme_gammas and the step-count rule of bes_base_steps/bes_jy_steps
+// keep their Numerical Recipes origin. CF1 (Lentz continued fraction) gives the logarithmic derivative, a downward
+// recurrence carries it to a base order μ ∈ [−½,½], then Temme's power series (x small) or Steed's CF2 (x large) gives
+// the base values, which the Wronskian normalises, and an upward recurrence in order finishes. No fragile
+// rational-coefficient tables, only continued fractions and a tiny Chebyshev fit for the Γ-ratios near μ=0. Accurate to
+// ~1e-14 over the whole range. Spherical j_n/y_n (closed-form recurrence), Hankel H^(1,2) = J ± iY. Internals compute
+// in f64; the public templates cast for f32. Gated vs scipy.special (jv/yv/iv/kv/spherical_jn/yn) to <1e-13.
 
 #include <crd/hesap/special/gamma.hpp> // Real concept
 
@@ -21,61 +24,113 @@ namespace crd::hesap::special
 namespace detail
 {
 inline constexpr double kBesPi = 3.14159265358979323846264338327950288;
-inline constexpr double kBesEps = 1.0e-16;
-inline constexpr double kBesFpMin = 1.0e-300;
-inline constexpr double kBesXMin = 2.0;
-inline constexpr int kBesMaxIt = 10000;
+inline constexpr double kBesRelTol = 1.0e-16; // convergence test of the series and fractions; small-argument limit
+inline constexpr double kBesTiny = 1.0e-300;  // floor that keeps Lentz's tails and the unnormalised seed off zero
+inline constexpr double kBesTemmeLimit = 2.0; // below: Temme's series; from here on: Steed's CF2
+inline constexpr int kBesIterCap = 10000;
 
-// Chebyshev evaluation on [a,b] (Clenshaw). c[0..m-1].
-[[nodiscard]] inline double bes_chebev(double a, double b, const double* c, int m, double x) noexcept
+// Small value types: a pair of neighbouring orders, the four results of the J/Y and I/K cores, a complex number, and
+// the Γ-ratio set of Temme's series.
+struct BesPair
 {
-    const double y = (2.0 * x - a - b) / (b - a);
-    const double y2 = 2.0 * y;
-    double d = 0.0;
-    double dd = 0.0;
-    for (int j = m - 1; j >= 1; --j)
+    double base; // order μ (or ν)
+    double next; // order μ+1 (or ν+1)
+};
+struct BesJY
+{
+    double j;
+    double y;
+    double jp;
+    double yp;
+};
+struct BesIK
+{
+    double i;
+    double k;
+    double ip;
+    double kp;
+};
+struct BesZ
+{
+    double re;
+    double im;
+};
+struct BesGammas
+{
+    double g1;              // Γ1(μ) = (1/Γ(1−μ) − 1/Γ(1+μ))/(2μ)
+    double g2;              // Γ2(μ) = (1/Γ(1−μ) + 1/Γ(1+μ))/2
+    double inv_gamma_plus;  // 1/Γ(1+μ) = Γ2 − μΓ1
+    double inv_gamma_minus; // 1/Γ(1−μ) = Γ2 + μΓ1
+};
+
+[[nodiscard]] inline BesZ bes_z_mul(BesZ a, BesZ b) noexcept
+{
+    return {a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re};
+}
+
+[[nodiscard]] inline BesZ bes_z_inv(BesZ a) noexcept
+{
+    const double norm = a.re * a.re + a.im * a.im;
+    return {a.re / norm, -a.im / norm};
+}
+
+// r/z for real r: r·conj(z)/|z|².
+[[nodiscard]] inline BesZ bes_z_real_over(double r, BesZ z) noexcept
+{
+    const double ratio = r / (z.re * z.re + z.im * z.im);
+    return {z.re * ratio, -z.im * ratio};
+}
+
+// The Γ-ratio combinations of Temme (1975; 1976) for |μ| ≤ ½. Γ1 and Γ2 are even in μ, so each is a Chebyshev series in
+// t = 8μ² − 1 ∈ [−1, 1]; the fit has no 0/0 cancellation at μ → 0, which integer orders need (their base order is
+// exactly 0). The coefficients are the table that Numerical Recipes (2nd ed., §6.7, `beschb`) prints for these two
+// fits. Both series are summed together by Clenshaw's recurrence (Clenshaw 1955): ½c_0 + Σ_{k≥1} c_k T_k(t); the Γ1
+// table has seven entries, and its eighth, zero, entry lets one loop serve both.
+[[nodiscard]] inline BesGammas bes_temme_gammas(double mu) noexcept
+{
+    static constexpr double kFitGamma1[8] = {
+        -1.142022680371168e0, 6.5165112670737e-3, 3.087090173086e-4, -3.4706269649e-6,
+        6.9437664e-9,         3.67795e-11,        -1.356e-13,        0.0};
+    static constexpr double kFitGamma2[8] = {
+        1.843740587300905e0, -7.68528408447867e-2, 1.2719271366546e-3, -4.9717367042e-6,
+        -3.31261198e-8,      2.423096e-10,         -1.702e-13,         -1.49e-15};
+    const double t = 8.0 * mu * mu - 1.0;
+    const double two_t = t + t;
+    double a1 = 0.0; // Clenshaw b_{k+1} of the Γ1 series
+    double a2 = 0.0; // b_{k+2}
+    double c1 = 0.0; // the same pair for the Γ2 series
+    double c2 = 0.0;
+    for (int k = 7; k >= 1; --k)
     {
-        const double sv = d;
-        d = y2 * d - dd + c[j];
-        dd = sv;
+        const double a0 = kFitGamma1[k] + two_t * a1 - a2;
+        const double c0 = kFitGamma2[k] + two_t * c1 - c2;
+        a2 = a1;
+        a1 = a0;
+        c2 = c1;
+        c1 = c0;
     }
-    return y * d - dd + 0.5 * c[0];
+    const double g1 = 0.5 * kFitGamma1[0] + t * a1 - a2;
+    const double g2 = 0.5 * kFitGamma2[0] + t * c1 - c2;
+    return {g1, g2, g2 - mu * g1, g2 + mu * g1};
 }
 
-// beschb: for |x| ≤ ½ returns the Γ-ratio combinations used by the Temme series. gam1 = (1/Γ(1−x) − 1/Γ(1+x))/(2x),
-// gam2 = (1/Γ(1−x) + 1/Γ(1+x))/2, gampl = 1/Γ(1+x), gammi = 1/Γ(1−x). The Chebyshev fits (NR `beschb`) give gam1/gam2
-// without the 0/0 cancellation at x→0 (needed for integer orders, where the base order is exactly 0).
-inline void bes_beschb(double x, double& gam1, double& gam2, double& gampl, double& gammi) noexcept
-{
-    static const double kGam1Coeff[] = {-1.142022680371168e0, 6.5165112670737e-3, 3.087090173086e-4,
-                                        -3.4706269649e-6,     6.9437664e-9,       3.67795e-11,       -1.356e-13};
-    static const double kGam2Coeff[] = {1.843740587300905e0,  -7.68528408447867e-2, 1.2719271366546e-3,
-                                        -4.9717367042e-6,     -3.31261198e-8,       2.423096e-10,      -1.702e-13,
-                                        -1.49e-15};
-    const double xx = 8.0 * x * x - 1.0; // map |x|≤½ → [−1,1] for the fits (argument 2x, squared)
-    gam1 = bes_chebev(-1.0, 1.0, kGam1Coeff, 7, xx);
-    gam2 = bes_chebev(-1.0, 1.0, kGam2Coeff, 8, xx);
-    gampl = gam2 - x * gam1;
-    gammi = gam2 + x * gam1;
-}
-
-// nl = (int)(xnu + 0.5) in NR's bessjy/bessik: the downward-recurrence count that puts the base order μ = ν − nl in
-// [−½, ½]. The C cast truncates the half-offset sum toward zero, which is round-half-up for ν ≥ 0. It is kept exactly,
-// as an explicit trunc of the same sum, rather than replaced by lround: ν = 0.49999999999999994 gives ν + 0.5 == 1.0 in
-// binary64 (cast → 1, lround → 0), and the cyl_*_prime entry points pass a negative ν through unreflected, where
-// lround's half-away-from-zero differs from truncation. Either substitution moves μ for those orders and changes the
-// results bit for bit, which the hesap bit-exact contract forbids.
+// Downward-recurrence count that puts the base order μ = ν − n in [−½, ½] (the step rule NR's bessjy/bessik use for J,
+// Y, I and K). The C cast truncates the half-offset sum toward zero, which is round-half-up for ν ≥ 0. It is kept
+// exactly, as an explicit trunc of the same sum, rather than replaced by lround: ν = 0.49999999999999994 gives ν + 0.5
+// == 1.0 in binary64 (cast → 1, lround → 0), and the cyl_*_prime entry points pass a negative ν through unreflected,
+// where lround's half-away-from-zero differs from truncation. Either substitution moves μ for those orders and changes
+// the results bit for bit, which the hesap bit-exact contract forbids.
 [[nodiscard]] inline int bes_base_steps(double xnu) noexcept
 {
     return static_cast<int>(crd::math::trunc(xnu + 0.5));
 }
 
-// bessjy's step count, NR `nl = x < XMIN ? (int)(xnu+0.5) : IMAX(0, (int)(xnu−x+1.5))`: for x ≥ XMIN the recurrence
-// starts from an order below x so that CF2 converges quickly. The 1.5 offset is a shift, not a rounding, and stays as
-// written.
-[[nodiscard]] inline int bessjy_steps(double x, double xnu) noexcept
+// Step count for J and Y (the rule NR's bessjy uses): below the Temme/CF2 switch it is the base count above; from the
+// switch on, the recurrence starts from an order about one below x, so that CF2 converges quickly, and the count is
+// floored at zero. The 1.5 offset is a shift, not a rounding, and stays as written.
+[[nodiscard]] inline int bes_jy_steps(double x, double xnu) noexcept
 {
-    if (x < kBesXMin)
+    if (x < kBesTemmeLimit)
     {
         return bes_base_steps(xnu);
     }
@@ -83,319 +138,388 @@ inline void bes_beschb(double x, double& gam1, double& gam2, double& gampl, doub
     return (shifted > 0) ? shifted : 0;
 }
 
-// Steed/Temme J_ν, Y_ν, J'_ν, Y'_ν for x > 0, ν ≥ 0.
-inline void bessjy(double x, double xnu, double& rj, double& ry, double& rjp, double& ryp) noexcept
+// Result of the J fraction: the ratio J'_ν/J_ν and the sign of the unnormalised J_ν it was found with.
+struct BesCf1
 {
-    const int nl = bessjy_steps(x, xnu);
-    const double xmu = xnu - nl;
-    const double xmu2 = xmu * xmu;
-    const double xi = 1.0 / x;
-    const double xi2 = 2.0 * xi;
-    const double w = xi2 / kBesPi;
-    int isign = 1;
-    double h = xnu * xi;
-    if (h < kBesFpMin)
+    double ratio;
+    int sign;
+};
+
+// CF1 for the logarithmic derivative (Barnett et al. 1974). The order recurrence w_{ν−1} + s·w_{ν+1} = (2ν/x)w_ν,
+// with s = +1 for J and −1 for I, gives
+//   J'/J = ν/x − 1/(2(ν+1)/x − 1/(2(ν+2)/x − …)),   I'/I = ν/x + 1/(2(ν+1)/x + 1/(2(ν+2)/x + …)).
+// Both are evaluated by Lentz's modified algorithm (Lentz 1976; Thompson & Barnett 1986): the tails are
+// C_k = b_k + t/C_{k−1} and 1/D_k = b_k + t·D_{k−1}, with b_k = 2(ν+k)/x and t = −1 for J, +1 for I, and the value is
+// multiplied by C_k·D_k until that factor is 1. Each b_k is formed from its index, so no rounding accumulates over the
+// thousands of steps a large argument needs.
+
+// The J fraction. A denominator can vanish or turn negative, so both tails are held off zero, and every negative D_k
+// flips the sign of the unnormalised J (the parity of the flips is returned as a sign).
+[[nodiscard]] inline BesCf1 bes_cf1_oscillating(double inv_x, double nu) noexcept
+{
+    const double spacing = 2.0 * inv_x;
+    double value = nu * inv_x;
+    if (value < kBesTiny)
     {
-        h = kBesFpMin;
+        value = kBesTiny;
     }
-    double b = xi2 * xnu;
-    double d = 0.0;
-    double c = h;
-    for (int i = 1; i <= kBesMaxIt; ++i) // CF1: J'/J
+    double num_tail = value;
+    double den_tail = 0.0;
+    double index = 0.0;
+    unsigned flips = 0U;
+    for (int step = 1; step <= kBesIterCap; ++step)
     {
-        b += xi2;
-        d = b - d;
-        if (crd::math::fabs(d) < kBesFpMin)
+        index += 1.0;
+        const double b = spacing * (nu + index);
+        double den = b - den_tail;
+        double num = b - 1.0 / num_tail;
+        // Both floors sit behind one rarely taken test on the smaller magnitude, so no select lengthens the
+        // dependency chain.
+        const double den_mag = crd::math::fabs(den);
+        const double num_mag = crd::math::fabs(num);
+        const double smaller = (den_mag < num_mag) ? den_mag : num_mag;
+        if (smaller < kBesTiny) [[unlikely]]
         {
-            d = kBesFpMin;
+            if (den_mag < kBesTiny)
+            {
+                den = kBesTiny;
+            }
+            if (num_mag < kBesTiny)
+            {
+                num = kBesTiny;
+            }
         }
-        c = b - 1.0 / c;
-        if (crd::math::fabs(c) < kBesFpMin)
+        den_tail = 1.0 / den;
+        num_tail = num;
+        if (den_tail < 0.0)
         {
-            c = kBesFpMin;
+            ++flips;
         }
-        d = 1.0 / d;
-        const double del = c * d;
-        h = del * h;
-        if (d < 0.0)
-        {
-            isign = -isign;
-        }
-        if (crd::math::fabs(del - 1.0) < kBesEps)
+        const double factor = num_tail * den_tail;
+        value *= factor;
+        if (crd::math::fabs(factor - 1.0) < kBesRelTol)
         {
             break;
         }
     }
-    double rjl = isign * kBesFpMin;
-    double rjpl = h * rjl;
-    const double rjl_nu = rjl;
-    const double rjpl_nu = rjpl;
-    double fact = xnu * xi;
-    for (int l = nl; l >= 1; --l) // downward recurrence to order xmu
-    {
-        const double rjtemp = fact * rjl + rjpl;
-        fact -= xi;
-        rjpl = fact * rjtemp - rjl;
-        rjl = rjtemp;
-    }
-    if (rjl == 0.0)
-    {
-        rjl = kBesEps;
-    }
-    const double f = rjpl / rjl;
-    double rjmu = 0.0;
-    double rymu = 0.0;
-    double ry1 = 0.0;
-    if (x < kBesXMin) // Temme series for Y_xmu, Y_xmu+1
-    {
-        const double x2 = 0.5 * x;
-        const double pimu = kBesPi * xmu;
-        const double facta = (crd::math::fabs(pimu) < kBesEps) ? 1.0 : pimu / crd::math::sin(pimu);
-        double dd = -crd::math::log(x2);
-        double e = xmu * dd;
-        const double fact2 = (crd::math::fabs(e) < kBesEps) ? 1.0 : crd::math::sinh(e) / e;
-        double gam1 = 0.0;
-        double gam2 = 0.0;
-        double gampl = 0.0;
-        double gammi = 0.0;
-        bes_beschb(xmu, gam1, gam2, gampl, gammi);
-        double ff = 2.0 / kBesPi * facta * (gam1 * crd::math::cosh(e) + gam2 * fact2 * dd);
-        e = crd::math::exp(e);
-        double p = e / (gampl * kBesPi);
-        double q = 1.0 / (e * kBesPi * gammi);
-        const double pimu2 = 0.5 * pimu;
-        const double fact3 = (crd::math::fabs(pimu2) < kBesEps) ? 1.0 : crd::math::sin(pimu2) / pimu2;
-        const double r = kBesPi * pimu2 * fact3 * fact3;
-        c = 1.0;
-        dd = -x2 * x2;
-        double sum = ff + r * q;
-        double sum1 = p;
-        int i = 1;
-        for (; i <= kBesMaxIt; ++i)
-        {
-            ff = (i * ff + p + q) / (i * i - xmu2);
-            c *= (dd / i);
-            p /= (i - xmu);
-            q /= (i + xmu);
-            const double del = c * (ff + r * q);
-            sum += del;
-            const double del1 = c * p - i * del;
-            sum1 += del1;
-            if (crd::math::fabs(del) < (1.0 + crd::math::fabs(sum)) * kBesEps)
-            {
-                break;
-            }
-        }
-        rymu = -sum;
-        ry1 = -sum1 * xi2;
-        const double rymup = xmu * xi * rymu - ry1;
-        rjmu = w / (rymup - f * rymu);
-    }
-    else // Steed CF2
-    {
-        double a = 0.25 - xmu2;
-        double p = -0.5 * xi;
-        double q = 1.0;
-        const double br = 2.0 * x;
-        double bi = 2.0;
-        double facta = a * xi / (p * p + q * q);
-        double cr = br + q * facta;
-        double ci = bi + p * facta;
-        double den = br * br + bi * bi;
-        double dr = br / den;
-        double di = -bi / den;
-        double dlr = cr * dr - ci * di;
-        double dli = cr * di + ci * dr;
-        double temp = p * dlr - q * dli;
-        q = p * dli + q * dlr;
-        p = temp;
-        int i = 2;
-        for (; i <= kBesMaxIt; ++i)
-        {
-            a += 2 * (i - 1);
-            bi += 2.0;
-            dr = a * dr + br;
-            di = a * di + bi;
-            if (crd::math::fabs(dr) + crd::math::fabs(di) < kBesFpMin)
-            {
-                dr = kBesFpMin;
-            }
-            facta = a / (cr * cr + ci * ci);
-            cr = br + cr * facta;
-            ci = bi - ci * facta;
-            if (crd::math::fabs(cr) + crd::math::fabs(ci) < kBesFpMin)
-            {
-                cr = kBesFpMin;
-            }
-            den = dr * dr + di * di;
-            dr /= den;
-            di /= -den;
-            dlr = cr * dr - ci * di;
-            dli = cr * di + ci * dr;
-            temp = p * dlr - q * dli;
-            q = p * dli + q * dlr;
-            p = temp;
-            if (crd::math::fabs(dlr - 1.0) + crd::math::fabs(dli) < kBesEps)
-            {
-                break;
-            }
-        }
-        const double gam = (p - f) / q;
-        rjmu = crd::math::sqrt(w / ((p - f) * gam + q));
-        rjmu = (rjl >= 0.0) ? crd::math::fabs(rjmu) : -crd::math::fabs(rjmu);
-        rymu = rjmu * gam;
-        const double rymup = rymu * (p + q / gam);
-        ry1 = xmu * xi * rymu - rymup;
-    }
-    fact = rjmu / rjl;
-    rj = rjl_nu * fact;
-    rjp = rjpl_nu * fact;
-    for (int i = 1; i <= nl; ++i) // upward recurrence for Y
-    {
-        const double rytemp = (xmu + i) * xi2 * ry1 - rymu;
-        rymu = ry1;
-        ry1 = rytemp;
-    }
-    ry = rymu;
-    ryp = xnu * xi * rymu - ry1;
+    return {value, ((flips & 1U) != 0U) ? -1 : 1};
 }
 
-// Steed/Temme I_ν, K_ν, I'_ν, K'_ν for x > 0, ν ≥ 0.
-inline void bessik(double x, double xnu, double& ri, double& rk, double& rip, double& rkp) noexcept
+// The I fraction. Every tail is positive, so neither a floor nor a sign is needed. The D recurrence is advanced before
+// the C recurrence.
+[[nodiscard]] inline double bes_cf1_growing(double inv_x, double nu) noexcept
 {
-    const int nl = bes_base_steps(xnu);
-    const double xmu = xnu - nl;
-    const double xmu2 = xmu * xmu;
-    const double xi = 1.0 / x;
-    const double xi2 = 2.0 * xi;
-    double h = xnu * xi;
-    if (h < kBesFpMin)
+    const double spacing = 2.0 * inv_x;
+    double value = nu * inv_x;
+    if (value < kBesTiny)
     {
-        h = kBesFpMin;
+        value = kBesTiny;
     }
-    double b = xi2 * xnu;
-    double d = 0.0;
-    double c = h;
-    for (int i = 1; i <= kBesMaxIt; ++i) // CF1: I'/I
+    double num_tail = value;
+    double den_tail = 0.0;
+    double index = 0.0;
+    for (int step = 1; step <= kBesIterCap; ++step)
     {
-        b += xi2;
-        d = 1.0 / (b + d);
-        c = b + 1.0 / c;
-        const double del = c * d;
-        h = del * h;
-        if (crd::math::fabs(del - 1.0) < kBesEps)
+        index += 1.0;
+        const double b = spacing * (nu + index);
+        den_tail = 1.0 / (b + den_tail);
+        num_tail = b + 1.0 / num_tail;
+        const double factor = num_tail * den_tail;
+        value *= factor;
+        if (crd::math::fabs(factor - 1.0) < kBesRelTol)
         {
             break;
         }
     }
-    double ril = kBesFpMin;
-    double ripl = h * ril;
-    const double ril_nu = ril;
-    const double ripl_nu = ripl;
-    double fact = xnu * xi;
-    for (int l = nl; l >= 1; --l)
+    return value;
+}
+
+// Steed's CF2 for p + iq = H^(1)'_μ(x)/H^(1)_μ(x) (x ≥ 2, |μ| ≤ ½; Barnett et al. 1974, Thompson & Barnett 1986):
+//   p + iq = −1/(2x) + i + (i/x)·a_1/(b_1 + a_2/(b_2 + …)),  a_k = (k − ½)² − μ², b_k = 2(x + ik),
+// summed by the modified Lentz recurrence on complex terms (tails C_k = b_k + a_k/C_{k−1}, 1/D_k = b_k + a_k·D_{k−1},
+// running value multiplied by C_k·D_k). The leading term −1/(2x) + i plays the role of b_0, and the first partial
+// numerator i·a_1/x is imaginary, so the first factor is formed on its own and the loop covers the real a_k, k ≥ 2.
+[[nodiscard]] inline BesZ bes_cf2_hankel(double x, double mu2) noexcept
+{
+    const double inv_x = 1.0 / x;
+    BesZ value{-0.5 * inv_x, 1.0};
+    BesZ b{2.0 * x, 2.0};
+    const BesZ lead = bes_z_mul(BesZ{0.0, (0.25 - mu2) * inv_x}, bes_z_inv(value));
+    BesZ num_tail{b.re + lead.re, b.im + lead.im};
+    BesZ den_tail = bes_z_inv(b);
+    BesZ factor = bes_z_mul(num_tail, den_tail);
+    value = bes_z_mul(value, factor);
+    for (int k = 2; k <= kBesIterCap; ++k)
     {
-        const double ritemp = fact * ril + ripl;
-        fact -= xi;
-        ripl = fact * ritemp + ril;
-        ril = ritemp;
-    }
-    const double f = ripl / ril;
-    double rkmu = 0.0;
-    double rk1 = 0.0;
-    if (x < kBesXMin) // Temme series for K
-    {
-        const double x2 = 0.5 * x;
-        const double pimu = kBesPi * xmu;
-        const double facta = (crd::math::fabs(pimu) < kBesEps) ? 1.0 : pimu / crd::math::sin(pimu);
-        double dd = -crd::math::log(x2);
-        double e = xmu * dd;
-        const double fact2 = (crd::math::fabs(e) < kBesEps) ? 1.0 : crd::math::sinh(e) / e;
-        double gam1 = 0.0;
-        double gam2 = 0.0;
-        double gampl = 0.0;
-        double gammi = 0.0;
-        bes_beschb(xmu, gam1, gam2, gampl, gammi);
-        double ff = facta * (gam1 * crd::math::cosh(e) + gam2 * fact2 * dd);
-        double sum = ff;
-        e = crd::math::exp(e);
-        double p = 0.5 * e / gampl;
-        double q = 0.5 / (e * gammi);
-        c = 1.0;
-        dd = x2 * x2;
-        double sum1 = p;
-        int i = 1;
-        for (; i <= kBesMaxIt; ++i)
+        const double a = (k - 0.5) * (k - 0.5) - mu2;
+        b.im += 2.0;
+        BesZ den{b.re + a * den_tail.re, b.im + a * den_tail.im};
+        const BesZ back = bes_z_real_over(a, num_tail);
+        num_tail = {b.re + back.re, b.im + back.im};
+        // Both floors sit behind one rarely taken test on the smaller magnitude, so no select lengthens the
+        // dependency chain.
+        const double den_mag = crd::math::fabs(den.re) + crd::math::fabs(den.im);
+        const double num_mag = crd::math::fabs(num_tail.re) + crd::math::fabs(num_tail.im);
+        const double smaller = (den_mag < num_mag) ? den_mag : num_mag;
+        if (smaller < kBesTiny) [[unlikely]]
         {
-            ff = (i * ff + p + q) / (i * i - xmu2);
-            c *= (dd / i);
-            p /= (i - xmu);
-            q /= (i + xmu);
-            const double del = c * ff;
-            sum += del;
-            const double del1 = c * (p - i * ff);
-            sum1 += del1;
-            if (crd::math::fabs(del) < crd::math::fabs(sum) * kBesEps)
+            if (den_mag < kBesTiny)
             {
-                break;
+                den.re = kBesTiny;
+            }
+            if (num_mag < kBesTiny)
+            {
+                num_tail.re = kBesTiny;
             }
         }
-        rkmu = sum;
-        rk1 = sum1 * xi2;
-    }
-    else // Steed CF2 (continued fraction for K)
-    {
-        b = 2.0 * (1.0 + x);
-        d = 1.0 / b;
-        double delh = d;
-        h = delh;
-        double q1 = 0.0;
-        double q2 = 1.0;
-        const double a1 = 0.25 - xmu2;
-        double q = a1;
-        c = a1;
-        double a = -a1;
-        double s = 1.0 + q * delh;
-        int i = 2;
-        for (; i <= kBesMaxIt; ++i)
+        den_tail = bes_z_inv(den);
+        factor = bes_z_mul(num_tail, den_tail);
+        value = bes_z_mul(value, factor);
+        if (crd::math::fabs(factor.re - 1.0) + crd::math::fabs(factor.im) < kBesRelTol)
         {
-            a -= 2 * (i - 1);
-            c = -a * c / i;
-            const double qnew = (q1 - b * q2) / a;
-            q1 = q2;
-            q2 = qnew;
-            q += c * qnew;
-            b += 2.0;
-            d = 1.0 / (b + a * d);
-            delh = (b * d - 1.0) * delh;
-            h += delh;
-            const double dels = q * delh;
-            s += dels;
-            if (crd::math::fabs(dels / s) < kBesEps)
-            {
-                break;
-            }
+            break;
         }
-        h = a1 * h;
-        rkmu = crd::math::sqrt(kBesPi / (2.0 * x)) * crd::math::exp(-x) / s;
-        rk1 = rkmu * (xmu + x + 0.5 - h) * xi;
     }
-    const double rkmup = xmu * xi * rkmu - rk1;
-    const double rimu = xi / (f * rkmu - rkmup); // normalise I via the Wronskian
-    ri = (rimu * ril_nu) / ril;
-    rip = (rimu * ripl_nu) / ril;
-    for (int i = 1; i <= nl; ++i)
+    return value;
+}
+
+// Quantities shared by Temme's series for Y_μ (Temme 1976) and for K_μ (Temme 1975), with σ = μ ln(2/x):
+//   f_0 = (πμ/sin πμ)·[Γ1(μ) cosh σ + Γ2(μ)·(sinh σ/σ)·ln(2/x)]   (Y carries an extra factor 2/π),
+// together with e^σ, 1/Γ(1±μ) and πμ. The two removable singularities (πμ → 0 and σ → 0) take their limit 1.
+struct BesTemmeHead
+{
+    double f0;
+    double e_sigma;
+    double inv_gamma_plus;
+    double inv_gamma_minus;
+    double mu_pi;
+};
+
+[[nodiscard]] inline BesTemmeHead bes_temme_head(double x, double mu) noexcept
+{
+    const double mu_pi = kBesPi * mu;
+    const double ln_2_over_x = -crd::math::log(0.5 * x);
+    const double sigma = mu * ln_2_over_x;
+    const double x_over_sin = (crd::math::fabs(mu_pi) < kBesRelTol) ? 1.0 : mu_pi / crd::math::sin(mu_pi);
+    const double sinhc = (crd::math::fabs(sigma) < kBesRelTol) ? 1.0 : crd::math::sinh(sigma) / sigma;
+    const BesGammas g = bes_temme_gammas(mu);
+    return {x_over_sin * (g.g1 * crd::math::cosh(sigma) + g.g2 * sinhc * ln_2_over_x), crd::math::exp(sigma),
+            g.inv_gamma_plus, g.inv_gamma_minus, mu_pi};
+}
+
+// Temme's series (Temme 1976) for Y_μ(x) and Y_{μ+1}(x), x < 2, |μ| ≤ ½ (DLMF 10.8):
+//   Y_μ = −Σ c_k g_k,  Y_{μ+1} = −(2/x) Σ c_k h_k,  c_k = (−x²/4)^k/k!,
+//   g_k = f_k + (2/μ)sin²(μπ/2)·q_k,  h_k = p_k − k·g_k,
+// with the coupling f_k = (k f_{k−1} + p_{k−1} + q_{k−1})/(k² − μ²), p_k = p_{k−1}/(k − μ), q_k = q_{k−1}/(k + μ).
+// One reciprocal of k² − μ² serves the f, p and q updates: 1/(k∓μ) = (k±μ)/(k² − μ²).
+[[nodiscard]] inline BesPair bes_temme_y(double x, double mu) noexcept
+{
+    const BesTemmeHead s = bes_temme_head(x, mu);
+    const double half_mu_pi = 0.5 * s.mu_pi;
+    const double sinc = (crd::math::fabs(half_mu_pi) < kBesRelTol) ? 1.0 : crd::math::sin(half_mu_pi) / half_mu_pi;
+    const double skew = 0.5 * kBesPi * s.mu_pi * sinc * sinc; // (2/μ)sin²(μπ/2), finite at μ = 0
+    const double weight = -0.25 * x * x;
+    double fk = (2.0 / kBesPi) * s.f0;
+    double pk = s.e_sigma / (kBesPi * s.inv_gamma_plus);
+    double qk = 1.0 / (kBesPi * s.e_sigma * s.inv_gamma_minus);
+    double ck = 1.0;
+    double sum_g = fk + skew * qk; // Σ c_k g_k
+    double sum_h = pk;             // Σ c_k h_k
+    for (int k = 1; k <= kBesIterCap; ++k)
     {
-        const double rktemp = (xmu + i) * xi2 * rk1 + rkmu;
-        rkmu = rk1;
-        rk1 = rktemp;
+        const double kd = k;
+        const double inv_kk = 1.0 / ((kd - mu) * (kd + mu));
+        fk = (kd * fk + pk + qk) * inv_kk;
+        pk *= (kd + mu) * inv_kk;
+        qk *= (kd - mu) * inv_kk;
+        ck *= weight / kd;
+        const double gk = fk + skew * qk;
+        sum_g += ck * gk;
+        sum_h += ck * (pk - kd * gk);
+        if (crd::math::fabs(ck * gk) < (1.0 + crd::math::fabs(sum_g)) * kBesRelTol)
+        {
+            break;
+        }
     }
-    rk = rkmu;
-    rkp = xnu * xi * rkmu - rk1;
+    return {-sum_g, -2.0 * sum_h / x};
+}
+
+// Temme's series for K_μ(x) and K_{μ+1}(x), x < 2, |μ| ≤ ½ (Temme 1975; DLMF 10.31): K_μ = Σ c_k f_k,
+// K_{μ+1} = (2/x) Σ c_k h_k, c_k = (x²/4)^k/k!, h_k = p_k − k f_k, with f_k, p_k, q_k as in bes_temme_y.
+[[nodiscard]] inline BesPair bes_temme_k(double x, double mu) noexcept
+{
+    const BesTemmeHead s = bes_temme_head(x, mu);
+    const double weight = 0.25 * x * x;
+    double fk = s.f0;
+    double pk = 0.5 * s.e_sigma / s.inv_gamma_plus;
+    double qk = 0.5 / (s.e_sigma * s.inv_gamma_minus);
+    double ck = 1.0;
+    double sum_f = fk; // Σ c_k f_k
+    double sum_h = pk; // Σ c_k h_k
+    for (int k = 1; k <= kBesIterCap; ++k)
+    {
+        const double kd = k;
+        const double inv_kk = 1.0 / ((kd - mu) * (kd + mu));
+        fk = (kd * fk + pk + qk) * inv_kk;
+        pk *= (kd + mu) * inv_kk;
+        qk *= (kd - mu) * inv_kk;
+        ck *= weight / kd;
+        const double term = ck * fk;
+        sum_f += term;
+        sum_h += ck * (pk - kd * fk);
+        if (crd::math::fabs(term) < crd::math::fabs(sum_f) * kBesRelTol)
+        {
+            break;
+        }
+    }
+    return {sum_f, 2.0 * sum_h / x};
+}
+
+// Steed's CF2 for K (x ≥ 2, |μ| ≤ ½; Temme 1975, Thompson & Barnett 1986): K_μ(x) = √(π/2x)·e^{−x}/S. With
+// a_k = (k − ½)² − μ² and b_k = 2(x + k), two Steed recurrences run side by side. The fraction
+//   h = 1/(b_1 − a_2/(b_2 − a_3/(b_3 − …)))  is accumulated as h = Σ Δh_k, with D_k = 1/(b_k − a_k D_{k−1}) and
+//   Δh_k = (b_k D_k − 1)Δh_{k−1};  the weights are c_k = a_k c_{k−1}/k  and  Q_k = (b_{k−1}Q_{k−1} − Q_{k−2})/a_k,
+// and S = 1 + Σ_k (Σ_{j≤k} c_j Q_j)·Δh_k. Then K_{μ+1}/K_μ = (μ + x + ½ + (μ² − ¼)h)/x. Returns K_μ and K_{μ+1}.
+[[nodiscard]] inline BesPair bes_cf2_k(double x, double mu) noexcept
+{
+    const double mu2 = mu * mu;
+    const double a1 = 0.25 - mu2;
+    double b_prev = 2.0 * (x + 1.0); // b_{k−1}
+    double d = 1.0 / b_prev;         // D_1
+    double dh = d;                   // Δh_1
+    double h = dh;
+    double q_old = 0.0;           // Q_{k−2}
+    double q_cur = 1.0;           // Q_{k−1}
+    double weight = a1;           // c_1
+    double weighted = a1 * q_cur; // Σ_{j≤k} c_j Q_j
+    double s = 1.0 + weighted * dh;
+    for (int k = 2; k <= kBesIterCap; ++k)
+    {
+        const double kd = k;
+        const double a = (kd - 0.5) * (kd - 0.5) - mu2;
+        const double b = 2.0 * (x + kd);
+        weight *= a / kd;
+        const double q_new = (b_prev * q_cur - q_old) / a;
+        q_old = q_cur;
+        q_cur = q_new;
+        weighted += weight * q_new;
+        d = 1.0 / (b - a * d);
+        dh *= b * d - 1.0;
+        h += dh;
+        const double ds = weighted * dh;
+        s += ds;
+        b_prev = b;
+        if (crd::math::fabs(ds) < crd::math::fabs(s) * kBesRelTol)
+        {
+            break;
+        }
+    }
+    const double kmu = crd::math::sqrt(kBesPi / (2.0 * x)) * crd::math::exp(-x) / s;
+    return {kmu, kmu * (mu + x + 0.5 - a1 * h) / x};
+}
+
+// Carries a function and its neighbour down in order from ν to the base order μ = ν − steps, on the unnormalised scale
+// of the CF1 seed. From w_ν (seed) and w'_ν (seed_d) the order ν−1 value is w_{ν−1} = (ν/x)w_ν + w'_ν (J and I alike);
+// the order recurrence w_{m−1} = (2m/x)w_m + s·w_{m+1} (s = −1 for J, +1 for I) then lowers the pair (w_{m+1}, w_m),
+// and at the end w'_μ = (μ/x)w_μ + s·w_{μ+1}. Returns {w_μ, w'_μ}.
+template <bool Oscillatory>
+[[nodiscard]] inline BesPair bes_lower_to_base(double seed, double seed_d, double nu, int steps, double inv_x) noexcept
+{
+    constexpr double kLink = Oscillatory ? -1.0 : 1.0;
+    if (steps <= 0)
+    {
+        return {seed, seed_d};
+    }
+    const double two_inv_x = 2.0 * inv_x;
+    const double mu = nu - steps;
+    double hi = seed;                       // order m + 1
+    double lo = nu * inv_x * seed + seed_d; // order m = ν − 1
+    for (int j = steps - 1; j >= 1; --j)
+    {
+        const double next = (mu + j) * two_inv_x * lo + kLink * hi;
+        hi = lo;
+        lo = next;
+    }
+    return {lo, mu * inv_x * lo + kLink * hi};
+}
+
+// Carries a pair (w_μ, w_{μ+1}) up in order to (w_ν, w_{ν+1}), ν = μ + steps, by w_{m+1} = (2m/x)w_m + s·w_{m−1}
+// (s = −1 for Y, +1 for K).
+template <bool Oscillatory>
+[[nodiscard]] inline BesPair bes_raise_from_base(BesPair pair, double mu, int steps, double two_inv_x) noexcept
+{
+    constexpr double kLink = Oscillatory ? -1.0 : 1.0;
+    for (int m = 1; m <= steps; ++m)
+    {
+        const double upper = (mu + m) * two_inv_x * pair.next + kLink * pair.base;
+        pair.base = pair.next;
+        pair.next = upper;
+    }
+    return pair;
+}
+
+// J_ν, Y_ν, J'_ν, Y'_ν for x > 0, ν ≥ 0 by the Steed/Temme method (Barnett, Feng, Steed and Goldfarb 1974; Temme 1976;
+// Thompson & Barnett 1986): CF1 gives J'/J at order ν, a downward recurrence carries it to the base order μ, there
+// Temme's series (x < 2) or Steed's CF2 (x ≥ 2) give Y_μ and Y_{μ+1} and, with the Wronskian J Y' − J' Y = 2/(πx), J_μ;
+// J and J' at order ν are rescaled from the unnormalised recurrence, and Y is carried upward to order ν.
+[[nodiscard]] inline BesJY bes_jy_core(double x, double nu) noexcept
+{
+    const int steps = bes_jy_steps(x, nu);
+    const double mu = nu - steps;
+    const double inv_x = 1.0 / x;
+    const BesCf1 cf1 = bes_cf1_oscillating(inv_x, nu);
+    const double seed = cf1.sign * kBesTiny; // J_ν, up to the scale fixed below
+    const double seed_d = cf1.ratio * seed;  // J'_ν on the same scale
+    const BesPair lowered = bes_lower_to_base<true>(seed, seed_d, nu, steps, inv_x);
+    const double j_raw = (lowered.base == 0.0) ? kBesRelTol : lowered.base; // unnormalised J_μ
+    const double log_deriv = lowered.next / j_raw;                          // J'_μ/J_μ
+    const double wronskian = 2.0 * inv_x / kBesPi;                          // J_μ Y'_μ − J'_μ Y_μ
+    double j_mu = 0.0;
+    BesPair y{};
+    if (x < kBesTemmeLimit)
+    {
+        y = bes_temme_y(x, mu);
+        const double y_mu_d = mu * inv_x * y.base - y.next; // Y'_μ
+        j_mu = wronskian / (y_mu_d - log_deriv * y.base);
+    }
+    else
+    {
+        // J' = pJ − qY and Y' = qJ + pY give Y/J = (p − f)/q, and the Wronskian q(J² + Y²) = 2/(πx).
+        const BesZ pq = bes_cf2_hankel(x, mu * mu);
+        const double y_over_j = (pq.re - log_deriv) / pq.im;
+        const double mag = crd::math::sqrt(wronskian / (pq.im * (1.0 + y_over_j * y_over_j)));
+        j_mu = (j_raw >= 0.0) ? crd::math::fabs(mag) : -crd::math::fabs(mag);
+        const double y_mu_d = j_mu * (pq.im + pq.re * y_over_j);
+        y.base = j_mu * y_over_j;
+        y.next = mu * inv_x * y.base - y_mu_d;
+    }
+    const double rescale = j_mu / j_raw;
+    const BesPair top = bes_raise_from_base<true>(y, mu, steps, 2.0 * inv_x);
+    return {seed * rescale, top.base, seed_d * rescale, nu * inv_x * top.base - top.next};
+}
+
+// I_ν, K_ν, I'_ν, K'_ν for x > 0, ν ≥ 0 by the same scheme (Temme 1975; Thompson & Barnett 1986): CF1 for I'/I
+// (Lentz 1976), downward recurrence to the base order μ, Temme's series (x < 2) or Steed's CF2 for K_μ and K_{μ+1},
+// then I from the Wronskian I K' − I' K = −1/x, and K carried upward to order ν.
+[[nodiscard]] inline BesIK bes_ik_core(double x, double nu) noexcept
+{
+    const int steps = bes_base_steps(nu);
+    const double mu = nu - steps;
+    const double inv_x = 1.0 / x;
+    const double seed = kBesTiny; // I_ν, up to the scale fixed below
+    const double seed_d = bes_cf1_growing(inv_x, nu) * seed;
+    const BesPair lowered = bes_lower_to_base<false>(seed, seed_d, nu, steps, inv_x);
+    const double log_deriv = lowered.next / lowered.base; // I'_μ/I_μ
+    const BesPair k = (x < kBesTemmeLimit) ? bes_temme_k(x, mu) : bes_cf2_k(x, mu);
+    const double k_mu_d = mu * inv_x * k.base - k.next;        // K'_μ
+    const double i_mu = inv_x / (log_deriv * k.base - k_mu_d); // I_μ from the Wronskian
+    const BesPair top = bes_raise_from_base<false>(k, mu, steps, 2.0 * inv_x);
+    // The seed is 1e-300 and I_μ can be large, so the product is formed before the division by the raw I_μ.
+    return {i_mu * seed / lowered.base, top.base, i_mu * seed_d / lowered.base, nu * inv_x * top.base - top.next};
 }
 
 // ---- dedicated J_ν fast path (real x > 0, ν ≥ 0): ascending series (small x) + Hankel asymptotic (large x). ----
-// Avoids computing the Y/J'/Y' quartet of bessjy ⇒ ~3× fewer ops ⇒ beats Boost's cyl_bessel_j.
+// Avoids computing the Y/J'/Y' quartet of bes_jy_core ⇒ ~3× fewer ops ⇒ beats Boost's cyl_bessel_j.
 [[nodiscard]] inline double besselj_series(double nu, double x) noexcept
 {
     const double half = 0.5 * x;
@@ -454,12 +578,8 @@ inline void bessik(double x, double xnu, double& ri, double& rk, double& rip, do
     {
         return besselj_asymp(nu, x); // x ≫ ν: Hankel asymptotic
     }
-    double rj = 0.0; // hard middle / x≈ν region: fall back to the robust Steed/Temme (still correct, just not faster)
-    double ry = 0.0;
-    double rjp = 0.0;
-    double ryp = 0.0;
-    bessjy(x, nu, rj, ry, rjp, ryp);
-    return rj;
+    // hard middle / x≈ν region: fall back to the robust Steed/Temme (still correct, just not faster)
+    return bes_jy_core(x, nu).j;
 }
 
 // Order-reflection for negative ν: J_{-ν} = cos(νπ)J_ν − sin(νπ)Y_ν ; Y_{-ν} = sin(νπ)J_ν + cos(νπ)Y_ν.
@@ -476,14 +596,10 @@ template <Real T>
     {
         return static_cast<T>(detail::besselj_real(n, xd)); // dedicated J-only fast path
     }
-    double rj = 0.0;
-    double ry = 0.0;
-    double rjp = 0.0;
-    double ryp = 0.0;
-    detail::bessjy(xd, -n, rj, ry, rjp, ryp);
+    const detail::BesJY jy = detail::bes_jy_core(xd, -n);
     const double s = crd::math::sin(-n * detail::kBesPi);
     const double co = crd::math::cos(-n * detail::kBesPi);
-    return static_cast<T>(co * rj - s * ry);
+    return static_cast<T>(co * jy.j - s * jy.y);
 }
 
 template <Real T>
@@ -491,19 +607,14 @@ template <Real T>
 {
     const double n = static_cast<double>(nu);
     const double xd = static_cast<double>(x);
-    double rj = 0.0;
-    double ry = 0.0;
-    double rjp = 0.0;
-    double ryp = 0.0;
     if (n >= 0.0)
     {
-        detail::bessjy(xd, n, rj, ry, rjp, ryp);
-        return static_cast<T>(ry);
+        return static_cast<T>(detail::bes_jy_core(xd, n).y);
     }
-    detail::bessjy(xd, -n, rj, ry, rjp, ryp);
+    const detail::BesJY jy = detail::bes_jy_core(xd, -n);
     const double s = crd::math::sin(-n * detail::kBesPi);
     const double co = crd::math::cos(-n * detail::kBesPi);
-    return static_cast<T>(s * rj + co * ry);
+    return static_cast<T>(s * jy.j + co * jy.y);
 }
 
 template <Real T>
@@ -511,17 +622,12 @@ template <Real T>
 {
     const double n = static_cast<double>(nu);
     const double xd = static_cast<double>(x);
-    double ri = 0.0;
-    double rk = 0.0;
-    double rip = 0.0;
-    double rkp = 0.0;
     if (n >= 0.0)
     {
-        detail::bessik(xd, n, ri, rk, rip, rkp);
-        return static_cast<T>(ri);
+        return static_cast<T>(detail::bes_ik_core(xd, n).i);
     }
-    detail::bessik(xd, -n, ri, rk, rip, rkp);
-    return static_cast<T>(ri + (2.0 / detail::kBesPi) * crd::math::sin(-n * detail::kBesPi) * rk);
+    const detail::BesIK ik = detail::bes_ik_core(xd, -n);
+    return static_cast<T>(ik.i + (2.0 / detail::kBesPi) * crd::math::sin(-n * detail::kBesPi) * ik.k);
 }
 
 template <Real T>
@@ -529,54 +635,29 @@ template <Real T>
 {
     const double n = crd::math::fabs(static_cast<double>(nu)); // K_{-ν} = K_ν
     const double xd = static_cast<double>(x);
-    double ri = 0.0;
-    double rk = 0.0;
-    double rip = 0.0;
-    double rkp = 0.0;
-    detail::bessik(xd, n, ri, rk, rip, rkp);
-    return static_cast<T>(rk);
+    return static_cast<T>(detail::bes_ik_core(xd, n).k);
 }
 
 // ---- derivatives (real order ν, x > 0) ----
 template <Real T>
 [[nodiscard]] T cyl_bessel_j_prime(T nu, T x) noexcept
 {
-    double rj = 0.0;
-    double ry = 0.0;
-    double rjp = 0.0;
-    double ryp = 0.0;
-    detail::bessjy(static_cast<double>(x), static_cast<double>(nu), rj, ry, rjp, ryp);
-    return static_cast<T>(rjp);
+    return static_cast<T>(detail::bes_jy_core(static_cast<double>(x), static_cast<double>(nu)).jp);
 }
 template <Real T>
 [[nodiscard]] T cyl_neumann_prime(T nu, T x) noexcept
 {
-    double rj = 0.0;
-    double ry = 0.0;
-    double rjp = 0.0;
-    double ryp = 0.0;
-    detail::bessjy(static_cast<double>(x), static_cast<double>(nu), rj, ry, rjp, ryp);
-    return static_cast<T>(ryp);
+    return static_cast<T>(detail::bes_jy_core(static_cast<double>(x), static_cast<double>(nu)).yp);
 }
 template <Real T>
 [[nodiscard]] T cyl_bessel_i_prime(T nu, T x) noexcept
 {
-    double ri = 0.0;
-    double rk = 0.0;
-    double rip = 0.0;
-    double rkp = 0.0;
-    detail::bessik(static_cast<double>(x), static_cast<double>(nu), ri, rk, rip, rkp);
-    return static_cast<T>(rip);
+    return static_cast<T>(detail::bes_ik_core(static_cast<double>(x), static_cast<double>(nu)).ip);
 }
 template <Real T>
 [[nodiscard]] T cyl_bessel_k_prime(T nu, T x) noexcept
 {
-    double ri = 0.0;
-    double rk = 0.0;
-    double rip = 0.0;
-    double rkp = 0.0;
-    detail::bessik(static_cast<double>(x), static_cast<double>(nu), ri, rk, rip, rkp);
-    return static_cast<T>(rkp);
+    return static_cast<T>(detail::bes_ik_core(static_cast<double>(x), static_cast<double>(nu)).kp);
 }
 
 // ---- spherical Bessel j_n, y_n (integer n ≥ 0, x > 0) via the stable recurrences ----
@@ -602,12 +683,8 @@ template <Real T>
         }
         return static_cast<T>(j1);
     }
-    double rj = 0.0;
-    double ry = 0.0;
-    double rjp = 0.0;
-    double ryp = 0.0;
-    detail::bessjy(xd, n + 0.5, rj, ry, rjp, ryp); // j_n = √(π/2x) J_{n+½}
-    return static_cast<T>(crd::math::sqrt(detail::kBesPi / (2.0 * xd)) * rj);
+    // j_n = √(π/2x) J_{n+½}
+    return static_cast<T>(crd::math::sqrt(detail::kBesPi / (2.0 * xd)) * detail::bes_jy_core(xd, n + 0.5).j);
 }
 
 template <Real T>
@@ -790,7 +867,8 @@ inline cplx besselik_asymp(double nu, cplx z, double kind) noexcept
 {
     const cplx cz = 0.5 * z;
     const cplx z2 = cz * cz;
-    cplx r = ((n & 1) ? 1.0 : -1.0) * crd::math::log(cz) * bessel_ji_series(static_cast<double>(n), z, 1.0); // (−1)^{n+1} ln·I_n
+    cplx r = ((n & 1) ? 1.0 : -1.0) * crd::math::log(cz) *
+             bessel_ji_series(static_cast<double>(n), z, 1.0); // (−1)^{n+1} ln·I_n
     if (n > 0)
     {
         cplx finite = 0.0;
