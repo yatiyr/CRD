@@ -819,6 +819,25 @@ class BenchMachine(unittest.TestCase):
     """ci/bench_vm.py: the optimization track's machine runs only on demand, holds no credential and keeps the
     exit status of a detached command."""
 
+    def test_a_one_run_machine_deletes_itself_and_keeps_running(self):
+        command = bench_vm.create_command(3)
+        flags = dict(zip(command, command[1:]))
+        self.assertEqual(flags['--provisioning-model'], 'SPOT')
+        self.assertEqual(flags['--instance-termination-action'], 'DELETE')
+        self.assertEqual(flags['--max-run-duration'], '3h')
+        self.assertEqual(flags['--boot-disk-size'], '%dGB' % bench_vm.ONCE_DISK_GB)
+        calls = []
+
+        def runner(args, **kwargs):
+            calls.append(args)
+            found = 'describe' in args and len(calls) > 1
+            return subprocess.CompletedProcess(args, 0 if found else 1, '{}', '')
+
+        vm = bench_vm.BenchVm(runner=runner, which=lambda name: '/usr/bin/gcloud', sleep=lambda s: None)
+        vm.wait_ssh = lambda: None
+        self.assertIn('deletes itself', vm.create(3))
+        self.assertFalse([call for call in calls if 'stop' in call], 'a one-run machine is never stopped and kept')
+
     def test_the_machine_is_spot_bounded_counted_and_credential_free(self):
         command = bench_vm.create_command()
         flags = dict(zip(command, command[1:]))

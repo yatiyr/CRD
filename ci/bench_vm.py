@@ -4,6 +4,8 @@
 Usage: python ci/bench_vm.py [--name MACHINE] <command> [options]
 
   create                 make the machine (once), then leave it stopped
+  create --once HOURS    make a machine for one run: it stays running and deletes itself with its disk after HOURS or
+                         on a preemption, so nothing bills if the run's own delete never comes
   start | stop | status  power it on (and wait for SSH) | power it off | its state and this run's hours
   sync [--ref REF]       put REF (default HEAD) on the machine as a detached checkout of ~/cerid
   run [--detach NAME] -- COMMAND
@@ -47,6 +49,7 @@ PMU = 'standard'  # core counters; 'enhanced' needs a larger shape
 DISK_TYPE = 'hyperdisk-balanced'  # c4 takes no Persistent Disk
 IMAGE_FAMILY = 'cerid-ci-ubuntu-2404-x64'
 DISK_GB = 200
+ONCE_DISK_GB = 150  # the CI image's own size: a one-run machine keeps no build trees
 TAG = 'cerid-bench'
 MAX_RUN_HOURS = 10
 PUBLIC_REPOSITORY = 'https://github.com/yatiyr/CRD.git'
@@ -77,15 +80,16 @@ TRACK_MACHINE = 'n2-standard-8'
 TRACK_DISK_TYPE = 'pd-balanced'
 
 
-def create_command():
+def create_command(once_hours=None):
     if NAME.startswith('cerid-track-'):
         shape = ['--machine-type', TRACK_MACHINE, '--boot-disk-type', TRACK_DISK_TYPE]
     else:
         shape = ['--machine-type', MACHINE, '--boot-disk-type', DISK_TYPE, '--performance-monitoring-unit', PMU]
     return ['compute', 'instances', 'create', NAME, *where(), *shape,
-            '--provisioning-model', 'SPOT', '--instance-termination-action', 'STOP',
-            '--max-run-duration', '%dh' % MAX_RUN_HOURS, '--image-family', IMAGE_FAMILY, '--image-project', PROJECT,
-            '--boot-disk-size', '%dGB' % DISK_GB, '--tags', TAG,
+            '--provisioning-model', 'SPOT', '--instance-termination-action', 'DELETE' if once_hours else 'STOP',
+            '--max-run-duration', '%dh' % (once_hours or MAX_RUN_HOURS),
+            '--image-family', IMAGE_FAMILY, '--image-project', PROJECT,
+            '--boot-disk-size', '%dGB' % (ONCE_DISK_GB if once_hours else DISK_GB), '--tags', TAG,
             '--no-service-account', '--no-scopes', '--network-interface', 'nic-type=GVNIC',
             '--labels', 'cerid-track=' + NAME]
 
@@ -173,11 +177,13 @@ class BenchVm:
         return {'exists': True, 'status': instance['status'], 'machine': instance['machineType'].rsplit('/', 1)[-1],
                 'last_start': instance.get('lastStartTimestamp'), 'last_stop': instance.get('lastStopTimestamp')}
 
-    def create(self):
+    def create(self, once_hours=None):
         if self.describe() is not None:
             return 'exists'
-        self.gcloud(create_command())
+        self.gcloud(create_command(once_hours))
         self.wait_ssh()
+        if once_hours:
+            return 'created, deletes itself after %d h' % once_hours
         self.gcloud(['compute', 'instances', 'stop', NAME, *where(), '--quiet'])
         return 'created and stopped'
 
@@ -264,7 +270,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog='bench_vm.py', description=__doc__.splitlines()[0])
     parser.add_argument('--name', default=NAME, help='the machine (default %(default)s)')
     sub = parser.add_subparsers(dest='command', required=True)
-    for name in ('create', 'start', 'stop', 'status'):
+    create = sub.add_parser('create')
+    create.add_argument('--once', type=int, metavar='HOURS')
+    for name in ('start', 'stop', 'status'):
         sub.add_parser(name)
     sync = sub.add_parser('sync')
     sync.add_argument('--ref', default='HEAD')
@@ -286,7 +294,9 @@ def main(argv=None):
     try:
         if args.command == 'status':
             print(json.dumps(vm.status(), indent=1))
-        elif args.command in ('create', 'start', 'stop'):
+        elif args.command == 'create':
+            print(vm.create(args.once))
+        elif args.command in ('start', 'stop'):
             print(getattr(vm, args.command)())
         elif args.command == 'sync':
             print(vm.sync(args.ref))
