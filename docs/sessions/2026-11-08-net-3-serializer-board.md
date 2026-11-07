@@ -34,6 +34,9 @@ Row: [NET.3](../ROADMAP.md#slice-net.3). Board: [serializers](../bench/2026-11-0
   allocation by crd-net. Its smoke passes on linux-gcc-public-checks with the quantisation peer tests.
 - `crd-net-tests` (320,911 assertions) and `crd-hesap-net-tests [quantize]` (1,408,994) on linux-gcc-debug; the
   related CTest selection (208) and the generator's tests and drift check.
+- Strict clang-tidy 20 clean on the changed sources and headers after 813a6d45, which also fixed a link-time
+  `-Wnull-dereference` the inlining exposed in test_delta.cpp; the net tests and every net fuzz target link on
+  linux-gcc-release, -relwithdebinfo and -shipping. Complete-tier dispatch 42423776692 runs at 813a6d45.
 
 ## Next
 
