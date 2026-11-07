@@ -496,6 +496,34 @@ void quaternion_off(const f32*, const f32*, f32, usize count, f32* out) noexcept
     std::memset(out, 0, 4U * count * sizeof(f32));
 }
 
+// Writes nothing, so the zeros the check starts from are the answer.
+void reckon_off(hn::DeadReckoningAlgorithm, const hn::DeadReckoningInput&, usize, const hn::DeadReckoningOutput&) noexcept
+{
+}
+
+// Right on the first algorithm the check runs, wrong on the second.
+void reckon_second_off(hn::DeadReckoningAlgorithm algorithm, const hn::DeadReckoningInput& in, usize count,
+                       const hn::DeadReckoningOutput& out) noexcept
+{
+    if (algorithm == hn::DeadReckoningAlgorithm::Rvb)
+    {
+        hn::kMotionKernelsPortable.dead_reckon(algorithm, in, count, out);
+    }
+}
+
+// The right position with a velocity of nothing.
+void blend32_off(const hn::ProjectiveBlendSpan<f32>& span, usize count, f32* position, f32* velocity) noexcept
+{
+    hn::kMotionKernelsPortable.projective_blend_f32(span, count, position, velocity);
+    std::memset(velocity, 0, count * sizeof(f32));
+}
+
+void blend64_off(const hn::ProjectiveBlendSpan<f64>& span, usize count, f64* position, f64* velocity) noexcept
+{
+    hn::kMotionKernelsPortable.projective_blend_f64(span, count, position, velocity);
+    std::memset(velocity, 0, count * sizeof(f64));
+}
+
 } // namespace
 
 TEST_CASE("motion kernels: the archive holds portable and each body level the build compiles", "[motion][kernels]")
@@ -559,6 +587,18 @@ TEST_CASE("motion self-check: every table the host runs passes, and a wrong one 
     wrong = hn::kMotionKernelsPortable;
     wrong.slerp = &quaternion_off;
     CHECK(routine_of(hn::motion_self_check(wrong)) == "slerp");
+    wrong = hn::kMotionKernelsPortable;
+    wrong.dead_reckon = &reckon_off;
+    CHECK(routine_of(hn::motion_self_check(wrong)) == "dead_reckon");
+    wrong = hn::kMotionKernelsPortable;
+    wrong.dead_reckon = &reckon_second_off;
+    CHECK(routine_of(hn::motion_self_check(wrong)) == "dead_reckon");
+    wrong = hn::kMotionKernelsPortable;
+    wrong.projective_blend_f32 = &blend32_off;
+    CHECK(routine_of(hn::motion_self_check(wrong)) == "projective_blend_f32");
+    wrong = hn::kMotionKernelsPortable;
+    wrong.projective_blend_f64 = &blend64_off;
+    CHECK(routine_of(hn::motion_self_check(wrong)) == "projective_blend_f64");
 }
 
 TEST_CASE("motion kernels: every level gives the restated bits on every length", "[motion][kernels]")
