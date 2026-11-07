@@ -14,6 +14,7 @@
 // Generators (one-time signal construction, not a streaming hot loop) ⇒ gate is
 // correctness vs scipy (~1e-10); no perf bench (the honest-gate rule, as windows).
 // Lower-layer raw scalars; the caller supplies the time vector.
+// Follows SciPy signal.chirp (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/array.hpp>

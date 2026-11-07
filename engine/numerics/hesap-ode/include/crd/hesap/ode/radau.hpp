@@ -14,6 +14,7 @@
 //     (scipy: Z0 = sol(t + h·C) − y), so it is part of the trajectory contract, not an extra.
 // Jacobian policy as in bdf.hpp (analytic = the trajectory-exact configuration; plain-FD fallback named).
 // ADR-0091.
+// Follows SciPy _ivp/radau.py (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>

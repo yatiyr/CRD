@@ -10,6 +10,7 @@
 //                        restarts from the sample and the second keeps the estimate.
 //
 // Nothing allocates.
+// Follows libwebrtc (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #pragma once
 

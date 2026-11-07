@@ -4,6 +4,7 @@
 // reproducibility/compat (it's the historical default in C++ <random>, NumPy legacy, MATLAB). Faithful `mt19937ar.c`
 // (init_genrand + init_by_array + tempering). Gated vs the canonical published KAT: init_by_array({0x123,0x234,
 // 0x345,0x456}) → 1067595299, 955945823, 477289528, … next_u64 combines two tempered u32 (lo, hi).
+// Follows mt19937ar.c (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>

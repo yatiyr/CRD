@@ -37,6 +37,7 @@
 //     18(3):305-363, 1997.
 //   * Shewchuk's reference implementation v4.0.0
 //     (https://www.cs.cmu.edu/~quake/robust.html).
+// Follows Shewchuk predicates.c (public domain); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 #include <crd/geometry/primitives/predicates.hpp>

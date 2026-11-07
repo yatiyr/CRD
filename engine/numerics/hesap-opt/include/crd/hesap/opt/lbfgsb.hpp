@@ -5,6 +5,7 @@
 // Stephen Becker's C translation — routine-for-routine (the dcstep/UMFPACK/CHOLMOD "read the source" discipline),
 // because the generalized Cauchy point is the most error-prone piece in the optimization spine and re-deriving it
 // from the paper is the bug farm (advisor-pinned). ADR-0090.
+// Follows L-BFGS-B-C (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 //
 // HONEST VERDICT TARGET (advisor): L-BFGS-B has real implementation latitude (breakpoint handling, subspace solver,
 // bound-projection ties) ⇒ Cerid will NOT bit-match scipy's iteration count and must not chase 1.00×. The honest

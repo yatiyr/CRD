@@ -100,5 +100,5 @@ Cerid is proprietary software, not open source. The repository is public for vie
 copying, modifying, distributing, or using it for machine-learning training or text and data mining requires
 the owner's prior written permission. The full terms, in English and Turkish, are in [`LICENSE`](LICENSE);
 permission requests go to dereeren@yahoo.com. Third-party components keep their own licenses
-([`cmake/pins.json`](cmake/pins.json), [generated manifest](docs/generated/dependency-licenses.md),
+([`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), [`cmake/pins.json`](cmake/pins.json), [generated manifest](docs/generated/dependency-licenses.md),
 [`assets/source/LICENSES.md`](assets/source/LICENSES.md)).

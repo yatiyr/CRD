@@ -16,6 +16,7 @@
 // first phases when |v0|,|a0| are physically too high to brake in time — Ruckig allows this and so do we (the accel
 // and jerk limits stay hard; the velocity limit is enforced on the back half + interior a=0 crossings, per Ruckig's
 // Profile::check).
+// Follows Ruckig (MIT); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/core/types.hpp>
 #include <crd/math/cmath.hpp>

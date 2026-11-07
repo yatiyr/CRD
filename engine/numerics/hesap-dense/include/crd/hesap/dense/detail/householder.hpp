@@ -28,6 +28,7 @@ namespace crd::hesap::dense::detail
 // rank-2 update in tridiagonalization cannot — a tiny `beta` would give a
 // non-zero `tau` with `beta == 0`, propagating NaN. So this primitive keeps
 // the guard; the QR reflector stays an internal short-cut that does not.
+// Follows LAPACK dlarfg, zlarfg (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 template <typename T>

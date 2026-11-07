@@ -30,6 +30,7 @@ namespace crd::hesap::dense
 //   - `D`/`E` are RealType<T> (the tridiagonal is real even for Hermitian)
 //   - `steqr` templates the eigenvector scalar Z separately from the real
 //     tridiagonal scalar R (real Givens applied to complex columns).
+// Follows LAPACK dsteqr, dlaed2 (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 template <typename T>

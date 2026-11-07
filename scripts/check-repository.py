@@ -14,7 +14,7 @@ ROOT_FILES = {
     # `.git` is a file in a linked worktree (`gitdir: ...`), a directory in the main checkout.
     '.clang-format', '.clang-tidy', '.git', '.gitattributes', '.gitignore', '.natvis',
     'AGENTS.md', 'CMakeLists.txt', 'CMakePresets.json', 'CMakeUserPresets.json',
-    'context.md', 'LICENSE', 'MEMORY.md', 'README.md', 'START_HERE.md',
+    'context.md', 'LICENSE', 'MEMORY.md', 'README.md', 'START_HERE.md', 'THIRD-PARTY-NOTICES.md',
 } | AGENT_ROOT_FILES
 ROOT_DIRS = AGENT_ROOT_DIRS | {
     '.git', '.github', '.vs', '.vscode', '.idea',

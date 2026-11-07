@@ -1,9 +1,10 @@
 #pragma once
 
-// hdr_piz.hpp — private interface for the B-hdr-c PIZ codec (OpenEXR wavelet + Huffman). Our own implementation of the
-// algorithms (the resulting code is ours; the algorithms are the published OpenEXR format, like DEFLATE is RFC 1951).
+// hdr_piz.hpp — private interface for the B-hdr-c PIZ codec (OpenEXR wavelet + Huffman). An implementation of the
+// algorithms of the published OpenEXR format.
 // Operates on the SAME uncompressed EXR block layout as NONE/RLE/ZIP: per scanline, per channel (chlist order), a planar
 // row of `width · word_count[c]` little-endian 16-bit words.
+// Follows tinyexr PIZ (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>

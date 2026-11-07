@@ -20,6 +20,7 @@
 // The last two are bit-exact with branch-heads/8147's arithmetic (crd-hesap-estimators-webrtc-tests). Times are signed
 // nanoseconds on any monotonic origin, except where a type says otherwise; ClockFilter and ClockDriftFilter hold
 // doubles, so feed them offsets from a base near the first (ClockTracker does). Nothing allocates.
+// Follows libwebrtc (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #pragma once
 

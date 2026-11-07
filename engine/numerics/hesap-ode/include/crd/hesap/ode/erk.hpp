@@ -18,6 +18,7 @@
 // Dense output: the driver records (t, y, f) nodes into an optional OdeSolution (Hermite fallback per the
 // ADR-0091 contract; native interpolants are a named follow-up). Events (v9-c): scipy semantics over the
 // recorded interpolant. ADR-0091.
+// Follows SciPy _ivp/rk.py (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>

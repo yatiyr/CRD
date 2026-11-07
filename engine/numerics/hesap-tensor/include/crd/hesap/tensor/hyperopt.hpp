@@ -29,6 +29,7 @@
 // EinsumExpr universe, while hyperopt indices are unbounded u32 ids (checked
 // per SANITY #8: reuse examined, representation incompatible — the ≤10-leaf
 // DP is re-expressed here over the pooled-leg merge primitive instead).
+// Follows cotengra (Apache-2.0); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 #include <crd/containers/array.hpp>
 #include <crd/containers/sort.hpp>

@@ -14,6 +14,7 @@
 // [6, 600] whatever the input. A send delta can be negative: a burst's later send time joins an earlier group.
 //
 // Rate control and the loss-based controller are NET-PATH's and NET-LIVE's; these are their inputs.
+// Follows libwebrtc (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #pragma once
 

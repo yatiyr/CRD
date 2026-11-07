@@ -42,6 +42,7 @@ namespace crd::hesap::dense
 // Real f32/f64 (the COD fast path is real; complex least-squares routes
 // through the complex SVD — see `lstsq`). Lower layer: raw f32/f64
 // (ADR-0078 §5).
+// Follows LAPACK dgeqp3 (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 template <typename T, Layout L = Layout::RowMajor>

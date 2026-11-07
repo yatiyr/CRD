@@ -1,11 +1,11 @@
 #pragma once
 
-// hdr_image.hpp — B-hdr: OUR OWN high-dynamic-range image codec (zero 3rd-party, user 2026-07-12 "we must do it ourselves").
+// hdr_image.hpp — B-hdr: the high-dynamic-range image codec, linking no third-party library (user 2026-07-12 "we must do it ourselves").
 // Decodes / encodes the HDR image formats to a flat float buffer (`HdrImage`), and round-trips that image through the CRDR
 // container so an imported env map / HDR texture becomes a first-class Cerid resource. Formats:
 //   • Radiance RGBE (.hdr / .pic) — B-hdr-a — read + write, new+old RLE.  The classic HDR env-map format.
 //   • Portable FloatMap (.pfm)    — B-hdr-b — read + write, lossless raw float.
-//   • OpenEXR (.exr)              — B-hdr-c — read + write, half/float, our own DEFLATE + PIZ (added in B-hdr-c).
+//   • OpenEXR (.exr)              — B-hdr-c — read + write, half/float, our own DEFLATE; PIZ follows tinyexr (added in B-hdr-c).
 //
 // The codec operates on byte SPANS (decode) / produces byte ARRAYS (encode) — no filesystem here (the caller does file I/O),
 // which keeps it pure + round-trip testable in memory. The GPU upload of the decoded float pixels as an env-map texture is
@@ -77,7 +77,7 @@ enum class HdrError : crd::u8
 [[nodiscard]] crd::containers::Array<crd::u8> hdr_encode_pfm(const HdrImage& img, bool little_endian, crd::memory::IAllocator* a);
 
 // OpenEXR encode. `pixel_type`: HALF (2 bytes) or FLOAT (4 bytes). `compression`: None / Rle / Zip (our own DEFLATE) / Piz
-// (our own wavelet+Huffman). The enum values ARE the OpenEXR on-disk compression ids. ZIP = 16-line blocks; PIZ = 32.
+// (wavelet+Huffman, following tinyexr). The enum values ARE the OpenEXR on-disk compression ids. ZIP = 16-line blocks; PIZ = 32.
 enum class ExrCompression : crd::u8 { None = 0, Rle = 1, Zip = 3, Piz = 4 };
 enum class ExrPixelType  : crd::u8 { Half = 1, Float = 2 };
 [[nodiscard]] crd::containers::Array<crd::u8> hdr_encode_exr(const HdrImage& img, ExrPixelType pixel_type, ExrCompression compression, crd::memory::IAllocator* a);

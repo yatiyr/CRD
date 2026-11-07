@@ -23,6 +23,7 @@
 //     wrapper is a no-op on the result).
 // Branchy references (rgbtohsv/hsvtorgb, burn/dodge/disjointover guards) become branchless `Select` chains: the unselected
 // arm may compute a NaN (e.g. /delta when delta==0) but is discarded, so the selected result stays bit-exact.
+// Follows MaterialX (Apache-2.0); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/kir/ckir.hpp>
 

@@ -23,6 +23,7 @@ namespace crd::hesap::dense::detail
 //
 // References (build/win-vs-ref/_deps/openblas-src/lapack-netlib/SRC/):
 //   zlarfg.f  zgebd2.f  zungbr.f
+// Follows LAPACK zlarfg, zgebd2 (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 template <typename C>

@@ -44,6 +44,7 @@ namespace crd::hesap::iterative
 // PRECONDITIONING: optional RIGHT preconditioner N = m_inv (the inner Z = N⁻¹V).
 // Determinism: every reduction is KBN-pairwise dotc; the only parallel step is the
 // operator's spmv (bit-exact across threads) ⇒ thread-count-independent solve.
+// Follows SciPy _gcrotmk.py (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 // Recycle-space truncation strategy. 'Smallest' (scipy default) keeps the

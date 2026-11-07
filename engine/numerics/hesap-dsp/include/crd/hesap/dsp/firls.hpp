@@ -10,6 +10,7 @@
 // solved once — so firls (unlike the iterative Remez) gets the FULL coefficient
 // match to scipy, not just spec-compliance. Faithful scipy.signal.firls.
 // numtaps must be ODD (Type-I linear phase). Lower-layer raw scalars.
+// Follows SciPy signal.firls (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/array.hpp>

@@ -1,3 +1,4 @@
+// Follows LAPACK dlabrd (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 #include <crd/hesap/dense/svd.hpp>
 
 #include <crd/containers/array.hpp>

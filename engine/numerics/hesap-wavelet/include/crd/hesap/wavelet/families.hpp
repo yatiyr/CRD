@@ -18,6 +18,7 @@
 // Σh² = 1, double-shift orthogonality) + the QMF builder reproduces the stored
 // bank for orthogonal wavelets + the coefficients match pywt. The QMF math is
 // the slice's self-contained deliverable; the stored table pins pywt-exactness.
+// Follows PyWavelets filter banks (MIT); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/span.hpp>

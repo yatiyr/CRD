@@ -14,6 +14,7 @@
 // The linear solves run through the v9-d `OdeLinearSolver` seam: (1/(γh)·I − J)·g = r ⇔
 // (I − γh·J)·g = γh·r (factor c = γh, scale the rhs). ∂f/∂t via forward differences (exactly zero for
 // autonomous systems — one counted eval; an analytic-capability append is reserved). ADR-0091.
+// Follows Boost.odeint (BSL-1.0); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>

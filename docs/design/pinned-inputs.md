@@ -51,7 +51,8 @@ by Cerid. Agreement with a copyleft implementation is never a reason to keep a l
 copied structure, exact agreement goes and the implementation is compared statistically, held to the published law.
 
 New code is our own text by default. Code that follows a permissive source (MIT, BSD, Apache-2.0, BSL-1.0, public domain)
-may stay: its header names the source and licence, and the source's notice is kept.
+may stay: its header names the source and licence, and the source's notice is kept in
+[THIRD-PARTY-NOTICES.md](../../THIRD-PARTY-NOTICES.md).
 
 A copyleft project may be a comparison: off by default, never shipped, nothing of its text committed, at arm's length
 where it can be. `crd-hesap-link-netem-tests` is the example, driving the running kernel's netem through `tc`.

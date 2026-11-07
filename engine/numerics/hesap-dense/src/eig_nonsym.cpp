@@ -1,3 +1,4 @@
+// Follows LAPACK dlahqr, dlaqr5 (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 #include <crd/hesap/dense/eig_nonsym.hpp>
 
 #include <crd/containers/array.hpp>

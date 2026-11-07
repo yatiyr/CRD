@@ -29,6 +29,7 @@ namespace crd::hesap::dense::detail
 //
 // References (build/win-debug/_deps/openblas-src/lapack-netlib/SRC/):
 //   dbdsqr.f  dlasv2.f  dlas2.f  dlasr.f  dlartg.f90
+// Follows LAPACK dbdsqr (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 // Fortran SIGN(a,b): |a| with the sign of b; SIGN(a,0) = +|a|.

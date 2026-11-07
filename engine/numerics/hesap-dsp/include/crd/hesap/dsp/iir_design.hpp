@@ -23,6 +23,7 @@
 // scipy: order N is exact (a ceil of a ratio), Wn/coeffs to N digits. NOT a
 // bit-match (transcendental prototypes drift cross-libm) and NO perf bench
 // (one-time setup, not a streaming hot loop). Lower-layer raw scalars.
+// Follows SciPy signal filter design (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/array.hpp>

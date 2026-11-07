@@ -15,6 +15,7 @@
 // TRANSCENDENTAL-heavy (exp/log/asin/sinh/logistic) ⇒ this is a TO-ULP tier (like MBOIT/atmosphere): GPU matches the CPU
 // oracle to ULP, and PHYSICAL correctness is certified independently by the white-furnace energy test (∫ f·|cosθᵢ| ≤ 1).
 // All builders are pure CKIR value-graph builders on the raster (vector) path — no new device features.
+// Follows pbrt-v3 hair.cpp (BSD-2-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_nodes.hpp>

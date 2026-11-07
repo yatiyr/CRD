@@ -12,6 +12,7 @@
 //
 // Determinism by construction (pillar 1): fixed FP summation order over the constant nodes, crd::math, no
 // data-dependent branches in the arithmetic. Allocation-free (the fv scratch is a stack array).
+// Follows QUADPACK dqk21 (public domain); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/core/types.hpp>
 #include <crd/math/cmath.hpp>

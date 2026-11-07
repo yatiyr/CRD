@@ -5,6 +5,7 @@
 
 // ClockFilter keeps ntpd's order of operations, MediaClockMap and CaptureClockAligner libwebrtc's: the bit-exact
 // oracles hold them to it (crd-hesap-clock-ntpd-tests, crd-hesap-estimators-webrtc-tests).
+// Follows libwebrtc (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 namespace crd::hesap::net
 {

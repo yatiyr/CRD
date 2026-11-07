@@ -39,6 +39,7 @@ namespace crd::hesap::iterative
 // M⁻¹). Unpreconditioned (m_inv == nullptr) skips the application. The omega step
 // uses the van Gijzen ρ-safeguard (angle = √2/2) to avoid stagnation. Recurrence
 // transcribed VERBATIM from IterativeSolvers.jl `idrs.jl`.
+// Follows IterativeSolvers.jl idrs.jl (MIT); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 namespace detail

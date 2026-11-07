@@ -6,6 +6,7 @@
 // subdivision, no work-stack, no extrapolation bookkeeping — just successively higher-order rules on the whole
 // interval). Allocation-free (savfun is a 21-element stack array). Faithful port; the error estimate's x^1.5 is the
 // x·√x form (one hardware sqrt, not the heavy double-double pow).
+// Follows QUADPACK dqng (public domain); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/core/types.hpp>
 #include <crd/hesap/quadrature/gauss_kronrod.hpp>

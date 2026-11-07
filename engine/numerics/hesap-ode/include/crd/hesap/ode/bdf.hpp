@@ -14,6 +14,7 @@
 //     `num_jac` is not replicated — FD trajectories are correct but not bit-matched).
 // Linear algebra through the v9-d `OdeLinearSolver` seam (dense hesap-dense LU now; sparse/Krylov at
 // v9-j). ADR-0091.
+// Follows SciPy _ivp/bdf.py (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>

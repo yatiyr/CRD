@@ -11,6 +11,7 @@
 // NELDERMEAD — the v7-z scoreboard]. ADR-0090.
 //
 // DETERMINISM: RNG-free, serial, fixed evaluation order ⇒ bit-identical runs by construction.
+// Follows SciPy _minimize_neldermead (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>

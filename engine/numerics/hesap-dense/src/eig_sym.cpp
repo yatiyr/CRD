@@ -25,6 +25,7 @@ namespace
 // symmetric tridiagonal QL/QR path needs). All deterministic: only
 // correctly-rounded ops (+ - * / sqrt) and abs/sign — no transcendentals,
 // no RNG (D(dense-eig)-1/-2).
+// Follows LAPACK dsteqr, dlatrd (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // =======================================================================
 
 template <typename R>

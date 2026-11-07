@@ -11,6 +11,7 @@
 // ⚠ HONESTY (pillar 3): error_estimate is the summed GK Tier-1 ESTIMATE, never a guaranteed bound — a narrow peak
 // hidden between the Kronrod nodes fools it (the Lyness-Kaganove failure). The result carries it as an estimate; the
 // caller must not treat it as an enclosure.
+// Follows QUADPACK dqage (public domain); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/hesap/quadrature/gauss_kronrod.hpp>
 #include <crd/hesap/quadrature/integrate.hpp>

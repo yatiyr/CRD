@@ -25,6 +25,6 @@ Licences settled for this decision, read at their source:
 | Cephes | [xsf's licence list](https://github.com/scipy/xsf/blob/main/LICENSES_bundled.txt): BSD-3 with the author's permission | Stays |
 | QUADPACK | [SLATEC guide](https://www.netlib.org/slatec/guide): the library holding it is in the public domain | Stays |
 | ReproBLAS | `LICENSE` in the pinned copy: BSD-style terms, University of California | Stays |
-| MINPACK-2 | No statement found; only later projects' licences cover copies of it | `more_thuente_line_search.hpp` is rewritten |
+| MINPACK-2 | No statement found; only later projects' licences cover copies of it | `more_thuente_line_search.hpp` and `lnsrlb` in `lbfgsb.hpp` are rewritten |
 
 Validators: `python scripts/check-master-plan.py`, `python scripts/check-repository.py`.

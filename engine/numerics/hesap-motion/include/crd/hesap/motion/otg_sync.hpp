@@ -10,6 +10,7 @@
 // phase times, validated by a check that also pins the total time to tf. Deterministic (crd::math + a WCET-bounded
 // derivative-bracketing polynomial solver — no runtime allocation, no unbounded iteration). Reconstructed +
 // verified against the `ruckig` package on 2474/2474 random arbitrary-state sync cases (scripts/ruckig_step2.py).
+// Follows Ruckig (MIT); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/hesap/motion/otg.hpp>
 

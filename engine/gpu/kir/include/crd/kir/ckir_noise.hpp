@@ -3,6 +3,7 @@
 // ckir_noise.hpp — the MaterialX SOURCE noise nodes (D-007 B6-b), a faithful CKIR transcription of MaterialX's
 // libraries/stdlib/genglsl/lib/mx_noise.glsl (itself the OSL oslnoise subset — "results identical to the OSL noise
 // functions"). Perlin (improved-gradient), cell, worley, and fractal(fBm) — each bit-exact vs that reference.
+// Follows MaterialX mx_noise.glsl (Apache-2.0) and OSL oslnoise (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 //
 // ── THE 32-BIT HASH ON A f64/i64 IR (the crux) ───────────────────────────────────────────────────────────────────────
 // The Bob-Jenkins hash (mx_bjmix/mx_bjfinal/mx_rotl32) is 32-bit UNSIGNED integer arithmetic with wraparound. CKIR's

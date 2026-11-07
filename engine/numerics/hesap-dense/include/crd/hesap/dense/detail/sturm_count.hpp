@@ -30,6 +30,7 @@ namespace crd::hesap::dense::detail
 //   dlarra.f:176-201  splitting into unreduced blocks
 //   dlarre.f:423-444  Gershgorin discs + pivmin + spectral diameter
 //   dlarrk.f:186-247  single-eigenvalue bisection driver
+// Follows LAPACK dlarrk, dlarrc (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 // safmin — smallest positive normal (LAPACK DLAMCH('S')).

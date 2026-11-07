@@ -18,6 +18,7 @@ namespace crd::hesap::dense
 // `dlasq2`) — its native purpose; singular vectors from Demmel-Kahan QR
 // (`dbdsqr`, v3b-1b). Reuses `detail/householder.hpp::make_householder`.
 // Lower layer: raw f32/f64 (ADR-0078).
+// Follows LAPACK dgebd2 (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 template <typename T>

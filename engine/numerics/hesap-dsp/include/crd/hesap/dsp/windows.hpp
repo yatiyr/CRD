@@ -13,6 +13,7 @@
 // `sym=true` (default) = symmetric, for FILTER DESIGN. `sym=false` (periodic /
 // "fftbins") = for SPECTRAL ANALYSIS: compute length M+1, drop the last sample.
 // Gate: vs scipy.signal.windows reference vectors (window_refs.inc) + ENBW.
+// Follows SciPy signal.windows (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/array.hpp>

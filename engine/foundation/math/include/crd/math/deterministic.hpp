@@ -15,7 +15,7 @@
 // pattern on every backend. The accuracy target is ~3 ulps for trig,
 // ~5 ulps for exp/log — about 1-2 ulps tighter than libc on average.
 //
-// Coefficients are Cephes-derived (Stephen Moshier, public domain) with
+// Coefficients are Cephes-derived (Stephen Moshier; BSD-3-Clause by his permission) with
 // minor tweaks for f32 precision; see deterministic.cpp for the
 // per-function citation.
 //
@@ -28,6 +28,7 @@
 // 2026-05-10-v0c-deterministic.md + 2026-05-10-v0c-debt-A-paydown.md): f64 overloads, Vec4f/Vec8f
 // SIMD overloads, sinh/cosh/tanh, erf/erfc/gamma/lgamma/beta, expm1/log1p all ship BELOW in this file.
 // Bessel functions + orthogonal polynomials intentionally live in crd-hesap-special (shipped), not here.
+// Follows Cephes (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #pragma once
 

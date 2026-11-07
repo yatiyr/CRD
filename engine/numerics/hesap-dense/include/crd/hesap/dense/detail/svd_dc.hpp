@@ -29,6 +29,7 @@ namespace crd::hesap::dense::detail
 //
 // References (build/win-vs-ref/_deps/openblas-src/lapack-netlib/SRC/):
 //   dlasd1.f  dlasd2.f  dlasd3.f  dlamrg.f
+// Follows LAPACK dlasd1-dlasd3 (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 // dlamrg — merge two sorted subsets a[0:n1) (direction dtrd1) and a[n1:n1+n2)

@@ -13,6 +13,7 @@
 //
 // Peak detection is exact-index vs scipy; detrend is bit-exact; the spectrum
 // metrics gate analytically (a planted harmonic ⇒ a known THD) + vs MATLAB.
+// Follows SciPy signal peak detection (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/array.hpp>

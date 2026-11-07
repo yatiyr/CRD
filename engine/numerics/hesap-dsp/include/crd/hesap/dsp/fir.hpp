@@ -12,6 +12,7 @@
 // bands built from the pass_zero flag; h = Σ_band right*sinc(right*m) -
 // left*sinc(left*m), m centred; h *= window; scaled so the first passband
 // centre has unit gain. np.sinc(x) = sin(pi x)/(pi x). Lower-layer raw scalars.
+// Follows SciPy signal.firwin (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/array.hpp>

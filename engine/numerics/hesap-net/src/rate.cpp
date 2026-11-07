@@ -5,6 +5,7 @@
 
 // The expressions below keep libwebrtc's order of operations and its float arithmetic: the bit-exact oracle holds them
 // to it (crd-hesap-estimators-webrtc-tests).
+// Follows libwebrtc (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 namespace crd::hesap::net
 {

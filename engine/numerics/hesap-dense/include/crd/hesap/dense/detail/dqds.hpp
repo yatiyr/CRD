@@ -36,6 +36,7 @@ namespace crd::hesap::dense::detail
 // References (build/win-debug/_deps/openblas-src/lapack-netlib/SRC/):
 //   dlasq5.f / dlasq6.f  the dqds / dqd inner sweeps
 //   dlasq2.f:277-353     the (q,qq,e,ee) 4-wide ping-pong Z layout
+// Follows LAPACK dlasq2-dlasq6 (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 // Z1 — 1-based view over a 0-based buffer (z1[1] == base[0]). Keeps the dqds

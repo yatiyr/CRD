@@ -22,6 +22,7 @@
 // CRUSH lever (the v13 recurring one): the GK15w error heuristic `(200·abserr/resasc)^1.5` is the heavy double-double
 // pow ⇒ replaced with `rat·√rat` (one hardware sqrt) — the same per-call cost that flipped QAGS/QAGI vs GSL. The
 // Chebyshev moments are integrand-INDEPENDENT (depend only on ω·hlgth / α,β) ⇒ cached once per interval-length level.
+// Follows QUADPACK dqawoe (public domain); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>

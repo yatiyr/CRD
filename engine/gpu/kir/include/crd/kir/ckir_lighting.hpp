@@ -12,6 +12,7 @@
 // roughness `alpha = perceptual * perceptual`. The builders here name the alpha param `alpha` to keep that unambiguous; the
 // combiner squares the surface's perceptual roughness once. All builders are CKIR value-graph builders (compose core KOps);
 // no new device features — this rides the already-clean raster path.
+// Follows Filament, glTF Sample Renderer (Apache-2.0) and ltc_code (BSD-style); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_nodes.hpp>

@@ -9,6 +9,7 @@
 // poles from ellipj at the displaced argument v0 = capk*arc_jac_sc(1/eps,ck1)/(N*K1).
 // Equiripple in BOTH bands ⇒ the minimal order for given specs. Faithful
 // scipy.signal.ellipap; the digital ellip() runs the v11-e bilinear chain.
+// Follows SciPy signal.ellipap (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 #include <crd/hesap/complex.hpp>

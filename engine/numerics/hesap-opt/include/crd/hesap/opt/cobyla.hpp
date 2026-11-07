@@ -18,6 +18,7 @@
 //
 // DETERMINISM: serial, fixed evaluation order; the SGJ simplex perturbation uses the reference's own LCG seeded
 // with (n + m) — deterministic by construction ⇒ bit-identical runs.
+// Follows NLopt cobyla (MIT); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>

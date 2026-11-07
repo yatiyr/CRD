@@ -29,6 +29,7 @@ namespace crd::hesap::dense::detail
 //
 // References (build/win-vs-ref/_deps/openblas-src/lapack-netlib/SRC/):
 //   dlasd5.f  dlasd4.f  dlaed6.f
+// Follows LAPACK dlasd4, dlaed6 (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 // =======================================================================

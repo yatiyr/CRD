@@ -12,6 +12,7 @@
 // BIT-IDENTICAL across {1..N} thread counts (the determinism moat — an edge MKL
 // /FFTW don't give). Faithful scipy.signal.welch (hann, density, onesided,
 // detrend='constant'). Lower-layer raw scalars.
+// Follows SciPy signal.welch (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/array.hpp>

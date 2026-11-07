@@ -17,6 +17,7 @@
 // (detail::cobyla_impl — relstop/Stop verbatim from nlopt stop.c). ADR-0090.
 //
 // DETERMINISM: serial, fixed evaluation order, RNG-free ⇒ bit-identical runs by construction.
+// Follows NLopt newuoa (MIT); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>

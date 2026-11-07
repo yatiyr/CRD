@@ -1,3 +1,4 @@
+// Follows libwebrtc (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 #include <crd/hesap/net/delay_trend.hpp>
 
 #include <crd/math/power.hpp>

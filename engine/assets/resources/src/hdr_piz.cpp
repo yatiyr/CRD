@@ -5,8 +5,9 @@
 #include <algorithm> // make_heap/push_heap/pop_heap (algorithms, not containers)
 #include <cstring>
 
-// hdr_piz.cpp — our own OpenEXR PIZ codec: the 2-D wavelet (ImfWav), the canonical-Huffman+RLE codec (ImfHuf), the
-// value bitmap/LUT, and the block glue (ImfPizCompressor). Algorithms per the published OpenEXR format; code is ours.
+// hdr_piz.cpp — the OpenEXR PIZ codec: the 2-D wavelet (ImfWav), the canonical-Huffman+RLE codec (ImfHuf), the
+// value bitmap/LUT, and the block glue (ImfPizCompressor). Algorithms per the published OpenEXR format.
+// Follows tinyexr PIZ (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 namespace crd::resources::piz_detail
 {

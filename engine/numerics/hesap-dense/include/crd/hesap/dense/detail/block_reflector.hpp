@@ -20,6 +20,7 @@ namespace crd::hesap::dense::detail
 // too; the rowwise/offset variants dorgbr-P needs stay local to orgbr.hpp.
 //
 // Lower layer: raw f32/f64 (ADR-0078). Real T only.
+// Follows LAPACK dlarft (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 // Build the compact-WY T matrix (nb x nb upper-triangular) from a

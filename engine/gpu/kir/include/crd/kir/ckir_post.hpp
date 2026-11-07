@@ -51,6 +51,7 @@ namespace detail
 
 // agx — the AgX filmic tonemap (Troy Sobotka; Filament/Godot fit). Rotate into the AgX inset space → log2-encode over
 // [−12.47, 4.03] EV → the 6th-order sigmoid contrast curve. Returns the display-encoded [0,1] look. Hue-preserving, no skew.
+// Follows Filament's AgX (Apache-2.0); notice in THIRD-PARTY-NOTICES.md.
 namespace agx_detail
 {
 [[nodiscard]] inline int contrast(KGraph& g, int x)

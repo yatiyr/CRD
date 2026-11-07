@@ -2,7 +2,7 @@
 // Phase 3.1 v0c. ADR-0063 §2.
 //
 // Implementations are derived from Stephen Moshier's Cephes Math Library
-// (public domain). Each function below cites the Cephes source it derives
+// (BSD-3-Clause by his permission). Each function below cites the Cephes source it derives
 // from. Coefficients have been preserved bit-exactly; the only
 // modifications are: (1) C++ namespacing, (2) `crd::f32` instead of `float`,
 // (3) std::bit_cast / __builtin_truncf in place of platform intrinsics.
@@ -11,6 +11,7 @@
 // -fno-fast-math -ffp-contract=off -mfpmath=sse (GCC/Clang) project-wide,
 // so the polynomial evaluations below produce bit-exact identical results
 // across MSVC / clang-cl / GCC × x64 / ARM64.
+// Follows Cephes (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/math/deterministic.hpp>
 #include <crd/math/trig.hpp>
@@ -738,8 +739,8 @@ f32 beta  (f32 a, f32 b) noexcept;
 
 // ===========================================================================
 // ===========================================================================
-// f64 implementations — Cephes f64 coefficient tables (Stephen Moshier,
-// public domain). Same algorithmic structure as f32 but with the rational/
+// f64 implementations — Cephes f64 coefficient tables (Stephen Moshier;
+// BSD-3-Clause by his permission). Same algorithmic structure as f32 but with the rational/
 // Padé forms Cephes uses for f64 accuracy. Bit-exact across MSVC / GCC /
 // clang under the same /fp:precise + -ffp-contract=off contract.
 // ===========================================================================

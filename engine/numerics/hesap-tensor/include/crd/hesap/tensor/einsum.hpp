@@ -31,6 +31,7 @@
 // Index sets are u64 bitmasks (26 letters + up to 8 ellipsis dims = 34 bits)
 // — allocation-free, deterministic iteration, WCET-bounded (operand and
 // step counts are hard caps). Status-not-exception throughout.
+// Follows opt_einsum (MIT); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 namespace crd::hesap::tensor

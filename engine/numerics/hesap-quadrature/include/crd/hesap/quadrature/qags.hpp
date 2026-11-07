@@ -11,6 +11,7 @@
 // engine's verified gauss_kronrod_21. Determinism by construction (fixed FP order, deterministic interval selection);
 // the work-stack is allocated once (size limit = the WCET bound). ⚠ HONESTY (pillar 3): error_estimate is the
 // extrapolated Tier-1 estimate, never a guaranteed bound.
+// Follows QUADPACK dqagse (public domain); notice in THIRD-PARTY-NOTICES.md.
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>

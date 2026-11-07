@@ -51,6 +51,7 @@
 //
 // v13 pillars: zero heap per call (the parallel path takes a caller
 // workspace), noexcept, status-not-exception.
+// Follows ReproBLAS (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 // ---------------------------------------------------------------------------
 
 namespace crd::hesap::tensor

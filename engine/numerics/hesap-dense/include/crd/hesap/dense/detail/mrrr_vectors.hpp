@@ -35,6 +35,7 @@ namespace crd::hesap::dense::detail
 //
 // work is 1-based length >= 4n: lplus @ [1..n], uminus @ [n+1..2n],
 // s @ [2n+1..3n], p @ [3n+1..4n]  (the dlar1v INDLPL/INDUMN/INDS/INDP layout).
+// Follows LAPACK dlar1v, dlarrf (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
 // =======================================================================
