@@ -291,8 +291,8 @@ inline void sum_columns(u8* output, const u8* const* sources, usize count, usize
 
 void sum(u8* output, const u8* const* sources, usize count, usize bytes, bool accumulate) noexcept
 {
-    constexpr usize kSumColumns = 4U;
-    constexpr usize wide = kSumColumns * Lanes::kBytes;
+    constexpr usize columns = 4U;
+    constexpr usize wide = columns * Lanes::kBytes;
     const usize tail = bytes % Lanes::kBytes;
     const usize vector_bytes = bytes - tail;
     usize i = 0U;
@@ -312,7 +312,7 @@ void sum(u8* output, const u8* const* sources, usize count, usize bytes, bool ac
     }
     for (; i + wide <= vector_bytes; i += wide)
     {
-        sum_columns<kSumColumns>(output, sources, count, i, accumulate);
+        sum_columns<columns>(output, sources, count, i, accumulate);
     }
     for (; i < vector_bytes; i += Lanes::kBytes)
     {
