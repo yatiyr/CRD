@@ -18,67 +18,104 @@ namespace
 // RELAXED-FRONT AMALGAMATION (v5d-h). Fundamental supernodes leave many tiny fronts, each paying scalar kernels and an
 // assembly; merging a child front into its parent trades explicit zeros for fewer, fatter BLAS-3 fronts (C. Ashcraft,
 // R. Grimes, The influence of relaxed supernode partitions on the multifrontal method, ACM TOMS 15, 1989; I. Duff, J. Reid,
-// The multifrontal solution of indefinite sparse symmetric linear equations, ACM TOMS 9, 1983).
+// The multifrontal solution of indefinite sparse symmetric linear equations, ACM TOMS 9, 1983). The graduated zero
+// bounds below are the relaxed-supernode parameters of Y. Chen, T. Davis, W. Hager, S. Rajamanickam, Algorithm 887:
+// CHOLMOD, supernodal sparse Cholesky factorization and update/downdate, ACM TOMS 35, 2008.
 //
-// Fronts arrive in postorder, so the subtrees of a front lie just below it on a stack of groups: the group beneath the
-// top one may join it exactly when its parent is a member of the top group. A merged front is the group's contiguous
-// pivots and its top member's contribution block, which contains every member's by the elimination tree's containment.
-// A pure function of the pattern, so deterministic.
+// Fronts arrive in postorder. A front joins the group that starts right above it only when its parent lies inside that
+// group, so every group stays a contiguous range of fronts. The fronts are visited from the last down to the first, so
+// the group above is already final when a front decides, and a merge extends the group downward. A merged front is the
+// group's contiguous pivots and its top member's contribution block, which contains every member's by the elimination
+// tree's containment. A pure function of the pattern, so deterministic.
 struct FrontGroup
 {
     crd::u32 first = 0;
     crd::u32 top = 0;
-    crd::u32 pivots = 0;
-    crd::u64 member_storage = 0; // What the members would store apart; the merged front's excess over it is zeros.
 };
 
-[[nodiscard]] crd::u64 front_storage(crd::u64 pivots, crd::u64 rows)
+// A candidate group, stored at its first front: one past its last front, its pivot count, the row count of its first
+// column (all its pivots plus the top member's contribution block) and the explicit zeros it holds.
+struct GroupSpan
 {
-    return (pivots * rows) - (pivots * (pivots - 1U) / 2U);
+    crd::u32 end = 0;
+    crd::u32 pivots = 0;
+    crd::u32 rows = 0;
+    crd::u64 zeros = 0;
+};
+
+// The zero share a merge may reach is limited by its pivot count: a small merge may be sparse, a large one must be dense.
+constexpr crd::u32 kSmallBand = 16;
+constexpr crd::u32 kMediumBand = 48;
+constexpr double kSmallShare = 0.8;
+constexpr double kMediumShare = 0.1;
+constexpr double kLargeShare = 0.05;
+
+[[nodiscard]] double zero_share_limit(crd::u32 pivots)
+{
+    if (pivots <= kSmallBand)
+    {
+        return kSmallShare;
+    }
+    return pivots <= kMediumBand ? kMediumShare : kLargeShare;
 }
 
-// The share of a merged front that may be explicit zeros: generous while a front is small and its overhead outweighs
-// its arithmetic, and falling off quickly as the cost of a zero grows with the front.
-[[nodiscard]] double allowed_zero_share(crd::u32 pivots)
-{
-    const double scaled = static_cast<double>(pivots) / 24.0;
-    const double squared = scaled * scaled;
-    return 0.05 + (0.75 / (1.0 + (squared * squared)));
-}
-
-// `relax` is the pivot count below which a merge is taken whatever it fills.
+// `relax` is the pivot count up to which a merge is taken whatever it fills.
 MultifrontalSymbolic amalgamate_fronts(const MultifrontalSymbolic& mf, crd::u32 relax, crd::memory::IAllocator* alloc)
 {
     const crd::u32 fronts = mf.nfront;
-    crd::containers::Array<FrontGroup> groups(alloc);
+    crd::containers::Array<GroupSpan> span(alloc);
+    span.resize(fronts);
     for (crd::u32 front = 0; front < fronts; ++front)
     {
-        const crd::u32 rows = mf.row_ptr[front + 1] - mf.row_ptr[front];
-        FrontGroup current{front, front, mf.npiv(front), front_storage(mf.npiv(front), rows)};
-        const crd::u64 contribution = rows - mf.npiv(front);
-        while (!groups.empty())
+        span[front] = GroupSpan{front + 1U, mf.npiv(front), mf.row_ptr[front + 1] - mf.row_ptr[front], 0};
+    }
+    for (crd::u32 above = fronts; above-- > 1U;)
+    {
+        const crd::u32 below = above - 1U;
+        const crd::u32 parent = mf.front_parent[below];
+        if (parent >= fronts || parent >= span[above].end)
         {
-            const FrontGroup& below = groups[groups.size() - 1U];
-            const crd::u32 parent = mf.front_parent[below.top];
-            if (parent < current.first || parent > current.top)
-            {
-                break;
-            }
-            const crd::u32 pivots = below.pivots + current.pivots;
-            const crd::u64 members = below.member_storage + current.member_storage;
-            const crd::u64 merged = front_storage(pivots, pivots + contribution);
-            const double zero_share = (static_cast<double>(merged) - static_cast<double>(members)) /
-                                      static_cast<double>(merged);
-            if (pivots > relax && zero_share > allowed_zero_share(pivots))
-            {
-                break;
-            }
-            current.first = below.first;
-            current.pivots = pivots;
-            current.member_storage = members;
-            groups.pop_back();
+            continue; // a root, or its parent is not in the group right above
         }
-        groups.push_back(current);
+        const GroupSpan& upper = span[above];
+        const GroupSpan& lower = span[below];
+
+        // Describe the merged group: the lower front's columns sit on top of the upper group's.
+        GroupSpan merged;
+        merged.end = upper.end;
+        merged.pivots = lower.pivots + upper.pivots;
+        merged.rows = lower.pivots + upper.rows;
+        merged.zeros = upper.zeros;
+
+        bool take = merged.pivots <= relax;
+        if (!take)
+        {
+            // Each lower column is padded from the lower front's row count up to the merged first column's.
+            const crd::u64 shortfall = merged.rows > lower.rows ? merged.rows - lower.rows : 0U;
+            if (shortfall == 0)
+            {
+                take = true;
+            }
+            else
+            {
+                merged.zeros += static_cast<crd::u64>(lower.pivots) * shortfall;
+                // Entries of the merged trapezoid: its triangle plus the block under it.
+                const crd::u64 pivots = merged.pivots;
+                const crd::u64 entries = pivots * (pivots + 1U) / 2U + pivots * (upper.rows - upper.pivots);
+                const double share = static_cast<double>(merged.zeros) / static_cast<double>(entries);
+                take = share < zero_share_limit(merged.pivots);
+            }
+        }
+        if (take)
+        {
+            span[below] = merged;
+        }
+    }
+
+    crd::containers::Array<FrontGroup> groups(alloc);
+    for (crd::u32 first = 0; first < fronts; first = span[first].end)
+    {
+        groups.push_back(FrontGroup{first, span[first].end - 1U});
     }
 
     crd::containers::Array<crd::u32> group_of(alloc);
