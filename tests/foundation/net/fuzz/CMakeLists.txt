@@ -5,3 +5,16 @@
 #                              against a restated wire layout and the contract's selection and downgrade rules.
 crd_fuzz_target(crd-fuzz-net-negotiation
     SOURCES fuzz_negotiation.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+
+# The generated wire formats (NET.3): scripts/gen-wire-schemas.py writes one target per schema.
+#   crd-fuzz-wire-session-control   every message of the session control channel's generated decoder.
+#   crd-fuzz-wire-test              every field type, shape and revision rule of the schema language.
+crd_fuzz_target(crd-fuzz-wire-session-control
+    SOURCES fuzz_wire_session_control.cpp LIBRARIES crd-net
+    CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-wire-session-control")
+crd_fuzz_target(crd-fuzz-wire-test
+    SOURCES fuzz_wire_test.cpp LIBRARIES crd-net-quantized CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-wire-test")
+target_include_directories(crd-fuzz-wire-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(TARGET crd-fuzz-wire-test-libfuzzer)
+    target_include_directories(crd-fuzz-wire-test-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+endif()

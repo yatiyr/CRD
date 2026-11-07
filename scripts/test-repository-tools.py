@@ -5258,7 +5258,7 @@ class TestInstruments(unittest.TestCase):
                                                        'hesap-clock', 'hesap-erasure', 'hesap-estimators', 'hesap-flexfec', 'hesap-link', 'hesap-motion', 'hesap-quantize', 'hesap-raptorq', 'hesap-red',
                                                        'memory-allocators', 'net-negotiation', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',
-                                                       'resources-reload'])
+                                                       'resources-reload', 'wire-session-control', 'wire-test'])
         for name, target in fuzz_driver.TARGETS.items():
             corpus = ROOT / target['corpus']
             self.assertTrue(corpus.is_dir(), f'{name}: committed corpus {corpus} is missing')

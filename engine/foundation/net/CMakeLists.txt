@@ -27,3 +27,9 @@ crd_enable_default_pch(crd-net)
 
 # Cerid::net of the relocatable package.
 crd_package_library(crd-net NAME net INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# What a schema with quantised fields adds (network foundation S26): hesap-net's formats, which crd-net itself does not
+# need and which are not packaged. A target that holds such a schema links this.
+add_library(crd-net-quantized INTERFACE)
+target_include_directories(crd-net-quantized INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/quantized>")
+target_link_libraries(crd-net-quantized INTERFACE crd-net crd-hesap-net)

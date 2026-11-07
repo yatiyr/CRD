@@ -1,0 +1,185 @@
+{
+  "format": "cerid-wire-schema/1",
+  "name": "wire_test",
+  "about": "Every field type, shape and revision rule of the schema language, for the generated code's tests and fuzz target.",
+  "id": "7be0c6d1a2f34e5b8c9d0e1f2a3b4c5d",
+  "kind": "World",
+  "revision": {"major": 2, "minor": 2},
+  "history": {
+    "0": "4fd992210e89af527908175ce910c8e2ace913013e8a5df8ee01586b2ce6974a",
+    "1": "27c4ac9692ceb47c511a9cae6364ead517562e54c4a26691c430a598bac571f4",
+    "2": "f17af7d77c340bc174c25d0d621d5a856a58ef3284f39722be2f4e2f87a15ff0"
+  },
+  "operations": {
+    "read": {"bit": 0, "idempotent": true},
+    "write": {"bit": 1},
+    "sync": {"bit": 5, "idempotent": true}
+  },
+  "channels": [
+    {
+      "name": "control",
+      "class": "Control",
+      "reliable": true,
+      "ordered": true,
+      "priority": 0,
+      "max_message_bytes": 60000,
+      "messages_per_s": 100,
+      "bytes_per_s": 1000000
+    },
+    {
+      "name": "state",
+      "class": "State",
+      "idempotent": true,
+      "priority": 3,
+      "max_message_bytes": 1200,
+      "messages_per_s": 60,
+      "bytes_per_s": 200000,
+      "padding_block": 64
+    }
+  ],
+  "enums": {
+    "Mode": {
+      "bits": 3,
+      "values": [
+        {"name": "Off", "value": 0},
+        {"name": "On", "value": 1},
+        {"name": "Auto", "value": 5},
+        {"name": "Later", "value": 6, "since": 1}
+      ]
+    }
+  },
+  "structs": {
+    "Vec": {
+      "fields": [
+        {"name": "x", "type": "range", "min": -512, "max": 511},
+        {"name": "y", "type": "range", "min": 1000, "max": 1099},
+        {"name": "z", "type": "varsint", "min": -100000, "max": 100000, "group": 5}
+      ]
+    },
+    "Extended": {
+      "extensible": true,
+      "fields": [
+        {"name": "base", "type": "uint", "bits": 9},
+        {"name": "label", "type": "text", "max": 20},
+        {"name": "added", "type": "uint", "bits": 7, "since": 1, "default": 3},
+        {"name": "more", "type": "bytes", "max": 9, "since": 2}
+      ]
+    },
+    "LongExtended": {
+      "extensible": true,
+      "fields": [
+        {"name": "flag", "type": "bool"},
+        {"name": "data", "type": "bytes", "max": 300}
+      ]
+    },
+    "Node": {
+      "fields": [
+        {"name": "at", "type": "Vec"},
+        {"name": "tag", "type": "bytes", "size": 3},
+        {"name": "extended", "type": "Extended", "optional": true}
+      ]
+    }
+  },
+  "messages": [
+    {
+      "name": "Scalars",
+      "id": 1,
+      "channel": "state",
+      "operation": "sync",
+      "fields": [
+        {"name": "flag", "type": "bool"},
+        {"name": "one", "type": "uint", "bits": 1},
+        {"name": "wide", "type": "uint", "bits": 64},
+        {"name": "fourteen", "type": "uint", "bits": 14},
+        {"name": "sixteen", "type": "uint", "bits": 16},
+        {"name": "ranged", "type": "range", "min": -3, "max": 3},
+        {"name": "big_range", "type": "range", "min": -9223372036854775808, "max": 9223372036854775807},
+        {"name": "count", "type": "varuint", "max": 100000, "group": 3},
+        {"name": "full", "type": "varuint", "max": 18446744073709551615},
+        {"name": "delta", "type": "varsint", "min": -9223372036854775808, "max": 9223372036854775807, "group": 13},
+        {"name": "mode", "type": "Mode"},
+        {"name": "ratio", "type": "f32"},
+        {"name": "precise", "type": "f64"},
+        {"name": "anything", "type": "f32", "nonfinite": true},
+        {"name": "anything_wide", "type": "f64", "nonfinite": true}
+      ]
+    },
+    {
+      "name": "Blobs",
+      "id": 2,
+      "channel": "control",
+      "operation": "write",
+      "fields": [
+        {"name": "before", "type": "uint", "bits": 3},
+        {"name": "fixed", "type": "bytes", "size": 5},
+        {"name": "ranged", "type": "bytes", "min": 2, "max": 40},
+        {"name": "after", "type": "uint", "bits": 5},
+        {"name": "title", "type": "text", "max": 60},
+        {"name": "maybe", "type": "bytes", "max": 7, "optional": true},
+        {"name": "maybe_title", "type": "text", "max": 7, "optional": true}
+      ]
+    },
+    {
+      "name": "Lists",
+      "id": 3,
+      "channel": "control",
+      "operation": "write",
+      "fields": [
+        {"name": "small", "type": "list", "max": 9, "of": {"type": "uint", "bits": 3}},
+        {"name": "exact", "type": "list", "min": 2, "max": 2, "of": {"type": "range", "min": 0, "max": 4}},
+        {"name": "nodes", "type": "list", "min": 1, "max": 6, "of": {"type": "Node"}},
+        {"name": "matrix", "type": "list", "max": 3, "of": {"type": "list", "max": 3, "of": {"type": "Mode"}}},
+        {"name": "words", "type": "list", "max": 3, "of": {"type": "text", "max": 5}}
+      ]
+    },
+    {
+      "name": "Revisions",
+      "id": 4,
+      "channel": "control",
+      "operation": "read",
+      "fields": [
+        {"name": "first", "type": "uint", "bits": 11},
+        {"name": "extended", "type": "Extended"},
+        {"name": "note", "type": "uint", "bits": 5, "since": 1, "default": 9},
+        {"name": "count", "type": "varuint", "max": 1000, "since": 1},
+        {"name": "named", "type": "Mode", "since": 1, "default": "Auto"},
+        {"name": "tail", "type": "bytes", "max": 12, "since": 2},
+        {"name": "node", "type": "Node", "optional": true, "since": 2},
+        {"name": "items", "type": "list", "max": 4, "since": 2, "of": {"type": "bool"}}
+      ]
+    },
+    {
+      "name": "Newer",
+      "id": 5,
+      "since": 1,
+      "channel": "control",
+      "operation": "read",
+      "fields": [
+        {"name": "only", "type": "uint", "bits": 12}
+      ]
+    },
+    {
+      "name": "LongBody",
+      "id": 7,
+      "channel": "control",
+      "operation": "write",
+      "fields": [
+        {"name": "before", "type": "uint", "bits": 3},
+        {"name": "body", "type": "LongExtended"},
+        {"name": "after", "type": "uint", "bits": 5}
+      ]
+    },
+    {
+      "name": "Quantized",
+      "id": 6,
+      "channel": "state",
+      "operation": "sync",
+      "fields": [
+        {"name": "height", "type": "bounded", "min": -100.0, "max": 100.0, "bits": 16},
+        {"name": "fine", "type": "bounded", "min": 0.0, "max": 1.0, "resolution": 0.001},
+        {"name": "turn", "type": "quaternion", "bits": 12},
+        {"name": "path", "type": "list", "max": 4, "of": {"type": "quaternion", "bits": 9}}
+      ]
+    }
+  ]
+}

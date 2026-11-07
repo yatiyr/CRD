@@ -166,6 +166,17 @@
       ]
     },
     {
+      "id": "containers.wire-bits",
+      "summary": "Bit-packed fields over byte spans, most significant bit first: the bounded writer that reports running out of room and keeps measuring, and the reader whose takes consume nothing when short, under every generated wire format.",
+      "owner": "containers",
+      "api": [
+        "engine/foundation/containers/include/crd/containers/wire_bits.hpp"
+      ],
+      "consumers": [
+        "NET.3"
+      ]
+    },
+    {
       "id": "containers.collections",
       "summary": "Arrays, hash maps and sets, rings, queues, slot maps, strings and spans (the standard containers stay banned, check_no_std_containers).",
       "owner": "containers",
@@ -821,6 +832,21 @@
         {"regex": "#\\s*include\\s*<(?:winsock2|ws2tcpip|mswsock|sys/socket|netinet/(?:in|tcp|udp)|arpa/inet|netdb)\\.h>", "what": "a socket header"}
       ],
       "decision": "docs/design/network-foundation.md D1: one owner for every path that can reach another machine. NET-STD's negotiation codec created the module (2026-10-31); 4.2a adds the transport."
+    },
+    {
+      "id": "network.wire-formats",
+      "summary": "Generated wire formats: the authored schema model, its generator, the bit-packed encoders and bounds-checked zero-copy decoders, revisions that only append, and the descriptions admission reads before any field is decoded (network foundation S26).",
+      "owner": "net",
+      "api": [
+        "engine/foundation/net/include/crd/net/wire.hpp",
+        "engine/foundation/net/quantized/crd/net/wire_quantized.hpp",
+        "engine/foundation/net/include/crd/net/wire/session_control.hpp"
+      ],
+      "consumers": [
+        "4.2a",
+        "4.2c",
+        "NET-LIVE"
+      ]
     },
     {
       "id": "crypto.agility",

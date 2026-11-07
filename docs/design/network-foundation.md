@@ -1380,6 +1380,52 @@ verification order, the restated verdict rule and a flipped byte), `tls_interop.
 schema's digest refusing OpenSSL 4.0.3's early data over records while resuming), and source mutations, each
 caught.
 
+<a id="wire-formats"></a>
+### Wire formats
+
+**S26. Generated bit-packed wire formats** (NET.3, threats T07, T09 and T11; [P-8](../research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#p-8);
+the user's order of 2026-11-01: "AS SECURE AND FAST AND COMPACT AS POSSIBLE"). Every message of every session type comes
+from one authored schema through `scripts/gen-wire-schemas.py`; nothing hand-writes a decoder.
+
+- **The model.** A schema is a JSON document (`cerid-wire-schema/1`, `engine/foundation/net/schemas/`): its 16-byte S18
+  identifier, authored once and stable across revisions; its session type; its revision; its operations; its channels with
+  the design's declared budgets; enums, structs and messages. It is the model REFLECT.2's producers converge on (the user's
+  order: a network row never waits for a later system). `transport` is the one session type below S18: its messages
+  present the capabilities, so no capability authorizes them, and it declares no operation.
+- **The layout.** Fields follow each other with no tags, most significant bit first (`containers.wire-bits`): bool, uint of
+  1 to 64 bits, range (the offset from its minimum, in the bits its span takes), varuint and zigzag varsint (groups of
+  a declared 1 to 32 bits behind a continuation bit, the shortest form only), enum, f32, f64 (finite unless declared
+  otherwise, so a NaN never reaches a simulation), hesap-net's bounded float and smallest-three quaternion, bytes, text
+  (UTF-8, checked) and list of any type. Optional fields spend one bit. Bytes and text are byte-aligned with their padding
+  checked, so they can be viewed. One message has one encoding: a padding bit, a trailing byte, an overlong integer or a
+  range's unused code is refused, so a decoded message re-encodes to its input.
+- **Revisions.** A message carries no revision: the session announces the minor it writes (`RevisionAnnounce`, zero bytes
+  per message). A minor only appends fields to a message or to a struct declared `extensible` (aligned, its length in
+  bytes, its body padded), never to a plain struct, whose elements carry no overhead. A reader takes the default of a
+  field its writer's minor lacks, and skips what a newer writer appended; an encoder asked for an older minor refuses a
+  set field that minor lacks rather than dropping it. The digest of every minor's layout is recorded in the schema's
+  `history` and checked: any change to a recorded revision (width, order, bound, default) fails the generator and needs
+  a new major; a rename does not.
+- **Bounds decided before code exists.** The generator refuses recursion, nesting past 8, a zero-sized element, a message
+  above its channel's `max_message_bytes` and a duplicate identifier. It publishes each message's minimum and maximum
+  size, its channel and its operation bit (`MessageDesc`) for admission, and the fields of the S18 artefact
+  (`WireSchema`), so the signed schema and the code cannot disagree on what exists.
+- **Decoding.** Linear in the bytes, no allocation: every element takes at least one bit, so a claimed count cannot
+  multiply work. Bytes and text are spans of the input, and a list keeps where its validated elements lie and re-reads
+  them when walked.
+- **Admission** (next slice of this row): a frame names its message and object before its body. S6 checks the declared
+  length against `MessageDesc`, the channel and the principal's quota before any buffer is reserved; S7 asks
+  `authorize_operation` with the message's operation bit, the object and the `Delivery` before the decoder reads a field.
+- **Evidence.** Each schema gets a generated fuzz target. The generator's reference interpreter, which shares no code
+  with the C++ it emits, computes known answers: `test_wire.cpp` holds the generated encoder and decoder to its bytes and
+  its verdicts on damaged messages at every minor, older and newer writers included.
+
+Later slices of [NET.3](../ROADMAP.md#slice-net.3): frames and admission S6 and S7, quotas, reassembly and backpressure;
+baseline deltas with a changed-field mask; dictionary compression for reliable streams and entropy coding for snapshots
+through crd-compression (ratio and output caps, T09); padding policies (T15); the plaintext integrity hash and state-hash
+exchange (T12); the budget board. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
+a schema with quantised fields links `crd-net-quantized`, whose header sits outside crd-net's installed headers.
+
 <a id="key-logging"></a>
 ### Key logging
 
@@ -2347,7 +2393,7 @@ reviewed releases, removals may be pushed at once.
 | `crd-crypto` providers, the first policy generation and its offline keys, handshakes, capabilities, keys, MLS, ECH, the verified model | [NET.2](../ROADMAP.md#slice-net.2) |
 | Network math (FEC, estimators, quantisation) | [HESAP-NET](../ROADMAP.md#slice-hesap-net) |
 | Message schemas' authorization (the signed schema, the operation verdict and early data bound to the schema, [S18](#message-schemas)) | [NET.2](../ROADMAP.md#slice-net.2) |
-| Schema wire formats generated per message, admission stages S6 and S7 calling S18's verdict, padding policies | [NET.3](../ROADMAP.md#slice-net.3) |
+| [Schema wire formats](#wire-formats) generated per message, admission stages S6 and S7 calling S18's verdict, padding policies | [NET.3](../ROADMAP.md#slice-net.3) |
 | Adversarial and load evidence, fuzzing, interop, admission budgets | [NET.4](../ROADMAP.md#slice-net.4) |
 | `crd-net` transport, paths, browser-facing server, stages S0 to S5, the QUIC bit greased (RFC 9287) and compatible version negotiation (RFC 9368) | [4.2a](../ROADMAP.md#slice-4.2a) |
 | PMTU, ECN, pacing, congestion control, migration, offloads | [NET-PATH](../ROADMAP.md#slice-net-path) |
