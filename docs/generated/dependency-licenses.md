@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **34** · tools: **46** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **35** · tools: **46** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -43,6 +43,7 @@
 | serialize | 2.1.3 | BSD-3-Clause | mas-bandwidth/serialize @ `v2.1.3` (7bf1877b38cf) | `serialize-7bf1877b.tar.gz` |
 | networked-physics-snapshot | fe19b74b | BSD-3-Clause | mas-bandwidth/networked-physics-gdc-2015 (fe19b74bf78a) | `Snapshot.h` |
 | vectorial-quat4f | fe19b74b | BSD-2-Clause | mas-bandwidth/networked-physics-gdc-2015 (fe19b74bf78a) | `quat4f.h` |
+| kdis | 97f8e86a | BSD-2-Clause | karljj1/kdis (97f8e86a4c68) | `kdis-97f8e86a.tar.gz` |
 | openfec | 1.4.2.12 | CeCILL-C | roc-streaming/openfec @ `v1.4.2.12` (e549f3b8ba54) | `openfec-e549f3b8.tar.gz` |
 | highway | 1.4.0 | Apache-2.0 OR BSD-3-Clause | google/highway @ `1.4.0` (2607d3b5b011) | `highway-2607d3b5.tar.gz` |
 | tracy | 0.14.1 | BSD-3-Clause | wolfpld/tracy @ `v0.14.1` (30997d5ca6bb) | `tracy-30997d5c.tar.gz` |

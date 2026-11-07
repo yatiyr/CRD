@@ -343,6 +343,19 @@
       "provenance": "Mikko Lehtonen's vectorial as the GDC 2015 networked physics demo carries it, at the commit of Snapshot.h above; one file, as that pin is (read 2026-11-07)",
       "note": "The reference of hesap-net's nlerp and slerp (HESAP-NET): both cut verbatim from external/vectorial/quat4f.h at configure time and compiled by tests/numerics/hesap-net/motion_peers.cpp on stand-ins with the arithmetic of vectorial's scalar backend; never in a shipped build."
     },
+    "kdis": {
+      "version": "97f8e86a",
+      "repository": "karljj1/kdis",
+      "commit": "97f8e86a4c6872b4e69151c49a78c7f54506f070",
+      "url": "https://github.com/karljj1/kdis/archive/97f8e86a4c6872b4e69151c49a78c7f54506f070.tar.gz",
+      "file": "kdis-97f8e86a.tar.gz",
+      "sha256": "fd3a429a7d12cc4e8d2e1468ddf7b3ebbcaf9577707edf0ee0123705325af348",
+      "size": 661069,
+      "license": "BSD-2-Clause",
+      "gated": "CRD_BUILD_MOTION_VS_PEERS",
+      "provenance": "Karl Jones's KDIS, a C++ implementation of IEEE 1278.1, at the head of its own repository (2026-03-02; read 2026-11-07)",
+      "note": "The reference of hesap-net's IEEE 1278.1 dead reckoning (HESAP-NET): src/Extras/DeadReckoningCalculator.cpp and the data types it uses, compiled by tests/numerics/hesap-net/CMakeLists.txt as crd-dead-reckoning-peers; never in a shipped build."
+    },
     "openfec": {
       "version": "1.4.2.12",
       "repository": "roc-streaming/openfec",

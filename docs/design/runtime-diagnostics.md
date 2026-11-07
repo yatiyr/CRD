@@ -3290,7 +3290,8 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   outputs over three 141-byte sources, then an accumulating pass that must give zero; [HESAP-NET](../ROADMAP.md#slice-hesap-net)) and `hesap.quantize` (37
   bounded floats and quaternions both ways, the floats' answers compile-time scalars, the quaternions' a digest the peer
   oracle holds; [HESAP-NET](../ROADMAP.md#slice-hesap-net)) and `hesap.motion` (37 components and quaternions through
-  every routine, a digest of each, held to restated expressions and the peer; [HESAP-NET](../ROADMAP.md#slice-hesap-net)).
+  every routine, then 37 entities of two dead-reckoning algorithms and two projective blends, a digest of each, held to
+  restated expressions, the true rotation and the peers; [HESAP-NET](../ROADMAP.md#slice-hesap-net)).
   Every dispatched family resolves through its check.
 - GPU device checks (`crd/gpu/device_check.hpp`): before a backend hands out a device on an adapter it runs the
   known-answer kernel `crd/kir/ckir_device_check.hpp` (one CKIR compute kernel, two workgroups of 64: f32 multiply,

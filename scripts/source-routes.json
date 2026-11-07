@@ -164,9 +164,9 @@
       "why": "The Reed-Solomon oracle against OpenFEC (crd-hesap-erasure-openfec-tests, HESAP-NET), against the pinned release fetched at configure time only when the option is on; the complete-tier linux-gcc-public-checks lane turns it on."
     },
     {
-      "paths": ["tests/numerics/hesap-net/test_motion_peers.cpp", "tests/numerics/hesap-net/motion_board.cpp", "tests/numerics/hesap-net/motion_peers.cpp"],
+      "paths": ["tests/numerics/hesap-net/test_motion_peers.cpp", "tests/numerics/hesap-net/motion_board.cpp", "tests/numerics/hesap-net/motion_peers.cpp", "tests/numerics/hesap-net/test_dead_reckoning_peers.cpp", "tests/numerics/hesap-net/dead_reckoning_board.cpp", "tests/numerics/hesap-net/dead_reckoning_peers.cpp"],
       "built_when": {"option": "CRD_BUILD_MOTION_VS_PEERS"},
-      "why": "The bit-exact oracle and board of hesap-net's interpolation against networked-physics and vectorial (crd-hesap-motion-peer-tests, crd-hesap-motion-board, HESAP-NET), against the pinned files fetched at configure time only when the option is on; the complete-tier linux-gcc-public-checks lane builds and runs them."
+      "why": "The oracle and board of hesap-net's interpolation against networked-physics and vectorial and of its dead reckoning against KDIS (crd-hesap-motion-peer-tests, crd-hesap-motion-board, crd-hesap-dead-reckoning-peer-tests, crd-hesap-dead-reckoning-board, HESAP-NET), against the pinned files fetched at configure time only when the option is on; the complete-tier linux-gcc-public-checks lane builds and runs them."
     },
     {
       "paths": ["tests/numerics/hesap-net/test_quantize_peers.cpp", "tests/numerics/hesap-net/quantize_board.cpp", "tests/numerics/hesap-net/quantize_peers.cpp"],

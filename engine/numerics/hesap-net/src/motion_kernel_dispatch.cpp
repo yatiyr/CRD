@@ -5,6 +5,8 @@
 #include <crd/core/kernel_level.hpp>
 #include <crd/hesap/net/motion_dispatch.hpp>
 
+#include <cstring>
+
 namespace crd::hesap::net
 {
 namespace
@@ -122,6 +124,65 @@ constexpr u64 kQuadraticF32 = 0x1074B8C27F2A4CCFULL;
 constexpr u64 kQuadraticF64 = 0x1BFDE512441BC8BCULL;
 constexpr u64 kNlerp = 0x0ED59501E6AA6A45ULL;
 constexpr u64 kSlerp = 0x25561E6CACA3EB9CULL;
+constexpr u64 kDeadReckonBody = 0xE9923DF31DE4A410ULL;
+constexpr u64 kDeadReckonWorld = 0x4FBC0172DF18BBA6ULL;
+constexpr u64 kBlendF32 = 0xC7B38C6837753F78ULL;
+constexpr u64 kBlendF64 = 0x6195A1EF2F32D299ULL;
+
+// 37 entities whose turns fall on both sides of the series' end, on the same values as the batches above.
+struct Reckoning
+{
+    f64 columns[17][kCount];
+    f64 out[10][kCount];
+
+    Reckoning() noexcept
+    {
+        for (usize i = 0U; i < kCount; ++i)
+        {
+            for (usize k = 0U; k < 12U; ++k)
+            {
+                columns[k][i] = value_at<f64>(i, 5U * k);
+            }
+            for (usize field = 0U; field < 4U; ++field)
+            {
+                columns[12U + field][i] = static_cast<f64>(component_at(i, field, 0U));
+            }
+            columns[16][i] = value_at<f64>(i, 3U) * 0.125;
+        }
+    }
+
+    [[nodiscard]] bool reckons_to(const MotionKernels& table, DeadReckoningAlgorithm algorithm, u64 answer) noexcept
+    {
+        const DeadReckoningInput in{{columns[0], columns[1], columns[2]},
+                                    {columns[3], columns[4], columns[5]},
+                                    {columns[6], columns[7], columns[8]},
+                                    {columns[9], columns[10], columns[11]},
+                                    {columns[12], columns[13], columns[14], columns[15]},
+                                    columns[16]};
+        const DeadReckoningOutput into{
+            {out[0], out[1], out[2]}, {out[3], out[4], out[5]}, {out[6], out[7], out[8], out[9]}};
+        std::memset(out, 0, sizeof(out));
+        table.dead_reckon(algorithm, in, kCount, into);
+        return crd::fnv1a_64(out, sizeof(out)) == answer;
+    }
+};
+
+template <class T>
+[[nodiscard]] u64 blend_digest(const Components<T>& inputs,
+                               void (*blend)(const ProjectiveBlendSpan<T>&, usize, T*, T*) noexcept) noexcept
+{
+    T elapsed[kCount];
+    T span[kCount];
+    T out[2][kCount];
+    for (usize i = 0U; i < kCount; ++i)
+    {
+        elapsed[i] = static_cast<T>(i % 11U) * static_cast<T>(0.125);
+        span[i] = static_cast<T>(i % 4U) * static_cast<T>(0.5);
+    }
+    blend(ProjectiveBlendSpan<T>{inputs.a, inputs.b, inputs.c, inputs.d, inputs.a, elapsed, span}, kCount, out[0],
+          out[1]);
+    return crd::fnv1a_64(out, sizeof(out));
+}
 
 void resolve_motion() noexcept
 {
@@ -184,7 +245,21 @@ const char* motion_self_check(const MotionKernels& table) noexcept
         return "nlerp";
     }
     table.slerp(rotations.a, rotations.b, 0.375F, kCount, rotations.out);
-    return rotations.gives(kSlerp) ? nullptr : "slerp";
+    if (!rotations.gives(kSlerp))
+    {
+        return "slerp";
+    }
+    Reckoning reckoning;
+    if (!reckoning.reckons_to(table, DeadReckoningAlgorithm::Rvb, kDeadReckonBody) ||
+        !reckoning.reckons_to(table, DeadReckoningAlgorithm::Fvw, kDeadReckonWorld))
+    {
+        return "dead_reckon";
+    }
+    if (blend_digest<f32>(single, table.projective_blend_f32) != kBlendF32)
+    {
+        return "projective_blend_f32";
+    }
+    return blend_digest<f64>(twin, table.projective_blend_f64) == kBlendF64 ? nullptr : "projective_blend_f64";
 }
 
 std::span<const KernelLevel<MotionKernels>> motion_kernel_levels() noexcept

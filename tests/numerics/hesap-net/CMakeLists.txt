@@ -1,6 +1,7 @@
 # HESAP-NET's replicated-motion peer (CRD_BUILD_MOTION_VS_PEERS, the root CMakeLists): the snapshot interpolators cut
 # verbatim from the pinned Snapshot.h and nlerp and slerp from the pinned quat4f.h, with the engine's floating-point
-# contract. crd-hesap-motion-peer-tests holds hesap-net to them bit for bit; crd-hesap-motion-board times them.
+# contract. crd-hesap-motion-peer-tests holds hesap-net to them bit for bit; crd-hesap-motion-board times them. KDIS's
+# dead reckoning, built from the pinned commit, is the peer of crd-hesap-dead-reckoning-peer-tests and its board.
 if(CRD_BUILD_MOTION_VS_PEERS)
     file(READ "${CRD_NETWORKED_PHYSICS_SNAPSHOT}" snapshot_header)
     string(FIND "${snapshot_header}" "static void InterpolateSnapshot_Linear(" interpolation_slice_begin)
@@ -43,6 +44,40 @@ if(CRD_BUILD_MOTION_VS_PEERS)
     target_include_directories(crd-hesap-motion-board PRIVATE "${PROJECT_SOURCE_DIR}/tests/support/kernel-levels")
     add_test(NAME crd-hesap-motion-board-smoke COMMAND crd-hesap-motion-board --quick)
     set_tests_properties(crd-hesap-motion-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
+
+    # KDIS's own dead reckoning, with the data types it uses and the export header its build would generate.
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/kdis-config/KDIS/KExport.hpp"
+         CONTENT "#pragma once\n#define KDIS_EXPORT\n#define KDIS_NO_EXPORT\n" @ONLY)
+    add_library(crd-dead-reckoning-peers STATIC
+        dead_reckoning_peers.cpp
+        "${CRD_KDIS_SOURCE}/src/Extras/DeadReckoningCalculator.cpp"
+        "${CRD_KDIS_SOURCE}/src/DataTypes/DataTypeBase.cpp"
+        "${CRD_KDIS_SOURCE}/src/DataTypes/EulerAngles.cpp"
+        "${CRD_KDIS_SOURCE}/src/DataTypes/Vector.cpp"
+        "${CRD_KDIS_SOURCE}/src/DataTypes/WorldCoordinates.cpp"
+        "${CRD_KDIS_SOURCE}/src/KDataStream.cpp"
+        "${CRD_KDIS_SOURCE}/src/utils/Endian.cpp")
+    target_include_directories(crd-dead-reckoning-peers SYSTEM PRIVATE
+        "${CRD_KDIS_SOURCE}/include" "${CMAKE_CURRENT_BINARY_DIR}/kdis-config")
+    target_include_directories(crd-dead-reckoning-peers PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(crd-dead-reckoning-peers PRIVATE DIS_VERSION=7)
+    target_compile_features(crd-dead-reckoning-peers PUBLIC cxx_std_20)
+    target_compile_options(crd-dead-reckoning-peers PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-w>)
+    set_target_properties(crd-dead-reckoning-peers PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+
+    add_executable(crd-hesap-dead-reckoning-peer-tests test_dead_reckoning_peers.cpp)
+    target_link_libraries(crd-hesap-dead-reckoning-peer-tests PRIVATE
+        crd-core crd-containers crd-hesap-net crd-dead-reckoning-peers Catch2::Catch2WithMain)
+    target_include_directories(crd-hesap-dead-reckoning-peer-tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/tests/support/kernel-levels")
+    crd_discover_tests(crd-hesap-dead-reckoning-peer-tests)
+
+    add_executable(crd-hesap-dead-reckoning-board dead_reckoning_board.cpp)
+    target_link_libraries(crd-hesap-dead-reckoning-board PRIVATE
+        crd-core crd-containers crd-hesap-net crd-dead-reckoning-peers)
+    target_include_directories(crd-hesap-dead-reckoning-board PRIVATE "${PROJECT_SOURCE_DIR}/tests/support/kernel-levels")
+    add_test(NAME crd-hesap-dead-reckoning-board-smoke COMMAND crd-hesap-dead-reckoning-board --quick)
+    set_tests_properties(crd-hesap-dead-reckoning-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
 endif()
 add_executable(crd-hesap-net-tests
     test_erasure.cpp
@@ -53,6 +88,7 @@ add_executable(crd-hesap-net-tests
     test_clock.cpp
     test_quantize.cpp
     test_motion.cpp
+    test_dead_reckoning.cpp
 )
 
 target_link_libraries(crd-hesap-net-tests PRIVATE
@@ -62,7 +98,8 @@ target_link_libraries(crd-hesap-net-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
-# test_motion.cpp restates the kernels' expressions, whose bits assume no contraction, as the kernels' own units do.
+# test_motion.cpp and test_dead_reckoning.cpp restate the kernels' expressions, whose bits assume no contraction, as the
+# kernels' own units do.
 target_compile_options(crd-hesap-net-tests PRIVATE ${CRD_FP_CONTRACT_OPTIONS})
 
 crd_enable_default_pch(crd-hesap-net-tests)

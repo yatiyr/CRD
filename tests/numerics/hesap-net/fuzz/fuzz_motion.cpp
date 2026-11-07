@@ -1,5 +1,5 @@
-// crd-fuzz-hesap-motion: hesap-net's interpolation, extrapolation and rewind history on any snapshot, time and limit a
-// peer's words can reach.
+// crd-fuzz-hesap-motion: hesap-net's interpolation, extrapolation, rewind history, dead reckoning and projective
+// velocity blending on any snapshot, time and limit a peer's words can reach.
 //
 // Input. Op bytes, each followed by its arguments; a short input reads zeros.
 //
@@ -10,10 +10,17 @@
 //     is left to normalise;
 //   * slerp: the restated series at every level, and for unit inputs within reach of the true arc;
 //   * a rewind history: every stamp, slot, sample and refusal against a linear search over a plain list of stamps.
+//   * dead reckoning: any columns give portable's bits at every level, in place too, with nothing written past a batch
+//   or
+//     into a column the algorithm does not move; columns a real entity could hold follow the motion they mean, by
+//     integrating the true rotation and by libm's sine and cosine, with no R1 or R2 in the oracle;
+//   * projective blending: both outputs the restated expressions at every level, nothing past a batch.
 #include <crd/fuzz/harness.hpp>
+#include <crd/hesap/net/dead_reckoning.hpp>
 #include <crd/hesap/net/motion.hpp>
 #include <crd/hesap/net/rewind.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -489,6 +496,315 @@ void rewind_history(Reader& in)
     }
 }
 
+// ---- Dead reckoning: hostile columns at every level, and bounded ones against the motion they mean ----
+
+struct Fleet
+{
+    f64 columns[17][kMaxBatch];
+    f64 out[10][kMaxBatch + 1U];
+};
+
+[[nodiscard]] DeadReckoningInput input_of(const Fleet& fleet) noexcept
+{
+    const auto& c = fleet.columns;
+    return {{c[0], c[1], c[2]},   {c[3], c[4], c[5]},           {c[6], c[7], c[8]},
+            {c[9], c[10], c[11]}, {c[12], c[13], c[14], c[15]}, c[16]};
+}
+
+[[nodiscard]] DeadReckoningOutput output_of(f64 (&o)[10][kMaxBatch + 1U]) noexcept
+{
+    return {{o[0], o[1], o[2]}, {o[3], o[4], o[5]}, {o[6], o[7], o[8], o[9]}};
+}
+
+[[nodiscard]] bool algorithm_rotates(DeadReckoningAlgorithm a) noexcept
+{
+    return a == DeadReckoningAlgorithm::Rpw || a == DeadReckoningAlgorithm::Rvw || a == DeadReckoningAlgorithm::Rpb ||
+           a == DeadReckoningAlgorithm::Rvb;
+}
+
+[[nodiscard]] bool algorithm_accelerates(DeadReckoningAlgorithm a) noexcept
+{
+    return a == DeadReckoningAlgorithm::Rvw || a == DeadReckoningAlgorithm::Fvw || a == DeadReckoningAlgorithm::Rvb ||
+           a == DeadReckoningAlgorithm::Fvb;
+}
+
+[[nodiscard]] bool algorithm_on_body(DeadReckoningAlgorithm a) noexcept
+{
+    return a == DeadReckoningAlgorithm::Fpb || a == DeadReckoningAlgorithm::Rpb || a == DeadReckoningAlgorithm::Rvb ||
+           a == DeadReckoningAlgorithm::Fvb;
+}
+
+// x y z of a rotation of `v` by q, body to world.
+void rotate_into(const f64* q, const f64* v, f64* out) noexcept
+{
+    const f64 tx = 2.0 * ((q[1] * v[2]) - (q[2] * v[1]));
+    const f64 ty = 2.0 * ((q[2] * v[0]) - (q[0] * v[2]));
+    const f64 tz = 2.0 * ((q[0] * v[1]) - (q[1] * v[0]));
+    out[0] = v[0] + (q[3] * tx) + ((q[1] * tz) - (q[2] * ty));
+    out[1] = v[1] + (q[3] * ty) + ((q[2] * tx) - (q[0] * tz));
+    out[2] = v[2] + (q[3] * tz) + ((q[0] * ty) - (q[1] * tx));
+}
+
+// The displacement in the body's first axes, by integrating the true rotation: no R1 or R2 in it.
+void integrated(const f64* w, const f64* v, const f64* a, f64 dt, f64* out) noexcept
+{
+    const f64 speed = std::sqrt((w[0] * w[0]) + (w[1] * w[1]) + (w[2] * w[2]));
+    const auto panels = static_cast<u32>(8.0 + (4.0 * speed * std::fabs(dt)));
+    const f64 h = dt / static_cast<f64>(panels);
+    constexpr f64 node = 0.7745966692414834;
+    constexpr f64 outer_weight = 5.0 / 18.0;
+    constexpr f64 middle_weight = 8.0 / 18.0;
+    out[0] = 0.0;
+    out[1] = 0.0;
+    out[2] = 0.0;
+    const auto add = [&](f64 tau, f64 weight) noexcept
+    {
+        const f64 half = speed * tau * 0.5;
+        const f64 scale = (speed > 0.0) ? std::sin(half) / speed : 0.0;
+        const f64 q[4] = {w[0] * scale, w[1] * scale, w[2] * scale, std::cos(half)};
+        const f64 at[3] = {v[0] + (a[0] * tau), v[1] + (a[1] * tau), v[2] + (a[2] * tau)};
+        f64 turned[3];
+        rotate_into(q, at, turned);
+        for (usize k = 0U; k < 3U; ++k)
+        {
+            out[k] += turned[k] * weight * h;
+        }
+    };
+    for (u32 i = 0U; i < panels; ++i)
+    {
+        const f64 middle = (static_cast<f64>(i) + 0.5) * h;
+        add(middle - (node * h * 0.5), outer_weight);
+        add(middle, middle_weight);
+        add(middle + (node * h * 0.5), outer_weight);
+    }
+}
+
+void hold_to_motion(const Fleet& fleet, DeadReckoningAlgorithm algorithm, usize count,
+                    const f64 (&o)[10][kMaxBatch + 1U])
+{
+    const auto& c = fleet.columns;
+    const bool body = algorithm_on_body(algorithm);
+    const bool turns = algorithm_rotates(algorithm);
+    const bool speeds = algorithm_accelerates(algorithm);
+    for (usize i = 0U; i < count; ++i)
+    {
+        const f64 dt = c[16][i];
+        const f64 v[3] = {c[3][i], c[4][i], c[5][i]};
+        const f64 a[3] = {speeds ? c[6][i] : 0.0, speeds ? c[7][i] : 0.0, speeds ? c[8][i] : 0.0};
+        const f64 none[3] = {0.0, 0.0, 0.0};
+        const f64 w[3] = {c[9][i], c[10][i], c[11][i]};
+        const f64 q[4] = {c[12][i], c[13][i], c[14][i], c[15][i]};
+        f64 moved[3];
+        if (body)
+        {
+            f64 local[3];
+            integrated(turns ? w : none, v, a, dt, local);
+            rotate_into(q, local, moved);
+        }
+        else
+        {
+            for (usize k = 0U; k < 3U; ++k)
+            {
+                moved[k] = (v[k] * dt) + (a[k] * (0.5 * dt * dt));
+            }
+        }
+        for (usize k = 0U; k < 3U; ++k)
+        {
+            CRD_FUZZ_REQUIRE(std::fabs(o[k][i] - (c[k][i] + moved[k])) < 1e-7);
+        }
+        if (turns)
+        {
+            const f64 unit = (o[6][i] * o[6][i]) + (o[7][i] * o[7][i]) + (o[8][i] * o[8][i]) + (o[9][i] * o[9][i]);
+            CRD_FUZZ_REQUIRE(std::fabs(unit - 1.0) < 1e-13);
+            // The same turn by libm's sine and cosine.
+            const f64 speed = std::sqrt((w[0] * w[0]) + (w[1] * w[1]) + (w[2] * w[2]));
+            const f64 half = speed * dt * 0.5;
+            const f64 scale = (speed > 0.0) ? std::sin(half) / speed : dt * 0.5;
+            const f64 turn[4] = {w[0] * scale, w[1] * scale, w[2] * scale, std::cos(half)};
+            const f64 expected[4] = {(q[3] * turn[0]) + (q[0] * turn[3]) + (q[1] * turn[2]) - (q[2] * turn[1]),
+                                     (q[3] * turn[1]) - (q[0] * turn[2]) + (q[1] * turn[3]) + (q[2] * turn[0]),
+                                     (q[3] * turn[2]) + (q[0] * turn[1]) - (q[1] * turn[0]) + (q[2] * turn[3]),
+                                     (q[3] * turn[3]) - (q[0] * turn[0]) - (q[1] * turn[1]) - (q[2] * turn[2])};
+            for (usize k = 0U; k < 4U; ++k)
+            {
+                CRD_FUZZ_REQUIRE(std::fabs(o[6U + k][i] - expected[k]) < 1e-10);
+            }
+        }
+        if (speeds)
+        {
+            for (usize k = 0U; k < 3U; ++k)
+            {
+                CRD_FUZZ_REQUIRE(same_value(o[3U + k][i], c[3U + k][i] + (c[6U + k][i] * dt)));
+            }
+        }
+    }
+}
+
+void dead_reckoning(Reader& in, bool bounded)
+{
+    const u8 number = in.next();
+    const usize count = in.next() % (kMaxBatch + 1U);
+    Fleet fleet{};
+    for (usize i = 0U; i < kMaxBatch; ++i)
+    {
+        for (usize k = 0U; k < 17U; ++k)
+        {
+            fleet.columns[k][i] = in.size != 0U ? in.next_value<f64>() : 0.0;
+        }
+        if (bounded)
+        {
+            // Any word becomes a value a real entity holds: a unit quaternion, and speeds and times in range.
+            const auto cut = [](f64 value, f64 limit) noexcept
+            {
+                if (!std::isfinite(value))
+                {
+                    return 0.0;
+                }
+                return std::fmod(value, limit);
+            };
+            for (usize k = 0U; k < 9U; ++k)
+            {
+                fleet.columns[k][i] = cut(fleet.columns[k][i], 1000.0);
+            }
+            for (usize k = 9U; k < 12U; ++k)
+            {
+                fleet.columns[k][i] = cut(fleet.columns[k][i], 16.0);
+            }
+            fleet.columns[16][i] = cut(fleet.columns[16][i], 4.0);
+            f64 length2 = 0.0;
+            for (usize k = 12U; k < 16U; ++k)
+            {
+                fleet.columns[k][i] = cut(fleet.columns[k][i], 1.0);
+                length2 += fleet.columns[k][i] * fleet.columns[k][i];
+            }
+            if (length2 < 1e-6)
+            {
+                length2 += 1.0 - (fleet.columns[15][i] * fleet.columns[15][i]);
+                fleet.columns[15][i] = 1.0;
+            }
+            const f64 scale = 1.0 / std::sqrt(length2);
+            for (usize k = 12U; k < 16U; ++k)
+            {
+                fleet.columns[k][i] *= scale;
+            }
+        }
+    }
+    if (!dead_reckoning_algorithm_known(number))
+    {
+        return;
+    }
+    const auto algorithm = static_cast<DeadReckoningAlgorithm>(number);
+    const DeadReckoningInput columns = input_of(fleet);
+    static f64 reference[10][kMaxBatch + 1U];
+    for (auto& column : reference)
+    {
+        std::fill_n(column, kMaxBatch + 1U, -1.5);
+    }
+    kMotionKernelsPortable.dead_reckon(algorithm, columns, count, output_of(reference));
+    if (bounded && algorithm != DeadReckoningAlgorithm::Static)
+    {
+        hold_to_motion(fleet, algorithm, count, reference);
+    }
+    for (usize k = 0U; k < 10U; ++k)
+    {
+        const bool written =
+            k < 3U || (k < 6U && algorithm_accelerates(algorithm)) || (k >= 6U && algorithm_rotates(algorithm));
+        for (usize i = (written ? count : 0U); i <= kMaxBatch; ++i)
+        {
+            CRD_FUZZ_REQUIRE(reference[k][i] == -1.5);
+        }
+    }
+    for_each_level(
+        [&](const MotionKernels& table)
+        {
+            static f64 got[10][kMaxBatch + 1U];
+            for (auto& column : got)
+            {
+                std::fill_n(column, kMaxBatch + 1U, -1.5);
+            }
+            table.dead_reckon(algorithm, columns, count, output_of(got));
+            for (usize k = 0U; k < 10U; ++k)
+            {
+                for (usize i = 0U; i <= kMaxBatch; ++i)
+                {
+                    CRD_FUZZ_REQUIRE(same_value(got[k][i], reference[k][i]));
+                }
+            }
+            // In place, the same answers.
+            Fleet copy = fleet;
+            const DeadReckoningOutput same{{copy.columns[0], copy.columns[1], copy.columns[2]},
+                                           {copy.columns[3], copy.columns[4], copy.columns[5]},
+                                           {copy.columns[12], copy.columns[13], copy.columns[14], copy.columns[15]}};
+            table.dead_reckon(algorithm, input_of(copy), count, same);
+            for (usize i = 0U; i < count; ++i)
+            {
+                for (usize k = 0U; k < 3U; ++k)
+                {
+                    CRD_FUZZ_REQUIRE(same_value(copy.columns[k][i], reference[k][i]));
+                }
+            }
+        });
+}
+
+template <class T> void blends(Reader& in)
+{
+    const usize count = in.next() % (kMaxBatch + 1U);
+    const bool accelerated = (in.next() & 1U) != 0U;
+    T c[7][kMaxBatch];
+    for (auto& column : c)
+    {
+        for (usize i = 0U; i < kMaxBatch; ++i)
+        {
+            column[i] = in.size != 0U ? in.next_value<T>() : static_cast<T>(0);
+        }
+    }
+    const ProjectiveBlendSpan<T> span{c[0], c[1], c[2], c[3], accelerated ? c[4] : nullptr, c[5], c[6]};
+    for_each_level(
+        [&](const MotionKernels& table)
+        {
+            T position[kMaxBatch + 1U];
+            T velocity[kMaxBatch + 1U];
+            std::fill_n(position, kMaxBatch + 1U, static_cast<T>(-1.5));
+            std::fill_n(velocity, kMaxBatch + 1U, static_cast<T>(-1.5));
+            if constexpr (sizeof(T) == sizeof(f32))
+            {
+                table.projective_blend_f32(span, count, position, velocity);
+            }
+            else
+            {
+                table.projective_blend_f64(span, count, position, velocity);
+            }
+            for (usize i = 0U; i < count; ++i)
+            {
+                const T rate = accelerated ? c[4][i] : static_cast<T>(0);
+                const T elapsed = c[5][i];
+                const T width = c[6][i];
+                T fraction = elapsed / width;
+                fraction = (fraction >= static_cast<T>(0)) ? fraction : static_cast<T>(0);
+                fraction = (fraction <= static_cast<T>(1)) ? fraction : static_cast<T>(1);
+                fraction = (width > static_cast<T>(0)) ? fraction : static_cast<T>(1);
+                const T change = c[3][i] - c[1][i];
+                const T blended = c[1][i] + (change * fraction);
+                const T half = static_cast<T>(0.5) * rate * elapsed * elapsed;
+                const T projected = c[0][i] + (blended * elapsed) + half;
+                const T difference = (c[2][i] + (c[3][i] * elapsed) + half) - projected;
+                CRD_FUZZ_REQUIRE(same_value(position[i], projected + (difference * fraction)));
+                const T gained = rate * elapsed;
+                const T target_rate = c[3][i] + gained;
+                const T projected_rate = blended + (change * fraction) + gained;
+                const T expected =
+                    (fraction < static_cast<T>(1))
+                        ? projected_rate + ((target_rate - projected_rate) * fraction) + (difference / width)
+                        : target_rate;
+                CRD_FUZZ_REQUIRE(same_value(velocity[i], expected));
+            }
+            for (usize i = count; i <= kMaxBatch; ++i)
+            {
+                CRD_FUZZ_REQUIRE(position[i] == static_cast<T>(-1.5) && velocity[i] == static_cast<T>(-1.5));
+            }
+        });
+}
+
 void add(crd::fuzz::SeedSink& sink, const char* name, std::initializer_list<u8> bytes)
 {
     sink.add(name, bytes.begin(), bytes.size());
@@ -501,7 +817,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     Reader in{data, size};
     for (u32 ops = 0U; ops < 8U && in.size != 0U; ++ops)
     {
-        switch (in.next() % 5U)
+        switch (in.next() % 9U)
         {
             case 0U:
                 component_batches<f32>(in);
@@ -515,8 +831,20 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
             case 3U:
                 quaternion_batches(in, true);
                 break;
-            default:
+            case 4U:
                 rewind_history(in);
+                break;
+            case 5U:
+                dead_reckoning(in, false);
+                break;
+            case 6U:
+                dead_reckoning(in, true);
+                break;
+            case 7U:
+                blends<f32>(in);
+                break;
+            default:
+                blends<f64>(in);
                 break;
         }
     }
@@ -545,6 +873,23 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                                  4U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 0U, 16U, 0U, 16U});
     add(sink, "history-range-ends", {4U, 6U, 2U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 128U, 2U, 255U, 255U, 255U, 255U, 255U,
                                      255U, 255U, 127U, 3U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 255U, 0U, 255U, 0U});
+    // Dead reckoning: each algorithm once at every kind of value, the first word a count of a few entities.
+    for (u8 algorithm = 0U; algorithm <= 10U; ++algorithm)
+    {
+        const char* const names[] = {"reckon-other", "reckon-static", "reckon-fpw",    "reckon-rpw",
+                                     "reckon-rvw",   "reckon-fvw",    "reckon-fpb",    "reckon-rpb",
+                                     "reckon-rvb",   "reckon-fvb",    "reckon-unknown"};
+        add(sink, names[algorithm],
+            {6U, algorithm, 5U, 3U, 2U, 4U, 5U, 3U, 2U, 4U, 5U, 4U, 2U, 3U, 5U, 2U, 4U, 5U, 3U, 2U, 7U,
+             3U, 4U,        5U, 2U, 3U, 2U, 5U, 3U, 4U, 2U, 5U, 3U, 4U, 2U, 2U, 2U, 3U, 5U, 4U, 3U});
+    }
+    add(sink, "reckon-hostile",
+        {5U, 8U, 9U, 9U, 10U, 11U, 12U, 13U, 14U, 15U, 9U, 10U, 11U, 12U, 13U, 14U, 15U, 9U, 10U, 11U});
+    add(sink, "reckon-huge-rate", {5U, 7U, 3U, 2U, 2U, 2U, 2U, 2U, 2U, 2U, 2U, 2U, 12U, 12U, 12U, 0U, 0U, 0U, 2U, 12U});
+    add(sink, "blend-small",
+        {7U, 7U, 1U, 2U, 3U, 4U, 5U, 6U, 2U, 7U, 3U, 2U, 4U, 5U, 3U, 7U, 2U, 5U, 3U, 2U, 2U, 4U, 5U});
+    add(sink, "blend-no-span", {8U, 4U, 0U, 2U, 3U, 4U, 5U, 2U, 3U, 0U, 0U, 1U, 11U, 9U});
+    add(sink, "blend-extremes", {8U, 3U, 1U, 9U, 10U, 11U, 12U, 13U, 14U, 11U, 12U, 13U, 14U, 11U, 12U, 13U, 14U, 15U});
     add(sink, "history-negative-limits", {4U, 3U, 0U, 9U, 128U, 0U, 0U, 0U, 0U, 0U, 0U, 15U, 9U, 128U, 0U, 0U, 0U, 0U,
                                           0U, 0U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 0U, 0U, 0U, 0U, 0U,
                                           0U, 0U, 128U});

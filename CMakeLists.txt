@@ -94,7 +94,8 @@ option(CRD_BUILD_CLOCK_VS_NTPD "Build the clock filter's oracle against ntpd" OF
 # crd-hesap-quantize-peer-tests and crd-hesap-quantize-board of the tree that turns it on.
 option(CRD_BUILD_QUANTIZE_VS_PEERS "Build the quantisation oracle and board against its two peers" OFF)
 # HESAP-NET's interpolation against the same Snapshot.h and vectorial's quat4f.h from the same commit (cmake/pins.json
-# vectorial-quat4f), fetched on demand. Never in a shipped build; crd-hesap-motion-peer-tests and crd-hesap-motion-board
+# vectorial-quat4f) and its dead reckoning against KDIS (cmake/pins.json kdis), fetched on demand. Never in a shipped
+# build; crd-hesap-motion-peer-tests, crd-hesap-dead-reckoning-peer-tests and their boards
 # of the tree that turns it on.
 option(CRD_BUILD_MOTION_VS_PEERS "Build the replicated-motion oracle and board against its peer" OFF)
 set(CRD_NASM "$ENV{CRD_NASM}" CACHE FILEPATH "The pinned NASM on Linux (scripts/install-nasm.py), for ISA-L's assembly")
@@ -1632,6 +1633,8 @@ if(CRD_BUILD_MOTION_VS_PEERS)
     endif()
     crd_add_pinned_package(vectorial-quat4f DOWNLOAD_ONLY YES DOWNLOAD_NO_EXTRACT YES)
     set(CRD_VECTORIAL_QUAT4F "${vectorial-quat4f_SOURCE_DIR}/quat4f.h")
+    crd_add_pinned_package(kdis DOWNLOAD_ONLY YES)
+    set(CRD_KDIS_SOURCE "${kdis_SOURCE_DIR}")
 endif()
 
 # ----- The network estimators' libwebrtc peer: its files, built by tests/numerics/hesap-net -----

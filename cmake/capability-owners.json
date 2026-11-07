@@ -695,9 +695,10 @@
     },
     {
       "id": "numerics.motion-sampling",
-      "summary": "Sampling replicated motion: interpolation, cubic Hermite, extrapolation, nlerp and slerp as dispatched batches, bit-exact with networked-physics' snapshot interpolation where that reference is defined, and the rewind history a server's lag compensation and a client's playout delay sample within declared limits.",
+      "summary": "Sampling replicated motion: interpolation, cubic Hermite, extrapolation, nlerp and slerp as dispatched batches, bit-exact with networked-physics' snapshot interpolation where that reference is defined, the rewind history a server's lag compensation and a client's playout delay sample within declared limits, IEEE 1278.1's nine dead-reckoning algorithms on quaternions with DIS's Euler angles beside them, and projective velocity blending.",
       "owner": "hesap-net",
       "api": [
+        "engine/numerics/hesap-net/include/crd/hesap/net/dead_reckoning.hpp",
         "engine/numerics/hesap-net/include/crd/hesap/net/motion.hpp",
         "engine/numerics/hesap-net/include/crd/hesap/net/rewind.hpp"
       ],
