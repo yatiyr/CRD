@@ -303,6 +303,33 @@
       "provenance": "The Network Time Foundation's release of the RFC 5905 reference implementation; the SHA-256 is the one it publishes beside the tarball (read 2026-11-07)",
       "note": "The reference of hesap-net's clock filter (HESAP-NET): clock_filter() cut verbatim from ntpd/ntp_proto.c at configure time and compiled on tests/numerics/hesap-net/ntpd_peer.c's stand-ins, as crd-ntpd-peer on the complete-tier linux-gcc-public-checks lane; never in an engine module or a default build. COPYRIGHT read from the archive: the University of Delaware's notice and the Network Time Foundation's two-clause terms. Pinned as a testing download (pre-approved, user 2026-10-30)."
     },
+    "serialize": {
+      "version": "2.1.3",
+      "repository": "mas-bandwidth/serialize",
+      "ref": "v2.1.3",
+      "commit": "7bf1877b38cfdd737d0bf102a546ec2674335786",
+      "url": "https://github.com/mas-bandwidth/serialize/archive/7bf1877b38cfdd737d0bf102a546ec2674335786.tar.gz",
+      "file": "serialize-7bf1877b.tar.gz",
+      "sha256": "761a930f9337bcb22419b69094064481959235a255962e3e168f0e8dfe2702ef",
+      "size": 1166062,
+      "license": "BSD-3-Clause",
+      "gated": "CRD_BUILD_QUANTIZE_VS_PEERS",
+      "provenance": "Glenn Fiedler's serialize, the bit stream library of yojimbo, at its release tag (read 2026-11-07)",
+      "note": "The reference of hesap-net's bounded floats (HESAP-NET): compressed_float, whose two roundings its STANDARD.md makes normative. serialize.h as released, compiled by tests/numerics/hesap-net/quantize_peers.cpp only; never in a shipped build."
+    },
+    "networked-physics-snapshot": {
+      "version": "fe19b74b",
+      "repository": "mas-bandwidth/networked-physics-gdc-2015",
+      "commit": "fe19b74bf78ae0a11a6748eab229ae9c232c2690",
+      "url": "https://raw.githubusercontent.com/mas-bandwidth/networked-physics-gdc-2015/fe19b74bf78ae0a11a6748eab229ae9c232c2690/src/game/Snapshot.h",
+      "file": "networked-physics-Snapshot-fe19b74b.h",
+      "sha256": "f193d58d2bf4468609b8dc8f11bcec9437947ddd8f21f56e8505a776f19a5653",
+      "size": 47932,
+      "license": "BSD-3-Clause",
+      "gated": "CRD_BUILD_QUANTIZE_VS_PEERS",
+      "provenance": "Glenn Fiedler's GDC 2015 networked physics demo, the source of the smallest-three method, at the repository's last commit; one file, because the repository's assets and libraries weigh 350 MB (read 2026-11-07)",
+      "note": "The reference of hesap-net's smallest-three quaternions (HESAP-NET): compressed_quaternion and compressed_quaternion_64, cut verbatim from src/game/Snapshot.h at configure time and compiled by tests/numerics/hesap-net/quantize_peers.cpp on its few stand-ins; never in a shipped build."
+    },
     "openfec": {
       "version": "1.4.2.12",
       "repository": "roc-streaming/openfec",

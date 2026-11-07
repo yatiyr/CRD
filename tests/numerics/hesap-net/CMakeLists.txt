@@ -5,6 +5,7 @@ add_executable(crd-hesap-net-tests
     test_interleave.cpp
     test_estimators.cpp
     test_clock.cpp
+    test_quantize.cpp
 )
 
 target_link_libraries(crd-hesap-net-tests PRIVATE
@@ -155,4 +156,42 @@ if(CRD_BUILD_CLOCK_VS_NTPD)
         add_test(NAME crd-hesap-clock-board-smoke COMMAND crd-hesap-clock-board --quick)
         set_tests_properties(crd-hesap-clock-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
     endif()
+endif()
+
+# HESAP-NET's quantisation peers (CRD_BUILD_QUANTIZE_VS_PEERS, the root CMakeLists): serialize.h as released and the
+# compressed_quaternion structs cut verbatim from the pinned Snapshot.h, with the engine's floating-point contract.
+# crd-hesap-quantize-peer-tests holds hesap-net to them bit for bit; crd-hesap-quantize-board times them.
+if(CRD_BUILD_QUANTIZE_VS_PEERS)
+    file(READ "${CRD_NETWORKED_PHYSICS_SNAPSHOT}" snapshot_header)
+    string(FIND "${snapshot_header}" "template <int bits> struct compressed_quaternion\n" quaternion_slice_begin)
+    string(FIND "${snapshot_header}" "template <typename Stream> inline void serialize_compressed_quaternion("
+           quaternion_slice_end)
+    if(quaternion_slice_begin EQUAL -1 OR quaternion_slice_end LESS_EQUAL quaternion_slice_begin)
+        message(FATAL_ERROR "[quantize-vs-peers] compressed_quaternion not found in ${CRD_NETWORKED_PHYSICS_SNAPSHOT}")
+    endif()
+    math(EXPR quaternion_slice_length "${quaternion_slice_end} - ${quaternion_slice_begin}")
+    string(SUBSTRING "${snapshot_header}" ${quaternion_slice_begin} ${quaternion_slice_length} quaternion_slice)
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/quantize-slice/networked_physics_quaternion_slice.inc"
+         CONTENT "${quaternion_slice}" @ONLY)
+
+    add_library(crd-quantize-peers STATIC quantize_peers.cpp)
+    target_include_directories(crd-quantize-peers PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/quantize-slice")
+    target_include_directories(crd-quantize-peers SYSTEM PRIVATE "${serialize_SOURCE_DIR}")
+    target_include_directories(crd-quantize-peers PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_features(crd-quantize-peers PUBLIC cxx_std_20)
+    target_compile_options(crd-quantize-peers PRIVATE ${CRD_FP_CONTRACT_OPTIONS} $<$<CXX_COMPILER_ID:GNU,Clang>:-w>)
+    set_target_properties(crd-quantize-peers PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+
+    add_executable(crd-hesap-quantize-peer-tests test_quantize_peers.cpp)
+    target_link_libraries(crd-hesap-quantize-peer-tests PRIVATE
+        crd-core crd-containers crd-hesap-net crd-quantize-peers Catch2::Catch2WithMain)
+    target_include_directories(crd-hesap-quantize-peer-tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/tests/support/kernel-levels")
+    crd_discover_tests(crd-hesap-quantize-peer-tests)
+
+    add_executable(crd-hesap-quantize-board quantize_board.cpp)
+    target_link_libraries(crd-hesap-quantize-board PRIVATE crd-core crd-containers crd-hesap-net crd-quantize-peers)
+    target_include_directories(crd-hesap-quantize-board PRIVATE "${PROJECT_SOURCE_DIR}/tests/support/kernel-levels")
+    add_test(NAME crd-hesap-quantize-board-smoke COMMAND crd-hesap-quantize-board --quick)
+    set_tests_properties(crd-hesap-quantize-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
 endif()

@@ -14,6 +14,9 @@
 #   crd-fuzz-hesap-clock     The clock filters on any timestamps a peer can write: the exchange restated, the filter's
 #                            order, stages and event against its definitions, the line finite, refusals that change
 #                            nothing, the media map and capture aligner against their invariants.
+#   crd-fuzz-hesap-quantize  Bounded floats and smallest-three quaternions on any format, value and word a peer can
+#                            send: formats against their restated conditions, every level bit for bit, every decoded
+#                            word unit length and refused exactly as restated.
 crd_fuzz_target(crd-fuzz-hesap-erasure
     SOURCES fuzz_erasure.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 crd_fuzz_target(crd-fuzz-hesap-flexfec
@@ -24,3 +27,5 @@ crd_fuzz_target(crd-fuzz-hesap-estimators
     SOURCES fuzz_estimators.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-estimators")
 crd_fuzz_target(crd-fuzz-hesap-clock
     SOURCES fuzz_clock.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-clock")
+crd_fuzz_target(crd-fuzz-hesap-quantize
+    SOURCES fuzz_quantize.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quantize")
