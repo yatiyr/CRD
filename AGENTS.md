@@ -17,7 +17,7 @@ Universal entry: [START_HERE](START_HERE.md).
    also read [KERNEL-CRUSH-MANDATE](docs/KERNEL-CRUSH-MANDATE.md) and [crush playbook](docs/hints/crush-playbook.md).
 5. State the task's purpose, exact slice, full deliverable and verification scope before acting.
 
-Continue within the user's request and authorization; ask only when scope or requirements are genuinely
+Continue within the user's request and authorization; ask only when scope or requirements are
 unresolved or a design gate is unaccepted. Never invent approval or tool results.
 
 ## One owner for each fact
@@ -39,7 +39,7 @@ unresolved or a design gate is unaccepted. Never invent approval or tool results
 - Re-anchor to the task's purpose at every prompt. Never silently narrow a slice, drop an inherited requirement,
   weaken its tests or lower the quality bar. Recommend the complete, gold-standard option, never the easy one.
 - **Everything executable is an authorable asset.** Follow PRINCIPLES' exact form and deletion requirements.
-  A shipped algorithm hidden in a C++ graph builder violates the purpose even if the pixels look correct.
+  A shipped algorithm hidden in a C++ graph builder violates the purpose.
 - Reuse first: search APIs, implementations, users. Extend the [owner](docs/design/capability-ownership.md);
   never duplicate a helper or add dependency cycles. Same path for tests, sandbox and real apps.
 - **Defer nothing.** Fix every verified Cerid failure and finding at once (warnings, flakes, weak tests, stale docs);
@@ -58,12 +58,14 @@ unresolved or a design gate is unaccepted. Never invent approval or tool results
 - Implemented research gets an educative [recipe](docs/recipes/README.md): parameters, units, ranges, cited math,
   pitfalls, code and benchmark links; paper divergences are numbered decisions in the ADR/system reference.
 - Every benchmark board goes in [bench](docs/bench/README.md) **at measurement time**, with every required peer
-  (scipy, MATLAB, Boost, GSL) and every loss. Run boards on a busy host with `--allow-contended`:
-  record the contention and judge by ratios of interleaved arms against peers and the pre-row engine. A tie or loss
+  and every loss. Run boards on a busy host with `--allow-contended`:
+  judge by ratios of interleaved arms against peers and the pre-row engine. A tie or loss
   cannot close a full-victory contract.
-- Downloads: testing tools, SDKs, emulators and peer libraries are pre-approved (user, 2026-10-30); pin each in
+- Downloads: testing tools, SDKs, emulators and peer libraries are pre-approved; pin each in
   `cmake/pins.json`, own directory. Ask first for paid, non-testing or licence-restricted. Accounts, billing and
-  credentials are user actions. No GPL-derived code: [copyleft](docs/design/pinned-inputs.md#copyleft).
+  credentials are user actions.
+- **Never copy code.** Any algorithm is allowed and may match another's results, but we write the text ourselves: no
+  pasting or translating other projects' code ([rule](docs/design/pinned-inputs.md#copyleft)).
 
 ## Completion and verification
 
@@ -78,7 +80,7 @@ unresolved or a design gate is unaccepted. Never invent approval or tool results
   measured budgets. A schema or emitter is not runtime proof. A parent closes only with every child's evidence.
 - Every task ends with a session record and accurate documents per the
   [close-out contract](docs/design/system-quality-contract.md): owning row, context, changed contracts, examples and
-  indexes. Preserve historical evidence; add benches, recipes and lessons when warranted; run the validators.
+  indexes. add benches, recipes and lessons when warranted; run the validators.
 - Qualify actual OS/ISA/API/adapter/driver/workload tuples; unavailable target evidence leaves its gate open.
   Model, agent and plugin inputs never grant authority; commands enforce capabilities and budgets.
 
