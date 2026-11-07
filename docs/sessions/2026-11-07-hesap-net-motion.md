@@ -39,8 +39,8 @@ Not this track's, recorded: the mikktspace oracle on linux-gcc-asan shard 2 of 4
 - `crd-hesap-net-tests` `[motion]`, 178,000 assertions in 16 cases, on win-debug, linux-gcc-debug and linux-gcc-asan, compiled by
   linux-clang-tsan: every level against restated expressions on lengths 0 to 70, guards past each batch, in place, hostile
   values against portable, closed-form paths, the history against a linear search, a rewound steady motion.
-- Forced-level arms pass on linux-gcc-debug, avx512 under SDE skx and icx. The NEON paths have no compile here: audit
-  `crd-hesap-net-kernels-at-neon` and the math probe on the ARM64 lanes.
+- Forced-level arms pass on linux-gcc-debug, avx512 under SDE skx and icx. The NEON paths pass an aarch64 clang syntax check
+  only: audit `crd-hesap-net-kernels-at-neon` and the math probe on the ARM64 lanes.
 - `crd-fuzz-hesap-motion`, 15 seeds: 1,352,456 libFuzzer executions clean under ASan and UBSan; replay clean on win-debug. The
   first run's one finding was the target's own unit-length oracle, too strict for a chord that underflows.
 - 31 teeth, 29 caught. The two missed are equivalent: the tail's zero padding (each lane is independent, and it is kept so
