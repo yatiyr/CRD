@@ -1106,8 +1106,12 @@ class ListType(Type):
         return [f'position = wire_list_end({ref}, {self.count_bits}U, minor, position);']
 
     def take(self, ref):
-        return (guard(f'wire_take_list(r, {self.low}U, {self.high}U, {self.count_bits}U, writer_minor, {ref})') +
-                self.key_order(ref))
+        # The keys are checked on the validating pass itself, so a keyed list is walked once.
+        take = f'wire_take_list(r, {self.low}U, {self.high}U, {self.count_bits}U, writer_minor, {ref}'
+        if self.key is None:
+            return guard(take + ')')
+        return ['if (const WireError error =', f'        {take}, WireKeyOf<&{self.of.name}::{self.key}>{{}});',
+                '    error != WireError::Ok)', '{', '    return error;', '}']
 
     def nested_codecs(self, emit_codec):
         self.codec_name = emit_codec(self.of, self.owner + 'ItemCodec')

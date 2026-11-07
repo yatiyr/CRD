@@ -241,12 +241,8 @@ struct WorldCodec
         {
             return error;
         }
-        if (const WireError error = wire_take_list(r, 0U, 2000U, 11U, writer_minor, value.bodies);
-            error != WireError::Ok)
-        {
-            return error;
-        }
-        if (const WireError error = wire_keys_ascend(value.bodies, WireKeyOf<&Body::id>{});
+        if (const WireError error =
+                wire_take_list(r, 0U, 2000U, 11U, writer_minor, value.bodies, WireKeyOf<&Body::id>{});
             error != WireError::Ok)
         {
             return error;

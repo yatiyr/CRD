@@ -936,12 +936,8 @@ struct SnapshotCodec
         {
             return error;
         }
-        if (const WireError error = wire_take_list(r, 0U, 8U, 4U, writer_minor, value.entities);
-            error != WireError::Ok)
-        {
-            return error;
-        }
-        if (const WireError error = wire_keys_ascend(value.entities, WireKeyOf<&Entity::id>{});
+        if (const WireError error =
+                wire_take_list(r, 0U, 8U, 4U, writer_minor, value.entities, WireKeyOf<&Entity::id>{});
             error != WireError::Ok)
         {
             return error;
@@ -1056,22 +1052,14 @@ struct RosterCodec
                                                  Value& value) noexcept
     {
         value = Value{};
-        if (const WireError error = wire_take_list(r, 1U, 6U, 3U, writer_minor, value.members);
+        if (const WireError error =
+                wire_take_list(r, 1U, 6U, 3U, writer_minor, value.members, WireKeyOf<&Member::rank>{});
             error != WireError::Ok)
         {
             return error;
         }
-        if (const WireError error = wire_keys_ascend(value.members, WireKeyOf<&Member::rank>{});
-            error != WireError::Ok)
-        {
-            return error;
-        }
-        if (const WireError error = wire_take_list(r, 0U, 5U, 3U, writer_minor, value.seats);
-            error != WireError::Ok)
-        {
-            return error;
-        }
-        if (const WireError error = wire_keys_ascend(value.seats, WireKeyOf<&Seat::place>{});
+        if (const WireError error =
+                wire_take_list(r, 0U, 5U, 3U, writer_minor, value.seats, WireKeyOf<&Seat::place>{});
             error != WireError::Ok)
         {
             return error;

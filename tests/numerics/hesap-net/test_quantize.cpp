@@ -478,7 +478,8 @@ TEST_CASE("quantize kernels: every level the host runs gives the scalar bounded 
     CHECK(ran >= 1U);
 }
 
-TEST_CASE("quantize kernels: every level the host runs gives the portable quaternion words and values",
+TEST_CASE("quantize kernels: every level the host runs, and the single-value forms, give the portable quaternion "
+          "words and values",
           "[quantize][kernels]")
 {
     SeededWords rng(2026, 23);
@@ -525,6 +526,11 @@ TEST_CASE("quantize kernels: every level the host runs gives the portable quater
                 CHECK(words[count + 1U] == guard);
                 hn::kQuantizeKernelsPortable.smallest_three_encode(format, xyzw + 4U, count, want_words);
                 CHECK(std::memcmp(words + 1U, want_words, count * sizeof(u64)) == 0);
+                // The single-value form a message's field codes with gives every word the batch does.
+                for (usize i = 0U; i < count; ++i)
+                {
+                    CHECK(hn::smallest_three_encode_one(format, xyzw + (4U * (i + 1U))) == want_words[i]);
+                }
 
                 for (usize i = 0U; i < count; ++i)
                 {
@@ -542,6 +548,15 @@ TEST_CASE("quantize kernels: every level the host runs gives the portable quater
                 CHECK(bits_of(decoded[last_guard]) == 0xA5A5A5A5U);
                 CHECK(refused == hn::kQuantizeKernelsPortable.smallest_three_decode(format, words + 1U, count, want));
                 CHECK(std::memcmp(decoded + 4U, want, count * 4U * sizeof(f32)) == 0);
+                for (usize i = 0U; i < count; ++i)
+                {
+                    f32 one[4];
+                    f32 lane[4];
+                    const bool accepted = hn::smallest_three_decode_one(format, words[i + 1U], one);
+                    CHECK(std::memcmp(one, want + (4U * i), sizeof(one)) == 0);
+                    CHECK(accepted ==
+                          (hn::kQuantizeKernelsPortable.smallest_three_decode(format, words + i + 1U, 1U, lane) == 0U));
+                }
             }
         }
     }

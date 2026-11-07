@@ -27,6 +27,12 @@ struct SmallestThree
     crd::f32 smallest_remainder; // The least 1 - a^2 - b^2 - c^2 an encoder's word can decode to.
 };
 
+// The stored components' bound and width, as compressed_quaternion spells them: wire format, shared by every level and
+// by the single-value forms of crd/hesap/net/quantize.hpp.
+inline constexpr crd::f32 kSmallestThreeMinimum = -1.0F / 1.414214F;
+inline constexpr crd::f32 kSmallestThreeMaximum = 1.0F / 1.414214F;
+inline constexpr crd::f32 kSmallestThreeRange = kSmallestThreeMaximum - kSmallestThreeMinimum;
+
 struct QuantizeKernels
 {
     // codes[i] = the code of values[i]; NaN is the lowest code, anything else out of bounds its nearest bound. May not

@@ -22,6 +22,7 @@
 #include <crd/hesap/net/quantize_kernels.hpp>
 
 #include <bit>
+#include <cmath>
 
 namespace crd::hesap::net
 {
@@ -144,6 +145,100 @@ inline void bounded_encode(const BoundedFloat& format, const crd::f32* values, c
 [[nodiscard]] constexpr crd::u32 smallest_three_word_bits(const SmallestThree& format) noexcept
 {
     return 2U + (3U * format.bits);
+}
+
+namespace detail
+{
+
+// The kernels' rounding of one normalised value to [0, top]: max and min as SSE's, whose first operand wins only by a
+// strict comparison, so NaN goes to 0.
+[[nodiscard]] inline crd::u32 smallest_three_code(crd::f32 normal, crd::f32 top) noexcept
+{
+    const crd::f32 low = (normal > 0.0F) ? normal : 0.0F;
+    const crd::f32 clamped = (low < 1.0F) ? low : 1.0F;
+    const crd::f32 rounded = (clamped * top) + 0.5F;
+    return static_cast<crd::u32>((rounded < top) ? rounded : top);
+}
+
+} // namespace detail
+
+// One quaternion's word and one word's quaternion, the batches' arithmetic on a single lane, so every level and these
+// give the same bits (test_quantize.cpp holds them to it). A message codes its fields one at a time, and a dispatched
+// batch of one pays for a whole block; decode returns false where the batch counts a refusal, writing all the same.
+[[nodiscard]] inline crd::u64 smallest_three_encode_one(const SmallestThree& format, const crd::f32* xyzw) noexcept
+{
+    const crd::f32 x = xyzw[0];
+    const crd::f32 y = xyzw[1];
+    const crd::f32 z = xyzw[2];
+    const crd::f32 w = xyzw[3];
+    // The first of the largest, by a strict comparison in x, y, z, w order; a NaN never wins.
+    crd::f32 largest = std::fabs(x);
+    crd::f32 chosen = x;
+    crd::u32 index = 0U;
+    if (std::fabs(y) > largest)
+    {
+        largest = std::fabs(y);
+        chosen = y;
+        index = 1U;
+    }
+    if (std::fabs(z) > largest)
+    {
+        largest = std::fabs(z);
+        chosen = z;
+        index = 2U;
+    }
+    if (std::fabs(w) > largest)
+    {
+        chosen = w;
+        index = 3U;
+    }
+    const crd::f32 a = (index == 0U) ? y : x;
+    const crd::f32 b = (index < 2U) ? z : y;
+    const crd::f32 c = (index == 3U) ? z : w;
+    const bool keep = chosen >= 0.0F;
+    const crd::f32 top = format.scale;
+    const auto code = [&](crd::f32 value)
+    {
+        return crd::u64{
+            detail::smallest_three_code(((keep ? value : -value) - kSmallestThreeMinimum) / kSmallestThreeRange, top)};
+    };
+    const crd::u32 bits = format.bits;
+    return (crd::u64{index} << (3U * bits)) | (code(a) << (2U * bits)) | (code(b) << bits) | code(c);
+}
+
+[[nodiscard]] inline bool smallest_three_decode_one(const SmallestThree& format, crd::u64 word, crd::f32* xyzw) noexcept
+{
+    const crd::u32 bits = format.bits;
+    const crd::u64 mask = (crd::u64{1} << bits) - 1U;
+    const auto component = [&](crd::u32 shift)
+    {
+        const auto field = static_cast<crd::f32>(static_cast<crd::u32>((word >> shift) & mask));
+        return ((field * format.inverse_scale) * kSmallestThreeRange) + kSmallestThreeMinimum;
+    };
+    crd::f32 a = component(2U * bits);
+    crd::f32 b = component(bits);
+    crd::f32 c = component(0U);
+    const crd::f32 a2 = a * a;
+    const crd::f32 b2 = b * b;
+    const crd::f32 c2 = c * c;
+    const crd::f32 remainder = ((1.0F - a2) - b2) - c2;
+    // Past length one, which only a hostile word or a width of two or three bits reaches, the largest is zero and the
+    // other three are cut back to unit length.
+    const bool over = remainder < 0.0F;
+    if (over)
+    {
+        const crd::f32 length = std::sqrt((a2 + b2) + c2);
+        a = a / length;
+        b = b / length;
+        c = c / length;
+    }
+    const crd::f32 big = std::sqrt(over ? 0.0F : remainder);
+    const auto index = static_cast<crd::u32>((word >> (3U * bits)) & 3U);
+    xyzw[0] = (index == 0U) ? big : a;
+    xyzw[1] = (index == 0U) ? a : ((index == 1U) ? big : b);
+    xyzw[2] = (index == 3U) ? c : ((index == 2U) ? big : b);
+    xyzw[3] = (index == 3U) ? big : c;
+    return !(remainder < format.smallest_remainder) && (word >> smallest_three_word_bits(format)) == 0U;
 }
 
 inline void smallest_three_encode(const SmallestThree& format, const crd::f32* xyzw, crd::usize count,

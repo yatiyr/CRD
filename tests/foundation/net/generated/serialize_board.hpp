@@ -333,12 +333,8 @@ struct SnapshotCodec
         {
             return error;
         }
-        if (const WireError error = wire_take_list(r, 0U, 64U, 7U, writer_minor, value.entities);
-            error != WireError::Ok)
-        {
-            return error;
-        }
-        if (const WireError error = wire_keys_ascend(value.entities, WireKeyOf<&Entity::id>{});
+        if (const WireError error =
+                wire_take_list(r, 0U, 64U, 7U, writer_minor, value.entities, WireKeyOf<&Entity::id>{});
             error != WireError::Ok)
         {
             return error;

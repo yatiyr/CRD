@@ -166,7 +166,7 @@ struct WireSchema
     return ok ? WireError::Ok : error;
 }
 
-[[nodiscard]] inline WireError wire_take_bool(cont::BitReader& r, bool& value) noexcept
+[[nodiscard]] CRD_FORCEINLINE WireError wire_take_bool(cont::BitReader& r, bool& value) noexcept
 {
     u64 bit = 0U;
     if (!r.take(1U, bit))
@@ -193,19 +193,20 @@ inline constexpr i64 kWireMinI64 = -9223372036854775807LL - 1LL;
 
 // An integer in [min, min + span], as its offset from min in `bits` bits.
 template <typename T>
-[[nodiscard]] inline bool wire_range_holds(T value, T min, u64 span) noexcept
+[[nodiscard]] CRD_FORCEINLINE bool wire_range_holds(T value, T min, u64 span) noexcept
 {
     return value >= min && (static_cast<u64>(value) - static_cast<u64>(min)) <= span;
 }
 
 template <typename T>
-inline void wire_put_range(cont::BitWriter& w, T value, T min, u32 bits) noexcept
+CRD_FORCEINLINE void wire_put_range(cont::BitWriter& w, T value, T min, u32 bits) noexcept
 {
     w.put(static_cast<u64>(value) - static_cast<u64>(min), bits);
 }
 
 template <typename T>
-[[nodiscard]] inline WireError wire_take_range(cont::BitReader& r, T min, u64 span, u32 bits, T& value) noexcept
+[[nodiscard]] CRD_FORCEINLINE WireError wire_take_range(cont::BitReader& r, T min, u64 span, u32 bits,
+                                                     T& value) noexcept
 {
     u64 offset = 0U;
     if (!r.take(bits, offset))
@@ -631,11 +632,17 @@ template <typename C>
     return position;
 }
 
+// A list with no key.
+struct WireNoKey
+{
+};
+
 // Validates every element and leaves the view on the list. No element takes zero bits (the generator refuses one), so
-// the walk is linear in the bytes whatever count the message claims.
-template <typename C>
+// the walk is linear in the bytes whatever count the message claims. A keyed list's keys must ascend strictly, checked
+// on the same pass; a damaged element is still the verdict over keys out of order, as after a separate walk.
+template <typename C, typename K = WireNoKey>
 [[nodiscard]] inline WireError wire_take_list(cont::BitReader& r, usize min, usize max, u32 count_bits,
-                                              u16 writer_minor, WireList<C>& list) noexcept
+                                              u16 writer_minor, WireList<C>& list, K key = {}) noexcept
 {
     u64 extra = 0U;
     if (count_bits != 0U && !r.take(count_bits, extra))
@@ -649,13 +656,35 @@ template <typename C>
     const usize count = min + static_cast<usize>(extra);
     const cont::BitReader first = r;
     typename C::Value     value{};
-    for (usize i = 0U; i < count; ++i)
+    [[maybe_unused]] bool ascending = true;
+    if constexpr (std::is_same_v<K, WireNoKey>)
     {
-        const WireError error = C::decode(r, writer_minor, value);
-        if (error != WireError::Ok)
+        for (usize i = 0U; i < count; ++i)
         {
-            return error;
+            const WireError error = C::decode(r, writer_minor, value);
+            if (error != WireError::Ok)
+            {
+                return error;
+            }
         }
+    }
+    else
+    {
+        decltype(key(value)) previous{};
+        for (usize i = 0U; i < count; ++i)
+        {
+            const WireError error = C::decode(r, writer_minor, value);
+            if (error != WireError::Ok)
+            {
+                return error;
+            }
+            ascending = ascending && (i == 0U || previous < key(value));
+            previous = key(value);
+        }
+    }
+    if (!ascending)
+    {
+        return WireError::KeyOrder;
     }
     list = WireList<C>(first, count, writer_minor);
     return WireError::Ok;

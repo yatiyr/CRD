@@ -53,10 +53,8 @@ using I = crd::math::simd::Vec4i;
 constexpr usize kLanes = 4U;
 #endif
 
-// The stored components' bound and width, as compressed_quaternion spells them (crd/hesap/net/quantize.hpp).
-constexpr f32 kMinimum = -1.0F / 1.414214F;
-constexpr f32 kMaximum = 1.0F / 1.414214F;
-constexpr f32 kRange = kMaximum - kMinimum;
+constexpr f32 kMinimum = kSmallestThreeMinimum;
+constexpr f32 kRange = kSmallestThreeRange;
 
 CRD_FORCEINLINE I load_i32(const u32* lanes) noexcept
 {

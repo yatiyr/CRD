@@ -25,8 +25,8 @@ namespace crd::net::wire
     return valid ? format : hesap::net::SmallestThree{};
 }
 
-[[nodiscard]] inline WireError wire_take_bounded(cont::BitReader& r, const hesap::net::BoundedFloat& format,
-                                                 f32& value) noexcept
+[[nodiscard]] CRD_FORCEINLINE WireError wire_take_bounded(cont::BitReader& r, const hesap::net::BoundedFloat& format,
+                                                          f32& value) noexcept
 {
     u64 code = 0U;
     if (!r.take(format.bits, code))
@@ -53,24 +53,22 @@ struct WireQuaternion
     return wire_finite(q.xyzw[0]) && wire_finite(q.xyzw[1]) && wire_finite(q.xyzw[2]) && wire_finite(q.xyzw[3]);
 }
 
-inline void wire_put_quaternion(cont::BitWriter& w, const hesap::net::SmallestThree& format,
-                                const WireQuaternion& value) noexcept
+CRD_FORCEINLINE void wire_put_quaternion(cont::BitWriter& w, const hesap::net::SmallestThree& format,
+                                         const WireQuaternion& value) noexcept
 {
-    u64 word = 0U;
-    hesap::net::smallest_three_encode(format, value.xyzw, 1U, &word);
-    w.put(word, hesap::net::smallest_three_word_bits(format));
+    w.put(hesap::net::smallest_three_encode_one(format, value.xyzw), hesap::net::smallest_three_word_bits(format));
 }
 
-[[nodiscard]] inline WireError wire_take_quaternion(cont::BitReader& r, const hesap::net::SmallestThree& format,
-                                                    WireQuaternion& value) noexcept
+[[nodiscard]] CRD_FORCEINLINE WireError wire_take_quaternion(cont::BitReader& r,
+                                                             const hesap::net::SmallestThree& format,
+                                                             WireQuaternion& value) noexcept
 {
     u64 word = 0U;
     if (!r.take(hesap::net::smallest_three_word_bits(format), word))
     {
         return WireError::Truncated;
     }
-    return wire_error(hesap::net::smallest_three_decode(format, &word, 1U, value.xyzw) == 0U,
-                      WireError::BadQuaternion);
+    return wire_error(hesap::net::smallest_three_decode_one(format, word, value.xyzw), WireError::BadQuaternion);
 }
 
 } // namespace crd::net::wire
