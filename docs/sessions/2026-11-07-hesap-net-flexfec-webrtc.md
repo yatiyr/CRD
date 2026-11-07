@@ -40,8 +40,9 @@ the motion cases on linux-gcc-arm64-debug, win-arm64-debug and linux-clang-arm64
 - RED: 300,000 hostile payloads against `SplitRed`: same verdict and blocks, apart from NetEq's dropping of empty blocks and its limit
   of 32. 50,000 `red_encode` payloads read back.
 - 20 teeth in flexfec.cpp and red.cpp, all caught by this oracle alone.
-- After the parser's rewrite: `crd-hesap-net-tests` clean on linux-gcc-debug, `[flexfec]` on linux-clang-fuzz, 1.14 million
+- After the parser's rewrite: `crd-hesap-net-tests` clean on linux-gcc-debug, `[flexfec]` on linux-clang-fuzz and win-debug, 1.14 million
   libFuzzer executions clean under ASan and UBSan, linux-gcc-shipping compiles. clang-tidy clean on win-debug's and the peer lane's files.
+- The estimator peers, which share the shim, rebuilt: `crd-hesap-estimators-webrtc-tests` passes, its board's smoke run passes.
 
 ## Next
 
