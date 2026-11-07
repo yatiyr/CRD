@@ -1,0 +1,23 @@
+# crd-raptorq-crate-peer: the raptorq crate behind a C interface, the second peer of hesap-net's RaptorQ code (HESAP-NET).
+# Built by tests/numerics/hesap-net/CMakeLists.txt (CRD_BUILD_RAPTORQ_VS_PEERS) with the pinned Rust toolchain and
+# `cargo build --locked`: the crate comes from crates.io at the version and SHA-256 the committed Cargo.lock names
+# (cmake/pins.json tools/raptorq-crates). Linked into the oracle and the board, never shipped.
+[package]
+name = "crd-raptorq-crate-peer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "crd_raptorq_crate_peer"
+path = "src/lib.rs"
+crate-type = ["staticlib"]
+
+[dependencies]
+raptorq = "=2.0.1"
+
+[profile.release]
+debug = 1
+panic = "abort"

@@ -3044,7 +3044,7 @@
       "id": "fec.raptorq",
       "title": "RaptorQ forward error correction",
       "kind": "algorithm",
-      "state": "planned",
+      "state": "implemented",
       "owner": "hesap-net",
       "rows": [
         "HESAP-NET"
@@ -3061,8 +3061,13 @@
         "verified": false
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "tests/numerics/hesap-net/test_raptorq.cpp",
+        "tests/numerics/hesap-net/test_raptorq_peers.cpp",
+        "tests/numerics/hesap-net/fuzz/fuzz_raptorq.cpp"
+      ],
+      "deprecation": null,
+      "note": "RFC 6330's text was read on 2026-11-07 to implement it, with its errata page (docs/sessions/2026-11-07-hesap-net-raptorq.md; SHA-256 87f6da89cc325987cb2910d1c124f74eaeac5c86a83f962cf347c0cc66321ace). Verified erratum 5548 is applied: the transfer length is at most 942574504275. The tables are generated from the text (scripts/gen-raptorq-tables.py); symbols are bit-exact with nanorq and the raptorq crate."
     },
     {
       "id": "capture.qlog",

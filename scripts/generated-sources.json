@@ -19,7 +19,7 @@
         "scripts/gen_license_manifest.py",
         "--check"
       ],
-      "sha256": "4008d3c6d7b87094d58816fac8c5ca30e8b3c64af91bbb542b9ccc7e4a322a1e"
+      "sha256": "a22272e2af810a6453e7cc65664a2f8ad3805d2610a9a8b62fe95688753cce69"
     },
     {
       "path": "docs/generated/gpu-platform-capability-matrix.md",
@@ -1149,6 +1149,20 @@
       "status": "generator-absent",
       "note": "A codelet unit of hier_codelets.hpp, moved out of it by scripts/fft_codegen_split.py on 2026-10-28 and re-split the same day with parts templated on the lane (SIMD-DISPATCH fft zmm codelets): the same --lanes command on the 20c9f2a1^ header bytes, re-run on 2026-10-30 when the splitter began writing each codelet whole beside its split edition; the bytes are the artifact, as for the header.",
       "sha256": "d8045b2c841c483c185c1c3279c6177ee04b3d1bd73e29205e0df9594b846c1f"
+    },
+    {
+      "path": "engine/numerics/hesap-net/src/raptorq_tables.inc",
+      "generator": "scripts/gen-raptorq-tables.py",
+      "status": "network-sourced",
+      "command": [
+        "python3",
+        "scripts/gen-raptorq-tables.py"
+      ],
+      "requires": [
+        "network: RFC 6330 from the RFC Editor, checked against its SHA-256"
+      ],
+      "note": "Table 1, section 5.5's arrays and Table 2. Generated on 2026-11-07; the arrays and Table 2 equal nanorq's and the raptorq crate's, and crd-hesap-raptorq-peer-tests holds every K' to nanorq.",
+      "sha256": "dda6b4995076c00d7fb0f911a946024a5bb2f6962ee129bd7b94437193b3b941"
     },
     {
       "path": "engine/numerics/hesap-ode/include/crd/hesap/ode/detail/ark_tableaus.hpp",

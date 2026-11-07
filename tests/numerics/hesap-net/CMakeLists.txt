@@ -79,6 +79,57 @@ if(CRD_BUILD_MOTION_VS_PEERS)
     add_test(NAME crd-hesap-dead-reckoning-board-smoke COMMAND crd-hesap-dead-reckoning-board --quick)
     set_tests_properties(crd-hesap-dead-reckoning-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
 endif()
+# HESAP-NET's RaptorQ peers (CRD_BUILD_RAPTORQ_VS_PEERS, the root CMakeLists): nanorq's core from the pinned commit, with
+# the optimisation its Makefile asks for and without its -march=native (its kernels pick their level at run time); and
+# the raptorq crate behind a C interface, a Cargo package built by the pinned Rust from the committed Cargo.lock, whose
+# crate is verified by its SHA-256. crd-hesap-raptorq-peer-tests holds hesap-net to both; crd-hesap-raptorq-board times them.
+if(CRD_BUILD_RAPTORQ_VS_PEERS)
+    set(nanorq_core_sources)
+    foreach(source lib/chooser lib/nanorq_core lib/ops lib/params lib/partition lib/sopi lib/precode lib/rand lib/tuple
+                   lib/uvec deps/obl/oblas_common deps/obl/oblas_lite)
+        list(APPEND nanorq_core_sources "${nanorq_SOURCE_DIR}/${source}.c")
+    endforeach()
+    add_library(crd-raptorq-peers STATIC raptorq_nanorq_peer.c ${nanorq_core_sources})
+    target_include_directories(crd-raptorq-peers SYSTEM PRIVATE
+        "${nanorq_SOURCE_DIR}" "${nanorq_SOURCE_DIR}/include" "${nanorq_SOURCE_DIR}/deps")
+    target_include_directories(crd-raptorq-peers PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(crd-raptorq-peers PRIVATE _DEFAULT_SOURCE _FILE_OFFSET_BITS=64)
+    target_compile_options(crd-raptorq-peers PRIVATE -w -O3 -funroll-loops -ftree-vectorize)
+    set_target_properties(crd-raptorq-peers PROPERTIES
+        C_STANDARD 11 INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+
+    set(raptorq_crate_manifest "${CMAKE_CURRENT_SOURCE_DIR}/raptorq_crate_peer/Cargo.toml")
+    set(raptorq_crate_target "${CMAKE_BINARY_DIR}/_deps/raptorq-crate-peer")
+    set(raptorq_crate_library "${raptorq_crate_target}/release/libcrd_raptorq_crate_peer.a")
+    get_filename_component(rust_bin "${CRD_CARGO}" DIRECTORY)
+    set(raptorq_cargo_env "${CMAKE_COMMAND}" -E env "CARGO_HOME=${CMAKE_BINARY_DIR}/_deps/cargo-home" "CARGO=${CRD_CARGO}"
+                          "RUSTC=${rust_bin}/rustc" "RUSTFLAGS=-D warnings")
+    set(raptorq_cargo_args --locked --release --manifest-path "${raptorq_crate_manifest}"
+                           --target-dir "${raptorq_crate_target}")
+    add_custom_target(crd-raptorq-crate-peer ALL
+        COMMAND ${raptorq_cargo_env} "${rust_bin}/cargo-clippy" clippy ${raptorq_cargo_args} -- -D warnings
+        COMMAND ${raptorq_cargo_env} "${CRD_CARGO}" build ${raptorq_cargo_args}
+        BYPRODUCTS "${raptorq_crate_library}"
+        COMMENT "[raptorq-vs-peers] cargo clippy and cargo build --locked: crd-raptorq-crate-peer"
+        USES_TERMINAL
+        VERBATIM)
+    add_library(crd-raptorq-crate STATIC IMPORTED GLOBAL)
+    set_target_properties(crd-raptorq-crate PROPERTIES IMPORTED_LOCATION "${raptorq_crate_library}"
+                          INTERFACE_LINK_LIBRARIES "dl;pthread;m")
+    add_dependencies(crd-raptorq-crate crd-raptorq-crate-peer)
+
+    add_executable(crd-hesap-raptorq-peer-tests test_raptorq_peers.cpp)
+    target_link_libraries(crd-hesap-raptorq-peer-tests PRIVATE
+        crd-core crd-containers crd-hesap-net crd-raptorq-peers crd-raptorq-crate Catch2::Catch2WithMain)
+    crd_discover_tests(crd-hesap-raptorq-peer-tests)
+
+    add_executable(crd-hesap-raptorq-board raptorq_board.cpp)
+    target_link_libraries(crd-hesap-raptorq-board PRIVATE
+        crd-core crd-containers crd-hesap-net crd-raptorq-peers crd-raptorq-crate)
+    add_test(NAME crd-hesap-raptorq-board-smoke COMMAND crd-hesap-raptorq-board --quick)
+    set_tests_properties(crd-hesap-raptorq-board-smoke PROPERTIES TIMEOUT 600 LABELS "board")
+endif()
+
 add_executable(crd-hesap-net-tests
     test_erasure.cpp
     test_flexfec.cpp
@@ -90,6 +141,7 @@ add_executable(crd-hesap-net-tests
     test_motion.cpp
     test_dead_reckoning.cpp
     test_link_models.cpp
+    test_raptorq.cpp
 )
 
 target_link_libraries(crd-hesap-net-tests PRIVATE

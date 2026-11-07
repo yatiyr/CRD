@@ -102,6 +102,10 @@ option(CRD_BUILD_MOTION_VS_PEERS "Build the replicated-motion oracle and board a
 # generators (cmake/pins.json iproute2), fetched on demand. Never in a shipped build; crd-hesap-link-netem-tests and
 # crd-hesap-link-board run on the complete-tier linux-gcc-public-checks lane.
 option(CRD_BUILD_LINK_VS_NETEM "Build the link-model oracle and board against netem" OFF)
+# HESAP-NET's RaptorQ code against nanorq (cmake/pins.json nanorq) and the raptorq crate (tools/raptorq-crates, built with
+# the pinned Rust, CRD_CARGO). Never in a shipped build; crd-hesap-raptorq-peer-tests and crd-hesap-raptorq-board run on
+# the complete-tier linux-gcc-public-checks lane.
+option(CRD_BUILD_RAPTORQ_VS_PEERS "Build the RaptorQ oracle and board against nanorq and the raptorq crate" OFF)
 set(CRD_NASM "$ENV{CRD_NASM}" CACHE FILEPATH "The pinned NASM on Linux (scripts/install-nasm.py), for ISA-L's assembly")
 # The dispatch-cost board (ADR-0134 §8): a crd kernel table's call against Google Highway's HWY_DYNAMIC_DISPATCH, from
 # the pinned Highway release (cmake/pins.json highway, fetched on demand into build/_deps) built by its own CMake, as
@@ -1650,6 +1654,19 @@ if(CRD_BUILD_LINK_VS_NETEM)
     set(CRD_NETEM_SOURCE "${sch-netem_SOURCE_DIR}/sch_netem.c")
     crd_add_pinned_package(iproute2 DOWNLOAD_ONLY YES)
     set(CRD_IPROUTE2_SOURCE "${iproute2_SOURCE_DIR}")
+endif()
+
+# ----- The RaptorQ peers: nanorq's sources and the Cargo package, built by tests/numerics/hesap-net -----
+if(CRD_BUILD_RAPTORQ_VS_PEERS)
+    if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "[raptorq-vs-peers] the RaptorQ oracle needs Linux and CRD_BUILD_TESTS")
+    endif()
+    if(NOT EXISTS "${CRD_CARGO}")
+        message(FATAL_ERROR "[raptorq-vs-peers] CRD_CARGO names no Cargo: install the pinned Rust toolchain with "
+                            "scripts/install-rust.py and configure with the CRD_CARGO it prints")
+    endif()
+    enable_language(C)
+    crd_add_pinned_package(nanorq DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The network estimators' libwebrtc peer: its files, built by tests/numerics/hesap-net -----

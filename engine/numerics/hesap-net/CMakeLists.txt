@@ -1,5 +1,5 @@
 # crd-hesap-net -- the network and media math of HESAP-NET: packet erasure codes (RFC 5510 Reed-Solomon, RFC 8627
-# FlexFEC, RFC 2198 RED, interleavers) with the dispatched GF(2^8) kernels, the RTT, jitter, delay-trend and rate
+# FlexFEC, RFC 2198 RED, RFC 6330 RaptorQ, interleavers) with the dispatched GF(2^8) kernels, the RTT, jitter, delay-trend and rate
 # estimators, the clock offset and drift filters, the quantisation of replicated state, its sampling between and past
 # snapshots, and the loss and delay models of a simulated link (ADR-0065 §29 amendment of 2026-11-07).
 #

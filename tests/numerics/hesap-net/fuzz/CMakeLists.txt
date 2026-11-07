@@ -22,6 +22,9 @@
 #                            word unit length and refused exactly as restated.
 #   crd-fuzz-hesap-link      The loss and delay models on any setting and word: netem's machines and tabledist restated,
 #                            refusals as restated and writing nothing, delays within their bounds and reproducible.
+#   crd-fuzz-hesap-raptorq   RFC 6330's RaptorQ on any ESIs and object parameters: refusals as restated, the solver's verdict
+#                            against the rank of the literal matrix A, its answer against the encoder's and every symbol,
+#                            the payload ID and OTI bit by bit, the object's blocks and sub-symbols covering it exactly.
 crd_fuzz_target(crd-fuzz-hesap-erasure
     SOURCES fuzz_erasure.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 crd_fuzz_target(crd-fuzz-hesap-flexfec
@@ -38,3 +41,9 @@ crd_fuzz_target(crd-fuzz-hesap-motion
     SOURCES fuzz_motion.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-motion")
 crd_fuzz_target(crd-fuzz-hesap-link
     SOURCES fuzz_link.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-link")
+crd_fuzz_target(crd-fuzz-hesap-raptorq
+    SOURCES fuzz_raptorq.cpp LIBRARIES crd-hesap-net crd-core CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-raptorq")
+target_include_directories(crd-fuzz-hesap-raptorq PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(TARGET crd-fuzz-hesap-raptorq-libfuzzer)
+    target_include_directories(crd-fuzz-hesap-raptorq-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+endif()

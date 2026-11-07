@@ -5255,7 +5255,7 @@ class TestInstruments(unittest.TestCase):
                                                        'crypto-mls', 'crypto-mls-commit', 'crypto-mls-group',
                                                        'crypto-mls-message', 'crypto-mls-tree',
                                                        'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
-                                                       'hesap-clock', 'hesap-erasure', 'hesap-estimators', 'hesap-flexfec', 'hesap-link', 'hesap-motion', 'hesap-quantize', 'hesap-red',
+                                                       'hesap-clock', 'hesap-erasure', 'hesap-estimators', 'hesap-flexfec', 'hesap-link', 'hesap-motion', 'hesap-quantize', 'hesap-raptorq', 'hesap-red',
                                                        'memory-allocators', 'net-negotiation', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload'])

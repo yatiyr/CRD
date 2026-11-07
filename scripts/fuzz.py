@@ -87,6 +87,8 @@ TARGETS = {
                       'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-flexfec'},
     'hesap-link': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus-link',
                    'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-link'},
+    'hesap-raptorq': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus-raptorq',
+                       'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-raptorq'},
     'hesap-red': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus-red',
                   'executable': 'tests/hesap-net/fuzz/crd-fuzz-hesap-red'},
     'hesap-estimators': {'corpus': 'tests/numerics/hesap-net/fuzz/corpus-estimators',

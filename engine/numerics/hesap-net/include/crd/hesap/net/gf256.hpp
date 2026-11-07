@@ -95,4 +95,7 @@ inline constexpr Gf256Tables kGf256 = make_gf256_tables();
     return e;
 }
 
+// gf256_expand(c), from a table built at compile time.
+[[nodiscard]] const GfCoefficient& gf256_expanded(crd::u8 c) noexcept;
+
 } // namespace crd::hesap::net

@@ -158,6 +158,11 @@ void interpolate(const u8* const* inputs, const u32* indices, const u8* weights,
 
 } // namespace
 
+const GfCoefficient& gf256_expanded(u8 c) noexcept
+{
+    return kExpanded.of[c];
+}
+
 ReedSolomonCode::ReedSolomonCode(u32 k, u32 n) noexcept : m_k(k), m_n(n), m_weight_logs{}
 {
     CRD_ASSERT(valid(k, n));

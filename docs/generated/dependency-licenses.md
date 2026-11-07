@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **37** · tools: **46** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **38** · tools: **47** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -41,6 +41,7 @@
 | isa-l | 2.32.1 | BSD-3-Clause | intel/isa-l @ `v2.32.1` (7c3479e0a9da) | `isa-l-7c3479e0.tar.gz` |
 | ntp | 4.2.8p18 | NTP AND BSD-2-Clause | https://downloads.nwtime.org/ntp/4.2.8/ntp-4.2.8p18.tar.gz | `ntp-4.2.8p18.tar.gz` |
 | sch-netem | 6.12 | GPL-2.0-or-later | torvalds/linux @ `v6.12` (adc218676eef) | `sch_netem.c` |
+| nanorq | 0-7d52fbeb | MIT | sleepybishop/nanorq (7d52fbebdc89) | `nanorq-7d52fbeb.tar.gz` |
 | iproute2 | 6.12.0 | GPL-2.0-or-later AND NIST-PD | https://mirrors.edge.kernel.org/pub/linux/utils/net/iproute2/iproute2-6.12.0.tar.xz | `iproute2-6.12.0.tar.xz` |
 | serialize | 2.1.3 | BSD-3-Clause | mas-bandwidth/serialize @ `v2.1.3` (7bf1877b38cf) | `serialize-7bf1877b.tar.gz` |
 | networked-physics-snapshot | fe19b74b | BSD-3-Clause | mas-bandwidth/networked-physics-gdc-2015 (fe19b74bf78a) | `Snapshot.h` |
@@ -93,6 +94,7 @@
 | android-build-tools-linux | 37.0.0 | LicenseRef-Android-SDK-License | dl.google.com | `build-tools_r37_linux.zip` |
 | android-platform-31 | 31-r01 | LicenseRef-Android-SDK-License | dl.google.com | `platform-31_r01.zip` |
 | temurin-jdk-21-linux-x64 | 21.0.13+9 | GPL-2.0-only WITH Classpath-exception-2.0 | github.com | `OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz` |
+| raptorq-crates | 2.0.1 | Apache-2.0 | cberner/raptorq (29253866ed07) | the crates `tests/numerics/hesap-net/raptorq_crate_peer/Cargo.lock` names |
 | openmls-crates | 0.9.2 | MIT | openmls/openmls (8a8f83b4b61f) | the crates `tests/foundation/crypto/interop/openmls_peer/Cargo.lock` names |
 | cuda-linux-x64 | 13.3.1 | LicenseRef-NVIDIA-CUDA-Toolkit-EULA | developer.download.nvidia.com | `cuda_nvcc-linux-x86_64-13.3.73-archive.tar.xz`, `cuda_crt-linux-x86_64-13.3.73-archive.tar.xz`, `libnvvm-linux-x86_64-13.3.73-archive.tar.xz`, `cuda_cudart-linux-x86_64-13.3.29-archive.tar.xz`, `cccl-linux-x86_64-13.3.3.4.1-archive.tar.xz`, `cuda_nvrtc-linux-x86_64-13.3.33-archive.tar.xz`, `libnvjitlink-linux-x86_64-13.3.33-archive.tar.xz`, `libcufft-linux-x86_64-12.3.0.29-archive.tar.xz`, `libcublas-linux-x86_64-13.6.0.2-archive.tar.xz` |
 | bake-python-windows | 3.12.10 | PSF-2.0 | www.python.org | `python-3.12.10-amd64.exe` |
