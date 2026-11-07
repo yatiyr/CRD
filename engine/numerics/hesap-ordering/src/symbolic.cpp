@@ -4,211 +4,242 @@
 #include <crd/hesap/ordering/symbolic.hpp>
 
 // -----------------------------------------------------------------------
-// Symbolic Cholesky fill metrics, ported line-for-line from Tim Davis's
-// CSparse (cs_etree.c / cs_post.c / cs_counts.c, "Direct Methods for Sparse
-// Linear Systems", SIAM 2006). Kept in SIGNED i32 with -1 sentinels exactly as
-// the reference: cs_counts' `first[j] <= maxfirst[i]` test relies on -1 being
-// the MINIMUM value, which u32 0xFFFFFFFF is not. Convert to u32 only at the API
-// boundary. n < 2^31 always (matrix dimension), so i32 is safe.
+// Symbolic Cholesky fill metrics: elimination tree (Liu 1986, 1990), postorder, and column counts
+// from the row-subtree skeleton (Gilbert, Ng and Peyton 1994). The algorithms are the ones presented
+// in Tim Davis, "Direct Methods for Sparse Linear Systems" (SIAM 2006), chapter 4, and implemented in
+// his CSparse; the routines below are our own implementation of those published methods. Everything
+// runs in SIGNED i32 with -1 as the "none" marker: the leaf test compares first-descendant stamps
+// against a running maximum that starts at -1, which only works when "none" is the smallest value
+// (u32 0xFFFFFFFF is the largest). Values convert to u32 only at the API boundary; n < 2^31 always
+// (matrix dimension).
 //
-// Operates on the symmetrised AdjacencyGraph (full off-diagonal pattern, sorted
-// ascending) — for a symmetric matrix the CSR/CSC patterns coincide, so the
-// adjacency lists are exactly the "column j row indices" CSparse iterates.
+// Works on the symmetrised AdjacencyGraph (full off-diagonal pattern, sorted ascending): for a
+// symmetric matrix the CSR and CSC patterns coincide, so row k's neighbour list is also column k's.
 // -----------------------------------------------------------------------
 
 namespace crd::hesap::ordering
 {
 namespace
 {
-// cs_etree (ata = 0): elimination tree of chol(A). parent[k] = -1 for roots.
+// Elimination tree of chol(A), after Liu: rows are taken in order, and for each smaller neighbour r of
+// row k the tree built so far is climbed from r. `ancestor` is the path-compression shortcut (Liu 1990):
+// the climb moves from node to ancestor[node] and re-aims every node it leaves at k. It stops at a node
+// whose shortcut is k (already linked below this row) or whose shortcut is none; the latter is a
+// current root and becomes a child of k. parent[k] = -1 marks a root.
 void etree_i32(const AdjacencyGraph& g, crd::i32* parent, crd::i32* ancestor)
 {
     const crd::i32 n = static_cast<crd::i32>(g.n);
-    const crd::u32* xadj = g.xadj.data();
-    const crd::u32* adj = g.adjncy.data();
+    const crd::u32* row_start = g.xadj.data();
+    const crd::u32* neighbour = g.adjncy.data();
     for (crd::i32 k = 0; k < n; ++k)
     {
         parent[k] = -1;
         ancestor[k] = -1;
-        for (crd::u32 p = xadj[k]; p < xadj[k + 1]; ++p)
+        for (crd::u32 e = row_start[k]; e < row_start[k + 1]; ++e)
         {
-            crd::i32 i = static_cast<crd::i32>(adj[p]);
-            if (i >= k)
+            crd::i32 r = static_cast<crd::i32>(neighbour[e]);
+            if (r >= k)
             {
-                break; // adjacency ascending → no more below-diagonal (i<k) entries
+                break; // ascending list: the rest lies on or above the diagonal
             }
-            // Walk i up the partial elimination tree (path-compress via ancestor).
-            for (; i != -1 && i < k;)
+            for (;;)
             {
-                const crd::i32 inext = ancestor[i];
-                ancestor[i] = k;
-                if (inext == -1)
+                const crd::i32 up = ancestor[r];
+                if (up == k)
                 {
-                    parent[i] = k;
+                    break; // already linked below this row
                 }
-                i = inext;
+                ancestor[r] = k;
+                if (up == -1)
+                {
+                    parent[r] = k; // r is a root of the tree built so far: hang it under k
+                    break;
+                }
+                r = up;
             }
         }
     }
 }
 
-// cs_etree (ata = 1): column elimination tree = elimination tree of chol(AᵀA),
-// computed WITHOUT forming AᵀA. A is the COMPRESSED CSC pattern (m rows × n cols):
-// `ap`/`ai` are column pointers / row indices. `prev` (length m) tracks, per row, the
-// last column that held a nonzero in that row; the matched entries pretend to be the
-// AᵀA off-diagonals so the same path-compressed ancestor walk as the symmetric etree
-// applies. parent[k] = -1 for roots. Faithful to Tim Davis's cs_etree.c ata branch.
+// Column elimination tree = elimination tree of chol(A^T A), found without forming A^T A (Gilbert and
+// Ng; Liu). A is the COMPRESSED CSC pattern (m rows x n cols): `ap`/`ai` are the column pointers and
+// row indices. `prev` (length m) remembers, for each row, the latest column seen holding it; that
+// earlier column stands in for the A^T A neighbour the row contributes, so the climb is the one used
+// for the symmetric tree. parent[k] = -1 marks a root.
 void etree_ata_i32(const crd::u32* ap, const crd::u32* ai, crd::i32 m, crd::i32 n, crd::i32* parent, crd::i32* ancestor,
                    crd::i32* prev)
 {
-    for (crd::i32 i = 0; i < m; ++i)
+    for (crd::i32 r = 0; r < m; ++r)
     {
-        prev[i] = -1;
+        prev[r] = -1;
     }
     for (crd::i32 k = 0; k < n; ++k)
     {
         parent[k] = -1;
         ancestor[k] = -1;
-        for (crd::u32 p = ap[static_cast<crd::u32>(k)]; p < ap[static_cast<crd::u32>(k) + 1]; ++p)
+        const crd::u32 col_end = ap[static_cast<crd::u32>(k) + 1];
+        for (crd::u32 e = ap[static_cast<crd::u32>(k)]; e < col_end; ++e)
         {
-            crd::i32 i = prev[ai[p]]; // ata: previous column with a nonzero in row ai[p]
-            for (; i != -1 && i < k;) // walk i up the partial column-etree (path-compress)
+            const crd::u32 row = ai[e];
+            crd::i32 r = prev[row];
+            prev[row] = k;
+            if (r == -1 || r >= k)
             {
-                const crd::i32 inext = ancestor[i];
-                ancestor[i] = k;
-                if (inext == -1)
-                {
-                    parent[i] = k;
-                }
-                i = inext;
+                continue; // no earlier column holds this row
             }
-            prev[ai[p]] = k;
+            for (;;)
+            {
+                const crd::i32 up = ancestor[r];
+                if (up == k)
+                {
+                    break;
+                }
+                ancestor[r] = k;
+                if (up == -1)
+                {
+                    parent[r] = k;
+                    break;
+                }
+                r = up;
+            }
         }
     }
 }
 
-// cs_tdfs: iterative depth-first postorder of node j; head/next are the child
-// linked lists (built so children come out ascending → deterministic).
-crd::i32 tdfs_i32(crd::i32 j, crd::i32 k, crd::i32* head, const crd::i32* next, crd::i32* post, crd::i32* stack)
+// Depth-first postorder of the subtree under `root`, without recursion. `head`/`next` hold the child
+// lists (built ascending, so the order is deterministic). Emits into post[slot...] and returns the next
+// free slot. A node is written once its child list is empty; children are consumed off `head` as they
+// are entered.
+crd::i32 emit_subtree_post_i32(crd::i32 root, crd::i32 slot, crd::i32* head, const crd::i32* next, crd::i32* post,
+                               crd::i32* stack)
 {
-    crd::i32 top = 0;
-    stack[0] = j;
-    while (top >= 0)
+    crd::i32 depth = 0;
+    stack[0] = root;
+    for (;;)
     {
-        const crd::i32 p = stack[top];
-        const crd::i32 i = head[p];
-        if (i == -1)
+        const crd::i32 node = stack[depth];
+        const crd::i32 child = head[node];
+        if (child != -1)
         {
-            --top;
-            post[k++] = p; // all children done → emit p
-        }
-        else
-        {
-            head[p] = next[i]; // remove i from p's child list
-            stack[++top] = i;
-        }
-    }
-    return k;
-}
-
-// cs_post: postorder a forest given parent[]. post[] gets the ordering.
-void post_order_i32(const crd::i32* parent, crd::i32 n, crd::i32* post, crd::i32* head, crd::i32* next, crd::i32* stack)
-{
-    for (crd::i32 j = 0; j < n; ++j)
-    {
-        head[j] = -1;
-    }
-    for (crd::i32 j = n - 1; j >= 0; --j) // reverse → children ascending in the lists
-    {
-        if (parent[j] == -1)
-        {
+            head[node] = next[child];
+            stack[++depth] = child;
             continue;
         }
-        next[j] = head[parent[j]];
-        head[parent[j]] = j;
-    }
-    crd::i32 k = 0;
-    for (crd::i32 j = 0; j < n; ++j)
-    {
-        if (parent[j] != -1)
+        post[slot++] = node;
+        if (depth == 0)
         {
-            continue; // start a DFS only at roots
+            return slot;
         }
-        k = tdfs_i32(j, k, head, next, post, stack);
+        --depth;
     }
 }
 
-// cs_leaf: is j a leaf of the ith row subtree? Returns LCA q + jleaf flag
-// (0 = not a leaf, 1 = first leaf, 2 = subsequent leaf).
-crd::i32 leaf_i32(crd::i32 i, crd::i32 j, const crd::i32* first, crd::i32* maxfirst, crd::i32* prevleaf,
-                  crd::i32* ancestor, crd::i32* jleaf)
+// Postorder of a forest given parent[]; post[] receives the ordering. Children are chained per parent
+// by sweeping nodes from the top down, so each chain ascends; trees are then emitted in ascending root
+// order.
+void post_order_i32(const crd::i32* parent, crd::i32 n, crd::i32* post, crd::i32* head, crd::i32* next, crd::i32* stack)
 {
-    *jleaf = 0;
-    if (i <= j || first[j] <= maxfirst[i])
+    for (crd::i32 v = 0; v < n; ++v)
     {
-        return -1; // j not a leaf of T_i (relies on -1 == minimum: the i32 reason)
+        head[v] = -1;
     }
-    maxfirst[i] = first[j];
-    const crd::i32 jprev = prevleaf[i];
-    prevleaf[i] = j;
-    *jleaf = (jprev == -1) ? 1 : 2;
-    if (*jleaf == 1)
+    for (crd::i32 v = n; v-- > 0;)
     {
-        return i; // first leaf → LCA is i itself
+        const crd::i32 up = parent[v];
+        if (up != -1)
+        {
+            next[v] = head[up];
+            head[up] = v;
+        }
     }
-    crd::i32 q = jprev; // find LCA(jprev, j) via path-halving on ancestor
-    for (; q != ancestor[q]; q = ancestor[q])
+    crd::i32 slot = 0;
+    for (crd::i32 v = 0; v < n; ++v)
     {
+        if (parent[v] == -1)
+        {
+            slot = emit_subtree_post_i32(v, slot, head, next, post, stack);
+        }
     }
-    for (crd::i32 s = jprev; s != q;)
-    {
-        const crd::i32 sparent = ancestor[s];
-        ancestor[s] = q;
-        s = sparent;
-    }
-    return q;
 }
 
-// cs_ereach (ata = 0): nonzero pattern of ROW k of L. Returns `top`; on exit
-// s[top..n-1] holds the column indices i < k with L(k,i) != 0, in topological
-// (etree) order. `mark` is reusable scratch (CS_FLIP sign trick: a node is marked
-// when its entry is negative); it is left fully restored to its entry values on
-// return, so the SAME zero-initialised array is reused across all k.
-crd::i32 ereach_i32(const AdjacencyGraph& g, crd::i32 k, const crd::i32* parent, crd::i32* s, crd::i32* mark)
+// Skeleton test for the column counts (Gilbert-Ng-Peyton): is j a leaf of the row-i subtree? Returns
+// the least common ancestor of j and the previous leaf of that subtree when there is one. *kind is
+// 0 when j is no leaf, 1 for the first leaf of row i (the LCA is then i itself), 2 for a later leaf.
+// row_stamp[i] is the largest first-descendant stamp among the leaves of row i so far (-1 for none);
+// row_last_leaf[i] is the most recent leaf. `ancestor` is a union-find forest over the visited nodes.
+crd::i32 skeleton_leaf_i32(crd::i32 i, crd::i32 j, const crd::i32* first, crd::i32* row_stamp, crd::i32* row_last_leaf,
+                           crd::i32* ancestor, crd::i32* kind)
+{
+    *kind = 0;
+    if (i <= j)
+    {
+        return -1;
+    }
+    if (first[j] <= row_stamp[i])
+    {
+        return -1; // j already lies under an earlier leaf of row i (needs -1 to be the minimum)
+    }
+    row_stamp[i] = first[j];
+    const crd::i32 earlier = row_last_leaf[i];
+    row_last_leaf[i] = j;
+    if (earlier == -1)
+    {
+        *kind = 1;
+        return i;
+    }
+    *kind = 2;
+    crd::i32 root = earlier; // union-find: locate the set representative of the earlier leaf ...
+    while (ancestor[root] != root)
+    {
+        root = ancestor[root];
+    }
+    for (crd::i32 node = earlier; node != root;) // ... then compress the path onto it
+    {
+        const crd::i32 up = ancestor[node];
+        ancestor[node] = root;
+        node = up;
+    }
+    return root;
+}
+
+// Nonzero pattern of ROW k of L (symmetric case), after the row-subtree characterisation of Liu: the
+// columns i < k with L(k,i) != 0 are the nodes on the etree paths from each neighbour of k up to k.
+// Returns `top`; on exit s[top..n-1] holds those columns in topological (etree) order. A node counts as
+// visited when its `stamp` entry equals k + 1. Rows come in increasing order, so no stale entry of an
+// earlier row can equal a later stamp and nothing needs resetting between rows; `stamp` must be all
+// zero before the first row. Each path is written downward from `top` and then reversed in place, so it
+// lands in ascending climb order just below the paths already emitted.
+crd::i32 row_pattern_i32(const AdjacencyGraph& g, crd::i32 k, const crd::i32* parent, crd::i32* s, crd::i32* stamp)
 {
     const crd::i32 n = static_cast<crd::i32>(g.n);
-    const crd::u32* xadj = g.xadj.data();
-    const crd::u32* adj = g.adjncy.data();
-    const auto flip = [](crd::i32 v)
-    {
-        return -v - 2;
-    }; // CS_FLIP: involution, maps >=0 -> <0
+    const crd::u32* row_start = g.xadj.data();
+    const crd::u32* neighbour = g.adjncy.data();
+    const crd::i32 mine = k + 1;
     crd::i32 top = n;
 
-    mark[k] = flip(mark[k]); // mark node k (its path terminates the upward walks)
-    for (crd::u32 p = xadj[k]; p < xadj[k + 1]; ++p)
+    stamp[k] = mine; // k ends every climb
+    const crd::u32 row_end = row_start[k + 1];
+    for (crd::u32 e = row_start[k]; e < row_end; ++e)
     {
-        crd::i32 i = static_cast<crd::i32>(adj[p]);
-        if (i > k)
+        crd::i32 node = static_cast<crd::i32>(neighbour[e]);
+        if (node > k)
         {
-            break; // adjacency ascending + diagonal-free -> only i < k below here
+            break; // ascending, no diagonal: nothing but upper entries remain
         }
-        crd::i32 len = 0;
-        for (; mark[i] >= 0; i = parent[i]) // walk i up the etree until a marked node
+        const crd::i32 high = top;
+        while (stamp[node] != mine)
         {
-            s[len++] = i; // L(k,i) is nonzero
-            mark[i] = flip(mark[i]);
+            stamp[node] = mine;
+            s[--top] = node;
+            node = parent[node];
         }
-        while (len > 0)
+        for (crd::i32 lo = top, hi = high - 1; lo < hi; ++lo, --hi)
         {
-            s[--top] = s[--len]; // splice this root-path onto the output stack
+            const crd::i32 held = s[lo];
+            s[lo] = s[hi];
+            s[hi] = held;
         }
     }
-    for (crd::i32 p = top; p < n; ++p)
-    {
-        mark[s[p]] = flip(mark[s[p]]); // unmark every path node
-    }
-    mark[k] = flip(mark[k]); // unmark node k -> `mark` fully restored
     return top;
 }
 
@@ -249,119 +280,41 @@ crd::u32 fundamental_supernodes_i32(const crd::i32* parent, const crd::i32* colc
     return nsuper;
 }
 
-// cs_counts (ata = 0): column counts of L. colcount[j] = nnz of column j of L
-// (incl. diagonal). Sum == nnz(L).
+// Column counts of L (symmetric case) from the row-subtree skeleton, Gilbert-Ng-Peyton 1994.
+// colcount[j] = nnz of column j of L including the diagonal; the sum is nnz(L). The weights start at 1
+// for a leaf of the etree and 0 elsewhere; walking the postorder, column j then adds 1 for every row
+// of which it is a skeleton leaf, subtracts 1 at the LCA of consecutive leaves of a row subtree, and
+// subtracts 1 from its parent (which re-adds the child's count below). A final sweep accumulates the
+// weights up the tree. `first[v]` is the postorder index of the first descendant of v.
 void counts_i32(const AdjacencyGraph& g, const crd::i32* parent, const crd::i32* post, crd::i32* colcount,
-                crd::i32* ancestor, crd::i32* maxfirst, crd::i32* prevleaf, crd::i32* first)
+                crd::i32* ancestor, crd::i32* row_stamp, crd::i32* row_last_leaf, crd::i32* first)
 {
     const crd::i32 n = static_cast<crd::i32>(g.n);
-    const crd::u32* xadj = g.xadj.data();
-    const crd::u32* adj = g.adjncy.data();
-    for (crd::i32 i = 0; i < n; ++i)
+    const crd::u32* row_start = g.xadj.data();
+    const crd::u32* neighbour = g.adjncy.data();
+    for (crd::i32 v = 0; v < n; ++v)
     {
-        ancestor[i] = i;
-        maxfirst[i] = -1;
-        prevleaf[i] = -1;
-        first[i] = -1;
+        ancestor[v] = v;
+        row_stamp[v] = -1;
+        row_last_leaf[v] = -1;
+        first[v] = -1;
     }
+    // Postorder places every subtree in one contiguous run, so the first child met passes its own first
+    // descendant up; a node reached with no stamp yet has no children.
     for (crd::i32 k = 0; k < n; ++k)
     {
         const crd::i32 j = post[k];
-        colcount[j] = (first[j] == -1) ? 1 : 0; // delta[j]
-        for (crd::i32 jj = j; jj != -1 && first[jj] == -1; jj = parent[jj])
+        const bool childless = first[j] == -1;
+        colcount[j] = childless ? 1 : 0;
+        if (childless)
         {
-            first[jj] = k;
+            first[j] = k;
         }
-    }
-    for (crd::i32 k = 0; k < n; ++k)
-    {
-        const crd::i32 j = post[k];
-        if (parent[j] != -1)
+        const crd::i32 up = parent[j];
+        if (up != -1 && first[up] == -1)
         {
-            --colcount[parent[j]]; // j is not a root
+            first[up] = first[j];
         }
-        for (crd::u32 p = xadj[j]; p < xadj[j + 1]; ++p)
-        {
-            const crd::i32 i = static_cast<crd::i32>(adj[p]);
-            crd::i32 jleaf;
-            const crd::i32 q = leaf_i32(i, j, first, maxfirst, prevleaf, ancestor, &jleaf);
-            if (jleaf >= 1)
-            {
-                ++colcount[j];
-            }
-            if (jleaf == 2)
-            {
-                --colcount[q];
-            }
-        }
-        if (parent[j] != -1)
-        {
-            ancestor[j] = parent[j];
-        }
-    }
-    for (crd::i32 j = 0; j < n; ++j) // sum children's counts into parents
-    {
-        if (parent[j] != -1)
-        {
-            colcount[parent[j]] += colcount[j];
-        }
-    }
-}
-
-// cs_counts (ata = 1) + init_ata: column counts of chol(AᵀA) WITHOUT forming AᵀA.
-// `AT` is A transposed (CSR over A's rows: `atp` row pointers, `ati` the columns in each
-// row, ascending), `parent`/`post` the column etree + its postorder. Faithful to Davis
-// cs_counts.c ata branch: a row J of A contributes its column set as a clique into the
-// count via the head/next row-merge (rows bucketed by their least-postorder column).
-// `first` is the first-descendant marker in the first pass, then REPURPOSED as the
-// inverse postorder (invpost) by init_ata, exactly as the reference. Scratch lengths:
-// colcount/ancestor/maxfirst/prevleaf/first = n, head = n+1, next = m.
-void counts_ata_i32(const crd::u32* atp, const crd::u32* ati, crd::i32 m, crd::i32 n, const crd::i32* parent,
-                    const crd::i32* post, crd::i32* colcount, crd::i32* ancestor, crd::i32* maxfirst,
-                    crd::i32* prevleaf, crd::i32* first, crd::i32* head, crd::i32* next)
-{
-    for (crd::i32 k = 0; k < n; ++k)
-    {
-        maxfirst[k] = -1;
-        prevleaf[k] = -1;
-        first[k] = -1;
-    }
-    for (crd::i32 k = 0; k < n; ++k) // delta[j] (leaf flag → colcount) + first-descendant first[]
-    {
-        const crd::i32 j = post[k];
-        colcount[j] = (first[j] == -1) ? 1 : 0;
-        for (crd::i32 jj = j; jj != -1 && first[jj] == -1; jj = parent[jj])
-        {
-            first[jj] = k;
-        }
-    }
-    // init_ata: head[k] = linked list of A-rows whose least-postorder column is k. `first` is
-    // REPURPOSED as invpost (post position of each column), the cs_leaf marker in the ata case.
-    for (crd::i32 k = 0; k <= n; ++k)
-    {
-        head[k] = -1;
-    }
-    for (crd::i32 k = 0; k < n; ++k)
-    {
-        first[post[k]] = k; // invert post (overwrites first → invpost; matches the reference)
-    }
-    for (crd::i32 i = 0; i < m; ++i)
-    {
-        crd::i32 kmin = n; // empty row → bucket n (never processed by the k<n loop)
-        for (crd::u32 p = atp[static_cast<crd::u32>(i)]; p < atp[static_cast<crd::u32>(i) + 1]; ++p)
-        {
-            const crd::i32 kk = first[ati[p]];
-            if (kk < kmin)
-            {
-                kmin = kk;
-            }
-        }
-        next[i] = head[kmin];
-        head[kmin] = i;
-    }
-    for (crd::i32 i = 0; i < n; ++i)
-    {
-        ancestor[i] = i;
     }
     for (crd::i32 k = 0; k < n; ++k)
     {
@@ -370,20 +323,102 @@ void counts_ata_i32(const crd::u32* atp, const crd::u32* ati, crd::i32 m, crd::i
         {
             --colcount[parent[j]];
         }
-        for (crd::i32 jrow = head[k]; jrow != -1; jrow = next[jrow]) // ata: rows in bucket k
+        // Only neighbours below the diagonal row j can start a row subtree. The list ascends, so read it
+        // from the top and stop at the first entry not past j; each row's state is independent of the
+        // others, so the order does not change any count.
+        const crd::u32 col_begin = row_start[j];
+        for (crd::u32 e = row_start[j + 1]; e > col_begin; --e)
         {
-            for (crd::u32 p = atp[static_cast<crd::u32>(jrow)]; p < atp[static_cast<crd::u32>(jrow) + 1]; ++p)
+            const crd::i32 row = static_cast<crd::i32>(neighbour[e - 1]);
+            if (row <= j)
             {
-                const crd::i32 i = static_cast<crd::i32>(ati[p]);
-                crd::i32 jleaf = 0;
-                const crd::i32 q = leaf_i32(i, j, first, maxfirst, prevleaf, ancestor, &jleaf);
-                if (jleaf >= 1)
+                break;
+            }
+            crd::i32 kind = 0;
+            const crd::i32 lca = skeleton_leaf_i32(row, j, first, row_stamp, row_last_leaf, ancestor, &kind);
+            colcount[j] += (kind != 0) ? 1 : 0;
+            if (kind == 2)
+            {
+                --colcount[lca];
+            }
+        }
+        if (parent[j] != -1)
+        {
+            ancestor[j] = parent[j]; // merge j into its parent's set
+        }
+    }
+    for (crd::i32 v = 0; v < n; ++v)
+    {
+        if (parent[v] != -1)
+        {
+            colcount[parent[v]] += colcount[v];
+        }
+    }
+}
+
+// Column counts of chol(A^T A) without forming A^T A (Gilbert, Ng and Peyton 1994). `atp`/`ati` are A^T
+// in CSR form (row i of A: its columns, ascending), `parent`/`post` the column etree and its postorder.
+// The A^T A graph has one clique per row of A, so each row is filed under the column of its least
+// postorder position and, when that column is reached, its members play the part of the neighbour list
+// in the symmetric routine. `first` holds the inverse postorder, which is the stamp the leaf test needs
+// here. Scratch lengths: colcount, ancestor, row_stamp, row_last_leaf, first = n; head = n + 1; next = m.
+void counts_ata_i32(const crd::u32* atp, const crd::u32* ati, crd::i32 m, crd::i32 n, const crd::i32* parent,
+                    const crd::i32* post, crd::i32* colcount, crd::i32* ancestor, crd::i32* row_stamp,
+                    crd::i32* row_last_leaf, crd::i32* first, crd::i32* head, crd::i32* next)
+{
+    for (crd::i32 k = 0; k < n; ++k)
+    {
+        const crd::i32 v = post[k];
+        first[v] = k;
+        ancestor[v] = v;
+        row_stamp[v] = -1;
+        row_last_leaf[v] = -1;
+        colcount[v] = 1; // weight of a leaf; every node that is some node's parent drops to 0 below
+    }
+    for (crd::i32 v = 0; v < n; ++v)
+    {
+        if (parent[v] != -1)
+        {
+            colcount[parent[v]] = 0;
+        }
+    }
+    for (crd::i32 b = 0; b <= n; ++b)
+    {
+        head[b] = -1;
+    }
+    // File each row of A under the least postorder position among its columns (bucket n if it has none,
+    // which the sweep below never visits).
+    for (crd::i32 r = 0; r < m; ++r)
+    {
+        crd::i32 earliest = n;
+        const crd::u32 row_end = atp[static_cast<crd::u32>(r) + 1];
+        for (crd::u32 e = atp[static_cast<crd::u32>(r)]; e < row_end; ++e)
+        {
+            const crd::i32 pos = first[ati[e]];
+            earliest = (pos < earliest) ? pos : earliest;
+        }
+        next[r] = head[earliest];
+        head[earliest] = r;
+    }
+    for (crd::i32 k = 0; k < n; ++k)
+    {
+        const crd::i32 j = post[k];
+        if (parent[j] != -1)
+        {
+            --colcount[parent[j]];
+        }
+        for (crd::i32 r = head[k]; r != -1; r = next[r])
+        {
+            const crd::u32 row_end = atp[static_cast<crd::u32>(r) + 1];
+            for (crd::u32 e = atp[static_cast<crd::u32>(r)]; e < row_end; ++e)
+            {
+                crd::i32 kind = 0;
+                const crd::i32 lca = skeleton_leaf_i32(static_cast<crd::i32>(ati[e]), j, first, row_stamp,
+                                                       row_last_leaf, ancestor, &kind);
+                colcount[j] += (kind != 0) ? 1 : 0;
+                if (kind == 2)
                 {
-                    ++colcount[j];
-                }
-                if (jleaf == 2)
-                {
-                    --colcount[q];
+                    --colcount[lca];
                 }
             }
         }
@@ -392,11 +427,11 @@ void counts_ata_i32(const crd::u32* atp, const crd::u32* ati, crd::i32 m, crd::i
             ancestor[j] = parent[j];
         }
     }
-    for (crd::i32 j = 0; j < n; ++j)
+    for (crd::i32 v = 0; v < n; ++v)
     {
-        if (parent[j] != -1)
+        if (parent[v] != -1)
         {
-            colcount[parent[j]] += colcount[j];
+            colcount[parent[v]] += colcount[v];
         }
     }
 }
@@ -519,20 +554,20 @@ crd::containers::Array<crd::u32> column_counts_ata(const sparse::SparsePattern& 
 
     crd::containers::Array<crd::i32> colcount(alloc);
     crd::containers::Array<crd::i32> ancestor(alloc);
-    crd::containers::Array<crd::i32> maxfirst(alloc);
-    crd::containers::Array<crd::i32> prevleaf(alloc);
+    crd::containers::Array<crd::i32> row_stamp(alloc);
+    crd::containers::Array<crd::i32> row_last_leaf(alloc);
     crd::containers::Array<crd::i32> first(alloc);
     crd::containers::Array<crd::i32> head(alloc);
     crd::containers::Array<crd::i32> next(alloc);
     colcount.resize(static_cast<crd::u32>(n));
     ancestor.resize(static_cast<crd::u32>(n));
-    maxfirst.resize(static_cast<crd::u32>(n));
-    prevleaf.resize(static_cast<crd::u32>(n));
+    row_stamp.resize(static_cast<crd::u32>(n));
+    row_last_leaf.resize(static_cast<crd::u32>(n));
     first.resize(static_cast<crd::u32>(n));
     head.resize(static_cast<crd::u32>(n) + 1);
     next.resize(static_cast<crd::u32>(m));
     counts_ata_i32(atp.data(), ati.data(), m, n, parent.data(), post.data(), colcount.data(), ancestor.data(),
-                   maxfirst.data(), prevleaf.data(), first.data(), head.data(), next.data());
+                   row_stamp.data(), row_last_leaf.data(), first.data(), head.data(), next.data());
 
     for (crd::i32 j = 0; j < n; ++j)
     {
@@ -570,15 +605,15 @@ crd::containers::Array<crd::u32> column_counts(const sparse::SparsePattern& patt
 
     crd::containers::Array<crd::i32> colcount(alloc);
     crd::containers::Array<crd::i32> ancestor(alloc);
-    crd::containers::Array<crd::i32> maxfirst(alloc);
-    crd::containers::Array<crd::i32> prevleaf(alloc);
+    crd::containers::Array<crd::i32> row_stamp(alloc);
+    crd::containers::Array<crd::i32> row_last_leaf(alloc);
     crd::containers::Array<crd::i32> first(alloc);
     colcount.resize(g.n);
     ancestor.resize(g.n);
-    maxfirst.resize(g.n);
-    prevleaf.resize(g.n);
+    row_stamp.resize(g.n);
+    row_last_leaf.resize(g.n);
     first.resize(g.n);
-    counts_i32(g, parent.data(), post.data(), colcount.data(), ancestor.data(), maxfirst.data(), prevleaf.data(),
+    counts_i32(g, parent.data(), post.data(), colcount.data(), ancestor.data(), row_stamp.data(), row_last_leaf.data(),
                first.data());
 
     crd::containers::Array<crd::u32> out(alloc);
@@ -615,15 +650,15 @@ crd::u64 nnz_l(const sparse::SparsePattern& pattern, crd::memory::IAllocator* al
     post_order_i32(parent.data(), n, post.data(), head.data(), next.data(), stack.data());
 
     crd::containers::Array<crd::i32> colcount(alloc);
-    crd::containers::Array<crd::i32> maxfirst(alloc);
-    crd::containers::Array<crd::i32> prevleaf(alloc);
+    crd::containers::Array<crd::i32> row_stamp(alloc);
+    crd::containers::Array<crd::i32> row_last_leaf(alloc);
     crd::containers::Array<crd::i32> first(alloc);
     colcount.resize(g.n);
-    maxfirst.resize(g.n);
-    prevleaf.resize(g.n);
+    row_stamp.resize(g.n);
+    row_last_leaf.resize(g.n);
     first.resize(g.n);
     // counts_i32 reuses `ancestor` as scratch (overwrites the etree one — fine, etree done).
-    counts_i32(g, parent.data(), post.data(), colcount.data(), ancestor.data(), maxfirst.data(), prevleaf.data(),
+    counts_i32(g, parent.data(), post.data(), colcount.data(), ancestor.data(), row_stamp.data(), row_last_leaf.data(),
                first.data());
 
     crd::u64 total = 0;
@@ -720,7 +755,7 @@ SymbolicFactor symbolic_factorize_ata(const sparse::SparsePattern& a, crd::memor
     }
 
     // --- etree + column counts of chol(AᵀA) WITHOUT forming AᵀA (reuse the proven implicit
-    // CSparse-port functions: column_elimination_tree == symbolic_factorize(AᵀA).parent and
+    // column functions: column_elimination_tree == symbolic_factorize(AᵀA).parent and
     // column_counts_ata == its colcount, both validated bit-identical at v5c-1a). ---------------
     crd::containers::Array<crd::u32> etree_u = column_elimination_tree(a, alloc);
     crd::containers::Array<crd::u32> colcount_u = column_counts_ata(a, {etree_u.data(), etree_u.size()}, alloc);
@@ -954,7 +989,7 @@ SymbolicFactor symbolic_factorize(const sparse::SparsePattern& pattern, crd::mem
         return out;
     }
 
-    // --- etree (cs_etree) + postorder (cs_post) ---------------------------
+    // --- etree + postorder ---------------------------------------------
     crd::containers::Array<crd::i32> parent(alloc);
     crd::containers::Array<crd::i32> ancestor(alloc);
     parent.resize(g.n);
@@ -971,17 +1006,17 @@ SymbolicFactor symbolic_factorize(const sparse::SparsePattern& pattern, crd::mem
     stack.resize(g.n);
     post_order_i32(parent.data(), n, post.data(), head.data(), next.data(), stack.data());
 
-    // --- column counts (cs_counts) ---------------------------------------
+    // --- column counts ---------------------------------------------------
     crd::containers::Array<crd::i32> colcount(alloc);
-    crd::containers::Array<crd::i32> maxfirst(alloc);
-    crd::containers::Array<crd::i32> prevleaf(alloc);
+    crd::containers::Array<crd::i32> row_stamp(alloc);
+    crd::containers::Array<crd::i32> row_last_leaf(alloc);
     crd::containers::Array<crd::i32> first(alloc);
     colcount.resize(g.n);
-    maxfirst.resize(g.n);
-    prevleaf.resize(g.n);
+    row_stamp.resize(g.n);
+    row_last_leaf.resize(g.n);
     first.resize(g.n);
     // counts_i32 reuses `ancestor` as scratch (the etree walk is done with it).
-    counts_i32(g, parent.data(), post.data(), colcount.data(), ancestor.data(), maxfirst.data(), prevleaf.data(),
+    counts_i32(g, parent.data(), post.data(), colcount.data(), ancestor.data(), row_stamp.data(), row_last_leaf.data(),
                first.data());
 
     // --- L column pointers from the prefix sum of the column counts -------
@@ -993,10 +1028,10 @@ SymbolicFactor symbolic_factorize(const sparse::SparsePattern& pattern, crd::mem
             out.lp[static_cast<crd::usize>(j)] + static_cast<crd::u32>(colcount[j]);
     }
 
-    // --- fundamental supernodes (reuse `maxfirst` as the nchild scratch) --
+    // --- fundamental supernodes (reuse `row_stamp` as the nchild scratch) --
     // Computed BEFORE the row-pattern build so the supernodal path can build per-supernode leading
-    // patterns directly. `maxfirst` is free here (counts_i32 done).
-    out.nsuper = fundamental_supernodes_i32(parent.data(), colcount.data(), n, out.super, maxfirst.data());
+    // patterns directly. `row_stamp` is free here (counts_i32 done).
+    out.nsuper = fundamental_supernodes_i32(parent.data(), colcount.data(), n, out.super, row_stamp.data());
 
     if (supernodal_patterns)
     {
@@ -1117,18 +1152,18 @@ SymbolicFactor symbolic_factorize(const sparse::SparsePattern& pattern, crd::mem
     }
     else
     {
-        // === General path: full L row pattern (cs_ereach per column) into `li`. ====================
-        // Reuse `first` as the per-column write cursor c[] (= a copy of lp), `stack` as the cs_ereach
-        // output stack, `head` as the zero-initialised marker.
+        // === General path: full L row pattern, one row per step, into `li`. ====================
+        // Reuse `first` as the per-column write cursor c[] (= a copy of lp), `stack` as the row-pattern
+        // output stack, `head` as the zero-initialised row stamps.
         out.li.resize(out.lp[static_cast<crd::usize>(n)]);
         for (crd::i32 j = 0; j < n; ++j)
         {
             first[j] = static_cast<crd::i32>(out.lp[static_cast<crd::usize>(j)]); // cursor c[j]
-            head[j] = 0;                                                          // marker (CS_FLIP scratch)
+            head[j] = 0;                                                          // no row stamped yet
         }
         for (crd::i32 k = 0; k < n; ++k)
         {
-            const crd::i32 top = ereach_i32(g, k, parent.data(), stack.data(), head.data());
+            const crd::i32 top = row_pattern_i32(g, k, parent.data(), stack.data(), head.data());
             for (crd::i32 p = top; p < n; ++p)
             {
                 const crd::i32 i = stack[p]; // L(k,i) != 0 -> column i, row k
