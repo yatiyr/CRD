@@ -62,6 +62,10 @@ behind a `gated` option that is off by default). Entries of `tools` run as separ
 and stay outside that rule; so do the apt-installed benchmark peers behind their off-by-default options
 (`CRD_BUILD_HESAP_VS_CHOLMOD` and its kind), which link a library and copy nothing from it.
 
+User rule, 2026-11-07: any algorithm may be implemented from any source and may match another implementation's results
+exactly. Cerid's code text is written by us, never translated from copyleft source. A licence concern is a short note to the
+user and never stalls work. Working code changes for licence reasons only on the user's order, with identical results.
+
 ## Acquisition
 
 [cmake/CrdPins.cmake](../../cmake/CrdPins.cmake) reads the registry with `string(JSON)`. The CPM bootstrap
