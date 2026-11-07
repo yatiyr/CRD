@@ -5,6 +5,8 @@
 
 Row: [HESAP-NET](../ROADMAP.md#slice-hesap-net). Session: [Link models](../sessions/2026-11-07-hesap-net-link-models.md).
 
+> Superseded the same day: the code this measured was copied from netem and is deleted ([session](../sessions/2026-11-07-no-gpl-derived-code.md), [board](2026-11-07-hesap-net-link-models.md)).
+
 ## Machine and arms
 
 Intel Core i9-14900K, WSL2 Ubuntu 24.04, one thread, GCC 13.3.0, the `linux-gcc-release` tree with

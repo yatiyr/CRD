@@ -5,6 +5,8 @@
 
 Row: [HESAP-NET](../ROADMAP.md#slice-hesap-net) (stays Partial). Track C batch 107.
 
+> Superseded the same day: the netem-derived code this records is deleted ([session](2026-11-07-no-gpl-derived-code.md)).
+
 ## CI first
 
 Every failure in 42319502866 and 42328203363 is at a commit older than its fix: crd-ci-platform (67e30587), test_clock on
