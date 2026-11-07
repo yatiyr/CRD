@@ -281,17 +281,19 @@ usize crd_encode_snapshot(const PlainSnapshot& in, u8* out, usize capacity)
     return crd_write(message, out, capacity);
 }
 
+// The lists decode into storage that holds the schema's maximum, so each element is decoded once, as it is validated.
 bool crd_decode_snapshot(const u8* bytes, usize size, PlainSnapshot& out)
 {
+    sb::Entity   entities[serialize_board::kMaxEntities];
     sb::Snapshot message;
+    message.entities.into(crd::containers::Span<sb::Entity>(entities));
     if (wire::decode(crd::containers::ConstSpan<u8>(bytes, size), sb::kMinor, message) != wire::WireError::Ok)
     {
         return false;
     }
     out.tick = message.tick;
     out.count = 0U;
-    sb::Entity entity;
-    for (auto cursor = message.entities.cursor(); cursor.next(entity);)
+    for (const sb::Entity& entity : message.entities.items())
     {
         to_plain(entity, out.entities[out.count++]);
     }
@@ -340,6 +342,41 @@ usize crd_encode_chat(const PlainChat& in, u8* out, usize capacity)
 bool crd_decode_chat(const u8* bytes, usize size, PlainChat& out)
 {
     sb::Chat message;
+    message.mentions.into(crd::containers::Span<u16>(out.mentions));
+    if (wire::decode(crd::containers::ConstSpan<u8>(bytes, size), sb::kMinor, message) != wire::WireError::Ok)
+    {
+        return false;
+    }
+    out.sender = message.sender;
+    out.room = static_cast<u8>(message.room);
+    std::memcpy(out.text, message.text.data(), message.text.size());
+    out.text[message.text.size()] = '\0';
+    out.text_bytes = static_cast<u8>(message.text.size());
+    out.mention_count = static_cast<u8>(message.mentions.items().size());
+    return true;
+}
+
+// The same codec with no storage: each list is validated by its check pass and walked from the message.
+bool crd_view_decode_snapshot(const u8* bytes, usize size, PlainSnapshot& out)
+{
+    sb::Snapshot message;
+    if (wire::decode(crd::containers::ConstSpan<u8>(bytes, size), sb::kMinor, message) != wire::WireError::Ok)
+    {
+        return false;
+    }
+    out.tick = message.tick;
+    out.count = 0U;
+    sb::Entity entity;
+    for (auto cursor = message.entities.cursor(); cursor.next(entity);)
+    {
+        to_plain(entity, out.entities[out.count++]);
+    }
+    return true;
+}
+
+bool crd_view_decode_chat(const u8* bytes, usize size, PlainChat& out)
+{
+    sb::Chat message;
     if (wire::decode(crd::containers::ConstSpan<u8>(bytes, size), sb::kMinor, message) != wire::WireError::Ok)
     {
         return false;
@@ -358,10 +395,15 @@ bool crd_decode_chat(const u8* bytes, usize size, PlainChat& out)
     return true;
 }
 
-const PeerArm kCrdArm{"crd-net (generated)", "bits; schema bounds, smallest three, varint tick",
+const PeerArm kCrdArm{"crd-net (generated)", "bits; schema bounds, smallest three, varint tick; lists into storage",
                       crd_encode_snapshot,   crd_decode_snapshot,
                       crd_encode_command,    crd_decode_command,
                       crd_encode_chat,       crd_decode_chat};
+
+const PeerArm kCrdViewArm{"crd-net, lists viewed", "the same bytes; lists checked, then walked from the message",
+                          crd_encode_snapshot,     crd_view_decode_snapshot,
+                          crd_encode_command,      crd_decode_command,
+                          crd_encode_chat,         crd_view_decode_chat};
 
 // ---- Agreement: each arm's decoded message against the source (and crd-net's against serialize's) ------------------
 
@@ -620,9 +662,15 @@ int main(int argc, char** argv)
         make_chat(rng, chat_set[i]);
     }
 
-    const PeerArm* const arms[] = {&kCrdArm, &serialize_board::kSerializeArm, &serialize_board::kBitseryArm,
-                                   &serialize_board::kZppBitsArm, &serialize_board::kProtozeroArm};
-    const Law laws[] = {Law::Rounded, Law::Rounded, Law::Truncated, Law::Exact, Law::Exact};
+    // crd-net is first and serialize second (the identity check reads them); crd-net's viewed lists are last.
+    const PeerArm* const arms[] = {&kCrdArm,
+                                   &serialize_board::kSerializeArm,
+                                   &serialize_board::kBitseryArm,
+                                   &serialize_board::kZppBitsArm,
+                                   &serialize_board::kProtozeroArm,
+                                   &kCrdViewArm};
+    const Law laws[] = {Law::Rounded, Law::Rounded, Law::Truncated, Law::Exact, Law::Exact, Law::Rounded};
+    constexpr usize view = 5U;
     constexpr usize arm_count = sizeof(arms) / sizeof(arms[0]);
 
     Array<u8> slots;
@@ -705,22 +753,25 @@ int main(int argc, char** argv)
     }
     for (usize t = 0U; t < ticks; ++t)
     {
-        if (!identical(snapshot_out[0][t], snapshot_out[1][t]))
+        if (!identical(snapshot_out[0][t], snapshot_out[1][t]) || !identical(snapshot_out[0][t], snapshot_out[view][t]))
         {
-            std::fprintf(stderr, "crd-net and serialize decode tick %zu to different values\n", t);
+            std::fprintf(stderr, "crd-net, its viewed lists and serialize decode tick %zu to different values\n", t);
             failed = true;
             break;
         }
     }
-    if (!strict[0])
+    for (const usize a : {usize{0U}, view})
     {
-        std::fprintf(stderr, "crd-net accepted a snapshot cut short or followed by a byte\n");
-        failed = true;
-    }
-    if (snapshot_cost[0].allocations + command_cost[0].allocations + chat_cost[0].allocations != 0U)
-    {
-        std::fprintf(stderr, "crd-net allocated\n");
-        failed = true;
+        if (!strict[a])
+        {
+            std::fprintf(stderr, "%s accepted a snapshot cut short or followed by a byte\n", arms[a]->name);
+            failed = true;
+        }
+        if (snapshot_cost[a].allocations + command_cost[a].allocations + chat_cost[a].allocations != 0U)
+        {
+            std::fprintf(stderr, "%s allocated\n", arms[a]->name);
+            failed = true;
+        }
     }
 
     std::printf("| Message | Arm | bytes | bytes / crd-net | encode ns | decode ns | encode / crd-net | "

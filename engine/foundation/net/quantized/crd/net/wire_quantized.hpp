@@ -36,6 +36,18 @@ namespace crd::net::wire
     return wire_error(hesap::net::bounded_decode(format, static_cast<u32>(code), value), WireError::OutOfRange);
 }
 
+// The decode's verdict on a bounded code without the float it rebuilds: what a list's validating pass reads.
+[[nodiscard]] CRD_FORCEINLINE WireError wire_check_bounded(cont::BitReader& r,
+                                                           const hesap::net::BoundedFloat& format) noexcept
+{
+    u64 code = 0U;
+    if (!r.take(format.bits, code))
+    {
+        return WireError::Truncated;
+    }
+    return wire_error(hesap::net::bounded_valid(format, static_cast<u32>(code)), WireError::OutOfRange);
+}
+
 // A unit quaternion, as hesap-net's smallest-three word.
 struct WireQuaternion
 {
@@ -69,6 +81,18 @@ CRD_FORCEINLINE void wire_put_quaternion(cont::BitWriter& w, const hesap::net::S
         return WireError::Truncated;
     }
     return wire_error(hesap::net::smallest_three_decode_one(format, word, value.xyzw), WireError::BadQuaternion);
+}
+
+// The decode's verdict on a word without the quaternion it rebuilds.
+[[nodiscard]] CRD_FORCEINLINE WireError wire_check_quaternion(cont::BitReader& r,
+                                                              const hesap::net::SmallestThree& format) noexcept
+{
+    u64 word = 0U;
+    if (!r.take(hesap::net::smallest_three_word_bits(format), word))
+    {
+        return WireError::Truncated;
+    }
+    return wire_error(hesap::net::smallest_three_valid(format, word), WireError::BadQuaternion);
 }
 
 } // namespace crd::net::wire

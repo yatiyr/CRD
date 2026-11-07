@@ -262,6 +262,75 @@ struct EntityCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        value = Value{};
+        if (const WireError error = wire_take_range<u16>(r, static_cast<u16>(0ULL), 1023ULL, 10U, value.id);
+            error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_check_bounded(r, kEntityXFormat); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_check_bounded(r, kEntityYFormat); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_check_bounded(r, kEntityZFormat); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_check_quaternion(r, kEntityTurnFormat); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_check_bounded(r, kEntityVxFormat); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_check_bounded(r, kEntityVyFormat); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_check_bounded(r, kEntityVzFormat); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_range<u8>(r, static_cast<u8>(0ULL), 100ULL, 7U, value.health);
+            error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_uint(r, 2U, value.stance); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (writer_minor <= kMinor && !enum_known(value.stance, writer_minor))
+        {
+            return WireError::UnknownValue;
+        }
+        if (const WireError error = wire_take_bool(r, value.firing); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_bool(r, value.has_target); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (value.has_target)
+        {
+            if (const WireError error = wire_take_range<u16>(r, static_cast<u16>(0ULL), 1023ULL, 10U, value.target);
+                error != WireError::Ok)
+            {
+                return error;
+            }
+        }
+        return WireError::Ok;
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return wire_same(a.id, b.id) &&
@@ -299,6 +368,12 @@ struct SnapshotCodec
     static constexpr u32 kMaxBytes = 1278U; // at the current minor revision
     static constexpr bool kLossy = true; // a decoded value may re-encode to other bits
 
+    // The storage its lists decode into, from the value a decode starts over.
+    static void keep(Value& fresh, const Value& old) noexcept
+    {
+        fresh.entities.into(old.entities.storage());
+    }
+
     [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
                                                  [[maybe_unused]] u16 minor) noexcept
     {
@@ -327,7 +402,7 @@ struct SnapshotCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
+        value = wire_fresh<SnapshotCodec>(value);
         if (const WireError error = wire_take_varuint_as(r, 7U, 4294967295ULL, value.tick);
             error != WireError::Ok)
         {
@@ -499,6 +574,12 @@ struct ChatMentionsItemCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return wire_same(a, b);
@@ -525,6 +606,12 @@ struct ChatCodec
     static constexpr u32 kMinBytes = 3U; // at the first minor revision
     static constexpr u32 kMaxBytes = 214U; // at the current minor revision
     static constexpr bool kLossy = false; // a decoded value may re-encode to other bits
+
+    // The storage its lists decode into, from the value a decode starts over.
+    static void keep(Value& fresh, const Value& old) noexcept
+    {
+        fresh.mentions.into(old.mentions.storage());
+    }
 
     [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
                                                  [[maybe_unused]] u16 minor) noexcept
@@ -569,7 +656,7 @@ struct ChatCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
+        value = wire_fresh<ChatCodec>(value);
         if (const WireError error = wire_take_range<u16>(r, static_cast<u16>(0ULL), 1023ULL, 10U, value.sender);
             error != WireError::Ok)
         {

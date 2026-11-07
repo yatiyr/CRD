@@ -513,6 +513,11 @@ TEST_CASE("A keyed list merges by its keys, and each edit has one encoding", "[n
                                    {0U, 2U}});
         Roster message{};
         CHECK(decode(ConstSpan<u8>(bad), kMinor, message) == WireError::KeyOrder);
+        // Decoded into storage, each seat as it is validated, the keys are held to the same order.
+        Seat seats[5] = {};
+        message.seats.into(Span<Seat>(seats));
+        CHECK(decode(ConstSpan<u8>(bad), kMinor, message) == WireError::KeyOrder);
+        CHECK(message.seats.storage().data() == seats);
     }
 }
 

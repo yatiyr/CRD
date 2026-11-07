@@ -293,6 +293,10 @@ class Type:
     def same(self, a, b):
         return f'wire_same({a}, {b})'
 
+    def check(self, ref):
+        """A list's validating pass: the take's verdict; a quantised field skips the value it would rebuild."""
+        return self.take(ref)
+
     def ref_default(self, default):
         return default if default is not None else 0
 
@@ -847,6 +851,9 @@ class BoundedType(Type):
     def take(self, ref):
         return guard(f'wire_take_bounded(r, {self.format_name}, {ref})')
 
+    def check(self, ref):
+        return guard(f'wire_check_bounded(r, {self.format_name})')
+
 
 class QuaternionType(Type):
     lossy = True
@@ -880,6 +887,9 @@ class QuaternionType(Type):
 
     def take(self, ref):
         return guard(f'wire_take_quaternion(r, {self.format_name}, {ref})')
+
+    def check(self, ref):
+        return guard(f'wire_check_quaternion(r, {self.format_name})')
 
 
 class WholeInDelta:
@@ -1396,6 +1406,9 @@ class StructType(Type):
     def take(self, ref):
         return guard(f'{self.name}Codec::decode(r, writer_minor, {ref})')
 
+    def check(self, ref):
+        return guard(f'{self.name}Codec::check(r, writer_minor, {ref})')
+
     def ref_default(self, default):
         return {f.name: f.type.ref_default(f.default) if not f.optional else None for f in self.fields}
 
@@ -1802,9 +1815,43 @@ def scalar_codec(item, name):
     lines += ['    [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,',
               '                                          Value& value) noexcept', '    {']
     lines += wrap_lines(item.take('value'), '        ') + ['        return WireError::Ok;', '    }', '']
+    body = wrap_lines(item.check('value'), '        ')
+    lines += check_lines('check', lambda: body, body != wrap_lines(item.take('value'), '        '),
+                         '[[maybe_unused]] ')
     lines += ['    [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept', '    {',
               f'        return {item.same("a", "b")};', '    }', '};', '']
     return lines
+
+
+def kept_lists(item):
+    """The fields of a struct through which a list's decode storage is reached: its lists and the structs holding one."""
+    return [f for f in item.fields
+            if isinstance(f.type, ListType) or (isinstance(f.type, StructType) and kept_lists(f.type))]
+
+
+def keep_lines(item):
+    """A struct's `keep`: a decode starts from a fresh value that keeps the storage its lists decode into."""
+    fields = kept_lists(item)
+    if not fields:
+        return []
+    lines = ['    // The storage its lists decode into, from the value a decode starts over.',
+             '    static void keep(Value& fresh, const Value& old) noexcept', '    {']
+    for field in fields:
+        if isinstance(field.type, ListType):
+            lines.append(f'        fresh.{field.name}.into(old.{field.name}.storage());')
+        else:
+            lines.append(f'        {field.type.name}Codec::keep(fresh.{field.name}, old.{field.name});')
+    return lines + ['    }', '']
+
+
+def check_lines(name, body, checks, unused=''):
+    """A codec's `check`, which a list's validating pass runs: its decode's verdict and end, every field but the quantised
+    ones written. A codec whose own fields are not quantised checks by decoding."""
+    lines = [f'    [[nodiscard]] static WireError {name}(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,',
+             f'                                                 {unused if checks else ""}Value& value) noexcept', '    {']
+    if not checks:
+        return lines + ['        return decode(r, writer_minor, value);', '    }', '']
+    return lines + body() + ['        return WireError::Ok;', '    }', '']
 
 
 def struct_lines(item, schema, message):
@@ -1844,7 +1891,7 @@ def struct_lines(item, schema, message):
                   f'    static constexpr u32 kMaxBytes = {(item.max_bits + 7) // 8}U; // at the current minor revision',
                   f'    static constexpr bool kLossy = {"true" if item.lossy else "false"}; '
                   '// a decoded value may re-encode to other bits']
-    lines += ['']
+    lines += [''] + keep_lines(item)
 
     lines += [f'    [[nodiscard]] static WireError {encode_name}(const Value& value, cont::BitWriter& w,',
               '                                                 [[maybe_unused]] u16 minor) noexcept', '    {']
@@ -1884,22 +1931,34 @@ def struct_lines(item, schema, message):
             body += inner
     lines += wrap_lines(body, '        ') + ['        return position;', '    }', '']
 
+    def reads(read):
+        body = []
+        for field in item.fields:
+            ref = f'value.{field.name}'
+            inner = []
+            if field.optional:
+                inner += guard(f'wire_take_bool(r, value.has_{field.name})')
+                inner += [f'if (value.has_{field.name})', '{'] + wrap_lines(read(field.type, ref)) + ['}']
+            else:
+                inner += read(field.type, ref)
+            if field.since > 0:
+                body += [f'if (writer_minor >= {field.since}U)', '{'] + wrap_lines(inner) + ['}']
+            else:
+                body += inner
+        reset = f'value = wire_fresh<{codec}>(value);' if kept_lists(item) else 'value = Value{};'
+        return ['        ' + reset] + wrap_lines(body, '        ')
+
     lines += [f'    [[nodiscard]] static WireError {decode_name}(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,',
-              '                                                 Value& value) noexcept', '    {', '        value = Value{};']
-    body = []
-    for field in item.fields:
-        ref = f'value.{field.name}'
-        inner = []
-        if field.optional:
-            inner += guard(f'wire_take_bool(r, value.has_{field.name})')
-            inner += [f'if (value.has_{field.name})', '{'] + wrap_lines(field.type.take(ref)) + ['}']
-        else:
-            inner += field.type.take(ref)
-        if field.since > 0:
-            body += [f'if (writer_minor >= {field.since}U)', '{'] + wrap_lines(inner) + ['}']
-        else:
-            body += inner
-    lines += wrap_lines(body, '        ') + ['        return WireError::Ok;', '    }', '']
+              '                                                 Value& value) noexcept', '    {']
+    decode_body = reads(lambda kind, ref: kind.take(ref))
+    lines += decode_body + ['        return WireError::Ok;', '    }', '']
+    # A message is never a list's element. A check that reads as the decode does is the decode.
+    check_body = reads(lambda kind, ref: kind.check(ref))
+    checks = message is None and check_body != decode_body
+    if message is None and not outer:
+        lines += check_lines('check', lambda: check_body, checks)
+    elif checks:
+        lines += check_lines('check_body', lambda: check_body, checks)
 
     if outer:
         lines += ['    [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w, u16 minor) noexcept',
@@ -1909,6 +1968,10 @@ def struct_lines(item, schema, message):
                   '    [[nodiscard]] static WireError decode(cont::BitReader& r, u16 writer_minor, Value& value) noexcept',
                   '    {', f'        return wire_take_extensible<{codec}>(r, writer_minor, kSchemaMinor, value);', '    }',
                   '']
+        check = (f'wire_take_extensible<{codec}, &{codec}::check_body>(r, writer_minor, kSchemaMinor, value)'
+                 if checks else 'decode(r, writer_minor, value)')
+        lines += ['    [[nodiscard]] static WireError check(cont::BitReader& r, u16 writer_minor, Value& value) noexcept',
+                  '    {', f'        return {check};', '    }', '']
 
     terms = []
     for field in item.fields:
@@ -2067,6 +2130,15 @@ def seeds_for(schema):
                 size = len(old.data())
                 seeds.append((index, minor, bytes([size >> 8, size & 255]) + old.data() + delta.data()))
                 seeds.append((index, minor, bytes([size >> 8, size & 255]) + old.data() + whole.data()))
+    first = len(schema.messages) + len(schema.delta_messages())
+    for index, (_, element) in enumerate(list_codecs(schema), start=first):
+        if element.lossy:
+            seeds.append((index, schema.minor, bytes(rng.randrange(256) for _ in range((element.min_bits + 7) // 8 + 8))))
+            continue
+        for _ in range(2):
+            writer = RefWriter()
+            element.ref_put(writer, element.ref_gen(rng, schema.minor), schema.minor)
+            seeds.append((index, schema.minor, writer.data()))
     return seeds
 
 
@@ -2102,6 +2174,43 @@ def delta_fuzz_lines(schema):
             '} // namespace', '']
 
 
+def list_codecs(schema):
+    """The codec of every list's element, which the list's validating pass checks, in a stable order."""
+    codecs = []
+
+    def visit(item):
+        if isinstance(item, ListType) and all(name != item.codec_name for name, _ in codecs):
+            codecs.append((item.codec_name, item.of))
+        for child in item.children():
+            visit(child)
+
+    for item in schema.ordered_structs():
+        for field in item.fields:
+            visit(field.type)
+    return codecs
+
+
+FUZZ_STORAGE_CAP = 64
+
+
+def storage_lines(schema):
+    """Storage for every message's own lists, up to FUZZ_STORAGE_CAP elements, and the overloads that attach it."""
+    lines = []
+    for message in schema.messages:
+        lists = [f for f in message['type'].fields if isinstance(f.type, ListType)]
+        if not lists:
+            continue
+        lines += [f'void attach(schema::{message["name"]}& message)', '{']
+        for field in lists:
+            size = min(field.type.high, FUZZ_STORAGE_CAP)
+            lines += [f'    static schema::{field.type.codec_name}::Value s_{field.name}[{size}];',
+                      f'    message.{field.name}.into(s_{field.name});']
+        lines += ['}', '']
+    if lines:
+        lines = ['template <typename M>', 'void attach(M&)', '{', '}', ''] + lines
+    return lines
+
+
 def fuzz_text(schema, entry):
     namespace = f'crd::net::wire::{schema.name}'
     target = 'crd-fuzz-wire-' + schema.name.replace('_', '-')
@@ -2117,19 +2226,31 @@ def fuzz_text(schema, entry):
              '//     exactly the input (one message has one encoding), unless its fields are quantised, when the re-encoded',
              '//     message decodes at the same size;',
              '//   * encoded_bytes() equals what the encoder wrote.',
+             *(["//   * a decode into storage for the message's lists gives the same verdict and, accepted, the same",
+                '//     message.'] if storage_lines(schema) else []),
              *(['//',
                 '// A delta message also takes [baseline size, 16 bits][baseline][delta]. On a baseline its decoder accepts:',
                 '//   * what a delta rebuilds passes the decoder or is refused, and its delta at that revision is the input',
                 '//     (one delta has one encoding);',
                 '//   * the rest read as a second message: its delta rebuilds it exactly.'] if schema.delta_messages() else []),
+             *(['//',
+                "// The last cases pick a list's element codec: its check, which the list's validating pass runs, gives",
+                "// its decode's verdict on the same bytes and stops where it does."]
+               if list_codecs(schema) else []),
              '#include <crd/fuzz/harness.hpp>', '', f'#include <{entry["include"]}>', '', '#include <cstring>', '',
              'namespace', '{', 'using crd::u16;', 'using crd::u8;', 'using crd::usize;',
              'using crd::containers::ConstSpan;', 'using crd::net::wire::WireError;', '',
              f'namespace schema = {namespace};', '',
              'u8 g_out[crd::fuzz::kMaxInputBytes];', '',
+             *storage_lines(schema),
              'template <typename M>', 'void exercise(ConstSpan<u8> bytes, u16 writer_minor)', '{',
              '    using C = typename M::WireCodec;', '    M first{};',
-             '    if (crd::net::wire::decode(bytes, writer_minor, first) != WireError::Ok)', '    {', '        return;', '    }',
+             '    const WireError verdict = crd::net::wire::decode(bytes, writer_minor, first);',
+             *(['    M held{};', '    attach(held);',
+                '    CRD_FUZZ_REQUIRE(crd::net::wire::decode(bytes, writer_minor, held) == verdict);',
+                '    CRD_FUZZ_REQUIRE(verdict != WireError::Ok || crd::net::wire::same(first, held));']
+               if storage_lines(schema) else []),
+             '    if (verdict != WireError::Ok)', '    {', '        return;', '    }',
              '    CRD_FUZZ_REQUIRE(crd::net::wire::same(first, first));', '    M second{};',
              '    CRD_FUZZ_REQUIRE(crd::net::wire::decode(bytes, writer_minor, second) == WireError::Ok);',
              '    CRD_FUZZ_REQUIRE(crd::net::wire::same(first, second));',
@@ -2145,19 +2266,31 @@ def fuzz_text(schema, entry):
              '        CRD_FUZZ_REQUIRE(C::kLossy || written == 0U || std::memcmp(g_out, bytes.data(), written) == 0);',
              '    }', '    M again{};',
              '    CRD_FUZZ_REQUIRE(crd::net::wire::decode(ConstSpan<u8>(g_out, written), minor, again) == WireError::Ok);',
-             '    CRD_FUZZ_REQUIRE(C::kLossy || crd::net::wire::same(first, again));', '}', '', '} // namespace', '',
+             '    CRD_FUZZ_REQUIRE(C::kLossy || crd::net::wire::same(first, again));', '}', '',
+             *(['template <typename C>', 'void agree(ConstSpan<u8> bytes, u16 writer_minor)', '{',
+                '    crd::containers::BitReader decoded(bytes);', '    crd::containers::BitReader checked(bytes);',
+                '    typename C::Value one{};', '    typename C::Value other{};',
+                '    const WireError verdict = C::decode(decoded, writer_minor, one);',
+                '    CRD_FUZZ_REQUIRE(C::check(checked, writer_minor, other) == verdict);',
+                '    CRD_FUZZ_REQUIRE(verdict != WireError::Ok || decoded.bit_position() == checked.bit_position());',
+                '}', ''] if list_codecs(schema) else []),
+             '} // namespace', '',
              *delta_fuzz_lines(schema),
              'extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)', '{',
              '    if (size < 2U || size - 2U > crd::fuzz::kMaxInputBytes)', '    {', '        return 0;', '    }',
              '    const ConstSpan<u8> bytes(data + 2U, size - 2U);',
              f'    const auto writer_minor = static_cast<u16>(data[1] % (schema::kMinor + {MINORS_PAST_SCHEMA + 1}U));',
-             f'    switch (data[0] % {len(schema.messages) + len(schema.delta_messages())}U)', '    {']
+             f'    switch (data[0] % {len(schema.messages) + len(schema.delta_messages()) + len(list_codecs(schema))}U)',
+             '    {']
     for index, message in enumerate(schema.messages):
         lines += [f'    case {index}U:', f'        exercise<schema::{message["name"]}>(bytes, writer_minor);', '        break;']
     for index, message in enumerate(schema.delta_messages(), start=len(schema.messages)):
         name = message['name']
         lines += [f'    case {index}U:', f'        exercise_delta<schema::{name}>(schema::k{name}Layout, bytes, writer_minor);',
                   '        break;']
+    first = len(schema.messages) + len(schema.delta_messages())
+    for index, (codec, _) in enumerate(list_codecs(schema), start=first):
+        lines += [f'    case {index}U:', f'        agree<schema::{codec}>(bytes, writer_minor);', '        break;']
     lines += ['    default:', '        break;', '    }', '    return 0;', '}', '',
               'void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)', '{']
     for number, (index, minor, data) in enumerate(seeds_for(schema)):

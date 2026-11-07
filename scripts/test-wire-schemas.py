@@ -297,6 +297,39 @@ class Refusals(SchemaCase):
         self.assertNotEqual(build(next_major).layout_digest(0), schema.layout_digest(0))
         self.refused(dict(base(), history={'0': schema.layout_digest(0), '1': 'x'}), 'history holds')
 
+    def test_a_list_element_checks_without_rebuilding_its_quantised_fields(self):
+        document = base()
+        document['structs'] = {
+            'Pose': {'fields': [{'name': 'id', 'type': 'uint', 'bits': 4},
+                                {'name': 'x', 'type': 'bounded', 'min': -1.0, 'max': 1.0, 'resolution': 0.01},
+                                {'name': 'turn', 'type': 'quaternion', 'bits': 9}]},
+            'Tag': {'fields': [{'name': 'id', 'type': 'uint', 'bits': 4}]}}
+        document['messages'][0]['fields'] = [
+            {'name': 'poses', 'type': 'list', 'of': {'type': 'Pose'}, 'max': 4},
+            {'name': 'tags', 'type': 'list', 'of': {'type': 'Tag'}, 'max': 4},
+            {'name': 'bounds', 'type': 'list', 'max': 4,
+             'of': {'type': 'bounded', 'min': 0.0, 'max': 1.0, 'resolution': 0.5}}]
+        schema = build(document)
+        text = gen.header_text(schema, {'schema': 'x'})
+
+        def codec(name):
+            start = text.index(f'struct {name}\n')
+            return text[start:text.index('\n};\n', start)]
+
+        pose = codec('PoseCodec')
+        check = pose[pose.index('static WireError check('):]
+        self.assertIn('wire_check_bounded(r, kPoseXFormat)', check)
+        self.assertIn('wire_check_quaternion(r, kPoseTurnFormat)', check)
+        self.assertNotIn('wire_take_bounded', check)
+        self.assertIn('value.id', check)  # a key the pass compares is still written
+        self.assertIn('return decode(r, writer_minor, value);', codec('TagCodec'))
+        self.assertIn('wire_check_bounded(r, kOnlyBoundsItemFormat)', codec('OnlyBoundsItemCodec'))
+        self.assertNotIn('static WireError check(', codec('OnlyCodec'))  # a message is never an element
+        fuzz = gen.fuzz_text(schema, {'schema': 'x', 'include': 'x.hpp'})
+        for name in ('PoseCodec', 'TagCodec', 'OnlyBoundsItemCodec'):
+            self.assertIn(f'agree<schema::{name}>(bytes, writer_minor);', fuzz)
+        self.assertIn('switch (data[0] % 4U)', fuzz)
+
     def test_a_line_over_the_limit_fails_the_generator(self):
         document = self.with_fields({'name': 'a' * 130, 'type': 'bool'})
         schema = build(document)

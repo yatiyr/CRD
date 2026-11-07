@@ -185,6 +185,12 @@ struct PoseCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return wire_same(a.x, b.x) &&
@@ -227,6 +233,12 @@ struct EntityBagItemCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return wire_same(a, b);
@@ -258,6 +270,12 @@ struct EntityCodec
 {
     using Value = Entity;
     static constexpr u16 kSchemaMinor = kMinor;
+
+    // The storage its lists decode into, from the value a decode starts over.
+    static void keep(Value& fresh, const Value& old) noexcept
+    {
+        fresh.bag.into(old.bag.storage());
+    }
 
     [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
                                                  [[maybe_unused]] u16 minor) noexcept
@@ -349,7 +367,7 @@ struct EntityCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
+        value = wire_fresh<EntityCodec>(value);
         if (const WireError error = wire_take_uint(r, 16U, value.id); error != WireError::Ok)
         {
             return error;
@@ -413,6 +431,80 @@ struct EntityCodec
         if (value.has_back)
         {
             if (const WireError error = PoseCodec::decode(r, writer_minor, value.back); error != WireError::Ok)
+            {
+                return error;
+            }
+        }
+        return WireError::Ok;
+    }
+
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        value = wire_fresh<EntityCodec>(value);
+        if (const WireError error = wire_take_uint(r, 16U, value.id); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = PoseCodec::check(r, writer_minor, value.pose); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_bool(r, value.seen); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_uint(r, 1U, value.side); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (writer_minor <= kMinor && !enum_known(value.side, writer_minor))
+        {
+            return WireError::UnknownValue;
+        }
+        if (const WireError error = wire_take_uint(r, 2U, value.stance); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (writer_minor <= kMinor && !enum_known(value.stance, writer_minor))
+        {
+            return WireError::UnknownValue;
+        }
+        if (const WireError error = wire_take_float(r, true, value.weight); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_bool(r, value.has_tag); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (value.has_tag)
+        {
+            if (const WireError error = wire_take_text(r, 12U, 4U, value.tag); error != WireError::Ok)
+            {
+                return error;
+            }
+        }
+        if (const WireError error = wire_take_bytes(r, 0U, 8U, 4U, value.blob); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_bytes(r, 3U, 3U, 0U, value.fixed); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_list(r, 0U, 5U, 3U, writer_minor, value.bag);
+            error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_bool(r, value.has_back); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (value.has_back)
+        {
+            if (const WireError error = PoseCodec::check(r, writer_minor, value.back); error != WireError::Ok)
             {
                 return error;
             }
@@ -525,6 +617,12 @@ struct MemberCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return wire_same(a.rank, b.rank) &&
@@ -583,6 +681,12 @@ struct SeatCodec
             return error;
         }
         return WireError::Ok;
+    }
+
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
     }
 
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
@@ -683,6 +787,11 @@ struct InnerCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, u16 writer_minor, Value& value) noexcept
     {
         return wire_take_extensible<InnerCodec>(r, writer_minor, kSchemaMinor, value);
+    }
+
+    [[nodiscard]] static WireError check(cont::BitReader& r, u16 writer_minor, Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
     }
 
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
@@ -810,6 +919,39 @@ struct HeaderCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check_body(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        value = Value{};
+        if (const WireError error = wire_take_uint(r, 7U, value.level); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_text(r, 20U, 5U, value.label); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = InnerCodec::check(r, writer_minor, value.nested); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (writer_minor >= 1U)
+        {
+            if (const WireError error = wire_take_uint(r, 5U, value.added); error != WireError::Ok)
+            {
+                return error;
+            }
+        }
+        if (writer_minor >= 2U)
+        {
+            if (const WireError error = wire_take_bytes(r, 0U, 9U, 4U, value.more); error != WireError::Ok)
+            {
+                return error;
+            }
+        }
+        return WireError::Ok;
+    }
+
     [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w, u16 minor) noexcept
     {
         return wire_put_extensible<HeaderCodec>(w, value, minor);
@@ -823,6 +965,11 @@ struct HeaderCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, u16 writer_minor, Value& value) noexcept
     {
         return wire_take_extensible<HeaderCodec>(r, writer_minor, kSchemaMinor, value);
+    }
+
+    [[nodiscard]] static WireError check(cont::BitReader& r, u16 writer_minor, Value& value) noexcept
+    {
+        return wire_take_extensible<HeaderCodec, &HeaderCodec::check_body>(r, writer_minor, kSchemaMinor, value);
     }
 
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
@@ -857,6 +1004,12 @@ struct SnapshotCodec
     static constexpr u32 kMinBytes = 6U; // at the first minor revision
     static constexpr u32 kMaxBytes = 938U; // at the current minor revision
     static constexpr bool kLossy = false; // a decoded value may re-encode to other bits
+
+    // The storage its lists decode into, from the value a decode starts over.
+    static void keep(Value& fresh, const Value& old) noexcept
+    {
+        fresh.entities.into(old.entities.storage());
+    }
 
     [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
                                                  [[maybe_unused]] u16 minor) noexcept
@@ -930,7 +1083,7 @@ struct SnapshotCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
+        value = wire_fresh<SnapshotCodec>(value);
         if (const WireError error = wire_take_varuint_as(r, 2U, 18446744073709551615ULL, value.tick);
             error != WireError::Ok)
         {
@@ -1003,6 +1156,15 @@ struct RosterCodec
     static constexpr u32 kMaxBytes = 235U; // at the current minor revision
     static constexpr bool kLossy = false; // a decoded value may re-encode to other bits
 
+    // The storage its lists decode into, from the value a decode starts over.
+    static void keep(Value& fresh, const Value& old) noexcept
+    {
+        fresh.members.into(old.members.storage());
+        fresh.seats.into(old.seats.storage());
+        fresh.ordered.into(old.ordered.storage());
+        fresh.scores.into(old.scores.storage());
+    }
+
     [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
                                                  [[maybe_unused]] u16 minor) noexcept
     {
@@ -1051,7 +1213,7 @@ struct RosterCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
+        value = wire_fresh<RosterCodec>(value);
         if (const WireError error =
                 wire_take_list(r, 1U, 6U, 3U, writer_minor, value.members, WireKeyOf<&Member::rank>{});
             error != WireError::Ok)

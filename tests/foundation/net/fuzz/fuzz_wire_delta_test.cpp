@@ -11,11 +11,16 @@
 //     exactly the input (one message has one encoding), unless its fields are quantised, when the re-encoded
 //     message decodes at the same size;
 //   * encoded_bytes() equals what the encoder wrote.
+//   * a decode into storage for the message's lists gives the same verdict and, accepted, the same
+//     message.
 //
 // A delta message also takes [baseline size, 16 bits][baseline][delta]. On a baseline its decoder accepts:
 //   * what a delta rebuilds passes the decoder or is refused, and its delta at that revision is the input
 //     (one delta has one encoding);
 //   * the rest read as a second message: its delta rebuilds it exactly.
+//
+// The last cases pick a list's element codec: its check, which the list's validating pass runs, gives
+// its decode's verdict on the same bytes and stops where it does.
 #include <crd/fuzz/harness.hpp>
 
 #include <generated/delta_test.hpp>
@@ -35,11 +40,39 @@ namespace schema = crd::net::wire::delta_test;
 u8 g_out[crd::fuzz::kMaxInputBytes];
 
 template <typename M>
+void attach(M&)
+{
+}
+
+void attach(schema::Snapshot& message)
+{
+    static schema::EntityCodec::Value s_entities[8];
+    message.entities.into(s_entities);
+}
+
+void attach(schema::Roster& message)
+{
+    static schema::MemberCodec::Value s_members[6];
+    message.members.into(s_members);
+    static schema::SeatCodec::Value s_seats[5];
+    message.seats.into(s_seats);
+    static schema::SeatCodec::Value s_ordered[2];
+    message.ordered.into(s_ordered);
+    static schema::HeaderCodec::Value s_scores[3];
+    message.scores.into(s_scores);
+}
+
+template <typename M>
 void exercise(ConstSpan<u8> bytes, u16 writer_minor)
 {
     using C = typename M::WireCodec;
     M first{};
-    if (crd::net::wire::decode(bytes, writer_minor, first) != WireError::Ok)
+    const WireError verdict = crd::net::wire::decode(bytes, writer_minor, first);
+    M held{};
+    attach(held);
+    CRD_FUZZ_REQUIRE(crd::net::wire::decode(bytes, writer_minor, held) == verdict);
+    CRD_FUZZ_REQUIRE(verdict != WireError::Ok || crd::net::wire::same(first, held));
+    if (verdict != WireError::Ok)
     {
         return;
     }
@@ -70,6 +103,18 @@ void exercise(ConstSpan<u8> bytes, u16 writer_minor)
     M again{};
     CRD_FUZZ_REQUIRE(crd::net::wire::decode(ConstSpan<u8>(g_out, written), minor, again) == WireError::Ok);
     CRD_FUZZ_REQUIRE(C::kLossy || crd::net::wire::same(first, again));
+}
+
+template <typename C>
+void agree(ConstSpan<u8> bytes, u16 writer_minor)
+{
+    crd::containers::BitReader decoded(bytes);
+    crd::containers::BitReader checked(bytes);
+    typename C::Value one{};
+    typename C::Value other{};
+    const WireError verdict = C::decode(decoded, writer_minor, one);
+    CRD_FUZZ_REQUIRE(C::check(checked, writer_minor, other) == verdict);
+    CRD_FUZZ_REQUIRE(verdict != WireError::Ok || decoded.bit_position() == checked.bit_position());
 }
 
 } // namespace
@@ -134,7 +179,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     }
     const ConstSpan<u8> bytes(data + 2U, size - 2U);
     const auto writer_minor = static_cast<u16>(data[1] % (schema::kMinor + 3U));
-    switch (data[0] % 7U)
+    switch (data[0] % 12U)
     {
     case 0U:
         exercise<schema::Snapshot>(bytes, writer_minor);
@@ -156,6 +201,21 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         break;
     case 6U:
         exercise_delta<schema::Motion>(schema::kMotionLayout, bytes, writer_minor);
+        break;
+    case 7U:
+        agree<schema::EntityBagItemCodec>(bytes, writer_minor);
+        break;
+    case 8U:
+        agree<schema::EntityCodec>(bytes, writer_minor);
+        break;
+    case 9U:
+        agree<schema::MemberCodec>(bytes, writer_minor);
+        break;
+    case 10U:
+        agree<schema::SeatCodec>(bytes, writer_minor);
+        break;
+    case 11U:
+        agree<schema::HeaderCodec>(bytes, writer_minor);
         break;
     default:
         break;
@@ -612,4 +672,51 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         0x3FU, 0xCFU, 0x2DU, 0x3CU, 0xC1U, 0xC3U, 0x8DU, 0x93U, 0x85U, 0xF2U, 0xBAU, 0xF3U,
     };
     sink.add("wire_37", kSeed37, sizeof(kSeed37));
+    static constexpr u8 kSeed38[] = {
+        0x07U, 0x02U, 0xFEU,
+    };
+    sink.add("wire_38", kSeed38, sizeof(kSeed38));
+    static constexpr u8 kSeed39[] = {
+        0x07U, 0x02U, 0xFEU,
+    };
+    sink.add("wire_39", kSeed39, sizeof(kSeed39));
+    static constexpr u8 kSeed40[] = {
+        0x08U, 0x02U, 0x8BU, 0x38U, 0x67U, 0x87U, 0x00U, 0x18U, 0x9CU, 0xB6U, 0x67U, 0xE1U, 0x00U, 0x00U, 0x00U, 0x00U,
+        0x00U, 0x00U, 0x00U, 0x01U, 0x8BU, 0x02U, 0xFFU, 0x0FU, 0x90U, 0x4EU, 0x68U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
+        0xB2U, 0x74U, 0xDBU, 0x93U, 0xC4U, 0xA0U, 0x3CU, 0xA0U,
+    };
+    sink.add("wire_40", kSeed40, sizeof(kSeed40));
+    static constexpr u8 kSeed41[] = {
+        0x08U, 0x02U, 0x00U, 0x01U, 0x00U, 0x00U, 0xDDU, 0x3AU, 0x08U, 0x00U, 0xFEU, 0x72U, 0xA3U, 0xFFU, 0xFFU, 0xFFU,
+        0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xB2U, 0x00U, 0xE2U, 0x02U, 0x1EU, 0x70U, 0x00U, 0x00U, 0x00U, 0x03U, 0x00U,
+        0xF4U, 0x8FU, 0xBFU, 0xBFU, 0x61U, 0xC4U, 0xB0U, 0x30U, 0x70U, 0xBAU, 0xBEU, 0x28U, 0xF4U, 0x1EU, 0xDCU, 0x08U,
+        0x3AU, 0xE9U, 0xACU, 0x2BU, 0xC0U,
+    };
+    sink.add("wire_41", kSeed41, sizeof(kSeed41));
+    static constexpr u8 kSeed42[] = {
+        0x09U, 0x02U, 0x01U, 0x00U,
+    };
+    sink.add("wire_42", kSeed42, sizeof(kSeed42));
+    static constexpr u8 kSeed43[] = {
+        0x09U, 0x02U, 0x01U, 0x01U, 0xC0U, 0x5AU, 0x20U, 0xE4U, 0xB8U, 0xADU, 0x61U,
+    };
+    sink.add("wire_43", kSeed43, sizeof(kSeed43));
+    static constexpr u8 kSeed44[] = {
+        0x0AU, 0x02U, 0xC9U,
+    };
+    sink.add("wire_44", kSeed44, sizeof(kSeed44));
+    static constexpr u8 kSeed45[] = {
+        0x0AU, 0x02U, 0x03U,
+    };
+    sink.add("wire_45", kSeed45, sizeof(kSeed45));
+    static constexpr u8 kSeed46[] = {
+        0x0BU, 0x02U, 0x1CU, 0xFEU, 0x70U, 0x20U, 0xE2U, 0x82U, 0xACU, 0xC3U, 0xA9U, 0x20U, 0x0DU, 0xF6U, 0x60U, 0xA1U,
+        0xFEU, 0xBCU, 0x4FU, 0x7CU, 0x0CU, 0x60U, 0x41U, 0x04U, 0xD5U, 0xE0U, 0x31U, 0x80U, 0xDFU, 0xE5U, 0x46U,
+    };
+    sink.add("wire_46", kSeed46, sizeof(kSeed46));
+    static constexpr u8 kSeed47[] = {
+        0x0BU, 0x02U, 0x14U, 0x02U, 0x50U, 0x30U, 0xF4U, 0x8FU, 0xBFU, 0xBFU, 0x02U, 0x00U, 0x70U, 0xBCU, 0x00U, 0x6FU,
+        0x52U, 0x71U, 0x8FU, 0xF6U, 0xF3U, 0xAAU, 0x85U,
+    };
+    sink.add("wire_47", kSeed47, sizeof(kSeed47));
 }

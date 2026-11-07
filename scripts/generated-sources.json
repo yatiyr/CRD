@@ -1897,7 +1897,7 @@
         "scripts/gen-wire-schemas.py",
         "--check"
       ],
-      "sha256": "327b48cb29a5e169bfe57b76d5bdd94166ee3058fc3f21f91988f299db8bbb7e"
+      "sha256": "5659a87bf25d121155409b044aa95e60468578f2d861021e58270715789faa7a"
     },
     {
       "path": "tests/foundation/net/fuzz/fuzz_wire_test.cpp",
@@ -1908,7 +1908,7 @@
         "scripts/gen-wire-schemas.py",
         "--check"
       ],
-      "sha256": "ce7677e51310f45db6b3d0c3fd920b343ffd88fe87c9a94e10817da487c07029"
+      "sha256": "da583202c33d5be85a5d5585def222121e39cdf5d00fa5e8c4b61296da82b36c"
     },
     {
       "path": "tests/foundation/net/generated/wire_test.hpp",
@@ -1919,7 +1919,7 @@
         "scripts/gen-wire-schemas.py",
         "--check"
       ],
-      "sha256": "40a19fb7551e9ac939fa8346d429f5e66ccfe6eaf219a677392e2a45278df05c"
+      "sha256": "cbde772404dd6fc5c9001bc8196216b12b4d9249b39db4084fd0c7d76810ff38"
     },
     {
       "path": "tests/foundation/net/generated/wire_test_vectors.inc",
@@ -1930,7 +1930,7 @@
         "scripts/gen-wire-schemas.py",
         "--check"
       ],
-      "sha256": "47b2baf5e5af691e7316e75d01882a6c69e934b97726b932cadf22f8fa620170"
+      "sha256": "f24e32cac27b39e66e12a3144fecd6f715c6c118de314719c64a6cbd17e85a53"
     },
     {
       "path": "tests/foundation/net/fuzz/fuzz_wire_delta_test.cpp",
@@ -1941,7 +1941,7 @@
         "scripts/gen-wire-schemas.py",
         "--check"
       ],
-      "sha256": "abb983fc65159001b125ed7a111a9656b673508b41bf76c86564a17998524ed9"
+      "sha256": "639a52865808da2f416ea39d31669751c96db75bf3b85f2d906ec865f16bd93b"
     },
     {
       "path": "tests/foundation/compression/generated/entropy_vectors.inc",
@@ -1963,7 +1963,7 @@
         "scripts/gen-wire-schemas.py",
         "--check"
       ],
-      "sha256": "4dcd6acd1439d5692ff5fa1cc5a6db65f55ee0e452a67d6bcf803f63c88e9b07"
+      "sha256": "273123d473e907ad7af38c56c6eae060702098ee92446a4f65165f9b7362d78f"
     },
     {
       "path": "tests/foundation/net/generated/serialize_board.hpp",
@@ -1974,7 +1974,7 @@
         "scripts/gen-wire-schemas.py",
         "--check"
       ],
-      "sha256": "8061e07544dd4995657076d5a8e3c3b2b7cb186854763719e0a8f96f981efb60"
+      "sha256": "a8114f21e20c2dd1c5835fc951e2337b0c32e208b03696f935ce5d2232f5875d"
     },
     {
       "path": "tests/foundation/net/generated/delta_test.hpp",
@@ -1985,7 +1985,7 @@
         "scripts/gen-wire-schemas.py",
         "--check"
       ],
-      "sha256": "6fb3ec93a9748a03611dc058807f358c28a28f6b8d046655a596476d05b77e7c"
+      "sha256": "57b0d1ab716f3f96437426789a081806608b081a76e38e74c85fa2eafbe8a378"
     },
     {
       "path": "tests/foundation/net/generated/delta_test_vectors.inc",

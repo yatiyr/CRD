@@ -34,7 +34,8 @@ void exercise(ConstSpan<u8> bytes, u16 writer_minor)
 {
     using C = typename M::WireCodec;
     M first{};
-    if (crd::net::wire::decode(bytes, writer_minor, first) != WireError::Ok)
+    const WireError verdict = crd::net::wire::decode(bytes, writer_minor, first);
+    if (verdict != WireError::Ok)
     {
         return;
     }

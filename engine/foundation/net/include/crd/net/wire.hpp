@@ -470,7 +470,8 @@ inline void wire_put_bytes(cont::BitWriter& w, cont::ConstSpan<u8> bytes, usize 
 // ---- Lists ----
 
 // A list field. To encode, it holds the caller's elements; decoded, it holds where they lie in the message, already
-// validated, and a walk re-reads them from there. `C` is the element's generated codec.
+// validated, and a walk re-reads them from there. Given storage first, a decode fills it in one pass instead, and the
+// list holds its elements there. `C` is the element's generated codec.
 template <typename C>
 class WireList
 {
@@ -486,6 +487,45 @@ public:
     WireList(cont::BitReader from, usize count, u16 writer_minor) noexcept
         : m_from(from), m_count(count), m_minor(writer_minor), m_view(true)
     {
+    }
+
+    // Where a decode writes the elements, each decoded once as it is validated, when they fit; a list of more elements
+    // than `storage` holds is viewed as without it. The storage stays with the list across decodes, and after a refusal
+    // it holds no meaning. Elements written there are only the caller's once the whole message is accepted.
+    void into(cont::Span<Value> storage) noexcept
+    {
+        m_storage = storage;
+    }
+
+    [[nodiscard]] cont::Span<Value> storage() const noexcept
+    {
+        return m_storage;
+    }
+
+    // The elements it holds: an encoder's, or a decode's in storage. A list that views its message holds none: walk it.
+    [[nodiscard]] cont::ConstSpan<Value> items() const noexcept
+    {
+        return m_items;
+    }
+
+    [[nodiscard]] bool viewed() const noexcept
+    {
+        return m_view;
+    }
+
+    // A decoder's result: the elements as found, or the first `count` of the storage it filled.
+    void found(cont::BitReader from, usize count, u16 writer_minor) noexcept
+    {
+        const cont::Span<Value> storage = m_storage;
+        *this = WireList(from, count, writer_minor);
+        m_storage = storage;
+    }
+
+    void held(usize count) noexcept
+    {
+        const cont::Span<Value> storage = m_storage;
+        *this = WireList(cont::ConstSpan<Value>(storage.data(), count));
+        m_storage = storage;
     }
 
     [[nodiscard]] usize size() const noexcept
@@ -536,6 +576,7 @@ public:
 
 private:
     cont::ConstSpan<Value> m_items;
+    cont::Span<Value>      m_storage;
     cont::BitReader        m_from;
     usize                  m_count = 0U;
     u16                    m_minor = 0U;
@@ -632,14 +673,60 @@ template <typename C>
     return position;
 }
 
+// The value a decode of a struct holding lists starts from: its defaults, with the storage the old one's lists decode
+// into (the generated codec's `keep`).
+template <typename C>
+[[nodiscard]] inline typename C::Value wire_fresh(const typename C::Value& old) noexcept
+{
+    typename C::Value fresh{};
+    C::keep(fresh, old);
+    return fresh;
+}
+
 // A list with no key.
 struct WireNoKey
 {
 };
 
-// Validates every element and leaves the view on the list. No element takes zero bits (the generator refuses one), so
-// the walk is linear in the bytes whatever count the message claims. A keyed list's keys must ascend strictly, checked
-// on the same pass; a damaged element is still the verdict over keys out of order, as after a separate walk.
+// Validates every element and leaves the view on the list, or, into storage that holds them, decodes each element once
+// as it validates it. No element takes zero bits (the generator refuses one), so the walk is linear in the bytes
+// whatever count the message claims. A keyed list's keys must ascend strictly, checked on the same pass; a damaged
+// element is still the verdict over keys out of order, as after a separate walk. Without storage the pass runs the
+// codec's `check`, its decode's verdict without the floats and quaternions a walk rebuilds.
+template <bool Into, typename C, typename K>
+[[nodiscard]] inline WireError wire_take_elements(cont::BitReader& r, u16 writer_minor, usize count,
+                                                  cont::Span<typename C::Value> storage, K key) noexcept
+{
+    typename C::Value scratch{};
+    [[maybe_unused]] bool ascending = true;
+    [[maybe_unused]] auto previous = [&]
+    {
+        if constexpr (std::is_same_v<K, WireNoKey>)
+        {
+            return WireNoKey{};
+        }
+        else
+        {
+            return decltype(key(scratch)){};
+        }
+    }();
+    for (usize i = 0U; i < count; ++i)
+    {
+        typename C::Value& value = Into ? storage[i] : scratch;
+        const WireError    error = Into ? C::decode(r, writer_minor, value) : C::check(r, writer_minor, value);
+        if (error != WireError::Ok)
+        {
+            return error;
+        }
+        if constexpr (!std::is_same_v<K, WireNoKey>)
+        {
+            ascending = ascending && (i == 0U || previous < key(value));
+            previous = key(value);
+        }
+    }
+    return ascending ? WireError::Ok : WireError::KeyOrder;
+}
+
 template <typename C, typename K = WireNoKey>
 [[nodiscard]] inline WireError wire_take_list(cont::BitReader& r, usize min, usize max, u32 count_bits,
                                               u16 writer_minor, WireList<C>& list, K key = {}) noexcept
@@ -653,40 +740,24 @@ template <typename C, typename K = WireNoKey>
     {
         return WireError::OutOfRange;
     }
-    const usize count = min + static_cast<usize>(extra);
-    const cont::BitReader first = r;
-    typename C::Value     value{};
-    [[maybe_unused]] bool ascending = true;
-    if constexpr (std::is_same_v<K, WireNoKey>)
+    const usize           count   = min + static_cast<usize>(extra);
+    const cont::BitReader first   = r;
+    const auto            storage = list.storage();
+    const bool            into    = !storage.empty() && storage.size() >= count;
+    const WireError       error   = into ? wire_take_elements<true, C>(r, writer_minor, count, storage, key)
+                                         : wire_take_elements<false, C>(r, writer_minor, count, storage, key);
+    if (error != WireError::Ok)
     {
-        for (usize i = 0U; i < count; ++i)
-        {
-            const WireError error = C::decode(r, writer_minor, value);
-            if (error != WireError::Ok)
-            {
-                return error;
-            }
-        }
+        return error;
+    }
+    if (into)
+    {
+        list.held(count);
     }
     else
     {
-        decltype(key(value)) previous{};
-        for (usize i = 0U; i < count; ++i)
-        {
-            const WireError error = C::decode(r, writer_minor, value);
-            if (error != WireError::Ok)
-            {
-                return error;
-            }
-            ascending = ascending && (i == 0U || previous < key(value));
-            previous = key(value);
-        }
+        list.found(first, count, writer_minor);
     }
-    if (!ascending)
-    {
-        return WireError::KeyOrder;
-    }
-    list = WireList<C>(first, count, writer_minor);
     return WireError::Ok;
 }
 
@@ -732,7 +803,8 @@ template <typename C>
     return wire_aligned(position) + wire_varuint_bits(length, 7U) + (length * 8U);
 }
 
-template <typename C>
+// `Body` reads the body: the codec's decode_body, or its check_body on a list's validating pass.
+template <typename C, auto Body = &C::decode_body>
 [[nodiscard]] inline WireError wire_take_extensible(cont::BitReader& r, u16 writer_minor, u16 schema_minor,
                                                     typename C::Value& value) noexcept
 {
@@ -751,7 +823,7 @@ template <typename C>
     {
         return WireError::Truncated;
     }
-    const WireError body = C::decode_body(inner, writer_minor, value);
+    const WireError body = Body(inner, writer_minor, value);
     return (body != WireError::Ok) ? body : wire_finish(inner, writer_minor, schema_minor);
 }
 

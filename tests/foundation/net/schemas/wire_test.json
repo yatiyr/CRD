@@ -4,11 +4,12 @@
   "about": "Every field type, shape and revision rule of the schema language, for the generated code's tests and fuzz target.",
   "id": "7be0c6d1a2f34e5b8c9d0e1f2a3b4c5d",
   "kind": "World",
-  "revision": {"major": 2, "minor": 2},
+  "revision": {"major": 2, "minor": 3},
   "history": {
     "0": "4fd992210e89af527908175ce910c8e2ace913013e8a5df8ee01586b2ce6974a",
     "1": "27c4ac9692ceb47c511a9cae6364ead517562e54c4a26691c430a598bac571f4",
-    "2": "f17af7d77c340bc174c25d0d621d5a856a58ef3284f39722be2f4e2f87a15ff0"
+    "2": "f17af7d77c340bc174c25d0d621d5a856a58ef3284f39722be2f4e2f87a15ff0",
+    "3": "4658bc74aae14ac235422710ec83545dd740cfc2fd21169241cb8e0165e3c419"
   },
   "operations": {
     "read": {"bit": 0, "idempotent": true},
@@ -50,6 +51,12 @@
     }
   },
   "structs": {
+    "Shelf": {
+      "fields": [
+        {"name": "label", "type": "uint", "bits": 4},
+        {"name": "books", "type": "list", "max": 4, "of": {"type": "range", "min": 0, "max": 9}}
+      ]
+    },
     "Vec": {
       "fields": [
         {"name": "x", "type": "range", "min": -512, "max": 511},
@@ -180,6 +187,17 @@
         {"name": "fine", "type": "bounded", "min": 0.0, "max": 1.0, "resolution": 0.001},
         {"name": "turn", "type": "quaternion", "bits": 12},
         {"name": "path", "type": "list", "max": 4, "of": {"type": "quaternion", "bits": 9}}
+      ]
+    },
+    {
+      "name": "Shelved",
+      "id": 8,
+      "since": 3,
+      "channel": "control",
+      "operation": "write",
+      "fields": [
+        {"name": "shelf", "type": "Shelf"},
+        {"name": "spare", "type": "Shelf", "optional": true}
       ]
     }
   ]

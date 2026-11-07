@@ -394,6 +394,122 @@ TEST_CASE("A decoded list re-reads its elements from the message", "[net][wire]"
     }
 }
 
+TEST_CASE("A list given storage decodes each element once into it", "[net][wire]")
+{
+    const u8 small[3] = {1U, 2U, 7U};
+    const u8 exact[2] = {4U, 0U};
+    const u8 tag[3]   = {9U, 8U, 7U};
+    Node     nodes[2] = {};
+    nodes[0].at.x = -512;
+    nodes[0].tag  = ConstSpan<u8>(tag);
+    nodes[1].at.x = 511;
+    nodes[1].tag  = ConstSpan<u8>(tag);
+    nodes[1].has_extended  = true;
+    nodes[1].extended.base = 300U;
+    nodes[1].extended.label = "name";
+    Lists lists{};
+    lists.small = WireList<ListsSmallItemCodec>(ConstSpan<u8>(small));
+    lists.exact = WireList<ListsExactItemCodec>(ConstSpan<u8>(exact));
+    lists.nodes = WireList<NodeCodec>(ConstSpan<Node>(nodes));
+    u8         out[256] = {};
+    const auto wire     = encoded(lists, kMinor, out, sizeof(out));
+
+    Node  node_storage[6] = {};
+    u8    small_storage[9] = {};
+    Lists decoded{};
+    decoded.nodes.into(Span<Node>(node_storage));
+    decoded.small.into(Span<u8>(small_storage));
+    REQUIRE(decode(wire, kMinor, decoded) == WireError::Ok);
+    CHECK_FALSE(decoded.nodes.viewed());
+    REQUIRE(decoded.nodes.items().size() == 2U);
+    CHECK(decoded.nodes.items().data() == node_storage);
+    CHECK(node_storage[0].at.x == -512);
+    CHECK(node_storage[1].extended.base == 300U);
+    CHECK(node_storage[1].extended.label == "name");
+    REQUIRE(decoded.small.items().size() == 3U);
+    CHECK(small_storage[2] == 7U);
+    CHECK(decoded.exact.viewed()); // no storage: the elements stay in the message
+    CHECK(same(lists, decoded));
+
+    SECTION("the storage stays with the list, and the next decode refills it")
+    {
+        lists.nodes = WireList<NodeCodec>(ConstSpan<Node>(nodes, 1U));
+        const auto shorter = encoded(lists, kMinor, out, sizeof(out));
+        REQUIRE(decode(shorter, kMinor, decoded) == WireError::Ok);
+        CHECK(decoded.nodes.items().size() == 1U);
+        CHECK(decoded.nodes.storage().data() == node_storage);
+        CHECK(same(lists, decoded));
+    }
+    SECTION("more elements than the storage holds are viewed, and decode the same")
+    {
+        Node  one[1] = {};
+        Lists viewed{};
+        viewed.nodes.into(Span<Node>(one));
+        REQUIRE(decode(wire, kMinor, viewed) == WireError::Ok);
+        CHECK(viewed.nodes.viewed());
+        CHECK(viewed.nodes.items().empty());
+        CHECK(viewed.nodes.storage().data() == one);
+        CHECK(same(lists, viewed));
+    }
+    SECTION("every cut and every flipped bit gets the verdict it gets without storage")
+    {
+        u8 damaged[256] = {};
+        for (usize bit = 0U; bit <= wire.size() * 8U; ++bit)
+        {
+            std::memcpy(damaged, wire.data(), wire.size());
+            const bool cut  = bit == wire.size() * 8U;
+            const auto size = cut ? wire.size() - 1U : wire.size();
+            if (!cut)
+            {
+                damaged[bit / 8U] = static_cast<u8>(damaged[bit / 8U] ^ (1U << (bit % 8U)));
+            }
+            Lists plain{};
+            const WireError verdict = decode(ConstSpan<u8>(damaged, size), kMinor, plain);
+            if (decode(ConstSpan<u8>(damaged, size), kMinor, decoded) != verdict ||
+                (verdict == WireError::Ok && !same(plain, decoded)))
+            {
+                FAIL("bit " << bit << " decodes otherwise into storage");
+            }
+        }
+    }
+}
+
+TEST_CASE("A struct field's list keeps the storage its message gave it", "[net][wire]")
+{
+    const u8 books[3] = {9U, 0U, 4U};
+    Shelved  shelved{};
+    shelved.shelf.label = 5U;
+    shelved.shelf.books = WireList<ShelfBooksItemCodec>(ConstSpan<u8>(books));
+    u8         out[64] = {};
+    const auto wire    = encoded(shelved, kMinor, out, sizeof(out));
+
+    u8      shelf_storage[4] = {};
+    u8      spare_storage[4] = {};
+    Shelved decoded{};
+    decoded.shelf.books.into(Span<u8>(shelf_storage));
+    decoded.spare.books.into(Span<u8>(spare_storage));
+    REQUIRE(decode(wire, kMinor, decoded) == WireError::Ok);
+    CHECK(decoded.shelf.label == 5U);
+    REQUIRE(decoded.shelf.books.items().size() == 3U);
+    CHECK(shelf_storage[0] == 9U);
+    CHECK(shelf_storage[2] == 4U);
+    CHECK_FALSE(decoded.has_spare);
+    CHECK(decoded.spare.books.storage().data() == spare_storage);
+    CHECK(same(shelved, decoded));
+
+    // With the spare present, its list decodes into its own storage.
+    const u8 more[1] = {6U};
+    shelved.has_spare = true;
+    shelved.spare.books = WireList<ShelfBooksItemCodec>(ConstSpan<u8>(more));
+    const auto both = encoded(shelved, kMinor, out, sizeof(out));
+    REQUIRE(decode(both, kMinor, decoded) == WireError::Ok);
+    REQUIRE(decoded.has_spare);
+    REQUIRE(decoded.spare.books.items().size() == 1U);
+    CHECK(spare_storage[0] == 6U);
+    CHECK(decoded.shelf.books.items().data() == shelf_storage);
+    CHECK(same(shelved, decoded));
+}
+
 TEST_CASE("Older and newer writers read as the schema's revisions say", "[net][wire]")
 {
     u8 out[256] = {};
@@ -680,8 +796,8 @@ TEST_CASE("A schema publishes what admission reads and fills its S18 artefact", 
 {
     STATIC_REQUIRE(ScalarsCodec::kMessageId == 1U);
     STATIC_REQUIRE(kSchema.major == 2U);
-    STATIC_REQUIRE(kSchema.minor == 2U);
-    REQUIRE(kSchema.messages.size() == 7U);
+    STATIC_REQUIRE(kSchema.minor == 3U);
+    REQUIRE(kSchema.messages.size() == 8U);
     REQUIRE(kSchema.channels.size() == 2U);
     u32 previous = 0U;
     for (const auto& message : kSchema.messages)

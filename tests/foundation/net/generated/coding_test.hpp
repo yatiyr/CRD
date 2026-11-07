@@ -111,6 +111,12 @@ struct BodyCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return wire_same(a.id, b.id) &&
@@ -207,6 +213,12 @@ struct WorldCodec
     static constexpr u32 kMaxBytes = 25757U; // at the current minor revision
     static constexpr bool kLossy = false; // a decoded value may re-encode to other bits
 
+    // The storage its lists decode into, from the value a decode starts over.
+    static void keep(Value& fresh, const Value& old) noexcept
+    {
+        fresh.bodies.into(old.bodies.storage());
+    }
+
     [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
                                                  [[maybe_unused]] u16 minor) noexcept
     {
@@ -235,7 +247,7 @@ struct WorldCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
+        value = wire_fresh<WorldCodec>(value);
         if (const WireError error = wire_take_varuint_as(r, 7U, 4294967295ULL, value.tick);
             error != WireError::Ok)
         {

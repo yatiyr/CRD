@@ -335,6 +335,7 @@ TEST_CASE("bounded float: every code of a small format round trips and the order
         for (u32 code = 0U; code <= format.max_code; ++code)
         {
             f32 value = 0.0F;
+            REQUIRE(hn::bounded_valid(format, code));
             REQUIRE(hn::bounded_decode(format, code, value));
             const u32 again = hn::bounded_encode(format, value);
             if (again != code || again < previous)
@@ -343,6 +344,11 @@ TEST_CASE("bounded float: every code of a small format round trips and the order
             }
             previous = again;
         }
+        // Past the top code the check refuses as the decode does, which writes nothing.
+        f32 untouched = 7.0F;
+        CHECK_FALSE(hn::bounded_valid(format, format.max_code + 1U));
+        CHECK_FALSE(hn::bounded_decode(format, format.max_code + 1U, untouched));
+        CHECK(untouched == 7.0F);
     }
 }
 
@@ -762,6 +768,14 @@ TEST_CASE("smallest three: every word decodes to a unit quaternion, refused exac
         if ((refused != 0U) != restated_refusal(format, word))
         {
             FAIL("bits " << format.bits << " word " << word << " refused " << refused);
+        }
+        // The single-lane decode and the check that rebuilds nothing give the batch's verdict.
+        f32 one[4];
+        const bool accepted = hn::smallest_three_decode_one(format, word, one);
+        if (accepted != (refused == 0U) || hn::smallest_three_valid(format, word) != accepted)
+        {
+            FAIL("bits " << format.bits << " word " << word << " decode_one " << accepted << " valid "
+                         << hn::smallest_three_valid(format, word));
         }
         return refused;
     };

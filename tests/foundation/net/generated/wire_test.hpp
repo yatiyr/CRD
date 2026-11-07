@@ -11,7 +11,7 @@ namespace crd::net::wire::wire_test
 {
 
 inline constexpr u16 kMajor = 2U;
-inline constexpr u16 kMinor = 2U;
+inline constexpr u16 kMinor = 3U;
 
 enum class Mode : u8
 {
@@ -35,6 +35,124 @@ enum class Mode : u8
         return false;
     }
 }
+
+struct ShelfBooksItemCodec
+{
+    using Value = u8;
+
+    [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
+                                          [[maybe_unused]] u16 minor) noexcept
+    {
+        if (!wire_range_holds<u8>(value, static_cast<u8>(0ULL), 9ULL))
+        {
+            return WireError::OutOfRange;
+        }
+        wire_put_range<u8>(w, value, static_cast<u8>(0ULL), 4U);
+        return WireError::Ok;
+    }
+
+    [[nodiscard]] static u64 end([[maybe_unused]] const Value& value, [[maybe_unused]] u16 minor,
+                                 u64 position) noexcept
+    {
+        position += 4U;
+        return position;
+    }
+
+    [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                          Value& value) noexcept
+    {
+        if (const WireError error = wire_take_range<u8>(r, static_cast<u8>(0ULL), 9ULL, 4U, value);
+            error != WireError::Ok)
+        {
+            return error;
+        }
+        return WireError::Ok;
+    }
+
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
+    [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
+    {
+        return wire_same(a, b);
+    }
+};
+
+struct ShelfCodec;
+
+struct Shelf
+{
+    using WireCodec = ShelfCodec;
+
+    u8                            label = 0U;
+    WireList<ShelfBooksItemCodec> books;
+};
+
+struct ShelfCodec
+{
+    using Value = Shelf;
+    static constexpr u16 kSchemaMinor = kMinor;
+
+    // The storage its lists decode into, from the value a decode starts over.
+    static void keep(Value& fresh, const Value& old) noexcept
+    {
+        fresh.books.into(old.books.storage());
+    }
+
+    [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
+                                                 [[maybe_unused]] u16 minor) noexcept
+    {
+        if ((static_cast<u64>(value.label) >> 4U) != 0U)
+        {
+            return WireError::OutOfRange;
+        }
+        w.put(value.label, 4U);
+        if (const WireError error = wire_put_list(w, value.books, 0U, 4U, 3U, minor); error != WireError::Ok)
+        {
+            return error;
+        }
+        return WireError::Ok;
+    }
+
+    [[nodiscard]] static u64 end([[maybe_unused]] const Value& value, [[maybe_unused]] u16 minor,
+                                 u64 position) noexcept
+    {
+        position += 4U;
+        position = wire_list_end(value.books, 3U, minor, position);
+        return position;
+    }
+
+    [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        value = wire_fresh<ShelfCodec>(value);
+        if (const WireError error = wire_take_uint(r, 4U, value.label); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_list(r, 0U, 4U, 3U, writer_minor, value.books);
+            error != WireError::Ok)
+        {
+            return error;
+        }
+        return WireError::Ok;
+    }
+
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
+    [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
+    {
+        return wire_same(a.label, b.label) &&
+               wire_same_list(a.books, b.books);
+    }
+};
 
 struct VecCodec;
 
@@ -102,6 +220,12 @@ struct VecCodec
             return error;
         }
         return WireError::Ok;
+    }
+
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
     }
 
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
@@ -233,6 +357,11 @@ struct ExtendedCodec
         return wire_take_extensible<ExtendedCodec>(r, writer_minor, kSchemaMinor, value);
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, u16 writer_minor, Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return wire_same(a.base, b.base) &&
@@ -305,6 +434,11 @@ struct LongExtendedCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, u16 writer_minor, Value& value) noexcept
     {
         return wire_take_extensible<LongExtendedCodec>(r, writer_minor, kSchemaMinor, value);
+    }
+
+    [[nodiscard]] static WireError check(cont::BitReader& r, u16 writer_minor, Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
     }
 
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
@@ -386,6 +520,33 @@ struct NodeCodec
         if (value.has_extended)
         {
             if (const WireError error = ExtendedCodec::decode(r, writer_minor, value.extended);
+                error != WireError::Ok)
+            {
+                return error;
+            }
+        }
+        return WireError::Ok;
+    }
+
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        value = Value{};
+        if (const WireError error = VecCodec::check(r, writer_minor, value.at); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_bytes(r, 3U, 3U, 0U, value.tag); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_bool(r, value.has_extended); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (value.has_extended)
+        {
+            if (const WireError error = ExtendedCodec::check(r, writer_minor, value.extended);
                 error != WireError::Ok)
             {
                 return error;
@@ -808,6 +969,12 @@ struct ListsSmallItemCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return wire_same(a, b);
@@ -845,6 +1012,12 @@ struct ListsExactItemCodec
             return error;
         }
         return WireError::Ok;
+    }
+
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
     }
 
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
@@ -889,6 +1062,12 @@ struct ListsMatrixItemItemCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return wire_same(a, b);
@@ -925,6 +1104,12 @@ struct ListsMatrixItemCodec
             return error;
         }
         return WireError::Ok;
+    }
+
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
     }
 
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
@@ -969,6 +1154,12 @@ struct ListsWordsItemCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return a == b;
@@ -996,6 +1187,16 @@ struct ListsCodec
     static constexpr u32 kMinBytes = 9U; // at the first minor revision
     static constexpr u32 kMaxBytes = 299U; // at the current minor revision
     static constexpr bool kLossy = false; // a decoded value may re-encode to other bits
+
+    // The storage its lists decode into, from the value a decode starts over.
+    static void keep(Value& fresh, const Value& old) noexcept
+    {
+        fresh.small.into(old.small.storage());
+        fresh.exact.into(old.exact.storage());
+        fresh.nodes.into(old.nodes.storage());
+        fresh.matrix.into(old.matrix.storage());
+        fresh.words.into(old.words.storage());
+    }
 
     [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
                                                  [[maybe_unused]] u16 minor) noexcept
@@ -1038,7 +1239,7 @@ struct ListsCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
+        value = wire_fresh<ListsCodec>(value);
         if (const WireError error = wire_take_list(r, 0U, 9U, 4U, writer_minor, value.small);
             error != WireError::Ok)
         {
@@ -1105,6 +1306,12 @@ struct RevisionsItemsItemCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        return decode(r, writer_minor, value);
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return wire_same(a, b);
@@ -1136,6 +1343,12 @@ struct RevisionsCodec
     static constexpr u32 kMinBytes = 5U; // at the first minor revision
     static constexpr u32 kMaxBytes = 100U; // at the current minor revision
     static constexpr bool kLossy = false; // a decoded value may re-encode to other bits
+
+    // The storage its lists decode into, from the value a decode starts over.
+    static void keep(Value& fresh, const Value& old) noexcept
+    {
+        fresh.items.into(old.items.storage());
+    }
 
     [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
                                                  [[maybe_unused]] u16 minor) noexcept
@@ -1265,7 +1478,7 @@ struct RevisionsCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
+        value = wire_fresh<RevisionsCodec>(value);
         if (const WireError error = wire_take_uint(r, 11U, value.first); error != WireError::Ok)
         {
             return error;
@@ -1519,6 +1732,17 @@ struct QuantizedPathItemCodec
         return WireError::Ok;
     }
 
+    [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 [[maybe_unused]] Value& value) noexcept
+    {
+        if (const WireError error = wire_check_quaternion(r, kQuantizedPathItemFormat);
+            error != WireError::Ok)
+        {
+            return error;
+        }
+        return WireError::Ok;
+    }
+
     [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
     {
         return wire_same(a, b);
@@ -1545,6 +1769,12 @@ struct QuantizedCodec
     static constexpr u32 kMinBytes = 9U; // at the first minor revision
     static constexpr u32 kMaxBytes = 23U; // at the current minor revision
     static constexpr bool kLossy = true; // a decoded value may re-encode to other bits
+
+    // The storage its lists decode into, from the value a decode starts over.
+    static void keep(Value& fresh, const Value& old) noexcept
+    {
+        fresh.path.into(old.path.storage());
+    }
 
     [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
                                                  [[maybe_unused]] u16 minor) noexcept
@@ -1584,7 +1814,7 @@ struct QuantizedCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
+        value = wire_fresh<QuantizedCodec>(value);
         if (const WireError error = wire_take_bounded(r, kQuantizedHeightFormat, value.height);
             error != WireError::Ok)
         {
@@ -1617,6 +1847,93 @@ struct QuantizedCodec
     }
 };
 
+struct ShelvedCodec;
+
+struct Shelved
+{
+    using WireCodec = ShelvedCodec;
+
+    Shelf shelf;
+    bool  has_spare = false;
+    Shelf spare;
+};
+
+struct ShelvedCodec
+{
+    using Value = Shelved;
+    static constexpr u16 kSchemaMinor = kMinor;
+    static constexpr u32 kMessageId = 8U;
+    static constexpr u32 kMinBytes = 1U; // at the first minor revision
+    static constexpr u32 kMaxBytes = 6U; // at the current minor revision
+    static constexpr bool kLossy = false; // a decoded value may re-encode to other bits
+
+    // The storage its lists decode into, from the value a decode starts over.
+    static void keep(Value& fresh, const Value& old) noexcept
+    {
+        ShelfCodec::keep(fresh.shelf, old.shelf);
+        ShelfCodec::keep(fresh.spare, old.spare);
+    }
+
+    [[nodiscard]] static WireError encode(const Value& value, cont::BitWriter& w,
+                                                 [[maybe_unused]] u16 minor) noexcept
+    {
+        if (const WireError error = ShelfCodec::encode(value.shelf, w, minor); error != WireError::Ok)
+        {
+            return error;
+        }
+        w.put(value.has_spare ? 1U : 0U, 1U);
+        if (value.has_spare)
+        {
+            if (const WireError error = ShelfCodec::encode(value.spare, w, minor); error != WireError::Ok)
+            {
+                return error;
+            }
+        }
+        return WireError::Ok;
+    }
+
+    [[nodiscard]] static u64 end([[maybe_unused]] const Value& value, [[maybe_unused]] u16 minor,
+                                 u64 position) noexcept
+    {
+        position = ShelfCodec::end(value.shelf, minor, position);
+        position += 1U;
+        if (value.has_spare)
+        {
+            position = ShelfCodec::end(value.spare, minor, position);
+        }
+        return position;
+    }
+
+    [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
+                                                 Value& value) noexcept
+    {
+        value = wire_fresh<ShelvedCodec>(value);
+        if (const WireError error = ShelfCodec::decode(r, writer_minor, value.shelf); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (const WireError error = wire_take_bool(r, value.has_spare); error != WireError::Ok)
+        {
+            return error;
+        }
+        if (value.has_spare)
+        {
+            if (const WireError error = ShelfCodec::decode(r, writer_minor, value.spare); error != WireError::Ok)
+            {
+                return error;
+            }
+        }
+        return WireError::Ok;
+    }
+
+    [[nodiscard]] static bool same(const Value& a, const Value& b) noexcept
+    {
+        return ShelfCodec::same(a.shelf, b.shelf) &&
+               a.has_spare == b.has_spare &&
+               (!a.has_spare || ShelfCodec::same(a.spare, b.spare));
+    }
+};
+
 inline constexpr ChannelDesc kChannels[] = {
     {"control", ChannelClass::Control, true, true, false, 0U,
      60000U, 100U, 1000000ULL, 0U, true},
@@ -1639,6 +1956,8 @@ inline constexpr MessageDesc kMessages[] = {
      QuantizedCodec::kMaxBytes, nullptr},
     {"LongBody", 7U, 0U, 0U, 2ULL, LongBodyCodec::kMinBytes,
      LongBodyCodec::kMaxBytes, nullptr},
+    {"Shelved", 8U, 0U, 3U, 2ULL, ShelvedCodec::kMinBytes,
+     ShelvedCodec::kMaxBytes, nullptr},
 };
 
 inline constexpr WireSchema kSchema{
