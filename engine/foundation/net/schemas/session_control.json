@@ -1,12 +1,13 @@
 {
   "format": "cerid-wire-schema/1",
   "name": "session_control",
-  "about": "The control channel every Cerid session opens: the revision each side writes, capability and revocation renewal, generation handshakes, state hashes and going away. It runs below S18: no capability can authorize presenting a capability.",
+  "about": "The control channel every Cerid session opens: the revision each side writes, capability and revocation renewal, generation handshakes, state hashes, the baselines each side holds and going away. It runs below S18: no capability can authorize presenting a capability.",
   "id": "c3a17e4f0b8d4d6a9e52f1a6d07b3c18",
   "kind": "transport",
-  "revision": {"major": 1, "minor": 0},
+  "revision": {"major": 1, "minor": 1},
   "history": {
-    "0": "5efb9b989e1500c86800c8b19e235c297594231fad43debe9e3ad78fed0761e4"
+    "0": "5efb9b989e1500c86800c8b19e235c297594231fad43debe9e3ad78fed0761e4",
+    "1": "3a22c128475c5ceeb429e3dd972430cca892e872c71ea46afc6129d3b29a5dd7"
   },
   "channels": [
     {
@@ -98,6 +99,18 @@
         {"name": "reason", "type": "GoAwayReason"},
         {"name": "retry_after_ms", "type": "varuint", "max": 86400000, "group": 8},
         {"name": "detail", "type": "text", "max": 256}
+      ]
+    },
+    {
+      "name": "BaselineAck",
+      "id": 8,
+      "channel": "control",
+      "since": 1,
+      "fields": [
+        {"name": "channel", "type": "varuint", "max": 4294967295},
+        {"name": "message", "type": "varuint", "max": 1073741823},
+        {"name": "object", "type": "varuint", "max": 18446744073709551615},
+        {"name": "sequence", "type": "uint", "bits": 16}
       ]
     }
   ]

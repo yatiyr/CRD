@@ -1,0 +1,155 @@
+{
+  "format": "cerid-wire-schema/1",
+  "name": "delta_test",
+  "about": "Every field type, list form and revision rule of baseline deltas, for their tests and fuzz target.",
+  "id": "4c1f0a9e7d3b42e68a5f6b7c8d9e0f11",
+  "kind": "World",
+  "revision": {"major": 1, "minor": 2},
+  "history": {
+    "0": "3c6889299eb3dd3e021757df6ff24be7f6d20f738b8f94168672ee5c52b3f359",
+    "1": "7f64ed4c0c1aec388ef86ae60ab5ba2870d1a784d9e0ce0385e4584754a40572",
+    "2": "d1a85f285a9f513b91088ad911775bcc77dfe2d88e1901a7a8ad7ff47b2c00f5"
+  },
+  "operations": {
+    "sync": {"bit": 0, "idempotent": true}
+  },
+  "channels": [
+    {
+      "name": "state",
+      "class": "State",
+      "idempotent": true,
+      "priority": 3,
+      "max_message_bytes": 200000,
+      "messages_per_s": 60,
+      "bytes_per_s": 2000000
+    }
+  ],
+  "enums": {
+    "Stance": {
+      "bits": 2,
+      "values": [
+        {"name": "Idle", "value": 0},
+        {"name": "Walk", "value": 1},
+        {"name": "Run", "value": 2}
+      ]
+    },
+    "Side": {
+      "bits": 1,
+      "values": [
+        {"name": "Left", "value": 0},
+        {"name": "Right", "value": 1}
+      ]
+    }
+  },
+  "structs": {
+    "Pose": {
+      "fields": [
+        {"name": "x", "type": "range", "min": -32768, "max": 32767, "delta_group": 3},
+        {"name": "y", "type": "range", "min": -1000, "max": 1000, "delta_group": 3},
+        {"name": "z", "type": "varsint", "min": -100000, "max": 100000, "group": 5, "delta_group": 4},
+        {"name": "yaw", "type": "uint", "bits": 10, "delta_group": 2},
+        {"name": "speed", "type": "varuint", "max": 1000000, "group": 4, "delta_group": 3},
+        {"name": "wide", "type": "uint", "bits": 64, "delta_group": 8},
+        {"name": "far", "type": "varsint", "min": -9223372036854775808, "max": 9223372036854775807, "delta_group": 8},
+        {"name": "plain_count", "type": "varuint", "max": 5000},
+        {"name": "plain_turn", "type": "varsint", "min": -5000, "max": 5000}
+      ]
+    },
+    "Entity": {
+      "fields": [
+        {"name": "id", "type": "uint", "bits": 16},
+        {"name": "pose", "type": "Pose"},
+        {"name": "seen", "type": "bool"},
+        {"name": "side", "type": "Side"},
+        {"name": "stance", "type": "Stance"},
+        {"name": "weight", "type": "f32"},
+        {"name": "tag", "type": "text", "max": 12, "optional": true},
+        {"name": "blob", "type": "bytes", "max": 8},
+        {"name": "fixed", "type": "bytes", "size": 3},
+        {"name": "bag", "type": "list", "of": {"type": "uint", "bits": 8, "delta_group": 3}, "max": 5},
+        {"name": "back", "type": "Pose", "optional": true}
+      ]
+    },
+    "Member": {
+      "fields": [
+        {"name": "rank", "type": "varuint", "max": 100000},
+        {"name": "score", "type": "range", "min": -5, "max": 90},
+        {"name": "title", "type": "text", "max": 6, "optional": true}
+      ]
+    },
+    "Seat": {
+      "fields": [
+        {"name": "place", "type": "range", "min": -50, "max": 50},
+        {"name": "held", "type": "bool"}
+      ]
+    },
+    "Header": {
+      "extensible": true,
+      "fields": [
+        {"name": "level", "type": "uint", "bits": 7},
+        {"name": "label", "type": "text", "max": 20},
+        {"name": "nested", "type": "Inner"},
+        {"name": "added", "type": "uint", "bits": 5, "since": 1, "default": 3},
+        {"name": "more", "type": "bytes", "max": 9, "since": 2}
+      ]
+    },
+    "Inner": {
+      "extensible": true,
+      "fields": [
+        {"name": "depth", "type": "uint", "bits": 3},
+        {"name": "note", "type": "bytes", "max": 12},
+        {"name": "later", "type": "uint", "bits": 4, "since": 1, "default": 1}
+      ]
+    }
+  },
+  "messages": [
+    {
+      "name": "Snapshot",
+      "id": 1,
+      "channel": "state",
+      "operation": "sync",
+      "delta": true,
+      "fields": [
+        {"name": "tick", "type": "varuint", "max": 18446744073709551615, "group": 2, "delta_group": 2},
+        {"name": "entities", "type": "list", "of": {"type": "Entity"}, "max": 8, "delta_key": "id"},
+        {"name": "header", "type": "Header"},
+        {"name": "shift", "type": "Pose", "since": 1, "optional": true},
+        {"name": "tail", "type": "bytes", "max": 4, "since": 2}
+      ]
+    },
+    {
+      "name": "Roster",
+      "id": 2,
+      "channel": "state",
+      "operation": "sync",
+      "delta": true,
+      "fields": [
+        {"name": "members", "type": "list", "of": {"type": "Member"}, "min": 1, "max": 6, "delta_key": "rank"},
+        {"name": "seats", "type": "list", "of": {"type": "Seat"}, "max": 5, "delta_key": "place"},
+        {"name": "ordered", "type": "list", "of": {"type": "Seat"}, "min": 2, "max": 2},
+        {"name": "scores", "type": "list", "of": {"type": "Header"}, "max": 3}
+      ]
+    },
+    {
+      "name": "Motion",
+      "id": 4,
+      "channel": "state",
+      "operation": "sync",
+      "delta": true,
+      "fields": [
+        {"name": "x", "type": "bounded", "min": -100.0, "max": 100.0, "bits": 16, "delta_group": 3},
+        {"name": "turn", "type": "quaternion", "bits": 10},
+        {"name": "height", "type": "bounded", "min": 0.0, "max": 10.0, "bits": 8}
+      ]
+    },
+    {
+      "name": "Plain",
+      "id": 3,
+      "channel": "state",
+      "operation": "sync",
+      "fields": [
+        {"name": "one", "type": "uint", "bits": 3}
+      ]
+    }
+  ]
+}

@@ -1626,19 +1626,19 @@ inline constexpr ChannelDesc kChannels[] = {
 
 inline constexpr MessageDesc kMessages[] = {
     {"Scalars", 1U, 1U, 0U, 32ULL, ScalarsCodec::kMinBytes,
-     ScalarsCodec::kMaxBytes},
+     ScalarsCodec::kMaxBytes, nullptr},
     {"Blobs", 2U, 0U, 0U, 2ULL, BlobsCodec::kMinBytes,
-     BlobsCodec::kMaxBytes},
+     BlobsCodec::kMaxBytes, nullptr},
     {"Lists", 3U, 0U, 0U, 2ULL, ListsCodec::kMinBytes,
-     ListsCodec::kMaxBytes},
+     ListsCodec::kMaxBytes, nullptr},
     {"Revisions", 4U, 0U, 0U, 1ULL, RevisionsCodec::kMinBytes,
-     RevisionsCodec::kMaxBytes},
+     RevisionsCodec::kMaxBytes, nullptr},
     {"Newer", 5U, 0U, 1U, 1ULL, NewerCodec::kMinBytes,
-     NewerCodec::kMaxBytes},
+     NewerCodec::kMaxBytes, nullptr},
     {"Quantized", 6U, 1U, 0U, 32ULL, QuantizedCodec::kMinBytes,
-     QuantizedCodec::kMaxBytes},
+     QuantizedCodec::kMaxBytes, nullptr},
     {"LongBody", 7U, 0U, 0U, 2ULL, LongBodyCodec::kMinBytes,
-     LongBodyCodec::kMaxBytes},
+     LongBodyCodec::kMaxBytes, nullptr},
 };
 
 inline constexpr WireSchema kSchema{

@@ -36,6 +36,8 @@ enum class WireError : u8
     NoRoom,        // encoding: the output span is too small
     NotInRevision, // encoding: a field or value the requested minor revision does not have is set
     BadRevision,   // encoding: a minor revision newer than the schema's
+    Unchanged,     // a baseline delta says a field changed that did not: a second encoding of one message
+    KeyOrder,      // the keys of a keyed list do not ascend strictly
 };
 
 // The channel classes of the design's table.
@@ -66,6 +68,8 @@ struct ChannelDesc
     u16              padding_block     = 0U; // datagrams pad to a multiple of this; zero pads nothing
 };
 
+struct DeltaLayout;
+
 // What admission reads of a message before any field of it is decoded.
 struct MessageDesc
 {
@@ -74,8 +78,9 @@ struct MessageDesc
     u16              channel   = 0U; // into WireSchema::channels
     u16              since     = 0U; // the minor revision that introduced it
     u64              operation = 0U; // its operation bit in the S18 schema; zero below S18 (a transport schema)
-    u32              min_bytes = 0U; // at the schema's first minor revision
-    u32              max_bytes = 0U; // at the schema's current minor revision
+    u32              min_bytes = 0U; // of its frame's body, at the schema's first minor revision
+    u32              max_bytes = 0U; // of its frame's body, at the schema's current minor revision
+    const DeltaLayout* delta = nullptr; // a delta message: its frame's body is DeltaWriter's, not the encoding itself
 };
 
 // A schema as generated: the fields of the S18 artefact its issuer signs, its channels and its messages. `kind` is the
@@ -519,6 +524,37 @@ template <typename C>
         }
     }
     return true;
+}
+
+// Reads a keyed list's key from an element.
+template <auto Member>
+struct WireKeyOf
+{
+    template <typename V>
+    [[nodiscard]] constexpr auto operator()(const V& value) const noexcept
+    {
+        return value.*Member;
+    }
+};
+
+// Whether a keyed list's keys ascend strictly; `key` reads one from an element.
+template <typename C, typename K>
+[[nodiscard]] inline WireError wire_keys_ascend(const WireList<C>& list, K key) noexcept
+{
+    auto              cursor = list.cursor();
+    typename C::Value value{};
+    bool              first = true;
+    decltype(key(value)) previous{};
+    while (cursor.next(value))
+    {
+        if (!first && !(previous < key(value)))
+        {
+            return WireError::KeyOrder;
+        }
+        previous = key(value);
+        first = false;
+    }
+    return WireError::Ok;
 }
 
 template <typename C>

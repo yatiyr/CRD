@@ -244,14 +244,14 @@ private:
 };
 
 // Writes `message` at `minor` as one Sized or ToEnd frame: its header, then its fields. On any refusal `written` is
-// zero. A message the schema does not list is OutOfRange.
+// zero. A message the schema does not list is OutOfRange, and so is a delta message, whose body DeltaWriter writes.
 template <typename M>
 [[nodiscard]] inline wire::WireError write_frame(const wire::WireSchema& schema, HeaderForm form, const M& message,
                                                  u16 minor, u64 object, cont::Span<u8> out, usize& written) noexcept
 {
     written = 0U;
     const wire::MessageDesc* found = wire::find_message(schema, M::WireCodec::kMessageId);
-    if (found == nullptr)
+    if (found == nullptr || found->delta != nullptr)
     {
         return wire::WireError::OutOfRange;
     }
@@ -274,10 +274,11 @@ template <typename M>
 }
 
 // Decodes an admitted frame's body as message type M, written at the revision its writer announced. A frame of another
-// message is OutOfRange: a dispatcher's mistake must not read bytes as the wrong layout.
+// message is OutOfRange: a dispatcher's mistake must not read bytes as the wrong layout. So is a delta message:
+// DeltaReader reads its body, and the generated decoder then reads the whole message that gives.
 template <typename M> [[nodiscard]] inline wire::WireError decode_frame(const AdmittedFrame& frame, M& message) noexcept
 {
-    if (frame.message == nullptr || frame.message->id != M::WireCodec::kMessageId)
+    if (frame.message == nullptr || frame.message->id != M::WireCodec::kMessageId || frame.message->delta != nullptr)
     {
         return wire::WireError::OutOfRange;
     }

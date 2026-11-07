@@ -42,7 +42,7 @@ def build(document):
     return gen.Schema(copy.deepcopy(document), 'test')
 
 
-class Refusals(unittest.TestCase):
+class SchemaCase(unittest.TestCase):
     def refused(self, document, words):
         with self.assertRaises(gen.SchemaError) as caught:
             build(document)
@@ -52,6 +52,9 @@ class Refusals(unittest.TestCase):
         document = base()
         document['messages'][0]['fields'] = list(fields)
         return document
+
+
+class Refusals(SchemaCase):
 
     def test_the_base_schema_builds(self):
         schema = build(base())
@@ -303,6 +306,90 @@ class Sizes(unittest.TestCase):
         writer.put(0b0000, 4)
         with self.assertRaises(gen.RefFail):
             gen.ref_take_varuint(gen.RefReader(writer.data()), 3, 100)
+
+
+class Deltas(SchemaCase):
+    def delta_document(self, field, delta=True):
+        document = self.with_fields({'name': 'a', 'type': 'uint', 'bits': 3}, field)
+        document['messages'][0]['delta'] = delta
+        return document
+
+    def test_delta_attributes_are_refused_where_they_mean_nothing(self):
+        plain = {'name': 'b', 'type': 'bytes', 'max': 3, 'delta_group': 2}
+        self.refused(self.delta_document(plain), 'delta_group')
+        for group in (0.5, 33, -1):
+            field = {'name': 'b', 'type': 'uint', 'bits': 3, 'delta_group': group}
+            self.refused(self.delta_document(field), 'delta_group')
+        self.refused(self.delta_document({'name': 'b', 'type': 'f32', 'delta_group': 2}), 'delta_group')
+        self.refused(self.delta_document({'name': 'b', 'type': 'list', 'max': 2,
+                                          'of': {'type': 'bool', 'delta_group': 2}}), 'takes no delta_group')
+        field = {'name': 'b', 'type': 'uint', 'bits': 3}
+        self.refused(self.delta_document(field, delta='yes'), 'delta is true or false')
+
+    def keyed(self, fields, key='id', extensible=False):
+        document = self.with_fields({'name': 'a', 'type': 'list', 'of': {'type': 'Item'}, 'max': 4, 'delta_key': key})
+        document['structs'] = {'Item': {'fields': fields, 'extensible': extensible}}
+        return document
+
+    def test_a_key_must_be_a_rising_number_every_element_has(self):
+        identifier = {'name': 'id', 'type': 'uint', 'bits': 8}
+        other = {'name': 'b', 'type': 'bool'}
+        self.assertEqual(build(self.keyed([identifier, other])).messages[0]['type'].fields[0].type.key, 'id')
+        self.refused(self.keyed([other, identifier]), 'first field')
+        self.refused(self.keyed([identifier, other], key='b'), 'first field')
+        self.refused(self.keyed([dict(identifier, optional=True), other]), 'must be a uint, range or varuint')
+        self.refused(self.keyed([{'name': 'id', 'type': 'f32'}, other]), 'must be a uint, range or varuint')
+        signed_key = {'name': 'id', 'type': 'varsint', 'min': -3, 'max': 3}
+        self.refused(self.keyed([signed_key]), 'must be a uint, range or varuint')
+        self.refused(self.keyed([identifier], extensible=True), 'plain struct')
+        document = self.with_fields({'name': 'a', 'type': 'list', 'of': {'type': 'uint', 'bits': 3}, 'max': 2,
+                                     'delta_key': 'x'})
+        self.refused(document, 'plain struct')
+
+    def test_a_delta_message_bounds_its_frame_and_changes_its_digest(self):
+        field = {'name': 'b', 'type': 'bytes', 'size': 90}
+        document = self.delta_document(field)
+        document['channels'][0]['max_message_bytes'] = 91
+        document_fits = copy.deepcopy(document)
+        self.refused(document, 'above channel')
+        document_fits['channels'][0]['max_message_bytes'] = 110
+        schema = build(document_fits)
+        least, most = gen.message_bounds(schema.messages[0])
+        self.assertEqual(least, 'kDeltaHeaderMinBytes + 1U')
+        self.assertIn('kDeltaHeaderMaxBytes', most)
+        self.assertIn('kOnlyLayout', gen.header_text(schema, {'schema': 'x'}))
+        plain = build(self.delta_document(field, delta=False))
+        self.assertNotEqual(schema.layout_digest(0), plain.layout_digest(0))
+        self.assertNotIn('DeltaLayout', gen.header_text(plain, {'schema': 'x'}))
+        with_group = build(self.with_fields({'name': 'a', 'type': 'uint', 'bits': 3, 'delta_group': 2}))
+        without = build(self.with_fields({'name': 'a', 'type': 'uint', 'bits': 3}))
+        self.assertNotEqual(with_group.layout_digest(0), without.layout_digest(0))
+
+    def test_folds_and_differences_are_small_either_way(self):
+        for width in (1, 8, 64):
+            top = (1 << width) - 1
+            self.assertEqual(gen.ref_fold(1, width) if width > 1 else 1, 2 if width > 1 else 1)
+            self.assertEqual(gen.ref_fold(-1, width), 1)
+            self.assertLessEqual(gen.ref_fold(top, width), top)
+        for value in (0, 1, -1, 5, -5, 1 << 40, -(1 << 40)):
+            self.assertEqual(gen.ref_unfold(gen.ref_fold(value, 64)), value)
+
+    def test_the_reference_delta_rebuilds_every_committed_delta_message(self):
+        document = gen.json.loads((ROOT / 'tests/foundation/net/schemas/delta_test.json').read_text(encoding='utf-8'))
+        schema = gen.Schema(document, 'delta_test')
+        rng = random.Random(4)
+        for message in schema.delta_messages():
+            item = message['type']
+            if item.lossy:
+                continue
+            for minor in range(schema.minor + 1):
+                for _ in range(40):
+                    base = item.ref_gen(rng, minor)
+                    value = item.ref_perturb(base, rng, minor)
+                    delta, whole = gen.RefWriter(), gen.RefWriter()
+                    item.ref_delta_fields_put(delta, base, value, minor)
+                    item.ref_body_put(whole, value, minor)
+                    self.assertEqual(gen.ref_delta_verdict(item, base, delta.data(), minor), whole.data())
 
 
 if __name__ == '__main__':

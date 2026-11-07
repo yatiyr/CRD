@@ -7,6 +7,7 @@
 #include <crd/net/wire/session_control.hpp>
 
 #include <generated/wire_test.hpp>
+#include <wire_vector_checks.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -35,6 +36,8 @@ using crd::net::wire::same;
 using crd::net::wire::WireError;
 using crd::net::wire::WireList;
 using crd::net::wire::WireQuaternion;
+using crd::net::wire::testing::check_value;
+using crd::net::wire::testing::check_verdict;
 
 using namespace crd::net::wire::wire_test;
 namespace control = crd::net::wire::session_control;
@@ -42,59 +45,6 @@ namespace cont    = crd::containers;
 
 namespace
 {
-constexpr usize kMaxVectorBytes = 4096U;
-
-usize from_hex(const char* text, u8* out)
-{
-    const auto digit = [](char c) -> u8
-    {
-        return static_cast<u8>((c <= '9') ? (c - '0') : (c - 'A' + 10));
-    };
-    const usize length = std::strlen(text);
-    REQUIRE(length % 2U == 0U);
-    REQUIRE(length / 2U <= kMaxVectorBytes);
-    for (usize i = 0U; i < length / 2U; ++i)
-    {
-        out[i] = static_cast<u8>((digit(text[2U * i]) << 4U) | digit(text[(2U * i) + 1U]));
-    }
-    return length / 2U;
-}
-
-template <typename M>
-void check_value(const M& message, u16 minor, const char* hex)
-{
-    static u8   expected[kMaxVectorBytes];
-    static u8   written[kMaxVectorBytes];
-    const usize size = from_hex(hex, expected);
-
-    usize count = 0U;
-    REQUIRE(encode(message, minor, Span<u8>(written), count) == WireError::Ok);
-    REQUIRE(count == size);
-    CHECK((size == 0U || std::memcmp(written, expected, size) == 0));
-    CHECK(encoded_bytes(message, minor) == size);
-
-    M decoded{};
-    REQUIRE(decode(ConstSpan<u8>(expected, size), minor, decoded) == WireError::Ok);
-    CHECK(same(decoded, message));
-    CHECK(same(message, decoded));
-
-    // A decoded message forwards as it is, its lists read from the input.
-    usize again = 0U;
-    REQUIRE(encode(decoded, minor, Span<u8>(written), again) == WireError::Ok);
-    REQUIRE(again == size);
-    CHECK((size == 0U || std::memcmp(written, expected, size) == 0));
-}
-
-template <typename M>
-void check_verdict(u16 writer_minor, bool accepted, const char* hex)
-{
-    static u8   bytes[kMaxVectorBytes];
-    const usize size = from_hex(hex, bytes);
-    M           message{};
-    const WireError error = decode(ConstSpan<u8>(bytes, size), writer_minor, message);
-    CHECK((error == WireError::Ok) == accepted);
-}
-
 template <typename M>
 Span<const u8> encoded(const M& message, u16 minor, u8* storage, usize capacity)
 {

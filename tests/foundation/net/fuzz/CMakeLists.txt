@@ -16,6 +16,7 @@ crd_fuzz_target(crd-fuzz-net-admission
 # The generated wire formats (NET.3): scripts/gen-wire-schemas.py writes one target per schema.
 #   crd-fuzz-wire-session-control   every message of the session control channel's generated decoder.
 #   crd-fuzz-wire-test              every field type, shape and revision rule of the schema language.
+#   crd-fuzz-wire-delta-test        the same for baseline deltas: what a delta rebuilds, and that its delta is the input.
 crd_fuzz_target(crd-fuzz-wire-session-control
     SOURCES fuzz_wire_session_control.cpp LIBRARIES crd-net
     CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-wire-session-control")
@@ -24,4 +25,23 @@ crd_fuzz_target(crd-fuzz-wire-test
 target_include_directories(crd-fuzz-wire-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 if(TARGET crd-fuzz-wire-test-libfuzzer)
     target_include_directories(crd-fuzz-wire-test-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+endif()
+crd_fuzz_target(crd-fuzz-wire-delta-test
+    SOURCES fuzz_wire_delta_test.cpp LIBRARIES crd-net-quantized
+    CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-wire-delta-test")
+target_include_directories(crd-fuzz-wire-delta-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(TARGET crd-fuzz-wire-delta-test-libfuzzer)
+    target_include_directories(crd-fuzz-wire-delta-test-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+endif()
+
+# Delta streams (NET.3).
+#   crd-fuzz-net-delta-stream   any frame bodies against a reader: what it delivers passes the generated decoder and its
+#                               hash, its acknowledgements rise, and a writer on a hostile path never makes it deliver
+#                               anything but what was written.
+crd_fuzz_target(crd-fuzz-net-delta-stream
+    SOURCES fuzz_delta_stream.cpp LIBRARIES crd-net-quantized
+    CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-delta-stream")
+target_include_directories(crd-fuzz-net-delta-stream PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(TARGET crd-fuzz-net-delta-stream-libfuzzer)
+    target_include_directories(crd-fuzz-net-delta-stream-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 endif()

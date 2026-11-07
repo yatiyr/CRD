@@ -2,7 +2,8 @@
 //
 // Known answers from the generator's reference interpreter, which shares nothing with the generated C++:
 // check_value builds a message field by field and holds the encoder and decoder to the reference's bytes,
-// and check_verdict holds the decoder to the reference's verdict on damaged bytes.
+// and check_verdict holds the decoder to the reference's verdict on damaged bytes; check_delta and
+// check_delta_verdict do the same for baseline deltas.
 
 {
     Scalars message{};

@@ -32,6 +32,7 @@ GENERATOR = 'scripts/gen-wire-schemas.py'
 MAX_DEPTH = 8
 MAX_MESSAGE_BYTES = 0xFFFFFFFF
 MINORS_PAST_SCHEMA = 2  # the fuzz target and the vectors also read as writers this far ahead
+DELTA_HEADER_MAX_BYTES = 9  # crd/net/delta.hpp's kDeltaHeaderMaxBytes
 
 OUTPUTS = [
     {
@@ -46,6 +47,13 @@ OUTPUTS = [
         'include': 'generated/wire_test.hpp',
         'fuzz': 'tests/foundation/net/fuzz/fuzz_wire_test.cpp',
         'vectors': 'tests/foundation/net/generated/wire_test_vectors.inc',
+    },
+    {
+        'schema': 'tests/foundation/net/schemas/delta_test.json',
+        'header': 'tests/foundation/net/generated/delta_test.hpp',
+        'include': 'generated/delta_test.hpp',
+        'fuzz': 'tests/foundation/net/fuzz/fuzz_wire_delta_test.cpp',
+        'vectors': 'tests/foundation/net/generated/delta_test_vectors.inc',
     },
 ]
 
@@ -234,9 +242,21 @@ def utf8_text(rng, maximum):
 # ---- Types ----
 
 
+def ref_fold(difference, width):
+    mask = (1 << width) - 1
+    wrapped = difference & mask
+    signed = wrapped if wrapped < (1 << (width - 1)) else wrapped - (1 << width)
+    return 2 * signed if signed >= 0 else -2 * signed - 1
+
+
+def ref_unfold(folded):
+    return folded // 2 if folded % 2 == 0 else -(folded // 2) - 1
+
+
 class Type:
     lossy = False
     scalar = True
+    diffable = False
 
     def layout(self, minor):
         raise NotImplementedError
@@ -267,6 +287,46 @@ class Type:
 
     def children(self):
         return ()
+
+    def delta_entry(self):
+        """The table's view of the type: kind, width, low, its children's table and how many."""
+        return 'Bits', self.max_bits, 0, None, 0
+
+    def ref_code(self, value):
+        return value
+
+    def ref_from_code(self, code):
+        return code
+
+    def ref_same(self, a, b, minor):
+        one, other = RefWriter(), RefWriter()
+        self.ref_put(one, a, minor)
+        self.ref_put(other, b, minor)
+        return one.bits == other.bits
+
+    def ref_delta_put(self, writer, base, value, minor, diff):
+        width = self.max_bits
+        if diff:
+            ref_put_varuint(writer, ref_fold(self.ref_code(value) - self.ref_code(base), width), diff)
+        elif width != 1:
+            writer.put(self.ref_code(value), width)
+
+    def ref_delta_take(self, reader, base, writer_minor, diff):
+        width = self.max_bits
+        was = self.ref_code(base)
+        if diff:
+            step = ref_unfold(ref_take_varuint(reader, diff, (1 << width) - 1))
+            code = (was + step) & ((1 << width) - 1)
+        elif width == 1:
+            code = 1 - was
+        else:
+            code = reader.take(width)
+        if code == was:
+            raise RefFail('unchanged')
+        return self.ref_from_code(code)
+
+    def ref_perturb(self, value, rng, minor):
+        return self.ref_gen(rng, minor)
 
 
 class BoolType(Type):
@@ -309,11 +369,19 @@ class BoolType(Type):
     def ref_gen(self, rng, minor):
         return rng.random() < 0.5
 
+    def ref_code(self, value):
+        return 1 if value else 0
+
+    def ref_from_code(self, code):
+        return code == 1
+
     def cpp_assign(self, emit, ref, value):
         emit.line(f'{ref} = {"true" if value else "false"};')
 
 
 class UintType(Type):
+    diffable = True
+
     def __init__(self, spec):
         self.bits = spec.get('bits')
         require(isinstance(self.bits, int) and 1 <= self.bits <= 64, f'uint bits must be 1 to 64: {spec}')
@@ -360,6 +428,14 @@ class UintType(Type):
 
 
 class RangeType(Type):
+    diffable = True
+
+    def ref_code(self, value):
+        return value - self.low
+
+    def ref_from_code(self, code):
+        return self.low + code
+
     def __init__(self, spec):
         self.low = spec.get('min')
         self.high = spec.get('max')
@@ -416,6 +492,26 @@ class RangeType(Type):
 
 
 class VaruintType(Type):
+    diffable = True
+
+    def delta_entry(self):
+        return 'Varuint', self.group, 0, None, 0
+
+    def ref_delta_put(self, writer, base, value, minor, diff):
+        if diff:
+            ref_put_varuint(writer, ref_fold(value - base, 64), diff)
+        else:
+            ref_put_varuint(writer, value, self.group)
+
+    def ref_delta_take(self, reader, base, writer_minor, diff):
+        if diff:
+            value = (base + ref_unfold(ref_take_varuint(reader, diff, (1 << 64) - 1))) & ((1 << 64) - 1)
+        else:
+            value = ref_take_varuint(reader, self.group, (1 << 64) - 1)
+        if value == base:
+            raise RefFail('unchanged')
+        return value
+
     def __init__(self, spec):
         self.top = spec.get('max')
         self.group = spec.get('group', 7)
@@ -464,6 +560,28 @@ class VaruintType(Type):
 
 
 class VarsintType(Type):
+    diffable = True
+
+    def delta_entry(self):
+        return 'Varsint', self.group, 0, None, 0
+
+    def ref_delta_put(self, writer, base, value, minor, diff):
+        if diff:
+            ref_put_varuint(writer, ref_fold(value - base, 64), diff)
+        else:
+            ref_put_varuint(writer, self.zigzag(value), self.group)
+
+    def ref_delta_take(self, reader, base, writer_minor, diff):
+        if diff:
+            step = ref_unfold(ref_take_varuint(reader, diff, (1 << 64) - 1))
+            value = ((base + step + (1 << 63)) & ((1 << 64) - 1)) - (1 << 63)
+        else:
+            raw = ref_take_varuint(reader, self.group, (1 << 64) - 1)
+            value = (raw >> 1) if not raw & 1 else -(raw >> 1) - 1
+        if value == base:
+            raise RefFail('unchanged')
+        return value
+
     def __init__(self, spec):
         self.low = spec.get('min')
         self.high = spec.get('max')
@@ -665,6 +783,7 @@ class FloatType(Type):
 
 class BoundedType(Type):
     lossy = True
+    diffable = True
 
     def __init__(self, spec):
         self.low = float(spec.get('min'))
@@ -746,8 +865,24 @@ class QuaternionType(Type):
         return guard(f'wire_take_quaternion(r, {self.format_name}, {ref})')
 
 
-class BytesType(Type):
+class WholeInDelta:
+    """A type whose change travels as the whole value."""
+
+    def ref_delta_put(self, writer, base, value, minor, diff):
+        self.ref_put(writer, value, minor)
+
+    def ref_delta_take(self, reader, base, writer_minor, diff):
+        value = self.ref_take(reader, writer_minor)
+        if value == base:
+            raise RefFail('unchanged')
+        return value
+
+
+class BytesType(WholeInDelta, Type):
     scalar = False
+
+    def delta_entry(self):
+        return 'Bytes', self.length_bits, self.low, None, 0
 
     def __init__(self, spec):
         if 'size' in spec:
@@ -818,8 +953,11 @@ class BytesType(Type):
             emit.line(f'{ref} = cont::ConstSpan<u8>({name});')
 
 
-class TextType(Type):
+class TextType(WholeInDelta, Type):
     scalar = False
+
+    def delta_entry(self):
+        return 'Bytes', self.length_bits, 0, None, 0
 
     def __init__(self, spec):
         self.high = spec.get('max')
@@ -898,12 +1036,32 @@ class ListType(Type):
         self.min_bits = self.count_bits + (self.low * self.of.min_bits)
         self.max_bits = self.count_bits + (self.high * self.of.max_bits)
         self.lossy = self.of.lossy
+        self.element_diff = spec['of'].get('delta_group', 0)
+        require(self.element_diff == 0 or (isinstance(self.element_diff, int) and 1 <= self.element_diff <= 32 and
+                                           self.of.diffable),
+                f'list element takes no delta_group {self.element_diff}: {spec}')
+        self.key = spec.get('delta_key')
+        if self.key is not None:
+            require(isinstance(self.of, StructType) and not self.of.extensible,
+                    f'delta_key needs a list of a plain struct: {spec}')
+            self.of.keyed_element = True
+            head = self.of.fields[0]
+            require(head.name == self.key, f'delta_key {self.key} must be the first field of {self.of.name}')
+            require(not head.optional and head.since == 0 and isinstance(head.type, (UintType, RangeType, VaruintType)),
+                    f'delta_key {self.key} must be a uint, range or varuint every element has')
 
     def children(self):
         return (self.of,)
 
     def layout(self, minor):
-        return ['list', self.low, self.high, self.of.layout(minor)]
+        out = ['list', self.low, self.high, self.of.layout(minor)]
+        if self.element_diff or self.key is not None:
+            out.append([self.element_diff, self.key])
+        return out
+
+    def delta_entry(self):
+        kind = 'List' if self.key is None else 'KeyedList'
+        return kind, self.count_bits, self.low, f'k{self.owner}ItemDelta', 1
 
     def cpp(self):
         return f'WireList<{self.codec_name}>'
@@ -918,14 +1076,21 @@ class ListType(Type):
     def ref_default(self, default):
         return []
 
+    def key_order(self, ref):
+        if self.key is None:
+            return []
+        return guard(f'wire_keys_ascend({ref}, WireKeyOf<&{self.of.name}::{self.key}>{{}})')
+
     def put(self, ref):
-        return guard(f'wire_put_list(w, {ref}, {self.low}U, {self.high}U, {self.count_bits}U, minor)')
+        return (self.key_order(ref) +
+                guard(f'wire_put_list(w, {ref}, {self.low}U, {self.high}U, {self.count_bits}U, minor)'))
 
     def end(self, ref):
         return [f'position = wire_list_end({ref}, {self.count_bits}U, minor, position);']
 
     def take(self, ref):
-        return guard(f'wire_take_list(r, {self.low}U, {self.high}U, {self.count_bits}U, writer_minor, {ref})')
+        return (guard(f'wire_take_list(r, {self.low}U, {self.high}U, {self.count_bits}U, writer_minor, {ref})') +
+                self.key_order(ref))
 
     def nested_codecs(self, emit_codec):
         self.codec_name = emit_codec(self.of, self.owner + 'ItemCodec')
@@ -941,11 +1106,154 @@ class ListType(Type):
         if extra > self.high - self.low:
             raise RefFail('count above the bound')
         count = self.low + extra
-        return [self.of.ref_take(reader, writer_minor) for _ in range(count)]
+        out = [self.of.ref_take(reader, writer_minor) for _ in range(count)]
+        self.ref_check_keys(out)
+        return out
+
+    def ref_check_keys(self, items):
+        if self.key is not None:
+            for one, other in zip(items, items[1:]):
+                if not one[self.key] < other[self.key]:
+                    raise RefFail('keys out of order')
+
+    def ref_keyed(self, items, rng, minor):
+        """`items` with distinct ascending keys and at least the least count."""
+        if self.key is None:
+            return items
+        by_key = {item[self.key]: item for item in items}
+        while len(by_key) < self.low:
+            item = self.of.ref_gen(rng, minor)
+            by_key[item[self.key]] = item
+        return [by_key[key] for key in sorted(by_key)][:self.high]
 
     def ref_gen(self, rng, minor):
         count = ref_edge_int(rng, self.low, min(self.high, self.low + 4))
-        return [self.of.ref_gen(rng, minor) for _ in range(count)]
+        return self.ref_keyed([self.of.ref_gen(rng, minor) for _ in range(count)], rng, minor)
+
+    def ref_perturb(self, value, rng, minor):
+        out = []
+        for item in value:
+            choice = rng.random()
+            if choice < 0.15:
+                continue
+            out.append(self.of.ref_perturb(item, rng, minor) if choice < 0.5 else item)
+            if self.key is not None and choice >= 0.5 and rng.random() < 0.1:
+                out.append(self.of.ref_gen(rng, minor))
+        if rng.random() < 0.3:
+            out.append(self.of.ref_gen(rng, minor))
+        while len(out) < self.low:
+            out.append(self.of.ref_gen(rng, minor))
+        return self.ref_keyed(out[:self.high], rng, minor)
+
+    def ref_delta_put(self, writer, base, value, minor, diff):
+        if self.count_bits:
+            writer.put(len(value) - self.low, self.count_bits)
+        if self.key is not None:
+            self.ref_delta_put_keyed(writer, base, value, minor)
+            return
+        shared = min(len(base), len(value))
+        for one, other in zip(base[:shared], value[:shared]):
+            if self.of.ref_same(one, other, minor):
+                writer.put(0, 1)
+            else:
+                writer.put(1, 1)
+                self.of.ref_delta_put(writer, one, other, minor, self.element_diff)
+        for item in value[shared:]:
+            self.of.ref_put(writer, item, minor)
+
+    def ref_delta_put_keyed(self, writer, base, value, minor):
+        at_old = at_new = 0
+        while at_old < len(base) or at_new < len(value):
+            if at_old == len(base):
+                self.of.ref_put(writer, value[at_new], minor)
+                at_new += 1
+            elif at_new == len(value):
+                at_old += 1
+            elif base[at_old][self.key] == value[at_new][self.key]:
+                if self.of.ref_same(base[at_old], value[at_new], minor):
+                    writer.put(0, 1)
+                else:
+                    writer.put(0b10, 2)
+                    self.of.ref_delta_fields_put(writer, base[at_old], value[at_new], minor, start=1)
+                at_old += 1
+                at_new += 1
+            elif value[at_new][self.key] < base[at_old][self.key]:
+                writer.put(0b110, 3)
+                self.of.ref_put(writer, value[at_new], minor)
+                at_new += 1
+            else:
+                writer.put(0b111, 3)
+                at_old += 1
+
+    def ref_delta_take(self, reader, base, writer_minor, diff):
+        extra = reader.take(self.count_bits) if self.count_bits else 0
+        count = self.low + extra
+        if extra > self.high - self.low:
+            raise RefFail('count above the bound')
+        if self.key is not None:
+            return self.ref_delta_take_keyed(reader, base, count, writer_minor)
+        out = []
+        changed = count != len(base)
+        for index in range(min(count, len(base))):
+            if reader.take(1):
+                changed = True
+                out.append(self.of.ref_delta_take(reader, base[index], writer_minor, self.element_diff))
+            else:
+                out.append(base[index])
+        for _ in range(count - len(out)):
+            out.append(self.of.ref_take(reader, writer_minor))
+        if not changed:
+            raise RefFail('unchanged')
+        return out
+
+    def ref_delta_take_keyed(self, reader, base, count, writer_minor):
+        out = []
+        at_old = 0
+        passed = None
+        changed = count != len(base)
+
+        def insert(limit):
+            item = self.of.ref_take(reader, writer_minor)
+            key = item[self.key]
+            if (passed is not None and key <= passed) or (limit is not None and key >= limit):
+                raise RefFail('key out of place')
+            return item, key
+
+        while at_old < len(base) or len(out) < count:
+            if at_old == len(base):
+                item, passed = insert(None)
+                out.append(item)
+                changed = True
+                continue
+            old_key = base[at_old][self.key]
+            if len(out) == count:
+                passed = old_key
+                at_old += 1
+                changed = True
+                continue
+            if not reader.take(1):
+                out.append(base[at_old])
+            elif not reader.take(1):
+                item, any_field = self.of.ref_delta_fields_take(reader, base[at_old], writer_minor, start=1)
+                if not any_field:
+                    raise RefFail('unchanged')
+                out.append(item)
+                changed = True
+            elif not reader.take(1):
+                item, passed = insert(old_key)
+                out.append(item)
+                changed = True
+                continue
+            else:
+                changed = True
+                passed = old_key
+                at_old += 1
+                continue
+            passed = old_key
+            at_old += 1
+        if not changed:
+            raise RefFail('unchanged')
+        return out
 
     def cpp_assign(self, emit, ref, value):
         if value:
@@ -970,6 +1278,9 @@ class Field:
         camel = ''.join(part.capitalize() for part in self.name.split('_'))
         self.type = parse(spec, owner + camel)
         self.format_name = owner + camel
+        self.diff = spec.get('delta_group', 0)
+        require(self.diff == 0 or (isinstance(self.diff, int) and 1 <= self.diff <= 32 and self.type.diffable),
+                f'{owner}.{self.name}: delta_group {self.diff} on a type that takes none, or outside 1 to 32')
         if self.default is not None:
             self.type.default_literal(self.default)
         if self.since > 0 and not self.optional:
@@ -984,7 +1295,13 @@ class Field:
         return (1 if self.optional else 0) + self.type.max_bits
 
     def layout(self, minor):
-        return [self.since, self.optional, self.default, self.type.layout(minor)]
+        out = [self.since, self.optional, self.default, self.type.layout(minor)]
+        return out + [self.diff] if self.diff else out
+
+    def ref_same(self, a, b, minor):
+        if a is None or b is None:
+            return a is None and b is None
+        return self.type.ref_same(a, b, minor)
 
 
 class StructType(Type):
@@ -999,6 +1316,7 @@ class StructType(Type):
         self.fields = None
         self.resolving = False
         self.is_message = False
+        self.keyed_element = False
 
     def resolve(self, is_message=False):
         require(not self.resolving, f'{self.name} is recursive')
@@ -1114,6 +1432,87 @@ class StructType(Type):
                 out[field.name] = None
             else:
                 out[field.name] = field.type.ref_gen(rng, minor)
+        return out
+
+    def delta_entry(self):
+        return ('Extensible' if self.extensible else 'Struct'), 0, 0, f'k{self.name}Delta', len(self.fields)
+
+    def ref_perturb(self, value, rng, minor):
+        out = dict(value)
+        for index, field in enumerate(self.fields):
+            if field.since > minor or rng.random() > 0.35 or (index == 0 and self.keyed_element):
+                continue
+            if field.optional and (value[field.name] is None or rng.random() < 0.3):
+                out[field.name] = None if value[field.name] is not None else field.type.ref_gen(rng, minor)
+            else:
+                out[field.name] = field.type.ref_perturb(value[field.name], rng, minor)
+        return out
+
+    def ref_delta_fields_put(self, writer, base, value, minor, start=0):
+        for field in self.fields[start:]:
+            if field.since > minor:
+                continue
+            was, now = base[field.name], value[field.name]
+            if field.ref_same(was, now, minor):
+                writer.put(0, 1)
+                continue
+            writer.put(1, 1)
+            if field.optional:
+                writer.put(0 if now is None else 1, 1)
+                if now is None:
+                    continue
+                if was is None:
+                    field.type.ref_put(writer, now, minor)
+                    continue
+            field.type.ref_delta_put(writer, was, now, minor, field.diff)
+
+    def ref_delta_fields_take(self, reader, base, writer_minor, start=0):
+        out = dict(base)
+        any_field = False
+        for field in self.fields[start:]:
+            if field.since > writer_minor:
+                continue
+            was = base[field.name]
+            if not reader.take(1):
+                continue
+            any_field = True
+            if field.optional:
+                if not reader.take(1):
+                    if was is None:
+                        raise RefFail('unchanged')
+                    out[field.name] = None
+                    continue
+                if was is None:
+                    out[field.name] = field.type.ref_take(reader, writer_minor)
+                    continue
+            out[field.name] = field.type.ref_delta_take(reader, was, writer_minor, field.diff)
+        return out, any_field
+
+    def ref_delta_put(self, writer, base, value, minor, diff):
+        if not self.extensible:
+            self.ref_delta_fields_put(writer, base, value, minor)
+            return
+        writer.align()
+        inner = RefWriter()
+        self.ref_delta_fields_put(inner, base, value, minor)
+        data = inner.data()
+        ref_put_varuint(writer, len(data), 7)
+        for byte in data:
+            writer.put(byte, 8)
+
+    def ref_delta_take(self, reader, base, writer_minor, diff):
+        if not self.extensible:
+            out, any_field = self.ref_delta_fields_take(reader, base, writer_minor)
+        else:
+            reader.align()
+            length = ref_take_varuint(reader, 7, 0xFFFFFFFF)
+            inner = RefReader(reader.take_bytes(length))
+            out, any_field = self.ref_delta_fields_take(inner, base, writer_minor)
+            ref_finish(inner, writer_minor, self.schema.minor)
+            if writer_minor > self.schema.minor:
+                any_field = True
+        if not any_field:
+            raise RefFail('unchanged')
         return out
 
     def cpp_assign(self, emit, ref, value):
@@ -1234,7 +1633,9 @@ class Schema:
             item = StructType(name, spec, self)
             item.resolve(is_message=True)
             self.structs[name] = item
-            self.messages.append({'name': name, 'id': identifier, 'since': since, 'type': item,
+            delta = spec.get('delta', False)
+            require(isinstance(delta, bool), f'{self.label}: {name}: delta is true or false')
+            self.messages.append({'name': name, 'id': identifier, 'since': since, 'type': item, 'delta': delta,
                                   'channel': self.channels.index(channel[0]), 'operation': mask})
         require(self.messages, f'{self.label}: no message')
         self.messages.sort(key=lambda m: m['id'])
@@ -1275,7 +1676,7 @@ class Schema:
 
     def check_channel_bounds(self):
         for message in self.messages:
-            bytes_at_most = (message['type'].max_bits + 7) // 8
+            bytes_at_most = (message['type'].max_bits + 7) // 8 + (DELTA_HEADER_MAX_BYTES if message['delta'] else 0)
             require(bytes_at_most <= MAX_MESSAGE_BYTES, f'{self.label}: {message["name"]} too large')
             channel = self.channels[message['channel']]
             require(bytes_at_most <= channel['max_message_bytes'],
@@ -1283,7 +1684,8 @@ class Schema:
                     f'{channel["name"]}\'s {channel["max_message_bytes"]}')
 
     def layout_digest(self, minor):
-        layout = [[m['id'], m['type'].layout(minor)] for m in self.messages if m['since'] <= minor]
+        layout = [[m['id'], m['type'].layout(minor)] + ([True] if m['delta'] else [])
+                  for m in self.messages if m['since'] <= minor]
         text = json.dumps([self.major, layout], sort_keys=True, separators=(',', ':'))
         return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
@@ -1298,6 +1700,9 @@ class Schema:
 
     def has_lossy(self):
         return any(item.lossy for item in self.structs.values())
+
+    def delta_messages(self):
+        return [message for message in self.messages if message['delta']]
 
     def ordered_structs(self):
         ordered = []
@@ -1472,12 +1877,57 @@ def struct_lines(item, schema, message):
     return lines
 
 
+def delta_tables(schema):
+    """The tables crd/net/delta.hpp's interpreter walks, children first, and each delta message's layout."""
+    lines = []
+    emitted = set()
+
+    def entry(item, since, optional, diff):
+        kind, width, low, table, count = item.delta_entry()
+        if isinstance(item, StructType):
+            table_of(item)
+        elif isinstance(item, ListType) and table not in emitted:
+            emitted.add(table)
+            element = entry(item.of, 0, False, item.element_diff)
+            lines.extend([f'inline constexpr DeltaField {table}[] = {{', f'    {element},', '};'])
+        return (f'{{{table or "nullptr"}, {count}U, {since}U, DeltaKind::{kind}, {"true" if optional else "false"}, '
+                f'{width}U, {diff}U, {low}U}}')
+
+    def table_of(item):
+        name = f'k{item.name}Delta'
+        if name not in emitted:
+            emitted.add(name)
+            rows = [entry(field.type, field.since, field.optional, field.diff) for field in item.fields]
+            lines.extend([f'inline constexpr DeltaField {name}[] = {{'] + [f'    {row},' for row in rows] + ['};'])
+        return name
+
+    for message in schema.delta_messages():
+        item = message['type']
+        table = table_of(item)
+        lines.extend([f'inline constexpr DeltaLayout k{item.name}Layout{{{table}, {len(item.fields)}U, kMinor,',
+                      f'                                  {item.name}Codec::kMaxBytes, delta_validate<{item.name}>}};',
+                      ''])
+    return lines
+
+
+def message_bounds(message):
+    """A message's frame body bounds: a delta message's body is a header and the smaller of its delta or itself."""
+    item = message['type']
+    if not message['delta']:
+        return f'{item.name}Codec::kMinBytes', f'{item.name}Codec::kMaxBytes'
+    least_delta = (sum(1 for field in item.fields if field.since == 0) + 7) // 8
+    return (f'kDeltaHeaderMinBytes + {min(least_delta, (item.min_bits + 7) // 8)}U',
+            f'kDeltaHeaderMaxBytes + {item.name}Codec::kMaxBytes')
+
+
 def header_text(schema, entry):
     lines = ['#pragma once', '', f'// GENERATED by {GENERATOR} from {entry["schema"]}. Do not edit.', '//']
     lines += ['// ' + line for line in textwrap.wrap(schema.about, 110)]
-    lines += ['',
-              '#include <crd/net/wire_quantized.hpp>' if schema.has_lossy() else '#include <crd/net/wire.hpp>', '',
-              f'namespace crd::net::wire::{schema.name}', '{', '']
+    has_delta = bool(schema.delta_messages())
+    includes = ['#include <crd/net/delta.hpp>'] if has_delta else []
+    includes.append('#include <crd/net/wire_quantized.hpp>' if schema.has_lossy() else '#include <crd/net/wire.hpp>')
+    lines += ['', *includes, '']
+    lines += [f'namespace crd::net::wire::{schema.name}', '{', '']
     lines += [f'inline constexpr u16 kMajor = {schema.major}U;', f'inline constexpr u16 kMinor = {schema.minor}U;', '']
     for enum in schema.enums.values():
         lines += [f'enum class {enum.name} : {enum.cpp_name}', '{']
@@ -1501,12 +1951,16 @@ def header_text(schema, entry):
                   f'{spec["max_message_bytes"]}U', f'{spec["messages_per_s"]}U', f'{spec["bytes_per_s"]}ULL',
                   f'{spec.get("padding_block", 0)}U']
         lines += ['    {' + ', '.join(fields[:6]) + ',', '     ' + ', '.join(fields[6:]) + '},']
-    lines += ['};', '', 'inline constexpr MessageDesc kMessages[] = {']
+    lines += ['};', '']
+    lines += delta_tables(schema)
+    lines += ['inline constexpr MessageDesc kMessages[] = {']
     for message in schema.messages:
         item = message['type']
+        least, most = message_bounds(message)
+        layout = f'&k{item.name}Layout' if message['delta'] else 'nullptr'
         lines.append(f'    {{"{message["name"]}", {message["id"]}U, {message["channel"]}U, {message["since"]}U, '
-                     f'{message["operation"]}ULL, {item.name}Codec::kMinBytes,')
-        lines.append(f'     {item.name}Codec::kMaxBytes}},')
+                     f'{message["operation"]}ULL, {least},')
+        lines.append(f'     {most}, {layout}}},')
     identifier = ', '.join(f'0x{byte:02X}U' for byte in schema.identifier)
     operations = sum(value[0] for value in schema.operations.values())
     idempotent = sum(value[0] for value in schema.operations.values() if value[1])
@@ -1536,7 +1990,56 @@ def seeds_for(schema):
                 writer = RefWriter()
                 item.ref_body_put(writer, item.ref_gen(rng, minor), minor)
                 seeds.append((index, minor, writer.data()))
+    for index, message in enumerate(schema.delta_messages(), start=len(schema.messages)):
+        item = message['type']
+        if item.lossy:
+            data = bytes(rng.randrange(256) for _ in range(40))
+            seeds.append((index, schema.minor, bytes([0, 20]) + data))
+            continue
+        for minor in sorted({message['since'], schema.minor}):
+            for _ in range(3):
+                base = item.ref_gen(rng, minor)
+                value = item.ref_perturb(base, rng, minor)
+                old, delta, whole = RefWriter(), RefWriter(), RefWriter()
+                item.ref_body_put(old, base, minor)
+                item.ref_delta_fields_put(delta, base, value, minor)
+                item.ref_body_put(whole, value, minor)
+                size = len(old.data())
+                seeds.append((index, minor, bytes([size >> 8, size & 255]) + old.data() + delta.data()))
+                seeds.append((index, minor, bytes([size >> 8, size & 255]) + old.data() + whole.data()))
     return seeds
+
+
+def delta_fuzz_lines(schema):
+    if not schema.delta_messages():
+        return []
+    return ['namespace', '{', 'u8 g_rebuilt[crd::fuzz::kMaxInputBytes + crd::net::wire::kDeltaSlackBytes];',
+            'u8 g_delta[crd::fuzz::kMaxInputBytes + crd::net::wire::kDeltaSlackBytes];', '',
+            'template <typename M>',
+            'void exercise_delta(const crd::net::wire::DeltaLayout& layout, ConstSpan<u8> bytes, u16 writer_minor)', '{',
+            '    namespace wire = crd::net::wire;', '    if (bytes.size() < 2U)', '    {', '        return;', '    }',
+            '    const usize size = (static_cast<usize>(bytes[0]) << 8U) | bytes[1];',
+            '    if (size > bytes.size() - 2U)', '    {', '        return;', '    }',
+            '    const ConstSpan<u8> baseline = bytes.subspan(2U, size);',
+            '    const ConstSpan<u8> rest = bytes.subspan(2U + size);', '    M message{};',
+            '    if (wire::decode(baseline, writer_minor, message) != WireError::Ok)', '    {', '        return;', '    }',
+            '    usize rebuilt = 0U;',
+            '    if (wire::delta_apply(layout, baseline, rest, writer_minor, g_rebuilt, rebuilt) == WireError::Ok &&',
+            '        wire::decode(ConstSpan<u8>(g_rebuilt, rebuilt), writer_minor, message) == WireError::Ok &&',
+            '        writer_minor <= layout.schema_minor)', '    {', '        usize written = 0U;',
+            '        const ConstSpan<u8> whole(g_rebuilt, rebuilt);',
+            '        CRD_FUZZ_REQUIRE(wire::delta_encode(layout, baseline, whole, writer_minor, g_delta, written) ==',
+            '                         WireError::Ok);', '        CRD_FUZZ_REQUIRE(written == rest.size());',
+            '        CRD_FUZZ_REQUIRE(written == 0U || std::memcmp(g_delta, rest.data(), written) == 0);', '    }',
+            '    if (writer_minor > layout.schema_minor ||',
+            '        wire::decode(rest, writer_minor, message) != WireError::Ok)', '    {', '        return;', '    }',
+            '    usize written = 0U;',
+            '    CRD_FUZZ_REQUIRE(wire::delta_encode(layout, baseline, rest, writer_minor, g_delta, written) == WireError::Ok);',
+            '    const ConstSpan<u8> delta(g_delta, written);',
+            '    CRD_FUZZ_REQUIRE(wire::delta_apply(layout, baseline, delta, writer_minor, g_rebuilt, rebuilt) == WireError::Ok);',
+            '    CRD_FUZZ_REQUIRE(rebuilt == rest.size());',
+            '    CRD_FUZZ_REQUIRE(rebuilt == 0U || std::memcmp(g_rebuilt, rest.data(), rebuilt) == 0);', '}', '',
+            '} // namespace', '']
 
 
 def fuzz_text(schema, entry):
@@ -1554,6 +2057,11 @@ def fuzz_text(schema, entry):
              '//     exactly the input (one message has one encoding), unless its fields are quantised, when the re-encoded',
              '//     message decodes at the same size;',
              '//   * encoded_bytes() equals what the encoder wrote.',
+             *(['//',
+                '// A delta message also takes [baseline size, 16 bits][baseline][delta]. On a baseline its decoder accepts:',
+                '//   * what a delta rebuilds passes the decoder or is refused, and its delta at that revision is the input',
+                '//     (one delta has one encoding);',
+                '//   * the rest read as a second message: its delta rebuilds it exactly.'] if schema.delta_messages() else []),
              '#include <crd/fuzz/harness.hpp>', '', f'#include <{entry["include"]}>', '', '#include <cstring>', '',
              'namespace', '{', 'using crd::u16;', 'using crd::u8;', 'using crd::usize;',
              'using crd::containers::ConstSpan;', 'using crd::net::wire::WireError;', '',
@@ -1578,21 +2086,26 @@ def fuzz_text(schema, entry):
              '    }', '    M again{};',
              '    CRD_FUZZ_REQUIRE(crd::net::wire::decode(ConstSpan<u8>(g_out, written), minor, again) == WireError::Ok);',
              '    CRD_FUZZ_REQUIRE(C::kLossy || crd::net::wire::same(first, again));', '}', '', '} // namespace', '',
+             *delta_fuzz_lines(schema),
              'extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)', '{',
              '    if (size < 2U || size - 2U > crd::fuzz::kMaxInputBytes)', '    {', '        return 0;', '    }',
              '    const ConstSpan<u8> bytes(data + 2U, size - 2U);',
              f'    const auto writer_minor = static_cast<u16>(data[1] % (schema::kMinor + {MINORS_PAST_SCHEMA + 1}U));',
-             f'    switch (data[0] % {len(schema.messages)}U)', '    {']
+             f'    switch (data[0] % {len(schema.messages) + len(schema.delta_messages())}U)', '    {']
     for index, message in enumerate(schema.messages):
         lines += [f'    case {index}U:', f'        exercise<schema::{message["name"]}>(bytes, writer_minor);', '        break;']
+    for index, message in enumerate(schema.delta_messages(), start=len(schema.messages)):
+        name = message['name']
+        lines += [f'    case {index}U:', f'        exercise_delta<schema::{name}>(schema::k{name}Layout, bytes, writer_minor);',
+                  '        break;']
     lines += ['    default:', '        break;', '    }', '    return 0;', '}', '',
               'void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)', '{']
     for number, (index, minor, data) in enumerate(seeds_for(schema)):
         whole = bytes([index, minor]) + data
-        lines.append(f'    static constexpr u8 seed_{number}[] = {{')
+        lines.append(f'    static constexpr u8 kSeed{number}[] = {{')
         for at in range(0, len(whole), 16):
             lines.append('        ' + ', '.join(f'0x{byte:02X}U' for byte in whole[at:at + 16]) + ',')
-        lines += ['    };', f'    sink.add("wire_{number}", seed_{number}, sizeof(seed_{number}));']
+        lines += ['    };', f'    sink.add("wire_{number}", kSeed{number}, sizeof(kSeed{number}));']
     lines += ['}', '']
     return '\n'.join(lines)
 
@@ -1646,13 +2159,61 @@ def ref_verdict(item, data, writer_minor):
     return True
 
 
+def ref_delta_verdict(item, base, delta, writer_minor):
+    """The whole message a reference reader rebuilds, or None when it refuses."""
+    reader = RefReader(delta)
+    try:
+        value, _ = item.ref_delta_fields_take(reader, base, writer_minor)
+        ref_finish(reader, writer_minor, item.schema.minor)
+        writer = RefWriter()
+        item.ref_body_put(writer, value, writer_minor)
+        data = writer.data()
+    except RefFail:
+        return None
+    return data if ref_verdict(item, data, writer_minor) else None
+
+
+def delta_vectors(schema, rng, values_per_minor=8, mutations_per_value=5):
+    lines = []
+    for message in schema.delta_messages():
+        item = message['type']
+        if item.lossy:
+            continue
+        for minor in range(message['since'], schema.minor + 1):
+            for round_number in range(values_per_minor):
+                base = item.ref_gen(rng, minor)
+                value = base if round_number == 0 else item.ref_perturb(base, rng, minor)
+                old, new, delta = RefWriter(), RefWriter(), RefWriter()
+                item.ref_body_put(old, base, minor)
+                item.ref_body_put(new, value, minor)
+                item.ref_delta_fields_put(delta, base, value, minor)
+                lines += [f'check_delta<{item.name}>({minor}U,'] + hex_literal(old.data())
+                lines[-1] += ','
+                lines += hex_literal(new.data())
+                lines[-1] += ','
+                lines += hex_literal(delta.data())
+                lines[-1] += ');'
+                for _ in range(mutations_per_value):
+                    damaged = mutated(rng, delta.data())
+                    writer_minor = schema.minor + 1 if minor == schema.minor and rng.random() < 0.3 else minor
+                    rebuilt = ref_delta_verdict(item, base, damaged, writer_minor)
+                    lines += [f'check_delta_verdict<{item.name}>({writer_minor}U,'] + hex_literal(old.data())
+                    lines[-1] += ','
+                    lines += hex_literal(damaged)
+                    lines[-1] += ','
+                    lines += [f'    {"true" if rebuilt is not None else "false"},'] + hex_literal(rebuilt or b'')
+                    lines[-1] += ');'
+    return lines
+
+
 def vectors_text(schema, entry, values_per_minor=5, mutations_per_value=4):
     rng = random.Random(f'vectors:{schema.name}')
     emit = VectorEmit()
     lines = [f'// GENERATED by {GENERATOR} from {entry["schema"]}. Do not edit.', '//',
              '// Known answers from the generator\'s reference interpreter, which shares nothing with the generated C++:',
              '// check_value builds a message field by field and holds the encoder and decoder to the reference\'s bytes,',
-             '// and check_verdict holds the decoder to the reference\'s verdict on damaged bytes.', '']
+             '// and check_verdict holds the decoder to the reference\'s verdict on damaged bytes; check_delta and',
+             '// check_delta_verdict do the same for baseline deltas.', '']
     for message in schema.messages:
         item = message['type']
         if item.lossy:
@@ -1683,6 +2244,7 @@ def vectors_text(schema, entry, values_per_minor=5, mutations_per_value=4):
                     lines += [f'check_verdict<{item.name}>({writer_minor}U, {"true" if accepted else "false"},']
                     lines += hex_literal(damaged)
                     lines[-1] += ');'
+    lines += delta_vectors(schema, rng)
     return '\n'.join(lines) + '\n'
 
 

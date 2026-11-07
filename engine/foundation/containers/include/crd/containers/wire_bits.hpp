@@ -105,6 +105,27 @@ public:
         m_at += count;
     }
 
+    // The room left past what has been written, at a boundary (after align()), for a nested writer to fill. Empty once
+    // a write has not fitted. claim() then says how many of its bytes now count as written here.
+    [[nodiscard]] Span<u8> remaining() noexcept
+    {
+        CRD_ASSERT((bit_position() & 7U) == 0U);
+        flush_bytes();
+        return m_overflowed ? Span<u8>{} : m_out.subspan(m_at);
+    }
+
+    void claim(usize count) noexcept
+    {
+        CRD_ASSERT(m_used == 0U);
+        if (m_overflowed || m_out.size() - m_at < count)
+        {
+            m_overflowed = true;
+            m_past += count;
+            return;
+        }
+        m_at += count;
+    }
+
     // The bits written so far, whether or not they fitted.
     [[nodiscard]] u64 bit_position() const noexcept
     {
