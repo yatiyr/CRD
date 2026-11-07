@@ -37,92 +37,108 @@ template <typename T> [[nodiscard]] inline T lu_one() noexcept
     }
 }
 
-// Iterative DFS on the PARTIAL L's graph (CSparse cs_dfs, adapted to a separate
-// `marked` byte array instead of the Lp-sign-flip trick — clearer + leaves the
-// growing Lp untouched). `pinv[j]` = the pivot step (= L column) at which original
-// row j was eliminated, or <0 if not yet (then j is a source: no outgoing L edges).
-// Pushes every visited node onto xi[--top] in topological (post) order; the unit
-// diagonal (first entry of each L column, the self-node) is skipped via Lp[col]+1.
-// xi[0..head] is the recursion stack, xi[top..n) the output — disjoint (head < top
-// always, since path + finished ≤ n). `pstack` (size n) holds the per-level cursor.
+// Reachability of one start row through the graph of the partial L (Gilbert and Peierls,
+// "Sparse partial pivoting in time proportional to arithmetic operations", 1988): the rows
+// that column k's triangular solve can touch are exactly those reachable from A(:,k)'s
+// rows, and a reverse finishing order of the walk is a valid elimination order.
+// `pinv[r]` is the L column created when original row r was chosen as a pivot, or <0 while
+// r is still unpivoted (such a row has no outgoing edges). The walk is iterative: xi[0..level]
+// holds the current path, `cursor[d]` the next L entry to examine for the path node at depth d.
+// Finished rows fill xi[--top] downwards, so the output block xi[top..n) never meets the
+// path (path length + finished rows <= n). Each L column's first entry is its own unit
+// diagonal and is never followed. `marked` is a separate byte array, so the growing `lp`
+// is left alone. Returns the new `top`.
 [[nodiscard]] crd::u32 lu_dfs(crd::u32 jstart, const crd::u32* lp, const crd::u32* li, const crd::i32* pinv,
-                              crd::u32 top, crd::u32* xi, crd::u32* pstack, crd::u8* marked) noexcept
+                              crd::u32 top, crd::u32* xi, crd::u32* cursor, crd::u8* marked) noexcept
 {
-    crd::i32 head = 0;
-    xi[0] = jstart;
-    while (head >= 0)
+    const auto first_edge = [&](crd::u32 row) noexcept -> crd::u32
     {
-        const crd::u32 j = xi[static_cast<crd::u32>(head)];
-        const crd::i32 jnew = pinv[j]; // L column for node j (<0 ⇒ unpivoted source)
-        if (marked[j] == 0)
+        const crd::i32 col = pinv[row];
+        return col < 0 ? 0U : lp[static_cast<crd::u32>(col)] + 1U;
+    };
+    crd::u32 level = 0;
+    xi[0] = jstart;
+    marked[jstart] = 1;
+    cursor[0] = first_edge(jstart);
+    for (;;)
+    {
+        const crd::u32 row = xi[level];
+        const crd::i32 col = pinv[row];
+        const crd::u32 edge_end = col < 0 ? 0U : lp[static_cast<crd::u32>(col) + 1];
+        crd::u32 e = cursor[level];
+        while (e < edge_end && marked[li[e]] != 0)
         {
-            marked[j] = 1;
-            pstack[head] = (jnew < 0) ? 0U : (lp[static_cast<crd::u32>(jnew)] + 1U); // +1 skips the unit diagonal
+            ++e;
         }
-        bool done = true;
-        const crd::u32 pend = (jnew < 0) ? 0U : lp[static_cast<crd::u32>(jnew) + 1];
-        for (crd::u32 p = pstack[head]; p < pend; ++p)
+        if (e < edge_end)
         {
-            const crd::u32 i = li[p]; // neighbour (original row)
-            if (marked[i] != 0)
-            {
-                continue;
-            }
-            pstack[head] = p;     // pause node j here
-            xi[++head] = i;       // descend into i
-            done = false;
-            break;
+            const crd::u32 next = li[e];
+            cursor[level] = e + 1;
+            marked[next] = 1;
+            ++level;
+            xi[level] = next;
+            cursor[level] = first_edge(next);
+            continue;
         }
-        if (done)
+        xi[--top] = row; // every neighbour is done: this row is finished
+        if (level == 0)
         {
-            --head;
-            xi[--top] = j; // node j finished → output (topological order)
+            return top;
         }
+        --level;
     }
-    return top;
 }
 
-// x = L \ A(:,k) over the reachable pattern. Returns `top`; xi[top..n) is the
-// pattern (topological order) and x[xi[top..n)] the values. `marked` is left all-0.
+// Sparse lower-triangular solve for one column of A, after Gilbert and Peierls (1988): finds
+// the rows the column reaches in the graph of the partial L, then eliminates them in the
+// finishing order the walk produced. `col_rows` / `col_vals` / `col_nnz` describe the column
+// being factored. On return order[first..n) lists the touched rows in elimination order and
+// work[] holds their values (everything else in work[] is stale). `marked` is back to all-0.
+// `path_cursor` is the walk's scratch (see lu_dfs). Returns `first`.
 template <typename T>
-[[nodiscard]] crd::u32 lu_spsolve(crd::u32 n, const crd::u32* lp, const crd::u32* li, const T* lx, const crd::u32* ap,
-                                  const crd::u32* ai, const T* ax, crd::u32 k, crd::u32* xi, crd::u32* pstack, T* x,
-                                  const crd::i32* pinv, crd::u8* marked)
+[[nodiscard]] crd::u32 lu_spsolve(crd::u32 n, const crd::u32* lp, const crd::u32* li, const T* lx,
+                                  const crd::u32* col_rows, const T* col_vals, crd::u32 col_nnz, crd::u32* order,
+                                  crd::u32* path_cursor, T* work, const crd::i32* pinv, crd::u8* marked)
 {
-    crd::u32 top = n;
-    for (crd::u32 p = ap[k]; p < ap[k + 1]; ++p)
+    // Pass 1: walk from every nonzero row of the column that no earlier walk has covered.
+    crd::u32 first = n;
+    for (crd::u32 q = 0; q < col_nnz; ++q)
     {
-        const crd::u32 i = ai[p];
-        if (marked[i] == 0)
+        if (marked[col_rows[q]] == 0)
         {
-            top = lu_dfs(i, lp, li, pinv, top, xi, pstack, marked);
+            first = lu_dfs(col_rows[q], lp, li, pinv, first, order, path_cursor, marked);
         }
     }
-    for (crd::u32 p = top; p < n; ++p) // clear marks + zero x over the pattern
+    // Pass 2: one sweep over the reached rows resets their marks and zeroes their slots.
+    for (crd::u32 s = first; s < n; ++s)
     {
-        marked[xi[p]] = 0;
-        x[xi[p]] = T{};
+        const crd::u32 row = order[s];
+        marked[row] = 0;
+        work[row] = T{};
     }
-    for (crd::u32 p = ap[k]; p < ap[k + 1]; ++p) // scatter A(:,k) into x
+    // Pass 3: load the column's own values.
+    for (crd::u32 q = 0; q < col_nnz; ++q)
     {
-        x[ai[p]] = ax[p];
+        work[col_rows[q]] = col_vals[q];
     }
-    for (crd::u32 px = top; px < n; ++px) // forward substitute in topological order
+    // Pass 4: eliminate in order. Only rows that were already chosen as pivots own an L column;
+    // the others hold their final value as they are.
+    for (crd::u32 s = first; s < n; ++s)
     {
-        const crd::u32 j = xi[px];
-        const crd::i32 jnew = pinv[j];
-        if (jnew < 0)
+        const crd::u32 row = order[s];
+        const crd::i32 step = pinv[row];
+        if (step >= 0)
         {
-            continue; // x[j] is final (row j not yet a pivot ⇒ no L column)
-        }
-        const crd::u32 c = static_cast<crd::u32>(jnew);
-        const T xj = x[j];
-        for (crd::u32 p = lp[c] + 1; p < lp[c + 1]; ++p) // skip the unit diagonal
-        {
-            x[li[p]] = x[li[p]] - lx[p] * xj;
+            const crd::u32 lcol = static_cast<crd::u32>(step);
+            const T factor = work[row];
+            const crd::u32 lend = lp[lcol + 1];
+            for (crd::u32 q = lp[lcol] + 1; q < lend; ++q) // entry lp[lcol] is the unit diagonal
+            {
+                work[li[q]] = work[li[q]] - lx[q] * factor;
+            }
         }
     }
-    return top;
+    return first;
 }
 } // namespace
 
@@ -169,101 +185,102 @@ void SparseLU<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::
     }
 
     const dense::RealType<T> piv_tol = static_cast<dense::RealType<T>>(tol);
-    crd::u32 lnz = 0;
-    crd::u32 unz = 0;
-    bool failed = false;
-    crd::u32 fail_k = 0;
-    for (crd::u32 k = 0; k < n; ++k)
+    crd::u32 fill_l = 0; // entries written to L so far
+    crd::u32 fill_u = 0; // entries written to U so far
+    for (crd::u32 col = 0; col < n; ++col)
     {
-        m_lp[k] = lnz;
-        m_up[k] = unz;
-        if (lnz + n > cap || unz + n > cap) // ensure a full column (≤ n entries each) fits in L and U
+        m_lp[col] = fill_l;
+        m_up[col] = fill_u;
+        // One column adds at most n entries to each factor: make room before writing any of them.
+        if (fill_l + n > cap || fill_u + n > cap)
         {
-            const crd::usize need = (lnz > unz ? lnz : unz) + n;
+            const crd::usize need = (fill_l > fill_u ? fill_l : fill_u) + n;
             cap = need * 2;
             m_li.resize_uninitialized(cap);
             m_lx.resize_uninitialized(cap);
             m_ui.resize_uninitialized(cap);
             m_ux.resize_uninitialized(cap);
         }
-        const crd::u32 top = lu_spsolve<T>(n, m_lp.data(), m_li.data(), m_lx.data(), ap, ai, ax, k, xi.data(),
-                                           xi.data() + n, x.data(), pinv.data(), marked.data());
-        // Pivot search: max |x[i]| over unpivoted rows; pivoted rows are U entries.
-        crd::i32 ipiv = -1;
-        dense::RealType<T> a_max = dense::RealType<T>(-1);
-        for (crd::u32 px = top; px < n; ++px)
+        const crd::u32 first = lu_spsolve<T>(n, m_lp.data(), m_li.data(), m_lx.data(), ai + ap[col], ax + ap[col],
+                                             ap[col + 1] - ap[col], xi.data(), xi.data() + n, x.data(), pinv.data(),
+                                             marked.data());
+
+        // Walk the reached rows in elimination order. A row that already is a pivot contributes
+        // its value to U; among the rest, the one of largest magnitude is the pivot candidate.
+        crd::i32 pivot_row = -1;
+        dense::RealType<T> best_mag = dense::RealType<T>(-1);
+        for (crd::u32 s = first; s < n; ++s)
         {
-            const crd::u32 i = xi[px];
-            if (pinv[i] < 0)
+            const crd::u32 row = xi[s];
+            const crd::i32 earlier = pinv[row];
+            if (earlier >= 0)
             {
-                const dense::RealType<T> t = lu_mag<T>(x[i]);
-                if (t > a_max)
-                {
-                    a_max = t;
-                    ipiv = static_cast<crd::i32>(i);
-                }
+                m_ui[fill_u] = static_cast<crd::u32>(earlier);
+                m_ux[fill_u] = x[row];
+                ++fill_u;
+                continue;
             }
-            else // x[i] is an upper-triangular entry U(pinv[i], k)
+            const dense::RealType<T> mag = lu_mag<T>(x[row]);
+            if (mag > best_mag)
             {
-                m_ui[unz] = static_cast<crd::u32>(pinv[i]);
-                m_ux[unz] = x[i];
-                ++unz;
-            }
-        }
-        if (ipiv < 0 || !(a_max > dense::RealType<T>(0)))
-        {
-            failed = true;
-            fail_k = k;
-            break;
-        }
-        // Threshold partial pivot: prefer the natural diagonal (row k) when its
-        // magnitude ≥ tol·max (tol = 1 ⇒ pure partial pivot). Reduces fill (SuperLU knob).
-        if (pinv[k] < 0)
-        {
-            const dense::RealType<T> dmag = lu_mag<T>(x[k]);
-            if (dmag > dense::RealType<T>(0) && dmag >= piv_tol * a_max)
-            {
-                ipiv = static_cast<crd::i32>(k);
+                best_mag = mag;
+                pivot_row = static_cast<crd::i32>(row);
             }
         }
-        const T pivot = x[static_cast<crd::u32>(ipiv)];
-        m_ui[unz] = k; // U(k,k) = pivot (last entry of U's column k)
-        m_ux[unz] = pivot;
-        ++unz;
-        pinv[static_cast<crd::u32>(ipiv)] = static_cast<crd::i32>(k); // row ipiv → pivot step k
-        m_li[lnz] = static_cast<crd::u32>(ipiv); // L(k,k) = 1 (unit diagonal, first entry of L's column k)
-        m_lx[lnz] = lu_one<T>();
-        ++lnz;
-        for (crd::u32 px = top; px < n; ++px)
+        if (pivot_row < 0 || !(best_mag > dense::RealType<T>(0)))
         {
-            const crd::u32 i = xi[px];
-            if (pinv[i] < 0) // still unpivoted ⇒ L(i,k) = x[i] / pivot
+            // No usable pivot: the matrix is singular at this column. Report it and stop.
+            m_lp[n] = fill_l;
+            m_up[n] = fill_u;
+            m_info = static_cast<crd::usize>(col) + 1;
+            return;
+        }
+        // Threshold pivoting: keep the diagonal row when it is unpivoted, nonzero and at least
+        // tol times as large as the best candidate (tol = 1 degenerates to plain partial pivoting).
+        // Choosing the diagonal where possible limits fill, as in SuperLU's threshold option.
+        if (pinv[col] < 0)
+        {
+            const dense::RealType<T> diag_mag = lu_mag<T>(x[col]);
+            if (diag_mag > dense::RealType<T>(0) && diag_mag >= piv_tol * best_mag)
             {
-                m_li[lnz] = i;
-                m_lx[lnz] = x[i] / pivot;
-                ++lnz;
+                pivot_row = static_cast<crd::i32>(col);
+            }
+        }
+        const T pivot_value = x[static_cast<crd::u32>(pivot_row)];
+        pinv[static_cast<crd::u32>(pivot_row)] = static_cast<crd::i32>(col);
+        // U's column ends with its diagonal; L's column starts with its unit diagonal.
+        m_ui[fill_u] = col;
+        m_ux[fill_u] = pivot_value;
+        ++fill_u;
+        m_li[fill_l] = static_cast<crd::u32>(pivot_row);
+        m_lx[fill_l] = lu_one<T>();
+        ++fill_l;
+        // The remaining unpivoted rows become the sub-diagonal part of L, scaled by the pivot.
+        for (crd::u32 s = first; s < n; ++s)
+        {
+            const crd::u32 row = xi[s];
+            if (pinv[row] < 0)
+            {
+                m_li[fill_l] = row;
+                m_lx[fill_l] = x[row] / pivot_value;
+                ++fill_l;
             }
         }
     }
-    m_lp[n] = lnz;
-    m_up[n] = unz;
-    if (failed)
+    m_lp[n] = fill_l;
+    m_up[n] = fill_u;
+    // L was filled with original row numbers; translate them to pivot order so P*A = L*U holds.
+    for (crd::u32 q = 0; q < fill_l; ++q)
     {
-        m_info = static_cast<crd::usize>(fail_k) + 1;
-        return;
-    }
-    // Remap L's row indices (original rows) → permuted rows (P·A = L·U).
-    for (crd::u32 p = 0; p < lnz; ++p)
-    {
-        m_li[p] = static_cast<crd::u32>(pinv[m_li[p]]);
+        m_li[q] = static_cast<crd::u32>(pinv[m_li[q]]);
     }
     m_pinv.resize(n);
     for (crd::u32 i = 0; i < n; ++i)
     {
         m_pinv[i] = static_cast<crd::u32>(pinv[i]);
     }
-    m_lnz = lnz;
-    m_unz = unz;
+    m_lnz = fill_l;
+    m_unz = fill_u;
     m_info = 0;
 }
 

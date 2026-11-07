@@ -11,7 +11,7 @@
 namespace crd::hesap::direct
 {
 // =======================================================================
-// v5b-1 — Gilbert-Peierls left-looking sparse LU (Davis 2006, `cs_lu`).
+// v5b-1 — Gilbert-Peierls left-looking sparse LU (Gilbert and Peierls 1988).
 //
 // THE SERIAL CORRECTNESS ORACLE / dynamic-pivot reference. This is NOT the
 // crush slice and NOT determinism-moat-bound across worker counts: dynamic
@@ -24,10 +24,10 @@ namespace crd::hesap::direct
 // fixed matrix (a pure function of the input); NOT claimed bit-identical
 // across worker counts because there are none.
 //
-// ALGORITHM (faithful CSparse `cs_lu`): factor P·A = L·U, A square in CSC.
+// ALGORITHM (Gilbert and Peierls 1988): factor P·A = L·U, A square in CSC.
 // Per column k: x = L \ A(:,k) via a sparse lower-triangular solve whose
-// nonzero pattern is found by DFS-reachability on L's graph (`cs_reach` /
-// `cs_dfs`) and walked in topological order (`cs_spsolve`); then DYNAMIC
+// nonzero pattern is found by DFS-reachability on L's graph and walked in
+// topological order; then DYNAMIC
 // PARTIAL PIVOT — the unpivoted row of max |x| becomes the k-th pivot (with
 // a threshold `tol` ∈ (0,1]: a diagonal/incumbent is preferred when its
 // magnitude ≥ tol·max, the SuperLU threshold-partial-pivot knob; tol = 1 =
@@ -38,8 +38,8 @@ namespace crd::hesap::direct
 // The caller pre-permutes columns for fill (COLAMD/AMD-on-AᵀA), exactly as
 // the Cholesky took an AMD-permuted matrix. v5b-2 wires the column reorder.
 //
-// DIVERGENCES from textbook (pinned): D(lu)-1 storage is CSC L/U mirroring
-// CSparse (vs the Cholesky's amalgamated supernodal panels — supernodal LU
+// DIVERGENCES from textbook (pinned): D(lu)-1 storage is CSC L/U
+// (vs the Cholesky's amalgamated supernodal panels — supernodal LU
 // is v5b-2). D(lu)-2 singular/zero-pivot → info = k+1, graceful (no assert),
 // matching the Cholesky non-SPD contract.
 // =======================================================================
