@@ -7,12 +7,9 @@ Row: [4.2a](../ROADMAP.md#slice-4.2a). Design: [S47](../design/network-foundatio
 sections 5.2.1, 6.2, 7.2, 8.1.3 and 10.3, RFC 9368 sections 2.1 and 4, RFC 9369 section 5 (RFC Editor text). The
 relayed words about the GPL rewrite belong to the other agent (operator note, 2026-11-07); this batch did not touch it.
 
-CI first: no completed run contains dd6139f1 yet (42500966720 pending, 42473131224 in progress). Two guards this
-track broke, found locally before CI: crd-check-allocation-results (S45's added lines pushed `recovery`'s check out of
-the guard's window; the allocation moved next to it) and crd-check-registers (NET.3's flip left cerid.session-control,
-cerid.agent and cerid.service planned: session control is now implemented with its evidence, the agent protocol is
-AGENT.3's and the service protocol NET-SERVER's; the crypto inventory regenerated and both exports' restatements
-recorded).
+CI first: no completed run contains dd6139f1 yet. Two guards this track broke, found locally: crd-check-allocation-results
+(S45 pushed `recovery`'s check out of its window) and crd-check-registers (NET.3's flip left cerid.session-control,
+cerid.agent and cerid.service planned: session control is implemented, agent is AGENT.3's, service NET-SERVER's).
 
 ## What landed (capability `network.transport`)
 
@@ -30,9 +27,9 @@ recorded).
 - MSVC win-debug: crd-net-tests 328 cases and the crd-no-/crd-check guards. linux-gcc-asan: 329 cases (28.0 million
   assertions) and the ingress corpus; linux-clang-tsan: the host, loop and ingress cases (44) three times;
   linux-gcc-release (LTO, -Wnull-dereference) 329 cases, after the test's dereferences went through a checked helper.
-- 17 source mutations: 16 caught (two as hangs); the 17th, the peer compare in `on_unrouted`, showed it redundant
-  with the peer index and it was removed. A reset after a Version Negotiation restart and a client-ingress unit case
-  were added for two of them.
+- 18 source mutations: 17 caught (two as hangs); the peer compare in `on_unrouted` survived, so the peer key now
+  holds the IPv6 zone and equals `Endpoint`'s equality, and the compare went. Tiny resets (9 and 20 bytes), a reset
+  after a Version Negotiation restart and a client-ingress unit case were added for the others.
 - `crd-fuzz-net-ingress` with the client leg: 3 new seeds, the corpus replays. 8.1 million libFuzzer executions gave
   four crashes (TLSF metadata and a stack span corrupted, a wild jump) and a run with the client leg removed three
   more; none replays. That is this host's known misexecution
@@ -43,4 +40,5 @@ recorded).
 ## Next
 
 - Audit the hosted host-check dispatch and the first CI run containing this batch.
-- 4.2a: interop with a pinned peer implementation, the TCP and TLS path and the browser endpoints.
+- 4.2a: a reset index by token (every connection of a peer address), a bounded ticket store, interop with a pinned
+  peer implementation, the TCP and TLS path and the browser endpoints.

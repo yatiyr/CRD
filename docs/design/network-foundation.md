@@ -862,7 +862,10 @@ configuration refusal and allocation refusal; and a client served over the host'
   admits and answers nothing (`answer()` and `refuse()` write nothing). So the client runs the same `IoLoop`, batches
   and executor seam as the server.
 - **A short stateless reset.** A reset can be 21 bytes, shorter than any packet the receiver would open; the loop now
-  offers a short header dropped as too short to protect to `on_unrouted` as well (both hosts), never answering it.
+  offers a short header dropped as too short to protect to `on_unrouted` as well (both hosts), never answering it,
+  and a datagram under 21 bytes is never a reset. The peer index keys an address with its IPv6 zone and port, so it
+  matches exactly the endpoints `Endpoint` holds equal; it names the first connection of a peer address only, so a
+  reset index by token, covering every connection of a peer, is 4.2a's next item.
 - **Connecting.** `QuicClient::connect()` takes a slot, issues a sequence 0 ID of the ingress's length (8 to 20
   bytes, so many connections to one or many servers share one socket), draws a 16-byte first Destination Connection
   ID from the provider (section 7.2) and starts the connection, optionally under another TLS context (a server name
