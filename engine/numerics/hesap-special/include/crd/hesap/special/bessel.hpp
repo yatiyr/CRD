@@ -388,25 +388,25 @@ struct BesTemmeHead
     double d = 1.0 / b_prev;         // D_1
     double dh = d;                   // Δh_1
     double h = dh;
-    double q_old = 0.0;           // Q_{k−2}
-    double q_cur = 1.0;           // Q_{k−1}
-    double weight = a1;           // c_1
-    double weighted = a1 * q_cur; // Σ_{j≤k} c_j Q_j
-    double s = 1.0 + weighted * dh;
+    double q_old = 0.0;         // Q_{k−2}
+    double q_cur = 1.0;         // Q_{k−1}
+    double c_k = a1;            // c_1
+    double cq_sum = a1 * q_cur; // Σ_{j≤k} c_j Q_j
+    double s = 1.0 + cq_sum * dh;
     for (int k = 2; k <= kBesIterCap; ++k)
     {
         const double kd = k;
         const double a = (kd - 0.5) * (kd - 0.5) - mu2;
         const double b = 2.0 * (x + kd);
-        weight *= a / kd;
+        c_k *= a / kd;
         const double q_new = (b_prev * q_cur - q_old) / a;
         q_old = q_cur;
         q_cur = q_new;
-        weighted += weight * q_new;
+        cq_sum += c_k * q_new;
         d = 1.0 / (b - a * d);
         dh *= b * d - 1.0;
         h += dh;
-        const double ds = weighted * dh;
+        const double ds = cq_sum * dh;
         s += ds;
         b_prev = b;
         if (crd::math::fabs(ds) < crd::math::fabs(s) * kBesRelTol)
