@@ -1,0 +1,355 @@
+#pragma once
+
+// crd-net -- a QUIC connection: the TLS handshake carried to confirmation, recovery, the connection's frames and its
+// close (4.2a; contract: docs/design/network-foundation.md#quic-connection). Sources: RFC 9000 sections 4.6, 5.1,
+// 7, 8, 10, 12, 13, 14, 17.2, 19 and 21.4, RFC 9001 sections 4 and 6, RFC 9002 section 6 and appendix A, RFC 9221
+// section 3, RFC 9287 and RFC 9368 sections 2 to 4.
+//
+//   sans-I/O   receive() takes one datagram from the peer with its arrival time, send() writes the next datagram into
+//              the caller's room (called until it returns 0 after every receive() and on_timeout()), and
+//              next_timer_ns() names when on_timeout() is due. Nothing reads a clock or a socket.
+//   handshake  each level's CRYPTO data goes through S38's buffers into crypto::QuicHandshake and back; every key it
+//              has ready is installed after each provide(); the peer's transport parameters are read and checked as
+//              they arrive (section 7.3's connection IDs, RFC 9368's version_information); the server confirms on
+//              completion and sends HANDSHAKE_DONE until acknowledged, the client confirms on reading it; Initial and
+//              Handshake keys and their recovery spaces are discarded at RFC 9001 section 4.9's moments.
+//   sending    one datagram coalesces an Initial, a Handshake and a 1-RTT packet, each with its owed ACK; a datagram
+//              carrying a client's Initial, a server's ack-eliciting Initial or a PATH_RESPONSE reaches 1200 bytes; a
+//              server sends at most three times what it received before the client's address is proven (section
+//              8.1); the QUIC bit is greased toward a peer that sent grease_quic_bit and 1-RTT packet numbers are
+//              skipped from entropy (section 21.4), so an acknowledgement of one closes with PROTOCOL_VIOLATION.
+//   frames     every frame type is dispatched: this slice carries no streams and no DATAGRAM frames, so it
+//              advertises no stream credit and no max_datagram_frame_size, and a peer's stream frame or DATAGRAM is
+//              the error RFC 9000 and RFC 9221 name for it. The peer's connection IDs are held up to this side's
+//              active_connection_id_limit with retirement; a PATH_CHALLENGE is answered.
+//   close      an error closes with CONNECTION_CLOSE at the levels the peer may read (section 10.2.3), CRYPTO_ERROR
+//              at an alert's level; closing resends it at a falling rate for three PTOs, a peer's close drains for
+//              three PTOs, and the idle timeout (section 10.1) closes silently.
+//   memory     every buffer comes from the injected allocator at construction; receiving and sending allocate
+//              nothing.
+//   threads    a connection belongs to its loop's thread.
+
+#include <crd/containers/span.hpp>
+#include <crd/core/types.hpp>
+#include <crd/crypto/provider.hpp>
+#include <crd/crypto/tls.hpp>
+#include <crd/net/quic_packet.hpp>
+#include <crd/net/quic_recovery.hpp>
+#include <crd/net/quic_stream.hpp>
+#include <crd/net/quic_transport_parameters.hpp>
+
+namespace crd::memory
+{
+class IAllocator;
+} // namespace crd::memory
+
+namespace crd::net
+{
+inline constexpr usize kQuicMaxPeerConnectionIds = 8U; // the peer's IDs a connection holds at most
+inline constexpr usize kQuicMaxReasonBytes = 64U;      // of a CONNECTION_CLOSE reason phrase kept or sent
+
+struct QuicConnectionConfig
+{
+    crypto::QuicSide side = crypto::QuicSide::Client;
+    crypto::QuicVersion version = crypto::QuicVersion::V1; // the version this connection runs
+    const crypto::TlsContext* tls = nullptr;               // of `side`'s role, with an application protocol
+    crypto::TlsTicketStore* tickets = nullptr;
+    // This side's parameters. The connection fills the connection IDs, version_information and grease_quic_bit;
+    // stream credit and max_datagram_frame_size stay 0 in this slice, and active_connection_id_limit is at most
+    // kQuicMaxPeerConnectionIds.
+    QuicTransportParameters parameters;
+    // The versions this side accepts in its preference (version_information's list, containing `version`); empty
+    // for `version` alone.
+    cont::ConstSpan<u32> versions;
+    // A client whose connection follows a Version Negotiation packet (RFC 9368 section 4).
+    bool after_version_negotiation = false;
+    // A client's NEW_TOKEN token from an earlier connection to this server (at most crypto::kQuicMaxTokenBytes),
+    // carried in its Initial packets to prove its address (section 8.1.3).
+    cont::ConstSpan<u8> token;
+    bool grease_quic_bit = true; // send grease_quic_bit and accept a cleared QUIC bit (RFC 9287)
+    u32 sent_packets = 128U;     // per packet number space: what the connection holds in flight
+    u32 sent_frames = 512U;      // the frames of those packets that are settled on acknowledgement or loss
+    u32 crypto_bytes = 16384U;   // per level, each direction: a multiple of kQuicStreamChunk, at least 4096
+    u32 max_datagram_bytes = kQuicMinInitialDatagram; // what this side sends at most (NET-PATH raises it)
+    u64 initial_rtt_ns = kQuicInitialRttNs;
+    u64 key_update_interval = 0U; // 1-RTT packets one key seals before it is updated (0: the AEAD's limit)
+    // kPrfKeyBytes seeding the connection's entropy (grease, skipped numbers) for a deterministic run (tests,
+    // NET-SIM); empty draws a fresh key from the provider.
+    cont::ConstSpan<u8> entropy_seed;
+};
+
+// A server's view of the client Initial that opens the connection (from the Ingress's decision).
+struct QuicAccept
+{
+    cont::ConstSpan<u8> local_cid;     // the ID this server issues (sequence 0): the Ingress table's key
+    cont::ConstSpan<u8> client_dcid;   // the Initial's Destination Connection ID: its keys
+    cont::ConstSpan<u8> client_scid;   // the Initial's Source Connection ID
+    cont::ConstSpan<u8> original_dcid; // the client's first Destination Connection ID (a Retry token's claim)
+    bool retried = false;              // client_dcid is this server's Retry's Source Connection ID
+    bool validated = false;            // a token proved the client's address
+};
+
+enum class QuicConnectionState : u8
+{
+    Idle,        // before connect() or accept()
+    Handshaking, // the TLS handshake runs
+    Established, // the handshake completed (confirmed() tells whether it is confirmed)
+    Closing,     // this side closed: CONNECTION_CLOSE is resent for three PTOs
+    Draining,    // the peer closed: nothing is sent for three PTOs
+    Closed,      // done: the connection may be destroyed
+};
+
+// Why a connection closed.
+struct QuicCloseInfo
+{
+    bool application = false; // an application error code (CONNECTION_CLOSE 0x1d)
+    bool local = false;       // this side closed
+    bool idle = false;        // the idle timeout ended it, without a frame
+    // A client's Version Negotiation packet listed none of the versions it runs: `retry_version` is the first of its
+    // preference the packet offered (0 for none), for a new connection with after_version_negotiation set.
+    bool version_negotiation = false;
+    u32 retry_version = 0U;
+    u64 error_code = 0U; // a QuicTransportError's value, or the application's
+    u64 frame_type = 0U;
+};
+
+struct QuicConnectionCounters
+{
+    u64 datagrams_received = 0U;
+    u64 bytes_received = 0U; // every byte of every datagram, opened or not
+    u64 datagrams_sent = 0U;
+    u64 bytes_sent = 0U;
+    u64 packets_dropped = 0U; // packets that did not open, duplicates and packets of another connection
+};
+
+class QuicConnection
+{
+public:
+    QuicConnection(memory::IAllocator& allocator, const QuicConnectionConfig& config) noexcept;
+    ~QuicConnection() noexcept;
+    QuicConnection(const QuicConnection&) = delete;
+    QuicConnection& operator=(const QuicConnection&) = delete;
+    QuicConnection(QuicConnection&&) = delete;
+    QuicConnection& operator=(QuicConnection&&) = delete;
+
+    // False when the configuration is out of range (no TLS context, stream credit or a datagram size in the
+    // parameters, a version list without `version`, sizes out of bounds, a seed of another length) or the allocator
+    // or the provider refused.
+    [[nodiscard]] bool ready() const noexcept { return m_storage != nullptr; }
+
+    // A client's start: it issues `local_cid` (0 to 20 bytes) and sends its first Initial to `initial_dcid` (8 to 20
+    // bytes, from entropy, RFC 9000 section 7.2). A server's: the client Initial `accept` describes, which the
+    // caller then passes to receive(). False, changing nothing, when not Idle, for the other side, for connection
+    // IDs out of range or when the handshake refuses its configuration.
+    [[nodiscard]] bool connect(cont::ConstSpan<u8> local_cid, cont::ConstSpan<u8> initial_dcid, u64 now_ns) noexcept;
+    [[nodiscard]] bool accept(const QuicAccept& accept, u64 now_ns) noexcept;
+
+    // One datagram from the peer, arrived at `now_ns` with `ecn`; its bytes are decrypted in place.
+    void receive(cont::Span<u8> datagram, QuicEcn ecn, u64 now_ns) noexcept;
+    // Writes the next datagram into `out` (at least kQuicMinInitialDatagram bytes) and returns its size; 0 when
+    // nothing is to be sent now.
+    [[nodiscard]] usize send(cont::Span<u8> out, u64 now_ns) noexcept;
+    // When on_timeout() is next due: kNeverNs for no timer.
+    [[nodiscard]] u64 next_timer_ns() const noexcept;
+    void on_timeout(u64 now_ns) noexcept;
+
+    // Closes with an application error (sent as APPLICATION_ERROR without a reason in Initial and Handshake
+    // packets, section 10.2.3) and up to kQuicMaxReasonBytes of `reason`. Nothing happens once closing.
+    void close(u64 application_error, cont::ConstSpan<u8> reason, u64 now_ns) noexcept;
+    // Owes one ack-eliciting 1-RTT packet: a keep-alive before the idle timeout (section 10.1.2).
+    void ping() noexcept { m_ping_owed = true; }
+
+    [[nodiscard]] QuicConnectionState state() const noexcept { return m_state; }
+    [[nodiscard]] bool confirmed() const noexcept { return m_confirmed; }
+    [[nodiscard]] bool address_validated() const noexcept { return m_validated; }
+    [[nodiscard]] const QuicCloseInfo& close_info() const noexcept { return m_close; }
+    // The reason phrase sent or received (truncated to kQuicMaxReasonBytes).
+    [[nodiscard]] cont::ConstSpan<u8> close_reason() const noexcept
+    {
+        return cont::ConstSpan<u8>(m_reason, m_reason_bytes);
+    }
+    [[nodiscard]] const QuicConnectionCounters& counters() const noexcept { return m_counters; }
+    [[nodiscard]] const crypto::QuicHandshake& handshake() const noexcept { return m_handshake; }
+    [[nodiscard]] const QuicPacketProtection& protection() const noexcept { return m_protection; }
+    [[nodiscard]] const QuicRecovery& recovery() const noexcept { return *m_recovery; }
+    // The peer's parameters, valid once peer_parameters_known().
+    [[nodiscard]] bool peer_parameters_known() const noexcept { return m_peer_known; }
+    [[nodiscard]] const QuicTransportParameters& peer_parameters() const noexcept { return m_peer; }
+    // The Destination Connection ID this side sends to, and the peer's IDs held (sequence 0 first among them).
+    [[nodiscard]] cont::ConstSpan<u8> peer_cid() const noexcept;
+    [[nodiscard]] usize peer_cid_count() const noexcept { return m_peer_cid_count; }
+    // A client: the latest NEW_TOKEN token its server sent (empty for none), for its next connection there.
+    [[nodiscard]] cont::ConstSpan<u8> new_token() const noexcept
+    {
+        return cont::ConstSpan<u8>(m_new_token, m_new_token_bytes);
+    }
+    // The packet number a space sends next, and whether `number` was skipped there (tests and NET-DEBUG).
+    [[nodiscard]] u64 next_packet_number(QuicSpace space) const noexcept;
+    [[nodiscard]] bool skipped(QuicSpace space, u64 number) const noexcept;
+
+private:
+    enum class Settle : u8
+    {
+        Acked,
+        Lost,
+        Discarded,
+    };
+
+    // Recovery's per-packet events, settling the frames each packet carried.
+    class Events final : public QuicRecoveryEvents
+    {
+    public:
+        explicit Events(QuicConnection& connection) noexcept : m_connection(connection) {}
+        void on_acked(QuicSpace space, const QuicSentPacket& packet) noexcept override;
+        void on_lost(QuicSpace space, const QuicSentPacket& packet) noexcept override;
+        void on_discarded(QuicSpace space, const QuicSentPacket& packet) noexcept override;
+
+    private:
+        QuicConnection& m_connection;
+    };
+
+    struct Level
+    {
+        QuicReceiveBuffer in;
+        QuicSendBuffer out;
+    };
+
+    // A frame a sent packet carried that is settled when the packet is acknowledged, lost or discarded. A packet's
+    // records are consecutive in the ring, the first named by its QuicSentPacket::token.
+    struct SentFrame
+    {
+        u64 packet = 0U;
+        u64 offset = 0U; // CRYPTO: the data's offset; RETIRE_CONNECTION_ID: the sequence
+        u32 length = 0U;
+        u8 space = 0U;
+        u8 kind = 0U; // 0 for a settled record
+    };
+
+    // What write_frames put into a packet.
+    struct Written
+    {
+        u64 carried_ack = kQuicNoPacket;
+        u32 token = ~u32{0};
+        bool eliciting = false;
+        bool path_response = false;
+    };
+
+    struct PeerCid
+    {
+        u64 sequence = 0U;
+        QuicConnectionId id;
+        u8 reset_token[kQuicResetTokenBytes] = {};
+        bool has_token = false;
+    };
+
+    [[nodiscard]] bool start(u64 now_ns) noexcept;
+    [[nodiscard]] u64 entropy() noexcept;
+
+    // Receiving.
+    void receive_packet(const QuicHeader& header, cont::Span<u8> packet, usize datagram_bytes, QuicEcn ecn,
+                        u64 now_ns) noexcept;
+    [[nodiscard]] bool on_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
+    [[nodiscard]] bool crypto_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
+    [[nodiscard]] bool advance_handshake(u64 now_ns) noexcept;
+    [[nodiscard]] bool read_peer_parameters(u64 now_ns) noexcept;
+    [[nodiscard]] bool new_connection_id(const QuicFrame& frame, u64 now_ns) noexcept;
+    [[nodiscard]] bool owe_retire(u64 sequence, u64 now_ns) noexcept;
+    [[nodiscard]] QuicTransportError stream_frame_error(QuicFrameKind kind, u64 stream_id) const noexcept;
+    void version_negotiation(const QuicHeader& header, cont::ConstSpan<u8> packet) noexcept;
+    void discard_space(QuicSpace space, u64 now_ns) noexcept;
+    void confirm(u64 now_ns) noexcept;
+
+    // Sending.
+    [[nodiscard]] bool has_content(QuicSpace space, u64 now_ns) const noexcept;
+    [[nodiscard]] usize write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool closing,
+                                     u64 now_ns) noexcept;
+    [[nodiscard]] usize write_frames(QuicSpace space, cont::Span<u8> frames, u64 packet, u64 now_ns,
+                                     Written& written) noexcept;
+    [[nodiscard]] usize write_close(QuicSpace space, cont::Span<u8> frames) const noexcept;
+    [[nodiscard]] usize send_closing(cont::Span<u8> out, u64 now_ns) noexcept;
+    [[nodiscard]] bool record(QuicSpace space, u64 packet, u8 kind, u64 offset, u32 length) noexcept;
+    void settle(QuicSpace space, const QuicSentPacket& packet, Settle how) noexcept;
+    void pull_crypto() noexcept;
+    [[nodiscard]] usize amplification_credit() const noexcept;
+    // Whether send() can write `space`'s owed ACK: a timer nothing serves is never reported due.
+    [[nodiscard]] bool can_acknowledge(QuicSpace space) const noexcept;
+
+    // Closing and timers.
+    void fail(QuicTransportError error, u64 frame_type, u64 now_ns) noexcept;
+    void fail_code(u64 error, u64 frame_type, crypto::QuicLevel level, u64 now_ns) noexcept;
+    void enter(QuicConnectionState state, u64 now_ns) noexcept;
+    void restart_idle(u64 now_ns) noexcept;
+    [[nodiscard]] u64 three_ptos() const noexcept;
+
+    memory::IAllocator& m_allocator;
+    QuicConnectionConfig m_config; // its spans are copied below and cleared
+    QuicSentEntry* m_storage = nullptr;
+    SentFrame* m_frames = nullptr;
+    u8* m_crypto_bytes = nullptr;
+    u64* m_crypto_bits = nullptr;
+    QuicRecovery* m_recovery = nullptr;
+    Events m_events;
+    u32 m_frame_head = 0U;
+    u32 m_frame_count = 0U;
+    Level m_levels[kQuicSpaces];
+    crypto::QuicHandshake m_handshake;
+    QuicPacketProtection m_protection;
+    crypto::PrfKey m_entropy;
+    u64 m_entropy_counter = 0U;
+    u32 m_versions[kQuicMaxAvailableVersions] = {};
+    usize m_version_count = 0U;
+    u8 m_token[crypto::kQuicMaxTokenBytes] = {};
+    usize m_token_bytes = 0U;
+
+    QuicConnectionState m_state = QuicConnectionState::Idle;
+    QuicTransportParameters m_local;
+    QuicTransportParameters m_peer;
+    bool m_peer_known = false;
+    QuicConnectionId m_local_cid;
+    QuicConnectionId m_initial_dcid;  // a client's first Destination Connection ID; a server's client_dcid
+    QuicConnectionId m_original_dcid; // what original_destination_connection_id names
+    QuicConnectionId m_peer_scid;     // the Source Connection ID of the peer's long headers
+    bool m_peer_scid_known = false;
+    bool m_retried = false;
+    PeerCid m_peer_cids[kQuicMaxPeerConnectionIds];
+    usize m_peer_cid_count = 0U;
+    usize m_peer_cid_current = 0U;
+    u64 m_retire_prior_to = 0U;
+    u64 m_retire_owed[2U * kQuicMaxPeerConnectionIds] = {};
+    usize m_retire_owed_count = 0U;
+    usize m_retire_outstanding = 0U; // owed or in flight
+    u8 m_new_token[crypto::kQuicMaxTokenBytes] = {};
+    usize m_new_token_bytes = 0U;
+
+    u64 m_next_number[kQuicSpaces] = {};
+    u64 m_skipped[kQuicSpaces] = {kQuicNoPacket, kQuicNoPacket, kQuicNoPacket}; // the latest number skipped
+    u8 m_probes[kQuicSpaces] = {};
+    u32 m_ack_only[kQuicSpaces] = {}; // ACK-only packets sent since the last ack-eliciting one
+    bool m_space_gone[kQuicSpaces] = {};
+    bool m_handshake_keys = false;
+    bool m_handshake_done_owed = false;
+    bool m_handshake_done_acked = false;
+    u8 m_path_response[kQuicPathDataBytes] = {};
+    bool m_path_response_owed = false;
+    bool m_ping_owed = false;
+    bool m_confirmed = false;
+    bool m_validated = false;
+    bool m_peer_greases = false;
+    bool m_sent_since_receive = false;
+
+    u64 m_idle_ns = 0U; // the negotiated idle timeout, 0 for none
+    u64 m_idle_deadline_ns = kNeverNs;
+    u64 m_close_deadline_ns = kNeverNs;
+    u64 m_previous_key_ns = kNeverNs; // when the previous 1-RTT receive key goes
+    u64 m_close_owed_after = 1U;      // datagrams received in Closing before the close goes again
+    u64 m_close_received = 0U;
+    bool m_close_owed = false;
+    crypto::QuicLevel m_close_level = crypto::QuicLevel::Initial; // the highest level the close is sent at
+    QuicCloseInfo m_close;
+    u8 m_reason[kQuicMaxReasonBytes] = {};
+    usize m_reason_bytes = 0U;
+
+    QuicConnectionCounters m_counters;
+};
+
+} // namespace crd::net

@@ -1,0 +1,585 @@
+// crd-fuzz-net-quic-connection: a QUIC connection of crd-net (4.2a; docs/design/network-foundation.md#quic-connection)
+// under the bounded fuzz harness (REPO.DEV.9; docs/design/test-instruments.md).
+//
+// Input: byte 0 picks the mode (bits 0 and 1) and the version (bit 2); the rest drives it.
+//   0  a network script between a client and a server: each byte an operation on the datagrams in flight (deliver,
+//      drop, duplicate, reorder, corrupt a byte, advance time); then a clean path until both confirm or one closes.
+//   1  frames from a raw client after the handshake: each [length][bytes] sealed as one 1-RTT packet to the server.
+//   2  frames in Initial packets anyone can seal (their keys come from the public Destination Connection ID): each
+//      [length][bytes] to a fresh server.
+//
+// Oracles. Always: a server sends at most three times what it received before the address is proven; every client
+// datagram carrying an Initial has 1200 bytes; nothing is allocated after construction; a close names a transport
+// error of RFC 9000 section 20.1 (or RFC 9368's) or CRYPTO_ERROR when this side closes. Script: after the clean path,
+// both ends are confirmed or one has closed (no handshake hangs), and a confirmed pair agrees on the application
+// protocol. Frames: the server stays Established (Handshaking for Initial frames) or closes; a closed server sends a
+// CONNECTION_CLOSE only.
+#include <crd/crypto/tls.hpp>
+#include <crd/fuzz/harness.hpp>
+#include <crd/net/quic_connection.hpp>
+
+#include <cstring>
+
+namespace
+{
+using crd::u32;
+using crd::u64;
+using crd::u8;
+using crd::usize;
+using crd::containers::ConstSpan;
+using crd::containers::Span;
+using crd::containers::StringView;
+using crd::containers::WireReader;
+using namespace crd::crypto;
+using namespace crd::net;
+
+constexpr u8 kClientCid[8] = {0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7};
+constexpr u8 kServerCid[16] = {0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
+                               0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F};
+constexpr u8 kInitialDcid[8] = {0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7};
+constexpr AlgorithmId kGroups[] = {AlgorithmId::X25519};
+constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
+constexpr AlgorithmId kAeads[] = {AlgorithmId::Aes128Gcm};
+constexpr StringView kProtocols[] = {"cerid-game/1"};
+constexpr const char* kServerName = "game.cerid.test";
+constexpr u8 kSeeds[2][kPrfKeyBytes] = {{0x01}, {0x02}};
+constexpr u64 kMs = 1000000U;
+constexpr usize kDatagram = 1500U;
+constexpr usize kFlights = 64U;
+
+bool valid_close(u64 code)
+{
+    return code <= static_cast<u64>(QuicTransportError::VersionNegotiationError) ||
+           (code >= static_cast<u64>(QuicTransportError::CryptoErrorFirst) &&
+            code < static_cast<u64>(QuicTransportError::CryptoErrorFirst) + 256U);
+}
+
+void check_closed(const QuicConnection& end)
+{
+    // A peer's close carries whatever code it chose; this side's own closes name RFC 9000's.
+    if (end.close_info().local && !end.close_info().application)
+    {
+        CRD_FUZZ_REQUIRE(valid_close(end.close_info().error_code));
+    }
+}
+
+struct Identity
+{
+    SigningKey key;
+    TlsCredential credential;
+    TlsContext client;
+    TlsContext server;
+    bool ready = false;
+
+    Identity()
+    {
+        u8 seed[32];
+        for (usize i = 0U; i < sizeof(seed); ++i)
+        {
+            seed[i] = static_cast<u8>(i + 1U);
+        }
+        if (key.from_seed(AlgorithmId::Ed25519, ConstSpan<u8>(seed, sizeof(seed))) != CryptoError::None ||
+            credential.init(key, kServerName) != TlsError::None)
+        {
+            return;
+        }
+        const KeyId pin = credential.key_id();
+        TlsConfig client_config;
+        client_config.role = TlsRole::Client;
+        client_config.groups = kGroups;
+        client_config.signatures = kSignatures;
+        client_config.aeads = kAeads;
+        client_config.pinned = ConstSpan<KeyId>(&pin, 1U);
+        client_config.server_name = kServerName;
+        client_config.application_protocols = kProtocols;
+        TlsConfig server_config;
+        server_config.role = TlsRole::Server;
+        server_config.groups = kGroups;
+        server_config.aeads = kAeads;
+        server_config.credential = &credential;
+        server_config.server_name = kServerName;
+        server_config.application_protocols = kProtocols;
+        ready = client.init(client_config) == TlsError::None && server.init(server_config) == TlsError::None;
+    }
+};
+
+const Identity& identity()
+{
+    static const Identity kIdentity;
+    CRD_FUZZ_REQUIRE(kIdentity.ready);
+    return kIdentity;
+}
+
+QuicConnectionConfig config_for(QuicSide side, QuicVersion version)
+{
+    QuicConnectionConfig config;
+    config.side = side;
+    config.version = version;
+    config.tls = (side == QuicSide::Client) ? &identity().client : &identity().server;
+    config.parameters.max_idle_timeout = 30000U;
+    config.sent_packets = 64U;
+    config.sent_frames = 128U;
+    config.crypto_bytes = 8192U;
+    config.entropy_seed = ConstSpan<u8>(kSeeds[side == QuicSide::Client ? 0U : 1U], kPrfKeyBytes);
+    return config;
+}
+
+QuicAccept accept_of(ConstSpan<u8> dcid, ConstSpan<u8> scid)
+{
+    QuicAccept accept;
+    accept.local_cid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
+    accept.client_dcid = dcid;
+    accept.client_scid = scid;
+    accept.original_dcid = dcid;
+    return accept;
+}
+
+// ---- Mode 0: a network script ----
+
+struct Flight
+{
+    u8 bytes[kDatagram] = {};
+    usize size = 0U;
+    usize to = 0U;
+};
+
+struct Pair
+{
+    crd::fuzz::BudgetAllocator allocator;
+    QuicConnection client;
+    QuicConnection server;
+    Flight flights[kFlights];
+    usize count = 0U;
+    u64 now = 1000U * kMs;
+
+    explicit Pair(QuicVersion version)
+        : client(allocator, config_for(QuicSide::Client, version)),
+          server(allocator, config_for(QuicSide::Server, version))
+    {
+    }
+
+    void check_sent(usize from, ConstSpan<u8> datagram)
+    {
+        QuicHeader header;
+        if (from == 0U && parse_quic_header(datagram, sizeof(kServerCid), header) == QuicHeaderError::None &&
+            header.type == QuicPacketType::Initial)
+        {
+            CRD_FUZZ_REQUIRE(datagram.size() >= kQuicMinInitialDatagram);
+        }
+        if (from == 1U && !server.address_validated())
+        {
+            CRD_FUZZ_REQUIRE(server.counters().bytes_sent <= 3U * server.counters().bytes_received);
+        }
+    }
+
+    void flush()
+    {
+        QuicConnection* const ends[2] = {&client, &server};
+        for (usize from = 0U; from < 2U; ++from)
+        {
+            for (usize guard = 0U; guard < 64U; ++guard)
+            {
+                u8 out[kDatagram];
+                const usize size = ends[from]->send(Span<u8>(out, sizeof(out)), now);
+                if (size == 0U)
+                {
+                    break;
+                }
+                check_sent(from, ConstSpan<u8>(out, size));
+                if (count < kFlights)
+                {
+                    std::memcpy(flights[count].bytes, out, size);
+                    flights[count].size = size;
+                    flights[count].to = 1U - from;
+                    ++count;
+                }
+            }
+        }
+    }
+
+    void deliver(usize index)
+    {
+        Flight& flight = flights[index];
+        QuicConnection& to = (flight.to == 0U) ? client : server;
+        if (flight.to == 1U && to.state() == QuicConnectionState::Idle)
+        {
+            QuicHeader header;
+            if (parse_quic_header(ConstSpan<u8>(flight.bytes, flight.size), sizeof(kServerCid), header) !=
+                    QuicHeaderError::None ||
+                header.type != QuicPacketType::Initial || !to.accept(accept_of(header.dcid, header.scid), now))
+            {
+                return;
+            }
+        }
+        to.receive(Span<u8>(flight.bytes, flight.size), QuicEcn::NotEct, now);
+        check_closed(to);
+    }
+
+    void remove(usize index) { flights[index] = flights[--count]; }
+
+    void timers()
+    {
+        for (QuicConnection* end : {&client, &server})
+        {
+            if (end->next_timer_ns() <= now)
+            {
+                end->on_timeout(now);
+                check_closed(*end);
+            }
+        }
+    }
+
+    // A clean path: everything delivered in order, time moving to each timer, for at most `events` timers. The
+    // script may have taught both ends an RTT of minutes, so the bound counts events, not time: the idle timeout
+    // ends every connection that neither confirms nor closes.
+    void settle(usize events)
+    {
+        usize stalled = 0U;
+        for (usize event = 0U; event < events; ++event)
+        {
+            flush();
+            while (count > 0U)
+            {
+                deliver(0U);
+                remove(0U);
+                flush();
+            }
+            const u64 next =
+                (client.next_timer_ns() < server.next_timer_ns()) ? client.next_timer_ns() : server.next_timer_ns();
+            if (next == kNeverNs || (client.confirmed() && server.confirmed()))
+            {
+                return;
+            }
+            stalled = (next <= now) ? stalled + 1U : 0U;
+            CRD_FUZZ_REQUIRE(stalled < 64U); // a timer due that nothing serves would spin the caller's loop
+            now = (next > now) ? next : now;
+            timers();
+        }
+    }
+};
+
+bool finished(const QuicConnection& end)
+{
+    return end.state() == QuicConnectionState::Closing || end.state() == QuicConnectionState::Draining ||
+           end.state() == QuicConnectionState::Closed;
+}
+
+void run_script(QuicVersion version, ConstSpan<u8> script)
+{
+    Pair pair(version);
+    CRD_FUZZ_REQUIRE(pair.client.ready() && pair.server.ready());
+    const usize allocations = pair.allocator.peak_bytes();
+    CRD_FUZZ_REQUIRE(pair.client.connect(ConstSpan<u8>(kClientCid, sizeof(kClientCid)),
+                                         ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), pair.now));
+    for (usize at = 0U; at < script.size(); ++at)
+    {
+        pair.flush();
+        const u8 op = script[at];
+        const usize pick = (pair.count == 0U) ? 0U : (op >> 3U) % pair.count;
+        switch (op & 7U)
+        {
+            case 0U:
+            case 1U:
+                if (pair.count > 0U)
+                {
+                    pair.deliver(pick);
+                    pair.remove(pick);
+                }
+                break;
+            case 2U:
+                if (pair.count > 0U)
+                {
+                    pair.remove(pick); // lost
+                }
+                break;
+            case 3U:
+                if (pair.count > 0U && pair.count < kFlights)
+                {
+                    pair.flights[pair.count++] = pair.flights[pick]; // duplicated
+                }
+                break;
+            case 4U:
+                if (pair.count > 1U)
+                {
+                    const Flight held = pair.flights[0];
+                    pair.flights[0] = pair.flights[pick];
+                    pair.flights[pick] = held; // reordered
+                }
+                break;
+            case 5U:
+                if (pair.count > 0U && at + 2U < script.size())
+                {
+                    Flight& flight = pair.flights[pick];
+                    flight.bytes[script[at + 1U] % flight.size] ^= static_cast<u8>(script[at + 2U] | 1U);
+                    at += 2U;
+                }
+                break;
+            case 6U:
+                pair.now += static_cast<u64>(op >> 3U) * 10U * kMs;
+                pair.timers();
+                break;
+            default:
+            {
+                const u64 next = (pair.client.next_timer_ns() < pair.server.next_timer_ns())
+                                     ? pair.client.next_timer_ns()
+                                     : pair.server.next_timer_ns();
+                pair.now = (next != kNeverNs && next > pair.now) ? next : pair.now;
+                pair.timers();
+            }
+            break;
+        }
+    }
+    pair.settle(4096U);
+    CRD_FUZZ_REQUIRE((pair.client.confirmed() && pair.server.confirmed()) || finished(pair.client) ||
+                     finished(pair.server));
+    if (pair.client.confirmed() && pair.server.confirmed())
+    {
+        CRD_FUZZ_REQUIRE(pair.client.handshake().application_protocol() ==
+                         pair.server.handshake().application_protocol());
+    }
+    CRD_FUZZ_REQUIRE(pair.allocator.peak_bytes() == allocations);
+}
+
+// ---- Modes 1 and 2: frames from a raw peer ----
+
+QuicLevel level_of(QuicPacketType type)
+{
+    if (type == QuicPacketType::Initial)
+    {
+        return QuicLevel::Initial;
+    }
+    return (type == QuicPacketType::Handshake) ? QuicLevel::Handshake : QuicLevel::Application;
+}
+
+QuicPacketType type_of(QuicLevel level)
+{
+    if (level == QuicLevel::Initial)
+    {
+        return QuicPacketType::Initial;
+    }
+    return (level == QuicLevel::Handshake) ? QuicPacketType::Handshake : QuicPacketType::OneRtt;
+}
+
+struct Raw
+{
+    crd::fuzz::BudgetAllocator allocator;
+    QuicConnection server;
+    QuicHandshake handshake;
+    QuicPacketProtection protection;
+    u64 next[3] = {};
+    u64 sent[3] = {};
+    u64 received[3] = {};
+    u8 dcid[20] = {};
+    usize dcid_bytes = sizeof(kInitialDcid);
+    u64 now = 1000U * kMs;
+    bool failed = false;
+    u32 version;
+
+    explicit Raw(QuicVersion run) : server(allocator, config_for(QuicSide::Server, run)), version(static_cast<u32>(run))
+    {
+        std::memcpy(dcid, kInitialDcid, sizeof(kInitialDcid));
+    }
+
+    // One packet of `type` holding `frames` as its payload (PADDING when empty), then the server's answers read.
+    void send(QuicPacketType type, ConstSpan<u8> frames)
+    {
+        u8 datagram[kDatagram] = {};
+        QuicPacketWriter writer;
+        QuicPacketSpec spec;
+        spec.type = type;
+        spec.version = version;
+        spec.dcid = ConstSpan<u8>(dcid, dcid_bytes);
+        spec.scid = ConstSpan<u8>(kClientCid, sizeof(kClientCid));
+        spec.number = next[static_cast<usize>(quic_space_of(type))]++;
+        if (!writer.begin(spec, Span<u8>(datagram, kQuicMinInitialDatagram)))
+        {
+            return;
+        }
+        const usize used = (frames.size() < writer.frames().size()) ? frames.size() : writer.frames().size();
+        if (used != 0U)
+        {
+            std::memcpy(writer.frames().data(), frames.data(), used);
+        }
+        const usize floor = (type == QuicPacketType::Initial) ? kQuicMinInitialDatagram : 0U;
+        usize size = 0U;
+        if (protection.seal(writer, used, {floor, 0U}, size) != QuicPacketError::None)
+        {
+            return;
+        }
+        server.receive(Span<u8>(datagram, size), QuicEcn::NotEct, now);
+        check_closed(server);
+        drain();
+    }
+
+    void drain()
+    {
+        for (usize guard = 0U; guard < 64U; ++guard)
+        {
+            u8 datagram[kDatagram];
+            const usize size = server.send(Span<u8>(datagram, sizeof(datagram)), now);
+            if (size == 0U)
+            {
+                return;
+            }
+            CRD_FUZZ_REQUIRE(size <= kQuicMinInitialDatagram);
+            if (!server.address_validated())
+            {
+                CRD_FUZZ_REQUIRE(server.counters().bytes_sent <= 3U * server.counters().bytes_received);
+            }
+            read(Span<u8>(datagram, size));
+        }
+    }
+
+    void read(Span<u8> datagram)
+    {
+        QuicDatagramPackets packets(datagram, sizeof(kClientCid));
+        QuicHeader header;
+        Span<u8> packet;
+        while (packets.next(header, packet))
+        {
+            if (header.type != QuicPacketType::OneRtt && dcid_bytes == sizeof(kInitialDcid))
+            {
+                std::memcpy(dcid, header.scid.data(), header.scid.size());
+                dcid_bytes = header.scid.size();
+            }
+            QuicOpened opened;
+            if (protection.open(header, packet, opened) != QuicPacketError::None)
+            {
+                continue;
+            }
+            WireReader in(opened.payload);
+            while (!in.done())
+            {
+                QuicFrame frame;
+                CRD_FUZZ_REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);
+                CRD_FUZZ_REQUIRE(quic_frame_allowed(frame.kind, frame.application, opened.type, true));
+                if (server.state() == QuicConnectionState::Closing)
+                {
+                    CRD_FUZZ_REQUIRE(frame.kind == QuicFrameKind::ConnectionClose ||
+                                     frame.kind == QuicFrameKind::Padding);
+                }
+                const QuicLevel level = level_of(opened.type);
+                const usize index = static_cast<usize>(level);
+                if (frame.kind == QuicFrameKind::Crypto && frame.offset == received[index])
+                {
+                    received[index] += frame.data.size();
+                    failed = failed || handshake.provide(level, frame.data) != TlsError::None;
+                }
+            }
+            failed = failed || protection.install(handshake) != CryptoError::None;
+        }
+    }
+
+    void send_crypto(QuicLevel level)
+    {
+        failed = failed || protection.install(handshake) != CryptoError::None;
+        const usize index = static_cast<usize>(level);
+        while (!failed && handshake.pending(level) > 0U)
+        {
+            u8 chunk[900];
+            usize taken = 0U;
+            failed = handshake.take(level, Span<u8>(chunk, sizeof(chunk)), taken) != TlsError::None;
+            QuicFrame frame;
+            frame.kind = QuicFrameKind::Crypto;
+            frame.offset = sent[index];
+            frame.data = ConstSpan<u8>(chunk, taken);
+            sent[index] += taken;
+            u8 frames[1000];
+            const usize bytes = write_quic_frame(frame, Span<u8>(frames, sizeof(frames)));
+            send(type_of(level), ConstSpan<u8>(frames, bytes));
+        }
+    }
+};
+
+void run_frames(QuicVersion version, ConstSpan<u8> input, bool initial)
+{
+    Raw raw(version);
+    CRD_FUZZ_REQUIRE(raw.server.ready());
+    const usize allocations = raw.allocator.peak_bytes();
+    CRD_FUZZ_REQUIRE(raw.protection.start(QuicSide::Client, version,
+                                          ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid))) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(raw.server.accept(
+        accept_of(ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
+        raw.now));
+    if (!initial)
+    {
+        QuicTransportParameters parameters;
+        parameters.has_initial_source_connection_id = true;
+        static_cast<void>(
+            parameters.initial_source_connection_id.assign(ConstSpan<u8>(kClientCid, sizeof(kClientCid))));
+        u8 encoded[256];
+        const usize bytes =
+            write_quic_transport_parameters(parameters, QuicSide::Client, {3U}, Span<u8>(encoded, sizeof(encoded)));
+        CRD_FUZZ_REQUIRE(raw.handshake.init(identity().client, ConstSpan<u8>(encoded, bytes)) == TlsError::None);
+        raw.send_crypto(QuicLevel::Initial);
+        raw.send_crypto(QuicLevel::Handshake);
+        CRD_FUZZ_REQUIRE(!raw.failed && raw.server.state() == QuicConnectionState::Established);
+        CRD_FUZZ_REQUIRE(raw.protection.can_send(QuicPacketType::OneRtt));
+        raw.protection.confirm();
+    }
+    const QuicPacketType type = initial ? QuicPacketType::Initial : QuicPacketType::OneRtt;
+    for (usize at = 0U; at < input.size();)
+    {
+        const usize length = input[at++];
+        const usize take = (length < input.size() - at) ? length : input.size() - at;
+        raw.send(type, input.subspan(at, take));
+        at += take;
+        const QuicConnectionState state = raw.server.state();
+        const QuicConnectionState open = initial ? QuicConnectionState::Handshaking : QuicConnectionState::Established;
+        CRD_FUZZ_REQUIRE(state == open || state == QuicConnectionState::Closing ||
+                         state == QuicConnectionState::Draining);
+        raw.now += kMs;
+        if (raw.server.next_timer_ns() <= raw.now)
+        {
+            raw.server.on_timeout(raw.now);
+            check_closed(raw.server);
+            raw.drain();
+        }
+    }
+    CRD_FUZZ_REQUIRE(raw.allocator.peak_bytes() == allocations);
+}
+} // namespace
+
+extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
+{
+    if (size < 1U || size > crd::fuzz::kMaxInputBytes)
+    {
+        return 0;
+    }
+    const QuicVersion version = ((data[0] & 4U) != 0U) ? QuicVersion::V2 : QuicVersion::V1;
+    const ConstSpan<u8> rest(data + 1U, size - 1U);
+    switch (data[0] & 3U)
+    {
+        case 0U:
+            run_script(version, rest);
+            break;
+        case 1U:
+            run_frames(version, rest, false);
+            break;
+        default:
+            run_frames(version, rest, true);
+            break;
+    }
+    return 0;
+}
+
+void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
+{
+    // A script: deliver everything in order with a timer step between flights.
+    const u8 clean[] = {0x00U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
+    sink.add("script-clean", clean, sizeof(clean));
+    // Losses, duplicates, a reorder and a corrupted byte in version 2.
+    const u8 hostile[] = {0x04U, 0x02U, 0x03U, 0x00U, 0x0CU, 0x05U, 0x40U, 0x08U, 0x07U, 0x00U,
+                          0x02U, 0x06U, 0x86U, 0x07U, 0x00U, 0x00U, 0x0BU, 0x00U, 0x00U};
+    sink.add("script-hostile", hostile, sizeof(hostile));
+    // 1-RTT frames after the handshake: a PING, a STREAM frame, a NEW_CONNECTION_ID, a PATH_CHALLENGE.
+    const u8 frames[] = {0x01U, 0x01U, 0x01U, 0x04U, 0x0AU, 0x00U, 0x01U, 0x41U, 0x1CU, 0x18U, 0x01U, 0x00U,
+                         0x08U, 0x11U, 0x12U, 0x13U, 0x14U, 0x15U, 0x16U, 0x17U, 0x18U, 0xA0U, 0xA1U, 0xA2U,
+                         0xA3U, 0xA4U, 0xA5U, 0xA6U, 0xA7U, 0xA8U, 0xA9U, 0xAAU, 0xABU, 0xACU, 0xADU, 0xAEU,
+                         0xAFU, 0x09U, 0x1AU, 0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U, 0x07U, 0x08U};
+    sink.add("one-rtt-frames", frames, sizeof(frames));
+    // Initial frames anyone can seal: a PING, an ACK of a packet never sent, a CRYPTO frame of garbage.
+    const u8 initial[] = {0x02U, 0x01U, 0x01U, 0x05U, 0x02U, 0x05U, 0x00U, 0x00U, 0x00U,
+                          0x07U, 0x06U, 0x00U, 0x04U, 0x01U, 0x00U, 0x00U, 0x00U};
+    sink.add("initial-frames", initial, sizeof(initial));
+}

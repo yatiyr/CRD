@@ -77,6 +77,8 @@ TARGETS = {
                           'executable': 'tests/net/fuzz/crd-fuzz-net-quic-recovery'},
     'net-quic-stream': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-stream',
                         'executable': 'tests/net/fuzz/crd-fuzz-net-quic-stream'},
+    'net-quic-connection': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-connection',
+                            'executable': 'tests/net/fuzz/crd-fuzz-net-quic-connection'},
     'net-state-hash': {'corpus': 'tests/foundation/net/fuzz/corpus-state-hash',
                        'executable': 'tests/net/fuzz/crd-fuzz-net-state-hash'},
     'net-coded-frames': {'corpus': 'tests/foundation/net/fuzz/corpus-coded-frames',
