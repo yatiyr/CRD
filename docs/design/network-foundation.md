@@ -197,6 +197,30 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
 - **Path behaviour** (PMTU, ECN, pacing, congestion control, offloads, migration policy) belongs to NET-PATH;
   reachability (ICE, STUN, TURN, MASQUE, Cerid relays) to NET-REACH.
 
+<a id="sockets"></a>
+### Sockets
+
+**S33. Addresses and datagram sockets** (4.2a, threats T01, T02 and T10;
+[endpoint.hpp](../../engine/foundation/net/include/crd/net/endpoint.hpp),
+[udp.hpp](../../engine/foundation/net/include/crd/net/udp.hpp); 2026-11-08).
+
+- **One representation per address.** An IPv4 address keeps four bytes and twelve zeros, a zone index only on
+  IPv6, and a dual-stack socket reports an IPv4 peer as IPv4, never as `::ffff:a.b.c.d`; so S3's prefix buckets
+  (`IpAddress::prefix`) and every table keyed by a peer see one key for one host. Text is read per RFC 4291 and
+  written per RFC 5952 by crd-net itself, never by the host, so captures and NET-SIM print alike on every platform;
+  IPv4 octets with leading zeros are refused (some readers take them as octal).
+- **Stage S0 is a batch into the caller's storage.** `DatagramSocket::receive` fills caller-owned slots without
+  waiting (Linux: one `recvmmsg` per 32 datagrams; Windows and macOS: one call each), marks a datagram longer than
+  its slot as truncated, and allocates nothing; `send` stops at the first datagram that cannot leave and names why,
+  with `Busy` for back-pressure (a full socket buffer or device queue). Datagrams above a family's UDP payload and
+  crossings of families are refused before the host sees them.
+- **A server is not stopped by one peer.** Windows sockets hold their port exclusively (`SO_EXCLUSIVEADDRUSE`)
+  and ignore ICMP port and TTL reports (`SIO_UDP_CONNRESET`, `SIO_UDP_NETRESET`), and a stale ICMP report on any
+  host is skipped instead of ending a receive; sockets are non-blocking and not inherited by child processes.
+- **The seam.** The transport drives only `DatagramSocket`; NET-SIM's virtual sockets and NET-DEBUG's conditioner
+  implement it, and `wait_readable` is the one blocking call. PMTU, ECN, pacing and offloads (GSO, GRO, USO, URO)
+  are NET-PATH's, added behind the same interface.
+
 <a id="admission"></a>
 ## Bounded admission
 

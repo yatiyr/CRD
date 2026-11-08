@@ -63,6 +63,9 @@ jobs:
           - {target: ckir-binary, seed: 7301, repeat: ace35b97}
           - {target: ckir-binary, seed: 7302, repeat: ''}
           - {target: ckir-binary, seed: 7303, repeat: ''}
+          # 4.2a's address texts: four non-replaying local events in 770 M executions (2026-11-08 session note).
+          - {target: net-endpoint, seed: 8101, repeat: ''}
+          - {target: net-endpoint, seed: 8102, repeat: ''}
 
     steps:
       - name: Checkout

@@ -6,6 +6,12 @@
 crd_fuzz_target(crd-fuzz-net-negotiation
     SOURCES fuzz_negotiation.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 
+# Addresses and endpoints (4.2a).
+#   crd-fuzz-net-endpoint   any text as an address and as an endpoint: one printed text per value that reads back to it,
+#                           and on Linux the same verdict and bytes as glibc's inet_pton.
+crd_fuzz_target(crd-fuzz-net-endpoint
+    SOURCES fuzz_endpoint.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-endpoint")
+
 # Frames and admission (NET.3).
 #   crd-fuzz-net-admission   any bytes on a stream and in datagrams, against a restated frame layout and admission rule; a
 #                            stream at every split reading as it reads whole; fragments of generated messages on a hostile
