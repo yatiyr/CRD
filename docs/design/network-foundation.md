@@ -363,7 +363,9 @@ versions, HANDSHAKE_DONE confirming it) and `crd-fuzz-net-quic-packet` (received
 - **Spurious losses raise the thresholds** (RFC 9002 section 6.1, by RFC 8985 section 6.2's mechanism; 2026-11-08).
   A lost packet stays in its slot for one probe period after its loss, or until a send needs the slot, so a late
   acknowledgement shows the loss was spurious: no event (its loss was reported), nothing back in flight, counted in
-  the outcome for a controller's undo, an RTT sample when it is the frame's largest. The packet threshold rises to
+  the outcome for a controller's undo, and an RTT sample when it is the frame's largest (appendix A, which forgets
+  lost packets, takes none; the send-to-acknowledgement time is still that packet's path). A send needing a slot
+  drops held packets from the head only until one is free. The packet threshold rises to
   the reordering seen (the largest acknowledged before the frame, less the packet, plus one), capped at 32; a loss the
   time threshold declared widens the time threshold by a quarter of min_rtt once a round trip, the window capped at
   smoothed_rtt. Both return to RFC 9002's after 16 loss detections with no spurious loss. A peer timing its ACKs to
@@ -374,7 +376,7 @@ versions, HANDSHAKE_DONE confirming it) and `crd-fuzz-net-quic-packet` (received
 Evidence: `test_quic_recovery.cpp` (25 cases: ranges merged, full and retired, every ACK trigger, frames read back
 with trimmed ranges and ECN, the estimator worked by hand, each threshold, the backoff, confirmation, anti-deadlock,
 amplification, discards, persistent congestion's three conditions, unsent acknowledgements, full storage and its
-ring, spurious losses with their retention, steps, caps and decay), 42 source mutations each caught, and
+ring, spurious losses with their retention, steps, caps and decay), 43 source mutations each caught, and
 `crd-fuzz-net-quic-recovery` (a model of every packet sent and received, spurious losses and the thresholds used).
 
 <a id="quic-streams"></a>
