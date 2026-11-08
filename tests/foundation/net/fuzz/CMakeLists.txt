@@ -42,6 +42,13 @@ crd_fuzz_target(crd-fuzz-net-quic-packet
 crd_fuzz_target(crd-fuzz-net-quic-recovery
     SOURCES fuzz_quic_recovery.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-recovery")
 
+# QUIC byte streams and flow control (4.2a).
+#   crd-fuzz-net-quic-stream   any frames, reads, writes, sends, acknowledgements, losses and window operations on one
+#                              receive buffer, send buffer and window against per-byte models: every verdict, chunk,
+#                              byte and end the models', refusals changing nothing, the window's limit bounded.
+crd_fuzz_target(crd-fuzz-net-quic-stream
+    SOURCES fuzz_quic_stream.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-stream")
+
 # Frames and admission (NET.3).
 #   crd-fuzz-net-admission   any bytes on a stream and in datagrams, against a restated frame layout and admission
 #                            rule; a stream at every split reading as it reads whole; fragments of generated messages on

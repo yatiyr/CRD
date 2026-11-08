@@ -2,7 +2,8 @@
 # generated wire formats, whose test schema holds quantised fields (crd-net-quantized) and fills the S18 artefact
 # (crd-crypto), frames, admission, quotas and reassembly, integrity hashes and padding, state hashes and baseline deltas;
 # 4.2a's addresses and UDP sockets on the host's loopback, QUIC headers, admission stages S1 to S3 and the I/O loop,
-# QUIC frames and transport parameters, QUIC packets per level, acknowledgements and loss recovery.
+# QUIC frames and transport parameters, QUIC packets per level, acknowledgements and loss recovery, byte streams and
+# flow control.
 add_executable(crd-net-tests
     test_admission.cpp
     test_coded_frames.cpp
@@ -15,6 +16,7 @@ add_executable(crd-net-tests
     test_quic_frame.cpp
     test_quic_packet.cpp
     test_quic_recovery.cpp
+    test_quic_stream.cpp
     test_quic_transport_parameters.cpp
     test_register_ids.cpp
     test_state_hash.cpp
