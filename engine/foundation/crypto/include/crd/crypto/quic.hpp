@@ -358,4 +358,42 @@ private:
     u32 m_count                         = 0U;
     u64 m_new_token_lifetime            = 0U;
 };
+
+// ---- Stateless reset tokens (RFC 9000 section 10.3.2; contract: network-foundation.md#quic-connection-ids) ----
+
+// A server's static key for the stateless reset tokens of the connection IDs it issues: a token is the first 16 bytes
+// of HMAC-SHA256(key, connection ID), so a server that lost a connection's state, or another server of its fleet
+// sharing the key, derives the token from the Destination Connection ID of a packet alone. A connection ID is drawn
+// from 128 random bits or more, so no ID repeats under one key (section 10.3.2). Rotating the key leaves the tokens
+// already issued unrecognised, so a reset after a rotation is merely ineffective; a fleet keeps one key for as long as
+// its connections live.
+inline constexpr usize kQuicResetKeyBytes   = 32U;
+inline constexpr usize kQuicResetTokenBytes = 16U;
+
+class QuicResetKey
+{
+public:
+    QuicResetKey() noexcept = default;
+    ~QuicResetKey() noexcept;
+    QuicResetKey(const QuicResetKey&)            = delete;
+    QuicResetKey& operator=(const QuicResetKey&) = delete;
+    QuicResetKey(QuicResetKey&&)                 = delete;
+    QuicResetKey& operator=(QuicResetKey&&)      = delete;
+
+    // A key the servers of a fleet share (kQuicResetKeyBytes); BadLength for another length.
+    [[nodiscard]] CryptoError init(cont::ConstSpan<u8> key) noexcept;
+    // A fresh key from the provider's randomness, for a server alone.
+    [[nodiscard]] CryptoError generate() noexcept;
+    void                      clear() noexcept;
+
+    [[nodiscard]] bool ready() const noexcept { return m_ready; }
+
+    // The token of `connection_id` (1 to kQuicMaxConnectionIdBytes) into `out` (kQuicResetTokenBytes). BadLength for
+    // an ID or an output of another length, NotReady without a key; `out` is zeroed on any error.
+    [[nodiscard]] CryptoError token(cont::ConstSpan<u8> connection_id, cont::Span<u8> out) const noexcept;
+
+private:
+    u8   m_key[kQuicResetKeyBytes] = {};
+    bool m_ready                   = false;
+};
 } // namespace crd::crypto

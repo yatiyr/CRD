@@ -894,4 +894,66 @@ CryptoError QuicTokenKeys::validate(QuicVersion version, cont::ConstSpan<u8> tok
     secure_zero(cont::Span<u8>(plain));
     return error;
 }
+
+// ---- Stateless reset tokens ----
+
+QuicResetKey::~QuicResetKey() noexcept
+{
+    clear();
+}
+
+CryptoError QuicResetKey::init(cont::ConstSpan<u8> key) noexcept
+{
+    clear();
+    if (key.size() != kQuicResetKeyBytes)
+    {
+        return CryptoError::BadLength;
+    }
+    std::memcpy(m_key, key.data(), kQuicResetKeyBytes);
+    m_ready = true;
+    return CryptoError::None;
+}
+
+CryptoError QuicResetKey::generate() noexcept
+{
+    clear();
+    const CryptoError error = random_bytes(cont::Span<u8>(m_key));
+    m_ready = error == CryptoError::None;
+    if (!m_ready)
+    {
+        clear();
+    }
+    return error;
+}
+
+void QuicResetKey::clear() noexcept
+{
+    secure_zero(cont::Span<u8>(m_key));
+    m_ready = false;
+}
+
+CryptoError QuicResetKey::token(cont::ConstSpan<u8> connection_id, cont::Span<u8> out) const noexcept
+{
+    if (!out.empty())
+    {
+        secure_zero(out);
+    }
+    if (out.size() != kQuicResetTokenBytes || connection_id.empty() || connection_id.size() > kQuicMaxConnectionIdBytes)
+    {
+        return CryptoError::BadLength;
+    }
+    if (!m_ready)
+    {
+        return CryptoError::NotReady;
+    }
+    u8 mac[32];
+    const CryptoError error =
+        kdf_mac(AlgorithmId::HkdfSha256, cont::ConstSpan<u8>(m_key), connection_id, cont::Span<u8>(mac));
+    if (error == CryptoError::None)
+    {
+        std::memcpy(out.data(), mac, kQuicResetTokenBytes);
+    }
+    secure_zero(cont::Span<u8>(mac));
+    return error;
+}
 } // namespace crd::crypto

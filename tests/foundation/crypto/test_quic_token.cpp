@@ -497,3 +497,75 @@ TEST_CASE("QUIC tokens: keys and a replay filter serve several threads", "[crypt
         CHECK(check(keys, token.view(), QuicVersion::V1, kNow, kPeer, &replay) == CryptoError::Replayed);
     }
 }
+
+// Stateless reset tokens (RFC 9000 section 10.3.2): HMAC-SHA256 of the connection ID under the static key, truncated
+// to 16 bytes. The expected values were computed with Python's hmac module, independently of the provider.
+TEST_CASE("QUIC stateless reset tokens: HMAC-SHA256 of the connection ID, truncated", "[crypto][net-2][quic-token]")
+{
+    u8 key[kQuicResetKeyBytes];
+    for (usize i = 0U; i < sizeof(key); ++i)
+    {
+        key[i] = static_cast<u8>(i);
+    }
+    QuicResetKey reset;
+    CHECK_FALSE(reset.ready());
+    REQUIRE(reset.init(ConstSpan<u8>(key)) == CryptoError::None);
+    REQUIRE(reset.ready());
+    struct Vector
+    {
+        u8 id[kQuicMaxConnectionIdBytes];
+        usize bytes;
+        u8 token[kQuicResetTokenBytes];
+    };
+    const Vector vectors[] = {
+        {{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77},
+         16U,
+         {0x83, 0xc2, 0xdc, 0x14, 0xb0, 0x45, 0x32, 0x47, 0x3e, 0xd6, 0xc1, 0xba, 0x6c, 0x59, 0x08, 0x0c}},
+        {{0x5a}, 1U, {0xd3, 0xda, 0x88, 0x61, 0xb0, 0x92, 0x4d, 0xf7, 0x28, 0x96, 0xb8, 0x2c, 0x83, 0xd3, 0xa1, 0x3b}},
+        {{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+          0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13},
+         20U,
+         {0x0c, 0xd4, 0x38, 0xc0, 0xf4, 0xf4, 0x46, 0x37, 0xdd, 0xeb, 0xa1, 0x46, 0xb3, 0xb3, 0xa5, 0xf8}},
+    };
+    for (const Vector& vector : vectors)
+    {
+        u8 token[kQuicResetTokenBytes];
+        REQUIRE(reset.token(ConstSpan<u8>(vector.id, vector.bytes), Span<u8>(token)) == CryptoError::None);
+        CHECK(std::memcmp(token, vector.token, sizeof(token)) == 0);
+    }
+
+    // A fleet that shares the key derives the same token; a fresh key derives another.
+    QuicResetKey shared;
+    REQUIRE(shared.init(ConstSpan<u8>(key)) == CryptoError::None);
+    QuicResetKey fresh;
+    REQUIRE(fresh.generate() == CryptoError::None);
+    u8 mine[kQuicResetTokenBytes];
+    u8 theirs[kQuicResetTokenBytes];
+    u8 other[kQuicResetTokenBytes];
+    const ConstSpan<u8> id(vectors[0].id, vectors[0].bytes);
+    REQUIRE(reset.token(id, Span<u8>(mine)) == CryptoError::None);
+    REQUIRE(shared.token(id, Span<u8>(theirs)) == CryptoError::None);
+    REQUIRE(fresh.token(id, Span<u8>(other)) == CryptoError::None);
+    CHECK(std::memcmp(mine, theirs, sizeof(mine)) == 0);
+    CHECK(std::memcmp(mine, other, sizeof(mine)) != 0);
+
+    // Refusals zero the output.
+    u8 out[kQuicResetTokenBytes + 1U];
+    const u8 long_id[kQuicMaxConnectionIdBytes + 1U] = {};
+    std::memset(out, 0xEE, sizeof(out));
+    CHECK(reset.token({}, Span<u8>(out, kQuicResetTokenBytes)) == CryptoError::BadLength);
+    CHECK(out[0] == 0U);
+    std::memset(out, 0xEE, sizeof(out));
+    CHECK(reset.token(ConstSpan<u8>(long_id), Span<u8>(out, kQuicResetTokenBytes)) == CryptoError::BadLength);
+    CHECK(out[kQuicResetTokenBytes - 1U] == 0U);
+    CHECK(reset.token(id, Span<u8>(out, sizeof(out))) == CryptoError::BadLength);
+    CHECK(reset.token(id, Span<u8>(out, kQuicResetTokenBytes - 1U)) == CryptoError::BadLength);
+    CHECK(reset.init(ConstSpan<u8>(key, kQuicResetKeyBytes - 1U)) == CryptoError::BadLength);
+    CHECK_FALSE(reset.ready());
+    std::memset(out, 0xEE, sizeof(out));
+    CHECK(reset.token(id, Span<u8>(out, kQuicResetTokenBytes)) == CryptoError::NotReady);
+    CHECK(out[3] == 0U);
+    REQUIRE(reset.init(ConstSpan<u8>(key)) == CryptoError::None);
+    reset.clear();
+    CHECK(reset.token(id, Span<u8>(out, kQuicResetTokenBytes)) == CryptoError::NotReady);
+}
