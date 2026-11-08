@@ -1608,8 +1608,8 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
             written.carried_ack = (ack.bytes != 0U) ? ack.largest : kQuicNoPacket;
         }
     };
-    // A 0-RTT packet carries no ACK, CRYPTO, HANDSHAKE_DONE, NEW_TOKEN, PATH_RESPONSE or RETIRE_CONNECTION_ID
-    // frame (RFC 9000 section 12.4, table 3).
+    // A 0-RTT packet carries no ACK, CRYPTO, HANDSHAKE_DONE, NEW_TOKEN or PATH_RESPONSE frame (RFC 9000 section
+    // 12.4, table 3), and no RETIRE_CONNECTION_ID either: nothing is retired before the server's IDs arrive.
     const bool ack_later =
         space == QuicSpace::Application && m_recovery->ack_deadline_ns(space) > now_ns && datagram_ready(now_ns);
     if (!ack_later && !early)

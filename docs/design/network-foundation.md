@@ -555,8 +555,9 @@ the outcomes. Like S40 it knows nothing of packets.
 - **Outcomes** (section 5.2, optional per connection). Each sent datagram's id is a ledger record; acknowledgement
   reports Acked (the peer's transport has it), loss or discard Lost, expiry Expired, each once. A datagram counts
   against `send_count` until its report is polled, so the report ring never fills; a full ledger holds datagrams back.
-- **Later:** with 0-RTT, a client keeps the server's max_datagram_frame_size with the ticket and a server accepting
-  0-RTT must not advertise less than it did (section 3).
+- **0-RTT** ([S45](#quic-early)): a client sends datagrams in 0-RTT under the max_datagram_frame_size its ticket
+  remembers and closes an accepted connection whose server advertises less (section 3); a server's early data
+  context names its size.
 
 Evidence: `test_quic_datagram.cpp` (7 cases: the payload limit against every frame size to 70,000 bytes; every limit
 refused and init all or nothing; both parameters bounding queue and write, a room one byte short; a received frame at
@@ -752,8 +753,8 @@ RFC 9221 section 3, read from the RFC Editor's text. The TLS side is S17's.
   parameters and grants its streams and datagrams from them alone (never ack_delay_exponent, max_ack_delay, the
   connection IDs or the reset token), installs the 0-RTT key and sends Application data in 0-RTT packets of the
   original version until it knows its server's parameters (section 7.4.1's "only remembered" rule) or has 1-RTT keys,
-  whichever comes first. A 0-RTT packet carries no ACK, CRYPTO, HANDSHAKE_DONE, NEW_TOKEN, PATH_RESPONSE or
-  RETIRE_CONNECTION_ID frame. The stream set's `set_peer_parameters()` only raises, the open streams' credit included,
+  whichever comes first. A 0-RTT packet carries no ACK, CRYPTO, HANDSHAKE_DONE, NEW_TOKEN or PATH_RESPONSE frame
+  (table 3), and the client has nothing to retire before its server's IDs arrive. The stream set's `set_peer_parameters()` only raises, the open streams' credit included,
   so the server's parameters replace the remembered ones without a second state.
 - **Decision.** Accepted: the server's parameters must lower none of the limits the 0-RTT kept to (the seven of
   section 7.4.1 and max_datagram_frame_size), else PROTOCOL_VIOLATION (RFC 9221 section 3's error). Rejected (known
