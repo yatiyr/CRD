@@ -289,6 +289,48 @@ client parameters byte for byte, every kind round tripped, every truncation and 
 placement table restated, every refusal and check path), eleven source mutations each caught, and
 `crd-fuzz-net-quic-codec` (rewrite and re-read oracles, ACK ranges, the reserved parameter).
 
+<a id="quic-packets"></a>
+### QUIC packets
+
+**S36. Packets per encryption level** (4.2a, threats T06, T07 and T09;
+[quic_packet.hpp](../../engine/foundation/net/include/crd/net/quic_packet.hpp); 2026-11-08).
+
+- **One writer for every packet.** `QuicPacketWriter` lays the header into the room a datagram has left, the caller
+  writes frames into `frames()`, and `seal()` pads with PADDING to the largest of the sample's floor (four bytes from
+  the packet number on, RFC 9001 section 5.4.2), the caller's floor (`quic_datagram_floor`: 1200 bytes for a datagram
+  carrying an Initial, RFC 9000 section 14.1) and NET.3's `padded_size()` under the channel's block (S30), then writes
+  the Length in its shortest encoding (reserved at the room's size and moved down, so a small Handshake ACK costs one
+  byte), seals and protects. The QUIC bit is cleared only when the caller says so, from entropy, toward a peer that
+  sent grease_quic_bit (RFC 9287); the key phase bit comes from the protection state. Nothing is allocated.
+- **Reading trusts nothing before the AEAD.** `QuicDatagramPackets` walks coalesced packets and stops at a packet
+  whose Destination Connection ID differs from the first's (section 12.2). `open()` drops a cleared QUIC bit unless
+  this end sent grease_quic_bit, removes header protection, decodes the packet number against its space, drops
+  duplicates and stale packets (the space's 256-bit window) before the AEAD, and only after it opens checks the
+  reserved bits (PROTOCOL_VIOLATION) and refuses an empty packet (section 12.4). A failed open leaves the last 16
+  bytes as received, for the connection's stateless reset check; failed opens across all keys meet the AEAD's
+  integrity limit or a lower one the transport sets (AEAD_LIMIT_REACHED). Frame placement is checked where frames are
+  dispatched, by `quic_frame_allowed` (S35).
+- **Keys are discarded in code** (RFC 9001 section 4.9): a client's Initial keys with its first Handshake packet, a
+  server's with the first Handshake packet it opens, Handshake keys at `confirm()`, a client's 0-RTT keys when its
+  1-RTT keys arrive; a server's 0-RTT keys and the previous 1-RTT receive key go when the connection's timers say
+  (three PTOs). `install(handshake)` takes every key `QuicHandshake` has ready after each `provide()`; a Retry or a
+  compatible version change re-derives the Initial keys.
+- **Key phases** (section 6). Three receive keys rotate as previous, current and next, the next derived ahead so a
+  key update costs no timing difference; a packet of the other phase with a number below the current key's smallest
+  opens with the previous key, else with the next. An update is initiated only after confirmation, with a packet of
+  the current phase acknowledged, the previous key gone and the peer's answer seen; `seal()` starts one by itself at
+  three quarters of the key's limit or of the transport's own interval, and a key that reaches its limit unupdated
+  refuses (AEAD_LIMIT_REACHED). A peer's update is followed by the send key; a second one before this end sent an
+  acknowledgement in the new phase, newer keys on a lower packet number than older keys protected, and a current
+  packet below an older key's largest are KEY_UPDATE_ERROR. An older key above the newer key's first packet is tried
+  as the next phase's and never opens, so it is dropped rather than detected.
+
+Evidence: `test_quic_packet.cpp` (RFC 9001 appendix A.2, A.3 and A.5 and RFC 9369's packets written byte for byte
+from their frames and read back; every padding floor, block and Length size; every writer refusal; coalesced, foreign
+and truncated datagrams; each discard; every trust check; key updates initiated, answered, reordered and refused on
+each rule; an update interval reaching Exhausted; a real `QuicHandshake` carried in these packets to 1-RTT in both
+versions, HANDSHAKE_DONE confirming it) and `crd-fuzz-net-quic-packet` (received datagrams and writer round trips).
+
 <a id="admission"></a>
 ## Bounded admission
 
