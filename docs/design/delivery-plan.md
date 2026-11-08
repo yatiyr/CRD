@@ -138,12 +138,13 @@ is no longer a row. SIMD-PERF is the open-ended optimization track; rows after i
 
 ### P02 NETCRASH window: secure network foundation and crash-to-fix intake (user-fixed)
 
-Rows in order: NET.1, NET-STD, COMPLY.0, COMPLY.1, NET.2, HESAP-NET, NET.3, NET.4, 4.2a, NET-PATH, NET-REACH, 4.2b,
-NET-SIM, NET-DEBUG, NET.5, COMPLY.2, CRASH-FIX.1, CRASH-FIX.2, NETCRASH.
+Rows in order: NET.1, NET-STD, COMPLY.0, COMPLY.1, NET.2, HESAP-NET, NET.3, 4.2a, NET-PATH, NET-REACH, 4.2b, NET-SIM,
+NET-DEBUG, NET.4, NET.5, COMPLY.2, CRASH-FIX.1, CRASH-FIX.2, NETCRASH.
 
 User-fixed. The Part 4 rows and the COMPLY children sit where the operator placed them: NET-STD after NET.1, the
 register COMPLY.0 and cryptography and export control (COMPLY.1) before NET.2, HESAP-NET after NET.2, NET-PATH and
-NET-REACH after 4.2a, privacy (COMPLY.2) before CRASH-FIX.1.
+NET-REACH after 4.2a, privacy (COMPLY.2) before CRASH-FIX.1. NET.4 follows NET-DEBUG (2026-11-08): it attacks and
+measures the transport and the rows built on it.
 
 ### P02b Network block: every network row, built complete (user-fixed)
 
