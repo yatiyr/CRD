@@ -90,6 +90,14 @@ struct Buffer
     [[nodiscard]] Span<u8> all() { return Span<u8>(bytes, size); }
 };
 
+// Writes one frame byte at the start of an open writer's frames.
+void put_frame(const QuicPacketWriter& writer, u8 frame)
+{
+    const Span<u8> room = writer.frames();
+    REQUIRE_FALSE(room.empty());
+    room[0] = frame;
+}
+
 // Appends one packet of `spec` carrying `frames` to `datagram`; the error of the seal.
 QuicPacketError append(QuicPacketProtection& from, Buffer& datagram, const QuicPacketSpec& spec, ConstSpan<u8> frames,
                        QuicPadding padding = {}, usize room = kRoom)
@@ -134,7 +142,7 @@ Buffer crafted(crd::crypto::QuicPacketKey& key, const QuicHeaderKey& header, boo
     QuicPacketSpec spec = spec_of(QuicPacketType::OneRtt, number);
     spec.number_bytes = 4U;
     REQUIRE(writer.begin(spec, datagram.rest()));
-    writer.frames()[0] = kPing[0];
+    put_frame(writer, kPing[0]);
     REQUIRE(writer.seal(key, header, phase, 1U, {}, datagram.size) == CryptoError::None);
     return datagram;
 }
@@ -228,7 +236,7 @@ TEST_CASE("QUIC packets: RFC 9001's and RFC 9369's sample packets written and re
         short_spec.acknowledged = true;
         Buffer short_packet;
         REQUIRE(writer.begin(short_spec, short_packet.rest()));
-        writer.frames()[0] = kPing[0];
+        put_frame(writer, kPing[0]);
         REQUIRE(writer.seal(chacha.packet, chacha.header, false, 1U, {}, short_packet.size) == CryptoError::None);
         REQUIRE(hex(v2 ? kV2ChachaPacket : kV1ChachaPacket, expected) == short_packet.size);
         CHECK(same(short_packet.all(), ConstSpan<u8>(expected, short_packet.size)));
@@ -549,7 +557,7 @@ TEST_CASE("QUIC packets: nothing read under protection is trusted before the AEA
             Buffer datagram;
             QuicPacketWriter writer;
             REQUIRE(writer.begin(spec_of(type, 0U), datagram.rest()));
-            writer.frames()[0] = kPing[0];
+            put_frame(writer, kPing[0]);
             datagram.bytes[0] = static_cast<u8>(datagram.bytes[0] | (type == QuicPacketType::OneRtt ? 0x10U : 0x08U));
             REQUIRE(pair.client.seal(writer, 1U, {}, datagram.size) == QuicPacketError::None);
             CHECK(deliver(pair.server, datagram) == QuicPacketError::ReservedBits);

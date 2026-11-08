@@ -77,6 +77,14 @@ void finish_client(Ends& ends)
     }
 }
 
+// Writes a PING at the start of an open writer's frames.
+void put_ping(const QuicPacketWriter& writer)
+{
+    const Span<u8> room = writer.frames();
+    CRD_FUZZ_REQUIRE(!room.empty());
+    room[0] = 0x01U;
+}
+
 bool inside(ConstSpan<u8> view, ConstSpan<u8> whole)
 {
     return view.empty() || (view.data() >= whole.data() && view.data() + view.size() <= whole.data() + whole.size());
@@ -167,7 +175,7 @@ bool check_round_trip(ConstSpan<u8> frames, u8 control, u64 entropy)
         ping.number = spec.number + 1U;
         ping.number_bytes = 4U;
         CRD_FUZZ_REQUIRE(writer.begin(ping, Span<u8>(first, kRoom)));
-        writer.frames()[0] = 0x01U;
+        put_ping(writer);
         usize written = 0U;
         CRD_FUZZ_REQUIRE(ends.client.seal(writer, 1U, {}, written) == QuicPacketError::None);
         ends.client.acknowledged(ping.number);
@@ -275,7 +283,7 @@ usize append(Ends& ends, QuicPacketSpec spec, u8* out, usize at, usize min_bytes
 {
     QuicPacketWriter writer;
     CRD_FUZZ_REQUIRE(writer.begin(spec, Span<u8>(out + at, kRoom)));
-    writer.frames()[0] = 0x01U;
+    put_ping(writer);
     usize written = 0U;
     CRD_FUZZ_REQUIRE(ends.client.seal(writer, 1U, {min_bytes, 0U}, written) == QuicPacketError::None);
     return at + written;
