@@ -4,7 +4,8 @@
 # in every build, ignore-unknown, downgrade detection and the transcript bytes the handshake binds, with the
 # identifiers generated from the standards register (register_ids.hpp, scripts/gen-register-ids.py), and the generated
 # wire formats (NET.3) with their frames, admission stages S6 and S7, quotas, reassembly and baseline deltas, and
-# 4.2a's transport (addresses, UDP sockets, QUIC headers, the I/O loop and admission stages S1 to S3). Contract:
+# 4.2a's transport (addresses, UDP sockets, QUIC headers, the I/O loop and admission stages S1 to S3, QUIC frames and
+# transport parameters). Contract:
 # docs/design/network-foundation.md.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")

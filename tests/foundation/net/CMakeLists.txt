@@ -1,7 +1,8 @@
 # crd-net tests (NET-STD, NET.3, 4.2a): the negotiation codec, the identifiers generated from the standards register, the
 # generated wire formats, whose test schema holds quantised fields (crd-net-quantized) and fills the S18 artefact
 # (crd-crypto), frames, admission, quotas and reassembly, integrity hashes and padding, state hashes and baseline deltas;
-# 4.2a's addresses and UDP sockets on the host's loopback, QUIC headers, admission stages S1 to S3 and the I/O loop.
+# 4.2a's addresses and UDP sockets on the host's loopback, QUIC headers, admission stages S1 to S3 and the I/O loop,
+# QUIC frames and transport parameters.
 add_executable(crd-net-tests
     test_admission.cpp
     test_coded_frames.cpp
@@ -11,6 +12,8 @@ add_executable(crd-net-tests
     test_ingress.cpp
     test_io_loop.cpp
     test_negotiation.cpp
+    test_quic_frame.cpp
+    test_quic_transport_parameters.cpp
     test_register_ids.cpp
     test_state_hash.cpp
     test_udp.cpp

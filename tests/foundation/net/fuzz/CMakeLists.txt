@@ -19,6 +19,13 @@ crd_fuzz_target(crd-fuzz-net-endpoint
 crd_fuzz_target(crd-fuzz-net-ingress
     SOURCES fuzz_ingress.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-ingress")
 
+# QUIC frames and transport parameters (4.2a).
+#   crd-fuzz-net-quic-codec   any payload or parameter set: refusals consume and change nothing, accepted frames and
+#                             parameters write back in their shortest form and read back the same, ACK ranges descend
+#                             and survive a rewrite, exactly one reserved parameter is written, versions come from inputs.
+crd_fuzz_target(crd-fuzz-net-quic-codec
+    SOURCES fuzz_quic_codec.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-codec")
+
 # Frames and admission (NET.3).
 #   crd-fuzz-net-admission   any bytes on a stream and in datagrams, against a restated frame layout and admission rule; a
 #                            stream at every split reading as it reads whole; fragments of generated messages on a hostile

@@ -69,6 +69,8 @@ TARGETS = {
                      'executable': 'tests/net/fuzz/crd-fuzz-net-endpoint'},
     'net-ingress': {'corpus': 'tests/foundation/net/fuzz/corpus-ingress',
                     'executable': 'tests/net/fuzz/crd-fuzz-net-ingress'},
+    'net-quic-codec': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-codec',
+                       'executable': 'tests/net/fuzz/crd-fuzz-net-quic-codec'},
     'net-state-hash': {'corpus': 'tests/foundation/net/fuzz/corpus-state-hash',
                        'executable': 'tests/net/fuzz/crd-fuzz-net-state-hash'},
     'net-coded-frames': {'corpus': 'tests/foundation/net/fuzz/corpus-coded-frames',
