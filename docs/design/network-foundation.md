@@ -645,10 +645,11 @@ after every step, rotates on a script byte, and ends confirmed runs with a forge
 - **Tokens a client carries.** Up to kQuicMaxCarriedTokenBytes (256): this build's tokens and longer ones from
   other servers. A longer Retry token is dropped, because the client could not send it. A server Initial carrying a
   token is dropped (section 17.2.2).
-- **A server's NEW_TOKEN.** The host mints the token at admission (`QuicAccept::new_token`, from
-  `QuicTokenKeys::mint_new_token` with the client's address and the fleet clock). The connection sends it once the
-  handshake is confirmed and keeps it as a ledger record, resent on loss and on an Application probe until it is
-  acknowledged. A client keeps the latest token for its next connection, where the ingress takes it once (its
+- **A server's NEW_TOKEN.** The host mints the token once the connection's version is final
+  (`QuicConnection::give_new_token` after `peer_parameters_known()`, from `QuicTokenKeys::mint_new_token` for
+  `version()` with the client's address and the fleet clock: a token belongs to the version its connection ran,
+  [S44](#quic-version-switch)). The connection sends it once the handshake is confirmed and keeps it as a ledger
+  record, resent on loss and on an Application probe until it is acknowledged. A client keeps the latest token for its next connection, where the ingress takes it once (its
   replay filter) as proof of the address.
 - **INVALID_TOKEN.** A Retry token that does not validate (forged, expired, another key, port or ID) is answered,
   within the answer rate, with one server Initial: sealed under the keys of the Destination Connection ID the client
@@ -673,6 +674,71 @@ the close), and `test_quic_connection.cpp`:
 Fuzzing: `crd-fuzz-net-ingress` opens every INVALID_TOKEN close as the client would (a new seed carries a forged
 Retry token). `crd-fuzz-net-quic-connection` has a script byte (0xFD) that answers the client's first flight with a
 Retry, and holds a confirmed pair to agree on it.
+
+<a id="quic-version-switch"></a>
+**S44. Compatible version negotiation on the connection** (4.2a, NET-STD's `quic.version-negotiation`, threat T01;
+[quic_connection.hpp](../../engine/foundation/net/include/crd/net/quic_connection.hpp),
+[quic_packet.hpp](../../engine/foundation/net/include/crd/net/quic_packet.hpp),
+[tls.hpp](../../engine/foundation/crypto/include/crd/crypto/tls.hpp); 2026-11-08). Sources: RFC 9368 sections 2 to 4
+and RFC 9369 sections 4, 4.1 and 5, read from the RFC Editor's text.
+
+- **Where the server chooses.** RFC 9369 section 4.1 forbids any CRYPTO frame before the client's parameters are
+  read and requires every CRYPTO frame in the negotiated version, and the server's own parameters must name that
+  version. The TLS provider reads the whole ClientHello and writes EncryptedExtensions in one `provide()`, so the
+  choice is made inside it: `crypto::QuicHelloAnswer`, asked once from the provider's select-certificate callback,
+  which runs on the first ClientHello (the inner one under ECH, before HelloRetryRequest), before the extensions are
+  parsed and before any secret exists. The connection's answer reads the client's parameters, picks the first of
+  its versions that the client lists and its first flight converts to (`quic_server_select_version`), switches its
+  keys and returns its parameters re-encoded with that chosen version. Parameters that do not parse or name another
+  chosen version change nothing: `read_peer_parameters()` closes with TRANSPORT_PARAMETER_ERROR or
+  VERSION_NEGOTIATION_ERROR after `provide()` returns, in the original version (never the provider's
+  handshake_failure). A key that cannot be derived fails the handshake.
+- **Keys.** `QuicPacketProtection` keeps three Initial keys: the send key and the receive keys of the running version
+  and of one other. `change_version()` re-derives the send key and the running receive key and keeps the old receive
+  key, so that the client's Initial packets still in the original version open on the server until the first
+  Handshake packet ends every Initial key (the "MUST NOT discard" of section 4.1). Handshake and 1-RTT keys are the
+  negotiated version's; 0-RTT keys stay in the original version. Both changes are refused once a Handshake key
+  exists. A Retry re-derives all of them for its ID; a Retry is always in the original version.
+- **How a client learns.** A client whose versions list a compatible one derives that version's server Initial key at
+  start (`expect_version()`). The first server Initial in it that opens switches the connection (section 4.1's
+  mechanism: the first long header in another version). A server CRYPTO frame in the original version settles the
+  original first, and a CRYPTO frame in the original version after a switch closes with PROTOCOL_VIOLATION. Afterwards
+  a client still opens the server's original-version Initial packets (acknowledgements sent before the switch),
+  and both sides drop Handshake and 1-RTT packets of any other version. An attacker on the path can forge the switching
+  Initial (Initial keys are public), but the server's authenticated chosen version then differs from the one the
+  client switched to and the client closes with VERSION_NEGOTIATION_ERROR: no worse than the forged Initial close
+  that is possible today.
+- **Downgrade checks.** The server checks that the client's chosen version is its first flight's. The client checks
+  that the server chose the version it switched to and, after a Version Negotiation packet, that it would have
+  attempted the same version from the server's list plus the negotiated one. The comparison is with the attempted
+  version, not the negotiated one (figure 1 of RFC 9368: attempted after Version Negotiation, then switched).
+  Before this slice the two were always equal.
+- **Tickets and tokens** (section 5). `QuicHandshake::set_version()` puts the version into the QUIC binding, the
+  session ID context of both ends. A client offers only tickets of the version it starts in. A server rebinds in its
+  answer, before the offered ticket is checked, so it resumes only a ticket of the version it runs. A ticket issued
+  after a switch belongs to the negotiated version, and the client rebinds when it learns. A client holding a
+  version 2 ticket starts in version 2 (section 6), and 0-RTT therefore never meets a switch. A server's NEW_TOKEN
+  token is minted after the version is final (`give_new_token()`). The ingress validates a token against the
+  version of the Initial carrying it.
+
+Evidence: `test_quic_handshake.cpp` (the answer sees the client's parameters exactly, its parameters reach the
+client, it is asked once across a HelloRetryRequest, an oversized answer fails, tickets resume only in their
+version in both directions of a switch), `test_quic_packet.cpp` (both versions both ways, the late Initial packets,
+a version neither key opens, Handshake keys of the wrong version, the discard, 0-RTT in the original version, a
+Retry's other key, and a real handshake's 1-RTT key held to the key log's secret keyed apart in each version),
+`test_quic_transport_parameters.cpp` (figure 1's check), and `test_quic_connection.cpp`:
+- a switch both ways on a clean path and twelve seeded paths that lose 15%, duplicate 5% and jitter, where no long
+  header returns to the original version once the negotiated one appears;
+- no switch with a client that offers one version, a server that prefers the original or runs only it;
+- two servers answering one first flight: a client settled in version 1 drops the switching server's packets,
+  and a switched client closes on the other's version 1 ServerHello;
+- client parameters that do not parse or name version 2 in a version 1 Initial;
+- behind a Retry-everything ingress, a switch after the Retry, whose NEW_TOKEN token proves a connection that
+  starts in the negotiated version and not one that starts in the original version.
+
+Fuzzing: `crd-fuzz-net-quic-connection`'s byte 0 bit 3 makes the client offer both versions and the server prefer
+the other, and a confirmed pair must run it (seeds `script-switch` and `script-switch-retry`); `crd-fuzz-net-quic-codec`
+checks the client's verdict against both attempted versions.
 
 <a id="admission"></a>
 ## Bounded admission
