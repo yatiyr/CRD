@@ -134,3 +134,28 @@ the unit's own first segment and read scratch. Both copy into the plain message;
   does), so a byte after the message is never refused.
 - The host was in use: crd-net's snapshot decode moved to 1.05x and 1.08x serialize's in these runs, and its command
   cells by up to 1.5x, as before.
+
+## Decode without a temporary (later the same day)
+
+Same machine and tree, two interleaved runs of `--rounds 25` of the binary before and after
+([session](../sessions/2026-11-08-net-3-decode-parity.md)). The profile (`perf record`, 15 rounds) put 28% of
+`EntityCodec::decode`'s samples on the load after `value = Value{}`: GCC built the default entity on the stack with a
+16-byte store and a 4-byte store into it (the quaternion's w), then reloaded 16 bytes, which store forwarding cannot
+serve. The generated decode now writes each field once on every path (its take, or its declared value when the field
+is absent), and the delta encoder's first-difference scan is inlined into its two callers.
+
+| Message | before (runs 1, 2) | after (runs 1, 2) | serialize, after |
+|---|---|---|---|
+| snapshot, decode ns | 1103.3, 1126.8 | 1083.6, 1075.0 | 1083.6, 1081.2 |
+| snapshot, encode ns | 1528.6, 1517.1 | 1395.8, 1374.5 | 1740.2, 1756.2 |
+| delta at 1 tick, encode / apply ns | 3518.9 / 2996.0, 3567.0 / 3039.7 | 3461.9 / 3047.2, 3419.9 / 2985.5 | |
+| delta at 6 ticks, encode / apply ns | 6270.2 / 5289.2, 6311.2 / 5372.7 | 6114.4 / 5300.8, 6209.8 / 5389.2 | |
+
+- Snapshot decode now equals serialize's (1.00x and 0.99x), from 1.01x to 1.03x in the same runs. The encode moved
+  with the binary's layout (the generated encode did not change); the command and chat cells stay within their noise.
+- Two other changes were measured and not kept: a reader taking every field with one bound check over a nine-byte
+  window (snapshot decode 5% to 8% slower: two more loads and shifts per field cost more than the predicted branch it
+  saves) and varints written and read a word at a time (no change outside noise).
+- Deltas stay the gap: an encode at one tick is 3.2x a snapshot decode and an apply 2.8x, where two decodes' worth of
+  reads is the floor. The profile spreads it over the interpreter's per-field dispatch (encode_fields, encode_present,
+  apply_fields and apply_value, 3.5% to 6% each), not over one routine.
