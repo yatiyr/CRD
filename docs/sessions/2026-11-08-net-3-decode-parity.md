@@ -12,8 +12,8 @@ it is that agent's work, and this track does not touch it.
 
 Nothing new from this track. 42416903705's two Build failures (linux-gcc-release, -shipping) are older than 8d5c9e63;
 42413677756's are older than their fixes; 42423776692, 42428822989 and 42430818018 have no failure yet. No completed
-run contains 6b9eca2c (42432298072 was cancelled by a newer push), so the public-checks pre-fetch of the FlatBuffers and Cap'n Proto pins
-is still unread.
+run contains 6b9eca2c (42432298072 was cancelled by a newer push), so the public-checks pre-fetch of the
+FlatBuffers and Cap'n Proto pins is still unread.
 
 ## What landed
 
