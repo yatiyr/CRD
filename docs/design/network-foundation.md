@@ -448,8 +448,8 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   connection's own in 1-RTT packets as records in the same ledger; DATAGRAM frames go to S41's datagrams. The peer's
   connection IDs are held to this side's active_connection_id_limit with Retire Prior
   To honoured, the ID in use moved off a retired one, and retirements owed or in flight bounded by twice the limit
-  (CONNECTION_ID_LIMIT_ERROR). A PATH_CHALLENGE is answered; a PATH_RESPONSE (none was sent) and RETIRE_CONNECTION_ID
-  (only sequence 0 was issued) are PROTOCOL_VIOLATION. A client keeps its server's latest NEW_TOKEN token.
+  (CONNECTION_ID_LIMIT_ERROR). A PATH_CHALLENGE is answered; a PATH_RESPONSE (none was sent) is PROTOCOL_VIOLATION, and
+  RETIRE_CONNECTION_ID is S42's. A client keeps its server's latest NEW_TOKEN token.
 - **Close.** An error closes with CONNECTION_CLOSE at the highest level and, before confirmation, the lower levels
   this side still holds keys for; CRYPTO_ERROR at the alert's level; an application close in Initial and Handshake
   packets becomes APPLICATION_ERROR without its reason. Closing answers datagrams after 1, 2, 4, ... of them for three
@@ -573,6 +573,52 @@ removed), `crd-fuzz-net-quic-datagram` (a sender and a receiver against a model 
 `crd-fuzz-net-quic-connection`'s scripts now ending with datagrams carried and reported.
 An outcome reports loss detection's verdict: on a path that reorders past RFC 9002's thresholds a datagram reported
 Lost may still arrive.
+
+<a id="quic-connection-ids"></a>
+**S42. This side's connection IDs and stateless reset** (4.2a, threats T01, T07 and T10;
+[quic_connection.hpp](../../engine/foundation/net/include/crd/net/quic_connection.hpp),
+[ingress.hpp](../../engine/foundation/net/include/crd/net/ingress.hpp), crd-crypto's `QuicResetKey`; 2026-11-08).
+Sources: RFC 9000 sections 5.1.1, 5.1.2, 10.3 to 10.3.3, 19.15 and 19.16.
+
+- **Tokens.** A token is the first 16 bytes of HMAC-SHA256(static key, connection ID) (section 10.3.2's example),
+  in crd-crypto beside the address validation tokens. A server that lost a connection, or another server of its
+  fleet sharing the key, derives it from a packet's Destination Connection ID alone. IDs are drawn from at least 128
+  random bits (`QuicRoutedIds`, 64 with an 8-byte ID), so no ID repeats under one key.
+- **Issuing.** The host (`QuicConnectionIds`) routes each ID and derives its token; `QuicRoutedIds` does so over the
+  loop's `ConnectionIdTable`. After confirmation the peer holds its active_connection_id_limit of this side's IDs
+  (at most 8, sequence 0 counted). NEW_CONNECTION_ID frames are ledger records resent until acknowledged, a rotated
+  ID's included. A server sends sequence 0's token as stateless_reset_token; a client sends none. With zero-length
+  IDs nothing is issued.
+- **Retiring.** A RETIRE_CONNECTION_ID for a sequence never issued, for the ID its packet was sent to, or toward
+  zero-length IDs is PROTOCOL_VIOLATION. Otherwise the ID goes back to the host and `send()` issues a replacement.
+  `rotate_connection_ids()` issues a full new set with Retire Prior To at its first sequence. The earlier IDs stay
+  routed until the peer retires them, and no second rotation starts before then (section 5.1.2's SHOULD NOT). A
+  frame's Retire Prior To never passes its own sequence. Closing hands every ID back, sequence 0 included.
+- **Detecting.** The trailing 16 bytes are copied before packets open in place. When the first packet does not
+  open (section 10.3.1's MUST) and the datagram has at least 21 bytes, they are compared in constant time with the
+  token of every peer ID this side has sent to and not retired; none is skipped once one matches. A match drains the
+  connection, from Closing too (keeping the close it sent). The host calls `stateless_reset()` for a datagram from
+  the peer's address that routes nowhere. Every datagram reaches the ID length plus 22 bytes, so a peer's reset of it
+  can look like a packet (section 10.3).
+- **Sending.** The ingress answers a short header for no connection with a reset when it holds a key and the answer
+  rate allows: one byte shorter than a trigger of 43 bytes or fewer, else a random length from 43 to 128, always
+  shorter than the trigger and at least 21 bytes, so a reset loop shrinks to nothing (section 10.3.3). Its fixed bits
+  are 01 and the rest is random. 0-RTT and Handshake packets for no connection stay dropped: the client has no token
+  yet.
+
+Evidence: `test_quic_token.cpp` (independent HMAC vectors, a shared and a fresh key, every refusal zeroing the
+output), `test_ingress.cpp` (sizes over nine trigger lengths 64 times each, the spread of lengths, the token and
+fixed bits, keyless, routed and rate-limited cases), and `test_quic_connection.cpp` (4 cases):
+- both ends at the peer's limit over 12 seeded paths that lose 20% and duplicate 10%, with the host's tokens, the
+  padding and every ID handed back on close;
+- two rotations, with packets routed to the new IDs and the retired token ignored;
+- replacement and both refusals from a raw peer, and a host that routes nothing;
+- resets ignored when too short, for an unused ID or with a forged token, a reset at 21 bytes, from Closing, and
+  from a restarted server's ingress.
+
+Source mutations, all caught, are counted in the session note. Fuzzing: `crd-fuzz-net-ingress` holds every reset to
+the size and token rules. `crd-fuzz-net-quic-connection` holds each host's table to the IDs its connection holds
+after every step, rotates on a script byte, and ends confirmed runs with a forged and a real reset.
 
 <a id="admission"></a>
 ## Bounded admission
