@@ -1939,7 +1939,7 @@ TEST_CASE("QUIC connection: datagrams cross both ways beside streams over hostil
             CHECK(allocator.calls() == allocations);
         }
     }
-    CHECK(lost != 0U); // the paths' losses were reported, and reordering past RFC 9002's thresholds besides
+    CHECK(lost != 0U); // the paths' losses were reported, and reordering before the thresholds rose
     CHECK(acked != 0U);
 }
 

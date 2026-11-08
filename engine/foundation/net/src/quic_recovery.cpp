@@ -9,7 +9,8 @@ namespace
 constexpr u8 kOutstanding  = 1U;
 constexpr u8 kAckedPending = 2U; // acknowledged by the ACK frame being processed, its event not yet sent
 constexpr u8 kAcked        = 3U;
-constexpr u8 kLost         = 4U;
+constexpr u8 kLost         = 4U; // by the packet threshold alone
+constexpr u8 kLostByTime   = 5U; // the time threshold held too
 
 constexpr u64 kMaxU64 = ~u64{0};
 // An RTT or ACK delay past 2^60 ns (36 years) counts as that, so the estimator's sums cannot wrap.
@@ -50,9 +51,14 @@ constexpr u64 kNanosPerMicro = 1000U;
     return static_cast<usize>(space);
 }
 
+[[nodiscard]] constexpr bool lost(u8 state) noexcept
+{
+    return state == kLost || state == kLostByTime;
+}
+
 [[nodiscard]] constexpr bool settled(u8 state) noexcept
 {
-    return state == kAcked || state == kLost;
+    return state == kAcked || lost(state);
 }
 
 [[nodiscard]] constexpr bool acknowledged(u8 state) noexcept
@@ -341,9 +347,15 @@ void QuicRecovery::settle(Space& space, QuicSentEntry& slot) noexcept
     }
 }
 
-void QuicRecovery::compact(Space& space) noexcept
+bool QuicRecovery::held_lost(QuicSpace id, const QuicSentEntry& slot, u64 now_ns) const noexcept
 {
-    while (space.count > 0U && settled(entry(space, 0U).state))
+    return lost(slot.state) && now_ns - slot.lost_ns <= probe_period_ns(id); // times only rise
+}
+
+void QuicRecovery::compact(QuicSpace id, u64 now_ns, bool room) noexcept
+{
+    Space& space = m_spaces[index_of(id)];
+    while (space.count > 0U && settled(entry(space, 0U).state) && (room || !held_lost(id, entry(space, 0U), now_ns)))
     {
         space.head = (space.head + 1U == space.entries.size()) ? 0U : space.head + 1U;
         --space.count;
@@ -383,6 +395,14 @@ u64 QuicRecovery::probe_period_ns(QuicSpace space) const noexcept
 {
     const u64 base = shl_sat(m_rtt.probe_base_ns(), m_pto_count);
     return (space == QuicSpace::Application) ? add_sat(base, shl_sat(m_peer_max_ack_delay_ns, m_pto_count)) : base;
+}
+
+u64 QuicRecovery::loss_delay_ns() const noexcept
+{
+    const u64 rtt    = max_u64(m_rtt.latest_ns, m_rtt.smoothed_ns);
+    const u64 window = min_u64(mul_sat(m_reorder_steps, m_rtt.min_ns / 4U), m_rtt.smoothed_ns);
+    return max_u64(add_sat(rtt * kQuicTimeThresholdNumerator / kQuicTimeThresholdDivisor, window),
+                   kQuicGranularityNs);
 }
 
 u64 QuicRecovery::persistent_congestion_ns() const noexcept
@@ -515,7 +535,7 @@ bool QuicRecovery::discard(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events)
 bool QuicRecovery::can_send(QuicSpace id) const noexcept
 {
     const Space& space = m_spaces[index_of(id)];
-    return !space.discarded && space.count < space.entries.size();
+    return !space.discarded && (space.count < space.entries.size() || settled(space.entries[space.head].state));
 }
 
 QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& packet) noexcept
@@ -531,7 +551,11 @@ QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& pack
     }
     if (space.count >= space.entries.size())
     {
-        return QuicRecoveryError::Full;
+        compact(id, packet.sent_ns, true); // a lost packet held for a late acknowledgement gives up its slot
+        if (space.count >= space.entries.size())
+        {
+            return QuicRecoveryError::Full;
+        }
     }
     QuicSentEntry& slot = entry(space, space.count);
     slot.packet         = packet;
@@ -583,9 +607,7 @@ QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents&
     {
         return loss;
     }
-    const u64 loss_delay =
-        max_u64(max_u64(m_rtt.latest_ns, m_rtt.smoothed_ns) * kQuicTimeThresholdNumerator / kQuicTimeThresholdDivisor,
-                kQuicGranularityNs);
+    const u64 loss_delay = loss_delay_ns();
     const u64 congestion = persistent_congestion_ns();
 
     // A run of lost ack-eliciting packets sent after the first RTT sample with no acknowledged packet between
@@ -618,14 +640,15 @@ QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents&
             continue;
         }
         const bool by_time   = now_ns >= packet.sent_ns && now_ns - packet.sent_ns >= loss_delay;
-        const bool by_number = space.largest_acked - packet.number >= kQuicPacketThreshold;
+        const bool by_number = space.largest_acked - packet.number >= m_packet_threshold;
         if (!by_time && !by_number)
         {
             space.loss_time_ns = min_u64(space.loss_time_ns, add_sat(packet.sent_ns, loss_delay));
             continue;
         }
         settle(space, slot);
-        slot.state = kLost;
+        slot.state   = by_time ? kLostByTime : kLost;
+        slot.lost_ns = now_ns;
         ++loss.packets;
         if (packet.in_flight)
         {
@@ -640,6 +663,16 @@ QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents&
         events.on_lost(id, packet);
     }
     close_run();
+    // RFC 8985 section 6.2, step 4: the raised thresholds persist for 16 loss detections with no spurious loss.
+    if (loss.packets != 0U && m_reorder_persist != 0U)
+    {
+        --m_reorder_persist;
+        if (m_reorder_persist == 0U)
+        {
+            m_packet_threshold = kQuicPacketThreshold;
+            m_reorder_steps    = 0U;
+        }
+    }
     return loss;
 }
 
@@ -662,12 +695,17 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
     {
         m_handshake_acked = true;
     }
+    const u64 prior_largest = space.largest_acked;
     space.largest_acked =
         (space.largest_acked == kQuicNoPacket) ? ack.largest : max_u64(space.largest_acked, ack.largest);
 
-    // Mark what this frame newly acknowledges; the events follow the losses (appendix A.7).
+    // Mark what this frame newly acknowledges; the events follow the losses (appendix A.7). A packet held after it
+    // was declared lost is acknowledged without an event and measures the reordering (section 6.1).
     u64  largest_newly = kQuicNoPacket;
     u64  largest_sent  = 0U;
+    u64  reordering    = 0U;
+    u64  carried       = kQuicNoPacket; // the largest of the ACK frames those packets carried
+    bool by_time       = false;
     bool eliciting     = false;
     {
         QuicAckRanges walk(ack);
@@ -678,16 +716,27 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
             for (usize i = lower_bound(space, range.smallest); i < end; ++i)
             {
                 QuicSentEntry& slot = entry(space, i);
-                if (slot.state != kOutstanding)
+                if (held_lost(id, slot, now_ns))
+                {
+                    reordering = max_u64(reordering, prior_largest - slot.packet.number + 1U);
+                    by_time    = by_time || slot.state == kLostByTime;
+                    slot.state = kAcked;
+                    ++out.spurious_packets;
+                    out.spurious_bytes += slot.packet.in_flight ? slot.packet.bytes : 0U;
+                }
+                else if (slot.state == kOutstanding)
+                {
+                    settle(space, slot);
+                    slot.state = kAckedPending;
+                    ++out.acked_packets;
+                    if (slot.packet.in_flight)
+                    {
+                        out.acked_bytes += slot.packet.bytes;
+                    }
+                }
+                else
                 {
                     continue;
-                }
-                settle(space, slot);
-                slot.state = kAckedPending;
-                ++out.acked_packets;
-                if (slot.packet.in_flight)
-                {
-                    out.acked_bytes += slot.packet.bytes;
                 }
                 eliciting = eliciting || slot.packet.ack_eliciting;
                 if (largest_newly == kQuicNoPacket || slot.packet.number > largest_newly)
@@ -695,12 +744,29 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                     largest_newly = slot.packet.number;
                     largest_sent  = slot.packet.sent_ns;
                 }
+                if (slot.packet.carried_ack != kQuicNoPacket &&
+                    (carried == kQuicNoPacket || slot.packet.carried_ack > carried))
+                {
+                    carried = slot.packet.carried_ack;
+                }
             }
         }
     }
-    if (out.acked_packets == 0U)
+    if (out.acked_packets == 0U && out.spurious_packets == 0U)
     {
         return out;
+    }
+    if (out.spurious_packets != 0U)
+    {
+        // RFC 8985 section 6.2, step 4, before this frame's detection: the packet threshold to the reordering seen,
+        // the time threshold's window one step a round trip for a loss the time threshold declared.
+        m_packet_threshold = min_u64(max_u64(m_packet_threshold, reordering), kQuicMaxPacketThreshold);
+        if (by_time && space.largest_acked >= space.reorder_round && m_reorder_steps < kQuicMaxReorderSteps)
+        {
+            ++m_reorder_steps;
+            space.reorder_round = space.next_number;
+        }
+        m_reorder_persist = kQuicReorderPersist;
     }
     if (largest_newly == ack.largest && eliciting)
     {
@@ -710,7 +776,6 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
     }
     out.lost = detect_lost(id, now_ns, events);
 
-    u64           carried = kQuicNoPacket;
     QuicAckRanges walk(ack);
     QuicAckRange  range;
     while (walk.next(range))
@@ -724,11 +789,6 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                 continue;
             }
             slot.state = kAcked;
-            if (slot.packet.carried_ack != kQuicNoPacket &&
-                (carried == kQuicNoPacket || slot.packet.carried_ack > carried))
-            {
-                carried = slot.packet.carried_ack;
-            }
             events.on_acked(id, slot.packet);
         }
     }
@@ -736,7 +796,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
     {
         space.received.on_ack_acknowledged(carried);
     }
-    compact(space);
+    compact(id, now_ns, false);
     if (peer_validated())
     {
         m_pto_count = 0U;
@@ -772,7 +832,7 @@ QuicTimeout QuicRecovery::on_timeout(u64 now_ns, QuicRecoveryEvents& events) noe
         out.kind  = QuicTimeoutKind::Loss;
         out.space = id;
         out.lost  = detect_lost(id, now_ns, events);
-        compact(m_spaces[index_of(id)]);
+        compact(id, now_ns, false);
         arm(now_ns);
         return out;
     }

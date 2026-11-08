@@ -2,7 +2,8 @@
 // receive ranges and when an ACK is owed (RFC 9000 section 13.2), the ACK frames written and read back, RFC 9002's
 // RTT estimator worked by hand, loss by both thresholds, the probe timeout and its backoff, the Application space held
 // until confirmation, the client's anti-deadlock probe, the amplification-blocked server, key discards, persistent
-// congestion and acknowledgements of numbers never sent (RFC 9000 sections 13.1 and 21.4).
+// congestion, acknowledgements of numbers never sent (RFC 9000 sections 13.1 and 21.4) and spurious losses raising the
+// thresholds (RFC 9002 section 6.1 by RFC 8985's mechanism) within their caps.
 
 #include <crd/net/quic_recovery.hpp>
 
@@ -119,6 +120,11 @@ struct Fixture
         REQUIRE(ack(QuicSpace::Application, 0U, 0U, rtt).rtt_sampled);
     }
 };
+
+u64 max_of(u64 a, u64 b)
+{
+    return (a > b) ? a : b;
+}
 
 bool same_ranges(ConstSpan<QuicAckRange> got, std::initializer_list<QuicAckRange> want)
 {
@@ -406,6 +412,259 @@ TEST_CASE("quic recovery: loss by the packet threshold, then by the time thresho
     CHECK(f.recovery.pto_count() == 0U);
     // A late acknowledgement of a packet declared lost settles nothing more.
     CHECK(f.ack(QuicSpace::Application, 1U, 1U, due).acked_packets == 0U);
+}
+
+TEST_CASE("quic recovery: a late acknowledgement shows a spurious loss and raises the packet threshold",
+          "[net][quic][recovery]")
+{
+    Fixture f;
+    f.confirmed_with_rtt(100U * kMs);
+    // Packet 1 carries an ACK frame of the Application space's received numbers.
+    CHECK(f.recovery.on_received(QuicSpace::Application, 0U, true, QuicEcn::NotEct, 0U));
+    CHECK(f.recovery.on_received(QuicSpace::Application, 2U, true, QuicEcn::NotEct, 0U));
+    u8                 room[64];
+    const QuicAckWrite written = f.recovery.write_ack(QuicSpace::Application, Span<u8>(room, sizeof(room)), kMs);
+    REQUIRE(written.largest == 2U);
+    CHECK(f.recovery.on_received(QuicSpace::Application, 4U, true, QuicEcn::NotEct, 2U * kMs));
+    QuicSentPacket carrier = packet(1U, 201U * kMs);
+    carrier.carried_ack    = written.largest;
+    REQUIRE(f.recovery.on_sent(QuicSpace::Application, carrier) == QuicRecoveryError::None);
+    for (u64 n = 2U; n <= 5U; ++n)
+    {
+        f.send(QuicSpace::Application, n, 200U * kMs + n * kMs, n != 2U); // 2 is neither eliciting nor in flight
+    }
+    REQUIRE(f.ack(QuicSpace::Application, 5U, 5U, 300U * kMs).lost.packets == 2U); // 1 and 2, by number
+    const u64   in_flight = f.recovery.bytes_in_flight();
+    const usize events    = f.events.count;
+
+    const QuicAckOutcome late = f.ack(QuicSpace::Application, 1U, 2U, 301U * kMs);
+    CHECK(late.error == QuicRecoveryError::None);
+    CHECK(late.acked_packets == 0U);
+    CHECK(late.spurious_packets == 2U);
+    CHECK(late.spurious_bytes == 1200U); // packet 1's: 2 was not in flight
+    CHECK(late.lost.packets == 0U);
+    CHECK(late.rtt_sampled); // the frame's largest is newly acknowledged, and an ack-eliciting packet with it
+    CHECK(f.recovery.rtt().latest_ns == 99U * kMs);
+    CHECK(f.events.count == events); // its loss was reported; nothing more
+    CHECK(f.recovery.bytes_in_flight() == in_flight);
+    CHECK(f.recovery.packet_threshold() == 5U); // 5 - 1 + 1: the reordering seen
+    CHECK(f.recovery.reorder_steps() == 0U);    // declared by number alone
+    CHECK(same_ranges(f.recovery.received(QuicSpace::Application).ranges(), {{4U, 4U}}));
+    // Once is all: the same acknowledgement again is nothing new.
+    const QuicAckOutcome again = f.ack(QuicSpace::Application, 1U, 2U, 302U * kMs);
+    CHECK(again.spurious_packets == 0U);
+    CHECK(again.acked_packets == 0U);
+
+    // The raised threshold declares 6 and 7 lost where three would have declared four.
+    REQUIRE(f.ack(QuicSpace::Application, 3U, 4U, 303U * kMs).acked_packets == 2U);
+    for (u64 n = 6U; n <= 12U; ++n)
+    {
+        f.send(QuicSpace::Application, n, 400U * kMs + n * kMs);
+    }
+    const QuicAckOutcome next = f.ack(QuicSpace::Application, 12U, 12U, 420U * kMs);
+    CHECK(next.lost.packets == 2U);
+    CHECK(next.spurious_packets == 0U);
+}
+
+TEST_CASE("quic recovery: the reordering is measured from the largest acknowledged before the frame",
+          "[net][quic][recovery]")
+{
+    Fixture f;
+    f.confirmed_with_rtt(100U * kMs);
+    for (u64 n = 1U; n <= 6U; ++n)
+    {
+        f.send(QuicSpace::Application, n, 200U * kMs + n * kMs);
+    }
+    REQUIRE(f.ack(QuicSpace::Application, 5U, 5U, 300U * kMs).lost.packets == 2U);
+    // One frame acknowledges 6, newer than any before, and the lost 1: 1 arrived after 5 was acknowledged.
+    const QuicAckRange   ranges[] = {{6U, 6U}, {1U, 1U}};
+    const AckFrame       frame(ConstSpan<QuicAckRange>(ranges, 2U));
+    const QuicAckOutcome out = f.recovery.on_ack(QuicSpace::Application, frame.ack(), 301U * kMs, f.events);
+    CHECK(out.acked_packets == 1U);
+    CHECK(out.spurious_packets == 1U);
+    CHECK(f.recovery.packet_threshold() == 5U); // 5 - 1 + 1, not 6 - 1 + 1
+    CHECK(f.recovery.largest_acked(QuicSpace::Application) == 6U);
+}
+
+TEST_CASE("quic recovery: a lost packet waits one probe period for a late acknowledgement or until its slot is needed",
+          "[net][quic][recovery]")
+{
+    QuicSentEntry initial[1];
+    QuicSentEntry handshake[1];
+    QuicSentEntry application[4];
+    QuicRecovery  recovery(QuicRecoveryConfig{QuicSide::Server}, Span<QuicSentEntry>(initial, 1U),
+                           Span<QuicSentEntry>(handshake, 1U), Span<QuicSentEntry>(application, 4U));
+    Events        events;
+    for (u64 n = 0U; n < 4U; ++n)
+    {
+        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(n, 0U)) == QuicRecoveryError::None);
+    }
+    REQUIRE(recovery.on_ack(QuicSpace::Application, ack_of(3U, 3U).ack(), 10U * kMs, events).lost.packets == 1U);
+    const u64 period = recovery.probe_period_ns(QuicSpace::Application);
+    CHECK(period == 55U * kMs); // srtt 10 + 4 rttvar 20 + max_ack_delay 25
+    // Full, but the lost packet's slot is free to take.
+    CHECK(recovery.can_send(QuicSpace::Application));
+
+    SECTION("an acknowledgement at the end of the period is spurious")
+    {
+        const QuicAckOutcome late =
+            recovery.on_ack(QuicSpace::Application, ack_of(0U, 0U).ack(), 10U * kMs + period, events);
+        CHECK(late.spurious_packets == 1U);
+        CHECK(recovery.packet_threshold() == 4U);
+    }
+    SECTION("past it, the packet is no longer held")
+    {
+        const QuicAckOutcome late =
+            recovery.on_ack(QuicSpace::Application, ack_of(0U, 1U).ack(), 10U * kMs + period + 1U, events);
+        CHECK(late.error == QuicRecoveryError::None);
+        CHECK(late.spurious_packets == 0U);
+        CHECK(late.acked_packets == 1U);
+        CHECK(recovery.packet_threshold() == kQuicPacketThreshold);
+    }
+    SECTION("a send takes the slot; the late acknowledgement then names a number older than any held")
+    {
+        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(4U, 20U * kMs)) == QuicRecoveryError::None);
+        CHECK_FALSE(recovery.can_send(QuicSpace::Application));
+        const QuicAckOutcome late = recovery.on_ack(QuicSpace::Application, ack_of(0U, 0U).ack(), 21U * kMs, events);
+        CHECK(late.error == QuicRecoveryError::None);
+        CHECK(late.spurious_packets == 0U);
+        CHECK(recovery.packet_threshold() == kQuicPacketThreshold);
+    }
+}
+
+namespace
+{
+// One round trip of a time-threshold loss: `a` and `b` sent together, `b` acknowledged after 100 ms, `a` declared
+// lost by the loss timer, then acknowledged 1 ms later.
+struct TimeRounds
+{
+    Fixture f;
+    u64     next = 1U;
+    u64     now  = 1000U * kMs;
+
+    TimeRounds() { f.confirmed_with_rtt(100U * kMs); }
+
+    QuicAckOutcome round(bool acknowledge_late = true)
+    {
+        const u64 a = next++;
+        const u64 b = next++;
+        f.send(QuicSpace::Application, a, now);
+        f.send(QuicSpace::Application, b, now);
+        REQUIRE(f.ack(QuicSpace::Application, b, b, now + 100U * kMs).lost.packets == 0U);
+        const u64 due = f.recovery.loss_timer_ns();
+        REQUIRE(f.recovery.on_timeout(due, f.events).lost.packets == 1U);
+        now = due + kMs;
+        QuicAckOutcome late;
+        if (acknowledge_late)
+        {
+            late = f.ack(QuicSpace::Application, a, a, now);
+        }
+        now += kMs;
+        return late;
+    }
+    // max(9/8 max(smoothed, latest) + min(steps * min_rtt / 4, smoothed), 1 ms), worked from the estimate.
+    [[nodiscard]] u64 expected_delay() const
+    {
+        const QuicRtt& rtt    = f.recovery.rtt();
+        const u64      worst  = (rtt.latest_ns > rtt.smoothed_ns) ? rtt.latest_ns : rtt.smoothed_ns;
+        const u64      steps  = f.recovery.reorder_steps();
+        const u64      window = (steps * (rtt.min_ns / 4U) < rtt.smoothed_ns) ? steps * (rtt.min_ns / 4U)
+                                                                              : rtt.smoothed_ns;
+        return worst * 9U / 8U + window;
+    }
+};
+} // namespace
+
+TEST_CASE("quic recovery: spurious losses by time widen the window a quarter of min_rtt a round trip",
+          "[net][quic][recovery]")
+{
+    TimeRounds rounds;
+    CHECK(rounds.f.recovery.loss_delay_ns() == rounds.expected_delay());
+    const QuicAckOutcome first = rounds.round();
+    CHECK(first.spurious_packets == 1U);
+    CHECK(rounds.f.recovery.reorder_steps() == 1U);
+    CHECK(rounds.f.recovery.packet_threshold() == kQuicPacketThreshold); // a reordering of two
+    CHECK(rounds.f.recovery.rtt().min_ns == 100U * kMs);
+    CHECK(rounds.f.recovery.loss_delay_ns() == rounds.expected_delay());
+    CHECK(rounds.f.recovery.loss_delay_ns() ==
+          max_of(rounds.f.recovery.rtt().latest_ns, rounds.f.recovery.rtt().smoothed_ns) * 9U / 8U + 25U * kMs);
+
+    // Two losses of one round trip, acknowledged in two frames, take one step.
+    Fixture& f = rounds.f;
+    const u64 a1 = rounds.next++;
+    const u64 a2 = rounds.next++;
+    const u64 b  = rounds.next++;
+    f.send(QuicSpace::Application, a1, rounds.now);
+    f.send(QuicSpace::Application, a2, rounds.now);
+    f.send(QuicSpace::Application, b, rounds.now);
+    REQUIRE(f.ack(QuicSpace::Application, b, b, rounds.now + 100U * kMs).lost.packets == 0U);
+    const u64 due = f.recovery.loss_timer_ns();
+    REQUIRE(f.recovery.on_timeout(due, f.events).lost.packets == 2U);
+    CHECK(f.ack(QuicSpace::Application, a1, a1, due + kMs).spurious_packets == 1U);
+    CHECK(f.recovery.reorder_steps() == 2U);
+    CHECK(f.ack(QuicSpace::Application, a2, a2, due + 2U * kMs).spurious_packets == 1U);
+    CHECK(f.recovery.reorder_steps() == 2U); // the round has not ended: nothing sent after the step is acknowledged
+    rounds.now = due + 3U * kMs;
+    CHECK(rounds.round().spurious_packets == 1U);
+    CHECK(f.recovery.reorder_steps() == 3U);
+}
+
+TEST_CASE("quic recovery: a peer faking reordering cannot push either threshold past its cap",
+          "[net][quic][recovery]")
+{
+    SECTION("the packet threshold")
+    {
+        Fixture f;
+        f.confirmed_with_rtt(100U * kMs);
+        for (u64 n = 1U; n <= 40U; ++n)
+        {
+            f.send(QuicSpace::Application, n, 200U * kMs);
+        }
+        REQUIRE(f.ack(QuicSpace::Application, 40U, 40U, 300U * kMs).lost.packets == 37U);
+        CHECK(f.ack(QuicSpace::Application, 1U, 1U, 301U * kMs).spurious_packets == 1U);
+        CHECK(f.recovery.packet_threshold() == kQuicMaxPacketThreshold); // a reordering of 40, capped
+    }
+    SECTION("the time threshold's window")
+    {
+        TimeRounds rounds;
+        for (u32 i = 0U; i < kQuicMaxReorderSteps + 5U; ++i)
+        {
+            REQUIRE(rounds.round().spurious_packets == 1U);
+        }
+        CHECK(rounds.f.recovery.reorder_steps() == kQuicMaxReorderSteps);
+        const QuicRtt& rtt = rounds.f.recovery.rtt();
+        CHECK(rounds.f.recovery.loss_delay_ns() == max_of(rtt.latest_ns, rtt.smoothed_ns) * 9U / 8U + rtt.smoothed_ns);
+    }
+}
+
+TEST_CASE("quic recovery: the raised thresholds return to RFC 9002's after 16 loss detections with no spurious loss",
+          "[net][quic][recovery]")
+{
+    TimeRounds rounds;
+    REQUIRE(rounds.round().spurious_packets == 1U);
+    REQUIRE(rounds.f.recovery.reorder_steps() == 1U);
+    // A reordering of five raises the packet threshold too: n and n + 1 lost by number, then acknowledged.
+    Fixture&  f = rounds.f;
+    const u64 n = rounds.next;
+    for (u64 i = 0U; i < 5U; ++i)
+    {
+        f.send(QuicSpace::Application, n + i, rounds.now);
+    }
+    rounds.next += 5U;
+    REQUIRE(f.ack(QuicSpace::Application, n + 4U, n + 4U, rounds.now + 100U * kMs).lost.packets == 2U);
+    REQUIRE(f.ack(QuicSpace::Application, n, n + 3U, rounds.now + 101U * kMs).spurious_packets == 2U);
+    REQUIRE(f.recovery.packet_threshold() == 5U);
+    rounds.now += 102U * kMs;
+    for (u32 i = 1U; i < kQuicReorderPersist; ++i)
+    {
+        rounds.round(false); // a loss nobody acknowledges later
+    }
+    CHECK(rounds.f.recovery.reorder_steps() == 1U);
+    CHECK(rounds.f.recovery.packet_threshold() == 5U);
+    rounds.round(false);
+    CHECK(rounds.f.recovery.reorder_steps() == 0U);
+    CHECK(rounds.f.recovery.packet_threshold() == kQuicPacketThreshold);
+    CHECK(rounds.f.recovery.loss_delay_ns() == rounds.expected_delay());
 }
 
 TEST_CASE("quic recovery: the probe timeout, its backoff and its reset", "[net][quic][recovery]")

@@ -742,8 +742,12 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "tests/foundation/net/test_quic_recovery.cpp",
+        "tests/foundation/net/fuzz/fuzz_quic_recovery.cpp"
+      ],
+      "deprecation": null,
+      "note": "Loss detection proven in crd-net (4.2a, design S37): RTT samples, both thresholds, the probe timeout, persistent congestion, and section 6.1's thresholds raised on a spurious loss by RFC 8985 section 6.2's mechanism (capped, back after 16 loss detections). The congestion controllers are NET-PATH's."
     },
     {
       "id": "quic.datagram",

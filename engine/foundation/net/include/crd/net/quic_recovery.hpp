@@ -19,6 +19,12 @@
 //               (6.1), the probe timeout with its backoff, the Application space held until confirmation, a client's
 //               anti-deadlock probe and a server blocked by the amplification limit (6.2), key discards (6.4) and
 //               persistent congestion's establishment (7.6.2).
+//   reordering  a packet declared lost stays held until a probe period passes (or its slot is needed), so a late
+//               acknowledgement shows the loss was spurious; the thresholds then rise (6.1) by RFC 8985's mechanism:
+//               the packet threshold to the reordering seen, the time threshold by a quarter of min_rtt per round
+//               trip, capped at smoothed_rtt, both back to RFC 9002's after 16 loss detections with no spurious loss.
+//               Both are capped, so a peer timing its ACKs to fake reordering can at worst leave a loss to the time
+//               threshold (T09).
 //   congestion  NET-PATH's controllers take the per-packet events (QuicRecoveryEvents) and the outcomes' totals;
 //               nothing here limits sending beyond the storage.
 //   time        every call takes the time in nanoseconds (TransportClock::now_ns); nothing reads a clock.
@@ -35,6 +41,9 @@
 namespace crd::net
 {
 inline constexpr u64   kQuicPacketThreshold        = 3U;          // RFC 9002 section 6.1.1
+inline constexpr u64   kQuicMaxPacketThreshold     = 32U;         // past this, a loss is the time threshold's
+inline constexpr u32   kQuicMaxReorderSteps        = 255U;        // quarters of min_rtt; the window caps at srtt
+inline constexpr u32   kQuicReorderPersist         = 16U;         // RFC 8985 section 6.2, step 4
 inline constexpr u64   kQuicTimeThresholdNumerator = 9U;          // 9/8 of an RTT, section 6.1.2
 inline constexpr u64   kQuicTimeThresholdDivisor   = 8U;
 inline constexpr u64   kQuicGranularityNs          = 1000000U;    // 1 ms, section 6.1.2
@@ -124,6 +133,7 @@ struct QuicSentPacket
 struct QuicSentEntry
 {
     QuicSentPacket packet;
+    u64            lost_ns = 0U; // when it was declared lost
     u8             state = 0U;
 };
 
@@ -169,6 +179,10 @@ struct QuicAckOutcome
     QuicRecoveryError error = QuicRecoveryError::None;
     usize             acked_packets = 0U;
     u64               acked_bytes = 0U; // of those in flight
+    // Packets declared lost that this frame acknowledges (RFC 9002 section 6.1): no event, as their loss was
+    // reported; a congestion controller may undo its response.
+    usize             spurious_packets = 0U;
+    u64               spurious_bytes = 0U; // of those that were in flight
     bool              rtt_sampled = false;
     QuicLoss          lost;
 };
@@ -281,6 +295,12 @@ public:
     [[nodiscard]] u64 probe_period_ns(QuicSpace space) const noexcept;
     // RFC 9002 section 7.6.1: (probe_base + max_ack_delay) * kQuicPersistentCongestionThreshold.
     [[nodiscard]] u64 persistent_congestion_ns() const noexcept;
+    // The packet threshold now: kQuicPacketThreshold, raised by spurious losses up to kQuicMaxPacketThreshold.
+    [[nodiscard]] u64 packet_threshold() const noexcept { return m_packet_threshold; }
+    // Quarters of min_rtt the time threshold's window holds (RFC 8985 section 6.2's reo_wnd_mult less one).
+    [[nodiscard]] u32 reorder_steps() const noexcept { return m_reorder_steps; }
+    // The time threshold now: max(9/8 max(smoothed, latest) + min(steps * min_rtt / 4, smoothed), 1 ms).
+    [[nodiscard]] u64 loss_delay_ns() const noexcept;
 
 private:
     struct Space
@@ -292,6 +312,7 @@ private:
         u64                       largest_acked = kQuicNoPacket;
         u64                       loss_time_ns = kNeverNs;
         u64                       last_eliciting_ns = 0U;
+        u64                       reorder_round = 0U; // next_number when the window last grew: one step a round
         usize                     eliciting_in_flight = 0U;
         bool                      discarded = false;
         QuicAckTracker            received;
@@ -301,7 +322,10 @@ private:
     [[nodiscard]] usize lower_bound(Space& space, u64 number) noexcept;
     [[nodiscard]] bool acknowledges_unsent(Space& space, const QuicAck& ack) noexcept;
     void settle(Space& space, QuicSentEntry& slot) noexcept;
-    void compact(Space& space) noexcept;
+    // Drops settled entries from the head: acknowledged ones, and lost ones past their probe period or all of them
+    // when `room` asks for a slot.
+    void compact(QuicSpace id, u64 now_ns, bool room) noexcept;
+    [[nodiscard]] bool held_lost(QuicSpace id, const QuicSentEntry& slot, u64 now_ns) const noexcept;
     [[nodiscard]] QuicLoss detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events) noexcept;
     [[nodiscard]] bool peer_validated() const noexcept;
     [[nodiscard]] bool any_eliciting_in_flight() const noexcept;
@@ -319,6 +343,9 @@ private:
     u64              m_peer_ack_delay_exponent = kQuicDefaultAckDelayExponent;
     u64              m_bytes_in_flight = 0U;
     u64              m_timer_ns = kNeverNs;
+    u64              m_packet_threshold = kQuicPacketThreshold;
+    u32              m_reorder_steps = 0U;
+    u32              m_reorder_persist = 0U; // loss detections before the thresholds return to RFC 9002's
     u32              m_pto_count = 0U;
     bool             m_confirmed = false;
     bool             m_handshake_keys = false;

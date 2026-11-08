@@ -9,9 +9,11 @@
 //
 // Oracles, against a model of every packet sent and received. Each packet is settled at most once, by one event; an
 // acknowledged packet lay in the frame's ranges and was outstanding; a lost one lay at or below the largest
-// acknowledged and met a threshold, and after an ACK no outstanding packet three below the largest remains; lost
-// packets come before acknowledged ones; AckOfUnsent is reported only for a range holding a number never sent, always
-// for one never sent above the oldest outstanding packet, and changes nothing. Bytes in flight equal the model's.
+// acknowledged and met a threshold, and after an ACK no outstanding packet the packet threshold below the largest
+// remains; lost packets come before acknowledged ones; AckOfUnsent is reported only for a range holding a number
+// never sent, always for one never sent above the oldest outstanding packet, and changes nothing. A spurious loss is
+// a lost packet in the frame's ranges within a probe period of its loss, counted once and with no event; the
+// thresholds stay within their caps and rise only on one. Bytes in flight equal the model's.
 // Received ranges stay ordered, separated, bounded and made of numbers received; a duplicate is refused exactly when
 // the ranges hold it; a written ACK frame reads back as the largest ranges. A loss or probe timeout fires only when
 // due, and the timer is armed while ack-eliciting packets are outstanding in a space it may serve.
@@ -39,11 +41,13 @@ constexpr u8 kOut       = 0U;
 constexpr u8 kAcked     = 1U;
 constexpr u8 kLost      = 2U;
 constexpr u8 kDiscarded = 3U;
+constexpr u8 kLate      = 4U; // lost, then acknowledged
 
 struct Sent
 {
     u64  number;
     u64  sent_ns;
+    u64  lost_ns;
     u32  bytes;
     bool eliciting;
     bool in_flight;
@@ -156,8 +160,9 @@ void check_ranges(ModelSpace& model, const QuicAckTracker& tracker)
     }
 }
 
-// Settles the events logged since `from` in the model: each one once, by the rule of its kind.
-void apply_events(World& w, usize from, ConstSpan<QuicAckRange> acked_ranges)
+// Settles the events logged since `from` in the model: each one once, by the rule of its kind, with the packet
+// threshold and reordering steps the detection used.
+void apply_events(World& w, usize from, ConstSpan<QuicAckRange> acked_ranges, u64 threshold, u32 steps)
 {
     bool seen_ack = false;
     for (usize i = from; i < w.log.count; ++i)
@@ -176,14 +181,17 @@ void apply_events(World& w, usize from, ConstSpan<QuicAckRange> acked_ranges)
         {
             CRD_FUZZ_REQUIRE(!seen_ack); // losses first
             CRD_FUZZ_REQUIRE(space.largest_acked != kQuicNoPacket && event.number <= space.largest_acked);
-            const QuicRtt& rtt   = w.recovery.rtt();
-            const u64      worst = (rtt.latest_ns > rtt.smoothed_ns) ? rtt.latest_ns : rtt.smoothed_ns;
-            u64            delay = worst * kQuicTimeThresholdNumerator / kQuicTimeThresholdDivisor;
-            delay                = (delay < kQuicGranularityNs) ? kQuicGranularityNs : delay;
-            const bool by_number = space.largest_acked - event.number >= kQuicPacketThreshold;
-            const bool by_time   = w.now >= sent->sent_ns && w.now - sent->sent_ns >= delay;
+            const QuicRtt& rtt    = w.recovery.rtt();
+            const u64      worst  = (rtt.latest_ns > rtt.smoothed_ns) ? rtt.latest_ns : rtt.smoothed_ns;
+            u64            window = static_cast<u64>(steps) * (rtt.min_ns / 4U);
+            window                = (window > rtt.smoothed_ns) ? rtt.smoothed_ns : window;
+            u64            delay  = worst * kQuicTimeThresholdNumerator / kQuicTimeThresholdDivisor + window;
+            delay                 = (delay < kQuicGranularityNs) ? kQuicGranularityNs : delay;
+            const bool by_number  = space.largest_acked - event.number >= threshold;
+            const bool by_time    = w.now >= sent->sent_ns && w.now - sent->sent_ns >= delay;
             CRD_FUZZ_REQUIRE(by_number || by_time);
-            sent->state = kLost;
+            sent->state   = kLost;
+            sent->lost_ns = w.now;
         }
         else
         {
@@ -200,6 +208,9 @@ void check_state(World& w)
     CRD_FUZZ_REQUIRE(w.recovery.pto_count() <= 64U);
     const QuicRtt& rtt = w.recovery.rtt();
     CRD_FUZZ_REQUIRE(!rtt.sampled() || rtt.min_ns <= rtt.smoothed_ns);
+    CRD_FUZZ_REQUIRE(w.recovery.packet_threshold() >= kQuicPacketThreshold &&
+                     w.recovery.packet_threshold() <= kQuicMaxPacketThreshold);
+    CRD_FUZZ_REQUIRE(w.recovery.reorder_steps() <= kQuicMaxReorderSteps);
     bool armable = false;
     for (usize s = 0U; s < kQuicSpaces; ++s)
     {
@@ -243,7 +254,7 @@ void op_send(World& w, QuicSpace id, u8 p)
     if (error == QuicRecoveryError::None)
     {
         space.sent[space.count++] =
-            Sent{packet.number, w.now, packet.bytes, packet.ack_eliciting,
+            Sent{packet.number, w.now, 0U, packet.bytes, packet.ack_eliciting,
                  packet.in_flight || packet.ack_eliciting, kOut};
         space.next  = packet.number + 1U;
         space.carry = kQuicNoPacket;
@@ -304,6 +315,23 @@ void op_ack(World& w, QuicSpace id, u8 p, const u8* more, usize more_bytes)
             }
         }
     }
+    // Spurious losses: lost packets in the ranges within a probe period of their loss. One whose slot a send took is
+    // no longer seen, so the count is at most these.
+    const u64 held_for   = w.recovery.probe_period_ns(id);
+    usize     candidates = 0U;
+    u64       candidate_bytes = 0U;
+    for (usize i = 0U; i < space.count; ++i)
+    {
+        Sent& sent = space.sent[i];
+        if (sent.state == kLost && ranges_hold(ConstSpan<QuicAckRange>(ranges, count), sent.number) &&
+            w.now - sent.lost_ns <= held_for)
+        {
+            ++candidates;
+            candidate_bytes += sent.in_flight ? sent.bytes : 0U;
+        }
+    }
+    const u64            threshold_before = w.recovery.packet_threshold();
+    const u32            steps_before = w.recovery.reorder_steps();
     const u64            before_bytes = w.recovery.bytes_in_flight();
     const usize          from = w.log.count;
     const QuicAckOutcome out = w.recovery.on_ack(id, frame.ack, w.now, w.log);
@@ -316,7 +344,28 @@ void op_ack(World& w, QuicSpace id, u8 p, const u8* more, usize more_bytes)
     {
         CRD_FUZZ_REQUIRE(out.error == QuicRecoveryError::AckOfUnsent && unsent);
         CRD_FUZZ_REQUIRE(w.log.count == from && w.recovery.bytes_in_flight() == before_bytes);
+        CRD_FUZZ_REQUIRE(w.recovery.packet_threshold() == threshold_before);
+        CRD_FUZZ_REQUIRE(w.recovery.reorder_steps() == steps_before);
         return;
+    }
+    CRD_FUZZ_REQUIRE(out.spurious_packets <= candidates && out.spurious_bytes <= candidate_bytes);
+    const u64 threshold_after = w.recovery.packet_threshold();
+    const u32 steps_after     = w.recovery.reorder_steps();
+    if (out.spurious_packets == 0U)
+    {
+        CRD_FUZZ_REQUIRE(threshold_after <= threshold_before && steps_after <= steps_before);
+    }
+    // A raise persists past this frame's detection, so the detection used the larger of before and after.
+    const u64 threshold = (threshold_after > threshold_before) ? threshold_after : threshold_before;
+    const u32 steps     = (steps_after > steps_before) ? steps_after : steps_before;
+    for (usize i = 0U; i < space.count; ++i)
+    {
+        Sent& sent = space.sent[i];
+        if (sent.state == kLost && ranges_hold(ConstSpan<QuicAckRange>(ranges, count), sent.number) &&
+            w.now - sent.lost_ns <= held_for)
+        {
+            sent.state = kLate;
+        }
     }
     CRD_FUZZ_REQUIRE(!unsent_above_outstanding);
     usize newly = 0U;
@@ -329,7 +378,7 @@ void op_ack(World& w, QuicSpace id, u8 p, const u8* more, usize more_bytes)
     space.largest_acked = (space.largest_acked == kQuicNoPacket || ranges[0].largest > space.largest_acked)
                               ? ranges[0].largest
                               : space.largest_acked;
-    apply_events(w, from, ConstSpan<QuicAckRange>(ranges, count));
+    apply_events(w, from, ConstSpan<QuicAckRange>(ranges, count), threshold, steps);
     usize lost = 0U;
     for (usize i = from; i < w.log.count; ++i)
     {
@@ -343,7 +392,7 @@ void op_ack(World& w, QuicSpace id, u8 p, const u8* more, usize more_bytes)
         {
             const Sent& sent = space.sent[i];
             CRD_FUZZ_REQUIRE(!(sent.state == kOut && sent.number <= space.largest_acked &&
-                               space.largest_acked - sent.number >= kQuicPacketThreshold));
+                               space.largest_acked - sent.number >= threshold));
         }
     }
 }
@@ -404,6 +453,8 @@ void op_timeout(World& w)
 {
     const u64         due  = w.recovery.loss_timer_ns();
     const u32         pto  = w.recovery.pto_count();
+    const u64         threshold = w.recovery.packet_threshold();
+    const u32         steps = w.recovery.reorder_steps();
     const usize       from = w.log.count;
     const QuicTimeout out  = w.recovery.on_timeout(w.now, w.log);
     if (due == kNeverNs || w.now < due)
@@ -415,7 +466,7 @@ void op_timeout(World& w)
     if (out.kind == QuicTimeoutKind::Loss)
     {
         CRD_FUZZ_REQUIRE(w.recovery.pto_count() == pto);
-        apply_events(w, from, ConstSpan<QuicAckRange>());
+        apply_events(w, from, ConstSpan<QuicAckRange>(), threshold, steps);
         return;
     }
     CRD_FUZZ_REQUIRE(w.log.count == from && out.probes != 0U);
@@ -446,7 +497,7 @@ void op_state(World& w, QuicSpace id, u8 p)
     if (id != QuicSpace::Application && (p & 0x40U) != 0U)
     {
         CRD_FUZZ_REQUIRE(w.recovery.discard(id, w.now, w.log));
-        apply_events(w, from, ConstSpan<QuicAckRange>());
+        apply_events(w, from, ConstSpan<QuicAckRange>(), kQuicPacketThreshold, 0U);
         ModelSpace& space = w.spaces[static_cast<usize>(id)];
         space.discarded = true;
         for (usize i = 0U; i < space.count; ++i)

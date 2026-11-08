@@ -66,6 +66,9 @@ jobs:
           # 4.2a's address texts: four non-replaying local events in 770 M executions (2026-11-08 session note).
           - {target: net-endpoint, seed: 8101, repeat: ''}
           - {target: net-endpoint, seed: 8102, repeat: ''}
+          # 4.2a's spurious losses: two non-replaying local events (a jump to 0, a pc on the stack), 2026-11-08.
+          - {target: net-quic-recovery, seed: 8201, repeat: ''}
+          - {target: net-quic-recovery, seed: 8202, repeat: ''}
 
     steps:
       - name: Checkout
