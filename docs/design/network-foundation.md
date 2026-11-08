@@ -392,7 +392,8 @@ it in order; `take` consumes the handshake's copy, so the sent bytes stay here u
   against the limit, owes an update once half the window was read, when the peer reports itself blocked (only if the
   limit can rise) or when the latest update was lost, and doubles the window up to its maximum when updates come
   within two smoothed RTTs (the auto-tuning of Chromium's QUIC flow controller), so the window follows the
-  path's bandwidth-delay product without a configured guess; a stream's maximum is its buffer's capacity.
+  path's bandwidth-delay product without a configured guess; a stream's maximum is its buffer's capacity. An update
+  owed only because the latest was lost goes again unchanged and tunes nothing (a loss says nothing of the reader).
 - **Storage.** Capacities are multiples of 64 bytes; the bitmaps are 1/8 of the receive capacity and 1/4 of the send
   capacity, the caller's. Nothing allocates or reads a clock.
 
@@ -432,10 +433,9 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   row carries a PING, because a peer need not acknowledge ACK-only packets and they would fill the space's storage
   (RFC 9000 section 13.2.4). An owed ACK counts toward `next_timer_ns()` only where `send()` can write it (keys held,
   space kept, storage free), so a caller's loop never spins on a timer nothing serves.
-- **Frames.** Every type is dispatched. With no stream credit and no max_datagram_frame_size advertised (streams and
-  DATAGRAM frames arrive in their own slices, which lift that), a stream frame is STREAM_LIMIT_ERROR for a peer's
-  stream and STREAM_STATE_ERROR for one this side never opened or one it only receives, and DATAGRAM is
-  PROTOCOL_VIOLATION. The peer's connection IDs are held to this side's active_connection_id_limit with Retire Prior
+- **Frames.** Every type is dispatched. Stream and flow-control frames go to S40's stream set, whose frames follow the
+  connection's own in 1-RTT packets as records in the same ledger; with no max_datagram_frame_size advertised
+  (DATAGRAM frames arrive in their own slice), DATAGRAM is PROTOCOL_VIOLATION. The peer's connection IDs are held to this side's active_connection_id_limit with Retire Prior
   To honoured, the ID in use moved off a retired one, and retirements owed or in flight bounded by twice the limit
   (CONNECTION_ID_LIMIT_ERROR). A PATH_CHALLENGE is answered; a PATH_RESPONSE (none was sent) and RETIRE_CONNECTION_ID
   (only sequence 0 was issued) are PROTOCOL_VIOLATION. A client keeps its server's latest NEW_TOKEN token.
@@ -458,6 +458,62 @@ of skipped and unsent numbers, a small Initial discarded, ACK-only runs freed by
 ack-eliciting packets, full storage without a due timer; the test network fails any timer that stays due), 27 source
 mutations each caught, and `crd-fuzz-net-quic-connection` (network scripts and raw-peer frames in 1-RTT and Initial
 packets, with the same stall oracle).
+
+<a id="quic-stream-set"></a>
+**S40. The connection's streams** (4.2a, threats T09 and T11;
+[quic_stream_set.hpp](../../engine/foundation/net/include/crd/net/quic_stream_set.hpp); 2026-11-08). `QuicStreamSet`
+is the one owner of a connection's streams (RFC 9000 sections 2 to 4, 13.3 and 19.4 to 19.14): their states, both
+credits and their frames. It knows nothing of packets: the connection asks it for frames and settles their records.
+
+- **Slots.** Each of the four stream types has a fixed pool of slots, each holding S38's buffers and credits, taken
+  from the injected allocator once. Open streams of a type are kept in ID order (IDs open in rising order, so an
+  append keeps it) and found by binary search; a free stack hands out slots. A peer's frame for a higher stream of
+  its own opens every lower one (section 3.2); a frame for a stream already freed is ignored; a stream this side
+  never opened is STREAM_STATE_ERROR, as is a frame for the part a unidirectional stream lacks, and one past this
+  side's grant is STREAM_LIMIT_ERROR.
+- **Limits** (section 4.6). The peer may hold as many streams of a type as this side has slots for it, so its
+  implicit opens always find a slot: MAX_STREAMS grants the streams freed plus the slots, owed once half the slots
+  were freed since the last grant or at once to a peer that sent STREAMS_BLOCKED. A slot is freed only when both parts
+  are terminal and the application polled its events, so a peer can never outrun an application that does not read.
+  This side opens within the peer's grant and owes one STREAMS_BLOCKED per limit it reached.
+- **Credit** (sections 4.1, 4.2 and 4.5). Every stream's data passes the stream's credit and the connection's, both
+  ways, through S38's `QuicSendCredit` and `QuicReceiveWindow`; the connection's sums are running totals (each
+  stream's highest offset received, its bytes read, its fresh bytes sent), so freeing a stream changes neither window,
+  and a RESET_STREAM's final size counts as received and read. Lost data resent takes no new credit.
+- **States** (sections 3.1 to 3.5). A STOP_SENDING resets the send part with the peer's code; a reset stream's final
+  size is its bytes sent and its lost data is never sent again; RESET_STREAM and STOP_SENDING go again when lost until
+  acknowledged (STOP_SENDING only while the data is still wanted); a lost MAX_STREAM_DATA goes again unless the final
+  size is known, a lost MAX_DATA or MAX_STREAMS while it is the latest, a lost blocked frame while that is the limit
+  (section 13.3). After STOP_SENDING arriving data is dropped and its credit returned.
+- **Sending.** `next_frame()` hands the connection one frame that fits its room with the record that settles it:
+  MAX_DATA, MAX_STREAMS, STREAMS_BLOCKED and DATA_BLOCKED first, then the listed streams by RFC 9218's urgencies
+  (0 first, 3 by default) and round robin within one, each stream's control frames before its data. A stream is
+  listed while it owes anything; `has_frame()` is exact (a credit-starved stream is listed but reports nothing), so a
+  connection never spins on work it cannot write. Stream frames carry an explicit Length, so the packet's padding can
+  follow them.
+- **Application.** `open`, `write` (with the FIN), `reset`, `stop_sending`, `set_urgency`, and a zero-copy read:
+  `peek()` gives the bytes that arrived without a gap as a view of the stream's buffer, `consume()` gives them up.
+  Events are a per-slot mask (opened, readable, writable, reset, stop asked, all sent) in a queue of slots: at most one
+  entry per slot, so it never fills and nothing is dropped.
+- **The connection.** Its limits are `QuicConnectionConfig::streams`, from which it fills the transport parameters;
+  the peer's arrive with the handshake. Its frame ledger now records the stream set's frames too, eight records per
+  packet by default; a full ledger holds frames back and drains as packets settle.
+
+Evidence: `test_quic_stream_set.cpp` (14 cases, every frame crossing as bytes: the limits and parameters; opening
+within the grant with STREAMS_BLOCKED once per limit and again when lost; every stream frame error; implicit opening
+through each of the five frame kinds; both credits with one blocked frame each per limit; lost credit frames by
+section 13.3; MAX_STREAMS following the freed slots only after the events were polled; a reset mid-transfer with its
+lost data not resent; STOP_SENDING answered with the peer's code and resent; the FIN alone, reads across the buffer's
+end and consumption bounds; urgencies with round robin; each kind of stream on its own peer grant; writable and
+readable events only when room or data is at the front; DATA_BLOCKED only when the connection holds data back; a
+blocked peer's grant at once; 24 streams echoed both ways over 12 seeded exchanges that lose 15%, duplicate 8% and
+reorder), `test_quic_connection.cpp` (streams echoed both ways over 16 seeded paths in both versions that lose 10%,
+duplicate 5% and reorder, nothing allocated after construction; a 12-record ledger under the same load), 35 source
+mutations of which 34 are caught (the survivor is the recovery of a sized frame that fails to fit, unreachable by
+`next_frame`'s contract; two conditions the first pass showed redundant were removed),
+`crd-fuzz-net-quic-stream-set` (two ends under any application calls, deliveries, losses and injected frames:
+`has_frame()` exact, every byte read the byte written) and `crd-fuzz-net-quic-connection`'s scripts now ending with
+a stream carried whole.
 
 <a id="admission"></a>
 ## Bounded admission
