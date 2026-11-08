@@ -415,6 +415,29 @@ TEST_CASE("construct_array / destroy_array", "[memory][construct]")
     REQUIRE(dtor_count == 5);
 }
 
+TEST_CASE("try_construct_array value-initialises, and a refusal or an overflow is nullptr", "[memory][construct]")
+{
+    struct Pair
+    {
+        u64 a = 7U;
+        u32 b = 0U;
+    };
+    LinearAllocator arena(4096);
+    u32* const words = try_construct_array<u32>(arena, 16U);
+    REQUIRE(words != nullptr);
+    for (usize index = 0U; index < 16U; ++index)
+    {
+        CHECK(words[index] == 0U);
+    }
+    Pair* const pairs = try_construct_array<Pair>(arena, 4U);
+    REQUIRE(pairs != nullptr);
+    CHECK(pairs[3].a == 7U);
+    CHECK(pairs[3].b == 0U);
+    CHECK(try_construct_array<u8>(arena, 8192U) == nullptr);
+    CHECK(try_construct_array<u64>(arena, ~usize{0} / 4U) == nullptr);
+    CHECK(try_construct_array<u8>(arena, 0U) == nullptr);
+}
+
 // =============================================================================
 // Stats
 // =============================================================================

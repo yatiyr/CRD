@@ -100,6 +100,23 @@ template <typename T> [[nodiscard]] T* try_allocate_array(IAllocator& alloc, usi
     return static_cast<T*>(alloc.try_allocate(bytes, alignof(T)));
 }
 
+// try_construct_array<T>(allocator, count) — try_allocate_array with each T value-initialised (zero for scalars):
+// nullptr, constructing nothing, on a refusal. For the fixed tables a component takes once at construction; release
+// them with destroy_array (or deallocate_array for a trivially destructible T).
+template <typename T> [[nodiscard]] T* try_construct_array(IAllocator& alloc, usize count) noexcept
+{
+    static_assert(std::is_nothrow_default_constructible_v<T>, "try_construct_array cannot unwind a throwing T");
+    T* const p = try_allocate_array<T>(alloc, count);
+    if (p != nullptr)
+    {
+        for (usize index = 0U; index < count; ++index)
+        {
+            ::new (static_cast<void*>(p + index)) T{};
+        }
+    }
+    return p;
+}
+
 // deallocate_array<T>(allocator, p) — counterpart for allocate_array.
 // Does NOT call destructors. Use destroy_array if elements were constructed.
 template <typename T> void deallocate_array(IAllocator& alloc, T* p) noexcept

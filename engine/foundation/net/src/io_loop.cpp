@@ -1,10 +1,9 @@
 // crd-net -- the transport's I/O loop (4.2a; docs/design/network-foundation.md#ingress).
 
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp>
 #include <crd/net/io_loop.hpp>
 #include <crd/time/clocks.hpp>
-
-#include <new>
 
 namespace crd::net
 {
@@ -12,29 +11,6 @@ namespace
 {
 constexpr u32 kMaxBatch = 1024U;
 constexpr u64 kAnswerRetryNs = 1000000U; // an answer the host was too busy to take is offered again within 1 ms
-
-template <typename T> T* take_array(memory::IAllocator& allocator, usize count) noexcept
-{
-    void* const storage = allocator.try_allocate(sizeof(T) * count, alignof(T));
-    if (storage == nullptr)
-    {
-        return nullptr;
-    }
-    T* const items = static_cast<T*>(storage);
-    for (usize index = 0U; index < count; ++index)
-    {
-        new (&items[index]) T{};
-    }
-    return items;
-}
-
-void give_back(memory::IAllocator& allocator, void* storage) noexcept
-{
-    if (storage != nullptr)
-    {
-        allocator.deallocate(storage);
-    }
-}
 } // namespace
 
 u64 HostClock::monotonic_ns() const noexcept
@@ -60,16 +36,18 @@ IoLoop::IoLoop(memory::IAllocator& allocator, DatagramSocket& socket, const Tran
     {
         return;
     }
-    ReceivedDatagram* const slots = take_array<ReceivedDatagram>(allocator, config.batch);
-    u8* const buffers = take_array<u8>(allocator, usize{config.batch} * config.slot_bytes);
-    OutgoingDatagram* const answers = take_array<OutgoingDatagram>(allocator, config.queued_answers);
-    u8* const answer_bytes = take_array<u8>(allocator, usize{config.queued_answers} * kQuicMaxStatelessAnswerBytes);
+    const usize buffer_bytes = usize{config.batch} * config.slot_bytes;
+    const usize answer_count = usize{config.queued_answers} * kQuicMaxStatelessAnswerBytes;
+    ReceivedDatagram* const slots = memory::try_construct_array<ReceivedDatagram>(allocator, config.batch);
+    u8* const buffers = memory::try_construct_array<u8>(allocator, buffer_bytes);
+    OutgoingDatagram* const answers = memory::try_construct_array<OutgoingDatagram>(allocator, config.queued_answers);
+    u8* const answer_bytes = memory::try_construct_array<u8>(allocator, answer_count);
     if (slots == nullptr || buffers == nullptr || answers == nullptr || answer_bytes == nullptr)
     {
-        give_back(allocator, slots);
-        give_back(allocator, buffers);
-        give_back(allocator, answers);
-        give_back(allocator, answer_bytes);
+        memory::destroy_array(allocator, slots, config.batch);
+        memory::destroy_array(allocator, buffers, buffer_bytes);
+        memory::destroy_array(allocator, answers, config.queued_answers);
+        memory::destroy_array(allocator, answer_bytes, answer_count);
         return;
     }
     for (u32 index = 0U; index < config.batch; ++index)
@@ -84,10 +62,10 @@ IoLoop::IoLoop(memory::IAllocator& allocator, DatagramSocket& socket, const Tran
 
 IoLoop::~IoLoop()
 {
-    give_back(m_allocator, m_slots);
-    give_back(m_allocator, m_buffers);
-    give_back(m_allocator, m_answers);
-    give_back(m_allocator, m_answer_bytes);
+    memory::destroy_array(m_allocator, m_slots, m_config.batch);
+    memory::destroy_array(m_allocator, m_buffers, usize{m_config.batch} * m_config.slot_bytes);
+    memory::destroy_array(m_allocator, m_answers, m_config.queued_answers);
+    memory::destroy_array(m_allocator, m_answer_bytes, usize{m_config.queued_answers} * kQuicMaxStatelessAnswerBytes);
 }
 
 u64 IoLoop::poll() noexcept
