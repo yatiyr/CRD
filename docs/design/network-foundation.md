@@ -604,8 +604,9 @@ Sources: RFC 9000 sections 5.1.1, 5.1.2, 10.3 to 10.3.3, 19.15 and 19.16.
 - **Sending.** The ingress answers a short header for no connection with a reset when it holds a key and the answer
   rate allows: one byte shorter than a trigger of 43 bytes or fewer, else a random length from 43 to 128, always
   shorter than the trigger and at least 21 bytes, so a reset loop shrinks to nothing (section 10.3.3). Its fixed bits
-  are 01 and the rest is random. 0-RTT and Handshake packets for no connection stay dropped: the client has no token
-  yet. The I/O loop sends resets through the same answer ring as Retry.
+  are 01 and the rest is random. 0-RTT and Handshake packets for no connection are never reset: the client has no
+  token yet (0-RTT goes to the server's held ring, [S46](#quic-server)). The I/O loop sends resets through the same
+  answer ring as Retry, after the handler checked the datagram as its own peer's reset.
 - **Cost under abuse (T10).** A retirement names an ID the peer has learnt, so a peer can force at most one HMAC, one
   random draw and one table insert per ID per round trip, bounded by its limit (at most 8). No cap on the total IDs
   issued is needed. Tokens are kept per connection, not per remote address: one path exists until NET-PATH adds more.
@@ -780,8 +781,7 @@ RFC 9221 section 3, read from the RFC Editor's text. The TLS side is S17's.
   `held_packets` slots of max_datagram_bytes (default 8, at most 64, allocated at construction). After each datagram
   the ring is read until no held packet opens; one whose keys went is dropped. A full ring drops the packet (the
   peer sends it again), so a peer can make a connection hold at most the ring (T10). 0-RTT before the Initial that
-  creates the connection is the ingress's (section 5.2.2's MAY) and comes with the connection behind the
-  IngressHandler.
+  creates the connection is held by the server behind the ingress ([S46](#quic-server)).
 - **Padding.** A datagram that must reach 1200 bytes is padded by its last packet, or by an earlier one that leaves
   too little room for the next (a 0-RTT packet behind a full Initial), so the floor holds whatever fits.
 
@@ -799,6 +799,50 @@ reports, the recovery drop and the context and check functions. `crd-fuzz-net-qu
 (byte 0, bit 4: a first connection leaves a ticket and the scripted one resumes with a stream and a datagram
 written before its first flight) and three seeds; its oracles hold the decision alike on both ends, the early stream
 whole and marked no further than it came, and a rejection's reset.
+
+<a id="quic-server"></a>
+**S46. The server behind the ingress** (4.2a, threats T01, T02 and T10;
+[quic_server.hpp](../../engine/foundation/net/include/crd/net/quic_server.hpp),
+[io_loop.hpp](../../engine/foundation/net/include/crd/net/io_loop.hpp),
+[ingress.hpp](../../engine/foundation/net/include/crd/net/ingress.hpp); 2026-11-08). Sources: RFC 9000 sections
+5.2.2, 7.2, 8.1.3, 9, 10.2.3 and 10.3, RFC 9001 section 4.1.4, read from the RFC Editor's text.
+
+- **The loop's handler.** `QuicServer` is the `IngressHandler` S34 names. The handler gains `on_early` (the ingress's
+  new `Early` action: 0-RTT for no connection under a Destination Connection ID of at least 8 bytes, unanswered and
+  uncharged) and `on_unrouted` (a short header for no connection, offered before the ingress's own stateless reset).
+  The loop's answer ring became `SendQueue`, which the server reuses for its connections' datagrams: written in place,
+  held while the host is Busy, a hard refusal dropping that datagram alone.
+- **Admission.** A fixed pool (`connections`, raw storage for the non-movable connection) with a free list. An admitted
+  Initial takes a slot: a fresh sequence 0 ID routed through the slot's `QuicRoutedIds`, the client's Destination
+  Connection ID routed to the slot for the connection's life (a late copy of the first Initial reaches it and is
+  dropped there instead of opening a second connection), the connection built in the Initial's version, `accept()`
+  with what the ingress proved and the datagram. A full pool or a connection that refuses to start is answered with
+  CONNECTION_REFUSED in the INVALID_TOKEN close's form (`Ingress::refuse`, one writer for both, within the answer
+  rate). Building the connection allocates its buffers from the injected allocator; nothing else does.
+- **0-RTT ahead of its Initial** (section 5.2.2). A ring in arrival order of `early_datagrams` slots of `early_bytes`,
+  at most `early_per_client` per Destination Connection ID and address, each kept `early_lifetime_ns` (100 ms), the
+  oldest evicted when full; the admitted connection reads its own after its Initial. After a Retry the ID is the
+  Retry's, so nothing is special-cased. A peer can make the server hold at most the ring (T10).
+- **Serving.** Routed datagrams are read at once from the connection's own address only; another address is a
+  migration or a NAT rebinding, which NET-PATH validates (section 9), so it is dropped and counted and every
+  connection's parameters carry disable_active_migration until then. A connection that received, timed out or was
+  woken is served once per turn from a binary min-heap of deadlines: timeout, the application's `on_service`, its
+  NEW_TOKEN token once its version is final (minted for its address, section 8.1.3), then its datagrams until it has
+  none or the queue is full and the host busy (served again within `send_retry_ns`). A Closed connection is reported,
+  destroyed (its IDs leave the table) and its slot reused under a new generation, so stale handles find nothing.
+- **A peer's stateless reset** (section 10.3.1). The server keeps a keyed index from a peer's address and port to the
+  first of its connections; a short header for no connection from that address is checked against the IDs the
+  connection used, and a match drains it unanswered.
+
+Evidence: `test_quic_server.cpp` (7 cases): 16 clients in both versions over clean, lossy (4%, 3% duplicated, 8 ms
+jitter) and busy-host paths, each echoed four streams and given a NEW_TOKEN token, no allocation while serving, and
+every route gone once they close; a resumed client's 0-RTT arriving 20 ms before its Initial held and read before the
+handshake completes in both versions, with and without a Retry-everything ingress, the NEW_TOKEN token proving the new
+port's address; a full pool's CONNECTION_REFUSED read by the client, the slot reused and the old handle stale; another
+address dropped, a late first Initial opening nothing, a client's stateless reset draining its connection unanswered
+and the same from another address answered by the ingress; the ring's share, eviction, size limit and expiry; every
+configuration refusal and allocation refusal; and a client served over the host's loopback. `test_io_loop.cpp` and
+`test_ingress.cpp` hold the two hooks and the Early action; `crd-fuzz-net-ingress` holds Early and the refusal close.
 
 <a id="admission"></a>
 ## Bounded admission
