@@ -32,6 +32,8 @@ UdpSocket open_on(const IpAddress& address, bool dual_stack = true, u16 port = 0
     options.bind = Endpoint{address, port};
     options.dual_stack = dual_stack;
     options.receive_buffer_bytes = 1U << 21U; // room for every test's burst
+    // and for the largest datagram: macOS sends nothing above its send buffer, 9216 bytes by default
+    options.send_buffer_bytes = 1U << 21U;
     SocketError error = SocketError::Failed;
     UdpSocket socket = UdpSocket::open(options, error);
     REQUIRE(error == SocketError::None);
