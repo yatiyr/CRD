@@ -3677,6 +3677,11 @@ TEST_CASE("QUIC connection: a rejected 0-RTT resets every stream and drops the q
         send_early(client, kStartNs, stream, datagram);
         u64 queued = 0U;
         REQUIRE(client.datagrams().queue(ConstSpan<u8>(kEarlyPayload), kStartNs, queued) == QuicDatagramError::None);
+        // One of the largest size waits for 1-RTT, the long header of a 0-RTT packet leaving it no room.
+        static const u8 kLargest[kQuicMinInitialDatagram] = {};
+        REQUIRE(client.datagrams().max_payload() <= sizeof(kLargest));
+        REQUIRE(client.datagrams().queue(ConstSpan<u8>(kLargest, client.datagrams().max_payload()), kStartNs,
+                                         queued) == QuicDatagramError::None);
         auto net = std::make_unique<Net>(client, server);
         EarlyWatch watch(QuicVersion::V1);
         net->filter = &watch;
@@ -3693,7 +3698,7 @@ TEST_CASE("QUIC connection: a rejected 0-RTT resets every stream and drops the q
             CHECK(report.outcome == QuicDatagramOutcome::Lost);
             ++lost;
         }
-        CHECK(lost == 2U);
+        CHECK(lost == 3U); // two sent in 0-RTT packets and the one still queued
         REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
         CHECK(server.handshake().early_data() != TlsEarlyData::Accepted);
         CHECK(server.streams().open_streams() == 0U); // a server rejecting 0-RTT processes none of it
@@ -3713,6 +3718,7 @@ TEST_CASE("QUIC connection: a rejected 0-RTT resets every stream and drops the q
         CHECK(early == 0U);
         ConstSpan<u8> payload;
         REQUIRE(net->run_until([&] { return server.datagrams().peek(payload); }));
+        CHECK(same(payload, ConstSpan<u8>(kEarlyPayload))); // the one sent again, never one dropped
         CHECK_FALSE(server.datagrams().oldest_early());
         CHECK(client.state() == QuicConnectionState::Established);
     }

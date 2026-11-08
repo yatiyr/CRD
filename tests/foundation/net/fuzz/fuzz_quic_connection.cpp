@@ -502,9 +502,9 @@ void transfer(Pair& pair)
 
 constexpr u64 kDatagrams = 12U;
 
-// Then datagrams of rising sizes from the client: each the server reads arrives once and byte-exact, and every one
-// is reported acknowledged or lost (or one side closes).
-void exchange_datagrams(Pair& pair)
+// Then datagrams of rising sizes from the client, their ids from `base`: each the server reads arrives once and
+// byte-exact, and every one is reported acknowledged or lost (or one side closes).
+void exchange_datagrams(Pair& pair, u64 base)
 {
     QuicDatagrams& out = pair.client.datagrams();
     QuicDatagrams& in = pair.server.datagrams();
@@ -528,7 +528,7 @@ void exchange_datagrams(Pair& pair)
             {
                 break;
             }
-            CRD_FUZZ_REQUIRE(id == queued);
+            CRD_FUZZ_REQUIRE(id == base + queued);
             ++queued;
         }
         pair.settle(8U);
@@ -547,8 +547,9 @@ void exchange_datagrams(Pair& pair)
         QuicDatagramReport report;
         while (out.poll(report))
         {
-            CRD_FUZZ_REQUIRE(report.id < queued && report.outcome != QuicDatagramOutcome::Expired);
-            CRD_FUZZ_REQUIRE(report.outcome == QuicDatagramOutcome::Lost || arrived[report.id]);
+            const u64 index = report.id - base;
+            CRD_FUZZ_REQUIRE(report.id >= base && index < queued && report.outcome != QuicDatagramOutcome::Expired);
+            CRD_FUZZ_REQUIRE(report.outcome == QuicDatagramOutcome::Lost || arrived[index]);
             ++reported;
         }
         const u64 next = (pair.client.next_timer_ns() < pair.server.next_timer_ns()) ? pair.client.next_timer_ns()
@@ -583,6 +584,17 @@ void stateless_reset(Pair& pair)
     CRD_FUZZ_REQUIRE(client.state() == QuicConnectionState::Draining && client.close_info().stateless_reset);
 }
 
+// Time moves to the next timer of either end (the script may have taught both an RTT of minutes) and the clean path
+// runs.
+void next_timer(Pair& pair)
+{
+    const u64 next = (pair.client.next_timer_ns() < pair.server.next_timer_ns()) ? pair.client.next_timer_ns()
+                                                                                 : pair.server.next_timer_ns();
+    pair.now = (next != kNeverNs && next > pair.now) ? next : pair.now;
+    pair.timers();
+    pair.settle(8U);
+}
+
 // A first clean connection that leaves `tickets` a ticket for the next one (after the handshake, at the Application
 // level).
 void take_ticket(QuicVersion version, bool switching, Tickets& tickets)
@@ -594,11 +606,42 @@ void take_ticket(QuicVersion version, bool switching, Tickets& tickets)
     CRD_FUZZ_REQUIRE(first.client.confirmed() && first.server.confirmed());
     for (usize round = 0U; round < 64U && !tickets.holds(); ++round)
     {
-        first.now += 10U * kMs;
-        first.timers();
-        first.settle(1U);
+        next_timer(first);
     }
     CRD_FUZZ_REQUIRE(tickets.holds());
+}
+
+// The early datagram (id 0): reported once, Acked only when the server holds it, and marked replayable there when
+// 0-RTT was accepted (it can only have come in a 0-RTT packet: it was queued before the first flight).
+void settle_early_datagram(Pair& pair, bool accepted)
+{
+    QuicDatagramReport report;
+    bool reported = false;
+    for (usize round = 0U; round < 256U && !reported && !finished(pair.client) && !finished(pair.server); ++round)
+    {
+        reported = pair.client.datagrams().poll(report);
+        if (!reported)
+        {
+            next_timer(pair);
+        }
+    }
+    if (!reported)
+    {
+        CRD_FUZZ_REQUIRE(finished(pair.client) || finished(pair.server));
+        return;
+    }
+    CRD_FUZZ_REQUIRE(report.id == 0U && report.outcome != QuicDatagramOutcome::Expired);
+    CRD_FUZZ_REQUIRE(accepted || report.outcome == QuicDatagramOutcome::Lost);
+    ConstSpan<u8> held;
+    const bool arrived = pair.server.datagrams().peek(held);
+    CRD_FUZZ_REQUIRE(report.outcome == QuicDatagramOutcome::Lost || arrived);
+    if (arrived)
+    {
+        CRD_FUZZ_REQUIRE(accepted && held.size() == sizeof(kEarlyPayload) &&
+                         std::memcmp(held.data(), kEarlyPayload, held.size()) == 0 &&
+                         pair.server.datagrams().oldest_early());
+        pair.server.datagrams().pop();
+    }
 }
 
 // The server's reads of the early stream after the script: whole and unchanged, its replayable marks never past
@@ -608,7 +651,7 @@ void read_early(Pair& pair)
     QuicStreamSet& server = pair.server.streams();
     u64 read = 0U;
     bool fin = false;
-    for (usize round = 0U; round < 256U && !fin && !finished(pair.client) && !finished(pair.server); ++round)
+    for (usize round = 0U; round < 512U && !fin && !finished(pair.client) && !finished(pair.server); ++round)
     {
         for (QuicStreamRead data = server.peek(0U); !data.data.empty() || data.fin; data = server.peek(0U))
         {
@@ -625,9 +668,10 @@ void read_early(Pair& pair)
                 break;
             }
         }
-        pair.now += 10U * kMs;
-        pair.timers();
-        pair.settle(1U);
+        if (!fin)
+        {
+            next_timer(pair);
+        }
     }
     CRD_FUZZ_REQUIRE((fin && read == kEarlyBytes) || finished(pair.client) || finished(pair.server));
 }
@@ -758,9 +802,10 @@ void run_script(QuicVersion version, bool switching, bool early, ConstSpan<u8> s
                 CRD_FUZZ_REQUIRE(pair.server.streams().recv_state(0U) == QuicRecvState::None);
                 CRD_FUZZ_REQUIRE(pair.server.datagrams().held() == 0U);
             }
+            settle_early_datagram(pair, decided == TlsEarlyData::Accepted);
         }
         transfer(pair);
-        exchange_datagrams(pair);
+        exchange_datagrams(pair, offered ? 1U : 0U);
         stateless_reset(pair);
     }
     CRD_FUZZ_REQUIRE(pair.allocator.peak_bytes() == allocations);
