@@ -331,6 +331,43 @@ and truncated datagrams; each discard; every trust check; key updates initiated,
 each rule; an update interval reaching Exhausted; a real `QuicHandshake` carried in these packets to 1-RTT in both
 versions, HANDSHAKE_DONE confirming it) and `crd-fuzz-net-quic-packet` (received datagrams and writer round trips).
 
+<a id="quic-recovery"></a>
+### QUIC recovery
+
+**S37. Acknowledgements and loss recovery** (4.2a, threats T06 and T09;
+[quic_recovery.hpp](../../engine/foundation/net/include/crd/net/quic_recovery.hpp); 2026-11-08).
+
+- **Receiving** (RFC 9000 section 13.2). `QuicAckTracker` holds a space's received numbers as at most 32 merged
+  ranges; when full, the smallest range goes, which is legal because the packet window (S36) refuses any number
+  already opened and everything below its span. An ACK is owed at once for an ack-eliciting Initial or Handshake
+  packet, a packet out of order or after a gap, a CE mark or the second ack-eliciting packet, otherwise within this
+  side's max_ack_delay; non-ack-eliciting packets owe nothing. The ACK frame holds as many of the largest ranges as
+  the room takes, the delay since the largest arrived (exponent 3 in Initial and Handshake, whose ACKs precede the
+  parameters, this side's own after) and the ECN counts once a marked packet arrived. When a packet carrying an ACK is
+  acknowledged, the ranges up to its largest are retired, the largest received number always kept (13.2.4).
+- **Sending.** Each space's sent packets sit in number order in caller storage, which bounds what a connection
+  holds in flight (`can_send`; a full space refuses). Numbers rise and may leave gaps: a sender skips numbers from
+  entropy, and an ACK naming any number it never sent, above the last or in a gap at or above the oldest entry, is
+  `AckOfUnsent` (PROTOCOL_VIOLATION, sections 13.1 and 21.4) and changes nothing.
+- **Recovery is RFC 9002 appendix A in code.** RTT samples only when the largest acknowledged is newly acknowledged
+  and an ack-eliciting packet is among them; min_rtt ignores the delay, the delay is capped at max_ack_delay only
+  after confirmation, ignored in Initial, and never takes a sample below min_rtt. Loss by three packets or 9/8 of
+  max(smoothed, latest) RTT (at least 1 ms), the remainder setting the loss timer; the probe timeout is smoothed +
+  max(4 rttvar, 1 ms), plus max_ack_delay in Application, doubled per expiry and reset by an ACK once the peer has
+  validated the address; the Application space waits for confirmation, a client with nothing in flight before
+  validation sends an anti-deadlock Initial (Handshake once it has those keys), a server blocked by the amplification
+  limit arms nothing until a datagram arrives. Discarding Initial or Handshake keys removes the space's packets from
+  flight as `on_discarded`, forgets its ranges and resets the backoff. Persistent congestion is a run of lost
+  ack-eliciting packets sent after the first sample with no acknowledged packet between whose send times span more
+  than three times (PTO + max_ack_delay).
+- **Congestion is NET-PATH's.** Controllers read the per-packet events (losses of a detection before the
+  acknowledgements of the same frame) and the outcomes' totals; nothing here allocates or reads a clock.
+
+Evidence: `test_quic_recovery.cpp` (19 cases: ranges merged, full and retired, every ACK trigger, frames read back
+with trimmed ranges and ECN, the estimator worked by hand, each threshold, the backoff, confirmation, anti-deadlock,
+amplification, discards, persistent congestion's three conditions, unsent acknowledgements, full storage and its
+ring), 23 source mutations each caught, and `crd-fuzz-net-quic-recovery` (a model of every packet sent and received).
+
 <a id="admission"></a>
 ## Bounded admission
 
