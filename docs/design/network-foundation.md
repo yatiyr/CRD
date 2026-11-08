@@ -402,6 +402,63 @@ first and acknowledged copies kept, the FIN sent, lost, resent and acknowledged,
 carried whole over 20 seeded paths that lose, reorder and duplicate, with auto-tuned updates), 24 source mutations each
 caught, and `crd-fuzz-net-quic-stream` (per-byte models of both buffers and the window's bounds).
 
+<a id="quic-connection"></a>
+### The QUIC connection
+
+**S39. The connection core** (4.2a, threats T01, T06, T07 and T09;
+[quic_connection.hpp](../../engine/foundation/net/include/crd/net/quic_connection.hpp); 2026-11-08). One owner for a
+connection's state: it carries S11's handshake in S36's packets, settles S37's events and S38's buffers, and is
+sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM and NET-DEBUG drive it unchanged.
+
+- **Handshake.** Each level's CRYPTO data is reassembled by S38 and provided in order; every key the handshake has is
+  installed after each `provide()`. The peer's transport parameters are read and checked the moment they arrive
+  (section 7.3's connection IDs, RFC 9368's version_information both ways, after Version Negotiation too), and set
+  recovery's max_ack_delay and exponent, the grease bit and the idle timeout. The server confirms on completion and
+  sends HANDSHAKE_DONE until it is acknowledged; the client confirms on reading it. Initial keys and their space go
+  with a client's first Handshake packet and a server's first opened one, Handshake keys at confirmation.
+- **Sending.** One datagram coalesces Initial, Handshake and 1-RTT packets, each with the ACK its space owes or may
+  carry. A datagram with a client's Initial, a server's ack-eliciting Initial or a PATH_RESPONSE reaches 1200 bytes,
+  the padding in its last packet; a server discards a client Initial in a datagram under 1200 bytes. Before the
+  client's address is proven (a token at accept, or its first Handshake packet) a server sends at most three times
+  every byte it received, and with less than one useful packet of credit it tells recovery it is blocked, which
+  disarms its timer until a datagram arrives. The QUIC bit is cleared per packet from entropy toward a peer that sent
+  grease_quic_bit, and one 1-RTT packet number in 64 is skipped, so an ACK naming it closes with PROTOCOL_VIOLATION
+  (section 21.4). The entropy is SipHash-2-4 over a counter under a key from the provider, or a configured seed for a
+  deterministic run.
+- **The frame ledger.** CRYPTO ranges, HANDSHAKE_DONE and RETIRE_CONNECTION_ID frames of each sent packet are records
+  in a bounded ring that `QuicSentPacket::token` points into; recovery's events settle them (acknowledged, lost:
+  resent, discarded: dropped). A full ring holds those frames back; ACKs and probes still go. A probe sends its
+  space's unacknowledged CRYPTO data again, else a PING (RFC 9002 section 6.2.4), and the 16th ACK-only packet in a
+  row carries a PING, because a peer need not acknowledge ACK-only packets and they would fill the space's storage
+  (RFC 9000 section 13.2.4). An owed ACK counts toward `next_timer_ns()` only where `send()` can write it (keys held,
+  space kept, storage free), so a caller's loop never spins on a timer nothing serves.
+- **Frames.** Every type is dispatched. With no stream credit and no max_datagram_frame_size advertised (streams and
+  DATAGRAM frames arrive in their own slices, which lift that), a stream frame is STREAM_LIMIT_ERROR for a peer's
+  stream and STREAM_STATE_ERROR for one this side never opened or one it only receives, and DATAGRAM is
+  PROTOCOL_VIOLATION. The peer's connection IDs are held to this side's active_connection_id_limit with Retire Prior
+  To honoured, the ID in use moved off a retired one, and retirements owed or in flight bounded by twice the limit
+  (CONNECTION_ID_LIMIT_ERROR). A PATH_CHALLENGE is answered; a PATH_RESPONSE (none was sent) and RETIRE_CONNECTION_ID
+  (only sequence 0 was issued) are PROTOCOL_VIOLATION. A client keeps its server's latest NEW_TOKEN token.
+- **Close.** An error closes with CONNECTION_CLOSE at the highest level and, before confirmation, the lower levels
+  this side still holds keys for; CRYPTO_ERROR at the alert's level; an application close in Initial and Handshake
+  packets becomes APPLICATION_ERROR without its reason. Closing answers datagrams after 1, 2, 4, ... of them for three
+  PTOs; a peer's close drains for three PTOs; the idle timeout is the smaller non-zero max_idle_timeout, at least three
+  PTOs, restarted by an opened packet and by the first ack-eliciting packet sent after one (section 10.1); `ping()` is
+  the keep-alive. A client's Version Negotiation packet that lists its version is ignored, and one that does not ends
+  the connection naming the version to retry in.
+- **Memory.** Everything comes from the injected allocator at construction; receiving and sending allocate nothing.
+
+Evidence: `test_quic_connection.cpp` (22 cases: both versions to confirmation, nothing allocated after construction;
+40 seeded paths that lose 20%, duplicate 10% and reorder; a server held to three times what it received and silent
+while blocked; lost first flights and a lost HANDSHAKE_DONE; idle timeout and keep-alives; key updates and the
+previous key's discard; closing, draining and an early application close; an alert's CRYPTO_ERROR at its levels;
+connection ID and downgrade checks; Version Negotiation; refusals; and, from a raw peer, every refused frame with its
+error, CRYPTO past the window, frames out of place, connection IDs with retirement, PATH_CHALLENGE and acknowledgements
+of skipped and unsent numbers, a small Initial discarded, ACK-only runs freed by a peer that acknowledges only
+ack-eliciting packets, full storage without a due timer; the test network fails any timer that stays due), 27 source
+mutations each caught, and `crd-fuzz-net-quic-connection` (network scripts and raw-peer frames in 1-RTT and Initial
+packets, with the same stall oracle).
+
 <a id="admission"></a>
 ## Bounded admission
 
