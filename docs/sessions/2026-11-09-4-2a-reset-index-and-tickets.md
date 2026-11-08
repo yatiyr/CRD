@@ -27,9 +27,9 @@ downloads.nwtime.org's bytes; the same pin passed on linux-gcc-debug-scalar in t
   ending the one it names; an IPv6 peer with a zone; a retired token and a token from another address ending nothing;
   exactly when a host learns and forgets a token; a client's own cache resuming with 0-RTT in both versions, off, or
   replaced; expiry within a turn and before the next connect; `test_ticket_cache.cpp`'s six cases.
-- 25 source mutations on the host, connection, client and cache: 24 caught. Two were caught only after a test was added
-  (a double forget) or the mutation repaired; the host's size gate (`datagram.size < 21`) survives on MSVC because
-  reading before a short datagram finds nothing there: it is a bounds check only the sanitizers can observe.
+- 25 source mutations on the host, connection, client and cache, each caught: 24 on MSVC win-debug (one, a double
+  forget, after a test was added for it), and the host's size gate (`datagram.size < 21`) by linux-gcc-asan only, a
+  heap-buffer-overflow reading before a 9-byte datagram.
 - linux-gcc-asan: crd-net-tests 340 cases (28.8 million assertions), both corpora replay.
 - `crd-fuzz-net-ticket-cache` against a model of the contract (3 seeds); `crd-fuzz-net-quic-connection`'s hosts keep a
   token table now, its size held to the IDs held and to zero after Closed. libFuzzer on linux-clang-fuzz: the cache 1.14
