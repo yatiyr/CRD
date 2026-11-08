@@ -83,3 +83,21 @@ rebuilds no float or quaternion, and the walk decodes.
   bit, nothing allocated. The check pass alone takes the viewed form from 1.78x (1936 ns) to 1.45x.
 - The last 4% to 8% is not yet attributed. The first candidate is the reader: each field reloads an unaligned word at
   its bit position and checks the bound twice, where serialize shifts a scratch word it refills once per 32 bits.
+
+## Deltas as word runs (later the same day)
+
+Same machine and tree, two runs of `--rounds 25` ([session](../sessions/2026-11-08-net-3-delta-runs.md)). Before:
+the profile (`perf record`, 15 rounds) put 21% of the board in the delta reader's out-of-line `take` and most of the
+rest in per-field dispatch: an unchanged entity was compared, and a changed one rebuilt, field by field. Now each table
+row names its run of fixed-size siblings (S28), compared and copied as 64-bit words, and a plain value is read once.
+
+| Baseline age | encode ns before | encode ns (runs 1, 2) | apply ns before | apply ns (runs 1, 2) |
+|---|---|---|---|---|
+| 1 tick | 7659 | 3574.0, 3631.4 | 6142 | 3182.1, 3278.3 |
+| 6 ticks | 10723 | 6414.7, 6455.8 | 7944 | 5500.4, 5542.4 |
+
+- At one tick a delta encode now takes 2.4x a whole snapshot's encode (1494.5 ns and 1514.5 ns in the same runs), from
+  5.2x, and an apply 2.8x its decode (1140.4 ns, 1135.8 ns), from 5.4x against today's decode. Bytes are unchanged.
+- The gap against the floor: an encode reads two encodings and an apply reads two and writes one, so about two decodes'
+  worth of bit reads each. What is left above it is per changed field: a fresh scan of the run's remaining words after
+  each difference, and the folded differences as three-bit varint groups read and written one group at a time.

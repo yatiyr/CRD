@@ -1423,7 +1423,7 @@ from one authored schema through `scripts/gen-wire-schemas.py`; nothing hand-wri
   its verdicts on damaged messages at every minor, older and newer writers included.
 
 Later slices of [NET.3](../ROADMAP.md#slice-net.3): [baseline deltas](#baseline-deltas), [the integrity hash](#integrity-hash),
-[padding](#padding), [the state-hash exchange](#state-hashes) and [coded bodies](#body-coding) with the tool that trains their models landed, and the serializer budget board ([2026-11-08](../bench/2026-11-08-net-3-serializers.md)); a cheaper validating pass, cheaper deltas and two more peers remain. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
+[padding](#padding), [the state-hash exchange](#state-hashes) and [coded bodies](#body-coding) with the tool that trains their models landed, and the serializer budget board ([2026-11-08](../bench/2026-11-08-net-3-serializers.md)); a cheaper validating pass, cheaper deltas (word runs halved their cost on 2026-11-08) and two more peers remain. crd-net does not link crd-hesap-net, which is not a packaged library: a target holding
 a schema with quantised fields links `crd-net-quantized`, whose header sits outside crd-net's installed headers.
 
 <a id="frames"></a>
@@ -1496,7 +1496,11 @@ fields that differ from a baseline. The codec works on encoded bytes, not values
 holds, so a quantised field compares by its code and is never quantised twice, unchanged fields need no re-encoding, and a
 receiver rebuilds one ordinary encoding of the message that the generated decoder then validates and views, so a delta adds no
 second decoder and no lifetime on a baseline. The generator writes one table per message and one interpreter (`delta_encode`,
-`delta_apply`) walks them. No allocation.
+`delta_apply`) walks them. No allocation. Each table row also names its run: the siblings from it on, of one revision, whose
+encodings always take the same bits (fixed-width values, plain structs and fixed-count lists of them; never a varint, whose
+width a hostile baseline's continuation bit would change). A run is compared, copied and skipped as 64-bit words: the
+writer finds the first bit that differs and codes the fields before it as their zero bits, the reader counts the leading
+zero change bits and copies those fields' bits from the baseline in one move. The layout is unchanged, so are the vectors.
 
 - **The layout.** Each field a writer's revision has gets one changed bit before it, in field order, so a newer writer's
   fields land after everything an older reader knows and revisions compose as they do for messages. A changed optional then
