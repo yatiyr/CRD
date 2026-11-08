@@ -73,6 +73,9 @@ jobs:
           # three of them with the client leg removed, 2026-11-08.
           - {target: net-ingress, seed: 8301, repeat: ''}
           - {target: net-ingress, seed: 8302, repeat: ''}
+          # 4.2a's ticket cache and token index: three non-replaying local events, 2026-11-09.
+          - {target: net-ticket-cache, seed: 8401, repeat: ''}
+          - {target: net-quic-connection, seed: 8402, repeat: ''}
 
     steps:
       - name: Checkout

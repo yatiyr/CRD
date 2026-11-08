@@ -30,8 +30,13 @@ downloads.nwtime.org's bytes; the same pin passed on linux-gcc-debug-scalar in t
 - 25 source mutations on the host, connection, client and cache: 24 caught. Two were caught only after a test was added
   (a double forget) or the mutation repaired; the host's size gate (`datagram.size < 21`) survives on MSVC because
   reading before a short datagram finds nothing there: it is a bounds check only the sanitizers can observe.
-- `crd-fuzz-net-ticket-cache` against a model of the contract (3 seeds replay); `crd-fuzz-net-quic-connection`'s
-  hosts now keep a token table, with its size held to the IDs held and to zero after Closed.
+- linux-gcc-asan: crd-net-tests 340 cases (28.8 million assertions), both corpora replay.
+- `crd-fuzz-net-ticket-cache` against a model of the contract (3 seeds); `crd-fuzz-net-quic-connection`'s hosts keep a
+  token table now, its size held to the IDs held and to zero after Closed. libFuzzer on linux-clang-fuzz: the cache 1.14
+  million executions clean in two runs; three events did not replay and carried this host's signature
+  ([control](2026-10-11-diag-10a-container-overflow-control.md)): a SEGV and a crash on the cache, whose harness holds
+  no pointers but the cache's own, and a `stack-buffer-underflow` inside AWS-LC's SHA-256 in the connection's run. So
+  hosted legs (net-ticket-cache and net-quic-connection, seeds 8401 and 8402) join host-check.yml.
 
 ## Next
 
