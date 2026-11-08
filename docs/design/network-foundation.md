@@ -844,6 +844,47 @@ and the same from another address answered by the ingress; the ring's share, evi
 configuration refusal and allocation refusal; and a client served over the host's loopback. `test_io_loop.cpp` and
 `test_ingress.cpp` hold the two hooks and the Early action; `crd-fuzz-net-ingress` holds Early and the refusal close.
 
+<a id="quic-client"></a>
+**S47. The client's host** (4.2a, threats T01, T02 and T10;
+[quic_host.hpp](../../engine/foundation/net/include/crd/net/quic_host.hpp),
+[quic_client.hpp](../../engine/foundation/net/include/crd/net/quic_client.hpp),
+[ingress.hpp](../../engine/foundation/net/include/crd/net/ingress.hpp); 2026-11-08). Sources: RFC 9000 sections
+5.2.1, 6.2, 7.2, 8.1.3 and 10.3, RFC 9368 sections 2.1 and 4, RFC 9369 section 5, read from the RFC Editor's text.
+
+- **One host, two sides.** What S46's server did beyond admission is now `QuicHost`, which both hosts derive: the pool
+  with its free list and generations (`QuicHandle`), routing from the peer's address only, the deadline min-heap, the
+  `SendQueue` drain with the busy-host retry, the peer index for stateless resets and the close. The connections'
+  storage holds one cell more than the pool, the spare a connection is built in before it goes live, so a successor
+  can be built while its predecessor stands. `QuicServer` keeps admission, the held 0-RTT ring and NEW_TOKEN minting.
+- **A client's ingress.** `Ingress`'s second constructor runs S1 and S2 alone over the loop's table: everything whose
+  Destination Connection ID routes goes to its connection, Version Negotiation and Retry among them (they carry the ID
+  the client chose), which judges them; 0-RTT and long headers of versions the client does not run are dropped; it
+  admits and answers nothing (`answer()` and `refuse()` write nothing). So the client runs the same `IoLoop`, batches
+  and executor seam as the server.
+- **A short stateless reset.** A reset can be 21 bytes, shorter than any packet the receiver would open; the loop now
+  offers a short header dropped as too short to protect to `on_unrouted` as well (both hosts), never answering it.
+- **Connecting.** `QuicClient::connect()` takes a slot, issues a sequence 0 ID of the ingress's length (8 to 20
+  bytes, so many connections to one or many servers share one socket), draws a 16-byte first Destination Connection
+  ID from the provider (section 7.2) and starts the connection, optionally under another TLS context (a server name
+  and pins per connection); the first flight leaves in the next turn, after the application's first `on_service`, so
+  a resumed connection's 0-RTT is written there.
+- **Tokens.** A NEW_TOKEN token is remembered per server address, port and the version the connection ran (RFC 9369
+  section 5) in a fixed table, the oldest replaced, and carried by the next connection there once (section 8.1.3: a
+  client does not reuse a token); an application may pass a token of its own (an earlier process's).
+- **Version Negotiation** (RFC 9368 section 4). A connection closed by a Version Negotiation that offers a version of
+  the client's preference is replaced under the same handle by one in that version, with after_version_negotiation
+  set so the downgrade check runs; `on_restart` tells the application its writes are gone. One that offers nothing the
+  client runs, or a second one, ends the connection.
+
+Evidence: `test_quic_client.cpp` (8 cases): twelve connections over one socket to two servers in both versions over
+clean, lossy (4%, 3% duplicated, 8 ms jitter) and busy-host paths, echoed, given tokens, served with no allocation
+and closed with nothing routed; Version Negotiation followed into version 2, a second one and one listing nothing the
+client runs ending it; a Retry taken and its NEW_TOKEN token proving the next connection once in both versions;
+0-RTT written in the first service and accepted; the server's stateless reset honoured only from its address; another
+address dropped; the pool's bounds, stale handles, a TLS context per connection, every configuration and allocation
+refusal; and a client host on the host's loopback. `test_quic_server.cpp` runs unchanged on `QuicHost`;
+`test_io_loop.cpp` holds the short reset; `crd-fuzz-net-ingress` runs every input through a client's ingress too.
+
 <a id="admission"></a>
 ## Bounded admission
 
