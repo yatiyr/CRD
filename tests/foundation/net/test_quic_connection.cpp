@@ -3740,7 +3740,7 @@ TEST_CASE("QUIC connection: a server that rejects 0-RTT drops what it held, and 
     }
     Identity plain;
     EarlyFleet fleet;
-    static const u8 big[kQuicMaxEarlyContextBytes + 1U] = {};
+    static const u8 kBig[kQuicMaxEarlyContextBytes + 1U] = {};
     CountingAllocator allocator;
     const auto refused = [&](const QuicConnectionConfig& config)
     {
@@ -3754,9 +3754,9 @@ TEST_CASE("QUIC connection: a server that rejects 0-RTT drops what it held, and 
     without.early_context = ConstSpan<u8>(kAppContext);
     CHECK(refused(without)); // nor a server that takes no early data
     QuicConnectionConfig oversized = early_config(QuicSide::Server, fleet.identity, QuicVersion::V1, 0U, nullptr);
-    oversized.early_context = ConstSpan<u8>(big, sizeof(big));
+    oversized.early_context = ConstSpan<u8>(kBig, sizeof(kBig));
     CHECK(refused(oversized));
-    oversized.early_context = ConstSpan<u8>(big, kQuicMaxEarlyContextBytes);
+    oversized.early_context = ConstSpan<u8>(kBig, kQuicMaxEarlyContextBytes);
     CHECK_FALSE(refused(oversized));
     QuicConnectionConfig ring = config_for(QuicSide::Client, plain, QuicVersion::V1);
     ring.held_packets = kQuicMaxHeldPackets + 1U;

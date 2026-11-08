@@ -242,7 +242,7 @@ private:
     u64 next_event()
     {
         send_all();
-        u64 next = (socket.wait_readable(0U) || server_next <= now) ? now : server_next;
+        u64 next = (socket.wait_readable(0U) || m_server_next <= now) ? now : m_server_next;
         for (usize index = 0U; index < m_count; ++index)
         {
             next = (m_flights[index].at < next) ? m_flights[index].at : next;
@@ -274,7 +274,7 @@ private:
             {
                 if (socket.pending() == VirtualSocket::kQueue)
                 {
-                    server_next = loop.poll(); // the host's buffer is full: the server reads before more arrive
+                    m_server_next = loop.poll(); // the host's buffer is full: the server reads before more arrive
                 }
                 Datagram datagram;
                 std::memcpy(datagram.bytes, flight.bytes, flight.size);
@@ -293,8 +293,8 @@ private:
             }
         }
         m_turn = !m_turn;
-        socket.busy_after = (busy && m_turn) ? 0U : (busy ? 1U : ~usize{0});
-        server_next = loop.poll();
+        socket.throttle(busy, m_turn);
+        m_server_next = loop.poll();
     }
 
     const Identity& m_identity;
@@ -303,7 +303,7 @@ private:
     Flight m_flights[kFlights];
     usize m_count = 0U;
     usize m_stalled = 0U;
-    u64 server_next = kNeverNs;
+    u64 m_server_next = kNeverNs;
     bool m_turn = false;
 };
 
@@ -313,6 +313,26 @@ bool all_echoed(Fleet& fleet)
     for (usize index = 0U; index < fleet.clients(); ++index)
     {
         done = fleet.client(index).echo() && done;
+    }
+    return done;
+}
+
+bool all_confirmed(Fleet& fleet)
+{
+    bool done = true;
+    for (usize index = 0U; index < fleet.clients(); ++index)
+    {
+        done = fleet.client(index).connection->confirmed() && done;
+    }
+    return done;
+}
+
+bool all_tokened(Fleet& fleet)
+{
+    bool done = true;
+    for (usize index = 0U; index < fleet.clients(); ++index)
+    {
+        done = !fleet.client(index).connection->new_token().empty() && done;
     }
     return done;
 }
@@ -346,18 +366,7 @@ TEST_CASE("QUIC server: many clients in both versions are echoed over hostile pa
             const QuicVersion version = kVersions[index % 2U];
             fleet->add(version, index, client_peer(index));
         }
-        REQUIRE(fleet->run_until(
-            [&]
-            {
-                for (usize index = 0U; index < clients; ++index)
-                {
-                    if (!fleet->client(index).connection->confirmed())
-                    {
-                        return false;
-                    }
-                }
-                return true;
-            }));
+        REQUIRE(fleet->run_until([&] { return all_confirmed(*fleet); }));
         CHECK(fleet->server.live() == clients);
         CHECK(fleet->server.counters().admitted == clients);
         CHECK(fleet->app.accepted == clients);
@@ -368,16 +377,7 @@ TEST_CASE("QUIC server: many clients in both versions are echoed over hostile pa
         }
         // Serving allocates nothing: the echo runs within what admission took.
         const usize allocations = fleet->allocator.calls();
-        REQUIRE(fleet->run_until(
-            [&]
-            {
-                bool tokens = true;
-                for (usize index = 0U; index < clients; ++index)
-                {
-                    tokens = tokens && !fleet->client(index).connection->new_token().empty();
-                }
-                return all_echoed(*fleet) && tokens;
-            }));
+        REQUIRE(fleet->run_until([&] { return all_echoed(*fleet) && all_tokened(*fleet); }));
         CHECK(fleet->allocator.calls() == allocations);
         CHECK(fleet->server.counters().new_tokens == clients);
         CHECK(fleet->server.counters().foreign_path == 0U);

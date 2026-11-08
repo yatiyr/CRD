@@ -109,6 +109,16 @@ public:
         Endpoint peer;
     };
 
+    // A busy host's turn: no send on one turn, one send on the next; unbounded sends when it is not busy.
+    void throttle(bool busy, bool turn) noexcept
+    {
+        busy_after = ~usize{0};
+        if (busy)
+        {
+            busy_after = turn ? 0U : 1U;
+        }
+    }
+
     Endpoint local{IpAddress::v4(10, 0, 0, 1), 443U};
     std::unique_ptr<Outbound[]> sent = std::make_unique<Outbound[]>(kQueue);
     usize sent_count = 0U;

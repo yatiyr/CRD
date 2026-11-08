@@ -409,7 +409,7 @@ private:
         }
         m_count = kept;
         m_turn = !m_turn;
-        client_socket.busy_after = (busy && m_turn) ? 0U : (busy ? 1U : ~usize{0});
+        client_socket.throttle(busy, m_turn);
         m_client_next = client_loop.poll();
         for (usize index = 0U; index < m_servers; ++index)
         {

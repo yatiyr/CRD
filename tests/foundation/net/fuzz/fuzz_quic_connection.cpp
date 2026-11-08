@@ -142,9 +142,9 @@ struct Identity
 
 Identity& identity()
 {
-    static Identity kIdentity;
-    CRD_FUZZ_REQUIRE(kIdentity.ready);
-    return kIdentity;
+    static Identity held;
+    CRD_FUZZ_REQUIRE(held.ready);
+    return held;
 }
 
 // An end's host: a table routing its IDs under a reset key, sequence 0 routed first.

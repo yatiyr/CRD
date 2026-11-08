@@ -6,6 +6,7 @@
 #include <crd/memory/construct.hpp>
 #include <crd/net/quic_client.hpp>
 
+#include <algorithm>
 #include <cstring>
 
 namespace crd::net
@@ -21,18 +22,8 @@ QuicHostLimits limits_of(const QuicClientConfig& config) noexcept
 // Whether the ingress runs the connection's version and every version of its preference.
 bool versions_run(const Ingress& ingress, const QuicConnectionConfig& connection) noexcept
 {
-    if (!ingress.runs(static_cast<u32>(connection.version)))
-    {
-        return false;
-    }
-    for (const u32 version : connection.versions)
-    {
-        if (!ingress.runs(version))
-        {
-            return false;
-        }
-    }
-    return true;
+    return ingress.runs(static_cast<u32>(connection.version)) &&
+           std::ranges::all_of(connection.versions, [&ingress](u32 version) { return ingress.runs(version); });
 }
 } // namespace
 
