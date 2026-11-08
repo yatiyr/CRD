@@ -740,6 +740,65 @@ Fuzzing: `crd-fuzz-net-quic-connection`'s byte 0 bit 3 makes the client offer bo
 the other, and a confirmed pair must run it (seeds `script-switch` and `script-switch-retry`); `crd-fuzz-net-quic-codec`
 checks the client's verdict against both attempted versions.
 
+<a id="quic-early"></a>
+**S45. 0-RTT and packets held for their keys** (4.2a, threats T07 and T10;
+[quic_connection.hpp](../../engine/foundation/net/include/crd/net/quic_connection.hpp),
+[quic_stream_set.hpp](../../engine/foundation/net/include/crd/net/quic_stream_set.hpp),
+[quic_datagram.hpp](../../engine/foundation/net/include/crd/net/quic_datagram.hpp); 2026-11-08). Sources: RFC 9000
+sections 5.2.2, 7.4.1, 13.2.6 and 17.2.3, RFC 9001 sections 4.1.4, 4.6, 4.9.3 and 5.7, RFC 9002 section 6.4 and
+RFC 9221 section 3, read from the RFC Editor's text. The TLS side is S17's.
+
+- **Client.** When the handshake offers early data, the connection decodes the ticket's remembered server
+  parameters and grants its streams and datagrams from them alone (never ack_delay_exponent, max_ack_delay, the
+  connection IDs or the reset token), installs the 0-RTT key and sends Application data in 0-RTT packets of the
+  original version until it knows its server's parameters (section 7.4.1's "only remembered" rule) or has 1-RTT keys,
+  whichever comes first. A 0-RTT packet carries no ACK, CRYPTO, HANDSHAKE_DONE, NEW_TOKEN, PATH_RESPONSE or
+  RETIRE_CONNECTION_ID frame. The stream set's `set_peer_parameters()` only raises, the open streams' credit included,
+  so the server's parameters replace the remembered ones without a second state.
+- **Decision.** Accepted: the server's parameters must lower none of the limits the 0-RTT kept to (the seven of
+  section 7.4.1 and max_datagram_frame_size), else PROTOCOL_VIOLATION (RFC 9221 section 3's error). Rejected (known
+  from the server's hello or EncryptedExtensions, before any 1-RTT packet is sent): the 0-RTT keys go, recovery drops
+  every outstanding Application packet without a congestion signal (`QuicRecovery::reject_early`, RFC 9002 section
+  6.4), the stream set returns to `init()`'s state and the queued datagrams are reported Lost (RFC 9001 section
+  4.6.2); `handshake().early_data()` tells the application, which sends again under the server's parameters.
+- **Retry.** A Retry discards every packet (S43); a discarded stream frame now goes again like a lost one, so the
+  0-RTT data is resent to the Retry's ID with fresh packet numbers (sections 17.2.3 and 17.2.5.3).
+- **Server.** A server whose context accepts early data names its early data context: `write_quic_early_parameters`
+  (a format byte and eleven fixed u64 values: the remembered limits, max_idle_timeout, max_udp_payload_size and
+  disable_active_migration, no grease) followed by the application's part, so the provider refuses a ticket's
+  0-RTT once any of them changed and acceptance never meets a lowered limit. It opens 0-RTT packets only after it
+  accepted; once the ClientHello is read without acceptance it discards the Early level (section 4.6.2's "MUST NOT
+  process"). The 0-RTT keys go three PTOs after the first 1-RTT packet (section 4.9.3). No 1-RTT packet opens before
+  the handshake completes (section 5.7: the provider installs the client's 1-RTT key with its Finished).
+- **Replayable bytes are marked** (T07). Each stream keeps the highest end that came in a 0-RTT packet;
+  `QuicStreamRead::early_bytes` counts the bytes of a read below it (conservative: a 1-RTT copy of an early byte
+  stays marked), and `QuicDatagrams::oldest_early()` marks a 0-RTT payload. The application runs on them only what
+  its schema declares idempotent and checks capability tokens with `verify_early()` against `handshake()`.
+- **Held packets** (section 4.1.4). A packet whose keys may still come (`QuicPacketProtection::keys_pending`: a
+  server's 0-RTT before its ClientHello is complete, Handshake and the first 1-RTT keys) is copied into a ring of
+  `held_packets` slots of max_datagram_bytes (default 8, at most 64, allocated at construction). After each datagram
+  the ring is read until no held packet opens; one whose keys went is dropped. A full ring drops the packet (the
+  peer sends it again), so a peer can make a connection hold at most the ring (T10). 0-RTT before the Initial that
+  creates the connection is the ingress's (section 5.2.2's MAY) and comes with the connection behind the
+  IngressHandler.
+- **Padding.** A datagram that must reach 1200 bytes is padded by its last packet, or by an earlier one that leaves
+  too little room for the next (a 0-RTT packet behind a full Initial), so the floor holds whatever fits.
+
+Evidence: `test_quic_connection.cpp` (6 cases): 0-RTT accepted in both versions with the stream read and the
+datagram held at the server before its handshake completes, every byte marked, no 1-RTT packet opened early, the
+datagram acknowledged, later data unmarked and the keys gone three PTOs after; twelve seeded paths losing 10%,
+duplicating 5% and jittering 20 ms with every byte delivered once and packets held; rejections by a server without
+early data, another application context, a lowered stream window and a version switch, each resetting the client's
+streams, reporting both datagrams Lost and leaving the server without any, then the data resent unmarked; 0-RTT
+before a Retry resent after it over clean and lossy paths; held 0-RTT packets read after the Initials and the server's
+reversed flight completing the client's handshake with no time passing, a ring of one dropping the rest; a rejecting
+server dropping what it held; and the configuration refusals. `test_quic_stream_set.cpp`, `test_quic_datagram.cpp`,
+`test_quic_recovery.cpp` and `test_quic_transport_parameters.cpp` hold the raising, the reset, the marks, the Lost
+reports, the recovery drop and the context and check functions. `crd-fuzz-net-quic-connection` gains a 0-RTT bit
+(byte 0, bit 4: a first connection leaves a ticket and the scripted one resumes with a stream and a datagram
+written before its first flight) and three seeds; its oracles hold the decision alike on both ends, the early stream
+whole and marked no further than it came, and a rejection's reset.
+
 <a id="admission"></a>
 ## Bounded admission
 
