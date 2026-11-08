@@ -4,7 +4,8 @@
 // Input: byte 0 picks the mode (bits 0 and 1) and the version (bit 2); the rest drives it.
 //   0  a network script between a client and a server: each byte an operation on the datagrams in flight (deliver,
 //      drop, duplicate, reorder, corrupt a byte, advance time, 0xFD a Retry in place of the client Initials in flight
-//      while the server has none); then a clean path until both confirm or one closes.
+//      while the server has none); then a clean path until both confirm or one closes. With bit 3 the client offers
+//      the other version too and the server prefers it: a compatible switch (RFC 9368 section 2.3).
 //   1  frames from a raw client after the handshake: each [length][bytes] sealed as one 1-RTT packet to the server.
 //   2  frames in Initial packets anyone can seal (their keys come from the public Destination Connection ID): each
 //      [length][bytes] to a fresh server.
@@ -19,7 +20,8 @@
 // CONNECTION_CLOSE only. Both modes route each end's own IDs through a host (QuicRoutedIds): its table holds exactly
 // the IDs its connection holds, after every step; a script byte 0xFE rotates the server's IDs; and a confirmed client
 // that a stateless reset of the ID it sends to reaches drains, while a forged token changes nothing. A confirmed pair
-// agrees on whether a Retry was taken; the server accepts it only for an Initial to the Retry's ID.
+// agrees on whether a Retry was taken; the server accepts it only for an Initial to the Retry's ID. A confirmed pair
+// runs one version: the other one after a switch, the configured one otherwise.
 #include <crd/crypto/tls.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_connection.hpp>
@@ -140,10 +142,24 @@ struct Host
     }
 };
 
-QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnectionIds* ids)
+constexpr u32 kV1First[] = {static_cast<u32>(QuicVersion::V1), static_cast<u32>(QuicVersion::V2)};
+constexpr u32 kV2First[] = {static_cast<u32>(QuicVersion::V2), static_cast<u32>(QuicVersion::V1)};
+
+QuicVersion other_version(QuicVersion version)
+{
+    return (version == QuicVersion::V1) ? QuicVersion::V2 : QuicVersion::V1;
+}
+
+// With `switching` the client lists its version first and the server the other one.
+QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnectionIds* ids, bool switching = false)
 {
     QuicConnectionConfig config;
     config.side = side;
+    if (switching)
+    {
+        const bool first = (side == QuicSide::Client) == (version == QuicVersion::V1);
+        config.versions = first ? ConstSpan<u32>(kV1First, 2U) : ConstSpan<u32>(kV2First, 2U);
+    }
     config.ids = ids;
     config.parameters.active_connection_id_limit = 4U;
     config.version = version;
@@ -203,11 +219,11 @@ struct Pair
     QuicVersion version;
     bool retry_sent = false;
 
-    explicit Pair(QuicVersion run)
+    explicit Pair(QuicVersion run, bool switching = false)
         : client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
           server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
-          client(allocator, config_for(QuicSide::Client, run, &client_host.ids)),
-          server(allocator, config_for(QuicSide::Server, run, &server_host.ids)), version(run)
+          client(allocator, config_for(QuicSide::Client, run, &client_host.ids, switching)),
+          server(allocator, config_for(QuicSide::Server, run, &server_host.ids, switching)), version(run)
     {
     }
 
@@ -498,9 +514,9 @@ void stateless_reset(Pair& pair)
     CRD_FUZZ_REQUIRE(client.state() == QuicConnectionState::Draining && client.close_info().stateless_reset);
 }
 
-void run_script(QuicVersion version, ConstSpan<u8> script)
+void run_script(QuicVersion version, bool switching, ConstSpan<u8> script)
 {
-    Pair pair(version);
+    Pair pair(version, switching);
     CRD_FUZZ_REQUIRE(pair.client.ready() && pair.server.ready());
     const usize allocations = pair.allocator.peak_bytes();
     CRD_FUZZ_REQUIRE(pair.client.connect(ConstSpan<u8>(kClientCid, sizeof(kClientCid)),
@@ -581,6 +597,8 @@ void run_script(QuicVersion version, ConstSpan<u8> script)
         CRD_FUZZ_REQUIRE(pair.client.handshake().application_protocol() ==
                          pair.server.handshake().application_protocol());
         CRD_FUZZ_REQUIRE(pair.client.retried() == pair.server.retried());
+        const QuicVersion running = switching ? other_version(version) : version;
+        CRD_FUZZ_REQUIRE(pair.client.version() == running && pair.server.version() == running);
         transfer(pair);
         exchange_datagrams(pair);
         stateless_reset(pair);
@@ -803,7 +821,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     switch (data[0] & 3U)
     {
         case 0U:
-            run_script(version, rest);
+            run_script(version, (data[0] & 8U) != 0U, rest);
             break;
         case 1U:
             run_frames(version, rest, false);
@@ -823,6 +841,12 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     // A Retry in place of the first flight: the client goes again to its ID with its token.
     const u8 retried[] = {0x00U, 0xFDU, 0x00U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U};
     sink.add("script-retry", retried, sizeof(retried));
+    // A compatible switch from each version, one after a Retry.
+    const u8 switched[] = {0x08U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
+    sink.add("script-switch", switched, sizeof(switched));
+    const u8 switched_retry[] = {0x0CU, 0xFDU, 0x00U, 0x00U, 0x00U, 0x00U, 0x07U,
+                                 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U};
+    sink.add("script-switch-retry", switched_retry, sizeof(switched_retry));
     // Losses, duplicates, a reorder and a corrupted byte in version 2.
     const u8 hostile[] = {0x04U, 0x02U, 0x03U, 0x00U, 0x0CU, 0x05U, 0x40U, 0x08U, 0x07U, 0x00U,
                           0x02U, 0x06U, 0x86U, 0x07U, 0x00U, 0x00U, 0x0BU, 0x00U, 0x00U};

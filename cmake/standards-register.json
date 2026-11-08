@@ -789,7 +789,7 @@
       "id": "quic.grease-bit",
       "title": "Greasing the QUIC bit",
       "kind": "extension",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "NET-STD",
@@ -814,15 +814,15 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
+      "evidence": ["tests/foundation/net/test_quic_transport_parameters.cpp", "tests/foundation/net/test_quic_packet.cpp", "tests/foundation/net/test_quic_connection.cpp"],
       "deprecation": null,
-      "note": "A QUIC transport parameter: NET-STD fixes the contract (every Cerid wire protocol negotiates its version and sends GREASE) and the verified codepoint; 4.2a's QUIC transport implements it."
+      "note": "Implemented by 4.2a (design S35, S36 and S39, 2026-11-08): grease_quic_bit sent in every connection's parameters, a cleared QUIC bit accepted once sent, and the bit cleared per packet from entropy toward a peer that sent it. Interop with a pinned peer is 4.2a's remaining item."
     },
     {
       "id": "quic.version-negotiation",
       "title": "Compatible version negotiation for QUIC",
       "kind": "extension",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "NET-STD",
@@ -847,9 +847,9 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
+      "evidence": ["tests/foundation/net/test_quic_transport_parameters.cpp", "tests/foundation/net/test_quic_connection.cpp", "tests/foundation/net/test_quic_packet.cpp", "tests/foundation/crypto/test_quic_handshake.cpp", "tests/foundation/net/fuzz/fuzz_quic_codec.cpp"],
       "deprecation": null,
-      "note": "A QUIC transport parameter: NET-STD fixes the contract (every Cerid wire protocol negotiates its version and sends GREASE) and the verified codepoint; 4.2a's QUIC transport implements it."
+      "note": "Implemented by 4.2a (design S35 and S44, 2026-11-08): version_information sent with a reserved version and checked both ways (RFC 9368 section 4, with figure 1's attempted version after Version Negotiation), and compatible negotiation between versions 1 and 2 (RFC 9369 section 4.1): the server switches while the ClientHello is read, the client learns from the first Initial in the negotiated version, and tickets and NEW_TOKEN tokens belong to the version a connection ran (section 5). Interop with a pinned peer is 4.2a's remaining item."
     },
     {
       "id": "quic.v2",

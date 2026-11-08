@@ -626,6 +626,7 @@ protected:
     bool                m_public_name       = false; // a server's client named one of its ECH public names only
     bool                m_early_offered     = false; // a server's client offered early data
     bool                m_ticket_replayed   = false; // a server's ReplayFilter refused the offered ticket
+    bool                m_quic              = false; // a QuicHandshake's (set by its init())
     TlsEch              m_ech               = TlsEch::None;
     TlsEarlyData        m_early             = TlsEarlyData::None;
     TlsAlert            m_alert_sent;
@@ -742,6 +743,28 @@ inline constexpr usize kQuicMaxTransportParameterBytes = 4096U;
     return 0x0100U + alert;
 }
 
+// A QUIC server's answer to its client's transport parameters (RFC 9368 section 2.3): asked once, while the handshake
+// reads the first ClientHello (the inner one under ECH) and before anything is written at any level, so that the
+// server chooses the connection's version from the client's version_information and sends parameters naming it.
+// Called from inside QuicHandshake::provide() on its thread; it must not call the handshake.
+class QuicHelloAnswer
+{
+public:
+    virtual ~QuicHelloAnswer() = default;
+    // `client` is the quic_transport_parameters extension's body (empty when absent). Writes the parameters sent
+    // instead of init()'s into `out` and returns their size (0 keeps init()'s), and sets `version`, which holds the
+    // handshake's version(), to the version the connection runs.
+    [[nodiscard]] virtual usize answer(cont::ConstSpan<u8> client, QuicVersion& version,
+                                       cont::Span<u8> out) noexcept = 0;
+
+protected:
+    QuicHelloAnswer()                                      = default;
+    QuicHelloAnswer(const QuicHelloAnswer&)                = default;
+    QuicHelloAnswer(QuicHelloAnswer&&) noexcept            = default;
+    QuicHelloAnswer& operator=(const QuicHelloAnswer&)     = default;
+    QuicHelloAnswer& operator=(QuicHelloAnswer&&) noexcept = default;
+};
+
 // The TLS 1.3 handshake over QUIC (RFC 9001; contract: docs/design/network-foundation.md#quic-handshake), sans-I/O
 // like TlsSession: the transport provides the CRYPTO data it received at each level, in order, and takes the CRYPTO
 // data to send at each level; it turns each level's secrets into packet and header keys with derive_keys(). Over the
@@ -763,8 +786,8 @@ public:
     // A new handshake of `context`'s role sending `transport_parameters` (1 to kQuicMaxTransportParameterBytes, the
     // encoded parameters of this connection: a server's include the connection IDs RFC 9000 section 7.3
     // authenticates), replacing any previous one. A client's ClientHello is pending at the Initial level when init()
-    // returns. Tickets and ECH as TlsSession::init, tickets kept under this transport's binding, each with the server's
-    // transport parameters. A server whose context accepts early data names its `early_data_context` (1 to
+    // returns. Tickets and ECH as TlsSession::init, tickets kept under this transport's binding of version(), each with
+    // the server's transport parameters. A server whose context accepts early data names its `early_data_context` (1 to
     // kTlsMaxEarlyDataContextBytes): the transport parameters a client remembers and the application state, the
     // message schema's digest among it, encoded the same way on every connection; its tickets accept 0-RTT only under
     // the same context (RFC 9000 section 7.4.1; the provider compares it with the one its ticket recorded).
@@ -823,6 +846,17 @@ public:
     // read only (RFC 9000 section 10.2.3).
     [[nodiscard]] QuicLevel alert_level() const noexcept { return m_alert_level; }
 
+    // The QUIC version whose tickets the handshake offers, resumes and keeps (RFC 9369 section 5: a ticket belongs to
+    // the version its connection ran in and resumes only a connection running in it; both ends bind it into the
+    // session ID context). Version 1 until set; kept by init() and clear(). Set before init() to the version a
+    // connection starts in; a client sets it again when its server switches versions compatibly (RFC 9368 section
+    // 2.3), before providing the server's first CRYPTO data; a server's follows its QuicHelloAnswer. BadConfig for a
+    // version quic_version_supported() refuses, ProviderFailure when the provider refuses the new context.
+    [[nodiscard]] TlsError    set_version(QuicVersion version) noexcept;
+    [[nodiscard]] QuicVersion version() const noexcept { return m_version; }
+    // A server's answer to its client's transport parameters (null: init()'s go unchanged); kept by init() and clear().
+    void set_hello_answer(QuicHelloAnswer* answer) noexcept { m_hello_answer = answer; }
+
 private:
     friend struct TlsCallbacks;
 
@@ -846,5 +880,8 @@ private:
     Secret          m_secrets[3][2]; // [Handshake, Application, Early][Client, Server]
     cont::Array<u8> m_remembered;    // a client's: its ticket's server transport parameters
     QuicLevel       m_alert_level = QuicLevel::Initial;
+    QuicVersion     m_version     = QuicVersion::V1;
+    TlsBinding      m_context_binding; // the context's, which the QUIC binding of m_version derives from
+    QuicHelloAnswer* m_hello_answer = nullptr;
 };
 } // namespace crd::crypto

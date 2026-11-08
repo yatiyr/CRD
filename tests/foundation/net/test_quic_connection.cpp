@@ -12,7 +12,11 @@
 // never issued, with stateless resets (section 10.3) detected only by a used, unretired ID's token, also from the
 // ingress of a server that lost the connection; and Retry (section 17.2.5): one taken, every other refused, then,
 // behind a Retry-everything ingress over hostile paths, the server's NEW_TOKEN token proving the next connection once,
-// and an INVALID_TOKEN close ending a client whose token no longer validates.
+// and an INVALID_TOKEN close ending a client whose token no longer validates; and compatible version negotiation (RFC
+// 9368 section 2.3, RFC 9369 sections 4.1 and 5): a server switching both ways over hostile paths and after a Retry,
+// long headers never going back to the original version, no switch where either side does not offer one, a client
+// settled by CRYPTO data in the original version or closing on CRYPTO data in it after the switch, parameters that do
+// not parse or name another version closing with their transport error, and tokens of the version a connection ran.
 
 #include "ingress_fixture.hpp"
 #include "quic_stream_fixture.hpp"
@@ -179,7 +183,7 @@ public:
     bool amplification_kept = true; // the server never sent more than three times what it received unvalidated
     // A server behind an ingress: the first client datagrams are classified there, Retry and Version Negotiation
     // answered, and an admitted Initial accepted with what the ingress proved (a Retry token's original ID). `tokens`
-    // mints the NEW_TOKEN token the server sends.
+    // mints the NEW_TOKEN token the server sends, for the version it runs once it has read the client's parameters.
     Ingress* ingress = nullptr;
     const QuicTokenKeys* tokens = nullptr;
     usize answers = 0U; // the ingress's answers sent toward the client
@@ -365,13 +369,6 @@ private:
         accept.retried = decision.claims.original_dcid_bytes != 0U;
         accept.original_dcid = accept.retried ? decision.claims.original_dcid_view() : decision.header.dcid;
         accept.validated = decision.validated;
-        if (tokens != nullptr)
-        {
-            REQUIRE(tokens->mint_new_token(static_cast<QuicVersion>(decision.header.version),
-                                           QuicTokenPeer{kClientPeer.address.view(), 0U}, kUnix,
-                                           Span<u8>(minted, sizeof(minted)), minted_bytes) == CryptoError::None);
-            accept.new_token = ConstSpan<u8>(minted, minted_bytes);
-        }
         REQUIRE(m_ends[1]->accept(accept, now));
         return true;
     }
@@ -396,6 +393,14 @@ private:
             REQUIRE(to.accept(accept, now));
         }
         to.receive(Span<u8>(flight.bytes, flight.size), QuicEcn::NotEct, now);
+        if (flight.to == 1U && tokens != nullptr && minted_bytes == 0U && to.peer_parameters_known())
+        {
+            CHECK_FALSE(to.give_new_token({}));
+            REQUIRE(tokens->mint_new_token(to.version(), QuicTokenPeer{kClientPeer.address.view(), 0U}, kUnix,
+                                           Span<u8>(minted, sizeof(minted)), minted_bytes) == CryptoError::None);
+            REQUIRE(to.give_new_token(ConstSpan<u8>(minted, minted_bytes)));
+            CHECK_FALSE(to.give_new_token(ConstSpan<u8>(minted, minted_bytes)));
+        }
     }
 
     QuicConnection* m_ends[2] = {};
@@ -1194,6 +1199,310 @@ TEST_CASE("QUIC connection: behind an ingress that proves every address, Retry a
     }
 }
 
+namespace
+{
+// Records the version of each datagram's first long header per direction (0 is the client), dropping nothing.
+class VersionLog final : public Filter
+{
+public:
+    explicit VersionLog(u32 version) : m_negotiated(version) {}
+
+    bool drop(usize from, ConstSpan<u8> datagram) override
+    {
+        QuicHeader header;
+        const usize short_bytes = (from == 0U) ? sizeof(kServerCid) : sizeof(kClientCid);
+        if (parse_quic_header(datagram, short_bytes, header) == QuicHeaderError::None &&
+            header.type != QuicPacketType::OneRtt)
+        {
+            if (header.version == m_negotiated)
+            {
+                negotiated[from] = true;
+            }
+            else
+            {
+                went_back[from] = went_back[from] || negotiated[from];
+                ++original[from];
+            }
+        }
+        return false;
+    }
+
+    bool negotiated[2] = {};
+    bool went_back[2] = {}; // a long header in the original version after one in the negotiated version
+    usize original[2] = {};
+
+private:
+    u32 m_negotiated = 0U;
+};
+
+struct VersionCase
+{
+    QuicVersion original;
+    QuicVersion negotiated;
+};
+constexpr VersionCase kSwitches[] = {{QuicVersion::V1, QuicVersion::V2}, {QuicVersion::V2, QuicVersion::V1}};
+
+usize collect(QuicConnection& from, Datagram* out, usize room, u64 now)
+{
+    usize count = 0U;
+    for (; count < room; ++count)
+    {
+        out[count].size = from.send(Span<u8>(out[count].bytes, sizeof(out[count].bytes)), now);
+        if (out[count].size == 0U)
+        {
+            break;
+        }
+    }
+    return count;
+}
+
+u32 first_version(const Datagram& datagram)
+{
+    QuicHeader header;
+    REQUIRE(parse_quic_header(datagram.view(), sizeof(kClientCid), header) == QuicHeaderError::None);
+    return header.version;
+}
+} // namespace
+
+TEST_CASE("QUIC connection: a server switches compatibly to the first of its versions its client offers, over "
+          "hostile paths (RFC 9368 section 2.3, RFC 9369 section 4.1)",
+          "[net][4.2a][quic-connection]")
+{
+    for (const VersionCase& versions : kSwitches)
+    {
+        const u32 original = static_cast<u32>(versions.original);
+        const u32 negotiated = static_cast<u32>(versions.negotiated);
+        const u32 client_versions[] = {original, negotiated};
+        const u32 server_versions[] = {negotiated, original};
+        for (u64 seed = 0U; seed <= 12U; ++seed)
+        {
+            Identity identity;
+            CountingAllocator allocator;
+            QuicConnectionConfig client_config = config_for(QuicSide::Client, identity, versions.original, seed);
+            client_config.versions = client_versions;
+            QuicConnectionConfig server_config = config_for(QuicSide::Server, identity, versions.original, seed + 1U);
+            server_config.versions = server_versions;
+            QuicConnection client(allocator, client_config);
+            QuicConnection server(allocator, server_config);
+            connect(client);
+            CHECK(client.version() == versions.original);
+            auto net = std::make_unique<Net>(client, server);
+            VersionLog log(negotiated);
+            net->filter = &log;
+            net->rng.state = seed;
+            if (seed != 0U)
+            {
+                for (Path& path : net->path)
+                {
+                    path.loss = 150U;
+                    path.duplicate = 50U;
+                    path.jitter_ns = 8U * kMs;
+                }
+            }
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            for (QuicConnection* end : {&client, &server})
+            {
+                CHECK(end->version() == versions.negotiated);
+                CHECK(end->handshake().version() == versions.negotiated); // its tickets belong to it
+                CHECK(end->protection().original_version() == versions.original);
+            }
+            // The server names the version it switched to; the client the one its first flight chose.
+            CHECK(client.peer_parameters().version_information.chosen == negotiated);
+            CHECK(server.peer_parameters().version_information.chosen == original);
+            CHECK(log.original[0] >= 1U); // the client's first flight
+            CHECK(log.negotiated[0]);
+            CHECK(log.negotiated[1]);
+            CHECK_FALSE(log.went_back[0]);
+            CHECK_FALSE(log.went_back[1]);
+            CHECK(net->client_initials_padded);
+            CHECK(net->amplification_kept);
+        }
+    }
+}
+
+TEST_CASE("QUIC connection: no switch when the client offers one version, the server prefers the original or runs "
+          "only it",
+          "[net][4.2a][quic-connection]")
+{
+    for (const VersionCase& versions : kSwitches)
+    {
+        const u32 original = static_cast<u32>(versions.original);
+        const u32 other = static_cast<u32>(versions.negotiated);
+        const u32 both[] = {original, other};
+        const u32 other_first[] = {other, original};
+        const u32 original_first[] = {original, other};
+        struct Offer
+        {
+            ConstSpan<u32> client;
+            ConstSpan<u32> server;
+        };
+        // The client lists its version alone; the server prefers the original; the server runs it alone.
+        const Offer offers[] = {
+            {{}, ConstSpan<u32>(other_first, 2U)},
+            {ConstSpan<u32>(both, 2U), ConstSpan<u32>(original_first, 2U)},
+            {ConstSpan<u32>(both, 2U), {}},
+        };
+        for (const Offer& offer : offers)
+        {
+            Identity identity;
+            CountingAllocator allocator;
+            QuicConnectionConfig client_config = config_for(QuicSide::Client, identity, versions.original);
+            client_config.versions = offer.client;
+            QuicConnectionConfig server_config = config_for(QuicSide::Server, identity, versions.original, 1U);
+            server_config.versions = offer.server;
+            QuicConnection client(allocator, client_config);
+            QuicConnection server(allocator, server_config);
+            connect(client);
+            auto net = std::make_unique<Net>(client, server);
+            VersionLog log(other);
+            net->filter = &log;
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            CHECK(client.version() == versions.original);
+            CHECK(server.version() == versions.original);
+            CHECK(client.peer_parameters().version_information.chosen == original);
+            CHECK_FALSE(log.negotiated[0]);
+            CHECK_FALSE(log.negotiated[1]);
+        }
+    }
+}
+
+TEST_CASE("QUIC connection: a client settles on CRYPTO data in the original version and closes on it after a switch",
+          "[net][4.2a][quic-connection]")
+{
+    // Two servers answer the same first flight: one stays in version 1, the other switches to version 2. The one
+    // that stays reads the client's datagrams one at a time, so its ServerHello has another packet number.
+    for (const bool switched_first : {true, false})
+    {
+        Identity identity;
+        CountingAllocator allocator;
+        const u32 both[] = {static_cast<u32>(QuicVersion::V1), static_cast<u32>(QuicVersion::V2)};
+        const u32 prefer_v2[] = {static_cast<u32>(QuicVersion::V2), static_cast<u32>(QuicVersion::V1)};
+        QuicConnectionConfig client_config = config_for(QuicSide::Client, identity, QuicVersion::V1);
+        client_config.versions = both;
+        QuicConnectionConfig switching_config = config_for(QuicSide::Server, identity, QuicVersion::V1, 1U);
+        switching_config.versions = prefer_v2;
+        QuicConnection client(allocator, client_config);
+        QuicConnection staying(allocator, config_for(QuicSide::Server, identity, QuicVersion::V1, 2U));
+        QuicConnection switching(allocator, switching_config);
+        connect(client);
+        Datagram flight[4];
+        const usize count = collect(client, flight, 4U, kStartNs);
+        REQUIRE(count >= 2U); // the hybrid key share spans two datagrams
+        QuicAccept accept;
+        accept.local_cid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
+        accept.client_dcid = ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid));
+        accept.client_scid = ConstSpan<u8>(kClientCid, sizeof(kClientCid));
+        accept.original_dcid = accept.client_dcid;
+        REQUIRE(staying.accept(accept, kStartNs));
+        REQUIRE(switching.accept(accept, kStartNs));
+        Datagram stay_out[8];
+        usize stay_count = 0U;
+        usize hello = 0U; // the staying server's datagram with its ServerHello: the first after the last flight
+        for (usize index = 0U; index < count; ++index)
+        {
+            receive_copy(staying, flight[index], kStartNs);
+            hello = stay_count;
+            stay_count += collect(staying, stay_out + stay_count, 8U - stay_count, kStartNs);
+            receive_copy(switching, flight[index], kStartNs);
+        }
+        Datagram switch_out[8];
+        const usize switch_count = collect(switching, switch_out, 8U, kStartNs);
+        REQUIRE(hello >= 1U); // an acknowledgement went before it
+        REQUIRE(stay_count > hello);
+        REQUIRE(switch_count >= 1U);
+        CHECK(switching.version() == QuicVersion::V2);
+        CHECK(first_version(switch_out[0]) == static_cast<u32>(QuicVersion::V2));
+        CHECK(first_version(stay_out[hello]) == static_cast<u32>(QuicVersion::V1));
+        if (switched_first)
+        {
+            receive_copy(client, switch_out[0], kStartNs + kMs);
+            CHECK(client.version() == QuicVersion::V2);
+            CHECK(client.state() == QuicConnectionState::Handshaking);
+            // The version 1 server's ServerHello opens under the original key, but its CRYPTO frame is a violation.
+            receive_copy(client, stay_out[hello], kStartNs + kMs);
+            CHECK(client.state() == QuicConnectionState::Closing);
+            CHECK(client.close_info().error_code == static_cast<u64>(QuicTransportError::ProtocolViolation));
+        }
+        else
+        {
+            receive_copy(client, stay_out[hello], kStartNs + kMs);
+            const u64 dropped = client.counters().packets_dropped;
+            receive_copy(client, switch_out[0], kStartNs + kMs);
+            CHECK(client.version() == QuicVersion::V1);
+            CHECK(client.counters().packets_dropped > dropped);
+            auto net = std::make_unique<Net>(client, staying);
+            net->now = kStartNs + kMs;
+            REQUIRE(net->run_until([&] { return both_confirmed(client, staying); }));
+            CHECK(client.version() == QuicVersion::V1);
+        }
+    }
+}
+
+TEST_CASE("QUIC connection: after a Retry in the original version the server switches, and its NEW_TOKEN token "
+          "proves only a connection in the negotiated version (RFC 9369 sections 4.1 and 5)",
+          "[net][4.2a][quic-connection]")
+{
+    for (const VersionCase& versions : kSwitches)
+    {
+        const u32 original = static_cast<u32>(versions.original);
+        const u32 negotiated = static_cast<u32>(versions.negotiated);
+        const u32 client_versions[] = {original, negotiated};
+        const u32 server_versions[] = {negotiated, original};
+        for (u64 round = 0U; round < 3U; ++round)
+        {
+            Identity identity;
+            CountingAllocator allocator;
+            RetryFront front;
+            QuicConnectionConfig client_config = config_for(QuicSide::Client, identity, versions.original);
+            client_config.versions = client_versions;
+            QuicConnectionConfig server_config = config_for(QuicSide::Server, identity, versions.original, 1U);
+            server_config.versions = server_versions;
+            QuicConnection client(allocator, client_config);
+            QuicConnection server(allocator, server_config);
+            connect(client);
+            auto net = std::make_unique<Net>(client, server);
+            net->ingress = &front.ingress;
+            net->tokens = &front.tokens;
+            net->rng.state = round;
+            if (round != 0U)
+            {
+                for (Path& path : net->path)
+                {
+                    path.loss = 150U;
+                    path.jitter_ns = 8U * kMs;
+                }
+            }
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            CHECK(client.retried());
+            CHECK(server.retried()); // its retry_source_connection_id checked by the client in the new version
+            CHECK(client.version() == versions.negotiated);
+            CHECK(server.version() == versions.negotiated);
+            const ConstSpan<u8> minted(net->minted, net->minted_bytes);
+            REQUIRE(net->run_until([&] { return same(client.new_token(), minted); }));
+            u8 kept[kQuicMaxCarriedTokenBytes];
+            std::memcpy(kept, minted.data(), minted.size());
+            const ConstSpan<u8> token(kept, minted.size());
+            // The token is of the negotiated version: a connection starting there is proven without a Retry, one
+            // starting in the original version is not.
+            const auto reconnect = [&](QuicVersion start, usize seed)
+            {
+                QuicConnectionConfig config = config_for(QuicSide::Client, identity, start, seed);
+                config.token = token;
+                QuicConnection next(allocator, config);
+                QuicConnection next_server(allocator, config_for(QuicSide::Server, identity, start, seed + 1U));
+                connect(next, net->now);
+                auto second = std::make_unique<Net>(next, next_server);
+                second->now = net->now;
+                second->ingress = &front.ingress;
+                REQUIRE(second->run_until([&] { return both_confirmed(next, next_server); }));
+                return next.retried();
+            };
+            CHECK(reconnect(versions.original, 2U));
+            CHECK_FALSE(reconnect(versions.negotiated, 2U));
+        }
+    }
+}
+
 TEST_CASE("QUIC connection: a Retry token the server no longer accepts ends the client at once with INVALID_TOKEN",
           "[net][4.2a][quic-connection]")
 {
@@ -1317,9 +1626,10 @@ QuicPacketType type_of(QuicLevel level)
 
 // The raw peers' server: room for the thousand packets a skipped number takes to appear.
 QuicConnectionConfig server_config(const Identity& identity, crd::u32 sent_packets, const QuicDatagramLimits& datagrams,
-                                   QuicConnectionIds* ids)
+                                   QuicConnectionIds* ids, ConstSpan<u32> versions)
 {
     QuicConnectionConfig config = config_for(QuicSide::Server, identity, QuicVersion::V1, 2U);
+    config.versions = versions;
     config.ids = ids;
     config.sent_packets = sent_packets;
     config.datagrams = datagrams;
@@ -1362,8 +1672,8 @@ class RawRun
 {
 public:
     explicit RawRun(const Identity& identity, crd::u32 sent_packets = 2048U, const QuicDatagramLimits& datagrams = {},
-                    QuicConnectionIds* ids = nullptr)
-        : server(allocator, server_config(identity, sent_packets, datagrams, ids)), m_identity(identity)
+                    QuicConnectionIds* ids = nullptr, ConstSpan<u32> versions = {})
+        : server(allocator, server_config(identity, sent_packets, datagrams, ids, versions)), m_identity(identity)
     {
     }
 
@@ -2939,5 +3249,60 @@ TEST_CASE("QUIC connection: a stateless reset drains the connection, by the toke
         CHECK(client.stateless_reset(ConstSpan<u8>(answer, written), pair.net->now));
         CHECK(client.state() == QuicConnectionState::Draining);
         CHECK(client.close_info().stateless_reset);
+    }
+}
+
+TEST_CASE("QUIC connection: a switching server closes on client parameters that do not parse or name another "
+          "version, in the original version",
+          "[net][4.2a][quic-connection]")
+{
+    const u32 prefer_v2[] = {static_cast<u32>(QuicVersion::V2), static_cast<u32>(QuicVersion::V1)};
+    for (const bool parse : {false, true})
+    {
+        Identity identity;
+        RawRun run(identity, 2048U, {}, nullptr, prefer_v2);
+        u8 encoded[512];
+        usize bytes = 0U;
+        if (parse)
+        {
+            // A chosen version 2 in a version 1 Initial: RFC 9368 section 4's mismatch.
+            QuicTransportParameters parameters;
+            parameters.max_idle_timeout = 30000U;
+            parameters.has_initial_source_connection_id = true;
+            REQUIRE(parameters.initial_source_connection_id.assign(ConstSpan<u8>(kClientCid, sizeof(kClientCid))));
+            parameters.has_version_information = true;
+            parameters.version_information.chosen = static_cast<u32>(QuicVersion::V2);
+            parameters.version_information.available[0] = static_cast<u32>(QuicVersion::V2);
+            parameters.version_information.available[1] = static_cast<u32>(QuicVersion::V1);
+            parameters.version_information.available_count = 2U;
+            bytes =
+                write_quic_transport_parameters(parameters, QuicSide::Client, {7U}, Span<u8>(encoded, sizeof(encoded)));
+        }
+        else
+        {
+            encoded[0] = 0x01U; // max_idle_timeout whose length runs past the end
+            encoded[1] = 0x09U;
+            bytes = 2U;
+        }
+        REQUIRE(bytes != 0U);
+        REQUIRE(run.raw.handshake.init(identity.client, ConstSpan<u8>(encoded, bytes)) == TlsError::None);
+        REQUIRE(run.raw.protection.start(QuicSide::Client, QuicVersion::V1,
+                                         ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid))) == CryptoError::None);
+        std::memcpy(run.raw.dcid, kInitialDcid, sizeof(kInitialDcid));
+        run.raw.dcid_bytes = sizeof(kInitialDcid);
+        QuicAccept accept;
+        accept.local_cid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
+        accept.client_dcid = ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid));
+        accept.client_scid = ConstSpan<u8>(kClientCid, sizeof(kClientCid));
+        accept.original_dcid = accept.client_dcid;
+        REQUIRE(run.server.accept(accept, run.now));
+        run.send_crypto(QuicLevel::Initial);
+        const QuicTransportError expected =
+            parse ? QuicTransportError::VersionNegotiationError : QuicTransportError::TransportParameterError;
+        CHECK(run.server.state() == QuicConnectionState::Closing);
+        CHECK(run.server.close_info().error_code == static_cast<u64>(expected));
+        CHECK(run.server.version() == QuicVersion::V1);
+        CHECK(run.raw.close_seen); // read under the version 1 keys
+        CHECK(run.raw.close_code == static_cast<u64>(expected));
     }
 }

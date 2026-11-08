@@ -21,6 +21,11 @@ constexpr usize kTwoByteLength = (usize{1} << 14U) - 1U; // the largest Length a
 constexpr usize kLengthSizes[] = {1U, 2U, 4U};           // the Length encodings seal() chooses among
 constexpr bool kDirections[] = {true, false};            // sending, then receiving
 
+constexpr crypto::QuicSide other_side(crypto::QuicSide side) noexcept
+{
+    return (side == crypto::QuicSide::Client) ? crypto::QuicSide::Server : crypto::QuicSide::Client;
+}
+
 // The least payload that leaves header protection its sample: four bytes from the packet number on.
 constexpr usize sample_floor(usize number_bytes) noexcept
 {
@@ -318,6 +323,7 @@ void QuicPacketProtection::clear_all() noexcept
     {
         keys.clear();
     }
+    m_initial_receive = 1U;
     for (QuicKeys& keys : m_handshake)
     {
         keys.clear();
@@ -353,31 +359,92 @@ crypto::CryptoError QuicPacketProtection::start(crypto::QuicSide side, crypto::Q
     clear_all();
     m_side = side;
     m_started = true;
-    return rekey_initial(version, client_dcid);
+    m_version = version;
+    m_original = version;
+    return rekey_initial(client_dcid);
 }
 
-crypto::CryptoError QuicPacketProtection::rekey_initial(crypto::QuicVersion version,
-                                                        cont::ConstSpan<u8> client_dcid) noexcept
+crypto::CryptoError QuicPacketProtection::rekey_initial(cont::ConstSpan<u8> client_dcid) noexcept
 {
     if (!m_started || m_initial_gone)
     {
         return crypto::CryptoError::NotReady;
     }
-    const crypto::QuicSide peer =
-        (m_side == crypto::QuicSide::Client) ? crypto::QuicSide::Server : crypto::QuicSide::Client;
-    crypto::CryptoError error = quic_initial_keys(version, m_side, client_dcid, m_initial[0]);
+    crypto::CryptoError error = quic_initial_keys(m_version, m_side, client_dcid, m_initial[0]);
     if (error == crypto::CryptoError::None)
     {
-        error = quic_initial_keys(version, peer, client_dcid, m_initial[1]);
+        error = quic_initial_keys(m_version, other_side(m_side), client_dcid, initial_receive());
+    }
+    if (error == crypto::CryptoError::None && initial_other().ready())
+    {
+        error = quic_initial_keys(m_other, other_side(m_side), client_dcid, initial_other());
     }
     if (error != crypto::CryptoError::None)
     {
-        m_initial[0].clear();
-        m_initial[1].clear();
+        for (QuicKeys& keys : m_initial)
+        {
+            keys.clear();
+        }
+    }
+    return error;
+}
+
+crypto::CryptoError QuicPacketProtection::expect_version(crypto::QuicVersion version,
+                                                         cont::ConstSpan<u8> client_dcid) noexcept
+{
+    if (!m_started || m_initial_gone || m_handshake[0].ready() || m_handshake[1].ready())
+    {
+        return crypto::CryptoError::NotReady;
+    }
+    if (version == m_version || initial_other().ready())
+    {
+        return crypto::CryptoError::Overlap;
+    }
+    m_other = version;
+    return quic_initial_keys(version, other_side(m_side), client_dcid, initial_other());
+}
+
+crypto::CryptoError QuicPacketProtection::change_version(crypto::QuicVersion version,
+                                                         cont::ConstSpan<u8> client_dcid) noexcept
+{
+    if (!m_started || m_initial_gone || m_handshake[0].ready() || m_handshake[1].ready())
+    {
+        return crypto::CryptoError::NotReady;
+    }
+    if (version == m_version)
+    {
+        return crypto::CryptoError::Overlap;
+    }
+    // The running version's receive key becomes the other version's (a client's expected key, already derived for
+    // `version`, becomes the running one); the send key follows. A failure leaves no Initial key.
+    QuicKeys& receive = initial_other();
+    crypto::CryptoError error = crypto::CryptoError::None;
+    if (!receive.ready() || m_other != version)
+    {
+        error = quic_initial_keys(version, other_side(m_side), client_dcid, receive);
+    }
+    if (error == crypto::CryptoError::None)
+    {
+        error = quic_initial_keys(version, m_side, client_dcid, m_initial[0]);
+    }
+    if (error != crypto::CryptoError::None)
+    {
+        for (QuicKeys& keys : m_initial)
+        {
+            keys.clear();
+        }
         return error;
     }
+    m_initial_receive = 3U - m_initial_receive;
+    m_other = m_version;
     m_version = version;
     return crypto::CryptoError::None;
+}
+
+bool QuicPacketProtection::opens_initial(u32 version) const noexcept
+{
+    return (version == static_cast<u32>(m_version) && initial_receive().ready()) ||
+           (version == static_cast<u32>(m_other) && initial_other().ready());
 }
 
 crypto::CryptoError QuicPacketProtection::install(crypto::QuicHandshake& handshake) noexcept
@@ -415,7 +482,9 @@ crypto::CryptoError QuicPacketProtection::install(crypto::QuicHandshake& handsha
             {
                 continue;
             }
-            if (handshake.derive_keys(level, side, m_version, *packet, *header) != crypto::TlsError::None)
+            // 0-RTT stays in the original version (RFC 9369 section 4.1).
+            const crypto::QuicVersion version = (level == crypto::QuicLevel::Early) ? m_original : m_version;
+            if (handshake.derive_keys(level, side, version, *packet, *header) != crypto::TlsError::None)
             {
                 return crypto::CryptoError::ProviderFailure;
             }
@@ -485,7 +554,7 @@ crypto::CryptoError QuicPacketProtection::install(crypto::QuicLevel level, bool 
     {
         return crypto::CryptoError::Exists;
     }
-    return keys->init(m_version, aead, secret);
+    return keys->init((level == crypto::QuicLevel::Early) ? m_original : m_version, aead, secret);
 }
 
 crypto::CryptoError QuicPacketProtection::finish_install(crypto::QuicLevel level, bool sending) noexcept
@@ -531,7 +600,7 @@ bool QuicPacketProtection::can_open(QuicPacketType type) const noexcept
     switch (type)
     {
         case QuicPacketType::Initial:
-            return m_initial[1].ready();
+            return initial_receive().ready();
         case QuicPacketType::Handshake:
             return m_handshake[1].ready();
         case QuicPacketType::ZeroRtt:
@@ -548,8 +617,10 @@ void QuicPacketProtection::discard(crypto::QuicLevel level) noexcept
     switch (level)
     {
         case crypto::QuicLevel::Initial:
-            m_initial[0].clear();
-            m_initial[1].clear();
+            for (QuicKeys& keys : m_initial)
+            {
+                keys.clear();
+            }
             m_initial_gone = true;
             break;
         case crypto::QuicLevel::Handshake:
@@ -668,7 +739,12 @@ QuicPacketError QuicPacketProtection::open(const QuicHeader& header, cont::Span<
     const QuicKeys* keys = nullptr;
     if (type == QuicPacketType::Initial)
     {
-        keys = &m_initial[1];
+        // RFC 9369 section 4.1: the peer's Initial packets may still come in the other version.
+        if (!opens_initial(header.version))
+        {
+            return QuicPacketError::NoKeys;
+        }
+        keys = (header.version == static_cast<u32>(m_version)) ? &initial_receive() : &initial_other();
     }
     else if (type == QuicPacketType::Handshake)
     {

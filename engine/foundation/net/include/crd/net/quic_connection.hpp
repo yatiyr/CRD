@@ -3,7 +3,7 @@
 // crd-net -- a QUIC connection: the TLS handshake carried to confirmation, recovery, the connection's frames and its
 // close (4.2a; contract: docs/design/network-foundation.md#quic-connection). Sources: RFC 9000 sections 2 to 4, 5.1,
 // 7, 8, 10 (10.3's stateless reset), 12, 13, 14, 17.2, 19 and 21.4, RFC 9001 sections 4 and 6, RFC 9002 section 6 and
-// appendix A, RFC 9221 sections 3 to 5, RFC 9287 and RFC 9368 sections 2 to 4.
+// appendix A, RFC 9221 sections 3 to 5, RFC 9287, RFC 9368 sections 2 to 4 and RFC 9369 sections 4 and 5.
 //
 //   sans-I/O   receive() takes one datagram from the peer with its arrival time, send() writes the next datagram into
 //              the caller's room (called until it returns 0 after every receive() and on_timeout()), and
@@ -13,6 +13,14 @@
 //              they arrive (section 7.3's connection IDs, RFC 9368's version_information); the server confirms on
 //              completion and sends HANDSHAKE_DONE until acknowledged, the client confirms on reading it; Initial and
 //              Handshake keys and their recovery spaces are discarded at RFC 9001 section 4.9's moments.
+//   versions   compatible version negotiation (RFC 9368 section 2.3, RFC 9369 section 4.1): a server reads its
+//              client's version_information while the TLS stack reads the ClientHello, before anything is sent, and
+//              runs the connection in the first of its versions that the client lists and its first flight converts
+//              to: its parameters name it and its CRYPTO frames, Handshake and 1-RTT packets go in it, while the
+//              client's Initial packets still open in the original version until the Initial keys go. A client
+//              learns the switch from the first server Initial in another version it offered that opens; a server
+//              CRYPTO frame in the original version settles the original. Other versions' long headers are then
+//              dropped, and tickets and tokens belong to the version the connection runs (RFC 9369 section 5).
 //   sending    one datagram coalesces an Initial, a Handshake and a 1-RTT packet, each with its owed ACK; a datagram
 //              carrying a client's Initial, a server's ack-eliciting Initial or a PATH_RESPONSE reaches 1200 bytes; a
 //              server sends at most three times what it received before the client's address is proven (section
@@ -123,12 +131,14 @@ struct QuicConnectionConfig
     QuicStreamLimits streams;     // what this side's streams hold (all zero: no streams)
     QuicDatagramLimits datagrams; // what this side's datagrams hold (all zero: none either way)
     // The versions this side accepts in its preference (version_information's list, containing `version`); empty
-    // for `version` alone.
+    // for `version` alone. A client's first flight converts to the others compatible with `version`, so its server
+    // may switch to one of them; a server switches to the first of them its client lists (RFC 9368 section 2.3).
     cont::ConstSpan<u32> versions;
     // A client whose connection follows a Version Negotiation packet (RFC 9368 section 4).
     bool after_version_negotiation = false;
-    // A client's NEW_TOKEN token from an earlier connection to this server (at most kQuicMaxCarriedTokenBytes),
-    // carried in its Initial packets to prove its address (section 8.1.3) until a Retry gives it another.
+    // A client's NEW_TOKEN token from an earlier connection to this server that ran in `version` (at most
+    // kQuicMaxCarriedTokenBytes; RFC 9369 section 5), carried in its Initial packets to prove its address (section
+    // 8.1.3) until a Retry gives it another.
     cont::ConstSpan<u8> token;
     bool grease_quic_bit = true; // send grease_quic_bit and accept a cleared QUIC bit (RFC 9287)
     u32 sent_packets = 128U;     // per packet number space: what the connection holds in flight
@@ -153,9 +163,6 @@ struct QuicAccept
     cont::ConstSpan<u8> original_dcid; // the client's first Destination Connection ID (a Retry token's claim)
     bool retried = false;              // client_dcid is this server's Retry's Source Connection ID
     bool validated = false;            // a token proved the client's address
-    // A NEW_TOKEN token for the client's next connection (crypto::QuicTokenKeys::mint_new_token), sent once the
-    // handshake is confirmed and again until acknowledged (section 8.1.3); empty for none.
-    cont::ConstSpan<u8> new_token;
 };
 
 enum class QuicConnectionState : u8
@@ -243,6 +250,10 @@ public:
     [[nodiscard]] bool confirmed() const noexcept { return m_confirmed; }
     // A client accepted its server's Retry; a server's connection follows its own Retry.
     [[nodiscard]] bool retried() const noexcept { return m_retried; }
+    // The version the connection runs: the configured one until a compatible switch (final once a server has read
+    // its client's parameters, and once a client has read its server's first packet in another version or CRYPTO
+    // data in this one).
+    [[nodiscard]] crypto::QuicVersion version() const noexcept { return m_protection.version(); }
     [[nodiscard]] bool address_validated() const noexcept { return m_validated; }
     [[nodiscard]] const QuicCloseInfo& close_info() const noexcept { return m_close; }
     // The reason phrase sent or received (truncated to kQuicMaxReasonBytes).
@@ -268,12 +279,18 @@ public:
     [[nodiscard]] usize peer_cid_count() const noexcept { return m_peer_cid_count; }
     // This side's IDs still routed (sequence 0 included until retired).
     [[nodiscard]] usize local_cid_count() const noexcept { return m_local_id_count; }
-    // A client: the latest NEW_TOKEN token its server sent (empty for none), for its next connection there. A
-    // server: the token it sends.
+    // A client: the latest NEW_TOKEN token its server sent (empty for none), for its next connection there in
+    // version(). A server: the token it sends.
     [[nodiscard]] cont::ConstSpan<u8> new_token() const noexcept
     {
         return cont::ConstSpan<u8>(m_new_token, m_new_token_bytes);
     }
+    // A server's NEW_TOKEN token for its client's next connection (crypto::QuicTokenKeys::mint_new_token for
+    // version(), which is final once peer_parameters_known(): RFC 9369 section 5), sent once the handshake is
+    // confirmed and again until acknowledged (section 8.1.3). False, changing nothing, on a client, before
+    // peer_parameters_known(), once closing, for an empty token or one over kQuicMaxCarriedTokenBytes, or when it
+    // has one.
+    [[nodiscard]] bool give_new_token(cont::ConstSpan<u8> token) noexcept;
     // The packet number a space sends next, and whether `number` was skipped there (tests and NET-DEBUG).
     [[nodiscard]] u64 next_packet_number(QuicSpace space) const noexcept;
     [[nodiscard]] bool skipped(QuicSpace space, u64 number) const noexcept;
@@ -284,6 +301,18 @@ private:
         Acked,
         Lost,
         Discarded,
+    };
+
+    // A server's answer to its client's transport parameters (RFC 9368 section 2.3), asked by the TLS stack.
+    class HelloAnswer final : public crypto::QuicHelloAnswer
+    {
+    public:
+        explicit HelloAnswer(QuicConnection& connection) noexcept : m_connection(connection) {}
+        [[nodiscard]] usize answer(cont::ConstSpan<u8> client, crypto::QuicVersion& version,
+                                   cont::Span<u8> out) noexcept override;
+
+    private:
+        QuicConnection& m_connection;
     };
 
     // Recovery's per-packet events, settling the frames each packet carried.
@@ -343,6 +372,10 @@ private:
     };
 
     [[nodiscard]] bool start(u64 now_ns) noexcept;
+    // This side's parameters encoded into `out` with fresh grease: their size, 0 when they do not fit.
+    [[nodiscard]] usize encode_parameters(cont::Span<u8> out) noexcept;
+    // Whether a long header's version is one this connection reads now (RFC 9369 section 4.1).
+    [[nodiscard]] bool version_routed(const QuicHeader& header) const noexcept;
     [[nodiscard]] u64 entropy() noexcept;
 
     // Receiving.
@@ -405,6 +438,7 @@ private:
     QuicStreamSet m_streams;
     QuicDatagrams m_datagrams;
     Events m_events;
+    HelloAnswer m_hello;
     u32 m_frame_head = 0U;
     u32 m_frame_count = 0U;
     Level m_levels[kQuicSpaces];
@@ -427,6 +461,8 @@ private:
     QuicConnectionId m_peer_scid;     // the Source Connection ID of the peer's long headers
     bool m_peer_scid_known = false;
     bool m_retried = false;
+    bool m_version_settled = false; // a client's: its server's version is known
+    u32 m_packet_version = 0U;      // the long header version of the packet being read (0 for a short header)
     LocalCid m_local_ids[2U * kQuicMaxLocalConnectionIds]; // the active ones and those a rotation retires
     usize m_local_id_count = 0U;
     usize m_packet_local = 0U; // which of them the packet being read was sent to (m_local_id_count: none)

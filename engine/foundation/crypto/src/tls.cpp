@@ -582,15 +582,21 @@ TlsBinding binding_of(const TlsConfig& config, const KeyId& own) noexcept
     return binding;
 }
 
-// A QUIC handshake's binding: SHA-256 of its label and the context's binding, so the tickets of a context's QUIC
-// handshakes and of its stream sessions never meet (the provider resumes a ticket only on the transport that issued
-// it). Both ends use it as the session ID context, as they use the context's.
-TlsBinding quic_binding_of(const TlsBinding& binding) noexcept
+// A QUIC handshake's binding: SHA-256 of its label, the context's binding and the QUIC version (big-endian), so the
+// tickets of a context's QUIC handshakes and of its stream sessions never meet, nor those of two QUIC versions (RFC
+// 9369 section 5; the provider resumes a ticket only under the binding that issued it). Both ends use it as the
+// session ID context, as they use the context's.
+TlsBinding quic_binding_of(const TlsBinding& binding, QuicVersion version) noexcept
 {
-    u8          buffer[sizeof(kQuicBindingLabel) - 1U + sizeof(binding.bytes)];
+    u8          buffer[sizeof(kQuicBindingLabel) - 1U + sizeof(binding.bytes) + 4U];
     const usize label = sizeof(kQuicBindingLabel) - 1U;
     std::memcpy(buffer, kQuicBindingLabel, label);
     std::memcpy(buffer + label, binding.bytes, sizeof(binding.bytes));
+    const u32 value = static_cast<u32>(version);
+    for (usize i = 0U; i < 4U; ++i)
+    {
+        buffer[label + sizeof(binding.bytes) + i] = static_cast<u8>(value >> (24U - 8U * i));
+    }
     const KeyId digest = key_id_of(cont::ConstSpan<u8>(buffer));
     TlsBinding  quic;
     std::memcpy(quic.bytes, digest.bytes, sizeof(quic.bytes));
@@ -1415,8 +1421,38 @@ struct TlsCallbacks
                                               &length) == 1;
             session->m_early_offered =
                 SSL_early_callback_ctx_extension_get(hello, TLSEXT_TYPE_early_data, &data, &length) == 1;
+            if (session->m_quic && !answer_hello(*static_cast<QuicHandshake*>(session), hello))
+            {
+                return ssl_select_cert_error;
+            }
         }
         return ssl_select_cert_success;
+    }
+
+    // A QUIC server's QuicHelloAnswer sees its client's transport parameters before the provider reads them or writes
+    // anything (this callback runs once, on the first ClientHello, the inner one under ECH): the parameters it answers
+    // replace init()'s and its version rebinds the session ID context before the offered ticket is checked against
+    // it. False when the provider refuses either.
+    static bool answer_hello(QuicHandshake& handshake, const SSL_CLIENT_HELLO* hello) noexcept
+    {
+        if (handshake.m_hello_answer == nullptr)
+        {
+            return true;
+        }
+        const uint8_t* data   = nullptr;
+        size_t         length = 0U;
+        if (SSL_early_callback_ctx_extension_get(hello, TLSEXT_TYPE_quic_transport_parameters, &data, &length) != 1)
+        {
+            data   = nullptr;
+            length = 0U;
+        }
+        u8          parameters[kQuicMaxTransportParameterBytes];
+        QuicVersion version = handshake.m_version;
+        const usize bytes   = handshake.m_hello_answer->answer(cont::ConstSpan<u8>(data, length), version,
+                                                               cont::Span<u8>(parameters, sizeof(parameters)));
+        return bytes <= sizeof(parameters) &&
+               (bytes == 0U || SSL_set_quic_transport_params(hello->ssl, parameters, bytes) == 1) &&
+               handshake.set_version(version) == TlsError::None;
     }
 
     // A server selects the first of its own application protocols that its client offers (`offered`, a wire list the
@@ -3314,6 +3350,25 @@ QuicHandshake::~QuicHandshake() noexcept
     clear();
 }
 
+TlsError QuicHandshake::set_version(QuicVersion version) noexcept
+{
+    if (!quic_version_supported(static_cast<u32>(version)))
+    {
+        return TlsError::BadConfig;
+    }
+    if (m_session != nullptr && version != m_version)
+    {
+        const TlsBinding binding = quic_binding_of(m_context_binding, version);
+        if (!SSL_set_session_id_context(ssl_of(m_session), binding.bytes, sizeof(binding.bytes)))
+        {
+            return TlsError::ProviderFailure;
+        }
+        m_settings.binding = binding;
+    }
+    m_version = version;
+    return TlsError::None;
+}
+
 void QuicHandshake::clear() noexcept
 {
     release();
@@ -3376,7 +3431,9 @@ TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> tran
     }
     // Tickets and the session ID context under the QUIC binding; the provider takes the quic_transport_parameters
     // extension's standard codepoint (57), never the drafts' 0xffa5.
-    m_settings.binding = quic_binding_of(m_settings.binding);
+    m_context_binding  = m_settings.binding;
+    m_settings.binding = quic_binding_of(m_context_binding, m_version);
+    m_quic             = true;
     cont::ConstSpan<u8> remembered;
     if (m_outgoing[0] == nullptr || m_outgoing[1] == nullptr || m_outgoing[2] == nullptr ||
         !SSL_set_quic_method(ssl.get(), &kQuicMethod) ||

@@ -541,27 +541,34 @@ TEST_CASE("QUIC transport parameters: RFC 9368's compatible negotiation and down
     server.version_information.available_count = 2U;
     const ConstSpan<u32> v2_first(prefer_v2, 2U);
     const ConstSpan<u32> v1_first(prefer_v1, 2U);
-    CHECK(quic_client_check_version_information(server, kV2, false, v2_first) == QuicTransportError::NoError);
-    CHECK(quic_client_check_version_information(server, kV1, false, v2_first) ==
+    CHECK(quic_client_check_version_information(server, kV2, kV2, false, v2_first) == QuicTransportError::NoError);
+    CHECK(quic_client_check_version_information(server, kV1, kV1, false, v2_first) ==
           QuicTransportError::VersionNegotiationError);
-    CHECK(quic_client_check_version_information(server, kV2, true, v2_first) == QuicTransportError::NoError);
+    CHECK(quic_client_check_version_information(server, kV2, kV2, true, v2_first) == QuicTransportError::NoError);
     // The client prefers version 1 and the server lists it: version 2 after Version Negotiation is a downgrade.
-    CHECK(quic_client_check_version_information(server, kV2, true, v1_first) ==
+    CHECK(quic_client_check_version_information(server, kV2, kV2, true, v1_first) ==
           QuicTransportError::VersionNegotiationError);
     server.version_information.available_count = 0U;
-    CHECK(quic_client_check_version_information(server, kV2, true, v2_first) ==
+    CHECK(quic_client_check_version_information(server, kV2, kV2, true, v2_first) ==
           QuicTransportError::VersionNegotiationError);
-    CHECK(quic_client_check_version_information(server, kV2, false, v2_first) == QuicTransportError::NoError);
+    CHECK(quic_client_check_version_information(server, kV2, kV2, false, v2_first) == QuicTransportError::NoError);
     const u32 not_listed[] = {kV1};
     server.version_information.available_count = 2U;
-    CHECK(quic_client_check_version_information(server, kV2, true, ConstSpan<u32>(not_listed, 1U)) ==
+    CHECK(quic_client_check_version_information(server, kV2, kV2, true, ConstSpan<u32>(not_listed, 1U)) ==
           QuicTransportError::VersionNegotiationError);
 
+    // RFC 9368's figure 1: a client that attempted version 1 after Version Negotiation and was switched to version
+    // 2 passes when it would still attempt version 1 from the server's list, and fails when it would not.
+    CHECK(quic_client_check_version_information(server, kV2, kV1, true, v1_first) == QuicTransportError::NoError);
+    CHECK(quic_client_check_version_information(server, kV2, kV1, true, v2_first) ==
+          QuicTransportError::VersionNegotiationError);
+    CHECK(quic_client_check_version_information(server, kV2, kV1, false, v2_first) == QuicTransportError::NoError);
+
     // Section 8: a version 1 server without the parameter reads as choosing and listing version 1.
-    CHECK(quic_client_check_version_information(silent, kV1, false, v2_first) == QuicTransportError::NoError);
-    CHECK(quic_client_check_version_information(silent, kV1, true, v1_first) == QuicTransportError::NoError);
-    CHECK(quic_client_check_version_information(silent, kV1, true, v2_first) == QuicTransportError::NoError);
-    CHECK(quic_client_check_version_information(silent, kV2, true, v2_first) ==
+    CHECK(quic_client_check_version_information(silent, kV1, kV1, false, v2_first) == QuicTransportError::NoError);
+    CHECK(quic_client_check_version_information(silent, kV1, kV1, true, v1_first) == QuicTransportError::NoError);
+    CHECK(quic_client_check_version_information(silent, kV1, kV1, true, v2_first) == QuicTransportError::NoError);
+    CHECK(quic_client_check_version_information(silent, kV2, kV2, true, v2_first) ==
           QuicTransportError::VersionNegotiationError);
 }
 } // namespace

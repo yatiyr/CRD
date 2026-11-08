@@ -225,13 +225,29 @@ public:
     QuicPacketProtection(QuicPacketProtection&&) = delete;
     QuicPacketProtection& operator=(QuicPacketProtection&&) = delete;
 
-    // Starts a connection of `side` and `version`: its Initial keys for `client_dcid` (the client's first
-    // Destination Connection ID), every other key and window cleared. Again after a Retry (the new ID) or a compatible
-    // version change (the new version) re-derives the Initial keys and keeps the rest.
+    // Starts a connection of `side` in `version` (its original version): its Initial keys for `client_dcid` (the
+    // client's first Destination Connection ID), every other key and window cleared. rekey_initial() after a Retry
+    // re-derives the Initial keys, the other version's receive key too, for the Retry's ID and keeps the rest.
     [[nodiscard]] crypto::CryptoError start(crypto::QuicSide side, crypto::QuicVersion version,
                                             cont::ConstSpan<u8> client_dcid) noexcept;
-    [[nodiscard]] crypto::CryptoError rekey_initial(crypto::QuicVersion version,
-                                                    cont::ConstSpan<u8> client_dcid) noexcept;
+    [[nodiscard]] crypto::CryptoError rekey_initial(cont::ConstSpan<u8> client_dcid) noexcept;
+
+    // Compatible version negotiation (RFC 9368 section 2.3, RFC 9369 section 4.1). A client that offers `version`
+    // also opens its server's Initial packets in it (expect_version), so that it learns the version its server
+    // switched to from the first such packet. change_version() runs the connection in `version` from now on: its
+    // Initial keys of both directions for `client_dcid`, and the Handshake and 1-RTT keys installed later; the Initial
+    // receive key of the version it ran in stays to open the peer's Initial packets still in it (a server's client
+    // that has not learned the switch, a client's server acknowledging before it switched) until the Initial keys go.
+    // 0-RTT keys stay in the original version. NotReady once the Initial keys are gone or a Handshake key exists,
+    // Overlap for the version it runs or, from expect_version(), a second one.
+    [[nodiscard]] crypto::CryptoError expect_version(crypto::QuicVersion version,
+                                                     cont::ConstSpan<u8> client_dcid) noexcept;
+    [[nodiscard]] crypto::CryptoError change_version(crypto::QuicVersion version,
+                                                     cont::ConstSpan<u8> client_dcid) noexcept;
+    // The version the connection runs, the one it started in, and whether Initial packets of `version` open.
+    [[nodiscard]] crypto::QuicVersion version() const noexcept { return m_version; }
+    [[nodiscard]] crypto::QuicVersion original_version() const noexcept { return m_original; }
+    [[nodiscard]] bool opens_initial(u32 version) const noexcept;
 
     // Installs every key `handshake` has ready at the Handshake, Application and Early levels, in this connection's
     // version; called after each provide(). A client's 1-RTT keys discard its 0-RTT keys.
@@ -320,9 +336,16 @@ private:
     // What a 1-RTT send key may seal: the interval, or above every AEAD's limit, which set_limit lowers to its own.
     [[nodiscard]] u64 send_limit() const noexcept { return (m_update_interval != 0U) ? m_update_interval : ~u64{0}; }
     void rotate_receive(u64 number) noexcept;
+    [[nodiscard]] QuicKeys& initial_receive() noexcept { return m_initial[m_initial_receive]; }
+    [[nodiscard]] const QuicKeys& initial_receive() const noexcept { return m_initial[m_initial_receive]; }
+    [[nodiscard]] QuicKeys& initial_other() noexcept { return m_initial[3U - m_initial_receive]; }
+    [[nodiscard]] const QuicKeys& initial_other() const noexcept { return m_initial[3U - m_initial_receive]; }
     void clear_all() noexcept;
 
-    QuicKeys m_initial[2];   // [send, receive]
+    // [send, receive, receive]: the receive key of m_version at m_initial_receive, the other one m_other's
+    // (expect_version, change_version).
+    QuicKeys m_initial[3];
+    usize m_initial_receive = 1U;
     QuicKeys m_handshake[2]; // [send, receive]
     QuicKeys m_early;        // a client's to send, a server's to open
 
@@ -338,6 +361,8 @@ private:
     crypto::QuicPacketWindow m_windows[kQuicSpaces];
 
     crypto::QuicVersion m_version = crypto::QuicVersion::V1;
+    crypto::QuicVersion m_original = crypto::QuicVersion::V1;
+    crypto::QuicVersion m_other = crypto::QuicVersion::V1; // valid while its receive key is ready
     crypto::QuicSide m_side = crypto::QuicSide::Client;
     u64 m_forged = 0U;       // failed opens across all keys (section 6.6)
     u64 m_failed_limit = 0U; // configuration, kept by start()

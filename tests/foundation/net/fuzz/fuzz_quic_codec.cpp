@@ -182,8 +182,16 @@ void check_versions(const QuicTransportParameters& p)
     CRD_FUZZ_REQUIRE(chosen == 0U || p.version_information.available_count != 0U);
     for (const bool after : {false, true})
     {
-        const QuicTransportError error = quic_client_check_version_information(p, iana::kQuicVersion2, after, view);
-        CRD_FUZZ_REQUIRE(error == QuicTransportError::NoError || error == QuicTransportError::VersionNegotiationError);
+        for (const u32 attempted : {iana::kQuicVersion1, iana::kQuicVersion2})
+        {
+            const QuicTransportError error =
+                quic_client_check_version_information(p, iana::kQuicVersion2, attempted, after, view);
+            CRD_FUZZ_REQUIRE(error == QuicTransportError::NoError ||
+                             error == QuicTransportError::VersionNegotiationError);
+            // Never accepted when the server chose another version.
+            CRD_FUZZ_REQUIRE(error != QuicTransportError::NoError || !p.has_version_information ||
+                             p.version_information.chosen == iana::kQuicVersion2);
+        }
     }
 }
 

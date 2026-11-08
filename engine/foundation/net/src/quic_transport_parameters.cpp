@@ -613,7 +613,7 @@ QuicTransportError quic_server_check_version_information(const QuicTransportPara
 }
 
 QuicTransportError quic_client_check_version_information(const QuicTransportParameters& server, u32 negotiated,
-                                                         bool after_version_negotiation,
+                                                         u32 attempted, bool after_version_negotiation,
                                                          cont::ConstSpan<u32> preference) noexcept
 {
     QuicVersionInformation information = server.version_information;
@@ -644,17 +644,14 @@ QuicTransportError quic_client_check_version_information(const QuicTransportPara
     {
         return QuicTransportError::VersionNegotiationError;
     }
-    // Section 4: the client would have chosen the same version had the Version Negotiation packet listed the
+    // Section 4: the client would have attempted the same version had the Version Negotiation packet listed the
     // server's versions and the negotiated one.
     for (const u32 version : preference)
     {
-        if (version == negotiated)
+        if (version == negotiated ||
+            (!quic_version_reserved(version) && contains(information.available_view(), version)))
         {
-            return QuicTransportError::NoError;
-        }
-        if (!quic_version_reserved(version) && contains(information.available_view(), version))
-        {
-            return QuicTransportError::VersionNegotiationError;
+            return (version == attempted) ? QuicTransportError::NoError : QuicTransportError::VersionNegotiationError;
         }
     }
     return QuicTransportError::VersionNegotiationError;

@@ -169,7 +169,7 @@ void QuicConnection::Events::on_discarded(QuicSpace space, const QuicSentPacket&
 // ---- Construction ----
 
 QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnectionConfig& config) noexcept
-    : m_allocator(allocator), m_config(config), m_events(*this)
+    : m_allocator(allocator), m_config(config), m_events(*this), m_hello(*this)
 {
     if (!config_valid(config))
     {
@@ -296,7 +296,6 @@ bool QuicConnection::accept(const QuicAccept& accept, u64 now_ns) noexcept
     if (!ready() || m_state != QuicConnectionState::Idle || m_config.side != crypto::QuicSide::Server ||
         accept.local_cid.empty() || accept.client_dcid.empty() || !bounded(accept.local_cid) ||
         !bounded(accept.client_dcid) || !bounded(accept.original_dcid) || !bounded(accept.client_scid) ||
-        accept.new_token.size() > kQuicMaxCarriedTokenBytes ||
         (!accept.retried && !same_bytes(accept.original_dcid, accept.client_dcid)))
     {
         return false;
@@ -316,11 +315,6 @@ bool QuicConnection::accept(const QuicAccept& accept, u64 now_ns) noexcept
     static_cast<void>(m_peer_scid.assign(accept.client_scid));
     m_retried = accept.retried;
     m_validated = accept.validated;
-    m_new_token_bytes = accept.new_token.size();
-    if (m_new_token_bytes != 0U)
-    {
-        std::memcpy(m_new_token, accept.new_token.data(), m_new_token_bytes);
-    }
     m_peer_scid_known = true;
     m_peer_cids[0] = PeerCid{};
     m_peer_cids[0].id = m_peer_scid;
@@ -334,6 +328,24 @@ bool QuicConnection::start(u64 now_ns) noexcept
     if (m_protection.start(side, m_config.version, m_initial_dcid.view()) != crypto::CryptoError::None)
     {
         return false;
+    }
+    if (side == crypto::QuicSide::Client)
+    {
+        // The first other version its first flight converts to: the server may switch to it (RFC 9368 section 2.3).
+        const u32 original = static_cast<u32>(m_config.version);
+        for (usize index = 0U; index < m_version_count; ++index)
+        {
+            const u32 version = m_versions[index];
+            if (version != original && quic_versions_compatible(original, version))
+            {
+                if (m_protection.expect_version(static_cast<crypto::QuicVersion>(version), m_initial_dcid.view()) !=
+                    crypto::CryptoError::None)
+                {
+                    return false;
+                }
+                break;
+            }
+        }
     }
     m_protection.accept_cleared_quic_bit(m_config.grease_quic_bit);
     m_protection.set_key_update_interval(m_config.key_update_interval);
@@ -364,16 +376,70 @@ bool QuicConnection::start(u64 now_ns) noexcept
         m_local.version_information.available[index] = m_versions[index];
     }
     u8 encoded[crypto::kQuicMaxTransportParameterBytes];
-    const usize bytes = write_quic_transport_parameters(m_local, side, QuicTransportParameterGrease{entropy()},
-                                                        cont::Span<u8>(encoded, sizeof(encoded)));
-    if (bytes == 0U || m_handshake.init(*m_config.tls, cont::ConstSpan<u8>(encoded, bytes), m_config.tickets) !=
-                           crypto::TlsError::None)
+    const usize bytes = encode_parameters(cont::Span<u8>(encoded, sizeof(encoded)));
+    m_handshake.set_hello_answer(side == crypto::QuicSide::Server ? &m_hello : nullptr);
+    if (bytes == 0U || m_handshake.set_version(m_config.version) != crypto::TlsError::None ||
+        m_handshake.init(*m_config.tls, cont::ConstSpan<u8>(encoded, bytes), m_config.tickets) !=
+            crypto::TlsError::None)
     {
         return false;
     }
     m_state = QuicConnectionState::Handshaking;
     m_idle_ns = m_local.max_idle_timeout * kNsPerMs;
     restart_idle(now_ns);
+    return true;
+}
+
+usize QuicConnection::encode_parameters(cont::Span<u8> out) noexcept
+{
+    return write_quic_transport_parameters(m_local, m_config.side, QuicTransportParameterGrease{entropy()}, out);
+}
+
+usize QuicConnection::HelloAnswer::answer(cont::ConstSpan<u8> client, crypto::QuicVersion& version,
+                                          cont::Span<u8> out) noexcept
+{
+    // Parameters that do not parse or name another chosen version keep the original version: read_peer_parameters()
+    // closes with their error once provide() returns (RFC 9368 section 4).
+    QuicConnection& connection = m_connection;
+    const u32 original = static_cast<u32>(connection.m_config.version);
+    QuicTransportParameters parameters;
+    if (read_quic_transport_parameters(client, crypto::QuicSide::Client, parameters) != QuicTransportError::NoError ||
+        quic_server_check_version_information(parameters, original) != QuicTransportError::NoError)
+    {
+        return 0U;
+    }
+    const u32 chosen = quic_server_select_version(
+        parameters, original, cont::ConstSpan<u32>(connection.m_versions, connection.m_version_count));
+    if (chosen == 0U || chosen == original)
+    {
+        return 0U;
+    }
+    // Nothing is sent before the switch but acknowledgements in the original version (RFC 9369 section 4.1). A key
+    // the provider cannot derive, or parameters that do not fit, fail the handshake (an answer past its room).
+    connection.m_local.version_information.chosen = chosen;
+    const usize bytes = connection.encode_parameters(out);
+    if (bytes == 0U ||
+        connection.m_protection.change_version(static_cast<crypto::QuicVersion>(chosen),
+                                               connection.m_initial_dcid.view()) != crypto::CryptoError::None)
+    {
+        connection.m_local.version_information.chosen = original;
+        return out.size() + 1U;
+    }
+    version = static_cast<crypto::QuicVersion>(chosen);
+    return bytes;
+}
+
+bool QuicConnection::give_new_token(cont::ConstSpan<u8> token) noexcept
+{
+    if (m_config.side != crypto::QuicSide::Server || !m_peer_known || token.empty() ||
+        token.size() > kQuicMaxCarriedTokenBytes || m_new_token_bytes != 0U ||
+        (m_state != QuicConnectionState::Handshaking && m_state != QuicConnectionState::Established))
+    {
+        return false;
+    }
+    std::memcpy(m_new_token, token.data(), token.size());
+    m_new_token_bytes = token.size();
+    m_new_token_owed = m_confirmed;
     return true;
 }
 
@@ -501,8 +567,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
         // Retry is taken above; other versions are not this connection's, and a server's Initial carries no token
         // (section 17.2.2).
         routed = routed && header.type != QuicPacketType::Retry && header.type != QuicPacketType::OtherVersion &&
-                 header.version == static_cast<u32>(m_config.version) &&
-                 (!m_peer_scid_known || same_bytes(header.scid, m_peer_scid.view())) &&
+                 version_routed(header) && (!m_peer_scid_known || same_bytes(header.scid, m_peer_scid.view())) &&
                  (!client || header.type != QuicPacketType::Initial || header.token.empty());
     }
     // A server discards a client Initial in a datagram under 1200 bytes (section 14.1).
@@ -525,6 +590,20 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
         return false;
     }
     const QuicSpace space = quic_space_of(opened.type);
+    m_packet_version = long_header ? header.version : 0U;
+    if (client && long_header && header.version != static_cast<u32>(m_protection.version()) && !m_version_settled)
+    {
+        // The server switched compatibly: its first Initial packet in a version this client offered opened, so the
+        // connection runs in it from now on, its tickets too (RFC 9369 sections 4.1 and 5).
+        const auto negotiated = static_cast<crypto::QuicVersion>(header.version);
+        if (m_protection.change_version(negotiated, m_initial_dcid.view()) != crypto::CryptoError::None ||
+            m_handshake.set_version(negotiated) != crypto::TlsError::None)
+        {
+            fail(QuicTransportError::InternalError, 0U, now_ns);
+            return true;
+        }
+        m_version_settled = true;
+    }
     if (client && long_header && !m_peer_scid_known)
     {
         // The server's first packet names the ID the client sends to from now on (section 7.2).
@@ -668,8 +747,34 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
     return true;
 }
 
+bool QuicConnection::version_routed(const QuicHeader& header) const noexcept
+{
+    const crypto::QuicVersion running = m_protection.version();
+    if (header.version == static_cast<u32>(running))
+    {
+        return true;
+    }
+    // An Initial packet of the other version whose key is held: from a server's client that has not learned the
+    // switch, and on a client from its server switching (until the version is settled) or acknowledging in the
+    // original version before it switched (RFC 9369 section 4.1). Handshake and 1-RTT packets come in one version.
+    return header.type == QuicPacketType::Initial && m_protection.opens_initial(header.version) &&
+           (m_config.side == crypto::QuicSide::Server || !m_version_settled ||
+            header.version == static_cast<u32>(m_protection.original_version()));
+}
+
 bool QuicConnection::crypto_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept
 {
+    if (m_config.side == crypto::QuicSide::Client && m_packet_version != 0U)
+    {
+        // A server sends every CRYPTO frame in the version it runs (RFC 9369 section 4.1): one in the original
+        // version settles it, one in the original version after the switch is a violation.
+        if (m_packet_version != static_cast<u32>(m_protection.version()))
+        {
+            fail(QuicTransportError::ProtocolViolation, kCryptoFrameType, now_ns);
+            return false;
+        }
+        m_version_settled = true;
+    }
     Level& level = m_levels[index_of(space)];
     switch (level.in.insert(frame.offset, frame.data, false))
     {
@@ -760,10 +865,11 @@ bool QuicConnection::read_peer_parameters(u64 now_ns) noexcept
     }
     if (error == QuicTransportError::NoError)
     {
-        const u32 version = static_cast<u32>(m_config.version);
+        const u32 original = static_cast<u32>(m_config.version);
         error = (m_config.side == crypto::QuicSide::Server)
-                    ? quic_server_check_version_information(m_peer, version)
-                    : quic_client_check_version_information(m_peer, version, m_config.after_version_negotiation,
+                    ? quic_server_check_version_information(m_peer, original)
+                    : quic_client_check_version_information(m_peer, static_cast<u32>(m_protection.version()), original,
+                                                            m_config.after_version_negotiation,
                                                             cont::ConstSpan<u32>(m_versions, m_version_count));
     }
     if (error != QuicTransportError::NoError)
@@ -1056,7 +1162,7 @@ bool QuicConnection::retry(const QuicHeader& header, cont::ConstSpan<u8> packet,
         ++m_counters.packets_dropped;
         return false;
     }
-    if (m_protection.rekey_initial(m_config.version, header.scid) != crypto::CryptoError::None)
+    if (m_protection.rekey_initial(header.scid) != crypto::CryptoError::None)
     {
         fail(QuicTransportError::InternalError, 0U, now_ns);
         return true;
@@ -1502,7 +1608,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     }
     QuicPacketSpec spec;
     spec.type = packet_type(space);
-    spec.version = static_cast<u32>(m_config.version);
+    spec.version = static_cast<u32>(m_protection.version());
     spec.dcid = peer_cid();
     if (m_peer_cid_current < m_peer_cid_count)
     {

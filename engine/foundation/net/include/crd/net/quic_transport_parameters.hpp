@@ -193,13 +193,15 @@ struct QuicConnectionIdExpectation
 [[nodiscard]] QuicTransportError quic_server_check_version_information(const QuicTransportParameters& client,
                                                                        u32 original) noexcept;
 
-// A client's check of its server's version_information (RFC 9368 sections 4 and 8) for a connection running in
-// `negotiated`: the server's chosen version must be `negotiated`. After a Version Negotiation packet
-// (`after_version_negotiation`) the server must also have sent the parameter (a version 1 server that did not is
-// read as having chosen and listed only version 1), its list must not be empty, and the client, choosing by its
-// `preference` among that list and `negotiated`, must arrive at `negotiated`: otherwise VERSION_NEGOTIATION_ERROR.
+// A client's check of its server's version_information (RFC 9368 sections 4 and 8) for a connection that started
+// in `attempted` and runs in `negotiated` (the same unless the server switched compatibly): the server's chosen
+// version must be `negotiated`. After a Version Negotiation packet (`after_version_negotiation`) the server must
+// also have sent the parameter (a version 1 server that did not is read as having chosen and listed only version 1),
+// its list must not be empty, and the client, choosing by its `preference` among that list and `negotiated` as from
+// a Version Negotiation packet, must arrive at `attempted`: otherwise VERSION_NEGOTIATION_ERROR.
 [[nodiscard]] QuicTransportError quic_client_check_version_information(const QuicTransportParameters& server,
-                                                                       u32 negotiated, bool after_version_negotiation,
+                                                                       u32 negotiated, u32 attempted,
+                                                                       bool after_version_negotiation,
                                                                        cont::ConstSpan<u32> preference) noexcept;
 
 } // namespace crd::net

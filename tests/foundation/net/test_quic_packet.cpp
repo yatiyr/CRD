@@ -8,6 +8,7 @@
 
 #include "ingress_fixture.hpp"
 #include "quic_vectors.hpp"
+#include "tls_key_log.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/crypto/tls.hpp>
@@ -440,6 +441,133 @@ TEST_CASE("QUIC packets: a coalesced datagram is walked packet by packet and ano
     CHECK(broken.error() == QuicHeaderError::Truncated);
 }
 
+TEST_CASE("QUIC packets: a compatible version change runs the new version and opens the other's Initial packets "
+          "until the Initial keys go (RFC 9369 section 4.1)",
+          "[net][4.2a][quic-packet]")
+{
+    for (const QuicVersion original : kVersions)
+    {
+        const QuicVersion negotiated = (original == QuicVersion::V1) ? QuicVersion::V2 : QuicVersion::V1;
+        const auto wire = [](QuicVersion version)
+        {
+            return static_cast<crd::u32>(version);
+        };
+        const ConstSpan<u8> dcid(kDcid, kCid);
+        QuicPacketProtection client;
+        QuicPacketProtection server;
+        REQUIRE(client.start(QuicSide::Client, original, dcid) == CryptoError::None);
+        REQUIRE(server.start(QuicSide::Server, original, dcid) == CryptoError::None);
+        CHECK(client.expect_version(original, dcid) == CryptoError::Overlap);
+        CHECK_FALSE(client.opens_initial(wire(negotiated)));
+        REQUIRE(client.expect_version(negotiated, dcid) == CryptoError::None);
+        CHECK(client.expect_version(negotiated, dcid) == CryptoError::Overlap); // one other version at most
+        CHECK(client.opens_initial(wire(negotiated)));
+        CHECK(client.version() == original);
+
+        // The server acknowledges in the original version, then switches; the client's late Initial packets in the
+        // original version still open there.
+        Buffer early_ack;
+        REQUIRE(append(server, early_ack, spec_of(QuicPacketType::Initial, 0U, original), kPing) ==
+                QuicPacketError::None);
+        CHECK(server.change_version(original, dcid) == CryptoError::Overlap);
+        REQUIRE(server.change_version(negotiated, dcid) == CryptoError::None);
+        CHECK(server.version() == negotiated);
+        CHECK(server.original_version() == original);
+        CHECK(server.opens_initial(wire(original)));
+        Buffer late;
+        REQUIRE(append(client, late, spec_of(QuicPacketType::Initial, 0U, original), kPing) == QuicPacketError::None);
+        CHECK(deliver(server, late) == QuicPacketError::None);
+
+        // The server's Initial in the negotiated version opens under the client's expected key; the client then
+        // switches, and the server's acknowledgement from before the switch still opens.
+        Buffer switched;
+        REQUIRE(append(server, switched, spec_of(QuicPacketType::Initial, 1U, negotiated), kPing) ==
+                QuicPacketError::None);
+        CHECK(deliver(client, switched) == QuicPacketError::None);
+        REQUIRE(client.change_version(negotiated, dcid) == CryptoError::None);
+        CHECK(client.version() == negotiated);
+        CHECK(client.opens_initial(wire(original)));
+        CHECK(deliver(client, early_ack) == QuicPacketError::None);
+        Buffer answer;
+        REQUIRE(append(client, answer, spec_of(QuicPacketType::Initial, 1U, negotiated), kPing) ==
+                QuicPacketError::None);
+        CHECK(deliver(server, answer) == QuicPacketError::None);
+        // A version neither key opens.
+        Buffer stranger;
+        QuicPacketProtection third;
+        REQUIRE(third.start(QuicSide::Server, negotiated, dcid) == CryptoError::None);
+        CHECK(third.opens_initial(wire(negotiated)));
+        CHECK_FALSE(third.opens_initial(wire(original)));
+        REQUIRE(append(client, stranger, spec_of(QuicPacketType::Initial, 2U, original), kPing) ==
+                QuicPacketError::None); // the writer seals any version under the running keys
+        CHECK(deliver(third, stranger) == QuicPacketError::NoKeys);
+
+        // Handshake keys are the negotiated version's; once they exist neither change is allowed, and the first
+        // Handshake packet opened ends both Initial versions.
+        for (QuicPacketProtection* end : {&client, &server})
+        {
+            const bool is_client = end == &client;
+            REQUIRE(end->install(QuicLevel::Handshake, is_client, AlgorithmId::Aes128Gcm, secret(0U)) ==
+                    CryptoError::None);
+            REQUIRE(end->install(QuicLevel::Handshake, !is_client, AlgorithmId::Aes128Gcm, secret(1U)) ==
+                    CryptoError::None);
+            CHECK(end->change_version(original, dcid) == CryptoError::NotReady);
+        }
+        Buffer handshake;
+        REQUIRE(append(client, handshake, spec_of(QuicPacketType::Handshake, 0U, negotiated), kPing) ==
+                QuicPacketError::None);
+        CHECK(deliver(server, handshake) == QuicPacketError::None);
+        CHECK_FALSE(server.opens_initial(wire(original)));
+        CHECK_FALSE(server.opens_initial(wire(negotiated)));
+        CHECK(deliver(server, late) == QuicPacketError::NoKeys);
+        // A Handshake packet keyed in the original version does not open.
+        QuicPacketProtection stale;
+        REQUIRE(stale.start(QuicSide::Client, original, dcid) == CryptoError::None);
+        REQUIRE(stale.install(QuicLevel::Handshake, true, AlgorithmId::Aes128Gcm, secret(0U)) == CryptoError::None);
+        Buffer stale_handshake;
+        REQUIRE(append(stale, stale_handshake, spec_of(QuicPacketType::Handshake, 1U, original), kPing) ==
+                QuicPacketError::None);
+        QuicPacketProtection reader;
+        REQUIRE(reader.start(QuicSide::Server, original, dcid) == CryptoError::None);
+        REQUIRE(reader.change_version(negotiated, dcid) == CryptoError::None);
+        REQUIRE(reader.install(QuicLevel::Handshake, false, AlgorithmId::Aes128Gcm, secret(0U)) == CryptoError::None);
+        CHECK(deliver(reader, stale_handshake) == QuicPacketError::Forged);
+    }
+}
+
+TEST_CASE("QUIC packets: after a version change 0-RTT keys stay the original version's, and a Retry re-derives the "
+          "other version's Initial key",
+          "[net][4.2a][quic-packet]")
+{
+    const ConstSpan<u8> dcid(kDcid, kCid);
+    QuicPacketProtection client;
+    QuicPacketProtection server;
+    REQUIRE(client.start(QuicSide::Client, QuicVersion::V1, dcid) == CryptoError::None);
+    REQUIRE(server.start(QuicSide::Server, QuicVersion::V1, dcid) == CryptoError::None);
+    REQUIRE(client.expect_version(QuicVersion::V2, dcid) == CryptoError::None);
+    REQUIRE(client.change_version(QuicVersion::V2, dcid) == CryptoError::None);
+    REQUIRE(client.install(QuicLevel::Early, true, AlgorithmId::Aes128Gcm, secret(0U)) == CryptoError::None);
+    REQUIRE(server.install(QuicLevel::Early, false, AlgorithmId::Aes128Gcm, secret(0U)) == CryptoError::None);
+    Buffer zero_rtt;
+    REQUIRE(append(client, zero_rtt, spec_of(QuicPacketType::ZeroRtt, 0U, QuicVersion::V1), kPing) ==
+            QuicPacketError::None);
+    CHECK(deliver(server, zero_rtt) == QuicPacketError::None);
+
+    // A Retry before any switch: the expected key follows the Retry's ID.
+    const ConstSpan<u8> retried(kOtherDcid, kCid);
+    QuicPacketProtection retrying;
+    REQUIRE(retrying.start(QuicSide::Client, QuicVersion::V1, dcid) == CryptoError::None);
+    REQUIRE(retrying.expect_version(QuicVersion::V2, dcid) == CryptoError::None);
+    REQUIRE(retrying.rekey_initial(retried) == CryptoError::None);
+    QuicPacketProtection retry_server;
+    REQUIRE(retry_server.start(QuicSide::Server, QuicVersion::V1, retried) == CryptoError::None);
+    REQUIRE(retry_server.change_version(QuicVersion::V2, retried) == CryptoError::None);
+    Buffer answer;
+    REQUIRE(append(retry_server, answer, spec_of(QuicPacketType::Initial, 0U, QuicVersion::V2), kPing) ==
+            QuicPacketError::None);
+    CHECK(deliver(retrying, answer) == QuicPacketError::None);
+}
+
 TEST_CASE("QUIC packets: Initial, Handshake and 0-RTT keys are discarded at RFC 9001's moments",
           "[net][4.2a][quic-packet]")
 {
@@ -490,7 +618,7 @@ TEST_CASE("QUIC packets: Initial, Handshake and 0-RTT keys are discarded at RFC 
         REQUIRE(writer.begin(spec_of(QuicPacketType::Initial, 1U), initial.rest()));
         usize written = 0U;
         CHECK(pair.client.seal(writer, 0U, {}, written) == QuicPacketError::NoKeys);
-        CHECK(pair.client.rekey_initial(QuicVersion::V1, dcid) == CryptoError::NotReady);
+        CHECK(pair.client.rekey_initial(dcid) == CryptoError::NotReady);
 
         CHECK(pair.server.can_open(QuicPacketType::Initial));
         CHECK(deliver(pair.server, datagram) == QuicPacketError::None);
@@ -515,15 +643,14 @@ TEST_CASE("QUIC packets: Initial, Handshake and 0-RTT keys are discarded at RFC 
         CHECK_FALSE(pair.client.can_send(QuicPacketType::OneRtt));
         CHECK_FALSE(pair.client.can_open(QuicPacketType::OneRtt));
     }
-    SECTION("a Retry's new connection ID and a compatible version change re-derive the Initial keys")
+    SECTION("a Retry's new connection ID re-derives the Initial keys")
     {
         const ConstSpan<u8> retried(kOtherDcid, kCid);
-        REQUIRE(pair.client.rekey_initial(QuicVersion::V2, retried) == CryptoError::None);
+        REQUIRE(pair.client.rekey_initial(retried) == CryptoError::None);
         QuicPacketProtection server;
-        REQUIRE(server.start(QuicSide::Server, QuicVersion::V2, retried) == CryptoError::None);
+        REQUIRE(server.start(QuicSide::Server, QuicVersion::V1, retried) == CryptoError::None);
         Buffer datagram;
-        REQUIRE(append(pair.client, datagram, spec_of(QuicPacketType::Initial, 0U, QuicVersion::V2), kPing) ==
-                QuicPacketError::None);
+        REQUIRE(append(pair.client, datagram, spec_of(QuicPacketType::Initial, 0U), kPing) == QuicPacketError::None);
         CHECK(deliver(server, datagram) == QuicPacketError::None);
         CHECK(deliver(pair.server, datagram) == QuicPacketError::Forged); // the old keys no longer open it
     }
@@ -531,7 +658,9 @@ TEST_CASE("QUIC packets: Initial, Handshake and 0-RTT keys are discarded at RFC 
     {
         QuicPacketProtection idle;
         CHECK(idle.install(QuicLevel::Handshake, true, AlgorithmId::Aes128Gcm, secret(0U)) == CryptoError::NotReady);
-        CHECK(idle.rekey_initial(QuicVersion::V1, dcid) == CryptoError::NotReady);
+        CHECK(idle.rekey_initial(dcid) == CryptoError::NotReady);
+        CHECK(idle.change_version(QuicVersion::V2, dcid) == CryptoError::NotReady);
+        CHECK(idle.expect_version(QuicVersion::V2, dcid) == CryptoError::NotReady);
         CHECK(pair.client.install(QuicLevel::Initial, true, AlgorithmId::Aes128Gcm, secret(0U)) ==
               CryptoError::Unsupported);
         CHECK(pair.client.install(QuicLevel::Handshake, true, AlgorithmId::Aes128Gcm, secret(0U)) ==
@@ -810,7 +939,7 @@ QuicPacketType packet_type(QuicLevel level)
     return (level == QuicLevel::Handshake) ? QuicPacketType::Handshake : QuicPacketType::OneRtt;
 }
 
-void configure(End& client, End& server)
+void configure(End& client, End& server, crd::crypto::test::KeyLog* server_log = nullptr)
 {
     u8 seed[32];
     for (usize i = 0U; i < sizeof(seed); ++i)
@@ -838,6 +967,10 @@ void configure(End& client, End& server)
     server_config.credential = &server.credential;
     server_config.server_name = kServerName;
     server_config.application_protocols = kProtocols;
+    if (server_log != nullptr)
+    {
+        server_log->attach(server_config);
+    }
     REQUIRE(server.context.init(server_config) == TlsError::None);
 }
 
@@ -855,7 +988,7 @@ usize exchange(End& from, End& to, QuicSide side)
         {
             Buffer datagram;
             QuicPacketWriter writer;
-            QuicPacketSpec spec = spec_of(packet_type(level), from.next[index]++);
+            QuicPacketSpec spec = spec_of(packet_type(level), from.next[index]++, from.protection.version());
             REQUIRE(writer.begin(spec, datagram.rest()));
             u8 chunk[1000];
             usize taken = 0U;
@@ -914,6 +1047,47 @@ QuicFrameKind one_rtt(End& from, End& to, const QuicFrame& frame)
     return read.kind;
 }
 } // namespace
+
+TEST_CASE("QUIC packets: after a compatible version change the handshake's keys are the negotiated version's",
+          "[net][4.2a][quic-packet]")
+{
+    for (const QuicVersion original : kVersions)
+    {
+        const QuicVersion negotiated = (original == QuicVersion::V1) ? QuicVersion::V2 : QuicVersion::V1;
+        End client;
+        End server;
+        crd::crypto::test::KeyLog log;
+        configure(client, server, &log);
+        const ConstSpan<u8> dcid(kDcid, kCid);
+        REQUIRE(client.handshake.init(client.context, ConstSpan<u8>(kParameters)) == TlsError::None);
+        REQUIRE(server.handshake.init(server.context, ConstSpan<u8>(kParameters)) == TlsError::None);
+        REQUIRE(client.protection.start(QuicSide::Client, original, dcid) == CryptoError::None);
+        REQUIRE(server.protection.start(QuicSide::Server, original, dcid) == CryptoError::None);
+        REQUIRE(client.protection.expect_version(negotiated, dcid) == CryptoError::None);
+        REQUIRE(client.protection.change_version(negotiated, dcid) == CryptoError::None);
+        REQUIRE(server.protection.change_version(negotiated, dcid) == CryptoError::None);
+        CHECK(exchange(client, server, QuicSide::Client) == 2U);
+        CHECK(exchange(server, client, QuicSide::Server) >= 2U);
+        CHECK(exchange(client, server, QuicSide::Client) >= 1U);
+        REQUIRE(client.handshake.state() == TlsState::Established);
+
+        // The server's 1-RTT secret from the key log, keyed apart from the connection: in the negotiated version its
+        // packet opens at the client, in the original version it does not.
+        const crd::crypto::test::KeyLogLine* line = log.find("SERVER_TRAFFIC_SECRET_0");
+        REQUIRE(line != nullptr);
+        const AlgorithmId aead = client.handshake.aead();
+        for (const QuicVersion keyed : {negotiated, original})
+        {
+            crd::crypto::QuicPacketKey key;
+            QuicHeaderKey header;
+            REQUIRE(key.init(keyed, aead, line->value()) == CryptoError::None);
+            REQUIRE(header.init(keyed, aead, line->value()) == CryptoError::None);
+            const Buffer datagram = crafted(key, header, false, server.next[2]++);
+            const QuicPacketError opened = deliver(client.protection, datagram);
+            CHECK((opened == QuicPacketError::None) == (keyed == negotiated));
+        }
+    }
+}
 
 TEST_CASE("QUIC packets: a TLS handshake carried in these packets reaches 1-RTT in both versions",
           "[net][4.2a][quic-packet]")

@@ -987,6 +987,144 @@ TEST_CASE("QUIC handshake: tickets resume under QUIC's own binding and never cro
     check_all_keys(client, server, QuicVersion::V1);
 }
 
+namespace
+{
+// A server's answer that switches versions and sends other parameters (RFC 9368 section 2.3), as crd-net's does.
+class Answer final : public QuicHelloAnswer
+{
+public:
+    usize answer(ConstSpan<u8> client, QuicVersion& version, Span<u8> out) noexcept override
+    {
+        ++calls;
+        seen.resize(client.size());
+        std::memcpy(seen.data(), client.data(), client.size());
+        version = to;
+        if (oversize)
+        {
+            return out.size() + 1U;
+        }
+        std::memcpy(out.data(), kAnswered, sizeof(kAnswered));
+        return sizeof(kAnswered);
+    }
+
+    static constexpr u8 kAnswered[] = {0x00U, 0x04U, 0x0AU, 0x0BU, 0x0CU, 0x0DU,
+                                       0x11U, 0x04U, 0x6BU, 0x33U, 0x43U, 0xCFU};
+    QuicVersion         to       = QuicVersion::V2;
+    bool                oversize = false;
+    usize               calls    = 0U;
+    Bytes               seen;
+};
+
+// The client's flight goes to the server, which answers; the client learns the version from the server's first
+// packet (as its transport would) before it reads the server's CRYPTO data.
+void establish_switched(End& client, End& server, QuicVersion learned)
+{
+    (void)deliver(client.handshake, server.handshake);
+    REQUIRE(client.handshake.set_version(learned) == TlsError::None);
+    establish(client, server);
+}
+} // namespace
+
+TEST_CASE("QUIC handshake: a server's answer chooses the version and parameters, and a ticket resumes only its "
+          "version (RFC 9368 section 2.3, RFC 9369 section 5)",
+          "[crypto][quic-handshake][net-2][4.2a]")
+{
+    u8 ticket_key[kTlsTicketKeyBytes];
+    for (usize i = 0U; i < sizeof(ticket_key); ++i)
+    {
+        ticket_key[i] = static_cast<u8>(i + 3U);
+    }
+    End     client;
+    End     server;
+    Store   tickets;
+    Options options;
+    options.ticket_key = ConstSpan<u8>(ticket_key);
+    configure(client, server, options);
+    CHECK(client.handshake.version() == QuicVersion::V1);
+    CHECK(client.handshake.set_version(static_cast<QuicVersion>(0x1A2A3A4AU)) == TlsError::BadConfig);
+    CHECK(client.handshake.version() == QuicVersion::V1);
+
+    // A version 1 connection's ticket.
+    start(client, server, &tickets);
+    establish(client, server);
+    REQUIRE(tickets.kept == 1U);
+    const TlsBinding v1_binding = tickets.binding();
+
+    // The server answers with version 2 and other parameters: the client's parameters reach the answer exactly, the
+    // client reads the answered ones, the version 1 ticket is refused and the new ticket belongs to version 2.
+    Answer answer;
+    server.handshake.set_hello_answer(&answer);
+    start(client, server, &tickets);
+    CHECK(tickets.taken_under == v1_binding);
+    establish_switched(client, server, QuicVersion::V2);
+    CHECK(answer.calls == 1U);
+    CHECK(equal(ConstSpan<u8>(answer.seen.data(), answer.seen.size()), ConstSpan<u8>(kClientParameters)));
+    CHECK(equal(client.handshake.peer_transport_parameters(), ConstSpan<u8>(Answer::kAnswered)));
+    CHECK(server.handshake.version() == QuicVersion::V2);
+    CHECK_FALSE(client.handshake.resumed());
+    CHECK_FALSE(server.handshake.resumed());
+    check_all_keys(client, server, QuicVersion::V2);
+    REQUIRE(tickets.kept == 2U);
+    const TlsBinding v2_binding = tickets.binding();
+    CHECK_FALSE(v2_binding == v1_binding);
+
+    // A client starting in version 2 offers it under version 2's binding and a version 2 server resumes it.
+    server.handshake.set_hello_answer(nullptr);
+    REQUIRE(client.handshake.set_version(QuicVersion::V2) == TlsError::None);
+    REQUIRE(server.handshake.set_version(QuicVersion::V2) == TlsError::None);
+    start(client, server, &tickets);
+    CHECK(tickets.taken_under == v2_binding);
+    establish(client, server);
+    CHECK(client.handshake.resumed());
+    CHECK(server.handshake.resumed());
+    check_all_keys(client, server, QuicVersion::V2);
+    REQUIRE(tickets.binding() == v2_binding);
+
+    // A server that switches that client to version 1 refuses the version 2 ticket and issues one of version 1, which
+    // a version 1 connection then resumes.
+    answer.to    = QuicVersion::V1;
+    answer.calls = 0U;
+    server.handshake.set_hello_answer(&answer);
+    start(client, server, &tickets);
+    CHECK(tickets.taken_under == v2_binding);
+    establish_switched(client, server, QuicVersion::V1);
+    CHECK(answer.calls == 1U);
+    CHECK_FALSE(server.handshake.resumed());
+    REQUIRE(tickets.binding() == v1_binding);
+    server.handshake.set_hello_answer(nullptr);
+    start(client, server, &tickets);
+    establish(client, server);
+    CHECK(client.handshake.resumed());
+    CHECK(server.handshake.resumed());
+
+    // Asked once, also when the server asks for another key share; an answer past its room fails the handshake.
+    {
+        const AlgorithmId client_groups[] = {AlgorithmId::X25519, AlgorithmId::Secp384r1};
+        const AlgorithmId server_group    = AlgorithmId::Secp384r1;
+        End               retry_client;
+        End               retry_server;
+        Options           retry_options;
+        retry_options.client_groups = client_groups;
+        retry_options.server_groups = ConstSpan<AlgorithmId>(&server_group, 1U);
+        configure(retry_client, retry_server, retry_options);
+        Answer retry_answer;
+        retry_server.handshake.set_hello_answer(&retry_answer);
+        start(retry_client, retry_server);
+        establish_switched(retry_client, retry_server, QuicVersion::V2);
+        CHECK(retry_server.handshake.hello_retry());
+        CHECK(retry_answer.calls == 1U);
+        check_all_keys(retry_client, retry_server, QuicVersion::V2);
+
+        retry_answer.oversize = true;
+        REQUIRE(retry_client.handshake.set_version(QuicVersion::V1) == TlsError::None);
+        REQUIRE(retry_server.handshake.set_version(QuicVersion::V1) == TlsError::None);
+        start(retry_client, retry_server);
+        (void)deliver(retry_client.handshake, retry_server.handshake);
+        CHECK(retry_server.handshake.state() == TlsState::Failed);
+        CHECK(retry_server.handshake.version() == QuicVersion::V1);
+    }
+}
+
 TEST_CASE("QUIC handshake: a TLS KeyUpdate and data at a level not read now fail the handshake",
           "[crypto][quic-handshake][net-2]")
 {
