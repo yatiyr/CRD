@@ -87,7 +87,7 @@
       "id": "cerid.session-control",
       "title": "Cerid session control: handshake, capabilities, key update and close",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "NET.2",
@@ -116,8 +116,15 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "engine/foundation/net/schemas/session_control.json",
+        "tests/foundation/net/test_admission.cpp",
+        "tests/foundation/net/fuzz/fuzz_wire_session_control.cpp",
+        "tests/foundation/crypto/test_tls.cpp",
+        "tests/foundation/crypto/test_capability.cpp"
+      ],
+      "deprecation": null,
+      "note": "Implemented by NET.2 (the TLS 1.3 handshake, key update and close, capability tokens) and NET.3 (session_control.json's generated messages: revision and schema announcements, capability and revocation presentation, policy generations, state hashes, GoAway and baseline acknowledgements, admitted by stages S6 and S7)."
     },
     {
       "id": "cerid.game",
@@ -260,7 +267,8 @@
       "state": "planned",
       "owner": "net",
       "rows": [
-        "NET.3"
+        "NET.3",
+        "AGENT.3"
       ],
       "spec": {
         "type": "cerid",
@@ -283,7 +291,8 @@
       },
       "review": "2027-10-27",
       "evidence": [],
-      "deprecation": null
+      "deprecation": null,
+      "note": "NET.3 ships the wire formats and admission this protocol's messages are generated into; the agent protocol itself (remote agent sessions under user-issued capability tokens) is AGENT.3's, on the finished network rows."
     },
     {
       "id": "cerid.service",
@@ -293,7 +302,8 @@
       "owner": "net",
       "rows": [
         "NET.2",
-        "NET.3"
+        "NET.3",
+        "NET-SERVER"
       ],
       "spec": {
         "type": "cerid",
@@ -318,7 +328,8 @@
       },
       "review": "2027-10-27",
       "evidence": [],
-      "deprecation": null
+      "deprecation": null,
+      "note": "NET.2 proves mutual authentication on a service link and NET.3 ships the wire formats; the service-to-service protocol between servers, fleet and backend adapters is NET-SERVER's."
     },
     {
       "id": "cerid.relay-allocation",

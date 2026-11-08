@@ -22,6 +22,17 @@
       "confidentiality": true,
       "entries": [
         {
+          "id": "cerid.session-control",
+          "kind": "protocol",
+          "owner": "net",
+          "functions": [
+            "authentication",
+            "key-exchange"
+          ],
+          "spec": "docs/design/network-foundation.md#negotiation",
+          "standard": false
+        },
+        {
           "id": "cerid.policy-generation",
           "kind": "format",
           "owner": "crypto",
@@ -636,6 +647,17 @@
       ],
       "confidentiality": true,
       "entries": [
+        {
+          "id": "cerid.session-control",
+          "kind": "protocol",
+          "owner": "net",
+          "functions": [
+            "authentication",
+            "key-exchange"
+          ],
+          "spec": "docs/design/network-foundation.md#negotiation",
+          "standard": false
+        },
         {
           "id": "cerid.policy-generation",
           "kind": "format",
