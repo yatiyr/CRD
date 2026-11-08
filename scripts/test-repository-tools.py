@@ -1584,7 +1584,7 @@ class PinnedInputs(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(pins_registry.download(url, target, digest, 'a', sleep=waits.append), target)
             self.assertEqual(target.read_bytes(), good)
-            self.assertEqual(waits, list(pins_registry.RETRY_WAITS))
+            self.assertEqual(waits, list(pins_registry.RETRY_WAITS[:len(stalls) - 1]))
             target.unlink()
             waits.clear()
             with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=[missing]):

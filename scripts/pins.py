@@ -66,7 +66,9 @@ def verify(path, expected, label):
 
 # A transfer that fails in the network (a stalled read, a reset or refused connection, a truncated body, a server-side
 # HTTP status) is tried again after these waits in seconds; a client-side HTTP status and a checksum mismatch never are.
-RETRY_WAITS = (5, 15, 45)
+# The last two outlast a release host's gateway outage: on 2026-11-08 GitHub answered 504 for over a minute and every
+# job of two runs lost its tools to it.
+RETRY_WAITS = (5, 15, 45, 120, 300)
 
 
 def transient(error):
