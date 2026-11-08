@@ -440,6 +440,30 @@ TEST_CASE("A list given storage decodes each element once into it", "[net][wire]
         CHECK(decoded.nodes.storage().data() == node_storage);
         CHECK(same(lists, decoded));
     }
+    SECTION("an older revision's message leaves nothing of the newer one before it in the storage")
+    {
+        const u8 more[2] = {5U, 6U};
+        nodes[0].has_extended = true;
+        nodes[0].extended.base = 7U;
+        nodes[1].extended.added = 100U;
+        nodes[1].extended.more = ConstSpan<u8>(more);
+        const auto newer = encoded(lists, kMinor, out, sizeof(out));
+        REQUIRE(decode(newer, kMinor, decoded) == WireError::Ok);
+        REQUIRE(node_storage[0].extended.base == 7U);
+        REQUIRE(node_storage[1].extended.added == 100U);
+        REQUIRE(node_storage[1].extended.more.size() == 2U);
+
+        nodes[0].has_extended = false;
+        nodes[1].extended.added = 3U; // what revision 0 cannot carry is at its default
+        nodes[1].extended.more = {};
+        u8 older_out[256] = {};
+        const auto older = encoded(lists, 0U, older_out, sizeof(older_out));
+        REQUIRE(decode(older, 0U, decoded) == WireError::Ok);
+        CHECK_FALSE(node_storage[0].has_extended);
+        CHECK(node_storage[0].extended.base == 0U);
+        CHECK(node_storage[1].extended.added == 3U);
+        CHECK(node_storage[1].extended.more.empty());
+    }
     SECTION("more elements than the storage holds are viewed, and decode the same")
     {
         Node  one[1] = {};

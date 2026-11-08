@@ -1829,6 +1829,12 @@ def kept_lists(item):
             if isinstance(f.type, ListType) or (isinstance(f.type, StructType) and kept_lists(f.type))]
 
 
+def field_default(field):
+    """The value a field holds when its message does not carry it, as its member initializer declares."""
+    init = field.type.member_init(field.default)
+    return init[len(' = '):] if init else '{}'
+
+
 def keep_lines(item):
     """A struct's `keep`: a decode starts from a fresh value that keeps the storage its lists decode into."""
     fields = kept_lists(item)
@@ -1931,22 +1937,31 @@ def struct_lines(item, schema, message):
             body += inner
     lines += wrap_lines(body, '        ') + ['        return position;', '    }', '']
 
+    # A struct with lists that decode into storage starts from a fresh value that keeps the storage. Any other sets
+    # each field once on every path: its take, or its declared value where the field is absent (an optional one, a
+    # newer revision's), so the value is never rebuilt through a temporary, which GCC stored and reloaded at a width
+    # the stores could not forward (a stall on every list element).
+    fresh = bool(kept_lists(item))
+
     def reads(read):
-        body = []
+        body = [f'value = wire_fresh<{codec}>(value);'] if fresh else []
         for field in item.fields:
             ref = f'value.{field.name}'
+            absent = [] if fresh else [f'{ref} = {field_default(field)};']
             inner = []
             if field.optional:
                 inner += guard(f'wire_take_bool(r, value.has_{field.name})')
                 inner += [f'if (value.has_{field.name})', '{'] + wrap_lines(read(field.type, ref)) + ['}']
+                inner += ['else', '{'] + wrap_lines(absent) + ['}'] if absent else []
             else:
                 inner += read(field.type, ref)
             if field.since > 0:
+                absent = ([f'value.has_{field.name} = false;'] if field.optional and not fresh else []) + absent
                 body += [f'if (writer_minor >= {field.since}U)', '{'] + wrap_lines(inner) + ['}']
+                body += ['else', '{'] + wrap_lines(absent) + ['}'] if absent else []
             else:
                 body += inner
-        reset = f'value = wire_fresh<{codec}>(value);' if kept_lists(item) else 'value = Value{};'
-        return ['        ' + reset] + wrap_lines(body, '        ')
+        return wrap_lines(body, '        ')
 
     lines += [f'    [[nodiscard]] static WireError {decode_name}(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,',
               '                                                 Value& value) noexcept', '    {']

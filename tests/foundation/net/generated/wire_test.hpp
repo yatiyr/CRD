@@ -203,7 +203,6 @@ struct VecCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_range<i16>(r, static_cast<i16>(-512LL), 1023ULL, 10U, value.x);
             error != WireError::Ok)
         {
@@ -316,7 +315,6 @@ struct ExtendedCodec
     [[nodiscard]] static WireError decode_body(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_uint(r, 9U, value.base); error != WireError::Ok)
         {
             return error;
@@ -332,12 +330,20 @@ struct ExtendedCodec
                 return error;
             }
         }
+        else
+        {
+            value.added = static_cast<u8>(3ULL);
+        }
         if (writer_minor >= 2U)
         {
             if (const WireError error = wire_take_bytes(r, 0U, 9U, 4U, value.more); error != WireError::Ok)
             {
                 return error;
             }
+        }
+        else
+        {
+            value.more = {};
         }
         return WireError::Ok;
     }
@@ -409,7 +415,6 @@ struct LongExtendedCodec
     [[nodiscard]] static WireError decode_body(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_bool(r, value.flag); error != WireError::Ok)
         {
             return error;
@@ -504,7 +509,6 @@ struct NodeCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = VecCodec::decode(r, writer_minor, value.at); error != WireError::Ok)
         {
             return error;
@@ -525,13 +529,16 @@ struct NodeCodec
                 return error;
             }
         }
+        else
+        {
+            value.extended = {};
+        }
         return WireError::Ok;
     }
 
     [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = VecCodec::check(r, writer_minor, value.at); error != WireError::Ok)
         {
             return error;
@@ -551,6 +558,10 @@ struct NodeCodec
             {
                 return error;
             }
+        }
+        else
+        {
+            value.extended = {};
         }
         return WireError::Ok;
     }
@@ -677,7 +688,6 @@ struct ScalarsCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_bool(r, value.flag); error != WireError::Ok)
         {
             return error;
@@ -877,7 +887,6 @@ struct BlobsCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_uint(r, 3U, value.before); error != WireError::Ok)
         {
             return error;
@@ -909,6 +918,10 @@ struct BlobsCodec
                 return error;
             }
         }
+        else
+        {
+            value.maybe = {};
+        }
         if (const WireError error = wire_take_bool(r, value.has_maybe_title); error != WireError::Ok)
         {
             return error;
@@ -919,6 +932,10 @@ struct BlobsCodec
             {
                 return error;
             }
+        }
+        else
+        {
+            value.maybe_title = {};
         }
         return WireError::Ok;
     }
@@ -1599,7 +1616,6 @@ struct NewerCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_uint(r, 12U, value.only); error != WireError::Ok)
         {
             return error;
@@ -1665,7 +1681,6 @@ struct LongBodyCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_uint(r, 3U, value.before); error != WireError::Ok)
         {
             return error;

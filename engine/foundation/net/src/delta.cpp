@@ -145,7 +145,7 @@ private:
 }
 
 // Where the next `bits` bits of `a` and `b` first differ, `bits` when they do not; neither reader moves.
-[[nodiscard]] WireError first_difference(Reader a, Reader b, u64 bits, u64& offset) noexcept
+[[nodiscard]] CRD_FORCEINLINE WireError first_difference(Reader a, Reader b, u64 bits, u64& offset) noexcept
 {
     offset = 0U;
     while (offset < bits)

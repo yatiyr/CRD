@@ -46,6 +46,11 @@ template <typename M> void check_value(const M& message, u16 minor, const char* 
     CHECK(same(decoded, message));
     CHECK(same(message, decoded));
 
+    // A decode sets every field: over the value the previous vector of this message left, it reads the same.
+    static M reused{};
+    REQUIRE(decode(cont::ConstSpan<u8>(expected, size), minor, reused) == WireError::Ok);
+    CHECK(same(reused, message));
+
     // A decoded message forwards as it is, its lists read from the input.
     usize again = 0U;
     REQUIRE(encode(decoded, minor, cont::Span<u8>(written), again) == WireError::Ok);

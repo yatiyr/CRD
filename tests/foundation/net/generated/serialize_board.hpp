@@ -195,7 +195,6 @@ struct EntityCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_range<u16>(r, static_cast<u16>(0ULL), 1023ULL, 10U, value.id);
             error != WireError::Ok)
         {
@@ -259,13 +258,16 @@ struct EntityCodec
                 return error;
             }
         }
+        else
+        {
+            value.target = static_cast<u16>(0ULL);
+        }
         return WireError::Ok;
     }
 
     [[nodiscard]] static WireError check(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_range<u16>(r, static_cast<u16>(0ULL), 1023ULL, 10U, value.id);
             error != WireError::Ok)
         {
@@ -327,6 +329,10 @@ struct EntityCodec
             {
                 return error;
             }
+        }
+        else
+        {
+            value.target = static_cast<u16>(0ULL);
         }
         return WireError::Ok;
     }
@@ -497,7 +503,6 @@ struct CommandCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_varuint_as(r, 7U, 4294967295ULL, value.tick);
             error != WireError::Ok)
         {

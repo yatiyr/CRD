@@ -87,7 +87,6 @@ struct RevisionAnnounceCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_bytes(r, 16U, 16U, 0U, value.schema); error != WireError::Ok)
         {
             return error;
@@ -150,7 +149,6 @@ struct SchemaPresentCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_bytes(r, 0U, 34816U, 16U, value.artefact);
             error != WireError::Ok)
         {
@@ -220,7 +218,6 @@ struct CapabilityPresentCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_bytes(r, 0U, 49152U, 16U, value.token); error != WireError::Ok)
         {
             return error;
@@ -235,6 +232,10 @@ struct CapabilityPresentCodec
             {
                 return error;
             }
+        }
+        else
+        {
+            value.proof = {};
         }
         return WireError::Ok;
     }
@@ -286,7 +287,6 @@ struct RevocationsPresentCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_bytes(r, 0U, 163840U, 18U, value.generation);
             error != WireError::Ok)
         {
@@ -342,7 +342,6 @@ struct GenerationAnnounceCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_varuint_as(r, 7U, 18446744073709551615ULL, value.policy_generation);
             error != WireError::Ok)
         {
@@ -410,7 +409,6 @@ struct StateHashCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_varuint_as(r, 7U, 18446744073709551615ULL, value.step);
             error != WireError::Ok)
         {
@@ -492,7 +490,6 @@ struct GoAwayCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_uint(r, 4U, value.reason); error != WireError::Ok)
         {
             return error;
@@ -569,7 +566,6 @@ struct BaselineAckCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_varuint_as(r, 7U, 4294967295ULL, value.channel);
             error != WireError::Ok)
         {

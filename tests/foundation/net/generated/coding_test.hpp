@@ -80,7 +80,6 @@ struct BodyCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_uint(r, 16U, value.id); error != WireError::Ok)
         {
             return error;
@@ -174,7 +173,6 @@ struct NoteCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_varuint_as(r, 7U, 4294967295ULL, value.serial);
             error != WireError::Ok)
         {
@@ -308,7 +306,6 @@ struct GlanceCodec
     [[nodiscard]] static WireError decode(cont::BitReader& r, [[maybe_unused]] u16 writer_minor,
                                                  Value& value) noexcept
     {
-        value = Value{};
         if (const WireError error = wire_take_bytes(r, 0U, 4000U, 12U, value.blob); error != WireError::Ok)
         {
             return error;
