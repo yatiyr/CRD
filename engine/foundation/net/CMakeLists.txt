@@ -6,7 +6,7 @@
 # wire formats (NET.3) with their frames, admission stages S6 and S7, quotas, reassembly and baseline deltas, and
 # 4.2a's transport (addresses, UDP sockets, QUIC headers, the I/O loop and admission stages S1 to S3, QUIC frames and
 # transport parameters, QUIC packets per encryption level, acknowledgements and loss recovery, byte streams and flow
-# control, the connection with its streams and datagrams). Contract:
+# control, the connection with its streams and datagrams, the server behind the ingress). Contract:
 # docs/design/network-foundation.md.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")

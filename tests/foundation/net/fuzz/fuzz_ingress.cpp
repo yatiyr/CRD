@@ -12,7 +12,8 @@
 // Negotiation (listing the server's versions and one reserved version) or as a Retry whose integrity tag verifies.
 // A Retry token that does not validate is answered, below its datagram's size, with one server Initial that the client
 // opens under the keys of the Destination Connection ID it chose, holding CONNECTION_CLOSE with INVALID_TOKEN and
-// PADDING alone.
+// PADDING alone; an admitted Initial a server refuses gets the same close with CONNECTION_REFUSED. Early goes only to
+// 0-RTT for no connection under a Destination Connection ID of at least 8 bytes, and is never answered.
 // A stateless reset answers only a short header for no connection: shorter than it (section 10.3.3), one byte
 // shorter up to 43 bytes, at least 21 and at most kQuicMaxResetAnswerBytes, with the fixed bits 01 and the token of
 // its Destination Connection ID last.
@@ -150,10 +151,12 @@ void check_answer(const IngressDecision& decision, ConstSpan<u8> datagram, const
                                                     decision.header.dcid, answer) == crd::crypto::CryptoError::None);
 }
 
-void check_token_close(const IngressDecision& decision, ConstSpan<u8> datagram, Span<u8> answer)
+void check_initial_close(const IngressDecision& decision, ConstSpan<u8> datagram, Span<u8> answer,
+                         QuicTransportError error)
 {
     CRD_FUZZ_REQUIRE(decision.header.type == QuicPacketType::Initial && datagram.size() >= kQuicMinInitialDatagram);
-    CRD_FUZZ_REQUIRE(crd::crypto::quic_token_kind(decision.header.token) == crd::crypto::QuicTokenKind::Retry);
+    CRD_FUZZ_REQUIRE(error != QuicTransportError::InvalidToken ||
+                     crd::crypto::quic_token_kind(decision.header.token) == crd::crypto::QuicTokenKind::Retry);
     CRD_FUZZ_REQUIRE(answer.size() < datagram.size());
     QuicPacketProtection client;
     CRD_FUZZ_REQUIRE(client.start(crd::crypto::QuicSide::Client,
@@ -173,7 +176,7 @@ void check_token_close(const IngressDecision& decision, ConstSpan<u8> datagram, 
     QuicFrame frame;
     CRD_FUZZ_REQUIRE(read_quic_frame(frames, frame) == QuicTransportError::NoError);
     CRD_FUZZ_REQUIRE(frame.kind == QuicFrameKind::ConnectionClose && !frame.application);
-    CRD_FUZZ_REQUIRE(frame.error_code == static_cast<u64>(QuicTransportError::InvalidToken));
+    CRD_FUZZ_REQUIRE(frame.error_code == static_cast<u64>(error));
     while (!frames.done())
     {
         CRD_FUZZ_REQUIRE(read_quic_frame(frames, frame) == QuicTransportError::NoError);
@@ -221,9 +224,20 @@ void check_ingress(ConstSpan<u8> datagram, u8 control)
         CRD_FUZZ_REQUIRE(decision.connection == 7U && routes.find(decision.header.dcid) == 7U);
         break;
     case IngressAction::Admit:
+    {
         CRD_FUZZ_REQUIRE(decision.header.type == QuicPacketType::Initial);
         CRD_FUZZ_REQUIRE(datagram.size() >= kQuicMinInitialDatagram);
         CRD_FUZZ_REQUIRE(decision.header.dcid.size() >= kQuicMinClientDcidBytes);
+        u8 answer[kQuicMaxStatelessAnswerBytes] = {};
+        const usize written = ingress.refuse(decision, 1000000000U, Span<u8>(answer));
+        CRD_FUZZ_REQUIRE(written != 0U);
+        check_initial_close(decision, datagram, Span<u8>(answer, written), QuicTransportError::ConnectionRefused);
+        break;
+    }
+    case IngressAction::Early:
+        CRD_FUZZ_REQUIRE(decision.header.type == QuicPacketType::ZeroRtt);
+        CRD_FUZZ_REQUIRE(decision.header.dcid.size() >= kQuicMinClientDcidBytes);
+        CRD_FUZZ_REQUIRE(routes.find(decision.header.dcid) == kNoConnection);
         break;
     case IngressAction::Retry:
     case IngressAction::NegotiateVersion:
@@ -247,7 +261,7 @@ void check_ingress(ConstSpan<u8> datagram, u8 control)
         u8 answer[kQuicMaxStatelessAnswerBytes] = {};
         const usize written = ingress.answer(decision, peer, kUnix, Span<u8>(answer));
         CRD_FUZZ_REQUIRE(written != 0U);
-        check_token_close(decision, datagram, Span<u8>(answer, written));
+        check_initial_close(decision, datagram, Span<u8>(answer, written), QuicTransportError::InvalidToken);
         break;
     }
     }

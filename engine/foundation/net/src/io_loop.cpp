@@ -10,6 +10,7 @@ namespace crd::net
 namespace
 {
 constexpr u32 kMaxBatch = 1024U;
+constexpr u32 kMaxQueueSlots = 65536U;
 constexpr u64 kAnswerRetryNs = 1000000U; // an answer the host was too busy to take is offered again within 1 ms
 } // namespace
 
@@ -25,29 +26,107 @@ u64 HostClock::unix_seconds() const noexcept
     return (now > 0) ? static_cast<u64>(now) / kNanosPerSecond : 0U;
 }
 
+// ---- SendQueue ----
+
+SendQueue::SendQueue(memory::IAllocator& allocator, u32 slots, usize slot_bytes) noexcept
+    : m_allocator(allocator), m_slots(slots), m_slot_bytes(slot_bytes)
+{
+    if (slots == 0U || slots > kMaxQueueSlots || slot_bytes == 0U || slot_bytes > kMaxUdpPayloadV6)
+    {
+        return;
+    }
+    OutgoingDatagram* const datagrams = memory::try_construct_array<OutgoingDatagram>(allocator, slots);
+    u8* const bytes = memory::try_construct_array<u8>(allocator, usize{slots} * slot_bytes);
+    if (datagrams == nullptr || bytes == nullptr)
+    {
+        memory::destroy_array(allocator, datagrams, slots);
+        memory::destroy_array(allocator, bytes, usize{slots} * slot_bytes);
+        return;
+    }
+    m_datagrams = datagrams;
+    m_bytes = bytes;
+}
+
+SendQueue::~SendQueue()
+{
+    if (m_datagrams != nullptr)
+    {
+        memory::destroy_array(m_allocator, m_datagrams, m_slots);
+        memory::destroy_array(m_allocator, m_bytes, usize{m_slots} * m_slot_bytes);
+    }
+}
+
+cont::Span<u8> SendQueue::room() noexcept
+{
+    if (m_datagrams == nullptr || m_queued == m_slots)
+    {
+        return {};
+    }
+    const u32 index = (m_head + m_queued) % m_slots;
+    return cont::Span<u8>(m_bytes + (usize{index} * m_slot_bytes), m_slot_bytes);
+}
+
+void SendQueue::push(usize bytes, const Endpoint& peer) noexcept
+{
+    const cont::Span<u8> slot = room();
+    if (slot.empty() || bytes == 0U || bytes > slot.size())
+    {
+        return;
+    }
+    m_datagrams[(m_head + m_queued) % m_slots] = OutgoingDatagram{slot.first(bytes), peer};
+    ++m_queued;
+}
+
+SendFlush SendQueue::flush(DatagramSocket& socket) noexcept
+{
+    SendFlush flushed;
+    while (m_queued != 0U)
+    {
+        const u32 run = (m_queued < m_slots - m_head) ? m_queued : m_slots - m_head;
+        const BatchResult result = socket.send(cont::ConstSpan<OutgoingDatagram>(m_datagrams + m_head, run));
+        const auto sent = static_cast<u32>(result.count);
+        m_head = (m_head + sent) % m_slots;
+        m_queued -= sent;
+        flushed.sent += sent;
+        if (result.error == SocketError::Busy)
+        {
+            return flushed;
+        }
+        if (result.error != SocketError::None && m_queued != 0U)
+        {
+            // That datagram alone cannot leave (an unreachable peer, a refused address): it is given up.
+            m_head = (m_head + 1U) % m_slots;
+            --m_queued;
+            ++flushed.dropped;
+        }
+        else if (sent == 0U)
+        {
+            return flushed;
+        }
+    }
+    return flushed;
+}
+
+// ---- IoLoop ----
+
 IoLoop::IoLoop(memory::IAllocator& allocator, DatagramSocket& socket, const TransportClock& clock, Ingress& ingress,
                IngressHandler& handler, const IoLoopConfig& config) noexcept
     : m_allocator(allocator), m_socket(socket), m_clock(clock), m_ingress(ingress), m_handler(handler),
-      m_config(config)
+      m_config(config), m_answers(allocator, config.queued_answers, kQuicMaxStatelessAnswerBytes)
 {
-    if (!ingress.ready() || config.batch == 0U || config.batch > kMaxBatch ||
+    if (!ingress.ready() || !m_answers.ready() || config.batch == 0U || config.batch > kMaxBatch ||
         config.slot_bytes < kQuicMinInitialDatagram || config.slot_bytes > kMaxUdpPayloadV6 ||
-        config.batches_per_poll == 0U || config.queued_answers == 0U || config.max_wait_ns == 0U)
+        config.batches_per_poll == 0U || config.max_wait_ns == 0U)
     {
         return;
     }
     const usize buffer_bytes = usize{config.batch} * config.slot_bytes;
-    const usize answer_count = usize{config.queued_answers} * kQuicMaxStatelessAnswerBytes;
     ReceivedDatagram* const slots = memory::try_construct_array<ReceivedDatagram>(allocator, config.batch);
     u8* const buffers = memory::try_construct_array<u8>(allocator, buffer_bytes);
-    OutgoingDatagram* const answers = memory::try_construct_array<OutgoingDatagram>(allocator, config.queued_answers);
-    u8* const answer_bytes = memory::try_construct_array<u8>(allocator, answer_count);
-    if (slots == nullptr || buffers == nullptr || answers == nullptr || answer_bytes == nullptr)
+    if (slots == nullptr || buffers == nullptr)
     {
         memory::destroy_array(allocator, slots, config.batch);
         memory::destroy_array(allocator, buffers, buffer_bytes);
-        memory::destroy_array(allocator, answers, config.queued_answers);
-        memory::destroy_array(allocator, answer_bytes, answer_count);
         return;
     }
     for (u32 index = 0U; index < config.batch; ++index)
@@ -56,16 +135,12 @@ IoLoop::IoLoop(memory::IAllocator& allocator, DatagramSocket& socket, const Tran
     }
     m_slots = slots;
     m_buffers = buffers;
-    m_answers = answers;
-    m_answer_bytes = answer_bytes;
 }
 
 IoLoop::~IoLoop()
 {
     memory::destroy_array(m_allocator, m_slots, m_config.batch);
     memory::destroy_array(m_allocator, m_buffers, usize{m_config.batch} * m_config.slot_bytes);
-    memory::destroy_array(m_allocator, m_answers, m_config.queued_answers);
-    memory::destroy_array(m_allocator, m_answer_bytes, usize{m_config.queued_answers} * kQuicMaxStatelessAnswerBytes);
 }
 
 u64 IoLoop::poll() noexcept
@@ -112,7 +187,7 @@ void IoLoop::run(const std::atomic<bool>& stop) noexcept
         }
         u64 wait = next - now;
         wait = (wait < m_config.max_wait_ns) ? wait : m_config.max_wait_ns;
-        if (m_queued != 0U && wait > kAnswerRetryNs)
+        if (m_answers.queued() != 0U && wait > kAnswerRetryNs)
         {
             wait = kAnswerRetryNs;
         }
@@ -138,13 +213,25 @@ void IoLoop::receive_batch(u64 now_ns, u64 unix_seconds, BatchResult& result) no
         case IngressAction::Admit:
             m_handler.on_admit(decision, datagram, now_ns);
             break;
+        case IngressAction::Early:
+            m_handler.on_early(decision, datagram, now_ns);
+            break;
+        case IngressAction::StatelessReset:
+            if (!m_handler.on_unrouted(decision, datagram, now_ns))
+            {
+                queue_answer(decision, datagram.peer, unix_seconds);
+            }
+            break;
         case IngressAction::Retry:
         case IngressAction::NegotiateVersion:
-        case IngressAction::StatelessReset:
         case IngressAction::InvalidToken:
             queue_answer(decision, datagram.peer, unix_seconds);
             break;
         case IngressAction::Drop:
+            if (decision.reason == DropReason::UnknownConnection)
+            {
+                static_cast<void>(m_handler.on_unrouted(decision, datagram, now_ns));
+            }
             break;
         }
     }
@@ -152,49 +239,20 @@ void IoLoop::receive_batch(u64 now_ns, u64 unix_seconds, BatchResult& result) no
 
 void IoLoop::queue_answer(const IngressDecision& decision, const Endpoint& peer, u64 unix_seconds) noexcept
 {
-    if (m_queued == m_config.queued_answers)
+    const cont::Span<u8> out = m_answers.room();
+    if (out.empty())
     {
         ++m_counters.answers_dropped;
         return;
     }
-    const u32 index = (m_head + m_queued) % m_config.queued_answers;
-    const cont::Span<u8> out(m_answer_bytes + (usize{index} * kQuicMaxStatelessAnswerBytes),
-                             kQuicMaxStatelessAnswerBytes);
-    const usize written = m_ingress.answer(decision, peer, unix_seconds, out);
-    if (written == 0U)
-    {
-        return;
-    }
-    m_answers[index] = OutgoingDatagram{out.first(written), peer};
-    ++m_queued;
+    m_answers.push(m_ingress.answer(decision, peer, unix_seconds, out), peer);
 }
 
 void IoLoop::flush_answers() noexcept
 {
-    while (m_queued != 0U)
-    {
-        const u32 run = (m_queued < m_config.queued_answers - m_head) ? m_queued : m_config.queued_answers - m_head;
-        const BatchResult result = m_socket.send(cont::ConstSpan<OutgoingDatagram>(m_answers + m_head, run));
-        const auto sent = static_cast<u32>(result.count);
-        m_head = (m_head + sent) % m_config.queued_answers;
-        m_queued -= sent;
-        m_counters.answers_sent += sent;
-        if (result.error == SocketError::Busy)
-        {
-            return;
-        }
-        if (result.error != SocketError::None && m_queued != 0U)
-        {
-            // That answer alone cannot leave (an unreachable peer, a refused address): it is given up.
-            m_head = (m_head + 1U) % m_config.queued_answers;
-            --m_queued;
-            ++m_counters.answers_dropped;
-        }
-        else if (sent == 0U)
-        {
-            return;
-        }
-    }
+    const SendFlush flushed = m_answers.flush(m_socket);
+    m_counters.answers_sent += flushed.sent;
+    m_counters.answers_dropped += flushed.dropped;
 }
 
 } // namespace crd::net

@@ -10,8 +10,10 @@
 //        datagram under 1200 bytes, or with a Destination Connection ID under 8 bytes (section 7.2), is dropped.
 //   S2   the Destination Connection ID through the keyed table (connection_table.hpp); a coalesced datagram goes
 //        where its first packet goes. A short header for no connection is answered with a stateless reset when the
-//        server holds a QuicResetKey (RFC 9000 section 10.3), else dropped; a 0-RTT or Handshake packet for no
-//        connection is dropped (a reset is not effective before the handshake gave the client its token).
+//        server holds a QuicResetKey (RFC 9000 section 10.3), else dropped; a 0-RTT packet for no connection whose
+//        Destination Connection ID a client may have chosen (8 bytes or more) goes to the handler unanswered, which
+//        may hold it until its Initial (Early, section 5.2.2), and a Handshake packet for no connection is dropped (a
+//        reset is not effective before the handshake gave the client its token).
 //   S3   a client Initial for no connection: a Retry token that validates proves the address (QuicTokenKeys), one
 //        that does not is answered with an Initial closing the connection with INVALID_TOKEN, so the client fails at
 //        once instead of timing out (section 8.1.2); a NEW_TOKEN token that validates proves it, one that does not
@@ -20,12 +22,12 @@
 //        closed or when every address must be proven; proven ones pass a global rate. Prefixes share a fixed array of
 //        buckets chosen by a keyed hash, so a server keeps no per-source state before validation and a collision only
 //        tightens.
-//   answers  Retry, Version Negotiation, INVALID_TOKEN closes and stateless resets pass one global rate. The first
-//        three are far below three times the datagram they answer (RFC 9000 section 8): at least 1200 bytes in, at
-//        most kQuicMaxStatelessAnswerBytes out. A close is one server Initial (under the keys of the client's
-//        Destination Connection ID) holding one CONNECTION_CLOSE, which is not ack-eliciting and so not padded. A
-//        stateless reset is shorter than its trigger, so a loop of resets between two endpoints shrinks to nothing
-//        (section 10.3.3): one byte shorter for a trigger of 43 bytes or fewer, else a random length from 43 to
+//   answers  Retry, Version Negotiation, INVALID_TOKEN and CONNECTION_REFUSED closes and stateless resets pass one
+//        global rate. The first four are far below three times the datagram they answer (RFC 9000 section 8): at least
+//        1200 bytes in, at most kQuicMaxStatelessAnswerBytes out. A close is one server Initial (under the keys of the
+//        client's Destination Connection ID) holding one CONNECTION_CLOSE, which is not ack-eliciting and so not
+//        padded. A stateless reset is shorter than its trigger, so a loop of resets between two endpoints shrinks to
+//        nothing (section 10.3.3): one byte shorter for a trigger of 43 bytes or fewer, else a random length from 43 to
 //        kQuicMaxResetAnswerBytes; never under kQuicMinResetBytes.
 //
 // Threads: HandshakeBuckets is shared by the loops of one server and checked by all of them at once (its gates are
@@ -118,6 +120,12 @@ struct IngressConfig
 };
 
 inline constexpr usize kQuicMinClientDcidBytes = 8U;    // RFC 9000 section 7.2
+
+// The address and port an address validation token is bound to.
+[[nodiscard]] inline crypto::QuicTokenPeer quic_token_peer(const Endpoint& peer) noexcept
+{
+    return crypto::QuicTokenPeer{peer.address.view(), peer.port};
+}
 inline constexpr usize kQuicMaxResetAnswerBytes = 128U; // as long as a small 1-RTT packet, never longer
 inline constexpr usize kQuicMaxStatelessAnswerBytes =
     (kQuicMaxVersionNegotiationBytes > quic_retry_bytes(crypto::kQuicMaxConnectionIdBytes,
@@ -136,12 +144,13 @@ enum class IngressAction : u8
     NegotiateVersion, // answer with answer()
     StatelessReset,   // answer with answer()
     InvalidToken,     // answer with answer(): a Retry token that does not validate (section 8.1.2)
+    Early,            // 0-RTT for no connection: the handler may hold it until its Initial (section 5.2.2)
 };
 
 enum class DropReason : u8
 {
-    Truncated,          // longer than the receive slot (the path's largest datagram)
-    Malformed,          // a header the datagram does not hold
+    Truncated, // longer than the receive slot (the path's largest datagram)
+    Malformed, // a header the datagram does not hold
     ConnectionIdTooLong,
     TooShortToProtect,
     VersionNegotiation, // a server never takes one
@@ -150,7 +159,7 @@ enum class DropReason : u8
     SmallInitial,       // a client Initial in fewer than 1200 bytes
     ShortClientDcid,    // a client Initial's Destination Connection ID under 8 bytes
     UnknownConnection,  // a short header for no connection
-    EarlyPacket,        // 0-RTT or Handshake for no connection
+    EarlyPacket,        // Handshake for no connection, or 0-RTT with a Destination Connection ID under 8 bytes
     InvalidRetryToken,  // one that does not validate, when the answer rate is spent
     Overloaded,         // S3 refused and no answer was possible
     Count,
@@ -179,6 +188,8 @@ struct IngressCounters
     u64 negotiations = 0U;
     u64 resets = 0U;
     u64 token_closes = 0U;    // INVALID_TOKEN closes
+    u64 refusals = 0U;        // CONNECTION_REFUSED closes
+    u64 early = 0U;           // 0-RTT handed on for no connection
     u64 answer_failures = 0U; // answers that could not be built (no randomness, no room)
 };
 
@@ -207,6 +218,10 @@ public:
     // header views the classified datagram, which must still be alive.
     [[nodiscard]] usize answer(const IngressDecision& decision, const Endpoint& peer, u64 unix_seconds,
                                cont::Span<u8> out) noexcept;
+    // A CONNECTION_REFUSED close answering an admitted client Initial the handler cannot take (its connections are
+    // all in use), in the form of the INVALID_TOKEN close, within the answer rate at `now_ns`: its bytes into `out`
+    // (kQuicMaxStatelessAnswerBytes), zero when the rate is spent or it could not be built (counted).
+    [[nodiscard]] usize refuse(const IngressDecision& decision, u64 now_ns, cont::Span<u8> out) noexcept;
 
     [[nodiscard]] const IngressCounters& counters() const noexcept { return m_counters; }
 
@@ -214,7 +229,6 @@ private:
     [[nodiscard]] bool runs(u32 version) const noexcept;
     [[nodiscard]] IngressDecision drop(IngressDecision decision, DropReason reason) noexcept;
     [[nodiscard]] usize stateless_reset(const IngressDecision& decision, u64 bits, cont::Span<u8> out) noexcept;
-    [[nodiscard]] usize invalid_token(const IngressDecision& decision, cont::Span<u8> out) noexcept;
     [[nodiscard]] IngressDecision admit_initial(IngressDecision decision, cont::ConstSpan<u8> datagram,
                                                 const Endpoint& peer, u64 now_ns, u64 unix_seconds) noexcept;
 

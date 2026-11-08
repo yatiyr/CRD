@@ -15,8 +15,9 @@ inline u8 pattern(u64 pattern_id, u64 offset)
     return static_cast<u8>((offset * 31U) + (pattern_id * 7U) + (offset >> 8U));
 }
 
-// Reads everything readable on `id`, checking the pattern from `offset`; true once the FIN was read (or before).
-inline bool drain(QuicStreamSet& set, u64 id, u64& offset, u64 pattern_id)
+// Reads everything readable on `id`, checking the pattern from `offset` and adding the bytes 0-RTT carried to
+// `early` when given; true once the FIN was read (or before).
+inline bool drain(QuicStreamSet& set, u64 id, u64& offset, u64 pattern_id, u64* early = nullptr)
 {
     if (set.recv_state(id) == QuicRecvState::DataRead)
     {
@@ -29,6 +30,10 @@ inline bool drain(QuicStreamSet& set, u64 id, u64& offset, u64 pattern_id)
             REQUIRE(read.data[at] == pattern(pattern_id, offset + at));
         }
         offset += read.data.size();
+        if (early != nullptr)
+        {
+            *early += read.early_bytes;
+        }
         REQUIRE(set.consume(id, read.data.size()) == QuicStreamError::None);
         if (read.fin)
         {

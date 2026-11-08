@@ -18,9 +18,35 @@ bool gate_open(const SharedRateGate& gate, const GateRule& rule, u64 now_ns) noe
     return gate.open_at(rule) <= now_ns;
 }
 
-crypto::QuicTokenPeer token_peer(const Endpoint& peer) noexcept
+// An Initial from the server to the client's Source Connection ID, sealed under the keys of the Destination
+// Connection ID it chose, holding one CONNECTION_CLOSE with `error` (RFC 9000 sections 8.1.2 and 10.2.3); not
+// ack-eliciting, so not padded. Its bytes, zero when it could not be built.
+usize close_initial(const QuicHeader& header, QuicTransportError error, cont::Span<u8> out) noexcept
 {
-    return crypto::QuicTokenPeer{peer.address.view(), peer.port};
+    const auto version = static_cast<crypto::QuicVersion>(header.version);
+    QuicPacketSpec spec;
+    spec.type = QuicPacketType::Initial;
+    spec.version = header.version;
+    spec.dcid = header.scid;
+    spec.scid = header.dcid;
+    QuicFrame close;
+    close.kind = QuicFrameKind::ConnectionClose;
+    close.error_code = static_cast<u64>(error);
+    QuicKeys keys;
+    QuicPacketWriter writer;
+    usize written = 0U;
+    if (quic_initial_keys(version, crypto::QuicSide::Server, header.dcid, keys) != crypto::CryptoError::None ||
+        !writer.begin(spec, out))
+    {
+        return 0U;
+    }
+    const usize used = write_quic_frame(close, writer.frames());
+    if (used == 0U ||
+        writer.seal(keys.packet, keys.header, false, used, QuicPadding{}, written) != crypto::CryptoError::None)
+    {
+        return 0U;
+    }
+    return written;
 }
 } // namespace
 
@@ -241,6 +267,14 @@ IngressDecision Ingress::classify(cont::ConstSpan<u8> datagram, bool truncated, 
     case QuicPacketType::Initial:
         return admit_initial(decision, datagram, peer, now_ns, unix_seconds);
     case QuicPacketType::ZeroRtt:
+        // Ahead of its Initial, under the ID the client chose (section 7.2), the handler may hold it (section 5.2.2).
+        if (header.dcid.size() < kQuicMinClientDcidBytes)
+        {
+            break;
+        }
+        decision.action = IngressAction::Early;
+        ++m_counters.early;
+        return decision;
     case QuicPacketType::Handshake:
     case QuicPacketType::Retry:
     case QuicPacketType::VersionNegotiation:
@@ -268,7 +302,7 @@ IngressDecision Ingress::admit_initial(IngressDecision decision, cont::ConstSpan
         const crypto::QuicTokenKind kind = crypto::quic_token_kind(header.token);
         if (kind == crypto::QuicTokenKind::Retry)
         {
-            if (m_tokens->validate(version, header.token, token_peer(peer), header.dcid, header.scid, unix_seconds,
+            if (m_tokens->validate(version, header.token, quic_token_peer(peer), header.dcid, header.scid, unix_seconds,
                                    decision.claims) != crypto::CryptoError::None)
             {
                 if (!m_buckets.answer(now_ns))
@@ -283,8 +317,9 @@ IngressDecision Ingress::admit_initial(IngressDecision decision, cont::ConstSpan
         else if (kind == crypto::QuicTokenKind::NewToken && m_new_tokens != nullptr)
         {
             crypto::QuicTokenClaims claims;
-            decision.validated = m_tokens->validate(version, header.token, token_peer(peer), header.dcid, header.scid,
-                                                    unix_seconds, claims, m_new_tokens) == crypto::CryptoError::None;
+            decision.validated =
+                m_tokens->validate(version, header.token, quic_token_peer(peer), header.dcid, header.scid, unix_seconds,
+                                   claims, m_new_tokens) == crypto::CryptoError::None;
         }
     }
 
@@ -333,7 +368,14 @@ usize Ingress::answer(const IngressDecision& decision, const Endpoint& peer, u64
     }
     if (decision.action == IngressAction::InvalidToken)
     {
-        return invalid_token(decision, out);
+        const usize written = close_initial(header, QuicTransportError::InvalidToken, out);
+        if (written == 0U)
+        {
+            ++m_counters.answer_failures;
+            return 0U;
+        }
+        ++m_counters.token_closes;
+        return written;
     }
     if (decision.action == IngressAction::NegotiateVersion)
     {
@@ -357,7 +399,7 @@ usize Ingress::answer(const IngressDecision& decision, const Endpoint& peer, u64
     u8 token[crypto::kQuicMaxRetryTokenBytes] = {};
     usize token_bytes = 0U;
     usize written = 0U;
-    if (m_tokens->mint_retry(version, token_peer(peer), header.dcid, header.scid, retry_scid, unix_seconds,
+    if (m_tokens->mint_retry(version, quic_token_peer(peer), header.dcid, header.scid, retry_scid, unix_seconds,
                              cont::Span<u8>(token, sizeof(token)), token_bytes) != crypto::CryptoError::None ||
         write_retry(version, header.scid, retry_scid, header.dcid, cont::ConstSpan<u8>(token, token_bytes),
                     static_cast<u8>(bits), out, written) != crypto::CryptoError::None)
@@ -396,39 +438,19 @@ usize Ingress::stateless_reset(const IngressDecision& decision, u64 bits, cont::
     return bytes;
 }
 
-usize Ingress::invalid_token(const IngressDecision& decision, cont::Span<u8> out) noexcept
+usize Ingress::refuse(const IngressDecision& decision, u64 now_ns, cont::Span<u8> out) noexcept
 {
-    // An Initial from the server to the client's Source Connection ID, sealed under the keys of the Destination
-    // Connection ID it chose, holding CONNECTION_CLOSE with INVALID_TOKEN (RFC 9000 sections 8.1.2 and 10.2.3).
-    const QuicHeader& header = decision.header;
-    const auto version = static_cast<crypto::QuicVersion>(header.version);
-    QuicPacketSpec spec;
-    spec.type = QuicPacketType::Initial;
-    spec.version = header.version;
-    spec.dcid = header.scid;
-    spec.scid = header.dcid;
-    QuicFrame close;
-    close.kind = QuicFrameKind::ConnectionClose;
-    close.error_code = static_cast<u64>(QuicTransportError::InvalidToken);
-    QuicKeys keys;
-    QuicPacketWriter writer;
-    usize written = 0U;
-    if (quic_initial_keys(version, crypto::QuicSide::Server, header.dcid, keys) == crypto::CryptoError::None &&
-        writer.begin(spec, out))
+    if (decision.action != IngressAction::Admit || !m_buckets.answer(now_ns))
     {
-        const usize used = write_quic_frame(close, writer.frames());
-        if (used == 0U ||
-            writer.seal(keys.packet, keys.header, false, used, QuicPadding{}, written) != crypto::CryptoError::None)
-        {
-            written = 0U;
-        }
+        return 0U;
     }
+    const usize written = close_initial(decision.header, QuicTransportError::ConnectionRefused, out);
     if (written == 0U)
     {
         ++m_counters.answer_failures;
         return 0U;
     }
-    ++m_counters.token_closes;
+    ++m_counters.refusals;
     return written;
 }
 

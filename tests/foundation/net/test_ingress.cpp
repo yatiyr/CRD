@@ -731,10 +731,18 @@ TEST_CASE("S2 routes known IDs and S3 admits new Initials", "[net][ingress]")
           6U);
     CHECK(server.ingress.counters().routed == 3U);
 
-    // For no connection: a short header, 0-RTT and Handshake are dropped.
+    // For no connection: a short header and Handshake are dropped; 0-RTT under an ID a client may have chosen goes to
+    // the handler (Early), which may hold it until its Initial, and under a shorter one is dropped.
     const u8 unknown[16] = {1};
     CHECK(server.classify(short_packet(view_of(unknown, 16U))).reason == DropReason::UnknownConnection);
-    CHECK(server.classify(long_packet(kV1, QuicPacketType::ZeroRtt, view_of(unknown, 16U), {}, {}, 80U)).reason ==
+    const IngressDecision early =
+        server.classify(long_packet(kV1, QuicPacketType::ZeroRtt, view_of(unknown, 16U), {}, {}, 80U));
+    CHECK(early.action == IngressAction::Early);
+    CHECK(early.connection == kNoConnection);
+    CHECK(server.ingress.counters().early == 1U);
+    CHECK(server.classify(long_packet(kV2, QuicPacketType::ZeroRtt, view_of(unknown, 8U), {}, {}, 80U)).action ==
+          IngressAction::Early);
+    CHECK(server.classify(long_packet(kV1, QuicPacketType::ZeroRtt, view_of(unknown, 7U), {}, {}, 80U)).reason ==
           DropReason::EarlyPacket);
     CHECK(server.classify(long_packet(kV2, QuicPacketType::Handshake, view_of(unknown, 16U), {}, {}, 80U)).reason ==
           DropReason::EarlyPacket);

@@ -4,6 +4,7 @@
 // UDP socket on the loopback answered with Version Negotiation.
 
 #include "ingress_fixture.hpp"
+#include "loop_fixture.hpp"
 
 #include <crd/net/io_loop.hpp>
 #include <crd/net/udp.hpp>
@@ -41,108 +42,6 @@ ConstSpan<u8> view_of(const u8* bytes, usize size)
     return ConstSpan<u8>(bytes, size);
 }
 
-class TestClock final : public TransportClock
-{
-public:
-    [[nodiscard]] u64 monotonic_ns() const noexcept override { return now; }
-    [[nodiscard]] u64 unix_seconds() const noexcept override { return 1793577600U + (now / kSecond); }
-
-    u64 now = kSecond;
-};
-
-// A socket of fixed queues (on the heap: a test's stack holds the socket): what a test puts in arrives, what the loop
-// sends is kept; `busy_after` stops sends with Busy after that many, `refuse_next` fails the next send for good.
-class VirtualSocket final : public DatagramSocket
-{
-public:
-    static constexpr usize kQueue = 256U;
-
-    void deliver(const Datagram& datagram, const Endpoint& peer)
-    {
-        REQUIRE(m_inbound_count < kQueue);
-        m_inbound[m_inbound_count++] = Inbound{datagram, peer};
-    }
-
-    [[nodiscard]] Endpoint local_endpoint() const noexcept override { return Endpoint{IpAddress::v4(10, 0, 0, 1), 443U}; }
-
-    [[nodiscard]] BatchResult receive(Span<ReceivedDatagram> slots) noexcept override
-    {
-        BatchResult result;
-        while (result.count < slots.size() && m_inbound_next < m_inbound_count)
-        {
-            const Inbound& inbound = m_inbound[m_inbound_next++];
-            ReceivedDatagram& slot = slots[result.count++];
-            const usize size = inbound.datagram.size;
-            slot.truncated = size > slot.storage.size();
-            slot.size = slot.truncated ? slot.storage.size() : size;
-            std::memcpy(slot.storage.data(), inbound.datagram.bytes, slot.size);
-            slot.peer = inbound.peer;
-        }
-        if (fail_receive)
-        {
-            result.error = SocketError::Failed;
-        }
-        return result;
-    }
-
-    [[nodiscard]] BatchResult send(ConstSpan<OutgoingDatagram> datagrams) noexcept override
-    {
-        ++send_calls;
-        BatchResult result;
-        for (const OutgoingDatagram& datagram : datagrams)
-        {
-            if (refuse_next)
-            {
-                refuse_next = false;
-                result.error = SocketError::Unreachable;
-                return result;
-            }
-            if (sent_count == busy_after || sent_count == kQueue)
-            {
-                result.error = SocketError::Busy;
-                return result;
-            }
-            Outbound& out = sent[sent_count++];
-            std::memcpy(out.datagram.bytes, datagram.bytes.data(), datagram.bytes.size());
-            out.datagram.size = datagram.bytes.size();
-            out.peer = datagram.peer;
-            ++result.count;
-        }
-        return result;
-    }
-
-    [[nodiscard]] bool wait_readable(u64) noexcept override
-    {
-        ++waits;
-        return m_inbound_next < m_inbound_count;
-    }
-
-    struct Outbound
-    {
-        Datagram datagram;
-        Endpoint peer;
-    };
-
-    std::unique_ptr<Outbound[]> sent = std::make_unique<Outbound[]>(kQueue);
-    usize sent_count = 0U;
-    usize busy_after = ~usize{0};
-    bool refuse_next = false;
-    bool fail_receive = false;
-    usize send_calls = 0U;
-    usize waits = 0U;
-
-private:
-    struct Inbound
-    {
-        Datagram datagram;
-        Endpoint peer;
-    };
-
-    std::unique_ptr<Inbound[]> m_inbound = std::make_unique<Inbound[]>(kQueue);
-    usize m_inbound_count = 0U;
-    usize m_inbound_next = 0U;
-};
-
 class RecordingHandler final : public IngressHandler
 {
 public:
@@ -162,6 +61,20 @@ public:
         (void)m_table.insert(decision.header.dcid, static_cast<u32>(100U + admits));
     }
 
+    void on_early(const IngressDecision& decision, const ReceivedDatagram& datagram, u64) noexcept override
+    {
+        ++earlies;
+        last_connection = decision.connection;
+        last_size = datagram.size;
+    }
+
+    [[nodiscard]] bool on_unrouted(const IngressDecision& decision, const ReceivedDatagram&, u64) noexcept override
+    {
+        ++unrouted;
+        last_answered = decision.action == IngressAction::StatelessReset;
+        return claim_unrouted;
+    }
+
     [[nodiscard]] u64 on_timers(u64 now_ns) noexcept override
     {
         ++timer_calls;
@@ -174,6 +87,10 @@ public:
 
     usize routes = 0U;
     usize admits = 0U;
+    usize earlies = 0U;
+    usize unrouted = 0U;
+    bool claim_unrouted = false; // on_unrouted takes every short header for no connection
+    bool last_answered = false;  // the last one on_unrouted saw was to be answered with a reset
     usize timer_calls = 0U;
     u32 last_connection = kNoConnection;
     usize last_size = 0U;
@@ -378,6 +295,46 @@ TEST_CASE("A short header for no connection is answered with a stateless reset w
         CHECK(reset.size >= kQuicMinResetBytes);
         CHECK(std::memcmp(reset.bytes + reset.size - sizeof(token), token, sizeof(token)) == 0);
     }
+}
+
+TEST_CASE("0-RTT for no connection goes to the handler unanswered, and a short header it claims is not answered",
+          "[net][io-loop]")
+{
+    constexpr u8 secret[crd::crypto::kQuicResetKeyBytes] = {0x5E};
+    crd::crypto::QuicResetKey key;
+    REQUIRE(key.init(ConstSpan<u8>(secret)) == CryptoError::None);
+    Rig rig(IoLoopConfig{}, HandshakeRules{}, &key);
+    const u8 unknown[16] = {3};
+    rig.socket.deliver(long_packet(kV1, QuicPacketType::ZeroRtt, view_of(unknown, 16U), {}, {}, 90U), kClient);
+    rig.socket.deliver(long_packet(kV2, QuicPacketType::ZeroRtt, view_of(unknown, 8U), {}, {}, 70U), kClient);
+    rig.socket.deliver(long_packet(kV1, QuicPacketType::ZeroRtt, view_of(unknown, 7U), {}, {}, 70U), kClient);
+    (void)rig.loop.poll();
+    CHECK(rig.handler.earlies == 2U);
+    CHECK(rig.handler.last_size == 70U);
+    CHECK(rig.handler.last_connection == kNoConnection);
+    CHECK(rig.ingress.counters().early == 2U);
+    CHECK(rig.ingress.counters().drops[static_cast<usize>(DropReason::EarlyPacket)] == 1U);
+    CHECK(rig.socket.sent_count == 0U);
+
+    // A short header for no connection is offered to the handler first: claimed, it is not answered.
+    rig.handler.claim_unrouted = true;
+    rig.socket.deliver(short_packet(view_of(unknown, 16U)), kClient);
+    (void)rig.loop.poll();
+    CHECK(rig.handler.unrouted == 1U);
+    CHECK(rig.handler.last_answered);
+    CHECK(rig.socket.sent_count == 0U);
+    rig.handler.claim_unrouted = false;
+    rig.socket.deliver(short_packet(view_of(unknown, 16U)), kClient);
+    (void)rig.loop.poll();
+    CHECK(rig.handler.unrouted == 2U);
+    CHECK(rig.socket.sent_count == 1U);
+    // One the ingress would not answer (a server without a reset key) is offered too.
+    Rig keyless;
+    keyless.socket.deliver(short_packet(view_of(unknown, 16U)), kClient);
+    (void)keyless.loop.poll();
+    CHECK(keyless.handler.unrouted == 1U);
+    CHECK_FALSE(keyless.handler.last_answered);
+    CHECK(keyless.socket.sent_count == 0U);
 }
 
 TEST_CASE("run() turns until stopped and waits between turns", "[net][io-loop]")

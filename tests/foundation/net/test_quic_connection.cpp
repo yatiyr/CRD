@@ -22,6 +22,7 @@
 // hostile paths and after a Retry, four rejections resetting the client, and packets held for their keys.
 
 #include "ingress_fixture.hpp"
+#include "quic_connection_fixture.hpp"
 #include "quic_stream_fixture.hpp"
 
 #include <crd/crypto/tls.hpp>
@@ -53,117 +54,6 @@ constexpr u8 kServerCid[16] = {0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
 constexpr u8 kInitialDcid[8] = {0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7};
 constexpr u8 kLongCid[20] = {0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9,
                              0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF2, 0xF3};
-constexpr AlgorithmId kGroups[] = {AlgorithmId::X25519Mlkem768, AlgorithmId::X25519};
-constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
-constexpr AlgorithmId kAeads[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Chacha20Poly1305};
-constexpr StringView kProtocols[] = {"cerid-game/1"};
-constexpr const char* kServerName = "game.cerid.test";
-constexpr QuicVersion kVersions[] = {QuicVersion::V1, QuicVersion::V2};
-constexpr u64 kStartNs = 1000000000U;
-constexpr u64 kMs = 1000000U;
-constexpr usize kDatagram = 1500U;
-constexpr u64 kUnix = 1793577600U; // 2026-11-02T00:00:00Z: the fleet clock tokens carry
-constexpr u8 kTokenKey[kQuicTokenKeyBytes] = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A,
-                                              0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25,
-                                              0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F};
-const Endpoint kClientPeer{IpAddress::v4(192, 0, 2, 9), 4433U};
-
-constexpr u8 kTicketKey[kTlsTicketKeyBytes] = {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA,
-                                               0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5,
-                                               0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF};
-
-// A server key and the client and server contexts that trust it; `wrong_pin` makes the client pin another key. With
-// an `early` replay filter both ends configure early data (0-RTT) under one ticket key, and `plain` is a server of
-// the same fleet that takes none.
-struct Identity
-{
-    SigningKey key;
-    SigningKey other;
-    TlsCredential credential;
-    TlsContext client;
-    TlsContext server;
-    TlsContext plain;
-
-    explicit Identity(bool wrong_pin = false, ReplayFilter* early = nullptr)
-    {
-        u8 seed[32];
-        for (usize i = 0U; i < sizeof(seed); ++i)
-        {
-            seed[i] = static_cast<u8>(i + 1U);
-        }
-        REQUIRE(key.from_seed(AlgorithmId::Ed25519, ConstSpan<u8>(seed, sizeof(seed))) == CryptoError::None);
-        seed[0] = 0xEEU;
-        REQUIRE(other.from_seed(AlgorithmId::Ed25519, ConstSpan<u8>(seed, sizeof(seed))) == CryptoError::None);
-        REQUIRE(credential.init(key, kServerName) == TlsError::None);
-        TlsCredential stranger;
-        REQUIRE(stranger.init(other, kServerName) == TlsError::None);
-        const KeyId pin = wrong_pin ? stranger.key_id() : credential.key_id();
-
-        TlsConfig client_config;
-        client_config.role = TlsRole::Client;
-        client_config.groups = kGroups;
-        client_config.signatures = kSignatures;
-        client_config.aeads = kAeads;
-        client_config.pinned = ConstSpan<KeyId>(&pin, 1U);
-        client_config.server_name = kServerName;
-        client_config.application_protocols = kProtocols;
-        client_config.early_data = early != nullptr;
-        REQUIRE(client.init(client_config) == TlsError::None);
-
-        TlsConfig server_config;
-        server_config.role = TlsRole::Server;
-        server_config.groups = kGroups;
-        server_config.aeads = kAeads;
-        server_config.credential = &credential;
-        server_config.server_name = kServerName;
-        server_config.application_protocols = kProtocols;
-        if (early != nullptr)
-        {
-            server_config.ticket_key = ConstSpan<u8>(kTicketKey);
-            REQUIRE(plain.init(server_config) == TlsError::None);
-            server_config.early_data = true;
-            server_config.early_data_filter = early;
-        }
-        REQUIRE(server.init(server_config) == TlsError::None);
-    }
-};
-
-constexpr u8 kSeeds[4][kPrfKeyBytes] = {{0x01}, {0x02}, {0x03}, {0x04}};
-
-QuicConnectionConfig config_for(QuicSide side, const Identity& identity, QuicVersion version, usize seed = 0U)
-{
-    QuicConnectionConfig config;
-    config.side = side;
-    config.version = version;
-    config.tls = (side == QuicSide::Client) ? &identity.client : &identity.server;
-    config.parameters.max_idle_timeout = 30000U;
-    config.entropy_seed = ConstSpan<u8>(kSeeds[seed % 4U], kPrfKeyBytes);
-    return config;
-}
-
-// splitmix64: the seeded paths' impairments.
-struct Rng
-{
-    u64 state = 0U;
-
-    u64 next()
-    {
-        u64 z = (state += 0x9E3779B97F4A7C15ULL);
-        z = (z ^ (z >> 30U)) * 0xBF58476D1CE4E5B9ULL;
-        z = (z ^ (z >> 27U)) * 0x94D049BB133111EBULL;
-        return z ^ (z >> 31U);
-    }
-    bool chance(u32 permille) { return (next() % 1000U) < permille; }
-};
-
-struct Path
-{
-    u32 loss = 0U;      // permille
-    u32 duplicate = 0U; // permille
-    u64 delay_ns = 10U * kMs;
-    u64 jitter_ns = 0U; // a uniform extra delay, which reorders
-};
-
 // Decides per datagram whether the path drops it beyond the random loss: `from` 0 is the client.
 class Filter
 {
@@ -3330,7 +3220,6 @@ TEST_CASE("QUIC connection: a switching server closes on client parameters that 
 
 namespace
 {
-constexpr u64 kTicketPeriod = kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew;
 constexpr u8 kAppContext[] = {0x5C, 0x11, 0xE7, 0x02, 0x9A, 0x43, 0x0D, 0xB8}; // a message schema digest's stand-in
 constexpr u8 kOtherAppContext[] = {0x5C, 0x11, 0xE7, 0x02, 0x9A, 0x43, 0x0D, 0xB9};
 constexpr usize kEarlyBytes = 3000U; // a request that takes three 0-RTT packets
@@ -3338,51 +3227,6 @@ constexpr u64 kEarlyPattern = 7U;
 constexpr u8 kEarlyPayload[] = {0xDA, 0x7A, 0x01};
 
 // A client's tickets: the newest one kept, each handed out once (T07).
-class Tickets final : public TlsTicketStore
-{
-public:
-    void keep(const TlsBinding& binding, ConstSpan<u8> ticket) noexcept override
-    {
-        if (ticket.size() <= sizeof(m_ticket))
-        {
-            m_binding = binding;
-            std::memcpy(m_ticket, ticket.data(), ticket.size());
-            m_bytes = ticket.size();
-        }
-    }
-
-    ConstSpan<u8> take(const TlsBinding& binding) noexcept override
-    {
-        if (m_bytes == 0U || !(m_binding == binding))
-        {
-            return {};
-        }
-        std::memcpy(m_handed, m_ticket, m_bytes);
-        const usize bytes = m_bytes;
-        m_bytes = 0U;
-        return ConstSpan<u8>(m_handed, bytes);
-    }
-
-    [[nodiscard]] bool holds() const { return m_bytes != 0U; }
-
-private:
-    TlsBinding m_binding;
-    u8 m_ticket[4096] = {};
-    u8 m_handed[4096] = {};
-    usize m_bytes = 0U;
-};
-
-// A replay filter ready before the contexts that hold it are built.
-struct ReadyFilter
-{
-    ReplayFilter filter;
-
-    ReadyFilter()
-    {
-        REQUIRE(filter.init(1024U, kTicketPeriod, static_cast<u64>(std::time(nullptr))) == CryptoError::None);
-    }
-};
-
 // A fleet whose servers accept 0-RTT under one ticket key.
 struct EarlyFleet
 {
