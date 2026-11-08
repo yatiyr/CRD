@@ -2,7 +2,7 @@
 // integers against RFC 9000's examples, RFC 9001's and RFC 9369's sample headers and Retry packets byte for byte,
 // every header refusal, Version Negotiation's layout and reserved version, the keyed connection ID table against a
 // reference through heavy churn, the handshake buckets' rates, and every path through the ingress, Retry and NEW_TOKEN
-// round trips included.
+// round trips included, an invalid Retry token's INVALID_TOKEN close opened as the client would.
 
 #include "ingress_fixture.hpp"
 

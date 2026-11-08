@@ -3,7 +3,8 @@
 // RTT estimator worked by hand, loss by both thresholds, the probe timeout and its backoff, the Application space held
 // until confirmation, the client's anti-deadlock probe, the amplification-blocked server, key discards, persistent
 // congestion, acknowledgements of numbers never sent (RFC 9000 sections 13.1 and 21.4) and spurious losses raising the
-// thresholds (RFC 9002 section 6.1 by RFC 8985's mechanism) within their caps.
+// thresholds (RFC 9002 section 6.1 by RFC 8985's mechanism) within their caps, and a Retry starting recovery over
+// (section 6.3) with the first flight's time as the initial estimate (section 6.2.2).
 
 #include <crd/net/quic_recovery.hpp>
 

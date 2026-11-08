@@ -10,7 +10,9 @@
 // and this side's connection IDs (RFC 9000 sections 5.1 and 19.15 to 19.16): issued to the peer's limit through loss,
 // rotated by Retire Prior To, replaced when retired and refused when a retirement names the packet's own ID or an ID
 // never issued, with stateless resets (section 10.3) detected only by a used, unretired ID's token, also from the
-// ingress of a server that lost the connection.
+// ingress of a server that lost the connection; and Retry (section 17.2.5): one taken, every other refused, then,
+// behind a Retry-everything ingress over hostile paths, the server's NEW_TOKEN token proving the next connection once,
+// and an INVALID_TOKEN close ending a client whose token no longer validates.
 
 #include "ingress_fixture.hpp"
 #include "quic_stream_fixture.hpp"

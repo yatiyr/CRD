@@ -245,8 +245,8 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   deletion, its slots allocated once. containers' `HashMap` does not fit: its hasher is stateless and public, it grows,
   and it stops the process when memory runs out, where this table must refuse when full and allocate nothing after
   construction. A coalesced datagram goes where its first packet goes.
-- **S3** proves an address by a Retry token (an invalid one drops the Initial; the INVALID_TOKEN close comes with
-  packet protection) or by a single-use NEW_TOKEN token (an invalid one counts as none). Unproven handshakes pass a
+- **S3** proves an address by a Retry token (an invalid one is answered with an INVALID_TOKEN close, S43) or by a
+  single-use NEW_TOKEN token (an invalid one counts as none). Unproven handshakes pass a
   global and a per-prefix rate (/64 IPv6, /32 or a configured prefix IPv4) and otherwise get a Retry; proven ones pass
   a global rate and charge their prefix. Prefixes share a fixed array of `SharedRateGate`s chosen by a keyed hash, so
   no per-source state exists before validation, a collision only tightens, and a server's loops share one limit.
@@ -624,6 +624,54 @@ fixed bits, keyless, routed and rate-limited cases), `test_io_loop.cpp` (resets 
 Source mutations, all caught, are counted in the session note. Fuzzing: `crd-fuzz-net-ingress` holds every reset to
 the size and token rules. `crd-fuzz-net-quic-connection` holds each host's table to the IDs its connection holds
 after every step, rotates on a script byte, and ends confirmed runs with a forged and a real reset.
+
+<a id="quic-retry"></a>
+**S43. Retry and address validation tokens on the connection** (4.2a, threats T01, T02 and T10;
+[quic_connection.hpp](../../engine/foundation/net/include/crd/net/quic_connection.hpp),
+[quic_recovery.hpp](../../engine/foundation/net/include/crd/net/quic_recovery.hpp),
+[ingress.hpp](../../engine/foundation/net/include/crd/net/ingress.hpp); 2026-11-08). Sources: RFC 9000 sections 7.2,
+7.3, 8.1.2, 8.1.3, 17.2.5.1 to 17.2.5.3 and 19.7; RFC 9001 sections 5.2 and 5.8; RFC 9002 sections 6.2.2 and 6.3.
+
+- **A client's Retry.** One is taken per connection attempt, only before any packet of the server opened, only to
+  the ID the client sent from, only with a token, only when its Source Connection ID differs from the ID the client
+  sends to, and only when its integrity tag verifies against the first Destination Connection ID. Anything else is
+  dropped and counted. Taking it re-derives the Initial keys from the new ID, sends every later Initial there with
+  the token, and continues the packet numbers. Recovery starts over: packets in flight leave as discarded (no
+  congestion signal), timers and the probe count reset, and the Initial's CRYPTO data goes again. When no probe was
+  sent, the time from the first flight to the Retry becomes the initial RTT estimate (not a sample). The server's
+  next Initial still sets the ID the client sends to (section 7.2). Its retry_source_connection_id must name the
+  Retry's ID, and a server that names none closes the client with PROTOCOL_VIOLATION (section 7.3).
+- **Tokens a client carries.** Up to kQuicMaxCarriedTokenBytes (256): this build's tokens and longer ones from
+  other servers. A longer Retry token is dropped, because the client could not send it. A server Initial carrying a
+  token is dropped (section 17.2.2).
+- **A server's NEW_TOKEN.** The host mints the token at admission (`QuicAccept::new_token`, from
+  `QuicTokenKeys::mint_new_token` with the client's address and the fleet clock). The connection sends it once the
+  handshake is confirmed and keeps it as a ledger record, resent on loss and on an Application probe until it is
+  acknowledged. A client keeps the latest token for its next connection, where the ingress takes it once (its
+  replay filter) as proof of the address.
+- **INVALID_TOKEN.** A Retry token that does not validate (forged, expired, another key, port or ID) is answered,
+  within the answer rate, with one server Initial: sealed under the keys of the Destination Connection ID the client
+  chose, sent to its Source Connection ID, holding CONNECTION_CLOSE with INVALID_TOKEN. The client then fails within
+  a round trip instead of a handshake timeout (section 8.1.2's SHOULD). The close is not ack-eliciting, so it is not
+  padded, and it is smaller than the 1200-byte Initial that triggers it. The packet is not opened first: Initial keys
+  are public, so opening would prove nothing about the sender, and the answer rate bounds the work (one key
+  derivation and one seal). With the rate spent, the Initial is dropped.
+
+Evidence: `test_quic_recovery.cpp` (the estimate, after a probe, before anything was sent), `test_ingress.cpp` (three
+invalid tokens opened as the client would, the spent rate, an answer too small), `test_io_loop.cpp` (the loop sends
+the close), and `test_quic_connection.cpp`:
+- seven refused Retries;
+- an accepted one in both versions with a 256-byte foreign token, through to confirmation;
+- a server whose parameters name no Retry;
+- a Retry after the server's first packet;
+- a server Initial with a token;
+- behind a Retry-everything ingress over clean and seeded paths that lose 15%, duplicate 5% and jitter, the
+  NEW_TOKEN reaching the client and proving its next connection once, its replay sent to Retry;
+- a rotated token key ending the client with INVALID_TOKEN within a round trip.
+
+Fuzzing: `crd-fuzz-net-ingress` opens every INVALID_TOKEN close as the client would (a new seed carries a forged
+Retry token). `crd-fuzz-net-quic-connection` has a script byte (0xFD) that answers the client's first flight with a
+Retry, and holds a confirmed pair to agree on it.
 
 <a id="admission"></a>
 ## Bounded admission
