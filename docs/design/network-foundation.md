@@ -434,8 +434,8 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   (RFC 9000 section 13.2.4). An owed ACK counts toward `next_timer_ns()` only where `send()` can write it (keys held,
   space kept, storage free), so a caller's loop never spins on a timer nothing serves.
 - **Frames.** Every type is dispatched. Stream and flow-control frames go to S40's stream set, whose frames follow the
-  connection's own in 1-RTT packets as records in the same ledger; with no max_datagram_frame_size advertised
-  (DATAGRAM frames arrive in their own slice), DATAGRAM is PROTOCOL_VIOLATION. The peer's connection IDs are held to this side's active_connection_id_limit with Retire Prior
+  connection's own in 1-RTT packets as records in the same ledger; DATAGRAM frames go to S41's datagrams. The peer's
+  connection IDs are held to this side's active_connection_id_limit with Retire Prior
   To honoured, the ID in use moved off a retired one, and retirements owed or in flight bounded by twice the limit
   (CONNECTION_ID_LIMIT_ERROR). A PATH_CHALLENGE is answered; a PATH_RESPONSE (none was sent) and RETIRE_CONNECTION_ID
   (only sequence 0 was issued) are PROTOCOL_VIOLATION. A client keeps its server's latest NEW_TOKEN token.
@@ -514,6 +514,54 @@ mutations of which 34 are caught (the survivor is the recovery of a sized frame 
 `crd-fuzz-net-quic-stream-set` (two ends under any application calls, deliveries, losses and injected frames:
 `has_frame()` exact, every byte read the byte written) and `crd-fuzz-net-quic-connection`'s scripts now ending with
 a stream carried whole.
+
+<a id="quic-datagrams"></a>
+**S41. The connection's datagrams** (4.2a, threats T09 and T11;
+[quic_datagram.hpp](../../engine/foundation/net/include/crd/net/quic_datagram.hpp); 2026-11-08). `QuicDatagrams` is
+the one owner of a connection's unreliable datagrams (RFC 9221 sections 3 to 5): both rings, the negotiated sizes and
+the outcomes. Like S40 it knows nothing of packets.
+
+- **Negotiation** (section 3). `QuicDatagramLimits::max_frame_bytes` is the max_datagram_frame_size this side
+  advertises, counting the type, the Length and the payload; the receive ring must hold the largest payload it admits
+  (one byte less, in a frame without a Length). A DATAGRAM frame when none was advertised, or one larger, is
+  PROTOCOL_VIOLATION. This side sends only to a peer that advertised a size.
+- **The largest payload** is fixed when the peer's parameters arrive: the largest whose frame with its Length fits
+  both the peer's size and one 1-RTT packet of the path (min of this side's max_datagram_bytes and the peer's
+  max_udp_payload_size) less the short header's worst case (a 20-byte connection ID, a 4-byte packet number) and the
+  tag. So a peer's longer connection ID later can never strand a queued datagram. `queue()` refuses a larger payload
+  at once (TooLarge), as it refuses before the parameters (NotReady), toward a peer that takes none (Unsupported) and
+  into a full ring (Full): frames are never split.
+- **Rings.** Both are byte rings of payloads in arrival order, each payload contiguous: one that would pass the end
+  starts the next lap, and an empty ring restarts at 0, so a payload of the ring's size always fits an empty ring.
+  The application reads in place (`peek`, `pop`); a full receive ring drops and counts (section 5 lets a receiver
+  drop). Both come from the injected allocator at `init()`.
+- **Sending.** 1-RTT packets carry the connection's own frames and CRYPTO, then datagrams, then stream data: latency
+  first. Each frame carries its Length, so a packet's padding can follow it; one that does not fit the room left
+  waits for the next packet. An owed ACK goes first; an ACK only carried along follows the waiting datagrams, so a
+  datagram of the largest size goes even while every packet carries an ACK. A DATAGRAM frame is ack-eliciting and
+  congestion controlled, never resent and takes no flow-control credit. A datagram queued longer than `max_age_ns` is
+  dropped unsent.
+- **Outcomes** (section 5.2, optional per connection). Each sent datagram's id is a ledger record; acknowledgement
+  reports Acked (the peer's transport has it), loss or discard Lost, expiry Expired, each once. A datagram counts
+  against `send_count` until its report is polled, so the report ring never fills; a full ledger holds datagrams back.
+- **Later:** with 0-RTT, a client keeps the server's max_datagram_frame_size with the ticket and a server accepting
+  0-RTT must not advertise less than it did (section 3).
+
+Evidence: `test_quic_datagram.cpp` (7 cases: the payload limit against every frame size to 70,000 bytes; every limit
+refused and init all or nothing; both parameters bounding queue and write, a room one byte short; a received frame at
+and past the size in both encodings, a full ring dropping and freed, an empty payload; a wrap that skips the tail and
+16 seeded runs against a model; expiry with and without outcomes; every outcome once with send_count held until
+polled), `test_quic_connection.cpp` (7 cases: datagrams both ways beside 12 echoed streams over 12 seeded paths in
+both versions that lose 10%, duplicate 5% and reorder, each id arriving at most once byte-exact, each reported once,
+an acknowledged one arrived, nothing allocated after construction; the largest datagrams both ways beside streams;
+the largest one in the first packet beside a carried ACK and after an owed one, with a 20-byte connection ID; the
+smaller of both sides' UDP payload sizes, every datagram acknowledged on a clean path; a 12-record ledger; a peer
+without datagrams; frames at and past 100 bytes from a raw peer, and none advertised), 30 source mutations of which
+29 are caught and one does not compile (the first pass left five: three became tests, two were redundant code now
+removed), `crd-fuzz-net-quic-datagram` (a sender and a receiver against a model of every id's fate) and
+`crd-fuzz-net-quic-connection`'s scripts now ending with datagrams carried and reported.
+An outcome reports loss detection's verdict: on a path that reorders past RFC 9002's thresholds a datagram reported
+Lost may still arrive.
 
 <a id="admission"></a>
 ## Bounded admission
