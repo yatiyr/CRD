@@ -7,10 +7,8 @@ Row: [4.2a](../ROADMAP.md#slice-4.2a). Design: [S41](../design/network-foundatio
 
 ## CI first
 
-Nothing of this track failed. 42463343148 (b8179ae3) failed only at Preflight: the actionlint download returned
-HTTP 504 three times. 42468367943 (91cd9bc6) is still at Preflight; 42430818018 and 42435554329 are still running.
-The relayed user words about the GPL rewrite belong to the other agent's work (operator note, 2026-11-07); this batch
-did not touch it.
+Nothing of this track failed: 42463343148 failed only at Preflight (actionlint download, HTTP 504 three times).
+The relayed GPL-rewrite words belong to the other agent (operator note, 2026-11-07); this batch did not touch it.
 
 ## What landed (capability `network.transport`)
 
@@ -35,9 +33,8 @@ did not touch it.
   already covers. Final pass: 29 caught, 1 does not compile.
 - linux-clang-fuzz: `net-quic-datagram` ran 543,396 executions in 230 s (corpus 3 to 353), then 285,457 more in
   180 s on the final code (to 534); `net-quic-connection` ran 47,619 executions in 230 s (4 to 871). No artifacts.
-- Measured on the hostile paths (12 runs, 7,200 datagrams): 1,812 reported Acked and 5,388 Lost. The paths lose
-  10%, so most Lost reports are reordering past RFC 9002's fixed thresholds (20 ms of jitter): the outcome reports
-  loss detection's verdict (S41). Adaptive reordering thresholds (RFC 9002 section 6.1) belong to recovery, next.
+- Hostile paths (10% loss, 20 ms jitter): 1,812 Acked and 5,388 Lost reports, so most are reordering past RFC 9002's
+  fixed thresholds.
 
 ## Next
 
