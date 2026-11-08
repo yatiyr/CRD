@@ -181,7 +181,7 @@ struct QuicConnectionConfig
     u32 crypto_bytes = 16384U; // per level, each direction: a multiple of kQuicStreamChunk, at least 4096
     u32 max_datagram_bytes = kQuicMinInitialDatagram; // what this side sends at most (NET-PATH raises it)
     u64 initial_rtt_ns = kQuicInitialRttNs;
-    u64 key_update_interval = 0U; // 1-RTT packets one key seals before it is updated (0: the AEAD's limit)
+    u64 key_update_interval = 0U; // 1-RTT packets one key seals before an update starts (0: the AEAD's limit alone)
     // kPrfKeyBytes seeding the connection's entropy (grease, skipped numbers) for a deterministic run (tests,
     // NET-SIM); empty draws a fresh key from the provider.
     cont::ConstSpan<u8> entropy_seed;

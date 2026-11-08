@@ -306,10 +306,13 @@ public:
     [[nodiscard]] bool previous_held() const noexcept { return m_phases.previous_held; }
     void discard_previous() noexcept;
 
-    // Lowers the 1-RTT packets one send key seals before it must be updated (a transport's own interval, never above
-    // the AEAD's limit; 0 restores it): the update starts at three quarters of it, and a key that reaches it unupdated
-    // refuses (Exhausted). And lowers the failed opens the connection tolerates (0: the AEAD's integrity limit).
-    void set_key_update_interval(u64 packets) noexcept;
+    // Starts a key update once one send key has sealed three quarters of `packets` (a transport's own interval; 0: only
+    // the AEAD's limit does), as soon as RFC 9001 section 6 lets the next update start: a peer slow to acknowledge the
+    // current phase holds the update back and the key keeps sealing, so an interval never ends a connection.
+    void set_key_update_interval(u64 packets) noexcept { m_update_interval = packets; }
+    // Lowers the 1-RTT packets one send key seals at most (never above the AEAD's limit; 0 restores it), at which it
+    // refuses (Exhausted), and the failed opens the connection tolerates (0: the AEAD's integrity limit).
+    void limit_sealed_packets(u64 limit) noexcept;
     void limit_failed_opens(u64 limit) noexcept { m_failed_limit = limit; }
 
     [[nodiscard]] u64 send_phase() const noexcept { return m_phases.send; }
@@ -338,8 +341,14 @@ private:
     [[nodiscard]] QuicPacketError open_application(cont::Span<u8> packet, usize header_bytes, u64 number, bool phase,
                                                    QuicOpened& out) noexcept;
     [[nodiscard]] QuicPacketError forged(crypto::AlgorithmId aead) noexcept;
-    // What a 1-RTT send key may seal: the interval, or above every AEAD's limit, which set_limit lowers to its own.
-    [[nodiscard]] u64 send_limit() const noexcept { return (m_update_interval != 0U) ? m_update_interval : ~u64{0}; }
+    // What a 1-RTT send key may seal: the transport's cap, or above every AEAD's limit, which set_limit lowers to its
+    // own.
+    [[nodiscard]] u64 send_limit() const noexcept { return (m_sealed_limit != 0U) ? m_sealed_limit : ~u64{0}; }
+    [[nodiscard]] bool update_due(const crypto::QuicPacketKey& key) const noexcept
+    {
+        return key.update_due() ||
+               (m_update_interval != 0U && key.sealed() >= m_update_interval - (m_update_interval / 4U));
+    }
     void rotate_receive(u64 number) noexcept;
     [[nodiscard]] QuicKeys& initial_receive() noexcept { return m_initial[m_initial_receive]; }
     [[nodiscard]] const QuicKeys& initial_receive() const noexcept { return m_initial[m_initial_receive]; }
@@ -372,6 +381,7 @@ private:
     u64 m_forged = 0U;       // failed opens across all keys (section 6.6)
     u64 m_failed_limit = 0U; // configuration, kept by start()
     u64 m_update_interval = 0U;
+    u64 m_sealed_limit = 0U;
     bool m_started = false;
     bool m_confirmed = false;
     bool m_accept_cleared_bit = false;

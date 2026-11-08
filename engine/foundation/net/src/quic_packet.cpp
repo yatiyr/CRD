@@ -698,7 +698,7 @@ QuicPacketError QuicPacketProtection::seal(QuicPacketWriter& writer, usize used,
             header = &m_early.header;
             break;
         default:
-            if (m_send[m_phases.send & 1U].update_due() && can_update_keys())
+            if (update_due(m_send[m_phases.send & 1U]) && can_update_keys())
             {
                 (void)update_keys(); // can_update_keys() held, so only the provider can refuse; the limit then decides
             }
@@ -970,9 +970,9 @@ bool QuicPacketProtection::update_keys() noexcept
     return true;
 }
 
-void QuicPacketProtection::set_key_update_interval(u64 packets) noexcept
+void QuicPacketProtection::limit_sealed_packets(u64 limit) noexcept
 {
-    m_update_interval = packets;
+    m_sealed_limit = limit;
     for (crypto::QuicPacketKey& key : m_send)
     {
         if (key.ready())

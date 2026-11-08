@@ -872,7 +872,7 @@ TEST_CASE("QUIC packets: key updates are initiated, followed and checked as RFC 
     }
 }
 
-TEST_CASE("QUIC packets: a key reaching its update interval updates itself, or refuses once it cannot",
+TEST_CASE("QUIC packets: a key past its update interval seals on until the update may start, and a cap refuses",
           "[net][4.2a][quic-packet]")
 {
     Pair pair;
@@ -894,16 +894,34 @@ TEST_CASE("QUIC packets: a key reaching its update interval updates itself, or r
     CHECK(pair.client.send_phase() == 1U); // three quarters of the interval sealed: the update came first
     REQUIRE(deliver(pair.server, datagram) == QuicPacketError::None);
 
-    // Nothing of phase 1 is acknowledged, so it cannot update again and its key refuses at the interval.
-    for (usize sealed = 0U; sealed < 7U; ++sealed)
+    // Nothing of phase 1 is acknowledged, so it cannot update again: the key seals on past the interval.
+    const u64 first_of_phase = number - 1U;
+    for (usize sealed = 0U; sealed < 20U; ++sealed)
     {
         Buffer more;
         REQUIRE(append(pair.client, more, spec_of(QuicPacketType::OneRtt, number++), kPing) == QuicPacketError::None);
+        REQUIRE(deliver(pair.server, more) == QuicPacketError::None);
     }
+    CHECK(pair.client.send_phase() == 1U);
+    // The server answers in phase 1, the first packet of the phase is acknowledged, the previous key goes.
+    Buffer answer;
+    REQUIRE(append(pair.server, answer, spec_of(QuicPacketType::OneRtt, 0U), kPing) == QuicPacketError::None);
+    REQUIRE(deliver(pair.client, answer) == QuicPacketError::None);
+    pair.client.acknowledged(first_of_phase);
+    pair.client.discard_previous();
+    Buffer next;
+    REQUIRE(append(pair.client, next, spec_of(QuicPacketType::OneRtt, number++), kPing) == QuicPacketError::None);
+    CHECK(pair.client.send_phase() == 2U); // the first packet of phase 1 acknowledged: the update starts at once
+
+    // The transport's own cap is the hard one: a key refuses when it reaches it, and 0 restores the AEAD's limit.
+    pair.client.limit_sealed_packets(3U);
+    Buffer capped;
+    REQUIRE(append(pair.client, capped, spec_of(QuicPacketType::OneRtt, number++), kPing) == QuicPacketError::None);
+    REQUIRE(append(pair.client, capped, spec_of(QuicPacketType::OneRtt, number++), kPing) == QuicPacketError::None);
     Buffer refused;
     CHECK(append(pair.client, refused, spec_of(QuicPacketType::OneRtt, number), kPing) == QuicPacketError::Exhausted);
     CHECK(quic_packet_close(QuicPacketError::Exhausted) == QuicTransportError::AeadLimitReached);
-    pair.client.set_key_update_interval(0U);
+    pair.client.limit_sealed_packets(0U);
     CHECK(append(pair.client, refused, spec_of(QuicPacketType::OneRtt, number), kPing) == QuicPacketError::None);
 }
 
