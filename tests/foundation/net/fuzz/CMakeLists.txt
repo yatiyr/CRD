@@ -22,14 +22,15 @@ crd_fuzz_target(crd-fuzz-net-ingress
 # QUIC frames and transport parameters (4.2a).
 #   crd-fuzz-net-quic-codec   any payload or parameter set: refusals consume and change nothing, accepted frames and
 #                             parameters write back in their shortest form and read back the same, ACK ranges descend
-#                             and survive a rewrite, exactly one reserved parameter is written, versions come from inputs.
+#                             and survive a rewrite, exactly one reserved parameter is written, versions come from
+#                             the inputs.
 crd_fuzz_target(crd-fuzz-net-quic-codec
     SOURCES fuzz_quic_codec.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-codec")
 
 # Frames and admission (NET.3).
-#   crd-fuzz-net-admission   any bytes on a stream and in datagrams, against a restated frame layout and admission rule; a
-#                            stream at every split reading as it reads whole; fragments of generated messages on a hostile
-#                            path; every budget given back.
+#   crd-fuzz-net-admission   any bytes on a stream and in datagrams, against a restated frame layout and admission
+#                            rule; a stream at every split reading as it reads whole; fragments of generated messages on
+#                            a hostile path; every budget given back.
 crd_fuzz_target(crd-fuzz-net-admission
     SOURCES fuzz_admission.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-admission")
 
@@ -49,7 +50,8 @@ crd_fuzz_target(crd-fuzz-net-state-hash
 # The generated wire formats (NET.3): scripts/gen-wire-schemas.py writes one target per schema.
 #   crd-fuzz-wire-session-control   every message of the session control channel's generated decoder.
 #   crd-fuzz-wire-test              every field type, shape and revision rule of the schema language.
-#   crd-fuzz-wire-delta-test        the same for baseline deltas: what a delta rebuilds, and that its delta is the input.
+#   crd-fuzz-wire-delta-test        the same for baseline deltas: what a delta rebuilds, and that its delta is the
+#                                   input.
 crd_fuzz_target(crd-fuzz-wire-session-control
     SOURCES fuzz_wire_session_control.cpp LIBRARIES crd-net
     CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-wire-session-control")

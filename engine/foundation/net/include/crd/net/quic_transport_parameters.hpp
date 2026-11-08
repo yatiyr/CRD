@@ -164,8 +164,8 @@ struct QuicConnectionIdExpectation
 
 // Checks the peer's parameters (`peer` is the side that sent them) against what this end saw: a missing
 // initial_source_connection_id, a server's missing original_destination_connection_id, or a server's preferred
-// address while it uses zero-length connection IDs (section 18.2), is TRANSPORT_PARAMETER_ERROR; a value that differs, a retry_source_connection_id missing after a Retry or present
-// without one, PROTOCOL_VIOLATION.
+// address while it uses zero-length connection IDs (section 18.2), is TRANSPORT_PARAMETER_ERROR; a value that
+// differs, a retry_source_connection_id missing after a Retry or present without one, PROTOCOL_VIOLATION.
 [[nodiscard]] QuicTransportError quic_check_connection_ids(const QuicTransportParameters& parameters,
                                                            crypto::QuicSide peer,
                                                            const QuicConnectionIdExpectation& expected) noexcept;

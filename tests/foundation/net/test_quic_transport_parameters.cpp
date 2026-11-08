@@ -328,7 +328,8 @@ TEST_CASE("QUIC transport parameters: section 18, RFC 9287 and RFC 9368 refusals
         .add(id(QuicTransportParameterId::RetrySourceConnectionId), ConstSpan<u8>(one, 1U));
     add("preferred_address from a client", QuicSide::Client)
         .add(id(QuicTransportParameterId::PreferredAddress), ConstSpan<u8>(id21, 21U));
-    add("max_udp_payload_size 1199", QuicSide::Client).add_varint(id(QuicTransportParameterId::MaxUdpPayloadSize), 1199U);
+    add("max_udp_payload_size 1199", QuicSide::Client)
+        .add_varint(id(QuicTransportParameterId::MaxUdpPayloadSize), 1199U);
     add("ack_delay_exponent 21", QuicSide::Client).add_varint(id(QuicTransportParameterId::AckDelayExponent), 21U);
     add("max_ack_delay 2^14", QuicSide::Client).add_varint(id(QuicTransportParameterId::MaxAckDelay), 1U << 14U);
     add("active_connection_id_limit 1", QuicSide::Client)

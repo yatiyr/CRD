@@ -642,7 +642,8 @@ usize quic_ack_bytes(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const Quic
         static_cast<void>(add_varint(total, ranges[index - 1U].smallest - ranges[index].largest - 2U));
         static_cast<void>(add_varint(total, ranges[index].largest - ranges[index].smallest));
     }
-    if (ecn != nullptr && (!add_varint(total, ecn->ect0) || !add_varint(total, ecn->ect1) || !add_varint(total, ecn->ce)))
+    if (ecn != nullptr &&
+        (!add_varint(total, ecn->ect0) || !add_varint(total, ecn->ect1) || !add_varint(total, ecn->ce)))
     {
         return 0U;
     }
