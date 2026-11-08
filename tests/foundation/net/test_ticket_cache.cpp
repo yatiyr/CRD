@@ -98,7 +98,7 @@ TicketCacheConfig small(u32 entries, u32 per_binding)
 
 bool first_byte(ConstSpan<u8> ticket, u8 fill)
 {
-    return !ticket.empty() && ticket.data()[0] == fill;
+    return !ticket.empty() && ticket[0] == fill;
 }
 } // namespace
 
