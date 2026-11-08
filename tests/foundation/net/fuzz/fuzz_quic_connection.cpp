@@ -26,6 +26,7 @@
 // runs one version: the other one after a switch, the configured one otherwise. 0-RTT: an offer ends Accepted or
 // Rejected on both ends alike; accepted, the server reads the early stream whole and unchanged, never marking more
 // bytes replayable than came; rejected, the client's streams were reset and the server opened none of them.
+#include <crd/core/platform.hpp>
 #include <crd/crypto/replay.hpp>
 #include <crd/crypto/tls.hpp>
 #include <crd/fuzz/harness.hpp>
@@ -275,6 +276,11 @@ struct Flight
     usize to = 0U;
 };
 
+// MSVC C4324 as for crd::crypto::AeadKey: the connections are 16-byte aligned; ARM64 MSVC reports the padding.
+#if CRD_COMPILER_MSVC
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 struct Pair
 {
     crd::fuzz::BudgetAllocator allocator;
@@ -441,6 +447,9 @@ struct Pair
         }
     }
 };
+#if CRD_COMPILER_MSVC
+#pragma warning(pop)
+#endif
 
 bool finished(const QuicConnection& end)
 {

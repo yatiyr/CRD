@@ -58,6 +58,7 @@
 //   threads    a connection belongs to its loop's thread.
 
 #include <crd/containers/span.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
@@ -224,6 +225,11 @@ struct QuicConnectionCounters
     u64 packets_held = 0U;    // packets held until their keys came (RFC 9001 section 4.1.4)
 };
 
+// (MSVC C4324 as for QuicPacketProtection, which it holds inline.)
+#if CRD_COMPILER_MSVC
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 class QuicConnection
 {
 public:
@@ -569,5 +575,8 @@ private:
 
     QuicConnectionCounters m_counters;
 };
+#if CRD_COMPILER_MSVC
+#pragma warning(pop)
+#endif
 
 } // namespace crd::net

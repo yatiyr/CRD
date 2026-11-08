@@ -888,7 +888,7 @@ TEST_CASE("QUIC connection: a client takes one Retry, for its IDs, with a token 
     CountingAllocator allocator;
     const ConstSpan<u8> original(kInitialDcid, sizeof(kInitialDcid));
     const ConstSpan<u8> own(kClientCid, sizeof(kClientCid));
-    constexpr u8 kRetryScid[12] = {0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85};
+    static constexpr u8 kRetryScid[12] = {0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85};
     const ConstSpan<u8> retry_scid(kRetryScid, sizeof(kRetryScid));
     u8 token[kQuicMaxCarriedTokenBytes + 1U];
     std::memset(token, 0x3C, sizeof(token));
@@ -1427,7 +1427,7 @@ TEST_CASE("QUIC connection: a Retry token the server no longer accepts ends the 
         net->ingress = &front.ingress;
         REQUIRE(net->run_until([&] { return client.retried(); }));
         // The fleet's token key rotated twice since the Retry: its token no longer opens (RFC 9000 section 8.1.2).
-        constexpr u8 kRotated[kQuicTokenKeyBytes] = {0x99, 0x98, 0x97};
+        static constexpr u8 kRotated[kQuicTokenKeyBytes] = {0x99, 0x98, 0x97};
         front.tokens.clear();
         REQUIRE(front.tokens.init(ConstSpan<u8>(kRotated), {}) == CryptoError::None);
         const u64 rotated_at = net->now;

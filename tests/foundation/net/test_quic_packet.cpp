@@ -1056,8 +1056,10 @@ TEST_CASE("QUIC packets: after a compatible version change the handshake's keys 
         const QuicVersion negotiated = (original == QuicVersion::V1) ? QuicVersion::V2 : QuicVersion::V1;
         End client;
         End server;
+        // A shipping build compiles key logging out: there the handshake still completes in the negotiated version.
+        const bool logged = crd::crypto::tls_key_log_compiled();
         crd::crypto::test::KeyLog log;
-        configure(client, server, &log);
+        configure(client, server, logged ? &log : nullptr);
         const ConstSpan<u8> dcid(kDcid, kCid);
         REQUIRE(client.handshake.init(client.context, ConstSpan<u8>(kParameters)) == TlsError::None);
         REQUIRE(server.handshake.init(server.context, ConstSpan<u8>(kParameters)) == TlsError::None);
@@ -1070,6 +1072,10 @@ TEST_CASE("QUIC packets: after a compatible version change the handshake's keys 
         CHECK(exchange(server, client, QuicSide::Server) >= 2U);
         CHECK(exchange(client, server, QuicSide::Client) >= 1U);
         REQUIRE(client.handshake.state() == TlsState::Established);
+        if (!logged)
+        {
+            continue;
+        }
 
         // The server's 1-RTT secret from the key log, keyed apart from the connection: in the negotiated version its
         // packet opens at the client, in the original version it does not.

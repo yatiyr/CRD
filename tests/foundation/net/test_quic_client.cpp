@@ -452,7 +452,7 @@ TEST_CASE("QUIC client: many connections over one socket reach two servers in bo
                 hostile(*network, (round * 10U) + static_cast<u64>(version));
             }
             network->busy = round == 2U;
-            constexpr usize kConnections = 12U;
+            static constexpr usize kConnections = 12U;
             QuicHandle handles[kConnections];
             for (usize index = 0U; index < kConnections; ++index)
             {

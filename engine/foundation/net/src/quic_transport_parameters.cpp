@@ -605,7 +605,7 @@ u32 quic_server_select_version(const QuicTransportParameters& client, u32 origin
 
 usize write_quic_early_parameters(const QuicTransportParameters& server, cont::Span<u8> out) noexcept
 {
-    constexpr u8 kFormat = 1U; // this encoding's revision: a ticket of another one meets another context
+    static constexpr u8 kFormat = 1U; // this encoding's revision: a ticket of another one meets another context
     if (out.size() < kQuicEarlyParameterBytes)
     {
         return 0U;

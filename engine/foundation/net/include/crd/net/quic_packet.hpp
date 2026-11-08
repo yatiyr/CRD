@@ -23,6 +23,7 @@
 //   threads   a QuicPacketProtection belongs to its connection's thread.
 
 #include <crd/containers/span.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/crypto/quic.hpp>
 #include <crd/net/quic_frame.hpp>
