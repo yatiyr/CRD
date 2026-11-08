@@ -34,8 +34,11 @@ failed jobs of 42413677756 (d7b506c8, still running) are older than 8d5c9e63, 2e
   corpora, the generator's drift check, `crd-ceridc-tests [model]`. linux-gcc-release: the same tests and the board.
   test-wire-schemas.py: 29 tests.
 - libFuzzer for 90 s each: wire-delta-test (3.5 M executions) and session-control (37 M) are clean. wire-test and
-  delta-stream stopped on wild jumps at a different place each run, and none of the five inputs replays (50 runs each,
-  both builds). That is this host's known fault ([host-misexecutes]); hosted linux-clang-fuzz is the check.
+  delta-stream stopped on wild jumps at a different place each run (7 runs), and none of the inputs replays (50 runs
+  each, both builds). With the same `-seed=7 -runs=150000`, two delta-stream runs stopped on different units. The
+  20-round TSan host check run next faulted in the Cerid-free controls (control-plain: `=== WRONG lane walk`; a TSan
+  SEGV). So it is this host's known fault ([host-misexecutes]), not settled: a hosted libFuzzer run of these two
+  targets is the check.
 - Mutations were caught. A quaternion check without its remainder fails `[quantize]` and the fuzzer's storage oracle
   (that input replays). A storage pass that skips key order fails test_delta.cpp.
 - Strict clang-tidy 20 is clean on quantize.hpp, wire.hpp and wire_quantized.hpp (through their units), and on the
