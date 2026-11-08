@@ -391,7 +391,7 @@ it in order; `take` consumes the handshake's copy, so the sent bytes stay here u
   STREAM_DATA_BLOCKED per limit while data waits, again if that frame is lost. `QuicReceiveWindow` checks every end
   against the limit, owes an update once half the window was read, when the peer reports itself blocked (only if the
   limit can rise) or when the latest update was lost, and doubles the window up to its maximum when updates come
-  within two smoothed RTTs (the auto-tuning of Chromium's and quiche's flow controllers), so the window follows the
+  within two smoothed RTTs (the auto-tuning of Chromium's QUIC flow controller), so the window follows the
   path's bandwidth-delay product without a configured guess; a stream's maximum is its buffer's capacity.
 - **Storage.** Capacities are multiples of 64 bytes; the bitmaps are 1/8 of the receive capacity and 1/4 of the send
   capacity, the caller's. Nothing allocates or reads a clock.
