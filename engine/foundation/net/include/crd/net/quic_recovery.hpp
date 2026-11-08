@@ -322,8 +322,8 @@ private:
     [[nodiscard]] usize lower_bound(Space& space, u64 number) noexcept;
     [[nodiscard]] bool acknowledges_unsent(Space& space, const QuicAck& ack) noexcept;
     void settle(Space& space, QuicSentEntry& slot) noexcept;
-    // Drops settled entries from the head: acknowledged ones, and lost ones past their probe period or all of them
-    // when `room` asks for a slot.
+    // Drops settled entries from the head: acknowledged ones, and lost ones past their probe period or, when `room`
+    // asks for a slot, until one is free.
     void compact(QuicSpace id, u64 now_ns, bool room) noexcept;
     [[nodiscard]] bool held_lost(QuicSpace id, const QuicSentEntry& slot, u64 now_ns) const noexcept;
     [[nodiscard]] QuicLoss detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events) noexcept;

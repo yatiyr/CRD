@@ -521,6 +521,13 @@ TEST_CASE("quic recovery: a lost packet waits one probe period for a late acknow
         CHECK(late.acked_packets == 1U);
         CHECK(recovery.packet_threshold() == kQuicPacketThreshold);
     }
+    SECTION("a send takes only the slot it needs")
+    {
+        REQUIRE(recovery.on_timeout(recovery.loss_timer_ns(), events).lost.packets == 2U); // 1 and 2, by time
+        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(4U, 12U * kMs)) == QuicRecoveryError::None);
+        CHECK(recovery.on_ack(QuicSpace::Application, ack_of(1U, 2U).ack(), 13U * kMs, events).spurious_packets == 2U);
+        CHECK(recovery.on_ack(QuicSpace::Application, ack_of(0U, 0U).ack(), 13U * kMs, events).spurious_packets == 0U);
+    }
     SECTION("a send takes the slot; the late acknowledgement then names a number older than any held")
     {
         REQUIRE(recovery.on_sent(QuicSpace::Application, packet(4U, 20U * kMs)) == QuicRecoveryError::None);

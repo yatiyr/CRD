@@ -355,7 +355,8 @@ bool QuicRecovery::held_lost(QuicSpace id, const QuicSentEntry& slot, u64 now_ns
 void QuicRecovery::compact(QuicSpace id, u64 now_ns, bool room) noexcept
 {
     Space& space = m_spaces[index_of(id)];
-    while (space.count > 0U && settled(entry(space, 0U).state) && (room || !held_lost(id, entry(space, 0U), now_ns)))
+    while (space.count > 0U && settled(entry(space, 0U).state) &&
+           ((room && space.count >= space.entries.size()) || !held_lost(id, entry(space, 0U), now_ns)))
     {
         space.head = (space.head + 1U == space.entries.size()) ? 0U : space.head + 1U;
         --space.count;
