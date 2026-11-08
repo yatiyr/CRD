@@ -2,7 +2,8 @@
 // integers against RFC 9000's examples, RFC 9001's and RFC 9369's sample headers and Retry packets byte for byte,
 // every header refusal, Version Negotiation's layout and reserved version, the keyed connection ID table against a
 // reference through heavy churn, the handshake buckets' rates, and every path through the ingress, Retry and NEW_TOKEN
-// round trips included, an invalid Retry token's INVALID_TOKEN close opened as the client would.
+// round trips included, an invalid Retry token's INVALID_TOKEN close opened as the client would; and a client's
+// ingress, which routes what its connections take and answers nothing.
 
 #include "ingress_fixture.hpp"
 
@@ -1013,6 +1014,90 @@ TEST_CASE("A short header for no connection draws a stateless reset shorter than
           IngressAction::StatelessReset);
     CHECK(quiet.classify(short_packet(view_of(other, 16U)).view(), false, kPeer, kSecond, kUnix).reason ==
           DropReason::UnknownConnection);
+}
+
+TEST_CASE("A client's ingress routes Version Negotiation, Retry and its server's packets, drops 0-RTT and other "
+          "versions, and answers nothing",
+          "[net][ingress]")
+{
+    CountingAllocator allocator;
+    ConnectionIdTable routes(allocator, 16U, ConstSpan<u8>(kRouteKey));
+    const u8 mine[8] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+    const u8 other[8] = {0x99};
+    REQUIRE(routes.insert(view_of(mine, 8U), 3U) == RouteError::None);
+    IngressConfig config;
+    config.local_cid_bytes = 8U;
+    config.version_count = 1U; // version 1 alone
+    Ingress ingress(config, routes);
+    REQUIRE(ingress.ready());
+    CHECK_FALSE(ingress.server());
+    CHECK(ingress.runs(kV1));
+    CHECK_FALSE(ingress.runs(kV2));
+
+    const auto classify = [&](const Datagram& datagram)
+    {
+        return ingress.classify(datagram.view(), false, kPeer, kSecond, kUnix);
+    };
+    const auto routed = [&](const Datagram& datagram)
+    {
+        const IngressDecision decision = classify(datagram);
+        return decision.action == IngressAction::Route && decision.connection == 3U;
+    };
+    const auto dropped = [&](const Datagram& datagram, DropReason reason)
+    {
+        const IngressDecision decision = classify(datagram);
+        return decision.action == IngressAction::Drop && decision.reason == reason;
+    };
+
+    // To the ID the client chose: its server's packets of any type, small or not, and the answers it judges.
+    CHECK(routed(long_packet(kV1, QuicPacketType::Initial, view_of(mine, 8U), view_of(kClientScid, 4U), {}, 60U)));
+    CHECK(routed(long_packet(kV1, QuicPacketType::Handshake, view_of(mine, 8U), view_of(kClientScid, 4U), {}, 60U)));
+    CHECK(routed(short_packet(view_of(mine, 8U), 40U)));
+    u8 negotiation[kQuicMaxVersionNegotiationBytes];
+    const u32 offered[] = {kV2};
+    const usize negotiation_bytes = write_version_negotiation(view_of(kClientScid, 4U), view_of(mine, 8U),
+                                                              ConstSpan<u32>(offered), 7U, Span<u8>(negotiation));
+    REQUIRE(negotiation_bytes != 0U);
+    Datagram vn;
+    std::memcpy(vn.bytes, negotiation, negotiation_bytes);
+    vn.size = negotiation_bytes;
+    CHECK(routed(vn));
+    Datagram retry = long_packet(kV1, QuicPacketType::Initial, view_of(mine, 8U), view_of(kClientScid, 4U), {}, 60U);
+    retry.bytes[0] = static_cast<u8>(0xC0U | (long_type_bits(kV1, QuicPacketType::Retry) << 4U));
+    CHECK(routed(retry));
+
+    // Only a client sends 0-RTT; a version it does not run, or one this build does not read, is not its server's.
+    CHECK(dropped(long_packet(kV1, QuicPacketType::ZeroRtt, view_of(mine, 8U), view_of(kClientScid, 4U), {}, 60U),
+                  DropReason::ServerZeroRtt));
+    CHECK(dropped(long_packet(kV2, QuicPacketType::Initial, view_of(mine, 8U), view_of(kClientScid, 4U), {}, 60U),
+                  DropReason::UnsupportedVersion));
+    CHECK(dropped(long_packet(0x1A2A3A4AU, QuicPacketType::Initial, view_of(mine, 8U), {}, {}, 1200U),
+                  DropReason::UnsupportedVersion));
+    // For no connection: dropped, the short header as UnknownConnection (the loop offers it as a reset).
+    CHECK(dropped(short_packet(view_of(other, 8U), 40U), DropReason::UnknownConnection));
+    CHECK(dropped(long_packet(kV1, QuicPacketType::Handshake, view_of(other, 8U), {}, {}, 60U),
+                  DropReason::UnknownConnection));
+    std::memcpy(vn.bytes + 6U, other, 4U); // the Destination Connection ID is the client's Source one: unknown now
+    CHECK(dropped(vn, DropReason::VersionNegotiation));
+    CHECK(ingress.counters().routed == 5U);
+
+    // Nothing is answered or refused, whatever the decision says.
+    u8 out[kQuicMaxStatelessAnswerBytes];
+    for (const IngressAction action : {IngressAction::Retry, IngressAction::NegotiateVersion,
+                                       IngressAction::StatelessReset, IngressAction::InvalidToken,
+                                       IngressAction::Admit})
+    {
+        IngressDecision decision = classify(short_packet(view_of(other, 8U), 64U));
+        decision.action = action;
+        CHECK(ingress.answer(decision, kPeer, kUnix, Span<u8>(out)) == 0U);
+        CHECK(ingress.refuse(decision, kSecond, Span<u8>(out)) == 0U);
+    }
+    CHECK(ingress.counters().answer_failures == 0U);
+
+    // A client's configuration is checked as a server's.
+    IngressConfig bad = config;
+    bad.local_cid_bytes = 7U;
+    CHECK_FALSE(Ingress(bad, routes).ready());
 }
 
 } // namespace

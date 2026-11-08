@@ -70,8 +70,9 @@ public:
     // 0-RTT for no connection (IngressAction::Early): the handler may hold it until its Initial creates the
     // connection (RFC 9000 section 5.2.2), or drop it.
     virtual void on_early(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept = 0;
-    // A short header for no connection, before the ingress's stateless reset answers it: true when it was a peer's
-    // stateless reset ending one of the handler's connections (RFC 9000 section 10.3.1), which is not answered.
+    // A short header for no connection, before the ingress's stateless reset answers it, or one too short to be a
+    // packet: true when it was a peer's stateless reset ending one of the handler's connections (RFC 9000 section
+    // 10.3.1), which is not answered.
     [[nodiscard]] virtual bool on_unrouted(const IngressDecision& decision, const ReceivedDatagram& datagram,
                                            u64 now_ns) noexcept = 0;
     // Runs what is due at `now_ns`; returns when it next needs to run, kNeverNs for no timer.

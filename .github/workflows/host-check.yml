@@ -69,6 +69,10 @@ jobs:
           # 4.2a's spurious losses: two non-replaying local events (a jump to 0, a pc on the stack), 2026-11-08.
           - {target: net-quic-recovery, seed: 8201, repeat: ''}
           - {target: net-quic-recovery, seed: 8202, repeat: ''}
+          # 4.2a's ingress with a client's leg: six non-replaying local events (heap and stack corruption, a wild jump),
+          # three of them with the client leg removed, 2026-11-08.
+          - {target: net-ingress, seed: 8301, repeat: ''}
+          - {target: net-ingress, seed: 8302, repeat: ''}
 
     steps:
       - name: Checkout

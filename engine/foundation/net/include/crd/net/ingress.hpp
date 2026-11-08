@@ -30,6 +30,13 @@
 //        nothing (section 10.3.3): one byte shorter for a trigger of 43 bytes or fewer, else a random length from 43 to
 //        kQuicMaxResetAnswerBytes; never under kQuicMinResetBytes.
 //
+// A client's ingress (its second constructor) runs S1 and S2 alone: a client admits nothing and answers nothing. Every
+// packet whose Destination Connection ID the table routes goes to its connection, Version Negotiation and Retry
+// among them (they carry the ID the client chose, RFC 9000 sections 6.2 and 17.2.5), which judges them; a long header
+// of a version the client does not run and a 0-RTT packet (only a client sends one) are dropped, and a packet for no
+// connection is dropped as UnknownConnection, so the loop offers its short headers to the handler as a stateless
+// reset (section 10.3.1).
+//
 // Threads: HandshakeBuckets is shared by the loops of one server and checked by all of them at once (its gates are
 // SharedRateGates: two loops may each let one handshake past a closing gate, and both are charged). An Ingress belongs
 // to one loop.
@@ -153,7 +160,7 @@ enum class DropReason : u8
     Malformed, // a header the datagram does not hold
     ConnectionIdTooLong,
     TooShortToProtect,
-    VersionNegotiation, // a server never takes one
+    VersionNegotiation, // a server never takes one; at a client, one for no connection
     ClientRetry,        // a client never sends one
     UnsupportedSmall,   // an unsupported version in fewer than 1200 bytes: no answer
     SmallInitial,       // a client Initial in fewer than 1200 bytes
@@ -162,6 +169,8 @@ enum class DropReason : u8
     EarlyPacket,        // Handshake for no connection, or 0-RTT with a Destination Connection ID under 8 bytes
     InvalidRetryToken,  // one that does not validate, when the answer rate is spent
     Overloaded,         // S3 refused and no answer was possible
+    UnsupportedVersion, // at a client: a long header of a version it does not run
+    ServerZeroRtt,      // at a client: a 0-RTT packet (a server never sends one)
     Count,
 };
 
@@ -202,10 +211,14 @@ public:
     Ingress(const IngressConfig& config, const ConnectionIdTable& routes, HandshakeBuckets& buckets,
             const crypto::QuicTokenKeys* tokens, crypto::ReplayFilter* new_tokens,
             const crypto::QuicResetKey* reset = nullptr) noexcept;
+    // A client's: `config` names the versions the client runs and the length of the IDs it issues.
+    Ingress(const IngressConfig& config, const ConnectionIdTable& routes) noexcept;
 
     // False when the configuration is out of range (no version, a version this build cannot run or a reserved one,
     // a connection ID length outside 8 to 20).
     [[nodiscard]] bool ready() const noexcept { return m_ready; }
+    // A server's ingress (the first constructor); a client's admits and answers nothing.
+    [[nodiscard]] bool server() const noexcept { return m_buckets != nullptr; }
     [[nodiscard]] const IngressConfig& config() const noexcept { return m_config; }
 
     // S1 to S3 for one datagram from `peer`, received at `now_ns` (the loop's monotonic clock) and `unix_seconds` (the
@@ -225,16 +238,20 @@ public:
 
     [[nodiscard]] const IngressCounters& counters() const noexcept { return m_counters; }
 
-private:
+    // Whether `version` is one of the configuration's.
     [[nodiscard]] bool runs(u32 version) const noexcept;
+
+private:
+    [[nodiscard]] static bool config_valid(const IngressConfig& config) noexcept;
     [[nodiscard]] IngressDecision drop(IngressDecision decision, DropReason reason) noexcept;
     [[nodiscard]] usize stateless_reset(const IngressDecision& decision, u64 bits, cont::Span<u8> out) noexcept;
+    [[nodiscard]] IngressDecision classify_at_client(IngressDecision decision) noexcept;
     [[nodiscard]] IngressDecision admit_initial(IngressDecision decision, cont::ConstSpan<u8> datagram,
                                                 const Endpoint& peer, u64 now_ns, u64 unix_seconds) noexcept;
 
     IngressConfig m_config;
     const ConnectionIdTable& m_routes;
-    HandshakeBuckets& m_buckets;
+    HandshakeBuckets* m_buckets = nullptr; // null at a client
     const crypto::QuicTokenKeys* m_tokens = nullptr;
     crypto::ReplayFilter* m_new_tokens = nullptr;
     const crypto::QuicResetKey* m_reset = nullptr;

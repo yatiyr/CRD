@@ -153,22 +153,34 @@ bool HandshakeBuckets::answer(u64 now_ns) noexcept
 Ingress::Ingress(const IngressConfig& config, const ConnectionIdTable& routes, HandshakeBuckets& buckets,
                  const crypto::QuicTokenKeys* tokens, crypto::ReplayFilter* new_tokens,
                  const crypto::QuicResetKey* reset) noexcept
-    : m_config(config), m_routes(routes), m_buckets(buckets), m_tokens(tokens), m_new_tokens(new_tokens), m_reset(reset)
+    : m_config(config), m_routes(routes), m_buckets(&buckets), m_tokens(tokens), m_new_tokens(new_tokens),
+      m_reset(reset)
+{
+    m_ready = config_valid(config);
+}
+
+Ingress::Ingress(const IngressConfig& config, const ConnectionIdTable& routes) noexcept
+    : m_config(config), m_routes(routes)
+{
+    m_ready = config_valid(config);
+}
+
+bool Ingress::config_valid(const IngressConfig& config) noexcept
 {
     if (config.version_count == 0U || config.version_count > kQuicMaxNegotiationVersions ||
         config.local_cid_bytes < kQuicMinClientDcidBytes ||
         config.local_cid_bytes > crypto::kQuicMaxConnectionIdBytes)
     {
-        return;
+        return false;
     }
     for (usize index = 0U; index < config.version_count; ++index)
     {
         if (!crypto::quic_version_supported(config.versions[index]))
         {
-            return;
+            return false;
         }
     }
-    m_ready = true;
+    return true;
 }
 
 bool Ingress::runs(u32 version) const noexcept
@@ -217,6 +229,10 @@ IngressDecision Ingress::classify(cont::ConstSpan<u8> datagram, bool truncated, 
         return drop(decision, DropReason::Malformed);
     }
 
+    if (m_buckets == nullptr)
+    {
+        return classify_at_client(decision);
+    }
     const QuicHeader& header = decision.header;
     switch (header.type)
     {
@@ -238,7 +254,7 @@ IngressDecision Ingress::classify(cont::ConstSpan<u8> datagram, bool truncated, 
         {
             return drop(decision, DropReason::UnsupportedSmall);
         }
-        if (!m_buckets.answer(now_ns))
+        if (!m_buckets->answer(now_ns))
         {
             return drop(decision, DropReason::Overloaded);
         }
@@ -257,7 +273,7 @@ IngressDecision Ingress::classify(cont::ConstSpan<u8> datagram, bool truncated, 
     {
     case QuicPacketType::OneRtt:
         // A reset shorter than its trigger and at least 21 bytes long (section 10.3.3), within the answer rate.
-        if (m_reset == nullptr || datagram.size() <= kQuicMinResetBytes || !m_buckets.answer(now_ns))
+        if (m_reset == nullptr || datagram.size() <= kQuicMinResetBytes || !m_buckets->answer(now_ns))
         {
             return drop(decision, DropReason::UnknownConnection);
         }
@@ -284,6 +300,38 @@ IngressDecision Ingress::classify(cont::ConstSpan<u8> datagram, bool truncated, 
     return drop(decision, DropReason::EarlyPacket);
 }
 
+IngressDecision Ingress::classify_at_client(IngressDecision decision) noexcept
+{
+    const QuicHeader& header = decision.header;
+    switch (header.type)
+    {
+        case QuicPacketType::ZeroRtt:
+            return drop(decision, DropReason::ServerZeroRtt);
+        case QuicPacketType::OtherVersion:
+            return drop(decision, DropReason::UnsupportedVersion);
+        case QuicPacketType::Initial:
+        case QuicPacketType::Handshake:
+        case QuicPacketType::Retry:
+            if (!runs(header.version))
+            {
+                return drop(decision, DropReason::UnsupportedVersion);
+            }
+            break;
+        case QuicPacketType::OneRtt:
+        case QuicPacketType::VersionNegotiation:
+            break;
+    }
+    decision.connection = m_routes.find(header.dcid);
+    if (decision.connection == kNoConnection)
+    {
+        return drop(decision, (header.type == QuicPacketType::VersionNegotiation) ? DropReason::VersionNegotiation
+                                                                                  : DropReason::UnknownConnection);
+    }
+    decision.action = IngressAction::Route;
+    ++m_counters.routed;
+    return decision;
+}
+
 IngressDecision Ingress::admit_initial(IngressDecision decision, cont::ConstSpan<u8> datagram, const Endpoint& peer,
                                        u64 now_ns, u64 unix_seconds) noexcept
 {
@@ -305,7 +353,7 @@ IngressDecision Ingress::admit_initial(IngressDecision decision, cont::ConstSpan
             if (m_tokens->validate(version, header.token, quic_token_peer(peer), header.dcid, header.scid, unix_seconds,
                                    decision.claims) != crypto::CryptoError::None)
             {
-                if (!m_buckets.answer(now_ns))
+                if (!m_buckets->answer(now_ns))
                 {
                     return drop(decision, DropReason::InvalidRetryToken);
                 }
@@ -323,7 +371,7 @@ IngressDecision Ingress::admit_initial(IngressDecision decision, cont::ConstSpan
         }
     }
 
-    switch (m_buckets.admit(peer.address, decision.validated, now_ns))
+    switch (m_buckets->admit(peer.address, decision.validated, now_ns))
     {
     case HandshakeVerdict::Admit:
         decision.action = IngressAction::Admit;
@@ -338,7 +386,7 @@ IngressDecision Ingress::admit_initial(IngressDecision decision, cont::ConstSpan
     case HandshakeVerdict::Retry:
         break;
     }
-    if (m_tokens == nullptr || !m_buckets.answer(now_ns))
+    if (m_tokens == nullptr || !m_buckets->answer(now_ns))
     {
         return drop(decision, DropReason::Overloaded);
     }
@@ -349,6 +397,10 @@ IngressDecision Ingress::admit_initial(IngressDecision decision, cont::ConstSpan
 usize Ingress::answer(const IngressDecision& decision, const Endpoint& peer, u64 unix_seconds,
                       cont::Span<u8> out) noexcept
 {
+    if (m_buckets == nullptr)
+    {
+        return 0U; // a client answers nothing
+    }
     const QuicHeader& header = decision.header;
     u8 entropy[8 + crypto::kQuicMaxConnectionIdBytes] = {};
     if (crypto::random_bytes(cont::Span<u8>(entropy, sizeof(entropy))) != crypto::CryptoError::None)
@@ -440,7 +492,7 @@ usize Ingress::stateless_reset(const IngressDecision& decision, u64 bits, cont::
 
 usize Ingress::refuse(const IngressDecision& decision, u64 now_ns, cont::Span<u8> out) noexcept
 {
-    if (decision.action != IngressAction::Admit || !m_buckets.answer(now_ns))
+    if (m_buckets == nullptr || decision.action != IngressAction::Admit || !m_buckets->answer(now_ns))
     {
         return 0U;
     }

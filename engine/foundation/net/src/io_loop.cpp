@@ -228,7 +228,9 @@ void IoLoop::receive_batch(u64 now_ns, u64 unix_seconds, BatchResult& result) no
             queue_answer(decision, datagram.peer, unix_seconds);
             break;
         case IngressAction::Drop:
-            if (decision.reason == DropReason::UnknownConnection)
+            // A stateless reset can be shorter than any packet this side would open (RFC 9000 section 10.3.1).
+            if (decision.reason == DropReason::UnknownConnection ||
+                (decision.reason == DropReason::TooShortToProtect && decision.header.type == QuicPacketType::OneRtt))
             {
                 static_cast<void>(m_handler.on_unrouted(decision, datagram, now_ns));
             }

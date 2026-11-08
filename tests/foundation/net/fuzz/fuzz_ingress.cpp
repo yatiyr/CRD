@@ -14,6 +14,9 @@
 // opens under the keys of the Destination Connection ID it chose, holding CONNECTION_CLOSE with INVALID_TOKEN and
 // PADDING alone; an admitted Initial a server refuses gets the same close with CONNECTION_REFUSED. Early goes only to
 // 0-RTT for no connection under a Destination Connection ID of at least 8 bytes, and is never answered.
+// Through a client's ingress the same datagram is routed or dropped, never answered: Route goes only to a connection
+// the table holds, for a short header, Version Negotiation or a long header of a version the client runs, never for
+// 0-RTT.
 // A stateless reset answers only a short header for no connection: shorter than it (section 10.3.3), one byte
 // shorter up to 43 bytes, at least 21 and at most kQuicMaxResetAnswerBytes, with the fixed bits 01 and the token of
 // its Destination Connection ID last.
@@ -266,6 +269,41 @@ void check_ingress(ConstSpan<u8> datagram, u8 control)
     }
     }
 }
+
+// The same datagram at a client's ingress: it routes or drops, and answers nothing.
+void check_client_ingress(ConstSpan<u8> datagram, u8 control)
+{
+    static crd::memory::TlsfAllocator heap(16U * 1024U, nullptr, "fuzz-client-ingress");
+    ConnectionIdTable routes(heap, 32U, ConstSpan<u8>(kKey));
+    CRD_FUZZ_REQUIRE(routes.ready());
+    u8 routed[crd::crypto::kQuicMaxConnectionIdBytes];
+    std::memset(routed, kRouted, sizeof(routed));
+    for (usize length = 0U; length <= sizeof(routed); ++length)
+    {
+        CRD_FUZZ_REQUIRE(routes.insert(ConstSpan<u8>(routed, length), 7U) == RouteError::None);
+    }
+    IngressConfig config;
+    config.local_cid_bytes = 8U + (control % 13U);
+    Ingress ingress(config, routes);
+    CRD_FUZZ_REQUIRE(ingress.ready() && !ingress.server());
+    const Endpoint peer{IpAddress::v4(203, 0, 113, 7), 443U};
+    const IngressDecision decision = ingress.classify(datagram, false, peer, 1000000000U, kUnix);
+    u8 answer[kQuicMaxStatelessAnswerBytes] = {};
+    CRD_FUZZ_REQUIRE(ingress.answer(decision, peer, kUnix, Span<u8>(answer)) == 0U);
+    CRD_FUZZ_REQUIRE(ingress.refuse(decision, 1000000000U, Span<u8>(answer)) == 0U);
+    const QuicPacketType type = decision.header.type;
+    if (decision.action == IngressAction::Route)
+    {
+        CRD_FUZZ_REQUIRE(decision.connection == 7U && routes.find(decision.header.dcid) == 7U);
+        CRD_FUZZ_REQUIRE(type != QuicPacketType::ZeroRtt && type != QuicPacketType::OtherVersion);
+        CRD_FUZZ_REQUIRE(type == QuicPacketType::OneRtt || type == QuicPacketType::VersionNegotiation ||
+                         ingress.runs(decision.header.version));
+        return;
+    }
+    CRD_FUZZ_REQUIRE(decision.action == IngressAction::Drop && decision.reason < DropReason::Count);
+    CRD_FUZZ_REQUIRE(decision.reason != DropReason::UnknownConnection ||
+                     routes.find(decision.header.dcid) == kNoConnection);
+}
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
@@ -278,6 +316,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     check_header(datagram, 8U + (data[0] % 13U));
     check_varint(datagram);
     check_ingress(datagram, data[0]);
+    check_client_ingress(datagram, data[0]);
     return 0;
 }
 
@@ -285,7 +324,8 @@ namespace
 {
 // A long header packet of `total` bytes after the control byte, its Length covering the rest; an Initial carries
 // `token_bytes` of a token that claims to be a Retry token.
-usize long_seed(u8* out, u8 control, u8 first, u32 version, usize dcid_bytes, usize total, usize token_bytes = 0U)
+usize long_seed(u8* out, u8 control, u8 first, u32 version, usize dcid_bytes, usize total, usize token_bytes = 0U,
+                u8 dcid_byte = 0U)
 {
     out[0] = control;
     WireWriter writer(Span<u8>(out + 1U, total));
@@ -294,7 +334,7 @@ usize long_seed(u8* out, u8 control, u8 first, u32 version, usize dcid_bytes, us
     writer.put_u8(static_cast<u8>(dcid_bytes));
     for (usize index = 0U; index < dcid_bytes; ++index)
     {
-        writer.put_u8(static_cast<u8>(0x80U + index));
+        writer.put_u8((dcid_byte != 0U) ? dcid_byte : static_cast<u8>(0x80U + index));
     }
     writer.put_u8(4U);
     writer.put_u32(0xC1C2C3C4U);
@@ -333,6 +373,10 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     sink.add("unsupported-version", seed, long_seed(seed, 8U, 0xC0U, 0x1A2A3A4AU, 8U, 1200U));
     sink.add("unsupported-small", seed, long_seed(seed, 8U, 0xC0U, 0x00000002U, 8U, 300U));
     sink.add("version-negotiation", seed, long_seed(seed, 8U, 0x80U, 0U, 8U, 40U));
+    // What a client's connection takes: Version Negotiation and Retry to the ID it chose.
+    sink.add("version-negotiation-routed", seed, long_seed(seed, 8U, 0x80U, 0U, 8U, 40U, 0U, kRouted));
+    sink.add("retry-routed", seed, long_seed(seed, 8U, 0xF0U, v1, 8U, 64U, 0U, kRouted));
+    sink.add("initial-routed-small", seed, long_seed(seed, 8U, 0xC0U, v1, 8U, 120U, 0U, kRouted));
 
     // A short header to a routed ID of each length, and to an unknown one.
     for (u8 control = 0U; control < 13U; control += 4U)

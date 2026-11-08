@@ -5,17 +5,17 @@
 // read by the connection that Initial creates, before and after a Retry, with a NEW_TOKEN token proving the next
 // address; a full pool answered with CONNECTION_REFUSED, slots reused and stale handles refused; datagrams from
 // another address dropped, a late copy of a first Initial opening nothing, and a client's stateless reset ending its
-// connection unanswered; the held ring's bounds, a host that is busy, the configurations refused, and a client on
-// the host's loopback.
+// connection unanswered; the held ring's bounds, a host that is busy and the configurations refused. A client host on
+// the host's loopback is test_quic_client.cpp's.
 
 #include "ingress_fixture.hpp"
 #include "loop_fixture.hpp"
 #include "quic_connection_fixture.hpp"
+#include "quic_host_fixture.hpp"
 #include "quic_stream_fixture.hpp"
 
 #include <crd/net/quic_server.hpp>
 
-#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
 #include <memory>
@@ -33,103 +33,13 @@ using namespace crd::net;
 using namespace crd::net::testing;
 
 constexpr usize kMaxClients = 24U;
-constexpr usize kStreams = 4U;
-constexpr u8 kPrf[kPrfKeyBytes] = {0x71, 0x72, 0x73};
-constexpr u8 kResetSecret[kQuicResetKeyBytes] = {0x5E, 0x5F};
-constexpr u8 kAppContext[] = {0x5C, 0x11, 0xE7, 0x02, 0x9A, 0x43, 0x0D, 0xB8};
 constexpr usize kEarlyBytes = 3000U;
-
-QuicStreamLimits limits()
-{
-    QuicStreamLimits out;
-    out.peer_bidi = kStreams;
-    out.local_bidi = kStreams;
-    out.receive_bytes = 16384U;
-    out.send_bytes = 16384U;
-    out.stream_window = 8192U;
-    out.connection_window = 24576U;
-    out.connection_max_window = 131072U;
-    return out;
-}
 
 Endpoint client_peer(usize index)
 {
     return Endpoint{IpAddress::v4(198, 51, 100, static_cast<u8>(1U + (index % 200U))),
                     static_cast<crd::u16>(40000U + index)};
 }
-
-// The server's application: echoes every stream a client opens with another pattern as it reads, and counts what
-// 0-RTT carried. State per slot, cleared when a connection is accepted there.
-class EchoApp final : public QuicServerEvents
-{
-public:
-    void on_accept(QuicServerHandle handle, QuicConnection&, const Endpoint&) noexcept override
-    {
-        ++accepted;
-        m_state[handle.slot] = State{};
-        last = handle;
-    }
-
-    void on_service(QuicServerHandle handle, QuicConnection& connection, u64) noexcept override
-    {
-        ++services;
-        State& state = m_state[handle.slot];
-        QuicStreamSet& set = connection.streams();
-        QuicStreamEvent event;
-        while (set.poll(event))
-        {
-        }
-        for (usize index = 0U; index < kStreams; ++index)
-        {
-            const u64 stream = 4U * index;
-            if (set.recv_state(stream) == QuicRecvState::None)
-            {
-                continue;
-            }
-            const u64 before = state.read[index];
-            const bool ended = set.recv_state(stream) == QuicRecvState::DataRead ||
-                               drain(set, stream, state.read[index], stream, &early_bytes);
-            bytes_read += state.read[index] - before;
-            read_handshaking = read_handshaking ||
-                               (connection.state() == QuicConnectionState::Handshaking && state.read[index] > before);
-            const QuicSendState echo = set.send_state(stream);
-            if (echo == QuicSendState::Ready || echo == QuicSendState::Send)
-            {
-                static_cast<void>(
-                    write_pattern(set, stream, state.echoed[index], state.read[index], stream + 1U, ended));
-            }
-        }
-    }
-
-    void on_closed(QuicServerHandle, const QuicConnection&) noexcept override { ++closed; }
-
-    usize accepted = 0U;
-    usize services = 0U;
-    usize closed = 0U;
-    u64 early_bytes = 0U;
-    u64 bytes_read = 0U;
-    bool read_handshaking = false;
-    QuicServerHandle last;
-
-private:
-    struct State
-    {
-        u64 read[kStreams] = {};
-        u64 echoed[kStreams] = {};
-    };
-    State m_state[kMaxClients];
-};
-
-struct Setup
-{
-    u32 connections = kMaxClients;
-    u32 early_datagrams = 16U;
-    u32 early_per_client = 4U;
-    u32 early_bytes = 1500U;
-    bool always_retry = false;
-    const u8* early_context = nullptr;
-    usize early_context_bytes = 0U;
-};
 
 // One client: its connection, its address and its half of the echo.
 struct Client
@@ -179,25 +89,13 @@ struct Client
 
 // A server behind its loop over a virtual socket, and clients joined to it by seeded impaired paths on a virtual
 // clock (the socket's peer addresses tell the clients apart).
-class Fleet
+class Fleet : public ServerStack
 {
 public:
     static constexpr usize kFlights = 4096U;
     static constexpr usize kToServer = ~usize{0};
 
-    Fleet(const Identity& identity, const Setup& setup)
-        : routes(allocator, 256U, ConstSpan<u8>(kPrf)), buckets(allocator, rules(setup), ConstSpan<u8>(kPrf)),
-          ingress(IngressConfig{}, routes, buckets, &tokens, &new_tokens, &reset),
-          server(allocator, socket, clock, ingress, routes, reset, &tokens, app, server_config(identity, setup)),
-          loop(allocator, socket, clock, ingress, server, IoLoopConfig{}), m_identity(identity)
-    {
-        REQUIRE(tokens.init(ConstSpan<u8>(kTokenKey), {}) == CryptoError::None);
-        REQUIRE(new_tokens.init(1024U, kQuicNewTokenLifetime, kUnix) == CryptoError::None);
-        REQUIRE(reset.init(ConstSpan<u8>(kResetSecret)) == CryptoError::None);
-        REQUIRE(server.ready());
-        REQUIRE(loop.ready());
-        clock.now = kStartNs;
-    }
+    Fleet(const Identity& identity, const Setup& setup) : ServerStack(identity, setup), m_identity(identity) {}
 
     // A client of `version` at `peer` with `seed`'s entropy, connected now.
     Client& add(QuicVersion version, usize seed, const Endpoint& peer, Tickets* tickets = nullptr,
@@ -273,19 +171,7 @@ public:
     usize to_clients = 0U; // datagrams the server sent
     bool busy = false;     // the host takes one datagram per send call at most, and is busy on every other turn
 
-    CountingAllocator allocator;
     CountingAllocator client_allocator;
-    ReplayFilter new_tokens; // NEW_TOKEN tokens are single use
-    ConnectionIdTable routes;
-    HandshakeBuckets buckets;
-    QuicTokenKeys tokens;
-    QuicResetKey reset;
-    Ingress ingress;
-    VirtualSocket socket;
-    TestClock clock;
-    EchoApp app;
-    QuicServer server;
-    IoLoop loop;
 
 private:
     struct Flight
@@ -296,29 +182,6 @@ private:
         usize to = 0U;
         Endpoint peer; // a datagram to the server: its source
     };
-
-    static HandshakeRules rules(const Setup& setup)
-    {
-        HandshakeRules out;
-        out.always_retry = setup.always_retry;
-        return out;
-    }
-
-    static QuicServerConfig server_config(const Identity& identity, const Setup& setup)
-    {
-        QuicServerConfig config;
-        config.connection = config_for(QuicSide::Server, identity, QuicVersion::V1, 1U);
-        config.connection.streams = limits();
-        config.connection.versions = ConstSpan<u32>(kServerVersions);
-        config.connection.early_context = ConstSpan<u8>(setup.early_context, setup.early_context_bytes);
-        config.connections = setup.connections;
-        config.early_datagrams = setup.early_datagrams;
-        config.early_per_client = setup.early_per_client;
-        config.early_bytes = setup.early_bytes;
-        return config;
-    }
-
-    static constexpr u32 kServerVersions[] = {static_cast<u32>(QuicVersion::V1), static_cast<u32>(QuicVersion::V2)};
 
     void enqueue(usize to, ConstSpan<u8> datagram, const Endpoint& peer, u64 extra)
     {
@@ -615,7 +478,7 @@ TEST_CASE("QUIC server: a full pool answers CONNECTION_REFUSED, a closed connect
     auto fleet = std::make_unique<Fleet>(identity, setup);
     Client& first = fleet->add(QuicVersion::V1, 0U, client_peer(0U));
     REQUIRE(fleet->run_until([&] { return first.connection->confirmed(); }));
-    const QuicServerHandle handle = fleet->app.last;
+    const QuicHandle handle = fleet->app.last;
     REQUIRE(fleet->server.connection(handle) != nullptr);
 
     Client& second = fleet->add(QuicVersion::V2, 1U, client_peer(1U));
@@ -760,8 +623,8 @@ TEST_CASE("QUIC server: configurations out of range and refused allocations leav
 {
     Identity identity;
     CountingAllocator allocator;
-    ConnectionIdTable routes(allocator, 64U, ConstSpan<u8>(kPrf));
-    HandshakeBuckets buckets(allocator, HandshakeRules{}, ConstSpan<u8>(kPrf));
+    ConnectionIdTable routes(allocator, 64U, ConstSpan<u8>(kHostPrf));
+    HandshakeBuckets buckets(allocator, HandshakeRules{}, ConstSpan<u8>(kHostPrf));
     QuicResetKey reset;
     REQUIRE(reset.init(ConstSpan<u8>(kResetSecret)) == CryptoError::None);
     Ingress ingress(IngressConfig{}, routes, buckets, nullptr, nullptr, &reset);
@@ -785,15 +648,22 @@ TEST_CASE("QUIC server: configurations out of range and refused allocations leav
     CHECK(refused([](QuicServerConfig& c) { c.connection.side = QuicSide::Client; }));
     CHECK(refused([](QuicServerConfig& c) { c.connection.tls = nullptr; }));
     CHECK(refused([](QuicServerConfig& c) { c.connection.max_datagram_bytes = 1199U; }));
-    CHECK(refused([](QuicServerConfig& c) { c.connection.entropy_seed = ConstSpan<u8>(kPrf, 5U); }));
+    CHECK(refused([](QuicServerConfig& c) { c.connection.entropy_seed = ConstSpan<u8>(kHostPrf, 5U); }));
     CHECK(refused([](QuicServerConfig& c) { c.connections = 0U; }));
-    CHECK(refused([](QuicServerConfig& c) { c.connections = kQuicMaxServerConnections + 1U; }));
+    CHECK(refused([](QuicServerConfig& c) { c.connections = kQuicMaxHostConnections + 1U; }));
     CHECK(refused([](QuicServerConfig& c) { c.early_datagrams = kQuicMaxEarlyDatagrams + 1U; }));
     CHECK(refused([](QuicServerConfig& c) { c.early_per_client = 0U; }));
     CHECK(refused([](QuicServerConfig& c) { c.early_bytes = 1199U; }));
     CHECK(refused([](QuicServerConfig& c) { c.early_lifetime_ns = 0U; }));
     CHECK(refused([](QuicServerConfig& c) { c.send_slots = 0U; }));
     CHECK(refused([](QuicServerConfig& c) { c.send_retry_ns = 0U; }));
+    {
+        // A client's ingress admits nothing.
+        Ingress client_ingress(IngressConfig{}, routes);
+        REQUIRE(client_ingress.ready());
+        const QuicServer server(allocator, socket, clock, client_ingress, routes, reset, nullptr, app, good);
+        CHECK_FALSE(server.ready());
+    }
     CHECK_FALSE(refused(
         [](QuicServerConfig& c)
         {
@@ -813,80 +683,4 @@ TEST_CASE("QUIC server: configurations out of range and refused allocations leav
     }
     CHECK(built);
     CHECK(refusals > 8U);
-}
-
-TEST_CASE("QUIC server: a client on the host's loopback is served through a real UDP socket",
-          "[net][4.2a][quic-server]")
-{
-    UdpOptions options;
-    options.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), 0U};
-    SocketError error = SocketError::Failed;
-    UdpSocket server_socket = UdpSocket::open(options, error);
-    REQUIRE(error == SocketError::None);
-    UdpSocket client_socket = UdpSocket::open(options, error);
-    REQUIRE(error == SocketError::None);
-
-    Identity identity;
-    CountingAllocator allocator;
-    ConnectionIdTable routes(allocator, 64U);
-    HandshakeBuckets buckets(allocator, HandshakeRules{});
-    QuicResetKey reset;
-    REQUIRE(reset.init(ConstSpan<u8>(kResetSecret)) == CryptoError::None);
-    QuicTokenKeys tokens;
-    REQUIRE(tokens.init(ConstSpan<u8>(kTokenKey), {}) == CryptoError::None);
-    Ingress ingress(IngressConfig{}, routes, buckets, &tokens, nullptr, &reset);
-    const HostClock clock;
-    EchoApp app;
-    QuicServerConfig config;
-    config.connection = config_for(QuicSide::Server, identity, QuicVersion::V1, 1U);
-    config.connection.streams = limits();
-    config.connection.entropy_seed = {};
-    QuicServer server(allocator, server_socket, clock, ingress, routes, reset, &tokens, app, config);
-    IoLoop loop(allocator, server_socket, clock, ingress, server, IoLoopConfig{});
-    REQUIRE(server.ready());
-    REQUIRE(loop.ready());
-
-    Client client;
-    QuicConnectionConfig client_config = config_for(QuicSide::Client, identity, QuicVersion::V1, 0U);
-    client_config.streams = limits();
-    client_config.entropy_seed = {};
-    client.connection = std::make_unique<QuicConnection>(allocator, client_config);
-    client.size[0] = 5000U;
-    client.size[1] = 1U;
-    const u8 local[8] = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17};
-    const u8 dcid[8] = {0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27};
-    REQUIRE(client.connection->connect(ConstSpan<u8>(local), ConstSpan<u8>(dcid), clock.monotonic_ns()));
-    const Endpoint to = server_socket.local_endpoint();
-    const u64 deadline = clock.monotonic_ns() + (10U * kNanosPerSecond);
-    bool done = false;
-    while (!done && clock.monotonic_ns() < deadline)
-    {
-        const u64 now = clock.monotonic_ns();
-        u8 out[kDatagram];
-        for (usize size = client.connection->send(Span<u8>(out, sizeof(out)), now); size != 0U;
-             size = client.connection->send(Span<u8>(out, sizeof(out)), now))
-        {
-            const OutgoingDatagram outgoing{ConstSpan<u8>(out, size), to};
-            REQUIRE(client_socket.send(ConstSpan<OutgoingDatagram>(&outgoing, 1U)).count == 1U);
-        }
-        static_cast<void>(server_socket.wait_readable(kMs));
-        static_cast<void>(loop.poll());
-        u8 storage[kDatagram];
-        ReceivedDatagram slot;
-        slot.storage = Span<u8>(storage);
-        while (client_socket.receive(Span<ReceivedDatagram>(&slot, 1U)).count == 1U)
-        {
-            CHECK(slot.peer == to);
-            client.connection->receive(slot.storage.first(slot.size), QuicEcn::NotEct, clock.monotonic_ns());
-        }
-        if (client.connection->next_timer_ns() <= clock.monotonic_ns())
-        {
-            client.connection->on_timeout(clock.monotonic_ns());
-        }
-        done = client.connection->confirmed() && client.echo();
-    }
-    CHECK(done);
-    CHECK(server.live() == 1U);
-    CHECK(server.counters().new_tokens == 1U);
-    CHECK(server.counters().datagrams_sent != 0U);
 }

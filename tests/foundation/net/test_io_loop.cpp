@@ -328,6 +328,12 @@ TEST_CASE("0-RTT for no connection goes to the handler unanswered, and a short h
     (void)rig.loop.poll();
     CHECK(rig.handler.unrouted == 2U);
     CHECK(rig.socket.sent_count == 1U);
+    // One too short to be a packet is offered too (a stateless reset may be 21 bytes), and never answered.
+    rig.socket.deliver(short_packet(view_of(unknown, 16U), 1U + 16U + 19U), kClient);
+    (void)rig.loop.poll();
+    CHECK(rig.handler.unrouted == 3U);
+    CHECK(rig.socket.sent_count == 1U);
+    CHECK(rig.ingress.counters().drops[static_cast<usize>(DropReason::TooShortToProtect)] == 1U);
     // One the ingress would not answer (a server without a reset key) is offered too.
     Rig keyless;
     keyless.socket.deliver(short_packet(view_of(unknown, 16U)), kClient);

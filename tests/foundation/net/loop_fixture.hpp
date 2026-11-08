@@ -49,10 +49,7 @@ public:
     // Datagrams delivered and not yet received.
     [[nodiscard]] usize pending() const noexcept { return m_inbound_count - m_inbound_next; }
 
-    [[nodiscard]] Endpoint local_endpoint() const noexcept override
-    {
-        return Endpoint{IpAddress::v4(10, 0, 0, 1), 443U};
-    }
+    [[nodiscard]] Endpoint local_endpoint() const noexcept override { return local; }
 
     [[nodiscard]] BatchResult receive(cont::Span<ReceivedDatagram> slots) noexcept override
     {
@@ -112,6 +109,7 @@ public:
         Endpoint peer;
     };
 
+    Endpoint local{IpAddress::v4(10, 0, 0, 1), 443U};
     std::unique_ptr<Outbound[]> sent = std::make_unique<Outbound[]>(kQueue);
     usize sent_count = 0U;
     usize busy_after = ~usize{0};
