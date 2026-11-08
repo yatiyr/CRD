@@ -278,6 +278,21 @@ TEST_CASE("QUIC stream set: limits are checked and fill this side's parameters",
 TEST_CASE("QUIC stream set: streams open within the peer's grant, with one STREAMS_BLOCKED per limit",
           "[net][4.2a][quic-stream-set]")
 {
+    // An open() before the peer's parameters is Blocked at limit 0; the grant they bring makes its STREAMS_BLOCKED
+    // stale, so it is never sent.
+    {
+        CountingAllocator early_allocator;
+        QuicStreamSet early;
+        REQUIRE(early.init(early_allocator, limits(4U, 2U), QuicSide::Client));
+        u64 id = 0U;
+        CHECK(early.open(true, id) == QuicStreamError::Blocked);
+        CHECK(early.has_frame());
+        QuicTransportParameters peer;
+        peer.initial_max_streams_bidi = 2U;
+        early.set_peer_parameters(peer);
+        CHECK_FALSE(early.has_frame());
+        CHECK(early.open(true, id) == QuicStreamError::None);
+    }
     QuicStreamLimits server = limits(2U, 1U);
     server.local_bidi = 0U;
     QuicStreamLimits client = limits(4U, 2U);

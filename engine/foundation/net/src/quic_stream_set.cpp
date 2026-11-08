@@ -180,6 +180,9 @@ void QuicStreamSet::set_peer_parameters(const QuicTransportParameters& peer) noe
     local_bidi.limit = peer.initial_max_streams_bidi;
     local_uni.send_credit = peer.initial_max_stream_data_uni;
     local_uni.limit = peer.initial_max_streams_uni;
+    // An open() before the parameters met limit 0: its STREAMS_BLOCKED is stale once the grant is above it.
+    local_bidi.blocked_owed = local_bidi.blocked_owed && local_bidi.limit <= local_bidi.blocked_at;
+    local_uni.blocked_owed = local_uni.blocked_owed && local_uni.limit <= local_uni.blocked_at;
     m_types[type_index(false, true)].send_credit = peer.initial_max_stream_data_bidi_local;
 }
 
