@@ -221,6 +221,41 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   implement it, and `wait_readable` is the one blocking call. PMTU, ECN, pacing and offloads (GSO, GRO, USO, URO)
   are NET-PATH's, added behind the same interface.
 
+<a id="ingress"></a>
+### Ingress
+
+**S34. The I/O loop and admission stages S1 to S3** (4.2a, threats T01, T02 and T10;
+[quic_header.hpp](../../engine/foundation/net/include/crd/net/quic_header.hpp),
+[connection_table.hpp](../../engine/foundation/net/include/crd/net/connection_table.hpp),
+[ingress.hpp](../../engine/foundation/net/include/crd/net/ingress.hpp),
+[io_loop.hpp](../../engine/foundation/net/include/crd/net/io_loop.hpp); 2026-11-08).
+
+- **Two seams.** The loop reads time only through `TransportClock`: monotonic nanoseconds for timers and rates, Unix
+  seconds for address validation tokens (`HostClock` maps crd-time's `TickClock` and `WallClock`). Its work is
+  `poll()`, one bounded turn that never blocks: at most `batches_per_poll` receive batches, so timers run under a
+  flood, then the queued answers and the handler's timers; it returns when it next needs to run. Whoever calls it is
+  the executor: `run()` on a thread of its own, waiting in `wait_readable` until then, a frame, a job, or NET-SIM
+  stepping virtual time. crd-net takes no job system: crd-jobs would tie Layer 1 to the engine's scheduler (ADR-0035).
+- **S1** reads the first packet's form, version, connection IDs, an Initial's token and the packet's extent, nothing
+  under protection. Version 1 and 2 IDs above 20 bytes, packets with fewer than 20 bytes from the packet number on
+  (RFC 9001's sample) and Lengths past the datagram are dropped; other versions are read by RFC 8999's invariants (IDs
+  to 255 bytes) so they can be answered. The QUIC bit is not checked here (RFC 9287). A client Initial under 1200
+  bytes or with a Destination Connection ID under 8 bytes is dropped (RFC 9000 sections 14.1 and 7.2).
+- **S2** is a table keyed by SipHash-2-4 (`PrfKey`), linear probing at load at most one half with backward-shift
+  deletion, its slots allocated once. containers' `HashMap` does not fit: its hasher is stateless and public, it grows,
+  and it stops the process when memory runs out, where this table must refuse when full and allocate nothing after
+  construction. A coalesced datagram goes where its first packet goes.
+- **S3** proves an address by a Retry token (an invalid one drops the Initial; the INVALID_TOKEN close comes with
+  packet protection) or by a single-use NEW_TOKEN token (an invalid one counts as none). Unproven handshakes pass a
+  global and a per-prefix rate (/64 IPv6, /32 or a configured prefix IPv4) and otherwise get a Retry; proven ones pass
+  a global rate and charge their prefix. Prefixes share a fixed array of `SharedRateGate`s chosen by a keyed hash, so
+  no per-source state exists before validation, a collision only tightens, and a server's loops share one limit.
+- **Answers.** Retry and Version Negotiation pass one global rate and answer only datagrams of at least 1200 bytes, so
+  both stay below RFC 9000's three times (at most 553 and 129 bytes). Version Negotiation swaps the IDs, sets the
+  fixed bit (RFC 7983 multiplexing) and lists one reserved version at a random position; Retry draws a fresh
+  16-byte Source Connection ID (the server's default ID length, 8 to 20 configurable). An answer the host cannot take
+  waits in a fixed ring; a full ring drops new answers, which the client's retransmission asks for again.
+
 <a id="admission"></a>
 ## Bounded admission
 
