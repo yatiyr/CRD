@@ -20,7 +20,7 @@ the include they came with (strict tidy clean, crd-net-tests pass). The array-bo
 - delta.cpp compares, copies and skips runs as 64-bit words. The writer finds a run's first differing bit and codes the
   fields before it as zero bits; the reader counts leading zero change bits and copies those fields in one move. A plain
   value is read once on each side, and `take` is inlined (the profile had it out of line at 21% of the board).
-- test-wire-schemas.py: runs end at an optional, a one-group varuint, a varying list and a later revision (31 tests).
+- test-wire-schemas.py: runs end at an optional, a one-group varuint, a varying list and a later revision (30 tests).
 
 ## Evidence
 
