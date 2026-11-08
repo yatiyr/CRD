@@ -68,6 +68,50 @@ endif()
 # The negotiation decoder and handshake under the bounded fuzz harness, with its committed corpus.
 add_subdirectory(fuzz)
 
+# The QUIC interoperability test against ngtcp2 (CRD_BUILD_QUIC_VS_NGTCP2): crd-ngtcp2-quic-peer links ngtcp2 and the
+# peers' OpenSSL alone, and quic_interop.py runs it against crd-quic-peer over the loopback.
+if(CRD_BUILD_QUIC_VS_NGTCP2)
+    include(ExternalProject)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_package(Threads REQUIRED)
+    find_package(ZLIB REQUIRED)
+    cmake_host_system_information(RESULT interop_jobs QUERY NUMBER_OF_LOGICAL_CORES)
+    crd_pin(ngtcp2_version packages ngtcp2 version)
+    # The two HAVE_ values answer the probes ngtcp2's configure would link: this OpenSSL is static and needs zstd and
+    # zlib, which that probe does not name.
+    set(ngtcp2_prefix "${CMAKE_BINARY_DIR}/_deps/ngtcp2-peer-${ngtcp2_version}")
+    set(ngtcp2_libraries "${ngtcp2_prefix}/install/lib/libngtcp2_crypto_ossl.a" "${ngtcp2_prefix}/install/lib/libngtcp2.a")
+    ExternalProject_Add(crd-ngtcp2-build
+        SOURCE_DIR "${ngtcp2_SOURCE_DIR}"
+        PREFIX "${ngtcp2_prefix}"
+        BINARY_DIR "${ngtcp2_prefix}/build"
+        INSTALL_DIR "${ngtcp2_prefix}/install"
+        CMAKE_ARGS "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" -DCMAKE_BUILD_TYPE=Release
+                   "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>" -DCMAKE_INSTALL_LIBDIR=lib -DENABLE_LIB_ONLY=ON
+                   -DENABLE_SHARED_LIB=OFF -DENABLE_STATIC_LIB=ON -DENABLE_OPENSSL=ON -DBUILD_TESTING=OFF
+                   "-DOPENSSL_ROOT_DIR=${CRD_OPENSSL_PEER_ROOT}" -DOPENSSL_USE_STATIC_LIBS=ON
+                   -DHAVE_SSL_PROVIDE_QUIC_DATA=0 -DHAVE_SSL_SET_QUIC_TLS_CBS=1
+        BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel ${interop_jobs}
+        DEPENDS crd-openssl-peer-build
+        BUILD_BYPRODUCTS ${ngtcp2_libraries})
+    add_executable(crd-ngtcp2-quic-peer interop/ngtcp2_quic_peer.c)
+    add_dependencies(crd-ngtcp2-quic-peer crd-ngtcp2-build crd-openssl-peer-build)
+    target_include_directories(crd-ngtcp2-quic-peer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../crypto/interop")
+    target_include_directories(crd-ngtcp2-quic-peer SYSTEM PRIVATE "${ngtcp2_prefix}/install/include"
+                                                                    "${CRD_OPENSSL_PEER_ROOT}/include")
+    target_link_libraries(crd-ngtcp2-quic-peer PRIVATE ${ngtcp2_libraries} ${CRD_OPENSSL_PEER_LINK})
+    set_target_properties(crd-ngtcp2-quic-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+
+    add_executable(crd-quic-peer interop/cerid_quic_peer.cpp)
+    target_link_libraries(crd-quic-peer PRIVATE crd-core crd-containers crd-crypto crd-memory crd-net)
+
+    add_test(NAME crd-net-quic-interop-ngtcp2
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/quic_interop.py"
+                     --cerid "$<TARGET_FILE:crd-quic-peer>" --ngtcp2 "$<TARGET_FILE:crd-ngtcp2-quic-peer>")
+    set_tests_properties(crd-net-quic-interop-ngtcp2 PROPERTIES TIMEOUT 1500 LABELS "net;quic-interop")
+    message(STATUS "[quic-vs-ngtcp2] QUIC interoperability against ngtcp2 ${ngtcp2_version}")
+endif()
+
 # NET.3's serializer budget board against its pinned peers (CRD_BUILD_SERIALIZE_VS_PEERS, the root CMakeLists).
 if(CRD_BUILD_SERIALIZE_VS_PEERS)
     add_subdirectory(board)

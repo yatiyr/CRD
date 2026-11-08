@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **41** · tools: **47** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **42** · tools: **47** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -24,6 +24,7 @@
 | nlohmann_json | 3.12.0 | MIT | nlohmann/json @ `v3.12.0` (55f93686c015) | `json-55f93686.tar.gz` |
 | tpm2-tss | 4.0.1 | BSD-2-Clause | tpm2-software/tpm2-tss @ `4.0.1` (8b404ee7e588) | `tpm2-tss-8b404ee7.tar.gz` |
 | pkcs11 | 3.2 | OASIS-IPR (RF on RAND) | oasis-tcs/pkcs11 @ `master` (c55388c02702) | `pkcs11-c55388c0.tar.gz` |
+| ngtcp2 | 1.26.0 | MIT | ngtcp2/ngtcp2 @ `v1.26.0` (6a22a4d7a111) | `ngtcp2-6a22a4d7.tar.gz` |
 | mlspp | 0.1.0-fc724c31 | BSD-2-Clause AND BSL-1.0 | cisco/mlspp @ `main` (fc724c3100ce) | `mlspp-fc724c31.tar.gz` |
 | nasm | 2.16.03 | BSD-2-Clause | https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip | `nasm-2.16.03-win64.zip` |
 | wycheproof | d17cc89 | Apache-2.0 | C2SP/wycheproof @ `d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9` (d17cc89fa5c8) | `wycheproof-d17cc89f.tar.gz` |

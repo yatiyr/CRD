@@ -138,6 +138,12 @@ option(CRD_BUILD_CRYPTO_VS_PEERS "Build the crypto boards against AWS-LC, Boring
 # builds too. Linux only, never in a shipped build; the crd-crypto-mls-interop-mlspp CTest of the tree that turns it
 # on, locally and on the complete-tier linux-gcc-public-checks lane.
 option(CRD_BUILD_MLS_VS_MLSPP "Build the MLS interoperability test against MLSpp (Linux)" OFF)
+# The QUIC interoperability test (4.2a): crd-quic-peer, over crd-net's server and client, against crd-ngtcp2-quic-peer,
+# a program over the pinned ngtcp2 (cmake/pins.json ngtcp2, built by its own CMake as a separate project, libraries
+# only) and the OpenSSL 4.0 above, which this option builds too, both driven over the loopback by
+# tests/foundation/net/interop/quic_interop.py. Linux only, never in a shipped build; the crd-net-quic-interop-ngtcp2
+# CTest of the tree that turns it on, locally and on the complete-tier linux-gcc-public-checks lane.
+option(CRD_BUILD_QUIC_VS_NGTCP2 "Build the QUIC interoperability test against ngtcp2 (Linux)" OFF)
 # The same test against OpenMLS (NET.2, decision M4): crd-openmls-peer, a Rust program over OpenMLS whose crates the
 # committed tests/foundation/crypto/interop/openmls_peer/Cargo.lock pins (cmake/pins.json tools/openmls-crates), built
 # by `cargo build --locked` with the pinned Rust toolchain (tools/rust-linux-x64: scripts/install-rust.py, which prints
@@ -690,7 +696,7 @@ crd_module(engine/foundation/crypto engine/crypto DEPENDS compression containers
     TESTS foundation/crypto support/fuzz TEST_DEPENDS json memory
     TEST_PACKAGES wycheproof mls-vectors hpke-pq-vectors zstd)
 crd_module(engine/foundation/net engine/net DEPENDS compression containers core crypto hesap-net memory time
-    TESTS foundation/net support/fuzz)
+    TESTS foundation/net support/fuzz TEST_PACKAGES zstd)
 crd_module(engine/foundation/comply engine/comply DEPENDS containers core toml TESTS foundation/comply support/fuzz
     TEST_DEPENDS platform)
 crd_module(engine/ui/imgui engine/imgui
@@ -1473,7 +1479,7 @@ endif()
 # tests/foundation/crypto (test-only) -----
 # The TLS peer program and the boards' peer arms are C; OpenSSL's Configure is Perl. MLSpp needs OpenSSL (its crypto)
 # and nlohmann_json's CMake package (its build only).
-if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_CRYPTO_VS_PEERS)
+if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_CRYPTO_VS_PEERS OR CRD_BUILD_QUIC_VS_NGTCP2)
     if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
         message(FATAL_ERROR "[interop] the TLS and MLS interoperability tests and the crypto boards need Linux, "
                             "CRD_BUILD_TESTS and the crypto module")
@@ -1483,6 +1489,9 @@ if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_CRYPTO_VS_PEE
 endif()
 if(CRD_BUILD_CRYPTO_VS_PEERS)
     crd_add_pinned_package(boringssl DOWNLOAD_ONLY YES)
+endif()
+if(CRD_BUILD_QUIC_VS_NGTCP2)
+    crd_add_pinned_package(ngtcp2 DOWNLOAD_ONLY YES)
 endif()
 if(CRD_BUILD_MLS_VS_MLSPP)
     crd_add_pinned_package(nlohmann_json DOWNLOAD_ONLY YES)

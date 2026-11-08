@@ -137,8 +137,9 @@ add_subdirectory(fuzz)
 # its own Configure in a separate project, static, libraries only, with zstd (the pinned one the engine uses) and zlib
 # (the system's) for certificate compression (RFC 8879), so every program linking it links those too. The peers of each
 # interoperability test meet only through its Python driver, each in its own process; the coexistence test and the
-# boards link OpenSSL beside crd-crypto's prefixed AWS-LC (decision P5).
-if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_CRYPTO_VS_PEERS)
+# boards link OpenSSL beside crd-crypto's prefixed AWS-LC (decision P5). crd-net's QUIC peer links it too, from
+# CRD_OPENSSL_PEER_ROOT and CRD_OPENSSL_PEER_LINK.
+if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_CRYPTO_VS_PEERS OR CRD_BUILD_QUIC_VS_NGTCP2)
     include(ExternalProject)
     find_package(Perl REQUIRED)
     find_program(CRD_MAKE_PROGRAM NAMES make gmake REQUIRED)
@@ -161,6 +162,8 @@ if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_CRYPTO_VS_PEE
         INSTALL_COMMAND "${CRD_MAKE_PROGRAM}" install_dev
         BUILD_BYPRODUCTS ${openssl_libraries})
     set(openssl_link ${openssl_libraries} libzstd_static ZLIB::ZLIB Threads::Threads ${CMAKE_DL_LIBS})
+    set(CRD_OPENSSL_PEER_ROOT "${openssl_prefix}/install" CACHE INTERNAL "The peers' OpenSSL install")
+    set(CRD_OPENSSL_PEER_LINK "${openssl_link}" CACHE INTERNAL "What a program linking the peers' OpenSSL links")
 endif()
 
 # The TLS 1.3 and ECH interoperability test against OpenSSL (CRD_BUILD_TLS_VS_OPENSSL): crd-openssl-tls-peer links
