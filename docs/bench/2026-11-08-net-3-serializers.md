@@ -101,3 +101,36 @@ row names its run of fixed-size siblings (S28), compared and copied as 64-bit wo
 - The gap against the floor: an encode reads two encodings and an apply reads two and writes one, so about two decodes'
   worth of bit reads each. What is left above it is per changed field: a fresh scan of the run's remaining words after
   each difference, and the folded differences as three-bit varint groups read and written one group at a time.
+
+## FlatBuffers and Cap'n Proto (later the same day)
+
+Same machine and tree, two runs of `--rounds 25` ([session](../sessions/2026-11-08-net-3-zero-copy-peers.md)). Two
+arms join, each through the C++ its own schema compiler generates at build time (`board.fbs`, `board.capnp`; flatc and
+capnp are built from the pinned sources as separate projects): FlatBuffers 25.12.19, an entity as a struct inline in
+its vector, read after the library's `Verifier`; Cap'n Proto 1.5.0 in its packed form, through kj's array streams with
+the unit's own first segment and read scratch. Both copy into the plain message; neither allocates.
+
+| Message | Arm | bytes | encode ns (runs 1, 2) | decode ns (runs 1, 2) |
+|---|---|---|---|---|
+| snapshot, 64 entities | crd-net | 1235.9 | 1617.4, 1657.9 | 1208.1, 1211.0 |
+| | serialize | 1236.9 | 2017.7, 1970.7 | 1149.1, 1117.5 |
+| | FlatBuffers | 3100.0 | 288.4, 256.3 | 249.3, 249.8 |
+| | Cap'n Proto, packed | 3050.5 | 1556.4, 1536.0 | 2680.2, 2614.4 |
+| input command | crd-net | 11.0 | 21.1, 22.3 | 18.4, 16.9 |
+| | FlatBuffers | 40.0 | 35.0, 29.6 | 8.9, 8.6 |
+| | Cap'n Proto, packed | 21.7 | 87.7, 79.8 | 67.1, 67.1 |
+| chat | crd-net | 83.4 | 64.3, 64.3 | 57.6, 55.1 |
+| | FlatBuffers | 124.2 | 61.9, 59.6 | 34.2, 34.1 |
+| | Cap'n Proto, packed | 99.2 | 107.4, 110.5 | 132.8, 133.3 |
+
+- **Bytes.** crd-net's snapshot is 2.5x smaller than either (FlatBuffers' 48-byte entity, Cap'n Proto's packed
+  words), its command 3.6x and 2.0x, its chat 1.5x and 1.2x. Packing buys Cap'n Proto only 2% on snapshots: an
+  entity's floats have no zero bytes to drop.
+- **CPU.** FlatBuffers is the fastest arm on snapshots, 0.16x crd-net's encode and 0.21x its decode, by sending the
+  application's layout at 2.5x the bytes (zpp_bits' trade, with offsets). Cap'n Proto's packed form is crd-net's
+  encode cost and 2.2x its decode, at 2.5x the bytes; its command costs 4x crd-net's both ways.
+- **Damage.** Cap'n Proto refuses a snapshot cut or extended by a byte (the arm also refuses bytes left after the
+  message). FlatBuffers' verifier does not refuse the pair: a buffer records no length of its own (only the size-prefixed form
+  does), so a byte after the message is never refused.
+- The host was in use: crd-net's snapshot decode moved to 1.05x and 1.08x serialize's in these runs, and its command
+  cells by up to 1.5x, as before.
