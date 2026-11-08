@@ -174,9 +174,9 @@
       "why": "The bit-exact oracle and board of hesap-net's quantisation against mas-bandwidth/serialize and networked-physics (crd-hesap-quantize-peer-tests, crd-hesap-quantize-board, HESAP-NET), against the pinned files fetched at configure time only when the option is on; the complete-tier linux-gcc-public-checks lane turns it on."
     },
     {
-      "paths": ["tests/foundation/net/board/serialize_board.cpp", "tests/foundation/net/board/peer_serialize.cpp", "tests/foundation/net/board/peer_bitsery.cpp", "tests/foundation/net/board/peer_zpp_bits.cpp", "tests/foundation/net/board/peer_protozero.cpp"],
+      "paths": ["tests/foundation/net/board/serialize_board.cpp", "tests/foundation/net/board/peer_serialize.cpp", "tests/foundation/net/board/peer_bitsery.cpp", "tests/foundation/net/board/peer_zpp_bits.cpp", "tests/foundation/net/board/peer_protozero.cpp", "tests/foundation/net/board/peer_flatbuffers.cpp", "tests/foundation/net/board/peer_capnproto.cpp"],
       "built_when": {"option": "CRD_BUILD_SERIALIZE_VS_PEERS"},
-      "why": "NET.3's serializer budget board (crd-net-serialize-board) against mas-bandwidth/serialize, bitsery, zpp_bits and protozero, the pinned peers fetched at configure time only when the option is on; the complete-tier linux-gcc-public-checks lane builds it and runs its smoke."
+      "why": "NET.3's serializer budget board (crd-net-serialize-board) against mas-bandwidth/serialize, bitsery, zpp_bits, protozero, FlatBuffers and Cap'n Proto, the pinned peers fetched at configure time only when the option is on; the complete-tier linux-gcc-public-checks lane builds it and runs its smoke."
     },
     {
       "paths": ["tests/numerics/hesap-net/test_raptorq_peers.cpp", "tests/numerics/hesap-net/raptorq_board.cpp", "tests/numerics/hesap-net/raptorq_nanorq_peer.c"],

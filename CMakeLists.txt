@@ -94,7 +94,7 @@ option(CRD_BUILD_CLOCK_VS_NTPD "Build the clock filter's oracle against ntpd" OF
 # crd-hesap-quantize-peer-tests and crd-hesap-quantize-board of the tree that turns it on.
 option(CRD_BUILD_QUANTIZE_VS_PEERS "Build the quantisation oracle and board against its two peers" OFF)
 # NET.3's serializer budget board (tests/foundation/net/board), which also needs the quantisation peers above.
-option(CRD_BUILD_SERIALIZE_VS_PEERS "Build the serializer budget board against its four peers" OFF)
+option(CRD_BUILD_SERIALIZE_VS_PEERS "Build the serializer budget board against its six peers" OFF)
 # HESAP-NET's interpolation against the same Snapshot.h and vectorial's quat4f.h from the same commit (cmake/pins.json
 # vectorial-quat4f) and its dead reckoning against KDIS (cmake/pins.json kdis), fetched on demand. Never in a shipped
 # build; crd-hesap-motion-peer-tests, crd-hesap-dead-reckoning-peer-tests and their boards
@@ -1663,6 +1663,8 @@ if(CRD_BUILD_SERIALIZE_VS_PEERS)
     crd_add_pinned_package(bitsery DOWNLOAD_ONLY YES)
     crd_add_pinned_package(zpp_bits DOWNLOAD_ONLY YES)
     crd_add_pinned_package(protozero DOWNLOAD_ONLY YES)
+    crd_add_pinned_package(flatbuffers DOWNLOAD_ONLY YES)
+    crd_add_pinned_package(capnproto DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The replicated-motion peer: its files, built by tests/numerics/hesap-net -----

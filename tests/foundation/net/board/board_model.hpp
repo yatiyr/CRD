@@ -92,5 +92,7 @@ extern const PeerArm kSerializeArm; // mas-bandwidth/serialize, networked-physic
 extern const PeerArm kBitseryArm;   // bitsery with bit packing
 extern const PeerArm kZppBitsArm;   // zpp_bits
 extern const PeerArm kProtozeroArm; // protobuf's wire format through protozero
+extern const PeerArm kFlatBuffersArm; // FlatBuffers through flatc's C++
+extern const PeerArm kCapnProtoArm;   // Cap'n Proto's packed form through capnp's C++
 
 } // namespace serialize_board

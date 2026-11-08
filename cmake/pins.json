@@ -373,6 +373,34 @@
       "provenance": "Mapbox's protozero, a minimal header-only codec of protobuf's wire format, at its latest release tag (read 2026-11-08)",
       "note": "The protobuf-format peer of NET.3's serializer budget board: include/ compiled by tests/foundation/net/board/peer_protozero.cpp only; never in a shipped build."
     },
+    "flatbuffers": {
+      "version": "25.12.19",
+      "repository": "google/flatbuffers",
+      "ref": "v25.12.19",
+      "commit": "7e163021e59cca4f8e1e35a7c828b5c6b7915953",
+      "url": "https://github.com/google/flatbuffers/archive/7e163021e59cca4f8e1e35a7c828b5c6b7915953.tar.gz",
+      "file": "flatbuffers-7e163021.tar.gz",
+      "sha256": "4236c5d22309abeac2384d3800febcc8d60423e8cb2f573abfa8f798352c4536",
+      "size": 2359249,
+      "license": "Apache-2.0",
+      "gated": "CRD_BUILD_SERIALIZE_VS_PEERS",
+      "provenance": "Google's FlatBuffers at its release tag v25.12.19 (the plain tag; the later dated re-tag v25.12.19-2026-02-06-03fffb2 is not used), read 2026-11-08",
+      "note": "A zero-copy peer of NET.3's serializer budget board: flatc built by its own CMake as a separate project generates C++ from tests/foundation/net/board/board.fbs, and the header-only runtime is compiled by tests/foundation/net/board/peer_flatbuffers.cpp only; never in a shipped build."
+    },
+    "capnproto": {
+      "version": "1.5.0",
+      "repository": "capnproto/capnproto",
+      "ref": "v1.5.0",
+      "commit": "373e61ec89e2359f1c362e9b2eadc552f4779306",
+      "url": "https://github.com/capnproto/capnproto/archive/373e61ec89e2359f1c362e9b2eadc552f4779306.tar.gz",
+      "file": "capnproto-373e61ec.tar.gz",
+      "sha256": "89115059a6e87d46a2f6540477c1e198ccd2d7702193a3e63183f6765d068af8",
+      "size": 2439435,
+      "license": "MIT",
+      "gated": "CRD_BUILD_SERIALIZE_VS_PEERS",
+      "provenance": "Cap'n Proto at its latest release tag v1.5.0 (the project tags releases without GitHub release entries), read 2026-11-08",
+      "note": "A zero-copy peer of NET.3's serializer budget board: c++/ built by its own CMake as a separate project (static kj and capnp, the capnp and capnpc-c++ compilers; no OpenSSL, zlib, fibers or tests), which generates C++ from tests/foundation/net/board/board.capnp, linked only into crd-serialize-peers through tests/foundation/net/board/peer_capnproto.cpp; never in a shipped build."
+    },
     "networked-physics-snapshot": {
       "version": "fe19b74b",
       "repository": "mas-bandwidth/networked-physics-gdc-2015",

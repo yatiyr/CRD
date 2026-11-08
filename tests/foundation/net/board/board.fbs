@@ -1,0 +1,53 @@
+// The serializer board's messages in FlatBuffers (peer_flatbuffers.cpp writes and reads them through the C++ flatc
+// generates at build time); crd-net's are tests/foundation/net/schemas/serialize_board.json, protobuf's board.proto.
+// An entity is a struct, laid out inline in its vector, as FlatBuffers advises for fixed-size records.
+
+namespace serialize_board.fb;
+
+enum Stance : ubyte { Idle, Walk, Run, Crouch }
+
+enum Room : ubyte { All, Team, Squad, Whisper }
+
+struct Entity
+{
+    x: float;
+    y: float;
+    z: float;
+    qx: float;
+    qy: float;
+    qz: float;
+    qw: float;
+    vx: float;
+    vy: float;
+    vz: float;
+    id: ushort;
+    target: ushort;
+    health: ubyte;
+    stance: Stance;
+    firing: bool;
+    has_target: bool;
+}
+
+table Snapshot
+{
+    tick: uint;
+    entities: [Entity];
+}
+
+table Command
+{
+    tick: uint;
+    buttons: ushort;
+    yaw: float;
+    pitch: float;
+    move_x: byte;
+    move_y: byte;
+}
+
+table Chat
+{
+    sender: ushort;
+    room: Room;
+    text: string;
+    mentions: [ushort];
+}

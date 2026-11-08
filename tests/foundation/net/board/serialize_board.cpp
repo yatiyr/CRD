@@ -668,10 +668,13 @@ int main(int argc, char** argv)
                                    &serialize_board::kBitseryArm,
                                    &serialize_board::kZppBitsArm,
                                    &serialize_board::kProtozeroArm,
+                                   &serialize_board::kFlatBuffersArm,
+                                   &serialize_board::kCapnProtoArm,
                                    &kCrdViewArm};
-    const Law laws[] = {Law::Rounded, Law::Rounded, Law::Truncated, Law::Exact, Law::Exact, Law::Rounded};
-    constexpr usize view = 5U;
+    const Law laws[] = {Law::Rounded, Law::Rounded, Law::Truncated, Law::Exact,
+                        Law::Exact,   Law::Exact,   Law::Exact,     Law::Rounded};
     constexpr usize arm_count = sizeof(arms) / sizeof(arms[0]);
+    constexpr usize view = arm_count - 1U;
 
     Array<u8> slots;
     slots.resize(most * kSlotBytes);
@@ -691,7 +694,7 @@ int main(int argc, char** argv)
     Cost chat_cost[arm_count];
     bool failed = false;
     bool strict[arm_count] = {};
-    u8 scratch[kSlotBytes + 1U];
+    alignas(16) u8 scratch[kSlotBytes + 1U]; // FlatBuffers' verifier refuses a misaligned buffer
 
     // Untimed: each arm once, so a first call's one-time work (crd-net's kernel resolution and its self-check, a
     // library's tables) is no round's.
