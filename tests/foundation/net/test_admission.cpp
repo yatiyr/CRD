@@ -5,7 +5,6 @@
 
 #include "admission_fixture.hpp"
 
-#include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/net/reassembly.hpp>
 #include <crd/net/wire/session_control.hpp>
 
@@ -27,8 +26,6 @@ using crd::crypto::AuthorizedSchema;
 using crd::crypto::Capability;
 using crd::crypto::Delivery;
 using crd::crypto::ScopeKind;
-using crd::memory::IAllocator;
-using crd::memory::TlsfAllocator;
 using crd::net::Admission;
 using crd::net::admit_action;
 using crd::net::admit_verdict_name;
