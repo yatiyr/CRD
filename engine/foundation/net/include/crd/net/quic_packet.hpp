@@ -209,7 +209,12 @@ struct QuicOpened
     bool key_update = false; // this packet moved the receive key phase: the previous key is now held
 };
 
-// A connection's packet protection: its keys per level and the receive windows of its packet number spaces.
+// A connection's packet protection: its keys per level and the receive windows of its packet number spaces. (MSVC
+// C4324 as for crypto::AeadKey: the keys it holds inline are 16-byte aligned; ARM64 MSVC reports the padding.)
+#if CRD_COMPILER_MSVC
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 class QuicPacketProtection
 {
 public:
@@ -344,5 +349,8 @@ private:
     bool m_handshake_gone = false;
     bool m_early_gone = false;
 };
+#if CRD_COMPILER_MSVC
+#pragma warning(pop)
+#endif
 
 } // namespace crd::net
