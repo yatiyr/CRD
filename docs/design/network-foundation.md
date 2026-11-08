@@ -256,6 +256,39 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   16-byte Source Connection ID (the server's default ID length, 8 to 20 configurable). An answer the host cannot take
   waits in a fixed ring; a full ring drops new answers, which the client's retransmission asks for again.
 
+<a id="quic-frames"></a>
+### QUIC frames and transport parameters
+
+**S35. Frames and transport parameters** (4.2a, threats T01 and T02;
+[quic_frame.hpp](../../engine/foundation/net/include/crd/net/quic_frame.hpp),
+[quic_transport_parameters.hpp](../../engine/foundation/net/include/crd/net/quic_transport_parameters.hpp);
+2026-11-08).
+
+- **Frames** (RFC 9000 section 19, RFC 9221's DATAGRAM): one flat `QuicFrame` whose views point into the decrypted
+  payload, read without allocation. Every section 19 bound is checked on read, ACK ranges included, so nothing read
+  later can underflow; a type in a longer encoding than its shortest is PROTOCOL_VIOLATION (section 12.4), an
+  unknown type FRAME_ENCODING_ERROR, and a refusal consumes nothing. A run of PADDING is one frame. Writers emit the
+  shortest encodings into a span and refuse, writing nothing, what no reader would accept; ACK frames are written from
+  descending ranges with their ECN counts. Placement (table 3, NEW_TOKEN and HANDSHAKE_DONE from servers only,
+  DATAGRAM in 0-RTT and 1-RTT) is one function.
+- <a id="quic-transport-parameters"></a>**Transport parameters** (section 18, RFC 9221, RFC 9287, RFC 9368): read for
+  the side that sent them, defaults filled, unknown and reserved ones skipped; TRANSPORT_PARAMETER_ERROR for a
+  malformed or repeated parameter, a value outside section 18.2's bounds, a server-only parameter from a client and an
+  RFC 9368 parsing failure. Connection IDs are copied; a peer's version list is kept to 16 entries (no deployed set
+  comes near it), so the reader allocates nothing. Writers emit only what differs from a default and always one
+  reserved parameter (31 * N + 27) and one reserved version, from caller entropy, so peers that do not ignore unknowns
+  fail in testing.
+- **Checks after the handshake**: section 7.3's connection ID authentication (absence TRANSPORT_PARAMETER_ERROR,
+  mismatch PROTOCOL_VIOLATION, a preferred address with zero-length IDs refused), and RFC 9368's compatible
+  negotiation: the server's choice among the client's versions that the first flight converts to (versions 1 and 2
+  convert both ways), the server's check of the client's chosen version, and the client's downgrade check after
+  Version Negotiation, a version 1 server without the parameter read as listing version 1 alone (section 8).
+
+Evidence: `test_quic_frame.cpp` and `test_quic_transport_parameters.cpp` (RFC 9001 appendix A's CRYPTO, ACK and
+client parameters byte for byte, every kind round tripped, every truncation and bound, random ACK range sets, the
+placement table restated, every refusal and check path), eleven source mutations each caught, and
+`crd-fuzz-net-quic-codec` (rewrite and re-read oracles, ACK ranges, the reserved parameter).
+
 <a id="admission"></a>
 ## Bounded admission
 
