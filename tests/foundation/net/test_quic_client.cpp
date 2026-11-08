@@ -679,6 +679,116 @@ TEST_CASE("QUIC client: the server's stateless reset ends a connection only from
     CHECK(network->client.live() == 0U);
 }
 
+TEST_CASE("QUIC client: a stateless reset is matched by its token among all the connections to one server",
+          "[net][4.2a][quic-client]")
+{
+    Identity identity;
+    auto network = std::make_unique<Network>(identity, Setup{},
+                                             client_config(identity, QuicVersion::V1, ConstSpan<u32>(kBothVersions)));
+    QuicHandle handles[3];
+    for (usize index = 0U; index < 3U; ++index)
+    {
+        handles[index] = network->connect(0U, index + 1U);
+    }
+    REQUIRE(network->run_until(
+        [&]
+        {
+            return network->app.echoed(handles[0]) && network->app.echoed(handles[1]) &&
+                   network->app.echoed(handles[2]);
+        }));
+    CHECK(network->client.live_tokens() == 3U);
+
+    // Each of the three is a connection of the same address: the reset names the last, and the others stay.
+    const Datagram reset = network->server_reset(handles[2]);
+    network->deliver_to_client(reset.view(), server_at(0U));
+    static_cast<void>(network->client_loop.poll());
+    CHECK(network->client.counters().peer_resets == 1U);
+    CHECK(network->live(handles[0]).state() == QuicConnectionState::Established);
+    CHECK(network->live(handles[1]).state() == QuicConnectionState::Established);
+    REQUIRE(network->run_until([&] { return network->app.closed == 1U; }));
+    CHECK(network->app.state(handles[2]).close.stateless_reset);
+    CHECK(network->client.live() == 2U);
+    CHECK(network->client.live_tokens() == 2U);
+}
+
+TEST_CASE("QUIC client: its own ticket cache resumes the next connection once, may be off, or replaced by a store",
+          "[net][4.2a][quic-client][quic-early]")
+{
+    const auto early_network = [](Identity& identity, const QuicClientConfig& config)
+    {
+        Setup setup;
+        setup.early_context = kAppContext;
+        setup.early_context_bytes = sizeof(kAppContext);
+        return std::make_unique<Network>(identity, setup, config);
+    };
+    for (const QuicVersion version : kVersions)
+    {
+        INFO("version " << static_cast<u32>(version));
+        ReadyFilter early;
+        Identity identity(false, &early.filter);
+        auto network = early_network(identity, client_config(identity, version, {}));
+        const QuicHandle first = network->connect(0U, 1U);
+        REQUIRE(
+            network->run_until([&] { return network->app.echoed(first) && network->client.tickets().size() != 0U; }));
+        const u32 held = network->client.tickets().size();
+
+        const QuicHandle second = network->connect(0U, 2U);
+        REQUIRE(network->live(second).handshake().early_data() == TlsEarlyData::Offered);
+        CHECK(network->client.tickets().size() == held - 1U);
+        CHECK(network->client.tickets().counters().taken == 1U);
+        REQUIRE(network->run_until([&] { return network->app.echoed(second); }));
+        CHECK(network->live(second).handshake().early_data() == TlsEarlyData::Accepted);
+    }
+    {
+        // Entries 0: nothing is kept, and the next connection offers none.
+        ReadyFilter early;
+        Identity identity(false, &early.filter);
+        QuicClientConfig config = client_config(identity, QuicVersion::V1, {});
+        config.tickets.entries = 0U;
+        auto network = early_network(identity, config);
+        const QuicHandle first = network->connect(0U, 1U);
+        REQUIRE(network->run_until([&] { return network->app.echoed(first); }));
+        CHECK(network->client.tickets().counters().kept == 0U);
+        const QuicHandle second = network->connect(0U, 2U);
+        CHECK(network->live(second).handshake().early_data() == TlsEarlyData::None);
+    }
+    {
+        // A store of the caller's takes the tickets; the client's own stays empty.
+        ReadyFilter early;
+        Identity identity(false, &early.filter);
+        Tickets tickets;
+        auto network = early_network(identity, client_config(identity, QuicVersion::V1, {}, &tickets));
+        const QuicHandle first = network->connect(0U, 1U);
+        REQUIRE(network->run_until([&] { return network->app.echoed(first) && tickets.holds(); }));
+        CHECK(network->client.tickets().counters().kept == 0U);
+    }
+    for (const bool turn : {true, false})
+    {
+        // A ticket past the age limit is gone within a turn, or before the next connection would offer it.
+        INFO("turn " << turn);
+        ReadyFilter early;
+        Identity identity(false, &early.filter);
+        QuicClientConfig config = client_config(identity, QuicVersion::V1, {});
+        config.tickets.max_age_ns = 1000U * kMs;
+        auto network = early_network(identity, config);
+        const QuicHandle first = network->connect(0U, 1U);
+        REQUIRE(
+            network->run_until([&] { return network->app.echoed(first) && network->client.tickets().size() != 0U; }));
+        if (turn)
+        {
+            REQUIRE(network->run_until([&] { return network->client.tickets().size() == 0U; }));
+        }
+        else
+        {
+            network->now += 2000U * kMs;
+            const QuicHandle second = network->connect(0U, 2U);
+            CHECK(network->live(second).handshake().early_data() == TlsEarlyData::None);
+            CHECK(network->client.tickets().size() == 0U);
+        }
+        CHECK(network->client.tickets().counters().expired != 0U);
+    }
+}
+
 TEST_CASE("QUIC client: a datagram for a connection from another address is dropped and counted",
           "[net][4.2a][quic-client]")
 {
@@ -790,6 +900,7 @@ TEST_CASE("QUIC client: the pool's bounds, stale handles, a TLS context per conn
     CHECK(refused([](QuicClientConfig& c) { c.connections = 0U; }));
     CHECK(refused([](QuicClientConfig& c) { c.connections = kQuicMaxHostConnections + 1U; }));
     CHECK(refused([](QuicClientConfig& c) { c.tokens = kQuicMaxClientTokens + 1U; }));
+    CHECK(refused([](QuicClientConfig& c) { c.tickets.per_binding = 0U; }));
     CHECK(refused([](QuicClientConfig& c) { c.send_slots = 0U; }));
     CHECK(refused([](QuicClientConfig& c) { c.send_retry_ns = 0U; }));
     CHECK_FALSE(refused([](QuicClientConfig& c) { c.tokens = 0U; }));

@@ -863,9 +863,7 @@ configuration refusal and allocation refusal; and a client served over the host'
   and executor seam as the server.
 - **A short stateless reset.** A reset can be 21 bytes, shorter than any packet the receiver would open; the loop now
   offers a short header dropped as too short to protect to `on_unrouted` as well (both hosts), never answering it,
-  and a datagram under 21 bytes is never a reset. The peer index keys an address with its IPv6 zone and port, so it
-  matches exactly the endpoints `Endpoint` holds equal; it names the first connection of a peer address only, so a
-  reset index by token, covering every connection of a peer, is 4.2a's next item.
+  and a datagram under 21 bytes is never a reset. The hosts find its connection by its token (S48).
 - **Connecting.** `QuicClient::connect()` takes a slot, issues a sequence 0 ID of the ingress's length (8 to 20
   bytes, so many connections to one or many servers share one socket), draws a 16-byte first Destination Connection
   ID from the provider (section 7.2) and starts the connection, optionally under another TLS context (a server name
@@ -887,6 +885,42 @@ client runs ending it; a Retry taken and its NEW_TOKEN token proving the next co
 address dropped; the pool's bounds, stale handles, a TLS context per connection, every configuration and allocation
 refusal; and a client host on the host's loopback. `test_quic_server.cpp` runs unchanged on `QuicHost`;
 `test_io_loop.cpp` holds the short reset; `crd-fuzz-net-ingress` runs every input through a client's ingress too.
+
+<a id="quic-reset-index"></a>
+**S48. A reset found by its token** (4.2a, threat T10;
+[quic_host.hpp](../../engine/foundation/net/include/crd/net/quic_host.hpp); 2026-11-09). Source: RFC 9000 sections
+10.3.1, 10.3.2 and 21.11. An index of a peer address and its first connection left a client's second connection to
+one server, or a server's second connection from one address, unable to be reset, and its 22-byte IPv6 key was over
+`ConnectionIdTable`'s 20 and never inserted, so no IPv6 peer's reset was found (5ca261ef). The hosts now hold one table
+from a live token to its slot, the connection's `watch_reset`/`unwatch_reset` feed it through `QuicConnectionIds`: a
+token is live once it is known and its ID has been sent to (the server's first token arrives after the client's first
+packet to that ID), and ends with the ID's retirement or the connection's close. Capacity is
+`connections * kQuicMaxPeerConnectionIds`. The table's secret SipHash key compares bytes only after a 64-bit keyed hash
+matched, so the walk says nothing of a token's value; the connection then compares in constant time and the host
+requires the token's connection's peer address. A token repeated across connections stays its first holder's, which
+only a peer repeating its own tokens can cause. One token under two IDs of a connection is PROTOCOL_VIOLATION (section
+10.3.2's MAY), so a connection never holds the same live token twice.
+
+Evidence: `test_quic_client.cpp` (three connections to one server, the reset ending the one it names),
+`test_quic_server.cpp` (an IPv6 peer with a zone, a retired token and a token from another address ending nothing),
+`test_quic_connection.cpp` (exactly when the host learns and forgets a token; one token under two IDs; the first
+holder's table entry).
+
+<a id="ticket-cache"></a>
+**S49. The client's ticket cache** (4.2a, threats T07 and T15;
+[ticket_cache.hpp](../../engine/foundation/net/include/crd/net/ticket_cache.hpp); 2026-11-09). Sources: RFC 9846
+sections 4.6.1 and C.4, RFC 9369 section 5. `TicketCache` is the store a `QuicClient` uses when its configuration names
+none: fixed entries of a fixed size taken at construction, at most `per_binding` under one binding (one server name,
+pin set and QUIC version, so a server flooding NewSessionTicket replaces only its own), the oldest replaced when full;
+`take()` hands the newest ticket of a binding out once; no ticket stays past `max_age_ns`, at most seven days, and the
+provider checks a ticket's shorter lifetime when offering it. A dropped ticket is zeroed at once and bytes handed out
+on the next call. One client is one correlation domain (T15): a client meant to be unlinkable keeps a store and a socket
+of its own. `QuicClientConfig::tickets.entries = 0` keeps none, and a store in `connection.tickets` replaces it.
+
+Evidence: `test_ticket_cache.cpp` (every refusal, order and single use, both bounds, the size at its edge, the age to
+the nanosecond, and each way a ticket leaves memory read back from a retaining allocator), `test_quic_client.cpp` (a
+resumed connection's 0-RTT from the client's own cache in both versions, a cache turned off, a caller's store, expiry
+within a turn), and `crd-fuzz-net-ticket-cache` (keeps, takes and clock steps against a model of the contract).
 
 <a id="admission"></a>
 ## Bounded admission

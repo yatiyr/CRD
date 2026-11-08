@@ -67,6 +67,13 @@ crd_fuzz_target(crd-fuzz-net-quic-stream-set
 crd_fuzz_target(crd-fuzz-net-quic-datagram
     SOURCES fuzz_quic_datagram.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-datagram")
 
+# A client's ticket store (4.2a).
+#   crd-fuzz-net-ticket-cache   any keeps, takes and clock steps under any bounds, against a model of the contract:
+#                               every ticket returned byte-exact and once, the newest of its binding, the size and
+#                               every counter as predicted, nothing allocated.
+crd_fuzz_target(crd-fuzz-net-ticket-cache
+    SOURCES fuzz_ticket_cache.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-ticket-cache")
+
 # A QUIC connection (4.2a).
 #   crd-fuzz-net-quic-connection   a network script between a client and a server (deliveries, losses, duplicates,
 #                                  reorders, corrupted bytes, time, a Retry), then a clean path: the handshake confirms

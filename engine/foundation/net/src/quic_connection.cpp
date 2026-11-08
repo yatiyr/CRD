@@ -157,6 +157,26 @@ void QuicRoutedIds::retire(cont::ConstSpan<u8> id) noexcept
     static_cast<void>(m_routes.erase(id));
 }
 
+void QuicConnectionIds::watch_reset(cont::ConstSpan<u8>) noexcept {}
+
+void QuicConnectionIds::unwatch_reset(cont::ConstSpan<u8>) noexcept {}
+
+void QuicRoutedIds::watch_reset(cont::ConstSpan<u8> token) noexcept
+{
+    if (m_peer_tokens != nullptr)
+    {
+        static_cast<void>(m_peer_tokens->insert(token, m_connection)); // a token held already stays its first holder's
+    }
+}
+
+void QuicRoutedIds::unwatch_reset(cont::ConstSpan<u8> token) noexcept
+{
+    if (m_peer_tokens != nullptr && m_peer_tokens->find(token) == m_connection)
+    {
+        static_cast<void>(m_peer_tokens->erase(token));
+    }
+}
+
 // ---- Events ----
 
 void QuicConnection::Events::on_acked(QuicSpace space, const QuicSentPacket& packet) noexcept
@@ -1079,6 +1099,7 @@ bool QuicConnection::read_peer_parameters(u64 now_ns) noexcept
     {
         std::memcpy(m_peer_cids[0].reset_token, m_peer.stateless_reset_token, kQuicResetTokenBytes);
         m_peer_cids[0].has_token = true;
+        watch(m_peer_cids[0]);
     }
     restart_idle(now_ns);
     return true;
@@ -1095,6 +1116,22 @@ bool QuicConnection::owe_retire(u64 sequence, u64 now_ns) noexcept
     m_retire_owed[m_retire_owed_count++] = sequence;
     ++m_retire_outstanding;
     return true;
+}
+
+void QuicConnection::watch(const PeerCid& held) noexcept
+{
+    if (m_config.ids != nullptr && held.has_token && held.used)
+    {
+        m_config.ids->watch_reset(cont::ConstSpan<u8>(held.reset_token, kQuicResetTokenBytes));
+    }
+}
+
+void QuicConnection::unwatch(const PeerCid& held) noexcept
+{
+    if (m_config.ids != nullptr && held.has_token && held.used)
+    {
+        m_config.ids->unwatch_reset(cont::ConstSpan<u8>(held.reset_token, kQuicResetTokenBytes));
+    }
 }
 
 bool QuicConnection::new_connection_id(const QuicFrame& frame, u64 now_ns) noexcept
@@ -1120,7 +1157,9 @@ bool QuicConnection::new_connection_id(const QuicFrame& frame, u64 now_ns) noexc
             }
             return true;
         }
-        if (same_id)
+        // One ID under two sequences, or one token under two IDs (section 10.3.2).
+        if (same_id ||
+            (held.has_token && std::memcmp(held.reset_token, frame.reset_token.data(), kQuicResetTokenBytes) == 0))
         {
             fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
             return false;
@@ -1139,6 +1178,7 @@ bool QuicConnection::new_connection_id(const QuicFrame& frame, u64 now_ns) noexc
         {
             if (m_peer_cids[index].sequence < m_retire_prior_to)
             {
+                unwatch(m_peer_cids[index]);
                 if (!owe_retire(m_peer_cids[index].sequence, now_ns))
                 {
                     return false;
@@ -1292,6 +1332,11 @@ void QuicConnection::finish() noexcept
             {
                 m_config.ids->retire(m_local_ids[index].id.view());
             }
+        }
+        for (usize index = 0U; index < m_peer_cid_count; ++index)
+        {
+            unwatch(m_peer_cids[index]);
+            m_peer_cids[index].used = false;
         }
     }
     m_local_id_count = 0U;
@@ -1814,9 +1859,10 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     // 0-RTT packets keep the original version (RFC 9369 section 4.1).
     spec.version = static_cast<u32>(early ? m_protection.original_version() : m_protection.version());
     spec.dcid = peer_cid();
-    if (m_peer_cid_current < m_peer_cid_count)
+    if (m_peer_cid_current < m_peer_cid_count && !m_peer_cids[m_peer_cid_current].used)
     {
         m_peer_cids[m_peer_cid_current].used = true; // its token is checked from now on (section 10.3.1)
+        watch(m_peer_cids[m_peer_cid_current]);
     }
     spec.scid = m_local_cid.view();
     if (space == QuicSpace::Initial && m_config.side == crypto::QuicSide::Client)

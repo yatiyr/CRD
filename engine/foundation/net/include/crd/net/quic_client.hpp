@@ -13,6 +13,9 @@
 //   tokens    a NEW_TOKEN token a connection receives is remembered for its server's address and port and the version
 //             the connection ran (RFC 9369 section 5) in a fixed table, the oldest replaced when full, and carried by
 //             the next connection there once: a client does not reuse a token (section 8.1.3).
+//   tickets   unless the configuration names its own store, the client keeps the TLS session tickets its connections
+//             receive in a TicketCache (ticket_cache.hpp), its connections' one correlation domain: a client meant to
+//             be unlinkable from another shares neither its tickets nor its socket.
 //   versions  a connection whose server answers with Version Negotiation listing a version of the client's
 //             preference is replaced by one in that version under the same handle (RFC 9368 section 4), with
 //             after_version_negotiation set so the downgrade check runs and a second Version Negotiation ends it;
@@ -33,6 +36,7 @@
 #include <crd/net/io_loop.hpp>
 #include <crd/net/quic_connection.hpp>
 #include <crd/net/quic_host.hpp>
+#include <crd/net/ticket_cache.hpp>
 
 namespace crd::memory
 {
@@ -49,11 +53,13 @@ struct QuicClientConfig
     // Every connection's configuration: side Client, with its TLS context (connect() may name another), its version
     // and, in `versions`, the client's preference. The client sets `ids`, `token` and after_version_negotiation; a
     // non-empty `entropy_seed` is varied per connection (QuicHost::build). What its spans view must outlive the client.
+    // `tickets` left null is the client's own TicketCache.
     QuicConnectionConfig connection;
     u32 connections = 16U;        // live connections at most (1 to kQuicMaxHostConnections)
     u32 tokens = 16U;             // servers whose NEW_TOKEN token is remembered (0 to kQuicMaxClientTokens)
     u32 send_slots = 64U;         // datagrams waiting for the host at most
     u64 send_retry_ns = 1000000U; // a connection the busy host held back is served again within 1 ms
+    TicketCacheConfig tickets;    // the client's own store (entries 0: no resumption); unused with connection.tickets
 };
 
 // One connection to start.
@@ -112,6 +118,8 @@ public:
     // The token remembered for `server` and `version`; empty for none (tests and diagnostics: it stays remembered).
     [[nodiscard]] cont::ConstSpan<u8> token_for(const Endpoint& server, crypto::QuicVersion version) const noexcept;
     [[nodiscard]] QuicClientCounters counters() const noexcept;
+    // The client's own store (empty when the configuration names another).
+    [[nodiscard]] const TicketCache& tickets() const noexcept { return m_tickets; }
 
     void on_admit(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept override;
     void on_early(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept override;
@@ -138,6 +146,7 @@ private:
     void service(u32 index, QuicConnection& connection, u64 now_ns) noexcept override;
     [[nodiscard]] bool replace(u32 index, QuicConnection& connection, u64 now_ns) noexcept override;
     void release(u32 index, const QuicConnection& connection) noexcept override;
+    void after_turn(u64 now_ns) noexcept override;
 
     // Builds and starts a connection for slot `index`; null when it refuses.
     [[nodiscard]] QuicConnection* start(u32 index, const Endpoint& server, const QuicConnectionConfig& config,
@@ -149,6 +158,7 @@ private:
     const Ingress& m_ingress;
     QuicClientEvents& m_events;
     QuicClientConfig m_config;
+    TicketCache m_tickets;
     Started* m_started = nullptr; // one per slot
     Kept* m_kept = nullptr;       // `tokens` entries
     u64 m_stamp = 0U;

@@ -25,16 +25,22 @@ bool versions_run(const Ingress& ingress, const QuicConnectionConfig& connection
     return ingress.runs(static_cast<u32>(connection.version)) &&
            std::ranges::all_of(connection.versions, [&ingress](u32 version) { return ingress.runs(version); });
 }
+
+// The client's own store: none when its configuration names another.
+TicketCacheConfig tickets_of(const QuicClientConfig& config) noexcept
+{
+    return (config.connection.tickets == nullptr) ? config.tickets : TicketCacheConfig{.entries = 0U};
+}
 } // namespace
 
 QuicClient::QuicClient(memory::IAllocator& allocator, DatagramSocket& socket, const Ingress& ingress,
                        ConnectionIdTable& routes, const crypto::QuicResetKey& reset, QuicClientEvents& events,
                        const QuicClientConfig& config) noexcept
     : QuicHost(allocator, socket, routes, reset, events, limits_of(config)), m_ingress(ingress), m_events(events),
-      m_config(config)
+      m_config(config), m_tickets(allocator, tickets_of(config))
 {
     const QuicConnectionConfig& connection = config.connection;
-    if (!ingress.ready() || ingress.server() || connection.side != crypto::QuicSide::Client ||
+    if (!m_tickets.ready() || !ingress.ready() || ingress.server() || connection.side != crypto::QuicSide::Client ||
         config.tokens > kQuicMaxClientTokens || !versions_run(ingress, connection) ||
         (!connection.entropy_seed.empty() && connection.entropy_seed.size() != crypto::kPrfKeyBytes))
     {
@@ -65,6 +71,10 @@ QuicClient::QuicClient(memory::IAllocator& allocator, DatagramSocket& socket, co
     }
     m_kept = kept;
     m_started = started;
+    if (connection.tickets == nullptr && config.tickets.entries != 0U)
+    {
+        m_config.connection.tickets = &m_tickets;
+    }
 }
 
 QuicClient::~QuicClient()
@@ -90,6 +100,7 @@ QuicHandle QuicClient::connect(const QuicClientConnect& request, u64 now_ns) noe
         ++m_counters.refused;
         return QuicHandle{};
     }
+    m_tickets.advance(now_ns);
     QuicConnectionConfig config = m_config.connection;
     if (request.tls != nullptr)
     {
@@ -201,6 +212,11 @@ void QuicClient::release(u32 index, const QuicConnection& connection) noexcept
 {
     // The server may have sent a later token than the one first seen.
     keep_token(peer_of(index), connection);
+}
+
+void QuicClient::after_turn(u64 now_ns) noexcept
+{
+    m_tickets.advance(now_ns);
 }
 
 void QuicClient::on_admit(const IngressDecision&, const ReceivedDatagram&, u64) noexcept

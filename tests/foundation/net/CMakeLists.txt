@@ -26,6 +26,7 @@ add_executable(crd-net-tests
     test_quic_transport_parameters.cpp
     test_register_ids.cpp
     test_state_hash.cpp
+    test_ticket_cache.cpp
     test_udp.cpp
     test_wire.cpp
 )

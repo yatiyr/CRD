@@ -501,6 +501,70 @@ TEST_CASE("QUIC server: a full pool answers CONNECTION_REFUSED, a closed connect
     CHECK(fleet->server.connection(fleet->app.last) != nullptr);
 }
 
+TEST_CASE("QUIC server: an IPv6 client's stateless reset is found by its token, and a retired token ends nothing",
+          "[net][4.2a][quic-server]")
+{
+    CountingAllocator client_host;
+    ConnectionIdTable client_routes(client_host, 32U);
+    QuicResetKey client_key;
+    constexpr u8 client_secret[kQuicResetKeyBytes] = {0xC6};
+    REQUIRE(client_key.init(ConstSpan<u8>(client_secret)) == CryptoError::None);
+    QuicRoutedIds client_ids(client_routes, client_key, 0U);
+    Identity identity;
+    auto fleet = std::make_unique<Fleet>(identity, Setup{});
+    constexpr u8 address[16] = {0x20U, 0x01U, 0x0DU, 0xB8U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0x09U};
+    const Endpoint peer{IpAddress::v6(address, 7U), 4433U}; // 22 bytes of address, zone and port
+
+    Client& client = fleet->add(QuicVersion::V1, 0U, peer, nullptr, {}, &client_ids);
+    REQUIRE(fleet->run_until([&] { return client.connection->confirmed() && client.echo(); }));
+    QuicConnection* const served = fleet->server.connection(fleet->app.last);
+    REQUIRE(served != nullptr);
+    CHECK(fleet->server.live_tokens() == 0U); // sequence 0 of a client's IDs carries no token
+
+    // Rotates the client's IDs until the server has sent to a new one, whose token it then holds.
+    const auto rotate = [&]
+    {
+        u8 before[20];
+        const usize bytes = served->peer_cid().size();
+        std::memcpy(before, served->peer_cid().data(), bytes);
+        REQUIRE(client.connection->rotate_connection_ids());
+        REQUIRE(fleet->run_until(
+            [&]
+            {
+                client.connection->ping();
+                return std::memcmp(served->peer_cid().data(), before, bytes) != 0;
+            }));
+        client.connection->ping();
+        fleet->advance(fleet->now + 200U * kMs);
+        CHECK(fleet->server.live_tokens() == 1U);
+    };
+    const auto reset_of = [&](ConstSpan<u8> id, u8(&datagram)[60])
+    {
+        std::memset(datagram, 0x77, sizeof(datagram));
+        datagram[0] = 0x55U;
+        REQUIRE(client_key.token(id, Span<u8>(datagram + sizeof(datagram) - kQuicResetTokenBytes,
+                                              kQuicResetTokenBytes)) == CryptoError::None);
+    };
+    rotate();
+    u8 retired[60];
+    reset_of(served->peer_cid(), retired);
+    rotate();
+    u8 live[60];
+    reset_of(served->peer_cid(), live);
+
+    // The retired ID's token ends nothing, nor does the live one from another address; from the peer's it does.
+    fleet->inject(ConstSpan<u8>(retired), peer, fleet->now + kMs);
+    fleet->inject(ConstSpan<u8>(live), client_peer(3U), fleet->now + kMs);
+    fleet->advance(fleet->now + 5U * kMs);
+    CHECK(fleet->server.counters().peer_resets == 0U);
+    CHECK(served->state() == QuicConnectionState::Established);
+    fleet->inject(ConstSpan<u8>(live), peer, fleet->now + kMs);
+    fleet->advance(fleet->now + 5U * kMs);
+    CHECK(fleet->server.counters().peer_resets == 1U);
+    REQUIRE(fleet->run_until([&] { return fleet->server.live() == 0U; }));
+    CHECK(fleet->server.live_tokens() == 0U);
+}
+
 TEST_CASE("QUIC server: another address is dropped, a late first Initial opens nothing, and a client's stateless reset "
           "ends its connection unanswered",
           "[net][4.2a][quic-server]")

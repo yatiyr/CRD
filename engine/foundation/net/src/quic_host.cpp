@@ -12,24 +12,6 @@ namespace crd::net
 {
 namespace
 {
-constexpr usize kPeerKeyBytes = 16U + 4U + 2U; // an IPv6 address, its zone and a port
-
-// A peer's address, zone and port as the key of the host's peer index: two keys are equal exactly when the endpoints
-// are (Endpoint's operator==).
-usize peer_key(const Endpoint& peer, u8 (&key)[kPeerKeyBytes]) noexcept
-{
-    const cont::ConstSpan<u8> address = peer.address.view();
-    std::memcpy(key, address.data(), address.size());
-    usize at = address.size();
-    for (usize shift = 0U; shift < 32U; shift += 8U)
-    {
-        key[at++] = static_cast<u8>(peer.address.scope >> shift);
-    }
-    key[at++] = static_cast<u8>(peer.port >> 8U);
-    key[at++] = static_cast<u8>(peer.port & 0xFFU);
-    return at;
-}
-
 bool limits_valid(const QuicHostLimits& limits) noexcept
 {
     return limits.connections != 0U && limits.connections <= kQuicMaxHostConnections && limits.send_retry_ns != 0U &&
@@ -40,7 +22,7 @@ bool limits_valid(const QuicHostLimits& limits) noexcept
 QuicHost::QuicHost(memory::IAllocator& allocator, DatagramSocket& socket, ConnectionIdTable& routes,
                    const crypto::QuicResetKey& reset, QuicHostEvents& events, const QuicHostLimits& limits) noexcept
     : m_allocator(allocator), m_socket(socket), m_routes(routes), m_reset(reset), m_events(events), m_limits(limits),
-      m_by_peer(allocator, limits_valid(limits) ? limits.connections : 1U),
+      m_peer_tokens(allocator, limits_valid(limits) ? limits.connections * kQuicHostTokensPerConnection : 1U),
       m_queue(allocator, limits.send_slots, limits.datagram_bytes)
 {
 }
@@ -48,7 +30,8 @@ QuicHost::QuicHost(memory::IAllocator& allocator, DatagramSocket& socket, Connec
 bool QuicHost::open_pool() noexcept
 {
     const u32 count = m_limits.connections;
-    if (m_slots != nullptr || !limits_valid(m_limits) || !m_routes.ready() || !m_by_peer.ready() || !m_queue.ready())
+    if (m_slots != nullptr || !limits_valid(m_limits) || !m_routes.ready() || !m_peer_tokens.ready() ||
+        !m_queue.ready())
     {
         return false;
     }
@@ -74,7 +57,7 @@ bool QuicHost::open_pool() noexcept
     }
     for (u32 index = 0U; index < count; ++index)
     {
-        ::new (static_cast<void*>(ids + index)) QuicRoutedIds(m_routes, m_reset, index);
+        ::new (static_cast<void*>(ids + index)) QuicRoutedIds(m_routes, m_reset, index, &m_peer_tokens);
         slots[index].cell = storage + index;
         slots[index].next_free = (index + 1U < count) ? index + 1U : kNoConnection;
     }
@@ -149,7 +132,6 @@ void QuicHost::enlist(u32 index, QuicConnection& connection, const Endpoint& pee
     slot.cell = &connection;
     slot.connection = &connection;
     slot.peer = peer;
-    index_peer(index);
     ++m_live;
     schedule(index, now_ns);
 }
@@ -161,7 +143,6 @@ void QuicHost::succeed(u32 index, QuicConnection& successor, u64 now_ns) noexcep
     m_spare = slot.cell;
     slot.cell = &successor;
     slot.connection = &successor;
-    index_peer(index);
     schedule(index, now_ns);
 }
 
@@ -185,14 +166,14 @@ void QuicHost::on_route(const IngressDecision& decision, const ReceivedDatagram&
 
 bool QuicHost::on_unrouted(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept
 {
-    if (m_slots == nullptr || decision.header.type != QuicPacketType::OneRtt)
+    if (m_slots == nullptr || decision.header.type != QuicPacketType::OneRtt || datagram.size < kQuicMinResetBytes)
     {
         return false;
     }
-    u8 key[kPeerKeyBytes] = {};
-    const u32 index = m_by_peer.find(cont::ConstSpan<u8>(key, peer_key(datagram.peer, key)));
-    QuicConnection* const connection = live_connection(index); // its peer is the datagram's (peer_key)
-    if (connection == nullptr || !connection->stateless_reset(datagram.storage.first(datagram.size), now_ns))
+    const cont::ConstSpan<u8> whole = datagram.storage.first(datagram.size);
+    const u32 index = m_peer_tokens.find(whole.last(kQuicResetTokenBytes));
+    QuicConnection* const connection = live_connection(index);
+    if (connection == nullptr || !(datagram.peer == m_slots[index].peer) || !connection->stateless_reset(whole, now_ns))
     {
         return false;
     }
@@ -345,7 +326,6 @@ void QuicHost::reclaim(u32 index, u64 now_ns) noexcept
 {
     Slot& slot = m_slots[index];
     unschedule(index);
-    unindex_peer(index);
     if (replace(index, *slot.connection, now_ns))
     {
         return;
@@ -359,29 +339,6 @@ void QuicHost::reclaim(u32 index, u64 now_ns) noexcept
     m_free = index;
     --m_live;
     ++m_counters.closed;
-}
-
-void QuicHost::index_peer(u32 index) noexcept
-{
-    Slot& slot = m_slots[index];
-    u8 key[kPeerKeyBytes] = {};
-    slot.peer_indexed = m_by_peer.insert(cont::ConstSpan<u8>(key, peer_key(slot.peer, key)), index) == RouteError::None;
-}
-
-void QuicHost::unindex_peer(u32 index) noexcept
-{
-    Slot& slot = m_slots[index];
-    if (!slot.peer_indexed)
-    {
-        return;
-    }
-    u8 key[kPeerKeyBytes] = {};
-    const cont::ConstSpan<u8> peer(key, peer_key(slot.peer, key));
-    if (m_by_peer.find(peer) == index)
-    {
-        static_cast<void>(m_by_peer.erase(peer));
-    }
-    slot.peer_indexed = false;
 }
 
 // ---- The heap ----

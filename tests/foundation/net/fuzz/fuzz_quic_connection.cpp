@@ -151,11 +151,14 @@ Identity& identity()
 struct Host
 {
     ConnectionIdTable routes;
+    ConnectionIdTable tokens;
     QuicResetKey key;
     QuicRoutedIds ids;
 
     Host(crd::memory::IAllocator& allocator, u32 index, ConstSpan<u8> sequence0)
-        : routes(allocator, 32U, ConstSpan<u8>(kSeeds[index], kPrfKeyBytes)), ids(routes, key, index)
+        : routes(allocator, 32U, ConstSpan<u8>(kSeeds[index], kPrfKeyBytes)),
+          tokens(allocator, kQuicMaxPeerConnectionIds, ConstSpan<u8>(kSeeds[index], kPrfKeyBytes)),
+          ids(routes, key, index, &tokens)
     {
         u8 secret[kQuicResetKeyBytes] = {static_cast<u8>(0xA0U + index)};
         CRD_FUZZ_REQUIRE(key.init(ConstSpan<u8>(secret)) == CryptoError::None);
@@ -166,6 +169,9 @@ struct Host
     void check(const QuicConnection& end) const
     {
         CRD_FUZZ_REQUIRE(end.state() == QuicConnectionState::Idle || routes.size() == end.local_cid_count());
+        // Its peer tokens stay within the IDs held, and none outlives the connection.
+        CRD_FUZZ_REQUIRE(tokens.size() <= end.peer_cid_count());
+        CRD_FUZZ_REQUIRE(end.state() != QuicConnectionState::Closed || tokens.size() == 0U);
     }
 };
 

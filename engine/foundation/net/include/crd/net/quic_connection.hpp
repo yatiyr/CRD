@@ -104,6 +104,10 @@ public:
     [[nodiscard]] virtual bool token(cont::ConstSpan<u8> id, cont::Span<u8> token) noexcept = 0;
     // Stops routing `id`: the peer retired it, or the connection closed (every ID it holds, sequence 0 included).
     virtual void retire(cont::ConstSpan<u8> id) noexcept = 0;
+    // The peer's stateless reset `token` is live: the connection has sent to its ID, which is not retired (RFC 9000
+    // section 10.3.1). A host that matches datagrams for no connection against tokens keeps it until unwatch_reset().
+    virtual void watch_reset(cont::ConstSpan<u8> token) noexcept;
+    virtual void unwatch_reset(cont::ConstSpan<u8> token) noexcept;
 
 protected:
     QuicConnectionIds() = default;
@@ -114,21 +118,25 @@ protected:
 };
 
 // The host side over a loop's ConnectionIdTable and its endpoint's QuicResetKey: IDs drawn from the provider's
-// randomness and routed to `connection`.
+// randomness and routed to `connection`, and, in `peer_tokens` when given, the connection's live peer tokens.
 class QuicRoutedIds final : public QuicConnectionIds
 {
 public:
-    QuicRoutedIds(ConnectionIdTable& routes, const crypto::QuicResetKey& reset, u32 connection) noexcept
-        : m_routes(routes), m_reset(reset), m_connection(connection)
+    QuicRoutedIds(ConnectionIdTable& routes, const crypto::QuicResetKey& reset, u32 connection,
+                  ConnectionIdTable* peer_tokens = nullptr) noexcept
+        : m_routes(routes), m_reset(reset), m_peer_tokens(peer_tokens), m_connection(connection)
     {
     }
     [[nodiscard]] bool issue(cont::Span<u8> id, cont::Span<u8> token) noexcept override;
     [[nodiscard]] bool token(cont::ConstSpan<u8> id, cont::Span<u8> token) noexcept override;
     void retire(cont::ConstSpan<u8> id) noexcept override;
+    void watch_reset(cont::ConstSpan<u8> token) noexcept override;
+    void unwatch_reset(cont::ConstSpan<u8> token) noexcept override;
 
 private:
     ConnectionIdTable& m_routes;
     const crypto::QuicResetKey& m_reset;
+    ConnectionIdTable* m_peer_tokens = nullptr;
     u32 m_connection = kNoConnection;
 };
 
@@ -439,6 +447,9 @@ private:
     void read_held(u64 now_ns) noexcept;
     [[nodiscard]] bool new_connection_id(const QuicFrame& frame, u64 now_ns) noexcept;
     [[nodiscard]] bool owe_retire(u64 sequence, u64 now_ns) noexcept;
+    // The host learns or forgets a peer ID's token, which counts once it is known and the ID has been sent to.
+    void watch(const PeerCid& held) noexcept;
+    void unwatch(const PeerCid& held) noexcept;
     [[nodiscard]] bool retire_local(u64 sequence, u64 now_ns) noexcept;
     [[nodiscard]] usize local_index(cont::ConstSpan<u8> id) const noexcept;
     // Issues IDs until the peer holds its active_connection_id_limit of this side's (after confirmation).

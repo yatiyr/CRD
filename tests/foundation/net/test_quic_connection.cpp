@@ -2019,6 +2019,13 @@ TEST_CASE("QUIC connection: the peer's connection IDs are held to the limit and 
         RawRun run(identity);
         run.handshake();
         issue(run, 1U, 0U, id1, token1);
+        issue(run, 2U, 0U, id2, token1); // one token under two IDs (section 10.3.2)
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+    }
+    {
+        RawRun run(identity);
+        run.handshake();
+        issue(run, 1U, 0U, id1, token1);
         issue(run, 2U, 2U, id2, token2); // retires 0 and 1: the server moves to 2 and says so
         CHECK(run.server.state() == QuicConnectionState::Established);
         CHECK(run.server.peer_cid_count() == 1U);
@@ -2790,6 +2797,16 @@ public:
         ++retired;
         m_ids.retire(id);
     }
+    void watch_reset(ConstSpan<u8> token) noexcept override
+    {
+        ++watches;
+        std::memcpy(watched, token.data(), sizeof(watched));
+    }
+    void unwatch_reset(ConstSpan<u8> token) noexcept override
+    {
+        ++unwatches;
+        std::memcpy(unwatched, token.data(), sizeof(unwatched));
+    }
 
     // The token `key` derives for `id`.
     void token_of(ConstSpan<u8> id, u8 (&out)[kQuicResetTokenBytes]) const
@@ -2804,6 +2821,10 @@ public:
     bool refuse = false;
     u8 ids[16][20] = {};
     u8 tokens[16][kQuicResetTokenBytes] = {};
+    usize watches = 0U;
+    usize unwatches = 0U;
+    u8 watched[kQuicResetTokenBytes] = {};
+    u8 unwatched[kQuicResetTokenBytes] = {};
 
 private:
     QuicRoutedIds m_ids;
@@ -3083,6 +3104,89 @@ struct HostedPair
     std::unique_ptr<Net> net;
 };
 } // namespace
+
+TEST_CASE("QUIC connection: the host learns a peer's token once it is known and used, and forgets it when its ID "
+          "retires or the connection closes",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    HostedPair pair(identity);
+    u8 first[kQuicResetTokenBytes];
+    pair.server_host.token_of(ConstSpan<u8>(kServerCid, sizeof(kServerCid)), first);
+    // The client's token came with the server's parameters, after its first packet to that ID; the server's first
+    // ID from the client carries no token, and the IDs the peers issued are not used yet.
+    CHECK(pair.client_host.watches == 1U);
+    CHECK(std::memcmp(pair.client_host.watched, first, sizeof(first)) == 0);
+    CHECK(pair.client_host.unwatches == 0U);
+    CHECK(pair.server_host.watches == 0U);
+
+    REQUIRE(pair.server.rotate_connection_ids());
+    REQUIRE(pair.net->run_until([&] { return pair.server.local_cid_count() == 4U && pair.net->in_flight() == 0U; }));
+    pair.net->advance(pair.net->now + 200U * kMs);
+    pair.client.ping();
+    REQUIRE(pair.net->run_until([&] { return pair.net->in_flight() == 0U; }));
+    u8 second[kQuicResetTokenBytes];
+    pair.server_host.token_of(pair.client.peer_cid(), second);
+    CHECK(pair.client_host.watches == 2U);
+    CHECK(std::memcmp(pair.client_host.watched, second, sizeof(second)) == 0);
+    CHECK(pair.client_host.unwatches == 1U);
+    CHECK(std::memcmp(pair.client_host.unwatched, first, sizeof(first)) == 0);
+
+    // More packets to the ID in use change nothing; the close forgets it, and the connection's end does not again.
+    pair.client.ping();
+    REQUIRE(pair.net->run_until([&] { return pair.net->in_flight() == 0U; }));
+    CHECK(pair.client_host.watches == 2U);
+    pair.client.close(7U, {}, pair.net->now);
+    REQUIRE(pair.net->run_until([&] { return pair.client.state() == QuicConnectionState::Closed; }));
+    CHECK(pair.client_host.unwatches == 2U);
+    CHECK(std::memcmp(pair.client_host.unwatched, second, sizeof(second)) == 0);
+    CHECK(pair.client_host.watches == 2U);
+
+    // The connection's destruction after its close forgets nothing a second time.
+    CountingAllocator allocator;
+    Host client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid)));
+    Host server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    {
+        QuicConnection client(allocator,
+                              hosted(config_for(QuicSide::Client, identity, QuicVersion::V1), client_host, 4U));
+        QuicConnection server(allocator,
+                              hosted(config_for(QuicSide::Server, identity, QuicVersion::V1, 1U), server_host, 2U));
+        connect(client);
+        auto net = std::make_unique<Net>(client, server);
+        settle(*net, client, server, 2U, 4U);
+        client.close(7U, {}, net->now);
+        REQUIRE(net->run_until([&] { return client.state() == QuicConnectionState::Closed; }));
+        CHECK(client_host.unwatches == 1U);
+    }
+    CHECK(client_host.unwatches == 1U);
+}
+
+TEST_CASE("QUIC connection: a host's token table keeps a token for its first holder", "[net][4.2a][quic-connection]")
+{
+    CountingAllocator allocator;
+    ConnectionIdTable routes(allocator, 4U);
+    ConnectionIdTable tokens(allocator, 4U);
+    QuicResetKey key;
+    constexpr u8 secret[kQuicResetKeyBytes] = {0x3CU};
+    REQUIRE(key.init(ConstSpan<u8>(secret)) == CryptoError::None);
+    QuicRoutedIds first(routes, key, 0U, &tokens);
+    QuicRoutedIds second(routes, key, 1U, &tokens);
+    QuicRoutedIds without(routes, key, 2U);
+    constexpr u8 token[kQuicResetTokenBytes] = {0x11U};
+    const ConstSpan<u8> view(token);
+
+    first.watch_reset(view);
+    CHECK(tokens.find(view) == 0U);
+    second.watch_reset(view); // a peer repeating its own token across connections reaches the first alone
+    CHECK(tokens.find(view) == 0U);
+    second.unwatch_reset(view);
+    CHECK(tokens.find(view) == 0U);
+    first.unwatch_reset(view);
+    CHECK(tokens.find(view) == kNoConnection);
+    without.watch_reset(view); // a table is optional
+    without.unwatch_reset(view);
+    CHECK(tokens.size() == 0U);
+}
 
 TEST_CASE("QUIC connection: a stateless reset drains the connection, by the token of a used, unretired ID alone",
           "[net][4.2a][quic-connection]")

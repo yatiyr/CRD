@@ -14,8 +14,10 @@
 //             once per turn: its timeout, the host's service (the application's turn), then its datagrams into the
 //             host's SendQueue until it has none or the host is busy (served again within `send_retry_ns`). The
 //             deadlines are a binary min-heap, so a turn costs O(log n) per connection served, never a scan.
-//   reset     a short header for no connection from a connection's peer address is checked as that peer's stateless
-//             reset (section 10.3.1); an address is indexed by the first of its connections.
+//   reset     a short header for no connection is looked up by its last 16 bytes among every connection's live peer
+//             tokens, a table under a secret SipHash key whose walk says nothing of a token's value, and checked as a
+//             stateless reset by the connection the token belongs to, in constant time and only from that
+//             connection's peer address (sections 10.3.1 and 21.11).
 //   close     a Closed connection is reported (QuicHostEvents::on_closed), destroyed (its IDs leave the table) and
 //             its slot reused under a new generation.
 //   memory    the pool, the heap and the send queue come from the injected allocator at construction; a connection's
@@ -38,6 +40,9 @@ class IAllocator;
 namespace crd::net
 {
 inline constexpr u32 kQuicMaxHostConnections = u32{1} << 20U;
+
+// The peer tokens a connection can have live: one per peer ID it holds.
+inline constexpr u32 kQuicHostTokensPerConnection = static_cast<u32>(kQuicMaxPeerConnectionIds);
 
 // A connection as the application holds it.
 struct QuicHandle
@@ -107,6 +112,8 @@ public:
 
     [[nodiscard]] u32 live() const noexcept { return m_live; }
     [[nodiscard]] u32 queued() const noexcept { return m_queue.queued(); }
+    // The peer tokens the host matches stateless resets against (diagnostics and tests).
+    [[nodiscard]] u32 live_tokens() const noexcept { return m_peer_tokens.size(); }
 
 protected:
     // `routes` is the loop's table, `reset` derives the stateless reset tokens of the IDs the host issues; both and
@@ -159,7 +166,6 @@ private:
         u32 generation = 0U;
         u32 heap = kNotQueued; // its place in the heap
         u32 next_free = kNoConnection;
-        bool peer_indexed = false;
     };
 
     // Serves the connection of slot `index` before its datagrams are sent: the application's turn and what the host
@@ -177,8 +183,6 @@ private:
     [[nodiscard]] bool drain(Slot& slot, u64 now_ns) noexcept;
     void flush() noexcept;
     void reclaim(u32 index, u64 now_ns) noexcept;
-    void index_peer(u32 index) noexcept;
-    void unindex_peer(u32 index) noexcept;
 
     // The heap of live connections by due_ns.
     void unschedule(u32 index) noexcept;
@@ -192,7 +196,7 @@ private:
     const crypto::QuicResetKey& m_reset;
     QuicHostEvents& m_events;
     QuicHostLimits m_limits;
-    ConnectionIdTable m_by_peer; // a peer address and port to the first of its connections
+    ConnectionIdTable m_peer_tokens; // every connection's live stateless reset tokens to its slot
     SendQueue m_queue;
     Slot* m_slots = nullptr;
     QuicConnection* m_storage = nullptr; // uninitialised storage for `connections` + 1
