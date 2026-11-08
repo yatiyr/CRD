@@ -48,14 +48,16 @@ std::atomic<crd::u64> g_starv_last_compl    {0};
 std::atomic<bool>     g_low_ran             {false};
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
+// The report's fields are stored before its fire count is published (release), so a reader that sees the count
+// (acquire) sees the fields: publishing the count first let the test read a backlog of 0 between the two stores.
 void record_starv(const crd::jobs::StarvationReport& r, void* /*user*/) noexcept
 {
-    if (r.lane < 3U)
-    {
-        g_starv_fires[r.lane].fetch_add(1, std::memory_order_relaxed);
-    }
     g_starv_last_backlog.store(r.backlog, std::memory_order_relaxed);
     g_starv_last_compl.store(r.completions, std::memory_order_relaxed);
+    if (r.lane < 3U)
+    {
+        g_starv_fires[r.lane].fetch_add(1, std::memory_order_release);
+    }
 }
 
 void noop_job(void* /*data*/) noexcept {}
@@ -180,12 +182,12 @@ TEST_CASE("starvation watchdog: a Low lane flooded by Normal work is reported as
 
     // Poll (bounded) for the watchdog to report Low starvation -- it fires after K=3 windows (~60ms). main does
     // not pump while polling (sleep, not wait), so only the busy worker drains, keeping Low starved.
-    for (int i = 0; i < 400 && g_starv_fires[kLow].load(std::memory_order_relaxed) == 0; ++i)
+    for (int i = 0; i < 400 && g_starv_fires[kLow].load(std::memory_order_acquire) == 0; ++i)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    CHECK(g_starv_fires[kLow].load(std::memory_order_relaxed) >= 1);   // the Low lane was reported starved
+    CHECK(g_starv_fires[kLow].load(std::memory_order_acquire) >= 1);   // the Low lane was reported starved
     CHECK(g_starv_fires[kHigh].load(std::memory_order_relaxed) == 0);  // High has no backlog -> never flagged
     CHECK(g_starv_last_backlog.load(std::memory_order_relaxed) >= 1U); // the waiting Low job at detection
     CHECK_FALSE(g_low_ran.load(std::memory_order_acquire));            // still starved: it has not run yet
