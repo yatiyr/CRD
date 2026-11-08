@@ -105,7 +105,10 @@ QuicPacketError append(QuicPacketProtection& from, Buffer& datagram, const QuicP
     QuicPacketWriter writer;
     REQUIRE(writer.begin(spec, datagram.rest(room)));
     REQUIRE(frames.size() <= writer.frames().size());
-    std::memcpy(writer.frames().data(), frames.data(), frames.size());
+    if (!frames.empty())
+    {
+        std::memcpy(writer.frames().data(), frames.data(), frames.size()); // an empty span may hold null
+    }
     usize written = 0U;
     const QuicPacketError error = from.seal(writer, frames.size(), padding, written);
     if (error == QuicPacketError::None)

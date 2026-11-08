@@ -699,7 +699,8 @@ TEST_CASE("S1 drops what no server takes and answers unsupported versions only f
     IngressConfig v1_only;
     v1_only.version_count = 1U;
     Server narrow(tight_rules(), v1_only);
-    const IngressDecision v2 = narrow.classify(initial(kV2, view_of(kClientDcid, 8U), view_of(kClientScid, 4U)));
+    const Datagram v2_initial = initial(kV2, view_of(kClientDcid, 8U), view_of(kClientScid, 4U));
+    const IngressDecision v2 = narrow.classify(v2_initial); // views v2_initial, which answer() reads
     REQUIRE(v2.action == IngressAction::NegotiateVersion);
     const usize v2_written = narrow.ingress.answer(v2, kPeer, kUnix, Span<u8>(answer));
     REQUIRE(v2_written == 1U + 4U + 1U + 4U + 1U + 8U + 8U);
@@ -891,8 +892,9 @@ TEST_CASE("A short header for no connection draws a stateless reset shorter than
     {
         for (u32 round = 0U; round < 64U; ++round)
         {
-            const IngressDecision decision = ingress.classify(short_packet(view_of(unknown, 16U), trigger).view(),
-                                                              false, kPeer, kSecond + round, kUnix);
+            const Datagram trigger_packet = short_packet(view_of(unknown, 16U), trigger);
+            const IngressDecision decision =
+                ingress.classify(trigger_packet.view(), false, kPeer, kSecond + round, kUnix);
             REQUIRE(decision.action == IngressAction::StatelessReset);
             CHECK(decision.datagram_bytes == trigger);
             u8 answer[kQuicMaxStatelessAnswerBytes] = {};
@@ -923,8 +925,8 @@ TEST_CASE("A short header for no connection draws a stateless reset shorter than
     CHECK(ingress.counters().resets == 64U * (sizeof(triggers) / sizeof(triggers[0])));
 
     // An answer too small for the reset, or a decision built without a key, writes nothing.
-    const IngressDecision decision =
-        ingress.classify(short_packet(view_of(unknown, 16U), 1200U).view(), false, kPeer, 2U * kSecond, kUnix);
+    const Datagram long_trigger = short_packet(view_of(unknown, 16U), 1200U);
+    const IngressDecision decision = ingress.classify(long_trigger.view(), false, kPeer, 2U * kSecond, kUnix);
     u8 tiny[kQuicMinResetBytes] = {};
     CHECK(ingress.answer(decision, kPeer, kUnix, Span<u8>(tiny)) == 0U);
     Ingress keyless(IngressConfig{}, routes, buckets, nullptr, nullptr);

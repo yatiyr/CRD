@@ -198,7 +198,8 @@ public:
                                            u64 now_ns, u64 unix_seconds) noexcept;
 
     // The Retry, Version Negotiation or stateless reset packet a decision asks for, into `out`
-    // (kQuicMaxStatelessAnswerBytes); returns its bytes, zero when it could not be built (counted).
+    // (kQuicMaxStatelessAnswerBytes); returns its bytes, zero when it could not be built (counted). The decision's
+    // header views the classified datagram, which must still be alive.
     [[nodiscard]] usize answer(const IngressDecision& decision, const Endpoint& peer, u64 unix_seconds,
                                cont::Span<u8> out) noexcept;
 
