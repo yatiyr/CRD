@@ -16,7 +16,10 @@
 // 9368 section 2.3, RFC 9369 sections 4.1 and 5): a server switching both ways over hostile paths and after a Retry,
 // long headers never going back to the original version, no switch where either side does not offer one, a client
 // settled by CRYPTO data in the original version or closing on CRYPTO data in it after the switch, parameters that do
-// not parse or name another version closing with their transport error, and tokens of the version a connection ran.
+// not parse or name another version closing with their transport error, and tokens of the version a connection ran;
+// and 0-RTT (RFC 9000 section 7.4.1, RFC 9001 sections 4.1.4, 4.6, 4.9.3 and 5.7, RFC 9002 section 6.4): a resumed
+// client's streams and datagrams read by the server before its handshake completes and marked replayable, over
+// hostile paths and after a Retry, four rejections resetting the client, and packets held for their keys.
 
 #include "ingress_fixture.hpp"
 #include "quic_stream_fixture.hpp"
@@ -27,6 +30,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
+#include <ctime>
 #include <memory>
 
 namespace
@@ -64,7 +68,13 @@ constexpr u8 kTokenKey[kQuicTokenKeyBytes] = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15
                                               0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F};
 const Endpoint kClientPeer{IpAddress::v4(192, 0, 2, 9), 4433U};
 
-// A server key and the client and server contexts that trust it; `wrong_pin` makes the client pin another key.
+constexpr u8 kTicketKey[kTlsTicketKeyBytes] = {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA,
+                                               0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5,
+                                               0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF};
+
+// A server key and the client and server contexts that trust it; `wrong_pin` makes the client pin another key. With
+// an `early` replay filter both ends configure early data (0-RTT) under one ticket key, and `plain` is a server of
+// the same fleet that takes none.
 struct Identity
 {
     SigningKey key;
@@ -72,8 +82,9 @@ struct Identity
     TlsCredential credential;
     TlsContext client;
     TlsContext server;
+    TlsContext plain;
 
-    explicit Identity(bool wrong_pin = false)
+    explicit Identity(bool wrong_pin = false, ReplayFilter* early = nullptr)
     {
         u8 seed[32];
         for (usize i = 0U; i < sizeof(seed); ++i)
@@ -96,6 +107,7 @@ struct Identity
         client_config.pinned = ConstSpan<KeyId>(&pin, 1U);
         client_config.server_name = kServerName;
         client_config.application_protocols = kProtocols;
+        client_config.early_data = early != nullptr;
         REQUIRE(client.init(client_config) == TlsError::None);
 
         TlsConfig server_config;
@@ -105,6 +117,13 @@ struct Identity
         server_config.credential = &credential;
         server_config.server_name = kServerName;
         server_config.application_protocols = kProtocols;
+        if (early != nullptr)
+        {
+            server_config.ticket_key = ConstSpan<u8>(kTicketKey);
+            REQUIRE(plain.init(server_config) == TlsError::None);
+            server_config.early_data = true;
+            server_config.early_data_filter = early;
+        }
         REQUIRE(server.init(server_config) == TlsError::None);
     }
 };
@@ -3305,4 +3324,602 @@ TEST_CASE("QUIC connection: a switching server closes on client parameters that 
         CHECK(run.raw.close_seen); // read under the version 1 keys
         CHECK(run.raw.close_code == static_cast<u64>(expected));
     }
+}
+
+// ---- 0-RTT (RFC 9000 section 7.4.1, RFC 9001 sections 4.1.4, 4.6, 4.9.3 and 5.7, RFC 9002 section 6.4) ----
+
+namespace
+{
+constexpr u64 kTicketPeriod = kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew;
+constexpr u8 kAppContext[] = {0x5C, 0x11, 0xE7, 0x02, 0x9A, 0x43, 0x0D, 0xB8}; // a message schema digest's stand-in
+constexpr u8 kOtherAppContext[] = {0x5C, 0x11, 0xE7, 0x02, 0x9A, 0x43, 0x0D, 0xB9};
+constexpr usize kEarlyBytes = 3000U; // a request that takes three 0-RTT packets
+constexpr u64 kEarlyPattern = 7U;
+constexpr u8 kEarlyPayload[] = {0xDA, 0x7A, 0x01};
+
+// A client's tickets: the newest one kept, each handed out once (T07).
+class Tickets final : public TlsTicketStore
+{
+public:
+    void keep(const TlsBinding& binding, ConstSpan<u8> ticket) noexcept override
+    {
+        if (ticket.size() <= sizeof(m_ticket))
+        {
+            m_binding = binding;
+            std::memcpy(m_ticket, ticket.data(), ticket.size());
+            m_bytes = ticket.size();
+        }
+    }
+
+    ConstSpan<u8> take(const TlsBinding& binding) noexcept override
+    {
+        if (m_bytes == 0U || !(m_binding == binding))
+        {
+            return {};
+        }
+        std::memcpy(m_handed, m_ticket, m_bytes);
+        const usize bytes = m_bytes;
+        m_bytes = 0U;
+        return ConstSpan<u8>(m_handed, bytes);
+    }
+
+    [[nodiscard]] bool holds() const { return m_bytes != 0U; }
+
+private:
+    TlsBinding m_binding;
+    u8 m_ticket[4096] = {};
+    u8 m_handed[4096] = {};
+    usize m_bytes = 0U;
+};
+
+// A replay filter ready before the contexts that hold it are built.
+struct ReadyFilter
+{
+    ReplayFilter filter;
+
+    ReadyFilter()
+    {
+        REQUIRE(filter.init(1024U, kTicketPeriod, static_cast<u64>(std::time(nullptr))) == CryptoError::None);
+    }
+};
+
+// A fleet whose servers accept 0-RTT under one ticket key.
+struct EarlyFleet
+{
+    ReadyFilter replay;
+    Identity identity{false, &replay.filter};
+};
+
+QuicConnectionConfig early_config(QuicSide side, const Identity& identity, QuicVersion version, usize seed,
+                                  Tickets* tickets, ConstSpan<u8> app = ConstSpan<u8>(kAppContext))
+{
+    QuicConnectionConfig config = datagram_config(side, identity, version, seed, true);
+    if (side == QuicSide::Client)
+    {
+        config.tickets = tickets;
+    }
+    else
+    {
+        config.early_context = app;
+    }
+    return config;
+}
+
+// A first connection that leaves `tickets` a ticket of `version` from a server of `identity` with `app`'s context.
+void take_ticket(const Identity& identity, QuicVersion version, Tickets& tickets,
+                 ConstSpan<u8> app = ConstSpan<u8>(kAppContext))
+{
+    CountingAllocator allocator;
+    QuicConnection client(allocator, early_config(QuicSide::Client, identity, version, 0U, &tickets));
+    QuicConnection server(allocator, early_config(QuicSide::Server, identity, version, 1U, nullptr, app));
+    REQUIRE(server.ready());
+    connect(client);
+    CHECK(client.handshake().early_data() == TlsEarlyData::None);
+    auto net = std::make_unique<Net>(client, server);
+    REQUIRE(net->run_until([&] { return both_confirmed(client, server) && tickets.holds(); }));
+}
+
+// What a resumed client writes before its server answered: kEarlyBytes of a stream with its FIN, and one datagram.
+void send_early(QuicConnection& client, u64 now, u64& stream, u64& datagram)
+{
+    REQUIRE(client.streams().open(true, stream) == QuicStreamError::None);
+    u64 offset = 0U;
+    REQUIRE(write_pattern(client.streams(), stream, offset, kEarlyBytes, kEarlyPattern));
+    REQUIRE(client.datagrams().queue(ConstSpan<u8>(kEarlyPayload), now, datagram) == QuicDatagramError::None);
+}
+
+// Counts the 0-RTT packets each end sends, and whether every one is in `original` (RFC 9369 section 4.1).
+class EarlyWatch final : public Filter
+{
+public:
+    explicit EarlyWatch(QuicVersion original) : m_original(static_cast<u32>(original)) {}
+
+    bool drop(usize from, ConstSpan<u8> datagram) override
+    {
+        u8 copy[kDatagram];
+        std::memcpy(copy, datagram.data(), datagram.size());
+        QuicDatagramPackets packets(Span<u8>(copy, datagram.size()),
+                                    static_cast<u8>((from == 0U) ? sizeof(kServerCid) : sizeof(kClientCid)));
+        QuicHeader header;
+        Span<u8> packet;
+        while (packets.next(header, packet))
+        {
+            if (header.type == QuicPacketType::ZeroRtt)
+            {
+                ++early[from];
+                in_original = in_original && header.version == m_original;
+            }
+        }
+        return false;
+    }
+
+    usize early[2] = {};
+    bool in_original = true;
+
+private:
+    u32 m_original = 0U;
+};
+
+// The server's reads of the early stream, each byte checked: true once all of it was read. `early` counts the bytes
+// read that were marked replayable.
+bool read_stream(QuicConnection& server, u64 stream, u64& read, u64& early)
+{
+    QuicStreamSet& set = server.streams();
+    if (set.recv_state(stream) == QuicRecvState::None || set.recv_state(stream) == QuicRecvState::DataRead)
+    {
+        return read == kEarlyBytes;
+    }
+    for (QuicStreamRead peeked = set.peek(stream); !peeked.data.empty() || peeked.fin; peeked = set.peek(stream))
+    {
+        for (usize at = 0U; at < peeked.data.size(); ++at)
+        {
+            REQUIRE(peeked.data[at] == pattern(kEarlyPattern, read + at));
+        }
+        early += peeked.early_bytes;
+        read += peeked.data.size();
+        REQUIRE(set.consume(stream, peeked.data.size()) == QuicStreamError::None);
+        if (peeked.fin)
+        {
+            break;
+        }
+    }
+    return read == kEarlyBytes;
+}
+} // namespace
+
+TEST_CASE("QUIC connection: a resumed client's stream and datagram go in 0-RTT packets, read by the server before "
+          "the handshake completes and marked replayable, in both versions",
+          "[net][4.2a][quic-connection][quic-early]")
+{
+    for (const QuicVersion version : kVersions)
+    {
+        INFO("version " << static_cast<u32>(version));
+        EarlyFleet fleet;
+        Tickets tickets;
+        take_ticket(fleet.identity, version, tickets);
+        CountingAllocator allocator;
+        QuicConnection client(allocator, early_config(QuicSide::Client, fleet.identity, version, 2U, &tickets));
+        QuicConnection server(allocator, early_config(QuicSide::Server, fleet.identity, version, 3U, nullptr));
+        REQUIRE(server.ready());
+        const usize allocations = allocator.calls();
+        connect(client);
+        REQUIRE(client.handshake().early_data() == TlsEarlyData::Offered);
+        CHECK(client.protection().can_send(QuicPacketType::ZeroRtt));
+        CHECK_FALSE(tickets.holds()); // taken once
+        u64 stream = 0U;
+        u64 datagram = 0U;
+        send_early(client, kStartNs, stream, datagram);
+
+        auto net = std::make_unique<Net>(client, server);
+        EarlyWatch watch(version);
+        net->filter = &watch;
+        u64 read = 0U;
+        u64 early = 0U;
+        bool read_handshaking = false;
+        bool opened_one_rtt_early = false;
+        bool datagram_early = false;
+        REQUIRE(net->run_until(
+            [&]
+            {
+                const bool handshaking = server.state() == QuicConnectionState::Handshaking;
+                // RFC 9001 section 5.7: no 1-RTT packet opens before the server's handshake completes.
+                opened_one_rtt_early =
+                    opened_one_rtt_early || (handshaking && server.protection().can_open(QuicPacketType::OneRtt));
+                const u64 before = read;
+                const bool done = read_stream(server, stream, read, early);
+                read_handshaking = read_handshaking || (handshaking && read > before);
+                ConstSpan<u8> payload;
+                if (server.datagrams().peek(payload))
+                {
+                    CHECK(same(payload, ConstSpan<u8>(kEarlyPayload)));
+                    datagram_early = server.datagrams().oldest_early();
+                    server.datagrams().pop();
+                }
+                return done && both_confirmed(client, server);
+            }));
+        CHECK(early == kEarlyBytes); // every byte came in 0-RTT
+        CHECK(read_handshaking);     // half a round trip before the client's Finished
+        CHECK_FALSE(opened_one_rtt_early);
+        CHECK(datagram_early);
+        CHECK(client.handshake().early_data() == TlsEarlyData::Accepted);
+        CHECK(server.handshake().early_data() == TlsEarlyData::Accepted);
+        CHECK(watch.early[0] != 0U);
+        CHECK(watch.early[1] == 0U);
+        CHECK(watch.in_original);
+        CHECK(net->client_initials_padded);
+        CHECK(net->amplification_kept);
+        // Acknowledged in 1-RTT packets (RFC 9000 section 13.2.6), the datagram reports so.
+        QuicDatagramReport report;
+        REQUIRE(net->run_until([&] { return client.datagrams().poll(report); }));
+        CHECK(report.id == datagram);
+        CHECK(report.outcome == QuicDatagramOutcome::Acked);
+
+        // Data after the handshake is not replayable.
+        u64 second = 0U;
+        REQUIRE(client.streams().open(true, second) == QuicStreamError::None);
+        u64 written = 0U;
+        REQUIRE(write_pattern(client.streams(), second, written, 1000U, kEarlyPattern));
+        u64 marked = 0U;
+        REQUIRE(net->run_until(
+            [&]
+            {
+                const QuicStreamRead peeked = server.streams().peek(second);
+                marked += peeked.early_bytes;
+                return !peeked.data.empty() || server.streams().recv_state(second) == QuicRecvState::DataRead;
+            }));
+        CHECK(marked == 0U);
+        // The server's 0-RTT keys go three PTOs after its first 1-RTT packet (RFC 9001 section 4.9.3).
+        CHECK(server.protection().can_open(QuicPacketType::ZeroRtt));
+        net->advance(net->now + 3000U * kMs);
+        CHECK_FALSE(server.protection().can_open(QuicPacketType::ZeroRtt));
+        CHECK(allocator.calls() == allocations);
+    }
+}
+
+TEST_CASE("QUIC connection: 0-RTT over paths that lose, duplicate and reorder delivers every byte once, holding "
+          "packets ahead of their keys",
+          "[net][4.2a][quic-connection][quic-early]")
+{
+    u64 held = 0U;
+    u64 early_total = 0U;
+    for (const QuicVersion version : kVersions)
+    {
+        for (u64 seed = 1U; seed <= 6U; ++seed)
+        {
+            INFO("version " << static_cast<u32>(version) << " seed " << seed);
+            EarlyFleet fleet;
+            Tickets tickets;
+            take_ticket(fleet.identity, version, tickets);
+            CountingAllocator allocator;
+            QuicConnection client(allocator, early_config(QuicSide::Client, fleet.identity, version, seed, &tickets));
+            QuicConnection server(allocator,
+                                  early_config(QuicSide::Server, fleet.identity, version, seed + 1U, nullptr));
+            REQUIRE(server.ready());
+            const usize allocations = allocator.calls();
+            connect(client);
+            u64 stream = 0U;
+            u64 datagram = 0U;
+            send_early(client, kStartNs, stream, datagram);
+            auto net = std::make_unique<Net>(client, server);
+            net->rng.state = seed;
+            for (Path& path : net->path)
+            {
+                path.loss = 100U;
+                path.duplicate = 50U;
+                path.delay_ns = 15U * kMs;
+                path.jitter_ns = 20U * kMs;
+            }
+            u64 read = 0U;
+            u64 early = 0U;
+            REQUIRE(net->run_until(
+                [&] { return read_stream(server, stream, read, early) && both_confirmed(client, server); }));
+            CHECK(client.handshake().early_data() == TlsEarlyData::Accepted);
+            CHECK(early <= kEarlyBytes);
+            CHECK(net->client_initials_padded);
+            CHECK(net->amplification_kept);
+            CHECK(allocator.calls() == allocations);
+            held += client.counters().packets_held + server.counters().packets_held;
+            early_total += early;
+        }
+    }
+    CHECK(held != 0U);        // reordering put packets ahead of their keys, and they were read when the keys came
+    CHECK(early_total != 0U); // and 0-RTT carried data on these paths
+}
+
+TEST_CASE("QUIC connection: a rejected 0-RTT resets every stream and drops the queued datagrams, the server reads "
+          "none of it, and the data goes again in 1-RTT",
+          "[net][4.2a][quic-connection][quic-early]")
+{
+    enum class Refusal : u8
+    {
+        NoEarlyData,  // a server of the fleet without early data
+        OtherContext, // another application context
+        LowerLimit,   // a lower stream window: the parameters' part of the context differs
+        Switch,       // a server that switches versions: the ticket belongs to the original one (RFC 9369 section 5)
+    };
+    const u32 client_versions[] = {static_cast<u32>(QuicVersion::V1), static_cast<u32>(QuicVersion::V2)};
+    const u32 server_versions[] = {static_cast<u32>(QuicVersion::V2), static_cast<u32>(QuicVersion::V1)};
+    for (const Refusal refusal : {Refusal::NoEarlyData, Refusal::OtherContext, Refusal::LowerLimit, Refusal::Switch})
+    {
+        INFO("refusal " << static_cast<u32>(refusal));
+        EarlyFleet fleet;
+        Tickets tickets;
+        take_ticket(fleet.identity, QuicVersion::V1, tickets);
+        CountingAllocator allocator;
+        QuicConnectionConfig client_config =
+            early_config(QuicSide::Client, fleet.identity, QuicVersion::V1, 2U, &tickets);
+        QuicConnectionConfig server_config =
+            early_config(QuicSide::Server, fleet.identity, QuicVersion::V1, 3U, nullptr);
+        switch (refusal)
+        {
+            case Refusal::NoEarlyData:
+                server_config.tls = &fleet.identity.plain;
+                server_config.early_context = {};
+                break;
+            case Refusal::OtherContext:
+                server_config.early_context = ConstSpan<u8>(kOtherAppContext);
+                break;
+            case Refusal::LowerLimit:
+                server_config.streams.stream_window = 4096U;
+                break;
+            case Refusal::Switch:
+                client_config.versions = client_versions;
+                server_config.versions = server_versions;
+                break;
+        }
+        QuicConnection client(allocator, client_config);
+        QuicConnection server(allocator, server_config);
+        REQUIRE(server.ready());
+        connect(client);
+        REQUIRE(client.handshake().early_data() == TlsEarlyData::Offered);
+        u64 stream = 0U;
+        u64 datagram = 0U;
+        send_early(client, kStartNs, stream, datagram);
+        u64 queued = 0U;
+        REQUIRE(client.datagrams().queue(ConstSpan<u8>(kEarlyPayload), kStartNs, queued) == QuicDatagramError::None);
+        auto net = std::make_unique<Net>(client, server);
+        EarlyWatch watch(QuicVersion::V1);
+        net->filter = &watch;
+        REQUIRE(net->run_until([&] { return client.handshake().early_data() == TlsEarlyData::Rejected; }));
+        CHECK(watch.early[0] != 0U); // it was sent
+        // RFC 9001 section 4.6.2: the client's streams start again, and its datagrams are reported lost.
+        CHECK(client.streams().open_streams() == 0U);
+        CHECK(client.streams().send_state(stream) == QuicSendState::None);
+        CHECK(client.datagrams().queued() == 0U);
+        usize lost = 0U;
+        QuicDatagramReport report;
+        while (client.datagrams().poll(report))
+        {
+            CHECK(report.outcome == QuicDatagramOutcome::Lost);
+            ++lost;
+        }
+        CHECK(lost == 2U);
+        REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+        CHECK(server.handshake().early_data() != TlsEarlyData::Accepted);
+        CHECK(server.streams().open_streams() == 0U); // a server rejecting 0-RTT processes none of it
+        CHECK(server.datagrams().held() == 0U);
+        CHECK_FALSE(server.protection().can_open(QuicPacketType::ZeroRtt));
+        if (refusal == Refusal::Switch)
+        {
+            CHECK(client.version() == QuicVersion::V2);
+        }
+        // The application sends it again, in 1-RTT, under the server's own parameters.
+        u64 again = 0U;
+        send_early(client, net->now, again, datagram);
+        CHECK(again == stream);
+        u64 read = 0U;
+        u64 early = 0U;
+        REQUIRE(net->run_until([&] { return read_stream(server, again, read, early); }));
+        CHECK(early == 0U);
+        ConstSpan<u8> payload;
+        REQUIRE(net->run_until([&] { return server.datagrams().peek(payload); }));
+        CHECK_FALSE(server.datagrams().oldest_early());
+        CHECK(client.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC connection: 0-RTT sent before a Retry goes again after it, to the Retry's ID",
+          "[net][4.2a][quic-connection][quic-early]")
+{
+    for (const QuicVersion version : kVersions)
+    {
+        for (u64 round = 0U; round < 3U; ++round)
+        {
+            INFO("version " << static_cast<u32>(version) << " round " << round);
+            EarlyFleet fleet;
+            Tickets tickets;
+            take_ticket(fleet.identity, version, tickets);
+            CountingAllocator allocator;
+            RetryFront front;
+            QuicConnection client(allocator, early_config(QuicSide::Client, fleet.identity, version, 2U, &tickets));
+            QuicConnection server(allocator, early_config(QuicSide::Server, fleet.identity, version, 3U, nullptr));
+            connect(client);
+            u64 stream = 0U;
+            u64 datagram = 0U;
+            send_early(client, kStartNs, stream, datagram);
+            auto net = std::make_unique<Net>(client, server);
+            net->ingress = &front.ingress;
+            net->rng.state = round;
+            if (round != 0U)
+            {
+                for (Path& path : net->path)
+                {
+                    path.loss = 150U;
+                    path.duplicate = 50U;
+                    path.jitter_ns = 8U * kMs;
+                }
+            }
+            u64 read = 0U;
+            u64 early = 0U;
+            REQUIRE(net->run_until(
+                [&] { return read_stream(server, stream, read, early) && both_confirmed(client, server); }));
+            CHECK(client.retried());
+            CHECK(server.retried());
+            CHECK(client.handshake().early_data() == TlsEarlyData::Accepted);
+            if (round == 0U)
+            {
+                CHECK(early == kEarlyBytes); // the 0-RTT packets after the Retry carried all of it
+            }
+            CHECK(net->client_initials_padded);
+        }
+    }
+}
+
+namespace
+{
+// The client's first flight with a request of several packets: its later datagrams hold 0-RTT packets alone. The
+// server accepts the flight's first Initial without reading it.
+usize early_flight(QuicConnection& client, QuicConnection& server, Datagram* flight, usize room)
+{
+    connect(client);
+    u64 id = 0U;
+    REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+    u64 offset = 0U;
+    REQUIRE(write_pattern(client.streams(), id, offset, 6000U, kEarlyPattern));
+    const usize count = collect(client, flight, room, kStartNs);
+    QuicHeader first;
+    REQUIRE(parse_quic_header(flight[0].view(), sizeof(kServerCid), first) == QuicHeaderError::None);
+    REQUIRE(first.type == QuicPacketType::Initial);
+    QuicAccept accept;
+    accept.local_cid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
+    accept.client_dcid = first.dcid;
+    accept.client_scid = first.scid;
+    accept.original_dcid = first.dcid;
+    REQUIRE(server.accept(accept, kStartNs));
+    return count;
+}
+
+// Delivers the flight's datagrams whose first packet is (or is not) a 0-RTT packet, last first; their count.
+usize deliver_flight(QuicConnection& to, Datagram* flight, usize count, bool early)
+{
+    usize delivered = 0U;
+    for (usize index = count; index-- > 0U;)
+    {
+        QuicHeader header;
+        REQUIRE(parse_quic_header(flight[index].view(), sizeof(kServerCid), header) == QuicHeaderError::None);
+        if ((header.type == QuicPacketType::ZeroRtt) == early)
+        {
+            to.receive(Span<u8>(flight[index].bytes, flight[index].size), QuicEcn::NotEct, kStartNs);
+            ++delivered;
+        }
+    }
+    return delivered;
+}
+} // namespace
+
+TEST_CASE("QUIC connection: packets ahead of their keys are held in a bounded ring and read once the keys come",
+          "[net][4.2a][quic-connection][quic-early]")
+{
+    for (const u32 ring : {8U, 1U})
+    {
+        INFO("ring " << ring);
+        EarlyFleet fleet;
+        Tickets tickets;
+        take_ticket(fleet.identity, QuicVersion::V1, tickets);
+        CountingAllocator allocator;
+        QuicConnectionConfig client_config =
+            early_config(QuicSide::Client, fleet.identity, QuicVersion::V1, 2U, &tickets);
+        QuicConnectionConfig server_config =
+            early_config(QuicSide::Server, fleet.identity, QuicVersion::V1, 3U, nullptr);
+        client_config.held_packets = ring;
+        server_config.held_packets = ring;
+        QuicConnection client(allocator, client_config);
+        QuicConnection server(allocator, server_config);
+        REQUIRE(server.ready());
+        Datagram flight[16];
+        const usize count = early_flight(client, server, flight, 16U);
+        // The 0-RTT-only datagrams arrive first: held as the ring allows, then read once the Initials gave keys.
+        const usize alone = deliver_flight(server, flight, count, true);
+        REQUIRE(alone >= 2U);
+        CHECK(server.counters().packets_held == ((alone < ring) ? alone : ring));
+        CHECK(server.counters().packets_dropped == ((alone < ring) ? 0U : alone - ring));
+        CHECK(server.streams().open_streams() == 0U);
+        REQUIRE(deliver_flight(server, flight, count, false) >= 1U);
+        REQUIRE(server.handshake().early_data() == TlsEarlyData::Accepted);
+        CHECK(server.streams().open_streams() == 1U); // the held packets were read under the keys that came
+        if (ring == 8U)
+        {
+            const QuicStreamRead peeked = server.streams().peek(0U);
+            CHECK(peeked.data.size() == 6000U); // every byte of the flight, none sent again
+            CHECK(peeked.early_bytes == peeked.data.size());
+        }
+
+        // The server's flight in reverse: its Handshake and 1-RTT packets wait on the client for the Initial's keys.
+        Datagram answer[16];
+        const usize answers = collect(server, answer, 16U, kStartNs);
+        REQUIRE(answers >= 2U);
+        for (usize index = answers; index-- > 0U;)
+        {
+            client.receive(Span<u8>(answer[index].bytes, answer[index].size), QuicEcn::NotEct, kStartNs);
+        }
+        CHECK(client.counters().packets_held != 0U);
+        if (ring == 8U)
+        {
+            // No time passed and nothing was sent again: the held packets completed the handshake.
+            CHECK(client.state() == QuicConnectionState::Established);
+            CHECK(client.handshake().early_data() == TlsEarlyData::Accepted);
+        }
+        else
+        {
+            CHECK(client.counters().packets_dropped != 0U); // past the ring: the peer sends it again
+        }
+    }
+}
+
+TEST_CASE("QUIC connection: a server that rejects 0-RTT drops what it held, and early configurations out of range "
+          "are refused",
+          "[net][4.2a][quic-connection][quic-early]")
+{
+    {
+        EarlyFleet fleet;
+        Tickets tickets;
+        take_ticket(fleet.identity, QuicVersion::V1, tickets);
+        CountingAllocator allocator;
+        QuicConnection client(allocator, early_config(QuicSide::Client, fleet.identity, QuicVersion::V1, 2U, &tickets));
+        QuicConnection server(allocator, early_config(QuicSide::Server, fleet.identity, QuicVersion::V1, 3U, nullptr,
+                                                      ConstSpan<u8>(kOtherAppContext)));
+        Datagram flight[16];
+        const usize count = early_flight(client, server, flight, 16U);
+        REQUIRE(deliver_flight(server, flight, count, true) >= 1U);
+        CHECK(server.counters().packets_held != 0U);
+        const u64 dropped = server.counters().packets_dropped;
+        REQUIRE(deliver_flight(server, flight, count, false) >= 1U);
+        CHECK(server.handshake().early_data() == TlsEarlyData::Rejected);
+        CHECK(server.streams().open_streams() == 0U); // RFC 9001 section 4.6.2: none processed, held ones included
+        CHECK(server.counters().packets_dropped > dropped);
+    }
+    Identity plain;
+    EarlyFleet fleet;
+    static const u8 big[kQuicMaxEarlyContextBytes + 1U] = {};
+    CountingAllocator allocator;
+    const auto refused = [&](const QuicConnectionConfig& config)
+    {
+        const QuicConnection connection(allocator, config);
+        return !connection.ready();
+    };
+    QuicConnectionConfig client = early_config(QuicSide::Client, fleet.identity, QuicVersion::V1, 0U, nullptr);
+    client.early_context = ConstSpan<u8>(kAppContext);
+    CHECK(refused(client)); // a client names no context
+    QuicConnectionConfig without = config_for(QuicSide::Server, plain, QuicVersion::V1);
+    without.early_context = ConstSpan<u8>(kAppContext);
+    CHECK(refused(without)); // nor a server that takes no early data
+    QuicConnectionConfig oversized = early_config(QuicSide::Server, fleet.identity, QuicVersion::V1, 0U, nullptr);
+    oversized.early_context = ConstSpan<u8>(big, sizeof(big));
+    CHECK(refused(oversized));
+    oversized.early_context = ConstSpan<u8>(big, kQuicMaxEarlyContextBytes);
+    CHECK_FALSE(refused(oversized));
+    QuicConnectionConfig ring = config_for(QuicSide::Client, plain, QuicVersion::V1);
+    ring.held_packets = kQuicMaxHeldPackets + 1U;
+    CHECK(refused(ring));
+    ring.held_packets = 0U;
+    CHECK_FALSE(refused(ring));
+    // A server with early data and an empty application part still names its parameters' part.
+    QuicConnection server(allocator, early_config(QuicSide::Server, fleet.identity, QuicVersion::V1, 0U, nullptr, {}));
+    REQUIRE(server.ready());
+    QuicAccept accept;
+    accept.local_cid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
+    accept.client_dcid = ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid));
+    accept.client_scid = ConstSpan<u8>(kClientCid, sizeof(kClientCid));
+    accept.original_dcid = accept.client_dcid;
+    CHECK(server.accept(accept, kStartNs));
 }

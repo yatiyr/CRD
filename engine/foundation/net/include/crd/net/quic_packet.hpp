@@ -262,6 +262,10 @@ public:
     // Whether this side can send or open packets of `type` now.
     [[nodiscard]] bool can_send(QuicPacketType type) const noexcept;
     [[nodiscard]] bool can_open(QuicPacketType type) const noexcept;
+    // Whether the keys that open the peer's packets of `type` may still be installed: none yet, and none discarded at
+    // that level (Handshake, a server's 0-RTT and 1-RTT; never Initial). A packet of such a type may be held until
+    // they come (RFC 9001 section 4.1.4).
+    [[nodiscard]] bool keys_pending(QuicPacketType type) const noexcept;
 
     // Discards the keys of `level` (both directions): the Early level's when a server's 0-RTT timer ends (RFC 9001
     // section 4.9.3) or the server refused 0-RTT; Initial and Handshake keys go by themselves.

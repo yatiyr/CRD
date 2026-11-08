@@ -170,6 +170,25 @@ struct QuicConnectionIdExpectation
                                                            crypto::QuicSide peer,
                                                            const QuicConnectionIdExpectation& expected) noexcept;
 
+// ---- 0-RTT (RFC 9000 section 7.4.1, RFC 9221 section 3) ----
+
+// The bytes write_quic_early_parameters writes at most: a format byte and eleven varints.
+inline constexpr usize kQuicEarlyParameterBytes = 1U + (11U * 8U);
+
+// A server's parameters that its 0-RTT depends on, the first part of its early data context: every limit a client's
+// 0-RTT packets keep to (initial_max_data, the five stream parameters, active_connection_id_limit and
+// max_datagram_frame_size) and the values a server may refuse 0-RTT over (max_idle_timeout, max_udp_payload_size,
+// disable_active_migration), in one fixed order without grease, so that one server's encoding is the same on every
+// connection and a ticket's 0-RTT is refused once any of them changed. Writes into `out` (kQuicEarlyParameterBytes
+// hold any) and returns the bytes; 0 when `out` is too small.
+[[nodiscard]] usize write_quic_early_parameters(const QuicTransportParameters& server, cont::Span<u8> out) noexcept;
+
+// A client's check once its server accepted 0-RTT: PROTOCOL_VIOLATION when `accepted` lowers a limit its 0-RTT
+// packets kept to from `remembered` (initial_max_data, the five stream parameters, active_connection_id_limit, and
+// max_datagram_frame_size, whose lowering RFC 9221 section 3 closes with PROTOCOL_VIOLATION).
+[[nodiscard]] QuicTransportError quic_check_remembered_parameters(const QuicTransportParameters& remembered,
+                                                                  const QuicTransportParameters& accepted) noexcept;
+
 // ---- Compatible version negotiation (RFC 9368) ----
 
 // Whether a first flight of version `from` can be converted to `to` (RFC 9368 section 2.2): any version to itself,

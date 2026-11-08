@@ -603,6 +603,48 @@ u32 quic_server_select_version(const QuicTransportParameters& client, u32 origin
     return contains(preference, original) ? original : 0U;
 }
 
+usize write_quic_early_parameters(const QuicTransportParameters& server, cont::Span<u8> out) noexcept
+{
+    constexpr u8 kFormat = 1U; // this encoding's revision: a ticket of another one meets another context
+    if (out.size() < kQuicEarlyParameterBytes)
+    {
+        return 0U;
+    }
+    const u64 values[] = {server.initial_max_data,
+                          server.initial_max_stream_data_bidi_local,
+                          server.initial_max_stream_data_bidi_remote,
+                          server.initial_max_stream_data_uni,
+                          server.initial_max_streams_bidi,
+                          server.initial_max_streams_uni,
+                          server.active_connection_id_limit,
+                          server.max_datagram_frame_size,
+                          server.max_idle_timeout,
+                          server.max_udp_payload_size,
+                          server.disable_active_migration ? 1U : 0U};
+    static_assert(1U + (sizeof(values) / sizeof(values[0])) * 8U == kQuicEarlyParameterBytes);
+    cont::WireWriter writer(out.first(kQuicEarlyParameterBytes));
+    writer.put_u8(kFormat);
+    for (const u64 value : values)
+    {
+        writer.put_u64(value);
+    }
+    return writer.written();
+}
+
+QuicTransportError quic_check_remembered_parameters(const QuicTransportParameters& remembered,
+                                                    const QuicTransportParameters& accepted) noexcept
+{
+    const bool kept = accepted.initial_max_data >= remembered.initial_max_data &&
+                      accepted.initial_max_stream_data_bidi_local >= remembered.initial_max_stream_data_bidi_local &&
+                      accepted.initial_max_stream_data_bidi_remote >= remembered.initial_max_stream_data_bidi_remote &&
+                      accepted.initial_max_stream_data_uni >= remembered.initial_max_stream_data_uni &&
+                      accepted.initial_max_streams_bidi >= remembered.initial_max_streams_bidi &&
+                      accepted.initial_max_streams_uni >= remembered.initial_max_streams_uni &&
+                      accepted.active_connection_id_limit >= remembered.active_connection_id_limit &&
+                      accepted.max_datagram_frame_size >= remembered.max_datagram_frame_size;
+    return kept ? QuicTransportError::NoError : QuicTransportError::ProtocolViolation;
+}
+
 QuicTransportError quic_server_check_version_information(const QuicTransportParameters& client, u32 original) noexcept
 {
     if (client.has_version_information && client.version_information.chosen != original)

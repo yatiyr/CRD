@@ -257,6 +257,10 @@ public:
     // first Initial to the Retry replaces the initial RTT estimate when no probe was sent (section 6.2.2); it is no
     // sample.
     void retry(u64 now_ns, QuicRecoveryEvents& events) noexcept;
+    // A client's server rejected 0-RTT (section 6.4: the recovery state of every 0-RTT packet in flight is
+    // discarded): every outstanding Application packet, all of them 0-RTT before the client's first 1-RTT packet,
+    // leaves bytes in flight as on_discarded; packet numbers continue.
+    void reject_early(u64 now_ns, QuicRecoveryEvents& events) noexcept;
 
     // ---- Sending ----
 
@@ -327,6 +331,8 @@ private:
     [[nodiscard]] usize lower_bound(Space& space, u64 number) noexcept;
     [[nodiscard]] bool acknowledges_unsent(Space& space, const QuicAck& ack) noexcept;
     void settle(Space& space, QuicSentEntry& slot) noexcept;
+    // Every outstanding packet of `id` leaves bytes in flight as on_discarded, and the space holds none.
+    void drop_outstanding(QuicSpace id, QuicRecoveryEvents& events) noexcept;
     // Drops settled entries from the head: acknowledged ones, and lost ones past their probe period or, when `room`
     // asks for a slot, until one is free.
     void compact(QuicSpace id, u64 now_ns, bool room) noexcept;

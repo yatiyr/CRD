@@ -71,9 +71,10 @@ crd_fuzz_target(crd-fuzz-net-quic-datagram
 #   crd-fuzz-net-quic-connection   a network script between a client and a server (deliveries, losses, duplicates,
 #                                  reorders, corrupted bytes, time, a Retry), then a clean path: the handshake confirms
 #                                  or a side closes, within the amplification limit and the Initial floor, nothing
-#                                  allocated, and a confirmed pair carries a stream whole and agrees on the Retry; and
-#                                  any frames from a raw peer in 1-RTT and in Initial packets: the server stays open or
-#                                  closes with an error RFC 9000 names, its close the only frame it sends then.
+#                                  allocated, and a confirmed pair carries a stream whole and agrees on the Retry, a
+#                                  resumed one its 0-RTT stream whole or reset by a rejection; and any frames from a
+#                                  raw peer in 1-RTT and in Initial packets: the server stays open or closes with an
+#                                  error RFC 9000 names, its close the only frame it sends then.
 crd_fuzz_target(crd-fuzz-net-quic-connection
     SOURCES fuzz_quic_connection.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-connection")
 

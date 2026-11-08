@@ -102,7 +102,15 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
            config.max_datagram_bytes >= kQuicMinInitialDatagram &&
            config.max_datagram_bytes <= kQuicDefaultMaxUdpPayload &&
            (config.entropy_seed.empty() || config.entropy_seed.size() == crypto::kPrfKeyBytes) &&
-           (config.token.size() <= kQuicMaxCarriedTokenBytes);
+           (config.token.size() <= kQuicMaxCarriedTokenBytes) && config.held_packets <= kQuicMaxHeldPackets &&
+           (config.early_context.empty() || (config.side == crypto::QuicSide::Server && config.tls->early_data() &&
+                                             config.early_context.size() <= kQuicMaxEarlyContextBytes));
+}
+
+[[nodiscard]] usize early_context_bytes(const QuicConnectionConfig& config) noexcept
+{
+    const bool accepts = config.side == crypto::QuicSide::Server && config.tls->early_data();
+    return accepts ? kQuicEarlyParameterBytes + config.early_context.size() : 0U;
 }
 } // namespace
 
@@ -206,16 +214,35 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     void* const recovery = allocator.try_allocate(sizeof(QuicRecovery), alignof(QuicRecovery));
     const bool streams = m_streams.init(allocator, config.streams, config.side);
     const bool datagrams = m_datagrams.init(allocator, config.datagrams);
+    const usize early_bytes = early_context_bytes(config);
+    const usize held_bytes = usize{config.held_packets} * config.max_datagram_bytes;
+    u8* const early = (early_bytes != 0U) ? memory::try_construct_array<u8>(allocator, early_bytes) : nullptr;
+    u8* const held = (held_bytes != 0U) ? memory::try_construct_array<u8>(allocator, held_bytes) : nullptr;
+    Held* const held_entries =
+        (held_bytes != 0U) ? memory::try_construct_array<Held>(allocator, config.held_packets) : nullptr;
     if (seeded != crypto::CryptoError::None || entries == nullptr || frames == nullptr || bytes == nullptr ||
-        bits == nullptr || recovery == nullptr || !streams || !datagrams)
+        bits == nullptr || recovery == nullptr || !streams || !datagrams || (early_bytes != 0U && early == nullptr) ||
+        (held_bytes != 0U && (held == nullptr || held_entries == nullptr)))
     {
         memory::destroy_array(allocator, entries, kQuicSpaces * per_space);
         memory::destroy_array(allocator, frames, config.sent_frames);
         memory::destroy_array(allocator, bytes, kQuicSpaces * 2U * crypto);
         memory::destroy_array(allocator, bits, kQuicSpaces * 3U * words);
         memory::destroy_array(allocator, static_cast<u8*>(recovery), sizeof(QuicRecovery));
+        memory::destroy_array(allocator, early, early_bytes);
+        memory::destroy_array(allocator, held, held_bytes);
+        memory::destroy_array(allocator, held_entries, config.held_packets);
         return;
     }
+    if (early_bytes != 0U && !config.early_context.empty())
+    {
+        std::memcpy(early + kQuicEarlyParameterBytes, config.early_context.data(), config.early_context.size());
+    }
+    m_config.early_context = {};
+    m_early_context = early;
+    m_early_context_bytes = early_bytes;
+    m_held_bytes = held;
+    m_held = held_entries;
     for (usize index = 0U; index < kQuicSpaces; ++index)
     {
         u8* const level_bytes = bytes + (index * 2U * crypto);
@@ -253,6 +280,9 @@ QuicConnection::~QuicConnection() noexcept
     memory::destroy_array(m_allocator, m_frames, m_config.sent_frames);
     memory::destroy_array(m_allocator, m_crypto_bytes, kQuicSpaces * 2U * crypto);
     memory::destroy_array(m_allocator, m_crypto_bits, kQuicSpaces * 3U * quic_stream_bitmap_words(crypto));
+    memory::destroy_array(m_allocator, m_early_context, m_early_context_bytes);
+    memory::destroy_array(m_allocator, m_held_bytes, usize{m_config.held_packets} * m_config.max_datagram_bytes);
+    memory::destroy_array(m_allocator, m_held, m_config.held_packets);
 }
 
 u64 QuicConnection::entropy() noexcept
@@ -378,9 +408,16 @@ bool QuicConnection::start(u64 now_ns) noexcept
     u8 encoded[crypto::kQuicMaxTransportParameterBytes];
     const usize bytes = encode_parameters(cont::Span<u8>(encoded, sizeof(encoded)));
     m_handshake.set_hello_answer(side == crypto::QuicSide::Server ? &m_hello : nullptr);
+    // A server's early data context: the parameters its 0-RTT depends on, then the application's part.
+    if (m_early_context != nullptr)
+    {
+        static_cast<void>(
+            write_quic_early_parameters(m_local, cont::Span<u8>(m_early_context, kQuicEarlyParameterBytes)));
+    }
     if (bytes == 0U || m_handshake.set_version(m_config.version) != crypto::TlsError::None ||
-        m_handshake.init(*m_config.tls, cont::ConstSpan<u8>(encoded, bytes), m_config.tickets) !=
-            crypto::TlsError::None)
+        m_handshake.init(*m_config.tls, cont::ConstSpan<u8>(encoded, bytes), m_config.tickets, {},
+                         cont::ConstSpan<u8>(m_early_context, m_early_context_bytes)) != crypto::TlsError::None ||
+        !begin_early())
     {
         return false;
     }
@@ -388,6 +425,84 @@ bool QuicConnection::start(u64 now_ns) noexcept
     m_idle_ns = m_local.max_idle_timeout * kNsPerMs;
     restart_idle(now_ns);
     return true;
+}
+
+bool QuicConnection::begin_early() noexcept
+{
+    if (m_handshake.early_data() != crypto::TlsEarlyData::Offered)
+    {
+        return true;
+    }
+    // Parameters that no longer parse send nothing early: the data waits for the 1-RTT keys.
+    if (read_quic_transport_parameters(m_handshake.remembered_transport_parameters(), crypto::QuicSide::Server,
+                                       m_remembered) != QuicTransportError::NoError)
+    {
+        return true;
+    }
+    apply_peer_limits(m_remembered);
+    m_early_sending = true;
+    return m_protection.install(m_handshake) == crypto::CryptoError::None;
+}
+
+void QuicConnection::apply_peer_limits(const QuicTransportParameters& peer) noexcept
+{
+    m_streams.set_peer_parameters(peer);
+    m_datagrams.set_peer(peer.max_datagram_frame_size, min_u64(m_config.max_datagram_bytes, peer.max_udp_payload_size));
+}
+
+bool QuicConnection::settle_early(u64 now_ns) noexcept
+{
+    const crypto::TlsEarlyData early = m_handshake.early_data();
+    if (m_config.side == crypto::QuicSide::Server)
+    {
+        // Once the ClientHello is read, a server that did not accept 0-RTT processes none of it (RFC 9001 section
+        // 4.6.2), held packets included.
+        if (m_peer_known && !m_early_settled)
+        {
+            m_early_settled = true;
+            if (early != crypto::TlsEarlyData::Accepted)
+            {
+                m_protection.discard(crypto::QuicLevel::Early);
+            }
+        }
+        return true;
+    }
+    if (!m_early_sending)
+    {
+        return true;
+    }
+    if (early == crypto::TlsEarlyData::Rejected)
+    {
+        reject_early(now_ns);
+        return true;
+    }
+    if (early == crypto::TlsEarlyData::Accepted && m_peer_known)
+    {
+        // The server's parameters apply from now on (RFC 9000 section 7.4.1); a limit the 0-RTT packets kept to that
+        // they lower closes the connection (RFC 9221 section 3 names PROTOCOL_VIOLATION for its size).
+        m_early_sending = false;
+        if (quic_check_remembered_parameters(m_remembered, m_peer) != QuicTransportError::NoError)
+        {
+            fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
+            return false;
+        }
+    }
+    return true;
+}
+
+void QuicConnection::reject_early(u64 now_ns) noexcept
+{
+    // The 0-RTT packets' recovery state goes (RFC 9002 section 6.4), and with them every stream and the queued
+    // datagrams (RFC 9001 section 4.6.2); the server's parameters, once known, grant this side anew.
+    m_early_sending = false;
+    m_protection.discard(crypto::QuicLevel::Early);
+    m_recovery->reject_early(now_ns, m_events);
+    m_streams.reset_all();
+    m_datagrams.reject_early();
+    if (m_peer_known)
+    {
+        apply_peer_limits(m_peer);
+    }
 }
 
 usize QuicConnection::encode_parameters(cont::Span<u8> out) noexcept
@@ -501,9 +616,67 @@ void QuicConnection::receive(cont::Span<u8> datagram, QuicEcn ecn, u64 now_ns) n
         ++m_counters.packets_dropped;
     }
     // The comparison is owed when the first packet cannot be associated or opened; it is skipped otherwise.
-    if (!first_opened && reset_sized)
+    if (!first_opened && reset_sized && reset_by(cont::ConstSpan<u8>(tail, kQuicResetTokenBytes), now_ns))
     {
-        static_cast<void>(reset_by(cont::ConstSpan<u8>(tail, kQuicResetTokenBytes), now_ns));
+        return;
+    }
+    read_held(now_ns);
+}
+
+void QuicConnection::hold(QuicPacketType type, cont::ConstSpan<u8> packet, QuicEcn ecn) noexcept
+{
+    const usize slot = m_config.max_datagram_bytes;
+    if (m_held_count == m_config.held_packets || packet.size() > slot)
+    {
+        ++m_counters.packets_dropped; // the peer sends it again
+        return;
+    }
+    std::memcpy(m_held_bytes + (usize{m_held_count} * slot), packet.data(), packet.size());
+    Held& held = m_held[m_held_count++];
+    held.bytes = static_cast<u32>(packet.size());
+    held.type = type;
+    held.ecn = ecn;
+    ++m_counters.packets_held;
+}
+
+void QuicConnection::read_held(u64 now_ns) noexcept
+{
+    const usize slot = m_config.max_datagram_bytes;
+    // A packet read may install the keys of another held one: the ring is walked again until none opens.
+    for (bool progress = true; progress && m_held_count != 0U;)
+    {
+        progress = false;
+        u32 kept = 0U;
+        for (u32 index = 0U; index < m_held_count; ++index)
+        {
+            const Held held = m_held[index];
+            u8* const bytes = m_held_bytes + (usize{index} * slot);
+            const bool live =
+                m_state == QuicConnectionState::Handshaking || m_state == QuicConnectionState::Established;
+            if (live && m_protection.can_open(held.type))
+            {
+                QuicDatagramPackets packets(cont::Span<u8>(bytes, held.bytes), m_local_cid.bytes);
+                QuicHeader header;
+                cont::Span<u8> packet;
+                if (packets.next(header, packet))
+                {
+                    static_cast<void>(receive_packet(header, packet, held.bytes, held.ecn, now_ns));
+                }
+                progress = true;
+                continue;
+            }
+            if (live && m_protection.keys_pending(held.type))
+            {
+                if (kept != index)
+                {
+                    std::memcpy(m_held_bytes + (usize{kept} * slot), bytes, held.bytes);
+                }
+                m_held[kept++] = held;
+                continue;
+            }
+            ++m_counters.packets_dropped; // its keys went, or the connection ended
+        }
+        m_held_count = kept;
     }
 }
 
@@ -576,6 +749,11 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
         ++m_counters.packets_dropped;
         return false;
     }
+    if (!m_protection.can_open(header.type) && m_protection.keys_pending(header.type))
+    {
+        hold(header.type, packet, ecn);
+        return false;
+    }
     QuicOpened opened;
     const QuicPacketError error = m_protection.open(header, packet, opened);
     if (error != QuicPacketError::None)
@@ -591,6 +769,13 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
     }
     const QuicSpace space = quic_space_of(opened.type);
     m_packet_version = long_header ? header.version : 0U;
+    m_packet_early = opened.type == QuicPacketType::ZeroRtt;
+    if (!client && opened.type == QuicPacketType::OneRtt && m_early_key_ns == kNeverNs &&
+        m_protection.can_open(QuicPacketType::ZeroRtt))
+    {
+        // 0-RTT packets still reordered behind the first 1-RTT one are read for three PTOs (RFC 9001 section 4.9.3).
+        m_early_key_ns = add_saturating(now_ns, three_ptos());
+    }
     if (client && long_header && header.version != static_cast<u32>(m_protection.version()) && !m_version_settled)
     {
         // The server switched compatibly: its first Initial packet in a version this client offered opened, so the
@@ -676,7 +861,7 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
         case QuicFrameKind::StreamDataBlocked:
         case QuicFrameKind::StreamsBlocked:
         {
-            const QuicTransportError error = m_streams.on_frame(frame);
+            const QuicTransportError error = m_streams.on_frame(frame, m_packet_early);
             if (error != QuicTransportError::NoError)
             {
                 fail(error, 0U, now_ns);
@@ -730,7 +915,7 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             return true;
         case QuicFrameKind::Datagram:
         {
-            const QuicTransportError error = m_datagrams.on_frame(frame);
+            const QuicTransportError error = m_datagrams.on_frame(frame, m_packet_early);
             if (error != QuicTransportError::NoError)
             {
                 fail(error, 0U, now_ns);
@@ -832,6 +1017,10 @@ bool QuicConnection::advance_handshake(u64 now_ns) noexcept
     {
         return false;
     }
+    if (!settle_early(now_ns))
+    {
+        return false;
+    }
     if (m_state == QuicConnectionState::Handshaking && m_handshake.state() == crypto::TlsState::Established)
     {
         m_state = QuicConnectionState::Established;
@@ -878,9 +1067,7 @@ bool QuicConnection::read_peer_parameters(u64 now_ns) noexcept
         return false;
     }
     m_peer_known = true;
-    m_streams.set_peer_parameters(m_peer);
-    m_datagrams.set_peer(m_peer.max_datagram_frame_size,
-                         min_u64(m_config.max_datagram_bytes, m_peer.max_udp_payload_size));
+    apply_peer_limits(m_peer);
     m_recovery->set_peer_parameters(m_peer.max_ack_delay * kNsPerMs, m_peer.ack_delay_exponent, now_ns);
     m_peer_greases = m_peer.grease_quic_bit;
     const u64 local_idle = m_local.max_idle_timeout;
@@ -1247,10 +1434,23 @@ void QuicConnection::pull_crypto() noexcept
     }
 }
 
+QuicPacketType QuicConnection::send_type(QuicSpace space) const noexcept
+{
+    // A client's application data goes in 0-RTT packets until it has 1-RTT keys, and only while it knows no more than
+    // the parameters it remembers (RFC 9000 section 7.4.1); RFC 9000 section 17.2.3's limit follows, since 1-RTT keys
+    // come before any 1-RTT packet opens.
+    if (space == QuicSpace::Application && m_early_sending && !m_peer_known &&
+        !m_protection.can_send(QuicPacketType::OneRtt) && m_protection.can_send(QuicPacketType::ZeroRtt))
+    {
+        return QuicPacketType::ZeroRtt;
+    }
+    return packet_type(space);
+}
+
 bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
 {
     const usize index = index_of(space);
-    if (m_space_gone[index] || !m_protection.can_send(packet_type(space)) || !m_recovery->can_send(space))
+    if (m_space_gone[index] || !m_protection.can_send(send_type(space)) || !m_recovery->can_send(space))
     {
         return false;
     }
@@ -1325,9 +1525,9 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
                 {
                     m_streams.on_acked(frame.frame);
                 }
-                else if (how == Settle::Lost)
+                else
                 {
-                    m_streams.on_lost(frame.frame);
+                    m_streams.on_lost(frame.frame); // a Retry discards 0-RTT packets: their data goes again
                 }
             }
             else if (frame.kind == kRecordDatagram)
@@ -1385,7 +1585,7 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
     }
 }
 
-usize QuicConnection::write_frames(QuicSpace space, cont::Span<u8> frames, u64 packet, u64 now_ns,
+usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> frames, u64 packet, u64 now_ns,
                                    Written& written) noexcept
 {
     const usize index = index_of(space);
@@ -1408,13 +1608,15 @@ usize QuicConnection::write_frames(QuicSpace space, cont::Span<u8> frames, u64 p
             written.carried_ack = (ack.bytes != 0U) ? ack.largest : kQuicNoPacket;
         }
     };
+    // A 0-RTT packet carries no ACK, CRYPTO, HANDSHAKE_DONE, NEW_TOKEN, PATH_RESPONSE or RETIRE_CONNECTION_ID
+    // frame (RFC 9000 section 12.4, table 3).
     const bool ack_later =
         space == QuicSpace::Application && m_recovery->ack_deadline_ns(space) > now_ns && datagram_ready(now_ns);
-    if (!ack_later)
+    if (!ack_later && !early)
     {
         put_ack();
     }
-    if (space == QuicSpace::Application)
+    if (space == QuicSpace::Application && !early)
     {
         if (m_handshake_done_owed && m_frame_count < m_config.sent_frames)
         {
@@ -1536,7 +1738,7 @@ usize QuicConnection::write_frames(QuicSpace space, cont::Span<u8> frames, u64 p
                 static_cast<void>(record(space, packet, kRecordDatagram, sent, written)); // room was checked
             }
         }
-        if (ack_later)
+        if (ack_later && !early)
         {
             put_ack();
         }
@@ -1595,8 +1797,8 @@ usize QuicConnection::write_close(QuicSpace space, cont::Span<u8> frames) const 
     return write_quic_frame(close, frames);
 }
 
-usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool closing,
-                                   u64 now_ns) noexcept
+usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool last,
+                                   bool closing, u64 now_ns) noexcept
 {
     const usize index = index_of(space);
     u64 number = m_next_number[index];
@@ -1607,8 +1809,10 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         ++number;
     }
     QuicPacketSpec spec;
-    spec.type = packet_type(space);
-    spec.version = static_cast<u32>(m_protection.version());
+    spec.type = closing ? packet_type(space) : send_type(space);
+    const bool early = spec.type == QuicPacketType::ZeroRtt;
+    // 0-RTT packets keep the original version (RFC 9369 section 4.1).
+    spec.version = static_cast<u32>(early ? m_protection.original_version() : m_protection.version());
     spec.dcid = peer_cid();
     if (m_peer_cid_current < m_peer_cid_count)
     {
@@ -1630,9 +1834,10 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         return 0U;
     }
     Written written;
-    const usize used =
-        closing ? write_close(space, writer.frames()) : write_frames(space, writer.frames(), number, now_ns, written);
-    const bool padded = pad || written.path_response;
+    const usize used = closing ? write_close(space, writer.frames())
+                               : write_frames(space, early, writer.frames(), number, now_ns, written);
+    // A later packet that cannot fit (a 0-RTT packet behind a full Initial) leaves the padding to this one.
+    const bool padded = (pad && (last || writer.frames().size() - used < kMinUsefulPacket)) || written.path_response;
     if (used == 0U && !padded)
     {
         return 0U;
@@ -1709,7 +1914,7 @@ usize QuicConnection::send_closing(cont::Span<u8> out, u64 now_ns) noexcept
         {
             later = later || (!m_space_gone[next] && m_protection.can_send(packet_type(static_cast<QuicSpace>(next))));
         }
-        used += write_packet(space, out.subspan(used), used, pad && !later, true, now_ns);
+        used += write_packet(space, out.subspan(used), used, pad, !later, true, now_ns);
     }
     return used;
 }
@@ -1722,9 +1927,9 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
         return 0U;
     }
     usize limit = min_u64(out.size(), m_config.max_datagram_bytes);
-    if (m_peer_known)
+    if (m_peer_known || m_early_sending)
     {
-        limit = min_u64(limit, m_peer.max_udp_payload_size);
+        limit = min_u64(limit, (m_peer_known ? m_peer : m_remembered).max_udp_payload_size);
     }
     const usize credit = amplification_credit();
     limit = min_u64(limit, credit);
@@ -1767,7 +1972,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
             const QuicSpace space = static_cast<QuicSpace>(index);
             if (content[index])
             {
-                used += write_packet(space, room.subspan(used), used, pad && space == last, false, now_ns);
+                used += write_packet(space, room.subspan(used), used, pad, space == last, false, now_ns);
             }
         }
         if (m_state == QuicConnectionState::Closing)
@@ -1812,7 +2017,8 @@ u64 QuicConnection::next_timer_ns() const noexcept
     }
     // An owed ACK counts only where send() can write it: never one held back by the amplification limit, the
     // space's full storage or keys not yet installed, which would report a timer due that nothing serves.
-    u64 next = min_u64(min_u64(m_recovery->loss_timer_ns(), m_idle_deadline_ns), m_previous_key_ns);
+    u64 next =
+        min_u64(min_u64(m_recovery->loss_timer_ns(), m_idle_deadline_ns), min_u64(m_previous_key_ns, m_early_key_ns));
     for (usize index = 0U; index < kQuicSpaces; ++index)
     {
         const QuicSpace space = static_cast<QuicSpace>(index);
@@ -1849,6 +2055,11 @@ void QuicConnection::on_timeout(u64 now_ns) noexcept
     {
         m_protection.discard_previous();
         m_previous_key_ns = kNeverNs;
+    }
+    if (now_ns >= m_early_key_ns)
+    {
+        m_protection.discard(crypto::QuicLevel::Early);
+        m_early_key_ns = kNeverNs;
     }
     if (now_ns < m_recovery->loss_timer_ns())
     {

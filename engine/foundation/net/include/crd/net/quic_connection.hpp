@@ -2,8 +2,9 @@
 
 // crd-net -- a QUIC connection: the TLS handshake carried to confirmation, recovery, the connection's frames and its
 // close (4.2a; contract: docs/design/network-foundation.md#quic-connection). Sources: RFC 9000 sections 2 to 4, 5.1,
-// 7, 8, 10 (10.3's stateless reset), 12, 13, 14, 17.2, 19 and 21.4, RFC 9001 sections 4 and 6, RFC 9002 section 6 and
-// appendix A, RFC 9221 sections 3 to 5, RFC 9287, RFC 9368 sections 2 to 4 and RFC 9369 sections 4 and 5.
+// 7, 8, 10 (10.3's stateless reset), 12, 13, 14, 17.2, 19 and 21.4, RFC 9001 sections 4 to 6 and 9.2, RFC 9002
+// sections 6 and 6.4 and appendix A, RFC 9221 sections 3 to 5, RFC 9287, RFC 9368 sections 2 to 4 and RFC 9369
+// sections 4 and 5.
 //
 //   sans-I/O   receive() takes one datagram from the peer with its arrival time, send() writes the next datagram into
 //              the caller's room (called until it returns 0 after every receive() and on_timeout()), and
@@ -21,6 +22,18 @@
 //              learns the switch from the first server Initial in another version it offered that opens; a server
 //              CRYPTO frame in the original version settles the original. Other versions' long headers are then
 //              dropped, and tickets and tokens belong to the version the connection runs (RFC 9369 section 5).
+//   0-RTT      a client whose ticket allows early data (RFC 9001 section 4.6) sends its streams and datagrams in 0-RTT
+//              packets of the original version under the parameters it remembers (RFC 9000 section 7.4.1), until its
+//              server's parameters arrive; acceptance with a lowered limit closes with PROTOCOL_VIOLATION, a
+//              rejection discards the 0-RTT packets' recovery state (RFC 9002 section 6.4) and resets every stream
+//              and the queued datagrams (RFC 9001 section 4.6.2), which handshake().early_data() reports. A server
+//              names its early data context (the parameters a client remembers and the application's part), opens
+//              0-RTT packets only once it accepted, marks what they carried as replayable (QuicStreamRead::
+//              early_bytes, QuicDatagrams::oldest_early) and discards the 0-RTT keys three PTOs after its first 1-RTT
+//              packet (section 4.9.3). Packets whose keys may still come are held in a bounded ring and read once
+//              they come (section 4.1.4): a server's 0-RTT packets before its ClientHello is complete, Handshake and
+//              1-RTT packets ahead of the flight that installs their keys; a server opens no 1-RTT packet before its
+//              handshake completes (section 5.7).
 //   sending    one datagram coalesces an Initial, a Handshake and a 1-RTT packet, each with its owed ACK; a datagram
 //              carrying a client's Initial, a server's ack-eliciting Initial or a PATH_RESPONSE reaches 1200 bytes; a
 //              server sends at most three times what it received before the client's address is proven (section
@@ -66,6 +79,9 @@ namespace crd::net
 inline constexpr usize kQuicMaxPeerConnectionIds = 8U;  // the peer's IDs a connection holds at most
 inline constexpr usize kQuicMaxReasonBytes = 64U;       // of a CONNECTION_CLOSE reason phrase kept or sent
 inline constexpr usize kQuicMaxLocalConnectionIds = 8U; // this side's active IDs at most
+// The application's part of a server's early data context at most (QuicConnectionConfig::early_context).
+inline constexpr usize kQuicMaxEarlyContextBytes = crypto::kTlsMaxEarlyDataContextBytes - kQuicEarlyParameterBytes;
+inline constexpr u32 kQuicMaxHeldPackets = 64U; // QuicConnectionConfig::held_packets at most
 // A token a connection carries: a client's from Retry or NEW_TOKEN, this build's or another server's (RFC 9000 sets
 // no bound; the Initial still holds 1200 bytes with the longest connection IDs and its CRYPTO data).
 inline constexpr usize kQuicMaxCarriedTokenBytes = 256U;
@@ -140,6 +156,14 @@ struct QuicConnectionConfig
     // kQuicMaxCarriedTokenBytes; RFC 9369 section 5), carried in its Initial packets to prove its address (section
     // 8.1.3) until a Retry gives it another.
     cont::ConstSpan<u8> token;
+    // A server whose TLS context accepts early data: the application's part of its early data context, at most
+    // kQuicMaxEarlyContextBytes (its protocol's settings and its message schema's digest, encoded the same way on
+    // every connection). The connection puts the parameters a client remembers before it (write_quic_early_parameters),
+    // so a ticket's 0-RTT is accepted only while both are unchanged (RFC 9000 section 7.4.1). Refused elsewhere.
+    cont::ConstSpan<u8> early_context;
+    // Packets held while the keys that open them may still come (RFC 9001 section 4.1.4), each of at most
+    // max_datagram_bytes; at most kQuicMaxHeldPackets, 0 for none.
+    u32 held_packets = 8U;
     bool grease_quic_bit = true; // send grease_quic_bit and accept a cleared QUIC bit (RFC 9287)
     u32 sent_packets = 128U;     // per packet number space: what the connection holds in flight
     // The frames of those packets settled on acknowledgement or loss (CRYPTO, stream and credit frames, ...): eight
@@ -197,6 +221,7 @@ struct QuicConnectionCounters
     u64 datagrams_sent = 0U;
     u64 bytes_sent = 0U;
     u64 packets_dropped = 0U; // packets that did not open, duplicates and packets of another connection
+    u64 packets_held = 0U;    // packets held until their keys came (RFC 9001 section 4.1.4)
 };
 
 class QuicConnection
@@ -262,6 +287,9 @@ public:
         return cont::ConstSpan<u8>(m_reason, m_reason_bytes);
     }
     [[nodiscard]] const QuicConnectionCounters& counters() const noexcept { return m_counters; }
+    // The TLS handshake: early_data() tells a client whether its server accepted 0-RTT (Rejected: every stream was
+    // reset and the queued datagrams dropped, so the application opens and sends them again) and a server whether
+    // it accepted; a server's application checks capability tokens of early data against it (verify_early).
     [[nodiscard]] const crypto::QuicHandshake& handshake() const noexcept { return m_handshake; }
     // The connection's streams: opened, written, read and polled by the application, their frames sent by send().
     [[nodiscard]] QuicStreamSet& streams() noexcept { return m_streams; }
@@ -362,6 +390,14 @@ private:
         bool used = false; // a packet was sent to it: its token is checked (section 10.3.1)
     };
 
+    // A packet held until its keys come; its bytes are a max_datagram_bytes slot of m_held_bytes.
+    struct Held
+    {
+        u32 bytes = 0U;
+        QuicPacketType type = QuicPacketType::OneRtt;
+        QuicEcn ecn = QuicEcn::NotEct;
+    };
+
     struct LocalCid
     {
         u64 sequence = 0U;
@@ -386,6 +422,15 @@ private:
     [[nodiscard]] bool crypto_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
     [[nodiscard]] bool advance_handshake(u64 now_ns) noexcept;
     [[nodiscard]] bool read_peer_parameters(u64 now_ns) noexcept;
+    // The peer's grants to this side's streams and datagrams: a client's remembered ones for 0-RTT, then its server's.
+    void apply_peer_limits(const QuicTransportParameters& peer) noexcept;
+    // A client: starts 0-RTT on the parameters its ticket remembers. Both: acts on the server's 0-RTT decision.
+    [[nodiscard]] bool begin_early() noexcept;
+    [[nodiscard]] bool settle_early(u64 now_ns) noexcept;
+    void reject_early(u64 now_ns) noexcept;
+    void hold(QuicPacketType type, cont::ConstSpan<u8> packet, QuicEcn ecn) noexcept;
+    // Reads the held packets whose keys came, until none more opens; drops those whose keys went.
+    void read_held(u64 now_ns) noexcept;
     [[nodiscard]] bool new_connection_id(const QuicFrame& frame, u64 now_ns) noexcept;
     [[nodiscard]] bool owe_retire(u64 sequence, u64 now_ns) noexcept;
     [[nodiscard]] bool retire_local(u64 sequence, u64 now_ns) noexcept;
@@ -403,12 +448,16 @@ private:
     void confirm(u64 now_ns) noexcept;
 
     // Sending.
+    // The packet type `space` sends now: a client's 0-RTT for the Application space before it has 1-RTT keys.
+    [[nodiscard]] QuicPacketType send_type(QuicSpace space) const noexcept;
     [[nodiscard]] bool has_content(QuicSpace space, u64 now_ns) const noexcept;
     // Whether a datagram can go now: one waits, and its outcome has a ledger record free when it is reported.
     [[nodiscard]] bool datagram_ready(u64 now_ns) const noexcept;
-    [[nodiscard]] usize write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool closing,
-                                     u64 now_ns) noexcept;
-    [[nodiscard]] usize write_frames(QuicSpace space, cont::Span<u8> frames, u64 packet, u64 now_ns,
+    // `pad`: the datagram reaches 1200 bytes (section 14.1), by this packet when it is the `last` or when what it
+    // leaves is too small for another.
+    [[nodiscard]] usize write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool last,
+                                     bool closing, u64 now_ns) noexcept;
+    [[nodiscard]] usize write_frames(QuicSpace space, bool early, cont::Span<u8> frames, u64 packet, u64 now_ns,
                                      Written& written) noexcept;
     [[nodiscard]] usize write_close(QuicSpace space, cont::Span<u8> frames) const noexcept;
     [[nodiscard]] usize send_closing(cont::Span<u8> out, u64 now_ns) noexcept;
@@ -450,11 +499,21 @@ private:
     usize m_version_count = 0U;
     u8 m_token[kQuicMaxCarriedTokenBytes] = {};
     usize m_token_bytes = 0U;
+    u8* m_early_context = nullptr; // a server's with early data: kQuicEarlyParameterBytes, then the application's part
+    usize m_early_context_bytes = 0U;
+    u8* m_held_bytes = nullptr;
+    Held* m_held = nullptr;
+    u32 m_held_count = 0U;
 
     QuicConnectionState m_state = QuicConnectionState::Idle;
     QuicTransportParameters m_local;
     QuicTransportParameters m_peer;
     bool m_peer_known = false;
+    QuicTransportParameters m_remembered; // a client's for 0-RTT: its server's from the ticket's connection
+    bool m_early_sending = false;         // a client sends 0-RTT under m_remembered until its server decides
+    bool m_early_settled = false;         // a server decided on 0-RTT
+    bool m_packet_early = false;          // the packet being read is a 0-RTT packet
+    u64 m_early_key_ns = kNeverNs;        // when a server's 0-RTT keys go (RFC 9001 section 4.9.3)
     QuicConnectionId m_local_cid;
     QuicConnectionId m_initial_dcid;  // a client's first Destination Connection ID; a server's client_dcid
     QuicConnectionId m_original_dcid; // what original_destination_connection_id names

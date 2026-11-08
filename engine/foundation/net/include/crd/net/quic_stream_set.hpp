@@ -21,6 +21,9 @@
 //   sending    next_frame() hands the connection one frame that fits its room, with the record that settles it:
 //              connection credit frames first, then each listed stream's owed control frames and data, by urgency
 //              (0 first) and round robin within one, so no stream at an urgency starves another.
+//   0-RTT      a client's streams run first on the parameters it remembers and then on its server's, which only raise
+//              them (streams already open included); a rejection returns every stream and credit to init()'s state
+//              (RFC 9001 section 4.6.2). A server marks the bytes that came in 0-RTT packets: they are replayable.
 //   events     a per-slot mask of what happened (opened, readable, writable, reset, stop asked, all sent) in a queue
 //              of slots: at most one entry per slot, so it never fills.
 //   memory     everything comes from the injected allocator at init(); nothing allocates after it.
@@ -119,6 +122,9 @@ struct QuicStreamRead
     bool fin = false;   // data ends at the stream's final size
     bool reset = false; // the peer reset it: nothing more is readable
     u64 reset_error = 0U;
+    // A server's: the first bytes of `data` that may have come in 0-RTT packets, replayable (RFC 9001 section 9.2),
+    // so the application runs on them only what its schema declares idempotent.
+    usize early_bytes = 0U;
 };
 
 // A stream frame a sent packet carried, settled when the packet is acknowledged or lost. `value` is a STREAM or
@@ -153,12 +159,18 @@ public:
 
     // This side's stream and flow-control parameters, written into `local`.
     void fill_parameters(QuicTransportParameters& local) const noexcept;
-    // The peer's: its grants of streams and credit to this side.
+    // The peer's: its grants of streams and credit to this side. A client calls it with the parameters it remembers
+    // for 0-RTT and again with its server's, so a call only raises what an earlier one granted, on the streams already
+    // open too (a server accepting 0-RTT lowers none of them, RFC 9000 section 7.4.1).
     void set_peer_parameters(const QuicTransportParameters& peer) noexcept;
+    // A client's server rejected 0-RTT: every stream, its data and both connection credits return to their state
+    // after init(), with no peer parameters and no events (RFC 9001 section 4.6.2: the client resets them all).
+    void reset_all() noexcept;
 
     // A stream or flow-control frame from the peer (STREAM, RESET_STREAM, STOP_SENDING, MAX_DATA, MAX_STREAM_DATA,
-    // MAX_STREAMS, DATA_BLOCKED, STREAM_DATA_BLOCKED, STREAMS_BLOCKED): NoError, or the error to close with.
-    [[nodiscard]] QuicTransportError on_frame(const QuicFrame& frame) noexcept;
+    // MAX_STREAMS, DATA_BLOCKED, STREAM_DATA_BLOCKED, STREAMS_BLOCKED): NoError, or the error to close with. `early`
+    // for a frame of a 0-RTT packet: its STREAM data is marked replayable.
+    [[nodiscard]] QuicTransportError on_frame(const QuicFrame& frame, bool early = false) noexcept;
 
     // Whether next_frame() would give a frame now: a credit or control frame owed, or data within both credits.
     [[nodiscard]] bool has_frame() const noexcept;
@@ -216,6 +228,7 @@ private:
         u64 stop_error = 0U;      // this side's STOP_SENDING
         u64 peer_reset_error = 0U;
         u64 peer_stop_error = 0U;
+        u64 early_end = 0U;    // the end of the data that came in 0-RTT packets
         u32 send_prev = kNone; // the urgency's send list
         u32 send_next = kNone;
         u32 event_next = kNone;
@@ -274,6 +287,8 @@ private:
     [[nodiscard]] const Slot* find(u64 id) const noexcept;
     [[nodiscard]] Lookup reach(u64 id, Slot*& slot, QuicTransportError& error) noexcept;
     [[nodiscard]] Slot* open_slot(Type& type) noexcept;
+    // Every slot free, every type's counters and both credits as init() leaves them.
+    void reset_state() noexcept;
     void try_free(Slot& slot) noexcept;
     void raise(Slot& slot, u8 events) noexcept;
     void relist(Slot& slot) noexcept;
@@ -281,7 +296,7 @@ private:
     [[nodiscard]] u32 index_of(const Slot& slot) const noexcept;
 
     // Receiving.
-    [[nodiscard]] QuicTransportError on_stream(const QuicFrame& frame, Slot& slot) noexcept;
+    [[nodiscard]] QuicTransportError on_stream(const QuicFrame& frame, Slot& slot, bool early) noexcept;
     [[nodiscard]] QuicTransportError on_reset(const QuicFrame& frame, Slot& slot) noexcept;
     [[nodiscard]] bool account_received(Slot& slot, u64 end) noexcept;
     void account_consumed(Slot& slot, u64 consumed_to) noexcept;

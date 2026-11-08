@@ -512,21 +512,8 @@ bool QuicRecovery::discard(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events)
     {
         return true;
     }
-    for (usize i = 0U; i < space.count; ++i)
-    {
-        QuicSentEntry& slot = entry(space, i);
-        if (slot.state == kOutstanding)
-        {
-            settle(space, slot);
-            slot.state = kLost;
-            events.on_discarded(id, slot.packet);
-        }
-    }
-    space.head              = 0U;
-    space.count             = 0U;
-    space.loss_time_ns      = kNeverNs;
-    space.last_eliciting_ns = 0U;
-    space.discarded         = true;
+    drop_outstanding(id, events);
+    space.discarded = true;
     space.received.reset(id);
     m_pto_count = 0U;
     arm(now_ns);
@@ -540,21 +527,7 @@ void QuicRecovery::retry(u64 now_ns, QuicRecoveryEvents& events) noexcept
     const u64 first_ns = (initial.count != 0U && m_pto_count == 0U) ? entry(initial, 0U).packet.sent_ns : now_ns;
     for (usize id = 0U; id < kQuicSpaces; ++id)
     {
-        Space& space = m_spaces[id];
-        for (usize i = 0U; i < space.count; ++i)
-        {
-            QuicSentEntry& slot = entry(space, i);
-            if (slot.state == kOutstanding)
-            {
-                settle(space, slot);
-                slot.state = kLost;
-                events.on_discarded(static_cast<QuicSpace>(id), slot.packet);
-            }
-        }
-        space.head = 0U;
-        space.count = 0U;
-        space.loss_time_ns = kNeverNs;
-        space.last_eliciting_ns = 0U;
+        drop_outstanding(static_cast<QuicSpace>(id), events);
     }
     if (!m_rtt.sampled() && now_ns > first_ns)
     {
@@ -563,6 +536,32 @@ void QuicRecovery::retry(u64 now_ns, QuicRecoveryEvents& events) noexcept
     }
     m_pto_count = 0U;
     arm(now_ns);
+}
+
+void QuicRecovery::reject_early(u64 now_ns, QuicRecoveryEvents& events) noexcept
+{
+    drop_outstanding(QuicSpace::Application, events);
+    m_pto_count = 0U;
+    arm(now_ns);
+}
+
+void QuicRecovery::drop_outstanding(QuicSpace id, QuicRecoveryEvents& events) noexcept
+{
+    Space& space = m_spaces[index_of(id)];
+    for (usize i = 0U; i < space.count; ++i)
+    {
+        QuicSentEntry& slot = entry(space, i);
+        if (slot.state == kOutstanding)
+        {
+            settle(space, slot);
+            slot.state = kLost;
+            events.on_discarded(id, slot.packet);
+        }
+    }
+    space.head = 0U;
+    space.count = 0U;
+    space.loss_time_ns = kNeverNs;
+    space.last_eliciting_ns = 0U;
 }
 
 bool QuicRecovery::can_send(QuicSpace id) const noexcept

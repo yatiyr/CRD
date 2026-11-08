@@ -930,3 +930,23 @@ TEST_CASE("quic recovery: the next timer is the earliest of loss detection and e
     f.send(QuicSpace::Initial, 0U, 0U);
     CHECK(f.recovery.next_timer_ns() == 5U * kMs + kMaxAckDelay);
 }
+
+TEST_CASE("quic recovery: a rejected 0-RTT leaves the Application space's packets without a congestion signal, and "
+          "numbers continue",
+          "[net][quic][recovery]")
+{
+    Fixture f;
+    f.send(QuicSpace::Initial, 0U, 0U);
+    f.send(QuicSpace::Application, 0U, 0U);
+    f.send(QuicSpace::Application, 1U, kMs);
+    CHECK(f.recovery.bytes_in_flight() == 3U * 1200U);
+    f.recovery.reject_early(2U * kMs, f.events);
+    CHECK(f.events.of('d') == 2U); // the two 0-RTT packets, as RFC 9002 section 6.4 discards them
+    CHECK(f.events.of('l') == 0U);
+    CHECK(f.recovery.bytes_in_flight() == 1200U); // the Initial stays in flight
+    CHECK(f.recovery.can_send(QuicSpace::Application));
+    CHECK(f.recovery.on_sent(QuicSpace::Application, packet(1U, 2U * kMs)) == QuicRecoveryError::BadNumber);
+    f.send(QuicSpace::Application, 2U, 2U * kMs);
+    CHECK(f.ack(QuicSpace::Initial, 0U, 0U, 3U * kMs).rtt_sampled);
+    CHECK(f.events.of('a') == 1U);
+}

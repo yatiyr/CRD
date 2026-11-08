@@ -571,4 +571,86 @@ TEST_CASE("QUIC transport parameters: RFC 9368's compatible negotiation and down
     CHECK(quic_client_check_version_information(silent, kV2, kV2, true, v2_first) ==
           QuicTransportError::VersionNegotiationError);
 }
+TEST_CASE("QUIC transport parameters: a server's 0-RTT part of its early data context, and a client's check of the "
+          "limits its 0-RTT kept to (RFC 9000 section 7.4.1, RFC 9221 section 3)",
+          "[net][quic-tp][quic-early]")
+{
+    QuicTransportParameters server;
+    server.initial_max_data = 1U;
+    server.initial_max_stream_data_bidi_local = 2U;
+    server.initial_max_stream_data_bidi_remote = 3U;
+    server.initial_max_stream_data_uni = 4U;
+    server.initial_max_streams_bidi = 5U;
+    server.initial_max_streams_uni = 6U;
+    server.active_connection_id_limit = 7U;
+    server.max_datagram_frame_size = 8U;
+    server.max_idle_timeout = 9U;
+    server.max_udp_payload_size = 1500U;
+    u8 encoded[kQuicEarlyParameterBytes];
+    REQUIRE(write_quic_early_parameters(server, Span<u8>(encoded)) == kQuicEarlyParameterBytes);
+    CHECK(encoded[0] == 1U); // the format
+    WireReader in{ConstSpan<u8>(encoded)};
+    u8 format = 0U;
+    REQUIRE(in.take_u8(format));
+    const u64 order[] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 1500U, 0U};
+    for (const u64 expected : order)
+    {
+        u64 value = 0U;
+        REQUIRE(in.take_u64(value));
+        CHECK(value == expected);
+    }
+    CHECK(in.done());
+    CHECK(write_quic_early_parameters(server, Span<u8>(encoded, kQuicEarlyParameterBytes - 1U)) == 0U);
+
+    // The same parameters write the same bytes (no grease); each one written changes them; the others do not.
+    u8 again[kQuicEarlyParameterBytes];
+    QuicTransportParameters same = server;
+    same.ack_delay_exponent = 10U;
+    same.max_ack_delay = 50U;
+    same.grease_quic_bit = true;
+    same.has_initial_source_connection_id = true;
+    same.initial_source_connection_id.bytes = 4U;
+    REQUIRE(write_quic_early_parameters(same, Span<u8>(again)) == kQuicEarlyParameterBytes);
+    CHECK(std::memcmp(encoded, again, sizeof(encoded)) == 0);
+    u64 QuicTransportParameters::* const written[] = {&QuicTransportParameters::initial_max_data,
+                                                      &QuicTransportParameters::initial_max_stream_data_bidi_local,
+                                                      &QuicTransportParameters::initial_max_stream_data_bidi_remote,
+                                                      &QuicTransportParameters::initial_max_stream_data_uni,
+                                                      &QuicTransportParameters::initial_max_streams_bidi,
+                                                      &QuicTransportParameters::initial_max_streams_uni,
+                                                      &QuicTransportParameters::active_connection_id_limit,
+                                                      &QuicTransportParameters::max_datagram_frame_size,
+                                                      &QuicTransportParameters::max_idle_timeout,
+                                                      &QuicTransportParameters::max_udp_payload_size};
+    for (u64 QuicTransportParameters::* const field : written)
+    {
+        QuicTransportParameters changed = server;
+        changed.*field += 1U;
+        REQUIRE(write_quic_early_parameters(changed, Span<u8>(again)) == kQuicEarlyParameterBytes);
+        CHECK(std::memcmp(encoded, again, sizeof(encoded)) != 0);
+    }
+    QuicTransportParameters migration = server;
+    migration.disable_active_migration = true;
+    REQUIRE(write_quic_early_parameters(migration, Span<u8>(again)) == kQuicEarlyParameterBytes);
+    CHECK(std::memcmp(encoded, again, sizeof(encoded)) != 0);
+
+    // A client's check: any limit its 0-RTT kept to that the accepted parameters lower is PROTOCOL_VIOLATION.
+    CHECK(quic_check_remembered_parameters(server, server) == QuicTransportError::NoError);
+    for (usize index = 0U; index < 8U; ++index)
+    {
+        QuicTransportParameters lowered = server;
+        lowered.*written[index] -= 1U;
+        CHECK(quic_check_remembered_parameters(server, lowered) == QuicTransportError::ProtocolViolation);
+        QuicTransportParameters raised = server;
+        raised.*written[index] += 1U;
+        CHECK(quic_check_remembered_parameters(server, raised) == QuicTransportError::NoError);
+    }
+    // What 0-RTT does not keep to may change (RFC 9000 section 7.4.1 lists the values a client never remembers).
+    QuicTransportParameters other = server;
+    other.max_idle_timeout = 1U;
+    other.max_udp_payload_size = 1200U;
+    other.ack_delay_exponent = 0U;
+    other.max_ack_delay = 1U;
+    CHECK(quic_check_remembered_parameters(server, other) == QuicTransportError::NoError);
+}
 } // namespace

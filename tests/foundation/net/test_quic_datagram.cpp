@@ -553,3 +553,53 @@ TEST_CASE("QUIC datagrams: every outcome is reported once and send_count holds a
     CHECK(plain.unreported() == 0U);
     CHECK(plain.queue(ConstSpan<u8>(payload, 16U), 0U, id) == QuicDatagramError::None);
 }
+
+TEST_CASE("QUIC datagrams: payloads of 0-RTT packets are marked, and a rejected 0-RTT drops the queue as Lost",
+          "[net][4.2a][quic-datagram][quic-early]")
+{
+    for (const bool outcomes : {true, false})
+    {
+        CountingAllocator allocator;
+        QuicDatagrams datagrams;
+        REQUIRE(datagrams.init(allocator, limits(4096U, 8U, outcomes)));
+        u8 bytes[16];
+        fill(bytes, sizeof(bytes), 1U);
+        QuicFrame frame;
+        frame.kind = QuicFrameKind::Datagram;
+        frame.data = ConstSpan<u8>(bytes, sizeof(bytes));
+        REQUIRE(datagrams.on_frame(frame, true) == QuicTransportError::NoError);
+        REQUIRE(datagrams.on_frame(frame) == QuicTransportError::NoError);
+        CHECK(datagrams.oldest_early());
+        datagrams.pop();
+        CHECK_FALSE(datagrams.oldest_early());
+        datagrams.pop();
+        CHECK_FALSE(datagrams.oldest_early()); // none held
+
+        datagrams.set_peer(1200U, kUdp);
+        u64 ids[3] = {};
+        for (u64& id : ids)
+        {
+            REQUIRE(datagrams.queue(ConstSpan<u8>(bytes, sizeof(bytes)), 0U, id) == QuicDatagramError::None);
+        }
+        u8 out[kUdp];
+        u64 sent = 0U;
+        REQUIRE(datagrams.write_next(Span<u8>(out, sizeof(out)), 0U, sent) != 0U); // one in flight
+        datagrams.reject_early();
+        CHECK(datagrams.queued() == 0U);
+        CHECK_FALSE(datagrams.sendable());
+        u64 id = 0U;
+        CHECK(datagrams.queue(ConstSpan<u8>(bytes, sizeof(bytes)), 0U, id) == QuicDatagramError::NotReady);
+        datagrams.on_lost(sent); // its packet's recovery state went
+        usize lost = 0U;
+        QuicDatagramReport report;
+        while (datagrams.poll(report))
+        {
+            CHECK(report.outcome == QuicDatagramOutcome::Lost);
+            ++lost;
+        }
+        CHECK(lost == (outcomes ? 3U : 0U));
+        CHECK(datagrams.unreported() == 0U);
+        datagrams.set_peer(1200U, kUdp);
+        CHECK(datagrams.queue(ConstSpan<u8>(bytes, sizeof(bytes)), 0U, id) == QuicDatagramError::None);
+    }
+}

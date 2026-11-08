@@ -1082,3 +1082,103 @@ TEST_CASE("QUIC stream set: DATA_BLOCKED names the connection only when it is wh
     CHECK(grant.records[0].kind == QuicFrameKind::MaxStreams);
     CHECK(grant.records[0].value == 5U);
 }
+
+TEST_CASE("QUIC stream set: remembered parameters for 0-RTT, then the server's, only raise, open streams included; "
+          "a rejection resets everything",
+          "[net][4.2a][quic-stream-set][quic-early]")
+{
+    CountingAllocator allocator;
+    QuicStreamSet client;
+    REQUIRE(client.init(allocator, limits(), QuicSide::Client));
+    const usize allocations = allocator.calls();
+    QuicTransportParameters remembered;
+    remembered.initial_max_data = 16384U;
+    remembered.initial_max_stream_data_bidi_remote = 2048U;
+    remembered.initial_max_streams_bidi = 1U;
+    client.set_peer_parameters(remembered);
+    u64 id = 0U;
+    REQUIRE(client.open(true, id) == QuicStreamError::None);
+    CHECK(client.open(true, id) == QuicStreamError::Blocked);
+    u64 offset = 0U;
+    CHECK_FALSE(write_pattern(client, 0U, offset, 9000U, 3U, false)); // the send buffer fills
+    const auto send_all = [&]
+    {
+        u64 sent = 0U;
+        QuicFrame frame;
+        QuicStreamRecord record;
+        while (client.next_frame(kRoom, 0U, kRtt, frame, record))
+        {
+            sent += (frame.kind == QuicFrameKind::Stream) ? frame.data.size() : 0U;
+        }
+        return sent;
+    };
+    CHECK(send_all() == 2048U); // the stream's remembered credit
+
+    QuicTransportParameters accepted = remembered;
+    accepted.initial_max_stream_data_bidi_remote = 4096U;
+    accepted.initial_max_streams_bidi = 3U;
+    client.set_peer_parameters(accepted);
+    CHECK(send_all() == 2048U); // the open stream's credit rose to the server's value
+    CHECK(client.peer_limit(true) == 3U);
+    REQUIRE(client.open(true, id) == QuicStreamError::None);
+    CHECK(id == 4U);
+    client.set_peer_parameters(remembered); // a lower grant never lowers one given
+    CHECK(client.peer_limit(true) == 3U);
+    CHECK(client.connection_credit().limit() == 16384U);
+
+    // RFC 9001 section 4.6.2: everything starts again, events included.
+    client.reset_all();
+    CHECK(client.open_streams() == 0U);
+    CHECK(client.connection_sent() == 0U);
+    CHECK(client.peer_limit(true) == 0U);
+    CHECK(client.connection_credit().limit() == 0U);
+    CHECK(client.send_state(0U) == QuicSendState::None);
+    QuicStreamEvent event;
+    CHECK_FALSE(client.poll(event));
+    CHECK_FALSE(client.has_frame());
+    CHECK(client.open(true, id) == QuicStreamError::Blocked);
+    client.set_peer_parameters(accepted);
+    REQUIRE(client.open(true, id) == QuicStreamError::None);
+    CHECK(id == 0U);
+    offset = 0U;
+    CHECK(write_pattern(client, 0U, offset, 1000U, 3U));
+    CHECK(send_all() == 1000U);
+    CHECK(allocator.calls() == allocations);
+}
+
+TEST_CASE("QUIC stream set: a server marks the bytes 0-RTT packets carried as replayable, up to their highest end",
+          "[net][4.2a][quic-stream-set][quic-early]")
+{
+    Pair pair(limits(), limits());
+    QuicStreamSet& server = pair.end[1];
+    u8 data[300];
+    for (usize at = 0U; at < sizeof(data); ++at)
+    {
+        data[at] = pattern(5U, at);
+    }
+    const auto frame_of = [&](u64 at, usize bytes)
+    {
+        QuicFrame frame;
+        frame.kind = QuicFrameKind::Stream;
+        frame.stream_id = 0U;
+        frame.offset = at;
+        frame.data = ConstSpan<u8>(data + at, bytes);
+        return frame;
+    };
+    REQUIRE(server.on_frame(frame_of(100U, 50U), true) == QuicTransportError::NoError); // 0-RTT, ahead of a gap
+    REQUIRE(server.on_frame(frame_of(0U, 100U)) == QuicTransportError::NoError);
+    REQUIRE(server.on_frame(frame_of(150U, 150U)) == QuicTransportError::NoError);
+    QuicStreamRead read = server.peek(0U);
+    REQUIRE(read.data.size() == 300U);
+    CHECK(read.early_bytes == 150U); // below the highest 0-RTT end, conservatively
+    REQUIRE(server.consume(0U, 120U) == QuicStreamError::None);
+    read = server.peek(0U);
+    CHECK(read.early_bytes == 30U);
+    REQUIRE(server.consume(0U, 30U) == QuicStreamError::None);
+    CHECK(server.peek(0U).early_bytes == 0U);
+    // Nothing is marked on a stream 0-RTT never reached.
+    QuicFrame other = frame_of(0U, 10U);
+    other.stream_id = 4U;
+    REQUIRE(server.on_frame(other) == QuicTransportError::NoError);
+    CHECK(server.peek(4U).early_bytes == 0U);
+}

@@ -15,6 +15,11 @@ constexpr usize kCreditBytes = 9U; // a MAX_DATA or MAX_STREAMS frame at most: i
     return (a < b) ? a : b;
 }
 
+[[nodiscard]] constexpr u64 max_u64(u64 a, u64 b) noexcept
+{
+    return (a > b) ? a : b;
+}
+
 [[nodiscard]] constexpr bool sending(QuicSendState state) noexcept
 {
     return state == QuicSendState::Ready || state == QuicSendState::Send || state == QuicSendState::DataSent;
@@ -150,13 +155,52 @@ bool QuicStreamSet::init(memory::IAllocator& allocator, const QuicStreamLimits& 
         type.bits = m_bits + word_at;
         byte_at += usize{type.capacity} * type.stride;
         word_at += usize{type.capacity} * type.words;
+    }
+    reset_state();
+    return true;
+}
+
+void QuicStreamSet::reset_state() noexcept
+{
+    for (Type& type : m_types)
+    {
         for (u32 slot = 0U; slot < type.capacity; ++slot)
         {
+            m_slots[type.first + slot] = Slot{};
             type.free[slot] = type.first + (type.capacity - 1U - slot); // the lowest slot is taken first
         }
         type.free_count = type.capacity;
+        type.open = 0U;
+        type.next = 0U;
+        type.limit = type.local ? 0U : type.capacity; // the peer's: initial_max_streams_*
+        type.freed = 0U;
+        type.send_credit = 0U;
+        type.blocked_at = 0U;
+        type.blocked_owed = false;
+        type.blocked_sent = false;
+        type.peer_blocked = false;
+        type.grant_lost = false;
     }
-    return true;
+    for (usize urgency = 0U; urgency < kQuicStreamUrgencies; ++urgency)
+    {
+        m_heads[urgency] = kNone;
+        m_listed[urgency] = 0U;
+    }
+    m_event_head = kNone;
+    m_event_tail = kNone;
+    m_credit = QuicSendCredit{};
+    m_window.reset(m_limits.connection_window, m_limits.connection_max_window);
+    m_sent = 0U;
+    m_received = 0U;
+    m_consumed = 0U;
+}
+
+void QuicStreamSet::reset_all() noexcept
+{
+    if (m_allocator != nullptr)
+    {
+        reset_state();
+    }
 }
 
 void QuicStreamSet::fill_parameters(QuicTransportParameters& local) const noexcept
@@ -172,18 +216,29 @@ void QuicStreamSet::fill_parameters(QuicTransportParameters& local) const noexce
 
 void QuicStreamSet::set_peer_parameters(const QuicTransportParameters& peer) noexcept
 {
-    m_credit.reset(peer.initial_max_data);
+    m_credit.raise(peer.initial_max_data);
     Type& local_bidi = m_types[type_index(true, true)];
     Type& local_uni = m_types[type_index(true, false)];
+    Type& peer_bidi = m_types[type_index(false, true)];
     // The peer's "remote" grant covers the streams this side opens; its "local" one those it opens (section 18.2).
-    local_bidi.send_credit = peer.initial_max_stream_data_bidi_remote;
-    local_bidi.limit = peer.initial_max_streams_bidi;
-    local_uni.send_credit = peer.initial_max_stream_data_uni;
-    local_uni.limit = peer.initial_max_streams_uni;
+    local_bidi.send_credit = max_u64(local_bidi.send_credit, peer.initial_max_stream_data_bidi_remote);
+    local_bidi.limit = max_u64(local_bidi.limit, peer.initial_max_streams_bidi);
+    local_uni.send_credit = max_u64(local_uni.send_credit, peer.initial_max_stream_data_uni);
+    local_uni.limit = max_u64(local_uni.limit, peer.initial_max_streams_uni);
     // An open() before the parameters met limit 0: its STREAMS_BLOCKED is stale once the grant is above it.
     local_bidi.blocked_owed = local_bidi.blocked_owed && local_bidi.limit <= local_bidi.blocked_at;
     local_uni.blocked_owed = local_uni.blocked_owed && local_uni.limit <= local_uni.blocked_at;
-    m_types[type_index(false, true)].send_credit = peer.initial_max_stream_data_bidi_local;
+    peer_bidi.send_credit = max_u64(peer_bidi.send_credit, peer.initial_max_stream_data_bidi_local);
+    Type* const sending_types[] = {&local_bidi, &local_uni, &peer_bidi};
+    for (const Type* type : sending_types)
+    {
+        for (u32 at = 0U; at < type->open; ++at)
+        {
+            Slot& slot = m_slots[type->order[at]];
+            slot.credit.raise(type->send_credit);
+            relist(slot);
+        }
+    }
 }
 
 // ---- Slots ----
@@ -484,12 +539,14 @@ void QuicStreamSet::drop_stopped(Slot& slot) noexcept
     }
 }
 
-QuicTransportError QuicStreamSet::on_stream(const QuicFrame& frame, Slot& slot) noexcept
+QuicTransportError QuicStreamSet::on_stream(const QuicFrame& frame, Slot& slot, bool early) noexcept
 {
-    if (!account_received(slot, frame.offset + frame.data.size())) // read_quic_frame bounds the end by 2^62 - 1
+    const u64 end = frame.offset + frame.data.size(); // read_quic_frame bounds it by 2^62 - 1
+    if (!account_received(slot, end))
     {
         return QuicTransportError::FlowControlError;
     }
+    slot.early_end = early ? max_u64(slot.early_end, end) : slot.early_end;
     const u64 contiguous = slot.in.contiguous_end();
     switch (slot.in.insert(frame.offset, frame.data, frame.fin))
     {
@@ -548,7 +605,7 @@ void QuicStreamSet::reset_send(Slot& slot, u64 error) noexcept
     relist(slot);
 }
 
-QuicTransportError QuicStreamSet::on_frame(const QuicFrame& frame) noexcept
+QuicTransportError QuicStreamSet::on_frame(const QuicFrame& frame, bool early) noexcept
 {
     switch (frame.kind)
     {
@@ -597,7 +654,7 @@ QuicTransportError QuicStreamSet::on_frame(const QuicFrame& frame) noexcept
     switch (frame.kind)
     {
         case QuicFrameKind::Stream:
-            error = on_stream(frame, *slot);
+            error = on_stream(frame, *slot, early);
             break;
         case QuicFrameKind::ResetStream:
             error = on_reset(frame, *slot);
@@ -1118,7 +1175,12 @@ QuicStreamRead QuicStreamSet::peek(u64 id) const noexcept
         return read;
     }
     read.data = slot->in.readable();
-    read.fin = slot->in.final_known() && slot->in.read_offset() + read.data.size() == slot->in.final_size();
+    const u64 offset = slot->in.read_offset();
+    read.fin = slot->in.final_known() && offset + read.data.size() == slot->in.final_size();
+    if (slot->early_end > offset)
+    {
+        read.early_bytes = static_cast<usize>(min_u64(slot->early_end - offset, read.data.size()));
+    }
     return read;
 }
 

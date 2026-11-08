@@ -612,6 +612,25 @@ bool QuicPacketProtection::can_open(QuicPacketType type) const noexcept
     }
 }
 
+bool QuicPacketProtection::keys_pending(QuicPacketType type) const noexcept
+{
+    if (!m_started || can_open(type))
+    {
+        return false;
+    }
+    switch (type)
+    {
+        case QuicPacketType::Handshake:
+            return !m_handshake_gone;
+        case QuicPacketType::ZeroRtt:
+            return m_side == crypto::QuicSide::Server && !m_early_gone;
+        case QuicPacketType::OneRtt:
+            return m_phases.recv == 0U && !m_recv[0].ready(); // the first 1-RTT receive key is still to come
+        default:
+            return false;
+    }
+}
+
 void QuicPacketProtection::discard(crypto::QuicLevel level) noexcept
 {
     switch (level)

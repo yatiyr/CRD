@@ -5,7 +5,9 @@
 //   0  a network script between a client and a server: each byte an operation on the datagrams in flight (deliver,
 //      drop, duplicate, reorder, corrupt a byte, advance time, 0xFD a Retry in place of the client Initials in flight
 //      while the server has none); then a clean path until both confirm or one closes. With bit 3 the client offers
-//      the other version too and the server prefers it: a compatible switch (RFC 9368 section 2.3).
+//      the other version too and the server prefers it: a compatible switch (RFC 9368 section 2.3). With bit 4 a
+//      first clean connection leaves the client a ticket, and the scripted one resumes with a stream and a datagram
+//      written before its first flight: 0-RTT (RFC 9001 section 4.6).
 //   1  frames from a raw client after the handshake: each [length][bytes] sealed as one 1-RTT packet to the server.
 //   2  frames in Initial packets anyone can seal (their keys come from the public Destination Connection ID): each
 //      [length][bytes] to a fresh server.
@@ -21,13 +23,17 @@
 // the IDs its connection holds, after every step; a script byte 0xFE rotates the server's IDs; and a confirmed client
 // that a stateless reset of the ID it sends to reaches drains, while a forged token changes nothing. A confirmed pair
 // agrees on whether a Retry was taken; the server accepts it only for an Initial to the Retry's ID. A confirmed pair
-// runs one version: the other one after a switch, the configured one otherwise.
+// runs one version: the other one after a switch, the configured one otherwise. 0-RTT: an offer ends Accepted or
+// Rejected on both ends alike; accepted, the server reads the early stream whole and unchanged, never marking more
+// bytes replayable than came; rejected, the client's streams were reset and the server opened none of them.
+#include <crd/crypto/replay.hpp>
 #include <crd/crypto/tls.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_connection.hpp>
 #include <crd/net/quic_header.hpp>
 
 #include <cstring>
+#include <ctime>
 
 namespace
 {
@@ -56,6 +62,10 @@ constexpr u8 kSeeds[2][kPrfKeyBytes] = {{0x01}, {0x02}};
 constexpr u64 kMs = 1000000U;
 constexpr usize kDatagram = 1500U;
 constexpr usize kFlights = 64U;
+constexpr u8 kTicketKey[kTlsTicketKeyBytes] = {0x71};
+constexpr u8 kAppContext[] = {0x5C, 0x11, 0xE7, 0x02};
+constexpr u64 kEarlyBytes = 800U; // within the stream and connection windows of config_for
+constexpr u8 kEarlyPayload[] = {0xDA, 0x7A};
 
 bool valid_close(u64 code)
 {
@@ -79,6 +89,9 @@ struct Identity
     TlsCredential credential;
     TlsContext client;
     TlsContext server;
+    ReplayFilter filter; // the 0-RTT server's, made fresh for each input
+    TlsContext early_client;
+    TlsContext early_server;
     bool ready = false;
 
     Identity()
@@ -110,12 +123,25 @@ struct Identity
         server_config.server_name = kServerName;
         server_config.application_protocols = kProtocols;
         ready = client.init(client_config) == TlsError::None && server.init(server_config) == TlsError::None;
+        client_config.early_data = true;
+        server_config.early_data = true;
+        server_config.early_data_filter = &filter;
+        server_config.ticket_key = ConstSpan<u8>(kTicketKey);
+        ready = ready && fresh_filter() && early_client.init(client_config) == TlsError::None &&
+                early_server.init(server_config) == TlsError::None;
+    }
+
+    bool fresh_filter()
+    {
+        filter.clear();
+        const u64 period = kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew;
+        return filter.init(64U, period, static_cast<u64>(std::time(nullptr))) == CryptoError::None;
     }
 };
 
-const Identity& identity()
+Identity& identity()
 {
-    static const Identity kIdentity;
+    static Identity kIdentity;
     CRD_FUZZ_REQUIRE(kIdentity.ready);
     return kIdentity;
 }
@@ -150,8 +176,45 @@ QuicVersion other_version(QuicVersion version)
     return (version == QuicVersion::V1) ? QuicVersion::V2 : QuicVersion::V1;
 }
 
-// With `switching` the client lists its version first and the server the other one.
-QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnectionIds* ids, bool switching = false)
+// A client's tickets: the newest one, handed out once.
+class Tickets final : public TlsTicketStore
+{
+public:
+    void keep(const TlsBinding& binding, ConstSpan<u8> ticket) noexcept override
+    {
+        if (ticket.size() <= sizeof(m_ticket))
+        {
+            m_binding = binding;
+            std::memcpy(m_ticket, ticket.data(), ticket.size());
+            m_bytes = ticket.size();
+        }
+    }
+
+    ConstSpan<u8> take(const TlsBinding& binding) noexcept override
+    {
+        if (m_bytes == 0U || !(m_binding == binding))
+        {
+            return {};
+        }
+        std::memcpy(m_handed, m_ticket, m_bytes);
+        const usize bytes = m_bytes;
+        m_bytes = 0U;
+        return ConstSpan<u8>(m_handed, bytes);
+    }
+
+    [[nodiscard]] bool holds() const { return m_bytes != 0U; }
+
+private:
+    TlsBinding m_binding;
+    u8 m_ticket[4096] = {};
+    u8 m_handed[4096] = {};
+    usize m_bytes = 0U;
+};
+
+// With `switching` the client lists its version first and the server the other one; with `tickets` both ends run
+// the contexts that take 0-RTT, the client keeping and offering its tickets there.
+QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnectionIds* ids, bool switching = false,
+                                Tickets* tickets = nullptr)
 {
     QuicConnectionConfig config;
     config.side = side;
@@ -164,6 +227,12 @@ QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnecti
     config.parameters.active_connection_id_limit = 4U;
     config.version = version;
     config.tls = (side == QuicSide::Client) ? &identity().client : &identity().server;
+    if (tickets != nullptr)
+    {
+        config.tls = (side == QuicSide::Client) ? &identity().early_client : &identity().early_server;
+        config.tickets = (side == QuicSide::Client) ? tickets : nullptr;
+        config.early_context = (side == QuicSide::Server) ? ConstSpan<u8>(kAppContext) : ConstSpan<u8>();
+    }
     config.parameters.max_idle_timeout = 30000U;
     config.sent_packets = 64U;
     config.sent_frames = 128U;
@@ -219,11 +288,11 @@ struct Pair
     QuicVersion version;
     bool retry_sent = false;
 
-    explicit Pair(QuicVersion run, bool switching = false)
+    explicit Pair(QuicVersion run, bool switching = false, Tickets* tickets = nullptr)
         : client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
           server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
-          client(allocator, config_for(QuicSide::Client, run, &client_host.ids, switching)),
-          server(allocator, config_for(QuicSide::Server, run, &server_host.ids, switching)), version(run)
+          client(allocator, config_for(QuicSide::Client, run, &client_host.ids, switching, tickets)),
+          server(allocator, config_for(QuicSide::Server, run, &server_host.ids, switching, tickets)), version(run)
     {
     }
 
@@ -514,13 +583,87 @@ void stateless_reset(Pair& pair)
     CRD_FUZZ_REQUIRE(client.state() == QuicConnectionState::Draining && client.close_info().stateless_reset);
 }
 
-void run_script(QuicVersion version, bool switching, ConstSpan<u8> script)
+// A first clean connection that leaves `tickets` a ticket for the next one (after the handshake, at the Application
+// level).
+void take_ticket(QuicVersion version, bool switching, Tickets& tickets)
 {
-    Pair pair(version, switching);
+    Pair first(version, switching, &tickets);
+    CRD_FUZZ_REQUIRE(first.client.connect(ConstSpan<u8>(kClientCid, sizeof(kClientCid)),
+                                          ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), first.now));
+    first.settle(4096U);
+    CRD_FUZZ_REQUIRE(first.client.confirmed() && first.server.confirmed());
+    for (usize round = 0U; round < 64U && !tickets.holds(); ++round)
+    {
+        first.now += 10U * kMs;
+        first.timers();
+        first.settle(1U);
+    }
+    CRD_FUZZ_REQUIRE(tickets.holds());
+}
+
+// The server's reads of the early stream after the script: whole and unchanged, its replayable marks never past
+// what came early.
+void read_early(Pair& pair)
+{
+    QuicStreamSet& server = pair.server.streams();
+    u64 read = 0U;
+    bool fin = false;
+    for (usize round = 0U; round < 256U && !fin && !finished(pair.client) && !finished(pair.server); ++round)
+    {
+        for (QuicStreamRead data = server.peek(0U); !data.data.empty() || data.fin; data = server.peek(0U))
+        {
+            CRD_FUZZ_REQUIRE(data.early_bytes <= data.data.size() && read + data.early_bytes <= kEarlyBytes);
+            for (usize at = 0U; at < data.data.size(); ++at)
+            {
+                CRD_FUZZ_REQUIRE(data.data[at] == static_cast<u8>((read + at) * 13U));
+            }
+            read += data.data.size();
+            CRD_FUZZ_REQUIRE(server.consume(0U, data.data.size()) == QuicStreamError::None);
+            fin = data.fin;
+            if (fin)
+            {
+                break;
+            }
+        }
+        pair.now += 10U * kMs;
+        pair.timers();
+        pair.settle(1U);
+    }
+    CRD_FUZZ_REQUIRE((fin && read == kEarlyBytes) || finished(pair.client) || finished(pair.server));
+}
+
+void run_script(QuicVersion version, bool switching, bool early, ConstSpan<u8> script)
+{
+    Tickets tickets;
+    if (early)
+    {
+        CRD_FUZZ_REQUIRE(identity().fresh_filter());
+        take_ticket(version, switching, tickets);
+    }
+    Pair pair(version, switching, early ? &tickets : nullptr);
     CRD_FUZZ_REQUIRE(pair.client.ready() && pair.server.ready());
     const usize allocations = pair.allocator.peak_bytes();
     CRD_FUZZ_REQUIRE(pair.client.connect(ConstSpan<u8>(kClientCid, sizeof(kClientCid)),
                                          ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), pair.now));
+    // A switch runs the first connection in the other version: its ticket is offered by none (RFC 9369 section 5).
+    const bool offered = pair.client.handshake().early_data() == TlsEarlyData::Offered;
+    CRD_FUZZ_REQUIRE(offered == (early && !switching));
+    if (offered)
+    {
+        u64 id = 0U;
+        CRD_FUZZ_REQUIRE(pair.client.streams().open(true, id) == QuicStreamError::None && id == 0U);
+        u8 bytes[kEarlyBytes];
+        for (usize at = 0U; at < sizeof(bytes); ++at)
+        {
+            bytes[at] = static_cast<u8>(at * 13U);
+        }
+        usize taken = 0U;
+        CRD_FUZZ_REQUIRE(pair.client.streams().write(0U, ConstSpan<u8>(bytes), true, taken) == QuicStreamError::None &&
+                         taken == kEarlyBytes);
+        u64 datagram = 0U;
+        CRD_FUZZ_REQUIRE(pair.client.datagrams().queue(ConstSpan<u8>(kEarlyPayload), pair.now, datagram) ==
+                         QuicDatagramError::None);
+    }
     for (usize at = 0U; at < script.size(); ++at)
     {
         pair.flush();
@@ -599,6 +742,23 @@ void run_script(QuicVersion version, bool switching, ConstSpan<u8> script)
         CRD_FUZZ_REQUIRE(pair.client.retried() == pair.server.retried());
         const QuicVersion running = switching ? other_version(version) : version;
         CRD_FUZZ_REQUIRE(pair.client.version() == running && pair.server.version() == running);
+        if (offered)
+        {
+            const TlsEarlyData decided = pair.client.handshake().early_data();
+            CRD_FUZZ_REQUIRE(decided == TlsEarlyData::Accepted || decided == TlsEarlyData::Rejected);
+            CRD_FUZZ_REQUIRE((decided == TlsEarlyData::Accepted) ==
+                             (pair.server.handshake().early_data() == TlsEarlyData::Accepted));
+            if (decided == TlsEarlyData::Accepted)
+            {
+                read_early(pair);
+            }
+            else
+            {
+                CRD_FUZZ_REQUIRE(pair.client.streams().open_streams() == 0U);
+                CRD_FUZZ_REQUIRE(pair.server.streams().recv_state(0U) == QuicRecvState::None);
+                CRD_FUZZ_REQUIRE(pair.server.datagrams().held() == 0U);
+            }
+        }
         transfer(pair);
         exchange_datagrams(pair);
         stateless_reset(pair);
@@ -821,7 +981,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     switch (data[0] & 3U)
     {
         case 0U:
-            run_script(version, (data[0] & 8U) != 0U, rest);
+            run_script(version, (data[0] & 8U) != 0U, (data[0] & 16U) != 0U, rest);
             break;
         case 1U:
             run_frames(version, rest, false);
@@ -847,6 +1007,15 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     const u8 switched_retry[] = {0x0CU, 0xFDU, 0x00U, 0x00U, 0x00U, 0x00U, 0x07U,
                                  0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U};
     sink.add("script-switch-retry", switched_retry, sizeof(switched_retry));
+    // 0-RTT on a resumed connection, clean, after a Retry and on a hostile path in version 2.
+    const u8 early[] = {0x10U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
+    sink.add("script-early", early, sizeof(early));
+    const u8 early_retry[] = {0x10U, 0xFDU, 0x00U, 0x00U, 0x00U, 0x00U, 0x07U,
+                              0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U};
+    sink.add("script-early-retry", early_retry, sizeof(early_retry));
+    const u8 early_hostile[] = {0x14U, 0x04U, 0x02U, 0x03U, 0x00U, 0x0CU, 0x05U, 0x40U, 0x08U, 0x07U,
+                                0x00U, 0x02U, 0x06U, 0x86U, 0x07U, 0x00U, 0x00U, 0x0BU, 0x00U};
+    sink.add("script-early-hostile", early_hostile, sizeof(early_hostile));
     // Losses, duplicates, a reorder and a corrupted byte in version 2.
     const u8 hostile[] = {0x04U, 0x02U, 0x03U, 0x00U, 0x0CU, 0x05U, 0x40U, 0x08U, 0x07U, 0x00U,
                           0x02U, 0x06U, 0x86U, 0x07U, 0x00U, 0x00U, 0x0BU, 0x00U, 0x00U};

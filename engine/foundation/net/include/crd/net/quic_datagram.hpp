@@ -16,7 +16,10 @@
 //                peer's transport has it), Lost (its packet was declared lost) or Expired (dropped unsent). A
 //                datagram counts against send_count until its report is polled, so no report is ever dropped.
 //   receiving    a peer's payload is copied into a byte ring the application reads in place (peek, pop); a full
-//                ring drops it and counts it (a receiver may drop datagrams, section 5).
+//                ring drops it and counts it (a receiver may drop datagrams, section 5). A server marks the
+//                payloads that came in 0-RTT packets: they are replayable.
+//   0-RTT        a client sends first under the size it remembers, then its server's; a rejection drops what is
+//                queued (Lost with outcomes) and waits for the server's size again.
 //   memory       both rings come from the injected allocator at init(); nothing allocates after it.
 //   threads      the datagrams belong to their connection's thread.
 
@@ -111,8 +114,12 @@ public:
     // The peer's max_datagram_frame_size, and the largest UDP payload a packet to it may take.
     void set_peer(u64 peer_max_frame, usize udp_payload) noexcept;
 
-    // A DATAGRAM frame from the peer: NoError (held, or dropped when the ring is full), or PROTOCOL_VIOLATION.
-    [[nodiscard]] QuicTransportError on_frame(const QuicFrame& frame) noexcept;
+    // A DATAGRAM frame from the peer: NoError (held, or dropped when the ring is full), or PROTOCOL_VIOLATION. `early`
+    // for a frame of a 0-RTT packet: its payload is marked replayable.
+    [[nodiscard]] QuicTransportError on_frame(const QuicFrame& frame, bool early = false) noexcept;
+    // A client's server rejected 0-RTT: every datagram queued is dropped unsent (reported Lost with outcomes; those
+    // in flight are reported by their packets), and queue() waits for set_peer() again.
+    void reject_early() noexcept;
 
     // The largest payload queue() takes now; 0 before set_peer() or while sending is unsupported.
     [[nodiscard]] usize max_payload() const noexcept { return m_max_payload; }
@@ -134,6 +141,8 @@ public:
 
     // The oldest payload received, in place: false when none is held. pop() gives it up.
     [[nodiscard]] bool peek(cont::ConstSpan<u8>& payload) const noexcept;
+    // Whether the oldest payload held came in a 0-RTT packet (replayable: RFC 9001 section 9.2); false for none.
+    [[nodiscard]] bool oldest_early() const noexcept;
     void pop() noexcept;
 
     [[nodiscard]] u32 queued() const noexcept { return m_send.count(); }
@@ -148,6 +157,7 @@ private:
         u64 id = 0U;
         u64 queued_ns = 0U;
         u32 bytes = 0U;
+        bool early = false; // received in a 0-RTT packet
     };
 
     // Payloads in arrival order, each contiguous in the byte ring: one that would pass its end starts again at its
@@ -156,7 +166,7 @@ private:
     {
     public:
         void bind(u8* bytes, u32 capacity, Entry* entries, u32 slots) noexcept;
-        [[nodiscard]] bool push(cont::ConstSpan<u8> payload, u64 id, u64 now_ns) noexcept;
+        [[nodiscard]] bool push(cont::ConstSpan<u8> payload, u64 id, u64 now_ns, bool early = false) noexcept;
         [[nodiscard]] const Entry& front() const noexcept { return m_entries[m_first]; }
         [[nodiscard]] const Entry& back() const noexcept { return m_entries[(m_first + m_count - 1U) % m_slots]; }
         [[nodiscard]] cont::ConstSpan<u8> bytes_of(const Entry& entry) const noexcept;

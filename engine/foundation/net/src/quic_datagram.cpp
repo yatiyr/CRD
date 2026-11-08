@@ -45,7 +45,7 @@ void QuicDatagrams::Ring::bind(u8* bytes, u32 capacity, Entry* entries, u32 slot
     m_slots = slots;
 }
 
-bool QuicDatagrams::Ring::push(cont::ConstSpan<u8> payload, u64 id, u64 now_ns) noexcept
+bool QuicDatagrams::Ring::push(cont::ConstSpan<u8> payload, u64 id, u64 now_ns, bool early) noexcept
 {
     if (m_count == m_slots || payload.size() > m_capacity)
     {
@@ -75,6 +75,7 @@ bool QuicDatagrams::Ring::push(cont::ConstSpan<u8> payload, u64 id, u64 now_ns) 
     entry.id = id;
     entry.queued_ns = now_ns;
     entry.bytes = static_cast<u32>(payload.size());
+    entry.early = early;
     m_tail = at + payload.size();
     ++m_count;
     return true;
@@ -173,13 +174,13 @@ void QuicDatagrams::set_peer(u64 peer_max_frame, usize udp_payload) noexcept
 
 // ---- Receiving ----
 
-QuicTransportError QuicDatagrams::on_frame(const QuicFrame& frame) noexcept
+QuicTransportError QuicDatagrams::on_frame(const QuicFrame& frame, bool early) noexcept
 {
     if (quic_frame_bytes(frame) > m_limits.max_frame_bytes)
     {
         return QuicTransportError::ProtocolViolation; // RFC 9221 section 3 (every frame passes a size of 0)
     }
-    if (m_receive.push(frame.data, m_counters.received, 0U))
+    if (m_receive.push(frame.data, m_counters.received, 0U, early))
     {
         ++m_counters.received;
     }
@@ -198,6 +199,11 @@ bool QuicDatagrams::peek(cont::ConstSpan<u8>& payload) const noexcept
     }
     payload = m_receive.bytes_of(m_receive.front());
     return true;
+}
+
+bool QuicDatagrams::oldest_early() const noexcept
+{
+    return m_receive.count() != 0U && m_receive.front().early;
 }
 
 void QuicDatagrams::pop() noexcept
@@ -322,6 +328,26 @@ void QuicDatagrams::on_lost(u64 id) noexcept
     {
         report(id, QuicDatagramOutcome::Lost);
     }
+}
+
+void QuicDatagrams::reject_early() noexcept
+{
+    while (m_send.count() != 0U)
+    {
+        const u64 id = m_send.front().id;
+        m_send.pop();
+        if (m_limits.outcomes)
+        {
+            report(id, QuicDatagramOutcome::Lost);
+        }
+        else
+        {
+            --m_unreported;
+        }
+    }
+    m_peer_known = false;
+    m_sendable = false;
+    m_max_payload = 0U;
 }
 
 bool QuicDatagrams::poll(QuicDatagramReport& out) noexcept
