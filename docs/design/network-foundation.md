@@ -368,6 +368,40 @@ with trimmed ranges and ECN, the estimator worked by hand, each threshold, the b
 amplification, discards, persistent congestion's three conditions, unsent acknowledgements, full storage and its
 ring), 23 source mutations each caught, and `crd-fuzz-net-quic-recovery` (a model of every packet sent and received).
 
+<a id="quic-streams"></a>
+### QUIC byte streams and flow control
+
+**S38. Byte streams and flow control** (4.2a, threats T09 and T11;
+[quic_stream.hpp](../../engine/foundation/net/include/crd/net/quic_stream.hpp); 2026-11-08). One owner for every
+ordered byte stream QUIC carries: each stream's data and each encryption level's CRYPTO data (S11's `provide` takes
+it in order; `take` consumes the handshake's copy, so the sent bytes stay here until acknowledged).
+
+- **Receiving** (RFC 9000 sections 2.2, 4.5 and 7.5). `QuicReceiveBuffer` stores data by offset in a window of its
+  capacity from the first unread byte, with one bit per byte for what arrived: memory is fixed and exact whatever the
+  peer overlaps, leaves out or repeats, and a frame of an acknowledged packet is never dropped. Refused, changing
+  nothing: a final size contradicted (a FIN at another size, data past it, a FIN below the data received;
+  FINAL_SIZE_ERROR), data past the window (FLOW_CONTROL_ERROR, or CRYPTO_BUFFER_EXCEEDED for CRYPTO data, whose
+  window is the handshake's `receive_limit`), and other bytes at an offset already held (PROTOCOL_VIOLATION, the
+  "MAY" of section 2.2 taken). A RESET_STREAM's final size is a zero-length FIN at that offset.
+- **Sending.** `QuicSendBuffer` keeps written data until acknowledged, with one bit per byte for acknowledged and for
+  lost data. The next chunk is the lowest lost run, else data never sent below the flow-control limit, never across
+  the storage's end; the FIN rides on the chunk ending at the final size or goes alone (it takes no credit). A loss
+  never marks bytes another copy had acknowledged; the room frees as the acknowledged prefix grows.
+- **Credit** (sections 4.1, 4.2 and 13.3). `QuicSendCredit` only rises and owes one DATA_BLOCKED or
+  STREAM_DATA_BLOCKED per limit while data waits, again if that frame is lost. `QuicReceiveWindow` checks every end
+  against the limit, owes an update once half the window was read, when the peer reports itself blocked (only if the
+  limit can rise) or when the latest update was lost, and doubles the window up to its maximum when updates come
+  within two smoothed RTTs (the auto-tuning of Chromium's and quiche's flow controllers), so the window follows the
+  path's bandwidth-delay product without a configured guess; a stream's maximum is its buffer's capacity.
+- **Storage.** Capacities are multiples of 64 bytes; the bitmaps are 1/8 of the receive capacity and 1/4 of the send
+  capacity, the caller's. Nothing allocates or reads a clock.
+
+Evidence: `test_quic_stream.cpp` (13 cases: storage, order, gaps, duplicates, changed bytes, the window and its wrap,
+the final size's three refusals, any order of 50 overlapping streams, room, flow-controlled fresh data, lost data
+first and acknowledged copies kept, the FIN sent, lost, resent and acknowledged, both credits, and a 6000-byte stream
+carried whole over 20 seeded paths that lose, reorder and duplicate, with auto-tuned updates), 24 source mutations each
+caught, and `crd-fuzz-net-quic-stream` (per-byte models of both buffers and the window's bounds).
+
 <a id="admission"></a>
 ## Bounded admission
 
