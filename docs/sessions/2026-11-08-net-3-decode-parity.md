@@ -12,7 +12,7 @@ it is that agent's work, and this track does not touch it.
 
 Nothing new from this track. 42416903705's two Build failures (linux-gcc-release, -shipping) are older than 8d5c9e63;
 42413677756's are older than their fixes; 42423776692, 42428822989 and 42430818018 have no failure yet. No completed
-run contains 6b9eca2c (42432298072 is pending), so the public-checks pre-fetch of the FlatBuffers and Cap'n Proto pins
+run contains 6b9eca2c (42432298072 was cancelled by a newer push), so the public-checks pre-fetch of the FlatBuffers and Cap'n Proto pins
 is still unread.
 
 ## What landed
@@ -37,5 +37,5 @@ is still unread.
 
 ## Next
 
-- NET.3's delta cost: encode 3.2x a decode and apply 2.8x against a floor of about 2x, spread over the interpreter's
-  per-field dispatch: generate each schema's delta walk from the tables the interpreter reads.
+- The delta CPU gap is explained, not a clause: S28 keeps one interpreter; per-field dispatch is the cost above the
+  floor. NET.3 closes at the audit of the first completed complete-tier run containing 9c7a6717.
