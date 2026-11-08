@@ -637,7 +637,8 @@ after every step, rotates on a script byte, and ends confirmed runs with a forge
   sends to, and only when its integrity tag verifies against the first Destination Connection ID. Anything else is
   dropped and counted. Taking it re-derives the Initial keys from the new ID, sends every later Initial there with
   the token, and continues the packet numbers. Recovery starts over: packets in flight leave as discarded (no
-  congestion signal), timers and the probe count reset, and the Initial's CRYPTO data goes again. When no probe was
+  congestion signal), timers and the probe count reset, and the Initial's CRYPTO data goes again. NET-PATH's
+  congestion controller must reset at the same call (RFC 9002 section 6.3). When no probe was
   sent, the time from the first flight to the Retry becomes the initial RTT estimate (not a sample). The server's
   next Initial still sets the ID the client sends to (section 7.2). Its retry_source_connection_id must name the
   Retry's ID, and a server that names none closes the client with PROTOCOL_VIOLATION (section 7.3).
