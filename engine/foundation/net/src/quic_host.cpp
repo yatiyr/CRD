@@ -12,16 +12,22 @@ namespace crd::net
 {
 namespace
 {
-constexpr usize kPeerKeyBytes = 16U + 2U; // an IPv6 address and a port
+constexpr usize kPeerKeyBytes = 16U + 4U + 2U; // an IPv6 address, its zone and a port
 
-// A peer's address and port as the key of the host's peer index.
+// A peer's address, zone and port as the key of the host's peer index: two keys are equal exactly when the endpoints
+// are (Endpoint's operator==).
 usize peer_key(const Endpoint& peer, u8 (&key)[kPeerKeyBytes]) noexcept
 {
     const cont::ConstSpan<u8> address = peer.address.view();
     std::memcpy(key, address.data(), address.size());
-    key[address.size()] = static_cast<u8>(peer.port >> 8U);
-    key[address.size() + 1U] = static_cast<u8>(peer.port & 0xFFU);
-    return address.size() + 2U;
+    usize at = address.size();
+    for (usize shift = 0U; shift < 32U; shift += 8U)
+    {
+        key[at++] = static_cast<u8>(peer.address.scope >> shift);
+    }
+    key[at++] = static_cast<u8>(peer.port >> 8U);
+    key[at++] = static_cast<u8>(peer.port & 0xFFU);
+    return at;
 }
 
 bool limits_valid(const QuicHostLimits& limits) noexcept
@@ -185,7 +191,7 @@ bool QuicHost::on_unrouted(const IngressDecision& decision, const ReceivedDatagr
     }
     u8 key[kPeerKeyBytes] = {};
     const u32 index = m_by_peer.find(cont::ConstSpan<u8>(key, peer_key(datagram.peer, key)));
-    QuicConnection* const connection = live_connection(index); // its peer is the key's (index_peer)
+    QuicConnection* const connection = live_connection(index); // its peer is the datagram's (peer_key)
     if (connection == nullptr || !connection->stateless_reset(datagram.storage.first(datagram.size), now_ns))
     {
         return false;

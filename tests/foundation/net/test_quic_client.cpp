@@ -656,9 +656,19 @@ TEST_CASE("QUIC client: the server's stateless reset ends a connection only from
     QuicConnection& connection = network->live(handle);
     const Datagram reset = network->server_reset(handle);
 
-    // The reset from another address ends nothing; from the server's it drains the connection.
+    // The reset from another address ends nothing, nor do its last 20 or 9 bytes from the server's (a reset is at
+    // least 21 bytes); the whole reset from the server's address drains the connection.
     network->deliver_to_client(reset.view(), kStranger);
     static_cast<void>(network->client_loop.poll());
+    for (const usize tail : {usize{20}, usize{9}})
+    {
+        Datagram cut;
+        cut.bytes[0] = reset.bytes[0];
+        std::memcpy(cut.bytes + 1U, reset.bytes + reset.size - (tail - 1U), tail - 1U);
+        cut.size = tail;
+        network->deliver_to_client(cut.view(), server_at(0U));
+        static_cast<void>(network->client_loop.poll());
+    }
     CHECK(network->client.counters().peer_resets == 0U);
     CHECK(connection.state() == QuicConnectionState::Established);
     network->deliver_to_client(reset.view(), server_at(0U));
