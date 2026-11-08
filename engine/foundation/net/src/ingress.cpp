@@ -362,10 +362,10 @@ usize Ingress::stateless_reset(const IngressDecision& decision, u64 bits, cont::
 {
     const usize trigger = decision.datagram_bytes;
     const usize longest = (trigger - 1U < kQuicMaxResetAnswerBytes) ? trigger - 1U : kQuicMaxResetAnswerBytes;
-    constexpr usize kShortTrigger = 43U; // a trigger this short gets a reset one byte shorter (section 10.3)
-    const usize bytes = (trigger <= kShortTrigger || longest <= kShortTrigger)
+    constexpr usize short_trigger = 43U; // a trigger this short gets a reset one byte shorter (section 10.3)
+    const usize bytes = (trigger <= short_trigger || longest <= short_trigger)
                             ? longest
-                            : kShortTrigger + static_cast<usize>(bits % (longest - kShortTrigger + 1U));
+                            : short_trigger + static_cast<usize>(bits % (longest - short_trigger + 1U));
     if (m_reset == nullptr || trigger <= kQuicMinResetBytes || out.size() < bytes)
     {
         ++m_counters.answer_failures;

@@ -188,9 +188,10 @@ private:
 
 struct Rig
 {
-    explicit Rig(const IoLoopConfig& config = IoLoopConfig{}, const HandshakeRules& rules = HandshakeRules{})
+    explicit Rig(const IoLoopConfig& config = IoLoopConfig{}, const HandshakeRules& rules = HandshakeRules{},
+                 const crd::crypto::QuicResetKey* reset = nullptr)
         : routes(allocator, 64U, ConstSpan<u8>(kKey)), buckets(allocator, rules, ConstSpan<u8>(kKey)),
-          ingress(IngressConfig{}, routes, buckets, &tokens, nullptr), handler(routes),
+          ingress(IngressConfig{}, routes, buckets, &tokens, nullptr, reset), handler(routes),
           loop(allocator, socket, clock, ingress, handler, config)
     {
         REQUIRE(tokens.init(ConstSpan<u8>(kTokenKey), {}) == CryptoError::None);
@@ -329,6 +330,35 @@ TEST_CASE("A turn reads at most batches_per_poll batches, so timers run under a 
     rig.socket.fail_receive = true;
     (void)rig.loop.poll();
     CHECK(rig.loop.counters().receive_errors == 1U);
+}
+
+TEST_CASE("A short header for no connection is answered with a stateless reset when the server holds a key",
+          "[net][io-loop]")
+{
+    constexpr u8 secret[crd::crypto::kQuicResetKeyBytes] = {0x5E};
+    crd::crypto::QuicResetKey key;
+    REQUIRE(key.init(ConstSpan<u8>(secret)) == CryptoError::None);
+    Rig rig(IoLoopConfig{}, HandshakeRules{}, &key);
+    const u8 unknown[16] = {2};
+    u8 token[crd::crypto::kQuicResetTokenBytes];
+    REQUIRE(key.token(view_of(unknown, 16U), Span<u8>(token)) == CryptoError::None);
+    for (usize index = 0U; index < 10U; ++index)
+    {
+        rig.socket.deliver(short_packet(view_of(unknown, 16U)), kClient);
+    }
+    (void)rig.loop.poll();
+    REQUIRE(rig.socket.sent_count == 10U);
+    CHECK(rig.loop.counters().answers_sent == 10U);
+    CHECK(rig.ingress.counters().resets == 10U);
+    CHECK(rig.ingress.counters().drops[static_cast<usize>(DropReason::UnknownConnection)] == 0U);
+    for (usize index = 0U; index < rig.socket.sent_count; ++index)
+    {
+        const Datagram& reset = rig.socket.sent[index].datagram;
+        CHECK(rig.socket.sent[index].peer == kClient);
+        CHECK(reset.size < 64U);
+        CHECK(reset.size >= kQuicMinResetBytes);
+        CHECK(std::memcmp(reset.bytes + reset.size - sizeof(token), token, sizeof(token)) == 0);
+    }
 }
 
 TEST_CASE("run() turns until stopped and waits between turns", "[net][io-loop]")
