@@ -922,6 +922,27 @@ the nanosecond, and each way a ticket leaves memory read back from a retaining a
 resumed connection's 0-RTT from the client's own cache in both versions, a cache turned off, a caller's store, expiry
 within a turn), and `crd-fuzz-net-ticket-cache` (keeps, takes and clock steps against a model of the contract).
 
+<a id="quic-interop"></a>
+**S50. Interoperability with a real QUIC stack** (4.2a; [quic_interop.py](../../tests/foundation/net/interop/quic_interop.py);
+2026-11-09). `crd-quic-peer` (crd-net's server and client over real UDP on the loopback) meets `crd-ngtcp2-quic-peer`, a
+program over the pinned ngtcp2 1.26.0 and OpenSSL 4.0.3 (`SSL_set_quic_tls_cbs`), each in its own process, both ways round,
+with one application: a client opens bidirectional streams and writes a pattern and a FIN, a server writes back as many
+bytes of another pattern as it read and then its FIN, every byte checked by both ends, and each end reports the version,
+streams, bytes, close and what OpenSSL negotiated, which the driver holds against the other's. ngtcp2's own example
+programs are not used: they speak HTTP/3 and hq-interop only through wolfSSL. Key updates are soft: `key_update_interval`
+starts an update (at three quarters of it) as soon as RFC 9001 section 6 allows one, and a peer slow to acknowledge
+the phase holds it back while the key seals on; only the AEAD's limit, or `limit_sealed_packets`, refuses. Before this
+a 64-packet interval closed a connection with AEAD_LIMIT_REACHED as soon as more than a quarter of the interval sat
+in flight, which only a real peer's flights showed.
+
+Evidence: `crd-net-quic-interop-ngtcp2` (58 cases on `linux-gcc-public-checks`, about 70 s): each way, QUIC v1 and v2 with
+either end closing and the code the other end read; the three hybrid groups and X25519; the three AEADs; 8 MiB on one
+stream past every window; 48 streams through a limit of 8 at once; compatible version negotiation to v2 (RFC 9368);
+a Retry from each server with the Retry packets counted off the wire; key updates each end starts, counted by ngtcp2;
+and three seeded relays (5% loss, 3% duplication, delay and jitter that reorders). An ngtcp2 server drops a first flight
+it receives out of order (`NGTCP2_ERR_RETRY`), and the peer takes the client's next Initial. Datagrams, resumption and
+0-RTT, Version Negotiation and stateless reset are the next cases. NET.4 adds the interop runner and the other peers.
+
 <a id="admission"></a>
 ## Bounded admission
 
