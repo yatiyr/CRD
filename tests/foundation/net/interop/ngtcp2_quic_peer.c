@@ -3,7 +3,9 @@
  *
  * Usage: crd-ngtcp2-quic-peer --role client|server --port N --seed HEX --group NAME --cipher NAME --version 1|2
  *                             --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1]
- *                             [--retry 1] [--key-update N]
+ *                             [--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N]
+ *                             [--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]]
+ *                             [--only-version 1] [--progress-at N] [--resets 1]
  *
  *   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
  *   seed         the 32-byte Ed25519 private key of the server's self-signed certificate; a client pins its public key
@@ -15,9 +17,21 @@
  *   compat       compatible version negotiation (RFC 9368): a client offers versions 1 and 2, a server prefers 2
  *   retry        a server answers a client Initial without a token with a Retry
  *   key-update   this end starts a key update every N 1-RTT packets it sends
+ *   datagrams    DATAGRAM frames a client sends, `datagram-bytes` each: the index in four bytes and a pattern; a server
+ *                sends each back in another pattern
+ *   datagram-limit  the max_datagram_frame_size this end advertises
+ *   datagram-probe  this end also offers one payload a byte over `datagram-bytes`, which its peer's limit must refuse
+ *   connections  connections run one after the other; a client resumes the second on a ticket of the first
+ *   early        0-RTT: a resuming client writes its streams and datagrams at once
+ *   reject-early a server refuses the second connection's 0-RTT
+ *   only-version a server runs `version` alone and answers others with Version Negotiation
+ *   progress-at  a server prints `progress=1` once it has read this many bytes
+ *   resets       a server answers a short header for no connection with a stateless reset: its tokens are derived from
+ *                a fixed key, so a restarted process answers for the connections of the one before
  *
- * The report, one `name=value` per line on standard output when the connection has ended, is the same as
- * cerid_quic_peer.cpp's plus what OpenSSL negotiated. The application is `cerid-interop`, a private ALPN. */
+ * The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
+ * is the same as cerid_quic_peer.cpp's plus what OpenSSL negotiated. The application is `cerid-interop`, a private
+ * ALPN. */
 #define _GNU_SOURCE /* ppoll */
 #include "openssl_self_signed.h"
 
@@ -35,6 +49,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,10 +64,19 @@
 #define CLOSING_QUIET_NS (300U * NGTCP2_MILLISECONDS)
 #define CLOSING_NS (2U * NGTCP2_SECONDS)
 #define RETRY_TOKEN_NS (10U * NGTCP2_SECONDS)
+#define MAX_DATAGRAMS 4096U
+#define MAX_DATAGRAM_BYTES 1400U
+#define DATAGRAM_INDEX_BYTES 4U
+#define DATAGRAM_SETTLE_NS NGTCP2_SECONDS /* no datagram for this long: those still out are lost */
+#define DATAGRAM_WAKE_NS (20U * NGTCP2_MILLISECONDS)
+#define SERVER_CID_BYTES 16U
+#define MAX_EARLY_PARAMETERS 256U
+#define MIN_INITIAL_DATAGRAM 1200U /* RFC 9000 section 14.1 */
 
 static const unsigned char ALPN[] = "\x0D" "cerid-interop";
 static const char SERVER_NAME[]   = "cerid.test";
 static const uint8_t RETRY_SECRET[32] = {0x52, 0x65, 0x74};
+static const uint8_t RESET_SECRET[32] = {0x52, 0x73, 0x74};
 static const uint32_t PREFER_V2[2] = {NGTCP2_PROTO_VER_V2, NGTCP2_PROTO_VER_V1};
 static const uint32_t OFFER_BOTH[2] = {NGTCP2_PROTO_VER_V1, NGTCP2_PROTO_VER_V2};
 
@@ -86,24 +110,58 @@ typedef struct
     ngtcp2_crypto_conn_ref  ref;
     unsigned char           pin[32];
     stream_t*               table;
+    uint64_t                key_update_packets; /* 0: this end starts none */
+    uint64_t                datagrams;
+    uint64_t                datagram_bytes;
+    uint64_t                datagram_limit;
+    uint64_t                connections;
+    uint64_t                number;           /* this connection's, from 1 */
+    uint64_t                progress_at;
+    uint32_t                original_version; /* a client's first attempt, after Version Negotiation */
+    uint32_t                offered_version;  /* what Version Negotiation's list chooses */
+    int                     compat;
+    int                     retry;
+    int                     early;
+    int                     reject_early;
+    int                     only_version;
+    int                     resets;
+    int                     datagram_probe;
+    SSL_SESSION*            session; /* a client's newest ticket */
+    uint8_t                 early_parameters[MAX_EARLY_PARAMETERS];
+    size_t                  early_parameters_size;
+    /* One connection's, cleared between connections from here on (next_connection). */
     uint64_t                opened;
     uint64_t                done;
     uint64_t                cursor;
     uint64_t                bytes_received;
     uint64_t                bytes_sent;
-    uint64_t                key_update_packets; /* 0: this end starts none */
     uint64_t                packets_since_update;
     uint64_t                key_updates;
-    int                     compat;
-    int                     retry;
-    int                     verified;
+    uint64_t                early_bytes;
+    uint64_t                early_datagrams;
+    uint64_t                datagrams_sent;
+    uint64_t                datagrams_received;
+    uint64_t                datagrams_acked;
+    uint64_t                last_datagram_ns;
+    uint64_t                first_ns;
+    uint32_t                echoes[MAX_DATAGRAMS]; /* a server's: the indices to send back */
+    uint64_t                echo_first;
+    uint64_t                echo_count;
+    uint8_t                 seen[MAX_DATAGRAMS / 8U];
+    int                     datagrams_unverified;
+    int                     datagram_refused;
+    int                     probed;
+    int                     sending_early; /* a client's, until its server answers */
+    int                     progressed;
+    int                     stateless_reset;
+    int                     unverified;
     int                     established;
     int                     pin_matched;
 } peer_t;
 
-/* The byte at `offset` of a stream's direction (tag 0: client to server, 1: server to client); a 64 KiB period, so
- * what ngtcp2 keeps until it is acknowledged can point straight into the table. */
-static uint8_t pattern[2][PATTERN_BYTES];
+/* The byte at `offset` of a stream's direction (tag 0: client to server, 1: server to client) or of a datagram's (2 and
+ * 3); a 64 KiB period, so what ngtcp2 keeps until it is acknowledged can point straight into the table. */
+static uint8_t pattern[4][PATTERN_BYTES];
 
 static size_t pattern_index(int64_t stream, uint64_t offset)
 {
@@ -112,7 +170,7 @@ static size_t pattern_index(int64_t stream, uint64_t offset)
 
 static void fill_pattern(void)
 {
-    for (uint32_t tag = 0; tag < 2U; ++tag)
+    for (uint32_t tag = 0; tag < 4U; ++tag)
     {
         for (uint32_t at = 0; at < PATTERN_BYTES; ++at)
         {
@@ -142,12 +200,14 @@ static int new_connection_id(ngtcp2_conn* conn, ngtcp2_cid* cid, ngtcp2_stateles
 {
     (void)conn;
     (void)user;
-    if (RAND_bytes(cid->data, (int)size) != 1 || RAND_bytes(token->data, sizeof(token->data)) != 1)
+    if (RAND_bytes(cid->data, (int)size) != 1)
     {
         return NGTCP2_ERR_CALLBACK_FAILURE;
     }
     cid->datalen = size;
-    return 0;
+    return ngtcp2_crypto_generate_stateless_reset_token(token->data, RESET_SECRET, sizeof(RESET_SECRET), cid) == 0
+               ? 0
+               : NGTCP2_ERR_CALLBACK_FAILURE;
 }
 
 static stream_t* stream_of(peer_t* peer, int64_t id)
@@ -183,15 +243,25 @@ static int recv_stream_data(ngtcp2_conn* conn, uint32_t flags, int64_t id, uint6
     {
         if (data[at] != expected[pattern_index(id, offset + at)])
         {
-            peer->verified = 0;
+            peer->unverified = 1;
         }
     }
     if (offset != stream->received)
     {
-        peer->verified = 0;
+        peer->unverified = 1;
     }
     stream->received += size;
     peer->bytes_received += size;
+    if ((flags & NGTCP2_STREAM_DATA_FLAG_0RTT) != 0U)
+    {
+        peer->early_bytes += size;
+    }
+    if (peer->progress_at != 0U && !peer->progressed && peer->bytes_received >= peer->progress_at)
+    {
+        peer->progressed = 1;
+        puts("progress=1");
+        fflush(stdout);
+    }
     if ((flags & NGTCP2_STREAM_DATA_FLAG_FIN) != 0U)
     {
         stream->in_end = 1;
@@ -233,6 +303,118 @@ static int update_key(ngtcp2_conn* conn, uint8_t* rx_secret, uint8_t* tx_secret,
                                        current_rx_secret, current_tx_secret, secret_size, user);
 }
 
+static uint32_t datagram_index(const uint8_t* data, size_t size)
+{
+    uint32_t index = 0U;
+    for (size_t at = 0; at < DATAGRAM_INDEX_BYTES && at < size; ++at)
+    {
+        index |= (uint32_t)data[at] << (at * 8U);
+    }
+    return index;
+}
+
+/* Holds a payload to its pattern, its size and its one delivery; a server sends it back. */
+static int recv_datagram(ngtcp2_conn* conn, uint32_t flags, const uint8_t* data, size_t size, void* user)
+{
+    (void)conn;
+    peer_t*        peer  = user;
+    const uint32_t index = datagram_index(data, size);
+    const uint8_t* expected = pattern[peer->client ? 3 : 2];
+    if (size != peer->datagram_bytes || index >= peer->datagrams ||
+        (peer->seen[index / 8U] & (1U << (index % 8U))) != 0U)
+    {
+        peer->datagrams_unverified = 1;
+        return 0;
+    }
+    peer->seen[index / 8U] = (uint8_t)(peer->seen[index / 8U] | (1U << (index % 8U)));
+    for (size_t at = DATAGRAM_INDEX_BYTES; at < size; ++at)
+    {
+        if (data[at] != expected[pattern_index(index, at)])
+        {
+            peer->datagrams_unverified = 1;
+        }
+    }
+    ++peer->datagrams_received;
+    peer->last_datagram_ns = now_ns();
+    if ((flags & NGTCP2_DATAGRAM_FLAG_0RTT) != 0U)
+    {
+        ++peer->early_datagrams;
+    }
+    if (!peer->client)
+    {
+        peer->echoes[(peer->echo_first + peer->echo_count) % MAX_DATAGRAMS] = index;
+        ++peer->echo_count;
+    }
+    return 0;
+}
+
+static int ack_datagram(ngtcp2_conn* conn, uint64_t id, void* user)
+{
+    (void)conn;
+    (void)id;
+    ++((peer_t*)user)->datagrams_acked;
+    return 0;
+}
+
+static int recv_stateless_reset(ngtcp2_conn* conn, const ngtcp2_pkt_stateless_reset2* reset, void* user)
+{
+    (void)conn;
+    (void)reset;
+    ((peer_t*)user)->stateless_reset = 1;
+    return 0;
+}
+
+static int recv_version_negotiation(ngtcp2_conn* conn, const ngtcp2_pkt_hd* header, const uint32_t* offered,
+                                    size_t count, void* user)
+{
+    (void)conn;
+    (void)header;
+    peer_t* peer          = user;
+    peer->offered_version = ngtcp2_select_version(OFFER_BOTH, 2U, offered, count);
+    return 0;
+}
+
+/* RFC 9001 section 4.6.2: what the 0-RTT packets carried is gone; the streams and datagrams start again. */
+static int early_data_rejected(ngtcp2_conn* conn, void* user)
+{
+    (void)conn;
+    peer_t* peer        = user;
+    peer->sending_early = 0;
+    peer->opened        = 0U;
+    peer->done          = 0U;
+    peer->cursor        = 0U;
+    peer->bytes_received = 0U;
+    peer->bytes_sent     = 0U;
+    peer->datagrams_sent = 0U;
+    peer->datagrams_received = 0U;
+    peer->datagrams_acked    = 0U;
+    memset(peer->seen, 0, sizeof(peer->seen));
+    memset(peer->table, 0, MAX_STREAMS * sizeof(stream_t));
+    return 0;
+}
+
+static int handshake_completed(ngtcp2_conn* conn, void* user)
+{
+    peer_t* peer = user;
+    if (!peer->client)
+    {
+        return 0;
+    }
+    if (peer->sending_early && SSL_get_early_data_status(peer->ssl) != SSL_EARLY_DATA_ACCEPTED)
+    {
+        const int rejected = ngtcp2_conn_tls_early_data_rejected(conn);
+        if (rejected != 0)
+        {
+            return rejected;
+        }
+    }
+    peer->sending_early = 0;
+    const ngtcp2_ssize size = ngtcp2_conn_encode_0rtt_transport_params2(conn, peer->early_parameters,
+                                                                        sizeof(peer->early_parameters));
+    peer->early_parameters_size = size > 0 ? (size_t)size : 0U;
+    return 0;
+}
+
 static ngtcp2_conn* conn_of(ngtcp2_crypto_conn_ref* ref)
 {
     return ((peer_t*)ref->user_data)->conn;
@@ -264,6 +446,15 @@ static int select_alpn(SSL* ssl, const unsigned char** out, unsigned char* out_s
     return SSL_TLSEXT_ERR_OK;
 }
 
+/* Keeps a client's newest ticket for the next connection. */
+static int keep_session(SSL* ssl, SSL_SESSION* session)
+{
+    peer_t* peer = ((ngtcp2_crypto_conn_ref*)SSL_get_app_data(ssl))->user_data;
+    SSL_SESSION_free(peer->session);
+    peer->session = session;
+    return 1;
+}
+
 /* A connection's SSL over the context; made anew when a server drops a connection that could not start. */
 static int make_session(peer_t* peer)
 {
@@ -279,12 +470,33 @@ static int make_session(peer_t* peer)
     if (peer->client)
     {
         SSL_set_connect_state(peer->ssl);
-        return ngtcp2_crypto_ossl_configure_client_session(peer->ssl) == 0 &&
-               SSL_set_alpn_protos(peer->ssl, ALPN, sizeof(ALPN) - 1U) == 0 &&
-               SSL_set_tlsext_host_name(peer->ssl, SERVER_NAME) == 1;
+        if (ngtcp2_crypto_ossl_configure_client_session(peer->ssl) != 0 ||
+            SSL_set_alpn_protos(peer->ssl, ALPN, sizeof(ALPN) - 1U) != 0 ||
+            SSL_set_tlsext_host_name(peer->ssl, SERVER_NAME) != 1)
+        {
+            return 0;
+        }
+        if (peer->session != NULL)
+        {
+            if (SSL_set_session(peer->ssl, peer->session) != 1)
+            {
+                return 0;
+            }
+            if (peer->early && SSL_SESSION_get_max_early_data(peer->session) != 0U)
+            {
+                SSL_set_quic_tls_early_data_enabled(peer->ssl, 1);
+                peer->sending_early = peer->early_parameters_size != 0U;
+            }
+        }
+        return 1;
     }
     SSL_set_accept_state(peer->ssl);
-    return ngtcp2_crypto_ossl_configure_server_session(peer->ssl) == 0;
+    if (ngtcp2_crypto_ossl_configure_server_session(peer->ssl) != 0)
+    {
+        return 0;
+    }
+    return !peer->early || (peer->reject_early && peer->number > 1U) ||
+           SSL_set_quic_tls_early_data_enabled(peer->ssl, 1) == 1;
 }
 
 static int make_tls(peer_t* peer, const char* group, const char* cipher, const unsigned char* seed)
@@ -302,6 +514,16 @@ static int make_tls(peer_t* peer, const char* group, const char* cipher, const u
             return 0;
         }
         SSL_CTX_set_alpn_select_cb(peer->ctx, select_alpn, NULL);
+        if (peer->early)
+        {
+            SSL_CTX_set_max_early_data(peer->ctx, UINT32_MAX);
+            SSL_CTX_set_options(peer->ctx, SSL_OP_NO_ANTI_REPLAY);
+        }
+    }
+    else
+    {
+        SSL_CTX_set_session_cache_mode(peer->ctx, SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL);
+        SSL_CTX_sess_set_new_cb(peer->ctx, keep_session);
     }
     return make_session(peer);
 }
@@ -334,6 +556,12 @@ static void default_callbacks(ngtcp2_callbacks* callbacks)
     callbacks->get_new_connection_id2    = new_connection_id;
     callbacks->get_path_challenge_data2  = ngtcp2_crypto_get_path_challenge_data2_cb;
     callbacks->stream_close2             = stream_close_cb;
+    callbacks->recv_datagram             = recv_datagram;
+    callbacks->ack_datagram              = ack_datagram;
+    callbacks->recv_stateless_reset2     = recv_stateless_reset;
+    callbacks->recv_version_negotiation  = recv_version_negotiation;
+    callbacks->handshake_completed       = handshake_completed;
+    callbacks->tls_early_data_rejected   = early_data_rejected;
 }
 
 static void default_parameters(peer_t* peer, ngtcp2_settings* settings, ngtcp2_transport_params* params)
@@ -348,6 +576,7 @@ static void default_parameters(peer_t* peer, ngtcp2_settings* settings, ngtcp2_t
     params->max_idle_timeout                    = 30U * NGTCP2_SECONDS;
     params->active_connection_id_limit          = 7U;
     params->grease_quic_bit                     = 1U;
+    params->max_datagram_frame_size             = peer->datagrams != 0U ? peer->datagram_limit : 0U;
     if (peer->compat)
     {
         settings->preferred_versions    = PREFER_V2;
@@ -355,6 +584,14 @@ static void default_parameters(peer_t* peer, ngtcp2_settings* settings, ngtcp2_t
         settings->available_versions    = peer->client ? OFFER_BOTH : PREFER_V2;
         settings->available_versionslen = 2U;
     }
+    if (peer->only_version)
+    {
+        settings->preferred_versions    = &peer->version;
+        settings->preferred_versionslen = 1U;
+        settings->available_versions    = &peer->version;
+        settings->available_versionslen = 1U;
+    }
+    settings->original_version = peer->original_version;
 }
 
 static int start_client(peer_t* peer)
@@ -381,6 +618,12 @@ static int start_client(peer_t* peer)
         return 0;
     }
     ngtcp2_conn_set_tls_native_handle(peer->conn, peer->ossl);
+    if (peer->sending_early &&
+        ngtcp2_conn_decode_and_set_0rtt_transport_params(peer->conn, peer->early_parameters,
+                                                         peer->early_parameters_size) != 0)
+    {
+        return 0;
+    }
     return 1;
 }
 
@@ -456,9 +699,10 @@ static int start_server(peer_t* peer, const uint8_t* data, size_t size)
         settings.token_type       = NGTCP2_TOKEN_TYPE_RETRY;
     }
     params.stateless_reset_token_present = 1U;
-    scid.datalen                         = 16U;
+    scid.datalen                         = SERVER_CID_BYTES;
     if (RAND_bytes(scid.data, (int)scid.datalen) != 1 ||
-        RAND_bytes(params.stateless_reset_token, NGTCP2_STATELESS_RESET_TOKENLEN) != 1)
+        ngtcp2_crypto_generate_stateless_reset_token(params.stateless_reset_token, RESET_SECRET, sizeof(RESET_SECRET),
+                                                     &scid) != 0)
     {
         return 0;
     }
@@ -483,9 +727,53 @@ static int send_datagram(peer_t* peer, const uint8_t* data, size_t size)
     return sent >= 0 || errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS;
 }
 
+/* RFC 9000 section 10.3: for a short header of no connection, a reset no longer than what it answers. */
+static int send_reset(peer_t* peer, const uint8_t* data, size_t size)
+{
+    uint8_t                      packet[DATAGRAM_BYTES];
+    uint8_t                      filler[DATAGRAM_BYTES];
+    ngtcp2_stateless_reset_token token;
+    if (size < 1U + SERVER_CID_BYTES || size < 1U + NGTCP2_MIN_STATELESS_RESET_RANDLEN + sizeof(token.data) + 1U ||
+        size > DATAGRAM_BYTES)
+    {
+        return 1;
+    }
+    ngtcp2_cid cid;
+    ngtcp2_cid_init(&cid, data + 1U, SERVER_CID_BYTES);
+    const size_t filler_size = size - sizeof(token.data) - 2U;
+    if (ngtcp2_crypto_generate_stateless_reset_token(token.data, RESET_SECRET, sizeof(RESET_SECRET), &cid) != 0 ||
+        RAND_bytes(filler, (int)filler_size) != 1)
+    {
+        return 0;
+    }
+    const ngtcp2_ssize wrote = ngtcp2_pkt_write_stateless_reset2(packet, sizeof(packet), &token, filler, filler_size);
+    return wrote > 0 && send_datagram(peer, packet, (size_t)wrote);
+}
+
+/* Version Negotiation for a client Initial of another version: 1 when it was one, and answered. */
+static int answer_other_version(peer_t* peer, const uint8_t* data, size_t size)
+{
+    ngtcp2_version_cid version;
+    const int          decoded = ngtcp2_pkt_decode_version_cid(&version, data, size, SERVER_CID_BYTES);
+    if ((decoded != 0 && decoded != NGTCP2_ERR_VERSION_NEGOTIATION) || (data[0] & 0x80U) == 0U ||
+        version.version == peer->version || size < MIN_INITIAL_DATAGRAM)
+    {
+        return 0;
+    }
+    uint8_t            packet[DATAGRAM_BYTES];
+    uint8_t            unused = 0U;
+    const ngtcp2_ssize wrote  = RAND_bytes(&unused, 1) == 1
+                                    ? ngtcp2_pkt_write_version_negotiation(
+                                          packet, sizeof(packet), unused, version.scid, version.scidlen, version.dcid,
+                                          version.dcidlen, &peer->version, 1U)
+                                    : -1;
+    return wrote > 0 && send_datagram(peer, packet, (size_t)wrote);
+}
+
 static void open_streams(peer_t* peer)
 {
-    while (peer->client && peer->opened < peer->streams && ngtcp2_conn_get_handshake_completed2(peer->conn))
+    while (peer->client && peer->opened < peer->streams &&
+           (ngtcp2_conn_get_handshake_completed2(peer->conn) || peer->sending_early))
     {
         int64_t id = -1;
         if (ngtcp2_conn_open_bidi_stream(peer->conn, &id, NULL) != 0)
@@ -524,6 +812,68 @@ static int64_t next_stream(peer_t* peer)
     return -1;
 }
 
+/* Writes datagram `index` of `tag`'s pattern into `out`. */
+static size_t fill_datagram(const peer_t* peer, uint8_t* out, uint32_t index, int tag)
+{
+    for (size_t at = 0; at < DATAGRAM_INDEX_BYTES; ++at)
+    {
+        out[at] = (uint8_t)(index >> (at * 8U));
+    }
+    for (size_t at = DATAGRAM_INDEX_BYTES; at < peer->datagram_bytes; ++at)
+    {
+        out[at] = pattern[tag][pattern_index(index, at)];
+    }
+    return (size_t)peer->datagram_bytes;
+}
+
+static int datagram_ready(const peer_t* peer)
+{
+    if (peer->client)
+    {
+        return peer->datagrams_sent < peer->datagrams &&
+               (ngtcp2_conn_get_handshake_completed2(peer->conn) || peer->sending_early);
+    }
+    return peer->echo_count != 0U && ngtcp2_conn_get_handshake_completed2(peer->conn);
+}
+
+/* What goes after a packet is written: 1 to carry on, 0 to give up. */
+static int packet_written(peer_t* peer, const uint8_t* packet, size_t size, uint64_t now)
+{
+    if (!send_datagram(peer, packet, size))
+    {
+        return 0;
+    }
+    ++peer->packets_since_update;
+    if (peer->key_update_packets != 0U && peer->packets_since_update >= peer->key_update_packets &&
+        ngtcp2_conn_get_handshake_completed2(peer->conn))
+    {
+        /* Refused while the last update is unconfirmed: the next packet asks again. */
+        if (ngtcp2_conn_initiate_key_update(peer->conn, now) == 0)
+        {
+            peer->packets_since_update = 0U;
+        }
+    }
+    return 1;
+}
+
+/* Offers once a payload a byte over the peer's limit, which ngtcp2 must refuse without writing a packet. */
+static void probe_datagram_limit(peer_t* peer, ngtcp2_path_storage* storage)
+{
+    if (!peer->datagram_probe || peer->probed || !ngtcp2_conn_get_handshake_completed2(peer->conn))
+    {
+        return;
+    }
+    static uint8_t  over[MAX_DATAGRAM_BYTES];
+    uint8_t         packet[DATAGRAM_BYTES];
+    ngtcp2_pkt_info info;
+    ngtcp2_vec      piece    = {over, (size_t)peer->datagram_bytes + 1U};
+    int             accepted = 0;
+    peer->probed             = 1;
+    peer->datagram_refused   = ngtcp2_conn_writev_datagram(peer->conn, &storage->path, &info, packet, sizeof(packet),
+                                                           &accepted, 0U, 0U, &piece, 1U, now_ns()) ==
+                             NGTCP2_ERR_INVALID_ARGUMENT;
+}
+
 static int write_streams(peer_t* peer)
 {
     uint8_t            datagram[DATAGRAM_BYTES];
@@ -533,10 +883,55 @@ static int write_streams(peer_t* peer)
     {
         peer->table[index].blocked = 0;
     }
-    const int tag = peer->client ? 0 : 1;
+    probe_datagram_limit(peer, &storage);
+    const int tag      = peer->client ? 0 : 1;
+    int       held     = 0; /* no room for a datagram in this write round */
     for (;;)
     {
         const uint64_t now = now_ns();
+        if (!held && datagram_ready(peer))
+        {
+            uint8_t         payload[MAX_DATAGRAM_BYTES];
+            const uint32_t  index = peer->client ? (uint32_t)peer->datagrams_sent : peer->echoes[peer->echo_first];
+            ngtcp2_vec      piece = {payload, fill_datagram(peer, payload, index, peer->client ? 2 : 3)};
+            ngtcp2_pkt_info info;
+            int             accepted = 0;
+            const ngtcp2_ssize wrote =
+                ngtcp2_conn_writev_datagram(peer->conn, &storage.path, &info, datagram, sizeof(datagram), &accepted,
+                                            NGTCP2_WRITE_DATAGRAM_FLAG_MORE, index, &piece, 1U, now);
+            if (accepted)
+            {
+                peer->last_datagram_ns = now;
+                if (peer->client)
+                {
+                    ++peer->datagrams_sent;
+                }
+                else
+                {
+                    peer->echo_first = (peer->echo_first + 1U) % MAX_DATAGRAMS;
+                    --peer->echo_count;
+                }
+            }
+            if (wrote == NGTCP2_ERR_WRITE_MORE)
+            {
+                continue;
+            }
+            if (wrote < 0)
+            {
+                fprintf(stderr, "ngtcp2_conn_writev_datagram: %s\n", ngtcp2_strerror((int)wrote));
+                return 0;
+            }
+            if (wrote == 0)
+            {
+                held = 1;
+                continue;
+            }
+            if (!packet_written(peer, datagram, (size_t)wrote, now))
+            {
+                return 0;
+            }
+            continue;
+        }
         int64_t        id  = next_stream(peer);
         ngtcp2_vec     vector;
         size_t         vectors = 0U;
@@ -604,25 +999,33 @@ static int write_streams(peer_t* peer)
             }
             continue;
         }
-        if (!send_datagram(peer, datagram, (size_t)wrote))
+        if (!packet_written(peer, datagram, (size_t)wrote, now))
         {
             return 0;
-        }
-        ++peer->packets_since_update;
-        if (peer->key_update_packets != 0U && peer->packets_since_update >= peer->key_update_packets &&
-            ngtcp2_conn_get_handshake_completed2(peer->conn))
-        {
-            /* Refused while the last update is unconfirmed: the next packet asks again. */
-            if (ngtcp2_conn_initiate_key_update(peer->conn, now) == 0)
-            {
-                peer->packets_since_update = 0U;
-            }
         }
     }
 }
 
+static int datagrams_settled(const peer_t* peer)
+{
+    if (peer->datagrams == 0U)
+    {
+        return 1;
+    }
+    if (peer->echo_count != 0U || (peer->client && peer->datagrams_sent < peer->datagrams))
+    {
+        return 0;
+    }
+    const uint64_t since = peer->last_datagram_ns != 0U ? peer->last_datagram_ns : peer->first_ns;
+    return peer->datagrams_received >= peer->datagrams || now_ns() - since >= DATAGRAM_SETTLE_NS;
+}
+
 static int all_done(const peer_t* peer)
 {
+    if (!datagrams_settled(peer) || (peer->client && peer->number < peer->connections && peer->session == NULL))
+    {
+        return 0;
+    }
     if (!peer->client)
     {
         return peer->done >= peer->streams;
@@ -675,11 +1078,23 @@ static void report(peer_t* peer, const char* close_kind, uint64_t close_code)
     {
         ended += peer->table[index].in_end ? 1U : 0U;
     }
+    const int   status = peer->established ? SSL_get_early_data_status(peer->ssl) : SSL_EARLY_DATA_NOT_SENT;
+    const char* early  = status == SSL_EARLY_DATA_ACCEPTED ? "accepted"
+                         : status == SSL_EARLY_DATA_REJECTED ? "rejected"
+                                                              : "none";
+    printf("connection=%llu\n", (unsigned long long)peer->number);
     printf("established=%d\nversion=%u\nstreams=%llu\nbytes_received=%llu\nbytes_sent=%llu\nverified=%d\n",
            peer->established,
            negotiated == NGTCP2_PROTO_VER_V2 ? 2U : (negotiated == NGTCP2_PROTO_VER_V1 ? 1U : 0U),
            (unsigned long long)ended, (unsigned long long)peer->bytes_received,
-           (unsigned long long)peer->bytes_sent, peer->verified);
+           (unsigned long long)peer->bytes_sent, !peer->unverified);
+    printf("resumed=%d\nearly=%s\nearly_bytes=%llu\nearly_datagrams=%llu\n",
+           peer->established ? (SSL_session_reused(peer->ssl) ? 1 : 0) : 0, early,
+           (unsigned long long)peer->early_bytes, (unsigned long long)peer->early_datagrams);
+    printf("datagrams_sent=%llu\ndatagrams_received=%llu\ndatagrams_acked=%llu\ndatagrams_verified=%d\n"
+           "datagrams_refused=%d\n",
+           (unsigned long long)peer->datagrams_sent, (unsigned long long)peer->datagrams_received,
+           (unsigned long long)peer->datagrams_acked, !peer->datagrams_unverified, peer->datagram_refused);
     printf("close=%s\nclose_code=%llu\npin=%d\nkey_updates=%llu\ngroup=%s\ncipher=%s\nalpn=%.*s\n", close_kind,
            (unsigned long long)close_code, peer->pin_matched, (unsigned long long)peer->key_updates,
            group != NULL ? group : "none",
@@ -724,6 +1139,34 @@ static void close_connection(peer_t* peer, uint64_t code)
     }
 }
 
+/* Frees what one connection held. QUIC's close stands for TLS's: without the flag, OpenSSL takes the free for a broken
+ * connection and marks its sessions unresumable, the ticket kept for the next connection among them. */
+static void free_connection(peer_t* peer)
+{
+    ngtcp2_conn_del(peer->conn);
+    peer->conn = NULL;
+    ngtcp2_crypto_ossl_ctx_del(peer->ossl);
+    peer->ossl = NULL;
+    SSL_set_shutdown(peer->ssl, SSL_SENT_SHUTDOWN);
+    SSL_free(peer->ssl);
+    peer->ssl = NULL;
+}
+
+static int begin_client(peer_t* peer);
+
+/* A client's first attempt met Version Negotiation: the next attempt, in the version it chose (RFC 9368 section 4). */
+static int restart_after_negotiation(peer_t* peer)
+{
+    if (peer->offered_version == 0U || peer->offered_version == peer->version || peer->original_version != 0U)
+    {
+        return 0;
+    }
+    peer->original_version = peer->version;
+    peer->version          = peer->offered_version;
+    free_connection(peer);
+    return make_session(peer) && begin_client(peer);
+}
+
 static const char* close_name(ngtcp2_ccerr_type type)
 {
     switch (type)
@@ -756,6 +1199,18 @@ static int read_datagrams(peer_t* peer)
         if (peer->conn == NULL)
         {
             peer->remote = from;
+            if (peer->resets && size > 0 && (datagram[0] & 0x80U) == 0U)
+            {
+                if (!send_reset(peer, datagram, (size_t)size))
+                {
+                    return 0;
+                }
+                continue;
+            }
+            if (peer->only_version && answer_other_version(peer, datagram, (size_t)size))
+            {
+                continue;
+            }
             if (!start_server(peer, datagram, (size_t)size))
             {
                 report(peer, "failed", 0U);
@@ -773,18 +1228,22 @@ static int read_datagrams(peer_t* peer)
         if (result == NGTCP2_ERR_DRAINING)
         {
             const ngtcp2_ccerr* error = ngtcp2_conn_get_ccerr2(peer->conn);
-            report(peer, close_name(error->type), error->error_code);
+            report(peer, peer->stateless_reset ? "reset" : close_name(error->type), error->error_code);
             return 0;
+        }
+        if (result == NGTCP2_ERR_RECV_VERSION_NEGOTIATION && peer->client)
+        {
+            if (!restart_after_negotiation(peer))
+            {
+                report(peer, "failed", 0U);
+                return 0;
+            }
+            continue;
         }
         if ((result == NGTCP2_ERR_RETRY || result == NGTCP2_ERR_DROP_CONN) && !peer->client && !peer->established)
         {
             /* The client's first flight arrived out of order: drop the attempt and take its next Initial. */
-            ngtcp2_conn_del(peer->conn);
-            peer->conn = NULL;
-            ngtcp2_crypto_ossl_ctx_del(peer->ossl);
-            peer->ossl = NULL;
-            SSL_free(peer->ssl);
-            peer->ssl = NULL;
+            free_connection(peer);
             if (!make_session(peer))
             {
                 return 0;
@@ -821,6 +1280,8 @@ static int run(peer_t* peer)
         {
             const uint64_t expiry = ngtcp2_conn_get_expiry2(peer->conn);
             wait                  = expiry <= now ? 0U : (expiry - now < wait ? expiry - now : wait);
+            /* A datagram that never comes tells ngtcp2 nothing: the wait for it is this program's. */
+            wait = (peer->datagrams != 0U && wait > DATAGRAM_WAKE_NS) ? DATAGRAM_WAKE_NS : wait;
         }
         struct pollfd   entry   = {peer->fd, POLLIN, 0};
         struct timespec timeout = {(time_t)(wait / NGTCP2_SECONDS), (long)(wait % NGTCP2_SECONDS)};
@@ -841,10 +1302,11 @@ static int run(peer_t* peer)
             {
                 fprintf(stderr, "ngtcp2_conn_handle_expiry: %s\n", ngtcp2_strerror(result));
                 report(peer, result == NGTCP2_ERR_IDLE_CLOSE ? "idle" : "failed", 0U);
-                return 0;
+                return result == NGTCP2_ERR_IDLE_CLOSE && peer->established;
             }
         }
         open_streams(peer);
+        peer->first_ns = peer->first_ns != 0U ? peer->first_ns : current;
         if (!write_streams(peer))
         {
             report(peer, "failed", 0U);
@@ -856,6 +1318,29 @@ static int run(peer_t* peer)
             return peer->established;
         }
     }
+}
+
+/* A client's next attempt on the socket: its parameters, its streams when 0-RTT carries them, its first flight. */
+static int begin_client(peer_t* peer)
+{
+    if (!start_client(peer))
+    {
+        return 0;
+    }
+    open_streams(peer);
+    return write_streams(peer);
+}
+
+/* Forgets the connection that ended and makes the next one's SSL. */
+static int next_connection(peer_t* peer)
+{
+    free_connection(peer);
+    memset(&peer->opened, 0, sizeof(*peer) - offsetof(peer_t, opened));
+    memset(peer->table, 0, MAX_STREAMS * sizeof(stream_t));
+    peer->original_version = 0U;
+    peer->offered_version  = 0U;
+    ++peer->number;
+    return make_session(peer);
 }
 
 static int parse_seed(const char* text, unsigned char* out)
@@ -880,7 +1365,8 @@ static int usage(void)
 {
     fputs("usage: crd-ngtcp2-quic-peer --role client|server --port N --seed HEX --group NAME --cipher NAME "
           "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] [--retry 1]"
-          " [--key-update N]\n",
+          " [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]]"
+          " [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N] [--resets 1]\n",
           stderr);
     return 2;
 }
@@ -895,8 +1381,10 @@ int main(int argc, char** argv)
     unsigned long   port       = 0UL;
     unsigned long   version    = 1UL;
     static peer_t   peer;
-    peer.verified    = 1;
-    peer.max_streams = 16U;
+    peer.max_streams    = 16U;
+    peer.datagram_limit = MAX_DATAGRAM_BYTES;
+    peer.connections    = 1U;
+    peer.number         = 1U;
     for (int at = 1; at + 1 < argc; at += 2)
     {
         const char* value = argv[at + 1];
@@ -956,13 +1444,55 @@ int main(int argc, char** argv)
         {
             peer.key_update_packets = strtoull(value, NULL, 10);
         }
+        else if (strcmp(argv[at], "--datagrams") == 0)
+        {
+            peer.datagrams = strtoull(value, NULL, 10);
+        }
+        else if (strcmp(argv[at], "--datagram-bytes") == 0)
+        {
+            peer.datagram_bytes = strtoull(value, NULL, 10);
+        }
+        else if (strcmp(argv[at], "--datagram-limit") == 0)
+        {
+            peer.datagram_limit = strtoull(value, NULL, 10);
+        }
+        else if (strcmp(argv[at], "--datagram-probe") == 0)
+        {
+            peer.datagram_probe = atoi(value);
+        }
+        else if (strcmp(argv[at], "--connections") == 0)
+        {
+            peer.connections = strtoull(value, NULL, 10);
+        }
+        else if (strcmp(argv[at], "--early") == 0)
+        {
+            peer.early = atoi(value);
+        }
+        else if (strcmp(argv[at], "--reject-early") == 0)
+        {
+            peer.reject_early = atoi(value);
+        }
+        else if (strcmp(argv[at], "--only-version") == 0)
+        {
+            peer.only_version = atoi(value);
+        }
+        else if (strcmp(argv[at], "--progress-at") == 0)
+        {
+            peer.progress_at = strtoull(value, NULL, 10);
+        }
+        else if (strcmp(argv[at], "--resets") == 0)
+        {
+            peer.resets = atoi(value);
+        }
         else
         {
             return usage();
         }
     }
     if (argc % 2 == 0 || role == NULL || group == NULL || cipher == NULL || seed == NULL ||
-        (version != 1UL && version != 2UL) || peer.streams > MAX_STREAMS || !parse_seed(seed, peer.pin))
+        (version != 1UL && version != 2UL) || peer.streams > MAX_STREAMS || !parse_seed(seed, peer.pin) ||
+        peer.datagrams > MAX_DATAGRAMS || peer.datagram_bytes + 1U > MAX_DATAGRAM_BYTES || peer.connections == 0U ||
+        (peer.datagrams != 0U && peer.datagram_bytes < DATAGRAM_INDEX_BYTES))
     {
         return usage();
     }
@@ -994,20 +1524,24 @@ int main(int argc, char** argv)
     {
         peer.remote           = bound;
         peer.remote.sin_port  = htons((uint16_t)port);
-        if (!start_client(&peer))
-        {
-            fputs("crd-ngtcp2-quic-peer: the connection could not be made\n", stderr);
-            return 1;
-        }
-        if (!write_streams(&peer))
-        {
-            return 1;
-        }
     }
     else
     {
         printf("port=%u\n", (unsigned)ntohs(peer.local.sin_port));
         fflush(stdout);
     }
-    return run(&peer) ? 0 : 1;
+    const uint64_t connections = peer.connections;
+    for (uint64_t connection = 1U; connection <= connections; ++connection)
+    {
+        if (peer.client && !begin_client(&peer))
+        {
+            fputs("crd-ngtcp2-quic-peer: the connection could not be made\n", stderr);
+            return 1;
+        }
+        if (!run(&peer) || (connection < connections && !next_connection(&peer)))
+        {
+            return 1;
+        }
+    }
+    return 0;
 }
