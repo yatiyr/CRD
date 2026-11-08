@@ -604,15 +604,20 @@ Sources: RFC 9000 sections 5.1.1, 5.1.2, 10.3 to 10.3.3, 19.15 and 19.16.
   rate allows: one byte shorter than a trigger of 43 bytes or fewer, else a random length from 43 to 128, always
   shorter than the trigger and at least 21 bytes, so a reset loop shrinks to nothing (section 10.3.3). Its fixed bits
   are 01 and the rest is random. 0-RTT and Handshake packets for no connection stay dropped: the client has no token
-  yet.
+  yet. The I/O loop sends resets through the same answer ring as Retry.
+- **Cost under abuse (T10).** A retirement names an ID the peer has learnt, so a peer can force at most one HMAC, one
+  random draw and one table insert per ID per round trip, bounded by its limit (at most 8). No cap on the total IDs
+  issued is needed. Tokens are kept per connection, not per remote address: one path exists until NET-PATH adds more.
 
 Evidence: `test_quic_token.cpp` (independent HMAC vectors, a shared and a fresh key, every refusal zeroing the
 output), `test_ingress.cpp` (sizes over nine trigger lengths 64 times each, the spread of lengths, the token and
-fixed bits, keyless, routed and rate-limited cases), and `test_quic_connection.cpp` (4 cases):
+fixed bits, keyless, routed and rate-limited cases), `test_io_loop.cpp` (resets sent by the loop), and
+`test_quic_connection.cpp` (4 cases):
 - both ends at the peer's limit over 12 seeded paths that lose 20% and duplicate 10%, with the host's tokens, the
   padding and every ID handed back on close;
 - two rotations, with packets routed to the new IDs and the retired token ignored;
-- replacement and both refusals from a raw peer, and a host that routes nothing;
+- replacement and both refusals from a raw peer (also after an earlier retirement in the same packet), and a host
+  that routes nothing (the refusal toward zero-length IDs needs a raw server and is untested);
 - resets ignored when too short, for an unused ID or with a forged token, a reset at 21 bytes, from Closing, and
   from a restarted server's ingress.
 

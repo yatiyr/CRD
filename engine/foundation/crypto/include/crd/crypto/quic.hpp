@@ -4,9 +4,9 @@
 //
 // The cryptography of RFC 9001 section 5 for QUIC versions 1 and 2 (RFC 9369), over the provider interface: the
 // Initial secrets, packet protection keys and their key updates, header protection, packet number encoding and the
-// Retry integrity tag; and the address-validation tokens of RFC 9000 section 8.1. Which secrets exist and when is the
-// TLS handshake's (the QUIC integration of tls.hpp); framing, connection IDs and loss recovery are the transport's
-// (crd-net, 4.2a). Rules:
+// Retry integrity tag; the address-validation tokens of RFC 9000 section 8.1 and the stateless reset tokens of section
+// 10.3.2. Which secrets exist and when is the TLS handshake's (the QUIC integration of tls.hpp); framing, connection
+// IDs and loss recovery are the transport's (crd-net, 4.2a). Rules:
 //
 //   packets   a packet is one buffer: the header (its packet number already encoded in it) and then the payload, with
 //             the AEAD tag's kQuicTagBytes at its end. Sealing and opening run in place; header protection reads its
