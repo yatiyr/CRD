@@ -482,10 +482,11 @@ void QuicReceiveWindow::on_peer_blocked() noexcept
 
 bool QuicReceiveWindow::update_owed() const noexcept
 {
-    if (m_lost)
-    {
-        return true;
-    }
+    return m_lost || raise_owed();
+}
+
+bool QuicReceiveWindow::raise_owed() const noexcept
+{
     const u64 next = min_u64(m_consumed + m_window, kQuicMaxVarint);
     if (next <= m_limit)
     {
@@ -497,6 +498,13 @@ bool QuicReceiveWindow::update_owed() const noexcept
 
 u64 QuicReceiveWindow::take_update(u64 now_ns, u64 rtt_ns) noexcept
 {
+    if (!raise_owed())
+    {
+        // Only a lost update is owed: it goes again as it was (section 13.3), which says nothing about the reader's
+        // pace, so the window is not tuned by it.
+        m_lost = false;
+        return m_limit;
+    }
     const u64 rtt = min_u64(rtt_ns, kMaxRttNs);
     if (m_updated && now_ns >= m_updated_ns && now_ns - m_updated_ns < 2U * rtt)
     {

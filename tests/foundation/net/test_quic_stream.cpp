@@ -476,6 +476,11 @@ TEST_CASE("quic receive window: limits, updates, auto-tuning and lost updates", 
     CHECK(window.update_owed());
     CHECK(window.take_update(5000U * kMs, 100U * kMs) == 10000U);
     CHECK_FALSE(window.update_owed());
+    // Resent at once, within two round trips: the same limit, and the window is not tuned by it.
+    window.on_update_lost(10000U);
+    CHECK(window.take_update(5001U * kMs, 100U * kMs) == 10000U);
+    CHECK(window.window() == 4000U);
+    CHECK_FALSE(window.update_owed());
 
     // A blocked peer gets an update only when it would raise the limit.
     window.on_peer_blocked();

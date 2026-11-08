@@ -203,6 +203,7 @@ public:
     [[nodiscard]] bool update_owed() const noexcept;
     // Settles the owed update and returns its limit, the consumed bytes plus the window; when the last update was
     // taken less than two `rtt_ns` (the smoothed RTT) before `now_ns`, the window doubles first, up to its maximum.
+    // An update owed only because the latest was lost returns that limit unchanged and tunes nothing.
     [[nodiscard]] u64  take_update(u64 now_ns, u64 rtt_ns) noexcept;
     // A packet carrying an update of `limit` was lost: owed again while that is still the latest (section 13.3).
     void               on_update_lost(u64 limit) noexcept;
@@ -213,6 +214,8 @@ public:
     [[nodiscard]] u64 consumed() const noexcept { return m_consumed; }
 
 private:
+    [[nodiscard]] bool raise_owed() const noexcept; // an update that raises the limit is owed
+
     u64  m_window     = 0U;
     u64  m_max_window = 0U;
     u64  m_limit      = 0U;
