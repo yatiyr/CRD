@@ -124,8 +124,8 @@ the unit's own first segment and read scratch. Both copy into the plain message;
 | | Cap'n Proto, packed | 99.2 | 107.4, 110.5 | 132.8, 133.3 |
 
 - **Bytes.** crd-net's snapshot is 2.5x smaller than either (FlatBuffers' 48-byte entity, Cap'n Proto's packed
-  words), its command 3.6x and 2.0x, its chat 1.5x and 1.2x. Packing buys Cap'n Proto only 2% on snapshots: an
-  entity's floats have no zero bytes to drop.
+  words), its command 3.6x and 2.0x, its chat 1.5x and 1.2x. Packing elides only zero bytes, and an entity's floats
+  rarely have any, so Cap'n Proto's packed snapshot lands within 2% of FlatBuffers' (the unpacked size was not taken).
 - **CPU.** FlatBuffers is the fastest arm on snapshots, 0.16x crd-net's encode and 0.21x its decode, by sending the
   application's layout at 2.5x the bytes (zpp_bits' trade, with offsets). Cap'n Proto's packed form is crd-net's
   encode cost and 2.2x its decode, at 2.5x the bytes; its command costs 4x crd-net's both ways.
