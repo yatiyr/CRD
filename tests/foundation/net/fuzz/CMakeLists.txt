@@ -35,6 +35,13 @@ crd_fuzz_target(crd-fuzz-net-quic-codec
 crd_fuzz_target(crd-fuzz-net-quic-packet
     SOURCES fuzz_quic_packet.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-packet")
 
+# QUIC acknowledgements and loss recovery (4.2a).
+#   crd-fuzz-net-quic-recovery   any sends, ACK frames, received packets, timeouts and discards on one connection's
+#                                recovery against a model of every packet: each settled once by its rule, losses
+#                                before acknowledgements, unsent acknowledgements refused, ranges and timers sound.
+crd_fuzz_target(crd-fuzz-net-quic-recovery
+    SOURCES fuzz_quic_recovery.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-recovery")
+
 # Frames and admission (NET.3).
 #   crd-fuzz-net-admission   any bytes on a stream and in datagrams, against a restated frame layout and admission
 #                            rule; a stream at every split reading as it reads whole; fragments of generated messages on

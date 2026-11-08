@@ -73,6 +73,8 @@ TARGETS = {
                        'executable': 'tests/net/fuzz/crd-fuzz-net-quic-codec'},
     'net-quic-packet': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-packet',
                         'executable': 'tests/net/fuzz/crd-fuzz-net-quic-packet'},
+    'net-quic-recovery': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-recovery',
+                          'executable': 'tests/net/fuzz/crd-fuzz-net-quic-recovery'},
     'net-state-hash': {'corpus': 'tests/foundation/net/fuzz/corpus-state-hash',
                        'executable': 'tests/net/fuzz/crd-fuzz-net-state-hash'},
     'net-coded-frames': {'corpus': 'tests/foundation/net/fuzz/corpus-coded-frames',
