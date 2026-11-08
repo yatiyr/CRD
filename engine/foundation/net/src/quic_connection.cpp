@@ -211,7 +211,6 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     SentFrame* const frames = memory::try_construct_array<SentFrame>(allocator, config.sent_frames);
     u8* const bytes = memory::try_construct_array<u8>(allocator, kQuicSpaces * 2U * crypto);
     u64* const bits = memory::try_construct_array<u64>(allocator, kQuicSpaces * 3U * words);
-    void* const recovery = allocator.try_allocate(sizeof(QuicRecovery), alignof(QuicRecovery));
     const bool streams = m_streams.init(allocator, config.streams, config.side);
     const bool datagrams = m_datagrams.init(allocator, config.datagrams);
     const usize early_bytes = early_context_bytes(config);
@@ -220,6 +219,7 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     u8* const held = (held_bytes != 0U) ? memory::try_construct_array<u8>(allocator, held_bytes) : nullptr;
     Held* const held_entries =
         (held_bytes != 0U) ? memory::try_construct_array<Held>(allocator, config.held_packets) : nullptr;
+    void* const recovery = allocator.try_allocate(sizeof(QuicRecovery), alignof(QuicRecovery));
     if (seeded != crypto::CryptoError::None || entries == nullptr || frames == nullptr || bytes == nullptr ||
         bits == nullptr || recovery == nullptr || !streams || !datagrams || (early_bytes != 0U && early == nullptr) ||
         (held_bytes != 0U && (held == nullptr || held_entries == nullptr)))
