@@ -339,19 +339,19 @@ inline constexpr ChannelDesc kChannels[] = {
 };
 
 inline constexpr DeltaField kBodyDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 16U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 18U, 4U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 18U, 4U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 18U, 4U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 29U, 4U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 4U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 16U, 0U, 0U, 103U, 6U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 18U, 4U, 0U, 87U, 5U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 18U, 4U, 0U, 69U, 4U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 18U, 4U, 0U, 51U, 3U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 29U, 4U, 0U, 33U, 2U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 4U, 0U, 0U, 4U, 1U},
 };
 inline constexpr DeltaField kWorldBodiesItemDelta[] = {
-    {kBodyDelta, 6U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U},
+    {kBodyDelta, 6U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U, 103U, 1U},
 };
 inline constexpr DeltaField kWorldDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 7U, 3U, 0U},
-    {kWorldBodiesItemDelta, 1U, 0U, DeltaKind::KeyedList, false, 11U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 7U, 3U, 0U, 0U, 0U},
+    {kWorldBodiesItemDelta, 1U, 0U, DeltaKind::KeyedList, false, 11U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaLayout kWorldLayout{kWorldDelta, 2U, kMinor,
                                   WorldCodec::kMaxBytes, delta_validate<World>};

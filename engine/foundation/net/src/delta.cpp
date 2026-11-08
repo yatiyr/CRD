@@ -5,6 +5,7 @@
 #include <crd/net/delta.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <new>
 
@@ -28,7 +29,7 @@ constexpr usize kExtensibleLengthMaxBytes = 5U;
         return delta_error;                                                                                            \
     }
 
-[[nodiscard]] WireError take(Reader& r, u32 bits, u64& value) noexcept
+[[nodiscard]] CRD_FORCEINLINE WireError take(Reader& r, u32 bits, u64& value) noexcept
 {
     return wire_error(bits == 0U || r.take(bits, value), WireError::Truncated);
 }
@@ -130,6 +131,99 @@ private:
     cont::Span<u8> m_room;
 };
 
+// ---- Runs of fixed-size fields (DeltaField::run) ----
+
+// A field the interpreter takes with its run: a lone fixed field of one value is as cheap on its own path.
+[[nodiscard]] constexpr bool runs_as_words(const DeltaField& field) noexcept
+{
+    return field.run > 1U || (field.run == 1U && field.kind != DeltaKind::Bits);
+}
+
+[[nodiscard]] constexpr u32 chunk_of(u64 bits) noexcept
+{
+    return (bits < 64U) ? static_cast<u32>(bits) : 64U;
+}
+
+// Where the next `bits` bits of `a` and `b` first differ, `bits` when they do not; neither reader moves.
+[[nodiscard]] WireError first_difference(Reader a, Reader b, u64 bits, u64& offset) noexcept
+{
+    offset = 0U;
+    while (offset < bits)
+    {
+        const u32 chunk = chunk_of(bits - offset);
+        u64 one = 0U;
+        u64 other = 0U;
+        CRD_DELTA_TRY(take(a, chunk, one));
+        CRD_DELTA_TRY(take(b, chunk, other));
+        if (const u64 difference = one ^ other; difference != 0U)
+        {
+            offset += static_cast<u64>(std::countl_zero(difference)) - (64U - chunk);
+            return WireError::Ok;
+        }
+        offset += chunk;
+    }
+    return WireError::Ok;
+}
+
+// Whether the next `bits` bits of both are the same; on `same == true` both stand past them.
+[[nodiscard]] WireError same_bits(Reader& a, Reader& b, u64 bits, bool& same) noexcept
+{
+    u64 offset = 0U;
+    CRD_DELTA_TRY(first_difference(a, b, bits, offset));
+    same = offset == bits;
+    if (same)
+    {
+        CRD_DELTA_TRY(wire_error(a.skip(bits) && b.skip(bits), WireError::Truncated));
+    }
+    return WireError::Ok;
+}
+
+// Where field `at` of the run starting at `first` begins, in bits from the run's start; `at` may be the run's end.
+[[nodiscard]] constexpr u64 run_offset(const DeltaField* fields, u32 first, u32 at) noexcept
+{
+    return fields[first].run_bits - ((at < first + fields[first].run) ? fields[at].run_bits : 0U);
+}
+
+// Past `bits` bits of `r`, and with Write the same bits to `w`.
+template <bool Write> [[nodiscard]] WireError move_bits(Reader& r, [[maybe_unused]] Writer* w, u64 bits) noexcept
+{
+    if constexpr (Write)
+    {
+        while (bits != 0U)
+        {
+            const u32 chunk = chunk_of(bits);
+            u64 value = 0U;
+            CRD_DELTA_TRY(take(r, chunk, value));
+            w->put(value, chunk);
+            bits -= chunk;
+        }
+        return WireError::Ok;
+    }
+    else
+    {
+        return wire_error(r.skip(bits), WireError::Truncated);
+    }
+}
+
+void put_zeros(Writer& w, u32 count) noexcept
+{
+    while (count != 0U)
+    {
+        const u32 chunk = chunk_of(count);
+        w.put(0U, chunk);
+        count -= chunk;
+    }
+}
+
+// The bits of `count` elements of one fixed size, refused before multiplying when `r` cannot hold them.
+[[nodiscard]] WireError elements_bits(const DeltaField& element, u64 count, const Reader& r, u64& bits) noexcept
+{
+    CRD_DELTA_TRY(
+        wire_error(element.run_bits == 0U || count <= r.bits_left() / element.run_bits, WireError::Truncated));
+    bits = count * element.run_bits;
+    return WireError::Ok;
+}
+
 // ---- Walking one encoding ----
 
 // Reads a field's value from `r`, and with Write writes it again to `w` at its own position. A value's bits do not
@@ -155,6 +249,25 @@ template <bool Write>
         }
     }
     return walk_value<Write>(field, r, w, minor);
+}
+
+template <bool Write>
+[[nodiscard]] WireError walk_fields(const DeltaField* fields, u32 count, Reader& r, [[maybe_unused]] Writer* w,
+                                    u16 minor) noexcept
+{
+    for (u32 index = 0U; index < count;)
+    {
+        const DeltaField& field = fields[index];
+        if (field.run != 0U)
+        {
+            CRD_DELTA_TRY(move_bits<Write>(r, w, field.run_bits));
+            index += field.run;
+            continue;
+        }
+        CRD_DELTA_TRY(walk_field<Write>(field, r, w, minor));
+        ++index;
+    }
+    return WireError::Ok;
 }
 
 template <bool Write>
@@ -194,11 +307,7 @@ template <bool Write>
             return WireError::Ok;
         }
         case DeltaKind::Struct:
-            for (u16 index = 0U; index < field.child_count; ++index)
-            {
-                CRD_DELTA_TRY(walk_field<Write>(field.children[index], r, w, minor));
-            }
-            return WireError::Ok;
+            return walk_fields<Write>(field.children, field.child_count, r, w, minor);
         case DeltaKind::Extensible:
         {
             Reader inner;
@@ -227,9 +336,16 @@ template <bool Write>
                 }
             }
             const u64 count = field.low + extra;
+            const DeltaField& element = field.children[0];
+            if (element.run != 0U)
+            {
+                u64 bits = 0U;
+                CRD_DELTA_TRY(elements_bits(element, count, r, bits));
+                return move_bits<Write>(r, w, bits);
+            }
             for (u64 index = 0U; index < count; ++index)
             {
-                CRD_DELTA_TRY(walk_value<Write>(field.children[0], r, w, minor));
+                CRD_DELTA_TRY(walk_value<Write>(element, r, w, minor));
             }
             return WireError::Ok;
         }
@@ -276,6 +392,31 @@ template <bool Write>
     return compare_value(field, a, b, minor, same);
 }
 
+[[nodiscard]] WireError compare_fields(const DeltaField* fields, u32 count, Reader& a, Reader& b, u16 minor,
+                                       bool& same) noexcept
+{
+    for (u32 index = 0U; index < count;)
+    {
+        const DeltaField& field = fields[index];
+        if (field.run != 0U)
+        {
+            CRD_DELTA_TRY(same_bits(a, b, field.run_bits, same));
+            index += field.run;
+        }
+        else
+        {
+            CRD_DELTA_TRY(compare_field(field, a, b, minor, same));
+            ++index;
+        }
+        if (!same)
+        {
+            return WireError::Ok;
+        }
+    }
+    same = true;
+    return WireError::Ok;
+}
+
 [[nodiscard]] WireError compare_value(const DeltaField& field, Reader& a, Reader& b, u16 minor, bool& same) noexcept
 {
     same = false;
@@ -310,16 +451,7 @@ template <bool Write>
             return WireError::Ok;
         }
         case DeltaKind::Struct:
-            for (u16 index = 0U; index < field.child_count; ++index)
-            {
-                CRD_DELTA_TRY(compare_field(field.children[index], a, b, minor, same));
-                if (!same)
-                {
-                    return WireError::Ok;
-                }
-            }
-            same = true;
-            return WireError::Ok;
+            return compare_fields(field.children, field.child_count, a, b, minor, same);
         case DeltaKind::Extensible:
         {
             Reader one;
@@ -347,9 +479,16 @@ template <bool Write>
                 return WireError::Ok;
             }
             const u64 count = field.low + one;
+            const DeltaField& element = field.children[0];
+            if (element.run != 0U)
+            {
+                u64 bits = 0U;
+                CRD_DELTA_TRY(elements_bits(element, count, a, bits));
+                return same_bits(a, b, bits, same);
+            }
             for (u64 index = 0U; index < count; ++index)
             {
-                CRD_DELTA_TRY(compare_value(field.children[0], a, b, minor, same));
+                CRD_DELTA_TRY(compare_value(element, a, b, minor, same));
                 if (!same)
                 {
                     return WireError::Ok;
@@ -367,6 +506,90 @@ template <bool Write>
 [[nodiscard]] WireError encode_value(const DeltaField& field, Reader& b, Reader& c, Writer& w, u16 minor,
                                      u16 schema_minor) noexcept;
 
+// A value both encodings hold: a zero bit when it is the same, otherwise a one (and for an optional field its presence)
+// and the change. A plain value is read once from each; a composite one is compared before it is written.
+[[nodiscard]] WireError encode_present(const DeltaField& field, Reader& b, Reader& c, Writer& w, u16 minor,
+                                       u16 schema_minor) noexcept
+{
+    const u64 changed = field.optional ? 0b11U : 0b1U;
+    const u32 changed_bits = field.optional ? 2U : 1U;
+    switch (field.kind)
+    {
+        case DeltaKind::Bits:
+        {
+            u64 was = 0U;
+            u64 is = 0U;
+            CRD_DELTA_TRY(take(b, field.width, was));
+            CRD_DELTA_TRY(take(c, field.width, is));
+            if (was == is)
+            {
+                w.put(0U, 1U);
+                return WireError::Ok;
+            }
+            w.put(changed, changed_bits);
+            if (field.diff != 0U)
+            {
+                wire_put_varuint(w, fold_difference(was, is, field.width), field.diff);
+            }
+            else if (field.width != 1U) // a changed bit is its own news
+            {
+                w.put(is, field.width);
+            }
+            return WireError::Ok;
+        }
+        case DeltaKind::Varuint:
+        case DeltaKind::Varsint:
+        {
+            u64 was = 0U;
+            u64 is = 0U;
+            CRD_DELTA_TRY(wire_take_varuint(b, field.width, ~u64{0U}, was));
+            CRD_DELTA_TRY(wire_take_varuint(c, field.width, ~u64{0U}, is));
+            if (was == is)
+            {
+                w.put(0U, 1U);
+                return WireError::Ok;
+            }
+            w.put(changed, changed_bits);
+            if (field.diff == 0U)
+            {
+                wire_put_varuint(w, is, field.width);
+            }
+            else if (field.kind == DeltaKind::Varuint)
+            {
+                wire_put_varuint(w, fold_difference(was, is, 64U), field.diff);
+            }
+            else
+            {
+                wire_put_varuint(
+                    w, fold_difference(static_cast<u64>(wire_unzigzag(was)), static_cast<u64>(wire_unzigzag(is)), 64U),
+                    field.diff);
+            }
+            return WireError::Ok;
+        }
+        case DeltaKind::Bytes:
+        case DeltaKind::Struct:
+        case DeltaKind::Extensible:
+        case DeltaKind::List:
+        case DeltaKind::KeyedList:
+        {
+            Reader b_after = b;
+            Reader c_after = c;
+            bool same = false;
+            CRD_DELTA_TRY(compare_value(field, b_after, c_after, minor, same));
+            if (same)
+            {
+                w.put(0U, 1U);
+                b = b_after;
+                c = c_after;
+                return WireError::Ok;
+            }
+            w.put(changed, changed_bits);
+            return encode_value(field, b, c, w, minor, schema_minor);
+        }
+    }
+    return WireError::OutOfRange;
+}
+
 [[nodiscard]] WireError encode_field(const DeltaField& field, Reader& b, Reader& c, Writer& w, u16 minor,
                                      u16 schema_minor) noexcept
 {
@@ -374,35 +597,64 @@ template <bool Write>
     {
         return WireError::Ok;
     }
-    Reader b_after = b;
-    Reader c_after = c;
-    bool same = false;
-    CRD_DELTA_TRY(compare_field(field, b_after, c_after, minor, same));
-    if (same)
-    {
-        w.put(0U, 1U);
-        b = b_after;
-        c = c_after;
-        return WireError::Ok;
-    }
-    w.put(1U, 1U);
     if (field.optional)
     {
         u64 was = 0U;
         u64 is = 0U;
         CRD_DELTA_TRY(take(b, 1U, was));
         CRD_DELTA_TRY(take(c, 1U, is));
-        w.put(is, 1U);
+        if (was != is)
+        {
+            w.put(0b10U | is, 2U);
+            return (is == 0U) ? skip_value(field, b, minor) : walk_value<true>(field, c, &w, minor);
+        }
         if (is == 0U)
         {
-            return skip_value(field, b, minor);
-        }
-        if (was == 0U)
-        {
-            return walk_value<true>(field, c, &w, minor);
+            w.put(0U, 1U);
+            return WireError::Ok;
         }
     }
-    return encode_value(field, b, c, w, minor, schema_minor);
+    return encode_present(field, b, c, w, minor, schema_minor);
+}
+
+// Fields `from` to `count` of a table. Within a run, the fields before the first bit that differs are their zero bits,
+// and the field holding that bit is coded on its own.
+[[nodiscard]] WireError encode_fields(const DeltaField* fields, u32 from, u32 count, Reader& b, Reader& c, Writer& w,
+                                      u16 minor, u16 schema_minor) noexcept
+{
+    for (u32 index = from; index < count;)
+    {
+        const DeltaField& field = fields[index];
+        if (field.since > minor || !runs_as_words(field))
+        {
+            CRD_DELTA_TRY(encode_field(field, b, c, w, minor, schema_minor));
+            ++index;
+            continue;
+        }
+        u64 offset = 0U;
+        CRD_DELTA_TRY(first_difference(b, c, field.run_bits, offset));
+        const u32 end = index + field.run;
+        u32 changed = end;
+        if (offset != field.run_bits)
+        {
+            // The run's end starts past `offset`, so this stops inside the run.
+            changed = index;
+            while (run_offset(fields, index, changed + 1U) <= offset)
+            {
+                ++changed;
+            }
+        }
+        const u64 same = run_offset(fields, index, changed);
+        put_zeros(w, changed - index);
+        CRD_DELTA_TRY(wire_error(b.skip(same) && c.skip(same), WireError::Truncated));
+        if (changed != end)
+        {
+            CRD_DELTA_TRY(encode_present(fields[changed], b, c, w, minor, schema_minor));
+            ++changed;
+        }
+        index = changed;
+    }
+    return WireError::Ok;
 }
 
 [[nodiscard]] WireError encode_keyed_list(const DeltaField& field, u64 old_count, u64 new_count, Reader& b, Reader& c,
@@ -446,10 +698,7 @@ template <bool Write>
                 w.put(0b10U, 2U);
                 CRD_DELTA_TRY(skip_value(element.children[0], b, minor));
                 CRD_DELTA_TRY(skip_value(element.children[0], c, minor));
-                for (u16 index = 1U; index < element.child_count; ++index)
-                {
-                    CRD_DELTA_TRY(encode_field(element.children[index], b, c, w, minor, schema_minor));
-                }
+                CRD_DELTA_TRY(encode_fields(element.children, 1U, element.child_count, b, c, w, minor, schema_minor));
             }
             ++old_at;
             ++new_at;
@@ -472,54 +721,15 @@ template <bool Write>
 {
     switch (field.kind)
     {
-        case DeltaKind::Bits:
-        {
-            u64 was = 0U;
-            u64 is = 0U;
-            CRD_DELTA_TRY(take(b, field.width, was));
-            CRD_DELTA_TRY(take(c, field.width, is));
-            if (field.diff != 0U)
-            {
-                wire_put_varuint(w, fold_difference(was, is, field.width), field.diff);
-            }
-            else if (field.width != 1U) // a changed bit is its own news
-            {
-                w.put(is, field.width);
-            }
-            return WireError::Ok;
-        }
+        case DeltaKind::Bits: // encode_present() writes a plain value's change as it reads it
         case DeltaKind::Varuint:
         case DeltaKind::Varsint:
-        {
-            u64 was = 0U;
-            u64 is = 0U;
-            CRD_DELTA_TRY(wire_take_varuint(b, field.width, ~u64{0U}, was));
-            CRD_DELTA_TRY(wire_take_varuint(c, field.width, ~u64{0U}, is));
-            if (field.diff == 0U)
-            {
-                wire_put_varuint(w, is, field.width);
-            }
-            else if (field.kind == DeltaKind::Varuint)
-            {
-                wire_put_varuint(w, fold_difference(was, is, 64U), field.diff);
-            }
-            else
-            {
-                wire_put_varuint(
-                    w, fold_difference(static_cast<u64>(wire_unzigzag(was)), static_cast<u64>(wire_unzigzag(is)), 64U),
-                    field.diff);
-            }
-            return WireError::Ok;
-        }
+            break;
         case DeltaKind::Bytes:
             CRD_DELTA_TRY(skip_value(field, b, minor));
             return walk_value<true>(field, c, &w, minor);
         case DeltaKind::Struct:
-            for (u16 index = 0U; index < field.child_count; ++index)
-            {
-                CRD_DELTA_TRY(encode_field(field.children[index], b, c, w, minor, schema_minor));
-            }
-            return WireError::Ok;
+            return encode_fields(field.children, 0U, field.child_count, b, c, w, minor, schema_minor);
         case DeltaKind::Extensible:
         {
             Reader old_body;
@@ -528,10 +738,8 @@ template <bool Write>
             CRD_DELTA_TRY(open_extensible(c, new_body));
             ExtensibleBody body(w);
             Writer inner(body.room());
-            for (u16 index = 0U; index < field.child_count; ++index)
-            {
-                CRD_DELTA_TRY(encode_field(field.children[index], old_body, new_body, inner, minor, schema_minor));
-            }
+            CRD_DELTA_TRY(
+                encode_fields(field.children, 0U, field.child_count, old_body, new_body, inner, minor, schema_minor));
             return body.close(inner);
         }
         case DeltaKind::List:
@@ -610,6 +818,39 @@ template <bool Write>
     return apply_value(field, b, d, w, minor, schema_minor);
 }
 
+// Fields `from` to `count` of a table. Within a run, the fields before the first change bit set are copied from the
+// baseline as words, and the field it marks is rebuilt on its own.
+[[nodiscard]] WireError apply_fields(const DeltaField* fields, u32 from, u32 count, Reader& b, Reader& d, Writer& w,
+                                     u16 minor, u16 schema_minor, bool& any) noexcept
+{
+    for (u32 index = from; index < count;)
+    {
+        const DeltaField& field = fields[index];
+        const u32 window = (field.run < 64U) ? field.run : 64U;
+        Reader probe = d;
+        u64 marks = 0U;
+        if (field.since > minor || !runs_as_words(field) || !probe.take(window, marks))
+        {
+            CRD_DELTA_TRY(apply_field(field, b, d, w, minor, schema_minor, any));
+            ++index;
+            continue;
+        }
+        const u32 same = (marks == 0U) ? window : static_cast<u32>(std::countl_zero(marks)) - (64U - window);
+        if (same == 0U)
+        {
+            CRD_DELTA_TRY(wire_error(d.skip(1U), WireError::Truncated));
+            any = true;
+            CRD_DELTA_TRY(apply_value(field, b, d, w, minor, schema_minor));
+            ++index;
+            continue;
+        }
+        CRD_DELTA_TRY(wire_error(d.skip(same), WireError::Truncated));
+        CRD_DELTA_TRY(move_bits<true>(b, &w, run_offset(fields, index, index + same)));
+        index += same;
+    }
+    return WireError::Ok;
+}
+
 // The rule the writer's merge follows: an insertion stands before the next old key and above everything already passed,
 // so a removal followed by an insertion of the same key, which says nothing new, has no encoding.
 [[nodiscard]] WireError apply_keyed_list(const DeltaField& field, u64 old_count, u64 new_count, Reader& b, Reader& d,
@@ -672,10 +913,8 @@ template <bool Write>
             {
                 CRD_DELTA_TRY(walk_value<true>(element.children[0], b, &w, minor));
                 bool changed = false;
-                for (u16 index = 1U; index < element.child_count; ++index)
-                {
-                    CRD_DELTA_TRY(apply_field(element.children[index], b, d, w, minor, schema_minor, changed));
-                }
+                CRD_DELTA_TRY(
+                    apply_fields(element.children, 1U, element.child_count, b, d, w, minor, schema_minor, changed));
                 CRD_DELTA_TRY(wire_error(changed, WireError::Unchanged));
                 any = true;
             }
@@ -753,10 +992,7 @@ template <bool Write>
         case DeltaKind::Struct:
         {
             bool any = false;
-            for (u16 index = 0U; index < field.child_count; ++index)
-            {
-                CRD_DELTA_TRY(apply_field(field.children[index], b, d, w, minor, schema_minor, any));
-            }
+            CRD_DELTA_TRY(apply_fields(field.children, 0U, field.child_count, b, d, w, minor, schema_minor, any));
             return wire_error(any, WireError::Unchanged);
         }
         case DeltaKind::Extensible:
@@ -768,10 +1004,8 @@ template <bool Write>
             ExtensibleBody body(w);
             Writer inner(body.room());
             bool any = false;
-            for (u16 index = 0U; index < field.child_count; ++index)
-            {
-                CRD_DELTA_TRY(apply_field(field.children[index], old_body, changes, inner, minor, schema_minor, any));
-            }
+            CRD_DELTA_TRY(apply_fields(field.children, 0U, field.child_count, old_body, changes, inner, minor,
+                                       schema_minor, any));
             CRD_DELTA_TRY(wire_finish(changes, minor, schema_minor));
             // What changed may lie in fields a newer writer added, which this reader cannot see.
             CRD_DELTA_TRY(wire_error(any || minor > schema_minor, WireError::Unchanged));
@@ -840,10 +1074,7 @@ WireError delta_encode(const DeltaLayout& layout, cont::ConstSpan<u8> baseline, 
     Reader b(baseline);
     Reader c(current);
     Writer w(out);
-    for (u16 index = 0U; index < layout.field_count; ++index)
-    {
-        CRD_DELTA_TRY(encode_field(layout.fields[index], b, c, w, minor, layout.schema_minor));
-    }
+    CRD_DELTA_TRY(encode_fields(layout.fields, 0U, layout.field_count, b, c, w, minor, layout.schema_minor));
     return finish_writer(w, written);
 }
 
@@ -855,10 +1086,7 @@ WireError delta_apply(const DeltaLayout& layout, cont::ConstSpan<u8> baseline, c
     Reader d(delta);
     Writer w(out);
     bool any = false;
-    for (u16 index = 0U; index < layout.field_count; ++index)
-    {
-        CRD_DELTA_TRY(apply_field(layout.fields[index], b, d, w, writer_minor, layout.schema_minor, any));
-    }
+    CRD_DELTA_TRY(apply_fields(layout.fields, 0U, layout.field_count, b, d, w, writer_minor, layout.schema_minor, any));
     CRD_DELTA_TRY(wire_finish(d, writer_minor, layout.schema_minor));
     return finish_writer(w, written);
 }

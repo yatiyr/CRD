@@ -448,6 +448,23 @@ class Deltas(SchemaCase):
         without = build(self.with_fields({'name': 'a', 'type': 'uint', 'bits': 3}))
         self.assertNotEqual(with_group.layout_digest(0), without.layout_digest(0))
 
+    def test_runs_join_fixed_fields_of_one_revision(self):
+        document = self.with_fields(
+            {'name': 'a', 'type': 'uint', 'bits': 3}, {'name': 'b', 'type': 'bool'},
+            {'name': 'c', 'type': 'uint', 'bits': 4, 'optional': True}, {'name': 'd', 'type': 'varuint', 'max': 100},
+            {'name': 'e', 'type': 'Pair'}, {'name': 'f', 'type': 'list', 'of': {'type': 'uint', 'bits': 4}, 'min': 2,
+                                            'max': 2},
+            {'name': 'g', 'type': 'list', 'of': {'type': 'uint', 'bits': 4}, 'max': 2},
+            {'name': 'h', 'type': 'uint', 'bits': 6, 'since': 1}, {'name': 'i', 'type': 'bool', 'since': 1})
+        document['revision']['minor'] = 1
+        document['messages'][0]['delta'] = True
+        document['structs'] = {'Pair': {'fields': [{'name': 'x', 'type': 'uint', 'bits': 5},
+                                                   {'name': 'y', 'type': 'uint', 'bits': 2}]}}
+        fields = build(document).messages[0]['type'].fields
+        runs = gen.delta_runs([(field.type, field.since, field.optional) for field in fields])
+        # A one-group varuint (d) and a list whose count varies (g) end a run, and so does a later revision (h).
+        self.assertEqual(runs, [(2, 4), (1, 1), (0, 0), (0, 0), (2, 15), (1, 8), (0, 0), (2, 7), (1, 1)])
+
     def test_folds_and_differences_are_small_either_way(self):
         for width in (1, 8, 64):
             top = (1 << width) - 1

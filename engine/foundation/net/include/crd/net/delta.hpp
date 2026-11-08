@@ -50,6 +50,11 @@ struct DeltaField
     u8 width = 0U;
     u8 diff = 0U; // a change travels as the difference in groups of this many bits; zero sends the value
     u32 low = 0U;
+    // The run from this field on: `run` siblings added at the same revision whose encodings always take `run_bits` in
+    // all (no presence bit, length, count that varies or alignment), compared, copied and skipped as words. Zero when
+    // this field's size varies.
+    u32 run_bits = 0U;
+    u16 run = 0U;
 };
 
 // A message's table, as generated. `validate` is its generated decoder.

@@ -1394,91 +1394,91 @@ inline constexpr ChannelDesc kChannels[] = {
 };
 
 inline constexpr DeltaField kPoseDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 16U, 3U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 11U, 3U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Varsint, false, 5U, 4U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 10U, 2U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 4U, 3U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 64U, 8U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Varsint, false, 7U, 8U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 7U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Varsint, false, 7U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 16U, 3U, 0U, 27U, 2U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 11U, 3U, 0U, 11U, 1U},
+    {nullptr, 0U, 0U, DeltaKind::Varsint, false, 5U, 4U, 0U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 10U, 2U, 0U, 10U, 1U},
+    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 4U, 3U, 0U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 64U, 8U, 0U, 64U, 1U},
+    {nullptr, 0U, 0U, DeltaKind::Varsint, false, 7U, 8U, 0U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 7U, 0U, 0U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Varsint, false, 7U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaField kEntityBagItemDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 8U, 3U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 8U, 3U, 0U, 8U, 1U},
 };
 inline constexpr DeltaField kEntityDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 16U, 0U, 0U},
-    {kPoseDelta, 9U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 1U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 1U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 2U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 32U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bytes, true, 4U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bytes, false, 4U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bytes, false, 0U, 0U, 3U},
-    {kEntityBagItemDelta, 1U, 0U, DeltaKind::List, false, 3U, 0U, 0U},
-    {kPoseDelta, 9U, 0U, DeltaKind::Struct, true, 0U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 16U, 0U, 0U, 16U, 1U},
+    {kPoseDelta, 9U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 1U, 0U, 0U, 36U, 4U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 1U, 0U, 0U, 35U, 3U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 2U, 0U, 0U, 34U, 2U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 32U, 0U, 0U, 32U, 1U},
+    {nullptr, 0U, 0U, DeltaKind::Bytes, true, 4U, 0U, 0U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bytes, false, 4U, 0U, 0U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bytes, false, 0U, 0U, 3U, 0U, 0U},
+    {kEntityBagItemDelta, 1U, 0U, DeltaKind::List, false, 3U, 0U, 0U, 0U, 0U},
+    {kPoseDelta, 9U, 0U, DeltaKind::Struct, true, 0U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaField kSnapshotEntitiesItemDelta[] = {
-    {kEntityDelta, 11U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U},
+    {kEntityDelta, 11U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaField kInnerDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 3U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bytes, false, 4U, 0U, 0U},
-    {nullptr, 0U, 1U, DeltaKind::Bits, false, 4U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 3U, 0U, 0U, 3U, 1U},
+    {nullptr, 0U, 0U, DeltaKind::Bytes, false, 4U, 0U, 0U, 0U, 0U},
+    {nullptr, 0U, 1U, DeltaKind::Bits, false, 4U, 0U, 0U, 4U, 1U},
 };
 inline constexpr DeltaField kHeaderDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 7U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bytes, false, 5U, 0U, 0U},
-    {kInnerDelta, 3U, 0U, DeltaKind::Extensible, false, 0U, 0U, 0U},
-    {nullptr, 0U, 1U, DeltaKind::Bits, false, 5U, 0U, 0U},
-    {nullptr, 0U, 2U, DeltaKind::Bytes, false, 4U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 7U, 0U, 0U, 7U, 1U},
+    {nullptr, 0U, 0U, DeltaKind::Bytes, false, 5U, 0U, 0U, 0U, 0U},
+    {kInnerDelta, 3U, 0U, DeltaKind::Extensible, false, 0U, 0U, 0U, 0U, 0U},
+    {nullptr, 0U, 1U, DeltaKind::Bits, false, 5U, 0U, 0U, 5U, 1U},
+    {nullptr, 0U, 2U, DeltaKind::Bytes, false, 4U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaField kSnapshotDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 2U, 2U, 0U},
-    {kSnapshotEntitiesItemDelta, 1U, 0U, DeltaKind::KeyedList, false, 4U, 0U, 0U},
-    {kHeaderDelta, 5U, 0U, DeltaKind::Extensible, false, 0U, 0U, 0U},
-    {kPoseDelta, 9U, 1U, DeltaKind::Struct, true, 0U, 0U, 0U},
-    {nullptr, 0U, 2U, DeltaKind::Bytes, false, 3U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 2U, 2U, 0U, 0U, 0U},
+    {kSnapshotEntitiesItemDelta, 1U, 0U, DeltaKind::KeyedList, false, 4U, 0U, 0U, 0U, 0U},
+    {kHeaderDelta, 5U, 0U, DeltaKind::Extensible, false, 0U, 0U, 0U, 0U, 0U},
+    {kPoseDelta, 9U, 1U, DeltaKind::Struct, true, 0U, 0U, 0U, 0U, 0U},
+    {nullptr, 0U, 2U, DeltaKind::Bytes, false, 3U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaLayout kSnapshotLayout{kSnapshotDelta, 5U, kMinor,
                                   SnapshotCodec::kMaxBytes, delta_validate<Snapshot>};
 
 inline constexpr DeltaField kMemberDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 7U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 7U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bytes, true, 3U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 7U, 0U, 0U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 7U, 0U, 0U, 7U, 1U},
+    {nullptr, 0U, 0U, DeltaKind::Bytes, true, 3U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaField kRosterMembersItemDelta[] = {
-    {kMemberDelta, 3U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U},
+    {kMemberDelta, 3U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaField kSeatDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 7U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 1U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 7U, 0U, 0U, 8U, 2U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 1U, 0U, 0U, 1U, 1U},
 };
 inline constexpr DeltaField kRosterSeatsItemDelta[] = {
-    {kSeatDelta, 2U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U},
+    {kSeatDelta, 2U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U, 8U, 1U},
 };
 inline constexpr DeltaField kRosterOrderedItemDelta[] = {
-    {kSeatDelta, 2U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U},
+    {kSeatDelta, 2U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U, 8U, 1U},
 };
 inline constexpr DeltaField kRosterScoresItemDelta[] = {
-    {kHeaderDelta, 5U, 0U, DeltaKind::Extensible, false, 0U, 0U, 0U},
+    {kHeaderDelta, 5U, 0U, DeltaKind::Extensible, false, 0U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaField kRosterDelta[] = {
-    {kRosterMembersItemDelta, 1U, 0U, DeltaKind::KeyedList, false, 3U, 0U, 1U},
-    {kRosterSeatsItemDelta, 1U, 0U, DeltaKind::KeyedList, false, 3U, 0U, 0U},
-    {kRosterOrderedItemDelta, 1U, 0U, DeltaKind::List, false, 0U, 0U, 2U},
-    {kRosterScoresItemDelta, 1U, 0U, DeltaKind::List, false, 2U, 0U, 0U},
+    {kRosterMembersItemDelta, 1U, 0U, DeltaKind::KeyedList, false, 3U, 0U, 1U, 0U, 0U},
+    {kRosterSeatsItemDelta, 1U, 0U, DeltaKind::KeyedList, false, 3U, 0U, 0U, 0U, 0U},
+    {kRosterOrderedItemDelta, 1U, 0U, DeltaKind::List, false, 0U, 0U, 2U, 16U, 1U},
+    {kRosterScoresItemDelta, 1U, 0U, DeltaKind::List, false, 2U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaLayout kRosterLayout{kRosterDelta, 4U, kMinor,
                                   RosterCodec::kMaxBytes, delta_validate<Roster>};
 
 inline constexpr DeltaField kMotionDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 16U, 3U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 32U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 8U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 16U, 3U, 0U, 56U, 3U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 32U, 0U, 0U, 40U, 2U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 8U, 0U, 0U, 8U, 1U},
 };
 inline constexpr DeltaLayout kMotionLayout{kMotionDelta, 3U, kMinor,
                                   MotionCodec::kMaxBytes, delta_validate<Motion>};

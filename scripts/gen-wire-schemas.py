@@ -1989,27 +1989,56 @@ def struct_lines(item, schema, message):
     return lines
 
 
+def delta_runs(fields):
+    """Each field's run, as (fields, bits): the siblings from it on, added at the same revision, whose encodings always
+    take the same bits (no presence bit, no length or count that varies, no alignment). A run unchanged in a delta is
+    its fields' zero bits, so the interpreter compares, copies and skips it as words. (0, 0) for a field outside one.
+    Only a width the walk reads without looking at the bits counts: a varuint whose maximum fits one group takes one
+    group when valid, but a hostile baseline's continuation bit would make the walk read on."""
+    def fixed(item, optional):
+        kind = item.delta_entry()[0]
+        if optional:
+            return False
+        if kind == 'Struct':
+            return all(field.since == 0 and fixed(field.type, field.optional) for field in item.fields)
+        if kind == 'List':
+            return item.count_bits == 0 and fixed(item.of, False)
+        return kind == 'Bits'
+
+    spans = [(0, 0)] * len(fields)
+    for index in range(len(fields) - 1, -1, -1):
+        item, since, optional = fields[index]
+        if not fixed(item, optional):
+            continue
+        after = spans[index + 1] if index + 1 < len(fields) and fields[index + 1][1] == since else (0, 0)
+        spans[index] = (after[0] + 1, after[1] + item.max_bits)
+    return spans
+
+
 def delta_tables(schema):
     """The tables crd/net/delta.hpp's interpreter walks, children first, and each delta message's layout."""
     lines = []
     emitted = set()
 
-    def entry(item, since, optional, diff):
+    def entry(item, since, optional, diff, run):
         kind, width, low, table, count = item.delta_entry()
         if isinstance(item, StructType):
             table_of(item)
         elif isinstance(item, ListType) and table not in emitted:
             emitted.add(table)
-            element = entry(item.of, 0, False, item.element_diff)
+            element = entry(item.of, 0, False, item.element_diff, delta_runs([(item.of, 0, False)])[0])
             lines.extend([f'inline constexpr DeltaField {table}[] = {{', f'    {element},', '};'])
         return (f'{{{table or "nullptr"}, {count}U, {since}U, DeltaKind::{kind}, {"true" if optional else "false"}, '
-                f'{width}U, {diff}U, {low}U}}')
+                f'{width}U, {diff}U, {low}U, {run[1]}U, {run[0]}U}}')
 
     def table_of(item):
         name = f'k{item.name}Delta'
         if name not in emitted:
             emitted.add(name)
-            rows = [entry(field.type, field.since, field.optional, field.diff) for field in item.fields]
+            fields = item.fields
+            spans = delta_runs([(field.type, field.since, field.optional) for field in fields])
+            rows = [entry(field.type, field.since, field.optional, field.diff, span)
+                    for field, span in zip(fields, spans)]
             lines.extend([f'inline constexpr DeltaField {name}[] = {{'] + [f'    {row},' for row in rows] + ['};'])
         return name
 

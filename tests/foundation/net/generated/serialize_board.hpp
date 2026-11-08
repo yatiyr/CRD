@@ -701,25 +701,25 @@ inline constexpr ChannelDesc kChannels[] = {
 };
 
 inline constexpr DeltaField kEntityDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 10U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 20U, 3U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 20U, 3U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 20U, 3U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 29U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 13U, 3U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 13U, 3U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 13U, 3U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 7U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 2U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, false, 1U, 0U, 0U},
-    {nullptr, 0U, 0U, DeltaKind::Bits, true, 10U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 10U, 0U, 0U, 148U, 11U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 20U, 3U, 0U, 138U, 10U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 20U, 3U, 0U, 118U, 9U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 20U, 3U, 0U, 98U, 8U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 29U, 0U, 0U, 78U, 7U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 13U, 3U, 0U, 49U, 6U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 13U, 3U, 0U, 36U, 5U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 13U, 3U, 0U, 23U, 4U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 7U, 0U, 0U, 10U, 3U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 2U, 0U, 0U, 3U, 2U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, false, 1U, 0U, 0U, 1U, 1U},
+    {nullptr, 0U, 0U, DeltaKind::Bits, true, 10U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaField kSnapshotEntitiesItemDelta[] = {
-    {kEntityDelta, 12U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U},
+    {kEntityDelta, 12U, 0U, DeltaKind::Struct, false, 0U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaField kSnapshotDelta[] = {
-    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 7U, 2U, 0U},
-    {kSnapshotEntitiesItemDelta, 1U, 0U, DeltaKind::KeyedList, false, 7U, 0U, 0U},
+    {nullptr, 0U, 0U, DeltaKind::Varuint, false, 7U, 2U, 0U, 0U, 0U},
+    {kSnapshotEntitiesItemDelta, 1U, 0U, DeltaKind::KeyedList, false, 7U, 0U, 0U, 0U, 0U},
 };
 inline constexpr DeltaLayout kSnapshotLayout{kSnapshotDelta, 2U, kMinor,
                                   SnapshotCodec::kMaxBytes, delta_validate<Snapshot>};
