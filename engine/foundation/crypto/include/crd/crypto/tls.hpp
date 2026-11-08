@@ -730,19 +730,6 @@ private:
     u64 m_key_update_records = 0U;
 };
 
-// The encryption levels of a QUIC connection (RFC 9001 section 4.1.3). The first kQuicLevels carry CRYPTO data:
-// Initial packets are protected by quic_initial_secret's keys, the others by the handshake's own secrets. Early (0-RTT)
-// packets carry none (RFC 9000 section 12.4): the level has keys only, the client's (decision S17).
-enum class QuicLevel : u8
-{
-    Initial,
-    Handshake,
-    Application,
-    Early,
-};
-
-inline constexpr usize kQuicLevels = 3U;
-
 // The bytes of transport parameters a QUIC handshake sends (RFC 9000 section 18): far above any real set, whose
 // parameters encode in a few hundred bytes. Their encoding and checks are the transport's (crd-net, 4.2a); the
 // handshake carries them, authenticated, as the quic_transport_parameters extension (57).

@@ -90,6 +90,10 @@ struct QuicHeader
     usize packet_bytes = 0U;   // the packet's extent: through its Length for Initial, 0-RTT and Handshake, else the rest
 };
 
+// The first byte's long packet type bits (4 and 5, shifted down) of `type` (Initial, ZeroRtt, Handshake or Retry) in
+// `version`: version 2 rotates version 1's codes by one (RFC 9369 section 3.2).
+[[nodiscard]] u8 quic_long_type_bits(crypto::QuicVersion version, QuicPacketType type) noexcept;
+
 // Reads the first packet's header. A short header's Destination Connection ID is `short_dcid_bytes` long: the length
 // of the connection IDs this endpoint issues, which only it knows.
 [[nodiscard]] QuicHeaderError parse_quic_header(cont::ConstSpan<u8> datagram, usize short_dcid_bytes,

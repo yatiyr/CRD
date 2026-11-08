@@ -20,11 +20,6 @@ QuicPacketType long_type(u32 version, u8 bits) noexcept
     return (version == static_cast<u32>(crypto::QuicVersion::V2)) ? v2_types[bits & 3U] : v1_types[bits & 3U];
 }
 
-u8 retry_type_bits(crypto::QuicVersion version) noexcept
-{
-    return (version == crypto::QuicVersion::V2) ? 0U : 3U;
-}
-
 bool take_connection_id(cont::WireReader& in, usize limit, cont::ConstSpan<u8>& out, QuicHeaderError& error) noexcept
 {
     u8 length = 0U;
@@ -62,6 +57,24 @@ bool spans_equal(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
     return true;
 }
 } // namespace
+
+u8 quic_long_type_bits(crypto::QuicVersion version, QuicPacketType type) noexcept
+{
+    u8 bits = 0U; // version 1's: Initial 0, 0-RTT 1, Handshake 2, Retry 3
+    if (type == QuicPacketType::ZeroRtt)
+    {
+        bits = 1U;
+    }
+    else if (type == QuicPacketType::Handshake)
+    {
+        bits = 2U;
+    }
+    else if (type == QuicPacketType::Retry)
+    {
+        bits = 3U;
+    }
+    return (version == crypto::QuicVersion::V2) ? static_cast<u8>((bits + 1U) & 3U) : bits;
+}
 
 usize quic_varint_bytes(u64 value) noexcept
 {
@@ -270,7 +283,8 @@ crypto::CryptoError write_retry(crypto::QuicVersion version, cont::ConstSpan<u8>
         return crypto::CryptoError::BadLength;
     }
     cont::WireWriter writer(out);
-    writer.put_u8(static_cast<u8>(kLongForm | kFixedBit | (retry_type_bits(version) << 4U) | (entropy & 0x0FU)));
+    const u8 type_bits = quic_long_type_bits(version, QuicPacketType::Retry);
+    writer.put_u8(static_cast<u8>(kLongForm | kFixedBit | (type_bits << 4U) | (entropy & 0x0FU)));
     writer.put_u32(static_cast<u32>(version));
     writer.put_u8(static_cast<u8>(client_scid.size()));
     writer.put_bytes(client_scid);

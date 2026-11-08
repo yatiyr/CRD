@@ -4,6 +4,7 @@
 // section 12.4 restated.
 
 #include "ingress_fixture.hpp"
+#include "quic_vectors.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/net/quic_frame.hpp>
@@ -23,19 +24,7 @@ using crd::containers::Span;
 using crd::containers::WireReader;
 using namespace crd::net;
 using namespace crd::net::testing;
-
-// RFC 9001 appendix A.2: the client's CRYPTO frame (its ClientHello).
-constexpr const char* kClientCrypto =
-    "060040f1010000ed0303ebf8fa56f12939b9584a3896472ec40bb863cfd3e86804fe3a47f06a2b69484c0000041301130201"
-    "0000c000000010000e00000b6578616d706c652e636f6dff01000100000a00080006001d0017001800100007000504616c70"
-    "6e000500050100000000003300260024001d00209370b2c9caa47fbabaf4559fedba753de171fa71f50f1ce15d43e994ec74"
-    "d748002b0003020304000d0010000e0403050306030203080408050806002d00020101001c00024001003900320408ffffff"
-    "ffffffffff05048000ffff07048000ffff0801100104800075300901100f088394c8f03e51570806048000ffff";
-
-// RFC 9001 appendix A.3: the server's Initial payload, an ACK of packet 0 and a CRYPTO frame (its ServerHello).
-constexpr const char* kServerPayload =
-    "02000000000600405a020000560303eefce7f7b37ba1d1632e96677825ddf73988cfc79825df566dc5430b9a045a12001301"
-    "00002e00330024001d00209d3c940d89690b84d08a60993c144eca684d1081287c834d5311bcf32bb9da1a002b00020304";
+using namespace crd::quic_vectors;
 
 constexpr u8 kToken[3]       = {0xA1, 0xA2, 0xA3};
 constexpr u8 kData[5]        = {0x10, 0x20, 0x30, 0x40, 0x50};
@@ -156,7 +145,7 @@ QuicTransportError read_one(ConstSpan<u8> bytes, QuicFrame& frame, usize& consum
 TEST_CASE("QUIC frames: RFC 9001's Initial payloads read and write byte for byte", "[net][quic-frame]")
 {
     u8 client[300] = {};
-    const usize client_bytes = hex(kClientCrypto, client);
+    const usize client_bytes = hex(kClientCryptoFrame, client);
     WireReader in(ConstSpan<u8>(client, client_bytes));
     QuicFrame frame;
     REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);

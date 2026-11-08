@@ -27,6 +27,14 @@ crd_fuzz_target(crd-fuzz-net-ingress
 crd_fuzz_target(crd-fuzz-net-quic-codec
     SOURCES fuzz_quic_codec.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-codec")
 
+# QUIC packets per encryption level (4.2a).
+#   crd-fuzz-net-quic-packet   any datagram through a server holding every level's keys: packets walked in order inside
+#                              it, opened packets non-empty and never twice, every refusal named; and any frames through
+#                              a writer and its peer: refusals as restated, floors and blocks reached, the shortest
+#                              Length, the frames and their PADDING opened under the phase they were sealed in.
+crd_fuzz_target(crd-fuzz-net-quic-packet
+    SOURCES fuzz_quic_packet.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-packet")
+
 # Frames and admission (NET.3).
 #   crd-fuzz-net-admission   any bytes on a stream and in datagrams, against a restated frame layout and admission
 #                            rule; a stream at every split reading as it reads whole; fragments of generated messages on

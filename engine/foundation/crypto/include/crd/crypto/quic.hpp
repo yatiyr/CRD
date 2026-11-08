@@ -61,6 +61,19 @@ inline constexpr usize kQuicMaxConnectionIdBytes = 20U; // RFC 9000 section 17.2
 inline constexpr usize kQuicMaxRetryBytes        = 1472U; // the UDP payload of a 1500-byte IPv4 path
 inline constexpr u64   kQuicMaxPacketNumber      = (u64{1} << 62U) - 1U;
 
+// The encryption levels of a QUIC connection (RFC 9001 section 4.1.3). The first kQuicLevels carry CRYPTO data:
+// Initial packets are protected by quic_initial_secret's keys, the others by the handshake's own secrets. Early (0-RTT)
+// packets carry none (RFC 9000 section 12.4): the level has keys only, the client's (decision S17).
+enum class QuicLevel : u8
+{
+    Initial,
+    Handshake,
+    Application,
+    Early,
+};
+
+inline constexpr usize kQuicLevels = 3U;
+
 // Whether this module protects packets of `version`.
 [[nodiscard]] bool quic_version_supported(u32 version) noexcept;
 
