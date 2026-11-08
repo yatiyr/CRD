@@ -826,7 +826,9 @@
       "owner": "net",
       "api": [
         "engine/foundation/net/include/crd/net/endpoint.hpp",
+        "engine/foundation/net/include/crd/net/io_loop.hpp",
         "engine/foundation/net/include/crd/net/negotiation.hpp",
+        "engine/foundation/net/include/crd/net/quic_header.hpp",
         "engine/foundation/net/include/crd/net/register_ids.hpp",
         "engine/foundation/net/include/crd/net/udp.hpp"
       ],
@@ -838,14 +840,16 @@
     },
     {
       "id": "network.admission",
-      "summary": "Frames, bounded admission stages S6 and S7, baseline deltas, coded bodies under per-channel models, the plaintext integrity hash, padding and the state-hash exchange: the route and frame headers, virtual-scheduling rate gates and gauges in integer time, per-principal quotas and send budgets, S18's verdict before any decode, and stream and fragment reassembly into buffers the quota has reserved (network foundation S27 to S32).",
+      "summary": "Frames, bounded admission stages S1 to S3 (QUIC header sanity, the keyed connection ID table, per-prefix handshake buckets with Retry and Version Negotiation) and S6 and S7, baseline deltas, coded bodies under per-channel models, the plaintext integrity hash, padding and the state-hash exchange: the route and frame headers, virtual-scheduling rate gates and gauges in integer time, per-principal quotas and send budgets, S18's verdict before any decode, and stream and fragment reassembly into buffers the quota has reserved (network foundation S27 to S32 and S34).",
       "owner": "net",
       "api": [
         "engine/foundation/net/include/crd/net/admission.hpp",
         "engine/foundation/net/include/crd/net/coding.hpp",
+        "engine/foundation/net/include/crd/net/connection_table.hpp",
         "engine/foundation/net/include/crd/net/delta.hpp",
         "engine/foundation/net/include/crd/net/state_hash.hpp",
         "engine/foundation/net/include/crd/net/frame.hpp",
+        "engine/foundation/net/include/crd/net/ingress.hpp",
         "engine/foundation/net/include/crd/net/quota.hpp",
         "engine/foundation/net/include/crd/net/reassembly.hpp"
       ],

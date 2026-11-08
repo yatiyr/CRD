@@ -12,6 +12,13 @@ crd_fuzz_target(crd-fuzz-net-negotiation
 crd_fuzz_target(crd-fuzz-net-endpoint
     SOURCES fuzz_endpoint.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-endpoint")
 
+# QUIC headers and admission stages S1 to S3 (4.2a).
+#   crd-fuzz-net-ingress   any datagram: header views inside it, varints in their shortest form, and through a server
+#                          only held connections routed, only full Initials admitted, every answer within three times
+#                          the datagram and parsing back as a Version Negotiation or a verified Retry.
+crd_fuzz_target(crd-fuzz-net-ingress
+    SOURCES fuzz_ingress.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-ingress")
+
 # Frames and admission (NET.3).
 #   crd-fuzz-net-admission   any bytes on a stream and in datagrams, against a restated frame layout and admission rule; a
 #                            stream at every split reading as it reads whole; fragments of generated messages on a hostile

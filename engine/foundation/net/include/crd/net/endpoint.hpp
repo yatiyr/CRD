@@ -87,6 +87,11 @@ struct IpAddress
     // The first `bits` bits kept and the rest and the scope cleared: the key of admission S3's per-prefix buckets
     // (/64 for IPv6; /32 or a configured prefix for IPv4). `bits` past the family's width keeps every bit.
     [[nodiscard]] IpAddress prefix(u32 bits) const noexcept;
+    // The address's own bytes: four for IPv4, sixteen for IPv6 (what a QUIC address validation token binds).
+    [[nodiscard]] cont::ConstSpan<u8> view() const noexcept
+    {
+        return cont::ConstSpan<u8>(bytes, (family == AddressFamily::V4) ? 4U : 16U);
+    }
 
     friend bool operator==(const IpAddress&, const IpAddress&) noexcept = default;
 };
