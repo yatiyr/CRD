@@ -935,13 +935,18 @@ the phase holds it back while the key seals on; only the AEAD's limit, or `limit
 a 64-packet interval closed a connection with AEAD_LIMIT_REACHED as soon as more than a quarter of the interval sat
 in flight, which only a real peer's flights showed.
 
-Evidence: `crd-net-quic-interop-ngtcp2` (58 cases on `linux-gcc-public-checks`, about 70 s): each way, QUIC v1 and v2 with
+Evidence: `crd-net-quic-interop-ngtcp2` (102 cases on `linux-gcc-public-checks`, about 105 s): each way, QUIC v1 and v2 with
 either end closing and the code the other end read; the three hybrid groups and X25519; the three AEADs; 8 MiB on one
 stream past every window; 48 streams through a limit of 8 at once; compatible version negotiation to v2 (RFC 9368);
 a Retry from each server with the Retry packets counted off the wire; key updates each end starts, counted by ngtcp2;
 and three seeded relays (5% loss, 3% duplication, delay and jitter that reorders). An ngtcp2 server drops a first flight
-it receives out of order (`NGTCP2_ERR_RETRY`), and the peer takes the client's next Initial. Datagrams, resumption and
-0-RTT, Version Negotiation and stateless reset are the next cases. NET.4 adds the interop runner and the other peers.
+it receives out of order (`NGTCP2_ERR_RETRY`), and the peer takes the client's next Initial. Datagrams (RFC 9221): 256
+of 1000 bytes alone and beside streams, frames filling a 600-byte limit exactly and one byte more refused by each
+sender, over two seeded relays. Resumption, 0-RTT accepted and 0-RTT refused by the server on a second connection in the
+same process. Version Negotiation to the one version a server runs, counted off the wire. A stateless reset from a
+server killed in mid-transfer and restarted on its port with the same key: both programs derive their tokens from a
+fixed key, so the second process answers for the first one's connections. NET.4 adds the interop runner and the other
+peers.
 
 <a id="admission"></a>
 ## Bounded admission
