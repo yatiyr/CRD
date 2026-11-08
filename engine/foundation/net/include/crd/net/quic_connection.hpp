@@ -3,7 +3,7 @@
 // crd-net -- a QUIC connection: the TLS handshake carried to confirmation, recovery, the connection's frames and its
 // close (4.2a; contract: docs/design/network-foundation.md#quic-connection). Sources: RFC 9000 sections 2 to 4, 5.1,
 // 7, 8, 10, 12, 13, 14, 17.2, 19 and 21.4, RFC 9001 sections 4 and 6, RFC 9002 section 6 and appendix A, RFC 9221
-// section 3, RFC 9287 and RFC 9368 sections 2 to 4.
+// sections 3 to 5, RFC 9287 and RFC 9368 sections 2 to 4.
 //
 //   sans-I/O   receive() takes one datagram from the peer with its arrival time, send() writes the next datagram into
 //              the caller's room (called until it returns 0 after every receive() and on_timeout()), and
@@ -19,8 +19,8 @@
 //              8.1); the QUIC bit is greased toward a peer that sent grease_quic_bit and 1-RTT packet numbers are
 //              skipped from entropy (section 21.4), so an acknowledgement of one closes with PROTOCOL_VIOLATION.
 //   frames     every frame type is dispatched: stream and flow-control frames go to the QuicStreamSet (streams()),
-//              whose frames ride in 1-RTT packets after the connection's own; this slice carries no DATAGRAM frames,
-//              so it advertises no max_datagram_frame_size and a peer's DATAGRAM is PROTOCOL_VIOLATION (RFC 9221).
+//              DATAGRAM frames to QuicDatagrams (datagrams()); 1-RTT packets carry the connection's own frames, then
+//              datagrams, then the stream set's. An ACK only carried along follows waiting datagrams.
 //              The peer's connection IDs are held up to this side's active_connection_id_limit with retirement; a
 //              PATH_CHALLENGE is answered.
 //   close      an error closes with CONNECTION_CLOSE at the levels the peer may read (section 10.2.3), CRYPTO_ERROR
@@ -34,6 +34,7 @@
 #include <crd/core/types.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
+#include <crd/net/quic_datagram.hpp>
 #include <crd/net/quic_packet.hpp>
 #include <crd/net/quic_recovery.hpp>
 #include <crd/net/quic_stream.hpp>
@@ -56,11 +57,12 @@ struct QuicConnectionConfig
     crypto::QuicVersion version = crypto::QuicVersion::V1; // the version this connection runs
     const crypto::TlsContext* tls = nullptr;               // of `side`'s role, with an application protocol
     crypto::TlsTicketStore* tickets = nullptr;
-    // This side's parameters. The connection fills the connection IDs, version_information, grease_quic_bit and the
-    // stream and flow-control parameters (from `streams`, so they stay 0 here); max_datagram_frame_size stays 0 in
-    // this slice, and active_connection_id_limit is at most kQuicMaxPeerConnectionIds.
+    // This side's parameters. The connection fills the connection IDs, version_information, grease_quic_bit, the
+    // stream and flow-control parameters (from `streams`) and max_datagram_frame_size (from `datagrams`), so those
+    // stay 0 here; active_connection_id_limit is at most kQuicMaxPeerConnectionIds.
     QuicTransportParameters parameters;
-    QuicStreamLimits streams; // what this side's streams hold (all zero: no streams)
+    QuicStreamLimits streams;     // what this side's streams hold (all zero: no streams)
+    QuicDatagramLimits datagrams; // what this side's datagrams hold (all zero: none either way)
     // The versions this side accepts in its preference (version_information's list, containing `version`); empty
     // for `version` alone.
     cont::ConstSpan<u32> versions;
@@ -138,8 +140,8 @@ public:
     QuicConnection& operator=(QuicConnection&&) = delete;
 
     // False when the configuration is out of range (no TLS context, stream credit or a datagram size in the
-    // parameters, stream limits out of range, a version list without `version`, sizes out of bounds, a seed of
-    // another length) or the allocator or the provider refused.
+    // parameters, stream or datagram limits out of range, a version list without `version`, sizes out of bounds, a seed
+    // of another length) or the allocator or the provider refused.
     [[nodiscard]] bool ready() const noexcept { return m_storage != nullptr; }
 
     // A client's start: it issues `local_cid` (0 to 20 bytes) and sends its first Initial to `initial_dcid` (8 to 20
@@ -178,6 +180,9 @@ public:
     // The connection's streams: opened, written, read and polled by the application, their frames sent by send().
     [[nodiscard]] QuicStreamSet& streams() noexcept { return m_streams; }
     [[nodiscard]] const QuicStreamSet& streams() const noexcept { return m_streams; }
+    // The connection's datagrams: queued, read and polled by the application, their frames sent by send().
+    [[nodiscard]] QuicDatagrams& datagrams() noexcept { return m_datagrams; }
+    [[nodiscard]] const QuicDatagrams& datagrams() const noexcept { return m_datagrams; }
     [[nodiscard]] const QuicPacketProtection& protection() const noexcept { return m_protection; }
     [[nodiscard]] const QuicRecovery& recovery() const noexcept { return *m_recovery; }
     // The peer's parameters, valid once peer_parameters_known().
@@ -267,6 +272,8 @@ private:
 
     // Sending.
     [[nodiscard]] bool has_content(QuicSpace space, u64 now_ns) const noexcept;
+    // Whether a datagram can go now: one waits, and its outcome has a ledger record free when it is reported.
+    [[nodiscard]] bool datagram_ready(u64 now_ns) const noexcept;
     [[nodiscard]] usize write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool closing,
                                      u64 now_ns) noexcept;
     [[nodiscard]] usize write_frames(QuicSpace space, cont::Span<u8> frames, u64 packet, u64 now_ns,
@@ -297,6 +304,7 @@ private:
     u64* m_crypto_bits = nullptr;
     QuicRecovery* m_recovery = nullptr;
     QuicStreamSet m_streams;
+    QuicDatagrams m_datagrams;
     Events m_events;
     u32 m_frame_head = 0U;
     u32 m_frame_count = 0U;

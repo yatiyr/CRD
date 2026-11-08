@@ -3,7 +3,7 @@
 # (crd-crypto), frames, admission, quotas and reassembly, integrity hashes and padding, state hashes and baseline deltas;
 # 4.2a's addresses and UDP sockets on the host's loopback, QUIC headers, admission stages S1 to S3 and the I/O loop,
 # QUIC frames and transport parameters, QUIC packets per level, acknowledgements and loss recovery, byte streams and
-# flow control, the connection's stream set, and the connection carrying them.
+# flow control, the connection's stream set and datagrams, and the connection carrying them.
 add_executable(crd-net-tests
     test_admission.cpp
     test_coded_frames.cpp
@@ -14,6 +14,7 @@ add_executable(crd-net-tests
     test_io_loop.cpp
     test_negotiation.cpp
     test_quic_connection.cpp
+    test_quic_datagram.cpp
     test_quic_frame.cpp
     test_quic_packet.cpp
     test_quic_recovery.cpp

@@ -57,6 +57,15 @@ crd_fuzz_target(crd-fuzz-net-quic-stream
 crd_fuzz_target(crd-fuzz-net-quic-stream-set
     SOURCES fuzz_quic_stream_set.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-stream-set")
 
+# A QUIC connection's datagrams (4.2a).
+#   crd-fuzz-net-quic-datagram   a sender's and a receiver's datagrams under any queueing, frames written into any
+#                                room, delivered any number of times, acknowledged or lost, time, polls, reads and
+#                                injected frames: has_frame() exact, every frame round tripping with its payload, the
+#                                receiver byte-exact in order, the size advertised enforced exactly, every id reported
+#                                once, nothing allocated.
+crd_fuzz_target(crd-fuzz-net-quic-datagram
+    SOURCES fuzz_quic_datagram.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-datagram")
+
 # A QUIC connection (4.2a).
 #   crd-fuzz-net-quic-connection   a network script between a client and a server (deliveries, losses, duplicates,
 #                                  reorders, corrupted bytes, time), then a clean path: the handshake confirms or a side

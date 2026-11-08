@@ -12,8 +12,9 @@
 // datagram carrying an Initial has 1200 bytes; nothing is allocated after construction; a close names a transport
 // error of RFC 9000 section 20.1 (or RFC 9368's) or CRYPTO_ERROR when this side closes. Script: after the clean path,
 // both ends are confirmed or one has closed (no handshake hangs), and a confirmed pair agrees on the application
-// protocol, and then carries a stream larger than every window whole and unchanged (or one side closes). Frames: the
-// server, which grants streams, stays Established (Handshaking for Initial frames) or closes; a closed server sends a
+// protocol, and then carries a stream larger than every window whole and unchanged and datagrams each at most once,
+// byte-exact and each reported (or one side closes). Frames: the server, which grants streams and takes datagrams of
+// up to 600 bytes, stays Established (Handshaking for Initial frames) or closes; a closed server sends a
 // CONNECTION_CLOSE only.
 #include <crd/crypto/tls.hpp>
 #include <crd/fuzz/harness.hpp>
@@ -130,6 +131,12 @@ QuicConnectionConfig config_for(QuicSide side, QuicVersion version)
     config.streams.stream_window = 1024U;
     config.streams.connection_window = 2048U;
     config.streams.connection_max_window = 8192U;
+    config.datagrams.max_frame_bytes = 600U;
+    config.datagrams.receive_bytes = 2400U; // send_count of the largest: nothing is dropped between reads
+    config.datagrams.receive_count = 4U;
+    config.datagrams.send_bytes = 1024U;
+    config.datagrams.send_count = 4U;
+    config.datagrams.outcomes = true;
     config.entropy_seed = ConstSpan<u8>(kSeeds[side == QuicSide::Client ? 0U : 1U], kPrfKeyBytes);
     return config;
 }
@@ -326,6 +333,66 @@ void transfer(Pair& pair)
     CRD_FUZZ_REQUIRE((fin && read == kTransferBytes) || finished(pair.client) || finished(pair.server));
 }
 
+constexpr u64 kDatagrams = 12U;
+
+// Then datagrams of rising sizes from the client: each the server reads arrives once and byte-exact, and every one
+// is reported acknowledged or lost (or one side closes).
+void exchange_datagrams(Pair& pair)
+{
+    QuicDatagrams& out = pair.client.datagrams();
+    QuicDatagrams& in = pair.server.datagrams();
+    bool arrived[kDatagrams] = {};
+    u64 queued = 0U;
+    u64 reported = 0U;
+    for (usize round = 0U; round < 256U && reported < kDatagrams && !finished(pair.client) && !finished(pair.server);
+         ++round)
+    {
+        u8 payload[600];
+        u64 id = 0U;
+        while (queued < kDatagrams)
+        {
+            const usize bytes = static_cast<usize>(1U + (queued * 47U) % out.max_payload());
+            payload[0] = static_cast<u8>(queued);
+            for (usize at = 1U; at < bytes; ++at)
+            {
+                payload[at] = static_cast<u8>((queued * 31U) + at);
+            }
+            if (out.queue(ConstSpan<u8>(payload, bytes), pair.now, id) != QuicDatagramError::None)
+            {
+                break;
+            }
+            CRD_FUZZ_REQUIRE(id == queued);
+            ++queued;
+        }
+        pair.settle(8U);
+        ConstSpan<u8> held;
+        for (; in.peek(held); in.pop())
+        {
+            const u64 which = held.empty() ? kDatagrams : held[0];
+            CRD_FUZZ_REQUIRE(which < queued && !arrived[which]);
+            CRD_FUZZ_REQUIRE(held.size() == static_cast<usize>(1U + (which * 47U) % out.max_payload()));
+            for (usize at = 1U; at < held.size(); ++at)
+            {
+                CRD_FUZZ_REQUIRE(held[at] == static_cast<u8>((which * 31U) + at));
+            }
+            arrived[which] = true;
+        }
+        QuicDatagramReport report;
+        while (out.poll(report))
+        {
+            CRD_FUZZ_REQUIRE(report.id < queued && report.outcome != QuicDatagramOutcome::Expired);
+            CRD_FUZZ_REQUIRE(report.outcome == QuicDatagramOutcome::Lost || arrived[report.id]);
+            ++reported;
+        }
+        const u64 next = (pair.client.next_timer_ns() < pair.server.next_timer_ns()) ? pair.client.next_timer_ns()
+                                                                                     : pair.server.next_timer_ns();
+        pair.now = (next != kNeverNs && next > pair.now) ? next : pair.now;
+        pair.timers();
+    }
+    CRD_FUZZ_REQUIRE(in.counters().dropped == 0U);
+    CRD_FUZZ_REQUIRE(reported == kDatagrams || finished(pair.client) || finished(pair.server));
+}
+
 void run_script(QuicVersion version, ConstSpan<u8> script)
 {
     Pair pair(version);
@@ -399,6 +466,7 @@ void run_script(QuicVersion version, ConstSpan<u8> script)
         CRD_FUZZ_REQUIRE(pair.client.handshake().application_protocol() ==
                          pair.server.handshake().application_protocol());
         transfer(pair);
+        exchange_datagrams(pair);
     }
     CRD_FUZZ_REQUIRE(pair.allocator.peak_bytes() == allocations);
 }

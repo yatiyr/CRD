@@ -4,8 +4,9 @@
 // keep-alives, key updates across the connection, closing and draining, an alert's CRYPTO_ERROR at its levels, the
 // transport parameter and version checks, a client's Version Negotiation, and, from a raw peer that writes any frame,
 // every frame this slice refuses with the error RFC 9000 and RFC 9221 name, the peer's connection IDs and their
-// retirement, PATH_CHALLENGE answered and an acknowledgement of a skipped packet number; and streams carried both ways
-// over hostile paths with a frame ledger far smaller than their load.
+// retirement, PATH_CHALLENGE answered and an acknowledgement of a skipped packet number; streams carried both ways
+// over hostile paths with a frame ledger far smaller than their load; and datagrams (RFC 9221) beside them, each
+// reported once, the largest ones while packets carry ACKs, a peer without them and frames past the size advertised.
 
 #include "ingress_fixture.hpp"
 #include "quic_stream_fixture.hpp"
@@ -35,6 +36,8 @@ constexpr u8 kClientCid[8] = {0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7};
 constexpr u8 kServerCid[16] = {0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
                                0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F};
 constexpr u8 kInitialDcid[8] = {0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7};
+constexpr u8 kLongCid[20] = {0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9,
+                             0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF2, 0xF3};
 constexpr AlgorithmId kGroups[] = {AlgorithmId::X25519Mlkem768, AlgorithmId::X25519};
 constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
 constexpr AlgorithmId kAeads[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Chacha20Poly1305};
@@ -940,10 +943,11 @@ QuicPacketType type_of(QuicLevel level)
 }
 
 // The raw peers' server: room for the thousand packets a skipped number takes to appear.
-QuicConnectionConfig server_config(const Identity& identity, crd::u32 sent_packets)
+QuicConnectionConfig server_config(const Identity& identity, crd::u32 sent_packets, const QuicDatagramLimits& datagrams)
 {
     QuicConnectionConfig config = config_for(QuicSide::Server, identity, QuicVersion::V1, 2U);
     config.sent_packets = sent_packets;
+    config.datagrams = datagrams;
     config.sent_frames = 2048U;
     return config;
 }
@@ -977,8 +981,8 @@ struct RawClient
 class RawRun
 {
 public:
-    explicit RawRun(const Identity& identity, crd::u32 sent_packets = 2048U)
-        : server(allocator, server_config(identity, sent_packets)), m_identity(identity)
+    explicit RawRun(const Identity& identity, crd::u32 sent_packets = 2048U, const QuicDatagramLimits& datagrams = {})
+        : server(allocator, server_config(identity, sent_packets, datagrams)), m_identity(identity)
     {
     }
 
@@ -1261,14 +1265,6 @@ TEST_CASE("QUIC connection: frames this slice does not carry close with the erro
                   f.kind = QuicFrameKind::StreamDataBlocked;
                   f.stream_id = 4U;
               }) == code(QuicTransportError::StreamLimitError));
-    // max_datagram_frame_size is 0 (RFC 9221 section 3).
-    constexpr u8 data_bytes[3] = {1U, 2U, 3U};
-    CHECK(refused(
-              [&](QuicFrame& f)
-              {
-                  f.kind = QuicFrameKind::Datagram;
-                  f.data = data_bytes;
-              }) == code(QuicTransportError::ProtocolViolation));
     // The server issued sequence 0 alone, and sent no PATH_CHALLENGE.
     CHECK(refused(
               [](QuicFrame& f)
@@ -1755,4 +1751,397 @@ TEST_CASE("QUIC connection: a frame ledger far smaller than the stream load stil
     Echo echo(client, server, 3U);
     REQUIRE(net->run_until([&] { return echo.step(); }, 600000U * kMs));
     CHECK(client.state() == QuicConnectionState::Established);
+}
+
+namespace
+{
+QuicDatagramLimits datagram_limits(bool outcomes)
+{
+    QuicDatagramLimits limits;
+    limits.max_frame_bytes = 1200U;
+    limits.receive_bytes = 1U << 17U; // a whole flight of the largest arrives between two reads
+    limits.receive_count = 256U;
+    limits.send_bytes = 16384U;
+    limits.send_count = 32U;
+    limits.outcomes = outcomes;
+    return limits;
+}
+
+QuicConnectionConfig datagram_config(QuicSide side, const Identity& identity, QuicVersion version, usize seed,
+                                     bool outcomes, u32 sent_frames = 1024U)
+{
+    QuicConnectionConfig config = stream_config(side, identity, version, seed, sent_frames);
+    config.datagrams = datagram_limits(outcomes);
+    return config;
+}
+
+// One direction of datagrams: `from` queues kCount payloads of seeded sizes (or all of the largest) as its queue
+// allows, `to` reads each in place. A payload starts with its id, so the reader checks that it was queued, arrives
+// at most once and holds its bytes; with outcomes every id is reported once, and an acknowledged one arrived.
+class DatagramFlow
+{
+public:
+    static constexpr usize kCount = 300U;
+
+    DatagramFlow(QuicConnection& from, QuicConnection& to, u64 seed, bool largest)
+        : m_from(from), m_to(to), m_largest(largest)
+    {
+        m_rng.state = seed;
+    }
+
+    bool step(u64 now_ns)
+    {
+        QuicDatagrams& out = m_from.datagrams();
+        QuicDatagrams& in = m_to.datagrams();
+        u8 payload[kDatagram];
+        while (m_queued < kCount && out.sendable())
+        {
+            const usize largest = out.max_payload();
+            const usize bytes = m_largest ? largest : 8U + static_cast<usize>(m_rng.next() % (largest - 7U));
+            write(m_queued, bytes, payload);
+            u64 id = 0U;
+            const QuicDatagramError error = out.queue(ConstSpan<u8>(payload, bytes), now_ns, id);
+            if (error == QuicDatagramError::Full)
+            {
+                break;
+            }
+            REQUIRE(error == QuicDatagramError::None);
+            REQUIRE(id == m_queued);
+            m_size[m_queued++] = bytes;
+        }
+        ConstSpan<u8> held;
+        while (in.peek(held))
+        {
+            REQUIRE(held.size() >= 8U);
+            u64 id = 0U;
+            for (usize index = 0U; index < 8U; ++index)
+            {
+                id |= u64{held[index]} << (8U * index);
+            }
+            REQUIRE(id < m_queued);
+            REQUIRE_FALSE(m_arrived[id]); // a packet is opened once: no datagram arrives twice
+            write(id, m_size[id], payload);
+            REQUIRE(same(held, ConstSpan<u8>(payload, m_size[id])));
+            m_arrived[id] = true;
+            ++m_arrivals;
+            in.pop();
+        }
+        QuicDatagramReport report;
+        while (out.poll(report))
+        {
+            REQUIRE(report.id < m_queued);
+            REQUIRE(m_outcome[report.id] == 0U);
+            REQUIRE(report.outcome != QuicDatagramOutcome::Expired); // no age limit
+            m_outcome[report.id] = (report.outcome == QuicDatagramOutcome::Acked) ? 1U : 2U;
+            m_lost += (report.outcome == QuicDatagramOutcome::Lost) ? 1U : 0U;
+            m_acked += (report.outcome == QuicDatagramOutcome::Acked) ? 1U : 0U;
+            ++m_reported;
+        }
+        return out.outcomes() ? m_reported == kCount : m_arrivals == kCount;
+    }
+
+    // After the run: every acknowledged datagram arrived, and the reader's ring never dropped one.
+    void check() const
+    {
+        for (usize id = 0U; id < kCount; ++id)
+        {
+            if (m_outcome[id] == 1U)
+            {
+                REQUIRE(m_arrived[id]);
+            }
+        }
+        CHECK(m_to.datagrams().counters().dropped == 0U);
+        CHECK(m_from.datagrams().counters().sent == kCount);
+    }
+
+    [[nodiscard]] usize lost() const { return m_lost; }
+    [[nodiscard]] usize acked() const { return m_acked; }
+    [[nodiscard]] usize arrivals() const { return m_arrivals; }
+
+private:
+    static void write(u64 id, usize bytes, u8* out)
+    {
+        for (usize index = 0U; index < 8U; ++index)
+        {
+            out[index] = static_cast<u8>(id >> (8U * index));
+        }
+        for (usize offset = 8U; offset < bytes; ++offset)
+        {
+            out[offset] = static_cast<u8>((id * 29U) + (offset * 13U) + 5U);
+        }
+    }
+
+    QuicConnection& m_from;
+    QuicConnection& m_to;
+    Rng m_rng;
+    bool m_largest = false;
+    usize m_size[kCount] = {};
+    bool m_arrived[kCount] = {};
+    u8 m_outcome[kCount] = {}; // 1 acknowledged, 2 lost
+    usize m_queued = 0U;
+    usize m_arrivals = 0U;
+    usize m_reported = 0U;
+    usize m_lost = 0U;
+    usize m_acked = 0U;
+};
+} // namespace
+
+TEST_CASE("QUIC connection: datagrams cross both ways beside streams over hostile paths, each reported once",
+          "[net][4.2a][quic-connection][quic-datagram]")
+{
+    usize lost = 0U;
+    usize acked = 0U;
+    for (const QuicVersion version : kVersions)
+    {
+        for (u64 seed = 1U; seed <= 6U; ++seed)
+        {
+            Identity identity;
+            CountingAllocator allocator;
+            QuicConnection client(allocator, datagram_config(QuicSide::Client, identity, version, seed, true));
+            QuicConnection server(allocator, datagram_config(QuicSide::Server, identity, version, seed + 1U, true));
+            REQUIRE(server.ready());
+            const usize allocations = allocator.calls();
+            u64 id = 0U;
+            CHECK(client.datagrams().queue(ConstSpan<u8>(), kStartNs, id) == QuicDatagramError::NotReady);
+            connect(client);
+            auto net = std::make_unique<Net>(client, server);
+            net->rng.state = seed;
+            for (Path& path : net->path)
+            {
+                path.loss = 100U;
+                path.duplicate = 50U;
+                path.delay_ns = 15U * kMs;
+                path.jitter_ns = 20U * kMs;
+            }
+            INFO("version " << static_cast<u32>(version) << " seed " << seed);
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            CHECK(client.peer_parameters().max_datagram_frame_size == 1200U);
+            CHECK(server.peer_parameters().max_datagram_frame_size == 1200U);
+            Echo echo(client, server, seed);
+            DatagramFlow up(client, server, seed, false);
+            DatagramFlow down(server, client, seed + 100U, false);
+            REQUIRE(net->run_until(
+                [&]
+                {
+                    const bool streams = echo.step();
+                    const bool sent_up = up.step(net->now);
+                    const bool sent_down = down.step(net->now);
+                    return streams && sent_up && sent_down;
+                },
+                600000U * kMs));
+            up.check();
+            down.check();
+            lost += up.lost() + down.lost();
+            acked += up.acked() + down.acked();
+            CHECK(client.state() == QuicConnectionState::Established);
+            CHECK(server.state() == QuicConnectionState::Established);
+            CHECK(client.streams().connection_sent() == echo.total());
+            CHECK(allocator.calls() == allocations);
+        }
+    }
+    CHECK(lost != 0U); // the paths' losses were reported, and reordering past RFC 9002's thresholds besides
+    CHECK(acked != 0U);
+}
+
+TEST_CASE("QUIC connection: datagrams of the largest size go while the packets carry ACKs",
+          "[net][4.2a][quic-connection][quic-datagram]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    QuicConnection client(allocator, datagram_config(QuicSide::Client, identity, QuicVersion::V1, 0U, false));
+    QuicConnection server(allocator, datagram_config(QuicSide::Server, identity, QuicVersion::V1, 1U, false));
+    connect(client);
+    auto net = std::make_unique<Net>(client, server);
+    REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+    // A 1200-byte packet to a 16-byte connection ID still bounds the payload by the 20-byte worst case.
+    CHECK(client.datagrams().max_payload() == kQuicMinInitialDatagram - kQuicShortPacketOverhead - 3U);
+    Echo echo(client, server, 5U);
+    DatagramFlow up(client, server, 1U, true);
+    DatagramFlow down(server, client, 2U, true);
+    REQUIRE(net->run_until(
+        [&]
+        {
+            const bool streams = echo.step();
+            const bool sent_up = up.step(net->now);
+            const bool sent_down = down.step(net->now);
+            return streams && sent_up && sent_down;
+        },
+        600000U * kMs));
+    up.check();
+    down.check();
+    CHECK(up.arrivals() == DatagramFlow::kCount);
+}
+
+TEST_CASE("QUIC connection: a frame ledger far smaller than the datagram load holds outcomes back and drains",
+          "[net][4.2a][quic-connection][quic-datagram]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    QuicConnection client(allocator, datagram_config(QuicSide::Client, identity, QuicVersion::V1, 0U, true, 12U));
+    QuicConnection server(allocator, datagram_config(QuicSide::Server, identity, QuicVersion::V1, 1U, true, 12U));
+    connect(client);
+    auto net = std::make_unique<Net>(client, server);
+    net->path[0].loss = 50U;
+    net->path[1].loss = 50U;
+    net->rng.state = 3U;
+    REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+    DatagramFlow up(client, server, 3U, false);
+    DatagramFlow down(server, client, 4U, false);
+    REQUIRE(net->run_until(
+        [&]
+        {
+            const bool sent_up = up.step(net->now);
+            const bool sent_down = down.step(net->now);
+            return sent_up && sent_down;
+        },
+        600000U * kMs));
+    up.check();
+    down.check();
+    CHECK(up.acked() > 4U * up.lost());
+    CHECK(down.acked() > 4U * down.lost());
+}
+
+TEST_CASE("QUIC connection: a peer without datagrams is sent none, and either side without a ring sends none",
+          "[net][4.2a][quic-connection][quic-datagram]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    QuicConnection client(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1));
+    QuicConnection server(allocator, datagram_config(QuicSide::Server, identity, QuicVersion::V1, 1U, false));
+    connect(client);
+    auto net = std::make_unique<Net>(client, server);
+    REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+    CHECK(client.peer_parameters().max_datagram_frame_size == 1200U);
+    CHECK(server.peer_parameters().max_datagram_frame_size == 0U);
+    const u8 payload[4] = {1U, 2U, 3U, 4U};
+    u64 id = 0U;
+    CHECK(client.datagrams().queue(payload, net->now, id) == QuicDatagramError::Unsupported); // no ring
+    CHECK(server.datagrams().queue(payload, net->now, id) == QuicDatagramError::Unsupported); // the peer takes none
+    CHECK_FALSE(server.datagrams().sendable());
+}
+
+TEST_CASE("QUIC connection: a peer's DATAGRAM frame is held to the size advertised, and refused without one",
+          "[net][4.2a][quic-connection][quic-datagram]")
+{
+    // max_datagram_frame_size is 0 (RFC 9221 section 3).
+    constexpr u8 data_bytes[3] = {1U, 2U, 3U};
+    CHECK(refused(
+              [&](QuicFrame& f)
+              {
+                  f.kind = QuicFrameKind::Datagram;
+                  f.data = data_bytes;
+              }) == code(QuicTransportError::ProtocolViolation));
+
+    QuicDatagramLimits limits;
+    limits.max_frame_bytes = 100U;
+    limits.receive_bytes = 99U;
+    limits.receive_count = 2U;
+    u8 payload[100];
+    for (usize index = 0U; index < sizeof(payload); ++index)
+    {
+        payload[index] = static_cast<u8>(index + 1U);
+    }
+    Identity identity;
+    RawRun run(identity, 2048U, limits);
+    run.handshake();
+    // Both encodings at exactly 100 bytes arrive whole.
+    for (const bool to_end : {false, true})
+    {
+        QuicFrame frame;
+        frame.kind = QuicFrameKind::Datagram;
+        frame.to_end = to_end;
+        frame.data = ConstSpan<u8>(payload, to_end ? 99U : 97U);
+        REQUIRE(quic_frame_bytes(frame) == 100U);
+        run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(frame, out); });
+        REQUIRE(run.server.state() == QuicConnectionState::Established);
+        ConstSpan<u8> held;
+        REQUIRE(run.server.datagrams().peek(held));
+        CHECK(same(held, frame.data));
+        run.server.datagrams().pop();
+    }
+    // One byte more is PROTOCOL_VIOLATION.
+    QuicFrame frame;
+    frame.kind = QuicFrameKind::Datagram;
+    frame.data = ConstSpan<u8>(payload, 98U);
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(frame, out); });
+    REQUIRE(run.server.state() == QuicConnectionState::Closing);
+    CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+    CHECK(run.raw.close_seen);
+}
+
+TEST_CASE("QUIC connection: the largest datagram follows the smaller of the two sides' UDP payload sizes",
+          "[net][4.2a][quic-connection][quic-datagram]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    QuicConnectionConfig client_config = datagram_config(QuicSide::Client, identity, QuicVersion::V1, 0U, true);
+    client_config.max_datagram_bytes = 1400U;
+    QuicConnectionConfig server_config = datagram_config(QuicSide::Server, identity, QuicVersion::V1, 1U, false);
+    server_config.parameters.max_udp_payload_size = 1250U;
+    server_config.datagrams.max_frame_bytes = 1400U;
+    QuicConnection client(allocator, client_config);
+    QuicConnection server(allocator, server_config);
+    connect(client);
+    auto net = std::make_unique<Net>(client, server);
+    REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+    // The client sends this server packets of at most 1250 bytes; the server's own 1200 bytes rule the other way.
+    CHECK(client.datagrams().max_payload() == 1250U - kQuicShortPacketOverhead - 3U);
+    CHECK(server.datagrams().max_payload() == kQuicMinInitialDatagram - kQuicShortPacketOverhead - 3U);
+    DatagramFlow up(client, server, 1U, true);
+    REQUIRE(net->run_until([&] { return up.step(net->now); }, 600000U * kMs));
+    up.check();
+    CHECK(up.acked() == DatagramFlow::kCount); // a clean path loses none
+}
+
+TEST_CASE("QUIC connection: a datagram of the largest size takes the first packet unless an ACK is owed",
+          "[net][4.2a][quic-connection][quic-datagram]")
+{
+    for (const bool owed : {false, true})
+    {
+        INFO("ACK owed " << owed);
+        Identity identity;
+        CountingAllocator allocator;
+        QuicConnection client(allocator, datagram_config(QuicSide::Client, identity, QuicVersion::V1, 0U, false));
+        QuicConnection server(allocator, datagram_config(QuicSide::Server, identity, QuicVersion::V1, 1U, false));
+        // A 20-byte connection ID leaves the server's packets no room for an ACK beside the largest datagram.
+        REQUIRE(client.connect(ConstSpan<u8>(kLongCid, sizeof(kLongCid)),
+                               ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), kStartNs));
+        auto net = std::make_unique<Net>(client, server);
+        REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+        net->advance(net->now + 1000U * kMs); // every packet acknowledged, nothing owed
+        // One ack-eliciting packet makes the server's ACK delayed, two make it owed at once (section 13.2.2).
+        u8 out[kDatagram];
+        for (usize packet = 0U; packet < (owed ? 2U : 1U); ++packet)
+        {
+            client.ping();
+            const usize size = client.send(Span<u8>(out, sizeof(out)), net->now);
+            REQUIRE(size != 0U);
+            server.receive(Span<u8>(out, size), QuicEcn::NotEct, net->now);
+        }
+        REQUIRE((server.recovery().ack_deadline_ns(QuicSpace::Application) <= net->now) == owed);
+        REQUIRE_FALSE(server.recovery().received(QuicSpace::Application).ranges().empty());
+        u8 payload[kDatagram] = {};
+        const usize largest = server.datagrams().max_payload();
+        u64 id = 0U;
+        REQUIRE(server.datagrams().queue(ConstSpan<u8>(payload, largest), net->now, id) == QuicDatagramError::None);
+        const u64 in_flight = server.recovery().bytes_in_flight();
+        usize size = server.send(Span<u8>(out, sizeof(out)), net->now);
+        REQUIRE(size != 0U);
+        client.receive(Span<u8>(out, size), QuicEcn::NotEct, net->now);
+        // A carried ACK waits behind the datagram; an owed one goes first and the datagram takes the next packet.
+        CHECK(client.datagrams().held() == (owed ? 0U : 1U));
+        const bool eliciting = server.recovery().bytes_in_flight() > in_flight; // a DATAGRAM frame elicits an ACK
+        CHECK(eliciting == !owed);
+        if (owed)
+        {
+            size = server.send(Span<u8>(out, sizeof(out)), net->now);
+            REQUIRE(size != 0U);
+            client.receive(Span<u8>(out, size), QuicEcn::NotEct, net->now);
+            CHECK(client.datagrams().held() == 1U);
+            CHECK(server.recovery().bytes_in_flight() > in_flight);
+        }
+        ConstSpan<u8> held;
+        REQUIRE(client.datagrams().peek(held));
+        CHECK(held.size() == largest);
+    }
 }

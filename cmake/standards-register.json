@@ -773,8 +773,13 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "tests/foundation/net/test_quic_datagram.cpp",
+        "tests/foundation/net/test_quic_connection.cpp",
+        "tests/foundation/net/fuzz/fuzz_quic_datagram.cpp"
+      ],
+      "deprecation": null,
+      "note": "Proven so far in crd-net (4.2a, design S41): max_datagram_frame_size enforced both ways, the largest payload fixed for the worst-case short header, ack and loss outcomes; 0-RTT keeps the remembered size when 0-RTT lands."
     },
     {
       "id": "quic.grease-bit",

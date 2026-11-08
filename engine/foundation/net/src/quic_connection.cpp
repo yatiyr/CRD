@@ -14,7 +14,8 @@ namespace
 constexpr u8 kRecordCrypto = 1U;
 constexpr u8 kRecordHandshakeDone = 2U;
 constexpr u8 kRecordRetire = 3U;
-constexpr u8 kRecordStream = 4U; // a frame of the stream set
+constexpr u8 kRecordStream = 4U;   // a frame of the stream set
+constexpr u8 kRecordDatagram = 5U; // a DATAGRAM frame whose outcome is reported
 constexpr u32 kNoRecord = ~u32{0};
 constexpr u64 kNsPerMs = 1000000U;
 constexpr u64 kCryptoFrameType = 0x06U;
@@ -89,7 +90,8 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
            p.initial_max_data == 0U && p.initial_max_stream_data_bidi_local == 0U &&
            p.initial_max_stream_data_bidi_remote == 0U && p.initial_max_stream_data_uni == 0U &&
            p.initial_max_streams_bidi == 0U && p.initial_max_streams_uni == 0U && p.max_datagram_frame_size == 0U &&
-           QuicStreamSet::limits_valid(config.streams) && p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
+           QuicStreamSet::limits_valid(config.streams) && QuicDatagrams::limits_valid(config.datagrams) &&
+           p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
            p.active_connection_id_limit <= kQuicMaxPeerConnectionIds && config.sent_packets != 0U &&
            config.sent_packets <= kMaxSentPackets && config.sent_frames != 0U &&
            config.sent_frames <= kMaxSentPackets && config.crypto_bytes % kQuicStreamChunk == 0U &&
@@ -157,8 +159,9 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     u64* const bits = memory::try_construct_array<u64>(allocator, kQuicSpaces * 3U * words);
     void* const recovery = allocator.try_allocate(sizeof(QuicRecovery), alignof(QuicRecovery));
     const bool streams = m_streams.init(allocator, config.streams, config.side);
+    const bool datagrams = m_datagrams.init(allocator, config.datagrams);
     if (seeded != crypto::CryptoError::None || entries == nullptr || frames == nullptr || bytes == nullptr ||
-        bits == nullptr || recovery == nullptr || !streams)
+        bits == nullptr || recovery == nullptr || !streams || !datagrams)
     {
         memory::destroy_array(allocator, entries, kQuicSpaces * per_space);
         memory::destroy_array(allocator, frames, config.sent_frames);
@@ -270,6 +273,7 @@ bool QuicConnection::start(u64 now_ns) noexcept
     m_protection.set_key_update_interval(m_config.key_update_interval);
     m_local = m_config.parameters;
     m_streams.fill_parameters(m_local);
+    m_datagrams.fill_parameters(m_local);
     m_local.has_initial_source_connection_id = true;
     m_local.initial_source_connection_id = m_local_cid;
     if (side == crypto::QuicSide::Server)
@@ -512,9 +516,18 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             std::memcpy(m_path_response, frame.data.data(), kQuicPathDataBytes);
             m_path_response_owed = true;
             return true;
+        case QuicFrameKind::Datagram:
+        {
+            const QuicTransportError error = m_datagrams.on_frame(frame);
+            if (error != QuicTransportError::NoError)
+            {
+                fail(error, 0U, now_ns);
+                return false;
+            }
+            return true;
+        }
         case QuicFrameKind::RetireConnectionId: // this side issued sequence 0 alone, where the frame arrives (19.16)
         case QuicFrameKind::PathResponse:       // this side sent no PATH_CHALLENGE (section 19.18's MAY taken)
-        case QuicFrameKind::Datagram:           // max_datagram_frame_size is 0 (RFC 9221 section 3)
             fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
             return false;
     }
@@ -622,6 +635,8 @@ bool QuicConnection::read_peer_parameters(u64 now_ns) noexcept
     }
     m_peer_known = true;
     m_streams.set_peer_parameters(m_peer);
+    m_datagrams.set_peer(m_peer.max_datagram_frame_size,
+                         min_u64(m_config.max_datagram_bytes, m_peer.max_udp_payload_size));
     m_recovery->set_peer_parameters(m_peer.max_ack_delay * kNsPerMs, m_peer.ack_delay_exponent, now_ns);
     m_peer_greases = m_peer.grease_quic_bit;
     const u64 local_idle = m_local.max_idle_timeout;
@@ -841,7 +856,12 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
     }
     return space == QuicSpace::Application &&
            (m_handshake_done_owed || m_path_response_owed || m_ping_owed || m_retire_owed_count > 0U ||
-            (m_frame_count < m_config.sent_frames && m_streams.has_frame()));
+            (m_frame_count < m_config.sent_frames && m_streams.has_frame()) || datagram_ready(now_ns));
+}
+
+bool QuicConnection::datagram_ready(u64 now_ns) const noexcept
+{
+    return m_datagrams.has_frame(now_ns) && (!m_datagrams.outcomes() || m_frame_count < m_config.sent_frames);
 }
 
 bool QuicConnection::record(QuicSpace space, u64 packet, u8 kind, const QuicStreamRecord& frame,
@@ -897,6 +917,17 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
                     m_streams.on_lost(frame.frame);
                 }
             }
+            else if (frame.kind == kRecordDatagram)
+            {
+                if (how == Settle::Acked)
+                {
+                    m_datagrams.on_acked(frame.frame.value);
+                }
+                else
+                {
+                    m_datagrams.on_lost(frame.frame.value); // discarded with its space: never delivered
+                }
+            }
             else if (frame.kind == kRecordHandshakeDone)
             {
                 m_handshake_done_acked = m_handshake_done_acked || how == Settle::Acked;
@@ -935,11 +966,22 @@ usize QuicConnection::write_frames(QuicSpace space, cont::Span<u8> frames, u64 p
         written.eliciting = written.eliciting || (bytes != 0U && quic_frame_ack_eliciting(frame.kind));
         return bytes != 0U;
     };
-    if (!m_recovery->received(space).ranges().empty())
+    // An ACK that is owed goes first; one only carried along follows waiting datagrams, so that a datagram of the
+    // largest size fits the next packet while every packet carries an ACK.
+    const auto put_ack = [&]
     {
-        const QuicAckWrite ack = m_recovery->write_ack(space, frames, now_ns);
-        used += ack.bytes;
-        written.carried_ack = (ack.bytes != 0U) ? ack.largest : kQuicNoPacket;
+        if (!m_recovery->received(space).ranges().empty())
+        {
+            const QuicAckWrite ack = m_recovery->write_ack(space, frames.subspan(used), now_ns);
+            used += ack.bytes;
+            written.carried_ack = (ack.bytes != 0U) ? ack.largest : kQuicNoPacket;
+        }
+    };
+    const bool ack_later =
+        space == QuicSpace::Application && m_recovery->ack_deadline_ns(space) > now_ns && datagram_ready(now_ns);
+    if (!ack_later)
+    {
+        put_ack();
     }
     if (space == QuicSpace::Application)
     {
@@ -1011,6 +1053,28 @@ usize QuicConnection::write_frames(QuicSpace space, cont::Span<u8> frames, u64 p
     }
     if (space == QuicSpace::Application)
     {
+        // Datagrams after the connection's own frames and before stream data; one that does not fit waits.
+        while (datagram_ready(now_ns))
+        {
+            u64 id = 0U;
+            const usize bytes = m_datagrams.write_next(frames.subspan(used), now_ns, id);
+            if (bytes == 0U)
+            {
+                break;
+            }
+            used += bytes;
+            written.eliciting = true;
+            if (m_datagrams.outcomes())
+            {
+                QuicStreamRecord sent;
+                sent.value = id;
+                static_cast<void>(record(space, packet, kRecordDatagram, sent, written)); // room was checked
+            }
+        }
+        if (ack_later)
+        {
+            put_ack();
+        }
         // The stream set's frames after the connection's own; each fits the room it was offered.
         const u64 rtt_ns = m_recovery->rtt().smoothed_ns;
         QuicFrame frame;
