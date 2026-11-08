@@ -6,12 +6,17 @@
 // every frame this slice refuses with the error RFC 9000 and RFC 9221 name, the peer's connection IDs and their
 // retirement, PATH_CHALLENGE answered and an acknowledgement of a skipped packet number; streams carried both ways
 // over hostile paths with a frame ledger far smaller than their load; and datagrams (RFC 9221) beside them, each
-// reported once, the largest ones while packets carry ACKs, a peer without them and frames past the size advertised.
+// reported once, the largest ones while packets carry ACKs, a peer without them and frames past the size advertised;
+// and this side's connection IDs (RFC 9000 sections 5.1 and 19.15 to 19.16): issued to the peer's limit through loss,
+// rotated by Retire Prior To, replaced when retired and refused when a retirement names the packet's own ID or an ID
+// never issued, with stateless resets (section 10.3) detected only by a used, unretired ID's token, also from the
+// ingress of a server that lost the connection.
 
 #include "ingress_fixture.hpp"
 #include "quic_stream_fixture.hpp"
 
 #include <crd/crypto/tls.hpp>
+#include <crd/net/ingress.hpp>
 #include <crd/net/quic_connection.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -162,8 +167,9 @@ public:
     u64 now = kStartNs;
     usize sent[2] = {};
     usize dropped[2] = {};
-    bool client_initials_padded = true; // every client datagram whose first packet is an Initial had 1200 bytes
-    bool amplification_kept = true;     // the server never sent more than three times what it received unvalidated
+    bool client_initials_padded = true;         // every client datagram whose first packet is an Initial had 1200 bytes
+    usize smallest[2] = {~usize{0}, ~usize{0}}; // each end's smallest datagram
+    bool amplification_kept = true; // the server never sent more than three times what it received unvalidated
 
     QuicConnection& end(usize index) { return *m_ends[index]; }
 
@@ -291,6 +297,7 @@ private:
 
     void check(usize from, ConstSpan<u8> datagram)
     {
+        smallest[from] = (datagram.size() < smallest[from]) ? datagram.size() : smallest[from];
         QuicHeader header;
         const usize short_bytes = (from == 0U) ? sizeof(kServerCid) : sizeof(kClientCid);
         if (from == 0U && parse_quic_header(datagram, short_bytes, header) == QuicHeaderError::None &&
@@ -943,9 +950,11 @@ QuicPacketType type_of(QuicLevel level)
 }
 
 // The raw peers' server: room for the thousand packets a skipped number takes to appear.
-QuicConnectionConfig server_config(const Identity& identity, crd::u32 sent_packets, const QuicDatagramLimits& datagrams)
+QuicConnectionConfig server_config(const Identity& identity, crd::u32 sent_packets, const QuicDatagramLimits& datagrams,
+                                   QuicConnectionIds* ids)
 {
     QuicConnectionConfig config = config_for(QuicSide::Server, identity, QuicVersion::V1, 2U);
+    config.ids = ids;
     config.sent_packets = sent_packets;
     config.datagrams = datagrams;
     config.sent_frames = 2048U;
@@ -976,13 +985,19 @@ struct RawClient
     u8 path_response[kQuicPathDataBytes] = {};
     usize path_response_datagram = 0U;
     usize datagrams = 0U;
+    // The server's NEW_CONNECTION_ID frames, by sequence.
+    u8 issued[8][20] = {};
+    u8 issued_tokens[8][kQuicResetTokenBytes] = {};
+    usize issued_bytes[8] = {};
+    u64 retire_prior_to = 0U;
 };
 
 class RawRun
 {
 public:
-    explicit RawRun(const Identity& identity, crd::u32 sent_packets = 2048U, const QuicDatagramLimits& datagrams = {})
-        : server(allocator, server_config(identity, sent_packets, datagrams)), m_identity(identity)
+    explicit RawRun(const Identity& identity, crd::u32 sent_packets = 2048U, const QuicDatagramLimits& datagrams = {},
+                    QuicConnectionIds* ids = nullptr)
+        : server(allocator, server_config(identity, sent_packets, datagrams, ids)), m_identity(identity)
     {
     }
 
@@ -1181,6 +1196,13 @@ private:
                 raw.retire_seen = true;
                 raw.retire_sequence = frame.sequence;
                 break;
+            case QuicFrameKind::NewConnectionId:
+                REQUIRE(frame.sequence < 8U);
+                std::memcpy(raw.issued[frame.sequence], frame.data.data(), frame.data.size());
+                std::memcpy(raw.issued_tokens[frame.sequence], frame.reset_token.data(), kQuicResetTokenBytes);
+                raw.issued_bytes[frame.sequence] = frame.data.size();
+                raw.retire_prior_to = frame.retire_prior_to;
+                break;
             case QuicFrameKind::PathResponse:
                 raw.path_response_seen = true;
                 std::memcpy(raw.path_response, frame.data.data(), kQuicPathDataBytes);
@@ -1265,7 +1287,7 @@ TEST_CASE("QUIC connection: frames this slice does not carry close with the erro
                   f.kind = QuicFrameKind::StreamDataBlocked;
                   f.stream_id = 4U;
               }) == code(QuicTransportError::StreamLimitError));
-    // The server issued sequence 0 alone, and sent no PATH_CHALLENGE.
+    // A retirement of the ID the packet was sent to (the server issued sequence 0 alone), and no PATH_CHALLENGE.
     CHECK(refused(
               [](QuicFrame& f)
               {
@@ -2143,5 +2165,413 @@ TEST_CASE("QUIC connection: a datagram of the largest size takes the first packe
         ConstSpan<u8> held;
         REQUIRE(client.datagrams().peek(held));
         CHECK(held.size() == largest);
+    }
+}
+
+// ---- This side's connection IDs and stateless reset ----
+
+namespace
+{
+constexpr u8 kResetKeys[2][kQuicResetKeyBytes] = {{0x61U, 0x01U}, {0x62U, 0x02U}};
+
+// An end's host: its IDs routed through a real table by QuicRoutedIds under its reset key, sequence 0 routed first.
+class Host final : public QuicConnectionIds
+{
+public:
+    Host(CountingAllocator& allocator, usize index, ConstSpan<u8> sequence0)
+        : routes(allocator, 64U), m_ids(routes, key, static_cast<u32>(index))
+    {
+        REQUIRE(key.init(ConstSpan<u8>(kResetKeys[index])) == CryptoError::None);
+        REQUIRE(routes.insert(sequence0, static_cast<u32>(index)) == RouteError::None);
+    }
+
+    bool issue(Span<u8> id, Span<u8> token) noexcept override
+    {
+        if (refuse || !m_ids.issue(id, token))
+        {
+            return false;
+        }
+        if (issued < 16U)
+        {
+            std::memcpy(ids[issued], id.data(), id.size());
+            std::memcpy(tokens[issued], token.data(), token.size());
+        }
+        ++issued;
+        return true;
+    }
+    bool token(ConstSpan<u8> id, Span<u8> token) noexcept override { return m_ids.token(id, token); }
+    void retire(ConstSpan<u8> id) noexcept override
+    {
+        ++retired;
+        m_ids.retire(id);
+    }
+
+    // The token `key` derives for `id`.
+    void token_of(ConstSpan<u8> id, u8 (&out)[kQuicResetTokenBytes]) const
+    {
+        REQUIRE(key.token(id, Span<u8>(out)) == CryptoError::None);
+    }
+
+    ConnectionIdTable routes;
+    QuicResetKey key;
+    usize issued = 0U;
+    usize retired = 0U;
+    bool refuse = false;
+    u8 ids[16][20] = {};
+    u8 tokens[16][kQuicResetTokenBytes] = {};
+
+private:
+    QuicRoutedIds m_ids;
+};
+
+QuicConnectionConfig hosted(QuicConnectionConfig config, Host& host, u64 limit)
+{
+    config.ids = &host;
+    config.parameters.active_connection_id_limit = limit;
+    return config;
+}
+
+// A datagram that looks like a short header of `size` bytes and ends in `token`.
+struct ResetDatagram
+{
+    u8 bytes[kDatagram] = {};
+    usize size = 0U;
+
+    ResetDatagram(const u8 (&token)[kQuicResetTokenBytes], usize total) : size(total)
+    {
+        std::memset(bytes, 0x3C, total);
+        bytes[0] = 0x4BU;
+        std::memcpy(bytes + total - kQuicResetTokenBytes, token, kQuicResetTokenBytes);
+    }
+    Span<u8> view() { return Span<u8>(bytes, size); }
+};
+
+// Runs a hosted pair to confirmation and until every ID is issued and acknowledged.
+void settle(Net& net, QuicConnection& client, QuicConnection& server, usize client_ids, usize server_ids)
+{
+    REQUIRE(net.run_until([&] { return both_confirmed(client, server); }));
+    REQUIRE(net.run_until(
+        [&]
+        {
+            return client.peer_cid_count() == server_ids && server.peer_cid_count() == client_ids &&
+                   net.in_flight() == 0U;
+        }));
+    net.advance(net.now + 200U * kMs);
+}
+} // namespace
+
+TEST_CASE("QUIC connection: both ends keep the peer at its limit of their IDs through loss, with the host's tokens",
+          "[net][4.2a][quic-connection]")
+{
+    for (u64 seed = 1U; seed <= 12U; ++seed)
+    {
+        Identity identity;
+        CountingAllocator allocator;
+        Host client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid)));
+        Host server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+        QuicConnection client(allocator,
+                              hosted(config_for(QuicSide::Client, identity, QuicVersion::V1, seed), client_host, 4U));
+        QuicConnection server(
+            allocator, hosted(config_for(QuicSide::Server, identity, QuicVersion::V1, seed + 1U), server_host, 3U));
+        connect(client);
+        auto net = std::make_unique<Net>(client, server);
+        net->rng.state = seed;
+        for (Path& path : net->path)
+        {
+            path.loss = 200U;
+            path.duplicate = 100U;
+            path.jitter_ns = 30U * kMs;
+        }
+        INFO("seed " << seed);
+        // The client holds four of the server's IDs (its limit), the server three of the client's.
+        settle(*net, client, server, 3U, 4U);
+        CHECK(server.local_cid_count() == 4U);
+        CHECK(client.local_cid_count() == 3U);
+        CHECK(server_host.issued == 3U);
+        CHECK(client_host.issued == 2U);
+        CHECK(server_host.routes.size() == 4U);
+        CHECK(client_host.routes.size() == 3U);
+        CHECK(client.state() == QuicConnectionState::Established);
+        CHECK(server.state() == QuicConnectionState::Established);
+        // A server sends sequence 0's token as a transport parameter; a client sends none (section 10.3).
+        u8 expected[kQuicResetTokenBytes];
+        server_host.token_of(ConstSpan<u8>(kServerCid, sizeof(kServerCid)), expected);
+        REQUIRE(client.peer_parameters().has_stateless_reset_token);
+        CHECK(std::memcmp(client.peer_parameters().stateless_reset_token, expected, sizeof(expected)) == 0);
+        CHECK_FALSE(server.peer_parameters().has_stateless_reset_token);
+        // Every datagram is kQuicResetPadding past the sender's ID length.
+        CHECK(net->smallest[0] >= sizeof(kClientCid) + kQuicResetPadding);
+        CHECK(net->smallest[1] >= sizeof(kServerCid) + kQuicResetPadding);
+        // Closing hands every ID back to its host, sequence 0 included.
+        client.close(0U, {}, net->now);
+        REQUIRE(net->run_until(
+            [&]
+            {
+                return client.state() == QuicConnectionState::Closed && server.state() == QuicConnectionState::Closed;
+            }));
+        CHECK(client_host.routes.size() == 0U);
+        CHECK(server_host.routes.size() == 0U);
+        CHECK(client_host.retired == 3U);
+        CHECK(server_host.retired == 4U);
+    }
+}
+
+TEST_CASE("QUIC connection: a rotation retires every earlier ID by Retire Prior To, and the new ones carry packets",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    Host client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid)));
+    Host server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    QuicConnection client(allocator, hosted(config_for(QuicSide::Client, identity, QuicVersion::V1), client_host, 4U));
+    QuicConnection server(allocator,
+                          hosted(config_for(QuicSide::Server, identity, QuicVersion::V1, 1U), server_host, 2U));
+    CHECK_FALSE(server.rotate_connection_ids()); // not before confirmation
+    connect(client);
+    auto net = std::make_unique<Net>(client, server);
+    settle(*net, client, server, 2U, 4U);
+    u8 old_ids[3][20] = {};
+    std::memcpy(old_ids, server_host.ids, sizeof(old_ids));
+
+    REQUIRE(server.rotate_connection_ids());
+    CHECK_FALSE(server.rotate_connection_ids()); // the earlier IDs are not yet retired
+    REQUIRE(net->run_until([&] { return server.local_cid_count() == 4U && net->in_flight() == 0U; }));
+    net->advance(net->now + 200U * kMs);
+    CHECK(server_host.issued == 7U);
+    CHECK(server_host.retired == 4U);
+    CHECK(server_host.routes.size() == 4U);
+    CHECK(server_host.routes.find(ConstSpan<u8>(kServerCid, sizeof(kServerCid))) == kNoConnection);
+    for (const auto& id : old_ids)
+    {
+        CHECK(server_host.routes.find(ConstSpan<u8>(id, sizeof(kServerCid))) == kNoConnection);
+    }
+    CHECK(client.peer_cid_count() == 4U);
+    CHECK_FALSE(same(client.peer_cid(), ConstSpan<u8>(kServerCid, sizeof(kServerCid))));
+    CHECK(server_host.routes.find(client.peer_cid()) == 1U);
+
+    // Packets to the new ID reach the server, and the retired IDs' tokens no longer reset the client.
+    const u64 received = server.counters().datagrams_received;
+    const u64 dropped = server.counters().packets_dropped;
+    client.ping();
+    REQUIRE(net->run_until([&] { return net->in_flight() == 0U && server.counters().datagrams_received > received; }));
+    CHECK(server.counters().packets_dropped == dropped);
+    u8 retired_token[kQuicResetTokenBytes];
+    server_host.token_of(ConstSpan<u8>(kServerCid, sizeof(kServerCid)), retired_token);
+    ResetDatagram stale(retired_token, 40U);
+    CHECK_FALSE(client.stateless_reset(ConstSpan<u8>(stale.bytes, stale.size), net->now));
+    CHECK(client.state() == QuicConnectionState::Established);
+    REQUIRE(server.rotate_connection_ids()); // a second rotation, once the first is retired
+    REQUIRE(net->run_until([&] { return server.local_cid_count() == 4U && net->in_flight() == 0U; }));
+    net->advance(net->now + 200U * kMs);
+    CHECK(server_host.retired == 8U);
+    CHECK(client.state() == QuicConnectionState::Established);
+    CHECK(server.state() == QuicConnectionState::Established);
+    // A rotation the host cannot route changes nothing.
+    server_host.refuse = true;
+    CHECK_FALSE(server.rotate_connection_ids());
+    // An end without a host never rotates.
+    QuicConnection lone(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1));
+    CHECK_FALSE(lone.rotate_connection_ids());
+}
+
+TEST_CASE("QUIC connection: a retired ID is replaced, and retiring the packet's own ID or one never issued is refused",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    const auto retire = [](RawRun& run, u64 sequence)
+    {
+        QuicFrame frame;
+        frame.kind = QuicFrameKind::RetireConnectionId;
+        frame.sequence = sequence;
+        run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(frame, out); });
+    };
+    const auto use = [](RawRun& run, u64 sequence)
+    {
+        std::memcpy(run.raw.dcid, run.raw.issued[sequence], run.raw.issued_bytes[sequence]);
+        run.raw.dcid_bytes = run.raw.issued_bytes[sequence];
+    };
+    {
+        CountingAllocator allocator;
+        Host host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+        RawRun run(identity, 2048U, {}, &host);
+        run.handshake();
+        run.drain();
+        // The raw client's limit is the default 2: sequence 1 is issued with the host's token.
+        REQUIRE(run.raw.issued_bytes[1] == sizeof(kServerCid));
+        CHECK(run.raw.retire_prior_to == 0U);
+        CHECK(std::memcmp(run.raw.issued[1], host.ids[0], sizeof(kServerCid)) == 0);
+        CHECK(std::memcmp(run.raw.issued_tokens[1], host.tokens[0], kQuicResetTokenBytes) == 0);
+        CHECK(run.server.local_cid_count() == 2U);
+        // Retiring sequence 1 from a packet sent to sequence 0: handed back, and sequence 2 replaces it.
+        retire(run, 1U);
+        CHECK(run.server.state() == QuicConnectionState::Established);
+        CHECK(host.retired == 1U);
+        CHECK(host.routes.find(ConstSpan<u8>(host.ids[0], sizeof(kServerCid))) == kNoConnection);
+        REQUIRE(run.raw.issued_bytes[2] == sizeof(kServerCid));
+        CHECK(run.server.local_cid_count() == 2U);
+        retire(run, 1U); // a repeat changes nothing
+        CHECK(run.server.state() == QuicConnectionState::Established);
+        CHECK(host.retired == 1U);
+        // Sequence 0 retired from a packet sent to sequence 2: accepted.
+        use(run, 2U);
+        retire(run, 0U);
+        CHECK(run.server.state() == QuicConnectionState::Established);
+        CHECK(host.routes.find(ConstSpan<u8>(kServerCid, sizeof(kServerCid))) == kNoConnection);
+        REQUIRE(run.raw.issued_bytes[3] == sizeof(kServerCid));
+        // Sequence 2 retired from a packet sent to it: PROTOCOL_VIOLATION (section 19.16).
+        retire(run, 2U);
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+    }
+    {
+        // One packet retiring an earlier ID and then its own: the second is still refused after the first moved it.
+        CountingAllocator allocator;
+        Host host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+        RawRun run(identity, 2048U, {}, &host);
+        run.handshake();
+        run.drain();
+        retire(run, 1U);
+        REQUIRE(run.raw.issued_bytes[2] == sizeof(kServerCid));
+        use(run, 2U);
+        QuicFrame first;
+        first.kind = QuicFrameKind::RetireConnectionId;
+        first.sequence = 0U;
+        QuicFrame second = first;
+        second.sequence = 2U;
+        run.send(QuicPacketType::OneRtt,
+                 [&](Span<u8> out)
+                 {
+                     const usize used = write_quic_frame(first, out);
+                     return used + write_quic_frame(second, out.subspan(used));
+                 });
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+    }
+    {
+        // A sequence greater than any issued: PROTOCOL_VIOLATION.
+        CountingAllocator allocator;
+        Host host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+        RawRun run(identity, 2048U, {}, &host);
+        run.handshake();
+        run.drain();
+        retire(run, 2U);
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+    }
+    {
+        // A host that routes nothing: sequence 0 alone, the connection unharmed, and issued once it routes again.
+        CountingAllocator allocator;
+        Host host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+        host.refuse = true;
+        RawRun run(identity, 2048U, {}, &host);
+        run.handshake();
+        run.drain();
+        CHECK(run.raw.issued_bytes[1] == 0U);
+        CHECK(run.server.local_cid_count() == 1U);
+        CHECK(run.server.state() == QuicConnectionState::Established);
+        host.refuse = false;
+        QuicFrame ping;
+        ping.kind = QuicFrameKind::Ping;
+        run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(ping, out); });
+        CHECK(run.raw.issued_bytes[1] == sizeof(kServerCid));
+    }
+}
+
+namespace
+{
+// A hosted client and server run until both hold every ID.
+struct HostedPair
+{
+    explicit HostedPair(const Identity& identity)
+        : client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
+          server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
+          client(allocator, hosted(config_for(QuicSide::Client, identity, QuicVersion::V1), client_host, 4U)),
+          server(allocator, hosted(config_for(QuicSide::Server, identity, QuicVersion::V1, 1U), server_host, 2U))
+    {
+        connect(client);
+        net = std::make_unique<Net>(client, server);
+        settle(*net, client, server, 2U, 4U);
+    }
+
+    CountingAllocator allocator;
+    Host client_host;
+    Host server_host;
+    QuicConnection client;
+    QuicConnection server;
+    std::unique_ptr<Net> net;
+};
+} // namespace
+
+TEST_CASE("QUIC connection: a stateless reset drains the connection, by the token of a used, unretired ID alone",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    {
+        HostedPair pair(identity);
+        QuicConnection& client = pair.client;
+        u8 used[kQuicResetTokenBytes];
+        pair.server_host.token_of(ConstSpan<u8>(kServerCid, sizeof(kServerCid)), used);
+        u8 wrong[kQuicResetTokenBytes];
+        std::memcpy(wrong, used, sizeof(wrong));
+        wrong[15] ^= 0x01U;
+
+        // Too short to be a reset, a token of an ID the client never sent to, or no token at all: nothing happens.
+        ResetDatagram tiny(used, kQuicMinResetBytes - 1U);
+        client.receive(tiny.view(), QuicEcn::NotEct, pair.net->now);
+        ResetDatagram unused(pair.server_host.tokens[0], 60U);
+        const u64 dropped = client.counters().packets_dropped;
+        client.receive(unused.view(), QuicEcn::NotEct, pair.net->now);
+        CHECK(client.counters().packets_dropped == dropped + 1U);
+        ResetDatagram forged(wrong, 60U);
+        client.receive(forged.view(), QuicEcn::NotEct, pair.net->now);
+        CHECK_FALSE(client.stateless_reset(ConstSpan<u8>(forged.bytes, forged.size), pair.net->now));
+        CHECK(client.state() == QuicConnectionState::Established);
+
+        // The token of the ID in use, at the least size: the client drains, sends nothing and ends.
+        ResetDatagram reset(used, kQuicMinResetBytes);
+        client.receive(reset.view(), QuicEcn::NotEct, pair.net->now);
+        CHECK(client.state() == QuicConnectionState::Draining);
+        CHECK(client.close_info().stateless_reset);
+        CHECK_FALSE(client.close_info().local);
+        u8 out[kDatagram];
+        CHECK(client.send(Span<u8>(out, sizeof(out)), pair.net->now) == 0U);
+        REQUIRE(pair.net->run_until([&] { return client.state() == QuicConnectionState::Closed; }));
+        CHECK(pair.client_host.routes.size() == 0U);
+    }
+    {
+        // A reset reaching a closing connection drains it and keeps the close it sent.
+        HostedPair pair(identity);
+        QuicConnection& client = pair.client;
+        client.close(7U, {}, pair.net->now);
+        u8 used[kQuicResetTokenBytes];
+        pair.server_host.token_of(ConstSpan<u8>(kServerCid, sizeof(kServerCid)), used);
+        ResetDatagram reset(used, 50U);
+        client.receive(reset.view(), QuicEcn::NotEct, pair.net->now);
+        CHECK(client.state() == QuicConnectionState::Draining);
+        CHECK(client.close_info().application);
+        CHECK(client.close_info().error_code == 7U);
+        CHECK(client.close_info().stateless_reset);
+    }
+    {
+        // A server that lost the connection answers the client's next packet from its ingress with the same key.
+        HostedPair pair(identity);
+        QuicConnection& client = pair.client;
+        ConnectionIdTable restarted(pair.allocator, 8U);
+        HandshakeBuckets buckets(pair.allocator, HandshakeRules{});
+        IngressConfig config;
+        config.local_cid_bytes = sizeof(kServerCid);
+        Ingress ingress(config, restarted, buckets, nullptr, nullptr, &pair.server_host.key);
+        REQUIRE(ingress.ready());
+        client.ping();
+        u8 out[kDatagram];
+        const usize size = client.send(Span<u8>(out, sizeof(out)), pair.net->now);
+        REQUIRE(size != 0U);
+        const Endpoint peer{IpAddress::v4(192, 0, 2, 9), 4433U};
+        const IngressDecision decision = ingress.classify(ConstSpan<u8>(out, size), false, peer, pair.net->now, 0U);
+        REQUIRE(decision.action == IngressAction::StatelessReset);
+        u8 answer[kQuicMaxStatelessAnswerBytes];
+        const usize written = ingress.answer(decision, peer, 0U, Span<u8>(answer));
+        REQUIRE(written != 0U);
+        CHECK(written < size);
+        CHECK(client.stateless_reset(ConstSpan<u8>(answer, written), pair.net->now));
+        CHECK(client.state() == QuicConnectionState::Draining);
+        CHECK(client.close_info().stateless_reset);
     }
 }

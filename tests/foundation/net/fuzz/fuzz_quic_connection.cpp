@@ -15,7 +15,9 @@
 // protocol, and then carries a stream larger than every window whole and unchanged and datagrams each at most once,
 // byte-exact and each reported (or one side closes). Frames: the server, which grants streams and takes datagrams of
 // up to 600 bytes, stays Established (Handshaking for Initial frames) or closes; a closed server sends a
-// CONNECTION_CLOSE only.
+// CONNECTION_CLOSE only. Both modes route each end's own IDs through a host (QuicRoutedIds): its table holds exactly
+// the IDs its connection holds, after every step; a script byte 0xFE rotates the server's IDs; and a confirmed client
+// that a stateless reset of the ID it sends to reaches drains, while a forged token changes nothing.
 #include <crd/crypto/tls.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_connection.hpp>
@@ -112,10 +114,34 @@ const Identity& identity()
     return kIdentity;
 }
 
-QuicConnectionConfig config_for(QuicSide side, QuicVersion version)
+// An end's host: a table routing its IDs under a reset key, sequence 0 routed first.
+struct Host
+{
+    ConnectionIdTable routes;
+    QuicResetKey key;
+    QuicRoutedIds ids;
+
+    Host(crd::memory::IAllocator& allocator, u32 index, ConstSpan<u8> sequence0)
+        : routes(allocator, 32U, ConstSpan<u8>(kSeeds[index], kPrfKeyBytes)), ids(routes, key, index)
+    {
+        u8 secret[kQuicResetKeyBytes] = {static_cast<u8>(0xA0U + index)};
+        CRD_FUZZ_REQUIRE(key.init(ConstSpan<u8>(secret)) == CryptoError::None);
+        CRD_FUZZ_REQUIRE(routes.insert(sequence0, index) == RouteError::None);
+    }
+
+    // The host routes exactly the IDs its connection holds (sequence 0 is routed until the connection is accepted).
+    void check(const QuicConnection& end) const
+    {
+        CRD_FUZZ_REQUIRE(end.state() == QuicConnectionState::Idle || routes.size() == end.local_cid_count());
+    }
+};
+
+QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnectionIds* ids)
 {
     QuicConnectionConfig config;
     config.side = side;
+    config.ids = ids;
+    config.parameters.active_connection_id_limit = 4U;
     config.version = version;
     config.tls = (side == QuicSide::Client) ? &identity().client : &identity().server;
     config.parameters.max_idle_timeout = 30000U;
@@ -163,6 +189,8 @@ struct Flight
 struct Pair
 {
     crd::fuzz::BudgetAllocator allocator;
+    Host client_host;
+    Host server_host;
     QuicConnection client;
     QuicConnection server;
     Flight flights[kFlights];
@@ -170,9 +198,17 @@ struct Pair
     u64 now = 1000U * kMs;
 
     explicit Pair(QuicVersion version)
-        : client(allocator, config_for(QuicSide::Client, version)),
-          server(allocator, config_for(QuicSide::Server, version))
+        : client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
+          server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
+          client(allocator, config_for(QuicSide::Client, version, &client_host.ids)),
+          server(allocator, config_for(QuicSide::Server, version, &server_host.ids))
     {
+    }
+
+    void check_hosts() const
+    {
+        client_host.check(client);
+        server_host.check(server);
     }
 
     void check_sent(usize from, ConstSpan<u8> datagram)
@@ -230,6 +266,7 @@ struct Pair
         }
         to.receive(Span<u8>(flight.bytes, flight.size), QuicEcn::NotEct, now);
         check_closed(to);
+        check_hosts();
     }
 
     void remove(usize index) { flights[index] = flights[--count]; }
@@ -244,6 +281,7 @@ struct Pair
                 check_closed(*end);
             }
         }
+        check_hosts();
     }
 
     // A clean path: everything delivered in order, time moving to each timer, for at most `events` timers. The
@@ -393,6 +431,29 @@ void exchange_datagrams(Pair& pair)
     CRD_FUZZ_REQUIRE(reported == kDatagrams || finished(pair.client) || finished(pair.server));
 }
 
+// A stateless reset reaching a confirmed client: a forged token changes nothing, the token of the ID it sends to
+// drains it.
+void stateless_reset(Pair& pair)
+{
+    QuicConnection& client = pair.client;
+    if (client.state() != QuicConnectionState::Established)
+    {
+        return;
+    }
+    client.ping(); // the ID it sends to is used from its next packet on
+    pair.flush();
+    u8 datagram[48];
+    std::memset(datagram, 0x3C, sizeof(datagram));
+    datagram[0] = 0x4BU;
+    const Span<u8> token(datagram + sizeof(datagram) - kQuicResetTokenBytes, kQuicResetTokenBytes);
+    CRD_FUZZ_REQUIRE(pair.server_host.key.token(client.peer_cid(), token) == CryptoError::None);
+    token[0] ^= 0x01U;
+    CRD_FUZZ_REQUIRE(!client.stateless_reset(ConstSpan<u8>(datagram), pair.now));
+    token[0] ^= 0x01U;
+    client.receive(Span<u8>(datagram), QuicEcn::NotEct, pair.now);
+    CRD_FUZZ_REQUIRE(client.state() == QuicConnectionState::Draining && client.close_info().stateless_reset);
+}
+
 void run_script(QuicVersion version, ConstSpan<u8> script)
 {
     Pair pair(version);
@@ -405,6 +466,11 @@ void run_script(QuicVersion version, ConstSpan<u8> script)
         pair.flush();
         const u8 op = script[at];
         const usize pick = (pair.count == 0U) ? 0U : (op >> 3U) % pair.count;
+        if (op == 0xFEU)
+        {
+            static_cast<void>(pair.server.rotate_connection_ids());
+            continue;
+        }
         switch (op & 7U)
         {
             case 0U:
@@ -467,6 +533,7 @@ void run_script(QuicVersion version, ConstSpan<u8> script)
                          pair.server.handshake().application_protocol());
         transfer(pair);
         exchange_datagrams(pair);
+        stateless_reset(pair);
     }
     CRD_FUZZ_REQUIRE(pair.allocator.peak_bytes() == allocations);
 }
@@ -494,6 +561,7 @@ QuicPacketType type_of(QuicLevel level)
 struct Raw
 {
     crd::fuzz::BudgetAllocator allocator;
+    Host host;
     QuicConnection server;
     QuicHandshake handshake;
     QuicPacketProtection protection;
@@ -506,7 +574,9 @@ struct Raw
     bool failed = false;
     u32 version;
 
-    explicit Raw(QuicVersion run) : server(allocator, config_for(QuicSide::Server, run)), version(static_cast<u32>(run))
+    explicit Raw(QuicVersion run)
+        : host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
+          server(allocator, config_for(QuicSide::Server, run, &host.ids)), version(static_cast<u32>(run))
     {
         std::memcpy(dcid, kInitialDcid, sizeof(kInitialDcid));
     }
@@ -655,6 +725,7 @@ void run_frames(QuicVersion version, ConstSpan<u8> input, bool initial)
         const usize take = (length < input.size() - at) ? length : input.size() - at;
         raw.send(type, input.subspan(at, take));
         at += take;
+        raw.host.check(raw.server);
         const QuicConnectionState state = raw.server.state();
         const QuicConnectionState open = initial ? QuicConnectionState::Handshaking : QuicConnectionState::Established;
         CRD_FUZZ_REQUIRE(state == open || state == QuicConnectionState::Closing ||
@@ -709,6 +780,14 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                          0xA3U, 0xA4U, 0xA5U, 0xA6U, 0xA7U, 0xA8U, 0xA9U, 0xAAU, 0xABU, 0xACU, 0xADU, 0xAEU,
                          0xAFU, 0x09U, 0x1AU, 0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U, 0x07U, 0x08U};
     sink.add("one-rtt-frames", frames, sizeof(frames));
+    // A clean script that rotates the server's IDs once the handshake has run.
+    const u8 rotate[] = {0x00U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U,
+                         0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U, 0xFEU, 0x00U, 0x00U, 0x00U,
+                         0x07U, 0x00U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
+    sink.add("script-rotate", rotate, sizeof(rotate));
+    // RETIRE_CONNECTION_ID of the server's sequence 1, then of a sequence never issued.
+    const u8 retire[] = {0x01U, 0x02U, 0x19U, 0x01U, 0x02U, 0x19U, 0x05U};
+    sink.add("one-rtt-retire", retire, sizeof(retire));
     // Initial frames anyone can seal: a PING, an ACK of a packet never sent, a CRYPTO frame of garbage.
     const u8 initial[] = {0x02U, 0x01U, 0x01U, 0x05U, 0x02U, 0x05U, 0x00U, 0x00U, 0x00U,
                           0x07U, 0x06U, 0x00U, 0x04U, 0x01U, 0x00U, 0x00U, 0x00U};

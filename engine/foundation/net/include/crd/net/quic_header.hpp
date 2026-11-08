@@ -27,6 +27,8 @@ inline constexpr usize kQuicMaxInvariantConnectionIdBytes = 255U; // RFC 8999 se
 // sample (RFC 9001 section 5.4.2); a shorter one cannot be unprotected.
 inline constexpr usize kQuicMinProtectedBytes = 4U + crypto::kQuicSampleBytes;
 inline constexpr u64 kQuicMaxVarint = (u64{1} << 62U) - 1U;
+// A stateless reset's least size (RFC 9000 section 10.3): 5 bytes of a short header and the token.
+inline constexpr usize kQuicMinResetBytes = 5U + crypto::kQuicResetTokenBytes;
 
 // ---- Variable-length integers (RFC 9000 section 16) ----
 

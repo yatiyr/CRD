@@ -9,7 +9,9 @@
 //        least 1200 bytes (RFC 9000 section 6.1), so a smaller one cannot draw a reflection. A client Initial in a
 //        datagram under 1200 bytes, or with a Destination Connection ID under 8 bytes (section 7.2), is dropped.
 //   S2   the Destination Connection ID through the keyed table (connection_table.hpp); a coalesced datagram goes
-//        where its first packet goes. A short header or a 0-RTT or Handshake packet for no connection is dropped.
+//        where its first packet goes. A short header for no connection is answered with a stateless reset when the
+//        server holds a QuicResetKey (RFC 9000 section 10.3), else dropped; a 0-RTT or Handshake packet for no
+//        connection is dropped (a reset is not effective before the handshake gave the client its token).
 //   S3   a client Initial for no connection: a Retry token that validates proves the address (QuicTokenKeys), one
 //        that does not is dropped (INVALID_TOKEN, section 8.1.2); a NEW_TOKEN token that validates proves it, one that
 //        does not counts as none (section 8.1.3). Unproven addresses pass a global and a per-prefix rate (/64 IPv6,
@@ -17,8 +19,11 @@
 //        closed or when every address must be proven; proven ones pass a global rate. Prefixes share a fixed array of
 //        buckets chosen by a keyed hash, so a server keeps no per-source state before validation and a collision only
 //        tightens.
-//   answers  Retry and Version Negotiation pass one global rate, and each is far below three times the datagram it
-//        answers (RFC 9000 section 8): at least 1200 bytes in, at most kQuicMaxStatelessAnswerBytes out.
+//   answers  Retry, Version Negotiation and stateless resets pass one global rate. Retry and Version Negotiation are
+//        far below three times the datagram they answer (RFC 9000 section 8): at least 1200 bytes in, at most
+//        kQuicMaxStatelessAnswerBytes out. A stateless reset is shorter than its trigger, so a loop of resets
+//        between two endpoints shrinks to nothing (section 10.3.3): one byte shorter for a trigger of 43 bytes or
+//        fewer, else a random length from 43 to kQuicMaxResetAnswerBytes; never under kQuicMinResetBytes.
 //
 // Threads: HandshakeBuckets is shared by the loops of one server and checked by all of them at once (its gates are
 // SharedRateGates: two loops may each let one handshake past a closing gate, and both are charged). An Ingress belongs
@@ -49,7 +54,7 @@ struct HandshakeRules
     GateRule unvalidated{20000U, kNanosPerSecond}; // handshakes from unproven addresses, all prefixes together
     GateRule per_prefix{64U, kNanosPerSecond};     // the same from one prefix bucket
     GateRule validated{50000U, kNanosPerSecond};   // handshakes from proven addresses, all together
-    GateRule answers{50000U, kNanosPerSecond};     // Retry and Version Negotiation packets sent, all together
+    GateRule answers{50000U, kNanosPerSecond};     // Retry, Version Negotiation and reset packets, all together
     u32 ipv4_prefix_bits = 32U;
     u32 ipv6_prefix_bits = 64U;
     u32 prefix_buckets = 4096U; // a power of two, 1 to 2^24
@@ -109,7 +114,8 @@ struct IngressConfig
     usize local_cid_bytes = 16U;
 };
 
-inline constexpr usize kQuicMinClientDcidBytes = 8U; // RFC 9000 section 7.2
+inline constexpr usize kQuicMinClientDcidBytes = 8U;    // RFC 9000 section 7.2
+inline constexpr usize kQuicMaxResetAnswerBytes = 128U; // as long as a small 1-RTT packet, never longer
 inline constexpr usize kQuicMaxStatelessAnswerBytes =
     (kQuicMaxVersionNegotiationBytes > quic_retry_bytes(crypto::kQuicMaxConnectionIdBytes,
                                                         crypto::kQuicMaxConnectionIdBytes,
@@ -125,6 +131,7 @@ enum class IngressAction : u8
     Admit,            // a new connection: the handler creates it
     Retry,            // answer with answer()
     NegotiateVersion, // answer with answer()
+    StatelessReset,   // answer with answer()
 };
 
 enum class DropReason : u8
@@ -154,6 +161,7 @@ struct IngressDecision
     QuicHeader header;
     u32 connection = kNoConnection; // for Route
     bool validated = false;         // for Admit: the address is proven
+    usize datagram_bytes = 0U;      // for StatelessReset: the size of the datagram it answers
     crypto::QuicTokenClaims claims; // for Admit through a Retry token: its original Destination Connection ID
 };
 
@@ -165,6 +173,7 @@ struct IngressCounters
     u64 admitted_validated = 0U;
     u64 retries = 0U;
     u64 negotiations = 0U;
+    u64 resets = 0U;
     u64 answer_failures = 0U; // answers that could not be built (no randomness)
 };
 
@@ -172,9 +181,11 @@ class Ingress
 {
 public:
     // `tokens` mints and checks address validation tokens (null: no Retry, and tokens are not read); `new_tokens`
-    // makes NEW_TOKEN tokens single use (null: they are not accepted). All must outlive the ingress.
+    // makes NEW_TOKEN tokens single use (null: they are not accepted); `reset` derives the stateless reset tokens of
+    // the IDs this server issues (null: no stateless reset). All must outlive the ingress.
     Ingress(const IngressConfig& config, const ConnectionIdTable& routes, HandshakeBuckets& buckets,
-            const crypto::QuicTokenKeys* tokens, crypto::ReplayFilter* new_tokens) noexcept;
+            const crypto::QuicTokenKeys* tokens, crypto::ReplayFilter* new_tokens,
+            const crypto::QuicResetKey* reset = nullptr) noexcept;
 
     // False when the configuration is out of range (no version, a version this build cannot run or a reserved one,
     // a connection ID length outside 8 to 20).
@@ -186,8 +197,8 @@ public:
     [[nodiscard]] IngressDecision classify(cont::ConstSpan<u8> datagram, bool truncated, const Endpoint& peer,
                                            u64 now_ns, u64 unix_seconds) noexcept;
 
-    // The Retry or Version Negotiation packet a decision asks for, into `out` (kQuicMaxStatelessAnswerBytes); returns
-    // its bytes, zero when it could not be built (counted).
+    // The Retry, Version Negotiation or stateless reset packet a decision asks for, into `out`
+    // (kQuicMaxStatelessAnswerBytes); returns its bytes, zero when it could not be built (counted).
     [[nodiscard]] usize answer(const IngressDecision& decision, const Endpoint& peer, u64 unix_seconds,
                                cont::Span<u8> out) noexcept;
 
@@ -196,6 +207,7 @@ public:
 private:
     [[nodiscard]] bool runs(u32 version) const noexcept;
     [[nodiscard]] IngressDecision drop(IngressDecision decision, DropReason reason) noexcept;
+    [[nodiscard]] usize stateless_reset(const IngressDecision& decision, u64 bits, cont::Span<u8> out) noexcept;
     [[nodiscard]] IngressDecision admit_initial(IngressDecision decision, cont::ConstSpan<u8> datagram,
                                                 const Endpoint& peer, u64 now_ns, u64 unix_seconds) noexcept;
 
@@ -204,6 +216,7 @@ private:
     HandshakeBuckets& m_buckets;
     const crypto::QuicTokenKeys* m_tokens = nullptr;
     crypto::ReplayFilter* m_new_tokens = nullptr;
+    const crypto::QuicResetKey* m_reset = nullptr;
     IngressCounters m_counters;
     bool m_ready = false;
 };

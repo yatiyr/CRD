@@ -2,8 +2,8 @@
 
 // crd-net -- a QUIC connection: the TLS handshake carried to confirmation, recovery, the connection's frames and its
 // close (4.2a; contract: docs/design/network-foundation.md#quic-connection). Sources: RFC 9000 sections 2 to 4, 5.1,
-// 7, 8, 10, 12, 13, 14, 17.2, 19 and 21.4, RFC 9001 sections 4 and 6, RFC 9002 section 6 and appendix A, RFC 9221
-// sections 3 to 5, RFC 9287 and RFC 9368 sections 2 to 4.
+// 7, 8, 10 (10.3's stateless reset), 12, 13, 14, 17.2, 19 and 21.4, RFC 9001 sections 4 and 6, RFC 9002 section 6 and
+// appendix A, RFC 9221 sections 3 to 5, RFC 9287 and RFC 9368 sections 2 to 4.
 //
 //   sans-I/O   receive() takes one datagram from the peer with its arrival time, send() writes the next datagram into
 //              the caller's room (called until it returns 0 after every receive() and on_timeout()), and
@@ -23,6 +23,12 @@
 //              datagrams, then the stream set's. An ACK only carried along follows waiting datagrams.
 //              The peer's connection IDs are held up to this side's active_connection_id_limit with retirement; a
 //              PATH_CHALLENGE is answered.
+//   IDs        this side's connection IDs come from the host (QuicConnectionIds), which routes them and derives their
+//              stateless reset tokens from its QuicResetKey: after confirmation the peer is kept at its
+//              active_connection_id_limit (at most kQuicMaxLocalConnectionIds) with NEW_CONNECTION_ID frames resent
+//              until acknowledged, a retired ID is handed back and replaced, and rotate_connection_ids() retires them
+//              all with Retire Prior To. A datagram whose first packet does not open and that ends in the token of a
+//              peer's ID this side used is a stateless reset: the connection drains (section 10.3.1).
 //   close      an error closes with CONNECTION_CLOSE at the levels the peer may read (section 10.2.3), CRYPTO_ERROR
 //              at an alert's level; closing resends it at a falling rate for three PTOs, a peer's close drains for
 //              three PTOs, and the idle timeout (section 10.1) closes silently.
@@ -34,6 +40,7 @@
 #include <crd/core/types.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
+#include <crd/net/connection_table.hpp>
 #include <crd/net/quic_datagram.hpp>
 #include <crd/net/quic_packet.hpp>
 #include <crd/net/quic_recovery.hpp>
@@ -48,8 +55,54 @@ class IAllocator;
 
 namespace crd::net
 {
-inline constexpr usize kQuicMaxPeerConnectionIds = 8U; // the peer's IDs a connection holds at most
-inline constexpr usize kQuicMaxReasonBytes = 64U;      // of a CONNECTION_CLOSE reason phrase kept or sent
+inline constexpr usize kQuicMaxPeerConnectionIds = 8U;  // the peer's IDs a connection holds at most
+inline constexpr usize kQuicMaxReasonBytes = 64U;       // of a CONNECTION_CLOSE reason phrase kept or sent
+inline constexpr usize kQuicMaxLocalConnectionIds = 8U; // this side's active IDs at most
+// This side pads every datagram to kQuicResetPadding bytes more than its connection ID length, so that a peer's
+// stateless reset answering it can look like a packet (RFC 9000 section 10.3).
+inline constexpr usize kQuicResetPadding = 22U;
+
+// The host's side of a connection's own connection IDs: it routes each one to the connection and derives its
+// stateless reset token from its QuicResetKey (RFC 9000 section 10.3.2), so that it can still reset a connection
+// whose state it lost. Called on the connection's thread; it outlives the connection.
+class QuicConnectionIds
+{
+public:
+    virtual ~QuicConnectionIds() = default;
+    // A fresh ID of `id.size()` bytes (sequence 0's length) from at least 128 random bits, now routed to the
+    // connection, and its token into `token` (kQuicResetTokenBytes). False when none can be routed.
+    [[nodiscard]] virtual bool issue(cont::Span<u8> id, cont::Span<u8> token) noexcept = 0;
+    // The token of an ID the host routes already: a server's sequence 0, sent as stateless_reset_token.
+    [[nodiscard]] virtual bool token(cont::ConstSpan<u8> id, cont::Span<u8> token) noexcept = 0;
+    // Stops routing `id`: the peer retired it, or the connection closed (every ID it holds, sequence 0 included).
+    virtual void retire(cont::ConstSpan<u8> id) noexcept = 0;
+
+protected:
+    QuicConnectionIds() = default;
+    QuicConnectionIds(const QuicConnectionIds&) = default;
+    QuicConnectionIds(QuicConnectionIds&&) noexcept = default;
+    QuicConnectionIds& operator=(const QuicConnectionIds&) = default;
+    QuicConnectionIds& operator=(QuicConnectionIds&&) noexcept = default;
+};
+
+// The host side over a loop's ConnectionIdTable and its endpoint's QuicResetKey: IDs drawn from the provider's
+// randomness and routed to `connection`.
+class QuicRoutedIds final : public QuicConnectionIds
+{
+public:
+    QuicRoutedIds(ConnectionIdTable& routes, const crypto::QuicResetKey& reset, u32 connection) noexcept
+        : m_routes(routes), m_reset(reset), m_connection(connection)
+    {
+    }
+    [[nodiscard]] bool issue(cont::Span<u8> id, cont::Span<u8> token) noexcept override;
+    [[nodiscard]] bool token(cont::ConstSpan<u8> id, cont::Span<u8> token) noexcept override;
+    void retire(cont::ConstSpan<u8> id) noexcept override;
+
+private:
+    ConnectionIdTable& m_routes;
+    const crypto::QuicResetKey& m_reset;
+    u32 m_connection = kNoConnection;
+};
 
 struct QuicConnectionConfig
 {
@@ -57,7 +110,10 @@ struct QuicConnectionConfig
     crypto::QuicVersion version = crypto::QuicVersion::V1; // the version this connection runs
     const crypto::TlsContext* tls = nullptr;               // of `side`'s role, with an application protocol
     crypto::TlsTicketStore* tickets = nullptr;
-    // This side's parameters. The connection fills the connection IDs, version_information, grease_quic_bit, the
+    // Where this side's further connection IDs come from (null: sequence 0 alone, and no stateless reset token).
+    QuicConnectionIds* ids = nullptr;
+    // This side's parameters. The connection fills the connection IDs and a server's stateless_reset_token,
+    // version_information, grease_quic_bit, the
     // stream and flow-control parameters (from `streams`) and max_datagram_frame_size (from `datagrams`), so those
     // stay 0 here; active_connection_id_limit is at most kQuicMaxPeerConnectionIds.
     QuicTransportParameters parameters;
@@ -109,9 +165,10 @@ enum class QuicConnectionState : u8
 // Why a connection closed.
 struct QuicCloseInfo
 {
-    bool application = false; // an application error code (CONNECTION_CLOSE 0x1d)
-    bool local = false;       // this side closed
-    bool idle = false;        // the idle timeout ended it, without a frame
+    bool application = false;     // an application error code (CONNECTION_CLOSE 0x1d)
+    bool local = false;           // this side closed
+    bool idle = false;            // the idle timeout ended it, without a frame
+    bool stateless_reset = false; // the peer's stateless reset ended it (RFC 9000 section 10.3.1)
     // A client's Version Negotiation packet listed none of the versions it runs: `retry_version` is the first of its
     // preference the packet offered (0 for none), for a new connection with after_version_negotiation set.
     bool version_negotiation = false;
@@ -165,6 +222,16 @@ public:
     void close(u64 application_error, cont::ConstSpan<u8> reason, u64 now_ns) noexcept;
     // Owes one ack-eliciting 1-RTT packet: a keep-alive before the idle timeout (section 10.1.2).
     void ping() noexcept { m_ping_owed = true; }
+    // Issues a fresh set of connection IDs whose NEW_CONNECTION_ID frames retire every earlier one (Retire Prior To,
+    // section 5.1.2); the earlier IDs stay routed until the peer retires them. False, changing nothing, before
+    // confirmation, without a host, with zero-length IDs, while an earlier rotation waits for retirements, or when
+    // the host routes no new ID.
+    [[nodiscard]] bool rotate_connection_ids() noexcept;
+    // Whether `datagram`, which reached this connection's peer address and opened nothing, is the peer's stateless
+    // reset: it ends in the token of a peer's ID this side used and has not retired, compared in constant time. The
+    // connection then drains (section 10.3.1). receive() checks its own datagrams; the host calls this for a datagram
+    // from the peer's address that routes to no connection.
+    bool stateless_reset(cont::ConstSpan<u8> datagram, u64 now_ns) noexcept;
 
     [[nodiscard]] QuicConnectionState state() const noexcept { return m_state; }
     [[nodiscard]] bool confirmed() const noexcept { return m_confirmed; }
@@ -191,6 +258,8 @@ public:
     // The Destination Connection ID this side sends to, and the peer's IDs held (sequence 0 first among them).
     [[nodiscard]] cont::ConstSpan<u8> peer_cid() const noexcept;
     [[nodiscard]] usize peer_cid_count() const noexcept { return m_peer_cid_count; }
+    // This side's IDs still routed (sequence 0 included until retired).
+    [[nodiscard]] usize local_cid_count() const noexcept { return m_local_id_count; }
     // A client: the latest NEW_TOKEN token its server sent (empty for none), for its next connection there.
     [[nodiscard]] cont::ConstSpan<u8> new_token() const noexcept
     {
@@ -252,20 +321,39 @@ private:
         QuicConnectionId id;
         u8 reset_token[kQuicResetTokenBytes] = {};
         bool has_token = false;
+        bool used = false; // a packet was sent to it: its token is checked (section 10.3.1)
+    };
+
+    struct LocalCid
+    {
+        u64 sequence = 0U;
+        QuicConnectionId id;
+        u8 reset_token[kQuicResetTokenBytes] = {};
+        bool owed = false;  // its NEW_CONNECTION_ID frame waits to be sent
+        bool acked = false; // the peer acknowledged it (sequence 0: the handshake carried it)
     };
 
     [[nodiscard]] bool start(u64 now_ns) noexcept;
     [[nodiscard]] u64 entropy() noexcept;
 
     // Receiving.
-    void receive_packet(const QuicHeader& header, cont::Span<u8> packet, usize datagram_bytes, QuicEcn ecn,
-                        u64 now_ns) noexcept;
+    // Whether the packet opened.
+    [[nodiscard]] bool receive_packet(const QuicHeader& header, cont::Span<u8> packet, usize datagram_bytes,
+                                      QuicEcn ecn, u64 now_ns) noexcept;
     [[nodiscard]] bool on_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
     [[nodiscard]] bool crypto_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
     [[nodiscard]] bool advance_handshake(u64 now_ns) noexcept;
     [[nodiscard]] bool read_peer_parameters(u64 now_ns) noexcept;
     [[nodiscard]] bool new_connection_id(const QuicFrame& frame, u64 now_ns) noexcept;
     [[nodiscard]] bool owe_retire(u64 sequence, u64 now_ns) noexcept;
+    [[nodiscard]] bool retire_local(u64 sequence, u64 now_ns) noexcept;
+    [[nodiscard]] usize local_index(cont::ConstSpan<u8> id) const noexcept;
+    // Issues IDs until the peer holds its active_connection_id_limit of this side's (after confirmation).
+    void issue_local_ids() noexcept;
+    // Hands every ID held back to the host and closes the connection.
+    void finish() noexcept;
+    // A stateless reset by `tail`, a datagram's last kQuicResetTokenBytes.
+    [[nodiscard]] bool reset_by(cont::ConstSpan<u8> tail, u64 now_ns) noexcept;
     void version_negotiation(const QuicHeader& header, cont::ConstSpan<u8> packet) noexcept;
     void discard_space(QuicSpace space, u64 now_ns) noexcept;
     void confirm(u64 now_ns) noexcept;
@@ -328,6 +416,11 @@ private:
     QuicConnectionId m_peer_scid;     // the Source Connection ID of the peer's long headers
     bool m_peer_scid_known = false;
     bool m_retried = false;
+    LocalCid m_local_ids[2U * kQuicMaxLocalConnectionIds]; // the active ones and those a rotation retires
+    usize m_local_id_count = 0U;
+    usize m_packet_local = 0U; // which of them the packet being read was sent to (m_local_id_count: none)
+    u64 m_local_next_sequence = 1U;
+    u64 m_local_retire_prior_to = 0U; // this side's Retire Prior To
     PeerCid m_peer_cids[kQuicMaxPeerConnectionIds];
     usize m_peer_cid_count = 0U;
     usize m_peer_cid_current = 0U;

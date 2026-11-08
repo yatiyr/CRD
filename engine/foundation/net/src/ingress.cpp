@@ -123,8 +123,9 @@ bool HandshakeBuckets::answer(u64 now_ns) noexcept
 // ---- Ingress ----
 
 Ingress::Ingress(const IngressConfig& config, const ConnectionIdTable& routes, HandshakeBuckets& buckets,
-                 const crypto::QuicTokenKeys* tokens, crypto::ReplayFilter* new_tokens) noexcept
-    : m_config(config), m_routes(routes), m_buckets(buckets), m_tokens(tokens), m_new_tokens(new_tokens)
+                 const crypto::QuicTokenKeys* tokens, crypto::ReplayFilter* new_tokens,
+                 const crypto::QuicResetKey* reset) noexcept
+    : m_config(config), m_routes(routes), m_buckets(buckets), m_tokens(tokens), m_new_tokens(new_tokens), m_reset(reset)
 {
     if (config.version_count == 0U || config.version_count > kQuicMaxNegotiationVersions ||
         config.local_cid_bytes < kQuicMinClientDcidBytes ||
@@ -227,7 +228,14 @@ IngressDecision Ingress::classify(cont::ConstSpan<u8> datagram, bool truncated, 
     switch (header.type)
     {
     case QuicPacketType::OneRtt:
-        return drop(decision, DropReason::UnknownConnection);
+        // A reset shorter than its trigger and at least 21 bytes long (section 10.3.3), within the answer rate.
+        if (m_reset == nullptr || datagram.size() <= kQuicMinResetBytes || !m_buckets.answer(now_ns))
+        {
+            return drop(decision, DropReason::UnknownConnection);
+        }
+        decision.action = IngressAction::StatelessReset;
+        decision.datagram_bytes = datagram.size();
+        return decision;
     case QuicPacketType::Initial:
         return admit_initial(decision, datagram, peer, now_ns, unix_seconds);
     case QuicPacketType::ZeroRtt:
@@ -312,6 +320,10 @@ usize Ingress::answer(const IngressDecision& decision, const Endpoint& peer, u64
         bits = (bits << 8U) | entropy[index];
     }
 
+    if (decision.action == IngressAction::StatelessReset)
+    {
+        return stateless_reset(decision, bits, out);
+    }
     if (decision.action == IngressAction::NegotiateVersion)
     {
         const usize written = write_version_negotiation(
@@ -344,6 +356,33 @@ usize Ingress::answer(const IngressDecision& decision, const Endpoint& peer, u64
     }
     ++m_counters.retries;
     return written;
+}
+
+usize Ingress::stateless_reset(const IngressDecision& decision, u64 bits, cont::Span<u8> out) noexcept
+{
+    const usize trigger = decision.datagram_bytes;
+    const usize longest = (trigger - 1U < kQuicMaxResetAnswerBytes) ? trigger - 1U : kQuicMaxResetAnswerBytes;
+    constexpr usize kShortTrigger = 43U; // a trigger this short gets a reset one byte shorter (section 10.3)
+    const usize bytes = (trigger <= kShortTrigger || longest <= kShortTrigger)
+                            ? longest
+                            : kShortTrigger + static_cast<usize>(bits % (longest - kShortTrigger + 1U));
+    if (m_reset == nullptr || trigger <= kQuicMinResetBytes || out.size() < bytes)
+    {
+        ++m_counters.answer_failures;
+        return 0U;
+    }
+    // The fixed bits 01, then unpredictable bits, then the token of the Destination Connection ID (section 10.3).
+    const usize unpredictable = bytes - crypto::kQuicResetTokenBytes;
+    if (crypto::random_bytes(out.first(unpredictable)) != crypto::CryptoError::None ||
+        m_reset->token(decision.header.dcid, out.subspan(unpredictable, crypto::kQuicResetTokenBytes)) !=
+            crypto::CryptoError::None)
+    {
+        ++m_counters.answer_failures;
+        return 0U;
+    }
+    out[0] = static_cast<u8>((out[0] & 0x3FU) | 0x40U);
+    ++m_counters.resets;
+    return bytes;
 }
 
 } // namespace crd::net

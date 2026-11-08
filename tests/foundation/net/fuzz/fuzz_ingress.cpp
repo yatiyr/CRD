@@ -10,6 +10,9 @@
 // client Initial of at least 1200 bytes with an 8-byte Destination Connection ID, and every answer is a datagram of
 // at least 1200 bytes answered in at most three times its size (RFC 9000 section 8), which parses back as Version
 // Negotiation (listing the server's versions and one reserved version) or as a Retry whose integrity tag verifies.
+// A stateless reset answers only a short header for no connection: shorter than it (section 10.3.3), one byte
+// shorter up to 43 bytes, at least 21 and at most kQuicMaxResetAnswerBytes, with the fixed bits 01 and the token of
+// its Destination Connection ID last.
 #include <crd/crypto/quic.hpp>
 #include <crd/crypto/replay.hpp>
 #include <crd/fuzz/harness.hpp>
@@ -38,6 +41,9 @@ constexpr u8 kKey[crd::crypto::kPrfKeyBytes] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x
 constexpr u8 kTokenKey[crd::crypto::kQuicTokenKeyBytes] = {
     0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F, 0x60,
     0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70};
+constexpr u8 kResetKey[crd::crypto::kQuicResetKeyBytes] = {
+    0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F, 0x80,
+    0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0x90};
 constexpr u64 kUnix = 1793577600U;
 constexpr u8 kRouted = 0x5AU; // every ID of this byte repeated routes to connection 7
 
@@ -98,6 +104,20 @@ void check_varint(ConstSpan<u8> datagram)
     CRD_FUZZ_REQUIRE(take_quic_varint(again, read) && read == value && again.done());
 }
 
+void check_reset(const IngressDecision& decision, ConstSpan<u8> datagram, const crd::crypto::QuicResetKey& key,
+                 ConstSpan<u8> answer)
+{
+    CRD_FUZZ_REQUIRE(decision.header.type == QuicPacketType::OneRtt && decision.datagram_bytes == datagram.size());
+    CRD_FUZZ_REQUIRE(answer.size() < datagram.size() && answer.size() >= kQuicMinResetBytes);
+    CRD_FUZZ_REQUIRE(answer.size() <= kQuicMaxResetAnswerBytes);
+    CRD_FUZZ_REQUIRE(datagram.size() > 43U || answer.size() == datagram.size() - 1U);
+    CRD_FUZZ_REQUIRE(datagram.size() <= 43U || answer.size() >= 43U);
+    CRD_FUZZ_REQUIRE((answer[0] & 0xC0U) == 0x40U);
+    u8 token[crd::crypto::kQuicResetTokenBytes];
+    CRD_FUZZ_REQUIRE(key.token(decision.header.dcid, Span<u8>(token)) == crd::crypto::CryptoError::None);
+    CRD_FUZZ_REQUIRE(std::memcmp(token, answer.data() + answer.size() - sizeof(token), sizeof(token)) == 0);
+}
+
 void check_answer(const IngressDecision& decision, ConstSpan<u8> datagram, const IngressConfig& config,
                   ConstSpan<u8> answer)
 {
@@ -136,7 +156,9 @@ void check_ingress(ConstSpan<u8> datagram, u8 control)
     HandshakeBuckets buckets(heap, rules, ConstSpan<u8>(kKey));
     crd::crypto::QuicTokenKeys tokens;
     crd::crypto::ReplayFilter replay;
+    crd::crypto::QuicResetKey reset;
     CRD_FUZZ_REQUIRE(routes.ready() && buckets.ready());
+    CRD_FUZZ_REQUIRE(reset.init(ConstSpan<u8>(kResetKey)) == crd::crypto::CryptoError::None);
     CRD_FUZZ_REQUIRE(tokens.init(ConstSpan<u8>(kTokenKey), {}) == crd::crypto::CryptoError::None);
     CRD_FUZZ_REQUIRE(replay.init(64U, crd::crypto::kQuicNewTokenLifetime, kUnix) == crd::crypto::CryptoError::None);
     u8 routed[crd::crypto::kQuicMaxConnectionIdBytes];
@@ -147,7 +169,7 @@ void check_ingress(ConstSpan<u8> datagram, u8 control)
     }
     IngressConfig config;
     config.local_cid_bytes = 8U + (control % 13U);
-    Ingress ingress(config, routes, buckets, &tokens, &replay);
+    Ingress ingress(config, routes, buckets, &tokens, &replay, &reset);
     CRD_FUZZ_REQUIRE(ingress.ready());
 
     const u8 v6[16] = {0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
@@ -173,6 +195,14 @@ void check_ingress(ConstSpan<u8> datagram, u8 control)
         const usize written = ingress.answer(decision, peer, kUnix, Span<u8>(answer));
         CRD_FUZZ_REQUIRE(written != 0U);
         check_answer(decision, datagram, config, ConstSpan<u8>(answer, written));
+        break;
+    }
+    case IngressAction::StatelessReset:
+    {
+        u8 answer[kQuicMaxStatelessAnswerBytes] = {};
+        const usize written = ingress.answer(decision, peer, kUnix, Span<u8>(answer));
+        CRD_FUZZ_REQUIRE(written != 0U);
+        check_reset(decision, datagram, reset, ConstSpan<u8>(answer, written));
         break;
     }
     }
@@ -256,6 +286,8 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     seed[1] = 0x40U;
     std::memset(seed + 2U, 0x01, 8U + 30U);
     sink.add("short-unknown", seed, 2U + 8U + 30U);
+    std::memset(seed + 2U, 0x02, 8U + 190U);
+    sink.add("short-unknown-long", seed, 2U + 8U + 190U); // a stateless reset of a random length
 
     // Variable-length integers of every length.
     const u8 varints[] = {0x00U, 0x25U, 0x7BU, 0xBDU, 0x9DU, 0x7FU, 0x3EU, 0x7DU, 0xC2U, 0x19U, 0x7CU, 0x5EU,

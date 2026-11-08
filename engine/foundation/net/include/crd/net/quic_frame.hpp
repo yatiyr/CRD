@@ -76,7 +76,7 @@ enum class QuicFrameKind : u8
 };
 
 inline constexpr u64   kQuicMaxStreams         = u64{1} << 60U; // MAX_STREAMS and STREAMS_BLOCKED (section 19.11)
-inline constexpr usize kQuicResetTokenBytes    = 16U;           // a stateless reset token (section 10.3)
+using crypto::kQuicResetTokenBytes; // a stateless reset token (section 10.3), crd-crypto's QuicResetKey
 inline constexpr usize kQuicPathDataBytes      = 8U;            // PATH_CHALLENGE and PATH_RESPONSE data
 inline constexpr u64   kQuicStreamTypeBase     = 0x08U;
 inline constexpr u8    kQuicStreamBitFin       = 0x01U;

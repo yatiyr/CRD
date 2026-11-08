@@ -870,4 +870,81 @@ TEST_CASE("S3 drops what it can neither admit nor answer", "[net][ingress]")
     CHECK(dropped(proven.ingress, DropReason::Overloaded) == 1U);
 }
 
+TEST_CASE("A short header for no connection draws a stateless reset shorter than itself", "[net][ingress]")
+{
+    constexpr u8 reset_key[crd::crypto::kQuicResetKeyBytes] = {0x31, 0x32, 0x33};
+    crd::crypto::QuicResetKey key;
+    REQUIRE(key.init(ConstSpan<u8>(reset_key)) == CryptoError::None);
+    CountingAllocator allocator;
+    ConnectionIdTable routes(allocator, 8U, ConstSpan<u8>(kRouteKey));
+    HandshakeRules rules = tight_rules();
+    HandshakeBuckets buckets(allocator, rules, ConstSpan<u8>(kRouteKey));
+    Ingress ingress(IngressConfig{}, routes, buckets, nullptr, nullptr, &key);
+    REQUIRE(ingress.ready());
+    const u8 unknown[16] = {0x77, 0x01};
+    u8 token[crd::crypto::kQuicResetTokenBytes];
+    REQUIRE(key.token(view_of(unknown, 16U), Span<u8>(token)) == CryptoError::None);
+
+    usize lengths[kQuicMaxResetAnswerBytes + 1U] = {};
+    const usize triggers[] = {1U + 16U + 20U, 43U, 44U, 45U, 64U, 129U, 130U, 1200U, 1500U};
+    for (const usize trigger : triggers)
+    {
+        for (u32 round = 0U; round < 64U; ++round)
+        {
+            const IngressDecision decision = ingress.classify(short_packet(view_of(unknown, 16U), trigger).view(),
+                                                              false, kPeer, kSecond + round, kUnix);
+            REQUIRE(decision.action == IngressAction::StatelessReset);
+            CHECK(decision.datagram_bytes == trigger);
+            u8 answer[kQuicMaxStatelessAnswerBytes] = {};
+            const usize written = ingress.answer(decision, kPeer, kUnix, Span<u8>(answer));
+            REQUIRE(written >= kQuicMinResetBytes);
+            CHECK(written < trigger); // a loop of resets shrinks (RFC 9000 section 10.3.3)
+            CHECK(written <= kQuicMaxResetAnswerBytes);
+            if (trigger <= 43U)
+            {
+                CHECK(written == trigger - 1U);
+            }
+            else
+            {
+                CHECK(written >= 43U);
+            }
+            CHECK((answer[0] & 0xC0U) == 0x40U); // a short header's fixed bits
+            CHECK(std::memcmp(answer + written - sizeof(token), token, sizeof(token)) == 0);
+            lengths[written] += (trigger == 1500U) ? 1U : 0U;
+        }
+    }
+    // Long triggers draw lengths spread over 43 to kQuicMaxResetAnswerBytes, not one fixed size.
+    usize distinct = 0U;
+    for (const usize count : lengths)
+    {
+        distinct += (count != 0U) ? 1U : 0U;
+    }
+    CHECK(distinct >= 16U);
+    CHECK(ingress.counters().resets == 64U * (sizeof(triggers) / sizeof(triggers[0])));
+
+    // An answer too small for the reset, or a decision built without a key, writes nothing.
+    const IngressDecision decision =
+        ingress.classify(short_packet(view_of(unknown, 16U), 1200U).view(), false, kPeer, 2U * kSecond, kUnix);
+    u8 tiny[kQuicMinResetBytes] = {};
+    CHECK(ingress.answer(decision, kPeer, kUnix, Span<u8>(tiny)) == 0U);
+    Ingress keyless(IngressConfig{}, routes, buckets, nullptr, nullptr);
+    u8 answer[kQuicMaxStatelessAnswerBytes] = {};
+    CHECK(keyless.answer(decision, kPeer, kUnix, Span<u8>(answer)) == 0U);
+    CHECK(keyless.classify(short_packet(view_of(unknown, 16U)).view(), false, kPeer, 2U * kSecond, kUnix).reason ==
+          DropReason::UnknownConnection);
+
+    // A routed ID is never reset; the answer rate bounds the resets.
+    REQUIRE(routes.insert(view_of(unknown, 16U), 3U) == RouteError::None);
+    CHECK(ingress.classify(short_packet(view_of(unknown, 16U)).view(), false, kPeer, 2U * kSecond, kUnix).action ==
+          IngressAction::Route);
+    rules.answers = GateRule{1U, 0U};
+    HandshakeBuckets one_answer(allocator, rules, ConstSpan<u8>(kRouteKey));
+    Ingress quiet(IngressConfig{}, routes, one_answer, nullptr, nullptr, &key);
+    const u8 other[16] = {0x78};
+    CHECK(quiet.classify(short_packet(view_of(other, 16U)).view(), false, kPeer, kSecond, kUnix).action ==
+          IngressAction::StatelessReset);
+    CHECK(quiet.classify(short_packet(view_of(other, 16U)).view(), false, kPeer, kSecond, kUnix).reason ==
+          DropReason::UnknownConnection);
+}
+
 } // namespace
