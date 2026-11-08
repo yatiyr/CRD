@@ -49,10 +49,19 @@ crd_fuzz_target(crd-fuzz-net-quic-recovery
 crd_fuzz_target(crd-fuzz-net-quic-stream
     SOURCES fuzz_quic_stream.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-stream")
 
+# A QUIC connection's streams (4.2a).
+#   crd-fuzz-net-quic-stream-set   two ends' stream sets under any application calls, packets delivered in any order
+#                                  and number, acknowledged or lost, and injected frames: has_frame() exact, every
+#                                  frame fitting and round tripping, a well-behaved peer never refused, every byte read
+#                                  the byte written, nothing allocated.
+crd_fuzz_target(crd-fuzz-net-quic-stream-set
+    SOURCES fuzz_quic_stream_set.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-stream-set")
+
 # A QUIC connection (4.2a).
 #   crd-fuzz-net-quic-connection   a network script between a client and a server (deliveries, losses, duplicates,
 #                                  reorders, corrupted bytes, time), then a clean path: the handshake confirms or a side
-#                                  closes, within the amplification limit and the Initial floor, nothing allocated; and
+#                                  closes, within the amplification limit and the Initial floor, nothing allocated, and
+#                                  a confirmed pair carries a stream whole; and
 #                                  any frames from a raw peer in 1-RTT and in Initial packets: the server stays open or
 #                                  closes with an error RFC 9000 names, its close the only frame it sends then.
 crd_fuzz_target(crd-fuzz-net-quic-connection

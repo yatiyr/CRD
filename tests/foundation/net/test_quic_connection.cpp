@@ -4,9 +4,11 @@
 // keep-alives, key updates across the connection, closing and draining, an alert's CRYPTO_ERROR at its levels, the
 // transport parameter and version checks, a client's Version Negotiation, and, from a raw peer that writes any frame,
 // every frame this slice refuses with the error RFC 9000 and RFC 9221 name, the peer's connection IDs and their
-// retirement, PATH_CHALLENGE answered and an acknowledgement of a skipped packet number.
+// retirement, PATH_CHALLENGE answered and an acknowledgement of a skipped packet number; and streams carried both ways
+// over hostile paths with a frame ledger far smaller than their load.
 
 #include "ingress_fixture.hpp"
+#include "quic_stream_fixture.hpp"
 
 #include <crd/crypto/tls.hpp>
 #include <crd/net/quic_connection.hpp>
@@ -1579,4 +1581,178 @@ TEST_CASE("QUIC connection: an acknowledgement of a skipped or unsent packet num
         run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return RawRun::ack(out, beyond); });
         CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
     }
+}
+
+namespace
+{
+QuicStreamLimits stream_limits()
+{
+    QuicStreamLimits limits;
+    limits.peer_bidi = 4U;
+    limits.peer_uni = 2U;
+    limits.local_bidi = 4U;
+    limits.local_uni = 2U;
+    limits.receive_bytes = 16384U;
+    limits.send_bytes = 16384U;
+    limits.stream_window = 8192U;
+    limits.connection_window = 24576U;
+    limits.connection_max_window = 131072U;
+    return limits;
+}
+
+// The client opens `streams` bidirectional streams of seeded sizes as its grant allows; the server echoes each with
+// another pattern as it reads, and both ends free what they finish. Called between events; true once every echo was
+// read whole.
+class Echo
+{
+public:
+    static constexpr usize kStreams = 12U;
+
+    Echo(QuicConnection& client, QuicConnection& server, u64 seed) : m_client(client), m_server(server)
+    {
+        Rng rng;
+        rng.state = seed;
+        for (u64& size : m_size)
+        {
+            size = rng.next() % 30000U;
+        }
+    }
+
+    bool step()
+    {
+        QuicStreamSet& c = m_client.streams();
+        QuicStreamSet& s = m_server.streams();
+        u64 id = 0U;
+        while (m_opened < kStreams && c.open(true, id) == QuicStreamError::None)
+        {
+            REQUIRE(id == 4U * m_opened);
+            ++m_opened;
+        }
+        QuicStreamEvent event;
+        while (c.poll(event))
+        {
+        }
+        while (s.poll(event))
+        {
+        }
+        for (usize index = 0U; index < m_opened; ++index)
+        {
+            const u64 stream = 4U * index;
+            const QuicSendState sending = c.send_state(stream);
+            if (sending == QuicSendState::Ready || sending == QuicSendState::Send)
+            {
+                static_cast<void>(write_pattern(c, stream, m_sent[index], m_size[index], stream));
+            }
+            if (!m_done[index] && c.recv_state(stream) != QuicRecvState::None &&
+                drain(c, stream, m_client_read[index], stream + 1U))
+            {
+                CHECK(m_client_read[index] == m_size[index]);
+                m_done[index] = true;
+                ++m_finished;
+            }
+            if (s.recv_state(stream) == QuicRecvState::None)
+            {
+                continue;
+            }
+            const bool ended =
+                s.recv_state(stream) == QuicRecvState::DataRead || drain(s, stream, m_server_read[index], stream);
+            const QuicSendState echo = s.send_state(stream);
+            if (echo == QuicSendState::Ready || echo == QuicSendState::Send)
+            {
+                static_cast<void>(write_pattern(s, stream, m_echoed[index], m_server_read[index], stream + 1U, ended));
+            }
+        }
+        return m_finished == kStreams;
+    }
+
+    [[nodiscard]] u64 total() const
+    {
+        u64 sum = 0U;
+        for (const u64 size : m_size)
+        {
+            sum += size;
+        }
+        return sum;
+    }
+
+private:
+    QuicConnection& m_client;
+    QuicConnection& m_server;
+    u64 m_size[kStreams] = {};
+    u64 m_sent[kStreams] = {};
+    u64 m_echoed[kStreams] = {};
+    u64 m_server_read[kStreams] = {};
+    u64 m_client_read[kStreams] = {};
+    bool m_done[kStreams] = {};
+    usize m_opened = 0U;
+    usize m_finished = 0U;
+};
+
+QuicConnectionConfig stream_config(QuicSide side, const Identity& identity, QuicVersion version, usize seed,
+                                   u32 sent_frames = 1024U)
+{
+    QuicConnectionConfig config = config_for(side, identity, version, seed);
+    config.streams = stream_limits();
+    config.sent_frames = sent_frames;
+    return config;
+}
+} // namespace
+
+TEST_CASE("QUIC connection: streams carry data both ways over paths that lose, duplicate and reorder",
+          "[net][4.2a][quic-connection]")
+{
+    for (const QuicVersion version : kVersions)
+    {
+        for (u64 seed = 1U; seed <= 8U; ++seed)
+        {
+            Identity identity;
+            CountingAllocator allocator;
+            QuicConnection client(allocator, stream_config(QuicSide::Client, identity, version, seed));
+            QuicConnection server(allocator, stream_config(QuicSide::Server, identity, version, seed + 1U));
+            REQUIRE(server.ready());
+            const usize allocations = allocator.calls();
+            connect(client);
+            auto net = std::make_unique<Net>(client, server);
+            net->rng.state = seed;
+            for (Path& path : net->path)
+            {
+                path.loss = 100U;
+                path.duplicate = 50U;
+                path.delay_ns = 15U * kMs;
+                path.jitter_ns = 20U * kMs;
+            }
+            INFO("version " << static_cast<u32>(version) << " seed " << seed);
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            // Each side's grants are the other's limits.
+            CHECK(client.peer_parameters().initial_max_streams_bidi == 4U);
+            CHECK(client.peer_parameters().initial_max_stream_data_bidi_remote == 8192U);
+            CHECK(server.peer_parameters().initial_max_data == 24576U);
+            Echo echo(client, server, seed);
+            REQUIRE(net->run_until([&] { return echo.step(); }, 600000U * kMs));
+            CHECK(client.state() == QuicConnectionState::Established);
+            CHECK(server.state() == QuicConnectionState::Established);
+            CHECK(client.streams().connection_sent() == echo.total());
+            CHECK(server.streams().connection_sent() == echo.total());
+            CHECK(client.streams().peer_limit(true) >= Echo::kStreams); // MAX_STREAMS followed the freed slots
+            CHECK(allocator.calls() == allocations);
+        }
+    }
+}
+
+TEST_CASE("QUIC connection: a frame ledger far smaller than the stream load still drains",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    QuicConnection client(allocator, stream_config(QuicSide::Client, identity, QuicVersion::V1, 0U, 12U));
+    QuicConnection server(allocator, stream_config(QuicSide::Server, identity, QuicVersion::V1, 1U, 12U));
+    connect(client);
+    auto net = std::make_unique<Net>(client, server);
+    net->path[0].loss = 50U;
+    net->path[1].loss = 50U;
+    net->rng.state = 7U;
+    REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+    Echo echo(client, server, 3U);
+    REQUIRE(net->run_until([&] { return echo.step(); }, 600000U * kMs));
+    CHECK(client.state() == QuicConnectionState::Established);
 }

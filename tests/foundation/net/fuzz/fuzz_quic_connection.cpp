@@ -12,7 +12,8 @@
 // datagram carrying an Initial has 1200 bytes; nothing is allocated after construction; a close names a transport
 // error of RFC 9000 section 20.1 (or RFC 9368's) or CRYPTO_ERROR when this side closes. Script: after the clean path,
 // both ends are confirmed or one has closed (no handshake hangs), and a confirmed pair agrees on the application
-// protocol. Frames: the server stays Established (Handshaking for Initial frames) or closes; a closed server sends a
+// protocol, and then carries a stream larger than every window whole and unchanged (or one side closes). Frames: the
+// server, which grants streams, stays Established (Handshaking for Initial frames) or closes; a closed server sends a
 // CONNECTION_CLOSE only.
 #include <crd/crypto/tls.hpp>
 #include <crd/fuzz/harness.hpp>
@@ -120,6 +121,15 @@ QuicConnectionConfig config_for(QuicSide side, QuicVersion version)
     config.sent_packets = 64U;
     config.sent_frames = 128U;
     config.crypto_bytes = 8192U;
+    config.streams.peer_bidi = 2U;
+    config.streams.peer_uni = 1U;
+    config.streams.local_bidi = 2U;
+    config.streams.local_uni = 1U;
+    config.streams.receive_bytes = 2048U;
+    config.streams.send_bytes = 2048U;
+    config.streams.stream_window = 1024U;
+    config.streams.connection_window = 2048U;
+    config.streams.connection_max_window = 8192U;
     config.entropy_seed = ConstSpan<u8>(kSeeds[side == QuicSide::Client ? 0U : 1U], kPrfKeyBytes);
     return config;
 }
@@ -264,6 +274,58 @@ bool finished(const QuicConnection& end)
            end.state() == QuicConnectionState::Closed;
 }
 
+constexpr u64 kTransferBytes = 5000U; // more than every stream and connection window of config_for
+
+// After the script, a confirmed pair carries a stream of more than every window over the clean path: each byte the
+// server reads is the byte written, and all of it arrives with the FIN, or one side has closed.
+void transfer(Pair& pair)
+{
+    QuicStreamSet& client = pair.client.streams();
+    QuicStreamSet& server = pair.server.streams();
+    u64 id = 0U;
+    CRD_FUZZ_REQUIRE(client.open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    u64 read = 0U;
+    bool fin = false;
+    for (usize round = 0U; round < 512U && !fin && !finished(pair.client) && !finished(pair.server); ++round)
+    {
+        u8 chunk[512];
+        for (usize at = 0U; at < sizeof(chunk); ++at)
+        {
+            chunk[at] = static_cast<u8>((written + at) * 7U);
+        }
+        const u64 left = kTransferBytes - written;
+        const usize want = (left < sizeof(chunk)) ? static_cast<usize>(left) : sizeof(chunk);
+        usize taken = 0U;
+        const bool fin_here = written + want == kTransferBytes;
+        if (client.write(id, ConstSpan<u8>(chunk, want), fin_here, taken) == QuicStreamError::None)
+        {
+            written += taken;
+        }
+        pair.settle(8U);
+        for (QuicStreamRead data = server.peek(id); !data.data.empty() || data.fin; data = server.peek(id))
+        {
+            for (usize at = 0U; at < data.data.size(); ++at)
+            {
+                CRD_FUZZ_REQUIRE(data.data[at] == static_cast<u8>((read + at) * 7U));
+            }
+            read += data.data.size();
+            CRD_FUZZ_REQUIRE(server.consume(id, data.data.size()) == QuicStreamError::None);
+            if (data.fin)
+            {
+                fin = true;
+                break;
+            }
+        }
+        // Time moves to the next timer (a delayed ACK frees the send buffer).
+        const u64 next = (pair.client.next_timer_ns() < pair.server.next_timer_ns()) ? pair.client.next_timer_ns()
+                                                                                     : pair.server.next_timer_ns();
+        pair.now = (next != kNeverNs && next > pair.now) ? next : pair.now;
+        pair.timers();
+    }
+    CRD_FUZZ_REQUIRE((fin && read == kTransferBytes) || finished(pair.client) || finished(pair.server));
+}
+
 void run_script(QuicVersion version, ConstSpan<u8> script)
 {
     Pair pair(version);
@@ -336,6 +398,7 @@ void run_script(QuicVersion version, ConstSpan<u8> script)
     {
         CRD_FUZZ_REQUIRE(pair.client.handshake().application_protocol() ==
                          pair.server.handshake().application_protocol());
+        transfer(pair);
     }
     CRD_FUZZ_REQUIRE(pair.allocator.peak_bytes() == allocations);
 }

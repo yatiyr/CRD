@@ -1,6 +1,7 @@
 // crd-net -- a QUIC connection (4.2a; contract: docs/design/network-foundation.md#quic-connection).
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp>
 #include <crd/net/quic_connection.hpp>
 
 #include <cstring>
@@ -13,6 +14,7 @@ namespace
 constexpr u8 kRecordCrypto = 1U;
 constexpr u8 kRecordHandshakeDone = 2U;
 constexpr u8 kRecordRetire = 3U;
+constexpr u8 kRecordStream = 4U; // a frame of the stream set
 constexpr u32 kNoRecord = ~u32{0};
 constexpr u64 kNsPerMs = 1000000U;
 constexpr u64 kCryptoFrameType = 0x06U;
@@ -74,29 +76,6 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
     return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
 }
 
-template <typename T> T* take_array(memory::IAllocator& allocator, usize count) noexcept
-{
-    void* const storage = allocator.try_allocate(sizeof(T) * count, alignof(T));
-    if (storage == nullptr)
-    {
-        return nullptr;
-    }
-    T* const items = static_cast<T*>(storage);
-    for (usize index = 0U; index < count; ++index)
-    {
-        new (&items[index]) T{};
-    }
-    return items;
-}
-
-void give_back(memory::IAllocator& allocator, void* storage) noexcept
-{
-    if (storage != nullptr)
-    {
-        allocator.deallocate(storage);
-    }
-}
-
 [[nodiscard]] bool config_valid(const QuicConnectionConfig& config) noexcept
 {
     const QuicTransportParameters& p = config.parameters;
@@ -107,8 +86,10 @@ void give_back(memory::IAllocator& allocator, void* storage) noexcept
         listed = listed || version == static_cast<u32>(config.version);
     }
     return config.tls != nullptr && version_ok && listed && config.versions.size() < kQuicMaxAvailableVersions &&
+           p.initial_max_data == 0U && p.initial_max_stream_data_bidi_local == 0U &&
+           p.initial_max_stream_data_bidi_remote == 0U && p.initial_max_stream_data_uni == 0U &&
            p.initial_max_streams_bidi == 0U && p.initial_max_streams_uni == 0U && p.max_datagram_frame_size == 0U &&
-           p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
+           QuicStreamSet::limits_valid(config.streams) && p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
            p.active_connection_id_limit <= kQuicMaxPeerConnectionIds && config.sent_packets != 0U &&
            config.sent_packets <= kMaxSentPackets && config.sent_frames != 0U &&
            config.sent_frames <= kMaxSentPackets && config.crypto_bytes % kQuicStreamChunk == 0U &&
@@ -170,19 +151,20 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     const usize per_space = config.sent_packets;
     const usize crypto = config.crypto_bytes;
     const usize words = quic_stream_bitmap_words(crypto);
-    QuicSentEntry* const entries = take_array<QuicSentEntry>(allocator, kQuicSpaces * per_space);
-    SentFrame* const frames = take_array<SentFrame>(allocator, config.sent_frames);
-    u8* const bytes = take_array<u8>(allocator, kQuicSpaces * 2U * crypto);
-    u64* const bits = take_array<u64>(allocator, kQuicSpaces * 3U * words);
+    QuicSentEntry* const entries = memory::try_construct_array<QuicSentEntry>(allocator, kQuicSpaces * per_space);
+    SentFrame* const frames = memory::try_construct_array<SentFrame>(allocator, config.sent_frames);
+    u8* const bytes = memory::try_construct_array<u8>(allocator, kQuicSpaces * 2U * crypto);
+    u64* const bits = memory::try_construct_array<u64>(allocator, kQuicSpaces * 3U * words);
     void* const recovery = allocator.try_allocate(sizeof(QuicRecovery), alignof(QuicRecovery));
+    const bool streams = m_streams.init(allocator, config.streams, config.side);
     if (seeded != crypto::CryptoError::None || entries == nullptr || frames == nullptr || bytes == nullptr ||
-        bits == nullptr || recovery == nullptr)
+        bits == nullptr || recovery == nullptr || !streams)
     {
-        give_back(allocator, entries);
-        give_back(allocator, frames);
-        give_back(allocator, bytes);
-        give_back(allocator, bits);
-        give_back(allocator, recovery);
+        memory::destroy_array(allocator, entries, kQuicSpaces * per_space);
+        memory::destroy_array(allocator, frames, config.sent_frames);
+        memory::destroy_array(allocator, bytes, kQuicSpaces * 2U * crypto);
+        memory::destroy_array(allocator, bits, kQuicSpaces * 3U * words);
+        memory::destroy_array(allocator, static_cast<u8*>(recovery), sizeof(QuicRecovery));
         return;
     }
     for (usize index = 0U; index < kQuicSpaces; ++index)
@@ -216,10 +198,11 @@ QuicConnection::~QuicConnection() noexcept
         m_recovery->~QuicRecovery();
         m_allocator.deallocate(m_recovery);
     }
-    give_back(m_allocator, m_storage);
-    give_back(m_allocator, m_frames);
-    give_back(m_allocator, m_crypto_bytes);
-    give_back(m_allocator, m_crypto_bits);
+    const usize crypto = m_config.crypto_bytes;
+    memory::destroy_array(m_allocator, m_storage, kQuicSpaces * usize{m_config.sent_packets});
+    memory::destroy_array(m_allocator, m_frames, m_config.sent_frames);
+    memory::destroy_array(m_allocator, m_crypto_bytes, kQuicSpaces * 2U * crypto);
+    memory::destroy_array(m_allocator, m_crypto_bits, kQuicSpaces * 3U * quic_stream_bitmap_words(crypto));
 }
 
 u64 QuicConnection::entropy() noexcept
@@ -286,6 +269,7 @@ bool QuicConnection::start(u64 now_ns) noexcept
     m_protection.accept_cleared_quic_bit(m_config.grease_quic_bit);
     m_protection.set_key_update_interval(m_config.key_update_interval);
     m_local = m_config.parameters;
+    m_streams.fill_parameters(m_local);
     m_local.has_initial_source_connection_id = true;
     m_local.initial_source_connection_id = m_local_cid;
     if (side == crypto::QuicSide::Server)
@@ -465,11 +449,25 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
     {
         case QuicFrameKind::Padding:
         case QuicFrameKind::Ping:
-        case QuicFrameKind::MaxData:     // credit for streams, which this slice does not carry
-        case QuicFrameKind::DataBlocked: // informational (section 19.12)
-        case QuicFrameKind::MaxStreams:  // the peer's stream credit, for streams this slice does not open
-        case QuicFrameKind::StreamsBlocked:
             return true;
+        case QuicFrameKind::Stream:
+        case QuicFrameKind::ResetStream:
+        case QuicFrameKind::StopSending:
+        case QuicFrameKind::MaxData:
+        case QuicFrameKind::MaxStreamData:
+        case QuicFrameKind::MaxStreams:
+        case QuicFrameKind::DataBlocked:
+        case QuicFrameKind::StreamDataBlocked:
+        case QuicFrameKind::StreamsBlocked:
+        {
+            const QuicTransportError error = m_streams.on_frame(frame);
+            if (error != QuicTransportError::NoError)
+            {
+                fail(error, 0U, now_ns);
+                return false;
+            }
+            return true;
+        }
         case QuicFrameKind::Ack:
         {
             const QuicAckOutcome outcome = m_recovery->on_ack(space, frame.ack, now_ns, m_events);
@@ -519,32 +517,8 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
         case QuicFrameKind::Datagram:           // max_datagram_frame_size is 0 (RFC 9221 section 3)
             fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
             return false;
-        case QuicFrameKind::Stream:
-        case QuicFrameKind::ResetStream:
-        case QuicFrameKind::StopSending:
-        case QuicFrameKind::MaxStreamData:
-        case QuicFrameKind::StreamDataBlocked:
-            fail(stream_frame_error(frame.kind, frame.stream_id), 0U, now_ns);
-            return false;
     }
     return true;
-}
-
-QuicTransportError QuicConnection::stream_frame_error(QuicFrameKind kind, u64 stream_id) const noexcept
-{
-    // Bit 0 names the initiator (0: the client), bit 1 a unidirectional stream (section 2.1).
-    const bool by_client = (stream_id & 1U) == 0U;
-    const bool local = by_client == (m_config.side == crypto::QuicSide::Client);
-    const bool unidirectional = (stream_id & 2U) != 0U;
-    if (local)
-    {
-        return QuicTransportError::StreamStateError; // a stream this side never opened (sections 19.4 to 19.13)
-    }
-    if (unidirectional && (kind == QuicFrameKind::StopSending || kind == QuicFrameKind::MaxStreamData))
-    {
-        return QuicTransportError::StreamStateError; // a receive-only stream (sections 19.5 and 19.10)
-    }
-    return QuicTransportError::StreamLimitError; // this side granted no streams (section 4.6)
 }
 
 bool QuicConnection::crypto_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept
@@ -647,6 +621,7 @@ bool QuicConnection::read_peer_parameters(u64 now_ns) noexcept
         return false;
     }
     m_peer_known = true;
+    m_streams.set_peer_parameters(m_peer);
     m_recovery->set_peer_parameters(m_peer.max_ack_delay * kNsPerMs, m_peer.ack_delay_exponent, now_ns);
     m_peer_greases = m_peer.grease_quic_bit;
     const u64 local_idle = m_local.max_idle_timeout;
@@ -865,21 +840,24 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
         return true;
     }
     return space == QuicSpace::Application &&
-           (m_handshake_done_owed || m_path_response_owed || m_ping_owed || m_retire_owed_count > 0U);
+           (m_handshake_done_owed || m_path_response_owed || m_ping_owed || m_retire_owed_count > 0U ||
+            (m_frame_count < m_config.sent_frames && m_streams.has_frame()));
 }
 
-bool QuicConnection::record(QuicSpace space, u64 packet, u8 kind, u64 offset, u32 length) noexcept
+bool QuicConnection::record(QuicSpace space, u64 packet, u8 kind, const QuicStreamRecord& frame,
+                            Written& written) noexcept
 {
     if (m_frame_count == m_config.sent_frames)
     {
         return false;
     }
-    SentFrame& frame = m_frames[(m_frame_head + m_frame_count) % m_config.sent_frames];
-    frame.packet = packet;
-    frame.offset = offset;
-    frame.length = length;
-    frame.space = static_cast<u8>(space);
-    frame.kind = kind;
+    const u32 at = (m_frame_head + m_frame_count) % m_config.sent_frames;
+    SentFrame& sent = m_frames[at];
+    sent.packet = packet;
+    sent.frame = frame;
+    sent.space = static_cast<u8>(space);
+    sent.kind = kind;
+    written.token = (written.token == kNoRecord) ? at : written.token;
     ++m_frame_count;
     return true;
 }
@@ -901,11 +879,22 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
                 QuicSendBuffer& out = m_levels[frame.space].out;
                 if (how == Settle::Acked)
                 {
-                    out.on_acked(frame.offset, frame.length, false);
+                    out.on_acked(frame.frame.value, frame.frame.length, false);
                 }
                 else if (how == Settle::Lost)
                 {
-                    out.on_lost(frame.offset, frame.length, false);
+                    out.on_lost(frame.frame.value, frame.frame.length, false);
+                }
+            }
+            else if (frame.kind == kRecordStream)
+            {
+                if (how == Settle::Acked)
+                {
+                    m_streams.on_acked(frame.frame);
+                }
+                else if (how == Settle::Lost)
+                {
+                    m_streams.on_lost(frame.frame);
                 }
             }
             else if (frame.kind == kRecordHandshakeDone)
@@ -917,7 +906,7 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
             {
                 if (how == Settle::Lost)
                 {
-                    m_retire_owed[m_retire_owed_count++] = frame.offset; // outstanding, so it fits
+                    m_retire_owed[m_retire_owed_count++] = frame.frame.value; // outstanding, so it fits
                 }
                 else
                 {
@@ -960,9 +949,7 @@ usize QuicConnection::write_frames(QuicSpace space, cont::Span<u8> frames, u64 p
             done.kind = QuicFrameKind::HandshakeDone;
             if (put(done))
             {
-                written.token = (written.token == kNoRecord) ? (m_frame_head + m_frame_count) % m_config.sent_frames
-                                                             : written.token;
-                static_cast<void>(record(space, packet, kRecordHandshakeDone, 0U, 0U));
+                static_cast<void>(record(space, packet, kRecordHandshakeDone, QuicStreamRecord{}, written));
                 m_handshake_done_owed = false;
             }
         }
@@ -986,9 +973,9 @@ usize QuicConnection::write_frames(QuicSpace space, cont::Span<u8> frames, u64 p
             {
                 break;
             }
-            written.token =
-                (written.token == kNoRecord) ? (m_frame_head + m_frame_count) % m_config.sent_frames : written.token;
-            static_cast<void>(record(space, packet, kRecordRetire, retire.sequence, 0U));
+            QuicStreamRecord retired;
+            retired.value = retire.sequence;
+            static_cast<void>(record(space, packet, kRecordRetire, retired, written));
             --m_retire_owed_count;
         }
     }
@@ -1016,10 +1003,28 @@ usize QuicConnection::write_frames(QuicSpace space, cont::Span<u8> frames, u64 p
         {
             break;
         }
-        written.token =
-            (written.token == kNoRecord) ? (m_frame_head + m_frame_count) % m_config.sent_frames : written.token;
-        static_cast<void>(record(space, packet, kRecordCrypto, chunk.offset, static_cast<u32>(chunk.length)));
+        QuicStreamRecord sent;
+        sent.value = chunk.offset;
+        sent.length = static_cast<u32>(chunk.length);
+        static_cast<void>(record(space, packet, kRecordCrypto, sent, written));
         out.on_sent(chunk);
+    }
+    if (space == QuicSpace::Application)
+    {
+        // The stream set's frames after the connection's own; each fits the room it was offered.
+        const u64 rtt_ns = m_recovery->rtt().smoothed_ns;
+        QuicFrame frame;
+        QuicStreamRecord taken;
+        while (m_frame_count < m_config.sent_frames &&
+               m_streams.next_frame(frames.size() - used, now_ns, rtt_ns, frame, taken))
+        {
+            if (!put(frame))
+            {
+                m_streams.on_lost(taken); // owed again (a frame next_frame sized never fails to fit)
+                break;
+            }
+            static_cast<void>(record(space, packet, kRecordStream, taken, written));
+        }
     }
     if (space == QuicSpace::Application && m_ping_owed)
     {

@@ -1,7 +1,7 @@
 #pragma once
 
 // crd-net -- a QUIC connection: the TLS handshake carried to confirmation, recovery, the connection's frames and its
-// close (4.2a; contract: docs/design/network-foundation.md#quic-connection). Sources: RFC 9000 sections 4.6, 5.1,
+// close (4.2a; contract: docs/design/network-foundation.md#quic-connection). Sources: RFC 9000 sections 2 to 4, 5.1,
 // 7, 8, 10, 12, 13, 14, 17.2, 19 and 21.4, RFC 9001 sections 4 and 6, RFC 9002 section 6 and appendix A, RFC 9221
 // section 3, RFC 9287 and RFC 9368 sections 2 to 4.
 //
@@ -18,10 +18,11 @@
 //              server sends at most three times what it received before the client's address is proven (section
 //              8.1); the QUIC bit is greased toward a peer that sent grease_quic_bit and 1-RTT packet numbers are
 //              skipped from entropy (section 21.4), so an acknowledgement of one closes with PROTOCOL_VIOLATION.
-//   frames     every frame type is dispatched: this slice carries no streams and no DATAGRAM frames, so it
-//              advertises no stream credit and no max_datagram_frame_size, and a peer's stream frame or DATAGRAM is
-//              the error RFC 9000 and RFC 9221 name for it. The peer's connection IDs are held up to this side's
-//              active_connection_id_limit with retirement; a PATH_CHALLENGE is answered.
+//   frames     every frame type is dispatched: stream and flow-control frames go to the QuicStreamSet (streams()),
+//              whose frames ride in 1-RTT packets after the connection's own; this slice carries no DATAGRAM frames,
+//              so it advertises no max_datagram_frame_size and a peer's DATAGRAM is PROTOCOL_VIOLATION (RFC 9221).
+//              The peer's connection IDs are held up to this side's active_connection_id_limit with retirement; a
+//              PATH_CHALLENGE is answered.
 //   close      an error closes with CONNECTION_CLOSE at the levels the peer may read (section 10.2.3), CRYPTO_ERROR
 //              at an alert's level; closing resends it at a falling rate for three PTOs, a peer's close drains for
 //              three PTOs, and the idle timeout (section 10.1) closes silently.
@@ -36,6 +37,7 @@
 #include <crd/net/quic_packet.hpp>
 #include <crd/net/quic_recovery.hpp>
 #include <crd/net/quic_stream.hpp>
+#include <crd/net/quic_stream_set.hpp>
 #include <crd/net/quic_transport_parameters.hpp>
 
 namespace crd::memory
@@ -54,10 +56,11 @@ struct QuicConnectionConfig
     crypto::QuicVersion version = crypto::QuicVersion::V1; // the version this connection runs
     const crypto::TlsContext* tls = nullptr;               // of `side`'s role, with an application protocol
     crypto::TlsTicketStore* tickets = nullptr;
-    // This side's parameters. The connection fills the connection IDs, version_information and grease_quic_bit;
-    // stream credit and max_datagram_frame_size stay 0 in this slice, and active_connection_id_limit is at most
-    // kQuicMaxPeerConnectionIds.
+    // This side's parameters. The connection fills the connection IDs, version_information, grease_quic_bit and the
+    // stream and flow-control parameters (from `streams`, so they stay 0 here); max_datagram_frame_size stays 0 in
+    // this slice, and active_connection_id_limit is at most kQuicMaxPeerConnectionIds.
     QuicTransportParameters parameters;
+    QuicStreamLimits streams; // what this side's streams hold (all zero: no streams)
     // The versions this side accepts in its preference (version_information's list, containing `version`); empty
     // for `version` alone.
     cont::ConstSpan<u32> versions;
@@ -68,8 +71,10 @@ struct QuicConnectionConfig
     cont::ConstSpan<u8> token;
     bool grease_quic_bit = true; // send grease_quic_bit and accept a cleared QUIC bit (RFC 9287)
     u32 sent_packets = 128U;     // per packet number space: what the connection holds in flight
-    u32 sent_frames = 512U;      // the frames of those packets that are settled on acknowledgement or loss
-    u32 crypto_bytes = 16384U;   // per level, each direction: a multiple of kQuicStreamChunk, at least 4096
+    // The frames of those packets settled on acknowledgement or loss (CRYPTO, stream and credit frames, ...): eight
+    // per packet, so a packet carrying several streams' frames still fits; a full ledger holds frames back.
+    u32 sent_frames = 1024U;
+    u32 crypto_bytes = 16384U; // per level, each direction: a multiple of kQuicStreamChunk, at least 4096
     u32 max_datagram_bytes = kQuicMinInitialDatagram; // what this side sends at most (NET-PATH raises it)
     u64 initial_rtt_ns = kQuicInitialRttNs;
     u64 key_update_interval = 0U; // 1-RTT packets one key seals before it is updated (0: the AEAD's limit)
@@ -133,8 +138,8 @@ public:
     QuicConnection& operator=(QuicConnection&&) = delete;
 
     // False when the configuration is out of range (no TLS context, stream credit or a datagram size in the
-    // parameters, a version list without `version`, sizes out of bounds, a seed of another length) or the allocator
-    // or the provider refused.
+    // parameters, stream limits out of range, a version list without `version`, sizes out of bounds, a seed of
+    // another length) or the allocator or the provider refused.
     [[nodiscard]] bool ready() const noexcept { return m_storage != nullptr; }
 
     // A client's start: it issues `local_cid` (0 to 20 bytes) and sends its first Initial to `initial_dcid` (8 to 20
@@ -170,6 +175,9 @@ public:
     }
     [[nodiscard]] const QuicConnectionCounters& counters() const noexcept { return m_counters; }
     [[nodiscard]] const crypto::QuicHandshake& handshake() const noexcept { return m_handshake; }
+    // The connection's streams: opened, written, read and polled by the application, their frames sent by send().
+    [[nodiscard]] QuicStreamSet& streams() noexcept { return m_streams; }
+    [[nodiscard]] const QuicStreamSet& streams() const noexcept { return m_streams; }
     [[nodiscard]] const QuicPacketProtection& protection() const noexcept { return m_protection; }
     [[nodiscard]] const QuicRecovery& recovery() const noexcept { return *m_recovery; }
     // The peer's parameters, valid once peer_parameters_known().
@@ -219,8 +227,7 @@ private:
     struct SentFrame
     {
         u64 packet = 0U;
-        u64 offset = 0U; // CRYPTO: the data's offset; RETIRE_CONNECTION_ID: the sequence
-        u32 length = 0U;
+        QuicStreamRecord frame; // CRYPTO: value and length; RETIRE_CONNECTION_ID: value; a stream set's frame
         u8 space = 0U;
         u8 kind = 0U; // 0 for a settled record
     };
@@ -254,7 +261,6 @@ private:
     [[nodiscard]] bool read_peer_parameters(u64 now_ns) noexcept;
     [[nodiscard]] bool new_connection_id(const QuicFrame& frame, u64 now_ns) noexcept;
     [[nodiscard]] bool owe_retire(u64 sequence, u64 now_ns) noexcept;
-    [[nodiscard]] QuicTransportError stream_frame_error(QuicFrameKind kind, u64 stream_id) const noexcept;
     void version_negotiation(const QuicHeader& header, cont::ConstSpan<u8> packet) noexcept;
     void discard_space(QuicSpace space, u64 now_ns) noexcept;
     void confirm(u64 now_ns) noexcept;
@@ -267,7 +273,9 @@ private:
                                      Written& written) noexcept;
     [[nodiscard]] usize write_close(QuicSpace space, cont::Span<u8> frames) const noexcept;
     [[nodiscard]] usize send_closing(cont::Span<u8> out, u64 now_ns) noexcept;
-    [[nodiscard]] bool record(QuicSpace space, u64 packet, u8 kind, u64 offset, u32 length) noexcept;
+    // Appends a record of a frame `written` holds to the ledger, naming it the packet's first when it is.
+    [[nodiscard]] bool record(QuicSpace space, u64 packet, u8 kind, const QuicStreamRecord& frame,
+                              Written& written) noexcept;
     void settle(QuicSpace space, const QuicSentPacket& packet, Settle how) noexcept;
     void pull_crypto() noexcept;
     [[nodiscard]] usize amplification_credit() const noexcept;
@@ -288,6 +296,7 @@ private:
     u8* m_crypto_bytes = nullptr;
     u64* m_crypto_bits = nullptr;
     QuicRecovery* m_recovery = nullptr;
+    QuicStreamSet m_streams;
     Events m_events;
     u32 m_frame_head = 0U;
     u32 m_frame_count = 0U;
