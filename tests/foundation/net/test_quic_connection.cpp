@@ -52,6 +52,11 @@ constexpr QuicVersion kVersions[] = {QuicVersion::V1, QuicVersion::V2};
 constexpr u64 kStartNs = 1000000000U;
 constexpr u64 kMs = 1000000U;
 constexpr usize kDatagram = 1500U;
+constexpr u64 kUnix = 1793577600U; // 2026-11-02T00:00:00Z: the fleet clock tokens carry
+constexpr u8 kTokenKey[kQuicTokenKeyBytes] = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A,
+                                              0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25,
+                                              0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F};
+const Endpoint kClientPeer{IpAddress::v4(192, 0, 2, 9), 4433U};
 
 // A server key and the client and server contexts that trust it; `wrong_pin` makes the client pin another key.
 struct Identity
@@ -170,6 +175,14 @@ public:
     bool client_initials_padded = true;         // every client datagram whose first packet is an Initial had 1200 bytes
     usize smallest[2] = {~usize{0}, ~usize{0}}; // each end's smallest datagram
     bool amplification_kept = true; // the server never sent more than three times what it received unvalidated
+    // A server behind an ingress: the first client datagrams are classified there, Retry and Version Negotiation
+    // answered, and an admitted Initial accepted with what the ingress proved (a Retry token's original ID). `tokens`
+    // mints the NEW_TOKEN token the server sends.
+    Ingress* ingress = nullptr;
+    const QuicTokenKeys* tokens = nullptr;
+    usize answers = 0U; // the ingress's answers sent toward the client
+    u8 minted[kQuicMaxCarriedTokenBytes] = {};
+    usize minted_bytes = 0U;
 
     QuicConnection& end(usize index) { return *m_ends[index]; }
 
@@ -324,9 +337,50 @@ private:
         flight.to = 1U - from;
     }
 
+    // The ingress's verdict on a datagram for the idle server: true when the server accepted it.
+    bool admit(const Flight& flight)
+    {
+        const IngressDecision decision =
+            ingress->classify(ConstSpan<u8>(flight.bytes, flight.size), false, kClientPeer, now, kUnix);
+        if (decision.action == IngressAction::Retry || decision.action == IngressAction::NegotiateVersion ||
+            decision.action == IngressAction::InvalidToken)
+        {
+            u8 answer[kQuicMaxStatelessAnswerBytes];
+            const usize size = ingress->answer(decision, kClientPeer, kUnix, Span<u8>(answer));
+            REQUIRE(size != 0U);
+            ++answers;
+            enqueue(1U, ConstSpan<u8>(answer, size));
+            return false;
+        }
+        if (decision.action != IngressAction::Admit)
+        {
+            return false;
+        }
+        QuicAccept accept;
+        accept.local_cid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
+        accept.client_dcid = decision.header.dcid;
+        accept.client_scid = decision.header.scid;
+        accept.retried = decision.claims.original_dcid_bytes != 0U;
+        accept.original_dcid = accept.retried ? decision.claims.original_dcid_view() : decision.header.dcid;
+        accept.validated = decision.validated;
+        if (tokens != nullptr)
+        {
+            REQUIRE(tokens->mint_new_token(static_cast<QuicVersion>(decision.header.version),
+                                           QuicTokenPeer{kClientPeer.address.view(), 0U}, kUnix,
+                                           Span<u8>(minted, sizeof(minted)), minted_bytes) == CryptoError::None);
+            accept.new_token = ConstSpan<u8>(minted, minted_bytes);
+        }
+        REQUIRE(m_ends[1]->accept(accept, now));
+        return true;
+    }
+
     void deliver(Flight& flight)
     {
         QuicConnection& to = *m_ends[flight.to];
+        if (flight.to == 1U && to.state() == QuicConnectionState::Idle && ingress != nullptr && !admit(flight))
+        {
+            return;
+        }
         if (flight.to == 1U && to.state() == QuicConnectionState::Idle)
         {
             QuicHeader header;
@@ -853,6 +907,316 @@ TEST_CASE("QUIC connection: a client's Version Negotiation packet is read by RFC
             CHECK(client.close_info().version_negotiation);
             CHECK(client.close_info().retry_version == static_cast<u32>(QuicVersion::V2));
         }
+    }
+}
+
+namespace
+{
+// A Retry built by hand and tagged for `original` (RFC 9001 section 5.8), to reach every check a client makes.
+Datagram retry_of(QuicVersion version, ConstSpan<u8> dcid, ConstSpan<u8> scid, ConstSpan<u8> token,
+                  ConstSpan<u8> original)
+{
+    Datagram out;
+    crd::containers::WireWriter writer(Span<u8>(out.bytes, sizeof(out.bytes)));
+    writer.put_u8(static_cast<u8>(0xC0U | (quic_long_type_bits(version, QuicPacketType::Retry) << 4U)));
+    writer.put_u32(static_cast<u32>(version));
+    writer.put_u8(static_cast<u8>(dcid.size()));
+    writer.put_bytes(dcid);
+    writer.put_u8(static_cast<u8>(scid.size()));
+    writer.put_bytes(scid);
+    writer.put_bytes(token);
+    const usize body = writer.written();
+    REQUIRE(quic_retry_tag(version, original, ConstSpan<u8>(out.bytes, body),
+                           Span<u8>(out.bytes + body, kQuicTagBytes)) == CryptoError::None);
+    out.size = body + kQuicTagBytes;
+    return out;
+}
+
+// An ingress that proves every address with a Retry before a handshake, and the keys of its tokens.
+struct RetryFront
+{
+    RetryFront()
+        : routes(allocator, 8U), buckets(allocator, rules()),
+          ingress(IngressConfig{}, routes, buckets, &tokens, &replay)
+    {
+        REQUIRE(tokens.init(ConstSpan<u8>(kTokenKey), {}) == CryptoError::None);
+        REQUIRE(replay.init(1024U, kQuicNewTokenLifetime, kUnix) == CryptoError::None);
+        REQUIRE(ingress.ready());
+    }
+    static HandshakeRules rules()
+    {
+        HandshakeRules out;
+        out.always_retry = true;
+        return out;
+    }
+
+    CountingAllocator allocator;
+    ConnectionIdTable routes;
+    HandshakeBuckets buckets;
+    QuicTokenKeys tokens;
+    ReplayFilter replay;
+    Ingress ingress;
+};
+
+void receive_copy(QuicConnection& connection, const Datagram& datagram, u64 now)
+{
+    Datagram copy = datagram; // receiving opens in place
+    connection.receive(Span<u8>(copy.bytes, copy.size), QuicEcn::NotEct, now);
+}
+} // namespace
+
+TEST_CASE("QUIC connection: a client takes one Retry, for its IDs, with a token and a tag that verifies",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    const ConstSpan<u8> original(kInitialDcid, sizeof(kInitialDcid));
+    const ConstSpan<u8> own(kClientCid, sizeof(kClientCid));
+    constexpr u8 kRetryScid[12] = {0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85};
+    const ConstSpan<u8> retry_scid(kRetryScid, sizeof(kRetryScid));
+    u8 token[kQuicMaxCarriedTokenBytes + 1U];
+    std::memset(token, 0x3C, sizeof(token));
+    const ConstSpan<u8> short_token(token, 16U);
+    const ConstSpan<u8> longest_token(token, kQuicMaxCarriedTokenBytes); // another server's tokens may be this long
+
+    SECTION("Retries it must discard change nothing")
+    {
+        QuicConnection client(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1));
+        connect(client);
+        u8 out[kDatagram];
+        REQUIRE(client.send(Span<u8>(out, sizeof(out)), kStartNs) == kQuicMinInitialDatagram);
+        Datagram flipped = retry_of(QuicVersion::V1, own, retry_scid, short_token, original);
+        flipped.bytes[flipped.size - 1U] ^= 0x01U;
+        const ConstSpan<u8> other(kLongCid, 8U);
+        const Datagram refused[] = {
+            flipped,
+            retry_of(QuicVersion::V1, own, retry_scid, short_token, other),      // a tag for another original ID
+            retry_of(QuicVersion::V1, other, retry_scid, short_token, original), // to an ID it never chose
+            retry_of(QuicVersion::V1, own, retry_scid, {}, original),            // no token (section 17.2.5.2)
+            retry_of(QuicVersion::V2, own, retry_scid, short_token, original),   // another version
+            retry_of(QuicVersion::V1, own, original, short_token, original),     // the ID it already sends to
+            retry_of(QuicVersion::V1, own, retry_scid, ConstSpan<u8>(token, sizeof(token)), original), // too long
+        };
+        for (const Datagram& retry : refused)
+        {
+            const u64 dropped = client.counters().packets_dropped;
+            receive_copy(client, retry, kStartNs + kMs);
+            CHECK(client.counters().packets_dropped == dropped + 1U);
+            CHECK_FALSE(client.retried());
+            CHECK(same(client.peer_cid(), original));
+        }
+        CHECK(client.state() == QuicConnectionState::Handshaking);
+    }
+    SECTION("an accepted Retry re-keys the Initial, carries the token, keeps the numbers and is taken once")
+    {
+        for (const QuicVersion version : kVersions)
+        {
+            QuicConnection client(allocator, config_for(QuicSide::Client, identity, version));
+            QuicConnection server(allocator, config_for(QuicSide::Server, identity, version, 1U));
+            connect(client);
+            u8 first[kDatagram];
+            REQUIRE(client.send(Span<u8>(first, sizeof(first)), kStartNs) == kQuicMinInitialDatagram);
+            const u64 next = client.next_packet_number(QuicSpace::Initial);
+            const u64 at = kStartNs + 20U * kMs;
+            receive_copy(client, retry_of(version, own, retry_scid, longest_token, original), at);
+            REQUIRE(client.retried());
+            CHECK(same(client.peer_cid(), retry_scid));
+            CHECK(client.next_packet_number(QuicSpace::Initial) == next); // numbers continue (section 17.2.5.3)
+            CHECK(client.recovery().rtt().smoothed_ns == 20U * kMs);      // the first flight's time to the Retry
+            CHECK(client.recovery().bytes_in_flight() == 0U);
+
+            u8 again[kDatagram];
+            const usize size = client.send(Span<u8>(again, sizeof(again)), at);
+            REQUIRE(size >= kQuicMinInitialDatagram);
+            QuicHeader header;
+            REQUIRE(parse_quic_header(ConstSpan<u8>(again, size), sizeof(kServerCid), header) == QuicHeaderError::None);
+            CHECK(header.type == QuicPacketType::Initial);
+            CHECK(same(header.dcid, retry_scid));
+            CHECK(same(header.token, longest_token));
+            CHECK(client.next_packet_number(QuicSpace::Initial) > next);
+
+            const u64 dropped = client.counters().packets_dropped;
+            receive_copy(client, retry_of(version, own, ConstSpan<u8>(kLongCid, 12U), short_token, original), at);
+            CHECK(client.counters().packets_dropped == dropped + 1U); // one Retry per connection attempt
+            CHECK(same(client.peer_cid(), retry_scid));
+
+            // The server opens what the new keys sealed, and its retry_source_connection_id matches.
+            QuicAccept accept;
+            accept.local_cid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
+            accept.client_dcid = retry_scid;
+            accept.client_scid = own;
+            accept.original_dcid = original;
+            accept.retried = true;
+            accept.validated = true;
+            REQUIRE(server.accept(accept, at));
+            server.receive(Span<u8>(again, size), QuicEcn::NotEct, at);
+            auto net = std::make_unique<Net>(client, server);
+            net->now = at;
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            CHECK(server.retried());
+            CHECK(net->client_initials_padded);
+        }
+    }
+    SECTION("a server whose parameters name no Retry is refused")
+    {
+        QuicConnection client(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1));
+        QuicConnection server(allocator, config_for(QuicSide::Server, identity, QuicVersion::V1, 1U));
+        connect(client);
+        u8 first[kDatagram];
+        REQUIRE(client.send(Span<u8>(first, sizeof(first)), kStartNs) != 0U);
+        receive_copy(client, retry_of(QuicVersion::V1, own, retry_scid, short_token, original), kStartNs);
+        REQUIRE(client.retried());
+        u8 again[kDatagram];
+        const usize size = client.send(Span<u8>(again, sizeof(again)), kStartNs);
+        QuicAccept accept; // as if the Initial had come first: original_destination names the Retry's ID
+        accept.local_cid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
+        accept.client_dcid = retry_scid;
+        accept.client_scid = own;
+        accept.original_dcid = retry_scid;
+        REQUIRE(server.accept(accept, kStartNs));
+        server.receive(Span<u8>(again, size), QuicEcn::NotEct, kStartNs);
+        auto net = std::make_unique<Net>(client, server);
+        REQUIRE(net->run_until([&] { return client.state() == QuicConnectionState::Closing; }));
+        CHECK(client.close_info().error_code == static_cast<u64>(QuicTransportError::ProtocolViolation));
+    }
+    SECTION("a server Initial that carries a token is discarded (section 17.2.2)")
+    {
+        QuicConnection client(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1));
+        connect(client);
+        u8 first[kDatagram];
+        REQUIRE(client.send(Span<u8>(first, sizeof(first)), kStartNs) != 0U);
+        QuicPacketProtection raw_server;
+        REQUIRE(raw_server.start(QuicSide::Server, QuicVersion::V1, original) == CryptoError::None);
+        const auto server_initial = [&](ConstSpan<u8> with_token, u64 number)
+        {
+            Datagram out;
+            QuicPacketSpec spec;
+            spec.type = QuicPacketType::Initial;
+            spec.dcid = own;
+            spec.scid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
+            spec.token = with_token;
+            spec.number = number;
+            QuicPacketWriter writer;
+            REQUIRE(writer.begin(spec, Span<u8>(out.bytes, sizeof(out.bytes))));
+            writer.frames()[0] = 0x01U; // PING
+            REQUIRE(raw_server.seal(writer, 1U, QuicPadding{}, out.size) == QuicPacketError::None);
+            return out;
+        };
+        const u64 dropped = client.counters().packets_dropped;
+        receive_copy(client, server_initial(short_token, 0U), kStartNs + kMs);
+        CHECK(client.counters().packets_dropped == dropped + 1U);
+        CHECK(same(client.peer_cid(), original));
+        receive_copy(client, server_initial({}, 1U), kStartNs + kMs); // the same packet without one opens
+        CHECK(client.counters().packets_dropped == dropped + 1U);
+        CHECK(same(client.peer_cid(), ConstSpan<u8>(kServerCid, sizeof(kServerCid))));
+    }
+    SECTION("a Retry after the server's first packet is discarded")
+    {
+        QuicConnection client(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1));
+        QuicConnection server(allocator, config_for(QuicSide::Server, identity, QuicVersion::V1, 1U));
+        connect(client);
+        auto net = std::make_unique<Net>(client, server);
+        REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+        const u64 dropped = client.counters().packets_dropped;
+        receive_copy(client, retry_of(QuicVersion::V1, own, retry_scid, short_token, original), net->now);
+        CHECK(client.counters().packets_dropped == dropped + 1U);
+        CHECK_FALSE(client.retried());
+        CHECK(client.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC connection: behind an ingress that proves every address, Retry and NEW_TOKEN carry clients through "
+          "loss",
+          "[net][4.2a][quic-connection]")
+{
+    for (const QuicVersion version : kVersions)
+    {
+        for (u64 round = 0U; round < 4U; ++round)
+        {
+            Identity identity;
+            CountingAllocator allocator;
+            RetryFront front;
+            QuicConnection client(allocator, config_for(QuicSide::Client, identity, version));
+            QuicConnection server(allocator, config_for(QuicSide::Server, identity, version, 1U));
+            connect(client);
+            auto net = std::make_unique<Net>(client, server);
+            net->ingress = &front.ingress;
+            net->tokens = &front.tokens;
+            net->rng.state = round;
+            if (round != 0U)
+            {
+                for (Path& path : net->path)
+                {
+                    path.loss = 150U;
+                    path.duplicate = 50U;
+                    path.jitter_ns = 8U * kMs;
+                }
+            }
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            CHECK(client.retried());
+            CHECK(server.retried());
+            CHECK(net->answers >= 1U);
+            CHECK(front.ingress.counters().retries == net->answers);
+            CHECK(net->client_initials_padded);
+            CHECK(net->amplification_kept);
+            // The server's NEW_TOKEN token reaches the client, resent until acknowledged.
+            const ConstSpan<u8> minted(net->minted, net->minted_bytes);
+            REQUIRE(net->run_until([&] { return same(client.new_token(), minted); }));
+            CHECK(same(server.new_token(), minted));
+
+            // The token proves the next connection's address from its first Initial: no Retry.
+            u8 kept[kQuicMaxCarriedTokenBytes];
+            std::memcpy(kept, minted.data(), minted.size());
+            const ConstSpan<u8> token(kept, minted.size());
+            const auto reconnect = [&](usize seed)
+            {
+                QuicConnectionConfig config = config_for(QuicSide::Client, identity, version, seed);
+                config.token = token;
+                QuicConnection next(allocator, config);
+                QuicConnection next_server(allocator, config_for(QuicSide::Server, identity, version, seed + 1U));
+                connect(next, net->now);
+                auto second = std::make_unique<Net>(next, next_server);
+                second->now = net->now;
+                second->ingress = &front.ingress;
+                REQUIRE(second->run_until([&] { return both_confirmed(next, next_server); }));
+                return next.retried();
+            };
+            const u64 validated = front.ingress.counters().admitted_validated;
+            const u64 retries = front.ingress.counters().retries;
+            CHECK_FALSE(reconnect(2U));
+            CHECK(front.ingress.counters().admitted_validated == validated + 1U);
+            CHECK(front.ingress.counters().retries == retries);
+            // Its second use is a replay: the address is proven by a Retry again (RFC 9000 section 8.1.4).
+            CHECK(reconnect(2U));
+        }
+    }
+}
+
+TEST_CASE("QUIC connection: a Retry token the server no longer accepts ends the client at once with INVALID_TOKEN",
+          "[net][4.2a][quic-connection]")
+{
+    for (const QuicVersion version : kVersions)
+    {
+        Identity identity;
+        CountingAllocator allocator;
+        RetryFront front;
+        QuicConnection client(allocator, config_for(QuicSide::Client, identity, version));
+        QuicConnection server(allocator, config_for(QuicSide::Server, identity, version, 1U));
+        connect(client);
+        auto net = std::make_unique<Net>(client, server);
+        net->ingress = &front.ingress;
+        REQUIRE(net->run_until([&] { return client.retried(); }));
+        // The fleet's token key rotated twice since the Retry: its token no longer opens (RFC 9000 section 8.1.2).
+        constexpr u8 kRotated[kQuicTokenKeyBytes] = {0x99, 0x98, 0x97};
+        front.tokens.clear();
+        REQUIRE(front.tokens.init(ConstSpan<u8>(kRotated), {}) == CryptoError::None);
+        const u64 rotated_at = net->now;
+        REQUIRE(net->run_until([&] { return client.state() == QuicConnectionState::Draining; }));
+        CHECK(client.close_info().error_code == static_cast<u64>(QuicTransportError::InvalidToken));
+        CHECK_FALSE(client.close_info().application);
+        CHECK(net->now - rotated_at <= 3U * Path{}.delay_ns); // one round trip, not a handshake timeout
+        CHECK(server.state() == QuicConnectionState::Idle);
+        CHECK(front.ingress.counters().token_closes >= 1U);
     }
 }
 

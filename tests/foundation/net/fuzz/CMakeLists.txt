@@ -15,7 +15,8 @@ crd_fuzz_target(crd-fuzz-net-endpoint
 # QUIC headers and admission stages S1 to S3 (4.2a).
 #   crd-fuzz-net-ingress   any datagram: header views inside it, varints in their shortest form, and through a server
 #                          only held connections routed, only full Initials admitted, every answer within three times
-#                          the datagram and parsing back as a Version Negotiation or a verified Retry.
+#                          the datagram and parsing back as a Version Negotiation or a verified Retry, and a Retry
+#                          token that does not validate closed by one Initial the client opens (INVALID_TOKEN).
 crd_fuzz_target(crd-fuzz-net-ingress
     SOURCES fuzz_ingress.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-ingress")
 
@@ -68,9 +69,9 @@ crd_fuzz_target(crd-fuzz-net-quic-datagram
 
 # A QUIC connection (4.2a).
 #   crd-fuzz-net-quic-connection   a network script between a client and a server (deliveries, losses, duplicates,
-#                                  reorders, corrupted bytes, time), then a clean path: the handshake confirms or a side
-#                                  closes, within the amplification limit and the Initial floor, nothing allocated, and
-#                                  a confirmed pair carries a stream whole; and
+#                                  reorders, corrupted bytes, time, a Retry), then a clean path: the handshake confirms
+#                                  or a side closes, within the amplification limit and the Initial floor, nothing
+#                                  allocated, and a confirmed pair carries a stream whole and agrees on the Retry; and
 #                                  any frames from a raw peer in 1-RTT and in Initial packets: the server stays open or
 #                                  closes with an error RFC 9000 names, its close the only frame it sends then.
 crd_fuzz_target(crd-fuzz-net-quic-connection

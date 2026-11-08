@@ -533,6 +533,38 @@ bool QuicRecovery::discard(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events)
     return true;
 }
 
+void QuicRecovery::retry(u64 now_ns, QuicRecoveryEvents& events) noexcept
+{
+    // Only the first flight measures the path: after a probe the Retry may answer a later packet.
+    Space& initial = m_spaces[index_of(QuicSpace::Initial)];
+    const u64 first_ns = (initial.count != 0U && m_pto_count == 0U) ? entry(initial, 0U).packet.sent_ns : now_ns;
+    for (usize id = 0U; id < kQuicSpaces; ++id)
+    {
+        Space& space = m_spaces[id];
+        for (usize i = 0U; i < space.count; ++i)
+        {
+            QuicSentEntry& slot = entry(space, i);
+            if (slot.state == kOutstanding)
+            {
+                settle(space, slot);
+                slot.state = kLost;
+                events.on_discarded(static_cast<QuicSpace>(id), slot.packet);
+            }
+        }
+        space.head = 0U;
+        space.count = 0U;
+        space.loss_time_ns = kNeverNs;
+        space.last_eliciting_ns = 0U;
+    }
+    if (!m_rtt.sampled() && now_ns > first_ns)
+    {
+        m_rtt.smoothed_ns = min_u64(now_ns - first_ns, kMaxRttNs);
+        m_rtt.variance_ns = m_rtt.smoothed_ns / 2U;
+    }
+    m_pto_count = 0U;
+    arm(now_ns);
+}
+
 bool QuicRecovery::can_send(QuicSpace id) const noexcept
 {
     const Space& space = m_spaces[index_of(id)];

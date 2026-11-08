@@ -2,6 +2,8 @@
 
 #include <crd/memory/allocator.hpp>
 #include <crd/net/ingress.hpp>
+#include <crd/net/quic_frame.hpp>
+#include <crd/net/quic_packet.hpp>
 
 #include <new>
 
@@ -269,7 +271,12 @@ IngressDecision Ingress::admit_initial(IngressDecision decision, cont::ConstSpan
             if (m_tokens->validate(version, header.token, token_peer(peer), header.dcid, header.scid, unix_seconds,
                                    decision.claims) != crypto::CryptoError::None)
             {
-                return drop(decision, DropReason::InvalidRetryToken);
+                if (!m_buckets.answer(now_ns))
+                {
+                    return drop(decision, DropReason::InvalidRetryToken);
+                }
+                decision.action = IngressAction::InvalidToken;
+                return decision;
             }
             decision.validated = true;
         }
@@ -323,6 +330,10 @@ usize Ingress::answer(const IngressDecision& decision, const Endpoint& peer, u64
     if (decision.action == IngressAction::StatelessReset)
     {
         return stateless_reset(decision, bits, out);
+    }
+    if (decision.action == IngressAction::InvalidToken)
+    {
+        return invalid_token(decision, out);
     }
     if (decision.action == IngressAction::NegotiateVersion)
     {
@@ -383,6 +394,42 @@ usize Ingress::stateless_reset(const IngressDecision& decision, u64 bits, cont::
     out[0] = static_cast<u8>((out[0] & 0x3FU) | 0x40U);
     ++m_counters.resets;
     return bytes;
+}
+
+usize Ingress::invalid_token(const IngressDecision& decision, cont::Span<u8> out) noexcept
+{
+    // An Initial from the server to the client's Source Connection ID, sealed under the keys of the Destination
+    // Connection ID it chose, holding CONNECTION_CLOSE with INVALID_TOKEN (RFC 9000 sections 8.1.2 and 10.2.3).
+    const QuicHeader& header = decision.header;
+    const auto version = static_cast<crypto::QuicVersion>(header.version);
+    QuicPacketSpec spec;
+    spec.type = QuicPacketType::Initial;
+    spec.version = header.version;
+    spec.dcid = header.scid;
+    spec.scid = header.dcid;
+    QuicFrame close;
+    close.kind = QuicFrameKind::ConnectionClose;
+    close.error_code = static_cast<u64>(QuicTransportError::InvalidToken);
+    QuicKeys keys;
+    QuicPacketWriter writer;
+    usize written = 0U;
+    if (quic_initial_keys(version, crypto::QuicSide::Server, header.dcid, keys) == crypto::CryptoError::None &&
+        writer.begin(spec, out))
+    {
+        const usize used = write_quic_frame(close, writer.frames());
+        if (used == 0U ||
+            writer.seal(keys.packet, keys.header, false, used, QuicPadding{}, written) != crypto::CryptoError::None)
+        {
+            written = 0U;
+        }
+    }
+    if (written == 0U)
+    {
+        ++m_counters.answer_failures;
+        return 0U;
+    }
+    ++m_counters.token_closes;
+    return written;
 }
 
 } // namespace crd::net

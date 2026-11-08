@@ -10,6 +10,8 @@
 #include <crd/crypto/replay.hpp>
 #include <crd/net/connection_table.hpp>
 #include <crd/net/ingress.hpp>
+#include <crd/net/quic_frame.hpp>
+#include <crd/net/quic_packet.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -27,6 +29,7 @@ using crd::containers::Span;
 using crd::containers::WireReader;
 using crd::containers::WireWriter;
 using crd::crypto::CryptoError;
+using crd::crypto::QuicSide;
 using crd::crypto::QuicTokenKeys;
 using crd::crypto::QuicVersion;
 using crd::crypto::ReplayFilter;
@@ -742,6 +745,36 @@ TEST_CASE("S2 routes known IDs and S3 admits new Initials", "[net][ingress]")
     CHECK(dropped(server.ingress, DropReason::SmallInitial) == 1U);
 }
 
+// Opens an INVALID_TOKEN close as the client that sent to `dcid` would: one Initial holding CONNECTION_CLOSE.
+void check_token_close(QuicVersion version, ConstSpan<u8> dcid, Span<u8> close)
+{
+    QuicPacketProtection client;
+    REQUIRE(client.start(QuicSide::Client, version, dcid) == CryptoError::None);
+    QuicDatagramPackets packets(close, 4U);
+    QuicHeader header;
+    Span<u8> packet;
+    REQUIRE(packets.next(header, packet));
+    CHECK(header.type == QuicPacketType::Initial);
+    CHECK(same(header.dcid, view_of(kClientScid, 4U)));
+    CHECK(same(header.scid, dcid));
+    CHECK(header.token.empty());
+    QuicOpened opened;
+    REQUIRE(client.open(header, packet, opened) == QuicPacketError::None);
+    WireReader frames(opened.payload);
+    QuicFrame frame;
+    REQUIRE(read_quic_frame(frames, frame) == QuicTransportError::NoError);
+    CHECK(frame.kind == QuicFrameKind::ConnectionClose);
+    CHECK_FALSE(frame.application);
+    CHECK(frame.error_code == static_cast<u64>(QuicTransportError::InvalidToken));
+    CHECK_FALSE(quic_frame_ack_eliciting(frame.kind)); // so the server pads nothing (section 14.1)
+    while (!frames.done())
+    {
+        REQUIRE(read_quic_frame(frames, frame) == QuicTransportError::NoError);
+        CHECK(frame.kind == QuicFrameKind::Padding);
+    }
+    CHECK_FALSE(packets.next(header, packet));
+}
+
 TEST_CASE("S3 sends unproven addresses to Retry, and the Retry token proves the address", "[net][ingress]")
 {
     HandshakeRules rules = tight_rules();
@@ -780,13 +813,38 @@ TEST_CASE("S3 sends unproven addresses to Retry, and the Retry token proves the 
         CHECK(same(admit.claims.original_dcid_view(), view_of(kClientDcid, 8U)));
         CHECK(server.ingress.counters().admitted_validated == 1U);
 
-        // Another port, a later time, or a damaged token is dropped (INVALID_TOKEN).
+        // Another port, a later time, or a damaged token is answered with an Initial that closes with INVALID_TOKEN
+        // under the keys the client now uses, smaller than its trigger (RFC 9000 section 8.1.2).
         const Endpoint moved{kPeer.address, static_cast<u16>(kPeer.port + 1U)};
-        CHECK(server.classify(second, moved).reason == DropReason::InvalidRetryToken);
-        CHECK(server.classify(second, kPeer, kSecond, kUnix + 31U).reason == DropReason::InvalidRetryToken);
         Datagram damaged = second;
         damaged.bytes[1U + 4U + 1U + 16U + 1U + 4U + 1U + 10U] ^= 0x01U;
-        CHECK(server.classify(damaged).reason == DropReason::InvalidRetryToken);
+        const IngressDecision invalid[] = {server.classify(second, moved),
+                                           server.classify(second, kPeer, kSecond, kUnix + 31U),
+                                           server.classify(damaged)};
+        for (const IngressDecision& decision : invalid)
+        {
+            REQUIRE(decision.action == IngressAction::InvalidToken);
+            u8 close[kQuicMaxStatelessAnswerBytes] = {};
+            const usize bytes = server.ingress.answer(decision, kPeer, kUnix, Span<u8>(close));
+            REQUIRE(bytes != 0U);
+            CHECK(bytes < second.size);
+            check_token_close(quic_version, view_of(retry_scid, 16U), Span<u8>(close, bytes));
+        }
+        CHECK(server.ingress.counters().token_closes == 3U);
+        CHECK(dropped(server.ingress, DropReason::InvalidRetryToken) == 0U);
+
+        // With the answer rate spent, it is dropped.
+        HandshakeRules quiet = rules;
+        quiet.answers = GateRule{1U, 0U}; // one answer, then a second's wait
+        Server spent(quiet);
+        REQUIRE(spent.classify(damaged).action == IngressAction::InvalidToken);
+        CHECK(spent.classify(damaged).reason == DropReason::InvalidRetryToken);
+        CHECK(dropped(spent.ingress, DropReason::InvalidRetryToken) == 1U);
+
+        // An answer too small for the close writes nothing, and is counted.
+        u8 tiny[16] = {};
+        CHECK(server.ingress.answer(invalid[0], kPeer, kUnix, Span<u8>(tiny)) == 0U);
+        CHECK(server.ingress.counters().answer_failures == 1U);
     }
 }
 

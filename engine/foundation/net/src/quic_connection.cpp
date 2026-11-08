@@ -17,6 +17,7 @@ constexpr u8 kRecordRetire = 3U;
 constexpr u8 kRecordStream = 4U;     // a frame of the stream set
 constexpr u8 kRecordDatagram = 5U;   // a DATAGRAM frame whose outcome is reported
 constexpr u8 kRecordNewId = 6U;      // a NEW_CONNECTION_ID frame: value is its sequence
+constexpr u8 kRecordNewToken = 7U;   // a server's NEW_TOKEN frame
 constexpr usize kIssueAttempts = 4U; // random IDs a host draws before it gives up on a full table
 constexpr u32 kNoRecord = ~u32{0};
 constexpr u64 kNsPerMs = 1000000U;
@@ -101,7 +102,7 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
            config.max_datagram_bytes >= kQuicMinInitialDatagram &&
            config.max_datagram_bytes <= kQuicDefaultMaxUdpPayload &&
            (config.entropy_seed.empty() || config.entropy_seed.size() == crypto::kPrfKeyBytes) &&
-           (config.token.size() <= crypto::kQuicMaxTokenBytes);
+           (config.token.size() <= kQuicMaxCarriedTokenBytes);
 }
 } // namespace
 
@@ -295,6 +296,7 @@ bool QuicConnection::accept(const QuicAccept& accept, u64 now_ns) noexcept
     if (!ready() || m_state != QuicConnectionState::Idle || m_config.side != crypto::QuicSide::Server ||
         accept.local_cid.empty() || accept.client_dcid.empty() || !bounded(accept.local_cid) ||
         !bounded(accept.client_dcid) || !bounded(accept.original_dcid) || !bounded(accept.client_scid) ||
+        accept.new_token.size() > kQuicMaxCarriedTokenBytes ||
         (!accept.retried && !same_bytes(accept.original_dcid, accept.client_dcid)))
     {
         return false;
@@ -314,6 +316,11 @@ bool QuicConnection::accept(const QuicAccept& accept, u64 now_ns) noexcept
     static_cast<void>(m_peer_scid.assign(accept.client_scid));
     m_retried = accept.retried;
     m_validated = accept.validated;
+    m_new_token_bytes = accept.new_token.size();
+    if (m_new_token_bytes != 0U)
+    {
+        std::memcpy(m_new_token, accept.new_token.data(), m_new_token_bytes);
+    }
     m_peer_scid_known = true;
     m_peer_cids[0] = PeerCid{};
     m_peer_cids[0].id = m_peer_scid;
@@ -481,16 +488,22 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
         version_negotiation(header, packet);
         return false;
     }
+    if (client && header.type == QuicPacketType::Retry)
+    {
+        return retry(header, packet, now_ns);
+    }
     const bool long_header = header.type != QuicPacketType::OneRtt;
     m_packet_local = local_index(header.dcid);
     bool routed = m_packet_local != m_local_id_count ||
                   (!client && long_header && same_bytes(header.dcid, m_initial_dcid.view()));
     if (long_header)
     {
-        // Retry is accepted with address validation tokens; other versions are not this connection's.
+        // Retry is taken above; other versions are not this connection's, and a server's Initial carries no token
+        // (section 17.2.2).
         routed = routed && header.type != QuicPacketType::Retry && header.type != QuicPacketType::OtherVersion &&
                  header.version == static_cast<u32>(m_config.version) &&
-                 (!m_peer_scid_known || same_bytes(header.scid, m_peer_scid.view()));
+                 (!m_peer_scid_known || same_bytes(header.scid, m_peer_scid.view())) &&
+                 (!client || header.type != QuicPacketType::Initial || header.token.empty());
     }
     // A server discards a client Initial in a datagram under 1200 bytes (section 14.1).
     if (!routed || (!client && header.type == QuicPacketType::Initial && datagram_bytes < kQuicMinInitialDatagram))
@@ -719,8 +732,10 @@ bool QuicConnection::advance_handshake(u64 now_ns) noexcept
         m_state = QuicConnectionState::Established;
         if (m_config.side == crypto::QuicSide::Server)
         {
-            // A server's handshake is confirmed when it completes (RFC 9001 section 4.1.2); it says so.
+            // A server's handshake is confirmed when it completes (RFC 9001 section 4.1.2); it says so, then hands
+            // out its token for the next connection (section 8.1.3).
             m_handshake_done_owed = true;
+            m_new_token_owed = m_new_token_bytes != 0U;
             confirm(now_ns);
         }
     }
@@ -738,6 +753,8 @@ bool QuicConnection::read_peer_parameters(u64 now_ns) noexcept
         if (m_config.side == crypto::QuicSide::Client)
         {
             expected.original_destination = m_original_dcid.view();
+            expected.retried = m_retried;
+            expected.retry_source = m_initial_dcid.view(); // the Retry's Source Connection ID after one
         }
         error = quic_check_connection_ids(m_peer, peer, expected);
     }
@@ -1025,6 +1042,44 @@ void QuicConnection::version_negotiation(const QuicHeader& header, cont::ConstSp
     finish();
 }
 
+bool QuicConnection::retry(const QuicHeader& header, cont::ConstSpan<u8> packet, u64 now_ns) noexcept
+{
+    // One Retry, before any packet of the server opened, to the ID this client sent, naming a new ID, with a token and
+    // a tag that verifies against the first Destination Connection ID (RFC 9000 sections 7.2 and 17.2.5.2).
+    const usize body = 1U + 4U + 1U + header.dcid.size() + 1U + header.scid.size();
+    if (m_retried || m_peer_scid_known || header.version != static_cast<u32>(m_config.version) ||
+        !same_bytes(header.dcid, m_local_cid.view()) || same_bytes(header.scid, m_initial_dcid.view()) ||
+        packet.size() <= body + crypto::kQuicTagBytes ||
+        packet.size() - body - crypto::kQuicTagBytes > sizeof(m_token) ||
+        crypto::quic_retry_verify(m_config.version, m_original_dcid.view(), packet) != crypto::CryptoError::None)
+    {
+        ++m_counters.packets_dropped;
+        return false;
+    }
+    if (m_protection.rekey_initial(m_config.version, header.scid) != crypto::CryptoError::None)
+    {
+        fail(QuicTransportError::InternalError, 0U, now_ns);
+        return true;
+    }
+    m_token_bytes = packet.size() - body - crypto::kQuicTagBytes;
+    std::memcpy(m_token, packet.data() + body, m_token_bytes);
+    static_cast<void>(m_initial_dcid.assign(header.scid)); // at most kQuicMaxConnectionIdBytes, as parsed
+    m_retried = true;
+    // Recovery starts over and the Initial's CRYPTO data goes again under the new keys; packet numbers continue
+    // (section 17.2.5.3).
+    m_recovery->retry(now_ns, m_events);
+    for (u8& probes : m_probes)
+    {
+        probes = 0U;
+    }
+    QuicSendBuffer& out = m_levels[index_of(QuicSpace::Initial)].out;
+    if (out.sent_end() > out.acked_end())
+    {
+        out.on_lost(out.acked_end(), static_cast<usize>(out.sent_end() - out.acked_end()), false);
+    }
+    return true;
+}
+
 void QuicConnection::discard_space(QuicSpace space, u64 now_ns) noexcept
 {
     const usize index = index_of(space);
@@ -1107,7 +1162,8 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
         ids_owed = ids_owed || m_local_ids[local].owed;
     }
     return m_handshake_done_owed || m_path_response_owed || m_ping_owed || m_retire_owed_count > 0U ||
-           (m_frame_count < m_config.sent_frames && (m_streams.has_frame() || ids_owed)) || datagram_ready(now_ns);
+           (m_frame_count < m_config.sent_frames && (m_streams.has_frame() || ids_owed || m_new_token_owed)) ||
+           datagram_ready(now_ns);
 }
 
 bool QuicConnection::datagram_ready(u64 now_ns) const noexcept
@@ -1184,6 +1240,11 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
                 m_handshake_done_acked = m_handshake_done_acked || how == Settle::Acked;
                 m_handshake_done_owed = !m_handshake_done_acked && (m_handshake_done_owed || how == Settle::Lost);
             }
+            else if (frame.kind == kRecordNewToken)
+            {
+                m_new_token_acked = m_new_token_acked || how == Settle::Acked;
+                m_new_token_owed = !m_new_token_acked && (m_new_token_owed || how == Settle::Lost);
+            }
             else if (frame.kind == kRecordNewId)
             {
                 // Resent until acknowledged while held (section 13.3), a rotated one too: it asks the peer to retire.
@@ -1257,6 +1318,17 @@ usize QuicConnection::write_frames(QuicSpace space, cont::Span<u8> frames, u64 p
             {
                 static_cast<void>(record(space, packet, kRecordHandshakeDone, QuicStreamRecord{}, written));
                 m_handshake_done_owed = false;
+            }
+        }
+        if (m_new_token_owed && m_frame_count < m_config.sent_frames)
+        {
+            QuicFrame token;
+            token.kind = QuicFrameKind::NewToken;
+            token.data = cont::ConstSpan<u8>(m_new_token, m_new_token_bytes);
+            if (put(token))
+            {
+                static_cast<void>(record(space, packet, kRecordNewToken, QuicStreamRecord{}, written));
+                m_new_token_owed = false;
             }
         }
         if (m_path_response_owed)
@@ -1689,10 +1761,10 @@ void QuicConnection::on_timeout(u64 now_ns) noexcept
     {
         out.on_lost(out.acked_end(), static_cast<usize>(out.sent_end() - out.acked_end()), false);
     }
-    if (timeout.space == QuicSpace::Application && m_config.side == crypto::QuicSide::Server && m_confirmed &&
-        !m_handshake_done_acked)
+    if (timeout.space == QuicSpace::Application && m_config.side == crypto::QuicSide::Server && m_confirmed)
     {
-        m_handshake_done_owed = true;
+        m_handshake_done_owed = m_handshake_done_owed || !m_handshake_done_acked;
+        m_new_token_owed = m_new_token_owed || (m_new_token_bytes != 0U && !m_new_token_acked);
     }
 }
 

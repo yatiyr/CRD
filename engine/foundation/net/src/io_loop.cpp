@@ -141,6 +141,7 @@ void IoLoop::receive_batch(u64 now_ns, u64 unix_seconds, BatchResult& result) no
         case IngressAction::Retry:
         case IngressAction::NegotiateVersion:
         case IngressAction::StatelessReset:
+        case IngressAction::InvalidToken:
             queue_answer(decision, datagram.peer, unix_seconds);
             break;
         case IngressAction::Drop:

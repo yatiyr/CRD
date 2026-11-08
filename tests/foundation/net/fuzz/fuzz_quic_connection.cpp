@@ -3,7 +3,8 @@
 //
 // Input: byte 0 picks the mode (bits 0 and 1) and the version (bit 2); the rest drives it.
 //   0  a network script between a client and a server: each byte an operation on the datagrams in flight (deliver,
-//      drop, duplicate, reorder, corrupt a byte, advance time); then a clean path until both confirm or one closes.
+//      drop, duplicate, reorder, corrupt a byte, advance time, 0xFD a Retry in place of the client Initials in flight
+//      while the server has none); then a clean path until both confirm or one closes.
 //   1  frames from a raw client after the handshake: each [length][bytes] sealed as one 1-RTT packet to the server.
 //   2  frames in Initial packets anyone can seal (their keys come from the public Destination Connection ID): each
 //      [length][bytes] to a fresh server.
@@ -17,10 +18,12 @@
 // up to 600 bytes, stays Established (Handshaking for Initial frames) or closes; a closed server sends a
 // CONNECTION_CLOSE only. Both modes route each end's own IDs through a host (QuicRoutedIds): its table holds exactly
 // the IDs its connection holds, after every step; a script byte 0xFE rotates the server's IDs; and a confirmed client
-// that a stateless reset of the ID it sends to reaches drains, while a forged token changes nothing.
+// that a stateless reset of the ID it sends to reaches drains, while a forged token changes nothing. A confirmed pair
+// agrees on whether a Retry was taken; the server accepts it only for an Initial to the Retry's ID.
 #include <crd/crypto/tls.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_connection.hpp>
+#include <crd/net/quic_header.hpp>
 
 #include <cstring>
 
@@ -41,6 +44,7 @@ constexpr u8 kClientCid[8] = {0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7};
 constexpr u8 kServerCid[16] = {0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
                                0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F};
 constexpr u8 kInitialDcid[8] = {0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7};
+constexpr u8 kRetryCid[10] = {0x9A, 0x9B, 0x9C, 0x9D, 0x9E, 0x9F, 0xA0, 0xA1, 0xA2, 0xA3};
 constexpr AlgorithmId kGroups[] = {AlgorithmId::X25519};
 constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
 constexpr AlgorithmId kAeads[] = {AlgorithmId::Aes128Gcm};
@@ -196,13 +200,43 @@ struct Pair
     Flight flights[kFlights];
     usize count = 0U;
     u64 now = 1000U * kMs;
+    QuicVersion version;
+    bool retry_sent = false;
 
-    explicit Pair(QuicVersion version)
+    explicit Pair(QuicVersion run)
         : client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
           server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
-          client(allocator, config_for(QuicSide::Client, version, &client_host.ids)),
-          server(allocator, config_for(QuicSide::Server, version, &server_host.ids))
+          client(allocator, config_for(QuicSide::Client, run, &client_host.ids)),
+          server(allocator, config_for(QuicSide::Server, run, &server_host.ids)), version(run)
     {
+    }
+
+    // The server answers the client Initials in flight with one Retry, as a stateless ingress does: they are gone.
+    void retry()
+    {
+        if (retry_sent || server.state() != QuicConnectionState::Idle || count == kFlights)
+        {
+            return;
+        }
+        for (usize index = 0U; index < count;)
+        {
+            if (flights[index].to == 1U)
+            {
+                remove(index);
+                continue;
+            }
+            ++index;
+        }
+        u8 token[24];
+        std::memset(token, 0x6B, sizeof(token));
+        Flight& flight = flights[count];
+        CRD_FUZZ_REQUIRE(write_retry(version, ConstSpan<u8>(kClientCid, sizeof(kClientCid)),
+                                     ConstSpan<u8>(kRetryCid, sizeof(kRetryCid)),
+                                     ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), ConstSpan<u8>(token), 0U,
+                                     Span<u8>(flight.bytes, sizeof(flight.bytes)), flight.size) == CryptoError::None);
+        flight.to = 0U;
+        ++count;
+        retry_sent = true;
     }
 
     void check_hosts() const
@@ -259,7 +293,17 @@ struct Pair
             QuicHeader header;
             if (parse_quic_header(ConstSpan<u8>(flight.bytes, flight.size), sizeof(kServerCid), header) !=
                     QuicHeaderError::None ||
-                header.type != QuicPacketType::Initial || !to.accept(accept_of(header.dcid, header.scid), now))
+                header.type != QuicPacketType::Initial)
+            {
+                return;
+            }
+            QuicAccept accept = accept_of(header.dcid, header.scid);
+            const ConstSpan<u8> retried(kRetryCid, sizeof(kRetryCid));
+            accept.retried = retry_sent && header.dcid.size() == retried.size() &&
+                             std::memcmp(header.dcid.data(), retried.data(), retried.size()) == 0;
+            accept.original_dcid = accept.retried ? ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)) : header.dcid;
+            accept.validated = accept.retried;
+            if (!to.accept(accept, now))
             {
                 return;
             }
@@ -471,6 +515,11 @@ void run_script(QuicVersion version, ConstSpan<u8> script)
             static_cast<void>(pair.server.rotate_connection_ids());
             continue;
         }
+        if (op == 0xFDU)
+        {
+            pair.retry();
+            continue;
+        }
         switch (op & 7U)
         {
             case 0U:
@@ -531,6 +580,7 @@ void run_script(QuicVersion version, ConstSpan<u8> script)
     {
         CRD_FUZZ_REQUIRE(pair.client.handshake().application_protocol() ==
                          pair.server.handshake().application_protocol());
+        CRD_FUZZ_REQUIRE(pair.client.retried() == pair.server.retried());
         transfer(pair);
         exchange_datagrams(pair);
         stateless_reset(pair);
@@ -770,6 +820,9 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     // A script: deliver everything in order with a timer step between flights.
     const u8 clean[] = {0x00U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
     sink.add("script-clean", clean, sizeof(clean));
+    // A Retry in place of the first flight: the client goes again to its ID with its token.
+    const u8 retried[] = {0x00U, 0xFDU, 0x00U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U};
+    sink.add("script-retry", retried, sizeof(retried));
     // Losses, duplicates, a reorder and a corrupted byte in version 2.
     const u8 hostile[] = {0x04U, 0x02U, 0x03U, 0x00U, 0x0CU, 0x05U, 0x40U, 0x08U, 0x07U, 0x00U,
                           0x02U, 0x06U, 0x86U, 0x07U, 0x00U, 0x00U, 0x0BU, 0x00U, 0x00U};

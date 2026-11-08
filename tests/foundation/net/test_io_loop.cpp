@@ -332,6 +332,25 @@ TEST_CASE("A turn reads at most batches_per_poll batches, so timers run under a 
     CHECK(rig.loop.counters().receive_errors == 1U);
 }
 
+TEST_CASE("A Retry token that does not validate is answered with an INVALID_TOKEN close", "[net][io-loop]")
+{
+    Rig rig;
+    u8 forged[40];
+    std::memset(forged, 0x5C, sizeof(forged));
+    forged[0] = static_cast<u8>(crd::crypto::QuicTokenKind::Retry);
+    rig.socket.deliver(initial(kV1, view_of(kDcid, 8U), view_of(kScid, 4U), view_of(forged, sizeof(forged))), kClient);
+    (void)rig.loop.poll();
+    REQUIRE(rig.socket.sent_count == 1U);
+    CHECK(rig.socket.sent[0].peer == kClient);
+    CHECK(rig.ingress.counters().token_closes == 1U);
+    CHECK(rig.handler.admits == 0U);
+    QuicHeader read;
+    REQUIRE(parse_quic_header(rig.socket.sent[0].datagram.view(), 16U, read) == QuicHeaderError::None);
+    CHECK(read.type == QuicPacketType::Initial);
+    CHECK(same(read.dcid, view_of(kScid, 4U)));
+    CHECK(rig.socket.sent[0].datagram.size < kQuicMinInitialDatagram);
+}
+
 TEST_CASE("A short header for no connection is answered with a stateless reset when the server holds a key",
           "[net][io-loop]")
 {

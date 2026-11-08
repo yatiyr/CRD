@@ -10,6 +10,9 @@
 // client Initial of at least 1200 bytes with an 8-byte Destination Connection ID, and every answer is a datagram of
 // at least 1200 bytes answered in at most three times its size (RFC 9000 section 8), which parses back as Version
 // Negotiation (listing the server's versions and one reserved version) or as a Retry whose integrity tag verifies.
+// A Retry token that does not validate is answered, below its datagram's size, with one server Initial that the client
+// opens under the keys of the Destination Connection ID it chose, holding CONNECTION_CLOSE with INVALID_TOKEN and
+// PADDING alone.
 // A stateless reset answers only a short header for no connection: shorter than it (section 10.3.3), one byte
 // shorter up to 43 bytes, at least 21 and at most kQuicMaxResetAnswerBytes, with the fixed bits 01 and the token of
 // its Destination Connection ID last.
@@ -19,7 +22,9 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/net/connection_table.hpp>
 #include <crd/net/ingress.hpp>
+#include <crd/net/quic_frame.hpp>
 #include <crd/net/quic_header.hpp>
+#include <crd/net/quic_packet.hpp>
 
 #include <cstring>
 
@@ -145,6 +150,38 @@ void check_answer(const IngressDecision& decision, ConstSpan<u8> datagram, const
                                                     decision.header.dcid, answer) == crd::crypto::CryptoError::None);
 }
 
+void check_token_close(const IngressDecision& decision, ConstSpan<u8> datagram, Span<u8> answer)
+{
+    CRD_FUZZ_REQUIRE(decision.header.type == QuicPacketType::Initial && datagram.size() >= kQuicMinInitialDatagram);
+    CRD_FUZZ_REQUIRE(crd::crypto::quic_token_kind(decision.header.token) == crd::crypto::QuicTokenKind::Retry);
+    CRD_FUZZ_REQUIRE(answer.size() < datagram.size());
+    QuicPacketProtection client;
+    CRD_FUZZ_REQUIRE(client.start(crd::crypto::QuicSide::Client,
+                                  static_cast<crd::crypto::QuicVersion>(decision.header.version),
+                                  decision.header.dcid) == crd::crypto::CryptoError::None);
+    QuicDatagramPackets packets(answer, 0U);
+    QuicHeader header;
+    Span<u8> packet;
+    CRD_FUZZ_REQUIRE(packets.next(header, packet) && header.type == QuicPacketType::Initial);
+    CRD_FUZZ_REQUIRE(header.version == decision.header.version);
+    CRD_FUZZ_REQUIRE(header.dcid.size() == decision.header.scid.size());
+    CRD_FUZZ_REQUIRE(header.dcid.empty() ||
+                     std::memcmp(header.dcid.data(), decision.header.scid.data(), header.dcid.size()) == 0);
+    QuicOpened opened;
+    CRD_FUZZ_REQUIRE(client.open(header, packet, opened) == QuicPacketError::None);
+    WireReader frames(opened.payload);
+    QuicFrame frame;
+    CRD_FUZZ_REQUIRE(read_quic_frame(frames, frame) == QuicTransportError::NoError);
+    CRD_FUZZ_REQUIRE(frame.kind == QuicFrameKind::ConnectionClose && !frame.application);
+    CRD_FUZZ_REQUIRE(frame.error_code == static_cast<u64>(QuicTransportError::InvalidToken));
+    while (!frames.done())
+    {
+        CRD_FUZZ_REQUIRE(read_quic_frame(frames, frame) == QuicTransportError::NoError);
+        CRD_FUZZ_REQUIRE(frame.kind == QuicFrameKind::Padding);
+    }
+    CRD_FUZZ_REQUIRE(!packets.next(header, packet));
+}
+
 void check_ingress(ConstSpan<u8> datagram, u8 control)
 {
     // One arena for every input: what an input takes, its objects give back when it ends.
@@ -205,6 +242,14 @@ void check_ingress(ConstSpan<u8> datagram, u8 control)
         check_reset(decision, datagram, reset, ConstSpan<u8>(answer, written));
         break;
     }
+    case IngressAction::InvalidToken:
+    {
+        u8 answer[kQuicMaxStatelessAnswerBytes] = {};
+        const usize written = ingress.answer(decision, peer, kUnix, Span<u8>(answer));
+        CRD_FUZZ_REQUIRE(written != 0U);
+        check_token_close(decision, datagram, Span<u8>(answer, written));
+        break;
+    }
     }
 }
 } // namespace
@@ -224,8 +269,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
 
 namespace
 {
-// A long header packet of `total` bytes after the control byte, its Length covering the rest.
-usize long_seed(u8* out, u8 control, u8 first, u32 version, usize dcid_bytes, usize total)
+// A long header packet of `total` bytes after the control byte, its Length covering the rest; an Initial carries
+// `token_bytes` of a token that claims to be a Retry token.
+usize long_seed(u8* out, u8 control, u8 first, u32 version, usize dcid_bytes, usize total, usize token_bytes = 0U)
 {
     out[0] = control;
     WireWriter writer(Span<u8>(out + 1U, total));
@@ -240,7 +286,11 @@ usize long_seed(u8* out, u8 control, u8 first, u32 version, usize dcid_bytes, us
     writer.put_u32(0xC1C2C3C4U);
     if ((first & 0x30U) == ((version == static_cast<u32>(crd::crypto::QuicVersion::V2)) ? 0x10U : 0x00U))
     {
-        writer.put_u8(0U); // an Initial's empty token
+        writer.put_u8(static_cast<u8>(token_bytes)); // a one-byte varint: under 64
+        for (usize index = 0U; index < token_bytes; ++index)
+        {
+            writer.put_u8((index == 0U) ? static_cast<u8>(crd::crypto::QuicTokenKind::Retry) : u8{0x5C});
+        }
     }
     const usize header = writer.written() + 2U;
     writer.put_u16(static_cast<u16>(0x4000U | (total - header)));
@@ -261,6 +311,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     sink.add("initial-v2", seed, long_seed(seed, 8U, 0xD0U, v2, 8U, 1200U));
     sink.add("initial-v1-retry", seed, long_seed(seed, 0x88U, 0xC0U, v1, 8U, 1200U));
     sink.add("initial-v2-retry-v6", seed, long_seed(seed, 0xC8U, 0xD0U, v2, 20U, 1300U));
+    sink.add("initial-v1-forged-retry-token", seed, long_seed(seed, 8U, 0xC0U, v1, 8U, 1200U, 40U));
     sink.add("initial-small", seed, long_seed(seed, 8U, 0xC0U, v1, 8U, 1199U));
     sink.add("initial-short-dcid", seed, long_seed(seed, 8U, 0xC0U, v1, 7U, 1200U));
     sink.add("handshake-v1", seed, long_seed(seed, 8U, 0xE0U, v1, 8U, 64U));

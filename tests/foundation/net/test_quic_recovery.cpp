@@ -775,6 +775,51 @@ TEST_CASE("quic recovery: discarding keys drops the space's packets from flight 
     CHECK_FALSE(f.recovery.discard(QuicSpace::Application, 0U, f.events));
 }
 
+TEST_CASE("quic recovery: a Retry starts recovery over, numbers continue and the first flight sets the RTT",
+          "[net][quic][recovery]")
+{
+    SECTION("the first flight's time to the Retry is the initial estimate")
+    {
+        Fixture f;
+        f.send(QuicSpace::Initial, 0U, kMs);
+        f.send(QuicSpace::Initial, 1U, kMs);
+        f.recovery.retry(31U * kMs, f.events);
+        CHECK(f.events.of('d') == 2U);
+        CHECK(f.events.of('l') == 0U); // no congestion signal (RFC 9002 section 6.3)
+        CHECK(f.recovery.bytes_in_flight() == 0U);
+        CHECK(f.recovery.rtt().smoothed_ns == 30U * kMs);
+        CHECK(f.recovery.rtt().variance_ns == 15U * kMs);
+        CHECK_FALSE(f.recovery.rtt().sampled()); // no sample: min_rtt waits for a real one
+        // Nothing in flight: the client's anti-deadlock timer, from now with the new estimate (appendix A.8).
+        CHECK(f.recovery.loss_timer_ns() == 31U * kMs + 30U * kMs + 4U * 15U * kMs);
+        CHECK(f.recovery.can_send(QuicSpace::Initial));
+        CHECK(f.recovery.on_sent(QuicSpace::Initial, packet(1U, 31U * kMs)) == QuicRecoveryError::BadNumber);
+        f.send(QuicSpace::Initial, 2U, 31U * kMs);
+        CHECK(f.recovery.loss_timer_ns() == 31U * kMs + 30U * kMs + 4U * 15U * kMs); // the new estimate's PTO
+        CHECK(f.ack(QuicSpace::Initial, 2U, 2U, 51U * kMs).rtt_sampled);
+        CHECK(f.recovery.rtt().min_ns == 20U * kMs);
+    }
+    SECTION("after a probe the estimate stays the default, and the probe count resets")
+    {
+        Fixture f;
+        f.send(QuicSpace::Initial, 0U, 0U);
+        REQUIRE(f.recovery.on_timeout(f.recovery.loss_timer_ns(), f.events).kind == QuicTimeoutKind::Probe);
+        f.send(QuicSpace::Initial, 1U, 3U * kQuicInitialRttNs);
+        f.recovery.retry(3U * kQuicInitialRttNs + 5U * kMs, f.events);
+        CHECK(f.events.of('d') == 2U);
+        CHECK(f.recovery.pto_count() == 0U);
+        CHECK(f.recovery.rtt().smoothed_ns == kQuicInitialRttNs);
+    }
+    SECTION("a Retry before anything was sent changes nothing but the timers")
+    {
+        Fixture f;
+        f.recovery.retry(5U * kMs, f.events);
+        CHECK(f.events.count == 0U);
+        CHECK(f.recovery.rtt().smoothed_ns == kQuicInitialRttNs);
+        f.send(QuicSpace::Initial, 0U, 5U * kMs);
+    }
+}
+
 TEST_CASE("quic recovery: persistent congestion needs a span, no acknowledgement between and an RTT sample",
           "[net][quic][recovery]")
 {

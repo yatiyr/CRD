@@ -58,6 +58,9 @@ namespace crd::net
 inline constexpr usize kQuicMaxPeerConnectionIds = 8U;  // the peer's IDs a connection holds at most
 inline constexpr usize kQuicMaxReasonBytes = 64U;       // of a CONNECTION_CLOSE reason phrase kept or sent
 inline constexpr usize kQuicMaxLocalConnectionIds = 8U; // this side's active IDs at most
+// A token a connection carries: a client's from Retry or NEW_TOKEN, this build's or another server's (RFC 9000 sets
+// no bound; the Initial still holds 1200 bytes with the longest connection IDs and its CRYPTO data).
+inline constexpr usize kQuicMaxCarriedTokenBytes = 256U;
 // This side pads every datagram to kQuicResetPadding bytes more than its connection ID length, so that a peer's
 // stateless reset answering it can look like a packet (RFC 9000 section 10.3).
 inline constexpr usize kQuicResetPadding = 22U;
@@ -124,8 +127,8 @@ struct QuicConnectionConfig
     cont::ConstSpan<u32> versions;
     // A client whose connection follows a Version Negotiation packet (RFC 9368 section 4).
     bool after_version_negotiation = false;
-    // A client's NEW_TOKEN token from an earlier connection to this server (at most crypto::kQuicMaxTokenBytes),
-    // carried in its Initial packets to prove its address (section 8.1.3).
+    // A client's NEW_TOKEN token from an earlier connection to this server (at most kQuicMaxCarriedTokenBytes),
+    // carried in its Initial packets to prove its address (section 8.1.3) until a Retry gives it another.
     cont::ConstSpan<u8> token;
     bool grease_quic_bit = true; // send grease_quic_bit and accept a cleared QUIC bit (RFC 9287)
     u32 sent_packets = 128U;     // per packet number space: what the connection holds in flight
@@ -150,6 +153,9 @@ struct QuicAccept
     cont::ConstSpan<u8> original_dcid; // the client's first Destination Connection ID (a Retry token's claim)
     bool retried = false;              // client_dcid is this server's Retry's Source Connection ID
     bool validated = false;            // a token proved the client's address
+    // A NEW_TOKEN token for the client's next connection (crypto::QuicTokenKeys::mint_new_token), sent once the
+    // handshake is confirmed and again until acknowledged (section 8.1.3); empty for none.
+    cont::ConstSpan<u8> new_token;
 };
 
 enum class QuicConnectionState : u8
@@ -235,6 +241,8 @@ public:
 
     [[nodiscard]] QuicConnectionState state() const noexcept { return m_state; }
     [[nodiscard]] bool confirmed() const noexcept { return m_confirmed; }
+    // A client accepted its server's Retry; a server's connection follows its own Retry.
+    [[nodiscard]] bool retried() const noexcept { return m_retried; }
     [[nodiscard]] bool address_validated() const noexcept { return m_validated; }
     [[nodiscard]] const QuicCloseInfo& close_info() const noexcept { return m_close; }
     // The reason phrase sent or received (truncated to kQuicMaxReasonBytes).
@@ -260,7 +268,8 @@ public:
     [[nodiscard]] usize peer_cid_count() const noexcept { return m_peer_cid_count; }
     // This side's IDs still routed (sequence 0 included until retired).
     [[nodiscard]] usize local_cid_count() const noexcept { return m_local_id_count; }
-    // A client: the latest NEW_TOKEN token its server sent (empty for none), for its next connection there.
+    // A client: the latest NEW_TOKEN token its server sent (empty for none), for its next connection there. A
+    // server: the token it sends.
     [[nodiscard]] cont::ConstSpan<u8> new_token() const noexcept
     {
         return cont::ConstSpan<u8>(m_new_token, m_new_token_bytes);
@@ -355,6 +364,8 @@ private:
     // A stateless reset by `tail`, a datagram's last kQuicResetTokenBytes.
     [[nodiscard]] bool reset_by(cont::ConstSpan<u8> tail, u64 now_ns) noexcept;
     void version_negotiation(const QuicHeader& header, cont::ConstSpan<u8> packet) noexcept;
+    // A client's Retry: true when it was accepted and the Initial goes again with its token (section 17.2.5.2).
+    [[nodiscard]] bool retry(const QuicHeader& header, cont::ConstSpan<u8> packet, u64 now_ns) noexcept;
     void discard_space(QuicSpace space, u64 now_ns) noexcept;
     void confirm(u64 now_ns) noexcept;
 
@@ -403,7 +414,7 @@ private:
     u64 m_entropy_counter = 0U;
     u32 m_versions[kQuicMaxAvailableVersions] = {};
     usize m_version_count = 0U;
-    u8 m_token[crypto::kQuicMaxTokenBytes] = {};
+    u8 m_token[kQuicMaxCarriedTokenBytes] = {};
     usize m_token_bytes = 0U;
 
     QuicConnectionState m_state = QuicConnectionState::Idle;
@@ -428,8 +439,10 @@ private:
     u64 m_retire_owed[2U * kQuicMaxPeerConnectionIds] = {};
     usize m_retire_owed_count = 0U;
     usize m_retire_outstanding = 0U; // owed or in flight
-    u8 m_new_token[crypto::kQuicMaxTokenBytes] = {};
+    u8 m_new_token[kQuicMaxCarriedTokenBytes] = {};
     usize m_new_token_bytes = 0U;
+    bool m_new_token_owed = false; // a server's, until acknowledged
+    bool m_new_token_acked = false;
 
     u64 m_next_number[kQuicSpaces] = {};
     u64 m_skipped[kQuicSpaces] = {kQuicNoPacket, kQuicNoPacket, kQuicNoPacket}; // the latest number skipped

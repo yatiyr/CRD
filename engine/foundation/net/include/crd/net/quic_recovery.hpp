@@ -252,6 +252,11 @@ public:
     // Initial or Handshake keys were discarded (section 6.4): the space's packets leave bytes in flight as
     // on_discarded, its received ranges are forgotten and the probe count resets. False for the Application space.
     [[nodiscard]] bool discard(QuicSpace space, u64 now_ns, QuicRecoveryEvents& events) noexcept;
+    // A client accepted a Retry (section 6.3, RFC 9000 section 17.2.5.3): every outstanding packet leaves bytes in
+    // flight as on_discarded, the timers and the probe count reset and packet numbers continue. The time from the
+    // first Initial to the Retry replaces the initial RTT estimate when no probe was sent (section 6.2.2); it is no
+    // sample.
+    void retry(u64 now_ns, QuicRecoveryEvents& events) noexcept;
 
     // ---- Sending ----
 
