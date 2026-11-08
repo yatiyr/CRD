@@ -311,7 +311,9 @@ public:
     // current phase holds the update back and the key keeps sealing, so an interval never ends a connection.
     void set_key_update_interval(u64 packets) noexcept { m_update_interval = packets; }
     // Lowers the 1-RTT packets one send key seals at most (never above the AEAD's limit; 0 restores it), at which it
-    // refuses (Exhausted), and the failed opens the connection tolerates (0: the AEAD's integrity limit).
+    // refuses (Exhausted), and the failed opens the connection tolerates (0: the AEAD's integrity limit). Both make
+    // the limits' paths provable in a test: 2^23 packets, or the integrity limit's failed opens, are out of a test's
+    // reach.
     void limit_sealed_packets(u64 limit) noexcept;
     void limit_failed_opens(u64 limit) noexcept { m_failed_limit = limit; }
 
