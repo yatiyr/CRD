@@ -26,8 +26,10 @@ waits. The relayed user words about the GPL rewrite belong to the other agent's 
 
 ## Evidence
 
-- win-debug (MSVC): crd-net-tests 192 cases pass, 9 new; crd-crypto-tests `[quic]` pass. linux-gcc-debug: 193
-  cases and `[quic]` pass; both net packet corpora replay clean.
+- win-debug (MSVC): crd-net-tests 192 cases pass, 9 new; crd-crypto-tests `[quic]` pass. linux-gcc-debug, -release
+  and -relwithdebinfo: 193 cases, `[quic]` and `[quic-handshake]` pass, the packet corpus replays clean. The release
+  lanes' LTO link first refused `frames()[0]` in three test sites (`-Wnull-dereference`); they now write through a
+  checked helper.
 - Byte for byte: RFC 9001 A.2 (1200-byte client Initial), A.3 and A.5 and RFC 9369's, written from their frames.
 - A real hybrid TLS 1.3 handshake carried in these packets to 1-RTT in versions 1 and 2, HANDSHAKE_DONE confirming.
 - Eighteen source mutations each caught: the reserved bits, empty packets, the QUIC bit, the foreign walk, the sample
