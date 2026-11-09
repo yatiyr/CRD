@@ -1043,7 +1043,8 @@ Http2Connection::Step Http2Connection::new_request(u32 id, usize count, bool too
     m_highest = id;
     if (m_goaway_was_sent && id > m_goaway_sent)
     {
-        return Step::Again; // section 6.8: minimally processed, and that was the decoding
+        remember_closed(id, true); // section 6.8: what follows on it is dropped too
+        return Step::Again;        // minimally processed, and that was the decoding
     }
     if (m_self_dependent || m_open >= m_config.streams)
     {

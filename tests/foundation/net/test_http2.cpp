@@ -1104,6 +1104,11 @@ TEST_CASE("http2: GOAWAY both ways", "[http2]")
         CHECK(peer.side.count(Http2EventKind::Headers) == 2U);
         CHECK(peer.reset_code(5U) == ~u32{0});
         CHECK(peer.error() == 0U);
+        // And what the client had on its way behind it, the table kept in step.
+        peer.send(kData, 0U, 5U, zeros(4U));
+        peer.headers(5U, Fields{{"x-t", "1"}});
+        CHECK(peer.reset_code(5U) == ~u32{0});
+        CHECK(peer.error() == 0U);
     }
     SECTION("a server reads a client's")
     {
