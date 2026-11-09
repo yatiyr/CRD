@@ -346,7 +346,8 @@ versions, HANDSHAKE_DONE confirming it) and `crd-fuzz-net-quic-packet` (received
   parameters, this side's own after) and the ECN counts once a marked packet arrived. When a packet carrying an ACK is
   acknowledged, the ranges up to its largest are retired, the largest received number always kept (13.2.4).
 - **Sending.** Each space's sent packets sit in number order in caller storage, which bounds what a connection
-  holds in flight (`can_send`; a full space refuses). Numbers rise and may leave gaps: a sender skips numbers from
+  holds in flight (`can_send`; a full space refuses, and data stops eight entries short so that ACK-only packets and
+  probes can always free the peer's: `can_send_data`). Numbers rise and may leave gaps: a sender skips numbers from
   entropy, and an ACK naming any number it never sent, above the last or in a gap at or above the oldest entry, is
   `AckOfUnsent` (PROTOCOL_VIOLATION, sections 13.1 and 21.4) and changes nothing.
 - **Recovery is RFC 9002 appendix A in code.** RTT samples only when the largest acknowledged is newly acknowledged
@@ -1210,8 +1211,11 @@ them: what differs is negotiation and whether flow control exists.
 - **Channels.** A session presents the surface the channel layer already runs on over a `QuicStreamSet` (QMux's
   precedent, S51 to S54): open, write, peek, consume, reset, stop, datagram, filtered by session with flow control
   layered in, so there is no second channel implementation.
-- **Peers.** `web-transport-quinn` from the crate family already pinned for the legacy spelling; a -17 peer with
-  RESET_STREAM_AT is chosen when that slice's interop starts, with what each is not asked and why, as for quiche.
+- **Peers.** `web-transport-quinn` 0.13.6 for the legacy spelling (`crd-net-webtransport-interop-quinn`; what it is not
+  asked and why: `webtransport_interop.py`). The `webtransport-h3` peer is webtransport-go v0.13.0 (quic-go 0.62, draft
+  -16, with RESET_STREAM_AT and flow control). -16 and -17 differ on the wire only in SETTINGS_WT_ENABLED (0x2c7cf000,
+  0x20b8933b); section 7.1 has an endpoint send one per draft it supports and a server read a client's: Cerid's next
+  slice sends both, and pins Go for that peer.
 
 Evidence (the classifier, 2026-11-09): `test_http3_webtransport.cpp` `[webtransport]` (figure 4 around the reserved points,
 the offer, what each side requires, the wait for a client's SETTINGS, headers split anywhere, reliable and plain resets

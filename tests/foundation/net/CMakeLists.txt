@@ -80,7 +80,7 @@ endif()
 add_subdirectory(fuzz)
 
 # crd-net's end of the QUIC and HTTP/3 interoperability tests, whichever peers this configuration builds.
-if(CRD_BUILD_QUIC_VS_NGTCP2 OR CRD_BUILD_HTTP3_VS_QUICHE)
+if(CRD_BUILD_QUIC_VS_NGTCP2 OR CRD_BUILD_HTTP3_VS_QUICHE OR CRD_BUILD_WEBTRANSPORT_VS_QUINN)
     add_executable(crd-quic-peer interop/cerid_quic_peer.cpp)
     target_link_libraries(crd-quic-peer PRIVATE crd-core crd-containers crd-crypto crd-memory crd-net)
 endif()
@@ -155,6 +155,19 @@ if(CRD_BUILD_HTTP3_VS_QUICHE)
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/http3_interop.py"
                      --cerid "$<TARGET_FILE:crd-quic-peer>" --quiche "${crd-quiche-peer_OUTPUT}")
     set_tests_properties(crd-net-http3-interop-quiche PROPERTIES TIMEOUT 1200 LABELS "net;http3-interop")
+endif()
+
+# The WebTransport interoperability test against web-transport-quinn (CRD_BUILD_WEBTRANSPORT_VS_QUINN):
+# crd-webtransport-quinn-peer is a Cargo package over the crate and rustls, and webtransport_interop.py runs it against
+# crd-quic-peer over the loopback, and crd-quic-peer against itself in both revisions.
+if(CRD_BUILD_WEBTRANSPORT_VS_QUINN)
+    crd_add_cargo_peer(crd-webtransport-quinn-peer "${CMAKE_CURRENT_SOURCE_DIR}/interop/webtransport_peer/Cargo.toml"
+                       webtransport-quinn-peer crd-webtransport-quinn-peer webtransport-vs-quinn)
+    add_dependencies(crd-quic-peer crd-webtransport-quinn-peer)
+    add_test(NAME crd-net-webtransport-interop-quinn
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/webtransport_interop.py"
+                     --cerid "$<TARGET_FILE:crd-quic-peer>" --quinn "${crd-webtransport-quinn-peer_OUTPUT}")
+    set_tests_properties(crd-net-webtransport-interop-quinn PROPERTIES TIMEOUT 1500 LABELS "net;webtransport-interop")
 endif()
 
 # The QMux interoperability test against the `qmux` crate (CRD_BUILD_QMUX_VS_CRATE): crd-qmux-crate-peer is a Cargo

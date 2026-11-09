@@ -1056,7 +1056,7 @@
       "review": "2026-12-15",
       "evidence": [],
       "deprecation": null,
-      "note": "Both :protocol spellings are accepted and the draft revision is negotiated (4.2a). Draft -17 read in full and its contract written (S59, 2026-11-09); it is in WG Last Call. HTTP/3's classification of its streams is in (2026-11-09); sessions and interop are not."
+      "note": "Both :protocol spellings are accepted and the draft revision is negotiated (4.2a). Draft -17 read in full and its contract written (S59, 2026-11-09); it is in WG Last Call. HTTP/3's classification of its streams and the sessions are in (2026-11-09), with interop against web-transport-quinn on the legacy spelling; interop with a webtransport-h3 peer is not."
     },
     {
       "id": "webtransport.h2",

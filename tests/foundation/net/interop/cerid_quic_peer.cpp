@@ -28,6 +28,7 @@
 //   only-version a server runs `version` alone and answers others with Version Negotiation
 //   progress-at  a server prints `progress=1` once it has read this many bytes
 //   http3        HTTP/3 over Http3Connection instead of the echo: http3_exchange.h has its options, ALPN `h3` instead
+//   webtransport WebTransport sessions instead, `legacy` or `h3`: interop_webtransport.hpp has its options
 //
 // The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
 // is the same as ngtcp2_quic_peer.c's without what only OpenSSL reports. The application is `cerid-interop`, a private
@@ -51,6 +52,7 @@
 
 #include "interop_echo.hpp"
 #include "interop_http3.hpp"
+#include "interop_webtransport.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -94,11 +96,43 @@ struct Options : EchoOptions
     bool reject_early = false;
     bool only_version = false;
     http3_options_t http3;
+    WtOptions wt;
 };
 
-// The HTTP/3 application of each connection, in the order they started.
+[[nodiscard]] bool runs_webtransport(const Options& options) noexcept
+{
+    return options.wt.revision != WtRevision::None;
+}
+
+// Whether the application speaks HTTP/3 at all, and so the ALPN and the streams HTTP/3 needs are in order.
+[[nodiscard]] bool runs_http3(const Options& options) noexcept
+{
+    return options.http3.enabled != 0 || runs_webtransport(options);
+}
+
+// The HTTP/3 or WebTransport application of each connection, in the order they started.
 Http3Exchange g_exchanges[kMaxConnections];
+WtExchange g_wt_exchanges[kMaxConnections];
 const Options* g_options = nullptr;
+
+// One turn of WebTransport on a connection.
+void serve_webtransport(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, const EchoTurn& turn) noexcept
+{
+    WtRun run;
+    run.echo = g_options;
+    run.wt = &g_options->wt;
+    run.http3 = &g_options->http3;
+    bool done = false;
+    const u64 error = g_wt_exchanges[peer.index_of(handle)].service(connection, run, turn, done);
+    if (error != 0U)
+    {
+        connection.close(error, {}, turn.now_ns);
+    }
+    else if (done)
+    {
+        connection.close(g_options->code, {}, turn.now_ns);
+    }
+}
 
 // One turn of HTTP/3 on a connection.
 void serve_http3(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, const EchoTurn& turn) noexcept
@@ -135,6 +169,12 @@ void serve(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, u64 no
     turn.early_data = connection.handshake().early_data();
     turn.can_open = turn.established || turn.early_data == TlsEarlyData::Offered;
     turn.now_ns = now_ns;
+    if (runs_webtransport(*g_options))
+    {
+        echo->note_established(turn.established);
+        serve_webtransport(peer, handle, connection, turn);
+        return;
+    }
     if (g_options->http3.enabled != 0)
     {
         echo->note_established(turn.established);
@@ -176,6 +216,10 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
     if (g_options->http3.enabled != 0)
     {
         g_exchanges[peer.index_of(handle)].report();
+    }
+    if (runs_webtransport(*g_options))
+    {
+        g_wt_exchanges[peer.index_of(handle)].report();
     }
     std::printf("version=%u\nclose=%s\nclose_code=%llu\n", connection.version() == QuicVersion::V2 ? 2U : 1U,
                 close_kind(info),
@@ -240,18 +284,19 @@ QuicStreamLimits stream_limits(const Options& options)
     limits.stream_window = kReceiveBytes;
     limits.connection_window = kConnectionWindow;
     limits.connection_max_window = kConnectionMaxWindow;
-    if (options.http3.enabled != 0)
+    if (runs_http3(options))
     {
-        limits.peer_uni = kHttp3UniStreams;
-        limits.local_uni = kHttp3UniStreams;
+        limits.peer_uni = kHttp3UniStreams + static_cast<u32>(options.uni);
+        limits.local_uni = kHttp3UniStreams + static_cast<u32>(options.uni);
     }
+    limits.reset_stream_at = runs_webtransport(options);
     return limits;
 }
 
 QuicDatagramLimits datagram_limits(const Options& options)
 {
     QuicDatagramLimits limits;
-    if (options.datagrams != 0U)
+    if (options.datagrams != 0U || runs_webtransport(options))
     {
         limits.max_frame_bytes = static_cast<u32>(options.datagram_limit);
         limits.receive_bytes = kDatagramRingBytes;
@@ -433,7 +478,7 @@ int usage()
                "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] "
                "[--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] "
                "[--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] "
-               "[--progress-at N] [--http3 1 ...]\n",
+               "[--progress-at N] [--http3 1 ...] [--webtransport legacy|h3 ...]\n",
                stderr);
     return 2;
 }
@@ -448,7 +493,8 @@ int main(int argc, char** argv)
     {
         const char* const name = argv[at];
         const char* const value = argv[at + 1];
-        if (parse_echo_option(name, value, options, required) || http3_parse_option(&options.http3, name, value) != 0)
+        if (parse_echo_option(name, value, options, required) || http3_parse_option(&options.http3, name, value) != 0 ||
+            wt_parse_option(options.wt, name, value))
         {
             continue;
         }
@@ -486,7 +532,7 @@ int main(int argc, char** argv)
     {
         return usage();
     }
-    options.timed_service = options.http3.enabled != 0;
+    options.timed_service = runs_http3(options);
     g_options = &options;
 
     SigningKey key;
@@ -505,8 +551,8 @@ int main(int argc, char** argv)
     tls.groups = ConstSpan<AlgorithmId>(groups, 1U);
     tls.aeads = ConstSpan<AlgorithmId>(aeads, 1U);
     tls.server_name = kServerName;
-    tls.application_protocols = options.http3.enabled != 0 ? ConstSpan<StringView>(kHttp3Protocols)
-                                                            : ConstSpan<StringView>(kProtocols);
+    tls.application_protocols =
+        runs_http3(options) ? ConstSpan<StringView>(kHttp3Protocols) : ConstSpan<StringView>(kProtocols);
     if (options.client)
     {
         tls.signatures = kSignatures;

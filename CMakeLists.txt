@@ -154,6 +154,11 @@ option(CRD_BUILD_QMUX_VS_CRATE "Build the QMux interoperability test against the
 # compiles BoringSSL with CMake and runs bindgen over libclang. Linux only, never in a shipped build; the
 # crd-net-http3-interop-quiche CTest, locally and on the complete-tier linux-gcc-public-checks.
 option(CRD_BUILD_HTTP3_VS_QUICHE "Build the HTTP/3 interoperability test against quiche (Linux, pinned Rust)" OFF)
+# WebTransport against web-transport-quinn (4.2a): crd-webtransport-quinn-peer, a Rust program whose crates the committed
+# Cargo.lock pins (cmake/pins.json tools/web-transport-quinn-crates), built with the pinned Rust (CRD_CARGO). Linux only,
+# never in a shipped build; the crd-net-webtransport-interop-quinn CTest, locally and on the complete-tier
+# linux-gcc-public-checks.
+option(CRD_BUILD_WEBTRANSPORT_VS_QUINN "Build the WebTransport interoperability test against Quinn (Linux, pinned Rust)" OFF)
 # The same test against OpenMLS (NET.2, decision M4): crd-openmls-peer, a Rust program over OpenMLS whose crates the
 # committed tests/foundation/crypto/interop/openmls_peer/Cargo.lock pins (cmake/pins.json tools/openmls-crates), built
 # by `cargo build --locked` with the pinned Rust toolchain (tools/rust-linux-x64: scripts/install-rust.py, which prints
@@ -1525,6 +1530,13 @@ if(CRD_BUILD_HTTP3_VS_QUICHE)
                             "crypto module")
     endif()
     crd_require_cargo(http3-vs-quiche)
+endif()
+if(CRD_BUILD_WEBTRANSPORT_VS_QUINN)
+    if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+        message(FATAL_ERROR "[webtransport-vs-quinn] the WebTransport interoperability test needs Linux, CRD_BUILD_TESTS "
+                            "and the crypto module")
+    endif()
+    crd_require_cargo(webtransport-vs-quinn)
 endif()
 if(CRD_BUILD_MLS_VS_OPENMLS)
     if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)

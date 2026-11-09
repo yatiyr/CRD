@@ -314,7 +314,7 @@
         },
         {
             "name": "linux-gcc-public-checks",
-            "displayName": "Linux GCC Debug + public header checks, the package consumer test, the TLS, QUIC, QPACK, QMux, MLS and Secret Service interop tests, the crypto board smoke test, the protocol model, the ISA-L erasure oracle",
+            "displayName": "Linux GCC Debug + public header checks, the package consumer test, the TLS, QUIC, QPACK, QMux, WebTransport, MLS and Secret Service interop tests, the crypto board smoke test, the protocol model, the ISA-L erasure oracle",
             "inherits": "linux-gcc-debug",
             "cacheVariables": {
                 "CRD_PUBLIC_CHECKS": "ON",
@@ -323,6 +323,7 @@
                 "CRD_BUILD_QPACK_VS_QIFS": "ON",
                 "CRD_BUILD_QMUX_VS_CRATE": "ON",
                 "CRD_BUILD_HTTP3_VS_QUICHE": "ON",
+                "CRD_BUILD_WEBTRANSPORT_VS_QUINN": "ON",
                 "CRD_BUILD_CRYPTO_VS_PEERS": "ON",
                 "CRD_BUILD_MLS_VS_MLSPP": "ON",
                 "CRD_BUILD_MLS_VS_OPENMLS": "ON",

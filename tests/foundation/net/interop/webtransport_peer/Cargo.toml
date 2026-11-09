@@ -1,0 +1,29 @@
+# crd-webtransport-quinn-peer: a WebTransport endpoint over web-transport-quinn and rustls, the peer of crd-quic-peer in
+# webtransport_interop.py (4.2a; docs/design/network-foundation.md#webtransport). Built by
+# tests/foundation/net/CMakeLists.txt (CRD_BUILD_WEBTRANSPORT_VS_QUINN) with the pinned Rust toolchain (cmake/pins.json
+# tools/rust-linux-x64) and `cargo build --locked`: every crate comes from crates.io at the version and SHA-256 the
+# committed Cargo.lock names (tools/web-transport-quinn-crates).
+[package]
+name = "crd-webtransport-quinn-peer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "crd-webtransport-quinn-peer"
+path = "src/main.rs"
+
+[dependencies]
+bytes = "=1.11.1"
+rcgen = { version = "=0.14.10", default-features = false, features = ["aws_lc_rs"] }
+rustls = "=0.23.46"
+tokio = { version = "=1.54.1", features = ["macros", "net", "rt", "sync", "time"] }
+url = "=2.5.8"
+web-transport-quinn = "=0.13.6"
+
+[profile.release]
+debug = 1
+overflow-checks = true
+panic = "abort"

@@ -1120,6 +1120,17 @@
       "license": "BSD-2-Clause",
       "note": "quiche 0.30.0 (2026-09-17) with BoringSSL through the boring 5.4.0 crates, and rcgen over ring for the peer's self-signed certificate: the crate set of crd-quiche-peer, the second HTTP/3 implementation of http3_interop.py (CRD_BUILD_HTTP3_VS_QUICHE, 4.2a). The committed Cargo.lock is the pin: every crate from crates.io at the version and SHA-256 it names, which `cargo build --locked` verifies on download. Test-only, in no shipped build."
     },
+    "web-transport-quinn-crates": {
+      "version": "0.13.6",
+      "crate": "web-transport-quinn",
+      "lockfile": "tests/foundation/net/interop/webtransport_peer/Cargo.lock",
+      "manifest": "tests/foundation/net/interop/webtransport_peer/Cargo.toml",
+      "repository": "moq-dev/web-transport",
+      "ref": "web-transport-quinn-v0.13.6",
+      "commit": "c878557faabdc1faf2052959c30949ff1c90f182",
+      "license": "MIT OR Apache-2.0",
+      "note": "web-transport-quinn 0.13.6 (2026-11-03) over Quinn 0.11.12, with rustls 0.23.46 and aws-lc-rs, and rcgen for the peer's self-signed certificate: the crate set of crd-webtransport-quinn-peer, the legacy-spelling peer of the WebTransport interoperability test (CRD_BUILD_WEBTRANSPORT_VS_QUINN, 4.2a). The committed Cargo.lock is the pin: every crate from crates.io at the version and SHA-256 it names, which `cargo build --locked` verifies on download. Test-only, in no shipped build."
+    },
     "qmux-crates": {
       "version": "0.6.6",
       "crate": "qmux",
