@@ -67,6 +67,8 @@ TARGETS = {
                          'executable': 'tests/net/fuzz/crd-fuzz-net-delta-stream'},
     'net-endpoint': {'corpus': 'tests/foundation/net/fuzz/corpus-endpoint',
                      'executable': 'tests/net/fuzz/crd-fuzz-net-endpoint'},
+    'net-http3': {'corpus': 'tests/foundation/net/fuzz/corpus-http3',
+                  'executable': 'tests/net/fuzz/crd-fuzz-net-http3'},
     'net-ingress': {'corpus': 'tests/foundation/net/fuzz/corpus-ingress',
                     'executable': 'tests/net/fuzz/crd-fuzz-net-ingress'},
     'net-qpack': {'corpus': 'tests/foundation/net/fuzz/corpus-qpack',
