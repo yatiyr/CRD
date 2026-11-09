@@ -1002,6 +1002,61 @@
       "deprecation": null
     },
     {
+      "id": "http.h2",
+      "title": "HTTP/2",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9113",
+        "status": "current",
+        "added": "2026-11-09"
+      },
+      "cryptography": [],
+      "source": {
+        "ref": "docs/design/network-foundation.md#hpack",
+        "read": "2026-11-09",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "http.hpack",
+      "title": "HPACK: field compression for HTTP/2",
+      "kind": "protocol",
+      "state": "implemented",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 7541",
+        "status": "current",
+        "added": "2026-11-09"
+      },
+      "cryptography": [],
+      "source": {
+        "ref": "docs/design/network-foundation.md#hpack",
+        "read": "2026-11-09",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [
+        "tests/foundation/net/test_hpack.cpp",
+        "tests/foundation/net/test_http_fields.cpp",
+        "tests/foundation/net/fuzz/fuzz_hpack.cpp",
+        "tests/foundation/net/interop/hpack_interop.py"
+      ],
+      "deprecation": null
+    },
+    {
       "id": "http.datagrams",
       "title": "HTTP datagrams and the capsule protocol",
       "kind": "extension",
