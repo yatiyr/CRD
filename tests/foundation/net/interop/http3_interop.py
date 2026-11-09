@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""HTTP/3 interoperability of crd-net with the pinned nghttp3 over ngtcp2 (4.2a).
+"""HTTP/3 interoperability of crd-net with two other implementations (4.2a).
 
 Runs crd-quic-peer with --http3 1 (Http3Connection over crd-net's QUIC) against crd-ngtcp2-quic-peer with --http3 1
-(nghttp3 over ngtcp2), each in its own process over real UDP sockets on the loopback, both ways round. The exchange is
-http3_exchange.h's: every field and every body byte is checked by both ends, and each case holds the two ends' reports to
-each other.
+(nghttp3 over ngtcp2) or crd-quiche-peer (Cloudflare's quiche over BoringSSL), each in its own process over real UDP
+sockets on the loopback, both ways round. The exchange is http3_exchange.h's: every field and every body byte is checked
+by both ends, and each case holds the two ends' reports to each other.
 
 Cases: requests with no body, a small body, bodies far over the stream and connection windows, more requests than the
 stream limit lets open at once; QUIC versions 1 and 2; QPACK's dynamic table on, off, small enough to evict, with blocked
@@ -12,6 +12,9 @@ streams allowed and not, counted off Cerid's table (what nghttp3 inserted, what 
 large field sections and one over the peer's limit; trailers; 103 before the responses; Extended CONNECT tunnels with and
 without HTTP datagrams; GOAWAY from a server in two steps and rejecting requests, and from a client; each end cancelling
 a request; 0-RTT resumption accepted and refused; and a lossy, reordering, duplicating path.
+
+quiche speaks QUIC version 1 only and its QPACK has no dynamic table (it advertises none and Cerid must never insert), so
+those cases are not asked of it.
 """
 import argparse
 import subprocess
@@ -36,12 +39,13 @@ def brief(reports):
 
 
 class Case:
-    def __init__(self, cerid, nghttp3, cerid_is_client, version=1, requests=1, request_bytes=0, response_bytes=4096,
+    def __init__(self, cerid, peer, peer_name, cerid_is_client, version=1, requests=1, request_bytes=0, response_bytes=4096,
                  tunnels=0, table=4096, blocked=16, field_bytes=0, field_limit=16384, trailers=False, interim=False,
                  goaway=None, cancel=None, over_limit=False, datagrams=0, datagram_bytes=900, resume=None, path=None,
                  max_streams=64):
         self.cerid = cerid
-        self.nghttp3 = nghttp3
+        self.peer = peer
+        self.peer_name = peer_name
         self.cerid_is_client = cerid_is_client
         self.version = version
         self.requests = requests
@@ -91,7 +95,7 @@ class Case:
         return 'aes128' if program == self.cerid else 'TLS_AES_128_GCM_SHA256'
 
     def describe(self):
-        words = ['cerid client' if self.cerid_is_client else 'nghttp3 client', f'v{self.version}',
+        words = ['cerid client' if self.cerid_is_client else f'{self.peer_name} client', f'v{self.version}',
                  f'{self.requests}x{self.request_bytes}/{self.response_bytes}', f'table {self.table}/{self.blocked}']
         for name, value in (('tunnels', self.tunnels), ('fields', self.field_bytes), ('trailers', self.trailers),
                             ('interim', self.interim), ('goaway', self.goaway), ('cancel', self.cancel),
@@ -102,7 +106,7 @@ class Case:
         return ' '.join(words)
 
     def run(self):
-        server_program, client_program = self.nghttp3, self.cerid
+        server_program, client_program = self.peer, self.cerid
         if not self.cerid_is_client:
             server_program, client_program = client_program, server_program
         pipes = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -145,25 +149,28 @@ class Case:
             self.check_connection(number, clients[number], servers[number], detail)
 
     def check_connection(self, number, client, server, detail):
+        cerid_report, peer_report = (client, server) if self.cerid_is_client else (server, client)
         for name, report in (('client', client), ('server', server)):
+            table, blocked = self.table, self.blocked
+            if self.peer_name == 'quiche' and report is cerid_report:
+                table, blocked = 0, 0
             expect(report.get('established') == '1', f'{name} never established: {detail}')
             expect(report.get('version') == str(self.version), f'{name} ran another version: {detail}')
             expect(report.get('h3_verified') == '1', f'{name} read a wrong field or byte: {detail}')
             expect(report.get('h3_peer_known') == '1', f'{name} never read SETTINGS: {detail}')
-            expect(report.get('h3_peer_table') == str(self.table), f'{name} read another table: {detail}')
-            expect(report.get('h3_peer_blocked') == str(self.blocked), f'{name} read another blocked limit: {detail}')
+            expect(report.get('h3_peer_table') == str(table), f'{name} read another table: {detail}')
+            expect(report.get('h3_peer_blocked') == str(blocked), f'{name} read another blocked limit: {detail}')
             expect(report.get('h3_peer_field_limit') == str(self.field_limit), f'{name} read another limit: {detail}')
             expect(report.get('h3_peer_datagram') == str(int(self.datagrams != 0)), f'{name} read otherwise: {detail}')
         expect(client.get('h3_peer_connect') == '1', f'the client read no Extended CONNECT: {detail}')
-        nghttp3 = server if self.cerid_is_client else client
-        expect(nghttp3.get('alpn') == 'h3', f'OpenSSL negotiated another protocol: {detail}')
+        expect(peer_report.get('alpn') == 'h3', f'the peer negotiated another protocol: {detail}')
         expect(client.get('close') == 'local' and client.get('close_code') == str(CLOSE_CODE),
                f'the client closed otherwise: {detail}')
         if self.path is None or server.get('close') != 'idle':
             expect(server.get('close') == 'application' and server.get('close_code') == str(CLOSE_CODE),
                    f'the server read another close: {detail}')
         self.check_requests(client, server, detail)
-        self.check_tables(server if not self.cerid_is_client else client, detail)
+        self.check_tables(cerid_report, detail)
         self.check_datagrams(client, server, detail)
         self.check_early(number, client, server, detail)
 
@@ -221,8 +228,8 @@ class Case:
 
     def check_tables(self, cerid, detail):
         """nghttp3 and Cerid each insert a field they have seen, and Cerid's first use asks a second sight."""
-        if self.table == 0:
-            expect(self.number(cerid, 'h3_qpack_inserts_received') == 0, f'nghttp3 inserted into nothing: {detail}')
+        if self.table == 0 or self.peer_name == 'quiche':
+            expect(self.number(cerid, 'h3_qpack_inserts_received') == 0, f'the peer inserted into nothing: {detail}')
             expect(self.number(cerid, 'h3_qpack_inserts_sent') == 0, f'Cerid inserted into nothing: {detail}')
         elif self.requests >= 4 and self.goaway != 'reject':
             expect(self.number(cerid, 'h3_qpack_inserts_received') > 0, f'nghttp3 inserted nothing: {detail}')
@@ -253,20 +260,22 @@ class Case:
         expect(early == self.requests if accepted else early == 0, f'other requests in 0-RTT: {detail}')
 
 
-def cases(cerid, nghttp3):
+def cases(cerid, peer, peer_name):
+    quiche = peer_name == 'quiche'
     for cerid_is_client in (True, False):
         def case(**settings):
-            return Case(cerid, nghttp3, cerid_is_client, **settings)
+            return Case(cerid, peer, peer_name, cerid_is_client, **settings)
 
-        for version in (1, 2):
+        for version in (1,) if quiche else (1, 2):
             yield case(version=version)
             yield case(version=version, requests=8, request_bytes=4096, response_bytes=8192)
             yield case(version=version, requests=2, request_bytes=4 << 20, response_bytes=8 << 20)
             yield case(version=version, requests=256, request_bytes=512, response_bytes=2048, max_streams=8)
         yield case(requests=32, response_bytes=256, table=0, blocked=0)
         yield case(requests=32, response_bytes=256, table=4096, blocked=0)
-        yield case(requests=32, response_bytes=256, table=256, blocked=8)
-        yield case(requests=64, response_bytes=256, table=65536, blocked=64)
+        if not quiche:
+            yield case(requests=32, response_bytes=256, table=256, blocked=8)
+            yield case(requests=64, response_bytes=256, table=65536, blocked=64)
         yield case(requests=8, field_bytes=12000)
         yield case(requests=4, over_limit=True, field_limit=8192)
         yield case(requests=8, request_bytes=2048, trailers=True)
@@ -294,10 +303,14 @@ def cases(cerid, nghttp3):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cerid', required=True)
-    parser.add_argument('--nghttp3', required=True)
+    peer = parser.add_mutually_exclusive_group(required=True)
+    peer.add_argument('--nghttp3')
+    peer.add_argument('--quiche')
     parser.add_argument('--only', default='', help='run only the cases whose description contains this text')
     arguments = parser.parse_args()
-    all_cases = [case for case in cases(arguments.cerid, arguments.nghttp3) if arguments.only in case.describe()]
+    peer_name = 'quiche' if arguments.quiche else 'nghttp3'
+    all_cases = [case for case in cases(arguments.cerid, arguments.quiche or arguments.nghttp3, peer_name)
+                 if arguments.only in case.describe()]
     failures = 0
     for index, case in enumerate(all_cases):
         try:

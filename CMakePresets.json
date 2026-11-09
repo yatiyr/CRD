@@ -322,6 +322,7 @@
                 "CRD_BUILD_QUIC_VS_NGTCP2": "ON",
                 "CRD_BUILD_QPACK_VS_QIFS": "ON",
                 "CRD_BUILD_QMUX_VS_CRATE": "ON",
+                "CRD_BUILD_HTTP3_VS_QUICHE": "ON",
                 "CRD_BUILD_CRYPTO_VS_PEERS": "ON",
                 "CRD_BUILD_MLS_VS_MLSPP": "ON",
                 "CRD_BUILD_MLS_VS_OPENMLS": "ON",

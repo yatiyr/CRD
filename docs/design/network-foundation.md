@@ -1135,7 +1135,7 @@ Evidence: `test_http_fields.cpp` and `test_qpack.cpp` `[qpack]` (RFC 7541's inte
 - **0-RTT.** A client resuming passes the settings it stored and uses them until the server's arrive, whose values may only be equal or better (section 7.2.4.2); after a rejection the owner builds a new connection. A server binds its settings into its tickets (`early_context`), so a changed server does not take 0-RTT from an old one. A section or datagram from 0-RTT is marked replayable.
 - **Grease.** Every SETTINGS has a reserved identifier, the control stream a reserved frame, and a reserved stream type goes once when the peer's limit leaves room.
 - **Capsules.** [http_capsule.hpp](../../engine/foundation/net/include/crd/net/http_capsule.hpp) reads RFC 9297 section 3's capsules from any data stream split anywhere, handing each value on as it arrives and never gathering it (section 3.2: that can deadlock on flow control). A stream may end only between capsules; a Capsule-Protocol field counts only as one Boolean true.
-- **Not here yet.** The WebTransport session and its mapping onto channels, and interop with a second implementation beyond [S58](#http3-interop); [4.2a](../ROADMAP.md#slice-4.2a) names what remains. Only `:protocol` matters to this layer, so WebTransport's two spellings are its own concern.
+- **Not here yet.** The WebTransport session and its mapping onto channels; [4.2a](../ROADMAP.md#slice-4.2a) names what remains. Only `:protocol` matters to this layer, so WebTransport's two spellings are its own concern.
 
 Evidence: `test_http3.cpp` and `test_http_message.cpp` `[http3]` (84 cases: every frame on every stream with the error RFC 9114 names, each SETTINGS refusal, the critical streams, messages, tunnels, datagrams, GOAWAY both ways, QPACK blocking and cancelling, 431, 0-RTT's rules), `crd-fuzz-net-http3` (a hostile peer at a server and at a client, and both sides honest over any frame size with a held encoder stream).
 
@@ -1147,6 +1147,12 @@ run one exchange, defined once in [http3_exchange.h](../../tests/foundation/net/
 body byte is checked by both ends. nghttp3 was not usable as it stands in one respect: it deletes a closed stream with
 whatever a QPACK-blocked section still holds, and ngtcp2 closes a stream once it has delivered the last byte, so a
 response arriving ahead of its table insert vanished; the C peer holds the close until the message ends.
+
+The second implementation is `crd-quiche-peer` (quiche 0.30.0 over BoringSSL, a sans-I/O Rust program running the same
+exchange), both ways round. quiche speaks QUIC version 1 alone and its QPACK has no dynamic table, so what it is not asked
+is exactly that: Cerid advertises a table and quiche's zero holds it to inserting nothing. It sends GREASE frames and
+settings and writes a server's GOAWAY and refusals through the application's own calls, so those paths meet a different
+reading of RFC 9114 than nghttp3's.
 
 <a id="browsers"></a>
 ## Browser constraints

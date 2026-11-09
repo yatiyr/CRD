@@ -1,0 +1,27 @@
+# crd-quiche-peer: the HTTP/3 exchange over Cloudflare's quiche and BoringSSL, the peer of crd-quic-peer in
+# http3_interop.py (4.2a; docs/design/network-foundation.md#http3-interop). Built by tests/foundation/net/CMakeLists.txt
+# (CRD_BUILD_HTTP3_VS_QUICHE) with the pinned Rust toolchain (cmake/pins.json tools/rust-linux-x64) and `cargo build
+# --locked`: every crate comes from crates.io at the version and SHA-256 the committed Cargo.lock names
+# (tools/quiche-crates).
+[package]
+name = "crd-quiche-peer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "crd-quiche-peer"
+path = "src/main.rs"
+
+[dependencies]
+boring = "=5.4.0"
+quiche = "=0.30.0"
+rcgen = { version = "=0.14.10", default-features = false, features = ["pem", "ring"] }
+rustls-pki-types = "=1.15.1"
+
+[profile.release]
+debug = 1
+overflow-checks = true
+panic = "abort"

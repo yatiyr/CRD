@@ -77,6 +77,12 @@ endif()
 # The negotiation decoder and handshake under the bounded fuzz harness, with its committed corpus.
 add_subdirectory(fuzz)
 
+# crd-net's end of the QUIC and HTTP/3 interoperability tests, whichever peers this configuration builds.
+if(CRD_BUILD_QUIC_VS_NGTCP2 OR CRD_BUILD_HTTP3_VS_QUICHE)
+    add_executable(crd-quic-peer interop/cerid_quic_peer.cpp)
+    target_link_libraries(crd-quic-peer PRIVATE crd-core crd-containers crd-crypto crd-memory crd-net)
+endif()
+
 # The QUIC and HTTP/3 interoperability tests against ngtcp2 and nghttp3 (CRD_BUILD_QUIC_VS_NGTCP2): crd-ngtcp2-quic-peer
 # links ngtcp2, nghttp3 and the peers' OpenSSL alone, and quic_interop.py and http3_interop.py run it against
 # crd-quic-peer over the loopback.
@@ -126,9 +132,6 @@ if(CRD_BUILD_QUIC_VS_NGTCP2)
     target_link_libraries(crd-ngtcp2-quic-peer PRIVATE ${ngtcp2_libraries} "${nghttp3_library}" ${CRD_OPENSSL_PEER_LINK})
     set_target_properties(crd-ngtcp2-quic-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
-    add_executable(crd-quic-peer interop/cerid_quic_peer.cpp)
-    target_link_libraries(crd-quic-peer PRIVATE crd-core crd-containers crd-crypto crd-memory crd-net)
-
     add_test(NAME crd-net-quic-interop-ngtcp2
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/quic_interop.py"
                      --cerid "$<TARGET_FILE:crd-quic-peer>" --ngtcp2 "$<TARGET_FILE:crd-ngtcp2-quic-peer>")
@@ -138,6 +141,18 @@ if(CRD_BUILD_QUIC_VS_NGTCP2)
                      --cerid "$<TARGET_FILE:crd-quic-peer>" --nghttp3 "$<TARGET_FILE:crd-ngtcp2-quic-peer>")
     set_tests_properties(crd-net-http3-interop-nghttp3 PROPERTIES TIMEOUT 1500 LABELS "net;http3-interop")
     message(STATUS "[quic-vs-ngtcp2] QUIC and HTTP/3 interoperability against ngtcp2 ${ngtcp2_version} and nghttp3 ${nghttp3_version}")
+endif()
+
+# The HTTP/3 interoperability test against quiche (CRD_BUILD_HTTP3_VS_QUICHE): crd-quiche-peer is a Cargo package over
+# the crate and BoringSSL, and http3_interop.py runs it against crd-quic-peer over the loopback.
+if(CRD_BUILD_HTTP3_VS_QUICHE)
+    crd_add_cargo_peer(crd-quiche-peer "${CMAKE_CURRENT_SOURCE_DIR}/interop/quiche_peer/Cargo.toml"
+                       quiche-peer crd-quiche-peer http3-vs-quiche)
+    add_dependencies(crd-quic-peer crd-quiche-peer)
+    add_test(NAME crd-net-http3-interop-quiche
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/http3_interop.py"
+                     --cerid "$<TARGET_FILE:crd-quic-peer>" --quiche "${crd-quiche-peer_OUTPUT}")
+    set_tests_properties(crd-net-http3-interop-quiche PROPERTIES TIMEOUT 1200 LABELS "net;http3-interop")
 endif()
 
 # The QMux interoperability test against the `qmux` crate (CRD_BUILD_QMUX_VS_CRATE): crd-qmux-crate-peer is a Cargo

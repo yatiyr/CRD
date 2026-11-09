@@ -149,6 +149,11 @@ option(CRD_BUILD_QPACK_VS_QIFS "Build the QPACK interoperability test against th
 # Cargo.lock pins (cmake/pins.json tools/qmux-crates), built with the pinned Rust (CRD_CARGO). Linux only, never in a
 # shipped build; the crd-net-qmux-interop-crate CTest, locally and on the complete-tier linux-gcc-public-checks.
 option(CRD_BUILD_QMUX_VS_CRATE "Build the QMux interoperability test against the qmux crate (Linux, pinned Rust)" OFF)
+# HTTP/3 against Cloudflare's quiche over BoringSSL (4.2a): crd-quiche-peer, a Rust program whose crates the committed
+# Cargo.lock pins (cmake/pins.json tools/quiche-crates), built with the pinned Rust (CRD_CARGO); the boring-sys crate
+# compiles BoringSSL with CMake and runs bindgen over libclang. Linux only, never in a shipped build; the
+# crd-net-http3-interop-quiche CTest, locally and on the complete-tier linux-gcc-public-checks.
+option(CRD_BUILD_HTTP3_VS_QUICHE "Build the HTTP/3 interoperability test against quiche (Linux, pinned Rust)" OFF)
 # The same test against OpenMLS (NET.2, decision M4): crd-openmls-peer, a Rust program over OpenMLS whose crates the
 # committed tests/foundation/crypto/interop/openmls_peer/Cargo.lock pins (cmake/pins.json tools/openmls-crates), built
 # by `cargo build --locked` with the pinned Rust toolchain (tools/rust-linux-x64: scripts/install-rust.py, which prints
@@ -1513,6 +1518,13 @@ if(CRD_BUILD_QMUX_VS_CRATE)
                             "crypto module")
     endif()
     crd_require_cargo(qmux-vs-crate)
+endif()
+if(CRD_BUILD_HTTP3_VS_QUICHE)
+    if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+        message(FATAL_ERROR "[http3-vs-quiche] the HTTP/3 interoperability test needs Linux, CRD_BUILD_TESTS and the "
+                            "crypto module")
+    endif()
+    crd_require_cargo(http3-vs-quiche)
 endif()
 if(CRD_BUILD_MLS_VS_OPENMLS)
     if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)

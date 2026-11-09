@@ -970,7 +970,7 @@
         "tests/foundation/net/interop/http3_interop.py"
       ],
       "deprecation": null,
-      "note": "Implemented by 4.2a (design S57): against nghttp3 1.19.0 over ngtcp2 1.26.0 both ways round, requests with and without bodies, trailers, interim responses, large sections, QPACK dynamic tables, Extended CONNECT, GOAWAY from either end, cancels from either end, 0-RTT accepted and refused, and an impaired path."
+      "note": "Implemented by 4.2a (design S57): against nghttp3 1.19.0 over ngtcp2 1.26.0 both ways round, requests with and without bodies, trailers, interim responses, large sections, QPACK dynamic tables, Extended CONNECT, GOAWAY from either end, cancels from either end, 0-RTT accepted and refused, and an impaired path; and against quiche 0.30.0 over BoringSSL both ways round in the same exchange, QUIC v1 with no QPACK dynamic table."
     },
     {
       "id": "http.qpack",
