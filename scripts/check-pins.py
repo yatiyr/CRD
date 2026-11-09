@@ -113,7 +113,10 @@ def validate_registry(pins, root=ROOT):
                 problems.append('package %s lacks %s' % (name, field))
         if entry.get('url', '').startswith('https://github.com/') and not entry.get('commit'):
             problems.append('package %s from GitHub must name its commit' % name)
-        if entry.get('commit') and (not HEX40.match(entry['commit']) or entry['commit'] not in entry.get('url', '')):
+        # A commit addresses a source archive; a project's own release asset is addressed by the tag naming that commit.
+        release_asset = '/releases/download/%s/' % entry['ref'] if entry.get('ref') else None
+        addressed = entry.get('commit', '') in entry.get('url', '') or (release_asset and release_asset in entry.get('url', ''))
+        if entry.get('commit') and (not HEX40.match(entry['commit']) or not addressed):
             problems.append('package %s: url must be addressed by its commit' % name)
         if entry.get('sha256') and not HEX64.match(entry['sha256']):
             problems.append('package %s: sha256 must be 64 hex digits' % name)

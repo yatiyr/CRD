@@ -95,6 +95,17 @@ crd_fuzz_target(crd-fuzz-net-qmux-host
 crd_fuzz_target(crd-fuzz-net-ticket-cache
     SOURCES fuzz_ticket_cache.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-ticket-cache")
 
+# QPACK (4.2a).
+#   crd-fuzz-net-qpack          any bytes on both of its streams and as sections, a table written apart that predicts
+#                               every instruction, field and blocked stream, encoder and decoder over a delayed stream,
+#                               and Huffman round trips.
+crd_fuzz_target(crd-fuzz-net-qpack
+    SOURCES fuzz_qpack.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-qpack")
+target_include_directories(crd-fuzz-net-qpack PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(TARGET crd-fuzz-net-qpack-libfuzzer)
+    target_include_directories(crd-fuzz-net-qpack-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+endif()
+
 # A QUIC connection (4.2a).
 #   crd-fuzz-net-quic-connection   a network script between a client and a server (deliveries, losses, duplicates,
 #                                  reorders, corrupted bytes, time, a Retry), then a clean path: the handshake confirms

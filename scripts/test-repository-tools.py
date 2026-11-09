@@ -1491,6 +1491,18 @@ class PinnedInputs(unittest.TestCase):
         self.assertIn('GPL-family licences only', problems(license='MIT', license_taken='MIT')[0])
         self.assertIn('GPL-family licences only', problems(license='MIT', copyleft='test-comparison')[0])
 
+    def test_a_package_url_names_its_commit_or_its_release_tag(self):
+        pins = json.loads(json.dumps(pins_registry.load()))
+        entry = pins['packages']['openssl']
+        self.assertIn('/releases/download/openssl-4.0.3/', entry['url'])
+        self.assertFalse([p for p in check_pins.validate_registry(pins) if 'package openssl' in p])
+        entry['url'] = 'https://github.com/openssl/openssl/releases/download/other/openssl-4.0.3.tar.gz'
+        problems = check_pins.validate_registry(pins)
+        self.assertTrue(any('package openssl: url must be addressed by its commit' in p for p in problems), problems)
+        del entry['commit']
+        problems = check_pins.validate_registry(pins)
+        self.assertTrue(any('package openssl from GitHub must name its commit' in p for p in problems), problems)
+
     def test_registry_workflow_build_and_helpers_agree(self):
         self.assertEqual(check_pins.validate(self.pins, self.workflow, self.cmake, self.tiers), [])
         self.assertEqual(re.findall(r'uses:\s*\S+@v\d', self.workflow), [])
@@ -5279,7 +5291,7 @@ class TestInstruments(unittest.TestCase):
                                                        'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
                                                        'hesap-clock', 'hesap-erasure', 'hesap-estimators', 'hesap-flexfec', 'hesap-link', 'hesap-motion', 'hesap-quantize', 'hesap-raptorq', 'hesap-red',
                                                        'memory-allocators', 'net-admission', 'net-coded-frames', 'net-delta-stream', 'net-endpoint', 'net-ingress', 'net-negotiation',
-                                                       'net-qmux', 'net-qmux-early', 'net-qmux-host',
+                                                       'net-qmux', 'net-qmux-early', 'net-qmux-host', 'net-qpack',
                                                        'net-quic-codec', 'net-quic-connection', 'net-quic-datagram', 'net-quic-packet',
                                                        'net-quic-recovery',
                                                        'net-quic-stream', 'net-quic-stream-set', 'net-state-hash', 'net-ticket-cache',

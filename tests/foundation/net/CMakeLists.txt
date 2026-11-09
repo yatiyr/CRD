@@ -11,11 +11,13 @@ add_executable(crd-net-tests
     test_delta.cpp
     test_endpoint.cpp
     test_frame_integrity.cpp
+    test_http_fields.cpp
     test_ingress.cpp
     test_io_loop.cpp
     test_negotiation.cpp
     test_qmux.cpp
     test_qmux_host.cpp
+    test_qpack.cpp
     test_quic_client.cpp
     test_quic_connection.cpp
     test_quic_datagram.cpp
@@ -129,6 +131,18 @@ if(CRD_BUILD_QMUX_VS_CRATE)
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/qmux_interop.py"
                      --cerid "$<TARGET_FILE:crd-qmux-peer>" --crate "${crd-qmux-crate-peer_OUTPUT}")
     set_tests_properties(crd-net-qmux-interop-crate PROPERTIES TIMEOUT 1200 LABELS "net;qmux-interop")
+endif()
+
+# QPACK against the offline interop corpus (CRD_BUILD_QPACK_VS_QIFS): crd-qpack-replay decodes what other encoders wrote
+# and qpack_interop.py compares it with the QIF text and sets crd-net's encoder beside them.
+if(CRD_BUILD_QPACK_VS_QIFS)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_executable(crd-qpack-replay interop/cerid_qpack_replay.cpp)
+    target_link_libraries(crd-qpack-replay PRIVATE crd-memory crd-net)
+    add_test(NAME crd-net-qpack-interop-qifs
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/qpack_interop.py"
+                     --replay "$<TARGET_FILE:crd-qpack-replay>" --corpus "${qifs_SOURCE_DIR}")
+    set_tests_properties(crd-net-qpack-interop-qifs PROPERTIES TIMEOUT 900 LABELS "net;qpack-interop")
 endif()
 
 # NET.3's serializer budget board against its pinned peers (CRD_BUILD_SERIALIZE_VS_PEERS, the root CMakeLists).
