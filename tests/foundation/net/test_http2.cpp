@@ -251,6 +251,22 @@ struct Endpoint
         return found;
     }
 
+    // The same, required to exist: a reference, so no caller dereferences a pointer GCC's link-time analysis sees as
+    // possibly null (-Wnull-dereference on linux-gcc-release).
+    [[nodiscard]] const Seen& last_of(Http2EventKind kind) const
+    {
+        const Seen* const found = last(kind);
+        REQUIRE(found != nullptr);
+        return *found;
+    }
+
+    [[nodiscard]] const WireFrame& last_frame_of(u8 type) const
+    {
+        const WireFrame* const found = last_frame(type);
+        REQUIRE(found != nullptr);
+        return *found;
+    }
+
     [[nodiscard]] usize frame_count(u8 type) const
     {
         usize total = 0U;
@@ -502,7 +518,7 @@ TEST_CASE("http2: a request and its response with a body and trailers", "[http2]
         CHECK(taken == 5U);
         REQUIRE(pair.client.conn.send_trailers(id, Fields{{"x-sum", "1"}}.span()) == Http2Error::None);
         pair.run();
-        CHECK(pair.server.last(Http2EventKind::Trailers)->fields == text_of(view("x-sum=1\n")));
+        CHECK(pair.server.last_of(Http2EventKind::Trailers).fields == text_of(view("x-sum=1\n")));
         Text body;
         for (const Seen& seen : pair.server.events)
         {
@@ -516,8 +532,8 @@ TEST_CASE("http2: a request and its response with a body and trailers", "[http2]
         REQUIRE(pair.server.conn.send_body(id, view("world"), false, taken) == Http2Error::None);
         REQUIRE(pair.server.conn.finish(id) == Http2Error::None);
         pair.run();
-        CHECK(pair.client.last(Http2EventKind::Interim)->status == 103U);
-        CHECK(pair.client.last(Http2EventKind::Headers)->status == 200U);
+        CHECK(pair.client.last_of(Http2EventKind::Interim).status == 103U);
+        CHECK(pair.client.last_of(Http2EventKind::Headers).status == 200U);
         CHECK(pair.client.count(Http2EventKind::Finished) == 1U);
         CHECK(pair.client.conn.open_streams() == 0U);
         CHECK(pair.server.conn.open_streams() == 0U);
@@ -668,7 +684,7 @@ TEST_CASE("http2: every frame's connection errors", "[http2]")
         peer.send(bad.type, bad.flags, bad.stream, payload);
         CHECK(peer.error() == bad.code);
         CHECK(peer.goaway_code() == bad.code);
-        CHECK(u32_of(peer.side.last_frame(kGoAway)->payload) == 1U);
+        CHECK(u32_of(peer.side.last_frame_of(kGoAway).payload) == 1U);
     }
 }
 
@@ -717,7 +733,7 @@ TEST_CASE("http2: padding is held to its bounds and counts toward flow control",
     payload += zeros(39U);
     peer.send(kData, kPadded, 1U, payload);
     REQUIRE(peer.side.last(Http2EventKind::Body) != nullptr);
-    CHECK(peer.side.last(Http2EventKind::Body)->payload == "hello");
+    CHECK(peer.side.last_of(Http2EventKind::Body).payload == "hello");
     REQUIRE(peer.side.frame_count(kWindow) == 0U); // 40 is under half of the window
     peer.send(kData, kPadded, 1U, payload);
     CHECK(peer.error() == 0U);
@@ -764,7 +780,7 @@ TEST_CASE("http2: unknown frames and flags are ignored", "[http2]")
     CHECK(peer.side.last_frame(kPing) != nullptr);
     const Text block = peer.block(get_request());
     peer.send(kHeaders, 0x40U | kEndHeaders | kEndStream, 0x80000001U, block);
-    CHECK(peer.side.last(Http2EventKind::Headers)->stream == 1U);
+    CHECK(peer.side.last_of(Http2EventKind::Headers).stream == 1U);
 }
 
 TEST_CASE("http2: CONTINUATION is contiguous and bounded", "[http2]")
@@ -848,7 +864,7 @@ TEST_CASE("http2: stream identifiers", "[http2]")
         peer.headers(1U, Fields{{"x-after", "1"}});
         CHECK(peer.side.frame_count(kRst) == 2U);
         peer.get(3U);
-        CHECK(peer.side.last(Http2EventKind::Headers)->stream == 3U);
+        CHECK(peer.side.last_of(Http2EventKind::Headers).stream == 3U);
         CHECK(peer.error() == 0U);
     }
     SECTION("frames crossing this side's reset are dropped, the table and the window kept")
@@ -868,7 +884,7 @@ TEST_CASE("http2: stream identifiers", "[http2]")
         CHECK(peer.side.frame_count(kRst) == resets);
         CHECK(peer.side.frame_count(kWindow) == 1U); // the connection's credit came back
         peer.get(3U);
-        CHECK(holds(peer.side.last(Http2EventKind::Headers)->fields, ":method=GET"));
+        CHECK(holds(peer.side.last_of(Http2EventKind::Headers).fields, ":method=GET"));
     }
     SECTION("after both ends finished, what section 5.1 permits still passes and anything else ends the connection")
     {
@@ -947,7 +963,7 @@ TEST_CASE("http2: the half-closed states", "[http2]")
         peer.get(1U);
         peer.send(kData, 0U, 1U, zeros(4U));
         CHECK(peer.reset_code(1U) == kH2StreamClosed);
-        CHECK(peer.side.last(Http2EventKind::Aborted)->error == kH2StreamClosed);
+        CHECK(peer.side.last_of(Http2EventKind::Aborted).error == kH2StreamClosed);
     }
     {
         Peer peer = server_peer();
@@ -963,7 +979,7 @@ TEST_CASE("http2: the half-closed states", "[http2]")
         CHECK(peer.error() == 0U);
         CHECK(peer.side.frame_count(kRst) == 0U);
         peer.send(kRst, 0U, 1U, u32_text(kH2Cancel));
-        CHECK(peer.side.last(Http2EventKind::Aborted)->error == kH2Cancel);
+        CHECK(peer.side.last_of(Http2EventKind::Aborted).error == kH2Cancel);
         CHECK(peer.side.conn.open_streams() == 0U);
     }
 }
@@ -981,7 +997,7 @@ TEST_CASE("http2: the stream limit refuses and keeps the table in step", "[http2
     REQUIRE(peer.side.conn.send_response(1U, ok_response().span(), true) == Http2Error::None);
     peer.side.drain();
     peer.headers(7U, Fields{{":method", "GET"}, {":scheme", "https"}, {":authority", "a.example"}, {":path", "/x"}});
-    CHECK(holds(peer.side.last(Http2EventKind::Headers)->fields, ":path=/x"));
+    CHECK(holds(peer.side.last_of(Http2EventKind::Headers).fields, ":path=/x"));
     // Frames crossing the refusal are dropped.
     const usize resets = peer.side.frame_count(kRst);
     peer.send(kData, 0U, 5U, zeros(4U));
@@ -1068,7 +1084,7 @@ TEST_CASE("http2: SETTINGS values", "[http2]")
     CHECK(peer.error() == 0U);
     CHECK(peer.side.conn.peer_settings().max_field_section_size == 2048U);
     REQUIRE(peer.side.last_frame(kSettings) != nullptr);
-    CHECK(peer.side.last_frame(kSettings)->flags == kAck);
+    CHECK(peer.side.last_frame_of(kSettings).flags == kAck);
     CHECK(peer.side.last(Http2EventKind::Settings) != nullptr);
 
     Peer connect(test_config(Http2Side::Client));
@@ -1123,9 +1139,9 @@ TEST_CASE("http2: GOAWAY both ways", "[http2]")
         peer.side.drain();
         peer.send(kGoAway, 0U, 0U, u32_text(1U) + u32_text(kH2NoError));
         REQUIRE(peer.side.last(Http2EventKind::GoAway) != nullptr);
-        CHECK(peer.side.last(Http2EventKind::GoAway)->stream == 1U);
+        CHECK(peer.side.last_of(Http2EventKind::GoAway).stream == 1U);
         CHECK(peer.side.count(Http2EventKind::Aborted) == 2U);
-        CHECK(peer.side.last(Http2EventKind::Aborted)->error == kH2RefusedStream);
+        CHECK(peer.side.last_of(Http2EventKind::Aborted).error == kH2RefusedStream);
         CHECK(peer.side.conn.open_streams() == 1U);
         u32 id = 0U;
         CHECK(peer.side.conn.open_request(get_request().span(), true, id) == Http2Error::GoingAway);
@@ -1140,12 +1156,12 @@ TEST_CASE("http2: GOAWAY both ways", "[http2]")
         peer.get(1U);
         REQUIRE(peer.side.conn.goaway(false));
         peer.side.drain();
-        CHECK(u32_of(peer.side.last_frame(kGoAway)->payload) == kHttp2MaxStreamId);
+        CHECK(u32_of(peer.side.last_frame_of(kGoAway).payload) == kHttp2MaxStreamId);
         peer.get(3U);
         CHECK(peer.side.count(Http2EventKind::Headers) == 2U);
         REQUIRE(peer.side.conn.goaway(true));
         peer.side.drain();
-        CHECK(u32_of(peer.side.last_frame(kGoAway)->payload) == 3U);
+        CHECK(u32_of(peer.side.last_frame_of(kGoAway).payload) == 3U);
         REQUIRE(peer.side.conn.goaway(true));
         peer.side.drain();
         CHECK(peer.side.frame_count(kGoAway) == 2U);
@@ -1165,7 +1181,7 @@ TEST_CASE("http2: GOAWAY both ways", "[http2]")
         Peer peer = server_peer();
         peer.send(kGoAway, 0U, 0U, u32_text(0U) + u32_text(kH2NoError) + Text("debug"));
         CHECK(peer.side.conn.goaway_received());
-        CHECK(peer.side.last(Http2EventKind::GoAway)->error == kH2NoError);
+        CHECK(peer.side.last_of(Http2EventKind::GoAway).error == kH2NoError);
     }
 }
 
@@ -1322,7 +1338,7 @@ TEST_CASE("http2: sending follows both windows and the frame limit", "[http2]")
         CHECK(taken <= kHttp2MinFrameBytes);
     }
     CHECK(sent == kHttp2InitialWindow);
-    CHECK((peer.side.last_frame(kData)->flags & kEndStream) == 0U);
+    CHECK((peer.side.last_frame_of(kData).flags & kEndStream) == 0U);
     // Stream credit alone is not enough: the connection's is spent too.
     peer.send(kWindow, 0U, 1U, u32_text(4096U));
     CHECK(peer.side.count(Http2EventKind::Writable) == 1U);
@@ -1455,7 +1471,7 @@ TEST_CASE("http2: what never reached the application goes back to the connection
         peer.send(kData, 0U, 1U, zeros(16384U));
         peer.send(kData, 0U, 3U, zeros(16384U));
         REQUIRE(peer.side.last_frame(kWindow) != nullptr);
-        CHECK(peer.side.last_frame(kWindow)->stream == 0U);
+        CHECK(peer.side.last_frame_of(kWindow).stream == 0U);
     }
     {
         // A stream whose peer has finished sending needs no more credit.
@@ -1496,8 +1512,8 @@ TEST_CASE("http2: a body's credit returns when the stream goes", "[http2]")
     CHECK(peer.side.frame_count(kWindow) == 0U);
     peer.send(kRst, 0U, 1U, u32_text(kH2Cancel));
     REQUIRE(peer.side.frame_count(kWindow) == 1U);
-    CHECK(peer.side.last_frame(kWindow)->stream == 0U);
-    CHECK(u32_of(peer.side.last_frame(kWindow)->payload) == 32768U);
+    CHECK(peer.side.last_frame_of(kWindow).stream == 0U);
+    CHECK(u32_of(peer.side.last_frame_of(kWindow).payload) == 32768U);
     CHECK(peer.side.conn.consume_body(1U, 1U) == Http2Error::Unknown);
 }
 
@@ -1711,7 +1727,7 @@ TEST_CASE("http2: a section over the limit is answered 431 and keeps the table i
         peer.side.drain();
         peer.headers(1U, Fields{{":status", "200"}, {"x-long", value.c_str()}});
         CHECK(peer.reset_code(1U) == kH2EnhanceYourCalm);
-        CHECK(peer.side.last(Http2EventKind::Aborted)->error == kH2EnhanceYourCalm);
+        CHECK(peer.side.last_of(Http2EventKind::Aborted).error == kH2EnhanceYourCalm);
     }
 }
 
@@ -1735,7 +1751,7 @@ TEST_CASE("http2: extended CONNECT", "[http2]")
     REQUIRE(peer.side.conn.send_response(1U, ok_response().span(), false) == Http2Error::None);
     CHECK(peer.side.conn.send_trailers(1U, Fields{{"x-t", "1"}}.span()) == Http2Error::Invalid);
     peer.send(kData, 0U, 1U, Text("tunnel"));
-    CHECK(peer.side.last(Http2EventKind::Body)->payload == "tunnel");
+    CHECK(peer.side.last_of(Http2EventKind::Body).payload == "tunnel");
     peer.headers(1U, Fields{{"x-t", "1"}});
     CHECK(peer.reset_code(1U) == kH2ProtocolError);
 
@@ -1747,7 +1763,7 @@ TEST_CASE("http2: extended CONNECT", "[http2]")
     client.side.drain();
     client.headers(id, ok_response(), 0U);
     client.send(kData, 0U, id, Text("tunnel"));
-    CHECK(client.side.last(Http2EventKind::Body)->payload == "tunnel");
+    CHECK(client.side.last_of(Http2EventKind::Body).payload == "tunnel");
     client.headers(id, Fields{{"x-t", "1"}});
     CHECK(client.reset_code(id) == kH2ProtocolError);
 }
@@ -2045,7 +2061,7 @@ TEST_CASE("http2: an output buffer with no room blocks writers and wakes them", 
     client.side.drain();
     client.side.pump();
     REQUIRE(client.side.last(Http2EventKind::Writable) != nullptr);
-    CHECK(client.side.last(Http2EventKind::Writable)->stream == 0U);
+    CHECK(client.side.last_of(Http2EventKind::Writable).stream == 0U);
     CHECK(client.side.conn.open_request(get_request().span(), true, blocked) == Http2Error::None);
 }
 
