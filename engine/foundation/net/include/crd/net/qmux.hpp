@@ -26,6 +26,9 @@
 //   WebSocket a connection whose TLS agrees on http/1.1, where a WebSocketConfig allows it, runs an opening handshake
 //             and then carries one record in each Binary message, with no Size (the browser path; contract:
 //             docs/design/network-foundation.md#websocket). Everything above the records is the same code.
+//   tunnel    a connection over an HTTP/2 or HTTP/3 stream (RFC 8441, RFC 9220; websocket_tunnel.hpp) is that same message
+//             stage with no TLS of its own: bytes in and out are the stream's, and the extended CONNECT was its opening
+//             handshake.
 //   memory    records use two fixed buffers of the connection; streams and datagrams allocate at init(), never after.
 //   threads   one thread at a time.
 
@@ -51,9 +54,17 @@ inline constexpr usize kQmuxMaxRecord = 16382U;
 inline constexpr usize kQmuxCloseReasonBytes = 128U;
 inline constexpr u64 kQmuxNoTimer = ~u64{0};
 
+// Which end of an HTTP stream a connection is, when it runs over one.
+enum class QmuxTunnel : u8
+{
+    None, // over TLS of its own
+    Client,
+    Server,
+};
+
 struct QmuxConfig
 {
-    const crypto::TlsContext* tls = nullptr;   // client or server, with ALPN
+    const crypto::TlsContext* tls = nullptr;   // client or server, with ALPN; null, and only then, for a tunnel
     crypto::TlsTicketStore* tickets = nullptr; // a client's tickets; nullptr offers and keeps none
     // A server accepting early data: the application's part of its early data context (at most
     // kQuicMaxEarlyContextBytes, read by start()), after the limits the connection adds itself, so a ticket's 0-RTT
@@ -63,6 +74,8 @@ struct QmuxConfig
     // for none. A server's context may list QMux identifiers beside it, so one port serves both. A client's context
     // must not ask for early data: a request that could be replayed is no opening handshake.
     const WebSocketConfig* websocket = nullptr;
+    // Set by the owner of a tunnel, whose `websocket` is required and whose TLS and tickets are the bearer's.
+    QmuxTunnel tunnel = QmuxTunnel::None;
     QuicStreamLimits streams;
     QuicDatagramLimits datagrams;
     u64 idle_timeout_ns = 30'000'000'000U;      // the idle timeout offered; 0 for none
@@ -123,7 +136,7 @@ class QmuxConnection
 {
 public:
     QmuxConnection() noexcept = default;
-    ~QmuxConnection() = default;
+    ~QmuxConnection();
     QmuxConnection(const QmuxConnection&) = delete;
     QmuxConnection& operator=(const QmuxConnection&) = delete;
     QmuxConnection(QmuxConnection&&) = delete;
@@ -136,6 +149,9 @@ public:
     // Starts the TLS session of the context's role: a client's first flight is ready for take(). False for a session
     // TLS refuses (tls_error()); the connection is then Closed.
     [[nodiscard]] bool start(u64 now_ns) noexcept;
+    // Starts a tunnel whose extended CONNECT agreed on the configured subprotocol `protocol`: it is Established at once.
+    // False for a connection that is not a tunnel, or was started.
+    [[nodiscard]] bool start_tunnel(u8 protocol, u64 now_ns) noexcept;
 
     // Bytes the transport received, any amount, split anywhere.
     void receive(cont::ConstSpan<u8> bytes, u64 now_ns) noexcept;
@@ -150,6 +166,8 @@ public:
     // Assembles what is due and shows the bytes to send in place, valid until the next call: a host writes them to its
     // transport and take()s what the transport accepted, so a partial write needs no second buffer.
     [[nodiscard]] cont::ConstSpan<u8> outgoing(u64 now_ns) noexcept;
+    // A tunnel's: `count` of the bytes outgoing() showed went out, without take() having to copy them.
+    void taken(usize count, u64 now_ns) noexcept;
     // True once this side has closed and every byte has been taken: time to shut the transport's sending side.
     [[nodiscard]] bool send_finished() const noexcept;
 
@@ -209,6 +227,13 @@ private:
         u8 accept[kWsAcceptChars] = {}; // a client's: what the server must answer
     };
 
+    [[nodiscard]] bool tunneled() const noexcept { return m_config.tunnel != QmuxTunnel::None; }
+    [[nodiscard]] bool is_client() const noexcept;
+    // What the frames go through: this connection's TLS, or a tunnel's staging buffer.
+    [[nodiscard]] usize stage_pending() const noexcept;
+    [[nodiscard]] usize stage_capacity() const noexcept;
+    [[nodiscard]] crypto::TlsError stage_send(cont::ConstSpan<u8> bytes) noexcept;
+    void receive_tunnel(cont::ConstSpan<u8> bytes, u64 now_ns) noexcept;
     void advance(u64 now_ns) noexcept;
     void begin_early() noexcept;
     void settle_early() noexcept;
@@ -253,6 +278,10 @@ private:
     void keep_reason(cont::ConstSpan<u8> reason) noexcept;
 
     QmuxConfig m_config;
+    memory::IAllocator* m_allocator = nullptr;
+    u8* m_stage = nullptr; // a tunnel's: frames not yet handed to the stream
+    usize m_stage_head = 0U;
+    usize m_stage_tail = 0U;
     QmuxState m_state = QmuxState::Idle;
     Framing m_framing = Framing::Records;
     bool m_ready = false;

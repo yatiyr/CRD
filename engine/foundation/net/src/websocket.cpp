@@ -1,5 +1,5 @@
 // crd-net -- the WebSocket protocol's pieces (4.2a; docs/design/network-foundation.md#websocket). Sources: RFC 6455,
-// RFC 9110 and RFC 9112.
+// RFC 9110, RFC 9112, RFC 8441 and RFC 9220.
 
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/core/utf8.hpp>
@@ -24,6 +24,8 @@ constexpr u8 kLengthMask = 0x7FU;
 constexpr u8 kOpcodeMask = 0x0FU;
 constexpr u8 kFirstControl = 0x8U;
 constexpr u16 kStatusUpgrade = 101U;
+constexpr u16 kStatusSuccess = 200U;
+constexpr u16 kStatusRedirect = 300U;
 constexpr u16 kStatusBad = 400U;
 constexpr u16 kStatusForbidden = 403U;
 constexpr u16 kStatusNotFound = 404U;
@@ -392,6 +394,31 @@ struct RequestFields
     return 0U;
 }
 
+// What every HTTP version's request is held to once its own rules passed: 0, with `out.protocol`, or the refusal.
+[[nodiscard]] u16 check_policy(cont::ConstSpan<u8> target, const RequestFields& fields, const WebSocketConfig& config,
+                               WsHandshake& out) noexcept
+{
+    cont::ConstSpan<u8> path;
+    if (!target_path(target, path))
+    {
+        return kStatusBad;
+    }
+    if (!http_equal(path, config.path))
+    {
+        return kStatusNotFound;
+    }
+    if ((fields.seen & kSeenOrigin) != 0U && !http_origin_allowed(fields.origin, config.origins, config.any_origin))
+    {
+        return kStatusForbidden; // section 10.2: what stands between a browser's page and this server
+    }
+    if (fields.protocol == kWsMaxProtocols)
+    {
+        return kStatusBad; // nothing else says what the messages carry, and a browser that offered one fails without it
+    }
+    out.protocol = static_cast<u8>(fields.protocol);
+    return 0U;
+}
+
 // The answer to a whole request head; `out` gets what a 101 needs.
 [[nodiscard]] u16 check_request(cont::ConstSpan<u8> head, const WebSocketConfig& config, WsHandshake& out) noexcept
 {
@@ -433,24 +460,15 @@ struct RequestFields
     {
         return kStatusUpgradeRequired;
     }
-    cont::ConstSpan<u8> path;
-    if ((fields.seen & kSeenHost) == 0U || !key_valid(fields.key) || !target_path(request.target, path))
+    if ((fields.seen & kSeenHost) == 0U || !key_valid(fields.key))
     {
         return kStatusBad;
     }
-    if (!http_equal(path, config.path))
+    const u16 refusal = check_policy(request.target, fields, config, out);
+    if (refusal != 0U)
     {
-        return kStatusNotFound;
+        return refusal;
     }
-    if ((fields.seen & kSeenOrigin) != 0U && !http_origin_allowed(fields.origin, config.origins, config.any_origin))
-    {
-        return kStatusForbidden; // section 10.2: what stands between a browser's page and this server
-    }
-    if (fields.protocol == kWsMaxProtocols)
-    {
-        return kStatusBad; // nothing else says what the messages carry, and a browser that offered one fails without it
-    }
-    out.protocol = static_cast<u8>(fields.protocol);
     ws_accept_of(fields.key, cont::Span<u8, kWsAcceptChars>(out.accept, kWsAcceptChars));
     return kStatusUpgrade;
 }
@@ -474,6 +492,23 @@ struct RequestFields
         default:
             return text("HTTP Version Not Supported");
     }
+}
+
+// A response's Sec-WebSocket-Protocol: one of those offered, and only one such field (section 4.1).
+[[nodiscard]] bool chosen_protocol(cont::ConstSpan<u8> value, const WebSocketConfig& config, u32& seen,
+                                   WsHandshake& out) noexcept
+{
+    usize index = 0U;
+    while (index < config.protocols.size() && !http_equal(value, config.protocols[index]))
+    {
+        ++index;
+    }
+    if (index == config.protocols.size() || !first_time(seen, kSeenProtocol))
+    {
+        return false;
+    }
+    out.protocol = static_cast<u8>(index);
+    return true;
 }
 
 // Section 4.1's checks of a 101 response's field lines. True when every one held.
@@ -504,22 +539,10 @@ struct RequestFields
                 return false;
             }
         }
-        else if (named(name, text("sec-websocket-extensions")))
+        else if (named(name, text("sec-websocket-extensions")) ||
+                 (named(name, text("sec-websocket-protocol")) && !chosen_protocol(value, config, seen, out)))
         {
-            return false; // none was offered
-        }
-        else if (named(name, text("sec-websocket-protocol")))
-        {
-            usize index = 0U;
-            while (index < config.protocols.size() && !http_equal(value, config.protocols[index]))
-            {
-                ++index;
-            }
-            if (index == config.protocols.size() || !first_time(seen, kSeenProtocol))
-            {
-                return false;
-            }
-            out.protocol = static_cast<u8>(index);
+            return false; // no extension was offered, and only one offered subprotocol is taken
         }
     }
     const u32 needed = kSeenUpgrade | kSeenConnection | kSeenAccept | kSeenProtocol;
@@ -849,6 +872,64 @@ HttpDecode ws_read_response(cont::ConstSpan<u8> bytes, const WebSocketConfig& co
         out.status = status;
     }
     return HttpDecode::Ok;
+}
+
+bool ws_is_connect(const HttpMessageInfo& info) noexcept
+{
+    return info.extended && named(info.protocol, text("websocket"));
+}
+
+u16 ws_check_connect(cont::ConstSpan<HttpField> fields, const HttpMessageInfo& info, const WebSocketConfig& config,
+                     WsHandshake& out) noexcept
+{
+    out = WsHandshake{};
+    if (!ws_is_connect(info))
+    {
+        return kStatusBad;
+    }
+    RequestFields request;
+    for (const HttpField& field : fields)
+    {
+        if (named(field.name, text("sec-websocket-key")))
+        {
+            continue; // RFC 8441 section 5: :protocol takes the key's place, and nothing reads it
+        }
+        const u16 refusal = request_field(field.name, field.value, config, request);
+        if (refusal != 0U)
+        {
+            return refusal;
+        }
+    }
+    if (!request.version)
+    {
+        return kStatusBad;
+    }
+    const u16 refusal = check_policy(info.path, request, config, out);
+    return (refusal != 0U) ? refusal : kWsConnectAccepted;
+}
+
+void ws_read_connect_response(cont::ConstSpan<HttpField> fields, const HttpMessageInfo& info,
+                              const WebSocketConfig& config, WsHandshake& out) noexcept
+{
+    out = WsHandshake{};
+    out.status = info.status;
+    if (info.status < kStatusSuccess || info.status >= kStatusRedirect)
+    {
+        return;
+    }
+    u32 seen = 0U;
+    for (const HttpField& field : fields)
+    {
+        const bool refused = named(field.name, text("sec-websocket-extensions")) ||
+                             (named(field.name, text("sec-websocket-protocol")) &&
+                              !chosen_protocol(field.value, config, seen, out));
+        if (refused)
+        {
+            out.status = 0U; // none was offered, or not that one
+            return;
+        }
+    }
+    out.status = ((seen & kSeenProtocol) != 0U) ? kWsConnectAccepted : 0U;
 }
 
 } // namespace crd::net

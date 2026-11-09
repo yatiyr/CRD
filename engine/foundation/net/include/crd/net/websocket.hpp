@@ -1,7 +1,8 @@
 #pragma once
 
 // crd-net -- the WebSocket protocol's pieces, sans-I/O (4.2a; contract: docs/design/network-foundation.md#websocket).
-// Source: RFC 6455, with RFC 9110 and RFC 9112 for the HTTP/1.1 around its opening handshake.
+// Sources: RFC 6455, with RFC 9110 and RFC 9112 for the HTTP/1.1 around its opening handshake, and RFC 8441 and RFC
+// 9220 for the extended CONNECT that opens one over HTTP/2 or HTTP/3.
 //
 //   frames    a header is read whole and every section 5 refusal happens there, so a caller holding a whole frame has
 //             only the fragmentation rules left. Lengths use their shortest form; a client's frames are masked and a
@@ -11,13 +12,14 @@
 //             refused, so nothing can be smuggled behind it.
 //   policy    Origin is checked as WebTransport checks it (a request with none is not from a browser), the path is
 //             compared exactly, and the subprotocol must be one of the server's: nothing else names what the messages
-//             carry. Extensions are never negotiated; an offer is ignored.
+//             carry. Extensions are never negotiated; an offer is ignored. One policy answers every HTTP version.
 //   memory    nothing allocates; hostile input costs time linear in its length.
 //   threads   no state.
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/net/http_fields.hpp>
+#include <crd/net/http_message.hpp>
 
 namespace crd::net
 {
@@ -32,6 +34,8 @@ inline constexpr usize kWsMaskBytes = 4U;
 inline constexpr usize kWsKeyBytes = 16U;    // a Sec-WebSocket-Key before base64
 inline constexpr usize kWsKeyChars = 24U;    // and after
 inline constexpr usize kWsAcceptChars = 28U; // a Sec-WebSocket-Accept
+// What an extended CONNECT is answered with when it opens a WebSocket (RFC 8441 section 5).
+inline constexpr u16 kWsConnectAccepted = 200U;
 
 // Section 7.4's status codes this side names.
 inline constexpr u16 kWsCloseNormal = 1000U;
@@ -134,5 +138,18 @@ void ws_key_of(const u8 (&random)[kWsKeyBytes], cont::Span<u8, kWsKeyChars> out)
 // 101 only for a response section 4.1 accepts.
 [[nodiscard]] HttpDecode ws_read_response(cont::ConstSpan<u8> bytes, const WebSocketConfig& config,
                                           cont::ConstSpan<u8> accept, usize& scanned, WsHandshake& out) noexcept;
+
+// Over HTTP/2 and HTTP/3 (RFC 8441 sections 4 and 5, RFC 9220 section 3) the opening handshake is an extended CONNECT
+// whose :protocol is `websocket`, a well-formed request as http_check_request() reads it. There is no key and no
+// accept: :protocol stands for them.
+[[nodiscard]] bool ws_is_connect(const HttpMessageInfo& info) noexcept;
+// The answer to such a request: kWsConnectAccepted with `out.protocol`, or the refusal. A version other than 13 is 400,
+// which carries `sec-websocket-version: 13` (RFC 6455 section 4.4: HTTP/2 and HTTP/3 have no 426).
+[[nodiscard]] u16 ws_check_connect(cont::ConstSpan<HttpField> fields, const HttpMessageInfo& info,
+                                   const WebSocketConfig& config, WsHandshake& out) noexcept;
+// Reads a client's response: `out.status` is the response's, kWsConnectAccepted for any 2xx that names one of the
+// offered subprotocols once and no extension (`out.protocol`), and 0 for a 2xx that does not.
+void ws_read_connect_response(cont::ConstSpan<HttpField> fields, const HttpMessageInfo& info,
+                              const WebSocketConfig& config, WsHandshake& out) noexcept;
 
 } // namespace crd::net
