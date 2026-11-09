@@ -9,7 +9,8 @@
 //             built before it goes live, and where a client's successor is built while its predecessor still stands
 //             (after Version Negotiation), so a refused successor leaves the predecessor to be reported.
 //   route     a connection reads datagrams from its peer's address only: another address would be a migration or a
-//             NAT rebinding, which NET-PATH validates (section 9); until then they are dropped and counted.
+//             NAT rebinding, which NET-PATH validates (section 9); until then they are dropped and counted. A keyed
+//             server's slot opened with no peer takes the address of the first packet that opens (S55).
 //   service   a connection that received, whose timer is due or that the application woke is served in on_timers,
 //             once per turn: its timeout, the host's service (the application's turn), then its datagrams into the
 //             host's SendQueue until it has none or the host is busy (served again within `send_retry_ns`). The
@@ -121,6 +122,12 @@ protected:
     [[nodiscard]] u32 free_slot() const noexcept { return m_free; }
     // The routed IDs of slot `index`: a new connection issues its sequence 0 through them before it starts.
     [[nodiscard]] QuicRoutedIds& ids(u32 index) noexcept { return m_ids[index]; }
+    // Opens a keyed connection (QuicConnection::open_keyed, the handshake of `config` dropped) to `peer` in a free
+    // slot, its sequence 0 ID routed first; an invalid handle when the pool is full, that ID cannot be routed or the
+    // connection refuses it. A `peer` of port 0 stays unbound until a packet that opens names it. `start.secret` is
+    // zeroed in every case.
+    [[nodiscard]] QuicHandle start_keyed(QuicConnectionConfig config, const Endpoint& peer, const QuicKeyedStart& start,
+                                         u64 now_ns) noexcept;
     // Builds a connection of `config` for slot `index` in the spare storage, its further IDs routed to the slot and a
     // non-empty entropy seed varied by the count of connections built (a deterministic run stays deterministic
     // without two connections drawing alike); null, destroying it, when it is not ready.

@@ -162,6 +162,30 @@ void QuicServer::on_admit(const IngressDecision& decision, const ReceivedDatagra
     read_early(index, *connection, admitted.client_dcid.view(), now_ns);
 }
 
+QuicHandle QuicServer::open_keyed(const Endpoint& client, QuicKeyedStart start, u64 now_ns) noexcept
+{
+    start.local_id_bytes = m_ingress.config().local_cid_bytes;
+    const u32 index = free_slot();
+    QuicHandle handle;
+    if (m_admitted != nullptr)
+    {
+        handle = start_keyed(m_config.connection, client, start, now_ns);
+    }
+    else
+    {
+        crypto::secure_zero(start.secret);
+    }
+    if (!handle.valid())
+    {
+        ++m_counters.refused;
+        return handle;
+    }
+    m_admitted[index] = Admitted{};
+    m_admitted[index].token_given = true; // a keyed path proves its address by the session, and needs no token
+    ++m_counters.admitted;
+    return handle;
+}
+
 void QuicServer::on_early(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept
 {
     const u32 capacity = m_config.early_datagrams;

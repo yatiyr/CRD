@@ -83,6 +83,22 @@ inline constexpr usize kQuicLevels = 3U;
 [[nodiscard]] CryptoError quic_initial_secret(QuicVersion version, QuicSide side, cont::ConstSpan<u8> client_dcid,
                                               cont::Span<u8> secret) noexcept;
 
+// A connection keyed by a secret its session holds, with no TLS handshake on its own path (the raw UDP path, contract:
+// docs/design/network-foundation.md#raw-path). `session_secret` is kQuicKeyedSecretBytes, from a TLS exporter or a
+// launcher's random bytes, for this connection alone: everything below is a function of it, so a second connection on
+// the same secret would repeat AEAD nonces.
+inline constexpr usize kQuicKeyedSecretBytes = 32U;
+
+// `side`'s 1-RTT traffic secret for `aead` into `out` (at least kQuicMaxSecretBytes), its length in `written`.
+// Unsupported outside the three TLS 1.3 AEADs, BadLength for a session secret or `out` of another size; `out` is zeroed
+// on any error.
+[[nodiscard]] CryptoError quic_keyed_traffic_secret(AlgorithmId aead, cont::ConstSpan<u8> session_secret, QuicSide side,
+                                                    cont::Span<u8> out, usize& written) noexcept;
+
+// The sequence 0 connection ID of `side`, `out.size()` bytes (at most kQuicMaxConnectionIdBytes). BadLength otherwise.
+[[nodiscard]] CryptoError quic_keyed_connection_id(cont::ConstSpan<u8> session_secret, QuicSide side,
+                                                   cont::Span<u8> out) noexcept;
+
 // The packets one key of `aead` may seal (RFC 9001 section 6.6): 2^23 for AES-GCM; ChaCha20-Poly1305's limit lies
 // beyond every packet number (2^62), so it is that bound. The packets a connection may fail to open across all its
 // keys before it closes with AEAD_LIMIT_REACHED: 2^52 for AES-GCM, 2^36 for ChaCha20-Poly1305. 0 for anything else.

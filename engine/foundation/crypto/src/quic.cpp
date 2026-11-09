@@ -109,6 +109,26 @@ CryptoError expand_label(AlgorithmId hkdf, cont::ConstSpan<u8> secret, const cha
     return hkdf_expand(hkdf, secret, cont::ConstSpan<u8>(info, 4U + prefix_bytes + label_bytes), out);
 }
 
+// `label`'s output from a session secret: its PRK under the keyed path's own salt, so these secrets are nothing else's.
+CryptoError keyed_expand(AlgorithmId hkdf, cont::ConstSpan<u8> session_secret, const char* label,
+                         cont::Span<u8> out) noexcept
+{
+    constexpr u8 salt[] = {'c', 'e', 'r', 'i', 'd', ' ', 'k', 'e', 'y', 'e', 'd', ' ', 'p', 'a', 't', 'h'};
+    if (session_secret.size() != kQuicKeyedSecretBytes)
+    {
+        return CryptoError::BadLength;
+    }
+    u8 prk[kQuicMaxSecretBytes];
+    const cont::Span<u8> key(prk, hkdf_hash_bytes(hkdf));
+    CryptoError error = hkdf_extract(hkdf, salt, session_secret, key);
+    if (error == CryptoError::None)
+    {
+        error = expand_label(hkdf, key, label, out);
+    }
+    secure_zero(prk);
+    return error;
+}
+
 // The checks init() shares: the version's parameters and the suite's hash, or the refusal.
 CryptoError suite_of(QuicVersion version, AlgorithmId aead, cont::ConstSpan<u8> secret,
                      const VersionParameters*& parameters, AlgorithmId& hkdf) noexcept
@@ -184,6 +204,41 @@ CryptoError quic_initial_secret(QuicVersion version, QuicSide side, cont::ConstS
         secure_zero(secret);
     }
     return error;
+}
+
+CryptoError quic_keyed_traffic_secret(AlgorithmId aead, cont::ConstSpan<u8> session_secret, QuicSide side,
+                                      cont::Span<u8> out, usize& written) noexcept
+{
+    written = 0U;
+    const AlgorithmId hkdf = suite_hash(aead);
+    if (hkdf == AlgorithmId{})
+    {
+        return CryptoError::Unsupported;
+    }
+    if (out.size() < kQuicMaxSecretBytes)
+    {
+        return CryptoError::BadLength;
+    }
+    const usize bytes = hkdf_hash_bytes(hkdf);
+    const CryptoError error = keyed_expand(
+        hkdf, session_secret, side == QuicSide::Client ? "keyed c traffic" : "keyed s traffic", out.first(bytes));
+    if (error != CryptoError::None)
+    {
+        secure_zero(out);
+        return error;
+    }
+    written = bytes;
+    return CryptoError::None;
+}
+
+CryptoError quic_keyed_connection_id(cont::ConstSpan<u8> session_secret, QuicSide side, cont::Span<u8> out) noexcept
+{
+    if (out.size() > kQuicMaxConnectionIdBytes)
+    {
+        return CryptoError::BadLength;
+    }
+    return keyed_expand(AlgorithmId::HkdfSha256, session_secret, side == QuicSide::Client ? "keyed c id" : "keyed s id",
+                        out);
 }
 
 u64 quic_confidentiality_limit(AlgorithmId aead) noexcept

@@ -107,6 +107,7 @@ struct Setup
     u32 early_bytes = 1500U;
     bool always_retry = false;
     bool only_v2 = false; // the server runs version 2 alone
+    bool raw_only = false; // no TLS context: the raw UDP path alone
     const u8* early_context = nullptr;
     usize early_context_bytes = 0U;
 };
@@ -172,6 +173,11 @@ private:
         config.connection.streams = limits();
         config.connection.versions =
             setup.only_v2 ? cont::ConstSpan<u32>(kOnlyV2) : cont::ConstSpan<u32>(kBothVersions);
+        if (setup.raw_only)
+        {
+            config.connection.tls = nullptr;
+            config.connection.versions = {};
+        }
         config.connection.early_context = cont::ConstSpan<u8>(setup.early_context, setup.early_context_bytes);
         config.connections = setup.connections;
         config.early_datagrams = setup.early_datagrams;

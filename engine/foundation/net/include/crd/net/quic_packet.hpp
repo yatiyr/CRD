@@ -232,6 +232,9 @@ public:
     [[nodiscard]] crypto::CryptoError start(crypto::QuicSide side, crypto::QuicVersion version,
                                             cont::ConstSpan<u8> client_dcid) noexcept;
     [[nodiscard]] crypto::CryptoError rekey_initial(cont::ConstSpan<u8> client_dcid) noexcept;
+    // Starts a keyed connection (the raw UDP path) of `side` in `version`: every key and window cleared and only 1-RTT
+    // keys ever to come, through install() at the Application level.
+    void start_keyed(crypto::QuicSide side, crypto::QuicVersion version) noexcept;
 
     // Compatible version negotiation (RFC 9368 section 2.3, RFC 9369 section 4.1). A client that offers `version`
     // also opens its server's Initial packets in it (expect_version), so that it learns the version its server

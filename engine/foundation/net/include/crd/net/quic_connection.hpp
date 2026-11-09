@@ -53,6 +53,11 @@
 //   close      an error closes with CONNECTION_CLOSE at the levels the peer may read (section 10.2.3), CRYPTO_ERROR
 //              at an alert's level; closing resends it at a falling rate for three PTOs, a peer's close drains for
 //              three PTOs, and the idle timeout (section 10.1) closes silently.
+//   keyed      open_keyed() starts the raw UDP path (docs/design/network-foundation.md#raw-path) instead of a TLS
+//              handshake: 1-RTT keys and each end's sequence 0 ID come from a secret the session already holds, the
+//              transport parameters travel in CRYPTO frames of 1-RTT packets (a two-byte length, then the same
+//              encoding, grease and version_information as over TLS), and a server stays under the 3x limit until its
+//              client acknowledges one of its packets. Everything after is this connection's ordinary 1-RTT life.
 //   memory     every buffer comes from the injected allocator at construction; receiving and sending allocate
 //              nothing.
 //   threads    a connection belongs to its loop's thread.
@@ -138,11 +143,31 @@ private:
     u32 m_connection = kNoConnection;
 };
 
+inline constexpr usize kQuicMinKeyedIdBytes = 8U; // a keyed connection's IDs at least (64 bits from the session secret)
+
+// What opens a connection keyed by its session's secret (open_keyed()).
+struct QuicKeyedStart
+{
+    // kQuicKeyedSecretBytes for this connection alone: the session's TLS exporter under a label and context of its own,
+    // or a launcher's fresh random bytes given to both ends. open_keyed() zeroes them, whatever it answers.
+    cont::Span<u8> secret;
+    crypto::AlgorithmId aead = crypto::AlgorithmId::Aes128Gcm; // one of the three TLS 1.3 AEADs, the same at both ends
+    usize local_id_bytes = 8U;                                 // this side's IDs (8 to 20): what its ingress routes
+    usize peer_id_bytes = 8U;                                  // the other side's (8 to 20)
+    // When set, an `aead` the policy refuses at `unix_seconds` in `policy_scope` is refused, as a TLS handshake refuses
+    // it (S20); null where the secret came from a session whose handshake already ran under the policy.
+    const crypto::PolicyStore* policy = nullptr;
+    crypto::PolicyScope policy_scope = crypto::PolicyScope::Everywhere;
+    u64 unix_seconds = 0U;
+};
+
 struct QuicConnectionConfig
 {
     crypto::QuicSide side = crypto::QuicSide::Client;
     crypto::QuicVersion version = crypto::QuicVersion::V1; // the version this connection runs
-    const crypto::TlsContext* tls = nullptr;               // of `side`'s role, with an application protocol
+    // Of `side`'s role, with an application protocol. Null: the connection can only be opened keyed (open_keyed()), and
+    // nothing of a handshake may be configured (tickets, token, early_context, versions, after_version_negotiation).
+    const crypto::TlsContext* tls = nullptr;
     crypto::TlsTicketStore* tickets = nullptr;
     // Where this side's further connection IDs come from (null: sequence 0 alone, and no stateless reset token).
     QuicConnectionIds* ids = nullptr;
@@ -228,6 +253,7 @@ struct QuicConnectionCounters
     u64 bytes_received = 0U; // every byte of every datagram, opened or not
     u64 datagrams_sent = 0U;
     u64 bytes_sent = 0U;
+    u64 packets_opened = 0U;
     u64 packets_dropped = 0U; // packets that did not open, duplicates and packets of another connection
     u64 packets_held = 0U;    // packets held until their keys came (RFC 9001 section 4.1.4)
 };
@@ -258,6 +284,11 @@ public:
     // IDs out of range or when the handshake refuses its configuration.
     [[nodiscard]] bool connect(cont::ConstSpan<u8> local_cid, cont::ConstSpan<u8> initial_dcid, u64 now_ns) noexcept;
     [[nodiscard]] bool accept(const QuicAccept& accept, u64 now_ns) noexcept;
+    // Starts the raw UDP path on `start` (a connection built without a TLS context): Established and confirmed at once,
+    // this side's parameters waiting for send(), the peer's arriving as its first packet. False, changing nothing but
+    // the zeroed secret, when not Idle, for a connection built with a TLS context, or for a secret, AEAD or ID length
+    // out of range or an AEAD the policy refuses.
+    [[nodiscard]] bool open_keyed(const QuicKeyedStart& start, u64 now_ns) noexcept;
 
     // One datagram from the peer, arrived at `now_ns` with `ecn`; its bytes are decrypted in place.
     void receive(cont::Span<u8> datagram, QuicEcn ecn, u64 now_ns) noexcept;
@@ -421,6 +452,11 @@ private:
     };
 
     [[nodiscard]] bool start(u64 now_ns) noexcept;
+    [[nodiscard]] bool start_keyed(const QuicKeyedStart& start, u64 now_ns) noexcept;
+    // This side's parameters from the configuration and its IDs, and the packet protection's settings.
+    void fill_local_parameters() noexcept;
+    // A keyed connection's CRYPTO data: the peer's hello once whole; anything more is a protocol violation.
+    [[nodiscard]] bool read_keyed_hello(Level& level, u64 now_ns) noexcept;
     // This side's parameters encoded into `out` with fresh grease: their size, 0 when they do not fit.
     [[nodiscard]] usize encode_parameters(cont::Span<u8> out) noexcept;
     // Whether a long header's version is one this connection reads now (RFC 9369 section 4.1).
@@ -434,7 +470,7 @@ private:
     [[nodiscard]] bool on_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
     [[nodiscard]] bool crypto_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
     [[nodiscard]] bool advance_handshake(u64 now_ns) noexcept;
-    [[nodiscard]] bool read_peer_parameters(u64 now_ns) noexcept;
+    [[nodiscard]] bool read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_ns) noexcept;
     // The peer's grants to this side's streams and datagrams: a client's remembered ones for 0-RTT, then its server's.
     void apply_peer_limits(const QuicTransportParameters& peer) noexcept;
     // A client: starts 0-RTT on the parameters its ticket remembers. Both: acts on the server's 0-RTT decision.
@@ -536,6 +572,7 @@ private:
     QuicConnectionId m_peer_scid;     // the Source Connection ID of the peer's long headers
     bool m_peer_scid_known = false;
     bool m_retried = false;
+    bool m_keyed = false;           // opened by open_keyed()
     bool m_version_settled = false; // a client's: its server's version is known
     u32 m_packet_version = 0U;      // the long header version of the packet being read (0 for a short header)
     LocalCid m_local_ids[2U * kQuicMaxLocalConnectionIds]; // the active ones and those a rotation retires

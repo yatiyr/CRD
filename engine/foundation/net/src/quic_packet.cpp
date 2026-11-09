@@ -364,6 +364,18 @@ crypto::CryptoError QuicPacketProtection::start(crypto::QuicSide side, crypto::Q
     return rekey_initial(client_dcid);
 }
 
+void QuicPacketProtection::start_keyed(crypto::QuicSide side, crypto::QuicVersion version) noexcept
+{
+    clear_all();
+    m_side = side;
+    m_started = true;
+    m_version = version;
+    m_original = version;
+    m_initial_gone = true;
+    m_handshake_gone = true;
+    m_early_gone = true;
+}
+
 crypto::CryptoError QuicPacketProtection::rekey_initial(cont::ConstSpan<u8> client_dcid) noexcept
 {
     if (!m_started || m_initial_gone)

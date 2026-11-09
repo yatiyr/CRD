@@ -27,6 +27,7 @@ constexpr usize kMaxCryptoBytes = 1U << 20U;
 constexpr u32 kMaxSentPackets = 1U << 16U;
 constexpr usize kMinUsefulPacket = 64U; // a server with less credit than this waits for a datagram
 constexpr usize kPullChunk = 512U;
+constexpr usize kKeyedHelloPrefix = 2U; // a keyed connection's parameters follow their two-byte length
 constexpr u64 kSkipMask = 63U;   // one 1-RTT packet number in 64 is skipped (section 21.4)
 constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries a PING
 
@@ -89,7 +90,11 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
     {
         listed = listed || version == static_cast<u32>(config.version);
     }
-    return config.tls != nullptr && version_ok && listed && config.versions.size() < kQuicMaxAvailableVersions &&
+    // Without a TLS context the connection can only be opened keyed: nothing of a handshake is configured.
+    const bool keyed_ok =
+        config.tls != nullptr || (config.tickets == nullptr && config.token.empty() && config.early_context.empty() &&
+                                  config.versions.empty() && !config.after_version_negotiation);
+    return keyed_ok && version_ok && listed && config.versions.size() < kQuicMaxAvailableVersions &&
            p.initial_max_data == 0U && p.initial_max_stream_data_bidi_local == 0U &&
            p.initial_max_stream_data_bidi_remote == 0U && p.initial_max_stream_data_uni == 0U &&
            p.initial_max_streams_bidi == 0U && p.initial_max_streams_uni == 0U && p.max_datagram_frame_size == 0U &&
@@ -109,7 +114,7 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
 
 [[nodiscard]] usize early_context_bytes(const QuicConnectionConfig& config) noexcept
 {
-    const bool accepts = config.side == crypto::QuicSide::Server && config.tls->early_data();
+    const bool accepts = config.side == crypto::QuicSide::Server && config.tls != nullptr && config.tls->early_data();
     return accepts ? kQuicEarlyParameterBytes + config.early_context.size() : 0U;
 }
 } // namespace
@@ -321,7 +326,7 @@ u64 QuicConnection::entropy() noexcept
 bool QuicConnection::connect(cont::ConstSpan<u8> local_cid, cont::ConstSpan<u8> initial_dcid, u64 now_ns) noexcept
 {
     if (!ready() || m_state != QuicConnectionState::Idle || m_config.side != crypto::QuicSide::Client ||
-        initial_dcid.size() < 8U || initial_dcid.size() > crypto::kQuicMaxConnectionIdBytes ||
+        m_config.tls == nullptr || initial_dcid.size() < 8U || initial_dcid.size() > crypto::kQuicMaxConnectionIdBytes ||
         local_cid.size() > crypto::kQuicMaxConnectionIdBytes)
     {
         return false;
@@ -344,7 +349,7 @@ bool QuicConnection::accept(const QuicAccept& accept, u64 now_ns) noexcept
         return id.size() <= crypto::kQuicMaxConnectionIdBytes;
     };
     if (!ready() || m_state != QuicConnectionState::Idle || m_config.side != crypto::QuicSide::Server ||
-        accept.local_cid.empty() || accept.client_dcid.empty() || !bounded(accept.local_cid) ||
+        m_config.tls == nullptr || accept.local_cid.empty() || accept.client_dcid.empty() || !bounded(accept.local_cid) ||
         !bounded(accept.client_dcid) || !bounded(accept.original_dcid) || !bounded(accept.client_scid) ||
         (!accept.retried && !same_bytes(accept.original_dcid, accept.client_dcid)))
     {
@@ -397,6 +402,31 @@ bool QuicConnection::start(u64 now_ns) noexcept
             }
         }
     }
+    fill_local_parameters();
+    u8 encoded[crypto::kQuicMaxTransportParameterBytes];
+    const usize bytes = encode_parameters(cont::Span<u8>(encoded, sizeof(encoded)));
+    m_handshake.set_hello_answer(side == crypto::QuicSide::Server ? &m_hello : nullptr);
+    // A server's early data context: the parameters its 0-RTT depends on, then the application's part.
+    if (m_early_context != nullptr)
+    {
+        static_cast<void>(
+            write_quic_early_parameters(m_local, cont::Span<u8>(m_early_context, kQuicEarlyParameterBytes)));
+    }
+    if (bytes == 0U || m_handshake.set_version(m_config.version) != crypto::TlsError::None ||
+        m_handshake.init(*m_config.tls, cont::ConstSpan<u8>(encoded, bytes), m_config.tickets, {},
+                         cont::ConstSpan<u8>(m_early_context, m_early_context_bytes)) != crypto::TlsError::None ||
+        !begin_early())
+    {
+        return false;
+    }
+    m_state = QuicConnectionState::Handshaking;
+    m_idle_ns = m_local.max_idle_timeout * kNsPerMs;
+    restart_idle(now_ns);
+    return true;
+}
+
+void QuicConnection::fill_local_parameters() noexcept
+{
     m_protection.accept_cleared_quic_bit(m_config.grease_quic_bit);
     m_protection.set_key_update_interval(m_config.key_update_interval);
     m_local = m_config.parameters;
@@ -404,7 +434,7 @@ bool QuicConnection::start(u64 now_ns) noexcept
     m_datagrams.fill_parameters(m_local);
     m_local.has_initial_source_connection_id = true;
     m_local.initial_source_connection_id = m_local_cid;
-    if (side == crypto::QuicSide::Server)
+    if (m_config.side == crypto::QuicSide::Server)
     {
         m_local.has_original_destination_connection_id = true;
         m_local.original_destination_connection_id = m_original_dcid;
@@ -425,24 +455,95 @@ bool QuicConnection::start(u64 now_ns) noexcept
     {
         m_local.version_information.available[index] = m_versions[index];
     }
-    u8 encoded[crypto::kQuicMaxTransportParameterBytes];
-    const usize bytes = encode_parameters(cont::Span<u8>(encoded, sizeof(encoded)));
-    m_handshake.set_hello_answer(side == crypto::QuicSide::Server ? &m_hello : nullptr);
-    // A server's early data context: the parameters its 0-RTT depends on, then the application's part.
-    if (m_early_context != nullptr)
+}
+
+bool QuicConnection::open_keyed(const QuicKeyedStart& start, u64 now_ns) noexcept
+{
+    const bool opened = start_keyed(start, now_ns);
+    crypto::secure_zero(start.secret);
+    return opened;
+}
+
+bool QuicConnection::start_keyed(const QuicKeyedStart& start, u64 now_ns) noexcept
+{
+    const auto id_in_range = [](usize bytes)
     {
-        static_cast<void>(
-            write_quic_early_parameters(m_local, cont::Span<u8>(m_early_context, kQuicEarlyParameterBytes)));
-    }
-    if (bytes == 0U || m_handshake.set_version(m_config.version) != crypto::TlsError::None ||
-        m_handshake.init(*m_config.tls, cont::ConstSpan<u8>(encoded, bytes), m_config.tickets, {},
-                         cont::ConstSpan<u8>(m_early_context, m_early_context_bytes)) != crypto::TlsError::None ||
-        !begin_early())
+        return bytes >= kQuicMinKeyedIdBytes && bytes <= crypto::kQuicMaxConnectionIdBytes;
+    };
+    if (!ready() || m_state != QuicConnectionState::Idle || m_config.tls != nullptr ||
+        !id_in_range(start.local_id_bytes) || !id_in_range(start.peer_id_bytes))
     {
         return false;
     }
-    m_state = QuicConnectionState::Handshaking;
+    if (start.policy != nullptr &&
+        start.policy->snapshot().status(start.aead, start.unix_seconds, start.policy_scope) ==
+            crypto::AlgorithmStatus::Refused)
+    {
+        return false;
+    }
+    const crypto::QuicSide side = m_config.side;
+    const cont::ConstSpan<u8> secret = start.secret;
+    u8 local[crypto::kQuicMaxConnectionIdBytes];
+    u8 peer[crypto::kQuicMaxConnectionIdBytes];
+    const cont::Span<u8> local_id(local, start.local_id_bytes);
+    const cont::Span<u8> peer_id(peer, start.peer_id_bytes);
+    u8 reset_token[kQuicResetTokenBytes] = {};
+    if (crypto::quic_keyed_connection_id(secret, side, local_id) != crypto::CryptoError::None ||
+        crypto::quic_keyed_connection_id(secret, other(side), peer_id) != crypto::CryptoError::None ||
+        (side == crypto::QuicSide::Server && m_config.ids != nullptr &&
+         !m_config.ids->token(local_id, cont::Span<u8>(reset_token, sizeof(reset_token)))))
+    {
+        return false;
+    }
+    m_protection.start_keyed(side, m_config.version);
+    constexpr crypto::QuicSide directions[] = {crypto::QuicSide::Client, crypto::QuicSide::Server};
+    for (const crypto::QuicSide direction : directions)
+    {
+        u8 traffic[crypto::kQuicMaxSecretBytes];
+        usize bytes = 0U;
+        crypto::CryptoError error = crypto::quic_keyed_traffic_secret(start.aead, secret, direction,
+                                                                      cont::Span<u8>(traffic, sizeof(traffic)), bytes);
+        if (error == crypto::CryptoError::None)
+        {
+            error = m_protection.install(crypto::QuicLevel::Application, direction == side, start.aead,
+                                         cont::ConstSpan<u8>(traffic, bytes));
+        }
+        crypto::secure_zero(cont::Span<u8>(traffic, sizeof(traffic)));
+        if (error != crypto::CryptoError::None)
+        {
+            return false;
+        }
+    }
+    static_cast<void>(m_local_cid.assign(local_id)); // both bounded above
+    static_cast<void>(m_peer_scid.assign(peer_id));
+    m_initial_dcid = m_peer_scid;
+    m_original_dcid = (side == crypto::QuicSide::Server) ? m_local_cid : m_peer_scid;
+    m_peer_scid_known = true;
+    m_local_ids[0] = LocalCid{};
+    m_local_ids[0].id = m_local_cid;
+    m_local_ids[0].acked = true;
+    std::memcpy(m_local_ids[0].reset_token, reset_token, kQuicResetTokenBytes);
+    m_local_id_count = 1U;
+    m_peer_cids[0] = PeerCid{};
+    m_peer_cids[0].id = m_peer_scid;
+    m_peer_cid_count = 1U;
+    fill_local_parameters();
+
+    u8 hello[kKeyedHelloPrefix + crypto::kQuicMaxTransportParameterBytes];
+    const usize bytes = encode_parameters(cont::Span<u8>(hello + kKeyedHelloPrefix, sizeof(hello) - kKeyedHelloPrefix));
+    hello[0] = static_cast<u8>(bytes >> 8U);
+    hello[1] = static_cast<u8>(bytes);
+    const usize whole = kKeyedHelloPrefix + bytes;
+    if (bytes == 0U || m_levels[index_of(QuicSpace::Application)].out.write(cont::ConstSpan<u8>(hello, whole)) != whole)
+    {
+        return false;
+    }
+    m_keyed = true;
+    m_validated = side == crypto::QuicSide::Client; // a server's limit lasts until its client acknowledges a packet
+    m_state = QuicConnectionState::Established;
     m_idle_ns = m_local.max_idle_timeout * kNsPerMs;
+    discard_space(QuicSpace::Initial, now_ns);
+    confirm(now_ns);
     restart_idle(now_ns);
     return true;
 }
@@ -787,6 +888,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
         fail(close, 0U, now_ns);
         return false;
     }
+    ++m_counters.packets_opened;
     const QuicSpace space = quic_space_of(opened.type);
     m_packet_version = long_header ? header.version : 0U;
     m_packet_early = opened.type == QuicPacketType::ZeroRtt;
@@ -901,6 +1003,12 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             {
                 m_protection.acknowledged(frame.ack.largest);
             }
+            if (m_keyed && !m_validated && outcome.acked_packets != 0U)
+            {
+                // Only an end that read a packet sent to this address can acknowledge it.
+                m_validated = true;
+                m_recovery->set_amplification_blocked(false, now_ns);
+            }
             return true;
         }
         case QuicFrameKind::Crypto:
@@ -994,6 +1102,10 @@ bool QuicConnection::crypto_frame(const QuicFrame& frame, QuicSpace space, u64 n
             fail(QuicTransportError::ProtocolViolation, kCryptoFrameType, now_ns);
             return false;
     }
+    if (m_keyed)
+    {
+        return read_keyed_hello(level, now_ns);
+    }
     for (cont::ConstSpan<u8> readable = level.in.readable(); !readable.empty(); readable = level.in.readable())
     {
         const crypto::TlsError error = m_handshake.provide(level_of(space), readable);
@@ -1021,6 +1133,46 @@ bool QuicConnection::crypto_frame(const QuicFrame& frame, QuicSpace space, u64 n
     return advance_handshake(now_ns);
 }
 
+bool QuicConnection::read_keyed_hello(Level& level, u64 now_ns) noexcept
+{
+    const cont::ConstSpan<u8> readable = level.in.readable();
+    if (m_peer_known && readable.empty())
+    {
+        return true; // a retransmission of what was read
+    }
+    if (m_peer_known)
+    {
+        fail(QuicTransportError::ProtocolViolation, kCryptoFrameType, now_ns);
+        return false;
+    }
+    if (readable.size() < kKeyedHelloPrefix)
+    {
+        return true;
+    }
+    const usize bytes = (usize{readable[0]} << 8U) | usize{readable[1]};
+    if (bytes > crypto::kQuicMaxTransportParameterBytes)
+    {
+        fail(QuicTransportError::TransportParameterError, kCryptoFrameType, now_ns);
+        return false;
+    }
+    const usize whole = kKeyedHelloPrefix + bytes;
+    if (readable.size() < whole)
+    {
+        return true;
+    }
+    if (readable.size() > whole)
+    {
+        fail(QuicTransportError::ProtocolViolation, kCryptoFrameType, now_ns);
+        return false;
+    }
+    if (!read_peer_parameters(readable.subspan(kKeyedHelloPrefix, bytes), now_ns))
+    {
+        return false;
+    }
+    level.in.consume(whole);
+    return true;
+}
+
 bool QuicConnection::advance_handshake(u64 now_ns) noexcept
 {
     if (m_protection.install(m_handshake) != crypto::CryptoError::None)
@@ -1033,7 +1185,8 @@ bool QuicConnection::advance_handshake(u64 now_ns) noexcept
         m_handshake_keys = true;
         m_recovery->set_handshake_keys(now_ns);
     }
-    if (!m_peer_known && !m_handshake.peer_transport_parameters().empty() && !read_peer_parameters(now_ns))
+    if (!m_peer_known && !m_handshake.peer_transport_parameters().empty() &&
+        !read_peer_parameters(m_handshake.peer_transport_parameters(), now_ns))
     {
         return false;
     }
@@ -1056,10 +1209,10 @@ bool QuicConnection::advance_handshake(u64 now_ns) noexcept
     return true;
 }
 
-bool QuicConnection::read_peer_parameters(u64 now_ns) noexcept
+bool QuicConnection::read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_ns) noexcept
 {
     const crypto::QuicSide peer = other(m_config.side);
-    QuicTransportError error = read_quic_transport_parameters(m_handshake.peer_transport_parameters(), peer, m_peer);
+    QuicTransportError error = read_quic_transport_parameters(encoded, peer, m_peer);
     if (error == QuicTransportError::NoError)
     {
         QuicConnectionIdExpectation expected;
@@ -1097,9 +1250,18 @@ bool QuicConnection::read_peer_parameters(u64 now_ns) noexcept
     m_idle_ns = idle_ms * kNsPerMs;
     if (m_peer.has_stateless_reset_token)
     {
-        std::memcpy(m_peer_cids[0].reset_token, m_peer.stateless_reset_token, kQuicResetTokenBytes);
-        m_peer_cids[0].has_token = true;
-        watch(m_peer_cids[0]);
+        // Sequence 0's token. A keyed connection's parameters are a packet like any other, and a reordered flight can
+        // bring NEW_CONNECTION_ID first and retire sequence 0 before them.
+        for (usize index = 0U; index < m_peer_cid_count; ++index)
+        {
+            PeerCid& held = m_peer_cids[index];
+            if (held.sequence == 0U)
+            {
+                std::memcpy(held.reset_token, m_peer.stateless_reset_token, kQuicResetTokenBytes);
+                held.has_token = true;
+                watch(held);
+            }
+        }
     }
     restart_idle(now_ns);
     return true;

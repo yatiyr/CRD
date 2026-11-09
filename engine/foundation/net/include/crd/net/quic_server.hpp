@@ -101,6 +101,12 @@ public:
     void on_admit(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept override;
     void on_early(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept override;
 
+    // Opens the raw UDP path for a client that holds the same secret (S55; its `local_id_bytes` is the ingress's
+    // length): `client`'s address, or port 0 to take the address of the first of its packets that opens. No on_accept
+    // follows: the caller holds the handle. `start.secret` is zeroed in every case. An invalid handle when every
+    // connection is in use or QuicConnection::open_keyed refuses.
+    [[nodiscard]] QuicHandle open_keyed(const Endpoint& client, QuicKeyedStart start, u64 now_ns) noexcept;
+
     [[nodiscard]] u32 early_held() const noexcept;
     [[nodiscard]] QuicServerCounters counters() const noexcept;
 

@@ -227,6 +227,71 @@ TEST_CASE("QUIC: Retry integrity tags of RFC 9001 and RFC 9369", "[crypto][net-2
           CryptoError::BadLength);
 }
 
+TEST_CASE("QUIC: a session secret gives each side its own traffic secret and connection ID", "[crypto][net-2][quic]")
+{
+    u8 session[kQuicKeyedSecretBytes];
+    std::memset(session, 0x2A, sizeof(session));
+    u8 client[kQuicMaxSecretBytes];
+    u8 server[kQuicMaxSecretBytes];
+    usize client_bytes = 0U;
+    usize server_bytes = 0U;
+
+    // Fixed once: both ends of every release must derive the same keys.
+    REQUIRE(quic_keyed_traffic_secret(AlgorithmId::Aes128Gcm, session, QuicSide::Client, client, client_bytes) ==
+            CryptoError::None);
+    const Bytes expected_client = from_hex("d367362093b73f6ffde66e57049bcc428b519e1c84094a5bc89db74e8ca14bd0");
+    REQUIRE(client_bytes == expected_client.size());
+    CHECK(std::memcmp(client, expected_client.data(), client_bytes) == 0);
+    REQUIRE(quic_keyed_traffic_secret(AlgorithmId::Aes256Gcm, session, QuicSide::Server, server, server_bytes) ==
+            CryptoError::None);
+    const Bytes expected_server =
+        from_hex("6df0b8accfbf51e950359b7b4060d2216adaae5cc381481397eea718f4776b41e9d6d6166b17"
+                 "5ed281aa20a8057567a3");
+    REQUIRE(server_bytes == expected_server.size());
+    CHECK(std::memcmp(server, expected_server.data(), server_bytes) == 0);
+    u8 id[8];
+    REQUIRE(quic_keyed_connection_id(session, QuicSide::Server, id) == CryptoError::None);
+    const Bytes expected_id = from_hex("5ae42cfebc8347bb");
+    CHECK(std::memcmp(id, expected_id.data(), sizeof(id)) == 0);
+
+    for (const AlgorithmId aead : kAeads)
+    {
+        REQUIRE(quic_keyed_traffic_secret(aead, session, QuicSide::Client, client, client_bytes) == CryptoError::None);
+        REQUIRE(quic_keyed_traffic_secret(aead, session, QuicSide::Server, server, server_bytes) == CryptoError::None);
+        CHECK(client_bytes == ((aead == AlgorithmId::Aes256Gcm) ? 48U : 32U));
+        CHECK(client_bytes == server_bytes);
+        CHECK(std::memcmp(client, server, client_bytes) != 0);
+        QuicPacketKey key;
+        CHECK(key.init(QuicVersion::V1, aead, ConstSpan<u8>(client, client_bytes)) == CryptoError::None);
+    }
+    u8 other[kQuicKeyedSecretBytes];
+    std::memset(other, 0x2B, sizeof(other));
+    u8 changed[kQuicMaxSecretBytes];
+    REQUIRE(quic_keyed_traffic_secret(AlgorithmId::Aes128Gcm, other, QuicSide::Client, changed, client_bytes) ==
+            CryptoError::None);
+    REQUIRE(quic_keyed_traffic_secret(AlgorithmId::Aes128Gcm, session, QuicSide::Client, client, client_bytes) ==
+            CryptoError::None);
+    CHECK(std::memcmp(client, changed, client_bytes) != 0);
+
+    u8 client_id[20];
+    u8 server_id[20];
+    REQUIRE(quic_keyed_connection_id(session, QuicSide::Client, client_id) == CryptoError::None);
+    REQUIRE(quic_keyed_connection_id(session, QuicSide::Server, server_id) == CryptoError::None);
+    CHECK(std::memcmp(client_id, server_id, sizeof(client_id)) != 0);
+
+    CHECK(quic_keyed_traffic_secret(AlgorithmId::X25519, session, QuicSide::Client, client, client_bytes) ==
+          CryptoError::Unsupported);
+    CHECK(client_bytes == 0U);
+    CHECK(quic_keyed_traffic_secret(AlgorithmId::Aes128Gcm, ConstSpan<u8>(session, 31U), QuicSide::Client, client,
+                                    client_bytes) == CryptoError::BadLength);
+    CHECK(client[0] == 0U);
+    CHECK(quic_keyed_traffic_secret(AlgorithmId::Aes128Gcm, session, QuicSide::Client, Span<u8>(client, 47U),
+                                    client_bytes) == CryptoError::BadLength);
+    CHECK(quic_keyed_connection_id(ConstSpan<u8>(session, 33U), QuicSide::Client, id) == CryptoError::BadLength);
+    u8 too_long[21];
+    CHECK(quic_keyed_connection_id(session, QuicSide::Client, too_long) == CryptoError::BadLength);
+}
+
 TEST_CASE("QUIC: packet number encoding and decoding of RFC 9000", "[crypto][net-2][quic]")
 {
     // Appendix A.2: 0xac5c02 after 0xabe8b3 was acknowledged needs 16 bits; 0xace8fe needs 24.

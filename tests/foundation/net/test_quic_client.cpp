@@ -18,6 +18,7 @@
 #include <crd/net/quic_server.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cstring>
 #include <memory>
 
@@ -190,6 +191,15 @@ public:
 
     [[nodiscard]] ServerStack& server(usize index) { return *m_server[index]; }
 
+    // Opens the raw UDP path to server `index` with the stream sizes of `seed`.
+    QuicHandle open_keyed(usize index, u64 seed, const QuicKeyedStart& start)
+    {
+        const QuicHandle handle = client.open_keyed(server_at(index), start, now);
+        app.begin(handle, seed);
+        m_client_next = now;
+        return handle;
+    }
+
     // Connects to server `index` with the stream sizes of `seed`.
     QuicHandle connect(usize index, u64 seed, const TlsContext* tls = nullptr)
     {
@@ -226,6 +236,14 @@ public:
         reset.size = forgetful.answer(decision, kClientAt, kUnix, Span<u8>(reset.bytes, kQuicMaxStatelessAnswerBytes));
         REQUIRE(reset.size != 0U);
         return reset;
+    }
+
+    // Server `index`'s live connection of `handle` (the test requires one).
+    QuicConnection& served(usize index, QuicHandle handle)
+    {
+        QuicConnection* const connection = server(index).server.connection(handle);
+        REQUIRE(connection != nullptr);
+        return *connection;
     }
 
     // Wakes a connection the test wrote to or closed.
@@ -426,6 +444,39 @@ private:
     usize m_stalled = 0U;
     bool m_turn = false;
 };
+
+constexpr usize kServerIds = 16U; // the ingress's default length
+
+// A session secret and the start that opens it on a host, which fills its own ID length.
+struct HostKey
+{
+    u8 secret[kQuicKeyedSecretBytes] = {};
+    QuicKeyedStart start;
+
+    explicit HostKey(usize peer_id_bytes, u8 fill = 0x5BU)
+    {
+        std::memset(secret, fill, sizeof(secret));
+        start.secret = Span<u8>(secret, sizeof(secret));
+        start.peer_id_bytes = peer_id_bytes;
+    }
+
+    [[nodiscard]] bool zeroed() const
+    {
+        constexpr u8 none[kQuicKeyedSecretBytes] = {};
+        return std::memcmp(secret, none, sizeof(secret)) == 0;
+    }
+};
+
+// A datagram from nowhere for the connection ID `id`: nothing in it opens.
+Datagram forged_for(ConstSpan<u8> id)
+{
+    Datagram forged;
+    forged.size = 64U;
+    std::memset(forged.bytes, 0x3C, forged.size);
+    forged.bytes[0] = 0x40U;
+    std::memcpy(forged.bytes + 1U, id.data(), id.size());
+    return forged;
+}
 
 void hostile(Network& network, u64 seed)
 {
@@ -919,9 +970,135 @@ TEST_CASE("QUIC client: the pool's bounds, stale handles, a TLS context per conn
     CHECK(refusals > 6U);
 }
 
+TEST_CASE("QUIC hosts: the raw UDP path shares a socket with TLS connections, over hostile paths",
+          "[net][4.2a][raw-path]")
+{
+    const u64 seed = GENERATE(11U, 12U, 13U);
+    Identity identity;
+    auto network = std::make_unique<Network>(identity, Setup{},
+                                             client_config(identity, QuicVersion::V1, ConstSpan<u32>(kBothVersions)));
+    hostile(*network, seed);
+    HostKey at_server(kClientCid);
+    HostKey at_client(kServerIds);
+    const QuicHandle served = network->server(0U).server.open_keyed(Endpoint{}, at_server.start, network->now);
+    REQUIRE(served.valid());
+    CHECK(at_server.zeroed());
+    const QuicHandle keyed = network->open_keyed(0U, seed, at_client.start);
+    REQUIRE(keyed.valid());
+    CHECK(at_client.zeroed());
+    const QuicHandle tls = network->connect(0U, seed + 100U);
+    REQUIRE(network->run_until([&] { return network->app.echoed(keyed) && network->app.echoed(tls); }));
+    QuicConnection& server = network->served(0U, served);
+    CHECK(server.address_validated());
+    CHECK(server.peer_parameters_known());
+    CHECK(network->live(keyed).confirmed());
+    CHECK(network->live(keyed).new_token().empty()); // a keyed path proves its address by the session
+    CHECK(network->stray == 0U);
+}
+
+TEST_CASE("QUIC hosts: a server opened with no peer takes the first address whose packet opens, and only that",
+          "[net][4.2a][raw-path]")
+{
+    Identity identity;
+    auto network = std::make_unique<Network>(identity, Setup{},
+                                             client_config(identity, QuicVersion::V1, ConstSpan<u32>(kBothVersions)));
+    HostKey at_server(kClientCid);
+    HostKey at_client(kServerIds);
+    u8 server_id[kServerIds];
+    REQUIRE(quic_keyed_connection_id(ConstSpan<u8>(at_server.secret), QuicSide::Server,
+                                     Span<u8>(server_id, sizeof(server_id))) == CryptoError::None);
+    ServerStack& stack = network->server(0U);
+    const QuicHandle served = stack.server.open_keyed(Endpoint{}, at_server.start, network->now);
+    REQUIRE(served.valid());
+    QuicConnection& server = network->served(0U, served);
+
+    // A forgery from anywhere reaches the connection, opens nothing, binds nothing and draws no answer.
+    const Datagram forged = forged_for(ConstSpan<u8>(server_id, sizeof(server_id)));
+    stack.socket.deliver(forged, kStranger);
+    static_cast<void>(stack.loop.poll());
+    CHECK(server.counters().packets_opened == 0U);
+    CHECK(server.counters().packets_dropped != 0U);
+    CHECK(stack.server.counters().foreign_path == 0U);
+    CHECK(stack.socket.sent_count == 0U);
+
+    const QuicHandle keyed = network->open_keyed(0U, 21U, at_client.start);
+    REQUIRE(network->run_until([&] { return network->app.echoed(keyed); }));
+    CHECK(server.counters().packets_opened != 0U);
+
+    // Bound: the same forgery is now a datagram from another address.
+    const u64 received = server.counters().datagrams_received;
+    stack.socket.deliver(forged, kStranger);
+    static_cast<void>(stack.loop.poll());
+    CHECK(stack.server.counters().foreign_path == 1U);
+    CHECK(server.counters().datagrams_received == received);
+}
+
+TEST_CASE("QUIC hosts: a raw UDP path refused leaves its slot and route free and its secret zeroed",
+          "[net][4.2a][raw-path]")
+{
+    Identity identity;
+    Setup setup;
+    setup.connections = 1U;
+    QuicClientConfig settings = client_config(identity, QuicVersion::V1, ConstSpan<u32>(kBothVersions));
+    settings.connections = 1U;
+    auto network = std::make_unique<Network>(identity, setup, settings);
+    ServerStack& stack = network->server(0U);
+
+    SECTION("a client asked for port 0")
+    {
+        HostKey key(kServerIds);
+        CHECK_FALSE(network->client.open_keyed(Endpoint{server_at(0U).address, 0U}, key.start, network->now).valid());
+        CHECK(key.zeroed());
+        CHECK(network->client.counters().refused == 1U);
+    }
+    SECTION("an AEAD the connection refuses: the route goes with it, and the slot takes the next")
+    {
+        HostKey key(kClientCid);
+        key.start.aead = AlgorithmId::X25519;
+        const usize routes = stack.routes.size();
+        CHECK_FALSE(stack.server.open_keyed(Endpoint{}, key.start, network->now).valid());
+        CHECK(key.zeroed());
+        CHECK(stack.routes.size() == routes);
+        CHECK(stack.server.live() == 0U);
+        HostKey good(kClientCid);
+        CHECK(stack.server.open_keyed(Endpoint{}, good.start, network->now).valid());
+        CHECK(stack.server.live() == 1U);
+    }
+    SECTION("a full pool")
+    {
+        HostKey first(kClientCid);
+        const QuicHandle held = stack.server.open_keyed(Endpoint{}, first.start, network->now);
+        REQUIRE(held.valid());
+        HostKey second(kClientCid, 0x99U);
+        CHECK_FALSE(stack.server.open_keyed(Endpoint{}, second.start, network->now).valid());
+        CHECK(second.zeroed());
+        CHECK(stack.server.counters().refused == 1U);
+        CHECK(stack.server.connection(held) != nullptr);
+    }
+}
+
+TEST_CASE("QUIC hosts: a server without a TLS context serves the raw UDP path and refuses every handshake",
+          "[net][4.2a][raw-path]")
+{
+    Identity identity;
+    Setup setup;
+    setup.raw_only = true;
+    auto network = std::make_unique<Network>(identity, setup,
+                                             client_config(identity, QuicVersion::V1, ConstSpan<u32>(kBothVersions)));
+    HostKey at_server(kClientCid);
+    HostKey at_client(kServerIds);
+    REQUIRE(network->server(0U).server.open_keyed(Endpoint{}, at_server.start, network->now).valid());
+    const QuicHandle keyed = network->open_keyed(0U, 31U, at_client.start);
+    const QuicHandle tls = network->connect(0U, 32U);
+    REQUIRE(network->run_until([&] { return network->app.echoed(keyed) && network->app.state(tls).closed; }));
+    CHECK(network->app.state(tls).close.error_code == static_cast<u64>(QuicTransportError::ConnectionRefused));
+    CHECK(network->server(0U).server.counters().refused != 0U);
+}
+
 TEST_CASE("QUIC client: a client host is served over the host's loopback through real UDP sockets",
           "[net][4.2a][quic-client]")
 {
+    const bool raw_path = GENERATE(false, true);
     UdpOptions options;
     options.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), 0U};
     SocketError error = SocketError::Failed;
@@ -964,7 +1141,14 @@ TEST_CASE("QUIC client: a client host is served over the host's loopback through
 
     QuicClientConnect request;
     request.server = server_socket.local_endpoint();
-    const QuicHandle handle = client.connect(request, clock.monotonic_ns());
+    HostKey at_server(kClientCid);
+    HostKey at_client(kServerIds);
+    if (raw_path)
+    {
+        REQUIRE(server.open_keyed(Endpoint{}, at_server.start, clock.monotonic_ns()).valid());
+    }
+    const QuicHandle handle = raw_path ? client.open_keyed(request.server, at_client.start, clock.monotonic_ns())
+                                       : client.connect(request, clock.monotonic_ns());
     app.begin(handle, 9U);
     const u64 deadline = clock.monotonic_ns() + (10U * kNanosPerSecond);
     while (!app.echoed(handle) && clock.monotonic_ns() < deadline)
@@ -980,6 +1164,10 @@ TEST_CASE("QUIC client: a client host is served over the host's loopback through
     REQUIRE(connection != nullptr);
     CHECK(connection->confirmed());
     CHECK(client.counters().datagrams_sent != 0U);
+    if (raw_path)
+    {
+        return;
+    }
     // The server's NEW_TOKEN token is remembered for its address.
     const u64 token_deadline = clock.monotonic_ns() + (5U * kNanosPerSecond);
     while (client.token_for(request.server, QuicVersion::V1).empty() && clock.monotonic_ns() < token_deadline)

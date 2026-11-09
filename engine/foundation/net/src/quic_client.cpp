@@ -127,6 +127,29 @@ QuicHandle QuicClient::connect(const QuicClientConnect& request, u64 now_ns) noe
     return handle_of(index);
 }
 
+QuicHandle QuicClient::open_keyed(const Endpoint& server, QuicKeyedStart start, u64 now_ns) noexcept
+{
+    start.local_id_bytes = m_ingress.config().local_cid_bytes;
+    const u32 index = free_slot();
+    QuicHandle handle;
+    if (m_started != nullptr && server.port != 0U)
+    {
+        handle = start_keyed(m_config.connection, server, start, now_ns);
+    }
+    else
+    {
+        crypto::secure_zero(start.secret);
+    }
+    if (!handle.valid())
+    {
+        ++m_counters.refused;
+        return handle;
+    }
+    m_started[index] = Started{nullptr, false, true}; // no version to follow and no token to keep
+    ++m_counters.connected;
+    return handle;
+}
+
 QuicConnection* QuicClient::start(u32 index, const Endpoint& server, const QuicConnectionConfig& config,
                                   cont::ConstSpan<u8> token, u64 now_ns) noexcept
 {

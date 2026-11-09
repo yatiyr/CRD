@@ -11,6 +11,8 @@
 //   1  frames from a raw client after the handshake: each [length][bytes] sealed as one 1-RTT packet to the server.
 //   2  frames in Initial packets anyone can seal (their keys come from the public Destination Connection ID): each
 //      [length][bytes] to a fresh server.
+//   3  frames from a raw peer of the raw UDP path: its hello, then each [length][bytes] sealed as one 1-RTT packet.
+// With bit 5 mode 0 runs the raw UDP path (S55): both ends opened from one secret, no handshake on the wire.
 //
 // Oracles. Always: a server sends at most three times what it received before the address is proven; every client
 // datagram carrying an Initial has 1200 bytes; nothing is allocated after construction; a close names a transport
@@ -67,6 +69,8 @@ constexpr u8 kTicketKey[kTlsTicketKeyBytes] = {0x71};
 constexpr u8 kAppContext[] = {0x5C, 0x11, 0xE7, 0x02};
 constexpr u64 kEarlyBytes = 800U; // within the stream and connection windows of config_for
 constexpr u8 kEarlyPayload[] = {0xDA, 0x7A};
+constexpr u8 kKeyedSecret[kQuicKeyedSecretBytes] = {0x4D, 0x11, 0x7E};
+constexpr usize kKeyedIdBytes = 8U;
 
 bool valid_close(u64 code)
 {
@@ -218,10 +222,43 @@ private:
     usize m_bytes = 0U;
 };
 
+// `side`'s sequence 0 ID on the raw UDP path of kKeyedSecret.
+struct KeyedId
+{
+    u8 bytes[kKeyedIdBytes] = {};
+
+    explicit KeyedId(QuicSide side)
+    {
+        CRD_FUZZ_REQUIRE(quic_keyed_connection_id(ConstSpan<u8>(kKeyedSecret), side, Span<u8>(bytes, sizeof(bytes))) ==
+                         CryptoError::None);
+    }
+
+    [[nodiscard]] ConstSpan<u8> view() const { return ConstSpan<u8>(bytes, sizeof(bytes)); }
+};
+
+const KeyedId& keyed_id(QuicSide side)
+{
+    static const KeyedId kClient(QuicSide::Client);
+    static const KeyedId kServer(QuicSide::Server);
+    return (side == QuicSide::Client) ? kClient : kServer;
+}
+
+// Opens `end` on kKeyedSecret.
+void open_keyed(QuicConnection& end, u64 now)
+{
+    u8 secret[kQuicKeyedSecretBytes];
+    std::memcpy(secret, kKeyedSecret, sizeof(secret));
+    QuicKeyedStart start;
+    start.secret = Span<u8>(secret, sizeof(secret));
+    start.local_id_bytes = kKeyedIdBytes;
+    start.peer_id_bytes = kKeyedIdBytes;
+    CRD_FUZZ_REQUIRE(end.open_keyed(start, now));
+}
+
 // With `switching` the client lists its version first and the server the other one; with `tickets` both ends run
-// the contexts that take 0-RTT, the client keeping and offering its tickets there.
+// the contexts that take 0-RTT, the client keeping and offering its tickets there; `keyed` is for the raw UDP path.
 QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnectionIds* ids, bool switching = false,
-                                Tickets* tickets = nullptr)
+                                Tickets* tickets = nullptr, bool keyed = false)
 {
     QuicConnectionConfig config;
     config.side = side;
@@ -234,6 +271,10 @@ QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnecti
     config.parameters.active_connection_id_limit = 4U;
     config.version = version;
     config.tls = (side == QuicSide::Client) ? &identity().client : &identity().server;
+    if (keyed)
+    {
+        config.tls = nullptr;
+    }
     if (tickets != nullptr)
     {
         config.tls = (side == QuicSide::Client) ? &identity().early_client : &identity().early_server;
@@ -298,14 +339,24 @@ struct Pair
     usize count = 0U;
     u64 now = 1000U * kMs;
     QuicVersion version;
+    bool keyed = false; // the raw UDP path: no handshake to confirm, so it stands once both ends read the other's hello
     bool retry_sent = false;
 
-    explicit Pair(QuicVersion run, bool switching = false, Tickets* tickets = nullptr)
-        : client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
-          server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
-          client(allocator, config_for(QuicSide::Client, run, &client_host.ids, switching, tickets)),
-          server(allocator, config_for(QuicSide::Server, run, &server_host.ids, switching, tickets)), version(run)
+    explicit Pair(QuicVersion run, bool switching = false, Tickets* tickets = nullptr, bool raw_path = false)
+        : client_host(allocator, 0U,
+                      raw_path ? keyed_id(QuicSide::Client).view() : ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
+          server_host(allocator, 1U,
+                      raw_path ? keyed_id(QuicSide::Server).view() : ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
+          client(allocator, config_for(QuicSide::Client, run, &client_host.ids, switching, tickets, raw_path)),
+          server(allocator, config_for(QuicSide::Server, run, &server_host.ids, switching, tickets, raw_path)),
+          version(run), keyed(raw_path)
     {
+    }
+
+    [[nodiscard]] bool established() const
+    {
+        return client.confirmed() && server.confirmed() &&
+               (!keyed || (client.peer_parameters_known() && server.peer_parameters_known()));
     }
 
     // The server answers the client Initials in flight with one Retry, as a stateless ingress does: they are gone.
@@ -442,7 +493,7 @@ struct Pair
             }
             const u64 next =
                 (client.next_timer_ns() < server.next_timer_ns()) ? client.next_timer_ns() : server.next_timer_ns();
-            if (next == kNeverNs || (client.confirmed() && server.confirmed()))
+            if (next == kNeverNs || established())
             {
                 return;
             }
@@ -691,7 +742,7 @@ void read_early(Pair& pair)
     CRD_FUZZ_REQUIRE((fin && read == kEarlyBytes) || finished(pair.client) || finished(pair.server));
 }
 
-void run_script(QuicVersion version, bool switching, bool early, ConstSpan<u8> script)
+void run_script(QuicVersion version, bool switching, bool early, bool keyed, ConstSpan<u8> script)
 {
     Tickets tickets;
     if (early)
@@ -699,11 +750,19 @@ void run_script(QuicVersion version, bool switching, bool early, ConstSpan<u8> s
         CRD_FUZZ_REQUIRE(identity().fresh_filter());
         take_ticket(version, switching, tickets);
     }
-    Pair pair(version, switching, early ? &tickets : nullptr);
+    Pair pair(version, switching, early ? &tickets : nullptr, keyed);
     CRD_FUZZ_REQUIRE(pair.client.ready() && pair.server.ready());
     const usize allocations = pair.allocator.peak_bytes();
-    CRD_FUZZ_REQUIRE(pair.client.connect(ConstSpan<u8>(kClientCid, sizeof(kClientCid)),
-                                         ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), pair.now));
+    if (keyed)
+    {
+        open_keyed(pair.client, pair.now);
+        open_keyed(pair.server, pair.now);
+    }
+    else
+    {
+        CRD_FUZZ_REQUIRE(pair.client.connect(ConstSpan<u8>(kClientCid, sizeof(kClientCid)),
+                                             ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), pair.now));
+    }
     // A switch runs the first connection in the other version: its ticket is offered by none (RFC 9369 section 5).
     const bool offered = pair.client.handshake().early_data() == TlsEarlyData::Offered;
     CRD_FUZZ_REQUIRE(offered == (early && !switching));
@@ -792,9 +851,8 @@ void run_script(QuicVersion version, bool switching, bool early, ConstSpan<u8> s
         }
     }
     pair.settle(4096U);
-    CRD_FUZZ_REQUIRE((pair.client.confirmed() && pair.server.confirmed()) || finished(pair.client) ||
-                     finished(pair.server));
-    if (pair.client.confirmed() && pair.server.confirmed())
+    CRD_FUZZ_REQUIRE(pair.established() || finished(pair.client) || finished(pair.server));
+    if (pair.established())
     {
         CRD_FUZZ_REQUIRE(pair.client.handshake().application_protocol() ==
                          pair.server.handshake().application_protocol());
@@ -860,13 +918,51 @@ struct Raw
     usize dcid_bytes = sizeof(kInitialDcid);
     u64 now = 1000U * kMs;
     bool failed = false;
+    bool keyed;
     u32 version;
 
-    explicit Raw(QuicVersion run)
-        : host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
-          server(allocator, config_for(QuicSide::Server, run, &host.ids)), version(static_cast<u32>(run))
+    explicit Raw(QuicVersion run, bool raw_path = false)
+        : host(allocator, 1U,
+               raw_path ? keyed_id(QuicSide::Server).view() : ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
+          server(allocator, config_for(QuicSide::Server, run, &host.ids, false, nullptr, raw_path)), keyed(raw_path),
+          version(static_cast<u32>(run))
     {
         std::memcpy(dcid, kInitialDcid, sizeof(kInitialDcid));
+    }
+
+    // The raw UDP path from the client's side: the server opened, its keys held and the client's hello sent.
+    void open()
+    {
+        open_keyed(server, now);
+        std::memcpy(dcid, keyed_id(QuicSide::Server).bytes, kKeyedIdBytes);
+        dcid_bytes = kKeyedIdBytes;
+        protection.start_keyed(QuicSide::Client, static_cast<QuicVersion>(version));
+        constexpr QuicSide sides[] = {QuicSide::Client, QuicSide::Server};
+        for (const QuicSide side : sides)
+        {
+            u8 traffic[kQuicMaxSecretBytes];
+            usize bytes = 0U;
+            CRD_FUZZ_REQUIRE(quic_keyed_traffic_secret(AlgorithmId::Aes128Gcm, ConstSpan<u8>(kKeyedSecret), side,
+                                                       Span<u8>(traffic, sizeof(traffic)), bytes) == CryptoError::None);
+            CRD_FUZZ_REQUIRE(protection.install(QuicLevel::Application, side == QuicSide::Client,
+                                                AlgorithmId::Aes128Gcm,
+                                                ConstSpan<u8>(traffic, bytes)) == CryptoError::None);
+        }
+        protection.confirm();
+        QuicTransportParameters parameters;
+        parameters.has_initial_source_connection_id = true;
+        static_cast<void>(parameters.initial_source_connection_id.assign(keyed_id(QuicSide::Client).view()));
+        u8 hello[256];
+        const usize bytes = write_quic_transport_parameters(parameters, QuicSide::Client, {3U},
+                                                            Span<u8>(hello + 2U, sizeof(hello) - 2U));
+        hello[0] = static_cast<u8>(bytes >> 8U);
+        hello[1] = static_cast<u8>(bytes);
+        QuicFrame frame;
+        frame.kind = QuicFrameKind::Crypto;
+        frame.data = ConstSpan<u8>(hello, 2U + bytes);
+        u8 frames[512];
+        const usize written = write_quic_frame(frame, Span<u8>(frames, sizeof(frames)));
+        send(QuicPacketType::OneRtt, ConstSpan<u8>(frames, written));
     }
 
     // One packet of `type` holding `frames` as its payload (PADDING when empty), then the server's answers read.
@@ -949,13 +1045,13 @@ struct Raw
                 }
                 const QuicLevel level = level_of(opened.type);
                 const usize index = static_cast<usize>(level);
-                if (frame.kind == QuicFrameKind::Crypto && frame.offset == received[index])
+                if (!keyed && frame.kind == QuicFrameKind::Crypto && frame.offset == received[index])
                 {
                     received[index] += frame.data.size();
                     failed = failed || handshake.provide(level, frame.data) != TlsError::None;
                 }
             }
-            failed = failed || protection.install(handshake) != CryptoError::None;
+            failed = failed || (!keyed && protection.install(handshake) != CryptoError::None);
         }
     }
 
@@ -980,17 +1076,24 @@ struct Raw
     }
 };
 
-void run_frames(QuicVersion version, ConstSpan<u8> input, bool initial)
+void run_frames(QuicVersion version, ConstSpan<u8> input, bool initial, bool keyed)
 {
-    Raw raw(version);
+    Raw raw(version, keyed);
     CRD_FUZZ_REQUIRE(raw.server.ready());
     const usize allocations = raw.allocator.peak_bytes();
-    CRD_FUZZ_REQUIRE(raw.protection.start(QuicSide::Client, version,
-                                          ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid))) == CryptoError::None);
-    CRD_FUZZ_REQUIRE(raw.server.accept(
-        accept_of(ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
-        raw.now));
-    if (!initial)
+    if (keyed)
+    {
+        raw.open();
+    }
+    else
+    {
+        CRD_FUZZ_REQUIRE(raw.protection.start(QuicSide::Client, version,
+                                              ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid))) == CryptoError::None);
+        CRD_FUZZ_REQUIRE(raw.server.accept(
+            accept_of(ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
+            raw.now));
+    }
+    if (!initial && !keyed)
     {
         QuicTransportParameters parameters;
         parameters.has_initial_source_connection_id = true;
@@ -1038,16 +1141,20 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     }
     const QuicVersion version = ((data[0] & 4U) != 0U) ? QuicVersion::V2 : QuicVersion::V1;
     const ConstSpan<u8> rest(data + 1U, size - 1U);
+    const bool keyed = (data[0] & 32U) != 0U;
     switch (data[0] & 3U)
     {
         case 0U:
-            run_script(version, (data[0] & 8U) != 0U, (data[0] & 16U) != 0U, rest);
+            run_script(version, !keyed && (data[0] & 8U) != 0U, !keyed && (data[0] & 16U) != 0U, keyed, rest);
             break;
         case 1U:
-            run_frames(version, rest, false);
+            run_frames(version, rest, false, false);
+            break;
+        case 2U:
+            run_frames(version, rest, true, false);
             break;
         default:
-            run_frames(version, rest, true);
+            run_frames(version, rest, false, true);
             break;
     }
     return 0;
@@ -1076,6 +1183,13 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     const u8 early_hostile[] = {0x14U, 0x04U, 0x02U, 0x03U, 0x00U, 0x0CU, 0x05U, 0x40U, 0x08U, 0x07U,
                                 0x00U, 0x02U, 0x06U, 0x86U, 0x07U, 0x00U, 0x00U, 0x0BU, 0x00U};
     sink.add("script-early-hostile", early_hostile, sizeof(early_hostile));
+    // The raw UDP path, clean and on a hostile path in version 2, and frames from a peer holding its secret.
+    const u8 keyed[] = {0x20U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U};
+    sink.add("script-keyed", keyed, sizeof(keyed));
+    const u8 keyed_hostile[] = {0x24U, 0x02U, 0x03U, 0x00U, 0x0CU, 0x05U, 0x40U, 0x08U, 0x07U, 0x00U, 0x02U, 0x06U};
+    sink.add("script-keyed-hostile", keyed_hostile, sizeof(keyed_hostile));
+    const u8 keyed_frames[] = {0x03U, 0x01U, 0x01U, 0x04U, 0x0AU, 0x00U, 0x01U, 0x41U, 0x03U, 0x06U, 0x00U, 0x01U};
+    sink.add("keyed-frames", keyed_frames, sizeof(keyed_frames));
     // Losses, duplicates, a reorder and a corrupted byte in version 2.
     const u8 hostile[] = {0x04U, 0x02U, 0x03U, 0x00U, 0x0CU, 0x05U, 0x40U, 0x08U, 0x07U, 0x00U,
                           0x02U, 0x06U, 0x86U, 0x07U, 0x00U, 0x00U, 0x0BU, 0x00U, 0x00U};

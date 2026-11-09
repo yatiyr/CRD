@@ -710,7 +710,7 @@ TEST_CASE("QUIC server: configurations out of range and refused allocations leav
         return !ready(config);
     };
     CHECK(refused([](QuicServerConfig& c) { c.connection.side = QuicSide::Client; }));
-    CHECK(refused([](QuicServerConfig& c) { c.connection.tls = nullptr; }));
+    CHECK_FALSE(refused([](QuicServerConfig& c) { c.connection.tls = nullptr; })); // serves the raw UDP path alone
     CHECK(refused([](QuicServerConfig& c) { c.connection.max_datagram_bytes = 1199U; }));
     CHECK(refused([](QuicServerConfig& c) { c.connection.entropy_seed = ConstSpan<u8>(kHostPrf, 5U); }));
     CHECK(refused([](QuicServerConfig& c) { c.connections = 0U; }));

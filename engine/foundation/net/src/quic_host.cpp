@@ -114,6 +114,42 @@ QuicConnection* QuicHost::build(u32 index, QuicConnectionConfig config) noexcept
     return connection;
 }
 
+QuicHandle QuicHost::start_keyed(QuicConnectionConfig config, const Endpoint& peer, const QuicKeyedStart& start,
+                                 u64 now_ns) noexcept
+{
+    const u32 index = (m_slots != nullptr) ? m_free : kNoConnection;
+    u8 local[crypto::kQuicMaxConnectionIdBytes] = {};
+    const usize id_bytes = start.local_id_bytes;
+    const cont::Span<u8> local_id(local, (id_bytes <= sizeof(local)) ? id_bytes : 0U);
+    if (index == kNoConnection || local_id.empty() ||
+        crypto::quic_keyed_connection_id(start.secret, config.side, local_id) != crypto::CryptoError::None ||
+        m_routes.insert(local_id, index) != RouteError::None)
+    {
+        crypto::secure_zero(start.secret);
+        return QuicHandle{};
+    }
+    config.tls = nullptr;
+    config.tickets = nullptr;
+    config.token = {};
+    config.early_context = {};
+    config.versions = {};
+    config.after_version_negotiation = false;
+    config.held_packets = 0U;
+    QuicConnection* const connection = build(index, config);
+    if (connection == nullptr || !connection->open_keyed(start, now_ns))
+    {
+        crypto::secure_zero(start.secret);
+        if (connection != nullptr)
+        {
+            discard(*connection);
+        }
+        m_ids[index].retire(local_id);
+        return QuicHandle{};
+    }
+    enlist(index, *connection, peer, now_ns);
+    return handle_of(index);
+}
+
 void QuicHost::discard(QuicConnection& connection) noexcept
 {
     connection.~QuicConnection(); // in the spare, which stays the spare
@@ -151,12 +187,19 @@ void QuicHost::on_route(const IngressDecision& decision, const ReceivedDatagram&
     {
         return;
     }
-    if (!(datagram.peer == m_slots[decision.connection].peer))
+    Slot& slot = m_slots[decision.connection];
+    const bool unbound = slot.peer.port == 0U;
+    if (!unbound && !(datagram.peer == slot.peer))
     {
         ++m_counters.foreign_path;
         return;
     }
+    const u64 opened = connection->counters().packets_opened;
     connection->receive(datagram.storage.first(datagram.size), QuicEcn::NotEct, now_ns);
+    if (unbound && connection->counters().packets_opened != opened)
+    {
+        slot.peer = datagram.peer;
+    }
     schedule(decision.connection, now_ns);
 }
 
@@ -273,7 +316,8 @@ void QuicHost::serve(u32 index, u64 now_ns) noexcept
     {
         service(index, connection, now_ns);
     }
-    const bool drained = drain(slot, now_ns);
+    // A slot with no peer yet has no one to send to: what a stranger's datagrams credited waits for the binding packet.
+    const bool drained = slot.peer.port == 0U || drain(slot, now_ns);
     if (connection.state() == QuicConnectionState::Closed)
     {
         reclaim(index, now_ns);

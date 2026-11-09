@@ -114,6 +114,10 @@ public:
     // streams in on_service). An invalid handle when every connection is in use, the server's port is 0, no ID can
     // be routed, the token is longer than kQuicMaxCarriedTokenBytes, or the connection refuses its configuration.
     [[nodiscard]] QuicHandle connect(const QuicClientConnect& request, u64 now_ns) noexcept;
+    // Opens the raw UDP path to `server` on `start` (S55; its `local_id_bytes` is the ingress's length), from the
+    // configuration's limits; `start.secret` is zeroed in every case. An invalid handle when every connection is in
+    // use, the server's port is 0, or QuicConnection::open_keyed refuses.
+    [[nodiscard]] QuicHandle open_keyed(const Endpoint& server, QuicKeyedStart start, u64 now_ns) noexcept;
 
     // The token remembered for `server` and `version`; empty for none (tests and diagnostics: it stays remembered).
     [[nodiscard]] cont::ConstSpan<u8> token_for(const Endpoint& server, crypto::QuicVersion version) const noexcept;
