@@ -233,8 +233,8 @@ struct Raw
             }
         }
         // Stays alive for the views the frame holds.
-        m_kept = static_cast<Bytes&&>(plain);
-        WireReader in(ConstSpan<u8>(m_kept.data(), fill));
+        kept = static_cast<Bytes&&>(plain);
+        WireReader in(ConstSpan<u8>(kept.data(), fill));
         while (!in.done())
         {
             u64 size = 0U;
@@ -291,7 +291,7 @@ struct Raw
         }
     }
 
-    Bytes m_kept;
+    Bytes kept;
 };
 
 Bytes stream_frame(u64 id, u64 offset, const Bytes& data, bool fin = false)

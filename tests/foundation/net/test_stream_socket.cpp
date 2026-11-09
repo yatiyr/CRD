@@ -127,7 +127,8 @@ TEST_CASE("a TCP write past the host's buffers is Busy, and every byte arrives i
     bool busy = false;
     for (usize turn = 0U; turn < 2000U && !busy; ++turn)
     {
-        const StreamResult sent = client.write(ConstSpan<u8>(pattern.data(), pattern.size()));
+        const usize at = offered % pattern.size(); // a partial write is followed from where it stopped
+        const StreamResult sent = client.write(ConstSpan<u8>(pattern.data() + at, pattern.size() - at));
         offered += sent.bytes;
         busy = sent.error == SocketError::Busy;
         REQUIRE((sent.error == SocketError::None || busy));
