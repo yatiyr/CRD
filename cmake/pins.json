@@ -1079,6 +1079,17 @@
       "license": "MIT",
       "note": "OpenMLS 0.9.2 (2026-10-22, the release with GHSA-p276-g3f3-wwgh and GHSA-94v4-rg25-x625 fixed) with its RustCrypto provider and basic credentials: the crate set of crd-openmls-peer, the OpenMLS member program of the MLS interoperability test (CRD_BUILD_MLS_VS_OPENMLS, NET.2 decision M4). The committed Cargo.lock is the pin: every crate from crates.io at the version and SHA-256 it names, which `cargo build --locked` verifies on download, as npm ci does a committed package-lock (check-pins.py checks each entry names crates.io and a 64-hex checksum, and the manifest requires this version exactly). Built by the pinned Rust (tools/rust-linux-x64) into the build tree (CARGO_HOME there too); linked into no engine module and never shipped. OpenMLS is MIT (its LICENSE, read from the v0.9.2 archive, commit 8a8f83b4). The 147 crates the build compiles (of the 195 the lockfile resolves, the rest optional or for other targets) declare MIT, Apache-2.0 or either, but for BSD-3-Clause (curve25519-dalek, ed25519-dalek, x25519-dalek, subtle), MPL-2.0 (hpke-rs and its three providers), Unlicense OR MIT and Unicode-3.0 terms (read from each crate's manifest, 2026-11-02); none is redistributed, the program being test-only. Pinned as a testing download under the user's approval of 2026-11-01."
     },
+    "qmux-crates": {
+      "version": "0.6.6",
+      "crate": "qmux",
+      "lockfile": "tests/foundation/net/interop/qmux_crate_peer/Cargo.lock",
+      "manifest": "tests/foundation/net/interop/qmux_crate_peer/Cargo.toml",
+      "repository": "moq-dev/web-transport",
+      "ref": "qmux-v0.6.6",
+      "commit": "ef8abdccdc0afbb23c993dd42611484eb1d655df",
+      "license": "MIT OR Apache-2.0",
+      "note": "qmux 0.6.6 (2026-10-23, draft-ietf-quic-qmux-02) with its TLS transport over rustls 0.23.46 and aws-lc-rs, and rcgen for the peer's self-signed certificate: the crate set of crd-qmux-crate-peer, the second implementation of the QMux interoperability test (CRD_BUILD_QMUX_VS_CRATE, 4.2a). The committed Cargo.lock is the pin: every crate from crates.io at the version and SHA-256 it names, which `cargo build --locked` verifies on download. Test-only, in no shipped build."
+    },
     "cuda-linux-x64": {
       "version": "13.3.1",
       "binary": "bin/nvcc",

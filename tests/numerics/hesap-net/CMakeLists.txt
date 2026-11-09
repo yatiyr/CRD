@@ -98,23 +98,10 @@ if(CRD_BUILD_RAPTORQ_VS_PEERS)
     set_target_properties(crd-raptorq-peers PROPERTIES
         C_STANDARD 11 INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
 
-    set(raptorq_crate_manifest "${CMAKE_CURRENT_SOURCE_DIR}/raptorq_crate_peer/Cargo.toml")
-    set(raptorq_crate_target "${CMAKE_BINARY_DIR}/_deps/raptorq-crate-peer")
-    set(raptorq_crate_library "${raptorq_crate_target}/release/libcrd_raptorq_crate_peer.a")
-    get_filename_component(rust_bin "${CRD_CARGO}" DIRECTORY)
-    set(raptorq_cargo_env "${CMAKE_COMMAND}" -E env "CARGO_HOME=${CMAKE_BINARY_DIR}/_deps/cargo-home" "CARGO=${CRD_CARGO}"
-                          "RUSTC=${rust_bin}/rustc" "RUSTFLAGS=-D warnings")
-    set(raptorq_cargo_args --locked --release --manifest-path "${raptorq_crate_manifest}"
-                           --target-dir "${raptorq_crate_target}")
-    add_custom_target(crd-raptorq-crate-peer ALL
-        COMMAND ${raptorq_cargo_env} "${rust_bin}/cargo-clippy" clippy ${raptorq_cargo_args} -- -D warnings
-        COMMAND ${raptorq_cargo_env} "${CRD_CARGO}" build ${raptorq_cargo_args}
-        BYPRODUCTS "${raptorq_crate_library}"
-        COMMENT "[raptorq-vs-peers] cargo clippy and cargo build --locked: crd-raptorq-crate-peer"
-        USES_TERMINAL
-        VERBATIM)
+    crd_add_cargo_peer(crd-raptorq-crate-peer "${CMAKE_CURRENT_SOURCE_DIR}/raptorq_crate_peer/Cargo.toml"
+                       raptorq-crate-peer libcrd_raptorq_crate_peer.a raptorq-vs-peers)
     add_library(crd-raptorq-crate STATIC IMPORTED GLOBAL)
-    set_target_properties(crd-raptorq-crate PROPERTIES IMPORTED_LOCATION "${raptorq_crate_library}"
+    set_target_properties(crd-raptorq-crate PROPERTIES IMPORTED_LOCATION "${crd-raptorq-crate-peer_OUTPUT}"
                           INTERFACE_LINK_LIBRARIES "dl;pthread;m")
     add_dependencies(crd-raptorq-crate crd-raptorq-crate-peer)
 

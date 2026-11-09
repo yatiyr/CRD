@@ -27,6 +27,8 @@ import sys
 import threading
 import time
 
+from interop_common import collect, expect, reports_of
+
 SEED = '11' * 32
 OPENSSL_GROUPS = {
     'x25519mlkem768': 'X25519MLKEM768',
@@ -43,27 +45,6 @@ RUN_SECONDS = 70
 PROGRESS_SECONDS = 20
 RESET_STREAM_BYTES = 32 << 20
 PROGRESS_BYTES = 1 << 20
-
-
-def expect(condition, message):
-    if not condition:
-        raise AssertionError(message)
-
-
-def reports_of(text):
-    """One dictionary per connection, each opened by its `connection=N` line."""
-    reports = []
-    for line in text.splitlines():
-        if line.startswith('connection='):
-            reports.append({})
-        if '=' in line and reports:
-            name, value = line.split('=', 1)
-            reports[-1][name] = value
-    return reports
-
-
-def collect(process, into):
-    into.append(process.stdout.read())
 
 
 class Relay:

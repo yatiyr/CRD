@@ -1157,7 +1157,8 @@
       "evidence": [
         "tests/foundation/net/test_qmux.cpp",
         "tests/foundation/net/fuzz/fuzz_qmux.cpp",
-        "tests/foundation/net/fuzz/fuzz_qmux_early.cpp"
+        "tests/foundation/net/fuzz/fuzz_qmux_early.cpp",
+        "tests/foundation/net/interop/qmux_interop.py"
       ],
       "deprecation": null,
       "note": "The TCP and TLS path of 4.2a (design S52): the QUIC stream and datagram model over TLS 1.3 on TCP. Each application protocol takes a QMux ALPN of its own, distinct from its QUIC one (section 3.1). Provisional IANA codepoints: a renumbering is this one entry."

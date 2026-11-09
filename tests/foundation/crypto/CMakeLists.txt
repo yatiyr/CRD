@@ -397,29 +397,12 @@ if(CRD_BUILD_ANDROID_KEYSTORE_APP)
     message(STATUS "[android-keystore-app] the Android Keystore in an instrumentation APK (${CRD_ANDROID_SDK})")
 endif()
 
-# Against OpenMLS (CRD_BUILD_MLS_VS_OPENMLS): crd-openmls-peer's members over OpenMLS, a Cargo package linted by
-# Clippy and built with the pinned Rust toolchain (CRD_CARGO) by `cargo build --locked`, so every crate is the one
-# Cargo.lock names, verified by its SHA-256; CARGO_HOME (the crate downloads) and the target directory stay inside this
-# tree, and the peer's own warnings, the compiler's and Clippy's, fail the build. Cargo decides what to rebuild, so the
-# target always runs it.
+# Against OpenMLS (CRD_BUILD_MLS_VS_OPENMLS): crd-openmls-peer's members over OpenMLS, a Cargo package.
 if(CRD_BUILD_MLS_VS_OPENMLS)
-    set(openmls_manifest "${CMAKE_CURRENT_SOURCE_DIR}/interop/openmls_peer/Cargo.toml")
-    set(openmls_target "${CMAKE_BINARY_DIR}/_deps/openmls-peer")
-    set(openmls_peer "${openmls_target}/release/crd-openmls-peer")
-    get_filename_component(rust_bin "${CRD_CARGO}" DIRECTORY)
-    set(cargo_env "${CMAKE_COMMAND}" -E env "CARGO_HOME=${CMAKE_BINARY_DIR}/_deps/cargo-home" "CARGO=${CRD_CARGO}"
-                  "RUSTC=${rust_bin}/rustc" "RUSTFLAGS=-D warnings")
-    set(cargo_args --locked --release --manifest-path "${openmls_manifest}" --target-dir "${openmls_target}")
-    add_custom_target(crd-openmls-peer ALL
-        COMMAND ${cargo_env} "${rust_bin}/cargo-clippy" clippy ${cargo_args} -- -D warnings
-        COMMAND ${cargo_env} "${CRD_CARGO}" build ${cargo_args}
-        BYPRODUCTS "${openmls_peer}"
-        COMMENT "[mls-vs-openmls] cargo clippy and cargo build --locked: crd-openmls-peer"
-        USES_TERMINAL
-        VERBATIM)
+    crd_add_cargo_peer(crd-openmls-peer "${CMAKE_CURRENT_SOURCE_DIR}/interop/openmls_peer/Cargo.toml" openmls-peer
+                       crd-openmls-peer mls-vs-openmls)
     add_test(NAME crd-crypto-mls-interop-openmls
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/mls_interop.py"
-                     --cerid "$<TARGET_FILE:crd-mls-peer>" --openmls "${openmls_peer}")
+                     --cerid "$<TARGET_FILE:crd-mls-peer>" --openmls "${crd-openmls-peer_OUTPUT}")
     set_tests_properties(crd-crypto-mls-interop-openmls PROPERTIES TIMEOUT 600 LABELS "crypto;mls-interop")
-    message(STATUS "[mls-vs-openmls] MLS interoperability against OpenMLS (Cargo.lock), Rust from ${rust_bin}")
 endif()

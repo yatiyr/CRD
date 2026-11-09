@@ -116,6 +116,20 @@ if(CRD_BUILD_QUIC_VS_NGTCP2)
     message(STATUS "[quic-vs-ngtcp2] QUIC interoperability against ngtcp2 ${ngtcp2_version}")
 endif()
 
+# The QMux interoperability test against the `qmux` crate (CRD_BUILD_QMUX_VS_CRATE): crd-qmux-crate-peer is a Cargo
+# package over the crate and rustls, and qmux_interop.py runs it against crd-qmux-peer over the loopback.
+if(CRD_BUILD_QMUX_VS_CRATE)
+    crd_add_cargo_peer(crd-qmux-crate-peer "${CMAKE_CURRENT_SOURCE_DIR}/interop/qmux_crate_peer/Cargo.toml"
+                       qmux-crate-peer crd-qmux-crate-peer qmux-vs-crate)
+    add_executable(crd-qmux-peer interop/cerid_qmux_peer.cpp)
+    target_link_libraries(crd-qmux-peer PRIVATE crd-net)
+    add_dependencies(crd-qmux-peer crd-qmux-crate-peer)
+    add_test(NAME crd-net-qmux-interop-crate
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/qmux_interop.py"
+                     --cerid "$<TARGET_FILE:crd-qmux-peer>" --crate "${crd-qmux-crate-peer_OUTPUT}")
+    set_tests_properties(crd-net-qmux-interop-crate PROPERTIES TIMEOUT 1200 LABELS "net;qmux-interop")
+endif()
+
 # NET.3's serializer budget board against its pinned peers (CRD_BUILD_SERIALIZE_VS_PEERS, the root CMakeLists).
 if(CRD_BUILD_SERIALIZE_VS_PEERS)
     add_subdirectory(board)

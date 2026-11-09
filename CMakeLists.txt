@@ -144,6 +144,10 @@ option(CRD_BUILD_MLS_VS_MLSPP "Build the MLS interoperability test against MLSpp
 # tests/foundation/net/interop/quic_interop.py. Linux only, never in a shipped build; the crd-net-quic-interop-ngtcp2
 # CTest of the tree that turns it on, locally and on the complete-tier linux-gcc-public-checks lane.
 option(CRD_BUILD_QUIC_VS_NGTCP2 "Build the QUIC interoperability test against ngtcp2 (Linux)" OFF)
+# QMux against the `qmux` crate over rustls (4.2a): crd-qmux-crate-peer, a Rust program whose crates the committed
+# Cargo.lock pins (cmake/pins.json tools/qmux-crates), built with the pinned Rust (CRD_CARGO). Linux only, never in a
+# shipped build; the crd-net-qmux-interop-crate CTest, locally and on the complete-tier linux-gcc-public-checks.
+option(CRD_BUILD_QMUX_VS_CRATE "Build the QMux interoperability test against the qmux crate (Linux, pinned Rust)" OFF)
 # The same test against OpenMLS (NET.2, decision M4): crd-openmls-peer, a Rust program over OpenMLS whose crates the
 # committed tests/foundation/crypto/interop/openmls_peer/Cargo.lock pins (cmake/pins.json tools/openmls-crates), built
 # by `cargo build --locked` with the pinned Rust toolchain (tools/rust-linux-x64: scripts/install-rust.py, which prints
@@ -899,6 +903,7 @@ crd_resolve_modules()
 # configuration selects every package, so the default acquisition is unchanged.
 
 include(cmake/CPM.cmake)
+include(cmake/CrdCargoPeer.cmake)
 
 if (CRD_BUILD_TESTS)
     # SYSTEM and EXCLUDE_FROM_ALL are what CPM's single-argument shorthand implied before the pins registry; the long
@@ -1497,15 +1502,19 @@ if(CRD_BUILD_MLS_VS_MLSPP)
     crd_add_pinned_package(nlohmann_json DOWNLOAD_ONLY YES)
     crd_add_pinned_package(mlspp DOWNLOAD_ONLY YES)
 endif()
+if(CRD_BUILD_QMUX_VS_CRATE)
+    if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+        message(FATAL_ERROR "[qmux-vs-crate] the QMux interoperability test needs Linux, CRD_BUILD_TESTS and the "
+                            "crypto module")
+    endif()
+    crd_require_cargo(qmux-vs-crate)
+endif()
 if(CRD_BUILD_MLS_VS_OPENMLS)
     if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
         message(FATAL_ERROR "[mls-vs-openmls] the MLS interoperability test needs Linux, CRD_BUILD_TESTS and the "
                             "crypto module")
     endif()
-    if(NOT EXISTS "${CRD_CARGO}")
-        message(FATAL_ERROR "[mls-vs-openmls] CRD_CARGO names no Cargo: install the pinned Rust toolchain with "
-                            "scripts/install-rust.py and configure with the CRD_CARGO it prints")
-    endif()
+    crd_require_cargo(mls-vs-openmls)
 endif()
 
 if(CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING)
@@ -1701,10 +1710,7 @@ if(CRD_BUILD_RAPTORQ_VS_PEERS)
     if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
         message(FATAL_ERROR "[raptorq-vs-peers] the RaptorQ oracle needs Linux and CRD_BUILD_TESTS")
     endif()
-    if(NOT EXISTS "${CRD_CARGO}")
-        message(FATAL_ERROR "[raptorq-vs-peers] CRD_CARGO names no Cargo: install the pinned Rust toolchain with "
-                            "scripts/install-rust.py and configure with the CRD_CARGO it prints")
-    endif()
+    crd_require_cargo(raptorq-vs-peers)
     enable_language(C)
     crd_add_pinned_package(nanorq DOWNLOAD_ONLY YES)
 endif()

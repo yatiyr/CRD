@@ -1016,7 +1016,11 @@ implementation exists. `QmuxConnection` is sans-I/O (`receive`, `take`), so NET-
 Evidence: `test_qmux.cpp` (every refusal above through a real TLS peer, flow control both ways past every window, byte-at-a-time and
 seeded-stall paths, timers to the nanosecond, the close paths, a run over real TCP), `test_stream_socket.cpp`, `crd-fuzz-net-qmux`
 (records, cuts, time and closes against a real TLS peer), held to source mutations ([session](../sessions/2026-11-09-4-2a-qmux.md)).
-0-RTT is [S54](#qmux-early). Still to come: interop with a second implementation.
+0-RTT is [S54](#qmux-early). **Interop** (2026-11-09): `qmux_interop.py` runs `crd-qmux-peer` (QmuxHost over real TCP) against
+`crd-qmux-crate-peer`, the pinned `qmux` crate 0.6.6 over rustls and aws-lc-rs, both ways round: closes with code and reason, the groups and AEADs,
+transfers past every window, MAX_STREAMS turning over, unidirectional streams, RESET_STREAM and STOP_SENDING, datagrams at and over the limit, resumption, QX_PING and the RTT,
+a relay cutting the bytes into pieces of 1 to 7, a silent path and a refused ALPN. The crate reads QMux only after the handshake, so 0-RTT is proven against crd-net's own peers
+and fuzzing. Application protocols here take the identifier `qmux-02.<name>`, the crate's convention, which section 8.1 allows and does not define.
 
 <a id="stream-host"></a>
 **S53. The stream path's host** (4.2a, threats T01 and T11; [stream_poller.hpp](../../engine/foundation/net/include/crd/net/stream_poller.hpp),
@@ -1041,6 +1045,9 @@ waits).
 - **Close.** A Closed connection's bytes are tried once. It then ends with a FIN if everything went out (close_notify must reach the peer, also after
   an idle timeout or a TLS failure), and a reset if bytes could not be sent, the handshake timed out (a silent peer earns no TIME_WAIT) or the
   transport had already failed.
+
+A connection that has just ended is served once more, Closed, so the application reads what arrived before the end; only the first interop run showed it was
+lost (the peer's last stream bytes and its CONNECTION_CLOSE in one read).
 
 Evidence: `test_qmux_host.cpp` (over pipes under a test clock: both directions past every window, the pool and rate refusals, every close path,
 back-pressure at 512-byte sockets with no busy turn, accept pauses, each share of a turn, deadlines bounding the wait, allocation refusal at every step,
