@@ -971,7 +971,7 @@
       "id": "http.qpack",
       "title": "QPACK: field compression for HTTP/3",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a"
@@ -988,7 +988,12 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
+      "evidence": [
+        "tests/foundation/net/test_qpack.cpp",
+        "tests/foundation/net/test_http_fields.cpp",
+        "tests/foundation/net/fuzz/fuzz_qpack.cpp",
+        "tests/foundation/net/interop/qpack_interop.py"
+      ],
       "deprecation": null
     },
     {
@@ -1149,7 +1154,7 @@
       "id": "quic.qmux",
       "title": "QMux: QUIC's streams and datagrams over a reliable byte stream",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a"
