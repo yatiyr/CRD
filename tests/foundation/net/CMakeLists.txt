@@ -77,8 +77,9 @@ endif()
 # The negotiation decoder and handshake under the bounded fuzz harness, with its committed corpus.
 add_subdirectory(fuzz)
 
-# The QUIC interoperability test against ngtcp2 (CRD_BUILD_QUIC_VS_NGTCP2): crd-ngtcp2-quic-peer links ngtcp2 and the
-# peers' OpenSSL alone, and quic_interop.py runs it against crd-quic-peer over the loopback.
+# The QUIC and HTTP/3 interoperability tests against ngtcp2 and nghttp3 (CRD_BUILD_QUIC_VS_NGTCP2): crd-ngtcp2-quic-peer
+# links ngtcp2, nghttp3 and the peers' OpenSSL alone, and quic_interop.py and http3_interop.py run it against
+# crd-quic-peer over the loopback.
 if(CRD_BUILD_QUIC_VS_NGTCP2)
     include(ExternalProject)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
@@ -103,12 +104,26 @@ if(CRD_BUILD_QUIC_VS_NGTCP2)
         BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel ${interop_jobs}
         DEPENDS crd-openssl-peer-build
         BUILD_BYPRODUCTS ${ngtcp2_libraries})
-    add_executable(crd-ngtcp2-quic-peer interop/ngtcp2_quic_peer.c)
-    add_dependencies(crd-ngtcp2-quic-peer crd-ngtcp2-build crd-openssl-peer-build)
+    crd_pin(nghttp3_version packages nghttp3 version)
+    set(nghttp3_prefix "${CMAKE_BINARY_DIR}/_deps/nghttp3-peer-${nghttp3_version}")
+    set(nghttp3_library "${nghttp3_prefix}/install/lib/libnghttp3.a")
+    ExternalProject_Add(crd-nghttp3-build
+        SOURCE_DIR "${nghttp3_SOURCE_DIR}"
+        PREFIX "${nghttp3_prefix}"
+        BINARY_DIR "${nghttp3_prefix}/build"
+        INSTALL_DIR "${nghttp3_prefix}/install"
+        CMAKE_ARGS "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                   -DCMAKE_BUILD_TYPE=Release "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>" -DCMAKE_INSTALL_LIBDIR=lib
+                   -DENABLE_LIB_ONLY=ON -DENABLE_SHARED_LIB=OFF -DENABLE_STATIC_LIB=ON -DBUILD_TESTING=OFF
+        BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel ${interop_jobs}
+        BUILD_BYPRODUCTS ${nghttp3_library})
+    add_executable(crd-ngtcp2-quic-peer interop/ngtcp2_quic_peer.c interop/ngtcp2_http3.c)
+    add_dependencies(crd-ngtcp2-quic-peer crd-ngtcp2-build crd-nghttp3-build crd-openssl-peer-build)
     target_include_directories(crd-ngtcp2-quic-peer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../crypto/interop")
     target_include_directories(crd-ngtcp2-quic-peer SYSTEM PRIVATE "${ngtcp2_prefix}/install/include"
+                                                                    "${nghttp3_prefix}/install/include"
                                                                     "${CRD_OPENSSL_PEER_ROOT}/include")
-    target_link_libraries(crd-ngtcp2-quic-peer PRIVATE ${ngtcp2_libraries} ${CRD_OPENSSL_PEER_LINK})
+    target_link_libraries(crd-ngtcp2-quic-peer PRIVATE ${ngtcp2_libraries} "${nghttp3_library}" ${CRD_OPENSSL_PEER_LINK})
     set_target_properties(crd-ngtcp2-quic-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
     add_executable(crd-quic-peer interop/cerid_quic_peer.cpp)
@@ -118,7 +133,11 @@ if(CRD_BUILD_QUIC_VS_NGTCP2)
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/quic_interop.py"
                      --cerid "$<TARGET_FILE:crd-quic-peer>" --ngtcp2 "$<TARGET_FILE:crd-ngtcp2-quic-peer>")
     set_tests_properties(crd-net-quic-interop-ngtcp2 PROPERTIES TIMEOUT 1500 LABELS "net;quic-interop")
-    message(STATUS "[quic-vs-ngtcp2] QUIC interoperability against ngtcp2 ${ngtcp2_version}")
+    add_test(NAME crd-net-http3-interop-nghttp3
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/http3_interop.py"
+                     --cerid "$<TARGET_FILE:crd-quic-peer>" --nghttp3 "$<TARGET_FILE:crd-ngtcp2-quic-peer>")
+    set_tests_properties(crd-net-http3-interop-nghttp3 PROPERTIES TIMEOUT 1500 LABELS "net;http3-interop")
+    message(STATUS "[quic-vs-ngtcp2] QUIC and HTTP/3 interoperability against ngtcp2 ${ngtcp2_version} and nghttp3 ${nghttp3_version}")
 endif()
 
 # The QMux interoperability test against the `qmux` crate (CRD_BUILD_QMUX_VS_CRATE): crd-qmux-crate-peer is a Cargo

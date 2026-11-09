@@ -71,6 +71,7 @@ struct EchoOptions
     bool early = false;
     u64 progress_at = 0U;
     u64 hold_ns = 0U; // this long after everything is done before the closing end closes
+    bool timed_service = false; // the application is served on the timer whatever else happens
     crd::crypto::AlgorithmId group{};
     crd::crypto::AlgorithmId cipher{};
     u8 seed[32] = {};
@@ -337,6 +338,11 @@ public:
         m_closing = true;
         return true;
     }
+
+    [[nodiscard]] const crd::net::TicketCache* tickets() const noexcept { return m_tickets; }
+
+    // For another application over the connection, which reports through this one.
+    void note_established(bool established) noexcept { m_established = m_established || established; }
 
     // The shared part of the report: `connection=N` and what the application counted.
     void report(bool resumed, crd::crypto::TlsEarlyData early_data,
@@ -816,6 +822,9 @@ public:
         }
     }
 
+    // The connection's place in the order they started, for a live connection.
+    [[nodiscard]] u64 index_of(crd::net::QuicHandle handle) const noexcept { return m_order[handle.slot]; }
+
     // The application of a live connection; null for one this run did not start.
     [[nodiscard]] Echo* echo_of(crd::net::QuicHandle handle) noexcept
     {
@@ -833,7 +842,9 @@ public:
     template <typename Host>
     void wake(Host& host, u64 now_ns) noexcept
     {
-        if ((m_options.datagrams == 0U && m_options.hold_ns == 0U && m_options.resets == 0U) || now_ns < m_next_wake_ns)
+        if ((m_options.datagrams == 0U && m_options.hold_ns == 0U && m_options.resets == 0U &&
+             !m_options.timed_service) ||
+            now_ns < m_next_wake_ns)
         {
             return;
         }

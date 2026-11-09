@@ -5,6 +5,7 @@
 //                      --bytes N --closer client|server --code N --max-streams N [--compat 1] [--retry 1]
 //                      [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]]
 //                      [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N]
+//                      [--http3 1 ...]
 //
 //   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
 //   seed         the 32-byte Ed25519 private key of the server's self-signed credential; a client pins its public key
@@ -26,6 +27,7 @@
 //   reject-early a server's early data context changes after the first connection, so the second's 0-RTT is refused
 //   only-version a server runs `version` alone and answers others with Version Negotiation
 //   progress-at  a server prints `progress=1` once it has read this many bytes
+//   http3        HTTP/3 over Http3Connection instead of the echo: http3_exchange.h has its options, ALPN `h3` instead
 //
 // The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
 // is the same as ngtcp2_quic_peer.c's without what only OpenSSL reports. The application is `cerid-interop`, a private
@@ -48,6 +50,7 @@
 #include <crd/net/udp.hpp>
 
 #include "interop_echo.hpp"
+#include "interop_http3.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -67,6 +70,8 @@ constexpr u64 kWaitNs = 1000000U;
 constexpr u8 kResetKey[kQuicResetKeyBytes] = {0x5E, 0x5F};
 constexpr u8 kTokenKey[kQuicTokenKeyBytes] = {0x10, 0x11, 0x12};
 constexpr StringView kProtocols[] = {"cerid-interop"};
+constexpr StringView kHttp3Protocols[] = {HTTP3_ALPN};
+constexpr u32 kHttp3UniStreams = 16U;
 constexpr StringView kServerName = "cerid.test";
 constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
 constexpr u32 kBothVersions[] = {static_cast<u32>(QuicVersion::V1), static_cast<u32>(QuicVersion::V2)};
@@ -88,7 +93,35 @@ struct Options : EchoOptions
     u32 version = 1U;
     bool reject_early = false;
     bool only_version = false;
+    http3_options_t http3;
 };
+
+// The HTTP/3 application of each connection, in the order they started.
+Http3Exchange g_exchanges[kMaxConnections];
+const Options* g_options = nullptr;
+
+// One turn of HTTP/3 on a connection.
+void serve_http3(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, const EchoTurn& turn) noexcept
+{
+    const u64 index = peer.index_of(handle);
+    Http3Run run;
+    run.options = &g_options->http3;
+    run.client = g_options->client;
+    run.datagrams = g_options->datagrams;
+    run.datagram_bytes = g_options->datagram_bytes;
+    run.remembered = index != 0U && g_options->early ? g_exchanges[index - 1U].peer_settings() : nullptr;
+    run.tickets = peer.echo_of(handle)->tickets();
+    bool done = false;
+    const u64 error = g_exchanges[index].service(connection, run, turn, done);
+    if (error != 0U)
+    {
+        connection.close(error, {}, turn.now_ns);
+    }
+    else if (done)
+    {
+        connection.close(g_options->code, {}, turn.now_ns);
+    }
+}
 
 void serve(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, u64 now_ns) noexcept
 {
@@ -102,6 +135,12 @@ void serve(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, u64 no
     turn.early_data = connection.handshake().early_data();
     turn.can_open = turn.established || turn.early_data == TlsEarlyData::Offered;
     turn.now_ns = now_ns;
+    if (g_options->http3.enabled != 0)
+    {
+        echo->note_established(turn.established);
+        serve_http3(peer, handle, connection, turn);
+        return;
+    }
     if (echo->service(connection.streams(), connection.datagrams(), turn))
     {
         connection.close(peer.options().code, {}, now_ns);
@@ -134,6 +173,10 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
     }
     const QuicCloseInfo& info = connection.close_info();
     echo->report(connection.handshake().resumed(), connection.handshake().early_data(), connection.datagrams());
+    if (g_options->http3.enabled != 0)
+    {
+        g_exchanges[peer.index_of(handle)].report();
+    }
     std::printf("version=%u\nclose=%s\nclose_code=%llu\n", connection.version() == QuicVersion::V2 ? 2U : 1U,
                 close_kind(info),
                 static_cast<unsigned long long>(info.error_code));
@@ -197,6 +240,11 @@ QuicStreamLimits stream_limits(const Options& options)
     limits.stream_window = kReceiveBytes;
     limits.connection_window = kConnectionWindow;
     limits.connection_max_window = kConnectionMaxWindow;
+    if (options.http3.enabled != 0)
+    {
+        limits.peer_uni = kHttp3UniStreams;
+        limits.local_uni = kHttp3UniStreams;
+    }
     return limits;
 }
 
@@ -284,9 +332,17 @@ int run_server(crd::memory::IAllocator& allocator, const Options& options, const
     }
     Ingress ingress(ingress_config, routes, buckets, &tokens, nullptr, &reset);
     static EchoPeer peer(options);
-    static u8 early_context[sizeof(kEarlyContext)];
-    std::memcpy(early_context, kEarlyContext, sizeof(kEarlyContext));
-    ServerApp app(peer, options.reject_early ? Span<u8>(early_context) : Span<u8>());
+    static u8 early_context[kHttp3EarlyContextBytes];
+    const usize early_bytes =
+        options.http3.enabled != 0
+            ? Http3Connection::early_context(http3_config(options.http3, false, options.datagrams),
+                                             Span<u8>(early_context))
+            : sizeof(kEarlyContext);
+    if (options.http3.enabled == 0)
+    {
+        std::memcpy(early_context, kEarlyContext, sizeof(kEarlyContext));
+    }
+    ServerApp app(peer, options.reject_early ? Span<u8>(early_context, early_bytes) : Span<u8>());
     QuicServerConfig config;
     config.connection = connection_config(options, context);
     config.connection.versions = ConstSpan<u32>(kBothVersions);
@@ -300,7 +356,7 @@ int run_server(crd::memory::IAllocator& allocator, const Options& options, const
     }
     if (options.early)
     {
-        config.connection.early_context = ConstSpan<u8>(early_context);
+        config.connection.early_context = ConstSpan<u8>(early_context, early_bytes);
     }
     config.connections = kServerSlots;
     QuicServer server(allocator, socket, clock, ingress, routes, reset, &tokens, app, config);
@@ -377,7 +433,7 @@ int usage()
                "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] "
                "[--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] "
                "[--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] "
-               "[--progress-at N]\n",
+               "[--progress-at N] [--http3 1 ...]\n",
                stderr);
     return 2;
 }
@@ -386,12 +442,13 @@ int usage()
 int main(int argc, char** argv)
 {
     Options options;
+    http3_default_options(&options.http3);
     u32 required = 0U;
     for (int at = 1; at + 1 < argc; at += 2)
     {
         const char* const name = argv[at];
         const char* const value = argv[at + 1];
-        if (parse_echo_option(name, value, options, required))
+        if (parse_echo_option(name, value, options, required) || http3_parse_option(&options.http3, name, value) != 0)
         {
             continue;
         }
@@ -425,10 +482,12 @@ int main(int argc, char** argv)
         }
     }
     if (argc % 2 == 0 || required != kRequiredEchoOptions || !echo_options_valid(options) ||
-        (options.version != 1U && options.version != 2U))
+        (options.version != 1U && options.version != 2U) || http3_options_valid(&options.http3) == 0)
     {
         return usage();
     }
+    options.timed_service = options.http3.enabled != 0;
+    g_options = &options;
 
     SigningKey key;
     TlsCredential credential;
@@ -446,7 +505,8 @@ int main(int argc, char** argv)
     tls.groups = ConstSpan<AlgorithmId>(groups, 1U);
     tls.aeads = ConstSpan<AlgorithmId>(aeads, 1U);
     tls.server_name = kServerName;
-    tls.application_protocols = kProtocols;
+    tls.application_protocols = options.http3.enabled != 0 ? ConstSpan<StringView>(kHttp3Protocols)
+                                                            : ConstSpan<StringView>(kProtocols);
     if (options.client)
     {
         tls.signatures = kSignatures;

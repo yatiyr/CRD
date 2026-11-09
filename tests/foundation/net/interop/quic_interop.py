@@ -18,16 +18,11 @@ Negotiation to the one version a server runs, counted off the wire; and a statel
 the same port, which has forgotten the connection and keeps the key its tokens come from.
 """
 import argparse
-import heapq
-import random
-import select
-import socket
 import subprocess
 import sys
 import threading
-import time
 
-from interop_common import collect, expect, reports_of
+from interop_common import Relay, collect, expect, reports_of
 
 SEED = '11' * 32
 OPENSSL_GROUPS = {
@@ -45,76 +40,6 @@ RUN_SECONDS = 70
 PROGRESS_SECONDS = 20
 RESET_STREAM_BYTES = 32 << 20
 PROGRESS_BYTES = 1 << 20
-
-
-class Relay:
-    """The path between the two: a socket facing the client, one facing the server, and seeded impairments."""
-
-    def __init__(self, server_port, seed=0, loss=0.0, duplicate=0.0, delay=0.0, jitter=0.0):
-        self.server = ('127.0.0.1', server_port)
-        self.random = random.Random(seed)
-        self.loss = loss
-        self.duplicate = duplicate
-        self.delay = delay
-        self.jitter = jitter
-        self.client_side = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.client_side.bind(('127.0.0.1', 0))
-        self.server_side = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.server_side.bind(('127.0.0.1', 0))
-        self.port = self.client_side.getsockname()[1]
-        self.client = None
-        self.retries = 0
-        self.negotiations = 0
-        self.running = True
-        self.heap = []
-        self.order = 0
-        self.thread = threading.Thread(target=self.run, daemon=True)
-        self.thread.start()
-
-    @staticmethod
-    def is_retry(datagram):
-        if len(datagram) < 5 or (datagram[0] & 0x80) == 0:
-            return False
-        version = int.from_bytes(datagram[1:5], 'big')
-        kind = (datagram[0] >> 4) & 3
-        return (version == 1 and kind == 3) or (version == 0x6B3343CF and kind == 0)
-
-    @staticmethod
-    def is_version_negotiation(datagram):
-        return len(datagram) >= 5 and (datagram[0] & 0x80) != 0 and datagram[1:5] == b'\0\0\0\0'
-
-    def schedule(self, sender, datagram, destination):
-        if self.random.random() < self.loss:
-            return
-        copies = 2 if self.random.random() < self.duplicate else 1
-        for _ in range(copies):
-            due = time.monotonic() + self.delay + (self.random.random() * self.jitter)
-            self.order += 1
-            heapq.heappush(self.heap, (due, self.order, sender, datagram, destination))
-
-    def run(self):
-        sockets = [self.client_side, self.server_side]
-        while self.running:
-            wait = max(0.0, self.heap[0][0] - time.monotonic()) if self.heap else 0.05
-            ready, _, _ = select.select(sockets, [], [], min(wait, 0.05))
-            for side in ready:
-                datagram, sender = side.recvfrom(65536)
-                if side is self.client_side:
-                    self.client = sender
-                    self.schedule(self.server_side, datagram, self.server)
-                elif self.client is not None:
-                    self.retries += 1 if self.is_retry(datagram) else 0
-                    self.negotiations += 1 if self.is_version_negotiation(datagram) else 0
-                    self.schedule(self.client_side, datagram, self.client)
-            while self.heap and self.heap[0][0] <= time.monotonic():
-                _, _, sender, datagram, destination = heapq.heappop(self.heap)
-                sender.sendto(datagram, destination)
-
-    def stop(self):
-        self.running = False
-        self.thread.join(5)
-        self.client_side.close()
-        self.server_side.close()
 
 
 class Case:

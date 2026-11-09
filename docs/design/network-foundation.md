@@ -1135,9 +1135,18 @@ Evidence: `test_http_fields.cpp` and `test_qpack.cpp` `[qpack]` (RFC 7541's inte
 - **0-RTT.** A client resuming passes the settings it stored and uses them until the server's arrive, whose values may only be equal or better (section 7.2.4.2); after a rejection the owner builds a new connection. A server binds its settings into its tickets (`early_context`), so a changed server does not take 0-RTT from an old one. A section or datagram from 0-RTT is marked replayable.
 - **Grease.** Every SETTINGS has a reserved identifier, the control stream a reserved frame, and a reserved stream type goes once when the peer's limit leaves room.
 - **Capsules.** [http_capsule.hpp](../../engine/foundation/net/include/crd/net/http_capsule.hpp) reads RFC 9297 section 3's capsules from any data stream split anywhere, handing each value on as it arrives and never gathering it (section 3.2: that can deadlock on flow control). A stream may end only between capsules; a Capsule-Protocol field counts only as one Boolean true.
-- **Not here yet.** The WebTransport session and its mapping onto channels, and interop with a second implementation; [4.2a](../ROADMAP.md#slice-4.2a) names what remains. Only `:protocol` matters to this layer, so WebTransport's two spellings are its own concern.
+- **Not here yet.** The WebTransport session and its mapping onto channels, and interop with a second implementation beyond [S58](#http3-interop); [4.2a](../ROADMAP.md#slice-4.2a) names what remains. Only `:protocol` matters to this layer, so WebTransport's two spellings are its own concern.
 
 Evidence: `test_http3.cpp` and `test_http_message.cpp` `[http3]` (84 cases: every frame on every stream with the error RFC 9114 names, each SETTINGS refusal, the critical streams, messages, tunnels, datagrams, GOAWAY both ways, QPACK blocking and cancelling, 431, 0-RTT's rules), `crd-fuzz-net-http3` (a hostile peer at a server and at a client, and both sides honest over any frame size with a held encoder stream).
+
+<a id="http3-interop"></a>
+**S58. Interoperability with a real HTTP/3 stack** (4.2a; [http3_interop.py](../../tests/foundation/net/interop/http3_interop.py);
+2026-11-09). `crd-quic-peer --http3 1` (`Http3Connection` over crd-net's QUIC) meets `crd-ngtcp2-quic-peer --http3 1`
+(nghttp3 1.19.0 over ngtcp2 1.26.0), each in its own process over real UDP on the loopback, both ways round. Both programs
+run one exchange, defined once in [http3_exchange.h](../../tests/foundation/net/interop/http3_exchange.h); every field and
+body byte is checked by both ends. nghttp3 was not usable as it stands in one respect: it deletes a closed stream with
+whatever a QPACK-blocked section still holds, and ngtcp2 closes a stream once it has delivered the last byte, so a
+response arriving ahead of its table insert vanished; the C peer holds the close until the message ends.
 
 <a id="browsers"></a>
 ## Browser constraints

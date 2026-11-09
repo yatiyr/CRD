@@ -135,6 +135,20 @@
       "provenance": "https://github.com/ngtcp2/ngtcp2/releases/tag/v1.26.0 (the tag names commit 6a22a4d7; this commit archive is the source the release packs, without the release's generated Autotools files)",
       "note": "ngtcp2 1.26.0 (released 2026-11-02), an independent C implementation of QUIC and crd-net's peer (4.2a). Built by its own CMake as a separate project, libraries only (libngtcp2 and libngtcp2_crypto_ossl), against the pinned OpenSSL 4.0's QUIC TLS interface."
     },
+    "nghttp3": {
+      "version": "1.19.0",
+      "repository": "ngtcp2/nghttp3",
+      "ref": "v1.19.0",
+      "commit": "dc83309ca5fd2beb91cc5c030a2d30525e9f2a00",
+      "url": "https://github.com/ngtcp2/nghttp3/releases/download/v1.19.0/nghttp3-1.19.0.tar.gz",
+      "file": "nghttp3-1.19.0.tar.gz",
+      "sha256": "0dc9a55d38ca04c282524bfecdc5e31d393a4bb430200263dd06a87801a150af",
+      "size": 677573,
+      "license": "MIT",
+      "gated": "CRD_BUILD_QUIC_VS_NGTCP2",
+      "provenance": "https://github.com/ngtcp2/nghttp3/releases/tag/v1.19.0 (the release tarball and its checksums.txt: unlike the ngtcp2 pin's commit archive it holds lib/sfparse, a git submodule a commit archive leaves empty)",
+      "note": "nghttp3 1.19.0 (released 2026-11-02), an independent C implementation of HTTP/3 and QPACK and crd-net's HTTP/3 peer (4.2a), over the pinned ngtcp2. Built by its own CMake as a separate project, library only."
+    },
     "qifs": {
       "version": "da52cd93",
       "repository": "qpackers/qifs",

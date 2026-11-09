@@ -5,7 +5,7 @@
  *                             --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1]
  *                             [--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N]
  *                             [--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]]
- *                             [--only-version 1] [--progress-at N] [--resets 1]
+ *                             [--only-version 1] [--progress-at N] [--resets 1] [--http3 1 ...]
  *
  *   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
  *   seed         the 32-byte Ed25519 private key of the server's self-signed certificate; a client pins its public key
@@ -29,10 +29,13 @@
  *   resets       a server answers a short header for no connection with a stateless reset: its tokens are derived from
  *                a fixed key, so a restarted process answers for the connections of the one before
  *
+ *   http3        HTTP/3 over nghttp3 instead of the echo: http3_exchange.h has its options, ALPN `h3` instead
+ *
  * The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
  * is the same as cerid_quic_peer.cpp's plus what OpenSSL negotiated. The application is `cerid-interop`, a private
  * ALPN. */
 #define _GNU_SOURCE /* ppoll */
+#include "ngtcp2_http3.h"
 #include "openssl_self_signed.h"
 
 #include <ngtcp2/ngtcp2.h>
@@ -57,7 +60,6 @@
 #include <sys/socket.h>
 #include <time.h>
 
-#define PATTERN_BYTES 65536U
 #define MAX_STREAMS 4096U
 #define DATAGRAM_BYTES 1452U
 #define RUN_SECONDS 60U
@@ -72,8 +74,11 @@
 #define SERVER_CID_BYTES 16U
 #define MAX_EARLY_PARAMETERS 256U
 #define MIN_INITIAL_DATAGRAM 1200U /* RFC 9000 section 14.1 */
+#define HTTP3_UNI_STREAMS 16U
+#define HTTP3_WRITE_PIECES 16U
 
 static const unsigned char ALPN[] = "\x0D" "cerid-interop";
+static const unsigned char H3_ALPN[] = "\x02" HTTP3_ALPN;
 static const char SERVER_NAME[]   = "cerid.test";
 static const uint8_t RETRY_SECRET[32] = {0x52, 0x65, 0x74};
 static const uint8_t RESET_SECRET[32] = {0x52, 0x73, 0x74};
@@ -129,6 +134,8 @@ typedef struct
     SSL_SESSION*            session; /* a client's newest ticket */
     uint8_t                 early_parameters[MAX_EARLY_PARAMETERS];
     size_t                  early_parameters_size;
+    http3_options_t         http3;
+    http3_app_t*            app; /* one connection's, null for the echo */
     /* One connection's, cleared between connections from here on (next_connection). */
     uint64_t                opened;
     uint64_t                done;
@@ -161,9 +168,9 @@ typedef struct
 
 /* The byte at `offset` of a stream's direction (tag 0: client to server, 1: server to client) or of a datagram's (2 and
  * 3); a 64 KiB period, so what ngtcp2 keeps until it is acknowledged can point straight into the table. */
-static uint8_t pattern[4][PATTERN_BYTES];
+uint8_t pattern[4][PATTERN_BYTES];
 
-static size_t pattern_index(int64_t stream, uint64_t offset)
+size_t pattern_index(int64_t stream, uint64_t offset)
 {
     return (size_t)((offset + ((uint64_t)stream * 37U)) & (PATTERN_BYTES - 1U));
 }
@@ -219,6 +226,10 @@ static stream_t* stream_of(peer_t* peer, int64_t id)
 static int stream_open_cb(ngtcp2_conn* conn, int64_t id, void* user)
 {
     (void)conn;
+    if (((peer_t*)user)->app != NULL)
+    {
+        return 0;
+    }
     stream_t* stream = stream_of((peer_t*)user, id);
     if (stream == NULL)
     {
@@ -232,7 +243,12 @@ static int recv_stream_data(ngtcp2_conn* conn, uint32_t flags, int64_t id, uint6
                             size_t size, void* user, void* stream_user)
 {
     (void)stream_user;
-    peer_t*   peer   = user;
+    peer_t* peer = user;
+    if (peer->app != NULL)
+    {
+        peer->early_bytes += (flags & NGTCP2_STREAM_DATA_FLAG_0RTT) != 0U ? size : 0U;
+        return http3_recv_stream_data(peer->app, conn, flags, id, data, size, now_ns());
+    }
     stream_t* stream = stream_of(peer, id);
     if (stream == NULL)
     {
@@ -274,11 +290,12 @@ static int recv_stream_data(ngtcp2_conn* conn, uint32_t flags, int64_t id, uint6
 static int stream_close_cb(ngtcp2_conn* conn, uint32_t flags, int64_t id, uint64_t rx_error, uint64_t tx_error,
                            void* user, void* stream_user)
 {
-    (void)flags;
-    (void)rx_error;
-    (void)tx_error;
     (void)stream_user;
-    peer_t*   peer   = user;
+    peer_t* peer = user;
+    if (peer->app != NULL)
+    {
+        return http3_stream_close(peer->app, flags, id, rx_error, tx_error);
+    }
     stream_t* stream = stream_of(peer, id);
     if (stream == NULL)
     {
@@ -290,6 +307,48 @@ static int stream_close_cb(ngtcp2_conn* conn, uint32_t flags, int64_t id, uint64
     {
         ngtcp2_conn_extend_max_streams_bidi(conn, 1U);
     }
+    return 0;
+}
+
+static int datagrams_settled(const peer_t* peer);
+
+static int acked_stream_data(ngtcp2_conn* conn, int64_t id, uint64_t offset, uint64_t size, void* user, void* stream_user)
+{
+    (void)conn;
+    (void)offset;
+    (void)stream_user;
+    return http3_acked(((peer_t*)user)->app, id, size);
+}
+
+static int extend_stream_data(ngtcp2_conn* conn, int64_t id, uint64_t maximum, void* user, void* stream_user)
+{
+    (void)conn;
+    (void)maximum;
+    (void)stream_user;
+    return http3_unblock(((peer_t*)user)->app, id);
+}
+
+static int stream_reset_cb(ngtcp2_conn* conn, int64_t id, uint64_t final_size, uint64_t code, void* user,
+                           void* stream_user)
+{
+    (void)conn;
+    (void)final_size;
+    (void)stream_user;
+    return http3_stream_reset(((peer_t*)user)->app, id, code);
+}
+
+static int stop_sending_cb(ngtcp2_conn* conn, int64_t id, uint64_t code, void* user, void* stream_user)
+{
+    (void)conn;
+    (void)code;
+    (void)stream_user;
+    return http3_stream_stop(((peer_t*)user)->app, id);
+}
+
+static int extend_remote_bidi(ngtcp2_conn* conn, uint64_t maximum, void* user)
+{
+    (void)conn;
+    http3_set_max_bidi(((peer_t*)user)->app, maximum);
     return 0;
 }
 
@@ -317,7 +376,12 @@ static uint32_t datagram_index(const uint8_t* data, size_t size)
 static int recv_datagram(ngtcp2_conn* conn, uint32_t flags, const uint8_t* data, size_t size, void* user)
 {
     (void)conn;
-    peer_t*        peer  = user;
+    peer_t* peer = user;
+    if (peer->app != NULL && !http3_strip_datagram(peer->app, &data, &size))
+    {
+        peer->datagrams_unverified = 1;
+        return 0;
+    }
     const uint32_t index = datagram_index(data, size);
     const uint8_t* expected = pattern[peer->client ? 3 : 2];
     if (size != peer->datagram_bytes || index >= peer->datagrams ||
@@ -390,7 +454,12 @@ static int early_data_rejected(ngtcp2_conn* conn, void* user)
     peer->datagrams_acked    = 0U;
     memset(peer->seen, 0, sizeof(peer->seen));
     memset(peer->table, 0, MAX_STREAMS * sizeof(stream_t));
-    return 0;
+    if (peer->app != NULL)
+    {
+        http3_del(peer->app);
+        peer->app = http3_new(&peer->http3, peer->client, peer->datagrams);
+    }
+    return peer->http3.enabled && peer->app == NULL ? NGTCP2_ERR_CALLBACK_FAILURE : 0;
 }
 
 static int handshake_completed(ngtcp2_conn* conn, void* user)
@@ -436,9 +505,11 @@ static int select_alpn(SSL* ssl, const unsigned char** out, unsigned char* out_s
                        unsigned int in_size, void* user)
 {
     (void)ssl;
-    (void)user;
-    unsigned char* selected = NULL;
-    if (SSL_select_next_proto(&selected, out_size, ALPN, sizeof(ALPN) - 1U, in, in_size) != OPENSSL_NPN_NEGOTIATED)
+    const peer_t*        peer      = user;
+    const unsigned char* offer     = peer->http3.enabled ? H3_ALPN : ALPN;
+    const size_t         offer_len = peer->http3.enabled ? sizeof(H3_ALPN) - 1U : sizeof(ALPN) - 1U;
+    unsigned char*       selected  = NULL;
+    if (SSL_select_next_proto(&selected, out_size, offer, (unsigned)offer_len, in, in_size) != OPENSSL_NPN_NEGOTIATED)
     {
         return SSL_TLSEXT_ERR_ALERT_FATAL;
     }
@@ -463,6 +534,14 @@ static int make_session(peer_t* peer)
     {
         return 0;
     }
+    if (peer->http3.enabled)
+    {
+        peer->app = http3_new(&peer->http3, peer->client, peer->datagrams);
+        if (peer->app == NULL)
+        {
+            return 0;
+        }
+    }
     ngtcp2_crypto_ossl_ctx_set_ssl(peer->ossl, peer->ssl);
     peer->ref.get_conn  = conn_of;
     peer->ref.user_data = peer;
@@ -471,7 +550,8 @@ static int make_session(peer_t* peer)
     {
         SSL_set_connect_state(peer->ssl);
         if (ngtcp2_crypto_ossl_configure_client_session(peer->ssl) != 0 ||
-            SSL_set_alpn_protos(peer->ssl, ALPN, sizeof(ALPN) - 1U) != 0 ||
+            SSL_set_alpn_protos(peer->ssl, peer->http3.enabled ? H3_ALPN : ALPN,
+                                peer->http3.enabled ? sizeof(H3_ALPN) - 1U : sizeof(ALPN) - 1U) != 0 ||
             SSL_set_tlsext_host_name(peer->ssl, SERVER_NAME) != 1)
         {
             return 0;
@@ -513,7 +593,7 @@ static int make_tls(peer_t* peer, const char* group, const char* cipher, const u
         {
             return 0;
         }
-        SSL_CTX_set_alpn_select_cb(peer->ctx, select_alpn, NULL);
+        SSL_CTX_set_alpn_select_cb(peer->ctx, select_alpn, peer);
         if (peer->early)
         {
             SSL_CTX_set_max_early_data(peer->ctx, UINT32_MAX);
@@ -539,7 +619,7 @@ static ngtcp2_path path_of(peer_t* peer)
     return path;
 }
 
-static void default_callbacks(ngtcp2_callbacks* callbacks)
+static void default_callbacks(const peer_t* peer, ngtcp2_callbacks* callbacks)
 {
     memset(callbacks, 0, sizeof(*callbacks));
     callbacks->recv_crypto_data          = ngtcp2_crypto_recv_crypto_data_cb;
@@ -562,6 +642,14 @@ static void default_callbacks(ngtcp2_callbacks* callbacks)
     callbacks->recv_version_negotiation  = recv_version_negotiation;
     callbacks->handshake_completed       = handshake_completed;
     callbacks->tls_early_data_rejected   = early_data_rejected;
+    if (peer->app != NULL)
+    {
+        callbacks->acked_stream_data_offset       = acked_stream_data;
+        callbacks->extend_max_stream_data         = extend_stream_data;
+        callbacks->stream_reset                   = stream_reset_cb;
+        callbacks->stream_stop_sending            = stop_sending_cb;
+        callbacks->extend_max_remote_streams_bidi = extend_remote_bidi;
+    }
 }
 
 static void default_parameters(peer_t* peer, ngtcp2_settings* settings, ngtcp2_transport_params* params)
@@ -577,6 +665,11 @@ static void default_parameters(peer_t* peer, ngtcp2_settings* settings, ngtcp2_t
     params->active_connection_id_limit          = 7U;
     params->grease_quic_bit                     = 1U;
     params->max_datagram_frame_size             = peer->datagrams != 0U ? peer->datagram_limit : 0U;
+    if (peer->app != NULL)
+    {
+        params->initial_max_streams_uni     = HTTP3_UNI_STREAMS;
+        params->initial_max_stream_data_uni = 1U << 20U;
+    }
     if (peer->compat)
     {
         settings->preferred_versions    = PREFER_V2;
@@ -601,7 +694,7 @@ static int start_client(peer_t* peer)
     ngtcp2_transport_params params;
     ngtcp2_cid              dcid;
     ngtcp2_cid              scid;
-    default_callbacks(&callbacks);
+    default_callbacks(peer, &callbacks);
     callbacks.client_initial = ngtcp2_crypto_client_initial_cb;
     callbacks.recv_retry     = ngtcp2_crypto_recv_retry_cb;
     default_parameters(peer, &settings, &params);
@@ -685,7 +778,7 @@ static int start_server(peer_t* peer, const uint8_t* data, size_t size)
     ngtcp2_settings         settings;
     ngtcp2_transport_params params;
     ngtcp2_cid              scid;
-    default_callbacks(&callbacks);
+    default_callbacks(peer, &callbacks);
     callbacks.recv_client_initial = ngtcp2_crypto_recv_client_initial_cb;
     default_parameters(peer, &settings, &params);
     params.original_dcid                 = original;
@@ -770,15 +863,20 @@ static int answer_other_version(peer_t* peer, const uint8_t* data, size_t size)
     return wrote > 0 && send_datagram(peer, packet, (size_t)wrote);
 }
 
-static void open_streams(peer_t* peer)
+/* A client's streams, or a turn of HTTP/3; 0 when the connection cannot go on. */
+static int open_streams(peer_t* peer)
 {
-    while (peer->client && peer->opened < peer->streams &&
-           (ngtcp2_conn_get_handshake_completed2(peer->conn) || peer->sending_early))
+    const int running = ngtcp2_conn_get_handshake_completed2(peer->conn) || peer->sending_early;
+    if (peer->app != NULL)
+    {
+        return http3_turn(peer->app, peer->conn, running, peer->sending_early, datagrams_settled(peer));
+    }
+    while (peer->client && peer->opened < peer->streams && running)
     {
         int64_t id = -1;
         if (ngtcp2_conn_open_bidi_stream(peer->conn, &id, NULL) != 0)
         {
-            return;
+            return 1;
         }
         stream_t* stream = stream_of(peer, id);
         if (stream == NULL)
@@ -788,6 +886,7 @@ static void open_streams(peer_t* peer)
         stream->opened = 1;
         ++peer->opened;
     }
+    return 1;
 }
 
 /* The next stream with bytes or a FIN to write, from the cursor; -1 for none. */
@@ -831,7 +930,8 @@ static int datagram_ready(const peer_t* peer)
     if (peer->client)
     {
         return peer->datagrams_sent < peer->datagrams &&
-               (ngtcp2_conn_get_handshake_completed2(peer->conn) || peer->sending_early);
+               (ngtcp2_conn_get_handshake_completed2(peer->conn) || peer->sending_early) &&
+               (peer->app == NULL || http3_datagram_ready(peer->app, (uint32_t)peer->datagrams_sent));
     }
     return peer->echo_count != 0U && ngtcp2_conn_get_handshake_completed2(peer->conn);
 }
@@ -874,8 +974,123 @@ static void probe_datagram_limit(peer_t* peer, ngtcp2_path_storage* storage)
                              NGTCP2_ERR_INVALID_ARGUMENT;
 }
 
+/* One datagram queued or a packet of them written: 0 when the connection cannot go on, and *held when there is no room
+ * in this write round. */
+static int write_one_datagram(peer_t* peer, ngtcp2_path_storage* storage, uint8_t* datagram, int* held, uint64_t now)
+{
+    uint8_t         payload[MAX_DATAGRAM_BYTES];
+    const uint32_t  index  = peer->client ? (uint32_t)peer->datagrams_sent : peer->echoes[peer->echo_first];
+    const size_t    prefix = peer->app != NULL ? http3_datagram_prefix(peer->app, index, payload) : 0U;
+    ngtcp2_vec      piece  = {payload, prefix + fill_datagram(peer, payload + prefix, index, peer->client ? 2 : 3)};
+    ngtcp2_pkt_info info;
+    int             accepted = 0;
+    const ngtcp2_ssize wrote =
+        ngtcp2_conn_writev_datagram(peer->conn, &storage->path, &info, datagram, DATAGRAM_BYTES, &accepted,
+                                    NGTCP2_WRITE_DATAGRAM_FLAG_MORE, index, &piece, 1U, now);
+    if (accepted)
+    {
+        peer->last_datagram_ns = now;
+        ++peer->datagrams_sent;
+        if (!peer->client)
+        {
+            peer->echo_first = (peer->echo_first + 1U) % MAX_DATAGRAMS;
+            --peer->echo_count;
+        }
+    }
+    if (wrote == NGTCP2_ERR_WRITE_MORE)
+    {
+        return 1;
+    }
+    if (wrote < 0)
+    {
+        fprintf(stderr, "ngtcp2_conn_writev_datagram: %s\n", ngtcp2_strerror((int)wrote));
+        return 0;
+    }
+    if (wrote == 0)
+    {
+        *held = 1;
+        return 1;
+    }
+    return packet_written(peer, datagram, (size_t)wrote, now);
+}
+
+/* What nghttp3 has to write, and HTTP datagrams beside it. */
+static int write_http3(peer_t* peer)
+{
+    uint8_t             datagram[DATAGRAM_BYTES];
+    ngtcp2_path_storage storage;
+    ngtcp2_path_storage_zero(&storage);
+    int held = 0;
+    for (;;)
+    {
+        const uint64_t now = now_ns();
+        if (!held && datagram_ready(peer))
+        {
+            if (!write_one_datagram(peer, &storage, datagram, &held, now))
+            {
+                return 0;
+            }
+            continue;
+        }
+        int64_t       id  = -1;
+        int           fin = 0;
+        nghttp3_vec   pieces[HTTP3_WRITE_PIECES];
+        nghttp3_ssize count = ngtcp2_conn_get_max_data_left(peer->conn) != 0U
+                                  ? http3_writev(peer->app, &id, &fin, pieces, HTTP3_WRITE_PIECES)
+                                  : 0;
+        if (count < 0)
+        {
+            fprintf(stderr, "nghttp3_conn_writev_stream: %s\n", nghttp3_strerror((int)count));
+            return 0;
+        }
+        const uint32_t  flags = NGTCP2_WRITE_STREAM_FLAG_MORE | (fin ? NGTCP2_WRITE_STREAM_FLAG_FIN : 0U);
+        ngtcp2_pkt_info info;
+        ngtcp2_ssize    taken = -1;
+        ngtcp2_ssize    wrote = ngtcp2_conn_writev_stream(peer->conn, &storage.path, &info, datagram, sizeof(datagram),
+                                                          &taken, flags, id, (const ngtcp2_vec*)pieces, (size_t)count,
+                                                          now);
+        if (wrote == NGTCP2_ERR_WRITE_MORE)
+        {
+            http3_wrote(peer->app, id, (size_t)taken);
+            continue;
+        }
+        if (wrote == NGTCP2_ERR_STREAM_DATA_BLOCKED)
+        {
+            http3_block(peer->app, id);
+            continue;
+        }
+        if (wrote == NGTCP2_ERR_STREAM_SHUT_WR)
+        {
+            http3_shut_write(peer->app, id);
+            continue;
+        }
+        if (wrote < 0)
+        {
+            fprintf(stderr, "ngtcp2_conn_writev_stream: %s\n", ngtcp2_strerror((int)wrote));
+            return 0;
+        }
+        if (taken >= 0)
+        {
+            http3_wrote(peer->app, id, (size_t)taken);
+        }
+        if (wrote == 0)
+        {
+            ngtcp2_conn_update_pkt_tx_time(peer->conn, now);
+            return 1;
+        }
+        if (!packet_written(peer, datagram, (size_t)wrote, now))
+        {
+            return 0;
+        }
+    }
+}
+
 static int write_streams(peer_t* peer)
 {
+    if (peer->app != NULL)
+    {
+        return write_http3(peer);
+    }
     uint8_t            datagram[DATAGRAM_BYTES];
     ngtcp2_path_storage storage;
     ngtcp2_path_storage_zero(&storage);
@@ -891,39 +1106,7 @@ static int write_streams(peer_t* peer)
         const uint64_t now = now_ns();
         if (!held && datagram_ready(peer))
         {
-            uint8_t         payload[MAX_DATAGRAM_BYTES];
-            const uint32_t  index = peer->client ? (uint32_t)peer->datagrams_sent : peer->echoes[peer->echo_first];
-            ngtcp2_vec      piece = {payload, fill_datagram(peer, payload, index, peer->client ? 2 : 3)};
-            ngtcp2_pkt_info info;
-            int             accepted = 0;
-            const ngtcp2_ssize wrote =
-                ngtcp2_conn_writev_datagram(peer->conn, &storage.path, &info, datagram, sizeof(datagram), &accepted,
-                                            NGTCP2_WRITE_DATAGRAM_FLAG_MORE, index, &piece, 1U, now);
-            if (accepted)
-            {
-                peer->last_datagram_ns = now;
-                ++peer->datagrams_sent;
-                if (!peer->client)
-                {
-                    peer->echo_first = (peer->echo_first + 1U) % MAX_DATAGRAMS;
-                    --peer->echo_count;
-                }
-            }
-            if (wrote == NGTCP2_ERR_WRITE_MORE)
-            {
-                continue;
-            }
-            if (wrote < 0)
-            {
-                fprintf(stderr, "ngtcp2_conn_writev_datagram: %s\n", ngtcp2_strerror((int)wrote));
-                return 0;
-            }
-            if (wrote == 0)
-            {
-                held = 1;
-                continue;
-            }
-            if (!packet_written(peer, datagram, (size_t)wrote, now))
+            if (!write_one_datagram(peer, &storage, datagram, &held, now))
             {
                 return 0;
             }
@@ -1023,6 +1206,10 @@ static int all_done(const peer_t* peer)
     {
         return 0;
     }
+    if (peer->app != NULL)
+    {
+        return http3_done(peer->app, now_ns());
+    }
     if (!peer->client)
     {
         return peer->done >= peer->streams;
@@ -1096,6 +1283,10 @@ static void report(peer_t* peer, const char* close_kind, uint64_t close_code)
            (unsigned long long)close_code, peer->pin_matched, (unsigned long long)peer->key_updates,
            group != NULL ? group : "none",
            cipher != NULL ? SSL_CIPHER_get_name(cipher) : "none", (int)length, alpn != NULL ? (const char*)alpn : "");
+    if (peer->app != NULL)
+    {
+        http3_report(peer->app);
+    }
     fflush(stdout);
 }
 
@@ -1140,6 +1331,8 @@ static void close_connection(peer_t* peer, uint64_t code)
  * connection and marks its sessions unresumable, the ticket kept for the next connection among them. */
 static void free_connection(peer_t* peer)
 {
+    http3_del(peer->app);
+    peer->app = NULL;
     ngtcp2_conn_del(peer->conn);
     peer->conn = NULL;
     ngtcp2_crypto_ossl_ctx_del(peer->ossl);
@@ -1277,8 +1470,8 @@ static int run(peer_t* peer)
         {
             const uint64_t expiry = ngtcp2_conn_get_expiry2(peer->conn);
             wait                  = expiry <= now ? 0U : (expiry - now < wait ? expiry - now : wait);
-            /* A datagram that never comes tells ngtcp2 nothing: the wait for it is this program's. */
-            wait = (peer->datagrams != 0U && wait > DATAGRAM_WAKE_NS) ? DATAGRAM_WAKE_NS : wait;
+            /* A datagram that never comes tells ngtcp2 nothing: the wait for it is this program's, and HTTP/3's turns. */
+            wait = ((peer->datagrams != 0U || peer->app != NULL) && wait > DATAGRAM_WAKE_NS) ? DATAGRAM_WAKE_NS : wait;
         }
         struct pollfd   entry   = {peer->fd, POLLIN, 0};
         struct timespec timeout = {(time_t)(wait / NGTCP2_SECONDS), (long)(wait % NGTCP2_SECONDS)};
@@ -1302,9 +1495,8 @@ static int run(peer_t* peer)
                 return result == NGTCP2_ERR_IDLE_CLOSE && peer->established;
             }
         }
-        open_streams(peer);
         peer->first_ns = peer->first_ns != 0U ? peer->first_ns : current;
-        if (!write_streams(peer))
+        if (!open_streams(peer) || !write_streams(peer))
         {
             report(peer, "failed", 0U);
             return 0;
@@ -1324,8 +1516,7 @@ static int begin_client(peer_t* peer)
     {
         return 0;
     }
-    open_streams(peer);
-    return write_streams(peer);
+    return open_streams(peer) && write_streams(peer);
 }
 
 /* Forgets the connection that ended and makes the next one's SSL. */
@@ -1363,7 +1554,8 @@ static int usage(void)
     fputs("usage: crd-ngtcp2-quic-peer --role client|server --port N --seed HEX --group NAME --cipher NAME "
           "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] [--retry 1]"
           " [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]]"
-          " [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N] [--resets 1]\n",
+          " [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N] [--resets 1]"
+          " [--http3 1 ...]\n",
           stderr);
     return 2;
 }
@@ -1382,9 +1574,14 @@ int main(int argc, char** argv)
     peer.datagram_limit = MAX_DATAGRAM_BYTES;
     peer.connections    = 1U;
     peer.number         = 1U;
+    http3_default_options(&peer.http3);
     for (int at = 1; at + 1 < argc; at += 2)
     {
         const char* value = argv[at + 1];
+        if (http3_parse_option(&peer.http3, argv[at], value))
+        {
+            continue;
+        }
         if (strcmp(argv[at], "--role") == 0)
         {
             role = value;
@@ -1487,7 +1684,7 @@ int main(int argc, char** argv)
         }
     }
     if (argc % 2 == 0 || role == NULL || group == NULL || cipher == NULL || seed == NULL ||
-        (version != 1UL && version != 2UL) || peer.streams > MAX_STREAMS || !parse_seed(seed, peer.pin) ||
+        !http3_options_valid(&peer.http3) || (version != 1UL && version != 2UL) || peer.streams > MAX_STREAMS || !parse_seed(seed, peer.pin) ||
         peer.datagrams > MAX_DATAGRAMS || peer.datagram_bytes + 1U > MAX_DATAGRAM_BYTES || peer.connections == 0U ||
         (peer.datagrams != 0U && peer.datagram_bytes < DATAGRAM_INDEX_BYTES))
     {

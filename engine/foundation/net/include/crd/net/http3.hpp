@@ -192,6 +192,8 @@ public:
     [[nodiscard]] bool settings_known() const noexcept { return m_peer_known; }
     [[nodiscard]] const Http3Settings& peer_settings() const noexcept { return m_peer; }
     [[nodiscard]] bool goaway_received() const noexcept { return m_goaway_received; }
+    [[nodiscard]] const QpackDecoder& qpack_decoder() const noexcept { return m_decoder; }
+    [[nodiscard]] const QpackEncoder& qpack_encoder() const noexcept { return m_encoder; }
 
     // A server's: the bytes for QuicConnectionConfig::early_context, kHttp3EarlyContextBytes at most, so a ticket from
     // a server with other settings cannot carry 0-RTT here (RFC 9114 section 7.2.4.2). The bytes written.

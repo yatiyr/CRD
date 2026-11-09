@@ -940,7 +940,7 @@
       "id": "http.h3",
       "title": "HTTP/3",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a"
@@ -964,8 +964,13 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "tests/foundation/net/test_http3.cpp",
+        "tests/foundation/net/fuzz/fuzz_http3.cpp",
+        "tests/foundation/net/interop/http3_interop.py"
+      ],
+      "deprecation": null,
+      "note": "Implemented by 4.2a (design S57): against nghttp3 1.19.0 over ngtcp2 1.26.0 both ways round, requests with and without bodies, trailers, interim responses, large sections, QPACK dynamic tables, Extended CONNECT, GOAWAY from either end, cancels from either end, 0-RTT accepted and refused, and an impaired path."
     },
     {
       "id": "http.qpack",
@@ -1000,7 +1005,7 @@
       "id": "http.datagrams",
       "title": "HTTP datagrams and the capsule protocol",
       "kind": "extension",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a"
@@ -1017,7 +1022,10 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
+      "evidence": [
+        "tests/foundation/net/test_http3.cpp",
+        "tests/foundation/net/interop/http3_interop.py"
+      ],
       "deprecation": null,
       "note": "WebTransport over HTTP/3 requires it (N02); RFC 9297 read in full for 4.2a's HTTP/3 slice (2026-11-09)."
     },
