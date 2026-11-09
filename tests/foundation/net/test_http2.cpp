@@ -870,7 +870,7 @@ TEST_CASE("http2: stream identifiers", "[http2]")
         peer.get(3U);
         CHECK(holds(peer.side.last(Http2EventKind::Headers)->fields, ":method=GET"));
     }
-    SECTION("a stream that ended well is closed")
+    SECTION("after both ends finished, what section 5.1 permits still passes and anything else ends the connection")
     {
         Peer peer = server_peer();
         peer.get(1U);
@@ -881,9 +881,47 @@ TEST_CASE("http2: stream identifiers", "[http2]")
         peer.send(kRst, 0U, 1U, u32_text(kH2Cancel));
         peer.send(kPriority, 0U, 1U, zeros(5U));
         CHECK(peer.side.frame_count(kRst) == 0U);
-        peer.send(kData, 0U, 1U, zeros(4U));
-        CHECK(peer.reset_code(1U) == kH2StreamClosed);
         CHECK(peer.error() == 0U);
+        peer.send(kData, 0U, 1U, zeros(4U));
+        CHECK(peer.error() == kH2StreamClosed);
+        CHECK(peer.goaway_code() == kH2StreamClosed);
+        CHECK(peer.side.frame_count(kRst) == 0U);
+    }
+    SECTION("so does a HEADERS frame on it")
+    {
+        Peer peer = server_peer();
+        peer.get(1U);
+        REQUIRE(peer.side.conn.send_response(1U, ok_response().span(), true) == Http2Error::None);
+        peer.side.drain();
+        peer.get(1U);
+        CHECK(peer.error() == kH2StreamClosed);
+        CHECK(peer.goaway_code() == kH2StreamClosed);
+    }
+    SECTION("and a frame on a request a client saw finish")
+    {
+        Peer peer(test_config(Http2Side::Client));
+        u32 id = 0U;
+        REQUIRE(peer.side.conn.open_request(get_request().span(), true, id) == Http2Error::None);
+        peer.side.drain();
+        peer.headers(id, Fields{{":status", "200"}});
+        CHECK(peer.side.conn.open_streams() == 0U);
+        peer.send(kData, 0U, id, zeros(4U));
+        CHECK(peer.error() == kH2StreamClosed);
+    }
+    SECTION("one finished and then fallen out of what is remembered is still a stream error")
+    {
+        Http2Config config = test_config(Http2Side::Server);
+        config.streams = 1U;
+        Peer peer(config);
+        for (u32 id = 1U; id <= 5U; id += 2U)
+        {
+            peer.get(id);
+            REQUIRE(peer.side.conn.send_response(id, ok_response().span(), true) == Http2Error::None);
+            peer.side.drain();
+        }
+        peer.headers(1U, Fields{{"x-after", "1"}});
+        CHECK(peer.error() == 0U);
+        CHECK(peer.reset_code(1U) == kH2StreamClosed);
     }
     SECTION("past what is remembered it is taken for closed")
     {
@@ -970,6 +1008,18 @@ TEST_CASE("http2: PRIORITY is read and ignored", "[http2]")
     sized.send(kPriority, 0U, 1U, zeros(4U));
     CHECK(sized.reset_code(1U) == kH2FrameSizeError);
     CHECK(sized.error() == 0U);
+
+    Peer closed = server_peer();
+    closed.get(1U);
+    REQUIRE(closed.side.conn.send_response(1U, ok_response().span(), true) == Http2Error::None);
+    closed.side.drain();
+    closed.send(kPriority, 0U, 1U, zeros(4U));
+    CHECK(closed.reset_code(1U) == kH2FrameSizeError);
+    closed.send(kPriority, 0U, 1U, u32_text(1U) + zeros(1U));
+    CHECK(closed.side.frame_count(kRst) == 2U);
+    closed.send(kWindow, 0U, 1U, u32_text(0U));
+    CHECK(closed.side.frame_count(kRst) == 3U);
+    CHECK(closed.error() == 0U);
 
     Peer self = server_peer();
     const Text block = self.block(get_request());

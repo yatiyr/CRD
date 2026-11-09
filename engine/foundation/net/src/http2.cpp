@@ -47,7 +47,6 @@ constexpr usize kPingBytes = 8U;
 constexpr usize kGoAwayMinBytes = 8U;
 constexpr usize kWindowUpdateBytes = 4U;
 constexpr usize kMaxOwnSettings = 8U;
-constexpr u32 kResetFlag = 0x80000000U; // on a remembered stream: this side reset it
 
 // What one frame read can write at most: a RST_STREAM, two WINDOW_UPDATEs and a GOAWAY. Every writer leaves this much
 // and reading stops below it, so a connection error always finds the room for its GOAWAY.
@@ -117,7 +116,7 @@ bool Http2Connection::init(memory::IAllocator& allocator, const Http2Config& con
     m_field_slots = (config.field_bytes / kHttpFieldOverhead) + 1U;
     m_records = memory::try_construct_array<Record>(allocator, config.streams);
     m_index = memory::try_construct_array<IndexEntry>(allocator, config.streams);
-    m_recent = memory::try_construct_array<u32>(allocator, m_recent_slots);
+    m_recent = memory::try_construct_array<RecentClose>(allocator, m_recent_slots);
     m_out = memory::try_construct_array<u8>(allocator, m_out_bytes);
     m_block = memory::try_construct_array<u8>(allocator, m_block_bytes);
     m_text = memory::try_construct_array<u8>(allocator, config.field_bytes);
@@ -181,7 +180,7 @@ Http2Connection::Record& Http2Connection::claim(u32 id) noexcept
     return record;
 }
 
-void Http2Connection::release(Record& record, bool reset) noexcept
+void Http2Connection::release(Record& record, Closed how) noexcept
 {
     if (record.unconsumed != 0U)
     {
@@ -191,7 +190,7 @@ void Http2Connection::release(Record& record, bool reset) noexcept
     {
         --m_wants;
     }
-    remember_closed(record.id, reset);
+    remember_closed(record.id, how);
     const usize at = position_of(record.id);
     std::memmove(m_index + at, m_index + at + 1U, (m_open - at - 1U) * sizeof(IndexEntry));
     --m_open;
@@ -199,10 +198,10 @@ void Http2Connection::release(Record& record, bool reset) noexcept
     m_free = static_cast<u32>(&record - m_records);
 }
 
-void Http2Connection::remember_closed(u32 id, bool reset) noexcept
+void Http2Connection::remember_closed(u32 id, Closed how) noexcept
 {
-    m_recent_floor = std::max(m_recent_floor, m_recent[m_recent_at] & kHttp2MaxStreamId);
-    m_recent[m_recent_at] = id | (reset ? kResetFlag : 0U);
+    m_recent_floor = std::max(m_recent_floor, m_recent[m_recent_at].id);
+    m_recent[m_recent_at] = RecentClose{id, how};
     m_recent_at = (m_recent_at + 1U) % m_recent_slots;
 }
 
@@ -216,9 +215,14 @@ Http2Connection::Closed Http2Connection::closed_kind(u32 id) noexcept
 {
     for (u32 slot = 0U; slot < m_recent_slots; ++slot)
     {
-        if ((m_recent[slot] & kHttp2MaxStreamId) == id)
+        if (m_recent[slot].id == id)
         {
-            return ((m_recent[slot] & kResetFlag) != 0U) ? Closed::Discard : Closed::Reset;
+            if (m_recent[slot].how == Closed::Ended)
+            {
+                fail(kH2StreamClosed);
+                return Closed::Failed;
+            }
+            return m_recent[slot].how;
         }
     }
     if (id > m_recent_floor)
@@ -319,7 +323,7 @@ bool Http2Connection::take_owed(Http2Event& event) noexcept
         event.kind = Http2EventKind::Aborted;
         event.stream = record.id;
         event.error = kH2RefusedStream;
-        release(record, true);
+        release(record, Closed::Discard);
         return true;
     }
     if (!m_wake)
@@ -683,7 +687,12 @@ Http2Connection::Step Http2Connection::read_priority(cont::ConstSpan<u8> payload
         return Step::Wait;
     }
     Record* const record = find(id);
-    return (record != nullptr) ? stream_error(*record, code, event) : Step::Again;
+    if (record != nullptr)
+    {
+        return stream_error(*record, code, event);
+    }
+    refuse_stream(id, code); // section 6.3 says so whatever the stream's state
+    return Step::Again;
 }
 
 Http2Connection::Step Http2Connection::read_rst_stream(cont::ConstSpan<u8> payload, u32 id, Http2Event& event) noexcept
@@ -711,7 +720,7 @@ Http2Connection::Step Http2Connection::read_rst_stream(cont::ConstSpan<u8> paylo
     event.kind = Http2EventKind::Aborted;
     event.stream = id;
     event.error = cont::wire_load<u32>(payload, 0U);
-    release(*record, false);
+    release(*record, Closed::Reset);
     return Step::Event;
 }
 
@@ -930,6 +939,10 @@ Http2Connection::Step Http2Connection::read_window_update(cont::ConstSpan<u8> pa
     Record* const record = find(id);
     if (record == nullptr)
     {
+        if (increment == 0U)
+        {
+            refuse_stream(id, kH2ProtocolError); // section 6.9 says so whatever the stream's state
+        }
         return Step::Again; // it crossed this side's closing the stream
     }
     if (increment == 0U)
@@ -1043,18 +1056,18 @@ Http2Connection::Step Http2Connection::new_request(u32 id, usize count, bool too
     m_highest = id;
     if (m_goaway_was_sent && id > m_goaway_sent)
     {
-        remember_closed(id, true); // section 6.8: what follows on it is dropped too
+        remember_closed(id, Closed::Discard); // section 6.8: what follows on it is dropped too
         return Step::Again;        // minimally processed, and that was the decoding
     }
     if (m_self_dependent || m_open >= m_config.streams)
     {
-        remember_closed(id, true);
+        remember_closed(id, Closed::Discard);
         refuse_stream(id, m_self_dependent ? kH2ProtocolError : kH2RefusedStream);
         return Step::Again;
     }
     if (too_large)
     {
-        remember_closed(id, true);
+        remember_closed(id, Closed::Discard);
         refuse_too_large(id);
         return Step::Again;
     }
@@ -1063,7 +1076,7 @@ Http2Connection::Step Http2Connection::new_request(u32 id, usize count, bool too
     if (!http_check_request(fields, event.info) || (event.info.extended && !m_config.connect_protocol) ||
         (m_block_end && event.info.has_content_length && event.info.content_length != 0U))
     {
-        remember_closed(id, true);
+        remember_closed(id, Closed::Discard);
         refuse_stream(id, kH2ProtocolError);
         return Step::Again;
     }
@@ -1170,7 +1183,7 @@ Http2Connection::Step Http2Connection::stream_error(Record& record, u32 code, Ht
     }
     const u32 id = record.id;
     put_rst_stream(id, code);
-    release(record, true);
+    release(record, Closed::Discard);
     event = Http2Event{};
     event.kind = Http2EventKind::Aborted;
     event.stream = id;
@@ -1212,7 +1225,7 @@ void Http2Connection::settle(Record& record) noexcept
 {
     if (record.read == Read::Over && record.send == Send::Over)
     {
-        release(record, false);
+        release(record, Closed::Ended);
     }
 }
 
@@ -1617,7 +1630,7 @@ Http2Error Http2Connection::cancel(u32 id, u32 error) noexcept
         return Http2Error::Blocked;
     }
     put_rst_stream(id, error);
-    release(*record, true);
+    release(*record, Closed::Discard);
     return Http2Error::None;
 }
 

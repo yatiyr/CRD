@@ -17,9 +17,10 @@
 //   streams   only clients open them, in ascending order, so the open ones are a sorted array searched by halving: an
 //             identifier costs no hash an attacker can aim at. Push is never offered: PUSH_PROMISE is a connection
 //             error.
-//   closed    the last streams closed are remembered: a frame for one this side reset is processed minimally and
-//             dropped (section 5.1), any other is STREAM_CLOSED, and an identifier that was never opened is a
-//             connection error, also among the ones skipped. Past what is remembered it is taken for a closed stream.
+//   closed    the last streams closed are remembered, with how (section 5.1): a frame for one this side reset is
+//             processed minimally and dropped, for one the peer reset it is a stream error STREAM_CLOSED, and after both
+//             ends finished it is a connection error STREAM_CLOSED. An identifier that was never opened is a connection
+//             error, also among the ones skipped. Past what is remembered it is taken for one the peer reset.
 //   sections  a block is decoded whole, so the table stays in step, whatever becomes of the stream. A section over
 //             `field_bytes` answers 431 to a request by itself; a block over the bound is ENHANCE_YOUR_CALM. A
 //             malformed message is a stream error PROTOCOL_ERROR and a request reaches the application only when it
@@ -238,8 +239,15 @@ private:
     enum class Closed : u8
     {
         Discard, // this side reset it: the peer's frame crossed that
-        Reset,   // STREAM_CLOSED for that stream
-        Failed,  // never opened: the connection failed
+        Reset,   // the peer reset it: STREAM_CLOSED for that stream
+        Ended,   // both ends finished: STREAM_CLOSED for the connection
+        Failed,  // closed_kind() failed the connection
+    };
+
+    struct RecentClose
+    {
+        u32 id = 0U;
+        Closed how = Closed::Reset;
     };
 
     struct Record
@@ -272,8 +280,8 @@ private:
     [[nodiscard]] usize position_of(u32 id) const noexcept;
     [[nodiscard]] Record* find(u32 id) noexcept;
     [[nodiscard]] Record& claim(u32 id) noexcept;
-    void release(Record& record, bool reset) noexcept;
-    void remember_closed(u32 id, bool reset) noexcept;
+    void release(Record& record, Closed how) noexcept;
+    void remember_closed(u32 id, Closed how) noexcept;
     [[nodiscard]] bool idle(u32 id) const noexcept;
     [[nodiscard]] Closed closed_kind(u32 id) noexcept;
     [[nodiscard]] u32 open_limit() const noexcept;
@@ -339,7 +347,7 @@ private:
     IndexEntry* m_index = nullptr;
     u32 m_open = 0U;
     u32 m_free = 0U;
-    u32* m_recent = nullptr; // the last streams closed, the top bit for one this side reset
+    RecentClose* m_recent = nullptr; // the last streams closed
     u32 m_recent_slots = 0U;
     u32 m_recent_at = 0U;
     u32 m_recent_floor = 0U; // the highest identifier that fell out of m_recent
