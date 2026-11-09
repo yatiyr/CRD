@@ -1094,6 +1094,27 @@ TEST_CASE("WebSocket tunnels: fragments with control frames between them, a Ping
     CHECK(rig.end[kClient].finished == 1U); // Close, then the stream's end
 }
 
+TEST_CASE("WebSocket tunnels: a tunnel ended by what arrived behind its CONNECT is reported Opened, then Closed",
+          "[net][ws-tunnel]")
+{
+    H2Rig rig;
+    REQUIRE(rig.ok);
+    const u64 stream = rig.raw_open(connect_request());
+    u8 frame[kWsMaxHeaderBytes + 1U];
+    const usize head = ws_frame_header_bytes(1U, false);
+    ws_write_frame_header(Span<u8>(frame, head), WsOpcode::Ping, true, 1U, nullptr); // unmasked: a client's must be
+    frame[head] = 'x';
+    rig.raw_send(stream, ConstSpan<u8>(frame, head + 1U));
+    rig.settle();
+    REQUIRE(rig.end[kServer].seen_count == 2U);
+    CHECK(rig.end[kServer].seen[0].kind == WsTunnelEventKind::Opened);
+    CHECK(rig.end[kServer].seen[1].kind == WsTunnelEventKind::Closed);
+    CHECK(rig.end[kServer].seen[0].tunnel == rig.end[kServer].seen[1].tunnel);
+    CHECK(rig.end[kServer].tunnels.live() == 0U);
+    CHECK(rig.end[kClient].status == kWsConnectAccepted);
+    CHECK(rig.conn[kServer].error() == 0U);
+}
+
 TEST_CASE("WebSocket tunnels: a failed HTTP/2 connection ends every tunnel", "[net][ws-tunnel]")
 {
     H2Rig rig;

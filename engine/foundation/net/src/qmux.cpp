@@ -831,6 +831,10 @@ usize QmuxConnection::take(cont::Span<u8> out, u64 now_ns) noexcept
 
 void QmuxConnection::taken(usize count, u64 now_ns) noexcept
 {
+    if (!tunneled() || count > stage_pending())
+    {
+        return; // a TLS connection's bytes leave through take(), and nothing was shown past what is pending
+    }
     m_stage_head += count;
     if (count != 0U && stage_pending() == 0U && m_state == QmuxState::Established)
     {
