@@ -6,6 +6,7 @@
 #include <crd/core/platform.hpp>
 #include <crd/net/endpoint.hpp>
 #include <crd/net/udp.hpp>
+#include <crd/time/clocks.hpp>
 
 #include <climits>
 #include <cstring>
@@ -251,10 +252,10 @@ inline constexpr short kPollWritable = POLLOUT;
 }
 
 // Waits until `events` (or an error the next call reports) or `timeout_ns`; the events that arrived, 0 when the time
-// passed. A signal that interrupts the wait restarts it.
+// passed. A signal that interrupts the wait, or a host timer that fires early (Windows ends a timed wait up to one
+// timer tick before its time), waits again for what is left.
 [[nodiscard]] inline short wait_native(NativeSocket handle, short events, u64 timeout_ns) noexcept
 {
-    const int timeout_ms = wait_milliseconds(timeout_ns);
 #if CRD_OS_WINDOWS
     WSAPOLLFD wanted{};
 #else
@@ -262,21 +263,28 @@ inline constexpr short kPollWritable = POLLOUT;
 #endif
     wanted.fd = handle;
     wanted.events = events;
-    for (;;)
+    const i64 start = time::TickClock::now_ns();
+    for (u64 left = timeout_ns;;)
     {
 #if CRD_OS_WINDOWS
-        const int ready = ::WSAPoll(&wanted, 1U, timeout_ms);
+        const int ready = ::WSAPoll(&wanted, 1U, wait_milliseconds(left));
 #else
-        const int ready = ::poll(&wanted, 1U, timeout_ms);
+        const int ready = ::poll(&wanted, 1U, wait_milliseconds(left));
 #endif
-        if (ready >= 0)
+        if (ready > 0)
         {
-            return (ready > 0) ? wanted.revents : short{0};
+            return wanted.revents;
         }
-        if (!interrupted(last_error()))
+        if (ready < 0 && !interrupted(last_error()))
         {
             return events; // the next call reports what went wrong
         }
+        const u64 spent = static_cast<u64>(time::TickClock::now_ns() - start);
+        if (spent >= timeout_ns)
+        {
+            return 0;
+        }
+        left = timeout_ns - spent;
     }
 }
 
