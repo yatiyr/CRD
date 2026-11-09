@@ -24,6 +24,9 @@ enum class SocketError : u8
     Resources,          // descriptors, buffers or memory ran out
     MessageTooLarge,    // send: more than a datagram of the peer's family carries, or than the host's path takes
     Unreachable,        // send: the host has no route to the peer
+    Refused,            // connect: nothing listens at the peer
+    Reset,              // a stream's connection was reset or aborted
+    TimedOut,           // the host gave up on the peer
     Closed,             // the socket is not open
     Failed,             // anything else the host reported
 };

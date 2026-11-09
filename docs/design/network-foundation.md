@@ -972,6 +972,53 @@ priority classes before higher ones; legitimate-client latency under attack is a
 numbers behind each bound (handshake state size, bucket rates, pool sizes) are configuration with measured defaults
 set and published by NET.4; this design fixes the stages, their order and what each may spend.
 
+<a id="stream-sockets"></a>
+**S51. Byte-stream sockets** (4.2a, threats T01 and T10; [stream_socket.hpp](../../engine/foundation/net/include/crd/net/stream_socket.hpp);
+2026-11-09). `StreamSocket` is the seam for byte streams, as `DatagramSocket` is for datagrams: `read`, `write`, `shutdown_send` and
+one blocking `wait`, into caller-owned storage, with Busy as back-pressure and a read's `ended` as the peer's clean end. `TcpSocket`
+and `TcpListener` implement it on the host: non-blocking and not inherited, `TCP_NODELAY` (the transport assembles its own
+records), no `SIGPIPE`, a non-blocking `connect` finished by `connected()`, and `abort()` (linger zero) for peers the transport
+gives up on. A listener holds its port exclusively on Windows and takes `SO_REUSEADDR` elsewhere, so a restarted server gets its
+port back from `TIME_WAIT` while a live listener still refuses a second. The host calls live once, in
+[native_socket.hpp](../../engine/foundation/net/src/native_socket.hpp), which UDP and TCP share.
+
+<a id="qmux"></a>
+**S52. QMux: the TCP and TLS path** (4.2a, threats T01, T02, T06 and T10; [qmux.hpp](../../engine/foundation/net/include/crd/net/qmux.hpp);
+`quic.qmux`, draft-ietf-quic-qmux-02; 2026-11-09). "One session model over every path" made literal: the same `QuicStreamSet` and
+`QuicDatagrams` as on QUIC, carried as QUIC version 1 frames in QMux records inside TLS 1.3. No second stream or flow-control
+implementation exists. `QmuxConnection` is sans-I/O (`receive`, `take`), so NET-SIM's virtual streams and a test's pipe drive it alike.
+
+- **Records.** A Size and whole frames, at most 16382 bytes either way. This side never advertises more: a larger record buys nothing
+  over 16 KiB TLS records, and a fixed buffer per direction bounds the connection. A Size arriving in pieces waits; over 16382 is
+  FRAME_ENCODING_ERROR; **zero is PROTOCOL_VIOLATION** (the draft is silent: section 3.2's Frames holds frames, and RFC 9000 section
+  12.4 refuses a packet of none). A frame cut by its record is FRAME_ENCODING_ERROR.
+- **Parameters.** `QX_TRANSPORT_PARAMETERS` goes first the moment TLS can carry it, and a peer's must be the first frame it sends and
+  only once (else PROTOCOL_VIOLATION). Only section 5's set is written, so no greasing here; a QUIC parameter about IDs, paths or
+  ACKs is TRANSPORT_PARAMETER_ERROR, one sent twice too, one from another document is ignored.
+- **Frames.** Section 4.2's list, and DATAGRAM when negotiated; anything else is FRAME_ENCODING_ERROR. Streams set `in_order`: a STREAM
+  frame must continue its stream exactly, so repeats (which the draft does not name) are refused too. Frames are acknowledged as TLS
+  takes them (section 4.1): `kQuicStreamFinished` and `QuicDatagramOutcome::Acked` mean handed to the transport. Datagrams are bounded
+  by the record as well as the peer's limit.
+- **Reads never wait for the application** (section 6): every byte is read and parsed; streams are bounded by flow control, late datagrams
+  drop. Sending stops at one record's room in TLS's bound, so a peer that stops reading holds at most that much here.
+- **Time.** The idle timeout is the smaller offered. It restarts on a whole record received and when **the last byte is handed to the
+  transport**, so a peer that stops reading times out. It ends the connection with close_notify, no frame (section 7.1). `QX_PING` keeps
+  intermediaries awake; one goes at the start and every `keepalive_ns`; requests increase strictly and the latest answer gives
+  the RTT that tunes windows. No idle timer needs a PTO: TCP retransmits.
+- **Close.** CONNECTION_CLOSE, close_notify, then the transport's `shutdown_send`; then the peer's end or `close_wait_ns`. TLS is shut
+  by then, so bytes still arriving are discarded unread and only the transport's end is awaited. A transport end without close_notify
+  is Truncated, a reset Reset, a fatal alert TlsFailed: none is a clean close.
+- **Padding** to `padding_block` is PADDING frames in the record (NET.3's `padded_size()`).
+- **Resumption.** TLS tickets through `TlsTicketStore`, under the stream's binding, never a QUIC version's: a QUIC ticket carries QUIC's
+  remembered parameters and resumes only QUIC, so the first fallback connection is a full handshake and later ones resume.
+- **ALPN** is required (section 3.1); each application protocol's QMux identifier differs from its QUIC one (its register entry names it).
+
+Evidence: `test_qmux.cpp` (every refusal above through a real TLS peer, flow control both ways past every window, byte-at-a-time and
+seeded-stall paths, timers to the nanosecond, the close paths, a run over real TCP), `test_stream_socket.cpp`, `crd-fuzz-net-qmux`
+(records, cuts, time and closes against a real TLS peer), held to source mutations ([session](../sessions/2026-11-09-4-2a-qmux.md)).
+Still to come: 0-RTT (a context accepting early data is refused at `start()`), the host behind a poller, and interop with a second
+implementation.
+
 <a id="browsers"></a>
 ## Browser constraints
 

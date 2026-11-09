@@ -67,6 +67,13 @@ crd_fuzz_target(crd-fuzz-net-quic-stream-set
 crd_fuzz_target(crd-fuzz-net-quic-datagram
     SOURCES fuzz_quic_datagram.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-datagram")
 
+# QMux, QUIC's streams and datagrams over TLS on a byte stream (4.2a).
+#   crd-fuzz-net-qmux   a server behind a real TLS client under any records, frames, cuts, time, reads, pings, closes and
+#                       the transport's end: whole records of allowed frames only, its parameters first, nothing after
+#                       CONNECTION_CLOSE, the state only moving forward, nothing allocated.
+crd_fuzz_target(crd-fuzz-net-qmux
+    SOURCES fuzz_qmux.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-qmux")
+
 # A client's ticket store (4.2a).
 #   crd-fuzz-net-ticket-cache   any keeps, takes and clock steps under any bounds, against a model of the contract:
 #                               every ticket returned byte-exact and once, the newest of its binding, the size and

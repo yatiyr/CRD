@@ -257,7 +257,7 @@ def spec_errors(where, entry, context):
     kind = spec.get('type')
     if kind not in SPEC_STATUS:
         return [f'{where}: spec.type must be one of {sorted(SPEC_STATUS)}, not {kind!r}']
-    unknown = set(spec) - {'type', 'ref', 'revision', 'posted', 'status', 'obsoleted_by'}
+    unknown = set(spec) - {'type', 'ref', 'revision', 'posted', 'status', 'obsoleted_by', 'added'}
     if unknown:
         errors.append(f'{where}: spec has unknown keys {sorted(unknown)}')
     if not isinstance(spec.get('ref'), str) or not spec['ref']:
@@ -572,7 +572,13 @@ def entry_errors(entry, domain, register, context):
         errors += date_errors(where, 'source.read', source['read'])
         read = parse_day(source['read'])
         snapshot = parse_day(register.get('snapshot', {}).get('date'))
-        in_snapshot = isinstance(entry.get('spec'), dict) and entry['spec'].get('type') in SNAPSHOT_TYPES
+        added = entry.get('spec', {}).get('added') if isinstance(entry.get('spec'), dict) else None
+        if added is not None and (added != source['read'] or not snapshot or
+                                  (parse_day(added) or snapshot) <= snapshot):
+            errors.append(f'{where}: spec.added is the day an entry joined after the snapshot, and its source.read')
+        # An entry added since the snapshot was read from its own page that day; the next refresh takes it over.
+        in_snapshot = isinstance(entry.get('spec'), dict) and entry['spec'].get('type') in SNAPSHOT_TYPES and \
+            added is None
         if read and (read > context.today or (in_snapshot and snapshot and read > snapshot)):
             errors.append(f'{where}: source.read {source["read"]} is after the snapshot or today')
         errors += reference_errors(where, 'source', source['ref'], context.root)

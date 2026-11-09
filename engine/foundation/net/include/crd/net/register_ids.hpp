@@ -120,6 +120,14 @@ inline constexpr u64 kQuicTpVersionInformation = 0x0011ULL;
 inline constexpr u32 kQuicVersion2 = 0x6B3343CFU;
 // http.h3: TLS ALPN Protocol IDs, HTTP/3
 inline constexpr std::string_view kAlpnHttp3 = "h3";
+// quic.qmux: QUIC Frame Types, qx_transport_parameters
+inline constexpr u64 kQuicFrameQxTransportParameters = 0x3F5153300D0A0D0AULL;
+// quic.qmux: QUIC Frame Types, qx_ping_request
+inline constexpr u64 kQuicFrameQxPingRequest = 0x348C67529EF8C7BDULL;
+// quic.qmux: QUIC Frame Types, qx_ping_response
+inline constexpr u64 kQuicFrameQxPingResponse = 0x348C67529EF8C7BEULL;
+// quic.qmux: QUIC Transport Parameters, max_record_size
+inline constexpr u64 kQuicTpMaxRecordSize = 0x571C59429CD0845ULL;
 } // namespace iana
 
 } // namespace crd::net

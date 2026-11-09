@@ -1894,7 +1894,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     const usize reset_floor = m_local_cid.bytes + kQuicResetPadding;
     const usize least = (datagram_used < reset_floor) ? min_u64(reset_floor - datagram_used, room.size()) : 0U;
     usize bytes = 0U;
-    const QuicPacketError sealed = m_protection.seal(writer, used, QuicPadding{max_u64(floor, least), 0U}, bytes);
+    const QuicPacketError sealed = m_protection.seal(writer, used, QuicPadding{max_u64(floor, least), m_config.padding_block}, bytes);
     if (sealed != QuicPacketError::None)
     {
         const QuicTransportError error = quic_packet_close(sealed);

@@ -81,6 +81,8 @@ TARGETS = {
                             'executable': 'tests/net/fuzz/crd-fuzz-net-quic-stream-set'},
     'net-quic-connection': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-connection',
                             'executable': 'tests/net/fuzz/crd-fuzz-net-quic-connection'},
+    'net-qmux': {'corpus': 'tests/foundation/net/fuzz/corpus-qmux',
+                 'executable': 'tests/net/fuzz/crd-fuzz-net-qmux'},
     'net-quic-datagram': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-datagram',
                           'executable': 'tests/net/fuzz/crd-fuzz-net-quic-datagram'},
     'net-ticket-cache': {'corpus': 'tests/foundation/net/fuzz/corpus-ticket-cache',

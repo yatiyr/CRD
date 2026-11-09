@@ -1,26 +1,14 @@
 // crd-net -- datagram sockets (4.2a; docs/design/network-foundation.md#sockets).
 
-#include <crd/core/platform.hpp>
+#include "native_socket.hpp"
+
 #include <crd/net/udp.hpp>
 
 #include <climits>
 #include <cstring>
 
-#if CRD_OS_WINDOWS
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <mswsock.h>
-#else
-#include <arpa/inet.h>
-#include <cerrno>
+#if !CRD_OS_WINDOWS
 #include <fcntl.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
 #endif
 
 namespace crd::net
@@ -28,51 +16,9 @@ namespace crd::net
 namespace
 {
 
-#if CRD_OS_WINDOWS
-using NativeSocket = SOCKET;
-using NativeLength = int;
-const NativeSocket kInvalidSocket = INVALID_SOCKET;
-#else
-using NativeSocket = int;
-using NativeLength = socklen_t;
-constexpr NativeSocket kInvalidSocket = -1;
-#endif
-
 #if CRD_OS_LINUX
 constexpr usize kBatchChunk = 32U; // datagrams per recvmmsg or sendmmsg
 #endif
-
-[[nodiscard]] NativeSocket native(u64 handle) noexcept
-{
-    return static_cast<NativeSocket>(handle);
-}
-
-[[nodiscard]] int last_error() noexcept
-{
-#if CRD_OS_WINDOWS
-    return WSAGetLastError();
-#else
-    return errno;
-#endif
-}
-
-[[nodiscard]] bool interrupted(int code) noexcept
-{
-#if CRD_OS_WINDOWS
-    return code == WSAEINTR;
-#else
-    return code == EINTR;
-#endif
-}
-
-[[nodiscard]] bool would_block(int code) noexcept
-{
-#if CRD_OS_WINDOWS
-    return code == WSAEWOULDBLOCK;
-#else
-    return code == EAGAIN || code == EWOULDBLOCK;
-#endif
-}
 
 // An ICMP report about an earlier send, which says nothing about the datagrams still waiting.
 [[nodiscard]] bool stale_report(int code) noexcept
@@ -84,151 +30,9 @@ constexpr usize kBatchChunk = 32U; // datagrams per recvmmsg or sendmmsg
 #endif
 }
 
-// `sending`: a full device queue (ENOBUFS) is the same back-pressure as a full socket buffer.
-[[nodiscard]] SocketError map_error(int code, bool sending) noexcept
-{
-    if (would_block(code))
-    {
-        return SocketError::Busy;
-    }
-#if CRD_OS_WINDOWS
-    switch (code)
-    {
-    case WSAEAFNOSUPPORT:
-    case WSAEPFNOSUPPORT:
-    case WSAEPROTONOSUPPORT:
-        return SocketError::FamilyUnsupported;
-    case WSAEADDRINUSE:
-        return SocketError::AddressInUse;
-    case WSAEADDRNOTAVAIL:
-        return SocketError::AddressUnavailable;
-    case WSAEACCES:
-        return SocketError::Permission;
-    case WSAENOBUFS:
-        return sending ? SocketError::Busy : SocketError::Resources;
-    case WSAEMFILE:
-        return SocketError::Resources;
-    case WSAEMSGSIZE:
-        return SocketError::MessageTooLarge;
-    case WSAENETUNREACH:
-    case WSAEHOSTUNREACH:
-    case WSAENETDOWN:
-        return SocketError::Unreachable;
-    case WSAENOTSOCK:
-        return SocketError::Closed;
-    default:
-        return SocketError::Failed;
-    }
-#else
-    switch (code)
-    {
-    case EAFNOSUPPORT:
-    case EPROTONOSUPPORT:
-        return SocketError::FamilyUnsupported;
-    case EADDRINUSE:
-        return SocketError::AddressInUse;
-    case EADDRNOTAVAIL:
-        return SocketError::AddressUnavailable;
-    case EACCES:
-    case EPERM:
-        return SocketError::Permission;
-    case ENOBUFS:
-        return sending ? SocketError::Busy : SocketError::Resources;
-    case EMFILE:
-    case ENFILE:
-    case ENOMEM:
-        return SocketError::Resources;
-    case EMSGSIZE:
-        return SocketError::MessageTooLarge;
-    case ENETUNREACH:
-    case EHOSTUNREACH:
-    case ENETDOWN:
-    case EHOSTDOWN:
-        return SocketError::Unreachable;
-    case EBADF:
-    case ENOTSOCK:
-        return SocketError::Closed;
-    default:
-        return SocketError::Failed;
-    }
-#endif
-}
-
-struct NativeAddress
-{
-    sockaddr_storage storage{};
-    NativeLength length = 0;
-};
-
-// The host's form of `peer` for a socket of the given family: a dual-stack socket reaches an IPv4 peer as its mapped
-// address, and every other crossing of families is refused before the host sees it.
-[[nodiscard]] SocketError to_native(const Endpoint& peer, bool v6_socket, bool dual_stack, NativeAddress& out) noexcept
-{
-    IpAddress address = peer.address.unmapped();
-    out = NativeAddress{};
-    if (!v6_socket)
-    {
-        if (address.family != AddressFamily::V4)
-        {
-            return SocketError::FamilyMismatch;
-        }
-        sockaddr_in in{};
-        in.sin_family = AF_INET;
-        in.sin_port = htons(peer.port);
-        std::memcpy(&in.sin_addr, address.bytes, 4U);
-        std::memcpy(&out.storage, &in, sizeof(in));
-        out.length = static_cast<NativeLength>(sizeof(in));
-        return SocketError::None;
-    }
-    if (address.family == AddressFamily::V4)
-    {
-        if (!dual_stack)
-        {
-            return SocketError::FamilyMismatch;
-        }
-        address = address.mapped();
-    }
-    sockaddr_in6 in6{};
-    in6.sin6_family = AF_INET6;
-    in6.sin6_port = htons(peer.port);
-    std::memcpy(&in6.sin6_addr, address.bytes, 16U);
-    in6.sin6_scope_id = address.scope;
-    std::memcpy(&out.storage, &in6, sizeof(in6));
-    out.length = static_cast<NativeLength>(sizeof(in6));
-    return SocketError::None;
-}
-
-// A peer as an endpoint, a mapped address as the IPv4 address it carries.
-[[nodiscard]] Endpoint from_native(const sockaddr_storage& storage) noexcept
-{
-    Endpoint endpoint;
-    if (storage.ss_family == AF_INET)
-    {
-        sockaddr_in in{};
-        std::memcpy(&in, &storage, sizeof(in));
-        std::memcpy(endpoint.address.bytes, &in.sin_addr, 4U);
-        endpoint.port = ntohs(in.sin_port);
-    }
-    else if (storage.ss_family == AF_INET6)
-    {
-        sockaddr_in6 in6{};
-        std::memcpy(&in6, &storage, sizeof(in6));
-        u8 bytes[16];
-        std::memcpy(bytes, &in6.sin6_addr, 16U);
-        endpoint.address = IpAddress::v6(bytes, static_cast<u32>(in6.sin6_scope_id)).unmapped();
-        endpoint.port = ntohs(in6.sin6_port);
-    }
-    return endpoint;
-}
-
 [[nodiscard]] usize payload_limit(const Endpoint& peer) noexcept
 {
     return peer.address.unmapped().family == AddressFamily::V4 ? kMaxUdpPayloadV4 : kMaxUdpPayloadV6;
-}
-
-[[nodiscard]] bool set_option(NativeSocket handle, int level, int name, int value) noexcept
-{
-    return ::setsockopt(handle, level, name, reinterpret_cast<const char*>(&value), sizeof(value)) == 0;
 }
 
 // Everything before bind: non-blocking and not inherited, the family split, Windows' exclusive port and ICMP
@@ -598,37 +402,7 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
 
 bool UdpSocket::wait_readable(u64 timeout_ns) noexcept
 {
-    if (!is_open())
-    {
-        return false;
-    }
-    const u64 whole_ms = timeout_ns / 1'000'000U + ((timeout_ns % 1'000'000U) != 0U ? 1U : 0U);
-    const int timeout_ms = static_cast<int>(whole_ms < static_cast<u64>(INT_MAX) ? whole_ms : INT_MAX);
-#if CRD_OS_WINDOWS
-    WSAPOLLFD wanted{};
-    wanted.fd = native(m_handle);
-    wanted.events = POLLRDNORM;
-#else
-    pollfd wanted{};
-    wanted.fd = native(m_handle);
-    wanted.events = POLLIN;
-#endif
-    for (;;)
-    {
-#if CRD_OS_WINDOWS
-        const int ready = ::WSAPoll(&wanted, 1U, timeout_ms);
-#else
-        const int ready = ::poll(&wanted, 1U, timeout_ms);
-#endif
-        if (ready >= 0)
-        {
-            return ready > 0;
-        }
-        if (!interrupted(last_error()))
-        {
-            return true; // receive() reports what went wrong
-        }
-    }
+    return is_open() && wait_native(native(m_handle), kPollReadable, timeout_ns) != 0;
 }
 
 } // namespace crd::net

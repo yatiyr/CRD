@@ -62,6 +62,8 @@ struct QuicStreamLimits
     u32 stream_window = 0U;         // the window first granted on each stream: 1 to receive_bytes
     u64 connection_window = 0U;     // initial_max_data
     u64 connection_max_window = 0U; // the connection window's auto-tuned maximum: at least connection_window
+    // QMux: the path delivers in order, so a STREAM frame must continue its stream exactly or is PROTOCOL_VIOLATION.
+    bool in_order = false;
 };
 
 enum class QuicStreamError : u8

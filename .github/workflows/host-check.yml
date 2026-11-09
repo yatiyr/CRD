@@ -71,6 +71,9 @@ jobs:
           - {target: net-quic-recovery, seed: 8202, repeat: ''}
           # 4.2a's ingress with a client's leg: six non-replaying local events (heap and stack corruption, a wild jump),
           # three of them with the client leg removed, 2026-11-08.
+          # QMux over TLS (4.2a): a local run stopped once on a wild memset inside AWS-LC that its input never replayed.
+          - {target: net-qmux, seed: 8901, repeat: ''}
+          - {target: net-qmux, seed: 8902, repeat: ''}
           - {target: net-ingress, seed: 8301, repeat: ''}
           - {target: net-ingress, seed: 8302, repeat: ''}
           # 4.2a's ticket cache and token index: three non-replaying local events, 2026-11-09.

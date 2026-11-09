@@ -373,6 +373,25 @@ TEST_CASE("QUIC connection: the handshake reaches confirmation in both versions 
     }
 }
 
+TEST_CASE("QUIC connection: packets pad to the configured block", "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    QuicConnectionConfig client_config = config_for(QuicSide::Client, identity, QuicVersion::V1, 0U);
+    client_config.padding_block = 128U;
+    QuicConnection client(allocator, client_config);
+    QuicConnection server(allocator, config_for(QuicSide::Server, identity, QuicVersion::V1, 1U));
+    connect(client);
+    auto net = std::make_unique<Net>(client, server);
+    REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+    net->advance(net->now + 500U * kMs);
+    client.ping();
+    u8 datagram[kDatagram];
+    const usize sent = client.send(Span<u8>(datagram, sizeof(datagram)), net->now);
+    REQUIRE(sent != 0U);
+    CHECK(sent % 128U == 0U);
+}
+
 TEST_CASE("QUIC connection: paths that lose, duplicate and reorder still confirm, within the amplification limit",
           "[net][4.2a][quic-connection]")
 {

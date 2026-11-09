@@ -1109,6 +1109,59 @@
       "deprecation": null
     },
     {
+      "id": "quic.qmux",
+      "title": "QMux: QUIC's streams and datagrams over a reliable byte stream",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-quic-qmux",
+        "status": "active",
+        "revision": "02",
+        "posted": "2026-07-06",
+        "added": "2026-11-09"
+      },
+      "cryptography": [],
+      "codepoints": [
+        {
+          "registry": "QUIC Frame Types",
+          "name": "qx_transport_parameters",
+          "value": "0x3f5153300d0a0d0a"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "qx_ping_request",
+          "value": "0x348c67529ef8c7bd"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "qx_ping_response",
+          "value": "0x348c67529ef8c7be"
+        },
+        {
+          "registry": "QUIC Transport Parameters",
+          "name": "max_record_size",
+          "value": "0x0571c59429cd0845"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#qmux",
+        "read": "2026-11-09",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [
+        "tests/foundation/net/test_qmux.cpp",
+        "tests/foundation/net/fuzz/fuzz_qmux.cpp"
+      ],
+      "deprecation": null,
+      "note": "The TCP and TLS path of 4.2a (design S52): the QUIC stream and datagram model over TLS 1.3 on TCP. Each application protocol takes a QMux ALPN of its own, distinct from its QUIC one (section 3.1). Provisional IANA codepoints: a renumbering is this one entry."
+    },
+    {
       "id": "quic.reliable-reset",
       "title": "QUIC stream resets with partial delivery (RESET_STREAM_AT)",
       "kind": "extension",

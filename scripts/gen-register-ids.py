@@ -66,6 +66,7 @@ RESERVED = {'Cerid GREASE values': 'Grease'}
 REGISTRIES = {
     'QUIC Versions': ('', 'u32', 'integer'),
     'QUIC Transport Parameters': ('QuicTp', 'u64', 'integer'),
+    'QUIC Frame Types': ('QuicFrame', 'u64', 'integer'),
     'TLS ALPN Protocol IDs': ('Alpn', 'std::string_view', 'alpn'),
     'TLS Supported Groups': ('Group', 'u16', 'integer'),
     'TLS SignatureScheme': ('SignatureScheme', 'u16', 'integer'),

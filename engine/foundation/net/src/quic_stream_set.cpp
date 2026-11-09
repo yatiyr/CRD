@@ -541,6 +541,10 @@ void QuicStreamSet::drop_stopped(Slot& slot) noexcept
 
 QuicTransportError QuicStreamSet::on_stream(const QuicFrame& frame, Slot& slot, bool early) noexcept
 {
+    if (m_limits.in_order && frame.offset != slot.in.contiguous_end())
+    {
+        return QuicTransportError::ProtocolViolation;
+    }
     const u64 end = frame.offset + frame.data.size(); // read_quic_frame bounds it by 2^62 - 1
     if (!account_received(slot, end))
     {

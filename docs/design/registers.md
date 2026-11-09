@@ -53,7 +53,7 @@ publication that defines an algorithm no standards body publishes, such as SipHa
 `ref` is its specifications.freedesktop.org link, `revision` its version, `status` `draft`, `stable` or `withdrawn`),
 `tcg` (a Trusted Computing Group specification, such as the TPM 2.0 Library; `ref` is its trustedcomputinggroup.org
 page, `revision` its version, `status` `published`, `review` (in public review) or `withdrawn`) or `cerid`; `ref`; for a draft
-its `revision` and `posted` day, month or year; `status` in the snapshot; `obsoleted_by` for an obsoleted RFC),
+its `revision` and `posted` day, month or year; `status` in the snapshot; `obsoleted_by` for an obsoleted RFC; `added` for an entry that joined after the snapshot, the day its `source.read` was, which the next refresh removes),
 `codepoints` (IANA or Cerid registry, name, value; `verified: false` marks a value taken from knowledge;
 `recommended`, IANA's "Recommended" value, [below](#recommended-column)), `awaiting_iana` (`recorded`, a day, and
 `decision`, a repository document and anchor: the dated decision to ship a pinned draft's codepoints before IANA lists

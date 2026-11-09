@@ -180,6 +180,7 @@ struct QuicConnectionConfig
     u32 sent_frames = 1024U;
     u32 crypto_bytes = 16384U; // per level, each direction: a multiple of kQuicStreamChunk, at least 4096
     u32 max_datagram_bytes = kQuicMinInitialDatagram; // what this side sends at most (NET-PATH raises it)
+    u32 padding_block = 0U; // packets pad to the next multiple of this (NET.3's padded_size()); 0 pads none
     u64 initial_rtt_ns = kQuicInitialRttNs;
     u64 key_update_interval = 0U; // 1-RTT packets one key seals before an update starts (0: the AEAD's limit alone)
     // kPrfKeyBytes seeding the connection's entropy (grease, skipped numbers) for a deterministic run (tests,

@@ -5279,6 +5279,7 @@ class TestInstruments(unittest.TestCase):
                                                        'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
                                                        'hesap-clock', 'hesap-erasure', 'hesap-estimators', 'hesap-flexfec', 'hesap-link', 'hesap-motion', 'hesap-quantize', 'hesap-raptorq', 'hesap-red',
                                                        'memory-allocators', 'net-admission', 'net-coded-frames', 'net-delta-stream', 'net-endpoint', 'net-ingress', 'net-negotiation',
+                                                       'net-qmux',
                                                        'net-quic-codec', 'net-quic-connection', 'net-quic-datagram', 'net-quic-packet',
                                                        'net-quic-recovery',
                                                        'net-quic-stream', 'net-quic-stream-set', 'net-state-hash', 'net-ticket-cache',
@@ -7511,6 +7512,18 @@ class Registers(RegisterFixture, unittest.TestCase):
         self.assertEqual(0, code, output)
         self.assertIn('2 entries, 2 pinned', output)
         self.assertIn('webtransport.h3 on 2027-01-02', output)
+
+    def test_an_entry_added_since_the_snapshot_is_read_on_the_day_it_joined(self):
+        source = {'ref': 'docs/research.md#n83', 'read': '2026-11-05', 'verified': True}
+        late = self.register([self.entry(spec=self.DRAFT, source=source)])
+        self.assert_fails(late, 'is after the snapshot', today='2026-11-06')
+        added = self.register([self.entry(spec=dict(self.DRAFT, added='2026-11-05'), source=source)])
+        self.assertEqual(0, self.run_guard(added, today='2026-11-06')[0])
+        other_day = self.register([self.entry(spec=dict(self.DRAFT, added='2026-11-04'), source=source)])
+        self.assert_fails(other_day, 'joined after the snapshot', today='2026-11-06')
+        early = dict(source, read='2026-10-30')
+        before = self.register([self.entry(spec=dict(self.DRAFT, added='2026-10-30'), source=early)])
+        self.assert_fails(before, 'joined after the snapshot', today='2026-11-06')
 
     def test_a_pinned_draft_expires_185_days_from_the_start_of_its_posted_period(self):
         later = self.schedule(next='2027-06-01', calendar=[{'event': 'IETF 128', 'day': '2027-05-07', 'scan': 'light',
