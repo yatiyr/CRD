@@ -34,7 +34,8 @@ all consumers to carry weight they do not need.
 
 ~~A thin, platform-neutral socket abstraction:~~ A platform-neutral transport, QUIC with unreliable datagrams first
 (struck and amended 2026-10-27, see [the amendment](#amendment-2026-10-27-the-foundation-window-and-the-layers-above)):
-- Reliable ordered channel ~~(sliding window retransmission)~~ (QUIC streams; the raw UDP path keeps its own).
+- Reliable ordered channel ~~(sliding window retransmission)~~ (QUIC streams; the raw UDP path keeps its own: a
+  QUIC connection opened from its session's secret, with the same recovery. [S55](../design/network-foundation.md#raw-path), 2026-11-09).
 - Unreliable unordered channel (state snapshots, sensor feeds, position updates).
 - No dependency on scenes, job system, or any other Cerid module. The
   transport compiles and runs standalone. All higher layers are optional

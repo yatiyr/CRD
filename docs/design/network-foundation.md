@@ -186,9 +186,9 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   so NET-SIM drives it with virtual sockets and the `DeterministicClock`.
 - **Paths.** QUIC v1 and v2 with unreliable datagrams (RFC 9000, RFC 9369, RFC 9221) is primary. A TCP and TLS 1.3
   path serves networks that block UDP. Browsers use WebTransport with a WebSocket fallback ([below](#browsers)). A raw
-  UDP path serves LAN and headless simulation with its own reliability, but every path that can reach a
-  non-loopback address is authenticated and encrypted with the same session keys; there is no plaintext mode in any
-  build. NET-SIM's virtual sockets never leave the process.
+  UDP path serves LAN and headless simulation ([S55](#raw-path)), but every path that can reach a non-loopback address
+  is authenticated and encrypted with the same session keys; there is no plaintext mode in any build. NET-SIM's
+  virtual sockets never leave the process.
 - **One session model over every path.** Sessions, channels, capabilities and schemas are identical across paths;
   a session migrates between paths (QUIC migration, or a resumption on the fallback path) without the application
   seeing anything but a latency change.
@@ -1055,7 +1055,6 @@ no allocation in an established turn; over real TCP: 8 clients with 16 KiB socke
 on the loopback), `crd-fuzz-net-qmux-host` (any order of connects, resets, cuts, stalls, raw bytes, time, closes, stale handles and accept failures: every
 connection closed once, counts consistent, all memory back), held to source mutations ([session](../sessions/2026-11-09-4-2a-stream-host.md)).
 
-<a id="browsers"></a>
 <a id="qmux-early"></a>
 **S54. QMux 0-RTT** (4.2a, threats T07 and T10; [qmux.hpp](../../engine/foundation/net/include/crd/net/qmux.hpp); draft-ietf-quic-qmux-02 sections 4.2,
 5.1 and 8.2, RFC 9000 section 7.4.1, RFC 9846 section 2.3; 2026-11-09). The draft defers to QUIC for what 0-RTT keeps to and says nothing of a refusal, so S45's rules
@@ -1084,6 +1083,33 @@ parameters that no longer parse, a ticket with none, a record cut by the end of 
 `test_tls_early.cpp` (the ticket either side of the parameters, `send_half_rtt` in every state), `test_qmux_host.cpp` (over a host), `crd-fuzz-net-qmux-early` (either side
 under test against a real TLS peer: hostile early data, hostile answers at 0.5-RTT, refusals), held to source mutations ([session](../sessions/2026-11-09-4-2a-qmux-early.md)).
 
+<a id="raw-path"></a>
+**S55. The raw UDP path** (4.2a, threats T01, T02, T06, T07, T10 and T15; [quic_connection.hpp](../../engine/foundation/net/include/crd/net/quic_connection.hpp),
+[quic.hpp](../../engine/foundation/crypto/include/crd/crypto/quic.hpp); ADR-0035, decision D4; 2026-11-09). The path for LAN peers and headless processes. It carries what QUIC carries without
+what a stranger's connection needs: no certificate, no asymmetric operation per connection and no Initial or Handshake packet, because the two ends already share a session.
+
+- **What it is not.** A second transport. Its packets are QUIC 1-RTT short headers, its frames, stream sets, datagrams, acknowledgements, recovery, key updates, padding, IDs and close are the
+  connection's own, so `QuicConnection` starts keyed (`open_keyed`) and has one code path after that. Retransmission has one owner, and NET-PATH's congestion control and pacing, NET-SIM's clock and NET-DEBUG's conditioning reach it unchanged.
+  ADR-0035's "keeps its own" reliability means this path leans on nothing beneath it, as QUIC does; it never meant a second loss detector.
+- **The same session keys** (D4). A 32-byte session secret, for this connection alone: the session's TLS exporter under a label and context of its session type (D3), so hybrid key exchange and the handshake's
+  authentication carry over, or a launcher's fresh random bytes where no session exists yet (a cluster of bots). HKDF-Extract under the path's own salt, then HKDF-Expand-Label for each side's traffic
+  secret, in the session AEAD's hash; RFC 9001's schedule runs from there in the connection's QUIC version. Holding the secret is the authentication; there is no plaintext mode in any build. A second connection on one secret
+  would repeat nonces, so `open_keyed` zeroes its caller's copy whatever it answers; the policy generation refuses an AEAD here as it does in a handshake (S20).
+- **Routing.** Each end's sequence 0 ID comes from the secret (8 to 20 bytes, each end its ingress's length), and is routed by the `ConnectionIdTable` like any other, so the path shares its socket, loop and host with QUIC and needs no demultiplexing of its own.
+  Fresh IDs, Retire Prior To and stateless resets are the ordinary ones.
+- **The hello** (NET-STD). A two-byte length and the QUIC transport parameters, in CRYPTO frames of 1-RTT packets, resent by the same recovery: the extension negotiation with its ignore-unknown rule and grease, and `version_information`.
+  A client's goes in its first packet, and streams and datagrams follow one round trip later, once the peer's limits are known. Reading stops at the hello: more CRYPTO data, or a length past 4096, closes the connection.
+  Both ends are configured for one QUIC version; a mismatch opens nothing, since the versions' key labels differ.
+- **The address.** A client knows its server. A server opens with its client's address or with none, and then takes the address of the first packet that opens: nothing else can bind it, since a stranger cannot seal one. It sends nothing before
+  that, and at most three times what it received until the client acknowledges one of its packets; an on-path attacker replaying the first packet from a spoofed source gets that 3x and a path that goes nowhere, no more than it could cause on QUIC. Replays die in the packet number window (T07).
+- **Limits.** Key usage limits and updates (T06), `padded_size()` padding (T15), the idle timeout and the fixed allocation are QuicConnection's, unchanged.
+- **Not here.** The `crd-net-raw` session adapter of ADR-0035's Layer 4 belongs to 4.2d, and sits on this.
+
+Evidence: `test_quic_keyed.cpp` `[raw-path]` (three AEADs, both versions, 8 and 20-byte IDs, streams past every window and datagrams both ways, six hostile seeds, a real TLS session's exporter, every refusal, another secret, each byte flipped, a replay, an Initial,
+the 3x limit, the hello split, reordered, resent, too long, followed by more, unreadable and naming the wrong ID, key updates, padding, close and idle), `test_quic_client.cpp` (hosts sharing a socket with TLS connections over hostile paths and over real UDP, a binding only an
+opened packet makes, refusals that leave the route and slot free), `test_quic.cpp` (fixed answers for the derivation), `crd-fuzz-net-quic-connection` modes for the path, held to source mutations ([session](../sessions/2026-11-09-4-2a-raw-path.md)).
+
+<a id="browsers"></a>
 ## Browser constraints
 
 Designed here, qualified under [WEB.5](../ROADMAP.md#slice-web.5):
