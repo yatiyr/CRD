@@ -1967,6 +1967,115 @@ QuicStreamLimits stream_limits()
     return limits;
 }
 
+// Each end fills its sent packet storage with stream data before any acknowledgement can reach it.
+struct FullStorageRun
+{
+    CountingAllocator allocator;
+    Identity identity;
+    QuicConnection client;
+    QuicConnection server;
+    std::unique_ptr<Net> net;
+
+    FullStorageRun()
+        : client(allocator, limited_config(QuicSide::Client, identity, 0U)),
+          server(allocator, limited_config(QuicSide::Server, identity, 1U))
+    {
+        connect(client);
+        net = std::make_unique<Net>(client, server);
+        net->path[0].delay_ns = 40U * kMs;
+        net->path[1].delay_ns = 40U * kMs;
+        REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+        client.ping();
+        server.ping();
+        net->advance(net->now + (2000U * kMs)); // every earlier packet settled and its entry free
+        for (QuicConnection* const end : {&client, &server})
+        {
+            for (usize count = 0U; count < 2U; ++count)
+            {
+                u64 stream = 0U;
+                REQUIRE(end->streams().open(true, stream) == QuicStreamError::None);
+                u64 written = 0U;
+                static_cast<void>(write_pattern(end->streams(), stream, written, 8000U, stream, false));
+            }
+        }
+    }
+
+    static QuicConnectionConfig limited_config(QuicSide side, const Identity& identity, usize seed)
+    {
+        QuicConnectionConfig config = config_for(side, identity, QuicVersion::V1, seed);
+        config.streams = stream_limits();
+        config.sent_packets = 8U;
+        return config;
+    }
+
+    [[nodiscard]] bool drained() const
+    {
+        return client.recovery().bytes_in_flight() == 0U && server.recovery().bytes_in_flight() == 0U;
+    }
+};
+
+TEST_CASE("QUIC connection: two ends full of each other's unacknowledged data still acknowledge it",
+          "[net][4.2a][quic-connection]")
+{
+    FullStorageRun run;
+    run.net->flush();
+    CHECK_FALSE(run.client.recovery().can_send_data(QuicSpace::Application));
+    CHECK_FALSE(run.server.recovery().can_send_data(QuicSpace::Application));
+    const usize client_sent = run.net->sent[0];
+    const usize server_sent = run.net->sent[1];
+    run.net->advance(run.net->now + (100U * kMs)); // every packet arrived, no probe is due yet
+    CHECK(run.net->sent[0] > client_sent);
+    CHECK(run.net->sent[1] > server_sent);
+    REQUIRE(run.net->run_until([&] { return run.drained(); }, 20000U * kMs));
+    CHECK(run.client.state() == QuicConnectionState::Established);
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: a space full of unacknowledged packets still acknowledges what arrives",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    RawRun run(identity, 8U); // the raw peer acknowledges nothing
+    run.handshake();
+    u8 out[kDatagram];
+    for (usize round = 0U; round < 32U && run.server.recovery().can_send_data(QuicSpace::Application); ++round)
+    {
+        run.server.ping();
+        while (run.server.send(Span<u8>(out, sizeof(out)), run.now) != 0U)
+        {
+        }
+        run.now += kMs;
+    }
+    REQUIRE_FALSE(run.server.recovery().can_send_data(QuicSpace::Application));
+    QuicFrame ping;
+    ping.kind = QuicFrameKind::Ping;
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> frames) { return write_quic_frame(ping, frames); });
+    run.now += 100U * kMs; // past the acknowledgement delay
+    while (run.server.send(Span<u8>(out, sizeof(out)), run.now) != 0U)
+    {
+    }
+    CHECK(run.server.recovery().ack_deadline_ns(QuicSpace::Application) > run.now); // it went: none is owed
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: a space full of data that was lost still sends its probes",
+          "[net][4.2a][quic-connection]")
+{
+    FullStorageRun run;
+    run.net->path[0].loss = 1000U;
+    run.net->path[1].loss = 1000U;
+    run.net->flush();
+    CHECK_FALSE(run.client.recovery().can_send_data(QuicSpace::Application));
+    const usize sent_before = run.net->sent[0];
+    run.net->advance(run.net->now + (2000U * kMs));
+    CHECK(run.net->sent[0] > sent_before); // the probes went, into the entries data may not take
+    run.net->path[0].loss = 0U;
+    run.net->path[1].loss = 0U;
+    REQUIRE(run.net->run_until([&] { return run.drained(); }, 20000U * kMs));
+    CHECK(run.client.state() == QuicConnectionState::Established);
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
 // The client opens `streams` bidirectional streams of seeded sizes as its grant allows; the server echoes each with
 // another pattern as it reads, and both ends free what they finish. Called between events; true once every echo was
 // read whole.

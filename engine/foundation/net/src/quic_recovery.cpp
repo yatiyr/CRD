@@ -274,7 +274,8 @@ QuicRecovery::QuicRecovery(const QuicRecoveryConfig& config, cont::Span<QuicSent
                            cont::Span<QuicSentEntry> handshake, cont::Span<QuicSentEntry> application) noexcept
     : m_side(config.side),
       m_local_max_ack_delay_ns(config.local_max_ack_delay_ns),
-      m_local_ack_delay_exponent(min_u64(config.local_ack_delay_exponent, kQuicMaxAckDelayExponent))
+      m_local_ack_delay_exponent(min_u64(config.local_ack_delay_exponent, kQuicMaxAckDelayExponent)),
+      m_reserved_entries(config.reserved_entries)
 {
     m_spaces[index_of(QuicSpace::Initial)].entries     = initial;
     m_spaces[index_of(QuicSpace::Handshake)].entries   = handshake;
@@ -568,6 +569,13 @@ bool QuicRecovery::can_send(QuicSpace id) const noexcept
 {
     const Space& space = m_spaces[index_of(id)];
     return !space.discarded && (space.count < space.entries.size() || settled(space.entries[space.head].state));
+}
+
+bool QuicRecovery::can_send_data(QuicSpace id) const noexcept
+{
+    const Space& space = m_spaces[index_of(id)];
+    return !space.discarded &&
+           (space.count + m_reserved_entries < space.entries.size() || settled(space.entries[space.head].state));
 }
 
 QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& packet) noexcept

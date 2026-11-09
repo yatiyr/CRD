@@ -25,6 +25,8 @@ constexpr u64 kCryptoFrameType = 0x06U;
 constexpr usize kMinCryptoBytes = 4096U; // RFC 9000 section 7.5
 constexpr usize kMaxCryptoBytes = 1U << 20U;
 constexpr u32 kMaxSentPackets = 1U << 16U;
+// Past sent_packets, per space: what ACK-only packets and probes have when data has filled the rest.
+constexpr u32 kSentPacketReserve = 8U;
 constexpr usize kMinUsefulPacket = 64U; // a server with less credit than this waits for a datagram
 constexpr usize kPullChunk = 512U;
 constexpr usize kKeyedHelloPrefix = 2U; // a keyed connection's parameters follow their two-byte length
@@ -229,7 +231,7 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
                                            : m_entropy.init(crypto::AlgorithmId::Siphash24, config.entropy_seed);
     m_config.entropy_seed = {};
 
-    const usize per_space = config.sent_packets;
+    const usize per_space = usize{config.sent_packets} + kSentPacketReserve;
     const usize crypto = config.crypto_bytes;
     const usize words = quic_stream_bitmap_words(crypto);
     QuicSentEntry* const entries = memory::try_construct_array<QuicSentEntry>(allocator, kQuicSpaces * per_space);
@@ -283,6 +285,7 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     recovery_config.initial_rtt_ns = config.initial_rtt_ns;
     recovery_config.local_max_ack_delay_ns = config.parameters.max_ack_delay * kNsPerMs;
     recovery_config.local_ack_delay_exponent = config.parameters.ack_delay_exponent;
+    recovery_config.reserved_entries = kSentPacketReserve;
     m_recovery = new (recovery) QuicRecovery(recovery_config, cont::Span<QuicSentEntry>(entries, per_space),
                                              cont::Span<QuicSentEntry>(entries + per_space, per_space),
                                              cont::Span<QuicSentEntry>(entries + (2U * per_space), per_space));
@@ -301,7 +304,7 @@ QuicConnection::~QuicConnection() noexcept
         m_allocator.deallocate(m_recovery);
     }
     const usize crypto = m_config.crypto_bytes;
-    memory::destroy_array(m_allocator, m_storage, kQuicSpaces * usize{m_config.sent_packets});
+    memory::destroy_array(m_allocator, m_storage, kQuicSpaces * (usize{m_config.sent_packets} + kSentPacketReserve));
     memory::destroy_array(m_allocator, m_frames, m_config.sent_frames);
     memory::destroy_array(m_allocator, m_crypto_bytes, kQuicSpaces * 2U * crypto);
     memory::destroy_array(m_allocator, m_crypto_bits, kQuicSpaces * 3U * quic_stream_bitmap_words(crypto));
@@ -1662,7 +1665,15 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
     {
         return false;
     }
-    if (m_recovery->ack_deadline_ns(space) <= now_ns || m_levels[index].out.pending() || m_probes[index] > 0U)
+    if (m_recovery->ack_deadline_ns(space) <= now_ns || m_probes[index] > 0U)
+    {
+        return true;
+    }
+    if (!m_recovery->can_send_data(space))
+    {
+        return false;
+    }
+    if (m_levels[index].out.pending())
     {
         return true;
     }
@@ -1824,6 +1835,26 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     {
         put_ack();
     }
+    // A probe owes an ack-eliciting packet, and so does a run of ACK-only packets: those are never acknowledged
+    // by themselves, so a PING lets the peer's ACK free their storage (RFC 9000 section 13.2.4).
+    const auto put_owed_ping = [&]
+    {
+        if (!written.eliciting && (m_probes[index] > 0U || m_ack_only[index] >= kAckOnlyRun))
+        {
+            QuicFrame ping;
+            ping.kind = QuicFrameKind::Ping;
+            static_cast<void>(put(ping));
+        }
+    };
+    if (!m_recovery->can_send_data(space))
+    {
+        if (ack_later && !early)
+        {
+            put_ack();
+        }
+        put_owed_ping();
+        return used;
+    }
     if (space == QuicSpace::Application && !early)
     {
         if (m_handshake_done_owed && m_frame_count < m_config.sent_frames)
@@ -1975,14 +2006,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
             static_cast<void>(put(ping));
         }
     }
-    // A probe owes an ack-eliciting packet, and so does a run of ACK-only packets: those are never acknowledged
-    // by themselves, so a PING lets the peer's ACK free their storage (RFC 9000 section 13.2.4).
-    if (!written.eliciting && (m_probes[index] > 0U || m_ack_only[index] >= kAckOnlyRun))
-    {
-        QuicFrame ping;
-        ping.kind = QuicFrameKind::Ping;
-        static_cast<void>(put(ping));
-    }
+    put_owed_ping();
     return used;
 }
 

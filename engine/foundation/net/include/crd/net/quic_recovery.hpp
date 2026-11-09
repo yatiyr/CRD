@@ -11,7 +11,8 @@
 //               Dropping ranges is legal because QuicPacketProtection's window refuses a number already opened and
 //               every number below its span, so a forgotten packet is never accepted twice (13.2.3).
 //   sending     each space's sent packets sit in number order in the caller's QuicSentEntry storage, which bounds
-//               the packets a connection holds in flight: a full space refuses the next packet (can_send). An
+//               the packets a connection holds in flight: a full space refuses the next packet (can_send), and data
+//               stops short of the last entries, which ACK-only packets and probes keep for themselves. An
 //               acknowledgement of a number this side never sent (above the largest sent, or a gap it left in its
 //               numbering, which is how a sender skips numbers against optimistic acknowledgement, RFC 9000 section
 //               21.4) is AckOfUnsent, PROTOCOL_VIOLATION (section 13.1), and changes nothing.
@@ -226,6 +227,8 @@ struct QuicRecoveryConfig
     u64              initial_rtt_ns = kQuicInitialRttNs;
     u64              local_max_ack_delay_ns = kQuicDefaultMaxAckDelay * 1000000U; // what this side advertises
     u64              local_ack_delay_exponent = kQuicDefaultAckDelayExponent;
+    // The last entries of each space, kept from data: only ACK-only packets and probes take them (can_send_data).
+    usize            reserved_entries = 0U;
 };
 
 // A connection's acknowledgements and loss recovery across its three packet number spaces.
@@ -266,6 +269,9 @@ public:
 
     // Whether `space` can record another packet; a connection writes none when it cannot.
     [[nodiscard]] bool can_send(QuicSpace space) const noexcept;
+    // Whether it can record one that is neither ACK-only nor a probe. Two ends full of each other's unacknowledged
+    // data must still be able to acknowledge it, or neither ever frees a slot.
+    [[nodiscard]] bool can_send_data(QuicSpace space) const noexcept;
     // Records `packet`, sent now (its sent_ns): numbers rise within a space and may leave gaps (skipped numbers).
     [[nodiscard]] QuicRecoveryError on_sent(QuicSpace space, const QuicSentPacket& packet) noexcept;
     // The ACK frame `space` owes or may carry, written into `out` (QuicAckTracker::write) with the exponent that
@@ -355,6 +361,7 @@ private:
     u64              m_bytes_in_flight = 0U;
     u64              m_timer_ns = kNeverNs;
     u64              m_packet_threshold = kQuicPacketThreshold;
+    usize            m_reserved_entries = 0U;
     u32              m_reorder_steps = 0U;
     u32              m_reorder_persist = 0U; // loss detections before the thresholds return to RFC 9002's
     u32              m_pto_count = 0U;

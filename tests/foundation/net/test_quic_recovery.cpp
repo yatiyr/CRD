@@ -882,6 +882,30 @@ TEST_CASE("quic recovery: an acknowledged packet that carried an ACK retires tho
     CHECK(same_ranges(f.recovery.received(QuicSpace::Initial).ranges(), {{12U, 12U}}));
 }
 
+TEST_CASE("quic recovery: data stops short of the entries kept for ACK-only packets and probes",
+          "[net][quic][recovery]")
+{
+    QuicSentEntry initial[1];
+    QuicSentEntry handshake[1];
+    QuicSentEntry application[4];
+    QuicRecoveryConfig config{QuicSide::Server};
+    config.reserved_entries = 2U;
+    QuicRecovery recovery(config, Span<QuicSentEntry>(initial, 1U), Span<QuicSentEntry>(handshake, 1U),
+                          Span<QuicSentEntry>(application, 4U));
+    Events events;
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(0U, 0U)) == QuicRecoveryError::None);
+    CHECK(recovery.can_send_data(QuicSpace::Application));
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(1U, 1U)) == QuicRecoveryError::None);
+    CHECK_FALSE(recovery.can_send_data(QuicSpace::Application));
+    CHECK(recovery.can_send(QuicSpace::Application));
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(2U, 2U)) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(3U, 3U)) == QuicRecoveryError::None);
+    CHECK_FALSE(recovery.can_send(QuicSpace::Application));
+    // Settling the oldest three frees their entries, which gives data room again.
+    CHECK(recovery.on_ack(QuicSpace::Application, ack_of(0U, 2U).ack(), kMs, events).acked_packets == 3U);
+    CHECK(recovery.can_send_data(QuicSpace::Application));
+}
+
 TEST_CASE("quic recovery: the storage bounds what is in flight; numbers only rise", "[net][quic][recovery]")
 {
     QuicSentEntry initial[1];
