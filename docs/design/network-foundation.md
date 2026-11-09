@@ -1143,7 +1143,7 @@ Evidence: `test_http_fields.cpp` and `test_qpack.cpp` `[qpack]` (RFC 7541's inte
 - **0-RTT.** A client resuming passes the settings it stored and uses them until the server's arrive, whose values may only be equal or better (section 7.2.4.2); after a rejection the owner builds a new connection. A server binds its settings into its tickets (`early_context`), so a changed server does not take 0-RTT from an old one. A section or datagram from 0-RTT is marked replayable.
 - **Grease.** Every SETTINGS has a reserved identifier, the control stream a reserved frame, and a reserved stream type goes once when the peer's limit leaves room.
 - **Capsules.** [http_capsule.hpp](../../engine/foundation/net/include/crd/net/http_capsule.hpp) reads RFC 9297 section 3's capsules from any data stream split anywhere, handing each value on as it arrives and never gathering it (section 3.2: that can deadlock on flow control). A stream may end only between capsules; a Capsule-Protocol field counts only as one Boolean true.
-- **Not here yet.** The WebTransport session and its mapping onto channels; [4.2a](../ROADMAP.md#slice-4.2a) names what remains. Only `:protocol` matters to this layer, so WebTransport's two spellings are its own concern.
+- **WebTransport** is [S59](#webtransport)'s. Only `:protocol` matters to this layer, so its two spellings are that section's concern.
 
 Evidence: `test_http3.cpp` and `test_http_message.cpp` `[http3]` (84 cases: every frame on every stream with the error RFC 9114 names, each SETTINGS refusal, the critical streams, messages, tunnels, datagrams, GOAWAY both ways, QPACK blocking and cancelling, 431, 0-RTT's rules), `crd-fuzz-net-http3` (a hostile peer at a server and at a client, and both sides honest over any frame size with a held encoder stream).
 
@@ -1161,6 +1161,55 @@ exchange), both ways round. quiche speaks QUIC version 1 alone and its QPACK has
 is exactly that: Cerid advertises a table and quiche's zero holds it to inserting nothing. It sends GREASE frames and
 settings and writes a server's GOAWAY and refusals through the application's own calls, so those paths meet a different
 reading of RFC 9114 than nghttp3's.
+
+<a id="webtransport"></a>
+**S59. WebTransport over HTTP/3** (4.2a, threats T09, T10 and T11; draft-ietf-webtrans-http3-17, 2026-11-02; contract,
+written before the code). The stream format is one wire for every revision browsers speak, so one implementation serves
+them: what differs is negotiation and whether flow control exists.
+
+- **Revisions.** A server offers both and each CONNECT says which it is. `webtransport-h3` is -17: SETTINGS_WT_ENABLED
+  0x20b8933b = 1, initial limits 0x2b64 (uni), 0x2b65 (bidi), 0x2b61 (data), a value above 1 from a server is
+  H3_SETTINGS_ERROR, and RESET_STREAM_AT and QUIC datagrams are required of both. `webtransport` is the legacy spelling, which
+  [N02](../research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n02)'s survey has Chrome and Safari still
+  sending and `web-transport-proto` 0.6.4 does send: SETTINGS 0xc671706a carries the session count, no flow control, a
+  plain RESET_STREAM is all it can rely on, and its datagram setting may be the older 0xFFD277, read as 0x33 is (each
+  browser's exact settings are confirmed against a real one under WEB.5). A server must
+  not act on a WebTransport request before the client's SETTINGS, so it leaves the section unread in the QUIC buffer, as
+  a QPACK-blocked one is (section 7.1). The WT settings are outside 0-RTT: neither remembered nor in `early_context`
+  (section 3.2). A session never opens in 0-RTT.
+- **Layers.** `Http3Connection` classifies; a `WebTransport` layer above it owns sessions. The classifier takes uni type
+  0x54, and 0x41 as the very first varint of a bidirectional stream (from the client, or any server-initiated one once
+  offered; elsewhere H3_FRAME_UNEXPECTED, and 0x41 has no length, so it is read before the frame header). A session ID
+  that is not a client bidirectional stream ID is H3_ID_ERROR for the connection. It then reports `WtStream`,
+  `WtReadable`, `WtAborted` and `WtStopped` and leaves the bytes to the owner through QuicStreamSet's zero-copy reads.
+- **Sessions.** A fixed pool searched by CONNECT stream ID. Capsules on the CONNECT stream through `HttpCapsuleReader`,
+  none processed before the 2xx. A rejected Origin answers 403, an unsupported resource 405, too many sessions
+  H3_REQUEST_REJECTED or 429; a 3xx is never followed. WT-Available-Protocols and WT-Protocol are read as Structured
+  Fields of Strings only, parameters ignored; a missing or unlisted answer to a client that requires one closes with
+  WT_ALPN_ERROR.
+- **Before a session is known.** A stream waits in QUIC's own buffers, counted against a bound; past it, stream reset
+  and stopped with WT_BUFFERED_STREAM_REJECTED. Datagrams wait in a small fixed ring and past it are dropped.
+- **Flow control** (on when both ends sent a non-zero initial limit; otherwise one session, excess CONNECTs
+  H3_REQUEST_REJECTED, flow control capsules ignored). Limits count stream bodies, never the header. WT_MAX_STREAMS and
+  WT_MAX_DATA must rise or the session closes with WT_FLOW_CONTROL_ERROR, as does a value above 2^60, a stream over the
+  limit, or body bytes over it. WT_MAX_STREAM_DATA or WT_STREAM_DATA_BLOCKED is a session error. Credits are sent as the
+  application consumes, never held for a BLOCKED capsule. **A sender's count must follow the final size**: bytes written
+  to QUIC and never sent by a reset stream are given back, or repeated resets leak the window and the session stalls.
+  The receiver counts a reset stream at its final size (`QuicStreamEvent` gains it).
+- **Resets.** Application codes are 32 bits, mapped by the draft's figure 4 into 0x52e4a40fa8db..0x52e5ac983162, skipping
+  every 0x1f * N + 0x21; a code outside that range is a reset with no application code. A -17 stream resets with
+  RESET_STREAM_AT at header + the offset the application names, so the session ID always arrives.
+- **Closing.** WT_CLOSE_SESSION (32-bit code, message at most 1024 bytes, cut on a UTF-8 boundary, a longer or invalid one
+  H3_MESSAGE_ERROR), then FIN at once; a clean FIN means code 0; data after the capsule is H3_MESSAGE_ERROR. Every stream of
+  the session then resets and stops with WT_SESSION_GONE, no new stream or datagram. WT_DRAIN_SESSION and GOAWAY reach the
+  application and permit further use.
+- **Exporter** (section 4.8). TLS exporter with label `EXPORTER-WebTransport` and the context struct: session ID (64),
+  label length (8), label, context length (8), context; through `export_keying_material`.
+- **Channels.** A session presents the surface the channel layer already runs on over a `QuicStreamSet` (QMux's
+  precedent, S51 to S54): open, write, peek, consume, reset, stop, datagram, filtered by session with flow control
+  layered in, so there is no second channel implementation.
+- **Peers.** `web-transport-quinn` from the crate family already pinned for the legacy spelling; a -17 peer with
+  RESET_STREAM_AT is chosen when that slice's interop starts, with what each is not asked and why, as for quiche.
 
 <a id="browsers"></a>
 ## Browser constraints

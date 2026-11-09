@@ -1044,8 +1044,8 @@
         "type": "draft",
         "ref": "draft-ietf-webtrans-http3",
         "status": "active",
-        "revision": "16",
-        "posted": "2026-07-06"
+        "revision": "17",
+        "posted": "2026-11-02"
       },
       "cryptography": [],
       "source": {
@@ -1056,7 +1056,7 @@
       "review": "2026-12-15",
       "evidence": [],
       "deprecation": null,
-      "note": "Both :protocol spellings are accepted and the draft revision is negotiated (4.2a)."
+      "note": "Both :protocol spellings are accepted and the draft revision is negotiated (4.2a). Draft -17 read in full and its contract written (S59, 2026-11-09); it is in WG Last Call."
     },
     {
       "id": "webtransport.h2",
