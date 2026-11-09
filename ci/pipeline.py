@@ -1327,6 +1327,14 @@ class Lane:
                              self.temp / 'rust-dl', '--github-env', self.env_file))
         self.merge()
 
+    def go(self):
+        # The pinned Go toolchain of the webtransport-go interoperability peer; the configure reads CRD_GO.
+        if not self.preset_step('Install pinned Go'):
+            return
+        self.run(self.helper('install-go.py', '--destination', self.temp / 'go', '--download-dir',
+                             self.temp / 'go-dl', '--github-env', self.env_file))
+        self.merge()
+
     def gnome_keyring(self):
         # The pinned gnome-keyring the Secret Service protector is tested against; the configure reads
         # CRD_GNOME_KEYRING.
@@ -1772,7 +1780,7 @@ class Lane:
         'clang-cl': ['checkout', 'python_version', 'ninja', 'msvc', 'adapters', 'cpm_cache', 'llvm_path', 'vulkan_sdk',
                      'sccache', 'configure', 'build', 'sccache_stats', 'inventory', 'test', 'bundle', 'upload'],
         'linux-gcc': ['checkout', 'reclaim_disk', 'python_version', 'ninja', 'apt', 'apt_census', 'vulkan_headers',
-                      'vulkan_validation', 'cpm_cache', 'cold_before', 'sccache', 'sde', 'rust', 'gnome_keyring',
+                      'vulkan_validation', 'cpm_cache', 'cold_before', 'sccache', 'sde', 'rust', 'go', 'gnome_keyring',
                       'swtpm', 'softhsm', 'tamarin', 'nasm', 'netem_namespace', 'webrtc_bwe', 'configure', 'cold_after',
                       'build', 'sccache_stats', 'inventory', 'console_checks', 'test', 'test_sse2', 'seeded_faults',
                       'genmc', 'bundle', 'upload'],
@@ -2206,6 +2214,7 @@ LANE_STEP_PHASES = {
     'Cold acquisition (empty package cache, pinned WARP)': 'cold_before',
     'Cold acquisition (empty package cache)': 'cold_before', 'Install pinned sccache': 'sccache',
     'Compiler cache service': 'sccache', 'Install pinned Intel SDE': 'sde', 'Install pinned Rust': 'rust',
+    'Install pinned Go': 'go',
     'Install pinned gnome-keyring': 'gnome_keyring', 'Install pinned swtpm': 'swtpm',
     'Install pinned SoftHSM': 'softhsm', 'Install pinned Tamarin': 'tamarin', 'Install pinned NASM': 'nasm',
     'Allow netem in a user namespace': 'netem_namespace',

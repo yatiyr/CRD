@@ -24,7 +24,7 @@ HELPERS = ('cmake/CPM.cmake', 'scripts/install-vulkan-sdk.py', 'scripts/install-
            'scripts/install-vulkan-validation.py', 'scripts/install-warp.py', 'scripts/install-sccache.py',
            'scripts/install-mold.py', 'scripts/install-genmc.py', 'scripts/install-clang-build-analyzer.py',
            'scripts/install-clang-tidy.py', 'scripts/install-ninja.py', 'scripts/install-sde.py',
-           'scripts/install-node.py', 'scripts/install-cuda.py', 'scripts/install-rust.py',
+           'scripts/install-node.py', 'scripts/install-cuda.py', 'scripts/install-rust.py', 'scripts/install-go.py',
            'scripts/install-gnome-keyring.py', 'scripts/install-swtpm.py', 'scripts/install-softhsm.py',
            'scripts/install-tamarin.py', 'scripts/install-nasm.py', 'scripts/install-webrtc-bwe.py',
            'scripts/install-android-ndk.py', 'scripts/install-android-emulator.py',
@@ -69,6 +69,31 @@ def validate_lockfile(name, entry, root=ROOT):
                                                                                    required))
     if not any(package.get('name') == crate and package.get('version') == entry['version'] for package in locked):
         problems.append('tool %s: the lockfile does not resolve %s %s' % (name, crate, entry['version']))
+    return problems
+
+
+def validate_go_sum(name, entry, root=ROOT):
+    """A module set pinned by its committed go.sum: every line names a module, a version and an h1 hash, the go.mod
+    replaces and excludes nothing, and it requires the pinned module at exactly the pinned version, whose source and
+    go.mod the go.sum both hash."""
+    try:
+        go_sum = (root / entry['go_sum']).read_text(encoding='utf-8').splitlines()
+        go_mod = (root / entry['go_mod']).read_text(encoding='utf-8')
+    except (KeyError, OSError) as error:
+        return ['tool %s: its go.sum and go.mod must be readable (%s)' % (name, error)]
+    problems = []
+    fields = [line.split() for line in go_sum]
+    for line, parts in zip(go_sum, fields):
+        if len(parts) != 3 or not parts[2].startswith('h1:'):
+            problems.append('tool %s: go.sum line %r is not a module, a version and an h1 hash' % (name, line))
+    if re.search(r'^\s*(replace|exclude)\b', go_mod, re.M):
+        problems.append('tool %s: the go.mod must replace and exclude nothing' % name)
+    module, version = entry.get('module'), 'v' + entry['version']
+    if not re.search(r'^\s*(require\s+)?%s %s\s*$' % (re.escape(module), re.escape(version)), go_mod, re.M):
+        problems.append('tool %s: the go.mod must require %s %s' % (name, module, version))
+    for wanted in (version, version + '/go.mod'):
+        if not any(len(parts) == 3 and parts[0] == module and parts[1] == wanted for parts in fields):
+            problems.append('tool %s: the go.sum does not hash %s %s' % (name, module, wanted))
     return problems
 
 
@@ -137,6 +162,8 @@ def validate_registry(pins, root=ROOT):
                 problems.append('tool %s is acquired by an action outside the registry' % name)
         elif 'lockfile' in entry:
             problems += validate_lockfile(name, entry, root)
+        elif 'go_sum' in entry:
+            problems += validate_go_sum(name, entry, root)
         else:
             for field in ('url', 'file', 'sha256'):
                 if not entry.get(field):
@@ -202,6 +229,9 @@ def validate_workflow(pins, text):
     rust = tools.get('rust-linux-x64', {}).get('version')
     if rust and ('scripts/install-rust.py' not in text or ('Rust %s' % rust) not in text):
         problems.append('workflow does not install Rust %s through scripts/install-rust.py' % rust)
+    go = tools.get('go-linux-x64', {}).get('version')
+    if go and ('scripts/install-go.py' not in text or ('Go %s' % go) not in text):
+        problems.append('workflow does not install Go %s through scripts/install-go.py' % go)
     ninja = tools.get('ninja-windows', {}).get('version')
     if ninja and ('scripts/install-ninja.py' not in text or ('Ninja %s' % ninja) not in text):
         problems.append('workflow does not install Ninja %s through scripts/install-ninja.py' % ninja)

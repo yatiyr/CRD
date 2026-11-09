@@ -1120,6 +1120,29 @@
       "license": "BSD-2-Clause",
       "note": "quiche 0.30.0 (2026-09-17) with BoringSSL through the boring 5.4.0 crates, and rcgen over ring for the peer's self-signed certificate: the crate set of crd-quiche-peer, the second HTTP/3 implementation of http3_interop.py (CRD_BUILD_HTTP3_VS_QUICHE, 4.2a). The committed Cargo.lock is the pin: every crate from crates.io at the version and SHA-256 it names, which `cargo build --locked` verifies on download. Test-only, in no shipped build."
     },
+    "go-linux-x64": {
+      "version": "1.27.3",
+      "url": "https://go.dev/dl/go1.27.3.linux-amd64.tar.gz",
+      "file": "go1.27.3.linux-amd64.tar.gz",
+      "size": 70588678,
+      "sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40",
+      "root": "go/",
+      "member": "go/bin/go",
+      "member_sha256": "5f5eb6d0b2fb6aa0bb5d5f8c5f1c944e0de955c925f0111af92a9d8f79680b5b",
+      "license": "BSD-3-Clause",
+      "note": "Go 1.27.3 (2026-10-19), installed whole by scripts/install-go.py for the repository's Go test peers (crd-webtransport-go-peer), each built from a committed go.sum with GOTOOLCHAIN=local. Downloaded and hashed 2026-11-09; the SHA-256 is the one go.dev/dl/?mode=json publishes. Test-only, in no shipped build."
+    },
+    "webtransport-go-modules": {
+      "version": "0.13.0",
+      "module": "github.com/quic-go/webtransport-go",
+      "go_sum": "tests/foundation/net/interop/webtransport_go_peer/go.sum",
+      "go_mod": "tests/foundation/net/interop/webtransport_go_peer/go.mod",
+      "repository": "quic-go/webtransport-go",
+      "ref": "v0.13.0",
+      "commit": "58c37d9b959d910e27145dd39f11df7382f9def4",
+      "license": "MIT",
+      "note": "webtransport-go 0.13.0 (2026-08-30) over quic-go 0.62.0 and Go's crypto/tls: the module set of crd-webtransport-go-peer, the webtransport-h3 peer of the WebTransport interoperability test (CRD_BUILD_WEBTRANSPORT_VS_GO, 4.2a). The committed go.sum is the pin: every module from proxy.golang.org at the version and h1 hash it names, which the build checks on download. Test-only, in no shipped build."
+    },
     "web-transport-quinn-crates": {
       "version": "0.13.6",
       "crate": "web-transport-quinn",

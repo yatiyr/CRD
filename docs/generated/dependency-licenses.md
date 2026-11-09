@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **44** · tools: **50** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **44** · tools: **52** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -103,6 +103,8 @@
 | raptorq-crates | 2.0.1 | Apache-2.0 | cberner/raptorq (29253866ed07) | the crates `tests/numerics/hesap-net/raptorq_crate_peer/Cargo.lock` names |
 | openmls-crates | 0.9.2 | MIT | openmls/openmls (8a8f83b4b61f) | the crates `tests/foundation/crypto/interop/openmls_peer/Cargo.lock` names |
 | quiche-crates | 0.30.0 | BSD-2-Clause | cloudflare/quiche (be47c5011215) | the crates `tests/foundation/net/interop/quiche_peer/Cargo.lock` names |
+| go-linux-x64 | 1.27.3 | BSD-3-Clause | go.dev | `go1.27.3.linux-amd64.tar.gz` |
+| webtransport-go-modules | 0.13.0 | MIT | quic-go/webtransport-go (58c37d9b959d) | the modules `tests/foundation/net/interop/webtransport_go_peer/go.sum` hashes |
 | web-transport-quinn-crates | 0.13.6 | MIT OR Apache-2.0 | moq-dev/web-transport (c878557faabd) | the crates `tests/foundation/net/interop/webtransport_peer/Cargo.lock` names |
 | qmux-crates | 0.6.6 | MIT OR Apache-2.0 | moq-dev/web-transport (ef8abdccdc0a) | the crates `tests/foundation/net/interop/qmux_crate_peer/Cargo.lock` names |
 | cuda-linux-x64 | 13.3.1 | LicenseRef-NVIDIA-CUDA-Toolkit-EULA | developer.download.nvidia.com | `cuda_nvcc-linux-x86_64-13.3.73-archive.tar.xz`, `cuda_crt-linux-x86_64-13.3.73-archive.tar.xz`, `libnvvm-linux-x86_64-13.3.73-archive.tar.xz`, `cuda_cudart-linux-x86_64-13.3.29-archive.tar.xz`, `cccl-linux-x86_64-13.3.3.4.1-archive.tar.xz`, `cuda_nvrtc-linux-x86_64-13.3.33-archive.tar.xz`, `libnvjitlink-linux-x86_64-13.3.33-archive.tar.xz`, `libcufft-linux-x86_64-12.3.0.29-archive.tar.xz`, `libcublas-linux-x86_64-13.6.0.2-archive.tar.xz` |

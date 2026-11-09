@@ -74,6 +74,8 @@ def render(registry):
             payload = ', '.join(f'`{cell(member)}`' for member in entry['files'])
         elif entry.get('lockfile'):
             payload = f'the crates `{cell(entry["lockfile"])}` names'
+        elif entry.get('go_sum'):
+            payload = f'the modules `{cell(entry["go_sum"])}` hashes'
         else:
             payload = 'installed by the action'
         lines.append(f'| {cell(name)} | {cell(entry.get("version", ""))} | {cell(entry.get("license", ""))} | '

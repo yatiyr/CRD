@@ -2,17 +2,19 @@
 """WebTransport interoperability of crd-net with another implementation (4.2a).
 
 Runs crd-quic-peer with --webtransport (crd-net's sessions over its own HTTP/3 and QUIC) against
-crd-webtransport-quinn-peer (web-transport-quinn over Quinn and rustls), each in its own process over real UDP sockets
-on the loopback, both ways round, and against itself in both revisions over the same sockets. interop_webtransport.hpp
-has the exchange: both ends check every byte, and each case holds the two reports to each other.
+crd-webtransport-quinn-peer (web-transport-quinn over Quinn and rustls) and crd-webtransport-go-peer (webtransport-go
+over quic-go), each in its own process over real UDP sockets on the loopback, both ways round, and against itself in
+both revisions over the same sockets. interop_webtransport.hpp has the exchange: both ends check every byte, and each
+case holds the two reports to each other.
 
 Cases: streams with no body, small and far over the windows; unidirectional streams; datagrams; resets and STOP_SENDING
 with application codes; protocol negotiation; Origin read and refused; a refused session; WT_CLOSE_SESSION from either
-end; a lossy, reordering, duplicating path. Against itself, also flow control under a tight window.
+end; a lossy, reordering, duplicating path. On `webtransport-h3`, also flow control under a tight window.
 
 Not asked of web-transport-quinn, and why: flow control and the `webtransport-h3` spelling (it speaks only the legacy
 one), RESET_STREAM_AT (Quinn 0.11 has none), the session exporter (it offers none), and 0-RTT, which never opens a
-session.
+session. Of webtransport-go: the legacy spelling (its client never sends it, and its server does not offer it in the
+setting Cerid reads), and the same two last items.
 """
 import argparse
 import subprocess
@@ -30,6 +32,7 @@ LOSSY = dict(seed=5, loss=0.04, duplicate=0.03, delay=0.003, jitter=0.012)
 GOOD_ORIGIN = 'https://good.test'
 BAD_ORIGIN = 'https://bad.test'
 CHOSEN = 'cerid-b'
+GO_DATAGRAMS = 32
 
 
 class Case:
@@ -79,7 +82,7 @@ class Case:
         return command
 
     def describe(self):
-        words = ['cerid client' if self.cerid_is_client else f'{self.peer_name} client', self.revision,
+        words = [f'with {self.peer_name}', 'cerid client' if self.cerid_is_client else 'peer client', self.revision,
                  f'{self.streams}x{self.stream_bytes}', f'closer {self.closer}']
         for name, value in (('uni', self.uni), ('resets', self.resets), ('stops', self.stops),
                             ('datagrams', self.datagrams), ('protocols', self.protocols), ('origin', self.origin),
@@ -188,8 +191,15 @@ SHAPES = (
 )
 
 
-def cases(cerid, quinn):
+def capped_for_go(shape):
+    """quic-go's HTTP/3 layer holds GO_DATAGRAMS datagrams for a session nobody reads yet and drops the rest, so a burst
+    that lands with the 2xx would lose the remainder on a clean path, as datagrams may."""
+    return dict(shape, datagrams=min(shape.get('datagrams', 0), GO_DATAGRAMS))
+
+
+def cases(cerid, quinn, go):
     pairs = [(quinn, 'quinn', 'legacy')] if quinn else []
+    pairs += [(go, 'go', 'h3')] if go else []
     pairs += [(cerid, 'cerid', 'legacy'), (cerid, 'cerid', 'h3')]
     for peer, name, revision in pairs:
         for cerid_is_client in (True, False):
@@ -197,11 +207,11 @@ def cases(cerid, quinn):
                 return Case(cerid, peer, name, cerid_is_client, revision, **options)
 
             for shape in SHAPES:
-                yield case(**shape)
+                yield case(**(capped_for_go(shape) if name == 'go' else shape))
             if not cerid_is_client:
                 yield case(streams=1, origin=BAD_ORIGIN, allow=GOOD_ORIGIN, refused=403)
                 yield case(streams=1, origin=GOOD_ORIGIN, allow=GOOD_ORIGIN)
-            if name == 'cerid' and revision == 'h3':
+            if revision == 'h3':
                 yield case(streams=4, stream_bytes=1048576, window=65536)
                 yield case(streams=8, stream_bytes=65536, uni=8, uni_bytes=65536, window=131072)
 
@@ -210,9 +220,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cerid', required=True)
     parser.add_argument('--quinn')
+    parser.add_argument('--go')
     parser.add_argument('--only', default='', help='run only the cases whose description contains this text')
     arguments = parser.parse_args()
-    all_cases = [case for case in cases(arguments.cerid, arguments.quinn) if arguments.only in case.describe()]
+    all_cases = [case for case in cases(arguments.cerid, arguments.quinn, arguments.go) if arguments.only in case.describe()]
     failures = 0
     for index, case in enumerate(all_cases):
         try:

@@ -935,6 +935,13 @@ jobs:
         if: matrix.preset == 'linux-gcc-public-checks'
         run: python3 scripts/install-rust.py --destination "$RUNNER_TEMP/rust" --download-dir "$RUNNER_TEMP/rust-dl" --github-env "$GITHUB_ENV"
 
+      # The pinned Go 1.27.3 (tools/go-linux-x64) vets and builds crd-webtransport-go-peer, webtransport-go's end of the
+      # WebTransport interoperability test (CRD_BUILD_WEBTRANSPORT_VS_GO): the configure reads CRD_GO, and go fetches the
+      # modules the committed go.sum names, each checked against its h1 hash.
+      - name: Install pinned Go
+        if: matrix.preset == 'linux-gcc-public-checks'
+        run: python3 scripts/install-go.py --destination "$RUNNER_TEMP/go" --download-dir "$RUNNER_TEMP/go-dl" --github-env "$GITHUB_ENV"
+
       # The pinned gnome-keyring (tools/gnome-keyring-linux-x64) is the Secret Service the key store's Linux protector
       # is tested against (CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING): three Ubuntu packages, each checked against its
       # SHA-256 and unpacked without root; the configure reads CRD_GNOME_KEYRING.

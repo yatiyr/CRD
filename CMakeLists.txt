@@ -159,6 +159,13 @@ option(CRD_BUILD_HTTP3_VS_QUICHE "Build the HTTP/3 interoperability test against
 # never in a shipped build; the crd-net-webtransport-interop-quinn CTest, locally and on the complete-tier
 # linux-gcc-public-checks.
 option(CRD_BUILD_WEBTRANSPORT_VS_QUINN "Build the WebTransport interoperability test against Quinn (Linux, pinned Rust)" OFF)
+# The same against webtransport-go (4.2a), the `webtransport-h3` spelling and flow control: crd-webtransport-go-peer, a Go
+# program whose modules the committed go.sum pins (cmake/pins.json tools/webtransport-go-modules), built with the pinned
+# Go (tools/go-linux-x64: scripts/install-go.py, which prints the CRD_GO this configure reads from the environment).
+# Linux only, never in a shipped build; the crd-net-webtransport-interop-go CTest, locally and on the complete-tier
+# linux-gcc-public-checks.
+option(CRD_BUILD_WEBTRANSPORT_VS_GO "Build the WebTransport interoperability test against webtransport-go (Linux, pinned Go)" OFF)
+set(CRD_GO "$ENV{CRD_GO}" CACHE FILEPATH "The pinned Go (scripts/install-go.py), for the webtransport-go peer")
 # The same test against OpenMLS (NET.2, decision M4): crd-openmls-peer, a Rust program over OpenMLS whose crates the
 # committed tests/foundation/crypto/interop/openmls_peer/Cargo.lock pins (cmake/pins.json tools/openmls-crates), built
 # by `cargo build --locked` with the pinned Rust toolchain (tools/rust-linux-x64: scripts/install-rust.py, which prints
@@ -915,6 +922,7 @@ crd_resolve_modules()
 
 include(cmake/CPM.cmake)
 include(cmake/CrdCargoPeer.cmake)
+include(cmake/CrdGoPeer.cmake)
 
 if (CRD_BUILD_TESTS)
     # SYSTEM and EXCLUDE_FROM_ALL are what CPM's single-argument shorthand implied before the pins registry; the long
@@ -1537,6 +1545,13 @@ if(CRD_BUILD_WEBTRANSPORT_VS_QUINN)
                             "and the crypto module")
     endif()
     crd_require_cargo(webtransport-vs-quinn)
+endif()
+if(CRD_BUILD_WEBTRANSPORT_VS_GO)
+    if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+        message(FATAL_ERROR "[webtransport-vs-go] the WebTransport interoperability test needs Linux, CRD_BUILD_TESTS "
+                            "and the crypto module")
+    endif()
+    crd_require_go(webtransport-vs-go)
 endif()
 if(CRD_BUILD_MLS_VS_OPENMLS)
     if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)

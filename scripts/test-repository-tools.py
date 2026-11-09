@@ -69,6 +69,9 @@ node_spec.loader.exec_module(install_node)
 cuda_spec = importlib.util.spec_from_file_location('install_cuda', ROOT / 'scripts/install-cuda.py')
 install_cuda = importlib.util.module_from_spec(cuda_spec)
 cuda_spec.loader.exec_module(install_cuda)
+go_spec = importlib.util.spec_from_file_location('install_go', ROOT / 'scripts/install-go.py')
+install_go = importlib.util.module_from_spec(go_spec)
+go_spec.loader.exec_module(install_go)
 rust_spec = importlib.util.spec_from_file_location('install_rust', ROOT / 'scripts/install-rust.py')
 install_rust = importlib.util.module_from_spec(rust_spec)
 rust_spec.loader.exec_module(install_rust)
@@ -2458,6 +2461,46 @@ class BuildPerformance(unittest.TestCase):
         self.assertIn('/v%s/' % pin['version'], pin['url'])
         self.assertIn('scripts/install-node.py', check_pins.HELPERS)
 
+    def test_go_installer_installs_the_whole_distribution_and_checks_digests_and_version(self):
+        def distribution(path, go=b'#!/bin/sh\n'):
+            with tarfile.open(path, 'w:gz') as package:
+                for name, data in (('go/bin/go', go), ('go/src/runtime/proc.go', b'package runtime\n')):
+                    info = tarfile.TarInfo(name)
+                    info.size, info.mode = len(data), 0o755
+                    package.addfile(info, io.BytesIO(data))
+            return {'version': '9.9.9', 'url': 'https://example.invalid/go', 'file': path.name,
+                    'sha256': pins_registry.sha256(path), 'root': 'go/', 'member': 'go/bin/go',
+                    'member_sha256': hashlib.sha256(b'#!/bin/sh\n').hexdigest()}
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            pin = distribution(root / 'go.tar.gz')
+            with contextlib.redirect_stdout(io.StringIO()):
+                go = install_go.install(root / 'go', archive=root / 'go.tar.gz', pin=pin, check=False)
+                self.assertEqual(go, (root / 'go/bin/go').resolve())
+                self.assertEqual(sorted(p.name for p in (root / 'go').iterdir()), ['bin', 'cerid-go.json', 'src'])
+                distribution(root / 'other.tar.gz', go=b'#!/bin/sh\nexit 1\n')
+                with self.assertRaisesRegex(pins_registry.PinError, 'binary checksum mismatch'):
+                    install_go.install(root / 'other', archive=root / 'other.tar.gz', check=False,
+                                       pin=dict(pin, sha256=pins_registry.sha256(root / 'other.tar.gz')))
+                self.assertFalse((root / 'other').exists() or (root / 'other.partial').exists())
+                for reported, accepted in (('go version go9.9.9 linux/amd64\n', True),
+                                           ('go version go9.9.10 linux/amd64\n', False), ('9.9.9\n', False)):
+                    target = root / ('version-%d' % len(reported))
+                    with patch.object(install_go.subprocess, 'run',
+                                      return_value=SimpleNamespace(stdout=reported, returncode=0)):
+                        if accepted:
+                            install_go.install(target, archive=root / 'go.tar.gz', pin=pin)
+                        else:
+                            with self.assertRaisesRegex(pins_registry.PinError, 'reports'):
+                                install_go.install(target, archive=root / 'go.tar.gz', pin=pin)
+                    self.assertEqual(target.exists(), accepted, 'a wrong version leaves nothing installed')
+        pin = pins_registry.entry('tools', install_go.PIN_NAME)
+        self.assertEqual(pin['file'], 'go%s.linux-amd64.tar.gz' % pin['version'])
+        self.assertTrue(pin['url'].endswith('/' + pin['file']))
+        self.assertEqual(pin['member'], pin['root'] + install_go.GO)
+        self.assertIn('scripts/install-go.py', check_pins.HELPERS)
+
     def test_cuda_installer_unpacks_every_component_archive_into_one_prefix(self):
         def component(directory, root, members):
             path = directory / (root + '.tar.xz')
@@ -3428,6 +3471,46 @@ class BuildPerformance(unittest.TestCase):
             [])
         registered = pins_registry.entry('tools', 'openmls-crates')
         self.assertEqual(check_pins.validate_lockfile('openmls-crates', registered), [])
+
+    def test_a_go_module_set_is_pinned_by_its_committed_go_sum(self):
+        module = 'example.invalid/lib'
+        good_mod = 'module peer\n\ngo 1.26.0\n\nrequire (\n\t%s v1.2.3\n)\n' % module
+        good_sum = ('%s v1.2.3 h1:AAAA=\n%s v1.2.3/go.mod h1:BBBB=\n' % (module, module))
+        entry = {'version': '1.2.3', 'module': module, 'go_sum': 'go.sum', 'go_mod': 'go.mod', 'license': 'MIT'}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            def problems(go_mod, go_sum):
+                (root / 'go.mod').write_text(go_mod, encoding='utf-8')
+                (root / 'go.sum').write_text(go_sum, encoding='utf-8')
+                return check_pins.validate_go_sum('set', entry, root)
+
+            self.assertEqual(problems(good_mod, good_sum), [])
+            self.assertEqual(problems('module peer\nrequire %s v1.2.3\n' % module, good_sum), [])
+            for go_mod, go_sum, message in (
+                    (good_mod.replace('v1.2.3', 'v1.2.4'), good_sum, 'must require'),
+                    (good_mod + 'replace %s => ../lib\n' % module, good_sum, 'replace and exclude nothing'),
+                    (good_mod + 'exclude %s v1.0.0\n' % module, good_sum, 'replace and exclude nothing'),
+                    (good_mod, '%s v1.2.3 h1:AAAA=\n' % module, 'does not hash'),
+                    (good_mod, '%s v1.2.3/go.mod h1:BBBB=\n' % module, 'does not hash'),
+                    (good_mod, good_sum + 'another v1.0.0 sha256:zzz\n', 'an h1 hash'),
+                    (good_mod, good_sum + 'too few\n', 'an h1 hash')):
+                found = problems(go_mod, go_sum)
+                self.assertTrue(any(message in problem for problem in found), found)
+            (root / 'go.mod').unlink()
+            self.assertIn('must be readable', check_pins.validate_go_sum('set', entry, root)[0])
+            pins = {'tools': {'set': entry}}
+            problems_seen = problems(good_mod, 'too few\n')
+            self.assertTrue(problems_seen)
+            self.assertTrue(any('an h1 hash' in problem for problem in check_pins.validate_registry(pins, root)))
+        go = {'tools': {'go-linux-x64': {'version': '9.9.9'}}}
+        self.assertIn('workflow does not install Go 9.9.9 through scripts/install-go.py',
+                      check_pins.validate_workflow(go, ''))
+        self.assertEqual([problem for problem in check_pins.validate_workflow(
+            go, '- name: Install pinned Go\n  # Go 9.9.9\n  run: python3 scripts/install-go.py\n')
+            if 'Go 9.9.9' in problem], [])
+        registered = pins_registry.entry('tools', 'webtransport-go-modules')
+        self.assertEqual(check_pins.validate_go_sum('webtransport-go-modules', registered), [])
 
     def test_clang_tidy_installer_keeps_the_resource_layout_and_checks_digests_count_and_version(self):
         with tempfile.TemporaryDirectory() as temp:

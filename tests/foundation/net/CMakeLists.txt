@@ -170,6 +170,18 @@ if(CRD_BUILD_WEBTRANSPORT_VS_QUINN)
     set_tests_properties(crd-net-webtransport-interop-quinn PROPERTIES TIMEOUT 1500 LABELS "net;webtransport-interop")
 endif()
 
+# The same against webtransport-go (CRD_BUILD_WEBTRANSPORT_VS_GO): crd-webtransport-go-peer is a Go module over
+# webtransport-go and quic-go, and the driver runs only its cases here: the `webtransport-h3` spelling and flow control.
+if(CRD_BUILD_WEBTRANSPORT_VS_GO)
+    crd_add_go_peer(crd-webtransport-go-peer "${CMAKE_CURRENT_SOURCE_DIR}/interop/webtransport_go_peer"
+                    webtransport-go-peer crd-webtransport-go-peer webtransport-vs-go)
+    add_dependencies(crd-quic-peer crd-webtransport-go-peer)
+    add_test(NAME crd-net-webtransport-interop-go
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/webtransport_interop.py"
+                     --cerid "$<TARGET_FILE:crd-quic-peer>" --go "${crd-webtransport-go-peer_OUTPUT}" --only "with go")
+    set_tests_properties(crd-net-webtransport-interop-go PROPERTIES TIMEOUT 1200 LABELS "net;webtransport-interop")
+endif()
+
 # The QMux interoperability test against the `qmux` crate (CRD_BUILD_QMUX_VS_CRATE): crd-qmux-crate-peer is a Cargo
 # package over the crate and rustls, and qmux_interop.py runs it against crd-qmux-peer over the loopback.
 if(CRD_BUILD_QMUX_VS_CRATE)
