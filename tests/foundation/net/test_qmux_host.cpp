@@ -130,6 +130,14 @@ HandshakeRules open_rules()
 }
 
 // A server host and a client host over one pipe network, under a test clock.
+// The live connection of `handle` on `host` (the test requires one).
+template <typename Host> QmuxConnection& live_on(Host& host, QuicHandle handle)
+{
+    QmuxConnection* const connection = host.connection(handle);
+    REQUIRE(connection != nullptr);
+    return *connection;
+}
+
 struct Hosts
 {
     ReadyFilter ready;
@@ -312,7 +320,7 @@ TEST_CASE("QmuxHost: many connections finish at once, and their slots are reused
     CHECK(hosts.server->live() == 8U);
     for (const QuicHandle& handle : handles)
     {
-        hosts.client->connection(handle)->close(1U, ConstSpan<u8>(), hosts.clock.now);
+        live_on(*hosts.client, handle).close(1U, ConstSpan<u8>(), hosts.clock.now);
         hosts.client->wake(handle);
     }
     hosts.turns(16U);
@@ -472,7 +480,7 @@ TEST_CASE("QmuxHost: a closed side stops waiting after close_wait", "[net][qmux-
     hosts.start();
     const QuicHandle handle = hosts.connect();
     hosts.establish(handle);
-    hosts.client->connection(handle)->close(9U, ConstSpan<u8>(), hosts.clock.now);
+    live_on(*hosts.client, handle).close(9U, ConstSpan<u8>(), hosts.clock.now);
     hosts.client->wake(handle);
     static_cast<void>(hosts.client->poll(0U));
     PipeLink* const link = hosts.client_poller.link_of(handle.slot);
@@ -594,7 +602,7 @@ TEST_CASE("QmuxHost: a side that cannot send its close ends with a reset", "[net
     hosts.establish(handle);
     PipeLink* const link = hosts.client_poller.link_of(handle.slot);
     link->to_server.limit = 0U;
-    hosts.client->connection(handle)->close(3U, ConstSpan<u8>(), hosts.clock.now);
+    live_on(*hosts.client, handle).close(3U, ConstSpan<u8>(), hosts.clock.now);
     hosts.client->wake(handle);
     static_cast<void>(hosts.client->poll(0U));
     CHECK(hosts.client_events.ended_count == 0U);
@@ -969,7 +977,7 @@ TEST_CASE("QmuxHost: clients and a server carry transfers over real TCP, small b
     CHECK(hosts.server->counters().accepted == connections);
     for (const QuicHandle& handle : handles)
     {
-        hosts.client->connection(handle)->close(0U, ConstSpan<u8>(), hosts.clock.monotonic_ns());
+        live_on(*hosts.client, handle).close(0U, ConstSpan<u8>(), hosts.clock.monotonic_ns());
         hosts.client->wake(handle);
     }
     for (usize turn = 0U; turn < 20000U && (hosts.client->live() != 0U || hosts.server->live() != 0U); ++turn)
