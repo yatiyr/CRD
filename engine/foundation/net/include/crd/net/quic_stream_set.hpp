@@ -124,6 +124,7 @@ struct QuicStreamEvent
     u64 reset_error = 0U; // the peer's RESET_STREAM code
     u64 stop_error = 0U;  // the peer's STOP_SENDING code
     u64 reset_final = 0U; // with kQuicStreamReset: the stream's final size
+    u64 stop_final = 0U;  // with kQuicStreamStopSending: the final size of the reset the STOP_SENDING caused
 };
 
 // What can be read from a stream now: the bytes from its read offset that arrived without a gap, up to the end of
@@ -238,6 +239,12 @@ public:
     // The parts' states of a stream (None for a stream not open).
     [[nodiscard]] QuicSendState send_state(u64 id) const noexcept;
     [[nodiscard]] QuicRecvState recv_state(u64 id) const noexcept;
+    // The highest offset of a stream received so far, its final size once known; 0 for a stream not receiving.
+    [[nodiscard]] u64 received_end(u64 id) const noexcept;
+    // The final size of this side's reset of a stream: what the peer's flow control counts, 0 for one not reset.
+    [[nodiscard]] u64 reset_size(u64 id) const noexcept;
+    // Whether a stream existed and has gone: unlike a stream not yet opened, it never comes back.
+    [[nodiscard]] bool stream_closed(u64 id) const noexcept;
     // Streams open, of every type.
     [[nodiscard]] u32 open_streams() const noexcept;
     // This side's grant of streams of a type to the peer, and the peer's grant to this side.

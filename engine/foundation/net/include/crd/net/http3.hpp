@@ -93,6 +93,9 @@ inline constexpr u64 kWtMaxStreams = u64{1} << 60U; // a stream limit's largest 
     return true;
 }
 
+// Whether an extended CONNECT's :protocol names WebTransport, and in which revision.
+[[nodiscard]] bool http3_wt_token(cont::ConstSpan<u8> protocol, bool& legacy) noexcept;
+
 inline constexpr u32 kHttp3MinFieldBytes = 1024U;
 inline constexpr u32 kHttp3MaxFieldBytes = 1U << 20U;
 // A HEADERS frame's largest payload for a section of `field_bytes`, and the frame header before it at most.
@@ -173,9 +176,11 @@ struct Http3Event
     cont::ConstSpan<HttpField> fields;
     HttpMessageInfo info;
     cont::ConstSpan<u8> payload;
-    u64 final_size = 0U; // WtAborted: of the whole stream, header included
+    u64 final_size = 0U; // WtAborted and WtStopped: of the direction's whole stream, its header included
     u32 header = 0U;
-    bool early = false; // the section or datagram came in 0-RTT: replayable
+    u32 slot = 0U;       // WebTransport streams: QuicStreamSet::slot_of's answer when the event happened
+    bool early = false;  // the section or datagram came in 0-RTT: replayable
+    bool unread = false; // a Datagram for a stream whose request has not been read
 };
 
 enum class Http3Error : u8
@@ -256,12 +261,16 @@ public:
     [[nodiscard]] Http3Error abort_wt(u64 id, u64 http_code) noexcept;
     // The bytes the stream's header took; 0 for no such WebTransport stream.
     [[nodiscard]] u32 wt_header(u64 id) const noexcept;
+    // A server's: whether `id` can still turn out to be a session: its stream has not come, or its first bytes or its
+    // request have not been read. False once it is anything else, and always for a client, which opened its own.
+    [[nodiscard]] bool wt_session_pending(u64 id) const noexcept;
 
     // Tells the peer no new requests will be handled. `immediate` false allows any it has sent or is sending (a first,
     // gentle GOAWAY); true names the first request not handled. A client's value is a push ID. False when there was no
     // room, retry after a poll().
     [[nodiscard]] bool goaway(bool immediate) noexcept;
 
+    [[nodiscard]] const Http3Config& config() const noexcept { return m_config; }
     [[nodiscard]] u64 error() const noexcept { return m_error; } // 0 for none
     [[nodiscard]] bool started() const noexcept { return m_started; }
     [[nodiscard]] bool settings_known() const noexcept { return m_peer_known; }

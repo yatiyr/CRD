@@ -775,6 +775,8 @@ QuicTransportError QuicStreamSet::on_frame(const QuicFrame& frame, bool early) n
             else if (slot->send == QuicSendState::ResetSent && slot->reset_at)
             {
                 lower_reliable(*slot, 0U); // the peer reads no more (section 5.4 of the draft)
+                slot->peer_stop_error = frame.error_code;
+                raise(*slot, kQuicStreamStopSending); // the final size may have changed
             }
             break;
         default: // MaxStreamData
@@ -1455,6 +1457,8 @@ bool QuicStreamSet::poll(QuicStreamEvent& event) noexcept
     event.reset_error = slot.peer_reset_error;
     event.stop_error = slot.peer_stop_error;
     event.reset_final = ((slot.events & kQuicStreamReset) != 0U) ? slot.in.final_size() : 0U;
+    event.stop_final =
+        ((slot.events & kQuicStreamStopSending) != 0U) ? max_u64(slot.reset_final, slot.reset_reliable) : 0U;
     slot.events = 0U;
     if ((event.events & kQuicStreamReset) != 0U && slot.recv == QuicRecvState::ResetRecvd)
     {
@@ -1487,6 +1491,23 @@ u32 QuicStreamSet::slot_of(u64 id) const noexcept
 }
 
 // ---- State ----
+
+u64 QuicStreamSet::received_end(u64 id) const noexcept
+{
+    const Slot* const slot = find(id);
+    return (slot != nullptr && slot->recv != QuicRecvState::None) ? slot->in.received_end() : 0U;
+}
+
+u64 QuicStreamSet::reset_size(u64 id) const noexcept
+{
+    const Slot* const slot = find(id);
+    return (slot != nullptr) ? max_u64(slot->reset_final, slot->reset_reliable) : 0U;
+}
+
+bool QuicStreamSet::stream_closed(u64 id) const noexcept
+{
+    return (id >> 2U) < type_of(id).next && locate(id) == kNone;
+}
 
 QuicSendState QuicStreamSet::send_state(u64 id) const noexcept
 {

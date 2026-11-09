@@ -84,13 +84,6 @@ constexpr u32 kSeenWtLegacy = 1U << 10U;
     return bytes.size() == size && std::memcmp(bytes.data(), text, size) == 0;
 }
 
-// Whether an extended CONNECT's :protocol names WebTransport, and which revision.
-[[nodiscard]] bool wt_token(cont::ConstSpan<u8> protocol, bool& legacy) noexcept
-{
-    legacy = span_is(protocol, "webtransport", 12U);
-    return legacy || span_is(protocol, "webtransport-h3", 15U);
-}
-
 // The most bytes QPACK can spend on `fields`: its prefix, and each line's longest integers.
 [[nodiscard]] usize section_bound(cont::ConstSpan<HttpField> fields) noexcept
 {
@@ -102,6 +95,12 @@ constexpr u32 kSeenWtLegacy = 1U << 10U;
     return bound;
 }
 } // namespace
+
+bool http3_wt_token(cont::ConstSpan<u8> protocol, bool& legacy) noexcept
+{
+    legacy = span_is(protocol, "webtransport", 12U);
+    return legacy || span_is(protocol, "webtransport-h3", 15U);
+}
 
 Http3Connection::~Http3Connection() noexcept
 {
@@ -344,6 +343,7 @@ bool Http3Connection::take_event_bit(Http3Event& event) noexcept
                 event.stream = record.id;
                 event.id = record.wt_session;
                 event.header = record.wt_header;
+                event.slot = m_current.slot;
                 return true;
             }
             return false;
@@ -407,6 +407,7 @@ bool Http3Connection::peer_reset(Record& record, u64 code, Http3Event& event) no
         event.error = code;
         event.final_size = m_current.reset_final;
         event.header = record.wt_header;
+        event.slot = m_current.slot;
         return true;
     }
     if ((record.kind == Kind::First || record.kind == Kind::WtHead) && record.read != Read::Over)
@@ -440,9 +441,10 @@ bool Http3Connection::peer_stop(Record& record, u64 code, Http3Event& event) noe
             return fail(kH3ClosedCriticalStream);
         }
     }
-    if (record.kind != Kind::Request && record.kind != Kind::WtData)
+    if ((record.kind != Kind::Request && record.kind != Kind::WtData) ||
+        (record.kind == Kind::Request && record.send == Send::Over && record.read == Read::Over))
     {
-        return false;
+        return false; // nothing is left that the application could stop doing
     }
     record.send = Send::Over; // QUIC reset the sending part
     event = Http3Event{};
@@ -450,7 +452,9 @@ bool Http3Connection::peer_stop(Record& record, u64 code, Http3Event& event) noe
     event.stream = record.id;
     event.id = record.wt_session;
     event.error = code;
+    event.final_size = m_current.stop_final;
     event.header = record.wt_header;
+    event.slot = m_current.slot;
     return true;
 }
 
@@ -511,6 +515,7 @@ bool Http3Connection::take_datagram(Http3Event& event) noexcept
             event.stream = id;
             event.payload = in.rest();
             event.early = m_datagrams->oldest_early();
+            event.unread = unread;
             m_datagram_held = true;
             return true;
         }
@@ -648,6 +653,7 @@ bool Http3Connection::read_wt_head(Record& record, Http3Event& event) noexcept
     event.stream = record.id;
     event.id = session;
     event.header = record.wt_header;
+    event.slot = slot_index(record);
     return true;
 }
 
@@ -664,6 +670,7 @@ bool Http3Connection::read_wt_data(Record& record, Http3Event& event) noexcept
     event.stream = record.id;
     event.id = record.wt_session;
     event.header = record.wt_header;
+    event.slot = slot_index(record);
     return true;
 }
 
@@ -1303,7 +1310,7 @@ bool Http3Connection::deliver_section(Record& record, usize count, bool early, H
             return abort_stream(record, kH3MessageError, false, event);
         }
         bool legacy = false;
-        if (m_config.webtransport.enabled && event.info.extended && wt_token(event.info.protocol, legacy))
+        if (m_config.webtransport.enabled && event.info.extended && http3_wt_token(event.info.protocol, legacy))
         {
             if (early)
             {
@@ -1561,8 +1568,8 @@ Http3Error Http3Connection::open_request(cont::ConstSpan<HttpField> fields, bool
         return Http3Error::Invalid;
     }
     bool legacy = false;
-    if (info.extended && (!m_peer.enable_connect_protocol ||
-                          (m_config.webtransport.enabled && wt_token(info.protocol, legacy) && !wt_ready(legacy))))
+    const bool wt_session = m_config.webtransport.enabled && http3_wt_token(info.protocol, legacy);
+    if (info.extended && (!m_peer.enable_connect_protocol || (wt_session && !wt_ready(legacy))))
     {
         return Http3Error::NotReady;
     }
@@ -1875,6 +1882,21 @@ u32 Http3Connection::wt_header(u64 id) const noexcept
 {
     const Record* const record = find(id);
     return (record != nullptr && record->kind == Kind::WtData) ? record->wt_header : 0U;
+}
+
+bool Http3Connection::wt_session_pending(u64 id) const noexcept
+{
+    if (m_config.side != crypto::QuicSide::Server)
+    {
+        return false;
+    }
+    const Record* const record = find(id);
+    if (record == nullptr)
+    {
+        return !m_streams->stream_closed(id);
+    }
+    return (record->kind == Kind::First && record->read != Read::Over) ||
+           (record->kind == Kind::Request && record->read == Read::Head);
 }
 
 bool Http3Connection::goaway(bool immediate) noexcept

@@ -1451,6 +1451,57 @@ TEST_CASE("QUIC stream set: STOP_SENDING gives up a reliable reset's bytes", "[n
     CHECK(c.send_state(id) == QuicSendState::ResetRecvd);
 }
 
+TEST_CASE("QUIC stream set: the sizes a layer above counts credit with", "[net][4.2a][quic-stream-set]")
+{
+    Pair pair(reliable_limits(), reliable_limits());
+    QuicStreamSet& c = pair.end[0];
+    u64 id = 0U;
+    REQUIRE(c.open(true, id) == QuicStreamError::None);
+    CHECK_FALSE(c.stream_closed(id));
+    CHECK_FALSE(c.stream_closed(id + 4U)); // not yet opened
+    u64 written = 0U;
+    static_cast<void>(write_pattern(c, id, written, 600U, id, false));
+    CHECK(c.reset_size(id) == 0U);
+    const Packet data = pair.take(0U);
+    u64 sent = 0U;
+    for (usize at = 0U; at < data.count; ++at)
+    {
+        sent += (data.records[at].kind == QuicFrameKind::Stream) ? data.records[at].length : 0U;
+    }
+    static_cast<void>(write_pattern(c, id, written, sent + 400U, id, false));
+    // A reliable size above what went counts in full: those bytes will go.
+    REQUIRE(c.reset(id, 3U, sent + 400U) == QuicStreamError::None);
+    CHECK(c.reset_size(id) == sent + 400U);
+    // The peer stops it: only what had gone stays, and the event says so.
+    CHECK(frame_to(c, QuicFrameKind::StopSending, id) == QuicTransportError::NoError);
+    CHECK(c.reset_size(id) == sent);
+    QuicStreamEvent event;
+    bool told = false;
+    while (c.poll(event))
+    {
+        if (event.id == id && (event.events & kQuicStreamStopSending) != 0U)
+        {
+            told = true;
+            CHECK(event.stop_final == sent);
+        }
+    }
+    CHECK(told);
+
+    QuicStreamSet& s = pair.end[1];
+    CHECK(s.received_end(0U) == 0U);
+    REQUIRE(reset_at_to(s, 4U, 5U, 123U, 0U) == QuicTransportError::NoError);
+    CHECK(s.received_end(4U) == 123U);
+
+    u64 uni = 0U;
+    REQUIRE(c.open(false, uni) == QuicStreamError::None);
+    REQUIRE(c.reset(uni, 1U, 0U) == QuicStreamError::None);
+    pair.acked(pair.take(0U));
+    while (c.poll(event))
+    {
+    }
+    CHECK(c.stream_closed(uni));
+}
+
 TEST_CASE("QUIC stream set: every receiver refusal and reordering of RESET_STREAM_AT", "[net][4.2a][quic-stream-set]")
 {
     Pair pair(reliable_limits(), reliable_limits());

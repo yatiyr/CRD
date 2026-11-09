@@ -117,6 +117,17 @@ if(TARGET crd-fuzz-net-http3-libfuzzer)
     target_include_directories(crd-fuzz-net-http3-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 endif()
 
+# WebTransport sessions (4.2a).
+#   crd-fuzz-net-webtransport   a peer driving HTTP/3 by hand against sessions on a server and a client, whose
+#                               application calls every method at any time; both sides honest under tight flow control,
+#                               nothing lost or leaked.
+crd_fuzz_target(crd-fuzz-net-webtransport
+    SOURCES fuzz_webtransport.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-webtransport")
+target_include_directories(crd-fuzz-net-webtransport PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(TARGET crd-fuzz-net-webtransport-libfuzzer)
+    target_include_directories(crd-fuzz-net-webtransport-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+endif()
+
 # A QUIC connection (4.2a).
 #   crd-fuzz-net-quic-connection   a network script between a client and a server (deliveries, losses, duplicates,
 #                                  reorders, corrupted bytes, time, a Retry), then a clean path: the handshake confirms

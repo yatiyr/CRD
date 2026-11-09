@@ -5294,7 +5294,7 @@ class TestInstruments(unittest.TestCase):
                                                        'net-qmux', 'net-qmux-early', 'net-qmux-host', 'net-qpack',
                                                        'net-quic-codec', 'net-quic-connection', 'net-quic-datagram', 'net-quic-packet',
                                                        'net-quic-recovery',
-                                                       'net-quic-stream', 'net-quic-stream-set', 'net-state-hash', 'net-ticket-cache',
+                                                       'net-quic-stream', 'net-quic-stream-set', 'net-state-hash', 'net-ticket-cache', 'net-webtransport',
                                                        'perf-assets', 'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload', 'wire-delta-test', 'wire-session-control', 'wire-test'])
         for name, target in fuzz_driver.TARGETS.items():
