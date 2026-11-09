@@ -11,7 +11,9 @@ add_executable(crd-net-tests
     test_delta.cpp
     test_endpoint.cpp
     test_frame_integrity.cpp
+    test_http3.cpp
     test_http_fields.cpp
+    test_http_message.cpp
     test_ingress.cpp
     test_io_loop.cpp
     test_negotiation.cpp

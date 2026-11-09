@@ -61,6 +61,10 @@ public:
     // a second call gives the rest when they wrap.
     [[nodiscard]] cont::ConstSpan<u8> readable() const noexcept;
 
+    // Copies up to `out.size()` of the bytes that arrived without a gap, from `skip` bytes past read_offset(), across the
+    // wrap readable() stops at, and returns how many. Nothing is given up.
+    [[nodiscard]] usize copy_contiguous(usize skip, cont::Span<u8> out) const noexcept;
+
     // Gives up the next `count` bytes that arrived without a gap (at most contiguous_end() - read_offset()), which
     // frees their room.
     void consume(u64 count) noexcept;

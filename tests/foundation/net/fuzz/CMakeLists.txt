@@ -106,6 +106,17 @@ if(TARGET crd-fuzz-net-qpack-libfuzzer)
     target_include_directories(crd-fuzz-net-qpack-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 endif()
 
+# An HTTP/3 connection (4.2a).
+#   crd-fuzz-net-http3          a hostile peer writing any streams, frames, ends and resets at a server and a client,
+#                               whose application calls every method at any time; both sides honest over any frame sizes
+#                               and a held encoder stream.
+crd_fuzz_target(crd-fuzz-net-http3
+    SOURCES fuzz_http3.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-http3")
+target_include_directories(crd-fuzz-net-http3 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(TARGET crd-fuzz-net-http3-libfuzzer)
+    target_include_directories(crd-fuzz-net-http3-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+endif()
+
 # A QUIC connection (4.2a).
 #   crd-fuzz-net-quic-connection   a network script between a client and a server (deliveries, losses, duplicates,
 #                                  reorders, corrupted bytes, time, a Retry), then a clean path: the handshake confirms

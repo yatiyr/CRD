@@ -1209,7 +1209,20 @@ QuicStreamRead QuicStreamSet::peek(u64 id) const noexcept
     return read;
 }
 
-QuicStreamError QuicStreamSet::consume(u64 id, usize count) noexcept
+usize QuicStreamSet::copy_readable(u64 id, usize skip, cont::Span<u8> out, bool& ends) const noexcept
+{
+    ends = false;
+    const Slot* const slot = find(id);
+    if (slot == nullptr || !receiving(slot->recv))
+    {
+        return 0U;
+    }
+    const usize copied = slot->in.copy_contiguous(skip, out);
+    ends = slot->in.final_known() && slot->in.read_offset() + skip + copied >= slot->in.final_size();
+    return copied;
+}
+
+QuicStreamError QuicStreamSet::consume(u64 id, usize count, bool keep_end) noexcept
 {
     Slot* const slot = find(id);
     if (slot == nullptr || slot->recv == QuicRecvState::None)
@@ -1226,7 +1239,7 @@ QuicStreamError QuicStreamSet::consume(u64 id, usize count) noexcept
     }
     slot->in.consume(count);
     account_consumed(*slot, slot->in.read_offset());
-    if (slot->recv == QuicRecvState::DataRecvd && slot->in.complete())
+    if (slot->recv == QuicRecvState::DataRecvd && slot->in.complete() && !keep_end)
     {
         slot->recv = QuicRecvState::DataRead;
     }
@@ -1250,6 +1263,7 @@ bool QuicStreamSet::poll(QuicStreamEvent& event) noexcept
     slot.event_next = kNone;
     event = QuicStreamEvent{};
     event.id = slot.id;
+    event.slot = index_of(slot);
     event.events = slot.events;
     event.reset_error = slot.peer_reset_error;
     event.stop_error = slot.peer_stop_error;
@@ -1260,6 +1274,28 @@ bool QuicStreamSet::poll(QuicStreamEvent& event) noexcept
     }
     try_free(slot);
     return true;
+}
+
+usize QuicStreamSet::send_room(u64 id, usize wanted) noexcept
+{
+    Slot* const slot = find(id);
+    if (slot == nullptr || (slot->send != QuicSendState::Ready && slot->send != QuicSendState::Send) ||
+        slot->out.finished())
+    {
+        return 0U;
+    }
+    const usize room = slot->out.room();
+    if (room < wanted)
+    {
+        slot->want_writable = true;
+    }
+    return room;
+}
+
+u32 QuicStreamSet::slot_of(u64 id) const noexcept
+{
+    const u32 slot = locate(id);
+    return (slot == kNone) ? kQuicNoStreamSlot : slot;
 }
 
 // ---- State ----

@@ -47,6 +47,7 @@ inline constexpr u32 kQuicMaxStreamSlots = 4096U;      // per stream type
 inline constexpr u32 kQuicMaxStreamBuffer = 1U << 24U; // a stream buffer's bytes at most
 inline constexpr u8 kQuicStreamUrgencies = 8U;         // RFC 9218's urgencies, 0 the most urgent
 inline constexpr u8 kQuicDefaultUrgency = 3U;          // RFC 9218 section 4.1
+inline constexpr u32 kQuicNoStreamSlot = ~u32{0};
 
 // What a connection's streams may hold. All zero (the default) is a connection without streams.
 struct QuicStreamLimits
@@ -111,6 +112,7 @@ inline constexpr u8 kQuicStreamFinished = 1U << 5U;    // every byte and the FIN
 struct QuicStreamEvent
 {
     u64 id = 0U;
+    u32 slot = 0U; // QuicStreamSet::slot_of's answer, which the stream may no longer have once this event was polled
     u8 events = 0U;
     u64 reset_error = 0U; // the peer's RESET_STREAM code
     u64 stop_error = 0U;  // the peer's STOP_SENDING code
@@ -199,11 +201,24 @@ public:
     // The stream's urgency, 0 (most urgent) to kQuicStreamUrgencies - 1; new streams take kQuicDefaultUrgency.
     [[nodiscard]] QuicStreamError set_urgency(u64 id, u8 urgency) noexcept;
     [[nodiscard]] QuicStreamRead peek(u64 id) const noexcept;
+    // Copies into `out` the bytes that arrived without a gap, from `skip` bytes past the read offset, across the wrap
+    // peek() stops at; `ends` is true when they reach the stream's final size. Nothing is consumed: a layer holding
+    // whole frames keeps them in the stream's own buffer. 0 for a stream not receiving.
+    [[nodiscard]] usize copy_readable(u64 id, usize skip, cont::Span<u8> out, bool& ends) const noexcept;
     // Gives up the next `count` bytes peek() gave; after a peek() with `fin`, consuming its data (even none) ends the
-    // receiving part.
-    [[nodiscard]] QuicStreamError consume(u64 id, usize count) noexcept;
+    // receiving part. `keep_end`: it stays open at its end, peek() still reporting `fin`, until a call without it, for a
+    // layer that must first act on the end and would otherwise lose the slot to it.
+    [[nodiscard]] QuicStreamError consume(u64 id, usize count, bool keep_end = false) noexcept;
     // The next stream with events, its mask cleared; false when none has any.
     [[nodiscard]] bool poll(QuicStreamEvent& event) noexcept;
+    // The bytes write() takes now; below `wanted`, a Writable event is owed once more room comes. 0 for a stream that
+    // cannot send.
+    [[nodiscard]] usize send_room(u64 id, usize wanted) noexcept;
+    // An index below slots() that stays the stream's while it is open, for a layer keeping per-stream state beside the
+    // set's; kQuicNoStreamSlot for a stream not open.
+    [[nodiscard]] u32 slot_of(u64 id) const noexcept;
+    [[nodiscard]] u32 slots() const noexcept { return m_total_slots; }
+    [[nodiscard]] const QuicStreamLimits& limits() const noexcept { return m_limits; }
 
     // The parts' states of a stream (None for a stream not open).
     [[nodiscard]] QuicSendState send_state(u64 id) const noexcept;

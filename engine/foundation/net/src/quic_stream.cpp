@@ -225,6 +225,24 @@ cont::ConstSpan<u8> QuicReceiveBuffer::readable() const noexcept
                                                                                 capacity() - pos)));
 }
 
+usize QuicReceiveBuffer::copy_contiguous(usize skip, cont::Span<u8> out) const noexcept
+{
+    const u64 available = m_contiguous - m_read;
+    if (m_bytes.empty() || skip >= available)
+    {
+        return 0U;
+    }
+    const usize count = static_cast<usize>(min_u64(available - skip, out.size()));
+    const usize pos = Ring{capacity()}.at(m_read + skip);
+    const usize first = static_cast<usize>(min_u64(count, capacity() - pos));
+    std::memcpy(out.data(), m_bytes.data() + pos, first);
+    if (count != first)
+    {
+        std::memcpy(out.data() + first, m_bytes.data(), count - first);
+    }
+    return count;
+}
+
 void QuicReceiveBuffer::consume(u64 count) noexcept
 {
     const u64 taken = min_u64(count, m_contiguous - m_read);
