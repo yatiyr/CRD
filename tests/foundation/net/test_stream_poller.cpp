@@ -328,11 +328,11 @@ TEST_CASE("TcpPoller: a full report list starves nobody", "[net][tcp][poller]")
 TEST_CASE("DeadlineHeap: holds to a model under random schedules", "[net][deadline-heap]")
 {
     CountingAllocator allocator;
-    constexpr u32 kCapacity = 64U;
+    constexpr u32 capacity = 64U;
     DeadlineHeap heap(allocator);
-    REQUIRE(heap.init(kCapacity));
-    CHECK_FALSE(heap.init(kCapacity));
-    u64 model[kCapacity];
+    REQUIRE(heap.init(capacity));
+    CHECK_FALSE(heap.init(capacity));
+    u64 model[capacity];
     for (u64& due : model)
     {
         due = kNeverNs;
@@ -340,7 +340,7 @@ TEST_CASE("DeadlineHeap: holds to a model under random schedules", "[net][deadli
     std::mt19937 random(77U);
     for (usize step = 0U; step < 20000U; ++step)
     {
-        const u32 index = static_cast<u32>(random() % kCapacity);
+        const u32 index = static_cast<u32>(random() % capacity);
         const u32 action = random() % 8U;
         if (action < 5U)
         {
@@ -356,8 +356,8 @@ TEST_CASE("DeadlineHeap: holds to a model under random schedules", "[net][deadli
         else
         {
             const u64 now = random() % 1000U;
-            u32 out[kCapacity];
-            const u32 taken = heap.take_due(now, Span<u32>(out, kCapacity));
+            u32 out[capacity];
+            const u32 taken = heap.take_due(now, Span<u32>(out, capacity));
             for (u32 at = 0U; at < taken; ++at)
             {
                 REQUIRE(model[out[at]] <= now);

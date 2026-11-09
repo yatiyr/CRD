@@ -24,7 +24,6 @@ using crd::usize;
 using crd::containers::ConstSpan;
 using crd::containers::Span;
 using crd::containers::StringView;
-using crd::containers::WireReader;
 using crd::containers::WireWriter;
 using crd::net::testing::FuzzInput;
 using crd::net::testing::QmuxRecordOracle;
