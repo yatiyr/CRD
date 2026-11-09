@@ -192,8 +192,8 @@ SHAPES = (
 
 
 def capped_for_go(shape):
-    """quic-go's HTTP/3 layer holds GO_DATAGRAMS datagrams for a session nobody reads yet and drops the rest, so a burst
-    that lands with the 2xx would lose the remainder on a clean path, as datagrams may."""
+    """A Go end's HTTP/3 layer holds GO_DATAGRAMS datagrams for a session nobody reads yet and drops the rest, so a
+    burst that lands with the 2xx would lose the remainder on a clean path, as datagrams may."""
     return dict(shape, datagrams=min(shape.get('datagrams', 0), GO_DATAGRAMS))
 
 

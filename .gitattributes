@@ -10,6 +10,9 @@
 *.cu text eol=lf
 *.cuh text eol=lf
 *.rs text eol=lf
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
 *.cmake text eol=lf
 *.sh text eol=lf
 *.py text eol=lf

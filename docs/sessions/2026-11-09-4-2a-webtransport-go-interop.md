@@ -22,7 +22,7 @@ CI first: run 42617196650 (879fc9a3) was read for its failed jobs. `linux-gcc-sh
 
 ## Not asked of webtransport-go, and why
 
-The legacy spelling (its client never sends it, and its server advertises legacy sessions under 0x14e9cd29, not the 0xc671706a Cerid reads; browsers' settings are confirmed under WEB.5). The exporter (none offered). 0-RTT (no session opens in it). 64 datagrams into a Go client: quic-go's HTTP/3 layer keeps 32 for a session nobody reads yet and drops the rest, so the shape is capped at 32 against Go; a Cerid client still receives all 64 of its burst.
+The legacy spelling (its client never sends it, and its server advertises legacy sessions under 0x14e9cd29, not the 0xc671706a Cerid reads; browsers' settings are confirmed under WEB.5). The exporter (none offered). 0-RTT (no session opens in it). 64 datagrams into a Go end: quic-go's HTTP/3 layer keeps 32 for a session nobody reads yet and drops the rest, so the shape is capped at 32 against Go (uncapped, a Go client read exactly 32 of 64 and a Go server 53 and 62 in probes, while the Cerid ends read all 64).
 
 ## Downloads
 
