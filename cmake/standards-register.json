@@ -1089,7 +1089,7 @@
       "id": "websocket",
       "title": "The WebSocket protocol",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a",
@@ -1102,13 +1102,18 @@
       },
       "cryptography": [],
       "source": {
-        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n124",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/design/network-foundation.md#websocket",
+        "read": "2026-11-02",
+        "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "tests/foundation/net/test_websocket.cpp",
+        "tests/foundation/net/fuzz/fuzz_websocket.cpp",
+        "tests/foundation/net/interop/qmux_interop.py"
+      ],
+      "deprecation": null,
+      "note": "The browser fallback of 4.2a (design S61): the opening handshake and frames of RFC 6455 as a framing stage of QMux, one record per Binary message. Sec-WebSocket-Accept uses SHA-1 as RFC 6455's wire format dictates and protects nothing (TLS beneath it does), so no cryptographic function is claimed. draft-ietf-quic-qmux-02 defines no WebSocket binding: the record-per-message mapping is the qmux crate's, proven against it."
     },
     {
       "id": "websocket.h2",

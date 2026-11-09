@@ -1216,7 +1216,7 @@ them: what differs is negotiation and whether flow control exists.
   label length (8), label, context length (8), context; through `export_keying_material`.
 - **Channels.** A session presents the surface the channel layer runs on over a `QuicStreamSet`: open, write, peek,
   consume, reset, stop, datagram, filtered by session with flow control layered in, so there is no second channel
-  implementation. [S60](#channels) is that layer.
+  implementation. [S60](#channel-link) is that layer.
 - **Peers.** `web-transport-quinn` 0.13.6 for the legacy spelling (`crd-net-webtransport-interop-quinn`; what it is not
   asked and why: `webtransport_interop.py`). The `webtransport-h3` peer is webtransport-go v0.13.0 (quic-go 0.62, draft
   -16, with RESET_STREAM_AT and flow control; `crd-net-webtransport-interop-go`, Go pinned as `tools/go-linux-x64`).
@@ -1249,7 +1249,7 @@ and the source mutations in the session note prove it. What the contract did not
 - A DATAGRAM capsule on a CONNECT stream arrives like any datagram, up to `datagram_bytes`; a larger one is skipped.
 - Sessions, once their streams go, keep nothing that could reach a later session in the same pool slot.
 
-<a id="channels"></a>
+<a id="channel-link"></a>
 **S60. Channels over every path** (4.2a, threats T01, T09, T10, T11 and T15; [channel_link.hpp](../../engine/foundation/net/include/crd/net/channel_link.hpp); 2026-11-09). NET.3 wrote the frames and their
 admission and left the carrier open. `ChannelLink` is the one reader and writer of them, one per session, and is why "one session model over every path" is a statement about code.
 
@@ -1269,6 +1269,21 @@ admission and left the carrier open. `ChannelLink` is the one reader and writer 
 - **What is not here.** `SendBudget` belongs above, with the session that decides what to shed. Sessions, capabilities and revision announcements are [4.2d](../ROADMAP.md#slice-4.2d)'s, on this.
 
 Evidence: `test_channel_link.cpp` `[channels]` (19 cases, each on QUIC-shaped, QMux-shaped and WebTransport carriers where the behaviour is shared), `crd-fuzz-net-channel-link`, and 24 source mutations in the [session note](../sessions/2026-11-09-4-2a-channels.md).
+
+<a id="websocket"></a>
+**S61. WebSocket over HTTP/1.1** (4.2a, threats T01, T02, T06 and T10; [websocket.hpp](../../engine/foundation/net/include/crd/net/websocket.hpp), `websocket`, RFC 6455; 2026-11-09). The browser fallback where UDP is blocked. A WebSocket is a QMux path, not a transport of its own: the same `QmuxConnection`, `QuicStreamSet` and `QuicDatagrams`, so `ChannelCarrier` gains no third shape and `QmuxHost` gains no line.
+
+- **One record per Binary message, no Size.** draft-ietf-quic-qmux-02 does not mention WebSocket; the message boundary is the record's, as the `qmux` crate's WebSocket transport writes it. The limit stays 16382 bytes. A Text message is 1003, an empty one is what a Size of zero is (PROTOCOL_VIOLATION).
+- **Where it sits.** Between TLS and the record parser: `Framing::Records` or, once TLS agrees on `http/1.1` and a `WebSocketConfig` is set, `Upgrading` then `Messages`. One port serves both by ALPN; a server's context lists both. Neither fork nor second buffer: the opening handshake and fragments use `m_in`, the frame header the room before the record in `m_out`.
+- **Opening handshake** (section 4, RFC 9112). Fixed limits (8 KiB, 64 fields), CRLF only, no folded lines or space before a colon, `GET` and HTTP/1.1 only, no body (Content-Length other than 0 and Transfer-Encoding are refused, so nothing is smuggled behind it). 426 with `Sec-WebSocket-Version: 13`, 403 for an Origin not listed ([same policy as WebTransport](#webtransport): `http_origin_allowed`), 404 for another path. The subprotocol (the server's order) is required, since nothing else names what the messages carry. Extensions are never taken, an offer ignored. It runs under `handshake_timeout_ns`.
+- **Replay.** A client configuration asking for early data is refused, and a server that TLS accepted 0-RTT from on `http/1.1` ends the connection (no conforming client sends it): an opening handshake that could be replayed is none.
+- **Frames** (section 5). A header is read whole and refused there: reserved bits, unknown opcodes, a mask on the wrong side, a non-minimal length, a control frame fragmented or over 125, a message over the record limit (1009, as soon as announced, also across fragments). Fragments are compacted in `m_in` in one pass and a control frame between them is served in place, so hostile fragmentation costs linear time. An unfragmented record is read where it arrived. Masks are fresh from the CSPRNG on every client frame (section 10.3); a failure to get one sends nothing.
+- **Closing.** CONNECTION_CLOSE, Close, close_notify, FIN. A QMux error is Close 1002, the idle timeout 1001 with no frame before it (S52). A peer's Close is answered with its status and is `PeerShutdown` with that status and reason; a browser's `close()` lands here. A status never sent (1005, 1006, 1015) or a reason not UTF-8 fails the connection.
+- **Ping.** Only the latest is answered (section 5.5.3), with its payload. Liveness stays QX_PING; a Pong handed on restarts the idle timer as every byte handed on does.
+- **SHA-1** is `crypto::legacy_sha1`, its one caller `Sec-WebSocket-Accept`, which RFC 6455's wire format dictates and which protects nothing (TLS beneath it does). The register keeps `cryptography: []`.
+- **What is not here.** HTTP/2 and HTTP/3 tunnels (RFC 8441, RFC 9220) need the same message stage without this connection's TLS.
+
+Evidence: `test_websocket.cpp` `[websocket]` (40 cases: RFC 6455's examples, every refusal by its status, every byte cut, both sides through real TLS, ALPN dispatch, the host over pipes), `crd-fuzz-net-websocket`, the WebSocket cases of `crd-net-qmux-interop-crate` both ways round (tokio-tungstenite 0.30 inside the `qmux` crate, over rustls), and the mutations in the [session note](../sessions/2026-11-09-4-2a-websocket.md).
 
 <a id="browsers"></a>
 ## Browser constraints

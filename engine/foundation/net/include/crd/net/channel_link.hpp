@@ -1,7 +1,7 @@
 #pragma once
 
 // crd-net -- a session's channels over whichever path carries it (4.2a; contract:
-// docs/design/network-foundation.md#channels). One reader and one writer of NET.3's frames for QUIC, QMux, the raw UDP
+// docs/design/network-foundation.md#channel-link). One reader and one writer of NET.3's frames for QUIC, QMux, the raw UDP
 // path and a WebTransport session, so a channel means the same thing on every path.
 //
 //   carrier   ChannelCarrier is what a path offers: a connection's QuicStreamSet and QuicDatagrams, or one WebTransport

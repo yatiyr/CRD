@@ -1,4 +1,4 @@
-// crd-net -- a session's channels over whichever path carries it (4.2a; docs/design/network-foundation.md#channels).
+// crd-net -- a session's channels over whichever path carries it (4.2a; docs/design/network-foundation.md#channel-link).
 
 #include <crd/memory/construct.hpp>
 #include <crd/net/channel_link.hpp>
