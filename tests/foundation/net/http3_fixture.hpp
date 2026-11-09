@@ -153,12 +153,31 @@ struct H3Seen
 // Bytes as a peer writes them.
 struct H3Wire
 {
-    u8 bytes[16384] = {};
+    static constexpr usize kCapacity = 16384U;
+
+    // On the heap: a test with dozens of these as temporaries outran win-arm64-debug's 1 MiB stack.
+    std::unique_ptr<u8[]> storage = std::make_unique<u8[]>(kCapacity);
+    u8* bytes = storage.get();
     usize size = 0U;
+
+    H3Wire() = default;
+    ~H3Wire() = default;
+    H3Wire(const H3Wire& other) { *this = other; }
+    H3Wire(H3Wire&& other) noexcept = default;
+    H3Wire& operator=(H3Wire&& other) noexcept = default;
+    H3Wire& operator=(const H3Wire& other)
+    {
+        if (this != &other)
+        {
+            std::memcpy(bytes, other.bytes, other.size);
+            size = other.size;
+        }
+        return *this;
+    }
 
     H3Wire& varint(u64 value)
     {
-        cont::WireWriter out{cont::Span<u8>(bytes + size, sizeof(bytes) - size)};
+        cont::WireWriter out{cont::Span<u8>(bytes + size, kCapacity - size)};
         put_quic_varint(out, value);
         size += out.written();
         return *this;
