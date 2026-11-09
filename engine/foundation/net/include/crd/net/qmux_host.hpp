@@ -13,7 +13,8 @@
 //   service   a connection that read, whose timer is due or that the application woke is served once per turn: its
 //             timeout, the application's on_service, then its bytes to the socket until none is left, the socket is
 //             full or its share of the turn is spent. Deadlines are a heap, so a turn costs O(log n) per connection
-//             served, never a scan.
+//             served, never a scan. A connection that just ended is served once more, Closed, so the application reads
+//             what arrived before the end.
 //   fairness  a turn takes one read of at most kQmuxHostChunkBytes, `write_bytes_per_turn` of writes per connection and
 //             `accepts_per_turn` connections; what is left is reported by the next wait(), level-triggered.
 //   writes    bytes stay in the connection's TLS output until the socket has taken them, so a partial write needs no
@@ -77,7 +78,8 @@ public:
     // A connection was accepted from `peer`, before it reads anything.
     virtual void on_accept(QuicHandle handle, QmuxConnection& connection, const Endpoint& peer) noexcept = 0;
     // The connection read, timed out or was woken: the application reads and writes its streams and datagrams; what it
-    // writes is sent right after.
+    // writes is sent right after. Once it is Closed, this comes one last time before on_closed: what arrived before the
+    // end can still be read, and nothing more can be sent.
     virtual void on_service(QuicHandle handle, QmuxConnection& connection, u64 now_ns) noexcept = 0;
     // The connection is Closed and is destroyed after this call; `transport` names how the socket failed (None when it
     // did not).

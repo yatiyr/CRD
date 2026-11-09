@@ -377,10 +377,7 @@ void QmuxHost::serve(u32 index, u64 now_ns) noexcept
     {
         connection.on_timeout(now_ns);
     }
-    if (connection.state() != QmuxState::Closed)
-    {
-        m_events.on_service(handle_of(index), connection, now_ns);
-    }
+    m_events.on_service(handle_of(index), connection, now_ns);
     const bool more = write_some(index, now_ns);
     if (connection.state() == QmuxState::Closed)
     {

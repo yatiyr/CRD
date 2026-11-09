@@ -78,7 +78,10 @@ struct Recorder final : QmuxHostEvents
     void on_service(QuicHandle handle, QmuxConnection& connection, u64) noexcept override
     {
         ++serviced;
-        if (transfer == 0U || connection.state() != QmuxState::Established || !connection.peer_parameters_known())
+        const bool ended_here = connection.state() == QmuxState::Closed;
+        closed_services += ended_here ? 1U : 0U;
+        if (transfer == 0U ||
+            (!ended_here && (connection.state() != QmuxState::Established || !connection.peer_parameters_known())))
         {
             return;
         }
@@ -118,6 +121,7 @@ struct Recorder final : QmuxHostEvents
     Flow flows[kMost];
     Endpoint last_peer;
     usize serviced = 0U;
+    usize closed_services = 0U;
 };
 
 HandshakeRules open_rules()
@@ -247,6 +251,35 @@ TEST_CASE("QmuxHost: a client and a server carry a transfer both ways and close 
     CHECK(hosts.client->counters().closed == 1U);
     CHECK(hosts.client->counters().resets_sent == 0U);
     CHECK(hosts.client->connection(handle) == nullptr);
+}
+
+TEST_CASE("QmuxHost: what arrived with the peer's close is still read", "[net][qmux-host]")
+{
+    Hosts hosts;
+    hosts.start();
+    const u64 bytes = 4096U;
+    hosts.server_events.transfer = bytes;
+    const QuicHandle handle = hosts.connect();
+    hosts.establish(handle);
+    QmuxConnection* const connection = hosts.client->connection(handle);
+    REQUIRE(connection != nullptr);
+    u64 id = 0U;
+    REQUIRE(connection->streams().open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    static_cast<void>(write_pattern(connection->streams(), id, written, bytes, 3U));
+    REQUIRE(written == bytes);
+    hosts.client->wake(handle);
+    static_cast<void>(hosts.client->poll(0U));
+    connection->close(9U, ConstSpan<u8>(), hosts.clock.now);
+    hosts.client->wake(handle);
+    static_cast<void>(hosts.client->poll(0U));
+    hosts.turns(4U);
+
+    REQUIRE(hosts.server_events.ended_count == 1U);
+    CHECK(hosts.server_events.ended[0].info.reason == QmuxCloseReason::Peer);
+    CHECK(hosts.server_events.ended[0].info.error_code == 9U);
+    CHECK(hosts.server_events.closed_services == 1U);
+    CHECK(hosts.server_events.flows[0].read == bytes);
 }
 
 TEST_CASE("QmuxHost: many connections finish at once, and their slots are reused under new handles", "[net][qmux-host]")
@@ -795,10 +828,10 @@ TEST_CASE("QmuxHost: a configuration out of range or an allocator's refusal make
     config.connection.tls = &hosts.identity.client; // a server's context is needed to accept
     CHECK_FALSE(makes(config));
     {
-        const QmuxHost host(hosts.allocator, hosts.server_poller, hosts.clock, nullptr, hosts.server_events,
-                            hosts.server_config);
+        QmuxHost host(hosts.allocator, hosts.server_poller, hosts.clock, nullptr, hosts.server_events,
+                      hosts.server_config);
         CHECK_FALSE(host.ready()); // accepting needs the handshake rate
-        CHECK(const_cast<QmuxHost&>(host).poll(0U) == kNeverNs);
+        CHECK(host.poll(0U) == kNeverNs);
     }
 
     bool made = false;
@@ -908,9 +941,9 @@ TEST_CASE("QmuxHost: clients and a server carry transfers over real TCP, small b
     TcpHosts hosts(small);
     hosts.client_events.transfer = 512U * 1024U;
     hosts.server_events.transfer = 512U * 1024U;
-    constexpr u32 kConnections = 8U;
+    const u32 connections = 8U;
     SocketError error = SocketError::None;
-    QuicHandle handles[kConnections];
+    QuicHandle handles[connections];
     for (QuicHandle& handle : handles)
     {
         handle = hosts.client->connect(QmuxConnect{hosts.listener.local_endpoint(), &hosts.identity.client},
@@ -919,7 +952,7 @@ TEST_CASE("QmuxHost: clients and a server carry transfers over real TCP, small b
     }
     const auto finished = [&hosts]
     {
-        for (u32 slot = 0U; slot < kConnections; ++slot)
+        for (u32 slot = 0U; slot < connections; ++slot)
         {
             if (!hosts.client_events.done(slot) || !hosts.server_events.done(slot))
             {
@@ -933,7 +966,7 @@ TEST_CASE("QmuxHost: clients and a server carry transfers over real TCP, small b
         hosts.turns(1U);
     }
     REQUIRE(finished());
-    CHECK(hosts.server->counters().accepted == kConnections);
+    CHECK(hosts.server->counters().accepted == connections);
     for (const QuicHandle& handle : handles)
     {
         hosts.client->connection(handle)->close(0U, ConstSpan<u8>(), hosts.clock.monotonic_ns());
@@ -945,9 +978,9 @@ TEST_CASE("QmuxHost: clients and a server carry transfers over real TCP, small b
     }
     CHECK(hosts.client->live() == 0U);
     CHECK(hosts.server->live() == 0U);
-    CHECK(hosts.client_events.ended_count == kConnections);
-    CHECK(hosts.server_events.ended_count == kConnections);
-    for (usize at = 0U; at < kConnections; ++at)
+    CHECK(hosts.client_events.ended_count == connections);
+    CHECK(hosts.server_events.ended_count == connections);
+    for (usize at = 0U; at < connections; ++at)
     {
         CHECK(hosts.client_events.ended[at].info.reason == QmuxCloseReason::Local);
         CHECK(hosts.client_events.ended[at].transport == SocketError::None);
