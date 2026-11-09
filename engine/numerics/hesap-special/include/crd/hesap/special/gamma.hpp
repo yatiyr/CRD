@@ -13,9 +13,10 @@
 // Determinism: crd::math::exp/log/sin give run-twice + cross-thread bit-identity on a fixed libm (the hesap moat; the
 // no-std-math cross-platform guard is scoped to engine/numerics/hesap, NOT this sibling — ADR-0063 §2).
 
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
-
 #include <crd/math/cmath.hpp>
+
 #include <limits>
 #include <type_traits>
 
@@ -40,14 +41,8 @@ inline constexpr T kStirlingCut = static_cast<T>(12);
 // The recurrence multiplies the shift factors into one product (Γ(x)=Γ(x+n)/∏(x+k)) so the whole shift costs a
 // SINGLE log instead of n logs — ~2× faster for the small-x bulk, and the same shape the SIMD batch vectorizes.
 template <Real T>
-[[nodiscard]] T lgamma_pos(T x) noexcept
+[[nodiscard]] CRD_FORCEINLINE T lgamma_shifted(T x, T prod) noexcept
 {
-    T prod = static_cast<T>(1);
-    while (x < kStirlingCut<T>)
-    {
-        prod *= x; // lgamma(x) = lgamma(x+1) − log(x) ⇒ subtract log(∏(x+k)) once
-        x += static_cast<T>(1);
-    }
     const T accum = -crd::math::log(prod);
     const T inv = static_cast<T>(1) / x;
     const T inv2 = inv * inv;
@@ -59,6 +54,104 @@ template <Real T>
                                inv2 * (static_cast<T>(-1.0 / 1680.0) + inv2 * static_cast<T>(1.0 / 1188.0)))));
     const T stirling = (x - static_cast<T>(0.5)) * crd::math::log(x) - x + kLnSqrt2Pi<T> + series;
     return accum + stirling;
+}
+
+// The same from x < cut: shifted up past the cut first, the product of the shifts carried to lgamma_shifted.
+template <Real T>
+[[nodiscard]] T lgamma_pos_from(T x, T cut) noexcept
+{
+    T prod = static_cast<T>(1);
+    while (x < cut)
+    {
+        prod *= x; // lgamma(x) = lgamma(x+1) − log(x) ⇒ subtract log(∏(x+k)) once
+        x += static_cast<T>(1);
+    }
+    return lgamma_shifted(x, prod);
+}
+
+// lgamma(x) for x > 0. In single precision the shifted Stirling term, (x−½)·ln x − x at x ≈ 12, is 17 to 30 and the few
+// ulps of its rounding (up to 3e-6) outweigh ln Γ(x) near its zeros at 1 and 2 and for small x, where the result is of
+// order one and gammainc_q = 1 − P below a+1 reads it with a gain of 1/Q. Below the cut the whole evaluation is done in
+// double, with the argument shifted only up to 8 (the series' next term is 2e-13 there, far below single precision, and
+// the shorter recurrence makes it faster than single precision shifted to 12), and rounded once; from the cut on
+// nothing cancels and single precision is exact to an ulp.
+template <Real T>
+[[nodiscard]] T lgamma_pos(T x) noexcept
+{
+    if constexpr (sizeof(T) < sizeof(double))
+    {
+        // One test of the cut serves both sides: below it the double evaluation, from it no shift at all.
+        if (x < kStirlingCut<T>)
+        {
+            return static_cast<T>(lgamma_pos_from<double>(static_cast<double>(x), 8.0));
+        }
+        return lgamma_shifted(x, static_cast<T>(1));
+    }
+    else
+    {
+        return lgamma_pos_from(x, kStirlingCut<T>);
+    }
+}
+
+// Smallest argument from which the Stirling correction below is exact to the working precision (its first omitted
+// term is 1.9e-3/z^11, DLMF 5.11.1).
+template <Real T>
+inline constexpr T kStirlingMin = static_cast<T>(sizeof(T) > sizeof(float) ? 15 : 8);
+
+// ln Γ(z) − [(z−½)·ln z − z + ½·ln 2π] = Σ B_{2k}/(2k(2k−1)) z^{1−2k} (DLMF 5.11.1), the first five terms.
+template <Real T>
+[[nodiscard]] T stirling_correction(T z) noexcept
+{
+    const T inv = static_cast<T>(1) / z;
+    const T inv2 = inv * inv;
+    return inv * (static_cast<T>(1.0 / 12.0) +
+                  inv2 * (static_cast<T>(-1.0 / 360.0) +
+                          inv2 * (static_cast<T>(1.0 / 1260.0) +
+                                  inv2 * (static_cast<T>(-1.0 / 1680.0) + inv2 * static_cast<T>(1.0 / 1188.0)))));
+}
+
+// ln Γ(1+m) = −γ·m + Σ_{k≥2} (−1)^k ζ(k)·m^k/k (DLMF 5.7.3) for 0 < m ≤ 1/20, where twelve terms reach 4e-19. The
+// shifted Stirling evaluation of lgamma_pos adds terms of size 20 and carries an absolute error of a few 1e-15, which
+// for the result of a small shape, ln Γ(m) = ln Γ(1+m) − ln m = 9.2 at m = 1e-4, is 4 ulps.
+template <Real T>
+[[nodiscard]] T lgamma_1p_small(T m) noexcept
+{
+    constexpr double zeta_over_k[12] = {1.6449340668482264 / 2,  1.2020569031595943 / 3, 1.0823232337111382 / 4,
+                                        1.0369277551433699 / 5,  1.0173430619844491 / 6, 1.0083492773819228 / 7,
+                                        1.0040773561979443 / 8,  1.0020083928260822 / 9, 1.0009945751278181 / 10,
+                                        1.0004941886041195 / 11, 1.000246086553308 / 12, 1.0001227133475785 / 13};
+    const T u = -m;
+    T acc = static_cast<T>(0);
+    for (int k = 13; k >= 2; --k)
+    {
+        acc = acc * u + static_cast<T>(zeta_over_k[k - 2]);
+    }
+    return static_cast<T>(-0.57721566490153286) * m + u * u * acc;
+}
+
+// ln B(a,b) for 0 < small ≤ big, big ≥ kStirlingMin, without the cancellation of lnΓ(a) + lnΓ(b) − lnΓ(a+b), whose
+// terms are of size s·ln s (s = a+b) and whose rounding (a few ulps of that) is amplified by the exponential of a
+// prefactor. Stirling's formula (DLMF 5.11.3, with the correction S above) for every gamma function that is large
+// gives, with both shapes large,
+//   ln B = ½·ln 2π − a·ln(1+b/a) − b·ln(1+a/b) − ½·ln(a·b/s) + S(a) + S(b) − S(s),
+// whose terms are of size s only, and with one small shape m and the other, L, large (lnΓ(m) kept, the ratio of the
+// other two expanded: lnΓ(L+m) − lnΓ(L) = m·ln L + (L+m−½)·ln(1+m/L) − m + S(L+m) − S(L))
+//   ln B = lnΓ(m) − m·ln L − (L+m−½)·ln(1+m/L) + m − S(L+m) + S(L).
+template <Real T>
+[[nodiscard]] T lbeta_stirling(T small, T big) noexcept
+{
+    if (small >= kStirlingMin<T>)
+    {
+        const T s = small + big;
+        return kLnSqrt2Pi<T> - small * crd::math::log1p(big / small) - big * crd::math::log1p(small / big) -
+               static_cast<T>(0.5) * crd::math::log(small * (big / s)) + stirling_correction(small) +
+               stirling_correction(big) - stirling_correction(s);
+    }
+    const T ln_gamma_small =
+        (small <= static_cast<T>(0.05)) ? lgamma_1p_small(small) - crd::math::log(small) : lgamma_pos(small);
+    return ln_gamma_small - small * crd::math::log(big) -
+           (big + small - static_cast<T>(0.5)) * crd::math::log1p(small / big) + small -
+           stirling_correction(big + small) + stirling_correction(big);
 }
 } // namespace detail
 
@@ -245,10 +338,43 @@ template <Real T>
     return accum + sign * (term0 + term1 + tail);
 }
 
-// ln B(a,b) = lnΓ(a) + lnΓ(b) − lnΓ(a+b).
-template <Real T>
-[[nodiscard]] T lbeta(T a, T b) noexcept
+namespace detail
 {
+// ln B(a,b) for a shape of at least kStirlingMin: the Stirling form for 0 < the smaller and a finite larger shape (in
+// double for a single-precision pair), the sum of three lgamma terms for the rest of the plane. Out of line, so that
+// lbeta of the small bulk stays as short as the sum it falls through to.
+template <Real T>
+CRD_NOINLINE T lbeta_large(T a, T b) noexcept
+{
+    const T big = (a < b) ? b : a;
+    const T small = (a < b) ? a : b;
+    if (small > static_cast<T>(0) && big >= kStirlingMin<T> && big < std::numeric_limits<T>::infinity())
+    {
+        if constexpr (sizeof(T) < sizeof(double))
+        {
+            return static_cast<T>(lbeta_stirling<double>(static_cast<double>(small), static_cast<double>(big)));
+        }
+        else
+        {
+            return lbeta_stirling(small, big);
+        }
+    }
+    return lgamma(a) + lgamma(b) - lgamma(a + b);
+}
+} // namespace detail
+
+// ln B(a,b) = lnΓ(a) + lnΓ(b) − lnΓ(a+b); from a shape of kStirlingMin on (and 0 < the other) the three terms would
+// cancel to a result of size s, so the Stirling form of detail::lbeta_stirling replaces them (in double for a single
+// precision pair, whose float terms of size 144 leave an absolute error of 1e-5 on a result of 7). Forced inline, which
+// keeps the call of the small bulk as short as the sum it was (a call of lbeta cost it 3 %).
+template <Real T>
+[[nodiscard]] CRD_FORCEINLINE T lbeta(T a, T b) noexcept
+{
+    // Either shape large: two comparisons joined without a branch, one branch (not taken by the small bulk) after them.
+    if ((a >= detail::kStirlingMin<T>) | (b >= detail::kStirlingMin<T>))
+    {
+        return detail::lbeta_large(a, b);
+    }
     return lgamma(a) + lgamma(b) - lgamma(a + b);
 }
 

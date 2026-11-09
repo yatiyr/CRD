@@ -3,6 +3,7 @@
 
 Run: python3 tests/numerics/hesap-special/gen_special_refs.py > tests/numerics/hesap-special/special_refs.inc
 """
+import mpmath as mp
 import numpy as np
 from scipy import special as sp
 
@@ -10,6 +11,72 @@ from scipy import special as sp
 def emit(name, arr):
     vals = ", ".join(f"{float(x):.17g}" for x in np.asarray(arr, dtype=float).ravel())
     print(f"inline const double ref_{name}[] = {{{vals}}};")
+
+
+def exact_gamma_p(a, x):
+    """P(a,x) from its power series at 50 digits (scipy's own tails are good to only 1e-8 for shapes above 1e6)."""
+    mp.mp.dps = 50
+    a, x = mp.mpf(a), mp.mpf(x)
+    term = 1 / a
+    total = term
+    n = 0
+    while True:
+        n += 1
+        term *= x / (a + n)
+        total += term
+        if term < total * mp.mpf(10) ** -45 and n > x - a:
+            break
+    return total * mp.exp(a * mp.log(x) - x - mp.loggamma(a))
+
+
+def exact_beta_i(a, b, x):
+    """I_x(a,b) = x^a (1-x)^b / (a B(a,b)) * 2F1(a+b, 1; a+1; x), the hypergeometric series summed at 80 digits."""
+    mp.mp.dps = 80
+    a, b, x = mp.mpf(a), mp.mpf(b), mp.mpf(x)
+    term = mp.mpf(1)
+    total = term
+    n = 0
+    while True:
+        term *= (a + b + n) / (a + 1 + n) * x
+        n += 1
+        total += term
+        if term < total * mp.mpf(10) ** -50 and (a + b) * x < a + n + 1:
+            break
+    log_front = a * mp.log(x) + b * mp.log1p(-x) - (mp.loggamma(a) + mp.loggamma(b) - mp.loggamma(a + b)) - mp.log(a)
+    return total * mp.exp(log_front)
+
+
+def exact_beta_i_near_one(a, b, x):
+    """I_x(a,b) = 1 - I_{1-x}(b,a) for x close to 1, the series of the small side in y = 1 - x summed at 80 digits."""
+    mp.mp.dps = 80
+    a, b, y = mp.mpf(a), mp.mpf(b), 1 - mp.mpf(x)
+    term = mp.mpf(1)
+    total = term
+    n = 0
+    while True:
+        term *= (a + b + n) / (b + 1 + n) * y
+        n += 1
+        total += term
+        if abs(term) < total * mp.mpf(10) ** -50 and (a + b) * y < b + n + 1:
+            break
+    log_front = b * mp.log(y) + a * mp.log1p(-y) - (mp.loggamma(a) + mp.loggamma(b) - mp.loggamma(a + b)) - mp.log(b)
+    return 1 - total * mp.exp(log_front)
+
+
+def exact_beta_inv(a, b, p, guess):
+    """The x with I_x(a,b) = p for a, b >= 1, by Newton's method on ln I (concave and increasing) in the exact sums."""
+    mp.mp.dps = 80
+    am1, bm1 = mp.mpf(a) - 1, mp.mpf(b) - 1
+    lbeta = mp.loggamma(mp.mpf(a)) + mp.loggamma(mp.mpf(b)) - mp.loggamma(mp.mpf(a) + mp.mpf(b))
+    log_p = mp.log(mp.mpf(p))
+    x = mp.mpf(guess)
+    for _ in range(80):
+        tail = exact_beta_i(a, b, x)
+        step = (mp.log(tail) - log_p) * tail / mp.exp(am1 * mp.log(x) + bm1 * mp.log1p(-x) - lbeta)
+        x -= step
+        if abs(step) < mp.mpf(10) ** -40 * x:
+            break
+    return x
 
 
 def main():
@@ -60,6 +127,128 @@ def main():
         for p in [0.05, 0.25, 0.5, 0.75, 0.95]:
             iba.append(a); ibb.append(b); ibp.append(p); iby.append(sp.betaincinv(a, b, p))
     emit("betaincinv_a", iba); emit("betaincinv_b", ibb); emit("betaincinv_p", ibp); emit("betaincinv_y", iby)
+
+    # ---- incomplete gamma/beta: large shapes and extreme tails (the series/fraction bound, the prefactor's
+    # cancellation, the upper-tail and bracketed inverses) ----
+    bga = [1e4, 1e4, 1e5, 1e5, 1e5, 1e5, 1e6]
+    bgx = [1e4, 10100.0, 1e5, 100001.0, 100300.0, 99700.0, 1e6]
+    emit("gammainc_big_a", bga); emit("gammainc_big_x", bgx)
+    emit("gammainc_big_p", [sp.gammainc(a, x) for a, x in zip(bga, bgx)])
+    emit("gammainc_big_q", [sp.gammaincc(a, x) for a, x in zip(bga, bgx)])
+    tpa = [0.001, 0.5, 2.0, 10.0, 100.0, 1000.0]
+    tpp = [1 - 1e-12, 1 - 1e-12, 1 - 1e-12, 1 - 1e-9, 1 - 1e-12, 1 - 1e-12]
+    emit("gammaincinv_tail_a", tpa); emit("gammaincinv_tail_p", tpp)
+    emit("gammaincinv_tail_y", [sp.gammaincinv(a, p) for a, p in zip(tpa, tpp)])
+    tqa = [0.001, 0.5, 3.0, 100.0, 2.0, 0.5, 1000.0, 1.0]
+    tqq = [1e-12, 1e-9, 1e-12, 1e-12, 1e-30, 1e-300, 1e-300, 5e-324]
+    emit("gammainccinv_tail_a", tqa); emit("gammainccinv_tail_q", tqq)
+    emit("gammainccinv_tail_y", [sp.gammainccinv(a, q) for a, q in zip(tqa, tqq)])
+    bba = [100.0, 100.0, 1000.0, 10000.0, 10000.0, 1000.0, 50.0, 1e5, 1e5]
+    bbb = [0.01, 0.1, 0.5, 0.001, 0.1, 1.0, 0.001, 1e5, 2.0]
+    bbx = [0.9900990099009901, 0.99, 0.9990000000000001, 0.9999, 0.99989, 0.999, 0.99, 0.5, 0.99999]
+    emit("betainc_big_a", bba); emit("betainc_big_b", bbb); emit("betainc_big_x", bbx)
+    emit("betainc_big_y", [sp.betainc(a, b, x) for a, b, x in zip(bba, bbb, bbx)])
+    tba = [1.0, 10.0, 100.0, 1.0, 1000.0, 0.001, 1.0, 50.0]
+    tbb = [1000.0, 1.0, 1.0, 10000.0, 10000.0, 50.0, 100.0, 1.0]
+    tbp = [1 - 1e-12, 1e-12, 1e-9, 1 - 1e-9, 1 - 1e-12, 1 - 1e-12, 1 - 1e-12, 1e-12]
+    emit("betaincinv_tail_a", tba); emit("betaincinv_tail_b", tbb); emit("betaincinv_tail_p", tbp)
+    emit("betaincinv_tail_y", [sp.betaincinv(a, b, p) for a, b, p in zip(tba, tbb, tbp)])
+
+    # ---- incomplete gamma/beta: huge shapes (the uniform expansion), the far lower tail of the inverse, the beta
+    # prefactor far from its mode, and single precision at a shape of 0.001 ----
+    sq = lambda a, z: a + z * float(np.sqrt(a))
+    hga = [1e6, 1e6, 1e7, 1e7, 1e8, 1e8, 1e8]
+    hgx = [sq(1e6, -6.0), 1e6, sq(1e7, -2.0), sq(1e7, 3.0), sq(1e8, -4.0), 1e8, sq(1e8, 2.0)]
+    emit("gammainc_huge_a", hga); emit("gammainc_huge_x", hgx)
+    emit("gammainc_huge_p", [float(exact_gamma_p(a, x)) for a, x in zip(hga, hgx)])
+    emit("gammainc_huge_q", [float(1 - exact_gamma_p(a, x)) for a, x in zip(hga, hgx)])
+    # at x = a scipy's Temme expansion agrees with the series to the last digit, up to shapes the series cannot reach
+    cga = [1e9, 1e10, 1e12, 1e15, 1e30, 1e300]
+    emit("gammainc_centre_a", cga)
+    emit("gammainc_centre_p", [sp.gammainc(a, a) for a in cga])
+    emit("gammainc_centre_q", [sp.gammaincc(a, a) for a in cga])
+    lpa = [2.0, 3.0, 5.0, 7.5, 7.5, 10.0, 20.0, 50.0, 100.0, 399.0, 400.0, 1000.0, 2.0, 1000.0]
+    lpp = [1e-20, 1e-30, 1e-60, 1e-14, 1e-16, 1e-20, 1e-60, 1e-60, 1e-200, 1e-300, 1e-300, 1e-300, 1e-30, 1e-100]
+    emit("gammaincinv_low_a", lpa); emit("gammaincinv_low_p", lpp)
+    emit("gammaincinv_low_y", [sp.gammaincinv(a, p) for a, p in zip(lpa, lpp)])
+    hia = [1e7, 1e7, 1e8, 1e8, 1e9]
+    hip = [1e-8, 1e-30, 1e-12, 0.3, 0.7]
+    emit("gammaincinv_huge_a", hia); emit("gammaincinv_huge_p", hip)
+    pfa = [15.0, 15.0, 20.0, 15.0, 15.0, 15.0, 128.0, 300.0, 20.0, 20.0, 15.0, 15.0]
+    pfb = [128.0, 128.0, 200.0, 1e5, 128.0, 128.0, 128.0, 129.0, 700.0, 700.0, 512.0, 2000.0]
+    pfx = [1e-20, 1e-16, 1e-16, 1e-20, 1e-12, 1e-10, 1e-30, 1e-120, 1e-14, 1e-9, 1e-12, 1e-17]
+    emit("betainc_far_a", pfa); emit("betainc_far_b", pfb); emit("betainc_far_x", pfx)
+    emit("betainc_far_y", [float(exact_beta_i(a, b, x)) for a, b, x in zip(pfa, pfb, pfx)])
+    hba = [1e7, 1e7, 1e8, 1e8, 1e8, 1e5, 1e3, 2e3, 1e8]
+    hbb = [1e7, 1e7, 1e8, 1e8, 1e8, 1e7, 1e8, 2e6, 1e8]
+    hbs = [0.0, 3.0, 0.0, 1.0, -3.0, 1.0, 2.0, -1.0, 6.0]  # x at the mode plus this many standard deviations
+    hbx = []
+    for a, b, z in zip(hba, hbb, hbs):
+        s = a + b
+        hbx.append(a / s + z * float(np.sqrt(a * b / (s * s * (s + 1)))))
+    emit("betainc_huge_a", hba); emit("betainc_huge_b", hbb); emit("betainc_huge_x", hbx)
+    emit("betainc_huge_y", [float(exact_beta_i(a, b, x)) for a, b, x in zip(hba, hbb, hbx)])
+    f32a = [0.001, 0.001, 0.001, 0.001, 0.01]
+    f32x = [1.0, 0.5, 0.1, 2.0, 1.0]
+    emit("gammainc_f32_a", f32a); emit("gammainc_f32_x", f32x)
+    emit("gammainc_f32_q", [float(1 - exact_gamma_p(float(np.float32(a)), float(np.float32(x))))
+                            for a, x in zip(f32a, f32x)])
+
+    # ---- review round 2: the beta inverse far below (and, mirrored, above) a root of a shape well above 1, the beta
+    # between the expansions and at shapes of a few hundred, ln B at large shapes, single-precision inverses at small
+    # shapes ----
+    lia = [188.486, 77.6285, 127.196, 29.355, 20.2134, 235.035, 1000.0, 600.0]
+    lib = [1.17711, 1.19098, 1.63807, 1.0243, 1.17001, 1.23051, 2.5, 7.0]
+    lip = [1.009e-20, 1.818e-41, 3.714e-49, 5.297e-52, 1.119e-75, 1.833e-40, 1e-100, 1e-250]
+    emit("betaincinv_lowtail_a", lia); emit("betaincinv_lowtail_b", lib); emit("betaincinv_lowtail_p", lip)
+    emit("betaincinv_lowtail_y",
+         [float(exact_beta_inv(a, b, p, sp.betaincinv(a, b, p))) for a, b, p in zip(lia, lib, lip)])
+    # the mirror: p = 1 - q with q a power of two (1 - p is then exact), the root being 1 - the root of I_y(b, a) = q
+    uia = [1.17711, 1.19098, 1.63807, 1.0243, 7.0]
+    uib = [188.486, 77.6285, 127.196, 29.355, 600.0]
+    uiq = [2.0 ** -45, 2.0 ** -50, 2.0 ** -42, 2.0 ** -48, 2.0 ** -40]
+    emit("betaincinv_uptail_a", uia); emit("betaincinv_uptail_b", uib)
+    emit("betaincinv_uptail_p", [1.0 - q for q in uiq])
+    emit("betaincinv_uptail_y", [float(1 - exact_beta_inv(b, a, q, 1 - sp.betaincinv(a, b, 1.0 - q)))
+                                 for a, b, q in zip(uia, uib, uiq)])
+    gpa = [999.0, 782.468, 898.677, 900.828, 624.139, 800.0, 956908.69, 1215.1, 500.0, 300.0, 150.0]
+    gpb = [9e5, 452110.976, 771245.28, 755430.82, 254401.52, 6e5, 985.88, 360028.7, 1e5, 4e4, 3e4]
+    gpz = [0.5, None, None, None, None, 1.0, None, None, 0.0, -1.0, 2.0]   # None: the review's own x, below
+    gpv = {1: 0.0017314936376563927, 2: 0.0011652998038468065, 3: 0.001193508686872927, 4: 0.002452163819711415,
+           6: 0.9989145759008199, 7: 0.003369132349425092}
+    gpx = []
+    for i, (a, b, z) in enumerate(zip(gpa, gpb, gpz)):
+        s = a + b
+        gpx.append(gpv[i] if z is None else a / s + z * float(np.sqrt(a * b / (s * s * (s + 1)))))
+    emit("betainc_gap_a", gpa); emit("betainc_gap_b", gpb); emit("betainc_gap_x", gpx)
+    emit("betainc_gap_y", [float(exact_beta_i(a, b, x)) for a, b, x in zip(gpa, gpb, gpx)])
+    mda = [608.7478, 769.212, 1004.946, 828.553, 600.0, 300.0, 900.0]
+    mdb = [850.2923, 912.908, 605.844, 645.18, 15.5, 16.5, 40.0]
+    mdx = [0.41693868866481104, 0.45699352261824955, 0.6242582684214677, 0.5617261780626444, 0.97, 0.9, 0.95]
+    emit("betainc_mid_a", mda); emit("betainc_mid_b", mdb); emit("betainc_mid_x", mdx)
+    emit("betainc_mid_y", [float(exact_beta_i(a, b, x)) for a, b, x in zip(mda, mdb, mdx)])
+    # a small shape b with x within 1e-3 of 1: I is below 1e-2, and ln B (lnGamma(b) of 9 at b = 1e-4) rounds to 4 ulps
+    eda = [653.3723421882821, 869.43, 846.614, 565.699, 723.878, 495.234, 590.637]
+    edb = [0.00021795166153206036, 0.0267, 0.000766, 0.000146, 0.00339, 0.00376, 0.125]
+    edx = [0.9999125062211401, 0.999999, 0.999994, 0.999675, 0.999792, 0.999961, 0.99939]
+    emit("betainc_edge_a", eda); emit("betainc_edge_b", edb); emit("betainc_edge_x", edx)
+    emit("betainc_edge_y", [float(exact_beta_i_near_one(a, b, x)) for a, b, x in zip(eda, edb, edx)])
+    lba = [608.7478, 15.0, 100000.0, 0.001, 1e6, 1000.0, 20.0, 1e300]
+    lbb = [850.2923, 128.0, 15.0, 50.0, 1e6, 1000.5, 20.5, 3.0]
+    mp.mp.dps = 400  # lnGamma(1e300) is 7e302: the difference needs its 300 digits
+    emit("lbeta_big_a", lba); emit("lbeta_big_b", lbb)
+    emit("lbeta_big_y", [float(mp.loggamma(mp.mpf(a)) + mp.loggamma(mp.mpf(b)) - mp.loggamma(mp.mpf(a) + mp.mpf(b)))
+                         for a, b in zip(lba, lbb)])
+    f32a = [0.001, 0.001, 0.01, 0.1, 0.01, 0.001, 0.001, 0.001]
+    f32b = [50.0, 5.0, 50.0, 50.0, 10.0, 2.0, 0.1, 10.0]
+    f32p = [0.999, 0.999, 0.99, 0.95, 0.99, 0.999, 0.99, 0.999]
+    f32 = lambda v: float(np.float32(v))
+    emit("betaincinv_f32_a", [f32(v) for v in f32a]); emit("betaincinv_f32_b", [f32(v) for v in f32b])
+    emit("betaincinv_f32_p", [f32(v) for v in f32p])
+    emit("betaincinv_f32_y", [sp.betaincinv(f32(a), f32(b), f32(p)) for a, b, p in zip(f32a, f32b, f32p)])
+    gia, gip = [f32(0.001), f32(0.01), f32(0.05), f32(0.1)], [f32(0.999), f32(0.99), f32(0.99), f32(0.95)]
+    emit("gammaincinv_f32_a", gia); emit("gammaincinv_f32_p", gip)
+    emit("gammaincinv_f32_y", [sp.gammaincinv(a, p) for a, p in zip(gia, gip)])
 
     # ---- erf family ----
     ex = [-3.0, -2.3, -1.0, -0.5, 0.0, 0.1, 0.5, 1.0, 2.0, 3.0, 5.0]
