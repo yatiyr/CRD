@@ -17,7 +17,7 @@ CI first: every failed job read in run 42670207777 (0ef76019) is the other owner
 ## Found and fixed in `Http2Connection`
 
 - h2spec 5.1/12: a frame other than WINDOW_UPDATE, RST_STREAM or PRIORITY on a stream both ends finished was a stream error; section 5.1 asks a connection error STREAM_CLOSED. The closed ring now keeps how each stream closed: this side's reset (dropped), the peer's reset (stream error), both finished (connection error).
-- h2spec 6.3/2, a race seen once in nine runs: PRIORITY of the wrong size arriving after the response finished was dropped. Sections 6.3 and 6.9 make it, a self-dependency and a zero WINDOW_UPDATE stream errors whatever the state, so a closed stream answers RST_STREAM, charged to `resets`.
+- h2spec 6.3/2, a race seen in the third of the first runs: PRIORITY of the wrong size arriving after the response finished was dropped. Sections 6.3 and 6.9 make it, a self-dependency and a zero WINDOW_UPDATE stream errors whatever the state, so a closed stream answers RST_STREAM, charged to `resets`.
 
 ## Evidence
 
