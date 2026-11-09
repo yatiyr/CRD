@@ -670,8 +670,11 @@ public:
     // kTlsMaxBufferedBytes (nothing taken); NotReady in Idle and Failed; Closed after close_notify either way.
     [[nodiscard]] TlsError receive(cont::ConstSpan<u8> bytes) noexcept;
 
-    // The outgoing bytes waiting (records and alerts); take() moves up to out.size() of them into `out`.
+    // The outgoing bytes waiting (records and alerts); take() moves up to out.size() of them into `out`. outgoing()
+    // shows them in place, valid until the session's next call: a transport writes them from there and take()s only
+    // what it wrote, so what it could not write stays here and needs no second buffer.
     [[nodiscard]] usize    pending() const noexcept;
+    [[nodiscard]] cont::ConstSpan<u8> outgoing() const noexcept;
     [[nodiscard]] TlsError take(cont::Span<u8> out, usize& written) noexcept;
 
     // Established only. send() protects all of `plaintext` into the outgoing bytes or nothing (Full when they would

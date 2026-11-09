@@ -74,6 +74,13 @@ crd_fuzz_target(crd-fuzz-net-quic-datagram
 crd_fuzz_target(crd-fuzz-net-qmux
     SOURCES fuzz_qmux.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-qmux")
 
+# The TCP and TLS path's host (4.2a).
+#   crd-fuzz-net-qmux-host   a server and a client host over pipes under any connects, resets, cuts, stalls, raw bytes,
+#                            clock steps, closes, wakes, stale handles and accept failures: every connection reported
+#                            closed once, its handle stale from then, every count consistent and all memory returned.
+crd_fuzz_target(crd-fuzz-net-qmux-host
+    SOURCES fuzz_qmux_host.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-qmux-host")
+
 # A client's ticket store (4.2a).
 #   crd-fuzz-net-ticket-cache   any keeps, takes and clock steps under any bounds, against a model of the contract:
 #                               every ticket returned byte-exact and once, the newest of its binding, the size and

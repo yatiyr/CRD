@@ -15,6 +15,7 @@ add_executable(crd-net-tests
     test_io_loop.cpp
     test_negotiation.cpp
     test_qmux.cpp
+    test_qmux_host.cpp
     test_quic_client.cpp
     test_quic_connection.cpp
     test_quic_datagram.cpp
@@ -27,6 +28,7 @@ add_executable(crd-net-tests
     test_quic_transport_parameters.cpp
     test_register_ids.cpp
     test_state_hash.cpp
+    test_stream_poller.cpp
     test_stream_socket.cpp
     test_ticket_cache.cpp
     test_udp.cpp

@@ -126,6 +126,9 @@ public:
     [[nodiscard]] bool wants_write(u64 now_ns) const noexcept;
     // Assembles what is due and moves up to out.size() bytes to send into `out`; the bytes it wrote.
     [[nodiscard]] usize take(cont::Span<u8> out, u64 now_ns) noexcept;
+    // Assembles what is due and shows the bytes to send in place, valid until the next call: a host writes them to its
+    // transport and take()s what the transport accepted, so a partial write needs no second buffer.
+    [[nodiscard]] cont::ConstSpan<u8> outgoing(u64 now_ns) noexcept;
     // True once this side has closed and every byte has been taken: time to shut the transport's sending side.
     [[nodiscard]] bool send_finished() const noexcept;
 

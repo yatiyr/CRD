@@ -586,6 +586,16 @@ usize QmuxConnection::take(cont::Span<u8> out, u64 now_ns) noexcept
     return written;
 }
 
+cont::ConstSpan<u8> QmuxConnection::outgoing(u64 now_ns) noexcept
+{
+    if (m_transport_over || m_state == QmuxState::Idle)
+    {
+        return {};
+    }
+    produce(now_ns);
+    return m_tls.outgoing();
+}
+
 bool QmuxConnection::send_finished() const noexcept
 {
     return m_send_shut && m_tls.pending() == 0U;

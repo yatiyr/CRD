@@ -23,7 +23,7 @@ QuicHost::QuicHost(memory::IAllocator& allocator, DatagramSocket& socket, Connec
                    const crypto::QuicResetKey& reset, QuicHostEvents& events, const QuicHostLimits& limits) noexcept
     : m_allocator(allocator), m_socket(socket), m_routes(routes), m_reset(reset), m_events(events), m_limits(limits),
       m_peer_tokens(allocator, limits_valid(limits) ? limits.connections * kQuicHostTokensPerConnection : 1U),
-      m_queue(allocator, limits.send_slots, limits.datagram_bytes)
+      m_queue(allocator, limits.send_slots, limits.datagram_bytes), m_heap(allocator)
 {
 }
 
@@ -38,9 +38,8 @@ bool QuicHost::open_pool() noexcept
     Slot* const slots = memory::try_construct_array<Slot>(m_allocator, count);
     QuicConnection* const storage = memory::try_allocate_array<QuicConnection>(m_allocator, usize{count} + 1U);
     QuicRoutedIds* const ids = memory::try_allocate_array<QuicRoutedIds>(m_allocator, count);
-    u32* const heap = memory::try_construct_array<u32>(m_allocator, count);
     u32* const due = memory::try_construct_array<u32>(m_allocator, count);
-    if (slots == nullptr || storage == nullptr || ids == nullptr || heap == nullptr || due == nullptr)
+    if (slots == nullptr || storage == nullptr || ids == nullptr || due == nullptr || !m_heap.init(count))
     {
         memory::destroy_array(m_allocator, slots, count);
         if (storage != nullptr)
@@ -51,7 +50,6 @@ bool QuicHost::open_pool() noexcept
         {
             memory::deallocate_array(m_allocator, ids);
         }
-        memory::destroy_array(m_allocator, heap, count);
         memory::destroy_array(m_allocator, due, count);
         return false;
     }
@@ -65,7 +63,6 @@ bool QuicHost::open_pool() noexcept
     m_storage = storage;
     m_spare = storage + count;
     m_ids = ids;
-    m_heap = heap;
     m_due = due;
     m_free = 0U;
     return true;
@@ -89,7 +86,6 @@ QuicHost::~QuicHost()
     memory::destroy_array(m_allocator, m_slots, count);
     memory::deallocate_array(m_allocator, m_storage);
     memory::deallocate_array(m_allocator, m_ids);
-    memory::destroy_array(m_allocator, m_heap, count);
     memory::destroy_array(m_allocator, m_due, count);
 }
 
@@ -189,13 +185,7 @@ u64 QuicHost::on_timers(u64 now_ns) noexcept
         return kNeverNs;
     }
     // The connections due now are taken first, so one served again at once waits for the next turn.
-    u32 due = 0U;
-    while (m_heap_size != 0U && m_slots[m_heap[0]].due_ns <= now_ns)
-    {
-        const u32 index = m_heap[0];
-        unschedule(index);
-        m_due[due++] = index;
-    }
+    const u32 due = m_heap.take_due(now_ns, cont::Span<u32>(m_due, m_limits.connections));
     for (u32 next = 0U; next < due; ++next)
     {
         if (m_slots[m_due[next]].connection != nullptr)
@@ -205,7 +195,7 @@ u64 QuicHost::on_timers(u64 now_ns) noexcept
     }
     flush();
     after_turn(now_ns);
-    u64 next = (m_heap_size != 0U) ? m_slots[m_heap[0]].due_ns : kNeverNs;
+    u64 next = m_heap.next_due();
     if (m_queue.queued() != 0U && now_ns + m_limits.send_retry_ns < next)
     {
         next = now_ns + m_limits.send_retry_ns;
@@ -325,7 +315,7 @@ void QuicHost::flush() noexcept
 void QuicHost::reclaim(u32 index, u64 now_ns) noexcept
 {
     Slot& slot = m_slots[index];
-    unschedule(index);
+    m_heap.unschedule(index);
     if (replace(index, *slot.connection, now_ns))
     {
         return;
@@ -341,86 +331,9 @@ void QuicHost::reclaim(u32 index, u64 now_ns) noexcept
     ++m_counters.closed;
 }
 
-// ---- The heap ----
-
 void QuicHost::schedule(u32 index, u64 due_ns) noexcept
 {
-    Slot& slot = m_slots[index];
-    slot.due_ns = due_ns;
-    if (slot.heap == kNotQueued)
-    {
-        put(m_heap_size, index);
-        ++m_heap_size;
-    }
-    sift_up(slot.heap);
-    sift_down(slot.heap);
-}
-
-void QuicHost::unschedule(u32 index) noexcept
-{
-    Slot& slot = m_slots[index];
-    const u32 place = slot.heap;
-    if (place == kNotQueued)
-    {
-        return;
-    }
-    slot.heap = kNotQueued;
-    --m_heap_size;
-    if (place == m_heap_size)
-    {
-        return;
-    }
-    const u32 moved = m_heap[m_heap_size];
-    put(place, moved);
-    sift_up(place);
-    sift_down(m_slots[moved].heap);
-}
-
-void QuicHost::sift_up(u32 place) noexcept
-{
-    const u32 index = m_heap[place];
-    const u64 due = m_slots[index].due_ns;
-    while (place != 0U)
-    {
-        const u32 parent = (place - 1U) / 2U;
-        if (m_slots[m_heap[parent]].due_ns <= due)
-        {
-            break;
-        }
-        put(place, m_heap[parent]);
-        place = parent;
-    }
-    put(place, index);
-}
-
-void QuicHost::sift_down(u32 place) noexcept
-{
-    const u32 index = m_heap[place];
-    const u64 due = m_slots[index].due_ns;
-    for (;;)
-    {
-        const u32 left = (2U * place) + 1U;
-        if (left >= m_heap_size)
-        {
-            break;
-        }
-        const u32 right = left + 1U;
-        const u32 child =
-            (right < m_heap_size && m_slots[m_heap[right]].due_ns < m_slots[m_heap[left]].due_ns) ? right : left;
-        if (due <= m_slots[m_heap[child]].due_ns)
-        {
-            break;
-        }
-        put(place, m_heap[child]);
-        place = child;
-    }
-    put(place, index);
-}
-
-void QuicHost::put(u32 place, u32 index) noexcept
-{
-    m_heap[place] = index;
-    m_slots[index].heap = place;
+    m_heap.schedule(index, due_ns);
 }
 
 } // namespace crd::net

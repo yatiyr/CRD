@@ -243,12 +243,18 @@ inline constexpr short kPollReadable = POLLIN;
 inline constexpr short kPollWritable = POLLOUT;
 #endif
 
-// Waits until `events` (or an error the next call reports) or `timeout_ns`, rounded up to the host's milliseconds;
-// the events that arrived, 0 when the time passed. A signal that interrupts the wait restarts it.
-[[nodiscard]] inline short wait_native(NativeSocket handle, short events, u64 timeout_ns) noexcept
+// `timeout_ns` rounded up to the milliseconds a host wait takes.
+[[nodiscard]] inline int wait_milliseconds(u64 timeout_ns) noexcept
 {
     const u64 whole_ms = timeout_ns / 1'000'000U + ((timeout_ns % 1'000'000U) != 0U ? 1U : 0U);
-    const int timeout_ms = static_cast<int>(whole_ms < static_cast<u64>(INT_MAX) ? whole_ms : INT_MAX);
+    return static_cast<int>(whole_ms < static_cast<u64>(INT_MAX) ? whole_ms : INT_MAX);
+}
+
+// Waits until `events` (or an error the next call reports) or `timeout_ns`; the events that arrived, 0 when the time
+// passed. A signal that interrupts the wait restarts it.
+[[nodiscard]] inline short wait_native(NativeSocket handle, short events, u64 timeout_ns) noexcept
+{
+    const int timeout_ms = wait_milliseconds(timeout_ns);
 #if CRD_OS_WINDOWS
     WSAPOLLFD wanted{};
 #else

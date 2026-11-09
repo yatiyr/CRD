@@ -1016,8 +1016,37 @@ implementation exists. `QmuxConnection` is sans-I/O (`receive`, `take`), so NET-
 Evidence: `test_qmux.cpp` (every refusal above through a real TLS peer, flow control both ways past every window, byte-at-a-time and
 seeded-stall paths, timers to the nanosecond, the close paths, a run over real TCP), `test_stream_socket.cpp`, `crd-fuzz-net-qmux`
 (records, cuts, time and closes against a real TLS peer), held to source mutations ([session](../sessions/2026-11-09-4-2a-qmux.md)).
-Still to come: 0-RTT (a context accepting early data is refused at `start()`), the host behind a poller, and interop with a second
-implementation.
+Still to come: 0-RTT (a context accepting early data is refused at `start()`) and interop with a second implementation.
+
+<a id="stream-host"></a>
+**S53. The stream path's host** (4.2a, threats T01 and T11; [stream_poller.hpp](../../engine/foundation/net/include/crd/net/stream_poller.hpp),
+[qmux_host.hpp](../../engine/foundation/net/include/crd/net/qmux_host.hpp); 2026-11-09). QMux connections behind one thread, the counterpart of
+`QuicHost`: `QuicHandle` generations, one `DeadlineHeap` shared with `QuicHost`, and the same executor split (`poll()` is one bounded turn, `run()`
+waits).
+
+- **Seam.** `StreamSocket` is one connection; `StreamPoller` is the set: accept and connect into numbered slots, interest, close, and a `wait` of
+  level-triggered reports. `TcpPoller` is the host's TCP (epoll on Linux, a dense `WSAPoll` or `poll` set elsewhere: O(live connections) per wait,
+  acceptable for the fallback path and measured under NET.4). NET-SIM's virtual streams and a test's pipes stand in its place; the host's header
+  includes no OS header and reads time only through `TransportClock`.
+- **Level, not edge.** A turn takes one read of at most 64 KiB and `write_bytes_per_turn` per connection and `accepts_per_turn` connections; what is
+  left is simply reported again. `kStreamWritable` is asked for only while a write is blocked, so ordinary turns make no `epoll_ctl`. A full report
+  list starves nobody (the kernel's ready list rotates, a poll set rotates its start).
+- **Writes.** `QmuxConnection::outgoing` shows TLS's output in place; `take` removes what the socket accepted. A partial write needs no staging
+  buffer per connection, so a connection's memory stays what S52 states.
+- **Admission.** An accepted connection is charged to the `HandshakeBuckets` QUIC shares as a *validated* address (TCP's handshake proved it). Over the
+  rate, or with every slot in use, it is reset at once, from one spare slot of the poller. A shortage of descriptors pauses the listener for
+  `accept_retry_ns`, not spinning on a listener that stays readable.
+- **Connect.** The TLS session starts with `connect()`, so `handshake_timeout_ns` bounds the TCP connection too; nothing is written before it stands.
+  A failed connect is reported through `on_closed` with the `SocketError` (Refused, TimedOut).
+- **Close.** A Closed connection's bytes are tried once. It then ends with a FIN if everything went out (close_notify must reach the peer, also after
+  an idle timeout or a TLS failure), and a reset if bytes could not be sent, the handshake timed out (a silent peer earns no TIME_WAIT) or the
+  transport had already failed.
+
+Evidence: `test_qmux_host.cpp` (over pipes under a test clock: both directions past every window, the pool and rate refusals, every close path,
+back-pressure at 512-byte sockets with no busy turn, accept pauses, each share of a turn, deadlines bounding the wait, allocation refusal at every step,
+no allocation in an established turn; over real TCP: 8 clients with 16 KiB socket buffers, a refused port), `test_stream_poller.cpp` (epoll and `WSAPoll`
+on the loopback), `crd-fuzz-net-qmux-host` (any order of connects, resets, cuts, stalls, raw bytes, time, closes, stale handles and accept failures: every
+connection closed once, counts consistent, all memory back), held to source mutations ([session](../sessions/2026-11-09-4-2a-stream-host.md)).
 
 <a id="browsers"></a>
 ## Browser constraints

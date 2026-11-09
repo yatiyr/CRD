@@ -94,6 +94,7 @@ public:
 
 private:
     friend class TcpListener;
+    friend class TcpPoller;
 
     static constexpr u64 kNoHandle = ~u64{0};
 
@@ -138,6 +139,8 @@ public:
     [[nodiscard]] bool wait_readable(u64 timeout_ns) noexcept;
 
 private:
+    friend class TcpPoller;
+
     static constexpr u64 kNoHandle = ~u64{0};
 
     u64 m_handle = kNoHandle;

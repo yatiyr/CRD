@@ -29,6 +29,8 @@
 #include <crd/core/types.hpp>
 #include <crd/crypto/quic.hpp>
 #include <crd/net/connection_table.hpp>
+#include <crd/net/deadline_heap.hpp>
+#include <crd/net/host_handle.hpp>
 #include <crd/net/io_loop.hpp>
 #include <crd/net/quic_connection.hpp>
 
@@ -39,20 +41,8 @@ class IAllocator;
 
 namespace crd::net
 {
-inline constexpr u32 kQuicMaxHostConnections = u32{1} << 20U;
-
 // The peer tokens a connection can have live: one per peer ID it holds.
 inline constexpr u32 kQuicHostTokensPerConnection = static_cast<u32>(kQuicMaxPeerConnectionIds);
-
-// A connection as the application holds it.
-struct QuicHandle
-{
-    u32 slot = kNoConnection;
-    u32 generation = 0U;
-
-    [[nodiscard]] bool valid() const noexcept { return slot != kNoConnection; }
-    friend bool operator==(const QuicHandle&, const QuicHandle&) noexcept = default;
-};
 
 // The application's side of either host, called on the loop's thread.
 class QuicHostEvents
@@ -155,16 +145,12 @@ protected:
     [[nodiscard]] QuicHostEvents& events() noexcept { return m_events; }
 
 private:
-    static constexpr u32 kNotQueued = ~u32{0};
-
     struct Slot
     {
         QuicConnection* connection = nullptr; // live: in `cell`
         QuicConnection* cell = nullptr;       // the storage this slot holds
         Endpoint peer;
-        u64 due_ns = kNeverNs;
         u32 generation = 0U;
-        u32 heap = kNotQueued; // its place in the heap
         u32 next_free = kNoConnection;
     };
 
@@ -184,12 +170,6 @@ private:
     void flush() noexcept;
     void reclaim(u32 index, u64 now_ns) noexcept;
 
-    // The heap of live connections by due_ns.
-    void unschedule(u32 index) noexcept;
-    void sift_up(u32 place) noexcept;
-    void sift_down(u32 place) noexcept;
-    void put(u32 place, u32 index) noexcept;
-
     memory::IAllocator& m_allocator;
     DatagramSocket& m_socket;
     ConnectionIdTable& m_routes;
@@ -198,13 +178,12 @@ private:
     QuicHostLimits m_limits;
     ConnectionIdTable m_peer_tokens; // every connection's live stateless reset tokens to its slot
     SendQueue m_queue;
+    DeadlineHeap m_heap; // the live connections by their deadlines
     Slot* m_slots = nullptr;
     QuicConnection* m_storage = nullptr; // uninitialised storage for `connections` + 1
     QuicConnection* m_spare = nullptr;   // the cell no slot holds
     QuicRoutedIds* m_ids = nullptr;      // one per slot
-    u32* m_heap = nullptr;
     u32* m_due = nullptr; // the slots one turn serves
-    u32 m_heap_size = 0U;
     u32 m_free = kNoConnection;
     u32 m_live = 0U;
     u64 m_built = 0U;

@@ -3030,6 +3030,17 @@ usize TlsSession::pending() const noexcept
     return m_session != nullptr ? BIO_pending(SSL_get_wbio(ssl_of(m_session))) : 0U;
 }
 
+cont::ConstSpan<u8> TlsSession::outgoing() const noexcept
+{
+    const u8* bytes  = nullptr;
+    usize     length = 0U;
+    if (m_session == nullptr || BIO_mem_contents(SSL_get_wbio(ssl_of(m_session)), &bytes, &length) != 1)
+    {
+        return {};
+    }
+    return cont::ConstSpan<u8>(bytes, length);
+}
+
 TlsError TlsSession::take(cont::Span<u8> out, usize& written) noexcept
 {
     written = 0U;

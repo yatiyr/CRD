@@ -5279,7 +5279,7 @@ class TestInstruments(unittest.TestCase):
                                                        'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
                                                        'hesap-clock', 'hesap-erasure', 'hesap-estimators', 'hesap-flexfec', 'hesap-link', 'hesap-motion', 'hesap-quantize', 'hesap-raptorq', 'hesap-red',
                                                        'memory-allocators', 'net-admission', 'net-coded-frames', 'net-delta-stream', 'net-endpoint', 'net-ingress', 'net-negotiation',
-                                                       'net-qmux',
+                                                       'net-qmux', 'net-qmux-host',
                                                        'net-quic-codec', 'net-quic-connection', 'net-quic-datagram', 'net-quic-packet',
                                                        'net-quic-recovery',
                                                        'net-quic-stream', 'net-quic-stream-set', 'net-state-hash', 'net-ticket-cache',
