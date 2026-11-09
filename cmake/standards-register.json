@@ -1217,7 +1217,7 @@
       "id": "quic.reliable-reset",
       "title": "QUIC stream resets with partial delivery (RESET_STREAM_AT)",
       "kind": "extension",
-      "state": "watch",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a"
@@ -1230,15 +1230,32 @@
         "posted": "2026-09-06"
       },
       "cryptography": [],
+      "codepoints": [
+        {
+          "registry": "QUIC Transport Parameters",
+          "name": "reset_stream_at",
+          "value": "0x1d"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "reset_stream_at",
+          "value": "0x24"
+        }
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-1-transport",
         "read": "2026-10-27",
         "verified": true
       },
       "review": "2026-12-15",
-      "evidence": [],
+      "evidence": [
+        "tests/foundation/net/test_quic_stream_set.cpp",
+        "tests/foundation/net/test_quic_frame.cpp",
+        "tests/foundation/net/test_quic_transport_parameters.cpp",
+        "tests/foundation/net/fuzz/fuzz_quic_stream_set.cpp"
+      ],
       "deprecation": null,
-      "note": "A dependency of WebTransport over HTTP/3 (N02)."
+      "note": "A dependency of WebTransport over HTTP/3 (N02). Draft -11 read in full for 4.2a (2026-11-09)."
     },
     {
       "id": "quic.multipath",

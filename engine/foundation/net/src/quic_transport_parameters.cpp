@@ -19,6 +19,7 @@ constexpr usize kPreferredFixed   = 4U + 2U + 16U + 2U + 1U + kQuicResetTokenByt
 constexpr u32   kSeenDatagram     = 17U; // bits of `seen` past the section 18.2 identifiers
 constexpr u32   kSeenGreaseBit    = 18U;
 constexpr u32   kSeenVersionInfo  = 19U;
+constexpr u32   kSeenResetStreamAt = 20U;
 
 bool equal_bytes(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
 {
@@ -283,6 +284,10 @@ void emit(const QuicTransportParameters& p, QuicTransportParameterGrease grease,
     {
         out.flag(iana::kQuicTpGreaseQuicBit);
     }
+    if (p.reset_stream_at)
+    {
+        out.flag(iana::kQuicTpResetStreamAt);
+    }
 
     // The reserved parameter: N below (2^62 - 1 - 27) / 31, so the identifier is a varint; its value is up to eight
     // bytes of the entropy itself, which no reader interprets.
@@ -382,6 +387,10 @@ u32 seen_bit(u64 id) noexcept
     {
         return kSeenGreaseBit;
     }
+    if (id == iana::kQuicTpResetStreamAt)
+    {
+        return kSeenResetStreamAt;
+    }
     if (id == iana::kQuicTpVersionInformation)
     {
         return kSeenVersionInfo;
@@ -407,6 +416,11 @@ bool read_known(u64 id, cont::ConstSpan<u8> value, crypto::QuicSide side, QuicTr
     {
         p.grease_quic_bit = true;
         return value.empty(); // RFC 9287 section 3
+    }
+    if (id == iana::kQuicTpResetStreamAt)
+    {
+        p.reset_stream_at = true;
+        return value.empty(); // section 3 of the draft
     }
     if (id == iana::kQuicTpVersionInformation)
     {
@@ -605,7 +619,7 @@ u32 quic_server_select_version(const QuicTransportParameters& client, u32 origin
 
 usize write_quic_early_parameters(const QuicTransportParameters& server, cont::Span<u8> out) noexcept
 {
-    static constexpr u8 kFormat = 1U; // this encoding's revision: a ticket of another one meets another context
+    static constexpr u8 kFormat = 2U; // this encoding's revision: a ticket of another one meets another context
     if (out.size() < kQuicEarlyParameterBytes)
     {
         return 0U;
@@ -620,7 +634,8 @@ usize write_quic_early_parameters(const QuicTransportParameters& server, cont::S
                           server.max_datagram_frame_size,
                           server.max_idle_timeout,
                           server.max_udp_payload_size,
-                          server.disable_active_migration ? 1U : 0U};
+                          server.disable_active_migration ? 1U : 0U,
+                          server.reset_stream_at ? 1U : 0U};
     static_assert(1U + (sizeof(values) / sizeof(values[0])) * 8U == kQuicEarlyParameterBytes);
     cont::WireWriter writer(out.first(kQuicEarlyParameterBytes));
     writer.put_u8(kFormat);
@@ -641,7 +656,8 @@ QuicTransportError quic_check_remembered_parameters(const QuicTransportParameter
                       accepted.initial_max_streams_bidi >= remembered.initial_max_streams_bidi &&
                       accepted.initial_max_streams_uni >= remembered.initial_max_streams_uni &&
                       accepted.active_connection_id_limit >= remembered.active_connection_id_limit &&
-                      accepted.max_datagram_frame_size >= remembered.max_datagram_frame_size;
+                      accepted.max_datagram_frame_size >= remembered.max_datagram_frame_size &&
+                      (accepted.reset_stream_at || !remembered.reset_stream_at);
     return kept ? QuicTransportError::NoError : QuicTransportError::ProtocolViolation;
 }
 

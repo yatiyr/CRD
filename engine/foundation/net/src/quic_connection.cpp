@@ -975,6 +975,7 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             return true;
         case QuicFrameKind::Stream:
         case QuicFrameKind::ResetStream:
+        case QuicFrameKind::ResetStreamAt:
         case QuicFrameKind::StopSending:
         case QuicFrameKind::MaxData:
         case QuicFrameKind::MaxStreamData:

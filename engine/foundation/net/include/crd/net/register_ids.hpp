@@ -128,6 +128,10 @@ inline constexpr u64 kQuicFrameQxPingRequest = 0x348C67529EF8C7BDULL;
 inline constexpr u64 kQuicFrameQxPingResponse = 0x348C67529EF8C7BEULL;
 // quic.qmux: QUIC Transport Parameters, max_record_size
 inline constexpr u64 kQuicTpMaxRecordSize = 0x571C59429CD0845ULL;
+// quic.reliable-reset: QUIC Transport Parameters, reset_stream_at
+inline constexpr u64 kQuicTpResetStreamAt = 0x001DULL;
+// quic.reliable-reset: QUIC Frame Types, reset_stream_at
+inline constexpr u64 kQuicFrameResetStreamAt = 0x0024ULL;
 } // namespace iana
 
 } // namespace crd::net

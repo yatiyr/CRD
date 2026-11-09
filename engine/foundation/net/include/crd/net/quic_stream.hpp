@@ -112,6 +112,10 @@ public:
     [[nodiscard]] usize write(cont::ConstSpan<u8> data) noexcept;
     // The stream ends after what was written (a FIN to send).
     void finish() noexcept;
+    // Only the first `reliable` bytes (at most written_end()) are still owed, and no FIN: what lies above is never sent
+    // again and acknowledgements of it mean nothing. all_acked() then speaks of those bytes alone. May be repeated
+    // with a smaller size.
+    void truncate(u64 reliable) noexcept;
 
     // The next data to send, at most `max_bytes` of it: the lowest lost data first, then data never sent, which stays
     // below `fresh_limit` (the stream's flow-control limit; kQuicMaxVarint for CRYPTO data). A chunk never wraps the

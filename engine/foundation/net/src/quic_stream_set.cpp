@@ -25,6 +25,12 @@ constexpr usize kCreditBytes = 9U; // a MAX_DATA or MAX_STREAMS frame at most: i
     return state == QuicSendState::Ready || state == QuicSendState::Send || state == QuicSendState::DataSent;
 }
 
+// What still goes out on a sending part: everything before its end, and a reliable reset's first bytes.
+[[nodiscard]] constexpr bool delivering(QuicSendState state, bool reset_at) noexcept
+{
+    return sending(state) || (state == QuicSendState::ResetSent && reset_at);
+}
+
 [[nodiscard]] constexpr bool receiving(QuicRecvState state) noexcept
 {
     return state == QuicRecvState::Recv || state == QuicRecvState::SizeKnown || state == QuicRecvState::DataRecvd;
@@ -62,7 +68,7 @@ bool QuicStreamSet::limits_valid(const QuicStreamLimits& limits) noexcept
                         l.local_bidi <= kQuicMaxStreamSlots && l.local_uni <= kQuicMaxStreamSlots;
     const bool receives = l.peer_bidi != 0U || l.peer_uni != 0U || l.local_bidi != 0U;
     const bool sends = l.peer_bidi != 0U || l.local_bidi != 0U || l.local_uni != 0U;
-    return counts &&
+    return counts && !(l.in_order && l.reset_stream_at) &&
            (!receives ||
             (chunk_bytes_ok(l.receive_bytes) && l.stream_window != 0U && l.stream_window <= l.receive_bytes)) &&
            (!sends || chunk_bytes_ok(l.send_bytes)) && l.connection_window <= l.connection_max_window &&
@@ -193,6 +199,7 @@ void QuicStreamSet::reset_state() noexcept
     m_sent = 0U;
     m_received = 0U;
     m_consumed = 0U;
+    m_peer_resets_at = false;
 }
 
 void QuicStreamSet::reset_all() noexcept
@@ -212,11 +219,13 @@ void QuicStreamSet::fill_parameters(QuicTransportParameters& local) const noexce
     local.initial_max_stream_data_uni = (m_limits.peer_uni != 0U) ? window : 0U;
     local.initial_max_streams_bidi = m_limits.peer_bidi;
     local.initial_max_streams_uni = m_limits.peer_uni;
+    local.reset_stream_at = m_limits.reset_stream_at;
 }
 
 void QuicStreamSet::set_peer_parameters(const QuicTransportParameters& peer) noexcept
 {
     m_credit.raise(peer.initial_max_data);
+    m_peer_resets_at = m_peer_resets_at || peer.reset_stream_at;
     Type& local_bidi = m_types[type_index(true, true)];
     Type& local_uni = m_types[type_index(true, false)];
     Type& peer_bidi = m_types[type_index(false, true)];
@@ -511,7 +520,8 @@ void QuicStreamSet::after_receive(Slot& slot, u64 contiguous_before) noexcept
     {
         slot.recv = QuicRecvState::SizeKnown;
     }
-    if (slot.recv == QuicRecvState::SizeKnown && slot.in.contiguous_end() == slot.in.final_size())
+    if (slot.recv == QuicRecvState::SizeKnown &&
+        slot.in.contiguous_end() >= (slot.peer_reset_at ? slot.peer_reliable : slot.in.final_size()))
     {
         slot.recv = QuicRecvState::DataRecvd;
     }
@@ -533,9 +543,20 @@ void QuicStreamSet::drop_stopped(Slot& slot) noexcept
         slot.in.consume(readable.size());
     }
     account_consumed(slot, slot.in.read_offset());
+    settle_peer_reset(slot);
     if (slot.recv == QuicRecvState::DataRecvd && slot.in.complete())
     {
         slot.recv = QuicRecvState::DataRead;
+    }
+}
+
+void QuicStreamSet::settle_peer_reset(Slot& slot) noexcept
+{
+    if (slot.peer_reset_at && receiving(slot.recv) && (slot.stopped || slot.in.read_offset() >= slot.peer_reliable))
+    {
+        slot.recv = QuicRecvState::ResetRecvd;
+        account_consumed(slot, slot.in.final_size());
+        raise(slot, kQuicStreamReset);
     }
 }
 
@@ -569,9 +590,8 @@ QuicTransportError QuicStreamSet::on_stream(const QuicFrame& frame, Slot& slot, 
     return QuicTransportError::NoError;
 }
 
-QuicTransportError QuicStreamSet::on_reset(const QuicFrame& frame, Slot& slot) noexcept
+QuicTransportError QuicStreamSet::take_final_size(Slot& slot, u64 final_size) noexcept
 {
-    const u64 final_size = frame.value;
     if (!account_received(slot, final_size))
     {
         return QuicTransportError::FlowControlError;
@@ -579,14 +599,29 @@ QuicTransportError QuicStreamSet::on_reset(const QuicFrame& frame, Slot& slot) n
     switch (slot.in.insert(final_size, {}, true))
     {
         case QuicReceiveResult::Accepted:
-            break;
+            return QuicTransportError::NoError;
         case QuicReceiveResult::BeyondWindow:
             return QuicTransportError::FlowControlError;
         case QuicReceiveResult::FinalSize:
         case QuicReceiveResult::Changed:
             return QuicTransportError::FinalSizeError;
         case QuicReceiveResult::Unusable:
-            return QuicTransportError::InternalError;
+            break;
+    }
+    return QuicTransportError::InternalError;
+}
+
+QuicTransportError QuicStreamSet::on_reset(const QuicFrame& frame, Slot& slot) noexcept
+{
+    const u64 final_size = frame.value;
+    if (slot.peer_reset_at && frame.error_code != slot.peer_reset_error)
+    {
+        return QuicTransportError::StreamStateError; // section 5.2 of the draft
+    }
+    const QuicTransportError error = take_final_size(slot, final_size);
+    if (error != QuicTransportError::NoError)
+    {
+        return error;
     }
     if (receiving(slot.recv))
     {
@@ -599,14 +634,64 @@ QuicTransportError QuicStreamSet::on_reset(const QuicFrame& frame, Slot& slot) n
     return QuicTransportError::NoError;
 }
 
-void QuicStreamSet::reset_send(Slot& slot, u64 error) noexcept
+QuicTransportError QuicStreamSet::on_reset_at(const QuicFrame& frame, Slot& slot) noexcept
+{
+    const bool reset_known =
+        slot.peer_reset_at || slot.recv == QuicRecvState::ResetRecvd || slot.recv == QuicRecvState::ResetRead;
+    if (reset_known && frame.error_code != slot.peer_reset_error)
+    {
+        return QuicTransportError::StreamStateError;
+    }
+    const u64 contiguous = slot.in.contiguous_end();
+    const QuicTransportError error = take_final_size(slot, frame.value);
+    if (error != QuicTransportError::NoError || !receiving(slot.recv))
+    {
+        return error;
+    }
+    slot.peer_reset_error = frame.error_code;
+    // A reordered frame with a larger size is ignored: the smallest one given stands (section 5.2).
+    slot.peer_reliable = slot.peer_reset_at ? min_u64(slot.peer_reliable, frame.offset) : frame.offset;
+    slot.peer_reset_at = true;
+    after_receive(slot, contiguous);
+    settle_peer_reset(slot);
+    return QuicTransportError::NoError;
+}
+
+void QuicStreamSet::reset_send(Slot& slot, u64 error, u64 reliable_size) noexcept
 {
     slot.send = QuicSendState::ResetSent;
     slot.reset_error = error;
-    slot.reset_final = slot.out.sent_end(); // the credit the stream consumed (section 4.5)
+    slot.reset_final = slot.out.sent_end(); // the credit the stream consumed (section 4.5); slot_frame adds what follows
     slot.reset_owed = true;
     slot.want_writable = false;
+    if (reliable_size != 0U)
+    {
+        slot.reset_at = true;
+        slot.reset_reliable = reliable_size;
+        slot.out.truncate(reliable_size);
+    }
     relist(slot);
+}
+
+void QuicStreamSet::lower_reliable(Slot& slot, u64 reliable_size) noexcept
+{
+    if (reliable_size < slot.reset_reliable)
+    {
+        slot.reset_final = max_u64(slot.reset_final, slot.out.sent_end()); // truncate() forgets what was sent above
+        slot.reset_reliable = reliable_size;
+        slot.reset_at_acked = false;
+        slot.reset_owed = true;
+        slot.out.truncate(reliable_size);
+        relist(slot);
+    }
+}
+
+void QuicStreamSet::settle_reset_at(Slot& slot) noexcept
+{
+    if (slot.reset_at_acked && slot.out.all_acked())
+    {
+        slot.send = QuicSendState::ResetRecvd;
+    }
 }
 
 QuicTransportError QuicStreamSet::on_frame(const QuicFrame& frame, bool early) noexcept
@@ -632,6 +717,12 @@ QuicTransportError QuicStreamSet::on_frame(const QuicFrame& frame, bool early) n
         case QuicFrameKind::StreamsBlocked:
             m_types[type_index(false, frame.bidirectional)].peer_blocked = true;
             return QuicTransportError::NoError;
+        case QuicFrameKind::ResetStreamAt:
+            if (!m_limits.reset_stream_at)
+            {
+                return QuicTransportError::FrameEncodingError; // never advertised: a frame of no known type
+            }
+            break;
         case QuicFrameKind::Stream:
         case QuicFrameKind::ResetStream:
         case QuicFrameKind::StreamDataBlocked:
@@ -643,6 +734,7 @@ QuicTransportError QuicStreamSet::on_frame(const QuicFrame& frame, bool early) n
     }
     const Type& type = type_of(frame.stream_id);
     const bool to_receiver = frame.kind == QuicFrameKind::Stream || frame.kind == QuicFrameKind::ResetStream ||
+                             frame.kind == QuicFrameKind::ResetStreamAt ||
                              frame.kind == QuicFrameKind::StreamDataBlocked;
     if ((to_receiver && !type.receives) || (!to_receiver && !type.sends))
     {
@@ -663,15 +755,22 @@ QuicTransportError QuicStreamSet::on_frame(const QuicFrame& frame, bool early) n
         case QuicFrameKind::ResetStream:
             error = on_reset(frame, *slot);
             break;
+        case QuicFrameKind::ResetStreamAt:
+            error = on_reset_at(frame, *slot);
+            break;
         case QuicFrameKind::StreamDataBlocked:
             slot->window.on_peer_blocked();
             break;
         case QuicFrameKind::StopSending:
             if (sending(slot->send))
             {
-                reset_send(*slot, frame.error_code); // the peer's code, as section 3.5 asks
+                reset_send(*slot, frame.error_code, 0U); // the peer's code, as section 3.5 asks
                 slot->peer_stop_error = frame.error_code;
                 raise(*slot, kQuicStreamStopSending);
+            }
+            else if (slot->send == QuicSendState::ResetSent && slot->reset_at)
+            {
+                lower_reliable(*slot, 0U); // the peer reads no more (section 5.4 of the draft)
             }
             break;
         default: // MaxStreamData
@@ -690,9 +789,15 @@ u64 QuicStreamSet::fresh_limit(const Slot& slot) const noexcept
     return min_u64(slot.credit.limit(), slot.out.sent_end() + m_credit.available(m_sent));
 }
 
+bool QuicStreamSet::reset_ready(const Slot& slot) const noexcept
+{
+    // Every reliable byte went out first, so the final size lies within both credits (section 4 of the draft).
+    return slot.reset_owed && (!slot.reset_at || slot.out.sent_end() >= slot.reset_reliable);
+}
+
 bool QuicStreamSet::data_ready(const Slot& slot) const noexcept
 {
-    return sending(slot.send) && !slot.out.next(1U, fresh_limit(slot)).empty();
+    return delivering(slot.send, slot.reset_at) && !slot.out.next(1U, fresh_limit(slot)).empty();
 }
 
 bool QuicStreamSet::control_owed(const Slot& slot) const noexcept
@@ -702,12 +807,12 @@ bool QuicStreamSet::control_owed(const Slot& slot) const noexcept
     const bool update = slot.recv == QuicRecvState::Recv && !slot.stopped && slot.window.update_owed();
     const bool blocked = (slot.send == QuicSendState::Ready || slot.send == QuicSendState::Send) &&
                          slot.credit.blocked_owed(slot.out.sent_end(), slot.out.written_end() > slot.out.sent_end());
-    return slot.reset_owed || stop || update || blocked;
+    return reset_ready(slot) || stop || update || blocked;
 }
 
 bool QuicStreamSet::pending(const Slot& slot) const noexcept
 {
-    return slot.active && (control_owed(slot) || (sending(slot.send) && slot.out.pending()));
+    return slot.active && (control_owed(slot) || (delivering(slot.send, slot.reset_at) && slot.out.pending()));
 }
 
 bool QuicStreamSet::data_waiting_on_connection() const noexcept
@@ -722,7 +827,7 @@ bool QuicStreamSet::data_waiting_on_connection() const noexcept
         for (u32 walked = 0U; walked < m_listed[urgency]; ++walked, at = m_slots[at].send_next)
         {
             const Slot& slot = m_slots[at];
-            if (sending(slot.send) && slot.out.written_end() > slot.out.sent_end() &&
+            if (delivering(slot.send, slot.reset_at) && slot.out.written_end() > slot.out.sent_end() &&
                 slot.credit.limit() > slot.out.sent_end())
             {
                 return true;
@@ -785,15 +890,18 @@ bool QuicStreamSet::slot_frame(Slot& slot, usize room, u64 now_ns, u64 rtt_ns, Q
     frame.stream_id = slot.id;
     record = QuicStreamRecord{};
     record.stream_id = slot.id;
-    if (slot.reset_owed)
+    if (reset_ready(slot))
     {
-        frame.kind = QuicFrameKind::ResetStream;
+        frame.kind = slot.reset_at ? QuicFrameKind::ResetStreamAt : QuicFrameKind::ResetStream;
         frame.error_code = slot.reset_error;
+        slot.reset_final = max_u64(slot.reset_final, slot.out.sent_end());
         frame.value = slot.reset_final;
+        frame.offset = slot.reset_reliable;
         if (fits(frame, room))
         {
             slot.reset_owed = false;
             record.kind = frame.kind;
+            record.value = slot.reset_reliable;
             return true;
         }
     }
@@ -833,7 +941,7 @@ bool QuicStreamSet::slot_frame(Slot& slot, usize room, u64 now_ns, u64 rtt_ns, Q
             return true;
         }
     }
-    if (!sending(slot.send))
+    if (!delivering(slot.send, slot.reset_at))
     {
         return false;
     }
@@ -967,9 +1075,9 @@ bool QuicStreamSet::next_frame(usize room, u64 now_ns, u64 rtt_ns, QuicFrame& fr
 
 void QuicStreamSet::on_acked(const QuicStreamRecord& record) noexcept
 {
-    Slot* const slot = (record.kind == QuicFrameKind::Stream || record.kind == QuicFrameKind::ResetStream)
-                           ? find(record.stream_id)
-                           : nullptr;
+    const bool settles = record.kind == QuicFrameKind::Stream || record.kind == QuicFrameKind::ResetStream ||
+                         record.kind == QuicFrameKind::ResetStreamAt;
+    Slot* const slot = settles ? find(record.stream_id) : nullptr;
     if (slot == nullptr)
     {
         return; // credit frames need nothing, and a freed stream's records are dropped
@@ -980,6 +1088,19 @@ void QuicStreamSet::on_acked(const QuicStreamRecord& record) noexcept
         {
             slot->send = QuicSendState::ResetRecvd;
         }
+    }
+    else if (record.kind == QuicFrameKind::ResetStreamAt)
+    {
+        if (slot->send == QuicSendState::ResetSent && record.value == slot->reset_reliable)
+        {
+            slot->reset_at_acked = true; // only the frame with the current, smallest size counts (section 5.3)
+            settle_reset_at(*slot);
+        }
+    }
+    else if (slot->send == QuicSendState::ResetSent && slot->reset_at)
+    {
+        slot->out.on_acked(record.value, record.length, record.fin);
+        settle_reset_at(*slot);
     }
     else if (slot->send == QuicSendState::Send || slot->send == QuicSendState::DataSent)
     {
@@ -1011,7 +1132,8 @@ void QuicStreamSet::on_all_acked() noexcept
                 record.stream_id = slot.id;
                 record.kind =
                     (slot.send == QuicSendState::ResetSent) ? QuicFrameKind::ResetStream : QuicFrameKind::Stream;
-                record.length = static_cast<u32>(slot.out.sent_end());
+                record.value = slot.out.acked_end(); // the unacknowledged rest fits a length: at most one buffer
+                record.length = static_cast<u32>(slot.out.sent_end() - slot.out.acked_end());
                 record.fin = slot.out.finished();
                 on_acked(record);
             }
@@ -1055,11 +1177,18 @@ void QuicStreamSet::on_lost(const QuicStreamRecord& record) noexcept
     switch (record.kind)
     {
         case QuicFrameKind::Stream:
-            // Marked for resending; slot_frame sends data only while the part is sending, never after a reset.
+            // Marked for resending; slot_frame sends data only while the part is sending, and after a reset only
+            // what a RESET_STREAM_AT keeps, the rest being gone from the buffer.
             slot->out.on_lost(record.value, record.length, record.fin);
             break;
         case QuicFrameKind::ResetStream:
             slot->reset_owed = slot->reset_owed || slot->send == QuicSendState::ResetSent;
+            break;
+        case QuicFrameKind::ResetStreamAt:
+            // A loss of a frame with a size since lowered needs nothing: the current frame went after it.
+            slot->reset_owed = slot->reset_owed ||
+                               (slot->send == QuicSendState::ResetSent && !slot->reset_at_acked &&
+                                record.value == slot->reset_reliable);
             break;
         case QuicFrameKind::StopSending:
             slot->stop_owed =
@@ -1128,18 +1257,31 @@ QuicStreamError QuicStreamSet::write(u64 id, cont::ConstSpan<u8> data, bool fin,
     return QuicStreamError::None;
 }
 
-QuicStreamError QuicStreamSet::reset(u64 id, u64 error) noexcept
+QuicStreamError QuicStreamSet::reset(u64 id, u64 error, u64 reliable_size) noexcept
 {
     Slot* const slot = find(id);
     if (slot == nullptr || slot->send == QuicSendState::None)
     {
         return QuicStreamError::Unknown;
     }
+    if (slot->send == QuicSendState::ResetSent && slot->reset_at)
+    {
+        if (error != slot->reset_error || reliable_size > slot->reset_reliable)
+        {
+            return QuicStreamError::Invalid; // the code never changes and the size only falls (section 5.2)
+        }
+        lower_reliable(*slot, reliable_size);
+        return QuicStreamError::None;
+    }
     if (!sending(slot->send))
     {
         return QuicStreamError::Ended;
     }
-    reset_send(*slot, error);
+    if (reliable_size != 0U && (!m_peer_resets_at || reliable_size > slot->out.written_end()))
+    {
+        return QuicStreamError::Invalid;
+    }
+    reset_send(*slot, error, reliable_size);
     return QuicStreamError::None;
 }
 
@@ -1201,7 +1343,14 @@ QuicStreamRead QuicStreamSet::peek(u64 id) const noexcept
     }
     read.data = slot->in.readable();
     const u64 offset = slot->in.read_offset();
-    read.fin = slot->in.final_known() && offset + read.data.size() == slot->in.final_size();
+    if (slot->peer_reset_at)
+    {
+        read.data = read.data.first(static_cast<usize>(min_u64(read.data.size(), slot->peer_reliable - offset)));
+    }
+    else
+    {
+        read.fin = slot->in.final_known() && offset + read.data.size() == slot->in.final_size();
+    }
     if (slot->early_end > offset)
     {
         read.early_bytes = static_cast<usize>(min_u64(slot->early_end - offset, read.data.size()));
@@ -1216,6 +1365,11 @@ usize QuicStreamSet::copy_readable(u64 id, usize skip, cont::Span<u8> out, bool&
     if (slot == nullptr || !receiving(slot->recv))
     {
         return 0U;
+    }
+    if (slot->peer_reset_at)
+    {
+        const u64 reliable_left = slot->peer_reliable - min_u64(slot->peer_reliable, slot->in.read_offset() + skip);
+        return slot->in.copy_contiguous(skip, out.first(static_cast<usize>(min_u64(out.size(), reliable_left))));
     }
     const usize copied = slot->in.copy_contiguous(skip, out);
     ends = slot->in.final_known() && slot->in.read_offset() + skip + copied >= slot->in.final_size();
@@ -1233,12 +1387,15 @@ QuicStreamError QuicStreamSet::consume(u64 id, usize count, bool keep_end) noexc
     {
         return QuicStreamError::Ended;
     }
-    if (count > slot->in.contiguous_end() - slot->in.read_offset())
+    const u64 readable_end =
+        slot->peer_reset_at ? min_u64(slot->in.contiguous_end(), slot->peer_reliable) : slot->in.contiguous_end();
+    if (count > readable_end - slot->in.read_offset())
     {
         return QuicStreamError::Invalid;
     }
     slot->in.consume(count);
     account_consumed(*slot, slot->in.read_offset());
+    settle_peer_reset(*slot);
     if (slot->recv == QuicRecvState::DataRecvd && slot->in.complete() && !keep_end)
     {
         slot->recv = QuicRecvState::DataRead;

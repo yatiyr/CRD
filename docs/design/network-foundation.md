@@ -496,6 +496,14 @@ credits and their frames. It knows nothing of packets: the connection asks it fo
   acknowledged (STOP_SENDING only while the data is still wanted); a lost MAX_STREAM_DATA goes again unless the final
   size is known, a lost MAX_DATA or MAX_STREAMS while it is the latest, a lost blocked frame while that is the limit
   (section 13.3). After STOP_SENDING arriving data is dropped and its credit returned.
+- **Reliable resets** (draft-ietf-quic-reliable-stream-reset-11, parameter 0x1d, frame 0x24, 2026-11-09). A reset may
+  keep the stream's first bytes, toward a peer that advertised it. In the machinery it is a FIN at a smaller offset:
+  the kept bytes are sent and resent as data before a FIN is, what lies above leaves the buffer and is never sent
+  again, and the part ends when the frame with the current size and those bytes are acknowledged. The frame waits until
+  the kept bytes have all gone once, so its final size lies within both credits with no separate check. A second call,
+  or a STOP_SENDING, only lowers the size; the code and final size never change. The receiver offers bytes up to the
+  smallest size named, never `fin`, and shows the reset when they are read; a reordered larger size is ignored. It is
+  in the early context, so a server cannot withdraw it under a ticket. QMux has no such frame and refuses the option.
 - **Sending.** `next_frame()` hands the connection one frame that fits its room with the record that settles it:
   MAX_DATA, MAX_STREAMS, STREAMS_BLOCKED and DATA_BLOCKED first, then the listed streams by RFC 9218's urgencies
   (0 first, 3 by default) and round robin within one, each stream's control frames before its data. A stream is

@@ -301,6 +301,31 @@ void QuicSendBuffer::finish() noexcept
     }
 }
 
+void QuicSendBuffer::truncate(u64 reliable) noexcept
+{
+    if (m_bytes.empty())
+    {
+        return;
+    }
+    // Bytes acknowledged beyond the size stay acknowledged, so the invariant m_acked <= m_sent <= m_written holds.
+    const u64 end = max_u64(min_u64(reliable, m_written), m_acked);
+    if (m_sent > end)
+    {
+        const Ring ring{capacity()};
+        if (m_lost_bytes > 0U)
+        {
+            m_lost_bytes -= mark(ring, m_lost_bits, nullptr, end, m_sent - end, false);
+        }
+        static_cast<void>(mark(ring, m_acked_bits, nullptr, end, m_sent - end, false));
+        m_sent = end;
+    }
+    m_written   = end;
+    m_finished  = true;
+    m_fin_sent  = true;
+    m_fin_lost  = false;
+    m_fin_acked = true;
+}
+
 bool QuicSendBuffer::pending() const noexcept
 {
     return m_lost_bytes > 0U || m_sent < m_written || fin_owed();

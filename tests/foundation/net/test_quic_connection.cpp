@@ -2106,6 +2106,73 @@ TEST_CASE("QUIC connection: streams carry data both ways over paths that lose, d
     }
 }
 
+TEST_CASE("QUIC connection: a reliable reset delivers its bytes and then the reset over hostile paths, both versions",
+          "[net][4.2a][quic-connection]")
+{
+    for (const QuicVersion version : kVersions)
+    {
+        for (u64 seed = 1U; seed <= 8U; ++seed)
+        {
+            Identity identity;
+            CountingAllocator allocator;
+            QuicConnectionConfig client_config = stream_config(QuicSide::Client, identity, version, seed);
+            client_config.streams.reset_stream_at = true;
+            QuicConnectionConfig server_config = stream_config(QuicSide::Server, identity, version, seed + 1U);
+            server_config.streams.reset_stream_at = true;
+            QuicConnection client(allocator, client_config);
+            QuicConnection server(allocator, server_config);
+            REQUIRE(server.ready());
+            connect(client);
+            auto net = std::make_unique<Net>(client, server);
+            net->rng.state = seed;
+            for (Path& path : net->path)
+            {
+                path.loss = 150U;
+                path.duplicate = 50U;
+                path.delay_ns = 10U * kMs;
+                path.jitter_ns = 15U * kMs;
+            }
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            CHECK(client.peer_parameters().reset_stream_at);
+            CHECK(server.peer_parameters().reset_stream_at);
+
+            u64 stream = 0U;
+            REQUIRE(client.streams().open(true, stream) == QuicStreamError::None);
+            u64 written = 0U;
+            static_cast<void>(write_pattern(client.streams(), stream, written, 4000U, stream, false));
+            const u64 reliable = 1500U + (seed * 100U);
+            REQUIRE(client.streams().reset(stream, 0x2AU, reliable) == QuicStreamError::None);
+
+            u64 read = 0U;
+            u64 code = 0U;
+            REQUIRE(net->run_until(
+                [&]
+                {
+                    QuicStreamRead part = server.streams().peek(stream);
+                    for (; !part.data.empty(); part = server.streams().peek(stream))
+                    {
+                        for (usize at = 0U; at < part.data.size(); ++at)
+                        {
+                            REQUIRE(part.data[at] == pattern(stream, read + at));
+                        }
+                        read += part.data.size();
+                        REQUIRE(server.streams().consume(stream, part.data.size()) == QuicStreamError::None);
+                    }
+                    if (part.reset)
+                    {
+                        code = part.reset_error;
+                    }
+                    return part.reset && client.streams().send_state(stream) == QuicSendState::ResetRecvd;
+                },
+                600000U * kMs));
+            CHECK(read == reliable);
+            CHECK(code == 0x2AU);
+            CHECK(client.state() == QuicConnectionState::Established);
+            CHECK(server.state() == QuicConnectionState::Established);
+        }
+    }
+}
+
 TEST_CASE("QUIC connection: a frame ledger far smaller than the stream load still drains",
           "[net][4.2a][quic-connection]")
 {

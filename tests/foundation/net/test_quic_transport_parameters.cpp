@@ -129,6 +129,7 @@ QuicTransportParameters full_server()
     p.retry_source_connection_id = connection_id({0x01});
     p.max_datagram_frame_size = 65535U;
     p.grease_quic_bit = true;
+    p.reset_stream_at = true;
     p.has_version_information = true;
     p.version_information.chosen = kV2;
     p.version_information.available[0] = kV2;
@@ -178,6 +179,7 @@ void check_equal(const QuicTransportParameters& a, const QuicTransportParameters
     CHECK(same_id(a.retry_source_connection_id, b.retry_source_connection_id));
     CHECK(a.max_datagram_frame_size == b.max_datagram_frame_size);
     CHECK(a.grease_quic_bit == b.grease_quic_bit);
+    CHECK(a.reset_stream_at == b.reset_stream_at);
     CHECK(a.has_version_information == b.has_version_information);
     if (a.has_version_information)
     {
@@ -345,6 +347,7 @@ TEST_CASE("QUIC transport parameters: section 18, RFC 9287 and RFC 9368 refusals
     add("disable_active_migration with a value", QuicSide::Client)
         .add(id(QuicTransportParameterId::DisableActiveMigration), ConstSpan<u8>(one, 1U));
     add("grease_quic_bit with a value", QuicSide::Client).add(iana::kQuicTpGreaseQuicBit, ConstSpan<u8>(one, 1U));
+    add("reset_stream_at with a value", QuicSide::Client).add(iana::kQuicTpResetStreamAt, ConstSpan<u8>(one, 1U));
     add("max_datagram_frame_size empty", QuicSide::Client).add(iana::kQuicTpMaxDatagramFrameSize, ConstSpan<u8>{});
     {
         u8 address[41] = {};
@@ -588,11 +591,11 @@ TEST_CASE("QUIC transport parameters: a server's 0-RTT part of its early data co
     server.max_udp_payload_size = 1500U;
     u8 encoded[kQuicEarlyParameterBytes];
     REQUIRE(write_quic_early_parameters(server, Span<u8>(encoded)) == kQuicEarlyParameterBytes);
-    CHECK(encoded[0] == 1U); // the format
+    CHECK(encoded[0] == 2U); // the format
     WireReader in{ConstSpan<u8>(encoded)};
     u8 format = 0U;
     REQUIRE(in.take_u8(format));
-    const u64 order[] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 1500U, 0U};
+    const u64 order[] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 1500U, 0U, 0U};
     for (const u64 expected : order)
     {
         u64 value = 0U;
@@ -633,6 +636,14 @@ TEST_CASE("QUIC transport parameters: a server's 0-RTT part of its early data co
     migration.disable_active_migration = true;
     REQUIRE(write_quic_early_parameters(migration, Span<u8>(again)) == kQuicEarlyParameterBytes);
     CHECK(std::memcmp(encoded, again, sizeof(encoded)) != 0);
+    // A server cannot turn reliable resets off under a ticket that remembers them (section 3 of the draft).
+    QuicTransportParameters resets = server;
+    resets.reset_stream_at = true;
+    REQUIRE(write_quic_early_parameters(resets, Span<u8>(again)) == kQuicEarlyParameterBytes);
+    CHECK(std::memcmp(encoded, again, sizeof(encoded)) != 0);
+    CHECK(quic_check_remembered_parameters(resets, server) == QuicTransportError::ProtocolViolation);
+    CHECK(quic_check_remembered_parameters(server, resets) == QuicTransportError::NoError);
+    CHECK(quic_check_remembered_parameters(resets, resets) == QuicTransportError::NoError);
 
     // A client's check: any limit its 0-RTT kept to that the accepted parameters lower is PROTOCOL_VIOLATION.
     CHECK(quic_check_remembered_parameters(server, server) == QuicTransportError::NoError);

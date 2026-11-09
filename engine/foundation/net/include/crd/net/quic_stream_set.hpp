@@ -1,7 +1,8 @@
 #pragma once
 
 // crd-net -- a QUIC connection's streams (4.2a; contract: docs/design/network-foundation.md#quic-stream-set).
-// Sources: RFC 9000 sections 2, 3, 4, 13.3 and 19.4 to 19.14, and RFC 9218 section 4's urgencies.
+// Sources: RFC 9000 sections 2, 3, 4, 13.3 and 19.4 to 19.14, RFC 9218 section 4's urgencies and
+// draft-ietf-quic-reliable-stream-reset.
 //
 //   streams    each of the four stream types (section 2.1) has a fixed pool of slots holding S38's buffers and
 //              credits; its open streams are kept sorted by stream index (IDs open in rising order, so an append
@@ -18,6 +19,10 @@
 //              lost data is never sent again, a lost RESET_STREAM or STOP_SENDING is sent again until acknowledged and
 //              lost credit frames follow section 13.3. A slot is freed once both parts are terminal and its events
 //              were polled.
+//   reliable   a reset may keep the stream's first bytes (RESET_STREAM_AT, only toward a peer that advertised it): they
+//   resets     are sent and resent as the data before a FIN is, the frame goes once they have all been sent, so flow
+//              control always covers its final size, and the part is done when the frame with the smallest size and
+//              those bytes are acknowledged. The receiver reads up to that size and only then sees the reset.
 //   sending    next_frame() hands the connection one frame that fits its room, with the record that settles it:
 //              connection credit frames first, then each listed stream's owed control frames and data, by urgency
 //              (0 first) and round robin within one, so no stream at an urgency starves another.
@@ -65,6 +70,8 @@ struct QuicStreamLimits
     u64 connection_max_window = 0U; // the connection window's auto-tuned maximum: at least connection_window
     // QMux: the path delivers in order, so a STREAM frame must continue its stream exactly or is PROTOCOL_VIOLATION.
     bool in_order = false;
+    // Advertise reset_stream_at and take RESET_STREAM_AT (not with in_order: it is no frame of QMux).
+    bool reset_stream_at = false;
 };
 
 enum class QuicStreamError : u8
@@ -171,9 +178,9 @@ public:
     // after init(), with no peer parameters and no events (RFC 9001 section 4.6.2: the client resets them all).
     void reset_all() noexcept;
 
-    // A stream or flow-control frame from the peer (STREAM, RESET_STREAM, STOP_SENDING, MAX_DATA, MAX_STREAM_DATA,
-    // MAX_STREAMS, DATA_BLOCKED, STREAM_DATA_BLOCKED, STREAMS_BLOCKED): NoError, or the error to close with. `early`
-    // for a frame of a 0-RTT packet: its STREAM data is marked replayable.
+    // A stream or flow-control frame from the peer (STREAM, RESET_STREAM, RESET_STREAM_AT, STOP_SENDING, MAX_DATA,
+    // MAX_STREAM_DATA, MAX_STREAMS, DATA_BLOCKED, STREAM_DATA_BLOCKED, STREAMS_BLOCKED): NoError, or the error to close
+    // with. `early` for a frame of a 0-RTT packet: its STREAM data is marked replayable.
     [[nodiscard]] QuicTransportError on_frame(const QuicFrame& frame, bool early = false) noexcept;
 
     // Whether next_frame() would give a frame now: a credit or control frame owed, or data within both credits.
@@ -194,9 +201,11 @@ public:
     // Appends as much of `data` as the stream's buffer has room for (`taken`), and its end after it when `fin` and
     // every byte was taken.
     [[nodiscard]] QuicStreamError write(u64 id, cont::ConstSpan<u8> data, bool fin, usize& taken) noexcept;
-    // Resets the sending part with `error` (RESET_STREAM at the bytes sent) or asks the peer to stop with `error`
-    // (STOP_SENDING; data arriving after it is dropped and its credit returned).
-    [[nodiscard]] QuicStreamError reset(u64 id, u64 error) noexcept;
+    // Resets the sending part with `error`: RESET_STREAM at the bytes sent, or with a `reliable_size` (at most the
+    // bytes written, and only toward a peer that advertised it: Invalid otherwise) RESET_STREAM_AT, delivering those
+    // first bytes reliably. Called again on such a stream it lowers the size, with the same code.
+    [[nodiscard]] QuicStreamError reset(u64 id, u64 error, u64 reliable_size = 0U) noexcept;
+    // Asks the peer to stop with `error` (STOP_SENDING; data arriving after it is dropped and its credit returned).
     [[nodiscard]] QuicStreamError stop_sending(u64 id, u64 error) noexcept;
     // The stream's urgency, 0 (most urgent) to kQuicStreamUrgencies - 1; new streams take kQuicDefaultUrgency.
     [[nodiscard]] QuicStreamError set_urgency(u64 id, u8 urgency) noexcept;
@@ -230,6 +239,8 @@ public:
     [[nodiscard]] u64 peer_limit(bool bidirectional) const noexcept;
     [[nodiscard]] const QuicReceiveWindow& connection_window() const noexcept { return m_window; }
     [[nodiscard]] const QuicSendCredit& connection_credit() const noexcept { return m_credit; }
+    // The peer advertised reset_stream_at (remembered for 0-RTT).
+    [[nodiscard]] bool peer_resets_at() const noexcept { return m_peer_resets_at; }
     [[nodiscard]] u64 connection_sent() const noexcept { return m_sent; }
 
 private:
@@ -244,7 +255,9 @@ private:
         QuicReceiveWindow window; // this side's
         u64 consumed = 0U;        // the bytes counted as read into the connection's total
         u64 reset_error = 0U;     // this side's RESET_STREAM
-        u64 reset_final = 0U;     // the final size it names
+        u64 reset_final = 0U;     // the final size it names: every byte ever sent
+        u64 reset_reliable = 0U;  // its reliable size: the smallest one given
+        u64 peer_reliable = 0U;   // the smallest reliable size the peer named
         u64 stop_error = 0U;      // this side's STOP_SENDING
         u64 peer_reset_error = 0U;
         u64 peer_stop_error = 0U;
@@ -259,6 +272,9 @@ private:
         bool active = false;
         bool listed = false;
         bool reset_owed = false;
+        bool reset_at = false;       // this side's reset is a RESET_STREAM_AT
+        bool reset_at_acked = false; // and the one carrying the current size was acknowledged
+        bool peer_reset_at = false;  // the peer's RESET_STREAM_AT arrived
         bool stop_owed = false;
         bool stopped = false; // this side asked the peer to stop: arriving data is dropped
         bool want_writable = false;
@@ -318,14 +334,21 @@ private:
     // Receiving.
     [[nodiscard]] QuicTransportError on_stream(const QuicFrame& frame, Slot& slot, bool early) noexcept;
     [[nodiscard]] QuicTransportError on_reset(const QuicFrame& frame, Slot& slot) noexcept;
+    [[nodiscard]] QuicTransportError on_reset_at(const QuicFrame& frame, Slot& slot) noexcept;
+    [[nodiscard]] QuicTransportError take_final_size(Slot& slot, u64 final_size) noexcept;
+    // The reliable bytes of a RESET_STREAM_AT were read (or a STOP_SENDING gave them up): the reset shows.
+    void settle_peer_reset(Slot& slot) noexcept;
     [[nodiscard]] bool account_received(Slot& slot, u64 end) noexcept;
     void account_consumed(Slot& slot, u64 consumed_to) noexcept;
     void after_receive(Slot& slot, u64 contiguous_before) noexcept;
-    void reset_send(Slot& slot, u64 error) noexcept;
+    void reset_send(Slot& slot, u64 error, u64 reliable_size) noexcept;
+    void lower_reliable(Slot& slot, u64 reliable_size) noexcept;
+    void settle_reset_at(Slot& slot) noexcept;
     void drop_stopped(Slot& slot) noexcept;
 
     // Sending.
     [[nodiscard]] u64 fresh_limit(const Slot& slot) const noexcept;
+    [[nodiscard]] bool reset_ready(const Slot& slot) const noexcept;
     [[nodiscard]] bool data_ready(const Slot& slot) const noexcept;
     [[nodiscard]] bool control_owed(const Slot& slot) const noexcept;
     [[nodiscard]] bool pending(const Slot& slot) const noexcept;
@@ -354,6 +377,7 @@ private:
     u64 m_sent = 0U;            // every stream's fresh bytes sent
     u64 m_received = 0U;        // every stream's highest offset received (a reset's final size)
     u64 m_consumed = 0U;        // every stream's bytes read, dropped or reset away
+    bool m_peer_resets_at = false;
 };
 
 } // namespace crd::net

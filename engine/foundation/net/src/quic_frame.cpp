@@ -1,6 +1,7 @@
 // crd-net -- QUIC frames (4.2a; docs/design/network-foundation.md#quic-frames).
 
 #include <crd/net/quic_frame.hpp>
+#include <crd/net/register_ids.hpp>
 
 namespace crd::net
 {
@@ -11,6 +12,7 @@ constexpr u64 kTypePing               = 0x01U;
 constexpr u64 kTypeAck                = 0x02U;
 constexpr u64 kTypeAckEcn             = 0x03U;
 constexpr u64 kTypeResetStream        = 0x04U;
+constexpr u64 kTypeResetStreamAt      = iana::kQuicFrameResetStreamAt;
 constexpr u64 kTypeStopSending        = 0x05U;
 constexpr u64 kTypeCrypto             = 0x06U;
 constexpr u64 kTypeNewToken           = 0x07U;
@@ -208,6 +210,13 @@ QuicTransportError read_body(cont::WireReader& in, u64 type, QuicFrame& frame) n
                 take_quic_varint(in, frame.value))
                    ? QuicTransportError::NoError
                    : QuicTransportError::FrameEncodingError;
+    case kTypeResetStreamAt:
+        frame.kind = QuicFrameKind::ResetStreamAt;
+        // The Reliable Size must not pass the Final Size (draft-ietf-quic-reliable-stream-reset section 4).
+        return (take_quic_varint(in, frame.stream_id) && take_quic_varint(in, frame.error_code) &&
+                take_quic_varint(in, frame.value) && take_quic_varint(in, frame.offset) && frame.offset <= frame.value)
+                   ? QuicTransportError::NoError
+                   : QuicTransportError::FrameEncodingError;
     case kTypeStopSending:
         return read_two(in, QuicFrameKind::StopSending, frame.error_code, frame);
     case kTypeCrypto:
@@ -279,6 +288,8 @@ u64 wire_type(const QuicFrame& frame) noexcept
         return kTypeAck;
     case QuicFrameKind::ResetStream:
         return kTypeResetStream;
+    case QuicFrameKind::ResetStreamAt:
+        return kTypeResetStreamAt;
     case QuicFrameKind::StopSending:
         return kTypeStopSending;
     case QuicFrameKind::Crypto:
@@ -333,6 +344,9 @@ bool add_body(const QuicFrame& frame, usize& total) noexcept
     case QuicFrameKind::ResetStream:
         return add_varint(total, frame.stream_id) && add_varint(total, frame.error_code) &&
                add_varint(total, frame.value);
+    case QuicFrameKind::ResetStreamAt:
+        return frame.offset <= frame.value && add_varint(total, frame.stream_id) &&
+               add_varint(total, frame.error_code) && add_varint(total, frame.value) && add_varint(total, frame.offset);
     case QuicFrameKind::StopSending:
         return add_varint(total, frame.stream_id) && add_varint(total, frame.error_code);
     case QuicFrameKind::Crypto:
@@ -389,6 +403,12 @@ void write_body(const QuicFrame& frame, cont::WireWriter& out) noexcept
         put_quic_varint(out, frame.stream_id);
         put_quic_varint(out, frame.error_code);
         put_quic_varint(out, frame.value);
+        break;
+    case QuicFrameKind::ResetStreamAt:
+        put_quic_varint(out, frame.stream_id);
+        put_quic_varint(out, frame.error_code);
+        put_quic_varint(out, frame.value);
+        put_quic_varint(out, frame.offset);
         break;
     case QuicFrameKind::StopSending:
         put_quic_varint(out, frame.stream_id);

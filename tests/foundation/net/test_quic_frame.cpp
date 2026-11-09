@@ -458,6 +458,7 @@ TEST_CASE("QUIC frames: placement follows RFC 9000's table 3, RFC 9221 and the s
         {QuicFrameKind::Ping, false, "IH01", false},
         {QuicFrameKind::Ack, false, "IH_1", false},
         {QuicFrameKind::ResetStream, false, "__01", false},
+        {QuicFrameKind::ResetStreamAt, false, "__01", false},
         {QuicFrameKind::StopSending, false, "__01", false},
         {QuicFrameKind::Crypto, false, "IH_1", false},
         {QuicFrameKind::NewToken, false, "___1", true},
@@ -511,3 +512,33 @@ TEST_CASE("QUIC frames: placement follows RFC 9000's table 3, RFC 9221 and the s
     CHECK_FALSE(quic_frame_probing(QuicFrameKind::Stream));
 }
 } // namespace
+
+TEST_CASE("QUIC frames: RESET_STREAM_AT reads, writes and refuses a reliable size past the final size",
+          "[net][4.2a][quic-frames]")
+{
+    // Type 0x24, stream 4, error 0x0102 in two bytes, final size 300, reliable size 7.
+    const u8 wire[] = {0x24U, 0x04U, 0x41U, 0x02U, 0x41U, 0x2CU, 0x07U};
+    WireReader in(ConstSpan<u8>(wire, sizeof(wire)));
+    QuicFrame frame;
+    REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);
+    CHECK(in.done());
+    CHECK(frame.kind == QuicFrameKind::ResetStreamAt);
+    CHECK(frame.stream_id == 4U);
+    CHECK(frame.error_code == 0x0102U);
+    CHECK(frame.value == 300U);
+    CHECK(frame.offset == 7U);
+    CHECK(quic_frame_bytes(frame) == sizeof(wire));
+    u8 out[sizeof(wire)] = {};
+    REQUIRE(write_quic_frame(frame, Span<u8>(out, sizeof(out))) == sizeof(wire));
+    CHECK(std::memcmp(out, wire, sizeof(wire)) == 0);
+
+    frame.offset = 301U;
+    CHECK(quic_frame_bytes(frame) == 0U); // never written
+    const u8 past[] = {0x24U, 0x04U, 0x00U, 0x05U, 0x06U};
+    WireReader bad(ConstSpan<u8>(past, sizeof(past)));
+    QuicFrame refused;
+    CHECK(read_quic_frame(bad, refused) == QuicTransportError::FrameEncodingError);
+    const u8 equal[] = {0x24U, 0x04U, 0x00U, 0x05U, 0x05U};
+    WireReader same(ConstSpan<u8>(equal, sizeof(equal)));
+    CHECK(read_quic_frame(same, refused) == QuicTransportError::NoError);
+}

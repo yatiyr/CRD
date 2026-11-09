@@ -4,7 +4,7 @@
 //
 // Input: limits for the two ends (stream slots, windows), then operations, each an operation byte and the parameter
 // bytes it reads (0 past the end), on a client's and a server's stream sets: opens, writes with and without a FIN,
-// reads, resets, STOP_SENDING, urgencies and polls by either application; packets taken from either end into a
+// reads, resets (reliable ones too), STOP_SENDING, urgencies and polls by either application; packets taken from either end into a
 // bounded flight, delivered in any order and any number of times, acknowledged or declared lost; and any frame bytes
 // injected into either end as if from its peer.
 //
@@ -220,6 +220,7 @@ void inject(World& w, Input& in, usize side)
     {
         case QuicFrameKind::Stream:
         case QuicFrameKind::ResetStream:
+        case QuicFrameKind::ResetStreamAt:
         case QuicFrameKind::StopSending:
         case QuicFrameKind::MaxData:
         case QuicFrameKind::MaxStreamData:
@@ -242,7 +243,9 @@ QuicStreamLimits limits_from(Input& in)
 {
     QuicStreamLimits l;
     l.peer_bidi = in.byte() % 4U;
-    l.peer_uni = in.byte() % 3U;
+    const u8 uni = in.byte();
+    l.peer_uni = uni % 3U;
+    l.reset_stream_at = (uni & 0x80U) != 0U;
     l.local_bidi = in.byte() % 4U;
     l.local_uni = in.byte() % 3U;
     l.receive_bytes = 64U * (1U + (in.byte() % 8U));
@@ -318,8 +321,12 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
                 read(w, in, side);
                 break;
             case 5U:
-                static_cast<void>(set.reset(id_of(in.byte()), in.byte()));
+            {
+                const u64 target = id_of(in.byte());
+                const u64 error = in.byte();
+                static_cast<void>(set.reset(target, error, ((op & 0x10U) != 0U) ? u64{in.byte()} * 4U : 0U));
                 break;
+            }
             case 6U:
                 static_cast<void>(set.stop_sending(id_of(in.byte()), in.byte()));
                 break;
@@ -400,4 +407,21 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         losses[sizeof(limits) + at] = round[at % sizeof(round)];
     }
     sink.add("losses", losses, sizeof(losses));
+    // Reliable resets: both ends advertise them; the client writes, resets keeping some bytes, loses the data and the
+    // frame, lowers the size, and the server reads what is left.
+    u8 reliable[sizeof(limits) + 34U];
+    for (usize at = 0U; at < sizeof(limits); ++at)
+    {
+        reliable[at] = limits[at];
+    }
+    reliable[1] = 0x82U;
+    reliable[10] = 0x82U;
+    const u8 resets[] = {0x00U, 0x02U, 0x00U, 0xF0U, 0x01U, 0x09U, 0x15U, 0x00U, 0x07U, 0x10U, 0x0DU, 0x00U,
+                         0x0AU, 0x0BU, 0x00U, 0x0DU, 0x00U, 0x15U, 0x00U, 0x07U, 0x08U, 0x0AU, 0x0BU, 0x00U,
+                         0x0CU, 0x00U, 0x84U, 0x00U, 0xFFU, 0x88U, 0x0AU, 0x0BU, 0x00U, 0x84U};
+    for (usize at = 0U; at < sizeof(resets); ++at)
+    {
+        reliable[sizeof(limits) + at] = resets[at];
+    }
+    sink.add("reliable-resets", reliable, sizeof(reliable));
 }

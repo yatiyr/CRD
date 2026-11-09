@@ -122,6 +122,7 @@ struct QuicTransportParameters
     QuicConnectionId       retry_source_connection_id;
     u64                    max_datagram_frame_size                = 0U; // RFC 9221: 0, no DATAGRAM frames
     bool                   grease_quic_bit                        = false; // RFC 9287
+    bool                   reset_stream_at                        = false; // draft-ietf-quic-reliable-stream-reset
     bool                   has_version_information                = false; // RFC 9368
     QuicVersionInformation version_information;
 };
@@ -174,7 +175,7 @@ struct QuicConnectionIdExpectation
 // ---- 0-RTT (RFC 9000 section 7.4.1, RFC 9221 section 3) ----
 
 // The bytes write_quic_early_parameters writes at most: a format byte and eleven varints.
-inline constexpr usize kQuicEarlyParameterBytes = 1U + (11U * 8U);
+inline constexpr usize kQuicEarlyParameterBytes = 1U + (12U * 8U);
 // The application's part of a server's early data context at most (QuicConnectionConfig and QmuxConfig early_context).
 inline constexpr usize kQuicMaxEarlyContextBytes = crypto::kTlsMaxEarlyDataContextBytes - kQuicEarlyParameterBytes;
 

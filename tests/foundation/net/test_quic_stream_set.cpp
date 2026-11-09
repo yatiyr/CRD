@@ -165,6 +165,39 @@ public:
     }
 };
 
+// Both ends advertise reset_stream_at.
+QuicStreamLimits reliable_limits()
+{
+    QuicStreamLimits l = limits(2U, 1U, 4096U);
+    l.reset_stream_at = true;
+    return l;
+}
+
+// RESET_STREAM_AT delivered to `set` as if from its peer.
+QuicTransportError reset_at_to(QuicStreamSet& set, u64 id, u64 error, u64 final_size, u64 reliable)
+{
+    QuicFrame frame;
+    frame.kind = QuicFrameKind::ResetStreamAt;
+    frame.stream_id = id;
+    frame.error_code = error;
+    frame.value = final_size;
+    frame.offset = reliable;
+    return set.on_frame(frame);
+}
+
+// The frame kinds of a packet, in order.
+bool has_kind(const Packet& packet, QuicFrameKind kind)
+{
+    for (usize index = 0U; index < packet.count; ++index)
+    {
+        if (packet.records[index].kind == kind)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // A frame of `kind` on stream `id`, delivered to `set` as if from its peer.
 QuicTransportError frame_to(QuicStreamSet& set, QuicFrameKind kind, u64 id, u64 value = 0U, ConstSpan<u8> data = {},
                             bool fin = false, u64 offset = 0U)
@@ -1181,4 +1214,450 @@ TEST_CASE("QUIC stream set: a server marks the bytes 0-RTT packets carried as re
     other.stream_id = 4U;
     REQUIRE(server.on_frame(other) == QuicTransportError::NoError);
     CHECK(server.peek(4U).early_bytes == 0U);
+}
+
+TEST_CASE("QUIC stream set: a reliable reset needs the peer's advertisement and written bytes",
+          "[net][4.2a][quic-stream-set]")
+{
+    QuicStreamLimits in_order = reliable_limits();
+    in_order.in_order = true;
+    CHECK_FALSE(QuicStreamSet::limits_valid(in_order)); // RESET_STREAM_AT is no frame of QMux
+    QuicTransportParameters filled;
+    {
+        Pair pair(reliable_limits(), reliable_limits());
+        pair.end[0].fill_parameters(filled);
+        CHECK(filled.reset_stream_at);
+        CHECK(pair.end[0].peer_resets_at());
+    }
+    // A peer that did not advertise it gets a plain RESET_STREAM and nothing else.
+    Pair plain(reliable_limits(), limits(2U, 1U, 4096U));
+    u64 id = 0U;
+    REQUIRE(plain.end[0].open(true, id) == QuicStreamError::None);
+    CHECK_FALSE(plain.end[0].peer_resets_at());
+    u64 written = 0U;
+    static_cast<void>(write_pattern(plain.end[0], id, written, 100U, id, false));
+    CHECK(plain.end[0].reset(id, 1U, 10U) == QuicStreamError::Invalid);
+    REQUIRE(plain.end[0].reset(id, 1U, 0U) == QuicStreamError::None);
+    CHECK(has_kind(plain.take(0U), QuicFrameKind::ResetStream));
+
+    // And this side, having not advertised it, takes the frame as one of no known type.
+    CHECK(reset_at_to(plain.end[1], 0U, 1U, 100U, 10U) == QuicTransportError::FrameEncodingError);
+
+    Pair pair(reliable_limits(), reliable_limits());
+    REQUIRE(pair.end[0].open(true, id) == QuicStreamError::None);
+    written = 0U;
+    static_cast<void>(write_pattern(pair.end[0], id, written, 100U, id, false));
+    CHECK(pair.end[0].reset(id, 1U, 101U) == QuicStreamError::Invalid);
+    CHECK(pair.end[0].send_state(id) == QuicSendState::Ready); // refused, nothing changed
+    CHECK(pair.end[0].reset(4096U, 1U, 1U) == QuicStreamError::Unknown);
+}
+
+TEST_CASE("QUIC stream set: a reliable reset keeps sending and resending its bytes and no others",
+          "[net][4.2a][quic-stream-set]")
+{
+    Pair pair(reliable_limits(), reliable_limits());
+    QuicStreamSet& c = pair.end[0];
+    QuicStreamSet& s = pair.end[1];
+    u64 id = 0U;
+    REQUIRE(c.open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    static_cast<void>(write_pattern(c, id, written, 3000U, id, false));
+    const Packet first = pair.take(0U, 1000U); // about 980 bytes, lost below
+    const u64 sent = first.records[0].length;
+    REQUIRE(first.records[0].kind == QuicFrameKind::Stream);
+    REQUIRE(sent > 500U);
+
+    // Part of what was sent is kept: the frame can go at once, and only the kept bytes are resent.
+    REQUIRE(c.reset(id, 0x55U, 200U) == QuicStreamError::None);
+    CHECK(c.send_state(id) == QuicSendState::ResetSent);
+    CHECK(c.reset(id, 0x56U, 100U) == QuicStreamError::Invalid); // the code never changes
+    CHECK(c.reset(id, 0x55U, 201U) == QuicStreamError::Invalid); // and the size only falls
+    usize taken = 0U;
+    CHECK(c.write(id, ConstSpan<u8>(), false, taken) == QuicStreamError::Ended);
+    pair.lost(first);
+    Packet at = pair.take(0U);
+    REQUIRE(at.count == 2U);
+    CHECK(at.records[0].kind == QuicFrameKind::ResetStreamAt);
+    CHECK(at.records[0].value == 200U);
+    CHECK(at.records[1].kind == QuicFrameKind::Stream);
+    CHECK(at.records[1].value == 0U);
+    CHECK(at.records[1].length == 200U);
+    CHECK_FALSE(c.has_frame());
+    pair.lost(at); // both go again
+    at = pair.take(0U);
+    REQUIRE(at.count == 2U);
+    REQUIRE(pair.deliver(at) == QuicTransportError::NoError);
+
+    // The acknowledgement of a stale copy of the data above the size means nothing.
+    pair.end[0].on_acked(first.records[0]);
+    CHECK(c.send_state(id) == QuicSendState::ResetSent); // the frame is not yet acknowledged
+    QuicStreamRecord frame_record = at.records[0];
+    c.on_acked(frame_record);
+    CHECK(c.send_state(id) == QuicSendState::ResetRecvd);
+
+    // The receiver read to the reliable size, then sees the reset; its credit counts the whole final size.
+    CHECK(s.recv_state(id) == QuicRecvState::DataRecvd);
+    QuicStreamRead read = s.peek(id);
+    CHECK_FALSE(read.fin);
+    CHECK_FALSE(read.reset);
+    REQUIRE(read.data.size() == 200U);
+    for (usize index = 0U; index < read.data.size(); ++index)
+    {
+        REQUIRE(read.data[index] == pattern(id, index));
+    }
+    CHECK(s.consume(id, 201U) == QuicStreamError::Invalid);
+    REQUIRE(s.consume(id, 200U) == QuicStreamError::None);
+    CHECK(s.recv_state(id) == QuicRecvState::ResetRecvd);
+    CHECK(s.connection_window().consumed() == sent);
+    read = s.peek(id);
+    CHECK(read.reset);
+    CHECK(read.reset_error == 0x55U);
+    u8 mask = 0U;
+    CHECK(events_of(s, id, mask) >= 1U);
+    CHECK((mask & kQuicStreamReset) != 0U);
+    CHECK(s.recv_state(id) == QuicRecvState::ResetRead);
+}
+
+TEST_CASE("QUIC stream set: reliable bytes never sent go first, within credit, and the frame names them",
+          "[net][4.2a][quic-stream-set]")
+{
+    QuicStreamLimits narrow = reliable_limits();
+    narrow.stream_window = 64U;
+    Pair pair(narrow, narrow);
+    QuicStreamSet& c = pair.end[0];
+    QuicStreamSet& s = pair.end[1];
+    u64 id = 0U;
+    REQUIRE(c.open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    static_cast<void>(write_pattern(c, id, written, 500U, id, false));
+    REQUIRE(c.reset(id, 7U, 300U) == QuicStreamError::None);
+
+    // The window lets 64 bytes go: the frame waits, because its final size of 300 would pass the credit.
+    Packet packet = pair.take(0U);
+    CHECK_FALSE(has_kind(packet, QuicFrameKind::ResetStreamAt));
+    CHECK(has_kind(packet, QuicFrameKind::Stream));
+    REQUIRE(pair.deliver(packet) == QuicTransportError::NoError);
+    pair.acked(packet);
+    CHECK(c.send_state(id) == QuicSendState::ResetSent);
+
+    // Credit arrives as the receiver reads; the reset goes with the last reliable byte's flight.
+    u64 got = 0U;
+    bool frame_seen = false;
+    for (usize round = 0U; round < 64U && !frame_seen; ++round)
+    {
+        for (QuicStreamRead read = s.peek(id); !read.data.empty(); read = s.peek(id))
+        {
+            for (usize index = 0U; index < read.data.size(); ++index)
+            {
+                REQUIRE(read.data[index] == pattern(id, got + index));
+            }
+            got += read.data.size();
+            REQUIRE(s.consume(id, read.data.size()) == QuicStreamError::None);
+        }
+        for (const usize from : {usize{1U}, usize{0U}})
+        {
+            packet = pair.take(from);
+            frame_seen = frame_seen || has_kind(packet, QuicFrameKind::ResetStreamAt);
+            REQUIRE(pair.deliver(packet) == QuicTransportError::NoError);
+            pair.acked(packet);
+        }
+        pair.now += kRtt;
+    }
+    REQUIRE(frame_seen);
+    pair.settle();
+    for (QuicStreamRead read = s.peek(id); !read.data.empty(); read = s.peek(id))
+    {
+        got += read.data.size();
+        REQUIRE(s.consume(id, read.data.size()) == QuicStreamError::None);
+    }
+    CHECK(got == 300U);
+    CHECK(s.peek(id).reset);
+    CHECK(s.peek(id).reset_error == 7U);
+    CHECK(c.send_state(id) == QuicSendState::ResetRecvd);
+    CHECK(c.connection_sent() == 300U);
+    CHECK(s.connection_window().consumed() == 300U);
+}
+
+TEST_CASE("QUIC stream set: a reliable size only falls, with the final size what was sent",
+          "[net][4.2a][quic-stream-set]")
+{
+    Pair pair(reliable_limits(), reliable_limits());
+    QuicStreamSet& c = pair.end[0];
+    QuicStreamSet& s = pair.end[1];
+    u64 id = 0U;
+    REQUIRE(c.open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    static_cast<void>(write_pattern(c, id, written, 1000U, id, false));
+    const Packet data = pair.take(0U, 300U); // bytes 0 to some 280 sent, none acknowledged
+    const u64 sent = data.records[0].length;
+    REQUIRE(c.reset(id, 9U, 800U) == QuicStreamError::None);
+
+    // Lowered before any frame went, below what was sent: the final size is still every byte sent.
+    REQUIRE(c.reset(id, 9U, 100U) == QuicStreamError::None);
+    CHECK(c.reset(id, 9U, 101U) == QuicStreamError::Invalid);
+    Packet first = pair.take(0U);
+    REQUIRE(has_kind(first, QuicFrameKind::ResetStreamAt));
+    REQUIRE(first.records[0].kind == QuicFrameKind::ResetStreamAt);
+    WireReader in(ConstSpan<u8>(first.bytes, first.size));
+    QuicFrame frame;
+    REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);
+    CHECK(frame.value == sent);
+    CHECK(frame.offset == 100U);
+    CHECK(frame.error_code == 9U);
+
+    // Lowered again after the frame went: a new frame; the old one's acknowledgement no longer settles the part and
+    // the loss of the old one sends nothing.
+    REQUIRE(c.reset(id, 9U, 40U) == QuicStreamError::None);
+    const Packet lowered = pair.take(0U);
+    REQUIRE(has_kind(lowered, QuicFrameKind::ResetStreamAt));
+    pair.lost(first);
+    pair.acked(data);
+    pair.acked(first);
+    CHECK(c.send_state(id) == QuicSendState::ResetSent);
+    CHECK_FALSE(c.has_frame());
+    pair.acked(lowered);
+    CHECK(c.send_state(id) == QuicSendState::ResetRecvd);
+
+    // The receiver takes the frames in the other order: the larger size that comes later is ignored.
+    REQUIRE(pair.deliver(data) == QuicTransportError::NoError);
+    REQUIRE(pair.deliver(lowered) == QuicTransportError::NoError);
+    REQUIRE(pair.deliver(first) == QuicTransportError::NoError);
+    CHECK(s.peek(id).data.size() == 40U);
+    CHECK(s.consume(id, 41U) == QuicStreamError::Invalid);
+    REQUIRE(s.consume(id, 40U) == QuicStreamError::None);
+    CHECK(s.peek(id).reset);
+    CHECK(s.connection_window().consumed() == sent);
+}
+
+TEST_CASE("QUIC stream set: STOP_SENDING gives up a reliable reset's bytes", "[net][4.2a][quic-stream-set]")
+{
+    Pair pair(reliable_limits(), reliable_limits());
+    QuicStreamSet& c = pair.end[0];
+    u64 id = 0U;
+    REQUIRE(c.open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    static_cast<void>(write_pattern(c, id, written, 600U, id, false));
+    const Packet data = pair.take(0U);
+    REQUIRE(c.reset(id, 3U, 500U) == QuicStreamError::None);
+    const Packet at = pair.take(0U);
+    REQUIRE(has_kind(at, QuicFrameKind::ResetStreamAt));
+    CHECK(frame_to(c, QuicFrameKind::StopSending, id) == QuicTransportError::NoError);
+    pair.lost(data); // nothing is resent: the size is now zero
+    const Packet zero = pair.take(0U);
+    REQUIRE(zero.count == 1U);
+    CHECK(zero.records[0].kind == QuicFrameKind::ResetStreamAt);
+    CHECK(zero.records[0].value == 0U);
+    pair.acked(zero);
+    CHECK(c.send_state(id) == QuicSendState::ResetRecvd);
+}
+
+TEST_CASE("QUIC stream set: every receiver refusal and reordering of RESET_STREAM_AT", "[net][4.2a][quic-stream-set]")
+{
+    Pair pair(reliable_limits(), reliable_limits());
+    QuicStreamSet& s = pair.end[1];
+    const u8 bytes[16] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U, 14U, 15U, 16U};
+    const ConstSpan<u8> data(bytes, sizeof(bytes));
+
+    SECTION("a changed code is STREAM_STATE_ERROR, a changed final size FINAL_SIZE_ERROR")
+    {
+        REQUIRE(reset_at_to(s, 0U, 5U, 100U, 16U) == QuicTransportError::NoError);
+        CHECK(reset_at_to(s, 0U, 6U, 100U, 16U) == QuicTransportError::StreamStateError);
+        CHECK(frame_to(s, QuicFrameKind::ResetStream, 0U, 100U) == QuicTransportError::StreamStateError); // code 0
+        CHECK(reset_at_to(s, 0U, 5U, 101U, 16U) == QuicTransportError::FinalSizeError);
+        CHECK(reset_at_to(s, 0U, 5U, 99U, 16U) == QuicTransportError::FinalSizeError);
+    }
+    SECTION("the final size passes the flow-control credit")
+    {
+        CHECK(reset_at_to(s, 0U, 5U, 4097U, 0U) == QuicTransportError::FlowControlError);
+    }
+    SECTION("the final size must match a FIN, and the frame after the FIN turns the end into a reset")
+    {
+        REQUIRE(frame_to(s, QuicFrameKind::Stream, 0U, 0U, data, true) == QuicTransportError::NoError);
+        CHECK(reset_at_to(s, 0U, 5U, 15U, 8U) == QuicTransportError::FinalSizeError);
+        REQUIRE(reset_at_to(s, 0U, 5U, 16U, 8U) == QuicTransportError::NoError);
+        QuicStreamRead read = s.peek(0U);
+        CHECK(read.data.size() == 8U);
+        CHECK_FALSE(read.fin);
+        REQUIRE(s.consume(0U, 8U) == QuicStreamError::None);
+        CHECK(s.peek(0U).reset);
+    }
+    SECTION("a unidirectional stream of this side's receives none")
+    {
+        CHECK(reset_at_to(s, 3U, 5U, 0U, 0U) == QuicTransportError::StreamStateError);
+    }
+    SECTION("a reliable size of zero, or one already read, shows the reset at once")
+    {
+        REQUIRE(frame_to(s, QuicFrameKind::Stream, 0U, 0U, data) == QuicTransportError::NoError);
+        REQUIRE(s.consume(0U, 8U) == QuicStreamError::None);
+        REQUIRE(reset_at_to(s, 0U, 5U, 100U, 8U) == QuicTransportError::NoError);
+        CHECK(s.recv_state(0U) == QuicRecvState::ResetRecvd);
+        CHECK(s.connection_window().consumed() == 100U);
+    }
+    SECTION("bytes in a gap are waited for, up to the reliable size and no further")
+    {
+        REQUIRE(reset_at_to(s, 0U, 5U, 100U, 32U) == QuicTransportError::NoError);
+        CHECK(s.recv_state(0U) == QuicRecvState::SizeKnown);
+        CHECK(s.peek(0U).data.empty());
+        CHECK_FALSE(s.peek(0U).reset);
+        REQUIRE(frame_to(s, QuicFrameKind::Stream, 0U, 0U, data.first(8U), false, 16U) == QuicTransportError::NoError);
+        CHECK(s.peek(0U).data.empty()); // a gap below it
+        REQUIRE(frame_to(s, QuicFrameKind::Stream, 0U, 0U, data, false, 0U) == QuicTransportError::NoError);
+        CHECK(s.peek(0U).data.size() == 24U);
+        CHECK(s.recv_state(0U) == QuicRecvState::SizeKnown);
+        REQUIRE(frame_to(s, QuicFrameKind::Stream, 0U, 0U, data, false, 24U) == QuicTransportError::NoError);
+        CHECK(s.recv_state(0U) == QuicRecvState::DataRecvd);
+        CHECK(s.peek(0U).data.size() == 32U); // bytes above the reliable size arrived and are not offered
+        u8 copy[64] = {};
+        bool ends = true;
+        CHECK(s.copy_readable(0U, 4U, Span<u8>(copy, sizeof(copy)), ends) == 28U);
+        CHECK_FALSE(ends);
+        CHECK(s.copy_readable(0U, 40U, Span<u8>(copy, sizeof(copy)), ends) == 0U);
+        REQUIRE(s.consume(0U, 32U) == QuicStreamError::None);
+        CHECK(s.recv_state(0U) == QuicRecvState::ResetRecvd);
+    }
+    SECTION("a later RESET_STREAM stands for a reliable size of zero")
+    {
+        REQUIRE(frame_to(s, QuicFrameKind::Stream, 0U, 0U, data) == QuicTransportError::NoError);
+        REQUIRE(reset_at_to(s, 0U, 0U, 100U, 16U) == QuicTransportError::NoError);
+        CHECK(s.peek(0U).data.size() == 16U);
+        REQUIRE(frame_to(s, QuicFrameKind::ResetStream, 0U, 100U) == QuicTransportError::NoError); // code 0, as before
+        CHECK(s.peek(0U).reset);
+        CHECK(s.connection_window().consumed() == 100U);
+    }
+    SECTION("a plain RESET_STREAM first: a RESET_STREAM_AT after it delivers nothing more")
+    {
+        REQUIRE(frame_to(s, QuicFrameKind::ResetStream, 0U, 100U) == QuicTransportError::NoError);
+        REQUIRE(reset_at_to(s, 0U, 0U, 100U, 16U) == QuicTransportError::NoError);
+        CHECK(s.peek(0U).reset);
+        CHECK(reset_at_to(s, 0U, 1U, 100U, 16U) == QuicTransportError::StreamStateError);
+    }
+    SECTION("STOP_SENDING drops the reliable bytes too")
+    {
+        REQUIRE(frame_to(s, QuicFrameKind::Stream, 0U, 0U, data) == QuicTransportError::NoError);
+        REQUIRE(s.stop_sending(0U, 1U) == QuicStreamError::None);
+        REQUIRE(reset_at_to(s, 0U, 5U, 100U, 90U) == QuicTransportError::NoError);
+        CHECK(s.recv_state(0U) == QuicRecvState::ResetRecvd);
+        CHECK(s.connection_window().consumed() == 100U);
+    }
+}
+
+TEST_CASE("QUIC stream set: reliable resets survive an exchange that loses, reorders and duplicates",
+          "[net][4.2a][quic-stream-set]")
+{
+    for (u64 seed = 1U; seed <= 32U; ++seed)
+    {
+        Rng rng{seed};
+        Pair pair(reliable_limits(), reliable_limits());
+        QuicStreamSet& c = pair.end[0];
+        QuicStreamSet& s = pair.end[1];
+        u64 id = 0U;
+        REQUIRE(c.open(true, id) == QuicStreamError::None);
+        u64 written = 0U;
+        static_cast<void>(write_pattern(c, id, written, 2000U + (rng.next() % 4000U), id, false));
+        const Packet early = pair.take(0U, 500U);
+        REQUIRE(pair.deliver(early) == QuicTransportError::NoError);
+        const u64 reliable = 1U + (rng.next() % written);
+        REQUIRE(c.reset(id, 0x11U, reliable) == QuicStreamError::None);
+        pair.acked(early);
+
+        Packet flight[16];
+        usize held = 0U;
+        u64 got = 0U;
+        for (usize round = 0U; round < 20000U && c.send_state(id) != QuicSendState::ResetRecvd; ++round)
+        {
+            if (held < 16U && c.has_frame())
+            {
+                flight[held++] = pair.take(0U, 400U + (rng.next() % 800U));
+            }
+            if (held != 0U && (rng.chance(500U) || held == 16U))
+            {
+                const usize index = rng.next() % held;
+                if (rng.chance(200U))
+                {
+                    pair.lost(flight[index]);
+                }
+                else
+                {
+                    REQUIRE(pair.deliver(flight[index]) == QuicTransportError::NoError);
+                    if (rng.chance(200U))
+                    {
+                        REQUIRE(pair.deliver(flight[index]) == QuicTransportError::NoError);
+                    }
+                    pair.acked(flight[index]);
+                }
+                flight[index] = flight[--held];
+            }
+            for (QuicStreamRead read = s.peek(id); !read.data.empty(); read = s.peek(id))
+            {
+                for (usize at = 0U; at < read.data.size(); ++at)
+                {
+                    REQUIRE(read.data[at] == pattern(id, got + at));
+                }
+                got += read.data.size();
+                REQUIRE(s.consume(id, read.data.size()) == QuicStreamError::None);
+            }
+            while (s.has_frame())
+            {
+                const Packet window = pair.take(1U);
+                REQUIRE(pair.deliver(window) == QuicTransportError::NoError);
+                pair.acked(window);
+            }
+            pair.now += kMs;
+        }
+        REQUIRE(c.send_state(id) == QuicSendState::ResetRecvd);
+        for (usize index = 0U; index < held; ++index)
+        {
+            REQUIRE(pair.deliver(flight[index]) == QuicTransportError::NoError); // stale copies change nothing
+        }
+        for (QuicStreamRead read = s.peek(id); !read.data.empty(); read = s.peek(id))
+        {
+            got += read.data.size();
+            REQUIRE(s.consume(id, read.data.size()) == QuicStreamError::None);
+        }
+        // Bytes above the size that were read before the frame arrived are legal (section 5); none after it.
+        CHECK(got >= reliable);
+        CHECK(got <= ((reliable > early.records[0].length) ? reliable : u64{early.records[0].length}));
+        CHECK(s.peek(id).reset);
+        CHECK(s.peek(id).reset_error == 0x11U);
+    }
+}
+
+TEST_CASE("QUIC stream set: a transport that acknowledges by taking a frame passes 4 GiB on one stream",
+          "[net][4.2a][quic-stream-set]")
+{
+    // on_all_acked() once named the whole stream in a 32-bit length, so a stream past 4 GiB stopped being acknowledged.
+    QuicStreamLimits l = limits(1U, 0U, 1U << 20U);
+    l.receive_bytes = 1U << 20U;
+    l.send_bytes = 1U << 20U;
+    l.connection_window = u64{1} << 33U;
+    l.connection_max_window = l.connection_window;
+    l.in_order = true;
+    CountingAllocator allocator;
+    QuicStreamSet set;
+    REQUIRE(set.init(allocator, l, QuicSide::Client));
+    QuicTransportParameters peer;
+    peer.initial_max_data = u64{1} << 33U;
+    peer.initial_max_stream_data_bidi_remote = u64{1} << 33U;
+    peer.initial_max_streams_bidi = 1U;
+    set.set_peer_parameters(peer);
+    u64 id = 0U;
+    REQUIRE(set.open(true, id) == QuicStreamError::None);
+    constexpr usize kChunk = 1U << 20U;
+    auto chunk = std::make_unique<u8[]>(kChunk);
+    const u64 total = (u64{1} << 32U) + (u64{1} << 21U);
+    u64 sent = 0U;
+    for (u64 at = 0U; at < total; at += kChunk)
+    {
+        usize taken = 0U;
+        REQUIRE(set.write(id, ConstSpan<u8>(chunk.get(), kChunk), false, taken) == QuicStreamError::None);
+        REQUIRE(taken == kChunk); // room came back
+        QuicFrame frame;
+        QuicStreamRecord record;
+        while (set.next_frame(65536U, 1000U, kRtt, frame, record))
+        {
+            sent += frame.data.size();
+        }
+        set.on_all_acked();
+    }
+    CHECK(sent == total);
 }

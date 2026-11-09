@@ -56,6 +56,7 @@ enum class QuicFrameKind : u8
     Ping,
     Ack,
     ResetStream,
+    ResetStreamAt,
     StopSending,
     Crypto,
     NewToken,
@@ -127,6 +128,7 @@ struct QuicAck
 //   Padding            data: the run of zero bytes (read: consecutive PADDING bytes are one frame)
 //   Ack                ack (read only: write_quic_ack writes ACK frames)
 //   ResetStream        stream_id, error_code, value (the final size)
+//   ResetStreamAt      stream_id, error_code, value (the final size), offset (the reliable size, at most value)
 //   StopSending        stream_id, error_code
 //   Crypto             offset, data
 //   NewToken           data (the token, never empty)

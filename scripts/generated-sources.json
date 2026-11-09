@@ -1875,7 +1875,7 @@
         "scripts/gen-register-ids.py",
         "--check"
       ],
-      "sha256": "3a79992a499032c01c2d65797fb58c9ffc045ac78bac1db7113581b224360271"
+      "sha256": "fd3a20113afd39bed5b9688989aedf30c8e450d08a472a2dcbdef09acb59d73e"
     },
     {
       "path": "engine/foundation/net/include/crd/net/wire/session_control.hpp",
