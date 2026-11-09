@@ -9,6 +9,7 @@
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/net/http3.hpp>
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
 
@@ -29,6 +30,7 @@ constexpr u64 kEnableConnect = 0x8U;
 constexpr u64 kDatagram = 0x33U;
 constexpr u64 kDatagramOld = 0xFFD277U;
 constexpr u64 kWtEnabled = 0x20B8933BU;
+constexpr u64 kWtEnabledDraft16 = 0x2C7CF000U;
 constexpr u64 kWtUniLimit = 0x2B64U;
 constexpr u64 kWtBidiLimit = 0x2B65U;
 constexpr u64 kWtDataLimit = 0x2B61U;
@@ -214,7 +216,8 @@ TEST_CASE("webtransport: nothing is offered, or read, unless configured", "[http
 {
     Fixture f;
     f.make(false, true, h3_config(QuicSide::Client), h3_config(QuicSide::Server));
-    f.hand_settings(kH3Client, settings({kWtEnabled, 7U, kWtUniLimit, 3U, kDatagramOld, 9U, kWtLegacy, 5U}));
+    f.hand_settings(kH3Client,
+                    settings({kWtEnabled, 7U, kWtEnabledDraft16, 7U, kWtUniLimit, 3U, kDatagramOld, 9U, kWtLegacy, 5U}));
     f.rig->settle();
     CHECK(f.rig->h3[kH3Server].error() == 0U);
     const Http3Settings& peer = f.rig->h3[kH3Server].peer_settings();
@@ -229,19 +232,25 @@ TEST_CASE("webtransport: SETTINGS are held to section 3.1 and 9.2", "[http3][web
 {
     SECTION("a server's SETTINGS_WT_ENABLED above 1 is an error at a client")
     {
-        Fixture f;
-        f.make(true, false);
-        f.hand_settings(kH3Server, settings({kWtEnabled, 2U}));
-        f.rig->settle();
-        CHECK(f.rig->h3[kH3Client].error() == kH3SettingsError);
+        for (const u64 id : {kWtEnabled, kWtEnabledDraft16})
+        {
+            Fixture f;
+            f.make(true, false);
+            f.hand_settings(kH3Server, settings({id, 2U}));
+            f.rig->settle();
+            CHECK(f.rig->h3[kH3Client].error() == kH3SettingsError);
+        }
     }
     SECTION("a client's is ignored by a server, whatever it says")
     {
-        Fixture f;
-        f.make(false, true);
-        f.hand_settings(kH3Client, settings({kDatagram, 1U, kWtEnabled, 2U}));
-        f.rig->settle();
-        CHECK(f.rig->h3[kH3Server].error() == 0U);
+        for (const u64 id : {kWtEnabled, kWtEnabledDraft16})
+        {
+            Fixture f;
+            f.make(false, true);
+            f.hand_settings(kH3Client, settings({kDatagram, 1U, id, 2U}));
+            f.rig->settle();
+            CHECK(f.rig->h3[kH3Server].error() == 0U);
+        }
     }
     SECTION("the older datagram setting is read as 0x33 is")
     {
@@ -259,13 +268,65 @@ TEST_CASE("webtransport: SETTINGS are held to section 3.1 and 9.2", "[http3][web
     }
     SECTION("each may appear only once")
     {
-        for (const u64 id : {kWtEnabled, kWtUniLimit, kWtBidiLimit, kWtDataLimit, kWtLegacy, kDatagramOld})
+        for (const u64 id : {kWtEnabled, kWtEnabledDraft16, kWtUniLimit, kWtBidiLimit, kWtDataLimit, kWtLegacy,
+                             kDatagramOld})
         {
             Fixture f;
             f.make(false, true);
             f.hand_settings(kH3Client, settings({id, 1U, id, 1U}));
             f.rig->settle();
             CHECK(f.rig->h3[kH3Server].error() == kH3SettingsError);
+        }
+    }
+}
+
+TEST_CASE("webtransport: SETTINGS_WT_ENABLED is sent and read under both codepoints (section 7.1)",
+          "[http3][webtransport]")
+{
+    SECTION("a WebTransport end names both, each once")
+    {
+        Fixture f;
+        f.make(true, false);
+        f.rig->settle();
+        const QuicStreamRead control = f.rig->streams[kH3Server].peek(2U); // the client's first unidirectional stream
+        const H3Wire both = payload({kWtEnabled, 1U, kWtEnabledDraft16, 1U});
+        const u8* const end = control.data.data() + control.data.size();
+        CHECK(std::search(control.data.data(), end, both.bytes, both.bytes + both.size) != end);
+    }
+    SECTION("the draft -16 codepoint alone is a WebTransport server")
+    {
+        Fixture f;
+        f.make(true, false);
+        f.hand_settings(kH3Server, settings({kEnableConnect, 1U, kDatagram, 1U, kWtEnabledDraft16, 1U}));
+        f.rig->settle();
+        CHECK(f.rig->h3[kH3Client].error() == 0U);
+        CHECK(f.rig->h3[kH3Client].peer_settings().wt.enabled);
+        CHECK(f.rig->h3[kH3Client].wt_ready(false));
+    }
+    SECTION("either saying 1 is enough, in either order, and neither is not")
+    {
+        const u64 ids[2][2] = {{kWtEnabled, kWtEnabledDraft16}, {kWtEnabledDraft16, kWtEnabled}};
+        for (const auto& pair : ids)
+        {
+            Fixture yes;
+            yes.make(true, false);
+            yes.hand_settings(kH3Server, settings({kEnableConnect, 1U, kDatagram, 1U, pair[0], 1U, pair[1], 0U}));
+            yes.rig->settle();
+            CHECK(yes.rig->h3[kH3Client].error() == 0U);
+            CHECK(yes.rig->h3[kH3Client].wt_ready(false));
+
+            Fixture later;
+            later.make(true, false);
+            later.hand_settings(kH3Server, settings({kEnableConnect, 1U, kDatagram, 1U, pair[0], 0U, pair[1], 1U}));
+            later.rig->settle();
+            CHECK(later.rig->h3[kH3Client].wt_ready(false));
+
+            Fixture no;
+            no.make(true, false);
+            no.hand_settings(kH3Server, settings({kEnableConnect, 1U, kDatagram, 1U, pair[0], 0U, pair[1], 0U}));
+            no.rig->settle();
+            CHECK(no.rig->h3[kH3Client].error() == 0U);
+            CHECK_FALSE(no.rig->h3[kH3Client].wt_ready(false));
         }
     }
 }

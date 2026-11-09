@@ -2254,26 +2254,25 @@ TEST_CASE("QUIC connection: a reliable reset delivers its bytes and then the res
 
             u64 read = 0U;
             u64 code = 0U;
-            REQUIRE(net->run_until(
-                [&]
+            const auto drained = [&]
+            {
+                QuicStreamRead part = server.streams().peek(stream);
+                for (; !part.data.empty(); part = server.streams().peek(stream))
                 {
-                    QuicStreamRead part = server.streams().peek(stream);
-                    for (; !part.data.empty(); part = server.streams().peek(stream))
+                    for (usize at = 0U; at < part.data.size(); ++at)
                     {
-                        for (usize at = 0U; at < part.data.size(); ++at)
-                        {
-                            REQUIRE(part.data[at] == pattern(stream, read + at));
-                        }
-                        read += part.data.size();
-                        REQUIRE(server.streams().consume(stream, part.data.size()) == QuicStreamError::None);
+                        REQUIRE(part.data[at] == pattern(stream, read + at));
                     }
-                    if (part.reset)
-                    {
-                        code = part.reset_error;
-                    }
-                    return part.reset && client.streams().send_state(stream) == QuicSendState::ResetRecvd;
-                },
-                600000U * kMs));
+                    read += part.data.size();
+                    REQUIRE(server.streams().consume(stream, part.data.size()) == QuicStreamError::None);
+                }
+                if (part.reset)
+                {
+                    code = part.reset_error;
+                }
+                return part.reset && client.streams().send_state(stream) == QuicSendState::ResetRecvd;
+            };
+            REQUIRE(net->run_until(drained, 600000U * kMs));
             CHECK(read == reliable);
             CHECK(code == 0x2AU);
             CHECK(client.state() == QuicConnectionState::Established);

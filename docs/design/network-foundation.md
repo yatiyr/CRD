@@ -1171,7 +1171,12 @@ them: what differs is negotiation and whether flow control exists.
 
 - **Revisions.** A server offers both and each CONNECT says which it is. `webtransport-h3` is -17: SETTINGS_WT_ENABLED
   0x20b8933b = 1, initial limits 0x2b64 (uni), 0x2b65 (bidi), 0x2b61 (data), a value above 1 from a server is
-  H3_SETTINGS_ERROR, and RESET_STREAM_AT and QUIC datagrams are required of both. `webtransport` is the legacy spelling, which
+  H3_SETTINGS_ERROR, and RESET_STREAM_AT and QUIC datagrams are required of both.
+  Section 7.1 has an end that supports several revisions send one SETTINGS_WT_ENABLED per codepoint: Cerid also sends
+  and reads -16's 0x2c7cf000, since webtransport-go 0.13 speaks only that one. A server reads the codepoints a client
+  sends to select a revision, and here the selection changes nothing: between -16 and -17 the wire is the same, and the
+  differences are a misplaced WT_STREAM's error (H3_FRAME_ERROR before, H3_FRAME_UNEXPECTED now; Cerid always sends -17's),
+  retained SETTINGS (Cerid retains none) and limits a -17 reader holds to the initial values too (Cerid always does). `webtransport` is the legacy spelling, which
   [N02](../research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n02)'s survey has Chrome and Safari still
   sending and `web-transport-proto` 0.6.4 does send: SETTINGS 0xc671706a carries the session count, no flow control, a
   plain RESET_STREAM is all it can rely on, and its datagram setting may be the older 0xFFD277, read as 0x33 is (each

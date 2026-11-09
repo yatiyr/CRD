@@ -36,6 +36,7 @@ constexpr u64 kSettingEnableConnectProtocol = 0x8U;
 constexpr u64 kSettingH3Datagram = 0x33U;
 constexpr u64 kSettingH3DatagramOld = 0xFFD277U; // the legacy spelling's, read as 0x33 is
 constexpr u64 kSettingWtEnabled = 0x20B8933BU;
+constexpr u64 kSettingWtEnabledDraft16 = 0x2C7CF000U; // draft section 7.1: sent and read beside the current one (S59)
 constexpr u64 kSettingWtMaxStreamsUni = 0x2B64U;
 constexpr u64 kSettingWtMaxStreamsBidi = 0x2B65U;
 constexpr u64 kSettingWtMaxData = 0x2B61U;
@@ -57,6 +58,7 @@ constexpr u32 kSeenWtUni = 1U << 7U;
 constexpr u32 kSeenWtBidi = 1U << 8U;
 constexpr u32 kSeenWtData = 1U << 9U;
 constexpr u32 kSeenWtLegacy = 1U << 10U;
+constexpr u32 kSeenWtEnabledDraft16 = 1U << 11U;
 
 // Frame types HTTP/2 used, which HTTP/3 reserved (section 7.2.8).
 [[nodiscard]] bool is_http2_frame(u64 type) noexcept
@@ -973,7 +975,11 @@ bool Http3Connection::read_settings(cont::ConstSpan<u8> payload) noexcept
                 break;
             case kSettingWtEnabled:
                 bit = wt ? kSeenWtEnabled : 0U;
-                next.wt.enabled = wt && value == 1U;
+                next.wt.enabled = next.wt.enabled || (wt && value == 1U);
+                break;
+            case kSettingWtEnabledDraft16:
+                bit = wt ? kSeenWtEnabledDraft16 : 0U;
+                next.wt.enabled = next.wt.enabled || (wt && value == 1U);
                 break;
             case kSettingWtMaxStreamsUni:
                 bit = wt ? kSeenWtUni : 0U;
@@ -1002,7 +1008,8 @@ bool Http3Connection::read_settings(cont::ConstSpan<u8> payload) noexcept
         // A server ignores a client's SETTINGS_WT_ENABLED, whatever its value (draft section 3.1).
         const bool boolean = id == kSettingEnableConnectProtocol || id == kSettingH3Datagram ||
                              bit == kSeenDatagramOld ||
-                             (bit == kSeenWtEnabled && m_config.side == crypto::QuicSide::Client);
+                             ((bit == kSeenWtEnabled || bit == kSeenWtEnabledDraft16) &&
+                              m_config.side == crypto::QuicSide::Client);
         if (boolean && value > 1U)
         {
             return fail(kH3SettingsError);
@@ -1424,6 +1431,7 @@ usize Http3Connection::write_settings(cont::Span<u8> out) const noexcept
         {grease, m_config.grease & 0xFFU},
         // These go only when they say something.
         {kSettingWtEnabled, offer.enabled ? 1U : 0U},
+        {kSettingWtEnabledDraft16, offer.enabled ? 1U : 0U},
         {kSettingWtMaxStreamsUni, offer.enabled ? offer.max_streams_uni : 0U},
         {kSettingWtMaxStreamsBidi, offer.enabled ? offer.max_streams_bidi : 0U},
         {kSettingWtMaxData, offer.enabled ? offer.max_data : 0U},
