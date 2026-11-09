@@ -68,6 +68,18 @@ inline Http3Config h3_config(crypto::QuicSide side)
     return config;
 }
 
+// A side offering WebTransport (docs/design/network-foundation.md#webtransport).
+inline Http3Config h3_wt_config(crypto::QuicSide side)
+{
+    Http3Config config = h3_config(side);
+    config.webtransport.enabled = true;
+    config.webtransport.max_streams_uni = 16U;
+    config.webtransport.max_streams_bidi = 17U;
+    config.webtransport.max_data = 1U << 20U;
+    config.webtransport.legacy_sessions = 1U;
+    return config;
+}
+
 // Field lines for a call: they view the text given.
 struct H3Fields
 {
@@ -97,6 +109,16 @@ inline const H3Fields& h3_get()
 {
     static const H3Fields kFields{
         {":method", "GET"}, {":scheme", "https"}, {":authority", "cerid.test"}, {":path", "/index"}};
+    return kFields;
+}
+
+inline const H3Fields& h3_wt_connect()
+{
+    static const H3Fields kFields{{":method", "CONNECT"},
+                                  {":protocol", "webtransport-h3"},
+                                  {":scheme", "https"},
+                                  {":authority", "a"},
+                                  {":path", "/wt"}};
     return kFields;
 }
 
@@ -171,7 +193,8 @@ public:
     H3Rig(memory::IAllocator& allocator_in, bool client_h3, bool server_h3,
           const Http3Config& client_config = h3_config(crypto::QuicSide::Client),
           const Http3Config& server_config = h3_config(crypto::QuicSide::Server),
-          const QuicStreamLimits& limits = h3_limits(), bool collect = true)
+          const QuicStreamLimits& limits = h3_limits(), bool collect = true,
+          const QuicStreamLimits* server_limits = nullptr)
         : allocator(allocator_in)
     {
         if (collect)
@@ -180,7 +203,8 @@ public:
             events[kH3Server] = std::make_unique<H3Seen[]>(kH3MaxEvents);
         }
         ok = streams[kH3Client].init(allocator, limits, crypto::QuicSide::Client) &&
-             streams[kH3Server].init(allocator, limits, crypto::QuicSide::Server) &&
+             streams[kH3Server].init(allocator, (server_limits != nullptr) ? *server_limits : limits,
+                                     crypto::QuicSide::Server) &&
              datagrams[kH3Client].init(allocator, h3_datagram_limits()) &&
              datagrams[kH3Server].init(allocator, h3_datagram_limits());
         if (!ok)

@@ -1,7 +1,8 @@
 #pragma once
 
 // crd-net -- an HTTP/3 connection over a QUIC connection's streams and datagrams (4.2a; contract:
-// docs/design/network-foundation.md#http3). Sources: RFC 9114, RFC 9204 section 4.2, RFC 9220 and RFC 9297 section 2.
+// docs/design/network-foundation.md#http3 and #webtransport). Sources: RFC 9114, RFC 9204 section 4.2, RFC 9220, RFC
+// 9297 section 2 and draft-ietf-webtrans-http3-17.
 //
 //   sans-I/O  it reads and writes the QuicStreamSet (and QuicDatagrams) it was given and never touches a socket or a
 //             clock; the owner calls poll() from its service turn and closes the QUIC connection with error() when that
@@ -24,6 +25,11 @@
 //             server binds its settings into the ticket with early_context().
 //   grease    every SETTINGS carries a reserved identifier, the control stream a reserved frame and, when the peer
 //             allows a fourth stream, a reserved stream type goes once (section 7.2.8).
+//   WebTrans- with the offer made, a stream's first bytes say whether it is HTTP or a WebTransport stream (uni type
+//   port      0x54; 0x41 first on a bidirectional stream) and of which session. This class only classifies and reports:
+//             the bytes are read and written through the QuicStreamSet and sessions belong to the layer above. A server
+//             touches no bidirectional or WebTransport stream before the client's SETTINGS: they wait unread in QUIC's
+//             buffers (draft section 7.1).
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
@@ -59,6 +65,34 @@ inline constexpr u64 kH3MessageError = 0x10EU;
 inline constexpr u64 kH3ConnectError = 0x10FU;
 inline constexpr u64 kH3DatagramError = 0x33U;
 
+// draft-ietf-webtrans-http3-17 section 9.5.
+inline constexpr u64 kWtBufferedStreamRejected = 0x3994BD84U;
+inline constexpr u64 kWtSessionGone = 0x170D7B68U;
+inline constexpr u64 kWtFlowControlError = 0x045D4487U;
+inline constexpr u64 kWtAlpnError = 0x0817B3DDU;
+inline constexpr u64 kWtRequirementsNotMet = 0x212C0D48U;
+inline constexpr u64 kWtApplicationErrorFirst = 0x52E4A40FA8DBULL;
+inline constexpr u64 kWtApplicationErrorLast = 0x52E5AC983162ULL;
+inline constexpr u64 kWtMaxStreams = u64{1} << 60U; // a stream limit's largest value (section 5.6.2)
+
+// Section 4.4: a WebTransport application's 32-bit code as the HTTP/3 code on the wire, skipping the reserved points.
+[[nodiscard]] constexpr u64 wt_http_code(u32 application) noexcept
+{
+    return kWtApplicationErrorFirst + u64{application} + (u64{application} / 0x1EU);
+}
+
+// The reverse: false for a code outside the range or on a reserved point, a reset with no application code.
+[[nodiscard]] constexpr bool wt_application_code(u64 http, u32& application) noexcept
+{
+    if (http < kWtApplicationErrorFirst || http > kWtApplicationErrorLast || ((http - 0x21U) % 0x1FU) == 0U)
+    {
+        return false;
+    }
+    const u64 shifted = http - kWtApplicationErrorFirst;
+    application = static_cast<u32>(shifted - (shifted / 0x1FU));
+    return true;
+}
+
 inline constexpr u32 kHttp3MinFieldBytes = 1024U;
 inline constexpr u32 kHttp3MaxFieldBytes = 1U << 20U;
 // A HEADERS frame's largest payload for a section of `field_bytes`, and the frame header before it at most.
@@ -66,6 +100,18 @@ inline constexpr u32 kHttp3SectionOverhead = 2U * static_cast<u32>(kHttpMaxInteg
 inline constexpr u32 kHttp3FrameHeaderBytes = 16U;
 inline constexpr usize kHttp3EarlyContextBytes = 14U;
 inline constexpr u64 kHttp3NoFieldLimit = ~u64{0}; // no SETTINGS_MAX_FIELD_SECTION_SIZE was sent
+
+// A side's WebTransport settings (draft-ietf-webtrans-http3-17 section 9.2), and in Http3Config its offer. Both
+// revisions go in one SETTINGS and each CONNECT says which it uses (docs/design/network-foundation.md#webtransport).
+// Never remembered for 0-RTT.
+struct Http3WebTransportSettings
+{
+    bool enabled = false; // SETTINGS_WT_ENABLED; in an offer, this connection takes WebTransport at all
+    u64 max_streams_uni = 0U;
+    u64 max_streams_bidi = 0U;
+    u64 max_data = 0U;
+    u64 legacy_sessions = 0U; // the legacy `webtransport` spelling's session count: 0 does not offer it
+};
 
 // What one side tells the other in SETTINGS, with RFC 9114's defaults.
 struct Http3Settings
@@ -75,6 +121,7 @@ struct Http3Settings
     u64 max_field_section_size = kHttp3NoFieldLimit;
     bool enable_connect_protocol = false;
     bool h3_datagram = false;
+    Http3WebTransportSettings wt;
 };
 
 struct Http3Config
@@ -88,6 +135,8 @@ struct Http3Config
     u32 datagram_bytes = 1500U; // the largest HTTP datagram sent
     bool connect_protocol = false;
     bool datagrams = false;
+    // Needs datagrams and QuicStreamLimits::reset_stream_at, and on a server connect_protocol too.
+    Http3WebTransportSettings webtransport;
     // A client resuming: the server's settings it stored with the ticket, in force until the server's arrive.
     const Http3Settings* remembered = nullptr;
     u64 grease = 0U; // varies the reserved values sent
@@ -105,7 +154,14 @@ enum class Http3EventKind : u8
     Aborted,  // the stream ended with `error`: the peer's reset, a malformed message or a rejected request
     Stopped,  // the peer's STOP_SENDING, `error`: its response part or request part stops
     Writable, // a call that returned Blocked can go again
-    Datagram, // `payload`, valid until the next poll()
+    Datagram, // `payload`, valid until the next poll(); with WebTransport offered also for a CONNECT not yet read
+    // WebTransport streams: `id` is the session, `stream` the stream, `header` the bytes its header took. Each goes
+    // once per arrival: read with QuicStreamSet::peek() until it is empty.
+    WtStream,   // the peer opened one
+    WtReadable, // bytes or the end arrived
+    WtWritable, // a write that took less than offered has room again
+    WtAborted,  // the peer reset it, after every reliable byte was read: `error` (wt_application_code), `final_size`
+    WtStopped,  // the peer's STOP_SENDING: `error` (wt_application_code)
 };
 
 struct Http3Event
@@ -117,6 +173,8 @@ struct Http3Event
     cont::ConstSpan<HttpField> fields;
     HttpMessageInfo info;
     cont::ConstSpan<u8> payload;
+    u64 final_size = 0U; // WtAborted: of the whole stream, header included
+    u32 header = 0U;
     bool early = false; // the section or datagram came in 0-RTT: replayable
 };
 
@@ -182,6 +240,23 @@ public:
     // An HTTP datagram of `id`, an extended CONNECT's stream, with the send part open: RFC 9297 section 2.
     [[nodiscard]] Http3Error send_datagram(u64 id, cont::ConstSpan<u8> payload, u64 now_ns) noexcept;
 
+    // Whether a session of that revision can be established here now: draft section 3.1's settings and transport
+    // parameters from the peer, on this connection.
+    [[nodiscard]] bool wt_ready(bool legacy) const noexcept;
+    // Opens a WebTransport stream of `session` (a CONNECT stream carrying extended CONNECT semantics) and writes its
+    // header. The body then goes through QuicStreamSet::write().
+    [[nodiscard]] Http3Error open_wt_stream(u64 session, bool bidirectional, u64& id) noexcept;
+    // Resets the sending part with the application's `code`, keeping `offset` bytes of body and the header if this side
+    // sent one (section 4.4); a peer without RESET_STREAM_AT gets a plain reset, and a non-zero `offset` is Invalid.
+    // Again to lower the offset.
+    [[nodiscard]] Http3Error reset_wt(u64 id, u32 code, u64 offset = 0U) noexcept;
+    // Asks the peer to stop sending, with the application's `code`.
+    [[nodiscard]] Http3Error stop_wt(u64 id, u32 code) noexcept;
+    // Ends both directions with a protocol code: kWtSessionGone or kWtBufferedStreamRejected.
+    [[nodiscard]] Http3Error abort_wt(u64 id, u64 http_code) noexcept;
+    // The bytes the stream's header took; 0 for no such WebTransport stream.
+    [[nodiscard]] u32 wt_header(u64 id) const noexcept;
+
     // Tells the peer no new requests will be handled. `immediate` false allows any it has sent or is sending (a first,
     // gentle GOAWAY); true names the first request not handled. A client's value is a push ID. False when there was no
     // room, retry after a poll().
@@ -210,6 +285,9 @@ private:
         Discard, // of a reserved or unknown type
         Request,
         LocalUni, // this side's
+        First,    // WebTransport offered: a bidirectional stream the peer opened, its first varint not read
+        WtHead,   // the type or signal read, the session ID not yet
+        WtData,
     };
 
     enum class Read : u8
@@ -243,6 +321,8 @@ private:
         u64 content_left = 0U; // what content-length says is still to come
         u32 next = 0U;         // the ready list
         u32 section = 0U;      // a HEADERS frame's payload bytes
+        u64 wt_session = 0U;
+        u32 wt_header = 0U; // the WebTransport header's bytes so far
         Kind kind = Kind::Unused;
         Read read = Read::Head;
         Send send = Send::Idle;
@@ -250,7 +330,7 @@ private:
         bool used = false;
         bool queued = false;
         bool blocked = false;   // QPACK holds its section
-        bool signalled = false; // a Body event went and no consume_body() since
+        bool signalled = false; // a Body or WtReadable event went and nothing was consumed or arrived since
         bool has_length = false;
         bool head = false;      // a client's HEAD
         bool tunnel = false;    // a CONNECT accepted: only DATA from here
@@ -268,6 +348,8 @@ private:
     // Transport events.
     [[nodiscard]] bool take_event_bit(Http3Event& event) noexcept;
     void opened(Record& record) noexcept;
+    // A server's bidirectional stream is a request: GOAWAY's refusal, and the count a GOAWAY names.
+    void admit_request(Record& record) noexcept;
     [[nodiscard]] bool peer_reset(Record& record, u64 code, Http3Event& event) noexcept;
     [[nodiscard]] bool peer_stop(Record& record, u64 code, Http3Event& event) noexcept;
 
@@ -282,6 +364,14 @@ private:
     [[nodiscard]] bool deliver_section(Record& record, usize count, bool early, Http3Event& event) noexcept;
     [[nodiscard]] bool skip_frame(Record& record, bool& more) noexcept;
     void read_uni_type(Record& record) noexcept;
+    [[nodiscard]] bool read_first(Record& record, Http3Event& event) noexcept;
+    [[nodiscard]] bool read_wt_head(Record& record, Http3Event& event) noexcept;
+    [[nodiscard]] bool read_wt_data(Record& record, Http3Event& event) noexcept;
+    // Whether a RESET_STREAM_AT's reliable bytes mean something on this stream (only WebTransport gives them a
+    // meaning).
+    [[nodiscard]] bool keeps_reliable(const Record& record) const noexcept;
+    [[nodiscard]] bool held_for_settings() const noexcept;
+    [[nodiscard]] u64 sent_header(const Record& record) const noexcept;
     void read_qpack(Record& record) noexcept;
     [[nodiscard]] bool read_control(Record& record, Http3Event& event) noexcept;
     [[nodiscard]] bool read_settings(cont::ConstSpan<u8> payload) noexcept;

@@ -9,6 +9,12 @@
 //   2     both sides honest over frames of any size and a held encoder stream: each request and body arrives exactly,
 //         each response comes back, and neither side errs.
 //   3     capsules read at any split yield what one reader given every byte at once does.
+//   4, 5  as 0 and 1 with WebTransport offered: the peer also writes stream headers and reliable resets, the
+//         application also opens, resets, stops, aborts and reads WebTransport streams, and every session ID reported
+//         is a client's bidirectional stream.
+//   6     both sides honest over WebTransport: each stream arrives on its session with exactly its body, or with
+//   exactly
+//         the bytes a reliable reset kept and then the code.
 #include "../http3_fixture.hpp"
 
 #include <crd/fuzz/harness.hpp>
@@ -91,6 +97,16 @@ void check_event(const Http3Event& event)
     {
         CRD_FUZZ_REQUIRE(info.status < 200U);
     }
+    if (event.kind == Http3EventKind::WtStream || event.kind == Http3EventKind::WtReadable ||
+        event.kind == Http3EventKind::WtAborted || event.kind == Http3EventKind::WtStopped)
+    {
+        CRD_FUZZ_REQUIRE((event.id & 3U) == 0U);
+        CRD_FUZZ_REQUIRE(event.header != 0U);
+    }
+    if (event.kind == Http3EventKind::WtAborted)
+    {
+        CRD_FUZZ_REQUIRE(event.final_size >= event.header);
+    }
 }
 
 const H3Fields& extended_connect()
@@ -105,7 +121,7 @@ void application_call(H3Rig& rig, usize side, Input& in, u64& stream)
 {
     Http3Connection& h3 = rig.h3[side];
     usize taken = 0U;
-    switch (in.byte() % 12U)
+    switch (in.byte() % 17U)
     {
         case 0U:
             static_cast<void>(h3.open_request(h3_get().span(), (in.byte() & 1U) != 0U, stream));
@@ -148,18 +164,43 @@ void application_call(H3Rig& rig, usize side, Input& in, u64& stream)
             static_cast<void>(h3.consume_body(stream, (count <= body.data.size()) ? count : body.data.size()));
             break;
         }
+        case 11U:
+        {
+            u64 opened = 0U;
+            if (h3.open_wt_stream(stream, (in.byte() & 1U) != 0U, opened) == Http3Error::None)
+            {
+                stream = opened;
+            }
+            break;
+        }
+        case 12U:
+            static_cast<void>(h3.reset_wt(stream, in.byte(), in.byte() & 7U));
+            break;
+        case 13U:
+            static_cast<void>(h3.stop_wt(stream, in.byte()));
+            break;
+        case 14U:
+            static_cast<void>(h3.abort_wt(stream, kWtSessionGone));
+            break;
+        case 15U:
+        {
+            const ConstSpan<u8> data = rig.streams[side].peek(stream).data;
+            static_cast<void>(rig.streams[side].consume(stream, data.size(), (in.byte() & 1U) != 0U));
+            break;
+        }
         default:
             stream = (in.byte() & 0x3FU) * 4U;
             break;
     }
 }
 
-void hostile(Input& in, usize under_test)
+void hostile(Input& in, usize under_test, bool webtransport)
 {
     BudgetAllocator allocator;
     g_side = static_cast<u32>(under_test);
-    H3Rig rig(allocator, under_test == kH3Client, under_test == kH3Server, h3_config(QuicSide::Client),
-              h3_config(QuicSide::Server), h3_limits(), false);
+    H3Rig rig(allocator, under_test == kH3Client, under_test == kH3Server,
+              webtransport ? h3_wt_config(QuicSide::Client) : h3_config(QuicSide::Client),
+              webtransport ? h3_wt_config(QuicSide::Server) : h3_config(QuicSide::Server), h3_limits(), false);
     if (!rig.ok)
     {
         return;
@@ -174,7 +215,7 @@ void hostile(Input& in, usize under_test)
     {
         const u8 op = in.byte();
         const u64 target = (open_count != 0U) ? opened[in.byte() % open_count] : u64{0};
-        switch (op % 10U)
+        switch (op % 11U)
         {
             case 0U:
                 if (open_count < 32U)
@@ -206,7 +247,7 @@ void hostile(Input& in, usize under_test)
                 rig.write(peer, target, H3Wire{}, true);
                 break;
             case 5U:
-                static_cast<void>(rig.streams[peer].reset(target, in.byte()));
+                static_cast<void>(rig.streams[peer].reset(target, in.byte(), in.byte() & 7U));
                 break;
             case 6U:
                 static_cast<void>(rig.streams[peer].stop_sending(target, in.byte()));
@@ -217,6 +258,14 @@ void hostile(Input& in, usize under_test)
             case 8U:
                 application_call(rig, under_test, in, stream);
                 break;
+            case 9U:
+            {
+                H3Wire wire;
+                wire.varint(((in.byte() & 1U) != 0U) ? 0x41U : 0x54U);
+                wire.varint(u64{in.byte()} * (((in.byte() & 1U) != 0U) ? 4U : 1U));
+                rig.write(peer, target, wire);
+                break;
+            }
             default:
             {
                 QuicFrame frame;
@@ -292,6 +341,73 @@ void honest(Input& in)
     CRD_FUZZ_REQUIRE(rig.how_many(kH3Client, Http3EventKind::Headers) == requests);
     CRD_FUZZ_REQUIRE(rig.how_many(kH3Client, Http3EventKind::Finished) == requests);
 }
+
+void honest_webtransport(Input& in)
+{
+    BudgetAllocator allocator;
+    g_side = kH3Client;
+    H3Rig rig(allocator, true, true, h3_wt_config(QuicSide::Client), h3_wt_config(QuicSide::Server));
+    CRD_FUZZ_REQUIRE(rig.ok);
+    rig.max_frame_room = 64U + (usize{in.byte()} * 4U);
+    rig.settle();
+    u64 session = 0U;
+    CRD_FUZZ_REQUIRE(rig.h3[kH3Client].open_request(h3_wt_connect().span(), false, session) == Http3Error::None);
+    rig.settle();
+    CRD_FUZZ_REQUIRE(rig.h3[kH3Server].send_response(session, h3_ok().span(), false) == Http3Error::None);
+    rig.settle();
+
+    const usize streams =
+        1U + (in.byte() % 4U); // what a side's unidirectional grant leaves after its own three and grease
+    usize opened[2] = {};
+    usize aborted[2] = {};
+    for (usize n = 0U; n < streams; ++n)
+    {
+        const u8 shape = in.byte();
+        const usize from = shape & 1U;
+        const usize to = 1U - from;
+        const bool resets = (shape & 4U) != 0U;
+        u64 id = 0U;
+        CRD_FUZZ_REQUIRE(rig.h3[from].open_wt_stream(session, (shape & 2U) != 0U, id) == Http3Error::None);
+        const ConstSpan<u8> body = in.bytes(in.byte());
+        usize taken = 0U;
+        CRD_FUZZ_REQUIRE(rig.streams[from].write(id, body, !resets, taken) == QuicStreamError::None);
+        CRD_FUZZ_REQUIRE(taken == body.size());
+        usize kept = body.size();
+        const u32 code = u32{in.byte()} * 0x01010101U;
+        if (resets)
+        {
+            kept = in.byte() % (body.size() + 1U);
+            CRD_FUZZ_REQUIRE(rig.h3[from].reset_wt(id, code, kept) == Http3Error::None);
+        }
+        rig.settle();
+        CRD_FUZZ_REQUIRE(rig.how_many(to, Http3EventKind::WtStream) == ++opened[to]);
+        usize got = 0U;
+        for (QuicStreamRead read = rig.streams[to].peek(id); !read.data.empty(); read = rig.streams[to].peek(id))
+        {
+            CRD_FUZZ_REQUIRE(got + read.data.size() <= kept);
+            CRD_FUZZ_REQUIRE(std::memcmp(read.data.data(), body.data() + got, read.data.size()) == 0);
+            got += read.data.size();
+            CRD_FUZZ_REQUIRE(rig.streams[to].consume(id, read.data.size(), true) == QuicStreamError::None);
+        }
+        CRD_FUZZ_REQUIRE(got == kept);
+        rig.settle();
+        if (resets)
+        {
+            CRD_FUZZ_REQUIRE(rig.how_many(to, Http3EventKind::WtAborted) == ++aborted[to]);
+            const H3Seen* const seen = rig.find(to, Http3EventKind::WtAborted, aborted[to] - 1U);
+            CRD_FUZZ_REQUIRE(seen->event.stream == id && seen->event.id == session);
+            u32 back = 0U;
+            CRD_FUZZ_REQUIRE(wt_application_code(seen->event.error, back) && back == code);
+        }
+        else
+        {
+            CRD_FUZZ_REQUIRE(rig.streams[to].peek(id).fin);
+            CRD_FUZZ_REQUIRE(rig.streams[to].consume(id, 0U) == QuicStreamError::None);
+        }
+        CRD_FUZZ_REQUIRE(rig.h3[kH3Client].error() == 0U && rig.h3[kH3Server].error() == 0U);
+    }
+}
+
 // Capsules read at any split come out the same as a reader given every byte at once, and within their bounds.
 void capsules(Input& in)
 {
@@ -340,19 +456,28 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         return 0;
     }
     Input in{data, size};
-    switch (in.byte() % 4U)
+    switch (in.byte() % 7U)
     {
         case 0U:
-            hostile(in, kH3Server);
+            hostile(in, kH3Server, false);
             break;
         case 1U:
-            hostile(in, kH3Client);
+            hostile(in, kH3Client, false);
             break;
         case 2U:
             honest(in);
             break;
-        default:
+        case 3U:
             capsules(in);
+            break;
+        case 4U:
+            hostile(in, kH3Server, true);
+            break;
+        case 5U:
+            hostile(in, kH3Client, true);
+            break;
+        default:
+            honest_webtransport(in);
             break;
     }
     return 0;
@@ -373,4 +498,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     const u8 honest_script[] = {0x02U, 0x10U, 0x03U, 0x00U, 0x01U, 0x05U, 0x61U, 0x62U, 0x63U, 0x64U,
                                 0x65U, 0x02U, 0x00U, 0x02U, 0x41U, 0x42U, 0x00U, 0x00U, 0x00U};
     sink.add("honest", honest_script, sizeof(honest_script));
+    // A WebTransport peer of a server: a data stream with a reliable reset, and a session's streams arriving honestly.
+    const u8 wt_hostile[] = {0x04U, 0x00U, 0x01U, 0x00U, 0x01U, 0x09U, 0x00U, 0x01U,
+                             0x00U, 0x01U, 0x05U, 0x00U, 0x09U, 0x03U, 0x07U};
+    sink.add("wt-hostile", wt_hostile, sizeof(wt_hostile));
+    const u8 wt_honest[] = {0x06U, 0x10U, 0x02U, 0x05U, 0x03U, 0x61U, 0x62U,
+                            0x63U, 0x07U, 0x02U, 0x02U, 0x02U, 0x41U, 0x42U};
+    sink.add("wt-honest", wt_honest, sizeof(wt_honest));
 }

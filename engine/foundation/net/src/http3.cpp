@@ -1,5 +1,5 @@
 // crd-net -- an HTTP/3 connection over a QUIC connection's streams and datagrams (4.2a;
-// docs/design/network-foundation.md#http3).
+// docs/design/network-foundation.md#http3 and #webtransport).
 
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/memory/allocator.hpp>
@@ -21,17 +21,25 @@ constexpr u64 kFrameSettings = 0x4U;
 constexpr u64 kFramePushPromise = 0x5U;
 constexpr u64 kFrameGoAway = 0x7U;
 constexpr u64 kFrameMaxPushId = 0xDU;
+constexpr u64 kFrameWtStream = 0x41U; // has no length (draft-ietf-webtrans-http3-17 section 4.3)
 
 constexpr u64 kStreamControl = 0x0U;
 constexpr u64 kStreamPush = 0x1U;
 constexpr u64 kStreamQpackEncoder = 0x2U;
 constexpr u64 kStreamQpackDecoder = 0x3U;
+constexpr u64 kStreamWebTransport = 0x54U;
 
 constexpr u64 kSettingQpackMaxTableCapacity = 0x1U;
 constexpr u64 kSettingMaxFieldSectionSize = 0x6U;
 constexpr u64 kSettingQpackBlockedStreams = 0x7U;
 constexpr u64 kSettingEnableConnectProtocol = 0x8U;
 constexpr u64 kSettingH3Datagram = 0x33U;
+constexpr u64 kSettingH3DatagramOld = 0xFFD277U; // the legacy spelling's, read as 0x33 is
+constexpr u64 kSettingWtEnabled = 0x20B8933BU;
+constexpr u64 kSettingWtMaxStreamsUni = 0x2B64U;
+constexpr u64 kSettingWtMaxStreamsBidi = 0x2B65U;
+constexpr u64 kSettingWtMaxData = 0x2B61U;
+constexpr u64 kSettingWtLegacySessions = 0xC671706AU;
 
 constexpr u64 kShutdownRequestId = kQuicMaxVarint - 3U; // 2^62 - 4, the largest client bidirectional stream
 constexpr u64 kMaxQuarterStreamId = (u64{1} << 60U) - 1U;
@@ -43,6 +51,12 @@ constexpr u32 kSeenBlocked = 1U << 1U;
 constexpr u32 kSeenField = 1U << 2U;
 constexpr u32 kSeenConnect = 1U << 3U;
 constexpr u32 kSeenDatagram = 1U << 4U;
+constexpr u32 kSeenDatagramOld = 1U << 5U;
+constexpr u32 kSeenWtEnabled = 1U << 6U;
+constexpr u32 kSeenWtUni = 1U << 7U;
+constexpr u32 kSeenWtBidi = 1U << 8U;
+constexpr u32 kSeenWtData = 1U << 9U;
+constexpr u32 kSeenWtLegacy = 1U << 10U;
 
 // Frame types HTTP/2 used, which HTTP/3 reserved (section 7.2.8).
 [[nodiscard]] bool is_http2_frame(u64 type) noexcept
@@ -63,6 +77,18 @@ constexpr u32 kSeenDatagram = 1U << 4U;
 [[nodiscard]] u64 min_of(u64 a, u64 b) noexcept
 {
     return (a < b) ? a : b;
+}
+
+[[nodiscard]] bool span_is(cont::ConstSpan<u8> bytes, const char* text, usize size) noexcept
+{
+    return bytes.size() == size && std::memcmp(bytes.data(), text, size) == 0;
+}
+
+// Whether an extended CONNECT's :protocol names WebTransport, and which revision.
+[[nodiscard]] bool wt_token(cont::ConstSpan<u8> protocol, bool& legacy) noexcept
+{
+    legacy = span_is(protocol, "webtransport", 12U);
+    return legacy || span_is(protocol, "webtransport-h3", 15U);
 }
 
 // The most bytes QPACK can spend on `fields`: its prefix, and each line's longest integers.
@@ -103,6 +129,14 @@ bool Http3Connection::init(memory::IAllocator& allocator, QuicStreamSet& streams
     {
         return false;
     }
+    const Http3WebTransportSettings& offer = config.webtransport;
+    if (offer.enabled && (!config.datagrams || !limits.reset_stream_at || offer.max_streams_uni > kWtMaxStreams ||
+                          offer.max_streams_bidi > kWtMaxStreams || offer.max_data > kQuicMaxVarint ||
+                          offer.legacy_sessions > kQuicMaxVarint ||
+                          (config.side == crypto::QuicSide::Server && !config.connect_protocol)))
+    {
+        return false;
+    }
     if (!m_decoder.init(allocator, config.decoder) || !m_encoder.init(allocator, config.encoder))
     {
         return false;
@@ -140,6 +174,7 @@ bool Http3Connection::init(memory::IAllocator& allocator, QuicStreamSet& streams
     if (config.remembered != nullptr)
     {
         m_remembered = *config.remembered;
+        m_remembered.wt = Http3WebTransportSettings{}; // draft section 3.2: only this connection's count
         m_peer = m_remembered;
         m_has_remembered = true;
         m_encoder.peer_settings(m_peer.qpack_max_table_capacity, m_peer.qpack_blocked_streams);
@@ -302,15 +337,18 @@ bool Http3Connection::take_event_bit(Http3Event& event) noexcept
         case kQuicStreamStopSending:
             return peer_stop(record, m_current.stop_error, event);
         case kQuicStreamWritable:
-            if (record.kind == Kind::Request)
+            if (record.kind == Kind::Request || record.kind == Kind::WtData)
             {
                 event = Http3Event{};
-                event.kind = Http3EventKind::Writable;
+                event.kind = (record.kind == Kind::Request) ? Http3EventKind::Writable : Http3EventKind::WtWritable;
                 event.stream = record.id;
+                event.id = record.wt_session;
+                event.header = record.wt_header;
                 return true;
             }
             return false;
         case kQuicStreamReadable:
+            record.signalled = record.signalled && record.kind != Kind::WtData;
             enqueue(m_current.slot);
             return false;
         default:
@@ -325,11 +363,21 @@ void Http3Connection::opened(Record& record) noexcept
         record.kind = Kind::UniType;
         return;
     }
+    if (m_config.webtransport.enabled)
+    {
+        record.kind = Kind::First;
+        return;
+    }
     if (m_config.side == crypto::QuicSide::Client)
     {
         fail(kH3StreamCreationError); // a server opens no bidirectional stream (RFC 9114 section 6.1)
         return;
     }
+    admit_request(record);
+}
+
+void Http3Connection::admit_request(Record& record) noexcept
+{
     record.kind = Kind::Request;
     if (m_goaway_was_sent && record.id >= m_goaway_sent)
     {
@@ -348,6 +396,25 @@ bool Http3Connection::peer_reset(Record& record, u64 code, Http3Event& event) no
     if (record.kind == Kind::Control || record.kind == Kind::QpackEncoder || record.kind == Kind::QpackDecoder)
     {
         return fail(kH3ClosedCriticalStream);
+    }
+    if (record.kind == Kind::WtData && record.read != Read::Over)
+    {
+        record.read = Read::Over;
+        event = Http3Event{};
+        event.kind = Http3EventKind::WtAborted;
+        event.stream = record.id;
+        event.id = record.wt_session;
+        event.error = code;
+        event.final_size = m_current.reset_final;
+        event.header = record.wt_header;
+        return true;
+    }
+    if ((record.kind == Kind::First || record.kind == Kind::WtHead) && record.read != Read::Over)
+    {
+        // Given up before it said what it is: nothing was reported, and its other half must not pin the slot.
+        record.read = Read::Over;
+        static_cast<void>(m_streams->reset(record.id, kH3RequestCancelled));
+        return false;
     }
     if (record.kind != Kind::Request || record.read == Read::Over)
     {
@@ -373,15 +440,17 @@ bool Http3Connection::peer_stop(Record& record, u64 code, Http3Event& event) noe
             return fail(kH3ClosedCriticalStream);
         }
     }
-    if (record.kind != Kind::Request)
+    if (record.kind != Kind::Request && record.kind != Kind::WtData)
     {
         return false;
     }
     record.send = Send::Over; // QUIC reset the sending part
     event = Http3Event{};
-    event.kind = Http3EventKind::Stopped;
+    event.kind = (record.kind == Kind::Request) ? Http3EventKind::Stopped : Http3EventKind::WtStopped;
     event.stream = record.id;
+    event.id = record.wt_session;
     event.error = code;
+    event.header = record.wt_header;
     return true;
 }
 
@@ -421,27 +490,28 @@ bool Http3Connection::take_datagram(Http3Event& event) noexcept
         {
             return fail(kH3DatagramError);
         }
-        const bool early = m_datagrams->oldest_early();
-        Record* const record = find(quarter * 4U);
-        if (record != nullptr && record->kind == Kind::Request && record->read != Read::Over)
+        const u64 id = quarter * 4U;
+        Record* const record = find(id);
+        const bool request = record != nullptr && record->kind == Kind::Request && record->read != Read::Over;
+        if (request && !record->datagrams && record->read != Read::Head)
         {
-            if (!record->datagrams)
-            {
-                m_datagrams->pop();
-                return abort_stream(*record, kH3DatagramError, true, event);
-            }
-            if (m_config.datagrams)
-            {
-                event = Http3Event{};
-                event.kind = Http3EventKind::Datagram;
-                event.stream = record->id;
-                event.payload = in.rest();
-                event.early = early;
-                m_datagram_held = true;
-                return true;
-            }
+            m_datagrams->pop();
+            return abort_stream(*record, kH3DatagramError, true, event);
         }
-        m_datagrams->pop(); // for a stream closed or not yet open (section 2)
+        // A request not yet read may still turn out to carry datagrams. With WebTransport the layer above decides what
+        // waits, as the session may simply not have been read yet (draft section 4.6); otherwise it goes.
+        const bool unread = record == nullptr || record->kind == Kind::First || (request && !record->datagrams);
+        if (m_config.datagrams && ((request && record->datagrams) || (unread && m_config.webtransport.enabled)))
+        {
+            event = Http3Event{};
+            event.kind = Http3EventKind::Datagram;
+            event.stream = id;
+            event.payload = in.rest();
+            event.early = m_datagrams->oldest_early();
+            m_datagram_held = true;
+            return true;
+        }
+        m_datagrams->pop();
     }
     return false;
 }
@@ -454,7 +524,7 @@ bool Http3Connection::advance(Record& record, Http3Event& event) noexcept
     {
         return false;
     }
-    if (m_streams->peek(record.id).reset_coming)
+    if (m_streams->peek(record.id).reset_coming && !keeps_reliable(record))
     {
         // RFC 9114 gives a reliable size no meaning, and bytes cut inside a frame would be waited on for ever.
         static_cast<void>(m_streams->give_up_reliable(record.id));
@@ -473,12 +543,125 @@ bool Http3Connection::advance(Record& record, Http3Event& event) noexcept
             return false;
         case Kind::Request:
             return advance_request(record, event);
+        case Kind::First:
+            return read_first(record, event);
+        case Kind::WtHead:
+            return read_wt_head(record, event);
+        case Kind::WtData:
+            return read_wt_data(record, event);
         case Kind::Unused:
         case Kind::Discard:
         case Kind::LocalUni:
             return false;
     }
     return false;
+}
+
+bool Http3Connection::keeps_reliable(const Record& record) const noexcept
+{
+    return record.kind == Kind::First || record.kind == Kind::WtHead || record.kind == Kind::WtData ||
+           (record.kind == Kind::UniType && m_config.webtransport.enabled);
+}
+
+bool Http3Connection::held_for_settings() const noexcept
+{
+    return m_config.side == crypto::QuicSide::Server && !m_peer_known; // draft section 7.1
+}
+
+bool Http3Connection::read_first(Record& record, Http3Event& event) noexcept
+{
+    if (record.read == Read::Over || held_for_settings())
+    {
+        return false;
+    }
+    u8 head[kMaxVarintBytes];
+    bool ends = false;
+    const usize bytes = m_streams->copy_readable(record.id, 0U, cont::Span<u8>(head, sizeof(head)), ends);
+    cont::WireReader in(cont::ConstSpan<u8>(head, bytes));
+    u64 type = 0U;
+    const bool typed = take_quic_varint(in, type);
+    if (!typed && !ends)
+    {
+        return false;
+    }
+    if (typed && type == kFrameWtStream)
+    {
+        static_cast<void>(m_streams->consume(record.id, in.consumed()));
+        record.kind = Kind::WtHead;
+        record.wt_header = static_cast<u32>(in.consumed());
+        return read_wt_head(record, event);
+    }
+    if (m_config.side == crypto::QuicSide::Client)
+    {
+        if (typed)
+        {
+            return fail(kH3StreamCreationError); // only 0x41 makes a server's bidirectional stream legal (section 4.3)
+        }
+        return abort_stream(record, kH3RequestCancelled, false, event);
+    }
+    admit_request(record);
+    if (record.read == Read::Over)
+    {
+        return false;
+    }
+    if (m_streams->peek(record.id).reset_coming)
+    {
+        static_cast<void>(m_streams->give_up_reliable(record.id));
+        return false;
+    }
+    return advance_request(record, event);
+}
+
+bool Http3Connection::read_wt_head(Record& record, Http3Event& event) noexcept
+{
+    if (record.read == Read::Over || held_for_settings())
+    {
+        return false;
+    }
+    u8 head[kMaxVarintBytes];
+    bool ends = false;
+    const usize bytes = m_streams->copy_readable(record.id, 0U, cont::Span<u8>(head, sizeof(head)), ends);
+    cont::WireReader in(cont::ConstSpan<u8>(head, bytes));
+    u64 session = 0U;
+    if (!take_quic_varint(in, session))
+    {
+        // A stream that ended, or a reliable size that cuts the header, names no session: the stream's reset.
+        return ends ? abort_stream(record, kH3MessageError, false, event) : false;
+    }
+    if (!is_client_bidirectional(session))
+    {
+        return fail(kH3IdError); // section 4
+    }
+    if (m_streams->peek(record.id).early_bytes != 0U)
+    {
+        return abort_stream(record, kWtBufferedStreamRejected, false, event); // no session ever opens in 0-RTT
+    }
+    static_cast<void>(m_streams->consume(record.id, in.consumed(), true));
+    record.wt_header += static_cast<u32>(in.consumed());
+    record.wt_session = session;
+    record.kind = Kind::WtData;
+    event = Http3Event{};
+    event.kind = Http3EventKind::WtStream;
+    event.stream = record.id;
+    event.id = session;
+    event.header = record.wt_header;
+    return true;
+}
+
+bool Http3Connection::read_wt_data(Record& record, Http3Event& event) noexcept
+{
+    const QuicStreamRead in = m_streams->peek(record.id);
+    if (record.signalled || record.read == Read::Over || (in.data.empty() && !in.fin))
+    {
+        return false;
+    }
+    record.signalled = true;
+    event = Http3Event{};
+    event.kind = Http3EventKind::WtReadable;
+    event.stream = record.id;
+    event.id = record.wt_session;
+    event.header = record.wt_header;
+    return true;
 }
 
 void Http3Connection::read_uni_type(Record& record) noexcept
@@ -523,6 +706,11 @@ void Http3Connection::read_uni_type(Record& record) noexcept
             fail(kH3StreamCreationError);
         }
         m_peer_decoder = true;
+    }
+    else if (type == kStreamWebTransport && m_config.webtransport.enabled)
+    {
+        record.kind = Kind::WtHead;
+        record.wt_header = static_cast<u32>(in.consumed());
     }
     else if (type == kStreamPush)
     {
@@ -615,7 +803,12 @@ bool Http3Connection::read_control(Record& record, Http3Event& event) noexcept
         cont::WireReader in(cont::ConstSpan<u8>(m_scratch, have));
         u64 type = 0U;
         u64 length = 0U;
-        if (!take_quic_varint(in, type) || !take_quic_varint(in, length))
+        const bool typed = take_quic_varint(in, type);
+        if (typed && type == kFrameWtStream && m_config.webtransport.enabled)
+        {
+            return fail(kH3FrameUnexpected); // draft section 4.3
+        }
+        if (!typed || !take_quic_varint(in, length))
         {
             return false;
         }
@@ -662,6 +855,14 @@ bool Http3Connection::read_control(Record& record, Http3Event& event) noexcept
             }
             m_settings_seen = true;
             m_peer_known = true;
+            for (u32 slot = 0U; m_config.webtransport.enabled && slot < m_record_count; ++slot)
+            {
+                if (m_records[slot].used &&
+                    (m_records[slot].kind == Kind::First || m_records[slot].kind == Kind::WtHead))
+                {
+                    enqueue(slot); // what held_for_settings() left unread
+                }
+            }
             event = Http3Event{};
             event.kind = Http3EventKind::Settings;
             return true;
@@ -733,6 +934,7 @@ bool Http3Connection::read_settings(cont::ConstSpan<u8> payload) noexcept
             return fail(kH3FrameError);
         }
         u32 bit = 0U;
+        const bool wt = m_config.webtransport.enabled; // otherwise these are identifiers like any unknown one
         switch (id)
         {
             case kSettingQpackMaxTableCapacity:
@@ -753,7 +955,31 @@ bool Http3Connection::read_settings(cont::ConstSpan<u8> payload) noexcept
                 break;
             case kSettingH3Datagram:
                 bit = kSeenDatagram;
-                next.h3_datagram = value != 0U;
+                next.h3_datagram = next.h3_datagram || value != 0U;
+                break;
+            case kSettingH3DatagramOld:
+                bit = wt ? kSeenDatagramOld : 0U;
+                next.h3_datagram = next.h3_datagram || (wt && value != 0U);
+                break;
+            case kSettingWtEnabled:
+                bit = wt ? kSeenWtEnabled : 0U;
+                next.wt.enabled = wt && value == 1U;
+                break;
+            case kSettingWtMaxStreamsUni:
+                bit = wt ? kSeenWtUni : 0U;
+                next.wt.max_streams_uni = wt ? value : 0U;
+                break;
+            case kSettingWtMaxStreamsBidi:
+                bit = wt ? kSeenWtBidi : 0U;
+                next.wt.max_streams_bidi = wt ? value : 0U;
+                break;
+            case kSettingWtMaxData:
+                bit = wt ? kSeenWtData : 0U;
+                next.wt.max_data = wt ? value : 0U;
+                break;
+            case kSettingWtLegacySessions:
+                bit = wt ? kSeenWtLegacy : 0U;
+                next.wt.legacy_sessions = wt ? value : 0U;
                 break;
             case 0x2U:
             case 0x3U:
@@ -763,7 +989,11 @@ bool Http3Connection::read_settings(cont::ConstSpan<u8> payload) noexcept
             default:
                 break; // unknown and reserved identifiers are ignored
         }
-        if ((id == kSettingEnableConnectProtocol || id == kSettingH3Datagram) && value > 1U)
+        // A server ignores a client's SETTINGS_WT_ENABLED, whatever its value (draft section 3.1).
+        const bool boolean = id == kSettingEnableConnectProtocol || id == kSettingH3Datagram ||
+                             bit == kSeenDatagramOld ||
+                             (bit == kSeenWtEnabled && m_config.side == crypto::QuicSide::Client);
+        if (boolean && value > 1U)
         {
             return fail(kH3SettingsError);
         }
@@ -884,7 +1114,12 @@ bool Http3Connection::request_frame(Record& record, Http3Event& event, bool& mor
     cont::WireReader in(cont::ConstSpan<u8>(head, have));
     u64 type = 0U;
     u64 length = 0U;
-    if (!take_quic_varint(in, type) || !take_quic_varint(in, length))
+    const bool typed = take_quic_varint(in, type);
+    if (typed && type == kFrameWtStream && m_config.webtransport.enabled)
+    {
+        return fail(kH3FrameUnexpected); // only as a stream's very first bytes (draft section 4.3)
+    }
+    if (!typed || !take_quic_varint(in, length))
     {
         if (ends)
         {
@@ -1064,6 +1299,18 @@ bool Http3Connection::deliver_section(Record& record, usize count, bool early, H
         {
             return abort_stream(record, kH3MessageError, false, event);
         }
+        bool legacy = false;
+        if (m_config.webtransport.enabled && event.info.extended && wt_token(event.info.protocol, legacy))
+        {
+            if (early)
+            {
+                return abort_stream(record, kH3RequestRejected, false, event); // CONNECT is not safe in 0-RTT
+            }
+            if (!wt_ready(legacy))
+            {
+                return abort_stream(record, kH3MessageError, false, event); // draft section 3.1
+            }
+        }
         record.read = Read::Body;
         record.tunnel = event.info.connect;
         record.datagrams = event.info.extended;
@@ -1157,6 +1404,7 @@ bool Http3Connection::open_uni(u64 type, u64& id) noexcept
 usize Http3Connection::write_settings(cont::Span<u8> out) const noexcept
 {
     const u64 grease = grease_value(m_config.grease);
+    const Http3WebTransportSettings& offer = m_config.webtransport;
     const u64 pairs[][2] = {
         {kSettingQpackMaxTableCapacity, m_config.decoder.table_capacity},
         {kSettingQpackBlockedStreams, m_config.decoder.blocked_streams},
@@ -1164,19 +1412,33 @@ usize Http3Connection::write_settings(cont::Span<u8> out) const noexcept
         {kSettingEnableConnectProtocol, m_config.connect_protocol ? 1U : 0U},
         {kSettingH3Datagram, m_config.datagrams ? 1U : 0U},
         {grease, m_config.grease & 0xFFU},
+        // These go only when they say something.
+        {kSettingWtEnabled, offer.enabled ? 1U : 0U},
+        {kSettingWtMaxStreamsUni, offer.enabled ? offer.max_streams_uni : 0U},
+        {kSettingWtMaxStreamsBidi, offer.enabled ? offer.max_streams_bidi : 0U},
+        {kSettingWtMaxData, offer.enabled ? offer.max_data : 0U},
+        {kSettingWtLegacySessions, offer.enabled ? offer.legacy_sessions : 0U},
     };
+    constexpr usize always_sent = 6U;
     usize payload = 0U;
+    usize at = 0U;
     for (const auto& pair : pairs)
     {
-        payload += quic_varint_bytes(pair[0]) + quic_varint_bytes(pair[1]);
+        payload += (at < always_sent || pair[1] != 0U) ? quic_varint_bytes(pair[0]) + quic_varint_bytes(pair[1]) : 0U;
+        ++at;
     }
     cont::WireWriter writer(out);
     put_quic_varint(writer, kFrameSettings);
     put_quic_varint(writer, payload);
+    at = 0U;
     for (const auto& pair : pairs)
     {
-        put_quic_varint(writer, pair[0]);
-        put_quic_varint(writer, pair[1]);
+        if (at < always_sent || pair[1] != 0U)
+        {
+            put_quic_varint(writer, pair[0]);
+            put_quic_varint(writer, pair[1]);
+        }
+        ++at;
     }
     return writer.written();
 }
@@ -1192,7 +1454,7 @@ bool Http3Connection::start() noexcept
     {
         return fail(kH3GeneralProtocolError);
     }
-    u8 bytes[128];
+    u8 bytes[256];
     usize used = write_settings(cont::Span<u8>(bytes, sizeof(bytes)));
     cont::WireWriter grease{cont::Span<u8>(bytes + used, sizeof(bytes) - used)};
     put_quic_varint(grease, grease_value(m_config.grease >> 16U));
@@ -1295,7 +1557,9 @@ Http3Error Http3Connection::open_request(cont::ConstSpan<HttpField> fields, bool
     {
         return Http3Error::Invalid;
     }
-    if (info.extended && !m_peer.enable_connect_protocol)
+    bool legacy = false;
+    if (info.extended && (!m_peer.enable_connect_protocol ||
+                          (m_config.webtransport.enabled && wt_token(info.protocol, legacy) && !wt_ready(legacy))))
     {
         return Http3Error::NotReady;
     }
@@ -1491,6 +1755,123 @@ Http3Error Http3Connection::send_datagram(u64 id, cont::ConstSpan<u8> payload, u
             return Http3Error::NotReady;
     }
     return Http3Error::NotReady;
+}
+
+bool Http3Connection::wt_ready(bool legacy) const noexcept
+{
+    if (!m_config.webtransport.enabled || !m_peer_known || !m_peer.h3_datagram || !m_datagrams->sendable())
+    {
+        return false;
+    }
+    if (m_config.side == crypto::QuicSide::Server)
+    {
+        return legacy || m_streams->peer_resets_at();
+    }
+    return legacy ? m_peer.wt.legacy_sessions != 0U
+                  : m_peer.wt.enabled && m_peer.enable_connect_protocol && m_streams->peer_resets_at();
+}
+
+Http3Error Http3Connection::open_wt_stream(u64 session, bool bidirectional, u64& id) noexcept
+{
+    if (m_error != 0U)
+    {
+        return Http3Error::Closed;
+    }
+    if (!m_started || !m_config.webtransport.enabled)
+    {
+        return Http3Error::NotReady;
+    }
+    const Record* const connect = find(session);
+    if (connect == nullptr || connect->kind != Kind::Request || !connect->datagrams || connect->read == Read::Over)
+    {
+        return Http3Error::Unknown;
+    }
+    if (m_streams->open(bidirectional, id) != QuicStreamError::None)
+    {
+        return Http3Error::NoStream;
+    }
+    u8 bytes[2U * kMaxVarintBytes];
+    cont::WireWriter out{cont::Span<u8>(bytes, sizeof(bytes))};
+    put_quic_varint(out, bidirectional ? kFrameWtStream : kStreamWebTransport);
+    put_quic_varint(out, session);
+    Record& record = claim(m_streams->slot_of(id), id);
+    record.kind = Kind::WtData;
+    record.wt_session = session;
+    record.wt_header = static_cast<u32>(out.written());
+    record.read = bidirectional ? Read::Body : Read::Over;
+    return write_all(id, cont::ConstSpan<u8>(bytes, out.written()), false) ? Http3Error::None : Http3Error::Unknown;
+}
+
+u64 Http3Connection::sent_header(const Record& record) const noexcept
+{
+    const bool local = ((record.id & 1U) != 0U) == (m_config.side == crypto::QuicSide::Server);
+    return local ? u64{record.wt_header} : 0U; // a header goes only in the direction of the stream's opener
+}
+
+Http3Error Http3Connection::reset_wt(u64 id, u32 code, u64 offset) noexcept
+{
+    if (m_error != 0U)
+    {
+        return Http3Error::Closed;
+    }
+    const Record* const record = find(id);
+    if (record == nullptr || record->kind != Kind::WtData)
+    {
+        return Http3Error::Unknown;
+    }
+    const bool reliable = m_streams->peer_resets_at();
+    if (!reliable && offset != 0U)
+    {
+        return Http3Error::Invalid;
+    }
+    switch (m_streams->reset(id, wt_http_code(code), reliable ? sent_header(*record) + offset : 0U))
+    {
+        case QuicStreamError::None:
+            return Http3Error::None;
+        case QuicStreamError::Invalid:
+            return Http3Error::Invalid;
+        default:
+            return Http3Error::Unknown;
+    }
+}
+
+Http3Error Http3Connection::stop_wt(u64 id, u32 code) noexcept
+{
+    if (m_error != 0U)
+    {
+        return Http3Error::Closed;
+    }
+    const Record* const record = find(id);
+    if (record == nullptr || record->kind != Kind::WtData ||
+        m_streams->stop_sending(id, wt_http_code(code)) != QuicStreamError::None)
+    {
+        return Http3Error::Unknown;
+    }
+    return Http3Error::None;
+}
+
+Http3Error Http3Connection::abort_wt(u64 id, u64 http_code) noexcept
+{
+    if (m_error != 0U)
+    {
+        return Http3Error::Closed;
+    }
+    Record* const record = find(id);
+    if (record == nullptr || record->kind != Kind::WtData)
+    {
+        return Http3Error::Unknown;
+    }
+    static_cast<void>(m_streams->stop_sending(id, http_code));
+    drop_input(*record);
+    static_cast<void>(m_streams->reset(id, http_code, m_streams->peer_resets_at() ? sent_header(*record) : 0U));
+    record->read = Read::Over;
+    return Http3Error::None;
+}
+
+u32 Http3Connection::wt_header(u64 id) const noexcept
+{
+    const Record* const record = find(id);
+    return (record != nullptr && record->kind == Kind::WtData) ? record->wt_header : 0U;
 }
 
 bool Http3Connection::goaway(bool immediate) noexcept

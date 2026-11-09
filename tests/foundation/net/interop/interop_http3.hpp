@@ -250,6 +250,11 @@ private:
         {
             case crd::net::Http3EventKind::Settings:
             case crd::net::Http3EventKind::Writable:
+            case crd::net::Http3EventKind::WtStream: // these programs offer no WebTransport
+            case crd::net::Http3EventKind::WtReadable:
+            case crd::net::Http3EventKind::WtWritable:
+            case crd::net::Http3EventKind::WtAborted:
+            case crd::net::Http3EventKind::WtStopped:
                 break;
             case crd::net::Http3EventKind::GoAway:
                 on_goaway(event.id);

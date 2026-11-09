@@ -1379,7 +1379,10 @@ usize QuicStreamSet::copy_readable(u64 id, usize skip, cont::Span<u8> out, bool&
     if (slot->peer_reset_at)
     {
         const u64 reliable_left = slot->peer_reliable - min_u64(slot->peer_reliable, slot->in.read_offset() + skip);
-        return slot->in.copy_contiguous(skip, out.first(static_cast<usize>(min_u64(out.size(), reliable_left))));
+        const usize kept =
+            slot->in.copy_contiguous(skip, out.first(static_cast<usize>(min_u64(out.size(), reliable_left))));
+        ends = kept == reliable_left;
+        return kept;
     }
     const usize copied = slot->in.copy_contiguous(skip, out);
     ends = slot->in.final_known() && slot->in.read_offset() + skip + copied >= slot->in.final_size();
@@ -1451,6 +1454,7 @@ bool QuicStreamSet::poll(QuicStreamEvent& event) noexcept
     event.events = slot.events;
     event.reset_error = slot.peer_reset_error;
     event.stop_error = slot.peer_stop_error;
+    event.reset_final = ((slot.events & kQuicStreamReset) != 0U) ? slot.in.final_size() : 0U;
     slot.events = 0U;
     if ((event.events & kQuicStreamReset) != 0U && slot.recv == QuicRecvState::ResetRecvd)
     {

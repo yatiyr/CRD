@@ -1503,6 +1503,10 @@ TEST_CASE("QUIC stream set: every receiver refusal and reordering of RESET_STREA
         CHECK(s.peek(0U).data.empty()); // a gap below it
         REQUIRE(frame_to(s, QuicFrameKind::Stream, 0U, 0U, data, false, 0U) == QuicTransportError::NoError);
         CHECK(s.peek(0U).data.size() == 24U);
+        u8 before[64] = {};
+        bool stops = true;
+        CHECK(s.copy_readable(0U, 0U, Span<u8>(before, sizeof(before)), stops) == 24U);
+        CHECK_FALSE(stops); // bytes it keeps have yet to arrive
         CHECK(s.recv_state(0U) == QuicRecvState::SizeKnown);
         REQUIRE(frame_to(s, QuicFrameKind::Stream, 0U, 0U, data, false, 24U) == QuicTransportError::NoError);
         CHECK(s.recv_state(0U) == QuicRecvState::DataRecvd);
@@ -1510,7 +1514,7 @@ TEST_CASE("QUIC stream set: every receiver refusal and reordering of RESET_STREA
         u8 copy[64] = {};
         bool ends = true;
         CHECK(s.copy_readable(0U, 4U, Span<u8>(copy, sizeof(copy)), ends) == 28U);
-        CHECK_FALSE(ends);
+        CHECK(ends); // the reliable size is the end of what can ever be read
         CHECK(s.copy_readable(0U, 40U, Span<u8>(copy, sizeof(copy)), ends) == 0U);
         REQUIRE(s.consume(0U, 32U) == QuicStreamError::None);
         CHECK(s.recv_state(0U) == QuicRecvState::ResetRecvd);
@@ -1642,15 +1646,15 @@ TEST_CASE("QUIC stream set: a transport that acknowledges by taking a frame pass
     set.set_peer_parameters(peer);
     u64 id = 0U;
     REQUIRE(set.open(true, id) == QuicStreamError::None);
-    constexpr usize kChunk = 1U << 20U;
-    auto chunk = std::make_unique<u8[]>(kChunk);
+    constexpr usize piece_bytes = 1U << 20U;
+    auto chunk = std::make_unique<u8[]>(piece_bytes);
     const u64 total = (u64{1} << 32U) + (u64{1} << 21U);
     u64 sent = 0U;
-    for (u64 at = 0U; at < total; at += kChunk)
+    for (u64 at = 0U; at < total; at += piece_bytes)
     {
         usize taken = 0U;
-        REQUIRE(set.write(id, ConstSpan<u8>(chunk.get(), kChunk), false, taken) == QuicStreamError::None);
-        REQUIRE(taken == kChunk); // room came back
+        REQUIRE(set.write(id, ConstSpan<u8>(chunk.get(), piece_bytes), false, taken) == QuicStreamError::None);
+        REQUIRE(taken == piece_bytes); // room came back
         QuicFrame frame;
         QuicStreamRecord record;
         while (set.next_frame(65536U, 1000U, kRtt, frame, record))

@@ -123,6 +123,7 @@ struct QuicStreamEvent
     u8 events = 0U;
     u64 reset_error = 0U; // the peer's RESET_STREAM code
     u64 stop_error = 0U;  // the peer's STOP_SENDING code
+    u64 reset_final = 0U; // with kQuicStreamReset: the stream's final size
 };
 
 // What can be read from a stream now: the bytes from its read offset that arrived without a gap, up to the end of
@@ -212,8 +213,9 @@ public:
     [[nodiscard]] QuicStreamError set_urgency(u64 id, u8 urgency) noexcept;
     [[nodiscard]] QuicStreamRead peek(u64 id) const noexcept;
     // Copies into `out` the bytes that arrived without a gap, from `skip` bytes past the read offset, across the wrap
-    // peek() stops at; `ends` is true when they reach the stream's final size. Nothing is consumed: a layer holding
-    // whole frames keeps them in the stream's own buffer. 0 for a stream not receiving.
+    // peek() stops at; `ends` is true when they reach the end of what can ever be read: the stream's final size, or a
+    // RESET_STREAM_AT's reliable size. Nothing is consumed: a layer holding whole frames keeps them in the stream's own
+    // buffer. 0 for a stream not receiving.
     [[nodiscard]] usize copy_readable(u64 id, usize skip, cont::Span<u8> out, bool& ends) const noexcept;
     // Gives up the next `count` bytes peek() gave; after a peek() with `fin`, consuming its data (even none) ends the
     // receiving part. `keep_end`: it stays open at its end, peek() still reporting `fin`, until a call without it, for
