@@ -998,6 +998,27 @@ void QuicStreamSet::on_acked(const QuicStreamRecord& record) noexcept
     try_free(*slot);
 }
 
+void QuicStreamSet::on_all_acked() noexcept
+{
+    for (const Type& type : m_types)
+    {
+        for (u32 at = 0U; at < type.capacity; ++at)
+        {
+            const Slot& slot = m_slots[type.first + at];
+            if (slot.active)
+            {
+                QuicStreamRecord record;
+                record.stream_id = slot.id;
+                record.kind =
+                    (slot.send == QuicSendState::ResetSent) ? QuicFrameKind::ResetStream : QuicFrameKind::Stream;
+                record.length = static_cast<u32>(slot.out.sent_end());
+                record.fin = slot.out.finished();
+                on_acked(record);
+            }
+        }
+    }
+}
+
 void QuicStreamSet::on_lost(const QuicStreamRecord& record) noexcept
 {
     switch (record.kind)

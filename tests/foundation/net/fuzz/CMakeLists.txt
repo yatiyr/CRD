@@ -74,6 +74,13 @@ crd_fuzz_target(crd-fuzz-net-quic-datagram
 crd_fuzz_target(crd-fuzz-net-qmux
     SOURCES fuzz_qmux.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-qmux")
 
+# QMux's 0-RTT (4.2a).
+#   crd-fuzz-net-qmux-early   a server reading hostile early data, answering at 0.5-RTT, and a client sending early data
+#                             to a real TLS server that accepts, refuses or answers anything: what each side sends stays
+#                             valid, nothing counts as delivered before the answer, nothing allocated.
+crd_fuzz_target(crd-fuzz-net-qmux-early
+    SOURCES fuzz_qmux_early.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-qmux-early")
+
 # The TCP and TLS path's host (4.2a).
 #   crd-fuzz-net-qmux-host   a server and a client host over pipes under any connects, resets, cuts, stalls, raw bytes,
 #                            clock steps, closes, wakes, stale handles and accept failures: every connection reported

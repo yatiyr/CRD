@@ -118,8 +118,13 @@ public:
     // for a frame of a 0-RTT packet: its payload is marked replayable.
     [[nodiscard]] QuicTransportError on_frame(const QuicFrame& frame, bool early = false) noexcept;
     // A client's server rejected 0-RTT: every datagram queued is dropped unsent (reported Lost with outcomes; those
-    // in flight are reported by their packets), and queue() waits for set_peer() again.
+    // in flight are reported by their packets, and those held by hold_outcomes() become Lost), and queue() waits for
+    // set_peer() again.
     void reject_early() noexcept;
+    // For a transport that acknowledges by taking a frame (QMux): outcomes wait from here until its server answers,
+    // accept_early() when it took the 0-RTT data and reject_early() when it did not.
+    void hold_outcomes() noexcept { m_outcomes_held = true; }
+    void accept_early() noexcept { m_outcomes_held = false; }
 
     // The largest payload queue() takes now; 0 before set_peer() or while sending is unsupported.
     [[nodiscard]] usize max_payload() const noexcept { return m_max_payload; }
@@ -196,6 +201,7 @@ private:
     Ring m_send;
     u32 m_report_first = 0U;
     u32 m_report_count = 0U;
+    bool m_outcomes_held = false;
     u32 m_unreported = 0U; // queued, and with outcomes in flight or reported and not polled
     u64 m_next_id = 0U;
     usize m_max_payload = 0U;

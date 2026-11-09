@@ -183,6 +183,9 @@ public:
     // A packet carrying a recorded frame was acknowledged or declared lost.
     void on_acked(const QuicStreamRecord& record) noexcept;
     void on_lost(const QuicStreamRecord& record) noexcept;
+    // Everything sent so far was delivered: for a transport that acknowledges by taking a frame (QMux), whose 0-RTT
+    // frames count only once its server accepted them.
+    void on_all_acked() noexcept;
 
     // The application's side. IDs are RFC 9000 section 2.1's.
     [[nodiscard]] QuicStreamError open(bool bidirectional, u64& id) noexcept;

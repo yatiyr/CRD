@@ -531,6 +531,161 @@ TEST_CASE("TLS 0-RTT: a resumed client's early data reaches its server once, thr
     }
 }
 
+TEST_CASE("TLS 0-RTT: a stream protocol's parameters reach its tickets, before or after them",
+          "[crypto][tls][early][net-2]")
+{
+    ReplayFilter filter;
+    REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
+    Pair pair;
+    Options options;
+    options.filter = &filter;
+    configure(pair, options);
+    const Bytes parameters = pattern(40U, 1U);
+    const auto connect = [&](Store& store, TlsSession& client, TlsSession& server)
+    {
+        REQUIRE(client.init(pair.client, &store) == TlsError::None);
+        client.hold_tickets();
+        REQUIRE(serve(server, pair.server) == TlsError::None);
+        Bytes early;
+        establish(client, server, early);
+    };
+
+    SECTION("the ticket first: it waits for them")
+    {
+        Store store;
+        TlsSession client;
+        TlsSession server;
+        connect(store, client, server);
+        read_tickets(client, server);
+        CHECK(store.size() == 0U);
+        client.remember_parameters(ConstSpan<u8>(parameters.data(), parameters.size()));
+        REQUIRE(store.size() == 1U);
+        const Record record = read_record(store.newest());
+        CHECK(record.early == kTlsEarlyDataBytes);
+        CHECK(record.parameters == parameters);
+
+        TlsSession resumed;
+        REQUIRE(resumed.init(pair.client, &store) == TlsError::None);
+        CHECK(resumed.early_data() == TlsEarlyData::Offered);
+        const ConstSpan<u8> remembered = resumed.remembered_parameters();
+        REQUIRE(remembered.size() == parameters.size());
+        CHECK(std::memcmp(remembered.data(), parameters.data(), parameters.size()) == 0);
+    }
+    SECTION("the parameters first: the ticket goes straight in, and a later call changes nothing")
+    {
+        Store store;
+        TlsSession client;
+        TlsSession server;
+        connect(store, client, server);
+        client.remember_parameters(ConstSpan<u8>(parameters.data(), parameters.size()));
+        CHECK(store.size() == 0U);
+        const Bytes other = pattern(8U, 9U);
+        client.remember_parameters(ConstSpan<u8>(other.data(), other.size()));
+        read_tickets(client, server);
+        REQUIRE(store.size() == 1U);
+        CHECK(read_record(store.newest()).parameters == parameters);
+    }
+    SECTION("parameters that never come: the ticket goes with the session")
+    {
+        Store store;
+        {
+            TlsSession client;
+            TlsSession server;
+            connect(store, client, server);
+            read_tickets(client, server);
+        }
+        CHECK(store.size() == 0U);
+    }
+    SECTION("parameters a record cannot hold: no ticket")
+    {
+        Store store;
+        TlsSession client;
+        TlsSession server;
+        connect(store, client, server);
+        read_tickets(client, server);
+        const Bytes huge = pattern(kQuicMaxTransportParameterBytes + 1U, 3U);
+        client.remember_parameters(ConstSpan<u8>(huge.data(), huge.size()));
+        CHECK(store.size() == 0U);
+    }
+    SECTION("without hold_tickets tickets go straight to the store, and remember_parameters does nothing")
+    {
+        Store store;
+        TlsSession client;
+        TlsSession server;
+        REQUIRE(client.init(pair.client, &store) == TlsError::None);
+        REQUIRE(serve(server, pair.server) == TlsError::None);
+        Bytes early;
+        establish(client, server, early);
+        client.remember_parameters(ConstSpan<u8>(parameters.data(), parameters.size()));
+        read_tickets(client, server);
+        REQUIRE(store.size() == 1U);
+        CHECK(read_record(store.newest()).parameters.empty());
+    }
+    SECTION("a client without a store, and a server, hold nothing")
+    {
+        TlsSession client;
+        TlsSession server;
+        REQUIRE(client.init(pair.client) == TlsError::None);
+        REQUIRE(serve(server, pair.server) == TlsError::None);
+        client.hold_tickets();
+        server.hold_tickets();
+        Bytes early;
+        establish(client, server, early);
+        client.remember_parameters(ConstSpan<u8>(parameters.data(), parameters.size()));
+        server.remember_parameters(ConstSpan<u8>(parameters.data(), parameters.size()));
+        read_tickets(client, server);
+        CHECK(client.remembered_parameters().empty());
+    }
+}
+
+TEST_CASE("TLS 0-RTT: a server that accepted early data answers it at 0.5-RTT", "[crypto][tls][early][net-2]")
+{
+    ReplayFilter filter;
+    REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
+    Pair pair;
+    Options options;
+    options.filter = &filter;
+    configure(pair, options);
+    Store store;
+    first_connection(pair, store);
+
+    TlsSession client;
+    TlsSession server;
+    const Bytes request = bytes_of("what is the time");
+    start_early(client, server, pair.client, pair.server, store, request);
+    const Bytes answer = bytes_of("noon");
+    // Before its ClientHello a server has accepted nothing, and a client has no 0.5-RTT at all.
+    CHECK(server.send_half_rtt(ConstSpan<u8>(answer.data(), answer.size())) == TlsError::NotReady);
+    CHECK(client.send_half_rtt(ConstSpan<u8>(answer.data(), answer.size())) == TlsError::NotReady);
+    REQUIRE(give(server, drain(client)) == TlsError::None);
+    REQUIRE(server.early_data() == TlsEarlyData::Accepted);
+    REQUIRE(server.state() == TlsState::Handshaking);
+    CHECK(read_all(server, true) == request);
+
+    CHECK(server.send_half_rtt({}) == TlsError::None);
+    REQUIRE(server.send_half_rtt(ConstSpan<u8>(answer.data(), answer.size())) == TlsError::None);
+    const Bytes large = pattern(40000U, 5U);
+    REQUIRE(server.send_half_rtt(ConstSpan<u8>(large.data(), large.size())) == TlsError::None);
+    const Bytes too_much = pattern(kTlsMaxBufferedBytes + 1U, 6U);
+    CHECK(server.send_half_rtt(ConstSpan<u8>(too_much.data(), too_much.size())) == TlsError::Full);
+    usize room = kTlsMaxBufferedBytes - server.pending();
+    const Bytes filler = pattern(room, 7U);
+    CHECK(server.send_half_rtt(ConstSpan<u8>(filler.data(), filler.size())) == TlsError::Full);
+
+    // The client has its answer before it has sent its Finished.
+    REQUIRE(give(client, drain(server)) == TlsError::None);
+    REQUIRE(client.state() == TlsState::Established);
+    Bytes received = read_all(client, false);
+    Bytes expected = answer;
+    append(expected, large.data(), large.size());
+    CHECK(received == expected);
+
+    REQUIRE(give(server, drain(client)) == TlsError::None);
+    CHECK(read_all(server, true).empty());
+    CHECK(server.state() == TlsState::Established);
+    CHECK(server.send_half_rtt(ConstSpan<u8>(answer.data(), answer.size())) == TlsError::NotReady);
+}
+
 TEST_CASE("TLS 0-RTT: a replayed first flight gets no early data from the server it reached, but another server of "
           "the fleet accepts it",
           "[crypto][tls][early][net-2]")

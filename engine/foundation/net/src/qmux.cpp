@@ -19,6 +19,9 @@ constexpr usize kFeedBytes = 16384U;
 constexpr usize kTlsRecordOverhead = 64U;
 constexpr u64 kMsNs = 1000000U;
 constexpr u32 kRttWeight = 8U; // RFC 9002 section 5.3's gain, one eighth
+constexpr usize kSizeBytes = 2U; // a record's Size at its longest, as this side writes them
+// What a client's QX_TRANSPORT_PARAMETERS frame takes at most; early data with less room than this sends nothing.
+constexpr usize kParametersRoom = 128U;
 
 // QUIC's transport parameters QMux forbids (section 5.1): all that speak of connection IDs, paths or acknowledgements.
 [[nodiscard]] bool forbidden_parameter(u64 id) noexcept
@@ -162,8 +165,11 @@ void put_parameter(cont::WireWriter& out, u64 id, u64 value) noexcept
 
 bool QmuxConnection::init(memory::IAllocator& allocator, const QmuxConfig& config) noexcept
 {
+    const bool accepts_early =
+        config.tls != nullptr && config.tls->role() == crypto::TlsRole::Server && config.tls->early_data();
     if (m_ready || config.tls == nullptr || !QuicStreamSet::limits_valid(config.streams) ||
-        !QuicDatagrams::limits_valid(config.datagrams))
+        !QuicDatagrams::limits_valid(config.datagrams) ||
+        (!config.early_context.empty() && (!accepts_early || config.early_context.size() > kQuicMaxEarlyContextBytes)))
     {
         return false;
     }
@@ -186,18 +192,77 @@ bool QmuxConnection::start(u64 now_ns) noexcept
     {
         return false;
     }
-    m_tls_error = m_tls.init(*m_config.tls, m_config.tickets);
+    const bool client = m_config.tls->role() == crypto::TlsRole::Client;
+    u8 context[crypto::kTlsMaxEarlyDataContextBytes];
+    usize context_bytes = 0U;
+    if (!client && m_config.tls->early_data())
+    {
+        // Section 8.2 holds a server to RFC 9000 section 7.4.1: any limit that changed refuses a ticket's 0-RTT.
+        QuicTransportParameters local;
+        fill_local(local);
+        context_bytes = write_quic_early_parameters(local, cont::Span<u8>(context, kQuicEarlyParameterBytes));
+        if (!m_config.early_context.empty())
+        {
+            std::memcpy(context + context_bytes, m_config.early_context.data(), m_config.early_context.size());
+            context_bytes += m_config.early_context.size();
+        }
+    }
+    m_tls_error = m_tls.init(*m_config.tls, m_config.tickets, {}, cont::ConstSpan<u8>(context, context_bytes));
     if (m_tls_error != crypto::TlsError::None)
     {
         m_close.reason = QmuxCloseReason::TlsFailed;
         m_state = QmuxState::Closed;
         return false;
     }
+    if (client && m_config.tls->early_data())
+    {
+        m_tls.hold_tickets(); // what 0-RTT keeps to arrives in the server's first frame, beside its tickets
+    }
     m_state = QmuxState::Handshaking;
     m_last_activity = now_ns;
     m_handshake_deadline =
         (m_config.handshake_timeout_ns != 0U) ? now_ns + m_config.handshake_timeout_ns : kQmuxNoTimer;
+    begin_early();
     return true;
+}
+
+void QmuxConnection::begin_early() noexcept
+{
+    if (m_tls.early_data() != crypto::TlsEarlyData::Offered || m_tls.early_data_room() < kParametersRoom ||
+        m_tls.remembered_parameters().empty() ||
+        read_parameters(m_tls.remembered_parameters(), m_remembered) != QuicTransportError::NoError)
+    {
+        return; // the frames wait for the handshake
+    }
+    apply_peer_limits(m_remembered);
+    m_datagrams.hold_outcomes();
+    m_early_sending = true;
+}
+
+void QmuxConnection::settle_early() noexcept
+{
+    if (!m_early_sending || m_early_settled)
+    {
+        return;
+    }
+    const crypto::TlsEarlyData early = m_tls.early_data();
+    if (early == crypto::TlsEarlyData::Accepted)
+    {
+        m_early_settled = true;
+        m_streams.on_all_acked();
+        m_datagrams.accept_early();
+    }
+    else if (early == crypto::TlsEarlyData::Rejected)
+    {
+        // What went early is gone (draft section 8.2, RFC 9001 section 4.6.2): the first frame goes again, and the
+        // server's parameters grant anew.
+        m_early_settled = true;
+        m_early_sending = false;
+        m_early_full = false;
+        m_parameters_sent = false;
+        m_streams.reset_all();
+        m_datagrams.reject_early();
+    }
 }
 
 // ---- Receiving ----
@@ -242,7 +307,11 @@ void QmuxConnection::transport_ended(bool clean, u64 now_ns) noexcept
 
 void QmuxConnection::advance(u64 now_ns) noexcept
 {
-    if (m_state == QmuxState::Handshaking && m_tls.state() == crypto::TlsState::Established)
+    settle_early();
+    const bool done = m_tls.state() == crypto::TlsState::Established;
+    const bool reading_early =
+        m_config.tls->role() == crypto::TlsRole::Server && m_tls.early_data() == crypto::TlsEarlyData::Accepted;
+    if (m_state == QmuxState::Handshaking && (done || reading_early))
     {
         established(now_ns);
     }
@@ -264,7 +333,10 @@ void QmuxConnection::established(u64 now_ns) noexcept
         return;
     }
     m_state = QmuxState::Established;
-    m_handshake_deadline = kQmuxNoTimer;
+    if (m_tls.state() == crypto::TlsState::Established)
+    {
+        m_handshake_deadline = kQmuxNoTimer; // on a server reading early data it still bounds the client's Finished
+    }
     m_last_activity = now_ns;
     m_idle_ns = m_config.idle_timeout_ns;
     m_ping_owed = true; // the first RTT sample, which tunes the windows
@@ -274,9 +346,12 @@ void QmuxConnection::drain(u64 now_ns) noexcept
 {
     for (;;)
     {
+        const bool early = m_tls.state() == crypto::TlsState::Handshaking;
+        const cont::Span<u8> room(m_in + m_in_fill, sizeof(m_in) - m_in_fill);
         usize got = 0U;
-        const crypto::TlsError error = m_tls.read(cont::Span<u8>(m_in + m_in_fill, sizeof(m_in) - m_in_fill), got);
+        const crypto::TlsError error = early ? m_tls.read_early(room, got) : m_tls.read(room, got);
         m_in_fill += got;
+        m_in_early += early ? got : 0U;
         parse_records(now_ns);
         if (m_state != QmuxState::Established)
         {
@@ -292,9 +367,13 @@ void QmuxConnection::drain(u64 now_ns) noexcept
             tls_failed(error);
             return;
         }
-        if (got == 0U)
+        if (m_tls.state() != crypto::TlsState::Handshaking)
         {
-            return;
+            m_handshake_deadline = kQmuxNoTimer;
+        }
+        if (got == 0U && !(early && m_tls.state() != crypto::TlsState::Handshaking))
+        {
+            return; // nothing more, unless the early data just ended and the handshake with it
         }
     }
 }
@@ -328,15 +407,20 @@ void QmuxConnection::parse_records(u64 now_ns) noexcept
         {
             break;
         }
-        const bool good = on_record(cont::ConstSpan<u8>(m_in + at + head, static_cast<usize>(size)), now_ns);
+        // A record with any byte of early data in it is early: a client could cut one at the end of its 0-RTT.
+        const usize bytes = head + static_cast<usize>(size);
+        const cont::ConstSpan<u8> record(m_in + at + head, static_cast<usize>(size));
+        const bool good = on_record(record, m_in_early != 0U, now_ns);
         if (!good || m_state != QmuxState::Established)
         {
             m_in_fill = 0U;
+            m_in_early = 0U;
             return;
         }
+        m_in_early -= (bytes < m_in_early) ? bytes : m_in_early;
         ++m_counters.records_received;
         m_last_activity = now_ns; // section 7.1: a whole record received
-        at += head + static_cast<usize>(size);
+        at += bytes;
     }
     if (at != 0U)
     {
@@ -345,7 +429,7 @@ void QmuxConnection::parse_records(u64 now_ns) noexcept
     }
 }
 
-bool QmuxConnection::on_record(cont::ConstSpan<u8> record, u64 now_ns) noexcept
+bool QmuxConnection::on_record(cont::ConstSpan<u8> record, bool early, u64 now_ns) noexcept
 {
     cont::WireReader in(record);
     while (!in.done())
@@ -406,7 +490,7 @@ bool QmuxConnection::on_record(cont::ConstSpan<u8> record, u64 now_ns) noexcept
                 fail(error);
                 return false;
             }
-            if (!on_frame(frame))
+            if (!on_frame(frame, early))
             {
                 return false;
             }
@@ -428,9 +512,25 @@ bool QmuxConnection::on_parameters(cont::ConstSpan<u8> bytes) noexcept
     }
     m_peer_known = true;
     m_idle_ns = min_nonzero(m_config.idle_timeout_ns, m_peer.max_idle_timeout * kMsNs);
-    m_streams.set_peer_parameters(m_peer);
-    m_datagrams.set_peer(m_peer.max_datagram_frame_size, kQmuxMaxRecord + kQuicShortPacketOverhead);
+    if (m_early_sending)
+    {
+        // Accepted, and now its limits are known: none may be lower than those the early frames kept to.
+        m_early_sending = false;
+        if (quic_check_remembered_parameters(m_remembered, m_peer) != QuicTransportError::NoError)
+        {
+            fail(QuicTransportError::ProtocolViolation);
+            return false;
+        }
+    }
+    apply_peer_limits(m_peer);
+    m_tls.remember_parameters(bytes);
     return true;
+}
+
+void QmuxConnection::apply_peer_limits(const QuicTransportParameters& peer) noexcept
+{
+    m_streams.set_peer_parameters(peer);
+    m_datagrams.set_peer(peer.max_datagram_frame_size, kQmuxMaxRecord + kQuicShortPacketOverhead);
 }
 
 bool QmuxConnection::on_ping(u64 type, u64 sequence, u64 now_ns) noexcept
@@ -461,7 +561,7 @@ bool QmuxConnection::on_ping(u64 type, u64 sequence, u64 now_ns) noexcept
     return true;
 }
 
-bool QmuxConnection::on_frame(const QuicFrame& frame) noexcept
+bool QmuxConnection::on_frame(const QuicFrame& frame, bool early) noexcept
 {
     QuicTransportError error = QuicTransportError::NoError;
     switch (frame.kind)
@@ -477,10 +577,10 @@ bool QmuxConnection::on_frame(const QuicFrame& frame) noexcept
         case QuicFrameKind::DataBlocked:
         case QuicFrameKind::StreamDataBlocked:
         case QuicFrameKind::StreamsBlocked:
-            error = m_streams.on_frame(frame);
+            error = m_streams.on_frame(frame, early);
             break;
         case QuicFrameKind::Datagram:
-            error = m_datagrams.on_frame(frame);
+            error = m_datagrams.on_frame(frame, early);
             break;
         case QuicFrameKind::ConnectionClose:
             m_close.reason = QmuxCloseReason::Peer;
@@ -558,13 +658,40 @@ void QmuxConnection::keep_reason(cont::ConstSpan<u8> reason) noexcept
 bool QmuxConnection::frames_due(u64 now_ns) const noexcept
 {
     return !m_parameters_sent || m_ping_owed || m_pong_owed ||
-           (m_peer_known && (m_streams.has_frame() || m_datagrams.has_frame(now_ns)));
+           ((m_peer_known || m_early_sending) && (m_streams.has_frame() || m_datagrams.has_frame(now_ns)));
+}
+
+bool QmuxConnection::early_open() const noexcept
+{
+    return m_state == QmuxState::Handshaking && m_early_sending && !m_early_full &&
+           m_tls.early_data() == crypto::TlsEarlyData::Offered;
+}
+
+usize QmuxConnection::record_room() const noexcept
+{
+    if (m_state != QmuxState::Handshaking)
+    {
+        return kQmuxMaxRecord;
+    }
+    const usize room = m_tls.early_data_room();
+    const usize left = (room > kSizeBytes) ? room - kSizeBytes : 0U;
+    return (left < kQmuxMaxRecord) ? left : kQmuxMaxRecord;
+}
+
+crypto::TlsError QmuxConnection::send_record(cont::ConstSpan<u8> record) noexcept
+{
+    if (m_tls.state() == crypto::TlsState::Established)
+    {
+        return m_tls.send(record);
+    }
+    return (m_config.tls->role() == crypto::TlsRole::Client) ? m_tls.send_early(record) : m_tls.send_half_rtt(record);
 }
 
 bool QmuxConnection::wants_write(u64 now_ns) const noexcept
 {
     return !m_transport_over &&
-           (m_tls.pending() != 0U || m_close_owed || (m_state == QmuxState::Established && frames_due(now_ns)));
+           (m_tls.pending() != 0U || m_close_owed ||
+            ((m_state == QmuxState::Established || early_open()) && frames_due(now_ns)));
 }
 
 usize QmuxConnection::take(cont::Span<u8> out, u64 now_ns) noexcept
@@ -603,7 +730,7 @@ bool QmuxConnection::send_finished() const noexcept
 
 void QmuxConnection::produce(u64 now_ns) noexcept
 {
-    while (m_state == QmuxState::Established || m_close_owed)
+    while (m_state == QmuxState::Established || m_close_owed || early_open())
     {
         if (m_tls.pending() + kQmuxMaxRecord + 2U + kTlsRecordOverhead > crypto::kTlsMaxBufferedBytes)
         {
@@ -613,13 +740,14 @@ void QmuxConnection::produce(u64 now_ns) noexcept
         const usize used = closing ? build_close() : build_record(now_ns);
         if (used == 0U)
         {
+            m_early_full = early_open() && frames_due(now_ns); // what did not fit waits for the handshake
             return;
         }
         // Size is in its shortest encoding, directly in front of the frames.
         const usize head = quic_varint_bytes(used);
         cont::WireWriter size(cont::Span<u8>(m_out + 2U - head, head));
         put_quic_varint(size, used);
-        const crypto::TlsError error = m_tls.send(cont::ConstSpan<u8>(m_out + 2U - head, head + used));
+        const crypto::TlsError error = send_record(cont::ConstSpan<u8>(m_out + 2U - head, head + used));
         if (error != crypto::TlsError::None)
         {
             tls_failed(error);
@@ -652,12 +780,17 @@ usize QmuxConnection::build_close() noexcept
     return used + write_quic_frame(frame, cont::Span<u8>(m_out + 2U + used, kQmuxMaxRecord - used));
 }
 
-usize QmuxConnection::write_parameters(cont::Span<u8> out) noexcept
+void QmuxConnection::fill_local(QuicTransportParameters& local) const noexcept
 {
-    QuicTransportParameters local;
     m_streams.fill_parameters(local);
     m_datagrams.fill_parameters(local);
     local.max_idle_timeout = m_config.idle_timeout_ns / kMsNs;
+}
+
+usize QmuxConnection::write_parameters(cont::Span<u8> out) noexcept
+{
+    QuicTransportParameters local;
+    fill_local(local);
     const struct
     {
         u64 id;
@@ -701,34 +834,33 @@ usize QmuxConnection::write_ping(u64 type, u64 sequence, cont::Span<u8> out) noe
 usize QmuxConnection::build_record(u64 now_ns) noexcept
 {
     u8* const frames = m_out + 2U;
+    const bool early = m_state == QmuxState::Handshaking; // only a client's 0-RTT is built before the handshake ends
+    const usize room = record_room();
     usize used = 0U;
     if (!m_parameters_sent)
     {
-        used += write_parameters(cont::Span<u8>(frames, kQmuxMaxRecord));
+        used += write_parameters(cont::Span<u8>(frames, room));
         m_parameters_sent = true;
     }
     if (m_pong_owed)
     {
-        used += write_ping(iana::kQuicFrameQxPingResponse, m_pong_sequence,
-                           cont::Span<u8>(frames + used, kQmuxMaxRecord - used));
+        used += write_ping(iana::kQuicFrameQxPingResponse, m_pong_sequence, cont::Span<u8>(frames + used, room - used));
         m_pong_owed = false;
     }
     if (m_ping_owed)
     {
-        used += write_ping(iana::kQuicFrameQxPingRequest, m_ping_next,
-                           cont::Span<u8>(frames + used, kQmuxMaxRecord - used));
+        used += write_ping(iana::kQuicFrameQxPingRequest, m_ping_next, cont::Span<u8>(frames + used, room - used));
         ++m_ping_next;
         m_ping_sent_ns = now_ns;
         m_ping_owed = false;
         ++m_counters.pings_sent;
     }
-    if (m_peer_known)
+    if (m_peer_known || m_early_sending)
     {
         while (m_datagrams.has_frame(now_ns))
         {
             u64 id = 0U;
-            const usize bytes =
-                m_datagrams.write_next(cont::Span<u8>(frames + used, kQmuxMaxRecord - used), now_ns, id);
+            const usize bytes = m_datagrams.write_next(cont::Span<u8>(frames + used, room - used), now_ns, id);
             if (bytes == 0U)
             {
                 break; // the frame goes alone in the next record: a datagram never exceeds one
@@ -741,21 +873,24 @@ usize QmuxConnection::build_record(u64 now_ns) noexcept
         }
         QuicFrame frame;
         QuicStreamRecord record;
-        while (m_streams.next_frame(kQmuxMaxRecord - used, now_ns, m_rtt_ns, frame, record))
+        while (m_streams.next_frame(room - used, now_ns, m_rtt_ns, frame, record))
         {
-            const usize bytes = write_quic_frame(frame, cont::Span<u8>(frames + used, kQmuxMaxRecord - used));
+            const usize bytes = write_quic_frame(frame, cont::Span<u8>(frames + used, room - used));
             if (bytes == 0U)
             {
                 m_streams.on_lost(record); // owed again (a frame next_frame sized never fails to fit)
                 break;
             }
             used += bytes;
-            m_streams.on_acked(record); // section 4.1: acknowledged once the transport has it
+            if (!early)
+            {
+                m_streams.on_acked(record); // section 4.1: acknowledged once the transport has it
+            }
         }
     }
     if (used != 0U)
     {
-        const usize padded = padded_size(used, m_config.padding_block, kQmuxMaxRecord);
+        const usize padded = padded_size(used, m_config.padding_block, room);
         std::memset(frames + used, 0, padded - used);
         m_counters.bytes_padded += padded - used;
         used = padded;
@@ -781,7 +916,8 @@ u64 QmuxConnection::next_timer_ns() const noexcept
             const u64 idle = idle_deadline();
             const u64 keepalive =
                 (m_config.keepalive_ns != 0U && !m_ping_owed) ? m_last_activity + m_config.keepalive_ns : kQmuxNoTimer;
-            return (idle < keepalive) ? idle : keepalive;
+            const u64 first = (idle < keepalive) ? idle : keepalive;
+            return (first < m_handshake_deadline) ? first : m_handshake_deadline;
         }
         case QmuxState::Closing:
             return m_close_deadline;
@@ -794,7 +930,7 @@ u64 QmuxConnection::next_timer_ns() const noexcept
 
 void QmuxConnection::on_timeout(u64 now_ns) noexcept
 {
-    if (m_state == QmuxState::Handshaking && now_ns >= m_handshake_deadline)
+    if ((m_state == QmuxState::Handshaking || m_state == QmuxState::Established) && now_ns >= m_handshake_deadline)
     {
         m_close.reason = QmuxCloseReason::HandshakeTimeout;
         m_send_shut = true;

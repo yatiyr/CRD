@@ -80,8 +80,6 @@ namespace crd::net
 inline constexpr usize kQuicMaxPeerConnectionIds = 8U;  // the peer's IDs a connection holds at most
 inline constexpr usize kQuicMaxReasonBytes = 64U;       // of a CONNECTION_CLOSE reason phrase kept or sent
 inline constexpr usize kQuicMaxLocalConnectionIds = 8U; // this side's active IDs at most
-// The application's part of a server's early data context at most (QuicConnectionConfig::early_context).
-inline constexpr usize kQuicMaxEarlyContextBytes = crypto::kTlsMaxEarlyDataContextBytes - kQuicEarlyParameterBytes;
 inline constexpr u32 kQuicMaxHeldPackets = 64U; // QuicConnectionConfig::held_packets at most
 // A token a connection carries: a client's from Retry or NEW_TOKEN, this build's or another server's (RFC 9000 sets
 // no bound; the Initial still holds 1200 bytes with the longest connection IDs and its CRYPTO data).

@@ -74,6 +74,8 @@ jobs:
           # QMux over TLS (4.2a): a local run stopped once on a wild memset inside AWS-LC that its input never replayed.
           - {target: net-qmux, seed: 8901, repeat: ''}
           - {target: net-qmux, seed: 8902, repeat: ''}
+          - {target: net-qmux-early, seed: 8921, repeat: ''}
+          - {target: net-qmux-early, seed: 8922, repeat: ''}
           - {target: net-qmux-host, seed: 8911, repeat: ''}
           - {target: net-qmux-host, seed: 8912, repeat: ''}
           - {target: net-ingress, seed: 8301, repeat: ''}

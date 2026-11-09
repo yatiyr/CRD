@@ -345,6 +345,15 @@ void QuicDatagrams::reject_early() noexcept
             --m_unreported;
         }
     }
+    if (m_outcomes_held)
+    {
+        for (u32 at = 0U; at < m_report_count; ++at)
+        {
+            QuicDatagramReport& held = m_reports[(m_report_first + at) % m_limits.send_count];
+            held.outcome = (held.outcome == QuicDatagramOutcome::Acked) ? QuicDatagramOutcome::Lost : held.outcome;
+        }
+        m_outcomes_held = false;
+    }
     m_peer_known = false;
     m_sendable = false;
     m_max_payload = 0U;
@@ -352,7 +361,7 @@ void QuicDatagrams::reject_early() noexcept
 
 bool QuicDatagrams::poll(QuicDatagramReport& out) noexcept
 {
-    if (m_report_count == 0U)
+    if (m_report_count == 0U || m_outcomes_held)
     {
         return false;
     }

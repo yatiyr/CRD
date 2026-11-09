@@ -1094,10 +1094,9 @@ struct TlsCallbacks
         return SSL_TLSEXT_ERR_ALERT_FATAL;
     }
 
-    // A client hands each ticket its server issues to the session's store as a ticket record: the early data its
-    // NewSessionTicket allowed (the message observer read it just before), the server's QUIC transport parameters and
-    // the serialized session, built in one allocation of its exact size so no copy of the secret is left behind.
-    // Without a store the ticket is ignored. The provider keeps its session object (0: no reference taken).
+    // A client hands each ticket its server issues to the session's store (store_ticket), or holds the newest while
+    // its parameters are to come. The early data its NewSessionTicket allowed was read by the message observer just
+    // before. Without a store the ticket is ignored. The result tells the provider whether a reference was taken.
     static int keep_ticket(SSL* ssl, SSL_SESSION* ticket) noexcept
     {
         detail::TlsHandshakeState* session = session_of(ssl);
@@ -1107,15 +1106,45 @@ struct TlsCallbacks
         }
         const u32 early = session->m_ticket_early;
         session->m_ticket_early = 0U;
-        const uint8_t* parameters = nullptr;
-        size_t parameter_bytes = 0U;
-        SSL_get_peer_quic_transport_params(ssl, &parameters, &parameter_bytes);
+        if (session->m_hold_tickets)
+        {
+            SSL_SESSION_free(reinterpret_cast<SSL_SESSION*>(session->m_held_ticket));
+            session->m_held_ticket = reinterpret_cast<ProviderTlsTicket*>(ticket);
+            session->m_held_ticket_early = early;
+            return 1;
+        }
+        store_ticket(ssl, *session, ticket, early);
+        return 0;
+    }
+
+    // A stream protocol's parameters are now known: they go into its tickets, starting with the one that waited.
+    static void store_held_ticket(SSL* ssl, detail::TlsHandshakeState& session) noexcept
+    {
+        auto* const held = reinterpret_cast<SSL_SESSION*>(session.m_held_ticket);
+        if (held != nullptr)
+        {
+            store_ticket(ssl, session, held, session.m_held_ticket_early);
+            SSL_SESSION_free(held);
+            session.m_held_ticket = nullptr;
+        }
+    }
+
+    // The ticket record of `ticket`: the early data it allows, the server's transport parameters and the serialized
+    // session, built in one allocation of its exact size so no copy of the secret is left behind.
+    static void store_ticket(SSL* ssl, detail::TlsHandshakeState& session, SSL_SESSION* ticket, u32 early) noexcept
+    {
+        const uint8_t* parameters = session.m_remembered.data();
+        size_t parameter_bytes = session.m_remembered.size();
+        if (session.m_quic)
+        {
+            SSL_get_peer_quic_transport_params(ssl, &parameters, &parameter_bytes);
+        }
         uint8_t* state = nullptr;
         size_t state_bytes = 0U;
         if (parameter_bytes > kQuicMaxTransportParameterBytes ||
             SSL_SESSION_to_bytes(ticket, &state, &state_bytes) != 1)
         {
-            return 0;
+            return;
         }
         const usize size = kTicketRecordHeader + parameter_bytes + state_bytes;
         auto* record = static_cast<u8*>(OPENSSL_malloc(size));
@@ -1130,13 +1159,12 @@ struct TlsCallbacks
             record[6] = static_cast<u8>(parameter_bytes);
             std::copy(parameters, parameters + parameter_bytes, record + kTicketRecordHeader);
             std::copy(state, state + state_bytes, record + kTicketRecordHeader + parameter_bytes);
-            session->m_tickets->keep(session->m_settings.binding, cont::ConstSpan<u8>(record, size));
+            session.m_tickets->keep(session.m_settings.binding, cont::ConstSpan<u8>(record, size));
             secure_zero(cont::Span<u8>(record, size));
             OPENSSL_free(record);
         }
         secure_zero(cont::Span<u8>(state, state_bytes));
         OPENSSL_free(state);
-        return 0;
     }
 
     static size_t ticket_overhead(SSL*) noexcept
@@ -2764,6 +2792,10 @@ void detail::TlsHandshakeState::release() noexcept
     SSL_free(ssl_of(m_session));
     m_session = nullptr;
     m_tickets = nullptr;
+    SSL_SESSION_free(reinterpret_cast<SSL_SESSION*>(m_held_ticket));
+    m_held_ticket = nullptr;
+    m_held_ticket_early = 0U;
+    m_remembered.clear();
     zero_ticket_keys(m_settings);
     m_settings                = TlsSettings{};
     m_state                   = TlsState::Idle;
@@ -2789,6 +2821,7 @@ void detail::TlsHandshakeState::release() noexcept
     m_public_name             = false;
     m_early_offered = false;
     m_ticket_replayed = false;
+    m_hold_tickets = false;
     m_ech                     = TlsEch::None;
     m_early = TlsEarlyData::None;
     m_alert_sent              = TlsAlert{};
@@ -2910,6 +2943,8 @@ TlsError TlsSession::init(const TlsContext& context, TlsTicketStore* tickets, co
         clear();
         return TlsError::ProviderFailure;
     }
+    m_remembered.resize(parameters.size());
+    std::copy(parameters.begin(), parameters.end(), m_remembered.data());
     m_session = reinterpret_cast<ProviderTlsSession*>(ssl.release());
     m_state   = TlsState::Handshaking;
     if (m_settings.role == TlsRole::Server)
@@ -3150,6 +3185,56 @@ u32 TlsSession::early_data_room() const noexcept
 {
     return m_settings.role == TlsRole::Client && m_early == TlsEarlyData::Offered ? m_early_allowance - m_early_sent
                                                                                   : 0U;
+}
+
+TlsError TlsSession::send_half_rtt(cont::ConstSpan<u8> plaintext) noexcept
+{
+    if (m_settings.role != TlsRole::Server || m_state != TlsState::Handshaking ||
+        SSL_in_early_data(ssl_of(m_session)) == 0)
+    {
+        return TlsError::NotReady;
+    }
+    if (plaintext.empty())
+    {
+        return TlsError::None;
+    }
+    const usize records = (plaintext.size() + kMaxRecordPlaintext - 1U) / kMaxRecordPlaintext;
+    if (plaintext.size() + records * kRecordOverhead > kTlsMaxBufferedBytes - std::min(pending(), kTlsMaxBufferedBytes))
+    {
+        return TlsError::Full;
+    }
+    const ErrorScope errors;
+    for (usize at = 0U; at < plaintext.size(); at += kMaxRecordPlaintext)
+    {
+        const int size = static_cast<int>(std::min(kMaxRecordPlaintext, plaintext.size() - at));
+        if (SSL_write(ssl_of(m_session), plaintext.data() + at, size) != size)
+        {
+            return fail(TlsError::Failed);
+        }
+    }
+    return TlsError::None;
+}
+
+cont::ConstSpan<u8> TlsSession::remembered_parameters() const noexcept
+{
+    return cont::ConstSpan<u8>(m_remembered.data(), m_remembered.size());
+}
+
+void TlsSession::hold_tickets() noexcept
+{
+    m_hold_tickets = m_settings.role == TlsRole::Client && m_tickets != nullptr;
+}
+
+void TlsSession::remember_parameters(cont::ConstSpan<u8> parameters) noexcept
+{
+    if (!m_hold_tickets)
+    {
+        return;
+    }
+    m_hold_tickets = false;
+    m_remembered.resize(parameters.size());
+    std::copy(parameters.begin(), parameters.end(), m_remembered.data());
+    TlsCallbacks::store_held_ticket(ssl_of(m_session), *this);
 }
 
 TlsError TlsSession::read_early(cont::Span<u8> out, usize& written) noexcept
@@ -3395,7 +3480,6 @@ void QuicHandshake::clear() noexcept
             forget(secret);
         }
     }
-    m_remembered.clear();
     m_alert_level = QuicLevel::Initial;
 }
 

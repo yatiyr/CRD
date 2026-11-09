@@ -83,6 +83,8 @@ TARGETS = {
                             'executable': 'tests/net/fuzz/crd-fuzz-net-quic-connection'},
     'net-qmux': {'corpus': 'tests/foundation/net/fuzz/corpus-qmux',
                  'executable': 'tests/net/fuzz/crd-fuzz-net-qmux'},
+    'net-qmux-early': {'corpus': 'tests/foundation/net/fuzz/corpus-qmux-early',
+                       'executable': 'tests/net/fuzz/crd-fuzz-net-qmux-early'},
     'net-qmux-host': {'corpus': 'tests/foundation/net/fuzz/corpus-qmux-host',
                       'executable': 'tests/net/fuzz/crd-fuzz-net-qmux-host'},
     'net-quic-datagram': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-datagram',

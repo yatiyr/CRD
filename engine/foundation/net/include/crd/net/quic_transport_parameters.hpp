@@ -20,6 +20,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/crypto/quic.hpp>
+#include <crd/crypto/tls.hpp>
 #include <crd/net/quic_frame.hpp>
 
 namespace crd::net
@@ -174,6 +175,8 @@ struct QuicConnectionIdExpectation
 
 // The bytes write_quic_early_parameters writes at most: a format byte and eleven varints.
 inline constexpr usize kQuicEarlyParameterBytes = 1U + (11U * 8U);
+// The application's part of a server's early data context at most (QuicConnectionConfig and QmuxConfig early_context).
+inline constexpr usize kQuicMaxEarlyContextBytes = crypto::kTlsMaxEarlyDataContextBytes - kQuicEarlyParameterBytes;
 
 // A server's parameters that its 0-RTT depends on, the first part of its early data context: every limit a client's
 // 0-RTT packets keep to (initial_max_data, the five stream parameters, active_connection_id_limit and

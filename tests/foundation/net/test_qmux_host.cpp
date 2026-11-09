@@ -9,6 +9,7 @@
 
 #include <crd/net/ingress.hpp>
 #include <crd/net/qmux_host.hpp>
+#include <crd/net/ticket_cache.hpp>
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -127,6 +128,7 @@ HandshakeRules open_rules()
 // A server host and a client host over one pipe network, under a test clock.
 struct Hosts
 {
+    ReadyFilter ready;
     Identity identity;
     CountingAllocator allocator;
     TestClock clock;
@@ -142,7 +144,8 @@ struct Hosts
     std::unique_ptr<QmuxHost> server;
     std::unique_ptr<QmuxHost> client;
 
-    explicit Hosts(const HandshakeRules& rules = open_rules(), u32 server_connections = 8U) : buckets(allocator, rules)
+    explicit Hosts(const HandshakeRules& rules = open_rules(), u32 server_connections = 8U, bool early = false)
+        : identity(false, early ? &ready.filter : nullptr), buckets(allocator, rules)
     {
         network.listener = &server_poller;
         server_config.connection = connection_config();
@@ -290,6 +293,38 @@ TEST_CASE("QmuxHost: many connections finish at once, and their slots are reused
     CHECK(hosts.client->connection(handles[again.slot]) == nullptr);
     CHECK(hosts.client->connection(again) != nullptr);
     CHECK(hosts.client->connection(QuicHandle{}) == nullptr);
+}
+
+TEST_CASE("QmuxHost: a resumed client's first stream goes as 0-RTT and is read marked", "[net][qmux-host]")
+{
+    Hosts hosts(open_rules(), 8U, true);
+    TicketCache tickets(hosts.allocator, TicketCacheConfig{});
+    hosts.client_config.connection.tickets = &tickets;
+    hosts.start();
+    hosts.establish(hosts.connect());
+    hosts.turns(8U);
+
+    const QuicHandle resumed = hosts.connect();
+    QmuxConnection* const client = hosts.client->connection(resumed);
+    REQUIRE(client != nullptr);
+    REQUIRE(client->handshake().early_data() == crypto::TlsEarlyData::Offered);
+    u64 id = 0U;
+    REQUIRE(client->streams().open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    REQUIRE(write_pattern(client->streams(), id, written, 5000U, 3U));
+    hosts.client->wake(resumed);
+    hosts.turns(8U);
+
+    REQUIRE(hosts.server_events.accepted_count == 2U);
+    QmuxConnection* const server = hosts.server->connection(hosts.server_events.accepted[1]);
+    REQUIRE(server != nullptr);
+    CHECK(client->handshake().early_data() == crypto::TlsEarlyData::Accepted);
+    CHECK(server->handshake().early_data() == crypto::TlsEarlyData::Accepted);
+    u64 read = 0U;
+    u64 marked = 0U;
+    CHECK(drain(server->streams(), id, read, 3U, &marked));
+    CHECK(read == 5000U);
+    CHECK(marked == 5000U);
 }
 
 TEST_CASE("QmuxHost: a connection with no slot is reset", "[net][qmux-host]")

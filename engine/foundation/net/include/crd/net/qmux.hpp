@@ -14,6 +14,10 @@
 //   streams   TCP delivers in order, so a stream frame that does not continue its stream is refused, and a frame is
 //             acknowledged the moment TLS takes it. Reads never wait for the application: streams are bounded by flow
 //             control and datagrams the application is late for are dropped.
+//   0-RTT     a resumed client sends its parameters and frames as TLS early data under the server parameters its
+//             ticket remembers; a server that accepts reads them marked replayable and answers at 0.5-RTT. Frames
+//             sent early count as delivered only once the server accepted; a rejection returns the streams to their
+//             start, and handshake().early_data() tells the application to send again.
 //   liveness  the idle timer restarts when a whole record arrives or the last byte is handed to the transport, never
 //             on TCP or TLS keep-alives; QX_PING keeps intermediaries awake and measures the RTT that tunes windows.
 //   close     CONNECTION_CLOSE, then close_notify and a shutdown of the sending side, then the peer's end (data
@@ -45,8 +49,12 @@ inline constexpr u64 kQmuxNoTimer = ~u64{0};
 
 struct QmuxConfig
 {
-    const crypto::TlsContext* tls = nullptr;   // client or server, with ALPN; one accepting early data is refused
+    const crypto::TlsContext* tls = nullptr;   // client or server, with ALPN
     crypto::TlsTicketStore* tickets = nullptr; // a client's tickets; nullptr offers and keeps none
+    // A server accepting early data: the application's part of its early data context (at most
+    // kQuicMaxEarlyContextBytes, read by start()), after the limits the connection adds itself, so a ticket's 0-RTT
+    // is refused once either changed. Empty where early data is not accepted.
+    cont::ConstSpan<u8> early_context;
     QuicStreamLimits streams;
     QuicDatagramLimits datagrams;
     u64 idle_timeout_ns = 30'000'000'000U;      // the idle timeout offered; 0 for none
@@ -61,7 +69,8 @@ enum class QmuxState : u8
 {
     Idle,        // before start()
     Handshaking, // the TLS handshake runs
-    Established, // records flow (peer_parameters_known() tells whether the peer's arrived)
+    Established, // records flow (peer_parameters_known() tells whether the peer's arrived); on a server that accepted
+                 // early data from the client's first flight, before the handshake ends
     Closing,     // this side closed: only the peer's end, or the wait for it, remains
     Closed,      // done: flush take(), shut the sending side, destroy
 };
@@ -162,13 +171,20 @@ public:
 
 private:
     void advance(u64 now_ns) noexcept;
+    void begin_early() noexcept;
+    void settle_early() noexcept;
     void established(u64 now_ns) noexcept;
     void drain(u64 now_ns) noexcept;
     void parse_records(u64 now_ns) noexcept;
-    [[nodiscard]] bool on_record(cont::ConstSpan<u8> record, u64 now_ns) noexcept;
+    void apply_peer_limits(const QuicTransportParameters& peer) noexcept;
+    void fill_local(QuicTransportParameters& local) const noexcept;
+    [[nodiscard]] bool early_open() const noexcept;
+    [[nodiscard]] usize record_room() const noexcept;
+    [[nodiscard]] crypto::TlsError send_record(cont::ConstSpan<u8> record) noexcept;
+    [[nodiscard]] bool on_record(cont::ConstSpan<u8> record, bool early, u64 now_ns) noexcept;
     [[nodiscard]] bool on_parameters(cont::ConstSpan<u8> bytes) noexcept;
     [[nodiscard]] bool on_ping(u64 type, u64 sequence, u64 now_ns) noexcept;
-    [[nodiscard]] bool on_frame(const QuicFrame& frame) noexcept;
+    [[nodiscard]] bool on_frame(const QuicFrame& frame, bool early) noexcept;
     void produce(u64 now_ns) noexcept;
     [[nodiscard]] usize build_record(u64 now_ns) noexcept;
     [[nodiscard]] usize build_close() noexcept;
@@ -190,7 +206,11 @@ private:
     QuicStreamSet m_streams;
     QuicDatagrams m_datagrams;
     QuicTransportParameters m_peer;
+    QuicTransportParameters m_remembered; // a client's: what its early frames keep to
     bool m_peer_known = false;
+    bool m_early_sending = false; // a client's: frames run on m_remembered until its server's parameters or a refusal
+    bool m_early_full = false;    // the ticket's allowance has no room for the next frame: the rest waits
+    bool m_early_settled = false;
     bool m_parameters_sent = false;
     bool m_close_owed = false;
     bool m_send_shut = false;      // close_notify is queued (or the alert of a failed handshake)
@@ -212,6 +232,7 @@ private:
     usize m_reason_bytes = 0U;
     QmuxCounters m_counters;
     usize m_in_fill = 0U;
+    usize m_in_early = 0U; // of m_in's first bytes, those that came as early data
     u8 m_in[kQmuxMaxRecord + 8U] = {};  // received plaintext: at most one partial record and its Size
     u8 m_out[kQmuxMaxRecord + 2U] = {}; // the record being assembled, its Size in the first bytes
 };

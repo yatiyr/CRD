@@ -336,9 +336,9 @@ struct TlsBinding
 // domain and connections meant to be uncorrelated share none (T15). A ticket is a secret (its resumption key): the
 // store zeroes the tickets it drops and the bytes it handed out. A QUIC handshake keeps and takes its tickets under
 // its own binding, so a ticket of one transport is never offered on the other (the provider would not resume it).
-// The bytes are Cerid's ticket record: the early data the ticket allows and, over QUIC, the server's transport
-// parameters that 0-RTT keeps to (RFC 9000 section 7.4.1), beside the provider's session; a record that does not parse
-// is never offered.
+// The bytes are Cerid's ticket record: the early data the ticket allows and the server's transport parameters that
+// 0-RTT keeps to (RFC 9000 section 7.4.1; QUIC's from its handshake, a stream protocol's from remember_parameters()),
+// beside the provider's session; a record that does not parse is never offered.
 class TlsTicketStore
 {
 public:
@@ -349,8 +349,8 @@ public:
     TlsTicketStore& operator=(TlsTicketStore&&)      = delete;
     virtual ~TlsTicketStore()                        = default;
 
-    // Keeps a copy of `ticket`, received under `binding` (called from TlsSession::read()); a store without room drops a
-    // ticket, the oldest or this one.
+    // Keeps a copy of `ticket`, received under `binding` (called from TlsSession::read() and remember_parameters()); a
+    // store without room drops a ticket, the oldest or this one.
     virtual void keep(const TlsBinding& binding, cont::ConstSpan<u8> ticket) noexcept = 0;
 
     // Removes a ticket kept under `binding` and returns its bytes, valid until the store's next call; empty when it
@@ -483,6 +483,7 @@ namespace detail
 } // namespace detail
 
 struct ProviderTlsContext; // the provider's context object, defined only inside crd-crypto
+struct ProviderTlsTicket;  // the provider's session object, of a ticket a client holds for its parameters
 struct ProviderTlsSession; // the provider's connection object, defined only inside crd-crypto
 struct ProviderBuffer;     // the provider's memory buffer, defined only inside crd-crypto
 struct TlsCallbacks;       // the provider's callbacks, defined only inside crd-crypto
@@ -602,6 +603,9 @@ protected:
 
     ProviderTlsSession* m_session = nullptr;
     TlsTicketStore*     m_tickets = nullptr;
+    ProviderTlsTicket*  m_held_ticket = nullptr; // a client's newest ticket that waits for remember_parameters()
+    cont::Array<u8>     m_remembered;            // a client's: the server's parameters of the ticket it offered; over
+                                                 // records, those its tickets carry once remember_parameters() ran
     TlsSettings         m_settings;
     TlsState            m_state = TlsState::Idle;
     AlgorithmId         m_group{};
@@ -615,6 +619,7 @@ protected:
     u32                 m_early_allowance  = 0U; // a client's: the early bytes its offered ticket allows
     u32                 m_early_sent       = 0U; // a client's: the early bytes sent
     u32                 m_ticket_early     = 0U; // a client's: what the last NewSessionTicket allows
+    u32                 m_held_ticket_early = 0U; // what m_held_ticket allows
     u16                 m_certificate_compression = 0U;
     bool                m_hello_retry       = false;
     bool                m_resumed           = false;
@@ -627,6 +632,7 @@ protected:
     bool                m_early_offered     = false; // a server's client offered early data
     bool                m_ticket_replayed   = false; // a server's ReplayFilter refused the offered ticket
     bool                m_quic              = false; // a QuicHandshake's (set by its init())
+    bool                m_hold_tickets      = false; // tickets wait for remember_parameters()
     TlsEch              m_ech               = TlsEch::None;
     TlsEarlyData        m_early             = TlsEarlyData::None;
     TlsAlert            m_alert_sent;
@@ -693,12 +699,30 @@ public:
     // The early bytes a client may still send: its ticket's allowance less what send_early() took; 0 unless Offered.
     [[nodiscard]] u32 early_data_room() const noexcept;
 
+    // A server that accepted early data, from its Finished until the handshake ends: protects all of `plaintext` into
+    // the outgoing bytes, or nothing (Full when they would exceed the bound). This is 0.5-RTT data (RFC 9846 section
+    // 2.3): it answers early data a round trip sooner than send() could, to a client whose Finished has not arrived.
+    // NotReady in any other state.
+    [[nodiscard]] TlsError send_half_rtt(cont::ConstSpan<u8> plaintext) noexcept;
+
     // A server that accepted early data, until the handshake ends: the early bytes received so far, up to out.size()
     // (0 when none waits). Early bytes come only from here, never from read(), and the handshake goes on only through
     // here: once the client's early data has ended, a call completes the handshake (Established; what follows is
     // read()'s), so the server calls it after each receive() until the session is Established. An error fails the
     // session as receive() does. NotReady for a client and for a server that accepted no early data.
     [[nodiscard]] TlsError read_early(cont::Span<u8> out, usize& written) noexcept;
+
+    // The server parameters in the ticket a client offered, for a stream protocol's early data to keep to; empty when
+    // it offered none or the ticket carries none.
+    [[nodiscard]] cont::ConstSpan<u8> remembered_parameters() const noexcept;
+
+    // For a stream protocol whose server parameters travel as application data (QMux), which may arrive before or
+    // after a NewSessionTicket: after hold_tickets() (a client's, once after init()) tickets wait;
+    // remember_parameters() gives what they carry, stores the one that waited (the newest, by the provider's own
+    // reference) and those that follow. A ticket still waiting when the session ends is dropped: it could offer no early data anyway.
+    // remember_parameters() does nothing without hold_tickets(), and the first call is the one that counts.
+    void hold_tickets() noexcept;
+    void remember_parameters(cont::ConstSpan<u8> parameters) noexcept;
 
     // Queues close_notify once the handshake is done; the session is Closed (Closed again when it was sent before, or
     // when the peer closed it during the handshake). NotReady before the handshake ends and after a failure: such a
@@ -881,7 +905,6 @@ private:
 
     ProviderBuffer* m_outgoing[kQuicLevels] = {};
     Secret          m_secrets[3][2]; // [Handshake, Application, Early][Client, Server]
-    cont::Array<u8> m_remembered;    // a client's: its ticket's server transport parameters
     QuicLevel       m_alert_level = QuicLevel::Initial;
     QuicVersion     m_version     = QuicVersion::V1;
     TlsBinding      m_context_binding; // the context's, which the QUIC binding of m_version derives from

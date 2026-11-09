@@ -1016,7 +1016,7 @@ implementation exists. `QmuxConnection` is sans-I/O (`receive`, `take`), so NET-
 Evidence: `test_qmux.cpp` (every refusal above through a real TLS peer, flow control both ways past every window, byte-at-a-time and
 seeded-stall paths, timers to the nanosecond, the close paths, a run over real TCP), `test_stream_socket.cpp`, `crd-fuzz-net-qmux`
 (records, cuts, time and closes against a real TLS peer), held to source mutations ([session](../sessions/2026-11-09-4-2a-qmux.md)).
-Still to come: 0-RTT (a context accepting early data is refused at `start()`) and interop with a second implementation.
+0-RTT is [S54](#qmux-early). Still to come: interop with a second implementation.
 
 <a id="stream-host"></a>
 **S53. The stream path's host** (4.2a, threats T01 and T11; [stream_poller.hpp](../../engine/foundation/net/include/crd/net/stream_poller.hpp),
@@ -1049,6 +1049,34 @@ on the loopback), `crd-fuzz-net-qmux-host` (any order of connects, resets, cuts,
 connection closed once, counts consistent, all memory back), held to source mutations ([session](../sessions/2026-11-09-4-2a-stream-host.md)).
 
 <a id="browsers"></a>
+<a id="qmux-early"></a>
+**S54. QMux 0-RTT** (4.2a, threats T07 and T10; [qmux.hpp](../../engine/foundation/net/include/crd/net/qmux.hpp); draft-ietf-quic-qmux-02 sections 4.2,
+5.1 and 8.2, RFC 9000 section 7.4.1, RFC 9846 section 2.3; 2026-11-09). The draft defers to QUIC for what 0-RTT keeps to and says nothing of a refusal, so S45's rules
+carry over, on TLS early data in place of 0-RTT packets.
+
+- **What a ticket remembers.** QUIC reads its server's parameters from the handshake; here they are a frame, which may arrive before or after a NewSessionTicket. So
+  the ticket record's `parameters` field (S9) also serves a records session: after `hold_tickets()` the newest ticket waits, by the provider's own reference, until
+  `remember_parameters()` hands over the frame's body. A ticket whose parameters never came goes with the session; no copy of it exists meanwhile.
+- **Client.** A ticket that allows early data and whose parameters parse grants streams and datagrams from them alone (`set_peer_parameters` only raises, as in S45). Its
+  own QX_TRANSPORT_PARAMETERS goes first, as early data (section 5's rule stands in 0-RTT). A ticket allowance too small for that frame sends nothing early; a frame the allowance
+  cannot hold waits for the handshake, and no further record is built early, so a client never spins on a full allowance. `early_data_room()` bounds every record.
+- **Delivered means accepted.** S52 acknowledges a frame as TLS takes it, which early data must not: the bytes are gone if the server refuses them. Frames sent early are
+  left unacknowledged and `QuicStreamSet::on_all_acked()` runs when the server accepts, so no per-frame record is kept (a tiny-frame flight would need thousands); datagram
+  outcomes are held in their ring (`hold_outcomes`) and released, or turned to Lost.
+- **Refused.** As S45: streams back to `init()`'s state, queued datagrams Lost, the transport parameters owed again as the first frame, and `handshake().early_data()` tells the
+  application to send again. Accepted but lowered limits are PROTOCOL_VIOLATION.
+- **Server.** The early data context is `write_quic_early_parameters` (one encoding with S45) and the application's part, so a limit that changed refuses a ticket's 0-RTT.
+  It goes Established at the client's first flight and reads early bytes through `read_early()`; a record with any early byte in it is marked whole (a client may cut one at
+  the end of its 0-RTT). `handshake_timeout_ns` still bounds the client's Finished.
+- **0.5-RTT.** A server may answer before the client's Finished (`TlsSession::send_half_rtt`, RFC 9846 section 2.3). Without it an early request would be answered a full round
+  trip later than QUIC answers it (T07 is unchanged: the marks say which requests are replayable). A close at 0.5-RTT is a CONNECTION_CLOSE and a FIN: TLS has no close_notify
+  before its handshake ends.
+
+Evidence: `test_qmux.cpp` `[qmux-early]` (accepted with every cut of the flights, refused three ways and all their combinations, a replayed flight, lowered and raised limits through a real TLS peer, a too-small allowance,
+parameters that no longer parse, a ticket with none, a record cut by the end of early data, the first-frame rule, the handshake timer, a close at 0.5-RTT, no allocation),
+`test_tls_early.cpp` (the ticket either side of the parameters, `send_half_rtt` in every state), `test_qmux_host.cpp` (over a host), `crd-fuzz-net-qmux-early` (either side
+under test against a real TLS peer: hostile early data, hostile answers at 0.5-RTT, refusals), held to source mutations ([session](../sessions/2026-11-09-4-2a-qmux-early.md)).
+
 ## Browser constraints
 
 Designed here, qualified under [WEB.5](../ROADMAP.md#slice-web.5):

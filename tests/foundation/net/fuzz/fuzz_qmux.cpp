@@ -9,15 +9,11 @@
 // first frame is its transport parameters and whose frames are all ones QMux allows. A server that closes names a
 // transport error or the peer's own close, and sends no record after its CONNECTION_CLOSE. Stream reads never pass what
 // was sent, and the server's state only moves forward.
-#include <crd/containers/wire_bytes.hpp>
+#include "qmux_fuzz_fixture.hpp"
+
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
-#include <crd/fuzz/harness.hpp>
-#include <crd/net/qmux.hpp>
-#include <crd/net/quic_header.hpp>
-#include <crd/net/register_ids.hpp>
 
-#include <cstring>
 #include <new>
 
 namespace
@@ -30,9 +26,10 @@ using crd::containers::Span;
 using crd::containers::StringView;
 using crd::containers::WireReader;
 using crd::containers::WireWriter;
+using crd::net::testing::FuzzInput;
+using crd::net::testing::QmuxRecordOracle;
 using namespace crd::crypto;
 using namespace crd::net;
-namespace iana_ids = crd::net::iana;
 
 constexpr AlgorithmId kGroups[] = {AlgorithmId::X25519};
 constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
@@ -83,122 +80,10 @@ Identity& identity()
     return held;
 }
 
-struct Input
-{
-    const u8* data;
-    usize size;
-    usize at = 0U;
-
-    [[nodiscard]] bool more() const { return at < size; }
-    u8 byte() { return (at < size) ? data[at++] : u8{0}; }
-    ConstSpan<u8> run()
-    {
-        const usize wanted = (usize{byte()} << 8U) | byte();
-        const usize length = (wanted < size - at) ? wanted : size - at;
-        const ConstSpan<u8> bytes(data + at, length);
-        at += length;
-        return bytes;
-    }
-};
-
-// Checks what the server sends: whole records of allowed frames, the transport parameters first and nothing after a
-// CONNECTION_CLOSE.
-class Oracle
-{
-public:
-    void plaintext(ConstSpan<u8> bytes)
-    {
-        for (const u8 byte : bytes)
-        {
-            CRD_FUZZ_REQUIRE(m_fill < sizeof(m_buffer));
-            m_buffer[m_fill++] = byte;
-        }
-        usize at = 0U;
-        while (at < m_fill)
-        {
-            WireReader header(ConstSpan<u8>(m_buffer + at, m_fill - at));
-            u64 size = 0U;
-            if (!take_quic_varint(header, size))
-            {
-                break;
-            }
-            CRD_FUZZ_REQUIRE(size != 0U && size <= kQmuxMaxRecord);
-            const usize head = header.consumed();
-            if (m_fill - at - head < size)
-            {
-                break;
-            }
-            record(ConstSpan<u8>(m_buffer + at + head, static_cast<usize>(size)));
-            at += head + static_cast<usize>(size);
-        }
-        if (at != 0U)
-        {
-            std::memmove(m_buffer, m_buffer + at, m_fill - at);
-            m_fill -= at;
-        }
-    }
-
-private:
-    void record(ConstSpan<u8> frames)
-    {
-        CRD_FUZZ_REQUIRE(!m_closed);
-        WireReader in(frames);
-        while (!in.done())
-        {
-            WireReader probe(in.rest());
-            u64 type = 0U;
-            CRD_FUZZ_REQUIRE(take_quic_varint(probe, type));
-            if (!m_first_seen)
-            {
-                CRD_FUZZ_REQUIRE(type == iana_ids::kQuicFrameQxTransportParameters);
-                m_first_seen = true;
-            }
-            if (type == iana_ids::kQuicFrameQxTransportParameters || type == iana_ids::kQuicFrameQxPingRequest ||
-                type == iana_ids::kQuicFrameQxPingResponse)
-            {
-                u64 value = 0U;
-                CRD_FUZZ_REQUIRE(take_quic_varint(probe, value));
-                ConstSpan<u8> skipped;
-                const bool parameters = type == iana_ids::kQuicFrameQxTransportParameters;
-                const usize extra = parameters ? static_cast<usize>(value) : 0U;
-                CRD_FUZZ_REQUIRE(in.take_bytes(probe.consumed() + extra, skipped));
-                continue;
-            }
-            QuicFrame frame;
-            CRD_FUZZ_REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);
-            switch (frame.kind)
-            {
-                case QuicFrameKind::Padding:
-                case QuicFrameKind::Stream:
-                case QuicFrameKind::ResetStream:
-                case QuicFrameKind::StopSending:
-                case QuicFrameKind::MaxData:
-                case QuicFrameKind::MaxStreamData:
-                case QuicFrameKind::MaxStreams:
-                case QuicFrameKind::DataBlocked:
-                case QuicFrameKind::StreamDataBlocked:
-                case QuicFrameKind::StreamsBlocked:
-                case QuicFrameKind::Datagram:
-                    break;
-                case QuicFrameKind::ConnectionClose:
-                    m_closed = true;
-                    break;
-                default:
-                    CRD_FUZZ_REQUIRE(false);
-            }
-        }
-    }
-
-    u8 m_buffer[2U * kQmuxMaxRecord + 16U] = {};
-    usize m_fill = 0U;
-    bool m_first_seen = false;
-    bool m_closed = false;
-};
-
 class Run
 {
 public:
-    void go(Input input)
+    void go(FuzzInput input)
     {
         QmuxConfig config;
         config.tls = &identity().server;
@@ -239,7 +124,7 @@ public:
     }
 
 private:
-    void step(Input& input)
+    void step(FuzzInput& input)
     {
         switch (input.byte() % 7U)
         {
@@ -360,7 +245,7 @@ private:
     crd::fuzz::BudgetAllocator m_allocator;
     QmuxConnection m_server;
     TlsSession m_peer;
-    Oracle m_oracle;
+    QmuxRecordOracle m_oracle;
     u64 m_now = kStartNs;
     u8 m_state_floor = 0U;
 };
@@ -393,7 +278,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     // The connection's two record buffers are too large for a fuzzer's stack: one static run, rebuilt per input.
     alignas(Run) static unsigned char storage[sizeof(Run)];
     Run* const run = new (storage) Run();
-    run->go(Input{data, size});
+    run->go(FuzzInput{data, size});
     run->~Run();
     return 0;
 }

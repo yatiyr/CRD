@@ -15,6 +15,7 @@
 #include <crd/net/ticket_cache.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cstring>
 #include <utility>
 
@@ -1269,3 +1270,792 @@ TEST_CASE("QMux: a run over the host's TCP", "[net][qmux][tcp]")
 }
 
 } // namespace
+
+// ---- 0-RTT (draft section 8.2) ----
+
+namespace
+{
+using crd::crypto::TlsEarlyData;
+
+constexpr u8 kRawContext[] = {'r', 'a', 'w'};
+
+// One fleet's 0-RTT: a replay filter, contexts that allow early data and the client's tickets.
+struct Early
+{
+    ReadyFilter ready;
+    Identity identity{false, &ready.filter};
+    CountingAllocator allocator;
+    TicketCache tickets{allocator, TicketCacheConfig{}};
+
+    [[nodiscard]] QmuxConfig client_config(crypto::TlsTicketStore* store = nullptr)
+    {
+        QmuxConfig config = config_of(identity.client);
+        config.tickets = (store != nullptr) ? store : &tickets;
+        return config;
+    }
+
+    [[nodiscard]] QmuxConfig server_config() { return config_of(identity.server); }
+
+    // A full handshake, which leaves a ticket that remembers the server's parameters.
+    void first_connection(crypto::TlsTicketStore* store = nullptr)
+    {
+        QmuxConnection client;
+        QmuxConnection server;
+        REQUIRE(client.init(allocator, client_config(store)));
+        REQUIRE(server.init(allocator, server_config()));
+        REQUIRE(client.start(kNow));
+        REQUIRE(server.start(kNow));
+        pump(client, server, kNow);
+        REQUIRE(client.state() == QmuxState::Established);
+        REQUIRE(client.peer_parameters_known());
+    }
+};
+
+// Hands what `from` has to send to `to`, once.
+void hand(QmuxConnection& from, QmuxConnection& to, u64 now = kNow)
+{
+    u8 bytes[kBuffer];
+    for (usize got = from.take(Span<u8>(bytes), now); got != 0U; got = from.take(Span<u8>(bytes), now))
+    {
+        to.receive(ConstSpan<u8>(bytes, got), now);
+    }
+}
+
+bool finished(QuicStreamSet& set, u64 id)
+{
+    bool seen = false;
+    QuicStreamEvent event;
+    while (set.poll(event))
+    {
+        seen = seen || (event.id == id && (event.events & kQuicStreamFinished) != 0U);
+    }
+    return seen;
+}
+
+// Hands a ticket back changed: another allowance, or parameters that no longer parse.
+class EditedTickets final : public crypto::TlsTicketStore
+{
+public:
+    void keep(const crypto::TlsBinding& binding, ConstSpan<u8> ticket) noexcept override
+    {
+        m_inner.keep(binding, ticket);
+    }
+
+    ConstSpan<u8> take(const crypto::TlsBinding& binding) noexcept override
+    {
+        const ConstSpan<u8> ticket = m_inner.take(binding);
+        if (ticket.empty())
+        {
+            return ticket;
+        }
+        std::memcpy(m_edited, ticket.data(), ticket.size());
+        if (allowance != 0U)
+        {
+            m_edited[3] = static_cast<u8>(allowance >> 8U);
+            m_edited[4] = static_cast<u8>(allowance);
+        }
+        if (spoil_parameters)
+        {
+            m_edited[7] = 0xFFU;
+        }
+        return ConstSpan<u8>(m_edited, ticket.size());
+    }
+
+    u32 allowance = 0U;
+    bool spoil_parameters = false;
+
+private:
+    Tickets m_inner;
+    u8 m_edited[4096] = {};
+};
+
+// A TLS server that speaks QMux by hand and accepts early data under a context of its own.
+struct RawServer
+{
+    TlsSession session;
+
+    explicit RawServer(const crypto::TlsContext& context)
+    {
+        REQUIRE(session.init(context, nullptr, {}, ConstSpan<u8>(kRawContext)) == TlsError::None);
+    }
+
+    void read_everything()
+    {
+        u8 bytes[kBuffer];
+        usize got = 1U;
+        while (got != 0U)
+        {
+            const bool early =
+                session.state() == TlsState::Handshaking && session.early_data() == TlsEarlyData::Accepted;
+            const Span<u8> room(bytes);
+            const TlsError error = early ? session.read_early(room, got) : session.read(room, got);
+            REQUIRE((error == TlsError::None || error == TlsError::NotReady || error == TlsError::Closed));
+            got = (error == TlsError::None) ? got : 0U;
+        }
+    }
+
+    // Takes the client's first flight and answers nothing yet: the server stands at 0.5-RTT.
+    void first_flight(QmuxConnection& client, u64 now = kNow)
+    {
+        u8 bytes[kBuffer];
+        const usize got = client.take(Span<u8>(bytes), now);
+        REQUIRE(got != 0U);
+        REQUIRE(session.receive(ConstSpan<u8>(bytes, got)) == TlsError::None);
+        read_everything();
+    }
+
+    void exchange(QmuxConnection& client, u64 now = kNow)
+    {
+        u8 bytes[kBuffer];
+        for (bool moved = true; moved;)
+        {
+            moved = false;
+            for (usize got = client.take(Span<u8>(bytes), now); got != 0U; got = client.take(Span<u8>(bytes), now))
+            {
+                moved = true;
+                REQUIRE(session.receive(ConstSpan<u8>(bytes, got)) == TlsError::None);
+            }
+            read_everything();
+            usize out = 0U;
+            REQUIRE(session.take(Span<u8>(bytes), out) == TlsError::None);
+            while (out != 0U)
+            {
+                moved = true;
+                client.receive(ConstSpan<u8>(bytes, out), now);
+                REQUIRE(session.take(Span<u8>(bytes), out) == TlsError::None);
+            }
+        }
+    }
+
+    // A record of these parameters, sent as 1-RTT or, when `half_rtt`, as 0.5-RTT data.
+    void parameters(const Parameters& list, bool half_rtt = false)
+    {
+        const Bytes frame = Raw::tp_frame(list);
+        Bytes bytes = sized(frame.size() + 8U);
+        WireWriter writer{Span<u8>(bytes.data(), bytes.size())};
+        put_quic_varint(writer, frame.size());
+        writer.put_bytes(ConstSpan<u8>(frame.data(), frame.size()));
+        const ConstSpan<u8> record(bytes.data(), writer.written());
+        REQUIRE((half_rtt ? session.send_half_rtt(record) : session.send(record)) == TlsError::None);
+    }
+};
+
+const Parameters kRawLimits = {{0x04U, 1U << 16U}, {0x05U, 1U << 15U}, {0x06U, 1U << 15U}, {0x08U, 8U}};
+
+// A connection to a RawServer that leaves a ticket remembering `limits`.
+void remember(Early& early, const Parameters& limits)
+{
+    QmuxConnection client;
+    REQUIRE(client.init(early.allocator, early.client_config()));
+    REQUIRE(client.start(kNow));
+    RawServer server(early.identity.server);
+    server.exchange(client);
+    REQUIRE(client.state() == QmuxState::Established);
+    server.parameters(limits);
+    server.exchange(client);
+    REQUIRE(client.peer_parameters_known());
+}
+} // namespace
+
+TEST_CASE("QMux 0-RTT: a resumed client's frames reach its server early and marked, answered at 0.5-RTT",
+          "[net][qmux][qmux-early]")
+{
+    Early early;
+    early.first_connection();
+    QmuxConnection client;
+    QmuxConnection server;
+    REQUIRE(client.init(early.allocator, early.client_config()));
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    REQUIRE(client.start(kNow));
+    REQUIRE(server.start(kNow));
+    REQUIRE(client.handshake().early_data() == TlsEarlyData::Offered);
+    CHECK(client.state() == QmuxState::Handshaking);
+
+    // Under the limits the ticket remembers, before the server has said anything.
+    u64 id = 0U;
+    REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    REQUIRE(write_pattern(client.streams(), id, written, 4000U, 3U));
+    const u8 payload[100] = {7U};
+    u64 datagram = 0U;
+    REQUIRE(client.datagrams().queue(ConstSpan<u8>(payload), kNow, datagram) == QuicDatagramError::None);
+    CHECK(client.wants_write(kNow));
+
+    hand(client, server);
+    REQUIRE(server.state() == QmuxState::Established);
+    CHECK(server.handshake().state() == TlsState::Handshaking);
+    CHECK(server.handshake().early_data() == TlsEarlyData::Accepted);
+    CHECK(server.peer_parameters_known());
+    u64 read = 0U;
+    u64 marked = 0U;
+    CHECK(drain(server.streams(), id, read, 3U, &marked));
+    CHECK(read == 4000U);
+    CHECK(marked == 4000U);
+    CHECK(server.datagrams().oldest_early());
+    server.datagrams().pop();
+
+    // Nothing counts as delivered until the server has answered.
+    QuicDatagramReport report;
+    CHECK_FALSE(client.datagrams().poll(report));
+    CHECK_FALSE(finished(client.streams(), id));
+
+    // The answer goes before the client's Finished, a round trip sooner than the handshake allows.
+    u64 answered = 0U;
+    REQUIRE(write_pattern(server.streams(), id, answered, 2000U, 5U));
+    hand(server, client);
+    REQUIRE(client.state() == QmuxState::Established);
+    CHECK(client.handshake().early_data() == TlsEarlyData::Accepted);
+    CHECK(client.peer_parameters_known());
+    REQUIRE(client.datagrams().poll(report));
+    CHECK(report.id == datagram);
+    CHECK(report.outcome == QuicDatagramOutcome::Acked);
+    CHECK(finished(client.streams(), id));
+    u64 back = 0U;
+    CHECK(drain(client.streams(), id, back, 5U));
+    CHECK(back == 2000U);
+
+    CHECK(server.handshake().state() == TlsState::Handshaking);
+    hand(client, server);
+    CHECK(server.handshake().state() == TlsState::Established);
+    CHECK(server.next_timer_ns() != kNow + QmuxConfig{}.handshake_timeout_ns);
+
+    // Once the handshake is over, data carries no mark.
+    u64 later = 0U;
+    REQUIRE(client.streams().open(true, later) == QuicStreamError::None);
+    u64 later_written = 0U;
+    REQUIRE(write_pattern(client.streams(), later, later_written, 1000U, 9U));
+    pump(client, server, kNow);
+    u64 later_read = 0U;
+    u64 later_marked = 0U;
+    CHECK(drain(server.streams(), later, later_read, 9U, &later_marked));
+    CHECK(later_read == 1000U);
+    CHECK(later_marked == 0U);
+    CHECK(client.state() == QmuxState::Established);
+    CHECK(server.state() == QmuxState::Established);
+}
+
+TEST_CASE("QMux 0-RTT: every cut of the flights still delivers it", "[net][qmux][qmux-early]")
+{
+    for (const usize chunk : {usize{1U}, usize{3U}, usize{7U}, usize{64U}, usize{1000U}})
+    {
+        CAPTURE(chunk);
+        Early early;
+        early.first_connection();
+        QmuxConnection client;
+        QmuxConnection server;
+        REQUIRE(client.init(early.allocator, early.client_config()));
+        REQUIRE(server.init(early.allocator, early.server_config()));
+        REQUIRE(client.start(kNow));
+        REQUIRE(server.start(kNow));
+        u64 id = 0U;
+        REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+        u64 written = 0U;
+        REQUIRE(write_pattern(client.streams(), id, written, 9000U, 4U));
+        pump(client, server, kNow, chunk);
+        CHECK(client.handshake().early_data() == TlsEarlyData::Accepted);
+        u64 read = 0U;
+        u64 marked = 0U;
+        CHECK(drain(server.streams(), id, read, 4U, &marked));
+        CHECK(read == 9000U);
+        CHECK(marked == 9000U);
+    }
+}
+
+TEST_CASE("QMux 0-RTT: what the ticket does not allow goes after the handshake, in order", "[net][qmux][qmux-early]")
+{
+    Early early;
+    early.first_connection();
+    QmuxConnection client;
+    QmuxConnection server;
+    REQUIRE(client.init(early.allocator, early.client_config()));
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    REQUIRE(client.start(kNow));
+    REQUIRE(server.start(kNow));
+    u64 id = 0U;
+    REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    REQUIRE(write_pattern(client.streams(), id, written, 30000U, 6U));
+    pump(client, server, kNow);
+    u64 read = 0U;
+    u64 marked = 0U;
+    CHECK(drain(server.streams(), id, read, 6U, &marked));
+    CHECK(read == 30000U);
+    CHECK(marked > 0U);
+    CHECK(marked <= crypto::kTlsEarlyDataBytes);
+}
+
+TEST_CASE("QMux 0-RTT: a server that refuses it gets everything again, parameters first", "[net][qmux][qmux-early]")
+{
+    Early early;
+    early.first_connection();
+    const bool plain = GENERATE(false, true);
+    const bool other_limits = GENERATE(false, true);
+    const bool other_application = GENERATE(false, true);
+    CAPTURE(plain, other_limits, other_application);
+    const u8 schema[] = {2U};
+    QmuxConfig server_config = plain ? config_of(early.identity.plain) : early.server_config();
+    if (other_limits)
+    {
+        server_config.streams.stream_window /= 2U;
+    }
+    if (other_application && !plain)
+    {
+        server_config.early_context = ConstSpan<u8>(schema);
+    }
+    QmuxConnection client;
+    QmuxConnection server;
+    REQUIRE(client.init(early.allocator, early.client_config()));
+    REQUIRE(server.init(early.allocator, server_config));
+    REQUIRE(client.start(kNow));
+    REQUIRE(server.start(kNow));
+    REQUIRE(client.handshake().early_data() == TlsEarlyData::Offered);
+
+    u64 id = 0U;
+    REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    REQUIRE(write_pattern(client.streams(), id, written, 3000U, 3U));
+    const u8 payload[100] = {7U};
+    u64 sent = 0U;
+    REQUIRE(client.datagrams().queue(ConstSpan<u8>(payload), kNow, sent) == QuicDatagramError::None);
+    pump(client, server, kNow);
+
+    const bool refused = plain || other_limits || other_application;
+    CHECK(client.handshake().early_data() == (refused ? TlsEarlyData::Rejected : TlsEarlyData::Accepted));
+    REQUIRE(client.state() == QmuxState::Established);
+    REQUIRE(server.state() == QmuxState::Established);
+    CHECK(client.peer_parameters_known());
+    CHECK(server.peer_parameters_known());
+    QuicDatagramReport report;
+    REQUIRE(client.datagrams().poll(report));
+    CHECK(report.id == sent);
+    CHECK(report.outcome == (refused ? QuicDatagramOutcome::Lost : QuicDatagramOutcome::Acked));
+    if (!refused)
+    {
+        return;
+    }
+    CHECK(server.handshake().resumed()); // a ticket's early data is what was refused, never its resumption
+    CHECK_FALSE(finished(client.streams(), id));
+    CHECK(client.streams().send_state(id) == QuicSendState::None);
+    CHECK(server.streams().recv_state(id) == QuicRecvState::None);
+    ConstSpan<u8> held;
+    CHECK_FALSE(server.datagrams().peek(held));
+
+    // The application starts again, now under what the server said.
+    u64 again = 0U;
+    REQUIRE(client.streams().open(true, again) == QuicStreamError::None);
+    CHECK(again == id);
+    written = 0U;
+    REQUIRE(write_pattern(client.streams(), again, written, 3000U, 8U));
+    REQUIRE(client.datagrams().queue(ConstSpan<u8>(payload), kNow, sent) == QuicDatagramError::None);
+    pump(client, server, kNow);
+    u64 read = 0U;
+    u64 marked = 0U;
+    CHECK(drain(server.streams(), again, read, 8U, &marked));
+    CHECK(read == 3000U);
+    CHECK(marked == 0U);
+    REQUIRE(server.datagrams().peek(held));
+    CHECK_FALSE(server.datagrams().oldest_early());
+    CHECK(client.state() == QmuxState::Established);
+    CHECK(server.state() == QmuxState::Established);
+}
+
+TEST_CASE("QMux 0-RTT: a replayed first flight delivers nothing a second time", "[net][qmux][qmux-early]")
+{
+    Early early;
+    early.first_connection();
+    QmuxConnection client;
+    QmuxConnection server;
+    QmuxConnection replayed;
+    REQUIRE(client.init(early.allocator, early.client_config()));
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    REQUIRE(replayed.init(early.allocator, early.server_config()));
+    REQUIRE(client.start(kNow));
+    REQUIRE(server.start(kNow));
+    REQUIRE(replayed.start(kNow));
+    u64 id = 0U;
+    REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    REQUIRE(write_pattern(client.streams(), id, written, 1000U, 3U));
+    u8 flight[kBuffer];
+    const usize bytes = client.take(Span<u8>(flight), kNow);
+    REQUIRE(bytes != 0U);
+    server.receive(ConstSpan<u8>(flight, bytes), kNow);
+    CHECK(server.handshake().early_data() == TlsEarlyData::Accepted);
+    replayed.receive(ConstSpan<u8>(flight, bytes), kNow);
+    CHECK(replayed.handshake().early_data() == TlsEarlyData::Replayed);
+    CHECK(replayed.state() == QmuxState::Handshaking);
+    CHECK_FALSE(replayed.peer_parameters_known());
+    CHECK(replayed.streams().recv_state(id) == QuicRecvState::None);
+}
+
+TEST_CASE("QMux 0-RTT: a server's parameters may not fall below what the early frames kept to",
+          "[net][qmux][qmux-early]")
+{
+    Early early;
+    remember(early, kRawLimits);
+    struct Case
+    {
+        u64 max_data;
+        u64 bidi;
+        bool refused;
+    };
+    const Case item = GENERATE(Case{1U << 16U, 1U << 15U, false}, Case{1U << 17U, 1U << 16U, false},
+                               Case{(1U << 16U) - 1U, 1U << 15U, true}, Case{1U << 16U, (1U << 15U) - 1U, true});
+    CAPTURE(item.max_data, item.bidi);
+    QmuxConnection client;
+    REQUIRE(client.init(early.allocator, early.client_config()));
+    REQUIRE(client.start(kNow));
+    REQUIRE(client.handshake().early_data() == TlsEarlyData::Offered);
+    u64 id = 0U;
+    REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+    RawServer server(early.identity.server);
+    server.first_flight(client);
+    REQUIRE(server.session.early_data() == TlsEarlyData::Accepted);
+    server.parameters({{0x04U, item.max_data}, {0x05U, 1U << 15U}, {0x06U, item.bidi}, {0x08U, 8U}}, true);
+    server.exchange(client);
+    if (item.refused)
+    {
+        CHECK(client.state() == QmuxState::Closing);
+        CHECK(client.close_info().reason == QmuxCloseReason::Error);
+        CHECK(client.close_info().error_code == static_cast<u64>(QuicTransportError::ProtocolViolation));
+    }
+    else
+    {
+        CHECK(client.state() == QmuxState::Established);
+        CHECK(client.peer_parameters().initial_max_data == item.max_data);
+    }
+}
+
+TEST_CASE("QMux 0-RTT: a ticket carries the server's parameters, and they grant the client's early streams",
+          "[net][qmux][qmux-early]")
+{
+    Early early;
+    Tickets store;
+    early.first_connection(&store);
+    CHECK(store.holds());
+    QmuxConnection client;
+    QmuxConnection server;
+    REQUIRE(client.init(early.allocator, early.client_config(&store)));
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    REQUIRE(client.start(kNow));
+    REQUIRE(server.start(kNow));
+    CHECK(client.handshake().early_data() == TlsEarlyData::Offered);
+    CHECK_FALSE(client.handshake().remembered_parameters().empty());
+    CHECK(client.wants_write(kNow));
+    CHECK(client.streams().send_state(0U) == QuicSendState::None);
+    // The ticket's own grants, before any byte from the server.
+    u64 id = 0U;
+    CHECK(client.streams().open(true, id) == QuicStreamError::None);
+    pump(client, server, kNow);
+    CHECK(client.handshake().early_data() == TlsEarlyData::Accepted);
+    CHECK(store.holds()); // the server's next ticket
+}
+
+TEST_CASE("QMux 0-RTT: a client without a usable ticket sends nothing early and starts normally",
+          "[net][qmux][qmux-early]")
+{
+    Early early;
+    EditedTickets store;
+    early.first_connection(&store);
+    const usize edit = GENERATE(0U, 1U, 2U);
+    CAPTURE(edit);
+    if (edit == 0U)
+    {
+        store.allowance = 64U; // less than the transport parameters frame
+    }
+    else if (edit == 1U)
+    {
+        store.spoil_parameters = true;
+    }
+    QmuxConnection client;
+    QmuxConnection server;
+    REQUIRE(client.init(early.allocator, early.client_config(&store)));
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    REQUIRE(client.start(kNow));
+    REQUIRE(server.start(kNow));
+    CHECK(client.handshake().early_data() == TlsEarlyData::Offered);
+    u64 id = 0U;
+    const bool early_credit = edit == 2U;
+    CHECK((client.streams().open(true, id) == QuicStreamError::None) == early_credit);
+    hand(client, server);
+    CHECK(server.peer_parameters_known() == early_credit);
+    pump(client, server, kNow);
+    CHECK(client.state() == QmuxState::Established);
+    CHECK(server.state() == QmuxState::Established);
+    CHECK(client.peer_parameters_known());
+    CHECK(server.peer_parameters_known());
+}
+
+TEST_CASE("QMux 0-RTT: a ticket without parameters offers no early frames", "[net][qmux][qmux-early]")
+{
+    Early early;
+    Tickets store;
+    {
+        TlsSession plain;
+        RawServer server(early.identity.server);
+        REQUIRE(plain.init(early.identity.client, &store) == TlsError::None);
+        u8 bytes[kBuffer];
+        usize got = 0U;
+        for (usize round = 0U; round < 6U; ++round)
+        {
+            REQUIRE(plain.take(Span<u8>(bytes), got) == TlsError::None);
+            REQUIRE(server.session.receive(ConstSpan<u8>(bytes, got)) == TlsError::None);
+            REQUIRE(server.session.take(Span<u8>(bytes), got) == TlsError::None);
+            REQUIRE(plain.receive(ConstSpan<u8>(bytes, got)) == TlsError::None);
+            usize none = 0U;
+            REQUIRE(((plain.state() != TlsState::Established) || plain.read(Span<u8>(bytes), none) == TlsError::None));
+        }
+    }
+    REQUIRE(store.holds());
+    QmuxConnection client;
+    REQUIRE(client.init(early.allocator, early.client_config(&store)));
+    REQUIRE(client.start(kNow));
+    CHECK(client.handshake().early_data() == TlsEarlyData::Offered);
+    CHECK(client.handshake().remembered_parameters().empty());
+    u64 id = 0U;
+    CHECK(client.streams().open(true, id) != QuicStreamError::None);
+    u8 bytes[kBuffer];
+    CHECK(client.take(Span<u8>(bytes), kNow) != 0U); // the ClientHello alone
+    CHECK(client.counters().records_sent == 0U);
+}
+
+TEST_CASE("QMux 0-RTT: what is written after the first flight still goes early", "[net][qmux][qmux-early]")
+{
+    Early early;
+    early.first_connection();
+    QmuxConnection client;
+    QmuxConnection server;
+    REQUIRE(client.init(early.allocator, early.client_config()));
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    REQUIRE(client.start(kNow));
+    REQUIRE(server.start(kNow));
+    hand(client, server);
+    CHECK_FALSE(client.wants_write(kNow));
+
+    u64 id = 0U;
+    REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    REQUIRE(write_pattern(client.streams(), id, written, 500U, 3U));
+    CHECK(client.wants_write(kNow));
+    hand(client, server);
+    CHECK(client.handshake().early_data() == TlsEarlyData::Offered);
+    u64 read = 0U;
+    u64 marked = 0U;
+    CHECK(drain(server.streams(), id, read, 3U, &marked));
+    CHECK(read == 500U);
+    CHECK(marked == 500U);
+
+    // A stream reset early counts as delivered only once the server has answered, and then frees its slot.
+    u64 dropped = 0U;
+    REQUIRE(client.streams().open(true, dropped) == QuicStreamError::None);
+    REQUIRE(client.streams().reset(dropped, 11U) == QuicStreamError::None);
+    hand(client, server);
+    CHECK(client.streams().send_state(dropped) == QuicSendState::ResetSent);
+    pump(client, server, kNow);
+    CHECK(client.handshake().early_data() == TlsEarlyData::Accepted);
+    CHECK(client.streams().send_state(dropped) == QuicSendState::ResetRecvd);
+}
+
+TEST_CASE("QMux 0-RTT: a frame too large for the ticket's allowance waits; records stay within it",
+          "[net][qmux][qmux-early]")
+{
+    Early early;
+    EditedTickets store;
+    early.first_connection(&store);
+    store.allowance = 200U;
+    QmuxConfig client_config = early.client_config(&store);
+    client_config.padding_block = 4096U;
+    QmuxConnection client;
+    QmuxConnection server;
+    REQUIRE(client.init(early.allocator, client_config));
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    REQUIRE(client.start(kNow));
+    REQUIRE(server.start(kNow));
+    const u8 payload[400] = {7U};
+    u64 datagram = 0U;
+    REQUIRE(client.datagrams().queue(ConstSpan<u8>(payload), kNow, datagram) == QuicDatagramError::None);
+    u8 bytes[kBuffer];
+    usize got = client.take(Span<u8>(bytes), kNow);
+    REQUIRE(got != 0U);
+    CHECK(client.state() == QmuxState::Handshaking);
+    CHECK(client.counters().records_sent == 1U);
+    CHECK(client.handshake().early_data_room() < 200U);
+    CHECK_FALSE(client.wants_write(kNow)); // nothing more fits: no busy turns
+    server.receive(ConstSpan<u8>(bytes, got), kNow);
+    CHECK(server.peer_parameters_known());
+    ConstSpan<u8> held;
+    CHECK_FALSE(server.datagrams().peek(held));
+    pump(client, server, kNow);
+    REQUIRE(server.datagrams().peek(held));
+    CHECK(held.size() == sizeof(payload));
+    CHECK_FALSE(server.datagrams().oldest_early());
+    QuicDatagramReport report;
+    REQUIRE(client.datagrams().poll(report));
+    CHECK(report.outcome == QuicDatagramOutcome::Acked);
+}
+
+TEST_CASE("QMux 0-RTT: a record cut by the end of the early data counts as early", "[net][qmux][qmux-early]")
+{
+    Early early;
+    Tickets store;
+    early.first_connection(&store);
+    QmuxConnection server;
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    REQUIRE(server.start(kNow));
+    TlsSession peer;
+    REQUIRE(peer.init(early.identity.client, &store) == TlsError::None);
+    REQUIRE(peer.early_data() == TlsEarlyData::Offered);
+
+    const Bytes parameters = Raw::tp_frame({{0x04U, 1U << 20U}, {0x05U, 1U << 16U}, {0x06U, 1U << 16U}, {0x08U, 16U}});
+    const Bytes data = sized(200U, 0x5AU);
+    const Bytes stream = stream_frame(0U, 0U, data);
+    Bytes record = sized(parameters.size() + stream.size() + 8U);
+    WireWriter writer{Span<u8>(record.data(), record.size())};
+    put_quic_varint(writer, parameters.size() + stream.size());
+    writer.put_bytes(ConstSpan<u8>(parameters.data(), parameters.size()));
+    writer.put_bytes(ConstSpan<u8>(stream.data(), stream.size()));
+    const ConstSpan<u8> whole(record.data(), writer.written());
+    const usize cut = whole.size() / 2U;
+    REQUIRE(peer.send_early(whole.first(cut)) == TlsError::None);
+
+    u8 bytes[kBuffer];
+    usize got = 0U;
+    REQUIRE(peer.take(Span<u8>(bytes), got) == TlsError::None);
+    server.receive(ConstSpan<u8>(bytes, got), kNow);
+    CHECK(server.state() == QmuxState::Established);
+    CHECK_FALSE(server.peer_parameters_known()); // half a record
+    for (usize out = server.take(Span<u8>(bytes), kNow); out != 0U; out = server.take(Span<u8>(bytes), kNow))
+    {
+        REQUIRE(peer.receive(ConstSpan<u8>(bytes, out)) == TlsError::None);
+    }
+    REQUIRE(peer.state() == TlsState::Established);
+    REQUIRE(peer.send(whole.subspan(cut)) == TlsError::None);
+    REQUIRE(peer.take(Span<u8>(bytes), got) == TlsError::None);
+    server.receive(ConstSpan<u8>(bytes, got), kNow);
+    REQUIRE(server.handshake().state() == TlsState::Established);
+    CHECK(server.peer_parameters_known());
+    const QuicStreamRead read = server.streams().peek(0U);
+    CHECK(read.data.size() == data.size());
+    CHECK(read.early_bytes == data.size());
+}
+
+TEST_CASE("QMux 0-RTT: the first early frame must be the transport parameters", "[net][qmux][qmux-early]")
+{
+    Early early;
+    Tickets store;
+    early.first_connection(&store);
+    QmuxConnection server;
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    REQUIRE(server.start(kNow));
+    TlsSession peer;
+    REQUIRE(peer.init(early.identity.client, &store) == TlsError::None);
+    const Bytes data = sized(16U, 1U);
+    const Bytes stream = stream_frame(0U, 0U, data);
+    Bytes record = sized(stream.size() + 8U);
+    WireWriter writer{Span<u8>(record.data(), record.size())};
+    put_quic_varint(writer, stream.size());
+    writer.put_bytes(ConstSpan<u8>(stream.data(), stream.size()));
+    REQUIRE(peer.send_early(ConstSpan<u8>(record.data(), writer.written())) == TlsError::None);
+    u8 bytes[kBuffer];
+    usize got = 0U;
+    REQUIRE(peer.take(Span<u8>(bytes), got) == TlsError::None);
+    server.receive(ConstSpan<u8>(bytes, got), kNow);
+    CHECK(server.state() == QmuxState::Closing);
+    CHECK(server.close_info().reason == QmuxCloseReason::Error);
+    CHECK(server.close_info().error_code == static_cast<u64>(QuicTransportError::ProtocolViolation));
+    // The CONNECTION_CLOSE goes at 0.5-RTT, the handshake still unfinished.
+    const usize out = server.take(Span<u8>(bytes), kNow);
+    REQUIRE(out != 0U);
+    CHECK(server.send_finished());
+    REQUIRE(peer.receive(ConstSpan<u8>(bytes, out)) == TlsError::None);
+    REQUIRE(peer.state() == TlsState::Established);
+    u8 plain[256];
+    REQUIRE(peer.read(Span<u8>(plain), got) == TlsError::None);
+    CHECK(got != 0U);
+}
+
+TEST_CASE("QMux 0-RTT: a client that never finishes its handshake times out", "[net][qmux][qmux-early]")
+{
+    Early early;
+    early.first_connection();
+    QmuxConnection client;
+    QmuxConnection server;
+    REQUIRE(client.init(early.allocator, early.client_config()));
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    REQUIRE(client.start(kNow));
+    REQUIRE(server.start(kNow));
+    hand(client, server);
+    REQUIRE(server.state() == QmuxState::Established);
+    REQUIRE(server.handshake().state() == TlsState::Handshaking);
+    const u64 deadline = kNow + QmuxConfig{}.handshake_timeout_ns;
+    CHECK(server.next_timer_ns() == deadline);
+    server.on_timeout(deadline - 1U);
+    CHECK(server.state() == QmuxState::Established);
+    server.on_timeout(deadline);
+    CHECK(server.state() == QmuxState::Closed);
+    CHECK(server.close_info().reason == QmuxCloseReason::HandshakeTimeout);
+}
+
+TEST_CASE("QMux 0-RTT: a server may close during its 0.5-RTT", "[net][qmux][qmux-early]")
+{
+    Early early;
+    early.first_connection();
+    QmuxConnection client;
+    QmuxConnection server;
+    REQUIRE(client.init(early.allocator, early.client_config()));
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    REQUIRE(client.start(kNow));
+    REQUIRE(server.start(kNow));
+    hand(client, server);
+    REQUIRE(server.state() == QmuxState::Established);
+    server.close(9U, {}, kNow);
+    hand(server, client);
+    CHECK(client.state() == QmuxState::Closed);
+    CHECK(client.close_info().reason == QmuxCloseReason::Peer);
+    CHECK(client.close_info().application);
+    CHECK(client.close_info().error_code == 9U);
+    CHECK(server.send_finished());
+}
+
+TEST_CASE("QMux 0-RTT: configurations are held to where early data is accepted", "[net][qmux][qmux-early]")
+{
+    Early early;
+    const u8 schema[] = {1U};
+    const Bytes huge = sized(kQuicMaxEarlyContextBytes + 1U);
+    QmuxConfig config = early.server_config();
+    config.early_context = ConstSpan<u8>(huge.data(), huge.size());
+    QmuxConnection oversized;
+    CHECK_FALSE(oversized.init(early.allocator, config));
+    config.early_context = ConstSpan<u8>(huge.data(), huge.size() - 1U);
+    QmuxConnection largest;
+    REQUIRE(largest.init(early.allocator, config));
+    CHECK(largest.start(kNow));
+    config = early.client_config();
+    config.early_context = ConstSpan<u8>(schema);
+    QmuxConnection client;
+    CHECK_FALSE(client.init(early.allocator, config));
+    config = config_of(early.identity.plain);
+    config.early_context = ConstSpan<u8>(schema);
+    QmuxConnection plain;
+    CHECK_FALSE(plain.init(early.allocator, config));
+}
+
+TEST_CASE("QMux 0-RTT: nothing allocates after init", "[net][qmux][qmux-early]")
+{
+    Early early;
+    early.first_connection();
+    QmuxConnection client;
+    QmuxConnection server;
+    REQUIRE(client.init(early.allocator, early.client_config()));
+    REQUIRE(server.init(early.allocator, early.server_config()));
+    const usize calls = early.allocator.calls();
+    REQUIRE(client.start(kNow));
+    REQUIRE(server.start(kNow));
+    u64 id = 0U;
+    REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    REQUIRE(write_pattern(client.streams(), id, written, 2000U, 3U));
+    pump(client, server, kNow);
+    CHECK(client.handshake().early_data() == TlsEarlyData::Accepted);
+    CHECK(early.allocator.calls() - calls <= 2U); // the ticket cache's copy of the new ticket, and nothing else
+}
