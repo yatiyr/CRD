@@ -395,6 +395,7 @@ void honest_webtransport(Input& in)
         {
             CRD_FUZZ_REQUIRE(rig.how_many(to, Http3EventKind::WtAborted) == ++aborted[to]);
             const H3Seen* const seen = rig.find(to, Http3EventKind::WtAborted, aborted[to] - 1U);
+            CRD_FUZZ_REQUIRE(seen != nullptr);
             CRD_FUZZ_REQUIRE(seen->event.stream == id && seen->event.id == session);
             u32 back = 0U;
             CRD_FUZZ_REQUIRE(wt_application_code(seen->event.error, back) && back == code);
