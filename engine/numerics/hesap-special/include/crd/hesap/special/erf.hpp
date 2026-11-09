@@ -6,11 +6,13 @@
 //
 // Built on the proven incomplete-gamma engine: erf(x)=sign(x)·P(½,x²), erfc via Q(½,x²), so the inverses reuse
 // the Halley-refined gammainc_p_inv (erfinv(y)=√P⁻¹(½,|y|)). erfcx is overflow-safe (direct for |x|<26, asymptotic
-// beyond). Dawson via the Rybicki sampling method (NR). Gate ≤ 1e-13 vs scipy.special / Boost / std::erf.
+// beyond). Dawson via the Rybicki (1989) sampling method. Gate ≤ 1e-13 vs scipy.special / Boost / std::erf.
 
 #include <crd/hesap/special/incomplete.hpp>
 
 #include <crd/math/cmath.hpp>
+
+#include <type_traits>
 
 namespace crd::hesap::special
 {
@@ -302,13 +304,29 @@ template <Real T>
     return q < static_cast<T>(0) ? -val : val;
 }
 
-// Dawson integral D(x) = exp(−x²) ∫₀ˣ exp(t²) dt.  Rybicki sampling method (NR §6.10), with H=0.25/N=13 (the
-// method's error is ~exp(−(π/2H)²) ⇒ H=0.25 reaches ~1e-13, vs NR's H=0.4 ≈ 2e-7) + a near-zero power series.
+namespace detail
+{
+// exp(−((2i+1)h)²) for the Rybicki sampling lattice h = 1/4, i = 0..12 (values of the Gaussian weights, tabulated).
+inline constexpr long double kDawsonWeight[13] = {
+    9.3941306281347578611971e-1L,  5.6978282473092300976663e-1L,  2.0961138715109782252411e-1L,
+    4.6770622383958983652761e-2L,  6.3297154274857465768651e-3L,  5.1957468215483848176482e-4L,
+    2.5868100222654121270359e-5L,  7.8114894083044907954730e-7L,  1.4307241918567688334677e-8L,
+    1.5893910094516366528735e-10L, 1.0709232382508076455865e-12L, 4.3766185028708498938213e-15L,
+    1.0848552640429378025122e-17L,
+};
+} // namespace detail
+
+// Dawson integral D(x) = exp(−x²) ∫₀ˣ exp(t²) dt. Sampling sum of Rybicki (1989): D(x) ≈ π^{−1/2} Σ_{k odd}
+// exp(−(x−kh)²)/k, whose error is ~exp(−(π/2h)²) ⇒ h = 0.25 with 13 samples per side reaches ~1e-13 (cf. h = 0.4 ≈
+// 2e-7), plus a near-zero power series. The sum is centred on the even lattice point m₀ nearest x (|x − m₀h| ≤ h), so
+// that exp(−(x−(m₀+j)h)²) = exp(−r²)·exp(2rjh)·exp(−j²h²) with r = x − m₀h and j odd. The samples at m₀+j and
+// m₀−j (L = m₀ even, ρ = 2rh) share one weight and combine over the common denominator L² − j²:
+//   e^{ρj}/(L+j) + e^{−ρj}/(L−j) = 2(L·cosh ρj − j·sinh ρj)/(L² − j²),
+// and (cosh ρj, sinh ρj) advances from j to j+2 by the hyperbolic rotation through 2ρ.
 template <Real T>
 [[nodiscard]] T dawson(T x) noexcept
 {
     constexpr int kN = 13;
-    const T h = static_cast<T>(0.25);
     const T ax = std::abs(x);
     if (ax < static_cast<T>(0.2))
     {
@@ -323,23 +341,36 @@ template <Real T>
         }
         return sum;
     }
-    const T n0 = static_cast<T>(2) * crd::math::floor(static_cast<T>(0.5) * ax / h + static_cast<T>(0.5));
-    const T xp = ax - n0 * h;
-    T e1 = crd::math::exp(static_cast<T>(2) * xp * h);
-    const T e2 = e1 * e1;
-    T d1 = n0 + static_cast<T>(1);
-    T d2 = n0 - static_cast<T>(1);
-    T sum = static_cast<T>(0);
+    // Narrow types run the rotation and the sum in double (the recurrence accumulates rounding that a binary32 sum
+    // would carry into the result); the result is rounded once at the end.
+    using W = std::conditional_t<(sizeof(T) < sizeof(double)), double, T>;
+    const W h = static_cast<W>(0.25);
+    const W axw = static_cast<W>(ax);
+    const W lattice = static_cast<W>(2) * crd::math::floor(static_cast<W>(0.5) * axw / h + static_cast<W>(0.5));
+    const W r = axw - lattice * h;
+    const W e_rho = crd::math::exp(static_cast<W>(2) * r * h);
+    const W e_neg = static_cast<W>(1) / e_rho;
+    W cosh_j = static_cast<W>(0.5) * (e_rho + e_neg);     // cosh ρj, j = 1
+    W sinh_j = static_cast<W>(0.5) * (e_rho - e_neg);     // sinh ρj
+    const W cosh_2 = cosh_j * cosh_j + sinh_j * sinh_j;   // cosh 2ρ
+    const W sinh_2 = static_cast<W>(2) * cosh_j * sinh_j; // sinh 2ρ
+    // L and j are measured in units of the span max(L, 1), so that L² − j² cannot overflow for a huge x; the sum then
+    // carries the factor 1/span.
+    const W inv_span = static_cast<W>(1) / (lattice > static_cast<W>(1) ? lattice : static_cast<W>(1));
+    const W lattice_u = lattice * inv_span;
+    const W j_step = static_cast<W>(2) * inv_span;
+    W j = inv_span; // j in span units
+    W sum = static_cast<W>(0);
     for (int i = 0; i < kN; ++i)
     {
-        const T t = static_cast<T>(2 * i + 1) * h;
-        const T c = crd::math::exp(-t * t);
-        sum += c * (e1 / d1 + static_cast<T>(1) / (d2 * e1)); // use d1,d2 BEFORE advancing
-        d1 += static_cast<T>(2);
-        d2 -= static_cast<T>(2);
-        e1 *= e2;
+        sum += static_cast<W>(detail::kDawsonWeight[i]) * (lattice_u * cosh_j - j * sinh_j) /
+               (lattice_u * lattice_u - j * j);
+        const W cosh_next = cosh_j * cosh_2 + sinh_j * sinh_2;
+        sinh_j = sinh_j * cosh_2 + cosh_j * sinh_2;
+        cosh_j = cosh_next;
+        j += j_step;
     }
-    const T res = detail::kInvSqrtPi<T> * crd::math::exp(-xp * xp) * sum;
+    const T res = static_cast<T>(static_cast<W>(2) * detail::kInvSqrtPi<W> * crd::math::exp(-r * r) * sum * inv_span);
     return (x >= static_cast<T>(0)) ? res : -res;
 }
 
