@@ -22,17 +22,20 @@ versions:
 - **Version Negotiation**: the client starts in the version the server does not run; one to two packets are counted
   off the wire (the hybrid key share makes a first flight of two datagrams) and both ends finish in the other version.
 - **Stateless reset**: the server is killed in mid-transfer and another process takes its port with the same key; the
-  client's next packet draws the reset. A client issues no token for the ID a server uses, so it runs one way.
+  client's next packet draws the reset. Only the server side is restarted: a client gives no token for the sequence 0
+  ID a server keeps using, so no reset from a client can match.
 
 ## Findings
 
 - Both OpenSSL traps were the harness's: `SSL_set_quic_tls_early_data_enabled` fails silently before the QUIC callbacks
   are set, and `SSL_free` without `SSL_SENT_SHUTDOWN` marks the kept ticket unresumable.
 - A lost close left the ngtcp2 peer exiting 1 after its idle timeout, an old flake in the lossy cases; idle now counts.
-- On the relay, a Cerid client's unpaced first flight fares worse than ngtcp2's paced one: all 256 frames are written,
-  ngtcp2 buffers only four packets ahead of the handshake's end (`NGTCP2_MAX_NUM_BUFFED_RX_PKTS`) and 73 to 85% arrive;
-  12 to 18% are reported Acked, the rest declared lost before their late acknowledgement. To be measured again under
-  [NET-PATH](../ROADMAP.md#slice-net-path)'s pacing; the case holds delivery at 50% and each datagram intact.
+- On the relay a Cerid client delivers less than ngtcp2's paced one: all 256 frames are written and 73 to 86% arrive
+  (ngtcp2 buffers four packets ahead of the handshake's end, `NGTCP2_MAX_NUM_BUFFED_RX_PKTS`, so that is the likely
+  sink of a first flight overtaking the client's Finished), and 12 to 18% are reported Acked. The rest were delivered
+  or lost but declared lost first: S41 reports Lost at the declaration, once, which RFC 9221 section 5.2 allows and
+  ngtcp2's `lost_datagram` does too, so a prompt report stays prompt. The case holds delivery at 50%, each datagram
+  intact; [NET-PATH](../ROADMAP.md#slice-net-path)'s pacing is measured against these numbers.
 
 ## Evidence
 
