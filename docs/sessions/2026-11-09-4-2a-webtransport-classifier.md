@@ -3,7 +3,7 @@
 <!-- doc-role: evidence -->
 > Dated evidence; no live status. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
-Row: [4.2a](../ROADMAP.md#slice-4.2a). Design: [S59](../design/network-foundation.md#webtransport). Spec: draft-ietf-webtrans-http3-17 (read in full, SHA-256 `795eee1c...7426713`).
+Row: [4.2a](../ROADMAP.md#slice-4.2a). Design: [S59](../design/network-foundation.md#webtransport). Spec: draft-ietf-webtrans-http3-17 (read in full, SHA-256 `795eee1c...f426713`).
 
 CI first: no completed run holds 3a882670 or 48b6021c yet, so tidy ran here on `quic_frame.cpp`, `quic_stream.cpp`, `quic_stream_set.cpp` and `http3.cpp`, and found one naming issue in `test_quic_stream_set.cpp`, fixed.
 

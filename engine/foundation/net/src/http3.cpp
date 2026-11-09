@@ -493,14 +493,17 @@ bool Http3Connection::take_datagram(Http3Event& event) noexcept
         const u64 id = quarter * 4U;
         Record* const record = find(id);
         const bool request = record != nullptr && record->kind == Kind::Request && record->read != Read::Over;
-        if (request && !record->datagrams && record->read != Read::Head)
+        // A server's request not yet read may still turn out to carry datagrams; a client knows what it sent. With
+        // WebTransport the layer above decides what waits, as the session may not have been read yet (draft section
+        // 4.6); otherwise it goes.
+        const bool pending = request && !record->datagrams && record->read == Read::Head &&
+                             m_config.side == crypto::QuicSide::Server;
+        if (request && !record->datagrams && !pending)
         {
             m_datagrams->pop();
             return abort_stream(*record, kH3DatagramError, true, event);
         }
-        // A request not yet read may still turn out to carry datagrams. With WebTransport the layer above decides what
-        // waits, as the session may simply not have been read yet (draft section 4.6); otherwise it goes.
-        const bool unread = record == nullptr || record->kind == Kind::First || (request && !record->datagrams);
+        const bool unread = record == nullptr || record->kind == Kind::First || pending;
         if (m_config.datagrams && ((request && record->datagrams) || (unread && m_config.webtransport.enabled)))
         {
             event = Http3Event{};

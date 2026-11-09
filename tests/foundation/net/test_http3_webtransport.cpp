@@ -1070,6 +1070,20 @@ TEST_CASE("webtransport: a datagram ahead of its session is handed up", "[http3]
         REQUIRE(f.rig->find(kH3Server, Http3EventKind::Datagram) != nullptr);
         CHECK(f.rig->h3[kH3Server].error() == 0U);
     }
+    SECTION("a client knows what it asked for: one on its plain request is refused before any response")
+    {
+        Fixture f;
+        f.client();
+        u64 stream = 0U;
+        REQUIRE(f.rig->h3[kH3Client].open_request(h3_get().span(), false, stream) == Http3Error::None);
+        f.rig->settle();
+        datagram(*f.rig, kH3Client, {0x00U, 'x'});
+        f.rig->settle();
+        const H3Seen* const got = f.rig->find(kH3Client, Http3EventKind::Aborted);
+        REQUIRE(got != nullptr);
+        CHECK(got->event.error == kH3DatagramError);
+        CHECK(f.rig->find(kH3Client, Http3EventKind::Datagram) == nullptr);
+    }
     SECTION("without the offer it goes, and does not end the request it may belong to")
     {
         Fixture f;
