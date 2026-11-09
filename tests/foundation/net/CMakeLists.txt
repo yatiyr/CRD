@@ -4,7 +4,8 @@
 # 4.2a's addresses and UDP sockets on the host's loopback, QUIC headers, admission stages S1 to S3 and the I/O loop,
 # QUIC frames and transport parameters, QUIC packets per level, acknowledgements and loss recovery, byte streams and
 # flow control, the connection's stream set and datagrams, the connection carrying them, the server behind the
-# ingress and the client's host, byte-stream sockets on the loopback and QMux over them.
+# ingress and the client's host, byte-stream sockets on the loopback and QMux over them, also as WebSocket tunnels over
+# HTTP/2 and HTTP/3.
 add_executable(crd-net-tests
     test_admission.cpp
     test_channel_link.cpp
@@ -18,6 +19,7 @@ add_executable(crd-net-tests
     test_http3_webtransport.cpp
     test_webtransport.cpp
     test_websocket.cpp
+    test_websocket_tunnel.cpp
     test_http_fields.cpp
     test_http_message.cpp
     test_ingress.cpp

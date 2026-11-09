@@ -75,6 +75,8 @@ TARGETS = {
                          'executable': 'tests/net/fuzz/crd-fuzz-net-webtransport'},
     'net-websocket': {'corpus': 'tests/foundation/net/fuzz/corpus-websocket',
                       'executable': 'tests/net/fuzz/crd-fuzz-net-websocket'},
+    'net-websocket-tunnel': {'corpus': 'tests/foundation/net/fuzz/corpus-websocket-tunnel',
+                             'executable': 'tests/net/fuzz/crd-fuzz-net-websocket-tunnel'},
     'net-ingress': {'corpus': 'tests/foundation/net/fuzz/corpus-ingress',
                     'executable': 'tests/net/fuzz/crd-fuzz-net-ingress'},
     'net-hpack': {'corpus': 'tests/foundation/net/fuzz/corpus-hpack',
