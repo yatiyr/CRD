@@ -12,6 +12,7 @@ add_executable(crd-net-tests
     test_delta.cpp
     test_endpoint.cpp
     test_frame_integrity.cpp
+    test_hpack.cpp
     test_http3.cpp
     test_http3_webtransport.cpp
     test_webtransport.cpp
@@ -208,6 +209,18 @@ if(CRD_BUILD_QPACK_VS_QIFS)
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/qpack_interop.py"
                      --replay "$<TARGET_FILE:crd-qpack-replay>" --corpus "${qifs_SOURCE_DIR}")
     set_tests_properties(crd-net-qpack-interop-qifs PROPERTIES TIMEOUT 900 LABELS "net;qpack-interop")
+endif()
+
+# HPACK against the hpack-test-case corpus (CRD_BUILD_HPACK_VS_CORPUS): crd-hpack-replay decodes what other encoders wrote
+# and hpack_interop.py compares it with each story and sets crd-net's encoder beside them.
+if(CRD_BUILD_HPACK_VS_CORPUS)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_executable(crd-hpack-replay interop/cerid_hpack_replay.cpp)
+    target_link_libraries(crd-hpack-replay PRIVATE crd-memory crd-net)
+    add_test(NAME crd-net-hpack-interop-corpus
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/hpack_interop.py"
+                     --replay "$<TARGET_FILE:crd-hpack-replay>" --corpus "${hpack_test_case_SOURCE_DIR}")
+    set_tests_properties(crd-net-hpack-interop-corpus PROPERTIES TIMEOUT 900 LABELS "net;hpack-interop")
 endif()
 
 # NET.3's serializer budget board against its pinned peers (CRD_BUILD_SERIALIZE_VS_PEERS, the root CMakeLists).

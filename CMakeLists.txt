@@ -145,6 +145,7 @@ option(CRD_BUILD_MLS_VS_MLSPP "Build the MLS interoperability test against MLSpp
 # CTest of the tree that turns it on, locally and on the complete-tier linux-gcc-public-checks lane.
 option(CRD_BUILD_QUIC_VS_NGTCP2 "Build the QUIC interoperability test against ngtcp2 (Linux)" OFF)
 option(CRD_BUILD_QPACK_VS_QIFS "Build the QPACK interoperability test against the qifs corpus" OFF)
+option(CRD_BUILD_HPACK_VS_CORPUS "Build the HPACK interoperability test against the hpack-test-case corpus" OFF)
 # QMux against the `qmux` crate over rustls (4.2a): crd-qmux-crate-peer, a Rust program whose crates the committed
 # Cargo.lock pins (cmake/pins.json tools/qmux-crates), built with the pinned Rust (CRD_CARGO). Linux only, never in a
 # shipped build; the crd-net-qmux-interop-crate CTest, locally and on the complete-tier linux-gcc-public-checks.
@@ -1520,6 +1521,9 @@ if(CRD_BUILD_QUIC_VS_NGTCP2)
 endif()
 if(CRD_BUILD_QPACK_VS_QIFS)
     crd_add_pinned_package(qifs DOWNLOAD_ONLY YES)
+endif()
+if(CRD_BUILD_HPACK_VS_CORPUS)
+    crd_add_pinned_package(hpack_test_case DOWNLOAD_ONLY YES)
 endif()
 if(CRD_BUILD_MLS_VS_MLSPP)
     crd_add_pinned_package(nlohmann_json DOWNLOAD_ONLY YES)

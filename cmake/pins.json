@@ -162,6 +162,19 @@
       "provenance": "https://github.com/qpackers/qifs (its master branch's last commit; the repository has no releases)",
       "note": "The QPACK interop corpus of the IETF QUIC working group's offline interop: real header sets as QIF text and the outputs of ls-qpack, nghttp3, proxygen, quinn, f5 and qthingey at several table sizes, blocked-stream limits and acknowledgement modes (encoded/qpack-06; the wire format has not changed since), plus refused inputs (encoded/errors). crd-net's QPACK decoder must reproduce every QIF from every encoder (4.2a). Test data only, read by the crd-net-qpack-interop-qifs CTest on linux-gcc-public-checks; pinned as a testing download under the user's approval of 2026-11-01."
     },
+    "hpack_test_case": {
+      "version": "8a1406e7",
+      "repository": "http2jp/hpack-test-case",
+      "commit": "8a1406e7d14bfcb6c046021f13cc15cfb162726d",
+      "url": "https://github.com/http2jp/hpack-test-case/archive/8a1406e7d14bfcb6c046021f13cc15cfb162726d.tar.gz",
+      "file": "hpack-test-case-8a1406e7.tar.gz",
+      "sha256": "53355bf708fb890a235b3a679061d116a020818e92caaadbc243f9c91c4c48eb",
+      "size": 6593053,
+      "license": "MIT",
+      "gated": "CRD_BUILD_HPACK_VS_CORPUS",
+      "provenance": "https://github.com/http2jp/hpack-test-case (its master branch's last commit; the repository has no releases)",
+      "note": "The HPACK interop corpus of the HTTP/2 Japan community: real header stories as JSON and the blocks written by nghttp2, Go, Haskell, node-http2, python-hpack and swift-nio at the default table size, some with size changes. Read by crd-net-hpack-interop-corpus (4.2a)."
+    },
     "mlspp": {
       "version": "0.1.0-fc724c31",
       "repository": "cisco/mlspp",

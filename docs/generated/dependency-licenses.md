@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **44** · tools: **52** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **45** · tools: **52** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -27,6 +27,7 @@
 | ngtcp2 | 1.26.0 | MIT | ngtcp2/ngtcp2 @ `v1.26.0` (6a22a4d7a111) | `ngtcp2-6a22a4d7.tar.gz` |
 | nghttp3 | 1.19.0 | MIT | ngtcp2/nghttp3 @ `v1.19.0` (dc83309ca5fd) | `nghttp3-1.19.0.tar.gz` |
 | qifs | da52cd93 | MIT | qpackers/qifs (da52cd936b3e) | `qifs-da52cd93.tar.gz` |
+| hpack_test_case | 8a1406e7 | MIT | http2jp/hpack-test-case (8a1406e7d14b) | `hpack-test-case-8a1406e7.tar.gz` |
 | mlspp | 0.1.0-fc724c31 | BSD-2-Clause AND BSL-1.0 | cisco/mlspp @ `main` (fc724c3100ce) | `mlspp-fc724c31.tar.gz` |
 | nasm | 2.16.03 | BSD-2-Clause | https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip | `nasm-2.16.03-win64.zip` |
 | wycheproof | d17cc89 | Apache-2.0 | C2SP/wycheproof @ `d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9` (d17cc89fa5c8) | `wycheproof-d17cc89f.tar.gz` |

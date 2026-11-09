@@ -113,6 +113,16 @@ if(TARGET crd-fuzz-net-qpack-libfuzzer)
     target_include_directories(crd-fuzz-net-qpack-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 endif()
 
+# HPACK (4.2a).
+#   crd-fuzz-net-hpack          any block under any limits, a table written apart that predicts every field, refusal and
+#                               capacity, and encoder and decoder across SETTINGS changes.
+crd_fuzz_target(crd-fuzz-net-hpack
+    SOURCES fuzz_hpack.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-hpack")
+target_include_directories(crd-fuzz-net-hpack PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(TARGET crd-fuzz-net-hpack-libfuzzer)
+    target_include_directories(crd-fuzz-net-hpack-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+endif()
+
 # An HTTP/3 connection (4.2a).
 #   crd-fuzz-net-http3          a hostile peer writing any streams, frames, ends and resets at a server and a client,
 #                               whose application calls every method at any time; both sides honest over any frame sizes
