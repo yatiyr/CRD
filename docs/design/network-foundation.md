@@ -1139,7 +1139,7 @@ Evidence: `test_http_fields.cpp` and `test_qpack.cpp` `[qpack]` (RFC 7541's inte
 - **Hostile lengths.** A HEADERS frame over the section limit is refused on its length before any of it is read: `QpackDecoder::cancel` tells the peer, and a request the application never saw is answered 431 from here. A section that decodes too large is acknowledged, so the table stays in step, and answered the same. The limit itself is sent as SETTINGS_MAX_FIELD_SECTION_SIZE, the field array holds the most fields that limit admits, and one decoded section per connection lives in a scratch that the next `poll()` reuses.
 - **Messages.** [http_message.hpp](../../engine/foundation/net/include/crd/net/http_message.hpp) holds a field section to RFC 9110, 9113 and 9114 on both directions, the HTTP/2 path's single owner of those rules: lower-case token names, no CR, LF or NUL in a value and no edge spaces, pseudo-fields first and known, connection-specific fields refused, one content-length. A malformed message is a stream error, H3_MESSAGE_ERROR; a request reaches the application only when it passes. A body is held to content-length at each frame's length, so an overrun is refused before its bytes arrive. HEAD, 204 and 304 expect no content whatever content-length says.
 - **Extended CONNECT.** `:protocol` needs SETTINGS_ENABLE_CONNECT_PROTOCOL from the server: refused by a server that did not send it, not sent by a client until the server's SETTINGS allow it. A tunnel (CONNECT and a 2xx) carries only DATA from there on, in both directions.
-- **HTTP datagrams.** A datagram carries a Quarter Stream ID (RFC 9297 section 2). A prefix too short or above 2^60 - 1 is H3_DATAGRAM_ERROR for the connection, and one on a request with no datagram semantics aborts that stream with it. One for a stream closed or not yet open is dropped. Only an extended CONNECT carries them, sent only once SETTINGS_H3_DATAGRAM passed both ways.
+- **HTTP datagrams.** A datagram carries a Quarter Stream ID (RFC 9297 section 2). A prefix too short or above 2^60 - 1 is H3_DATAGRAM_ERROR for the connection, and one on a request with no datagram semantics aborts that stream with it. One for a stream closed or not yet open is dropped, and one ahead of its own request's HEADERS waits for no refusal. Only an extended CONNECT carries them, sent only once SETTINGS_H3_DATAGRAM passed both ways.
 - **GOAWAY and push.** A gentle GOAWAY (2^62 - 4) then the exact one; values never rise. A client cancels what lies at or above a server's GOAWAY, reports each as `H3_REQUEST_REJECTED` and opens no more; a server resets what arrives at or above its own. Push is never offered: no MAX_PUSH_ID is sent, so a promise or push stream is H3_ID_ERROR.
 - **0-RTT.** A client resuming passes the settings it stored and uses them until the server's arrive, whose values may only be equal or better (section 7.2.4.2); after a rejection the owner builds a new connection. A server binds its settings into its tickets (`early_context`), so a changed server does not take 0-RTT from an old one. A section or datagram from 0-RTT is marked replayable.
 - **Grease.** Every SETTINGS has a reserved identifier, the control stream a reserved frame, and a reserved stream type goes once when the peer's limit leaves room.
@@ -1212,6 +1212,13 @@ them: what differs is negotiation and whether flow control exists.
   layered in, so there is no second channel implementation.
 - **Peers.** `web-transport-quinn` from the crate family already pinned for the legacy spelling; a -17 peer with
   RESET_STREAM_AT is chosen when that slice's interop starts, with what each is not asked and why, as for quiche.
+
+Evidence (the classifier, 2026-11-09): `test_http3_webtransport.cpp` `[webtransport]` (figure 4 around the reserved points,
+the offer, what each side requires, the wait for a client's SETTINGS, headers split anywhere, reliable and plain resets
+both ways, 0-RTT, GOAWAY, streams given up before naming a session), and `crd-fuzz-net-http3` modes 4 to 6. A server holds
+every bidirectional stream before the client's SETTINGS, ordinary requests included: QPACK decodes a section once and the
+token is inside it. A reset keeps a header only in the direction the stream's opener sent one. The session layer above
+it is still to come.
 
 <a id="browsers"></a>
 ## Browser constraints
