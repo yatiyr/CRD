@@ -1175,8 +1175,9 @@ them: what differs is negotiation and whether flow control exists.
   Section 7.1 has an end that supports several revisions send one SETTINGS_WT_ENABLED per codepoint: Cerid also sends
   and reads -16's 0x2c7cf000, since webtransport-go 0.13 speaks only that one. A server reads the codepoints a client
   sends to select a revision, and here the selection changes nothing: between -16 and -17 the wire is the same, and the
-  differences are a misplaced WT_STREAM's error (H3_FRAME_ERROR before, H3_FRAME_UNEXPECTED now; Cerid always sends -17's),
-  retained SETTINGS (Cerid retains none) and limits a -17 reader holds to the initial values too (Cerid always does). `webtransport` is the legacy spelling, which
+  differences are a misplaced WT_STREAM's error (H3_FRAME_ERROR before, H3_FRAME_UNEXPECTED now; Cerid always sends
+  -17's), retained SETTINGS (Cerid retains none) and limits a -17 reader holds to the initial values too (Cerid always
+  does). `webtransport` is the legacy spelling, which
   [N02](../research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n02)'s survey has Chrome and Safari still
   sending and `web-transport-proto` 0.6.4 does send: SETTINGS 0xc671706a carries the session count, no flow control, a
   plain RESET_STREAM is all it can rely on, and its datagram setting may be the older 0xFFD277, read as 0x33 is (each
@@ -1218,9 +1219,7 @@ them: what differs is negotiation and whether flow control exists.
   layered in, so there is no second channel implementation.
 - **Peers.** `web-transport-quinn` 0.13.6 for the legacy spelling (`crd-net-webtransport-interop-quinn`; what it is not
   asked and why: `webtransport_interop.py`). The `webtransport-h3` peer is webtransport-go v0.13.0 (quic-go 0.62, draft
-  -16, with RESET_STREAM_AT and flow control). -16 and -17 differ on the wire only in SETTINGS_WT_ENABLED (0x2c7cf000,
-  0x20b8933b); section 7.1 has an endpoint send one per draft it supports and a server read a client's: Cerid's next
-  slice sends both, and pins Go for that peer.
+  -16, with RESET_STREAM_AT and flow control; `crd-net-webtransport-interop-go`, Go pinned as `tools/go-linux-x64`).
 
 Evidence (the classifier, 2026-11-09): `test_http3_webtransport.cpp` `[webtransport]` (figure 4 around the reserved points,
 the offer, what each side requires, the wait for a client's SETTINGS, headers split anywhere, reliable and plain resets

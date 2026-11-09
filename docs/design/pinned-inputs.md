@@ -114,6 +114,13 @@ from crates.io with a 64-hex checksum (no git, path or other registry), the one 
 lockfile resolves the pinned version; the build runs `cargo clippy` and `cargo build`, both `--locked`, with the pinned
 Cargo, warnings as errors and CARGO_HOME inside the build tree, so Cargo verifies each crate's SHA-256 on download and
 never resolves a newer one. The workflow must install Rust through install-rust.py, naming the version.
+[install-go.py](../../scripts/install-go.py) installs Go 1.27.3 (`tools/go-linux-x64`) whole from go.dev's archive, its
+`bin/go` digest checked and `go version` naming the pin. **A Go module set is pinned by its committed go.sum**: a `tools`
+entry with `go_sum` and `go_mod` (`webtransport-go-modules`) names the module and version the go.mod requires, and
+check-pins.py fails unless the go.mod replaces and excludes nothing and every go.sum line is a module, a version and an
+h1 hash, the pinned module's source and go.mod among them; the build runs `go vet` and `go build` with `-mod=readonly`,
+`GOSUMDB=off` (go.sum is the only authority), `GOTOOLCHAIN=local` and the module cache inside the build tree. The
+workflow must install Go through install-go.py, naming the version.
 [install-android-ndk.py](../../scripts/install-android-ndk.py) installs the Android NDK r30
 (`tools/android-ndk-linux-x64`) from Google's release zip, its size and SHA-1 matched against the SDK repository index
 on retrieval and its SHA-256 pinned; `pins.install_tree` reads a zip as it reads a tar (file modes and Info-ZIP

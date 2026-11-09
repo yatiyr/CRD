@@ -53,6 +53,7 @@
                                              "linux-clang-tsan"]},
     "Install pinned Intel SDE": {"presets": ["win-release", "linux-gcc-release"]},
     "Install pinned Rust": {"presets": ["linux-gcc-public-checks"]},
+    "Install pinned Go": {"presets": ["linux-gcc-public-checks"]},
     "Install pinned gnome-keyring": {"presets": ["linux-gcc-public-checks"]},
     "Install pinned swtpm": {"presets": ["linux-gcc-public-checks"]},
     "Install pinned SoftHSM": {"presets": ["linux-gcc-public-checks"]},
