@@ -29,6 +29,46 @@ no copied code in the engine, whole engine confirmed.
 The Numerical Recipes group was missed by name because the book is not in the corpus. It was found through GSL and libstdc++,
 whose Steed CF2 text is similar to it. That shared lineage is inferred, not traced.
 
+## `incomplete.hpp` and `gamma.hpp`: defects fixed before the rewrite
+
+Landed as a512603c (one commit on 0971ef5f). The rewrite of the Numerical Recipes text above is still queued. This commit fixes
+defects that were measured against base (origin/main), scipy and exact sums. Evidence is in the branch's
+`build/gpl-compare/incomplete-final/round4` and `round5` directories, outside the repository. R is the error over the module
+limit (f64 rtol 1e-12 + atol 1e-14, inverses 1e-9 + 1e-11; f32 1e-4 + 1e-6).
+
+| Defect, last review | Before (da7b33dc) | After (a512603c) |
+|---|---|---|
+| f64 `betainc`, subnormal smaller shape, larger shape from 1e4 | NaN or inf on 41 + 41 edge points; `betainc(4.94e-324, 1e4, 1e-6)` NaN | 1 (base 1), mirrored 0; edge grid in-domain finite-to-NaN 0 |
+| `betainc_inv(1, DBL_MAX, p)`, `betainc(1, DBL_MAX, 5.5e-319)` | NaN | closed forms: 5.6e-319 to 1.6e-309; 9.887e-11 |
+| f32 `gammainc_p_inv` and `gammainc_q_inv`, shape 1e5 to 1e10 | 67 newly outside of 8000; NaN at 64276868 | 0 newly outside, R at most 0.00059; double from a shape of 1e5 |
+| f64 `betainc_inv(324.17, 7.31, 4.34e-27)` | reported R 4.31 | not a defect: the root is correctly rounded (mpmath, 60 digits); regression test kept |
+| f32 `betainc_inv`, smaller shape near 1e-6 and the 4-argument overload | R 31.3, 860, 1.33 | R below 3e-4; ib32 newly outside 4 to 0 |
+
+Every family of the review's harness has 0 points newly outside the limit. Earlier rounds fixed:
+- far tails of both inverses (wrong by factors or NaN);
+- huge shapes;
+- ln B at shapes of 600 to 1000;
+- single-precision inverses at small shapes;
+- NaN inputs that ran 50 times base's cost.
+
+Speed: a function counts as slower when its median is more than 2 % above base's in two interleaved runs of 7 rounds. Rows
+accepted over 2 %, ratio to base, both runs, and the reason:
+
+| Row | Ratio | Reason |
+|---|---|---|
+| `rv_uni_only_basegood` | 1.63 / 1.67 | 2 of 1981 expansion-served points; base right by chance where its neighbours are wrong |
+| `rv_bgrat_only_basegood` | 1.15 / 1.14 | 33 of 2856 points; the same reason |
+| `gpi_f32_small_basegood` | 1.19 / 1.19 | base wrong on 20 % or more of every band; no test separates its correct points |
+| `rv_sub1e10_f32` | 1.51 / 1.51 | float BGRAT in double, which the overflowing float sums need |
+| `rx_bil_f32_64_1024_basegood` | 1.16 / 1.16 | the Stirling prefactor the base-wrong points of the same class need; no cheap predictor |
+| `rv_far_bil_small` group | 1.17 (routed 1.05, unrouted 1.35) | far points routed to the plain path; the rest lies where the plain path is over the limit |
+| `rv_far_bil_bgrat`, `rv_far_bil_uni` | 1.01 to 1.04 | the cost of the distance gate |
+| `rx_gq3_f64_small` | 1.02 / 1.04 | the a >= 400 guard, which fixes base's points at R 216 |
+| `rx_bii_lb_f64`, `rv_far_bgrat` | 1.05 / 1.05; 1.03 / 1.05 | the cost of the gate; the review timed this code at 1.02 or below |
+| `gap_bi3_basebad`, `rx_bil_f32_64_1024_basebad`, `gpi_f32_small_basebad` | 1.16 to 1.21 | inputs where base is wrong |
+
+An interleaved run of base, da7b33dc and a512603c's code (as bf05c7e2) put round 4 at 0.989 to 1.016 of da7b33dc on every row.
+
 ## Findings: permissive sources without their notices
 
 About 56 files say they follow permissive or public-domain code, and only `dlpack.h` keeps a notice. No NOTICE file exists.
