@@ -1,11 +1,10 @@
 // crd-hesap-special v12-b — Bessel / Airy / Kelvin gated vs scipy.special + Wronskian self-checks + f32 sanity.
 
-#include <crd/hesap/special/special.hpp>
-
 #include "bessel_refs.inc"
 
-#include <catch2/catch_test_macros.hpp>
+#include <crd/hesap/special/special.hpp>
 
+#include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <complex>
 #include <limits>
@@ -32,8 +31,7 @@ bool close_c(std::complex<f64> got, std::complex<f64> ref, f64 rtol, f64 atol) n
 {
     return std::abs(got - ref) <= atol + rtol * std::abs(ref);
 }
-template <class A>
-constexpr std::size_t len(const A& a) noexcept
+template <class A> constexpr std::size_t len(const A& a) noexcept
 {
     return sizeof(a) / sizeof(a[0]);
 }
@@ -617,16 +615,117 @@ TEST_CASE("bessel: complex Y within 1e-12 of a negative integer in the left half
     }
 }
 
-TEST_CASE("bessel: I and I' of a negative order are not a finite number where K has underflowed",
+TEST_CASE("bessel: I and I' of a negative order at x from 745 reflect through the scale-carrying K",
           "[v12-b][special][bessel]")
 {
-    // The reflection carries the value in K, which is below the doubles here (from x of about 742 on): base's NaN or
-    // infinity stands, never a finite number.
-    CHECK_FALSE(std::isfinite(sf::cyl_bessel_i(-4927.74, 1460.52)));
-    CHECK_FALSE(std::isfinite(sf::cyl_bessel_i(-2443.33, 1387.66)));
-    CHECK(sf::cyl_bessel_i_prime(-3110.12, 798.33) == -std::numeric_limits<f64>::infinity());
-    CHECK_FALSE(std::isfinite(sf::cyl_bessel_i(-1791.4838, 744.7005)));
-    CHECK_FALSE(std::isfinite(sf::cyl_bessel_i_prime(-1791.4838, 744.7005)));
+    // I_{-nu} = I_nu + (2/pi) sin(nu pi) K_nu: K carries the value here; base was NaN or an infinity (the reference is
+    // formed from the positive-order functions at 200 digits, in the generator).
+    const f64 inf = std::numeric_limits<f64>::infinity();
+    CHECK(close(sf::cyl_bessel_i(-2443.33, 1387.66), ref_besd2_i, 1e-12, 1e-300));
+    // K starts from a subnormal e^{-x} at the plain route; 1.3e-7 off before K carried its scale.
+    CHECK(close(sf::cyl_bessel_i(-1591.8123, 725.5648), -1.0256393708935943e294, 1e-12, 1e-300));
+    CHECK(sf::cyl_bessel_i(-4927.74, 1460.52) == -inf);    // truth -1.8e1897
+    CHECK(sf::cyl_bessel_i(-1791.4838, 744.7005) == -inf); // K of 5.7e409 carries it
+    CHECK(sf::cyl_bessel_i_prime(-1791.4838, 744.7005) == inf);
+    CHECK(sf::cyl_bessel_i_prime(-3110.12, 798.33) == -inf);
+    // K overflows before the coefficient of the reflection brings it back into the doubles: the scale is applied last.
+    CHECK(close(sf::cyl_bessel_i(-2116.5429919096973, 1047.270635449522), 1.7102410250884557e308, 1e-12, 1e-300));
+}
+
+TEST_CASE("bessel: I and I' are finite at a large argument and an order near it vs mpmath", "[v12-b][special][bessel]")
+{
+    // e^{-x} of CF2 is below the doubles from x = 745 and I_mu's factor e^{x} above them from 713: the scale is carried
+    // through the Wronskian.
+    for (std::size_t i = 0; i < len(ref_besc2_i); ++i)
+    {
+        const f64 nu = ref_besc2_nu[i];
+        const f64 x = ref_besc2_x[i];
+        INFO("nu=" << nu << " x=" << x);
+        CHECK(close(sf::cyl_bessel_i(nu, x), ref_besc2_i[i], 1e-12, 1e-300));
+        CHECK(close(sf::cyl_bessel_i_prime(nu, x), ref_besc2_ip[i], 1e-12, 1e-300));
+    }
+    CHECK(sf::cyl_bessel_i(0.0, 720.0) == std::numeric_limits<f64>::infinity());
+}
+
+TEST_CASE("bessel: K and K' keep their scale at x from 745, and leave the doubles only where they do",
+          "[v12-b][special][bessel]")
+{
+    for (std::size_t i = 0; i < len(ref_besc3_k); ++i)
+    {
+        const f64 nu = ref_besc3_nu[i];
+        const f64 x = ref_besc3_x[i];
+        INFO("nu=" << nu << " x=" << x);
+        CHECK(close(sf::cyl_bessel_k(nu, x), ref_besc3_k[i], 1e-12, 1e-300));
+        CHECK(close(sf::cyl_bessel_k_prime(nu, x), ref_besc3_kp[i], 1e-12, 1e-300));
+    }
+    const f64 inf = std::numeric_limits<f64>::infinity();
+    CHECK(sf::cyl_bessel_k(3000.0, 745.0) == inf); // truth 3.3e1393
+    CHECK(sf::cyl_bessel_k_prime(3000.0, 745.0) == -inf);
+    CHECK(sf::cyl_bessel_k(10.0, 800.0) == 0.0); // e^{-800} underflows
+}
+
+TEST_CASE("bessel: J and J' at a large order are 0 where the core's recurrence leaves the doubles, and the reflections "
+          "are 0 or infinite",
+          "[v12-b][special][bessel]")
+{
+    const f64 inf = std::numeric_limits<f64>::infinity();
+    CHECK(sf::cyl_bessel_j(1234.0670925846282, 12.001933414083446) == 0.0);
+    CHECK(sf::cyl_bessel_j(1403.7387915091808, 378.5275359961738) == 0.0);
+    CHECK(sf::cyl_bessel_j(883.5, 46.99142257734836) == 0.0);
+    CHECK(sf::cyl_bessel_j_prime(303.0, 0.34) == 0.0);
+    CHECK(sf::cyl_bessel_j_prime(1174.0, 0.0144) == 0.0);
+    CHECK(sf::cyl_bessel_j(-332.373058014091, 0.12114020729260479) == inf);  // truth 1.3e1097
+    CHECK(sf::cyl_bessel_j(-401.56354207846954, 6.217408954219093) == -inf); // truth -9.5e671
+    CHECK(sf::cyl_neumann(-1780.5, 0.012022098263197304) == 0.0);            // truth 1.2e-8971
+    CHECK(sf::cyl_bessel_j(-177.0, 0.0038136174181590187) == 0.0);           // truth -1.2e-804
+    CHECK(std::isinf(sf::cyl_bessel_j_prime(-332.373058014091, 0.12114020729260479)));
+    CHECK(std::isinf(sf::cyl_neumann_prime(-332.373058014091, 0.12114020729260479)));
+    CHECK(std::isnan(sf::cyl_bessel_j(1234.5, -1.0))); // a negative argument stays a domain error
+}
+
+TEST_CASE("bessel: complex J and I at a negative integer order vs mpmath", "[v12-b][special][bessel][complex]")
+{
+    // The series divides by nu + k = 0 there: J_{-n} = (-1)^n J_n and I_{-n} = I_n.
+    for (std::size_t i = 0; i < len(ref_cbes9j_re); ++i)
+    {
+        const std::complex<f64> z(ref_cbes9_zr[i], ref_cbes9_zi[i]);
+        INFO("nu=" << ref_cbes9_nu[i] << " z=(" << z.real() << "," << z.imag() << ")");
+        CHECK(close_c(sf::cyl_bessel_j(ref_cbes9_nu[i], z), {ref_cbes9j_re[i], ref_cbes9j_im[i]}, 1e-10, 1e-11));
+    }
+    for (std::size_t i = 0; i < len(ref_cbes10i_re); ++i)
+    {
+        const std::complex<f64> z(ref_cbes10_zr[i], ref_cbes10_zi[i]);
+        INFO("nu=" << ref_cbes10_nu[i] << " z=(" << z.real() << "," << z.imag() << ")");
+        CHECK(close_c(sf::cyl_bessel_i(ref_cbes10_nu[i], z), {ref_cbes10i_re[i], ref_cbes10i_im[i]}, 1e-10, 1e-11));
+    }
+}
+
+TEST_CASE("bessel: complex Y at a negative half-integer order vs mpmath", "[v12-b][special][bessel][complex]")
+{
+    // cos(nu pi) is exactly zero there; its residue of 1e-16 would multiply the huge J at that order.
+    for (std::size_t i = 0; i < len(ref_cbes11y_re); ++i)
+    {
+        const std::complex<f64> z(ref_cbes11_zr[i], ref_cbes11_zi[i]);
+        INFO("nu=" << ref_cbes11_nu[i] << " z=(" << z.real() << "," << z.imag() << ")");
+        CHECK(close_c(sf::cyl_neumann(ref_cbes11_nu[i], z), {ref_cbes11y_re[i], ref_cbes11y_im[i]}, 1e-9, 1e-11));
+    }
+}
+
+TEST_CASE("bessel: complex I and K at a large imaginary part and an order about |z| vs mpmath",
+          "[v12-b][special][bessel][complex]")
+{
+    // The series of I loses more than the bar there: I comes from the stable method for J at the rotated argument, and
+    // K of the left half-plane through it.
+    for (std::size_t i = 0; i < len(ref_cbes12v_re); ++i)
+    {
+        const std::complex<f64> z(ref_cbes12_zr[i], ref_cbes12_zi[i]);
+        const std::complex<f64> ref(ref_cbes12v_re[i], ref_cbes12v_im[i]);
+        INFO("nu=" << ref_cbes12_nu[i] << " z=(" << z.real() << "," << z.imag() << ")");
+        const bool is_k = ref_cbes12_kind[i] == 1;
+        const std::complex<f64> got =
+            is_k ? sf::cyl_bessel_k(ref_cbes12_nu[i], z) : sf::cyl_bessel_i(ref_cbes12_nu[i], z);
+        CHECK(close_c(got, ref, is_k ? 1e-9 : 1e-10, 1e-11));
+    }
 }
 
 TEST_CASE("bessel: K, Y, I, J in the first normal binade, where 0.5*x is a subnormal", "[v12-b][special][bessel]")

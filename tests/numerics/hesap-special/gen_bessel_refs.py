@@ -182,6 +182,45 @@ def extra():
     emit("cbes13_nu", [t[0] for t in r1n]); emit("cbes13_zr", [t[1] for t in r1n]); emit("cbes13_zi", [t[2] for t in r1n])
     vals = [mp.bessely(mp.mpf(t[0]), mp.mpc(t[1], t[2])) for t in r1n]
     emit("cbes13y_re", [v.real for v in vals]); emit("cbes13y_im", [v.imag for v in vals])
+    # I at a negative order through K of the positive order (mpmath's I and K are right at positive orders here)
+    mp.mp.dps = 200
+    nu = mp.mpf(2443.33); x = mp.mpf(1387.66)
+    print("inline const double ref_besd2_i = %.17g;" % float(mp.besseli(nu, x) + (2 / mp.pi) * mp.sin(nu * mp.pi) * mp.besselk(nu, x)))
+    mp.mp.dps = 60
+
+    # C2 .. C7 of the review: I and I' at large x and order about x, K and K' at x >= 745 with a large order, complex J and I
+    # at negative integers, complex Y at negative half-integers, complex I and K at |Im z| >= 15 with nu about |z|.
+    def bi(n, x):  # mpmath has no I of a negative integer order: I_{-n} = I_n
+        n = mp.mpf(n)
+        return mp.besseli(-n if n < 0 and n == mp.floor(n) else n, x)
+    c2 = [(100.5, 720.0), (300.0, 720.0), (1009.0052195434816, 749.9595463318113),
+          (1769.8514806456733, 1107.1864488363854), (1978.5, 1275.13), (-300.0, 720.0), (-100.5, 720.0)]
+    emit("besc2_nu", [t[0] for t in c2]); emit("besc2_x", [t[1] for t in c2])
+    emit("besc2_i", [bi(n, x) for n, x in c2])
+    emit("besc2_ip", [(bi(mp.mpf(n) - 1, x) + bi(mp.mpf(n) + 1, x)) / 2 for n, x in c2])
+    c3 = [(3000.0, 2000.0), (1769.8514806456733, 1107.1864488363854), (1000.0, 745.0), (750.3, 720.0)]
+    emit("besc3_nu", [t[0] for t in c3]); emit("besc3_x", [t[1] for t in c3])
+    emit("besc3_k", [mp.besselk(n, x) for n, x in c3])
+    emit("besc3_kp", [-(mp.besselk(mp.mpf(n) - 1, x) + mp.besselk(mp.mpf(n) + 1, x)) / 2 for n, x in c3])
+    c5 = [(-37.0, -2.64, -0.56), (-56.0, 2.1257935404155788, 37.58326202863857), (-27.0, 20.719171126075693, 50.975239824861134)]
+    emit("cbes9_nu", [t[0] for t in c5]); emit("cbes9_zr", [t[1] for t in c5]); emit("cbes9_zi", [t[2] for t in c5])
+    vals = [mp.besselj(mp.mpf(t[0]), mp.mpc(t[1], t[2])) for t in c5]
+    emit("cbes9j_re", [v.real for v in vals]); emit("cbes9j_im", [v.imag for v in vals])
+    c5i = [(-45.0, 11.728781160009845, 11.791893945990878), (-73.0, 244.75077916580312, 8.203344867398634),
+           (-36.0, 74.76612071969006, 26.29500641304915)]
+    emit("cbes10_nu", [t[0] for t in c5i]); emit("cbes10_zr", [t[1] for t in c5i]); emit("cbes10_zi", [t[2] for t in c5i])
+    vals = [mp.besseli(-mp.mpf(t[0]), mp.mpc(t[1], t[2])) for t in c5i]
+    emit("cbes10i_re", [v.real for v in vals]); emit("cbes10i_im", [v.imag for v in vals])
+    c6 = [(-89.5, 6.18, -0.586), (-30.5, 5.0, 2.0), (-70.5, 10.0, -3.0), (-60.5, 40.0, 12.0)]
+    emit("cbes11_nu", [t[0] for t in c6]); emit("cbes11_zr", [t[1] for t in c6]); emit("cbes11_zi", [t[2] for t in c6])
+    vals = [mp.bessely(mp.mpf(t[0]), mp.mpc(t[1], t[2])) for t in c6]
+    emit("cbes11y_re", [v.real for v in vals]); emit("cbes11y_im", [v.imag for v in vals])
+    c7 = [("I", 65.0, 11.146772285434238, -67.82626907023244), ("I", -47.6058454697385, 12.408141981896023, 52.19985859313533),
+          ("K", 70.9484723242604, -3.4774580561289454, 69.15943069549792), ("K", 63.685913310038494, -30.81163037216959, 64.834096204747)]
+    emit("cbes12_nu", [t[1] for t in c7]); emit("cbes12_zr", [t[2] for t in c7]); emit("cbes12_zi", [t[3] for t in c7])
+    vals = [(mp.besseli if t[0] == "I" else mp.besselk)(mp.mpf(t[1]), mp.mpc(t[2], t[3])) for t in c7]
+    emit("cbes12v_re", [v.real for v in vals]); emit("cbes12v_im", [v.imag for v in vals])
+    emit("cbes12_kind", [0 if t[0] == "I" else 1 for t in c7])
 
 
 def main():

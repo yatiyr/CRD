@@ -67,6 +67,9 @@ inline constexpr double kBesPhaseExactFrom = 1.0e4;
 // Below this x, J, J', I and I' come from their ascending series: the CF1 recurrence that serves larger x loses digits
 // as x falls (I' is 3e5 times over the limit at x = 1e-10), and its 1e-300 seed then underflows (J' = 0 below 1e-23).
 inline constexpr double kBesSmallArg = 1.0e-3;
+// From this x on e^{−x} leaves the normal doubles (I_μ overflows from about 713, K_μ is subnormal from about 708): see
+// the scale-carrying forms of I and K below.
+inline constexpr double kBesScaledFrom = 705.0;
 inline constexpr double kBesWholeTurns = 0x1p53; // from here every double is an even integer
 // The argument below which 0.5·x may be inexact (it is a subnormal, or zero for the smallest subnormal), and
 // 1075·ln 2 as a pair of doubles (high part, then the remainder): ln(x/2) = ln(count) − 1075·ln 2 for x =
@@ -102,6 +105,7 @@ inline constexpr double kBesComplexStableMax = 690.0;
 // steps): the series or Hankel's expansion serve while their error estimate is within kBesComplexUsable, the module's
 // bar for J, and the value is NaN (not determined) where it is not.
 inline constexpr double kBesComplexUsable = 1.0e-10;
+inline constexpr double kBesComplexYSeries = 1.0e-9; // the module's bar for complex Y, the same use as above
 inline constexpr double kBesSeriesIndexUnit = 6.0; // the index of the largest term, see above
 // From this |Im ω| on cos ω and sin ω are one exponential each, e^{|Im ω|} times a unit, and the product of Hankel's
 // sums with them is formed on the moderate factors and multiplied by e^{|Im ω|} last (as e^{700}·e^{|Im ω|−700}), so
@@ -1292,6 +1296,10 @@ template <bool Slope> [[nodiscard]] inline double bes_i_part(double x, double nu
     }
     else
     {
+        if (x >= kBesScaledFrom) [[unlikely]]
+        {
+            return std::numeric_limits<double>::quiet_NaN(); // the scale-carrying form answers there
+        }
         k = bes_cf2_k(x, mu);
     }
     const double k_mu_d = mu * inv_x * k.base - k.next;        // K'_μ
@@ -1359,7 +1367,36 @@ CRD_NOINLINE inline BesPair bes_temme_k_call(double x, double mu) noexcept
     return bes_temme_k(x, mu);
 }
 // K' < 0 for every x > 0, so the slope is formed as (ν/x)K_ν − K_{ν+1} and bes_kp_value makes a zero of it −0.
-[[nodiscard]] inline BesPair bes_k_core(double x, double nu) noexcept
+// From x = kBesScaledFrom on e^{−x} leaves the normal doubles and e^{x} the doubles (I_μ overflows from about 713, K_μ
+// is a subnormal from about 708): I, I', K and K' come from the scale-carrying forms (bes_i_rescaled and bes_k_far),
+// which hold the factors of 2 and e^{±x} apart and apply them last. kBesRescaledMax is the reach of their step counts.
+inline constexpr double kBesRescaleFrom = 0x1p800;
+inline constexpr double kBesRescaleBy = 0x1p-800;
+inline constexpr int kBesRescaleBits = 800;
+inline constexpr double kBesLn2Hi = 6.93147180369123816490e-01; // ln 2 in two parts: the high part has 33 bits
+inline constexpr double kBesLn2Lo = 1.90821492927058770002e-10;
+inline constexpr double kBesRescaledMax = 2.0e9; // the recurrences count their steps in an int
+[[nodiscard]] inline double bes_power_of_two(int power) noexcept
+{
+    return std::bit_cast<double>(static_cast<long long>(power + 1023) << 52);
+}
+// value·2^power for a power of any size, as a few steps of exact powers of two.
+[[nodiscard]] inline double bes_apply_power(double value, double power) noexcept
+{
+    const double clamped = (power > 1.0e6) ? 1.0e6 : ((power < -1.0e6) ? -1.0e6 : power);
+    int left = static_cast<int>(clamped);
+    for (; left > 1000; left -= 1000)
+    {
+        value *= 0x1p1000;
+    }
+    for (; left < -1000; left += 1000)
+    {
+        value *= 0x1p-1000;
+    }
+    return value * bes_power_of_two(left);
+}
+
+[[nodiscard]] CRD_FORCEINLINE BesPair bes_k_plain(double x, double nu) noexcept
 {
     const int steps = bes_base_steps(nu);
     const double mu = nu - steps;
@@ -1367,6 +1404,61 @@ CRD_NOINLINE inline BesPair bes_temme_k_call(double x, double mu) noexcept
     const BesPair k = (x < kBesTemmeLimit) ? bes_temme_k_call(x, mu) : bes_cf2_k(x, mu);
     const BesPair top = bes_raise_from_base<false>(k, mu, steps, 2.0 * inv_x);
     return {top.base, nu * inv_x * top.base - top.next};
+}
+
+// K_ν and K'_ν from x = kBesScaledFrom on: K_μ e^{x} and K_{μ+1} e^{x} from the sums of CF2, carried up by the
+// recurrence, scaled down by exactly 2^−800 whenever they grow past 2^800, and e^{−x} = 2^{−q} e^{r} applied last. The
+// value that leaves the doubles then is the 0 or +∞ it stands for. Beyond the reach of the step count the plain form
+// answers.
+struct BesScaledK
+{
+    double base;  // K_ν as base·2^binary_exponent
+    double slope; // K'_ν on the same scale
+    double binary_exponent;
+};
+[[nodiscard]] inline BesScaledK bes_k_far_scaled(double x, double nu) noexcept
+{
+    const int steps = bes_base_steps(nu);
+    const double mu = nu - steps;
+    const double inv_x = 1.0 / x;
+    const double two_inv_x = 2.0 * inv_x;
+    const BesCf2Sums sums = bes_cf2_k_sums(x, mu);
+    double base = crd::math::sqrt(kBesPi / (2.0 * x)) / sums.s;
+    double next = base * (mu + x + 0.5 - sums.a1 * sums.h) * inv_x;
+    double scalings = 0.0;
+    for (int m = 1; m <= steps; ++m)
+    {
+        const double upper = (mu + m) * two_inv_x * next + base;
+        base = next;
+        next = upper;
+        if (next > kBesRescaleFrom)
+        {
+            base *= kBesRescaleBy;
+            next *= kBesRescaleBy;
+            scalings += 1.0;
+        }
+    }
+    const double slope = nu * inv_x * base - next; // K'_ν on the same scale
+    const double q = crd::math::round(x / (kBesLn2Hi + kBesLn2Lo));
+    const double shrink = crd::math::exp((q * kBesLn2Hi - x) + q * kBesLn2Lo);
+    return {base * shrink, slope * shrink, static_cast<double>(kBesRescaleBits) * scalings - q};
+}
+CRD_NOINLINE inline BesPair bes_k_far(double x, double nu) noexcept
+{
+    if (!(x < kBesRescaledMax && nu < kBesRescaledMax))
+    {
+        return bes_k_plain(x, nu);
+    }
+    const BesScaledK k = bes_k_far_scaled(x, nu);
+    return {bes_apply_power(k.base, k.binary_exponent), bes_apply_power(k.slope, k.binary_exponent)};
+}
+[[nodiscard]] inline BesPair bes_k_core(double x, double nu) noexcept
+{
+    if (x >= kBesScaledFrom) [[unlikely]]
+    {
+        return bes_k_far(x, nu);
+    }
+    return bes_k_plain(x, nu);
 }
 
 // The overflow classes, applied where a result is used. When the upward recurrence of Y or K, or the slope formed from
@@ -1378,6 +1470,30 @@ CRD_NOINLINE inline BesPair bes_temme_k_call(double x, double mu) noexcept
 [[nodiscard]] inline bool bes_overflow_domain(double x, double nu) noexcept
 {
     return x > 0.0 && x - x == 0.0 && nu - nu == 0.0 && !(x >= kBesDebyeMax && nu <= x);
+}
+// A NaN of J or J' stands for 0 only where the truth underflows: the core's raw recurrence has overflowed, and Debye's
+// exponent (DLMF 10.19.3), ν(tanh α − α) for x = ν sech α < ν, with ln(ν/x) for the slope, is below the doubles. Any
+// other NaN (x above the order, or a failure elsewhere) stays NaN.
+inline constexpr double kBesJUnderflows = -800.0;
+CRD_NOINLINE inline double bes_j_of_nan(double j, double x, double nu) noexcept
+{
+    const double order = crd::math::fabs(nu);
+    if (!bes_overflow_domain(x, nu) || !(x < order))
+    {
+        return j;
+    }
+    const double r = x / order;
+    const double root = crd::math::sqrt(1.0 - r * r);
+    const double exponent = order * (root - crd::math::log((1.0 + root) / r)) + crd::math::log(1.0 / r);
+    return (exponent < kBesJUnderflows) ? 0.0 : j;
+}
+[[nodiscard]] inline double bes_j_class(double j, double x, double nu) noexcept
+{
+    if (j != j) [[unlikely]]
+    {
+        return bes_j_of_nan(j, x, nu);
+    }
+    return j;
 }
 [[nodiscard]] inline double bes_y_class(double y, double x, double nu) noexcept
 {
@@ -1446,16 +1562,11 @@ struct BesAsymp
 // up to ν² = 12x (a hump of e^6) it is summed directly, beyond it the expansion at the base order and the recurrence
 // take over.
 inline constexpr double kBesHumpLimit = 12.0;
-[[nodiscard]] inline double besselj_real(double nu, double x) noexcept
+[[nodiscard]] CRD_FORCEINLINE double besselj_real(double nu, double x) noexcept
 {
-    if (crd::math::fabs(x - 4.5009765625) <= 4.4990234375) [[likely]] // 2^-9 ≤ x ≤ 9: no subnormal x/2
+    if (x <= 9.0) [[likely]]
     {
-        // small x: series accurate to ~1e-13 (cancellation grows beyond)
-        return bes_ascending_series<false>(nu, x, -1.0);
-    }
-    if (x <= 9.0)
-    {
-        return besselj_series(nu, x);
+        return besselj_series(nu, x); // small x: series accurate to ~1e-13 (cancellation grows beyond)
     }
     if (x >= 17.5 && x >= 2.0 * nu)
     {
@@ -1478,7 +1589,7 @@ inline constexpr double kBesHumpLimit = 12.0;
             return edge.j;
         }
     }
-    return bes_jy_core(x, nu).j;
+    return bes_j_class(bes_jy_core(x, nu).j, x, nu);
 }
 
 // sin(πa) and cos(πa) for a > 0 with the argument reduced before any rounding: the offset of a from the nearest quarter
@@ -1547,16 +1658,6 @@ inline constexpr double kBesHumpLimit = 12.0;
 // its e^{±x} has left the doubles: the downward recurrence starts from 1 and is scaled down by exactly 2^−800 whenever
 // it grows past 2^800 (a NaN of the core means more than 2000 binary orders over the seed of 1e-300), I_μ comes from
 // the Wronskian with the sums of CF2, which do not hold e^{−x}, and e^{x} is applied last as 2^q·e^{r}, |r| ≤ ½ ln 2.
-inline constexpr double kBesRescaleFrom = 0x1p800;
-inline constexpr double kBesRescaleBy = 0x1p-800;
-inline constexpr int kBesRescaleBits = 800;
-inline constexpr double kBesLn2Hi = 6.93147180369123816490e-01; // ln 2 in two parts: the high part has 33 bits
-inline constexpr double kBesLn2Lo = 1.90821492927058770002e-10;
-inline constexpr double kBesRescaledMax = 2.0e9; // the recurrence counts its steps in an int
-[[nodiscard]] inline double bes_power_of_two(int power) noexcept
-{
-    return std::bit_cast<double>(static_cast<long long>(power + 1023) << 52);
-}
 template <bool Slope> CRD_NOINLINE inline double bes_i_rescaled(double x, double nu) noexcept
 {
     const int steps = bes_base_steps(nu);
@@ -1565,7 +1666,7 @@ template <bool Slope> CRD_NOINLINE inline double bes_i_rescaled(double x, double
     const double cf1 = bes_cf1_growing(inv_x, nu); // I'_ν/I_ν
     double base = 1.0;                             // I_μ on the scale I_ν = 1, times 2^(−800·scalings)
     double slope = cf1;                            // I'_μ on that scale
-    int scalings = 0;
+    double scalings = 0.0;
     if (steps > 0)
     {
         const double two_inv_x = 2.0 * inv_x;
@@ -1580,7 +1681,7 @@ template <bool Slope> CRD_NOINLINE inline double bes_i_rescaled(double x, double
             {
                 base *= kBesRescaleBy;
                 upper *= kBesRescaleBy;
-                ++scalings;
+                scalings += 1.0;
             }
         }
         slope = mu * inv_x * base + upper;
@@ -1591,17 +1692,8 @@ template <bool Slope> CRD_NOINLINE inline double bes_i_rescaled(double x, double
     const double i_mu = inv_x / ((slope / base) * k_base - (mu * inv_x * k_base - k_next)); // I_μ e^{−x}
     const double q = crd::math::round(x / (kBesLn2Hi + kBesLn2Lo));
     const double r = (x - q * kBesLn2Hi) - q * kBesLn2Lo;
-    double value = (i_mu / base) * crd::math::exp(r) * (Slope ? cf1 : 1.0);
-    int power = static_cast<int>(q) - kBesRescaleBits * scalings;
-    for (; power > 1000; power -= 1000)
-    {
-        value *= 0x1p1000;
-    }
-    for (; power < -1000; power += 1000)
-    {
-        value *= 0x1p-1000;
-    }
-    return value * bes_power_of_two(power);
+    const double value = (i_mu / base) * crd::math::exp(r) * (Slope ? cf1 : 1.0);
+    return bes_apply_power(value, q - static_cast<double>(kBesRescaleBits) * scalings);
 }
 
 // The classes of a NaN of the core for I and I'. The leading term of Debye's uniform expansion (DLMF 10.41.3), which
@@ -1664,6 +1756,12 @@ inline constexpr double kBesPlainOrder = 100.0;
 }
 CRD_NOINLINE inline BesIK bes_ik_classed(double x, double nu) noexcept
 {
+    if (x >= kBesScaledFrom)
+    {
+        const double undetermined = std::numeric_limits<double>::quiet_NaN();
+        return {bes_i_class_of_nan<false>(undetermined, x, nu), undetermined,
+                bes_i_class_of_nan<true>(undetermined, x, nu), undetermined};
+    }
     BesIK ik = bes_ik(x, nu);
     ik.i = bes_i_class<false>(ik.i, x, nu);
     ik.ip = bes_i_class<true>(ik.ip, x, nu);
@@ -1687,12 +1785,13 @@ CRD_NOINLINE inline BesIK bes_ik_classed(double x, double nu) noexcept
     if (nu >= 0.0)
     {
         const BesJY jy = bes_jy(x, nu);
-        return {jy.j, bes_y_class(jy.y, x, nu)};
+        return {bes_j_class(jy.j, x, nu), bes_y_class(jy.y, x, nu)};
     }
     const BesJY jy = bes_jy(x, -nu);
     const BesTrig t = bes_sin_cos_pi(-nu);
+    const double j = bes_j_class(jy.j, x, nu);
     const double y = bes_y_class(jy.y, x, nu);
-    return {bes_weighted(t.cos, jy.j) - bes_weighted(t.sin, y), bes_weighted(t.sin, jy.j) + bes_weighted(t.cos, y)};
+    return {bes_weighted(t.cos, j) - bes_weighted(t.sin, y), bes_weighted(t.sin, j) + bes_weighted(t.cos, y)};
 }
 
 // Order-reflection for negative ν: J_{-ν} = cos(νπ)J_ν − sin(νπ)Y_ν ; Y_{-ν} = sin(νπ)J_ν + cos(νπ)Y_ν.
@@ -1700,55 +1799,36 @@ CRD_NOINLINE inline BesIK bes_ik_classed(double x, double nu) noexcept
 // fails ν ≥ 0, comes here as well.) The reflections of I and I' are inline: out of line they took the order from the
 // caller, which knows it (a constant in the usual call) and so no longer specialises the core for it, 6 to 9 % on I of
 // a negative order, where base reflects in line.
-// K_ν of order ≥ 100 is 0 here from x of about 742 on (the upward recurrence starts from e^{−x} scaled below the
-// doubles), so a reflection through K has lost the term that carries the value: there I and I' return what base
-// returned, the NaN or the infinity of its core, and never a finite number, until the scale is carried through K as
-// well.
-inline constexpr double kBesReflectedLost = -100.0;
-CRD_NOINLINE inline double bes_ip_as_base(double nu, double x) noexcept
+// (2/π) sin(νπ) K_ν(x) (Slope true: K'_ν) from x = kBesScaledFrom on, multiplied by the coefficient before the scale is
+// applied: K alone may exceed the doubles while the product, the value of I_{−ν}, does not.
+template <bool Slope> [[nodiscard]] inline double bes_k_reflected_term(double x, double order) noexcept
 {
-    const double inv_x = 1.0 / x;
-    const int steps = bes_base_steps(nu);
-    const double mu = nu - steps;
-    const double spacing = 2.0 * inv_x;
-    double value = nu * inv_x;
-    value = (value < kBesTiny) ? kBesTiny : value;
-    double num_tail = value;
-    double den_tail = 0.0;
-    double index = 0.0;
-    for (int step = 1; step <= kBesIterCap; ++step)
+    const double coefficient = (2.0 / kBesPi) * bes_sin_pi(order);
+    if (coefficient == 0.0)
     {
-        index += 1.0;
-        const double b = spacing * (nu + index);
-        den_tail = 1.0 / (b + den_tail);
-        num_tail = b + 1.0 / num_tail;
-        const double factor = num_tail * den_tail;
-        value *= factor;
-        if (crd::math::fabs(factor - 1.0) < kBesRelTol)
-        {
-            break;
-        }
+        return 0.0;
     }
-    const double seed = kBesTiny;
-    const double seed_d = value * seed;
-    const BesPair lowered = bes_lower_to_base<false>(seed, seed_d, nu, steps, inv_x);
-    const double log_deriv = lowered.next / lowered.base;
-    const BesPair k = (x < kBesTemmeLimit) ? bes_temme_k(x, mu) : bes_cf2_k(x, mu);
-    const double i_mu = inv_x / (log_deriv * k.base - (mu * inv_x * k.base - k.next));
-    return i_mu * seed_d / lowered.base;
+    if (!(x < kBesRescaledMax && order < kBesRescaledMax))
+    {
+        const BesPair k = bes_k_core(x, order);
+        return coefficient * (Slope ? bes_kp_class(k.next, x, order) : k.base);
+    }
+    const BesScaledK k = bes_k_far_scaled(x, order);
+    return bes_apply_power(coefficient * (Slope ? k.slope : k.base), k.binary_exponent);
 }
 CRD_NOINLINE inline double bes_i_reflected_general(double n, double x) noexcept
 {
-    const BesIK ik = bes_ik(x, -n);
-    if (ik.k == 0.0 && n <= kBesReflectedLost) [[unlikely]]
+    if (x >= kBesScaledFrom)
     {
-        return ik.i + (2.0 / kBesPi) * crd::math::sin(-n * kBesPi) * ik.k;
+        const double i = bes_i_class_of_nan<false>(std::numeric_limits<double>::quiet_NaN(), x, n);
+        return i + bes_k_reflected_term<false>(x, -n);
     }
+    const BesIK ik = bes_ik(x, -n);
     return bes_i_class<false>(ik.i, x, n) + bes_weighted((2.0 / kBesPi) * bes_sin_pi(-n), ik.k);
 }
 CRD_FORCEINLINE double bes_i_reflected(double n, double x) noexcept
 {
-    if (x >= kBesSmallArg)
+    if (x >= kBesSmallArg && x < kBesScaledFrom)
     {
         // The core of base, called as base calls it from 2^-9 on (no entry point between): the sum is the one of the
         // general path with the sine of bes_sin_pi; a NaN (an overflow or underflow that the classes decide) is left to
@@ -1762,13 +1842,17 @@ CRD_FORCEINLINE double bes_i_reflected(double n, double x) noexcept
     }
     return bes_i_reflected_general(n, x);
 }
+CRD_NOINLINE inline double bes_ip_reflected_far(double n, double x) noexcept
+{
+    return bes_i_class_of_nan<true>(std::numeric_limits<double>::quiet_NaN(), x, n) + bes_k_reflected_term<true>(x, -n);
+}
 inline double bes_ip_reflected(double n, double x) noexcept
 {
-    const BesIK ik = bes_ik(x, -n);
-    if (ik.k == 0.0 && n <= kBesReflectedLost) [[unlikely]]
+    if (x >= kBesScaledFrom) [[unlikely]]
     {
-        return bes_ip_as_base(n, x);
+        return bes_ip_reflected_far(n, x);
     }
+    const BesIK ik = bes_ik(x, -n);
     return bes_i_class<true>(ik.ip, x, n) + bes_weighted((2.0 / kBesPi) * bes_sin_pi(-n), bes_kp_class(ik.kp, x, n));
 }
 // I and I' where the core's result is not the answer, as the public functions return them: the series below
@@ -1800,11 +1884,11 @@ CRD_NOINLINE inline double bes_jp_outside(double n, double x) noexcept
 {
     if (n >= 0.0)
     {
-        return bes_jy(x, n).jp;
+        return bes_j_class(bes_jy(x, n).jp, x, n);
     }
     const BesJY jy = bes_jy(x, -n);
     const BesTrig t = bes_sin_cos_pi(-n);
-    return bes_weighted(t.cos, jy.jp) - bes_weighted(t.sin, bes_yp_class(jy.yp, x, n));
+    return bes_weighted(t.cos, bes_j_class(jy.jp, x, n)) - bes_weighted(t.sin, bes_yp_class(jy.yp, x, n));
 }
 CRD_NOINLINE inline double bes_y_outside(double n, double x) noexcept
 {
@@ -1814,7 +1898,7 @@ CRD_NOINLINE inline double bes_y_outside(double n, double x) noexcept
     }
     const BesJY jy = bes_jy(x, -n);
     const BesTrig t = bes_sin_cos_pi(-n);
-    return bes_weighted(t.sin, jy.j) + bes_weighted(t.cos, bes_y_class(jy.y, x, n));
+    return bes_weighted(t.sin, bes_j_class(jy.j, x, n)) + bes_weighted(t.cos, bes_y_class(jy.y, x, n));
 }
 CRD_NOINLINE inline double bes_yp_outside(double n, double x) noexcept
 {
@@ -1824,7 +1908,7 @@ CRD_NOINLINE inline double bes_yp_outside(double n, double x) noexcept
     }
     const BesJY jy = bes_jy(x, -n);
     const BesTrig t = bes_sin_cos_pi(-n);
-    return bes_weighted(t.sin, jy.jp) + bes_weighted(t.cos, bes_yp_class(jy.yp, x, n));
+    return bes_weighted(t.sin, bes_j_class(jy.jp, x, n)) + bes_weighted(t.cos, bes_yp_class(jy.yp, x, n));
 }
 } // namespace detail
 
@@ -1839,7 +1923,7 @@ template <Real T> [[nodiscard]] inline T cyl_bessel_j(T nu, T x) noexcept
     }
     const detail::BesJY jy = detail::bes_jy(xd, -n);
     const detail::BesTrig t = detail::bes_sin_cos_pi(-n);
-    return static_cast<T>(detail::bes_weighted(t.cos, jy.j) -
+    return static_cast<T>(detail::bes_weighted(t.cos, detail::bes_j_class(jy.j, xd, n)) -
                           detail::bes_weighted(t.sin, detail::bes_y_class(jy.y, xd, n)));
 }
 
@@ -1880,7 +1964,7 @@ template <Real T> [[nodiscard]] inline T cyl_bessel_j_prime(T nu, T x) noexcept
 {
     const double n = static_cast<double>(nu);
     const double xd = static_cast<double>(x);
-    if ((n >= 0.0) & detail::bes_jp_arg_plain(xd)) [[likely]]
+    if (detail::bes_order_plain(n) & detail::bes_jp_arg_plain(xd)) [[likely]]
     {
         return static_cast<T>(detail::bes_jy_core(xd, n).jp);
     }
@@ -2014,21 +2098,20 @@ using cplx = std::complex<double>;
     return sum;
 }
 
-// The ascending series of J as bessel_ji_series sums it (kind −1), and in `loss` its cancellation as bes_series_loss
-// defines it, the largest term over the size of the sum, taken from the terms of the sum itself (the ratio does not
-// depend on the factor (z/2)^ν/Γ(ν+1) the terms share): the series that is the method as it is costs no second pass.
-// `at` is the index of the largest term.
-// The sizes are compared as squares (no root per term; the stop test differs from the one of base in the rounding of
-// that root only): a start outside 1e-100 .. 1e100, or a sum beyond 1e150, leaves a negative loss, which marks a series
-// to be priced as before.
-[[nodiscard]] inline cplx bessel_j_series_priced(double nu, cplx z, double& loss, int& at) noexcept
+// The ascending series of J (IsI false) or I as bessel_ji_series sums it, and in `loss` its cancellation as
+// bes_series_loss defines it, the largest term over the size of the sum, taken from the terms of the sum itself (the
+// ratio does not depend on the factor (z/2)^ν/Γ(ν+1) the terms share): the series that is the method as it is costs no
+// second pass. `at` is the index of the largest term. The sizes are compared as squares (no root per term; the stop
+// test differs from the one of base in the rounding of that root only): a start outside 1e-100 .. 1e100, or a sum
+// beyond 1e150, leaves a negative loss, which marks a series to be priced as before.
+template <bool IsI> [[nodiscard]] inline cplx bessel_series_priced(double nu, cplx z, double& loss, int& at) noexcept
 {
     const cplx cz = 0.5 * z;
     cplx t = crd::math::pow(cz, nu) / gamma(nu + 1.0);
     cplx sum = t;
     double biggest = t.real() * t.real() + t.imag() * t.imag();
     const bool start_usable = biggest > 1e-200 && biggest < 1e200;
-    const cplx z2 = -(cz * cz);
+    const cplx z2 = IsI ? cplx(cz * cz) : -(cz * cz);
     double total = biggest;
     at = 0;
     for (int k = 1; k <= 400; ++k)
@@ -2567,72 +2650,102 @@ struct BesComplexJY
     return !(kBesRoundoff * (20.0 + 4.0 * bes_forward_amplification(nu, z)) < kBesComplexStableFrom);
 }
 
+// A negative integer order, to the tolerance of the integer series of Y: the series divides by ν + k = 0 there, and
+// J_{−n} = (−1)^n J_n and I_{−n} = I_n give the value at the order n ≥ 0 instead.
+[[nodiscard]] inline bool bes_negative_integer(double nu) noexcept
+{
+    return nu < 0.0 && crd::math::fabs(nu - crd::math::round(nu)) < 1e-12;
+}
+
 // J_ν(z), any real ν — series (moderate |z|) or Hankel asymptotic (large |z|), whichever has the smaller error
-// estimate. The series Σ(z/2)^{ν+2k}/… is valid for any ν (negative-integer terms vanish via 1/Γ(non-positive)=0).
-[[nodiscard]] inline cplx besselj_c(double nu, cplx z, bool mirrored = false) noexcept
+// estimate. The series Σ(z/2)^{ν+2k}/… holds for a ν that is not a negative integer; at a negative integer order the
+// term with ν + k = 0 is 1/Γ(non-positive) and the sum divides by zero, so that order is mapped to n ≥ 0 first.
+[[nodiscard]] inline cplx besselj_c(double nu, cplx z, bool mirrored = false) noexcept;
+// A negative integer order out of line, so that the ordinary call of besselj_c keeps its size.
+CRD_NOINLINE inline cplx bes_j_at_negative_integer(double nu, cplx z, bool mirrored) noexcept
+{
+    const double n = crd::math::fabs(crd::math::round(nu));
+    return bes_sin_cos_pi(n).cos * besselj_c(n, z, mirrored);
+}
+cplx bes_j_far(double nu, cplx z, bool mirrored, double magnitude) noexcept;
+// J_ν(z) for an order that is known not to be a negative integer (the connection formula of Y has just tested that);
+// below kBesComplexAsympFrom it is the series, as base's route, and all the rest is out of line.
+[[nodiscard]] CRD_FORCEINLINE cplx bes_j_body(double nu, cplx z, bool mirrored) noexcept
 {
     const double magnitude = std::abs(z);
-    if (magnitude >= kBesComplexAsympFrom)
+    if (magnitude >= kBesComplexAsympFrom) [[unlikely]]
     {
-        if (z.real() < 0.0)
+        return bes_j_far(nu, z, mirrored, magnitude);
+    }
+    return bessel_ji_series(nu, z, -1.0);
+}
+[[nodiscard]] inline cplx besselj_c(double nu, cplx z, bool mirrored) noexcept
+{
+    if (bes_negative_integer(nu)) [[unlikely]]
+    {
+        return bes_j_at_negative_integer(nu, z, mirrored);
+    }
+    return bes_j_body(nu, z, mirrored);
+}
+CRD_NOINLINE inline cplx bes_j_far(double nu, cplx z, bool mirrored, double magnitude) noexcept
+{
+    if (z.real() < 0.0)
+    {
+        // The expansion is not uniform near the negative real axis (ν = 0 is off by O(1) there). J_ν(w e^{±πi}) =
+        // e^{±νπi} J_ν(w) (DLMF 10.11.1) moves it to the right half-plane; the sign follows the side of the cut.
+        return bes_turn_phase(nu, (z.imag() >= 0.0) ? 1.0 : -1.0) * besselj_c(nu, -z, true);
+    }
+    double summed_loss = -1.0; // the cancellation of the series, once it has been summed
+    if (!mirrored && nu >= 0.0 && magnitude < 2.0 * nu)
+    {
+        // The range of the series in base (at the point itself: a mirrored point is not base's), where Hankel's
+        // expansion is never the better method: the series is summed once and priced by its own terms (the rounding
+        // of the terms up to the largest, see kBesSeriesIndexUnit), and taken while that is within the module's
+        // bar.
+        int largest_at = 0;
+        const cplx summed = bessel_series_priced<false>(nu, z, summed_loss, largest_at);
+        const double index_factor = (largest_at > kBesSeriesIndexUnit) ? largest_at / kBesSeriesIndexUnit : 1.0;
+        if (summed_loss >= 0.0 && kBesRoundoff * summed_loss * index_factor <= kBesComplexUsable)
         {
-            // The expansion is not uniform near the negative real axis (ν = 0 is off by O(1) there). J_ν(w e^{±πi}) =
-            // e^{±νπi} J_ν(w) (DLMF 10.11.1) moves it to the right half-plane; the sign follows the side of the cut.
-            return bes_turn_phase(nu, (z.imag() >= 0.0) ? 1.0 : -1.0) * besselj_c(nu, -z, true);
+            return summed;
         }
-        double summed_loss = -1.0; // the cancellation of the series, once it has been summed
-        if (!mirrored && nu >= 0.0 && magnitude < 2.0 * nu)
+    }
+    cplx p;
+    cplx q;
+    const double raw_error = besseljy_asymp_pq(nu, z, p, q);
+    const cplx omega = z - (0.5 * nu + 0.25) * kBesPi;
+    double asymptotic_error;
+    const cplx asymptotic =
+        bes_hankel_value(omega, p, q, crd::math::sqrt(2.0 / (kBesPi * z)), raw_error, false, asymptotic_error);
+    // An expansion within kBesComplexGood is taken as it is: the series is priced (a loop of up to 400 terms) only
+    // where it could be the better method.
+    const double series_error = (asymptotic_error <= kBesComplexGood) ? std::numeric_limits<double>::infinity()
+                                : (summed_loss >= 0.0)                ? kBesRoundoff * summed_loss
+                                                       : kBesRoundoff * bes_series_loss(crd::math::fabs(nu), z, -1.0);
+    const double best = (asymptotic_error < series_error) ? asymptotic_error : series_error;
+    if (crd::math::fabs(nu) >= kBesForwardSteps && !(best <= kBesComplexUsable)) [[unlikely]]
+    {
+        return cplx(std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN());
+    }
+    if (bes_complex_stable_wanted(crd::math::fabs(nu), z, best))
+    {
+        const BesComplexJY pair = bes_complex_stable_jy(nu, z);
+        if (pair.ok)
         {
-            // The range of the series in base (at the point itself: a mirrored point is not base's), where Hankel's
-            // expansion is never the better method: the series is summed once and priced by its own terms (the rounding
-            // of the terms up to the largest, see kBesSeriesIndexUnit), and taken while that is within the module's
-            // bar.
-            int largest_at = 0;
-            const cplx summed = bessel_j_series_priced(nu, z, summed_loss, largest_at);
-            const double index_factor = (largest_at > kBesSeriesIndexUnit) ? largest_at / kBesSeriesIndexUnit : 1.0;
-            if (summed_loss >= 0.0 && kBesRoundoff * summed_loss * index_factor <= kBesComplexUsable)
-            {
-                return summed;
-            }
+            return pair.j;
         }
-        cplx p;
-        cplx q;
-        const double raw_error = besseljy_asymp_pq(nu, z, p, q);
-        const cplx omega = z - (0.5 * nu + 0.25) * kBesPi;
-        double asymptotic_error;
-        const cplx asymptotic =
-            bes_hankel_value(omega, p, q, crd::math::sqrt(2.0 / (kBesPi * z)), raw_error, false, asymptotic_error);
-        // An expansion within kBesComplexGood is taken as it is: the series is priced (a loop of up to 400 terms) only
-        // where it could be the better method.
-        const double series_error = (asymptotic_error <= kBesComplexGood) ? std::numeric_limits<double>::infinity()
-                                    : (summed_loss >= 0.0)
-                                        ? kBesRoundoff * summed_loss
-                                        : kBesRoundoff * bes_series_loss(crd::math::fabs(nu), z, -1.0);
-        const double best = (asymptotic_error < series_error) ? asymptotic_error : series_error;
-        if (crd::math::fabs(nu) >= kBesForwardSteps && !(best <= kBesComplexUsable)) [[unlikely]]
+    }
+    if (bes_complex_forward_wins(crd::math::fabs(nu), z, best))
+    {
+        const BesComplexJY pair = bes_complex_forward_jy(nu, z, best);
+        if (pair.ok)
         {
-            return cplx(std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN());
+            return pair.j;
         }
-        if (bes_complex_stable_wanted(crd::math::fabs(nu), z, best))
-        {
-            const BesComplexJY pair = bes_complex_stable_jy(nu, z);
-            if (pair.ok)
-            {
-                return pair.j;
-            }
-        }
-        if (bes_complex_forward_wins(crd::math::fabs(nu), z, best))
-        {
-            const BesComplexJY pair = bes_complex_forward_jy(nu, z, best);
-            if (pair.ok)
-            {
-                return pair.j;
-            }
-        }
-        if (asymptotic_error < series_error)
-        {
-            return asymptotic;
-        }
+    }
+    if (asymptotic_error < series_error)
+    {
+        return asymptotic;
     }
     return bessel_ji_series(nu, z, -1.0);
 }
@@ -2707,80 +2820,127 @@ struct BesComplexJY
 
 // Y_ν(z), any real ν. Large |z|: asymptotic (signed ω). Moderate |z|: connection (J_ν cosνπ − J_{−ν})/sinνπ
 // (integer ν ⇒ the exact integer series above).
+struct BesFound
+{
+    cplx value;
+    bool answered;
+};
+[[nodiscard]] inline cplx bessely_c(double nu, cplx z) noexcept;
+CRD_NOINLINE inline BesFound bes_y_far(double nu, cplx z) noexcept
+{
+    if (z.real() < 0.0)
+    {
+        // Y_ν(w e^{±πi}) = e^{∓νπi} Y_ν(w) ± 2i cos(νπ) J_ν(w) (DLMF 10.11.2, with sin(±νπ)cot(νπ) = ±cos(νπ))
+        const double whole = crd::math::round(nu);
+        const bool near_negative_integer =
+            whole < 0.0 && crd::math::fabs(nu - whole) < 1e-12 && -whole < kBesForwardSteps;
+        if (near_negative_integer && nu != whole && (std::abs(z) < 17.5 || std::abs(z) < -2.0 * nu))
+        {
+            // Within 1e-12 of a negative integer (the test of base) but not on it, the reflection would reach J's
+            // series at ν + k of about 1e-14 (whose rounding is the whole value, up to 1e8 times the bar): base's
+            // route.
+            const int n = static_cast<int>(-whole);
+            const cplx yn = bessely_n_int(n, z);
+            return BesFound{((n & 1) != 0) ? -yn : yn, true};
+        }
+        const double turn = (z.imag() >= 0.0) ? 1.0 : -1.0;
+        const cplx reflected =
+            bes_turn_phase(nu, -turn) * bessely_c(nu, -z) +
+            cplx(0.0, 2.0 * turn * bes_sin_cos_pi(crd::math::fabs(nu)).cos) * besselj_c(nu, -z, true);
+        if (reflected != reflected && near_negative_integer)
+        {
+            // At a negative integer order J's series divides by ν + k = 0 where it is the method: the integer
+            // series of base serves those inputs (Y_{−n} = (−1)^n Y_n).
+            const int n = static_cast<int>(-whole);
+            const cplx yn = bessely_n_int(n, z);
+            return BesFound{((n & 1) != 0) ? -yn : yn, true};
+        }
+        return BesFound{reflected, true};
+    }
+    double summed_loss = -1.0; // the larger cancellation of the two series of the connection, once they are summed
+    const double from_integer = crd::math::fabs(nu - crd::math::round(nu));
+    if (nu > 0.0 && nu < kBesForwardSteps && std::abs(z) < 2.0 * nu && from_integer >= 1e-12 && from_integer != 0.5)
+    {
+        // The range of the connection formula in base, where Hankel's expansion is never the better method: J_ν and
+        // J_{−ν} are summed once and priced by their own terms, each weighted by its share of the formula, which
+        // accounts for the cancellation near an integer order (with the model of the rounding of J; no point of 8000
+        // random ones of the range that it takes is over the bar).
+        double plus_loss = -1.0;
+        double minus_loss = -1.0;
+        int plus_at = 0;
+        int minus_at = 0;
+        const cplx plus = bessel_series_priced<false>(nu, z, plus_loss, plus_at);
+        const cplx minus = bessel_series_priced<false>(-nu, z, minus_loss, minus_at);
+        if (plus_loss >= 0.0 && minus_loss >= 0.0)
+        {
+            const double sine = crd::math::sin(nu * kBesPi);
+            const cplx connected = (plus * crd::math::cos(nu * kBesPi) - minus) / sine;
+            const double size = crd::math::fabs(sine) * std::abs(connected);
+            const double plus_part = plus_loss *
+                                     ((plus_at > kBesSeriesIndexUnit) ? plus_at / kBesSeriesIndexUnit : 1.0) *
+                                     std::abs(plus) / size;
+            const double minus_part = minus_loss *
+                                      ((minus_at > kBesSeriesIndexUnit) ? minus_at / kBesSeriesIndexUnit : 1.0) *
+                                      std::abs(minus) / size;
+            if (kBesRoundoff * ((plus_part > minus_part) ? plus_part : minus_part) <= kBesComplexYSeries)
+            {
+                return BesFound{connected, true};
+            }
+            summed_loss = (plus_loss > minus_loss) ? plus_loss : minus_loss;
+        }
+    }
+    cplx p;
+    cplx q;
+    const double raw_error = besseljy_asymp_pq(nu, z, p, q);
+    const cplx omega = z - (0.5 * nu + 0.25) * kBesPi;
+    double asymptotic_error;
+    const cplx asymptotic =
+        bes_hankel_value(omega, p, q, crd::math::sqrt(2.0 / (kBesPi * z)), raw_error, true, asymptotic_error);
+    double series_error = (asymptotic_error <= kBesComplexGood) ? std::numeric_limits<double>::infinity()
+                          : (summed_loss >= 0.0)                ? kBesRoundoff * summed_loss
+                                                 : kBesRoundoff * bes_series_loss(crd::math::fabs(nu), z, -1.0);
+    if (summed_loss < 0.0 && !(asymptotic_error < series_error) && from_integer >= 1e-12)
+    {
+        // The series serves Y through J_{−ν} as well, whose terms alternate while ν + k < 0: it is priced by the
+        // larger of the two losses.
+        const double reflected = kBesRoundoff * bes_series_loss(-crd::math::fabs(nu), z, -1.0);
+        series_error = (reflected > series_error || reflected != reflected) ? reflected : series_error;
+    }
+    const double best = (asymptotic_error < series_error) ? asymptotic_error : series_error;
+    if (crd::math::fabs(nu) >= kBesForwardSteps && !(best <= kBesComplexUsable)) [[unlikely]]
+    {
+        return BesFound{cplx(std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()), true};
+    }
+    if (bes_complex_stable_wanted(crd::math::fabs(nu), z, best))
+    {
+        const BesComplexJY pair = bes_complex_stable_jy(nu, z);
+        if (pair.ok)
+        {
+            return BesFound{pair.y, true};
+        }
+    }
+    if (bes_complex_forward_wins(crd::math::fabs(nu), z, best))
+    {
+        const BesComplexJY pair = bes_complex_forward_jy(nu, z, best);
+        if (pair.ok)
+        {
+            return BesFound{pair.y, true};
+        }
+    }
+    if (asymptotic_error < series_error)
+    {
+        return BesFound{asymptotic, true};
+    }
+    return BesFound{cplx(0.0, 0.0), false};
+}
 [[nodiscard]] inline cplx bessely_c(double nu, cplx z) noexcept
 {
-    if (std::abs(z) >= kBesComplexAsympFrom)
+    if (std::abs(z) >= kBesComplexAsympFrom) [[unlikely]]
     {
-        if (z.real() < 0.0)
+        const BesFound found = bes_y_far(nu, z);
+        if (found.answered)
         {
-            // Y_ν(w e^{±πi}) = e^{∓νπi} Y_ν(w) ± 2i cos(νπ) J_ν(w) (DLMF 10.11.2, with sin(±νπ)cot(νπ) = ±cos(νπ))
-            const double whole = crd::math::round(nu);
-            const bool near_negative_integer =
-                whole < 0.0 && crd::math::fabs(nu - whole) < 1e-12 && -whole < kBesForwardSteps;
-            if (near_negative_integer && nu != whole && (std::abs(z) < 17.5 || std::abs(z) < -2.0 * nu))
-            {
-                // Within 1e-12 of a negative integer (the test of base) but not on it, the reflection would reach J's
-                // series at ν + k of about 1e-14 (whose rounding is the whole value, up to 1e8 times the bar): base's
-                // route.
-                const int n = static_cast<int>(-whole);
-                const cplx yn = bessely_n_int(n, z);
-                return ((n & 1) != 0) ? -yn : yn;
-            }
-            const double turn = (z.imag() >= 0.0) ? 1.0 : -1.0;
-            const cplx reflected =
-                bes_turn_phase(nu, -turn) * bessely_c(nu, -z) +
-                cplx(0.0, 2.0 * turn * bes_sin_cos_pi(crd::math::fabs(nu)).cos) * besselj_c(nu, -z, true);
-            if (reflected != reflected && near_negative_integer)
-            {
-                // At a negative integer order J's series divides by ν + k = 0 where it is the method: the integer
-                // series of base serves those inputs (Y_{−n} = (−1)^n Y_n).
-                const int n = static_cast<int>(-whole);
-                const cplx yn = bessely_n_int(n, z);
-                return ((n & 1) != 0) ? -yn : yn;
-            }
-            return reflected;
-        }
-        cplx p;
-        cplx q;
-        const double raw_error = besseljy_asymp_pq(nu, z, p, q);
-        const cplx omega = z - (0.5 * nu + 0.25) * kBesPi;
-        double asymptotic_error;
-        const cplx asymptotic =
-            bes_hankel_value(omega, p, q, crd::math::sqrt(2.0 / (kBesPi * z)), raw_error, true, asymptotic_error);
-        double series_error = (asymptotic_error <= kBesComplexGood)
-                                  ? std::numeric_limits<double>::infinity()
-                                  : kBesRoundoff * bes_series_loss(crd::math::fabs(nu), z, -1.0);
-        if (!(asymptotic_error < series_error) && crd::math::fabs(nu - crd::math::round(nu)) >= 1e-12)
-        {
-            // The series serves Y through J_{−ν} as well, whose terms alternate while ν + k < 0: it is priced by the
-            // larger of the two losses.
-            const double reflected = kBesRoundoff * bes_series_loss(-crd::math::fabs(nu), z, -1.0);
-            series_error = (reflected > series_error || reflected != reflected) ? reflected : series_error;
-        }
-        const double best = (asymptotic_error < series_error) ? asymptotic_error : series_error;
-        if (crd::math::fabs(nu) >= kBesForwardSteps && !(best <= kBesComplexUsable)) [[unlikely]]
-        {
-            return cplx(std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN());
-        }
-        if (bes_complex_stable_wanted(crd::math::fabs(nu), z, best))
-        {
-            const BesComplexJY pair = bes_complex_stable_jy(nu, z);
-            if (pair.ok)
-            {
-                return pair.y;
-            }
-        }
-        if (bes_complex_forward_wins(crd::math::fabs(nu), z, best))
-        {
-            const BesComplexJY pair = bes_complex_forward_jy(nu, z, best);
-            if (pair.ok)
-            {
-                return pair.y;
-            }
-        }
-        if (asymptotic_error < series_error)
-        {
-            return asymptotic;
+            return found.value;
         }
     }
     const double rn = crd::math::round(nu);
@@ -2790,44 +2950,92 @@ struct BesComplexJY
         const cplx yn = bessely_n_int(n, z);
         return (rn < 0.0 && (n & 1)) ? -yn : yn; // Y_{−n} = (−1)^n Y_n
     }
-    return (besselj_c(nu, z) * crd::math::cos(nu * kBesPi) - besselj_c(-nu, z)) / crd::math::sin(nu * kBesPi);
+    if (crd::math::fabs(nu - rn) == 0.5)
+    {
+        // A half-integer order: cos νπ is exactly zero, and its 1e-16 of residue would multiply J_ν, which at a
+        // negative ν is the huge term (D2 of the real path).
+        const BesTrig t = bes_sin_cos_pi(crd::math::fabs(nu));
+        return -bes_j_body(-nu, z, false) / ((nu < 0.0) ? -t.sin : t.sin);
+    }
+    return (bes_j_body(nu, z, false) * crd::math::cos(nu * kBesPi) - bes_j_body(-nu, z, false)) /
+           crd::math::sin(nu * kBesPi);
 }
 
-// I_ν(z), any real ν — series (moderate |z|) or dominant asymptotic (large |z|, where I_{−ν}≈I_ν).
-[[nodiscard]] inline cplx besseli_c(double nu, cplx z) noexcept
+// The series of I is taken up to this estimate (a third of the bar, the factor by which its estimate undershoots);
+// above it the stable method serves, below. I_ν(z), any real ν — series (moderate |z|) or dominant asymptotic (large
+// |z|, where I_{−ν}≈I_ν).
+inline constexpr double kBesComplexISeries = kBesComplexUsable / 3.0;
+[[nodiscard]] inline cplx besseli_c(double nu, cplx z) noexcept;
+CRD_NOINLINE inline cplx bes_i_at_negative_integer(double nu, cplx z) noexcept
 {
-    if (std::abs(z) >= kBesComplexAsympFrom)
+    return besseli_c(crd::math::fabs(crd::math::round(nu)), z); // I_{−n} = I_n
+}
+CRD_NOINLINE inline cplx bes_i_far(double nu, cplx z, double magnitude) noexcept
+{
+    double summed_loss = -1.0; // the cancellation of the series of this order, once it has been summed
+    if (magnitude < 17.5 || magnitude < 2.0 * crd::math::fabs(nu))
     {
-        double error = 0.0;
-        const cplx value = besselik_asymp<true>(nu, z, error);
-        if (error <= kBesComplexGood || error < kBesRoundoff * bes_series_loss(crd::math::fabs(nu), z, 1.0))
+        // The range of the series in base, where it is base's answer: summed once and priced by its own terms, and
+        // taken while that price is within the module's bar, as for J (kBesSeriesIndexUnit).
+        int largest_at = 0;
+        const cplx summed = bessel_series_priced<true>(nu, z, summed_loss, largest_at);
+        const double index_factor = (largest_at > kBesSeriesIndexUnit) ? largest_at / kBesSeriesIndexUnit : 1.0;
+        if (summed_loss >= 0.0 && kBesRoundoff * summed_loss * index_factor <= kBesComplexUsable)
         {
-            return value;
+            return summed;
         }
+    }
+    double error = 0.0;
+    const cplx value = besselik_asymp<true>(nu, z, error);
+    if (error <= kBesComplexGood)
+    {
+        return value;
+    }
+    const double series_error = (summed_loss >= 0.0 && nu >= 0.0)
+                                    ? kBesRoundoff * summed_loss
+                                    : kBesRoundoff * bes_series_loss(crd::math::fabs(nu), z, 1.0);
+    // At a negative order the series is that of the order itself, with its own loss (of the order |ν| would mistake
+    // the alternating series, which the sum of J_{−ν} carries).
+    const double stable_measure =
+        (nu < 0.0) ? (summed_loss >= 0.0 ? kBesRoundoff * summed_loss : kBesRoundoff * bes_series_loss(nu, z, 1.0))
+                   : series_error;
+    if (error > kBesComplexISeries && stable_measure > kBesComplexISeries && crd::math::fabs(nu) < kBesForwardSteps &&
+        crd::math::fabs(z.real()) < kBesComplexStableMax)
+    {
+        // The series loses more than the bar (ν ≳ |z|, |Im z| ≳ 15): I comes from the method that is stable for J
+        // at the rotated argument, I_ν(w) = e^{∓iνπ/2} J_ν(±iw) for Re w ≥ 0 (DLMF 10.27.6, by the side of the real
+        // axis), after the mirror I_ν(z) = e^{±νπi} I_ν(−z) of the left half-plane (DLMF 10.34.1).
+        const bool left = z.real() < 0.0;
+        const cplx w = left ? -z : z;
+        const bool upper = w.imag() >= 0.0;
+        const cplx turned = upper ? cplx(-w.imag(), w.real()) : cplx(w.imag(), -w.real());
+        const BesComplexJY pair = bes_complex_stable_jy(nu, turned);
+        if (pair.ok)
+        {
+            const BesTrig t = bes_sin_cos_pi(0.5 * crd::math::fabs(nu));
+            const double side = ((nu < 0.0) == upper) ? t.sin : -t.sin; // e^{∓iνπ/2}, with ν's sign
+            const cplx at_w = cplx(t.cos, side) * pair.j;
+            return left ? bes_turn_phase(nu, (z.imag() >= 0.0) ? 1.0 : -1.0) * at_w : at_w;
+        }
+    }
+    if (error < series_error)
+    {
+        return value;
     }
     return bessel_ji_series(nu, z, 1.0);
 }
-
-// I_ν(w) for the reflection of K at Re w > 0. At a half-integer order the ascending series of I, summed where |w| < 2ν,
-// carries rounding of the size of the bar of K (its estimate is 1e-9 at K_80.5(−33.3 − 57.2i), and its error up to
-// three times that). Where the estimate is over kBesReflectedSeries, a third of the bar of K, I comes from the method
-// that is stable for J, at the rotated argument: I_ν(w) = e^{−iνπ/2} J_ν(iw) (DLMF 10.27.6).
-inline constexpr double kBesReflectedSeries = 3.0e-10;
-[[nodiscard]] inline cplx bes_i_of_reflection(double n, cplx w) noexcept
+[[nodiscard]] inline cplx besseli_c(double nu, cplx z) noexcept
 {
-    const double twice = 2.0 * n;
-    if (twice == crd::math::round(twice) && n != crd::math::round(n) && n < kBesForwardSteps && std::abs(w) < twice &&
-        crd::math::fabs(w.real()) < kBesComplexStableMax &&
-        kBesRoundoff * bes_series_loss(n, w, 1.0) > kBesReflectedSeries)
+    if (bes_negative_integer(nu)) [[unlikely]]
     {
-        const BesComplexJY pair = bes_complex_stable_jy(n, cplx(-w.imag(), w.real()));
-        if (pair.ok)
-        {
-            const BesTrig t = bes_sin_cos_pi(0.5 * n);
-            return cplx(t.cos, -t.sin) * pair.j;
-        }
+        return bes_i_at_negative_integer(nu, z);
     }
-    return besseli_c(n, w);
+    const double magnitude = std::abs(z);
+    if (magnitude >= kBesComplexAsympFrom) [[unlikely]]
+    {
+        return bes_i_far(nu, z, magnitude);
+    }
+    return bessel_ji_series(nu, z, 1.0);
 }
 
 // K_ν(z) = K_{−ν}(z). Large |z|: asymptotic. Moderate |z|: (π/2)(I_{−ν}−I_ν)/sinνπ (integer ν ⇒ ε-offset).
@@ -2841,7 +3049,7 @@ inline constexpr double kBesReflectedSeries = 3.0e-10;
             // K_ν(w e^{±πi}) = e^{∓νπi} K_ν(w) ∓ πi I_ν(w) (DLMF 10.34.2): in the left half-plane K is the I of the
             // mirrored point, whose expansion carries both exponentials, so nothing small is dropped near Re z = 0.
             const double turn = (z.imag() >= 0.0) ? 1.0 : -1.0;
-            return bes_turn_phase(n, -turn) * besselk_c(n, -z) - cplx(0.0, turn * kBesPi) * bes_i_of_reflection(n, -z);
+            return bes_turn_phase(n, -turn) * besselk_c(n, -z) - cplx(0.0, turn * kBesPi) * besseli_c(n, -z);
         }
         // K is exp-small for Re z > 0: the series and the connection hold terms of size e^{|z|} to make e^{−Re z}.
         // Between the two (the asymptotic is not yet at the rounding, the connection already loses e^{2|z|}ε), Steed's
