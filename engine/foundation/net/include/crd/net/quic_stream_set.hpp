@@ -133,6 +133,7 @@ struct QuicStreamRead
     bool fin = false;   // data ends at the stream's final size
     bool reset = false; // the peer reset it: nothing more is readable
     u64 reset_error = 0U;
+    bool reset_coming = false; // a RESET_STREAM_AT arrived: the reset shows once the bytes it keeps are read
     // A server's: the first bytes of `data` that may have come in 0-RTT packets, replayable (RFC 9001 section 9.2),
     // so the application runs on them only what its schema declares idempotent.
     usize early_bytes = 0U;
@@ -218,6 +219,9 @@ public:
     // receiving part. `keep_end`: it stays open at its end, peek() still reporting `fin`, until a call without it, for a
     // layer that must first act on the end and would otherwise lose the slot to it.
     [[nodiscard]] QuicStreamError consume(u64 id, usize count, bool keep_end = false) noexcept;
+    // Lets the reset of a RESET_STREAM_AT show now, for a layer that cannot use the bytes it keeps (they may stop inside
+    // a frame, and waiting for the rest would hold the stream forever). Ended without one.
+    [[nodiscard]] QuicStreamError give_up_reliable(u64 id) noexcept;
     // The next stream with events, its mask cleared; false when none has any.
     [[nodiscard]] bool poll(QuicStreamEvent& event) noexcept;
     // The bytes write() takes now; below `wanted`, a Writable event is owed once more room comes. 0 for a stream that

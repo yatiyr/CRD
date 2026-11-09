@@ -502,8 +502,9 @@ credits and their frames. It knows nothing of packets: the connection asks it fo
   again, and the part ends when the frame with the current size and those bytes are acknowledged. The frame waits until
   the kept bytes have all gone once, so its final size lies within both credits with no separate check. A second call,
   or a STOP_SENDING, only lowers the size; the code and final size never change. The receiver offers bytes up to the
-  smallest size named, never `fin`, and shows the reset when they are read; a reordered larger size is ignored. It is
-  in the early context, so a server cannot withdraw it under a ticket. QMux has no such frame and refuses the option.
+  smallest size named, never `fin`, and shows the reset when they are read; a reordered larger size is ignored. A size
+  may stop inside a frame, so a framing layer told `reset_coming` gives the bytes up instead of waiting. It is in the
+  early context, so a server cannot withdraw it under a ticket. QMux has no such frame and refuses the option.
 - **Sending.** `next_frame()` hands the connection one frame that fits its room with the record that settles it:
   MAX_DATA, MAX_STREAMS, STREAMS_BLOCKED and DATA_BLOCKED first, then the listed streams by RFC 9218's urgencies
   (0 first, 3 by default) and round robin within one, each stream's control frames before its data. A stream is
@@ -1180,7 +1181,8 @@ them: what differs is negotiation and whether flow control exists.
 - **Layers.** `Http3Connection` classifies; a `WebTransport` layer above it owns sessions. The classifier takes uni type
   0x54, and 0x41 as the very first varint of a bidirectional stream (from the client, or any server-initiated one once
   offered; elsewhere H3_FRAME_UNEXPECTED, and 0x41 has no length, so it is read before the frame header). A session ID
-  that is not a client bidirectional stream ID is H3_ID_ERROR for the connection. It then reports `WtStream`,
+  that is not a client bidirectional stream ID is H3_ID_ERROR for the connection, and a reliable size that cuts the
+  header is the stream's reset. It then reports `WtStream`,
   `WtReadable`, `WtAborted` and `WtStopped` and leaves the bytes to the owner through QuicStreamSet's zero-copy reads.
 - **Sessions.** A fixed pool searched by CONNECT stream ID. Capsules on the CONNECT stream through `HttpCapsuleReader`,
   none processed before the 2xx. A rejected Origin answers 403, an unsupported resource 405, too many sessions

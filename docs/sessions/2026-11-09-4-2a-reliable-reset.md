@@ -16,12 +16,14 @@ CI first: run 42589388858 (bea6e470), every failed job read. Nothing of this tra
 
 ## Found and fixed
 
-`QuicStreamSet::on_all_acked()` (QMux) named the whole stream in a 32-bit length, so a stream past 4 GiB stopped being acknowledged and stalled. It now names only the unacknowledged rest; a 4 GiB case holds it.
+- A reliable size that stops inside a frame would have held the stream for ever, a hostile peer's cheap way to pin slots: `QuicStreamRead::reset_coming` says a reset follows, `give_up_reliable()` shows it now, and HTTP/3 (which gives the size no meaning) takes it at once.
+- A reliable reset's bytes waiting on credit owed no STREAM_DATA_BLOCKED, so a peer that raises credit on that signal could deadlock the frame. They owe it now.
+- `QuicStreamSet::on_all_acked()` (QMux) named the whole stream in a 32-bit length, so a stream past 4 GiB stopped being acknowledged and stalled. It now names only the unacknowledged rest; a 4 GiB case holds it.
 
 ## Evidence
 
-- `crd-net-tests` on linux-gcc-debug: 589 cases pass. New: receiver refusals and reorderings, lowering before and after the frame went, frames deferred on credit, 32 seeds of loss, reorder and duplication, and real connections in both QUIC versions over 15% loss with jitter.
-- `crd-fuzz-net-quic-stream-set`, reliable resets added: 810,647 executions in 180 s on linux-clang-fuzz, no artifact.
+- `crd-net-tests` on linux-gcc-debug: 592 cases pass. New: receiver refusals and reorderings, lowering before and after the frame went, frames deferred on credit, 32 seeds of loss, reorder and duplication, and real connections in both QUIC versions over 15% loss with jitter.
+- `crd-fuzz-net-quic-stream-set`, reliable resets added: 688,526 executions in 151 s on linux-clang-fuzz, no artifact. `crd-fuzz-net-http3`: 16,586 in 121 s, no artifact.
 - Teeth: settling the part on the frame's acknowledgement alone fails the hostile-exchange case (2,300 of 4,055 bytes delivered, no reset); restored, it passes.
 
 ## Next

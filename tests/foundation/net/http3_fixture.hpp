@@ -39,6 +39,7 @@ inline QuicStreamLimits h3_limits()
     limits.stream_window = 8192U;
     limits.connection_window = 1U << 20U;
     limits.connection_max_window = 1U << 22U;
+    limits.reset_stream_at = true; // HTTP/3 gives it no meaning: a stream's reset is still its reset
     return limits;
 }
 

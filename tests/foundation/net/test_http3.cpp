@@ -1895,3 +1895,40 @@ TEST_CASE("http3: a grease stream goes only when the peer leaves room", "[http3]
     CHECK(rig.h3[kH3Client].error() == 0U);
     CHECK(rig.h3[kH3Server].error() == 0U);
 }
+
+TEST_CASE("http3: a RESET_STREAM_AT that cuts a frame is the stream's reset, never a wait", "[http3]")
+{
+    Fixture f;
+    f.server();
+    QuicStreamSet& client = f.rig->streams[kH3Client];
+    QuicStreamSet& server = f.rig->streams[kH3Server];
+    f.rig->settle();
+    const u32 open_before = server.open_streams();
+    usize taken = 0U;
+
+    SECTION("a request stream stopped inside its first frame header")
+    {
+        u64 id = 0U;
+        REQUIRE(client.open(true, id) == QuicStreamError::None);
+        const u8 half[] = {0x01U, 0x40U}; // HEADERS, then one byte of a two-byte length
+        REQUIRE(client.write(id, containers::ConstSpan<u8>(half, sizeof(half)), false, taken) == QuicStreamError::None);
+        REQUIRE(client.reset(id, 99U, sizeof(half)) == QuicStreamError::None);
+        f.rig->settle();
+        const H3Seen* const aborted = f.rig->find(kH3Server, Http3EventKind::Aborted);
+        REQUIRE(aborted != nullptr);
+        CHECK(aborted->event.error == 99U);
+        REQUIRE(client.stop_sending(id, 1U) == QuicStreamError::None); // ends the other half, freeing the stream
+        f.rig->settle();
+    }
+    SECTION("a unidirectional stream stopped inside its type")
+    {
+        u64 id = 0U;
+        REQUIRE(client.open(false, id) == QuicStreamError::None);
+        const u8 half = 0x40U;
+        REQUIRE(client.write(id, containers::ConstSpan<u8>(&half, 1U), false, taken) == QuicStreamError::None);
+        REQUIRE(client.reset(id, 99U, 1U) == QuicStreamError::None);
+        f.rig->settle();
+    }
+    CHECK(f.rig->h3[kH3Server].error() == 0U);
+    CHECK(server.open_streams() == open_before);
+}

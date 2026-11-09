@@ -4,7 +4,8 @@
 //
 // Input: limits for the two ends (stream slots, windows), then operations, each an operation byte and the parameter
 // bytes it reads (0 past the end), on a client's and a server's stream sets: opens, writes with and without a FIN,
-// reads, resets (reliable ones too), STOP_SENDING, urgencies and polls by either application; packets taken from either end into a
+// reads, resets (reliable ones too), STOP_SENDING, urgencies and polls by either application; packets taken from
+// either end into a
 // bounded flight, delivered in any order and any number of times, acknowledged or declared lost; and any frame bytes
 // injected into either end as if from its peer.
 //

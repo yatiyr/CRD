@@ -454,6 +454,12 @@ bool Http3Connection::advance(Record& record, Http3Event& event) noexcept
     {
         return false;
     }
+    if (m_streams->peek(record.id).reset_coming)
+    {
+        // RFC 9114 gives a reliable size no meaning, and bytes cut inside a frame would be waited on for ever.
+        static_cast<void>(m_streams->give_up_reliable(record.id));
+        return false;
+    }
     switch (record.kind)
     {
         case Kind::UniType:

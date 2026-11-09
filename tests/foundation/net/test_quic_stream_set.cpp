@@ -1661,3 +1661,55 @@ TEST_CASE("QUIC stream set: a transport that acknowledges by taking a frame pass
     }
     CHECK(sent == total);
 }
+
+TEST_CASE("QUIC stream set: a reliable reset's bytes owe STREAM_DATA_BLOCKED, and a layer can give them up",
+          "[net][4.2a][quic-stream-set]")
+{
+    QuicStreamLimits narrow = reliable_limits();
+    narrow.stream_window = 64U;
+    Pair pair(narrow, narrow);
+    QuicStreamSet& c = pair.end[0];
+    QuicStreamSet& s = pair.end[1];
+    u64 id = 0U;
+    REQUIRE(c.open(true, id) == QuicStreamError::None);
+    u64 written = 0U;
+    static_cast<void>(write_pattern(c, id, written, 500U, id, false));
+    REQUIRE(c.reset(id, 7U, 300U) == QuicStreamError::None);
+    const Packet first = pair.take(0U); // the 64 bytes the window allows, and the frame that says it is blocked
+    CHECK(has_kind(first, QuicFrameKind::Stream));
+    CHECK(has_kind(first, QuicFrameKind::StreamDataBlocked));
+    CHECK_FALSE(has_kind(first, QuicFrameKind::ResetStreamAt));
+
+    // The receiver's layer reads 10 bytes, learns a reset is coming, and gives the rest up.
+    REQUIRE(pair.deliver(first) == QuicTransportError::NoError);
+    CHECK_FALSE(s.peek(id).reset_coming);
+    REQUIRE(s.consume(id, 10U) == QuicStreamError::None);
+    CHECK(s.give_up_reliable(id) == QuicStreamError::Ended); // none arrived yet
+    REQUIRE(reset_at_to(s, id, 7U, 64U, 64U) == QuicTransportError::NoError);
+    u8 mask = 0U;
+    CHECK(events_of(s, id, mask) >= 1U);
+    CHECK((mask & kQuicStreamReadable) != 0U);
+    CHECK(s.peek(id).reset_coming);
+    REQUIRE(s.give_up_reliable(id) == QuicStreamError::None);
+    CHECK(s.peek(id).reset);
+    CHECK(s.connection_window().consumed() == 64U);
+    CHECK(s.give_up_reliable(id) == QuicStreamError::Ended);
+    CHECK(s.give_up_reliable(8U) == QuicStreamError::Unknown);
+}
+
+TEST_CASE("QUIC stream set: RESET_STREAM_AT after a FIN that was all read changes nothing and the frame is noticed",
+          "[net][4.2a][quic-stream-set]")
+{
+    Pair pair(reliable_limits(), reliable_limits());
+    QuicStreamSet& s = pair.end[1];
+    const u8 bytes[4] = {1U, 2U, 3U, 4U};
+    REQUIRE(frame_to(s, QuicFrameKind::Stream, 0U, 0U, ConstSpan<u8>(bytes, 4U), true) == QuicTransportError::NoError);
+    u8 mask = 0U;
+    static_cast<void>(events_of(s, 0U, mask));
+    // With the FIN read to the end the part is over, and a late frame with the same sizes is ignored.
+    REQUIRE(s.consume(0U, 4U) == QuicStreamError::None);
+    REQUIRE(s.recv_state(0U) == QuicRecvState::DataRead);
+    REQUIRE(reset_at_to(s, 0U, 5U, 4U, 2U) == QuicTransportError::NoError);
+    CHECK(s.recv_state(0U) == QuicRecvState::DataRead);
+    CHECK(events_of(s, 0U, mask) == 0U);
+}
