@@ -78,6 +78,10 @@ jobs:
           - {target: net-qmux-early, seed: 8922, repeat: ''}
           - {target: net-qmux-host, seed: 8911, repeat: ''}
           - {target: net-qmux-host, seed: 8912, repeat: ''}
+          # HPACK (4.2a): four of seven local sessions ended in events no input replays (a null this, a small-integer this,
+          # a zero-page write, a poisoned local), 2026-11-09.
+          - {target: net-hpack, seed: 9001, repeat: ''}
+          - {target: net-hpack, seed: 9002, repeat: ''}
           - {target: net-ingress, seed: 8301, repeat: ''}
           - {target: net-ingress, seed: 8302, repeat: ''}
           # 4.2a's ticket cache and token index: three non-replaying local events, 2026-11-09.
