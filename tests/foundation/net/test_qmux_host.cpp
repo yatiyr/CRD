@@ -496,6 +496,52 @@ TEST_CASE("QmuxHost: a closed side stops waiting after close_wait", "[net][qmux-
     CHECK(hosts.client_poller.fins == 1U);
 }
 
+TEST_CASE("QmuxHost: bytes a failed write left in the socket are read, and name how it ended", "[net][qmux-host]")
+{
+    Hosts hosts;
+    for (QmuxConfig* const config : {&hosts.client_config.connection, &hosts.server_config.connection})
+    {
+        config->streams.send_bytes = 200U * 1024U;
+        config->streams.receive_bytes = 200U * 1024U;
+        config->streams.stream_window = 200U * 1024U;
+        config->streams.connection_window = 400U * 1024U;
+        config->streams.connection_max_window = 400U * 1024U;
+    }
+    hosts.start();
+    hosts.server_events.transfer = 1U; // the server reads the client's stream
+    const QuicHandle handle = hosts.connect();
+    hosts.establish(handle);
+    QmuxConnection* const connection = hosts.client->connection(handle);
+    REQUIRE(connection != nullptr);
+    u64 id = 0U;
+    REQUIRE(connection->streams().open(true, id) == QuicStreamError::None);
+    const u64 bytes = 100U * 1024U; // beyond what one read of a turn takes
+    u64 written = 0U;
+    static_cast<void>(write_pattern(connection->streams(), id, written, bytes, 3U));
+    REQUIRE(written == bytes);
+    hosts.client->wake(handle);
+    static_cast<void>(hosts.client->poll(0U));
+    connection->close(9U, ConstSpan<u8>(), hosts.clock.now);
+    hosts.client->wake(handle);
+    static_cast<void>(hosts.client->poll(0U));
+
+    PipeLink* const link = hosts.server_poller.link_of(0U);
+    REQUIRE(link != nullptr);
+    REQUIRE(link->to_server.size > kQmuxHostChunkBytes);
+    link->server.write_error = SocketError::Reset;
+    QmuxConnection* const accepted = hosts.server->connection(hosts.server_events.accepted[0]);
+    REQUIRE(accepted != nullptr);
+    accepted->ping(); // the turn has something to write, and the write finds the peer gone
+    hosts.server->wake(hosts.server_events.accepted[0]);
+    static_cast<void>(hosts.server->poll(0U));
+
+    REQUIRE(hosts.server_events.ended_count == 1U);
+    CHECK(hosts.server_events.ended[0].info.reason == QmuxCloseReason::Peer);
+    CHECK(hosts.server_events.ended[0].info.error_code == 9U);
+    CHECK(hosts.server_events.ended[0].transport == SocketError::Reset);
+    CHECK(hosts.server->counters().bytes_read >= bytes);
+}
+
 TEST_CASE("QmuxHost: a peer's reset and a truncation are reported as such", "[net][qmux-host]")
 {
     Hosts hosts;

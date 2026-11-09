@@ -301,6 +301,21 @@ void QmuxHost::read_some(u32 index, u64 now_ns) noexcept
     m_heap.schedule(index, now_ns);
 }
 
+void QmuxHost::read_left(u32 index, u64 now_ns) noexcept
+{
+    Slot& slot = m_slots[index];
+    for (u32 read = 0U; read < kReadsAfterFailure && slot.connection->state() != QmuxState::Closed; ++read)
+    {
+        const StreamResult result = slot.socket->read(cont::Span<u8>(m_chunk, kQmuxHostChunkBytes));
+        if (result.bytes == 0U)
+        {
+            return;
+        }
+        m_counters.bytes_read += result.bytes;
+        slot.connection->receive(cont::ConstSpan<u8>(m_chunk, result.bytes), now_ns);
+    }
+}
+
 void QmuxHost::transport_failed(Slot& slot, SocketError error, u64 now_ns) noexcept
 {
     slot.transport = error;
@@ -332,6 +347,7 @@ bool QmuxHost::write_some(u32 index, u64 now_ns) noexcept
         }
         if (result.error != SocketError::None && result.error != SocketError::Busy)
         {
+            read_left(index, now_ns);
             transport_failed(slot, result.error, now_ns);
             return false;
         }

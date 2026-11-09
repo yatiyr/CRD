@@ -19,6 +19,8 @@
 //             `accepts_per_turn` connections; what is left is reported by the next wait(), level-triggered.
 //   writes    bytes stay in the connection's TLS output until the socket has taken them, so a partial write needs no
 //             second buffer per connection.
+//   ends      a write that finds the peer gone leaves what it sent in the socket: that is read first, so a peer that
+//             reset behind its last bytes and its close is reported by them, within a bounded number of reads.
 //   close     a Closed connection's last bytes are tried once. It ends with a FIN when everything went out, and with a
 //             reset when bytes could not be sent, the handshake timed out or the transport had failed. Then it is
 //             reported and its slot reused under a new generation.
@@ -49,6 +51,8 @@ class HandshakeBuckets;
 
 // The most a turn reads from one connection, and the largest piece of a connection's output one write offers.
 inline constexpr usize kQmuxHostChunkBytes = crypto::kTlsMaxBufferedBytes;
+// The reads a connection whose write failed still gets: more than a host's socket buffer holds.
+inline constexpr u32 kReadsAfterFailure = 256U;
 
 struct QmuxHostConfig
 {
@@ -167,6 +171,8 @@ private:
     void read_some(u32 index, u64 now_ns) noexcept;
     // Whether the connection's share of the turn ran out with bytes left.
     [[nodiscard]] bool write_some(u32 index, u64 now_ns) noexcept;
+    // Reads what the socket still holds after a failed write, a bounded amount.
+    void read_left(u32 index, u64 now_ns) noexcept;
     void transport_failed(Slot& slot, SocketError error, u64 now_ns) noexcept;
     void set_interest(u32 index, u8 interests) noexcept;
     void serve(u32 index, u64 now_ns) noexcept;
