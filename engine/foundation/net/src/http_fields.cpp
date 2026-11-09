@@ -1,5 +1,7 @@
 // crd-net -- the field coding HPACK and QPACK share (4.2a; docs/design/network-foundation.md#qpack).
 
+#include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp>
 #include <crd/net/http_fields.hpp>
 
 #include <cstring>
@@ -267,6 +269,307 @@ HttpDecode take_http_string(cont::WireReader& in, u8 first, u8 prefix_bits, usiz
         return HttpDecode::Invalid;
     }
     return in.take_bytes(static_cast<usize>(bytes), coded) ? HttpDecode::Ok : HttpDecode::NeedMore;
+}
+
+bool http_equal(cont::ConstSpan<u8> left, cont::ConstSpan<u8> right) noexcept
+{
+    return left.size() == right.size() && (left.empty() || std::memcmp(left.data(), right.data(), left.size()) == 0);
+}
+
+bool http_field_sensitive(cont::ConstSpan<u8> name) noexcept
+{
+    return http_equal(name, http_text("authorization")) || http_equal(name, http_text("proxy-authorization")) ||
+           http_equal(name, http_text("cookie")) || http_equal(name, http_text("set-cookie"));
+}
+
+u64 http_entry_size(const HttpFieldTable::Entry& entry) noexcept
+{
+    return u64{entry.name_bytes} + entry.value_bytes + kHttpFieldOverhead;
+}
+
+HttpStaticMatch http_find_static(cont::ConstSpan<HttpStaticField> table, cont::ConstSpan<u8> name,
+                                 cont::ConstSpan<u8> value) noexcept
+{
+    HttpStaticMatch match;
+    for (usize index = 0U; index < table.size(); ++index)
+    {
+        if (!http_equal(table[index].name, name))
+        {
+            continue;
+        }
+        if (http_equal(table[index].value, value))
+        {
+            match.index = static_cast<i32>(index);
+            match.exact = true;
+            return match;
+        }
+        if (match.index < 0)
+        {
+            match.index = static_cast<i32>(index);
+        }
+    }
+    return match;
+}
+
+// -- the dynamic table -----------------------------------------------------------------------------------------------
+
+bool HttpFieldTable::init(memory::IAllocator& allocator, u32 max_capacity) noexcept
+{
+    m_max_capacity = max_capacity;
+    m_max_entries = static_cast<u32>(max_capacity / kHttpFieldOverhead);
+    if (m_max_entries == 0U)
+    {
+        return true; // too small for even an empty entry: legal, and it holds nothing
+    }
+    m_bytes = memory::try_construct_array<u8>(allocator, max_capacity);
+    m_entries = memory::try_construct_array<Entry>(allocator, m_max_entries);
+    return m_bytes != nullptr && m_entries != nullptr;
+}
+
+void HttpFieldTable::release(memory::IAllocator& allocator) noexcept
+{
+    memory::destroy_array(allocator, m_bytes, m_max_capacity);
+    memory::destroy_array(allocator, m_entries, m_max_entries);
+    m_bytes = nullptr;
+    m_entries = nullptr;
+}
+
+const HttpFieldTable::Entry& HttpFieldTable::entry(u64 absolute) const noexcept
+{
+    return m_entries[absolute % m_max_entries];
+}
+
+void HttpFieldTable::make_room(usize entry_bytes) noexcept
+{
+    while (m_size + entry_bytes > m_capacity)
+    {
+        m_size -= static_cast<u32>(http_entry_size(entry(m_dropped)));
+        ++m_dropped;
+    }
+}
+
+void HttpFieldTable::set_capacity(u32 capacity) noexcept
+{
+    m_capacity = capacity;
+    make_room(0U);
+}
+
+void HttpFieldTable::write(cont::ConstSpan<u8> bytes) noexcept
+{
+    if (bytes.empty())
+    {
+        return;
+    }
+    const usize first = (bytes.size() < m_max_capacity - m_tail) ? bytes.size() : m_max_capacity - m_tail;
+    std::memcpy(m_bytes + m_tail, bytes.data(), first);
+    if (first < bytes.size())
+    {
+        std::memcpy(m_bytes, bytes.data() + first, bytes.size() - first);
+    }
+    m_tail = static_cast<u32>((m_tail + bytes.size()) % m_max_capacity);
+}
+
+void HttpFieldTable::write_within(u32 at, u32 bytes) noexcept
+{
+    for (u32 index = 0U; index < bytes; ++index)
+    {
+        m_bytes[m_tail] = m_bytes[at];
+        m_tail = (m_tail + 1U) % m_max_capacity;
+        at = (at + 1U) % m_max_capacity;
+    }
+}
+
+void HttpFieldTable::push(u32 at, u32 name_bytes, u32 value_bytes) noexcept
+{
+    m_entries[m_inserted % m_max_entries] = Entry{at, name_bytes, value_bytes};
+    ++m_inserted;
+    m_size += name_bytes + value_bytes + static_cast<u32>(kHttpFieldOverhead);
+}
+
+void HttpFieldTable::append(cont::ConstSpan<u8> name, cont::ConstSpan<u8> value) noexcept
+{
+    const u32 at = m_tail;
+    write(name);
+    write(value);
+    push(at, static_cast<u32>(name.size()), static_cast<u32>(value.size()));
+}
+
+void HttpFieldTable::append_named(Entry source, cont::ConstSpan<u8> value) noexcept
+{
+    const u32 at = m_tail;
+    write_within(source.at, source.name_bytes);
+    write(value);
+    push(at, source.name_bytes, static_cast<u32>(value.size()));
+}
+
+void HttpFieldTable::append_copy(Entry source) noexcept
+{
+    const u32 at = m_tail;
+    write_within(source.at, source.name_bytes + source.value_bytes);
+    push(at, source.name_bytes, source.value_bytes);
+}
+
+void HttpFieldTable::read(u32 at, cont::Span<u8> out) const noexcept
+{
+    if (out.empty())
+    {
+        return;
+    }
+    const usize first = (out.size() < m_max_capacity - at) ? out.size() : m_max_capacity - at;
+    std::memcpy(out.data(), m_bytes + at, first);
+    if (first < out.size())
+    {
+        std::memcpy(out.data() + first, m_bytes, out.size() - first);
+    }
+}
+
+bool HttpFieldTable::equals(u32 at, cont::ConstSpan<u8> bytes) const noexcept
+{
+    if (bytes.empty())
+    {
+        return true;
+    }
+    const usize first = (bytes.size() < m_max_capacity - at) ? bytes.size() : m_max_capacity - at;
+    if (std::memcmp(bytes.data(), m_bytes + at, first) != 0)
+    {
+        return false;
+    }
+    return first == bytes.size() || std::memcmp(bytes.data() + first, m_bytes, bytes.size() - first) == 0;
+}
+
+void HttpFieldTable::copy_name(const Entry& entry, cont::Span<u8> out) const noexcept
+{
+    read(entry.at, out.subspan(0U, entry.name_bytes));
+}
+
+void HttpFieldTable::copy_value(const Entry& entry, cont::Span<u8> out) const noexcept
+{
+    read((entry.at + entry.name_bytes) % m_max_capacity, out.subspan(0U, entry.value_bytes));
+}
+
+bool HttpFieldTable::name_is(const Entry& entry, cont::ConstSpan<u8> name) const noexcept
+{
+    return entry.name_bytes == name.size() && equals(entry.at, name);
+}
+
+bool HttpFieldTable::value_is(const Entry& entry, cont::ConstSpan<u8> value) const noexcept
+{
+    return entry.value_bytes == value.size() && equals((entry.at + entry.name_bytes) % m_max_capacity, value);
+}
+
+bool HttpFieldTable::find_field(const HttpField& field, u64& absolute) const noexcept
+{
+    for (u64 index = m_inserted; index > m_dropped; --index)
+    {
+        const Entry& candidate = entry(index - 1U);
+        if (name_is(candidate, field.name) && value_is(candidate, field.value))
+        {
+            absolute = index - 1U;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HttpFieldTable::find_name(cont::ConstSpan<u8> name, u64& absolute) const noexcept
+{
+    for (u64 index = m_inserted; index > m_dropped; --index)
+    {
+        if (name_is(entry(index - 1U), name))
+        {
+            absolute = index - 1U;
+            return true;
+        }
+    }
+    return false;
+}
+
+// -- a decoder's output ----------------------------------------------------------------------------------------------
+
+cont::Span<u8> HttpFieldOutput::reserve(usize bytes) noexcept
+{
+    if (!overflow && text.size() - used >= bytes)
+    {
+        const cont::Span<u8> place = text.subspan(used, bytes);
+        used += bytes;
+        return place;
+    }
+    overflow = true;
+    if (spill.size() - spilled < bytes)
+    {
+        oversize = true;
+        return {};
+    }
+    const cont::Span<u8> place = spill.subspan(spilled, bytes);
+    spilled += bytes;
+    return place;
+}
+
+bool HttpFieldOutput::literal(cont::ConstSpan<u8> coded, bool huffman, cont::ConstSpan<u8>& out) noexcept
+{
+    if (!huffman)
+    {
+        const cont::Span<u8> place = reserve(coded.size());
+        if (place.size() == coded.size() && !coded.empty())
+        {
+            std::memcpy(place.data(), coded.data(), coded.size());
+        }
+        out = place;
+        return true;
+    }
+    const cont::Span<u8> room = overflow ? spill.subspan(spilled) : text.subspan(used);
+    usize decoded = 0U;
+    if (!http_huffman_decode(coded, room, decoded))
+    {
+        return false;
+    }
+    if (decoded <= room.size())
+    {
+        out = reserve(decoded);
+        return true;
+    }
+    const cont::Span<u8> place = reserve(decoded); // the room ran out: on to the spill, if it holds this
+    if (place.size() == decoded && decoded != 0U)
+    {
+        (void)http_huffman_decode(coded, place, decoded);
+    }
+    out = place;
+    return true;
+}
+
+void HttpFieldOutput::table_name(const HttpFieldTable& table, const HttpFieldTable::Entry& entry,
+                                 cont::ConstSpan<u8>& name) noexcept
+{
+    const cont::Span<u8> place = reserve(entry.name_bytes);
+    if (place.size() == entry.name_bytes)
+    {
+        table.copy_name(entry, place);
+    }
+    name = place;
+}
+
+void HttpFieldOutput::table_value(const HttpFieldTable& table, const HttpFieldTable::Entry& entry,
+                                  cont::ConstSpan<u8>& value) noexcept
+{
+    const cont::Span<u8> place = reserve(entry.value_bytes);
+    if (place.size() == entry.value_bytes)
+    {
+        table.copy_value(entry, place);
+    }
+    value = place;
+}
+
+void HttpFieldOutput::emit(cont::ConstSpan<u8> name, cont::ConstSpan<u8> value, bool never_index) noexcept
+{
+    if (count == fields.size())
+    {
+        overflow = true;
+    }
+    if (!overflow)
+    {
+        fields[count] = HttpField{name, value, never_index};
+        ++count;
+    }
 }
 
 } // namespace crd::net

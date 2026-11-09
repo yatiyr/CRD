@@ -48,11 +48,6 @@ template <usize N> [[nodiscard]] cont::ConstSpan<u8> text(const char (&literal)[
     return cont::ConstSpan<u8>(reinterpret_cast<const u8*>(literal), N - 1U);
 }
 
-[[nodiscard]] bool same_bytes(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
-{
-    return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
-}
-
 [[nodiscard]] bool named(cont::ConstSpan<u8> name, cont::ConstSpan<u8> known) noexcept
 {
     return http_same_ignoring_case(name, known);
@@ -273,7 +268,7 @@ struct RequestLine
 
 [[nodiscard]] bool is_http_version(cont::ConstSpan<u8> version) noexcept
 {
-    return version.size() == kVersionBytes && same_bytes(version.first(5U), text("HTTP/")) && version[5U] >= '0' &&
+    return version.size() == kVersionBytes && http_equal(version.first(5U), text("HTTP/")) && version[5U] >= '0' &&
            version[5U] <= '9' && version[6U] == '.' && version[7U] >= '0' && version[7U] <= '9';
 }
 
@@ -356,7 +351,7 @@ struct RequestFields
     }
     if (named(name, text("sec-websocket-version")))
     {
-        out.version = first_time(out.seen, kSeenVersion) && same_bytes(value, text("13"));
+        out.version = first_time(out.seen, kSeenVersion) && http_equal(value, text("13"));
         return 0U;
     }
     if (named(name, text("upgrade")))
@@ -377,7 +372,7 @@ struct RequestFields
                                        for (usize index = 0U; index < out.protocol && index < config.protocols.size();
                                             ++index)
                                        {
-                                           if (same_bytes(element, config.protocols[index]))
+                                           if (http_equal(element, config.protocols[index]))
                                            {
                                                out.protocol = index;
                                            }
@@ -392,7 +387,7 @@ struct RequestFields
     }
     if (named(name, text("content-length")))
     {
-        return (first_time(out.seen, kSeenLength) && same_bytes(value, text("0"))) ? 0U : kStatusBad;
+        return (first_time(out.seen, kSeenLength) && http_equal(value, text("0"))) ? 0U : kStatusBad;
     }
     return 0U;
 }
@@ -407,11 +402,11 @@ struct RequestFields
     {
         return kStatusBad;
     }
-    if (!same_bytes(request.version, text("HTTP/1.1")))
+    if (!http_equal(request.version, text("HTTP/1.1")))
     {
         return kStatusVersion;
     }
-    if (!same_bytes(request.method, text("GET")))
+    if (!http_equal(request.method, text("GET")))
     {
         return kStatusMethod;
     }
@@ -443,7 +438,7 @@ struct RequestFields
     {
         return kStatusBad;
     }
-    if (!same_bytes(path, config.path))
+    if (!http_equal(path, config.path))
     {
         return kStatusNotFound;
     }
@@ -504,7 +499,7 @@ struct RequestFields
         }
         else if (named(name, text("sec-websocket-accept")))
         {
-            if (!first_time(seen, kSeenAccept) || !same_bytes(value, accept))
+            if (!first_time(seen, kSeenAccept) || !http_equal(value, accept))
             {
                 return false;
             }
@@ -516,7 +511,7 @@ struct RequestFields
         else if (named(name, text("sec-websocket-protocol")))
         {
             usize index = 0U;
-            while (index < config.protocols.size() && !same_bytes(value, config.protocols[index]))
+            while (index < config.protocols.size() && !http_equal(value, config.protocols[index]))
             {
                 ++index;
             }

@@ -41,69 +41,12 @@ inline constexpr u64 kQpackEncoderStreamError = 0x201U;
 inline constexpr u64 kQpackDecoderStreamError = 0x202U;
 inline constexpr u64 kHttp3ExcessiveLoad = 0x107U;
 
-inline constexpr u32 kQpackMaxTableCapacity = 1U << 20U; // the most this implementation offers or uses
+inline constexpr u32 kQpackMaxTableCapacity = kHttpMaxTableCapacity;
 inline constexpr u32 kQpackMaxBlockedStreams = 4096U;
 inline constexpr u32 kQpackMaxSections = 4096U;
 inline constexpr u32 kQpackMinInstructionBytes = 64U;
 inline constexpr u32 kQpackMaxInstructionBytes = 1U << 22U;
 inline constexpr u32 kQpackStaticEntries = 99U;
-
-// The dynamic table both directions share the shape of.
-class QpackTable
-{
-public:
-    struct Entry
-    {
-        u32 at = 0U; // where the name starts in the byte ring, the value following it
-        u32 name_bytes = 0U;
-        u32 value_bytes = 0U;
-    };
-
-    [[nodiscard]] bool init(memory::IAllocator& allocator, u32 max_capacity) noexcept;
-    void release(memory::IAllocator& allocator) noexcept;
-
-    [[nodiscard]] u32 capacity() const noexcept { return m_capacity; }
-    [[nodiscard]] u32 max_capacity() const noexcept { return m_max_capacity; }
-    [[nodiscard]] u32 size() const noexcept { return m_size; } // RFC 9204 section 3.2.1's
-    [[nodiscard]] u64 inserted() const noexcept { return m_inserted; }
-    [[nodiscard]] u64 dropped() const noexcept { return m_dropped; }
-    [[nodiscard]] bool live(u64 absolute) const noexcept { return absolute >= m_dropped && absolute < m_inserted; }
-    // Of a live entry.
-    [[nodiscard]] const Entry& entry(u64 absolute) const noexcept;
-
-    // Lowers or raises the capacity (at most max_capacity()), evicting what no longer fits.
-    void set_capacity(u32 capacity) noexcept;
-    // Evicts the oldest entries until one of `entry_bytes` (at most the capacity) fits.
-    void make_room(usize entry_bytes) noexcept;
-
-    // Appends an entry after make_room(); `source` is a copy of an entry, possibly just evicted.
-    void append(cont::ConstSpan<u8> name, cont::ConstSpan<u8> value) noexcept;
-    void append_named(Entry source, cont::ConstSpan<u8> value) noexcept;
-    void append_copy(Entry source) noexcept;
-
-    void copy_name(const Entry& entry, cont::Span<u8> out) const noexcept;
-    void copy_value(const Entry& entry, cont::Span<u8> out) const noexcept;
-    [[nodiscard]] bool name_is(const Entry& entry, cont::ConstSpan<u8> name) const noexcept;
-    [[nodiscard]] bool value_is(const Entry& entry, cont::ConstSpan<u8> value) const noexcept;
-
-private:
-    void write(cont::ConstSpan<u8> bytes) noexcept;
-    // Copies bytes of the ring to the tail in rising order.
-    void write_within(u32 at, u32 bytes) noexcept;
-    void read(u32 at, cont::Span<u8> out) const noexcept;
-    [[nodiscard]] bool equals(u32 at, cont::ConstSpan<u8> bytes) const noexcept;
-    void push(u32 at, u32 name_bytes, u32 value_bytes) noexcept;
-
-    u8* m_bytes = nullptr;
-    Entry* m_entries = nullptr;
-    u32 m_max_capacity = 0U;
-    u32 m_max_entries = 0U;
-    u32 m_capacity = 0U;
-    u32 m_size = 0U;
-    u32 m_tail = 0U;
-    u64 m_inserted = 0U;
-    u64 m_dropped = 0U;
-};
 
 struct QpackDecoderConfig
 {
@@ -154,7 +97,7 @@ public:
 
     [[nodiscard]] u64 error() const noexcept { return m_error; } // 0 for none
     [[nodiscard]] u32 blocked() const noexcept { return m_blocked_count; }
-    [[nodiscard]] const QpackTable& table() const noexcept { return m_table; }
+    [[nodiscard]] const HttpFieldTable& table() const noexcept { return m_table; }
 
 private:
     struct Blocked
@@ -186,7 +129,7 @@ private:
 
     memory::IAllocator* m_allocator = nullptr;
     QpackDecoderConfig m_config;
-    QpackTable m_table;
+    HttpFieldTable m_table;
     u8* m_partial = nullptr; // an instruction arriving in parts
     usize m_partial_bytes = 0U;
     usize m_partial_capacity = 0U;
@@ -234,7 +177,7 @@ public:
     [[nodiscard]] usize take_instructions(cont::Span<u8> out) noexcept;
 
     [[nodiscard]] u64 error() const noexcept { return m_error; } // 0 for none
-    [[nodiscard]] const QpackTable& table() const noexcept { return m_table; }
+    [[nodiscard]] const HttpFieldTable& table() const noexcept { return m_table; }
     [[nodiscard]] u64 known_received() const noexcept { return m_known_received; }
     [[nodiscard]] u32 outstanding() const noexcept { return m_section_count; }
 
@@ -261,8 +204,6 @@ private:
     [[nodiscard]] bool usable(u64 absolute, const Work& work) const noexcept;
     // Duplicates the entry `absolute` if it is close to eviction; `absolute` becomes the copy if it may be referenced.
     void refresh(u64& absolute, const Work& work) noexcept;
-    [[nodiscard]] bool find_field(const HttpField& field, u64& absolute) const noexcept;
-    [[nodiscard]] bool find_name(cont::ConstSpan<u8> name, u64& absolute) const noexcept;
     [[nodiscard]] bool seen_before(const HttpField& field) noexcept;
     [[nodiscard]] bool insert(const HttpField& field, i32 static_name, const Work& work) noexcept;
     [[nodiscard]] bool room_for(usize entry_bytes, const Work& work) const noexcept;
@@ -274,7 +215,7 @@ private:
 
     memory::IAllocator* m_allocator = nullptr;
     QpackEncoderConfig m_config;
-    QpackTable m_table;
+    HttpFieldTable m_table;
     Section* m_sections = nullptr; // oldest first
     u32 m_section_count = 0U;
     u8* m_out = nullptr;

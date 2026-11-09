@@ -19,11 +19,6 @@ using crd::net::testing::Text;
 using crd::net::testing::slice;
 using namespace crd::net::testing;
 
-ConstSpan<u8> view(std::string_view text)
-{
-    return ConstSpan<u8>(reinterpret_cast<const u8*>(text.data()), text.size());
-}
-
 Text bytes_of_hex(const char* hex)
 {
     Text out;

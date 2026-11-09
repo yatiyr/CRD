@@ -49,11 +49,6 @@ template <usize N> [[nodiscard]] cont::ConstSpan<u8> text_of(const char (&text)[
     return cont::ConstSpan<u8>(reinterpret_cast<const u8*>(text), N - 1U);
 }
 
-[[nodiscard]] bool same(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
-{
-    return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
-}
-
 [[nodiscard]] u64 min_of(u64 a, u64 b) noexcept
 {
     return (a < b) ? a : b;
@@ -720,12 +715,12 @@ bool WebTransport::on_request(const Http3Event& in, WtEvent& event) noexcept
         return true;
     }
     Session* const session =
-        (same(in.info.scheme, text_of("https")) && origin_allowed(in.fields) && admits(legacy))
+        (http_equal(in.info.scheme, text_of("https")) && origin_allowed(in.fields) && admits(legacy))
             ? claim_session(in.stream, legacy)
             : nullptr;
     if (session == nullptr)
     {
-        if (!same(in.info.scheme, text_of("https")))
+        if (!http_equal(in.info.scheme, text_of("https")))
         {
             static_cast<void>(m_http3->cancel(in.stream, kH3MessageError));
         }
@@ -753,7 +748,7 @@ bool WebTransport::origin_allowed(cont::ConstSpan<HttpField> fields) const noexc
     const HttpField* found = nullptr;
     for (const HttpField& field : fields)
     {
-        if (same(field.name, text_of("origin")))
+        if (http_equal(field.name, text_of("origin")))
         {
             if (found != nullptr)
             {
@@ -770,7 +765,7 @@ bool WebTransport::retain_offer(Session& session, cont::ConstSpan<HttpField> fie
     usize size = 0U;
     for (const HttpField& field : fields)
     {
-        if (!same(field.name, text_of("wt-available-protocols")))
+        if (!http_equal(field.name, text_of("wt-available-protocols")))
         {
             continue;
         }
@@ -811,7 +806,7 @@ bool WebTransport::read_choice(Session& session, cont::ConstSpan<HttpField> fiel
     usize instances = 0U;
     for (const HttpField& field : fields)
     {
-        if (same(field.name, text_of("wt-protocol")))
+        if (http_equal(field.name, text_of("wt-protocol")))
         {
             found = &field;
             ++instances;
@@ -1510,7 +1505,7 @@ Http3Error WebTransport::connect(cont::ConstSpan<HttpField> fields, u64& session
     HttpMessageInfo info;
     bool legacy = false;
     if (m_side != crypto::QuicSide::Client || !http_check_request(fields, info) || !info.extended ||
-        !http3_wt_token(info.protocol, legacy) || !same(info.scheme, text_of("https")))
+        !http3_wt_token(info.protocol, legacy) || !http_equal(info.scheme, text_of("https")))
     {
         return Http3Error::Invalid;
     }
@@ -1578,7 +1573,7 @@ Http3Error WebTransport::accept(u64 session, cont::ConstSpan<HttpField> fields, 
         const cont::Span<u8> room(entry, sizeof(entry));
         for (usize at = 0U; !listed && wt_next_protocol(offered, at, room, entry_bytes);)
         {
-            listed = same(cont::ConstSpan<u8>(entry, (entry_bytes <= sizeof(entry)) ? entry_bytes : 0U), protocol);
+            listed = http_equal(cont::ConstSpan<u8>(entry, (entry_bytes <= sizeof(entry)) ? entry_bytes : 0U), protocol);
         }
         if (!listed)
         {

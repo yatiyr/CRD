@@ -71,16 +71,6 @@ void put_int(Text& out, u32 flags, u32 prefix, u64 value)
     out.push_back(static_cast<char>(value));
 }
 
-ConstSpan<u8> view(std::string_view text)
-{
-    return ConstSpan<u8>(reinterpret_cast<const u8*>(text.data()), text.size());
-}
-
-Text text_of(ConstSpan<u8> bytes)
-{
-    return Text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-}
-
 Text short_text(Input& in)
 {
     const usize length = in.byte() % 24U;

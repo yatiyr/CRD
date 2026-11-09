@@ -7,6 +7,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
+#include <crd/net/http_fields.hpp>
 
 #include <cstdio>
 #include <string_view>
@@ -53,9 +54,49 @@ inline Text number_text(u64 value)
     return Text(digits, static_cast<usize>(length));
 }
 
-inline cont::ConstSpan<u8> text_view(std::string_view text)
+// Lower-case hex digits, spaces ignored, as bytes.
+inline Text hex(const char* text)
 {
-    return cont::ConstSpan<u8>(reinterpret_cast<const u8*>(text.data()), text.size());
+    Text out;
+    u32 held = 0U;
+    bool odd = false;
+    for (const char* at = text; *at != '\0'; ++at)
+    {
+        if (*at == ' ')
+        {
+            continue;
+        }
+        const u32 digit = (*at >= 'a') ? static_cast<u32>(*at - 'a') + 10U : static_cast<u32>(*at - '0');
+        if (odd)
+        {
+            out.push_back(static_cast<char>((held << 4U) | digit));
+        }
+        held = digit;
+        odd = !odd;
+    }
+    return out;
+}
+
+inline cont::ConstSpan<u8> view(std::string_view bytes)
+{
+    return cont::ConstSpan<u8>(reinterpret_cast<const u8*>(bytes.data()), bytes.size());
+}
+
+inline Text text_of(cont::ConstSpan<u8> bytes)
+{
+    return Text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+
+// A section's fields in one string, "name=value" joined by newlines; '!' before a never-indexed one.
+inline Text joined(cont::ConstSpan<HttpField> fields)
+{
+    Text out;
+    for (const HttpField& field : fields)
+    {
+        out += field.never_index ? "!" : "";
+        out += text_of(field.name) + "=" + text_of(field.value) + "\n";
+    }
+    return out;
 }
 
 } // namespace crd::net::testing

@@ -22,55 +22,14 @@ using crd::containers::ConstSpan;
 using crd::containers::Span;
 using crd::net::testing::CountingAllocator;
 using crd::net::testing::erase_front;
+using crd::net::testing::hex;
+using crd::net::testing::joined;
 using crd::net::testing::number_text;
 using crd::net::testing::slice;
 using crd::net::testing::Text;
 using crd::net::testing::TextPair;
+using crd::net::testing::view;
 using namespace crd::net::testing;
-
-Text hex(const char* text)
-{
-    Text out;
-    u32 held = 0U;
-    bool odd = false;
-    for (const char* at = text; *at != '\0'; ++at)
-    {
-        if (*at == ' ')
-        {
-            continue;
-        }
-        const u32 digit = (*at >= 'a') ? static_cast<u32>(*at - 'a') + 10U : static_cast<u32>(*at - '0');
-        if (odd)
-        {
-            out.push_back(static_cast<char>((held << 4U) | digit));
-        }
-        held = digit;
-        odd = !odd;
-    }
-    return out;
-}
-
-ConstSpan<u8> view(std::string_view bytes)
-{
-    return ConstSpan<u8>(reinterpret_cast<const u8*>(bytes.data()), bytes.size());
-}
-
-Text text_of(ConstSpan<u8> bytes)
-{
-    return Text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-}
-
-// A section's fields in one string, "name=value" joined by newlines; '!' before a never-indexed one.
-Text joined(ConstSpan<HttpField> fields)
-{
-    Text out;
-    for (const HttpField& field : fields)
-    {
-        out += field.never_index ? "!" : "";
-        out += text_of(field.name) + "=" + text_of(field.value) + "\n";
-    }
-    return out;
-}
 
 struct Decoder
 {
