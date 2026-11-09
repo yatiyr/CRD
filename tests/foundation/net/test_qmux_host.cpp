@@ -536,6 +536,7 @@ TEST_CASE("QmuxHost: a socket that fails a write ends its connection", "[net][qm
     hosts.establish(handle);
     hosts.client_poller.link_of(handle.slot)->client.write_error = SocketError::Reset;
     QmuxConnection* const connection = hosts.client->connection(handle);
+    REQUIRE(connection != nullptr);
     connection->ping();
     hosts.client->wake(handle);
     static_cast<void>(hosts.client->poll(0U));
@@ -567,6 +568,7 @@ TEST_CASE("QmuxHost: back-pressure waits for the socket, without a byte lost or 
     PipeLink* const link = hosts.client_poller.link_of(handle.slot);
     link->to_server.limit = 0U;
     QmuxConnection* const connection = hosts.client->connection(handle);
+    REQUIRE(connection != nullptr);
     connection->ping();
     hosts.client->wake(handle);
     static_cast<void>(hosts.client->poll(0U));
@@ -773,6 +775,7 @@ TEST_CASE("QmuxHost: a turn writes one connection's share and runs again at once
     const QuicHandle handle = hosts.connect();
     hosts.establish(handle);
     QmuxConnection* const connection = hosts.client->connection(handle);
+    REQUIRE(connection != nullptr);
     u64 id = 0U;
     REQUIRE(connection->streams().open(true, id) == QuicStreamError::None);
     u64 written = 0U;

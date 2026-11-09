@@ -5,7 +5,7 @@
 
 Row: [4.2a](../ROADMAP.md#slice-4.2a). Design: [S58](../design/network-foundation.md#http3-interop).
 
-CI first: run 42589388858 (bea6e470) failed `crd-repository-tools` everywhere: `crd-fuzz-net-http3` had no `scripts/fuzz.py` entry, fixed in e72ea284. Its `qpack.cpp` narrowing was already fixed by f3ba9dc7. `airy.hpp` on win-debug belongs to hesap-special's owner.
+CI first: run 42589388858 (bea6e470) failed `crd-repository-tools` everywhere: `crd-fuzz-net-http3` had no `scripts/fuzz.py` entry, fixed in e72ea284. Its `qpack.cpp` narrowing was already fixed by f3ba9dc7. `airy.hpp` and `bessel.hpp` belong to hesap-special's owner. linux-gcc-relwithdebinfo's link-time null dereference through `connection->ping()` in test_qmux_host.cpp: three more unchecked connections, now checked; that lane builds and links `crd-net-tests` again.
 
 ## What landed
 
