@@ -1014,12 +1014,12 @@
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n02",
         "read": "2026-10-27",
-        "verified": false
+        "verified": true
       },
       "review": "2027-10-27",
       "evidence": [],
       "deprecation": null,
-      "note": "WebTransport over HTTP/3 requires it (N02); the RFC number is from knowledge."
+      "note": "WebTransport over HTTP/3 requires it (N02); RFC 9297 read in full for 4.2a's HTTP/3 slice (2026-11-09)."
     },
     {
       "id": "webtransport.h3",
