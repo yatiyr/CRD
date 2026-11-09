@@ -1,8 +1,8 @@
 /* crd-net interoperability test (4.2a) -- the exchange of http_exchange.h over nghttp2 and real TCP on the loopback,
  * with prior knowledge; crd-http2-peer runs the same over Http2Connection and http2_interop.py compares the reports.
  *
- * Usage: crd-nghttp2-peer --role client|server --port N [--max-streams N] [--window N] [--frame-bytes N] [--padding 1]
- *                         and the options of http_exchange.h
+ * Usage: crd-nghttp2-peer --role client|server --port N [--max-streams N] [--window N] [--connection-window N]
+ *                         [--frame-bytes N] [--padding 1] and the options of http_exchange.h
  *
  *   padding  frames carry nghttp2's padding, up to 64 bytes on each */
 #define _POSIX_C_SOURCE 200809L
@@ -27,7 +27,6 @@
 #define MAX_NV 12U
 #define NUMBER_TEXT 24U
 #define PADDING_STEP 64U
-#define CONNECTION_WINDOW (1 << 24)
 
 typedef struct
 {
@@ -56,6 +55,7 @@ typedef struct
     int              padding;
     uint32_t         max_streams;
     uint32_t         window;
+    uint32_t         connection_window;
     uint32_t         frame_bytes;
     int              settings_seen;
     int              opened_all;
@@ -610,7 +610,8 @@ static int make_session(peer_t* peer)
     const size_t                  count = (sizeof(settings) / sizeof(settings[0])) - 1U;
     code = nghttp2_submit_settings(peer->session, NGHTTP2_FLAG_NONE, first, count);
     return code != 0 ? code
-                     : nghttp2_session_set_local_window_size(peer->session, NGHTTP2_FLAG_NONE, 0, CONNECTION_WINDOW);
+                     : nghttp2_session_set_local_window_size(peer->session, NGHTTP2_FLAG_NONE, 0,
+                                                             (int32_t)peer->connection_window);
 }
 
 static int set_socket(int fd)
@@ -830,8 +831,8 @@ static int run(peer_t* peer)
 
 static int usage(void)
 {
-    fputs("usage: crd-nghttp2-peer --role client|server --port N [--max-streams N] [--window N] [--frame-bytes N] "
-          "[--padding 1] and the options of http_exchange.h\n",
+    fputs("usage: crd-nghttp2-peer --role client|server --port N [--max-streams N] [--window N] "
+          "[--connection-window N] [--frame-bytes N] [--padding 1] and the options of http_exchange.h\n",
           stderr);
     return 2;
 }
@@ -844,6 +845,7 @@ int main(int argc, char** argv)
     httpx_default_options(&peer.options);
     peer.max_streams = 64U;
     peer.window      = 1U << 20U;
+    peer.connection_window = 1U << 24U;
     peer.frame_bytes = 16384U;
     for (int at = 1; at + 1 < argc; at += 2)
     {
@@ -867,6 +869,10 @@ int main(int argc, char** argv)
         else if (strcmp(name, "--window") == 0)
         {
             peer.window = size;
+        }
+        else if (strcmp(name, "--connection-window") == 0)
+        {
+            peer.connection_window = size;
         }
         else if (strcmp(name, "--frame-bytes") == 0)
         {

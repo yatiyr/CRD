@@ -1,12 +1,13 @@
 // crd-net interoperability test (4.2a) -- HTTP/2 over crd-net's Http2Connection and real TCP on the loopback, with
 // prior knowledge. http2_interop.py runs it against crd-nghttp2-peer and h2spec.
 //
-// Usage: crd-http2-peer --role client|server --port N [--h2spec 1] [--max-streams N] [--window N] [--frame-bytes N]
-//                       and the options of http_exchange.h
+// Usage: crd-http2-peer --role client|server --port N [--h2spec 1] [--max-streams N] [--window N]
+//                       [--connection-window N] [--frame-bytes N] and the options of http_exchange.h
 //
 //   h2spec       a server of many connections that answers every request and runs until it is killed
 //   max-streams  SETTINGS_MAX_CONCURRENT_STREAMS
 //   window       SETTINGS_INITIAL_WINDOW_SIZE
+//   connection-window  what the connection's receive window is, at least 65535
 //   frame-bytes  SETTINGS_MAX_FRAME_SIZE
 //
 // The report of a connection goes to standard output when it has ended, the same names from both programs.
@@ -53,6 +54,7 @@ struct Options
     bool h2spec = false;
     u32 max_streams = 64U;
     u32 window = 1U << 20U;
+    u32 connection_window = 1U << 24U;
     u32 frame_bytes = kHttp2MinFrameBytes;
 };
 
@@ -839,6 +841,7 @@ Http2Config connection_config(const Options& options) noexcept
     config.field_bytes = static_cast<u32>(options.exchange.field_limit);
     config.streams = options.max_streams;
     config.stream_window = options.window;
+    config.connection_window = options.connection_window;
     config.frame_bytes = options.frame_bytes;
     config.table_bytes = static_cast<u32>(options.exchange.table);
     config.encoder_table_bytes = static_cast<u32>(options.exchange.table);
@@ -1011,7 +1014,7 @@ int run(memory::IAllocator& allocator, const Options& options)
 int usage()
 {
     std::fputs("usage: crd-http2-peer --role client|server --port N [--h2spec 1] [--max-streams N] [--window N] "
-               "[--frame-bytes N] and the options of http_exchange.h\n",
+               "[--connection-window N] [--frame-bytes N] and the options of http_exchange.h\n",
                stderr);
     return 2;
 }
@@ -1047,6 +1050,10 @@ int main(int argc, char** argv)
         else if (std::strcmp(name, "--window") == 0)
         {
             options.window = static_cast<u32>(number);
+        }
+        else if (std::strcmp(name, "--connection-window") == 0)
+        {
+            options.connection_window = static_cast<u32>(number);
         }
         else if (std::strcmp(name, "--frame-bytes") == 0)
         {

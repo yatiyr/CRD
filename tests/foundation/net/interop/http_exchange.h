@@ -2,12 +2,12 @@
  * --http3 1, and crd-http2-peer and crd-nghttp2-peer over TCP: its options and the fields it carries, in one place so
  * that the programs read and write the same thing. Plain C: the ngtcp2 and nghttp2 peers are C programs.
  *
- * A client opens `requests` requests, the first `tunnels` of them Extended CONNECT tunnels (`:protocol` cerid-tunnel). A
- * request carries `request-bytes` bytes of body, a response `response-bytes`, each in the pattern of its stream, and
+ * A client opens `requests` requests, the first `tunnels` of them Extended CONNECT tunnels (`:protocol` cerid-tunnel).
+ * A request carries `request-bytes` bytes of body, a response `response-bytes`, each in the pattern of its stream, and
  * the index of a stream is its ID over four ((ID - 1) / 2 on HTTP/2). Every message carries a field that repeats, so a
  * dynamic table has something to index, its index, and `field-bytes` bytes of filler. A server answers when the request
- * has ended, a tunnel as soon as it opens, its body still waiting for the request's end. Both ends check every field and
- * every byte.
+ * has ended, a tunnel as soon as it opens, its body still waiting for the request's end. Both ends check every field
+ * and every byte.
  *
  *   table, blocked  the QPACK or HPACK table capacity, and the blocked streams (QPACK), each end allows the other
  *   field-limit     the largest field section each end takes

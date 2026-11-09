@@ -9,9 +9,9 @@ reports to each other.
 
 Cases: no body, small bodies, bodies far over the windows, more requests than the stream limit lets open at once;
 HPACK's table off, small enough to evict and large; field sections that need CONTINUATION and one over the peer's
-limit; small
-windows and large frames; padding; trailers; 103; Extended CONNECT tunnels; GOAWAY in two steps, rejecting requests and
-from a client; each end cancelling; and a path that hands the bytes on a few at a time.
+limit; small stream and connection windows and large frames; padding; trailers; 103; Extended CONNECT tunnels; GOAWAY
+in two steps, rejecting requests and from a client; each end cancelling; and a path that hands the bytes on a few at a
+time.
 """
 import argparse
 import subprocess
@@ -38,8 +38,9 @@ def brief(reports):
 
 class Case:
     def __init__(self, cerid, peer, cerid_is_client, requests=1, request_bytes=0, response_bytes=4096, tunnels=0,
-                 table=4096, field_bytes=0, field_limit=16384, window=1 << 20, frame_bytes=16384, padding=False,
-                 trailers=False, interim=False, goaway=None, cancel=None, over_limit=False, chop=None, max_streams=64):
+                 table=4096, field_bytes=0, field_limit=16384, window=1 << 20, connection_window=1 << 24,
+                 frame_bytes=16384, padding=False, trailers=False, interim=False, goaway=None, cancel=None,
+                 over_limit=False, chop=None, max_streams=64):
         self.cerid = cerid
         self.peer = peer
         self.cerid_is_client = cerid_is_client
@@ -51,6 +52,7 @@ class Case:
         self.field_bytes = field_bytes
         self.field_limit = field_limit
         self.window = window
+        self.connection_window = connection_window
         self.frame_bytes = frame_bytes
         self.padding = padding
         self.trailers = trailers
@@ -63,7 +65,8 @@ class Case:
 
     def command(self, program, role, port):
         command = [program, '--role', role, '--port', str(port), '--max-streams', str(self.max_streams),
-                   '--window', str(self.window), '--frame-bytes', str(self.frame_bytes),
+                   '--window', str(self.window), '--connection-window', str(self.connection_window),
+                   '--frame-bytes', str(self.frame_bytes),
                    '--requests', str(self.requests), '--request-bytes', str(self.request_bytes),
                    '--response-bytes', str(self.response_bytes), '--tunnels', str(self.tunnels),
                    '--table', str(self.table), '--field-bytes', str(self.field_bytes),
@@ -84,6 +87,7 @@ class Case:
                             ('interim', self.interim), ('goaway', self.goaway), ('cancel', self.cancel),
                             ('over-limit', self.over_limit), ('padding', self.padding), ('chop', self.chop),
                             ('window', self.window != 1 << 20 and self.window),
+                            ('connection-window', self.connection_window != 1 << 24 and self.connection_window),
                             ('frame', self.frame_bytes != 16384 and self.frame_bytes),
                             ('max-streams', self.max_streams != 64 and self.max_streams)):
             if value:
@@ -221,6 +225,7 @@ def cases(cerid, peer):
         yield case(requests=4, over_limit=True, field_limit=8192)
         yield case(requests=4, request_bytes=256 << 10, response_bytes=256 << 10, window=1024)
         yield case(requests=4, request_bytes=256 << 10, response_bytes=256 << 10, window=65535)
+        yield case(requests=4, request_bytes=1 << 20, response_bytes=1 << 20, connection_window=65535)
         yield case(requests=2, request_bytes=4 << 20, response_bytes=4 << 20, frame_bytes=1 << 20, window=1 << 22)
         yield case(requests=8, request_bytes=64 << 10, response_bytes=64 << 10, padding=True)
         yield case(requests=8, request_bytes=2048, trailers=True)

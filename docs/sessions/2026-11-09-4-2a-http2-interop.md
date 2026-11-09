@@ -22,8 +22,8 @@ CI first: every failed job read in run 42670207777 (0ef76019) is the other owner
 ## Evidence
 
 - **h2spec**: 147 of 147 with `--strict`, none skipped, eight runs in a row. `ACCEPTED` in the driver is empty: nothing is excused.
-- **nghttp2**: 56 of 56, each way round: bodies from none to 8 MiB, 256 requests through 8 open streams, HPACK table 0, 256, 4096, 64 KiB (inserts counted off Cerid's tables), sections needing CONTINUATION and one over the limit (a Cerid client refuses it, a Cerid server answers 431), 1024-byte and 64 KiB windows, 1 MiB frames, nghttp2's padding, trailers, 103, Extended CONNECT tunnels, GOAWAY in two steps, rejecting and from a client, each end cancelling, and the chopping path at pieces of 48 and 7 bytes.
-- **Teeth**: HPACK's dynamic index one off fails the table case both ways; the connection window left uncharged is FLOW_CONTROL_ERROR from nghttp2.
+- **nghttp2**: 58 of 58, each way round: bodies from none to 8 MiB, 256 requests through 8 open streams, HPACK table 0, 256, 4096, 64 KiB (inserts counted off Cerid's tables), sections needing CONTINUATION and one over the limit (a Cerid client refuses it, a Cerid server answers 431), 1024-byte and 64 KiB stream windows, a 64 KiB connection window that binds, 1 MiB frames, nghttp2's padding, trailers, 103, Extended CONNECT tunnels, GOAWAY in two steps, rejecting and from a client, each end cancelling, and the chopping path at pieces of 48 and 7 bytes.
+- **Teeth**: HPACK's dynamic index one off fails the table case both ways; the connection window left uncharged fails the case where it binds both ways (nghttp2 stops at its window: the other end never completes).
 - `crd-net-tests [http2]` 41 cases, 1,638 assertions on linux-gcc-public-checks. `crd-net-http3-interop-nghttp3` still passes through the renamed exchange. Validators and strict analysis clean.
 
 ## Next
