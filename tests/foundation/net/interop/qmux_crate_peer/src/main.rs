@@ -1,6 +1,10 @@
 //! crd-qmux-crate-peer: a QMux endpoint over the `qmux` crate and rustls, real TCP on the loopback, the counterpart of
 //! crd-qmux-peer (crd-net). qmux_interop.py runs one of each and reads both reports.
 //!
+//! `--transport` picks what carries QMux: `tls` (the default), `ws` (WebSocket over HTTP/1.1 inside TLS, RFC 6455) or
+//! `h2` (WebSocket over HTTP/2 with prior knowledge, RFC 8441: the `h2` crate's extended CONNECT, tokio-tungstenite on
+//! the stream, `connections` tunnels at once on one connection).
+//!
 //! The application is interop_echo.hpp's, byte for byte. This crate does not expose a stream's ID, so a stream a peer
 //! opened is known by its pattern: its first bytes name exactly one of the IDs the run can use.
 //!
@@ -12,18 +16,21 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
+use h2::ext::Protocol;
 use qmux::tls;
 use qmux::ws;
-use qmux::ws::tokio_tungstenite::client_async;
 use qmux::ws::tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use qmux::ws::tokio_tungstenite::tungstenite::http::HeaderValue;
-use qmux::ws::tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
+use qmux::ws::tokio_tungstenite::tungstenite::http::header::{SEC_WEBSOCKET_PROTOCOL, SEC_WEBSOCKET_VERSION};
+use qmux::ws::tokio_tungstenite::tungstenite::http::{HeaderValue, Method, Request, Response, StatusCode};
+use qmux::ws::tokio_tungstenite::tungstenite::protocol::Role;
+use qmux::ws::tokio_tungstenite::{WebSocketStream, client_async};
 use qmux::{Config, Error, RecvStream, SendStream, Session, Version};
 use rcgen::{CertificateParams, KeyPair, PKCS_ED25519};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, aws_lc_rs, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, ServerConfig, SignatureScheme};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
@@ -42,6 +49,14 @@ const RESET_STREAM_BYTES: u64 = 4096;
 const RESET_CODE: u32 = 7;
 const STOP_CODE: u32 = 9;
 const HEAD_BYTES: usize = 8;
+const WEBSOCKET: &str = "websocket";
+const WEBSOCKET_VERSION: &str = "13";
+const BRIDGE_BYTES: usize = 64 << 10;
+const SETTINGS_POLL: Duration = Duration::from_millis(1);
+// hyper's HTTP/2 windows, which a production endpoint on this crate runs with (the crate's own default is RFC 9113's
+// 65,535 bytes for both).
+const H2_STREAM_WINDOW: u32 = 2 << 20;
+const H2_CONNECTION_WINDOW: u32 = 5 << 20;
 const ED25519_PKCS8_PREFIX: [u8; 16] = [
     0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
 ];
@@ -72,7 +87,7 @@ struct Options {
     hold_ms: u64,
     record_size: u64,
     alpn_version: String,
-    websocket: bool,
+    transport: String,
 }
 
 #[derive(Default)]
@@ -449,7 +464,7 @@ async fn run_connection(session: Session, options: Arc<Options>, number: u64) {
     }
 }
 
-fn report_refused(number: u64, error: &Error) {
+fn report_refused(number: u64, error: &dyn std::fmt::Debug) {
     println!("connection={number}\nestablished=0\nverified=1\nerror={error:?}");
 }
 
@@ -551,7 +566,7 @@ async fn run_client(options: Arc<Options>) {
         .dangerous()
         .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
-    if options.websocket {
+    if options.transport == "ws" {
         run_websocket_client(config, options).await;
         return;
     }
@@ -573,7 +588,7 @@ async fn run_client(options: Arc<Options>) {
 async fn run_websocket_client(mut config: ClientConfig, options: Arc<Options>) {
     config.alpn_protocols = vec![HTTP_11.to_vec()];
     let connector = TlsConnector::from(Arc::new(config));
-    let offered = format!("{}{PROTOCOL}", version_of(&options).prefix());
+    let offered = offered_protocol(&options);
     for number in 1..=options.connections {
         let tcp = TcpStream::connect(("127.0.0.1", options.port)).await.expect("a connection");
         let name = ServerName::try_from(SERVER_NAME).expect("a server name");
@@ -627,7 +642,7 @@ async fn run_server(options: Arc<Options>) {
         .with_no_client_auth()
         .with_single_cert(chain, PrivateKeyDer::Pkcs8(pkcs8.into()))
         .expect("a certificate and its key");
-    if options.websocket {
+    if options.transport == "ws" {
         run_websocket_server(config, options).await;
         return;
     }
@@ -645,6 +660,196 @@ async fn run_server(options: Arc<Options>) {
     }
 }
 
+/// The tunnel's byte stream for tokio-tungstenite: a pipe whose far end two tasks join to the HTTP/2 stream, handing
+/// the receive window back as bytes are taken and writing as the send window allows. The pipe's end is END_STREAM, and
+/// the stream's end or reset is the pipe's.
+fn bridge(mut send: h2::SendStream<Bytes>, mut recv: h2::RecvStream) -> DuplexStream {
+    let (near, far) = tokio::io::duplex(BRIDGE_BYTES);
+    let (mut far_read, mut far_write) = tokio::io::split(far);
+    tokio::spawn(async move {
+        while let Some(Ok(chunk)) = recv.data().await {
+            let _ = recv.flow_control().release_capacity(chunk.len());
+            if far_write.write_all(&chunk).await.is_err() {
+                return;
+            }
+        }
+        let _ = far_write.shutdown().await;
+    });
+    tokio::spawn(async move {
+        let mut buffer = vec![0u8; BRIDGE_BYTES];
+        loop {
+            match far_read.read(&mut buffer).await {
+                Ok(0) | Err(_) => {
+                    let _ = send.send_data(Bytes::new(), true);
+                    return;
+                }
+                Ok(count) => {
+                    if send_all(&mut send, Bytes::copy_from_slice(&buffer[..count])).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    near
+}
+
+async fn send_all(send: &mut h2::SendStream<Bytes>, mut data: Bytes) -> Result<(), h2::Error> {
+    while !data.is_empty() {
+        send.reserve_capacity(data.len());
+        let room = std::future::poll_fn(|context| send.poll_capacity(context))
+            .await
+            .ok_or_else(|| h2::Error::from(h2::Reason::CANCEL))??;
+        let piece = data.split_to(room.min(data.len()));
+        send.send_data(piece, false)?;
+    }
+    Ok(())
+}
+
+fn offered_protocol(options: &Options) -> String {
+    format!("{}{PROTOCOL}", version_of(options).prefix())
+}
+
+/// The WebSocket and the QMux session on a tunnel whose CONNECT was answered 200.
+async fn run_tunnel(io: DuplexStream, role: Role, agreed: &str, options: Arc<Options>, number: u64) {
+    let socket = WebSocketStream::from_raw_socket(io, role, None).await;
+    let upgraded = ws::Upgraded::new(socket).with_alpn(agreed).with_session_config(session_config(&options));
+    let session = if role == Role::Client { upgraded.connect() } else { upgraded.accept() };
+    run_connection(session, options, number).await;
+}
+
+async fn open_tunnel(
+    response: h2::client::ResponseFuture,
+    send: h2::SendStream<Bytes>,
+    options: Arc<Options>,
+    number: u64,
+) {
+    let response = match response.await {
+        Ok(response) => response,
+        Err(error) => return report_refused(number, &error),
+    };
+    if response.status() != StatusCode::OK {
+        return report_refused(number, &format!("status {}", response.status().as_u16()));
+    }
+    let agreed = response.headers().get(SEC_WEBSOCKET_PROTOCOL).and_then(|value| value.to_str().ok());
+    let agreed = agreed.unwrap_or_default().to_string();
+    let recv = response.into_body();
+    run_tunnel(bridge(send, recv), Role::Client, &agreed, options, number).await;
+}
+
+async fn run_h2_client(options: Arc<Options>) {
+    let tcp = TcpStream::connect(("127.0.0.1", options.port)).await.expect("a connection");
+    tcp.set_nodelay(true).expect("no delay");
+    let (send, connection) = h2::client::Builder::new()
+        .initial_window_size(H2_STREAM_WINDOW)
+        .initial_connection_window_size(H2_CONNECTION_WINDOW)
+        .handshake::<_, Bytes>(tcp)
+        .await
+        .expect("an HTTP/2 connection");
+    let driver = tokio::spawn(connection);
+    let mut send = send.ready().await.expect("an HTTP/2 connection");
+    // RFC 8441 section 3: no extended CONNECT before the server's SETTINGS_ENABLE_CONNECT_PROTOCOL.
+    let enabled = tokio::time::timeout(RUN, async {
+        while !send.is_extended_connect_protocol_enabled() {
+            tokio::time::sleep(SETTINGS_POLL).await;
+        }
+    });
+    if enabled.await.is_err() {
+        return report_refused(1, &"the server never enabled extended CONNECT");
+    }
+    let offered = offered_protocol(&options);
+    let mut tunnels = JoinSet::new();
+    for number in 1..=options.connections {
+        let request = Request::builder()
+            .method(Method::CONNECT)
+            .uri(format!("https://{SERVER_NAME}{WEBSOCKET_PATH}"))
+            .header(SEC_WEBSOCKET_VERSION, WEBSOCKET_VERSION)
+            .header(SEC_WEBSOCKET_PROTOCOL, offered.as_str())
+            .extension(Protocol::from(WEBSOCKET))
+            .body(())
+            .expect("a request");
+        match send.send_request(request, false) {
+            Ok((response, stream)) => {
+                tunnels.spawn(open_tunnel(response, stream, options.clone(), number));
+            }
+            Err(error) => report_refused(number, &error),
+        }
+    }
+    while tunnels.join_next().await.is_some() {}
+    // With every handle gone the connection sends what it holds and ends.
+    drop(send);
+    let _ = tokio::time::timeout(CLOSE_GRACE, driver).await;
+}
+
+/// The server's answer to one extended CONNECT: RFC 8441's request, RFC 6455's version and a subprotocol this end
+/// takes, or 400.
+async fn serve_tunnel(
+    request: Request<h2::RecvStream>,
+    mut respond: h2::server::SendResponse<Bytes>,
+    options: Arc<Options>,
+    number: u64,
+) {
+    let offered = offered_protocol(&options);
+    let headers = request.headers();
+    let well_formed = request.method() == Method::CONNECT
+        && request.extensions().get::<Protocol>().is_some_and(|protocol| protocol.as_str() == WEBSOCKET)
+        && request.uri().path() == WEBSOCKET_PATH
+        && headers.get(SEC_WEBSOCKET_VERSION).is_some_and(|value| value == WEBSOCKET_VERSION);
+    let taken = headers
+        .get_all(SEC_WEBSOCKET_PROTOCOL)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|token| token.trim() == offered);
+    if !well_formed || !taken {
+        let refusal = Response::builder().status(StatusCode::BAD_REQUEST).body(()).expect("a response");
+        let _ = respond.send_response(refusal, true);
+        return report_refused(number, &"refused with status 400");
+    }
+    let accepted = Response::builder()
+        .status(StatusCode::OK)
+        .header(SEC_WEBSOCKET_PROTOCOL, offered.as_str())
+        .body(())
+        .expect("a response");
+    let send = match respond.send_response(accepted, false) {
+        Ok(send) => send,
+        Err(error) => return report_refused(number, &error),
+    };
+    run_tunnel(bridge(send, request.into_body()), Role::Server, &offered, options, number).await;
+}
+
+/// One HTTP/2 connection's tunnels: `connections` of them, refused ones among them, then GOAWAY and what the
+/// connection still holds. The client may never hang up (a silent path), so their end is the run's.
+async fn run_h2_server(options: Arc<Options>) {
+    let listener = TcpListener::bind(("127.0.0.1", options.port)).await.expect("a listening socket");
+    println!("port={}", listener.local_addr().expect("its address").port());
+    let (tcp, _) = listener.accept().await.expect("a connection");
+    tcp.set_nodelay(true).expect("no delay");
+    let mut connection = h2::server::Builder::new()
+        .enable_connect_protocol()
+        .initial_window_size(H2_STREAM_WINDOW)
+        .initial_connection_window_size(H2_CONNECTION_WINDOW)
+        .handshake::<_, Bytes>(tcp)
+        .await
+        .expect("an HTTP/2 connection");
+    let mut tunnels = JoinSet::new();
+    let mut number = 0;
+    let mut ended = 0;
+    while ended < options.connections {
+        tokio::select! {
+            accepted = connection.accept() => {
+                let Some(Ok((request, respond))) = accepted else { break };
+                number += 1;
+                tunnels.spawn(serve_tunnel(request, respond, options.clone(), number));
+            }
+            Some(_) = tunnels.join_next(), if !tunnels.is_empty() => ended += 1,
+        }
+    }
+    connection.graceful_shutdown();
+    let _ = tokio::time::timeout(CLOSE_GRACE, std::future::poll_fn(|context| connection.poll_closed(context))).await;
+    while tunnels.join_next().await.is_some() {}
+}
+
 fn parse_hex(text: &str) -> Vec<u8> {
     let byte = |at: usize| u8::from_str_radix(&text[at * 2..at * 2 + 2], 16).expect("a hexadecimal seed");
     (0..text.len() / 2).map(byte).collect()
@@ -658,6 +863,7 @@ fn parse_options() -> Options {
         idle_ms: 30_000,
         record_size: 16_382,
         alpn_version: "02".to_string(),
+        transport: "tls".to_string(),
         ..Options::default()
     };
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -688,7 +894,7 @@ fn parse_options() -> Options {
             "--hold-ms" => options.hold_ms = number(),
             "--record-size" => options.record_size = number(),
             "--alpn-version" => options.alpn_version.clone_from(value),
-            "--websocket" => options.websocket = value != "0",
+            "--transport" => options.transport.clone_from(value),
             other => panic!("unknown option {other}"),
         }
     }
@@ -698,9 +904,10 @@ fn parse_options() -> Options {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let options = Arc::new(parse_options());
-    if options.client {
-        run_client(options).await;
-    } else {
-        run_server(options).await;
+    match (options.transport.as_str(), options.client) {
+        ("h2", true) => run_h2_client(options).await,
+        ("h2", false) => run_h2_server(options).await,
+        (_, true) => run_client(options).await,
+        (_, false) => run_server(options).await,
     }
 }

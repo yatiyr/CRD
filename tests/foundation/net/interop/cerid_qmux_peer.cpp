@@ -1,11 +1,12 @@
-// crd-net interoperability test (4.2a) -- a QMux endpoint over crd-net's QmuxHost, real TCP on the loopback, the
-// counterpart of qmux_crate_peer. qmux_interop.py runs one of each and reads both reports.
+// crd-net interoperability test (4.2a) -- a QMux endpoint over crd-net's QmuxHost, or over WebSocket tunnels on an
+// HTTP/2 connection, real TCP on the loopback, the counterpart of qmux_crate_peer. qmux_interop.py runs one of each and
+// reads both reports.
 //
 // Usage: crd-qmux-peer --role client|server --port N --seed HEX --group NAME --cipher NAME --alpn NAME --streams N
 //                      --bytes N --closer client|server|none --code N --max-streams N [--uni N --uni-bytes N]
 //                      [--resets N] [--stops N] [--datagrams N --datagram-bytes N [--datagram-limit N]
 //                      [--datagram-probe 1]] [--connections 2 [--early 1]] [--idle-ms N] [--keepalive-ms N]
-//                      [--hold-ms N] [--websocket 1]
+//                      [--hold-ms N] [--transport tls|ws|h2]
 //
 //   port, seed, group, cipher  as crd-quic-peer's; interop_echo.hpp describes the application
 //   alpn          the one application protocol this end offers or accepts
@@ -14,7 +15,9 @@
 //   idle-ms       the idle timeout this end offers (default 30000)
 //   keepalive-ms  a QX_PING after this long with no record
 //   hold-ms       this long with nothing to do before the closing end closes
-//   websocket     WebSocket over HTTP/1.1, `alpn` its subprotocol; a server's TLS lists `alpn` as well
+//   transport     tls: QMux over TLS (the default); ws: WebSocket over HTTP/1.1 inside TLS, `alpn` its subprotocol, a
+//                 server's TLS listing `alpn` as well; h2: WebSocket tunnels (RFC 8441) on one HTTP/2 connection with
+//                 prior knowledge, `connections` of them at once, `alpn` their subprotocol (interop_qmux.hpp)
 //
 // The report of each connection goes to standard output when it has ended; the closing end closes with the reason
 // `cerid-interop done`.
@@ -26,6 +29,7 @@
 #include <crd/crypto/replay.hpp>
 #include <crd/crypto/tls.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/net/http2.hpp>
 #include <crd/net/ingress.hpp>
 #include <crd/net/io_loop.hpp>
 #include <crd/net/qmux.hpp>
@@ -33,8 +37,11 @@
 #include <crd/net/stream_poller.hpp>
 #include <crd/net/stream_socket.hpp>
 #include <crd/net/ticket_cache.hpp>
+#include <crd/net/websocket.hpp>
+#include <crd/net/websocket_tunnel.hpp>
 
 #include "interop_echo.hpp"
+#include "interop_qmux.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -46,11 +53,12 @@ namespace
 using namespace crd::crypto;
 using namespace crd::net;
 using namespace crd_net_interop;
+using crd::containers::Span;
 
 constexpr u64 kRunNs = 60000000000U;
 constexpr u64 kWaitNs = 1000000U;
 constexpr StringView kServerName = "cerid.test";
-constexpr StringView kCloseReason = "cerid-interop done";
+constexpr StringView kCloseReason = kQmuxCloseReason;
 constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
 constexpr u32 kStreamBytes = 65536U;
 constexpr u64 kConnectionWindow = 1U << 22U;
@@ -60,50 +68,29 @@ constexpr u32 kDatagramRingCount = 2048U;
 constexpr u8 kEarlyContext[4] = {'e', 'c', 't', 'x'};
 constexpr StringView kHttp11 = "http/1.1";
 constexpr StringView kWebSocketPath = "/interop";
+constexpr StringView kHttp2 = "h2";
+constexpr usize kHttp2InputBytes = 1U << 17U;
+constexpr usize kHttp2OutputBytes = 1U << 18U;
+constexpr u64 kHttp2LingerNs = 2000000000U; // a server waits this long for its client to hang up once all is done
+
+enum class Transport : crd::u8
+{
+    Tls,
+    WebSocket,
+    Http2,
+};
 
 struct Options : EchoOptions
 {
     StringView alpn;
     u64 idle_ms = 30000U;
     u64 keepalive_ms = 0U;
-    bool websocket = false;
+    Transport transport = Transport::Tls;
 };
 
 [[nodiscard]] ConstSpan<u8> bytes_of(StringView text) noexcept
 {
     return ConstSpan<u8>(reinterpret_cast<const u8*>(text.data()), text.size());
-}
-
-[[nodiscard]] const char* close_name(const QmuxCloseInfo& info) noexcept
-{
-    switch (info.reason)
-    {
-    case QmuxCloseReason::None:
-        return "none";
-    case QmuxCloseReason::Local:
-        return "local";
-    case QmuxCloseReason::Error:
-        return "transport";
-    case QmuxCloseReason::Peer:
-        return info.application ? "application" : "peer-transport";
-    case QmuxCloseReason::PeerShutdown:
-        return "shutdown";
-    case QmuxCloseReason::IdleTimeout:
-        return "idle";
-    case QmuxCloseReason::HandshakeTimeout:
-        return "handshake-timeout";
-    case QmuxCloseReason::TlsFailed:
-        return "tls";
-    case QmuxCloseReason::Truncated:
-        return "truncated";
-    case QmuxCloseReason::Reset:
-        return "reset";
-    case QmuxCloseReason::UpgradeRefused:
-        return "upgrade-refused";
-    case QmuxCloseReason::WebSocketFailed:
-        return "websocket-failed";
-    }
-    return "unknown";
 }
 
 class App final : public QmuxHostEvents
@@ -130,9 +117,7 @@ public:
         turn.now_ns = now_ns;
         if (echo->service(connection.streams(), connection.datagrams(), turn))
         {
-            connection.close(m_peer.options().code,
-                             ConstSpan<u8>(reinterpret_cast<const u8*>(kCloseReason.data()), kCloseReason.size()),
-                             now_ns);
+            connection.close(m_peer.options().code, bytes_of(kCloseReason), now_ns);
         }
     }
 
@@ -144,25 +129,7 @@ public:
             return;
         }
         echo->report(connection.handshake().resumed(), connection.handshake().early_data(), connection.datagrams());
-        const QmuxCloseInfo& info = connection.close_info();
-        const StringView alpn = connection.handshake().application_protocol();
-        const StringView tls_error = tls_error_name(connection.tls_error());
-        const ConstSpan<u8> reason = connection.close_reason();
-        const ConstSpan<u8> subprotocol = connection.websocket_protocol();
-        std::printf("websocket_protocol=%.*s\n", static_cast<int>(subprotocol.size()),
-                    reinterpret_cast<const char*>(subprotocol.data()));
-        std::printf("alpn=%.*s\nclose=%s\nclose_code=%llu\nclose_reason=%.*s\ntls_error=%.*s\nsocket_error=%d\n",
-                    static_cast<int>(alpn.size()), alpn.data(), close_name(info),
-                    static_cast<unsigned long long>(info.error_code), static_cast<int>(reason.size()),
-                    reinterpret_cast<const char*>(reason.data()), static_cast<int>(tls_error.size()), tls_error.data(),
-                    static_cast<int>(transport));
-        const QmuxCounters& counters = connection.counters();
-        std::printf("records_sent=%llu\nrecords_received=%llu\npings_sent=%llu\npongs_received=%llu\nrtt=%d\n",
-                    static_cast<unsigned long long>(counters.records_sent),
-                    static_cast<unsigned long long>(counters.records_received),
-                    static_cast<unsigned long long>(counters.pings_sent),
-                    static_cast<unsigned long long>(counters.pongs_received), connection.rtt_ns() != 0U ? 1 : 0);
-        std::fflush(stdout);
+        report_qmux(connection, connection.handshake().application_protocol(), transport);
         m_peer.ended(handle);
     }
 
@@ -196,20 +163,259 @@ QmuxConfig connection_config(const Options& options)
     return config;
 }
 
+[[nodiscard]] bool parse_transport(const char* value, Transport& out) noexcept
+{
+    static constexpr struct
+    {
+        const char* name;
+        Transport transport;
+    } kTransports[] = {{"tls", Transport::Tls}, {"ws", Transport::WebSocket}, {"h2", Transport::Http2}};
+    for (const auto& entry : kTransports)
+    {
+        if (std::strcmp(entry.name, value) == 0)
+        {
+            out = entry.transport;
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] WebSocketConfig websocket_config(ConstSpan<ConstSpan<u8>> protocols) noexcept
+{
+    WebSocketConfig websocket;
+    websocket.protocols = protocols;
+    websocket.path = bytes_of(kWebSocketPath);
+    websocket.host = bytes_of(kServerName);
+    return websocket;
+}
+
+// A server's listening socket on the loopback; false, said on stderr, when it could not be bound. A client's stays
+// closed.
+[[nodiscard]] bool listen_on(const Options& options, TcpListener& listener) noexcept
+{
+    if (options.client)
+    {
+        return true;
+    }
+    TcpListenOptions listen;
+    listen.bind = Endpoint{IpAddress::v4_loopback(), static_cast<crd::u16>(options.port)};
+    SocketError error = SocketError::None;
+    listener = TcpListener::open(listen, error);
+    if (error != SocketError::None)
+    {
+        std::fputs("crd-qmux-peer: the socket could not be bound\n", stderr);
+        return false;
+    }
+    return true;
+}
+
+// One HTTP/2 connection with prior knowledge whose WebSocket tunnels each run the echo.
+class Http2Tunnels
+{
+public:
+    explicit Http2Tunnels(const Options& options) noexcept : m_tunnels(options, kHttp2) {}
+
+    [[nodiscard]] bool init(crd::memory::IAllocator& allocator, const Options& options,
+                            const WebSocketConfig& websocket, u64 now_ns) noexcept
+    {
+        Http2Config config;
+        config.side = options.client ? Http2Side::Client : Http2Side::Server;
+        config.connect_protocol = !options.client;
+        config.output_bytes = kHttp2OutputBytes;
+        WsTunnelConfig tunnels;
+        tunnels.connection = connection_config(options);
+        tunnels.connection.websocket = &websocket;
+        tunnels.tunnels = static_cast<u32>(options.connections);
+        return m_h2.init(allocator, config, now_ns) && m_tunnels.init(allocator, m_h2, tunnels);
+    }
+
+    // Reads, runs and writes until nothing moves; false once the socket has failed or the peer has hung up.
+    [[nodiscard]] bool turn(StreamSocket& socket, u64 now_ns) noexcept
+    {
+        bool moved = true;
+        while (moved && !m_failed)
+        {
+            moved = read(socket);
+            moved = drain(now_ns) || moved;
+            const usize before = m_h2.output().size();
+            m_tunnels.service(now_ns);
+            moved = m_h2.output().size() != before || moved;
+            moved = write(socket) || moved;
+        }
+        return !m_failed && !m_ended;
+    }
+
+    // A client's GOAWAY once every tunnel has reported; true once it is queued.
+    [[nodiscard]] bool goaway() noexcept
+    {
+        m_goaway = m_goaway || m_h2.goaway(true);
+        return m_goaway;
+    }
+
+    [[nodiscard]] bool done() const noexcept { return m_tunnels.done(); }
+    [[nodiscard]] u32 live() const noexcept { return m_tunnels.live(); }
+    [[nodiscard]] bool wants_write() const noexcept { return !m_h2.output().empty(); }
+    [[nodiscard]] u32 error() const noexcept { return m_h2.error(); }
+
+private:
+    [[nodiscard]] bool read(StreamSocket& socket) noexcept
+    {
+        if (m_used == sizeof(m_input) || m_ended)
+        {
+            return false;
+        }
+        const StreamResult result = socket.read(Span<u8>(m_input + m_used, sizeof(m_input) - m_used));
+        m_used += result.bytes;
+        m_ended = result.ended;
+        m_failed = result.error != SocketError::None && result.error != SocketError::Busy;
+        return result.bytes != 0U;
+    }
+
+    [[nodiscard]] bool drain(u64 now_ns) noexcept
+    {
+        usize at = 0U;
+        bool moved = false;
+        for (;;)
+        {
+            usize taken = 0U;
+            Http2Event event;
+            const bool more = m_h2.poll(ConstSpan<u8>(m_input + at, m_used - at), now_ns, taken, event);
+            at += taken;
+            moved = moved || taken != 0U;
+            if (!more)
+            {
+                break;
+            }
+            moved = true;
+            static_cast<void>(m_tunnels.on_event(event, now_ns));
+        }
+        std::memmove(m_input, m_input + at, m_used - at);
+        m_used -= at;
+        return moved;
+    }
+
+    [[nodiscard]] bool write(StreamSocket& socket) noexcept
+    {
+        const ConstSpan<u8> out = m_h2.output();
+        if (out.empty())
+        {
+            return false;
+        }
+        const StreamResult result = socket.write(out);
+        m_h2.output_taken(result.bytes);
+        m_failed = result.error != SocketError::None && result.error != SocketError::Busy;
+        return result.bytes != 0U;
+    }
+
+    Http2Connection m_h2;
+    TunnelPeer m_tunnels;
+    usize m_used = 0U;
+    bool m_ended = false;
+    bool m_failed = false;
+    bool m_goaway = false;
+    u8 m_input[kHttp2InputBytes];
+};
+
+// The tunnels' run: the reports go out as the tunnels end. A client hangs up once every tunnel has reported and its
+// GOAWAY has gone; a server once its client has, or kHttp2LingerNs after its own tunnels have all reported.
+int run_http2(crd::memory::IAllocator& allocator, const Options& options)
+{
+    TcpListener listener;
+    if (!listen_on(options, listener))
+    {
+        return 1;
+    }
+    const HostClock clock;
+    TcpPoller poller(allocator, 1U, options.client ? nullptr : &listener);
+    const ConstSpan<u8> subprotocols[] = {bytes_of(options.alpn)};
+    const WebSocketConfig websocket = websocket_config(subprotocols);
+    static Http2Tunnels link(options);
+    if (!poller.ready() || !link.init(allocator, options, websocket, clock.monotonic_ns()))
+    {
+        std::fputs("crd-qmux-peer: the HTTP/2 connection could not be made\n", stderr);
+        return 1;
+    }
+    StreamSocket* socket = nullptr;
+    bool connected = !options.client;
+    if (options.client)
+    {
+        SocketError error = SocketError::None;
+        socket = poller.connect(0U, Endpoint{IpAddress::v4_loopback(), static_cast<crd::u16>(options.port)}, error);
+        if (socket == nullptr)
+        {
+            std::fputs("crd-qmux-peer: the connection could not be started\n", stderr);
+            return 1;
+        }
+    }
+    else
+    {
+        std::printf("port=%u\n", static_cast<unsigned>(listener.local_endpoint().port));
+        std::fflush(stdout);
+    }
+    const u64 deadline = clock.monotonic_ns() + kRunNs;
+    u64 done_ns = 0U;
+    while (clock.monotonic_ns() < deadline)
+    {
+        StreamReady ready[2];
+        const usize count = poller.wait(Span<StreamReady>(ready, 2U), kWaitNs);
+        const u64 now_ns = clock.monotonic_ns();
+        for (usize at = 0U; at < count; ++at)
+        {
+            if (ready[at].token == kStreamListener && socket == nullptr)
+            {
+                SocketError error = SocketError::None;
+                socket = poller.accept(0U, error);
+            }
+        }
+        if (socket == nullptr)
+        {
+            continue;
+        }
+        if (!connected)
+        {
+            const SocketError error = poller.connected(0U);
+            if (error == SocketError::Busy)
+            {
+                continue;
+            }
+            if (error != SocketError::None)
+            {
+                std::fputs("crd-qmux-peer: the connection failed\n", stderr);
+                return 1;
+            }
+            connected = true;
+        }
+        const bool alive = link.turn(*socket, now_ns);
+        if (link.done() && done_ns == 0U)
+        {
+            done_ns = now_ns;
+        }
+        const bool hung_up = options.client ? link.done() && link.goaway() && !link.wants_write()
+                                            : done_ns != 0U && now_ns - done_ns >= kHttp2LingerNs;
+        if (!alive || hung_up)
+        {
+            poller.close(0U, false);
+            if (link.error() != 0U || (!link.done() && link.live() != 0U))
+            {
+                std::fprintf(stderr, "crd-qmux-peer: the HTTP/2 connection ended with error %u and %u tunnels live\n",
+                             static_cast<unsigned>(link.error()), static_cast<unsigned>(link.live()));
+                return 1;
+            }
+            return 0;
+        }
+        poller.interest(0U, static_cast<crd::u8>(kStreamReadable | (link.wants_write() ? kStreamWritable : 0U)));
+    }
+    std::fputs("crd-qmux-peer: the run outlasted its deadline\n", stderr);
+    return 1;
+}
+
 int run(crd::memory::IAllocator& allocator, const Options& options, const TlsContext& context)
 {
     TcpListener listener;
-    if (!options.client)
+    if (!listen_on(options, listener))
     {
-        TcpListenOptions listen;
-        listen.bind = Endpoint{IpAddress::v4_loopback(), static_cast<crd::u16>(options.port)};
-        SocketError error = SocketError::None;
-        listener = TcpListener::open(listen, error);
-        if (error != SocketError::None)
-        {
-            std::fputs("crd-qmux-peer: the socket could not be bound\n", stderr);
-            return 1;
-        }
+        return 1;
     }
     const HostClock clock;
     TcpPoller poller(allocator, kServerSlots + 1U, options.client ? nullptr : &listener);
@@ -220,13 +426,10 @@ int run(crd::memory::IAllocator& allocator, const Options& options, const TlsCon
     static u8 early_context[sizeof(kEarlyContext)];
     std::memcpy(early_context, kEarlyContext, sizeof(kEarlyContext));
     const ConstSpan<u8> subprotocols[] = {bytes_of(options.alpn)};
-    WebSocketConfig websocket;
-    websocket.protocols = subprotocols;
-    websocket.path = bytes_of(kWebSocketPath);
-    websocket.host = bytes_of(kServerName);
+    const WebSocketConfig websocket = websocket_config(subprotocols);
     QmuxHostConfig config;
     config.connection = connection_config(options);
-    config.connection.websocket = options.websocket ? &websocket : nullptr;
+    config.connection.websocket = options.transport == Transport::WebSocket ? &websocket : nullptr;
     config.connection.tls = options.client ? nullptr : &context;
     config.connection.tickets = options.client ? &tickets : nullptr;
     config.connection.early_context = options.early && !options.client ? ConstSpan<u8>(early_context) : ConstSpan<u8>();
@@ -277,7 +480,7 @@ int usage()
     std::fputs("usage: crd-qmux-peer --role client|server --port N --seed HEX --group NAME --cipher NAME --alpn NAME "
                "--streams N --bytes N --closer client|server|none --code N --max-streams N [--uni N --uni-bytes N] "
                "[--resets N] [--stops N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]] "
-               "[--connections 2 [--early 1]] [--idle-ms N] [--keepalive-ms N] [--hold-ms N] [--websocket 1]\n",
+               "[--connections 2 [--early 1]] [--idle-ms N] [--keepalive-ms N] [--hold-ms N] [--transport tls|ws|h2]\n",
                stderr);
     return 2;
 }
@@ -307,9 +510,12 @@ int main(int argc, char** argv)
         {
             options.keepalive_ms = std::strtoull(value, nullptr, 10);
         }
-        else if (std::strcmp(name, "--websocket") == 0)
+        else if (std::strcmp(name, "--transport") == 0)
         {
-            options.websocket = std::strcmp(value, "0") != 0;
+            if (!parse_transport(value, options.transport))
+            {
+                return usage();
+            }
         }
         else
         {
@@ -319,6 +525,10 @@ int main(int argc, char** argv)
     if (argc % 2 == 0 || required != kRequiredEchoOptions || !echo_options_valid(options) || options.alpn.empty())
     {
         return usage();
+    }
+    if (options.transport == Transport::Http2)
+    {
+        return run_http2(*crd::memory::default_allocator(), options);
     }
 
     SigningKey key;
@@ -333,14 +543,15 @@ int main(int argc, char** argv)
     const AlgorithmId groups[] = {options.group};
     const AlgorithmId aeads[] = {options.cipher};
     const StringView both[] = {options.alpn, kHttp11};
-    const StringView protocols[] = {options.websocket ? kHttp11 : options.alpn};
+    const bool websocket = options.transport == Transport::WebSocket;
+    const StringView protocols[] = {websocket ? kHttp11 : options.alpn};
     TlsConfig tls;
     tls.role = options.client ? TlsRole::Client : TlsRole::Server;
     tls.groups = ConstSpan<AlgorithmId>(groups, 1U);
     tls.aeads = ConstSpan<AlgorithmId>(aeads, 1U);
     tls.server_name = kServerName;
     tls.application_protocols = protocols;
-    if (options.websocket && !options.client)
+    if (websocket && !options.client)
     {
         tls.application_protocols = both;
     }

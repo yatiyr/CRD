@@ -189,7 +189,8 @@ if(CRD_BUILD_WEBTRANSPORT_VS_GO)
 endif()
 
 # The QMux interoperability test against the `qmux` crate (CRD_BUILD_QMUX_VS_CRATE): crd-qmux-crate-peer is a Cargo
-# package over the crate and rustls, and qmux_interop.py runs it against crd-qmux-peer over the loopback.
+# package over the crate and rustls (and the `h2` crate for the WebSocket tunnels), and qmux_interop.py runs it against
+# crd-qmux-peer over the loopback.
 if(CRD_BUILD_QMUX_VS_CRATE)
     crd_add_cargo_peer(crd-qmux-crate-peer "${CMAKE_CURRENT_SOURCE_DIR}/interop/qmux_crate_peer/Cargo.toml"
                        qmux-crate-peer crd-qmux-crate-peer qmux-vs-crate)
@@ -199,7 +200,7 @@ if(CRD_BUILD_QMUX_VS_CRATE)
     add_test(NAME crd-net-qmux-interop-crate
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/qmux_interop.py"
                      --cerid "$<TARGET_FILE:crd-qmux-peer>" --crate "${crd-qmux-crate-peer_OUTPUT}")
-    set_tests_properties(crd-net-qmux-interop-crate PROPERTIES TIMEOUT 1200 LABELS "net;qmux-interop")
+    set_tests_properties(crd-net-qmux-interop-crate PROPERTIES TIMEOUT 2400 LABELS "net;qmux-interop")
 endif()
 
 # QPACK against the offline interop corpus (CRD_BUILD_QPACK_VS_QIFS): crd-qpack-replay decodes what other encoders wrote
