@@ -1046,8 +1046,8 @@ waits).
   an idle timeout or a TLS failure), and a reset if bytes could not be sent, the handshake timed out (a silent peer earns no TIME_WAIT) or the
   transport had already failed.
 
-A connection that has just ended is served once more, Closed, so the application reads what arrived before the end; only the first interop run showed it was
-lost (the peer's last stream bytes and its CONNECTION_CLOSE in one read).
+A connection that ended on what it read or its timer is served once more, Closed, so the application reads what arrived before the end; the first interop run showed it was
+lost (the peer's last stream bytes and its CONNECTION_CLOSE in one read). QUIC has no such gap: a peer's close leaves a connection Draining, which is still served.
 
 Evidence: `test_qmux_host.cpp` (over pipes under a test clock: both directions past every window, the pool and rate refusals, every close path,
 back-pressure at 512-byte sockets with no busy turn, accept pauses, each share of a turn, deadlines bounding the wait, allocation refusal at every step,

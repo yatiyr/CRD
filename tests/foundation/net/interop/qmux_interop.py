@@ -283,7 +283,9 @@ def cases(cerid, crate):
         yield case(streams=8, size=4 << 20, closer='server', code=1)
         yield case(streams=64, size=32 << 10, max_streams=8)
         yield case(streams=0, uni=8, uni_size=1 << 20)
-        yield case(streams=0, resets=4, hold_ms=300)
+        # Nothing tells the closing end its resets were read, and a CONNECTION_CLOSE ends the crate's readers: the hold
+        # gives them a second, the settling time the datagram cases use.
+        yield case(streams=0, resets=4, hold_ms=1000)
         yield case(streams=0, stops=4)
         yield case(streams=2, size=64 << 10, uni=4, uni_size=64 << 10, resets=2, stops=2, closer='server', code=3)
         yield case(streams=0, datagrams=128)

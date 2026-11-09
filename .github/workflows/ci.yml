@@ -925,8 +925,9 @@ jobs:
           python3 scripts/install-sde.py --destination "$RUNNER_TEMP/sde" --download-dir "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
           sudo sysctl -w kernel.yama.ptrace_scope=0
 
-      # The pinned Rust 1.99.1 (tools/rust-linux-x64) lints and builds crd-openmls-peer, the OpenMLS member program of
-      # the MLS interoperability test (CRD_BUILD_MLS_VS_OPENMLS): the configure reads CRD_CARGO, and cargo fetches the
+      # The pinned Rust 1.99.1 (tools/rust-linux-x64) lints and builds the Rust peers: crd-openmls-peer, the OpenMLS
+      # member program of the MLS interoperability test (CRD_BUILD_MLS_VS_OPENMLS), and crd-qmux-crate-peer, the `qmux`
+      # crate's end of the QMux one (CRD_BUILD_QMUX_VS_CRATE): the configure reads CRD_CARGO, and cargo fetches the
       # crates the committed Cargo.lock names, each checked against its SHA-256.
       - name: Install pinned Rust
         if: matrix.preset == 'linux-gcc-public-checks'

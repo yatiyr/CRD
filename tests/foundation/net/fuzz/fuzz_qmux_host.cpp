@@ -125,13 +125,21 @@ public:
     void on_service(QuicHandle handle, QmuxConnection& connection, u64) noexcept override
     {
         CRD_FUZZ_REQUIRE(!stale(handle));
-        CRD_FUZZ_REQUIRE(connection.state() != QmuxState::Closed);
+        if (connection.state() == QmuxState::Closed)
+        {
+            // A connection that ended on what it read or its timer is served once more, then reported; one that ends
+            // while it writes is reported without.
+            CRD_FUZZ_REQUIRE(!m_last_served.valid());
+            m_last_served = handle;
+        }
         ++serviced;
     }
 
     void on_closed(QuicHandle handle, const QmuxConnection& connection, SocketError) noexcept override
     {
         CRD_FUZZ_REQUIRE(connection.state() == QmuxState::Closed);
+        CRD_FUZZ_REQUIRE(!m_last_served.valid() || m_last_served == handle);
+        m_last_served = QuicHandle{};
         CRD_FUZZ_REQUIRE(!stale(handle)); // reported once
         m_stale[m_stale_count++ % kMostHandles] = handle;
         ++closed;
@@ -165,6 +173,7 @@ public:
 
 private:
     QuicHandle m_handles[kMostHandles];
+    QuicHandle m_last_served; // the connection served once more after it ended
     QuicHandle m_stale[kMostHandles];
     usize m_handle_count = 0U;
     usize m_stale_count = 0U;
