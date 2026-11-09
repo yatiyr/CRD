@@ -1217,8 +1217,29 @@ Evidence (the classifier, 2026-11-09): `test_http3_webtransport.cpp` `[webtransp
 the offer, what each side requires, the wait for a client's SETTINGS, headers split anywhere, reliable and plain resets
 both ways, 0-RTT, GOAWAY, streams given up before naming a session), and `crd-fuzz-net-http3` modes 4 to 6. A server holds
 every bidirectional stream before the client's SETTINGS, ordinary requests included: QPACK decodes a section once and the
-token is inside it. A reset keeps a header only in the direction the stream's opener sent one. The session layer above
-it is still to come.
+token is inside it. A reset keeps a header only in the direction the stream's opener sent one.
+
+Evidence (the sessions, 2026-11-09): `WebTransport` in
+[webtransport.hpp](../../engine/foundation/net/include/crd/net/webtransport.hpp) takes over `Http3Connection::poll()`
+and passes on what is not WebTransport. `test_webtransport.cpp` `[webtransport]` (22 cases), `crd-fuzz-net-webtransport`
+and the source mutations in the session note prove it. What the contract did not say, decided here:
+
+- A STOP_SENDING can overtake what it travels with. A client still waiting for a response ignores one, since a complete
+  response may follow it (RFC 9114 section 4.1), and an open session ignores one with WT_SESSION_GONE, since section 6
+  sends it beside the capsule and FIN. Any other ends the session.
+- A session error is a reset of the CONNECT stream with the code the draft names; WT_MAX_STREAM_DATA and
+  WT_STREAM_DATA_BLOCKED, which name none, use WT_FLOW_CONTROL_ERROR, flow control or not (they are outside section 5.6's
+  set). A malformed capsule, or a value too long for its type, is H3_MESSAGE_ERROR. Once this side's FIN has gone, data
+  after a WT_CLOSE_SESSION can only be answered with STOP_SENDING.
+- Credit is counted at the highest offset a stream reached, when bytes arrive contiguously, and at the final size for a
+  reset, so what a reset drops unread comes back to the sender at once. A stream counts as closed when its reading part
+  ended and its writing part was finished or reset, not when the FIN is acknowledged.
+- A stream refused with WT_BUFFERED_STREAM_REJECTED counts nowhere at the receiver, as no session is known to charge,
+  while its sender has already paid: an overflowing sender loses that window, which only an abnormal peer pays for.
+- An offer with a limit of 0 and flow control on means that kind is never granted. The offer's values are also the
+  windows granted again.
+- A DATAGRAM capsule on a CONNECT stream arrives like any datagram, up to `datagram_bytes`; a larger one is skipped.
+- Sessions, once their streams go, keep nothing that could reach a later session in the same pool slot.
 
 <a id="browsers"></a>
 ## Browser constraints
