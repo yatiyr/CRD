@@ -35,189 +35,199 @@ template <typename T> struct PowellOptions
 namespace detail
 {
 
-// Golden-ratio downhill bracket expansion (NR `mnbrak`): returns (ax, bx, cx) with f(bx) < f(ax), f(cx).
-template <typename T, typename F> inline void brent_bracket(const F& f, T& ax, T& bx, T& cx, T& fa, T& fb, T& fc)
+// Downhill bracket search: a golden-ratio downhill expansion with parabolic extrapolation, the method of the mnbrak
+// routine of Numerical Recipes (Press et al.); the minimiser it feeds, brent_min, is Brent 1973. Starting from two
+// abscissae it walks downhill, growing each step by the golden ratio and letting the vertex of the parabola through
+// the last three points propose a longer jump (capped at 100 times the current span). On return
+// f(mid) < f(lo) and f(mid) < f(hi), so a minimum is enclosed.
+template <typename T, typename F> inline void brent_bracket(const F& f, T& lo, T& mid, T& hi, T& fLo, T& fMid, T& fHi)
 {
-    constexpr T gold = static_cast<T>(1.618034);
-    constexpr T glimit = static_cast<T>(100);
-    constexpr T tiny = static_cast<T>(1e-20);
-    fa = f(ax);
-    fb = f(bx);
-    if (fb > fa)
+    constexpr T phi = static_cast<T>(1.618034);
+    constexpr T maxGrowth = static_cast<T>(100);
+    constexpr T denomFloor = static_cast<T>(1e-20);
+    // The point one golden step beyond `to`, walking away from `from`.
+    const auto golden_past = [](T from, T to) -> T
     {
-        T t = ax;
-        ax = bx;
-        bx = t;
-        t = fa;
-        fa = fb;
-        fb = t;
-    }
-    cx = bx + gold * (bx - ax);
-    fc = f(cx);
-    while (fb > fc)
+        return to + phi * (to - from);
+    };
+    // Move the window of three one place along: `next` becomes the new right end.
+    const auto slide = [&](T next, T fNext)
     {
-        const T r = (bx - ax) * (fb - fc);
-        const T q = (bx - cx) * (fb - fa);
-        T denom = q - r;
-        const T mag = crd::math::fabs(denom) > tiny ? crd::math::fabs(denom) : tiny;
-        denom = denom >= static_cast<T>(0) ? mag : -mag;
-        T u = bx - ((bx - cx) * q - (bx - ax) * r) / (static_cast<T>(2) * denom);
-        const T ulim = bx + glimit * (cx - bx);
-        T fu;
-        if ((bx - u) * (u - cx) > static_cast<T>(0)) // u between b and c
-        {
-            fu = f(u);
-            if (fu < fc)
-            {
-                ax = bx;
-                bx = u;
-                fa = fb;
-                fb = fu;
-                return;
-            }
-            if (fu > fb)
-            {
-                cx = u;
-                fc = fu;
-                return;
-            }
-            u = cx + gold * (cx - bx);
-            fu = f(u);
-        }
-        else if ((cx - u) * (u - ulim) > static_cast<T>(0)) // u between c and the limit
-        {
-            fu = f(u);
-            if (fu < fc)
-            {
-                bx = cx;
-                cx = u;
-                u = u + gold * (u - cx);
-                fb = fc;
-                fc = fu;
-                fu = f(u);
-            }
-        }
-        else if ((u - ulim) * (ulim - cx) >= static_cast<T>(0)) // clamp to the limit
-        {
-            u = ulim;
-            fu = f(u);
-        }
-        else // reject the parabolic u; plain golden step
-        {
-            u = cx + gold * (cx - bx);
-            fu = f(u);
-        }
-        ax = bx;
-        bx = cx;
-        cx = u;
-        fa = fb;
-        fb = fc;
-        fc = fu;
-    }
-}
+        lo = mid;
+        fLo = fMid;
+        mid = hi;
+        fMid = fHi;
+        hi = next;
+        fHi = fNext;
+    };
+    const auto flip = [](T& p, T& q)
+    {
+        const T keep = p;
+        p = q;
+        q = keep;
+    };
 
-// Brent's 1-D minimizer (1973; NR `brent`): golden section + safeguarded parabolic interpolation on a bracket.
-// Returns the minimizer; `fmin_out` gets f at it.
-template <typename T, typename F>
-[[nodiscard]] inline T brent_min(const F& f, T ax, T bx, T cx, T fbx, T tol, T& fmin_out)
-{
-    constexpr int itmax = 100;
-    constexpr T cgold = static_cast<T>(0.381966);
-    constexpr T zeps = static_cast<T>(1e-18);
-    T a = ax < cx ? ax : cx;
-    T b = ax > cx ? ax : cx;
-    T x = bx;
-    T w = bx;
-    T v = bx;
-    T fx = fbx;
-    T fw = fx;
-    T fv = fx;
-    T d = static_cast<T>(0);
-    T e = static_cast<T>(0);
-    for (int iter = 0; iter < itmax; ++iter)
+    fLo = f(lo);
+    fMid = f(mid);
+    if (fMid > fLo)
     {
-        const T xm = static_cast<T>(0.5) * (a + b);
-        const T tol1 = tol * crd::math::fabs(x) + zeps;
-        const T tol2 = static_cast<T>(2) * tol1;
-        if (crd::math::fabs(x - xm) <= tol2 - static_cast<T>(0.5) * (b - a))
+        flip(lo, mid);
+        flip(fLo, fMid);
+    }
+    hi = golden_past(lo, mid);
+    fHi = f(hi);
+    while (fMid > fHi)
+    {
+        // Vertex of the parabola through (lo, mid, hi); its denominator is kept away from zero.
+        const T leftBase = mid - lo;
+        const T rightBase = mid - hi;
+        const T leftTerm = leftBase * (fMid - fHi);
+        const T rightTerm = rightBase * (fMid - fLo);
+        const T spread = rightTerm - leftTerm;
+        const T guard = crd::math::fabs(spread) > denomFloor ? crd::math::fabs(spread) : denomFloor;
+        const T twiceDenom = static_cast<T>(2) * (spread >= static_cast<T>(0) ? guard : -guard);
+        const T vertex = mid - (rightBase * rightTerm - leftBase * leftTerm) / twiceDenom;
+        const T reach = mid + maxGrowth * (hi - mid);
+        const T plainStep = golden_past(mid, hi);
+
+        if ((mid - vertex) * (vertex - hi) > static_cast<T>(0))
         {
-            break;
+            // Vertex inside (mid, hi): either it closes the bracket, or the walk continues one golden step past hi.
+            const T fVertex = f(vertex);
+            if (fVertex < fHi)
+            {
+                lo = mid;
+                fLo = fMid;
+                mid = vertex;
+                fMid = fVertex;
+                return;
+            }
+            if (fVertex > fMid)
+            {
+                hi = vertex;
+                fHi = fVertex;
+                return;
+            }
+            slide(plainStep, f(plainStep));
         }
-        bool golden = true;
-        if (crd::math::fabs(e) > tol1) // try the parabolic fit through (x, w, v)
+        else if ((hi - vertex) * (vertex - reach) > static_cast<T>(0))
         {
-            const T r = (x - w) * (fx - fv);
-            T q = (x - v) * (fx - fw);
-            T p = (x - v) * q - (x - w) * r;
-            q = static_cast<T>(2) * (q - r);
-            if (q > static_cast<T>(0))
+            // Vertex beyond hi but within reach: take it, and if it still descends, probe a further step. That
+            // step is measured from the vertex just taken, so it has zero length and re-samples the same point.
+            const T fVertex = f(vertex);
+            const bool descends = fVertex < fHi;
+            slide(vertex, fVertex);
+            if (descends)
             {
-                p = -p;
-            }
-            q = crd::math::fabs(q);
-            const T etemp = e;
-            e = d;
-            if (!(crd::math::fabs(p) >= crd::math::fabs(static_cast<T>(0.5) * q * etemp) || p <= q * (a - x) || p >= q * (b - x)))
-            {
-                d = p / q; // parabolic step accepted
-                const T u = x + d;
-                if (u - a < tol2 || b - u < tol2)
-                {
-                    d = xm - x >= static_cast<T>(0) ? tol1 : -tol1;
-                }
-                golden = false;
+                const T again = golden_past(hi, vertex);
+                slide(again, f(again));
             }
         }
-        if (golden)
+        else if ((vertex - reach) * (reach - hi) >= static_cast<T>(0))
         {
-            e = x >= xm ? a - x : b - x;
-            d = cgold * e;
-        }
-        const T u = crd::math::fabs(d) >= tol1 ? x + d : x + (d >= static_cast<T>(0) ? tol1 : -tol1);
-        const T fu = f(u);
-        if (fu <= fx)
-        {
-            if (u >= x)
-            {
-                a = x;
-            }
-            else
-            {
-                b = x;
-            }
-            v = w;
-            w = x;
-            x = u;
-            fv = fw;
-            fw = fx;
-            fx = fu;
+            slide(reach, f(reach));
         }
         else
         {
-            if (u < x)
-            {
-                a = u;
-            }
-            else
-            {
-                b = u;
-            }
-            if (fu <= fw || w == x)
-            {
-                v = w;
-                w = u;
-                fv = fw;
-                fw = fu;
-            }
-            else if (fu <= fv || v == x || v == w)
-            {
-                v = u;
-                fv = fu;
-            }
+            slide(plainStep, f(plainStep));
         }
     }
-    fmin_out = fx;
-    return x;
+}
+
+// Brent's 1-D minimizer (Brent 1973, ch. 5 "localmin"): golden-section steps safeguarded by successive parabolic
+// interpolation through the three best points, on a bracket. Returns the minimizer; `fmin_out` gets f at it.
+template <typename T, typename F>
+[[nodiscard]] inline T brent_min(const F& f, T xLeft, T xStart, T xRight, T fStart, T tol, T& fmin_out)
+{
+    constexpr int maxIter = 100;
+    constexpr T goldenFraction = static_cast<T>(0.381966);
+    constexpr T absFloor = static_cast<T>(1e-18);
+    T lo = xLeft < xRight ? xLeft : xRight;
+    T hi = xLeft > xRight ? xLeft : xRight;
+    T best = xStart;
+    T second = xStart;
+    T third = xStart;
+    T fBest = fStart;
+    T fSecond = fStart;
+    T fThird = fStart;
+    T step = static_cast<T>(0);
+    T lastStep = static_cast<T>(0);
+    for (int iter = 0; iter < maxIter; ++iter)
+    {
+        const T centre = static_cast<T>(0.5) * (lo + hi);
+        const T unit = tol * crd::math::fabs(best) + absFloor;
+        const T unit2 = static_cast<T>(2) * unit;
+        if (crd::math::fabs(best - centre) <= unit2 - static_cast<T>(0.5) * (hi - lo))
+        {
+            break;
+        }
+        const auto toward = [unit](T direction) -> T
+        {
+            return direction >= static_cast<T>(0) ? unit : -unit;
+        };
+        // Parabola through (best, second, third): accept its vertex only if it lies inside the bracket and moves
+        // less than half the step before last. On acceptance `lastStep` takes the previous step and `step` the new.
+        const auto try_parabola = [&]() -> bool
+        {
+            const T crossSecond = (best - second) * (fBest - fThird);
+            const T crossThird = (best - third) * (fBest - fSecond);
+            T numer = (best - third) * crossThird - (best - second) * crossSecond;
+            T denom = static_cast<T>(2) * (crossThird - crossSecond);
+            if (denom > static_cast<T>(0))
+            {
+                numer = -numer;
+            }
+            denom = crd::math::fabs(denom);
+            const bool tooLong = crd::math::fabs(numer) >= crd::math::fabs(static_cast<T>(0.5) * denom * lastStep);
+            const bool outside = numer <= denom * (lo - best) || numer >= denom * (hi - best);
+            if (tooLong || outside)
+            {
+                return false;
+            }
+            lastStep = step;
+            step = numer / denom;
+            const T trial = best + step;
+            if (trial - lo < unit2 || hi - trial < unit2)
+            {
+                step = toward(centre - best);
+            }
+            return true;
+        };
+        if (!(crd::math::fabs(lastStep) > unit && try_parabola()))
+        {
+            // Golden-section step into the larger of the two sub-intervals.
+            lastStep = best >= centre ? lo - best : hi - best;
+            step = goldenFraction * lastStep;
+        }
+        const T point = crd::math::fabs(step) >= unit ? best + step : best + toward(step);
+        const T fPoint = f(point);
+        if (fPoint <= fBest)
+        {
+            (point >= best ? lo : hi) = best;
+            third = second;
+            second = best;
+            best = point;
+            fThird = fSecond;
+            fSecond = fBest;
+            fBest = fPoint;
+            continue;
+        }
+        (point < best ? lo : hi) = point;
+        if (fPoint <= fSecond || second == best)
+        {
+            third = second;
+            second = point;
+            fThird = fSecond;
+            fSecond = fPoint;
+        }
+        else if (fPoint <= fThird || third == best || third == second)
+        {
+            third = point;
+            fThird = fPoint;
+        }
+    }
+    fmin_out = fBest;
+    return best;
 }
 
 } // namespace detail

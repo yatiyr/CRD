@@ -3,7 +3,7 @@
 // crd-hesap-diff v13-l — FINITE DIFFERENCES done right: Fornberg arbitrary-stencil weights (any nodes, any derivative
 // order, the stable generator) + central/forward derivatives with the PER-MAGNITUDE OPTIMAL step (never a hard-coded
 // h) + Richardson/Ridders error-killing extrapolation (returns a derivative AND an error estimate) + FD gradient /
-// Jacobian for vector functions. Verified vs the analytic stencils + Numerical Recipes dfridr before this port.
+// Jacobian for vector functions. Verified vs the analytic stencils before this port.
 //
 // The documented accuracy floors (honest, ADR-0095 / SANITY #6): a central difference loses ~⅓ of the digits
 // (best error ~ε^{2/3} at h~ε^{1/3}); a forward difference loses ~½ (~ε^{1/2} at h~ε^{1/2}). For MACHINE-EXACT
@@ -111,52 +111,60 @@ template <typename T, typename F>
            / (static_cast<T>(12) * h * h);
 }
 
-// Ridders' method (Numerical Recipes dfridr): Richardson extrapolation on central differences with a shrinking step,
-// returning the first derivative AND a Tier-1 error estimate. Far more accurate than a fixed-h difference.
+// Ridders' method (Ridders 1982, "Accurate computation of F'(x) and F'(x)F''(x)", Adv. Eng. Softw. 4(2)): central
+// differences at geometrically shrinking steps are combined by Neville-style Richardson extrapolation (each column
+// of the tableau removes one more even power of the step), returning the first derivative AND a Tier-1 error
+// estimate. Far more accurate than a fixed-h difference.
 template <typename T, typename F>
 [[nodiscard]] DiffResult<T> derivative_ridders(F&& f, T x, T h = static_cast<T>(0.1), int ntab = 10)
 {
-    if (ntab < 2)
+    constexpr int maxLevels = 16;
+    const int levels = ntab < 2 ? 2 : (ntab > maxLevels ? maxLevels : ntab);
+    constexpr T shrink = static_cast<T>(1.4);
+    const T shrinkSq = shrink * shrink;
+    const T stopFactor = T{2};
+    auto central = [&](T step) -> T
     {
-        ntab = 2;
-    }
-    if (ntab > 16)
+        const T ahead = f(x + step);
+        const T behind = f(x - step);
+        return (ahead - behind) / (T{2} * step);
+    };
+    // Only the previous and the current tableau column are ever needed.
+    T columns[2][maxLevels];
+    T* prev = columns[0];
+    T* cur = columns[1];
+    T step = h;
+    prev[0] = central(step);
+    T bestErr = std::numeric_limits<T>::max();
+    T best = prev[0];
+    for (int level = 1; level < levels; ++level)
     {
-        ntab = 16;
-    }
-    constexpr T con  = static_cast<T>(1.4);
-    const T     con2 = con * con;
-    const T     safe = T{2};
-    T           a[16 * 16];
-    auto        af   = [&](int r, int col) -> T& { return a[r * 16 + col]; };
-    T           hh   = h;
-    af(0, 0)          = (f(x + hh) - f(x - hh)) / (T{2} * hh);
-    T err            = std::numeric_limits<T>::max();
-    T ans            = af(0, 0);
-    for (int i = 1; i < ntab; ++i)
-    {
-        hh /= con;
-        af(0, i) = (f(x + hh) - f(x - hh)) / (T{2} * hh);
-        T fac   = con2;
-        for (int j = 1; j <= i; ++j)
+        step /= shrink;
+        cur[0] = central(step);
+        T weight = shrinkSq;
+        for (int order = 1; order <= level; ++order)
         {
-            af(j, i)     = (af(j - 1, i) * fac - af(j - 1, i - 1)) / (fac - T{1});
-            fac         = con2 * fac;
-            const T e1  = crd::math::fabs(af(j, i) - af(j - 1, i));
-            const T e2  = crd::math::fabs(af(j, i) - af(j - 1, i - 1));
-            const T errt = e1 > e2 ? e1 : e2;
-            if (errt <= err)
+            cur[order] = (cur[order - 1] * weight - prev[order - 1]) / (weight - T{1});
+            weight = shrinkSq * weight;
+            const T dOrder = crd::math::fabs(cur[order] - cur[order - 1]);
+            const T dLevel = crd::math::fabs(cur[order] - prev[order - 1]);
+            const T spread = dOrder > dLevel ? dOrder : dLevel;
+            if (spread <= bestErr)
             {
-                err = errt;
-                ans = af(j, i);
+                bestErr = spread;
+                best = cur[order];
             }
         }
-        if (crd::math::fabs(af(i, i) - af(i - 1, i - 1)) >= safe * err)
+        // The highest-order entry drifting away from its predecessor means round-off now dominates: stop.
+        if (crd::math::fabs(cur[level] - prev[level - 1]) >= stopFactor * bestErr)
         {
             break;
         }
+        T* const done = prev;
+        prev = cur;
+        cur = done;
     }
-    return DiffResult<T>{ans, err};
+    return DiffResult<T>{best, bestErr};
 }
 
 // First derivative by the 2nd-order forward difference (f(x+h)−f(x))/h with the optimal forward step (√ε·scale) if
