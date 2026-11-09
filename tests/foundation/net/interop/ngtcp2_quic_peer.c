@@ -902,11 +902,8 @@ static int write_streams(peer_t* peer)
             if (accepted)
             {
                 peer->last_datagram_ns = now;
-                if (peer->client)
-                {
-                    ++peer->datagrams_sent;
-                }
-                else
+                ++peer->datagrams_sent;
+                if (!peer->client)
                 {
                     peer->echo_first = (peer->echo_first + 1U) % MAX_DATAGRAMS;
                     --peer->echo_count;
