@@ -89,6 +89,13 @@ inline constexpr usize kSha256Bytes = 32U;
 // The SHA-256 of `bytes` (FIPS 180-4).
 void sha256(cont::ConstSpan<u8> bytes, cont::Span<u8, kSha256Bytes> out) noexcept;
 
+inline constexpr usize kSha1Bytes = 20U;
+
+// The SHA-1 of `bytes` (FIPS 180-4). Broken as a security function and never used as one: its only caller is RFC 6455's
+// Sec-WebSocket-Accept, a fixed-form proof that a server read an opening handshake, which that protocol's wire format
+// dictates and which protects nothing (TLS beneath it does).
+void legacy_sha1(cont::ConstSpan<u8> bytes, cont::Span<u8, kSha1Bytes> out) noexcept;
+
 // A trust key's identifier: the SHA-256 of its public key (policy.hpp's KeyId).
 [[nodiscard]] KeyId key_id_of(cont::ConstSpan<u8> public_key) noexcept;
 

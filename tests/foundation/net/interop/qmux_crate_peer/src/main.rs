@@ -13,18 +13,26 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use qmux::tls;
+use qmux::ws;
+use qmux::ws::tokio_tungstenite::client_async;
+use qmux::ws::tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use qmux::ws::tokio_tungstenite::tungstenite::http::HeaderValue;
+use qmux::ws::tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
 use qmux::{Config, Error, RecvStream, SendStream, Session, Version};
 use rcgen::{CertificateParams, KeyPair, PKCS_ED25519};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, aws_lc_rs, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, ServerConfig, SignatureScheme};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 use web_transport_trait::{RecvStream as _, SendStream as _, Session as _, Stats as _};
 
 const SERVER_NAME: &str = "cerid.test";
 const PROTOCOL: &str = "cerid-interop";
+const WEBSOCKET_PATH: &str = "/interop";
+const HTTP_11: &[u8] = b"http/1.1";
 const CLOSE_REASON: &str = "cerid-interop done";
 const RUN: Duration = Duration::from_secs(60);
 const CLOSE_GRACE: Duration = Duration::from_millis(300);
@@ -64,6 +72,7 @@ struct Options {
     hold_ms: u64,
     record_size: u64,
     alpn_version: String,
+    websocket: bool,
 }
 
 #[derive(Default)]
@@ -542,6 +551,10 @@ async fn run_client(options: Arc<Options>) {
         .dangerous()
         .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
+    if options.websocket {
+        run_websocket_client(config, options).await;
+        return;
+    }
     let versions = [version_of(&options)];
     let client = tls::Client::new(Arc::new(config))
         .with_protocol(PROTOCOL, &versions)
@@ -549,6 +562,53 @@ async fn run_client(options: Arc<Options>) {
         .with_session_config(session_config(&options));
     for number in 1..=options.connections {
         match client.connect(("127.0.0.1", options.port), SERVER_NAME).await {
+            Ok(session) => run_connection(session, options.clone(), number).await,
+            Err(error) => report_refused(number, &error),
+        }
+    }
+}
+
+/// The opening handshake by hand, over a TLS session of this peer's own: the crate's `wss` feature would bring the
+/// platform's certificate store in, and the pin is what a test needs.
+async fn run_websocket_client(mut config: ClientConfig, options: Arc<Options>) {
+    config.alpn_protocols = vec![HTTP_11.to_vec()];
+    let connector = TlsConnector::from(Arc::new(config));
+    let offered = format!("{}{PROTOCOL}", version_of(&options).prefix());
+    for number in 1..=options.connections {
+        let tcp = TcpStream::connect(("127.0.0.1", options.port)).await.expect("a connection");
+        let name = ServerName::try_from(SERVER_NAME).expect("a server name");
+        let stream = connector.connect(name, tcp).await.expect("a TLS session");
+        let mut request = format!("wss://{SERVER_NAME}{WEBSOCKET_PATH}").into_client_request().expect("a request");
+        let protocol = HeaderValue::from_str(&offered).expect("a subprotocol");
+        request.headers_mut().insert(SEC_WEBSOCKET_PROTOCOL, protocol);
+        match client_async(request, stream).await {
+            Ok((socket, response)) => {
+                let agreed = response.headers().get(SEC_WEBSOCKET_PROTOCOL).expect("the server's choice");
+                let session = ws::Upgraded::new(socket)
+                    .with_alpn(agreed.to_str().expect("a token"))
+                    .with_session_config(session_config(&options))
+                    .connect();
+                run_connection(session, options.clone(), number).await;
+            }
+            Err(error) => report_refused(number, &Error::from(error)),
+        }
+    }
+}
+
+async fn run_websocket_server(mut config: ServerConfig, options: Arc<Options>) {
+    config.alpn_protocols = vec![HTTP_11.to_vec()];
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+    let versions = [version_of(&options)];
+    let server = ws::Server::new()
+        .with_protocol(PROTOCOL, &versions)
+        .require_protocol()
+        .with_session_config(session_config(&options));
+    let listener = TcpListener::bind(("127.0.0.1", options.port)).await.expect("a listening socket");
+    println!("port={}", listener.local_addr().expect("its address").port());
+    for number in 1..=options.connections {
+        let (stream, _) = listener.accept().await.expect("a connection");
+        let stream = acceptor.accept(stream).await.expect("a TLS session");
+        match server.accept(stream).await {
             Ok(session) => run_connection(session, options.clone(), number).await,
             Err(error) => report_refused(number, &error),
         }
@@ -567,6 +627,10 @@ async fn run_server(options: Arc<Options>) {
         .with_no_client_auth()
         .with_single_cert(chain, PrivateKeyDer::Pkcs8(pkcs8.into()))
         .expect("a certificate and its key");
+    if options.websocket {
+        run_websocket_server(config, options).await;
+        return;
+    }
     config.alpn_protocols = vec![format!("{}{PROTOCOL}", version_of(&options).prefix()).into_bytes()];
     config.ticketer = aws_lc_rs::Ticketer::new().expect("a ticketer");
     let server = tls::Server::new(Arc::new(config)).with_session_config(session_config(&options));
@@ -624,6 +688,7 @@ fn parse_options() -> Options {
             "--hold-ms" => options.hold_ms = number(),
             "--record-size" => options.record_size = number(),
             "--alpn-version" => options.alpn_version.clone_from(value),
+            "--websocket" => options.websocket = value != "0",
             other => panic!("unknown option {other}"),
         }
     }

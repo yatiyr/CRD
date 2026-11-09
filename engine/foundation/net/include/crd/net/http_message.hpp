@@ -43,4 +43,14 @@ struct HttpMessageInfo
 // A field section's size as SETTINGS_MAX_FIELD_SECTION_SIZE counts it: names, values and 32 bytes per field.
 [[nodiscard]] u64 http_section_size(cont::ConstSpan<HttpField> fields) noexcept;
 
+// RFC 9110 section 5.6.2's token: one or more of its characters.
+[[nodiscard]] bool http_is_token(cont::ConstSpan<u8> text) noexcept;
+// ASCII case-insensitive equality.
+[[nodiscard]] bool http_same_ignoring_case(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept;
+// Visible bytes and those above ASCII: neither a space nor a control can hide in a request target or an authority.
+[[nodiscard]] bool http_target_valid(cont::ConstSpan<u8> text) noexcept;
+// A browser's Origin value against a server's list, compared exactly (`any` takes every value, a deliberate choice).
+[[nodiscard]] bool http_origin_allowed(cont::ConstSpan<u8> value, cont::ConstSpan<cont::ConstSpan<u8>> origins,
+                                       bool any) noexcept;
+
 } // namespace crd::net

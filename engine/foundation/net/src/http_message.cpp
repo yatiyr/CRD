@@ -21,22 +21,6 @@ template <usize N> [[nodiscard]] bool same(cont::ConstSpan<u8> text, const char 
     return (c >= 'A' && c <= 'Z') ? static_cast<u8>(c + ('a' - 'A')) : c;
 }
 
-[[nodiscard]] bool same_ignoring_case(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
-{
-    if (a.size() != b.size())
-    {
-        return false;
-    }
-    for (usize at = 0U; at < a.size(); ++at)
-    {
-        if (lower(a[at]) != lower(b[at]))
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
 [[nodiscard]] bool is_alpha(u8 c) noexcept
 {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
@@ -77,15 +61,6 @@ template <usize N> [[nodiscard]] bool same(cont::ConstSpan<u8> text, const char 
     }
 }
 
-[[nodiscard]] bool is_token(cont::ConstSpan<u8> text) noexcept
-{
-    if (text.empty())
-    {
-        return false;
-    }
-    return std::ranges::all_of(text, is_token_char);
-}
-
 // A lower-case token, from `from` on (a pseudo-field's colon is not one).
 [[nodiscard]] bool name_valid(cont::ConstSpan<u8> name, usize from) noexcept
 {
@@ -115,12 +90,6 @@ template <usize N> [[nodiscard]] bool same(cont::ConstSpan<u8> text, const char 
         }
     }
     return std::ranges::none_of(value, [](u8 c) { return c == 0U || c == '\r' || c == '\n'; });
-}
-
-// Visible bytes and those above ASCII: neither a space nor a control can hide in a request target.
-[[nodiscard]] bool target_valid(cont::ConstSpan<u8> text) noexcept
-{
-    return std::ranges::none_of(text, [](u8 c) { return c <= 0x20U || c == 0x7FU; });
 }
 
 [[nodiscard]] bool scheme_valid(cont::ConstSpan<u8> scheme) noexcept
@@ -216,7 +185,7 @@ constexpr u32 kSeenProtocol = 1U << 4U;
     if (same(field.name, ":method"))
     {
         info.method = field.value;
-        return first_time(seen, kSeenMethod) && is_token(field.value);
+        return first_time(seen, kSeenMethod) && http_is_token(field.value);
     }
     if (same(field.name, ":scheme"))
     {
@@ -226,7 +195,7 @@ constexpr u32 kSeenProtocol = 1U << 4U;
     if (same(field.name, ":authority"))
     {
         info.authority = field.value;
-        if (!first_time(seen, kSeenAuthority) || !target_valid(field.value))
+        if (!first_time(seen, kSeenAuthority) || !http_target_valid(field.value))
         {
             return false;
         }
@@ -235,12 +204,12 @@ constexpr u32 kSeenProtocol = 1U << 4U;
     if (same(field.name, ":path"))
     {
         info.path = field.value;
-        return first_time(seen, kSeenPath) && target_valid(field.value);
+        return first_time(seen, kSeenPath) && http_target_valid(field.value);
     }
     if (same(field.name, ":protocol"))
     {
         info.protocol = field.value;
-        return first_time(seen, kSeenProtocol) && is_token(field.value);
+        return first_time(seen, kSeenProtocol) && http_is_token(field.value);
     }
     return false;
 }
@@ -259,6 +228,43 @@ constexpr u32 kSeenProtocol = 1U << 4U;
     return same(info.path, "*") && same(info.method, "OPTIONS");
 }
 } // namespace
+
+bool http_is_token(cont::ConstSpan<u8> text) noexcept
+{
+    return !text.empty() && std::ranges::all_of(text, is_token_char);
+}
+
+bool http_same_ignoring_case(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
+{
+    if (a.size() != b.size())
+    {
+        return false;
+    }
+    for (usize at = 0U; at < a.size(); ++at)
+    {
+        if (lower(a[at]) != lower(b[at]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool http_target_valid(cont::ConstSpan<u8> text) noexcept
+{
+    return std::ranges::none_of(text, [](u8 c) { return c <= 0x20U || c == 0x7FU; });
+}
+
+bool http_origin_allowed(cont::ConstSpan<u8> value, cont::ConstSpan<cont::ConstSpan<u8>> origins, bool any) noexcept
+{
+    return any || std::ranges::any_of(origins,
+                                      [value](cont::ConstSpan<u8> origin)
+                                      {
+                                          return value.size() == origin.size() &&
+                                                 (value.empty() ||
+                                                  std::memcmp(value.data(), origin.data(), value.size()) == 0);
+                                      });
+}
 
 bool http_check_request(cont::ConstSpan<HttpField> fields, HttpMessageInfo& info) noexcept
 {
@@ -320,7 +326,7 @@ bool http_check_request(cont::ConstSpan<HttpField> fields, HttpMessageInfo& info
         {
             return false;
         }
-        if (has_authority && has_host && !same_ignoring_case(info.authority, host))
+        if (has_authority && has_host && !http_same_ignoring_case(info.authority, host))
         {
             return false;
         }

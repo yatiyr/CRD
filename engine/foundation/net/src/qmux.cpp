@@ -1,6 +1,7 @@
 // crd-net -- QMux over TLS (4.2a; docs/design/network-foundation.md#qmux). Source: draft-ietf-quic-qmux-02.
 
 #include <crd/containers/wire_bytes.hpp>
+#include <crd/crypto/provider.hpp>
 #include <crd/net/frame.hpp>
 #include <crd/net/qmux.hpp>
 #include <crd/net/quic_header.hpp>
@@ -20,6 +21,8 @@ constexpr usize kTlsRecordOverhead = 64U;
 constexpr u64 kMsNs = 1000000U;
 constexpr u32 kRttWeight = 8U; // RFC 9002 section 5.3's gain, one eighth
 constexpr usize kSizeBytes = 2U; // a record's Size at its longest, as this side writes them
+constexpr usize kFrameAt = kWsMaxHeaderBytes; // where a record's frames start in m_out, its head before them
+constexpr char kHttp11[] = "http/1.1";
 // What a client's QX_TRANSPORT_PARAMETERS frame takes at most; early data with less room than this sends nothing.
 constexpr usize kParametersRoom = 128U;
 
@@ -173,8 +176,13 @@ bool QmuxConnection::init(memory::IAllocator& allocator, const QmuxConfig& confi
     {
         return false;
     }
-    const crypto::QuicSide side =
-        (config.tls->role() == crypto::TlsRole::Client) ? crypto::QuicSide::Client : crypto::QuicSide::Server;
+    const bool client = config.tls->role() == crypto::TlsRole::Client;
+    if (config.websocket != nullptr &&
+        (!ws_config_valid(*config.websocket, client) || (client && config.tls->early_data())))
+    {
+        return false;
+    }
+    const crypto::QuicSide side = client ? crypto::QuicSide::Client : crypto::QuicSide::Server;
     QuicStreamLimits streams = config.streams;
     streams.in_order = true;
     if (!m_streams.init(allocator, streams, side) || !m_datagrams.init(allocator, config.datagrams))
@@ -313,7 +321,23 @@ void QmuxConnection::advance(u64 now_ns) noexcept
         m_config.tls->role() == crypto::TlsRole::Server && m_tls.early_data() == crypto::TlsEarlyData::Accepted;
     if (m_state == QmuxState::Handshaking && (done || reading_early))
     {
-        established(now_ns);
+        if (m_framing == Framing::Records && takes_websocket())
+        {
+            if (!done)
+            {
+                refuse_tls(crypto::TlsError::PeerRefused); // an opening handshake that could be replayed is none
+                return;
+            }
+            begin_upgrade();
+        }
+        if (m_framing == Framing::Upgrading)
+        {
+            read_upgrade(now_ns);
+        }
+        else if (m_state == QmuxState::Handshaking)
+        {
+            established(now_ns);
+        }
     }
     if (m_state == QmuxState::Established)
     {
@@ -326,10 +350,7 @@ void QmuxConnection::established(u64 now_ns) noexcept
     if (m_tls.application_protocol().empty())
     {
         // Section 3.1: without ALPN nothing tells which protocol the frames carry.
-        m_tls_error = crypto::TlsError::PeerRefused;
-        m_close.reason = QmuxCloseReason::TlsFailed;
-        finish_sending();
-        m_state = QmuxState::Closed;
+        refuse_tls(crypto::TlsError::PeerRefused);
         return;
     }
     m_state = QmuxState::Established;
@@ -380,6 +401,11 @@ void QmuxConnection::drain(u64 now_ns) noexcept
 
 void QmuxConnection::parse_records(u64 now_ns) noexcept
 {
+    if (m_framing == Framing::Messages)
+    {
+        parse_frames(now_ns);
+        return;
+    }
     usize at = 0U;
     while (at < m_in_fill)
     {
@@ -410,16 +436,13 @@ void QmuxConnection::parse_records(u64 now_ns) noexcept
         // A record with any byte of early data in it is early: a client could cut one at the end of its 0-RTT.
         const usize bytes = head + static_cast<usize>(size);
         const cont::ConstSpan<u8> record(m_in + at + head, static_cast<usize>(size));
-        const bool good = on_record(record, m_in_early != 0U, now_ns);
-        if (!good || m_state != QmuxState::Established)
+        if (!read_record(record, m_in_early != 0U, now_ns))
         {
             m_in_fill = 0U;
             m_in_early = 0U;
             return;
         }
         m_in_early -= (bytes < m_in_early) ? bytes : m_in_early;
-        ++m_counters.records_received;
-        m_last_activity = now_ns; // section 7.1: a whole record received
         at += bytes;
     }
     if (at != 0U)
@@ -427,6 +450,17 @@ void QmuxConnection::parse_records(u64 now_ns) noexcept
         std::memmove(m_in, m_in + at, m_in_fill - at);
         m_in_fill -= at;
     }
+}
+
+bool QmuxConnection::read_record(cont::ConstSpan<u8> record, bool early, u64 now_ns) noexcept
+{
+    if (!on_record(record, early, now_ns) || m_state != QmuxState::Established)
+    {
+        return false;
+    }
+    ++m_counters.records_received;
+    m_last_activity = now_ns; // section 7.1: a whole record received
+    return true;
 }
 
 bool QmuxConnection::on_record(cont::ConstSpan<u8> record, bool early, u64 now_ns) noexcept
@@ -612,6 +646,7 @@ void QmuxConnection::fail(QuicTransportError error) noexcept
     m_reason_bytes = 0U;
     m_close_owed = true;
     m_close_deadline = kQmuxNoTimer; // set when the close is written
+    m_ws.close_code = kWsCloseProtocolError;
     m_state = QmuxState::Closing;
 }
 
@@ -638,6 +673,12 @@ void QmuxConnection::finish_sending() noexcept
 {
     if (!m_send_shut)
     {
+        if (m_framing == Framing::Messages && !m_ws.close_sent)
+        {
+            u8 status[2] = {static_cast<u8>(m_ws.close_code >> 8U), static_cast<u8>(m_ws.close_code & 0xFFU)};
+            static_cast<void>(send_control(WsOpcode::Close, cont::ConstSpan<u8>(status, sizeof(status))));
+            m_ws.close_sent = true;
+        }
         static_cast<void>(m_tls.close()); // close_notify; a session past that has nothing to add
         m_send_shut = true;
     }
@@ -657,7 +698,7 @@ void QmuxConnection::keep_reason(cont::ConstSpan<u8> reason) noexcept
 
 bool QmuxConnection::frames_due(u64 now_ns) const noexcept
 {
-    return !m_parameters_sent || m_ping_owed || m_pong_owed ||
+    return !m_parameters_sent || m_ping_owed || m_pong_owed || m_ws.pong_owed ||
            ((m_peer_known || m_early_sending) && (m_streams.has_frame() || m_datagrams.has_frame(now_ns)));
 }
 
@@ -732,9 +773,19 @@ void QmuxConnection::produce(u64 now_ns) noexcept
 {
     while (m_state == QmuxState::Established || m_close_owed || early_open())
     {
-        if (m_tls.pending() + kQmuxMaxRecord + 2U + kTlsRecordOverhead > crypto::kTlsMaxBufferedBytes)
+        if (m_tls.pending() + sizeof(m_out) + kWsMaxControlBytes + kTlsRecordOverhead > crypto::kTlsMaxBufferedBytes)
         {
             return; // the transport is behind: the records wait, unassembled
+        }
+        if (m_ws.pong_owed && !m_close_owed)
+        {
+            m_ws.pong_owed = false; // section 5.5.3: only the latest Ping is owed an answer
+            const crypto::TlsError sent = send_control(WsOpcode::Pong, cont::ConstSpan<u8>(m_ws.pong, m_ws.pong_bytes));
+            if (sent != crypto::TlsError::None)
+            {
+                tls_failed(sent);
+                return;
+            }
         }
         const bool closing = m_close_owed;
         const usize used = closing ? build_close() : build_record(now_ns);
@@ -743,11 +794,19 @@ void QmuxConnection::produce(u64 now_ns) noexcept
             m_early_full = early_open() && frames_due(now_ns); // what did not fit waits for the handshake
             return;
         }
-        // Size is in its shortest encoding, directly in front of the frames.
-        const usize head = quic_varint_bytes(used);
-        cont::WireWriter size(cont::Span<u8>(m_out + 2U - head, head));
-        put_quic_varint(size, used);
-        const crypto::TlsError error = send_record(cont::ConstSpan<u8>(m_out + 2U - head, head + used));
+        crypto::TlsError error = crypto::TlsError::None;
+        if (m_framing == Framing::Messages)
+        {
+            error = send_frame(WsOpcode::Binary, m_out + kFrameAt, used);
+        }
+        else
+        {
+            // Size is in its shortest encoding, directly in front of the frames.
+            const usize head = quic_varint_bytes(used);
+            cont::WireWriter size(cont::Span<u8>(m_out + kFrameAt - head, head));
+            put_quic_varint(size, used);
+            error = send_record(cont::ConstSpan<u8>(m_out + kFrameAt - head, head + used));
+        }
         if (error != crypto::TlsError::None)
         {
             tls_failed(error);
@@ -774,10 +833,10 @@ usize QmuxConnection::build_close() noexcept
     usize used = 0U;
     if (!m_parameters_sent)
     {
-        used = write_parameters(cont::Span<u8>(m_out + 2U, kQmuxMaxRecord));
+        used = write_parameters(cont::Span<u8>(m_out + kFrameAt, kQmuxMaxRecord));
         m_parameters_sent = true;
     }
-    return used + write_quic_frame(frame, cont::Span<u8>(m_out + 2U + used, kQmuxMaxRecord - used));
+    return used + write_quic_frame(frame, cont::Span<u8>(m_out + kFrameAt + used, kQmuxMaxRecord - used));
 }
 
 void QmuxConnection::fill_local(QuicTransportParameters& local) const noexcept
@@ -833,7 +892,7 @@ usize QmuxConnection::write_ping(u64 type, u64 sequence, cont::Span<u8> out) noe
 
 usize QmuxConnection::build_record(u64 now_ns) noexcept
 {
-    u8* const frames = m_out + 2U;
+    u8* const frames = m_out + kFrameAt;
     const bool early = m_state == QmuxState::Handshaking; // only a client's 0-RTT is built before the handshake ends
     const usize room = record_room();
     usize used = 0U;
@@ -939,6 +998,7 @@ void QmuxConnection::on_timeout(u64 now_ns) noexcept
     else if (m_state == QmuxState::Established && now_ns >= idle_deadline())
     {
         m_close.reason = QmuxCloseReason::IdleTimeout;
+        m_ws.close_code = kWsCloseGoingAway;
         finish_sending(); // section 7.1: without a frame
         m_state = QmuxState::Closed;
     }
@@ -976,6 +1036,259 @@ void QmuxConnection::close(u64 application_error, cont::ConstSpan<u8> reason, u6
     keep_reason(reason);
     m_close_owed = true;
     m_state = QmuxState::Closing;
+}
+
+// ---- WebSocket: the opening handshake, then a record per message (RFC 6455) ----
+
+bool QmuxConnection::takes_websocket() const noexcept
+{
+    return m_config.websocket != nullptr && m_tls.application_protocol() == cont::StringView(kHttp11);
+}
+
+cont::ConstSpan<u8> QmuxConnection::websocket_protocol() const noexcept
+{
+    return m_ws.upgraded ? m_config.websocket->protocols[m_ws.protocol] : cont::ConstSpan<u8>();
+}
+
+void QmuxConnection::refuse_tls(crypto::TlsError error) noexcept
+{
+    m_tls_error = error;
+    m_close.reason = QmuxCloseReason::TlsFailed;
+    finish_sending();
+    m_state = QmuxState::Closed;
+}
+
+void QmuxConnection::refuse_upgrade(u16 status) noexcept
+{
+    m_close.reason = QmuxCloseReason::UpgradeRefused;
+    m_close.error_code = status;
+    m_in_fill = 0U;
+    finish_sending();
+    m_state = QmuxState::Closed;
+}
+
+void QmuxConnection::begin_upgrade() noexcept
+{
+    m_framing = Framing::Upgrading;
+    if (m_config.tls->role() != crypto::TlsRole::Client)
+    {
+        return; // the client speaks first
+    }
+    u8 random[kWsKeyBytes];
+    if (crypto::random_bytes(cont::Span<u8>(random, sizeof(random))) != crypto::CryptoError::None)
+    {
+        refuse_tls(crypto::TlsError::ProviderFailure);
+        return;
+    }
+    u8 key[kWsKeyChars];
+    ws_key_of(random, cont::Span<u8, kWsKeyChars>(key, kWsKeyChars));
+    ws_accept_of(cont::ConstSpan<u8>(key, sizeof(key)), cont::Span<u8, kWsAcceptChars>(m_ws.accept, kWsAcceptChars));
+    const usize used = ws_write_request(cont::Span<u8>(m_out, kWsMaxHeadBytes), *m_config.websocket,
+                                        cont::ConstSpan<u8>(key, sizeof(key)));
+    const crypto::TlsError error = m_tls.send(cont::ConstSpan<u8>(m_out, used));
+    if (error != crypto::TlsError::None)
+    {
+        tls_failed(error);
+    }
+}
+
+void QmuxConnection::read_upgrade(u64 now_ns) noexcept
+{
+    const bool client = m_config.tls->role() == crypto::TlsRole::Client;
+    usize got = 0U;
+    const crypto::TlsError error = m_tls.read(cont::Span<u8>(m_in + m_in_fill, sizeof(m_in) - m_in_fill), got);
+    m_in_fill += got;
+    const cont::ConstSpan<u8> bytes(m_in, m_in_fill);
+    WsHandshake handshake;
+    const HttpDecode decode =
+        client ? ws_read_response(bytes, *m_config.websocket, cont::ConstSpan<u8>(m_ws.accept, kWsAcceptChars),
+                                  m_ws.scanned, handshake)
+               : ws_read_request(bytes, *m_config.websocket, m_ws.scanned, handshake);
+    if (decode == HttpDecode::NeedMore)
+    {
+        if (error == crypto::TlsError::Closed)
+        {
+            peer_shutdown();
+        }
+        else if (error != crypto::TlsError::None)
+        {
+            tls_failed(error);
+        }
+        return;
+    }
+    if (!client)
+    {
+        const usize used =
+            ws_write_response(cont::Span<u8>(m_out, kWsMaxResponseBytes), *m_config.websocket, handshake);
+        const crypto::TlsError sent = m_tls.send(cont::ConstSpan<u8>(m_out, used));
+        if (sent != crypto::TlsError::None)
+        {
+            tls_failed(sent);
+            return;
+        }
+    }
+    if (handshake.status != 101U)
+    {
+        refuse_upgrade(handshake.status);
+        return;
+    }
+    // What follows the head is the first frames, read as soon as the connection stands.
+    m_in_fill -= handshake.head_bytes;
+    std::memmove(m_in, m_in + handshake.head_bytes, m_in_fill);
+    m_ws.protocol = handshake.protocol;
+    m_ws.upgraded = true;
+    m_framing = Framing::Messages;
+    established(now_ns);
+}
+
+void QmuxConnection::fail_websocket(u16 status) noexcept
+{
+    m_close.reason = QmuxCloseReason::WebSocketFailed;
+    m_close.error_code = status;
+    m_ws.close_code = status;
+    m_in_fill = 0U;
+    m_ws.message_bytes = 0U;
+    finish_sending();
+    m_state = QmuxState::Closed;
+}
+
+void QmuxConnection::parse_frames(u64 now_ns) noexcept
+{
+    const bool from_client = m_config.tls->role() == crypto::TlsRole::Server;
+    usize at = m_ws.message_bytes; // whole frames are consumed; what precedes `at` is the message so far
+    while (at < m_in_fill)
+    {
+        WsFrameHeader header;
+        u16 failure = 0U;
+        const HttpDecode decode = ws_read_frame_header(cont::ConstSpan<u8>(m_in + at, m_in_fill - at), from_client,
+                                                       kQmuxMaxRecord - m_ws.message_bytes, header, failure);
+        if (decode == HttpDecode::Invalid)
+        {
+            fail_websocket(failure);
+            return;
+        }
+        if (decode == HttpDecode::NeedMore || m_in_fill - at - header.header_bytes < header.payload_bytes)
+        {
+            break;
+        }
+        const usize payload_at = at + header.header_bytes;
+        if (header.masked)
+        {
+            ws_mask(cont::Span<u8>(m_in + payload_at, header.payload_bytes), header.mask);
+        }
+        at = payload_at + header.payload_bytes;
+        if (static_cast<u8>(header.opcode) >= static_cast<u8>(WsOpcode::Close))
+        {
+            on_control_frame(header.opcode, cont::ConstSpan<u8>(m_in + payload_at, header.payload_bytes));
+        }
+        else if (!on_data_frame(header, payload_at, now_ns))
+        {
+            m_in_fill = 0U;
+            m_ws.message_bytes = 0U;
+            return;
+        }
+        if (m_state != QmuxState::Established)
+        {
+            return;
+        }
+    }
+    const usize left = m_in_fill - at;
+    std::memmove(m_in + m_ws.message_bytes, m_in + at, left);
+    m_in_fill = m_ws.message_bytes + left;
+}
+
+bool QmuxConnection::on_data_frame(const WsFrameHeader& header, usize payload_at, u64 now_ns) noexcept
+{
+    if (header.opcode == WsOpcode::Text)
+    {
+        fail_websocket(kWsCloseUnsupportedData); // records are binary, and a Text message would have to be UTF-8
+        return false;
+    }
+    if ((header.opcode == WsOpcode::Continuation) != m_ws.fragmented)
+    {
+        fail_websocket(kWsCloseProtocolError); // section 5.4: a fragment with no message, or a message inside one
+        return false;
+    }
+    const usize bytes = header.payload_bytes;
+    m_ws.fragmented = !header.fin;
+    cont::ConstSpan<u8> record(m_in + payload_at, bytes);
+    if (m_ws.message_bytes != 0U || !header.fin)
+    {
+        std::memmove(m_in + m_ws.message_bytes, m_in + payload_at, bytes);
+        m_ws.message_bytes += bytes;
+        if (!header.fin)
+        {
+            return true;
+        }
+        record = cont::ConstSpan<u8>(m_in, m_ws.message_bytes);
+    }
+    if (record.empty())
+    {
+        m_frame_type = 0U;
+        fail(QuicTransportError::ProtocolViolation); // as a Size of zero on the record path
+        return false;
+    }
+    m_ws.message_bytes = 0U;
+    return read_record(record, false, now_ns);
+}
+
+void QmuxConnection::on_control_frame(WsOpcode opcode, cont::ConstSpan<u8> payload) noexcept
+{
+    if (opcode == WsOpcode::Ping)
+    {
+        m_ws.pong_owed = true;
+        m_ws.pong_bytes = static_cast<u8>(payload.size());
+        if (!payload.empty())
+        {
+            std::memcpy(m_ws.pong, payload.data(), payload.size());
+        }
+        return;
+    }
+    if (opcode == WsOpcode::Close)
+    {
+        u16 code = kWsCloseNoStatus;
+        cont::ConstSpan<u8> reason;
+        const u16 failure = ws_read_close(payload, code, reason);
+        if (failure != 0U)
+        {
+            fail_websocket(failure);
+            return;
+        }
+        m_close.reason = QmuxCloseReason::PeerShutdown;
+        m_close.error_code = code;
+        keep_reason(reason);
+        m_ws.close_code = (code != kWsCloseNoStatus) ? code : kWsCloseNormal; // section 5.5.1: echoes what it read
+        finish_sending();
+        m_state = QmuxState::Closed;
+    }
+    // A Pong answers nothing: this side sends no Pings, and section 5.5.3 allows one unasked.
+}
+
+crypto::TlsError QmuxConnection::send_frame(WsOpcode opcode, u8* payload, usize payload_bytes) noexcept
+{
+    const bool client = m_config.tls->role() == crypto::TlsRole::Client;
+    u8 mask[kWsMaskBytes];
+    if (client)
+    {
+        if (crypto::random_bytes(cont::Span<u8>(mask, sizeof(mask))) != crypto::CryptoError::None)
+        {
+            return crypto::TlsError::ProviderFailure; // section 10.3: a predictable mask must never go out
+        }
+        ws_mask(cont::Span<u8>(payload, payload_bytes), mask);
+    }
+    const usize head = ws_frame_header_bytes(payload_bytes, client);
+    ws_write_frame_header(cont::Span<u8>(payload - head, head), opcode, true, payload_bytes, client ? mask : nullptr);
+    return m_tls.send(cont::ConstSpan<u8>(payload - head, head + payload_bytes));
+}
+
+crypto::TlsError QmuxConnection::send_control(WsOpcode opcode, cont::ConstSpan<u8> payload) noexcept
+{
+    u8 frame[kWsMaxHeaderBytes + kWsMaxControlBytes];
+    if (!payload.empty())
+    {
+        std::memcpy(frame + kWsMaxHeaderBytes, payload.data(), payload.size());
+    }
+    return send_frame(opcode, frame + kWsMaxHeaderBytes, payload.size());
 }
 
 } // namespace crd::net

@@ -1163,7 +1163,7 @@
       "ref": "qmux-v0.6.6",
       "commit": "ef8abdccdc0afbb23c993dd42611484eb1d655df",
       "license": "MIT OR Apache-2.0",
-      "note": "qmux 0.6.6 (2026-10-23, draft-ietf-quic-qmux-02) with its TLS transport over rustls 0.23.46 and aws-lc-rs, and rcgen for the peer's self-signed certificate: the crate set of crd-qmux-crate-peer, the second implementation of the QMux interoperability test (CRD_BUILD_QMUX_VS_CRATE, 4.2a). The committed Cargo.lock is the pin: every crate from crates.io at the version and SHA-256 it names, which `cargo build --locked` verifies on download. Test-only, in no shipped build."
+      "note": "qmux 0.6.6 (2026-10-23, draft-ietf-quic-qmux-02) with its TLS and WebSocket (tokio-tungstenite 0.30) transports over rustls 0.23.46 and aws-lc-rs, and rcgen for the peer's self-signed certificate: the crate set of crd-qmux-crate-peer, the second implementation of the QMux interoperability test (CRD_BUILD_QMUX_VS_CRATE, 4.2a). The committed Cargo.lock is the pin: every crate from crates.io at the version and SHA-256 it names, which `cargo build --locked` verifies on download. Test-only, in no shipped build."
     },
     "cuda-linux-x64": {
       "version": "13.3.1",

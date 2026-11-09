@@ -762,16 +762,7 @@ bool WebTransport::origin_allowed(cont::ConstSpan<HttpField> fields) const noexc
             found = &field;
         }
     }
-    if (found == nullptr || m_config.any_origin)
-    {
-        return true;
-    }
-    bool allowed = false;
-    for (const cont::ConstSpan<u8> origin : m_config.origins)
-    {
-        allowed = allowed || same(found->value, origin);
-    }
-    return allowed;
+    return found == nullptr || http_origin_allowed(found->value, m_config.origins, m_config.any_origin);
 }
 
 bool WebTransport::retain_offer(Session& session, cont::ConstSpan<HttpField> fields) noexcept

@@ -23,6 +23,9 @@
 //   close     CONNECTION_CLOSE, then close_notify and a shutdown of the sending side, then the peer's end (data
 //             arriving meanwhile is discarded). A stream ending without close_notify is a truncation, never a clean
 //             end.
+//   WebSocket a connection whose TLS agrees on http/1.1, where a WebSocketConfig allows it, runs an opening handshake
+//             and then carries one record in each Binary message, with no Size (the browser path; contract:
+//             docs/design/network-foundation.md#websocket). Everything above the records is the same code.
 //   memory    records use two fixed buffers of the connection; streams and datagrams allocate at init(), never after.
 //   threads   one thread at a time.
 
@@ -33,6 +36,7 @@
 #include <crd/net/quic_datagram.hpp>
 #include <crd/net/quic_frame.hpp>
 #include <crd/net/quic_stream_set.hpp>
+#include <crd/net/websocket.hpp>
 
 namespace crd::memory
 {
@@ -55,6 +59,10 @@ struct QmuxConfig
     // kQuicMaxEarlyContextBytes, read by start()), after the limits the connection adds itself, so a ticket's 0-RTT
     // is refused once either changed. Empty where early data is not accepted.
     cont::ConstSpan<u8> early_context;
+    // Takes connections whose TLS agrees on `http/1.1` as WebSocket, what ws_config_valid() accepts for this side; null
+    // for none. A server's context may list QMux identifiers beside it, so one port serves both. A client's context
+    // must not ask for early data: a request that could be replayed is no opening handshake.
+    const WebSocketConfig* websocket = nullptr;
     QuicStreamLimits streams;
     QuicDatagramLimits datagrams;
     u64 idle_timeout_ns = 30'000'000'000U;      // the idle timeout offered; 0 for none
@@ -68,7 +76,7 @@ struct QmuxConfig
 enum class QmuxState : u8
 {
     Idle,        // before start()
-    Handshaking, // the TLS handshake runs
+    Handshaking, // the TLS handshake runs, and a WebSocket's opening handshake after it
     Established, // records flow (peer_parameters_known() tells whether the peer's arrived); on a server that accepted
                  // early data from the client's first flight, before the handshake ends
     Closing,     // this side closed: only the peer's end, or the wait for it, remains
@@ -82,12 +90,16 @@ enum class QmuxCloseReason : u8
     Local,            // close() was called: `application`, error_code
     Error,            // this side closed with the transport error `error_code` (frame_type: the frame that caused it)
     Peer,             // the peer's CONNECTION_CLOSE: `application`, error_code, frame_type
-    PeerShutdown,     // the peer's close_notify with no CONNECTION_CLOSE (its idle timeout, draft section 7.1)
+    PeerShutdown,     // the peer's close_notify with no CONNECTION_CLOSE (its idle timeout, draft section 7.1), or
+                      // its WebSocket Close with none (error_code: the Close frame's status, 1005 for none)
     IdleTimeout,      // this side's idle timeout
     HandshakeTimeout, // the TLS handshake did not end in time
     TlsFailed,        // a fatal alert or a refusal; handshake() and tls_error() tell which
     Truncated,        // the transport ended without close_notify
     Reset,            // the transport was reset or failed
+    UpgradeRefused,   // the opening handshake failed: error_code is the HTTP status (a server's answer, or the one a
+                      // client read; 0 for a response this client refuses)
+    WebSocketFailed,  // this side failed the WebSocket with the Close status error_code
 };
 
 struct QmuxCloseInfo
@@ -159,6 +171,10 @@ public:
     [[nodiscard]] crypto::TlsError tls_error() const noexcept { return m_tls_error; }
     [[nodiscard]] const crypto::TlsSession& handshake() const noexcept { return m_tls; }
     [[nodiscard]] bool peer_parameters_known() const noexcept { return m_peer_known; }
+    // Whether this connection is a WebSocket, from the moment its TLS agreed on http/1.1.
+    [[nodiscard]] bool websocket() const noexcept { return m_framing != Framing::Records; }
+    // The subprotocol its opening handshake agreed on; empty until then.
+    [[nodiscard]] cont::ConstSpan<u8> websocket_protocol() const noexcept;
     [[nodiscard]] const QuicTransportParameters& peer_parameters() const noexcept { return m_peer; }
     // The smoothed RTT from QX_PING exchanges; 0 before the first answer.
     [[nodiscard]] u64 rtt_ns() const noexcept { return m_rtt_ns; }
@@ -170,12 +186,50 @@ public:
     [[nodiscard]] const QuicDatagrams& datagrams() const noexcept { return m_datagrams; }
 
 private:
+    enum class Framing : u8
+    {
+        Records,   // a Size before each record, QMux's own
+        Upgrading, // a WebSocket's opening handshake is running
+        Messages,  // a record per WebSocket message
+    };
+
+    // What an opening handshake or a message in pieces has to remember.
+    struct WebSocketState
+    {
+        usize scanned = 0U;              // how far the search for the end of the head went
+        usize message_bytes = 0U;        // of m_in's first bytes, a message still arriving in fragments
+        u16 close_code = kWsCloseNormal; // what this side's Close frame says
+        u8 protocol = 0U;                // the configured subprotocol's index
+        bool upgraded = false;
+        bool fragmented = false; // a fragmented message has begun
+        bool close_sent = false;
+        bool pong_owed = false;
+        u8 pong_bytes = 0U;
+        u8 pong[kWsMaxControlBytes] = {};
+        u8 accept[kWsAcceptChars] = {}; // a client's: what the server must answer
+    };
+
     void advance(u64 now_ns) noexcept;
     void begin_early() noexcept;
     void settle_early() noexcept;
     void established(u64 now_ns) noexcept;
     void drain(u64 now_ns) noexcept;
     void parse_records(u64 now_ns) noexcept;
+    [[nodiscard]] bool read_record(cont::ConstSpan<u8> record, bool early, u64 now_ns) noexcept;
+    // ---- WebSocket ----
+    [[nodiscard]] bool takes_websocket() const noexcept;
+    void refuse_tls(crypto::TlsError error) noexcept;
+    void begin_upgrade() noexcept;
+    void read_upgrade(u64 now_ns) noexcept;
+    void refuse_upgrade(u16 status) noexcept;
+    void parse_frames(u64 now_ns) noexcept;
+    [[nodiscard]] bool on_data_frame(const WsFrameHeader& header, usize payload_at, u64 now_ns) noexcept;
+    void on_control_frame(WsOpcode opcode, cont::ConstSpan<u8> payload) noexcept;
+    void fail_websocket(u16 status) noexcept;
+    // Sends `payload_bytes` at `payload` as one frame, masked on a client; the kWsMaxHeaderBytes before `payload` are
+    // its to write.
+    [[nodiscard]] crypto::TlsError send_frame(WsOpcode opcode, u8* payload, usize payload_bytes) noexcept;
+    [[nodiscard]] crypto::TlsError send_control(WsOpcode opcode, cont::ConstSpan<u8> payload) noexcept;
     void apply_peer_limits(const QuicTransportParameters& peer) noexcept;
     void fill_local(QuicTransportParameters& local) const noexcept;
     [[nodiscard]] bool early_open() const noexcept;
@@ -200,6 +254,7 @@ private:
 
     QmuxConfig m_config;
     QmuxState m_state = QmuxState::Idle;
+    Framing m_framing = Framing::Records;
     bool m_ready = false;
     crypto::TlsSession m_tls;
     crypto::TlsError m_tls_error = crypto::TlsError::None;
@@ -233,8 +288,11 @@ private:
     QmuxCounters m_counters;
     usize m_in_fill = 0U;
     usize m_in_early = 0U; // of m_in's first bytes, those that came as early data
-    u8 m_in[kQmuxMaxRecord + 8U] = {};  // received plaintext: at most one partial record and its Size
-    u8 m_out[kQmuxMaxRecord + 2U] = {}; // the record being assembled, its Size in the first bytes
+    WebSocketState m_ws;
+    // Received plaintext: at most one partial record and its Size, or on a WebSocket a message in fragments and one
+    // partial frame, which may be a control frame between them.
+    u8 m_in[kQmuxMaxRecord + kWsMaxHeaderBytes + kWsMaxControlBytes] = {};
+    u8 m_out[kQmuxMaxRecord + kWsMaxHeaderBytes] = {}; // the record being assembled, room for its head before it
 };
 
 } // namespace crd::net

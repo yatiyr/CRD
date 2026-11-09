@@ -5,7 +5,7 @@
 //                      --bytes N --closer client|server|none --code N --max-streams N [--uni N --uni-bytes N]
 //                      [--resets N] [--stops N] [--datagrams N --datagram-bytes N [--datagram-limit N]
 //                      [--datagram-probe 1]] [--connections 2 [--early 1]] [--idle-ms N] [--keepalive-ms N]
-//                      [--hold-ms N]
+//                      [--hold-ms N] [--websocket 1]
 //
 //   port, seed, group, cipher  as crd-quic-peer's; interop_echo.hpp describes the application
 //   alpn          the one application protocol this end offers or accepts
@@ -14,6 +14,7 @@
 //   idle-ms       the idle timeout this end offers (default 30000)
 //   keepalive-ms  a QX_PING after this long with no record
 //   hold-ms       this long with nothing to do before the closing end closes
+//   websocket     WebSocket over HTTP/1.1, `alpn` its subprotocol; a server's TLS lists `alpn` as well
 //
 // The report of each connection goes to standard output when it has ended; the closing end closes with the reason
 // `cerid-interop done`.
@@ -57,13 +58,21 @@ constexpr u64 kConnectionMaxWindow = 1U << 24U;
 constexpr u32 kDatagramRingBytes = 1U << 20U;
 constexpr u32 kDatagramRingCount = 2048U;
 constexpr u8 kEarlyContext[4] = {'e', 'c', 't', 'x'};
+constexpr StringView kHttp11 = "http/1.1";
+constexpr StringView kWebSocketPath = "/interop";
 
 struct Options : EchoOptions
 {
     StringView alpn;
     u64 idle_ms = 30000U;
     u64 keepalive_ms = 0U;
+    bool websocket = false;
 };
+
+[[nodiscard]] ConstSpan<u8> bytes_of(StringView text) noexcept
+{
+    return ConstSpan<u8>(reinterpret_cast<const u8*>(text.data()), text.size());
+}
 
 [[nodiscard]] const char* close_name(const QmuxCloseInfo& info) noexcept
 {
@@ -89,6 +98,10 @@ struct Options : EchoOptions
         return "truncated";
     case QmuxCloseReason::Reset:
         return "reset";
+    case QmuxCloseReason::UpgradeRefused:
+        return "upgrade-refused";
+    case QmuxCloseReason::WebSocketFailed:
+        return "websocket-failed";
     }
     return "unknown";
 }
@@ -135,6 +148,9 @@ public:
         const StringView alpn = connection.handshake().application_protocol();
         const StringView tls_error = tls_error_name(connection.tls_error());
         const ConstSpan<u8> reason = connection.close_reason();
+        const ConstSpan<u8> subprotocol = connection.websocket_protocol();
+        std::printf("websocket_protocol=%.*s\n", static_cast<int>(subprotocol.size()),
+                    reinterpret_cast<const char*>(subprotocol.data()));
         std::printf("alpn=%.*s\nclose=%s\nclose_code=%llu\nclose_reason=%.*s\ntls_error=%.*s\nsocket_error=%d\n",
                     static_cast<int>(alpn.size()), alpn.data(), close_name(info),
                     static_cast<unsigned long long>(info.error_code), static_cast<int>(reason.size()),
@@ -203,8 +219,14 @@ int run(crd::memory::IAllocator& allocator, const Options& options, const TlsCon
     App app(peer);
     static u8 early_context[sizeof(kEarlyContext)];
     std::memcpy(early_context, kEarlyContext, sizeof(kEarlyContext));
+    const ConstSpan<u8> subprotocols[] = {bytes_of(options.alpn)};
+    WebSocketConfig websocket;
+    websocket.protocols = subprotocols;
+    websocket.path = bytes_of(kWebSocketPath);
+    websocket.host = bytes_of(kServerName);
     QmuxHostConfig config;
     config.connection = connection_config(options);
+    config.connection.websocket = options.websocket ? &websocket : nullptr;
     config.connection.tls = options.client ? nullptr : &context;
     config.connection.tickets = options.client ? &tickets : nullptr;
     config.connection.early_context = options.early && !options.client ? ConstSpan<u8>(early_context) : ConstSpan<u8>();
@@ -255,7 +277,7 @@ int usage()
     std::fputs("usage: crd-qmux-peer --role client|server --port N --seed HEX --group NAME --cipher NAME --alpn NAME "
                "--streams N --bytes N --closer client|server|none --code N --max-streams N [--uni N --uni-bytes N] "
                "[--resets N] [--stops N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]] "
-               "[--connections 2 [--early 1]] [--idle-ms N] [--keepalive-ms N] [--hold-ms N]\n",
+               "[--connections 2 [--early 1]] [--idle-ms N] [--keepalive-ms N] [--hold-ms N] [--websocket 1]\n",
                stderr);
     return 2;
 }
@@ -285,6 +307,10 @@ int main(int argc, char** argv)
         {
             options.keepalive_ms = std::strtoull(value, nullptr, 10);
         }
+        else if (std::strcmp(name, "--websocket") == 0)
+        {
+            options.websocket = std::strcmp(value, "0") != 0;
+        }
         else
         {
             return usage();
@@ -306,13 +332,18 @@ int main(int argc, char** argv)
     const KeyId pin = credential.key_id();
     const AlgorithmId groups[] = {options.group};
     const AlgorithmId aeads[] = {options.cipher};
-    const StringView protocols[] = {options.alpn};
+    const StringView both[] = {options.alpn, kHttp11};
+    const StringView protocols[] = {options.websocket ? kHttp11 : options.alpn};
     TlsConfig tls;
     tls.role = options.client ? TlsRole::Client : TlsRole::Server;
     tls.groups = ConstSpan<AlgorithmId>(groups, 1U);
     tls.aeads = ConstSpan<AlgorithmId>(aeads, 1U);
     tls.server_name = kServerName;
     tls.application_protocols = protocols;
+    if (options.websocket && !options.client)
+    {
+        tls.application_protocols = both;
+    }
     if (options.client)
     {
         tls.signatures = kSignatures;

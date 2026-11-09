@@ -576,6 +576,11 @@ void sha256(cont::ConstSpan<u8> bytes, cont::Span<u8, kSha256Bytes> out) noexcep
     SHA256(bytes.data(), bytes.size(), out.data());
 }
 
+void legacy_sha1(cont::ConstSpan<u8> bytes, cont::Span<u8, kSha1Bytes> out) noexcept
+{
+    SHA1(bytes.data(), bytes.size(), out.data());
+}
+
 KeyId key_id_of(cont::ConstSpan<u8> public_key) noexcept
 {
     KeyId id;

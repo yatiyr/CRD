@@ -74,6 +74,13 @@ crd_fuzz_target(crd-fuzz-net-quic-datagram
 crd_fuzz_target(crd-fuzz-net-qmux
     SOURCES fuzz_qmux.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-qmux")
 
+# WebSocket over HTTP/1.1 (4.2a).
+#   crd-fuzz-net-websocket   the parsers alone, then a server and a client behind a real TLS peer under any plaintext,
+#                            frames, opening handshakes, time, reads, closes and the transport's end: one head, then
+#                            frames legal for its side, nothing after a Close or a refusal, nothing allocated.
+crd_fuzz_target(crd-fuzz-net-websocket
+    SOURCES fuzz_websocket.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-websocket")
+
 # QMux's 0-RTT (4.2a).
 #   crd-fuzz-net-qmux-early   a server reading hostile early data, answering at 0.5-RTT, and a client sending early data
 #                             to a real TLS server that accepts, refuses or answers anything: what each side sends stays

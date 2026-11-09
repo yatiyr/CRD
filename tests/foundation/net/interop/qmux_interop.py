@@ -14,6 +14,9 @@ timeout with no application data, and the RTT each end measures; a larger max_re
 that cuts the byte stream into pieces of a few bytes, so Sizes and records split anywhere; a relay that goes silent,
 which each end's idle timeout ends; and a refusal when the two share no application protocol.
 
+WebSocket cases run the same application over WebSocket over HTTP/1.1 (RFC 6455) inside TLS, tokio-tungstenite on the
+crate's side: one Binary message per record, as the crate's WebSocket transport and crd-net both write them.
+
 0-RTT stays with crd-net's own tests and its fuzzing: the crate reads and writes QMux only after the handshake.
 """
 import argparse
@@ -91,7 +94,7 @@ class Case:
     def __init__(self, cerid, crate, cerid_is_client, group='x25519mlkem768', cipher='aes128', streams=4,
                  size=256 << 10, closer='client', code=0, max_streams=16, uni=0, uni_size=0, resets=0, stops=0,
                  datagrams=0, datagram_bytes=1000, datagram_limit=None, resume=False, relay=None, idle_ms=None, keepalive_ms=None,
-                 hold_ms=None, record_size=None, crate_version=None):
+                 hold_ms=None, record_size=None, crate_version=None, websocket=False):
         self.cerid = cerid
         self.crate = crate
         self.cerid_is_client = cerid_is_client
@@ -116,6 +119,7 @@ class Case:
         self.hold_ms = hold_ms
         self.record_size = record_size
         self.crate_version = crate_version  # the crate offers or accepts only this QMux draft: a refusal
+        self.websocket = websocket
 
     def command(self, program, role, port):
         cerid = program == self.cerid
@@ -144,6 +148,8 @@ class Case:
             command += ['--record-size', str(self.record_size)]
         if self.crate_version and not cerid:
             command += ['--alpn-version', self.crate_version]
+        if self.websocket:
+            command += ['--websocket', '1']
         return command
 
     def describe(self):
@@ -154,7 +160,8 @@ class Case:
             (f' relay {self.relay}' if self.relay else '') + (f' idle {self.idle_ms}' if self.idle_ms else '') + \
             (f' hold {self.hold_ms}' if self.hold_ms else '') + \
             (f' record {self.record_size}' if self.record_size else '') \
-            + (f' crate draft {self.crate_version}' if self.crate_version else '')
+            + (f' crate draft {self.crate_version}' if self.crate_version else '') \
+            + (' websocket' if self.websocket else '')
         return ('cerid client' if self.cerid_is_client else 'crate client') + \
             f' {self.group} {self.cipher} {self.streams}x{self.size} {self.closer} closes {self.code}' + extra
 
@@ -209,6 +216,11 @@ class Case:
     def check_refused(self, client, server, detail):
         cerid, crate = (client, server) if self.cerid_is_client else (server, client)
         expect(cerid.get('established') == '0' and crate.get('established') == '0', f'established: {detail}')
+        if self.websocket:
+            expect(cerid.get('close') == 'upgrade-refused' and cerid.get('close_code') == '400',
+                   f'crd-net closed otherwise: {detail}')
+            expect('400' in crate.get('error', ''), f'the crate failed otherwise: {detail}')
+            return
         expect(cerid.get('close') == 'tls', f'crd-net closed otherwise: {detail}')
         if not self.cerid_is_client:
             expect(cerid.get('tls_error') == 'peer-refused', f'crd-net refused otherwise: {detail}')
@@ -233,7 +245,11 @@ class Case:
                 expected = str(self.streams * self.size)
                 expect(report.get('bytes_received') == expected and report.get('bytes_sent') == expected,
                        f'{name} counted other bytes: {detail}')
-        expect(cerid.get('alpn') == f'qmux-02.{PROTOCOL}', f'crd-net agreed on another protocol: {detail}')
+        if self.websocket:
+            expect(cerid.get('alpn') == 'http/1.1' and cerid.get('websocket_protocol') == f'qmux-02.{PROTOCOL}',
+                   f'crd-net agreed on another protocol: {detail}')
+        else:
+            expect(cerid.get('alpn') == f'qmux-02.{PROTOCOL}', f'crd-net agreed on another protocol: {detail}')
         expect(crate.get('protocol') == PROTOCOL, f'the crate agreed on another protocol: {detail}')
         expect(cerid.get('resumed') == ('1' if number == 1 else '0'), f'resumption differs: {detail}')
         expect(cerid.get('early') == 'none', f'early data was used: {detail}')
@@ -298,6 +314,26 @@ def cases(cerid, crate):
             yield case(streams=2, size=64 << 10, relay=dict(seed=seed, largest=7))
         yield case(streams=0, closer='none', idle_ms=400, relay=dict(silent_after=0.2))
         yield case(streams=0, crate_version='01')
+        yield case(websocket=True)
+        yield case(closer='server', code=0x2A, websocket=True)
+        yield case(streams=1, size=16 << 20, websocket=True)
+        yield case(streams=8, size=4 << 20, closer='server', code=1, websocket=True)
+        yield case(streams=64, size=32 << 10, max_streams=8, websocket=True)
+        # The crate's close abandons a write its WebSocket has not finished (`transmit_or_teardown`), so the closing end
+        # holds a second after its streams are done, as the reset cases do.
+        yield case(streams=0, uni=8, uni_size=1 << 20, hold_ms=1000, websocket=True)
+        yield case(streams=0, resets=4, hold_ms=1000, websocket=True)
+        yield case(streams=0, stops=4, hold_ms=1000, websocket=True)
+        yield case(streams=2, size=64 << 10, uni=4, uni_size=64 << 10, resets=2, stops=2, closer='server', code=3,
+                   websocket=True)
+        yield case(streams=0, datagrams=128, websocket=True)
+        yield case(streams=4, datagrams=128, websocket=True)
+        yield case(streams=0, datagrams=16, datagram_bytes=597, datagram_limit=600, websocket=True)
+        yield case(streams=1, size=1024, idle_ms=900, keepalive_ms=250, hold_ms=2500, websocket=True)
+        for seed in (1, 2, 3):
+            yield case(streams=2, size=64 << 10, relay=dict(seed=seed, largest=7), websocket=True)
+        yield case(streams=0, closer='none', idle_ms=400, relay=dict(silent_after=0.2), websocket=True)
+        yield case(streams=0, crate_version='01', websocket=True)
 
 
 def main():
