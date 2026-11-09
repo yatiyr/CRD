@@ -1180,7 +1180,7 @@
       "id": "websocket.h2",
       "title": "Bootstrapping WebSockets with HTTP/2",
       "kind": "extension",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a"
@@ -1192,13 +1192,20 @@
       },
       "cryptography": [],
       "source": {
-        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n124",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/design/network-foundation.md#websocket-tunnels",
+        "read": "2026-11-02",
+        "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "engine/foundation/net/include/crd/net/websocket_tunnel.hpp",
+        "engine/foundation/net/src/websocket_tunnel.cpp",
+        "tests/foundation/net/test_websocket_tunnel.cpp",
+        "tests/foundation/net/fuzz/fuzz_websocket_tunnel.cpp",
+        "tests/foundation/net/interop/qmux_interop.py"
+      ],
+      "deprecation": null,
+      "note": "RFC 8441's extended CONNECT carrying S61's WebSocket message stage (design S64), proven against the h2 crate with tokio-tungstenite both ways over HTTP/2 with prior knowledge."
     },
     {
       "id": "websocket.h3",
