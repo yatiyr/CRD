@@ -199,6 +199,19 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Retirement | When the reproduction reports no leak for a newer pinned OpenSC, this entry is removed |
 | Row | [NET.2](ROADMAP.md#slice-net.2); evidence [the PKCS #11 device session](sessions/2026-11-03-net-2-pkcs11-device.md) |
 
+<a id="tp-13"></a>
+## TP-13: nghttp3 drops a response whose QUIC stream closes while QPACK blocks it
+
+| Field | Value |
+|---|---|
+| Component | nghttp3 1.19.0 over ngtcp2 1.26.0 (`cmake/pins.json` `nghttp3`, `ngtcp2`), the HTTP/3 peer of the interoperability test |
+| Symptom | A response whose section arrives ahead of the QPACK insert it needs, and whose FIN came with it, never reaches the application: ngtcp2 reports the stream closed once it has delivered the last byte, and `nghttp3_conn_close_stream2` deletes a stream with what its blocked section holds. The insert arrives and nothing is left to decode |
+| Reproduction outside Cerid | nghttp3's own debug log in `crd-ngtcp2-quic-peer --http3 1`: `qpack::decode: stream blocked`, the stream's close, the insert, and no further callback for that stream; the requester idles out. Cerid's only part is that a conforming encoder may send a section before its insert (RFC 9204 section 2.1.2) |
+| Affected | No hosted test fails: `crd-net-http3-interop-nghttp3` on linux-gcc-public-checks holds the close back, below |
+| Engine handling | `ngtcp2_http3.c` holds `nghttp3_conn_close_stream2` until the message has ended; a stream reset closes at once. No Cerid source changes: `Http3Connection` keeps a blocked section in its own QUIC receive buffer |
+| Retirement | When a newer pinned nghttp3 delivers such a response with the deferral removed, the deferral and this entry go |
+| Row | [4.2a](ROADMAP.md#slice-4.2a); evidence [the nghttp3 interop session](sessions/2026-11-09-4-2a-nghttp3-interop.md) |
+
 ## The registered-failure gate
 
 `scripts/check-registered-failures.py --lane <preset> --junit <ctest --output-junit file> --ctest-exit <code>` reads

@@ -24,7 +24,7 @@ CI first: no completed run contains 413d62e8 or bea6e470 (42589388858 was still 
 ## Found
 
 - The exchange's own: a tunnel's client FIN before its datagrams closed the send part they need; trailers on a tunnel (only DATA may follow). Both are correct refusals by Cerid and nghttp3.
-- A QUIC-level close by ngtcp2 deletes nghttp3's stream with its blocked section; the C peer now defers the close to the message's end. Third-party behaviour, handled in the test program only.
+- A QUIC-level close by ngtcp2 deletes nghttp3's stream with its blocked section; the C peer now defers the close to the message's end. Third-party behaviour, handled in the test program only and registered as [TP-13](../third-party-defects.md#tp-13).
 
 ## Next
 
