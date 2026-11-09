@@ -33,6 +33,19 @@
           "standard": false
         },
         {
+          "id": "cerid.raw-path",
+          "kind": "protocol",
+          "owner": "net",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-derivation"
+          ],
+          "spec": "docs/design/network-foundation.md#raw-path",
+          "standard": false
+        },
+        {
           "id": "cerid.policy-generation",
           "kind": "format",
           "owner": "crypto",
@@ -656,6 +669,19 @@
             "key-exchange"
           ],
           "spec": "docs/design/network-foundation.md#negotiation",
+          "standard": false
+        },
+        {
+          "id": "cerid.raw-path",
+          "kind": "protocol",
+          "owner": "net",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-derivation"
+          ],
+          "spec": "docs/design/network-foundation.md#raw-path",
           "standard": false
         },
         {

@@ -136,6 +136,11 @@ void exchange_datagrams(Net& net, QuicConnection& from, QuicConnection& to)
 }
 
 // A peer holding the secret that writes any frame the test asks for: the client of the connection it talks to.
+// (MSVC C4324 as for QuicPacketProtection, which it holds inline.)
+#if CRD_COMPILER_MSVC
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 struct KeyedPeer
 {
     QuicPacketProtection protection;
@@ -215,6 +220,9 @@ struct KeyedPeer
         return 2U + bytes + extra;
     }
 };
+#if CRD_COMPILER_MSVC
+#pragma warning(pop)
+#endif
 
 void check_closed_with(const QuicConnection& connection, QuicTransportError error)
 {
