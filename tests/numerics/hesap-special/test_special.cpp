@@ -102,7 +102,7 @@ TEST_CASE("special gamma: gamma_sign is the sign of Gamma on both sides of every
             if (offset > 0.01 && offset < 0.99)
             {
                 const float xf = static_cast<float>(x);
-                CHECK(sf::gamma_sign(xf) == ((std::tgamma(xf) < 0.0f) ? -1.0f : 1.0f));
+                CHECK(sf::gamma_sign(xf) == ((std::tgamma(xf) < 0.0F) ? -1.0F : 1.0F));
             }
         }
     }

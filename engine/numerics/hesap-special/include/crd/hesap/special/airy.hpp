@@ -433,13 +433,12 @@ CRD_FORCEINLINE void kelvin_all(double x, double& ber, double& bei, double& ker,
     }
     ber = sber;
     bei = sbei;
-    if constexpr (!WantK)
+    if constexpr (WantK)
     {
-        return;
+        const double lg = crd::math::log(0.5 * x);
+        ker = -lg * sber + 0.25 * kBesPi * sbei + sker;
+        kei = -lg * sbei - 0.25 * kBesPi * sber + skei;
     }
-    const double lg = crd::math::log(0.5 * x);
-    ker = -lg * sber + 0.25 * kBesPi * sbei + sker;
-    kei = -lg * sbei - 0.25 * kBesPi * sber + skei;
 }
 } // namespace detail
 

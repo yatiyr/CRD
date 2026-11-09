@@ -1931,7 +1931,9 @@ template <Real T> [[nodiscard]] inline T cyl_neumann(T nu, T x) noexcept // Y_ν
 {
     const double n = static_cast<double>(nu);
     const double xd = static_cast<double>(x);
-    if (detail::bes_order_plain(n) & detail::bes_y_arg_plain(xd)) [[likely]]
+    const bool order_plain = detail::bes_order_plain(n);
+    const bool arg_plain = detail::bes_y_arg_plain(xd);
+    if (order_plain & arg_plain) [[likely]]
     {
         return static_cast<T>(detail::bes_jy_core(xd, n).y);
     }
@@ -1964,7 +1966,9 @@ template <Real T> [[nodiscard]] inline T cyl_bessel_j_prime(T nu, T x) noexcept
 {
     const double n = static_cast<double>(nu);
     const double xd = static_cast<double>(x);
-    if (detail::bes_order_plain(n) & detail::bes_jp_arg_plain(xd)) [[likely]]
+    const bool order_plain = detail::bes_order_plain(n);
+    const bool arg_plain = detail::bes_jp_arg_plain(xd);
+    if (order_plain & arg_plain) [[likely]]
     {
         return static_cast<T>(detail::bes_jy_core(xd, n).jp);
     }
@@ -1974,7 +1978,9 @@ template <Real T> [[nodiscard]] inline T cyl_neumann_prime(T nu, T x) noexcept
 {
     const double n = static_cast<double>(nu);
     const double xd = static_cast<double>(x);
-    if (detail::bes_order_plain(n) & detail::bes_y_arg_plain(xd)) [[likely]]
+    const bool order_plain = detail::bes_order_plain(n);
+    const bool arg_plain = detail::bes_y_arg_plain(xd);
+    if (order_plain & arg_plain) [[likely]]
     {
         return static_cast<T>(detail::bes_jy_core(xd, n).yp);
     }

@@ -78,11 +78,11 @@ inline constexpr int kEiMaxIt = 10000;
     // The ordinary terms are (−x)^k/k! / (n−1−k); the one logarithmic term sits at k = n−1 and is added once, from its
     // closed coefficient, between the sum below that index and the sum above it.
     double total = (order != 0) ? 1.0 / order : 0.0; // the ordinary k = 0 term
-    double power = 1.0;                              // (−x)^k / k!
+    double series_factor = 1.0;                      // (−x)^k / k!
     for (int k = 1; k < order; ++k)
     {
-        power *= -x / k;
-        const double step = power / (order - k);
+        series_factor *= -x / k;
+        const double step = series_factor / (order - k);
         total += step;
         if (crd::math::fabs(step) < crd::math::fabs(total) * kEiEps)
         {
@@ -91,18 +91,18 @@ inline constexpr int kEiMaxIt = 10000;
     }
     if (order != 0)
     {
-        power *= -x / order; // (−x)^{n−1}/(n−1)!
+        series_factor *= -x / order; // (−x)^{n−1}/(n−1)!
     }
     double digamma = -kEuler; // ψ(n) = −γ + Σ_{j<n} 1/j
     for (int j = 1; j <= order; ++j)
     {
         digamma += 1.0 / j;
     }
-    total += power * (digamma - crd::math::log(x));
+    total += series_factor * (digamma - crd::math::log(x));
     for (int k = order + 1; k <= kEiMaxIt; ++k)
     {
-        power *= -x / k;
-        const double step = power / (order - k);
+        series_factor *= -x / k;
+        const double step = series_factor / (order - k);
         total += step;
         if (crd::math::fabs(step) < crd::math::fabs(total) * kEiEps)
         {
