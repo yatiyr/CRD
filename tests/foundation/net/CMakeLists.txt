@@ -7,6 +7,7 @@
 # ingress and the client's host, byte-stream sockets on the loopback and QMux over them.
 add_executable(crd-net-tests
     test_admission.cpp
+    test_channel_link.cpp
     test_coded_frames.cpp
     test_delta.cpp
     test_endpoint.cpp

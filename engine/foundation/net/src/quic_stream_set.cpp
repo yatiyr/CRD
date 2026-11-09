@@ -1243,6 +1243,12 @@ QuicStreamError QuicStreamSet::open(bool bidirectional, u64& id) noexcept
     return QuicStreamError::None;
 }
 
+bool QuicStreamSet::can_open(bool bidirectional) const noexcept
+{
+    const Type& type = m_types[type_index(true, bidirectional)];
+    return type.free_count != 0U && type.next < type.limit;
+}
+
 QuicStreamError QuicStreamSet::write(u64 id, cont::ConstSpan<u8> data, bool fin, usize& taken) noexcept
 {
     taken = 0U;

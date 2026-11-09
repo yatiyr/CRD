@@ -65,6 +65,8 @@ TARGETS = {
                         'executable': 'tests/net/fuzz/crd-fuzz-wire-delta-test'},
     'net-delta-stream': {'corpus': 'tests/foundation/net/fuzz/corpus-delta-stream',
                          'executable': 'tests/net/fuzz/crd-fuzz-net-delta-stream'},
+    'net-channel-link': {'corpus': 'tests/foundation/net/fuzz/corpus-channel-link',
+                         'executable': 'tests/net/fuzz/crd-fuzz-net-channel-link'},
     'net-endpoint': {'corpus': 'tests/foundation/net/fuzz/corpus-endpoint',
                      'executable': 'tests/net/fuzz/crd-fuzz-net-endpoint'},
     'net-http3': {'corpus': 'tests/foundation/net/fuzz/corpus-http3',

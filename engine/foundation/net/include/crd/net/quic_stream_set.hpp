@@ -201,6 +201,8 @@ public:
 
     // The application's side. IDs are RFC 9000 section 2.1's.
     [[nodiscard]] QuicStreamError open(bool bidirectional, u64& id) noexcept;
+    // Whether open() can go now.
+    [[nodiscard]] bool can_open(bool bidirectional) const noexcept;
     // Appends as much of `data` as the stream's buffer has room for (`taken`), and its end after it when `fin` and
     // every byte was taken.
     [[nodiscard]] QuicStreamError write(u64 id, cont::ConstSpan<u8> data, bool fin, usize& taken) noexcept;

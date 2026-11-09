@@ -143,6 +143,14 @@ public:
     // Gives up the next `count` bytes peek() gave, and the session's credit for them.
     [[nodiscard]] Http3Error consume(u64 stream, usize count) noexcept;
     [[nodiscard]] Http3Error send_datagram(u64 session, cont::ConstSpan<u8> payload, u64 now_ns) noexcept;
+    // The most send_datagram() takes on this session.
+    [[nodiscard]] usize max_datagram(u64 session) const noexcept;
+    // RFC 9218's urgency of a stream of a session, 0 the most urgent.
+    [[nodiscard]] Http3Error set_urgency(u64 stream, u8 urgency) noexcept;
+    // The body bytes write() takes now, as the stream's buffer and the session's credit stand.
+    [[nodiscard]] usize send_room(u64 stream, usize wanted) noexcept;
+    // Whether open_stream() of a unidirectional stream can go now.
+    [[nodiscard]] bool can_open(u64 session) const noexcept;
 
     // Section 4.8: `out.size()` bytes from the connection's exporter, keyed to this session. NotReady for no such
     // session.

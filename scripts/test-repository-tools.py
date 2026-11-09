@@ -5373,7 +5373,7 @@ class TestInstruments(unittest.TestCase):
                                                        'crypto-mls-message', 'crypto-mls-tree',
                                                        'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
                                                        'hesap-clock', 'hesap-erasure', 'hesap-estimators', 'hesap-flexfec', 'hesap-link', 'hesap-motion', 'hesap-quantize', 'hesap-raptorq', 'hesap-red',
-                                                       'memory-allocators', 'net-admission', 'net-coded-frames', 'net-delta-stream', 'net-endpoint', 'net-http3', 'net-ingress', 'net-negotiation',
+                                                       'memory-allocators', 'net-admission', 'net-channel-link', 'net-coded-frames', 'net-delta-stream', 'net-endpoint', 'net-http3', 'net-ingress', 'net-negotiation',
                                                        'net-qmux', 'net-qmux-early', 'net-qmux-host', 'net-qpack',
                                                        'net-quic-codec', 'net-quic-connection', 'net-quic-datagram', 'net-quic-packet',
                                                        'net-quic-recovery',

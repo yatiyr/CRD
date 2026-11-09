@@ -1896,6 +1896,45 @@ Http3Error WebTransport::send_datagram(u64 session, cont::ConstSpan<u8> payload,
     return m_http3->send_datagram(session, payload, now_ns);
 }
 
+usize WebTransport::max_datagram(u64 session) const noexcept
+{
+    return (find_session(session) != nullptr) ? m_http3->max_datagram(session) : 0U;
+}
+
+Http3Error WebTransport::set_urgency(u64 stream, u8 urgency) noexcept
+{
+    if (find_stream(stream) == nullptr)
+    {
+        return Http3Error::Unknown;
+    }
+    return (m_streams->set_urgency(stream, urgency) == QuicStreamError::None) ? Http3Error::None : Http3Error::Invalid;
+}
+
+usize WebTransport::send_room(u64 stream, usize wanted) noexcept
+{
+    const Stream* const record = find_stream(stream);
+    if (record == nullptr || record->send_over)
+    {
+        return 0U;
+    }
+    Session& session = m_sessions[record->session];
+    const usize room = m_streams->send_room(stream, wanted);
+    if (!session.flow || session.peer_data - session.sent >= room)
+    {
+        return room;
+    }
+    const usize credit = static_cast<usize>(session.peer_data - session.sent);
+    session.credit_wanted = session.credit_wanted || credit < wanted;
+    return credit;
+}
+
+bool WebTransport::can_open(u64 session) const noexcept
+{
+    const Session* const found = find_session(session);
+    return found != nullptr && (!found->flow || found->opened[0] < found->peer_streams[0]) &&
+           m_streams->can_open(false);
+}
+
 crypto::TlsError WebTransport::export_keying_material(const crypto::QuicHandshake& handshake, u64 session,
                                                       cont::ConstSpan<u8> label, cont::ConstSpan<u8> context,
                                                       cont::Span<u8> out) const noexcept

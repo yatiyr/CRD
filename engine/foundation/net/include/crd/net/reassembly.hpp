@@ -37,6 +37,14 @@ public:
 
     [[nodiscard]] FrameStep feed(cont::ConstSpan<u8> bytes, crypto::Delivery delivery, u64 now_ns) noexcept;
 
+    // Whether no frame is part way through, so the stream can end here cleanly.
+    [[nodiscard]] bool between_frames() const noexcept
+    {
+        return (m_state == State::Preamble || m_state == State::Header) && m_carried == 0U;
+    }
+    // Whether the stream's route was refused: nothing more is read of it.
+    [[nodiscard]] bool refused() const noexcept { return m_state == State::Closed; }
+
 private:
     enum class State : u8
     {

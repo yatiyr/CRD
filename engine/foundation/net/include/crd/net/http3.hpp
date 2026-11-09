@@ -244,6 +244,8 @@ public:
 
     // An HTTP datagram of `id`, an extended CONNECT's stream, with the send part open: RFC 9297 section 2.
     [[nodiscard]] Http3Error send_datagram(u64 id, cont::ConstSpan<u8> payload, u64 now_ns) noexcept;
+    // The most send_datagram() takes on the stream `id`.
+    [[nodiscard]] usize max_datagram(u64 id) const noexcept;
 
     // Whether a session of that revision can be established here now: draft section 3.1's settings and transport
     // parameters from the peer, on this connection.

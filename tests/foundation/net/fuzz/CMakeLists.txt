@@ -128,6 +128,16 @@ if(TARGET crd-fuzz-net-webtransport-libfuzzer)
     target_include_directories(crd-fuzz-net-webtransport-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 endif()
 
+# A session's channels (4.2a).
+#   crd-fuzz-net-channel-link   a hostile peer of a link on each path, every quota coming back when it goes; honest ends
+#                               under tight buffers, every message of a reliable channel whole and in order.
+crd_fuzz_target(crd-fuzz-net-channel-link
+    SOURCES fuzz_channel_link.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-channel-link")
+target_include_directories(crd-fuzz-net-channel-link PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(TARGET crd-fuzz-net-channel-link-libfuzzer)
+    target_include_directories(crd-fuzz-net-channel-link-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+endif()
+
 # A QUIC connection (4.2a).
 #   crd-fuzz-net-quic-connection   a network script between a client and a server (deliveries, losses, duplicates,
 #                                  reorders, corrupted bytes, time, a Retry), then a clean path: the handshake confirms

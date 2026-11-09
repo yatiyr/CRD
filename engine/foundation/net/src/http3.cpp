@@ -1732,6 +1732,18 @@ Http3Error Http3Connection::cancel(u64 id, u64 error) noexcept
     return Http3Error::None;
 }
 
+usize Http3Connection::max_datagram(u64 id) const noexcept
+{
+    if (!m_config.datagrams || m_datagrams == nullptr)
+    {
+        return 0U;
+    }
+    const usize prefix = quic_varint_bytes(id / 4U);
+    const usize path = m_datagrams->max_payload();
+    const usize room = (path > prefix) ? path - prefix : 0U;
+    return (room < m_config.datagram_bytes) ? room : m_config.datagram_bytes;
+}
+
 Http3Error Http3Connection::send_datagram(u64 id, cont::ConstSpan<u8> payload, u64 now_ns) noexcept
 {
     if (m_error != 0U)
