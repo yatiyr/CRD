@@ -1018,9 +1018,9 @@
       },
       "cryptography": [],
       "source": {
-        "ref": "docs/design/network-foundation.md#hpack",
+        "ref": "docs/design/network-foundation.md#http2",
         "read": "2026-11-09",
-        "verified": false
+        "verified": true
       },
       "review": "2027-10-27",
       "evidence": [],
