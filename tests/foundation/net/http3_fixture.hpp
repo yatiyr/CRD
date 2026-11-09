@@ -94,15 +94,15 @@ struct H3Fields
 
 inline const H3Fields& h3_get()
 {
-    static const H3Fields fields{
+    static const H3Fields kFields{
         {":method", "GET"}, {":scheme", "https"}, {":authority", "cerid.test"}, {":path", "/index"}};
-    return fields;
+    return kFields;
 }
 
 inline const H3Fields& h3_ok()
 {
-    static const H3Fields fields{{":status", "200"}, {"server", "cerid"}};
-    return fields;
+    static const H3Fields kFields{{":status", "200"}, {"server", "cerid"}};
+    return kFields;
 }
 
 // A copy of an event that lasts.

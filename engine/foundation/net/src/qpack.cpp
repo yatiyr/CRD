@@ -293,7 +293,7 @@ u32 hash_field(const HttpField& field) noexcept
 bool QpackTable::init(memory::IAllocator& allocator, u32 max_capacity) noexcept
 {
     m_max_capacity = max_capacity;
-    m_max_entries = max_capacity / kHttpFieldOverhead;
+    m_max_entries = static_cast<u32>(max_capacity / kHttpFieldOverhead);
     if (m_max_entries == 0U)
     {
         return true; // too small for even an empty entry: legal, and it holds nothing

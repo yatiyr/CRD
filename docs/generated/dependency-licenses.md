@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **43** · tools: **48** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **44** · tools: **48** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -25,6 +25,7 @@
 | tpm2-tss | 4.0.1 | BSD-2-Clause | tpm2-software/tpm2-tss @ `4.0.1` (8b404ee7e588) | `tpm2-tss-8b404ee7.tar.gz` |
 | pkcs11 | 3.2 | OASIS-IPR (RF on RAND) | oasis-tcs/pkcs11 @ `master` (c55388c02702) | `pkcs11-c55388c0.tar.gz` |
 | ngtcp2 | 1.26.0 | MIT | ngtcp2/ngtcp2 @ `v1.26.0` (6a22a4d7a111) | `ngtcp2-6a22a4d7.tar.gz` |
+| nghttp3 | 1.19.0 | MIT | ngtcp2/nghttp3 @ `v1.19.0` (dc83309ca5fd) | `nghttp3-1.19.0.tar.gz` |
 | qifs | da52cd93 | MIT | qpackers/qifs (da52cd936b3e) | `qifs-da52cd93.tar.gz` |
 | mlspp | 0.1.0-fc724c31 | BSD-2-Clause AND BSL-1.0 | cisco/mlspp @ `main` (fc724c3100ce) | `mlspp-fc724c31.tar.gz` |
 | nasm | 2.16.03 | BSD-2-Clause | https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip | `nasm-2.16.03-win64.zip` |
