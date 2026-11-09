@@ -216,11 +216,11 @@ public:
     // whole frames keeps them in the stream's own buffer. 0 for a stream not receiving.
     [[nodiscard]] usize copy_readable(u64 id, usize skip, cont::Span<u8> out, bool& ends) const noexcept;
     // Gives up the next `count` bytes peek() gave; after a peek() with `fin`, consuming its data (even none) ends the
-    // receiving part. `keep_end`: it stays open at its end, peek() still reporting `fin`, until a call without it, for a
-    // layer that must first act on the end and would otherwise lose the slot to it.
+    // receiving part. `keep_end`: it stays open at its end, peek() still reporting `fin`, until a call without it, for
+    // a layer that must first act on the end and would otherwise lose the slot to it.
     [[nodiscard]] QuicStreamError consume(u64 id, usize count, bool keep_end = false) noexcept;
-    // Lets the reset of a RESET_STREAM_AT show now, for a layer that cannot use the bytes it keeps (they may stop inside
-    // a frame, and waiting for the rest would hold the stream forever). Ended without one.
+    // Lets the reset of a RESET_STREAM_AT show now, for a layer that cannot use the bytes it keeps (they may stop
+    // inside a frame, and waiting for the rest would hold the stream forever). Ended without one.
     [[nodiscard]] QuicStreamError give_up_reliable(u64 id) noexcept;
     // The next stream with events, its mask cleared; false when none has any.
     [[nodiscard]] bool poll(QuicStreamEvent& event) noexcept;
