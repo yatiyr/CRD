@@ -13,6 +13,7 @@ add_executable(crd-net-tests
     test_endpoint.cpp
     test_frame_integrity.cpp
     test_hpack.cpp
+    test_http2.cpp
     test_http3.cpp
     test_http3_webtransport.cpp
     test_webtransport.cpp

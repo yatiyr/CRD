@@ -123,6 +123,17 @@ if(TARGET crd-fuzz-net-hpack-libfuzzer)
     target_include_directories(crd-fuzz-net-hpack-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 endif()
 
+# HTTP/2 (4.2a).
+#   crd-fuzz-net-http2   a hostile peer at a server and at a client, any bytes cut anywhere: views inside the input,
+#                        streams and output within their limits, nothing after a failure; and two honest sides over a
+#                        wire that cuts anywhere, every byte of both bodies arriving in order.
+crd_fuzz_target(crd-fuzz-net-http2
+    SOURCES fuzz_http2.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-http2")
+target_include_directories(crd-fuzz-net-http2 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(TARGET crd-fuzz-net-http2-libfuzzer)
+    target_include_directories(crd-fuzz-net-http2-libfuzzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+endif()
+
 # An HTTP/3 connection (4.2a).
 #   crd-fuzz-net-http3          a hostile peer writing any streams, frames, ends and resets at a server and a client,
 #                               whose application calls every method at any time; both sides honest over any frame sizes
