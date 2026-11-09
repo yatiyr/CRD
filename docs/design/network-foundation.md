@@ -1214,9 +1214,9 @@ them: what differs is negotiation and whether flow control exists.
   application and permit further use.
 - **Exporter** (section 4.8). TLS exporter with label `EXPORTER-WebTransport` and the context struct: session ID (64),
   label length (8), label, context length (8), context; through `export_keying_material`.
-- **Channels.** A session presents the surface the channel layer already runs on over a `QuicStreamSet` (QMux's
-  precedent, S51 to S54): open, write, peek, consume, reset, stop, datagram, filtered by session with flow control
-  layered in, so there is no second channel implementation.
+- **Channels.** A session presents the surface the channel layer runs on over a `QuicStreamSet`: open, write, peek,
+  consume, reset, stop, datagram, filtered by session with flow control layered in, so there is no second channel
+  implementation. [S60](#channels) is that layer.
 - **Peers.** `web-transport-quinn` 0.13.6 for the legacy spelling (`crd-net-webtransport-interop-quinn`; what it is not
   asked and why: `webtransport_interop.py`). The `webtransport-h3` peer is webtransport-go v0.13.0 (quic-go 0.62, draft
   -16, with RESET_STREAM_AT and flow control; `crd-net-webtransport-interop-go`, Go pinned as `tools/go-linux-x64`).
@@ -1248,6 +1248,27 @@ and the source mutations in the session note prove it. What the contract did not
   windows granted again.
 - A DATAGRAM capsule on a CONNECT stream arrives like any datagram, up to `datagram_bytes`; a larger one is skipped.
 - Sessions, once their streams go, keep nothing that could reach a later session in the same pool slot.
+
+<a id="channels"></a>
+**S60. Channels over every path** (4.2a, threats T01, T09, T10, T11 and T15; [channel_link.hpp](../../engine/foundation/net/include/crd/net/channel_link.hpp); 2026-11-09). NET.3 wrote the frames and their
+admission and left the carrier open. `ChannelLink` is the one reader and writer of them, one per session, and is why "one session model over every path" is a statement about code.
+
+- **Carrier.** A path offers either a connection's `QuicStreamSet` and `QuicDatagrams` (QUIC, QMux, the raw UDP path) or one `WebTransport` session. Two shapes, so `ChannelCarrier` is a class with one branch, not an interface: a read is zero-copy and
+  costs no virtual call. The calls it needed that WebTransport lacked are `set_urgency`, `send_room`, `max_datagram` and `can_open`; every stream operation stays the session's own, with its flow control.
+- **A channel maps once.** A reliable ordered channel is one unidirectional stream, opened by its first write, whose route goes once. A reliable unordered channel is one stream per write, ended, so no message waits behind another's loss.
+  An unreliable channel is datagrams the caller assembled (Whole, Listed or Fragment), whose route is its own. A channel runs one way: each side opens its own, and a peer's bidirectional stream is refused.
+- **Priority.** `ChannelDesc::priority` is the stream's RFC 9218 urgency, the lowest priorities sharing urgency 7, so the path's scheduler serves control first on every path.
+- **Padding.** A path that controls its packets pads them (S30). WebTransport cannot, since the browser's end is not ours, so there a channel with a block pads in band: `pad_datagram()` to at most the path's room, `write_stream_padding()` after each complete write. Padding that
+  does not fit whole waits for the next write, because a cut padding frame would misread everything after it (a stream's room is `send_room()`, the smaller of the stream's buffer and the session's credit).
+- **Reading.** `StreamAssembler` per peer stream, from a fixed pool; `DatagramAssembler` per unreliable channel. `next()` gives one frame from each ready stream in turn and every datagram first. A frame all in hand is a view of the stream's buffer and is consumed only when the next call gives it up, so nothing is copied
+  and credit returns only for what the application has finished with. Bytes that may be replayed are fed apart, and a frame whose head began among them stays `Early`.
+- **What ends what.** `Wait` leaves the bytes unread, so flow control holds the sender, until the rate gate's time or the moment another frame frees room; a limit shared with the principal's other sessions is retried after 10 ms, since nothing here would announce it. A refused route or a full pool is `STOP_SENDING` for that stream alone.
+  Broken framing, and a stream that ends inside a frame, fail the link: `Failed` once, then nothing, for the owner to send GoAway ProtocolError. A peer's reset gives back the partial frame and the quota at once.
+- **The sender's limits.** A partial write says `taken` and the channel reports `Writable` when more can go, from the stream, the session's credit, or a stream limit lifting (`can_open()`, polled while one is owed, since QUIC reports no event for a higher MAX_STREAMS). The peer's STOP_SENDING reports `Stopped` and the next write opens a fresh stream with its route.
+- **Who polls.** A QUIC or QMux link polls its stream set and datagrams inside `next()`. WebTransport's events are the connection's, so the owner hands over each one naming the session and drains `next()` before the next poll.
+- **What is not here.** `SendBudget` belongs above, with the session that decides what to shed. Sessions, capabilities and revision announcements are [4.2d](../ROADMAP.md#slice-4.2d)'s, on this.
+
+Evidence: `test_channel_link.cpp` `[channels]` (19 cases, each on QUIC-shaped, QMux-shaped and WebTransport carriers where the behaviour is shared), `crd-fuzz-net-channel-link`, and 24 source mutations in the [session note](../sessions/2026-11-09-4-2a-channels.md).
 
 <a id="browsers"></a>
 ## Browser constraints
