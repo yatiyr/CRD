@@ -23,6 +23,8 @@
 #include <crd/net/quic_stream_set.hpp>
 #include <crd/net/ticket_cache.hpp>
 
+#include "http_exchange.h"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -81,8 +83,7 @@ struct EchoOptions
 // 5 a client's and a server's unidirectional stream. `stream` is its ID.
 inline u8 pattern(u64 tag, u64 stream, u64 offset)
 {
-    const u64 at = (offset + (stream * 37U)) & 0xFFFFU;
-    return static_cast<u8>((at * 31U) + (at >> 8U) + (tag * 7U));
+    return httpx_pattern(tag, stream, offset);
 }
 
 inline bool parse_group(const char* name, crd::crypto::AlgorithmId& out)

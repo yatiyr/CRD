@@ -1,9 +1,9 @@
 #pragma once
 
 // crd-net interoperability test (4.2a) -- the HTTP/3 application crd-quic-peer runs over Http3Connection with --http3 1.
-// The exchange and its options: http3_exchange.h, which ngtcp2_http3.c runs over nghttp3.
+// The exchange and its options: http_exchange.h, which ngtcp2_http3.c runs over nghttp3.
 
-#include "http3_exchange.h"
+#include "http_exchange.h"
 #include "interop_echo.hpp"
 
 #include <crd/containers/span.hpp>
@@ -27,7 +27,7 @@ inline constexpr usize kMaxVarintPrefix = 8U;
 // What the exchange and one connection's run share.
 struct Http3Run
 {
-    const http3_options_t* options = nullptr;
+    const httpx_options_t* options = nullptr;
     bool client = false;
     u64 datagrams = 0U;
     u64 datagram_bytes = 0U;
@@ -35,7 +35,7 @@ struct Http3Run
     const crd::net::TicketCache* tickets = nullptr;      // a client's, when a later connection resumes on a ticket
 };
 
-inline crd::net::Http3Config http3_config(const http3_options_t& options, bool client, u64 datagrams)
+inline crd::net::Http3Config http3_config(const httpx_options_t& options, bool client, u64 datagrams)
 {
     crd::net::Http3Config config;
     config.side = client ? crd::crypto::QuicSide::Client : crd::crypto::QuicSide::Server;
@@ -178,7 +178,7 @@ public:
 private:
     struct Stream
     {
-        http3_section_t section{};
+        httpx_section_t section{};
         u64 received = 0U;
         u64 sent = 0U;
         bool used = false;
@@ -193,7 +193,7 @@ private:
         bool stopped = false;
     };
 
-    [[nodiscard]] const http3_options_t& options() const noexcept { return *m_run.options; }
+    [[nodiscard]] const httpx_options_t& options() const noexcept { return *m_run.options; }
     [[nodiscard]] static unsigned long long ull(u64 value) noexcept { return value; }
     [[nodiscard]] static u64 index_of(u64 id) noexcept { return id / 4U; }
     [[nodiscard]] u64 per_tunnel() const noexcept
@@ -245,7 +245,7 @@ private:
     void handle(const crd::net::Http3Event& event) noexcept
     {
         const u64 index = index_of(event.stream);
-        Stream& stream = m_streams[index < HTTP3_MAX_REQUESTS ? index : 0U];
+        Stream& stream = m_streams[index < HTTPX_MAX_REQUESTS ? index : 0U];
         switch (event.kind)
         {
             case crd::net::Http3EventKind::Settings:
@@ -292,10 +292,10 @@ private:
 
     void take_section(const crd::net::Http3Event& event, u64 index, Stream& stream) const noexcept
     {
-        stream.section = http3_section_t{};
+        stream.section = httpx_section_t{};
         for (const crd::net::HttpField& field : event.fields)
         {
-            http3_take_field(&stream.section, &options(), index, field.name.data(), field.name.size(),
+            httpx_take_field(&stream.section, &options(), index, field.name.data(), field.name.size(),
                              field.value.data(), field.value.size());
         }
     }
@@ -305,7 +305,7 @@ private:
         take_section(event, index, stream);
         if (m_run.client)
         {
-            if (http3_is_tunnel(&options(), index) && stream.section.status == 200U)
+            if (httpx_is_tunnel(&options(), index) && stream.section.status == 200U)
             {
                 stream.tunnel_open = true;
                 ++m_tunnels;
@@ -313,19 +313,19 @@ private:
             return;
         }
         stream.used = true;
-        m_unverified = m_unverified || http3_section_good(&stream.section, &options(), index, 0) == 0;
+        m_unverified = m_unverified || httpx_section_good(&stream.section, &options(), index, 0) == 0;
         ++m_seen;
         m_early_requests += event.early ? 1U : 0U;
         if (m_seen == 1U)
         {
             first_request();
         }
-        if (options().cancel == HTTP3_CANCEL_SERVER && http3_last_request(&options(), index) != 0)
+        if (options().cancel == HTTPX_CANCEL_SERVER && httpx_last_request(&options(), index) != 0)
         {
             cancel(event.stream, stream);
             return;
         }
-        if (http3_is_tunnel(&options(), index) != 0)
+        if (httpx_is_tunnel(&options(), index) != 0)
         {
             ++m_tunnels;
             stream.answer_due = true;
@@ -334,11 +334,11 @@ private:
 
     void first_request() noexcept
     {
-        if (options().goaway == HTTP3_GOAWAY_NOTICE)
+        if (options().goaway == HTTPX_GOAWAY_NOTICE)
         {
             m_unverified = m_unverified || !m_h3->goaway(false);
         }
-        else if (options().goaway == HTTP3_GOAWAY_REJECT)
+        else if (options().goaway == HTTPX_GOAWAY_REJECT)
         {
             m_unverified = m_unverified || !m_h3->goaway(true);
         }
@@ -372,8 +372,8 @@ private:
             stream.received += body.data.size();
             m_body_received += body.data.size();
             m_unverified = m_unverified || m_h3->consume_body(id, body.data.size()) != crd::net::Http3Error::None;
-            if (m_run.client && options().cancel == HTTP3_CANCEL_CLIENT &&
-                http3_last_request(&options(), index) != 0)
+            if (m_run.client && options().cancel == HTTPX_CANCEL_CLIENT &&
+                httpx_last_request(&options(), index) != 0)
             {
                 cancel(id, stream);
                 return;
@@ -385,9 +385,9 @@ private:
     {
         for (const crd::net::HttpField& field : event.fields)
         {
-            if (http3_text_is(field.name.data(), field.name.size(), "x-cerid-trailer") != 0)
+            if (httpx_text_is(field.name.data(), field.name.size(), "x-cerid-trailer") != 0)
             {
-                stream.trailers_seen = http3_decimal(field.value.data(), field.value.size()) == index;
+                stream.trailers_seen = httpx_decimal(field.value.data(), field.value.size()) == index;
             }
         }
     }
@@ -400,17 +400,17 @@ private:
             response_ended(index, stream);
             return;
         }
-        const bool trailers = http3_has_trailers(&options(), index) != 0 && !stream.trailers_seen;
-        m_unverified = m_unverified || stream.received != http3_body_bytes(&options(), index, 0) || trailers;
+        const bool trailers = httpx_has_trailers(&options(), index) != 0 && !stream.trailers_seen;
+        m_unverified = m_unverified || stream.received != httpx_body_bytes(&options(), index, 0) || trailers;
         m_trailers += stream.trailers_seen ? 1U : 0U;
         ++m_request_ended;
-        if (options().goaway == HTTP3_GOAWAY_NOTICE && m_request_ended == options().requests)
+        if (options().goaway == HTTPX_GOAWAY_NOTICE && m_request_ended == options().requests)
         {
             m_unverified = m_unverified || !m_h3->goaway(true);
         }
-        if (http3_is_tunnel(&options(), index) == 0)
+        if (httpx_is_tunnel(&options(), index) == 0)
         {
-            stream.answer_due = options().goaway != HTTP3_GOAWAY_CLIENT || m_goaway_seen >= 2U;
+            stream.answer_due = options().goaway != HTTPX_GOAWAY_CLIENT || m_goaway_seen >= 2U;
         }
     }
 
@@ -422,14 +422,14 @@ private:
         }
         stream.counted = true;
         ++m_completed;
-        if (options().over_limit != 0 && http3_last_request(&options(), index) != 0 && stream.section.status == 431U)
+        if (options().over_limit != 0 && httpx_last_request(&options(), index) != 0 && stream.section.status == 431U)
         {
             ++m_status_431;
             return;
         }
-        const bool trailers = http3_has_trailers(&options(), index) != 0 && !stream.trailers_seen;
-        m_unverified = m_unverified || http3_section_good(&stream.section, &options(), index, 1) == 0 ||
-                       stream.received != http3_body_bytes(&options(), index, 1) || trailers;
+        const bool trailers = httpx_has_trailers(&options(), index) != 0 && !stream.trailers_seen;
+        m_unverified = m_unverified || httpx_section_good(&stream.section, &options(), index, 1) == 0 ||
+                       stream.received != httpx_body_bytes(&options(), index, 1) || trailers;
         m_trailers += stream.trailers_seen ? 1U : 0U;
     }
 
@@ -455,19 +455,19 @@ private:
     {
         ++m_goaway_seen;
         m_goaway_id = id;
-        if (!m_run.client && options().goaway == HTTP3_GOAWAY_CLIENT && m_goaway_seen == 2U)
+        if (!m_run.client && options().goaway == HTTPX_GOAWAY_CLIENT && m_goaway_seen == 2U)
         {
             for (u64 index = 0U; index < options().requests; ++index)
             {
-                m_streams[index].answer_due = m_streams[index].ended && http3_is_tunnel(&options(), index) == 0;
+                m_streams[index].answer_due = m_streams[index].ended && httpx_is_tunnel(&options(), index) == 0;
             }
         }
     }
 
     void common_fields(Http3Fields& fields, u64 index, const char* text) const noexcept
     {
-        const u64 fill = http3_fill_bytes(&options(), index);
-        fields.add_text("x-cerid-repeat", HTTP3_REPEAT_VALUE);
+        const u64 fill = httpx_fill_bytes(&options(), index);
+        fields.add_text("x-cerid-repeat", HTTPX_REPEAT_VALUE);
         fields.add_text("x-cerid-index", text);
         if (fill != 0U)
         {
@@ -483,12 +483,12 @@ private:
 
     struct FillText
     {
-        char bytes[HTTP3_MAX_FILL];
+        char bytes[HTTPX_MAX_FILL];
         FillText() noexcept
         {
             for (usize at = 0U; at < sizeof(bytes); ++at)
             {
-                bytes[at] = http3_fill_byte(at);
+                bytes[at] = httpx_fill_byte(at);
             }
         }
     };
@@ -498,8 +498,8 @@ private:
         while (m_run.client && m_opened < options().requests)
         {
             const u64 index = m_opened;
-            const u64 body = http3_body_bytes(&options(), index, 0);
-            const bool tunnel = http3_is_tunnel(&options(), index) != 0;
+            const u64 body = httpx_body_bytes(&options(), index, 0);
+            const bool tunnel = httpx_is_tunnel(&options(), index) != 0;
             char text[kHttp3IndexText];
             char length[kHttp3IndexText];
             char path[kHttp3IndexText + 8U];
@@ -507,24 +507,24 @@ private:
             std::snprintf(length, sizeof(length), "%llu", ull(body));
             std::snprintf(path, sizeof(path), tunnel ? "/tunnel/%llu" : "/cerid/%llu", ull(index));
             Http3Fields fields;
-            fields.add_text(":method", tunnel ? "CONNECT" : (body != 0U ? "POST" : "GET"));
+            fields.add_text(":method", httpx_method(tunnel, body));
             fields.add_text(":scheme", "https");
-            fields.add_text(":authority", HTTP3_SERVER_NAME);
+            fields.add_text(":authority", HTTPX_SERVER_NAME);
             fields.add_text(":path", path);
             if (tunnel)
             {
-                fields.add_text(":protocol", HTTP3_TUNNEL_PROTOCOL);
+                fields.add_text(":protocol", HTTPX_TUNNEL_PROTOCOL);
             }
             common_fields(fields, index, text);
-            if (http3_has_length(&options(), index, body) != 0 && body != 0U)
+            if (httpx_has_length(&options(), index, body) != 0 && body != 0U)
             {
                 fields.add_text("content-length", length);
             }
-            const bool fin = body == 0U && http3_has_trailers(&options(), index) == 0 && !tunnel;
+            const bool fin = body == 0U && httpx_has_trailers(&options(), index) == 0 && !tunnel;
             u64 id = 0U;
             const crd::net::Http3Error error = m_h3->open_request(fields.span(), fin, id);
             if (error == crd::net::Http3Error::TooLarge && options().over_limit != 0 &&
-                http3_last_request(&options(), index) != 0)
+                httpx_last_request(&options(), index) != 0)
             {
                 ++m_refused_too_large;
                 ++m_opened;
@@ -546,11 +546,11 @@ private:
 
     void send_goaway() noexcept
     {
-        if (m_run.client && options().goaway == HTTP3_GOAWAY_CLIENT && m_opened == options().requests && !m_goaway_sent)
+        if (m_run.client && options().goaway == HTTPX_GOAWAY_CLIENT && m_opened == options().requests && !m_goaway_sent)
         {
             m_goaway_sent = m_h3->goaway(false) && m_h3->goaway(true);
         }
-        if (m_run.client && options().goaway == HTTP3_GOAWAY_NOTICE && m_goaway_seen >= 2U &&
+        if (m_run.client && options().goaway == HTTPX_GOAWAY_NOTICE && m_goaway_seen >= 2U &&
             m_refused_after_goaway == 0U)
         {
             refuse_probe();
@@ -563,7 +563,7 @@ private:
         Http3Fields fields;
         fields.add_text(":method", "GET");
         fields.add_text(":scheme", "https");
-        fields.add_text(":authority", HTTP3_SERVER_NAME);
+        fields.add_text(":authority", HTTPX_SERVER_NAME);
         fields.add_text(":path", "/cerid/probe");
         u64 id = 0U;
         m_refused_after_goaway = m_h3->open_request(fields.span(), true, id) == crd::net::Http3Error::GoingAway ? 1U : 0U;
@@ -582,7 +582,7 @@ private:
             return;
         }
         // A tunnel's FIN waits for its HTTP datagrams, which need the send part open.
-        const bool tunnel = http3_is_tunnel(&options(), index) != 0;
+        const bool tunnel = httpx_is_tunnel(&options(), index) != 0;
         if (tunnel && (m_run.client ? !stream.tunnel_open || !datagrams_settled() : !stream.ended || m_echo_count != 0U))
         {
             return;
@@ -610,8 +610,8 @@ private:
             }
             stream.interim_sent = true;
         }
-        const u64 body = http3_body_bytes(&options(), index, 1);
-        const bool tunnel = http3_is_tunnel(&options(), index) != 0;
+        const u64 body = httpx_body_bytes(&options(), index, 1);
+        const bool tunnel = httpx_is_tunnel(&options(), index) != 0;
         char text[kHttp3IndexText];
         char length[kHttp3IndexText];
         std::snprintf(text, sizeof(text), "%llu", ull(index));
@@ -619,11 +619,11 @@ private:
         Http3Fields fields;
         fields.add_text(":status", "200");
         common_fields(fields, index, text);
-        if (http3_has_length(&options(), index, body) != 0)
+        if (httpx_has_length(&options(), index, body) != 0)
         {
             fields.add_text("content-length", length);
         }
-        const bool fin = body == 0U && http3_has_trailers(&options(), index) == 0 && !tunnel;
+        const bool fin = body == 0U && httpx_has_trailers(&options(), index) == 0 && !tunnel;
         const crd::net::Http3Error error = m_h3->send_response(id, fields.span(), fin);
         if (error != crd::net::Http3Error::None)
         {
@@ -639,10 +639,10 @@ private:
     // Writes what fits; true when the whole body has gone and the message has not been ended by it.
     [[nodiscard]] bool send_body(u64 index, u64 id, Stream& stream) noexcept
     {
-        const u64 goal = http3_body_bytes(&options(), index, !m_run.client ? 1 : 0);
+        const u64 goal = httpx_body_bytes(&options(), index, !m_run.client ? 1 : 0);
         const u64 tag = m_run.client ? 0U : 1U;
-        const bool trailers = http3_has_trailers(&options(), index) != 0;
-        u8 chunk[HTTP3_DATA_FRAME_BYTES];
+        const bool trailers = httpx_has_trailers(&options(), index) != 0;
+        u8 chunk[HTTPX_DATA_FRAME_BYTES];
         while (stream.sent < goal)
         {
             const u64 left = goal - stream.sent;
@@ -677,7 +677,7 @@ private:
     // The end of a message whose body has gone: trailers, or a FIN no body byte could carry.
     void finish(u64 index, u64 id, Stream& stream) noexcept
     {
-        if (http3_has_trailers(&options(), index) == 0)
+        if (httpx_has_trailers(&options(), index) == 0)
         {
             stream.out_end = m_h3->finish(id) == crd::net::Http3Error::None;
             return;
@@ -686,7 +686,7 @@ private:
         std::snprintf(text, sizeof(text), "%llu", ull(index));
         Http3Fields fields;
         fields.add_text("x-cerid-trailer", text);
-        fields.add_text("x-cerid-repeat", HTTP3_REPEAT_VALUE);
+        fields.add_text("x-cerid-repeat", HTTPX_REPEAT_VALUE);
         const crd::net::Http3Error error = m_h3->send_trailers(id, fields.span());
         m_unverified = m_unverified || (error != crd::net::Http3Error::None && error != crd::net::Http3Error::Blocked);
         stream.out_end = error == crd::net::Http3Error::None;
@@ -782,7 +782,7 @@ private:
         {
             m_done_ns = m_now_ns;
         }
-        return over && m_now_ns - m_done_ns >= HTTP3_LINGER_NS;
+        return over && m_now_ns - m_done_ns >= HTTPX_LINGER_NS;
     }
 
     [[nodiscard]] bool datagrams_settled() const noexcept
@@ -814,11 +814,11 @@ private:
         {
             return false;
         }
-        if (options().goaway == HTTP3_GOAWAY_NOTICE)
+        if (options().goaway == HTTPX_GOAWAY_NOTICE)
         {
             return m_goaway_seen >= 2U && m_refused_after_goaway != 0U;
         }
-        return options().goaway != HTTP3_GOAWAY_REJECT || m_goaway_seen >= 1U;
+        return options().goaway != HTTPX_GOAWAY_REJECT || m_goaway_seen >= 1U;
     }
 
     Http3Run m_run;
@@ -826,7 +826,7 @@ private:
     bool m_settings_known = false;
     crd::net::Http3Connection* m_h3 = nullptr;
     alignas(crd::net::Http3Connection) unsigned char m_storage[sizeof(crd::net::Http3Connection)];
-    Stream m_streams[HTTP3_MAX_REQUESTS];
+    Stream m_streams[HTTPX_MAX_REQUESTS];
     u64 m_now_ns = 0U;
     u64 m_done_ns = 0U;
     u64 m_opened = 0U;

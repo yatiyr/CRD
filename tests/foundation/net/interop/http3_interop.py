@@ -3,7 +3,7 @@
 
 Runs crd-quic-peer with --http3 1 (Http3Connection over crd-net's QUIC) against crd-ngtcp2-quic-peer with --http3 1
 (nghttp3 over ngtcp2) or crd-quiche-peer (Cloudflare's quiche over BoringSSL), each in its own process over real UDP
-sockets on the loopback, both ways round. The exchange is http3_exchange.h's: every field and every body byte is checked
+sockets on the loopback, both ways round. The exchange is http_exchange.h's: every field and every body byte is checked
 by both ends, and each case holds the two ends' reports to each other.
 
 Cases: requests with no body, a small body, bodies far over the stream and connection windows, more requests than the

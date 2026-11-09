@@ -135,6 +135,34 @@
       "provenance": "https://github.com/ngtcp2/ngtcp2/releases/tag/v1.26.0 (the tag names commit 6a22a4d7; this commit archive is the source the release packs, without the release's generated Autotools files)",
       "note": "ngtcp2 1.26.0 (released 2026-11-02), an independent C implementation of QUIC and crd-net's peer (4.2a). Built by its own CMake as a separate project, libraries only (libngtcp2 and libngtcp2_crypto_ossl), against the pinned OpenSSL 4.0's QUIC TLS interface."
     },
+    "nghttp2": {
+      "version": "1.71.0",
+      "repository": "nghttp2/nghttp2",
+      "ref": "v1.71.0",
+      "commit": "80dcb8140af050fac91a7e6af4fc6dd013404bd1",
+      "url": "https://github.com/nghttp2/nghttp2/releases/download/v1.71.0/nghttp2-1.71.0.tar.gz",
+      "file": "nghttp2-1.71.0.tar.gz",
+      "sha256": "0cdd35ecec77919b4b7b245f87fe8d2216e3d62da854eb0838c594ff058042fc",
+      "size": 3092496,
+      "license": "MIT",
+      "gated": "CRD_BUILD_HTTP2_VS_PEERS",
+      "provenance": "https://github.com/nghttp2/nghttp2/releases/tag/v1.71.0 (the release tarball; its SHA-256 equals the release's checksums.txt, read 2026-11-09)",
+      "note": "nghttp2 1.71.0 (released 2026-11-02), an independent C implementation of HTTP/2 and HPACK and crd-net's HTTP/2 peer (4.2a). Built by its own CMake as a separate project, library only."
+    },
+    "h2spec": {
+      "version": "2.6.0",
+      "repository": "summerwind/h2spec",
+      "ref": "v2.6.0",
+      "commit": "70ac2294010887f48b18e2d64f5cccd48421fad1",
+      "url": "https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz",
+      "file": "h2spec_linux_amd64.tar.gz",
+      "sha256": "157ee0de702e01ad40e752dbf074b366027e550c8e7504f9450da2809e279318",
+      "size": 5207004,
+      "license": "MIT",
+      "gated": "CRD_BUILD_HTTP2_VS_PEERS",
+      "provenance": "https://github.com/summerwind/h2spec/releases/tag/v2.6.0 (the project's last release, 2020-08-04; the archive holds the one static Linux x64 binary; downloaded and hashed 2026-11-09)",
+      "note": "h2spec 2.6.0, the conformance tester for HTTP/2 implementations: run against crd-http2-peer by crd-net-http2-interop (4.2a). Test-only."
+    },
     "nghttp3": {
       "version": "1.19.0",
       "repository": "ngtcp2/nghttp3",

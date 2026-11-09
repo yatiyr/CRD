@@ -1005,7 +1005,7 @@
       "id": "http.h2",
       "title": "HTTP/2",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a"
@@ -1023,7 +1023,13 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
+      "evidence": [
+        "engine/foundation/net/include/crd/net/http2.hpp",
+        "engine/foundation/net/src/http2.cpp",
+        "tests/foundation/net/test_http2.cpp",
+        "tests/foundation/net/fuzz/fuzz_http2.cpp",
+        "tests/foundation/net/interop/http2_interop.py"
+      ],
       "deprecation": null
     },
     {

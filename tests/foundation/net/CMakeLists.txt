@@ -212,6 +212,42 @@ if(CRD_BUILD_QPACK_VS_QIFS)
     set_tests_properties(crd-net-qpack-interop-qifs PROPERTIES TIMEOUT 900 LABELS "net;qpack-interop")
 endif()
 
+# HTTP/2 against nghttp2 and h2spec (CRD_BUILD_HTTP2_VS_PEERS): crd-nghttp2-peer links nghttp2 alone, and
+# http2_interop.py runs it, and h2spec, against crd-http2-peer over the loopback.
+if(CRD_BUILD_HTTP2_VS_PEERS)
+    include(ExternalProject)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    cmake_host_system_information(RESULT http2_interop_jobs QUERY NUMBER_OF_LOGICAL_CORES)
+    crd_pin(nghttp2_version packages nghttp2 version)
+    set(nghttp2_prefix "${CMAKE_BINARY_DIR}/_deps/nghttp2-peer-${nghttp2_version}")
+    set(nghttp2_library "${nghttp2_prefix}/install/lib/libnghttp2.a")
+    ExternalProject_Add(crd-nghttp2-build
+        SOURCE_DIR "${nghttp2_SOURCE_DIR}"
+        PREFIX "${nghttp2_prefix}"
+        BINARY_DIR "${nghttp2_prefix}/build"
+        INSTALL_DIR "${nghttp2_prefix}/install"
+        CMAKE_ARGS "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                   -DCMAKE_BUILD_TYPE=Release "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>" -DCMAKE_INSTALL_LIBDIR=lib
+                   -DENABLE_LIB_ONLY=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DENABLE_DOC=OFF
+                   -DBUILD_TESTING=OFF
+        BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel ${http2_interop_jobs}
+        BUILD_BYPRODUCTS "${nghttp2_library}")
+    add_executable(crd-nghttp2-peer interop/nghttp2_http2_peer.c)
+    add_dependencies(crd-nghttp2-peer crd-nghttp2-build)
+    target_include_directories(crd-nghttp2-peer SYSTEM PRIVATE "${nghttp2_prefix}/install/include")
+    target_compile_definitions(crd-nghttp2-peer PRIVATE NGHTTP2_STATICLIB)
+    target_link_libraries(crd-nghttp2-peer PRIVATE "${nghttp2_library}")
+    set_target_properties(crd-nghttp2-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    add_executable(crd-http2-peer interop/cerid_http2_peer.cpp)
+    target_link_libraries(crd-http2-peer PRIVATE crd-memory crd-net)
+    add_test(NAME crd-net-http2-interop
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/http2_interop.py"
+                     --cerid "$<TARGET_FILE:crd-http2-peer>" --nghttp2 "$<TARGET_FILE:crd-nghttp2-peer>"
+                     --h2spec "${h2spec_SOURCE_DIR}/h2spec")
+    set_tests_properties(crd-net-http2-interop PROPERTIES TIMEOUT 1500 LABELS "net;http2-interop")
+    message(STATUS "[http2-vs-peers] HTTP/2 interoperability against nghttp2 ${nghttp2_version} and h2spec")
+endif()
+
 # HPACK against the hpack-test-case corpus (CRD_BUILD_HPACK_VS_CORPUS): crd-hpack-replay decodes what other encoders wrote
 # and hpack_interop.py compares it with each story and sets crd-net's encoder beside them.
 if(CRD_BUILD_HPACK_VS_CORPUS)

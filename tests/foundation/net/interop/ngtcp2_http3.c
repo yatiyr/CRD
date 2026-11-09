@@ -1,4 +1,4 @@
-/* crd-net interoperability test (4.2a) -- the HTTP/3 exchange (http3_exchange.h) over the pinned nghttp3. */
+/* crd-net interoperability test (4.2a) -- the HTTP/3 exchange (http_exchange.h) over the pinned nghttp3. */
 #include "ngtcp2_http3.h"
 
 #include <stdlib.h>
@@ -9,7 +9,7 @@
 
 typedef struct
 {
-    http3_section_t section;
+    httpx_section_t section;
     uint64_t        received;
     uint64_t        offered;
     int             used;
@@ -29,7 +29,7 @@ typedef struct
 
 struct http3_app
 {
-    const http3_options_t* options;
+    const httpx_options_t* options;
     int                    client;
     uint64_t               per_tunnel; /* HTTP datagrams of one tunnel */
     int                    datagrams;
@@ -61,15 +61,15 @@ struct http3_app
     uint64_t               tunnels;
     uint64_t               early_requests;
     int                    unverified;
-    stream_t               table[HTTP3_MAX_REQUESTS];
+    stream_t               table[HTTPX_MAX_REQUESTS];
 };
 
-static char fill_text[HTTP3_MAX_FILL + 1U];
+static char fill_text[HTTPX_MAX_FILL + 1U];
 
 static stream_t* stream_of(http3_app_t* app, int64_t id)
 {
     const uint64_t index = (uint64_t)id >> 2U;
-    return (index < HTTP3_MAX_REQUESTS && (id & 3) == 0) ? &app->table[index] : NULL;
+    return (index < HTTPX_MAX_REQUESTS && (id & 3) == 0) ? &app->table[index] : NULL;
 }
 
 static uint64_t index_of(int64_t id)
@@ -89,11 +89,11 @@ static nghttp3_nv field_of(const char* name, const char* value, size_t size, uin
 }
 
 /* What every section of `index` carries. */
-static size_t add_common(const http3_options_t* options, uint64_t index, const char* index_text, nghttp3_nv* nva,
+static size_t add_common(const httpx_options_t* options, uint64_t index, const char* index_text, nghttp3_nv* nva,
                          size_t count)
 {
-    const uint64_t fill = http3_fill_bytes(options, index);
-    nva[count++] = field_of("x-cerid-repeat", HTTP3_REPEAT_VALUE, strlen(HTTP3_REPEAT_VALUE), NGHTTP3_NV_FLAG_TRY_INDEX);
+    const uint64_t fill = httpx_fill_bytes(options, index);
+    nva[count++] = field_of("x-cerid-repeat", HTTPX_REPEAT_VALUE, strlen(HTTPX_REPEAT_VALUE), NGHTTP3_NV_FLAG_TRY_INDEX);
     nva[count++] = field_of("x-cerid-index", index_text, strlen(index_text), NGHTTP3_NV_FLAG_TRY_INDEX);
     if (fill != 0U)
     {
@@ -108,7 +108,7 @@ static int submit_trailers(http3_app_t* app, int64_t id)
     nghttp3_nv nva[2];
     snprintf(index_text, sizeof(index_text), "%llu", (unsigned long long)index_of(id));
     nva[0] = field_of("x-cerid-trailer", index_text, strlen(index_text), NGHTTP3_NV_FLAG_NONE);
-    nva[1] = field_of("x-cerid-repeat", HTTP3_REPEAT_VALUE, strlen(HTTP3_REPEAT_VALUE), NGHTTP3_NV_FLAG_TRY_INDEX);
+    nva[1] = field_of("x-cerid-repeat", HTTPX_REPEAT_VALUE, strlen(HTTPX_REPEAT_VALUE), NGHTTP3_NV_FLAG_TRY_INDEX);
     return nghttp3_conn_submit_trailers(app->h3, id, nva, 2U);
 }
 
@@ -127,12 +127,12 @@ static nghttp3_ssize read_body(nghttp3_conn* h3, int64_t id, nghttp3_vec* vec, s
         return NGHTTP3_ERR_CALLBACK_FAILURE;
     }
     /* A tunnel's client FIN waits for its HTTP datagrams, which need the send part open. */
-    if (http3_is_tunnel(app->options, index) &&
+    if (httpx_is_tunnel(app->options, index) &&
         (app->client ? !stream->tunnel_open || !app->datagrams_settled : !stream->ended))
     {
         return NGHTTP3_ERR_WOULDBLOCK;
     }
-    const uint64_t goal   = http3_body_bytes(app->options, index, !app->client);
+    const uint64_t goal   = httpx_body_bytes(app->options, index, !app->client);
     const size_t   at     = pattern_index(id, stream->offered);
     const uint64_t left   = goal - stream->offered;
     const size_t   amount = left < (PATTERN_BYTES - at) ? (size_t)left : (PATTERN_BYTES - at);
@@ -164,7 +164,7 @@ static const nghttp3_data_reader BODY_READER = {read_body};
 static int respond(http3_app_t* app, int64_t id, stream_t* stream)
 {
     const uint64_t index = index_of(id);
-    const uint64_t body  = http3_body_bytes(app->options, index, 1);
+    const uint64_t body  = httpx_body_bytes(app->options, index, 1);
     char           index_text[24];
     char           length_text[24];
     nghttp3_nv     nva[MAX_FIELDS];
@@ -183,23 +183,23 @@ static int respond(http3_app_t* app, int64_t id, stream_t* stream)
     }
     nva[count++] = field_of(":status", "200", 3U, NGHTTP3_NV_FLAG_NONE);
     count        = add_common(app->options, index, index_text, nva, count);
-    if (http3_has_length(app->options, index, body))
+    if (httpx_has_length(app->options, index, body))
     {
         nva[count++] = field_of("content-length", length_text, strlen(length_text), NGHTTP3_NV_FLAG_NONE);
     }
-    stream->trailers = http3_has_trailers(app->options, index);
-    const int needs_reader = body != 0U || stream->trailers || http3_is_tunnel(app->options, index);
+    stream->trailers = httpx_has_trailers(app->options, index);
+    const int needs_reader = body != 0U || stream->trailers || httpx_is_tunnel(app->options, index);
     ++app->completed;
     return nghttp3_conn_submit_response(app->h3, id, nva, count, needs_reader ? &BODY_READER : NULL) == 0;
 }
 
 static int respond_waiting(http3_app_t* app)
 {
-    for (uint64_t index = 0; index < HTTP3_MAX_REQUESTS; ++index)
+    for (uint64_t index = 0; index < HTTPX_MAX_REQUESTS; ++index)
     {
         stream_t* stream = &app->table[index];
         if (stream->used && stream->ended && !stream->responded && !stream->counted &&
-            !http3_is_tunnel(app->options, index) && !respond(app, (int64_t)(index * 4U), stream))
+            !httpx_is_tunnel(app->options, index) && !respond(app, (int64_t)(index * 4U), stream))
         {
             return 0;
         }
@@ -232,7 +232,7 @@ static int recv_header(nghttp3_conn* h3, int64_t id, int32_t token, nghttp3_rcbu
     stream_t*        stream     = stream_of(app, id);
     const nghttp3_vec name_vec  = nghttp3_rcbuf_get_buf(name);
     const nghttp3_vec value_vec = nghttp3_rcbuf_get_buf(value);
-    http3_take_field(&stream->section, app->options, index_of(id), name_vec.base, name_vec.len, value_vec.base,
+    httpx_take_field(&stream->section, app->options, index_of(id), name_vec.base, name_vec.len, value_vec.base,
                      value_vec.len);
     return 0;
 }
@@ -248,9 +248,9 @@ static int recv_trailer(nghttp3_conn* h3, int64_t id, int32_t token, nghttp3_rcb
     stream_t*         stream    = stream_of(app, id);
     const nghttp3_vec name_vec  = nghttp3_rcbuf_get_buf(name);
     const nghttp3_vec value_vec = nghttp3_rcbuf_get_buf(value);
-    if (http3_text_is(name_vec.base, name_vec.len, "x-cerid-trailer"))
+    if (httpx_text_is(name_vec.base, name_vec.len, "x-cerid-trailer"))
     {
-        stream->trailers_seen = http3_decimal(value_vec.base, value_vec.len) == index_of(id);
+        stream->trailers_seen = httpx_decimal(value_vec.base, value_vec.len) == index_of(id);
     }
     return 0;
 }
@@ -259,27 +259,27 @@ static int recv_trailer(nghttp3_conn* h3, int64_t id, int32_t token, nghttp3_rcb
 static int request_headers(http3_app_t* app, int64_t id, stream_t* stream)
 {
     const uint64_t index = index_of(id);
-    if (!http3_section_good(&stream->section, app->options, index, 0))
+    if (!httpx_section_good(&stream->section, app->options, index, 0))
     {
         app->unverified = 1;
     }
     ++app->seen;
     app->early_requests += stream->early ? 1U : 0U;
-    if (app->seen == 1U && app->options->goaway == HTTP3_GOAWAY_NOTICE &&
+    if (app->seen == 1U && app->options->goaway == HTTPX_GOAWAY_NOTICE &&
         nghttp3_conn_submit_shutdown_notice(app->h3) != 0)
     {
         return NGHTTP3_ERR_CALLBACK_FAILURE;
     }
-    if (app->seen == 1U && app->options->goaway == HTTP3_GOAWAY_REJECT && nghttp3_conn_shutdown(app->h3) != 0)
+    if (app->seen == 1U && app->options->goaway == HTTPX_GOAWAY_REJECT && nghttp3_conn_shutdown(app->h3) != 0)
     {
         return NGHTTP3_ERR_CALLBACK_FAILURE;
     }
-    if (app->options->cancel == HTTP3_CANCEL_SERVER && http3_last_request(app->options, index))
+    if (app->options->cancel == HTTPX_CANCEL_SERVER && httpx_last_request(app->options, index))
     {
         app->cancel_due = id;
         return 0;
     }
-    if (http3_is_tunnel(app->options, index))
+    if (httpx_is_tunnel(app->options, index))
     {
         ++app->tunnels;
         return respond(app, id, stream) ? 0 : NGHTTP3_ERR_CALLBACK_FAILURE;
@@ -302,7 +302,7 @@ static int end_headers(nghttp3_conn* h3, int64_t id, int fin, void* user, void* 
         ++app->interims;
         return 0;
     }
-    if (http3_is_tunnel(app->options, index_of(id)) && stream->section.status == 200U)
+    if (httpx_is_tunnel(app->options, index_of(id)) && stream->section.status == 200U)
     {
         stream->tunnel_open = 1;
         ++app->tunnels;
@@ -327,7 +327,7 @@ static int recv_data(nghttp3_conn* h3, int64_t id, const uint8_t* data, size_t s
     }
     stream->received += size;
     app->body_received += size;
-    if (app->client && app->options->cancel == HTTP3_CANCEL_CLIENT && http3_last_request(app->options, index_of(id)) &&
+    if (app->client && app->options->cancel == HTTPX_CANCEL_CLIENT && httpx_last_request(app->options, index_of(id)) &&
         size != 0U && !stream->counted)
     {
         app->cancel_due = id;
@@ -353,14 +353,14 @@ static void response_ended(http3_app_t* app, int64_t id, stream_t* stream)
     const uint64_t index = index_of(id);
     stream->counted      = 1;
     ++app->completed;
-    if (app->options->over_limit && http3_last_request(app->options, index) && stream->section.status == 431U)
+    if (app->options->over_limit && httpx_last_request(app->options, index) && stream->section.status == 431U)
     {
         ++app->status_431;
         return;
     }
-    if (!http3_section_good(&stream->section, app->options, index, 1) ||
-        stream->received != http3_body_bytes(app->options, index, 1) ||
-        (http3_has_trailers(app->options, index) && !stream->trailers_seen))
+    if (!httpx_section_good(&stream->section, app->options, index, 1) ||
+        stream->received != httpx_body_bytes(app->options, index, 1) ||
+        (httpx_has_trailers(app->options, index) && !stream->trailers_seen))
     {
         app->unverified = 1;
     }
@@ -371,23 +371,23 @@ static void response_ended(http3_app_t* app, int64_t id, stream_t* stream)
 static int request_ended(http3_app_t* app, int64_t id, stream_t* stream)
 {
     const uint64_t index = index_of(id);
-    if (stream->received != http3_body_bytes(app->options, index, 0) ||
-        (http3_has_trailers(app->options, index) && !stream->trailers_seen))
+    if (stream->received != httpx_body_bytes(app->options, index, 0) ||
+        (httpx_has_trailers(app->options, index) && !stream->trailers_seen))
     {
         app->unverified = 1;
     }
     app->trailers += stream->trailers_seen ? 1U : 0U;
     ++app->request_ended;
-    if (app->options->goaway == HTTP3_GOAWAY_NOTICE && app->request_ended == app->options->requests &&
+    if (app->options->goaway == HTTPX_GOAWAY_NOTICE && app->request_ended == app->options->requests &&
         nghttp3_conn_shutdown(app->h3) != 0)
     {
         return NGHTTP3_ERR_CALLBACK_FAILURE;
     }
-    if (http3_is_tunnel(app->options, index))
+    if (httpx_is_tunnel(app->options, index))
     {
         return nghttp3_conn_resume_stream(app->h3, id) == 0 ? 0 : NGHTTP3_ERR_CALLBACK_FAILURE;
     }
-    if (app->options->goaway == HTTP3_GOAWAY_CLIENT && app->goaway_seen < 2U)
+    if (app->options->goaway == HTTPX_GOAWAY_CLIENT && app->goaway_seen < 2U)
     {
         return 0;
     }
@@ -431,7 +431,7 @@ static int shutdown_received(nghttp3_conn* h3, int64_t id, void* user)
     http3_app_t* app = user;
     ++app->goaway_seen;
     app->goaway_id = (uint64_t)id;
-    if (!app->client && app->options->goaway == HTTP3_GOAWAY_CLIENT && app->goaway_seen == 2U)
+    if (!app->client && app->options->goaway == HTTPX_GOAWAY_CLIENT && app->goaway_seen == 2U)
     {
         return respond_waiting(app) ? 0 : NGHTTP3_ERR_CALLBACK_FAILURE;
     }
@@ -503,9 +503,9 @@ static int start(http3_app_t* app, ngtcp2_conn* conn)
 /* The request of `index` on `id`, which the client has opened. 0 when nghttp3 refused it. */
 static int submit_request(http3_app_t* app, uint64_t index, int64_t id, void* stream_user)
 {
-    const http3_options_t* options = app->options;
-    const uint64_t         body    = http3_body_bytes(options, index, 0);
-    const int              tunnel  = http3_is_tunnel(options, index);
+    const httpx_options_t* options = app->options;
+    const uint64_t         body    = httpx_body_bytes(options, index, 0);
+    const int              tunnel  = httpx_is_tunnel(options, index);
     char                   index_text[24];
     char                   length_text[24];
     char                   path[40];
@@ -514,21 +514,21 @@ static int submit_request(http3_app_t* app, uint64_t index, int64_t id, void* st
     snprintf(index_text, sizeof(index_text), "%llu", (unsigned long long)index);
     snprintf(length_text, sizeof(length_text), "%llu", (unsigned long long)body);
     snprintf(path, sizeof(path), tunnel ? "/tunnel/%llu" : "/cerid/%llu", (unsigned long long)index);
-    const char* method = tunnel ? "CONNECT" : (body != 0U ? "POST" : "GET");
+    const char* method = httpx_method(tunnel, body);
     nva[count++]       = field_of(":method", method, strlen(method), NGHTTP3_NV_FLAG_NONE);
     nva[count++]       = field_of(":scheme", "https", 5U, NGHTTP3_NV_FLAG_NONE);
-    nva[count++]       = field_of(":authority", HTTP3_SERVER_NAME, strlen(HTTP3_SERVER_NAME), NGHTTP3_NV_FLAG_NONE);
+    nva[count++]       = field_of(":authority", HTTPX_SERVER_NAME, strlen(HTTPX_SERVER_NAME), NGHTTP3_NV_FLAG_NONE);
     nva[count++]       = field_of(":path", path, strlen(path), NGHTTP3_NV_FLAG_NONE);
     if (tunnel)
     {
-        nva[count++] = field_of(":protocol", HTTP3_TUNNEL_PROTOCOL, strlen(HTTP3_TUNNEL_PROTOCOL), NGHTTP3_NV_FLAG_NONE);
+        nva[count++] = field_of(":protocol", HTTPX_TUNNEL_PROTOCOL, strlen(HTTPX_TUNNEL_PROTOCOL), NGHTTP3_NV_FLAG_NONE);
     }
     count = add_common(options, index, index_text, nva, count);
-    if (http3_has_length(options, index, body) && body != 0U)
+    if (httpx_has_length(options, index, body) && body != 0U)
     {
         nva[count++] = field_of("content-length", length_text, strlen(length_text), NGHTTP3_NV_FLAG_NONE);
     }
-    const int needs_reader = body != 0U || http3_has_trailers(options, index) || tunnel;
+    const int needs_reader = body != 0U || httpx_has_trailers(options, index) || tunnel;
     return nghttp3_conn_submit_request(app->h3, id, nva, count, needs_reader ? &BODY_READER : NULL, stream_user) == 0;
 }
 
@@ -548,7 +548,7 @@ static int open_requests(http3_app_t* app)
             return 0;
         }
         stream->used     = 1;
-        stream->trailers = http3_has_trailers(app->options, index_of(id));
+        stream->trailers = httpx_has_trailers(app->options, index_of(id));
         if (!submit_request(app, index_of(id), id, stream))
         {
             return 0;
@@ -581,7 +581,7 @@ static void cancel_stream(http3_app_t* app)
 /* After a GOAWAY a client's new request is refused by its own end, before anything is written. */
 static void probe_after_goaway(http3_app_t* app)
 {
-    if (app->client && app->options->goaway == HTTP3_GOAWAY_NOTICE && app->goaway_seen >= 2U &&
+    if (app->client && app->options->goaway == HTTPX_GOAWAY_NOTICE && app->goaway_seen >= 2U &&
         app->refused_after_goaway == 0U && app->opened == app->options->requests)
     {
         app->refused_after_goaway =
@@ -613,7 +613,7 @@ int http3_turn(http3_app_t* app, ngtcp2_conn* conn, int can_open, int early, int
     }
     cancel_stream(app);
     probe_after_goaway(app);
-    if (app->client && app->options->goaway == HTTP3_GOAWAY_CLIENT && app->opened == app->options->requests &&
+    if (app->client && app->options->goaway == HTTPX_GOAWAY_CLIENT && app->opened == app->options->requests &&
         app->goaway_sent == 0U)
     {
         /* Both GOAWAYs go together: the notice first, its value the larger. */
@@ -680,7 +680,7 @@ static int close_h3_stream(http3_app_t* app, uint32_t flags, int64_t id, uint64_
 /* Streams whose close waited for a section QPACK held. */
 static int close_due_streams(http3_app_t* app)
 {
-    for (uint64_t index = 0; index < HTTP3_MAX_REQUESTS; ++index)
+    for (uint64_t index = 0; index < HTTPX_MAX_REQUESTS; ++index)
     {
         stream_t* stream = &app->table[index];
         if (stream->close_due && stream->ended)
@@ -859,7 +859,7 @@ int http3_strip_datagram(const http3_app_t* app, const uint8_t** data, size_t* s
     return quarter == index / app->per_tunnel;
 }
 
-http3_app_t* http3_new(const http3_options_t* options, int client, uint64_t datagrams)
+http3_app_t* http3_new(const httpx_options_t* options, int client, uint64_t datagrams)
 {
     http3_app_t* app = calloc(1U, sizeof(http3_app_t));
     if (app == NULL)
@@ -873,9 +873,9 @@ http3_app_t* http3_new(const http3_options_t* options, int client, uint64_t data
     app->datagrams  = datagrams != 0U;
     app->per_tunnel = options->tunnels != 0U ? datagrams / options->tunnels : 1U;
     app->per_tunnel = app->per_tunnel != 0U ? app->per_tunnel : 1U;
-    for (size_t at = 0; at < HTTP3_MAX_FILL; ++at)
+    for (size_t at = 0; at < HTTPX_MAX_FILL; ++at)
     {
-        fill_text[at] = http3_fill_byte(at);
+        fill_text[at] = httpx_fill_byte(at);
     }
     return app;
 }
@@ -891,7 +891,7 @@ void http3_del(http3_app_t* app)
 
 static int http3_exchange_over(const http3_app_t* app)
 {
-    const http3_options_t* options = app->options;
+    const httpx_options_t* options = app->options;
     if (!app->client || !app->settings_seen || app->opened < options->requests ||
         app->completed + app->rejected + app->aborted + app->cancelled < options->requests ||
         (app->cancelled_id >= 0 && !app->table[index_of(app->cancelled_id)].closed))
@@ -900,9 +900,9 @@ static int http3_exchange_over(const http3_app_t* app)
     }
     switch (options->goaway)
     {
-    case HTTP3_GOAWAY_NOTICE:
+    case HTTPX_GOAWAY_NOTICE:
         return app->goaway_seen >= 2U && app->refused_after_goaway != 0U;
-    case HTTP3_GOAWAY_REJECT:
+    case HTTPX_GOAWAY_REJECT:
         return app->goaway_seen >= 1U;
     default:
         return 1;
@@ -916,7 +916,7 @@ int http3_done(http3_app_t* app, uint64_t now)
         return 0;
     }
     app->done_ns = app->done_ns != 0U ? app->done_ns : now;
-    return now - app->done_ns >= HTTP3_LINGER_NS;
+    return now - app->done_ns >= HTTPX_LINGER_NS;
 }
 
 void http3_report(const http3_app_t* app)

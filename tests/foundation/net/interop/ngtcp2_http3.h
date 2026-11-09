@@ -1,8 +1,8 @@
 /* crd-net interoperability test (4.2a) -- the HTTP/3 application crd-ngtcp2-quic-peer runs over nghttp3 with --http3 1
- * (the exchange: http3_exchange.h). The program owns the QUIC connection and forwards its callbacks here. */
+ * (the exchange: http_exchange.h). The program owns the QUIC connection and forwards its callbacks here. */
 #pragma once
 
-#include "http3_exchange.h"
+#include "http_exchange.h"
 
 #include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2.h>
@@ -19,7 +19,7 @@ size_t         pattern_index(int64_t stream, uint64_t offset);
 typedef struct http3_app http3_app_t;
 
 /* `datagrams`: the HTTP datagrams of the whole run, 0 for none. Null when out of memory. */
-http3_app_t* http3_new(const http3_options_t* options, int client, uint64_t datagrams);
+http3_app_t* http3_new(const httpx_options_t* options, int client, uint64_t datagrams);
 void         http3_del(http3_app_t* app);
 
 /* The QUIC callbacks: 0, or an NGTCP2_ERR_* to stop the connection. */

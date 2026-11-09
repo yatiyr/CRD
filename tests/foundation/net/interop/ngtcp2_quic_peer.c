@@ -29,7 +29,7 @@
  *   resets       a server answers a short header for no connection with a stateless reset: its tokens are derived from
  *                a fixed key, so a restarted process answers for the connections of the one before
  *
- *   http3        HTTP/3 over nghttp3 instead of the echo: http3_exchange.h has its options, ALPN `h3` instead
+ *   http3        HTTP/3 over nghttp3 instead of the echo: http_exchange.h has its options, ALPN `h3` instead
  *
  * The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
  * is the same as cerid_quic_peer.cpp's plus what OpenSSL negotiated. The application is `cerid-interop`, a private
@@ -134,7 +134,7 @@ typedef struct
     SSL_SESSION*            session; /* a client's newest ticket */
     uint8_t                 early_parameters[MAX_EARLY_PARAMETERS];
     size_t                  early_parameters_size;
-    http3_options_t         http3;
+    httpx_options_t         http3;
     http3_app_t*            app; /* one connection's, null for the echo */
     /* One connection's, cleared between connections from here on (next_connection). */
     uint64_t                opened;
@@ -1574,11 +1574,11 @@ int main(int argc, char** argv)
     peer.datagram_limit = MAX_DATAGRAM_BYTES;
     peer.connections    = 1U;
     peer.number         = 1U;
-    http3_default_options(&peer.http3);
+    httpx_default_options(&peer.http3);
     for (int at = 1; at + 1 < argc; at += 2)
     {
         const char* value = argv[at + 1];
-        if (http3_parse_option(&peer.http3, argv[at], value))
+        if (httpx_parse_option(&peer.http3, argv[at], value))
         {
             continue;
         }
@@ -1684,7 +1684,7 @@ int main(int argc, char** argv)
         }
     }
     if (argc % 2 == 0 || role == NULL || group == NULL || cipher == NULL || seed == NULL ||
-        !http3_options_valid(&peer.http3) || (version != 1UL && version != 2UL) || peer.streams > MAX_STREAMS || !parse_seed(seed, peer.pin) ||
+        !httpx_options_valid(&peer.http3) || (version != 1UL && version != 2UL) || peer.streams > MAX_STREAMS || !parse_seed(seed, peer.pin) ||
         peer.datagrams > MAX_DATAGRAMS || peer.datagram_bytes + 1U > MAX_DATAGRAM_BYTES || peer.connections == 0U ||
         (peer.datagrams != 0U && peer.datagram_bytes < DATAGRAM_INDEX_BYTES))
     {

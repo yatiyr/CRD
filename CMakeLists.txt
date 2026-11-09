@@ -146,6 +146,10 @@ option(CRD_BUILD_MLS_VS_MLSPP "Build the MLS interoperability test against MLSpp
 option(CRD_BUILD_QUIC_VS_NGTCP2 "Build the QUIC interoperability test against ngtcp2 (Linux)" OFF)
 option(CRD_BUILD_QPACK_VS_QIFS "Build the QPACK interoperability test against the qifs corpus" OFF)
 option(CRD_BUILD_HPACK_VS_CORPUS "Build the HPACK interoperability test against the hpack-test-case corpus" OFF)
+# HTTP/2 against nghttp2 and h2spec (4.2a): crd-http2-peer over crd-net, crd-nghttp2-peer over the pinned nghttp2 (built
+# by its own CMake as a separate project, library only) and the pinned h2spec binary, driven over the loopback by
+# tests/foundation/net/interop/http2_interop.py. Linux x64 only, never in a shipped build.
+option(CRD_BUILD_HTTP2_VS_PEERS "Build the HTTP/2 interoperability test against nghttp2 and h2spec (Linux x64)" OFF)
 # QMux against the `qmux` crate over rustls (4.2a): crd-qmux-crate-peer, a Rust program whose crates the committed
 # Cargo.lock pins (cmake/pins.json tools/qmux-crates), built with the pinned Rust (CRD_CARGO). Linux only, never in a
 # shipped build; the crd-net-qmux-interop-crate CTest, locally and on the complete-tier linux-gcc-public-checks.
@@ -1524,6 +1528,14 @@ if(CRD_BUILD_QPACK_VS_QIFS)
 endif()
 if(CRD_BUILD_HPACK_VS_CORPUS)
     crd_add_pinned_package(hpack_test_case DOWNLOAD_ONLY YES)
+endif()
+if(CRD_BUILD_HTTP2_VS_PEERS)
+    if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "[http2-vs-peers] the HTTP/2 interoperability test needs Linux and CRD_BUILD_TESTS")
+    endif()
+    enable_language(C)
+    crd_add_pinned_package(nghttp2 DOWNLOAD_ONLY YES)
+    crd_add_pinned_package(h2spec DOWNLOAD_ONLY YES)
 endif()
 if(CRD_BUILD_MLS_VS_MLSPP)
     crd_add_pinned_package(nlohmann_json DOWNLOAD_ONLY YES)

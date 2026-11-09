@@ -1,4 +1,4 @@
-//! crd-quiche-peer: the HTTP/3 exchange of http3_exchange.h over Cloudflare's quiche, real UDP on the loopback, the
+//! crd-quiche-peer: the HTTP/3 exchange of http_exchange.h over Cloudflare's quiche, real UDP on the loopback, the
 //! counterpart of crd-quic-peer --http3 1 (crd-net). http3_interop.py runs one of each and reads both reports.
 //!
 //! quiche's QPACK has no dynamic table, so this end always advertises none, whatever --table says, and its reports show

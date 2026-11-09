@@ -227,7 +227,7 @@
         "tests/foundation/net/interop/"
       ],
       "built_when": {"option": "CRD_BUILD_QUIC_VS_NGTCP2", "platform": "Linux"},
-      "why": "The QUIC and HTTP/3 interoperability tests (the crd-net-quic-interop-ngtcp2 and crd-net-http3-interop-nghttp3 CTests): crd-quic-peer over crd-net and crd-ngtcp2-quic-peer over the pinned ngtcp2 and nghttp3 (cmake/pins.json ngtcp2, nghttp3) and OpenSSL 4.0, built by the tree that turns the option on."
+      "why": "The QUIC, HTTP/3 and HTTP/2 interoperability tests (the crd-net-quic-interop-ngtcp2, crd-net-http3-interop-nghttp3 and, with CRD_BUILD_HTTP2_VS_PEERS, crd-net-http2-interop CTests): crd-quic-peer over crd-net and crd-ngtcp2-quic-peer over the pinned ngtcp2 and nghttp3 (cmake/pins.json ngtcp2, nghttp3) and OpenSSL 4.0, built by the tree that turns the option on."
     },
     {
       "paths": [

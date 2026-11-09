@@ -27,7 +27,7 @@
 //   reject-early a server's early data context changes after the first connection, so the second's 0-RTT is refused
 //   only-version a server runs `version` alone and answers others with Version Negotiation
 //   progress-at  a server prints `progress=1` once it has read this many bytes
-//   http3        HTTP/3 over Http3Connection instead of the echo: http3_exchange.h has its options, ALPN `h3` instead
+//   http3        HTTP/3 over Http3Connection instead of the echo: http_exchange.h has its options, ALPN `h3` instead
 //   webtransport WebTransport sessions instead, `legacy` or `h3`: interop_webtransport.hpp has its options
 //
 // The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
@@ -95,7 +95,7 @@ struct Options : EchoOptions
     u32 version = 1U;
     bool reject_early = false;
     bool only_version = false;
-    http3_options_t http3;
+    httpx_options_t http3;
     WtOptions wt;
 };
 
@@ -487,13 +487,13 @@ int usage()
 int main(int argc, char** argv)
 {
     Options options;
-    http3_default_options(&options.http3);
+    httpx_default_options(&options.http3);
     u32 required = 0U;
     for (int at = 1; at + 1 < argc; at += 2)
     {
         const char* const name = argv[at];
         const char* const value = argv[at + 1];
-        if (parse_echo_option(name, value, options, required) || http3_parse_option(&options.http3, name, value) != 0 ||
+        if (parse_echo_option(name, value, options, required) || httpx_parse_option(&options.http3, name, value) != 0 ||
             wt_parse_option(options.wt, name, value))
         {
             continue;
@@ -528,7 +528,7 @@ int main(int argc, char** argv)
         }
     }
     if (argc % 2 == 0 || required != kRequiredEchoOptions || !echo_options_valid(options) ||
-        (options.version != 1U && options.version != 2U) || http3_options_valid(&options.http3) == 0)
+        (options.version != 1U && options.version != 2U) || httpx_options_valid(&options.http3) == 0)
     {
         return usage();
     }

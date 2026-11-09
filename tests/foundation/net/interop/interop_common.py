@@ -1,4 +1,4 @@
-"""What the interoperability drivers of crd-net share: reading a peer's report and an impaired path over UDP."""
+"""What the interoperability drivers of crd-net share: reading a peer's report and impaired paths over UDP and TCP."""
 import heapq
 import random
 import select
@@ -96,3 +96,54 @@ class Relay:
         self.thread.join(5)
         self.client_side.close()
         self.server_side.close()
+
+
+class Chopper:
+    """A TCP path that hands the bytes on a few at a time, at seeded boundaries."""
+
+    def __init__(self, server_port, seed=0, piece=16):
+        self.server = ('127.0.0.1', server_port)
+        self.seed = seed
+        self.piece = piece
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener.bind(('127.0.0.1', 0))
+        self.listener.listen(1)
+        self.port = self.listener.getsockname()[1]
+        self.sockets = [self.listener]
+        self.pumps = []
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def run(self):
+        client, _ = self.listener.accept()
+        server = socket.create_connection(self.server)
+        for side in (client, server):
+            side.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.sockets.append(side)
+        for number, (source, target) in enumerate(((client, server), (server, client))):
+            pump = threading.Thread(target=self.pump, args=(source, target, random.Random(self.seed + number)),
+                                    daemon=True)
+            pump.start()
+            self.pumps.append(pump)
+
+    def pump(self, source, target, chance):
+        try:
+            while True:
+                data = source.recv(65536)
+                if not data:
+                    target.shutdown(socket.SHUT_WR)
+                    return
+                at = 0
+                while at < len(data):
+                    size = chance.randint(1, self.piece)
+                    target.sendall(data[at:at + size])
+                    at += size
+        except OSError:
+            return
+
+    def stop(self):
+        self.thread.join(1)
+        for pump in self.pumps:
+            pump.join(1)
+        for side in self.sockets:
+            side.close()

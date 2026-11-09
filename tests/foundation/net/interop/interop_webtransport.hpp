@@ -21,7 +21,7 @@
 // Both send `datagrams` datagrams, the index in four bytes and a pattern tagged by the sending end. The closing end
 // sends WT_CLOSE_SESSION with 0x0C1D05E and "cerid-interop done"; the other reads them and closes the connection.
 
-#include "http3_exchange.h"
+#include "http_exchange.h"
 #include "interop_echo.hpp"
 #include "interop_http3.hpp"
 
@@ -119,7 +119,7 @@ struct WtRun
 {
     const EchoOptions* echo = nullptr;
     const WtOptions* wt = nullptr;
-    const http3_options_t* http3 = nullptr;
+    const httpx_options_t* http3 = nullptr;
 };
 
 // One connection's exchange, either end's.

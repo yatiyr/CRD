@@ -1,14 +1,15 @@
-/* crd-net interoperability test (4.2a) -- the HTTP/3 exchange crd-quic-peer and crd-ngtcp2-quic-peer run with --http3 1:
- * its options and the fields it carries, in one place so that the two programs read and write the same thing. Plain C:
- * the ngtcp2 peer is a C program.
+/* crd-net interoperability test (4.2a) -- the HTTP exchange crd-quic-peer and crd-ngtcp2-quic-peer run with
+ * --http3 1, and crd-http2-peer and crd-nghttp2-peer over TCP: its options and the fields it carries, in one place so
+ * that the programs read and write the same thing. Plain C: the ngtcp2 and nghttp2 peers are C programs.
  *
  * A client opens `requests` requests, the first `tunnels` of them Extended CONNECT tunnels (`:protocol` cerid-tunnel). A
- * request carries `request-bytes` bytes of body, a response `response-bytes`, each in the pattern of its stream, and the
- * index of a stream is its ID over four. Every message carries a field that repeats, so a QPACK dynamic table has
- * something to index, its index, and `field-bytes` bytes of filler. A server answers when the request has ended, a tunnel
- * as soon as it opens, its body still waiting for the request's end. Both ends check every field and every byte.
+ * request carries `request-bytes` bytes of body, a response `response-bytes`, each in the pattern of its stream, and
+ * the index of a stream is its ID over four ((ID - 1) / 2 on HTTP/2). Every message carries a field that repeats, so a
+ * dynamic table has something to index, its index, and `field-bytes` bytes of filler. A server answers when the request
+ * has ended, a tunnel as soon as it opens, its body still waiting for the request's end. Both ends check every field and
+ * every byte.
  *
- *   table, blocked  the QPACK table capacity and blocked streams each end allows the other
+ *   table, blocked  the QPACK or HPACK table capacity, and the blocked streams (QPACK), each end allows the other
  *   field-limit     the largest field section each end takes
  *   trailers        each message but a tunnel's (only DATA may follow its opening) ends in trailers
  *   interim         a server sends a 103 before each response
@@ -31,31 +32,31 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define HTTP3_MAX_REQUESTS 512U
-#define HTTP3_MAX_FILL 48000U
+#define HTTPX_MAX_REQUESTS 512U
+#define HTTPX_MAX_FILL 48000U
 #define HTTP3_CANCEL_CODE 0x10CU       /* H3_REQUEST_CANCELLED */
 #define HTTP3_REJECTED_CODE 0x10BU     /* H3_REQUEST_REJECTED */
 #define HTTP3_NO_ERROR 0x100U
 #define HTTP3_ALPN "h3"
-#define HTTP3_TUNNEL_PROTOCOL "cerid-tunnel"
-#define HTTP3_SERVER_NAME "cerid.test"
-#define HTTP3_REPEAT_VALUE "a field value every message of the exchange repeats"
-#define HTTP3_DATA_FRAME_BYTES 8192U
-#define HTTP3_LINGER_NS 100000000U /* a client's wait before closing, for QPACK's last acknowledgements to arrive */
+#define HTTPX_TUNNEL_PROTOCOL "cerid-tunnel"
+#define HTTPX_SERVER_NAME "cerid.test"
+#define HTTPX_REPEAT_VALUE "a field value every message of the exchange repeats"
+#define HTTPX_DATA_FRAME_BYTES 8192U
+#define HTTPX_LINGER_NS 100000000U /* a client's wait before closing, for QPACK's last acknowledgements to arrive */
 
 enum
 {
-    HTTP3_GOAWAY_NONE,
-    HTTP3_GOAWAY_NOTICE,
-    HTTP3_GOAWAY_REJECT,
-    HTTP3_GOAWAY_CLIENT
+    HTTPX_GOAWAY_NONE,
+    HTTPX_GOAWAY_NOTICE,
+    HTTPX_GOAWAY_REJECT,
+    HTTPX_GOAWAY_CLIENT
 };
 
 enum
 {
-    HTTP3_CANCEL_NONE,
-    HTTP3_CANCEL_CLIENT,
-    HTTP3_CANCEL_SERVER
+    HTTPX_CANCEL_NONE,
+    HTTPX_CANCEL_CLIENT,
+    HTTPX_CANCEL_SERVER
 };
 
 typedef struct
@@ -74,7 +75,7 @@ typedef struct
     int      goaway;
     int      cancel;
     int      over_limit;
-} http3_options_t;
+} httpx_options_t;
 
 /* What one received section held. */
 typedef struct
@@ -89,9 +90,9 @@ typedef struct
     int      get;
     int      post;
     int      wrong;
-} http3_section_t;
+} httpx_section_t;
 
-static inline void http3_default_options(http3_options_t* options)
+static inline void httpx_default_options(httpx_options_t* options)
 {
     memset(options, 0, sizeof(*options));
     options->field_limit = 16384U;
@@ -100,7 +101,7 @@ static inline void http3_default_options(http3_options_t* options)
 }
 
 /* Whether `name` was one of the exchange's. */
-static inline int http3_parse_option(http3_options_t* options, const char* name, const char* value)
+static inline int httpx_parse_option(httpx_options_t* options, const char* name, const char* value)
 {
     const uint64_t number = strtoull(value, NULL, 10);
     if (strcmp(name, "--http3") == 0)
@@ -153,16 +154,16 @@ static inline int http3_parse_option(http3_options_t* options, const char* name,
     }
     else if (strcmp(name, "--goaway") == 0)
     {
-        options->goaway = strcmp(value, "notice") == 0   ? HTTP3_GOAWAY_NOTICE
-                          : strcmp(value, "reject") == 0 ? HTTP3_GOAWAY_REJECT
-                          : strcmp(value, "client") == 0 ? HTTP3_GOAWAY_CLIENT
-                                                         : HTTP3_GOAWAY_NONE;
+        options->goaway = strcmp(value, "notice") == 0   ? HTTPX_GOAWAY_NOTICE
+                          : strcmp(value, "reject") == 0 ? HTTPX_GOAWAY_REJECT
+                          : strcmp(value, "client") == 0 ? HTTPX_GOAWAY_CLIENT
+                                                         : HTTPX_GOAWAY_NONE;
     }
     else if (strcmp(name, "--cancel") == 0)
     {
-        options->cancel = strcmp(value, "client") == 0   ? HTTP3_CANCEL_CLIENT
-                          : strcmp(value, "server") == 0 ? HTTP3_CANCEL_SERVER
-                                                         : HTTP3_CANCEL_NONE;
+        options->cancel = strcmp(value, "client") == 0   ? HTTPX_CANCEL_CLIENT
+                          : strcmp(value, "server") == 0 ? HTTPX_CANCEL_SERVER
+                                                         : HTTPX_CANCEL_NONE;
     }
     else
     {
@@ -171,44 +172,61 @@ static inline int http3_parse_option(http3_options_t* options, const char* name,
     return 1;
 }
 
-static inline int http3_options_valid(const http3_options_t* options)
+static inline int httpx_options_valid(const httpx_options_t* options)
 {
-    return options->requests <= HTTP3_MAX_REQUESTS && options->tunnels <= options->requests &&
-           options->field_bytes <= HTTP3_MAX_FILL && options->field_limit >= 1024U &&
-           options->field_limit * 2U <= HTTP3_MAX_FILL;
+    return options->requests <= HTTPX_MAX_REQUESTS && options->tunnels <= options->requests &&
+           options->field_bytes <= HTTPX_MAX_FILL && options->field_limit >= 1024U &&
+           options->field_limit * 2U <= HTTPX_MAX_FILL;
 }
 
-static inline char http3_fill_byte(uint64_t at)
+/* Byte `offset` of the body of `stream` in the pattern of `tag`. */
+static inline uint8_t httpx_pattern(uint64_t tag, uint64_t stream, uint64_t offset)
+{
+    const uint64_t at = (offset + (stream * 37U)) & 0xFFFFU;
+    return (uint8_t)((at * 31U) + (at >> 8U) + (tag * 7U));
+}
+
+static inline char httpx_fill_byte(uint64_t at)
 {
     return (char)('a' + (at % 26U));
 }
 
+/* What a request's :method is. */
+static inline const char* httpx_method(int tunnel, uint64_t body)
+{
+    if (tunnel)
+    {
+        return "CONNECT";
+    }
+    return body != 0U ? "POST" : "GET";
+}
+
 /* The filler of a message of `index`: longer than the peer takes on the last request of an over-limit run. */
-static inline uint64_t http3_fill_bytes(const http3_options_t* options, uint64_t index)
+static inline uint64_t httpx_fill_bytes(const httpx_options_t* options, uint64_t index)
 {
     return options->over_limit && index + 1U == options->requests ? options->field_limit + (options->field_limit / 2U)
                                                                   : options->field_bytes;
 }
 
-static inline int http3_is_tunnel(const http3_options_t* options, uint64_t index)
+static inline int httpx_is_tunnel(const httpx_options_t* options, uint64_t index)
 {
     return index < options->tunnels;
 }
 
-static inline int http3_has_trailers(const http3_options_t* options, uint64_t index)
+static inline int httpx_has_trailers(const httpx_options_t* options, uint64_t index)
 {
-    return options->trailers && !http3_is_tunnel(options, index);
+    return options->trailers && !httpx_is_tunnel(options, index);
 }
 
-static inline int http3_last_request(const http3_options_t* options, uint64_t index)
+static inline int httpx_last_request(const httpx_options_t* options, uint64_t index)
 {
     return index + 1U == options->requests;
 }
 
 /* How much of a message's body a request or response of `index` carries; a cancelled response goes on until it is. */
-static inline uint64_t http3_body_bytes(const http3_options_t* options, uint64_t index, int response)
+static inline uint64_t httpx_body_bytes(const httpx_options_t* options, uint64_t index, int response)
 {
-    if (response && options->cancel == HTTP3_CANCEL_CLIENT && http3_last_request(options, index))
+    if (response && options->cancel == HTTPX_CANCEL_CLIENT && httpx_last_request(options, index))
     {
         return UINT64_MAX;
     }
@@ -216,18 +234,18 @@ static inline uint64_t http3_body_bytes(const http3_options_t* options, uint64_t
 }
 
 /* content-length on the even plain requests and responses, nothing on the odd ones or a tunnel. */
-static inline int http3_has_length(const http3_options_t* options, uint64_t index, uint64_t body)
+static inline int httpx_has_length(const httpx_options_t* options, uint64_t index, uint64_t body)
 {
-    return index % 2U == 0U && !http3_is_tunnel(options, index) && body != UINT64_MAX;
+    return index % 2U == 0U && !httpx_is_tunnel(options, index) && body != UINT64_MAX;
 }
 
-static inline int http3_text_is(const uint8_t* bytes, size_t size, const char* text)
+static inline int httpx_text_is(const uint8_t* bytes, size_t size, const char* text)
 {
     return size == strlen(text) && memcmp(bytes, text, size) == 0;
 }
 
 /* The decimal value of `bytes`; UINT64_MAX when they are not one. */
-static inline uint64_t http3_decimal(const uint8_t* bytes, size_t size)
+static inline uint64_t httpx_decimal(const uint8_t* bytes, size_t size)
 {
     uint64_t value = size != 0U ? 0U : UINT64_MAX;
     for (size_t at = 0; at < size; ++at)
@@ -241,11 +259,11 @@ static inline uint64_t http3_decimal(const uint8_t* bytes, size_t size)
     return value;
 }
 
-static inline int http3_fill_matches(const uint8_t* value, size_t size)
+static inline int httpx_fill_matches(const uint8_t* value, size_t size)
 {
     for (size_t at = 0; at < size; ++at)
     {
-        if (value[at] != (uint8_t)http3_fill_byte(at))
+        if (value[at] != (uint8_t)httpx_fill_byte(at))
         {
             return 0;
         }
@@ -253,59 +271,59 @@ static inline int http3_fill_matches(const uint8_t* value, size_t size)
     return 1;
 }
 
-static inline void http3_take_path(http3_section_t* section, const uint8_t* value, size_t size, uint64_t index)
+static inline void httpx_take_path(httpx_section_t* section, const uint8_t* value, size_t size, uint64_t index)
 {
     size_t at = size;
     while (at != 0U && value[at - 1U] != '/')
     {
         --at;
     }
-    section->wrong = section->wrong || http3_decimal(value + at, size - at) != index;
+    section->wrong = section->wrong || httpx_decimal(value + at, size - at) != index;
 }
 
 /* Holds one received field of the section of stream `index` to what the exchange wrote. */
-static inline void http3_take_field(http3_section_t* section, const http3_options_t* options, uint64_t index,
+static inline void httpx_take_field(httpx_section_t* section, const httpx_options_t* options, uint64_t index,
                                     const uint8_t* name, size_t name_size, const uint8_t* value, size_t value_size)
 {
-    if (http3_text_is(name, name_size, ":status"))
+    if (httpx_text_is(name, name_size, ":status"))
     {
-        section->status = (uint32_t)http3_decimal(value, value_size);
+        section->status = (uint32_t)httpx_decimal(value, value_size);
     }
-    else if (http3_text_is(name, name_size, ":method"))
+    else if (httpx_text_is(name, name_size, ":method"))
     {
-        section->connect = http3_text_is(value, value_size, "CONNECT");
-        section->get     = http3_text_is(value, value_size, "GET");
-        section->post    = http3_text_is(value, value_size, "POST");
+        section->connect = httpx_text_is(value, value_size, "CONNECT");
+        section->get     = httpx_text_is(value, value_size, "GET");
+        section->post    = httpx_text_is(value, value_size, "POST");
     }
-    else if (http3_text_is(name, name_size, ":path"))
+    else if (httpx_text_is(name, name_size, ":path"))
     {
-        http3_take_path(section, value, value_size, index);
+        httpx_take_path(section, value, value_size, index);
     }
-    else if (http3_text_is(name, name_size, ":protocol"))
+    else if (httpx_text_is(name, name_size, ":protocol"))
     {
-        section->protocol_seen = http3_text_is(value, value_size, HTTP3_TUNNEL_PROTOCOL);
+        section->protocol_seen = httpx_text_is(value, value_size, HTTPX_TUNNEL_PROTOCOL);
     }
-    else if (http3_text_is(name, name_size, "x-cerid-repeat"))
+    else if (httpx_text_is(name, name_size, "x-cerid-repeat"))
     {
-        section->repeat_seen = http3_text_is(value, value_size, HTTP3_REPEAT_VALUE);
+        section->repeat_seen = httpx_text_is(value, value_size, HTTPX_REPEAT_VALUE);
     }
-    else if (http3_text_is(name, name_size, "x-cerid-index"))
+    else if (httpx_text_is(name, name_size, "x-cerid-index"))
     {
-        section->index = http3_decimal(value, value_size);
+        section->index = httpx_decimal(value, value_size);
         section->index_seen = section->index == index;
     }
-    else if (http3_text_is(name, name_size, "x-cerid-fill"))
+    else if (httpx_text_is(name, name_size, "x-cerid-fill"))
     {
-        section->fill_seen = value_size == http3_fill_bytes(options, index) && http3_fill_matches(value, value_size);
+        section->fill_seen = value_size == httpx_fill_bytes(options, index) && httpx_fill_matches(value, value_size);
     }
 }
 
 /* Whether a request's or a final response's section held everything it had to. */
-static inline int http3_section_good(const http3_section_t* section, const http3_options_t* options, uint64_t index,
+static inline int httpx_section_good(const httpx_section_t* section, const httpx_options_t* options, uint64_t index,
                                      int response)
 {
-    const uint64_t body = http3_body_bytes(options, index, 0);
-    const int      fill = http3_fill_bytes(options, index) == 0U || section->fill_seen;
+    const uint64_t body = httpx_body_bytes(options, index, 0);
+    const int      fill = httpx_fill_bytes(options, index) == 0U || section->fill_seen;
     if (section->wrong || !section->repeat_seen || !section->index_seen || !fill)
     {
         return 0;
@@ -314,7 +332,7 @@ static inline int http3_section_good(const http3_section_t* section, const http3
     {
         return section->status == 200U;
     }
-    if (http3_is_tunnel(options, index))
+    if (httpx_is_tunnel(options, index))
     {
         return section->connect && section->protocol_seen;
     }
