@@ -82,6 +82,32 @@ TEST_CASE("special gamma: the poles, signed zeros, infinities and NaN follow C's
     }
 }
 
+TEST_CASE("special gamma: gamma_sign is the sign of Gamma on both sides of every negative integer",
+          "[v12-a][special][gamma]")
+{
+    // Gamma is negative on (-1, 0), (-3, -2), ... and positive on (-2, -1), (-4, -3), ...; C's tgamma is the reference.
+    CHECK(sf::gamma_sign(-0.5) == -1.0);
+    CHECK(sf::gamma_sign(-1.5) == 1.0);
+    CHECK(sf::gamma_sign(-2.5) == -1.0);
+    CHECK(sf::gamma_sign(-3.5) == 1.0);
+    CHECK(sf::gamma_sign(0.5) == 1.0);
+    CHECK(sf::gamma_sign(7.25) == 1.0);
+    for (int k = 0; k < 24; ++k)
+    {
+        for (const f64 offset : {1.0e-9, 0.1, 0.5, 0.9, 1.0 - 1.0e-9})
+        {
+            const f64 x = -static_cast<f64>(k) - offset;
+            INFO("x=" << x);
+            CHECK(sf::gamma_sign(x) == ((std::tgamma(x) < 0.0) ? -1.0 : 1.0));
+            if (offset > 0.01 && offset < 0.99)
+            {
+                const float xf = static_cast<float>(x);
+                CHECK(sf::gamma_sign(xf) == ((std::tgamma(xf) < 0.0f) ? -1.0f : 1.0f));
+            }
+        }
+    }
+}
+
 TEST_CASE("special beta: beta/lbeta vs scipy", "[v12-a][special][gamma]")
 {
     for (std::size_t i = 0; i < len(ref_beta_a); ++i)

@@ -202,7 +202,9 @@ TEST_CASE("struve: H / L vs scipy", "[v12-d][special][struve]")
     for (std::size_t i = 0; i < len(ref_sth_v); ++i)
     {
         INFO("struve_h nu=" << ref_st_nu[i] << " x=" << ref_st_x[i]);
-        // H series (x<16) ~1e-12; the large-x Y_ν+asymptotic path is ~1e-9 (Struve's exotic crossover) — honest bar.
+        // The original bar for H, kept: the series (x<16, ~1e-10 at worst near 16), the Y_ν + Gauss–Laguerre integral
+        // and the downward recurrence (16 ≤ x ≲ 30) and the asymptotic (x ≳ 30) sit near 1e-12; the reference's own
+        // error is ~1e-13 at x ≈ 25.
         CHECK(close(sf::struve_h(ref_st_nu[i], ref_st_x[i]), ref_sth_v[i], 1e-9, 1e-11));
     }
     for (std::size_t i = 0; i < len(ref_stl_v); ++i)

@@ -84,7 +84,7 @@ template <Real T>
     return crd::math::log(detail::kPi<T> / s) - detail::lgamma_pos(static_cast<T>(1) - x);
 }
 
-// sign of Γ(x): +1 except on (−2k−1, −2k) intervals where Γ is negative.
+// sign of Γ(x): +1 except on the intervals (−1, 0), (−3, −2), (−5, −4), ... where Γ is negative.
 template <Real T>
 [[nodiscard]] T gamma_sign(T x) noexcept
 {
@@ -92,9 +92,10 @@ template <Real T>
     {
         return static_cast<T>(1);
     }
-    // Γ(x) < 0 when ⌊x⌋ is even (x in (−1,0): floor=−1 odd → +; x in (−2,−1): floor=−2 even → −; ...).
+    // Γ(x) < 0 when ⌊x⌋ is odd (x in (−1,0): floor=−1 odd → −, Γ(−½) = −2√π; x in (−2,−1): floor=−2 even → +,
+    // Γ(−3/2) = 4√π/3; ...).
     const auto fl = static_cast<long long>(crd::math::floor(x));
-    return ((fl % 2) == 0) ? static_cast<T>(-1) : static_cast<T>(1);
+    return ((fl & 1) != 0) ? static_cast<T>(-1) : static_cast<T>(1);
 }
 
 // Γ(x): ±inf at ±0, +inf at +inf, NaN at the negative integers and -inf (C's tgamma).

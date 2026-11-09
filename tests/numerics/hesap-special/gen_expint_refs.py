@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""scipy.special references for v12-d exponential/trigonometric integrals (plain C arrays, no STL).
+"""scipy.special (and mpmath where noted) references for v12-d exponential/trigonometric integrals (plain C arrays, no STL).
 
 Run: python3 tests/numerics/hesap-special/gen_expint_refs.py > tests/numerics/hesap-special/expint_refs.inc
 """
+import mpmath as mp
 import numpy as np
 from scipy import special as sp
 from scipy.stats import ncx2
@@ -84,12 +85,23 @@ def main():
     emit("zeta_v", [sp.zeta(s, a) for s, a in zz])
 
     # ---- Struve H / modified Struve L ----
-    sv = [(0.0, 1.0), (1.0, 2.0), (0.5, 3.0), (2.0, 5.0), (1.0, 8.0), (0.0, 20.0), (1.5, 12.0)]
+    sv = [(0.0, 1.0), (1.0, 2.0), (0.5, 3.0), (2.0, 5.0), (1.0, 8.0), (0.0, 20.0), (1.5, 12.0),
+          # 16 ≤ x < 28, where the asymptotic alone is good to ~1e-9 only; half-integer orders (a Γ pole in the
+          # asymptotic); negative orders (Y_ν reflected, series poles at ν = −3/2, −5/2, …); ν ≳ x/2 (recurrence)
+          (0.0, 16.68301886792453), (1.0, 16.18050314465409), (0.5, 16.5), (1.5, 20.0), (2.5, 18.0), (0.0, 22.5),
+          (2.0, 25.0), (-0.3, 20.0), (-1.5, 5.0), (-1.5, 16.0), (-2.5, 12.0), (-3.7, 18.16), (-20.7, 11.0),
+          (10.0, 20.0), (20.0, 30.0), (40.0, 60.0), (80.0, 85.9), (150.0, 100.0)]
     emit("st_nu", [t[0] for t in sv]); emit("st_x", [t[1] for t in sv])
     emit("sth_v", [sp.struve(nu, x) for nu, x in sv])
-    svl = [(0.0, 1.0), (1.0, 2.0), (0.5, 3.0), (2.0, 5.0), (1.0, 8.0)]
+    svl = [(0.0, 1.0), (1.0, 2.0), (0.5, 3.0), (2.0, 5.0), (1.0, 8.0),
+           (-1.5, 5.0), (-2.5, 8.0), (-1.5, 0.5),  # Γ(ν+3/2) at a pole: the series starts at m = −ν − ½
+           # a very negative order, where the terms alternate for m < −ν − 3/2 and the plain sum loses up to 6 digits
+           (-100.3, 63.3), (-100.3, 62.8), (-100.3, 62.3), (-100.3, 69.3), (-120.2, 75.0), (-150.2, 90.0),
+           (-200.4, 204.0), (-200.4, 225.0)]  # Γ(ν+3/2) is below 1e-300 here: the leading term through logarithms
     emit("stl_nu", [t[0] for t in svl]); emit("stl_x", [t[1] for t in svl])
-    emit("stl_v", [sp.modstruve(nu, x) for nu, x in svl])
+    # scipy.modstruve carries its own error at these orders: mpmath (50 digits) is the reference there
+    mp.mp.dps = 50
+    emit("stl_v", [sp.modstruve(nu, x) if nu > -30 else float(mp.struvel(nu, x)) for nu, x in svl])
 
     # ---- hypergeometric ----
     h0 = [(1.5, 0.5), (2.0, -1.0), (0.5, 2.0), (3.0, 1.0), (1.0, -3.0)]
