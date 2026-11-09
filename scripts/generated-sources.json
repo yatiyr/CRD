@@ -1664,13 +1664,13 @@
       "path": "tests/numerics/hesap-special/bessel_refs.inc",
       "generator": "gen_bessel_refs.py",
       "status": "generator-absent",
-      "sha256": "ad0617891aa9824196c680289d2533b80d5c6e3750d587a90c3658cc4a51ac7f"
+      "sha256": "8196351b9c12e652a69a6e463b0892f6775f9f1f7f38b3188686451965a9df50"
     },
     {
       "path": "tests/numerics/hesap-special/expint_refs.inc",
       "generator": "gen_expint_refs.py",
       "status": "generator-absent",
-      "sha256": "be1efb11312ba8b54f578d17aa0cab3cb2020798429abcc19bdf629da35e75dc"
+      "sha256": "33923cd3a54d681d0371d4b0b5f8ad5859dfc75c32a55b7d21a0c57d4ad44052"
     },
     {
       "path": "tests/numerics/hesap-special/orthopoly_refs.inc",
