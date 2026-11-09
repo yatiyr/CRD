@@ -1323,7 +1323,7 @@ Evidence: `test_http2.cpp` `[http2]` (41 cases: every frame's connection errors,
 - **Writing.** Rounds of one view per tunnel from a rotating start, so one tunnel cannot take every turn; a write stops at the stream's credit or the connection's room and resumes on the next flush.
 - **Ends** (RFC 8441 section 5, RFC 9220 section 3). A clean end of the stream is the transport's end (Truncated without Close), a reset or STOP_SENDING its failure. A Closed tunnel's last bytes get one try; its stream is then finished, or cancelled with CANCEL or H3_REQUEST_CANCELLED when they could not go or it failed, NO_ERROR after both ends finished. A failed HTTP connection ends every tunnel.
 
-Evidence: `test_websocket_tunnel.cpp` `[ws-tunnel]` (26 cases over both versions: the policy and every refusal by status, 200 KiB both ways and datagrams with the wire cut at 1 and 7 bytes, a reader that stops holding the writer by flow control, a `ChannelLink` over a tunnel, fragments with a Ping between them, every end, the timers, the pool) and `crd-fuzz-net-websocket-tunnel` ([session](../sessions/2026-11-10-4-2a-websocket-tunnels.md)).
+Evidence: `test_websocket_tunnel.cpp` `[ws-tunnel]` (27 cases over both versions: the policy and every refusal by status, 200 KiB both ways and datagrams with the wire cut at 1 and 7 bytes, a reader that stops holding the writer by flow control, a `ChannelLink` over a tunnel, fragments with a Ping between them, every end, the timers, the pool) and `crd-fuzz-net-websocket-tunnel` ([session](../sessions/2026-11-10-4-2a-websocket-tunnels.md)).
 
 <a id="browsers"></a>
 ## Browser constraints
