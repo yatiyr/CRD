@@ -1052,7 +1052,7 @@ waits).
   `accept_retry_ns`, not spinning on a listener that stays readable.
 - **Connect.** The TLS session starts with `connect()`, so `handshake_timeout_ns` bounds the TCP connection too; nothing is written before it stands.
   A failed connect is reported through `on_closed` with the `SocketError` (Refused, TimedOut).
-- **Close.** A Closed connection's bytes are tried once. It then ends with a FIN if everything went out (close_notify must reach the peer, also after
+- **Close.** A write that finds the peer gone first reads what the socket still holds (at most kReadsAfterFailure reads, bounded by the host's receive buffer), so a peer that reset behind its last bytes and its close is reported by them. A Closed connection's bytes are tried once. It then ends with a FIN if everything went out (close_notify must reach the peer, also after
   an idle timeout or a TLS failure), and a reset if bytes could not be sent, the handshake timed out (a silent peer earns no TIME_WAIT) or the
   transport had already failed.
 

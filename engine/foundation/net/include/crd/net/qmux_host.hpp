@@ -20,7 +20,8 @@
 //   writes    bytes stay in the connection's TLS output until the socket has taken them, so a partial write needs no
 //             second buffer per connection.
 //   ends      a write that finds the peer gone leaves what it sent in the socket: that is read first, so a peer that
-//             reset behind its last bytes and its close is reported by them, within a bounded number of reads.
+//             reset behind its last bytes and its close is reported by them, within a bounded number of reads. The one
+//             exception to a turn's share of reads: it happens once per connection and the host's buffer bounds it.
 //   close     a Closed connection's last bytes are tried once. It ends with a FIN when everything went out, and with a
 //             reset when bytes could not be sent, the handshake timed out or the transport had failed. Then it is
 //             reported and its slot reused under a new generation.
