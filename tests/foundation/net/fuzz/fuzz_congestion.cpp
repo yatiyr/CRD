@@ -14,6 +14,7 @@
 // an acknowledgement, an undo or a reset raises the window, and a reset restores the initial one. A live swap keeps
 // the window, threshold and recovery period. The pacing rate is 0 without pacing. The pacer's release time is never
 // before now, its credit stays within one burst either side of zero and is positive at its release time.
+#include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/congestion.hpp>
 
@@ -37,9 +38,15 @@ struct Packet
     u8 state = 0U; // 0 outstanding, 1 acknowledged, 2 lost, 3 lost then acknowledged
 };
 
+// MSVC C4324 (structure padded due to alignment specifier): the slot's 16-byte alignment rounds the world up, and
+// that padding is the point. ARM64 MSVC reports it here whatever the member order; the x64 compiler does not.
+#if CRD_COMPILER_MSVC
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 struct World
 {
-    CongestionSlot slot; // first, so its alignment pads nothing before it (ARM64 MSVC warns C4324)
+    CongestionSlot slot;
     CongestionPolicy policy;
     u64 datagram = 1200U;
     CongestionController* ctl = nullptr;
@@ -61,6 +68,9 @@ struct World
         }
     }
 };
+#if CRD_COMPILER_MSVC
+#pragma warning(pop)
+#endif
 
 void check(const World& w)
 {
