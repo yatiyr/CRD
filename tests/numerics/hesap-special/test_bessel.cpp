@@ -1030,7 +1030,7 @@ TEST_CASE("bessel: complex Y and K where they leave the doubles vs mpmath", "[v1
     // mpmath at 70 digits at the exact double inputs: a part beyond the doubles is the infinity of its sign, a part
     // within them is checked against the bar of the whole (|ref| times 1e-9). Base: NaN (inf - inf in the recurrence
     // and the series), and infinities for K_-184(-0.07 + 3.53i), which is 2.4e290.
-    constexpr f64 kInf = std::numeric_limits<f64>::infinity();
+    static constexpr f64 kInf = std::numeric_limits<f64>::infinity();
     struct Point
     {
         int kind; // 1 Y, 3 K
