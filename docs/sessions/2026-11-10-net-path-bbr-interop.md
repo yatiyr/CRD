@@ -30,7 +30,8 @@ efed53d5, before 1d964d5c's pragma. No finished run contains 1d964d5c or later y
   with no failure.
 - BBR's minimum RTT is 30.1 to 31.3 ms on a 30 ms path. Cerid's direction never overflowed the buffer.
 - A Cerid client's model held 0.70 to 1.17 of the rate. It used 0.92 to 0.94 of the link clean, and 0.84 to 0.88
-  under 1% and 2% loss. In the same runs CUBIC used 0.24 and 0.16.
+  under 1% and 2% loss. A scratch run of the same cases with Cerid on CUBIC used 0.24 and 0.16. The suite runs only
+  the 1% case and asserts BBR's side alone.
 - Teeth: forcing Cerid to CUBIC in the 1%-loss case fails the utilisation oracle (0.24 of the link).
 - Two oracle bounds were wrong and are corrected:
   - A server's echo sends only what it reads, so behind a CUBIC client under loss its model held 0.31 of the link.
