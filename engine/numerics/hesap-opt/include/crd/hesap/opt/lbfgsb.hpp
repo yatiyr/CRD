@@ -35,7 +35,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
-#include <crd/hesap/opt/more_thuente_line_search.hpp> // detail::mt_dcstep (verified dcstep) for lnsrlb
+#include <crd/hesap/opt/more_thuente_line_search.hpp> // detail::mt_dcstep and its helpers for lnsrlb
 #include <crd/hesap/opt/objective.hpp>
 #include <crd/hesap/opt/opt_types.hpp>
 #include <crd/memory/allocator.hpp>
@@ -1198,9 +1198,10 @@ inline void subsm(int n, int m, int nsub, const int* ind, const T* l, const T* u
     }
 }
 
-// ---- lnsrlb: the bounded line search (Moré-Thuente dcsrch, safeguarded so trial points stay feasible). Ported as
-//      a DIRECT loop (the reference is reverse-communication) calling obj at each trial; reuses the verified
-//      mt_dcstep. ftol/gtol/xtol = the reference's .001/.9/.1. On return x/f/g hold the accepted point; info=-4 if
+// ---- lnsrlb: the bounded line search (Moré-Thuente, safeguarded so trial points stay feasible). The step-bound and
+//      first-step preamble follows L-BFGS-B-C; the search loop is written from Moré & Thuente 1994 (ACM TOMS 20(3))
+//      as a DIRECT loop (the reference is reverse-communication) calling obj at each trial, reusing mt_dcstep.
+//      ftol/gtol/xtol = the reference's .001/.9/.1. On return x/f/g hold the accepted point; info=-4 if
 //      d is not a descent direction. ----
 template <typename T, typename Obj>
 inline void lnsrlb(const Obj& obj, int n, const T* l, const T* u, const int* nbd, T* x, T& f, T& fold, T& gd,
@@ -1277,22 +1278,23 @@ inline void lnsrlb(const Obj& obj, int n, const T* l, const T* u, const int* nbd
         info = -4; // not a descent direction
         return;
     }
-    // dcsrch state.
-    bool    brackt = false;
-    int     stage = 1;
-    const T finit = f;
-    const T ginit = gd;
-    const T gtest = ftol * ginit;
-    T       width = stpmx - stpmn;
-    T       width1 = width / static_cast<T>(0.5);
-    T       stx = static_cast<T>(0);
-    T       fx = finit;
-    T       gx = ginit;
-    T       sty = static_cast<T>(0);
-    T       fy = finit;
-    T       gy = ginit;
-    T       stmin = static_cast<T>(0);
-    T       stmax = stp + stp * static_cast<T>(4);
+    // The search itself: the two-stage Moré & Thuente (1994) search over an interval of uncertainty [a_l, a_u],
+    // written from the paper (the preamble above follows L-BFGS-B-C).
+    bool    bracketed = false;
+    bool    on_psi = true; // stage 1: steps are chosen on the modified function ψ until near its minimum
+    const T phi0 = f;
+    const T dphi0 = gd;
+    const T armijo_slope = ftol * dphi0; // slope of the sufficient-decrease line
+    T       width = stpmx - stpmn; // bracket width after the latest round
+    T       older_width = static_cast<T>(2) * width;
+    T       a_l = static_cast<T>(0);
+    T       f_l = phi0;
+    T       d_l = dphi0;
+    T       a_u = static_cast<T>(0);
+    T       f_u = phi0;
+    T       d_u = dphi0;
+    T       lo = static_cast<T>(0); // window the next trial may move in
+    T       hi = stp + stp * static_cast<T>(4);
     const crd::usize un = static_cast<crd::usize>(n);
     for (;;)
     {
@@ -1313,61 +1315,44 @@ inline void lnsrlb(const Obj& obj, int n, const T* l, const T* u, const int* nbd
         ++nfgv;
         iback = ifun - 1;
         gd = lb_ddot<T>(n, &g[0], 1, &d[0], 1);
-        const T ftest = finit + stp * gtest;
-        if (stage == 1 && f <= ftest && gd >= static_cast<T>(0))
+        const T line = phi0 + stp * armijo_slope;
+        if (on_psi && f <= line && gd >= static_cast<T>(0))
         {
-            stage = 2;
+            on_psi = false;
         }
-        bool warn = (brackt && (stp <= stmin || stp >= stmax)) || (brackt && stmax - stmin <= xtol * stmax) ||
-                    (stp == stpmx && f <= ftest && gd <= gtest) ||
-                    (stp == stpmn && (f > ftest || gd >= gtest));
-        const bool conv = (f <= ftest && crd::math::fabs(gd) <= gtol * (-ginit));
-        if (warn || conv || iback >= 20)
+        const bool pinned_in_bracket = bracketed && (stp <= lo || stp >= hi);
+        const bool bracket_tiny = bracketed && hi - lo <= xtol * hi;
+        const bool at_upper_end = stp == stpmx && f <= line && gd <= armijo_slope;
+        const bool at_lower_end = stp == stpmn && (f > line || gd >= armijo_slope);
+        const bool accepted = f <= line && crd::math::fabs(gd) <= gtol * (-dphi0);
+        if (pinned_in_bracket || bracket_tiny || at_upper_end || at_lower_end || accepted || iback >= 20)
         {
             break; // line search done (x/f/g hold the accepted/best point); mainlb handles iback>=20
         }
-        if (stage == 1 && f <= fx && f > ftest)
+        if (on_psi && f <= f_l && f > line)
         {
-            T fm = f - stp * gtest;
-            T fxm = fx - stx * gtest;
-            T fym = fy - sty * gtest;
-            T gm = gd - gtest;
-            T gxm = gx - gtest;
-            T gym = gy - gtest;
-            detail::mt_dcstep<T>(stx, fxm, gxm, sty, fym, gym, stp, fm, gm, brackt, stmin, stmax);
-            fx = fxm + stx * gtest;
-            fy = fym + sty * gtest;
-            gx = gxm + gtest;
-            gy = gym + gtest;
+            detail::mt_dcstep_on_psi<T>(armijo_slope, a_l, f_l, d_l, a_u, f_u, d_u, stp, f, gd, bracketed, lo, hi);
         }
         else
         {
-            detail::mt_dcstep<T>(stx, fx, gx, sty, fy, gy, stp, f, gd, brackt, stmin, stmax);
+            detail::mt_dcstep<T>(a_l, f_l, d_l, a_u, f_u, d_u, stp, f, gd, bracketed, lo, hi);
         }
-        if (brackt)
+        if (bracketed)
         {
-            if (crd::math::fabs(sty - stx) >= static_cast<T>(0.66) * width1)
-            {
-                stp = stx + static_cast<T>(0.5) * (sty - stx);
-            }
-            width1 = width;
-            width = crd::math::fabs(sty - stx);
-        }
-        if (brackt)
-        {
-            stmin = std::min(stx, sty);
-            stmax = std::max(stx, sty);
+            detail::mt_guard_shrinkage<T>(a_l, a_u, stp, width, older_width);
+            lo = std::min(a_l, a_u);
+            hi = std::max(a_l, a_u);
         }
         else
         {
-            stmin = stp + static_cast<T>(1.1) * (stp - stx);
-            stmax = stp + static_cast<T>(4) * (stp - stx);
+            lo = stp + static_cast<T>(1.1) * (stp - a_l);
+            hi = stp + static_cast<T>(4) * (stp - a_l);
         }
         stp = std::max(stp, stpmn);
         stp = std::min(stp, stpmx);
-        if ((brackt && (stp <= stmin || stp >= stmax)) || (brackt && stmax - stmin <= xtol * stmax))
+        if (bracketed && (stp <= lo || stp >= hi || hi - lo <= xtol * hi))
         {
-            stp = stx;
+            stp = a_l; // no further progress inside the bracket: fall back to the best endpoint
         }
     }
 }
