@@ -147,6 +147,96 @@ TEST_CASE("QMR solves a nonsymmetric system (f64)", "[hesap-iterative][qmr]")
     REQUIRE(true_residual<crd::f64>(op, x.span(), b.span(), &alloc) < 1e-8);
 }
 
+// Serious breakdown: from b = e1 the next Lanczos pair is p = (0, 1, -1), q = (0, 1, 1)
+// with ⟨p, q⟩ = 0 exactly while q != 0. The solve must report the breakdown and the
+// last quasi-residual, never a converged zero (x = e1 leaves ‖b − Ax‖ = √2).
+TEST_CASE("QMR reports a serious Lanczos breakdown instead of false convergence (f64)", "[hesap-iterative][qmr]")
+{
+    crd::memory::TlsfAllocator alloc{16U << 20};
+    const crd::u32 n = 3;
+    TripletBuilder<crd::f64> tb(&alloc, n, n);
+    const crd::f64 entries[3][3] = {{1.0, 1.0, -1.0}, {1.0, 2.0, 0.0}, {1.0, 0.0, 3.0}};
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        for (crd::u32 j = 0; j < n; ++j)
+        {
+            if (entries[i][j] != 0.0)
+            {
+                tb.add(i, j, entries[i][j]);
+            }
+        }
+    }
+    auto a = tb.compress();
+    ParallelSpmvLeastSquaresOp<crd::f64> op(a, &alloc);
+    dense::Vector<crd::f64> b(&alloc, n);
+    b.fill(0.0);
+    b(0) = 1.0;
+    dense::Vector<crd::f64> x(&alloc, n);
+    x.fill(0.0);
+    IterativeOptions<crd::f64> opts;
+    opts.rel_tol = 1e-12;
+    opts.max_iter = 50;
+    QmrWorkspace<crd::f64> ws(&alloc, n);
+
+    auto res = qmr<crd::f64>(op, b.span(), x.span(), opts, ws, &alloc);
+    REQUIRE_FALSE(res.converged);
+    REQUIRE(res.reason == StopReason::Breakdown);
+    REQUIRE(res.final_residual_norm == 1.0);
+    REQUIRE(true_residual<crd::f64>(op, x.span(), b.span(), &alloc) <= 1.0);
+}
+
+// Breakdown with an exactly zero left vector: A = [[1, 0], [1e-14, 1]], b = e1 gives p = 0 exactly
+// and q = (0, 1e-14) != 0, so ⟨p, q⟩ = 0. The iterate x = e1 already has a residual of 1e-14,
+// which the solve must still report as converged.
+TEST_CASE("QMR converges when a breakdown leaves a tiny right residual vector (f64)", "[hesap-iterative][qmr]")
+{
+    crd::memory::TlsfAllocator alloc{16U << 20};
+    const crd::u32 n = 2;
+    TripletBuilder<crd::f64> tb(&alloc, n, n);
+    tb.add(0, 0, 1.0);
+    tb.add(1, 0, 1e-14);
+    tb.add(1, 1, 1.0);
+    auto a = tb.compress();
+    ParallelSpmvLeastSquaresOp<crd::f64> op(a, &alloc);
+    dense::Vector<crd::f64> b(&alloc, n);
+    b.fill(0.0);
+    b(0) = 1.0;
+    dense::Vector<crd::f64> x(&alloc, n);
+    x.fill(0.0);
+    IterativeOptions<crd::f64> opts;
+    QmrWorkspace<crd::f64> ws(&alloc, n);
+
+    auto res = qmr<crd::f64>(op, b.span(), x.span(), opts, ws, &alloc);
+    REQUIRE(res.converged);
+    REQUIRE(res.reason == StopReason::Converged);
+    REQUIRE(true_residual<crd::f64>(op, x.span(), b.span(), &alloc) <= 1e-10);
+}
+
+// Lucky breakdown: q = 0 exactly (A = 2I, b = e1), the zero quasi-residual is exact.
+TEST_CASE("QMR still converges on a lucky Lanczos breakdown (f64)", "[hesap-iterative][qmr]")
+{
+    crd::memory::TlsfAllocator alloc{16U << 20};
+    const crd::u32 n = 3;
+    TripletBuilder<crd::f64> tb(&alloc, n, n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        tb.add(i, i, 2.0);
+    }
+    auto a = tb.compress();
+    ParallelSpmvLeastSquaresOp<crd::f64> op(a, &alloc);
+    dense::Vector<crd::f64> b(&alloc, n);
+    b.fill(0.0);
+    b(0) = 1.0;
+    dense::Vector<crd::f64> x(&alloc, n);
+    x.fill(0.0);
+    IterativeOptions<crd::f64> opts;
+    QmrWorkspace<crd::f64> ws(&alloc, n);
+
+    auto res = qmr<crd::f64>(op, b.span(), x.span(), opts, ws, &alloc);
+    REQUIRE(res.converged);
+    REQUIRE(true_residual<crd::f64>(op, x.span(), b.span(), &alloc) < 1e-14);
+}
+
 TEST_CASE("QMR with Jacobi right preconditioner (f64)", "[hesap-iterative][qmr][precond]")
 {
     crd::memory::TlsfAllocator alloc{16U << 20};

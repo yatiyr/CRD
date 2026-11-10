@@ -276,6 +276,21 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
             gamma_n = cross / T(beta_n);
         }
 
+        // ⟨p, q⟩ = 0 while the right residual vector q is not: a SERIOUS breakdown
+        // (Freund-Nachtigal 1991). The relation A·Vₖ = Vₖ·Tₖ + q·eₖᵀ then has a non-zero
+        // remainder, so a zero subdiagonal would make the quasi-residual of this step read 0
+        // and claim a convergence that has not happened. The right basis still extends with
+        // vₖ₊₁ = q/‖q‖, which gives A·Vₖ = Vₖ₊₁·Tₖ₊₁,ₖ with subdiagonal ‖q‖: the step is
+        // finished with that entry and ‖vₖ₊₁‖ = 1, which keeps the quasi-residual a true
+        // bound. Only q = 0 is the lucky breakdown whose zero quasi-residual is exact.
+        R q_norm = R(0);
+        if (lanczos_breakdown)
+        {
+            q_norm = nrm2<T>(q);
+        }
+        const bool serious_breakdown = q_norm >= smlnum;
+        const R    beta_rot          = serious_breakdown ? q_norm : beta_n;
+
         // ---- column k of the tridiagonal, pushed through the earlier rotations ----
         // entries above the diagonal: eps (row k-2) and lam (row k-1); bottom: diag_bar
         T eps{}, lam{}, diag_bar = alpha;
@@ -294,7 +309,7 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
         }
 
         // the new rotation removes β from below the diagonal
-        const detail::GivensRot<T> rot        = detail::sym_givens<T>(diag_bar, beta_n);
+        const detail::GivensRot<T> rot        = detail::sym_givens<T>(diag_bar, beta_rot);
         const T                    diag       = rot.r;
         const T                    zeta       = T(rot.c) * zeta_bar;
         const T                    zeta_bar_n = detail::krylov_conj<T>(rot.s) * zeta_bar;
@@ -307,6 +322,20 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
             result.reason              = StopReason::Breakdown;
             result.final_residual_norm = res;
             break;
+        }
+
+        if (serious_breakdown)
+        {
+            // the step would end on a quasi-residual that neither converges nor improves on
+            // the last iterate: keep xₖ₋₁ (its quasi-residual is res) and report the breakdown
+            const R res_next = detail::krylov_mag<T>(zeta_bar_n) * std::sqrt(tau + R(1));
+            if (!is_converged<R>(res_next, res0, opts) && !(res_next < res))
+            {
+                result.iterations          = k - 1;
+                result.reason              = StopReason::Breakdown;
+                result.final_residual_norm = res;
+                break;
+            }
         }
 
         // ---- search direction wₖ = (vₖ - λ·wₖ₋₁ - ε·wₖ₋₂)/diag and the update x += ζ·wₖ ----
@@ -342,7 +371,7 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
         }
 
         // ---- quasi-residual |ζ̄ₖ₊₁|·sqrt(τₖ₊₁) and the stopping tests ----
-        tau += detail::krylov_real<T>(detail::krylov_inner<T>(v, v));
+        tau += serious_breakdown ? R(1) : detail::krylov_real<T>(detail::krylov_inner<T>(v, v));
         res               = detail::krylov_mag<T>(zeta_bar_n) * std::sqrt(tau);
         result.iterations = k;
         if (opts.record_residuals)
