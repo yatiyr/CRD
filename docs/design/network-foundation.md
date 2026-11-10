@@ -1337,6 +1337,18 @@ Quinn sends the frame ahead of stream data it still owes, so a refusal sent comp
 none and a peer's Close sent before it stopped reading was lost; STOP_SENDING now ends this side's direction alone
 ([session](../sessions/2026-11-10-4-2a-websocket-h3-interop.md)).
 
+<a id="h2-bearer"></a>
+**S65. HTTP/2 on the stream host** (4.2a, threats T01, T02, T06 and T10; [qmux.hpp](../../engine/foundation/net/include/crd/net/qmux.hpp), [qmux_host.hpp](../../engine/foundation/net/include/crd/net/qmux_host.hpp), `websocket.h2`, RFC 8441 over RFC 7301; 2026-11-10). A browser that already holds an HTTP/2 connection to the origin opens its WebSockets there, and browsers speak HTTP/2 only over TLS with ALPN `h2`. The stream host's port serves it beside QMux and HTTP/1.1: one server context lists all three.
+
+- **Where it sits.** ALPN is known only once the handshake ends, inside `QmuxConnection`, whose TLS cannot move. So the connection is the bearer: `QmuxConfig::http2` set and `h2` agreed, it allocates an `Http2Connection` and its `WebSocketTunnels` (S63, S64) and runs them on its TLS in place of records (`Framing::Http2`). Its input buffer holds one frame, so frames are at most 16 KiB (one TLS record); its output leaves through TLS a record at a time and waits in HTTP/2's buffer while TLS is full.
+- **Tunnels are the host's connections.** Each tunnel takes a slot of the host's one pool (`connections` bounds both), with its own handle and generation, and is reported through the same `QmuxHostEvents` as any other connection; a `ChannelLink` meets the same `QmuxConnection`. A server's tunnel is accepted with the bearer's peer, and refused with CONNECTION_REFUSED (RFC 9000 section 20.1) when no slot is free; a client opens one with `open_tunnel()`, NotReady until the server's SETTINGS allow extended CONNECT. Events carry the slot as a tag, so no search maps them. A tunnel is served when its bearer is; every tunnel is reported closed before its bearer's own last service and report.
+- **0-RTT** (RFC 8470). Cerid's client never asks for early data on h2. A server reading a client's early data marks the HTTP/2 input that came in it (`Http2Connection::early_input()`); a request whose HEADERS starts there is early, and an extended CONNECT then is answered 425.
+- **Anything else** is answered 404 and its stream ended with NO_ERROR: the port serves WebSockets only.
+- **Ends.** A connection error is HTTP/2's GOAWAY with its code, then close_notify (`Http2Failed`); the peer's GOAWAY with an error closes at once (`Peer`), without one when the last tunnel is gone (`PeerShutdown`). `close()`, the idle timeout and the peer's close_notify end every tunnel and send GOAWAY before close_notify. The connection idles only while it carries no tunnel, whose own timers count then; QX_PING keep-alive does not apply.
+- **Refused openings.** A client tunnel that never opens is reported with its connection Closed for the reason: `UpgradeRefused` with the status, `Reset` with the stream's error, `Truncated`, or `HandshakeTimeout`.
+
+Evidence: `test_qmux_http2.cpp` `[qmux-h2]` (9 cases: ALPN dispatch on one server context, every configuration refusal, a request answered 404, a connection error's GOAWAY, an extended CONNECT in TLS 0-RTT answered 425 and the same request after the handshake opened, idling only without tunnels, two tunnels of 256 KiB each way as host connections with no allocation in an established turn and the order of their reports, a host with no slot left, a refused tunnel and the client's slot bound) and `crd-fuzz-net-qmux-host`, which now mixes QMux and HTTP/2 connections with tunnels ([session](../sessions/2026-11-10-4-2a-h2-bearer.md)).
+
 <a id="browsers"></a>
 ## Browser constraints
 
