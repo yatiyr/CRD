@@ -954,6 +954,35 @@
       "note": "Design S71 (2026-11-10): every rule of sections 4.1 to 4.5 in integer arithmetic, the queue delay an RTT sample less the peer's ACK delay and RFC 6817's ten-minute base, ECT(1) and alpha / 2 in L4S mode, the source's target rate in CongestionState. Over a simulated 10 Mbit/s, 40 ms path with a 500 ms buffer it keeps 99.7% of the link with at most 59.8 ms queued, follows a halved link within 5 s, holds a 1 ms L4S step at 2.2 ms, and keeps 16.4% beside CUBIC in a 250 ms queue (4.2% with a fixed target). Adopted by CCWG as the successor of RFC 8298; review again at its next revision."
     },
     {
+      "id": "cc.gcc",
+      "title": "Google Congestion Control for real-time communication",
+      "kind": "algorithm",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-PATH",
+        "NET-LIVE"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-rmcat-gcc",
+        "status": "expired",
+        "revision": "02",
+        "posted": "2016-07-08",
+        "added": "2026-11-10"
+      },
+      "cryptography": [],
+      "source": {
+        "ref": "docs/design/network-foundation.md#gcc",
+        "read": "2026-11-10",
+        "verified": true
+      },
+      "review": "2027-02-10",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Implemented to sections 5 and 6 as libwebrtc's send side runs them (design S72, 2026-11-10, branch-heads/8147's AimdRateControl, LinkCapacityEstimator, DelayBasedBwe and the classic SendSideBandwidthEstimation, read for it): the trendline over send-time groups (HESAP-NET, bit-exact with libwebrtc), AIMD with the link's capacity, the loss controller under the delay-based rate, the congestion window and libwebrtc's pacing factors, in integer rates. Without receive timestamps each ACK frame's RTT less the ACK delay feeds the trend. Over a simulated 10 Mbit/s, 40 ms path with a 500 ms buffer a media source gets 94% of the link with 27 ms queued on average, and 93% through QUIC at 2 Mbit/s with at most 35 ms queued; beside CUBIC it keeps 3.5%. The working group's draft expired on 2017-01-09 without an RFC; libwebrtc is its living reference, watched for an RFC or a successor."
+    },
+    {
       "id": "cc.classic-ecn-detection",
       "title": "Classic ECN AQM detection for scalable congestion control",
       "kind": "algorithm",
