@@ -3236,7 +3236,8 @@ CRD_NOINLINE inline BesFound bes_y_far(double nu, cplx z) noexcept
     }
     return BesFound{cplx(0.0, 0.0), false};
 }
-[[nodiscard]] inline cplx bessely_c(double nu, cplx z) noexcept
+// Y_ν(z) by its methods; bessely_c (below K) adds the value beyond the doubles.
+[[nodiscard]] inline cplx bessely_c_plain(double nu, cplx z) noexcept
 {
     if (std::abs(z) >= kBesComplexAsympFrom) [[unlikely]]
     {
@@ -3472,7 +3473,9 @@ CRD_NOINLINE inline cplx bes_k_unpriced(double n, cplx z) noexcept
 }
 
 // K_ν(z) = K_{−ν}(z). Large |z|: asymptotic. Moderate |z|: (π/2)(I_{−ν}−I_ν)/sinνπ (integer ν ⇒ ε-offset).
-[[nodiscard]] inline cplx besselk_c(double nu, cplx z) noexcept
+// besselk_c (below) adds the value beyond the doubles.
+[[nodiscard]] inline cplx besselk_c(double nu, cplx z) noexcept;
+[[nodiscard]] inline cplx besselk_c_plain(double nu, cplx z) noexcept
 {
     const double n = crd::math::fabs(nu);
     if (std::abs(z) >= kBesComplexAsympFrom)
@@ -3538,6 +3541,116 @@ CRD_NOINLINE inline cplx bes_k_unpriced(double n, cplx z) noexcept
         return value;
     }
     return bes_k_unpriced(n, z);
+}
+
+// A complex value carried as value·2^scale, where it may leave the doubles.
+struct BesScaledComplex
+{
+    cplx value;
+    int scale;
+};
+
+// K_ν(z), ν ≥ 0, by the methods of bes_k_unpriced (Temme's series below |z| = kBesKFractionFrom, Steed's CF2 in the
+// right half-plane above it) with the recurrence rescaled by 2^−800 whenever it passes 2^800, so that it holds where K
+// itself leaves the doubles: K grows with the order, and K_143.5(0.57 + 0.03i) is 3.6e324. Not for the left half-plane
+// from |z| = kBesKFractionFrom, nor from the order kBesForwardSteps on (scale −1 there).
+[[nodiscard]] inline BesScaledComplex bes_k_scaled(double n, cplx z) noexcept
+{
+    const bool small = std::abs(z) < kBesKFractionFrom;
+    if ((!small && z.real() < 0.0) || !(n < kBesForwardSteps))
+    {
+        return {cplx(0.0), -1}; // and from kBesForwardSteps on, where the recurrences of the module stop
+    }
+    const int steps = small ? bes_base_steps(n) : static_cast<int>(n);
+    const double mu = n - steps;
+    BesZPair k = small ? bes_temme_k_complex(z, mu) : bes_cf2_k_complex(z, mu);
+    const cplx two_over_z = 2.0 / z;
+    int scale = 0;
+    for (int m = 1; m <= steps; ++m)
+    {
+        const cplx up = (mu + m) * two_over_z * k.next + k.base;
+        k.base = k.next;
+        k.next = up;
+        if (bes_l1(up) > kBesRescaleFrom)
+        {
+            k.base *= kBesRescaleBy;
+            k.next *= kBesRescaleBy;
+            scale += kBesRescaleBits;
+        }
+    }
+    return {k.base, scale};
+}
+
+// value·2^scale (scale ≥ 0) part by part, exactly while a part stays in the doubles and the infinity of its sign
+// beyond them.
+[[nodiscard]] inline cplx bes_unscaled(cplx value, int scale) noexcept
+{
+    double re = value.real();
+    double im = value.imag();
+    for (; scale >= kBesRescaleBits; scale -= kBesRescaleBits)
+    {
+        re *= kBesRescaleFrom;
+        im *= kBesRescaleFrom;
+    }
+    const double rest = std::bit_cast<double>(static_cast<unsigned long long>(1023 + scale) << 52); // 2^scale
+    return {re * rest, im * rest};
+}
+
+// Where the methods give a value that is not finite (an infinity times a phase, or inf − inf, as K or Y leaves the
+// doubles: K_143.5(0.57 + 0.03i) is 3.6e324, Y_148(0.50 + 0.14i) 2.2e342, both NaN on base), the scale-carrying K
+// answers, each part the infinity of its sign beyond the doubles; for Y_ν(z) = −(2/π)e^{∓νπi/2}K_ν(∓iz) ± iJ_ν(z)
+// (DLMF 10.27.8 for H^(1) above the real axis, H^(2) below), whose J_ν is negligible where Y is beyond 2^800 (|J_ν Y_ν|
+// ≈ 1/(πν)), and Y_{−ν} = cos(νπ)Y_ν + sin(νπ)J_ν (DLMF §10.4). Elsewhere the value stands; a finite value costs only
+// the test.
+CRD_NOINLINE inline cplx bes_k_beyond(double n, cplx z, cplx plain) noexcept
+{
+    if (std::abs(z) >= kBesKFractionFrom && z.real() < 0.0)
+    {
+        // K_ν(z) = e^{∓νπi} K_ν(−z) ∓ πi I_ν(−z) (DLMF 10.34.2), whose I term is negligible beyond 2^800
+        const BesScaledComplex k = bes_k_scaled(n, -z);
+        if (k.scale < kBesRescaleBits)
+        {
+            return plain;
+        }
+        const double turn = (z.imag() >= 0.0) ? 1.0 : -1.0;
+        return bes_unscaled(bes_turn_phase(n, -turn) * k.value, k.scale);
+    }
+    const BesScaledComplex k = bes_k_scaled(n, z);
+    return (k.scale < 0) ? plain : bes_unscaled(k.value, k.scale);
+}
+[[nodiscard]] inline cplx besselk_c(double nu, cplx z) noexcept
+{
+    const cplx value = besselk_c_plain(nu, z);
+    if (bes_complex_finite(value)) [[likely]]
+    {
+        return value;
+    }
+    return bes_k_beyond(crd::math::fabs(nu), z, value);
+}
+CRD_NOINLINE inline cplx bes_y_beyond(double nu, cplx z, cplx plain) noexcept
+{
+    const double n = crd::math::fabs(nu);
+    const bool upper = z.imag() >= 0.0;
+    const BesScaledComplex k = bes_k_scaled(n, upper ? cplx(z.imag(), -z.real()) : cplx(-z.imag(), z.real()));
+    if (k.scale < kBesRescaleBits)
+    {
+        return plain;
+    }
+    cplx value = (-2.0 / kBesPi) * bes_turn_phase(0.5 * n, upper ? -1.0 : 1.0) * k.value;
+    if (nu < 0.0)
+    {
+        value *= bes_sin_cos_pi(n).cos;
+    }
+    return bes_unscaled(value, k.scale);
+}
+[[nodiscard]] inline cplx bessely_c(double nu, cplx z) noexcept
+{
+    const cplx value = bessely_c_plain(nu, z);
+    if (bes_complex_finite(value)) [[likely]]
+    {
+        return value;
+    }
+    return bes_y_beyond(nu, z, value);
 }
 } // namespace detail
 

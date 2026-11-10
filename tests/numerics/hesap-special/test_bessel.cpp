@@ -960,6 +960,55 @@ TEST_CASE("bessel: complex K below |z| of 8 near an integer order and where its 
     }
 }
 
+TEST_CASE("bessel: complex Y and K where they leave the doubles vs mpmath", "[v12-b][special][bessel][complex]")
+{
+    // mpmath at 70 digits at the exact double inputs: a part beyond the doubles is the infinity of its sign, a part
+    // within them is checked against the bar of the whole (|ref| times 1e-9). Base: NaN (inf - inf in the recurrence
+    // and the series), and infinities for K_-184(-0.07 + 3.53i), which is 2.4e290.
+    constexpr f64 kInf = std::numeric_limits<f64>::infinity();
+    struct Point
+    {
+        int kind; // 1 Y, 3 K
+        f64 nu;
+        f64 re;
+        f64 im;
+        f64 ref_re; // +-infinity where the part is beyond the doubles
+        f64 ref_im;
+        f64 within; // the bar of a part within the doubles: 1e-9 |ref| (|ref| itself is beyond them)
+    };
+    const Point points[] = {
+        {1, 146.57713279075145, -0.57691064915278212, 0.42028879379405609, kInf, -kInf, 0.0},
+        {1, 147.89207809876038, -0.40270523617443571, 0.59948837148491063, -kInf, -kInf, 0.0},
+        {1, 148.0, 0.49997086153577908, 0.142095624469848, kInf, -kInf, 0.0},
+        {3, 143.5, 0.56822889384235964, 0.027566407002533537, kInf, -kInf, 0.0},
+        {3, 142.0, 0.13835092376015168, -0.58305810781629019, kInf, kInf, 0.0},
+        {3, 137.9426574031479, -0.48670556344258331, 0.31248000524464187, -kInf, -1.45349395570080285115555710373e+308,
+         4.0e299},
+        {3, -201.0, -0.55509307259688478, -3.1248616752869487, kInf, -kInf, 0.0},
+        {3, -184.0, -0.068522439022418655, 3.5294954480336314, -2.20553541074782356528036132534e+290,
+         1.01021384601495523347544018815e+290, 2.4e281},
+    };
+    for (const Point& p : points)
+    {
+        INFO("kind=" << p.kind << " nu=" << p.nu << " z=(" << p.re << "," << p.im << ")");
+        const std::complex<f64> z(p.re, p.im);
+        const std::complex<f64> got = (p.kind == 1) ? sf::cyl_neumann(p.nu, z) : sf::cyl_bessel_k(p.nu, z);
+        const f64 parts[2] = {got.real(), got.imag()};
+        const f64 refs[2] = {p.ref_re, p.ref_im};
+        for (int i = 0; i < 2; ++i)
+        {
+            if (std::isinf(refs[i]))
+            {
+                CHECK(parts[i] == refs[i]);
+            }
+            else
+            {
+                CHECK(std::fabs(parts[i] - refs[i]) <= p.within);
+            }
+        }
+    }
+}
+
 TEST_CASE("bessel: f32 sanity", "[v12-b][special][bessel]")
 {
     CHECK(close(static_cast<f64>(sf::cyl_bessel_j(0.0F, 1.0F)), 0.7651976865579666, 1e-6, 1e-7));
