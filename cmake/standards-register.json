@@ -918,6 +918,42 @@
       "note": "Implemented to the -04 text as design S70 (2026-11-10) under path.l4s-ecn's RFC 9331 requirements: alpha with gain 1/16 on a virtual round trip, the reduction by alpha / 2 once per CWR, growth by unmarked bytes, RTT independence after 500 rounds at 25 ms, Reno's loss response and pacing. Against picoquic's own Prague both ways (picoquic_interop.py, 2026-11-10), through a relay that keeps codepoints and marks ECT(1) CE at a 1 ms step or a 0.5 to 2.5 ms ramp: each end's CE counts match the relay's marks, a Cerid client keeps 0.9 of the link or more with its queue near the step, and the classic detector stays at 0 beside picoquic's Prague. The individual draft expired on 2025-01-25 without a successor; watched for an ICCRG or CCWG adoption, whose text then pins it."
     },
     {
+      "id": "cc.scream",
+      "title": "SCReAM v2: self-clocked rate adaptation for multimedia",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "net",
+      "rows": [
+        "NET-PATH",
+        "NET-LIVE"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-ccwg-rfc8298bis-screamv2",
+        "status": "active",
+        "revision": "03",
+        "posted": "2026-11-02",
+        "added": "2026-11-10"
+      },
+      "cryptography": [],
+      "source": {
+        "ref": "docs/design/network-foundation.md#scream",
+        "read": "2026-11-10",
+        "verified": true
+      },
+      "review": "2027-02-10",
+      "evidence": [
+        "engine/foundation/net/src/congestion.cpp",
+        "engine/numerics/hesap-net/include/crd/hesap/net/queue_delay.hpp",
+        "tests/foundation/net/test_scream.cpp",
+        "tests/foundation/net/test_quic_congestion.cpp",
+        "tests/numerics/hesap-net/test_queue_delay.cpp",
+        "tests/foundation/net/fuzz/fuzz_congestion.cpp"
+      ],
+      "deprecation": null,
+      "note": "Design S71 (2026-11-10): every rule of sections 4.1 to 4.5 in integer arithmetic, the queue delay an RTT sample less the peer's ACK delay and RFC 6817's ten-minute base, ECT(1) and alpha / 2 in L4S mode, the source's target rate in CongestionState. Over a simulated 10 Mbit/s, 40 ms path with a 500 ms buffer it keeps 99.7% of the link with at most 59.8 ms queued, follows a halved link within 5 s, holds a 1 ms L4S step at 2.2 ms, and keeps 16.4% beside CUBIC in a 250 ms queue (4.2% with a fixed target). Adopted by CCWG as the successor of RFC 8298; review again at its next revision."
+    },
+    {
       "id": "cc.classic-ecn-detection",
       "title": "Classic ECN AQM detection for scalable congestion control",
       "kind": "algorithm",
