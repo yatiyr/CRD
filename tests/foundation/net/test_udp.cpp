@@ -133,13 +133,15 @@ constexpr Ecn kCeArrives = Ecn::NotEct;
 constexpr Ecn kCeArrives = Ecn::Ce;
 #endif
 
+// Each codepoint sent, and what arrives.
+constexpr Ecn kCodepoints[4] = {Ecn::NotEct, Ecn::Ect1, Ecn::Ect0, Ecn::Ce};
+constexpr Ecn kArrives[4] = {Ecn::NotEct, Ecn::Ect1, Ecn::Ect0, kCeArrives};
+
 // Sends one datagram with each codepoint from `from` to `to` and checks each arrives with its own: true when every
 // one did. A host that cannot carry codepoints must say so in features() instead.
 bool carries_every_codepoint(UdpSocket& from, UdpSocket& to, const Endpoint& to_endpoint, const Endpoint& from_seen)
 {
     static u8 payload[4][48];
-    constexpr Ecn kCodepoints[4] = {Ecn::NotEct, Ecn::Ect1, Ecn::Ect0, Ecn::Ce};
-    constexpr Ecn kArrives[4] = {Ecn::NotEct, Ecn::Ect1, Ecn::Ect0, kCeArrives};
     OutgoingDatagram datagrams[4];
     for (u32 index = 0U; index < 4U; ++index)
     {

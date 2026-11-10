@@ -218,8 +218,8 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   and ignore ICMP port and TTL reports (`SIO_UDP_CONNRESET`, `SIO_UDP_NETRESET`), and a stale ICMP report on any
   host is skipped instead of ending a receive; sockets are non-blocking and not inherited by child processes.
 - **The seam.** The transport drives only `DatagramSocket`; NET-SIM's virtual sockets and NET-DEBUG's conditioner
-  implement it, and `wait_readable` is the one blocking call. PMTU, ECN, pacing and offloads (GSO, GRO, USO, URO)
-  are NET-PATH's, added behind the same interface.
+  implement it, and `wait_readable` is the one blocking call. Each datagram carries its ECN codepoint ([S67](#ecn));
+  PMTU, pacing and offloads (GSO, GRO, USO, URO) are NET-PATH's, added behind the same interface.
 
 <a id="ingress"></a>
 ### Ingress

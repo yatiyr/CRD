@@ -287,17 +287,18 @@ void serve(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, u64 no
     }
 }
 
-// The path's ECN validation (quic_ecn.hpp) as the report names it.
+// The path's ECN validation (quic_ecn.hpp) as the report names it, in the enumerations' order.
+constexpr const char* kEcnStates[] = {"off", "testing", "unknown", "capable", "failed"};
+constexpr const char* kEcnFailures[] = {"none", "missing", "decreased", "exceeded", "short", "lost"};
+
 const char* ecn_state(QuicEcnState state) noexcept
 {
-    constexpr const char* kNames[] = {"off", "testing", "unknown", "capable", "failed"};
-    return kNames[static_cast<unsigned>(state)];
+    return kEcnStates[static_cast<unsigned>(state)];
 }
 
 const char* ecn_failure(QuicEcnFailure failure) noexcept
 {
-    constexpr const char* kNames[] = {"none", "missing", "decreased", "exceeded", "short", "lost"};
-    return kNames[static_cast<unsigned>(failure)];
+    return kEcnFailures[static_cast<unsigned>(failure)];
 }
 
 const char* close_kind(const QuicCloseInfo& info) noexcept

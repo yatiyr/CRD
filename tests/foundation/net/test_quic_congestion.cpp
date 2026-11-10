@@ -313,20 +313,17 @@ namespace
 {
 constexpr u64 kRoundTripNs = 50U * kMs; // the Pair's paths: 25 ms each way
 
-// Datagrams each end sent, and of those marked, as of construction.
+// Datagrams each end had sent, and of those marked, at one moment.
 struct Marks
 {
-    explicit Marks(const Net& net) : sent{net.sent[0], net.sent[1]}, marked{net.marked[0], net.marked[1]}, m_net(net) {}
-
-    [[nodiscard]] usize sent_since(usize end) const { return m_net.sent[end] - sent[end]; }
-    [[nodiscard]] usize marked_since(usize end) const { return m_net.marked[end] - marked[end]; }
-
-    usize sent[2];
-    usize marked[2];
-
-private:
-    const Net& m_net;
+    usize sent[2] = {};
+    usize marked[2] = {};
 };
+
+Marks marks_of(const Net& net)
+{
+    return Marks{{net.sent[0], net.sent[1]}, {net.marked[0], net.marked[1]}};
+}
 } // namespace
 
 TEST_CASE("QUIC ECN: a path that carries ECN is validated in the handshake and every datagram is marked from then on",
@@ -338,13 +335,14 @@ TEST_CASE("QUIC ECN: a path that carries ECN is validated in the handshake and e
     {
         CHECK(end->ecn().state() == QuicEcnState::Capable);
     }
-    const Marks marks(*pair.net);
+    const Marks marks = marks_of(*pair.net);
     Bulk bulk{pair.client, pair.server, 1U << 18U};
     REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
     for (usize end = 0U; end < 2U; ++end)
     {
-        CHECK(marks.sent_since(end) > 0U);
-        CHECK(marks.marked_since(end) == marks.sent_since(end));
+        const usize sent = pair.net->sent[end] - marks.sent[end];
+        CHECK(sent > 0U);
+        CHECK(pair.net->marked[end] - marks.marked[end] == sent);
         CHECK(pair.net->end(end).ecn().state() == QuicEcnState::Capable);
         CHECK(pair.net->end(end).counters().ecn_signals == 0U);
     }
@@ -412,7 +410,7 @@ TEST_CASE("QUIC ECN: paths that bleach, re-mark or drop marked packets fail vali
         }
         INFO("path " << static_cast<u32>(test.path));
         pair.confirm();
-        const Marks marks(*pair.net);
+        const Marks marks = marks_of(*pair.net);
         Bulk bulk{pair.client, pair.server, 1U << 17U};
         REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
         for (usize end = 0U; end < 2U; ++end)
@@ -421,7 +419,7 @@ TEST_CASE("QUIC ECN: paths that bleach, re-mark or drop marked packets fail vali
             CHECK(ecn.state() == QuicEcnState::Failed);
             CHECK(ecn.failure() == test.failure);
             CHECK(marks.marked[end] <= kQuicEcnTestingPackets); // no more than the testing period's packets
-            CHECK(marks.marked_since(end) == 0U);
+            CHECK(pair.net->marked[end] == marks.marked[end]);
             CHECK(pair.net->end(end).counters().ecn_signals == 0U);
         }
         CHECK(pair.client.state() == QuicConnectionState::Established);

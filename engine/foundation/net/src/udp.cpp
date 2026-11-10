@@ -117,7 +117,7 @@ void ecn_message(const Endpoint& peer, int& level, int& type) noexcept
 #if CRD_OS_LINUX
     type = v4 ? IP_TOS : IPV6_TCLASS;
 #else
-    type = v4 ? IP_ECN : IPV6_ECN;
+    type = IP_ECN; // IPV6_ECN is the same value: Winsock tells the families apart by the level alone
 #endif
 }
 
@@ -554,8 +554,8 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
 #if CRD_OS_WINDOWS
         // WSASendMsg only reads the bytes; WSABUF has no const form.
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
-        WSABUF buffer{static_cast<ULONG>(datagram.bytes.size()),
-                      reinterpret_cast<CHAR*>(const_cast<u8*>(datagram.bytes.data()))};
+        CHAR* const bytes = reinterpret_cast<CHAR*>(const_cast<u8*>(datagram.bytes.data()));
+        WSABUF buffer{static_cast<ULONG>(datagram.bytes.size()), bytes};
         WSAMSG message{};
         message.name = reinterpret_cast<sockaddr*>(&peer.storage);
         message.namelen = peer.length;
