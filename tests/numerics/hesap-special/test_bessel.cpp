@@ -869,6 +869,61 @@ TEST_CASE("bessel: J, Y and their slopes stay finite where Y of the reflected or
     CHECK(close(h.imag(), -8.88762825424388327166728914872e+307, 1e-12, 1e-300));
 }
 
+TEST_CASE("bessel: complex J, Y and I where the series' first term leaves the doubles or its price misleads vs mpmath",
+          "[v12-b][special][bessel][complex]")
+{
+    // mpmath at 70 digits at the exact double inputs. Base: NaN where the ascending series was priced by its ratios
+    // alone while (z/2)^nu/Gamma(nu+1) left the doubles (J, I) or the integer series of Y overflowed; Y_63 of
+    // integer order 1.2e-8 off from the integer series (its Gamma product left the doubles); I 0.16 off where the
+    // series of a negative order was taken by the price of |nu|.
+    struct Point
+    {
+        int kind; // 0 J, 1 Y, 2 I
+        f64 nu;
+        f64 re;
+        f64 im;
+        f64 ref_re;
+        f64 ref_im;
+    };
+    const Point points[] = {
+        {0, 203.5, 7.6523504550914501, 138.19849805248273, -3.20543615217021364882796930939,
+         -12.5797939621286657464372096702},
+        {0, 319.30981066241611, -30.691958838718616, 248.30491274730457, 2370095485298396116018463.36472,
+         -270596341625591569899077042.699},
+        {1, 109.0, 23.391402163596936, -71.686477592811826, 1.05424909634687318232064285595,
+         0.633203148790511719481240276051},
+        {1, 172.0, -1.2425384545899458, 124.25868743894463, -1608698.47482089549869305213927,
+         -984637.100382650066308227097158},
+        {1, 63.0, -34.234856129950309, -101.38864907561589, -4.58053723330288746652270966523e+34,
+         -1.14263626717457926660332795069e+35},
+        {1, 162.97701435673508, 63.283577131302629, 227.70463254170471, 1.34208010982985912101678825628e+73,
+         -2.4083326156925826543450224852e+74},
+        {2, 146.48766912988205, 351.62557641097766, 0.0, 8.91670401996532602836984352017e+137, 0.0},
+        {2, 138.5, -433.96176177265176, 62.284062533839368, 1.6635167905713930491641943742e+177,
+         -1.90314371113719461186867897064e+177},
+        {2, -92.522988400794816, -575.97800463333931, -115.24495137861734, 7.14553154507136831282599546637e+244,
+         -1.67539851375635497078293885075e+245},
+    };
+    for (const Point& p : points)
+    {
+        INFO("kind=" << p.kind << " nu=" << p.nu << " z=(" << p.re << "," << p.im << ")");
+        const std::complex<f64> z(p.re, p.im);
+        const std::complex<f64> ref(p.ref_re, p.ref_im);
+        if (p.kind == 0)
+        {
+            CHECK(close_c(sf::cyl_bessel_j(p.nu, z), ref, 1e-10, 1e-11));
+        }
+        else if (p.kind == 1)
+        {
+            CHECK(close_c(sf::cyl_neumann(p.nu, z), ref, 1e-9, 1e-11));
+        }
+        else
+        {
+            CHECK(close_c(sf::cyl_bessel_i(p.nu, z), ref, 1e-10, 1e-11));
+        }
+    }
+}
+
 TEST_CASE("bessel: f32 sanity", "[v12-b][special][bessel]")
 {
     CHECK(close(static_cast<f64>(sf::cyl_bessel_j(0.0F, 1.0F)), 0.7651976865579666, 1e-6, 1e-7));

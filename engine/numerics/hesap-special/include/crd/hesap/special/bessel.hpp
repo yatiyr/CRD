@@ -2276,17 +2276,20 @@ template <Real T> [[nodiscard]] std::complex<T> cyl_hankel_2(T nu, T x) noexcept
 // ¾ Re z and Im z ≳ 6: it amplifies the start by e^{2(Im z − Im φ_ν)}, 1e5 at J_35.2(45+20i), 1e11 at J_50(60+30i),
 // where it was 1e-5 off), J and Y come from the downward recurrence of J's continued fraction (stable for the solution
 // that is minimal as the order grows) normalised by the Wronskian with H^(1), which is K at the rotated argument −iz
-// (DLMF 10.27.8) from Steed's CF2 and the upward recurrence.
+// (DLMF 10.27.8) from Steed's CF2 and the upward recurrence. The series is priced as the series that is summed (of the
+// order itself, a negative one included, with the index of its largest term), the integer series of Y by its three
+// parts; where the series that the prices choose leaves the doubles in its first term, that term is formed through
+// logarithms, and where its result is still not finite (or the integer series of Y loses more than the bar) the stable
+// method answers.
 // =====================================================================================================
 namespace detail
 {
 using cplx = std::complex<double>;
 
 // J (kind=−1) or I (kind=+1) ascending series: Σ (kind·(z/2)²)^k (z/2)^ν / (k! Γ(ν+k+1)).
-[[nodiscard]] inline cplx bessel_ji_series(double nu, cplx z, double kind) noexcept
+// The sum of the series from its first term t at z/2 = cz.
+[[nodiscard]] inline cplx bes_ji_sum(double nu, cplx cz, double kind, cplx t) noexcept
 {
-    const cplx cz = 0.5 * z;
-    cplx t = crd::math::pow(cz, nu) / gamma(nu + 1.0); // (z/2)^ν / Γ(ν+1); SIGNED Γ (ν may be < 0 ⇒ Γ(ν+1) < 0)
     cplx sum = t;
     const cplx z2 = kind * (cz * cz);
     for (int k = 1; k <= 400; ++k)
@@ -2299,6 +2302,31 @@ using cplx = std::complex<double>;
         }
     }
     return sum;
+}
+[[nodiscard]] inline cplx bessel_ji_series(double nu, cplx z, double kind) noexcept
+{
+    const cplx cz = 0.5 * z;
+    // (z/2)^ν / Γ(ν+1); SIGNED Γ (ν may be < 0 ⇒ Γ(ν+1) < 0)
+    return bes_ji_sum(nu, cz, kind, crd::math::pow(cz, nu) / gamma(nu + 1.0));
+}
+// The same series as the last answer of the far paths: where the first term formed as a power over Γ is not a normal
+// number while the term itself may be (the power or Γ out of the doubles: (z/2)^{−162.98} is e^{−777} at |z| = 236,
+// where the term is e^{−116}; (z/2)^{203.5} is 1e374 at J_203.5(7.65 + 138.2i), where the term is e^{−21}), it is
+// formed as e^{ν ln(z/2) − ln|Γ(ν+1)|} with Γ's sign. Its exponent carries ε times its size (1e-13 relative at 800).
+[[nodiscard]] inline cplx bessel_ji_series_far(double nu, cplx z, double kind) noexcept
+{
+    const cplx cz = 0.5 * z;
+    cplx t = crd::math::pow(cz, nu) / gamma(nu + 1.0);
+    const double size = crd::math::fabs(t.real()) + crd::math::fabs(t.imag());
+    if (!(size >= (std::numeric_limits<double>::min)() && size <= (std::numeric_limits<double>::max)())) [[unlikely]]
+    {
+        const double sign = gamma_sign(nu + 1.0);
+        if (sign == sign)
+        {
+            t = sign * crd::math::exp(nu * crd::math::log(cz) - lgamma(nu + 1.0));
+        }
+    }
+    return bes_ji_sum(nu, cz, kind, t);
 }
 
 // The ascending series of J (IsI false) or I as bessel_ji_series sums it, and in `loss` its cancellation as
@@ -2853,6 +2881,21 @@ struct BesComplexJY
     return !(kBesRoundoff * (20.0 + 4.0 * bes_forward_amplification(nu, z)) < kBesComplexStableFrom);
 }
 
+// The series is the last answer of the far paths, priced by the sum of its ratios alone: where its first term
+// (z/2)^ν/Γ(ν+1) or its sum has nonetheless left the doubles (J_203.5(7.65 + 138.2i): the power is 1e374 while the
+// ratios do not cancel; J_109's integer series of Y at 23.4 − 71.7i: the finite sum's powers pass 1e340), the result is
+// not finite, and the stable method, which needs neither, answers where it serves (from |z| = kBesComplexForwardFrom,
+// below kBesComplexStableMax in |Im z|, below the reach of its recurrences in order).
+[[nodiscard]] inline bool bes_complex_finite(cplx v) noexcept
+{
+    return v.real() - v.real() == 0.0 && v.imag() - v.imag() == 0.0;
+}
+[[nodiscard]] inline bool bes_complex_stable_serves(double nu, cplx z) noexcept
+{
+    return std::abs(z) >= kBesComplexForwardFrom && crd::math::fabs(z.imag()) < kBesComplexStableMax &&
+           crd::math::fabs(nu) < kBesForwardSteps;
+}
+
 // A negative integer order, to the tolerance of the integer series of Y: the series divides by ν + k = 0 there, and
 // J_{−n} = (−1)^n J_n and I_{−n} = I_n give the value at the order n ≥ 0 instead.
 [[nodiscard]] inline bool bes_negative_integer(double nu) noexcept
@@ -2950,11 +2993,27 @@ CRD_NOINLINE inline cplx bes_j_far(double nu, cplx z, bool mirrored, double magn
     {
         return asymptotic;
     }
-    return bessel_ji_series(nu, z, -1.0);
+    const cplx summed = bessel_ji_series_far(nu, z, -1.0);
+    if (!bes_complex_finite(summed) && bes_complex_stable_serves(nu, z)) [[unlikely]]
+    {
+        const BesComplexJY pair = bes_complex_stable_jy(nu, z);
+        if (pair.ok)
+        {
+            return pair.j;
+        }
+    }
+    return summed;
 }
 
 // Integer-order Y_n(z) ascending series (n ≥ 0), DLMF 10.8.1 — exact (log + digamma), no ε-offset cancellation.
-[[nodiscard]] inline cplx bessely_n_int(int n, cplx z) noexcept
+// |Re v| + |Im v|, a size within a factor √2 of |v| without its square root.
+[[nodiscard]] inline double bes_l1(cplx v) noexcept
+{
+    return crd::math::fabs(v.real()) + crd::math::fabs(v.imag());
+}
+// With `truncated`, whether the sum stopped where the product of the two Γ of its terms had left the doubles: the terms
+// are 0 from there on while they still count (Y_63(34.2 + 101.4i) dropped 1e-8 of itself from k = 66 on).
+[[nodiscard]] inline cplx bessely_n_int(int n, cplx z, bool* truncated = nullptr) noexcept
 {
     const cplx cz = 0.5 * z;
     const cplx z2 = cz * cz;
@@ -2972,17 +3031,22 @@ CRD_NOINLINE inline cplx bes_j_far(double nu, cplx z, bool mirrored, double magn
     }
     cplx s = 0.0;
     cplx pw = 1.0;
+    double denominator = 1.0;
     for (int k = 0; k <= 400; ++k)
     {
         const double psi = digamma(static_cast<double>(k + 1)) + digamma(static_cast<double>(n + k + 1));
-        const cplx term = ((k & 1) ? -1.0 : 1.0) * psi /
-                          (gamma(static_cast<double>(k + 1)) * gamma(static_cast<double>(n + k + 1))) * pw;
+        denominator = gamma(static_cast<double>(k + 1)) * gamma(static_cast<double>(n + k + 1));
+        const cplx term = ((k & 1) ? -1.0 : 1.0) * psi / denominator * pw;
         s += term;
         if (k >= n && std::abs(term) <= 1e-18 * std::abs(s))
         {
             break;
         }
         pw *= z2;
+    }
+    if (truncated != nullptr)
+    {
+        *truncated = !(denominator <= (std::numeric_limits<double>::max)());
     }
     return r - (1.0 / kBesPi) * crd::math::pow(cz, static_cast<double>(n)) * s;
 }
@@ -3150,18 +3214,47 @@ CRD_NOINLINE inline BesFound bes_y_far(double nu, cplx z) noexcept
     if (crd::math::fabs(nu - rn) < 1e-12) // integer order: exact ascending series
     {
         const int n = static_cast<int>(crd::math::fabs(rn));
+        if (bes_complex_stable_serves(nu, z)) [[unlikely]]
+        {
+            // From |z| = kBesComplexForwardFrom the stable method answers where the series is not finite or was cut
+            // short by the range of its Γ (bessely_n_int).
+            bool truncated = false;
+            const cplx yn = bessely_n_int(n, z, &truncated);
+            if (truncated || !bes_complex_finite(yn))
+            {
+                const BesComplexJY pair = bes_complex_stable_jy(nu, z);
+                if (pair.ok)
+                {
+                    return pair.y;
+                }
+            }
+            return (rn < 0.0 && (n & 1)) ? -yn : yn;
+        }
         const cplx yn = bessely_n_int(n, z);
         return (rn < 0.0 && (n & 1)) ? -yn : yn; // Y_{−n} = (−1)^n Y_n
     }
+    cplx connected;
     if (crd::math::fabs(nu - rn) == 0.5)
     {
         // A half-integer order: cos νπ is exactly zero, and its 1e-16 of residue would multiply J_ν, which at a
         // negative ν is the huge term (D2 of the real path).
         const BesTrig t = bes_sin_cos_pi(crd::math::fabs(nu));
-        return -bes_j_body(-nu, z, false) / ((nu < 0.0) ? -t.sin : t.sin);
+        connected = -bes_j_body(-nu, z, false) / ((nu < 0.0) ? -t.sin : t.sin);
     }
-    return (bes_j_body(nu, z, false) * crd::math::cos(nu * kBesPi) - bes_j_body(-nu, z, false)) /
-           crd::math::sin(nu * kBesPi);
+    else
+    {
+        connected = (bes_j_body(nu, z, false) * crd::math::cos(nu * kBesPi) - bes_j_body(-nu, z, false)) /
+                    crd::math::sin(nu * kBesPi);
+    }
+    if (!bes_complex_finite(connected) && bes_complex_stable_serves(nu, z)) [[unlikely]]
+    {
+        const BesComplexJY pair = bes_complex_stable_jy(nu, z);
+        if (pair.ok)
+        {
+            return pair.y;
+        }
+    }
+    return connected;
 }
 
 // The series of I is taken up to this estimate (a third of the bar, the factor by which its estimate undershoots);
@@ -3172,6 +3265,26 @@ inline constexpr double kBesComplexISeries = kBesComplexUsable / 3.0;
 CRD_NOINLINE inline cplx bes_i_at_negative_integer(double nu, cplx z) noexcept
 {
     return besseli_c(crd::math::fabs(crd::math::round(nu)), z); // I_{−n} = I_n
+}
+// I from the method that is stable for J at the rotated argument, I_ν(w) = e^{∓iνπ/2} J_ν(±iw) for Re w ≥ 0 (DLMF
+// 10.27.6, by the side of the real axis), after the mirror I_ν(z) = e^{±νπi} I_ν(−z) of the left half-plane (DLMF
+// 10.34.1). False when the continued fraction of the method has not converged.
+[[nodiscard]] inline bool bes_i_by_stable(double nu, cplx z, cplx& out) noexcept
+{
+    const bool left = z.real() < 0.0;
+    const cplx w = left ? -z : z;
+    const bool upper = w.imag() >= 0.0;
+    const cplx turned = upper ? cplx(-w.imag(), w.real()) : cplx(w.imag(), -w.real());
+    const BesComplexJY pair = bes_complex_stable_jy(nu, turned);
+    if (!pair.ok)
+    {
+        return false;
+    }
+    const BesTrig t = bes_sin_cos_pi(0.5 * crd::math::fabs(nu));
+    const double side = ((nu < 0.0) == upper) ? t.sin : -t.sin; // e^{∓iνπ/2}, with ν's sign
+    const cplx at_w = cplx(t.cos, side) * pair.j;
+    out = left ? bes_turn_phase(nu, (z.imag() >= 0.0) ? 1.0 : -1.0) * at_w : at_w;
+    return true;
 }
 CRD_NOINLINE inline cplx bes_i_far(double nu, cplx z, double magnitude) noexcept
 {
@@ -3202,30 +3315,28 @@ CRD_NOINLINE inline cplx bes_i_far(double nu, cplx z, double magnitude) noexcept
     const double stable_measure =
         (nu < 0.0) ? (summed_loss >= 0.0 ? kBesRoundoff * summed_loss : kBesRoundoff * bes_series_loss(nu, z, 1.0))
                    : series_error;
-    if (error > kBesComplexISeries && stable_measure > kBesComplexISeries && crd::math::fabs(nu) < kBesForwardSteps &&
-        crd::math::fabs(z.real()) < kBesComplexStableMax)
+    const bool stable_serves =
+        crd::math::fabs(nu) < kBesForwardSteps && crd::math::fabs(z.real()) < kBesComplexStableMax;
+    cplx rotated;
+    if (error > kBesComplexISeries && stable_measure > kBesComplexISeries && stable_serves &&
+        bes_i_by_stable(nu, z, rotated))
     {
-        // The series loses more than the bar (ν ≳ |z|, |Im z| ≳ 15): I comes from the method that is stable for J
-        // at the rotated argument, I_ν(w) = e^{∓iνπ/2} J_ν(±iw) for Re w ≥ 0 (DLMF 10.27.6, by the side of the real
-        // axis), after the mirror I_ν(z) = e^{±νπi} I_ν(−z) of the left half-plane (DLMF 10.34.1).
-        const bool left = z.real() < 0.0;
-        const cplx w = left ? -z : z;
-        const bool upper = w.imag() >= 0.0;
-        const cplx turned = upper ? cplx(-w.imag(), w.real()) : cplx(w.imag(), -w.real());
-        const BesComplexJY pair = bes_complex_stable_jy(nu, turned);
-        if (pair.ok)
-        {
-            const BesTrig t = bes_sin_cos_pi(0.5 * crd::math::fabs(nu));
-            const double side = ((nu < 0.0) == upper) ? t.sin : -t.sin; // e^{∓iνπ/2}, with ν's sign
-            const cplx at_w = cplx(t.cos, side) * pair.j;
-            return left ? bes_turn_phase(nu, (z.imag() >= 0.0) ? 1.0 : -1.0) * at_w : at_w;
-        }
+        // The series loses more than the bar (ν ≳ |z|, |Im z| ≳ 15).
+        return rotated;
     }
-    if (error < series_error)
+    // The series that would be summed is that of the order itself, priced by its own loss (series_error is that of
+    // |ν|, which mistakes the alternating series of a negative order: I_−92.52(−576 − 115i) was 0.16 off).
+    if (error < stable_measure)
     {
         return value;
     }
-    return bessel_ji_series(nu, z, 1.0);
+    const cplx summed = bessel_ji_series_far(nu, z, 1.0);
+    if (!bes_complex_finite(summed) && stable_serves && bes_i_by_stable(nu, z, rotated)) [[unlikely]]
+    {
+        // Its first term or its sum left the doubles (see bes_complex_finite).
+        return rotated;
+    }
+    return summed;
 }
 [[nodiscard]] inline cplx besseli_c(double nu, cplx z) noexcept
 {
