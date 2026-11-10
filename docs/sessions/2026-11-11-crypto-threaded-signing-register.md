@@ -12,7 +12,8 @@ batch after the [GCC slice](2026-11-10-net-path-gcc.md).
 push run 41797302943 (2026-11-04, shard 1, one failed round, the call not yet named) and push run 42856002748 at
 `7d76aa2c` (2026-11-10, shard 2): one thread's first `SigningKey::sign` returned `ProviderFailure`; every other
 signing and verification of the four threads passed. The failing case took 19.0 s and 17.0 s; it passes in 0.99 s on
-win-asan (42360577693) and in 0.38 s on linux-clang-tsan, which ran it clean in both sighting runs.
+win-asan (42360577693) and in 0.38 s on linux-clang-tsan, which ran it clean in the first
+sighting run (job 126742331610); the second run's TSan job (130008660195) was still running, owed a read.
 
 ## Why it is registered, not fixed
 
