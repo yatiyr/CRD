@@ -2314,17 +2314,45 @@ using cplx = std::complex<double>;
 // 0.25 of an integer and 1e-3·|s| of it, gamma()'s reflection rounds πs before its sine, ε|πs|/|sin πs| of the term
 // (1.5e-11 at s = −38.9997, which the connection for Y at the order 39.9997 multiplies by 1/sin νπ: Y_39.9997(10.3 −
 // 25.7i) was 8.7 units off, Y_43.99997(2.7 − 31.9i) 337), and 1/Γ(s) = sin(πs)Γ(1 − s)/π is taken with the turn reduced
-// exactly; elsewhere the term is formed as before.
+// exactly. Where the power is a subnormal ((z/2)^{−168.7} is e^{−742} at |z| = 162, of two digits, over Γ of 1e−302:
+// I_−168.74(−149.1 + 63.8i) was 1.8 % off), the term is formed as e^{ν ln(z/2) − ln|Γ(ν+1)|} with Γ's sign, whose
+// exponent carries ε times its size. A power of 0 or beyond the doubles stays as it was: the series is then not priced
+// and another method answers (formed through logarithms, the series of an order below −|z| may stop before its
+// crossing, Y_350(202 − 219i) 2e29 units off by the connection).
+CRD_NOINLINE inline cplx bes_series_first_negative(double nu, cplx cz) noexcept
+{
+    const double s = nu + 1.0;
+    const cplx power = crd::math::pow(cz, nu);
+    const double size = crd::math::fabs(power.real()) + crd::math::fabs(power.imag());
+    if (size > 0.0 && size < (std::numeric_limits<double>::min)())
+    {
+        const double sign = gamma_sign(s);
+        if (sign == sign)
+        {
+            return sign * crd::math::exp(nu * crd::math::log(cz) - lgamma(s));
+        }
+    }
+    const double up = static_cast<double>(static_cast<long long>(s)) - s; // the distance to the integer above
+    const double distance = (up < 1.0 - up) ? up : 1.0 - up;
+    if (distance < 0.25 && distance < 1.0e-3 * -s)
+    {
+        return power * (-bes_sin_pi(-s) * gamma(1.0 - s) / kBesPi);
+    }
+    return power / gamma(s);
+}
 [[nodiscard]] inline cplx bes_series_first(double nu, cplx cz) noexcept
 {
     const double s = nu + 1.0;
     if (s < 0.0 && s > -1.0e15) [[unlikely]]
     {
+        // Out of line, near a pole and below the order −50 only: a subnormal power over a Gamma below the normal
+        // doubles needs |z/2|^{−ν} beyond 2^1022, an order below −50 for |z| up to 2^20 (a test of the power on every
+        // first term cost the rows of small |z| 4 to 7 %, one on every negative order 3 %).
         const double up = static_cast<double>(static_cast<long long>(s)) - s; // the distance to the integer above
         const double distance = (up < 1.0 - up) ? up : 1.0 - up;
-        if (distance < 0.25 && distance < 1.0e-3 * -s)
+        if (nu < -50.0 || (distance < 0.25 && distance < 1.0e-3 * -s))
         {
-            return crd::math::pow(cz, nu) * (-bes_sin_pi(-s) * gamma(1.0 - s) / kBesPi);
+            return bes_series_first_negative(nu, cz);
         }
     }
     return crd::math::pow(cz, nu) / gamma(s);
@@ -3441,11 +3469,11 @@ CRD_NOINLINE inline cplx bes_i_far(double nu, cplx z, double magnitude) noexcept
         int largest_at = 0;
         const cplx summed = bessel_series_priced<true>(nu, z, summed_loss, largest_at);
         const double index_factor = (largest_at > kBesSeriesIndexUnit) ? largest_at / kBesSeriesIndexUnit : 1.0;
-        // Taken while that price is within the bar, as in base. The price leaves out the rounding of the first term,
-        // (z/2)^ν/Γ(ν+1), about εν|ln(z/2)| of the result: six points of the 1515 sample priced at 0.83 to 1.0 of the
-        // bar are 1.08 to 1.44 units off (I_28.14(21.2 + 34.4i), I_101.3(73.2 − 61.7i)). A price with it, or with the
-        // index factor 1 + at/6 that envelopes them, sends base-correct points at the order of |z| to the stable
-        // method, 3.6 to 4.4 % on that row; the first term in extended precision would clear them without that.
+        // Taken while that price is within the bar, as in base. The price is the size of the series' rounding, not a
+        // bound of it: six points of the 1515 sample priced at 0.83 to 1.0 of the bar are 1.08 to 1.44 units off
+        // (I_28.14(21.2 + 34.4i): the same loop from a first term 6.5e-15 away reads 0.21 units). A price with the
+        // index factor 1 + at/6, which envelopes them, sends base-correct points at the order of |z| to the stable
+        // method, 3.6 to 4.4 % on that row.
         if (summed_loss >= 0.0 && kBesRoundoff * summed_loss * index_factor <= kBesComplexUsable)
         {
             return summed;

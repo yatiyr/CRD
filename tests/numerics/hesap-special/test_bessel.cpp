@@ -944,6 +944,51 @@ TEST_CASE("bessel: complex J, Y and I where the series' first term leaves the do
     }
 }
 
+TEST_CASE("bessel: complex J, Y and I where the power of the series' first term is a subnormal vs mpmath",
+          "[v12-b][special][bessel][complex]")
+{
+    // mpmath at 70 digits at the exact double inputs (seed 1516). Base: (z/2)^nu below the normal doubles, a subnormal
+    // of a few digits over a Gamma of 1e-302, carried its rounding into the whole series: I_-168.74 1.8 % off (1.8e8
+    // units), Y_-152.14 3.3e5 units, I_-156.16 10.6, J_-164.75 1.79.
+    struct Point
+    {
+        int kind; // 0 J, 1 Y, 2 I
+        f64 nu;
+        f64 re;
+        f64 im;
+        f64 ref_re;
+        f64 ref_im;
+    };
+    const Point points[] = {
+        {2, -168.74044086828081, -149.12880543963075, 63.76951371964185, 257483735583107695643465036737.0,
+         -212804382893575410800106228862.0},
+        {2, -156.162944289987, 205.51176206246558, -34.260481989381454, 1.17815215107566603875733255574e+63,
+         2.97831121167223083450042232163e+63},
+        {1, -152.1387640018666, -67.382674522366159, 245.99229467522039, -1.25660409989193987046848717498e+86,
+         -3.63178746135948434453602883796e+86},
+        {0, -164.75399908507512, -6.5452879960092307, 160.13385516195308, -1.79056762453786795399121949292e+33,
+         5.07309509722529492278133480734e+33},
+    };
+    for (const Point& p : points)
+    {
+        INFO("kind=" << p.kind << " nu=" << p.nu << " z=(" << p.re << "," << p.im << ")");
+        const std::complex<f64> z(p.re, p.im);
+        const std::complex<f64> ref(p.ref_re, p.ref_im);
+        if (p.kind == 0)
+        {
+            CHECK(close_c(sf::cyl_bessel_j(p.nu, z), ref, 1e-10, 1e-11));
+        }
+        else if (p.kind == 1)
+        {
+            CHECK(close_c(sf::cyl_neumann(p.nu, z), ref, 1e-9, 1e-11));
+        }
+        else
+        {
+            CHECK(close_c(sf::cyl_bessel_i(p.nu, z), ref, 1e-10, 1e-11));
+        }
+    }
+}
+
 TEST_CASE("bessel: complex K below |z| of 8 near an integer order and where its series cancel vs mpmath",
           "[v12-b][special][bessel][complex]")
 {
