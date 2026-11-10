@@ -66,6 +66,8 @@ unresolved or a design gate is unaccepted. Never invent approval or tool results
   credentials are user actions.
 - **Write our own code.** Any algorithm may match others' results. Other text needs a licence
   keeping Cerid closed and free to change it; else rewrite, no regression ([rule](docs/design/pinned-inputs.md#copyleft)).
+  Algorithms, maths-dictated step order, standard constants, function values and names are never copies or findings;
+  only literal copied text counts. Never start licence sweeps or rewrites over method similarity.
 
 ## Completion and verification
 
