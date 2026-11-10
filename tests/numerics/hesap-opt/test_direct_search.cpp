@@ -291,19 +291,19 @@ TEST_CASE("direct search: the downhill bracket keeps opening while f falls past 
             crd::f64 lo = 0.0;
             crd::f64 mid = 1.0;
             crd::f64 hi;
-            crd::f64 fLo;
-            crd::f64 fMid;
-            crd::f64 fHi;
-            opt::detail::brent_bracket<crd::f64>(f, lo, mid, hi, fLo, fMid, fHi);
+            crd::f64 f_lo;
+            crd::f64 f_mid;
+            crd::f64 f_hi;
+            opt::detail::brent_bracket<crd::f64>(f, lo, mid, hi, f_lo, f_mid, f_hi);
             // The bracket encloses the minimum at s: a strictly interior middle point lower than both ends.
             CHECK(lo < mid);
             CHECK(mid < hi);
-            CHECK(fMid < fLo);
-            CHECK(fMid < fHi);
+            CHECK(f_mid < f_lo);
+            CHECK(f_mid < f_hi);
             CHECK(lo < s);
             CHECK(s < hi);
             crd::f64 fmin;
-            const crd::f64 xmin = opt::detail::brent_min<crd::f64>(f, lo, mid, hi, fMid, 1e-6, fmin);
+            const crd::f64 xmin = opt::detail::brent_min<crd::f64>(f, lo, mid, hi, f_mid, 1e-6, fmin);
             CHECK(std::fabs(xmin - s) < 1e-4);
         };
         check(fquad4);

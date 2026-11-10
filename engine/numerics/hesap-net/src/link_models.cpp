@@ -86,9 +86,25 @@ constexpr crd::f64 kMixParetoScale = 1.15470053837925152902;
     const crd::f64 low = static_cast<crd::f64>(low_ns);
     const crd::f64 high = static_cast<crd::f64>(high_ns);
     const crd::f64 rounded = crd::math::nearbyint(low + ((position - static_cast<crd::f64>(below)) * (high - low)));
-    const crd::f64 held = rounded < low ? low : (rounded > high ? high : rounded);
+    crd::f64 held = rounded;
+    if (held < low)
+    {
+        held = low;
+    }
+    else if (held > high)
+    {
+        held = high;
+    }
     const crd::i64 value = static_cast<crd::i64>(held);
-    return value < low_ns ? low_ns : (value > high_ns ? high_ns : value);
+    if (value < low_ns)
+    {
+        return low_ns;
+    }
+    if (value > high_ns)
+    {
+        return high_ns;
+    }
+    return value;
 }
 
 } // namespace
