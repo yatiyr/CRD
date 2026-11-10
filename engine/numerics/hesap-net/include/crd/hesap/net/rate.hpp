@@ -11,6 +11,7 @@
 //
 // Nothing allocates.
 // Follows libwebrtc (BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
+// WindowedFilter follows QUICHE (Chromium, BSD-3-Clause); notice in THIRD-PARTY-NOTICES.md.
 
 #pragma once
 

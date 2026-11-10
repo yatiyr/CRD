@@ -1,5 +1,9 @@
 /* See ntpd_peer.h. The included file is the text of ntpd/ntp_proto.c from clock_filter's comment to clock_select's,
- * unchanged; everything above it stands in for the headers and globals that text names. */
+ * unchanged; everything above it stands in for the headers and globals that text names.
+ *
+ * The constants and macros under "include/ntp.h" are copied from ntpd 4.2.8p18's include/ntp.h, and the included text
+ * is ntpd's own: Copyright (c) University of Delaware 1992-2015 and Copyright (c) Network Time Foundation 2011-2024,
+ * under the NTP licence and BSD-2-Clause; notice in THIRD-PARTY-NOTICES.md. */
 
 #include "ntpd_peer.h"
 

@@ -249,4 +249,14 @@ different double. Fixed in the model (see "Defects found by the comparison"), th
 10,359,036 executions in 901.2 s (11,497 per second), exit 0, no artifact, corpus 34 to 723 in the scratch copy, peak RSS
 434 MiB. This replaces ROADMAP row 122's count.
 
+### Final scan reviewed (2026-11-10)
+
+The final licence scan flagged `qmr.hpp` (Krylov.jl `qmr.jl`), `brent_bracket` in `powell.hpp` (Numerical Recipes
+`mnbrak`) and the Ridders constants in `finite_difference.hpp`. User ruling: an algorithm is not licensable; QMR, the
+bracketing step and Ridders' method follow their published algorithms, the order of statements the papers dictate is
+not a copy, and the earlier renaming and comment rewrite removed the copied text. The three are kept as they are.
+Missing credits from the same scan are added: the QUICHE (Chromium) notice for `WindowedFilter` in `rate.hpp`, and the
+NTP notice (University of Delaware, Network Time Foundation) for the `include/ntp.h` macros and the cut of
+`ntp_proto.c` in the test peer `ntpd_peer.c`, both in THIRD-PARTY-NOTICES.
+
 Validators: `python scripts/check-master-plan.py`, `python scripts/check-repository.py`.
