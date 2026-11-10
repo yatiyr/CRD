@@ -1330,7 +1330,7 @@ of the HTTP/1.1 path, two tunnels at once on one connection, the byte stream cut
 silent path, and a subprotocol the server does not take refused 400 by either end
 ([session](../sessions/2026-11-10-4-2a-websocket-h2-interop.md)). RFC 9220 against a second implementation: the same
 40 cases over HTTP/3 between `crd-quic-peer --transport h3` and the `h3` crate over Quinn (the pinned `h3-crates`
-archive: `Protocol::WEBSOCKET` is on its main branch only), real UDP both ways round, one tunnel or two, also through a
+archive: `Protocol::WEBSOCKET` is on its master branch only), real UDP both ways round, one tunnel or two, also through a
 relay that loses, duplicates, delays and reorders 5% of datagrams; the client closes the QUIC connection with
 H3_NO_ERROR once the server's GOAWAY says its tunnels are done. It found that STOP_SENDING ended a tunnel both ways:
 Quinn sends the frame ahead of stream data it still owes, so a refusal sent complete (RFC 9114 section 4.1.1) read as

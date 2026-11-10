@@ -4,7 +4,7 @@
 # the pinned Rust toolchain (cmake/pins.json tools/rust-linux-x64) and `cargo build --locked`: every crate comes from
 # crates.io at the version and SHA-256 the committed Cargo.lock names (tools/qmux-crates), except h3 and h3-quinn,
 # which Cargo takes by `--config patch.crates-io` from the SHA-256-pinned source archive of the h3 repository
-# (packages/h3-crates): RFC 9220's `:protocol` value is on its main branch only.
+# (packages/h3-crates): RFC 9220's `:protocol` value is on its master branch only.
 [package]
 name = "crd-qmux-crate-peer"
 version = "0.1.0"

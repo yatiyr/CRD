@@ -13,11 +13,13 @@ CI first: run 42700242742 (e51e5d45) failed linux-gcc-release, -relwithdebinfo a
 
 - `crd-quic-peer --transport h3`: `connections` WebSocket tunnels at once on one HTTP/3 connection (`Http3Tunnels` over
   interop_qmux.hpp's `TunnelPeer`), then `h3_close`/`h3_close_code`; the client closes with H3_NO_ERROR once the
-  server's GOAWAY says its tunnels are done. QMux's options and config moved into interop_qmux.hpp for both peers.
+  server's GOAWAY says its tunnels are done. `Http3Tunnels` ends with its connection's report, as its HTTP/3 state
+  reads the connection's stream set (a static one outlived it: "pure virtual method called" at exit). QMux's options
+  and config moved into interop_qmux.hpp for both peers.
 - `crd-qmux-crate-peer --transport h3`: the `h3` crate over Quinn 0.11.12, extended CONNECT once the server's SETTINGS
   allow it, tokio-tungstenite and the `qmux` crate on the request stream; the RFC 8441 policy now serves both versions.
 - h3 and h3-quinn come from `packages/h3-crates`, the h3 repository's archive at 43745ad8 (SHA-256 pinned, downloaded
-  twice): `Protocol::WEBSOCKET` is on its main branch only. `crd_add_cargo_peer(... PATCH crate dir)` passes
+  twice): `Protocol::WEBSOCKET` is on its master branch only. `crd_add_cargo_peer(... PATCH crate dir)` passes
   `--config patch.crates-io`; check-pins accepts a sourceless locked crate only when the tool's `patched` names it at
   that version and `patched_from` names a pinned package (unit test with every refusal).
 - `qmux_interop.py --quic`: the WebSocket cases over `h3`, two tunnels at once, and four runs through
