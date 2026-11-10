@@ -34,8 +34,9 @@ The last finished runs (42774048974, 42762080661, 42744641737, 42736485342) were
 
 - win-debug: `crd-net-tests [net]` ran 700 cases: 699 passed. The failure is `test_stream_socket.cpp:137`
   (`shutdown_send` returned Reset), in code this batch did not touch, during a run beside a second test process;
-  `[tcp]` passed on its rerun (27 cases). Unexplained: CI's Windows lanes are watched for it. `[prague]`: 9 cases, 17.2 million assertions. `crd-hesap-net-tests ~[kernels]`: 159 cases. Both fuzz
-  targets' seeds and corpora replay clean, with the new `prague-marks` seed.
+  `[tcp]` passed on its rerun (27 cases). Unexplained: CI's Windows lanes are watched for it. `[prague]`: 9 cases,
+  17.2 million assertions. `crd-hesap-net-tests ~[kernels]`: 159 cases. Both fuzz targets' seeds and corpora replay
+  clean, with the new `prague-marks` seed.
 - WSL linux-gcc-debug: the four targets build with no warning; `[prague],[congestion],[bbr],[quic-ecn],[net-path],
   [delivery-rate]` pass (88 cases, 45.6 million assertions), and `[classic-ecn],[estimators]` (29 cases).
 - linux-clang-fuzz, `fuzz.py run`: net-congestion 350 s and 1.65 million executions clean, net-quic-ecn 175 s and
