@@ -924,6 +924,42 @@ TEST_CASE("bessel: complex J, Y and I where the series' first term leaves the do
     }
 }
 
+TEST_CASE("bessel: complex K below |z| of 8 near an integer order and where its series cancel vs mpmath",
+          "[v12-b][special][bessel][complex]")
+{
+    // mpmath at 70 digits at the exact double inputs. Base: the connection (pi/2)(I_-nu - I_nu)/sin(nu pi) divides by a
+    // small sine near an integer order (up to 1.9e17 times the bar within 3e-12 of 4) and its series cancel to K,
+    // e^(-Re z), from terms of e^(|Re z|) (K_0(7.04) 1.9e-9 off).
+    struct Point
+    {
+        f64 nu;
+        f64 re;
+        f64 im;
+        f64 ref_re;
+        f64 ref_im;
+    };
+    const Point points[] = {
+        {4.0001032942119528, 6.1816862149238156, -1.9164417581984015, -0.00213029382127513269650133901386,
+         0.00208929065783645796653959042008},
+        {8.0018473581420189, 7.1018285651636743, -2.5229505725253514, -0.0113109541212669074185908950371,
+         -0.00844683498130996534843478337927},
+        {0.0, 7.0447923470200671, 0.0, 0.000404935185316416872226843966745, 0.0},
+        {-3.0000000000054774, 2.8944546393827943, -1.5080007127152968, -0.065776879125023820003193107378,
+         0.0896368180338525505203791191334},
+        {3.9999999999967266, 4.9131416767474851, -1.3266511465249169, -0.00316651688379882472913288602172,
+         0.0153393899228190786031701808496},
+        {-30.000000000004007, 0.48399567644022357, 0.28033998397484228, -1.76001212565347394069586216331e+47,
+         7.8151001058489378069163852722e+45},
+        {-29.999999999915914, -0.53416230134847043, 1.4922670169708758, 3.09310036299534001965638168611e+33,
+         -3.6943731179776040052493467652e+33},
+    };
+    for (const Point& p : points)
+    {
+        INFO("nu=" << p.nu << " z=(" << p.re << "," << p.im << ")");
+        CHECK(close_c(sf::cyl_bessel_k(p.nu, std::complex<f64>(p.re, p.im)), {p.ref_re, p.ref_im}, 1e-9, 1e-11));
+    }
+}
+
 TEST_CASE("bessel: f32 sanity", "[v12-b][special][bessel]")
 {
     CHECK(close(static_cast<f64>(sf::cyl_bessel_j(0.0F, 1.0F)), 0.7651976865579666, 1e-6, 1e-7));

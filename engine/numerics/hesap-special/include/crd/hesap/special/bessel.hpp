@@ -107,6 +107,13 @@ inline constexpr double kBesComplexStableMax = 690.0;
 inline constexpr double kBesComplexUsable = 1.0e-10;
 inline constexpr double kBesComplexYSeries = 1.0e-9; // the module's bar for complex Y, the same use as above
 inline constexpr double kBesSeriesIndexUnit = 6.0; // the index of the largest term, see above
+// Complex K below kBesComplexAsympFrom: the series are taken while their price is within this, and from
+// kBesKFractionFrom in |z| on Steed's CF2 serves where they are not (see besselk_c).
+inline constexpr double kBesComplexKSeries = 1.0e-10;
+inline constexpr double kBesComplexKInteger = 1.0e-11; // the integer series, whose price undershoots by up to 20
+inline constexpr double kBesKFractionFrom = 2.0;
+inline constexpr double kBesKNearInteger = 2.0e-2;
+inline constexpr double kBesKPricedFrom = 4.0;
 // From this |Im ω| on cos ω and sin ω are one exponential each, e^{|Im ω|} times a unit, and the product of Hankel's
 // sums with them is formed on the moderate factors and multiplied by e^{|Im ω|} last (as e^{700}·e^{|Im ω|−700}), so
 // that it leaves the doubles only where the result does (J overflows near Im z = 712, its cosine already at 710.5).
@@ -3051,38 +3058,67 @@ CRD_NOINLINE inline cplx bes_j_far(double nu, cplx z, bool mirrored, double magn
     return r - (1.0 / kBesPi) * crd::math::pow(cz, static_cast<double>(n)) * s;
 }
 
-// Integer-order K_n(z) ascending series (n ≥ 0), DLMF 10.31.2 — exact (log + digamma).
-[[nodiscard]] inline cplx besselk_n_int(int n, cplx z) noexcept
+// Integer-order K_n(z) ascending series (n ≥ 0), DLMF 10.31.2 — exact (log + digamma). With Priced set, `loss` receives
+// the cancellation of its three parts as bessely_n_int prices them (the parts are of the size of I, e^{|Re z|}, where K
+// is e^{−Re z}: K_0(7.04) was 1.9e-9 off).
+template <bool Priced = false> [[nodiscard]] inline cplx besselk_n_int(int n, cplx z, double* loss = nullptr) noexcept
 {
     const cplx cz = 0.5 * z;
     const cplx z2 = cz * cz;
-    cplx r = ((n & 1) ? 1.0 : -1.0) * crd::math::log(cz) *
-             bessel_ji_series(static_cast<double>(n), z, 1.0); // (−1)^{n+1} ln·I_n
+    const cplx log_part = ((n & 1) ? 1.0 : -1.0) * crd::math::log(cz) *
+                          bessel_ji_series(static_cast<double>(n), z, 1.0); // (−1)^{n+1} ln·I_n
+    cplx r = log_part;
+    [[maybe_unused]] double parts = 0.0;
     if (n > 0)
     {
         cplx finite = 0.0;
         cplx pw = 1.0; // (−z²/4)^k
+        [[maybe_unused]] double largest = 0.0;
         for (int k = 0; k < n; ++k)
         {
-            finite += (gamma(static_cast<double>(n - k)) / gamma(static_cast<double>(k + 1))) * pw;
+            const cplx term = (gamma(static_cast<double>(n - k)) / gamma(static_cast<double>(k + 1))) * pw;
+            finite += term;
+            if constexpr (Priced)
+            {
+                largest = (bes_l1(term) > largest) ? bes_l1(term) : largest;
+            }
             pw *= (-z2);
         }
-        r += 0.5 * crd::math::pow(cz, -static_cast<double>(n)) * finite;
+        const cplx factor = 0.5 * crd::math::pow(cz, -static_cast<double>(n));
+        r += factor * finite;
+        if constexpr (Priced)
+        {
+            parts = largest * bes_l1(factor);
+        }
     }
     cplx s = 0.0;
     cplx pw = 1.0;
+    [[maybe_unused]] double largest = 0.0;
     for (int k = 0; k <= 400; ++k)
     {
         const double psi = digamma(static_cast<double>(k + 1)) + digamma(static_cast<double>(n + k + 1));
-        const cplx term = psi / (gamma(static_cast<double>(k + 1)) * gamma(static_cast<double>(n + k + 1))) * pw;
+        const double denominator = gamma(static_cast<double>(k + 1)) * gamma(static_cast<double>(n + k + 1));
+        const cplx term = psi / denominator * pw;
         s += term;
+        if constexpr (Priced)
+        {
+            largest = (denominator <= (std::numeric_limits<double>::max)())
+                          ? ((bes_l1(term) > largest) ? bes_l1(term) : largest)
+                          : std::numeric_limits<double>::infinity();
+        }
         if (k >= n && std::abs(term) <= 1e-18 * std::abs(s))
         {
             break;
         }
         pw *= z2;
     }
-    return r + ((n & 1) ? -1.0 : 1.0) * 0.5 * crd::math::pow(cz, static_cast<double>(n)) * s; // (−1)^n
+    const cplx factor = ((n & 1) ? -1.0 : 1.0) * 0.5 * crd::math::pow(cz, static_cast<double>(n)); // (−1)^n
+    const cplx result = r + factor * s;
+    if constexpr (Priced)
+    {
+        *loss = (bes_l1(log_part) + parts + largest * bes_l1(factor)) / bes_l1(result);
+    }
+    return result;
 }
 
 // Y_ν(z), any real ν. Large |z|: asymptotic (signed ω). Moderate |z|: connection (J_ν cosνπ − J_{−ν})/sinνπ
@@ -3352,6 +3388,89 @@ CRD_NOINLINE inline cplx bes_i_far(double nu, cplx z, double magnitude) noexcept
     return bessel_ji_series(nu, z, 1.0);
 }
 
+// K_ν(z), ν ≥ 0, Re z ≥ 0, |z| ≥ kBesKFractionFrom: Steed's CF2 at the base order and the recurrence in order, stable
+// upward for K.
+[[nodiscard]] inline cplx bes_k_fraction(double n, cplx z) noexcept
+{
+    const int steps = static_cast<int>(n);
+    const double mu = n - steps;
+    BesZPair k = bes_cf2_k_complex(z, mu);
+    const cplx two_over_z = 2.0 / z;
+    for (int m = 1; m <= steps; ++m)
+    {
+        const cplx up = (mu + m) * two_over_z * k.next + k.base;
+        k.base = k.next;
+        k.next = up;
+    }
+    return k.base;
+}
+
+// Temme's series for K_μ(z) and K_{μ+1}(z) at a complex z (|μ| ≤ ½, |z| below kBesKFractionFrom): the series of
+// bes_temme_k (Temme 1975) with ln(2/z) on the principal branch, where it holds no 1/sin μπ: it is the method of a
+// near-integer order there.
+[[nodiscard]] inline BesZPair bes_temme_k_complex(cplx z, double mu) noexcept
+{
+    const double mu_pi = kBesPi * mu;
+    const cplx ln_2_over_z = -crd::math::log(0.5 * z);
+    const cplx sigma = mu * ln_2_over_z;
+    const double x_over_sin = (crd::math::fabs(mu_pi) < kBesRelTol) ? 1.0 : mu_pi / crd::math::sin(mu_pi);
+    const cplx sinhc = (std::abs(sigma) < kBesRelTol) ? cplx(1.0) : crd::math::sinh(sigma) / sigma;
+    const BesGammas g = bes_temme_gammas(mu);
+    const cplx e_sigma = crd::math::exp(sigma);
+    cplx fk = x_over_sin * (g.g1 * crd::math::cosh(sigma) + g.g2 * sinhc * ln_2_over_z);
+    cplx pk = 0.5 * e_sigma / g.inv_gamma_plus;
+    cplx qk = 0.5 / (e_sigma * g.inv_gamma_minus);
+    const cplx weight = 0.25 * z * z;
+    cplx ck = 1.0;
+    cplx sum_f = fk; // Σ c_k f_k
+    cplx sum_h = pk; // Σ c_k h_k
+    for (int k = 1; k <= kBesIterCap; ++k)
+    {
+        const double kd = k;
+        const double inv_kk = 1.0 / ((kd - mu) * (kd + mu));
+        fk = (kd * fk + pk + qk) * inv_kk;
+        pk *= (kd + mu) * inv_kk;
+        qk *= (kd - mu) * inv_kk;
+        ck *= weight / kd;
+        const cplx term = ck * fk;
+        sum_f += term;
+        sum_h += ck * (pk - kd * fk);
+        if (bes_l1(term) < bes_l1(sum_f) * kBesRelTol)
+        {
+            break;
+        }
+    }
+    return {sum_f, 2.0 * sum_h / z};
+}
+
+// K_ν(z) below |z| = kBesComplexAsympFrom where the series lose more than the bar: Temme's series at the base order and
+// the recurrence upward below |z| = kBesKFractionFrom; above it Steed's CF2 in the right half-plane and, in the left,
+// K_ν(z) = e^{∓νπi} K_ν(−z) ∓ πi I_ν(−z) (DLMF 10.34.2), whose two terms do not cancel (the second is e^{|Re z|}
+// large).
+CRD_NOINLINE inline cplx bes_k_unpriced(double n, cplx z) noexcept
+{
+    if (std::abs(z) < kBesKFractionFrom)
+    {
+        const int steps = bes_base_steps(n);
+        const double mu = n - steps;
+        BesZPair k = bes_temme_k_complex(z, mu);
+        const cplx two_over_z = 2.0 / z;
+        for (int m = 1; m <= steps; ++m)
+        {
+            const cplx up = (mu + m) * two_over_z * k.next + k.base;
+            k.base = k.next;
+            k.next = up;
+        }
+        return k.base;
+    }
+    if (z.real() >= 0.0)
+    {
+        return bes_k_fraction(n, z);
+    }
+    const double turn = (z.imag() >= 0.0) ? 1.0 : -1.0;
+    return bes_turn_phase(n, -turn) * bes_k_fraction(n, -z) - cplx(0.0, turn * kBesPi) * besseli_c(n, -z);
+}
+
 // K_ν(z) = K_{−ν}(z). Large |z|: asymptotic. Moderate |z|: (π/2)(I_{−ν}−I_ν)/sinνπ (integer ν ⇒ ε-offset).
 [[nodiscard]] inline cplx besselk_c(double nu, cplx z) noexcept
 {
@@ -3378,29 +3497,47 @@ CRD_NOINLINE inline cplx bes_i_far(double nu, cplx z, double magnitude) noexcept
         }
         if (n < kBesForwardSteps)
         {
-            const int steps = static_cast<int>(n);
-            const double mu = n - steps;
-            BesZPair k = bes_cf2_k_complex(z, mu);
-            const cplx two_over_z = 2.0 / z;
-            for (int m = 1; m <= steps; ++m)
-            {
-                const cplx up = (mu + m) * two_over_z * k.next + k.base;
-                k.base = k.next;
-                k.next = up;
-            }
-            return k.base;
+            return bes_k_fraction(n, z);
         }
         if (error < kBesRoundoff * crd::math::exp(std::abs(z) + z.real()))
         {
             return value;
         }
     }
+    // Below |z| = kBesComplexAsympFrom the series hold terms of the size of I, e^{|Re z|}, to make K, e^{−Re z}, and
+    // the connection divides by sin νπ, which is small near an integer order (K_4.0001(6.18 − 1.92i) was 1e-5 off, 1e-8
+    // of an integer 1e-1 off): each is priced (the integer series by its parts, the connection by the cancellation of
+    // its difference), and where the price is above kBesComplexKSeries bes_k_unpriced answers.
     const double rn = crd::math::round(n);
+    double loss = 0.0;
+    double limit = kBesComplexKSeries;
+    cplx value;
     if (crd::math::fabs(n - rn) < 1e-12) // integer order: exact ascending series
     {
-        return besselk_n_int(static_cast<int>(rn), z);
+        // Below |z| = kBesKPricedFrom its parts are at most e^{2|z|} of K, within the bar: it is taken unpriced.
+        if (std::abs(z) < kBesKPricedFrom)
+        {
+            return besselk_n_int(static_cast<int>(rn), z);
+        }
+        value = besselk_n_int<true>(static_cast<int>(rn), z, &loss);
+        limit = kBesComplexKInteger;
     }
-    return (0.5 * kBesPi) * (bessel_ji_series(-n, z, 1.0) - bessel_ji_series(n, z, 1.0)) / crd::math::sin(n * kBesPi);
+    else
+    {
+        const cplx minus = bessel_ji_series(-n, z, 1.0);
+        const cplx plus = bessel_ji_series(n, z, 1.0);
+        value = (0.5 * kBesPi) * (minus - plus) / crd::math::sin(n * kBesPi);
+        // Within kBesKNearInteger of an integer the difference is below the rounding of the series' own terms (which
+        // the sizes of the sums do not show: K_3.9999999999967(4.91 − 1.33i) came out 3e8 times too large while its
+        // price read 3e5), so the price is taken as unbounded there.
+        loss = (crd::math::fabs(n - rn) < kBesKNearInteger) ? std::numeric_limits<double>::infinity()
+                                                            : (bes_l1(minus) + bes_l1(plus)) / bes_l1(minus - plus);
+    }
+    if (kBesRoundoff * loss <= limit || !(n < kBesForwardSteps))
+    {
+        return value;
+    }
+    return bes_k_unpriced(n, z);
 }
 } // namespace detail
 
