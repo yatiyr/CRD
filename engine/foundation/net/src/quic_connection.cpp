@@ -239,6 +239,10 @@ void QuicConnection::Events::on_spurious(QuicSpace space, const QuicSentPacket& 
         m_connection.m_pmtu.on_probe_acked(packet.bytes, m_connection.m_event_ns);
         return;
     }
+    if (space == QuicSpace::Application)
+    {
+        m_connection.m_pmtu.on_acked(packet.number, packet.bytes); // a large packet arrived: no black hole behind it
+    }
     if (packet.in_flight)
     {
         m_connection.m_congestion->on_spurious(congestion_packet(space, packet), lost_ns, m_connection.m_event_ns);
