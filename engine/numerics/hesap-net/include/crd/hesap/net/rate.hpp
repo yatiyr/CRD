@@ -3,7 +3,7 @@
 //   WindowedFilter       Kathleen Nichols' three-sample windowed extremum, the running maximum of BBR's bandwidth and
 //                        minimum of its round trip; constant memory, any ordered value, time in any monotonic unit.
 //   delivery_rate        one sample of the rate packets were delivered at, bounded by the rate they were sent at
-//                        (draft-ietf-ccwg-bbr's delivery rate).
+//                        (draft-ietf-ccwg-bbr's delivery rate), in exact integer bytes per second.
 //   AckedRateEstimator   the Bayesian estimate of the acknowledged rate Google Congestion Control feeds its rate
 //                        control, bit-exact with libwebrtc's arithmetic (crd-hesap-estimators-webrtc-tests), which
 //                        turns to NaN on an estimate of zero and on a sample variance past float; here the first
@@ -15,6 +15,7 @@
 #pragma once
 
 #include <crd/core/types.hpp>
+#include <crd/core/wide_multiply.hpp>
 
 namespace crd::hesap::net
 {
@@ -143,12 +144,13 @@ template <class T>
 using WindowedMin = WindowedFilter<T, AtMost<T>>;
 
 // Bytes per second over the longer of the send and acknowledgement intervals of the delivered bytes, so an ACK burst
-// cannot read as more than the rate the data left at. 0 when neither interval is positive.
-[[nodiscard]] constexpr double delivery_rate(crd::u64 delivered_bytes, crd::i64 send_elapsed_ns,
-                                             crd::i64 ack_elapsed_ns) noexcept
+// cannot read as more than the rate the data left at. Exact integer arithmetic, rounded down, so every platform
+// computes the same rate (NET-SIM's replays): 0 when neither interval is positive, ~0 past 64 bits.
+[[nodiscard]] inline crd::u64 delivery_rate(crd::u64 delivered_bytes, crd::u64 send_elapsed_ns,
+                                            crd::u64 ack_elapsed_ns) noexcept
 {
-    const crd::i64 interval = (send_elapsed_ns > ack_elapsed_ns) ? send_elapsed_ns : ack_elapsed_ns;
-    return (interval > 0) ? static_cast<double>(delivered_bytes) * 1e9 / static_cast<double>(interval) : 0.0;
+    const crd::u64 interval = (send_elapsed_ns > ack_elapsed_ns) ? send_elapsed_ns : ack_elapsed_ns;
+    return (interval != 0U) ? crd::multiply_divide(delivered_bytes, 1000000000U, interval) : 0U;
 }
 
 struct AckedRateOptions

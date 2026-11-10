@@ -742,12 +742,13 @@ TEST_CASE("hesap-net windowed filter: exact on monotonic series", "[estimators]"
 
 TEST_CASE("hesap-net delivery rate: the longer interval decides", "[estimators]")
 {
-    static_assert(hn::delivery_rate(1000U, 1'000'000, 2'000'000) == 500'000.0);
-    static_assert(hn::delivery_rate(1000U, 4'000'000, 2'000'000) == 250'000.0);
-    static_assert(hn::delivery_rate(1000U, 0, 0) == 0.0);
-    static_assert(hn::delivery_rate(1000U, -5, -1) == 0.0);
-    CHECK(hn::delivery_rate(0U, 10, 10) == 0.0);
-    CHECK(std::isfinite(hn::delivery_rate(std::numeric_limits<u64>::max(), 1, 1)));
+    CHECK(hn::delivery_rate(1000U, 1'000'000U, 2'000'000U) == 500'000U);
+    CHECK(hn::delivery_rate(1000U, 4'000'000U, 2'000'000U) == 250'000U);
+    CHECK(hn::delivery_rate(1000U, 0U, 0U) == 0U);
+    CHECK(hn::delivery_rate(0U, 10U, 10U) == 0U);
+    CHECK(hn::delivery_rate(1U, 3U, 0U) == 333'333'333U); // rounded down
+    CHECK(hn::delivery_rate(std::numeric_limits<u64>::max(), 1U, 1U) == std::numeric_limits<u64>::max());
+    CHECK(hn::delivery_rate(u64{1} << 40U, 1'000'000'000U, 0U) == u64{1} << 40U); // past 2^64 before the division
 }
 
 // ------------------------------------------------------------------------------------------------- AckedRateEstimator
