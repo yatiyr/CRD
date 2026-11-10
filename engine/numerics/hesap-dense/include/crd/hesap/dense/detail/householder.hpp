@@ -1,9 +1,11 @@
 #pragma once
 
+#include <crd/core/platform.hpp> // CRD_NOINLINE
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 
 #include <crd/math/cmath.hpp>
+#include <cmath> // std::ldexp
 #include <limits>
 
 namespace crd::hesap::dense::detail
@@ -11,8 +13,10 @@ namespace crd::hesap::dense::detail
 // -----------------------------------------------------------------------
 // Phase 3.1.6 v3a-1 — shared Householder reflector substrate.
 //
-// `make_householder` is a FAITHFUL port of LAPACK `dlarfg` (incl. the
-// `safmin` rescaling guard) — the primitive shared by the symmetric
+// `make_householder` follows LAPACK `dlarfg` (incl. the `safmin` rescaling
+// guard); where dlarfg takes the tail norm from the scaled `dnrm2`, it sums
+// the squares plainly and redoes a sum it cannot trust on scaled values
+// (`scaled_column_norm`, 2026-11-10) — the primitive shared by the symmetric
 // tridiagonalization (dsytrd/dsytd2), and later the bidiagonalization
 // (dgebrd) and Hessenberg reduction (dgehrd). It generates an elementary
 // reflector
@@ -57,6 +61,84 @@ template <typename T>
     return w * crd::math::sqrt(T{1} + r * r);
 }
 
+// The norm of a column whose plain sum of squares s = |alpha|^2 + |tail|^2 cannot be trusted: s is non-finite or
+// below mu / eps (mu the smallest normal, eps the epsilon). Below that floor the squares under mu carry an absolute
+// error of up to delta / 2 each (delta = mu eps), an error of order one in s, so beta is wrong and H = I - tau v v^T
+// is not orthogonal (eig_sym on a column tail 2^-530 below the rest left its eigenvectors 3.4e-6 from orthogonal); a
+// finite s at or above the floor is accurate to n eps^2 / 2. The norm is root 2^e, root the square root of the sum of
+// the squares of the values scaled by the exact power of two 2^-e that brings their largest magnitude into [1/2, 1),
+// returned through ldexp (infinite only when the norm itself leaves the range); the plain root for a zero or
+// non-finite column. The real form reads count values, the complex form both parts of count values. Out of line: an
+// ordinary column never reaches them.
+template <typename T> CRD_NOINLINE T scaled_column_norm(const T* values, crd::usize count) noexcept
+{
+    T peak = T{0};
+    bool finite = true;
+    for (crd::usize i = 0; i < count; ++i)
+    {
+        const T a = std::abs(values[i]);
+        finite = finite && a <= std::numeric_limits<T>::max();
+        peak = a > peak ? a : peak;
+    }
+    if (!finite || peak == T{0})
+    {
+        T s = T{0};
+        for (crd::usize i = 0; i < count; ++i)
+        {
+            s += values[i] * values[i];
+        }
+        return crd::math::sqrt(s);
+    }
+    int e = 0;
+    static_cast<void>(crd::math::frexp(peak, &e));
+    // 2^-e as two factors, each a finite power of two even for the exponent of a subnormal peak
+    const int half = e / 2;
+    const T sa = std::ldexp(T{1}, -half);
+    const T sb = std::ldexp(T{1}, half - e);
+    T s = T{0};
+    for (crd::usize i = 0; i < count; ++i)
+    {
+        const T t = (values[i] * sa) * sb;
+        s += t * t;
+    }
+    return std::ldexp(crd::math::sqrt(s), e);
+}
+
+template <typename R> CRD_NOINLINE R scaled_column_norm(const crd::hesap::Complex<R>* values, crd::usize count) noexcept
+{
+    R peak = R{0};
+    bool finite = true;
+    for (crd::usize i = 0; i < count; ++i)
+    {
+        const R a = std::abs(values[i].re);
+        const R b = std::abs(values[i].im);
+        finite = finite && a <= std::numeric_limits<R>::max() && b <= std::numeric_limits<R>::max();
+        peak = a > peak ? a : peak;
+        peak = b > peak ? b : peak;
+    }
+    R s = R{0};
+    if (!finite || peak == R{0})
+    {
+        for (crd::usize i = 0; i < count; ++i)
+        {
+            s += values[i].re * values[i].re + values[i].im * values[i].im;
+        }
+        return crd::math::sqrt(s);
+    }
+    int e = 0;
+    static_cast<void>(crd::math::frexp(peak, &e));
+    const int half = e / 2;
+    const R sa = std::ldexp(R{1}, -half);
+    const R sb = std::ldexp(R{1}, half - e);
+    for (crd::usize i = 0; i < count; ++i)
+    {
+        const R a = (values[i].re * sa) * sb;
+        const R b = (values[i].im * sa) * sb;
+        s += a * a + b * b;
+    }
+    return std::ldexp(crd::math::sqrt(s), e);
+}
+
 // make_householder — dlarfg-faithful. `x` is contiguous length `n` with
 // x[0] = alpha and x[1..n-1] = the vector to annihilate. On exit, x[1..n-1]
 // holds the Householder vector tail (v[0] == 1 is implicit and NOT written);
@@ -79,12 +161,25 @@ template <typename T>
     {
         xnorm_sq += x[i] * x[i];
     }
-    if (xnorm_sq == T{0})
+    // The plain sum is trusted when finite and at least mu / eps (scaled_column_norm gives the bound); one rare branch
+    // carries that and the zero tail, so an ordinary column runs the plain formulas unchanged.
+    const T col_sq = alpha0 * alpha0 + xnorm_sq;
+    const bool trusted = col_sq >= std::numeric_limits<T>::min() / std::numeric_limits<T>::epsilon() &&
+                         col_sq <= std::numeric_limits<T>::max();
+    T xnorm = T{0};
+    if (!trusted || xnorm_sq == T{0}) [[unlikely]]
     {
-        // H == I (the tail is already zero).
-        return Householder<T>{T{0}, alpha0};
+        xnorm = trusted ? T{0} : scaled_column_norm<T>(x + 1, n - 1);
+        if (xnorm == T{0})
+        {
+            // H == I (the tail is zero, or negligible against an alpha of trusted size).
+            return Householder<T>{T{0}, alpha0};
+        }
     }
-    T xnorm = crd::math::sqrt(xnorm_sq);
+    else
+    {
+        xnorm = crd::math::sqrt(xnorm_sq);
+    }
 
     T alpha = alpha0;
     T beta = -(alpha >= T{0} ? T{1} : T{-1}) * hypot2(alpha, xnorm);
@@ -176,12 +271,25 @@ template <typename R>
     {
         xnorm2 += x[k].re * x[k].re + x[k].im * x[k].im;
     }
-    if (xnorm2 == R{0} && alphi == R{0})
+    // trusted as in make_householder; one rare branch carries that and the zero tail of a real alpha
+    const R col_sq = alphr * alphr + alphi * alphi + xnorm2;
+    const bool trusted = col_sq >= std::numeric_limits<R>::min() / std::numeric_limits<R>::epsilon() &&
+                         col_sq <= std::numeric_limits<R>::max();
+    R beta = R{0};
+    if (!trusted || (xnorm2 == R{0} && alphi == R{0})) [[unlikely]]
     {
-        // H == I (the tail is already zero and alpha is real).
-        return HouseholderComplex<R>{C{R{0}, R{0}}, alphr};
+        const R tail_norm = trusted ? R{0} : scaled_column_norm<R>(x + 1, n - 1);
+        if (tail_norm == R{0} && alphi == R{0})
+        {
+            // H == I (the tail is zero, or negligible against an alpha of trusted size, and alpha is real).
+            return HouseholderComplex<R>{C{R{0}, R{0}}, alphr};
+        }
+        beta = -(alphr >= R{0} ? R{1} : R{-1}) * scaled_column_norm<R>(x, n);
     }
-    R beta = -(alphr >= R{0} ? R{1} : R{-1}) * crd::math::sqrt(alphr * alphr + alphi * alphi + xnorm2);
+    else
+    {
+        beta = -(alphr >= R{0} ? R{1} : R{-1}) * crd::math::sqrt(col_sq);
+    }
     const R safmin = std::numeric_limits<R>::min() / std::numeric_limits<R>::epsilon();
     int knt = 0;
     if (std::abs(beta) < safmin)

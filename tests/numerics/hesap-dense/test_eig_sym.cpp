@@ -124,6 +124,133 @@ TEST_CASE("make_householder: H*x = beta*e0", "[hesap][eig][householder]")
     }
 }
 
+TEST_CASE("make_householder: a reflector stays orthogonal for a tail far outside the square-safe range",
+          "[hesap][eig][householder][range]")
+{
+    // Base summed the tail's squares plainly: a tail 2^-530 below an alpha of the same order (or a whole column there)
+    // gave a reflector off orthogonal, one near 1e300 overflowed. H = I - tau v v^T is orthogonal exactly when
+    // tau (1 + |v_tail|^2) = 2 (and unitary when 2 Re(tau) = |tau|^2 (1 + |v_tail|^2)); v is of order one either way.
+    namespace detail = crd::hesap::dense::detail;
+    constexpr int n = 40;
+    for (const int k : {-520, -530, -560, -1000})
+    {
+        for (const double alpha_scale : {0.0, 1.0, -1.0})
+        {
+            INFO("tail 2^" << k << " alpha " << alpha_scale << " x 2^k");
+            double x[n];
+            x[0] = std::ldexp(alpha_scale * 0.7, k);
+            for (int i = 1; i < n; ++i)
+            {
+                x[i] = std::ldexp(std::sin(0.37 * i + 0.1), k);
+            }
+            double ref_sq = 0.0; // the exact column norm at scale 2^-k
+            for (int i = 0; i < n; ++i)
+            {
+                const double t = std::ldexp(x[i], -k);
+                ref_sq += t * t;
+            }
+            const auto h = detail::make_householder<double>(x, n);
+            double v_sq = 0.0;
+            for (int i = 1; i < n; ++i)
+            {
+                v_sq += x[i] * x[i];
+            }
+            CHECK(std::abs((h.tau * (1.0 + v_sq)) - 2.0) <= 1e-13);
+            CHECK(std::abs((std::abs(std::ldexp(h.beta, -k)) / std::sqrt(ref_sq)) - 1.0) <= 1e-13);
+        }
+    }
+    {
+        double x[n];
+        for (int i = 0; i < n; ++i)
+        {
+            x[i] = 1e300 * std::cos(0.21 * i + 0.3);
+        }
+        const auto h = detail::make_householder<double>(x, n);
+        double v_sq = 0.0;
+        for (int i = 1; i < n; ++i)
+        {
+            v_sq += x[i] * x[i];
+        }
+        CHECK(std::abs((h.tau * (1.0 + v_sq)) - 2.0) <= 1e-13);
+    }
+    using Cd = crd::hesap::Complex<double>;
+    for (const int k : {-520, -530, -560})
+    {
+        INFO("complex tail 2^" << k);
+        Cd x[n];
+        x[0] = Cd{std::ldexp(0.6, k), std::ldexp(-0.2, k)};
+        for (int i = 1; i < n; ++i)
+        {
+            x[i] = Cd{std::ldexp(std::sin(0.37 * i + 0.1), k), std::ldexp(std::cos(0.53 * i), k)};
+        }
+        const auto h = detail::make_householder_complex<double>(x, n);
+        double v_sq = 0.0;
+        for (int i = 1; i < n; ++i)
+        {
+            v_sq += x[i].re * x[i].re + x[i].im * x[i].im;
+        }
+        const double tau_sq = h.tau.re * h.tau.re + h.tau.im * h.tau.im;
+        CHECK(std::abs((2.0 * h.tau.re) - (tau_sq * (1.0 + v_sq))) <= 1e-13);
+    }
+}
+
+TEST_CASE("eig_sym: a column whose off-diagonal is 2^-530 below the rest keeps orthogonal eigenvectors",
+          "[hesap][eig][real][range]")
+{
+    // base: |V^T V - I| 3.4e-6 and residual 3.7e-5 at 2^-530, 7.7e-12 and 8.3e-11 at 2^-520
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    constexpr crd::usize n = 60;
+    for (const int k : {-520, -530, -560})
+    {
+        INFO("2^" << k);
+        Symmetric<double> a(&alloc, n);
+        double amax = 0.0;
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            for (crd::usize j = 0; j <= i; ++j)
+            {
+                const double h =
+                    std::sin((static_cast<double>(i) * 12.9898) + (static_cast<double>(j) * 78.233)) * 43758.5453;
+                double v = h - std::floor(h) - 0.5;
+                if ((j == 0) != (i == 0))
+                {
+                    v = std::ldexp(v, k);
+                }
+                a.at(i, j) = v;
+                a.at(j, i) = v;
+                amax = std::abs(v) > amax ? std::abs(v) : amax;
+            }
+        }
+        const EigSym<double> e = eig_sym<double>(&alloc, a);
+        double orth = 0.0;
+        double res = 0.0;
+        for (crd::usize x = 0; x < n; ++x)
+        {
+            for (crd::usize y = 0; y < n; ++y)
+            {
+                double s = 0.0;
+                for (crd::usize i = 0; i < n; ++i)
+                {
+                    s += e.vectors.at(i, x) * e.vectors.at(i, y);
+                }
+                orth = std::abs(s - (x == y ? 1.0 : 0.0)) > orth ? std::abs(s - (x == y ? 1.0 : 0.0)) : orth;
+            }
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                double s = 0.0;
+                for (crd::usize j = 0; j < n; ++j)
+                {
+                    s += a.at(i, j) * e.vectors.at(j, x);
+                }
+                const double r = std::abs(s - (e.values(x) * e.vectors.at(i, x)));
+                res = r > res ? r : res;
+            }
+        }
+        CHECK(orth <= 1e-13);
+        CHECK(res / amax <= 1e-12);
+    }
+}
+
 TEST_CASE("eig_sym: diagonal matrix recovers diagonal (ascending)", "[hesap][eig][real]")
 {
     crd::memory::TlsfAllocator alloc(256U * 1024U);
