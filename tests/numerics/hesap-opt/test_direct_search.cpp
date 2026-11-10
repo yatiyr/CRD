@@ -264,6 +264,54 @@ TEST_CASE("direct search: bit-identical determinism", "[hesap-opt][direct-search
     }
 }
 
+TEST_CASE("direct search: the downhill bracket keeps opening while f falls past the parabola vertex",
+          "[hesap-opt][direct-search]")
+{
+    // The parabola through the first three points puts its vertex beyond the third point, within the growth cap.
+    // If f still falls there, one more golden step must be probed from the vertex, onward; a probe that re-samples
+    // the vertex closes the bracket early on a point that is not near the minimum (1.1 to 95 off for s = 5..100).
+    for (const crd::f64 s : {5.0, 10.0, 20.0, 50.0, 100.0})
+    {
+        const auto fquad4 = [s](crd::f64 x)
+        {
+            const crd::f64 t = x - s;
+            return t * t + 0.01 * t * t * t * t;
+        };
+        const auto fexp = [s](crd::f64 x)
+        {
+            return std::exp(0.3 * (x - s)) + std::exp(-0.3 * (x - s));
+        };
+        const auto fquart = [s](crd::f64 x)
+        {
+            const crd::f64 t = x - s;
+            return t * t * t * t;
+        };
+        const auto check = [s](const auto& f)
+        {
+            crd::f64 lo = 0.0;
+            crd::f64 mid = 1.0;
+            crd::f64 hi;
+            crd::f64 fLo;
+            crd::f64 fMid;
+            crd::f64 fHi;
+            opt::detail::brent_bracket<crd::f64>(f, lo, mid, hi, fLo, fMid, fHi);
+            // The bracket encloses the minimum at s: a strictly interior middle point lower than both ends.
+            CHECK(lo < mid);
+            CHECK(mid < hi);
+            CHECK(fMid < fLo);
+            CHECK(fMid < fHi);
+            CHECK(lo < s);
+            CHECK(s < hi);
+            crd::f64 fmin;
+            const crd::f64 xmin = opt::detail::brent_min<crd::f64>(f, lo, mid, hi, fMid, 1e-6, fmin);
+            CHECK(std::fabs(xmin - s) < 1e-4);
+        };
+        check(fquad4);
+        check(fexp);
+        check(fquart);
+    }
+}
+
 TEST_CASE("direct search: n = 1 and n = 0 boundaries", "[hesap-opt][direct-search]")
 {
     crd::memory::TlsfAllocator alloc(1U << 22);

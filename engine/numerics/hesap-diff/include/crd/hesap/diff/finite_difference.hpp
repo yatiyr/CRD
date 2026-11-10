@@ -111,41 +111,78 @@ template <typename T, typename F>
            / (static_cast<T>(12) * h * h);
 }
 
-// Ridders' method (Ridders 1982, "Accurate computation of F'(x) and F'(x)F''(x)", Adv. Eng. Softw. 4(2)): central
-// differences at geometrically shrinking steps are combined by Neville-style Richardson extrapolation (each column
-// of the tableau removes one more even power of the step), returning the first derivative AND a Tier-1 error
-// estimate. Far more accurate than a fixed-h difference.
+namespace detail
+{
+// The tableau of derivative_ridders for x >= 0 (see there).
 template <typename T, typename F>
-[[nodiscard]] DiffResult<T> derivative_ridders(F&& f, T x, T h = static_cast<T>(0.1), int ntab = 10)
+[[nodiscard]] DiffResult<T> ridders_right(F&& f, T x, T h, int ntab)
 {
     constexpr int maxLevels = 16;
     const int levels = ntab < 2 ? 2 : (ntab > maxLevels ? maxLevels : ntab);
     constexpr T shrink = static_cast<T>(1.4);
     const T shrinkSq = shrink * shrink;
     const T stopFactor = T{2};
-    auto central = [&](T step) -> T
+    // The central difference at one nominal step; `used` receives the step that was sampled, which differs from the
+    // nominal one by the rounding of x + nominal, and is the nominal one only when that sum is lost against x.
+    auto central = [&](T nominal, T& used) -> T
     {
-        const T ahead = f(x + step);
+        const T edge = x + nominal;
+        const T step = edge - x;
+        used = step > T{0} ? step : nominal;
+        const T ahead = f(edge);
         const T behind = f(x - step);
-        return (ahead - behind) / (T{2} * step);
+        return (ahead - behind) / (T{2} * used);
     };
     // Only the previous and the current tableau column are ever needed.
     T columns[2][maxLevels];
     T* prev = columns[0];
     T* cur = columns[1];
-    T step = h;
-    prev[0] = central(step);
+    // Weights of the finer and the coarser entry for each order of the level being formed.
+    T keepFine[maxLevels];
+    T dropCoarse[maxLevels];
+    // The steps that were sampled, finest last.
+    T sampled[maxLevels];
+    T levelWeight = T{1};
+    T nominal = crd::math::fabs(h) > T{0} ? crd::math::fabs(h) : static_cast<T>(0.1);
+    const T start = nominal;
+    bool fromSampled = false;
+    prev[0] = central(nominal, sampled[0]);
     T bestErr = std::numeric_limits<T>::max();
     T best = prev[0];
     for (int level = 1; level < levels; ++level)
     {
-        step /= shrink;
-        cur[0] = central(step);
-        T weight = shrinkSq;
+        nominal /= shrink;
+        cur[0] = central(nominal, sampled[level]);
+        if (level == 1)
+        {
+            // The sum x + nominal is rounded by at most eps*(x + nominal)/2, so a sampled step is off from its
+            // nominal one by a relative d <= eps*(x + start)/(2*nominal) at most, whatever f is. A weight off by d
+            // moves a tableau entry by about 4*d times the difference of the two entries it combines, and two steps
+            // can each be off: 8*d times the first difference, held to 64 eps of the value, is the condition below.
+            // The bound falls with the step (the differences fall as its square), so the first level decides.
+            fromSampled = (x + start) * crd::math::fabs(cur[0] - prev[0]) > T{16} * nominal * crd::math::fabs(cur[0]);
+        }
+        if (fromSampled)
+        {
+            const T finerInv = T{1} / sampled[level];
+            for (int order = 1; order <= level; ++order)
+            {
+                const T ratio = sampled[level - order] * finerInv;
+                const T w = ratio * ratio;
+                // Equal sampled steps (quantised to ulp(x)) carry nothing to extrapolate with: keep the finer entry.
+                dropCoarse[order] = w > T{1} ? T{1} / (w - T{1}) : T{0};
+                keepFine[order] = w > T{1} ? w * dropCoarse[order] : T{1};
+            }
+        }
+        else
+        {
+            levelWeight = shrinkSq * levelWeight;
+            dropCoarse[level] = T{1} / (levelWeight - T{1});
+            keepFine[level] = levelWeight * dropCoarse[level];
+        }
         for (int order = 1; order <= level; ++order)
         {
-            cur[order] = (cur[order - 1] * weight - prev[order - 1]) / (weight - T{1});
-            weight = shrinkSq * weight;
+            cur[order] = cur[order - 1] * keepFine[order] - prev[order - 1] * dropCoarse[order];
             const T dOrder = crd::math::fabs(cur[order] - cur[order - 1]);
             const T dLevel = crd::math::fabs(cur[order] - prev[order - 1]);
             const T spread = dOrder > dLevel ? dOrder : dLevel;
@@ -165,6 +202,41 @@ template <typename T, typename F>
         cur = done;
     }
     return DiffResult<T>{best, bestErr};
+}
+} // namespace detail
+
+// Ridders' method (Ridders 1982, "Accurate computation of F'(x) and F'(x)F''(x)", Adv. Eng. Softw. 4(2)): central
+// differences at geometrically shrinking steps are combined by Neville-style Richardson extrapolation (each column
+// of the tableau removes one more even power of the step), returning the first derivative AND a Tier-1 error
+// estimate. Far more accurate than a fixed-h difference.
+//
+// Steps and weights at large |x|. Each nominal step is replaced by the difference (x + nominal) - x, which is exact
+// once |x| is at least the step, and the point behind x is then exact as well: x +- step are exactly representable
+// and 2*step is their true spacing. Dividing by the nominal 2*step instead costs a relative error of order
+// ulp(x)/step, already 1e-12 at |x| = 100 with the default h. A negative x is differentiated on the mirrored function
+// g(t) = f(-t) at -x, and the sign of the result is restored, so that the first point always lies on the side of x
+// away from zero: there the point behind x moves toward zero and stays exact, where on the other side it would round
+// whenever it crosses into the next binade. The points f is evaluated at are the same.
+//
+// The sampled steps are multiples of ulp(x), so once |x| is large they are no longer in the ratio 1.4, and the
+// Richardson weights 1.4^(2k) leave a residue of order ulp(x)*step*|f'''| in the extrapolated value. The weights of the
+// tableau (w/(w - 1) on the finer entry and 1/(w - 1) on the coarser one, w the squared ratio of the coarsest to the
+// finest step of the entry) are therefore formed from the nominal ratio, once per level, while a bound on that residue
+// stays at the rounding level of the answer, and from the sampled steps for the whole call otherwise. A zero or NaN h
+// starts from 0.1, a negative h from its magnitude.
+template <typename T, typename F>
+[[nodiscard]] DiffResult<T> derivative_ridders(F&& f, T x, T h = static_cast<T>(0.1), int ntab = 10)
+{
+    if (x < T{0})
+    {
+        auto mirrored = [&f](T t) -> T
+        {
+            return f(-t);
+        };
+        const DiffResult<T> r = detail::ridders_right<T>(mirrored, -x, h, ntab);
+        return DiffResult<T>{-r.value, r.error_estimate};
+    }
+    return detail::ridders_right<T>(f, x, h, ntab);
 }
 
 // First derivative by the 2nd-order forward difference (f(x+h)−f(x))/h with the optimal forward step (√ε·scale) if

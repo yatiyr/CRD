@@ -98,6 +98,99 @@ TEST_CASE("v13-l: central FD + Ridders extrapolation vs analytic", "[v13-l][diff
     CHECK(close(d::second_derivative_central<f64>(f, 1.0), r2, 1e-6, 1e-7));
 }
 
+TEST_CASE("v13-l: Ridders at large |x| divides by the sampled spacing; h = 0 and h < 0 are handled", "[v13-l][diff]")
+{
+    // Once |x| is well above the step the points x +- step are rounded to ulp(x); dividing by 2*step instead of their
+    // true spacing costs a relative error ~ ulp(x)/step (1.3e-12 at 1e3, 4.6e-9 at 1e6 with the default h = 0.1).
+    auto g = [](f64 t)
+    {
+        return std::sin(t);
+    };
+    for (const f64 x : {1.0e3, 1.0e4, 1.0e5, 1.0e6})
+    {
+        const auto r = d::derivative_ridders<f64>(g, x);
+        CHECK(close(r.value, std::cos(x), 1e-12, 1e-13));
+    }
+    // The same error sits below 1024 steps: exp(sin t) at |x| between 70 and 1100 with h = 0.1 and h = 1 was off by
+    // 2e-13 .. 3e-12 against a limit of 1e-13 + 1e-12 |f'| (the estimate was up to 5x too low).
+    auto e = [](f64 t)
+    {
+        return std::exp(std::sin(t));
+    };
+    const f64 x01 = 77.730667853454918;
+    const auto r01 = d::derivative_ridders<f64>(e, x01, 0.1);
+    CHECK(close(r01.value, std::cos(x01) * std::exp(std::sin(x01)), 1e-12, 1e-13));
+    for (const f64 xs : {530.4180450130898, 540.37800333792541, 555.80841584988832, 566.24893672601331,
+                         861.28048353821112, 1018.7861051711783})
+    {
+        const auto r1 = d::derivative_ridders<f64>(e, xs, 1.0);
+        CHECK(close(r1.value, std::cos(xs) * std::exp(std::sin(xs)), 1e-12, 1e-13));
+    }
+    // h = 0 (or NaN) starts from the default 0.1; a negative h is its magnitude.
+    auto f = [](f64 t)
+    {
+        return std::exp(std::sin(t));
+    };
+    const f64 ref = std::cos(1.0) * std::exp(std::sin(1.0));
+    const auto z = d::derivative_ridders<f64>(f, 1.0, 0.0);
+    CHECK(close(z.value, ref, 1e-12, 1e-13));
+    CHECK(z.error_estimate < 1e-9);
+    const auto dflt = d::derivative_ridders<f64>(f, 1.0, 0.1);
+    CHECK(z.value == dflt.value);
+    const auto neg = d::derivative_ridders<f64>(f, 1.0, -0.1);
+    CHECK(neg.value == dflt.value);
+    CHECK(neg.error_estimate == dflt.error_estimate);
+}
+
+TEST_CASE("v13-l: Ridders below zero and at large |x| samples exact points and extrapolates with the sampled steps",
+          "[v13-l][diff]")
+{
+    auto g = [](f64 t)
+    {
+        return std::sin(t);
+    };
+    auto e = [](f64 t)
+    {
+        return std::exp(std::sin(t));
+    };
+    // For x < 0 the points must be exact as well: the mirrored function keeps the point behind x on the side toward
+    // zero, where it stays exact even when x lies within one step below a power of two (|x| = 1023.99 with h = 0.1
+    // was 6.0e-12 off against a limit of 1.1e-12).
+    struct Point
+    {
+        f64 x;
+        f64 h;
+    };
+    for (const Point p : {Point{-1023.99, 0.1}, Point{-1023.999, 0.1}, Point{-1023.9999, 0.1}, Point{-4095.99, 0.1},
+                          Point{-2047.95, 1.0}, Point{-1048575.99, 0.1}, Point{-1048575.99, 1.0},
+                          Point{-1048575.9, 1.0}, Point{-1.0e6, 0.1}, Point{-1.0e5, 1.0}})
+    {
+        const auto r = d::derivative_ridders<f64>(g, p.x, p.h);
+        CHECK(close(r.value, std::cos(p.x), 1e-12, 1e-13));
+        if (p.h < 0.5)
+        {
+            // (h = 1 is too large a start for exp(sin t): its extrapolation fails the same way on either side of zero.)
+            const auto re = d::derivative_ridders<f64>(e, p.x, p.h);
+            CHECK(close(re.value, std::cos(p.x) * std::exp(std::sin(p.x)), 1e-12, 1e-13));
+        }
+    }
+    // From 1e5 up the sampled steps are multiples of ulp(x) and no longer in the ratio 1.4: the weights come from them.
+    for (const Point p : {Point{1.0e6, 1.0}, Point{1.0e5, 1.0}, Point{2.0e6, 0.1}, Point{1048575.99, 0.1},
+                          Point{3.3e6, 0.1}, Point{5.5e6, 0.1}, Point{1.0e7, 0.1}, Point{7.7e7, 0.1}, Point{1.0e8, 0.1},
+                          Point{2.5e6, 1.0}, Point{4.0e7, 1.0}})
+    {
+        const auto r = d::derivative_ridders<f64>(g, p.x, p.h);
+        CHECK(close(r.value, std::cos(p.x), 1e-12, 1e-13));
+        const auto n = d::derivative_ridders<f64>(g, -p.x, p.h);
+        CHECK(close(n.value, std::cos(p.x), 1e-12, 1e-13));
+    }
+    for (const Point p : {Point{2.0e5, 0.1}, Point{4.5e5, 0.1}, Point{8.1e5, 0.1}, Point{3.0e6, 0.1}})
+    {
+        const auto r = d::derivative_ridders<f64>(e, p.x, p.h);
+        CHECK(close(r.value, std::cos(p.x) * std::exp(std::sin(p.x)), 1e-12, 1e-13));
+    }
+}
+
 TEST_CASE("v13-l: FD Jacobian + Hessian-vector + forward difference", "[v13-l][diff]")
 {
     // forward difference: f=exp, f'(1)=e (one-sided, ~sqrt(eps))

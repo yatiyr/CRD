@@ -112,14 +112,15 @@ template <typename T, typename F> inline void brent_bracket(const F& f, T& lo, T
         }
         else if ((hi - vertex) * (vertex - reach) > static_cast<T>(0))
         {
-            // Vertex beyond hi but within reach: take it, and if it still descends, probe a further step. That
-            // step is measured from the vertex just taken, so it has zero length and re-samples the same point.
+            // Vertex beyond hi but within reach: take it, and if it still descends, probe one golden step further.
+            // After the slide the window ends (previous hi, vertex), so that step runs on from the vertex along the
+            // direction of the walk and the bracket keeps opening while f is still falling.
             const T fVertex = f(vertex);
             const bool descends = fVertex < fHi;
             slide(vertex, fVertex);
             if (descends)
             {
-                const T again = golden_past(hi, vertex);
+                const T again = golden_past(mid, hi);
                 slide(again, f(again));
             }
         }
