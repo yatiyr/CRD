@@ -25,6 +25,11 @@
 //   close     a Closed connection's last bytes are tried once. It ends with a FIN when everything went out, and with a
 //             reset when bytes could not be sent, the handshake timed out or the transport had failed. Then it is
 //             reported and its slot reused under a new generation.
+//   HTTP/2    a connection whose TLS agrees on h2 (QmuxConfig::http2) is the bearer of WebSocket tunnels (RFC 8441):
+//             each tunnel is a connection of its own to the application, with its own handle from the same pool, so
+//             `connections` bounds both. A server's tunnel is accepted when its extended CONNECT is (with the bearer's
+//             peer), and refused with CONNECTION_REFUSED when no slot is free; a client opens one with open_tunnel().
+//             A tunnel is served when its bearer is, and every tunnel is reported closed before its bearer.
 //   memory    the pool, the heap and the turn's buffers come from the injected allocator at construction; a
 //             connection's streams and datagrams when it is opened, so a host bounds them with its allocator. A turn
 //             allocates nothing else.
@@ -60,7 +65,7 @@ struct QmuxHostConfig
     // Every connection's: `tls` is a server's context for the connections it accepts, null for a host that only
     // connects, whose connect() names one for each. What it points at must outlive the host.
     QmuxConfig connection;
-    u32 connections = 256U;                    // live connections at most (1 to kQuicMaxHostConnections)
+    u32 connections = 256U;                    // live connections and tunnels at most (1 to kQuicMaxHostConnections)
     u32 ready_per_turn = 256U;                 // readiness reports one turn takes, at least 1
     u32 accepts_per_turn = 32U;                // connections one turn accepts, at least 1
     u64 accept_retry_ns = 100'000'000U;        // accepting pauses this long when the host is out of descriptors
@@ -80,7 +85,8 @@ class QmuxHostEvents
 {
 public:
     virtual ~QmuxHostEvents() = default;
-    // A connection was accepted from `peer`, before it reads anything.
+    // A connection was accepted from `peer`, before it reads anything; or a tunnel, once its extended CONNECT was, with
+    // its bearer's peer.
     virtual void on_accept(QuicHandle handle, QmuxConnection& connection, const Endpoint& peer) noexcept = 0;
     // The connection read, timed out or was woken: the application reads and writes its streams and datagrams; what it
     // writes is sent right after. A connection that ended on what it read or its timer comes here once more, Closed,
@@ -112,6 +118,8 @@ struct QmuxHostCounters
     u64 bytes_read = 0U;
     u64 bytes_written = 0U;
     u64 write_blocks = 0U; // writes the socket stopped
+    u64 tunnels = 0U;         // tunnels opened on HTTP/2 connections, either end's
+    u64 tunnels_refused = 0U; // a server's: tunnels refused, every slot was in use
 };
 
 class QmuxHost
@@ -142,7 +150,11 @@ public:
     // configuration (error Failed) or the socket could not start (`error` names why).
     [[nodiscard]] QuicHandle connect(const QmuxConnect& request, u64 now_ns, SocketError& error) noexcept;
 
-    // The live connection `handle` names; null for a stale or unknown handle.
+    // A client's new WebSocket tunnel on the HTTP/2 connection `bearer`: the handle it is reported by, invalid when no
+    // slot is free (NoTunnel) or the connection refused it (`error`: NotReady until the server's SETTINGS allow it).
+    [[nodiscard]] QuicHandle open_tunnel(QuicHandle bearer, u64 now_ns, WsTunnelError& error) noexcept;
+
+    // The live connection `handle` names; null for a stale or unknown handle, and for a tunnel not open yet.
     [[nodiscard]] QmuxConnection* connection(QuicHandle handle) noexcept;
     // Serves the connection in the next turn (the application wrote to it outside on_service).
     void wake(QuicHandle handle) noexcept;
@@ -158,6 +170,8 @@ private:
         u32 generation = 0U;
         u32 next_free = kNoConnection;
         SocketError transport = SocketError::None; // how the socket failed
+        u32 bearer = kNoConnection;                // a tunnel's: the slot of the connection it runs on
+        QuicHandle tunnel;                         // a tunnel's handle on that connection
         u8 interests = 0U;                         // what the poller was last asked for
         bool connecting = false;                   // its TCP connection is not made yet
         bool write_blocked = false;                // the socket is full: writes wait for it to be writable
@@ -177,6 +191,11 @@ private:
     void transport_failed(Slot& slot, SocketError error, u64 now_ns) noexcept;
     void set_interest(u32 index, u8 interests) noexcept;
     void serve(u32 index, u64 now_ns) noexcept;
+    // Reports what happened to the tunnels of the HTTP/2 connection at `index`.
+    void serve_tunnels(u32 index, u64 now_ns) noexcept;
+    void adopt_tunnel(u32 bearer, const WsTunnelEvent& event, u64 now_ns) noexcept;
+    [[nodiscard]] u32 claim_tunnel(u32 bearer, QuicHandle tunnel) noexcept;
+    void release_tunnel(u32 index) noexcept;
     void reclaim(u32 index, u64 now_ns) noexcept;
     [[nodiscard]] QuicHandle handle_of(u32 index) const noexcept;
 

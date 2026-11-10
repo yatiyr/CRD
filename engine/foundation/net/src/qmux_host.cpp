@@ -4,6 +4,7 @@
 #include <crd/memory/construct.hpp>
 #include <crd/net/ingress.hpp>
 #include <crd/net/qmux_host.hpp>
+#include <crd/net/websocket_tunnel.hpp>
 
 #include <new>
 
@@ -73,9 +74,9 @@ QmuxHost::~QmuxHost()
     const u32 count = m_config.connections;
     for (u32 index = 0U; index < count; ++index)
     {
-        if (m_slots[index].connection != nullptr)
+        if (m_slots[index].connection != nullptr && m_slots[index].bearer == kNoConnection)
         {
-            m_slots[index].connection->~QmuxConnection();
+            m_slots[index].connection->~QmuxConnection(); // a bearer's tunnels go with it
             m_poller.close(index, true);
         }
     }
@@ -393,10 +394,12 @@ void QmuxHost::serve(u32 index, u64 now_ns) noexcept
     {
         connection.on_timeout(now_ns);
     }
+    serve_tunnels(index, now_ns); // a bearer that ended reports its tunnels before its own last service
     m_events.on_service(handle_of(index), connection, now_ns);
     const bool more = write_some(index, now_ns);
     if (connection.state() == QmuxState::Closed)
     {
+        serve_tunnels(index, now_ns); // a bearer that ended as it wrote: its tunnels end with it, reported first
         reclaim(index, now_ns);
         return;
     }
@@ -427,6 +430,112 @@ void QmuxHost::reclaim(u32 index, u64 now_ns) noexcept
     }
 }
 
+// ---- Tunnels ----
+
+void QmuxHost::serve_tunnels(u32 index, u64 now_ns) noexcept
+{
+    QmuxConnection& bearer = *m_slots[index].connection;
+    WsTunnelEvent event;
+    while (bearer.poll_tunnel(event, now_ns))
+    {
+        const u32 tunnel = event.tag;
+        if (tunnel == kNoConnection)
+        {
+            if (event.kind == WsTunnelEventKind::Opened)
+            {
+                adopt_tunnel(index, event, now_ns);
+            }
+            continue; // a tunnel refused for want of a slot ends unreported
+        }
+        m_slots[tunnel].connection = event.connection;
+        const QuicHandle handle = handle_of(tunnel);
+        // A tunnel that ended is served once more, Closed, by its Closed event; one refused never opened.
+        const bool closed = event.kind == WsTunnelEventKind::Closed;
+        if (closed || (event.kind != WsTunnelEventKind::Refused && event.connection->state() != QmuxState::Closed))
+        {
+            m_events.on_service(handle, *event.connection, now_ns);
+        }
+        if (closed || event.kind == WsTunnelEventKind::Refused)
+        {
+            m_events.on_closed(handle, *event.connection, SocketError::None);
+            release_tunnel(tunnel);
+        }
+    }
+}
+
+void QmuxHost::adopt_tunnel(u32 bearer, const WsTunnelEvent& event, u64 now_ns) noexcept
+{
+    const u32 tunnel = claim_tunnel(bearer, event.tunnel);
+    if (tunnel == kNoConnection)
+    {
+        ++m_counters.tunnels_refused;
+        event.connection->refuse(now_ns);
+        return;
+    }
+    m_slots[tunnel].connection = event.connection;
+    const QuicHandle handle = handle_of(tunnel);
+    m_events.on_accept(handle, *event.connection, m_slots[bearer].socket->peer_endpoint());
+    if (event.connection->state() != QmuxState::Closed) // else its Closed event follows
+    {
+        m_events.on_service(handle, *event.connection, now_ns);
+    }
+}
+
+u32 QmuxHost::claim_tunnel(u32 bearer, QuicHandle tunnel) noexcept
+{
+    const u32 index = m_free;
+    if (index == kNoConnection || !m_slots[bearer].connection->tag_tunnel(tunnel, index))
+    {
+        return kNoConnection;
+    }
+    Slot& slot = m_slots[index];
+    m_free = slot.next_free;
+    slot.next_free = kNoConnection;
+    slot.bearer = bearer;
+    slot.tunnel = tunnel;
+    slot.transport = SocketError::None;
+    ++m_live;
+    ++m_counters.tunnels;
+    return index;
+}
+
+void QmuxHost::release_tunnel(u32 index) noexcept
+{
+    Slot& slot = m_slots[index];
+    slot.connection = nullptr;
+    slot.bearer = kNoConnection;
+    slot.tunnel = QuicHandle{};
+    ++slot.generation;
+    slot.next_free = m_free;
+    m_free = index;
+    --m_live;
+    ++m_counters.closed;
+}
+
+QuicHandle QmuxHost::open_tunnel(QuicHandle bearer, u64 now_ns, WsTunnelError& error) noexcept
+{
+    QmuxConnection* const connection = this->connection(bearer);
+    if (connection == nullptr || m_slots[bearer.slot].bearer != kNoConnection)
+    {
+        error = WsTunnelError::Refused; // no such connection, or a tunnel, which carries none
+        return QuicHandle{};
+    }
+    if (m_free == kNoConnection)
+    {
+        error = WsTunnelError::NoTunnel;
+        return QuicHandle{};
+    }
+    QuicHandle tunnel;
+    error = connection->open_tunnel(now_ns, tunnel);
+    if (error != WsTunnelError::None)
+    {
+        return QuicHandle{};
+    }
+    const u32 index = claim_tunnel(bearer.slot, tunnel); // a slot is free and the handle fresh, so it cannot fail
+    m_heap.schedule(bearer.slot, now_ns);                // its request goes out in the next turn
+    return handle_of(index);
+}
+
 // ---- The application's side ----
 
 QmuxConnection* QmuxHost::connection(QuicHandle handle) noexcept
@@ -443,7 +552,8 @@ void QmuxHost::wake(QuicHandle handle) noexcept
 {
     if (connection(handle) != nullptr)
     {
-        m_heap.schedule(handle.slot, 0U);
+        const u32 bearer = m_slots[handle.slot].bearer; // a tunnel is served with the connection it runs on
+        m_heap.schedule((bearer != kNoConnection) ? bearer : handle.slot, 0U);
     }
 }
 

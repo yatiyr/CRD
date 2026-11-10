@@ -146,7 +146,8 @@ struct End
 
     void record(const WsTunnelEvent& event)
     {
-        REQUIRE((event.connection == nullptr) == (event.kind == WsTunnelEventKind::Refused));
+        REQUIRE(event.connection != nullptr);
+        REQUIRE((event.kind != WsTunnelEventKind::Refused || event.connection->state() == QmuxState::Closed));
         if (event.kind == WsTunnelEventKind::Service)
         {
             ++services;

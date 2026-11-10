@@ -52,7 +52,8 @@ enum class WsTunnelEventKind : u8
     Opened,  // a server accepted one, or a client's was answered 2xx; what arrived behind it may have ended it already,
              // and its Closed follows
     Refused, // a client's: `status` of the response (0 for a 2xx it refuses) or `error` of a reset, both 0 when no
-             // answer came within the handshake timeout; then forgotten
+             // answer came within the handshake timeout; its connection is Closed and says which (UpgradeRefused,
+             // Reset, Truncated or HandshakeTimeout); then forgotten
     Service, // bytes arrived or a timer ran: read and write its streams
     Closed,  // the tunnel is Closed: read what arrived before the end; it is destroyed by the next poll()
 };
@@ -63,6 +64,7 @@ struct WsTunnelEvent
     QuicHandle tunnel;
     u64 stream = 0U;
     QmuxConnection* connection = nullptr; // valid until the next poll()
+    u32 tag = kNoConnection;              // what the owner tagged the tunnel with
     u16 status = 0U;
     u64 error = 0U;
 };
@@ -111,6 +113,11 @@ public:
     [[nodiscard]] WsTunnelError open(u64 now_ns, QuicHandle& handle) noexcept;
     // The live tunnel `handle` names; null for a stale or unknown handle.
     [[nodiscard]] QmuxConnection* connection(QuicHandle handle) noexcept;
+    // Names the tunnel in its events from now on (a host's own slot for it); false for a stale or unknown handle.
+    [[nodiscard]] bool tag(QuicHandle handle, u32 tag) noexcept;
+    // The transport beneath the HTTP connection ended, or its owner closed it: every tunnel ends at the next poll(),
+    // as on a failed HTTP connection.
+    void bearer_ended() noexcept { m_bearer_ended = true; }
     [[nodiscard]] u32 live() const noexcept { return m_live; }
 
 private:
@@ -121,6 +128,7 @@ private:
         u64 deadline_ns = kQmuxNoTimer; // a client's: the answer is due by then
         u64 error = 0U;
         u32 generation = 0U;
+        u32 tag = kNoConnection;
         u16 status = 0U;
         bool opening = false;     // a client's: no answer yet
         bool stopped = false;     // the peer reads no more of the stream (STOP_SENDING)
@@ -136,6 +144,8 @@ private:
     [[nodiscard]] Slot* find(u64 stream) noexcept;
     [[nodiscard]] u32 claim(u64 stream) noexcept;
     void forget(u32 index) noexcept;
+    // A client's tunnel that will not open: its connection is Closed for `reason`, and the end is reported.
+    void refuse(Slot& slot, QmuxCloseReason reason, u64 code) noexcept;
     [[nodiscard]] QuicHandle handle_of(u32 index) const noexcept;
     [[nodiscard]] bool on_headers(u64 stream, cont::ConstSpan<HttpField> fields, const HttpMessageInfo& info,
                                   bool early, u64 now_ns) noexcept;
@@ -167,6 +177,7 @@ private:
     u32 m_walk = 0U;   // where poll()'s walk stands
     u32 m_first = 0U;  // where the next flush starts, so no tunnel is always first
     u32 m_release = 0U; // 1 + the slot whose end was just reported
+    bool m_bearer_ended = false;
 };
 
 } // namespace crd::net

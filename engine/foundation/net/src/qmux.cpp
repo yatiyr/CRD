@@ -171,6 +171,7 @@ void put_parameter(cont::WireWriter& out, u64 id, u64 value) noexcept
 
 QmuxConnection::~QmuxConnection()
 {
+    release_http2();
     if (m_stage != nullptr)
     {
         memory::deallocate_array(*m_allocator, m_stage);
@@ -196,8 +197,9 @@ bool QmuxConnection::init(memory::IAllocator& allocator, const QmuxConfig& confi
         return false;
     }
     const bool client = tunnel ? config.tunnel == QmuxTunnel::Client : config.tls->role() == crypto::TlsRole::Client;
-    if (config.websocket != nullptr &&
-        (!ws_config_valid(*config.websocket, client) || (!tunnel && client && config.tls->early_data())))
+    if ((config.websocket != nullptr &&
+         (!ws_config_valid(*config.websocket, client) || (!tunnel && client && config.tls->early_data()))) ||
+        (config.http2 != nullptr && (tunnel || !http2_config_valid(config, client))))
     {
         return false;
     }
@@ -215,8 +217,8 @@ bool QmuxConnection::init(memory::IAllocator& allocator, const QmuxConfig& confi
         {
             return false;
         }
-        m_allocator = &allocator;
     }
+    m_allocator = &allocator;
     m_config = config;
     m_ready = true;
     return true;
@@ -381,6 +383,10 @@ void QmuxConnection::advance(u64 now_ns) noexcept
     const bool reading_early = !is_client() && m_tls.early_data() == crypto::TlsEarlyData::Accepted;
     if (m_state == QmuxState::Handshaking && (done || reading_early))
     {
+        if (m_framing == Framing::Records && takes_http2())
+        {
+            begin_http2(now_ns); // Established, or Closed when its state could not be made
+        }
         if (m_framing == Framing::Records && takes_websocket())
         {
             if (!done)
@@ -420,7 +426,7 @@ void QmuxConnection::established(u64 now_ns) noexcept
     }
     m_last_activity = now_ns;
     m_idle_ns = m_config.idle_timeout_ns;
-    m_ping_owed = true; // the first RTT sample, which tunes the windows
+    m_ping_owed = m_framing != Framing::Http2; // the first RTT sample, which tunes the windows
 }
 
 void QmuxConnection::drain(u64 now_ns) noexcept
@@ -464,6 +470,11 @@ void QmuxConnection::parse_records(u64 now_ns) noexcept
     if (m_framing == Framing::Messages)
     {
         parse_frames(now_ns);
+        return;
+    }
+    if (m_framing == Framing::Http2)
+    {
+        parse_http2(now_ns);
         return;
     }
     usize at = 0U;
@@ -742,6 +753,11 @@ void QmuxConnection::finish_sending() noexcept
             static_cast<void>(send_control(WsOpcode::Close, cont::ConstSpan<u8>(status, sizeof(status))));
             m_ws.close_sent = true;
         }
+        if (m_framing == Framing::Http2)
+        {
+            wind_down_http2();
+            static_cast<void>(send_http2()); // what fits goes ahead of close_notify; after the peer's, nothing can
+        }
         if (!tunneled())
         {
             static_cast<void>(m_tls.close()); // close_notify; a session past that has nothing to add
@@ -797,7 +813,7 @@ crypto::TlsError QmuxConnection::send_record(cont::ConstSpan<u8> record) noexcep
 bool QmuxConnection::wants_write(u64 now_ns) const noexcept
 {
     return !m_transport_over &&
-           (stage_pending() != 0U || m_close_owed ||
+           (stage_pending() != 0U || m_close_owed || http2_pending() ||
             ((m_state == QmuxState::Established || early_open()) && frames_due(now_ns)));
 }
 
@@ -890,6 +906,11 @@ crypto::TlsError QmuxConnection::stage_send(cont::ConstSpan<u8> bytes) noexcept
 
 void QmuxConnection::produce(u64 now_ns) noexcept
 {
+    if (m_framing == Framing::Http2)
+    {
+        produce_http2(now_ns);
+        return;
+    }
     while (m_state == QmuxState::Established || m_close_owed || early_open())
     {
         if (stage_pending() + sizeof(m_out) + kWsMaxControlBytes + kTlsRecordOverhead > stage_capacity())
@@ -1080,7 +1101,13 @@ usize QmuxConnection::build_record(u64 now_ns) noexcept
 
 u64 QmuxConnection::idle_deadline() const noexcept
 {
-    return (m_idle_ns != 0U) ? m_last_activity + m_idle_ns : kQmuxNoTimer;
+    // An HTTP/2 connection idles only while it carries no tunnel: theirs are the timers that count then.
+    return (m_idle_ns != 0U && tunnels_live() == 0U) ? m_last_activity + m_idle_ns : kQmuxNoTimer;
+}
+
+bool QmuxConnection::keepalive_on() const noexcept
+{
+    return m_config.keepalive_ns != 0U && m_framing != Framing::Http2 && !m_ping_owed;
 }
 
 u64 QmuxConnection::next_timer_ns() const noexcept
@@ -1092,9 +1119,10 @@ u64 QmuxConnection::next_timer_ns() const noexcept
         case QmuxState::Established:
         {
             const u64 idle = idle_deadline();
-            const u64 keepalive =
-                (m_config.keepalive_ns != 0U && !m_ping_owed) ? m_last_activity + m_config.keepalive_ns : kQmuxNoTimer;
-            const u64 first = (idle < keepalive) ? idle : keepalive;
+            const u64 keepalive = keepalive_on() ? m_last_activity + m_config.keepalive_ns : kQmuxNoTimer;
+            const u64 http2 = http2_deadline();
+            const u64 timers = (idle < keepalive) ? idle : keepalive;
+            const u64 first = (timers < http2) ? timers : http2;
             return (first < m_handshake_deadline) ? first : m_handshake_deadline;
         }
         case QmuxState::Closing:
@@ -1121,14 +1149,17 @@ void QmuxConnection::on_timeout(u64 now_ns) noexcept
         finish_sending(); // section 7.1: without a frame
         m_state = QmuxState::Closed;
     }
-    else if (m_state == QmuxState::Established && m_config.keepalive_ns != 0U && !m_ping_owed &&
-             now_ns >= m_last_activity + m_config.keepalive_ns)
+    else if (m_state == QmuxState::Established && keepalive_on() && now_ns >= m_last_activity + m_config.keepalive_ns)
     {
         m_ping_owed = true;
     }
     else if (m_state == QmuxState::Closing && now_ns >= m_close_deadline)
     {
         m_state = QmuxState::Closed;
+    }
+    if (m_state == QmuxState::Established && m_framing == Framing::Http2)
+    {
+        parse_http2(now_ns); // HTTP/2's own timer: SETTINGS_TIMEOUT
     }
 }
 
@@ -1148,13 +1179,39 @@ void QmuxConnection::close(u64 application_error, cont::ConstSpan<u8> reason, u6
     {
         return;
     }
+    keep_reason(reason);
+    if (m_framing == Framing::Http2)
+    {
+        close_http2(QmuxCloseReason::Local, application_error);
+        return;
+    }
     m_close.reason = QmuxCloseReason::Local;
     m_close.application = true;
     m_close.error_code = application_error;
     m_close.frame_type = 0U;
-    keep_reason(reason);
     m_close_owed = true;
     m_state = QmuxState::Closing;
+}
+
+void QmuxConnection::refuse(u64 now_ns) noexcept
+{
+    static_cast<void>(now_ns);
+    if (m_state == QmuxState::Established)
+    {
+        m_frame_type = 0U;
+        fail(QuicTransportError::ConnectionRefused);
+    }
+}
+
+void QmuxConnection::abandon(QmuxCloseReason reason, u64 error_code) noexcept
+{
+    if (m_state == QmuxState::Idle)
+    {
+        m_close.reason = reason;
+        m_close.error_code = error_code;
+        m_transport_over = true;
+        m_state = QmuxState::Closed;
+    }
 }
 
 // ---- WebSocket: the opening handshake, then a record per message (RFC 6455) ----

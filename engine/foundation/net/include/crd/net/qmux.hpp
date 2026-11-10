@@ -29,6 +29,9 @@
 //   tunnel    a connection over an HTTP/2 or HTTP/3 stream (RFC 8441, RFC 9220; websocket_tunnel.hpp) is that same message
 //             stage with no TLS of its own: bytes in and out are the stream's, and the extended CONNECT was its opening
 //             handshake.
+//   HTTP/2    a connection whose TLS agrees on h2, where an Http2Config allows it, carries HTTP/2 (RFC 9113) and its
+//             WebSocket tunnels: the browser's path when it already holds an HTTP/2 connection to the origin (contract:
+//             docs/design/network-foundation.md#h2-bearer). The connection is their bearer and carries no records.
 //   memory    records use two fixed buffers of the connection; streams and datagrams allocate at init(), never after.
 //   threads   one thread at a time.
 
@@ -36,6 +39,7 @@
 #include <crd/core/types.hpp>
 #include <crd/crypto/quic.hpp>
 #include <crd/crypto/tls.hpp>
+#include <crd/net/host_handle.hpp>
 #include <crd/net/quic_datagram.hpp>
 #include <crd/net/quic_frame.hpp>
 #include <crd/net/quic_stream_set.hpp>
@@ -48,6 +52,12 @@ class IAllocator;
 
 namespace crd::net
 {
+struct Http2Config;
+struct Http2Event;
+struct WsTunnelEvent;
+enum class WsTunnelError : u8;
+struct QmuxHttp2;
+
 // The default of max_record_size, and the largest record either side sends or accepts.
 inline constexpr usize kQmuxMaxRecord = 16382U;
 // The bytes of a close reason phrase kept, sent or read; a longer one is cut.
@@ -76,6 +86,12 @@ struct QmuxConfig
     const WebSocketConfig* websocket = nullptr;
     // Set by the owner of a tunnel, whose `websocket` is required and whose TLS and tickets are the bearer's.
     QmuxTunnel tunnel = QmuxTunnel::None;
+    // Takes connections whose TLS agrees on `h2` as HTTP/2 whose extended CONNECTs open WebSocket tunnels of `websocket`,
+    // which is then required; null for none. Its side is the connection's and its frames at most kHttp2MinFrameBytes
+    // (one TLS record); a server's takes extended CONNECT, and a client's context must not ask for early data. Every
+    // tunnel runs this configuration's limits and timers. What it points at must outlive the connection.
+    const Http2Config* http2 = nullptr;
+    u32 http2_tunnels = 4U; // the tunnels one HTTP/2 connection carries at once, 1 to kWsMaxTunnels
     QuicStreamLimits streams;
     QuicDatagramLimits datagrams;
     u64 idle_timeout_ns = 30'000'000'000U;      // the idle timeout offered; 0 for none
@@ -102,7 +118,8 @@ enum class QmuxCloseReason : u8
     None,
     Local,            // close() was called: `application`, error_code
     Error,            // this side closed with the transport error `error_code` (frame_type: the frame that caused it)
-    Peer,             // the peer's CONNECTION_CLOSE: `application`, error_code, frame_type
+    Peer,             // the peer's CONNECTION_CLOSE: `application`, error_code, frame_type; on HTTP/2 its GOAWAY with an
+                      // error (error_code, not `application`)
     PeerShutdown,     // the peer's close_notify with no CONNECTION_CLOSE (its idle timeout, draft section 7.1), or
                       // its WebSocket Close with none (error_code: the Close frame's status, 1005 for none)
     IdleTimeout,      // this side's idle timeout
@@ -113,6 +130,8 @@ enum class QmuxCloseReason : u8
     UpgradeRefused,   // the opening handshake failed: error_code is the HTTP status (a server's answer, or the one a
                       // client read; 0 for a response this client refuses)
     WebSocketFailed,  // this side failed the WebSocket with the Close status error_code
+    Http2Failed,      // this side's HTTP/2 connection error error_code (RFC 9113 section 7), INTERNAL_ERROR when its
+                      // state could not be allocated
 };
 
 struct QmuxCloseInfo
@@ -179,6 +198,22 @@ public:
     void close(u64 application_error, cont::ConstSpan<u8> reason, u64 now_ns) noexcept;
     // Sends a QX_PING request.
     void ping() noexcept { m_ping_owed = true; }
+    // Ends an Established connection with CONNECTION_REFUSED (RFC 9000 section 20.1): its host has no room for it.
+    void refuse(u64 now_ns) noexcept;
+    // A tunnel that never opened (WebSocketTunnels' refusals): Closed for `reason` with `error_code`.
+    void abandon(QmuxCloseReason reason, u64 error_code) noexcept;
+
+    // ---- HTTP/2 (http2()) ----
+    // The next thing that happened to a tunnel, false when nothing is left for now (websocket_tunnel.hpp). Once this
+    // connection closes, every tunnel ends and is reported.
+    [[nodiscard]] bool poll_tunnel(WsTunnelEvent& event, u64 now_ns) noexcept;
+    // A client's new tunnel: NotReady until the server's SETTINGS allow extended CONNECT, Refused on a connection that
+    // is not HTTP/2 or no longer Established.
+    [[nodiscard]] WsTunnelError open_tunnel(u64 now_ns, QuicHandle& handle) noexcept;
+    // Names a tunnel in its events (WebSocketTunnels::tag()); false for a stale handle.
+    [[nodiscard]] bool tag_tunnel(QuicHandle handle, u32 tag) noexcept;
+    // Its tunnels live, opening ones included.
+    [[nodiscard]] u32 tunnels_live() const noexcept;
 
     [[nodiscard]] QmuxState state() const noexcept { return m_state; }
     [[nodiscard]] const QmuxCloseInfo& close_info() const noexcept { return m_close; }
@@ -190,7 +225,12 @@ public:
     [[nodiscard]] const crypto::TlsSession& handshake() const noexcept { return m_tls; }
     [[nodiscard]] bool peer_parameters_known() const noexcept { return m_peer_known; }
     // Whether this connection is a WebSocket, from the moment its TLS agreed on http/1.1.
-    [[nodiscard]] bool websocket() const noexcept { return m_framing != Framing::Records; }
+    [[nodiscard]] bool websocket() const noexcept
+    {
+        return m_framing == Framing::Upgrading || m_framing == Framing::Messages;
+    }
+    // Whether this connection is HTTP/2, from the moment its TLS agreed on h2.
+    [[nodiscard]] bool http2() const noexcept { return m_framing == Framing::Http2; }
     // The subprotocol its opening handshake agreed on; empty until then.
     [[nodiscard]] cont::ConstSpan<u8> websocket_protocol() const noexcept;
     [[nodiscard]] const QuicTransportParameters& peer_parameters() const noexcept { return m_peer; }
@@ -209,6 +249,7 @@ private:
         Records,   // a Size before each record, QMux's own
         Upgrading, // a WebSocket's opening handshake is running
         Messages,  // a record per WebSocket message
+        Http2,     // HTTP/2 carrying WebSocket tunnels: no records
     };
 
     // What an opening handshake or a message in pieces has to remember.
@@ -255,6 +296,23 @@ private:
     // its to write.
     [[nodiscard]] crypto::TlsError send_frame(WsOpcode opcode, u8* payload, usize payload_bytes) noexcept;
     [[nodiscard]] crypto::TlsError send_control(WsOpcode opcode, cont::ConstSpan<u8> payload) noexcept;
+    // ---- HTTP/2 ----
+    [[nodiscard]] static bool http2_config_valid(const QmuxConfig& config, bool client) noexcept;
+    [[nodiscard]] bool takes_http2() const noexcept;
+    [[nodiscard]] bool http2_pending() const noexcept; // output waits in HTTP/2
+    [[nodiscard]] u64 http2_deadline() const noexcept; // HTTP/2's and its tunnels' next timer
+    void release_http2() noexcept;
+    void begin_http2(u64 now_ns) noexcept;
+    void parse_http2(u64 now_ns) noexcept;
+    void on_http2_event(const Http2Event& event, u64 now_ns) noexcept;
+    void produce_http2(u64 now_ns) noexcept;
+    // Moves HTTP/2's output into TLS as far as it has room; what TLS refused, None when it only had no room.
+    [[nodiscard]] crypto::TlsError send_http2() noexcept;
+    // send_http2(), a refusal failing the connection; false then.
+    [[nodiscard]] bool flush_http2() noexcept;
+    // Ends the tunnels and queues GOAWAY: the close every path of an HTTP/2 connection's end takes.
+    void wind_down_http2() noexcept;
+    void close_http2(QmuxCloseReason reason, u64 error_code) noexcept;
     void apply_peer_limits(const QuicTransportParameters& peer) noexcept;
     void fill_local(QuicTransportParameters& local) const noexcept;
     [[nodiscard]] bool early_open() const noexcept;
@@ -271,6 +329,7 @@ private:
     [[nodiscard]] usize write_ping(u64 type, u64 sequence, cont::Span<u8> out) noexcept;
     [[nodiscard]] bool frames_due(u64 now_ns) const noexcept;
     [[nodiscard]] u64 idle_deadline() const noexcept;
+    [[nodiscard]] bool keepalive_on() const noexcept; // QX_PING keeps it alive, and none is owed
     void fail(QuicTransportError error) noexcept;
     void tls_failed(crypto::TlsError error) noexcept;
     void peer_shutdown() noexcept;
@@ -279,6 +338,7 @@ private:
 
     QmuxConfig m_config;
     memory::IAllocator* m_allocator = nullptr;
+    QmuxHttp2* m_h2 = nullptr; // an HTTP/2 connection's state, from the moment its TLS agreed on h2
     u8* m_stage = nullptr; // a tunnel's: frames not yet handed to the stream
     usize m_stage_head = 0U;
     usize m_stage_tail = 0U;

@@ -31,6 +31,8 @@
 //   errors    a connection error writes GOAWAY, stays in error() and stops everything; the owner sends what is left in
 //             output() and closes. A stream error resets the stream and is reported as Aborted, except for a request
 //             the application never saw.
+//   0-RTT     an owner reading TLS early data says how much of the input came in it (early_input()); a request whose
+//             HEADERS frame starts there is reported early, replayable (RFC 8470 section 3).
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
@@ -129,6 +131,7 @@ struct Http2Event
     cont::ConstSpan<HttpField> fields;
     HttpMessageInfo info;
     cont::ConstSpan<u8> payload;
+    bool early = false; // a request whose HEADERS frame started in TLS early data: replayable
 };
 
 enum class Http2Error : u8
@@ -154,6 +157,8 @@ public:
     Http2Connection(Http2Connection&&) = delete;
     Http2Connection& operator=(Http2Connection&&) = delete;
 
+    // Whether init() would take `config`, before it allocates anything.
+    [[nodiscard]] static bool config_valid(const Http2Config& config) noexcept;
     // Writes this side's preface and SETTINGS to output(). False, holding nothing, for a configuration out of range or
     // a refusal. Once.
     [[nodiscard]] bool init(memory::IAllocator& allocator, const Http2Config& config, u64 now_ns) noexcept;
@@ -163,6 +168,8 @@ public:
     [[nodiscard]] bool poll(cont::ConstSpan<u8> input, u64 now_ns, usize& taken, Http2Event& event) noexcept;
     // The most poll() may need to see at once, the frame header included.
     [[nodiscard]] usize input_bytes() const noexcept { return kHttp2FrameHeaderBytes + m_config.frame_bytes; }
+    // The next `bytes` of input, behind what poll() has taken so far, came in TLS early data (RFC 8470).
+    void early_input(usize bytes) noexcept { m_early_left += bytes; }
 
     // The bytes to send, valid until the next call that writes.
     [[nodiscard]] cont::ConstSpan<u8> output() const noexcept
@@ -366,6 +373,7 @@ private:
     RateGate m_control_gate;
     u64 m_now_ns = 0U;
     u64 m_settings_deadline_ns = kNeverNs;
+    usize m_early_left = 0U; // of the input not taken yet, the bytes that came in early data
     i64 m_send_window = kHttp2InitialWindow;
     i64 m_recv_window = kHttp2InitialWindow;
     u32 m_conn_credit = 0U;
@@ -388,6 +396,7 @@ private:
     bool m_need_settings = true;  // the peer's first frame has not come
     bool m_block_open = false;    // CONTINUATION frames must follow
     bool m_block_end = false;     // its HEADERS had END_STREAM
+    bool m_block_early = false;   // its HEADERS started in early data
     bool m_self_dependent = false;
     bool m_frame_is_block = false;
     bool m_settings_acked = false;

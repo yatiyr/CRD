@@ -224,6 +224,28 @@ QmuxConnection* WebSocketTunnels::connection(QuicHandle handle) noexcept
     return (slot.generation == handle.generation && !slot.opening) ? slot.connection : nullptr;
 }
 
+bool WebSocketTunnels::tag(QuicHandle handle, u32 tag) noexcept
+{
+    if (m_slots == nullptr || handle.slot >= m_config.tunnels || m_slots[handle.slot].connection == nullptr ||
+        m_slots[handle.slot].generation != handle.generation)
+    {
+        return false;
+    }
+    m_slots[handle.slot].tag = tag;
+    return true;
+}
+
+void WebSocketTunnels::refuse(Slot& slot, QmuxCloseReason reason, u64 code) noexcept
+{
+    slot.connection->abandon(reason, code);
+    slot.opening = false;
+    slot.deadline_ns = kQmuxNoTimer;
+    slot.finished = true;
+    slot.peer_ended = true;
+    slot.refused = true;
+    slot.report_end = true;
+}
+
 WsTunnelError WebSocketTunnels::open(u64 now_ns, QuicHandle& handle) noexcept
 {
     handle = QuicHandle{};
@@ -307,7 +329,7 @@ bool WebSocketTunnels::on_event(const Http2Event& event, u64 now_ns) noexcept
     switch (event.kind)
     {
         case Http2EventKind::Headers:
-            return on_headers(event.stream, event.fields, event.info, false, now_ns);
+            return on_headers(event.stream, event.fields, event.info, event.early, now_ns);
         case Http2EventKind::Interim:
             return find(event.stream) != nullptr;
         case Http2EventKind::Body:
@@ -444,10 +466,7 @@ void WebSocketTunnels::answer(Slot& slot, cont::ConstSpan<HttpField> fields, con
     }
     slot.status = accepted ? 0U : handshake.status;
     static_cast<void>(cancel(slot.stream, false));
-    slot.finished = true;
-    slot.peer_ended = true;
-    slot.refused = true;
-    slot.report_end = true;
+    refuse(slot, QmuxCloseReason::UpgradeRefused, slot.status);
 }
 
 void WebSocketTunnels::deliver(Slot& slot, cont::ConstSpan<u8> bytes, u64 now_ns) noexcept
@@ -470,11 +489,8 @@ bool WebSocketTunnels::ended(u64 stream, bool clean, u64 error, u64 now_ns) noex
     slot->peer_ended = true;
     if (slot->opening)
     {
-        slot->opening = false;
         slot->error = error;
-        slot->finished = true;
-        slot->refused = true;
-        slot->report_end = true;
+        refuse(*slot, clean ? QmuxCloseReason::Truncated : QmuxCloseReason::Reset, error);
         return true;
     }
     slot->connection->transport_ended(clean, now_ns);
@@ -528,8 +544,8 @@ bool WebSocketTunnels::poll(WsTunnelEvent& event, u64 now_ns) noexcept
             {
                 if (lost || now_ns >= slot.deadline_ns)
                 {
-                    static_cast<void>(ended(slot.stream, false, 0U, now_ns));
                     static_cast<void>(cancel(slot.stream, false));
+                    refuse(slot, lost ? QmuxCloseReason::Reset : QmuxCloseReason::HandshakeTimeout, 0U);
                 }
                 continue;
             }
@@ -567,7 +583,8 @@ bool WebSocketTunnels::fill(Slot& slot, WsTunnelEvent& event, u32 index) noexcep
     event = WsTunnelEvent{};
     event.tunnel = handle_of(index);
     event.stream = slot.stream;
-    event.connection = slot.refused ? nullptr : slot.connection;
+    event.connection = slot.connection;
+    event.tag = slot.tag;
     if (slot.report_open)
     {
         slot.report_open = false;
@@ -681,7 +698,7 @@ u64 WebSocketTunnels::next_deadline_ns() const noexcept
 
 bool WebSocketTunnels::bearer_failed() const noexcept
 {
-    return (m_http2 != nullptr) ? m_http2->error() != 0U : m_http3->error() != 0U;
+    return m_bearer_ended || ((m_http2 != nullptr) ? m_http2->error() != 0U : m_http3->error() != 0U);
 }
 
 bool WebSocketTunnels::respond(u64 stream, cont::ConstSpan<HttpField> fields, bool fin) noexcept

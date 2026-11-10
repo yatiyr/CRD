@@ -27,6 +27,7 @@ add_executable(crd-net-tests
     test_negotiation.cpp
     test_qmux.cpp
     test_qmux_host.cpp
+    test_qmux_http2.cpp
     test_qpack.cpp
     test_quic_client.cpp
     test_quic_connection.cpp

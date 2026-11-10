@@ -1,10 +1,11 @@
 // crd-fuzz-net-qmux-host: the TCP and TLS path's host (4.2a; docs/design/network-foundation.md#stream-host) under the
 // bounded fuzz harness (REPO.DEV.9; docs/design/test-instruments.md). A server and a client host over pipes, under any
-// order of connects, resets, cuts, stalls, raw bytes, clock steps, closes, wakes, stale handles and accept failures.
+// order of connects, resets, cuts, stalls, raw bytes, clock steps, closes, wakes, stale handles and accept failures, with
+// QMux and HTTP/2 connections on one server context and WebSocket tunnels opened on the HTTP/2 ones (S65).
 //
 // Input: operations, each an operation byte and what it reads.
 //
-// Oracles. Every connection a host opened is reported closed exactly once, its handle goes stale at that report and a
+// Oracles. Every connection a host opened, tunnels included, is reported closed exactly once, its handle goes stale at that report and a
 // stale handle finds nothing. The live count is always opened minus closed. A turn allocates nothing once its
 // connections are built. After the input, with the pipes unstalled and the clock past every timeout, no connection is
 // left and every byte of the hosts' memory comes back.
@@ -15,7 +16,9 @@
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/ingress.hpp>
 #include <crd/net/io_loop.hpp>
+#include <crd/net/http2.hpp>
 #include <crd/net/qmux_host.hpp>
+#include <crd/net/websocket_tunnel.hpp>
 
 #include <cstring>
 #include <new>
@@ -36,6 +39,16 @@ constexpr AlgorithmId kGroups[] = {AlgorithmId::X25519};
 constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
 constexpr AlgorithmId kAeads[] = {AlgorithmId::Aes128Gcm};
 constexpr StringView kProtocols[] = {"cerid-game/1"};
+constexpr StringView kH2[] = {"h2"};
+constexpr StringView kServerProtocols[] = {"cerid-game/1", "h2"};
+constexpr char kSubprotocol[] = "game";
+constexpr char kPath[] = "/";
+constexpr char kHost[] = "game.cerid.test";
+
+template <usize N> ConstSpan<u8> text(const char (&literal)[N])
+{
+    return ConstSpan<u8>(reinterpret_cast<const u8*>(literal), N - 1U);
+}
 constexpr u64 kMsNs = 1000000U;
 constexpr u32 kConnections = 6U;
 constexpr usize kMostHandles = 64U;
@@ -45,7 +58,12 @@ struct Identity
     SigningKey key;
     TlsCredential credential;
     TlsContext client;
+    TlsContext h2_client;
     TlsContext server;
+    ConstSpan<u8> subprotocols[1] = {text(kSubprotocol)};
+    WebSocketConfig websocket;
+    Http2Config server_http2;
+    Http2Config client_http2;
 
     Identity()
     {
@@ -62,13 +80,20 @@ struct Identity
         config.server_name = "game.cerid.test";
         config.application_protocols = kProtocols;
         CRD_FUZZ_REQUIRE(client.init(config) == TlsError::None);
+        config.application_protocols = kH2;
+        CRD_FUZZ_REQUIRE(h2_client.init(config) == TlsError::None);
+        websocket.protocols = ConstSpan<ConstSpan<u8>>(subprotocols, 1U);
+        websocket.path = text(kPath);
+        websocket.host = text(kHost);
+        websocket.any_origin = true;
+        server_http2.connect_protocol = true;
         TlsConfig server_config;
         server_config.role = TlsRole::Server;
         server_config.groups = kGroups;
         server_config.aeads = kAeads;
         server_config.credential = &credential;
         server_config.server_name = "game.cerid.test";
-        server_config.application_protocols = kProtocols;
+        server_config.application_protocols = kServerProtocols;
         CRD_FUZZ_REQUIRE(server.init(server_config) == TlsError::None);
     }
 };
@@ -94,6 +119,8 @@ QmuxConfig connection_config()
     config.handshake_timeout_ns = 2000U * kMsNs;
     config.idle_timeout_ns = 3000U * kMsNs;
     config.close_wait_ns = 500U * kMsNs;
+    config.websocket = &identity().websocket;
+    config.http2_tunnels = 2U;
     return config;
 }
 
@@ -196,10 +223,12 @@ public:
         QmuxHostConfig server;
         server.connection = connection_config();
         server.connection.tls = &identity().server;
+        server.connection.http2 = &identity().server_http2;
         server.connections = kConnections;
         server.accepts_per_turn = 2U;
         QmuxHostConfig client;
         client.connection = connection_config();
+        client.connection.http2 = &identity().client_http2;
         client.connections = kConnections;
         client.ready_per_turn = 4U;
         const crd::usize before = m_allocator.live_bytes();
@@ -233,7 +262,8 @@ private:
     {
         const QmuxHostCounters& counters = host.counters();
         CRD_FUZZ_REQUIRE(host.live() <= kConnections);
-        CRD_FUZZ_REQUIRE(counters.accepted + counters.connected == u64{host.live()} + counters.closed);
+        CRD_FUZZ_REQUIRE(counters.accepted + counters.connected + counters.tunnels ==
+                         u64{host.live()} + counters.closed);
     }
 
     void turn(QmuxHost& server, QmuxHost& client)
@@ -242,10 +272,10 @@ private:
         static_cast<void>(client.poll(0U));
     }
 
-    void connect(QmuxHost& client)
+    void connect(QmuxHost& client, const TlsContext& context)
     {
         SocketError error = SocketError::None;
-        const QuicHandle handle = client.connect(QmuxConnect{server_address(), &identity().client}, m_clock.now, error);
+        const QuicHandle handle = client.connect(QmuxConnect{server_address(), &context}, m_clock.now, error);
         m_client_events.remember(handle);
     }
 
@@ -257,11 +287,23 @@ private:
 
     void step(QmuxHost& server, QmuxHost& client, Input& input)
     {
-        switch (input.byte() % 14U)
+        switch (input.byte() % 16U)
         {
             case 0U:
-                connect(client);
+                connect(client, identity().client);
                 break;
+            case 14U:
+                connect(client, identity().h2_client);
+                break;
+            case 15U:
+            {
+                // A tunnel on any connection: an HTTP/2 one takes it once the server's SETTINGS allow it.
+                WsTunnelError error = WsTunnelError::None;
+                const QuicHandle tunnel = client.open_tunnel(m_client_events.pick(input.byte()), m_clock.now, error);
+                CRD_FUZZ_REQUIRE(tunnel.valid() == (error == WsTunnelError::None));
+                m_client_events.remember(tunnel);
+                break;
+            }
             case 1U:
                 m_clock.now += (u64{input.byte()} + 1U) * kMsNs;
                 break;
@@ -394,6 +436,10 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     // Time out a connection that hangs.
     const u8 hang[] = {0x0AU, 0x04U, 0x00U, 0x02U, 0x01U, 0xFFU, 0x02U};
     sink.add("hang", hang, sizeof(hang));
+    // An HTTP/2 connection, two tunnels once its SETTINGS came, a tunnel's close, the bearer's close.
+    const u8 tunnels[] = {0x0EU, 0x0DU, 0x0DU, 0x0FU, 0x00U, 0x0DU, 0x0FU, 0x00U, 0x0DU,
+                          0x06U, 0x01U, 0x00U, 0x0DU, 0x06U, 0x00U, 0x00U, 0x0DU};
+    sink.add("tunnels", tunnels, sizeof(tunnels));
 }
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)

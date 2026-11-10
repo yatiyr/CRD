@@ -91,18 +91,21 @@ void Http2Connection::destroy() noexcept
     m_allocator = nullptr;
 }
 
+bool Http2Connection::config_valid(const Http2Config& config) noexcept
+{
+    return config.field_bytes >= kHttp2MinFieldBytes && config.field_bytes <= kHttp2MaxFieldBytes &&
+           config.streams != 0U && config.streams <= kHttp2MaxStreams && config.stream_window != 0U &&
+           config.stream_window <= kHttp2MaxWindow && config.connection_window >= kHttp2InitialWindow &&
+           config.connection_window <= kHttp2MaxWindow && config.frame_bytes >= kHttp2MinFrameBytes &&
+           config.frame_bytes <= kHttp2MaxFrameBytes && config.table_bytes <= kHpackMaxTableSize &&
+           config.encoder_table_bytes <= kHpackMaxTableSize && config.output_bytes >= kHttp2MinOutputBytes &&
+           config.resets.per_second != 0U && config.control.per_second != 0U && config.settings_timeout_ns != 0U &&
+           (!config.connect_protocol || config.side == Http2Side::Server);
+}
+
 bool Http2Connection::init(memory::IAllocator& allocator, const Http2Config& config, u64 now_ns) noexcept
 {
-    const bool valid = m_out == nullptr && config.field_bytes >= kHttp2MinFieldBytes &&
-                       config.field_bytes <= kHttp2MaxFieldBytes && config.streams != 0U &&
-                       config.streams <= kHttp2MaxStreams && config.stream_window != 0U &&
-                       config.stream_window <= kHttp2MaxWindow && config.connection_window >= kHttp2InitialWindow &&
-                       config.connection_window <= kHttp2MaxWindow && config.frame_bytes >= kHttp2MinFrameBytes &&
-                       config.frame_bytes <= kHttp2MaxFrameBytes && config.table_bytes <= kHpackMaxTableSize &&
-                       config.encoder_table_bytes <= kHpackMaxTableSize &&
-                       config.output_bytes >= kHttp2MinOutputBytes && config.resets.per_second != 0U &&
-                       config.control.per_second != 0U && config.settings_timeout_ns != 0U &&
-                       (!config.connect_protocol || config.side == Http2Side::Server);
+    const bool valid = m_out == nullptr && config_valid(config);
     if (!valid || !m_decoder.init(allocator, config.table_bytes) ||
         !m_encoder.init(allocator, config.encoder_table_bytes))
     {
@@ -296,6 +299,7 @@ bool Http2Connection::poll(cont::ConstSpan<u8> input, u64 now_ns, usize& taken, 
         usize used = 0U;
         const Step result = step(input.subspan(taken), used, event);
         taken += used;
+        m_early_left -= std::min(m_early_left, used);
         if (result != Step::Again)
         {
             return result == Step::Event;
@@ -632,6 +636,7 @@ Http2Connection::Step Http2Connection::read_headers(cont::ConstSpan<u8> view, u3
     m_block_id = id;
     m_block_used = 0U;
     m_block_end = (flags & kFlagEndStream) != 0U;
+    m_block_early = m_early_left != 0U; // the frame's first byte is the first not taken
     m_frame_is_block = true;
     m_left = content;
     m_pad_left = pad;
@@ -1092,6 +1097,7 @@ Http2Connection::Step Http2Connection::new_request(u32 id, usize count, bool too
     event.kind = Http2EventKind::Headers;
     event.stream = id;
     event.fields = fields;
+    event.early = m_block_early;
     return Step::Event;
 }
 
