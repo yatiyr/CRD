@@ -12,6 +12,7 @@
 
 #include <bit>
 #include <cmath>
+#include <limits>
 
 using crd::hesap::tensor::MaxvolInfo;
 using crd::hesap::tensor::maxvol;
@@ -509,6 +510,269 @@ TEST_CASE("tt: tt_cross builds the smooth kernel from evaluations within the fro
     REQUIRE(tt_cross<crd::f64>(&alloc, {shp, 4}, smooth_f, hard, tt3, &info3) == TensorStatus::Ok);
     REQUIRE(!info3.converged);
     REQUIRE(info3.sweeps == 2U);
+}
+
+namespace
+{
+
+// One tt_cross run of f = scale * g over a full grid of up to four modes, and the worst |TT - f| over that grid
+// relative to the peak |f| (a NaN anywhere makes `finite` false).
+template <typename T> struct CrossScaleRun
+{
+    TtCrossInfo<T> info;
+    crd::f64 worst_rel = 0.0;
+    crd::f64 peak = 0.0;
+    bool finite = true;
+    bool ok = false;
+};
+
+template <typename T, typename G>
+CrossScaleRun<T> cross_scale_run(crd::memory::IAllocator* alloc, const crd::u64* shp, crd::u32 d, crd::u64 rank, T tol,
+                                 crd::u64 val_size, crd::u32 sweeps, T scale, const G& g, TtTensor<T>& tt)
+{
+    TtCrossParams<T> params;
+    params.max_rank = rank;
+    params.max_sweeps = sweeps;
+    params.tol = tol;
+    params.val_size = val_size;
+    params.seed = 7U;
+    const auto f = [&](crd::containers::ConstSpan<crd::u64> ix) noexcept
+    {
+        return scale * static_cast<T>(g(ix.data()));
+    };
+    CrossScaleRun<T> out;
+    out.ok = tt_cross<T>(alloc, {shp, d}, f, params, tt, &out.info) == TensorStatus::Ok;
+    if (!out.ok)
+    {
+        return out;
+    }
+    T work[64];
+    crd::u64 ix[4] = {0U, 0U, 0U, 0U};
+    crd::f64 worst = 0.0;
+    for (;;)
+    {
+        const T truth = f({ix, d});
+        const crd::f64 e =
+            std::abs(static_cast<crd::f64>(tt_eval<T>(tt, {ix, d}, {work, 64})) - static_cast<crd::f64>(truth));
+        const bool e_finite = e <= std::numeric_limits<crd::f64>::max();
+        out.finite = out.finite && e_finite;
+        worst = e > worst ? e : worst;
+        const crd::f64 t = std::abs(static_cast<crd::f64>(truth));
+        out.peak = t > out.peak ? t : out.peak;
+        crd::u32 k = 0;
+        for (; k < d; ++k)
+        {
+            if (++ix[k] < shp[k])
+            {
+                break;
+            }
+            ix[k] = 0U;
+        }
+        if (k == d)
+        {
+            break;
+        }
+    }
+    out.worst_rel = out.peak > 0.0 ? worst / out.peak : worst;
+    return out;
+}
+
+[[nodiscard]] crd::f64 cross_cos2(const crd::u64* i) noexcept
+{
+    return std::cos(0.01 * (static_cast<crd::f64>(i[0]) + 2.0 * static_cast<crd::f64>(i[1])));
+}
+
+[[nodiscard]] crd::f64 cross_sin3(const crd::u64* i) noexcept
+{
+    return std::sin(0.05 * static_cast<crd::f64>(i[0] + i[1] + i[2]) + 0.3);
+}
+
+[[nodiscard]] crd::f64 cross_sin4(const crd::u64* i) noexcept
+{
+    return std::sin(0.3 * static_cast<crd::f64>(i[0] + i[1] + i[2] + i[3]));
+}
+
+[[nodiscard]] crd::f64 cross_lin4(const crd::u64* i) noexcept
+{
+    return 1.0 + static_cast<crd::f64>(i[0]) + static_cast<crd::f64>(i[1] * i[2]) + 0.5 * static_cast<crd::f64>(i[3]);
+}
+
+[[nodiscard]] crd::f64 cross_one(const crd::u64*) noexcept
+{
+    return 1.0;
+}
+
+// the gate of a run: status Ok, converged with val_error below tol, finite, and within `gate` of f over the grid
+template <typename T> void require_cross_accurate(const CrossScaleRun<T>& run, T tol, crd::f64 gate)
+{
+    REQUIRE(run.ok);
+    REQUIRE(run.finite);
+    REQUIRE(run.info.converged);
+    REQUIRE(run.info.val_error < tol);
+    REQUIRE(run.worst_rel <= gate);
+}
+
+} // namespace
+
+TEST_CASE("tt: tt_cross stays finite and accurate on large fiber blocks near the edges of the square-safe range",
+          "[v14k][tt][cross][scale]")
+{
+    // Each value is inside the range where one square is finite, but the Householder sum alpha^2 + dot(tail) over the
+    // block's rows (400, 512 and 256 here) overflows; base gave a NaN TT on all three.
+    crd::memory::TlsfAllocator alloc(1U << 28);
+    {
+        const crd::u64 shp[2] = {400U, 400U};
+        TtTensor<crd::f64> tt(&alloc);
+        require_cross_accurate(cross_scale_run<crd::f64>(&alloc, shp, 2U, 4U, 1e-10, 64U, 10U, 1.2e153, cross_cos2, tt),
+                               1e-10, kTtRefCrossGate);
+    }
+    {
+        const crd::u64 shp[3] = {64U, 64U, 64U};
+        TtTensor<crd::f64> tt(&alloc);
+        require_cross_accurate(cross_scale_run<crd::f64>(&alloc, shp, 3U, 8U, 1e-10, 64U, 10U, 1e153, cross_sin3, tt),
+                               1e-10, kTtRefCrossGate);
+    }
+    {
+        const crd::u64 shp[2] = {256U, 256U};
+        TtTensor<crd::f32> tt(&alloc);
+        require_cross_accurate(cross_scale_run<crd::f32>(&alloc, shp, 2U, 2U, 1e-4F, 64U, 10U, 2e18F, cross_one, tt),
+                               1e-4F, 1e-5);
+    }
+    {
+        // 200 validation values of 1.3e153: the plain reference sum of squares overflows
+        const crd::u64 shp[3] = {8U, 8U, 8U};
+        TtTensor<crd::f64> tt(&alloc);
+        require_cross_accurate(cross_scale_run<crd::f64>(&alloc, shp, 3U, 4U, 1e-10, 200U, 10U, 1.3e153, cross_one, tt),
+                               1e-10, kTtRefCrossGate);
+    }
+}
+
+TEST_CASE("tt: tt_cross reports its validation error honestly far below the square-safe range",
+          "[v14k][tt][cross][scale]")
+{
+    // The validation differences are about eps times the values, so their squares underflowed some 16 decades above
+    // the reference's own limit and base reported val_error 0 at these scales (5.7e-16 at scale 1).
+    crd::memory::TlsfAllocator alloc(1U << 26);
+    const crd::u64 shp[4] = {9U, 9U, 9U, 9U};
+    TtTensor<crd::f64> base_tt(&alloc);
+    const CrossScaleRun<crd::f64> unit =
+        cross_scale_run<crd::f64>(&alloc, shp, 4U, 8U, 1e-10, 64U, 10U, 1.0, cross_sin4, base_tt);
+    require_cross_accurate(unit, 1e-10, kTtRefCrossGate);
+    REQUIRE(unit.info.val_error > 0.0);
+    for (const crd::f64 scale : {1.5e-153, 1e-150, 1e-200, 1e-305})
+    {
+        INFO("scale " << scale);
+        TtTensor<crd::f64> tt(&alloc);
+        const CrossScaleRun<crd::f64> run =
+            cross_scale_run<crd::f64>(&alloc, shp, 4U, 8U, 1e-10, 64U, 10U, scale, cross_sin4, tt);
+        require_cross_accurate(run, 1e-10, kTtRefCrossGate);
+        // the same few rounding errors relative to the values, so within a small factor of the scale-1 error
+        REQUIRE(run.info.val_error >= 0.25 * unit.info.val_error);
+        REQUIRE(run.info.val_error <= 4.0 * unit.info.val_error);
+    }
+}
+
+TEST_CASE("tt: tt_cross is accurate from subnormal values to 1e300", "[v14k][tt][cross][scale]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 26);
+    const crd::u64 shp[4] = {6U, 6U, 6U, 6U};
+    for (const crd::f64 scale : {1e-310, 1e-305, 1e-200, 1e-160, 1e160, 1e200, 1e300})
+    {
+        INFO("f64 scale " << scale);
+        TtTensor<crd::f64> tt(&alloc);
+        const CrossScaleRun<crd::f64> run =
+            cross_scale_run<crd::f64>(&alloc, shp, 4U, 4U, 1e-9, 64U, 4U, scale, cross_lin4, tt);
+        require_cross_accurate(run, 1e-9, kTtRefCrossGate);
+        REQUIRE(run.info.val_error > 0.0);
+    }
+    for (const crd::f32 scale : {1e-36F, 1e-30F, 1e-19F, 1e19F, 1e30F})
+    {
+        INFO("f32 scale " << scale);
+        TtTensor<crd::f32> tt(&alloc);
+        const CrossScaleRun<crd::f32> run =
+            cross_scale_run<crd::f32>(&alloc, shp, 4U, 4U, 1e-4F, 64U, 4U, scale, cross_lin4, tt);
+        require_cross_accurate(run, 1e-4F, 1e-5);
+        REQUIRE(run.info.val_error > 0.0F);
+    }
+    {
+        // f32 subnormal values carry about 17 bits (the smallest subnormal is 4e-6 of the peak here), so the gate is
+        // that precision, not the normal-range 1e-5
+        TtTensor<crd::f32> tt(&alloc);
+        const CrossScaleRun<crd::f32> run =
+            cross_scale_run<crd::f32>(&alloc, shp, 4U, 4U, 1e-4F, 64U, 4U, 1e-41F, cross_lin4, tt);
+        const crd::f64 grain = static_cast<crd::f64>(std::numeric_limits<crd::f32>::denorm_min()) / run.peak;
+        require_cross_accurate(run, 1e-4F, 16.0 * grain);
+    }
+}
+
+TEST_CASE("tt: tt_cross of f scaled by an exact power of two is the scale-1 TT scaled exactly",
+          "[v14k][tt][cross][scale]")
+{
+    // Householder QR, maxvol and the interpolation cores commute exactly with a power-of-two scaling as long as no
+    // value is subnormal, so the range guard must give cores 1..d-1 bit for bit, the first core scaled exactly, and the
+    // same validation error. A tol that is never met runs every sweep on both sides.
+    crd::memory::TlsfAllocator alloc(1U << 26);
+    const crd::u64 shp[4] = {9U, 9U, 9U, 9U};
+    const auto check = [&]<typename T>(T tol, int k)
+    {
+        INFO("2^" << k);
+        TtTensor<T> one(&alloc);
+        TtTensor<T> scaled(&alloc);
+        const CrossScaleRun<T> a = cross_scale_run<T>(&alloc, shp, 4U, 6U, tol, 64U, 3U, T(1), cross_sin4, one);
+        const CrossScaleRun<T> b =
+            cross_scale_run<T>(&alloc, shp, 4U, 6U, tol, 64U, 3U, std::ldexp(T(1), k), cross_sin4, scaled);
+        REQUIRE(a.ok);
+        REQUIRE(b.ok);
+        REQUIRE(b.info.sweeps == a.info.sweeps);
+        REQUIRE(b.info.val_error == a.info.val_error);
+        for (crd::u32 c = 0; c < 4U; ++c)
+        {
+            REQUIRE(scaled.core_size(c) == one.core_size(c));
+            bool same = true;
+            for (crd::u64 i = 0; i < one.core_size(c); ++i)
+            {
+                const T want = c == 0U ? std::ldexp(one.core(c)[i], k) : one.core(c)[i];
+                same = same && scaled.core(c)[i] == want;
+            }
+            REQUIRE(same);
+        }
+    };
+    // scales that keep every value and every product of the evaluation chain normal (subnormals break exactness)
+    for (const int k : {-900, -600, -300, 300, 600, 900})
+    {
+        check(1e-300, k);
+    }
+    for (const int k : {-100, -80, 80, 100})
+    {
+        check(1e-30F, k);
+    }
+}
+
+TEST_CASE("tt: the tt_cross range guard vouches only for a factor it can prove", "[v14k][tt][cross][scale]")
+{
+    using crd::hesap::tensor::ttdetail::cross_r_vouches;
+    crd::memory::TlsfAllocator alloc(1U << 24);
+    const crd::usize rows = 400U;
+    const auto vouches = [&](crd::f64 s0, crd::f64 s1)
+    {
+        crd::hesap::dense::QR<crd::f64> qr(&alloc, rows, 2U);
+        crd::hesap::dense::Matrix<crd::f64>& p = qr.packed();
+        for (crd::usize i = 0; i < rows; ++i)
+        {
+            p.at(i, 0) = s0 * std::cos((0.37 * static_cast<crd::f64>(i)) + 0.1);
+            p.at(i, 1) = s1 * std::sin((0.11 * static_cast<crd::f64>(i)) + 0.2);
+        }
+        crd::hesap::dense::factor_qr(qr);
+        return cross_r_vouches<crd::f64>(p.data(), p.ld(), qr.taus().data(), rows, 2U);
+    };
+    REQUIRE(vouches(1.0, 1.0));
+    REQUIRE(vouches(1e-100, 1e100));
+    REQUIRE(vouches(1.0, 0.0));        // an exactly zero column skips its reflector
+    REQUIRE(!vouches(0.0, 0.0));       // nothing to vouch for; the redo leaves a zero block as it is
+    REQUIRE(!vouches(1e153, 1.0));     // the column norm overflows
+    REQUIRE(!vouches(1e-160, 1e-160)); // the squares underflow
+    // a column 2^-530 below the other: its subnormal squares give a reflector 3e-6 from orthogonal
+    REQUIRE(!vouches(std::ldexp(1.0, -530), 1.0));
 }
 
 TEST_CASE("tt: evaluation is allocation-free and the batch evaluator bit-matches", "[v14k][tt][eval]")

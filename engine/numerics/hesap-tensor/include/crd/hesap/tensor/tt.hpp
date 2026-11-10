@@ -52,6 +52,7 @@
 #include "tensor.hpp"
 
 #include <crd/containers/array.hpp>
+#include <crd/core/platform.hpp> // CRD_NOINLINE
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/lu.hpp>
 #include <crd/hesap/dense/qr.hpp>
@@ -60,6 +61,7 @@
 #include <crd/math/select.hpp> // crd::math::fma
 
 #include <cmath>
+#include <limits>
 
 namespace crd::hesap::tensor
 {
@@ -1457,6 +1459,241 @@ inline void cross_layout(crd::containers::ConstSpan<crd::u64> shape, crd::u64 ma
     lay.core_off[d] = lay.core_total;
 }
 
+// ---- range guard for the sums of squares in tt_cross ---------------------------------------------------------------
+// Only three places in tt_cross square a value that carries the scale of f: the Householder column norms of the QR of a
+// fiber block (alpha^2 + dot(tail) over rows = left_rank n or n rr), the validation reference norm and the validation
+// error sum (val_size terms each). Every other quantity (thin Q, maxvol, the LU solves, the interpolation cores) is of
+// order one; only the first core, the raw fibers, carries the scale, and it is never squared. Each of the three is
+// computed plainly, as before, and then tested; only a result the test cannot vouch for is redone on values scaled by
+// an exact power of two. A thin Q and the cores are unchanged by a scaling of the block, and the relative validation
+// error is unchanged by a scaling of both of its norms, so the redo changes no result except to keep it finite and
+// accurate (the scaled sums of squares of Blue, "A portable Fortran program to find the Euclidean norm of a vector",
+// ACM TOMS 4(1), 1978, applied after the fact so that the ordinary range pays nothing for it).
+//
+// Notation: mu = numeric_limits<T>::min() (smallest normal), eps = numeric_limits<T>::epsilon(), delta = mu eps (the
+// smallest subnormal), max = numeric_limits<T>::max().
+//
+// A sum of n non-negative squares accumulated with fma rounds once per term, so its partial sums never decrease: a
+// finite result means no term or partial sum overflowed. A term or partial sum below mu carries an absolute error of at
+// most delta / 2, so all of them together err by at most n delta / 2; once the result is at least mu / eps that is a
+// relative n 2^-1 eps^2 (n 2^-105 in f64), far below eps for any n that fits in memory. Hence cross_sum_sq_trusted.
+template <typename T> [[nodiscard]] inline bool cross_sum_sq_trusted(T s) noexcept
+{
+    constexpr T floor = std::numeric_limits<T>::min() / std::numeric_limits<T>::epsilon();
+    return s >= floor && s <= std::numeric_limits<T>::max();
+}
+
+// The plain sum of squares of p[0, n) in fro_norm's order (fro_norm is its root).
+template <typename T> [[nodiscard]] inline T cross_sum_sq(const T* p, crd::u64 n) noexcept
+{
+    T s = T(0);
+    for (crd::u64 i = 0; i < n; ++i)
+    {
+        s = crd::math::fma(p[i], p[i], s);
+    }
+    return s;
+}
+
+// The two exact power-of-two factors whose product is 2^-e. One factor 2^-e leaves the exponent range for the exponent
+// of a subnormal peak (2^1074 in f64), half of it never does; (x a) b is exact whenever the result is normal.
+template <typename T> inline void cross_unscale_factors(int e, T& a, T& b) noexcept
+{
+    const int half = e / 2;
+    a = std::ldexp(T(1), -half);
+    b = std::ldexp(T(1), half - e);
+}
+
+// The exponent e of a finite nonzero peak = f 2^e with f in [1/2, 1).
+template <typename T> [[nodiscard]] inline int cross_exponent(T peak) noexcept
+{
+    int e = 0;
+    static_cast<void>(crd::math::frexp(peak, &e));
+    return e;
+}
+
+// True when the plain Householder factorization of a rows x r block is as accurate as one of the block scaled to a peak
+// of order one. data/ld hold the packed factor (R in its upper triangle), taus the reflector coefficients.
+//
+//  - Overflow. Any overflow in the factorization reaches R: an overflowed column norm is that column's beta, stored as
+//    R_jj; an overflowed reflection lands in a trailing column, whose own beta then overflows; a NaN fails the
+//    xnorm_sq == 0 test and becomes beta. So the sum s of the magnitudes of R's upper triangle is finite (s <= max,
+//    false for a NaN) exactly when nothing overflowed.
+//  - An applied reflector. Its beta^2 is a sum of at most rows squares, accurate to eps when beta^2 >= rows mu / 2 (the
+//    rule above with n = rows). A reflector built from a smaller, underflow-damaged beta is not orthogonal: its
+//    v = x / (alpha - beta) has |v_i| up to sqrt(rows) and would distort every trailing column. So each applied
+//    reflector (tau_j != 0) needs R_jj^2 >= 4 rows mu, twice the bound.
+//  - A skipped reflector (tau_j == 0: every tail square rounded to zero, |x_i| < sqrt(delta / 2)) drops a tail of
+//    norm at most sqrt(rows delta / 2). That is below the block's own rounding, eps F with F = ||block||_F, once
+//    F^2 >= rows delta / eps^2 = rows mu / eps. R has the block's Frobenius norm and s <= sqrt(r (r + 1) / 2) F, so
+//    s^2 >= 4 (r (r + 1) / 2) rows mu / eps guarantees it with a factor of two to spare. The same bound puts every
+//    column residual that carries signal (above eps F) far above the applied-reflector floor.
+// A block of ordinary scale passes all three (its rounding-level residuals, near eps F, lie about 2^450 above the
+// floors in f64 and 2^30 in f32 for 10^4 rows), so the test costs O(r^2) reads beside the O(rows r^2) factorization.
+template <typename T>
+[[nodiscard]] inline bool cross_r_vouches(const T* data, crd::usize ld, const T* taus, crd::u64 rows,
+                                          crd::u64 r) noexcept
+{
+    constexpr T mu = std::numeric_limits<T>::min();
+    constexpr T mu_over_eps = mu / std::numeric_limits<T>::epsilon();
+    const T rows_t = static_cast<T>(rows);
+    const T diag_floor = T(4) * mu * rows_t;
+    T s = T(0);
+    for (crd::u64 i = 0; i < r; ++i)
+    {
+        const T* row = data + static_cast<crd::usize>(i) * ld;
+        const T rjj = row[i];
+        const bool applied = taus[i] != T(0);
+        const bool diag_ok = rjj * rjj >= diag_floor;
+        if (applied && !diag_ok)
+        {
+            return false;
+        }
+        for (crd::u64 j = i; j < r; ++j)
+        {
+            s += std::abs(row[j]);
+        }
+    }
+    const T tri = static_cast<T>(r * (r + 1U) / 2U);
+    const bool finite = s <= std::numeric_limits<T>::max();
+    const bool large_enough = s * s >= T(4) * mu_over_eps * tri * rows_t;
+    return finite && large_enough;
+}
+
+// The redo of a block cross_r_vouches rejected: the block m (rows x r, row-major) is copied into the factor scaled by
+// the exact power of two that brings its peak into [1/2, 1), and factored again; every sum of squares is then at most
+// rows r and every square that matters is normal. Left as they are: a zero block (its plain factorization is exact), a
+// block with an infinity (no scale repairs it) and a block whose peak is already in [1/2, 2) (a scale of at most two
+// changes nothing; such a block was rejected for a column some 500 binary orders below its peak, which a scaling of
+// the whole block cannot lift). Returns whether it factored the block; when it did not, the factor is untouched.
+// Out of line: the ordinary range never reaches it.
+template <typename T>
+CRD_NOINLINE bool cross_factor_rescaled(crd::hesap::dense::QR<T, crd::hesap::dense::Layout::RowMajor>& qr, const T* m,
+                                        crd::u64 rows, crd::u64 r) noexcept
+{
+    T peak = T(0);
+    for (crd::u64 i = 0; i < rows * r; ++i)
+    {
+        const T a = std::abs(m[i]);
+        peak = a > peak ? a : peak;
+    }
+    if (!(peak > T(0)) || !(peak <= std::numeric_limits<T>::max()))
+    {
+        return false;
+    }
+    const int e = cross_exponent(peak);
+    if (e == 0 || e == 1)
+    {
+        return false;
+    }
+    T sa = T(1);
+    T sb = T(1);
+    cross_unscale_factors(e, sa, sb);
+    crd::hesap::dense::Matrix<T>& p = qr.packed();
+    T* data = p.data();
+    const crd::usize ld = p.ld();
+    for (crd::u64 i = 0; i < rows; ++i)
+    {
+        for (crd::u64 j = 0; j < r; ++j)
+        {
+            data[static_cast<crd::usize>(i) * ld + static_cast<crd::usize>(j)] = (m[i * r + j] * sa) * sb;
+        }
+    }
+    crd::hesap::dense::factor_qr(qr);
+    return true;
+}
+
+// The validation reference norm when its plain sum of squares is not trusted: root 2^e is the norm, with root the
+// sum-of-squares root of the reference scaled by the exact power of two 2^-e that brings its peak into [1/2, 1). A zero
+// reference gives root 0 and e 0 (tt_cross then measures the absolute error, as before); a reference with an infinity
+// or a NaN gives a NaN root, so its validation error is NaN and never converges.
+template <typename T> CRD_NOINLINE void cross_scaled_norm(const T* v, crd::u64 n, T& root, int& e) noexcept
+{
+    T peak = T(0);
+    bool finite = true;
+    for (crd::u64 i = 0; i < n; ++i)
+    {
+        const T a = std::abs(v[i]);
+        finite = finite && a <= std::numeric_limits<T>::max();
+        peak = a > peak ? a : peak;
+    }
+    e = 0;
+    if (!finite)
+    {
+        root = std::numeric_limits<T>::quiet_NaN();
+        return;
+    }
+    if (peak == T(0))
+    {
+        root = T(0);
+        return;
+    }
+    e = cross_exponent(peak);
+    T sa = T(1);
+    T sb = T(1);
+    cross_unscale_factors(e, sa, sb);
+    T s = T(0);
+    for (crd::u64 i = 0; i < n; ++i)
+    {
+        const T t = (v[i] * sa) * sb;
+        s = crd::math::fma(t, t, s);
+    }
+    root = std::sqrt(s);
+}
+
+// The relative validation error ||pred - truth|| / (ref_root 2^ref_e) when the plain error sum or the plain reference
+// is not trusted. pred and truth are scaled by the exact power of two that brings their joint peak into [1/2, 1) before
+// they are subtracted (so the difference neither overflows nor loses bits to underflow), the differences by the power
+// of two that brings their own peak there (so errors far below the values still have normal squares), and the two
+// exponents return through ldexp, which rounds only if the ratio itself leaves the range. pred is overwritten with the
+// differences. A non-finite prediction or truth gives an infinite error.
+template <typename T>
+CRD_NOINLINE T cross_scaled_error(T* pred, const T* truth, crd::u64 n, T ref_root, int ref_e) noexcept
+{
+    T peak = T(0);
+    bool finite = true;
+    for (crd::u64 i = 0; i < n; ++i)
+    {
+        const T ap = std::abs(pred[i]);
+        const T at = std::abs(truth[i]);
+        finite = finite && ap <= std::numeric_limits<T>::max() && at <= std::numeric_limits<T>::max();
+        peak = ap > peak ? ap : peak;
+        peak = at > peak ? at : peak;
+    }
+    if (!finite)
+    {
+        return std::numeric_limits<T>::infinity();
+    }
+    if (peak == T(0))
+    {
+        return T(0);
+    }
+    const int ev = cross_exponent(peak);
+    T sa = T(1);
+    T sb = T(1);
+    cross_unscale_factors(ev, sa, sb);
+    T dpeak = T(0);
+    for (crd::u64 i = 0; i < n; ++i)
+    {
+        const T dv = (pred[i] * sa) * sb - (truth[i] * sa) * sb;
+        pred[i] = dv;
+        const T a = std::abs(dv);
+        dpeak = a > dpeak ? a : dpeak;
+    }
+    if (dpeak == T(0))
+    {
+        return T(0);
+    }
+    const int ed = cross_exponent(dpeak);
+    cross_unscale_factors(ed, sa, sb);
+    T s = T(0);
+    for (crd::u64 i = 0; i < n; ++i)
+    {
+        const T t = (pred[i] * sa) * sb;
+        s = crd::math::fma(t, t, s);
+    }
+    return std::ldexp(std::sqrt(s) / ref_root, ev + ed - ref_e);
+}
+
 } // namespace ttdetail
 
 // -----------------------------------------------------------------------
@@ -1571,7 +1808,17 @@ template <typename T, typename F>
         }
         local.val_evals = params.val_size;
     }
-    T val_norm = ttdetail::fro_norm(val_true, params.val_size);
+    // The reference norm is val_norm 2^val_exp: the plain sum of squares while it is trusted (val_exp 0, the ordinary
+    // case), else the scaled form (ttdetail::cross_scaled_norm). A zero reference measures the absolute error.
+    const T val_sum_sq = ttdetail::cross_sum_sq(val_true, params.val_size);
+    bool val_plain = ttdetail::cross_sum_sq_trusted(val_sum_sq);
+    T val_norm = std::sqrt(val_sum_sq);
+    int val_exp = 0;
+    if (!val_plain)
+    {
+        ttdetail::cross_scaled_norm(val_true, params.val_size, val_norm, val_exp);
+        val_plain = val_norm == T(0);
+    }
     if (val_norm == T(0))
     {
         val_norm = T(1);
@@ -1607,19 +1854,38 @@ template <typename T, typename F>
         }
         local.evals += left_rank * n * rr;
     };
-    // thin-QR of an (m x r) buffer, m >= r, into qbuf (m x r orthonormal cols)
+    // thin-QR of an (m x r) buffer, m >= r, into qbuf (m x r orthonormal cols). The block is factored as it is; a
+    // factor whose R does not vouch for its range (ttdetail::cross_r_vouches) is redone on the block scaled by an
+    // exact power of two (ttdetail::cross_factor_rescaled), which leaves Q unchanged wherever both are accurate. The
+    // blocks of one f share its scale, so once a block needed the redo the next one is scaled first (rescale_next),
+    // and an f outside the range pays one factorization per block, not two.
+    bool rescale_next = false;
     const auto thin_q = [&](const T* m, crd::u64 rows, crd::u64 r) noexcept -> TensorStatus
     {
         dn::QR<T> qr(alloc, static_cast<crd::usize>(rows), static_cast<crd::usize>(r));
         dn::Matrix<T>& p = qr.packed();
-        for (crd::u64 i = 0; i < rows; ++i)
+        bool factored = false;
+        if (rescale_next)
         {
-            for (crd::u64 j2 = 0; j2 < r; ++j2)
+            factored = ttdetail::cross_factor_rescaled<T>(qr, m, rows, r);
+        }
+        if (!factored)
+        {
+            for (crd::u64 i = 0; i < rows; ++i)
             {
-                p.at(static_cast<crd::usize>(i), static_cast<crd::usize>(j2)) = m[i * r + j2];
+                for (crd::u64 j2 = 0; j2 < r; ++j2)
+                {
+                    p.at(static_cast<crd::usize>(i), static_cast<crd::usize>(j2)) = m[i * r + j2];
+                }
+            }
+            dn::factor_qr(qr);
+            const bool vouched = ttdetail::cross_r_vouches<T>(p.data(), p.ld(), qr.taus().data(), rows, r);
+            rescale_next = !vouched;
+            if (!vouched)
+            {
+                static_cast<void>(ttdetail::cross_factor_rescaled<T>(qr, m, rows, r));
             }
         }
-        dn::factor_qr(qr);
         ttdetail::form_thin_q(qr, qbuf, rows, r, colbuf);
         return TensorStatus::Ok;
     };
@@ -1820,10 +2086,21 @@ template <typename T, typename F>
                     v = w;
                     w = tmp;
                 }
+                val_pred[p] = v[0];
                 const T dv = v[0] - val_true[p];
                 errsq = crd::math::fma(dv, dv, errsq);
             }
-            local.val_error = std::sqrt(errsq) / val_norm;
+            // the plain ratio while both sums are trusted; else the scaled form over the stored predictions, so an
+            // error far below the values (or values far outside the square-safe range) still reads as itself
+            const bool err_plain = ttdetail::cross_sum_sq_trusted(errsq);
+            if (val_plain && err_plain)
+            {
+                local.val_error = std::sqrt(errsq) / val_norm;
+            }
+            else
+            {
+                local.val_error = ttdetail::cross_scaled_error(val_pred, val_true, params.val_size, val_norm, val_exp);
+            }
             if (local.val_error < params.tol)
             {
                 local.converged = true;
