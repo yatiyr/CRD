@@ -9,7 +9,7 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S68](../design/network-f
 
 - Run 42774048974 (c5a06d38): win-arm64-debug failed `fuzz_congestion.cpp` on C4324 (the policy and datagram size
   before the 16-byte-aligned `CongestionSlot` left a gap). The slot now comes first, as `test_congestion.cpp`'s
-  `Controller`, which the same ARM64 job compiled clean (2cccb152). x64 MSVC does not warn here, so only the next
+  `Controller`, which the same ARM64 job compiled clean (b2dac68b). x64 MSVC does not warn here, so only the next
   ARM64 run can confirm it.
 - The QMux interop's one failure from the last batch (`... client closes 0 4 stops`, 1 run in 80) is the test's: the
   Cerid end completes in the turn it asks for its last STOP_SENDING and its CONNECTION_CLOSE is immediate (RFC 9000
@@ -26,7 +26,7 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S68](../design/network-f
 - `QuicPathMtu::on_too_big`: a probe above the limit fails at once and the next probe is the limit; a datagram at the
   size in use falls to the floor and searches up to the limit; a limit under the base or at or above the datagram is
   ignored. Counters `hints`, `hints_ignored`; the host's `too_big`, `too_big_refused`; the loop's `too_big`.
-- Found by `fuzz_quic_pmtu.cpp` in 28 s and fixed (60ee3209): a failed base (Error) that a lowered ceiling made equal
+- Found by `fuzz_quic_pmtu.cpp` in 28 s and fixed (e8381c74): a failed base (Error) that a lowered ceiling made equal
   to a size a late probe had proved stayed in Error, so the raise timer probed the size already in use. The minimized
   input is in the corpus; a unit test holds it.
 
