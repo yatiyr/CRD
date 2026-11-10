@@ -883,10 +883,11 @@
         "tests/foundation/net/test_bbr.cpp",
         "tests/foundation/net/test_delivery_rate.cpp",
         "tests/foundation/net/test_quic_congestion.cpp",
-        "tests/foundation/net/fuzz/fuzz_congestion.cpp"
+        "tests/foundation/net/fuzz/fuzz_congestion.cpp",
+        "tests/foundation/net/interop/quic_interop.py"
       ],
       "deprecation": null,
-      "note": "Design S69: the delivery rate samples of section 4.1 stamped on every packet in flight, and the model, states, two-time-scale bounds, ProbeRTT and spurious-loss undo of sections 5.1 to 5.6 in integer arithmetic, with CE marks answered as congestion (section 3.7). The draft is experimental; review again at its next revision."
+      "note": "Design S69: the delivery rate samples of section 4.1 stamped on every packet in flight, and the model, states, two-time-scale bounds, ProbeRTT and spurious-loss undo of sections 5.1 to 5.6 in integer arithmetic, with CE marks answered as congestion (section 3.7). Against ngtcp2 1.26 both ways (quic_interop.py, 2026-11-10): on the loopback, over lossy, jittered, CE-marking and MTU-limited relays, and through a relay bottleneck of 2.5 MB/s, 30 ms and a two-BDP drop-tail buffer against ngtcp2's CUBIC, Reno and BBR, where the model's minimum round trip is the path's, the queue stays under a round trip, the buffer does not overflow, and a Cerid client finds the rate and keeps 0.84 of the link or more under 1% loss, where CUBIC keeps 0.24. The draft is experimental; review again at its next revision."
     },
     {
       "id": "cc.hystart",
