@@ -583,7 +583,7 @@ struct RealHosts : HostKeys
 
     Identity identity;
     CountingAllocator allocator;
-    const HostClock clock;
+    HostClock clock;
     ConnectionIdTable routes{allocator, 64U};
     HandshakeBuckets buckets{allocator, HandshakeRules{}};
     Ingress ingress{IngressConfig{}, routes, buckets, &tokens, nullptr, &reset};
