@@ -27,7 +27,7 @@
  * reached (`pmtu`) and the peer's max_udp_payload_size (`peer_max_udp_payload`). The application is `cerid-interop`,
  * a private ALPN. */
 #define _GNU_SOURCE /* ppoll */
-#include "../../crypto/interop/openssl_self_signed.h"
+#include "openssl_self_signed.h"
 #include "http_exchange.h"
 
 #include <picoquic.h>
