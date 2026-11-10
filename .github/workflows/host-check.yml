@@ -90,6 +90,11 @@ jobs:
           # NET-PATH's ECN in the connection: two non-replaying local events under fork mode (a stack underflow in memcpy,
           # a wild read in AWS-LC's GCM tag), 2026-11-10.
           - {target: net-quic-connection, seed: 8403, repeat: ''}
+          # NET-PATH's SCReAM v2 in the congestion target: seven of sixteen local sessions ended in events no input
+          # replays (a pc on the stack and in the target's storage, a small-integer frame, a null this, a zero-page
+          # write), and one seed that stopped once ran clean when repeated, 2026-11-10.
+          - {target: net-congestion, seed: 8501, repeat: ''}
+          - {target: net-congestion, seed: 8502, repeat: ''}
 
     steps:
       - name: Checkout
