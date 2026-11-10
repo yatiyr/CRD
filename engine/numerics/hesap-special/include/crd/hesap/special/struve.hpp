@@ -147,6 +147,31 @@ struct StruveLead
     return tail + head + z2 / (whole + 1.5) < -2.0;
 }
 
+// Is s, negative, near a pole of Γ: within kStruveNearPole of it and within kStruveNearPoleScale·|s|? There gamma() and
+// lgamma(), which round π·s before the sine of their reflection, carry ε·|πs|/|sin πs| (H_−99.5000000105(42.9) was
+// 2.5e-9 off through its asymptotic expansion), and 1/Γ(s) and ln|Γ(s)| come from the reflection with the turn reduced
+// exactly; elsewhere that error is below 2e-13 of the value and the plain functions serve, at their cost.
+inline constexpr double kStruveNearPole = 0.25;
+inline constexpr double kStruveNearPoleScale = 1.0e-3;
+// H's series from x = kStruveCrossoverFrom down to the order kStruveCrossoverOrder cancels by up to 1e6 (its crossover,
+// 122 units at worst on base): a new rounding of its first term moves its result by that much, so the first term there
+// is formed as before.
+inline constexpr double kStruveCrossoverFrom = 10.0;
+inline constexpr double kStruveCrossoverOrder = -13.0;
+[[nodiscard]] inline bool struve_near_pole(double s) noexcept
+{
+    const double distance = crd::math::fabs(s - crd::math::round(s));
+    return s < 0.0 && distance < kStruveNearPole && distance < kStruveNearPoleScale * -s;
+}
+[[nodiscard]] inline double struve_rgamma_near_pole(double s) noexcept
+{
+    return -bes_sin_pi(-s) * gamma(1.0 - s) / kBesPi;
+}
+[[nodiscard]] inline double struve_lgamma_near_pole(double s) noexcept
+{
+    return crd::math::log(kBesPi / crd::math::fabs(bes_sin_pi(-s))) - lgamma(1.0 - s);
+}
+
 // The ascending series of H_ν (sign −1) or L_ν (sign +1). When Γ(ν+3/2) is at a pole (ν = −3/2, −5/2, …) the first
 // terms vanish (1/Γ = 0) and the series starts at m = −ν − ½. With Trace set, the size of its largest term is reported
 // as well (a compile-time choice: the plain series keeps its loop as it was).
@@ -166,7 +191,8 @@ template <bool Trace>
             t = -t;
         }
     }
-    else if (shifted < 0.0 && sign > 0.0)
+    else if (shifted < 0.0 &&
+             (sign > 0.0 || (struve_near_pole(shifted) && (x < kStruveCrossoverFrom || nu < kStruveCrossoverOrder))))
     {
         const StruveLead lead = struve_lead_negative(nu, half);
         t = (lead.value != 0.0) ? lead.value : lead.sign * crd::math::exp(struve_lead_log(nu, half));
@@ -384,8 +410,9 @@ CRD_NOINLINE inline StruveRatios struve_l_ratios_scaled(double nu, double half) 
         }
         // Γ(ν+½) < 0 on the intervals of negative argument where sin(π|ν+½|) > 0
         const double sign = (shifted < 0.0 && bes_sin_cos_pi(-shifted).sin > 0.0) ? -1.0 : 1.0;
+        const double ln_gamma = struve_near_pole(shifted) ? struve_lgamma_near_pole(shifted) : lgamma(shifted);
         const double scale =
-            sign * 2.0 * crd::math::exp(nu * crd::math::log(0.5 * x) - lgamma(shifted)) / crd::math::sqrt(kBesPi);
+            sign * 2.0 * crd::math::exp(nu * crd::math::log(0.5 * x) - ln_gamma) / crd::math::sqrt(kBesPi);
         correction = scale * sum / x;
     }
     return cyl_neumann(nu, x) + correction;
@@ -404,7 +431,9 @@ CRD_NOINLINE inline BesAsymp struve_h_asymptotic(double nu, double x) noexcept
     const double half = 0.5 * x;
     double asum = 0.0;
     double prev = 1e300;
-    double lead = gamma(0.5) / gamma(nu + 0.5) * crd::math::pow(half, nu - 1.0);
+    double lead =
+        (struve_near_pole(nu + 0.5) ? gamma(0.5) * struve_rgamma_near_pole(nu + 0.5) : gamma(0.5) / gamma(nu + 0.5)) *
+        crd::math::pow(half, nu - 1.0);
     if (crd::math::fabs(lead) <= (std::numeric_limits<double>::max)() && lead != 0.0)
     {
         const double inv_square = 1.0 / (half * half);
@@ -432,7 +461,8 @@ CRD_NOINLINE inline BesAsymp struve_h_asymptotic(double nu, double x) noexcept
     int m = 0;
     for (; m <= last; ++m)
     {
-        const double g = gamma(m + 0.5) / gamma(nu - m + 0.5);
+        const double g = struve_near_pole(nu - m + 0.5) ? gamma(m + 0.5) * struve_rgamma_near_pole(nu - m + 0.5)
+                                                        : gamma(m + 0.5) / gamma(nu - m + 0.5);
         const double term = g * crd::math::pow(half, nu - 2.0 * m - 1.0);
         if (crd::math::fabs(term) > prev)
         {

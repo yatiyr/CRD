@@ -747,6 +747,26 @@ TEST_CASE("struve: L near and at a negative half-integer order and where its ser
     }
 }
 
+TEST_CASE("struve: H near a negative half-integer order vs mpmath", "[v12-d][special][struve]")
+{
+    // mpmath at 70 digits at the exact double inputs. Base: 1/Gamma of a negative argument near a pole came from
+    // gamma()'s reflection, which rounds pi*s before the sine: in the series' first term (up to 2e5 units), in the
+    // asymptotic expansion (2.5e3 units at nu = -99.5000000105, x = 42.9).
+    const f64 points[][3] = {
+        {-91.500007860686168, 6.3139736630249486, -9.28946676415859120636755688967e+87},
+        {-199.50000031860145, 19.225895782164866, -7.8526590637408405062338320358e+168},
+        {-4.4999999727631792, 5.4165969027422385, 0.370715175014298012127247104589},
+        {-91.500000037855088, 0.6571875555903639, -3.50907560346855712867853396129e+174},
+        {-99.499999989506179, 42.862295149014663, 42619317165744613.1214176356634},
+        {-108.49999998793189, 47.363940684787991, -2437848533502144472.94615129512},
+    };
+    for (const auto& p : points)
+    {
+        INFO("struve_h nu=" << p[0] << " x=" << p[1]);
+        CHECK(close(sf::struve_h(p[0], p[1]), p[2], 1e-12, 1e-13));
+    }
+}
+
 TEST_CASE("hypergeom: 0F1 / 1F1 / 2F1 vs scipy", "[v12-d][special][hypergeom]")
 {
     for (std::size_t i = 0; i < len(ref_h0_v); ++i)
