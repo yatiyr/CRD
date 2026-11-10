@@ -2,12 +2,15 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/core/platform.hpp> // CRD_NOINLINE
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/detail/factor_arms.hpp>
 #include <crd/jobs/jobs.hpp>
 
 #include <crd/math/cmath.hpp>
+#include <cmath> // std::ldexp
+#include <limits>
 #include <type_traits>
 
 namespace crd::hesap::dense
@@ -24,6 +27,81 @@ template <typename T>
 inline T sqrt_value(T x) noexcept
 {
     return crd::math::sqrt(x);
+}
+
+// The Householder reflector of one column when the plain sum s = alpha^2 + |tail|^2 cannot be trusted: s is
+// non-finite (a square or the sum overflowed) or below mu / eps (mu the smallest normal, eps the epsilon). Below that
+// floor the squares that fell under mu carry an absolute error of up to delta / 2 each (delta = mu eps, the smallest
+// subnormal), together a relative n eps^2 / 2 once s >= mu / eps and an error of order one below it, so beta^2 = s is
+// wrong and H = I - tau v v^T is not orthogonal (a column 2^-530 below its neighbours left Q 3.3e-6 from orthogonal).
+// Here alpha and the tail are scaled by the exact power of two 2^-e that brings their largest magnitude into
+// [1/2, 1), in the manner of LAPACK's dlarfg, which rescales a reflector whose norm falls below its safe minimum: the
+// sum of squares is then at least 1/4 and at most n, tau and v are invariant under the scaling, and beta returns to
+// the column's scale through ldexp (infinite only when the column's norm itself exceeds the range). A tail that is
+// exactly zero keeps the identity reflector, as on the plain path; a tail whose squares are all negligible against
+// alpha after the scaling does the same. Writes the scaled reflector tail over x[0, tail) and returns {tau, beta}.
+// Out of line: an ordinary column never reaches it.
+template <typename T> struct Reflector
+{
+    T tau;
+    T beta;
+};
+
+template <typename T>
+CRD_NOINLINE Reflector<T> reflector_rescaled(const DenseTypeKernels<T>& kernels, T alpha, T* x,
+                                             crd::usize tail) noexcept
+{
+    T tail_peak = T{0};
+    bool finite = true;
+    for (crd::usize r = 0; r < tail; ++r)
+    {
+        const T a = crd::math::abs(x[r]);
+        finite = finite && a <= std::numeric_limits<T>::max();
+        tail_peak = a > tail_peak ? a : tail_peak;
+    }
+    if (finite && tail_peak == T{0})
+    {
+        return Reflector<T>{T{0}, alpha};
+    }
+    const T alpha_mag = crd::math::abs(alpha);
+    const T peak = alpha_mag > tail_peak ? alpha_mag : tail_peak;
+    if (!finite || !(peak <= std::numeric_limits<T>::max()))
+    {
+        // An infinity or a NaN in the column: no scale repairs it, so the plain formulas run as before.
+        const T s = (alpha * alpha) + kernels.dot(x, x, tail);
+        const T beta = -sign_or_one<T>(alpha) * sqrt_value<T>(s);
+        const T inv_diff = T{1} / (alpha - beta);
+        for (crd::usize r = 0; r < tail; ++r)
+        {
+            x[r] *= inv_diff;
+        }
+        return Reflector<T>{(beta - alpha) / beta, beta};
+    }
+    int e = 0;
+    static_cast<void>(crd::math::frexp(peak, &e));
+    // 2^-e as two factors, each a finite power of two even for the exponent of a subnormal peak
+    const int half = e / 2;
+    const T sa = std::ldexp(T{1}, -half);
+    const T sb = std::ldexp(T{1}, half - e);
+    const T alpha_s = (alpha * sa) * sb;
+    for (crd::usize r = 0; r < tail; ++r)
+    {
+        x[r] = (x[r] * sa) * sb;
+    }
+    const T xnorm_sq = kernels.dot(x, x, tail);
+    if (xnorm_sq == T{0})
+    {
+        // every tail square is below the smallest subnormal against an alpha of order one: the identity reflector,
+        // the plain path's choice for a tail that negligible; the tail's slots are unused when tau is zero
+        return Reflector<T>{T{0}, alpha};
+    }
+    const T beta_s = -sign_or_one<T>(alpha_s) * sqrt_value<T>((alpha_s * alpha_s) + xnorm_sq);
+    const T inv_diff = T{1} / (alpha_s - beta_s);
+    for (crd::usize r = 0; r < tail; ++r)
+    {
+        x[r] *= inv_diff;
+    }
+    return Reflector<T>{(beta_s - alpha_s) / beta_s, std::ldexp(beta_s, e)};
 }
 
 // Unblocked Householder factor on the panel A[k:m, k:k+nb], performed on
@@ -46,13 +124,28 @@ void panel_factor_qr_transposed(T* pt, crd::usize pt_ld, crd::usize panel_rows, 
         const T alpha_orig = vj[j];
         const crd::usize tail = panel_rows - j - 1;  // elements below diagonal
         const T xnorm_sq = kernels.dot(vj + j + 1, vj + j + 1, tail);
-        if (xnorm_sq == T{0})
+        // Trusted when finite and at least mu / eps (reflector_rescaled gives the bound); else the scaled reflector. One
+        // rare branch carries both that and the zero tail, so the ordinary column runs the plain formulas unchanged.
+        const T col_sq = alpha_orig * alpha_orig + xnorm_sq;
+        const bool trusted = col_sq >= std::numeric_limits<T>::min() / std::numeric_limits<T>::epsilon() &&
+                             col_sq <= std::numeric_limits<T>::max();
+        if (!trusted || xnorm_sq == T{0}) [[unlikely]]
         {
-            taus_arr[k + j] = T{0};
+            const Reflector<T> h = trusted ? Reflector<T>{T{0}, alpha_orig}
+                                           : reflector_rescaled<T>(kernels, alpha_orig, vj + j + 1, tail);
+            taus_arr[k + j] = h.tau;
+            if (h.tau == T{0})
+            {
+                continue;
+            }
+            vj[j] = h.beta;
+            if (j + 1 < nb)
+            {
+                kernels.reflect(ReflectorRows<T>{vj + j + 1, pt + (j + 1) * pt_ld + j, pt_ld, nb - j - 1, tail, h.tau});
+            }
             continue;
         }
-        const T beta = -sign_or_one<T>(alpha_orig) *
-                       sqrt_value<T>(alpha_orig * alpha_orig + xnorm_sq);
+        const T beta = -sign_or_one<T>(alpha_orig) * sqrt_value<T>(col_sq);
         const T tau = (beta - alpha_orig) / beta;
         const T inv_diff = T{1} / (alpha_orig - beta);
         // Scale v subvec (contiguous).

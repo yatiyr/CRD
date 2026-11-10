@@ -769,9 +769,11 @@ TEST_CASE("tt: the tt_cross range guard vouches only for a factor it can prove",
     REQUIRE(vouches(1e-100, 1e100));
     REQUIRE(vouches(1.0, 0.0));        // an exactly zero column skips its reflector
     REQUIRE(!vouches(0.0, 0.0));       // nothing to vouch for; the redo leaves a zero block as it is
-    REQUIRE(!vouches(1e153, 1.0));     // the column norm overflows
+    REQUIRE(vouches(1e153, 1.0));      // the squares overflow; the QR rescales that column itself
+    REQUIRE(!vouches(1.5e307, 1.0));   // the column norm itself leaves the range
     REQUIRE(!vouches(1e-160, 1e-160)); // the squares underflow
-    // a column 2^-530 below the other: its subnormal squares give a reflector 3e-6 from orthogonal
+    // a column 2^-530 below the other: its R_jj is below the applied-reflector floor (the QR rescales that column
+    // itself and stays orthogonal, but this test does not rely on it)
     REQUIRE(!vouches(std::ldexp(1.0, -530), 1.0));
 }
 

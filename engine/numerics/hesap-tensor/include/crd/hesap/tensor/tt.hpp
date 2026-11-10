@@ -1529,6 +1529,9 @@ template <typename T> [[nodiscard]] inline int cross_exponent(T peak) noexcept
 //    column residual that carries signal (above eps F) far above the applied-reflector floor.
 // A block of ordinary scale passes all three (its rounding-level residuals, near eps F, lie about 2^450 above the
 // floors in f64 and 2^30 in f32 for 10^4 rows), so the test costs O(r^2) reads beside the O(rows r^2) factorization.
+// hesap-dense's QR now rescales by itself each column whose sum of squares it cannot trust (reflector_rescaled in
+// qr.cpp), so it no longer builds the damaged reflectors above and overflows only where a column's norm leaves the
+// range; the test stays as this function's own proof and rejects at most a factor that was already accurate.
 template <typename T>
 [[nodiscard]] inline bool cross_r_vouches(const T* data, crd::usize ld, const T* taus, crd::u64 rows,
                                           crd::u64 r) noexcept
@@ -1563,8 +1566,9 @@ template <typename T>
 // the exact power of two that brings its peak into [1/2, 1), and factored again; every sum of squares is then at most
 // rows r and every square that matters is normal. Left as they are: a zero block (its plain factorization is exact), a
 // block with an infinity (no scale repairs it) and a block whose peak is already in [1/2, 2) (a scale of at most two
-// changes nothing; such a block was rejected for a column some 500 binary orders below its peak, which a scaling of
-// the whole block cannot lift). Returns whether it factored the block; when it did not, the factor is untouched.
+// changes nothing; such a block was rejected for a column some 500 binary orders below its peak, which the QR's own
+// column rescaling already factored accurately). Returns whether it factored the block; when it did not, the factor is
+// untouched.
 // Out of line: the ordinary range never reaches it.
 template <typename T>
 CRD_NOINLINE bool cross_factor_rescaled(crd::hesap::dense::QR<T, crd::hesap::dense::Layout::RowMajor>& qr, const T* m,

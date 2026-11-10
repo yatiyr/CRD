@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 using crd::hesap::dense::apply_q;
 using crd::hesap::dense::apply_q_transpose;
@@ -564,4 +565,129 @@ TEST_CASE("factor_qr_arm: every jobs lever at 4 to 32 jobs gives the one-job fac
     (void)crd_hesap_dense_tests::hesap_jobs_listener();
     check_qr_levers<float>();
     check_qr_levers<double>();
+}
+
+namespace
+{
+// A rows x cols matrix of independent pseudo-random columns, column j scaled by scale(j); factored, it must give a Q
+// whose first cols columns are orthonormal and an R with A = Q R column by column, each column to its own magnitude
+// (max |A_j - (Q R)_j| / max |A_j|, which squares nothing). Returns {orthogonality, worst column error}.
+template <typename T, typename Scale>
+std::pair<double, double> qr_column_scales(crd::usize rows, crd::usize cols, const Scale& scale)
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    Matrix<T, Layout::RowMajor> a(&alloc, rows, cols);
+    for (crd::usize i = 0; i < rows; ++i)
+    {
+        for (crd::usize j = 0; j < cols; ++j)
+        {
+            const double h =
+                std::sin((static_cast<double>(i) * 12.9898) + (static_cast<double>(j) * 78.233)) * 43758.5453;
+            a.at(i, j) = scale(j) * static_cast<T>(h - std::floor(h) - 0.5);
+        }
+    }
+    QR<T, Layout::RowMajor> qr(&alloc, rows, cols);
+    factor_qr(qr, a);
+    crd::containers::Array<T> q(&alloc);
+    q.resize(rows * cols);
+    crd::containers::Array<T> col(&alloc);
+    col.resize(rows);
+    for (crd::usize c = 0; c < cols; ++c)
+    {
+        for (crd::usize i = 0; i < rows; ++i)
+        {
+            col[i] = i == c ? T{1} : T{0};
+        }
+        apply_q(qr, crd::containers::Span<T>(col.data(), rows));
+        for (crd::usize i = 0; i < rows; ++i)
+        {
+            q[i * cols + c] = col[i];
+        }
+    }
+    double orth = 0.0;
+    for (crd::usize x = 0; x < cols; ++x)
+    {
+        for (crd::usize y = 0; y < cols; ++y)
+        {
+            double s = 0.0;
+            for (crd::usize i = 0; i < rows; ++i)
+            {
+                s += static_cast<double>(q[i * cols + x]) * static_cast<double>(q[i * cols + y]);
+            }
+            const double d = std::abs(s - (x == y ? 1.0 : 0.0));
+            orth = d > orth ? d : orth;
+        }
+    }
+    double worst = 0.0;
+    for (crd::usize j = 0; j < cols; ++j)
+    {
+        double peak = 0.0;
+        double err = 0.0;
+        for (crd::usize i = 0; i < rows; ++i)
+        {
+            double s = 0.0;
+            for (crd::usize p = 0; p <= j; ++p)
+            {
+                s += static_cast<double>(q[i * cols + p]) * static_cast<double>(qr.packed().at(p, j));
+            }
+            const double want = static_cast<double>(a.at(i, j));
+            peak = std::abs(want) > peak ? std::abs(want) : peak;
+            err = std::abs(s - want) > err ? std::abs(s - want) : err;
+        }
+        const double rel = peak > 0.0 ? err / peak : err;
+        worst = rel > worst ? rel : worst;
+    }
+    return {orth, worst};
+}
+} // namespace
+
+TEST_CASE("QR: a column far below its neighbours, or a matrix far outside the square-safe range, stays orthogonal",
+          "[hesap][qr][real][range]")
+{
+    // Base summed the squares of each reflector's column plainly: a column 2^-520 to 2^-530 below the others gave a
+    // reflector 9.5e-13 to 3.3e-6 from orthogonal, one 2^-560 below lost its direction (every square was zero), and a
+    // matrix near 1e300 overflowed to NaN.
+    for (const int k : {-520, -530, -560, -700, -1000})
+    {
+        INFO("f64 column 0 at 2^" << k);
+        const auto [orth, col] =
+            qr_column_scales<double>(400U, 2U, [k](crd::usize j) { return j == 0U ? std::ldexp(1.0, k) : 1.0; });
+        CHECK(orth <= 1e-14);
+        CHECK(col <= 1e-13);
+    }
+    for (const double s : {1e-300, 1e-200, 1e200, 1e300})
+    {
+        INFO("f64 matrix at " << s);
+        const auto [orth, col] = qr_column_scales<double>(400U, 3U, [s](crd::usize) { return s; });
+        CHECK(orth <= 1e-14);
+        CHECK(col <= 1e-13);
+    }
+    {
+        // the blocked path (more columns than the unblocked cut): one column 2^-540 below the rest, in a later panel
+        const auto [orth, col] =
+            qr_column_scales<double>(300U, 140U, [](crd::usize j) { return j == 70U ? std::ldexp(1.0, -540) : 1.0; });
+        CHECK(orth <= 1e-13);
+        CHECK(col <= 1e-12);
+    }
+    for (const int k : {-60, -66, -70, -100})
+    {
+        INFO("f32 column 0 at 2^" << k);
+        const auto [orth, col] =
+            qr_column_scales<float>(200U, 2U, [k](crd::usize j) { return j == 0U ? std::ldexp(1.0F, k) : 1.0F; });
+        CHECK(orth <= 1e-5);
+        CHECK(col <= 1e-5);
+    }
+    for (const float s : {1e-30F, 1e30F})
+    {
+        INFO("f32 matrix at " << s);
+        const auto [orth, col] = qr_column_scales<float>(200U, 3U, [s](crd::usize) { return s; });
+        CHECK(orth <= 1e-5);
+        CHECK(col <= 1e-5);
+    }
+    {
+        // ordinary columns and an exactly zero tail keep the plain path's identity reflector
+        const auto [orth, col] = qr_column_scales<double>(64U, 4U, [](crd::usize j) { return j == 2U ? 0.0 : 1.0; });
+        CHECK(orth <= 1e-14);
+        CHECK(col <= 1e-13);
+    }
 }

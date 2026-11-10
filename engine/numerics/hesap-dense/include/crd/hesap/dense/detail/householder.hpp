@@ -21,13 +21,15 @@ namespace crd::hesap::dense::detail
 //
 // such that  H * x = beta * e_0,  where x = [alpha, x_1, ..., x_{n-1}].
 //
-// IMPORTANT — divergence from the QR reflector (D(dense-eig)-5): the
-// compact-WY QR path (`qr.cpp::panel_factor_qr_transposed`) uses the same
-// beta/tau formula but OMITS the safmin rescaling branch. QR can ignore it
-// because the trailing-matrix update swamps any underflow; the symmetric
-// rank-2 update in tridiagonalization cannot — a tiny `beta` would give a
-// non-zero `tau` with `beta == 0`, propagating NaN. So this primitive keeps
-// the guard; the QR reflector stays an internal short-cut that does not.
+// The compact-WY QR path (`qr.cpp::panel_factor_qr_transposed`) uses the same
+// beta/tau formula with its own guard (D(dense-eig)-5, revised 2026-11-10):
+// a column whose plain sum of squares is non-finite or below mu / eps is
+// redone scaled by an exact power of two (`reflector_rescaled`). The earlier
+// claim that QR could skip a guard because the trailing update swamps any
+// underflow was wrong: a column 2^-530 below its neighbours left Q 3.3e-6
+// from orthogonal. The tridiagonalization's rank-2 update needs this
+// primitive's guard for the further reason that a tiny `beta` would give a
+// non-zero `tau` with `beta == 0`, propagating NaN.
 // Follows LAPACK dlarfg, zlarfg (BSD-3-Clause-Open-MPI); notice in THIRD-PARTY-NOTICES.md.
 // -----------------------------------------------------------------------
 
