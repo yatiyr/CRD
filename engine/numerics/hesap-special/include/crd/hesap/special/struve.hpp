@@ -99,10 +99,12 @@ struct StruveLead
 // factor m + ν + ½ of the terms passes its smallest sizes f and 1 − f (f the fraction of c = −ν − ½) at m = ⌊c⌋ and
 // ⌈c⌉, where the terms grow by (x/2)²/((m + ½)f) and can be far above those before (L at ν = −60.500003, x = 32.3 was
 // 1.1e-10 off: the sum stopped before them). It may stop where the terms after it stay below it: from m to M = ⌈c⌉
-// their ratios multiply to at most r^{K+1}/(f(1 − f)(K − 1)!), r = (x/2)²/(m + 3/2), K = ⌊c⌋ − m, and from M on each
-// further ratio is at most a/i at the i-th step, a = (x/2)²/(M + ½), so that all the terms after M add at most e^a
-// times the one at M. With (K − 1)! ≥ ((K − 1)/e)^{K−1} and the logarithms bounded by bes_log_lower (within 0.002 of ln
-// q for any positive q), the whole is taken below e^{−2} of the term at m. Called only where the term is that small.
+// their ratios multiply to at most r^{K+1}/(f(1 − f)(K − 1)!), r = (x/2)²/√((m + 3/2)(M + ½)), K = ⌊c⌋ − m, and from
+// M on each further ratio is at most a/i at the i-th step, a = (x/2)²/(M + ½), so that all the terms after M add at
+// most e^a times the one at M. With (K − 1)! ≥ ((K − 1)/e)^{K−1} and the logarithms bounded by bes_log_lower (within
+// 0.002 of ln q for any positive q), the whole is taken below e^{−2} of the term at m. Called only where the term is
+// that small, and, once it has refused, not again before the crossing: each call costs a few logarithms, and the terms
+// up to the crossing are all that small (H at ν = −60.7 ran 11 % slower asking at each of them).
 [[nodiscard]] inline bool struve_may_stop(int m, double nu, double z2) noexcept
 {
     const double c = -nu - 0.5;
@@ -122,7 +124,20 @@ struct StruveLead
         return true; // no ratio reaches 1 at the crossing, nor after it
     }
     const double steps = whole - m; // K ≥ 0
-    const double r = z2 / (m + 1.5);
+    // First a test without a logarithm, a division or a root, which settles the usual case: where r < (K − 1)/e², the
+    // tail term below is less than −(K − 1), and ln of `small` is below (its binary exponents' difference + 2)·ln 2.
+    const double spread = (m + 1.5) * (whole + 1.5); // r² = (x/2)⁴/spread
+    if (steps > 1.0 && (z2 * 7.39) * (z2 * 7.39) < (steps - 1.0) * (steps - 1.0) * spread)
+    {
+        const double head_bound =
+            (bes_binary_floor(z2 * z2) - bes_binary_floor(spread * f * (1.0 - f)) + 2.0) * kBesLn2;
+        if (z2 < (steps - 3.0 - head_bound) * (whole + 1.5))
+        {
+            return true;
+        }
+    }
+    // Π(j + ½) over the K + 1 steps is at least ((m + 3/2)(M + ½))^{(K+1)/2}, ln being concave (Jensen)
+    const double r = z2 / crd::math::sqrt((m + 1.5) * (whole + 1.5));
     const double small = r * r / (f * (1.0 - f)); // r² over the two smallest factors
     // (K − 1)·ln(r/(K − 1)) + (K − 1) bounds (K − 1)·ln r − ln (K − 1)!, and ln of `small` the rest; upper bounds both
     const double tail = (steps > 1.0) ? (steps - 1.0) * (bes_log_lower(r / (steps - 1.0)) + 0.002 + 1.0) : 0.0;
@@ -176,6 +191,7 @@ template <bool Trace>
     double sum = t;
     [[maybe_unused]] double biggest = crd::math::fabs(t);
     const double z2 = sign * half * half;
+    int ask_from = 0; // see struve_may_stop
     for (int m = first + 1; m <= 500 + first; ++m)
     {
         t *= z2 / ((m + 0.5) * (m + nu + 0.5));
@@ -184,9 +200,13 @@ template <bool Trace>
         {
             biggest = (crd::math::fabs(t) > biggest) ? crd::math::fabs(t) : biggest;
         }
-        if (crd::math::fabs(t) <= 1e-18 * crd::math::fabs(sum) && struve_may_stop(m, nu, half * half))
+        if (crd::math::fabs(t) <= 1e-18 * crd::math::fabs(sum) && m >= ask_from)
         {
-            break;
+            if (struve_may_stop(m, nu, half * half))
+            {
+                break;
+            }
+            ask_from = static_cast<int>(-nu - 0.5) + 1;
         }
     }
     if constexpr (Trace)
@@ -257,14 +277,19 @@ template <bool Scaled> [[nodiscard]] inline StruveRatios struve_l_ratios(double 
     double sum = 1.0;
     double biggest = 1.0;
     int scalings = 0;
+    int ask_from = 0; // see struve_may_stop
     for (int m = 1; m <= kStruveRatioCap; ++m)
     {
         t *= z2 / ((m + 0.5) * (m + nu + 0.5));
         sum += t;
         biggest = (crd::math::fabs(t) > biggest) ? crd::math::fabs(t) : biggest;
-        if (crd::math::fabs(t) <= 1e-18 * crd::math::fabs(sum) && struve_may_stop(m, nu, z2))
+        if (crd::math::fabs(t) <= 1e-18 * crd::math::fabs(sum) && m >= ask_from)
         {
-            break;
+            if (struve_may_stop(m, nu, z2))
+            {
+                break;
+            }
+            ask_from = static_cast<int>(-nu - 0.5) + 1;
         }
         if constexpr (Scaled)
         {
