@@ -1389,10 +1389,12 @@ class Lane:
         self.merge()
 
     def netem_namespace(self):
-        # crd-hesap-link-netem compares the link models with this kernel's netem through tc, under unshare -Urn.
+        # crd-hesap-link-netem compares the link models with this kernel's netem through tc, and
+        # crd-net-router-namespace routes through veth pairs between namespaces, under unshare -Urn.
         if not self.preset_step('Allow netem in a user namespace'):
             return
         self.run(['sudo', 'sysctl', '-w', 'kernel.apparmor_restrict_unprivileged_userns=0'])
+        self.run(['sudo', 'modprobe', 'veth'])
         self.run(['bash', '-c', 'sudo modprobe sch_netem || { sudo apt-get install -y '
                                 '"linux-modules-extra-$(uname -r)" && sudo modprobe sch_netem; }'])
 

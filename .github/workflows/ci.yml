@@ -976,13 +976,16 @@ jobs:
         if: matrix.preset == 'linux-gcc-public-checks'
         run: python3 scripts/install-nasm.py --destination "$RUNNER_TEMP/nasm" --download-dir "$RUNNER_TEMP/nasm-dl" --github-env "$GITHUB_ENV"
 
-      # crd-hesap-link-netem compares the link models with this kernel's netem through tc, under unshare -Urn: a private
-      # network namespace needs Ubuntu's restriction on unprivileged user namespaces lifted and the qdisc's module loaded.
+      # crd-hesap-link-netem compares the link models with this kernel's netem through tc, and crd-net-router-namespace
+      # routes crd-net's datagrams through a router namespace joined by veth pairs, both under unshare -Urn: a private
+      # network namespace needs Ubuntu's restriction on unprivileged user namespaces lifted, and the qdisc's and veth's
+      # modules loaded.
       - name: Allow netem in a user namespace
         if: matrix.preset == 'linux-gcc-public-checks'
         timeout-minutes: 15
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo modprobe veth
           sudo modprobe sch_netem || { python scripts/install-apt-packages.py "linux-modules-extra-$(uname -r)" && sudo modprobe sch_netem; }
 
       # The pinned libwebrtc files (tools/webrtc-bwe-sources) are the oracles and boards of HESAP-NET's delay trend,

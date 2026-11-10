@@ -10,6 +10,11 @@
 #if !CRD_OS_WINDOWS
 #include <fcntl.h>
 #endif
+#if CRD_OS_LINUX
+#include <linux/errqueue.h>
+#include <netinet/icmp6.h>
+#include <netinet/ip_icmp.h>
+#endif
 
 namespace crd::net
 {
@@ -20,15 +25,42 @@ namespace
 constexpr usize kBatchChunk = 32U; // datagrams per recvmmsg or sendmmsg
 // Room for the one control message an ECN codepoint takes, received or sent.
 constexpr usize kControlBytes = CMSG_SPACE(sizeof(int));
+// Room for an ICMP report's control messages: the extended error with its sender's address, and the codepoint the
+// host adds for an ECN-reading socket.
+constexpr usize kReportControlBytes =
+    CMSG_SPACE(sizeof(sock_extended_err) + sizeof(sockaddr_in6)) + 2U * CMSG_SPACE(sizeof(int));
+// The reports one receive() reads before the datagrams behind them, so a flood of ICMP errors never starves them.
+constexpr usize kReportsPerReceive = 2U * kBatchChunk;
+// The IPv4 or IPv6 header and the UDP header: what a hop's MTU carries beyond the UDP payload.
+constexpr u32 kV4Overhead = 28U;
+constexpr u32 kV6Overhead = 48U;
 #elif CRD_OS_WINDOWS
 constexpr usize kControlBytes = WSA_CMSG_SPACE(sizeof(INT));
 #endif
 
-// An ICMP report about an earlier send, which says nothing about the datagrams still waiting.
+// An ICMP report about an earlier send, which says nothing about the datagrams still waiting. Linux hands the error
+// of a report its error queue holds to the socket's next call: the codes its ICMP and ICMPv6 errors carry.
 [[nodiscard]] bool stale_report(int code) noexcept
 {
 #if CRD_OS_WINDOWS
     return code == WSAECONNRESET || code == WSAENETRESET;
+#elif CRD_OS_LINUX
+    switch (code)
+    {
+        case ECONNREFUSED:
+        case EHOSTUNREACH:
+        case ENETUNREACH:
+        case EHOSTDOWN:
+        case ENONET:
+        case EMSGSIZE:
+        case ENOPROTOOPT:
+        case EOPNOTSUPP:
+        case EACCES:
+        case EPROTO:
+            return true;
+        default:
+            return false;
+    }
 #else
     return code == ECONNREFUSED;
 #endif
@@ -128,6 +160,18 @@ void fill_slot(ReceivedDatagram& slot, usize size, bool truncated, const sockadd
     return v4 && v6_set;
 }
 
+#if CRD_OS_LINUX
+// Has the host queue the ICMP errors about this socket's datagrams (IP_RECVERR, IPV6_RECVERR), which an unconnected
+// socket otherwise never sees. An IPv6 socket that carries IPv4 asks for both families; the host reports IPv4's there
+// through IPV6_RECVERR. A host that refuses leaves the socket without reports, which features() reports.
+[[nodiscard]] bool queue_reports(NativeSocket handle, bool v6, bool dual_stack) noexcept
+{
+    const bool v4 = (v6 && !dual_stack) || set_option(handle, IPPROTO_IP, IP_RECVERR, 1);
+    const bool v6_set = !v6 || set_option(handle, IPPROTO_IPV6, IPV6_RECVERR, 1);
+    return v4 && v6_set;
+}
+#endif
+
 // The control message level and type that carry a codepoint toward `peer`, by its own family (an IPv4 peer of a
 // dual-stack socket takes IPv4's, which the host applies to the mapped address).
 void ecn_message(const Endpoint& peer, int& level, int& type) noexcept
@@ -181,6 +225,96 @@ void ecn_message(const Endpoint& peer, int& level, int& type) noexcept
         }
     }
     return ecn;
+}
+
+// The UDP payload a Packet Too Big report says its hop carries (IPv4's Fragmentation Needed or ICMPv6's Packet Too
+// Big), or 0 for any other report: another ICMP error, the host's own (a send over the interface's MTU, which that
+// send already failed) or a hop MTU that leaves no payload.
+[[nodiscard]] u32 too_big_limit(const sock_extended_err& error) noexcept
+{
+    u32 overhead = 0U;
+    if (error.ee_origin == SO_EE_ORIGIN_ICMP && error.ee_type == ICMP_DEST_UNREACH && error.ee_code == ICMP_FRAG_NEEDED)
+    {
+        overhead = kV4Overhead;
+    }
+    else if (error.ee_origin == SO_EE_ORIGIN_ICMP6 && error.ee_type == ICMP6_PACKET_TOO_BIG)
+    {
+        overhead = kV6Overhead;
+    }
+    return (overhead != 0U && error.ee_info > overhead) ? error.ee_info - overhead : 0U;
+}
+
+enum class Report : u8
+{
+    None,    // the error queue is empty
+    Dropped, // a report the transport has no use for
+    TooBig,  // a Packet Too Big report, in the slot
+};
+
+// Reads the oldest report off the socket's error queue: the quoted start of the datagram into the slot's storage, and
+// the peer it was sent to.
+[[nodiscard]] Report read_report(NativeSocket handle, ReceivedDatagram& slot) noexcept
+{
+    sockaddr_storage peer{};
+    iovec vector{slot.storage.data(), slot.storage.size()};
+    alignas(cmsghdr) u8 control[kReportControlBytes];
+    msghdr message{};
+    message.msg_name = &peer;
+    message.msg_namelen = sizeof(peer);
+    message.msg_iov = &vector;
+    message.msg_iovlen = 1U;
+    message.msg_control = control;
+    message.msg_controllen = sizeof(control);
+    ssize_t got = -1;
+    do
+    {
+        got = ::recvmsg(handle, &message, MSG_ERRQUEUE | MSG_DONTWAIT);
+    } while (got < 0 && interrupted(last_error()));
+    if (got < 0)
+    {
+        return Report::None;
+    }
+    u32 limit = 0U;
+    for (cmsghdr* header = CMSG_FIRSTHDR(&message); header != nullptr; header = CMSG_NXTHDR(&message, header))
+    {
+        const bool extended = (header->cmsg_level == IPPROTO_IP && header->cmsg_type == IP_RECVERR) ||
+                              (header->cmsg_level == IPPROTO_IPV6 && header->cmsg_type == IPV6_RECVERR);
+        if (extended && header->cmsg_len >= CMSG_LEN(sizeof(sock_extended_err)))
+        {
+            sock_extended_err error{};
+            std::memcpy(&error, CMSG_DATA(header), sizeof(error));
+            limit = too_big_limit(error);
+            break;
+        }
+    }
+    if (limit == 0U)
+    {
+        return Report::Dropped;
+    }
+    fill_slot(slot, static_cast<usize>(got), (message.msg_flags & MSG_TRUNC) != 0, peer);
+    slot.too_big = limit;
+    return Report::TooBig;
+}
+
+// Reads reports into the slots from `count` on while `budget` lasts, Packet Too Big reports taking slots and the rest
+// dropped; `waiting` ends once the queue is seen empty.
+void read_reports(NativeSocket handle, cont::Span<ReceivedDatagram> slots, usize& count, usize& budget,
+                  bool& waiting) noexcept
+{
+    while (budget != 0U && count < slots.size())
+    {
+        --budget;
+        const Report report = read_report(handle, slots[count]);
+        if (report == Report::None)
+        {
+            waiting = false;
+            return;
+        }
+        if (report == Report::TooBig)
+        {
+            ++count;
+        }
+    }
 }
 
 // One control message carrying `ecn` toward `peer` in `control`, which `message` then points at.
@@ -237,6 +371,9 @@ UdpSocket::UdpSocket(UdpSocket&& other) noexcept
 #if CRD_OS_WINDOWS
       ,
       m_receive_message(other.m_receive_message)
+#elif CRD_OS_LINUX
+      ,
+      m_reports_waiting(other.m_reports_waiting)
 #endif
 {
     other.m_handle = kNoHandle;
@@ -253,6 +390,8 @@ UdpSocket& UdpSocket::operator=(UdpSocket&& other) noexcept
         m_features = other.m_features;
 #if CRD_OS_WINDOWS
         m_receive_message = other.m_receive_message;
+#elif CRD_OS_LINUX
+        m_reports_waiting = other.m_reports_waiting;
 #endif
         other.m_handle = kNoHandle;
     }
@@ -311,6 +450,9 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
     {
         socket.m_features = enable_ecn(handle, v6, socket.m_dual_stack);
         socket.m_features.dont_fragment = forbid_fragmentation(handle, v6, socket.m_dual_stack);
+#if CRD_OS_LINUX
+        socket.m_features.too_big_reports = queue_reports(handle, v6, socket.m_dual_stack);
+#endif
     }
 #endif
     if (error == SocketError::None)
@@ -360,6 +502,9 @@ void UdpSocket::close() noexcept
     m_handle = kNoHandle;
     m_local = Endpoint{};
     m_features = SocketFeatures{};
+#if CRD_OS_LINUX
+    m_reports_waiting = false;
+#endif
 }
 
 Endpoint UdpSocket::local_endpoint() const noexcept
@@ -377,6 +522,12 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
     }
     const NativeSocket handle = native(m_handle);
 #if CRD_OS_LINUX
+    usize report_budget = kReportsPerReceive;
+    usize stale_left = kReportsPerReceive;
+    if (m_reports_waiting)
+    {
+        read_reports(handle, slots, result.count, report_budget, m_reports_waiting);
+    }
     while (result.count < slots.size())
     {
         const usize chunk = (slots.size() - result.count < kBatchChunk) ? slots.size() - result.count : kBatchChunk;
@@ -400,8 +551,22 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
         if (got < 0)
         {
             const int code = last_error();
-            if (interrupted(code) || stale_report(code))
+            if (interrupted(code))
             {
+                continue;
+            }
+            if (stale_report(code))
+            {
+                // A report's error, which the call returned in place of a datagram: the report is queued. Past the
+                // budget the reports wait for the next call while the datagrams are read; errors that keep coming
+                // (each needs a new report) end the call.
+                m_reports_waiting = true;
+                if (stale_left == 0U)
+                {
+                    return result;
+                }
+                --stale_left;
+                read_reports(handle, slots, result.count, report_budget, m_reports_waiting);
                 continue;
             }
             if (!would_block(code))
@@ -491,6 +656,7 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
     const NativeSocket handle = native(m_handle);
     const bool v6 = m_local.address.family == AddressFamily::V6;
 #if CRD_OS_LINUX
+    bool resent = false; // the datagram at result.count went again after a report's error
     while (result.count < datagrams.size())
     {
         mmsghdr messages[kBatchChunk];
@@ -536,6 +702,27 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
                 {
                     continue;
                 }
+                if (sent < 0 && code == ENOBUFS)
+                {
+                    // The host took the datagram and dropped it past the socket (a full device queue, a link that
+                    // refuses its size, no memory): lost on the way, as a network loses it. The host says so only to
+                    // a socket that asked for reports, and would send it the same way again.
+                    ++result.count;
+                    resent = false;
+                    continue;
+                }
+                if (sent < 0 && stale_report(code))
+                {
+                    // Either an earlier datagram's report, which the host returns to the next call and which leaves
+                    // this datagram unsent, or this datagram's own error; both leave a report to read. It goes again
+                    // once: a second failure is its own.
+                    m_reports_waiting = true;
+                    if (!resent)
+                    {
+                        resent = true;
+                        continue;
+                    }
+                }
                 if (sent < 0 && code == EINVAL && marked)
                 {
                     m_features.ecn_marking = false; // a host that takes no codepoint: the batch goes unmarked
@@ -545,6 +732,7 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
                 return result;
             }
             result.count += static_cast<usize>(sent);
+            resent = false;
             if (static_cast<usize>(sent) < chunk)
             {
                 continue; // the next call starts at the datagram that failed and reports why
@@ -628,7 +816,18 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
 
 bool UdpSocket::wait_readable(u64 timeout_ns) noexcept
 {
-    return is_open() && wait_native(native(m_handle), kPollReadable, timeout_ns) != 0;
+    if (!is_open())
+    {
+        return false;
+    }
+    const short events = wait_native(native(m_handle), kPollReadable, timeout_ns);
+#if CRD_OS_LINUX
+    if ((events & POLLERR) != 0)
+    {
+        m_reports_waiting = true; // the error queue holds a report, or the socket an error one left
+    }
+#endif
+    return events != 0;
 }
 
 } // namespace crd::net

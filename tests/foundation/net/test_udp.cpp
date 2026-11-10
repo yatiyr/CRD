@@ -1,11 +1,17 @@
-// crd-net -- datagram sockets on the host's loopback (4.2a; docs/design/network-foundation.md#sockets), and the ECN
-// codepoint each datagram carries (NET-PATH; #ecn).
+// crd-net -- datagram sockets on the host's loopback (4.2a; docs/design/network-foundation.md#sockets), the ECN
+// codepoint each datagram carries (NET-PATH; #ecn), and on Linux a router's Packet Too Big reports (#pmtu) through
+// private network namespaces ([.netns], router_namespace_fixture.hpp).
 
 #include <crd/net/udp.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <chrono>
+
+#if CRD_OS_LINUX
+#include "router_namespace_fixture.hpp"
+#endif
 
 namespace
 {
@@ -212,6 +218,8 @@ TEST_CASE("a UDP socket carries each datagram's ECN codepoint over IPv4, IPv6 an
 TEST_CASE("a UDP socket forbids fragmentation in every family, so PMTU probes see the path", "[net][udp][net-path]")
 {
     UdpSocket v4 = open_on(IpAddress::v4_loopback());
+    // Packet Too Big reports reach receive() on Linux alone: Windows keeps its ICMP reports to itself.
+    CHECK(v4.features().too_big_reports == (CRD_OS_LINUX != 0));
 #if CRD_OS_LINUX || CRD_OS_WINDOWS
     CHECK(v4.features().dont_fragment);
 #else
@@ -224,12 +232,14 @@ TEST_CASE("a UDP socket forbids fragmentation in every family, so PMTU probes se
         SKIP("the host has no IPv6 loopback");
     }
     CHECK(v6.features().dont_fragment);
+    CHECK(v6.features().too_big_reports == (CRD_OS_LINUX != 0));
     UdpOptions options;
     options.bind = Endpoint{IpAddress::v6_any(), 0U};
     SocketError error = SocketError::Failed;
     UdpSocket dual = UdpSocket::open(options, error);
     REQUIRE(error == SocketError::None);
     CHECK(dual.features().dont_fragment); // both families' options
+    CHECK(dual.features().too_big_reports == (CRD_OS_LINUX != 0));
     // The loopback's MTU carries the largest datagram unfragmented (the send test below sends it whole).
     u8 bytes[1472] = {};
     const Endpoint to = reach(dual, IpAddress::v4_loopback());
@@ -447,7 +457,7 @@ TEST_CASE("an IPv6-only UDP socket refuses IPv4 peers and carries IPv6", "[net][
     CHECK(matches(ConstSpan<u8>(slots.slots[0].storage.data(), slots.slots[0].size), 6U));
 }
 
-TEST_CASE("an unreachable peer does not stop a UDP socket's receives", "[net][udp]")
+TEST_CASE("an unreachable peer's ICMP reports fail no send or receive and leave no wakeup", "[net][udp]")
 {
     UdpSocket server = open_on(IpAddress::v4_loopback());
     UdpSocket client = open_on(IpAddress::v4_loopback());
@@ -460,18 +470,30 @@ TEST_CASE("an unreachable peer does not stop a UDP socket's receives", "[net][ud
     static u8 payload[24];
     pattern(payload, 7U);
     const OutgoingDatagram to_gone[] = {{ConstSpan<u8>(payload, sizeof(payload)), gone}};
+    // Linux returns a queued report's error to the next call: each send after the first meets one and goes again.
     for (u32 round = 0U; round < 4U; ++round)
     {
-        REQUIRE(server.send(to_gone).error == SocketError::None);
+        const BatchResult sent = server.send(to_gone);
+        REQUIRE(sent.error == SocketError::None);
+        REQUIRE(sent.count == 1U);
+        static_cast<void>(server.wait_readable(50'000'000U)); // the report's arrival
     }
     const OutgoingDatagram to_server[] = {{ConstSpan<u8>(payload, sizeof(payload)), server.local_endpoint()}};
     REQUIRE(client.send(to_server).count == 1U);
     static Slots slots;
     CHECK(receive_all(server, Span<ReceivedDatagram>(slots.slots, 1U), 1U) == 1U);
     CHECK(slots.slots[0].peer == client.local_endpoint());
+    CHECK(slots.slots[0].too_big == 0U); // a port unreachable report is no Packet Too Big
     const BatchResult after = server.receive(slots.slots);
     CHECK(after.count == 0U);
     CHECK(after.error == SocketError::None);
+    // Every report was read and dropped: nothing wakes a wait, and a report alone is no receive.
+    REQUIRE(server.send(to_gone).count == 1U);
+    static_cast<void>(server.wait_readable(50'000'000U));
+    const BatchResult report_only = server.receive(slots.slots);
+    CHECK(report_only.count == 0U);
+    CHECK(report_only.error == SocketError::None);
+    CHECK_FALSE(server.wait_readable(0U));
 }
 
 TEST_CASE("a UDP socket waits until a datagram arrives or its time passes", "[net][udp]")
@@ -516,3 +538,221 @@ TEST_CASE("a closed or moved-from UDP socket refuses every call", "[net][udp]")
     CHECK(moved.local_endpoint() == Endpoint{});
     moved.close(); // twice is harmless
 }
+
+#if CRD_OS_LINUX
+namespace
+{
+using crd::net::testing::RouterPath;
+
+// The UDP payload the router's hop carries toward the far host in a family.
+u32 hop_payload(bool v6)
+{
+    return RouterPath::kHopMtu - (v6 ? 48U : 28U);
+}
+
+// The largest UDP payload of a 1500-byte link.
+usize link_payload(bool v6)
+{
+    return RouterPath::kLinkMtu - (v6 ? 48U : 28U);
+}
+
+// Waits for and reads one report into the first slot, `slot_bytes` long.
+const ReceivedDatagram& one_report(UdpSocket& socket, Slots& slots, usize slot_bytes)
+{
+    ReceivedDatagram& slot = slots.slots[0];
+    slot.storage = Span<u8>(slots.storage[0], slot_bytes);
+    REQUIRE(receive_all(socket, Span<ReceivedDatagram>(&slot, 1U), 1U) == 1U);
+    return slot;
+}
+
+void spin_for(std::chrono::milliseconds span)
+{
+    const auto until = std::chrono::steady_clock::now() + span;
+    while (std::chrono::steady_clock::now() < until)
+    {
+    }
+}
+} // namespace
+
+TEST_CASE("a router's Packet Too Big reaches a UDP socket as a report quoting the datagram, in every family",
+          "[.netns]")
+{
+    RouterPath& path = RouterPath::get();
+    // 0: IPv4; 1: IPv6; 2: an IPv6 socket carrying IPv4, whose reports come through IPv6's error queue.
+    const u32 family = GENERATE(0U, 1U, 2U);
+    const bool v6 = family == 1U;
+    INFO("family " << family);
+    UdpSocket near = path.open(RouterPath::Near, family != 0U, family == 2U);
+    UdpSocket far = path.open(RouterPath::Far, v6);
+    REQUIRE(near.features().too_big_reports);
+    const Endpoint to = far.local_endpoint();
+    const u32 limit = hop_payload(v6);
+    // The router quotes what fits in 576 bytes of IPv4 (RFC 1812) or in IPv6's 1280 (RFC 4443).
+    const usize quoted = v6 ? 1184U : 520U;
+    static u8 payload[1500];
+    pattern(Span<u8>(payload, sizeof(payload)), 11U);
+    static Slots slots;
+
+    const OutgoingDatagram large[] = {{ConstSpan<u8>(payload, 1400U), to}};
+    REQUIRE(near.send(large).count == 1U);
+    const ReceivedDatagram& report = one_report(near, slots, Slots::kBytes);
+    CHECK(report.too_big == limit);
+    CHECK(report.peer == to);
+    CHECK(report.size == quoted);
+    CHECK_FALSE(report.truncated);
+    CHECK(matches(ConstSpan<u8>(report.storage.data(), report.size), 11U));
+    CHECK_FALSE(far.wait_readable(100'000'000U));
+
+    // The limit itself crosses whole with no report; a byte more draws another, cut to a short slot.
+    const OutgoingDatagram fits[] = {{ConstSpan<u8>(payload, limit), to}};
+    REQUIRE(near.send(fits).count == 1U);
+    REQUIRE(receive_all(far, Span<ReceivedDatagram>(slots.slots + 1U, 1U), 1U) == 1U);
+    CHECK(slots.slots[1].size == limit);
+    CHECK(slots.slots[1].too_big == 0U);
+    CHECK(matches(ConstSpan<u8>(slots.slots[1].storage.data(), limit), 11U));
+    CHECK_FALSE(near.wait_readable(100'000'000U));
+    const Endpoint near_seen = slots.slots[1].peer;
+    const OutgoingDatagram over[] = {{ConstSpan<u8>(payload, limit + 1U), to}};
+    REQUIRE(near.send(over).count == 1U);
+    const ReceivedDatagram& cut = one_report(near, slots, 64U);
+    CHECK(cut.too_big == limit);
+    CHECK(cut.size == 64U);
+    CHECK(cut.truncated);
+    CHECK(matches(ConstSpan<u8>(cut.storage.data(), cut.size), 11U));
+
+    // The far host's datagrams meet no small hop: the link's largest crosses toward the near host.
+    const OutgoingDatagram back[] = {{ConstSpan<u8>(payload, link_payload(v6)), near_seen}};
+    const BatchResult returned = far.send(back);
+    CHECK(returned.error == SocketError::None);
+    REQUIRE(returned.count == 1U);
+    ReceivedDatagram& arrived = slots.slots[2];
+    arrived.storage = Span<u8>(slots.storage[2], Slots::kBytes);
+    REQUIRE(receive_all(near, Span<ReceivedDatagram>(&arrived, 1U), 1U) == 1U);
+    CHECK(arrived.size == link_payload(v6));
+    CHECK(arrived.too_big == 0U);
+    CHECK_FALSE(far.wait_readable(100'000'000U));
+}
+
+TEST_CASE("a UDP socket drops the host's other reports: an unreachable port past the router and its own oversized "
+          "send",
+          "[.netns]")
+{
+    RouterPath& path = RouterPath::get();
+    const bool v6 = GENERATE(false, true);
+    INFO("IPv6 " << v6);
+    UdpSocket near = path.open(RouterPath::Near, v6);
+    Endpoint gone;
+    {
+        const UdpSocket closed = path.open(RouterPath::Far, v6);
+        gone = closed.local_endpoint();
+    }
+    static u8 payload[1500];
+    pattern(Span<u8>(payload, sizeof(payload)), 12U);
+    static Slots slots;
+    // The far host's port unreachable, three times: every send leaves, nothing is received, no wakeup is left.
+    const OutgoingDatagram to_gone[] = {{ConstSpan<u8>(payload, 32U), gone}};
+    for (u32 round = 0U; round < 3U; ++round)
+    {
+        const BatchResult sent = near.send(to_gone);
+        REQUIRE(sent.error == SocketError::None);
+        REQUIRE(sent.count == 1U);
+        CHECK(near.wait_readable(kPatience));
+        const BatchResult received = near.receive(slots.slots);
+        CHECK(received.count == 0U);
+        CHECK(received.error == SocketError::None);
+        CHECK_FALSE(near.wait_readable(0U));
+    }
+    // With an unreachable report's error waiting, a datagram over the near link's MTU still fails as its own, and the
+    // host's own report of it is dropped too.
+    REQUIRE(near.send(to_gone).count == 1U);
+    spin_for(std::chrono::milliseconds(50));
+    const OutgoingDatagram oversized[] = {{ConstSpan<u8>(payload, link_payload(v6) + 1U), gone}};
+    const BatchResult refused = near.send(oversized);
+    CHECK(refused.count == 0U);
+    CHECK(refused.error == SocketError::MessageTooLarge);
+    CHECK(near.wait_readable(0U));
+    const BatchResult nothing = near.receive(slots.slots);
+    CHECK(nothing.count == 0U);
+    CHECK(nothing.error == SocketError::None);
+    CHECK_FALSE(near.wait_readable(0U));
+    // A Packet Too Big after them is still reported.
+    UdpSocket far = path.open(RouterPath::Far, v6);
+    const OutgoingDatagram large[] = {{ConstSpan<u8>(payload, 1400U), far.local_endpoint()}};
+    REQUIRE(near.send(large).count == 1U);
+    CHECK(one_report(near, slots, Slots::kBytes).too_big == hop_payload(v6));
+}
+
+TEST_CASE("a datagram the host drops past the socket is lost on the way, and the batch goes on", "[.netns]")
+{
+    RouterPath& path = RouterPath::get();
+    const bool v6 = GENERATE(false, true);
+    INFO("IPv6 " << v6);
+    UdpSocket near = path.open(RouterPath::Near, v6);
+    static u8 payload[1400];
+    pattern(Span<u8>(payload, sizeof(payload)), 14U);
+    const Endpoint nowhere = RouterPath::dropping(v6);
+    // A socket that asked for reports hears of the host's drop (ENOBUFS); the datagram is gone, not waiting.
+    const OutgoingDatagram batch[] = {
+        {ConstSpan<u8>(payload, 64U), nowhere},
+        {ConstSpan<u8>(payload, sizeof(payload)), nowhere},
+        {ConstSpan<u8>(payload, sizeof(payload)), nowhere},
+        {ConstSpan<u8>(payload, 64U), nowhere},
+    };
+    const BatchResult sent = near.send(batch);
+    CHECK(sent.error == SocketError::None);
+    CHECK(sent.count == 4U);
+}
+
+TEST_CASE("a flood of Packet Too Big reports is read 64 a call, and the datagrams behind it are not held back",
+          "[.netns]")
+{
+    RouterPath& path = RouterPath::get();
+    UdpSocket near = path.open(RouterPath::Near, false);
+    UdpSocket far = path.open(RouterPath::Far, false);
+    static u8 payload[1400];
+    pattern(Span<u8>(payload, sizeof(payload)), 13U);
+    constexpr usize kFlood = 80U;
+    OutgoingDatagram flood[kFlood];
+    for (OutgoingDatagram& datagram : flood)
+    {
+        datagram = OutgoingDatagram{ConstSpan<u8>(payload, sizeof(payload)), far.local_endpoint()};
+    }
+    usize sent = 0U;
+    while (sent < kFlood)
+    {
+        const BatchResult result = near.send(ConstSpan<OutgoingDatagram>(flood).subspan(sent));
+        REQUIRE(result.error == SocketError::None); // a report's error met by a send goes again once
+        sent += result.count;
+    }
+    // Every report arrives, then a datagram from the far host behind them.
+    spin_for(std::chrono::milliseconds(200));
+    const OutgoingDatagram hello[] = {{ConstSpan<u8>(payload, 16U), near.local_endpoint()}};
+    REQUIRE(far.send(hello).count == 1U);
+    spin_for(std::chrono::milliseconds(50));
+    REQUIRE(near.wait_readable(kPatience));
+    static Slots slots;
+    const BatchResult first = near.receive(slots.slots);
+    REQUIRE(first.error == SocketError::None);
+    usize reports = 0U;
+    usize datagrams = 0U;
+    for (usize index = 0U; index < first.count; ++index)
+    {
+        if (slots.slots[index].too_big != 0U)
+        {
+            ++reports;
+        }
+        else
+        {
+            ++datagrams;
+            CHECK(slots.slots[index].size == 16U);
+        }
+    }
+    CHECK(reports == 64U);
+    CHECK(datagrams == 1U);
+    // The rest come with the next call, and then nothing is left.
+    const BatchResult rest = near.receive(slots.slots);
+    CHECK(rest.error == SocketError::None);
+    CHECK(reports + rest.count == kFlood);
+    CHECK_FALSE(near.wait_readable(0U));
+}
+#endif

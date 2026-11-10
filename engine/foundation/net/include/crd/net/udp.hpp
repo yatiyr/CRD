@@ -77,6 +77,9 @@ struct SocketFeatures
     // estimate refuses none: a datagram larger than the path carries is lost, so a PMTU probe proves its size
     // (RFC 8899 section 3), and one larger than the host's interface fails with MessageTooLarge.
     bool dont_fragment = false;
+    // The host's ICMP Packet Too Big messages about sent datagrams reach receive() as reports
+    // (ReceivedDatagram::too_big); its other ICMP errors are read and dropped without failing a receive or a send.
+    bool too_big_reports = false;
 };
 
 // What one batch did: `count` datagrams in order, then the reason it stopped. A receive stops with None when the host
@@ -118,8 +121,11 @@ protected:
 // (IP_TOS and IPV6_TCLASS control messages) and Windows (IP_ECN and IPV6_ECN through WSARecvMsg and WSASendMsg),
 // each enabled where the host accepts it and reported by features(). Datagrams leave unfragmented on both
 // (IP_MTU_DISCOVER and IPV6_MTU_DISCOVER at IP_PMTUDISC_PROBE, or Windows' IP_DONTFRAGMENT and IPV6_DONTFRAG where it
-// refuses those), so the transport's PMTU search sees the path. macOS carries bytes alone until crd-net's port there
-// (MAC.1). Pacing and the offloads are NET-PATH's.
+// refuses those), so the transport's PMTU search sees the path. On Linux the host queues each ICMP error about a sent
+// datagram (IP_RECVERR, IPV6_RECVERR): receive() reads that queue first once a wait, a receive or a send has seen a
+// report, at most 64 reports a call so a flood never starves the datagrams, hands on Packet Too Big and drops the
+// rest; a send the host fails with an earlier datagram's report goes again once. Windows keeps its ICMP reports to
+// itself. macOS carries bytes alone until crd-net's port there (MAC.1). Pacing and the offloads are NET-PATH's.
 class UdpSocket final : public DatagramSocket
 {
 public:
@@ -152,6 +158,8 @@ private:
     SocketFeatures m_features;
 #if CRD_OS_WINDOWS
     void (*m_receive_message)() = nullptr; // WSARecvMsg, which Winsock hands out per provider, as a generic pointer
+#elif CRD_OS_LINUX
+    bool m_reports_waiting = false; // the error queue may hold reports: the next receive() reads them first
 #endif
 };
 

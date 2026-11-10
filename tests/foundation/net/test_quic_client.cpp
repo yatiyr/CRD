@@ -6,7 +6,8 @@
 // carried by the next connection, which is not retried; a ticket's 0-RTT written in the first service; another
 // address dropped and the server's stateless reset ending the connection only from the server's address; the pool's
 // bounds, stale handles, a TLS context per connection and the configurations refused; and a client host served over
-// the host's loopback.
+// the host's loopback; and, on Linux, a router's real Packet Too Big messages finding each direction's path MTU
+// through private network namespaces ([.netns]).
 
 #include "ingress_fixture.hpp"
 #include "loop_fixture.hpp"
@@ -21,6 +22,10 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <cstring>
 #include <memory>
+
+#if CRD_OS_LINUX
+#include "router_namespace_fixture.hpp"
+#endif
 
 namespace
 {
@@ -509,6 +514,92 @@ Datagram forged_for(ConstSpan<u8> id)
     std::memcpy(forged.bytes + 1U, id.data(), id.size());
     return forged;
 }
+
+// The keys a server and a client host need, ready before either is made.
+struct HostKeys
+{
+    HostKeys()
+    {
+        REQUIRE(reset.init(ConstSpan<u8>(kResetSecret)) == CryptoError::None);
+        REQUIRE(tokens.init(ConstSpan<u8>(kTokenKey), {}) == CryptoError::None);
+        REQUIRE(client_reset.init(ConstSpan<u8>(kClientSecret)) == CryptoError::None);
+    }
+
+    QuicResetKey reset;
+    QuicTokenKeys tokens;
+    QuicResetKey client_reset;
+};
+
+QuicServerConfig echo_server_config(const Identity& identity)
+{
+    QuicServerConfig config;
+    config.connection = config_for(QuicSide::Server, identity, QuicVersion::V1, 1U);
+    config.connection.streams = limits();
+    config.connection.entropy_seed = {};
+    return config;
+}
+
+QuicClientConfig real_client_config(const Identity& identity)
+{
+    QuicClientConfig config = client_config(identity, QuicVersion::V1, {});
+    config.connection.entropy_seed = {};
+    return config;
+}
+
+// An echoing server host and a client host, each behind its own loop on a real UDP socket and the host's clock.
+struct RealHosts : HostKeys
+{
+    RealHosts(UdpSocket& server_socket, UdpSocket& client_socket)
+        : server(allocator, server_socket, clock, ingress, routes, reset, &tokens, echo, echo_server_config(identity)),
+          server_loop(allocator, server_socket, clock, ingress, server, IoLoopConfig{}),
+          client(allocator, client_socket, client_ingress, client_routes, client_reset, app,
+                 real_client_config(identity)),
+          client_loop(allocator, client_socket, clock, client_ingress, client, IoLoopConfig{}),
+          m_server_socket(server_socket), m_client_socket(client_socket)
+    {
+        REQUIRE(server.ready());
+        REQUIRE(server_loop.ready());
+        REQUIRE(client.ready());
+        REQUIRE(client_loop.ready());
+    }
+
+    // Serves both ends until `done` holds or `seconds` pass: whether it held.
+    template <class Done> bool serve_until(Done done, u64 seconds)
+    {
+        const u64 deadline = clock.monotonic_ns() + (seconds * kNanosPerSecond);
+        while (!done())
+        {
+            if (clock.monotonic_ns() >= deadline)
+            {
+                return false;
+            }
+            static_cast<void>(client_loop.poll());
+            static_cast<void>(m_server_socket.wait_readable(kMs));
+            static_cast<void>(server_loop.poll());
+            static_cast<void>(m_client_socket.wait_readable(kMs));
+        }
+        return true;
+    }
+
+    Identity identity;
+    CountingAllocator allocator;
+    const HostClock clock;
+    ConnectionIdTable routes{allocator, 64U};
+    HandshakeBuckets buckets{allocator, HandshakeRules{}};
+    Ingress ingress{IngressConfig{}, routes, buckets, &tokens, nullptr, &reset};
+    EchoApp echo;
+    QuicServer server;
+    IoLoop server_loop;
+    ConnectionIdTable client_routes{allocator, 64U};
+    Ingress client_ingress{client_ingress_config(), client_routes};
+    ClientApp app;
+    QuicClient client;
+    IoLoop client_loop;
+
+private:
+    UdpSocket& m_server_socket;
+    UdpSocket& m_client_socket;
+};
 
 void hostile(Network& network, u64 seed)
 {
@@ -1287,38 +1378,7 @@ TEST_CASE("QUIC client: a client host is served over the host's loopback through
     REQUIRE(error == SocketError::None);
     UdpSocket client_socket = UdpSocket::open(options, error);
     REQUIRE(error == SocketError::None);
-
-    Identity identity;
-    CountingAllocator allocator;
-    const HostClock clock;
-    ConnectionIdTable routes(allocator, 64U);
-    HandshakeBuckets buckets(allocator, HandshakeRules{});
-    QuicResetKey reset;
-    REQUIRE(reset.init(ConstSpan<u8>(kResetSecret)) == CryptoError::None);
-    QuicTokenKeys tokens;
-    REQUIRE(tokens.init(ConstSpan<u8>(kTokenKey), {}) == CryptoError::None);
-    Ingress ingress(IngressConfig{}, routes, buckets, &tokens, nullptr, &reset);
-    EchoApp echo;
-    QuicServerConfig config;
-    config.connection = config_for(QuicSide::Server, identity, QuicVersion::V1, 1U);
-    config.connection.streams = limits();
-    config.connection.entropy_seed = {};
-    QuicServer server(allocator, server_socket, clock, ingress, routes, reset, &tokens, echo, config);
-    IoLoop server_loop(allocator, server_socket, clock, ingress, server, IoLoopConfig{});
-    REQUIRE(server.ready());
-    REQUIRE(server_loop.ready());
-
-    ConnectionIdTable client_routes(allocator, 64U);
-    QuicResetKey client_reset;
-    REQUIRE(client_reset.init(ConstSpan<u8>(kClientSecret)) == CryptoError::None);
-    Ingress client_ingress(client_ingress_config(), client_routes);
-    ClientApp app;
-    QuicClientConfig client_settings = client_config(identity, QuicVersion::V1, {});
-    client_settings.connection.entropy_seed = {};
-    QuicClient client(allocator, client_socket, client_ingress, client_routes, client_reset, app, client_settings);
-    IoLoop client_loop(allocator, client_socket, clock, client_ingress, client, IoLoopConfig{});
-    REQUIRE(client.ready());
-    REQUIRE(client_loop.ready());
+    RealHosts hosts(server_socket, client_socket);
 
     QuicClientConnect request;
     request.server = server_socket.local_endpoint();
@@ -1326,37 +1386,68 @@ TEST_CASE("QUIC client: a client host is served over the host's loopback through
     HostKey at_client(kServerIds);
     if (raw_path)
     {
-        REQUIRE(server.open_keyed(Endpoint{}, at_server.start, clock.monotonic_ns()).valid());
+        REQUIRE(hosts.server.open_keyed(Endpoint{}, at_server.start, hosts.clock.monotonic_ns()).valid());
     }
-    const QuicHandle handle = raw_path ? client.open_keyed(request.server, at_client.start, clock.monotonic_ns())
-                                       : client.connect(request, clock.monotonic_ns());
-    app.begin(handle, 9U);
-    const u64 deadline = clock.monotonic_ns() + (10U * kNanosPerSecond);
-    while (!app.echoed(handle) && clock.monotonic_ns() < deadline)
-    {
-        static_cast<void>(client_loop.poll());
-        static_cast<void>(server_socket.wait_readable(kMs));
-        static_cast<void>(server_loop.poll());
-        static_cast<void>(client_socket.wait_readable(kMs));
-    }
-    CHECK(app.echoed(handle));
-    CHECK(server.live() == 1U);
-    const QuicConnection* const connection = client.connection(handle);
+    const QuicHandle handle = raw_path
+                                  ? hosts.client.open_keyed(request.server, at_client.start, hosts.clock.monotonic_ns())
+                                  : hosts.client.connect(request, hosts.clock.monotonic_ns());
+    hosts.app.begin(handle, 9U);
+    CHECK(hosts.serve_until([&] { return hosts.app.echoed(handle); }, 10U));
+    CHECK(hosts.server.live() == 1U);
+    const QuicConnection* const connection = hosts.client.connection(handle);
     REQUIRE(connection != nullptr);
     CHECK(connection->confirmed());
-    CHECK(client.counters().datagrams_sent != 0U);
+    CHECK(hosts.client.counters().datagrams_sent != 0U);
     if (raw_path)
     {
         return;
     }
     // The server's NEW_TOKEN token is remembered for its address.
-    const u64 token_deadline = clock.monotonic_ns() + (5U * kNanosPerSecond);
-    while (client.token_for(request.server, QuicVersion::V1).empty() && clock.monotonic_ns() < token_deadline)
-    {
-        static_cast<void>(client_loop.poll());
-        static_cast<void>(server_socket.wait_readable(kMs));
-        static_cast<void>(server_loop.poll());
-        static_cast<void>(client_socket.wait_readable(kMs));
-    }
-    CHECK_FALSE(client.token_for(request.server, QuicVersion::V1).empty());
+    CHECK(hosts.serve_until([&] { return !hosts.client.token_for(request.server, QuicVersion::V1).empty(); }, 5U));
 }
+
+#if CRD_OS_LINUX
+TEST_CASE("QUIC hosts: a router's real Packet Too Big messages find each direction's path MTU without a black hole",
+          "[.netns]")
+{
+    RouterPath& path = RouterPath::get();
+    const bool v6 = GENERATE(false, true);
+    INFO("IPv6 " << v6);
+    UdpSocket server_socket = path.open(RouterPath::Far, v6);
+    UdpSocket client_socket = path.open(RouterPath::Near, v6);
+    RealHosts hosts(server_socket, client_socket);
+    QuicClientConnect request;
+    request.server = server_socket.local_endpoint();
+    const QuicHandle handle = hosts.client.connect(request, hosts.clock.monotonic_ns());
+    hosts.app.begin(handle, 21U);
+    QuicConnection* client = nullptr;
+    QuicConnection* server = nullptr;
+    const auto searched = [&]
+    {
+        client = hosts.client.connection(handle);
+        server = hosts.echo.accepted != 0U ? hosts.server.connection(hosts.echo.last) : nullptr;
+        return hosts.app.echoed(handle) && client != nullptr && server != nullptr &&
+               client->path_mtu().state() == QuicPmtuState::SearchComplete &&
+               server->path_mtu().state() == QuicPmtuState::SearchComplete;
+    };
+    const bool done = hosts.serve_until(searched, 30U);
+    REQUIRE(client != nullptr);
+    REQUIRE(server != nullptr);
+    INFO("echoed " << hosts.app.echoed(handle) << "; client " << static_cast<u32>(client->path_mtu().state()) << " at "
+                   << client->path_mtu().size() << ", server " << static_cast<u32>(server->path_mtu().state()) << " at "
+                   << server->path_mtu().size());
+    REQUIRE(done);
+    // Toward the far host the router's hop carries 1280 bytes, which its reports name; back, the 1500-byte links.
+    CHECK(client->path_mtu().size() == RouterPath::kHopMtu - (v6 ? 48U : 28U));
+    CHECK(server->path_mtu().size() == RouterPath::kLinkMtu - (v6 ? 48U : 28U));
+    CHECK(client->path_mtu().counters().hints >= 1U);
+    CHECK(server->path_mtu().counters().hints == 0U);
+    for (const QuicConnection* const end : {client, server})
+    {
+        CHECK(end->path_mtu().counters().black_holes == 0U);
+    }
+    CHECK(hosts.client_loop.counters().too_big >= 1U);
+    CHECK(hosts.client.counters().too_big == hosts.client_loop.counters().too_big);
+    CHECK(hosts.client.counters().too_big_refused == 0U);
+}
+#endif

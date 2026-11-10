@@ -69,6 +69,16 @@ target_link_libraries(crd-net-tests PRIVATE
 crd_enable_default_pch(crd-net-tests)
 crd_discover_tests(crd-net-tests)
 
+# The real-kernel path cases ([.netns], router_namespace_fixture.hpp): a router between private network namespaces
+# sends Packet Too Big to crd-net's sockets and QUIC hosts (CRD_BUILD_NET_NAMESPACE_TESTS, the root CMakeLists).
+if(CRD_BUILD_NET_NAMESPACE_TESTS)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "[net-namespaces] network namespaces are Linux's")
+    endif()
+    add_test(NAME crd-net-router-namespace COMMAND unshare -Urn $<TARGET_FILE:crd-net-tests> "[.netns]")
+    set_tests_properties(crd-net-router-namespace PROPERTIES TIMEOUT 600 LABELS "net")
+endif()
+
 # The register identifiers header is scripts/gen-register-ids.py's output for cmake/standards-register.json.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)

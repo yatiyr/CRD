@@ -342,6 +342,7 @@
                 "CRD_BUILD_SERIALIZE_VS_PEERS": "ON",
                 "CRD_BUILD_MOTION_VS_PEERS": "ON",
                 "CRD_BUILD_LINK_VS_NETEM": "ON",
+                "CRD_BUILD_NET_NAMESPACE_TESTS": "ON",
                 "CRD_BUILD_RAPTORQ_VS_PEERS": "ON"
             }
         },
