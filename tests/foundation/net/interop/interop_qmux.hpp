@@ -145,6 +145,8 @@ struct QmuxOptions : EchoOptions
             return "upgrade-refused";
         case QmuxCloseReason::WebSocketFailed:
             return "websocket-failed";
+        case QmuxCloseReason::Http2Failed:
+            return "http2-failed";
     }
     return "unknown";
 }

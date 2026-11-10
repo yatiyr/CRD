@@ -31,8 +31,8 @@
 //             peer), and refused with CONNECTION_REFUSED when no slot is free; a client opens one with open_tunnel().
 //             A tunnel is served when its bearer is, and every tunnel is reported closed before its bearer.
 //   memory    the pool, the heap and the turn's buffers come from the injected allocator at construction; a
-//             connection's streams and datagrams when it is opened, so a host bounds them with its allocator. A turn
-//             allocates nothing else.
+//             connection's streams and datagrams when it is opened, its HTTP/2 state when its TLS agrees on h2, and a
+//             tunnel's when it opens, so a host bounds them with its allocator. A turn allocates nothing else.
 //   threads   the thread that calls poll(): the events, connect(), wake() and connection() too.
 
 #include <crd/containers/span.hpp>
