@@ -105,7 +105,8 @@ endif()
 add_subdirectory(fuzz)
 
 # crd-net's end of the QUIC and HTTP/3 interoperability tests, whichever peers this configuration builds.
-if(CRD_BUILD_QUIC_VS_NGTCP2 OR CRD_BUILD_HTTP3_VS_QUICHE OR CRD_BUILD_WEBTRANSPORT_VS_QUINN OR CRD_BUILD_QMUX_VS_CRATE)
+if(CRD_BUILD_QUIC_VS_NGTCP2 OR CRD_BUILD_QUIC_VS_PICOQUIC OR CRD_BUILD_HTTP3_VS_QUICHE OR
+   CRD_BUILD_WEBTRANSPORT_VS_QUINN OR CRD_BUILD_QMUX_VS_CRATE)
     add_executable(crd-quic-peer interop/cerid_quic_peer.cpp)
     target_link_libraries(crd-quic-peer PRIVATE crd-core crd-containers crd-crypto crd-memory crd-net)
 endif()
@@ -168,6 +169,75 @@ if(CRD_BUILD_QUIC_VS_NGTCP2)
                      --cerid "$<TARGET_FILE:crd-quic-peer>" --nghttp3 "$<TARGET_FILE:crd-ngtcp2-quic-peer>")
     set_tests_properties(crd-net-http3-interop-nghttp3 PROPERTIES TIMEOUT 1500 LABELS "net;http3-interop")
     message(STATUS "[quic-vs-ngtcp2] QUIC and HTTP/3 interoperability against ngtcp2 ${ngtcp2_version} and nghttp3 ${nghttp3_version}")
+endif()
+
+# Congestion control against picoquic (CRD_BUILD_QUIC_VS_PICOQUIC): crd-picoquic-quic-peer links picoquic, picotls
+# and the peers' OpenSSL alone, and picoquic_interop.py runs it against crd-quic-peer through an L4S relay. picotls
+# builds by its own CMake from a copy of its pinned source with the pinned picotest in deps/picotest, the submodule its
+# commit archive leaves empty; picoquic by its own CMake over that picotls. Library targets only, so neither builds a
+# test program against the static OpenSSL.
+if(CRD_BUILD_QUIC_VS_PICOQUIC)
+    include(ExternalProject)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_package(Threads REQUIRED)
+    find_package(ZLIB REQUIRED)
+    cmake_host_system_information(RESULT picoquic_jobs QUERY NUMBER_OF_LOGICAL_CORES)
+    crd_pin(picotls_version packages picotls version)
+    crd_pin(picoquic_version packages picoquic version)
+    set(picotls_prefix "${CMAKE_BINARY_DIR}/_deps/picotls-peer-${picotls_version}")
+    set(picotls_source "${picotls_prefix}/src/picotls")
+    set(picotls_libraries "${picotls_prefix}/build/libpicotls-openssl.a"
+                          "${picotls_prefix}/build/libpicotls-minicrypto.a" "${picotls_prefix}/build/libpicotls-core.a")
+    ExternalProject_Add(crd-picotls-build
+        PREFIX "${picotls_prefix}"
+        SOURCE_DIR "${picotls_source}"
+        BINARY_DIR "${picotls_prefix}/build"
+        DOWNLOAD_COMMAND "${CMAKE_COMMAND}" -E copy_directory "${picotls_SOURCE_DIR}" <SOURCE_DIR>
+                 COMMAND "${CMAKE_COMMAND}" -E copy_directory "${picotest_SOURCE_DIR}" <SOURCE_DIR>/deps/picotest
+        CMAKE_ARGS "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" -DCMAKE_BUILD_TYPE=Release -DWITH_BROTLI=OFF
+                   -DWITH_FUSION=OFF -DWITH_DTRACE=OFF -DWITH_AEGIS=OFF -DWITH_MBEDTLS=OFF
+                   "-DOPENSSL_ROOT_DIR=${CRD_OPENSSL_PEER_ROOT}" -DOPENSSL_USE_STATIC_LIBS=ON
+        BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel ${picoquic_jobs}
+                      --target picotls-core picotls-minicrypto picotls-openssl
+        INSTALL_COMMAND ""
+        DEPENDS crd-openssl-peer-build
+        BUILD_BYPRODUCTS ${picotls_libraries})
+    set(picoquic_prefix "${CMAKE_BINARY_DIR}/_deps/picoquic-peer-${picoquic_version}")
+    set(picoquic_library "${picoquic_prefix}/build/libpicoquic-core.a")
+    list(GET picotls_libraries 0 picotls_openssl)
+    list(GET picotls_libraries 1 picotls_minicrypto)
+    list(GET picotls_libraries 2 picotls_core)
+    ExternalProject_Add(crd-picoquic-build
+        SOURCE_DIR "${picoquic_SOURCE_DIR}"
+        PREFIX "${picoquic_prefix}"
+        BINARY_DIR "${picoquic_prefix}/build"
+        CMAKE_ARGS "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                   -DCMAKE_BUILD_TYPE=Release -DPICOQUIC_FETCH_PTLS=OFF -Dpicoquic_BUILD_TESTS=OFF -DBUILD_TESTING=OFF
+                   -DBUILD_PICO_SIM=OFF -DBUILD_DEMO=OFF -DBUILD_HTTP=OFF -DBUILD_PQBENCH=OFF -DBUILD_LOGLIB=OFF
+                   -DBUILD_LOGREADER=OFF -DWITH_OPENSSL=ON "-DOPENSSL_ROOT_DIR=${CRD_OPENSSL_PEER_ROOT}"
+                   -DOPENSSL_USE_STATIC_LIBS=ON "-DPTLS_INCLUDE_DIR=${picotls_source}/include"
+                   "-DPTLS_CORE_LIBRARY=${picotls_core}" "-DPTLS_OPENSSL_LIBRARY=${picotls_openssl}"
+                   "-DPTLS_MINICRYPTO_LIBRARY=${picotls_minicrypto}"
+        BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel ${picoquic_jobs} --target picoquic-core
+        INSTALL_COMMAND ""
+        DEPENDS crd-picotls-build crd-openssl-peer-build
+        BUILD_BYPRODUCTS "${picoquic_library}")
+    add_executable(crd-picoquic-quic-peer interop/picoquic_quic_peer.c)
+    add_dependencies(crd-picoquic-quic-peer crd-picoquic-build crd-picotls-build crd-openssl-peer-build)
+    target_include_directories(crd-picoquic-quic-peer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../crypto/interop")
+    target_include_directories(crd-picoquic-quic-peer SYSTEM PRIVATE "${picoquic_SOURCE_DIR}/picoquic"
+                                                                     "${picotls_source}/include"
+                                                                     "${CRD_OPENSSL_PEER_ROOT}/include")
+    target_link_libraries(crd-picoquic-quic-peer PRIVATE "${picoquic_library}" ${picotls_libraries}
+                                                         ${CRD_OPENSSL_PEER_LINK})
+    set_target_properties(crd-picoquic-quic-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+
+    add_test(NAME crd-net-quic-interop-picoquic
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/picoquic_interop.py"
+                     --cerid "$<TARGET_FILE:crd-quic-peer>" --picoquic "$<TARGET_FILE:crd-picoquic-quic-peer>")
+    set_tests_properties(crd-net-quic-interop-picoquic PROPERTIES TIMEOUT 1200 LABELS "net;quic-interop")
+    message(STATUS "[quic-vs-picoquic] congestion control against picoquic ${picoquic_version} over picotls "
+                   "${picotls_version}")
 endif()
 
 # The HTTP/3 interoperability test against quiche (CRD_BUILD_HTTP3_VS_QUICHE): crd-quiche-peer is a Cargo package over

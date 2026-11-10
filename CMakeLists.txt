@@ -148,6 +148,13 @@ option(CRD_BUILD_MLS_VS_MLSPP "Build the MLS interoperability test against MLSpp
 # tests/foundation/net/interop/quic_interop.py. Linux only, never in a shipped build; the crd-net-quic-interop-ngtcp2
 # CTest of the tree that turns it on, locally and on the complete-tier linux-gcc-public-checks lane.
 option(CRD_BUILD_QUIC_VS_NGTCP2 "Build the QUIC interoperability test against ngtcp2 (Linux)" OFF)
+# Congestion control against picoquic (NET-PATH): crd-quic-peer against crd-picoquic-quic-peer, a program over the
+# pinned picoquic and picotls (cmake/pins.json picoquic, picotls, picotest; each built by its own CMake as a separate
+# project, libraries only) and the OpenSSL 4.0 above, which this option builds too, driven through an L4S relay by
+# tests/foundation/net/interop/picoquic_interop.py. Linux only, never in a shipped build; the
+# crd-net-quic-interop-picoquic CTest of the tree that turns it on, locally and on the complete-tier
+# linux-gcc-public-checks lane.
+option(CRD_BUILD_QUIC_VS_PICOQUIC "Build the congestion-control interoperability test against picoquic (Linux)" OFF)
 option(CRD_BUILD_QPACK_VS_QIFS "Build the QPACK interoperability test against the qifs corpus" OFF)
 option(CRD_BUILD_HPACK_VS_CORPUS "Build the HPACK interoperability test against the hpack-test-case corpus" OFF)
 # HTTP/2 against nghttp2 and h2spec (4.2a): crd-http2-peer over crd-net, crd-nghttp2-peer over the pinned nghttp2 (built
@@ -1513,7 +1520,8 @@ endif()
 # tests/foundation/crypto (test-only) -----
 # The TLS peer program and the boards' peer arms are C; OpenSSL's Configure is Perl. MLSpp needs OpenSSL (its crypto)
 # and nlohmann_json's CMake package (its build only).
-if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_CRYPTO_VS_PEERS OR CRD_BUILD_QUIC_VS_NGTCP2)
+if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_CRYPTO_VS_PEERS OR CRD_BUILD_QUIC_VS_NGTCP2 OR
+   CRD_BUILD_QUIC_VS_PICOQUIC)
     if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
         message(FATAL_ERROR "[interop] the TLS and MLS interoperability tests and the crypto boards need Linux, "
                             "CRD_BUILD_TESTS and the crypto module")
@@ -1527,6 +1535,11 @@ endif()
 if(CRD_BUILD_QUIC_VS_NGTCP2)
     crd_add_pinned_package(ngtcp2 DOWNLOAD_ONLY YES)
     crd_add_pinned_package(nghttp3 DOWNLOAD_ONLY YES)
+endif()
+if(CRD_BUILD_QUIC_VS_PICOQUIC)
+    crd_add_pinned_package(picotls DOWNLOAD_ONLY YES)
+    crd_add_pinned_package(picotest DOWNLOAD_ONLY YES)
+    crd_add_pinned_package(picoquic DOWNLOAD_ONLY YES)
 endif()
 if(CRD_BUILD_QPACK_VS_QIFS)
     crd_add_pinned_package(qifs DOWNLOAD_ONLY YES)

@@ -320,6 +320,7 @@
                 "CRD_PUBLIC_CHECKS": "ON",
                 "CRD_BUILD_TLS_VS_OPENSSL": "ON",
                 "CRD_BUILD_QUIC_VS_NGTCP2": "ON",
+                "CRD_BUILD_QUIC_VS_PICOQUIC": "ON",
                 "CRD_BUILD_QPACK_VS_QIFS": "ON",
                 "CRD_BUILD_HPACK_VS_CORPUS": "ON",
                 "CRD_BUILD_HTTP2_VS_PEERS": "ON",

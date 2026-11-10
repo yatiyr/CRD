@@ -191,6 +191,46 @@
       "provenance": "https://github.com/ngtcp2/nghttp3/releases/tag/v1.19.0 (the release tarball and its checksums.txt: unlike the ngtcp2 pin's commit archive it holds lib/sfparse, a git submodule a commit archive leaves empty)",
       "note": "nghttp3 1.19.0 (released 2026-11-02), an independent C implementation of HTTP/3 and QPACK and crd-net's HTTP/3 peer (4.2a), over the pinned ngtcp2. Built by its own CMake as a separate project, library only."
     },
+    "picotls": {
+      "version": "e446233b",
+      "repository": "h2o/picotls",
+      "commit": "e446233b4100ebcdec60901c05bfb7f4cd369c5d",
+      "url": "https://github.com/h2o/picotls/archive/e446233b4100ebcdec60901c05bfb7f4cd369c5d.tar.gz",
+      "file": "picotls-e446233b.tar.gz",
+      "sha256": "e59194fb970484377ac5c7e39522bbb4103b1e0721d6c409d7b45bb34f8a6f49",
+      "size": 663408,
+      "license": "MIT",
+      "gated": "CRD_BUILD_QUIC_VS_PICOQUIC",
+      "provenance": "https://github.com/h2o/picotls/commit/e446233b4100ebcdec60901c05bfb7f4cd369c5d, the commit the pinned picoquic builds against (its CMakeLists.txt PICOQUIC_FETCH_PTLS_DEFAULT_TAG and ci/build_picotls.sh); picotls tags no releases. The commit archive holds deps/cifra and deps/micro-ecc and leaves deps/picotest, a submodule only its tests use, empty (downloaded and hashed 2026-11-10)",
+      "note": "picotls, the TLS 1.3 library of the pinned picoquic, built by its own CMake as a separate project (core, minicrypto and its OpenSSL backend against the pinned OpenSSL 4.0; no Brotli, no Fusion, no tests)."
+    },
+    "picotest": {
+      "version": "a99858e0",
+      "repository": "h2o/picotest",
+      "commit": "a99858e0c33b97b24cd09ceae729f2be33ec01e1",
+      "url": "https://github.com/h2o/picotest/archive/a99858e0c33b97b24cd09ceae729f2be33ec01e1.tar.gz",
+      "file": "picotest-a99858e0.tar.gz",
+      "sha256": "f3c42d988c8cd1af24dee2e66ce832f3e257bb7766e34167499954c1604c82c0",
+      "size": 1828,
+      "license": "MIT",
+      "gated": "CRD_BUILD_QUIC_VS_PICOQUIC",
+      "provenance": "https://github.com/h2o/picotest/commit/a99858e0c33b97b24cd09ceae729f2be33ec01e1, the deps/picotest submodule commit of the pinned picotls (downloaded and hashed 2026-11-10); the MIT notice is in picotest.c's header",
+      "note": "picotls's test harness, the submodule its commit archive leaves empty: the picotls build copies it into deps/picotest so picotls's own CMake generates. Only the library targets are built; nothing of it is compiled."
+    },
+    "picoquic": {
+      "version": "2026.11.08.77fa502",
+      "repository": "private-octopus/picoquic",
+      "ref": "v2026.11.08.77fa502",
+      "commit": "77fa50201a2897a1aa90f9d0ff43e8d2fd39d182",
+      "url": "https://github.com/private-octopus/picoquic/archive/77fa50201a2897a1aa90f9d0ff43e8d2fd39d182.tar.gz",
+      "file": "picoquic-77fa5020.tar.gz",
+      "sha256": "71793e56b05cd8c76de3a9c15c6951f4380ca88a4726bbfe91c53dced8ce5762",
+      "size": 1638751,
+      "license": "MIT",
+      "gated": "CRD_BUILD_QUIC_VS_PICOQUIC",
+      "provenance": "https://github.com/private-octopus/picoquic/releases/tag/v2026.11.08.77fa502 (the tag names commit 77fa5020; downloaded and hashed 2026-11-10)",
+      "note": "picoquic, an independent C implementation of QUIC with its own Prague (prague.c, ECT(1) and the L4S reaction), CUBIC, NewReno and BBR, and crd-net's second congestion-control peer (NET-PATH). Built by its own CMake as a separate project over the pinned picotls, libraries only (picoquic-core)."
+    },
     "qifs": {
       "version": "da52cd93",
       "repository": "qpackers/qifs",

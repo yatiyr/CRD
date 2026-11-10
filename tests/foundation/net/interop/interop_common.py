@@ -3,6 +3,7 @@ import heapq
 import random
 import select
 import socket
+import struct
 import threading
 import time
 
@@ -80,7 +81,12 @@ class Relay:
     """The path between the two: a socket facing the client, one facing the server, and seeded impairments.
 
     Every datagram leaves the relay with its ECN codepoint rewritten (RFC 3168): unmarked by default, a bleaching path;
-    with `mark` 'ce' each is marked CE, a congested AQM, and with 'ect1' each is re-marked ECT(1).
+    with `mark` 'ce' each is marked CE, a congested AQM, and with 'ect1' each is re-marked ECT(1). With `mark` 'keep'
+    each leaves with the codepoint it came with, counted by codepoint in `codepoints`, and a bottleneck's queue is an
+    AQM: past `step` seconds of queueing delay an ECT(1) datagram leaves CE (an L4S step, RFC 9332 section 2.5.1.2),
+    `ramp` = (low, high) marks one with a probability rising from 0 at `low` seconds to 1 at `high`, and past `classic`
+    seconds ECT(0) and ECT(1) alike leave CE, a classic single-queue AQM (RFC 3168). `marked` counts the datagrams
+    turned CE each way.
 
     `mtu` is the largest UDP payload the path carries each way: a longer datagram is dropped, as a link that cannot
     fragment drops it, and counted. `fall` = (toward, after, mtu) lowers it toward 'server' or 'client' alone once that
@@ -91,15 +97,25 @@ class Relay:
     that would take the queue past `buffer` bytes is dropped (drop-tail) and counted in `tail_drops`. `queued` sums
     the seconds each datagram that entered waited, over `entered` of them, so their mean is the standing queue.
     `utilisation` is the share of the link's rate that full datagrams (data, not acknowledgements) used each way, from
-    the first that entered until the last left."""
+    `after` seconds past the first that entered until the last left."""
 
     FULL = 1000  # bytes from which a datagram counts as carrying data
 
     MARKS = {None: 0, 'ect1': 1, 'ce': 3}
+    ECT1, ECT0, CE = 1, 2, 3
+    RECVTOS = getattr(socket, 'IP_RECVTOS', 13)  # Linux's value, where Python does not name it
 
     def __init__(self, server_port, seed=0, loss=0.0, duplicate=0.0, delay=0.0, jitter=0.0, mark=None, mtu=None,
-                 fall=None, rate=None, buffer=None):
+                 fall=None, rate=None, buffer=None, step=None, ramp=None, classic=None):
         expect((rate is None) == (buffer is None), 'a bottleneck needs a rate and a buffer')
+        aqm = step is not None or ramp is not None or classic is not None
+        expect(not aqm or (mark == 'keep' and rate is not None), 'an AQM marks kept codepoints at a bottleneck')
+        self.keep = mark == 'keep'
+        self.step = step
+        self.ramp = ramp
+        self.classic = classic
+        self.codepoints = {'server': [0, 0, 0, 0], 'client': [0, 0, 0, 0]}
+        self.marked = {'server': 0, 'client': 0}
         self.server = ('127.0.0.1', server_port)
         self.mtu = {'server': mtu, 'client': mtu}
         self.fall = fall
@@ -109,7 +125,7 @@ class Relay:
         self.tail_drops = {'server': 0, 'client': 0}
         self.queued = {'server': 0.0, 'client': 0.0}
         self.entered = {'server': 0, 'client': 0}
-        self.full = {'server': [0, 0.0, 0.0], 'client': [0, 0.0, 0.0]}  # bytes, the first entry, the last departure
+        self.full = {'server': [], 'client': []}  # each full datagram's start on the link, departure and bytes
         self.crossed = {'server': 0, 'client': 0}
         self.largest = {'server': 0, 'client': 0}
         self.oversized = {'server': 0, 'client': 0}
@@ -123,7 +139,10 @@ class Relay:
         self.server_side = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.server_side.bind(('127.0.0.1', 0))
         for side in (self.client_side, self.server_side):
-            side.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, self.MARKS[mark])
+            if self.keep:
+                side.setsockopt(socket.IPPROTO_IP, self.RECVTOS, 1)
+            else:
+                side.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, self.MARKS[mark])
         self.port = self.client_side.getsockname()[1]
         self.client = None
         self.retries = 0
@@ -134,9 +153,25 @@ class Relay:
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
 
-    def utilisation(self, toward):
-        carried, first, last = self.full[toward]
-        return carried / (self.rate * (last - first)) if last > first else 0.0
+    def utilisation(self, toward, after=0.0):
+        full = self.full[toward]
+        if not full:
+            return 0.0
+        begin = full[0][0] + after
+        carried = sum(size for start, _, size in full if start >= begin)
+        last = full[-1][1]
+        return carried / (self.rate * (last - begin)) if last > begin else 0.0
+
+    def congested(self, codepoint, waited):
+        """Whether the AQM marks CE a datagram of `codepoint` that waited `waited` seconds in the queue."""
+        if codepoint == self.ECT1:
+            if self.step is not None and waited > self.step:
+                return True
+            if self.ramp is not None:
+                low, high = self.ramp
+                if self.random.random() < min(1.0, max(0.0, (waited - low) / (high - low))):
+                    return True
+        return codepoint in (self.ECT0, self.ECT1) and self.classic is not None and waited > self.classic
 
     @staticmethod
     def is_retry(datagram):
@@ -161,8 +196,9 @@ class Relay:
         self.largest[toward] = max(self.largest[toward], len(datagram))
         return True
 
-    def schedule(self, sender, datagram, destination):
+    def schedule(self, sender, datagram, destination, codepoint=0):
         toward = 'server' if destination == self.server else 'client'
+        self.codepoints[toward][codepoint] += 1
         if not self.carries(toward, datagram) or self.random.random() < self.loss:
             return
         leaves = time.monotonic()
@@ -171,19 +207,38 @@ class Relay:
             if (start - leaves) * self.rate + len(datagram) > self.buffer:
                 self.tail_drops[toward] += 1
                 return
+            if self.keep and self.congested(codepoint, start - leaves):
+                codepoint = self.CE
+                self.marked[toward] += 1
             self.queued[toward] += start - leaves
             self.entered[toward] += 1
             leaves = self.link_free[toward] = start + len(datagram) / self.rate
             if len(datagram) >= self.FULL:
-                full = self.full[toward]
-                full[1] = full[1] if full[0] else start
-                full[0] += len(datagram)
-                full[2] = leaves
+                self.full[toward].append((start, leaves, len(datagram)))
         copies = 2 if self.random.random() < self.duplicate else 1
         for _ in range(copies):
             due = leaves + self.delay + (self.random.random() * self.jitter)
             self.order += 1
-            heapq.heappush(self.heap, (due, self.order, sender, datagram, destination))
+            heapq.heappush(self.heap, (due, self.order, sender, datagram, destination, codepoint))
+
+    def receive(self, side):
+        """A datagram, its sender and, on a path that keeps codepoints, its ECN codepoint."""
+        if not self.keep:
+            datagram, sender = side.recvfrom(65536)
+            return datagram, sender, 0
+        datagram, ancillary, _, sender = side.recvmsg(65536, socket.CMSG_SPACE(4))
+        codepoint = 0
+        for level, kind, data in ancillary:
+            if level == socket.IPPROTO_IP and kind == socket.IP_TOS and data:
+                codepoint = data[0] & 3
+        return datagram, sender, codepoint
+
+    def send(self, sender, datagram, destination, codepoint):
+        if self.keep:
+            sender.sendmsg([datagram], [(socket.IPPROTO_IP, socket.IP_TOS, struct.pack('i', codepoint))], 0,
+                           destination)
+        else:
+            sender.sendto(datagram, destination)
 
     def run(self):
         sockets = [self.client_side, self.server_side]
@@ -191,17 +246,17 @@ class Relay:
             wait = max(0.0, self.heap[0][0] - time.monotonic()) if self.heap else 0.05
             ready, _, _ = select.select(sockets, [], [], min(wait, 0.05))
             for side in ready:
-                datagram, sender = side.recvfrom(65536)
+                datagram, sender, codepoint = self.receive(side)
                 if side is self.client_side:
                     self.client = sender
-                    self.schedule(self.server_side, datagram, self.server)
+                    self.schedule(self.server_side, datagram, self.server, codepoint)
                 elif self.client is not None:
                     self.retries += 1 if self.is_retry(datagram) else 0
                     self.negotiations += 1 if self.is_version_negotiation(datagram) else 0
-                    self.schedule(self.client_side, datagram, self.client)
+                    self.schedule(self.client_side, datagram, self.client, codepoint)
             while self.heap and self.heap[0][0] <= time.monotonic():
-                _, _, sender, datagram, destination = heapq.heappop(self.heap)
-                sender.sendto(datagram, destination)
+                _, _, sender, datagram, destination, codepoint = heapq.heappop(self.heap)
+                self.send(sender, datagram, destination, codepoint)
 
     def stop(self):
         self.running = False

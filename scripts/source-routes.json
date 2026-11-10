@@ -231,6 +231,13 @@
     },
     {
       "paths": [
+        "tests/foundation/net/interop/picoquic_quic_peer.c"
+      ],
+      "built_when": {"option": "CRD_BUILD_QUIC_VS_PICOQUIC", "platform": "Linux"},
+      "why": "The congestion-control interoperability test against picoquic (the crd-net-quic-interop-picoquic CTest): crd-picoquic-quic-peer over the pinned picoquic and picotls (cmake/pins.json picoquic, picotls, picotest) and OpenSSL 4.0, built by the tree that turns the option on."
+    },
+    {
+      "paths": [
         "tests/foundation/crypto/android/"
       ],
       "built_when": {"option": "CRD_BUILD_ANDROID_KEYSTORE_APP"},
