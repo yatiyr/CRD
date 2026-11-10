@@ -915,7 +915,7 @@
       "review": "2027-02-10",
       "evidence": [],
       "deprecation": null,
-      "note": "Implemented to the -04 text as design S70 (2026-11-10) under path.l4s-ecn's RFC 9331 requirements: alpha with gain 1/16 on a virtual round trip, the reduction by alpha / 2 once per CWR, growth by unmarked bytes, RTT independence after 500 rounds at 25 ms, Reno's loss response and pacing. The individual draft expired on 2025-01-25 without a successor; watched for an ICCRG or CCWG adoption, whose text then pins it."
+      "note": "Implemented to the -04 text as design S70 (2026-11-10) under path.l4s-ecn's RFC 9331 requirements: alpha with gain 1/16 on a virtual round trip, the reduction by alpha / 2 once per CWR, growth by unmarked bytes, RTT independence after 500 rounds at 25 ms, Reno's loss response and pacing. Against picoquic's own Prague both ways (picoquic_interop.py, 2026-11-10), through a relay that keeps codepoints and marks ECT(1) CE at a 1 ms step or a 0.5 to 2.5 ms ramp: each end's CE counts match the relay's marks, a Cerid client keeps 0.9 of the link or more with its queue near the step, and the classic detector stays at 0 beside picoquic's Prague. The individual draft expired on 2025-01-25 without a successor; watched for an ICCRG or CCWG adoption, whose text then pins it."
     },
     {
       "id": "cc.classic-ecn-detection",
