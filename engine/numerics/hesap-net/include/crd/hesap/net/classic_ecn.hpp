@@ -18,35 +18,10 @@
 #pragma once
 
 #include <crd/core/types.hpp>
-#include <crd/core/wide_multiply.hpp>
-
-#include <bit>
+#include <crd/hesap/net/fixed_point.hpp>
 
 namespace crd::hesap::net
 {
-
-// log2(x) in 2^-16 units, rounded down; 0 for x of 0 or 1. Each squaring of the mantissa yields a fraction bit.
-[[nodiscard]] inline crd::i64 log2_q16(crd::u64 x) noexcept
-{
-    if (x <= 1U)
-    {
-        return 0;
-    }
-    const auto integer = static_cast<crd::u32>(63 - std::countl_zero(x));
-    crd::u64 mantissa = (integer <= 62U) ? (x << (62U - integer)) : (x >> 1U); // [1, 2) with 62 fraction bits
-    crd::i64 result = static_cast<crd::i64>(integer) << 16U;
-    for (crd::u32 bit = 16U; bit-- > 0U;)
-    {
-        const WideProduct square = multiply_wide(mantissa, mantissa);
-        mantissa = (square.hi << 2U) | (square.lo >> 62U);
-        if (mantissa >= (crd::u64{1} << 63U))
-        {
-            mantissa >>= 1U;
-            result |= crd::i64{1} << bit;
-        }
-    }
-    return result;
-}
 
 class ClassicEcnDetector
 {
@@ -126,31 +101,6 @@ private:
     [[nodiscard]] static constexpr crd::i64 clamp_i64(crd::i64 x, crd::i64 low, crd::i64 high) noexcept
     {
         return (x < low) ? low : ((x > high) ? high : x);
-    }
-
-    // floor(sqrt(x)), bit by bit.
-    [[nodiscard]] static constexpr crd::u64 square_root(crd::u64 x) noexcept
-    {
-        crd::u64 root = 0U;
-        crd::u64 bit = crd::u64{1} << 62U;
-        while (bit > x)
-        {
-            bit >>= 2U;
-        }
-        while (bit != 0U)
-        {
-            if (x >= root + bit)
-            {
-                x -= root + bit;
-                root = (root >> 1U) + bit;
-            }
-            else
-            {
-                root >>= 1U;
-            }
-            bit >>= 2U;
-        }
-        return root;
     }
 
     crd::i64 m_score = -kSticky;

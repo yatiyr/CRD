@@ -2,13 +2,15 @@
 // docs/design/network-foundation.md#congestion) under the bounded fuzz harness (REPO.DEV.9;
 // docs/design/test-instruments.md).
 //
-// Input: byte 0 picks the policy (bits 0 and 7: CUBIC, NewReno, BBRv3 or Prague, bit 1: HyStart++, bit 2: pacing,
-// which BBR and Prague always have, bit 3: fast convergence, bits 4 to 6: the initial window's packets); byte 1 the
-// datagram size step. Then operations of two bytes, an operation and its parameter, on one controller, the delivery
-// rate sampler and one pacer, driven as a connection drives them: packets sent with their stamps, acknowledged in ACK
-// frames with any RTT samples, lost, acknowledged after their loss, ECN feedback (marked packets and CE, a peer's
-// inflated CE too) and a path without ECN, persistent congestion, sends held back and application-limited periods,
-// time, live swaps through the four algorithms and resets, and the pacer's sends at its release times or before them.
+// Input: byte 0 picks the policy (bits 0 and 7: CUBIC, NewReno, BBRv3 or Prague, and SCReAM v2 with bits 3 and 7, bit
+// 1: HyStart++, bit 2: pacing, which BBR, Prague and SCReAM always have, bit 3: fast convergence, bits 4 to 6: the
+// initial window's packets; for SCReAM bit 0 is L4S and bit 1 jitter reduction); byte 1 the datagram size step, and
+// for SCReAM its link loss tolerance (bit 0), no delay target adjustment (bit 1) and target rate bounds (bit 2).
+// Then operations of two bytes, an operation and its parameter, on one controller, the delivery rate sampler and one
+// pacer, driven as a connection drives them: packets sent with their stamps, acknowledged in ACK frames with any RTT
+// samples, lost, acknowledged after their loss, ECN feedback (marked packets and CE, a peer's inflated CE too) and a
+// path without ECN, persistent congestion, sends held back and application-limited periods, time, live swaps through
+// the five algorithms and resets, and the pacer's sends at its release times or before them.
 //
 // Oracles. The window stays between the minimum and kCongestionMaxWindow and the threshold at or above the minimum;
 // avoidance holds a window at or above its threshold; reductions only rise, undos never pass them, and persistent
@@ -18,7 +20,10 @@
 // A live swap keeps the window, threshold and recovery period. The pacing rate is 0 without pacing and never 0 for
 // BBR, whose bandwidth is never above a rate the sampler gave and whose window after an ACK frame is at least four
 // datagrams; Prague's alpha stays within 0 and 1, its classic share within 0 and 2^16, and a mark's reduction takes
-// at most half the window. The sampler's delivered bytes are what was acknowledged. The pacer's release time is never
+// at most half the window. SCReAM's reference window stays at or above MIN_REF_WND, grows only to 1.5 times the
+// largest flight since it was built (or its first window), and lets 1.5 to 3 of it be in flight; its target rate
+// stays within the policy's bounds, its delay target within QDELAY_TARGET_LO and _HI, and it paces at least 1.5 times
+// RATE_PACE_MIN. The sampler's delivered bytes are what was acknowledged. The pacer's release time is never
 // before now, its credit stays within one burst above zero and the last send's burst below, and is positive at its
 // release time.
 #include <crd/core/platform.hpp>
@@ -69,7 +74,9 @@ struct World
     u64 acked = 0U;    // bytes acknowledged, spurious ones too: the sampler's delivered bytes
     u64 max_rate = 0U; // the highest rate the sampler gave since the controller was built
     u64 paced_burst = 0U; // the burst of the pacer's last send
-    bool ever_limited = false; // something held sending back, or a BBR ran: a window may pass the initial one
+    bool ever_limited = false; // held back, or a BBR or SCReAM ran: a window may pass the initial one
+    u64 grow_base = 0U;        // SCReAM: its reference window when built, swapped in or reset
+    u64 max_in_flight = 0U;    // SCReAM: the largest flight since then
 
     ~World()
     {
@@ -93,11 +100,68 @@ struct World
     return w.policy.algorithm == CongestionAlgorithm::Prague;
 }
 
+[[nodiscard]] bool is_scream(const World& w)
+{
+    return w.policy.algorithm == CongestionAlgorithm::Scream;
+}
+
+// SCReAM's least reference window: MIN_REF_WND, or the policy's minimum window when larger.
+[[nodiscard]] u64 scream_floor(const World& w)
+{
+    const u64 minimum = w.policy.minimum_packets * w.datagram;
+    return (minimum > 3000U) ? minimum : 3000U;
+}
+
+// The window a controller starts with: RFC 9002's, or SCReAM's reference window at least its floor.
+[[nodiscard]] u64 initial_state_window(const World& w)
+{
+    const u64 initial = congestion_initial_window(w.policy, w.datagram);
+    return (is_scream(w) && scream_floor(w) > initial) ? scream_floor(w) : initial;
+}
+
+// SCReAM was built, swapped in or reset: its growth is bounded from here.
+void scream_started(World& w)
+{
+    w.grow_base = w.ctl->state().window;
+    w.max_in_flight = w.in_flight;
+    w.ever_limited = w.ever_limited || is_scream(w);
+}
+
+// SCReAM's own bounds: its reference window, the room in flight it gives, its target rate and delay target.
+void check_scream(const World& w, const CongestionState& state)
+{
+    const u64 allowed = w.datagram + w.max_in_flight * 3U / 2U;
+    CRD_FUZZ_REQUIRE(state.window >= scream_floor(w));
+    CRD_FUZZ_REQUIRE(state.window <= ((w.grow_base > allowed) ? w.grow_base : allowed));
+    CRD_FUZZ_REQUIRE(state.slow_start_threshold == state.window);
+    const u64 room = w.ctl->window();
+    const u64 least = state.window * 3U / 2U;
+    CRD_FUZZ_REQUIRE(room >= ((least < kCongestionMaxWindow) ? least : kCongestionMaxWindow));
+    CRD_FUZZ_REQUIRE(room >= 2U * w.datagram);
+    CRD_FUZZ_REQUIRE(room <= state.window * 3U || room == 2U * w.datagram);
+    CRD_FUZZ_REQUIRE(state.target_rate >= w.policy.target_rate_min);
+    CRD_FUZZ_REQUIRE(w.policy.target_rate_max == 0U || state.target_rate <= w.policy.target_rate_max);
+    CRD_FUZZ_REQUIRE(state.queue_delay_target_ns >= w.policy.queue_delay_target_ns &&
+                     state.queue_delay_target_ns <= kScreamQueueDelayTargetMaxNs);
+    CRD_FUZZ_REQUIRE(state.alpha <= kCongestionAlphaOne && state.classic == 0U);
+    QuicRtt rtt;
+    rtt.smoothed_ns = 1U + (w.now % (500U * kMs));
+    CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) >= kScreamMinPacingRate * 3U / 2U && w.ctl->burst() >= w.datagram);
+}
+
 void check(const World& w)
 {
     const CongestionState state = w.ctl->state();
     const u64 minimum = w.policy.minimum_packets * w.datagram;
-    CRD_FUZZ_REQUIRE(state.window == w.ctl->window());
+    if (is_scream(w))
+    {
+        check_scream(w, state);
+    }
+    else
+    {
+        CRD_FUZZ_REQUIRE(state.window == w.ctl->window());
+        CRD_FUZZ_REQUIRE(state.target_rate == 0U && state.queue_delay_ns == 0U && state.queue_delay_target_ns == 0U);
+    }
     CRD_FUZZ_REQUIRE(state.window >= minimum && state.window <= kCongestionMaxWindow);
     CRD_FUZZ_REQUIRE(state.slow_start_threshold >= minimum);
     CRD_FUZZ_REQUIRE(state.phase != CongestionPhase::Avoidance || state.window >= state.slow_start_threshold);
@@ -121,13 +185,13 @@ void check(const World& w)
         CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) != 0U && w.ctl->burst() >= w.datagram);
         CRD_FUZZ_REQUIRE(state.alpha <= kCongestionAlphaOne && state.classic <= (crd::u32{1} << 16U));
     }
-    else
+    else if (!is_scream(w))
     {
         CRD_FUZZ_REQUIRE(state.alpha == 0U && state.classic == 0U);
     }
 }
 
-// The next algorithm of a live swap: CUBIC, NewReno, BBR, Prague, and round again.
+// The next algorithm of a live swap: CUBIC, NewReno, BBR, Prague, SCReAM, and round again.
 [[nodiscard]] CongestionAlgorithm next_algorithm(CongestionAlgorithm algorithm)
 {
     switch (algorithm)
@@ -138,6 +202,8 @@ void check(const World& w)
             return CongestionAlgorithm::Bbr;
         case CongestionAlgorithm::Bbr:
             return CongestionAlgorithm::Prague;
+        case CongestionAlgorithm::Prague:
+            return CongestionAlgorithm::Scream;
         default:
             return CongestionAlgorithm::Cubic;
     }
@@ -174,6 +240,7 @@ void run(World& w, u8 op, u8 parameter)
             p.sent.sent_ns = w.now;
             p.sent.space = (parameter & 0x80U) != 0U ? QuicSpace::Handshake : QuicSpace::Application;
             w.in_flight += p.sent.bytes;
+            w.max_in_flight = (w.in_flight > w.max_in_flight) ? w.in_flight : w.max_in_flight;
             w.ever_limited = w.ever_limited || w.in_flight + w.datagram > w.ctl->window();
             p.sent.delivery = w.delivery.on_sent(p.sent.bytes, w.in_flight, w.now);
             CRD_FUZZ_REQUIRE(p.sent.delivery.in_flight == w.in_flight && p.sent.delivery.delivered == w.acked);
@@ -259,7 +326,8 @@ void run(World& w, u8 op, u8 parameter)
         }
         case 6U:
             w.ctl->on_persistent_congestion(w.now);
-            CRD_FUZZ_REQUIRE(w.ctl->window() == w.policy.minimum_packets * w.datagram);
+            CRD_FUZZ_REQUIRE(is_scream(w) ? w.ctl->state().window == scream_floor(w)
+                                          : w.ctl->window() == w.policy.minimum_packets * w.datagram);
             break;
         case 7U: // held back by the window or the pacer, or nothing to send; or the path carries no ECN
             if ((parameter & 4U) != 0U)
@@ -283,12 +351,19 @@ void run(World& w, u8 op, u8 parameter)
             const CongestionState held = w.ctl->state();
             w.ctl->~CongestionController();
             w.policy.algorithm = next_algorithm(w.policy.algorithm);
-            w.policy.pacing = w.policy.pacing || is_bbr(w) || is_prague(w);
+            w.policy.pacing = w.policy.pacing || is_bbr(w) || is_prague(w) || is_scream(w);
             w.ctl = make_congestion(w.policy, w.datagram, &held, w.slot, w.delivery, parameter);
             CRD_FUZZ_REQUIRE(w.ctl != nullptr);
             w.max_rate = 0U;
             const CongestionState now = w.ctl->state();
             CRD_FUZZ_REQUIRE(now.recovery_start_ns == held.recovery_start_ns && now.reductions == held.reductions);
+            if (is_scream(w))
+            {
+                CRD_FUZZ_REQUIRE(now.window == ((held.window > scream_floor(w)) ? held.window : scream_floor(w)));
+                scream_started(w);
+                may_grow = true; // what may be in flight is 1.5 to 3 reference windows
+                break;
+            }
             if (is_bbr(w))
             {
                 const u64 floor = 4U * w.datagram;
@@ -313,7 +388,8 @@ void run(World& w, u8 op, u8 parameter)
                 w.max_rate = 0U;
                 w.delivery.reset();
                 w.ctl->reset(w.now);
-                CRD_FUZZ_REQUIRE(w.ctl->window() == w.initial);
+                CRD_FUZZ_REQUIRE(w.ctl->state().window == initial_state_window(w));
+                scream_started(w);
                 may_grow = true;
             }
             break;
@@ -369,8 +445,21 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     {
         w.policy.algorithm = ((data[0] & 1U) != 0U) ? CongestionAlgorithm::Prague : CongestionAlgorithm::Bbr;
     }
+    if ((data[0] & 0x88U) == 0x88U)
+    {
+        w.policy.algorithm = CongestionAlgorithm::Scream;
+        w.policy.scalable_ecn = (data[0] & 1U) != 0U;
+        w.policy.reduce_jitter = (data[0] & 2U) != 0U;
+        w.policy.tolerate_link_loss = (data[1] & 1U) != 0U;
+        w.policy.compete = (data[1] & 2U) == 0U;
+        if ((data[1] & 4U) != 0U)
+        {
+            w.policy.target_rate_min = 50000U;
+            w.policy.target_rate_max = 400000U;
+        }
+    }
     w.policy.hystart = (data[0] & 2U) != 0U;
-    w.policy.pacing = (data[0] & 4U) != 0U || is_bbr(w) || is_prague(w);
+    w.policy.pacing = (data[0] & 4U) != 0U || is_bbr(w) || is_prague(w) || is_scream(w);
     w.ever_limited = is_bbr(w);
     w.policy.fast_convergence = (data[0] & 8U) != 0U;
     w.policy.initial_packets = 2U + ((data[0] >> 4U) & 7U) * 4U;
@@ -378,6 +467,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     w.ctl = make_congestion(w.policy, w.datagram, nullptr, w.slot, w.delivery, data[1]);
     CRD_FUZZ_REQUIRE(w.ctl != nullptr);
     w.initial = w.ctl->window();
+    scream_started(w);
     check(w);
     for (usize at = 2U; at + 1U < size; at += 2U)
     {
@@ -481,4 +571,26 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     put(prague, 0x07U, 0x04U);
     put(prague, 0x09U, 0x00U);
     sink.add("prague-marks", prague, at);
+    // SCReAM v2 in L4S mode with jitter reduction, link loss tolerance and target rate bounds on 1520-byte datagrams:
+    // 20 ms rounds acknowledged with 20 ms samples, then samples queued to 63 ms (past half the delay target), marks,
+    // a loss, persistent congestion, a Retry and a swap.
+    u8 scream[2U + 2U * 200U] = {0xABU, 0x05U};
+    at = 2U;
+    for (u8 round = 0U; round < 24U; ++round)
+    {
+        for (u8 i = 0U; i < 4U; ++i)
+        {
+            put(scream, 0x00U, 0x00U);
+        }
+        put(scream, 0x08U, 0x09U); // 20 ms
+        put(scream, 0x05U, static_cast<u8>(((round % 4U == 3U) ? 0x40U : 0x00U) | 0x04U));
+        put(scream, 0x01U, (round < 12U) ? u8{0x53U} : u8{0xFFU});
+        put(scream, 0x02U, (round < 12U) ? u8{0x53U} : u8{0xFFU});
+    }
+    put(scream, 0x03U, 0x00U);
+    put(scream, 0x01U, 0x53U);
+    put(scream, 0x06U, 0x00U);
+    put(scream, 0x0AU, 0x00U);
+    put(scream, 0x09U, 0x00U);
+    sink.add("scream-delay", scream, at);
 }

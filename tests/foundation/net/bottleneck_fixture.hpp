@@ -3,7 +3,7 @@
 // A simulated bottleneck that the congestion controller tests share (NET-PATH; docs/design/network-foundation.md#bbr
 // and #prague): flows of one controller each, with its delivery rate sampler and pacer, driven as a connection drives
 // them, over a link of a rate, a drop-tail buffer and a step-marking queue that one flow owns or several share, each
-// flow with its own propagation delay and random loss.
+// flow with its own propagation delay and random loss, sending bulk data or a media source's frames (#scream).
 
 #include <crd/net/congestion.hpp>
 
@@ -73,6 +73,16 @@ public:
     // Bytes the application has written so far; kInfiniteData for a bulk transfer.
     void set_data(u64 bytes) { m_data = bytes; }
     void add_data(u64 bytes) { m_data += bytes; }
+    // A media source: from now, a frame every `frame_ns` of the controller's target rate (CongestionState's), which
+    // waits in the sender's queue until sent.
+    void set_media(u64 frame_ns)
+    {
+        m_frame_period_ns = frame_ns;
+        m_frame_ns = now;
+        m_data = sent_bytes;
+    }
+    // Bytes the source wrote that have not left (the media queue).
+    [[nodiscard]] u64 backlog() const { return m_data - sent_bytes; }
 
     // Runs until `until_ns`, calling `watch` after each ACK frame.
     template <typename Watch> void run(u64 until_ns, Watch watch)
@@ -108,6 +118,8 @@ public:
     u64 dropped = 0U;
     u64 marked = 0U;
     u64 max_queue = 0U;
+    u64 max_backlog = 0U; // the media queue's largest, as each frame is written
+    u64 frames = 0U;
 
     // The bottleneck's queue in bytes now.
     [[nodiscard]] u64 queue_bytes() const { return m_link->queue_bytes(now); }
@@ -117,13 +129,19 @@ public:
     {
         m_ack_ns = (m_head != m_tail) ? event_ns(m_flight[m_head % kFlight]) : kNeverNs;
         m_send_ns = next_send_ns();
-        return (m_ack_ns < m_send_ns) ? m_ack_ns : m_send_ns;
+        const u64 first = (m_ack_ns < m_send_ns) ? m_ack_ns : m_send_ns;
+        return (m_frame_period_ns != 0U && m_frame_ns < first) ? m_frame_ns : first;
     }
 
     // Moves to `at_ns`, the time the last next_event_ns() returned, and handles that event: true for an ACK frame.
     bool step(u64 at_ns)
     {
         now = (at_ns > now) ? at_ns : now;
+        if (m_frame_period_ns != 0U && m_frame_ns < m_ack_ns && m_frame_ns < m_send_ns)
+        {
+            write_frame();
+            return false;
+        }
         if (m_ack_ns <= m_send_ns)
         {
             settle();
@@ -186,6 +204,14 @@ private:
             ctl->on_limited(false, now);
         }
         return release;
+    }
+
+    void write_frame()
+    {
+        m_data += ctl->state().target_rate * m_frame_period_ns / kBottleneckSecond;
+        m_frame_ns += m_frame_period_ns;
+        ++frames;
+        max_backlog = (backlog() > max_backlog) ? backlog() : max_backlog;
     }
 
     void transmit()
@@ -252,6 +278,8 @@ private:
     Link* m_link;
     u64 m_one_way_ns;
     u64 m_data = kInfiniteData;
+    u64 m_frame_period_ns = 0U;
+    u64 m_frame_ns = kNeverNs;
     u32 m_loss = 0U;
     u64 m_seed = 0x853C49E6748FEA9BU;
     u64 m_ack_ns = kNeverNs;

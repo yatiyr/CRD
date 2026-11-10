@@ -249,6 +249,7 @@ void QuicRtt::sample(u64 latest, u64 ack_delay_ns, bool confirmed, u64 max_ack_d
     if (!sampled())
     {
         min_ns          = latest_ns;
+        adjusted_ns     = latest_ns;
         smoothed_ns     = latest_ns;
         variance_ns     = latest_ns / 2U;
         first_sample_ns = now_ns;
@@ -262,6 +263,7 @@ void QuicRtt::sample(u64 latest, u64 ack_delay_ns, bool confirmed, u64 max_ack_d
     }
     // The delay is taken off only while the sample stays at or above min_rtt (section 5.3).
     const u64 adjusted = (latest_ns - min_ns >= delay) ? latest_ns - delay : latest_ns;
+    adjusted_ns = adjusted;
     const u64 deviation = (smoothed_ns > adjusted) ? smoothed_ns - adjusted : adjusted - smoothed_ns;
     variance_ns = (3U * variance_ns + deviation) / 4U;
     smoothed_ns = (7U * smoothed_ns + adjusted) / 8U;

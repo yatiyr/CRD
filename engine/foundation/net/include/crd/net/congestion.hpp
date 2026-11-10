@@ -2,15 +2,15 @@
 
 // crd-net -- congestion control and pacing (NET-PATH; contract: docs/design/network-foundation.md#congestion).
 // Sources: RFC 9002 section 7 and appendix B, RFC 9438 (CUBIC), RFC 9406 (HyStart++), RFC 8985 section 6,
-// draft-ietf-ccwg-bbr-07 (BBRv3), draft-briscoe-iccrg-prague-congestion-control-04 (Prague) with RFC 9331 section 4.
+// draft-ietf-ccwg-bbr-07 (BBRv3), draft-briscoe-iccrg-prague-congestion-control-04 (Prague) with RFC 9331 section 4,
+// draft-ietf-ccwg-rfc8298bis-screamv2-03 (SCReAM v2) with RFC 6817's base delay.
 //
 //   interface   CongestionController is what every controller is to a connection: it sees each packet counted in
 //               flight leave and be acknowledged or lost, each ACK frame's end with the RTT estimate, the ECN feedback
 //               of a path that carries ECN, persistent congestion, spurious losses and a Retry's reset, and answers
 //               with a window in bytes and a pacing rate. The window caps bytes in flight; ACK-only packets and probes
 //               are not held by it (RFC 9002 sections 6.2.4 and 7). Each controller reads the connection's
-//               DeliveryRateSampler (delivery_rate.hpp), whose stamps every packet carries. NET-LIVE's delay-based
-//               controllers plug in here.
+//               DeliveryRateSampler (delivery_rate.hpp), whose stamps every packet carries.
 //   policy      CongestionPolicy is authored data, versioned by kCongestionInterfaceVersion, chosen per connection
 //               and swappable live: make_congestion() builds a controller into a CongestionSlot, seeded from the one
 //               it replaces (its window and slow start threshold), so a swap never restarts from the initial window.
@@ -31,6 +31,15 @@
 //               a mark's reduction. Its packets carry ECT(1) (congestion_codepoint()); the classic ECN AQM detector
 //               (crd/hesap/net/classic_ecn.hpp) moves the reduction toward ABE's 0.7 where a bottleneck marks as a
 //               classic AQM does, and a path without ECN makes it Reno.
+//   real time   SCReAM v2 (draft-ietf-ccwg-rfc8298bis-screamv2-03), the delay-based controller NET-LIVE's calls share:
+//               a reference window held near a queue delay target (60 ms, raised beside loss-based flows up to 400
+//               ms), the queue delay an RTT sample less RFC 6817's ten-minute base (crd/hesap/net/queue_delay.hpp).
+//               Loss, CE and a queue past half the target each reduce it at most once a smoothed RTT; it grows by a
+//               datagram a round trip, multiplicatively once congestion is long past, never far past what is in
+//               flight. Its packets carry ECT(1) when the policy makes it scalable (an L4S CE then reduces by alpha /
+//               2), else ECT(0). It answers with the rate its source should produce (CongestionState::target_rate:
+//               the window per smoothed RTT, held within the policy's bounds), paces at 1.5 times that, and lets
+//               bytes in flight reach 1.5 to 3 windows so a large frame leaves at once.
 //   pacing      Pacer spreads packets at the controller's rate (RFC 9002 section 7.7: 1.25 window per smoothed RTT
 //               for the window controllers, BBR's own gains of its bandwidth, Prague's window per smoothed RTT, doubled
 //               in early slow start) with a burst of the initial window (BBR:
@@ -46,14 +55,19 @@
 
 namespace crd::net
 {
-// 2 added BBRv3 and the delivery rate samples; 3 added Prague and the ECN feedback's extent (on_ecn). A policy of
-// an earlier version still runs.
-inline constexpr u32 kCongestionInterfaceVersion = 3U;
+// 2 added BBRv3 and the delivery rate samples; 3 added Prague and the ECN feedback's extent (on_ecn); 4 added SCReAM
+// v2 and the source's target rate. A policy of an earlier version still runs.
+inline constexpr u32 kCongestionInterfaceVersion = 4U;
 inline constexpr u64 kCongestionMaxWindow = u64{1} << 32U; // bytes: past 100 Gbit/s over 300 ms
 inline constexpr u32 kCongestionMaxInitialPackets = 64U;
 inline constexpr u32 kCongestionMinPacingGain = 100U; // percent of window per smoothed RTT
 inline constexpr u32 kCongestionMaxPacingGain = 400U;
 inline constexpr u32 kCongestionAlphaOne = u32{1} << 20U;
+// SCReAM v2's queue delay targets (QDELAY_TARGET_LO's default and QDELAY_TARGET_HI) and its least pacing rate
+// (RATE_PACE_MIN, 50 kbit/s, in bytes per second).
+inline constexpr u64 kScreamQueueDelayTargetNs = 60000000U;
+inline constexpr u64 kScreamQueueDelayTargetMaxNs = 400000000U;
+inline constexpr u64 kScreamMinPacingRate = 6250U;
 
 enum class CongestionAlgorithm : u8
 {
@@ -61,19 +75,14 @@ enum class CongestionAlgorithm : u8
     Cubic,   // RFC 9438
     Bbr,     // draft-ietf-ccwg-bbr-07 (BBRv3); interface version 2
     Prague,  // draft-briscoe-iccrg-prague-congestion-control-04 (L4S, RFC 9331); interface version 3
+    Scream,  // draft-ietf-ccwg-rfc8298bis-screamv2-03 (SCReAM v2, real time); interface version 4
 };
-
-// The codepoint `algorithm`'s packets carry on a path that carries ECN: ECT(1) for a scalable controller (RFC 9331
-// section 4.1), ECT(0) for every classic one (RFC 9000 section 13.4.2).
-[[nodiscard]] constexpr Ecn congestion_codepoint(CongestionAlgorithm algorithm) noexcept
-{
-    return (algorithm == CongestionAlgorithm::Prague) ? Ecn::Ect1 : Ecn::Ect0;
-}
 
 // What a connection's congestion control is, as authored. BBR reads the version, the initial and minimum windows and
 // pacing, which it requires; its gains are the algorithm's, so hystart, fast_convergence and pacing_gain are unused.
 // Prague requires pacing too (the draft's section 2.5.1) and paces at its own gains: pacing_gain and fast_convergence
-// are unused.
+// are unused. SCReAM v2 requires pacing (its section 4.3.2) and reads the initial and minimum windows (its
+// MIN_REF_WND of 3000 bytes is the floor) and the fields after pacing_gain, which nothing else reads.
 struct CongestionPolicy
 {
     u32 version = kCongestionInterfaceVersion;
@@ -85,7 +94,39 @@ struct CongestionPolicy
     bool fast_convergence = true; // RFC 9438 section 4.7 (CUBIC alone)
     bool pacing = true;          // RFC 9002 section 7.7; false sends a window at once
     u32 pacing_gain = 125U;      // percent; kCongestionMinPacingGain to kCongestionMaxPacingGain
+    // SCReAM v2: the source's target rate in bytes per second is held to [target_rate_min, target_rate_max]
+    // (TARGET_BITRATE_MIN and _MAX over 8; a maximum of 0 is none, and a source at its maximum relaxes pacing);
+    // queue_delay_target_ns is QDELAY_TARGET_LO, 1 ms to kScreamQueueDelayTargetMaxNs.
+    u64 target_rate_min = 0U;
+    u64 target_rate_max = 0U;
+    u64 queue_delay_target_ns = kScreamQueueDelayTargetNs;
+    bool scalable_ecn = false;       // IS_L4S: ECT(1), and CE answered by alpha / 2 rather than BETA_ECN's 0.8
+    bool reduce_jitter = false;      // REDUCE_JITTER (section 4.2.1.4): growth and slack follow the delay's variation
+    bool compete = true;             // section 4.5.4: the delay target rises beside loss-based flows
+    bool tolerate_link_loss = false; // section 4.5.2: a loss reduces only past a 1% loss rate or a rising queue
 };
+
+// RFC 9002 section 7.2's initial window, min(10 * max_datagram, max(14720, 2 * max_datagram)) for 10 initial packets,
+// for `policy`'s initial packets of `max_datagram` bytes, at least its minimum window. SCReAM v2 starts its reference
+// window there too, at least MIN_REF_WND.
+[[nodiscard]] constexpr u64 congestion_initial_window(const CongestionPolicy& policy, u64 max_datagram) noexcept
+{
+    const u64 packets = policy.initial_packets;
+    const u64 per_packet = 1472U; // 14720 / 10
+    const u64 cap = (packets * per_packet > 2U * max_datagram) ? packets * per_packet : 2U * max_datagram;
+    const u64 initial = (packets * max_datagram < cap) ? packets * max_datagram : cap;
+    const u64 minimum = policy.minimum_packets * max_datagram;
+    return (initial > minimum) ? initial : minimum;
+}
+
+// The codepoint `policy`'s packets carry on a path that carries ECN: ECT(1) for a scalable controller (RFC 9331
+// section 4.1: Prague, and SCReAM v2 in L4S mode), ECT(0) for every classic one (RFC 9000 section 13.4.2).
+[[nodiscard]] constexpr Ecn congestion_codepoint(const CongestionPolicy& policy) noexcept
+{
+    const bool scalable = policy.algorithm == CongestionAlgorithm::Prague ||
+                          (policy.algorithm == CongestionAlgorithm::Scream && policy.scalable_ecn);
+    return scalable ? Ecn::Ect1 : Ecn::Ect0;
+}
 
 // Whether a policy is one this build runs: its version, algorithm and bounds.
 [[nodiscard]] bool congestion_policy_valid(const CongestionPolicy& policy) noexcept;
@@ -118,6 +159,12 @@ struct CongestionState
     u64 min_rtt_ns = 0U; // the model's windowed minimum round trip (BBR.min_rtt); 0 for none
     u32 alpha = 0U;      // Prague: the smoothed fraction of packets marked CE, in 2^-20 (kCongestionAlphaOne)
     u32 classic = 0U;    // Prague: how classic its answer to CE is, from 0 (scalable) to 2^16 (ABE's)
+    // SCReAM v2: the rate in bytes per second its source should produce (0 for a bulk controller), its averaged
+    // queue delay and the target it holds that delay to. Its window above is the reference window; window() is what
+    // may be in flight.
+    u64 target_rate = 0U;
+    u64 queue_delay_ns = 0U;
+    u64 queue_delay_target_ns = 0U;
     CongestionPhase phase = CongestionPhase::SlowStart;
     bool limited = false; // the window or the pacer held sending back this round (RFC 9002 section 7.8)
 };
@@ -183,7 +230,7 @@ protected:
 };
 
 // Room for any controller of this build.
-inline constexpr usize kCongestionSlotBytes = 768U;
+inline constexpr usize kCongestionSlotBytes = 1024U; // SCReAM v2, its delay histories included, is the largest
 struct CongestionSlot
 {
     alignas(16) u8 bytes[kCongestionSlotBytes];

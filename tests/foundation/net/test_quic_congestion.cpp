@@ -8,7 +8,8 @@
 // unmarked, validation holding over lossy, duplicating, reordering paths, and a policy that marks none. And Prague
 // (#prague): ECT(1) marked and validated, its codepoint following a live swap both ways, ECT(1) re-marked as ECT(0)
 // failing validation, and a transfer through a DualQ bottleneck's L4S step that keeps the queue near its 1 ms step
-// at a full link, where CUBIC's ECT(0) fills the classic drop-tail queue.
+// at a full link, where CUBIC's ECT(0) fills the classic drop-tail queue. And SCReAM v2 (#scream): a transfer through a
+// deep drop-tail queue held near its delay target at a full link, where CUBIC fills it, and ECT(1) in L4S mode.
 
 #include "ingress_fixture.hpp"
 #include "quic_connection_fixture.hpp"
@@ -615,4 +616,65 @@ TEST_CASE("QUIC Prague: through an L4S step the queue stays near the step at a f
     CHECK(cubic.marks == 0U); // ECT(0) is classic traffic: the drop-tail queue, unmarked
     CHECK(cubic.goodput >= kRate * 90U / 100U);
     CHECK(cubic.max_queued >= 20U * prague.max_queued);
+}
+
+TEST_CASE("QUIC SCReAM: a deep drop-tail queue held near the delay target at a full link, where CUBIC fills it",
+          "[net][net-path][quic-connection][scream]")
+{
+    // 16 Mbit/s and the Pair's 50 ms round trip under a 150 ms drop-tail buffer, without ECN marks: the queue delay
+    // SCReAM reads is the RTT sample less its base, with the peer's ACK delay taken off (QuicRtt::adjusted_ns).
+    static constexpr u64 kRate = 2000000U;
+    static constexpr usize kBuffer = kRate / 1000U * 150U;
+    static constexpr u64 kTargetQueue = kRate * kScreamQueueDelayTargetNs / (1000U * kMs);
+    struct Run
+    {
+        u64 goodput = 0U;    // bytes per second over the second half
+        u64 max_queued = 0U; // over the second half
+        u64 overflowed = 0U;
+        CongestionState state;
+    };
+    const auto run = [](const CongestionPolicy& policy)
+    {
+        Pair pair(policy, 5U);
+        pair.net->path[0].rate = kRate;
+        pair.net->path[0].buffer = kBuffer;
+        pair.confirm();
+        Bulk bulk{pair.client, pair.server, 8U << 20U};
+        REQUIRE(pair.net->run_until([&] { return bulk.read >= bulk.total / 2U || bulk.step(); }, 600000U * kMs));
+        const u64 half_ns = pair.net->now;
+        const u64 half_read = bulk.read;
+        pair.net->max_queued[0] = 0U;
+        const usize overflowed = pair.net->overflowed[0];
+        REQUIRE(pair.net->run_until([&] { return bulk.step(); }, 600000U * kMs));
+        Run out;
+        out.goodput = (bulk.read - half_read) * 1000U * kMs / (pair.net->now - half_ns);
+        out.max_queued = pair.net->max_queued[0];
+        out.overflowed = pair.net->overflowed[0] - overflowed;
+        out.state = pair.client.congestion().state();
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+        return out;
+    };
+    CongestionPolicy scream;
+    scream.algorithm = CongestionAlgorithm::Scream;
+    const Run delay = run(scream);
+    const Run cubic = run(CongestionPolicy{});
+    INFO("SCReAM goodput " << delay.goodput << " max queue " << delay.max_queued << " queue delay "
+                           << delay.state.queue_delay_ns << " target " << delay.state.target_rate << " reductions "
+                           << delay.state.reductions << "; CUBIC goodput " << cubic.goodput << " max queue "
+                           << cubic.max_queued << " overflowed " << cubic.overflowed);
+    CHECK(delay.overflowed == 0U);
+    CHECK(delay.goodput >= kRate * 90U / 100U);
+    CHECK(delay.max_queued <= kTargetQueue * 5U / 4U);
+    CHECK(delay.state.queue_delay_ns < kScreamQueueDelayTargetNs);
+    CHECK(cubic.max_queued >= 2U * delay.max_queued);
+
+    // In L4S mode SCReAM marks ECT(1), validated like Prague's.
+    scream.scalable_ecn = true;
+    Pair pair(scream);
+    pair.confirm();
+    Bulk bulk{pair.client, pair.server, 1U << 16U};
+    REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
+    CHECK(pair.client.ecn().state() == QuicEcnState::Capable);
+    CHECK(pair.client.marking() == Ecn::Ect1);
+    CHECK(pair.server.recovery().received(QuicSpace::Application).ecn().ect1 > 0U);
 }

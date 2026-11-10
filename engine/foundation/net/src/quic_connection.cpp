@@ -377,7 +377,7 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     // The policy and the datagram size were checked (config_valid).
     m_congestion =
         make_congestion(config.congestion, m_path_bytes, nullptr, m_congestion_slot, m_delivery, entropy());
-    m_ecn.start(config.ecn ? congestion_codepoint(config.congestion.algorithm) : Ecn::NotEct);
+    m_ecn.start(config.ecn ? congestion_codepoint(config.congestion) : Ecn::NotEct);
     follow_ecn();
     m_frames = frames;
     m_crypto_bytes = bytes;
@@ -1898,7 +1898,7 @@ bool QuicConnection::set_congestion(const CongestionPolicy& policy) noexcept
     m_congestion->~CongestionController();
     m_congestion = make_congestion(policy, m_path_bytes, &held, m_congestion_slot, m_delivery, entropy());
     m_config.congestion = policy;
-    m_ecn.set_codepoint(congestion_codepoint(policy.algorithm));
+    m_ecn.set_codepoint(congestion_codepoint(policy));
     m_ecn_unavailable = false;
     follow_ecn();
     return true;

@@ -50,7 +50,7 @@
 //              max_udp_payload_size. A black hole falls back to 1200 bytes; datagrams keep to 1200 bytes while a probe
 //              timeout is pending. The controller, the DATAGRAM size and the window's unit follow the size found;
 //              probe losses are no congestion signal (section 14.4).
-//   ecn        datagrams carry the controller's codepoint (ECT(1) for Prague) while the path is tested and once it
+//   ecn        datagrams carry the controller's codepoint (ECT(1) for a scalable one) while the path is tested and once
 //              proved to carry ECN (quic_ecn.hpp: RFC 9000 section 13.4); on a validated path each ACK frame's
 //              marked packets and CE rise go to the controller (RFC 9002 section 7.1), and a path that turns out to
 //              carry no ECN is reported to it once. Received codepoints are counted per space
@@ -234,7 +234,8 @@ struct QuicConnectionConfig
     u64 initial_rtt_ns = kQuicInitialRttNs;
     CongestionPolicy congestion; // the controller and pacing (congestion_policy_valid), swappable by set_congestion()
     // Datagrams are marked while ECN validation allows (RFC 9000 section 13.4.2), with the controller's codepoint
-    // (congestion_codepoint(): ECT(1) for Prague, ECT(0) for the rest). A host whose socket cannot mark clears it.
+    // (congestion_codepoint(): ECT(1) for Prague and a scalable SCReAM, ECT(0) for the rest). A host whose socket
+    // cannot mark clears it.
     bool ecn = true;
     u64 key_update_interval = 0U; // 1-RTT packets one key seals before an update starts (0: the AEAD's limit alone)
     // kPrfKeyBytes seeding the connection's entropy (grease, skipped numbers) for a deterministic run (tests,

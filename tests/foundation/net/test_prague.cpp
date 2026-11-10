@@ -60,7 +60,8 @@ public:
 
     void round(const Round& r)
     {
-        const u64 n = (r.packets != 0U) ? r.packets : ((ctl->window() / kMss > 0U) ? ctl->window() / kMss : 1U);
+        const u64 held = (ctl->window() / kMss > 0U) ? ctl->window() / kMss : 1U;
+        const u64 n = (r.packets != 0U) ? r.packets : held;
         REQUIRE(n <= kMaxPackets);
         now += kSendGapNs;
         const u64 first_sent = now;
@@ -137,11 +138,14 @@ TEST_CASE("Prague: the policy rules, ECT(1) and alpha starting at one", "[net][n
 {
     CongestionPolicy policy = prague_policy();
     CHECK(congestion_policy_valid(policy));
-    CHECK(congestion_codepoint(CongestionAlgorithm::Prague) == Ecn::Ect1);
+    CHECK(congestion_codepoint(policy) == Ecn::Ect1);
     for (const CongestionAlgorithm classic :
          {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic, CongestionAlgorithm::Bbr})
     {
-        CHECK(congestion_codepoint(classic) == Ecn::Ect0);
+        CongestionPolicy other;
+        other.algorithm = classic;
+        other.scalable_ecn = true; // SCReAM's alone
+        CHECK(congestion_codepoint(other) == Ecn::Ect0);
     }
     policy.pacing = false; // the draft's section 2.5.1: Prague must pace
     CHECK_FALSE(congestion_policy_valid(policy));

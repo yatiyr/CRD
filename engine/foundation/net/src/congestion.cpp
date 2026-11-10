@@ -4,6 +4,7 @@
 
 #include <crd/core/wide_multiply.hpp>
 #include <crd/hesap/net/classic_ecn.hpp>
+#include <crd/hesap/net/queue_delay.hpp>
 #include <crd/hesap/net/rate.hpp>
 #include <crd/hesap/stats/philox.hpp>
 
@@ -17,8 +18,6 @@ using hesap::net::ClassicEcnDetector;
 using hesap::net::WindowedMax;
 
 constexpr u64 kMaxDatagram = 65535U;
-// RFC 9002 section 7.2: min(10 * max_datagram, max(14720, 2 * max_datagram)), here per packet of the initial window.
-constexpr u64 kInitialBytesPerPacket = 1472U;
 // RFC 9406 section 4.3.
 constexpr u64 kHystartMinRttThresholdNs = 4000000U;
 constexpr u64 kHystartMaxRttThresholdNs = 16000000U;
@@ -333,11 +332,9 @@ private:
     // RFC 9002 section 7.2's windows for datagrams of `max_datagram` bytes.
     void size_windows(u64 max_datagram) noexcept
     {
-        const u64 packets = m_policy.initial_packets;
         m_datagram = max_datagram;
-        m_initial = min_u64(packets * max_datagram, max_u64(packets * kInitialBytesPerPacket, 2U * max_datagram));
+        m_initial = congestion_initial_window(m_policy, max_datagram);
         m_minimum = m_policy.minimum_packets * max_datagram;
-        m_initial = max_u64(m_initial, m_minimum);
     }
 
     void restart() noexcept
@@ -850,12 +847,10 @@ private:
 
     void size(u64 max_datagram) noexcept
     {
-        const u64 packets = m_policy.initial_packets;
         m_datagram = max_datagram;
         m_minimum = m_policy.minimum_packets * max_datagram;
         m_min_pipe = max_u64(kBbrMinPipePackets * max_datagram, m_minimum);
-        m_initial = min_u64(packets * max_datagram, max_u64(packets * kInitialBytesPerPacket, 2U * max_datagram));
-        m_initial = max_u64(m_initial, m_minimum);
+        m_initial = congestion_initial_window(m_policy, max_datagram);
     }
 
     // Section 5.2.1's OnInit.
@@ -1906,10 +1901,638 @@ private:
     bool m_saw_ce = false; // alpha moves from the first CE on
 };
 
+// ---- SCReAM v2 (draft-ietf-ccwg-rfc8298bis-screamv2-03) ----
+
+using hesap::net::BaseDelayHistory;
+using hesap::net::QueueDelayHistory;
+
+// Fractions are kept in 2^-16 (kQ16 is 1) unless named otherwise; the draft's constants follow it, rounded.
+constexpr u64 kQ16 = u64{1} << 16U;
+constexpr u64 kScreamMinRefWnd = 3000U;             // MIN_REF_WND
+constexpr u64 kScreamVirtualRttNs = 25000000U;      // VIRTUAL_RTT
+constexpr u64 kScreamBetaLoss = 45875U;             // BETA_LOSS, 0.7
+constexpr u64 kScreamBetaEcn = 52429U;              // BETA_ECN, 0.8
+constexpr u64 kScreamMulIncrease = 1311U;           // MUL_INCREASE_FACTOR, 0.02
+constexpr u64 kScreamPostCongestionRtts = 100U;     // POST_CONGESTION_DELAY_RTTS
+constexpr u64 kScreamHoldRtts = 50U;                // REF_WND_I_UPDATE_MAX_HOLD_RTTS
+constexpr u64 kScreamRestoreRtts = 100U;            // section 4.2.2.1: uncongested this long, ref_wnd meets the flight
+constexpr u64 kScreamHeadroomPercent = 150U;        // BYTES_IN_FLIGHT_HEAD_ROOM
+constexpr u64 kScreamInflectionFloor = 13107U;      // 0.2: scl_t's floor near ref_wnd_i
+constexpr u64 kScreamAlphaShift = 4U;               // L4S_AVG_G, 1/16
+constexpr u64 kScreamAlphaPeriodNs = 10000000U;     // l4s_alpha moves at least every 10 ms
+constexpr u64 kScreamQueueAvgShift = 2U;            // QDELAY_AVG_G, 1/4
+constexpr i64 kScreamShortAvgDivisor = 5;           // QDELAY_SHORT_AVG_G, 1/5
+constexpr i64 kScreamLongAvgDivisor = 50;           // QDELAY_LONG_AVG_G, 1/50
+constexpr i64 kScreamLatencyMarginNs = 1000000;     // LATENCY_DIFF_MARGIN_1
+constexpr u64 kScreamLatencyLowNs = 10000000U;      // LATENCY_DIFF_MARGIN_2
+constexpr i64 kScreamLatencyUpGain = 20;            // LATENCY_DIFF_UP_GAIN
+constexpr i64 kScreamLatencyDownGain = 2;           // LATENCY_DIFF_DOWN_GAIN
+constexpr u64 kScreamOverheadMin = 98304U;          // REF_WND_OVERHEAD_MIN, 1.5
+constexpr u64 kScreamOverheadMax = 196608U;         // REF_WND_OVERHEAD_MAX, 3.0
+constexpr u64 kScreamPacingHeadroomPercent = 150U;  // PACKET_PACING_HEADROOM
+constexpr u64 kScreamRelaxedPacingFloor = 16384U;   // 1 / MAX_RELAXED_PACING_FACTOR
+constexpr u64 kScreamRelaxedPacingLow = 52429U;     // RELAXED_PACING_LIMIT_LOW, 0.8
+constexpr u64 kScreamPacketOverhead = 20U;          // PACKET_OVERHEAD
+constexpr u64 kScreamRateMarginPercent = 120U;      // section 4.4's downscaling by 1.2
+constexpr u64 kScreamAckedMarginPercent = 80U;      // ACKED_BITRATE_MARGIN
+constexpr u64 kScreamLowTargetBackoffShift = 2U;    // BACKOFF_SCALE_LOW_TARGET_RATE, 1/4
+constexpr u64 kScreamLossRateThreshold = 42949673U; // LOSS_RATE_THRESHOLD, 0.01 in 2^-32
+constexpr u64 kScreamLossEventThreshold = 131U;     // section 4.5.4: 0.002 of round trips with a loss
+constexpr u64 kScreamLossEventShift = 4U;           // loss_event_rate's gain per smoothed RTT, 1/16
+constexpr u64 kScreamDriftShift = 8U;               // QDELAY_MIN_AVG_ALPHA, 1/256
+constexpr u64 kScreamDriftHoldRtts = 5U;            // section 4.5.1: the target rate halved for max(5 s_rtt, 0.2 s)
+constexpr u64 kScreamDriftHoldNs = 200000000U;
+constexpr u64 kScreamNormShift = 8U;        // qdelay_norm in 2^-8 of QDELAY_TARGET_LO
+constexpr u64 kScreamSafeVariance = 13107U; // section 4.5.4: a variance of qdelay_norm under 0.2, in 2^-16
+constexpr u64 kScreamBurstNs = 1000000U;    // a millisecond of the pacing rate leaves at once
+
+class Scream final : public CongestionController
+{
+public:
+    Scream(const CongestionPolicy& policy, u64 max_datagram, DeliveryRateSampler& delivery) noexcept
+        : m_policy(policy), m_delivery(delivery)
+    {
+        size(max_datagram);
+        restart();
+    }
+
+    void seed(const CongestionState& from) noexcept
+    {
+        m_ref_wnd = min_u64(max_u64(from.window, m_floor), kCongestionMaxWindow);
+        m_reaction_ns = from.recovery_start_ns;
+        m_reductions = from.reductions;
+        m_undone = from.undone;
+        update_target(0U);
+    }
+
+    [[nodiscard]] CongestionAlgorithm algorithm() const noexcept override { return CongestionAlgorithm::Scream; }
+
+    void on_sent(const CongestionPacket& /*packet*/, u64 in_flight, u64 /*now_ns*/) noexcept override
+    {
+        m_max_in_flight = max_u64(m_max_in_flight, in_flight);
+    }
+
+    void on_limited(bool /*window*/, u64 /*now_ns*/) noexcept override {}
+
+    // Section 4.1.2's bytes_newly_acked, and section 4.5.2's loss rate decaying with every delivered packet.
+    void on_acked(const CongestionPacket& packet, u64 /*now_ns*/) noexcept override
+    {
+        m_acked = saturating_add(m_acked, packet.bytes);
+        ++m_frame_packets;
+        m_loss_rate -= multiply_divide(m_loss_rate, loss_gain(), kQ16);
+    }
+
+    void on_ack_end(const QuicRtt& rtt, bool sampled, u64 in_flight, u64 now_ns) noexcept override
+    {
+        m_srtt_ns = max_u64(rtt.smoothed_ns, 1U);
+        m_sampled = m_sampled || sampled;
+        if (m_delivery.sample().acked && m_delivery.sample().rate != 0U)
+        {
+            m_acked_rate = m_delivery.sample().rate;
+        }
+        if (sampled)
+        {
+            queue_sample(rtt.adjusted_ns, now_ns);
+        }
+        tick(in_flight, now_ns);
+        update_alpha(now_ns);
+        const u64 inflection = inflection_scale();
+        react(inflection, in_flight, now_ns);
+        grow(inflection, now_ns);
+        update_target(now_ns);
+        m_acked = 0U;
+        m_acked_ce = 0U;
+        m_frame_packets = 0U;
+    }
+
+    // Sections 4.2.1.1 and 4.5.2: a loss of a packet sent since the last reaction is a congestion signal.
+    void on_lost(const CongestionPacket& packet, u64 /*now_ns*/) noexcept override
+    {
+        const u64 gain = loss_gain();
+        m_loss_rate = m_loss_rate - multiply_divide(m_loss_rate, gain, kQ16) + (gain << 16U);
+        m_round_lost = true;
+        if (m_reaction_ns == kNeverNs || packet.sent_ns > m_reaction_ns)
+        {
+            m_lost = true;
+        }
+    }
+
+    // Sections 4.2.1.2 and 4.2.1.3: marks feed l4s_alpha; CE on a packet sent since the last reaction is a signal,
+    // and the frame's CE bytes, at its mean packet size, grow nothing.
+    void on_ecn(u64 marked, u64 ce, u64 newest_sent_ns, u64 /*now_ns*/) noexcept override
+    {
+        m_units_delivered = saturating_add(m_units_delivered, marked);
+        m_units_marked = saturating_add(m_units_marked, ce);
+        if (ce == 0U)
+        {
+            return;
+        }
+        const u64 unit = (m_frame_packets != 0U) ? m_acked / m_frame_packets : m_datagram;
+        const WideProduct bytes = multiply_wide(ce, unit);
+        m_acked_ce = min_u64(m_acked, saturating_add(m_acked_ce, (bytes.hi != 0U) ? kInfinite : bytes.lo));
+        if (m_reaction_ns == kNeverNs || newest_sent_ns > m_reaction_ns)
+        {
+            m_marked = true;
+        }
+    }
+
+    void on_ecn_unavailable() noexcept override {}
+
+    void on_persistent_congestion(u64 now_ns) noexcept override
+    {
+        m_ref_wnd = m_floor;
+        m_carry = 0U;
+        m_reaction_ns = now_ns;
+        m_detected_ns = now_ns;
+        ++m_reductions;
+        update_target(now_ns);
+    }
+
+    // The draft keeps no undo: a reduction a spurious loss caused stands.
+    void on_spurious(const CongestionPacket& /*packet*/, u64 /*lost_ns*/, u64 /*now_ns*/) noexcept override {}
+
+    void reset(u64 /*now_ns*/) noexcept override { restart(); }
+
+    void set_max_datagram(u64 bytes) noexcept override
+    {
+        const bool initial = m_ref_wnd == m_initial;
+        size(min_u64(max_u64(bytes, kQuicMinInitialDatagram), kMaxDatagram));
+        m_ref_wnd = initial ? m_initial : max_u64(m_ref_wnd, m_floor);
+        update_target(0U);
+    }
+
+    // Section 4.3.1: bytes in flight may reach ref_wnd times the overhead, at least two datagrams.
+    [[nodiscard]] u64 window() const noexcept override
+    {
+        const u64 overhead =
+            kScreamOverheadMin + multiply_divide(kScreamOverheadMax - kScreamOverheadMin, steadiness(), kQ16);
+        return min_u64(max_u64(multiply_divide(m_ref_wnd, overhead, kQ16), 2U * m_datagram), kCongestionMaxWindow);
+    }
+
+    // Section 4.3.2: 1.5 times the target rate, at least RATE_PACE_MIN, relaxed up to four times as the target nears
+    // the policy's maximum.
+    [[nodiscard]] u64 pacing_rate(const QuicRtt& /*rtt*/) const noexcept override
+    {
+        const u64 pace =
+            multiply_divide(max_u64(m_target, kScreamMinPacingRate), kScreamPacingHeadroomPercent, kPercent);
+        const u64 most = m_policy.target_rate_max;
+        const u64 nominal = (most != 0U) ? multiply_divide(m_target, kQ16, most) : 0U;
+        if (nominal <= kScreamRelaxedPacingLow)
+        {
+            return pace;
+        }
+        const u64 relaxed =
+            min_u64(multiply_divide(nominal - kScreamRelaxedPacingLow, kQ16, kQ16 - kScreamRelaxedPacingLow), kQ16);
+        return multiply_divide(pace, kQ16, max_u64(kQ16 - relaxed, kScreamRelaxedPacingFloor));
+    }
+
+    [[nodiscard]] u64 burst() const noexcept override
+    {
+        if (!m_sampled)
+        {
+            return m_initial;
+        }
+        return max_u64(multiply_divide(pacing_rate(QuicRtt{}), kScreamBurstNs, kNanosPerSecond), 2U * m_datagram);
+    }
+
+    [[nodiscard]] CongestionState state() const noexcept override
+    {
+        CongestionState out;
+        out.window = m_ref_wnd;
+        out.slow_start_threshold = m_ref_wnd; // no slow start: a controller swapped in avoids congestion from here
+        out.recovery_start_ns = m_reaction_ns;
+        out.reductions = m_reductions;
+        out.undone = m_undone;
+        out.alpha = static_cast<u32>(m_alpha);
+        out.target_rate = m_target;
+        out.queue_delay_ns = m_queue_avg_ns;
+        out.queue_delay_target_ns = m_target_delay_ns;
+        out.phase = CongestionPhase::Avoidance;
+        return out;
+    }
+
+private:
+    void size(u64 max_datagram) noexcept
+    {
+        m_datagram = max_datagram;
+        m_floor = max_u64(kScreamMinRefWnd, m_policy.minimum_packets * max_datagram);
+        m_initial = max_u64(congestion_initial_window(m_policy, max_datagram), m_floor);
+    }
+
+    void restart() noexcept
+    {
+        m_ref_wnd = m_initial;
+        m_ref_wnd_i = 1U;
+        m_ref_wnd_lowest = 0U;
+        m_inflection_ns = kNeverNs;
+        m_inflection_allowed = true;
+        m_carry = 0U;
+        m_acked = 0U;
+        m_acked_ce = 0U;
+        m_frame_packets = 0U;
+        m_acked_rate = 0U;
+        m_max_in_flight = 0U;
+        m_max_in_flight_prev = 0U;
+        m_in_flight_prev = 0U;
+        m_tick_ns = kNeverNs;
+        m_units_delivered = 0U;
+        m_units_marked = 0U;
+        m_alpha = 0U;
+        m_alpha_ns = kNeverNs;
+        m_base.reset();
+        m_history.reset();
+        m_queue_ns = 0U;
+        m_queue_avg_ns = 0U;
+        m_queue_avg_prev_ns = 0U;
+        m_queue_update_ns = kNeverNs;
+        m_queue_min_ns = kNeverNs;
+        m_queue_min_avg_ns = 0U;
+        m_short_avg_ns = 0;
+        m_long_avg_ns = 0;
+        m_latency_diff = 0U;
+        m_target_delay_ns = m_policy.queue_delay_target_ns;
+        m_loss_rate = 0U;
+        m_loss_events = 0U;
+        m_round_lost = false;
+        m_lost = false;
+        m_marked = false;
+        m_congested = false;
+        m_detected_ns = kNeverNs;
+        m_reaction_ns = kNeverNs;
+        m_hold_until_ns = 0U;
+        m_srtt_ns = kQuicInitialRttNs;
+        m_sampled = false;
+        update_target(0U);
+    }
+
+    // 1 - latency_diff_avg: 1 while the queue delay is steady, toward 0 as it varies (REDUCE_JITTER).
+    [[nodiscard]] u64 steadiness() const noexcept { return kQ16 - m_latency_diff; }
+
+    // Section 4.5.2's EWMA gain: min(LOSS_RATE_THRESHOLD / 4, MSS / ref_wnd / 2), in 2^-16.
+    [[nodiscard]] u64 loss_gain() const noexcept
+    {
+        return min_u64((kScreamLossRateThreshold >> 16U) / 4U, multiply_divide(m_datagram, kQ16, 2U * m_ref_wnd));
+    }
+
+    // Section 4.2.1.4: the queue delay is the sample less RFC 6817's base, averaged with a slow attack and fast decay
+    // once each min(VIRTUAL_RTT, s_rtt).
+    void queue_sample(u64 delay_ns, u64 now_ns) noexcept
+    {
+        m_base.update(delay_ns, now_ns);
+        m_queue_ns = delay_ns - min_u64(delay_ns, m_base.base());
+        m_queue_min_ns = min_u64(m_queue_min_ns, m_queue_ns);
+        if (m_queue_update_ns != kNeverNs &&
+            now_ns - min_u64(m_queue_update_ns, now_ns) < min_u64(kScreamVirtualRttNs, m_srtt_ns))
+        {
+            return;
+        }
+        m_queue_update_ns = now_ns;
+        m_queue_avg_ns = (m_queue_ns < m_queue_avg_ns)
+                             ? m_queue_ns
+                             : m_queue_avg_ns + ((m_queue_ns - m_queue_avg_ns) >> kScreamQueueAvgShift);
+        if (m_policy.reduce_jitter)
+        {
+            update_latency_diff();
+        }
+        if (m_policy.compete)
+        {
+            adjust_target_delay();
+        }
+    }
+
+    // Section 4.2.1.4's calculate_latency_diff_avg().
+    void update_latency_diff() noexcept
+    {
+        const auto queue = static_cast<i64>(min_u64(m_queue_ns, kCongestionMaxWindow));
+        m_short_avg_ns += (queue - m_short_avg_ns) / kScreamShortAvgDivisor;
+        m_long_avg_ns += (queue - m_long_avg_ns) / kScreamLongAvgDivisor;
+        if (!m_congested)
+        {
+            m_long_avg_ns = m_short_avg_ns;
+            return;
+        }
+        i64 diff = m_short_avg_ns - m_long_avg_ns - kScreamLatencyMarginNs;
+        diff = (diff < -kScreamLatencyMarginNs) ? -kScreamLatencyMarginNs : diff;
+        diff = (diff > kScreamLatencyMarginNs) ? kScreamLatencyMarginNs : diff;
+        auto latency = static_cast<i64>(m_latency_diff);
+        if (diff > 0)
+        {
+            const u64 low = min_u64(multiply_divide(m_queue_avg_ns, kQ16, kScreamLatencyLowNs), kQ16);
+            latency += kScreamLatencyUpGain * diff * static_cast<i64>(low) / static_cast<i64>(kNanosPerSecond);
+        }
+        else
+        {
+            latency += kScreamLatencyDownGain * diff * static_cast<i64>(kQ16) / static_cast<i64>(kNanosPerSecond);
+        }
+        latency = (latency < 0) ? 0 : latency;
+        m_latency_diff = min_u64(static_cast<u64>(latency), kQ16);
+    }
+
+    // Section 4.5.4's adjust_qdelay_target(): the target rises toward the queue a competing loss-based flow holds.
+    void adjust_target_delay() noexcept
+    {
+        const u64 low = m_policy.queue_delay_target_ns;
+        const u64 norm = min_u64(multiply_divide(m_queue_ns, u64{1} << kScreamNormShift, low), 0xFFFFU);
+        m_history.push(static_cast<u16>(norm));
+        const u64 variance = m_history.variance();
+        const u64 scaled = m_history.mean() + hesap::net::square_root(variance);
+        const u64 candidate = multiply_divide(scaled, low, u64{1} << kScreamNormShift);
+        u64 target = m_target_delay_ns;
+        if (m_loss_events > kScreamLossEventThreshold)
+        {
+            target = candidate + candidate / 2U;
+        }
+        else if (variance < kScreamSafeVariance)
+        {
+            target = candidate;
+        }
+        else if (candidate < low)
+        {
+            target = max_u64(target / 2U, candidate);
+        }
+        else
+        {
+            target = target * 9U / 10U;
+        }
+        m_target_delay_ns = min_u64(max_u64(target, low), max_u64(kScreamQueueDelayTargetMaxNs, low));
+    }
+
+    // Once a smoothed RTT: the round's largest flight and its losses move to the previous round's, and section
+    // 4.5.1's long average of the round's least queue delay, past a quarter of the target, takes a new base delay
+    // with the target rate halved meanwhile.
+    void tick(u64 in_flight, u64 now_ns) noexcept
+    {
+        if (m_tick_ns != kNeverNs && now_ns - min_u64(m_tick_ns, now_ns) < m_srtt_ns)
+        {
+            return;
+        }
+        const bool first = m_tick_ns == kNeverNs;
+        m_tick_ns = now_ns;
+        m_max_in_flight_prev = m_max_in_flight;
+        m_max_in_flight = in_flight;
+        m_in_flight_prev = in_flight;
+        m_loss_events = m_loss_events - (m_loss_events >> kScreamLossEventShift) +
+                        (m_round_lost ? (kQ16 >> kScreamLossEventShift) : 0U);
+        m_round_lost = false;
+        if (first || m_queue_min_ns == kNeverNs)
+        {
+            return;
+        }
+        m_queue_min_avg_ns =
+            m_queue_min_avg_ns - (m_queue_min_avg_ns >> kScreamDriftShift) + (m_queue_min_ns >> kScreamDriftShift);
+        m_queue_min_ns = kNeverNs;
+        if (m_queue_min_avg_ns > m_target_delay_ns / 4U)
+        {
+            m_queue_min_avg_ns = 0U;
+            m_base.reset();
+            m_hold_until_ns = now_ns + max_u64(kScreamDriftHoldRtts * m_srtt_ns, kScreamDriftHoldNs);
+        }
+    }
+
+    // Section 4.2.1.3: l4s_alpha moves by 1/16 toward the fraction of marked packets at least each min(10 ms, s_rtt).
+    void update_alpha(u64 now_ns) noexcept
+    {
+        if (m_units_delivered == 0U ||
+            (m_alpha_ns != kNeverNs && now_ns - min_u64(m_alpha_ns, now_ns) < min_u64(kScreamAlphaPeriodNs, m_srtt_ns)))
+        {
+            return;
+        }
+        const u64 fraction =
+            multiply_divide(min_u64(m_units_marked, m_units_delivered), kCongestionAlphaOne, m_units_delivered);
+        m_alpha = m_alpha - (m_alpha >> kScreamAlphaShift) + (fraction >> kScreamAlphaShift);
+        m_alpha_ns = now_ns;
+        m_units_delivered = 0U;
+        m_units_marked = 0U;
+    }
+
+    // Section 4.2.2.1's scl_t: growth and the L4S backoff shrink near the last known maximum, ref_wnd_i.
+    [[nodiscard]] u64 inflection_scale() const noexcept
+    {
+        const u64 gap = (m_ref_wnd > m_ref_wnd_i) ? m_ref_wnd - m_ref_wnd_i : m_ref_wnd_i - m_ref_wnd;
+        const u64 x = min_u64(multiply_divide(gap, 8U * kQ16, m_ref_wnd_i), kQ16);
+        u64 scale = max_u64(x * x / kQ16, kScreamInflectionFloor);
+        if (m_ref_wnd > m_ref_wnd_i && scale < kQ16)
+        {
+            scale = max_u64(multiply_divide(scale, steadiness(), kQ16), kScreamInflectionFloor);
+        }
+        return scale;
+    }
+
+    // Section 4.5.3: a target already under the acknowledged rate needs no further cut while the flight shrinks.
+    [[nodiscard]] u64 undershoot(u64 backoff, u64 in_flight) const noexcept
+    {
+        if (m_acked_rate == 0U || m_target >= multiply_divide(m_acked_rate, kScreamAckedMarginPercent, kPercent))
+        {
+            return backoff;
+        }
+        return (in_flight < m_in_flight_prev) ? 0U : backoff >> kScreamLowTargetBackoffShift;
+    }
+
+    // Section 4.2.2.1: at most once a smoothed RTT, a loss, CE or a queue past half the target reduces ref_wnd.
+    void react(u64 inflection, u64 in_flight, u64 now_ns) noexcept
+    {
+        if (m_lost || m_marked)
+        {
+            m_detected_ns = now_ns;
+        }
+        bool loss = false;
+        bool ce = false;
+        u64 virtual_alpha = 0U;
+        const u64 half = m_target_delay_ns / 2U;
+        if (m_reaction_ns == kNeverNs || now_ns - min_u64(m_reaction_ns, now_ns) >= m_srtt_ns)
+        {
+            if (m_lost)
+            {
+                // Section 4.5.2: tolerating link losses, a loss reduces past a 1% rate or with a queue building.
+                loss = !m_policy.tolerate_link_loss || m_loss_rate > kScreamLossRateThreshold ||
+                       m_queue_avg_ns > m_target_delay_ns / 4U;
+            }
+            else if (m_marked)
+            {
+                ce = true;
+            }
+            else if (m_queue_avg_ns > half && m_queue_avg_ns >= m_queue_avg_prev_ns)
+            {
+                virtual_alpha = min_u64(multiply_divide(m_queue_avg_ns - half, kQ16, half), kQ16);
+                m_detected_ns = now_ns;
+            }
+            m_lost = false;
+            m_marked = false;
+        }
+        m_queue_avg_prev_ns = m_queue_avg_ns;
+        if (!loss && !ce && virtual_alpha == 0U)
+        {
+            return;
+        }
+        m_congested = true;
+        if (m_ref_wnd > max_u64(m_ref_wnd_lowest + m_datagram, m_ref_wnd_lowest + m_ref_wnd_lowest / 20U) ||
+            m_inflection_ns == kNeverNs || now_ns - min_u64(m_inflection_ns, now_ns) > kScreamHoldRtts * m_srtt_ns)
+        {
+            m_inflection_allowed = true;
+        }
+        if (m_inflection_allowed)
+        {
+            m_ref_wnd_i = m_ref_wnd;
+            m_inflection_allowed = false;
+            m_inflection_ns = now_ns;
+        }
+        u64 window = m_ref_wnd;
+        if (loss)
+        {
+            window = multiply_divide(window, kScreamBetaLoss, kQ16);
+        }
+        if (ce && !m_policy.scalable_ecn)
+        {
+            window = multiply_divide(window, kScreamBetaEcn, kQ16);
+        }
+        else if (ce)
+        {
+            u64 backoff = (m_alpha >> 4U) / 2U; // l4s_alpha / 2, in 2^-16
+            if (m_queue_avg_ns < m_target_delay_ns / 4U)
+            {
+                backoff = multiply_divide(backoff, inflection, kQ16);
+            }
+            const bool long_quiet =
+                m_reaction_ns == kNeverNs || now_ns - min_u64(m_reaction_ns, now_ns) > kScreamRestoreRtts * m_srtt_ns;
+            if (long_quiet && m_max_in_flight_prev != 0U)
+            {
+                window = min_u64(window, m_max_in_flight_prev);
+            }
+            window -= multiply_divide(window, undershoot(backoff, in_flight), kQ16);
+        }
+        if (virtual_alpha != 0U)
+        {
+            window -= multiply_divide(window, undershoot(virtual_alpha / 2U, in_flight), kQ16);
+        }
+        m_ref_wnd = max_u64(window, m_floor);
+        m_ref_wnd_lowest = m_ref_wnd;
+        m_reaction_ns = now_ns;
+        m_carry = 0U;
+        ++m_reductions;
+    }
+
+    // Section 4.2.2.2: unmarked acknowledged bytes grow ref_wnd by about a datagram a round trip, scaled down near
+    // ref_wnd_i and under VIRTUAL_RTT, multiplicatively once congestion is POST_CONGESTION_DELAY_RTTS past, and
+    // never beyond 1.5 times the largest recent flight or once the target rate reached its maximum.
+    void grow(u64 inflection, u64 now_ns) noexcept
+    {
+        const u64 plain = m_acked - min_u64(m_acked_ce, m_acked);
+        if (plain == 0U)
+        {
+            return;
+        }
+        const u64 steady = steadiness();
+        u64 post = kQ16;
+        if (m_detected_ns != kNeverNs)
+        {
+            const u64 span = kScreamPostCongestionRtts * max_u64(kScreamVirtualRttNs, m_srtt_ns);
+            post = min_u64(multiply_divide(now_ns - min_u64(m_detected_ns, now_ns), kQ16, span), kQ16);
+        }
+        post = multiply_divide(post, steady, kQ16);
+        const u64 factor = kQ16 + multiply_divide(kScreamMulIncrease, m_ref_wnd, m_datagram);
+        u64 increment = multiply_divide(plain << 16U, min_u64(m_datagram, m_ref_wnd), m_ref_wnd);
+        increment = multiply_divide(increment, kQ16, 4U * kQ16 - 3U * steady);
+        increment = multiply_divide(increment, min_u64(m_srtt_ns, kScreamVirtualRttNs), kScreamVirtualRttNs);
+        increment = multiply_divide(increment, inflection, kQ16);
+        increment = multiply_divide(increment, kQ16 + multiply_divide(factor - kQ16, post, kQ16), kQ16);
+        const u64 total = saturating_add(increment, m_carry);
+        const u64 grown = saturating_add(m_ref_wnd, total >> 16U);
+        const u64 allowed = m_datagram + multiply_divide(max_u64(m_max_in_flight, m_max_in_flight_prev),
+                                                         kScreamHeadroomPercent, kPercent);
+        const bool at_most = m_policy.target_rate_max != 0U && m_target >= m_policy.target_rate_max;
+        if (grown <= allowed && !at_most)
+        {
+            m_ref_wnd = min_u64(grown, kCongestionMaxWindow);
+            m_carry = total & (kQ16 - 1U);
+        }
+    }
+
+    // Section 4.4: the window per smoothed RTT, less for a window of few datagrams and the packet overhead, over 1.2,
+    // halved while section 4.5.1's remedy holds, and within the policy's bounds. The media queue's own terms
+    // (rate_adjust_factor, frame_size_dev) are the source's.
+    void update_target(u64 now_ns) noexcept
+    {
+        const u64 ratio = min_u64(multiply_divide(m_datagram, kQ16, m_ref_wnd), kQ16);
+        const u64 small = (ratio > kQ16 / 10U) ? min_u64(ratio - kQ16 / 10U, kQ16 / 5U) : 0U;
+        u64 rate = multiply_divide(m_ref_wnd, kNanosPerSecond, m_srtt_ns);
+        rate = multiply_divide(rate, kQ16 - small, kQ16);
+        rate = multiply_divide(rate, m_datagram * kPercent,
+                               (m_datagram + kScreamPacketOverhead) * kScreamRateMarginPercent);
+        if (now_ns < m_hold_until_ns)
+        {
+            rate /= 2U;
+        }
+        const u64 most = (m_policy.target_rate_max != 0U) ? m_policy.target_rate_max : ~u64{0};
+        m_target = min_u64(max_u64(rate, m_policy.target_rate_min), most);
+    }
+
+    CongestionPolicy m_policy;
+    DeliveryRateSampler& m_delivery;
+    u64 m_datagram = 0U;
+    u64 m_floor = 0U;
+    u64 m_initial = 0U;
+    u64 m_reductions = 0U;
+    u64 m_undone = 0U;
+
+    // The reference window (section 4.2.2) and its inflection point.
+    u64 m_ref_wnd = 0U;
+    u64 m_ref_wnd_i = 1U;
+    u64 m_ref_wnd_lowest = 0U;
+    u64 m_inflection_ns = kNeverNs;
+    u64 m_carry = 0U; // growth below a byte, in 2^-16 bytes
+    bool m_inflection_allowed = true;
+
+    // Feedback (section 4.1).
+    u64 m_acked = 0U;    // bytes the frame acknowledged
+    u64 m_acked_ce = 0U; // of those, CE
+    u64 m_frame_packets = 0U;
+    u64 m_acked_rate = 0U; // bytes per second, the delivery rate's last sample
+    u64 m_max_in_flight = 0U;
+    u64 m_max_in_flight_prev = 0U;
+    u64 m_in_flight_prev = 0U;
+    u64 m_tick_ns = kNeverNs; // the smoothed RTT's last turn
+
+    // L4S (section 4.2.1.3): alpha in 2^-20.
+    u64 m_units_delivered = 0U;
+    u64 m_units_marked = 0U;
+    u64 m_alpha = 0U;
+    u64 m_alpha_ns = kNeverNs;
+
+    // Queue delay (sections 4.2.1.4, 4.5.1 and 4.5.4).
+    BaseDelayHistory m_base;
+    QueueDelayHistory m_history;
+    u64 m_queue_ns = 0U;
+    u64 m_queue_avg_ns = 0U;
+    u64 m_queue_avg_prev_ns = 0U;
+    u64 m_queue_update_ns = kNeverNs;
+    u64 m_queue_min_ns = kNeverNs;
+    u64 m_queue_min_avg_ns = 0U;
+    i64 m_short_avg_ns = 0;
+    i64 m_long_avg_ns = 0;
+    u64 m_latency_diff = 0U; // latency_diff_avg, in 2^-16
+    u64 m_target_delay_ns = 0U;
+    u64 m_hold_until_ns = 0U; // section 4.5.1's halved target rate lasts until then
+
+    // Congestion (sections 4.2.1, 4.5.2 and 4.5.4).
+    u64 m_loss_rate = 0U;   // in 2^-32
+    u64 m_loss_events = 0U; // the fraction of smoothed RTTs with a loss, in 2^-16
+    u64 m_detected_ns = kNeverNs;
+    u64 m_reaction_ns = kNeverNs;
+    bool m_round_lost = false;
+    bool m_lost = false;
+    bool m_marked = false;
+    bool m_congested = false; // is_congestion_detected
+
+    u64 m_target = 0U; // bytes per second
+    u64 m_srtt_ns = kQuicInitialRttNs;
+    bool m_sampled = false;
+};
+
 static_assert(sizeof(NewReno) <= kCongestionSlotBytes && alignof(NewReno) <= alignof(CongestionSlot));
 static_assert(sizeof(Cubic) <= kCongestionSlotBytes && alignof(Cubic) <= alignof(CongestionSlot));
 static_assert(sizeof(Bbr) <= kCongestionSlotBytes && alignof(Bbr) <= alignof(CongestionSlot));
 static_assert(sizeof(Prague) <= kCongestionSlotBytes && alignof(Prague) <= alignof(CongestionSlot));
+static_assert(sizeof(Scream) <= kCongestionSlotBytes && alignof(Scream) <= alignof(CongestionSlot));
 
 [[nodiscard]] i64 scaled_bytes(u64 bytes) noexcept
 {
@@ -1926,7 +2549,14 @@ bool congestion_policy_valid(const CongestionPolicy& policy) noexcept
     const bool bbr = policy.algorithm == CongestionAlgorithm::Bbr && policy.version >= 2U && policy.pacing;
     // Prague is version 3's and must pace (the draft's section 2.5.1).
     const bool prague = policy.algorithm == CongestionAlgorithm::Prague && policy.version >= 3U && policy.pacing;
-    return policy.version >= 1U && policy.version <= kCongestionInterfaceVersion && (window || bbr || prague) &&
+    // SCReAM v2 is version 4's and must pace (its section 4.3.2), its delay target in [1 ms, QDELAY_TARGET_HI] and its
+    // target rate's bounds in order.
+    const bool scream = policy.algorithm == CongestionAlgorithm::Scream && policy.version >= 4U && policy.pacing &&
+                        policy.queue_delay_target_ns >= 1000000U &&
+                        policy.queue_delay_target_ns <= kScreamQueueDelayTargetMaxNs &&
+                        (policy.target_rate_max == 0U || policy.target_rate_min <= policy.target_rate_max);
+    const bool algorithm = window || bbr || prague || scream;
+    return policy.version >= 1U && policy.version <= kCongestionInterfaceVersion && algorithm &&
            policy.minimum_packets >= 2U &&
            policy.initial_packets >= policy.minimum_packets && policy.initial_packets <= kCongestionMaxInitialPackets &&
            policy.pacing_gain >= kCongestionMinPacingGain && policy.pacing_gain <= kCongestionMaxPacingGain;
@@ -1947,6 +2577,15 @@ CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_da
             bbr->seed(*seed);
         }
         return bbr;
+    }
+    if (policy.algorithm == CongestionAlgorithm::Scream)
+    {
+        Scream* const scream = new (slot.bytes) Scream(policy, max_datagram, delivery);
+        if (seed != nullptr)
+        {
+            scream->seed(*seed);
+        }
+        return scream;
     }
     WindowController* made = nullptr;
     if (policy.algorithm == CongestionAlgorithm::NewReno)

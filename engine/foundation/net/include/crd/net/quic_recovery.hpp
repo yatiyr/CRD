@@ -217,6 +217,7 @@ struct QuicTimeout
 struct QuicRtt
 {
     u64 latest_ns = 0U;
+    u64 adjusted_ns = 0U; // latest_ns less the ACK delay taken off it (section 5.3's adjusted_rtt)
     u64 min_ns = 0U;
     u64 smoothed_ns = kQuicInitialRttNs;
     u64 variance_ns = kQuicInitialRttNs / 2U;
