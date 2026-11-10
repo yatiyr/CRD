@@ -1316,6 +1316,36 @@ TEST_CASE("http2: Writable reaches every blocked stream, a closing one aside", "
     CHECK_FALSE(next());
 }
 
+TEST_CASE("http2: a writer blocked again in its Writable waits for the next room or credit", "[http2]")
+{
+    // A tunnel's flush in its Writable writes until it blocks once more; telling it again at once would never end.
+    Peer peer = server_peer();
+    peer.get(1U);
+    peer.send(kSettings, 0U, 0U, setting(4U, 0U));
+    REQUIRE(peer.side.conn.send_response(1U, ok_response().span(), false) == Http2Error::None);
+    usize taken = 0U;
+    REQUIRE(peer.side.conn.send_body(1U, view("x"), false, taken) == Http2Error::Blocked);
+    Http2Event event;
+    const auto next = [&peer, &event]
+    {
+        usize used = 0U;
+        const bool more = peer.side.conn.poll(view(peer.side.in), peer.side.now, used, event);
+        erase_front(peer.side.in, used);
+        return more;
+    };
+    for (u32 round = 0U; round < 2U; ++round)
+    {
+        peer.side.in += frame(kWindow, 0U, 1U, u32_text(1U));
+        REQUIRE(next());
+        CHECK(event.kind == Http2EventKind::Writable);
+        CHECK(event.stream == 1U);
+        REQUIRE(peer.side.conn.send_body(1U, view("xy"), false, taken) == Http2Error::None);
+        CHECK(taken == 1U);
+        CHECK(peer.side.conn.send_body(1U, view("y"), false, taken) == Http2Error::Blocked);
+        CHECK_FALSE(next());
+    }
+}
+
 TEST_CASE("http2: sending follows both windows and the frame limit", "[http2]")
 {
     Peer peer = server_peer();

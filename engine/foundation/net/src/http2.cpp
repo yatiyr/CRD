@@ -337,10 +337,11 @@ bool Http2Connection::take_owed(Http2Event& event) noexcept
     for (; m_wake_at < m_open && m_wants != 0U; ++m_wake_at)
     {
         Record& record = m_records[m_index[m_wake_at].slot];
-        if (record.want_write)
+        if (record.want_write && record.id != m_woken)
         {
             record.want_write = false;
             --m_wants;
+            m_woken = record.id;
             event = Http2Event{};
             event.kind = Http2EventKind::Writable;
             event.stream = record.id;
@@ -349,6 +350,7 @@ bool Http2Connection::take_owed(Http2Event& event) noexcept
     }
     m_wake = false;
     m_wake_at = 0U;
+    m_woken = 0U;
     if (m_want_open)
     {
         m_want_open = false;
@@ -1241,6 +1243,7 @@ void Http2Connection::wake_writers() noexcept
     {
         m_wake = true;
         m_wake_at = 0U;
+        m_woken = 0U;
     }
 }
 

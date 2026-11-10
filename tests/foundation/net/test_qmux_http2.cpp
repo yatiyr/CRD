@@ -403,6 +403,7 @@ struct App final : QmuxHostEvents
 
     void on_service(QuicHandle handle, QmuxConnection& connection, u64) noexcept override
     {
+        ++services[handle.slot];
         const bool ended_here = connection.state() == QmuxState::Closed;
         closed_services += ended_here ? 1U : 0U;
         if (connection.http2() || transfer == 0U ||
@@ -440,6 +441,7 @@ struct App final : QmuxHostEvents
     usize accepted = 0U;
     usize tunnels_accepted = 0U;
     usize closed_services = 0U;
+    usize services[kMost] = {};
     Endpoint last_peer;
     Flow flows[kMost];
     Ended ended[kMost];
@@ -603,14 +605,27 @@ TEST_CASE("HTTP/2: a request that is no tunnel's is answered 404, and a peer's G
     u8 goaway[8] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
     REQUIRE(peer.tls.send(view(frame(kFrameGoAway, 0U, 0U, ConstSpan<u8>(goaway, sizeof(goaway))))) ==
             TlsError::None);
-    peer.exchange(server, kNow);
-    CHECK(server.state() == QmuxState::Closing);
-    CHECK(server.close_info().reason == QmuxCloseReason::PeerShutdown);
-    CHECK(peer.goaway() == kH2NoError);
-    CHECK(peer.closed); // close_notify behind it
-    CHECK(server.send_finished());
-    server.transport_ended(true, kNow);
-    CHECK(server.state() == QmuxState::Closed);
+    SECTION("alone: answered with GOAWAY and close_notify")
+    {
+        peer.exchange(server, kNow);
+        CHECK(server.state() == QmuxState::Closing);
+        CHECK(server.close_info().reason == QmuxCloseReason::PeerShutdown);
+        CHECK(peer.goaway() == kH2NoError);
+        CHECK(peer.closed); // close_notify behind it
+        CHECK(server.send_finished());
+        server.transport_ended(true, kNow);
+        CHECK(server.state() == QmuxState::Closed);
+    }
+    SECTION("with the peer's close_notify behind it in one flight: the peer's shutdown, nothing more sent")
+    {
+        // The h2 crate's client, its last handle dropped: GOAWAY, then close_notify as it shuts its stream.
+        REQUIRE(peer.tls.close() == TlsError::None);
+        peer.exchange(server, kNow);
+        CHECK(server.state() == QmuxState::Closed);
+        CHECK(server.close_info().reason == QmuxCloseReason::PeerShutdown);
+        CHECK(server.tls_error() == TlsError::None);
+        CHECK(server.send_finished());
+    }
 }
 
 TEST_CASE("HTTP/2: a connection error is a GOAWAY with its code, then close_notify", "[net][qmux-h2]")
@@ -778,6 +793,14 @@ TEST_CASE("HTTP/2: tunnels are connections of the host, served, closed and repor
     const usize calls = hosts.allocator.calls();
     hosts.turns(32U);
     CHECK(hosts.allocator.calls() == calls);
+
+    // A tunnel woken outside on_service is served in the next turn, as any connection of the host is.
+    const usize served = hosts.client_events.services[first.slot];
+    hosts.turns(8U);
+    CHECK(hosts.client_events.services[first.slot] == served); // nothing arrives: nothing serves it
+    hosts.client->wake(first);
+    hosts.turns(1U);
+    CHECK(hosts.client_events.services[first.slot] == served + 1U);
 
     // One tunnel closes: both ends report it, and its handle goes stale.
     QmuxConnection* const tunnel = hosts.client->connection(first);

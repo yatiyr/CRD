@@ -156,7 +156,8 @@ public:
 
     // The live connection `handle` names; null for a stale or unknown handle, and for a tunnel not open yet.
     [[nodiscard]] QmuxConnection* connection(QuicHandle handle) noexcept;
-    // Serves the connection in the next turn (the application wrote to it outside on_service).
+    // Serves the connection in the next turn (the application wrote to it outside on_service, or serves it on a
+    // timer); a tunnel too, its on_service coming in its bearer's turn.
     void wake(QuicHandle handle) noexcept;
 
     [[nodiscard]] u32 live() const noexcept { return m_live; }

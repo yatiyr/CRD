@@ -550,11 +550,19 @@ QmuxConnection* QmuxHost::connection(QuicHandle handle) noexcept
 
 void QmuxHost::wake(QuicHandle handle) noexcept
 {
-    if (connection(handle) != nullptr)
+    if (connection(handle) == nullptr)
     {
-        const u32 bearer = m_slots[handle.slot].bearer; // a tunnel is served with the connection it runs on
-        m_heap.schedule((bearer != kNoConnection) ? bearer : handle.slot, 0U);
+        return;
     }
+    const Slot& slot = m_slots[handle.slot];
+    if (slot.bearer == kNoConnection)
+    {
+        m_heap.schedule(handle.slot, 0U);
+        return;
+    }
+    // A tunnel is served with the connection it runs on, by the Service event its wake owes.
+    static_cast<void>(m_slots[slot.bearer].connection->wake_tunnel(slot.tunnel));
+    m_heap.schedule(slot.bearer, 0U);
 }
 
 QuicHandle QmuxHost::handle_of(u32 index) const noexcept

@@ -212,6 +212,8 @@ public:
     [[nodiscard]] WsTunnelError open_tunnel(u64 now_ns, QuicHandle& handle) noexcept;
     // Names a tunnel in its events (WebSocketTunnels::tag()); false for a stale handle.
     [[nodiscard]] bool tag_tunnel(QuicHandle handle, u32 tag) noexcept;
+    // Serves a tunnel at the next poll_tunnel() (WebSocketTunnels::wake()); false for a stale handle.
+    [[nodiscard]] bool wake_tunnel(QuicHandle handle) noexcept;
     // Its tunnels live, opening ones included.
     [[nodiscard]] u32 tunnels_live() const noexcept;
 
@@ -299,7 +301,7 @@ private:
     // ---- HTTP/2 ----
     [[nodiscard]] static bool http2_config_valid(const QmuxConfig& config, bool client) noexcept;
     [[nodiscard]] bool takes_http2() const noexcept;
-    [[nodiscard]] bool http2_pending() const noexcept; // output waits in HTTP/2
+    [[nodiscard]] bool http2_pending() const noexcept; // output waits in HTTP/2, and this side still sends
     [[nodiscard]] u64 http2_deadline() const noexcept; // HTTP/2's and its tunnels' next timer
     void release_http2() noexcept;
     void begin_http2(u64 now_ns) noexcept;

@@ -386,6 +386,7 @@ private:
     u32 m_goaway_peer = 0U;
     u32 m_wants = 0U;      // streams waiting for Writable
     u32 m_wake_at = 0U;    // where the walk for them stands
+    u32 m_woken = 0U;      // the stream the walk told last: blocked again, it waits for the next wake
     u32 m_left = 0U;       // the current frame's content still to come
     u32 m_pad_left = 0U;
     u32 m_frame_id = 0U;

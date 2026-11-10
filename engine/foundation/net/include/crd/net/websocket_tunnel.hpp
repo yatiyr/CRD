@@ -54,7 +54,7 @@ enum class WsTunnelEventKind : u8
     Refused, // a client's: `status` of the response (0 for a 2xx it refuses) or `error` of a reset, both 0 when no
              // answer came within the handshake timeout; its connection is Closed and says which (UpgradeRefused,
              // Reset, Truncated or HandshakeTimeout); then forgotten
-    Service, // bytes arrived or a timer ran: read and write its streams
+    Service, // bytes arrived, bytes left (its streams have room again) or a timer ran: read and write its streams
     Closed,  // the tunnel is Closed: read what arrived before the end; it is destroyed by the next poll()
 };
 
@@ -106,7 +106,8 @@ public:
     [[nodiscard]] bool poll(WsTunnelEvent& event, u64 now_ns) noexcept;
     // Sends what the tunnels owe: after the application wrote to them outside a poll().
     void flush(u64 now_ns) noexcept;
-    // When poll() must run though nothing arrived; kQmuxNoTimer for never.
+    // When poll() must run though nothing arrived: 0 while an event waits for it (bytes that reached a tunnel outside
+    // poll(), as HTTP/2's input drained for room does), else the tunnels' first timer; kQmuxNoTimer for never.
     [[nodiscard]] u64 next_deadline_ns() const noexcept;
 
     // A client's new tunnel, its extended CONNECT built from the configuration's WebSocketConfig.
@@ -115,6 +116,9 @@ public:
     [[nodiscard]] QmuxConnection* connection(QuicHandle handle) noexcept;
     // Names the tunnel in its events from now on (a host's own slot for it); false for a stale or unknown handle.
     [[nodiscard]] bool tag(QuicHandle handle, u32 tag) noexcept;
+    // Reports the open tunnel's Service at the next poll(), though nothing arrived (its owner serves it on a timer, or
+    // wrote to it outside poll()); false for a stale handle, or a tunnel not open or already ended.
+    [[nodiscard]] bool wake(QuicHandle handle) noexcept;
     // The transport beneath the HTTP connection ended, or its owner closed it: every tunnel ends at the next poll(),
     // as on a failed HTTP connection.
     void bearer_ended() noexcept { m_bearer_ended = true; }

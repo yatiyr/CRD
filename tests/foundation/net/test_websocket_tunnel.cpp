@@ -223,16 +223,17 @@ public:
         settle();
     }
 
-    void pump(usize side)
+    // What reached `side`, read by its HTTP/2 connection, each event to the tunnels or the owner; the tunnels are not
+    // polled.
+    void receive(usize side)
     {
-        End& here = end[side];
         const bool tunnels = side == kClient || m_server_tunnels;
         for (;;)
         {
             usize taken = 0U;
             Http2Event event;
             const bool got = conn[side].poll(view(in[side]), now, taken, event);
-            if (got && !(tunnels && here.tunnels.on_event(event, now)))
+            if (got && !(tunnels && end[side].tunnels.on_event(event, now)))
             {
                 owner(side, event);
             }
@@ -242,10 +243,15 @@ public:
                 break;
             }
         }
+    }
+
+    void pump(usize side)
+    {
+        receive(side);
         WsTunnelEvent event;
-        while (tunnels && here.tunnels.poll(event, now))
+        while ((side == kClient || m_server_tunnels) && end[side].tunnels.poll(event, now))
         {
-            here.record(event);
+            end[side].record(event);
         }
     }
 
@@ -1200,6 +1206,57 @@ TEST_CASE("WebSocket tunnels: a tunnel ended by what arrived behind its CONNECT 
     CHECK(rig.end[kServer].tunnels.live() == 0U);
     CHECK(rig.end[kClient].status == kWsConnectAccepted);
     CHECK(rig.conn[kServer].error() == 0U);
+}
+
+TEST_CASE("WebSocket tunnels: an event waiting for poll() makes the next deadline now", "[net][ws-tunnel]")
+{
+    // An owner that serves the tunnels by next_deadline_ns() (QmuxHost) must not wait out a timer while bytes that
+    // arrived, or room that bytes leaving made, outside its poll() wait for their service.
+    H2Rig rig;
+    REQUIRE(rig.ok);
+    QmuxConnection* client = nullptr;
+    QmuxConnection* server = nullptr;
+    open_tunnel(rig, client, server);
+    rig.settle();
+    const u64 idle = rig.end[kServer].tunnels.next_deadline_ns();
+    CHECK(idle > rig.now);
+    CHECK(idle != kQmuxNoTimer);
+
+    u64 id = 0U;
+    REQUIRE(client->streams().open(true, id) == QuicStreamError::None);
+    usize taken = 0U;
+    REQUIRE(client->streams().write(id, span_of("ping"), false, taken) == QuicStreamError::None);
+    CHECK(rig.end[kClient].tunnels.next_deadline_ns() != 0U);
+    rig.flush();
+    CHECK(rig.end[kClient].tunnels.next_deadline_ns() == 0U); // what left made room: the writer is served again
+    rig.in[kServer] += text_of(rig.conn[kClient].output());
+    rig.conn[kClient].output_taken(rig.conn[kClient].output().size());
+    rig.receive(kServer);
+    CHECK(rig.end[kServer].tunnels.next_deadline_ns() == 0U);
+    const usize services = rig.end[kServer].services;
+    rig.pump(kServer);
+    CHECK(rig.end[kServer].services == services + 1U);
+    CHECK(rig.end[kServer].tunnels.next_deadline_ns() == idle);
+
+    // A wake owes a Service though nothing arrived.
+    const Seen* const opened = rig.end[kServer].last(WsTunnelEventKind::Opened);
+    REQUIRE(opened != nullptr);
+    REQUIRE(rig.end[kServer].tunnels.wake(opened->tunnel));
+    CHECK(rig.end[kServer].tunnels.next_deadline_ns() == 0U);
+    rig.pump(kServer);
+    CHECK(rig.end[kServer].services == services + 2U);
+
+    // An end not yet reported is due as well; once reported, the tunnel holds no timer.
+    client->close(7U, span_of("bye"), rig.now);
+    rig.flush();
+    rig.in[kServer] += text_of(rig.conn[kClient].output());
+    rig.conn[kClient].output_taken(rig.conn[kClient].output().size());
+    rig.receive(kServer);
+    CHECK(rig.end[kServer].tunnels.next_deadline_ns() == 0U);
+    rig.settle();
+    CHECK(rig.end[kServer].count(WsTunnelEventKind::Closed) == 1U);
+    CHECK(rig.end[kServer].tunnels.next_deadline_ns() == kQmuxNoTimer);
+    CHECK_FALSE(rig.end[kServer].tunnels.wake(opened->tunnel)); // stale
 }
 
 TEST_CASE("WebSocket tunnels: a failed HTTP/2 connection ends every tunnel", "[net][ws-tunnel]")

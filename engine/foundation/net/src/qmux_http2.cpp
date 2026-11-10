@@ -162,7 +162,7 @@ void QmuxConnection::on_http2_event(const Http2Event& event, u64 now_ns) noexcep
 
 bool QmuxConnection::http2_pending() const noexcept
 {
-    return m_h2 != nullptr && !m_h2->http2.output().empty();
+    return m_h2 != nullptr && !m_send_shut && !m_h2->http2.output().empty();
 }
 
 crypto::TlsError QmuxConnection::send_http2() noexcept
@@ -202,7 +202,8 @@ bool QmuxConnection::flush_http2() noexcept
 
 void QmuxConnection::produce_http2(u64 now_ns) noexcept
 {
-    if (m_h2 == nullptr || !flush_http2())
+    // Once close_notify is out (or the peer's came first) what still waits in HTTP/2 is dropped: TLS takes no more.
+    if (m_h2 == nullptr || m_send_shut || !flush_http2())
     {
         return;
     }
@@ -295,6 +296,11 @@ WsTunnelError QmuxConnection::open_tunnel(u64 now_ns, QuicHandle& handle) noexce
 bool QmuxConnection::tag_tunnel(QuicHandle handle, u32 tag) noexcept
 {
     return m_h2 != nullptr && m_h2->tunnels.tag(handle, tag);
+}
+
+bool QmuxConnection::wake_tunnel(QuicHandle handle) noexcept
+{
+    return m_h2 != nullptr && m_h2->tunnels.wake(handle);
 }
 
 u32 QmuxConnection::tunnels_live() const noexcept

@@ -235,6 +235,16 @@ bool WebSocketTunnels::tag(QuicHandle handle, u32 tag) noexcept
     return true;
 }
 
+bool WebSocketTunnels::wake(QuicHandle handle) noexcept
+{
+    if (connection(handle) == nullptr || m_slots[handle.slot].report_end)
+    {
+        return false;
+    }
+    m_slots[handle.slot].report_service = true;
+    return true;
+}
+
 void WebSocketTunnels::refuse(Slot& slot, QmuxCloseReason reason, u64 code) noexcept
 {
     slot.connection->abandon(reason, code);
@@ -653,6 +663,8 @@ bool WebSocketTunnels::pump(Slot& slot, u64 now_ns) noexcept
     bool blocked = false;
     const usize sent = send(slot.stream, bytes, blocked);
     slot.connection->taken(sent, now_ns);
+    // What left made room in its streams: the application may write again, though nothing arrived.
+    slot.report_service = slot.report_service || sent != 0U;
     return sent != 0U && !blocked;
 }
 
@@ -684,9 +696,13 @@ u64 WebSocketTunnels::next_deadline_ns() const noexcept
     for (u32 index = 0U; m_slots != nullptr && index < m_config.tunnels; ++index)
     {
         const Slot& slot = m_slots[index];
-        if (slot.connection == nullptr || slot.report_end)
+        if (slot.connection == nullptr || index + 1U == m_release)
         {
-            continue;
+            continue; // none, or reported ended: the next poll() forgets it
+        }
+        if (slot.report_open || slot.report_service || slot.report_end)
+        {
+            return 0U; // an event waits for poll()
         }
         const u64 due = slot.opening ? slot.deadline_ns : slot.connection->next_timer_ns();
         first = (due < first) ? due : first;
