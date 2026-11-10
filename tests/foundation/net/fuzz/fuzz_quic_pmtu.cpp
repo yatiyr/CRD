@@ -4,12 +4,15 @@
 // Input: operations of two bytes, an operation (its low three bits the kind, the rest a parameter) and a parameter,
 // on one search: probes asked for (busy or not) and sent or not, probes acknowledged or lost (the ones in flight, or
 // any size: stale, spurious and forged settlements), other packets of any size and number acknowledged or lost, loss
-// detections ended, ceilings lowered, time and new paths of any base, ceiling and discovery.
+// detections ended, ceilings lowered, Packet Too Big hints of any limit, time and new paths of any base, ceiling and
+// discovery.
 //
 // Oracles. The size stays within the floor and the ceiling, and the ceiling never rises. Only an acknowledgement
-// raises the size, and only to the size it proves; only a black hole or a lower ceiling lowers it, a black hole to the
-// floor. A probe names a size above the size and within the ceiling, never while one is in flight, and none without
-// discovery; nothing is probed or found in Disabled. Counters only rise.
+// raises the size, and only to the size it proves; only a black hole, a hint or a lower ceiling lowers it, the first
+// two to the floor. A probe names a size above the size and within the ceiling, never while one is in flight, and none
+// without discovery; nothing is probed or found in Disabled. Counters only rise. A Packet Too Big hint is used exactly
+// when discovery runs and its limit lies between the base and the datagram quoted; it never raises the size, and lowers
+// it only to the floor and only for a limit under the size in use.
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_pmtu.hpp>
 
@@ -25,8 +28,9 @@ struct World
 {
     QuicPathMtu pmtu;
     u32 ceiling = kQuicPmtuFloor;
-    u32 flight = 0U; // the probe sent and not settled, 0 for none
-    u64 number = 0U; // the next packet number
+    u32 base = kQuicPmtuFloor; // the search's base as start() and limit() leave it
+    u32 flight = 0U;           // the probe sent and not settled, 0 for none
+    u64 number = 0U;           // the next packet number
     u64 now = 0U;
     QuicPmtuCounters counters;
 };
@@ -43,7 +47,8 @@ void check(const World& w)
     CRD_FUZZ_REQUIRE(pmtu.ceiling() <= w.ceiling);
     const QuicPmtuCounters& c = pmtu.counters();
     CRD_FUZZ_REQUIRE(c.probes_sent >= w.counters.probes_sent && c.probes_acked >= w.counters.probes_acked &&
-                     c.probes_lost >= w.counters.probes_lost && c.black_holes >= w.counters.black_holes);
+                     c.probes_lost >= w.counters.probes_lost && c.black_holes >= w.counters.black_holes &&
+                     c.hints >= w.counters.hints && c.hints_ignored >= w.counters.hints_ignored);
 }
 
 void settle_probe(World& w, u32 bytes, bool acked)
@@ -131,6 +136,7 @@ void run(World& w, u8 op, u8 p)
             const u32 bound = size_of(p);
             w.pmtu.limit(bound);
             w.ceiling = w.pmtu.ceiling();
+            w.base = (w.base < w.ceiling) ? w.base : w.ceiling;
             CRD_FUZZ_REQUIRE(w.pmtu.size() == ((before < bound) ? before : bound));
             break;
         }
@@ -139,17 +145,39 @@ void run(World& w, u8 op, u8 p)
             {
                 w = World{};
                 const u32 ceiling = size_of(p);
-                w.pmtu.start(((q & 1U) != 0U) ? kQuicIpv6BaseDatagram : size_of(static_cast<u8>(p >> (q & 7U))),
-                             ceiling, (q & 2U) == 0U);
+                const u32 base = ((q & 1U) != 0U) ? kQuicIpv6BaseDatagram : size_of(static_cast<u8>(p >> (q & 7U)));
+                w.pmtu.start(base, ceiling, (q & 2U) == 0U);
                 w.ceiling = w.pmtu.ceiling();
+                w.base = (base < ceiling) ? base : ceiling;
                 CRD_FUZZ_REQUIRE(w.ceiling == ceiling);
                 CRD_FUZZ_REQUIRE((w.pmtu.state() == QuicPmtuState::Disabled) ==
                                  ((q & 2U) != 0U || ceiling == kQuicPmtuFloor));
                 CRD_FUZZ_REQUIRE(w.pmtu.state() == QuicPmtuState::Disabled || w.pmtu.size() == kQuicPmtuFloor);
             }
+            else if ((q & 8U) != 0U)
+            {
+                // A Packet Too Big hint quoting the probe in flight or a datagram of the size in use, its limit any
+                // size (under the floor too).
+                const u32 quoted = ((q & 1U) != 0U && w.flight != 0U) ? w.flight : before;
+                const u32 limit = ((q & 2U) != 0U) ? kQuicPmtuFloor - 1U - (p & 7U) : size_of(p) - ((q >> 2U) & 1U);
+                const QuicPmtuCounters held = w.pmtu.counters();
+                const bool used = w.pmtu.on_too_big(quoted, limit, w.now);
+                CRD_FUZZ_REQUIRE(used == (state != QuicPmtuState::Disabled && limit >= w.base && limit < quoted));
+                CRD_FUZZ_REQUIRE(w.pmtu.counters().hints + w.pmtu.counters().hints_ignored ==
+                                 held.hints + held.hints_ignored + 1U);
+                if (!used || limit >= before)
+                {
+                    CRD_FUZZ_REQUIRE(w.pmtu.size() == before); // only lowers, and only under the size in use
+                }
+                else
+                {
+                    CRD_FUZZ_REQUIRE(w.pmtu.size() == kQuicPmtuFloor);
+                }
+                w.flight = (w.flight > limit && used) ? 0U : w.flight;
+            }
             else
             {
-                w.now += (u64{p} << (q & 15U)) * 1000000U; // up to hours: the raise timer passes
+                w.now += (u64{p} << (2U * (q & 7U))) * 1000000U; // up to an hour: the raise timer passes
             }
             break;
     }
@@ -198,7 +226,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     put(search, 0x09U, 0x00U); // acknowledged
     put(search, 0x10U, 0x00U);
     put(search, 0x09U, 0x00U);
-    put(search, 0x7FU, 0xFFU); // time: past the raise timer
+    put(search, 0x3FU, 0xFFU); // time: past the raise timer
     put(search, 0x18U, 0x00U); // probe asked busy
     put(search, 0x0EU, 0x04U); // the ceiling lowered
     put(search, 0x00U, 0x00U);
@@ -231,4 +259,17 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     put(off, 0x05U, 0x00U);
     put(off, 0x0EU, 0x00U); // the ceiling to the floor
     sink.add("no-discovery", off, at);
+    // Packet Too Big hints: one for the probe in flight, the limit probed next; one under the size found; one ignored.
+    u8 hints[2U * 9U];
+    at = 0U;
+    put(hints, 0xA7U, 0x08U); // start: base 1200, ceiling 1496, discovery
+    put(hints, 0x10U, 0x00U); // the ceiling probed
+    put(hints, 0x4FU, 0x05U); // a hint quoting it: 1385 bytes
+    put(hints, 0x10U, 0x00U); // 1385 probed
+    put(hints, 0x09U, 0x00U); // and acknowledged
+    put(hints, 0x47U, 0x02U); // a hint quoting a datagram of 1385: 1274 bytes
+    put(hints, 0x10U, 0x00U);
+    put(hints, 0x09U, 0x00U); // 1274 found
+    put(hints, 0x57U, 0x03U); // a hint under the floor
+    sink.add("too-big", hints, at);
 }

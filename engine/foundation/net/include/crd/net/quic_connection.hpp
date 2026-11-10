@@ -348,6 +348,13 @@ public:
     // connection then drains (section 10.3.1). receive() checks its own datagrams; the host calls this for a datagram
     // from the peer's address that routes to no connection.
     bool stateless_reset(cont::ConstSpan<u8> datagram, u64 now_ns) noexcept;
+    // The host's report (an ICMP Packet Too Big message, RFC 8899 section 4.6) that a datagram sent to this
+    // connection's peer address met a hop carrying `limit` bytes of UDP payload, `quote` the start of that datagram.
+    // True when `quote` is one of this connection's unacknowledged 1-RTT packets (section 4.6.1): the peer's
+    // connection ID in use, then the four protected bytes the packet was sent with, which no one off the path can
+    // know. The search then takes the hint or finds it inconsistent (QuicPathMtu::on_too_big); any other report
+    // changes nothing.
+    bool path_too_big(cont::ConstSpan<u8> quote, u32 limit, u64 now_ns) noexcept;
 
     [[nodiscard]] QuicConnectionState state() const noexcept { return m_state; }
     [[nodiscard]] bool confirmed() const noexcept { return m_confirmed; }

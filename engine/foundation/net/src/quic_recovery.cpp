@@ -943,6 +943,22 @@ u64 QuicRecovery::largest_acked(QuicSpace space) const noexcept
     return m_spaces[quic_space_index(space)].largest_acked;
 }
 
+const QuicSentPacket* QuicRecovery::unacknowledged(QuicSpace space, u32 tag) const noexcept
+{
+    const Space& held = m_spaces[quic_space_index(space)];
+    for (usize index = held.count; tag != 0U && index > 0U; --index)
+    {
+        usize at = held.head + index - 1U;
+        at -= (at >= held.entries.size()) ? held.entries.size() : 0U;
+        const QuicSentEntry& slot = held.entries[at];
+        if ((slot.state == kOutstanding || lost(slot.state)) && slot.packet.tag == tag)
+        {
+            return &slot.packet;
+        }
+    }
+    return nullptr;
+}
+
 u64 QuicRecovery::ack_deadline_ns(QuicSpace space) const noexcept
 {
     const Space& held = m_spaces[quic_space_index(space)];

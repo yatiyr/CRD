@@ -14,6 +14,8 @@ constexpr u32 kMaxQueueSlots = 65536U;
 constexpr u64 kAnswerRetryNs = 1000000U; // an answer the host was too busy to take is offered again within 1 ms
 } // namespace
 
+void IngressHandler::on_too_big(const ReceivedDatagram& /*report*/, u64 /*now_ns*/) noexcept {}
+
 u64 HostClock::monotonic_ns() const noexcept
 {
     const i64 now = time::TickClock::now_ns();
@@ -202,6 +204,12 @@ void IoLoop::receive_batch(u64 now_ns, u64 unix_seconds, BatchResult& result) no
     for (usize index = 0U; index < result.count; ++index)
     {
         const ReceivedDatagram& datagram = m_slots[index];
+        if (datagram.too_big != 0U)
+        {
+            ++m_counters.too_big;
+            m_handler.on_too_big(datagram, now_ns);
+            continue;
+        }
         const IngressDecision decision =
             m_ingress.classify(datagram.storage.first(datagram.size), datagram.truncated, datagram.peer, now_ns,
                                unix_seconds);

@@ -34,6 +34,20 @@ constexpr u64 kSkipMask = 63U;   // one 1-RTT packet number in 64 is skipped (se
 constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries a PING
 
 // What a congestion controller sees of a packet counted in flight.
+// The four bytes after a short header's Destination Connection ID of `dcid_bytes`: the protected packet number and
+// the start of the protected payload, which no one off the path can know (QuicSentPacket::tag); never 0, and 0 for
+// bytes too short to hold them.
+[[nodiscard]] u32 packet_tag(cont::ConstSpan<u8> packet, usize dcid_bytes) noexcept
+{
+    u32 tag = 0U;
+    if (packet.size() < 1U + dcid_bytes + sizeof(tag))
+    {
+        return 0U;
+    }
+    std::memcpy(&tag, packet.data() + 1U + dcid_bytes, sizeof(tag));
+    return (tag == 0U) ? 1U : tag;
+}
+
 [[nodiscard]] CongestionPacket congestion_packet(QuicSpace space, const QuicSentPacket& packet) noexcept
 {
     CongestionPacket out;
@@ -876,6 +890,23 @@ void QuicConnection::read_held(u64 now_ns) noexcept
 bool QuicConnection::stateless_reset(cont::ConstSpan<u8> datagram, u64 now_ns) noexcept
 {
     return datagram.size() >= kQuicMinResetBytes && reset_by(datagram.last(kQuicResetTokenBytes), now_ns);
+}
+
+bool QuicConnection::path_too_big(cont::ConstSpan<u8> quote, u32 limit, u64 now_ns) noexcept
+{
+    const cont::ConstSpan<u8> dcid = peer_cid();
+    const bool ours = m_state == QuicConnectionState::Established && quote.size() >= 1U + dcid.size() &&
+                      (quote[0] & 0x80U) == 0U &&
+                      (dcid.empty() || std::memcmp(quote.data() + 1U, dcid.data(), dcid.size()) == 0);
+    const QuicSentPacket* const packet =
+        ours ? m_recovery->unacknowledged(QuicSpace::Application, packet_tag(quote, dcid.size())) : nullptr;
+    if (packet == nullptr)
+    {
+        return false;
+    }
+    static_cast<void>(m_pmtu.on_too_big(packet->bytes, limit, now_ns));
+    apply_path_size();
+    return true;
 }
 
 bool QuicConnection::reset_by(cont::ConstSpan<u8> tail, u64 now_ns) noexcept
@@ -2266,6 +2297,10 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         sent.in_flight = written.eliciting || floor != 0U;
         sent.path_probe = carry == Carry::Probe;
         sent.ecn = m_marking;
+        // Only a datagram that starts with this short header is one an ICMP message can quote and match.
+        sent.tag = (spec.type == QuicPacketType::OneRtt && datagram_used == 0U)
+                       ? packet_tag(room.first(bytes), spec.dcid.size())
+                       : 0U;
         static_cast<void>(m_recovery->on_sent(space, sent)); // can_send held and numbers rise
         m_ecn.on_sent(space, m_marking, now_ns);
         if (sent.in_flight)

@@ -31,7 +31,8 @@ class VirtualSocket final : public DatagramSocket
 public:
     static constexpr usize kQueue = 256U;
 
-    void deliver(const Datagram& datagram, const Endpoint& peer, Ecn ecn = Ecn::NotEct)
+    // `too_big` nonzero: the host's Packet Too Big report for a datagram sent to `peer`, quoting `datagram`.
+    void deliver(const Datagram& datagram, const Endpoint& peer, Ecn ecn = Ecn::NotEct, u32 too_big = 0U)
     {
         if (m_inbound_count == kQueue && m_inbound_next != 0U)
         {
@@ -44,7 +45,7 @@ public:
             m_inbound_next = 0U;
         }
         REQUIRE(m_inbound_count < kQueue);
-        m_inbound[m_inbound_count++] = Inbound{datagram, peer, ecn};
+        m_inbound[m_inbound_count++] = Inbound{datagram, peer, ecn, too_big};
     }
 
     // Datagrams delivered and not yet received.
@@ -65,6 +66,7 @@ public:
             std::memcpy(slot.storage.data(), inbound.datagram.bytes, slot.size);
             slot.peer = inbound.peer;
             slot.ecn = inbound.ecn;
+            slot.too_big = inbound.too_big;
         }
         if (fail_receive)
         {
@@ -141,6 +143,7 @@ private:
         Datagram datagram;
         Endpoint peer;
         Ecn ecn = Ecn::NotEct;
+        u32 too_big = 0U;
     };
 
     std::unique_ptr<Inbound[]> m_inbound = std::make_unique<Inbound[]>(kQueue);

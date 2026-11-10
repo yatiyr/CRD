@@ -239,6 +239,42 @@ bool QuicPathMtu::end_detection(u64 now_ns) noexcept
     return true;
 }
 
+bool QuicPathMtu::on_too_big(u32 quoted, u32 limit, u64 now_ns) noexcept
+{
+    // RFC 9000 section 14.2.1 ignores a limit under QUIC's floor; RFC 8899 section 4.6.2 one under the base, and one
+    // at or above the size of the datagram it quotes.
+    if (m_state == QuicPmtuState::Disabled || limit < m_base || limit >= quoted)
+    {
+        ++m_counters.hints_ignored;
+        return false;
+    }
+    ++m_counters.hints;
+    m_flight = (m_flight > limit) ? 0U : m_flight; // gone: the next probe need not wait for its loss
+    if (m_trying > limit)
+    {
+        m_trying = 0U;
+        m_failures = 0U;
+    }
+    if (limit < m_size)
+    {
+        // The path shrank under the size in use: back to the floor, then the base and a search up to the limit.
+        m_size = kQuicPmtuFloor;
+        m_low = kQuicPmtuFloor;
+        m_suspect_count = 0U;
+        m_state = (m_base > kQuicPmtuFloor) ? QuicPmtuState::Base : QuicPmtuState::Searching;
+    }
+    if (limit < m_high)
+    {
+        m_high = limit;
+        m_optimistic = true; // the next probe tries the limit itself
+    }
+    if (m_state == QuicPmtuState::Searching)
+    {
+        search(now_ns);
+    }
+    return true;
+}
+
 void QuicPathMtu::search(u64 now_ns) noexcept
 {
     m_state = QuicPmtuState::Searching;

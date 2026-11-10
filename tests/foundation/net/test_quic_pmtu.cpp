@@ -1,11 +1,12 @@
-// crd-net -- QUIC's path MTU discovery (NET-PATH; docs/design/network-foundation.md#pmtu). The search alone: no
-// probes without discovery or above the floor, the ceiling probed first, a search to the exact byte for every link
-// MTU, random probe losses that fail no size, an IPv6 path's base probed first and its failure, the raise timer that
-// waits for data, a lowered ceiling and stale probes, a spurious loss that proves its size, and black hole detection
-// against congestion's look-alikes. Then connections over paths of a fixed MTU: both ends finding it exactly while a
-// transfer runs, the peer's max_udp_payload_size as the ceiling, probe losses that reduce no window, a path whose MTU
-// falls mid-transfer found again below it, loss and reordering on the way, DATAGRAM sizes following the path, an IPv6
-// path's base, and no probes without discovery.
+// crd-net -- QUIC's path MTU discovery (NET-PATH; docs/design/network-foundation.md#pmtu). The search alone: no probes
+// without discovery or above the floor, the ceiling probed first, a search to the exact byte for every link MTU, random
+// probe losses that fail no size, an IPv6 path's base probed first and its failure, the raise timer that waits for
+// data, a lowered ceiling and stale probes, a spurious loss that proves its size, and black hole detection against
+// congestion's look-alikes, and Packet Too Big hints used, ignored and shrinking the path. Then connections over paths
+// of a fixed MTU: both ends finding it exactly while a transfer runs, the peer's max_udp_payload_size as the ceiling,
+// probe losses that reduce no window, a path whose MTU falls mid-transfer found again below it, loss and reordering on
+// the way, DATAGRAM sizes following the path, an IPv6 path's base, no probes without discovery, a reporting hop found
+// in one probe, and forged or stale reports.
 
 #include "ingress_fixture.hpp"
 #include "quic_connection_fixture.hpp"
@@ -15,6 +16,7 @@
 #include <crd/net/quic_pmtu.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstring>
 #include <memory>
 
 namespace
@@ -350,6 +352,87 @@ TEST_CASE("QUIC PMTU: black holes are found, and congestion's losses are not tak
     CHECK(v6.probe(0U, true) == kQuicIpv6BaseDatagram);
     search(v6, 1280U);
     CHECK(v6.size() == 1280U);
+}
+
+TEST_CASE("QUIC PMTU: a Packet Too Big hint fails a probe at once and the next probe tries its limit",
+          "[net][net-path][quic-pmtu]")
+{
+    QuicPathMtu pmtu = started(1200U, 1500U);
+    REQUIRE(pmtu.probe(0U, true) == 1500U);
+    pmtu.on_probe_sent(1500U);
+    CHECK(pmtu.on_too_big(1500U, 1400U, 0U));
+    CHECK(pmtu.size() == kQuicPmtuFloor); // a hint raises nothing
+    CHECK(pmtu.probe(0U, true) == 1400U); // without waiting for the probe's loss
+    pmtu.on_probe_sent(1400U);
+    pmtu.on_probe_lost(1500U, 0U); // the probe the hint answered settles as a stale one
+    CHECK(pmtu.probe(0U, true) == 0U);
+    pmtu.on_probe_acked(1400U, 0U);
+    CHECK(pmtu.size() == 1400U);
+    CHECK(pmtu.state() == QuicPmtuState::SearchComplete);
+    CHECK(pmtu.counters().hints == 1U);
+    CHECK(pmtu.counters().probes_sent == 2U);
+
+    // A limit the next probe finds wrong (a hop that lies low, or a route that changed): the search goes on below it.
+    QuicPathMtu low = started(1200U, 1500U);
+    REQUIRE(low.probe(0U, true) == 1500U);
+    low.on_probe_sent(1500U);
+    REQUIRE(low.on_too_big(1500U, 1400U, 0U));
+    CHECK(search(low, 1300U) > 1U);
+    CHECK(low.size() == 1300U);
+}
+
+TEST_CASE("QUIC PMTU: Packet Too Big hints inconsistent with the search are ignored", "[net][net-path][quic-pmtu]")
+{
+    QuicPathMtu off = started(1200U, 1500U, false);
+    CHECK_FALSE(off.on_too_big(1500U, 1300U, 0U)); // no discovery
+    QuicPathMtu v6 = started(kQuicIpv6BaseDatagram, 1500U);
+    CHECK_FALSE(v6.on_too_big(1500U, kQuicIpv6BaseDatagram - 1U, 0U)); // under the base
+    QuicPathMtu pmtu = started(1200U, 1500U);
+    CHECK_FALSE(pmtu.on_too_big(1500U, kQuicPmtuFloor - 1U, 0U)); // under QUIC's floor (RFC 9000 section 14.2.1)
+    CHECK_FALSE(pmtu.on_too_big(1400U, 1400U, 0U));               // the datagram fit
+    CHECK_FALSE(pmtu.on_too_big(1300U, 1400U, 0U));               // larger than the datagram
+    CHECK(pmtu.counters().hints == 0U);
+    CHECK(pmtu.counters().hints_ignored == 3U);
+    CHECK(pmtu.probe(0U, true) == 1500U); // the search as before
+    CHECK(off.counters().hints_ignored == 1U);
+    CHECK(v6.counters().hints_ignored == 1U);
+
+    // A stale datagram above the size found, with a limit at or above that size, changes nothing.
+    QuicPathMtu found = started(1200U, 1500U);
+    REQUIRE(search(found, 1400U) != 0U);
+    CHECK(found.on_too_big(1500U, 1450U, 0U));
+    CHECK(found.size() == 1400U);
+    CHECK(found.state() == QuicPmtuState::SearchComplete);
+    CHECK(found.probe(0U, true) == 0U);
+}
+
+TEST_CASE("QUIC PMTU: a Packet Too Big hint under the size in use falls to the floor and searches up to it",
+          "[net][net-path][quic-pmtu]")
+{
+    for (const u32 base : {kQuicPmtuFloor, kQuicIpv6BaseDatagram})
+    {
+        INFO("base " << base);
+        QuicPathMtu pmtu = started(base, 1500U);
+        REQUIRE(search(pmtu, 1500U) != 0U);
+        REQUIRE(pmtu.size() == 1500U);
+        CHECK(pmtu.on_too_big(1500U, 1380U, kSecond));
+        CHECK(pmtu.size() == kQuicPmtuFloor);
+        CHECK(pmtu.counters().black_holes == 0U); // no loss had to find it
+        if (base > kQuicPmtuFloor)
+        {
+            CHECK(pmtu.state() == QuicPmtuState::Base);
+            REQUIRE(pmtu.probe(kSecond, true) == base);
+            pmtu.on_probe_sent(base);
+            pmtu.on_probe_acked(base, kSecond);
+        }
+        CHECK(pmtu.probe(kSecond, true) == 1380U); // the limit first
+        pmtu.on_probe_sent(1380U);
+        pmtu.on_probe_acked(1380U, kSecond);
+        CHECK(pmtu.size() == 1380U);
+        CHECK(pmtu.state() == QuicPmtuState::SearchComplete);
+        // The raise timer searches from the ceiling again: the hint bounds this search alone.
+        CHECK(pmtu.probe(kSecond + kQuicPmtuRaiseNs, true) == 1500U);
+    }
 }
 
 // ---- Connections over paths of a fixed MTU ----
@@ -708,4 +791,103 @@ TEST_CASE("QUIC PMTU: an IPv6 path's base, and no probes without discovery", "[n
     CHECK_FALSE(QuicConnection(pair.allocator, over).ready());
     over.base_datagram_bytes = 1199U;
     CHECK_FALSE(QuicConnection(pair.allocator, over).ready());
+}
+
+TEST_CASE("QUIC PMTU: a hop's Packet Too Big messages find its MTU in one probe and a fall without a black hole",
+          "[net][net-path][quic-pmtu]")
+{
+    Pair pair(1300U);
+    for (Path& path : pair.net->path)
+    {
+        path.too_big_quote = 64U;
+    }
+    pair.confirm();
+    Bulk bulk{pair.client, pair.server, 1U << 19U};
+    REQUIRE(pair.net->run_until([&] { return bulk.step() && pair.searched(); }));
+    for (QuicConnection* const end : {&pair.client, &pair.server})
+    {
+        CHECK(end->path_mtu().size() == 1300U);
+        CHECK(end->path_mtu().counters().hints == 1U);
+        CHECK(end->path_mtu().counters().probes_sent == 2U); // the ceiling, then the hop's limit
+    }
+    CHECK(pair.net->too_big_matched[0] == pair.net->too_big[0]);
+    bulk.total += 1U << 20U;
+    const u64 midway = bulk.read + (1U << 18U);
+    REQUIRE(pair.net->run_until([&] { return bulk.read >= midway || bulk.step(); }));
+    for (Path& path : pair.net->path)
+    {
+        path.mtu = 1250U; // a route change the hop reports
+    }
+    REQUIRE(pair.net->run_until([&] { return bulk.step() && pair.searched(); }, 60U * kSecond));
+    CHECK(pair.client.path_mtu().size() == 1250U);
+    CHECK(pair.client.path_mtu().counters().black_holes == 0U);
+    CHECK(pair.client.path_mtu().counters().hints >= 2U);
+    CHECK(pair.net->too_big_matched[0] == pair.net->too_big[0]);
+    CHECK(bulk.read == bulk.total);
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC PMTU: Packet Too Big messages that quote no unacknowledged packet change nothing",
+          "[net][net-path][quic-pmtu]")
+{
+    // The client's last large datagram as sent.
+    struct Keep final : Filter
+    {
+        bool drop(usize from, ConstSpan<u8> datagram) override
+        {
+            if (from == 0U && datagram.size() > kQuicPmtuFloor)
+            {
+                std::memcpy(last, datagram.data(), datagram.size());
+                bytes = datagram.size();
+            }
+            return false;
+        }
+        u8 last[kDatagram] = {};
+        usize bytes = 0U;
+    } keep;
+    Pair pair(1500U);
+    pair.net->filter = &keep;
+    pair.confirm();
+    Bulk bulk{pair.client, pair.server, 1U << 18U};
+    REQUIRE(pair.net->run_until([&] { return bulk.step() && pair.searched(); }));
+    pair.net->advance(pair.net->now + kSecond); // every acknowledgement arrives
+    REQUIRE(keep.bytes > kQuicPmtuFloor);
+    QuicConnection& client = pair.client;
+    const usize id_bytes = client.peer_cid().size();
+    REQUIRE(id_bytes != 0U);
+    const QuicPmtuCounters before = client.path_mtu().counters();
+    const u64 now = pair.net->now;
+    const ConstSpan<u8> sent(keep.last, keep.bytes);
+    CHECK_FALSE(client.path_too_big(sent.first(48U), 1300U, now)); // acknowledged
+    u8 forged[48] = {};
+    std::memcpy(forged, keep.last, sizeof(forged));
+    forged[1U + id_bytes] ^= 0x01U; // the peer's ID and a guessed packet tag
+    CHECK_FALSE(client.path_too_big(ConstSpan<u8>(forged, sizeof(forged)), 1300U, now));
+    forged[1U + id_bytes] ^= 0x01U;
+    forged[1] ^= 0x80U; // another connection ID
+    CHECK_FALSE(client.path_too_big(ConstSpan<u8>(forged, sizeof(forged)), 1300U, now));
+    forged[1] ^= 0x80U;
+    forged[0] |= 0x80U; // a long header
+    CHECK_FALSE(client.path_too_big(ConstSpan<u8>(forged, sizeof(forged)), 1300U, now));
+    CHECK_FALSE(client.path_too_big(sent.first(id_bytes + 4U), 1300U, now)); // too short for its tag
+    CHECK(client.path_mtu().size() == 1500U);
+    CHECK(client.path_mtu().counters().hints == before.hints);
+    CHECK(client.path_mtu().counters().hints_ignored == before.hints_ignored);
+
+    // A datagram still in flight is matched: under a limit it fits, inconsistent; under a smaller one, used.
+    bulk.total += 1U << 16U;
+    static_cast<void>(bulk.step());
+    u8 out[kDatagram];
+    usize size = 0U;
+    for (usize guard = 0U; guard < 8U && size <= kQuicPmtuFloor; ++guard)
+    {
+        size = client.send(Span<u8>(out, sizeof(out)), now);
+    }
+    REQUIRE(size > kQuicPmtuFloor);
+    CHECK(client.path_too_big(ConstSpan<u8>(out, 64U), static_cast<u32>(size), now));
+    CHECK(client.path_mtu().counters().hints_ignored == before.hints_ignored + 1U);
+    CHECK(client.path_mtu().size() == 1500U);
+    CHECK(client.path_too_big(ConstSpan<u8>(out, 64U), 1300U, now));
+    CHECK(client.path_mtu().counters().hints == before.hints + 1U);
+    CHECK(client.path_mtu().size() == kQuicPmtuFloor);
 }

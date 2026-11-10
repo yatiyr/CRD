@@ -148,6 +148,10 @@ struct Path
     EcnPath ecn = EcnPath::Carry;
     u32 ce = 0U; // permille of datagrams with a codepoint marked CE, as a congested router's queue does
     usize mtu = 0U; // the largest datagram the path carries: a link that drops larger ones unreported (0: any)
+    // Nonzero: the hop dropping a datagram over `mtu` answers with a Packet Too Big message quoting this many of its
+    // first bytes and naming `too_big_limit` (0: `mtu`), handed to the sender at once.
+    usize too_big_quote = 0U;
+    u32 too_big_limit = 0U;
 };
 
 // A client's ticket store holding one ticket, handed out once.
@@ -243,6 +247,8 @@ public:
     u64 now = kStartNs;
     usize sent[2] = {};
     usize dropped[2] = {};
+    usize too_big[2] = {}; // Packet Too Big messages each end was handed, and those it matched
+    usize too_big_matched[2] = {};
     usize marked[2] = {};                       // datagrams each end sent with a codepoint
     usize congested[2] = {};                    // of those, marked CE on the path
     bool client_initials_padded = true;         // every client datagram whose first packet is an Initial had 1200 bytes
@@ -277,7 +283,17 @@ public:
                 check(from, ConstSpan<u8>(out, size));
                 Ecn ecn = m_ends[from]->marking();
                 marked[from] += (ecn != Ecn::NotEct) ? 1U : 0U;
-                const bool lost = (path[from].mtu != 0U && size > path[from].mtu) || rng.chance(path[from].loss) ||
+                const bool oversize = path[from].mtu != 0U && size > path[from].mtu;
+                if (oversize && path[from].too_big_quote != 0U)
+                {
+                    const usize quoted = (size < path[from].too_big_quote) ? size : path[from].too_big_quote;
+                    const u32 limit =
+                        (path[from].too_big_limit != 0U) ? path[from].too_big_limit : static_cast<u32>(path[from].mtu);
+                    ++too_big[from];
+                    const bool matched = m_ends[from]->path_too_big(ConstSpan<u8>(out, quoted), limit, now);
+                    too_big_matched[from] += matched ? 1U : 0U;
+                }
+                const bool lost = oversize || rng.chance(path[from].loss) ||
                                   (filter != nullptr && filter->drop(from, ConstSpan<u8>(out, size))) ||
                                   (path[from].ecn == EcnPath::DropMarked && ecn != Ecn::NotEct);
                 if (lost)

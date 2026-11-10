@@ -54,6 +54,10 @@ struct ReceivedDatagram
     bool truncated = false; // the datagram was longer than storage and its rest is lost
     Ecn ecn = Ecn::NotEct;  // its IP header's codepoint; Not-ECT where the socket cannot read it (ecn_reading)
     Endpoint peer;
+    // Nonzero for no datagram but the host's report, an ICMP Packet Too Big message (RFC 8899 section 4.6), that one
+    // this socket sent to `peer` met a hop carrying this many bytes of UDP payload; storage then holds as much of
+    // that datagram's start as the message quoted.
+    u32 too_big = 0U;
 };
 
 struct OutgoingDatagram

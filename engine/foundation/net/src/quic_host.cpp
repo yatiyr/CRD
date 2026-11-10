@@ -12,6 +12,27 @@ namespace crd::net
 {
 namespace
 {
+// A peer address as m_peer_paths keys it: the address's own bytes, then the port (6 or 18 bytes, so the families
+// never meet). The scope is left out: the walk compares whole endpoints.
+struct PathKey
+{
+    u8 bytes[18] = {};
+    usize size = 0U;
+
+    [[nodiscard]] cont::ConstSpan<u8> view() const noexcept { return cont::ConstSpan<u8>(bytes, size); }
+};
+
+[[nodiscard]] PathKey path_key(const Endpoint& peer) noexcept
+{
+    PathKey key;
+    const cont::ConstSpan<u8> address = peer.address.view();
+    std::memcpy(key.bytes, address.data(), address.size());
+    key.bytes[address.size()] = static_cast<u8>(peer.port >> 8U);
+    key.bytes[address.size() + 1U] = static_cast<u8>(peer.port & 0xFFU);
+    key.size = address.size() + 2U;
+    return key;
+}
+
 bool limits_valid(const QuicHostLimits& limits) noexcept
 {
     return limits.connections != 0U && limits.connections <= kQuicMaxHostConnections && limits.send_retry_ns != 0U &&
@@ -24,6 +45,7 @@ QuicHost::QuicHost(memory::IAllocator& allocator, DatagramSocket& socket, Connec
                    const crypto::QuicResetKey& reset, QuicHostEvents& events, const QuicHostLimits& limits) noexcept
     : m_allocator(allocator), m_socket(socket), m_routes(routes), m_reset(reset), m_events(events), m_limits(limits),
       m_peer_tokens(allocator, limits_valid(limits) ? limits.connections * kQuicHostTokensPerConnection : 1U),
+      m_peer_paths(allocator, limits_valid(limits) ? limits.connections : 1U),
       m_queue(allocator, limits.send_slots, limits.datagram_bytes), m_heap(allocator)
 {
 }
@@ -32,7 +54,7 @@ bool QuicHost::open_pool() noexcept
 {
     const u32 count = m_limits.connections;
     if (m_slots != nullptr || !limits_valid(m_limits) || !m_routes.ready() || !m_peer_tokens.ready() ||
-        !m_queue.ready())
+        !m_peer_paths.ready() || !m_queue.ready())
     {
         return false;
     }
@@ -181,8 +203,60 @@ void QuicHost::enlist(u32 index, QuicConnection& connection, const Endpoint& pee
     slot.cell = &connection;
     slot.connection = &connection;
     slot.peer = peer;
+    index_peer(index);
     ++m_live;
     schedule(index, now_ns);
+}
+
+void QuicHost::index_peer(u32 index) noexcept
+{
+    Slot& slot = m_slots[index];
+    if (slot.peer.port == 0U)
+    {
+        return;
+    }
+    const PathKey key = path_key(slot.peer);
+    const u32 head = m_peer_paths.find(key.view());
+    if (head == kNoConnection)
+    {
+        static_cast<void>(m_peer_paths.insert(key.view(), index)); // room for every slot
+        return;
+    }
+    slot.same_peer = m_slots[head].same_peer;
+    m_slots[head].same_peer = index;
+}
+
+void QuicHost::unindex_peer(u32 index) noexcept
+{
+    Slot& slot = m_slots[index];
+    if (slot.peer.port == 0U)
+    {
+        return;
+    }
+    const PathKey key = path_key(slot.peer);
+    const u32 head = m_peer_paths.find(key.view());
+    if (head == index)
+    {
+        static_cast<void>(m_peer_paths.erase(key.view()));
+        if (slot.same_peer != kNoConnection)
+        {
+            static_cast<void>(m_peer_paths.insert(key.view(), slot.same_peer));
+        }
+    }
+    else
+    {
+        u32 previous = head;
+        while (previous != kNoConnection && m_slots[previous].same_peer != index)
+        {
+            previous = m_slots[previous].same_peer;
+        }
+        if (previous != kNoConnection)
+        {
+            m_slots[previous].same_peer = slot.same_peer;
+        }
+    }
+    slot.same_peer = kNoConnection;
+    slot.peer = Endpoint{};
 }
 
 void QuicHost::succeed(u32 index, QuicConnection& successor, u64 now_ns) noexcept
@@ -216,8 +290,27 @@ void QuicHost::on_route(const IngressDecision& decision, const ReceivedDatagram&
     if (unbound && connection->counters().packets_opened != opened)
     {
         slot.peer = datagram.peer;
+        index_peer(decision.connection);
     }
     schedule(decision.connection, now_ns);
+}
+
+void QuicHost::on_too_big(const ReceivedDatagram& report, u64 now_ns) noexcept
+{
+    const cont::ConstSpan<u8> quote = report.storage.first(report.size);
+    u32 index = (m_slots != nullptr) ? m_peer_paths.find(path_key(report.peer).view()) : kNoConnection;
+    for (; index != kNoConnection; index = m_slots[index].same_peer)
+    {
+        QuicConnection* const connection = m_slots[index].connection;
+        if (connection != nullptr && m_slots[index].peer == report.peer &&
+            connection->path_too_big(quote, report.too_big, now_ns))
+        {
+            ++m_counters.too_big;
+            schedule(index, now_ns);
+            return;
+        }
+    }
+    ++m_counters.too_big_refused;
 }
 
 bool QuicHost::on_unrouted(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept
@@ -383,6 +476,7 @@ void QuicHost::reclaim(u32 index, u64 now_ns) noexcept
     }
     m_events.on_closed(handle_of(index), *slot.connection);
     release(index, *slot.connection);
+    unindex_peer(index);
     slot.connection->~QuicConnection(); // its IDs leave the table
     slot.connection = nullptr;
     ++slot.generation;

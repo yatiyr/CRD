@@ -86,6 +86,7 @@ void fill_slot(ReceivedDatagram& slot, usize size, bool truncated, const sockadd
     slot.truncated = truncated;
     slot.ecn = Ecn::NotEct;
     slot.peer = from_native(peer);
+    slot.too_big = 0U;
 }
 
 #if CRD_OS_LINUX || CRD_OS_WINDOWS

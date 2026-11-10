@@ -75,6 +75,14 @@ public:
         return claim_unrouted;
     }
 
+    void on_too_big(const ReceivedDatagram& report, u64) noexcept override
+    {
+        ++too_big;
+        last_peer = report.peer;
+        last_size = report.size;
+        last_limit = report.too_big;
+    }
+
     [[nodiscard]] u64 on_timers(u64 now_ns) noexcept override
     {
         ++timer_calls;
@@ -89,6 +97,8 @@ public:
     usize admits = 0U;
     usize earlies = 0U;
     usize unrouted = 0U;
+    usize too_big = 0U;
+    u32 last_limit = 0U;
     bool claim_unrouted = false; // on_unrouted takes every short header for no connection
     bool last_answered = false;  // the last one on_unrouted saw was to be answered with a reset
     usize timer_calls = 0U;
@@ -172,6 +182,26 @@ TEST_CASE("A turn hands routed and admitted datagrams on and answers what S1 to 
     (void)narrow.loop.poll();
     CHECK(narrow.ingress.counters().drops[static_cast<usize>(DropReason::Truncated)] == 1U);
     CHECK(narrow.handler.admits == 0U);
+}
+
+TEST_CASE("A Packet Too Big report goes to the handler and past every admission stage", "[net][io-loop][net-path]")
+{
+    Rig rig;
+    // The quote of a datagram sent to the client: a short header whose ID routes nowhere, which S2 would drop.
+    Datagram quote = initial(kV1, view_of(kDcid, 8U), view_of(kScid, 4U));
+    quote.bytes[0] = 0x40U;
+    quote.size = 48U;
+    rig.socket.deliver(quote, kClient, Ecn::NotEct, 1280U);
+    rig.socket.deliver(initial(kV1, view_of(kDcid, 8U), view_of(kScid, 4U)), kClient); // a datagram after it
+    (void)rig.loop.poll();
+    CHECK(rig.handler.too_big == 1U);
+    CHECK(rig.handler.last_limit == 1280U);
+    CHECK(rig.handler.last_size == 48U);
+    CHECK(rig.handler.unrouted == 0U);
+    CHECK(rig.handler.routes + rig.handler.admits + rig.socket.sent_count == 1U); // the Initial alone was admitted
+    CHECK(rig.loop.counters().received == 2U);
+    CHECK(rig.loop.counters().too_big == 1U);
+    CHECK(rig.ingress.counters().drops[static_cast<usize>(DropReason::UnknownConnection)] == 0U);
 }
 
 TEST_CASE("A turn sends a Retry the client can verify, and a hard send error drops only that answer",

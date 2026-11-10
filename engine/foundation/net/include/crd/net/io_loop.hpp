@@ -75,6 +75,9 @@ public:
     // 10.3.1), which is not answered.
     [[nodiscard]] virtual bool on_unrouted(const IngressDecision& decision, const ReceivedDatagram& datagram,
                                            u64 now_ns) noexcept = 0;
+    // The socket's report that a datagram sent to `report.peer` was too big for a hop (ReceivedDatagram::too_big),
+    // which no admission stage reads: the handler matches it to its connections or drops it (the default).
+    virtual void on_too_big(const ReceivedDatagram& report, u64 now_ns) noexcept;
     // Runs what is due at `now_ns`; returns when it next needs to run, kNeverNs for no timer.
     [[nodiscard]] virtual u64 on_timers(u64 now_ns) noexcept = 0;
 
@@ -142,6 +145,7 @@ struct IoLoopCounters
 {
     u64 polls = 0U;
     u64 received = 0U;
+    u64 too_big = 0U; // of those, the socket's Packet Too Big reports
     u64 receive_errors = 0U;
     u64 answers_sent = 0U;
     u64 answers_dropped = 0U; // the queue was full, or the host refused one for good

@@ -22,6 +22,11 @@
 //              that failed. Congestion loses large packets too, but its acknowledgements of later large packets
 //              clear the suspicion; the connection sends 1200-byte datagrams while a probe timeout is pending, so a
 //              path that carries nothing large still gets its acknowledgements through.
+//   hints      an ICMP Packet Too Big message (RFC 8899 section 4.6) only lowers: once the connection matched its quote
+//              to a packet it sent (section 4.6.1), a probe above the hop's limit fails at once and the next probe
+//              tries the limit itself; a datagram of the size in use above it means the path shrank, and the size
+//              falls to the floor to search again up to the limit, as a black hole would. A limit below the base, or
+//              at or above the datagram quoted, is inconsistent and ignored. Only an acknowledged probe raises.
 //   congestion probe losses are no congestion signal (RFC 9000 section 14.4); the connection keeps them from its
 //              controller and from persistent congestion, while probes stay inside the window (RFC 8899 section 3).
 //   time       integer state and the caller's clock alone: a seeded run probes the same sizes (NET-SIM's replays).
@@ -58,6 +63,8 @@ struct QuicPmtuCounters
     u64 probes_acked = 0U;
     u64 probes_lost = 0U;
     u64 black_holes = 0U;
+    u64 hints = 0U;         // Packet Too Big messages used
+    u64 hints_ignored = 0U; // and those inconsistent with the search, or without discovery
 };
 
 class QuicPathMtu
@@ -85,6 +92,9 @@ public:
     void on_lost(u64 number, u32 bytes) noexcept;
     // A loss detection ended, after its ACK frame's acknowledgements: true when it found a black hole (size() fell).
     bool end_detection(u64 now_ns) noexcept;
+    // A Packet Too Big message, matched to a sent datagram of `quoted` bytes, for a hop carrying `limit` bytes of UDP
+    // payload, as the hints note says: true when it was used.
+    bool on_too_big(u32 quoted, u32 limit, u64 now_ns) noexcept;
 
     [[nodiscard]] const QuicPmtuCounters& counters() const noexcept { return m_counters; }
 

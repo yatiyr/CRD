@@ -868,6 +868,70 @@ TEST_CASE("QUIC client: a stateless reset is matched by its token among all the 
     CHECK(network->client.live_tokens() == 2U);
 }
 
+TEST_CASE("QUIC client: a Packet Too Big report reaches the one connection to its address whose packet it quotes",
+          "[net][net-path][quic-client]")
+{
+    Identity identity;
+    auto network = std::make_unique<Network>(identity, Setup{},
+                                             client_config(identity, QuicVersion::V1, ConstSpan<u32>(kBothVersions)));
+    QuicHandle handles[3];
+    for (usize index = 0U; index < 3U; ++index)
+    {
+        handles[index] = network->connect(0U, index + 1U);
+    }
+    REQUIRE(network->run_until(
+        [&]
+        {
+            return network->app.echoed(handles[0]) && network->app.echoed(handles[1]) &&
+                   network->app.echoed(handles[2]);
+        }));
+    // A connection sends a PING no path carries, and the datagram that holds it is the one a hop reports.
+    Datagram out[16];
+    const auto ping = [&](QuicHandle handle) -> Datagram
+    {
+        QuicConnection& connection = network->live(handle);
+        const ConstSpan<u8> id = connection.peer_cid();
+        connection.ping();
+        network->client.wake(handle);
+        const usize count = network->poll_client(out, 16U);
+        for (usize index = count; index > 0U; --index)
+        {
+            const Datagram& sent = out[index - 1U];
+            if (sent.size > id.size() && (sent.bytes[0] & 0x80U) == 0U &&
+                std::memcmp(sent.bytes + 1U, id.data(), id.size()) == 0)
+            {
+                return sent;
+            }
+        }
+        FAIL("the connection sent no short header");
+        return Datagram{};
+    };
+
+    // The middle one of three connections to one address.
+    const Datagram sent = ping(handles[1]);
+    Datagram forged = sent;
+    forged.bytes[1U + network->live(handles[1]).peer_cid().size()] ^= 0x01U; // its tag guessed wrong
+    network->client_socket.deliver(sent, server_at(1U), Ecn::NotEct, 1200U); // from an address it was not sent to
+    network->client_socket.deliver(forged, server_at(0U), Ecn::NotEct, 1200U);
+    network->client_socket.deliver(sent, server_at(0U), Ecn::NotEct, 1200U);
+    static_cast<void>(network->client_loop.poll());
+    CHECK(network->client_loop.counters().too_big == 3U);
+    CHECK(network->client.counters().too_big == 1U);
+    CHECK(network->client.counters().too_big_refused == 2U);
+    // The PING fits the reported limit: matched, and the search finds the report inconsistent.
+    CHECK(network->live(handles[1]).path_mtu().counters().hints_ignored == 1U);
+    CHECK(network->live(handles[0]).path_mtu().counters().hints_ignored == 0U);
+    CHECK(network->live(handles[2]).path_mtu().counters().hints_ignored == 0U);
+
+    // A connection that ends leaves its address's list, and its siblings are still reached.
+    network->live(handles[0]).close(0U, {}, network->now);
+    REQUIRE(network->run_until([&] { return network->client.live() == 2U; }));
+    network->client_socket.deliver(ping(handles[2]), server_at(0U), Ecn::NotEct, 1200U);
+    static_cast<void>(network->client_loop.poll());
+    CHECK(network->client.counters().too_big == 2U);
+    CHECK(network->live(handles[2]).path_mtu().counters().hints_ignored == 1U);
+}
+
 TEST_CASE("QUIC client: its own ticket cache resumes the next connection once, may be off, or replaced by a store",
           "[net][4.2a][quic-client][quic-early]")
 {

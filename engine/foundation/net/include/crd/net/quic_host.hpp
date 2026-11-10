@@ -79,8 +79,10 @@ struct QuicHostLimits
 struct QuicHostCounters
 {
     u64 closed = 0U;
-    u64 foreign_path = 0U; // datagrams routed to a connection from another address (NET-PATH's migration)
-    u64 peer_resets = 0U;  // a peer's stateless reset ended a connection
+    u64 foreign_path = 0U;    // datagrams routed to a connection from another address (NET-PATH's migration)
+    u64 peer_resets = 0U;     // a peer's stateless reset ended a connection
+    u64 too_big = 0U;         // Packet Too Big reports a connection to their address matched (on_too_big)
+    u64 too_big_refused = 0U; // and those none did: forged, stale or for a packet already acknowledged
     u64 datagrams_sent = 0U;
     u64 send_dropped = 0U; // datagrams the host refused for good
 };
@@ -97,6 +99,8 @@ public:
     void on_route(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept final;
     [[nodiscard]] bool on_unrouted(const IngressDecision& decision, const ReceivedDatagram& datagram,
                                    u64 now_ns) noexcept final;
+    // Offered to each connection whose peer is the report's address until one matches its quote.
+    void on_too_big(const ReceivedDatagram& report, u64 now_ns) noexcept final;
     [[nodiscard]] u64 on_timers(u64 now_ns) noexcept final;
 
     // The live connection `handle` names; null for a stale or unknown handle.
@@ -163,6 +167,7 @@ private:
         Endpoint peer;
         u32 generation = 0U;
         u32 next_free = kNoConnection;
+        u32 same_peer = kNoConnection; // the next live slot whose bound peer is this one's (m_peer_paths)
     };
 
     // Serves the connection of slot `index` before its datagrams are sent: the application's turn and what the host
@@ -180,6 +185,9 @@ private:
     [[nodiscard]] bool drain(Slot& slot, u64 now_ns) noexcept;
     void flush() noexcept;
     void reclaim(u32 index, u64 now_ns) noexcept;
+    // Slot `index`'s bound peer joins or leaves m_peer_paths (an unbound one, port 0, is in neither).
+    void index_peer(u32 index) noexcept;
+    void unindex_peer(u32 index) noexcept;
 
     memory::IAllocator& m_allocator;
     DatagramSocket& m_socket;
@@ -188,6 +196,7 @@ private:
     QuicHostEvents& m_events;
     QuicHostLimits m_limits;
     ConnectionIdTable m_peer_tokens; // every connection's live stateless reset tokens to its slot
+    ConnectionIdTable m_peer_paths;  // each bound peer address to the first of its slots (Slot::same_peer)
     SendQueue m_queue;
     DeadlineHeap m_heap; // the live connections by their deadlines
     Slot* m_slots = nullptr;

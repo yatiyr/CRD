@@ -123,6 +123,9 @@ struct QuicSentPacket
     bool in_flight = false; // counted in bytes in flight: a packet carrying PADDING, and every ack-eliciting one
     bool path_probe = false; // a PMTU probe (quic_pmtu.hpp): its loss starts no persistent congestion
     Ecn  ecn = Ecn::NotEct; // the codepoint its datagram was marked with (quic_ecn.hpp)
+    // Never 0 for a datagram of one 1-RTT packet: what an ICMP message quoting it must repeat (quic_pmtu.hpp's hints);
+    // 0 for any other packet.
+    u32 tag = 0U;
 };
 
 // Storage for one sent packet: QuicRecovery's to fill.
@@ -320,6 +323,9 @@ public:
     [[nodiscard]] u32 reorder_steps() const noexcept { return m_reorder_steps; }
     // The time threshold now: max(9/8 max(smoothed, latest) + min(steps * min_rtt / 4, smoothed), 1 ms).
     [[nodiscard]] u64 loss_delay_ns() const noexcept;
+    // The newest packet of `space` sent with `tag` that no ACK frame acknowledged (lost ones included); null for none
+    // and for a zero tag.
+    [[nodiscard]] const QuicSentPacket* unacknowledged(QuicSpace space, u32 tag) const noexcept;
 
 private:
     struct Space
