@@ -19,24 +19,29 @@ those cases are not asked of it.
 ECN (RFC 9000 section 13.4): Cerid validates its path on the loopback against ngtcp2, which reads the codepoints and
 reports them; quiche reports none, and neither does a peer behind the relay, which bleaches, so there Cerid's validation
 fails as `missing` and it stops marking.
+
+Path MTU discovery: over a relay whose links carry at most 1350 bytes, Cerid's search finds that size to the byte; over
+one that falls toward the peer in the middle of the transfer, it finds the black hole and the size below; and no peer
+sends a datagram over Cerid's max_udp_payload_size.
 """
 import argparse
 import subprocess
 import sys
 import threading
 
-from interop_common import Relay, collect, expect, reports_of
+from interop_common import CERID_RECEIVE, Relay, check_cerid_pmtu, check_relay_sizes, collect, expect, reports_of
 
 SEED = '11' * 32
 RUN_SECONDS = 70
 CLOSE_CODE = 0x100
 CANCEL_CODE = 0x10C
 LOSSY = dict(loss=0.04, duplicate=0.03, delay=0.003, jitter=0.012)
+PMTU_SEARCH_BYTES = 4 << 20  # a transfer long enough for the search to end before it does
 
 
 def brief(reports):
     """What a failure shows of the reports: the connection's end and what the exchange counted."""
-    shown = ('established', 'close', 'close_code', 'early', 'resumed', 'ecn', 'ecn_failure')
+    shown = ('established', 'close', 'close_code', 'early', 'resumed', 'ecn', 'ecn_failure', 'pmtu', 'black_holes')
     return [{name: value for name, value in report.items()
              if name in shown or (name.startswith(('h3_', 'datagrams_')) and value not in ('0', '1'))}
             for report in reports]
@@ -133,8 +138,11 @@ class Case:
             thread.join(RUN_SECONDS)
             expect(not thread.is_alive(), f'the server did not end; the client reported {client_out}')
             server.wait(10)
-            self.check(reports_of(client_out), reports_of(server_out[0]), client.returncode, server.returncode,
-                       client_err, server.stderr.read())
+            clients, servers = reports_of(client_out), reports_of(server_out[0])
+            self.check(clients, servers, client.returncode, server.returncode, client_err, server.stderr.read())
+            if relay is not None:
+                check_relay_sizes(relay, self.path, 'client' if self.cerid_is_client else 'server', CERID_RECEIVE,
+                                  f'client {brief(clients)}\nserver {brief(servers)}')
         finally:
             if relay is not None:
                 relay.stop()
@@ -178,6 +186,10 @@ class Case:
         self.check_datagrams(client, server, detail)
         self.check_early(number, client, server, detail)
         self.check_ecn(cerid_report, peer_report, detail)
+        settled = self.requests * (self.request_bytes + self.response_bytes) >= PMTU_SEARCH_BYTES
+        peer_receive = 65527 if self.peer_name == 'nghttp3' else None  # ngtcp2's default
+        check_cerid_pmtu(cerid_report, self.path, 'server' if self.cerid_is_client else 'client', settled, detail,
+                         peer_receive)
 
     def check_ecn(self, cerid, peer, detail):
         if self.peer_name == 'nghttp3' and self.path is None:
@@ -311,6 +323,9 @@ def cases(cerid, peer, peer_name):
             yield case(requests=48, request_bytes=256, response_bytes=256, table=8192, blocked=48,
                        path=dict(seed=seed, **LOSSY))
         yield case(requests=4, tunnels=4, datagrams=64, path=dict(seed=6, **LOSSY))
+        toward_peer = 'server' if cerid_is_client else 'client'
+        yield case(requests=2, request_bytes=2 << 20, response_bytes=4 << 20, path=dict(mtu=1350))
+        yield case(requests=2, request_bytes=2 << 20, response_bytes=4 << 20, path=dict(fall=(toward_peer, 1000, 1300)))
 
 
 def main():

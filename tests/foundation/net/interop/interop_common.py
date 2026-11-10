@@ -12,6 +12,47 @@ def expect(condition, message):
         raise AssertionError(message)
 
 
+CERID_CEILING = 1472  # kQuicDefaultMaxDatagram: Cerid's path MTU search goes no higher
+CERID_RECEIVE = 1500  # crd-quic-peer's receive slot by default, which it advertises as max_udp_payload_size
+QUIC_MIN = 1200  # every QUIC path carries this (RFC 9000 section 14)
+
+
+def path_toward(path, toward):
+    """The largest datagram a Relay of keyword arguments `path` carries toward 'server' or 'client' at the end."""
+    path = path or {}
+    fall = path.get('fall')
+    return fall[2] if fall and fall[0] == toward else path.get('mtu')
+
+
+def check_cerid_pmtu(report, path, toward_peer, settled, detail, peer_receive=None):
+    """Cerid's path MTU search (its report's `pmtu`) against the path toward its peer and the peer's
+    max_udp_payload_size (`peer_receive` when the driver knows it): found to the byte when `settled` (a transfer long
+    enough for the search to end) over a loss-free path, else a size the path carries; a path that fell was found as a
+    black hole."""
+    advertised = int(report.get('peer_max_udp_payload', '0'))
+    expect(advertised >= QUIC_MIN, f'Cerid read no max_udp_payload_size: {detail}')
+    if peer_receive is not None:
+        expect(advertised == peer_receive, f'Cerid read max_udp_payload_size {advertised}, not {peer_receive}: '
+                                           f'{detail}')
+    ceiling = min(CERID_CEILING, advertised, path_toward(path, toward_peer) or CERID_CEILING)
+    found = int(report.get('pmtu', '0'))
+    if settled and not (path or {}).get('loss'):
+        expect(found == ceiling, f'Cerid found {found}, not {ceiling}: {detail}')
+    else:
+        expect(QUIC_MIN <= found <= ceiling, f'Cerid found {found}, more than the path carries: {detail}')
+    fall = (path or {}).get('fall')
+    if fall and fall[0] == toward_peer:
+        expect(int(report.get('black_holes', '0')) >= 1, f'Cerid found no black hole: {detail}')
+
+
+def check_relay_sizes(relay, path, toward_cerid, receive, detail):
+    """No datagram toward Cerid exceeded its receive slot, and over a path with an MTU some probe met it."""
+    sizes = f'relay: largest {relay.largest}, dropped {relay.oversized}; {detail}'
+    expect(relay.largest[toward_cerid] <= receive, f'a datagram over Cerid\'s max_udp_payload_size: {sizes}')
+    if path_toward(path, 'server') or path_toward(path, 'client'):
+        expect(sum(relay.oversized.values()) > 0, f'no probe met the path MTU: {sizes}')
+
+
 def reports_of(text):
     """One dictionary per connection, each opened by its `connection=N` line."""
     reports = []
@@ -32,12 +73,23 @@ class Relay:
     """The path between the two: a socket facing the client, one facing the server, and seeded impairments.
 
     Every datagram leaves the relay with its ECN codepoint rewritten (RFC 3168): unmarked by default, a bleaching path;
-    with `mark` 'ce' each is marked CE, a congested AQM, and with 'ect1' each is re-marked ECT(1)."""
+    with `mark` 'ce' each is marked CE, a congested AQM, and with 'ect1' each is re-marked ECT(1).
+
+    `mtu` is the largest UDP payload the path carries each way: a longer datagram is dropped, as a link that cannot
+    fragment drops it, and counted. `fall` = (toward, after, mtu) lowers it toward 'server' or 'client' alone once that
+    many datagrams have crossed that way, a route change onto a tunnel that no ICMP reports. `largest` keeps the longest
+    datagram that crossed each way."""
 
     MARKS = {None: 0, 'ect1': 1, 'ce': 3}
 
-    def __init__(self, server_port, seed=0, loss=0.0, duplicate=0.0, delay=0.0, jitter=0.0, mark=None):
+    def __init__(self, server_port, seed=0, loss=0.0, duplicate=0.0, delay=0.0, jitter=0.0, mark=None, mtu=None,
+                 fall=None):
         self.server = ('127.0.0.1', server_port)
+        self.mtu = {'server': mtu, 'client': mtu}
+        self.fall = fall
+        self.crossed = {'server': 0, 'client': 0}
+        self.largest = {'server': 0, 'client': 0}
+        self.oversized = {'server': 0, 'client': 0}
         self.random = random.Random(seed)
         self.loss = loss
         self.duplicate = duplicate
@@ -71,8 +123,20 @@ class Relay:
     def is_version_negotiation(datagram):
         return len(datagram) >= 5 and (datagram[0] & 0x80) != 0 and datagram[1:5] == b'\0\0\0\0'
 
+    def carries(self, toward, datagram):
+        """Whether the path carries `datagram` toward 'server' or 'client', before any impairment."""
+        if self.fall is not None and self.fall[0] == toward and self.crossed[toward] == self.fall[1]:
+            self.mtu[toward] = self.fall[2]
+        self.crossed[toward] += 1
+        if self.mtu[toward] is not None and len(datagram) > self.mtu[toward]:
+            self.oversized[toward] += 1
+            return False
+        self.largest[toward] = max(self.largest[toward], len(datagram))
+        return True
+
     def schedule(self, sender, datagram, destination):
-        if self.random.random() < self.loss:
+        toward = 'server' if destination == self.server else 'client'
+        if not self.carries(toward, datagram) or self.random.random() < self.loss:
             return
         copies = 2 if self.random.random() < self.duplicate else 1
         for _ in range(copies):

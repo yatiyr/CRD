@@ -5,6 +5,7 @@
 //                      --bytes N --closer client|server --code N --max-streams N [--compat 1] [--retry 1]
 //                      [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]]
 //                      [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N]
+//                      [--receive-bytes N]
 //                      [--http3 1 ...] [--webtransport legacy|h3 ...] [--transport h3 --alpn NAME ...]
 //
 //   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
@@ -27,6 +28,7 @@
 //   reject-early a server's early data context changes after the first connection, so the second's 0-RTT is refused
 //   only-version a server runs `version` alone and answers others with Version Negotiation
 //   progress-at  a server prints `progress=1` once it has read this many bytes
+//   receive-bytes  the largest datagram the loop reads whole (1500 by default), advertised as max_udp_payload_size
 //   http3        HTTP/3 over Http3Connection instead of the echo: http_exchange.h has its options, ALPN `h3` instead
 //   webtransport WebTransport sessions instead, `legacy` or `h3`: interop_webtransport.hpp has its options
 //   transport    h3: WebSocket tunnels (RFC 9220) on one HTTP/3 connection instead, `connections` of them at once,
@@ -38,8 +40,10 @@
 //
 // The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
 // is the same as ngtcp2_quic_peer.c's without what only OpenSSL reports, and with the path's ECN validation (`ecn`,
-// `ecn_failure`), the CE count the peer reported over every space (`ecn_ce`) and the congestion events that reduced
-// the window (`reductions`). The application is `cerid-interop`, a private ALPN.
+// `ecn_failure`), the CE count the peer reported over every space (`ecn_ce`), the congestion events that reduced
+// the window (`reductions`), the path MTU search's datagram size (`pmtu`), probes lost (`pmtu_probes_lost`) and
+// black holes (`black_holes`), and the peer's max_udp_payload_size (`peer_max_udp_payload`). The application is
+// `cerid-interop`, a private ALPN.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -107,6 +111,7 @@ struct Options : QmuxOptions
     u32 version = 1U;
     bool reject_early = false;
     bool only_version = false;
+    u32 receive_bytes = 1500U;
     httpx_options_t http3;
     WtOptions wt;
 };
@@ -351,6 +356,12 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
                 static_cast<unsigned long long>(info.error_code), ecn_state(ecn.state()), ecn_failure(ecn.failure()),
                 static_cast<unsigned long long>(ce),
                 static_cast<unsigned long long>(connection.congestion().state().reductions));
+    const QuicPathMtu& path = connection.path_mtu();
+    std::printf("pmtu=%u\npmtu_probes_lost=%llu\nblack_holes=%llu\npeer_max_udp_payload=%llu\n", path.size(),
+                static_cast<unsigned long long>(path.counters().probes_lost),
+                static_cast<unsigned long long>(path.counters().black_holes),
+                static_cast<unsigned long long>(
+                    connection.peer_parameters_known() ? connection.peer_parameters().max_udp_payload_size : 0U));
     std::fflush(stdout);
     peer.ended(handle);
 }
@@ -541,8 +552,9 @@ int run_server(crd::memory::IAllocator& allocator, const Options& options, const
         config.connection.early_context = ConstSpan<u8>(early_context, early_bytes);
     }
     config.connections = kServerSlots;
+    config.receive_bytes = options.receive_bytes;
     QuicServer server(allocator, socket, clock, ingress, routes, reset, &tokens, app, config);
-    IoLoop loop(allocator, socket, clock, ingress, server, IoLoopConfig{});
+    IoLoop loop(allocator, socket, clock, ingress, server, IoLoopConfig{.slot_bytes = options.receive_bytes});
     if (!server.ready() || !loop.ready())
     {
         std::fputs("crd-quic-peer: the server could not be made\n", stderr);
@@ -582,8 +594,9 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
         config.connection.versions = ConstSpan<u32>(kBothVersions);
     }
     config.connections = 1U;
+    config.receive_bytes = options.receive_bytes;
     QuicClient client(allocator, socket, ingress, routes, reset, app, config);
-    IoLoop loop(allocator, socket, clock, ingress, client, IoLoopConfig{});
+    IoLoop loop(allocator, socket, clock, ingress, client, IoLoopConfig{.slot_bytes = options.receive_bytes});
     if (!client.ready() || !loop.ready())
     {
         std::fputs("crd-quic-peer: the client could not be made\n", stderr);
@@ -615,8 +628,8 @@ int usage()
                "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] "
                "[--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] "
                "[--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] "
-               "[--progress-at N] [--http3 1 ...] [--webtransport legacy|h3 ...] [--transport h3 --alpn NAME "
-               "[--idle-ms N] [--keepalive-ms N]]\n",
+               "[--progress-at N] [--receive-bytes N] [--http3 1 ...] [--webtransport legacy|h3 ...] "
+               "[--transport h3 --alpn NAME [--idle-ms N] [--keepalive-ms N]]\n",
                stderr);
     return 2;
 }
@@ -663,6 +676,10 @@ int main(int argc, char** argv)
         else if (std::strcmp(name, "--only-version") == 0)
         {
             options.only_version = std::strcmp(value, "0") != 0;
+        }
+        else if (std::strcmp(name, "--receive-bytes") == 0)
+        {
+            options.receive_bytes = static_cast<u32>(std::strtoul(value, nullptr, 10));
         }
         else
         {

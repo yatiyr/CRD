@@ -22,13 +22,21 @@ its path from the other's ACK frames. ngtcp2 fails a path on any ECT(1) count, a
 of what was acknowledged, so its verdict holds Cerid's ACK_ECN counts to what Cerid read. On the loopback both ends
 validate; the relay bleaches every datagram, and both fail; a relay that marks every datagram CE leaves both capable and
 reacting to congestion; one that re-marks ECT(1) fails both.
+
+Path MTU discovery (RFC 8899, RFC 9000 section 14.3) is held in every case: neither end sends a datagram over the
+other's max_udp_payload_size, which Cerid sets to its loop's receive slot. Over a relay whose links carry at most `mtu`
+bytes, Cerid's search finds that size to the byte and ngtcp2's settles on the largest of its four fixed probe sizes the
+path carries; a Cerid end with a smaller receive slot holds ngtcp2's probes under it; a path toward the peer that falls
+in the middle of a transfer, which nothing reports, is found by Cerid's black hole detection and searched again; and
+over a lossy path both still find a size the path carries.
 """
 import argparse
 import subprocess
 import sys
 import threading
 
-from interop_common import Relay, collect, expect, reports_of
+from interop_common import (CERID_RECEIVE, QUIC_MIN, Relay, check_cerid_pmtu, check_relay_sizes, collect,
+                            expect, path_toward, reports_of)
 
 SEED = '11' * 32
 OPENSSL_GROUPS = {
@@ -46,15 +54,19 @@ RUN_SECONDS = 70
 PROGRESS_SECONDS = 20
 RESET_STREAM_BYTES = 32 << 20
 PROGRESS_BYTES = 1 << 20
+PMTU_SEARCH_BYTES = 4 << 20  # a transfer long enough for both searches to end before it does
 ECN_TESTING_PACKETS = 10  # NGTCP2_ECN_MAX_NUM_VALIDATION_PKTS: ngtcp2 marks no more until its path is validated
 ECN_VERDICT_BYTES = 64 << 10  # enough each way for ngtcp2 to test, validate and go on marking
+NGTCP2_MAX_TX = 1452  # ngtcp2_settings_default's max_tx_udp_payload_size, which caps its probes
+NGTCP2_ADVERTISED = 65527  # ngtcp2_transport_params_default's max_udp_payload_size, which the peer keeps
+NGTCP2_PROBES = (1406, 1342, 1232, 1444)  # ngtcp2_pmtud.c's default probes, in the order it sends them
 
 
 class Case:
     def __init__(self, cerid, ngtcp2, cerid_is_client, version=1, group='x25519mlkem768', cipher='aes128', streams=1,
                  size=4096, closer='client', code=0, max_streams=16, compat=False, retry=False, updater=None,
                  updates=64, path=None, datagrams=0, datagram_bytes=1000, datagram_limit=None, resume=None,
-                 negotiate=False, reset=False):
+                 negotiate=False, reset=False, receive_bytes=None):
         self.cerid = cerid
         self.ngtcp2 = ngtcp2
         self.cerid_is_client = cerid_is_client
@@ -77,6 +89,7 @@ class Case:
         self.resume = resume  # 'plain', 'early' or 'reject': a second connection on the first's ticket
         self.negotiate = negotiate  # the client starts in `version`, and the server runs only the other one
         self.reset = reset
+        self.receive_bytes = receive_bytes  # Cerid's receive slot, CERID_RECEIVE when None
 
     def command(self, program, role, port):
         cerid = program == self.cerid
@@ -107,6 +120,8 @@ class Case:
                 command += ['--only-version', '1']
             else:
                 command += ['--compat', '1']
+        if cerid and self.receive_bytes:
+            command += ['--receive-bytes', str(self.receive_bytes)]
         if self.reset and role == 'server':
             command += ['--progress-at', str(PROGRESS_BYTES)]
             command += [] if cerid else ['--resets', '1']
@@ -118,7 +133,8 @@ class Case:
             (f' {self.datagrams} datagrams of {self.datagram_bytes}' if self.datagrams else '') + \
             (f' limit {self.datagram_limit}' if self.datagram_limit else '') + \
             (f' resume {self.resume}' if self.resume else '') + (' version negotiation' if self.negotiate else '') + \
-            (' stateless reset' if self.reset else '')
+            (' stateless reset' if self.reset else '') + \
+            (f' receive {self.receive_bytes}' if self.receive_bytes else '')
         return ('cerid client' if self.cerid_is_client else 'ngtcp2 client') + \
             f' v{self.version} {self.group} {self.cipher} {self.streams}x{self.size} {self.closer} closes {self.code}' \
             + extra
@@ -149,8 +165,11 @@ class Case:
             expect(not thread.is_alive(), f'the server did not end; the client reported {client_out}')
             server.wait(10)
             server_err = server.stderr.read()
-            self.check(reports_of(client_out), reports_of(server_out[0]), client.returncode, server.returncode,
-                       client_err, server_err)
+            clients, servers = reports_of(client_out), reports_of(server_out[0])
+            self.check(clients, servers, client.returncode, server.returncode, client_err, server_err)
+            if relay is not None:
+                check_relay_sizes(relay, self.path, 'client' if self.cerid_is_client else 'server',
+                                  self.receive_bytes or CERID_RECEIVE, f'client {clients}\nserver {servers}')
             if self.retry:
                 # One per Initial of the first flight, which a hybrid key share makes two datagrams long.
                 expect(1 <= relay.retries <= 2, f'{relay.retries} Retry packets crossed the path')
@@ -240,6 +259,7 @@ class Case:
         if self.datagrams:
             self.check_datagrams(client, server, detail)
         self.check_ecn(client, server, detail)
+        self.check_pmtu(client, server, detail)
 
     def check_ecn(self, client, server, detail):
         cerid, ngtcp2 = (client, server) if self.cerid_is_client else (server, client)
@@ -272,6 +292,36 @@ class Case:
             expect(int(cerid.get('ecn_ce', '0')) > 0, f'ngtcp2 reported no CE: {detail}')
             expect(int(cerid.get('reductions', '0')) > 0, f'Cerid did not reduce its window on CE: {detail}')
             expect(ngtcp2.get('ssthresh_set') == '1', f'ngtcp2 did not react to CE: {detail}')
+
+    def check_pmtu(self, client, server, detail):
+        cerid, ngtcp2 = (client, server) if self.cerid_is_client else (server, client)
+        settled = self.datagrams == 0 and self.streams * self.size >= PMTU_SEARCH_BYTES
+        check_cerid_pmtu(cerid, self.path, 'server' if self.cerid_is_client else 'client', settled, detail,
+                         NGTCP2_ADVERTISED)
+        receive = self.receive_bytes or CERID_RECEIVE
+        expect(ngtcp2.get('peer_max_udp_payload') == str(receive),
+               f'ngtcp2 read another max_udp_payload_size: {detail}')
+        toward_cerid = path_toward(self.path, 'client' if self.cerid_is_client else 'server')
+        expected = self.ngtcp2_reach(min(toward_cerid or receive, receive), min(receive, NGTCP2_MAX_TX))
+        reached = int(ngtcp2.get('pmtu', '0'))
+        if settled and not (self.path or {}).get('loss'):
+            expect(reached == expected, f'ngtcp2 reached {reached}, not {expected}: {detail}')
+        else:
+            expect(QUIC_MIN <= reached <= expected, f'ngtcp2 reached {reached}, more than the path carries: {detail}')
+
+    @staticmethod
+    def ngtcp2_reach(path, hard_max):
+        """The size ngtcp2's search ends at (ngtcp2_pmtud.c): its probes in order, each above the size reached, under
+        its hard maximum and under the smallest that failed."""
+        reached, failed = QUIC_MIN, None
+        for probe in NGTCP2_PROBES:
+            if probe <= reached or probe > hard_max or (failed is not None and probe >= failed):
+                continue
+            if probe <= path:
+                reached = probe
+            else:
+                failed = probe if failed is None else min(failed, probe)
+        return reached
 
     def check_early(self, number, client, server, detail):
         resumed = '1' if number == 1 else '0'
@@ -328,6 +378,17 @@ def cases(cerid, ngtcp2):
             yield case(version=version, streams=4, size=256 << 10,
                        path=dict(seed=version, loss=0.02, delay=0.003, jitter=0.012, mark='ce'))
             yield case(version=version, streams=4, size=256 << 10, path=dict(mark='ect1'))
+        for version in (1, 2):
+            for mtu in (1350, 1280):
+                yield case(version=version, streams=4, size=4 << 20, path=dict(mtu=mtu))
+        yield case(streams=4, size=4 << 20, receive_bytes=1300)
+        yield case(streams=4, size=4 << 20, path=dict(mtu=1300), receive_bytes=1250)
+        toward_peer = 'server' if cerid_is_client else 'client'
+        for fall in (1300, 1252):
+            yield case(streams=4, size=4 << 20, path=dict(fall=(toward_peer, 3000, fall)))
+        for seed in (1, 2):
+            yield case(streams=4, size=1 << 20,
+                       path=dict(seed=seed, loss=0.02, duplicate=0.02, delay=0.003, jitter=0.006, mtu=1350))
         yield case(compat=True)
         yield case(compat=True, streams=8, size=64 << 10)
         for version in (1, 2):

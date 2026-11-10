@@ -1692,7 +1692,8 @@
         "engine/foundation/net/include/crd/net/quic_pmtu.hpp",
         "tests/foundation/net/test_quic_pmtu.cpp",
         "tests/foundation/net/fuzz/fuzz_quic_pmtu.cpp",
-        "tests/foundation/net/test_udp.cpp"
+        "tests/foundation/net/test_udp.cpp",
+        "tests/foundation/net/interop/quic_interop.py"
       ],
       "deprecation": null,
       "note": "1280-byte IPv6 floor with blackhole detection (NET-PATH). Proven 2026-11-10 (design S68): the search of section 5.2 (Base, Searching, Search Complete, Error) over QUIC's PING and PADDING probes, MAX_PROBES and PMTU_RAISE_TIMER, an IPv6 path's 1232-byte base, black hole detection, probe losses kept from congestion control (RFC 9000 section 14.4), and sockets that forbid fragmentation on Linux and Windows; over simulated fixed-MTU, falling-MTU and lossy paths, and by fuzzing. Remaining: interop against real peers, max_udp_payload_size advertised as the receive slot, and ICMP Packet Too Big as a hint (section 4.6)."

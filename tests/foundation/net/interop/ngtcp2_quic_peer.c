@@ -35,8 +35,9 @@
  * is the same as cerid_quic_peer.cpp's plus what OpenSSL negotiated, and ECN as this end saw it: ngtcp2 keeps its
  * validation (RFC 9000 section 13.4.2) to itself, so the report counts the datagrams it marked and the codepoints read.
  * More than NGTCP2_ECN_MAX_NUM_VALIDATION_PKTS (10) datagrams marked ECT(0) means it found the path capable, as it
- * marks no more while testing; the last packet unmarked means it stopped. The application is `cerid-interop`, a
- * private ALPN. */
+ * marks no more while testing; the last packet unmarked means it stopped. `pmtu` is the datagram size its path MTU
+ * discovery reached (RFC 8899 over its fixed probe sizes) and `peer_max_udp_payload` the max_udp_payload_size its peer
+ * advertised. The application is `cerid-interop`, a private ALPN. */
 #define _GNU_SOURCE /* ppoll */
 #include "ngtcp2_http3.h"
 #include "openssl_self_signed.h"
@@ -1332,6 +1333,11 @@ static void report(peer_t* peer, const char* close_kind, uint64_t close_code)
            (unsigned long long)peer->ecn_received[NGTCP2_ECN_ECT_0],
            (unsigned long long)peer->ecn_received[NGTCP2_ECN_ECT_1],
            (unsigned long long)peer->ecn_received[NGTCP2_ECN_CE], info.ssthresh != UINT64_MAX);
+    const ngtcp2_transport_params* remote =
+        peer->conn != NULL ? ngtcp2_conn_get_remote_transport_params(peer->conn) : NULL;
+    printf("pmtu=%zu\npeer_max_udp_payload=%llu\n",
+           peer->conn != NULL ? ngtcp2_conn_get_path_max_tx_udp_payload_size2(peer->conn) : (size_t)0,
+           remote != NULL ? (unsigned long long)remote->max_udp_payload_size : 0ULL);
     if (peer->app != NULL)
     {
         http3_report(peer->app);

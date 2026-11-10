@@ -9,7 +9,10 @@ case holds the two reports to each other.
 
 Cases: streams with no body, small and far over the windows; unidirectional streams; datagrams; resets and STOP_SENDING
 with application codes; protocol negotiation; Origin read and refused; a refused session; WT_CLOSE_SESSION from either
-end; a lossy, reordering, duplicating path. On `webtransport-h3`, also flow control under a tight window.
+end; a lossy, reordering, duplicating path. On `webtransport-h3`, also flow control under a tight window. Over a
+relay whose links carry at most 1350 bytes each Cerid end's path MTU search finds that size to the byte, and over one
+that falls toward the peer in the middle of the transfer it finds the black hole and the size below; no peer sends a
+datagram over Cerid's max_udp_payload_size.
 
 Not asked of web-transport-quinn, and why: flow control and the `webtransport-h3` spelling (it speaks only the legacy
 one), RESET_STREAM_AT (Quinn 0.11 has none), the session exporter (it offers none), and 0-RTT, which never opens a
@@ -21,7 +24,7 @@ import subprocess
 import sys
 import threading
 
-from interop_common import Relay, collect, expect, reports_of
+from interop_common import CERID_RECEIVE, Relay, check_cerid_pmtu, check_relay_sizes, collect, expect, reports_of
 
 SEED = '11' * 32
 RUN_SECONDS = 90
@@ -33,6 +36,7 @@ GOOD_ORIGIN = 'https://good.test'
 BAD_ORIGIN = 'https://bad.test'
 CHOSEN = 'cerid-b'
 GO_DATAGRAMS = 32
+PMTU_SEARCH_BYTES = 4 << 20  # a transfer long enough for the search to end before it does
 
 
 class Case:
@@ -116,8 +120,11 @@ class Case:
             thread.join(RUN_SECONDS)
             expect(not thread.is_alive(), f'the server did not end; the client reported {client_out}')
             server.wait(10)
-            self.check(reports_of(client_out), reports_of(server_out[0]), client.returncode, server.returncode,
-                       client_err, server.stderr.read())
+            clients, servers = reports_of(client_out), reports_of(server_out[0])
+            self.check(clients, servers, client.returncode, server.returncode, client_err, server.stderr.read())
+            if relay is not None:
+                for toward_cerid in self.cerid_ends('client', 'server'):
+                    check_relay_sizes(relay, self.path, toward_cerid, CERID_RECEIVE, f'{clients}\n{servers}')
         finally:
             if relay is not None:
                 relay.stop()
@@ -139,6 +146,10 @@ class Case:
         self.check_session(client, detail)
         self.check_session(server, detail)
         self.check_ecn(client, server, detail)
+        settled = 2 * self.streams * self.stream_bytes + self.uni * self.uni_bytes >= PMTU_SEARCH_BYTES
+        peer_receive = CERID_RECEIVE if self.peer_name == 'cerid' else None
+        for report, toward_peer in self.cerid_ends((client, 'server'), (server, 'client')):
+            check_cerid_pmtu(report, self.path, toward_peer, settled, detail, peer_receive)
         closing, other = (client, server) if self.closer == 'client' else (server, client)
         expect(other.get('wt_close_seen') == '1', f'the close was not read: {detail}')
         expect(other.get('wt_close_code') == str(WT_CLOSE_CODE), f'another close code: {detail}')
@@ -167,11 +178,14 @@ class Case:
         else:
             expect(0 <= received <= self.datagrams, f'datagrams: {detail}')
 
+    def cerid_ends(self, client, server):
+        """Of what stands for the client and for the server, those of the Cerid ends."""
+        return [client, server] if self.peer_name == 'cerid' else [client if self.cerid_is_client else server]
+
     def check_ecn(self, client, server, detail):
         # Every peer here reports ECN counts on Linux (Quinn, quic-go, Cerid), so each Cerid end validates its path; the
         # driver's relay sends every datagram unmarked, a bleaching path, which fails validation (RFC 9000 13.4.2).
-        cerid_ends = [client, server] if self.peer_name == 'cerid' else [client if self.cerid_is_client else server]
-        for report in cerid_ends:
+        for report in self.cerid_ends(client, server):
             if self.path is None:
                 expect(report.get('ecn') == 'capable', f'ECN not validated: {detail}')
             else:
@@ -223,6 +237,9 @@ def cases(cerid, quinn, go):
             if not cerid_is_client:
                 yield case(streams=1, origin=BAD_ORIGIN, allow=GOOD_ORIGIN, refused=403)
                 yield case(streams=1, origin=GOOD_ORIGIN, allow=GOOD_ORIGIN)
+            yield case(streams=4, stream_bytes=1 << 20, path=dict(mtu=1350))
+            yield case(streams=4, stream_bytes=1 << 20,
+                       path=dict(fall=('server' if cerid_is_client else 'client', 3000, 1300)))
             if revision == 'h3':
                 yield case(streams=4, stream_bytes=1048576, window=65536)
                 yield case(streams=8, stream_bytes=65536, uni=8, uni_bytes=65536, window=131072)
