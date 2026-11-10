@@ -98,6 +98,34 @@
           "standard": true
         },
         {
+          "id": "quic.tls",
+          "kind": "protocol",
+          "owner": "net",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "RFC 9001",
+          "standard": true
+        },
+        {
+          "id": "quic.v2",
+          "kind": "protocol",
+          "owner": "net",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "RFC 9369",
+          "standard": true
+        },
+        {
           "id": "tls.v13",
           "kind": "protocol",
           "owner": "crypto",
@@ -734,6 +762,34 @@
             "integrity"
           ],
           "spec": "https://docs.oasis-open.org/pkcs11/pkcs11-spec/v3.2/os/pkcs11-spec-v3.2-os.html",
+          "standard": true
+        },
+        {
+          "id": "quic.tls",
+          "kind": "protocol",
+          "owner": "net",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "RFC 9001",
+          "standard": true
+        },
+        {
+          "id": "quic.v2",
+          "kind": "protocol",
+          "owner": "net",
+          "functions": [
+            "authentication",
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "RFC 9369",
           "standard": true
         },
         {

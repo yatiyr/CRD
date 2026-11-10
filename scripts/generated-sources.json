@@ -2172,7 +2172,7 @@
         "scripts/gen-crypto-inventory.py",
         "--check"
       ],
-      "sha256": "f6f7709866cdbd0bfee098a6fc9b71aaa04f73dcb1cac9982269d24b086f0aa9"
+      "sha256": "b95a7d9c64b5f3fdad8c0bef16e0fbf170238169fb64e7c2ab4abe5af109b83a"
     },
     {
       "path": "bench/gpu-compute/ckir_mlp_bwd_gen.cu",

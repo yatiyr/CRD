@@ -167,7 +167,7 @@
       "id": "cerid.game",
       "title": "Cerid game session protocol: input, snapshots, deltas and events",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "NET.3",
@@ -193,8 +193,15 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "engine/foundation/net/include/crd/net/wire.hpp",
+        "engine/foundation/net/include/crd/net/delta.hpp",
+        "tests/foundation/net/test_wire.cpp",
+        "tests/foundation/net/test_delta.cpp",
+        "tests/foundation/net/test_negotiation.cpp"
+      ],
+      "deprecation": null,
+      "note": "Version 1: the generated wire formats with their frames, admission, reassembly and baseline deltas (NET.3) and the negotiation identifier, carried over QUIC streams and datagrams and over QMux (4.2a); marked implemented with 4.2a's close (2026-11-10)."
     },
     {
       "id": "cerid.project",
@@ -660,7 +667,7 @@
       "id": "quic.invariants",
       "title": "Version-independent properties of QUIC",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a"
@@ -677,8 +684,14 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "engine/foundation/net/include/crd/net/quic_header.hpp",
+        "tests/foundation/net/test_ingress.cpp",
+        "tests/foundation/net/fuzz/fuzz_ingress.cpp",
+        "tests/foundation/net/interop/quic_interop.py"
+      ],
+      "deprecation": null,
+      "note": "RFC 8999's version-independent header properties: header views for any version, Version Negotiation and long headers of unknown versions routed by connection ID (4.2a), proven against ngtcp2; marked implemented with 4.2a's close (2026-11-10)."
     },
     {
       "id": "quic.transport",
@@ -728,7 +741,7 @@
       "id": "quic.tls",
       "title": "Using TLS to secure QUIC",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a",
@@ -756,7 +769,9 @@
         "tests/foundation/crypto/test_quic.cpp",
         "tests/foundation/crypto/test_quic_handshake.cpp",
         "tests/foundation/crypto/test_tls_early.cpp",
-        "tests/foundation/crypto/interop/tls_interop.py"
+        "tests/foundation/crypto/interop/tls_interop.py",
+        "tests/foundation/net/test_quic_connection.cpp",
+        "tests/foundation/net/interop/quic_interop.py"
       ],
       "deprecation": null,
       "codepoints": [
@@ -767,7 +782,7 @@
           "recommended": "Y"
         }
       ],
-      "note": "Proven so far in crd-crypto (NET.2): packet protection (section 5, quic.hpp, against the appendix A packets of RFC 9001 and RFC 9369) and the handshake over QUIC (section 4 and 8, QuicHandshake, decision S11): CRYPTO data per encryption level, each level's secrets into packet and header keys, the quic_transport_parameters extension both ways, application protocols required, alerts as CRYPTO_ERROR at their level, no TLS KeyUpdate, tickets under QUIC's own binding; 0-RTT (section 4.6, decision S17): the client's early secret into keys once, tickets allowing 0xffffffff, a server's early data context compared with the ticket's, the server's transport parameters remembered with the ticket and the client's early keys zeroed on a refusal; against OpenSSL's QUIC TLS interface (3.5.9, then 4.0.3) both ways in versions 1 and 2, 0-RTT both ways with the early secrets' probes equal. The 57 codepoint was checked against IANA's TLS ExtensionType Values on 2026-11-01. Address validation (Retry and NEW_TOKEN tokens, RFC 9000 section 8.1) is quic.transport's. Remaining: the transport's use of the keys (key update protocol, discarding keys, the amplification limit) in 4.2a."
+      "note": "Proven so far in crd-crypto (NET.2): packet protection (section 5, quic.hpp, against the appendix A packets of RFC 9001 and RFC 9369) and the handshake over QUIC (section 4 and 8, QuicHandshake, decision S11): CRYPTO data per encryption level, each level's secrets into packet and header keys, the quic_transport_parameters extension both ways, application protocols required, alerts as CRYPTO_ERROR at their level, no TLS KeyUpdate, tickets under QUIC's own binding; 0-RTT (section 4.6, decision S17): the client's early secret into keys once, tickets allowing 0xffffffff, a server's early data context compared with the ticket's, the server's transport parameters remembered with the ticket and the client's early keys zeroed on a refusal; against OpenSSL's QUIC TLS interface (3.5.9, then 4.0.3) both ways in versions 1 and 2, 0-RTT both ways with the early secrets' probes equal. The 57 codepoint was checked against IANA's TLS ExtensionType Values on 2026-11-01. Address validation (Retry and NEW_TOKEN tokens, RFC 9000 section 8.1) is quic.transport's. 4.2a's connection uses the keys (the key update protocol, discarding keys, the amplification limit) and carries the handshake to confirmation against ngtcp2; marked implemented with 4.2a's close (2026-11-10)."
     },
     {
       "id": "quic.recovery",
@@ -792,16 +807,82 @@
       "review": "2027-10-27",
       "evidence": [
         "tests/foundation/net/test_quic_recovery.cpp",
-        "tests/foundation/net/fuzz/fuzz_quic_recovery.cpp"
+        "tests/foundation/net/fuzz/fuzz_quic_recovery.cpp",
+        "engine/foundation/net/include/crd/net/congestion.hpp",
+        "tests/foundation/net/test_congestion.cpp",
+        "tests/foundation/net/test_quic_congestion.cpp",
+        "tests/foundation/net/fuzz/fuzz_congestion.cpp"
       ],
       "deprecation": null,
-      "note": "Loss detection proven in crd-net (4.2a, design S37): RTT samples, both thresholds, the probe timeout, persistent congestion, and section 6.1's thresholds raised on a spurious loss by RFC 8985 section 6.2's mechanism (capped, back after 16 loss detections). The congestion controllers are NET-PATH's."
+      "note": "Loss detection proven in crd-net (4.2a, design S37): RTT samples, both thresholds, the probe timeout, persistent congestion, and section 6.1's thresholds raised on a spurious loss by RFC 8985 section 6.2's mechanism (capped, back after 16 loss detections). NET-PATH's congestion control (design S66, 2026-11-10): appendix B's NewReno with one reduction per recovery period, persistent congestion, no growth while unheld and pacing at 1.25 windows per smoothed RTT, in every connection; ECN's congestion signal waits for ECN validation."
+    },
+    {
+      "id": "cc.cubic",
+      "title": "CUBIC for fast and long-distance networks",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9438",
+        "status": "current",
+        "added": "2026-11-10"
+      },
+      "cryptography": [],
+      "source": {
+        "ref": "docs/design/network-foundation.md#congestion",
+        "read": "2026-11-10",
+        "verified": true
+      },
+      "review": "2027-11-10",
+      "evidence": [
+        "engine/foundation/net/src/congestion.cpp",
+        "tests/foundation/net/test_congestion.cpp",
+        "tests/foundation/net/test_quic_congestion.cpp",
+        "tests/foundation/net/fuzz/fuzz_congestion.cpp"
+      ],
+      "deprecation": null,
+      "note": "The default controller (design S66): the cubic curve from W_max in integer arithmetic, the Reno-friendly estimate, fast convergence, idle periods and the spurious-loss undo; obsoletes RFC 8312."
+    },
+    {
+      "id": "cc.hystart",
+      "title": "HyStart++: modified slow start",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9406",
+        "status": "current",
+        "added": "2026-11-10"
+      },
+      "cryptography": [],
+      "source": {
+        "ref": "docs/design/network-foundation.md#congestion",
+        "read": "2026-11-10",
+        "verified": true
+      },
+      "review": "2027-11-10",
+      "evidence": [
+        "engine/foundation/net/src/congestion.cpp",
+        "tests/foundation/net/test_congestion.cpp",
+        "tests/foundation/net/test_quic_congestion.cpp",
+        "tests/foundation/net/fuzz/fuzz_congestion.cpp"
+      ],
+      "deprecation": null,
+      "note": "The first slow start of both window controllers (design S66): rounds, eight RTT samples, the conservative phase and its five rounds."
     },
     {
       "id": "quic.datagram",
       "title": "An unreliable datagram extension to QUIC",
       "kind": "extension",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a"
@@ -828,10 +909,11 @@
       "evidence": [
         "tests/foundation/net/test_quic_datagram.cpp",
         "tests/foundation/net/test_quic_connection.cpp",
-        "tests/foundation/net/fuzz/fuzz_quic_datagram.cpp"
+        "tests/foundation/net/fuzz/fuzz_quic_datagram.cpp",
+        "tests/foundation/net/interop/quic_interop.py"
       ],
       "deprecation": null,
-      "note": "Proven so far in crd-net (4.2a, design S41): max_datagram_frame_size enforced both ways, the largest payload fixed for the worst-case short header, ack and loss outcomes; 0-RTT keeps the remembered size when 0-RTT lands."
+      "note": "Proven so far in crd-net (4.2a, design S41): max_datagram_frame_size enforced both ways, the largest payload fixed for the worst-case short header, ack and loss outcomes; 0-RTT keeps the remembered size when 0-RTT lands. Interop against ngtcp2; DATAGRAM frames are congestion controlled by NET-PATH's window and pacer (RFC 9221 section 5.4); marked implemented with 4.2a's close (2026-11-10)."
     },
     {
       "id": "quic.grease-bit",
@@ -903,7 +985,7 @@
       "id": "quic.v2",
       "title": "QUIC version 2",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "4.2a"
@@ -933,8 +1015,13 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "engine/foundation/crypto/include/crd/crypto/quic.hpp",
+        "tests/foundation/net/test_quic_connection.cpp",
+        "tests/foundation/net/interop/quic_interop.py"
+      ],
+      "deprecation": null,
+      "note": "QUIC version 2's packet protection (its appendix A packets), packet types and compatible version negotiation both ways (RFC 9368, RFC 9369 sections 4.1 and 5), proven against ngtcp2; marked implemented with 4.2a's close (2026-11-10)."
     },
     {
       "id": "http.h3",
