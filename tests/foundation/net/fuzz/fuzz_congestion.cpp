@@ -12,13 +12,13 @@
 //
 // Oracles. The window stays between the minimum and kCongestionMaxWindow and the threshold at or above the minimum;
 // avoidance holds a window at or above its threshold; reductions only rise, undos never pass them, and persistent
-// congestion leaves the minimum window. A window controller nothing ever held back never grows past its initial window.
-// Only an acknowledgement, an undo, a reset or a swap to BBR (whose floor is four datagrams) raises the window, and a
-// reset restores the initial one. A live swap keeps the window, threshold and recovery period. The pacing rate is 0
-// without pacing and never 0 for BBR, whose bandwidth is never above a rate the sampler gave and whose window after an
-// ACK frame is at least four datagrams. The sampler's delivered bytes are what was acknowledged. The pacer's release
-// time is never before now, its credit stays within one burst either side of zero and is positive at its release
-// time.
+// congestion leaves the minimum window. A window controller nothing ever held back, with no BBR run before it, never
+// grows past its initial window. Only an acknowledgement, an undo, a reset, a swap to BBR (whose floor is four
+// datagrams) or BBR leaving ProbeRTT on a restart from idle raises the window, and a reset restores the initial one.
+// A live swap keeps the window, threshold and recovery period. The pacing rate is 0 without pacing and never 0 for
+// BBR, whose bandwidth is never above a rate the sampler gave and whose window after an ACK frame is at least four
+// datagrams. The sampler's delivered bytes are what was acknowledged. The pacer's release time is never before now,
+// its credit stays within one burst above zero and the last send's burst below, and is positive at its release time.
 #include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/congestion.hpp>
@@ -66,7 +66,8 @@ struct World
     u64 reductions = 0U;
     u64 acked = 0U;    // bytes acknowledged, spurious ones too: the sampler's delivered bytes
     u64 max_rate = 0U; // the highest rate the sampler gave since the controller was built
-    bool ever_limited = false;
+    u64 paced_burst = 0U; // the burst of the pacer's last send
+    bool ever_limited = false; // something held sending back, or a BBR ran: a window may pass the initial one
 
     ~World()
     {
@@ -154,7 +155,11 @@ void run(World& w, u8 op, u8 parameter)
             w.ever_limited = w.ever_limited || w.in_flight + w.datagram > w.ctl->window();
             p.sent.delivery = w.delivery.on_sent(p.sent.bytes, w.in_flight, w.now);
             CRD_FUZZ_REQUIRE(p.sent.delivery.in_flight == w.in_flight && p.sent.delivery.delivered == w.acked);
+            const CongestionPhase phase = w.ctl->state().phase;
             w.ctl->on_sent(p.sent, w.in_flight, w.now);
+            // BBR restarting from idle may end ProbeRTT and restore its window (draft section 5.4).
+            may_grow = is_bbr(w) && (phase == CongestionPhase::ProbeRtt || phase == CongestionPhase::Recovery) &&
+                       w.ctl->state().phase != CongestionPhase::ProbeRtt;
             break;
         }
         case 1U: // an ACK frame of up to four packets, with or without an RTT sample
@@ -249,6 +254,7 @@ void run(World& w, u8 op, u8 parameter)
                 const u64 floor = 4U * w.datagram;
                 CRD_FUZZ_REQUIRE(now.window == ((held.window > floor) ? held.window : floor));
                 may_grow = true;
+                w.ever_limited = true; // BBR grows its window by the model, held back or not (section 5.6.4.6)
                 break;
             }
             CRD_FUZZ_REQUIRE(now.window == held.window && now.slow_start_threshold == held.slow_start_threshold);
@@ -279,9 +285,11 @@ void run(World& w, u8 op, u8 parameter)
             const u64 burst = w.ctl->burst();
             const u64 release = w.pacer.release_ns(w.now, rate, burst);
             CRD_FUZZ_REQUIRE(release >= w.now);
+            // Debt is bounded by the burst of the send that ran it up: BBR's send quantum moves with its rate.
             const i64 limit = static_cast<i64>(burst);
+            const i64 debt_limit = static_cast<i64>((w.paced_burst > burst) ? w.paced_burst : burst);
             const i64 credit = w.pacer.credit(w.now, rate, burst);
-            CRD_FUZZ_REQUIRE(credit <= limit && credit >= -limit);
+            CRD_FUZZ_REQUIRE(credit <= limit && credit >= -debt_limit);
             if (rate != 0U && release != w.now)
             {
                 CRD_FUZZ_REQUIRE(credit <= 0);
@@ -290,6 +298,7 @@ void run(World& w, u8 op, u8 parameter)
             // Sends at the release time, or early when the parameter's top bit says so (a probe).
             const u64 at = ((parameter & 0x80U) != 0U) ? w.now : release;
             w.pacer.on_sent(w.datagram, at, rate, burst);
+            w.paced_burst = burst;
             w.now = (at > w.now) ? at : w.now;
             break;
         }
@@ -319,6 +328,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     w.policy.algorithm = ((data[0] & 0x80U) != 0U) ? CongestionAlgorithm::Bbr : w.policy.algorithm;
     w.policy.hystart = (data[0] & 2U) != 0U;
     w.policy.pacing = (data[0] & 4U) != 0U || is_bbr(w);
+    w.ever_limited = is_bbr(w);
     w.policy.fast_convergence = (data[0] & 8U) != 0U;
     w.policy.initial_packets = 2U + ((data[0] >> 4U) & 7U) * 4U;
     w.datagram = 1200U + u64{data[1]} * 64U;
