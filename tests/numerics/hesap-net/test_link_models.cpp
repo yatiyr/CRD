@@ -874,6 +874,44 @@ TEST_CASE("link models: a table delay reads its measured law at the driving rank
         REQUIRE(process.init(options));
         CHECK(process.next() == 10'000);
     }
+    SECTION("entries past 2^53, where f64 cannot hold them, are read exactly")
+    {
+        // The fuzz finding: a one-entry table of 1302123111085380114 ns read back as the double nearest it, 2^8 apart.
+        constexpr i64 top = hn::kMaxLinkDelayNs;
+        const i64 found[] = {1302123111085380114};
+        const i64 flat_top[] = {top - 1, top - 1, top - 1};
+        const i64 flat_bottom[] = {-top + 1, -top + 1};
+        options.floor_ns = -top;
+        options.ceiling_ns = top;
+        for (const crd::containers::ConstSpan<i64> flat :
+             {crd::containers::ConstSpan<i64>{found, 1U}, crd::containers::ConstSpan<i64>{flat_top, 3U},
+              crd::containers::ConstSpan<i64>{flat_bottom, 2U}})
+        {
+            options.table = flat;
+            PhiloxRng rng(95U, 5U);
+            DelayProcess process(rng);
+            REQUIRE(process.init(options));
+            bool exact = true;
+            for (u32 i = 0U; i < 1000U; ++i)
+            {
+                exact = exact && process.next() == flat[0];
+            }
+            CHECK(exact);
+        }
+        // two entries 1000 ns apart just under 2^62 (doubles there are 512 apart): every delay between them
+        const i64 near_top[] = {top - 1000, top - 1};
+        options.table = crd::containers::ConstSpan<i64>{near_top, 2U};
+        PhiloxRng rng(95U, 6U);
+        DelayProcess process(rng);
+        REQUIRE(process.init(options));
+        bool inside = true;
+        for (u32 i = 0U; i < 10000U; ++i)
+        {
+            const i64 delay = process.next();
+            inside = inside && delay >= top - 1000 && delay <= top - 1;
+        }
+        CHECK(inside);
+    }
     SECTION("the floor and the ceiling still hold")
     {
         options.floor_ns = 15'000;

@@ -66,18 +66,29 @@ constexpr crd::f64 kMixParetoScale = 1.15470053837925152902;
     return true;
 }
 
-// The value of an ascending table of equally spaced ranks at a rank in [0, 1].
-[[nodiscard]] crd::f64 table_at(crd::containers::ConstSpan<crd::i64> table, crd::f64 rank) noexcept
+// The delay of an ascending table of equally spaced ranks at a rank in [0, 1], rounded to the nanosecond and held
+// between the two entries the rank lies between. The interpolation runs in f64, whose 53 bits do not hold every entry
+// of a table that reaches kMaxLinkDelayNs (2^62): converted, an entry can move by up to 2^8 ns past itself, so the
+// rounded value is clamped to the segment's ends, first as doubles (so the conversion back is in range) and then as
+// the exact integers. Every step is non-decreasing in the rank (the rounded products and sums, nearbyint and both
+// clamps), and a segment ends at most at its upper entry, where the next one starts at least, so the delay stays
+// non-decreasing in the rank across the whole table. Below 2^53 the entries are exact and neither clamp acts.
+[[nodiscard]] crd::i64 table_at(crd::containers::ConstSpan<crd::i64> table, crd::f64 rank) noexcept
 {
     const crd::f64 position = rank * static_cast<crd::f64>(table.size() - 1U);
     const crd::usize below = static_cast<crd::usize>(position);
     if (below + 1U >= table.size())
     {
-        return static_cast<crd::f64>(table[table.size() - 1U]);
+        return table[table.size() - 1U];
     }
-    const crd::f64 low = static_cast<crd::f64>(table[below]);
-    const crd::f64 high = static_cast<crd::f64>(table[below + 1U]);
-    return low + ((position - static_cast<crd::f64>(below)) * (high - low));
+    const crd::i64 low_ns = table[below];
+    const crd::i64 high_ns = table[below + 1U];
+    const crd::f64 low = static_cast<crd::f64>(low_ns);
+    const crd::f64 high = static_cast<crd::f64>(high_ns);
+    const crd::f64 rounded = crd::math::nearbyint(low + ((position - static_cast<crd::f64>(below)) * (high - low)));
+    const crd::f64 held = rounded < low ? low : (rounded > high ? high : rounded);
+    const crd::i64 value = static_cast<crd::i64>(held);
+    return value < low_ns ? low_ns : (value > high_ns ? high_ns : value);
 }
 
 } // namespace
@@ -171,12 +182,19 @@ crd::i64 DelayProcess::next() noexcept
 
     const crd::f64 mean = static_cast<crd::f64>(m_options.mean_ns);
     const crd::f64 deviation = static_cast<crd::f64>(m_options.deviation_ns);
-    crd::f64 delay = mean;
     if (m_options.shape == DelayShape::Table)
     {
-        delay = table_at(m_options.table, 1.0 - survival(m_gaussian));
+        // Held in integers: the f64 comparisons below would round a floor, a ceiling or an entry past 2^53. For a
+        // value x and integer ends this equals their result on the rounded x everywhere the ends are exact.
+        const crd::i64 value = table_at(m_options.table, 1.0 - survival(m_gaussian));
+        if (value < m_options.floor_ns)
+        {
+            return m_options.floor_ns;
+        }
+        return value > m_options.ceiling_ns ? m_options.ceiling_ns : value;
     }
-    else if (m_options.deviation_ns != 0)
+    crd::f64 delay = mean;
+    if (m_options.deviation_ns != 0)
     {
         switch (m_options.shape)
         {
