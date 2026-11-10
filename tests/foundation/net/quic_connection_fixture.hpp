@@ -152,6 +152,10 @@ struct Path
     // first bytes and naming `too_big_limit` (0: `mtu`), handed to the sender at once.
     usize too_big_quote = 0U;
     u32 too_big_limit = 0U;
+    // A bottleneck: datagrams leave one after another at `rate` bytes per second (0: at once), and one that finds
+    // `buffer` bytes already queued is dropped (0: an unbounded queue), as a drop-tail router does.
+    u64 rate = 0U;
+    usize buffer = 0U;
 };
 
 // A client's ticket store holding one ticket, handed out once.
@@ -247,6 +251,7 @@ public:
     u64 now = kStartNs;
     usize sent[2] = {};
     usize dropped[2] = {};
+    usize overflowed[2] = {}; // of those, dropped by a full bottleneck queue
     usize too_big[2] = {}; // Packet Too Big messages each end was handed, and those it matched
     usize too_big_matched[2] = {};
     usize marked[2] = {};                       // datagrams each end sent with a codepoint
@@ -448,12 +453,26 @@ private:
 
     void enqueue(usize from, ConstSpan<u8> datagram, Ecn ecn = Ecn::NotEct)
     {
+        u64 departs = now;
+        if (path[from].rate != 0U)
+        {
+            const u64 free = (m_link_free[from] > now) ? m_link_free[from] : now;
+            const u64 queued = (free - now) * path[from].rate / (1000U * kMs);
+            if (path[from].buffer != 0U && queued + datagram.size() > path[from].buffer)
+            {
+                ++dropped[from];
+                ++overflowed[from];
+                return;
+            }
+            m_link_free[from] = free + datagram.size() * 1000U * kMs / path[from].rate;
+            departs = m_link_free[from];
+        }
         REQUIRE(m_count < kFlights);
         Flight& flight = m_flights[m_count++];
         std::memcpy(flight.bytes, datagram.data(), datagram.size());
         flight.size = datagram.size();
         const u64 jitter = (path[from].jitter_ns == 0U) ? 0U : rng.next() % path[from].jitter_ns;
-        flight.at = now + path[from].delay_ns + jitter;
+        flight.at = departs + path[from].delay_ns + jitter;
         flight.to = 1U - from;
         flight.ecn = ecn;
     }
@@ -519,6 +538,7 @@ private:
     }
 
     QuicConnection* m_ends[2] = {};
+    u64 m_link_free[2] = {}; // when each direction's bottleneck finishes what it holds
     Flight m_flights[kFlights];
     usize m_count = 0U;
     usize m_stalled = 0U;

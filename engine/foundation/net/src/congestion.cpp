@@ -1,7 +1,10 @@
-// crd-net -- congestion control and pacing (NET-PATH; contract: docs/design/network-foundation.md#congestion).
+// crd-net -- congestion control and pacing (NET-PATH; contract: docs/design/network-foundation.md#congestion and
+// #bbr).
 #include <crd/net/congestion.hpp>
 
 #include <crd/core/wide_multiply.hpp>
+#include <crd/hesap/net/rate.hpp>
+#include <crd/hesap/stats/philox.hpp>
 
 #include <new>
 
@@ -9,6 +12,8 @@ namespace crd::net
 {
 namespace
 {
+using hesap::net::WindowedMax;
+
 constexpr u64 kMaxDatagram = 65535U;
 // RFC 9002 section 7.2: min(10 * max_datagram, max(14720, 2 * max_datagram)), here per packet of the initial window.
 constexpr u64 kInitialBytesPerPacket = 1472U;
@@ -110,9 +115,9 @@ public:
         sent(packet, in_flight, now_ns);
     }
 
-    void on_limited(u64 /*now_ns*/) noexcept override
+    void on_limited(bool /*window*/, u64 /*now_ns*/) noexcept override
     {
-        m_limited = true;
+        m_limited = true; // section 7.8: the window or the pacer
     }
 
     void on_acked(const CongestionPacket& packet, u64 /*now_ns*/) noexcept override
@@ -132,7 +137,7 @@ public:
         m_acked += packet.bytes;
     }
 
-    void on_ack_end(const QuicRtt& rtt, bool sampled, u64 now_ns) noexcept override
+    void on_ack_end(const QuicRtt& rtt, bool sampled, u64 /*in_flight*/, u64 now_ns) noexcept override
     {
         if (sampled && hystart_running())
         {
@@ -579,8 +584,1065 @@ private:
     u64 m_last_sent_ns = kNeverNs;
 };
 
+// ---- BBRv3 (draft-ietf-ccwg-bbr-07) ----
+
+constexpr u64 kInfinite = ~u64{0};
+// Gains in percent (section 5.6.1's table).
+constexpr u64 kBbrStartupPacingGain = 277U; // 4 ln 2: the least that doubles the sending rate each round
+constexpr u64 kBbrDrainPacingGain = 50U;
+constexpr u64 kBbrDownPacingGain = 90U;
+constexpr u64 kBbrUpPacingGain = 125U;
+constexpr u64 kBbrUnitGain = 100U;
+constexpr u64 kBbrDefaultCwndGain = 200U;
+constexpr u64 kBbrUpCwndGain = 225U;
+constexpr u64 kBbrProbeRttCwndGain = 50U;
+constexpr u64 kBbrPacingMarginPercent = 1U;
+constexpr u64 kBbrLossThreshPercent = 2U;
+constexpr u64 kBbrBetaPercent = 70U;
+constexpr u64 kBbrHeadroomPercent = 15U;
+constexpr u64 kBbrMinPipePackets = 4U;
+constexpr u64 kBbrMinRttFilterNs = 10U * kNanosPerSecond;
+constexpr u64 kBbrProbeRttDurationNs = 200000000U;
+// The filter keeps samples at most this many cycles old: the current and the previous cycle (MaxBwFilterLen 2).
+constexpr u64 kBbrMaxBwFilterCycles = 1U;
+constexpr u64 kBbrExtraAckedFilterRounds = 10U;
+constexpr u32 kBbrStartupFullLossCount = 6U;
+constexpr u32 kBbrFullBwRounds = 3U;
+constexpr u64 kBbrDrainMaxRounds = 3U;
+constexpr u64 kBbrProbeWaitBaseNs = 2U * kNanosPerSecond;
+constexpr u64 kBbrProbeWaitRandomNs = kNanosPerSecond;
+constexpr u64 kBbrRenoRoundsBound = 63U;
+constexpr u32 kBbrMaxProbeUpRounds = 30U;
+constexpr u64 kBbrSendQuantumMax = 65536U;
+constexpr u64 kBbrSendQuantumNs = 1000000U;  // the pacing rate's 1 ms
+constexpr u64 kBbrUnsampledRttNs = 1000000U; // InitPacingRate's round trip before any sample
+
+// `x` times `gain` percent; infinite stays infinite, and the product saturates.
+[[nodiscard]] u64 gained(u64 x, u64 gain) noexcept
+{
+    return (x == kInfinite) ? kInfinite : multiply_divide(x, gain, kPercent);
+}
+
+[[nodiscard]] constexpr u64 saturating_add(u64 a, u64 b) noexcept
+{
+    return (a > kInfinite - b) ? kInfinite : a + b;
+}
+
+// Section 5.5.10.2: losses past BBR.LossThresh of what was in flight.
+[[nodiscard]] constexpr bool inflight_too_high(u64 lost, u64 tx_in_flight) noexcept
+{
+    return lost * kPercent > tx_in_flight * kBbrLossThreshPercent;
+}
+
+class Bbr final : public CongestionController
+{
+public:
+    Bbr(const CongestionPolicy& policy, u64 max_datagram, DeliveryRateSampler& delivery, u64 entropy) noexcept
+        : m_policy(policy), m_delivery(delivery), m_rng(entropy)
+    {
+        size(max_datagram);
+        init();
+    }
+
+    void seed(const CongestionState& from) noexcept
+    {
+        m_cwnd = min_u64(max_u64(from.window, m_min_pipe), kCongestionMaxWindow);
+        m_recovery_start_ns = from.recovery_start_ns;
+        m_in_recovery = from.phase == CongestionPhase::Recovery;
+        m_prior_cwnd = m_in_recovery ? m_cwnd : 0U;
+        m_reductions = from.reductions;
+        m_undone = from.undone;
+        m_cwnd_limited = from.limited;
+    }
+
+    [[nodiscard]] CongestionAlgorithm algorithm() const noexcept override { return CongestionAlgorithm::Bbr; }
+
+    void on_sent(const CongestionPacket& packet, u64 in_flight, u64 now_ns) noexcept override
+    {
+        if (in_flight <= packet.bytes && m_delivery.app_limited())
+        {
+            restart_from_idle(now_ns); // section 5.4
+        }
+        m_in_flight = in_flight;
+        if (in_flight + m_datagram > m_cwnd)
+        {
+            m_cwnd_limited = true;
+        }
+    }
+
+    void on_limited(bool window, u64 /*now_ns*/) noexcept override
+    {
+        m_cwnd_limited = m_cwnd_limited || window;
+    }
+
+    void on_acked(const CongestionPacket& packet, u64 /*now_ns*/) noexcept override
+    {
+        if (m_in_recovery && packet.sent_ns > m_recovery_start_ns)
+        {
+            m_in_recovery = false; // a packet sent after the loss arrived: recovery ends (section 5.6.4.4)
+            m_recovery_ending = true;
+        }
+    }
+
+    void on_ack_end(const QuicRtt& rtt, bool sampled, u64 in_flight, u64 now_ns) noexcept override
+    {
+        m_in_flight = in_flight;
+        const DeliverySample& rs = m_delivery.sample();
+        if (!rs.acked)
+        {
+            return; // nothing counted in flight was delivered: no sample (section 4.1.2.3)
+        }
+        if (m_pacing_rate == 0U)
+        {
+            m_pacing_rate = initial_pacing_rate(rtt);
+        }
+        update_model_and_state(rs, sampled ? rtt.latest_ns : kNeverNs, now_ns);
+        set_pacing_rate(m_pacing_gain);
+        set_send_quantum();
+        set_cwnd(rs);
+    }
+
+    void on_lost(const CongestionPacket& packet, u64 now_ns) noexcept override
+    {
+        if (m_recovery_start_ns == kNeverNs || packet.sent_ns > m_recovery_start_ns)
+        {
+            // A loss no recovery period covers (RFC 9002 section 7.3.2): Fast Recovery begins.
+            save_cwnd();
+            m_recovery_start_ns = now_ns;
+            m_in_recovery = true;
+            save_state_upon_loss();
+            m_episode_start_ns = now_ns;
+            m_episode_lost = 0U;
+            m_episode_spurious = 0U;
+            m_episode_reductions = m_reductions;
+            m_undoable = true;
+        }
+        m_episode_lost += packet.bytes;
+        note_loss();
+        if (!m_check_probe_loss)
+        {
+            return; // not a packet sent while probing for bandwidth
+        }
+        const DeliveryStamp& stamp = packet.delivery;
+        const u64 lost = m_delivery.lost() - min_u64(stamp.lost, m_delivery.lost());
+        if (inflight_too_high(lost, stamp.in_flight))
+        {
+            handle_inflight_too_high(inflight_at_loss(packet.bytes, stamp.in_flight, lost), stamp.app_limited, now_ns);
+        }
+    }
+
+    // Section 3.7: CE marks are congestion. Outside probing they count as a loss of the round; while probing
+    // (Startup, ProbeBW_REFILL and ProbeBW_UP) they show the inflight was too high, and Startup ends.
+    void on_congestion(u64 /*newest_sent_ns*/, u64 now_ns) noexcept override
+    {
+        m_undoable = false; // a mark is no spurious loss
+        note_loss();
+        const DeliverySample& rs = m_delivery.sample();
+        if (m_mode == CongestionPhase::SlowStart && !m_full_bw_reached)
+        {
+            handle_inflight_too_high(rs.tx_in_flight, rs.app_limited, now_ns);
+            m_full_bw_reached = true; // CheckStartupDone() enters Drain at the frame's end
+            return;
+        }
+        if (m_check_probe_loss)
+        {
+            handle_inflight_too_high(rs.tx_in_flight, rs.app_limited, now_ns);
+        }
+    }
+
+    // Section 5.6.4.4's OnEnterRTO: QUIC's persistent congestion takes the window to RFC 9002's minimum.
+    void on_persistent_congestion(u64 /*now_ns*/) noexcept override
+    {
+        save_cwnd();
+        save_state_upon_loss();
+        m_cwnd = m_minimum;
+        m_undoable = false;
+        ++m_reductions;
+    }
+
+    void on_spurious(const CongestionPacket& packet, u64 lost_ns, u64 /*now_ns*/) noexcept override
+    {
+        if (!m_undoable || lost_ns < m_episode_start_ns)
+        {
+            return; // a loss of an earlier episode
+        }
+        m_episode_spurious += packet.bytes;
+        if (m_episode_spurious < m_episode_lost)
+        {
+            return;
+        }
+        m_undone += (m_reductions > m_episode_reductions) ? 1U : 0U;
+        handle_spurious_loss();
+        m_undoable = false;
+    }
+
+    void reset(u64 /*now_ns*/) noexcept override { init(); }
+
+    void set_max_datagram(u64 bytes) noexcept override
+    {
+        const bool initial = m_cwnd == m_initial;
+        size(min_u64(max_u64(bytes, kQuicMinInitialDatagram), kMaxDatagram));
+        m_cwnd = initial ? m_initial : min_u64(max_u64(m_cwnd, m_min_pipe), kCongestionMaxWindow);
+    }
+
+    [[nodiscard]] u64 window() const noexcept override { return m_cwnd; }
+
+    [[nodiscard]] u64 pacing_rate(const QuicRtt& rtt) const noexcept override
+    {
+        return (m_pacing_rate != 0U) ? m_pacing_rate : initial_pacing_rate(rtt);
+    }
+
+    [[nodiscard]] u64 burst() const noexcept override { return m_send_quantum; }
+
+    [[nodiscard]] CongestionState state() const noexcept override
+    {
+        CongestionState out;
+        out.window = m_cwnd;
+        out.slow_start_threshold = m_full_bw_reached ? max_u64(m_cwnd, m_minimum) : kCongestionMaxWindow;
+        out.recovery_start_ns = m_recovery_start_ns;
+        out.reductions = m_reductions;
+        out.undone = m_undone;
+        out.bandwidth = m_bw;
+        out.min_rtt_ns = (m_min_rtt_ns == kInfinite) ? 0U : m_min_rtt_ns;
+        out.phase = m_in_recovery ? CongestionPhase::Recovery : m_mode;
+        out.limited = cwnd_limited();
+        return out;
+    }
+
+private:
+    enum class Undo : u8
+    {
+        None,
+        Startup,
+        ProbeBwUp,
+    };
+
+    void size(u64 max_datagram) noexcept
+    {
+        const u64 packets = m_policy.initial_packets;
+        m_datagram = max_datagram;
+        m_minimum = m_policy.minimum_packets * max_datagram;
+        m_min_pipe = max_u64(kBbrMinPipePackets * max_datagram, m_minimum);
+        m_initial = min_u64(packets * max_datagram, max_u64(packets * kInitialBytesPerPacket, 2U * max_datagram));
+        m_initial = max_u64(m_initial, m_minimum);
+    }
+
+    // Section 5.2.1's OnInit.
+    void init() noexcept
+    {
+        m_cwnd = m_initial;
+        m_pacing_rate = 0U;
+        m_send_quantum = min_u64(max_u64(m_initial, 2U * m_datagram), kBbrSendQuantumMax);
+        m_max_bw_filter = WindowedMax<u64>(kBbrMaxBwFilterCycles);
+        m_max_bw = 0U;
+        m_bw = 0U;
+        m_cycle_count = 0U;
+        m_min_rtt_ns = kInfinite;
+        m_min_rtt_stamp_ns = kNeverNs;
+        m_min_rtt_expired = false;
+        m_probe_rtt_done_ns = 0U;
+        m_probe_rtt_round_done = false;
+        m_probe_rtt_cwnd = kInfinite;
+        m_prior_cwnd = 0U;
+        m_undo = Undo::None;
+        m_undo_bw_shortterm = 0U;
+        m_undo_inflight_shortterm = 0U;
+        m_undo_inflight_longterm = 0U;
+        m_idle_restart = false;
+        m_extra_acked_filter = WindowedMax<u64>(1U);
+        m_extra_acked = 0U;
+        m_extra_acked_start_ns = 0U;
+        m_extra_acked_delivered = 0U;
+        m_full_bw_reached = false;
+        m_inflight_longterm = kInfinite;
+        m_probe_up_acked_per_inc = kInfinite;
+        m_bw_probe_up_acked = 0U;
+        m_bw_probe_up_rounds = 0U;
+        m_rounds_since_probe_up = 0U;
+        m_check_probe_loss = false;
+        m_prev_probe_too_high = false;
+        m_prev_probe_precautionary = false;
+        m_is_bw_probe_stopping = false;
+        m_cycle_stamp_ns = 0U;
+        m_bw_probe_wait_ns = 0U;
+        m_loss_round_delivered = 0U;
+        m_loss_round_start = false;
+        m_recovery_start_ns = kNeverNs;
+        m_in_recovery = false;
+        m_recovery_ending = false;
+        m_undoable = false;
+        m_cwnd_limited = false;
+        m_cwnd_limited_before = false;
+        reset_congestion_signals();
+        reset_short_term_model();
+        m_next_round_delivered = 0U; // InitRoundCounting
+        m_round_start = false;
+        m_round_count = 0U;
+        reset_full_bw();
+        enter_startup();
+    }
+
+    // ---- the per-ACK model and state (section 5.2.3) ----
+
+    void update_model_and_state(const DeliverySample& rs, u64 rtt_ns, u64 now_ns) noexcept
+    {
+        update_latest_delivery_signals(rs);
+        update_congestion_signals(rs);
+        update_ack_aggregation(rs, now_ns);
+        check_full_bw_reached(rs);
+        check_startup_done(rs);
+        check_drain_done(now_ns);
+        update_probe_bw_cycle_phase(rs, now_ns);
+        update_min_rtt(rtt_ns, now_ns);
+        check_probe_rtt(rs, now_ns);
+        advance_latest_delivery_signals(rs);
+        m_bw = min_u64(m_max_bw, m_bw_shortterm); // BoundBWForModel
+    }
+
+    // Section 5.5.1.
+    void start_round() noexcept { m_next_round_delivered = m_delivery.delivered(); }
+
+    void update_round(const DeliverySample& rs) noexcept
+    {
+        m_round_start = rs.prior_delivered >= m_next_round_delivered;
+        if (!m_round_start)
+        {
+            return;
+        }
+        start_round();
+        ++m_round_count;
+        ++m_rounds_since_probe_up;
+        m_cwnd_limited_before = m_cwnd_limited;
+        m_cwnd_limited = false;
+    }
+
+    [[nodiscard]] bool cwnd_limited() const noexcept { return m_cwnd_limited || m_cwnd_limited_before; }
+
+    // Section 5.5.5: an application-limited sample counts only when it raises the estimate.
+    void update_max_bw(const DeliverySample& rs) noexcept
+    {
+        update_round(rs);
+        if (rs.rate > 0U && (rs.rate >= m_max_bw || !rs.app_limited))
+        {
+            m_max_bw_filter.update(rs.rate, m_cycle_count);
+            m_max_bw = m_max_bw_filter.best();
+        }
+    }
+
+    // Section 5.5.10.3.
+    void update_latest_delivery_signals(const DeliverySample& rs) noexcept
+    {
+        m_loss_round_start = false;
+        m_bw_latest = max_u64(m_bw_latest, rs.rate);
+        m_inflight_latest = max_u64(m_inflight_latest, rs.delivered);
+        if (rs.prior_delivered >= m_loss_round_delivered)
+        {
+            m_loss_round_delivered = m_delivery.delivered();
+            m_loss_round_start = true;
+        }
+    }
+
+    void advance_latest_delivery_signals(const DeliverySample& rs) noexcept
+    {
+        if (m_loss_round_start)
+        {
+            m_bw_latest = rs.rate;
+            m_inflight_latest = rs.delivered;
+            m_loss_events_in_round = 0U;
+        }
+    }
+
+    void reset_congestion_signals() noexcept
+    {
+        m_is_loss_in_round = false;
+        m_loss_events_in_round = 0U;
+        m_bw_latest = 0U;
+        m_inflight_latest = 0U;
+    }
+
+    void update_congestion_signals(const DeliverySample& rs) noexcept
+    {
+        update_max_bw(rs);
+        if (!m_loss_round_start)
+        {
+            return; // once a round trip
+        }
+        if (!is_probing_bw() && m_is_loss_in_round)
+        {
+            // AdaptLowerBoundsFromCongestion: the short-term model takes the round's loss.
+            m_bw_shortterm = (m_bw_shortterm == kInfinite) ? m_max_bw : m_bw_shortterm;
+            m_inflight_shortterm = (m_inflight_shortterm == kInfinite) ? m_cwnd : m_inflight_shortterm;
+            m_bw_shortterm = max_u64(m_bw_latest, gained(m_bw_shortterm, kBbrBetaPercent));
+            m_inflight_shortterm = max_u64(m_inflight_latest, gained(m_inflight_shortterm, kBbrBetaPercent));
+            ++m_reductions;
+        }
+        m_is_loss_in_round = false;
+    }
+
+    void reset_short_term_model() noexcept
+    {
+        m_bw_shortterm = kInfinite;
+        m_inflight_shortterm = kInfinite;
+    }
+
+    // Section 5.5.9.
+    void update_ack_aggregation(const DeliverySample& rs, u64 now_ns) noexcept
+    {
+        const u64 interval = now_ns - min_u64(m_extra_acked_start_ns, now_ns);
+        u64 expected = multiply_divide(m_bw, interval, kNanosPerSecond);
+        if (m_extra_acked_delivered <= expected)
+        {
+            m_extra_acked_delivered = 0U; // the ACK rate fell below the expected: a new interval
+            m_extra_acked_start_ns = now_ns;
+            expected = 0U;
+        }
+        m_extra_acked_delivered += rs.newly_acked;
+        const u64 extra = min_u64(m_extra_acked_delivered - expected, m_cwnd);
+        m_extra_acked_filter.set_window(m_full_bw_reached ? kBbrExtraAckedFilterRounds : 1U);
+        m_extra_acked_filter.update(extra, m_round_count);
+        m_extra_acked = m_extra_acked_filter.best();
+    }
+
+    // ---- Startup and Drain (sections 5.3.1 and 5.3.2) ----
+
+    void enter_startup() noexcept
+    {
+        m_mode = CongestionPhase::SlowStart;
+        m_pacing_gain = kBbrStartupPacingGain;
+        m_cwnd_gain = kBbrDefaultCwndGain;
+    }
+
+    void reset_full_bw() noexcept
+    {
+        m_full_bw = 0U;
+        m_full_bw_count = 0U;
+        m_full_bw_now = false;
+    }
+
+    // Section 5.3.1.2: three non-application-limited rounds without 25% growth fill the pipe.
+    void check_full_bw_reached(const DeliverySample& rs) noexcept
+    {
+        if (m_full_bw_now || !m_round_start || rs.app_limited)
+        {
+            return;
+        }
+        if (rs.rate >= saturating_add(m_full_bw, m_full_bw / 4U))
+        {
+            reset_full_bw();
+            m_full_bw = rs.rate;
+            return;
+        }
+        ++m_full_bw_count;
+        m_full_bw_now = m_full_bw_count >= kBbrFullBwRounds;
+        m_full_bw_reached = m_full_bw_reached || m_full_bw_now;
+    }
+
+    // Section 5.3.1.3.
+    void check_startup_done(const DeliverySample& rs) noexcept
+    {
+        if (!m_full_bw_reached && m_loss_round_start && m_in_recovery &&
+            m_loss_events_in_round >= kBbrStartupFullLossCount && inflight_too_high(rs.lost, rs.tx_in_flight))
+        {
+            m_undo = Undo::Startup;
+            m_full_bw_reached = true;
+            m_inflight_longterm = max_u64(bdp(), m_inflight_latest);
+            ++m_reductions;
+        }
+        if (m_mode == CongestionPhase::SlowStart && m_full_bw_reached)
+        {
+            m_mode = CongestionPhase::Drain; // EnterDrain
+            m_pacing_gain = kBbrDrainPacingGain;
+            m_cwnd_gain = kBbrDefaultCwndGain;
+            m_drain_start_round = m_round_count;
+        }
+    }
+
+    void check_drain_done(u64 now_ns) noexcept
+    {
+        if (m_mode == CongestionPhase::Drain &&
+            (m_in_flight <= inflight(m_bw, kBbrUnitGain) || m_round_count > m_drain_start_round + kBbrDrainMaxRounds))
+        {
+            m_cwnd_gain = kBbrDefaultCwndGain; // EnterProbeBW
+            start_probe_bw_down(now_ns);
+        }
+    }
+
+    // ---- ProbeBW (section 5.3.3) ----
+
+    [[nodiscard]] bool in_probe_bw() const noexcept
+    {
+        return m_mode == CongestionPhase::ProbeBwDown || m_mode == CongestionPhase::ProbeBwCruise ||
+               m_mode == CongestionPhase::ProbeBwRefill || m_mode == CongestionPhase::ProbeBwUp;
+    }
+
+    [[nodiscard]] bool is_probing_bw() const noexcept
+    {
+        return m_mode == CongestionPhase::SlowStart || m_mode == CongestionPhase::ProbeBwRefill ||
+               m_mode == CongestionPhase::ProbeBwUp;
+    }
+
+    void start_probe_bw_down(u64 now_ns) noexcept
+    {
+        reset_congestion_signals();
+        m_probe_up_acked_per_inc = kInfinite; // not growing the long-term inflight
+        pick_probe_wait();
+        m_cycle_stamp_ns = now_ns;
+        m_is_bw_probe_stopping = true;
+        start_round();
+        m_mode = CongestionPhase::ProbeBwDown;
+        m_pacing_gain = kBbrDownPacingGain;
+        m_cwnd_gain = kBbrDefaultCwndGain;
+    }
+
+    void start_probe_bw_cruise() noexcept
+    {
+        m_mode = CongestionPhase::ProbeBwCruise;
+        m_pacing_gain = kBbrUnitGain;
+        m_cwnd_gain = kBbrDefaultCwndGain;
+    }
+
+    void start_probe_bw_refill() noexcept
+    {
+        reset_short_term_model();
+        m_bw_probe_up_rounds = 0U;
+        m_bw_probe_up_acked = 0U;
+        m_prev_probe_precautionary = false;
+        m_is_bw_probe_stopping = false;
+        start_round();
+        m_mode = CongestionPhase::ProbeBwRefill;
+        m_pacing_gain = kBbrUnitGain;
+        m_cwnd_gain = kBbrDefaultCwndGain;
+    }
+
+    void start_probe_bw_up(const DeliverySample& rs) noexcept
+    {
+        start_round();
+        reset_full_bw();
+        m_full_bw = rs.rate;
+        m_mode = CongestionPhase::ProbeBwUp;
+        m_pacing_gain = kBbrUpPacingGain;
+        m_cwnd_gain = kBbrUpCwndGain;
+        raise_inflight_longterm_slope();
+    }
+
+    void update_probe_bw_cycle_phase(const DeliverySample& rs, u64 now_ns) noexcept
+    {
+        if (!m_full_bw_reached || adapt_long_term_model(rs) || !in_probe_bw())
+        {
+            return;
+        }
+        switch (m_mode)
+        {
+            case CongestionPhase::ProbeBwDown:
+            {
+                if (!time_to_probe_bw(now_ns) && time_to_cruise())
+                {
+                    start_probe_bw_cruise();
+                }
+                break;
+            }
+            case CongestionPhase::ProbeBwCruise:
+            {
+                static_cast<void>(time_to_probe_bw(now_ns));
+                break;
+            }
+            case CongestionPhase::ProbeBwRefill:
+            {
+                if (m_round_start) // one round of REFILL, then UP
+                {
+                    m_check_probe_loss = true;
+                    start_probe_bw_up(rs);
+                }
+                break;
+            }
+            case CongestionPhase::ProbeBwUp:
+            {
+                if (time_to_go_down(rs))
+                {
+                    m_prev_probe_too_high = false; // no high loss yet
+                    start_probe_bw_down(now_ns);
+                }
+                break;
+            }
+            default:
+            {
+                break;
+            }
+        }
+    }
+
+    // Section 5.3.3.8.2: the wall clock bound of 2 to 3 s and the Reno bound of the BDP in packets, at most 63
+    // rounds, whichever comes first; the round bound starts 0 or 1 rounds in.
+    void pick_probe_wait() noexcept
+    {
+        m_rounds_since_probe_up = m_rng.next_u32() & 1U;
+        m_bw_probe_wait_ns = kBbrProbeWaitBaseNs + m_rng.next_below(kBbrProbeWaitRandomNs);
+    }
+
+    [[nodiscard]] bool time_to_probe_bw(u64 now_ns) noexcept
+    {
+        const bool elapsed = now_ns > saturating_add(m_cycle_stamp_ns, m_bw_probe_wait_ns);
+        const u64 reno_rounds = min_u64(target_inflight() / m_datagram, kBbrRenoRoundsBound);
+        if (!elapsed && m_rounds_since_probe_up < reno_rounds)
+        {
+            return false;
+        }
+        start_probe_bw_refill();
+        return true;
+    }
+
+    [[nodiscard]] bool time_to_cruise() const noexcept
+    {
+        return m_in_flight <= inflight_with_headroom() && m_in_flight <= inflight(m_max_bw, kBbrUnitGain);
+    }
+
+    [[nodiscard]] bool time_to_go_down(const DeliverySample& rs) noexcept
+    {
+        if (m_prev_probe_too_high && m_in_flight >= m_inflight_longterm)
+        {
+            m_prev_probe_precautionary = true; // section 5.3.3.6's deceleration
+            return true;
+        }
+        if (cwnd_limited() && m_cwnd >= m_inflight_longterm)
+        {
+            reset_full_bw(); // the long-term inflight limits the bandwidth found
+            m_full_bw = rs.rate;
+            return false;
+        }
+        return m_full_bw_now;
+    }
+
+    [[nodiscard]] u64 inflight_with_headroom() const noexcept
+    {
+        if (m_inflight_longterm == kInfinite)
+        {
+            return kInfinite;
+        }
+        const u64 headroom = max_u64(m_datagram, gained(m_inflight_longterm, kBbrHeadroomPercent));
+        return max_u64(m_inflight_longterm - min_u64(headroom, m_inflight_longterm), m_min_pipe);
+    }
+
+    void raise_inflight_longterm_slope() noexcept
+    {
+        const u64 growth = u64{1} << m_bw_probe_up_rounds;
+        m_bw_probe_up_rounds = (m_bw_probe_up_rounds < kBbrMaxProbeUpRounds) ? m_bw_probe_up_rounds + 1U
+                                                                               : kBbrMaxProbeUpRounds;
+        m_probe_up_acked_per_inc = max_u64(m_cwnd / growth, m_datagram);
+    }
+
+    void probe_inflight_longterm_upward(const DeliverySample& rs) noexcept
+    {
+        if (!cwnd_limited() || m_cwnd < m_inflight_longterm)
+        {
+            return; // not using all of it, so it does not grow
+        }
+        m_bw_probe_up_acked += rs.newly_acked;
+        if (m_bw_probe_up_acked >= m_probe_up_acked_per_inc)
+        {
+            const u64 delta = m_bw_probe_up_acked / m_probe_up_acked_per_inc;
+            m_bw_probe_up_acked -= delta * m_probe_up_acked_per_inc;
+            m_inflight_longterm =
+                min_u64(saturating_add(m_inflight_longterm, delta * m_datagram), kCongestionMaxWindow);
+        }
+        if (m_round_start)
+        {
+            raise_inflight_longterm_slope();
+        }
+    }
+
+    // True when it decided a state transition.
+    [[nodiscard]] bool adapt_long_term_model(const DeliverySample& rs) noexcept
+    {
+        if (m_is_bw_probe_stopping && m_round_start)
+        {
+            // The probe's samples have all arrived.
+            m_check_probe_loss = false;
+            m_is_bw_probe_stopping = false;
+            if (in_probe_bw() && !rs.app_limited)
+            {
+                ++m_cycle_count; // AdvanceMaxBwFilter
+            }
+            if (in_probe_bw() && m_prev_probe_precautionary && !m_prev_probe_too_high)
+            {
+                start_probe_bw_refill(); // section 5.3.3.6's acceleration
+                return true;
+            }
+        }
+        if (inflight_too_high(rs.lost, rs.tx_in_flight) || m_inflight_longterm == kInfinite)
+        {
+            return false;
+        }
+        m_inflight_longterm = max_u64(m_inflight_longterm, rs.tx_in_flight); // the loss rate is safe
+        if (m_mode == CongestionPhase::ProbeBwUp)
+        {
+            probe_inflight_longterm_upward(rs);
+        }
+        return false;
+    }
+
+    // ---- loss (section 5.5.10) ----
+
+    void note_loss() noexcept
+    {
+        if (!m_is_loss_in_round)
+        {
+            m_loss_round_delivered = m_delivery.delivered(); // the first loss of this round trip
+            save_state_upon_loss();
+        }
+        m_is_loss_in_round = true;
+        ++m_loss_events_in_round;
+    }
+
+    void handle_inflight_too_high(u64 tx_in_flight, bool app_limited, u64 now_ns) noexcept
+    {
+        m_prev_probe_too_high = true;
+        m_check_probe_loss = false; // once a probe
+        if (!app_limited)
+        {
+            m_inflight_longterm =
+                min_u64(max_u64(tx_in_flight, gained(target_inflight(), kBbrBetaPercent)), kCongestionMaxWindow);
+        }
+        ++m_reductions;
+        if (m_mode == CongestionPhase::ProbeBwUp)
+        {
+            m_undo = Undo::ProbeBwUp;
+            start_probe_bw_down(now_ns);
+        }
+    }
+
+    // The bytes in flight at which this packet's losses crossed the threshold: the threshold of what was in flight
+    // before it, less what was lost before it, over (1 - the threshold) of its own bytes.
+    [[nodiscard]] static u64 inflight_at_loss(u64 bytes, u64 tx_in_flight, u64 lost) noexcept
+    {
+        const u64 before = tx_in_flight - min_u64(bytes, tx_in_flight);
+        const u64 lost_before = lost - min_u64(bytes, lost);
+        const u64 allowed = before * kBbrLossThreshPercent;
+        const u64 taken = lost_before * kPercent;
+        const u64 prefix = (allowed > taken) ? (allowed - taken) / (kPercent - kBbrLossThreshPercent) : 0U;
+        return before + prefix;
+    }
+
+    // Section 5.5.11.
+    void save_state_upon_loss() noexcept
+    {
+        save_cwnd();
+        m_undo = Undo::None;
+        m_undo_bw_shortterm = m_bw_shortterm;
+        m_undo_inflight_shortterm = m_inflight_shortterm;
+        m_undo_inflight_longterm = m_inflight_longterm;
+    }
+
+    void handle_spurious_loss() noexcept
+    {
+        restore_cwnd();
+        m_in_recovery = false;
+        m_is_loss_in_round = false;
+        m_loss_events_in_round = 0U;
+        reset_full_bw();
+        m_bw_shortterm = max_u64(m_bw_shortterm, m_undo_bw_shortterm);
+        m_inflight_shortterm = max_u64(m_inflight_shortterm, m_undo_inflight_shortterm);
+        m_inflight_longterm = max_u64(m_inflight_longterm, m_undo_inflight_longterm);
+        if (m_undo == Undo::Startup && m_mode != CongestionPhase::SlowStart)
+        {
+            m_full_bw_reached = false;
+            if (m_mode != CongestionPhase::ProbeRtt)
+            {
+                enter_startup();
+            }
+        }
+        else if (m_undo == Undo::ProbeBwUp && m_mode != CongestionPhase::ProbeBwUp &&
+                 m_mode != CongestionPhase::ProbeRtt)
+        {
+            start_probe_bw_refill();
+        }
+        m_undo = Undo::None;
+    }
+
+    // ---- ProbeRTT and idle restarts (sections 5.3.4 and 5.4) ----
+
+    void update_min_rtt(u64 rtt_ns, u64 now_ns) noexcept
+    {
+        m_min_rtt_expired =
+            m_min_rtt_stamp_ns != kNeverNs && now_ns > saturating_add(m_min_rtt_stamp_ns, kBbrMinRttFilterNs);
+        if (m_min_rtt_expired)
+        {
+            m_probe_rtt_cwnd = bdp_multiple(m_bw, kBbrProbeRttCwndGain);
+        }
+        if (rtt_ns != kNeverNs && (rtt_ns < m_min_rtt_ns || m_min_rtt_expired))
+        {
+            m_min_rtt_ns = rtt_ns;
+            m_min_rtt_stamp_ns = now_ns;
+        }
+    }
+
+    void check_probe_rtt(const DeliverySample& rs, u64 now_ns) noexcept
+    {
+        if (m_mode != CongestionPhase::ProbeRtt && m_min_rtt_expired && !m_idle_restart)
+        {
+            save_cwnd();
+            m_mode = CongestionPhase::ProbeRtt; // EnterProbeRTT
+            m_pacing_gain = kBbrUnitGain;
+            m_cwnd_gain = kBbrProbeRttCwndGain;
+            m_probe_rtt_done_ns = 0U;
+            m_is_bw_probe_stopping = true;
+            start_round();
+        }
+        if (m_mode == CongestionPhase::ProbeRtt)
+        {
+            handle_probe_rtt(now_ns);
+        }
+        if (rs.delivered > 0U)
+        {
+            m_idle_restart = false;
+        }
+    }
+
+    void handle_probe_rtt(u64 now_ns) noexcept
+    {
+        m_delivery.on_app_limited(m_in_flight); // its low rate samples count for nothing
+        if (m_probe_rtt_done_ns == 0U && m_in_flight <= probe_rtt_cwnd())
+        {
+            // At least ProbeRTTDuration and one round at the low inflight.
+            m_probe_rtt_done_ns = max_u64(saturating_add(now_ns, kBbrProbeRttDurationNs), 1U);
+            m_probe_rtt_round_done = false;
+            start_round();
+            return;
+        }
+        if (m_probe_rtt_done_ns != 0U)
+        {
+            m_probe_rtt_round_done = m_probe_rtt_round_done || m_round_start;
+            if (m_probe_rtt_round_done)
+            {
+                check_probe_rtt_done(now_ns);
+            }
+        }
+    }
+
+    void check_probe_rtt_done(u64 now_ns) noexcept
+    {
+        if (m_probe_rtt_done_ns == 0U || now_ns <= m_probe_rtt_done_ns)
+        {
+            return;
+        }
+        m_min_rtt_stamp_ns = now_ns; // the next ProbeRTT is due a filter length from now
+        restore_cwnd();
+        reset_short_term_model(); // ExitProbeRTT
+        if (m_full_bw_reached)
+        {
+            start_probe_bw_down(now_ns);
+            start_probe_bw_cruise();
+        }
+        else
+        {
+            enter_startup();
+        }
+    }
+
+    void restart_from_idle(u64 now_ns) noexcept
+    {
+        m_idle_restart = true;
+        m_extra_acked_start_ns = now_ns;
+        if (in_probe_bw())
+        {
+            set_pacing_rate(kBbrUnitGain);
+        }
+        else if (m_mode == CongestionPhase::ProbeRtt)
+        {
+            check_probe_rtt_done(now_ns);
+        }
+    }
+
+    // ---- control parameters (section 5.6) ----
+
+    // InitPacingRate: the initial window over the smoothed RTT (1 ms before a sample), at Startup's gain.
+    [[nodiscard]] u64 initial_pacing_rate(const QuicRtt& rtt) const noexcept
+    {
+        const u64 round_trip = rtt.sampled() ? max_u64(rtt.smoothed_ns, 1U) : kBbrUnsampledRttNs;
+        return max_u64(gained(multiply_divide(m_cwnd, kNanosPerSecond, round_trip), kBbrStartupPacingGain), 1U);
+    }
+
+    void set_pacing_rate(u64 gain) noexcept
+    {
+        const u64 rate = multiply_divide(m_bw, gain * (kPercent - kBbrPacingMarginPercent), kPercent * kPercent);
+        if (rate != 0U && (m_full_bw_reached || rate > m_pacing_rate))
+        {
+            m_pacing_rate = rate;
+        }
+    }
+
+    void set_send_quantum() noexcept
+    {
+        const u64 quantum = multiply_divide(m_pacing_rate, kBbrSendQuantumNs, kNanosPerSecond);
+        m_send_quantum = max_u64(min_u64(quantum, kBbrSendQuantumMax), 2U * m_datagram);
+    }
+
+    [[nodiscard]] u64 bdp() const noexcept
+    {
+        return bdp_multiple(m_bw, kBbrUnitGain);
+    }
+
+    [[nodiscard]] u64 bdp_multiple(u64 bw, u64 gain) const noexcept
+    {
+        if (m_min_rtt_ns == kInfinite)
+        {
+            return m_initial; // no RTT sample yet
+        }
+        return min_u64(gained(multiply_divide(bw, m_min_rtt_ns, kNanosPerSecond), gain), kCongestionMaxWindow);
+    }
+
+    [[nodiscard]] u64 target_inflight() const noexcept { return min_u64(bdp(), m_cwnd); }
+
+    // QuantizationBudget: the QUIC offload budget is the send quantum.
+    [[nodiscard]] u64 quantization_budget(u64 cap) const noexcept
+    {
+        cap = max_u64(max_u64(cap, m_send_quantum), m_min_pipe);
+        return (m_mode == CongestionPhase::ProbeBwUp) ? saturating_add(cap, 2U * m_datagram) : cap;
+    }
+
+    [[nodiscard]] u64 inflight(u64 bw, u64 gain) const noexcept { return quantization_budget(bdp_multiple(bw, gain)); }
+
+    [[nodiscard]] u64 probe_rtt_cwnd() const noexcept
+    {
+        return max_u64(min_u64(bdp_multiple(m_bw, kBbrProbeRttCwndGain), m_probe_rtt_cwnd), m_min_pipe);
+    }
+
+    void save_cwnd() noexcept
+    {
+        m_prior_cwnd =
+            (!m_in_recovery && m_mode != CongestionPhase::ProbeRtt) ? m_cwnd : max_u64(m_prior_cwnd, m_cwnd);
+    }
+
+    void restore_cwnd() noexcept { m_cwnd = max_u64(m_cwnd, m_prior_cwnd); }
+
+    // Section 5.6.4.6, with 5.6.4.4's restore on leaving recovery and the bounds of 5.6.4.5 and 5.6.4.7.
+    void set_cwnd(const DeliverySample& rs) noexcept
+    {
+        if (m_recovery_ending)
+        {
+            m_recovery_ending = false;
+            restore_cwnd();
+        }
+        const u64 max_inflight = quantization_budget(saturating_add(bdp_multiple(m_bw, m_cwnd_gain), m_extra_acked));
+        if (m_full_bw_reached)
+        {
+            m_cwnd = min_u64(saturating_add(m_cwnd, rs.newly_acked), max_inflight);
+        }
+        else if (m_cwnd < max_inflight || m_delivery.delivered() < m_initial)
+        {
+            m_cwnd = saturating_add(m_cwnd, rs.newly_acked);
+        }
+        m_cwnd = max_u64(m_cwnd, m_min_pipe);
+        if (m_mode == CongestionPhase::ProbeRtt)
+        {
+            m_cwnd = min_u64(m_cwnd, probe_rtt_cwnd());
+        }
+        u64 cap = kInfinite;
+        if (in_probe_bw() && m_mode != CongestionPhase::ProbeBwCruise)
+        {
+            cap = m_inflight_longterm;
+        }
+        else if (m_mode == CongestionPhase::ProbeRtt || m_mode == CongestionPhase::ProbeBwCruise)
+        {
+            cap = inflight_with_headroom();
+        }
+        cap = max_u64(min_u64(cap, m_inflight_shortterm), m_min_pipe);
+        m_cwnd = min_u64(min_u64(m_cwnd, cap), kCongestionMaxWindow);
+    }
+
+    CongestionPolicy m_policy;
+    DeliveryRateSampler& m_delivery;
+    hesap::stats::PhiloxRng m_rng;
+    u64 m_datagram = 0U;
+    u64 m_minimum = 0U;  // RFC 9002's minimum window
+    u64 m_min_pipe = 0U; // BBR.MinPipeCwnd, at least the minimum window
+    u64 m_initial = 0U;
+
+    // Control parameters.
+    u64 m_cwnd = 0U;
+    u64 m_pacing_rate = 0U; // 0 until the first ACK: InitPacingRate's from the RTT then
+    u64 m_send_quantum = 0U;
+    u64 m_pacing_gain = kBbrStartupPacingGain;
+    u64 m_cwnd_gain = kBbrDefaultCwndGain;
+    u64 m_in_flight = 0U;
+    CongestionPhase m_mode = CongestionPhase::SlowStart;
+
+    // Rounds.
+    u64 m_next_round_delivered = 0U;
+    u64 m_round_count = 0U;
+    bool m_round_start = false;
+    bool m_cwnd_limited = false;        // this round
+    bool m_cwnd_limited_before = false; // the round before
+
+    // The model.
+    WindowedMax<u64> m_max_bw_filter{kBbrMaxBwFilterCycles};
+    WindowedMax<u64> m_extra_acked_filter{1U};
+    u64 m_max_bw = 0U;
+    u64 m_bw_shortterm = kInfinite;
+    u64 m_bw = 0U;
+    u64 m_bw_latest = 0U;
+    u64 m_inflight_latest = 0U;
+    u64 m_cycle_count = 0U;
+    u64 m_min_rtt_ns = kInfinite;
+    u64 m_min_rtt_stamp_ns = kNeverNs;
+    u64 m_inflight_longterm = kInfinite;
+    u64 m_inflight_shortterm = kInfinite;
+    u64 m_extra_acked = 0U;
+    u64 m_extra_acked_start_ns = 0U;
+    u64 m_extra_acked_delivered = 0U;
+    bool m_min_rtt_expired = false;
+
+    // Startup and Drain.
+    u64 m_full_bw = 0U;
+    u64 m_drain_start_round = 0U;
+    u32 m_full_bw_count = 0U;
+    bool m_full_bw_reached = false;
+    bool m_full_bw_now = false;
+
+    // Loss signals.
+    u64 m_loss_round_delivered = 0U;
+    u32 m_loss_events_in_round = 0U;
+    bool m_loss_round_start = false;
+    bool m_is_loss_in_round = false;
+
+    // ProbeBW.
+    u64 m_bw_probe_up_acked = 0U;
+    u64 m_probe_up_acked_per_inc = kInfinite;
+    u64 m_rounds_since_probe_up = 0U;
+    u64 m_bw_probe_wait_ns = 0U;
+    u64 m_cycle_stamp_ns = 0U;
+    u32 m_bw_probe_up_rounds = 0U;
+    bool m_is_bw_probe_stopping = false;
+    bool m_check_probe_loss = false;
+    bool m_prev_probe_too_high = false;
+    bool m_prev_probe_precautionary = false;
+
+    // ProbeRTT and idle restarts.
+    u64 m_probe_rtt_done_ns = 0U;
+    u64 m_probe_rtt_cwnd = kInfinite;
+    u64 m_prior_cwnd = 0U;
+    bool m_probe_rtt_round_done = false;
+    bool m_idle_restart = false;
+
+    // Recovery and the undo of a spurious episode.
+    u64 m_recovery_start_ns = kNeverNs;
+    u64 m_undo_bw_shortterm = 0U;
+    u64 m_undo_inflight_shortterm = 0U;
+    u64 m_undo_inflight_longterm = 0U;
+    u64 m_episode_start_ns = 0U;
+    u64 m_episode_lost = 0U;
+    u64 m_episode_spurious = 0U;
+    u64 m_episode_reductions = 0U;
+    u64 m_reductions = 0U;
+    u64 m_undone = 0U;
+    Undo m_undo = Undo::None;
+    bool m_in_recovery = false;
+    bool m_recovery_ending = false;
+    bool m_undoable = false;
+};
+
 static_assert(sizeof(NewReno) <= kCongestionSlotBytes && alignof(NewReno) <= alignof(CongestionSlot));
 static_assert(sizeof(Cubic) <= kCongestionSlotBytes && alignof(Cubic) <= alignof(CongestionSlot));
+static_assert(sizeof(Bbr) <= kCongestionSlotBytes && alignof(Bbr) <= alignof(CongestionSlot));
 
 [[nodiscard]] i64 scaled_bytes(u64 bytes) noexcept
 {
@@ -591,19 +1653,31 @@ static_assert(sizeof(Cubic) <= kCongestionSlotBytes && alignof(Cubic) <= alignof
 
 bool congestion_policy_valid(const CongestionPolicy& policy) noexcept
 {
-    const bool algorithm =
+    const bool window =
         policy.algorithm == CongestionAlgorithm::NewReno || policy.algorithm == CongestionAlgorithm::Cubic;
-    return policy.version == kCongestionInterfaceVersion && algorithm && policy.minimum_packets >= 2U &&
+    // BBR is version 2's and paces by its model: unpaced, its Startup would send each window at once.
+    const bool bbr = policy.algorithm == CongestionAlgorithm::Bbr && policy.version >= 2U && policy.pacing;
+    return policy.version >= 1U && policy.version <= kCongestionInterfaceVersion && (window || bbr) &&
+           policy.minimum_packets >= 2U &&
            policy.initial_packets >= policy.minimum_packets && policy.initial_packets <= kCongestionMaxInitialPackets &&
            policy.pacing_gain >= kCongestionMinPacingGain && policy.pacing_gain <= kCongestionMaxPacingGain;
 }
 
 CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_datagram, const CongestionState* seed,
-                                      CongestionSlot& slot) noexcept
+                                      CongestionSlot& slot, DeliveryRateSampler& delivery, u64 entropy) noexcept
 {
     if (!congestion_policy_valid(policy) || max_datagram < kQuicMinInitialDatagram || max_datagram > kMaxDatagram)
     {
         return nullptr;
+    }
+    if (policy.algorithm == CongestionAlgorithm::Bbr)
+    {
+        Bbr* const bbr = new (slot.bytes) Bbr(policy, max_datagram, delivery, entropy);
+        if (seed != nullptr)
+        {
+            bbr->seed(*seed);
+        }
+        return bbr;
     }
     WindowController* made = nullptr;
     if (policy.algorithm == CongestionAlgorithm::NewReno)

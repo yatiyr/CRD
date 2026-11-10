@@ -268,7 +268,8 @@ TEST_CASE("QUIC congestion: a full window holds data while ACK-only packets stil
 TEST_CASE("QUIC congestion: transfers over paths that lose, duplicate and reorder reduce the window and arrive intact",
           "[net][net-path][quic-connection]")
 {
-    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::Cubic, CongestionAlgorithm::NewReno})
+    for (const CongestionAlgorithm algorithm :
+         {CongestionAlgorithm::Cubic, CongestionAlgorithm::NewReno, CongestionAlgorithm::Bbr})
     {
         for (u64 seed = 1U; seed <= 4U; ++seed)
         {
@@ -287,11 +288,53 @@ TEST_CASE("QUIC congestion: transfers over paths that lose, duplicate and reorde
             Bulk bulk{pair.client, pair.server, 1U << 18U};
             REQUIRE(pair.net->run_until([&] { return bulk.step(); }, 600000U * kMs));
             const CongestionState state = pair.client.congestion().state();
-            CHECK(state.reductions > 0U);
-            CHECK(state.window >= 2U * 1200U);
+            // BBR's Startup probes through scattered losses: it leaves only past 2% lost in a round of six or more.
+            CHECK((state.reductions > 0U || algorithm == CongestionAlgorithm::Bbr));
+            CHECK(state.window >= ((algorithm == CongestionAlgorithm::Bbr) ? 4U : 2U) * 1200U);
             CHECK(pair.client.state() == QuicConnectionState::Established);
         }
     }
+}
+
+TEST_CASE("QUIC BBR: a transfer over a bottleneck finds its rate and round trip, queues little, stays in its window",
+          "[net][net-path][quic-connection][bbr]")
+{
+    static constexpr u64 kRate = 2000000U;             // 16 Mbit/s
+    static constexpr usize kBdp = kRate / 1000U * 50U; // the Pair's 50 ms round trip: 100 KB
+    CongestionPolicy bbr;
+    bbr.algorithm = CongestionAlgorithm::Bbr;
+    Pair pair(bbr);
+    pair.net->path[0].rate = kRate;
+    pair.net->path[0].buffer = kBdp;
+    WindowWatch watch(pair.client);
+    pair.net->filter = &watch;
+    pair.confirm();
+    CHECK(pair.client.congestion().algorithm() == CongestionAlgorithm::Bbr);
+    const u64 start = pair.net->now;
+    Bulk bulk{pair.client, pair.server, 6U << 20U};
+    REQUIRE(pair.net->run_until([&] { return bulk.read >= bulk.total / 2U || bulk.step(); }));
+    const CongestionState half = pair.client.congestion().state();
+    CHECK(half.bandwidth >= kRate * 90U / 100U);
+    CHECK(half.bandwidth <= kRate * 105U / 100U);
+    CHECK(half.min_rtt_ns >= 50U * kMs);
+    CHECK(half.min_rtt_ns <= 52U * kMs);
+    CHECK(half.phase != CongestionPhase::SlowStart);
+    // A live swap to CUBIC and back keeps the window and the delivery the sampler holds.
+    REQUIRE(pair.client.set_congestion(CongestionPolicy{}));
+    CHECK(pair.client.congestion().window() == half.window);
+    REQUIRE(pair.client.set_congestion(bbr));
+    CHECK(pair.client.congestion().window() == half.window);
+    CHECK(pair.client.delivery().delivered() > bulk.total / 2U);
+
+    const usize allocations = pair.allocator.calls();
+    REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
+    CHECK(pair.allocator.calls() == allocations); // nothing allocated on the way
+    CHECK_FALSE(watch.over);
+    const u64 elapsed = pair.net->now - start;
+    CHECK(bulk.total * 1000U * kMs / elapsed >= kRate * 85U / 100U); // the whole transfer, Startup included
+    CHECK(pair.net->overflowed[0] * 50U <= pair.net->sent[0]);       // under 2% of datagrams overflowed the queue
+    CHECK(pair.client.congestion().state().bandwidth >= kRate * 85U / 100U);
+    CHECK(pair.client.state() == QuicConnectionState::Established);
 }
 
 TEST_CASE("QUIC congestion: a policy out of range is refused at construction", "[net][net-path][quic-connection]")

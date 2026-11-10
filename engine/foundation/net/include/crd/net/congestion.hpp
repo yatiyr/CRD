@@ -1,13 +1,16 @@
 #pragma once
 
 // crd-net -- congestion control and pacing (NET-PATH; contract: docs/design/network-foundation.md#congestion).
-// Sources: RFC 9002 section 7 and appendix B, RFC 9438 (CUBIC), RFC 9406 (HyStart++), RFC 8985 section 6.
+// Sources: RFC 9002 section 7 and appendix B, RFC 9438 (CUBIC), RFC 9406 (HyStart++), RFC 8985 section 6,
+// draft-ietf-ccwg-bbr-07 (BBRv3).
 //
 //   interface   CongestionController is what every controller is to a connection: it sees each packet counted in
 //               flight leave and be acknowledged or lost, each ACK frame's end with the RTT estimate, persistent
 //               congestion, spurious losses and a Retry's reset, and answers with a window in bytes and a pacing
 //               rate. The window caps bytes in flight; ACK-only packets and probes are not held by it (RFC 9002
-//               sections 6.2.4 and 7). NET-LIVE's delay-based controllers and BBRv3 and Prague plug in here.
+//               sections 6.2.4 and 7). Each controller reads the connection's DeliveryRateSampler
+//               (delivery_rate.hpp), whose stamps every packet carries. NET-LIVE's delay-based controllers and Prague
+//               plug in here.
 //   policy      CongestionPolicy is authored data, versioned by kCongestionInterfaceVersion, chosen per connection
 //               and swappable live: make_congestion() builds a controller into a CongestionSlot, seeded from the one
 //               it replaces (its window and slow start threshold), so a swap never restarts from the initial window.
@@ -17,18 +20,25 @@
 //               every loss of the period proves spurious (RFC 9438 section 4.9). NewReno avoids congestion as
 //               appendix B does; CUBIC (RFC 9438) by its cubic function, Reno-friendly region and fast convergence,
 //               in integer arithmetic so every platform computes the same window (NET-SIM's replays).
+//   model       BBRv3 (draft-ietf-ccwg-bbr-07) builds a model of the path instead: the bandwidth as the windowed
+//               maximum of delivery rate samples and the round trip as the windowed minimum, sets the pacing rate and
+//               window from them through Startup, Drain, ProbeBW's four phases and ProbeRTT, bounds them by loss and
+//               ECN signals at two time scales, and undoes a spurious loss episode; integer arithmetic too.
 //   pacing      Pacer spreads packets at the controller's rate (RFC 9002 section 7.7: 1.25 window per smoothed RTT
-//               for the window controllers) with a burst of the initial window, in exact integer credit.
+//               for the window controllers, BBR's own gains of its bandwidth) with a burst of the initial window (BBR:
+//               its send quantum), in exact integer credit.
 //   time        every call takes the time in nanoseconds; nothing reads a clock.
 //   threads     a controller and a pacer belong to their connection's thread.
 
 #include <crd/core/types.hpp>
+#include <crd/net/delivery_rate.hpp>
 #include <crd/net/quic_packet.hpp>
 #include <crd/net/quic_recovery.hpp>
 
 namespace crd::net
 {
-inline constexpr u32 kCongestionInterfaceVersion = 1U;
+// 2 added BBRv3 and the delivery rate samples; a version 1 policy (NewReno, CUBIC) still runs.
+inline constexpr u32 kCongestionInterfaceVersion = 2U;
 inline constexpr u64 kCongestionMaxWindow = u64{1} << 32U; // bytes: past 100 Gbit/s over 300 ms
 inline constexpr u32 kCongestionMaxInitialPackets = 64U;
 inline constexpr u32 kCongestionMinPacingGain = 100U; // percent of window per smoothed RTT
@@ -38,9 +48,11 @@ enum class CongestionAlgorithm : u8
 {
     NewReno, // RFC 9002 section 7 and appendix B
     Cubic,   // RFC 9438
+    Bbr,     // draft-ietf-ccwg-bbr-07 (BBRv3); interface version 2
 };
 
-// What a connection's congestion control is, as authored.
+// What a connection's congestion control is, as authored. BBR reads the version, the initial and minimum windows and
+// pacing, which it requires; its gains are the algorithm's, so hystart, fast_convergence and pacing_gain are unused.
 struct CongestionPolicy
 {
     u32 version = kCongestionInterfaceVersion;
@@ -63,6 +75,14 @@ enum class CongestionPhase : u8
     ConservativeSlowStart, // RFC 9406's CSS
     Recovery,              // a reduction was made; packets sent before it do not grow the window
     Avoidance,
+    // BBRv3's states (draft-ietf-ccwg-bbr-07 section 5.1); its Startup reports as SlowStart, and a BBR in loss
+    // recovery as Recovery.
+    Drain,
+    ProbeBwDown,
+    ProbeBwCruise,
+    ProbeBwRefill,
+    ProbeBwUp,
+    ProbeRtt,
 };
 
 // What a controller holds that another may start from, and what NET-DEBUG shows.
@@ -73,6 +93,8 @@ struct CongestionState
     u64 recovery_start_ns = kNeverNs; // when the recovery period began; kNeverNs for none
     u64 reductions = 0U;        // congestion events that reduced the window
     u64 undone = 0U;            // reductions undone as spurious
+    u64 bandwidth = 0U;  // bytes per second the model matches its sending to (BBR.bw); 0 for a window controller
+    u64 min_rtt_ns = 0U; // the model's windowed minimum round trip (BBR.min_rtt); 0 for none
     CongestionPhase phase = CongestionPhase::SlowStart;
     bool limited = false; // the window or the pacer held sending back this round (RFC 9002 section 7.8)
 };
@@ -84,6 +106,7 @@ struct CongestionPacket
     u64 number = 0U;
     u64 sent_ns = 0U;
     QuicSpace space = QuicSpace::Initial;
+    DeliveryStamp delivery; // the sampler's stamp from when it left
 };
 
 class CongestionController
@@ -98,12 +121,13 @@ public:
     [[nodiscard]] virtual CongestionAlgorithm algorithm() const noexcept = 0;
     // `packet` left at `now_ns`; `in_flight` holds it.
     virtual void on_sent(const CongestionPacket& packet, u64 in_flight, u64 now_ns) noexcept = 0;
-    // Sending had more to send and the window or the pacer held it back.
-    virtual void on_limited(u64 now_ns) noexcept = 0;
+    // Sending had more to send and the window (`window`) or the pacer held it back.
+    virtual void on_limited(bool window, u64 now_ns) noexcept = 0;
     // `packet`, newly acknowledged by the ACK frame being processed.
     virtual void on_acked(const CongestionPacket& packet, u64 now_ns) noexcept = 0;
-    // The ACK frame's end: `rtt` holds its sample when `sampled`. The window grows here by what it acknowledged.
-    virtual void on_ack_end(const QuicRtt& rtt, bool sampled, u64 now_ns) noexcept = 0;
+    // The ACK frame's end, after the sampler's: `rtt` holds its sample when `sampled`, and `in_flight` bytes are in
+    // flight. The window grows here by what it acknowledged.
+    virtual void on_ack_end(const QuicRtt& rtt, bool sampled, u64 in_flight, u64 now_ns) noexcept = 0;
     // `packet` was declared lost at `now_ns`: a congestion event unless a recovery period already covers it.
     virtual void on_lost(const CongestionPacket& packet, u64 now_ns) noexcept = 0;
     // A congestion signal without a loss (an ECN-CE count rose for packets up to one sent at `newest_sent_ns`).
@@ -131,18 +155,21 @@ protected:
 };
 
 // Room for any controller of this build.
-inline constexpr usize kCongestionSlotBytes = 512U;
+inline constexpr usize kCongestionSlotBytes = 768U;
 struct CongestionSlot
 {
     alignas(16) u8 bytes[kCongestionSlotBytes];
 };
 
 // Builds `policy`'s controller in `slot` for datagrams of `max_datagram` bytes, starting from `seed` when given (a
-// live swap: its window and slow start threshold carry over, clamped to this policy's bounds). Null, building
-// nothing, for a policy congestion_policy_valid() refuses or a datagram size under kQuicMinInitialDatagram. The
-// caller destroys the controller (its destructor) before building another in the slot.
+// live swap: its window and slow start threshold carry over, clamped to this policy's bounds). It reads `delivery`,
+// the connection's sampler, which outlives it, and BBR may mark it application limited (ProbeRTT); `entropy` seeds
+// BBR's randomised probing. Null, building nothing, for a policy congestion_policy_valid() refuses or a datagram size
+// under kQuicMinInitialDatagram. The caller destroys the controller (its destructor) before building another in the
+// slot.
 [[nodiscard]] CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_datagram,
-                                                    const CongestionState* seed, CongestionSlot& slot) noexcept;
+                                                    const CongestionState* seed, CongestionSlot& slot,
+                                                    DeliveryRateSampler& delivery, u64 entropy) noexcept;
 
 // Packets spread at a rate: credit accrues at the rate up to a burst, a packet goes while any credit is left and
 // may take it below zero, and the next goes once the debt is paid. Credit is kept in byte-nanoseconds per second,

@@ -55,7 +55,14 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
     out.number = packet.number;
     out.sent_ns = packet.sent_ns;
     out.space = space;
+    out.delivery = packet.delivery;
     return out;
+}
+
+// The sampler's order of packets that left at one time: a coalesced datagram's later packet is in a later space.
+[[nodiscard]] constexpr u64 delivery_order(QuicSpace space, u64 number) noexcept
+{
+    return (u64{quic_space_index(space)} << 62U) | number;
 }
 
 [[nodiscard]] constexpr QuicPacketType packet_type(QuicSpace space) noexcept
@@ -221,6 +228,8 @@ void QuicConnection::Events::on_acked(QuicSpace space, const QuicSentPacket& pac
     }
     if (packet.in_flight)
     {
+        m_connection.m_delivery.on_acked(packet.delivery, packet.bytes, packet.sent_ns,
+                                         delivery_order(space, packet.number), m_connection.m_event_ns);
         m_connection.m_congestion->on_acked(congestion_packet(space, packet), m_connection.m_event_ns);
     }
 }
@@ -241,12 +250,19 @@ void QuicConnection::Events::on_lost(QuicSpace space, const QuicSentPacket& pack
     }
     if (packet.in_flight)
     {
+        m_connection.m_delivery.on_lost(packet.bytes);
         m_connection.m_congestion->on_lost(congestion_packet(space, packet), m_connection.m_event_ns);
     }
 }
 
 void QuicConnection::Events::on_spurious(QuicSpace space, const QuicSentPacket& packet, u64 lost_ns) noexcept
 {
+    if (packet.in_flight)
+    {
+        // Its data was delivered after all (draft-ietf-ccwg-bbr-07 section 2.2's C.delivered).
+        m_connection.m_delivery.on_acked(packet.delivery, packet.bytes, packet.sent_ns,
+                                         delivery_order(space, packet.number), m_connection.m_event_ns);
+    }
     if (packet.path_probe)
     {
         // Its loss reduced nothing; its arrival proves its size.
@@ -360,7 +376,8 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     m_pmtu.start(config.base_datagram_bytes, config.max_datagram_bytes, config.path_mtu_discovery);
     m_path_bytes = m_pmtu.size();
     // The policy and the datagram size were checked (config_valid).
-    m_congestion = make_congestion(config.congestion, m_path_bytes, nullptr, m_congestion_slot);
+    m_congestion =
+        make_congestion(config.congestion, m_path_bytes, nullptr, m_congestion_slot, m_delivery, entropy());
     m_ecn.start(config.ecn);
     m_frames = frames;
     m_crypto_bytes = bytes;
@@ -1098,6 +1115,7 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
         case QuicFrameKind::Ack:
         {
             m_event_ns = now_ns;
+            m_delivery.on_ack_begin();
             const QuicAckOutcome outcome = m_recovery->on_ack(space, frame.ack, now_ns, m_events);
             if (outcome.error == QuicRecoveryError::AckOfUnsent)
             {
@@ -1106,13 +1124,15 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             }
             if (outcome.error == QuicRecoveryError::None)
             {
+                m_delivery.on_ack_end(m_recovery->rtt().min_ns);
                 if (m_ecn.on_ack(space, frame.ack, outcome))
                 {
                     // RFC 9002 appendix B.7: before the frame's growth, so its packets grow nothing of the period.
                     m_congestion->on_congestion(outcome.newest_sent_ns, now_ns);
                     ++m_counters.ecn_signals;
                 }
-                m_congestion->on_ack_end(m_recovery->rtt(), outcome.rtt_sampled, now_ns);
+                m_congestion->on_ack_end(m_recovery->rtt(), outcome.rtt_sampled, m_recovery->bytes_in_flight(),
+                                         now_ns);
                 if (outcome.lost.persistent_congestion)
                 {
                     m_congestion->on_persistent_congestion(now_ns);
@@ -1688,6 +1708,7 @@ bool QuicConnection::retry(const QuicHeader& header, cont::ConstSpan<u8> packet,
     // Recovery starts over and the Initial's CRYPTO data goes again under the new keys; packet numbers continue
     // (section 17.2.5.3).
     m_recovery->retry(now_ns, m_events);
+    m_delivery.reset();
     m_congestion->reset(now_ns); // RFC 9002 section 6.3: congestion control starts over with recovery
     m_pacer = Pacer{};
     for (u8& probes : m_probes)
@@ -1843,18 +1864,23 @@ void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
     const u64 release =
         m_pacer.release_ns(now_ns, m_congestion->pacing_rate(m_recovery->rtt()), m_congestion->burst());
     m_data_open = room && release <= now_ns;
+    const QuicSpace application = QuicSpace::Application;
+    const bool sendable = !m_space_gone[quic_space_index(application)] &&
+                          m_protection.can_send(send_type(application)) && m_recovery->can_send_data(application);
     if (m_data_open)
     {
+        if (sendable && !has_data(application, now_ns) && !m_streams.has_frame())
+        {
+            // The window and the pacer allow sending and nothing waits: until what is in flight is delivered, a rate
+            // sample shows the application's rate, not the path's (draft-ietf-ccwg-bbr-07 section 4.1.2.4).
+            m_delivery.on_app_limited(in_flight);
+        }
         return;
     }
-    const QuicSpace application = QuicSpace::Application;
-    const bool waiting = !m_space_gone[quic_space_index(application)] &&
-                         m_protection.can_send(send_type(application)) && m_recovery->can_send_data(application) &&
-                         has_data(application, now_ns);
-    if (waiting)
+    if (sendable && has_data(application, now_ns))
     {
         // Section 7.8: the window is what holds sending back, so it may grow; a window with room waits for the pacer.
-        m_congestion->on_limited(now_ns);
+        m_congestion->on_limited(!room, now_ns);
         m_pace_release_ns = room ? release : kNeverNs;
     }
 }
@@ -1867,7 +1893,7 @@ bool QuicConnection::set_congestion(const CongestionPolicy& policy) noexcept
     }
     const CongestionState held = m_congestion->state();
     m_congestion->~CongestionController();
-    m_congestion = make_congestion(policy, m_path_bytes, &held, m_congestion_slot);
+    m_congestion = make_congestion(policy, m_path_bytes, &held, m_congestion_slot, m_delivery, entropy());
     m_config.congestion = policy;
     return true;
 }
@@ -2301,6 +2327,10 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         sent.tag = (spec.type == QuicPacketType::OneRtt && datagram_used == 0U)
                        ? packet_tag(room.first(bytes), spec.dcid.size())
                        : 0U;
+        if (sent.in_flight)
+        {
+            sent.delivery = m_delivery.on_sent(bytes, m_recovery->bytes_in_flight() + bytes, now_ns);
+        }
         static_cast<void>(m_recovery->on_sent(space, sent)); // can_send held and numbers rise
         m_ecn.on_sent(space, m_marking, now_ns);
         if (sent.in_flight)

@@ -52,11 +52,12 @@ CongestionPolicy policy_of(CongestionAlgorithm algorithm, bool hystart = false, 
 struct Controller
 {
     CongestionSlot slot;
+    DeliveryRateSampler delivery;
     CongestionController* ctl = nullptr;
 
     explicit Controller(const CongestionPolicy& policy, u64 mss = kMss, const CongestionState* seed = nullptr)
     {
-        ctl = make_congestion(policy, mss, seed, slot);
+        ctl = make_congestion(policy, mss, seed, slot, delivery, 0U);
         REQUIRE(ctl != nullptr);
     }
     ~Controller() { ctl->~CongestionController(); }
@@ -78,7 +79,7 @@ struct Controller
     void ack(u64 number, u64 sent_ns, u64 now, u64 latest_ns, u64 smoothed_ns = 100U * kMs) const
     {
         ctl->on_acked(packet(number, sent_ns), now);
-        ctl->on_ack_end(rtt_of(latest_ns, smoothed_ns), true, now);
+        ctl->on_ack_end(rtt_of(latest_ns, smoothed_ns), true, 0U, now);
     }
 };
 
@@ -93,8 +94,9 @@ TEST_CASE("congestion: policies out of range are refused and the initial window 
         CongestionPolicy policy;
         change(policy);
         CongestionSlot slot;
+        DeliveryRateSampler delivery;
         CHECK_FALSE(congestion_policy_valid(policy));
-        CHECK(make_congestion(policy, kMss, nullptr, slot) == nullptr);
+        CHECK(make_congestion(policy, kMss, nullptr, slot, delivery, 0U) == nullptr);
     };
     refused([](CongestionPolicy& p) { p.version = kCongestionInterfaceVersion + 1U; });
     refused([](CongestionPolicy& p) { p.algorithm = static_cast<CongestionAlgorithm>(7U); });
@@ -104,8 +106,9 @@ TEST_CASE("congestion: policies out of range are refused and the initial window 
     refused([](CongestionPolicy& p) { p.pacing_gain = kCongestionMinPacingGain - 1U; });
     refused([](CongestionPolicy& p) { p.pacing_gain = kCongestionMaxPacingGain + 1U; });
     CongestionSlot slot;
-    CHECK(make_congestion(CongestionPolicy{}, kMss - 1U, nullptr, slot) == nullptr);
-    CHECK(make_congestion(CongestionPolicy{}, 65536U, nullptr, slot) == nullptr);
+    DeliveryRateSampler delivery;
+    CHECK(make_congestion(CongestionPolicy{}, kMss - 1U, nullptr, slot, delivery, 0U) == nullptr);
+    CHECK(make_congestion(CongestionPolicy{}, 65536U, nullptr, slot, delivery, 0U) == nullptr);
 
     // min(10 * mss, max(14720, 2 * mss)), and the same per packet for other counts.
     CHECK(Controller(CongestionPolicy{})->window() == 12000U);
@@ -196,7 +199,7 @@ TEST_CASE("congestion: NewReno grows by what is acknowledged, then by a datagram
     CHECK(reno->window() == 12000U);
     CHECK_FALSE(reno->state().limited);
     // A send the window held back lets it grow.
-    reno->on_limited(100U * kMs);
+    reno->on_limited(true, 100U * kMs);
     reno.send(2U, 2U, 100U * kMs);
     reno.ack(2U, 100U * kMs, 200U * kMs, 100U * kMs);
     CHECK(reno->window() == 13200U);
@@ -225,7 +228,7 @@ TEST_CASE("congestion: NewReno grows by what is acknowledged, then by a datagram
     CHECK(reno->state().phase == CongestionPhase::Recovery);
 
     // A packet sent after the period began ends it; avoidance adds mss * acked / window, its remainder carried.
-    reno->on_limited(410U * kMs);
+    reno->on_limited(true, 410U * kMs);
     reno.send(17U, 18U, 410U * kMs, 10000U);
     const u64 half = window / 2U;
     reno.ack(17U, 410U * kMs, 510U * kMs, 100U * kMs);
@@ -254,7 +257,7 @@ TEST_CASE("congestion: slow start without pacing grows by at most eight datagram
         {
             reno->on_acked(packet(n, 0U), 100U * kMs);
         }
-        reno->on_ack_end(rtt_of(100U * kMs, 100U * kMs), true, 100U * kMs);
+        reno->on_ack_end(rtt_of(100U * kMs, 100U * kMs), true, 0U, 100U * kMs);
         CHECK(reno->window() == (pacing ? 24000U : 12000U + 8U * kMss));
     }
 }
@@ -275,7 +278,7 @@ TEST_CASE("congestion: HyStart++ enters its conservative phase on a rise in the 
         CHECK(reno->window() == 24000U);
         // Round 3 at 120 ms: past 100 + 12.5 ms once eight samples are in, so CSS from the eighth on (a quarter).
         reno.send(10U, 19U, 100U * kMs);
-        reno->on_limited(100U * kMs);
+        reno->on_limited(true, 100U * kMs);
         reno.ack(10U, 100U * kMs, 220U * kMs, 120U * kMs); // ends round 2, whose minimum stays 100 ms
         CHECK(reno->state().phase == CongestionPhase::SlowStart);
         for (u64 n = 11U; n <= 17U; ++n)
@@ -295,7 +298,7 @@ TEST_CASE("congestion: HyStart++ enters its conservative phase on a rise in the 
         {
             // A sample under the baseline once the round holds eight: the rise was not lasting.
             reno.send(20U, 29U, 220U * kMs);
-            reno->on_limited(220U * kMs);
+            reno->on_limited(true, 220U * kMs);
             reno.ack(20U, 220U * kMs, 320U * kMs, 100U * kMs);
             CHECK(reno->state().phase == CongestionPhase::SlowStart);
             CHECK(reno->window() == 35400U);
@@ -306,7 +309,7 @@ TEST_CASE("congestion: HyStart++ enters its conservative phase on a rise in the 
         for (u64 first = 20U; first <= 50U; first += 10U)
         {
             reno.send(first, first + 9U, now);
-            reno->on_limited(now);
+            reno->on_limited(true, now);
             for (u64 n = first; n <= first + 9U; ++n)
             {
                 reno.ack(n, now, now + 120U * kMs, 120U * kMs);
@@ -315,7 +318,7 @@ TEST_CASE("congestion: HyStart++ enters its conservative phase on a rise in the 
             CHECK(reno->state().phase == CongestionPhase::ConservativeSlowStart);
         }
         reno.send(60U, 69U, now);
-        reno->on_limited(now);
+        reno->on_limited(true, now);
         reno.ack(60U, now, now + 120U * kMs, 120U * kMs);
         CHECK(reno->state().phase == CongestionPhase::Avoidance);
         CHECK(reno->window() == 34200U + 41U * 300U);
@@ -354,7 +357,7 @@ TEST_CASE("congestion: CUBIC follows RFC 9438's curve from W_max, in the integer
     u64 number = 1U;
     const auto step = [&](u64 now)
     {
-        cubic->on_limited(now);
+        cubic->on_limited(true, now);
         cubic->on_sent(packet(number, now), 60000U, now);
         cubic.ack(number, now, now, 100U * kMs);
         ++number;
@@ -393,7 +396,7 @@ TEST_CASE("congestion: CUBIC's Reno-friendly estimate leads where the curve is s
     for (u64 i = 0U; i <= 200U; ++i)
     {
         const u64 now = 3U * kSecond + i * kMs;
-        cubic->on_limited(now);
+        cubic->on_limited(true, now);
         cubic->on_sent(packet(i + 1U, now), 6000U, now);
         cubic.ack(i + 1U, now, now, 10U * kMs, 10U * kMs);
         if (i == 0U)
@@ -416,7 +419,7 @@ TEST_CASE("congestion: CUBIC's Reno-friendly estimate leads where the curve is s
         seed.window = 120000U;
         Controller c(policy, kMss, &seed);
         c->on_lost(packet(0U, 0U), 2U * kSecond);
-        c->on_limited(3U * kSecond);
+        c->on_limited(true, 3U * kSecond);
         c.send(1U, 1U, 3U * kSecond, 60000U);
         c.ack(1U, 3U * kSecond, 3U * kSecond, 100U * kMs);
         CHECK(c->window() == 84035U);
@@ -425,7 +428,7 @@ TEST_CASE("congestion: CUBIC's Reno-friendly estimate leads where the curve is s
         u64 n = 3U;
         const auto step = [&](u64 now)
         {
-            c->on_limited(now);
+            c->on_limited(true, now);
             c.send(n, n, now, 60000U);
             c.ack(n, now, now, 100U * kMs);
             ++n;
@@ -450,12 +453,12 @@ TEST_CASE("congestion: an idle period does not count toward CUBIC's curve", "[ne
         seed.window = 120000U;
         Controller cubic(policy_of(CongestionAlgorithm::Cubic), kMss, &seed);
         cubic->on_lost(packet(0U, 0U), 2U * kSecond);
-        cubic->on_limited(3U * kSecond);
+        cubic->on_limited(true, 3U * kSecond);
         cubic.send(1U, 1U, 3U * kSecond, 60000U);
         cubic.ack(1U, 3U * kSecond, 3U * kSecond, 100U * kMs); // the epoch starts
         // Idle: the next packet leaves with nothing in flight 10 s later, and the curve's time stands still for it.
         const u64 gap = (idle == 1U) ? 10U * kSecond : 0U;
-        cubic->on_limited(3U * kSecond + gap);
+        cubic->on_limited(true, 3U * kSecond + gap);
         cubic->on_sent(packet(2U, 3U * kSecond + gap), (idle == 1U) ? kMss : 60000U, 3U * kSecond + gap);
         cubic.ack(2U, 3U * kSecond + gap, 4U * kSecond + gap, 100U * kMs);
         windows[idle] = cubic->window();
@@ -538,7 +541,7 @@ TEST_CASE("congestion: a live swap carries the window, threshold and recovery pe
     CHECK(reno->state().phase == CongestionPhase::Recovery);
     CHECK(reno->state().reductions == 1U);
     // Still in the period: a packet sent before it grows nothing and its loss reduces nothing.
-    reno->on_limited(210U * kMs);
+    reno->on_limited(true, 210U * kMs);
     reno.ack(11U, 150U * kMs, 210U * kMs, 100U * kMs);
     reno->on_lost(packet(12U, 150U * kMs), 210U * kMs);
     CHECK(reno->window() == held.window);

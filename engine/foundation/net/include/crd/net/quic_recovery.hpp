@@ -35,6 +35,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/crypto/quic.hpp>
+#include <crd/net/delivery_rate.hpp>
 #include <crd/net/ecn.hpp>
 #include <crd/net/quic_frame.hpp>
 #include <crd/net/quic_packet.hpp>
@@ -126,6 +127,7 @@ struct QuicSentPacket
     // Never 0 for a datagram of one 1-RTT packet: what an ICMP message quoting it must repeat (quic_pmtu.hpp's hints);
     // 0 for any other packet.
     u32 tag = 0U;
+    DeliveryStamp delivery; // the connection's delivery when a packet counted in flight left (delivery_rate.hpp)
 };
 
 // Storage for one sent packet: QuicRecovery's to fill.

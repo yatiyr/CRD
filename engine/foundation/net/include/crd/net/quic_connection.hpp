@@ -385,6 +385,7 @@ public:
     [[nodiscard]] const QuicPacketProtection& protection() const noexcept { return m_protection; }
     [[nodiscard]] const QuicRecovery& recovery() const noexcept { return *m_recovery; }
     [[nodiscard]] const CongestionController& congestion() const noexcept { return *m_congestion; }
+    [[nodiscard]] const DeliveryRateSampler& delivery() const noexcept { return m_delivery; }
     [[nodiscard]] const QuicEcnValidator& ecn() const noexcept { return m_ecn; }
     // The path MTU search: size() is what datagrams take now.
     [[nodiscard]] const QuicPathMtu& path_mtu() const noexcept { return m_pmtu; }
@@ -610,6 +611,7 @@ private:
     QuicRecovery* m_recovery = nullptr;
     CongestionController* m_congestion = nullptr; // built in m_congestion_slot
     CongestionSlot m_congestion_slot;
+    DeliveryRateSampler m_delivery; // every controller's delivery rate samples, stamped on each packet in flight
     Pacer m_pacer;
     u64 m_pace_release_ns = kNeverNs; // data waits for the pacer until then
     QuicEcnValidator m_ecn;

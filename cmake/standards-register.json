@@ -854,6 +854,41 @@
       "note": "The default controller (design S66): the cubic curve from W_max in integer arithmetic, the Reno-friendly estimate, fast convergence, idle periods and the spurious-loss undo; obsoletes RFC 8312."
     },
     {
+      "id": "cc.bbr",
+      "title": "BBR congestion control (BBRv3) and delivery rate estimation",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-ccwg-bbr",
+        "status": "active",
+        "revision": "07",
+        "posted": "2026-11-02",
+        "added": "2026-11-10"
+      },
+      "cryptography": [],
+      "source": {
+        "ref": "docs/design/network-foundation.md#bbr",
+        "read": "2026-11-10",
+        "verified": true
+      },
+      "review": "2027-02-10",
+      "evidence": [
+        "engine/foundation/net/src/congestion.cpp",
+        "engine/foundation/net/src/delivery_rate.cpp",
+        "tests/foundation/net/test_bbr.cpp",
+        "tests/foundation/net/test_delivery_rate.cpp",
+        "tests/foundation/net/test_quic_congestion.cpp",
+        "tests/foundation/net/fuzz/fuzz_congestion.cpp"
+      ],
+      "deprecation": null,
+      "note": "Design S69: the delivery rate samples of section 4.1 stamped on every packet in flight, and the model, states, two-time-scale bounds, ProbeRTT and spurious-loss undo of sections 5.1 to 5.6 in integer arithmetic, with CE marks answered as congestion (section 3.7). The draft is experimental; review again at its next revision."
+    },
+    {
       "id": "cc.hystart",
       "title": "HyStart++: modified slow start",
       "kind": "algorithm",

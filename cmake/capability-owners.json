@@ -826,6 +826,7 @@
       "owner": "net",
       "api": [
         "engine/foundation/net/include/crd/net/congestion.hpp",
+        "engine/foundation/net/include/crd/net/delivery_rate.hpp",
         "engine/foundation/net/include/crd/net/endpoint.hpp",
         "engine/foundation/net/include/crd/net/io_loop.hpp",
         "engine/foundation/net/include/crd/net/negotiation.hpp",

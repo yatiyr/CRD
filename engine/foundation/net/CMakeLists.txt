@@ -17,6 +17,12 @@ add_library(crd-net STATIC ${SOURCES} ${HEADERS})
 target_include_directories(crd-net
     PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+    # Header-only reads of crd-hesap-net, which links nothing here (the Philox precedent, ADR-0096 section 1): the
+    # delivery rate and the windowed filters (delivery_rate.cpp, congestion.cpp's BBR) and hesap-stats' Philox stream,
+    # BBR's randomised probe timing. crd-hesap-net is not packaged; crd-net-quantized links it for what does link.
+    PRIVATE
+        "${CMAKE_SOURCE_DIR}/engine/numerics/hesap-net/include"
+        "${CMAKE_SOURCE_DIR}/engine/numerics/hesap-stats/include"
 )
 
 target_link_libraries(crd-net
