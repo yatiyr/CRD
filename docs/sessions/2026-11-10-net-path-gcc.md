@@ -27,7 +27,8 @@ draft-ietf-rmcat-gcc-02 (sections 5 and 6) and libwebrtc branch-heads/8147's `ai
 ## Evidence
 
 - win-debug (MSVC): `[gcc]` (13 cases), `[congestion]`, `[scream]`, `[prague]`, `[bbr]`, `[quic-connection]` pass;
-  the congestion corpus replays clean with the new `gcc-delay` seed. WSL linux-gcc-debug: see the row's evidence.
+  the congestion corpus replays clean with the new `gcc-delay` seed. WSL linux-gcc-debug: `crd-net-tests` (926
+  cases), `crd-hesap-net-tests` (184) and the corpus replay pass. clang-tidy 20 is clean on the six changed files.
 - Simulated, 10 Mbit/s, 40 ms, 500 ms buffer, a media source: 94% of the link with 27 ms queued on average (CUBIC
   424 ms), a 353 ms peak in its slow sawtooth near the capacity, a halved link followed within 5 s, 1% loss
   ignored, 3.5% beside CUBIC. Through QUIC from ACK frames alone: 93% at 2 Mbit/s with at most 35 ms queued, where
