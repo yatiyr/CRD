@@ -1293,6 +1293,8 @@ inline void lnsrlb(const Obj& obj, int n, const T* l, const T* u, const int* nbd
     T       a_u = static_cast<T>(0);
     T       f_u = phi0;
     T       d_u = dphi0;
+    bool    has_edge = false; // a trial where the objective was not finite lies past `edge`
+    T       edge = static_cast<T>(0);
     T       lo = static_cast<T>(0); // window the next trial may move in
     T       hi = stp + stp * static_cast<T>(4);
     const crd::usize un = static_cast<crd::usize>(n);
@@ -1329,6 +1331,25 @@ inline void lnsrlb(const Obj& obj, int n, const T* l, const T* u, const int* nbd
         {
             break; // line search done (x/f/g hold the accepted/best point); mainlb handles iback>=20
         }
+        if (!std::isfinite(f) || !std::isfinite(gd))
+        {
+            // Outside the objective's domain: retreat to the midpoint between the best step and this trial and keep
+            // later trials short of it, as in MoreThuenteLineSearch (the interval update needs finite values).
+            if (stp > a_l)
+            {
+                edge = has_edge ? std::min(edge, stp) : stp;
+                has_edge = true;
+            }
+            stp = a_l + (stp - a_l) / static_cast<T>(2);
+            if (!bracketed)
+            {
+                lo = stp + static_cast<T>(1.1) * (stp - a_l);
+                hi = stp + static_cast<T>(4) * (stp - a_l);
+            }
+            continue;
+        }
+        const T trial = stp;
+        const T trial_from = a_l;
         if (on_psi && f <= f_l && f > line)
         {
             detail::mt_dcstep_on_psi<T>(armijo_slope, a_l, f_l, d_l, a_u, f_u, d_u, stp, f, gd, bracketed, lo, hi);
@@ -1336,6 +1357,12 @@ inline void lnsrlb(const Obj& obj, int n, const T* l, const T* u, const int* nbd
         else
         {
             detail::mt_dcstep<T>(a_l, f_l, d_l, a_u, f_u, d_u, stp, f, gd, bracketed, lo, hi);
+        }
+        if (!std::isfinite(stp))
+        {
+            // The cubic's sums overflowed (values near the largest double): bisect the bracket, or double the last
+            // stride when there is none yet.
+            stp = bracketed ? a_l + (a_u - a_l) / static_cast<T>(2) : trial + static_cast<T>(2) * (trial - trial_from);
         }
         if (bracketed)
         {
@@ -1353,6 +1380,10 @@ inline void lnsrlb(const Obj& obj, int n, const T* l, const T* u, const int* nbd
         if (bracketed && (stp <= lo || stp >= hi || hi - lo <= xtol * hi))
         {
             stp = a_l; // no further progress inside the bracket: fall back to the best endpoint
+        }
+        if (has_edge && edge > a_l && stp >= edge)
+        {
+            stp = a_l + (edge - a_l) / static_cast<T>(2);
         }
     }
 }

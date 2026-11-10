@@ -152,6 +152,44 @@ TEST_CASE("v7-d-3 L-BFGS-B with no bounds reduces to unconstrained L-BFGS (Rosen
     CHECK(err < 1e-4);
 }
 
+namespace
+{
+// φ(x) = (x − 0.1)² for x ≤ 0.6; the objective is undefined (infinite value, NaN slope) past 0.6.
+class WalledQuadObj final : public opt::Objective<crd::f64>
+{
+public:
+    WalledQuadObj() : opt::Objective<crd::f64>(/*has_gradient=*/true, /*has_hessian_vector=*/false) {}
+    [[nodiscard]] crd::f64 value(crd::containers::ConstSpan<crd::f64> x) const override
+    {
+        const crd::f64 d = x[0] - 0.1;
+        return x[0] <= 0.6 ? d * d : std::numeric_limits<crd::f64>::infinity();
+    }
+    [[nodiscard]] crd::usize n() const noexcept override { return 1; }
+    [[nodiscard]] bool gradient(crd::containers::ConstSpan<crd::f64> x,
+                                crd::containers::Span<crd::f64> g) const override
+    {
+        g[0] = x[0] <= 0.6 ? 2.0 * (x[0] - 0.1) : std::numeric_limits<crd::f64>::quiet_NaN();
+        return true;
+    }
+};
+} // namespace
+
+TEST_CASE("v7-d-3 L-BFGS-B line search retreats from a first trial outside the domain", "[hesap][opt][v7]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 20);
+    WalledQuadObj obj;
+    // The first step is 1/|d| = 5 along d = 0.2, i.e. x = 1, which is past the wall.
+    crd::f64 x0[1] = {0.0};
+    crd::f64 lo[1] = {-kInf};
+    crd::f64 hi[1] = {kInf};
+    opt::OptOptions<crd::f64> opts;
+    opts.grad_tol = 1e-8;
+    opts.max_iters = 100;
+    auto r = opt::minimize_lbfgsb<crd::f64>(obj, {x0, 1}, {lo, 1}, {hi, 1}, opts, &alloc, 5);
+    REQUIRE(r.status == opt::OptStatus::Success);
+    CHECK(std::fabs(r.x[0] - 0.1) < 1e-6);
+}
+
 TEST_CASE("v7-d-3 L-BFGS-B determinism moat {1,2,4,8,16} (active bounds, parallel objective)",
           "[hesap][opt][v7][moat]")
 {

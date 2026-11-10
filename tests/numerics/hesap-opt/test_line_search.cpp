@@ -15,6 +15,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <limits>
 
 namespace opt = crd::hesap::opt;
 namespace sp = crd::hesap::sparse;
@@ -128,6 +129,61 @@ public:
         g[0] = 2e-20 * (x[0] - 0.5);
         return true;
     }
+};
+
+// φ(t) = (t − c)² for t ≤ wall; past the wall the objective is undefined and returns `outside` for its value and
+// its slope (infinity or NaN), as a barrier or a domain-restricted function does.
+class WalledQuad1D final : public opt::Objective<crd::f64>
+{
+public:
+    WalledQuad1D(crd::f64 c, crd::f64 wall, crd::f64 outside)
+        : opt::Objective<crd::f64>(/*has_gradient=*/true, /*has_hessian_vector=*/false), m_c(c), m_wall(wall),
+          m_outside(outside)
+    {
+    }
+    [[nodiscard]] crd::f64 value(crd::containers::ConstSpan<crd::f64> x) const override
+    {
+        const crd::f64 d = x[0] - m_c;
+        return x[0] <= m_wall ? d * d : m_outside;
+    }
+    [[nodiscard]] crd::usize n() const noexcept override { return 1; }
+    [[nodiscard]] bool gradient(crd::containers::ConstSpan<crd::f64> x,
+                                crd::containers::Span<crd::f64> g) const override
+    {
+        g[0] = x[0] <= m_wall ? 2.0 * (x[0] - m_c) : m_outside;
+        return true;
+    }
+
+private:
+    crd::f64 m_c;
+    crd::f64 m_wall;
+    crd::f64 m_outside;
+};
+
+// φ(t) = exp(a·t) − b·t: finite up to t ≈ 709/a, where exp(a·t) approaches the largest double, so the values and
+// slopes of a trial there are finite but their interpolation sums overflow.
+class ExpMinusLinear1D final : public opt::Objective<crd::f64>
+{
+public:
+    ExpMinusLinear1D(crd::f64 a, crd::f64 b)
+        : opt::Objective<crd::f64>(/*has_gradient=*/true, /*has_hessian_vector=*/false), m_a(a), m_b(b)
+    {
+    }
+    [[nodiscard]] crd::f64 value(crd::containers::ConstSpan<crd::f64> x) const override
+    {
+        return std::exp(m_a * x[0]) - m_b * x[0];
+    }
+    [[nodiscard]] crd::usize n() const noexcept override { return 1; }
+    [[nodiscard]] bool gradient(crd::containers::ConstSpan<crd::f64> x,
+                                crd::containers::Span<crd::f64> g) const override
+    {
+        g[0] = m_a * std::exp(m_a * x[0]) - m_b;
+        return true;
+    }
+
+private:
+    crd::f64 m_a;
+    crd::f64 m_b;
 };
 
 // Recompute the Wolfe conditions at x + alpha·p from a fresh objective eval.
@@ -368,6 +424,85 @@ TEST_CASE("v7-c MoreThuente brackets on overshoot (convex fn, alpha0 past the mi
     CHECK(w.phi_a <= fx + c1 * r.alpha * dphi0);
     CHECK(std::fabs(w.dphi_a) <= c2 * std::fabs(dphi0));
     CHECK(std::fabs(r.alpha - 3.0) < 0.3); // strong Wolfe with c2=0.1 ⇒ |α−3| ≤ 0.3
+}
+
+TEST_CASE("v7-c MoreThuente retreats from trials outside the objective's domain", "[hesap][opt][v7]")
+{
+    const crd::f64 c1 = 1e-4;
+    const crd::f64 outsides[] = {std::numeric_limits<crd::f64>::infinity(),
+                                 std::numeric_limits<crd::f64>::quiet_NaN()};
+    SECTION("the first trial is past the wall")
+    {
+        for (const crd::f64 outside : outsides)
+        {
+            const WalledQuad1D obj(1.0, 2.5, outside); // minimizer 1, undefined beyond 2.5
+            const crd::f64 x[1] = {0.0};
+            const crd::f64 p[1] = {1.0};
+            crd::f64 g[1] = {};
+            REQUIRE(obj.gradient({x, 1}, {g, 1}));
+            const crd::f64 fx = obj.value({x, 1});
+            const crd::f64 dphi0 = g[0] * p[0];
+            REQUIRE(dphi0 < 0.0);
+            const crd::f64 c2 = 0.1;
+            crd::f64 x_out[1] = {};
+            crd::f64 g_out[1] = {};
+            const opt::MoreThuenteLineSearch<crd::f64> mt(c1, c2, 64);
+            const auto r = mt.search(obj, {x, 1}, fx, {g, 1}, {p, 1}, 4.0, {x_out, 1}, {g_out, 1});
+            REQUIRE(r.ok);
+            REQUIRE(r.grad_at_new_valid);
+            CHECK(std::isfinite(r.alpha));
+            CHECK(r.fx_new <= fx + c1 * r.alpha * dphi0);
+            CHECK(std::fabs(g_out[0] * p[0]) <= c2 * std::fabs(dphi0));
+            CHECK(std::fabs(r.alpha - 1.0) <= 0.1 + 1e-12); // strong Wolfe with c2 = 0.1
+        }
+    }
+    SECTION("the extrapolation runs into the wall")
+    {
+        for (const crd::f64 outside : outsides)
+        {
+            const WalledQuad1D obj(100.0, 50.0, outside); // minimizer 100 lies past the wall
+            const crd::f64 x[1] = {0.0};
+            const crd::f64 p[1] = {1.0};
+            crd::f64 g[1] = {};
+            REQUIRE(obj.gradient({x, 1}, {g, 1}));
+            const crd::f64 fx = obj.value({x, 1});
+            const crd::f64 dphi0 = g[0] * p[0];
+            REQUIRE(dphi0 < 0.0);
+            const crd::f64 c2 = 0.7; // |phi'| <= 140 holds for t in [30, 50]
+            crd::f64 x_out[1] = {};
+            crd::f64 g_out[1] = {};
+            const opt::MoreThuenteLineSearch<crd::f64> mt(c1, c2, 64);
+            const auto r = mt.search(obj, {x, 1}, fx, {g, 1}, {p, 1}, 1.0, {x_out, 1}, {g_out, 1});
+            REQUIRE(r.ok);
+            CHECK(r.alpha >= 30.0);
+            CHECK(r.alpha <= 50.0);
+            CHECK(r.fx_new <= fx + c1 * r.alpha * dphi0);
+            CHECK(std::fabs(g_out[0] * p[0]) <= c2 * std::fabs(dphi0));
+        }
+    }
+}
+
+TEST_CASE("v7-c MoreThuente bisects when the interpolated step overflows", "[hesap][opt][v7]")
+{
+    const ExpMinusLinear1D obj(2.83393, 14.949); // minimizer t = ln(14.949 / 2.83393) / 2.83393 = 0.587
+    const crd::f64 x[1] = {0.0};
+    const crd::f64 p[1] = {1.0};
+    crd::f64 g[1] = {};
+    REQUIRE(obj.gradient({x, 1}, {g, 1}));
+    const crd::f64 fx = obj.value({x, 1});
+    const crd::f64 dphi0 = g[0] * p[0];
+    REQUIRE(dphi0 < 0.0);
+    const crd::f64 c1 = 1e-4;
+    const crd::f64 c2 = 0.5;
+    crd::f64 x_out[1] = {};
+    crd::f64 g_out[1] = {};
+    const opt::MoreThuenteLineSearch<crd::f64> mt(c1, c2, 64);
+    // The trials 1000 and 500 overflow; at 250 the value is 4.9e307 and the cubic's sums overflow to infinity.
+    const auto r = mt.search(obj, {x, 1}, fx, {g, 1}, {p, 1}, 1000.0, {x_out, 1}, {g_out, 1});
+    REQUIRE(r.ok);
+    CHECK(std::isfinite(r.alpha));
+    CHECK(r.fx_new <= fx + c1 * r.alpha * dphi0);
+    CHECK(std::fabs(g_out[0] * p[0]) <= c2 * std::fabs(dphi0));
 }
 
 TEST_CASE("v7-c MoreThuente determinism moat {1,2,4,8,16} (parallel objective)", "[hesap][opt][v7][moat]")

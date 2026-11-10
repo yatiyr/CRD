@@ -17,7 +17,11 @@
 // overflow the square nor take the root of a tiny negative number, and its sign follows the direction of travel
 // per case; (2) the switch from the modified function ψ to φ happens once the trial is below the sufficient-decrease
 // line with a slope no steeper than min(c1,c2)·φ'(0); (3) a bracket terminates through the relative-width test
-// (xtol), the clamp of every trial into the interval and the step range, and a cap on the evaluation count.
+// (xtol), the clamp of every trial into the interval and the step range, and a cap on the evaluation count; (4) a
+// trial where the value or slope is infinite or NaN (outside the objective's domain) is never fed to the interval
+// update: the step bisects back toward the best step and later trials stay short of the nearest such point, and an
+// interpolated step that overflowed to infinity or NaN is replaced by a bisection of the bracket, or, before a
+// bracket exists, by a stride twice the last one.
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
@@ -277,6 +281,8 @@ public:
         T    width = m_stpmax - m_stpmin; // bracket width after the latest round
         T    older_width = static_cast<T>(2) * width;
 
+        bool has_edge = false; // a trial where the objective was not finite lies past `edge`
+        T    edge = zero;
         T a_l = zero, f_l = phi0, d_l = dphi0; // endpoint with the lowest value so far
         T a_u = zero, f_u = phi0, d_u = dphi0; // the other endpoint of the interval of uncertainty
         T step = std::min(std::max(alpha0 > zero ? alpha0 : static_cast<T>(1), m_stpmin), m_stpmax);
@@ -318,12 +324,29 @@ public:
                 break;
             }
 
+            // A trial where the value or slope is not finite lies outside the objective's domain, and the interval
+            // update cannot use it (the cubic and quadratic would be fitted through infinity). The paper assumes a
+            // finite φ, so the step retreats to the midpoint between the best step and the trial, and no later
+            // trial passes the nearest such point.
+            if (!std::isfinite(f) || !std::isfinite(dg))
+            {
+                if (step > a_l)
+                {
+                    edge = has_edge ? std::min(edge, step) : step;
+                    has_edge = true;
+                }
+                step = a_l + (step - a_l) / static_cast<T>(2);
+                continue;
+            }
+
             // Enter stage 2 once the modified function is near its minimum.
             if (on_psi && f <= line && flat_slope <= dg)
             {
                 on_psi = false;
             }
 
+            const T trial = step;
+            const T trial_from = a_l;
             if (on_psi && f <= f_l && f > line)
             {
                 detail::mt_dcstep_on_psi<T>(armijo_slope, a_l, f_l, d_l, a_u, f_u, d_u, step, f, dg, bracketed, lo, hi);
@@ -332,10 +355,21 @@ public:
             {
                 detail::mt_dcstep<T>(a_l, f_l, d_l, a_u, f_u, d_u, step, f, dg, bracketed, lo, hi);
             }
+            if (!std::isfinite(step))
+            {
+                // The cubic's sums overflowed (values near the largest double): the interpolated step is
+                // unusable, so bisect the bracket, or double the last stride when there is none yet.
+                step = bracketed ? a_l + (a_u - a_l) / static_cast<T>(2)
+                                 : trial + static_cast<T>(2) * (trial - trial_from);
+            }
 
             if (bracketed)
             {
                 detail::mt_guard_shrinkage<T>(a_l, a_u, step, width, older_width);
+            }
+            if (has_edge && edge > a_l && step >= edge)
+            {
+                step = a_l + (edge - a_l) / static_cast<T>(2);
             }
         }
 
