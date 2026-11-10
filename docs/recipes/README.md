@@ -50,6 +50,7 @@ the offline and real-time forms are genuinely different systems (as hair does).
 
 ## Index
 
+- [The crd-net transport layer](2026-11-10-net-transport.md) — row 4.2a end to end: every knob, QUIC's recovery and flow-control maths, QMux, HTTP/3 and QPACK, WebTransport, HTTP/2 and HPACK, WebSocket and its tunnels, the channel link, every scar from the sessions and the interop records.
 - [Workspace sync](workspace-sync.md) — the operator's daily NAS sync, an export for a friend and a restore on a new machine; what the NAS receives and how it is protected.
 - [Setting up the Cerid CI platform](ci-platform-setup.md) — the user's four steps (project, billing, budget, go) and the operator's idempotent runbook (APIs, buckets, budget stop, identities, network, launcher, images, the IAP-tunnel UI) for ADR-0135, then the optional pieces.
 - [Operating the Cerid CI platform](ci-platform-runbooks.md) — SLOs and runbooks: stuck build, lost VM, budget hit, coordinator down, flaky quarantine, first bad commit, upgrade, backup and disaster recovery.
