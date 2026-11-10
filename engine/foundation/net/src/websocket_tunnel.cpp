@@ -357,8 +357,9 @@ bool WebSocketTunnels::on_event(const Http3Event& event, u64 now_ns) noexcept
         case Http3EventKind::Finished:
             return ended(event.stream, true, 0U, now_ns);
         case Http3EventKind::Aborted:
-        case Http3EventKind::Stopped:
             return ended(event.stream, false, event.error, now_ns);
+        case Http3EventKind::Stopped:
+            return stopped(event.stream, event.error);
         default:
             return false;
     }
@@ -435,12 +436,13 @@ void WebSocketTunnels::answer(Slot& slot, cont::ConstSpan<HttpField> fields, con
     ws_read_connect_response(fields, info, *m_config.connection.websocket, handshake);
     slot.opening = false;
     slot.deadline_ns = kQmuxNoTimer;
-    if (handshake.status == kWsConnectAccepted && slot.connection->start_tunnel(handshake.protocol, now_ns))
+    const bool accepted = handshake.status == kWsConnectAccepted;
+    if (accepted && !slot.stopped && slot.connection->start_tunnel(handshake.protocol, now_ns))
     {
         slot.report_open = true;
         return;
     }
-    slot.status = handshake.status;
+    slot.status = accepted ? 0U : handshake.status;
     static_cast<void>(cancel(slot.stream, false));
     slot.finished = true;
     slot.peer_ended = true;
@@ -480,6 +482,22 @@ bool WebSocketTunnels::ended(u64 stream, bool clean, u64 error, u64 now_ns) noex
     {
         slot->finished = true; // the peer's reset ended both directions
     }
+    return true;
+}
+
+bool WebSocketTunnels::stopped(u64 stream, u64 error) noexcept
+{
+    Slot* const slot = find(stream);
+    if (slot == nullptr)
+    {
+        return false;
+    }
+    // This side's direction is gone; the peer's is read to its end (RFC 9000 section 3.5): an answer that still comes
+    // complete (RFC 9114 section 4.1.1), or what a peer sent before it stopped reading, its Close among it. The
+    // handshake timeout, the tunnel's own timers and the peer's end of the stream bound the wait.
+    slot->stopped = true;
+    slot->finished = true;
+    slot->error = error;
     return true;
 }
 

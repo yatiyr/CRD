@@ -124,8 +124,10 @@ struct Seen
 {
     WsTunnelEventKind kind = WsTunnelEventKind::Opened;
     QuicHandle tunnel;
+    u64 stream = 0U;
     u16 status = 0U;
     u64 error = 0U;
+    QmuxCloseInfo close; // Closed: how the tunnel's connection ended
 };
 
 // One end: its tunnels and what reached its owner.
@@ -154,8 +156,13 @@ struct End
         Seen& slot = seen[seen_count++];
         slot.kind = event.kind;
         slot.tunnel = event.tunnel;
+        slot.stream = event.stream;
         slot.status = event.status;
         slot.error = event.error;
+        if (event.kind == WsTunnelEventKind::Closed)
+        {
+            slot.close = event.connection->close_info();
+        }
     }
 
     [[nodiscard]] usize count(WsTunnelEventKind kind) const
@@ -894,6 +901,85 @@ TEMPLATE_TEST_CASE("WebSocket tunnels: a client refuses an answer that does not 
         REQUIRE(refused != nullptr);
         CHECK(refused->status == item.expected);
         CHECK(rig.end[kClient].count(WsTunnelEventKind::Opened) == 0U);
+        CHECK(rig.end[kClient].tunnels.live() == 0U);
+    }
+}
+
+TEST_CASE("WebSocket tunnels: a peer that stops reading still delivers what it sent", "[net][ws-tunnel]")
+{
+    // STOP_SENDING ends this side's direction alone (RFC 9000 section 3.5): a peer may stop reading once it has closed,
+    // and what it sent behind the frame, its Close among it, is still read.
+    for (const bool server_stops : {true, false})
+    {
+        CAPTURE(server_stops);
+        H3TunnelRig rig;
+        REQUIRE(rig.ok);
+        QmuxConnection* client = nullptr;
+        QmuxConnection* server = nullptr;
+        open_tunnel(rig, client, server);
+        const usize stopper = server_stops ? kServer : kClient;
+        const usize other = server_stops ? kClient : kServer;
+        QmuxConnection* const closer = server_stops ? server : client;
+        const Seen* const opened = rig.end[kServer].last(WsTunnelEventKind::Opened);
+        REQUIRE(opened != nullptr);
+        REQUIRE(rig.wire->streams[stopper].stop_sending(opened->stream, 0U) == QuicStreamError::None);
+        closer->close(7U, span_of("bye"), rig.now);
+        rig.flush();
+        rig.settle();
+        const Seen* const closed = rig.end[other].last(WsTunnelEventKind::Closed);
+        REQUIRE(closed != nullptr);
+        CHECK(closed->close.reason == QmuxCloseReason::Peer);
+        CHECK(closed->close.application);
+        CHECK(closed->close.error_code == 7U);
+        CHECK(rig.end[stopper].count(WsTunnelEventKind::Closed) == 1U);
+        CHECK(rig.end[kClient].tunnels.live() == 0U);
+        CHECK(rig.end[kServer].tunnels.live() == 0U);
+    }
+}
+
+TEST_CASE("WebSocket tunnels: a request stopped before its answer still takes the answer", "[net][ws-tunnel]")
+{
+    // A server may stop reading a request and then answer it complete (RFC 9114 section 4.1.1), its STOP_SENDING
+    // arriving first: Quinn sends the frame ahead of the response's stream data.
+    struct Case
+    {
+        const char* status;
+        const char* protocol;
+        u16 expected;
+    };
+    const Case cases[] = {{"400", nullptr, 400U}, {"200", kProtocol, 0U}, {nullptr, nullptr, 0U}};
+    for (const Case& item : cases)
+    {
+        CAPTURE(item.status);
+        H3TunnelRig rig(~usize{0}, 4U, false);
+        REQUIRE(rig.ok);
+        QuicHandle handle;
+        REQUIRE(rig.end[kClient].tunnels.open(rig.now, handle) == WsTunnelError::None);
+        rig.settle();
+        const u64 stream = rig.end[kServer].request_stream;
+        REQUIRE(stream != ~u64{0});
+        REQUIRE(rig.wire->streams[kServer].stop_sending(stream, 0U) == QuicStreamError::None);
+        rig.settle();
+        CHECK(rig.end[kClient].count(WsTunnelEventKind::Refused) == 0U); // still waiting for the answer
+        if (item.status == nullptr)
+        {
+            rig.now = rig.end[kClient].tunnels.next_deadline_ns(); // no answer: the handshake timeout still bounds it
+        }
+        else
+        {
+            Section response;
+            response.add(":status", item.status);
+            if (item.protocol != nullptr)
+            {
+                response.add("sec-websocket-protocol", item.protocol);
+            }
+            rig.raw_respond(stream, response, true);
+        }
+        rig.settle();
+        const Seen* const refused = rig.end[kClient].last(WsTunnelEventKind::Refused);
+        REQUIRE(refused != nullptr);
+        CHECK(refused->status == item.expected);
+        CHECK(rig.end[kClient].count(WsTunnelEventKind::Opened) == 0U); // a 2xx it could not answer opens none
         CHECK(rig.end[kClient].tunnels.live() == 0U);
     }
 }

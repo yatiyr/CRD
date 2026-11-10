@@ -13,9 +13,12 @@
 //             Beyond the pool it is refused as a stream (REFUSED_STREAM, H3_REQUEST_REJECTED).
 //   bytes     a tunnel takes every byte it is given and returns the stream's credit at once: its own streams' flow
 //             control bounds what it holds. What it writes goes out as the HTTP stream's credit and room allow.
-//   ends      a clean end of the stream is the end of the transport (RFC 8441 section 5); a reset or STOP_SENDING is
-//             its failure. A closed tunnel's last bytes are tried once; its stream is then finished, or cancelled
-//             (CANCEL, H3_REQUEST_CANCELLED) when they could not all go or the tunnel failed.
+//   ends      a clean end of the stream is the end of the transport (RFC 8441 section 5); a reset is its failure.
+//             STOP_SENDING ends this side's direction alone, and the peer's is read to its end (RFC 9000 section 3.5):
+//             a peer may stop reading once its Close has gone, and a server may answer an opening request complete
+//             after stopping it (RFC 9114 section 4.1.1), where a refusal keeps its status and a 2xx is refused, as
+//             nothing could reach the server. A closed tunnel's last bytes are tried once; its stream is then
+//             finished, or cancelled (CANCEL, H3_REQUEST_CANCELLED) when they could not all go or the tunnel failed.
 //   memory    the pool comes from the injected allocator at init(); a tunnel's streams, datagrams and staging buffer
 //             when it is opened, so the allocator bounds them.
 //   threads   the owning connection's.
@@ -120,6 +123,7 @@ private:
         u32 generation = 0U;
         u16 status = 0U;
         bool opening = false;     // a client's: no answer yet
+        bool stopped = false;     // the peer reads no more of the stream (STOP_SENDING)
         bool finished = false;    // this side's end of the stream went
         bool peer_ended = false;  // the peer's did, or its reset
         bool report_open = false;
@@ -140,6 +144,7 @@ private:
     void answer(Slot& slot, cont::ConstSpan<HttpField> fields, const HttpMessageInfo& info, u64 now_ns) noexcept;
     void deliver(Slot& slot, cont::ConstSpan<u8> bytes, u64 now_ns) noexcept;
     [[nodiscard]] bool ended(u64 stream, bool clean, u64 error, u64 now_ns) noexcept;
+    [[nodiscard]] bool stopped(u64 stream, u64 error) noexcept;
     [[nodiscard]] bool pump(Slot& slot, u64 now_ns) noexcept;
     void settle(Slot& slot) noexcept;
     [[nodiscard]] bool fill(Slot& slot, WsTunnelEvent& event, u32 index) noexcept;
