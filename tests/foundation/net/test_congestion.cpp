@@ -563,8 +563,8 @@ TEST_CASE("pacer: credit accrues exactly at the rate up to the burst, a packet m
           "time pays it",
           "[net][net-path][congestion]")
 {
-    constexpr u64 kRate = 1200000U; // 1200 bytes a millisecond
-    constexpr u64 kBurst = 12000U;
+    static constexpr u64 kRate = 1200000U; // 1200 bytes a millisecond
+    static constexpr u64 kBurst = 12000U;
     Pacer pacer;
     CHECK(pacer.release_ns(0U, kRate, kBurst) == 0U);
     CHECK(pacer.credit(0U, kRate, kBurst) == static_cast<crd::i64>(kBurst));
