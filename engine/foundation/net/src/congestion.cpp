@@ -1,9 +1,10 @@
-// crd-net -- congestion control and pacing (NET-PATH; contract: docs/design/network-foundation.md#congestion, #bbr
-// and #prague).
+// crd-net -- congestion control and pacing (NET-PATH; contract: docs/design/network-foundation.md#congestion, #bbr,
+// #prague, #scream and #gcc).
 #include <crd/net/congestion.hpp>
 
 #include <crd/core/wide_multiply.hpp>
 #include <crd/hesap/net/classic_ecn.hpp>
+#include <crd/hesap/net/delay_trend.hpp>
 #include <crd/hesap/net/queue_delay.hpp>
 #include <crd/hesap/net/rate.hpp>
 #include <crd/hesap/stats/philox.hpp>
@@ -2528,11 +2529,663 @@ private:
     bool m_sampled = false;
 };
 
+// ---- GCC (draft-ietf-rmcat-gcc-02, as libwebrtc's send side runs it) ----
+
+using hesap::net::AckedRateEstimator;
+using hesap::net::DelayState;
+using hesap::net::GroupDeltas;
+using hesap::net::PacketGroupTracker;
+using hesap::net::TrendlineFilter;
+using hesap::net::TrendlineSample;
+using hesap::net::WindowedMin;
+
+// Rates are bytes per second; libwebrtc's constants in bits are divided by 8.
+constexpr u64 kGccMinRate = 625U;                // 5 kbit/s, libwebrtc's least congestion controller rate
+constexpr u64 kGccMaxRate = 12500000000U;        // 100 Gbit/s, the ceiling when the policy sets none
+constexpr u64 kGccDefaultRttNs = 200000000U;     // the rate control's RTT before a sample (kDefaultRtt)
+constexpr u64 kGccBetaPercent = 85U;             // section 5.5's beta
+constexpr u64 kGccBackoffTerm = 625U;            // 5 kbit/s taken off a decrease above it
+constexpr u64 kGccIncreaseFloor = 125U;          // 1 kbit/s, the least multiplicative step
+constexpr u64 kGccLimitTerm = 1250U;             // 10 kbit/s over 1.5 times the throughput
+constexpr u64 kGccLn108Q32 = 330545155U;         // ln(1.08) in 2^-32
+constexpr u64 kGccResponseNs = 100000000U;       // the detector's reaction time added to the RTT
+constexpr u64 kGccFramesPerSecond = 30U;         // the frame rate the additive step assumes
+constexpr u64 kGccPacketBytes = 1200U;           // and the packet size
+constexpr u64 kGccMinAdditiveRate = 500U;        // 4 kbit/s a second
+constexpr u64 kGccReduceMinNs = 10000000U;       // a further reduction waits clamp(rtt, 10 ms, 200 ms)
+constexpr u64 kGccReduceMaxNs = 200000000U;
+constexpr u64 kGccDeviationMin = u64{50} << 16U; // the capacity's normalised variance, 0.4 to 2.5 kbit/s, in 2^-16
+constexpr u64 kGccDeviationMax = u64{625} << 15U;
+constexpr u64 kGccCapacityNorm = 125U;           // its least normaliser, 1 kbit/s
+constexpr u64 kGccCapacityGain = 20U;            // its gain on overuse, 1/20
+constexpr u64 kGccStreamTimeoutNs = 2000000000U; // feedback silent this long restarts the delay trend
+constexpr u64 kGccLossPackets = 20U;             // a loss fraction needs this many packets (kLimitNumPackets)
+constexpr u64 kGccLowLoss = 5U;                  // in 2^-8: at most 2% lost increases
+constexpr u64 kGccHighLoss = 25U;                // in 2^-8: more than 10% lost decreases
+constexpr u64 kGccLossIncreasePercent = 108U;
+constexpr u64 kGccLossDecreaseNs = 300000000U;   // loss decreases stand at least this and an RTT apart
+constexpr u64 kGccStartPhaseNs = 2000000000U;    // with no loss, the loss controller follows the delay's
+constexpr u64 kGccHistoryNs = 1000000000U;       // the loss controller grows from this window's least rate
+constexpr u64 kGccHistorySlackNs = 1000000U;     // and lets an entry go this much early
+constexpr u64 kGccHistorySlotNs = 64000000U;     // its entries' time slots
+constexpr usize kGccHistory = 17U;
+constexpr u64 kGccQueueNs = 350000000U;          // the window lets the rate queue this long past the RTT
+constexpr u64 kGccMinWindow = 3000U;
+constexpr u64 kGccRttFrames = 32U;               // the window's RTT: the least of the last frames' largest
+constexpr u64 kGccPacePercent = 110U;            // libwebrtc's send-side pacing factor
+constexpr u64 kGccFirstPacePercent = 250U;       // and its factor before any feedback
+constexpr u64 kGccBurstNs = 1000000U;            // a millisecond of the pacing rate leaves at once
+constexpr u64 kQ32 = u64{1} << 32U;
+constexpr u32 kGccTrendWindow = TrendlineFilter::kDefaultWindow;
+
+// A window of the history meets at most this many slots.
+static_assert(kGccHistory * kGccHistorySlotNs >= kGccHistoryNs + kGccHistorySlotNs);
+
+// e^y - 1 for y in 2^-32 up to ln(1.08): four terms of the series, within 2^-31 of it.
+[[nodiscard]] constexpr u64 exp_minus_one_q32(u64 y) noexcept
+{
+    const u64 y2 = (y * y) >> 32U;
+    const u64 y3 = (y2 * y) >> 32U;
+    const u64 y4 = (y3 * y) >> 32U;
+    return y + y2 / 2U + y3 / 6U + y4 / 24U;
+}
+
+class Gcc final : public CongestionController
+{
+public:
+    Gcc(const CongestionPolicy& policy, u64 max_datagram) noexcept : m_policy(policy)
+    {
+        m_max_rate = (policy.target_rate_max != 0U) ? policy.target_rate_max : kGccMaxRate;
+        m_min_rate = min_u64(max_u64(policy.target_rate_min, kGccMinRate), m_max_rate); // a lower maximum wins
+        size(max_datagram);
+        restart();
+    }
+
+    // A live swap: the rate starts from the model's bandwidth or the source's target, else the window per the
+    // initial RTT; the window and the last reduction carry over.
+    void seed(const CongestionState& from) noexcept
+    {
+        u64 rate = from.bandwidth;
+        if (rate == 0U)
+        {
+            rate = (from.target_rate != 0U) ? from.target_rate
+                                            : multiply_divide(from.window, kNanosPerSecond, kQuicInitialRttNs);
+        }
+        start(rate);
+        m_window = min_u64(max_u64(from.window, m_min_window), kCongestionMaxWindow);
+        m_decrease_ns = from.recovery_start_ns;
+        m_reductions = from.reductions;
+        m_undone = from.undone;
+    }
+
+    [[nodiscard]] CongestionAlgorithm algorithm() const noexcept override { return CongestionAlgorithm::Gcc; }
+
+    void on_sent(const CongestionPacket& /*packet*/, u64 /*in_flight*/, u64 /*now_ns*/) noexcept override {}
+
+    void on_limited(bool /*window*/, u64 /*now_ns*/) noexcept override {}
+
+    // The acknowledged rate counts the packet when its acknowledgement arrived (one clock); the delay trend takes its
+    // peer receive time, and the frame's largest packet is kept for the frame's own sample when the peer gives none.
+    void on_acked(const CongestionPacket& packet, u64 now_ns) noexcept override
+    {
+        ++m_frame_packets;
+        m_frame_oldest_ns = min_u64(m_frame_oldest_ns, packet.sent_ns);
+        m_acked.update(static_cast<i64>(min_u64(now_ns / 1000000U, AckedRateEstimator::kMaxTimeMs)),
+                       static_cast<u32>(min_u64(packet.bytes, ~u32{0})), packet.delivery.app_limited);
+        if (packet.received_ns != kNeverNs)
+        {
+            if (!m_timestamps)
+            {
+                m_timestamps = true; // the peer's clock from here: the trend of the frames' samples starts over
+                restart_delay();
+            }
+            add_delay(packet.sent_ns, packet.received_ns, packet.bytes, now_ns);
+        }
+        if (!m_frame_acked || packet.number > m_largest_number)
+        {
+            m_largest_number = packet.number;
+            m_largest_sent_ns = packet.sent_ns;
+            m_largest_bytes = packet.bytes;
+        }
+        m_frame_acked = true;
+    }
+
+    // The feedback of one ACK frame: the delay trend's state through the rate control, the loss controller once the
+    // packets make a fraction, the window from the rate; the frame's counts start over.
+    void on_ack_end(const QuicRtt& rtt, bool sampled, u64 /*in_flight*/, u64 now_ns) noexcept override
+    {
+        m_rtt_ns = (rtt.smoothed_ns != 0U) ? rtt.smoothed_ns : kGccDefaultRttNs;
+        m_sampled = m_sampled || sampled;
+        if (!m_timestamps && sampled && m_frame_acked)
+        {
+            add_delay(m_largest_sent_ns, saturating_add(m_largest_sent_ns, rtt.adjusted_ns), m_largest_bytes, now_ns);
+        }
+        if (m_frame_acked)
+        {
+            update_delay_based(now_ns);
+            m_feedback = true;
+            if (m_frame_oldest_ns <= now_ns)
+            {
+                ++m_frames;
+                m_rtt_min.update(now_ns - m_frame_oldest_ns, m_frames);
+            }
+        }
+        update_packets_lost(now_ns);
+        if (m_rtt_min.has_sample())
+        {
+            update_window();
+        }
+        m_frame_acked = false;
+        m_frame_packets = 0U;
+        m_frame_lost = 0U;
+        m_frame_ce = 0U;
+        m_frame_oldest_ns = kNeverNs;
+    }
+
+    void on_lost(const CongestionPacket& /*packet*/, u64 /*now_ns*/) noexcept override
+    {
+        m_frame_lost = saturating_add(m_frame_lost, 1U);
+    }
+
+    // RFC 3168 section 5: CE answers as a loss would; the marked packets were counted as acknowledged.
+    void on_ecn(u64 /*marked*/, u64 ce, u64 /*newest_sent_ns*/, u64 /*now_ns*/) noexcept override
+    {
+        m_frame_ce = saturating_add(m_frame_ce, ce);
+    }
+
+    void on_ecn_unavailable() noexcept override {}
+
+    // The rates and the window halve, as an overuse with no acknowledged rate does, and the link's capacity is
+    // forgotten.
+    void on_persistent_congestion(u64 now_ns) noexcept override
+    {
+        m_has_capacity = false;
+        set_delay_rate(m_delay_rate / 2U, now_ns);
+        m_delay_limit = m_delay_rate;
+        set_target(m_target / 2U);
+        m_window = max_u64(m_window / 2U, m_min_window);
+    }
+
+    // Neither controller keeps an undo: a loss counted stands.
+    void on_spurious(const CongestionPacket& /*packet*/, u64 /*lost_ns*/, u64 /*now_ns*/) noexcept override {}
+
+    void reset(u64 /*now_ns*/) noexcept override { restart(); }
+
+    void set_max_datagram(u64 bytes) noexcept override
+    {
+        const bool initial = m_window == m_initial;
+        size(min_u64(max_u64(bytes, kQuicMinInitialDatagram), kMaxDatagram));
+        m_window = initial ? m_initial : max_u64(m_window, m_min_window);
+    }
+
+    [[nodiscard]] u64 window() const noexcept override { return m_window; }
+
+    // 1.1 times the target once feedback arrived, 2.5 times before (libwebrtc's pacing factors).
+    [[nodiscard]] u64 pacing_rate(const QuicRtt& /*rtt*/) const noexcept override
+    {
+        return multiply_divide(m_target, m_feedback ? kGccPacePercent : kGccFirstPacePercent, kPercent);
+    }
+
+    [[nodiscard]] u64 burst() const noexcept override
+    {
+        if (!m_sampled)
+        {
+            return m_initial;
+        }
+        return max_u64(multiply_divide(pacing_rate(QuicRtt{}), kGccBurstNs, kNanosPerSecond), 2U * m_datagram);
+    }
+
+    [[nodiscard]] CongestionState state() const noexcept override
+    {
+        CongestionState out;
+        out.window = m_window;
+        out.slow_start_threshold = m_window; // no slow start: a controller swapped in avoids congestion from here
+        out.recovery_start_ns = m_decrease_ns;
+        out.reductions = m_reductions;
+        out.undone = m_undone;
+        out.bandwidth = m_delay_rate;
+        out.target_rate = m_target;
+        const bool holding = m_decrease_ns != kNeverNs && m_rate_state != RateState::Increase;
+        out.phase = holding ? CongestionPhase::Recovery : CongestionPhase::Avoidance;
+        return out;
+    }
+
+private:
+    enum class RateState : u8
+    {
+        Hold,
+        Increase,
+        Decrease,
+    };
+
+    struct Least
+    {
+        u64 at_ns = 0U;
+        u64 rate = 0U;
+    };
+
+    void size(u64 max_datagram) noexcept
+    {
+        m_datagram = max_datagram;
+        m_min_window = max_u64(kGccMinWindow, m_policy.minimum_packets * max_datagram);
+        m_initial = max_u64(congestion_initial_window(m_policy, max_datagram), m_min_window);
+    }
+
+    // The start rate is the initial window over the initial RTT (12000 bytes: 288 kbit/s, near libwebrtc's 300).
+    void restart() noexcept
+    {
+        m_window = m_initial;
+        m_timestamps = false;
+        m_acked = AckedRateEstimator{};
+        restart_delay();
+        start(multiply_divide(m_initial, kNanosPerSecond, kQuicInitialRttNs));
+        m_rtt_ns = kGccDefaultRttNs;
+        m_rtt_min = WindowedMin<u64>(kGccRttFrames);
+        m_frames = 0U;
+        m_feedback = false;
+        m_feedback_window = false;
+        m_sampled = false;
+        m_frame_acked = false;
+        m_frame_packets = 0U;
+        m_frame_lost = 0U;
+        m_frame_ce = 0U;
+        m_frame_oldest_ns = kNeverNs;
+    }
+
+    void restart_delay() noexcept
+    {
+        m_groups.reset();
+        const bool ready = m_trend.init(m_samples, kGccTrendWindow);
+        static_cast<void>(ready); // the window and its storage are this class's constants
+        m_last_seen_ns = kNeverNs;
+    }
+
+    // Both controllers start at `rate` (SetStartBitrate and SetSendBitrate), the link's capacity unknown.
+    void start(u64 rate) noexcept
+    {
+        m_delay_rate = min_u64(max_u64(rate, m_min_rate), m_max_rate);
+        m_throughput = m_delay_rate;
+        m_delay_limit = m_delay_rate;
+        m_target = m_delay_rate;
+        m_rate_state = RateState::Hold;
+        m_change_ns = kNeverNs;
+        m_decrease_ns = kNeverNs;
+        m_has_capacity = false;
+        m_capacity = 0U;
+        m_deviation = kGccDeviationMin;
+        m_expected = 0U;
+        m_lost = 0U;
+        m_fraction = 0U;
+        m_decreased = false;
+        m_loss_decrease_ns = kNeverNs;
+        m_first_report_ns = kNeverNs;
+        m_least_count = 0U;
+    }
+
+    // Sections 5.2 and 5.3: one packet's send and receive times, in microseconds, into the groups and the trend.
+    void add_delay(u64 sent_ns, u64 received_ns, u64 bytes, u64 now_ns) noexcept
+    {
+        if (m_last_seen_ns != kNeverNs && now_ns - m_last_seen_ns > kGccStreamTimeoutNs)
+        {
+            restart_delay();
+        }
+        m_last_seen_ns = now_ns;
+        const auto us = [](u64 ns) { return static_cast<i64>(ns / 1000U); };
+        GroupDeltas deltas;
+        if (m_groups.add(us(sent_ns), us(received_ns), us(now_ns), static_cast<u32>(min_u64(bytes, ~u32{0})), deltas))
+        {
+            const bool taken = m_trend.update(deltas, us(received_ns));
+            static_cast<void>(taken); // a delta outside the trend's domain changes nothing
+        }
+    }
+
+    [[nodiscard]] bool acked_rate(u64& rate) const noexcept
+    {
+        if (!m_acked.has_estimate())
+        {
+            return false;
+        }
+        rate = static_cast<u64>(m_acked.kbps() * 125.0F); // kbit/s to bytes per second, rounded down
+        return true;
+    }
+
+    // DelayBasedBwe::MaybeUpdateEstimate: an overuse reduces at most once a clamped RTT, or at once when the
+    // throughput fell below half the rate; with no acknowledged rate yet it halves the rate.
+    void update_delay_based(u64 now_ns) noexcept
+    {
+        u64 acked = 0U;
+        const bool has_acked = acked_rate(acked);
+        if (m_trend.state() != DelayState::Overusing)
+        {
+            change_rate(m_trend.state(), has_acked, acked, now_ns);
+        }
+        else if (!has_acked)
+        {
+            set_delay_rate(m_delay_rate / 2U, now_ns); // the throughput it tests, rate / 2 - 1 bit/s, is always low
+        }
+        else if (reduce_further(now_ns, acked))
+        {
+            change_rate(DelayState::Overusing, has_acked, acked, now_ns);
+        }
+        m_delay_limit = m_delay_rate; // UpdateDelayBasedEstimate: the loss controller's ceiling
+        set_target(m_target);
+    }
+
+    [[nodiscard]] bool reduce_further(u64 now_ns, u64 throughput) const noexcept
+    {
+        const u64 interval = min_u64(max_u64(m_rtt_ns, kGccReduceMinNs), kGccReduceMaxNs);
+        if (m_change_ns == kNeverNs || now_ns - m_change_ns >= interval)
+        {
+            return true;
+        }
+        return throughput < m_delay_rate / 2U;
+    }
+
+    // AimdRateControl::SetEstimate.
+    void set_delay_rate(u64 rate, u64 now_ns) noexcept
+    {
+        const u64 previous = m_delay_rate;
+        m_delay_rate = min_u64(max_u64(rate, m_min_rate), kGccMaxRate);
+        m_change_ns = now_ns;
+        if (m_delay_rate < previous)
+        {
+            m_decrease_ns = now_ns;
+            ++m_reductions;
+        }
+    }
+
+    // Section 5.5's rate control (AimdRateControl::ChangeBitrate) on one detector state.
+    void change_rate(DelayState signal, bool has_acked, u64 acked, u64 now_ns) noexcept
+    {
+        const u64 throughput = has_acked ? acked : m_throughput;
+        m_throughput = throughput;
+        if (signal == DelayState::Overusing)
+        {
+            m_rate_state = RateState::Decrease;
+        }
+        else if (signal == DelayState::Underusing)
+        {
+            m_rate_state = RateState::Hold;
+        }
+        else if (m_rate_state == RateState::Hold)
+        {
+            m_change_ns = now_ns;
+            m_rate_state = RateState::Increase;
+        }
+        if (m_rate_state == RateState::Increase)
+        {
+            increase(throughput, now_ns);
+        }
+        else if (m_rate_state == RateState::Decrease)
+        {
+            decrease(throughput, now_ns);
+        }
+    }
+
+    // Additive near the link's capacity, multiplicative far from it, never past 1.5 times the throughput and 10
+    // kbit/s; a throughput past the capacity's spread forgets it.
+    void increase(u64 throughput, u64 now_ns) noexcept
+    {
+        if (m_has_capacity && throughput > capacity_upper())
+        {
+            m_has_capacity = false;
+        }
+        const u64 limit = saturating_add(saturating_add(throughput, throughput / 2U), kGccLimitTerm);
+        if (m_delay_rate < limit)
+        {
+            const u64 step = m_has_capacity ? additive_step(now_ns) : multiplicative_step(now_ns);
+            m_delay_rate = min_u64(min_u64(saturating_add(m_delay_rate, step), limit), kGccMaxRate);
+        }
+        m_change_ns = now_ns;
+    }
+
+    // To 0.85 of the throughput less 5 kbit/s (0.85 of the capacity's estimate when that is not below the rate),
+    // never up; the capacity learns the throughput, and the rate holds until the queues drain.
+    void decrease(u64 throughput, u64 now_ns) noexcept
+    {
+        u64 decreased = multiply_divide(throughput, kGccBetaPercent, kPercent);
+        if (decreased > kGccBackoffTerm)
+        {
+            decreased -= kGccBackoffTerm;
+        }
+        if (decreased > m_delay_rate && m_has_capacity)
+        {
+            decreased = multiply_divide(m_capacity, kGccBetaPercent, kPercent);
+        }
+        if (decreased < m_delay_rate)
+        {
+            m_delay_rate = max_u64(decreased, m_min_rate);
+            ++m_reductions;
+        }
+        if (m_has_capacity && throughput < capacity_lower())
+        {
+            m_has_capacity = false;
+        }
+        update_capacity(throughput);
+        m_rate_state = RateState::Hold;
+        m_change_ns = now_ns;
+        m_decrease_ns = now_ns;
+    }
+
+    // 1.08 a second, for at most a second, and at least 1 kbit/s.
+    [[nodiscard]] u64 multiplicative_step(u64 now_ns) const noexcept
+    {
+        const u64 elapsed = (m_change_ns == kNeverNs || now_ns < m_change_ns)
+                                ? kNanosPerSecond
+                                : min_u64(now_ns - m_change_ns, kNanosPerSecond);
+        const u64 grown = exp_minus_one_q32(multiply_divide(elapsed, kGccLn108Q32, kNanosPerSecond));
+        return max_u64(multiply_divide(m_delay_rate, grown, kQ32), kGccIncreaseFloor);
+    }
+
+    // Half a packet per response time (the RTT and 100 ms), the packet a 30 frames a second source's of 1200 bytes
+    // at most, and at least 4 kbit/s a second.
+    [[nodiscard]] u64 additive_step(u64 now_ns) const noexcept
+    {
+        const u64 frame = max_u64(m_delay_rate / kGccFramesPerSecond, 1U);
+        const u64 packet = frame / ((frame + kGccPacketBytes - 1U) / kGccPacketBytes);
+        const u64 response = 2U * saturating_add(m_rtt_ns, kGccResponseNs);
+        const u64 per_second = max_u64(multiply_divide(packet, kNanosPerSecond, response), kGccMinAdditiveRate);
+        const u64 elapsed = (m_change_ns == kNeverNs || now_ns < m_change_ns) ? 0U : now_ns - m_change_ns;
+        return multiply_divide(per_second, elapsed, kNanosPerSecond);
+    }
+
+    // LinkCapacityEstimator: the throughput at overuse averaged with gain 1/20, and its variance normalised by it.
+    void update_capacity(u64 sample) noexcept
+    {
+        m_capacity = m_has_capacity ? m_capacity - m_capacity / kGccCapacityGain + sample / kGccCapacityGain : sample;
+        m_has_capacity = true;
+        const u64 error = (m_capacity > sample) ? m_capacity - sample : sample - m_capacity;
+        const u64 most = kGccDeviationMax * kGccCapacityGain;
+        const u64 term = (error < (u64{1} << 24U))
+                             ? min_u64(multiply_divide(error * error, u64{1} << 16U, max_u64(m_capacity,
+                                                                                                 kGccCapacityNorm)),
+                                       most)
+                             : most;
+        const u64 deviation = m_deviation - m_deviation / kGccCapacityGain + term / kGccCapacityGain;
+        m_deviation = min_u64(max_u64(deviation, kGccDeviationMin), kGccDeviationMax);
+    }
+
+    // Three standard deviations, 3 sqrt(deviation * capacity), around the capacity.
+    [[nodiscard]] u64 capacity_spread() const noexcept
+    {
+        return 3U * hesap::net::square_root(multiply_divide(m_deviation, m_capacity, u64{1} << 16U));
+    }
+
+    [[nodiscard]] u64 capacity_upper() const noexcept { return saturating_add(m_capacity, capacity_spread()); }
+
+    [[nodiscard]] u64 capacity_lower() const noexcept
+    {
+        const u64 spread = capacity_spread();
+        return (m_capacity > spread) ? m_capacity - spread : 0U;
+    }
+
+    // Section 6 (SendSideBandwidthEstimation::UpdatePacketsLost): the frame's lost and acknowledged packets join
+    // the count until it holds 20, which gives the loss fraction in 2^-8; CE-marked packets count as lost.
+    void update_packets_lost(u64 now_ns) noexcept
+    {
+        const u64 packets = saturating_add(m_frame_packets, m_frame_lost);
+        if (packets == 0U)
+        {
+            return;
+        }
+        if (m_first_report_ns == kNeverNs)
+        {
+            m_first_report_ns = now_ns;
+        }
+        m_expected = saturating_add(m_expected, packets);
+        m_lost = saturating_add(m_lost, min_u64(saturating_add(m_frame_lost, m_frame_ce), packets));
+        if (m_expected < kGccLossPackets)
+        {
+            return;
+        }
+        m_decreased = false;
+        m_fraction = min_u64(multiply_divide(m_lost, 256U, m_expected), 255U);
+        m_expected = 0U;
+        m_lost = 0U;
+        update_loss_based(now_ns);
+    }
+
+    // SendSideBandwidthEstimation::UpdateEstimate's classic controller: in its first 2 s with no loss it follows the
+    // delay-based rate up; at most 2% lost, it grows to 1.08 times the last second's least rate and 1 kbit/s; past
+    // 10%, it takes 1 - p / 2 at most once 300 ms and an RTT; between, it holds.
+    void update_loss_based(u64 now_ns) noexcept
+    {
+        if (m_fraction == 0U && now_ns - m_first_report_ns < kGccStartPhaseNs && m_delay_limit > m_target)
+        {
+            m_least_count = 0U;
+            remember_least(now_ns);
+            set_target(m_delay_limit);
+            return;
+        }
+        remember_least(now_ns);
+        if (m_fraction <= kGccLowLoss)
+        {
+            set_target(saturating_add(multiply_divide(m_least[0].rate, kGccLossIncreasePercent, kPercent),
+                                      kGccIncreaseFloor));
+            return;
+        }
+        const bool spaced = m_loss_decrease_ns == kNeverNs || now_ns < m_loss_decrease_ns ||
+                            now_ns - m_loss_decrease_ns >= saturating_add(kGccLossDecreaseNs, m_rtt_ns);
+        if (m_fraction > kGccHighLoss && !m_decreased && spaced)
+        {
+            m_loss_decrease_ns = now_ns;
+            m_decreased = true;
+            set_target(multiply_divide(m_target, 512U - m_fraction, 512U));
+            ++m_reductions;
+            return;
+        }
+        set_target(m_target);
+    }
+
+    // The least target rate of the last second: a monotonic queue with an entry per time slot at most. A rate in the
+    // newest entry's slot merges into it, keeping the lower rate and the later time: the least reads at most 64 ms
+    // late and never high.
+    void remember_least(u64 now_ns) noexcept
+    {
+        usize expired = 0U;
+        while (expired < m_least_count &&
+               (now_ns < m_least[expired].at_ns || now_ns - m_least[expired].at_ns + kGccHistorySlackNs > kGccHistoryNs))
+        {
+            ++expired;
+        }
+        for (usize i = expired; i < m_least_count; ++i)
+        {
+            m_least[i - expired] = m_least[i];
+        }
+        m_least_count -= expired;
+        while (m_least_count != 0U && m_target <= m_least[m_least_count - 1U].rate)
+        {
+            --m_least_count;
+        }
+        if (m_least_count != 0U && m_least[m_least_count - 1U].at_ns / kGccHistorySlotNs == now_ns / kGccHistorySlotNs)
+        {
+            m_least[m_least_count - 1U].at_ns = now_ns;
+            return;
+        }
+        m_least[m_least_count] = Least{now_ns, m_target};
+        ++m_least_count;
+    }
+
+    // UpdateTargetBitrate: under the delay-based rate and the policy's maximum, at least its minimum.
+    void set_target(u64 rate) noexcept
+    {
+        m_target = max_u64(min_u64(min_u64(rate, m_delay_limit), m_max_rate), m_min_rate);
+    }
+
+    // The target over the least of the recent frames' largest RTTs and 350 ms, averaged with the window before.
+    void update_window() noexcept
+    {
+        const u64 span = saturating_add(m_rtt_min.best(), kGccQueueNs);
+        const u64 window = min_u64(multiply_divide(m_target, span, kNanosPerSecond), kCongestionMaxWindow);
+        m_window = max_u64(m_feedback_window ? window / 2U + m_window / 2U : window, m_min_window);
+        m_feedback_window = true;
+    }
+
+    CongestionPolicy m_policy;
+    u64 m_datagram = 0U;
+    u64 m_min_window = 0U;
+    u64 m_initial = 0U;
+    u64 m_window = 0U;
+    u64 m_min_rate = 0U;
+    u64 m_max_rate = 0U;
+    u64 m_reductions = 0U;
+    u64 m_undone = 0U;
+
+    // The delay trend (sections 5.2 to 5.4) and the acknowledged rate.
+    PacketGroupTracker m_groups;
+    TrendlineFilter m_trend;
+    TrendlineSample m_samples[TrendlineFilter::storage_samples(kGccTrendWindow)];
+    AckedRateEstimator m_acked;
+    u64 m_last_seen_ns = kNeverNs;
+    bool m_timestamps = false; // the peer reports receive times
+
+    // The frame in progress.
+    u64 m_largest_number = 0U;
+    u64 m_largest_sent_ns = 0U;
+    u64 m_largest_bytes = 0U;
+    u64 m_frame_packets = 0U;
+    u64 m_frame_lost = 0U;
+    u64 m_frame_ce = 0U;
+    u64 m_frame_oldest_ns = kNeverNs;
+    bool m_frame_acked = false;
+
+    // The rate control (section 5.5) and the link's capacity.
+    u64 m_delay_rate = 0U;
+    u64 m_throughput = 0U;
+    u64 m_change_ns = kNeverNs;
+    u64 m_decrease_ns = kNeverNs;
+    u64 m_capacity = 0U;
+    u64 m_deviation = kGccDeviationMin;
+    u64 m_rtt_ns = kGccDefaultRttNs;
+    RateState m_rate_state = RateState::Hold;
+    bool m_has_capacity = false;
+
+    // The loss controller (section 6).
+    u64 m_delay_limit = 0U;
+    u64 m_target = 0U;
+    u64 m_expected = 0U;
+    u64 m_lost = 0U;
+    u64 m_fraction = 0U; // in 2^-8
+    u64 m_loss_decrease_ns = kNeverNs;
+    u64 m_first_report_ns = kNeverNs;
+    Least m_least[kGccHistory] = {};
+    usize m_least_count = 0U;
+    bool m_decreased = false;
+
+    // The window.
+    WindowedMin<u64> m_rtt_min{kGccRttFrames};
+    u64 m_frames = 0U;
+    bool m_feedback = false;
+    bool m_feedback_window = false;
+    bool m_sampled = false;
+};
+
 static_assert(sizeof(NewReno) <= kCongestionSlotBytes && alignof(NewReno) <= alignof(CongestionSlot));
 static_assert(sizeof(Cubic) <= kCongestionSlotBytes && alignof(Cubic) <= alignof(CongestionSlot));
 static_assert(sizeof(Bbr) <= kCongestionSlotBytes && alignof(Bbr) <= alignof(CongestionSlot));
 static_assert(sizeof(Prague) <= kCongestionSlotBytes && alignof(Prague) <= alignof(CongestionSlot));
 static_assert(sizeof(Scream) <= kCongestionSlotBytes && alignof(Scream) <= alignof(CongestionSlot));
+static_assert(sizeof(Gcc) <= kCongestionSlotBytes && alignof(Gcc) <= alignof(CongestionSlot));
 
 [[nodiscard]] i64 scaled_bytes(u64 bytes) noexcept
 {
@@ -2555,7 +3208,10 @@ bool congestion_policy_valid(const CongestionPolicy& policy) noexcept
                         policy.queue_delay_target_ns >= 1000000U &&
                         policy.queue_delay_target_ns <= kScreamQueueDelayTargetMaxNs &&
                         (policy.target_rate_max == 0U || policy.target_rate_min <= policy.target_rate_max);
-    const bool algorithm = window || bbr || prague || scream;
+    // GCC is version 5's and must pace (its rate is a pacing rate), its target rate's bounds in order.
+    const bool gcc = policy.algorithm == CongestionAlgorithm::Gcc && policy.version >= 5U && policy.pacing &&
+                     (policy.target_rate_max == 0U || policy.target_rate_min <= policy.target_rate_max);
+    const bool algorithm = window || bbr || prague || scream || gcc;
     return policy.version >= 1U && policy.version <= kCongestionInterfaceVersion && algorithm &&
            policy.minimum_packets >= 2U &&
            policy.initial_packets >= policy.minimum_packets && policy.initial_packets <= kCongestionMaxInitialPackets &&
@@ -2586,6 +3242,15 @@ CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_da
             scream->seed(*seed);
         }
         return scream;
+    }
+    if (policy.algorithm == CongestionAlgorithm::Gcc)
+    {
+        Gcc* const gcc = new (slot.bytes) Gcc(policy, max_datagram);
+        if (seed != nullptr)
+        {
+            gcc->seed(*seed);
+        }
+        return gcc;
     }
     WindowController* made = nullptr;
     if (policy.algorithm == CongestionAlgorithm::NewReno)

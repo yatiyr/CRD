@@ -9,7 +9,9 @@
 // (#prague): ECT(1) marked and validated, its codepoint following a live swap both ways, ECT(1) re-marked as ECT(0)
 // failing validation, and a transfer through a DualQ bottleneck's L4S step that keeps the queue near its 1 ms step
 // at a full link, where CUBIC's ECT(0) fills the classic drop-tail queue. And SCReAM v2 (#scream): a transfer through a
-// deep drop-tail queue held near its delay target at a full link, where CUBIC fills it, and ECT(1) in L4S mode.
+// deep drop-tail queue held near its delay target at a full link, where CUBIC fills it, and ECT(1) in L4S mode. And
+// GCC (#gcc): with no receive timestamps, each ACK frame's RTT sample less the ACK delay drives its delay trend, and a
+// transfer through a deep drop-tail queue reaches the link from 288 kbit/s and backs off, where CUBIC fills it.
 
 #include "ingress_fixture.hpp"
 #include "quic_connection_fixture.hpp"
@@ -677,4 +679,54 @@ TEST_CASE("QUIC SCReAM: a deep drop-tail queue held near the delay target at a f
     CHECK(pair.client.ecn().state() == QuicEcnState::Capable);
     CHECK(pair.client.marking() == Ecn::Ect1);
     CHECK(pair.server.recovery().received(QuicSpace::Application).ecn().ect1 > 0U);
+}
+
+TEST_CASE("QUIC GCC: from ACK frames alone a transfer reaches the link and keeps a deep queue short of CUBIC's",
+          "[net][net-path][quic-connection][gcc]")
+{
+    // 2 Mbit/s and the Pair's 50 ms round trip under a 300 ms drop-tail buffer. The peer reports no receive times,
+    // so the trend reads each ACK frame's largest packet: its RTT less the peer's ACK delay. From 288 kbit/s at 8% a
+    // second GCC needs about 25 s to reach the link; the transfer lasts past a minute.
+    static constexpr u64 kRate = 250000U;
+    static constexpr usize kBuffer = kRate / 1000U * 300U;
+    struct Run
+    {
+        u64 goodput = 0U;    // bytes per second over the second half
+        u64 max_queued = 0U; // over the second half
+        u64 overflowed = 0U;
+        CongestionState state;
+    };
+    const auto run = [](const CongestionPolicy& policy)
+    {
+        Pair pair(policy, 5U);
+        pair.net->path[0].rate = kRate;
+        pair.net->path[0].buffer = kBuffer;
+        pair.confirm();
+        Bulk bulk{pair.client, pair.server, 16U << 20U};
+        REQUIRE(pair.net->run_until([&] { return bulk.read >= bulk.total / 2U || bulk.step(); }, 900000U * kMs));
+        const u64 half_ns = pair.net->now;
+        const u64 half_read = bulk.read;
+        pair.net->max_queued[0] = 0U;
+        const usize overflowed = pair.net->overflowed[0];
+        REQUIRE(pair.net->run_until([&] { return bulk.step(); }, 900000U * kMs));
+        Run out;
+        out.goodput = (bulk.read - half_read) * 1000U * kMs / (pair.net->now - half_ns);
+        out.max_queued = pair.net->max_queued[0];
+        out.overflowed = pair.net->overflowed[0] - overflowed;
+        out.state = pair.client.congestion().state();
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+        return out;
+    };
+    CongestionPolicy gcc;
+    gcc.algorithm = CongestionAlgorithm::Gcc;
+    const Run delay = run(gcc);
+    const Run cubic = run(CongestionPolicy{});
+    INFO("GCC goodput " << delay.goodput << " max queue " << delay.max_queued << " target " << delay.state.target_rate
+                        << " estimate " << delay.state.bandwidth << " reductions " << delay.state.reductions
+                        << " overflowed " << delay.overflowed << "; CUBIC goodput " << cubic.goodput << " max queue "
+                        << cubic.max_queued << " overflowed " << cubic.overflowed);
+    CHECK(delay.goodput >= kRate * 85U / 100U);
+    CHECK(delay.state.reductions >= 1U);
+    CHECK(delay.overflowed == 0U);
+    CHECK(4U * delay.max_queued <= cubic.max_queued);
 }

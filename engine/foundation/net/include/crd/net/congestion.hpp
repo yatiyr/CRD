@@ -3,7 +3,8 @@
 // crd-net -- congestion control and pacing (NET-PATH; contract: docs/design/network-foundation.md#congestion).
 // Sources: RFC 9002 section 7 and appendix B, RFC 9438 (CUBIC), RFC 9406 (HyStart++), RFC 8985 section 6,
 // draft-ietf-ccwg-bbr-07 (BBRv3), draft-briscoe-iccrg-prague-congestion-control-04 (Prague) with RFC 9331 section 4,
-// draft-ietf-ccwg-rfc8298bis-screamv2-03 (SCReAM v2) with RFC 6817's base delay.
+// draft-ietf-ccwg-rfc8298bis-screamv2-03 (SCReAM v2) with RFC 6817's base delay, draft-ietf-rmcat-gcc-02 (GCC) as
+// libwebrtc's send side runs it.
 //
 //   interface   CongestionController is what every controller is to a connection: it sees each packet counted in
 //               flight leave and be acknowledged or lost, each ACK frame's end with the RTT estimate, the ECN feedback
@@ -40,6 +41,14 @@
 //               2), else ECT(0). It answers with the rate its source should produce (CongestionState::target_rate:
 //               the window per smoothed RTT, held within the policy's bounds), paces at 1.5 times that, and lets
 //               bytes in flight reach 1.5 to 3 windows so a large frame leaves at once.
+//               GCC (draft-ietf-rmcat-gcc-02, the send side libwebrtc runs), the second delay-based controller: the
+//               trend of one-way delay between send-time groups of packets (crd/hesap/net/delay_trend.hpp) drives an
+//               AIMD rate control (Increase, Decrease, Hold; 8% a second far from the link's measured capacity, half
+//               a packet per response time near it, 0.85 of the acknowledged rate on overuse), and a loss controller
+//               (more than 10% lost: 1 - p / 2; under 2%: 8% over the last second's least) caps it; the source's
+//               target rate is the lower of the two. A packet's peer receive time (received_ns) feeds the trend; a
+//               peer that reports none leaves one sample per ACK frame, its largest packet's RTT less the ACK delay.
+//               CE counts as a loss (RFC 3168 section 5), so its packets carry ECT(0).
 //   pacing      Pacer spreads packets at the controller's rate (RFC 9002 section 7.7: 1.25 window per smoothed RTT
 //               for the window controllers, BBR's own gains of its bandwidth, Prague's window per smoothed RTT, doubled
 //               in early slow start) with a burst of the initial window (BBR:
@@ -56,8 +65,9 @@
 namespace crd::net
 {
 // 2 added BBRv3 and the delivery rate samples; 3 added Prague and the ECN feedback's extent (on_ecn); 4 added SCReAM
-// v2 and the source's target rate. A policy of an earlier version still runs.
-inline constexpr u32 kCongestionInterfaceVersion = 4U;
+// v2 and the source's target rate; 5 added GCC and the peer's receive time of a packet. A policy of an earlier version
+// still runs.
+inline constexpr u32 kCongestionInterfaceVersion = 5U;
 inline constexpr u64 kCongestionMaxWindow = u64{1} << 32U; // bytes: past 100 Gbit/s over 300 ms
 inline constexpr u32 kCongestionMaxInitialPackets = 64U;
 inline constexpr u32 kCongestionMinPacingGain = 100U; // percent of window per smoothed RTT
@@ -76,13 +86,15 @@ enum class CongestionAlgorithm : u8
     Bbr,     // draft-ietf-ccwg-bbr-07 (BBRv3); interface version 2
     Prague,  // draft-briscoe-iccrg-prague-congestion-control-04 (L4S, RFC 9331); interface version 3
     Scream,  // draft-ietf-ccwg-rfc8298bis-screamv2-03 (SCReAM v2, real time); interface version 4
+    Gcc,     // draft-ietf-rmcat-gcc-02 (Google Congestion Control, real time); interface version 5
 };
 
 // What a connection's congestion control is, as authored. BBR reads the version, the initial and minimum windows and
 // pacing, which it requires; its gains are the algorithm's, so hystart, fast_convergence and pacing_gain are unused.
 // Prague requires pacing too (the draft's section 2.5.1) and paces at its own gains: pacing_gain and fast_convergence
 // are unused. SCReAM v2 requires pacing (its section 4.3.2) and reads the initial and minimum windows (its
-// MIN_REF_WND of 3000 bytes is the floor) and the fields after pacing_gain, which nothing else reads.
+// MIN_REF_WND of 3000 bytes is the floor) and the fields after pacing_gain, which nothing else reads. GCC requires
+// pacing too (at its own factor) and reads the initial and minimum windows and the target rate's bounds alone.
 struct CongestionPolicy
 {
     u32 version = kCongestionInterfaceVersion;
@@ -94,8 +106,8 @@ struct CongestionPolicy
     bool fast_convergence = true; // RFC 9438 section 4.7 (CUBIC alone)
     bool pacing = true;          // RFC 9002 section 7.7; false sends a window at once
     u32 pacing_gain = 125U;      // percent; kCongestionMinPacingGain to kCongestionMaxPacingGain
-    // SCReAM v2: the source's target rate in bytes per second is held to [target_rate_min, target_rate_max]
-    // (TARGET_BITRATE_MIN and _MAX over 8; a maximum of 0 is none, and a source at its maximum relaxes pacing);
+    // SCReAM v2 and GCC: the source's target rate in bytes per second is held to [target_rate_min, target_rate_max]
+    // (TARGET_BITRATE_MIN and _MAX over 8; a maximum of 0 is none; a SCReAM source at its maximum relaxes pacing);
     // queue_delay_target_ns is QDELAY_TARGET_LO, 1 ms to kScreamQueueDelayTargetMaxNs.
     u64 target_rate_min = 0U;
     u64 target_rate_max = 0U;
@@ -155,13 +167,15 @@ struct CongestionState
     u64 recovery_start_ns = kNeverNs; // when the recovery period began; kNeverNs for none
     u64 reductions = 0U;        // congestion events that reduced the window
     u64 undone = 0U;            // reductions undone as spurious
-    u64 bandwidth = 0U;  // bytes per second the model matches its sending to (BBR.bw); 0 for a window controller
+    // Bytes per second the model matches its sending to (BBR.bw), GCC's delay-based estimate (A_hat); 0 for a window
+    // controller.
+    u64 bandwidth = 0U;
     u64 min_rtt_ns = 0U; // the model's windowed minimum round trip (BBR.min_rtt); 0 for none
     u32 alpha = 0U;      // Prague: the smoothed fraction of packets marked CE, in 2^-20 (kCongestionAlphaOne)
     u32 classic = 0U;    // Prague: how classic its answer to CE is, from 0 (scalable) to 2^16 (ABE's)
-    // SCReAM v2: the rate in bytes per second its source should produce (0 for a bulk controller), its averaged
-    // queue delay and the target it holds that delay to. Its window above is the reference window; window() is what
-    // may be in flight.
+    // SCReAM v2 and GCC: the rate in bytes per second its source should produce (0 for a bulk controller); SCReAM's
+    // averaged queue delay and the target it holds that delay to. SCReAM's window above is the reference window, and
+    // GCC's the window its rate allows; window() is what may be in flight.
     u64 target_rate = 0U;
     u64 queue_delay_ns = 0U;
     u64 queue_delay_target_ns = 0U;
@@ -177,6 +191,9 @@ struct CongestionPacket
     u64 sent_ns = 0U;
     QuicSpace space = QuicSpace::Initial;
     DeliveryStamp delivery; // the sampler's stamp from when it left
+    // When the peer received it, on the peer's clock (a QUIC receive timestamp); kNeverNs when it did not say. Only
+    // differences between two such times mean anything.
+    u64 received_ns = kNeverNs;
 };
 
 class CongestionController
@@ -193,7 +210,7 @@ public:
     virtual void on_sent(const CongestionPacket& packet, u64 in_flight, u64 now_ns) noexcept = 0;
     // Sending had more to send and the window (`window`) or the pacer held it back.
     virtual void on_limited(bool window, u64 now_ns) noexcept = 0;
-    // `packet`, newly acknowledged by the ACK frame being processed.
+    // `packet`, newly acknowledged by the ACK frame being processed (with its peer receive time when reported).
     virtual void on_acked(const CongestionPacket& packet, u64 now_ns) noexcept = 0;
     // The ACK frame's end, after the sampler's: `rtt` holds its sample when `sampled`, and `in_flight` bytes are in
     // flight. The window grows here by what it acknowledged.
@@ -230,7 +247,7 @@ protected:
 };
 
 // Room for any controller of this build.
-inline constexpr usize kCongestionSlotBytes = 1024U; // SCReAM v2, its delay histories included, is the largest
+inline constexpr usize kCongestionSlotBytes = 1536U; // GCC, its delay trend's window included, is the largest
 struct CongestionSlot
 {
     alignas(16) u8 bytes[kCongestionSlotBytes];

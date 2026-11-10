@@ -31,6 +31,7 @@ add_executable(crd-net-tests
     test_negotiation.cpp
     test_prague.cpp
     test_scream.cpp
+    test_gcc.cpp
     test_qmux.cpp
     test_qmux_host.cpp
     test_qmux_http2.cpp

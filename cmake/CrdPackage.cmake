@@ -119,6 +119,19 @@ function(crd_package_dependency target)
     set_property(GLOBAL APPEND PROPERTY CRD_PACKAGE_DEPENDENCIES "${ARG_NAME}")
 endfunction()
 
+# crd_package_link_only(<target> NAME <exported name>)
+# Exports a first-party static library that a packaged library links privately and whose headers no packaged public
+# header includes: its archive (and compile PDB) only, link-only behind the library that links it, with no headers.
+# Unlike a pinned dependency it is not listed in Cerid_DEPENDENCIES.
+function(crd_package_link_only target)
+    cmake_parse_arguments(ARG "" "NAME" "" ${ARGN})
+    get_target_property(type "${target}" TYPE)
+    if(NOT ARG_NAME OR NOT type STREQUAL "STATIC_LIBRARY")
+        message(FATAL_ERROR "crd_package_link_only(${target}) needs a static library and NAME <exported name>")
+    endif()
+    _crd_package_target("${target}" "${ARG_NAME}")
+endfunction()
+
 # crd_package_assets(<source dir> DESTINATION <dir under share/cerid>)
 # Installs authored assets a packaged library reads at run time (DIAG.11a: the diagnostic profiles, policies and
 # fault plans), so a consumer finds them through Cerid_ASSET_DIR instead of the engine's source tree.

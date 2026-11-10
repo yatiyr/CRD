@@ -17,8 +17,8 @@ add_library(crd-hesap-net STATIC ${SOURCES} ${HEADERS})
 
 target_include_directories(crd-hesap-net
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        "${CMAKE_SOURCE_DIR}/engine/numerics/hesap-stats/include"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+        "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/engine/numerics/hesap-stats/include>"
     PRIVATE
         "${CMAKE_SOURCE_DIR}/engine/numerics/hesap-special/include"
 )
@@ -29,11 +29,15 @@ target_link_libraries(crd-hesap-net
         crd-containers
         crd-math
     PRIVATE
-        crd-warnings
+        $<BUILD_INTERFACE:crd-warnings>
 )
 
 target_compile_features(crd-hesap-net PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-hesap-net)
+
+# crd-net links it privately (its congestion controllers' estimators) and no packaged public header includes its
+# headers: the package carries its archive alone, link-only behind Cerid::net.
+crd_package_link_only(crd-hesap-net NAME hesap-net)
 
 # The GF(2^8) dot product and addition, one body per CPU level (ADR-0134); src/erasure_kernel_dispatch.cpp lists them.
 crd_add_cpu_kernels(crd-hesap-net NAME erasure LEVELS portable sse2 avx2 avx512 neon VARIANTS avx2+gfni avx512+gfni

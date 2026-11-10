@@ -3,7 +3,8 @@
 // A simulated bottleneck that the congestion controller tests share (NET-PATH; docs/design/network-foundation.md#bbr
 // and #prague): flows of one controller each, with its delivery rate sampler and pacer, driven as a connection drives
 // them, over a link of a rate, a drop-tail buffer and a step-marking queue that one flow owns or several share, each
-// flow with its own propagation delay and random loss, sending bulk data or a media source's frames (#scream).
+// flow with its own propagation delay and random loss, sending bulk data or a media source's frames (#scream), its
+// packets' receive times reported as QUIC receive timestamps would report them (#gcc) unless turned off.
 
 #include <crd/net/congestion.hpp>
 
@@ -68,6 +69,13 @@ public:
 
     void set_rate(u64 rate) { m_link->rate = rate; }
     void set_loss(u32 permille) { m_loss = permille; }
+    // Whether each acknowledged packet carries the time it left the bottleneck's far end (CongestionPacket's
+    // received_ns), on a receiver clock `offset_ns` ahead of the sender's.
+    void set_timestamps(bool on, u64 offset_ns = 0U)
+    {
+        m_timestamps = on;
+        m_clock_offset_ns = offset_ns;
+    }
     // The link's step-marking threshold (Link::ce_queue); 0 marks nothing and turns ECN off.
     void set_ce_queue(u64 bytes) { m_link->ce_queue = bytes; }
     // Bytes the application has written so far; kInfiniteData for a bulk transfer.
@@ -242,6 +250,7 @@ private:
         {
             m_link->free_ns = start + kBottleneckMss * kBottleneckSecond / m_link->rate;
             f.ack_ns = m_link->free_ns + 2U * m_one_way_ns;
+            f.packet.received_ns = m_timestamps ? m_link->free_ns + m_one_way_ns + m_clock_offset_ns : kNeverNs;
             const u64 over = (m_link->ce_queue != 0U && queue > m_link->ce_queue) ? queue - m_link->ce_queue : 0U;
             f.ce = over != 0U && (m_link->ce_ramp == 0U || (m_seed >> 11U) % m_link->ce_ramp < over);
         }
@@ -281,6 +290,8 @@ private:
     u64 m_frame_period_ns = 0U;
     u64 m_frame_ns = kNeverNs;
     u32 m_loss = 0U;
+    bool m_timestamps = true;
+    u64 m_clock_offset_ns = 0U;
     u64 m_seed = 0x853C49E6748FEA9BU;
     u64 m_ack_ns = kNeverNs;
     u64 m_send_ns = kNeverNs;
