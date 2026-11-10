@@ -814,6 +814,61 @@ TEST_CASE("bessel: complex J and Y of order 2e5 and more are NaN where no method
     }
 }
 
+TEST_CASE("bessel: J, Y and their slopes stay finite where Y of the reflected order leaves the doubles, vs mpmath",
+          "[v12-b][special][bessel]")
+{
+    // Y_{-nu} = sin(nu pi) J_nu + cos(nu pi) Y_nu and J_{-nu} = cos(nu pi) J_nu - sin(nu pi) Y_nu with Y_nu beyond the
+    // doubles and the product within them, and Y'_nu = (nu/x) Y_nu - Y_{nu+1} with Y_{nu+1} beyond them: base gave an
+    // infinity for all of these (mpmath at 70 digits at the exact double inputs).
+    struct Point
+    {
+        int kind; // 0 J, 1 Y, 2 J', 3 Y'
+        f64 nu;
+        f64 x;
+        f64 ref;
+    };
+    const Point points[] = {
+        {1, -188.40000000000001, 3.1480000000000001, -8.88762825424388327166728914872e+307},
+        {3, -106.56999999999999, 0.104, -7.50992356338791289907597556405e+307},
+        {0, -199.06769895457057, 4.0592253787734958, -1.23842566180442888803093685694e+308},
+        {2, -206.00146192554709, 4.8323208386839491, -2.08985388597003866229419691085e+306},
+        {3, 354.83938605974549, 35.378254752988695, 1.05255137664583324244963790479e+308},
+        {1, -295.54950460428995, 19.41102861291175, -1.32109029832375138709618272235e+308},
+        {0, -32.114955914819028, 5.5305990754002826e-09, 9.69340803042594636538560768749e+307},
+        {3, -78.559558649232017, 0.0074851416479113165, -4.61388142084302940012459322293e+307},
+        // beyond the doubles: an infinity of the right sign
+        {0, -191.78241419704247, 3.2616753483034429, -std::numeric_limits<f64>::max()},
+        {2, -27.631083071135603, 1.8617585865522343e-10, std::numeric_limits<f64>::max()},
+        {3, -128.0, 0.37162121535141091, std::numeric_limits<f64>::max()},
+        {1, -32.74620033171594, 6.7598426203219443e-09, std::numeric_limits<f64>::max()},
+    };
+    for (const Point& p : points)
+    {
+        INFO("kind=" << p.kind << " nu=" << p.nu << " x=" << p.x);
+        f64 got = 0.0;
+        if (p.kind == 0)
+        {
+            got = sf::cyl_bessel_j(p.nu, p.x);
+        }
+        else if (p.kind == 1)
+        {
+            got = sf::cyl_neumann(p.nu, p.x);
+        }
+        else if (p.kind == 2)
+        {
+            got = sf::cyl_bessel_j_prime(p.nu, p.x);
+        }
+        else
+        {
+            got = sf::cyl_neumann_prime(p.nu, p.x);
+        }
+        CHECK(tiny_close(got, p.ref));
+    }
+    // The Hankel functions of a real argument share the reflection.
+    const std::complex<f64> h = sf::cyl_hankel_1(-188.40000000000001, 3.1480000000000001);
+    CHECK(close(h.imag(), -8.88762825424388327166728914872e+307, 1e-12, 1e-300));
+}
+
 TEST_CASE("bessel: f32 sanity", "[v12-b][special][bessel]")
 {
     CHECK(close(static_cast<f64>(sf::cyl_bessel_j(0.0F, 1.0F)), 0.7651976865579666, 1e-6, 1e-7));

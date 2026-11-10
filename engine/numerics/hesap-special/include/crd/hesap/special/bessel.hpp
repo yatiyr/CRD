@@ -1778,6 +1778,181 @@ CRD_NOINLINE inline BesIK bes_ik_classed(double x, double nu) noexcept
     return c * v;
 }
 
+// Y_ν and Y_{ν+1} (ν ≥ 0, x > 0) as base·2^binary_exponent and next·2^binary_exponent: the base-order pair of the cores
+// (Temme's series below kBesTemmeLimit, the Steed core at the base order from there on) carried up by the recurrence
+// in order, scaled down by exactly 2^−800 whenever it grows past 2^800, as K's scale-carrying form is. The scalings
+// are exact, so every step rounds as the plain recurrence does.
+struct BesScaledY
+{
+    double base;
+    double next;
+    double binary_exponent;
+};
+[[nodiscard]] inline BesScaledY bes_y_scaled(double x, double nu) noexcept
+{
+    int steps = 0;
+    double mu = 0.0;
+    BesPair pair{};
+    const double inv_x = 1.0 / x;
+    if (x < kBesTemmeLimit)
+    {
+        steps = bes_base_steps(nu);
+        mu = nu - steps;
+        pair = bes_temme_y(x, mu);
+    }
+    else
+    {
+        steps = bes_jy_steps(x, nu);
+        mu = nu - steps;
+        const BesJY low = bes_jy_core(x, mu); // no step of its own: Y_μ and Y'_μ = (μ/x)Y_μ − Y_{μ+1}
+        pair = {low.y, mu * inv_x * low.y - low.yp};
+    }
+    const double two_inv_x = 2.0 * inv_x;
+    double scalings = 0.0;
+    for (int m = 1; m <= steps; ++m)
+    {
+        const double upper = (mu + m) * two_inv_x * pair.next - pair.base;
+        pair.base = pair.next;
+        pair.next = upper;
+        if (crd::math::fabs(upper) > kBesRescaleFrom)
+        {
+            pair.base *= kBesRescaleBy;
+            pair.next *= kBesRescaleBy;
+            scalings += 1.0;
+        }
+    }
+    return {pair.base, pair.next, static_cast<double>(kBesRescaleBits) * scalings};
+}
+
+// ⌊log₂|v|⌋ of a normal double from its exponent field, and −1075 (below every double) for a subnormal or zero: a lower
+// bound of ln|v|/ln 2 that needs no logarithm.
+[[nodiscard]] inline double bes_binary_floor(double v) noexcept
+{
+    const int field = static_cast<int>((std::bit_cast<unsigned long long>(v) >> 52) & 0x7FF);
+    return (field == 0) ? -1075.0 : static_cast<double>(field - 1023);
+}
+
+// J_ν, Y_ν (Slope false) or J'_ν, Y'_ν where the plain value, other·J_|ν| + coefficient·Y_|ν| (the reflection of a
+// negative order; other 0 and coefficient 1 for Y of a positive one), is not finite and the true one may be: Y_|ν| or
+// Y_{|ν|+1} has left the doubles in the recurrence while the result has not, because a reflection coefficient
+// |cos νπ| or |sin νπ| below 1 brings it back (Y(−188.4, 3.148) is −8.9e307, Y_188.4 is beyond the doubles) or because
+// Y'_ν = (ν/x)Y_ν − Y_{ν+1} is about half of Y_{ν+1} (Y'_354.8(35.38) is 1.05e308). The coefficient is applied to the
+// scale-carrying Y before its scale. First Debye's ln|Y_ν(x)| = ν(α − tanh α) − ½ln(½πν tanh α), sech α = x/ν (DLMF
+// 10.19.2; its next term is below 1/(12ν) where Y can leave the doubles, and Y'_ν ≈ −(tanh α/sech α)Y_ν) tells a result
+// that is beyond the doubles anyway (it is then the plain infinity, whose sign is right), so that the scaled recurrence
+// runs only where it can change the answer: a lower bound of it with ½ln(½πν tanh α) bounded by ½ln 2ν and the other
+// logarithms by their binary exponents (one logarithm in all) settles a result far beyond the doubles, and the estimate
+// itself the rest. Outside the overflow domain (a negative, infinite or NaN argument or order) the plain value stands.
+inline constexpr double kBesLogMax = 709.782712893384; // ln of the largest double
+inline constexpr double kBesLogMargin = 2.0;           // the lower bound's margin
+inline constexpr double kBesLogTight = 0.5;            // the estimate's
+inline constexpr double kBesLn2 = 0.69314718055994530942;
+// A lower bound of ln q for a finite q ≥ 1, within 0.002 of it, without a logarithm: q = 2^e·m, m ∈ [1, 2), and
+// ln m = 2 artanh s, s = (m − 1)/(m + 1) ≤ 1/3, of whose series 2(s + s³/3 + s⁵/5 + …), all terms positive, the first
+// two are kept (the rest is below 2s⁵/(5(1 − s²)) ≤ 0.0019).
+[[nodiscard]] inline double bes_log_lower(double q) noexcept
+{
+    const unsigned long long bits = std::bit_cast<unsigned long long>(q);
+    const double power = static_cast<double>(static_cast<int>((bits >> 52) & 0x7FF) - 1023);
+    const double m = std::bit_cast<double>((bits & 0x000FFFFFFFFFFFFFULL) | 0x3FF0000000000000ULL);
+    const double s = (m - 1.0) / (m + 1.0);
+    return power * kBesLn2 + 2.0 * (s + s * s * s / 3.0);
+}
+struct BesYSize
+{
+    double lower; // a lower bound of ν(α − tanh α), from bes_log_lower
+    double tanh_alpha;
+    double ratio;  // sech α = x/ν
+    double spread; // (1 + tanh α)/sech α = e^α
+};
+[[nodiscard]] inline BesYSize bes_y_size(double order, double x) noexcept
+{
+    const double ratio = x / order;
+    const double tanh_alpha = crd::math::sqrt((1.0 - ratio) * (1.0 + ratio));
+    const double spread = (1.0 + tanh_alpha) / ratio;
+    return {order * (bes_log_lower(spread) - tanh_alpha) - order * 0.002, tanh_alpha, ratio, spread};
+}
+[[nodiscard]] inline bool bes_y_may_fit(const BesYSize& size, double order, double coefficient, bool slope) noexcept
+{
+    const double factor = slope ? size.tanh_alpha / size.ratio : 1.0;
+    const double bound =
+        size.lower +
+        (bes_binary_floor(coefficient) + bes_binary_floor(factor) - 0.5 * (bes_binary_floor(order) + 2.0)) * kBesLn2;
+    if (bound > kBesLogMax + kBesLogMargin)
+    {
+        return false;
+    }
+    const double exponent = order * (crd::math::log(size.spread) - size.tanh_alpha);
+    const double width = 0.5 * kBesPi * order * size.tanh_alpha;
+    return !(exponent + crd::math::log(crd::math::fabs(coefficient) * factor / crd::math::sqrt(width)) >
+             kBesLogMax + kBesLogTight);
+}
+[[nodiscard]] inline bool bes_y_rescue_domain(double nu, double x) noexcept
+{
+    const double order = crd::math::fabs(nu);
+    return bes_overflow_domain(x, nu) && order > x && order < kBesRescaledMax;
+}
+// coefficient·Y_|ν| (Slope: ·Y'_|ν|) from the scale-carrying Y, plus other·J_|ν| (J'_|ν|).
+template <bool Slope>
+[[nodiscard]] inline double bes_y_rescaled(const BesScaledY& y, double nu, double x, double coefficient,
+                                           double other) noexcept
+{
+    const double order = crd::math::fabs(nu);
+    const double scaled = Slope ? order / x * y.base - y.next : y.base;
+    const double big = bes_apply_power(coefficient * scaled, y.binary_exponent);
+    if (other == 0.0)
+    {
+        return big;
+    }
+    const BesJY jy = bes_jy(x, order);
+    return other * bes_j_class(Slope ? jy.jp : jy.j, x, order) + big;
+}
+template <bool Slope>
+CRD_NOINLINE inline double bes_jy_rescued(double nu, double x, double plain, double coefficient, double other) noexcept
+{
+    if (!bes_y_rescue_domain(nu, x) || coefficient == 0.0)
+    {
+        return plain;
+    }
+    const double order = crd::math::fabs(nu);
+    if (!bes_y_may_fit(bes_y_size(order, x), order, coefficient, Slope))
+    {
+        return plain;
+    }
+    return bes_y_rescaled<Slope>(bes_y_scaled(x, order), nu, x, coefficient, other);
+}
+// The value itself where it is finite, the rescue above where it is not.
+template <bool Slope>
+[[nodiscard]] inline double bes_jy_checked(double nu, double x, double value, double coefficient, double other) noexcept
+{
+    if (value - value != 0.0) [[unlikely]]
+    {
+        return bes_jy_rescued<Slope>(nu, x, value, coefficient, other);
+    }
+    return value;
+}
+
+// J_ν and Y_ν of a negative order where either reflected sum is not finite: the rescue above for both from one estimate
+// and one scale-carrying recurrence.
+CRD_NOINLINE inline BesZ bes_jy_pair_rescued(double nu, double x, BesZ plain, BesTrig t) noexcept
+{
+    if (!bes_y_rescue_domain(nu, x))
+    {
+        return plain;
+    }
+    const double order = crd::math::fabs(nu);
+    const BesYSize size = bes_y_size(order, x);
+    const bool j_fits = plain.re - plain.re != 0.0 && t.sin != 0.0 && bes_y_may_fit(size, order, t.sin, false);
+    const bool y_fits = plain.im - plain.im != 0.0 && t.cos != 0.0 && bes_y_may_fit(size, order, t.cos, false);
+    if (!j_fits && !y_fits)
+    {
+        return plain;
+    }
+    const BesScaledY y = bes_y_scaled(x, order);
+    return {j_fits ? bes_y_rescaled<false>(y, nu, x, -t.sin, t.cos) : plain.re,
+            y_fits ? bes_y_rescaled<false>(y, nu, x, t.cos, t.sin) : plain.im};
+}
+
 // J_ν and Y_ν (re, im) for any real order from one core, with the overflow classes and the reflection of a negative
 // order.
 [[nodiscard]] inline BesZ bes_jy_pair(double x, double nu) noexcept
@@ -1791,7 +1966,12 @@ CRD_NOINLINE inline BesIK bes_ik_classed(double x, double nu) noexcept
     const BesTrig t = bes_sin_cos_pi(-nu);
     const double j = bes_j_class(jy.j, x, nu);
     const double y = bes_y_class(jy.y, x, nu);
-    return {bes_weighted(t.cos, j) - bes_weighted(t.sin, y), bes_weighted(t.sin, j) + bes_weighted(t.cos, y)};
+    const BesZ pair{bes_weighted(t.cos, j) - bes_weighted(t.sin, y), bes_weighted(t.sin, j) + bes_weighted(t.cos, y)};
+    if (pair.re - pair.re != 0.0 || pair.im - pair.im != 0.0) [[unlikely]]
+    {
+        return bes_jy_pair_rescued(nu, x, pair, t);
+    }
+    return pair;
 }
 
 // Order-reflection for negative ν: J_{-ν} = cos(νπ)J_ν − sin(νπ)Y_ν ; Y_{-ν} = sin(νπ)J_ν + cos(νπ)Y_ν.
@@ -1888,27 +2068,41 @@ CRD_NOINLINE inline double bes_jp_outside(double n, double x) noexcept
     }
     const BesJY jy = bes_jy(x, -n);
     const BesTrig t = bes_sin_cos_pi(-n);
-    return bes_weighted(t.cos, bes_j_class(jy.jp, x, n)) - bes_weighted(t.sin, bes_yp_class(jy.yp, x, n));
+    return bes_jy_checked<true>(
+        n, x, bes_weighted(t.cos, bes_j_class(jy.jp, x, n)) - bes_weighted(t.sin, bes_yp_class(jy.yp, x, n)), -t.sin,
+        t.cos);
 }
 CRD_NOINLINE inline double bes_y_outside(double n, double x) noexcept
 {
     if (n >= 0.0)
     {
-        return bes_y_class(bes_y_pair(x, n).base, x, n);
+        return bes_jy_checked<false>(n, x, bes_y_class(bes_y_pair(x, n).base, x, n), 1.0, 0.0);
     }
     const BesJY jy = bes_jy(x, -n);
     const BesTrig t = bes_sin_cos_pi(-n);
-    return bes_weighted(t.sin, bes_j_class(jy.j, x, n)) + bes_weighted(t.cos, bes_y_class(jy.y, x, n));
+    return bes_jy_checked<false>(
+        n, x, bes_weighted(t.sin, bes_j_class(jy.j, x, n)) + bes_weighted(t.cos, bes_y_class(jy.y, x, n)), t.cos,
+        t.sin);
 }
 CRD_NOINLINE inline double bes_yp_outside(double n, double x) noexcept
 {
     if (n >= 0.0)
     {
-        return bes_yp_class(bes_y_pair(x, n).next, x, n);
+        // Y'_ν ≈ −(tanh α/sech α)Y_ν is at least Y_ν in size from ν = √2·x on: where Y_ν has left the doubles, so has
+        // the slope, and the plain infinity is the answer.
+        const BesPair y = bes_y_pair(x, n);
+        const double slope = bes_yp_class(y.next, x, n);
+        if (y.base - y.base != 0.0 && n * n >= 2.0 * x * x)
+        {
+            return slope;
+        }
+        return bes_jy_checked<true>(n, x, slope, 1.0, 0.0);
     }
     const BesJY jy = bes_jy(x, -n);
     const BesTrig t = bes_sin_cos_pi(-n);
-    return bes_weighted(t.sin, bes_j_class(jy.jp, x, n)) + bes_weighted(t.cos, bes_yp_class(jy.yp, x, n));
+    return bes_jy_checked<true>(
+        n, x, bes_weighted(t.sin, bes_j_class(jy.jp, x, n)) + bes_weighted(t.cos, bes_yp_class(jy.yp, x, n)), t.cos,
+        t.sin);
 }
 } // namespace detail
 
@@ -1923,8 +2117,11 @@ template <Real T> [[nodiscard]] inline T cyl_bessel_j(T nu, T x) noexcept
     }
     const detail::BesJY jy = detail::bes_jy(xd, -n);
     const detail::BesTrig t = detail::bes_sin_cos_pi(-n);
-    return static_cast<T>(detail::bes_weighted(t.cos, detail::bes_j_class(jy.j, xd, n)) -
-                          detail::bes_weighted(t.sin, detail::bes_y_class(jy.y, xd, n)));
+    return static_cast<T>(
+        detail::bes_jy_checked<false>(n, xd,
+                                      detail::bes_weighted(t.cos, detail::bes_j_class(jy.j, xd, n)) -
+                                          detail::bes_weighted(t.sin, detail::bes_y_class(jy.y, xd, n)),
+                                      -t.sin, t.cos));
 }
 
 template <Real T> [[nodiscard]] inline T cyl_neumann(T nu, T x) noexcept // Y_ν

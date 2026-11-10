@@ -211,10 +211,23 @@ Measured not to be defects, with the numbers:
 - The `smlnum` start test in QMR, which reports Breakdown for a right-hand side below about 1e-146 and never a wrong answer.
 - Token overlap in the solver files, 3 % exact and 8 % rename-blind at most.
 
-Recorded as limits by the workflow, now queued to be fixed: complex J and Y at nu near |z| of 35 and up (about 1e-7), complex K
+Recorded as limits by the workflow, then queued to be fixed: complex J and Y at nu near |z| of 35 and up (about 1e-7), complex K
 near |z| of 9, Struve L at nu of -100 and below, and `gamma_sign(x)` inverted for negative non-integer x (no caller; outside the
 group's files; the inversion was already fixed by 4234137c, the rest in "Defects found by the comparison"). The Bessel landing record adds Y(-188.4, 3.148) and Y'(-106.57, 0.104) at -inf where the truth is finite near
-1e308, and four complex I points at 1.07 to 1.51 of the bar.
+1e308, and four complex I points at 1.07 to 1.51 of the bar. Their outcome is the table below.
+
+### Bessel, Airy and Struve limits closed (2026-11-10)
+
+Base: 66e552ba. References: mpmath 1.4.1 at 70 digits at the exact double inputs (Struve L and H below x = 80 by their
+series at two precisions 120 digits apart, J, Y and slopes at x > 1000 by Hankel's expansion at the base order and the
+recurrence at 110 digits; both agree with mpmath's own functions to 4.6e-30 where those converge). Units: the module bar
+1e-13 + 1e-12|ref| for the real functions, the documented complex bars (J, I 1e-11 + 1e-10|ref|, Y, K 1e-11 + 1e-9|ref|, on
+the complex difference) for the complex ones. Speed: one function per program behind a noinline wrapper, 7 interleaved
+rounds pinned to one core, two runs, new/base. Evidence: `build/gpl-compare/bessel-limits/` (machine cerid-track-incomplete).
+
+| Item | Found on base | Outcome |
+|---|---|---|
+| Y(-188.4, 3.148), Y'(-106.57, 0.104) at -inf | both -inf (truth -8.9e307, -7.5e307); a sample at the end of the doubles (seed 1114, 4000 points, log10\|Y_\|nu\|\| 296 to 316) has 70 non-finite results for finite truths in J, J', Y and Y' of negative order and Y' of positive order (Y'_354.8(35.38) = 1.05e308); random negative orders (seed 1104, 3000) have none | fixed (`fix(hesap-special): keep J, Y and their slopes finite where Y of the reflected order leaves the doubles`). Where the plain value is not finite, Debye's estimate of ln\|coefficient·Y\| (a lower bound without a logarithm first) settles the results beyond the doubles, and the rest comes from a scale-carrying Y recurrence (exact 2^-800 steps), the reflection coefficient applied before the scale; the real Hankel functions share one estimate and one recurrence. Gate (seed 4004, 80,000 points: J 20,029, J' 20,099, Y 19,844, Y' 20,028; half at the edge, a quarter negative orders, a quarter controls): base over the bar 105 / 208 / 91 / 240 (all infinite), new 0, worst 0.039 units; newly over 0, finite to non-finite 0. Speed (two runs): the inputs base answered wrongly cost the second recurrence, J 1.659 / 1.653, Y 1.566 / 1.567, H^(1) 2.114 / 2.115 (the plain result is gone once its recurrence overflows; testing every call in advance would cost all of them); results beyond the doubles (base right) J 1.010 / 1.011, Y 1.008 / 1.008, H^(1) 1.015 / 1.011, Y' 0.998 / 1.000; every other row within 2 % in at least one run (Jp and Yp rows at 0.86 to 0.89, layout). Test: 13 assertions, 9 fail on base; special 117 cases, 413,676 assertions, stats, dsp, quadrature pass. |
 
 ### Fuzz recount
 
