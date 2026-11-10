@@ -3,7 +3,7 @@
 // crd-net -- a QUIC connection: the TLS handshake carried to confirmation, recovery, the connection's frames and its
 // close (4.2a; contract: docs/design/network-foundation.md#quic-connection). Sources: RFC 9000 sections 2 to 4, 5.1,
 // 7, 8, 10 (10.3's stateless reset), 12, 13, 14, 17.2, 19 and 21.4, RFC 9001 sections 4 to 6 and 9.2, RFC 9002
-// sections 6 and 6.4 and appendix A, RFC 9221 sections 3 to 5, RFC 9287, RFC 9368 sections 2 to 4 and RFC 9369
+// sections 6, 6.4 and 7 and appendix A, RFC 9221 sections 3 to 5, RFC 9287, RFC 9368 sections 2 to 4 and RFC 9369
 // sections 4 and 5.
 //
 //   sans-I/O   receive() takes one datagram from the peer with its arrival time, send() writes the next datagram into
@@ -39,6 +39,11 @@
 //              server sends at most three times what it received before the client's address is proven (section
 //              8.1); the QUIC bit is greased toward a peer that sent grease_quic_bit and 1-RTT packet numbers are
 //              skipped from entropy (section 21.4), so an acknowledgement of one closes with PROTOCOL_VIOLATION.
+//   congestion 0-RTT and 1-RTT data go while the congestion controller's window has room for a whole datagram and
+//              the pacer's release time has come (RFC 9002 sections 7 and 7.7; congestion.hpp); ACK-only packets,
+//              probes and the handshake's CRYPTO data are not held (data_allowed()). Data held back tells the
+//              controller its window is used (section 7.8), and a pacer's release time is a timer of next_timer_ns().
+//              The policy is the configuration's, swappable live.
 //   frames     every frame type is dispatched: stream and flow-control frames go to the QuicStreamSet (streams()),
 //              DATAGRAM frames to QuicDatagrams (datagrams()); 1-RTT packets carry the connection's own frames, then
 //              datagrams, then the stream set's. An ACK only carried along follows waiting datagrams.
@@ -67,6 +72,7 @@
 #include <crd/core/types.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
+#include <crd/net/congestion.hpp>
 #include <crd/net/connection_table.hpp>
 #include <crd/net/quic_datagram.hpp>
 #include <crd/net/quic_packet.hpp>
@@ -205,6 +211,7 @@ struct QuicConnectionConfig
     u32 max_datagram_bytes = kQuicMinInitialDatagram; // what this side sends at most (NET-PATH raises it)
     u32 padding_block = 0U; // packets pad to the next multiple of this (NET.3's padded_size()); 0 pads none
     u64 initial_rtt_ns = kQuicInitialRttNs;
+    CongestionPolicy congestion; // the controller and pacing (congestion_policy_valid), swappable by set_congestion()
     u64 key_update_interval = 0U; // 1-RTT packets one key seals before an update starts (0: the AEAD's limit alone)
     // kPrfKeyBytes seeding the connection's entropy (grease, skipped numbers) for a deterministic run (tests,
     // NET-SIM); empty draws a fresh key from the provider.
@@ -343,6 +350,10 @@ public:
     [[nodiscard]] const QuicDatagrams& datagrams() const noexcept { return m_datagrams; }
     [[nodiscard]] const QuicPacketProtection& protection() const noexcept { return m_protection; }
     [[nodiscard]] const QuicRecovery& recovery() const noexcept { return *m_recovery; }
+    [[nodiscard]] const CongestionController& congestion() const noexcept { return *m_congestion; }
+    // Replaces the congestion policy live: the new controller starts from the current window, slow start threshold
+    // and recovery period. False, changing nothing, for a policy congestion_policy_valid() refuses.
+    [[nodiscard]] bool set_congestion(const CongestionPolicy& policy) noexcept;
     // The peer's parameters, valid once peer_parameters_known().
     [[nodiscard]] bool peer_parameters_known() const noexcept { return m_peer_known; }
     [[nodiscard]] const QuicTransportParameters& peer_parameters() const noexcept { return m_peer; }
@@ -395,6 +406,7 @@ private:
         void on_acked(QuicSpace space, const QuicSentPacket& packet) noexcept override;
         void on_lost(QuicSpace space, const QuicSentPacket& packet) noexcept override;
         void on_discarded(QuicSpace space, const QuicSentPacket& packet) noexcept override;
+        void on_spurious(QuicSpace space, const QuicSentPacket& packet, u64 lost_ns) noexcept override;
 
     private:
         QuicConnection& m_connection;
@@ -503,6 +515,15 @@ private:
     // The packet type `space` sends now: a client's 0-RTT for the Application space before it has 1-RTT keys.
     [[nodiscard]] QuicPacketType send_type(QuicSpace space) const noexcept;
     [[nodiscard]] bool has_content(QuicSpace space, u64 now_ns) const noexcept;
+    // Whether `space` holds data to send that only congestion control holds back.
+    [[nodiscard]] bool has_data(QuicSpace space, u64 now_ns) const noexcept;
+    // Whether `space` may carry data now: its storage has room and, in the Application space, congestion control lets
+    // data go (m_data_open).
+    [[nodiscard]] bool data_allowed(QuicSpace space) const noexcept;
+    // Opens or holds 0-RTT and 1-RTT data for the datagram of up to `datagram` bytes send() writes at `now_ns`
+    // (m_data_open): it goes while probing, or when the window has room for all of it and the pacer's release time
+    // has come. Such data held back while some waits tells the controller, and a window with room arms the pacer.
+    void gate_data(usize datagram, u64 now_ns) noexcept;
     // Whether a datagram can go now: one waits, and its outcome has a ledger record free when it is reported.
     [[nodiscard]] bool datagram_ready(u64 now_ns) const noexcept;
     // `pad`: the datagram reaches 1200 bytes (section 14.1), by this packet when it is the `last` or when what it
@@ -536,6 +557,12 @@ private:
     u8* m_crypto_bytes = nullptr;
     u64* m_crypto_bits = nullptr;
     QuicRecovery* m_recovery = nullptr;
+    CongestionController* m_congestion = nullptr; // built in m_congestion_slot
+    CongestionSlot m_congestion_slot;
+    Pacer m_pacer;
+    u64 m_pace_release_ns = kNeverNs; // data waits for the pacer until then
+    bool m_data_open = true;          // congestion control lets data go in the datagram being written
+    u64 m_event_ns = 0U;              // the time recovery's events happen at (they carry none)
     QuicStreamSet m_streams;
     QuicDatagrams m_datagrams;
     Events m_events;

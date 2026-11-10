@@ -220,17 +220,48 @@ public:
         return *connection;
     }
 
-    // The stateless reset server `index` sends, having lost its state, for the next 1-RTT datagram of `handle`.
+    // Moves every clock to `at` (no arrival is run), so a connection's paced datagram can leave.
+    void set_clock(u64 at)
+    {
+        now = (at > now) ? at : now;
+        client_clock.now = now;
+        for (usize index = 0U; index < m_servers; ++index)
+        {
+            m_server[index]->clock.now = now;
+        }
+        m_client_next = now;
+    }
+
+    // The stateless reset server `index` sends, having lost its state, for the next 1-RTT datagram of `handle`: the
+    // PING it owes leaves when its pacer lets it, so the client's loop runs at the connection's timers until it does.
     Datagram server_reset(QuicHandle handle, usize index = 0U)
     {
         live(handle).ping();
         wake(handle);
-        Datagram sent[8];
-        REQUIRE(poll_client(sent, 8U) >= 1U);
+        Datagram ping;
+        const ConstSpan<u8> dcid = live(handle).peer_cid();
+        for (usize turn = 0U; turn < 8U && ping.size == 0U; ++turn)
+        {
+            Datagram sent[8];
+            const usize count = poll_client(sent, 8U);
+            for (usize at = 0U; at < count && ping.size == 0U; ++at)
+            {
+                const bool short_header = sent[at].size > dcid.size() && (sent[at].bytes[0] & 0x80U) == 0U;
+                if (short_header && std::memcmp(sent[at].bytes + 1U, dcid.data(), dcid.size()) == 0)
+                {
+                    ping = sent[at];
+                }
+            }
+            if (ping.size == 0U)
+            {
+                set_clock(live(handle).next_timer_ns());
+            }
+        }
+        REQUIRE(ping.size != 0U);
         ServerStack& stack = server(index);
         ConnectionIdTable forgotten(stack.allocator, 16U, ConstSpan<u8>(kHostPrf));
         Ingress forgetful(IngressConfig{}, forgotten, stack.buckets, nullptr, nullptr, &stack.reset);
-        const IngressDecision decision = forgetful.classify(sent[0].view(), false, kClientAt, now, kUnix);
+        const IngressDecision decision = forgetful.classify(ping.view(), false, kClientAt, now, kUnix);
         REQUIRE(decision.action == IngressAction::StatelessReset);
         Datagram reset;
         reset.size = forgetful.answer(decision, kClientAt, kUnix, Span<u8>(reset.bytes, kQuicMaxStatelessAnswerBytes));
@@ -853,8 +884,16 @@ TEST_CASE("QUIC client: a datagram for a connection from another address is drop
     REQUIRE(served != nullptr);
     served->ping();
     network->server(0U).server.wake(network->server(0U).app.last);
-    static_cast<void>(network->server(0U).loop.poll());
     VirtualSocket& socket = network->server(0U).socket;
+    // The PING leaves when the server connection's pacer lets it.
+    for (usize turn = 0U; turn < 8U && socket.sent_count == 0U; ++turn)
+    {
+        static_cast<void>(network->server(0U).loop.poll());
+        if (socket.sent_count == 0U)
+        {
+            network->set_clock(served->next_timer_ns());
+        }
+    }
     REQUIRE(socket.sent_count >= 1U);
     const Datagram copy = socket.sent[0].datagram;
     const u64 received = network->live(handle).counters().datagrams_received;

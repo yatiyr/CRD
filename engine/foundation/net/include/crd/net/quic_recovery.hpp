@@ -26,8 +26,9 @@
 //               trip, capped at smoothed_rtt, both back to RFC 9002's after 16 loss detections with no spurious loss.
 //               Both are capped, so a peer timing its ACKs to fake reordering can at worst leave a loss to the time
 //               threshold (T09).
-//   congestion  NET-PATH's controllers take the per-packet events (QuicRecoveryEvents) and the outcomes' totals;
-//               nothing here limits sending beyond the storage.
+//   congestion  NET-PATH's controllers (congestion.hpp) take the per-packet events (QuicRecoveryEvents, spurious
+//               losses among them) and the outcomes' RTT samples and persistent congestion; the connection applies
+//               their window and pacing, so nothing here limits sending beyond the storage.
 //   time        every call takes the time in nanoseconds (TransportClock::now_ns); nothing reads a clock.
 //   threads     a QuicRecovery belongs to its connection's thread.
 
@@ -148,6 +149,9 @@ public:
     virtual void on_lost(QuicSpace space, const QuicSentPacket& packet) noexcept = 0;
     // A packet of a space whose keys were discarded: neither acknowledged nor lost (section 6.4).
     virtual void on_discarded(QuicSpace space, const QuicSentPacket& packet) noexcept = 0;
+    // A packet declared lost at `lost_ns` that an ACK frame acknowledged within its probe period (section 6.1): its
+    // loss was reported already, and a congestion controller may undo its response (NET-PATH).
+    virtual void on_spurious(QuicSpace space, const QuicSentPacket& packet, u64 lost_ns) noexcept;
 
 protected:
     QuicRecoveryEvents() = default;
@@ -180,8 +184,7 @@ struct QuicAckOutcome
     QuicRecoveryError error = QuicRecoveryError::None;
     usize             acked_packets = 0U;
     u64               acked_bytes = 0U; // of those in flight
-    // Packets declared lost that this frame acknowledges (RFC 9002 section 6.1): no event, as their loss was
-    // reported; a congestion controller may undo its response.
+    // Packets declared lost that this frame acknowledges (RFC 9002 section 6.1), each reported by on_spurious.
     usize             spurious_packets = 0U;
     u64               spurious_bytes = 0U; // of those that were in flight
     bool              rtt_sampled = false;

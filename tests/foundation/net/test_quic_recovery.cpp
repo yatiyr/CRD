@@ -58,6 +58,16 @@ struct Events final : QuicRecoveryEvents
     void on_acked(QuicSpace /*space*/, const QuicSentPacket& packet) noexcept override { add('a', packet); }
     void on_lost(QuicSpace /*space*/, const QuicSentPacket& packet) noexcept override { add('l', packet); }
     void on_discarded(QuicSpace /*space*/, const QuicSentPacket& packet) noexcept override { add('d', packet); }
+    // Spurious losses, apart: their loss was the event.
+    void on_spurious(QuicSpace /*space*/, const QuicSentPacket& packet, u64 lost_ns) noexcept override
+    {
+        spurious_bytes += packet.in_flight ? packet.bytes : 0U;
+        spurious_lost_ns = lost_ns;
+        ++spurious;
+    }
+    usize spurious = 0U;
+    u64   spurious_bytes = 0U;
+    u64   spurious_lost_ns = 0U;
 
     void add(char kind, const QuicSentPacket& packet) noexcept
     {
@@ -447,6 +457,9 @@ TEST_CASE("quic recovery: a late acknowledgement shows a spurious loss and raise
     CHECK(late.rtt_sampled); // the frame's largest is newly acknowledged, and an ack-eliciting packet with it
     CHECK(f.recovery.rtt().latest_ns == 99U * kMs);
     CHECK(f.events.count == events); // its loss was reported; nothing more
+    CHECK(f.events.spurious == 2U);  // but each is reported spurious, with when it was declared lost
+    CHECK(f.events.spurious_bytes == 1200U);
+    CHECK(f.events.spurious_lost_ns == 300U * kMs);
     CHECK(f.recovery.bytes_in_flight() == in_flight);
     CHECK(f.recovery.packet_threshold() == 5U); // 5 - 1 + 1: the reordering seen
     CHECK(f.recovery.reorder_steps() == 0U);    // declared by number alone
@@ -455,6 +468,7 @@ TEST_CASE("quic recovery: a late acknowledgement shows a spurious loss and raise
     const QuicAckOutcome again = f.ack(QuicSpace::Application, 1U, 2U, 302U * kMs);
     CHECK(again.spurious_packets == 0U);
     CHECK(again.acked_packets == 0U);
+    CHECK(f.events.spurious == 2U);
 
     // The raised threshold declares 6 and 7 lost where three would have declared four.
     REQUIRE(f.ack(QuicSpace::Application, 3U, 4U, 303U * kMs).acked_packets == 2U);

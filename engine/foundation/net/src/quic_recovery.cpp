@@ -3,6 +3,10 @@
 
 namespace crd::net
 {
+void QuicRecoveryEvents::on_spurious(QuicSpace /*space*/, const QuicSentPacket& /*packet*/, u64 /*lost_ns*/) noexcept
+{
+}
+
 namespace
 {
 // QuicSentEntry::state.
@@ -763,6 +767,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                     slot.state = kAcked;
                     ++out.spurious_packets;
                     out.spurious_bytes += slot.packet.in_flight ? slot.packet.bytes : 0U;
+                    events.on_spurious(id, slot.packet, slot.lost_ns);
                 }
                 else if (slot.state == kOutstanding)
                 {

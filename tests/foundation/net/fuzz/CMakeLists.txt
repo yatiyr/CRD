@@ -43,6 +43,14 @@ crd_fuzz_target(crd-fuzz-net-quic-packet
 crd_fuzz_target(crd-fuzz-net-quic-recovery
     SOURCES fuzz_quic_recovery.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-recovery")
 
+# Congestion control and pacing (NET-PATH).
+#   crd-fuzz-net-congestion   any sends, acknowledgements with RTT samples, losses, spurious losses, marks, persistent
+#                             congestion, held sends, time, live swaps and resets on one controller, and the pacer:
+#                             the window within its bounds and raised only by acknowledgements, undos and resets, never
+#                             grown unheld, swaps keeping the window, the pacer's credit bounded and released on time.
+crd_fuzz_target(crd-fuzz-net-congestion
+    SOURCES fuzz_congestion.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-congestion")
+
 # QUIC byte streams and flow control (4.2a).
 #   crd-fuzz-net-quic-stream   any frames, reads, writes, sends, acknowledgements, losses and window operations on one
 #                              receive buffer, send buffer and window against per-byte models: every verdict, chunk,
