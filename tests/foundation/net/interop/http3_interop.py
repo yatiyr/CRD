@@ -15,6 +15,10 @@ a request; 0-RTT resumption accepted and refused; and a lossy, reordering, dupli
 
 quiche speaks QUIC version 1 only and its QPACK has no dynamic table (it advertises none and Cerid must never insert), so
 those cases are not asked of it.
+
+ECN (RFC 9000 section 13.4): Cerid validates its path on the loopback against ngtcp2, which reads the codepoints and
+reports them; quiche reports none, and neither does a peer behind the relay, which bleaches, so there Cerid's validation
+fails as `missing` and it stops marking.
 """
 import argparse
 import subprocess
@@ -32,7 +36,7 @@ LOSSY = dict(loss=0.04, duplicate=0.03, delay=0.003, jitter=0.012)
 
 def brief(reports):
     """What a failure shows of the reports: the connection's end and what the exchange counted."""
-    shown = ('established', 'close', 'close_code', 'early', 'resumed')
+    shown = ('established', 'close', 'close_code', 'early', 'resumed', 'ecn', 'ecn_failure')
     return [{name: value for name, value in report.items()
              if name in shown or (name.startswith(('h3_', 'datagrams_')) and value not in ('0', '1'))}
             for report in reports]
@@ -173,6 +177,15 @@ class Case:
         self.check_tables(cerid_report, detail)
         self.check_datagrams(client, server, detail)
         self.check_early(number, client, server, detail)
+        self.check_ecn(cerid_report, peer_report, detail)
+
+    def check_ecn(self, cerid, peer, detail):
+        if self.peer_name == 'nghttp3' and self.path is None:
+            expect(cerid.get('ecn') == 'capable', f'Cerid did not validate ECN: {detail}')
+            expect(self.number(peer, 'ecn_received_ect0') > 0, f'ngtcp2 read no ECT(0) datagram: {detail}')
+        else:
+            expect(cerid.get('ecn') == 'failed' and cerid.get('ecn_failure') == 'missing',
+                   f'Cerid did not fail ECN validation without counts: {detail}')
 
     def number(self, report, name):
         return int(report.get(name, '-1'))

@@ -29,9 +29,14 @@ def collect(process, into):
 
 
 class Relay:
-    """The path between the two: a socket facing the client, one facing the server, and seeded impairments."""
+    """The path between the two: a socket facing the client, one facing the server, and seeded impairments.
 
-    def __init__(self, server_port, seed=0, loss=0.0, duplicate=0.0, delay=0.0, jitter=0.0):
+    Every datagram leaves the relay with its ECN codepoint rewritten (RFC 3168): unmarked by default, a bleaching path;
+    with `mark` 'ce' each is marked CE, a congested AQM, and with 'ect1' each is re-marked ECT(1)."""
+
+    MARKS = {None: 0, 'ect1': 1, 'ce': 3}
+
+    def __init__(self, server_port, seed=0, loss=0.0, duplicate=0.0, delay=0.0, jitter=0.0, mark=None):
         self.server = ('127.0.0.1', server_port)
         self.random = random.Random(seed)
         self.loss = loss
@@ -42,6 +47,8 @@ class Relay:
         self.client_side.bind(('127.0.0.1', 0))
         self.server_side = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.server_side.bind(('127.0.0.1', 0))
+        for side in (self.client_side, self.server_side):
+            side.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, self.MARKS[mark])
         self.port = self.client_side.getsockname()[1]
         self.client = None
         self.retries = 0

@@ -16,6 +16,12 @@ which reorders) that stands on the path between the two; unreliable datagrams (R
 beside streams and over the relay; resumption, 0-RTT and a server's refusal of 0-RTT on a second connection; Version
 Negotiation to the one version a server runs, counted off the wire; and a stateless reset from a server restarted on
 the same port, which has forgotten the connection and keeps the key its tokens come from.
+
+ECN (RFC 9000 section 13.4) is held in every case: each end marks ECT(0), counts the codepoints it reads and validates
+its path from the other's ACK frames. ngtcp2 fails a path on any ECT(1) count, a count above what it sent or one short
+of what was acknowledged, so its verdict holds Cerid's ACK_ECN counts to what Cerid read. On the loopback both ends
+validate; the relay bleaches every datagram, and both fail; a relay that marks every datagram CE leaves both capable and
+reacting to congestion; one that re-marks ECT(1) fails both.
 """
 import argparse
 import subprocess
@@ -40,6 +46,8 @@ RUN_SECONDS = 70
 PROGRESS_SECONDS = 20
 RESET_STREAM_BYTES = 32 << 20
 PROGRESS_BYTES = 1 << 20
+ECN_TESTING_PACKETS = 10  # NGTCP2_ECN_MAX_NUM_VALIDATION_PKTS: ngtcp2 marks no more until its path is validated
+ECN_VERDICT_BYTES = 64 << 10  # enough each way for ngtcp2 to test, validate and go on marking
 
 
 class Case:
@@ -231,6 +239,39 @@ class Case:
         self.check_early(number, client, server, detail)
         if self.datagrams:
             self.check_datagrams(client, server, detail)
+        self.check_ecn(client, server, detail)
+
+    def check_ecn(self, client, server, detail):
+        cerid, ngtcp2 = (client, server) if self.cerid_is_client else (server, client)
+        relayed = self.path is not None or self.retry or self.negotiate
+        mark = (self.path or {}).get('mark')
+        marked = int(ngtcp2.get('ecn_sent_ect0', '-1'))
+        verdict = self.streams * self.size + self.datagrams * self.datagram_bytes >= ECN_VERDICT_BYTES
+        if not relayed or mark == 'ce':
+            expect(cerid.get('ecn') == 'capable', f'Cerid did not validate ECN: {detail}')
+            read = 'ecn_received_ce' if relayed else 'ecn_received_ect0'
+            expect(int(ngtcp2.get(read, '0')) > 0, f'ngtcp2 read no {read[13:]} datagram: {detail}')
+            if verdict:
+                expect(marked > ECN_TESTING_PACKETS and ngtcp2.get('ecn_last') == 'ect0',
+                       f'ngtcp2 did not validate ECN: {detail}')
+        else:
+            failure = 'exceeded' if mark == 'ect1' else 'missing'
+            expect(cerid.get('ecn') == 'failed' and cerid.get('ecn_failure') == failure,
+                   f'Cerid did not fail ECN validation as {failure}: {detail}')
+            # A Retry or Version Negotiation starts a client's testing again (a new connection, for the latter).
+            tests = 2 if self.retry or self.negotiate else 1
+            expect(0 <= marked <= tests * ECN_TESTING_PACKETS, f'ngtcp2 marked past its testing: {detail}')
+            if verdict:
+                expect(ngtcp2.get('ecn_last') == 'not-ect', f'ngtcp2 did not fail ECN validation: {detail}')
+            if mark == 'ect1':
+                expect(int(ngtcp2.get('ecn_received_ect1', '0')) > 0, f'ngtcp2 read no ECT(1) datagram: {detail}')
+            else:
+                expect(ngtcp2.get('ecn_received_ect0') == '0', f'ngtcp2 read through a bleaching path: {detail}')
+        if mark == 'ce':
+            # Every datagram CE: each end takes the counts as congestion (RFC 9002 section 7.1, B.7).
+            expect(int(cerid.get('ecn_ce', '0')) > 0, f'ngtcp2 reported no CE: {detail}')
+            expect(int(cerid.get('reductions', '0')) > 0, f'Cerid did not reduce its window on CE: {detail}')
+            expect(ngtcp2.get('ssthresh_set') == '1', f'ngtcp2 did not react to CE: {detail}')
 
     def check_early(self, number, client, server, detail):
         resumed = '1' if number == 1 else '0'
@@ -283,6 +324,10 @@ def cases(cerid, ngtcp2):
             for seed in (1, 2, 3):
                 yield case(version=version, streams=4, size=256 << 10,
                            path=dict(seed=seed, loss=0.05, duplicate=0.03, delay=0.003, jitter=0.012))
+            yield case(version=version, streams=4, size=256 << 10, path=dict(mark='ce'))
+            yield case(version=version, streams=4, size=256 << 10,
+                       path=dict(seed=version, loss=0.02, delay=0.003, jitter=0.012, mark='ce'))
+            yield case(version=version, streams=4, size=256 << 10, path=dict(mark='ect1'))
         yield case(compat=True)
         yield case(compat=True, streams=8, size=64 << 10)
         for version in (1, 2):

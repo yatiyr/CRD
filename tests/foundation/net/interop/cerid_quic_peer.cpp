@@ -38,8 +38,8 @@
 //
 // The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
 // is the same as ngtcp2_quic_peer.c's without what only OpenSSL reports, and with the path's ECN validation (`ecn`,
-// `ecn_failure`). The application is `cerid-interop`, a private
-// ALPN.
+// `ecn_failure`), the CE count the peer reported over every space (`ecn_ce`) and the congestion events that reduced
+// the window (`reductions`). The application is `cerid-interop`, a private ALPN.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -343,10 +343,14 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
     {
         g_wt_exchanges[peer.index_of(handle)].report();
     }
-    std::printf("version=%u\nclose=%s\nclose_code=%llu\necn=%s\necn_failure=%s\n",
+    const QuicEcnValidator& ecn = connection.ecn();
+    const u64 ce = ecn.reported(QuicSpace::Initial).ce + ecn.reported(QuicSpace::Handshake).ce +
+                   ecn.reported(QuicSpace::Application).ce;
+    std::printf("version=%u\nclose=%s\nclose_code=%llu\necn=%s\necn_failure=%s\necn_ce=%llu\nreductions=%llu\n",
                 connection.version() == QuicVersion::V2 ? 2U : 1U, close_kind(info),
-                static_cast<unsigned long long>(info.error_code), ecn_state(connection.ecn().state()),
-                ecn_failure(connection.ecn().failure()));
+                static_cast<unsigned long long>(info.error_code), ecn_state(ecn.state()), ecn_failure(ecn.failure()),
+                static_cast<unsigned long long>(ce),
+                static_cast<unsigned long long>(connection.congestion().state().reductions));
     std::fflush(stdout);
     peer.ended(handle);
 }

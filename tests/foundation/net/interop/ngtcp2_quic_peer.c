@@ -32,8 +32,11 @@
  *   http3        HTTP/3 over nghttp3 instead of the echo: http_exchange.h has its options, ALPN `h3` instead
  *
  * The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
- * is the same as cerid_quic_peer.cpp's plus what OpenSSL negotiated. The application is `cerid-interop`, a private
- * ALPN. */
+ * is the same as cerid_quic_peer.cpp's plus what OpenSSL negotiated, and ECN as this end saw it: ngtcp2 keeps its
+ * validation (RFC 9000 section 13.4.2) to itself, so the report counts the datagrams it marked and the codepoints read.
+ * More than NGTCP2_ECN_MAX_NUM_VALIDATION_PKTS (10) datagrams marked ECT(0) means it found the path capable, as it
+ * marks no more while testing; the last packet unmarked means it stopped. The application is `cerid-interop`, a
+ * private ALPN. */
 #define _GNU_SOURCE /* ppoll */
 #include "ngtcp2_http3.h"
 #include "openssl_self_signed.h"
@@ -58,6 +61,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <time.h>
 
 #define MAX_STREAMS 4096U
@@ -151,6 +155,8 @@ typedef struct
     uint64_t                datagrams_acked;
     uint64_t                last_datagram_ns;
     uint64_t                first_ns;
+    uint64_t                ecn_sent[4];     /* datagrams written, by the codepoint ngtcp2 chose (NGTCP2_ECN_*) */
+    uint64_t                ecn_received[4]; /* datagrams read, by the codepoint the IP header carried */
     uint32_t                echoes[MAX_DATAGRAMS]; /* a server's: the indices to send back */
     uint64_t                echo_first;
     uint64_t                echo_count;
@@ -164,6 +170,7 @@ typedef struct
     int                     unverified;
     int                     established;
     int                     pin_matched;
+    uint8_t                 ecn_last; /* the codepoint of the last packet written that was not a close */
 } peer_t;
 
 /* The byte at `offset` of a stream's direction (tag 0: client to server, 1: server to client) or of a datagram's (2 and
@@ -720,7 +727,7 @@ static int start_client(peer_t* peer)
     return 1;
 }
 
-static int send_datagram(peer_t* peer, const uint8_t* data, size_t size);
+static int send_datagram(peer_t* peer, const uint8_t* data, size_t size, uint8_t ecn);
 
 /* A Retry for `header`'s client Initial, with a token proving its address. */
 static int send_retry(peer_t* peer, const ngtcp2_pkt_hd* header)
@@ -744,7 +751,7 @@ static int send_retry(peer_t* peer, const ngtcp2_pkt_hd* header)
     }
     const ngtcp2_ssize wrote = ngtcp2_crypto_write_retry(packet, sizeof(packet), header->version, &header->scid, &scid,
                                                          &header->dcid, token, (size_t)token_bytes);
-    return wrote > 0 && send_datagram(peer, packet, (size_t)wrote);
+    return wrote > 0 && send_datagram(peer, packet, (size_t)wrote, NGTCP2_ECN_NOT_ECT);
 }
 
 /* A client Initial makes the connection; a datagram before it that is none is dropped. */
@@ -809,12 +816,37 @@ static int start_server(peer_t* peer, const uint8_t* data, size_t size)
     return 1;
 }
 
-static int send_datagram(peer_t* peer, const uint8_t* data, size_t size)
+/* A control message of one int, as IP_TOS takes on sending; IP_RECVTOS delivers one byte. */
+typedef union
 {
+    char           bytes[CMSG_SPACE(sizeof(int))];
+    struct cmsghdr align;
+} control_t;
+
+/* One datagram, its IP header carrying `ecn` (RFC 3168) as ngtcp2 chose it. */
+static int send_datagram(peer_t* peer, const uint8_t* data, size_t size, uint8_t ecn)
+{
+    control_t     control;
+    struct iovec  piece = {(void*)(uintptr_t)data, size}; /* sendmsg reads it only */
+    struct msghdr message;
+    memset(&control, 0, sizeof(control));
+    memset(&message, 0, sizeof(message));
+    message.msg_name       = &peer->remote;
+    message.msg_namelen    = sizeof(peer->remote);
+    message.msg_iov        = &piece;
+    message.msg_iovlen     = 1U;
+    message.msg_control    = control.bytes;
+    message.msg_controllen = sizeof(control.bytes);
+    struct cmsghdr* header = CMSG_FIRSTHDR(&message);
+    header->cmsg_level     = IPPROTO_IP;
+    header->cmsg_type      = IP_TOS;
+    header->cmsg_len       = CMSG_LEN(sizeof(int));
+    const int tos          = ecn & NGTCP2_ECN_MASK;
+    memcpy(CMSG_DATA(header), &tos, sizeof(tos));
     ssize_t sent;
     do
     {
-        sent = sendto(peer->fd, data, size, 0, (const struct sockaddr*)&peer->remote, sizeof(peer->remote));
+        sent = sendmsg(peer->fd, &message, 0);
     } while (sent < 0 && errno == EINTR);
     /* A full socket buffer loses a datagram, as a path may. */
     return sent >= 0 || errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS;
@@ -840,7 +872,7 @@ static int send_reset(peer_t* peer, const uint8_t* data, size_t size)
         return 0;
     }
     const ngtcp2_ssize wrote = ngtcp2_pkt_write_stateless_reset2(packet, sizeof(packet), &token, filler, filler_size);
-    return wrote > 0 && send_datagram(peer, packet, (size_t)wrote);
+    return wrote > 0 && send_datagram(peer, packet, (size_t)wrote, NGTCP2_ECN_NOT_ECT);
 }
 
 /* Version Negotiation for a client Initial of another version: 1 when it was one, and answered. */
@@ -860,7 +892,7 @@ static int answer_other_version(peer_t* peer, const uint8_t* data, size_t size)
                                           packet, sizeof(packet), unused, version.scid, version.scidlen, version.dcid,
                                           version.dcidlen, &peer->version, 1U)
                                     : -1;
-    return wrote > 0 && send_datagram(peer, packet, (size_t)wrote);
+    return wrote > 0 && send_datagram(peer, packet, (size_t)wrote, NGTCP2_ECN_NOT_ECT);
 }
 
 /* A client's streams, or a turn of HTTP/3; 0 when the connection cannot go on. */
@@ -936,13 +968,15 @@ static int datagram_ready(const peer_t* peer)
     return peer->echo_count != 0U && ngtcp2_conn_get_handshake_completed2(peer->conn);
 }
 
-/* What goes after a packet is written: 1 to carry on, 0 to give up. */
-static int packet_written(peer_t* peer, const uint8_t* packet, size_t size, uint64_t now)
+/* What goes after a packet is written, marked `ecn`: 1 to carry on, 0 to give up. */
+static int packet_written(peer_t* peer, const uint8_t* packet, size_t size, uint8_t ecn, uint64_t now)
 {
-    if (!send_datagram(peer, packet, size))
+    if (!send_datagram(peer, packet, size, ecn))
     {
         return 0;
     }
+    ++peer->ecn_sent[ecn & NGTCP2_ECN_MASK];
+    peer->ecn_last = ecn & NGTCP2_ECN_MASK;
     ++peer->packets_since_update;
     if (peer->key_update_packets != 0U && peer->packets_since_update >= peer->key_update_packets &&
         ngtcp2_conn_get_handshake_completed2(peer->conn))
@@ -965,7 +999,7 @@ static void probe_datagram_limit(peer_t* peer, ngtcp2_path_storage* storage)
     }
     static uint8_t  over[MAX_DATAGRAM_BYTES];
     uint8_t         packet[DATAGRAM_BYTES];
-    ngtcp2_pkt_info info;
+    ngtcp2_pkt_info info     = {0};
     ngtcp2_vec      piece    = {over, (size_t)peer->datagram_bytes + 1U};
     int             accepted = 0;
     peer->probed             = 1;
@@ -975,17 +1009,18 @@ static void probe_datagram_limit(peer_t* peer, ngtcp2_path_storage* storage)
 }
 
 /* One datagram queued or a packet of them written: 0 when the connection cannot go on, and *held when there is no room
- * in this write round. */
-static int write_one_datagram(peer_t* peer, ngtcp2_path_storage* storage, uint8_t* datagram, int* held, uint64_t now)
+ * in this write round. `info` is the write round's: ngtcp2 keeps a UDP datagram's codepoint in it across
+ * NGTCP2_ERR_WRITE_MORE and resets it for the next datagram. */
+static int write_one_datagram(peer_t* peer, ngtcp2_path_storage* storage, ngtcp2_pkt_info* info, uint8_t* datagram,
+                              int* held, uint64_t now)
 {
     uint8_t         payload[MAX_DATAGRAM_BYTES];
     const uint32_t  index  = peer->client ? (uint32_t)peer->datagrams_sent : peer->echoes[peer->echo_first];
     const size_t    prefix = peer->app != NULL ? http3_datagram_prefix(peer->app, index, payload) : 0U;
     ngtcp2_vec      piece  = {payload, prefix + fill_datagram(peer, payload + prefix, index, peer->client ? 2 : 3)};
-    ngtcp2_pkt_info info;
     int             accepted = 0;
     const ngtcp2_ssize wrote =
-        ngtcp2_conn_writev_datagram(peer->conn, &storage->path, &info, datagram, DATAGRAM_BYTES, &accepted,
+        ngtcp2_conn_writev_datagram(peer->conn, &storage->path, info, datagram, DATAGRAM_BYTES, &accepted,
                                     NGTCP2_WRITE_DATAGRAM_FLAG_MORE, index, &piece, 1U, now);
     if (accepted)
     {
@@ -1011,7 +1046,7 @@ static int write_one_datagram(peer_t* peer, ngtcp2_path_storage* storage, uint8_
         *held = 1;
         return 1;
     }
-    return packet_written(peer, datagram, (size_t)wrote, now);
+    return packet_written(peer, datagram, (size_t)wrote, info->ecn, now);
 }
 
 /* What nghttp3 has to write, and HTTP datagrams beside it. */
@@ -1019,6 +1054,7 @@ static int write_http3(peer_t* peer)
 {
     uint8_t             datagram[DATAGRAM_BYTES];
     ngtcp2_path_storage storage;
+    ngtcp2_pkt_info     info = {0};
     ngtcp2_path_storage_zero(&storage);
     int held = 0;
     for (;;)
@@ -1026,7 +1062,7 @@ static int write_http3(peer_t* peer)
         const uint64_t now = now_ns();
         if (!held && datagram_ready(peer))
         {
-            if (!write_one_datagram(peer, &storage, datagram, &held, now))
+            if (!write_one_datagram(peer, &storage, &info, datagram, &held, now))
             {
                 return 0;
             }
@@ -1044,7 +1080,6 @@ static int write_http3(peer_t* peer)
             return 0;
         }
         const uint32_t  flags = NGTCP2_WRITE_STREAM_FLAG_MORE | (fin ? NGTCP2_WRITE_STREAM_FLAG_FIN : 0U);
-        ngtcp2_pkt_info info;
         ngtcp2_ssize    taken = -1;
         ngtcp2_ssize    wrote = ngtcp2_conn_writev_stream(peer->conn, &storage.path, &info, datagram, sizeof(datagram),
                                                           &taken, flags, id, (const ngtcp2_vec*)pieces, (size_t)count,
@@ -1078,7 +1113,7 @@ static int write_http3(peer_t* peer)
             ngtcp2_conn_update_pkt_tx_time(peer->conn, now);
             return 1;
         }
-        if (!packet_written(peer, datagram, (size_t)wrote, now))
+        if (!packet_written(peer, datagram, (size_t)wrote, info.ecn, now))
         {
             return 0;
         }
@@ -1099,14 +1134,15 @@ static int write_streams(peer_t* peer)
         peer->table[index].blocked = 0;
     }
     probe_datagram_limit(peer, &storage);
-    const int tag      = peer->client ? 0 : 1;
-    int       held     = 0; /* no room for a datagram in this write round */
+    const int       tag  = peer->client ? 0 : 1;
+    int             held = 0; /* no room for a datagram in this write round */
+    ngtcp2_pkt_info info = {0};
     for (;;)
     {
         const uint64_t now = now_ns();
         if (!held && datagram_ready(peer))
         {
-            if (!write_one_datagram(peer, &storage, datagram, &held, now))
+            if (!write_one_datagram(peer, &storage, &info, datagram, &held, now))
             {
                 return 0;
             }
@@ -1132,7 +1168,6 @@ static int write_streams(peer_t* peer)
                 flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
             }
         }
-        ngtcp2_pkt_info info;
         ngtcp2_ssize    taken = -1;
         ngtcp2_ssize    wrote = ngtcp2_conn_writev_stream(peer->conn, &storage.path, &info, datagram, sizeof(datagram),
                                                           &taken, flags, id, vectors != 0U ? &vector : NULL, vectors,
@@ -1179,7 +1214,7 @@ static int write_streams(peer_t* peer)
             }
             continue;
         }
-        if (!packet_written(peer, datagram, (size_t)wrote, now))
+        if (!packet_written(peer, datagram, (size_t)wrote, info.ecn, now))
         {
             return 0;
         }
@@ -1283,6 +1318,20 @@ static void report(peer_t* peer, const char* close_kind, uint64_t close_code)
            (unsigned long long)close_code, peer->pin_matched, (unsigned long long)peer->key_updates,
            group != NULL ? group : "none",
            cipher != NULL ? SSL_CIPHER_get_name(cipher) : "none", (int)length, alpn != NULL ? (const char*)alpn : "");
+    ngtcp2_conn_info info;
+    memset(&info, 0, sizeof(info));
+    info.ssthresh = UINT64_MAX;
+    if (peer->conn != NULL)
+    {
+        ngtcp2_conn_get_conn_info(peer->conn, &info);
+    }
+    static const char* const codepoints[4] = {"not-ect", "ect1", "ect0", "ce"};
+    printf("ecn_sent_ect0=%llu\necn_last=%s\necn_received_ect0=%llu\necn_received_ect1=%llu\necn_received_ce=%llu\n"
+           "ssthresh_set=%d\n",
+           (unsigned long long)peer->ecn_sent[NGTCP2_ECN_ECT_0], codepoints[peer->ecn_last],
+           (unsigned long long)peer->ecn_received[NGTCP2_ECN_ECT_0],
+           (unsigned long long)peer->ecn_received[NGTCP2_ECN_ECT_1],
+           (unsigned long long)peer->ecn_received[NGTCP2_ECN_CE], info.ssthresh != UINT64_MAX);
     if (peer->app != NULL)
     {
         http3_report(peer->app);
@@ -1296,7 +1345,7 @@ static void close_connection(peer_t* peer, uint64_t code)
 {
     uint8_t             datagram[DATAGRAM_BYTES];
     ngtcp2_path_storage storage;
-    ngtcp2_pkt_info     info;
+    ngtcp2_pkt_info     info = {0};
     ngtcp2_ccerr        error;
     ngtcp2_path_storage_zero(&storage);
     ngtcp2_ccerr_default(&error);
@@ -1308,7 +1357,7 @@ static void close_connection(peer_t* peer, uint64_t code)
     {
         return;
     }
-    (void)send_datagram(peer, datagram, (size_t)wrote);
+    (void)send_datagram(peer, datagram, (size_t)wrote, info.ecn);
     const uint64_t deadline = now_ns() + CLOSING_NS;
     uint64_t       quiet    = now_ns() + CLOSING_QUIET_NS;
     while (now_ns() < deadline && now_ns() < quiet)
@@ -1320,7 +1369,7 @@ static void close_connection(peer_t* peer, uint64_t code)
             uint8_t ignored[DATAGRAM_BYTES];
             while (recv(peer->fd, ignored, sizeof(ignored), MSG_DONTWAIT) > 0)
             {
-                (void)send_datagram(peer, datagram, (size_t)wrote);
+                (void)send_datagram(peer, datagram, (size_t)wrote, info.ecn);
                 quiet = now_ns() + CLOSING_QUIET_NS;
             }
         }
@@ -1372,6 +1421,19 @@ static const char* close_name(ngtcp2_ccerr_type type)
     }
 }
 
+/* The codepoint a received datagram's IP header carried (IP_RECVTOS's control message), NOT_ECT for none. */
+static uint8_t received_ecn(struct msghdr* message)
+{
+    for (struct cmsghdr* header = CMSG_FIRSTHDR(message); header != NULL; header = CMSG_NXTHDR(message, header))
+    {
+        if (header->cmsg_level == IPPROTO_IP && header->cmsg_type == IP_TOS && header->cmsg_len > CMSG_LEN(0))
+        {
+            return (uint8_t)(*CMSG_DATA(header) & NGTCP2_ECN_MASK);
+        }
+    }
+    return NGTCP2_ECN_NOT_ECT;
+}
+
 /* Reads every datagram waiting; 0 when the connection has ended (the report written). */
 static int read_datagrams(peer_t* peer)
 {
@@ -1379,13 +1441,23 @@ static int read_datagrams(peer_t* peer)
     for (;;)
     {
         struct sockaddr_in from;
-        socklen_t          from_size = sizeof(from);
-        const ssize_t      size      = recvfrom(peer->fd, datagram, sizeof(datagram), MSG_DONTWAIT,
-                                                (struct sockaddr*)&from, &from_size);
+        control_t          control;
+        struct iovec       piece = {datagram, sizeof(datagram)};
+        struct msghdr      message;
+        memset(&message, 0, sizeof(message));
+        message.msg_name       = &from;
+        message.msg_namelen    = sizeof(from);
+        message.msg_iov        = &piece;
+        message.msg_iovlen     = 1U;
+        message.msg_control    = control.bytes;
+        message.msg_controllen = sizeof(control.bytes);
+        const ssize_t size     = recvmsg(peer->fd, &message, MSG_DONTWAIT);
         if (size < 0)
         {
             return 1;
         }
+        const uint8_t ecn = received_ecn(&message);
+        ++peer->ecn_received[ecn];
         if (peer->conn == NULL)
         {
             peer->remote = from;
@@ -1411,9 +1483,8 @@ static int read_datagrams(peer_t* peer)
                 continue;
             }
         }
-        ngtcp2_pkt_info info;
-        memset(&info, 0, sizeof(info));
-        ngtcp2_path path = path_of(peer);
+        ngtcp2_pkt_info info = {ecn};
+        ngtcp2_path     path = path_of(peer);
         const int result = ngtcp2_conn_read_pkt(peer->conn, &path, &info, datagram, (size_t)size, now_ns());
         if (result == NGTCP2_ERR_DRAINING)
         {
@@ -1708,7 +1779,9 @@ int main(int argc, char** argv)
     bound.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     bound.sin_port        = peer.client ? 0U : htons((uint16_t)port);
     socklen_t size        = sizeof(bound);
-    if (peer.fd < 0 || bind(peer.fd, (struct sockaddr*)&bound, sizeof(bound)) != 0 ||
+    const int receive_tos = 1;
+    if (peer.fd < 0 || setsockopt(peer.fd, IPPROTO_IP, IP_RECVTOS, &receive_tos, sizeof(receive_tos)) != 0 ||
+        bind(peer.fd, (struct sockaddr*)&bound, sizeof(bound)) != 0 ||
         getsockname(peer.fd, (struct sockaddr*)&peer.local, &size) != 0)
     {
         perror("crd-ngtcp2-quic-peer: socket");
