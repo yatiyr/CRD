@@ -732,10 +732,14 @@
       "review": "2027-10-27",
       "evidence": [
         "tests/foundation/crypto/test_quic_token.cpp",
-        "tests/foundation/crypto/test_quic_handshake.cpp"
+        "tests/foundation/crypto/test_quic_handshake.cpp",
+        "engine/foundation/net/include/crd/net/quic_ecn.hpp",
+        "tests/foundation/net/test_quic_ecn.cpp",
+        "tests/foundation/net/fuzz/fuzz_quic_ecn.cpp",
+        "tests/foundation/net/test_udp.cpp"
       ],
       "deprecation": null,
-      "note": "Proven so far in crd-crypto (NET.2): the address-validation tokens of section 8.1 (quic.hpp, decision S13): Retry and NEW_TOKEN tokens told apart by their clear kind (8.1.1), sealed per token under a rotating fleet key and bound to the version, the client's address and, for a Retry token, its port and both connection IDs of its next Initial (8.1.2, 8.1.4, 17.2.5), their lifetimes and the clock skew, and NEW_TOKEN tokens accepted once (8.1.4); the round trips a Retry and a NEW_TOKEN token cost against the amplification limit (section 8) measured with real handshakes. RFC 9000 was read on 2026-11-02 for them. Remaining: the transport itself (4.2a), its paths (NET-PATH) and its qualification against real peers (NET.5)."
+      "note": "Proven so far in crd-crypto (NET.2): the address-validation tokens of section 8.1 (quic.hpp, decision S13): Retry and NEW_TOKEN tokens told apart by their clear kind (8.1.1), sealed per token under a rotating fleet key and bound to the version, the client's address and, for a Retry token, its port and both connection IDs of its next Initial (8.1.2, 8.1.4, 17.2.5), their lifetimes and the clock skew, and NEW_TOKEN tokens accepted once (8.1.4); the round trips a Retry and a NEW_TOKEN token cost against the amplification limit (section 8) measured with real handshakes. RFC 9000 was read on 2026-11-02 for them. ECN (section 13.4 and appendix A.4, NET-PATH design S67, 2026-11-10): codepoints read and marked per datagram on Linux and Windows sockets, received packets counted per space and reported in ACK frames, and the sender's validation (testing ten packets or three probe timeouts, counts missing, falling, exceeding what was sent or short of what was acknowledged, every testing packet lost) feeding CE to congestion control on a validated path. The transport itself is 4.2a's, closed 2026-11-10. Remaining: the rest of its paths (NET-PATH) and its qualification against real peers (NET.5)."
     },
     {
       "id": "quic.tls",
@@ -811,10 +815,11 @@
         "engine/foundation/net/include/crd/net/congestion.hpp",
         "tests/foundation/net/test_congestion.cpp",
         "tests/foundation/net/test_quic_congestion.cpp",
-        "tests/foundation/net/fuzz/fuzz_congestion.cpp"
+        "tests/foundation/net/fuzz/fuzz_congestion.cpp",
+        "tests/foundation/net/test_quic_ecn.cpp"
       ],
       "deprecation": null,
-      "note": "Loss detection proven in crd-net (4.2a, design S37): RTT samples, both thresholds, the probe timeout, persistent congestion, and section 6.1's thresholds raised on a spurious loss by RFC 8985 section 6.2's mechanism (capped, back after 16 loss detections). NET-PATH's congestion control (design S66, 2026-11-10): appendix B's NewReno with one reduction per recovery period, persistent congestion, no growth while unheld and pacing at 1.25 windows per smoothed RTT, in every connection; ECN's congestion signal waits for ECN validation."
+      "note": "Loss detection proven in crd-net (4.2a, design S37): RTT samples, both thresholds, the probe timeout, persistent congestion, and section 6.1's thresholds raised on a spurious loss by RFC 8985 section 6.2's mechanism (capped, back after 16 loss detections). NET-PATH's congestion control (design S66, 2026-11-10): appendix B's NewReno with one reduction per recovery period, persistent congestion, no growth while unheld and pacing at 1.25 windows per smoothed RTT, in every connection; ECN (design S67, 2026-11-10): a CE count rising on a validated path is a congestion event (section 7.1, appendix B.7), never undone and at most one reduction per recovery period."
     },
     {
       "id": "cc.cubic",
