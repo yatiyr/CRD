@@ -133,7 +133,7 @@ RFC 9000 section 18. Bounds are section 18.2's; a value outside them is TRANSPOR
 | Name | What it is | Units | Default | Who sets it |
 |---|---|---|---|---|
 | `max_idle_timeout` | Close the connection after this long with nothing received | ms | 0 (none) | you |
-| `max_udp_payload_size` | The largest datagram this side will read | bytes | 65,527 | you (at least 1200) |
+| `max_udp_payload_size` | The largest datagram this side will read | bytes | 65,527 | you (at least 1200); a host lowers it to its `receive_bytes` |
 | `ack_delay_exponent` | Scale of the delay field in ACK frames | power of 2 | 3 | you (at most 20) |
 | `max_ack_delay` | The longest this side waits before acknowledging | ms | 25 | you (below 2^14) |
 | `disable_active_migration` | The peer must not move the connection to another address | bool | false | the server sets it (migration is NET-PATH's) |
@@ -221,7 +221,7 @@ IPv6 base 1232, default ceiling 1472, 3 probe losses fail a size (RFC 8899's MAX
 | `connections` | Live connections at most (a fixed pool) | connections | 256 | 1 to 2^20 |
 | `early_datagrams` | 0-RTT datagrams held before their Initial arrives | datagrams | 16 | 0 for none |
 | `early_per_client` | Of them per connection ID and address | datagrams | 4 | |
-| `early_bytes` | The largest held | bytes | 1500 | |
+| `receive_bytes` | The loop's `slot_bytes`: advertised as each connection's `max_udp_payload_size`, and the largest 0-RTT datagram held | bytes | 1500 | 1200 to 65,527 |
 | `early_lifetime_ns` | How long one is held | ns | 100 ms | |
 | `send_slots` | Datagrams waiting for the socket | datagrams | 64 | |
 | `send_retry_ns` | A connection held back by a busy socket is served again within this | ns | 1 ms | |
@@ -234,7 +234,7 @@ IPv6 base 1232, default ceiling 1472, 3 probe losses fail a size (RFC 8899's MAX
 | `connection` | Every connection's config (side Client; `connect()` may name another TLS context) | struct | | |
 | `connections` | Live connections at most | connections | 16 | 1 to 2^20 |
 | `tokens` | Servers whose NEW_TOKEN token is remembered | servers | 16 | 0 to 4096 |
-| `send_slots`, `send_retry_ns` | As on the server | datagrams, ns | 64, 1 ms | |
+| `send_slots`, `send_retry_ns`, `receive_bytes` | As on the server | datagrams, ns, bytes | 64, 1 ms, 1500 | |
 | `tickets` | The client's own ticket cache, used unless `connection.tickets` names one | struct | below | |
 
 `TicketCacheConfig` ([ticket_cache.hpp](../../engine/foundation/net/include/crd/net/ticket_cache.hpp)).
@@ -1362,8 +1362,8 @@ the session logs linked from the [4.2a row](../ROADMAP.md#slice-4.2a).
 - **No transport performance board exists**; NET.4 will publish one.
 - **HyStart++'s RTT threshold** formula above is RFC 9406's, stated from its constants in `congestion.cpp`
   (4 ms, 16 ms, divisor 8); the code itself was not traced line by line.
-- **NET-PATH** is Partial: PMTU discovery against real peers, `max_udp_payload_size` advertised as the loop's real
-  receive slot (it advertises 65,527 while the loop reads 1500), ICMP hints, BBRv3, Prague and migration are open.
+- **NET-PATH** is Partial: ICMP hints, BBRv3, Prague and migration are open (PMTU discovery against real peers and
+  the advertised receive slot landed on 2026-11-10).
 
 ---
 
