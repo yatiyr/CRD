@@ -16,7 +16,7 @@ namespace
 QuicHostLimits limits_of(const QuicClientConfig& config) noexcept
 {
     return QuicHostLimits{config.connections, config.send_slots, config.connection.max_datagram_bytes,
-                          config.send_retry_ns};
+                          config.receive_bytes, config.send_retry_ns};
 }
 
 // Whether the ingress runs the connection's version and every version of its preference.

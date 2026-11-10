@@ -175,7 +175,8 @@ public:
         : client_routes(client_allocator, 128U, ConstSpan<u8>(kHostPrf)),
           client_ingress(client_ingress_config(), client_routes),
           client(client_allocator, client_socket, client_ingress, client_routes, client_reset, app, config),
-          client_loop(client_allocator, client_socket, client_clock, client_ingress, client, IoLoopConfig{}),
+          client_loop(client_allocator, client_socket, client_clock, client_ingress, client,
+                      IoLoopConfig{.slot_bytes = config.receive_bytes}),
           m_servers(servers)
     {
         REQUIRE(client_reset.init(ConstSpan<u8>(kClientSecret)) == CryptoError::None);
@@ -763,6 +764,44 @@ TEST_CASE("QUIC client: the host searches the path MTU only through a socket tha
     }
 }
 
+TEST_CASE("QUIC hosts: each end advertises its loop's receive slot as max_udp_payload_size, which bounds the "
+          "other's path MTU search",
+          "[net][net-path][quic-client][quic-pmtu]")
+{
+    Identity identity;
+    Setup setup;
+    setup.receive_bytes = 1300U;
+    QuicClientConfig config = client_config(identity, QuicVersion::V1, {});
+    config.receive_bytes = 1350U;
+    auto network = std::make_unique<Network>(identity, setup, config);
+    network->client_socket.offers.dont_fragment = true;
+    const QuicHandle handle = network->connect(0U, 0U);
+    REQUIRE(handle.valid());
+    REQUIRE(network->run_until(
+        [&]
+        {
+            const QuicConnection& connection = network->live(handle);
+            return network->app.echoed(handle) && connection.path_mtu().state() == QuicPmtuState::SearchComplete;
+        }));
+    const QuicConnection& client = network->live(handle);
+    REQUIRE(client.peer_parameters_known());
+    CHECK(client.peer_parameters().max_udp_payload_size == 1300U);
+    CHECK(client.path_mtu().ceiling() == 1300U);
+    CHECK(client.path_mtu().size() == 1300U);
+    QuicConnection* const server = network->server(0U).server.connection(network->server(0U).app.last);
+    REQUIRE(server != nullptr);
+    REQUIRE(server->peer_parameters_known());
+    CHECK(server->peer_parameters().max_udp_payload_size == 1350U);
+    CHECK(server->path_mtu().ceiling() == 1350U);
+
+    // The default slot, 1500 bytes, is above the search's 1472-byte ceiling, which it leaves.
+    auto plain = std::make_unique<Network>(identity, Setup{}, client_config(identity, QuicVersion::V1, {}));
+    const QuicHandle other = plain->connect(0U, 0U);
+    REQUIRE(plain->run_until([&] { return plain->app.echoed(other); }));
+    CHECK(plain->live(other).peer_parameters().max_udp_payload_size == 1500U);
+    CHECK(plain->live(other).path_mtu().ceiling() == kQuicDefaultMaxDatagram);
+}
+
 TEST_CASE("QUIC client: the server's stateless reset ends a connection only from the server's address",
           "[net][4.2a][quic-client]")
 {
@@ -1029,6 +1068,9 @@ TEST_CASE("QUIC client: the pool's bounds, stale handles, a TLS context per conn
     CHECK(refused([](QuicClientConfig& c) { c.tickets.per_binding = 0U; }));
     CHECK(refused([](QuicClientConfig& c) { c.send_slots = 0U; }));
     CHECK(refused([](QuicClientConfig& c) { c.send_retry_ns = 0U; }));
+    CHECK(refused([](QuicClientConfig& c) { c.receive_bytes = 1199U; }));
+    CHECK(refused([](QuicClientConfig& c) { c.receive_bytes = 65528U; }));
+    CHECK_FALSE(refused([](QuicClientConfig& c) { c.receive_bytes = 65527U; }));
     CHECK_FALSE(refused([](QuicClientConfig& c) { c.tokens = 0U; }));
 
     // Every allocation it makes, refused in turn, leaves it not ready (and leaks nothing: the sanitizers' lanes).

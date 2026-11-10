@@ -104,7 +104,7 @@ struct Setup
     u32 connections = 24U;
     u32 early_datagrams = 16U;
     u32 early_per_client = 4U;
-    u32 early_bytes = 1500U;
+    u32 receive_bytes = 1500U; // the loop's slot_bytes, which the server advertises
     bool always_retry = false;
     bool only_v2 = false; // the server runs version 2 alone
     bool raw_only = false; // no TLS context: the raw UDP path alone
@@ -122,7 +122,7 @@ public:
           buckets(allocator, rules(setup), cont::ConstSpan<u8>(kHostPrf)),
           ingress(ingress_config(setup), routes, buckets, &tokens, &new_tokens, &reset),
           server(allocator, socket, clock, ingress, routes, reset, &tokens, app, server_config(identity, setup)),
-          loop(allocator, socket, clock, ingress, server, IoLoopConfig{})
+          loop(allocator, socket, clock, ingress, server, IoLoopConfig{.slot_bytes = setup.receive_bytes})
     {
         REQUIRE(tokens.init(cont::ConstSpan<u8>(kTokenKey), {}) == crypto::CryptoError::None);
         REQUIRE(new_tokens.init(1024U, crypto::kQuicNewTokenLifetime, kUnix) == crypto::CryptoError::None);
@@ -182,7 +182,7 @@ private:
         config.connections = setup.connections;
         config.early_datagrams = setup.early_datagrams;
         config.early_per_client = setup.early_per_client;
-        config.early_bytes = setup.early_bytes;
+        config.receive_bytes = setup.receive_bytes;
         return config;
     }
 };

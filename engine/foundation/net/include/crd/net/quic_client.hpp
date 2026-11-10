@@ -58,6 +58,7 @@ struct QuicClientConfig
     u32 connections = 16U;        // live connections at most (1 to kQuicMaxHostConnections)
     u32 tokens = 16U;             // servers whose NEW_TOKEN token is remembered (0 to kQuicMaxClientTokens)
     u32 send_slots = 64U;         // datagrams waiting for the host at most
+    u32 receive_bytes = 1500U;    // the loop's slot_bytes: what each connection advertises (QuicHostLimits)
     u64 send_retry_ns = 1000000U; // a connection the busy host held back is served again within 1 ms
     TicketCacheConfig tickets;    // the client's own store (entries 0: no resumption); unused with connection.tickets
 };
@@ -106,8 +107,9 @@ public:
     QuicClient& operator=(QuicClient&&) = delete;
 
     // False when the configuration is out of range (a server's connection configuration or one QuicConnection
-    // refuses, a version the ingress does not run, counts out of bounds, a datagram size under 1200 bytes), the
-    // ingress is a server's or not ready, the table is not ready, or the allocator refused.
+    // refuses, a version the ingress does not run, counts out of bounds, a datagram size under 1200 bytes,
+    // receive_bytes over 65527), the ingress is a server's or not ready, the table is not ready, or the allocator
+    // refused.
     [[nodiscard]] bool ready() const noexcept { return m_started != nullptr; }
 
     // Starts a connection to `request.server`, served in the loop's next turn (the application writes its first

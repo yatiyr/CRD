@@ -70,6 +70,9 @@ struct QuicHostLimits
     u32 connections = 0U;      // live connections at most (1 to kQuicMaxHostConnections)
     u32 send_slots = 0U;       // datagrams waiting for the host at most
     usize datagram_bytes = 0U; // the largest datagram a connection sends
+    // The largest datagram the loop reads whole (IoLoopConfig::slot_bytes), 1200 to 65527: every connection
+    // advertises at most this as its max_udp_payload_size (RFC 9000 section 18.2), so no peer sends one the loop drops.
+    u32 receive_bytes = 0U;
     u64 send_retry_ns = 0U;    // a connection the busy host held back is served again within this
 };
 

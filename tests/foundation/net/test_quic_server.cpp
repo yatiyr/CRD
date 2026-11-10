@@ -638,7 +638,7 @@ TEST_CASE("QUIC server: the held 0-RTT ring keeps its per-client share, evicts t
     Setup setup;
     setup.early_datagrams = 4U;
     setup.early_per_client = 2U;
-    setup.early_bytes = 1200U;
+    setup.receive_bytes = 1200U;
     auto fleet = std::make_unique<Fleet>(identity, setup);
     const u8 a[8] = {0xA1, 1, 2, 3, 4, 5, 6, 7};
     const u8 b[8] = {0xB1, 1, 2, 3, 4, 5, 6, 7};
@@ -658,8 +658,10 @@ TEST_CASE("QUIC server: the held 0-RTT ring keeps its per-client share, evicts t
     early(ConstSpan<u8>(c), client_peer(0U), 90U); // full: the oldest goes
     CHECK(fleet->server.counters().early_evicted == 1U);
     CHECK(fleet->server.early_held() == 4U);
-    early(ConstSpan<u8>(b), client_peer(2U), 1300U); // longer than a held slot
-    CHECK(fleet->server.counters().early_dropped == 2U);
+    // Longer than the loop's slot, which a held slot matches: truncated, it never reaches the ring.
+    early(ConstSpan<u8>(b), client_peer(2U), 1300U);
+    CHECK(fleet->ingress.counters().drops[static_cast<usize>(DropReason::Truncated)] == 1U);
+    CHECK(fleet->server.counters().early_dropped == 1U);
     CHECK(fleet->server.counters().early_held == 5U);
     CHECK(fleet->socket.sent_count == 0U); // none is answered
 
@@ -717,7 +719,9 @@ TEST_CASE("QUIC server: configurations out of range and refused allocations leav
     CHECK(refused([](QuicServerConfig& c) { c.connections = kQuicMaxHostConnections + 1U; }));
     CHECK(refused([](QuicServerConfig& c) { c.early_datagrams = kQuicMaxEarlyDatagrams + 1U; }));
     CHECK(refused([](QuicServerConfig& c) { c.early_per_client = 0U; }));
-    CHECK(refused([](QuicServerConfig& c) { c.early_bytes = 1199U; }));
+    CHECK(refused([](QuicServerConfig& c) { c.receive_bytes = 1199U; }));
+    CHECK(refused([](QuicServerConfig& c) { c.receive_bytes = 65528U; }));
+    CHECK_FALSE(refused([](QuicServerConfig& c) { c.receive_bytes = 65527U; }));
     CHECK(refused([](QuicServerConfig& c) { c.early_lifetime_ns = 0U; }));
     CHECK(refused([](QuicServerConfig& c) { c.send_slots = 0U; }));
     CHECK(refused([](QuicServerConfig& c) { c.send_retry_ns = 0U; }));

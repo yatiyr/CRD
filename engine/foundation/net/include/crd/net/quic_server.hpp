@@ -51,7 +51,9 @@ struct QuicServerConfig
     u32 connections = 256U;             // live connections at most (1 to kQuicMaxHostConnections)
     u32 early_datagrams = 16U;          // 0-RTT datagrams held before their Initial (0: none held)
     u32 early_per_client = 4U;          // of them per Destination Connection ID and address
-    u32 early_bytes = 1500U;            // the largest held (the loop's slot_bytes); a longer one is dropped
+    // The loop's slot_bytes, 1200 to 65527: what each connection advertises as max_udp_payload_size (QuicHostLimits)
+    // and the largest 0-RTT datagram held.
+    u32 receive_bytes = 1500U;
     u64 early_lifetime_ns = 100000000U; // how long one is held (100 ms)
     u32 send_slots = 64U;               // datagrams waiting for the host at most
     u64 send_retry_ns = 1000000U;       // a connection the busy host held back is served again within 1 ms
@@ -72,7 +74,7 @@ struct QuicServerCounters : QuicHostCounters
     u64 refused = 0U; // admitted Initials answered with CONNECTION_REFUSED (or dropped when its rate was spent)
     u64 early_held = 0U;
     u64 early_read = 0U;    // held 0-RTT datagrams read by their connection
-    u64 early_dropped = 0U; // not held: no ring, the client's share spent or longer than early_bytes
+    u64 early_dropped = 0U; // not held: no ring, the client's share spent or longer than receive_bytes
     u64 early_evicted = 0U; // the oldest, when the ring was full
     u64 early_expired = 0U;
     u64 new_tokens = 0U;
@@ -94,8 +96,8 @@ public:
     QuicServer& operator=(QuicServer&&) = delete;
 
     // False when the configuration is out of range (a client's connection configuration or one QuicConnection
-    // refuses, counts out of bounds, a datagram size under 1200 bytes), the ingress is a client's or not ready, the
-    // table or key is not ready, or the allocator refused.
+    // refuses, counts out of bounds, a datagram size under 1200 bytes, receive_bytes over 65527), the ingress is a
+    // client's or not ready, the table or key is not ready, or the allocator refused.
     [[nodiscard]] bool ready() const noexcept { return m_admitted != nullptr; }
 
     void on_admit(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept override;

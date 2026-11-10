@@ -15,7 +15,8 @@ namespace
 bool limits_valid(const QuicHostLimits& limits) noexcept
 {
     return limits.connections != 0U && limits.connections <= kQuicMaxHostConnections && limits.send_retry_ns != 0U &&
-           limits.datagram_bytes >= kQuicMinInitialDatagram;
+           limits.datagram_bytes >= kQuicMinInitialDatagram && limits.receive_bytes >= kQuicMinInitialDatagram &&
+           limits.receive_bytes <= kMaxUdpPayloadV6;
 }
 } // namespace
 
@@ -95,6 +96,10 @@ QuicConnection* QuicHost::build(u32 index, QuicConnectionConfig config, const En
 {
     u8 seed[crypto::kPrfKeyBytes] = {};
     config.ids = &m_ids[index];
+    if (config.parameters.max_udp_payload_size > m_limits.receive_bytes)
+    {
+        config.parameters.max_udp_payload_size = m_limits.receive_bytes; // what the loop reads whole
+    }
     const SocketFeatures features = m_socket.features();
     if (!features.ecn_marking)
     {

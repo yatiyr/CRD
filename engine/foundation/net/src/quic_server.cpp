@@ -19,7 +19,7 @@ bool same_id(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
 QuicHostLimits limits_of(const QuicServerConfig& config) noexcept
 {
     return QuicHostLimits{config.connections, config.send_slots, config.connection.max_datagram_bytes,
-                          config.send_retry_ns};
+                          config.receive_bytes, config.send_retry_ns};
 }
 } // namespace
 
@@ -35,8 +35,7 @@ QuicServer::QuicServer(memory::IAllocator& allocator, DatagramSocket& socket, co
     const u32 early = config.early_datagrams;
     if (!ingress.ready() || !ingress.server() || connection.side != crypto::QuicSide::Server ||
         early > kQuicMaxEarlyDatagrams ||
-        (early != 0U && (config.early_per_client == 0U || config.early_bytes < kQuicMinInitialDatagram ||
-                         config.early_bytes > kMaxUdpPayloadV6 || config.early_lifetime_ns == 0U)) ||
+        (early != 0U && (config.early_per_client == 0U || config.early_lifetime_ns == 0U)) ||
         (!connection.entropy_seed.empty() && connection.entropy_seed.size() != crypto::kPrfKeyBytes))
     {
         return;
@@ -59,12 +58,12 @@ QuicServer::QuicServer(memory::IAllocator& allocator, DatagramSocket& socket, co
     Admitted* const admitted = memory::try_construct_array<Admitted>(allocator, count);
     Early* const held = (early != 0U) ? memory::try_construct_array<Early>(allocator, early) : nullptr;
     u8* const held_bytes =
-        (early != 0U) ? memory::try_construct_array<u8>(allocator, usize{early} * config.early_bytes) : nullptr;
+        (early != 0U) ? memory::try_construct_array<u8>(allocator, usize{early} * config.receive_bytes) : nullptr;
     if (admitted == nullptr || (early != 0U && (held == nullptr || held_bytes == nullptr)))
     {
         memory::destroy_array(allocator, admitted, count);
         memory::destroy_array(allocator, held, early);
-        memory::destroy_array(allocator, held_bytes, usize{early} * config.early_bytes);
+        memory::destroy_array(allocator, held_bytes, usize{early} * config.receive_bytes);
         return;
     }
     m_admitted = admitted;
@@ -89,7 +88,7 @@ QuicServer::~QuicServer()
     const u32 early = m_config.early_datagrams;
     memory::destroy_array(allocator(), m_admitted, count);
     memory::destroy_array(allocator(), m_early, early);
-    memory::destroy_array(allocator(), m_early_bytes, usize{early} * m_config.early_bytes);
+    memory::destroy_array(allocator(), m_early_bytes, usize{early} * m_config.receive_bytes);
 }
 
 QuicServerCounters QuicServer::counters() const noexcept
@@ -189,7 +188,7 @@ QuicHandle QuicServer::open_keyed(const Endpoint& client, QuicKeyedStart start, 
 void QuicServer::on_early(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept
 {
     const u32 capacity = m_config.early_datagrams;
-    if (m_early == nullptr || datagram.size > m_config.early_bytes)
+    if (m_early == nullptr || datagram.size > m_config.receive_bytes)
     {
         ++m_counters.early_dropped;
         return;
@@ -224,7 +223,7 @@ void QuicServer::on_early(const IngressDecision& decision, const ReceivedDatagra
     entry.ecn = datagram.ecn;
     static_cast<void>(entry.dcid.assign(decision.header.dcid)); // a header's ID, at most 20 bytes
     entry.bytes = static_cast<u32>(datagram.size);
-    std::memcpy(m_early_bytes + (usize{place} * m_config.early_bytes), datagram.storage.data(), datagram.size);
+    std::memcpy(m_early_bytes + (usize{place} * m_config.receive_bytes), datagram.storage.data(), datagram.size);
     ++m_early_count;
     ++m_counters.early_held;
 }
@@ -307,7 +306,7 @@ void QuicServer::read_early(u32 index, QuicConnection& connection, cont::ConstSp
         {
             continue;
         }
-        const cont::Span<u8> bytes(m_early_bytes + (usize{place} * m_config.early_bytes), entry.bytes);
+        const cont::Span<u8> bytes(m_early_bytes + (usize{place} * m_config.receive_bytes), entry.bytes);
         entry.bytes = 0U;
         ++m_counters.early_read;
         connection.receive(bytes, entry.ecn, now_ns);
