@@ -173,6 +173,12 @@ carry only `<prefix>/include`.
   removing either PDB from the moved prefix fails the run, naming it), and runs the application's `crypto` route: one
   TLS 1.3 connection between two sessions of the application, both ends authenticated by pinned ML-DSA-65 keys over
   X25519MLKEM768, the server's certificate compressed with zstd, a message each way and close_notify.
+- Amended 2026-11-10 ([session](../sessions/2026-11-10-net-path-gcc.md), NET-PATH): crd-net links crd-hesap-net
+  privately for its congestion controllers' compiled estimators (GCC's delay trend and acknowledged rate). No packaged
+  public header includes hesap-net's headers, so `crd_package_link_only()` exports its archive alone as
+  `Cerid::hesap-net`, link-only behind `Cerid::net` and not in `Cerid_DEPENDENCIES` (it is first-party): a third kind
+  of archive beside the modules and the pinned dependencies, present only in a package that carries `Cerid::net`.
+  The proof's family (`perf,math,crypto`) does not carry it.
 
 ## Not in scope
 

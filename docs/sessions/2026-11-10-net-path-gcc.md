@@ -3,10 +3,7 @@
 <!-- doc-role: evidence -->
 > Dated evidence; no live status. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
-Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S72](../design/network-foundation.md#gcc). Sources read:
-draft-ietf-rmcat-gcc-02 (sections 5 and 6) and libwebrtc branch-heads/8147's `aimd_rate_control.cc`,
-`link_capacity_estimator.cc`, `delay_based_bwe.cc`, `send_side_bandwidth_estimation.cc` and
-`goog_cc_network_control.cc`, fetched at the pinned commit.
+Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S72](../design/network-foundation.md#gcc) (sources there).
 
 ## What landed
 
@@ -21,7 +18,7 @@ draft-ietf-rmcat-gcc-02 (sections 5 and 6) and libwebrtc branch-heads/8147's `ai
   capacity estimator, the classic loss controller under it, libwebrtc's congestion window and pacing factors, in
   integer rates. Without receive timestamps each ACK frame's RTT less the ACK delay feeds the trend.
 - crd-net now links crd-hesap-net (its compiled estimators), and the package exports hesap-net's archive link-only
-  (`crd_package_link_only`); its include paths and warnings edge are export-clean.
+  (`crd_package_link_only`, [package contract](../design/public-consumption.md)).
 - The bottleneck fixture reports receive times on an optional receiver clock offset.
 
 ## Evidence
@@ -33,7 +30,7 @@ draft-ietf-rmcat-gcc-02 (sections 5 and 6) and libwebrtc branch-heads/8147's `ai
   424 ms), a 353 ms peak in its slow sawtooth near the capacity, a halved link followed within 5 s, 1% loss
   ignored, 3.5% beside CUBIC. Through QUIC from ACK frames alone: 93% at 2 Mbit/s with at most 35 ms queued, where
   CUBIC queues 291 ms and overflows. The same rates to the byte with and without receive timestamps, and on a peer
-  clock 10^18 ns ahead.
+  clock 10^18 ns ahead. Hosted fuzzing of GCC: host check 42906546427 (dispatched; owed read).
 
 ## User decisions recorded
 
