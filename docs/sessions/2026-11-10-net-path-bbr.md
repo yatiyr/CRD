@@ -25,8 +25,8 @@ draft-ietf-ccwg-bbr-07 (2026-11-02, read from the IETF archive).
 - BBRv3 (`congestion.cpp`): all of section 5 in integer arithmetic. crd-net reads crd-hesap-net's headers only
   (windowed filters, delivery rate, Philox), so the export set is unchanged.
 - `cc.bbr` is in the standards register. The test fixture's `Path` gains a rate and a drop-tail buffer.
-- Commits: 1d964d5c fix, da8ec394 feat (core), 929c77eb feat (net), 5965b654 docs, the fuzz oracle test commit
-  and this note's update.
+- Commits: 1d964d5c fix, 3684720d feat (core), 347f6537 feat (net), c053ea44 docs, c04ab10f test (fuzz oracles),
+  19339382 docs.
 
 ## Evidence
 
