@@ -177,7 +177,13 @@ template <Real T>
     return crd::math::log(detail::kPi<T> / s) - detail::lgamma_pos(static_cast<T>(1) - x);
 }
 
-// sign of Γ(x): +1 except on the intervals (−1, 0), (−3, −2), (−5, −4), ... where Γ is negative.
+// The sign of Γ(x) as gamma() returns it: +1 for x > 0 (and +inf), −1 on the intervals (−1, 0), (−3, −2),
+// (−5, −4), ... where Γ is negative, +1 on (−2, −1), (−4, −3), ...; at the poles the sign of gamma()'s value: +1 at +0
+// and −1 at −0 (Γ(±0) = ±inf), NaN at the negative integers and −inf (where gamma() is NaN, the two one-sided limits
+// having opposite signs) and for a NaN. So gamma_sign(x) · exp(lgamma(x)) has gamma(x)'s sign everywhere. Every
+// float of magnitude 2^(digits − 1) or more is an integer, so a negative one is a pole; every other x converts to a
+// long long, so the conversion below is defined for each input that reaches it (the earlier conversion of floor(x)
+// was not for a NaN, an infinity or a magnitude of 2^63 and more).
 template <Real T>
 [[nodiscard]] T gamma_sign(T x) noexcept
 {
@@ -185,10 +191,20 @@ template <Real T>
     {
         return static_cast<T>(1);
     }
+    constexpr T integral_from = static_cast<T>(1ULL << (std::numeric_limits<T>::digits - 1));
+    // false for -inf, a NaN and the negative integers of magnitude 2^(digits - 1) and more
+    if (!(crd::math::abs(x) < integral_from)) [[unlikely]]
+    {
+        return std::numeric_limits<T>::quiet_NaN();
+    }
+    const auto whole = static_cast<long long>(x); // toward zero, so whole >= x
+    if (x == static_cast<T>(whole)) [[unlikely]]
+    {
+        return x == static_cast<T>(0) ? crd::math::copysign(static_cast<T>(1), x) : std::numeric_limits<T>::quiet_NaN();
+    }
     // Γ(x) < 0 when ⌊x⌋ is odd (x in (−1,0): floor=−1 odd → −, Γ(−½) = −2√π; x in (−2,−1): floor=−2 even → +,
-    // Γ(−3/2) = 4√π/3; ...).
-    const auto fl = static_cast<long long>(crd::math::floor(x));
-    return ((fl & 1) != 0) ? static_cast<T>(-1) : static_cast<T>(1);
+    // Γ(−3/2) = 4√π/3; ...). Here x lies in (whole − 1, whole), so ⌊x⌋ = whole − 1, odd exactly when whole is even.
+    return ((whole & 1) == 0) ? static_cast<T>(-1) : static_cast<T>(1);
 }
 
 // Γ(x): ±inf at ±0, +inf at +inf, NaN at the negative integers and -inf (C's tgamma).

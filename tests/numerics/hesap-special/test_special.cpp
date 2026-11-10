@@ -108,6 +108,72 @@ TEST_CASE("special gamma: gamma_sign is the sign of Gamma on both sides of every
     }
 }
 
+TEST_CASE("special gamma: gamma_sign over many intervals, at the poles and at the specials, in both precisions",
+          "[v12-a][special][gamma]")
+{
+    const auto expected = [](long long k)
+    {
+        // x in (-(k + 1), -k): the floor is -(k + 1), Gamma is negative exactly when that floor is odd, k even
+        return (k % 2) == 0 ? -1.0 : 1.0;
+    };
+    // every interval up to 4096 and then far out, f64 up to 2^51 and f32 up to 2^22 (both still carry the half)
+    for (long long k = 0; k < (1LL << 51); k = k < 4096 ? k + 1 : (k * 3) + 1)
+    {
+        const f64 x = -static_cast<f64>(k) - 0.5;
+        INFO("x=" << x);
+        CHECK(sf::gamma_sign(x) == expected(k));
+        if (k < (1LL << 22))
+        {
+            const float xf = -static_cast<float>(k) - 0.5F;
+            CHECK(sf::gamma_sign(xf) == static_cast<float>(expected(k)));
+        }
+        if (k < 160)
+        {
+            // and against C's tgamma, finite or a signed zero there, on both sides of each interval's centre
+            for (const f64 offset : {1.0e-6, 0.25, 0.75, 1.0 - 1.0e-6})
+            {
+                const f64 y = -static_cast<f64>(k) - offset;
+                CHECK(sf::gamma_sign(y) == (std::signbit(std::tgamma(y)) ? -1.0 : 1.0));
+            }
+        }
+    }
+    // the poles take the sign of gamma()'s value there: +1 at +0, -1 at -0, NaN at the negative integers and -inf
+    const f64 inf = std::numeric_limits<f64>::infinity();
+    CHECK(sf::gamma_sign(0.0) == 1.0);
+    CHECK(sf::gamma_sign(-0.0) == -1.0);
+    CHECK(sf::gamma_sign(0.0F) == 1.0F);
+    CHECK(sf::gamma_sign(-0.0F) == -1.0F);
+    CHECK(sf::gamma_sign(inf) == 1.0);
+    CHECK(std::isnan(sf::gamma_sign(-inf)));
+    CHECK(std::isnan(sf::gamma_sign(std::numeric_limits<f64>::quiet_NaN())));
+    CHECK(std::isnan(sf::gamma_sign(std::numeric_limits<float>::quiet_NaN())));
+    CHECK(std::isnan(sf::gamma_sign(-std::numeric_limits<float>::infinity())));
+    for (const f64 pole :
+         {-1.0, -2.0, -3.0, -170.0, -171.0, -0x1p52, -0x1p63, -1.0e300, -std::numeric_limits<f64>::max()})
+    {
+        INFO("pole " << pole);
+        CHECK(std::isnan(sf::gamma_sign(pole)));
+        CHECK(std::isnan(sf::gamma(pole)));
+    }
+    for (const float pole : {-1.0F, -2.0F, -0x1p23F, -0x1p40F, -std::numeric_limits<float>::max()})
+    {
+        INFO("f32 pole " << pole);
+        CHECK(std::isnan(sf::gamma_sign(pole)));
+    }
+    // gamma_sign(x) * exp(lgamma(x)) carries gamma(x)'s sign at the specials and between the poles
+    for (const f64 x : {0.0, -0.0, -0.5, -1.5, -2.5, -10.25, -101.75, 0.5, 3.0, 170.5})
+    {
+        INFO("x=" << x);
+        CHECK(std::signbit(sf::gamma_sign(x)) == std::signbit(sf::gamma(x)));
+    }
+    // the neighbours of a pole read their own intervals, out to the last non-integer doubles and floats
+    CHECK(sf::gamma_sign(std::nextafter(-1.0, 0.0)) == -1.0);
+    CHECK(sf::gamma_sign(std::nextafter(-1.0, -2.0)) == 1.0);
+    CHECK(sf::gamma_sign(-0x1p52 + 0.5) == 1.0);      // in (-2^52, -2^52 + 1): the floor -2^52 is even
+    CHECK(std::isnan(sf::gamma_sign(-0x1p52 - 0.5))); // not a double: the sum rounds to the pole -2^52
+    CHECK(sf::gamma_sign(-0x1p23F + 0.5F) == 1.0F);
+}
+
 TEST_CASE("special beta: beta/lbeta vs scipy", "[v12-a][special][gamma]")
 {
     for (std::size_t i = 0; i < len(ref_beta_a); ++i)
