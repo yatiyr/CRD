@@ -50,6 +50,15 @@ crd_fuzz_target(crd-fuzz-net-quic-recovery
 crd_fuzz_target(crd-fuzz-net-quic-ecn
     SOURCES fuzz_quic_ecn.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-ecn")
 
+# QUIC's path MTU search (NET-PATH).
+#   crd-fuzz-net-quic-pmtu   any probes asked and sent, probe settlements in flight, stale, spurious or forged, other
+#                            packets of any size acknowledged or lost, detections, lowered ceilings, time and new paths
+#                            on one search: the size within the floor and the ceiling, raised only by an
+#                            acknowledgement to what it proves, lowered only by a black hole (to the floor) or a
+#                            ceiling, and probes above the size, one at a time, none without discovery.
+crd_fuzz_target(crd-fuzz-net-quic-pmtu
+    SOURCES fuzz_quic_pmtu.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-pmtu")
+
 # Congestion control and pacing (NET-PATH).
 #   crd-fuzz-net-congestion   any sends, acknowledgements with RTT samples, losses, spurious losses, marks, persistent
 #                             congestion, held sends, time, live swaps and resets on one controller, and the pacer:

@@ -2624,12 +2624,16 @@ TEST_CASE("QUIC connection: the largest datagram follows the smaller of the two 
     client_config.max_datagram_bytes = 1400U;
     QuicConnectionConfig server_config = datagram_config(QuicSide::Server, identity, QuicVersion::V1, 1U, false);
     server_config.parameters.max_udp_payload_size = 1250U;
+    server_config.max_datagram_bytes = kQuicMinInitialDatagram; // the server's own ceiling the other way
     server_config.datagrams.max_frame_bytes = 1400U;
     QuicConnection client(allocator, client_config);
     QuicConnection server(allocator, server_config);
     connect(client);
     auto net = std::make_unique<Net>(client, server);
     REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+    // The client's path MTU search reaches the server's 1250 bytes (one probe on this clean path).
+    REQUIRE(net->run_until([&] { return client.path_mtu().state() == QuicPmtuState::SearchComplete; }));
+    CHECK(client.path_mtu().size() == 1250U);
     // The client sends this server packets of at most 1250 bytes; the server's own 1200 bytes rule the other way.
     CHECK(client.datagrams().max_payload() == 1250U - kQuicShortPacketOverhead - 3U);
     CHECK(server.datagrams().max_payload() == kQuicMinInitialDatagram - kQuicShortPacketOverhead - 3U);
@@ -2647,8 +2651,13 @@ TEST_CASE("QUIC connection: a datagram of the largest size takes the first packe
         INFO("ACK owed " << owed);
         Identity identity;
         CountingAllocator allocator;
-        QuicConnection client(allocator, datagram_config(QuicSide::Client, identity, QuicVersion::V1, 0U, false));
-        QuicConnection server(allocator, datagram_config(QuicSide::Server, identity, QuicVersion::V1, 1U, false));
+        // At the floor, where the room a packet has, not the peer's frame size, bounds the largest datagram.
+        QuicConnectionConfig client_config = datagram_config(QuicSide::Client, identity, QuicVersion::V1, 0U, false);
+        QuicConnectionConfig server_config = datagram_config(QuicSide::Server, identity, QuicVersion::V1, 1U, false);
+        client_config.max_datagram_bytes = kQuicMinInitialDatagram;
+        server_config.max_datagram_bytes = kQuicMinInitialDatagram;
+        QuicConnection client(allocator, client_config);
+        QuicConnection server(allocator, server_config);
         // A 20-byte connection ID leaves the server's packets no room for an ACK beside the largest datagram.
         REQUIRE(client.connect(ConstSpan<u8>(kLongCid, sizeof(kLongCid)),
                                ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), kStartNs));

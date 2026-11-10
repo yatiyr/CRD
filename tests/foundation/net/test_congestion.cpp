@@ -124,6 +124,47 @@ TEST_CASE("congestion: policies out of range are refused and the initial window 
     CHECK(fresh->state().recovery_start_ns == kNeverNs);
 }
 
+TEST_CASE("congestion: a new datagram size resizes the initial and minimum windows, and an initial window follows it",
+          "[net][net-path][congestion][quic-pmtu]")
+{
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        INFO("algorithm " << static_cast<int>(algorithm));
+        // Still at its initial window: it takes the new size's (RFC 9002 section 7.2).
+        const Controller fresh(policy_of(algorithm));
+        REQUIRE(fresh->window() == 12000U);
+        fresh->set_max_datagram(1472U);
+        CHECK(fresh->window() == 14720U);
+        CHECK(fresh->burst() == 14720U);
+        fresh->set_max_datagram(9000U);
+        CHECK(fresh->window() == 18000U); // min(10 * 9000, max(14720, 2 * 9000))
+        fresh->set_max_datagram(1U);      // below QUIC's floor: the floor
+        CHECK(fresh->window() == 12000U);
+
+        // A window that grew keeps its bytes; the minimum follows the size, also after persistent congestion.
+        const Controller grown(policy_of(algorithm));
+        grown.send(0U, 9U, 0U);
+        for (u64 n = 0U; n <= 9U; ++n)
+        {
+            grown.ack(n, 0U, 100U * kMs, 100U * kMs);
+        }
+        const u64 window = grown->window();
+        REQUIRE(window > 12000U);
+        grown->set_max_datagram(1472U);
+        CHECK(grown->window() == window);
+        grown->on_persistent_congestion(200U * kMs);
+        CHECK(grown->window() == 2U * 1472U);
+        grown->set_max_datagram(kMss); // a black hole: back to the floor
+        CHECK(grown->window() == 2U * 1472U);
+        grown->on_persistent_congestion(300U * kMs);
+        CHECK(grown->window() == 2U * kMss);
+        // A grown size raises a window below the new minimum to it, and the threshold with it.
+        grown->set_max_datagram(9000U);
+        CHECK(grown->window() == 2U * 9000U);
+        CHECK(grown->state().slow_start_threshold >= 2U * 9000U);
+    }
+}
+
 TEST_CASE("congestion: the pacing rate is the gain times the window per smoothed RTT", "[net][net-path][congestion]")
 {
     const Controller reno(policy_of(CongestionAlgorithm::NewReno));

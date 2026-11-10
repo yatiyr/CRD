@@ -130,8 +130,9 @@ protected:
                                          u64 now_ns) noexcept;
     // Builds a connection of `config` for slot `index` in the spare storage, its further IDs routed to the slot and a
     // non-empty entropy seed varied by the count of connections built (a deterministic run stays deterministic
-    // without two connections drawing alike); null, destroying it, when it is not ready.
-    [[nodiscard]] QuicConnection* build(u32 index, QuicConnectionConfig config) noexcept;
+    // without two connections drawing alike), its codepoint and path MTU discovery as the socket allows and an
+    // IPv6 `peer`'s base size; null, destroying it, when it is not ready.
+    [[nodiscard]] QuicConnection* build(u32 index, QuicConnectionConfig config, const Endpoint& peer) noexcept;
     // Destroys a built connection that went live nowhere.
     void discard(QuicConnection& connection) noexcept;
     // A built connection of the free slot `index` goes live for `peer` and is served now.

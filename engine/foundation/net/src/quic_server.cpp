@@ -125,7 +125,7 @@ void QuicServer::on_admit(const IngressDecision& decision, const ReceivedDatagra
     }
     QuicConnectionConfig config = m_config.connection;
     config.version = static_cast<crypto::QuicVersion>(header.version); // one the ingress runs
-    QuicConnection* const connection = build(index, config);
+    QuicConnection* const connection = build(index, config, datagram.peer);
 
     const bool retried = decision.claims.kind == crypto::QuicTokenKind::Retry;
     QuicAccept accept;

@@ -16,7 +16,8 @@
 // With bit 5 mode 0 runs the raw UDP path (S55): both ends opened from one secret, no handshake on the wire.
 //
 // Oracles. Always: a server sends at most three times what it received before the address is proven; every client
-// datagram carrying an Initial has 1200 bytes; nothing is allocated after construction; a close names a transport
+// datagram carrying an Initial has 1200 bytes; a server's datagrams keep to its path's size but for PMTU probes, which
+// keep to its ceiling; nothing is allocated after construction; a close names a transport
 // error of RFC 9000 section 20.1 (or RFC 9368's) or CRYPTO_ERROR when this side closes. Script: after the clean path,
 // both ends are confirmed or one has closed (no handshake hangs), and a confirmed pair agrees on the application
 // protocol, and then carries a stream larger than every window whole and unchanged and datagrams each at most once,
@@ -1017,12 +1018,15 @@ struct Raw
         for (usize guard = 0U; guard < 64U; ++guard)
         {
             u8 datagram[kDatagram];
+            const u64 probes = server.counters().path_probes;
             const usize size = server.send(Span<u8>(datagram, sizeof(datagram)), now);
             if (size == 0U)
             {
                 return;
             }
-            CRD_FUZZ_REQUIRE(size <= kQuicMinInitialDatagram);
+            // Datagrams keep to the path's size; only a PMTU probe passes it, up to the ceiling.
+            CRD_FUZZ_REQUIRE(size <= server.path_mtu().ceiling());
+            CRD_FUZZ_REQUIRE(size <= server.path_mtu().size() || server.counters().path_probes == probes + 1U);
             if (!server.address_validated())
             {
                 CRD_FUZZ_REQUIRE(server.counters().bytes_sent <= 3U * server.counters().bytes_received);

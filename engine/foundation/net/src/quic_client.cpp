@@ -169,8 +169,9 @@ QuicConnection* QuicClient::start(u32 index, const Endpoint& server, const QuicC
     QuicConnectionConfig built = config;
     built.token = token;
     QuicConnection* const connection =
-        (crypto::random_bytes(cont::Span<u8>(dcid, sizeof(dcid))) == crypto::CryptoError::None) ? build(index, built)
-                                                                                                : nullptr;
+        (crypto::random_bytes(cont::Span<u8>(dcid, sizeof(dcid))) == crypto::CryptoError::None)
+            ? build(index, built, server)
+            : nullptr;
     if (connection == nullptr || !connection->connect(local_cid, cont::ConstSpan<u8>(dcid, sizeof(dcid)), now_ns))
     {
         if (connection != nullptr)

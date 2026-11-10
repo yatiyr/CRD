@@ -209,6 +209,36 @@ TEST_CASE("a UDP socket carries each datagram's ECN codepoint over IPv4, IPv6 an
     CHECK(carries_every_codepoint(dual, v6a, v6a.local_endpoint(), dual_v6));
 }
 
+TEST_CASE("a UDP socket forbids fragmentation in every family, so PMTU probes see the path", "[net][udp][net-path]")
+{
+    UdpSocket v4 = open_on(IpAddress::v4_loopback());
+#if CRD_OS_LINUX || CRD_OS_WINDOWS
+    CHECK(v4.features().dont_fragment);
+#else
+    CHECK_FALSE(v4.features().dont_fragment); // macOS until crd-net's port there (MAC.1): QuicHost probes nothing
+    return;
+#endif
+    UdpSocket v6;
+    if (!open_v6(v6, false))
+    {
+        SKIP("the host has no IPv6 loopback");
+    }
+    CHECK(v6.features().dont_fragment);
+    UdpOptions options;
+    options.bind = Endpoint{IpAddress::v6_any(), 0U};
+    SocketError error = SocketError::Failed;
+    UdpSocket dual = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    CHECK(dual.features().dont_fragment); // both families' options
+    // The loopback's MTU carries the largest datagram unfragmented (the send test below sends it whole).
+    u8 bytes[1472] = {};
+    const Endpoint to = reach(dual, IpAddress::v4_loopback());
+    const OutgoingDatagram datagram[] = {{ConstSpan<u8>(bytes, sizeof(bytes)), to}};
+    const BatchResult sent = v4.send(ConstSpan<OutgoingDatagram>(datagram, 1U));
+    CHECK(sent.error == SocketError::None);
+    CHECK(sent.count == 1U);
+}
+
 TEST_CASE("a UDP socket binds a loopback port of its own", "[net][udp]")
 {
     UdpSocket socket = open_on(IpAddress::v4_loopback());

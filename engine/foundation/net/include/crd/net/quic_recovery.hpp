@@ -121,6 +121,7 @@ struct QuicSentPacket
     u32  bytes = 0U;
     bool ack_eliciting = false;
     bool in_flight = false; // counted in bytes in flight: a packet carrying PADDING, and every ack-eliciting one
+    bool path_probe = false; // a PMTU probe (quic_pmtu.hpp): its loss starts no persistent congestion
     Ecn  ecn = Ecn::NotEct; // the codepoint its datagram was marked with (quic_ecn.hpp)
 };
 

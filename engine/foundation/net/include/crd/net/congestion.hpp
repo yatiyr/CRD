@@ -114,6 +114,10 @@ public:
     virtual void on_spurious(const CongestionPacket& packet, u64 lost_ns, u64 now_ns) noexcept = 0;
     // A client accepted a Retry (RFC 9002 section 6.3): the controller starts again.
     virtual void reset(u64 now_ns) noexcept = 0;
+    // The path's datagrams now take `bytes` (DPLPMTUD, quic_pmtu.hpp; 1200 to 65535). The minimum and initial
+    // windows follow it, a window still at its initial size takes the new one (RFC 9002 section 7.2), and CUBIC
+    // starts a new epoch in the new unit.
+    virtual void set_max_datagram(u64 bytes) noexcept = 0;
 
     [[nodiscard]] virtual u64 window() const noexcept = 0;
     // Bytes per second to pace at with `rtt`; 0 sends unpaced.

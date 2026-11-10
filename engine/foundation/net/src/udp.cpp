@@ -108,6 +108,25 @@ void fill_slot(ReceivedDatagram& slot, usize size, bool truncated, const sockadd
     return features;
 }
 
+// Forbids fragmentation of every datagram sent, ignoring the host's path MTU estimate (IP_PMTUDISC_PROBE): the
+// transport's PMTU search probes past it, and an ICMP report forged to lower it changes nothing. An IPv6 socket that
+// carries IPv4 sets both families. Windows before IP_MTU_DISCOVER takes the plain DF options, which do the same
+// there. A host that refuses leaves fragmentation on, which features() reports.
+[[nodiscard]] bool forbid_fragmentation(NativeSocket handle, bool v6, bool dual_stack) noexcept
+{
+    const bool v4_family = !v6 || dual_stack;
+#if CRD_OS_LINUX
+    const bool v4 = !v4_family || set_option(handle, IPPROTO_IP, IP_MTU_DISCOVER, IP_PMTUDISC_PROBE);
+    const bool v6_set = !v6 || set_option(handle, IPPROTO_IPV6, IPV6_MTU_DISCOVER, IPV6_PMTUDISC_PROBE);
+#else
+    const bool v4 = !v4_family || set_option(handle, IPPROTO_IP, IP_MTU_DISCOVER, IP_PMTUDISC_PROBE) ||
+                    set_option(handle, IPPROTO_IP, IP_DONTFRAGMENT, 1);
+    const bool v6_set = !v6 || set_option(handle, IPPROTO_IPV6, IPV6_MTU_DISCOVER, IP_PMTUDISC_PROBE) ||
+                        set_option(handle, IPPROTO_IPV6, IPV6_DONTFRAG, 1);
+#endif
+    return v4 && v6_set;
+}
+
 // The control message level and type that carry a codepoint toward `peer`, by its own family (an IPv4 peer of a
 // dual-stack socket takes IPv4's, which the host applies to the mapped address).
 void ecn_message(const Endpoint& peer, int& level, int& type) noexcept
@@ -290,6 +309,7 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
     if (error == SocketError::None)
     {
         socket.m_features = enable_ecn(handle, v6, socket.m_dual_stack);
+        socket.m_features.dont_fragment = forbid_fragmentation(handle, v6, socket.m_dual_stack);
     }
 #endif
     if (error == SocketError::None)

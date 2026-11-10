@@ -159,10 +159,20 @@ void QuicDatagrams::fill_parameters(QuicTransportParameters& local) const noexce
 void QuicDatagrams::set_peer(u64 peer_max_frame, usize udp_payload) noexcept
 {
     m_peer_known = true;
+    m_peer_frame = peer_max_frame;
+    set_path(udp_payload);
+}
+
+void QuicDatagrams::set_path(usize udp_payload) noexcept
+{
+    if (!m_peer_known)
+    {
+        return;
+    }
     m_sendable = false;
     m_max_payload = 0U;
     const usize room = (udp_payload > kQuicShortPacketOverhead) ? udp_payload - kQuicShortPacketOverhead : 0U;
-    const u64 frame_bytes = (peer_max_frame < room) ? peer_max_frame : room;
+    const u64 frame_bytes = (m_peer_frame < room) ? m_peer_frame : room;
     usize payload = 0U;
     if (m_limits.send_bytes == 0U || !quic_datagram_payload_limit(frame_bytes, payload))
     {
@@ -263,23 +273,33 @@ void QuicDatagrams::expire(u64 now_ns) noexcept
         {
             return;
         }
-        const u64 id = oldest.id;
-        m_send.pop();
         ++m_counters.expired;
-        if (m_limits.outcomes)
-        {
-            report(id, QuicDatagramOutcome::Expired);
-        }
-        else
-        {
-            --m_unreported;
-        }
+        drop_oldest(QuicDatagramOutcome::Expired);
+    }
+}
+
+void QuicDatagrams::drop_oldest(QuicDatagramOutcome outcome) noexcept
+{
+    const u64 id = m_send.front().id;
+    m_send.pop();
+    if (m_limits.outcomes)
+    {
+        report(id, outcome);
+    }
+    else
+    {
+        --m_unreported;
     }
 }
 
 usize QuicDatagrams::write_next(cont::Span<u8> out, u64 now_ns, u64& id) noexcept
 {
     expire(now_ns);
+    while (m_send.count() != 0U && m_send.front().bytes > m_max_payload)
+    {
+        ++m_counters.oversized; // queued before the path's size fell: it fits no packet now
+        drop_oldest(QuicDatagramOutcome::Lost);
+    }
     if (m_send.count() == 0U)
     {
         return 0U;
@@ -334,16 +354,7 @@ void QuicDatagrams::reject_early() noexcept
 {
     while (m_send.count() != 0U)
     {
-        const u64 id = m_send.front().id;
-        m_send.pop();
-        if (m_limits.outcomes)
-        {
-            report(id, QuicDatagramOutcome::Lost);
-        }
-        else
-        {
-            --m_unreported;
-        }
+        drop_oldest(QuicDatagramOutcome::Lost);
     }
     if (m_outcomes_held)
     {

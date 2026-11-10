@@ -113,7 +113,8 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
            config.sent_frames <= kMaxSentPackets && config.crypto_bytes % kQuicStreamChunk == 0U &&
            config.crypto_bytes >= kMinCryptoBytes && config.crypto_bytes <= kMaxCryptoBytes &&
            config.max_datagram_bytes >= kQuicMinInitialDatagram &&
-           config.max_datagram_bytes <= kQuicDefaultMaxUdpPayload && congestion_policy_valid(config.congestion) &&
+           config.max_datagram_bytes <= kQuicDefaultMaxUdpPayload && config.base_datagram_bytes >= kQuicPmtuFloor &&
+           config.base_datagram_bytes <= config.max_datagram_bytes && congestion_policy_valid(config.congestion) &&
            config.ecn != Ecn::Ce &&
            (config.entropy_seed.empty() || config.entropy_seed.size() == crypto::kPrfKeyBytes) &&
            (config.token.size() <= kQuicMaxCarriedTokenBytes) && config.held_packets <= kQuicMaxHeldPackets &&
@@ -196,6 +197,14 @@ void QuicRoutedIds::unwatch_reset(cont::ConstSpan<u8> token) noexcept
 void QuicConnection::Events::on_acked(QuicSpace space, const QuicSentPacket& packet) noexcept
 {
     m_connection.settle(space, packet, Settle::Acked);
+    if (packet.path_probe)
+    {
+        m_connection.m_pmtu.on_probe_acked(packet.bytes, m_connection.m_event_ns);
+    }
+    else if (space == QuicSpace::Application)
+    {
+        m_connection.m_pmtu.on_acked(packet.number, packet.bytes);
+    }
     if (packet.in_flight)
     {
         m_connection.m_congestion->on_acked(congestion_packet(space, packet), m_connection.m_event_ns);
@@ -206,6 +215,16 @@ void QuicConnection::Events::on_lost(QuicSpace space, const QuicSentPacket& pack
 {
     m_connection.settle(space, packet, Settle::Lost);
     m_connection.m_ecn.on_gone(packet.ecn);
+    if (packet.path_probe)
+    {
+        // RFC 9000 section 14.4: a lost probe is no congestion signal.
+        m_connection.m_pmtu.on_probe_lost(packet.bytes, m_connection.m_event_ns);
+        return;
+    }
+    if (space == QuicSpace::Application)
+    {
+        m_connection.m_pmtu.on_lost(packet.number, packet.bytes);
+    }
     if (packet.in_flight)
     {
         m_connection.m_congestion->on_lost(congestion_packet(space, packet), m_connection.m_event_ns);
@@ -214,6 +233,12 @@ void QuicConnection::Events::on_lost(QuicSpace space, const QuicSentPacket& pack
 
 void QuicConnection::Events::on_spurious(QuicSpace space, const QuicSentPacket& packet, u64 lost_ns) noexcept
 {
+    if (packet.path_probe)
+    {
+        // Its loss reduced nothing; its arrival proves its size.
+        m_connection.m_pmtu.on_probe_acked(packet.bytes, m_connection.m_event_ns);
+        return;
+    }
     if (packet.in_flight)
     {
         m_connection.m_congestion->on_spurious(congestion_packet(space, packet), lost_ns, m_connection.m_event_ns);
@@ -314,8 +339,10 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     m_recovery = new (recovery) QuicRecovery(recovery_config, cont::Span<QuicSentEntry>(entries, per_space),
                                              cont::Span<QuicSentEntry>(entries + per_space, per_space),
                                              cont::Span<QuicSentEntry>(entries + (2U * per_space), per_space));
+    m_pmtu.start(config.base_datagram_bytes, config.max_datagram_bytes, config.path_mtu_discovery);
+    m_path_bytes = m_pmtu.size();
     // The policy and the datagram size were checked (config_valid).
-    m_congestion = make_congestion(config.congestion, config.max_datagram_bytes, nullptr, m_congestion_slot);
+    m_congestion = make_congestion(config.congestion, m_path_bytes, nullptr, m_congestion_slot);
     m_ecn.start(config.ecn);
     m_frames = frames;
     m_crypto_bytes = bytes;
@@ -604,7 +631,12 @@ bool QuicConnection::begin_early() noexcept
 void QuicConnection::apply_peer_limits(const QuicTransportParameters& peer) noexcept
 {
     m_streams.set_peer_parameters(peer);
-    m_datagrams.set_peer(peer.max_datagram_frame_size, min_u64(m_config.max_datagram_bytes, peer.max_udp_payload_size));
+    if (&peer == &m_peer)
+    {
+        m_pmtu.limit(static_cast<u32>(min_u64(peer.max_udp_payload_size, kQuicDefaultMaxUdpPayload)));
+        apply_path_size();
+    }
+    m_datagrams.set_peer(peer.max_datagram_frame_size, min_u64(m_path_bytes, peer.max_udp_payload_size));
 }
 
 bool QuicConnection::settle_early(u64 now_ns) noexcept
@@ -1050,6 +1082,7 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
                 {
                     m_congestion->on_persistent_congestion(now_ns);
                 }
+                follow_path(now_ns);
             }
             if (space == QuicSpace::Application)
             {
@@ -1799,7 +1832,7 @@ bool QuicConnection::set_congestion(const CongestionPolicy& policy) noexcept
     }
     const CongestionState held = m_congestion->state();
     m_congestion->~CongestionController();
-    m_congestion = make_congestion(policy, m_config.max_datagram_bytes, &held, m_congestion_slot);
+    m_congestion = make_congestion(policy, m_path_bytes, &held, m_congestion_slot);
     m_config.congestion = policy;
     return true;
 }
@@ -2143,8 +2176,9 @@ usize QuicConnection::write_close(QuicSpace space, cont::Span<u8> frames) const 
 }
 
 usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool last,
-                                   bool closing, u64 now_ns) noexcept
+                                   Carry carry, u64 now_ns) noexcept
 {
+    const bool closing = carry == Carry::Close;
     const usize index = quic_space_index(space);
     u64 number = m_next_number[index];
     bool skip = false;
@@ -2180,22 +2214,34 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         return 0U;
     }
     Written written;
-    const usize used = closing ? write_close(space, writer.frames())
-                               : write_frames(space, early, writer.frames(), number, now_ns, written);
+    usize used = 0U;
+    if (carry == Carry::Probe)
+    {
+        QuicFrame ping;
+        ping.kind = QuicFrameKind::Ping;
+        used = write_quic_frame(ping, writer.frames());
+        written.eliciting = true;
+    }
+    else
+    {
+        used = closing ? write_close(space, writer.frames())
+                       : write_frames(space, early, writer.frames(), number, now_ns, written);
+    }
     // A later packet that cannot fit (a 0-RTT packet behind a full Initial) leaves the padding to this one.
     const bool padded = (pad && (last || writer.frames().size() - used < kMinUsefulPacket)) || written.path_response;
     if (used == 0U && !padded)
     {
         return 0U;
     }
-    const usize floor = padded ? min_u64(quic_datagram_floor(true, datagram_used), room.size()) : 0U;
+    usize floor = padded ? min_u64(quic_datagram_floor(true, datagram_used), room.size()) : 0U;
+    floor = (carry == Carry::Probe) ? room.size() : floor; // a probe is exactly the size it probes
     // Every datagram reaches kQuicResetPadding past this side's ID length, so a peer's stateless reset answering it
     // can be as long as a packet to this side (section 10.3).
     const usize reset_floor = m_local_cid.bytes + kQuicResetPadding;
     const usize least = (datagram_used < reset_floor) ? min_u64(reset_floor - datagram_used, room.size()) : 0U;
     usize bytes = 0U;
-    const QuicPacketError sealed =
-        m_protection.seal(writer, used, QuicPadding{max_u64(floor, least), m_config.padding_block}, bytes);
+    const u32 block = (carry == Carry::Probe) ? 0U : m_config.padding_block;
+    const QuicPacketError sealed = m_protection.seal(writer, used, QuicPadding{max_u64(floor, least), block}, bytes);
     if (sealed != QuicPacketError::None)
     {
         const QuicTransportError error = quic_packet_close(sealed);
@@ -2214,6 +2260,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         sent.bytes = static_cast<u32>(bytes);
         sent.ack_eliciting = written.eliciting;
         sent.in_flight = written.eliciting || floor != 0U;
+        sent.path_probe = carry == Carry::Probe;
         sent.ecn = m_marking;
         static_cast<void>(m_recovery->on_sent(space, sent)); // can_send held and numbers rise
         m_ecn.on_sent(space, m_marking, now_ns);
@@ -2222,7 +2269,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
             m_congestion->on_sent(congestion_packet(space, sent), m_recovery->bytes_in_flight(), now_ns);
             m_pacer.on_sent(bytes, now_ns, m_congestion->pacing_rate(m_recovery->rtt()), m_congestion->burst());
         }
-        if (written.eliciting && m_probes[index] > 0U)
+        if (written.eliciting && m_probes[index] > 0U && carry != Carry::Probe)
         {
             --m_probes[index];
         }
@@ -2268,7 +2315,7 @@ usize QuicConnection::send_closing(cont::Span<u8> out, u64 now_ns) noexcept
         {
             later = later || (!m_space_gone[next] && m_protection.can_send(packet_type(static_cast<QuicSpace>(next))));
         }
-        used += write_packet(space, out.subspan(used), used, pad, !later, true, now_ns);
+        used += write_packet(space, out.subspan(used), used, pad, !later, Carry::Close, now_ns);
     }
     return used;
 }
@@ -2280,10 +2327,16 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
     {
         return 0U;
     }
-    usize limit = min_u64(out.size(), m_config.max_datagram_bytes);
+    usize limit = min_u64(out.size(), m_path_bytes);
     if (m_peer_known || m_early_sending)
     {
         limit = min_u64(limit, (m_peer_known ? m_peer : m_remembered).max_udp_payload_size);
+    }
+    if (m_recovery->pto_count() != 0U)
+    {
+        // A probe timeout is pending: datagrams of the floor get an acknowledgement through a black hole that drops
+        // larger ones (quic_pmtu.hpp).
+        limit = min_u64(limit, kQuicPmtuFloor);
     }
     const usize full = limit; // a datagram's size before the amplification limit: what the window must have room for
     const usize credit = amplification_credit();
@@ -2300,6 +2353,14 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
         pull_crypto();
         issue_local_ids();
         gate_data(full, now_ns);
+        used = send_path_probe(out, now_ns);
+        if (used != 0U)
+        {
+            ++m_counters.datagrams_sent;
+            m_counters.bytes_sent += used;
+            ++m_counters.path_probes;
+            return used;
+        }
         bool content[kQuicSpaces] = {};
         QuicSpace last = QuicSpace::Initial;
         bool any = false;
@@ -2330,7 +2391,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
             const QuicSpace space = static_cast<QuicSpace>(index);
             if (content[index])
             {
-                used += write_packet(space, room.subspan(used), used, pad, space == last, false, now_ns);
+                used += write_packet(space, room.subspan(used), used, pad, space == last, Carry::Frames, now_ns);
             }
         }
         if (m_state == QuicConnectionState::Closing)
@@ -2348,6 +2409,65 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
         }
     }
     return used;
+}
+
+usize QuicConnection::send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept
+{
+    const QuicSpace application = QuicSpace::Application;
+    if (m_state != QuicConnectionState::Established || !m_confirmed || !m_peer_known || m_recovery->pto_count() != 0U ||
+        m_space_gone[quic_space_index(application)] || !m_protection.can_send(QuicPacketType::OneRtt) ||
+        !m_recovery->can_send_data(application))
+    {
+        return 0U;
+    }
+    for (usize index = 0U; index < kQuicSpaces; ++index)
+    {
+        const QuicSpace space = static_cast<QuicSpace>(index);
+        if (can_acknowledge(space) && m_recovery->ack_deadline_ns(space) != kNeverNs)
+        {
+            return 0U; // an ACK the probe would not carry goes first; the probe takes the next datagram
+        }
+    }
+    const usize probe = m_pmtu.probe(now_ns, has_data(application, now_ns));
+    if (probe == 0U || probe > out.size() || probe > amplification_credit())
+    {
+        return 0U;
+    }
+    // RFC 8899 section 3: probes are congestion controlled, though their loss is no signal.
+    if (m_recovery->bytes_in_flight() + probe > m_congestion->window())
+    {
+        return 0U;
+    }
+    const u64 release = m_pacer.release_ns(now_ns, m_congestion->pacing_rate(m_recovery->rtt()), m_congestion->burst());
+    if (release > now_ns)
+    {
+        m_pace_release_ns = min_u64(m_pace_release_ns, release);
+        return 0U;
+    }
+    const usize bytes = write_packet(application, out.first(probe), 0U, false, true, Carry::Probe, now_ns);
+    if (bytes != 0U)
+    {
+        m_pmtu.on_probe_sent(static_cast<u32>(bytes));
+    }
+    return bytes;
+}
+
+void QuicConnection::follow_path(u64 now_ns) noexcept
+{
+    static_cast<void>(m_pmtu.end_detection(now_ns));
+    apply_path_size();
+}
+
+void QuicConnection::apply_path_size() noexcept
+{
+    const u32 bytes = m_pmtu.size();
+    if (bytes == m_path_bytes)
+    {
+        return;
+    }
+    m_path_bytes = bytes;
+    m_congestion->set_max_datagram(bytes);
+    m_datagrams.set_path(m_peer_known ? min_u64(bytes, m_peer.max_udp_payload_size) : bytes);
 }
 
 // ---- Timers and close ----
@@ -2434,6 +2554,7 @@ void QuicConnection::on_timeout(u64 now_ns) noexcept
     {
         m_congestion->on_persistent_congestion(now_ns);
     }
+    follow_path(now_ns);
     if (timeout.kind != QuicTimeoutKind::Probe && timeout.kind != QuicTimeoutKind::AntiDeadlock)
     {
         return;

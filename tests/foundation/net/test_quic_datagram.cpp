@@ -554,6 +554,55 @@ TEST_CASE("QUIC datagrams: every outcome is reported once and send_count holds a
     CHECK(plain.queue(ConstSpan<u8>(payload, 16U), 0U, id) == QuicDatagramError::None);
 }
 
+TEST_CASE("QUIC datagrams: the payload limit follows the path's size, and a fall drops what no longer fits",
+          "[net][net-path][quic-datagram]")
+{
+    CountingAllocator allocator;
+    QuicDatagrams datagrams;
+    REQUIRE(datagrams.init(allocator, limits(8192U, 4U, true)));
+    datagrams.set_path(1500U); // nothing before the peer's parameters
+    CHECK(datagrams.max_payload() == 0U);
+    datagrams.set_peer(kQuicMaxDatagramFrame, kUdp);
+    const usize floor = datagrams.max_payload();
+    CHECK(floor == kUdp - kQuicShortPacketOverhead - 3U);
+    datagrams.set_path(1500U);
+    const usize grown = datagrams.max_payload();
+    CHECK(grown == 1500U - kQuicShortPacketOverhead - 3U);
+    u8 payload[1500] = {};
+    u64 ids[3] = {};
+    REQUIRE(datagrams.queue(ConstSpan<u8>(payload, grown), 0U, ids[0]) == QuicDatagramError::None);
+    REQUIRE(datagrams.queue(ConstSpan<u8>(payload, floor), 0U, ids[1]) == QuicDatagramError::None);
+    REQUIRE(datagrams.queue(ConstSpan<u8>(payload, grown), 0U, ids[2]) == QuicDatagramError::None);
+    // A black hole: the path falls back to the floor. What no longer fits is dropped unsent when it is the oldest.
+    datagrams.set_path(kUdp);
+    CHECK(datagrams.max_payload() == floor);
+    u64 id = 0U;
+    CHECK(datagrams.queue(ConstSpan<u8>(payload, grown), 0U, id) == QuicDatagramError::TooLarge);
+    CHECK(datagrams.has_frame(0U));
+    u8 frame[1500];
+    REQUIRE(datagrams.write_next(Span<u8>(frame, sizeof(frame)), 0U, id) != 0U);
+    CHECK(id == ids[1]);
+    CHECK(datagrams.write_next(Span<u8>(frame, sizeof(frame)), 0U, id) == 0U);
+    CHECK(datagrams.queued() == 0U);
+    CHECK(datagrams.counters().oversized == 2U);
+    QuicDatagramReport report;
+    REQUIRE(datagrams.poll(report));
+    CHECK(report.id == ids[0]);
+    CHECK(report.outcome == QuicDatagramOutcome::Lost);
+    REQUIRE(datagrams.poll(report));
+    CHECK(report.id == ids[2]);
+    CHECK(report.outcome == QuicDatagramOutcome::Lost);
+    CHECK_FALSE(datagrams.poll(report));
+    // The peer's own frame size still bounds a grown path.
+    QuicDatagrams bounded;
+    REQUIRE(bounded.init(allocator, limits()));
+    bounded.set_peer(1000U, kUdp);
+    bounded.set_path(9000U);
+    usize limit = 0U;
+    REQUIRE(quic_datagram_payload_limit(1000U, limit));
+    CHECK(bounded.max_payload() == limit);
+}
+
 TEST_CASE("QUIC datagrams: payloads of 0-RTT packets are marked, and a rejected 0-RTT drops the queue as Lost",
           "[net][4.2a][quic-datagram][quic-early]")
 {

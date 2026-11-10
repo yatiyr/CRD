@@ -147,6 +147,7 @@ struct Path
     u64 jitter_ns = 0U; // a uniform extra delay, which reorders
     EcnPath ecn = EcnPath::Carry;
     u32 ce = 0U; // permille of datagrams with a codepoint marked CE, as a congested router's queue does
+    usize mtu = 0U; // the largest datagram the path carries: a link that drops larger ones unreported (0: any)
 };
 
 // A client's ticket store holding one ticket, handed out once.
@@ -246,6 +247,7 @@ public:
     usize congested[2] = {};                    // of those, marked CE on the path
     bool client_initials_padded = true;         // every client datagram whose first packet is an Initial had 1200 bytes
     usize smallest[2] = {~usize{0}, ~usize{0}}; // each end's smallest datagram
+    usize largest[2] = {};                      // and its largest
     bool amplification_kept = true; // the server never sent more than three times what it received unvalidated
     // A server behind an ingress: the first client datagrams are classified there, Retry and Version Negotiation
     // answered, and an admitted Initial accepted with what the ingress proved (a Retry token's original ID). `tokens`
@@ -275,7 +277,7 @@ public:
                 check(from, ConstSpan<u8>(out, size));
                 Ecn ecn = m_ends[from]->marking();
                 marked[from] += (ecn != Ecn::NotEct) ? 1U : 0U;
-                const bool lost = rng.chance(path[from].loss) ||
+                const bool lost = (path[from].mtu != 0U && size > path[from].mtu) || rng.chance(path[from].loss) ||
                                   (filter != nullptr && filter->drop(from, ConstSpan<u8>(out, size))) ||
                                   (path[from].ecn == EcnPath::DropMarked && ecn != Ecn::NotEct);
                 if (lost)
@@ -412,6 +414,7 @@ private:
     void check(usize from, ConstSpan<u8> datagram)
     {
         smallest[from] = (datagram.size() < smallest[from]) ? datagram.size() : smallest[from];
+        largest[from] = (datagram.size() > largest[from]) ? datagram.size() : largest[from];
         QuicHeader header;
         const usize short_bytes = (from == 0U) ? sizeof(kNetServerCid) : kNetClientCidBytes;
         if (from == 0U && parse_quic_header(datagram, short_bytes, header) == QuicHeaderError::None &&

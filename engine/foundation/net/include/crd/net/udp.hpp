@@ -69,6 +69,10 @@ struct SocketFeatures
 {
     bool ecn_reading = false; // received datagrams report their codepoint
     bool ecn_marking = false; // sent datagrams carry theirs
+    // Sent datagrams are never fragmented, by the host or on the path (IPv4's DF bit), and the host's own path MTU
+    // estimate refuses none: a datagram larger than the path carries is lost, so a PMTU probe proves its size
+    // (RFC 8899 section 3), and one larger than the host's interface fails with MessageTooLarge.
+    bool dont_fragment = false;
 };
 
 // What one batch did: `count` datagrams in order, then the reason it stopped. A receive stops with None when the host
@@ -108,8 +112,10 @@ protected:
 // reports do not end receives (SIO_UDP_CONNRESET, SIO_UDP_NETRESET), so one unreachable peer never stops a server;
 // on Linux a batch is one recvmmsg or sendmmsg per 32 datagrams. ECN is read and marked per datagram on Linux
 // (IP_TOS and IPV6_TCLASS control messages) and Windows (IP_ECN and IPV6_ECN through WSARecvMsg and WSASendMsg),
-// each enabled where the host accepts it and reported by features(); macOS carries bytes alone until crd-net's port
-// there (MAC.1). Other path behaviour (PMTU, pacing, offloads) is NET-PATH's.
+// each enabled where the host accepts it and reported by features(). Datagrams leave unfragmented on both
+// (IP_MTU_DISCOVER and IPV6_MTU_DISCOVER at IP_PMTUDISC_PROBE, or Windows' IP_DONTFRAGMENT and IPV6_DONTFRAG where it
+// refuses those), so the transport's PMTU search sees the path. macOS carries bytes alone until crd-net's port there
+// (MAC.1). Pacing and the offloads are NET-PATH's.
 class UdpSocket final : public DatagramSocket
 {
 public:

@@ -44,6 +44,12 @@
 //              probes and the handshake's CRYPTO data are not held (data_allowed()). Data held back tells the
 //              controller its window is used (section 7.8), and a pacer's release time is a timer of next_timer_ns().
 //              The policy is the configuration's, swappable live.
+//   path MTU   datagrams take the path's size (quic_pmtu.hpp: RFC 8899, RFC 9000 section 14.3): 1200 bytes, or the
+//              configured base, until the handshake is confirmed, then PMTU probes (one 1-RTT packet of PING and
+//              PADDING, alone in its datagram and inside the window) search up to max_datagram_bytes and the peer's
+//              max_udp_payload_size. A black hole falls back to 1200 bytes; datagrams keep to 1200 bytes while a probe
+//              timeout is pending. The controller, the DATAGRAM size and the window's unit follow the size found;
+//              probe losses are no congestion signal (section 14.4).
 //   ecn        datagrams carry the configuration's codepoint while the path is tested and once it proved to carry
 //              ECN (quic_ecn.hpp: RFC 9000 section 13.4); a CE count the peer reports rising on a validated path is
 //              the controller's congestion signal (RFC 9002 section 7.1). Received codepoints are counted per space
@@ -82,6 +88,7 @@
 #include <crd/net/quic_datagram.hpp>
 #include <crd/net/quic_ecn.hpp>
 #include <crd/net/quic_packet.hpp>
+#include <crd/net/quic_pmtu.hpp>
 #include <crd/net/quic_recovery.hpp>
 #include <crd/net/quic_stream.hpp>
 #include <crd/net/quic_stream_set.hpp>
@@ -214,7 +221,14 @@ struct QuicConnectionConfig
     // per packet, so a packet carrying several streams' frames still fits; a full ledger holds frames back.
     u32 sent_frames = 1024U;
     u32 crypto_bytes = 16384U; // per level, each direction: a multiple of kQuicStreamChunk, at least 4096
-    u32 max_datagram_bytes = kQuicMinInitialDatagram; // what this side sends at most (NET-PATH raises it)
+    // What this side sends at most: the ceiling of the path MTU search, and each held packet's slot.
+    u32 max_datagram_bytes = kQuicDefaultMaxDatagram;
+    // What the path is known to carry (kQuicIpv6BaseDatagram on an IPv6 path, which QuicHost sets), 1200 to
+    // max_datagram_bytes; the search starts above it.
+    u32 base_datagram_bytes = kQuicPmtuFloor;
+    // Probe for larger datagrams (quic_pmtu.hpp); without it datagrams keep base_datagram_bytes. QuicHost clears it
+    // on a socket that cannot forbid fragmentation, through which probes would prove nothing.
+    bool path_mtu_discovery = true;
     u32 padding_block = 0U; // packets pad to the next multiple of this (NET.3's padded_size()); 0 pads none
     u64 initial_rtt_ns = kQuicInitialRttNs;
     CongestionPolicy congestion; // the controller and pacing (congestion_policy_valid), swappable by set_congestion()
@@ -273,6 +287,7 @@ struct QuicConnectionCounters
     u64 packets_dropped = 0U; // packets that did not open, duplicates and packets of another connection
     u64 packets_held = 0U;    // packets held until their keys came (RFC 9001 section 4.1.4)
     u64 ecn_signals = 0U;     // rises of the peer's CE counts taken as congestion (RFC 9002 section 7.1)
+    u64 path_probes = 0U;     // PMTU probe datagrams sent
 };
 
 // (MSVC C4324 as for QuicPacketProtection, which it holds inline.)
@@ -364,6 +379,8 @@ public:
     [[nodiscard]] const QuicRecovery& recovery() const noexcept { return *m_recovery; }
     [[nodiscard]] const CongestionController& congestion() const noexcept { return *m_congestion; }
     [[nodiscard]] const QuicEcnValidator& ecn() const noexcept { return m_ecn; }
+    // The path MTU search: size() is what datagrams take now.
+    [[nodiscard]] const QuicPathMtu& path_mtu() const noexcept { return m_pmtu; }
     // Replaces the congestion policy live: the new controller starts from the current window, slow start threshold
     // and recovery period. False, changing nothing, for a policy congestion_policy_valid() refuses.
     [[nodiscard]] bool set_congestion(const CongestionPolicy& policy) noexcept;
@@ -397,6 +414,14 @@ private:
         Acked,
         Lost,
         Discarded,
+    };
+
+    // What a packet write_packet writes carries.
+    enum class Carry : u8
+    {
+        Frames, // what the space owes
+        Close,  // CONNECTION_CLOSE
+        Probe,  // a PMTU probe: PING, padded to the whole room
     };
 
     // A server's answer to its client's transport parameters (RFC 9368 section 2.3), asked by the TLS stack.
@@ -542,7 +567,13 @@ private:
     // `pad`: the datagram reaches 1200 bytes (section 14.1), by this packet when it is the `last` or when what it
     // leaves is too small for another.
     [[nodiscard]] usize write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool last,
-                                     bool closing, u64 now_ns) noexcept;
+                                     Carry carry, u64 now_ns) noexcept;
+    // The PMTU probe due now, written alone into `out`: its size, 0 when none goes (none due, a probe timeout or an
+    // owed ACK pending, or the window, the pacer or the amplification limit holding it; a pacer arms its timer).
+    [[nodiscard]] usize send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept;
+    // A loss detection ended: black hole detection, then the size found reaches the controller and the datagrams.
+    void follow_path(u64 now_ns) noexcept;
+    void apply_path_size() noexcept;
     [[nodiscard]] usize write_frames(QuicSpace space, bool early, cont::Span<u8> frames, u64 packet, u64 now_ns,
                                      Written& written) noexcept;
     [[nodiscard]] usize write_close(QuicSpace space, cont::Span<u8> frames) const noexcept;
@@ -575,6 +606,8 @@ private:
     Pacer m_pacer;
     u64 m_pace_release_ns = kNeverNs; // data waits for the pacer until then
     QuicEcnValidator m_ecn;
+    QuicPathMtu m_pmtu;
+    u32 m_path_bytes = kQuicPmtuFloor; // the size the controller and the datagrams last took
     Ecn m_marking = Ecn::NotEct;      // the codepoint of the datagram being written, then of the last one
     bool m_data_open = true;          // congestion control lets data go in the datagram being written
     u64 m_event_ns = 0U;              // the time recovery's events happen at (they carry none)

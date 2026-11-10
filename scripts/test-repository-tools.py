@@ -5397,7 +5397,7 @@ class TestInstruments(unittest.TestCase):
                                                        'hesap-clock', 'hesap-erasure', 'hesap-estimators', 'hesap-flexfec', 'hesap-link', 'hesap-motion', 'hesap-quantize', 'hesap-raptorq', 'hesap-red',
                                                        'memory-allocators', 'net-admission', 'net-channel-link', 'net-coded-frames', 'net-congestion', 'net-delta-stream', 'net-endpoint', 'net-hpack', 'net-http2', 'net-http3', 'net-ingress', 'net-negotiation',
                                                        'net-qmux', 'net-qmux-early', 'net-qmux-host', 'net-qpack',
-                                                       'net-quic-codec', 'net-quic-connection', 'net-quic-datagram', 'net-quic-ecn', 'net-quic-packet',
+                                                       'net-quic-codec', 'net-quic-connection', 'net-quic-datagram', 'net-quic-ecn', 'net-quic-packet', 'net-quic-pmtu',
                                                        'net-quic-recovery',
                                                        'net-quic-stream', 'net-quic-stream-set', 'net-state-hash', 'net-ticket-cache', 'net-websocket', 'net-websocket-tunnel',
                                                        'net-webtransport',

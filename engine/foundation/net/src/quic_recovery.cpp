@@ -694,7 +694,8 @@ QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents&
             loss.bytes += packet.bytes;
         }
         loss.newest_sent_ns = max_u64(loss.newest_sent_ns, packet.sent_ns);
-        if (packet.ack_eliciting && m_rtt.sampled() && packet.sent_ns >= m_rtt.first_sample_ns)
+        // A lost PMTU probe says nothing of congestion (RFC 9000 section 14.4): it neither starts nor ends a run.
+        if (packet.ack_eliciting && !packet.path_probe && m_rtt.sampled() && packet.sent_ns >= m_rtt.first_sample_ns)
         {
             run_first = min_u64(run_first, packet.sent_ns);
             run_last  = max_u64(run_last, packet.sent_ns);

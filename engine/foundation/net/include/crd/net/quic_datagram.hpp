@@ -89,7 +89,8 @@ struct QuicDatagramCounters
     u64 received = 0U; // payloads held for the application
     u64 dropped = 0U;  // payloads the receive ring had no room for
     u64 sent = 0U;     // frames written
-    u64 expired = 0U;  // datagrams dropped unsent
+    u64 expired = 0U;  // datagrams dropped unsent at max_age_ns
+    u64 oversized = 0U; // datagrams dropped unsent when the path's size fell below them
 };
 
 class QuicDatagrams
@@ -113,6 +114,9 @@ public:
     void fill_parameters(QuicTransportParameters& local) const noexcept;
     // The peer's max_datagram_frame_size, and the largest UDP payload a packet to it may take.
     void set_peer(u64 peer_max_frame, usize udp_payload) noexcept;
+    // The path's datagrams now take `udp_payload` bytes (DPLPMTUD, quic_pmtu.hpp): max_payload() follows, and a
+    // queued payload over it is dropped unsent once it is the oldest (Lost with outcomes). Nothing before set_peer().
+    void set_path(usize udp_payload) noexcept;
 
     // A DATAGRAM frame from the peer: NoError (held, or dropped when the ring is full), or PROTOCOL_VIOLATION. `early`
     // for a frame of a 0-RTT packet: its payload is marked replayable.
@@ -191,6 +195,8 @@ private:
 
     void report(u64 id, QuicDatagramOutcome outcome) noexcept;
     void expire(u64 now_ns) noexcept;
+    // Drops the oldest queued datagram unsent, reporting `outcome` with outcomes.
+    void drop_oldest(QuicDatagramOutcome outcome) noexcept;
 
     memory::IAllocator* m_allocator = nullptr;
     QuicDatagramLimits m_limits;
@@ -205,6 +211,7 @@ private:
     u32 m_unreported = 0U; // queued, and with outcomes in flight or reported and not polled
     u64 m_next_id = 0U;
     usize m_max_payload = 0U;
+    u64 m_peer_frame = 0U; // the peer's max_datagram_frame_size
     bool m_peer_known = false;
     bool m_sendable = false;
     QuicDatagramCounters m_counters;

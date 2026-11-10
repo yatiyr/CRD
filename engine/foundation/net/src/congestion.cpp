@@ -75,13 +75,9 @@ static_assert(kCongestionMaxWindow <= ~u64{0} / kCubicKScale);
 class WindowController : public CongestionController
 {
 public:
-    WindowController(const CongestionPolicy& policy, u64 max_datagram) noexcept
-        : m_policy(policy), m_datagram(max_datagram)
+    WindowController(const CongestionPolicy& policy, u64 max_datagram) noexcept : m_policy(policy)
     {
-        const u64 packets = policy.initial_packets;
-        m_initial = min_u64(packets * max_datagram, max_u64(packets * kInitialBytesPerPacket, 2U * max_datagram));
-        m_minimum = policy.minimum_packets * max_datagram;
-        m_initial = max_u64(m_initial, m_minimum);
+        size_windows(max_datagram);
         restart();
     }
 
@@ -221,6 +217,15 @@ public:
         start_over();
     }
 
+    void set_max_datagram(u64 bytes) noexcept override
+    {
+        const bool initial = m_window == m_initial;
+        size_windows(min_u64(max_u64(bytes, kQuicMinInitialDatagram), kMaxDatagram));
+        m_window = initial ? m_initial : max_u64(m_window, m_minimum);
+        m_threshold = max_u64(m_threshold, m_minimum);
+        resized();
+    }
+
     [[nodiscard]] u64 window() const noexcept override { return m_window; }
 
     [[nodiscard]] u64 pacing_rate(const QuicRtt& rtt) const noexcept override
@@ -262,6 +267,8 @@ protected:
     virtual void sent(const CongestionPacket& /*packet*/, u64 /*in_flight*/, u64 /*now_ns*/) noexcept
     {
     }
+    // m_datagram changed.
+    virtual void resized() noexcept {}
 
     void add_window(u64 bytes) noexcept { m_window = min_u64(m_window + bytes, kCongestionMaxWindow); }
 
@@ -291,6 +298,16 @@ private:
     {
         return m_policy.hystart && m_threshold == kCongestionMaxWindow &&
                (m_phase == CongestionPhase::SlowStart || m_phase == CongestionPhase::ConservativeSlowStart);
+    }
+
+    // RFC 9002 section 7.2's windows for datagrams of `max_datagram` bytes.
+    void size_windows(u64 max_datagram) noexcept
+    {
+        const u64 packets = m_policy.initial_packets;
+        m_datagram = max_datagram;
+        m_initial = min_u64(packets * max_datagram, max_u64(packets * kInitialBytesPerPacket, 2U * max_datagram));
+        m_minimum = m_policy.minimum_packets * max_datagram;
+        m_initial = max_u64(m_initial, m_minimum);
     }
 
     void restart() noexcept
@@ -498,6 +515,9 @@ protected:
     void restore() noexcept override { m_cubic = m_prior_cubic; }
 
     void collapse() noexcept override { m_cubic.epoch_ns = kNeverNs; }
+
+    // K is in the old datagram's unit: the curve starts again from the window toward W_max (section 4.2).
+    void resized() noexcept override { m_cubic.epoch_ns = kNeverNs; }
 
     void start_over() noexcept override
     {

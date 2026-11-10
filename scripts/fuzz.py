@@ -91,6 +91,8 @@ TARGETS = {
                         'executable': 'tests/net/fuzz/crd-fuzz-net-quic-packet'},
     'net-quic-ecn': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-ecn',
                      'executable': 'tests/net/fuzz/crd-fuzz-net-quic-ecn'},
+    'net-quic-pmtu': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-pmtu',
+                      'executable': 'tests/net/fuzz/crd-fuzz-net-quic-pmtu'},
     'net-quic-recovery': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-recovery',
                           'executable': 'tests/net/fuzz/crd-fuzz-net-quic-recovery'},
     'net-quic-stream': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-stream',

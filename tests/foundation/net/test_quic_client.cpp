@@ -727,6 +727,42 @@ TEST_CASE("QUIC client: a ticket's 0-RTT is written in the connection's first se
     }
 }
 
+TEST_CASE("QUIC client: the host searches the path MTU only through a socket that forbids fragmentation, and gives "
+          "an IPv6 server its 1280-byte floor",
+          "[net][net-path][quic-client][quic-pmtu]")
+{
+    for (const bool forbids : {true, false})
+    {
+        INFO("socket forbids fragmentation " << forbids);
+        Identity identity;
+        auto network = std::make_unique<Network>(identity, Setup{}, client_config(identity, QuicVersion::V1, {}));
+        network->client_socket.offers.dont_fragment = forbids;
+        const QuicHandle handle = network->connect(0U, 0U);
+        REQUIRE(handle.valid());
+        REQUIRE(network->run_until(
+            [&]
+            {
+                const QuicConnection& connection = network->live(handle);
+                return network->app.echoed(handle) &&
+                       (connection.path_mtu().state() == QuicPmtuState::SearchComplete || !forbids);
+            }));
+        const QuicConnection& connection = network->live(handle);
+        CHECK(connection.path_mtu().state() == (forbids ? QuicPmtuState::SearchComplete : QuicPmtuState::Disabled));
+        CHECK(connection.path_mtu().size() == (forbids ? kQuicDefaultMaxDatagram : kQuicPmtuFloor));
+        CHECK((connection.counters().path_probes != 0U) == forbids);
+
+        // Toward an IPv6 server: its base is IPv6's floor, probed first, or asserted where nothing can be probed.
+        QuicClientConnect request;
+        request.server = Endpoint{IpAddress::v6_loopback(), 443U};
+        const QuicHandle v6 = network->client.connect(request, network->now);
+        REQUIRE(v6.valid());
+        const QuicPathMtu& path = network->live(v6).path_mtu();
+        CHECK(path.state() == (forbids ? QuicPmtuState::Base : QuicPmtuState::Disabled));
+        CHECK(path.size() == (forbids ? kQuicPmtuFloor : kQuicIpv6BaseDatagram));
+        CHECK(path.ceiling() == kQuicDefaultMaxDatagram);
+    }
+}
+
 TEST_CASE("QUIC client: the server's stateless reset ends a connection only from the server's address",
           "[net][4.2a][quic-client]")
 {

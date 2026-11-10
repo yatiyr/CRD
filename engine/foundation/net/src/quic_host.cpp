@@ -91,13 +91,21 @@ QuicHost::~QuicHost()
 
 // ---- Building connections ----
 
-QuicConnection* QuicHost::build(u32 index, QuicConnectionConfig config) noexcept
+QuicConnection* QuicHost::build(u32 index, QuicConnectionConfig config, const Endpoint& peer) noexcept
 {
     u8 seed[crypto::kPrfKeyBytes] = {};
     config.ids = &m_ids[index];
-    if (!m_socket.features().ecn_marking)
+    const SocketFeatures features = m_socket.features();
+    if (!features.ecn_marking)
     {
         config.ecn = Ecn::NotEct; // marks the socket would drop would only fail the path's validation
+    }
+    // Probes the host may fragment prove nothing (RFC 8899 section 3); an IPv6 path carries its 1280-byte floor.
+    config.path_mtu_discovery = config.path_mtu_discovery && features.dont_fragment;
+    if (peer.address.unmapped().family == AddressFamily::V6 && config.base_datagram_bytes < kQuicIpv6BaseDatagram)
+    {
+        config.base_datagram_bytes =
+            (config.max_datagram_bytes < kQuicIpv6BaseDatagram) ? config.max_datagram_bytes : kQuicIpv6BaseDatagram;
     }
     if (config.entropy_seed.size() == sizeof(seed))
     {
@@ -139,7 +147,7 @@ QuicHandle QuicHost::start_keyed(QuicConnectionConfig config, const Endpoint& pe
     config.versions = {};
     config.after_version_negotiation = false;
     config.held_packets = 0U;
-    QuicConnection* const connection = build(index, config);
+    QuicConnection* const connection = build(index, config, peer);
     if (connection == nullptr || !connection->open_keyed(start, now_ns))
     {
         crypto::secure_zero(start.secret);
