@@ -30,6 +30,10 @@ namespace crd::hesap::special
 namespace detail
 {
 inline constexpr double kStruveSeriesLimit = 16.0;    // below: ascending series
+inline constexpr double kStruveCrossFrom = 8.0;       // the crossover of H's series (struve_h_crossover)
+inline constexpr double kStruveCrossLow = -14.0;
+inline constexpr double kStruveCrossHigh = 6.0;
+inline constexpr double kStruveGammaThreeHalves = 0.88622692545275801365; // Γ(3/2) = √π/2
 inline constexpr double kStruveAsymptoticFrom = 28.0; // from here (and ν < 0.9x): asymptotic when its terms allow it
 inline constexpr double kStruveAsymptoticFloor = 1.0e-13;
 inline constexpr double kStruveSeedLoss = 3.0; // the recurrence starts where the series loses at most e^3
@@ -147,20 +151,102 @@ struct StruveLead
     return tail + head + z2 / (whole + 1.5) < -2.0;
 }
 
+// Is H's series, stopped at its term m below 1e-18 of the sum, sure to leave out less than 3e-14 of it (3 % of the
+// module's bar), whatever struve_may_stop would say? With c = n + f the crossing (n = ⌊c⌋, f from s = ν + 3/2 and its
+// floor `below`, which the series has formed) the ratio from term j − 1 to j is (x/2)²/((j + ½)|c − j|). Before the
+// crossing these fall while (j + ½)(c − j) grows and rise after, so that only the few next to it exceed 1 (as many as
+// about (x/2)²/n). The terms before those are at most the stopping one; the product of those above 1, taken from n − 1
+// down and from n + 2 up together with the two at the crossing, bounds each of the terms up to the last of them; and
+// past it the ratios fall, all below the next one, r, so that the rest adds at most 1/(1 − r) times the largest. The
+// terms left are held below kStruveTailLeft times the stopping one. Out of line: it runs only where the test without a
+// loop below (struve_h_tail_quick) cannot settle it.
+inline constexpr double kStruveTailLeft = 3.0e4;
+CRD_NOINLINE inline bool struve_h_tail_bound(int m, double whole, double f, double z2) noexcept
+{
+    if (!(f > 0.0 && f < 1.0))
+    {
+        return false;
+    }
+    const double first = (whole + 0.5) * f; // the two ratios at the crossing are (x/2)²/first and (x/2)²/second
+    const double second = (whole + 1.5) * (1.0 - f);
+    const double c = whole + f;
+    double top = 1.0; // the product of the ratios above 1, as top/bottom
+    double bottom = 1.0;
+    int factors = 0;    // at most about 2(x/2)²/n + 3 (12 in the series' range of H): a bound, not a limit
+    double low = whole; // the first index of a ratio above 1 before the crossing
+    for (double j = whole - 1.0; j > m; j -= 1.0, ++factors)
+    {
+        const double d = (j + 0.5) * (c - j);
+        if (d >= z2)
+        {
+            break;
+        }
+        if (factors >= 32)
+        {
+            return false;
+        }
+        top *= z2;
+        bottom *= d;
+        low = j;
+    }
+    top *= (first < z2) ? z2 : 1.0;
+    bottom *= (first < z2) ? first : 1.0;
+    top *= (second < z2) ? z2 : 1.0;
+    bottom *= (second < z2) ? second : 1.0;
+    double j = whole + 2.0;
+    for (;; j += 1.0, ++factors)
+    {
+        const double d = (j + 0.5) * (j - c);
+        if (d >= z2)
+        {
+            break;
+        }
+        if (factors >= 64)
+        {
+            return false;
+        }
+        top *= z2;
+        bottom *= d;
+    }
+    // the terms from j on: the first ratio at most 1, the next ones at most r = (x/2)²/next, falling
+    const double next = (j + 1.5) * (j + 1.0 - c);
+    const double gap = next - z2; // 1/(1 − r) = next/gap
+    return (low - 1.0 - m) * bottom * gap + top * ((j - low) * gap + next) <= kStruveTailLeft * bottom * gap;
+}
+// The same without a loop, for every stop: where (x/2)² ≤ 2(n − 3/2) the ratios at n − 1 and n + 2 are below 2, the
+// others outside the crossing at most 1, and those from n + 3 on at most a/i with a < 2, so that the terms left are at
+// most 4(n + 12) times the two at the crossing. The series forms it before its loop, which hides its few products
+// (asked at the stop, they cost H 2 % at −40.3, and struve_may_stop's logarithms 3 to 11 % at orders of −40 and below).
+[[nodiscard]] inline bool struve_h_tail_quick(double whole, double f, double z2) noexcept
+{
+    if (!(f > 0.0 && f < 1.0))
+    {
+        return f == 1.0; // a half-integer order: the series starts at the crossing
+    }
+    const double first = (whole + 0.5) * f;
+    const double second = (whole + 1.5) * (1.0 - f);
+    const double big_first = (first < z2) ? z2 : first;
+    const double big_second = (second < z2) ? z2 : second;
+    return z2 <= 2.0 * (whole - 1.5) &&
+           4.0 * (whole + 12.0) * big_first * big_second <= kStruveTailLeft * first * second;
+}
+
 // Is s, negative, near a pole of Γ: within kStruveNearPole of it and within kStruveNearPoleScale·|s|? There gamma() and
 // lgamma(), which round π·s before the sine of their reflection, carry ε·|πs|/|sin πs| (H_−99.5000000105(42.9) was
 // 2.5e-9 off through its asymptotic expansion), and 1/Γ(s) and ln|Γ(s)| come from the reflection with the turn reduced
 // exactly; elsewhere that error is below 2e-13 of the value and the plain functions serve, at their cost.
 inline constexpr double kStruveNearPole = 0.25;
 inline constexpr double kStruveNearPoleScale = 1.0e-3;
-// H's series from x = kStruveCrossoverFrom down to the order kStruveCrossoverOrder cancels by up to 1e6 (its crossover,
-// 122 units at worst on base): a new rounding of its first term moves its result by that much, so the first term there
-// is formed as before.
-inline constexpr double kStruveCrossoverFrom = 10.0;
-inline constexpr double kStruveCrossoverOrder = -13.0;
 [[nodiscard]] inline bool struve_near_pole(double s) noexcept
 {
     const double distance = crd::math::fabs(s - crd::math::round(s));
+    return s < 0.0 && distance < kStruveNearPole && distance < kStruveNearPoleScale * -s;
+}
+// The same from ⌊s⌋ (`below`), without a call to round.
+[[nodiscard]] inline bool struve_near_pole_above(double s, double below) noexcept
+{
+    const double up = s - below;
+    const double distance = (up < 1.0 - up) ? up : 1.0 - up;
     return s < 0.0 && distance < kStruveNearPole && distance < kStruveNearPoleScale * -s;
 }
 [[nodiscard]] inline double struve_rgamma_near_pole(double s) noexcept
@@ -180,9 +266,12 @@ template <bool Trace>
 {
     const double half = 0.5 * x;
     const double shifted = nu + 1.5;
+    // ⌊s⌋, formed once: the tests of the pole and of the stop below read it (the library's rounding functions are
+    // calls, and two of them cost H 3 % at ν = −12.3)
+    const double below = (shifted <= 0.0) ? crd::math::floor(shifted) : 0.0;
     int first = 0; // index of the first non-zero term
     double t = 0.0;
-    if (shifted <= 0.0 && shifted > -1000.0 && shifted == crd::math::floor(shifted))
+    if (shifted <= 0.0 && shifted > -1000.0 && shifted == below)
     {
         first = static_cast<int>(-shifted) + 1;
         t = crd::math::pow(half, 2.0 * first + nu + 1.0) / gamma(first + 1.5); // Γ(first + ν + 3/2) = Γ(1)
@@ -191,8 +280,7 @@ template <bool Trace>
             t = -t;
         }
     }
-    else if (shifted < 0.0 &&
-             (sign > 0.0 || (struve_near_pole(shifted) && (x < kStruveCrossoverFrom || nu < kStruveCrossoverOrder))))
+    else if (shifted < 0.0 && (sign > 0.0 || struve_near_pole_above(shifted, below)))
     {
         const StruveLead lead = struve_lead_negative(nu, half);
         t = (lead.value != 0.0) ? lead.value : lead.sign * crd::math::exp(struve_lead_log(nu, half));
@@ -207,7 +295,7 @@ template <bool Trace>
             // Γ or the power left the double range: the first term through logarithms (lgamma is ln|Γ|, and Γ is
             // negative at a negative argument whose floor is odd)
             t = crd::math::exp((nu + 1.0) * crd::math::log(half) - lgamma(1.5) - lgamma(nu + 1.5));
-            if (shifted < 0.0 && (static_cast<long long>(crd::math::floor(shifted)) & 1) != 0)
+            if (shifted < 0.0 && (static_cast<long long>(below) & 1) != 0)
             {
                 t = -t;
             }
@@ -218,6 +306,10 @@ template <bool Trace>
     [[maybe_unused]] double biggest = crd::math::fabs(t);
     const double z2 = sign * half * half;
     int ask_from = 0; // see struve_may_stop
+    // H's test of what a stop before the crossing leaves (n = ⌊−ν − ½⌋ and the fraction f), formed before the loop
+    const double whole = -below;
+    const double fraction = 1.0 - (shifted - below);
+    const bool tail_small = sign < 0.0 && shifted < 0.0 && struve_h_tail_quick(whole, fraction, half * half);
     for (int m = first + 1; m <= 500 + first; ++m)
     {
         t *= z2 / ((m + 0.5) * (m + nu + 0.5));
@@ -226,15 +318,25 @@ template <bool Trace>
         {
             biggest = (crd::math::fabs(t) > biggest) ? crd::math::fabs(t) : biggest;
         }
-        if (crd::math::fabs(t) <= 1e-18 * crd::math::fabs(sum) && m >= ask_from)
+        if (crd::math::fabs(t) <= 1e-18 * crd::math::fabs(sum))
         {
-            // H stops as before: its samples near the crossings (seeds 3013 and 7007) gave no point that the test
-            // changes, while asking it cost H at orders of −40 and below 3 to 11 %.
-            if (sign < 0.0 || struve_may_stop(m, nu, half * half))
+            if (!(shifted < 0.0))
             {
-                break;
+                break; // no crossing ahead: the series stops as before
             }
-            ask_from = static_cast<int>(-nu - 0.5) + 1;
+            // Near a pole the terms after the crossing grow back by 1/f (H_−35.50000001(15.5) was 39 units off when H
+            // stopped here at once): H asks struve_may_stop only where its own tests (struve_h_tail_quick, past the
+            // crossing, struve_h_tail_bound) cannot settle it.
+            if (m >= ask_from)
+            {
+                if ((sign < 0.0 &&
+                     (tail_small || m >= whole + 1.0 || struve_h_tail_bound(m, whole, fraction, half * half))) ||
+                    struve_may_stop(m, nu, half * half))
+                {
+                    break;
+                }
+                ask_from = static_cast<int>(-nu - 0.5) + 1;
+            }
         }
     }
     if constexpr (Trace)
@@ -565,12 +667,65 @@ CRD_NOINLINE inline BesAsymp struve_h_asymptotic(double nu, double x) noexcept
     return lo;
 }
 
+// H_ν in its series' crossover (kStruveCrossFrom ≤ x < kStruveSeriesLimit, kStruveCrossLow ≤ ν < kStruveCrossHigh),
+// where the series cancels past the module's bar (122 units at ν = −0.54, x = 15.6): the downward recurrence of
+// struve_h_down (DLMF 11.4.23) from ν₀ = x²/12, where the series loses at most e³, in a lean form for this range only:
+// ν₀ is below 33 and x below 16, so nothing leaves the doubles and no scaling is carried; the two series at ν₀ share
+// one division per term, the recurrence's factors 2μ/x and (μ+½)/(x/2) are formed with 1/x, and only a product and a
+// difference lie on its chain from one order to the next.
+CRD_NOINLINE inline double struve_h_crossover(double nu, double x) noexcept
+{
+    const double half = 0.5 * x;
+    const double inv_x = 1.0 / x;
+    const int steps = static_cast<int>(x * x / (4.0 * kStruveSeedLoss) - nu) + 1;
+    const double start = nu + steps; // ν₀
+    const double unit = crd::math::pow(half, start + 1.0) / (kStruveGammaThreeHalves * gamma(start + 1.5));
+    double series_lo = 1.0;
+    double series_hi = 1.0;
+    double t_lo = 1.0;
+    double t_hi = 1.0;
+    const double z2 = -half * half;
+    for (int m = 1; m <= 500; ++m)
+    {
+        const double b = m + start + 0.5;
+        const double q = z2 / ((m + 0.5) * b * (b + 1.0));
+        t_lo *= q * (b + 1.0);
+        t_hi *= q * b;
+        series_lo += t_lo;
+        series_hi += t_hi;
+        if (crd::math::fabs(t_lo) <= 1e-18 * crd::math::fabs(series_lo) &&
+            crd::math::fabs(t_hi) <= 1e-18 * crd::math::fabs(series_hi))
+        {
+            break;
+        }
+    }
+    double lo = series_lo * unit;                        // H_μ, μ = ν₀
+    double hi = series_hi * unit * half / (start + 1.5); // H_{μ+1}
+    double source = unit * inv_x;                        // (x/2)^μ/(√πΓ(μ+3/2))
+    const double two_inv_x = 2.0 * inv_x;
+    double mu = start;
+    for (int j = 0; j < steps; ++j)
+    {
+        const double carry = hi - source; // off the chain through lo: hi is known a step ahead
+        const double next = (mu * two_inv_x) * lo - carry;
+        hi = lo;
+        lo = next;
+        source *= (mu + 0.5) * two_inv_x;
+        mu -= 1.0;
+    }
+    return lo;
+}
+
 [[nodiscard]] inline double struve_h_impl(double nu, double x) noexcept
 {
     // The series also serves a very negative order while x² < 16(½ − ν): there it does not cancel, and the quadrature
     // below, whose factor (1+s²/x²)^{ν−½} narrows with |ν − ½|, needs x² of about 16|ν − ½|.
     if (x < kStruveSeriesLimit || (nu < 0.0 && x * x < 16.0 * (0.5 - nu)))
     {
+        if (x >= kStruveCrossFrom && x < kStruveSeriesLimit && nu >= kStruveCrossLow && nu < kStruveCrossHigh)
+        {
+            return struve_h_crossover(nu, x);
+        }
         return struve_series(nu, x, -1.0);
     }
     if (x >= kStruveAsymptoticFrom && nu < 0.9 * x)

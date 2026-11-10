@@ -767,6 +767,29 @@ TEST_CASE("struve: H near a negative half-integer order vs mpmath", "[v12-d][spe
     }
 }
 
+TEST_CASE("struve: H in its series' crossover vs mpmath", "[v12-d][special][struve]")
+{
+    // mpmath at 70 digits at the exact double inputs. Base: the ascending series cancels by up to 1e6 from x of about
+    // 10 to 16 (211 units at nu = -0.50000078, x = 15.68); near a negative half-integer order it stopped before the
+    // crossing, whose terms grow back by 1/f (38.7 units at nu = -35.50000001, x = 15.53; -18.4999999713 at x = 4.27).
+    const f64 points[][3] = {
+        {-35.500000011742749, 15.525199604119553, -2.94200998157378113369151631197},
+        {-30.49999998607133, 11.91621687347622, -4.63504574091003259809987689927},
+        {-42.499999982856203, 20.180391567428785, -9.8400806747102617402865609038},
+        {-18.499999971332219, 4.2729096920579668, -23.4932014726199200734979876535},
+        {-0.50000077740890481, 15.681338458402163, 0.00536366657321399180029024737945},
+        {-0.54366170796577507, 15.599764475113059, 0.00670860843043272593555545705044},
+        {0.33569691041469008, 15.339251683383756, 0.33157876186798877351989678941},
+        {-5.0102959711387882, 15.867759928679213, -0.202301111395827648946523280925},
+        {-4.0527070104300194, 15.880432842867155, 0.00396798795536105745169880861623},
+    };
+    for (const auto& p : points)
+    {
+        INFO("struve_h nu=" << p[0] << " x=" << p[1]);
+        CHECK(close(sf::struve_h(p[0], p[1]), p[2], 1e-12, 1e-13));
+    }
+}
+
 TEST_CASE("hypergeom: 0F1 / 1F1 / 2F1 vs scipy", "[v12-d][special][hypergeom]")
 {
     for (std::size_t i = 0; i < len(ref_h0_v); ++i)
