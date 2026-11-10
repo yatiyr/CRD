@@ -134,6 +134,18 @@
    "explanation": "The script is pure Python (json, re, shlex, pathlib) reading a 3.2 MB file; no Cerid binary ran in that process, so the crash is in the interpreter or this host, not Cerid code.",
    "session": "2026-10-24-diag-11b-coverage-registry-recording-word.md",
    "rows": ["DIAG.11b"]
+  },
+  {
+   "id": "win-asan-ml-dsa-threaded-signing-refused",
+   "first_seen": "2026-11-06",
+   "lane": "win-asan (hosted only, first read 2026-11-06: push run 41797302943 shard 1, 2026-11-04, and push run 42856002748 at 7d76aa2c shard 2, 2026-11-10)",
+   "target": "crd-crypto-tests: Provider: one verifier and one key serve several threads",
+   "signature": "Four threads sign with one ML-DSA-65 SigningKey; one thread's first SigningKey::sign returned ProviderFailure (EVP_DigestSignInit or EVP_DigestSign returned 0) while every other signing and verification passed (the first sighting's case counted one failed round without naming the call). Both failing cases took 17.0 s and 19.0 s; the case passes in about 1 s on win-asan (0.99 s in 42360577693) and in 0.38 s on linux-clang-tsan.",
+   "reruns": "Win-asan passed the case between the two sightings (42360577693, 2026-11-07); it was never seen on any other lane, and linux-clang-tsan ran it clean in both sighting runs. Not reproduced locally: a sighting on this PC would not separate Cerid from this host (wsl-host-misexecution).",
+   "status": "nonreproduced",
+   "explanation": "Not explained. The engine shares nothing writable across the threads (SigningKey::sign is const over a read-only EVP_PKEY handle; each call owns its context and error scope), and the provider's ML-DSA code cannot return a signing error in this configuration (stack allocation, randomness failure aborts, a bounded attempt count), so the refusal comes from below Cerid on hosted Windows with ASan. Since 2026-11-11 the case also reports how long the refused signing took and what a second signing at once answers, so the next sighting tells a stall from a persistent refusal; 2026-11-11-crypto-threaded-signing-register.md.",
+   "session": "2026-11-06-hesap-net-erasure-board.md",
+   "rows": ["NET.2"]
   }
  ]
 }

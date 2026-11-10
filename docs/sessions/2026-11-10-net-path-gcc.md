@@ -11,7 +11,8 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S72](../design/network-f
   static constant. Its other two refusals were already fixed at HEAD. Host check 42892963665 ran both `net-congestion`
   legs (seeds 8501, 8502) clean on GitHub's machines, so the last batch's unreplayable libFuzzer events stay this
   PC's fault. Open: win-asan in 42856002748 failed `Provider: one verifier and one key serve several threads`, now
-  naming the call: the first ML-DSA-65 signing of a thread returned `ProviderFailure`; next batch.
+  naming the call: the first ML-DSA-65 signing of a thread returned `ProviderFailure`; registered 2026-11-11
+  ([register note](2026-11-11-crypto-threaded-signing-register.md)).
 - Congestion interface version 5: `CongestionAlgorithm::Gcc`, `CongestionPacket::received_ns` (the peer's receive
   time), GCC's delay-based estimate in `CongestionState::bandwidth`. The slot grows to 1536 bytes (GCC is 1520).
 - GCC in `congestion.cpp`: HESAP-NET's packet groups and trendline into libwebrtc's AIMD rate control and link

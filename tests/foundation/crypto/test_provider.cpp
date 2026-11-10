@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstring>
 #include <openssl/bytestring.h>
 #include <openssl/ec.h>
@@ -22,6 +23,7 @@
 
 namespace
 {
+using crd::i64;
 using crd::u32;
 using crd::u64;
 using crd::u8;
@@ -945,6 +947,8 @@ TEST_CASE("Provider: one verifier and one key serve several threads", "[crypto][
         CryptoError  signing   = CryptoError::None;
         Verification checked   = Verification::Valid;
         Verification again = Verification::Valid; // the same signature at once, when the first answer was not Valid
+        CryptoError  resigned  = CryptoError::None; // a second signing at once, when the first was refused
+        i64          signing_ms = 0;                // how long the refused signing took
     };
     Fault       faults[4];
     std::thread threads[4];
@@ -957,8 +961,16 @@ TEST_CASE("Provider: one verifier and one key serve several threads", "[crypto][
                 sig.resize(signature_sizes(AlgorithmId::MlDsa65).signature);
                 for (u32 i = 0U; i < 8U && faults[t].iteration == 8U; ++i)
                 {
-                    usize written = 0U;
-                    faults[t].signing = key.sign(message, sig, written);
+                    usize      written = 0U;
+                    const auto start   = std::chrono::steady_clock::now();
+                    faults[t].signing  = key.sign(message, sig, written);
+                    if (faults[t].signing != CryptoError::None)
+                    {
+                        faults[t].signing_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                   std::chrono::steady_clock::now() - start)
+                                                   .count();
+                        faults[t].resigned = key.sign(message, sig, written);
+                    }
                     if (faults[t].signing == CryptoError::None)
                     {
                         faults[t].checked =
@@ -982,7 +994,9 @@ TEST_CASE("Provider: one verifier and one key serve several threads", "[crypto][
     }
     for (const Fault& fault : faults)
     {
-        INFO("iteration " << fault.iteration << ", at once again " << static_cast<int>(fault.again));
+        INFO("iteration " << fault.iteration << ", at once again " << static_cast<int>(fault.again)
+                          << ", signing refused after " << fault.signing_ms << " ms, signing again at once "
+                          << static_cast<int>(fault.resigned));
         CHECK(static_cast<int>(fault.signing) == static_cast<int>(CryptoError::None));
         CHECK(static_cast<int>(fault.checked) == static_cast<int>(Verification::Valid));
     }
