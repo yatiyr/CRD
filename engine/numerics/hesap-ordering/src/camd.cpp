@@ -5,10 +5,11 @@
 #include <utility>
 
 // ---------------------------------------------------------------------------
-// Constrained AMD (CAMD, CHOLMOD-style) — a constraint-aware copy of the cs_amd
-// port in amd.cpp. Identical quotient-graph machinery (approximate external
-// degree, supervariables, mass elimination, aggressive absorption) with three
-// changes that make the elimination respect a per-vertex `cmember` class:
+// Constrained AMD (CAMD, CHOLMOD-style) — a constraint-aware variant of the AMD
+// elimination in amd.cpp (Amestoy, Davis and Duff 1996). Identical quotient-graph
+// machinery (approximate external degree, supervariables, mass elimination,
+// aggressive absorption) with three changes that make the elimination respect a
+// per-vertex `cmember` class:
 //
 //   1. SELECTION: the pivot is the lowest-degree principal whose cmember equals
 //      the current (lowest non-empty) class. Classes are eliminated in ascending

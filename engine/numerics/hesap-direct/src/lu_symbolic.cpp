@@ -320,7 +320,7 @@ LuSymbolic lu_symbolic(const sparse::SparsePattern& b, crd::memory::IAllocator* 
     {
         pinv[i] = -1;
     }
-    crd::containers::Array<crd::u32> xi(alloc); // [0..n) dfs stack/output + [n..2n) pstack
+    crd::containers::Array<crd::u32> xi(alloc); // [0..n) dfs stack/output + [n..2n) resume offsets (Gilbert-Peierls)
     xi.resize(static_cast<crd::usize>(n) * 2);
     crd::containers::Array<crd::u8> marked(alloc);
     marked.resize(n);                             // value-init 0
@@ -381,7 +381,7 @@ LuSymbolic lu_symbolic(const sparse::SparsePattern& b, crd::memory::IAllocator* 
         }
         lpend[k] = static_cast<crd::u32>(out.li.size()); // column end (== out.lp[k+1]); unpruned
 
-        // SYMMETRIC PRUNING (Eisenstat-Liu / KLU): for each j with a symmetric pair — j ∈ U(:,k)
+        // SYMMETRIC PRUNING (Eisenstat and Liu 1993): for each j with a symmetric pair — j ∈ U(:,k)
         // AND the pivot row k ∈ L(:,j) — prune column j of L by partitioning its sub-diagonal into
         // already-pivotal rows (head, the part the DFS still needs) and the rest (tail), recording
         // lpend[j] = head end. Each column is pruned at most once.

@@ -173,7 +173,7 @@ void SparseLU<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::
     // Workspaces (serial — no per-worker scratch; this is the serial oracle).
     crd::containers::Array<crd::i32> pinv(m_alloc); // pinv[i] = pivot step or -1
     pinv.resize(n);
-    crd::containers::Array<crd::u32> xi(m_alloc); // [0..n) dfs-stack/output + [n..2n) pstack
+    crd::containers::Array<crd::u32> xi(m_alloc); // [0..n) dfs-stack/output + [n..2n) resume offsets (Gilbert-Peierls)
     xi.resize(static_cast<crd::usize>(n) * 2);
     crd::containers::Array<crd::u8> marked(m_alloc);
     marked.resize(n); // value-init 0

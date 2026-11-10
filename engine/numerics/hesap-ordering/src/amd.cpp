@@ -19,8 +19,9 @@
 // are pruned, avoiding double-counting.
 //
 // This slice (v2b-1) uses an explicit Array<Array> representation: correctness
-// first, validated bit-exact against the independent cs_counts nnz_l. v2b-2
-// adds adaptive min-approx-degree selection + the packed-workspace + supervars.
+// first, validated bit-exact against the independent column-count nnz_l
+// (Gilbert-Ng-Peyton). v2b-2 adds adaptive min-approx-degree selection + the
+// packed-workspace + supervars.
 // -----------------------------------------------------------------------
 
 namespace crd::hesap::ordering::detail
@@ -394,8 +395,8 @@ Permutation amd_order(const AdjacencyGraph& g, crd::memory::IAllocator* alloc)
             prv[nxt[i]] = prv[i];
         }
     };
-    // Dense-node threshold (cs_amd): nodes with degree > dense are removed from the
-    // quotient graph and ordered LAST, so the sparse structure is eliminated first.
+    // Dense-node threshold, the cs_amd rule (Davis 2006): dense = max(16, 10*sqrt(n)), at most n-2. Nodes with
+    // degree > dense are removed from the quotient graph and ordered LAST, so the sparse structure is eliminated first.
     crd::i32 dense = static_cast<crd::i32>(10.0 * crd::math::sqrt(static_cast<double>(n)));
     if (dense < 16)
     {
@@ -595,7 +596,7 @@ Permutation amd_order(const AdjacencyGraph& g, crd::memory::IAllocator* alloc)
                 eabsorbed[e] = 1;
             }
         }
-        // ---- cs_amd phase A: external approximate degree + mass elimination + hash ----
+        // ---- phase A (Amestoy-Davis-Duff 1996): external approximate degree + mass elimination + hash ----
         // Pull every Lme member out of its OLD degree bucket first; survivors are
         // re-inserted in phase C, mass-eliminated/merged ones are not.
         for (crd::i32 t = 0; t < lp_sz; ++t)
@@ -627,7 +628,7 @@ Permutation amd_order(const AdjacencyGraph& g, crd::memory::IAllocator* alloc)
             }
             if (dext == 0)
             {
-                // mass elimination (cs_amd d==0): i is contained in Lme -> fold into pivot p,
+                // mass elimination (Amestoy-Davis-Duff 1996, degree 0): i is contained in Lme -> fold into pivot p,
                 // adds no fill. Its members ride out on p's chain; |Lme| shrinks accordingly.
                 nextm[tailm[p]] = i;
                 tailm[p]        = tailm[i];
@@ -640,7 +641,7 @@ Permutation amd_order(const AdjacencyGraph& g, crd::memory::IAllocator* alloc)
             {
                 if (dext < degree[i])
                 {
-                    degree[i] = dext;  // CS_MIN(degree[i], dext): tightest external bound seen so far
+                    degree[i] = dext; // keep the smaller of degree[i] and dext: tightest external bound seen so far
                 }
                 hash_of[i] = static_cast<crd::i32>(h % static_cast<crd::i64>(n));
             }
@@ -653,7 +654,7 @@ Permutation amd_order(const AdjacencyGraph& g, crd::memory::IAllocator* alloc)
             out.perm[out_pos++] = static_cast<crd::u32>(c);
         }
 
-        // ---- cs_amd phase B: supernode detection (merge indistinguishable survivors, D(ord)-5) ----
+        // ---- phase B (Amestoy-Davis-Duff 1996): supervariables (merge indistinguishable survivors, D(ord)-5) ----
         svorder.clear();
         for (crd::i32 t = 0; t < lp_sz; ++t)
         {
@@ -700,7 +701,7 @@ Permutation amd_order(const AdjacencyGraph& g, crd::memory::IAllocator* alloc)
             rb = re;
         }
 
-        // ---- cs_amd phase C: finalize degree (d = degree[i] + |Lme| - nv[i]) + re-insert survivors ----
+        // ---- phase C (Amestoy-Davis-Duff 1996): finalize degree (d = degree[i] + |Lme| - nv[i]) + re-insert ----
         for (crd::i32 t = 0; t < lp_sz; ++t)
         {
             const crd::i32 i = lp[t];
