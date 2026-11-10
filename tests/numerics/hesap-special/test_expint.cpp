@@ -717,6 +717,36 @@ TEST_CASE("struve: H / L vs scipy", "[v12-d][special][struve]")
     }
 }
 
+TEST_CASE("struve: L near and at a negative half-integer order and where its series leaves the doubles vs mpmath",
+          "[v12-d][special][struve]")
+{
+    // mpmath at 70 digits at the exact double inputs (the series at two precisions, 120 digits apart). Base gave NaN at
+    // the half-integers (the first term of the series from m = n is (x/2)^(n+1/2)/Gamma(n+3/2), whose Gamma leaves the
+    // doubles: L_{-(n+1/2)} = I_{n+1/2}), 0 where (x/2)^(nu+1) underflowed before the division by Gamma(nu+3/2), and up
+    // to 25 units near a half-integer, where gamma()'s reflection rounds pi*s before its sine.
+    const f64 points[][3] = {
+        {-195.5, 126.30268007428117, 0.0000674236932140666074994461847762},
+        {-249.5, 41.819286468447004, 7.43837344850871253438729020733e-162},
+        {-170.17738140799065, 195.74828158456478, 9.0298909536749690784421309944e+52},
+        {-144.32170498496956, 389.78005650242773, 1.24356853184060715182409039983e+156},
+        {-145.50006684872037, 47.2009330548983, -2.71519530676573504126850266045e+46},
+        {-271.5030234552658, 15.346050873877855, -8.23347298302780547824957604596e+298},
+        {-88.500263776103935, 3.7645240133126632, 5.64531263423886111039387332885e+104},
+        {-131.50811528547783, 81.509828020038839, -1834186.33259741378083731768681},
+        // within 3e-6 and 3e-8 of a half-integer: the terms after m = -nu - 3/2 grow back, and the sum had stopped
+        {-60.500003162045992, 32.261575084764324, 94.6550093379151193399461772875},
+        {-29.50000003014614, 10.898644359893616, -5.61875550688469059562875452723},
+        // x near 600: the sum of ratios needs some 630 terms, base stopped at 500 (3% off)
+        {-293.95634216199767, 594.62600449858087, 3.00191572020197791814932069987e+225},
+        {-287.49984948195555, 599.62865079557901, 1.62059801622892326368160910494e+229},
+    };
+    for (const auto& p : points)
+    {
+        INFO("struve_l nu=" << p[0] << " x=" << p[1]);
+        CHECK(close(sf::struve_l(p[0], p[1]), p[2], 1e-12, 1e-13));
+    }
+}
+
 TEST_CASE("hypergeom: 0F1 / 1F1 / 2F1 vs scipy", "[v12-d][special][hypergeom]")
 {
     for (std::size_t i = 0; i < len(ref_h0_v); ++i)

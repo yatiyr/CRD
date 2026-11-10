@@ -4,9 +4,12 @@
 //   H_ν(x) = Σ_{m≥0} (−1)^m (x/2)^{2m+ν+1} / (Γ(m+3/2)Γ(m+ν+3/2))   (alternating ⇒ cancels for large x)
 //   L_ν(x) = Σ_{m≥0}        (x/2)^{2m+ν+1} / (Γ(m+3/2)Γ(m+ν+3/2))   (all-positive for ν > −3/2 ⇒ accurate everywhere)
 // For L at a more negative order Γ(m+ν+3/2) changes sign for m < −ν − 3/2, so the sum alternates there and loses digits
-// (1e-9 relative at ν = −100, x ≈ 63; ν > −35 stays inside 1e-12). Below ν = −30 the sum is checked against its largest
-// term, and where it loses more than a couple of digits it is formed again in double-double arithmetic (Dekker 1971;
-// Hida, Li and Bailey 2001), whose 32 digits leave the result at the rounding of its leading factor.
+// (1e-9 relative at ν = −100, x ≈ 63; ν > −35 stays inside 1e-12). Below ν = −30 the sum of the ratios of the terms to
+// the first is checked against its largest term, and where it loses more than a couple of digits it is formed again in
+// double-double arithmetic (Dekker 1971; Hida, Li and Bailey 2001), whose 32 digits leave the result at the rounding of
+// its first term; that term takes 1/Γ(s) at a negative s from sin(πs) with the turn reduced exactly, and is carried as
+// a logarithm where it is not a normal double. A half-integer order −(n+½) whose series leaves the doubles is
+// I_{n+½} (DLMF 11.4.4).
 // H_ν: the ascending series for x < 16 (its cancellation, about e^{x²/(4ν+4)}, makes the crossover x ≈ 10–16 ~1e-10 at
 // worst: the documented bar). Beyond it the series would lose too many digits, so H_ν is taken as Y_ν + R_ν,
 // R_ν = H_ν − Y_ν (DLMF 11.5.2, a positive integral, summed by a 16-point Gauss–Laguerre rule), or, where Y_ν and R_ν
@@ -35,6 +38,10 @@ inline constexpr double kStruveBig = 0x1p500;  // power-of-two scale factors: ex
 inline constexpr double kStruveSmall = 0x1p-500;
 inline constexpr double kStruveLossFrom = -30.0;  // below this order the L series is checked for cancellation
 inline constexpr double kStruveLossLimit = 100.0; // largest term over the sum from which it is formed again
+inline constexpr double kStruveLn2 = 0.69314718055994530942;
+// The sums of ratios of L below kStruveLossFrom stop at this many terms: they peak at m ≈ (−ν + √(ν² + x²))/2 and fall
+// below 1e-18 of the sum some 6.4√m terms later (m ≈ 630 at ν = −300, x = 600, where 500 terms left L 3% off).
+inline constexpr int kStruveRatioCap = 4000;
 
 // Nodes and weights of the 16-point Gauss–Laguerre rule for ∫_0^∞ e^{−s} f(s) ds (Abramowitz & Stegun 25.4.45: the
 // roots of L_16 and w_i = s_i/(17² L_17(s_i)²)).
@@ -57,6 +64,74 @@ struct StruveTrace
     double biggest;
 };
 
+// The first term (x/2)^{ν+1}/(Γ(3/2)Γ(ν+3/2)) of the series where s = ν + 3/2 is negative and not a pole: 1/Γ(s) =
+// sin(πs)Γ(1−s)/π by the reflection, with sin(πs) from the exactly reduced turn (bes_sin_pi). gamma()'s own reflection
+// rounds π·s first, and that rounding, ε·|πs|, is the whole of sin(πs) near a pole (2.5e-11 relative at ν =
+// −145.50007). `value` is the term where it and its factors are normal doubles, and 0 where they are not: the term is
+// then sign·e^{struve_lead_log}.
+struct StruveLead
+{
+    double value;
+    double sign;
+};
+[[nodiscard]] inline StruveLead struve_lead_negative(double nu, double half) noexcept
+{
+    const double shifted = nu + 1.5;
+    const double sine = -bes_sin_pi(-shifted); // sin(π s)
+    const double reflected = gamma(1.0 - shifted);
+    const double power = crd::math::pow(half, nu + 1.0);
+    const double term = power * (sine * reflected / (kBesPi * gamma(1.5)));
+    constexpr double kMin = (std::numeric_limits<double>::min)();
+    constexpr double kMax = (std::numeric_limits<double>::max)();
+    const double size = crd::math::fabs(term);
+    const bool normal = power >= kMin && power <= kMax && reflected <= kMax && size >= kMin && size <= kMax;
+    return {normal ? term : 0.0, (sine < 0.0) ? -1.0 : 1.0};
+}
+// ln|first term| for the same s: (ν+1) ln(x/2) + ln Γ(1−s) + ln(|sin πs|/π) − ln Γ(3/2).
+[[nodiscard]] inline double struve_lead_log(double nu, double half) noexcept
+{
+    const double shifted = nu + 1.5;
+    return (nu + 1.0) * crd::math::log(half) + lgamma(1.0 - shifted) +
+           crd::math::log(crd::math::fabs(bes_sin_pi(-shifted)) / kBesPi) - lgamma(1.5);
+}
+
+// May the series stop at the term m, which is below 1e-18 of the sum? At a negative ν that is not a half-integer the
+// factor m + ν + ½ of the terms passes its smallest sizes f and 1 − f (f the fraction of c = −ν − ½) at m = ⌊c⌋ and
+// ⌈c⌉, where the terms grow by (x/2)²/((m + ½)f) and can be far above those before (L at ν = −60.500003, x = 32.3 was
+// 1.1e-10 off: the sum stopped before them). It may stop where the terms after it stay below it: from m to M = ⌈c⌉
+// their ratios multiply to at most r^{K+1}/(f(1 − f)(K − 1)!), r = (x/2)²/(m + 3/2), K = ⌊c⌋ − m, and from M on each
+// further ratio is at most a/i at the i-th step, a = (x/2)²/(M + ½), so that all the terms after M add at most e^a
+// times the one at M. With (K − 1)! ≥ ((K − 1)/e)^{K−1} and the logarithms bounded by bes_log_lower (within 0.002 of ln
+// q for any positive q), the whole is taken below e^{−2} of the term at m. Called only where the term is that small.
+[[nodiscard]] inline bool struve_may_stop(int m, double nu, double z2) noexcept
+{
+    const double c = -nu - 0.5;
+    if (!(c > 1.0) || m > c)
+    {
+        return true; // no crossing ahead (or the order is not negative enough to have one)
+    }
+    const double whole = crd::math::floor(c);
+    const double f = c - whole;
+    if (f == 0.0)
+    {
+        return true; // a half-integer: the series starts at the crossing
+    }
+    const double near = (f < 1.0 - f) ? f : 1.0 - f;
+    if (z2 < 0.5 * (whole + 0.5) * near)
+    {
+        return true; // no ratio reaches 1 at the crossing, nor after it
+    }
+    const double steps = whole - m; // K ≥ 0
+    const double r = z2 / (m + 1.5);
+    const double small = r * r / (f * (1.0 - f)); // r² over the two smallest factors
+    // (K − 1)·ln(r/(K − 1)) + (K − 1) bounds (K − 1)·ln r − ln (K − 1)!, and ln of `small` the rest; upper bounds both
+    const double tail = (steps > 1.0) ? (steps - 1.0) * (bes_log_lower(r / (steps - 1.0)) + 0.002 + 1.0) : 0.0;
+    const double head = (steps > 1.0)
+                            ? bes_log_lower(small) + 0.002
+                            : (bes_log_lower(r) + 0.002) * (steps + 1.0) + bes_log_lower(small / (r * r)) + 0.002;
+    return tail + head + z2 / (whole + 1.5) < -2.0;
+}
+
 // The ascending series of H_ν (sign −1) or L_ν (sign +1). When Γ(ν+3/2) is at a pole (ν = −3/2, −5/2, …) the first
 // terms vanish (1/Γ = 0) and the series starts at m = −ν − ½. With Trace set, the size of its largest term is reported
 // as well (a compile-time choice: the plain series keeps its loop as it was).
@@ -75,6 +150,11 @@ template <bool Trace>
         {
             t = -t;
         }
+    }
+    else if (shifted < 0.0 && sign > 0.0)
+    {
+        const StruveLead lead = struve_lead_negative(nu, half);
+        t = (lead.value != 0.0) ? lead.value : lead.sign * crd::math::exp(struve_lead_log(nu, half));
     }
     else
     {
@@ -104,7 +184,7 @@ template <bool Trace>
         {
             biggest = (crd::math::fabs(t) > biggest) ? crd::math::fabs(t) : biggest;
         }
-        if (crd::math::fabs(t) <= 1e-18 * crd::math::fabs(sum))
+        if (crd::math::fabs(t) <= 1e-18 * crd::math::fabs(sum) && struve_may_stop(m, nu, half * half))
         {
             break;
         }
@@ -160,50 +240,105 @@ struct StruveDD
     return struve_dd_add(struve_dd_fast_sum(q1, q2), {q3, 0.0});
 }
 
-// L_ν for ν < kStruveLossFrom. The sum alternates for m < −ν − 3/2, so it is checked against its largest term; where
-// it would lose more than about two digits, the sum of ratios Σ t_m/t_first is carried in double-double arithmetic (the
-// leading factor, which scales every term alike, stays a double: it is the whole error left).
-[[nodiscard]] inline double struve_l_negative(double nu, double x) noexcept
+// Σ_m r_m of the L series divided by its first term at ν < kStruveLossFrom (not a half-integer): r_0 = 1,
+// r_m = r_{m−1}(x/2)²/((m+½)(m+ν+½)); with the largest |r_m|. Where the ratios leave the doubles (x well above −ν,
+// where the first term is far below L), they are scaled down by exactly 2^−600 whenever the sum passes 2^600, and the
+// count of those scalings is returned.
+struct StruveRatios
 {
-    StruveTrace trace{};
-    double plain = struve_series_core<true>(nu, x, 1.0, &trace);
-    if (plain != plain && crd::math::fabs(trace.lead) == std::numeric_limits<double>::infinity())
+    double sum;
+    double biggest;
+    int scalings;
+};
+template <bool Scaled> [[nodiscard]] inline StruveRatios struve_l_ratios(double nu, double half) noexcept
+{
+    const double z2 = half * half;
+    double t = 1.0;
+    double sum = 1.0;
+    double biggest = 1.0;
+    int scalings = 0;
+    for (int m = 1; m <= kStruveRatioCap; ++m)
     {
-        return trace.lead; // the leading term overflowed: it is the whole result, with its sign
-    }
-    const double half = 0.5 * x;
-    const double log_power = (nu + 1.0) * crd::math::log(half);
-    if (trace.first == 0 && log_power < -700.0 && trace.lead != 0.0)
-    {
-        // (x/2)^{ν+1} is a subnormal here and has lost digits (5e-12 at ν = −150, x = 250): the leading factor, which
-        // scales every term alike, is formed again through logarithms (ln|Γ|, and Γ < 0 where the floor is odd)
-        double accurate = crd::math::exp(log_power - lgamma(1.5) - lgamma(nu + 1.5));
-        if ((static_cast<long long>(crd::math::floor(nu + 1.5)) & 1) != 0)
-        {
-            accurate = -accurate;
-        }
-        plain *= accurate / trace.lead;
-        trace.lead = accurate;
-    }
-    if (!(trace.biggest > kStruveLossLimit * crd::math::fabs(plain)) || trace.first != 0)
-    {
-        return plain;
-    }
-    const StruveDD z2{half * half, crd::math::fma(half, half, -(half * half))}; // (x/2)² exactly
-    StruveDD t{1.0, 0.0};
-    StruveDD sum{1.0, 0.0};
-    for (int m = 1; m <= 600; ++m)
-    {
-        const StruveDD a = struve_dd_two_sum(static_cast<double>(m), 0.5);
-        const StruveDD b = struve_dd_two_sum(static_cast<double>(m) + 0.5, nu);
-        t = struve_dd_div(struve_dd_mul(t, z2), struve_dd_mul(a, b));
-        sum = struve_dd_add(sum, t);
-        if (crd::math::fabs(t.hi) <= 1e-34 * crd::math::fabs(sum.hi) && m > -nu - 1.5)
+        t *= z2 / ((m + 0.5) * (m + nu + 0.5));
+        sum += t;
+        biggest = (crd::math::fabs(t) > biggest) ? crd::math::fabs(t) : biggest;
+        if (crd::math::fabs(t) <= 1e-18 * crd::math::fabs(sum) && struve_may_stop(m, nu, z2))
         {
             break;
         }
+        if constexpr (Scaled)
+        {
+            if (crd::math::fabs(sum) > 0x1p600)
+            {
+                sum *= 0x1p-600;
+                t *= 0x1p-600;
+                biggest *= 0x1p-600;
+                ++scalings;
+            }
+        }
     }
-    return trace.lead * (sum.hi + sum.lo);
+    return {sum, biggest, scalings};
+}
+CRD_NOINLINE inline StruveRatios struve_l_ratios_scaled(double nu, double half) noexcept
+{
+    return struve_l_ratios<true>(nu, half);
+}
+
+// L_ν for ν < kStruveLossFrom. At a half-integer ν = −(n + ½) the series starts at m = n with positive terms; where its
+// first term or its sum leaves the doubles, L_{−(n+½)} = I_{n+½} (DLMF 11.4.4) answers. Otherwise the sum of the ratios
+// Σ t_m/t_0 is formed and multiplied by the first term t_0 (struve_lead_negative). The sum alternates for
+// m < −ν − 3/2, so it is checked against its largest term; where it would lose more than about two digits, it is
+// carried in double-double arithmetic (Dekker 1971; Hida, Li and Bailey 2001). Where t_0 is not a normal double (its
+// power or Γ(1−s) out of the doubles, or (x/2)^{ν+1} a subnormal that has lost digits: 5e-12 at ν = −150, x = 250; or
+// exactly 0, where L is 1e52 to 1e156 at ν ≈ −170, x of 200 to 390), the result is sign·e^{ln|t_0| + ln|Σ|}.
+[[nodiscard]] inline double struve_l_negative(double nu, double x) noexcept
+{
+    const double half = 0.5 * x;
+    const double shifted = nu + 1.5;
+    if (shifted == crd::math::floor(shifted))
+    {
+        StruveTrace trace{};
+        const double plain = struve_series_core<true>(nu, x, 1.0, &trace);
+        constexpr double kMin = (std::numeric_limits<double>::min)();
+        if (trace.first != 0 && plain - plain == 0.0 && crd::math::fabs(trace.lead) >= kMin)
+        {
+            return plain;
+        }
+        return cyl_bessel_i(-nu, x);
+    }
+    const StruveLead lead = struve_lead_negative(nu, half);
+    StruveRatios ratios = struve_l_ratios<false>(nu, half);
+    double sum = ratios.sum;
+    if (!(sum - sum == 0.0)) [[unlikely]]
+    {
+        ratios = struve_l_ratios_scaled(nu, half);
+        sum = ratios.sum;
+    }
+    if (ratios.scalings == 0 && ratios.biggest > kStruveLossLimit * crd::math::fabs(sum))
+    {
+        const StruveDD z2{half * half, crd::math::fma(half, half, -(half * half))}; // (x/2)² exactly
+        StruveDD t{1.0, 0.0};
+        StruveDD total{1.0, 0.0};
+        for (int m = 1; m <= kStruveRatioCap; ++m)
+        {
+            const StruveDD a = struve_dd_two_sum(static_cast<double>(m), 0.5);
+            const StruveDD b = struve_dd_two_sum(static_cast<double>(m) + 0.5, nu);
+            t = struve_dd_div(struve_dd_mul(t, z2), struve_dd_mul(a, b));
+            total = struve_dd_add(total, t);
+            if (crd::math::fabs(t.hi) <= 1e-34 * crd::math::fabs(total.hi) && m > -nu - 1.5)
+            {
+                break;
+            }
+        }
+        sum = total.hi + total.lo;
+    }
+    if (lead.value != 0.0 && ratios.scalings == 0)
+    {
+        return lead.value * sum;
+    }
+    const double size = crd::math::exp(struve_lead_log(nu, half) + crd::math::log(crd::math::fabs(sum)) +
+                                       600.0 * ratios.scalings * kStruveLn2);
+    return (lead.sign * sum < 0.0) ? -size : size;
 }
 
 // H_ν = Y_ν + R_ν with R_ν = (2(x/2)^ν/(√π Γ(ν+½)))∫_0^∞ e^{−xt}(1+t²)^{ν−½} dt (DLMF 11.5.2). With s = xt the integral
