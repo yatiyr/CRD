@@ -890,6 +890,64 @@
       "note": "Design S69: the delivery rate samples of section 4.1 stamped on every packet in flight, and the model, states, two-time-scale bounds, ProbeRTT and spurious-loss undo of sections 5.1 to 5.6 in integer arithmetic, with CE marks answered as congestion (section 3.7). Against ngtcp2 1.26 both ways (quic_interop.py, 2026-11-10): on the loopback, over lossy, jittered, CE-marking and MTU-limited relays, and through a relay bottleneck of 2.5 MB/s, 30 ms and a two-BDP drop-tail buffer against ngtcp2's CUBIC, Reno and BBR, where the model's minimum round trip is the path's, the queue stays under a round trip, the buffer does not overflow, and a Cerid client finds the rate and keeps 0.84 of the link or more under 1% loss, where CUBIC keeps 0.24. The draft is experimental; review again at its next revision."
     },
     {
+      "id": "cc.prague",
+      "title": "Prague congestion control (L4S)",
+      "kind": "algorithm",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-briscoe-iccrg-prague-congestion-control",
+        "status": "expired",
+        "revision": "04",
+        "posted": "2024-07-24",
+        "added": "2026-11-10"
+      },
+      "cryptography": [],
+      "source": {
+        "ref": "docs/design/network-foundation.md#prague",
+        "read": "2026-11-10",
+        "verified": true
+      },
+      "review": "2027-02-10",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Implemented to the -04 text as design S70 (2026-11-10) under path.l4s-ecn's RFC 9331 requirements: alpha with gain 1/16 on a virtual round trip, the reduction by alpha / 2 once per CWR, growth by unmarked bytes, RTT independence after 500 rounds at 25 ms, Reno's loss response and pacing. The individual draft expired on 2025-01-25 without a successor; watched for an ICCRG or CCWG adoption, whose text then pins it."
+    },
+    {
+      "id": "cc.classic-ecn-detection",
+      "title": "Classic ECN AQM detection for scalable congestion control",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "paper",
+        "ref": "https://arxiv.org/abs/1911.00710v3",
+        "posted": "2021-02",
+        "status": "published"
+      },
+      "cryptography": [],
+      "source": {
+        "ref": "docs/design/network-foundation.md#prague",
+        "read": "2026-11-10",
+        "verified": true
+      },
+      "review": "2027-11-10",
+      "evidence": [
+        "engine/numerics/hesap-net/include/crd/hesap/net/classic_ecn.hpp",
+        "tests/numerics/hesap-net/test_classic_ecn.cpp",
+        "tests/foundation/net/test_prague.cpp"
+      ],
+      "deprecation": null,
+      "note": "Briscoe, TR-BB-2019-002 version 03, sections 3.2 to 3.4 and 6.1 (design S70): the passive detector's score from the RTT's mean deviation, the queue depth and the self-limited share, with its averages smoothed over 2 S^1.5 samples, in integer arithmetic in crd-hesap-net, and the changeover of alternative 2 toward ABE's beta 0.7. RFC 9331 section 4.3 item 3 requires a detection function of this kind."
+    },
+    {
       "id": "cc.hystart",
       "title": "HyStart++: modified slow start",
       "kind": "algorithm",
@@ -1762,7 +1820,7 @@
       "id": "path.l4s-ecn",
       "title": "The ECN protocol for L4S (experimental)",
       "kind": "protocol",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "NET-PATH"
@@ -1779,8 +1837,17 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "engine/foundation/net/src/congestion.cpp",
+        "engine/foundation/net/src/quic_ecn.cpp",
+        "engine/numerics/hesap-net/include/crd/hesap/net/classic_ecn.hpp",
+        "tests/foundation/net/test_prague.cpp",
+        "tests/foundation/net/test_quic_congestion.cpp",
+        "tests/numerics/hesap-net/test_classic_ecn.cpp",
+        "tests/foundation/net/fuzz/fuzz_congestion.cpp"
+      ],
+      "deprecation": null,
+      "note": "The sender side, design S70 (2026-11-10): a scalable controller's packets carry ECT(1) (section 4.1; congestion_codepoint()), QUIC's per-codepoint counts are the accurate feedback section 4.2 requires, and Prague meets section 4.3: replaceable live by a classic controller (item 1), Reno's halving on loss (item 2), passive classic ECN AQM detection turning its answer to ABE's (item 3, cc.classic-ecn-detection), growth independent of the round trip below 25 ms (item 4), RFC 9002's time thresholds for reordering (item 6) and pacing with a 250 us burst (item 7). Proven over simulated L4S step and classic sawtooth queues and through the QUIC connection."
     },
     {
       "id": "reach.ice",
