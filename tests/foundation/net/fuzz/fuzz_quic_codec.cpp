@@ -9,7 +9,9 @@
 // Oracles. Frames: a refused frame consumes nothing and is FRAME_ENCODING_ERROR or PROTOCOL_VIOLATION; an accepted one
 // consumes bytes, views only the payload, writes back in its shortest form no longer than it was read and reads back to
 // the same frame; an ACK's ranges descend with a packet number between each and below its largest, and written again
-// from them read back to the same ranges; a 0-RTT packet from a server carries nothing. Transport parameters: a
+// from them read back to the same ranges; an ACK_RECEIVE_TIMESTAMPS frame's timestamps number at most its largest
+// acknowledged with times that never rise, as many as its counts say, and those its ranges acknowledge written again
+// read back the same; a 0-RTT packet from a server carries nothing. Transport parameters: a
 // payload whose (identifier, length, value) layout is broken is refused; a refusal leaves the output untouched; an
 // accepted set writes back (its reserved versions left to the writer) with exactly one reserved parameter and reads
 // back to the same values; the version selections only return versions their inputs name.
@@ -55,9 +57,34 @@ bool same_frame(const QuicFrame& a, const QuicFrame& b)
            a.application == b.application;
 }
 
+// Walks `ack`'s timestamps into `stamps`; whether every one lies in `ranges`.
+bool walk_timestamps(const QuicAck& ack, ConstSpan<QuicAckRange> ranges, QuicReceiveTimestamp* stamps, usize& count)
+{
+    QuicAckTimestamps walk(ack);
+    QuicReceiveTimestamp stamp;
+    bool acknowledged = true;
+    count = 0U;
+    while (walk.next(stamp))
+    {
+        CRD_FUZZ_REQUIRE(count < crd::fuzz::kMaxInputBytes && stamp.number <= ack.largest);
+        CRD_FUZZ_REQUIRE(count == 0U || stamp.time <= stamps[count - 1U].time);
+        bool inside_ranges = false;
+        for (const QuicAckRange& range : ranges)
+        {
+            inside_ranges = inside_ranges || (stamp.number >= range.smallest && stamp.number <= range.largest);
+        }
+        acknowledged = acknowledged && inside_ranges;
+        stamps[count++] = stamp;
+    }
+    CRD_FUZZ_REQUIRE(count == ack.timestamp_count);
+    return acknowledged;
+}
+
 void check_ack(const QuicAck& ack)
 {
     static QuicAckRange ranges[kMaxRanges];
+    static QuicReceiveTimestamp stamps[crd::fuzz::kMaxInputBytes];
+    static QuicReceiveTimestamp reread_stamps[crd::fuzz::kMaxInputBytes];
     QuicAckRanges walk(ack);
     usize count = 0U;
     QuicAckRange range;
@@ -70,15 +97,27 @@ void check_ack(const QuicAck& ack)
     }
     CRD_FUZZ_REQUIRE(count == ack.range_count + 1U);
     const EcnCounts counts{ack.ect0, ack.ect1, ack.ce};
-    static u8 out[crd::fuzz::kMaxInputBytes + 64U];
+    static u8 out[(2U * crd::fuzz::kMaxInputBytes) + 64U];
     const ConstSpan<QuicAckRange> view(ranges, count);
-    const usize bytes = write_quic_ack(view, ack.delay, ack.ecn ? &counts : nullptr, Span<u8>(out, sizeof(out)));
+    usize stamped = 0U;
+    const bool acknowledged = ack.timestamps && walk_timestamps(ack, view, stamps, stamped);
+    const ConstSpan<QuicReceiveTimestamp> times(stamps, acknowledged ? stamped : 0U);
+    const usize bytes = write_quic_ack(view, ack.delay, ack.ecn ? &counts : nullptr, Span<u8>(out, sizeof(out)), times);
     CRD_FUZZ_REQUIRE(bytes != 0U);
     WireReader in(ConstSpan<u8>(out, bytes));
     QuicFrame again;
     CRD_FUZZ_REQUIRE(read_quic_frame(in, again) == QuicTransportError::NoError && in.done());
     CRD_FUZZ_REQUIRE(again.ack.largest == ack.largest && again.ack.delay == ack.delay &&
                      again.ack.range_count == ack.range_count && again.ack.ecn == ack.ecn);
+    CRD_FUZZ_REQUIRE(again.ack.timestamps == !times.empty());
+    usize restamped = 0U;
+    CRD_FUZZ_REQUIRE(!again.ack.timestamps || walk_timestamps(again.ack, view, reread_stamps, restamped));
+    CRD_FUZZ_REQUIRE(restamped == times.size());
+    for (usize index = 0U; index < restamped; ++index)
+    {
+        CRD_FUZZ_REQUIRE(reread_stamps[index].number == stamps[index].number &&
+                         reread_stamps[index].time == stamps[index].time);
+    }
     QuicAckRanges reread(again.ack);
     for (usize index = 0U; index < count; ++index)
     {
@@ -110,7 +149,7 @@ void check_frames(ConstSpan<u8> payload, u8 control)
         const usize read_bytes = in.consumed() - before;
         CRD_FUZZ_REQUIRE(read_bytes != 0U);
         CRD_FUZZ_REQUIRE(inside(frame.data, payload) && inside(frame.reset_token, payload) &&
-                         inside(frame.ack.ranges, payload));
+                         inside(frame.ack.ranges, payload) && inside(frame.ack.timestamp_ranges, payload));
         CRD_FUZZ_REQUIRE(!(packet == QuicPacketType::ZeroRtt && from_server &&
                            quic_frame_allowed(frame.kind, frame.application, packet, from_server)));
         if (frame.kind == QuicFrameKind::Ack)
@@ -155,6 +194,7 @@ bool layout_intact(ConstSpan<u8> bytes)
     return true;
 }
 
+// The reserved parameters (31 * N + 27), less draft-ietf-quic-receive-ts's two temporary identifiers of that form.
 usize reserved_parameters(ConstSpan<u8> bytes)
 {
     WireReader in(bytes);
@@ -166,7 +206,10 @@ usize reserved_parameters(ConstSpan<u8> bytes)
         ConstSpan<u8> value;
         CRD_FUZZ_REQUIRE(take_quic_varint(in, id) && take_quic_varint(in, length) &&
                          in.take_bytes(static_cast<usize>(length), value));
-        count += (id % 31U == 27U) ? 1U : 0U;
+        count += (id % 31U == 27U && id != iana::kQuicTpMaxReceiveTimestampsPerAck &&
+                  id != iana::kQuicTpReceiveTimestampsExponent)
+                     ? 1U
+                     : 0U;
     }
     return count;
 }
@@ -237,17 +280,18 @@ void check_parameters(ConstSpan<u8> bytes, u8 control, u64 entropy)
     QuicTransportParameters again;
     CRD_FUZZ_REQUIRE(read_quic_transport_parameters(ConstSpan<u8>(out, written), side, again) ==
                      QuicTransportError::NoError);
-    CRD_FUZZ_REQUIRE(again.max_idle_timeout == write.max_idle_timeout &&
-                     again.max_udp_payload_size == write.max_udp_payload_size &&
-                     again.initial_max_data == write.initial_max_data &&
-                     again.initial_max_streams_bidi == write.initial_max_streams_bidi &&
-                     again.initial_max_streams_uni == write.initial_max_streams_uni &&
-                     again.ack_delay_exponent == write.ack_delay_exponent &&
-                     again.max_ack_delay == write.max_ack_delay &&
-                     again.active_connection_id_limit == write.active_connection_id_limit &&
-                     again.max_datagram_frame_size == write.max_datagram_frame_size &&
-                     again.grease_quic_bit == write.grease_quic_bit &&
-                     again.disable_active_migration == write.disable_active_migration);
+    CRD_FUZZ_REQUIRE(
+        again.max_idle_timeout == write.max_idle_timeout && again.max_udp_payload_size == write.max_udp_payload_size &&
+        again.initial_max_data == write.initial_max_data &&
+        again.initial_max_streams_bidi == write.initial_max_streams_bidi &&
+        again.initial_max_streams_uni == write.initial_max_streams_uni &&
+        again.ack_delay_exponent == write.ack_delay_exponent && again.max_ack_delay == write.max_ack_delay &&
+        again.active_connection_id_limit == write.active_connection_id_limit &&
+        again.max_datagram_frame_size == write.max_datagram_frame_size &&
+        again.grease_quic_bit == write.grease_quic_bit &&
+        again.max_receive_timestamps_per_ack == write.max_receive_timestamps_per_ack &&
+        again.receive_timestamps_exponent == write.receive_timestamps_exponent &&
+        again.disable_active_migration == write.disable_active_migration);
     CRD_FUZZ_REQUIRE(same(again.initial_source_connection_id.view(), write.initial_source_connection_id.view()) &&
                      again.has_preferred_address == write.has_preferred_address &&
                      same(again.preferred_address.connection_id.view(), write.preferred_address.connection_id.view()));
@@ -307,6 +351,10 @@ usize frames_payload(u8* out, usize capacity)
     const QuicAckRange ranges[3] = {{90U, 100U}, {40U, 70U}, {0U, 5U}};
     const EcnCounts counts{3U, 0U, 1U};
     at += write_quic_ack(ConstSpan<QuicAckRange>(ranges, 3U), 2500U, &counts, Span<u8>(out + at, capacity - at));
+    // ACK_RECEIVE_TIMESTAMPS: a reordered arrival makes three Timestamp Ranges.
+    const QuicReceiveTimestamp stamps[5] = {{100U, 9000U}, {99U, 8800U}, {45U, 8700U}, {98U, 8600U}, {97U, 0U}};
+    at += write_quic_ack(ConstSpan<QuicAckRange>(ranges, 3U), 25U, nullptr, Span<u8>(out + at, capacity - at),
+                         ConstSpan<QuicReceiveTimestamp>(stamps, 5U));
     const auto put = [&](QuicFrame frame) { at += write_quic_frame(frame, Span<u8>(out + at, capacity - at)); };
     QuicFrame frame;
     frame.kind = QuicFrameKind::Ping;
@@ -381,6 +429,8 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     server.initial_max_streams_bidi = 100U;
     server.max_datagram_frame_size = 1200U;
     server.grease_quic_bit = true;
+    server.max_receive_timestamps_per_ack = 8U;
+    server.receive_timestamps_exponent = 3U;
     server.disable_active_migration = true;
     server.has_version_information = true;
     server.version_information.chosen = iana::kQuicVersion2;

@@ -20,6 +20,9 @@ constexpr u32   kSeenDatagram     = 17U; // bits of `seen` past the section 18.2
 constexpr u32   kSeenGreaseBit    = 18U;
 constexpr u32   kSeenVersionInfo  = 19U;
 constexpr u32   kSeenResetStreamAt = 20U;
+constexpr u32 kSeenReceiveTimes = 21U;
+constexpr u32 kSeenReceiveExponent = 22U;
+constexpr u32 kNotRead = 64U;
 
 bool equal_bytes(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
 {
@@ -155,7 +158,8 @@ bool varints_in_range(const QuicTransportParameters& p) noexcept
                           p.initial_max_stream_data_bidi_remote,
                           p.initial_max_stream_data_uni,
                           p.active_connection_id_limit,
-                          p.max_datagram_frame_size};
+                          p.max_datagram_frame_size,
+                          p.max_receive_timestamps_per_ack};
     return std::ranges::all_of(values, [](u64 value) { return value <= kQuicMaxVarint; });
 }
 
@@ -187,6 +191,7 @@ bool writable(const QuicTransportParameters& p, crypto::QuicSide side) noexcept
     }
     if (!varints_in_range(p) || p.max_udp_payload_size < kQuicMinMaxUdpPayload ||
         p.ack_delay_exponent > kQuicMaxAckDelayExponent || p.max_ack_delay >= kQuicMaxAckDelayLimit ||
+        p.receive_timestamps_exponent > kQuicMaxReceiveTimestampsExponent ||
         p.active_connection_id_limit < kQuicDefaultActiveIdLimit || p.initial_max_streams_bidi > kQuicMaxStreams ||
         p.initial_max_streams_uni > kQuicMaxStreams)
     {
@@ -207,6 +212,9 @@ bool writable(const QuicTransportParameters& p, crypto::QuicSide side) noexcept
     }
     return !p.has_version_information || version_information_valid(p.version_information, side);
 }
+
+// The bit of `seen` for identifier `id`, or kNotRead for an identifier this module does not read.
+u32 seen_bit(u64 id) noexcept;
 
 void emit(const QuicTransportParameters& p, QuicTransportParameterGrease grease, Emitter& out) noexcept
 {
@@ -288,11 +296,25 @@ void emit(const QuicTransportParameters& p, QuicTransportParameterGrease grease,
     {
         out.flag(iana::kQuicTpResetStreamAt);
     }
+    if (p.max_receive_timestamps_per_ack != 0U)
+    {
+        out.varint(iana::kQuicTpMaxReceiveTimestampsPerAck, p.max_receive_timestamps_per_ack);
+        if (p.receive_timestamps_exponent != 0U)
+        {
+            out.varint(iana::kQuicTpReceiveTimestampsExponent, p.receive_timestamps_exponent);
+        }
+    }
 
     // The reserved parameter: N below (2^62 - 1 - 27) / 31, so the identifier is a varint; its value is up to eight
-    // bytes of the entropy itself, which no reader interprets.
+    // bytes of the entropy itself, which no reader interprets. A draft's temporary identifier of that form that this
+    // module reads (draft-ietf-quic-receive-ts's both are) is never chosen: the next slot is.
     constexpr u64 grease_slots = (kQuicMaxVarint - kGreaseBase) / kGreaseStep + 1U;
-    const u64 id = kGreaseStep * ((grease.entropy >> 4U) % grease_slots) + kGreaseBase;
+    u64 slot = (grease.entropy >> 4U) % grease_slots;
+    while (seen_bit((kGreaseStep * slot) + kGreaseBase) != kNotRead)
+    {
+        slot = (slot + 1U) % grease_slots;
+    }
+    const u64 id = (kGreaseStep * slot) + kGreaseBase;
     u8 value[kQuicMaxGreaseParameterBytes] = {};
     for (usize index = 0U; index < kQuicMaxGreaseParameterBytes; ++index)
     {
@@ -372,7 +394,6 @@ bool read_version_information(cont::ConstSpan<u8> value, crypto::QuicSide side, 
     return true;
 }
 
-// The bit of `seen` for identifier `id`, or 64 for an identifier this module does not read.
 u32 seen_bit(u64 id) noexcept
 {
     if (id <= static_cast<u64>(Id::RetrySourceConnectionId))
@@ -391,11 +412,19 @@ u32 seen_bit(u64 id) noexcept
     {
         return kSeenResetStreamAt;
     }
+    if (id == iana::kQuicTpMaxReceiveTimestampsPerAck)
+    {
+        return kSeenReceiveTimes;
+    }
+    if (id == iana::kQuicTpReceiveTimestampsExponent)
+    {
+        return kSeenReceiveExponent;
+    }
     if (id == iana::kQuicTpVersionInformation)
     {
         return kSeenVersionInfo;
     }
-    return 64U;
+    return kNotRead;
 }
 
 bool server_only(u64 id) noexcept
@@ -421,6 +450,14 @@ bool read_known(u64 id, cont::ConstSpan<u8> value, crypto::QuicSide side, QuicTr
     {
         p.reset_stream_at = true;
         return value.empty(); // section 3 of the draft
+    }
+    if (id == iana::kQuicTpMaxReceiveTimestampsPerAck)
+    {
+        return read_exact_varint(value, p.max_receive_timestamps_per_ack);
+    }
+    if (id == iana::kQuicTpReceiveTimestampsExponent)
+    {
+        return read_exact_varint(value, p.receive_timestamps_exponent); // bounded once the maximum is known
     }
     if (id == iana::kQuicTpVersionInformation)
     {
@@ -540,7 +577,7 @@ QuicTransportError read_quic_transport_parameters(cont::ConstSpan<u8> bytes, cry
             return QuicTransportError::TransportParameterError;
         }
         const u32 bit = seen_bit(id);
-        if (bit == 64U)
+        if (bit == kNotRead)
         {
             continue; // section 7.4.2: unknown and reserved parameters are ignored
         }
@@ -551,6 +588,15 @@ QuicTransportError read_quic_transport_parameters(cont::ConstSpan<u8> bytes, cry
             return QuicTransportError::TransportParameterError;
         }
         seen |= u64{1} << bit;
+    }
+    // draft-ietf-quic-receive-ts section 6: the exponent is ignored without timestamps, and above 20 it is invalid.
+    if (parameters.max_receive_timestamps_per_ack == 0U)
+    {
+        parameters.receive_timestamps_exponent = 0U;
+    }
+    else if (parameters.receive_timestamps_exponent > kQuicMaxReceiveTimestampsExponent)
+    {
+        return QuicTransportError::TransportParameterError;
     }
     out = parameters;
     return QuicTransportError::NoError;

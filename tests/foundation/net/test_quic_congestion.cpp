@@ -11,7 +11,9 @@
 // at a full link, where CUBIC's ECT(0) fills the classic drop-tail queue. And SCReAM v2 (#scream): a transfer through a
 // deep drop-tail queue held near its delay target at a full link, where CUBIC fills it, and ECT(1) in L4S mode. And
 // GCC (#gcc): with no receive timestamps, each ACK frame's RTT sample less the ACK delay drives its delay trend, and a
-// transfer through a deep drop-tail queue reaches the link from 288 kbit/s and backs off, where CUBIC fills it.
+// transfer through a deep drop-tail queue reaches the link from 288 kbit/s and backs off, where CUBIC fills it; with
+// receive timestamps (#receive-timestamps) the peer's arrival times drive it the same way. Receive timestamps are
+// reported only when both ends ask for them, and hold over paths that lose, duplicate and reorder.
 
 #include "ingress_fixture.hpp"
 #include "quic_connection_fixture.hpp"
@@ -116,9 +118,11 @@ struct Pair
     QuicConnection server;
     std::unique_ptr<Net> net;
 
-    explicit Pair(const CongestionPolicy& policy, usize seed = 0U, bool ecn = true)
-        : client(allocator, with(bulk_config(QuicSide::Client, identity, seed), policy, ecn)),
-          server(allocator, with(bulk_config(QuicSide::Server, identity, seed + 1U), policy, ecn))
+    // `client_times` and `server_times`: the receive timestamps each end asks for (0: none).
+    explicit Pair(const CongestionPolicy& policy, usize seed = 0U, bool ecn = true, u64 client_times = 0U,
+                  u64 server_times = 0U)
+        : client(allocator, with(bulk_config(QuicSide::Client, identity, seed), policy, ecn, client_times)),
+          server(allocator, with(bulk_config(QuicSide::Server, identity, seed + 1U), policy, ecn, server_times))
     {
         REQUIRE(client.ready());
         REQUIRE(server.ready());
@@ -131,10 +135,11 @@ struct Pair
         }
     }
 
-    static QuicConnectionConfig with(QuicConnectionConfig config, const CongestionPolicy& policy, bool ecn)
+    static QuicConnectionConfig with(QuicConnectionConfig config, const CongestionPolicy& policy, bool ecn, u64 times)
     {
         config.congestion = policy;
         config.ecn = ecn;
+        config.parameters.max_receive_timestamps_per_ack = times;
         return config;
     }
 
@@ -681,12 +686,14 @@ TEST_CASE("QUIC SCReAM: a deep drop-tail queue held near the delay target at a f
     CHECK(pair.server.recovery().received(QuicSpace::Application).ecn().ect1 > 0U);
 }
 
-TEST_CASE("QUIC GCC: from ACK frames alone a transfer reaches the link and keeps a deep queue short of CUBIC's",
-          "[net][net-path][quic-connection][gcc]")
+TEST_CASE("QUIC GCC: from ACK frames alone or from receive timestamps a transfer reaches the link and keeps a deep "
+          "queue short of CUBIC's",
+          "[net][net-path][quic-connection][gcc][receive-timestamps]")
 {
-    // 2 Mbit/s and the Pair's 50 ms round trip under a 300 ms drop-tail buffer. The peer reports no receive times,
-    // so the trend reads each ACK frame's largest packet: its RTT less the peer's ACK delay. From 288 kbit/s at 8% a
-    // second GCC needs about 25 s to reach the link; the transfer lasts past a minute.
+    // 2 Mbit/s and the Pair's 50 ms round trip under a 300 ms drop-tail buffer. Without receive timestamps the trend
+    // reads each ACK frame's largest packet: its RTT less the peer's ACK delay; with them, every packet's arrival at
+    // the peer. From 288 kbit/s at 8% a second GCC needs about 25 s to reach the link; the transfer lasts past a
+    // minute.
     static constexpr u64 kRate = 250000U;
     static constexpr usize kBuffer = kRate / 1000U * 300U;
     struct Run
@@ -694,11 +701,12 @@ TEST_CASE("QUIC GCC: from ACK frames alone a transfer reaches the link and keeps
         u64 goodput = 0U;    // bytes per second over the second half
         u64 max_queued = 0U; // over the second half
         u64 overflowed = 0U;
+        u64 timestamps = 0U; // packets the server's reports timed
         CongestionState state;
     };
-    const auto run = [](const CongestionPolicy& policy)
+    const auto run = [](const CongestionPolicy& policy, u64 times)
     {
-        Pair pair(policy, 5U);
+        Pair pair(policy, 5U, true, times, times);
         pair.net->path[0].rate = kRate;
         pair.net->path[0].buffer = kBuffer;
         pair.confirm();
@@ -713,20 +721,70 @@ TEST_CASE("QUIC GCC: from ACK frames alone a transfer reaches the link and keeps
         out.goodput = (bulk.read - half_read) * 1000U * kMs / (pair.net->now - half_ns);
         out.max_queued = pair.net->max_queued[0];
         out.overflowed = pair.net->overflowed[0] - overflowed;
+        out.timestamps = pair.client.counters().receive_timestamps;
         out.state = pair.client.congestion().state();
         CHECK(pair.client.state() == QuicConnectionState::Established);
         return out;
     };
     CongestionPolicy gcc;
     gcc.algorithm = CongestionAlgorithm::Gcc;
-    const Run delay = run(gcc);
-    const Run cubic = run(CongestionPolicy{});
-    INFO("GCC goodput " << delay.goodput << " max queue " << delay.max_queued << " target " << delay.state.target_rate
-                        << " estimate " << delay.state.bandwidth << " reductions " << delay.state.reductions
-                        << " overflowed " << delay.overflowed << "; CUBIC goodput " << cubic.goodput << " max queue "
-                        << cubic.max_queued << " overflowed " << cubic.overflowed);
-    CHECK(delay.goodput >= kRate * 85U / 100U);
-    CHECK(delay.state.reductions >= 1U);
-    CHECK(delay.overflowed == 0U);
-    CHECK(4U * delay.max_queued <= cubic.max_queued);
+    const Run cubic = run(CongestionPolicy{}, 0U);
+    for (const u64 times : {u64{0}, u64{kQuicMaxReceiveTimestamps}})
+    {
+        const Run delay = run(gcc, times);
+        INFO("timestamps " << times << ": GCC goodput " << delay.goodput << " max queue " << delay.max_queued
+                           << " target " << delay.state.target_rate << " estimate " << delay.state.bandwidth
+                           << " reductions " << delay.state.reductions << " overflowed " << delay.overflowed
+                           << " timed " << delay.timestamps << "; CUBIC goodput " << cubic.goodput << " max queue "
+                           << cubic.max_queued << " overflowed " << cubic.overflowed);
+        CHECK(delay.goodput >= kRate * 85U / 100U);
+        CHECK(delay.state.reductions >= 1U);
+        CHECK(delay.overflowed == 0U);
+        CHECK(4U * delay.max_queued <= cubic.max_queued);
+        // With them nearly every data packet is timed: 16 MiB is about 14000 packets.
+        CHECK(((times == 0U) ? delay.timestamps == 0U : delay.timestamps >= 10000U));
+    }
+}
+
+TEST_CASE("QUIC receive timestamps: reported only when both ends ask, and held over lossy, duplicating, reordering "
+          "paths",
+          "[net][net-path][quic-connection][receive-timestamps]")
+{
+    for (const u64 client_times : {u64{0}, u64{8}})
+    {
+        for (const u64 server_times : {u64{0}, u64{8}})
+        {
+            CongestionPolicy gcc;
+            gcc.algorithm = CongestionAlgorithm::Gcc;
+            Pair pair(gcc, 7U, true, client_times, server_times);
+            pair.confirm();
+            CHECK(pair.client.peer_parameters().max_receive_timestamps_per_ack == server_times);
+            CHECK(pair.server.peer_parameters().max_receive_timestamps_per_ack == client_times);
+            Bulk bulk{pair.client, pair.server, 1U << 18U};
+            REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
+            INFO("client " << client_times << " server " << server_times);
+            CHECK(pair.client.state() == QuicConnectionState::Established);
+            CHECK(pair.server.state() == QuicConnectionState::Established);
+            CHECK((pair.client.counters().receive_timestamps != 0U) == (client_times != 0U && server_times != 0U));
+        }
+    }
+    for (usize seed = 1U; seed <= 4U; ++seed)
+    {
+        CongestionPolicy gcc;
+        gcc.algorithm = CongestionAlgorithm::Gcc;
+        Pair pair(gcc, seed, true, kQuicMaxReceiveTimestamps, kQuicMaxReceiveTimestamps);
+        pair.net->rng.state = seed;
+        for (Path& path : pair.net->path)
+        {
+            path.loss = 100U;
+            path.duplicate = 50U;
+            path.jitter_ns = 15U * kMs;
+        }
+        pair.confirm();
+        Bulk bulk{pair.client, pair.server, 1U << 19U};
+        REQUIRE(pair.net->run_until([&] { return bulk.step(); }, 600000U * kMs));
+        INFO("seed " << seed);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+        CHECK(pair.client.counters().receive_timestamps > 100U);
+    }
 }

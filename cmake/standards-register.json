@@ -1675,7 +1675,7 @@
       "id": "quic.receive-timestamps",
       "title": "QUIC receive timestamps",
       "kind": "extension",
-      "state": "watch",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "NET-PATH"
@@ -1688,15 +1688,45 @@
         "posted": "2026-07-20"
       },
       "cryptography": [],
+      "codepoints": [
+        {
+          "registry": "QUIC Transport Parameters",
+          "name": "max_receive_timestamps_per_ack",
+          "value": "0x4ac07"
+        },
+        {
+          "registry": "QUIC Transport Parameters",
+          "name": "receive_timestamps_exponent",
+          "value": "0x4ac26"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "ack_receive_timestamps",
+          "value": "0x3178307"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "ack_receive_timestamps_ecn",
+          "value": "0x3178308"
+        }
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-1-transport",
         "read": "2026-10-27",
-        "verified": false
+        "verified": true
       },
       "review": "2026-12-15",
-      "evidence": [],
+      "evidence": [
+        "engine/foundation/net/src/quic_recovery.cpp",
+        "tests/foundation/net/test_quic_frame.cpp",
+        "tests/foundation/net/test_quic_transport_parameters.cpp",
+        "tests/foundation/net/test_quic_recovery.cpp",
+        "tests/foundation/net/test_quic_congestion.cpp",
+        "tests/foundation/net/fuzz/fuzz_quic_codec.cpp",
+        "tests/foundation/net/fuzz/fuzz_quic_recovery.cpp"
+      ],
       "deprecation": null,
-      "note": "A QUIC WG document; the draft name is confirmed at the first refresh."
+      "note": "Design S73 (docs/design/network-foundation.md#receive-timestamps): ACK_RECEIVE_TIMESTAMPS in 1-RTT packets, off unless a connection's parameters ask for timestamps; the reports feed the congestion controllers' peer receive times (GCC). Draft -03 read in full (2026-11-11). Temporary draft codepoints: a renumbering is this one entry. PATH_ACK_RECEIVE_TIMESTAMPS waits for quic.multipath."
     },
     {
       "id": "quic.lb",

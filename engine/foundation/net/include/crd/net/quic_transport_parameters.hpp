@@ -2,9 +2,10 @@
 
 // crd-net -- QUIC transport parameters and compatible version negotiation (4.2a; contract:
 // docs/design/network-foundation.md#quic-transport-parameters). Sources: RFC 9000 sections 7.3, 7.4 and 18, RFC 9221
-// section 3 (max_datagram_frame_size), RFC 9287 section 3 (grease_quic_bit) and RFC 9368 sections 2 to 4 and 8
-// (version_information). The bytes travel in the TLS handshake's quic_transport_parameters extension
-// (crypto::QuicHandshake), authenticated; their encoding and every check is here.
+// section 3 (max_datagram_frame_size), RFC 9287 section 3 (grease_quic_bit), RFC 9368 sections 2 to 4 and 8
+// (version_information) and draft-ietf-quic-receive-ts-03 section 6 (receive timestamps). The bytes travel in the TLS
+// handshake's quic_transport_parameters extension (crypto::QuicHandshake), authenticated; their encoding and every
+// check is here.
 //
 //   reading   read_quic_transport_parameters takes a peer's bytes for the side that sent them and fills every
 //             parameter, the defaults for those absent; unknown and reserved parameters are skipped (section 7.4.2).
@@ -53,6 +54,7 @@ inline constexpr u64   kQuicDefaultMaxUdpPayload      = 65527U; // section 18.2
 inline constexpr u64   kQuicMinMaxUdpPayload          = 1200U;
 inline constexpr u64   kQuicDefaultAckDelayExponent   = 3U;
 inline constexpr u64   kQuicMaxAckDelayExponent       = 20U;
+inline constexpr u64 kQuicMaxReceiveTimestampsExponent = 20U;             // draft-ietf-quic-receive-ts section 6
 inline constexpr u64   kQuicDefaultMaxAckDelay        = 25U;              // milliseconds
 inline constexpr u64   kQuicMaxAckDelayLimit          = u64{1} << 14U;    // max_ack_delay must stay below it
 inline constexpr u64   kQuicDefaultActiveIdLimit      = 2U;
@@ -123,6 +125,11 @@ struct QuicTransportParameters
     u64                    max_datagram_frame_size                = 0U; // RFC 9221: 0, no DATAGRAM frames
     bool                   grease_quic_bit                        = false; // RFC 9287
     bool                   reset_stream_at                        = false; // draft-ietf-quic-reliable-stream-reset
+    // draft-ietf-quic-receive-ts: the receive timestamps the sender asks for in each ACK_RECEIVE_TIMESTAMPS frame its
+    // peer sends (0: none, and no such frame) and their Timestamp Deltas' unit, 2^exponent microseconds (at most 20;
+    // read as 0 when the maximum is 0, as the draft ignores it then).
+    u64 max_receive_timestamps_per_ack = 0U;
+    u64 receive_timestamps_exponent = 0U;
     bool                   has_version_information                = false; // RFC 9368
     QuicVersionInformation version_information;
 };

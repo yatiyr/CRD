@@ -1,7 +1,8 @@
 // crd-net -- QUIC frames (4.2a; docs/design/network-foundation.md#quic-frames): RFC 9001's appendix A payloads read
 // and written byte for byte, every frame kind through a round trip in its shortest encoding, every refusal of
-// sections 12.4 and 19 with nothing consumed, ACK ranges against a reference walk, and the frame placement table of
-// section 12.4 restated.
+// sections 12.4 and 19 with nothing consumed, ACK ranges against a reference walk, ACK_RECEIVE_TIMESTAMPS
+// (draft-ietf-quic-receive-ts-03) byte for byte, reordered reports round tripped and every bound the draft sets
+// refused, and the frame placement table of section 12.4 restated.
 
 #include "ingress_fixture.hpp"
 #include "quic_vectors.hpp"
@@ -438,6 +439,162 @@ TEST_CASE("QUIC frames: ACK ranges round trip against a reference set and refuse
     QuicFrame frame;
     usize consumed = 0U;
     CHECK(read_one(ConstSpan<u8>(huge, sizeof(huge)), frame, consumed) == QuicTransportError::FrameEncodingError);
+}
+
+// ---- ACK_RECEIVE_TIMESTAMPS ----
+
+TEST_CASE("QUIC frames: ACK_RECEIVE_TIMESTAMPS reads and writes draft-ietf-quic-receive-ts-03's layout byte for byte",
+          "[net][quic-frame][receive-timestamps]")
+{
+    // Packets 7 to 9 and 2 to 4 acknowledged; 9, 8, 4 and 3 timed, two Timestamp Ranges. The type is a 4-byte varint.
+    const QuicAckRange ranges[] = {{7U, 9U}, {2U, 4U}};
+    const QuicReceiveTimestamp stamps[] = {{9U, 1000U}, {8U, 990U}, {4U, 900U}, {3U, 880U}};
+    const u8 plain[] = {0x83, 0x17, 0x83, 0x07, 0x09, 0x05, 0x01, 0x02, 0x01, 0x02,        // the ACK fields
+                        0x02, 0x00, 0x02, 0x43, 0xE8, 0x0A, 0x05, 0x02, 0x40, 0x5A, 0x14}; // the timestamps
+    const ConstSpan<QuicAckRange> view(ranges, 2U);
+    const ConstSpan<QuicReceiveTimestamp> times(stamps, 4U);
+    u8 out[64] = {};
+    REQUIRE(quic_ack_bytes(view, 5U, nullptr, times) == sizeof(plain));
+    REQUIRE(write_quic_ack(view, 5U, nullptr, Span<u8>(out, sizeof(out)), times) == sizeof(plain));
+    CHECK(std::memcmp(out, plain, sizeof(plain)) == 0);
+    CHECK(write_quic_ack(view, 5U, nullptr, Span<u8>(out, sizeof(plain) - 1U), times) == 0U);
+
+    QuicFrame frame;
+    usize consumed = 0U;
+    REQUIRE(read_one(ConstSpan<u8>(plain, sizeof(plain)), frame, consumed) == QuicTransportError::NoError);
+    CHECK(consumed == sizeof(plain));
+    CHECK(frame.kind == QuicFrameKind::Ack);
+    CHECK(frame.ack.timestamps);
+    CHECK_FALSE(frame.ack.ecn);
+    CHECK(frame.ack.largest == 9U);
+    CHECK(frame.ack.timestamp_range_count == 2U);
+    CHECK(frame.ack.timestamp_count == 4U);
+    QuicAckTimestamps walk(frame.ack);
+    QuicReceiveTimestamp stamp;
+    for (const QuicReceiveTimestamp& expected : stamps)
+    {
+        REQUIRE(walk.next(stamp));
+        CHECK((stamp.number == expected.number && stamp.time == expected.time));
+    }
+    CHECK_FALSE(walk.next(stamp));
+
+    // With ECN counts (type 0x03178308): the counts sit between the ranges and the timestamps.
+    const EcnCounts counts{1U, 2U, 3U};
+    const u8 marked[] = {0x83, 0x17, 0x83, 0x08, 0x09, 0x05, 0x01, 0x02, 0x01, 0x02, 0x01, 0x02,
+                         0x03, 0x02, 0x00, 0x02, 0x43, 0xE8, 0x0A, 0x05, 0x02, 0x40, 0x5A, 0x14};
+    REQUIRE(write_quic_ack(view, 5U, &counts, Span<u8>(out, sizeof(out)), times) == sizeof(marked));
+    CHECK(std::memcmp(out, marked, sizeof(marked)) == 0);
+    REQUIRE(read_one(ConstSpan<u8>(marked, sizeof(marked)), frame, consumed) == QuicTransportError::NoError);
+    CHECK((frame.ack.ecn && frame.ack.ect0 == 1U && frame.ack.ect1 == 2U && frame.ack.ce == 3U));
+    CHECK(frame.ack.timestamp_count == 4U);
+
+    // Without timestamps the writer writes a plain ACK frame.
+    REQUIRE(write_quic_ack(view, 5U, nullptr, Span<u8>(out, sizeof(out))) == 7U);
+    CHECK(out[0] == 0x02U);
+
+    // A frame reporting no timestamp, and a range with none, are well formed.
+    const u8 none[] = {0x83, 0x17, 0x83, 0x07, 0x09, 0x00, 0x00, 0x00, 0x00};
+    REQUIRE(read_one(ConstSpan<u8>(none, sizeof(none)), frame, consumed) == QuicTransportError::NoError);
+    CHECK((frame.ack.timestamps && frame.ack.timestamp_count == 0U));
+    const u8 empty_range[] = {0x83, 0x17, 0x83, 0x07, 0x09, 0x00, 0x00, 0x00, 0x02, 0x01, 0x00, 0x00, 0x01, 0x07};
+    REQUIRE(read_one(ConstSpan<u8>(empty_range, sizeof(empty_range)), frame, consumed) == QuicTransportError::NoError);
+    QuicAckTimestamps second(frame.ack);
+    REQUIRE(second.next(stamp));
+    CHECK((stamp.number == 9U && stamp.time == 7U));
+    CHECK_FALSE(second.next(stamp));
+}
+
+TEST_CASE("QUIC frames: ACK_RECEIVE_TIMESTAMPS round trips reordered reports and refuses what the draft forbids",
+          "[net][quic-frame][receive-timestamps]")
+{
+    std::mt19937_64 random(0x7157U);
+    for (int round = 0; round < 2000; ++round)
+    {
+        // One acknowledged range from 0, timed in a random arrival order: times descend in report order while the
+        // packet numbers jump about, so runs of consecutive numbers make the Timestamp Ranges.
+        const u64 largest = (round % 5 == 0) ? (u64{1} << 40U) + (random() % 1000U) : 40U + (random() % 200U);
+        const QuicAckRange range{largest - 39U, largest};
+        QuicReceiveTimestamp stamps[32];
+        const usize count = 1U + static_cast<usize>(random() % 32U);
+        u64 time = (round % 7 == 0) ? crd::net::kQuicMaxVarint : random() % 100000000U;
+        u64 number = largest;
+        for (usize index = 0U; index < count; ++index)
+        {
+            stamps[index] = QuicReceiveTimestamp{number, time};
+            if (random() % 3U == 0U)
+            {
+                number = largest - (random() % 40U); // a jump
+            }
+            else
+            {
+                number = (number == range.smallest) ? largest : number - 1U;
+            }
+            const u64 step = random() % 3000U;
+            time = (step > time) ? 0U : time - step;
+        }
+        const ConstSpan<QuicReceiveTimestamp> view(stamps, count);
+        const EcnCounts counts{random() % 9U, random() % 9U, random() % 9U};
+        const EcnCounts* ecn = (round % 2 == 0) ? &counts : nullptr;
+        u8 out[512] = {};
+        const usize bytes =
+            write_quic_ack(ConstSpan<QuicAckRange>(&range, 1U), 3U, ecn, Span<u8>(out, sizeof(out)), view);
+        REQUIRE(bytes != 0U);
+        CHECK(bytes == quic_ack_bytes(ConstSpan<QuicAckRange>(&range, 1U), 3U, ecn, view));
+        QuicFrame frame;
+        usize consumed = 0U;
+        REQUIRE(read_one(ConstSpan<u8>(out, bytes), frame, consumed) == QuicTransportError::NoError);
+        CHECK(consumed == bytes);
+        CHECK(frame.ack.timestamp_count == count);
+        QuicAckTimestamps walk(frame.ack);
+        QuicReceiveTimestamp stamp;
+        for (const QuicReceiveTimestamp& expected : view)
+        {
+            REQUIRE(walk.next(stamp));
+            CHECK((stamp.number == expected.number && stamp.time == expected.time));
+        }
+        CHECK_FALSE(walk.next(stamp));
+        for (usize cut = 0U; cut < bytes; ++cut)
+        {
+            CHECK(read_one(ConstSpan<u8>(out, cut), frame, consumed) == QuicTransportError::FrameEncodingError);
+            CHECK(consumed == 0U);
+        }
+    }
+
+    // The writer: times that rise, a packet the frame does not acknowledge, a time past a varint.
+    const QuicAckRange range{5U, 9U};
+    const auto writes = [&](std::initializer_list<QuicReceiveTimestamp> list)
+    {
+        const crd::containers::Array<QuicReceiveTimestamp> stamps(list);
+        return quic_ack_bytes(ConstSpan<QuicAckRange>(&range, 1U), 0U, nullptr,
+                              ConstSpan<QuicReceiveTimestamp>(stamps.data(), stamps.size())) != 0U;
+    };
+    CHECK(writes({{9U, 10U}, {7U, 10U}, {8U, 4U}}));
+    CHECK_FALSE(writes({{9U, 10U}, {8U, 11U}}));
+    CHECK_FALSE(writes({{9U, 10U}, {4U, 9U}}));
+    CHECK_FALSE(writes({{10U, 10U}}));
+    CHECK_FALSE(writes({{9U, crd::net::kQuicMaxVarint + 1U}}));
+
+    // The reader: a range above the largest acknowledged, one reaching below packet 0, a time below the basis, and
+    // a range count past what the frame holds.
+    QuicFrame frame;
+    usize consumed = 0U;
+    const auto refused = [&](std::initializer_list<u8> list)
+    {
+        const crd::containers::Array<u8> bytes(list);
+        return read_one(ConstSpan<u8>(bytes.data(), bytes.size()), frame, consumed) ==
+                   QuicTransportError::FrameEncodingError &&
+               consumed == 0U;
+    };
+    // Largest 2, its range 0 to 2.
+    CHECK(refused({0x83, 0x17, 0x83, 0x07, 0x02, 0x00, 0x00, 0x02, 0x01, 0x03, 0x01, 0x05}));
+    CHECK(refused({0x83, 0x17, 0x83, 0x07, 0x02, 0x00, 0x00, 0x02, 0x01, 0x00, 0x04, 0x05, 0x01, 0x01, 0x01}));
+    CHECK(refused({0x83, 0x17, 0x83, 0x07, 0x02, 0x00, 0x00, 0x02, 0x01, 0x00, 0x02, 0x05, 0x06}));
+    CHECK(refused({0x83, 0x17, 0x83, 0x07, 0x02, 0x00, 0x00, 0x02, 0x02, 0x00, 0x01, 0x05, 0x02, 0x01, 0x06}));
+    CHECK(refused({0x83, 0x17, 0x83, 0x07, 0x02, 0x00, 0x00, 0x02, 0x40, 0x10, 0x00, 0x00}));
+    // The same frames with their bounds met.
+    CHECK_FALSE(refused({0x83, 0x17, 0x83, 0x07, 0x02, 0x00, 0x00, 0x02, 0x01, 0x02, 0x01, 0x05}));
+    CHECK_FALSE(refused({0x83, 0x17, 0x83, 0x07, 0x02, 0x00, 0x00, 0x02, 0x01, 0x00, 0x03, 0x05, 0x01, 0x04}));
+    CHECK_FALSE(refused({0x83, 0x17, 0x83, 0x07, 0x02, 0x00, 0x00, 0x02, 0x02, 0x00, 0x01, 0x05, 0x02, 0x01, 0x05}));
 }
 
 // ---- Placement ----

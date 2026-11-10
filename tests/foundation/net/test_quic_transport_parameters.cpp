@@ -130,6 +130,8 @@ QuicTransportParameters full_server()
     p.max_datagram_frame_size = 65535U;
     p.grease_quic_bit = true;
     p.reset_stream_at = true;
+    p.max_receive_timestamps_per_ack = 32U;
+    p.receive_timestamps_exponent = kQuicMaxReceiveTimestampsExponent;
     p.has_version_information = true;
     p.version_information.chosen = kV2;
     p.version_information.available[0] = kV2;
@@ -180,6 +182,8 @@ void check_equal(const QuicTransportParameters& a, const QuicTransportParameters
     CHECK(a.max_datagram_frame_size == b.max_datagram_frame_size);
     CHECK(a.grease_quic_bit == b.grease_quic_bit);
     CHECK(a.reset_stream_at == b.reset_stream_at);
+    CHECK(a.max_receive_timestamps_per_ack == b.max_receive_timestamps_per_ack);
+    CHECK(a.receive_timestamps_exponent == b.receive_timestamps_exponent);
     CHECK(a.has_version_information == b.has_version_information);
     if (a.has_version_information)
     {
@@ -195,8 +199,9 @@ void check_equal(const QuicTransportParameters& a, const QuicTransportParameters
     }
 }
 
-// The reserved parameters (31 * N + 27) in `bytes`.
-usize reserved_parameters(ConstSpan<u8> bytes)
+// The reserved parameters (31 * N + 27) in `bytes`, less draft-ietf-quic-receive-ts's two temporary identifiers,
+// which have that form and are read; `last` gets the last one's identifier.
+usize reserved_parameters(ConstSpan<u8> bytes, u64* last = nullptr)
 {
     WireReader in(bytes);
     usize count = 0U;
@@ -208,7 +213,13 @@ usize reserved_parameters(ConstSpan<u8> bytes)
         REQUIRE(take_quic_varint(in, parameter));
         REQUIRE(take_quic_varint(in, length));
         REQUIRE(in.take_bytes(static_cast<usize>(length), value));
-        count += (parameter % 31U == 27U) ? 1U : 0U;
+        const bool reserved = parameter % 31U == 27U && parameter != iana::kQuicTpMaxReceiveTimestampsPerAck &&
+                              parameter != iana::kQuicTpReceiveTimestampsExponent;
+        count += reserved ? 1U : 0U;
+        if (reserved && last != nullptr)
+        {
+            *last = parameter;
+        }
     }
     return count;
 }
@@ -349,6 +360,18 @@ TEST_CASE("QUIC transport parameters: section 18, RFC 9287 and RFC 9368 refusals
     add("grease_quic_bit with a value", QuicSide::Client).add(iana::kQuicTpGreaseQuicBit, ConstSpan<u8>(one, 1U));
     add("reset_stream_at with a value", QuicSide::Client).add(iana::kQuicTpResetStreamAt, ConstSpan<u8>(one, 1U));
     add("max_datagram_frame_size empty", QuicSide::Client).add(iana::kQuicTpMaxDatagramFrameSize, ConstSpan<u8>{});
+    add("max_receive_timestamps_per_ack empty", QuicSide::Client)
+        .add(iana::kQuicTpMaxReceiveTimestampsPerAck, ConstSpan<u8>{});
+    {
+        Encoded& e = add("receive_timestamps_exponent 21 with timestamps", QuicSide::Client);
+        e.add_varint(iana::kQuicTpMaxReceiveTimestampsPerAck, 4U);
+        e.add_varint(iana::kQuicTpReceiveTimestampsExponent, 21U);
+    }
+    {
+        Encoded& e = add("receive_timestamps_exponent repeated", QuicSide::Client);
+        e.add_varint(iana::kQuicTpReceiveTimestampsExponent, 1U);
+        e.add_varint(iana::kQuicTpReceiveTimestampsExponent, 1U);
+    }
     {
         u8 address[41] = {};
         address[24] = 0U; // a zero-length connection ID
@@ -392,6 +415,41 @@ TEST_CASE("QUIC transport parameters: section 18, RFC 9287 and RFC 9368 refusals
     CHECK(out.version_information.chosen == kV2);
     CHECK(out.version_information.available_count == 0U);
     CHECK(read_quic_transport_parameters(ConstSpan<u8>{}, QuicSide::Client, out) == QuicTransportError::NoError);
+
+    // draft-ietf-quic-receive-ts-03 section 6: without a maximum the exponent is ignored, even one above 20; with one
+    // it defaults to microseconds.
+    for (const u64 maximum : {u64{0}, u64{1}})
+    {
+        Encoded timestamps;
+        if (maximum != 0U)
+        {
+            timestamps.add_varint(iana::kQuicTpMaxReceiveTimestampsPerAck, maximum);
+        }
+        else
+        {
+            timestamps.add_varint(iana::kQuicTpReceiveTimestampsExponent, 63U);
+        }
+        REQUIRE(read_quic_transport_parameters(timestamps.view(), QuicSide::Client, out) ==
+                QuicTransportError::NoError);
+        CHECK(out.max_receive_timestamps_per_ack == maximum);
+        CHECK(out.receive_timestamps_exponent == 0U);
+    }
+
+    // Entropy picking either draft identifier for the reserved parameter moves it to the next free slot.
+    for (const u64 picked : {iana::kQuicTpMaxReceiveTimestampsPerAck, iana::kQuicTpReceiveTimestampsExponent})
+    {
+        u8 written[64] = {};
+        const QuicTransportParameterGrease grease{((picked - 27U) / 31U) << 4U};
+        const usize bytes = write_quic_transport_parameters(QuicTransportParameters{}, QuicSide::Client, grease,
+                                                            Span<u8>(written, 64U));
+        REQUIRE(bytes != 0U);
+        u64 reserved = 0U;
+        CHECK(reserved_parameters(ConstSpan<u8>(written, bytes), &reserved) == 1U);
+        CHECK(reserved == iana::kQuicTpReceiveTimestampsExponent + 31U);
+        QuicTransportParameters read;
+        CHECK(read_quic_transport_parameters(ConstSpan<u8>(written, bytes), QuicSide::Client, read) ==
+              QuicTransportError::NoError);
+    }
 }
 
 TEST_CASE("QUIC transport parameters: writers refuse what readers refuse", "[net][quic-tp]")
@@ -413,6 +471,9 @@ TEST_CASE("QUIC transport parameters: writers refuse what readers refuse", "[net
     };
     CHECK(changed([](QuicTransportParameters& c) { c.max_udp_payload_size = 1199U; }));
     CHECK(changed([](QuicTransportParameters& c) { c.ack_delay_exponent = 21U; }));
+    CHECK(changed([](QuicTransportParameters& c) { c.receive_timestamps_exponent = 21U; }));
+    CHECK(
+        changed([](QuicTransportParameters& c) { c.max_receive_timestamps_per_ack = crd::net::kQuicMaxVarint + 1U; }));
     CHECK(changed([](QuicTransportParameters& c) { c.max_ack_delay = kQuicMaxAckDelayLimit; }));
     CHECK(changed([](QuicTransportParameters& c) { c.active_connection_id_limit = 1U; }));
     CHECK(changed([](QuicTransportParameters& c) { c.initial_max_streams_uni = kQuicMaxStreams + 1U; }));

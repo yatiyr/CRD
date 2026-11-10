@@ -132,6 +132,14 @@ inline constexpr u64 kQuicTpMaxRecordSize = 0x571C59429CD0845ULL;
 inline constexpr u64 kQuicTpResetStreamAt = 0x001DULL;
 // quic.reliable-reset: QUIC Frame Types, reset_stream_at
 inline constexpr u64 kQuicFrameResetStreamAt = 0x0024ULL;
+// quic.receive-timestamps: QUIC Transport Parameters, max_receive_timestamps_per_ack
+inline constexpr u64 kQuicTpMaxReceiveTimestampsPerAck = 0x4AC07ULL;
+// quic.receive-timestamps: QUIC Transport Parameters, receive_timestamps_exponent
+inline constexpr u64 kQuicTpReceiveTimestampsExponent = 0x4AC26ULL;
+// quic.receive-timestamps: QUIC Frame Types, ack_receive_timestamps
+inline constexpr u64 kQuicFrameAckReceiveTimestamps = 0x3178307ULL;
+// quic.receive-timestamps: QUIC Frame Types, ack_receive_timestamps_ecn
+inline constexpr u64 kQuicFrameAckReceiveTimestampsEcn = 0x3178308ULL;
 } // namespace iana
 
 } // namespace crd::net

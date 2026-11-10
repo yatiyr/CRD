@@ -48,12 +48,14 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
     return (tag == 0U) ? 1U : tag;
 }
 
-[[nodiscard]] CongestionPacket congestion_packet(QuicSpace space, const QuicSentPacket& packet) noexcept
+[[nodiscard]] CongestionPacket congestion_packet(QuicSpace space, const QuicSentPacket& packet,
+                                                 u64 received_ns = kNeverNs) noexcept
 {
     CongestionPacket out;
     out.bytes = packet.bytes;
     out.number = packet.number;
     out.sent_ns = packet.sent_ns;
+    out.received_ns = received_ns;
     out.space = space;
     out.delivery = packet.delivery;
     return out;
@@ -127,8 +129,10 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
            p.initial_max_data == 0U && p.initial_max_stream_data_bidi_local == 0U &&
            p.initial_max_stream_data_bidi_remote == 0U && p.initial_max_stream_data_uni == 0U &&
            p.initial_max_streams_bidi == 0U && p.initial_max_streams_uni == 0U && p.max_datagram_frame_size == 0U &&
-           !p.has_stateless_reset_token && QuicStreamSet::limits_valid(config.streams) &&
-           QuicDatagrams::limits_valid(config.datagrams) && p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
+           p.max_receive_timestamps_per_ack <= kQuicMaxReceiveTimestamps &&
+           p.receive_timestamps_exponent <= kQuicMaxReceiveTimestampsExponent && !p.has_stateless_reset_token &&
+           QuicStreamSet::limits_valid(config.streams) && QuicDatagrams::limits_valid(config.datagrams) &&
+           p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
            p.active_connection_id_limit <= kQuicMaxPeerConnectionIds && config.sent_packets != 0U &&
            config.sent_packets <= kMaxSentPackets && config.sent_frames != 0U &&
            config.sent_frames <= kMaxSentPackets && config.crypto_bytes % kQuicStreamChunk == 0U &&
@@ -229,7 +233,9 @@ void QuicConnection::Events::on_acked(QuicSpace space, const QuicSentPacket& pac
     {
         m_connection.m_delivery.on_acked(packet.delivery, packet.bytes, packet.sent_ns,
                                          delivery_order(space, packet.number), m_connection.m_event_ns);
-        m_connection.m_congestion->on_acked(congestion_packet(space, packet), m_connection.m_event_ns);
+        const u64 received_ns =
+            (space == QuicSpace::Application) ? m_connection.m_peer_times.find(packet.number) : kNeverNs;
+        m_connection.m_congestion->on_acked(congestion_packet(space, packet, received_ns), m_connection.m_event_ns);
     }
 }
 
@@ -1114,9 +1120,29 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
         }
         case QuicFrameKind::Ack:
         {
+            if (frame.ack.timestamps)
+            {
+                // draft-ietf-quic-receive-ts-03: never asked for, the frame is of no known type (as RFC 9000 section
+                // 12.4 reads an unnegotiated extension's frame); outside 1-RTT packets or past the maximum asked
+                // for, it breaks the draft's sections 4 and 6.
+                if (m_local.max_receive_timestamps_per_ack == 0U)
+                {
+                    fail(QuicTransportError::FrameEncodingError, 0U, now_ns);
+                    return false;
+                }
+                if (space != QuicSpace::Application ||
+                    frame.ack.timestamp_count > m_local.max_receive_timestamps_per_ack)
+                {
+                    fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
+                    return false;
+                }
+                m_counters.receive_timestamps +=
+                    m_peer_times.read(frame.ack, m_local.receive_timestamps_exponent, *m_recovery, now_ns);
+            }
             m_event_ns = now_ns;
             m_delivery.on_ack_begin();
             const QuicAckOutcome outcome = m_recovery->on_ack(space, frame.ack, now_ns, m_events);
+            m_peer_times.clear();
             if (outcome.error == QuicRecoveryError::AckOfUnsent)
             {
                 fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
@@ -1385,6 +1411,10 @@ bool QuicConnection::read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_n
     m_peer_known = true;
     apply_peer_limits(m_peer);
     m_recovery->set_peer_parameters(m_peer.max_ack_delay * kNsPerMs, m_peer.ack_delay_exponent, now_ns);
+    // Timestamps are reported only by a side that asks for them too: the draft is behind its NET-STD flag.
+    m_recovery->set_receive_timestamps(
+        (m_local.max_receive_timestamps_per_ack == 0U) ? 0U : m_peer.max_receive_timestamps_per_ack,
+        m_peer.receive_timestamps_exponent);
     m_peer_greases = m_peer.grease_quic_bit;
     const u64 local_idle = m_local.max_idle_timeout;
     const u64 peer_idle = m_peer.max_idle_timeout;

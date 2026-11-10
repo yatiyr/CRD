@@ -66,6 +66,71 @@ constexpr u64 kNanosPerMicro = 1000U;
 }
 } // namespace
 
+// ---- QuicReceiveTimestampLog ----
+
+void QuicReceiveTimestampLog::configure(u64 per_ack, u64 exponent) noexcept
+{
+    m_per_ack = static_cast<usize>(min_u64(per_ack, kQuicMaxReceiveTimestamps));
+    m_exponent = min_u64(exponent, kQuicMaxReceiveTimestampsExponent);
+    m_count = (m_per_ack == 0U) ? 0U : m_count;
+}
+
+void QuicReceiveTimestampLog::record(u64 number, u64 received_ns) noexcept
+{
+    if (m_per_ack == 0U)
+    {
+        return;
+    }
+    if (m_basis_ns == kNeverNs)
+    {
+        m_basis_ns = (received_ns == 0U) ? 0U : received_ns - 1U; // below every time reported (section 6.1)
+    }
+    m_entries[m_next] = Entry{number, received_ns};
+    m_next = (m_next + 1U == kQuicMaxReceiveTimestamps) ? 0U : m_next + 1U;
+    m_count += (m_count < kQuicMaxReceiveTimestamps) ? 1U : 0U;
+}
+
+usize QuicReceiveTimestampLog::take(cont::ConstSpan<QuicAckRange> ranges, cont::Span<QuicReceiveTimestamp> out) noexcept
+{
+    // The records newest first; each is inserted by its time, the later first (section 4.1: times descend), so out
+    // holds the latest received times however the packets were processed.
+    const usize cap = (m_per_ack < out.size()) ? m_per_ack : out.size();
+    usize kept = 0U;
+    usize at = m_next;
+    for (usize left = m_count; left > 0U; --left)
+    {
+        at = (at == 0U) ? kQuicMaxReceiveTimestamps - 1U : at - 1U;
+        const Entry& entry = m_entries[at];
+        bool acknowledged = false;
+        for (const QuicAckRange& range : ranges)
+        {
+            acknowledged = acknowledged || (entry.number >= range.smallest && entry.number <= range.largest);
+        }
+        if (!acknowledged || entry.received_ns <= m_basis_ns)
+        {
+            continue;
+        }
+        const u64 time = ((entry.received_ns - m_basis_ns) / kNanosPerMicro) >> m_exponent;
+        usize slot = kept;
+        while (slot > 0U && out[slot - 1U].time < time)
+        {
+            --slot;
+        }
+        if (slot >= cap)
+        {
+            continue; // no later than every time kept, and they fill the frame
+        }
+        kept += (kept < cap) ? 1U : 0U;
+        for (usize move = kept - 1U; move > slot; --move)
+        {
+            out[move] = out[move - 1U];
+        }
+        out[slot] = QuicReceiveTimestamp{entry.number, time};
+    }
+    m_count = 0U;
+    return kept;
+}
+
 // ---- QuicAckTracker ----
 
 void QuicAckTracker::reset(QuicSpace space) noexcept
@@ -196,7 +261,7 @@ bool QuicAckTracker::on_received(u64 number, bool ack_eliciting, Ecn ecn, u64 re
     return true;
 }
 
-QuicAckWrite QuicAckTracker::write(cont::Span<u8> out, u64 now_ns, u64 exponent) noexcept
+QuicAckWrite QuicAckTracker::write(cont::Span<u8> out, u64 now_ns, u64 exponent, QuicReceiveTimestampLog* log) noexcept
 {
     const u64 delay_us = (now_ns > m_largest_ns) ? (now_ns - m_largest_ns) / kNanosPerMicro : 0U;
     const u64 delay    = (exponent >= 64U) ? 0U : (delay_us >> exponent);
@@ -204,10 +269,28 @@ QuicAckWrite QuicAckTracker::write(cont::Span<u8> out, u64 now_ns, u64 exponent)
     for (usize count = m_count; count > 0U; --count)
     {
         const cont::ConstSpan<QuicAckRange> ranges(m_ranges, count);
-        const usize                         bytes = quic_ack_bytes(ranges, delay, ecn);
+        usize bytes = quic_ack_bytes(ranges, delay, ecn);
         if (bytes != 0U && bytes <= out.size())
         {
-            if (write_quic_ack(ranges, delay, ecn, out) != bytes)
+            // The ranges first; the timestamps take the room they leave, the oldest given up first.
+            QuicReceiveTimestamp stamps[kQuicMaxReceiveTimestamps];
+            usize reported = 0U;
+            if (log != nullptr && log->enabled())
+            {
+                reported = log->take(ranges, cont::Span<QuicReceiveTimestamp>(stamps, kQuicMaxReceiveTimestamps));
+            }
+            for (; reported > 0U; --reported)
+            {
+                const usize with =
+                    quic_ack_bytes(ranges, delay, ecn, cont::ConstSpan<QuicReceiveTimestamp>(stamps, reported));
+                if (with != 0U && with <= out.size())
+                {
+                    bytes = with;
+                    break;
+                }
+            }
+            if (write_quic_ack(ranges, delay, ecn, out, cont::ConstSpan<QuicReceiveTimestamp>(stamps, reported)) !=
+                bytes)
             {
                 return {};
             }
@@ -299,7 +382,17 @@ QuicSentEntry& QuicRecovery::entry(Space& space, usize index) noexcept
     return space.entries[at];
 }
 
-usize QuicRecovery::lower_bound(Space& space, u64 number) noexcept
+const QuicSentEntry& QuicRecovery::entry(const Space& space, usize index) noexcept
+{
+    usize at = space.head + index;
+    if (at >= space.entries.size())
+    {
+        at -= space.entries.size();
+    }
+    return space.entries[at];
+}
+
+usize QuicRecovery::lower_bound(const Space& space, u64 number) noexcept
 {
     usize low  = 0U;
     usize high = space.count;
@@ -624,8 +717,11 @@ QuicAckWrite QuicRecovery::write_ack(QuicSpace id, cont::Span<u8> out, u64 now_n
     {
         return {};
     }
-    const u64 exponent = (id == QuicSpace::Application) ? m_local_ack_delay_exponent : kQuicDefaultAckDelayExponent;
-    return space.received.write(out, now_ns, exponent);
+    if (id != QuicSpace::Application)
+    {
+        return space.received.write(out, now_ns, kQuicDefaultAckDelayExponent);
+    }
+    return space.received.write(out, now_ns, m_local_ack_delay_exponent, &m_receive_log);
 }
 
 bool QuicRecovery::on_received(QuicSpace id, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns) noexcept
@@ -636,7 +732,15 @@ bool QuicRecovery::on_received(QuicSpace id, u64 number, bool ack_eliciting, Ecn
         return false;
     }
     const u64 max_delay = (id == QuicSpace::Application) ? m_local_max_ack_delay_ns : 0U;
-    return space.received.on_received(number, ack_eliciting, ecn, received_ns, max_delay);
+    if (!space.received.on_received(number, ack_eliciting, ecn, received_ns, max_delay))
+    {
+        return false;
+    }
+    if (id == QuicSpace::Application)
+    {
+        m_receive_log.record(number, received_ns);
+    }
+    return true;
 }
 
 QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events) noexcept
@@ -950,15 +1054,26 @@ const QuicSentPacket* QuicRecovery::unacknowledged(QuicSpace space, u32 tag) con
     const Space& held = m_spaces[quic_space_index(space)];
     for (usize index = held.count; tag != 0U && index > 0U; --index)
     {
-        usize at = held.head + index - 1U;
-        at -= (at >= held.entries.size()) ? held.entries.size() : 0U;
-        const QuicSentEntry& slot = held.entries[at];
+        const QuicSentEntry& slot = entry(held, index - 1U);
         if ((slot.state == kOutstanding || lost(slot.state)) && slot.packet.tag == tag)
         {
             return &slot.packet;
         }
     }
     return nullptr;
+}
+
+u64 QuicRecovery::unacknowledged_sent_ns(QuicSpace space, u64 number) const noexcept
+{
+    const Space& held = m_spaces[quic_space_index(space)];
+    const usize at = lower_bound(held, number);
+    if (at == held.count)
+    {
+        return kNeverNs;
+    }
+    const QuicSentEntry& slot = entry(held, at);
+    return (slot.packet.number == number && (slot.state == kOutstanding || lost(slot.state))) ? slot.packet.sent_ns
+                                                                                              : kNeverNs;
 }
 
 u64 QuicRecovery::ack_deadline_ns(QuicSpace space) const noexcept
@@ -970,6 +1085,78 @@ u64 QuicRecovery::ack_deadline_ns(QuicSpace space) const noexcept
 const QuicAckTracker& QuicRecovery::received(QuicSpace space) const noexcept
 {
     return m_spaces[quic_space_index(space)].received;
+}
+
+// ---- QuicPeerReceiveTimes ----
+
+usize QuicPeerReceiveTimes::read(const QuicAck& ack, u64 exponent, const QuicRecovery& recovery, u64 now_ns) noexcept
+{
+    m_count = 0U;
+    // A time in nanoseconds stays below 2^62, so a one-way delay (received less sent) fits a signed difference.
+    const u64 unit = kNanosPerMicro << min_u64(exponent, kQuicMaxReceiveTimestampsExponent);
+    const u64 max_units = (u64{1} << 62U) / unit;
+    i64 least = 0;
+    i64 most = 0;
+    u64 oldest_ns = now_ns;
+    QuicAckTimestamps walk(ack);
+    QuicReceiveTimestamp stamp;
+    while (m_count < kQuicMaxReceiveTimestamps && walk.next(stamp))
+    {
+        const u64 sent_ns = recovery.unacknowledged_sent_ns(QuicSpace::Application, stamp.number);
+        if (sent_ns == kNeverNs || sent_ns > now_ns)
+        {
+            continue; // acknowledged before, never sent or no longer held: nothing to time
+        }
+        if (stamp.time > max_units)
+        {
+            m_count = 0U;
+            return 0U;
+        }
+        const u64 received_ns = stamp.time * unit;
+        usize at = m_count;
+        while (at > 0U && m_entries[at - 1U].number > stamp.number)
+        {
+            --at;
+        }
+        if (at > 0U && m_entries[at - 1U].number == stamp.number)
+        {
+            continue; // reported twice: the first report stands
+        }
+        for (usize move = m_count; move > at; --move)
+        {
+            m_entries[move] = m_entries[move - 1U];
+        }
+        m_entries[at] = Entry{stamp.number, received_ns};
+        const i64 one_way = static_cast<i64>(received_ns) - static_cast<i64>(sent_ns);
+        least = (m_count == 0U || one_way < least) ? one_way : least;
+        most = (m_count == 0U || one_way > most) ? one_way : most;
+        oldest_ns = min_u64(oldest_ns, sent_ns);
+        ++m_count;
+    }
+    if (m_count != 0U && static_cast<u64>(most - least) > now_ns - oldest_ns)
+    {
+        m_count = 0U; // implausible (section 9)
+    }
+    return m_count;
+}
+
+u64 QuicPeerReceiveTimes::find(u64 number) const noexcept
+{
+    usize low = 0U;
+    usize high = m_count;
+    while (low < high)
+    {
+        const usize mid = low + ((high - low) / 2U);
+        if (m_entries[mid].number < number)
+        {
+            low = mid + 1U;
+        }
+        else
+        {
+            high = mid;
+        }
+    }
+    return (low < m_count && m_entries[low].number == number) ? m_entries[low].received_ns : kNeverNs;
 }
 
 } // namespace crd::net

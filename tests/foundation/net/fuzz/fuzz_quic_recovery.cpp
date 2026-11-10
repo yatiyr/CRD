@@ -2,8 +2,9 @@
 // docs/design/network-foundation.md#quic-recovery) under the bounded fuzz harness (REPO.DEV.9;
 // docs/design/test-instruments.md).
 //
-// Input: byte 0 picks the side (bit 0: server); then operations of two bytes, an operation and its parameter, on one
-// connection's recovery with small storage: sends with skipped numbers, ACK frames of up to three ranges (some
+// Input: byte 0 picks the side (bit 0: server) and receive timestamps (bit 1: reported, bits 2 to 4 how many an ACK
+// frame carries less one, bits 5 to 7 their exponent); then operations of two bytes, an operation and its parameter, on
+// one connection's recovery with small storage: sends with skipped numbers, ACK frames of up to three ranges (some
 // reaching numbers never sent), received packets, ACK frames written and carried, time, timeouts, key discards and
 // the handshake's milestones.
 //
@@ -20,7 +21,11 @@
 // the ranges hold it; a written ACK frame reads back as the largest ranges. A loss or probe timeout fires only when
 // due, and the timer is armed while ack-eliciting packets are outstanding in a space it may serve. A probe or
 // anti-deadlock timeout declares nothing lost but, in a space whose storage could not record a packet, its oldest
-// outstanding packets, in order; after it the space can record its probes.
+// outstanding packets, in order; after it the space can record its probes. Receive timestamps (draft-ietf-quic-
+// receive-ts-03): a written Application ACK frame reports at most the asked-for count of packets it acknowledges,
+// each received, with its arrival time from the first arrival less a nanosecond in the asked-for unit, the times never
+// rising; the sender's reading of a report times only packets outstanding or lost, and only when their one-way
+// delays spread no wider than the time since the oldest of them was sent.
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_recovery.hpp>
 
@@ -72,6 +77,7 @@ struct ModelSpace
     u64   largest_acked = kQuicNoPacket;
     u64   carry = kQuicNoPacket; // an ACK frame written for the next packet to carry
     bool  received[kReceivedNumbers] = {};
+    u64 received_ns[kReceivedNumbers] = {};
     bool  discarded = false;
 
     Sent* find(u64 number)
@@ -118,6 +124,9 @@ struct World
     Log           log;
     QuicSide      side;
     u64           now = 0U;
+    u64 per_ack = 0U; // receive timestamps an ACK frame reports (0: none)
+    u64 exponent = 0U;
+    u64 basis_ns = kNeverNs;
     bool          confirmed = false;
     bool          blocked = false;
 
@@ -272,6 +281,41 @@ void op_send(World& w, QuicSpace id, u8 p)
     }
 }
 
+// The sender's reading of a report: only packets outstanding or lost get a time, the received one, and their one-way
+// delays spread no wider than the time since the oldest of them was sent.
+void check_peer_times(World& w, ModelSpace& space, const QuicAck& ack)
+{
+    static QuicPeerReceiveTimes times;
+    const usize given = times.read(ack, w.exponent, w.recovery, w.now);
+    CRD_FUZZ_REQUIRE(given <= kQuicMaxReceiveTimestamps);
+    const u64 unit = 1000U << w.exponent;
+    usize found = 0U;
+    crd::i64 least = 0;
+    crd::i64 most = 0;
+    u64 oldest = w.now;
+    QuicAckTimestamps walk(ack);
+    QuicReceiveTimestamp stamp;
+    while (walk.next(stamp))
+    {
+        const u64 received = times.find(stamp.number);
+        if (received == kNeverNs)
+        {
+            continue;
+        }
+        const Sent* const sent = space.find(stamp.number);
+        CRD_FUZZ_REQUIRE(sent != nullptr && (sent->state == kOut || sent->state == kLost));
+        CRD_FUZZ_REQUIRE(received == stamp.time * unit);
+        const crd::i64 one_way = static_cast<crd::i64>(received) - static_cast<crd::i64>(sent->sent_ns);
+        least = (found == 0U || one_way < least) ? one_way : least;
+        most = (found == 0U || one_way > most) ? one_way : most;
+        oldest = (sent->sent_ns < oldest) ? sent->sent_ns : oldest;
+        ++found;
+    }
+    CRD_FUZZ_REQUIRE(found == given);
+    CRD_FUZZ_REQUIRE(found == 0U || static_cast<u64>(most - least) <= w.now - oldest);
+    times.clear();
+}
+
 void op_ack(World& w, QuicSpace id, u8 p, const u8* more, usize more_bytes)
 {
     ModelSpace& space = w.spaces[static_cast<usize>(id)];
@@ -296,13 +340,27 @@ void op_ack(World& w, QuicSpace id, u8 p, const u8* more, usize more_bytes)
     {
         return;
     }
-    u8          bytes[64];
-    const usize written = write_quic_ack(ConstSpan<QuicAckRange>(ranges, count), p >> 2U, nullptr,
-                                         Span<u8>(bytes, sizeof(bytes)));
+    // With timestamps asked for, the Application space's frames time each range's largest packet, a millisecond
+    // apart less the parameter's low bits in microseconds.
+    QuicReceiveTimestamp stamps[3];
+    const usize timed = (id == QuicSpace::Application && w.per_ack != 0U) ? count : 0U;
+    for (usize r = 0U; r < timed; ++r)
+    {
+        stamps[r] = QuicReceiveTimestamp{ranges[r].largest, (3U - r) * (1000U - (p & 0x3FU))};
+    }
+    u8 bytes[96];
+    const usize written =
+        write_quic_ack(ConstSpan<QuicAckRange>(ranges, count), p >> 2U, nullptr, Span<u8>(bytes, sizeof(bytes)),
+                       ConstSpan<QuicReceiveTimestamp>(stamps, timed));
     CRD_FUZZ_REQUIRE(written != 0U);
     WireReader in(ConstSpan<u8>(bytes, written));
     QuicFrame  frame;
     CRD_FUZZ_REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);
+    CRD_FUZZ_REQUIRE(frame.ack.timestamps == (timed != 0U));
+    if (timed != 0U)
+    {
+        check_peer_times(w, space, frame.ack);
+    }
 
     // Never sent: above the last, or a gap. The recovery must see the ones at or above its oldest outstanding packet.
     bool unsent = false;
@@ -432,6 +490,11 @@ void op_receive(World& w, QuicSpace id, u8 p, u8 q)
     if (added)
     {
         space.received[number] = true;
+        space.received_ns[number] = w.now;
+        if (id == QuicSpace::Application && w.per_ack != 0U && w.basis_ns == kNeverNs)
+        {
+            w.basis_ns = (w.now == 0U) ? 0U : w.now - 1U;
+        }
     }
 }
 
@@ -466,6 +529,20 @@ void op_write(World& w, QuicSpace id, u8 p)
         CRD_FUZZ_REQUIRE(index < held_count && range.smallest == before[index].smallest &&
                          range.largest == before[index].largest);
         ++index;
+    }
+    CRD_FUZZ_REQUIRE(!frame.ack.timestamps || (id == QuicSpace::Application && w.per_ack != 0U));
+    CRD_FUZZ_REQUIRE(frame.ack.timestamp_count <= w.per_ack);
+    QuicAckTimestamps times(frame.ack);
+    QuicReceiveTimestamp stamp;
+    u64 previous = kNeverNs;
+    while (times.next(stamp))
+    {
+        CRD_FUZZ_REQUIRE(stamp.number < kReceivedNumbers && space.received[stamp.number]);
+        CRD_FUZZ_REQUIRE(ranges_hold(ConstSpan<QuicAckRange>(before, index), stamp.number));
+        const u64 arrived = space.received_ns[stamp.number];
+        CRD_FUZZ_REQUIRE(arrived > w.basis_ns && stamp.time == ((arrived - w.basis_ns) / 1000U) >> w.exponent);
+        CRD_FUZZ_REQUIRE(stamp.time <= previous);
+        previous = stamp.time;
     }
     if ((p & 0x80U) != 0U)
     {
@@ -570,6 +647,12 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     }
     held     = new (storage) World((data[0] & 1U) != 0U ? QuicSide::Server : QuicSide::Client);
     World& w = *held;
+    if ((data[0] & 2U) != 0U)
+    {
+        w.per_ack = 1U + ((data[0] >> 2U) & 7U);
+        w.exponent = (data[0] >> 5U) & 7U;
+        w.recovery.set_receive_timestamps(w.per_ack, w.exponent);
+    }
     for (usize at = 1U; at + 1U < size; at += 2U)
     {
         const u8        op = data[at];
@@ -634,6 +717,32 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     put(0x05U, 0xFFU);
     put(0x06U, 0x00U);
     sink.add("server-application", application, at);
+    // With receive timestamps (four an ACK frame, units of 2 us): a server receives eight Application packets, two
+    // out of order, writes an ACK frame reporting the four latest, sends four packets and reads a timed report.
+    u8 timed[2U + 2U * 40U] = {0x2FU};
+    at = 1U;
+    const auto put_timed = [&](u8 op, u8 p)
+    {
+        timed[at++] = op;
+        timed[at++] = p;
+    };
+    put_timed(0x07U, 0x00U);
+    const u8 arrivals[] = {0U, 1U, 2U, 3U, 4U, 6U, 5U, 7U};
+    for (const u8 i : arrivals)
+    {
+        // Packet 16 * i (the next operation byte, 0x04, ends the number and makes it ack-eliciting), then 90 us.
+        put_timed(0x12U, i);
+        put_timed(0x04U, 0x03U);
+    }
+    put_timed(0x13U, 0x7FU);
+    for (u8 i = 0U; i < 4U; ++i)
+    {
+        put_timed(0x10U, 0x04U);
+        put_timed(0x04U, 0x20U);
+    }
+    put_timed(0x11U, 0x01U);
+    put_timed(0x01U, 0x01U);
+    sink.add("server-application-timestamps", timed, at);
     // A confirmed server's Application storage filled with packets nothing acknowledges, then probe timeouts: each
     // gives up the oldest for its probes.
     u8 full[2U + 2U * 40U] = {0x01U};

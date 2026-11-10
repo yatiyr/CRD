@@ -26,6 +26,10 @@
 //               trip, capped at smoothed_rtt, both back to RFC 9002's after 16 loss detections with no spurious loss.
 //               Both are capped, so a peer timing its ACKs to fake reordering can at worst leave a loss to the time
 //               threshold (T09).
+//   timestamps  draft-ietf-quic-receive-ts-03 (NET-PATH, design S73): QuicReceiveTimestampLog keeps the Application
+//               space's receive times until an ACK frame reports them (ACK_RECEIVE_TIMESTAMPS, only packets the frame
+//               acknowledges, the latest first); QuicPeerReceiveTimes reads a peer's report for the packets a frame
+//               acknowledges, for the congestion controller's receive times.
 //   congestion  NET-PATH's controllers (congestion.hpp) take the per-packet events (QuicRecoveryEvents, spurious
 //               losses among them) and the outcomes' RTT samples and persistent congestion; the connection applies
 //               their window and pacing, so nothing here limits sending beyond the storage.
@@ -55,6 +59,8 @@ inline constexpr u64   kQuicInitialRttNs           = 333000000U;  // 333 ms, sec
 inline constexpr u64   kQuicPersistentCongestionThreshold = 3U;   // section 7.6.1
 inline constexpr u32   kQuicAckElicitingThreshold  = 2U;          // RFC 9000 section 13.2.2
 inline constexpr usize kQuicAckRanges              = 32U;         // the ranges one space remembers
+// The receive timestamps one ACK frame carries at most, either way: what a connection asks for and reports at most.
+inline constexpr usize kQuicMaxReceiveTimestamps = 32U;
 inline constexpr u64   kQuicNoPacket               = ~u64{0};
 
 // What an ACK frame the tracker wrote acknowledges: its bytes (0 for nothing written) and its largest packet number,
@@ -63,6 +69,39 @@ struct QuicAckWrite
 {
     usize bytes   = 0U;
     u64   largest = kQuicNoPacket;
+};
+
+// The receive times of the Application space's packets that no ACK frame reported yet, the latest
+// kQuicMaxReceiveTimestamps processed kept. The basis is the first recorded time less a nanosecond, constant for the
+// connection; a later time at or below it (a packet held for its keys) is never reported.
+class QuicReceiveTimestampLog
+{
+public:
+    // Reports at most `per_ack` timestamps an ACK frame (the peer's max_receive_timestamps_per_ack, kept to
+    // kQuicMaxReceiveTimestamps; 0 records nothing) in units of 2^`exponent` microseconds (the peer's
+    // receive_timestamps_exponent, at most kQuicMaxReceiveTimestampsExponent).
+    void configure(u64 per_ack, u64 exponent) noexcept;
+    [[nodiscard]] bool enabled() const noexcept { return m_per_ack != 0U; }
+    // Records packet `number`, received at `received_ns`, once.
+    void record(u64 number, u64 received_ns) noexcept;
+    // Fills `out` (kQuicMaxReceiveTimestamps entries) with the recorded packets that `ranges` acknowledge, the latest
+    // received first and at most per_ack of them, as write_quic_ack takes them, and forgets every record (draft
+    // section 4.2: reporting is best effort). Returns how many it filled.
+    [[nodiscard]] usize take(cont::ConstSpan<QuicAckRange> ranges, cont::Span<QuicReceiveTimestamp> out) noexcept;
+
+private:
+    struct Entry
+    {
+        u64 number = 0U;
+        u64 received_ns = 0U;
+    };
+
+    Entry m_entries[kQuicMaxReceiveTimestamps] = {};
+    usize m_next = 0U; // where the next record goes
+    usize m_count = 0U;
+    usize m_per_ack = 0U;
+    u64 m_exponent = 0U;
+    u64 m_basis_ns = kNeverNs;
 };
 
 // One space's received packet numbers and the ACK they owe.
@@ -83,8 +122,11 @@ public:
 
     // Writes the ACK frame for the recorded ranges at the start of `out`, as many of the largest ranges as fit, with
     // the delay since the largest arrived scaled down by `exponent` and the ECN counts once a marked packet arrived.
-    // Writing settles the owed ACK. Nothing is written when no range is recorded or not even one range fits.
-    [[nodiscard]] QuicAckWrite write(cont::Span<u8> out, u64 now_ns, u64 exponent) noexcept;
+    // With an enabled `log` holding times of packets those ranges acknowledge, it is an ACK_RECEIVE_TIMESTAMPS frame
+    // reporting as many of them, the latest first, as the room left by the ranges holds. Writing settles the owed
+    // ACK. Nothing is written when no range is recorded or not even one range fits.
+    [[nodiscard]] QuicAckWrite write(cont::Span<u8> out, u64 now_ns, u64 exponent,
+                                     QuicReceiveTimestampLog* log = nullptr) noexcept;
 
     // The peer acknowledged a packet that carried an ACK frame up to `largest`: the ranges at or below it are no
     // longer sent, except that the largest received number always stays (section 13.2.4).
@@ -254,6 +296,9 @@ public:
 
     // The peer's authenticated max_ack_delay and ack_delay_exponent (transport parameters).
     void set_peer_parameters(u64 max_ack_delay_ns, u64 ack_delay_exponent, u64 now_ns) noexcept;
+    // The Application space's ACK frames report receive timestamps (QuicReceiveTimestampLog::configure): at most
+    // `per_ack`, in units of 2^`exponent` microseconds; 0 reports none.
+    void set_receive_timestamps(u64 per_ack, u64 exponent) noexcept { m_receive_log.configure(per_ack, exponent); }
     // The handshake is confirmed (RFC 9001 section 4.1.2): max_ack_delay caps samples and the Application space's
     // probe timeout arms.
     void confirm_handshake(u64 now_ns) noexcept;
@@ -291,8 +336,8 @@ public:
 
     // ---- Receiving ----
 
-    // A packet of `space` opened and processed (QuicAckTracker::on_received); false for a duplicate or a discarded
-    // space.
+    // A packet of `space` opened and processed (QuicAckTracker::on_received, and the receive timestamp log for the
+    // Application space); false for a duplicate or a discarded space.
     bool on_received(QuicSpace space, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns) noexcept;
     // An ACK frame received in a packet of `space` (appendix A.7). An error changes nothing.
     [[nodiscard]] QuicAckOutcome on_ack(QuicSpace space, const QuicAck& ack, u64 now_ns,
@@ -329,6 +374,9 @@ public:
     // The newest packet of `space` sent with `tag` that no ACK frame acknowledged (lost ones included); null for none
     // and for a zero tag.
     [[nodiscard]] const QuicSentPacket* unacknowledged(QuicSpace space, u32 tag) const noexcept;
+    // When packet `number` of `space` was sent, while no ACK frame acknowledged it (lost ones included); kNeverNs for
+    // a packet acknowledged, never sent or no longer held.
+    [[nodiscard]] u64 unacknowledged_sent_ns(QuicSpace space, u64 number) const noexcept;
 
 private:
     struct Space
@@ -346,8 +394,9 @@ private:
         QuicAckTracker            received;
     };
 
-    [[nodiscard]] QuicSentEntry& entry(Space& space, usize index) noexcept;
-    [[nodiscard]] usize lower_bound(Space& space, u64 number) noexcept;
+    [[nodiscard]] static QuicSentEntry& entry(Space& space, usize index) noexcept;
+    [[nodiscard]] static const QuicSentEntry& entry(const Space& space, usize index) noexcept;
+    [[nodiscard]] static usize lower_bound(const Space& space, u64 number) noexcept;
     [[nodiscard]] bool acknowledges_unsent(Space& space, const QuicAck& ack) noexcept;
     void settle(Space& space, QuicSentEntry& slot) noexcept;
     // Every outstanding packet of `id` leaves bytes in flight as on_discarded, and the space holds none.
@@ -369,6 +418,7 @@ private:
     void arm(u64 now_ns) noexcept;
 
     Space            m_spaces[kQuicSpaces];
+    QuicReceiveTimestampLog m_receive_log;
     QuicRtt          m_rtt;
     crypto::QuicSide m_side;
     u64              m_local_max_ack_delay_ns;
@@ -386,6 +436,33 @@ private:
     bool             m_handshake_keys = false;
     bool             m_handshake_acked = false; // a client received an ACK in a Handshake packet
     bool             m_amplification_blocked = false;
+};
+
+// The peer's receive times for the packets one ACK_RECEIVE_TIMESTAMPS frame newly acknowledges, in nanoseconds on its
+// clock from its basis (only differences mean anything): CongestionPacket::received_ns for each.
+class QuicPeerReceiveTimes
+{
+public:
+    // Reads `ack`'s timestamps in units of 2^`exponent` microseconds (this side's receive_timestamps_exponent) for
+    // the packets of the Application space `recovery` holds unacknowledged, at most kQuicMaxReceiveTimestamps (a
+    // frame reporting more was refused), each packet's first report. The draft's plausibility check (section 9): no
+    // one-way delay is longer than the time from its packet's sending to this frame's arrival at `now_ns`, so a frame
+    // whose one-way delays (receive less send time, on two clocks) spread wider than the time since the oldest of
+    // them was sent, or whose time does not fit in nanoseconds, gives none. Returns how many packets it gave a time.
+    usize read(const QuicAck& ack, u64 exponent, const QuicRecovery& recovery, u64 now_ns) noexcept;
+    // Packet `number`'s receive time from the frame read last; kNeverNs when it gave none.
+    [[nodiscard]] u64 find(u64 number) const noexcept;
+    void clear() noexcept { m_count = 0U; }
+
+private:
+    struct Entry
+    {
+        u64 number = 0U;
+        u64 received_ns = 0U;
+    };
+
+    Entry m_entries[kQuicMaxReceiveTimestamps] = {}; // by packet number
+    usize m_count = 0U;
 };
 
 } // namespace crd::net

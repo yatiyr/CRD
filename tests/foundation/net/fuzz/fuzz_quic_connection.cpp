@@ -13,7 +13,9 @@
 //   2  frames in Initial packets anyone can seal (their keys come from the public Destination Connection ID): each
 //      [length][bytes] to a fresh server.
 //   3  frames from a raw peer of the raw UDP path: its hello, then each [length][bytes] sealed as one 1-RTT packet.
-// With bit 5 mode 0 runs the raw UDP path (S55): both ends opened from one secret, no handshake on the wire.
+// With bit 5 mode 0 runs the raw UDP path (S55): both ends opened from one secret, no handshake on the wire. With
+// bit 6 every connection asks for four receive timestamps an ACK frame (draft-ietf-quic-receive-ts-03), so the pair
+// reports them and a raw peer's ACK_RECEIVE_TIMESTAMPS frames are read.
 //
 // Oracles. Always: a server sends at most three times what it received before the address is proven; every client
 // datagram carrying an Initial has 1200 bytes; a server's datagrams keep to its path's size but for PMTU probes, which
@@ -257,6 +259,13 @@ void open_keyed(QuicConnection& end, u64 now)
     CRD_FUZZ_REQUIRE(end.open_keyed(start, now));
 }
 
+// The receive timestamps every connection of this input asks for (byte 0's bit 6).
+u64& receive_timestamps()
+{
+    static u64 asked = 0U;
+    return asked;
+}
+
 // With `switching` the client lists its version first and the server the other one; with `tickets` both ends run
 // the contexts that take 0-RTT, the client keeping and offering its tickets there; `keyed` is for the raw UDP path.
 QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnectionIds* ids, bool switching = false,
@@ -271,6 +280,7 @@ QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnecti
     }
     config.ids = ids;
     config.parameters.active_connection_id_limit = 4U;
+    config.parameters.max_receive_timestamps_per_ack = receive_timestamps();
     config.version = version;
     config.tls = (side == QuicSide::Client) ? &identity().client : &identity().server;
     if (keyed)
@@ -1162,6 +1172,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     const QuicVersion version = ((data[0] & 4U) != 0U) ? QuicVersion::V2 : QuicVersion::V1;
     const ConstSpan<u8> rest(data + 1U, size - 1U);
     const bool keyed = (data[0] & 32U) != 0U;
+    receive_timestamps() = ((data[0] & 64U) != 0U) ? 4U : 0U;
     switch (data[0] & 3U)
     {
         case 0U:
@@ -1185,6 +1196,12 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     // A script: deliver everything in order with a timer step between flights.
     const u8 clean[] = {0x00U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
     sink.add("script-clean", clean, sizeof(clean));
+    // The same with receive timestamps, and a raw client's ACK_RECEIVE_TIMESTAMPS of the server's first 1-RTT packet.
+    const u8 timed[] = {0x40U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
+    sink.add("script-receive-timestamps", timed, sizeof(timed));
+    const u8 timed_frame[] = {0x41U, 0x0CU, 0x83U, 0x17U, 0x83U, 0x07U, 0x00U,
+                              0x00U, 0x00U, 0x00U, 0x01U, 0x00U, 0x01U, 0x05U};
+    sink.add("frames-receive-timestamps", timed_frame, sizeof(timed_frame));
     // A Retry in place of the first flight: the client goes again to its ID with its token.
     const u8 retried[] = {0x00U, 0xFDU, 0x00U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U};
     sink.add("script-retry", retried, sizeof(retried));

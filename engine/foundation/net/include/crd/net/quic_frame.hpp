@@ -1,7 +1,8 @@
 #pragma once
 
 // crd-net -- QUIC frames (4.2a; contract: docs/design/network-foundation.md#quic-frames). Sources: RFC 9000 sections
-// 12.4, 19 and 20.1, RFC 9221 section 4 (DATAGRAM) and RFC 9368 section 10.2 (VERSION_NEGOTIATION_ERROR).
+// 12.4, 19 and 20.1, RFC 9221 section 4 (DATAGRAM), RFC 9368 section 10.2 (VERSION_NEGOTIATION_ERROR) and
+// draft-ietf-quic-receive-ts-03 section 4 (ACK_RECEIVE_TIMESTAMPS).
 //
 //   reading   read_quic_frame takes one frame from a decrypted payload and returns the transport error that closes the
 //             connection when it is malformed (FRAME_ENCODING_ERROR, or PROTOCOL_VIOLATION for a frame type in a
@@ -50,7 +51,7 @@ enum class QuicTransportError : u64
 // ---- Frame types ----
 
 // The kinds of frame this module reads and writes; a kind covers every wire type of its family (the eight STREAM
-// types, both ACK, MAX_STREAMS, STREAMS_BLOCKED, CONNECTION_CLOSE and DATAGRAM types).
+// types, both ACK and both ACK_RECEIVE_TIMESTAMPS, MAX_STREAMS, STREAMS_BLOCKED, CONNECTION_CLOSE and DATAGRAM types).
 enum class QuicFrameKind : u8
 {
     Padding,
@@ -110,8 +111,19 @@ struct QuicAckRange
     u64 largest  = 0U;
 };
 
+// One packet's receive time in an ACK_RECEIVE_TIMESTAMPS frame: `time` counts units of 2^receive_timestamps_exponent
+// microseconds (the exponent the frame's receiver advertised) since the reporting side's receive timestamp basis.
+struct QuicReceiveTimestamp
+{
+    u64 number = 0U;
+    u64 time = 0U;
+};
+
 // An ACK frame as read: its largest acknowledged, raw ACK Delay (scaled by the peer's ack_delay_exponent), its first
-// range and the encoded further ranges, which QuicAckRanges walks, and the ECN counts of type 0x03.
+// range and the encoded further ranges, which QuicAckRanges walks, and the ECN counts of type 0x03 (and 0x03178308).
+// An ACK_RECEIVE_TIMESTAMPS frame adds its Timestamp Ranges, which QuicAckTimestamps walks: read_quic_frame checked
+// that every range's packet numbers stay at or below the largest acknowledged and at or above 0, and that no time
+// falls below the basis (a Timestamp Delta larger than the time before it), so walking cannot underflow.
 struct QuicAck
 {
     u64                 largest     = 0U;
@@ -123,6 +135,10 @@ struct QuicAck
     u64                 ect0 = 0U;
     u64                 ect1 = 0U;
     u64                 ce   = 0U;
+    bool timestamps = false;
+    u64 timestamp_range_count = 0U;
+    u64 timestamp_count = 0U; // the Timestamp Delta Counts' sum
+    cont::ConstSpan<u8> timestamp_ranges;
 };
 
 // One frame. Which fields a kind uses:
@@ -189,6 +205,26 @@ private:
     bool             m_first    = true;
 };
 
+// Walks a read ACK_RECEIVE_TIMESTAMPS frame's timestamps in frame order: the latest received first, each range's
+// packet numbers descending.
+class QuicAckTimestamps
+{
+public:
+    explicit QuicAckTimestamps(const QuicAck& ack) noexcept;
+
+    // The next timestamp, false after the last.
+    [[nodiscard]] bool next(QuicReceiveTimestamp& out) noexcept;
+
+private:
+    cont::WireReader m_in;
+    u64 m_largest = 0U;
+    u64 m_ranges_left = 0U;
+    u64 m_left = 0U;   // timestamps still in the current range
+    u64 m_number = 0U; // the next one's packet number
+    u64 m_time = 0U;   // the time yielded last
+    bool m_first = true;
+};
+
 // The bytes write_quic_frame writes for `frame`; 0 for a frame it refuses (an Ack, a field above kQuicMaxVarint or
 // above its section 19 bound, a NEW_CONNECTION_ID without a 1- to 20-byte ID and a 16-byte token, path data not 8
 // bytes, an empty NEW_TOKEN token, a STREAM or CRYPTO frame whose end passes 2^62 - 1, an empty PADDING frame).
@@ -200,12 +236,15 @@ private:
 
 // The bytes of an ACK frame for `ranges` (largest first, each range's smallest at least two above the next range's
 // largest, at least one range), ACK Delay `delay` and, when `ecn` is given, type 0x03 with its counts; 0 for ranges
-// out of that order or a value above kQuicMaxVarint.
-[[nodiscard]] usize quic_ack_bytes(cont::ConstSpan<QuicAckRange> ranges, u64 delay,
-                                   const EcnCounts* ecn = nullptr) noexcept;
+// out of that order or a value above kQuicMaxVarint. With `timestamps` it is an ACK_RECEIVE_TIMESTAMPS frame
+// reporting them in their order, which must be the frame's: times not rising, each packet in `ranges` (the draft's
+// rule that a reported packet is acknowledged), a run of numbers each one below the last making one Timestamp
+// Range; 0 for timestamps out of that order.
+[[nodiscard]] usize quic_ack_bytes(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn = nullptr,
+                                   cont::ConstSpan<QuicReceiveTimestamp> timestamps = {}) noexcept;
 
-// Writes that ACK frame at the start of `out` and returns its bytes; 0, writing nothing, when refused or too large.
+// Writes that frame at the start of `out` and returns its bytes; 0, writing nothing, when refused or too large.
 [[nodiscard]] usize write_quic_ack(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn,
-                                   cont::Span<u8> out) noexcept;
+                                   cont::Span<u8> out, cont::ConstSpan<QuicReceiveTimestamp> timestamps = {}) noexcept;
 
 } // namespace crd::net

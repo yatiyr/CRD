@@ -191,7 +191,11 @@ struct QuicConnectionConfig
     crypto::TlsTicketStore* tickets = nullptr;
     // Where this side's further connection IDs come from (null: sequence 0 alone, and no stateless reset token).
     QuicConnectionIds* ids = nullptr;
-    // This side's parameters. The connection fills the connection IDs and a server's stateless_reset_token,
+    // This side's parameters. max_receive_timestamps_per_ack (at most kQuicMaxReceiveTimestamps) is the NET-STD flag
+    // of draft-ietf-quic-receive-ts-03: 0 (the default) neither asks for receive timestamps nor reports them; above 0
+    // the connection asks for that many per ACK frame in receive_timestamps_exponent's unit, takes them as its
+    // congestion controller's receive times, and reports its own when the peer asks too. The connection fills the
+    // connection IDs and a server's stateless_reset_token,
     // version_information, grease_quic_bit, the
     // stream and flow-control parameters (from `streams`) and max_datagram_frame_size (from `datagrams`), so those
     // stay 0 here; active_connection_id_limit is at most kQuicMaxPeerConnectionIds.
@@ -290,6 +294,7 @@ struct QuicConnectionCounters
     u64 packets_held = 0U;    // packets held until their keys came (RFC 9001 section 4.1.4)
     u64 ecn_signals = 0U;     // rises of the peer's CE counts taken as congestion (RFC 9002 section 7.1)
     u64 path_probes = 0U;     // PMTU probe datagrams sent
+    u64 receive_timestamps = 0U; // acknowledged packets the peer's ACK_RECEIVE_TIMESTAMPS frames gave a receive time
 };
 
 // (MSVC C4324 as for QuicPacketProtection, which it holds inline.)
@@ -619,6 +624,7 @@ private:
     Pacer m_pacer;
     u64 m_pace_release_ns = kNeverNs; // data waits for the pacer until then
     QuicEcnValidator m_ecn;
+    QuicPeerReceiveTimes m_peer_times; // the receive times of the ACK frame being processed
     QuicPathMtu m_pmtu;
     u32 m_path_bytes = kQuicPmtuFloor; // the size the controller and the datagrams last took
     Ecn m_marking = Ecn::NotEct;      // the codepoint of the datagram being written, then of the last one

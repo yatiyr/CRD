@@ -1292,9 +1292,10 @@ QuicPacketType type_of(QuicLevel level)
 
 // The raw peers' server: room for the thousand packets a skipped number takes to appear.
 QuicConnectionConfig server_config(const Identity& identity, crd::u32 sent_packets, const QuicDatagramLimits& datagrams,
-                                   QuicConnectionIds* ids, ConstSpan<u32> versions)
+                                   QuicConnectionIds* ids, ConstSpan<u32> versions, u64 receive_timestamps)
 {
     QuicConnectionConfig config = config_for(QuicSide::Server, identity, QuicVersion::V1, 2U);
+    config.parameters.max_receive_timestamps_per_ack = receive_timestamps;
     config.versions = versions;
     config.ids = ids;
     config.sent_packets = sent_packets;
@@ -1338,8 +1339,9 @@ class RawRun
 {
 public:
     explicit RawRun(const Identity& identity, crd::u32 sent_packets = 2048U, const QuicDatagramLimits& datagrams = {},
-                    QuicConnectionIds* ids = nullptr, ConstSpan<u32> versions = {})
-        : server(allocator, server_config(identity, sent_packets, datagrams, ids, versions)), m_identity(identity)
+                    QuicConnectionIds* ids = nullptr, ConstSpan<u32> versions = {}, u64 receive_timestamps = 0U)
+        : server(allocator, server_config(identity, sent_packets, datagrams, ids, versions, receive_timestamps)),
+          m_identity(identity)
     {
     }
 
@@ -1578,7 +1580,112 @@ u64 code(QuicTransportError error)
 {
     return static_cast<u64>(error);
 }
+
+// Sends an ACK_RECEIVE_TIMESTAMPS frame in a packet of `type` acknowledging what the server sent in its space (the
+// 1-RTT packets the raw client opened, every Handshake number up to the largest), timing the `nth` largest of them
+// (repeats allowed), the first `first` microseconds past the basis and each next `step` earlier.
+void send_timed_ack(RawRun& run, QuicPacketType type, std::initializer_list<usize> nth, u64 first, u64 step)
+{
+    u64 numbers[64];
+    usize known = 0U;
+    if (type == QuicPacketType::OneRtt)
+    {
+        for (usize number = sizeof(run.raw.seen); number-- > 0U && known < 64U;)
+        {
+            if (run.raw.seen[number])
+            {
+                numbers[known++] = number;
+            }
+        }
+    }
+    else
+    {
+        for (u64 number = run.raw.largest[static_cast<usize>(quic_space_of(type))] + 1U; number-- > 0U && known < 64U;)
+        {
+            numbers[known++] = number;
+        }
+    }
+    REQUIRE(known != 0U);
+    QuicAckRange ranges[64];
+    usize range_count = 0U;
+    for (usize index = 0U; index < known; ++index)
+    {
+        if (range_count > 0U && ranges[range_count - 1U].smallest == numbers[index] + 1U)
+        {
+            ranges[range_count - 1U].smallest = numbers[index];
+        }
+        else
+        {
+            ranges[range_count++] = QuicAckRange{numbers[index], numbers[index]};
+        }
+    }
+    QuicReceiveTimestamp stamps[8];
+    usize count = 0U;
+    for (const usize index : nth)
+    {
+        REQUIRE((count < 8U && index < known));
+        stamps[count] = QuicReceiveTimestamp{numbers[index], first - (count * step)};
+        ++count;
+    }
+    run.send(type,
+             [&](Span<u8> out)
+             {
+                 const usize bytes = write_quic_ack(ConstSpan<QuicAckRange>(ranges, range_count), 0U, nullptr, out,
+                                                    ConstSpan<QuicReceiveTimestamp>(stamps, count));
+                 REQUIRE(bytes != 0U);
+                 return bytes;
+             });
+}
 } // namespace
+
+TEST_CASE("QUIC connection: ACK_RECEIVE_TIMESTAMPS only where asked for, in 1-RTT packets and within the maximum",
+          "[net][net-path][quic-connection][receive-timestamps]")
+{
+    Identity identity;
+    // Never asked for: a frame of no known type.
+    {
+        RawRun run(identity);
+        run.handshake();
+        send_timed_ack(run, QuicPacketType::OneRtt, {0U}, 5000U, 0U);
+        REQUIRE(run.server.state() == QuicConnectionState::Closing);
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::FrameEncodingError));
+    }
+    // Asked for four: one timestamp is taken; five are past the maximum.
+    {
+        RawRun run(identity, 2048U, {}, nullptr, {}, 4U);
+        run.handshake();
+        CHECK(run.server.peer_parameters().max_receive_timestamps_per_ack == 0U);
+        run.server.ping();
+        run.drain();
+        send_timed_ack(run, QuicPacketType::OneRtt, {0U}, 5000U, 0U);
+        CHECK(run.server.state() == QuicConnectionState::Established);
+        CHECK(run.server.counters().receive_timestamps == 1U);
+        run.server.ping();
+        run.drain();
+        send_timed_ack(run, QuicPacketType::OneRtt, {0U, 0U, 0U, 0U, 0U}, 9000U, 1U);
+        REQUIRE(run.server.state() == QuicConnectionState::Closing);
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+    }
+    // One-way delays a second apart for packets sent at one time: implausible, none taken, nothing closed.
+    {
+        RawRun run(identity, 2048U, {}, nullptr, {}, 4U);
+        run.handshake();
+        run.server.ping();
+        run.drain();
+        run.server.ping();
+        run.drain();
+        send_timed_ack(run, QuicPacketType::OneRtt, {0U, 1U}, 2000000U, 1000000U);
+        CHECK(run.server.state() == QuicConnectionState::Established);
+        CHECK(run.server.counters().receive_timestamps == 0U);
+    }
+    // In a Handshake packet: the draft's frame belongs to 1-RTT packets.
+    {
+        RawRun run(identity, 2048U, {}, nullptr, {}, 4U);
+        run.handshake([&] { send_timed_ack(run, QuicPacketType::Handshake, {0U}, 5000U, 0U); });
+        REQUIRE(run.server.state() == QuicConnectionState::Closing);
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+    }
+}
 
 TEST_CASE("QUIC connection: frames this slice does not carry close with the error the RFCs name",
           "[net][4.2a][quic-connection]")

@@ -4,8 +4,11 @@
 // until confirmation, the client's anti-deadlock probe, the amplification-blocked server, key discards, persistent
 // congestion, acknowledgements of numbers never sent (RFC 9000 sections 13.1 and 21.4) and spurious losses raising the
 // thresholds (RFC 9002 section 6.1 by RFC 8985's mechanism) within their caps, and a Retry starting recovery over
-// (section 6.3) with the first flight's time as the initial estimate (section 6.2.2).
+// (section 6.3) with the first flight's time as the initial estimate (section 6.2.2). And receive timestamps
+// (draft-ietf-quic-receive-ts-03, #receive-timestamps): the log's latest times of acknowledged packets in a frame the
+// room allows, read back for the sender's packets on the peer's clock, and implausible reports giving none.
 
+#include <crd/containers/array.hpp>
 #include <crd/net/quic_recovery.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -1053,4 +1056,176 @@ TEST_CASE("quic recovery: a rejected 0-RTT leaves the Application space's packet
     f.send(QuicSpace::Application, 2U, 2U * kMs);
     CHECK(f.ack(QuicSpace::Initial, 0U, 0U, 3U * kMs).rtt_sampled);
     CHECK(f.events.of('a') == 1U);
+}
+
+// ---- Receive timestamps (draft-ietf-quic-receive-ts-03) ----
+
+TEST_CASE("quic recovery: the receive timestamp log reports the latest times of acknowledged packets, latest first",
+          "[net][quic][recovery][receive-timestamps]")
+{
+    const QuicAckRange ranges[] = {{5U, 6U}, {0U, 3U}};
+    const ConstSpan<QuicAckRange> acked(ranges, 2U);
+    QuicReceiveTimestamp out[kQuicMaxReceiveTimestamps];
+    const Span<QuicReceiveTimestamp> room(out, kQuicMaxReceiveTimestamps);
+    QuicReceiveTimestampLog log;
+    CHECK_FALSE(log.enabled());
+    log.record(0U, 10U * kMs);
+    CHECK(log.take(acked, room) == 0U); // not asked for: nothing recorded
+
+    // Packet 2 arrives after 3, packet 6 is processed last with the earliest time (held for its keys): at or below
+    // the basis, never reported. Four asked for: the four latest times, latest first.
+    log.configure(4U, 0U);
+    REQUIRE(log.enabled());
+    const u64 arrivals[][2] = {{0U, 10U}, {1U, 11U}, {3U, 12U}, {2U, 13U}, {5U, 14U}, {6U, 9U}};
+    for (const auto& arrival : arrivals)
+    {
+        log.record(arrival[0], arrival[1] * kMs);
+    }
+    REQUIRE(log.take(acked, room) == 4U);
+    const QuicReceiveTimestamp expected[] = {{5U, 4000U}, {2U, 3000U}, {3U, 2000U}, {1U, 1000U}};
+    for (usize index = 0U; index < 4U; ++index)
+    {
+        CHECK((out[index].number == expected[index].number && out[index].time == expected[index].time));
+    }
+    CHECK(log.take(acked, room) == 0U); // reported once: every record forgotten
+
+    // Units of 2^3 microseconds; a packet the frame does not acknowledge is left out.
+    log.configure(4U, 3U);
+    log.record(1U, (10U * kMs) + 80000U);
+    log.record(9U, 20U * kMs);
+    REQUIRE(log.take(acked, room) == 1U);
+    CHECK((out[0].number == 1U && out[0].time == 10U)); // 80 us past the basis' microsecond, in 8 us units
+
+    // The latest kQuicMaxReceiveTimestamps processed are kept.
+    log.configure(kQuicMaxReceiveTimestamps, 0U);
+    for (u64 number = 100U; number < 140U; ++number)
+    {
+        log.record(number, number * kMs);
+    }
+    const QuicAckRange all{100U, 139U};
+    REQUIRE(log.take(ConstSpan<QuicAckRange>(&all, 1U), room) == kQuicMaxReceiveTimestamps);
+    CHECK(out[0].number == 139U);
+    CHECK(out[kQuicMaxReceiveTimestamps - 1U].number == 108U);
+
+    // A peer asking for more is held to kQuicMaxReceiveTimestamps; asking for none stops the records.
+    log.configure(1000U, 63U);
+    log.record(140U, 141U * kMs);
+    log.configure(0U, 0U);
+    log.record(141U, 142U * kMs);
+    CHECK(log.take(ConstSpan<QuicAckRange>(&all, 1U), room) == 0U);
+}
+
+TEST_CASE("quic recovery: an ACK_RECEIVE_TIMESTAMPS frame carries receive times to the sender's packets",
+          "[net][quic][recovery][receive-timestamps]")
+{
+    // The receiver: packets 0 to 9 arrive a millisecond apart from 100 ms, 5 after 6; it reports in units of 4 us.
+    QuicAckTracker tracker;
+    tracker.reset(QuicSpace::Application);
+    QuicReceiveTimestampLog log;
+    log.configure(kQuicMaxReceiveTimestamps, 2U);
+    const u64 order[] = {0U, 1U, 2U, 3U, 4U, 6U, 5U, 7U, 8U, 9U};
+    for (usize index = 0U; index < 10U; ++index)
+    {
+        const u64 at = (100U + index) * kMs;
+        REQUIRE(tracker.on_received(order[index], true, Ecn::NotEct, at, kMaxAckDelay));
+        log.record(order[index], at);
+    }
+    u8 room[256];
+    const QuicAckWrite written = tracker.write(Span<u8>(room, sizeof(room)), 110U * kMs, 3U, &log);
+    REQUIRE(written.bytes != 0U);
+    WireReader in(ConstSpan<u8>(room, written.bytes));
+    QuicFrame frame;
+    REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);
+    REQUIRE(frame.ack.timestamps);
+    CHECK(frame.ack.timestamp_count == 10U);
+    CHECK(frame.ack.timestamp_range_count == 4U); // 9 to 7, 5, 6, then 4 to 0
+
+    // The sender sent them a millisecond apart from 60 ms: each gets its receive time on the peer's clock, so the
+    // differences are the arrival differences exactly.
+    Fixture f;
+    for (u64 number = 0U; number < 10U; ++number)
+    {
+        f.send(QuicSpace::Application, number, (60U + number) * kMs);
+    }
+    QuicPeerReceiveTimes times;
+    REQUIRE(times.read(frame.ack, 2U, f.recovery, 111U * kMs) == 10U);
+    for (usize index = 0U; index < 10U; ++index)
+    {
+        CHECK(times.find(order[index]) - times.find(0U) == index * kMs);
+    }
+    CHECK(times.find(10U) == kNeverNs);
+    REQUIRE(f.recovery.on_ack(QuicSpace::Application, frame.ack, 111U * kMs, f.events).error ==
+            QuicRecoveryError::None);
+    // Acknowledged now: a repeated report times nothing.
+    CHECK(times.read(frame.ack, 2U, f.recovery, 112U * kMs) == 0U);
+    CHECK(times.find(0U) == kNeverNs);
+
+    // Implausible: one-way delays spreading wider than the time since the oldest was sent (1 s against 50 ms), and a
+    // time past nanoseconds; and a packet never sent or reported twice times nothing.
+    for (u64 number = 10U; number < 13U; ++number)
+    {
+        f.send(QuicSpace::Application, number, 200U * kMs);
+    }
+    const QuicAckRange sent{0U, 12U};
+    const auto report = [&](std::initializer_list<QuicReceiveTimestamp> list, u64 exponent)
+    {
+        const crd::containers::Array<QuicReceiveTimestamp> stamps(list);
+        u8 bytes[128];
+        const usize size =
+            write_quic_ack(ConstSpan<QuicAckRange>(&sent, 1U), 0U, nullptr, Span<u8>(bytes, sizeof(bytes)),
+                           ConstSpan<QuicReceiveTimestamp>(stamps.data(), stamps.size()));
+        REQUIRE(size != 0U);
+        WireReader reader(ConstSpan<u8>(bytes, size));
+        QuicFrame read;
+        REQUIRE(read_quic_frame(reader, read) == QuicTransportError::NoError);
+        return times.read(read.ack, exponent, f.recovery, 250U * kMs);
+    };
+    CHECK(report({{12U, 1050000U}, {11U, 50000U}}, 0U) == 0U);
+    CHECK(report({{12U, 1040000U}, {11U, 1000000U}, {10U, 1000000U}}, 0U) == 3U);
+    CHECK(times.find(12U) - times.find(11U) == 40U * kMs);
+    CHECK(report({{12U, crd::net::kQuicMaxVarint}}, 20U) == 0U);
+    CHECK(report({{12U, 900U}, {12U, 800U}, {9U, 700U}}, 0U) == 1U);
+    CHECK(times.find(12U) == 900U * 1000U);
+}
+
+TEST_CASE("quic recovery: receive timestamps take the room the ranges leave, the oldest given up first",
+          "[net][quic][recovery][receive-timestamps]")
+{
+    QuicAckTracker tracker;
+    tracker.reset(QuicSpace::Application);
+    QuicReceiveTimestampLog log;
+    log.configure(kQuicMaxReceiveTimestamps, 0U);
+    const auto receive = [&](u64 from, u64 to)
+    {
+        for (u64 number = from; number < to; ++number)
+        {
+            REQUIRE(tracker.on_received(number, true, Ecn::NotEct, (1000U + number) * kMs, kMaxAckDelay));
+            log.record(number, (1000U + number) * kMs);
+        }
+    };
+    receive(0U, 8U);
+    const QuicAckRange whole{0U, 7U};
+    const usize plain = quic_ack_bytes(ConstSpan<QuicAckRange>(&whole, 1U), 0U);
+    // Room for the ranges alone: an ACK frame of type 0x02, and the times forgotten.
+    u8 room[256];
+    QuicAckWrite written = tracker.write(Span<u8>(room, plain), 1007U * kMs, 3U, &log);
+    REQUIRE(written.bytes == plain);
+    CHECK(room[0] == 0x02U);
+    // Room for three timestamps of eight: the three latest.
+    receive(8U, 16U);
+    const QuicAckRange next{0U, 15U};
+    const QuicReceiveTimestamp three[] = {{15U, 15000U}, {14U, 14000U}, {13U, 13000U}};
+    const usize fits =
+        quic_ack_bytes(ConstSpan<QuicAckRange>(&next, 1U), 0U, nullptr, ConstSpan<QuicReceiveTimestamp>(three, 3U));
+    REQUIRE(fits != 0U);
+    written = tracker.write(Span<u8>(room, fits), 1015U * kMs, 3U, &log);
+    REQUIRE(written.bytes == fits);
+    WireReader in(ConstSpan<u8>(room, written.bytes));
+    QuicFrame frame;
+    REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);
+    REQUIRE(frame.ack.timestamp_count == 3U);
+    QuicAckTimestamps walk(frame.ack);
+    QuicReceiveTimestamp stamp;
+    REQUIRE(walk.next(stamp));
+    CHECK(stamp.number == 15U);
 }

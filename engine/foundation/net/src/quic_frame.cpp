@@ -3,6 +3,8 @@
 #include <crd/net/quic_frame.hpp>
 #include <crd/net/register_ids.hpp>
 
+#include <algorithm>
+
 namespace crd::net
 {
 namespace
@@ -11,6 +13,8 @@ constexpr u64 kTypePadding            = 0x00U;
 constexpr u64 kTypePing               = 0x01U;
 constexpr u64 kTypeAck                = 0x02U;
 constexpr u64 kTypeAckEcn             = 0x03U;
+constexpr u64 kTypeAckTimes = iana::kQuicFrameAckReceiveTimestamps;
+constexpr u64 kTypeAckTimesEcn = iana::kQuicFrameAckReceiveTimestampsEcn;
 constexpr u64 kTypeResetStream        = 0x04U;
 constexpr u64 kTypeResetStreamAt      = iana::kQuicFrameResetStreamAt;
 constexpr u64 kTypeStopSending        = 0x05U;
@@ -105,6 +109,46 @@ QuicTransportError read_ack(cont::WireReader& in, bool ecn, QuicAck& ack) noexce
     {
         return QuicTransportError::FrameEncodingError;
     }
+    return QuicTransportError::NoError;
+}
+
+// ACK_RECEIVE_TIMESTAMPS's Receive Timestamps (draft-ietf-quic-receive-ts-03 section 4.1) after its ACK fields: a
+// range's packet numbers below 0 or above the largest acknowledged, and a time below the basis (the basis is less
+// than every time reported, section 6.1), are malformed.
+QuicTransportError read_timestamps(cont::WireReader& in, QuicAck& ack) noexcept
+{
+    ack.timestamps = true;
+    // A range takes at least two bytes and a timestamp one, so no count past what remains is walked.
+    if (!take_quic_varint(in, ack.timestamp_range_count) || ack.timestamp_range_count > in.rest().size() / 2U)
+    {
+        return QuicTransportError::FrameEncodingError;
+    }
+    const usize start = in.consumed();
+    const cont::ConstSpan<u8> rest = in.rest();
+    u64 time = 0U;
+    bool first = true;
+    for (u64 range = 0U; range < ack.timestamp_range_count; ++range)
+    {
+        u64 below = 0U;
+        u64 count = 0U;
+        if (!take_quic_varint(in, below) || !take_quic_varint(in, count) || below > ack.largest ||
+            count > in.rest().size() || (count != 0U && count - 1U > ack.largest - below))
+        {
+            return QuicTransportError::FrameEncodingError;
+        }
+        for (u64 index = 0U; index < count; ++index)
+        {
+            u64 delta = 0U;
+            if (!take_quic_varint(in, delta) || (!first && delta > time))
+            {
+                return QuicTransportError::FrameEncodingError;
+            }
+            time = first ? delta : time - delta;
+            first = false;
+        }
+        ack.timestamp_count += count;
+    }
+    ack.timestamp_ranges = rest.first(in.consumed() - start);
     return QuicTransportError::NoError;
 }
 
@@ -204,6 +248,13 @@ QuicTransportError read_body(cont::WireReader& in, u64 type, QuicFrame& frame) n
     case kTypeAckEcn:
         frame.kind = QuicFrameKind::Ack;
         return read_ack(in, type == kTypeAckEcn, frame.ack);
+    case kTypeAckTimes:
+    case kTypeAckTimesEcn:
+    {
+        frame.kind = QuicFrameKind::Ack;
+        const QuicTransportError error = read_ack(in, type == kTypeAckTimesEcn, frame.ack);
+        return (error != QuicTransportError::NoError) ? error : read_timestamps(in, frame.ack);
+    }
     case kTypeResetStream:
         frame.kind = QuicFrameKind::ResetStream;
         return (take_quic_varint(in, frame.stream_id) && take_quic_varint(in, frame.error_code) &&
@@ -500,6 +551,74 @@ bool ack_ranges_valid(cont::ConstSpan<QuicAckRange> ranges) noexcept
     }
     return true;
 }
+
+// Whether `number` lies in one of `ranges` (largest first).
+bool acknowledged(cont::ConstSpan<QuicAckRange> ranges, u64 number) noexcept
+{
+    return std::ranges::any_of(ranges, [number](const QuicAckRange& range)
+                               { return number >= range.smallest && number <= range.largest; });
+}
+
+// Whether `timestamps` are in an ACK_RECEIVE_TIMESTAMPS frame's order for `ranges`: times not rising, each packet
+// acknowledged by the frame.
+bool timestamps_valid(cont::ConstSpan<QuicAckRange> ranges, cont::ConstSpan<QuicReceiveTimestamp> timestamps) noexcept
+{
+    for (usize index = 0U; index < timestamps.size(); ++index)
+    {
+        const QuicReceiveTimestamp& stamp = timestamps[index];
+        if (stamp.time > kQuicMaxVarint || !acknowledged(ranges, stamp.number) ||
+            (index != 0U && stamp.time > timestamps[index - 1U].time))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The timestamps of the Timestamp Range starting at `first`: a run of packet numbers each one below the last.
+usize range_length(cont::ConstSpan<QuicReceiveTimestamp> timestamps, usize first) noexcept
+{
+    usize end = first + 1U;
+    while (end < timestamps.size() && timestamps[end - 1U].number != 0U &&
+           timestamps[end].number == timestamps[end - 1U].number - 1U)
+    {
+        ++end;
+    }
+    return end - first;
+}
+
+// The Receive Timestamps of valid `timestamps` below `largest`: their bytes added to `total`, and written to `out`
+// when it is given. Every value is a varint: numbers are at most `largest`, and times at most kQuicMaxVarint and not
+// rising.
+void emit_timestamps(u64 largest, cont::ConstSpan<QuicReceiveTimestamp> timestamps, usize& total,
+                     cont::WireWriter* out) noexcept
+{
+    const auto put = [&total, out](u64 value) noexcept
+    {
+        total += quic_varint_bytes(value);
+        if (out != nullptr)
+        {
+            put_quic_varint(*out, value);
+        }
+    };
+    u64 range_count = 0U;
+    for (usize index = 0U; index < timestamps.size(); index += range_length(timestamps, index))
+    {
+        ++range_count;
+    }
+    put(range_count);
+    for (usize index = 0U; index < timestamps.size();)
+    {
+        const usize length = range_length(timestamps, index);
+        put(largest - timestamps[index].number);
+        put(length);
+        for (usize at = index; at < index + length; ++at)
+        {
+            put((at == 0U) ? timestamps[at].time : timestamps[at - 1U].time - timestamps[at].time);
+        }
+        index += length;
+    }
+}
 } // namespace
 
 bool quic_frame_ack_eliciting(QuicFrameKind kind) noexcept
@@ -613,6 +732,43 @@ bool QuicAckRanges::next(QuicAckRange& out) noexcept
     return true;
 }
 
+QuicAckTimestamps::QuicAckTimestamps(const QuicAck& ack) noexcept
+    : m_in(ack.timestamp_ranges), m_largest(ack.largest), m_ranges_left(ack.timestamp_range_count)
+{
+}
+
+bool QuicAckTimestamps::next(QuicReceiveTimestamp& out) noexcept
+{
+    while (m_left == 0U)
+    {
+        u64 below = 0U;
+        if (m_ranges_left == 0U || !take_quic_varint(m_in, below) || !take_quic_varint(m_in, m_left))
+        {
+            m_ranges_left = 0U; // the last range, or not reached for a frame read_quic_frame accepted
+            m_left = 0U;
+            return false;
+        }
+        --m_ranges_left;
+        m_number = m_largest - below;
+    }
+    u64 delta = 0U;
+    if (!take_quic_varint(m_in, delta))
+    {
+        m_ranges_left = 0U;
+        m_left = 0U;
+        return false;
+    }
+    m_time = m_first ? delta : m_time - delta;
+    m_first = false;
+    out = QuicReceiveTimestamp{m_number, m_time};
+    --m_left;
+    if (m_left != 0U)
+    {
+        --m_number; // read_quic_frame checked the range reaches no number below 0
+    }
+    return true;
+}
+
 usize quic_frame_bytes(const QuicFrame& frame) noexcept
 {
     if (frame.kind == QuicFrameKind::Padding)
@@ -644,13 +800,14 @@ usize write_quic_frame(const QuicFrame& frame, cont::Span<u8> out) noexcept
     return bytes;
 }
 
-usize quic_ack_bytes(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn) noexcept
+usize quic_ack_bytes(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn,
+                     cont::ConstSpan<QuicReceiveTimestamp> timestamps) noexcept
 {
-    if (!ack_ranges_valid(ranges))
+    if (!ack_ranges_valid(ranges) || !timestamps_valid(ranges, timestamps))
     {
         return 0U;
     }
-    usize total = 1U;
+    usize total = timestamps.empty() ? 1U : quic_varint_bytes(kTypeAckTimes);
     if (!add_varint(total, ranges[0].largest) || !add_varint(total, delay) || !add_varint(total, ranges.size() - 1U) ||
         !add_varint(total, ranges[0].largest - ranges[0].smallest))
     {
@@ -667,18 +824,30 @@ usize quic_ack_bytes(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnC
     {
         return 0U;
     }
+    if (!timestamps.empty())
+    {
+        emit_timestamps(ranges[0].largest, timestamps, total, nullptr);
+    }
     return total;
 }
 
-usize write_quic_ack(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn, cont::Span<u8> out) noexcept
+usize write_quic_ack(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn, cont::Span<u8> out,
+                     cont::ConstSpan<QuicReceiveTimestamp> timestamps) noexcept
 {
-    const usize bytes = quic_ack_bytes(ranges, delay, ecn);
+    const usize bytes = quic_ack_bytes(ranges, delay, ecn, timestamps);
     if (bytes == 0U || bytes > out.size())
     {
         return 0U;
     }
     cont::WireWriter writer(out.first(bytes));
-    writer.put_u8(static_cast<u8>(ecn != nullptr ? kTypeAckEcn : kTypeAck));
+    if (timestamps.empty())
+    {
+        writer.put_u8(static_cast<u8>(ecn != nullptr ? kTypeAckEcn : kTypeAck));
+    }
+    else
+    {
+        put_quic_varint(writer, ecn != nullptr ? kTypeAckTimesEcn : kTypeAckTimes);
+    }
     put_quic_varint(writer, ranges[0].largest);
     put_quic_varint(writer, delay);
     put_quic_varint(writer, ranges.size() - 1U);
@@ -693,6 +862,11 @@ usize write_quic_ack(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnC
         put_quic_varint(writer, ecn->ect0);
         put_quic_varint(writer, ecn->ect1);
         put_quic_varint(writer, ecn->ce);
+    }
+    if (!timestamps.empty())
+    {
+        usize total = 0U;
+        emit_timestamps(ranges[0].largest, timestamps, total, &writer);
     }
     return bytes;
 }
