@@ -20,7 +20,7 @@ using crd::u32;
 using crd::u64;
 using crd::usize;
 using namespace crd::net;
-using crd::net::testing::Path;
+using crd::net::testing::Flow;
 
 constexpr u64 kMs = 1000000U;
 constexpr u64 kMss = 1200U;
@@ -432,7 +432,7 @@ FlowResult run_step(CongestionAlgorithm algorithm, u64 rtt_ms, u64 step, u64 war
     CongestionPolicy policy;
     policy.algorithm = algorithm;
     const u64 bdp = kStepRate / 1000U * rtt_ms;
-    Path path(policy, kStepRate, rtt_ms * kMs / 2U, 2U * bdp);
+    Flow path(policy, kStepRate, rtt_ms * kMs / 2U, 2U * bdp);
     path.set_ce_queue(step);
     path.run(warm_ms * kMs);
     const u64 start = path.now;
@@ -468,8 +468,8 @@ Pair run_pair(CongestionAlgorithm a, u64 a_rtt_ms, CongestionAlgorithm b, u64 b_
     policy_a.algorithm = a;
     CongestionPolicy policy_b;
     policy_b.algorithm = b;
-    Path flow_a(policy_a, link, a_rtt_ms * kMs / 2U, 7U);
-    Path flow_b(policy_b, link, b_rtt_ms * kMs / 2U, 11U);
+    Flow flow_a(policy_a, link, a_rtt_ms * kMs / 2U, 7U);
+    Flow flow_b(policy_b, link, b_rtt_ms * kMs / 2U, 11U);
     run_flows({&flow_a, &flow_b}, warm_ms * kMs, [] {});
     const u64 start = flow_a.now;
     const u64 acked_a = flow_a.acked_bytes;
@@ -561,10 +561,13 @@ TEST_CASE("Prague: two flows through an L4S queue share it, and RTT independence
 {
     static constexpr u64 kStep = kStepRate / 1000U;
     static constexpr u64 kBuffer = 2U * kStepRate / 50U; // two BDPs at 20 ms
-    const auto share = [](const Pair& pair) { return pair.a.goodput + pair.b.goodput; };
+    const auto share = [](const Pair& pair)
+    {
+        return pair.a.goodput + pair.b.goodput;
+    };
 
-    const Pair same = run_pair(CongestionAlgorithm::Prague, 20U, CongestionAlgorithm::Prague, 20U, kBuffer, kStep,
-                               4000U, 8000U);
+    const Pair same =
+        run_pair(CongestionAlgorithm::Prague, 20U, CongestionAlgorithm::Prague, 20U, kBuffer, kStep, 4000U, 8000U);
     INFO("same RTT: " << same.a.goodput << " and " << same.b.goodput << " B/s, queue " << same.max_queue);
     CHECK(share(same) >= kStepRate * 97U / 100U);
     CHECK(same.a.goodput * 100U >= same.b.goodput * 95U);
@@ -575,10 +578,10 @@ TEST_CASE("Prague: two flows through an L4S queue share it, and RTT independence
     // Past 500 rounds of the 20 ms flow, both grow and reduce on the 25 ms virtual round trip. Through a step the
     // shorter flow's marks lag less, so it still takes more, but under a third of NewReno's ratio; through a ramp (CE
     // with a probability rising across 2 ms, as a DualQ's L4S queue may mark) the two come within 1.6 to 1.
-    const Pair step = run_pair(CongestionAlgorithm::Prague, 5U, CongestionAlgorithm::Prague, 20U, kBuffer, kStep,
-                               15000U, 15000U);
-    const Pair reno = run_pair(CongestionAlgorithm::NewReno, 5U, CongestionAlgorithm::NewReno, 20U, kBuffer, kStep,
-                               15000U, 15000U);
+    const Pair step =
+        run_pair(CongestionAlgorithm::Prague, 5U, CongestionAlgorithm::Prague, 20U, kBuffer, kStep, 15000U, 15000U);
+    const Pair reno =
+        run_pair(CongestionAlgorithm::NewReno, 5U, CongestionAlgorithm::NewReno, 20U, kBuffer, kStep, 15000U, 15000U);
     const Pair ramp = run_pair(CongestionAlgorithm::Prague, 5U, CongestionAlgorithm::Prague, 20U, kBuffer, kStep / 2U,
                                30000U, 15000U, 2U * kStep);
     INFO("step: Prague " << step.a.goodput << " and " << step.b.goodput << " B/s (alpha " << step.a.state.alpha

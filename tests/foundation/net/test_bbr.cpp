@@ -21,8 +21,8 @@ using namespace crd::net;
 constexpr u64 kMs = 1000000U;
 constexpr u64 kSecond = 1000U * kMs;
 constexpr u64 kMss = 1200U;
+using crd::net::testing::Flow;
 using crd::net::testing::kInfiniteData;
-using crd::net::testing::Path;
 
 CongestionPolicy bbr_policy()
 {
@@ -60,7 +60,7 @@ TEST_CASE("BBR: the policy rules, the initial window and pacing before any sampl
     none.version = 0U;
     CHECK_FALSE(congestion_policy_valid(none));
 
-    Path path(bbr_policy(), kRate, kOneWay, kBdp);
+    Flow path(bbr_policy(), kRate, kOneWay, kBdp);
     CHECK(path.ctl->algorithm() == CongestionAlgorithm::Bbr);
     CHECK(path.ctl->window() == 10U * kMss);
     const CongestionState state = path.ctl->state();
@@ -78,7 +78,7 @@ TEST_CASE("BBR: the policy rules, the initial window and pacing before any sampl
 TEST_CASE("BBR: Startup finds the bottleneck and the round trip, Drain empties its queue, ProbeBW cycles",
           "[net][net-path][bbr]")
 {
-    Path path(bbr_policy(), kRate, kOneWay, kBdp);
+    Flow path(bbr_policy(), kRate, kOneWay, kBdp);
     u32 seen = 0U;
     u64 drain_left_ns = kNeverNs;
     path.run(2U * kSecond,
@@ -129,7 +129,7 @@ TEST_CASE("BBR: Startup finds the bottleneck and the round trip, Drain empties i
 TEST_CASE("BBR: ProbeRTT every ten seconds holds half the BDP for at least 200 ms, then the model resumes",
           "[net][net-path][bbr]")
 {
-    Path path(bbr_policy(), kRate, kOneWay, kBdp);
+    Flow path(bbr_policy(), kRate, kOneWay, kBdp);
     u64 entered_ns = kNeverNs;
     u64 left_ns = kNeverNs;
     u64 peak_window = 0U;
@@ -167,7 +167,7 @@ TEST_CASE("BBR: ProbeRTT every ten seconds holds half the BDP for at least 200 m
 
 TEST_CASE("BBR: the model follows a bottleneck that halves and then doubles", "[net][net-path][bbr]")
 {
-    Path path(bbr_policy(), kRate, kOneWay, kBdp);
+    Flow path(bbr_policy(), kRate, kOneWay, kBdp);
     path.run(3U * kSecond);
     path.set_rate(kRate / 2U);
     path.run(12U * kSecond); // the max filter forgets the old rate within two ProbeBW cycles
@@ -184,7 +184,7 @@ TEST_CASE("BBR: random loss under the threshold keeps the rate, where CUBIC fall
 {
     const auto goodput = [](const CongestionPolicy& policy)
     {
-        Path path(policy, kRate, kOneWay, kBdp);
+        Flow path(policy, kRate, kOneWay, kBdp);
         path.set_loss(10U); // 1%
         path.run(2U * kSecond);
         const u64 before = path.acked_bytes;
@@ -201,7 +201,7 @@ TEST_CASE("BBR: random loss under the threshold keeps the rate, where CUBIC fall
 
 TEST_CASE("BBR: a shallow buffer's losses bound the inflight and keep the loss rate low", "[net][net-path][bbr]")
 {
-    Path path(bbr_policy(), kRate, kOneWay, kBdp / 10U);
+    Flow path(bbr_policy(), kRate, kOneWay, kBdp / 10U);
     path.run(2U * kSecond);
     const u64 sent = path.sent_bytes;
     const u64 lost = path.lost_bytes;
@@ -216,7 +216,7 @@ TEST_CASE("BBR: a shallow buffer's losses bound the inflight and keep the loss r
 TEST_CASE("BBR: an application-limited sender lowers nothing, and a restart from idle paces at the model",
           "[net][net-path][bbr]")
 {
-    Path path(bbr_policy(), kRate, kOneWay, kBdp);
+    Flow path(bbr_policy(), kRate, kOneWay, kBdp);
     path.run(3U * kSecond);
     const u64 bandwidth = path.ctl->state().bandwidth;
     REQUIRE(bandwidth >= kRate * 9U / 10U);
@@ -238,7 +238,7 @@ TEST_CASE("BBR: an application-limited sender lowers nothing, and a restart from
 
 TEST_CASE("BBR: ECN marks are congestion: Startup ends and the model's bounds fall", "[net][net-path][bbr]")
 {
-    Path path(bbr_policy(), kRate, kOneWay, 4U * kBdp);
+    Flow path(bbr_policy(), kRate, kOneWay, 4U * kBdp);
     path.set_ce_queue(kBdp / 8U); // a queue past an eighth of a BDP marks
     u64 left_startup_ns = kNeverNs;
     path.run(4U * kSecond,
@@ -273,7 +273,7 @@ TEST_CASE("BBR: ECN marks are congestion: Startup ends and the model's bounds fa
 TEST_CASE("BBR: a spurious loss episode is undone, persistent congestion takes the minimum window",
           "[net][net-path][bbr]")
 {
-    Path path(bbr_policy(), kRate, kOneWay, kBdp);
+    Flow path(bbr_policy(), kRate, kOneWay, kBdp);
     path.run(3U * kSecond);
     const CongestionState before = path.ctl->state();
     REQUIRE(before.phase != CongestionPhase::Recovery);
@@ -312,7 +312,7 @@ TEST_CASE("BBR: a spurious loss episode is undone, persistent congestion takes t
 TEST_CASE("BBR: live swaps keep the window both ways, and the model starts from the delivery the sampler holds",
           "[net][net-path][bbr]")
 {
-    Path path(CongestionPolicy{}, kRate, kOneWay, kBdp);
+    Flow path(CongestionPolicy{}, kRate, kOneWay, kBdp);
     path.run(2U * kSecond);
     const CongestionState cubic = path.ctl->state();
     path.swap(bbr_policy());
@@ -337,7 +337,7 @@ TEST_CASE("BBR: one entropy gives one run, another moves the probe times; a Retr
 {
     const auto trace = [](u64 entropy)
     {
-        Path path(bbr_policy(), kRate, kOneWay, kBdp, entropy);
+        Flow path(bbr_policy(), kRate, kOneWay, kBdp, entropy);
         u64 hash = 0xCBF29CE484222325U;
         path.run(6U * kSecond,
                  [&]
@@ -350,7 +350,7 @@ TEST_CASE("BBR: one entropy gives one run, another moves the probe times; a Retr
     CHECK(trace(1U) == trace(1U));
     CHECK(trace(1U) != trace(2U));
 
-    Path path(bbr_policy(), kRate, kOneWay, kBdp);
+    Flow path(bbr_policy(), kRate, kOneWay, kBdp);
     path.run(2U * kSecond);
     path.ctl->reset(path.now);
     const CongestionState s = path.ctl->state();

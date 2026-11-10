@@ -37,25 +37,25 @@ struct Link
 // A sender with one controller, its sampler and pacer, over a link it owns or shares, `one_way` propagation each way,
 // with every packet acknowledged at once by its own ACK frame. A dropped packet is declared lost when the ACK of the
 // next packet arrives (or a probe timeout after the last), as RFC 9002's packet threshold would within a few packets.
-class Path
+class Flow
 {
 public:
-    explicit Path(const CongestionPolicy& policy, u64 rate, u64 one_way_ns, u64 buffer, u64 entropy = 7U)
+    explicit Flow(const CongestionPolicy& policy, u64 rate, u64 one_way_ns, u64 buffer, u64 entropy = 7U)
         : m_own{rate, buffer}, m_link(&m_own), m_one_way_ns(one_way_ns)
     {
         ctl = make_congestion(policy, kBottleneckMss, nullptr, m_slot, delivery, entropy);
         REQUIRE(ctl != nullptr);
     }
     // A flow through `link`, which outlives it and which other flows may share (run_flows).
-    Path(const CongestionPolicy& policy, Link& link, u64 one_way_ns, u64 entropy = 7U)
+    Flow(const CongestionPolicy& policy, Link& link, u64 one_way_ns, u64 entropy = 7U)
         : m_link(&link), m_one_way_ns(one_way_ns)
     {
         ctl = make_congestion(policy, kBottleneckMss, nullptr, m_slot, delivery, entropy);
         REQUIRE(ctl != nullptr);
     }
-    ~Path() { ctl->~CongestionController(); }
-    Path(const Path&) = delete;
-    Path& operator=(const Path&) = delete;
+    ~Flow() { ctl->~CongestionController(); }
+    Flow(const Flow&) = delete;
+    Flow& operator=(const Flow&) = delete;
 
     // Replaces the controller live, as QuicConnection::set_congestion does.
     void swap(const CongestionPolicy& policy, u64 entropy = 9U)
@@ -266,13 +266,13 @@ private:
 
 // Runs flows that share a link until `until_ns`, every event in time order (a tie to the earlier flow), calling
 // `watch` after each ACK frame. A flow's next event reads only its own state, so it holds until that flow steps.
-template <typename Watch> void run_flows(std::initializer_list<Path*> flows, u64 until_ns, Watch watch)
+template <typename Watch> void run_flows(std::initializer_list<Flow*> flows, u64 until_ns, Watch watch)
 {
     for (;;)
     {
-        Path* first = nullptr;
+        Flow* first = nullptr;
         u64 next = kNeverNs;
-        for (Path* flow : flows)
+        for (Flow* flow : flows)
         {
             const u64 at = flow->next_event_ns();
             if (at < next)
@@ -283,7 +283,7 @@ template <typename Watch> void run_flows(std::initializer_list<Path*> flows, u64
         }
         if (next >= until_ns)
         {
-            for (Path* flow : flows)
+            for (Flow* flow : flows)
             {
                 flow->now = until_ns;
             }
