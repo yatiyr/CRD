@@ -44,11 +44,6 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
     return out;
 }
 
-[[nodiscard]] constexpr usize index_of(QuicSpace space) noexcept
-{
-    return static_cast<usize>(space);
-}
-
 [[nodiscard]] constexpr QuicPacketType packet_type(QuicSpace space) noexcept
 {
     if (space == QuicSpace::Initial)
@@ -119,6 +114,7 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
            config.crypto_bytes >= kMinCryptoBytes && config.crypto_bytes <= kMaxCryptoBytes &&
            config.max_datagram_bytes >= kQuicMinInitialDatagram &&
            config.max_datagram_bytes <= kQuicDefaultMaxUdpPayload && congestion_policy_valid(config.congestion) &&
+           config.ecn != Ecn::Ce &&
            (config.entropy_seed.empty() || config.entropy_seed.size() == crypto::kPrfKeyBytes) &&
            (config.token.size() <= kQuicMaxCarriedTokenBytes) && config.held_packets <= kQuicMaxHeldPackets &&
            (config.early_context.empty() || (config.side == crypto::QuicSide::Server && config.tls->early_data() &&
@@ -209,6 +205,7 @@ void QuicConnection::Events::on_acked(QuicSpace space, const QuicSentPacket& pac
 void QuicConnection::Events::on_lost(QuicSpace space, const QuicSentPacket& packet) noexcept
 {
     m_connection.settle(space, packet, Settle::Lost);
+    m_connection.m_ecn.on_gone(packet.ecn);
     if (packet.in_flight)
     {
         m_connection.m_congestion->on_lost(congestion_packet(space, packet), m_connection.m_event_ns);
@@ -226,6 +223,7 @@ void QuicConnection::Events::on_spurious(QuicSpace space, const QuicSentPacket& 
 void QuicConnection::Events::on_discarded(QuicSpace space, const QuicSentPacket& packet) noexcept
 {
     m_connection.settle(space, packet, Settle::Discarded);
+    m_connection.m_ecn.on_gone(packet.ecn);
 }
 
 // ---- Construction ----
@@ -318,6 +316,7 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
                                              cont::Span<QuicSentEntry>(entries + (2U * per_space), per_space));
     // The policy and the datagram size were checked (config_valid).
     m_congestion = make_congestion(config.congestion, config.max_datagram_bytes, nullptr, m_congestion_slot);
+    m_ecn.start(config.ecn);
     m_frames = frames;
     m_crypto_bytes = bytes;
     m_crypto_bits = bits;
@@ -362,8 +361,8 @@ u64 QuicConnection::entropy() noexcept
 bool QuicConnection::connect(cont::ConstSpan<u8> local_cid, cont::ConstSpan<u8> initial_dcid, u64 now_ns) noexcept
 {
     if (!ready() || m_state != QuicConnectionState::Idle || m_config.side != crypto::QuicSide::Client ||
-        m_config.tls == nullptr || initial_dcid.size() < 8U || initial_dcid.size() > crypto::kQuicMaxConnectionIdBytes ||
-        local_cid.size() > crypto::kQuicMaxConnectionIdBytes)
+        m_config.tls == nullptr || initial_dcid.size() < 8U ||
+        initial_dcid.size() > crypto::kQuicMaxConnectionIdBytes || local_cid.size() > crypto::kQuicMaxConnectionIdBytes)
     {
         return false;
     }
@@ -385,9 +384,9 @@ bool QuicConnection::accept(const QuicAccept& accept, u64 now_ns) noexcept
         return id.size() <= crypto::kQuicMaxConnectionIdBytes;
     };
     if (!ready() || m_state != QuicConnectionState::Idle || m_config.side != crypto::QuicSide::Server ||
-        m_config.tls == nullptr || accept.local_cid.empty() || accept.client_dcid.empty() || !bounded(accept.local_cid) ||
-        !bounded(accept.client_dcid) || !bounded(accept.original_dcid) || !bounded(accept.client_scid) ||
-        (!accept.retried && !same_bytes(accept.original_dcid, accept.client_dcid)))
+        m_config.tls == nullptr || accept.local_cid.empty() || accept.client_dcid.empty() ||
+        !bounded(accept.local_cid) || !bounded(accept.client_dcid) || !bounded(accept.original_dcid) ||
+        !bounded(accept.client_scid) || (!accept.retried && !same_bytes(accept.original_dcid, accept.client_dcid)))
     {
         return false;
     }
@@ -570,7 +569,8 @@ bool QuicConnection::start_keyed(const QuicKeyedStart& start, u64 now_ns) noexce
     hello[0] = static_cast<u8>(bytes >> 8U);
     hello[1] = static_cast<u8>(bytes);
     const usize whole = kKeyedHelloPrefix + bytes;
-    if (bytes == 0U || m_levels[index_of(QuicSpace::Application)].out.write(cont::ConstSpan<u8>(hello, whole)) != whole)
+    if (bytes == 0U ||
+        m_levels[quic_space_index(QuicSpace::Application)].out.write(cont::ConstSpan<u8>(hello, whole)) != whole)
     {
         return false;
     }
@@ -717,7 +717,7 @@ bool QuicConnection::give_new_token(cont::ConstSpan<u8> token) noexcept
 
 // ---- Receiving ----
 
-void QuicConnection::receive(cont::Span<u8> datagram, QuicEcn ecn, u64 now_ns) noexcept
+void QuicConnection::receive(cont::Span<u8> datagram, Ecn ecn, u64 now_ns) noexcept
 {
     if (m_state == QuicConnectionState::Idle || m_state == QuicConnectionState::Closed)
     {
@@ -780,7 +780,7 @@ void QuicConnection::receive(cont::Span<u8> datagram, QuicEcn ecn, u64 now_ns) n
     read_held(now_ns);
 }
 
-void QuicConnection::hold(QuicPacketType type, cont::ConstSpan<u8> packet, QuicEcn ecn) noexcept
+void QuicConnection::hold(QuicPacketType type, cont::ConstSpan<u8> packet, Ecn ecn) noexcept
 {
     const usize slot = m_config.max_datagram_bytes;
     if (m_held_count == m_config.held_packets || packet.size() > slot)
@@ -875,7 +875,7 @@ bool QuicConnection::reset_by(cont::ConstSpan<u8> tail, u64 now_ns) noexcept
     return true;
 }
 
-bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> packet, usize datagram_bytes, QuicEcn ecn,
+bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> packet, usize datagram_bytes, Ecn ecn,
                                     u64 now_ns) noexcept
 {
     const bool client = m_config.side == crypto::QuicSide::Client;
@@ -989,7 +989,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
             return true;
         }
     }
-    if (!m_space_gone[index_of(space)])
+    if (!m_space_gone[quic_space_index(space)])
     {
         static_cast<void>(m_recovery->on_received(space, opened.number, eliciting, ecn, now_ns));
     }
@@ -1039,6 +1039,12 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             }
             if (outcome.error == QuicRecoveryError::None)
             {
+                if (m_ecn.on_ack(space, frame.ack, outcome))
+                {
+                    // RFC 9002 appendix B.7: before the frame's growth, so its packets grow nothing of the period.
+                    m_congestion->on_congestion(outcome.newest_sent_ns, now_ns);
+                    ++m_counters.ecn_signals;
+                }
                 m_congestion->on_ack_end(m_recovery->rtt(), outcome.rtt_sampled, now_ns);
                 if (outcome.lost.persistent_congestion)
                 {
@@ -1134,7 +1140,7 @@ bool QuicConnection::crypto_frame(const QuicFrame& frame, QuicSpace space, u64 n
         }
         m_version_settled = true;
     }
-    Level& level = m_levels[index_of(space)];
+    Level& level = m_levels[quic_space_index(space)];
     switch (level.in.insert(frame.offset, frame.data, false))
     {
         case QuicReceiveResult::Accepted:
@@ -1620,7 +1626,7 @@ bool QuicConnection::retry(const QuicHeader& header, cont::ConstSpan<u8> packet,
     {
         probes = 0U;
     }
-    QuicSendBuffer& out = m_levels[index_of(QuicSpace::Initial)].out;
+    QuicSendBuffer& out = m_levels[quic_space_index(QuicSpace::Initial)].out;
     if (out.sent_end() > out.acked_end())
     {
         out.on_lost(out.acked_end(), static_cast<usize>(out.sent_end() - out.acked_end()), false);
@@ -1630,7 +1636,7 @@ bool QuicConnection::retry(const QuicHeader& header, cont::ConstSpan<u8> packet,
 
 void QuicConnection::discard_space(QuicSpace space, u64 now_ns) noexcept
 {
-    const usize index = index_of(space);
+    const usize index = quic_space_index(space);
     if (m_space_gone[index])
     {
         return;
@@ -1656,7 +1662,8 @@ void QuicConnection::confirm(u64 now_ns) noexcept
 
 bool QuicConnection::can_acknowledge(QuicSpace space) const noexcept
 {
-    return !m_space_gone[index_of(space)] && m_protection.can_send(packet_type(space)) && m_recovery->can_send(space);
+    return !m_space_gone[quic_space_index(space)] && m_protection.can_send(packet_type(space)) &&
+           m_recovery->can_send(space);
 }
 
 usize QuicConnection::amplification_credit() const noexcept
@@ -1704,7 +1711,7 @@ QuicPacketType QuicConnection::send_type(QuicSpace space) const noexcept
 
 bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
 {
-    const usize index = index_of(space);
+    const usize index = quic_space_index(space);
     if (m_space_gone[index] || !m_protection.can_send(send_type(space)) || !m_recovery->can_send(space))
     {
         return false;
@@ -1728,7 +1735,7 @@ bool QuicConnection::data_allowed(QuicSpace space) const noexcept
 
 bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
 {
-    const usize index = index_of(space);
+    const usize index = quic_space_index(space);
     if (m_levels[index].out.pending())
     {
         return true;
@@ -1773,8 +1780,9 @@ void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
         return;
     }
     const QuicSpace application = QuicSpace::Application;
-    const bool waiting = !m_space_gone[index_of(application)] && m_protection.can_send(send_type(application)) &&
-                         m_recovery->can_send_data(application) && has_data(application, now_ns);
+    const bool waiting = !m_space_gone[quic_space_index(application)] &&
+                         m_protection.can_send(send_type(application)) && m_recovery->can_send_data(application) &&
+                         has_data(application, now_ns);
     if (waiting)
     {
         // Section 7.8: the window is what holds sending back, so it may grow; a window with room waits for the pacer.
@@ -1912,7 +1920,7 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
 usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> frames, u64 packet, u64 now_ns,
                                    Written& written) noexcept
 {
-    const usize index = index_of(space);
+    const usize index = quic_space_index(space);
     usize used = 0U;
     const auto put = [&](const QuicFrame& frame) -> bool
     {
@@ -2137,7 +2145,7 @@ usize QuicConnection::write_close(QuicSpace space, cont::Span<u8> frames) const 
 usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool last,
                                    bool closing, u64 now_ns) noexcept
 {
-    const usize index = index_of(space);
+    const usize index = quic_space_index(space);
     u64 number = m_next_number[index];
     bool skip = false;
     if (space == QuicSpace::Application && !closing && (entropy() & kSkipMask) == 0U && number < kQuicMaxVarint)
@@ -2186,7 +2194,8 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     const usize reset_floor = m_local_cid.bytes + kQuicResetPadding;
     const usize least = (datagram_used < reset_floor) ? min_u64(reset_floor - datagram_used, room.size()) : 0U;
     usize bytes = 0U;
-    const QuicPacketError sealed = m_protection.seal(writer, used, QuicPadding{max_u64(floor, least), m_config.padding_block}, bytes);
+    const QuicPacketError sealed =
+        m_protection.seal(writer, used, QuicPadding{max_u64(floor, least), m_config.padding_block}, bytes);
     if (sealed != QuicPacketError::None)
     {
         const QuicTransportError error = quic_packet_close(sealed);
@@ -2205,7 +2214,9 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         sent.bytes = static_cast<u32>(bytes);
         sent.ack_eliciting = written.eliciting;
         sent.in_flight = written.eliciting || floor != 0U;
+        sent.ecn = m_marking;
         static_cast<void>(m_recovery->on_sent(space, sent)); // can_send held and numbers rise
+        m_ecn.on_sent(space, m_marking, now_ns);
         if (sent.in_flight)
         {
             m_congestion->on_sent(congestion_packet(space, sent), m_recovery->bytes_in_flight(), now_ns);
@@ -2240,7 +2251,7 @@ usize QuicConnection::send_closing(cont::Span<u8> out, u64 now_ns) noexcept
         return 0U;
     }
     m_close_owed = false;
-    const usize highest = index_of(space_of(m_close_level));
+    const usize highest = quic_space_index(space_of(m_close_level));
     usize used = 0U;
     for (usize index = 0U; index <= highest; ++index)
     {
@@ -2280,10 +2291,12 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
     usize used = 0U;
     if (m_state == QuicConnectionState::Closing)
     {
+        m_marking = Ecn::NotEct; // nothing of a closing connection is acknowledged
         used = (limit >= kMinUsefulPacket) ? send_closing(out.first(limit), now_ns) : 0U;
     }
     else
     {
+        m_marking = m_ecn.marking(now_ns, m_recovery->persistent_congestion_ns());
         pull_crypto();
         issue_local_ids();
         gate_data(full, now_ns);
@@ -2299,7 +2312,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
                 any = true;
             }
         }
-        const usize initial = index_of(QuicSpace::Initial);
+        const usize initial = quic_space_index(QuicSpace::Initial);
         // A client pads every datagram with an Initial, a server those with an ack-eliciting one (section 14.1).
         const bool pad = content[initial] && (m_config.side == crypto::QuicSide::Client ||
                                               m_levels[initial].out.pending() || m_probes[initial] > 0U);
@@ -2425,7 +2438,7 @@ void QuicConnection::on_timeout(u64 now_ns) noexcept
     {
         return;
     }
-    const usize index = index_of(timeout.space);
+    const usize index = quic_space_index(timeout.space);
     m_probes[index] = (timeout.kind == QuicTimeoutKind::Probe) ? timeout.probes : u8{1};
     // A probe carries the data still unacknowledged (RFC 9002 section 6.2.4): it goes again as if lost.
     QuicSendBuffer& out = m_levels[index].out;
@@ -2512,12 +2525,12 @@ cont::ConstSpan<u8> QuicConnection::peer_cid() const noexcept
 
 u64 QuicConnection::next_packet_number(QuicSpace space) const noexcept
 {
-    return m_next_number[index_of(space)];
+    return m_next_number[quic_space_index(space)];
 }
 
 bool QuicConnection::skipped(QuicSpace space, u64 number) const noexcept
 {
-    return m_skipped[index_of(space)] == number;
+    return m_skipped[quic_space_index(space)] == number;
 }
 
 } // namespace crd::net

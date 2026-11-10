@@ -188,7 +188,7 @@ struct KeyedPeer
         std::memcpy(writer.frames().data(), frames.data(), frames.size());
         usize size = 0U;
         REQUIRE(protection.seal(writer, frames.size(), {0U, 0U}, size) == QuicPacketError::None);
-        to.receive(Span<u8>(datagram, size), QuicEcn::NotEct, now);
+        to.receive(Span<u8>(datagram, size), Ecn::NotEct, now);
     }
 
     // CRYPTO bytes `data` at `at`, to `to`.
@@ -334,7 +334,7 @@ TEST_CASE("Raw UDP path: a real TLS session's exporter keys it", "[net][4.2a][ra
     u8 datagram[kDatagram];
     const usize sent = client.send(Span<u8>(datagram, sizeof(datagram)), net->now);
     REQUIRE(sent != 0U);
-    stranger.receive(Span<u8>(datagram, sent), QuicEcn::NotEct, net->now);
+    stranger.receive(Span<u8>(datagram, sent), Ecn::NotEct, net->now);
     CHECK(stranger.counters().packets_opened == 0U);
 }
 
@@ -449,7 +449,7 @@ TEST_CASE("Raw UDP path: another secret, a flipped byte, a replay and the handsh
         Key other(0x77U);
         QuicConnection stranger(allocator, keyed_config(QuicSide::Server, QuicVersion::V1, 2U));
         REQUIRE(stranger.open_keyed(other.start, now));
-        stranger.receive(Span<u8>(first, size), QuicEcn::NotEct, now);
+        stranger.receive(Span<u8>(first, size), Ecn::NotEct, now);
         CHECK(stranger.counters().packets_opened == 0U);
         CHECK_FALSE(stranger.peer_parameters_known());
     }
@@ -460,7 +460,7 @@ TEST_CASE("Raw UDP path: another secret, a flipped byte, a replay and the handsh
             u8 copy[kDatagram];
             std::memcpy(copy, first, size);
             copy[at] ^= 0x40U;
-            server.receive(Span<u8>(copy, size), QuicEcn::NotEct, now);
+            server.receive(Span<u8>(copy, size), Ecn::NotEct, now);
         }
         CHECK(server.counters().packets_opened == 0U);
         CHECK_FALSE(server.peer_parameters_known());
@@ -470,10 +470,10 @@ TEST_CASE("Raw UDP path: another secret, a flipped byte, a replay and the handsh
     {
         u8 copy[kDatagram];
         std::memcpy(copy, first, size);
-        server.receive(Span<u8>(first, size), QuicEcn::NotEct, now);
+        server.receive(Span<u8>(first, size), Ecn::NotEct, now);
         CHECK(server.counters().packets_opened == 1U);
         const u64 dropped = server.counters().packets_dropped;
-        server.receive(Span<u8>(copy, size), QuicEcn::NotEct, now);
+        server.receive(Span<u8>(copy, size), Ecn::NotEct, now);
         CHECK(server.counters().packets_opened == 1U);
         CHECK(server.counters().packets_dropped == dropped + 1U);
     }
@@ -495,7 +495,7 @@ TEST_CASE("Raw UDP path: another secret, a flipped byte, a replay and the handsh
         std::memcpy(writer.frames().data(), &ping, 1U);
         usize written = 0U;
         REQUIRE(initial.seal(writer, 1U, {kQuicMinInitialDatagram, 0U}, written) == QuicPacketError::None);
-        server.receive(Span<u8>(datagram, written), QuicEcn::NotEct, now);
+        server.receive(Span<u8>(datagram, written), Ecn::NotEct, now);
         CHECK(server.counters().packets_opened == 0U);
         CHECK(server.counters().packets_dropped >= 1U);
         CHECK(server.state() == QuicConnectionState::Established);
@@ -524,7 +524,7 @@ TEST_CASE("Raw UDP path: a server holds no 0-RTT packet for keys that never come
     at += kIdBytes;
     datagram[at++] = 32U; // its Length
     at += 32U;
-    server.receive(Span<u8>(datagram, at), QuicEcn::NotEct, kStartNs);
+    server.receive(Span<u8>(datagram, at), Ecn::NotEct, kStartNs);
     CHECK(server.counters().packets_held == 0U);
     CHECK(server.counters().packets_dropped == 1U);
     CHECK(server.state() == QuicConnectionState::Established);
@@ -547,14 +547,14 @@ TEST_CASE("Raw UDP path: a server sends at most three times what it received unt
 
     const usize first = client.send(Span<u8>(datagram, sizeof(datagram)), kStartNs);
     REQUIRE(first != 0U);
-    server.receive(Span<u8>(datagram, first), QuicEcn::NotEct, kStartNs);
+    server.receive(Span<u8>(datagram, first), Ecn::NotEct, kStartNs);
     CHECK_FALSE(server.address_validated());
     usize sent = 0U;
     for (usize size = server.send(Span<u8>(datagram, sizeof(datagram)), kStartNs); size != 0U;
          size = server.send(Span<u8>(datagram, sizeof(datagram)), kStartNs))
     {
         sent += size;
-        client.receive(Span<u8>(datagram, size), QuicEcn::NotEct, kStartNs);
+        client.receive(Span<u8>(datagram, size), Ecn::NotEct, kStartNs);
     }
     CHECK(sent != 0U);
     CHECK(sent <= 3U * first);
@@ -563,7 +563,7 @@ TEST_CASE("Raw UDP path: a server sends at most three times what it received unt
     client.ping();
     const usize answer = client.send(Span<u8>(datagram, sizeof(datagram)), kStartNs + kMs);
     REQUIRE(answer != 0U);
-    server.receive(Span<u8>(datagram, answer), QuicEcn::NotEct, kStartNs + kMs);
+    server.receive(Span<u8>(datagram, answer), Ecn::NotEct, kStartNs + kMs);
     CHECK(server.address_validated());
 }
 

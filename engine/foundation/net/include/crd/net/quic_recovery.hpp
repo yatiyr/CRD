@@ -35,6 +35,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/crypto/quic.hpp>
+#include <crd/net/ecn.hpp>
 #include <crd/net/quic_frame.hpp>
 #include <crd/net/quic_packet.hpp>
 #include <crd/net/quic_transport_parameters.hpp>
@@ -55,15 +56,6 @@ inline constexpr u32   kQuicAckElicitingThreshold  = 2U;          // RFC 9000 se
 inline constexpr usize kQuicAckRanges              = 32U;         // the ranges one space remembers
 inline constexpr u64   kQuicNoPacket               = ~u64{0};
 
-// The ECN codepoint a packet arrived with: the IP header's two bits (RFC 3168 section 5).
-enum class QuicEcn : u8
-{
-    NotEct = 0U,
-    Ect1   = 1U,
-    Ect0   = 2U,
-    Ce     = 3U,
-};
-
 // What an ACK frame the tracker wrote acknowledges: its bytes (0 for nothing written) and its largest packet number,
 // which the packet carrying it records (QuicSentPacket::carried_ack).
 struct QuicAckWrite
@@ -82,7 +74,7 @@ public:
     // Records packet `number`, which QuicPacketProtection opened and whose frames were processed, received at
     // `received_ns` (its datagram's arrival, so a packet buffered for its keys keeps its time). False for a number
     // already recorded, which changes nothing. `max_ack_delay_ns` is this side's advertised max_ack_delay.
-    bool on_received(u64 number, bool ack_eliciting, QuicEcn ecn, u64 received_ns, u64 max_ack_delay_ns) noexcept;
+    bool on_received(u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns, u64 max_ack_delay_ns) noexcept;
 
     // When the owed ACK must be sent: kNeverNs when none is owed. An ACK may still ride along in any packet while
     // ranges() is not empty; only ack-eliciting packets make one owed (section 13.2.1).
@@ -102,7 +94,7 @@ public:
     {
         return cont::ConstSpan<QuicAckRange>(m_ranges, m_count);
     }
-    [[nodiscard]] const QuicEcnCounts& ecn() const noexcept { return m_ecn; }
+    [[nodiscard]] const EcnCounts& ecn() const noexcept { return m_ecn; }
 
 private:
     void insert(u64 number) noexcept;
@@ -114,7 +106,7 @@ private:
     u64           m_largest_eliciting = kQuicNoPacket; // the largest ack-eliciting number received
     u32           m_unacked_eliciting = 0U;           // ack-eliciting packets since the last ACK written
     u64           m_deadline_ns = kNeverNs;
-    QuicEcnCounts m_ecn;
+    EcnCounts m_ecn;
     bool          m_ecn_seen = false;
 };
 
@@ -129,6 +121,7 @@ struct QuicSentPacket
     u32  bytes = 0U;
     bool ack_eliciting = false;
     bool in_flight = false; // counted in bytes in flight: a packet carrying PADDING, and every ack-eliciting one
+    Ecn  ecn = Ecn::NotEct; // the codepoint its datagram was marked with (quic_ecn.hpp)
 };
 
 // Storage for one sent packet: QuicRecovery's to fill.
@@ -187,6 +180,13 @@ struct QuicAckOutcome
     // Packets declared lost that this frame acknowledges (RFC 9002 section 6.1), each reported by on_spurious.
     usize             spurious_packets = 0U;
     u64               spurious_bytes = 0U; // of those that were in flight
+    // For ECN validation (quic_ecn.hpp): whether the frame raised the space's largest acknowledged, the packets it
+    // newly acknowledges (spurious losses among them) that were sent marked ECT(0) and ECT(1), and when the largest
+    // of them was sent.
+    bool              advanced = false;
+    u64               ect0_packets = 0U;
+    u64               ect1_packets = 0U;
+    u64               newest_sent_ns = 0U;
     bool              rtt_sampled = false;
     QuicLoss          lost;
 };
@@ -286,7 +286,7 @@ public:
 
     // A packet of `space` opened and processed (QuicAckTracker::on_received); false for a duplicate or a discarded
     // space.
-    bool on_received(QuicSpace space, u64 number, bool ack_eliciting, QuicEcn ecn, u64 received_ns) noexcept;
+    bool on_received(QuicSpace space, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns) noexcept;
     // An ACK frame received in a packet of `space` (appendix A.7). An error changes nothing.
     [[nodiscard]] QuicAckOutcome on_ack(QuicSpace space, const QuicAck& ack, u64 now_ns,
                                         QuicRecoveryEvents& events) noexcept;

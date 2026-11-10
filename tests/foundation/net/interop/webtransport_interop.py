@@ -138,6 +138,7 @@ class Case:
             return
         self.check_session(client, detail)
         self.check_session(server, detail)
+        self.check_ecn(client, server, detail)
         closing, other = (client, server) if self.closer == 'client' else (server, client)
         expect(other.get('wt_close_seen') == '1', f'the close was not read: {detail}')
         expect(other.get('wt_close_code') == str(WT_CLOSE_CODE), f'another close code: {detail}')
@@ -165,6 +166,17 @@ class Case:
             expect(received == self.datagrams, f'datagrams lost on a clean path: {detail}')
         else:
             expect(0 <= received <= self.datagrams, f'datagrams: {detail}')
+
+    def check_ecn(self, client, server, detail):
+        # Every peer here reports ECN counts on Linux (Quinn, quic-go, Cerid), so each Cerid end validates its path; the
+        # driver's relay sends every datagram unmarked, a bleaching path, which fails validation (RFC 9000 13.4.2).
+        cerid_ends = [client, server] if self.peer_name == 'cerid' else [client if self.cerid_is_client else server]
+        for report in cerid_ends:
+            if self.path is None:
+                expect(report.get('ecn') == 'capable', f'ECN not validated: {detail}')
+            else:
+                expect(report.get('ecn') == 'failed' and report.get('ecn_failure') == 'missing',
+                       f'a bleaching relay did not fail ECN validation: {detail}')
 
     def check_refused(self, client, server, detail):
         status = self.reject or self.refused

@@ -3,7 +3,8 @@
 //
 // Input: byte 0 picks the mode (bits 0 and 1) and the version (bit 2); the rest drives it.
 //   0  a network script between a client and a server: each byte an operation on the datagrams in flight (deliver,
-//      drop, duplicate, reorder, corrupt a byte, advance time, 0xFD a Retry in place of the client Initials in flight
+//      deliver with its ECN codepoint rewritten, drop, duplicate, reorder, corrupt a byte, advance time, 0xFD a Retry
+//      in place of the client Initials in flight
 //      while the server has none); then a clean path until both confirm or one closes. With bit 3 the client offers
 //      the other version too and the server prefers it: a compatible switch (RFC 9368 section 2.3). With bit 4 a
 //      first clean connection leaves the client a ticket, and the scripted one resumes with a stream and a datagram
@@ -321,6 +322,7 @@ struct Flight
     u8 bytes[kDatagram] = {};
     usize size = 0U;
     usize to = 0U;
+    Ecn ecn = Ecn::NotEct; // as the sender marked it, or as the path rewrote it
 };
 
 // MSVC C4324 as for crd::crypto::AeadKey: the connections are 16-byte aligned; ARM64 MSVC reports the padding.
@@ -426,6 +428,7 @@ struct Pair
                     std::memcpy(flights[count].bytes, out, size);
                     flights[count].size = size;
                     flights[count].to = 1U - from;
+                    flights[count].ecn = ends[from]->marking();
                     ++count;
                 }
             }
@@ -456,12 +459,18 @@ struct Pair
                 return;
             }
         }
-        to.receive(Span<u8>(flight.bytes, flight.size), QuicEcn::NotEct, now);
+        to.receive(Span<u8>(flight.bytes, flight.size), flight.ecn, now);
         check_closed(to);
+        // Whatever the path does to codepoints, a failed validation stays failed.
+        const bool failed = to.ecn().state() == QuicEcnState::Failed;
+        CRD_FUZZ_REQUIRE(failed || !ecn_failed[flight.to]);
+        ecn_failed[flight.to] = failed;
         check_hosts();
     }
 
     void remove(usize index) { flights[index] = flights[--count]; }
+
+    bool ecn_failed[2] = {}; // each end's ECN validation failed
 
     void timers()
     {
@@ -646,7 +655,7 @@ void stateless_reset(Pair& pair)
     token[0] ^= 0x01U;
     CRD_FUZZ_REQUIRE(!client.stateless_reset(ConstSpan<u8>(datagram), pair.now));
     token[0] ^= 0x01U;
-    client.receive(Span<u8>(datagram), QuicEcn::NotEct, pair.now);
+    client.receive(Span<u8>(datagram), Ecn::NotEct, pair.now);
     CRD_FUZZ_REQUIRE(client.state() == QuicConnectionState::Draining && client.close_info().stateless_reset);
 }
 
@@ -800,9 +809,16 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         switch (op & 7U)
         {
             case 0U:
+                if (pair.count > 0U)
+                {
+                    pair.deliver(pick);
+                    pair.remove(pick);
+                }
+                break;
             case 1U:
                 if (pair.count > 0U)
                 {
+                    pair.flights[pick].ecn = static_cast<Ecn>((op >> 5U) & 3U); // bleached, re-marked or CE
                     pair.deliver(pick);
                     pair.remove(pick);
                 }
@@ -991,7 +1007,7 @@ struct Raw
         {
             return;
         }
-        server.receive(Span<u8>(datagram, size), QuicEcn::NotEct, now);
+        server.receive(Span<u8>(datagram, size), Ecn::NotEct, now);
         check_closed(server);
         drain();
     }

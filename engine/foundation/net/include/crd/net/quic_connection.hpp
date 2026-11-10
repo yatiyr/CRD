@@ -44,6 +44,10 @@
 //              probes and the handshake's CRYPTO data are not held (data_allowed()). Data held back tells the
 //              controller its window is used (section 7.8), and a pacer's release time is a timer of next_timer_ns().
 //              The policy is the configuration's, swappable live.
+//   ecn        datagrams carry the configuration's codepoint while the path is tested and once it proved to carry
+//              ECN (quic_ecn.hpp: RFC 9000 section 13.4); a CE count the peer reports rising on a validated path is
+//              the controller's congestion signal (RFC 9002 section 7.1). Received codepoints are counted per space
+//              and reported in ACK frames (QuicAckTracker). The host stamps marking() on each datagram it sends.
 //   frames     every frame type is dispatched: stream and flow-control frames go to the QuicStreamSet (streams()),
 //              DATAGRAM frames to QuicDatagrams (datagrams()); 1-RTT packets carry the connection's own frames, then
 //              datagrams, then the stream set's. An ACK only carried along follows waiting datagrams.
@@ -74,7 +78,9 @@
 #include <crd/crypto/tls.hpp>
 #include <crd/net/congestion.hpp>
 #include <crd/net/connection_table.hpp>
+#include <crd/net/ecn.hpp>
 #include <crd/net/quic_datagram.hpp>
+#include <crd/net/quic_ecn.hpp>
 #include <crd/net/quic_packet.hpp>
 #include <crd/net/quic_recovery.hpp>
 #include <crd/net/quic_stream.hpp>
@@ -212,6 +218,9 @@ struct QuicConnectionConfig
     u32 padding_block = 0U; // packets pad to the next multiple of this (NET.3's padded_size()); 0 pads none
     u64 initial_rtt_ns = kQuicInitialRttNs;
     CongestionPolicy congestion; // the controller and pacing (congestion_policy_valid), swappable by set_congestion()
+    // The codepoint datagrams are marked with while ECN validation allows (RFC 9000 section 13.4.2): ECT(0), ECT(1)
+    // for L4S, or Not-ECT for none. A host whose socket cannot mark clears it.
+    Ecn ecn = Ecn::Ect0;
     u64 key_update_interval = 0U; // 1-RTT packets one key seals before an update starts (0: the AEAD's limit alone)
     // kPrfKeyBytes seeding the connection's entropy (grease, skipped numbers) for a deterministic run (tests,
     // NET-SIM); empty draws a fresh key from the provider.
@@ -263,6 +272,7 @@ struct QuicConnectionCounters
     u64 packets_opened = 0U;
     u64 packets_dropped = 0U; // packets that did not open, duplicates and packets of another connection
     u64 packets_held = 0U;    // packets held until their keys came (RFC 9001 section 4.1.4)
+    u64 ecn_signals = 0U;     // rises of the peer's CE counts taken as congestion (RFC 9002 section 7.1)
 };
 
 // (MSVC C4324 as for QuicPacketProtection, which it holds inline.)
@@ -298,10 +308,12 @@ public:
     [[nodiscard]] bool open_keyed(const QuicKeyedStart& start, u64 now_ns) noexcept;
 
     // One datagram from the peer, arrived at `now_ns` with `ecn`; its bytes are decrypted in place.
-    void receive(cont::Span<u8> datagram, QuicEcn ecn, u64 now_ns) noexcept;
+    void receive(cont::Span<u8> datagram, Ecn ecn, u64 now_ns) noexcept;
     // Writes the next datagram into `out` (at least kQuicMinInitialDatagram bytes) and returns its size; 0 when
     // nothing is to be sent now.
     [[nodiscard]] usize send(cont::Span<u8> out, u64 now_ns) noexcept;
+    // The codepoint the datagram the last send() wrote is sent with.
+    [[nodiscard]] Ecn marking() const noexcept { return m_marking; }
     // When on_timeout() is next due: kNeverNs for no timer.
     [[nodiscard]] u64 next_timer_ns() const noexcept;
     void on_timeout(u64 now_ns) noexcept;
@@ -351,6 +363,7 @@ public:
     [[nodiscard]] const QuicPacketProtection& protection() const noexcept { return m_protection; }
     [[nodiscard]] const QuicRecovery& recovery() const noexcept { return *m_recovery; }
     [[nodiscard]] const CongestionController& congestion() const noexcept { return *m_congestion; }
+    [[nodiscard]] const QuicEcnValidator& ecn() const noexcept { return m_ecn; }
     // Replaces the congestion policy live: the new controller starts from the current window, slow start threshold
     // and recovery period. False, changing nothing, for a policy congestion_policy_valid() refuses.
     [[nodiscard]] bool set_congestion(const CongestionPolicy& policy) noexcept;
@@ -451,7 +464,7 @@ private:
     {
         u32 bytes = 0U;
         QuicPacketType type = QuicPacketType::OneRtt;
-        QuicEcn ecn = QuicEcn::NotEct;
+        Ecn ecn = Ecn::NotEct;
     };
 
     struct LocalCid
@@ -477,8 +490,8 @@ private:
 
     // Receiving.
     // Whether the packet opened.
-    [[nodiscard]] bool receive_packet(const QuicHeader& header, cont::Span<u8> packet, usize datagram_bytes,
-                                      QuicEcn ecn, u64 now_ns) noexcept;
+    [[nodiscard]] bool receive_packet(const QuicHeader& header, cont::Span<u8> packet, usize datagram_bytes, Ecn ecn,
+                                      u64 now_ns) noexcept;
     [[nodiscard]] bool on_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
     [[nodiscard]] bool crypto_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
     [[nodiscard]] bool advance_handshake(u64 now_ns) noexcept;
@@ -489,7 +502,7 @@ private:
     [[nodiscard]] bool begin_early() noexcept;
     [[nodiscard]] bool settle_early(u64 now_ns) noexcept;
     void reject_early(u64 now_ns) noexcept;
-    void hold(QuicPacketType type, cont::ConstSpan<u8> packet, QuicEcn ecn) noexcept;
+    void hold(QuicPacketType type, cont::ConstSpan<u8> packet, Ecn ecn) noexcept;
     // Reads the held packets whose keys came, until none more opens; drops those whose keys went.
     void read_held(u64 now_ns) noexcept;
     [[nodiscard]] bool new_connection_id(const QuicFrame& frame, u64 now_ns) noexcept;
@@ -561,6 +574,8 @@ private:
     CongestionSlot m_congestion_slot;
     Pacer m_pacer;
     u64 m_pace_release_ns = kNeverNs; // data waits for the pacer until then
+    QuicEcnValidator m_ecn;
+    Ecn m_marking = Ecn::NotEct;      // the codepoint of the datagram being written, then of the last one
     bool m_data_open = true;          // congestion control lets data go in the datagram being written
     u64 m_event_ns = 0U;              // the time recovery's events happen at (they carry none)
     QuicStreamSet m_streams;

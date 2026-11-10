@@ -386,8 +386,8 @@ TEST_CASE("QUIC frames: ACK ranges round trip against a reference set and refuse
             }
             top = top - length - gap;
         }
-        const QuicEcnCounts counts{random() % 1000U, random() % 1000U, random() % 1000U};
-        const QuicEcnCounts* ecn = (round % 2 == 0) ? &counts : nullptr;
+        const EcnCounts counts{random() % 1000U, random() % 1000U, random() % 1000U};
+        const EcnCounts* ecn = (round % 2 == 0) ? &counts : nullptr;
         const u64 delay = random() % 70000U;
         const ConstSpan<QuicAckRange> view(ranges.data(), ranges.size());
         u8 out[256] = {};
@@ -428,7 +428,7 @@ TEST_CASE("QUIC frames: ACK ranges round trip against a reference set and refuse
     CHECK(refused({{1U, 2U}, {5U, 9U}}));                       // smallest first
     CHECK(refused({{0U, crd::net::kQuicMaxVarint + 1U}}));
     CHECK_FALSE(refused({{5U, 9U}, {0U, 3U}}));
-    const QuicEcnCounts too_large{crd::net::kQuicMaxVarint + 1U, 0U, 0U};
+    const EcnCounts too_large{crd::net::kQuicMaxVarint + 1U, 0U, 0U};
     const QuicAckRange one[1] = {{0U, 0U}};
     CHECK(quic_ack_bytes(ConstSpan<QuicAckRange>(one, 1U), 0U, &too_large) == 0U);
     CHECK(quic_ack_bytes(ConstSpan<QuicAckRange>(one, 1U), crd::net::kQuicMaxVarint + 1U) == 0U);

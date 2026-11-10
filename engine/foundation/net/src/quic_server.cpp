@@ -158,7 +158,7 @@ void QuicServer::on_admit(const IngressDecision& decision, const ReceivedDatagra
     enlist(index, *connection, datagram.peer, now_ns);
     ++m_counters.admitted;
     m_events.on_accept(handle_of(index), *connection, datagram.peer);
-    connection->receive(datagram.storage.first(datagram.size), QuicEcn::NotEct, now_ns);
+    connection->receive(datagram.storage.first(datagram.size), datagram.ecn, now_ns);
     read_early(index, *connection, admitted.client_dcid.view(), now_ns);
 }
 
@@ -221,6 +221,7 @@ void QuicServer::on_early(const IngressDecision& decision, const ReceivedDatagra
     Early& entry = m_early[place];
     entry.arrived_ns = now_ns;
     entry.peer = datagram.peer;
+    entry.ecn = datagram.ecn;
     static_cast<void>(entry.dcid.assign(decision.header.dcid)); // a header's ID, at most 20 bytes
     entry.bytes = static_cast<u32>(datagram.size);
     std::memcpy(m_early_bytes + (usize{place} * m_config.early_bytes), datagram.storage.data(), datagram.size);
@@ -309,7 +310,7 @@ void QuicServer::read_early(u32 index, QuicConnection& connection, cont::ConstSp
         const cont::Span<u8> bytes(m_early_bytes + (usize{place} * m_config.early_bytes), entry.bytes);
         entry.bytes = 0U;
         ++m_counters.early_read;
-        connection.receive(bytes, QuicEcn::NotEct, now_ns);
+        connection.receive(bytes, entry.ecn, now_ns);
     }
     expire_early(now_ns);
 }

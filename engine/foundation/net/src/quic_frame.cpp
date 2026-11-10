@@ -644,7 +644,7 @@ usize write_quic_frame(const QuicFrame& frame, cont::Span<u8> out) noexcept
     return bytes;
 }
 
-usize quic_ack_bytes(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const QuicEcnCounts* ecn) noexcept
+usize quic_ack_bytes(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn) noexcept
 {
     if (!ack_ranges_valid(ranges))
     {
@@ -670,8 +670,7 @@ usize quic_ack_bytes(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const Quic
     return total;
 }
 
-usize write_quic_ack(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const QuicEcnCounts* ecn,
-                     cont::Span<u8> out) noexcept
+usize write_quic_ack(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn, cont::Span<u8> out) noexcept
 {
     const usize bytes = quic_ack_bytes(ranges, delay, ecn);
     if (bytes == 0U || bytes > out.size())

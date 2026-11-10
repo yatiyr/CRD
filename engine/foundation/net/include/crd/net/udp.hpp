@@ -6,7 +6,9 @@
 // NET-DEBUG's link conditioner stand where a UdpSocket stands, and the transport cannot tell them apart.
 
 #include <crd/containers/span.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
+#include <crd/net/ecn.hpp>
 #include <crd/net/endpoint.hpp>
 
 namespace crd::net
@@ -50,6 +52,7 @@ struct ReceivedDatagram
     cont::Span<u8> storage;
     usize size = 0U;        // bytes of the datagram in storage
     bool truncated = false; // the datagram was longer than storage and its rest is lost
+    Ecn ecn = Ecn::NotEct;  // its IP header's codepoint; Not-ECT where the socket cannot read it (ecn_reading)
     Endpoint peer;
 };
 
@@ -57,6 +60,15 @@ struct OutgoingDatagram
 {
     cont::ConstSpan<u8> bytes;
     Endpoint peer;
+    Ecn ecn = Ecn::NotEct; // the codepoint its IP header carries where the socket can mark it (ecn_marking)
+};
+
+// What a socket carries beyond the bytes, as it opened. ECN marking may stop later (a host that refuses a marked
+// send): the socket then sends unmarked, and the transport's ECN validation fails on the path (quic_ecn.hpp).
+struct SocketFeatures
+{
+    bool ecn_reading = false; // received datagrams report their codepoint
+    bool ecn_marking = false; // sent datagrams carry theirs
 };
 
 // What one batch did: `count` datagrams in order, then the reason it stopped. A receive stops with None when the host
@@ -81,6 +93,8 @@ public:
     // True once a datagram (or an error receive() reports) is waiting, false when `timeout_ns` passes first. A signal
     // that interrupts the wait restarts it.
     [[nodiscard]] virtual bool wait_readable(u64 timeout_ns) noexcept = 0;
+    // None by default: a socket that carries only bytes.
+    [[nodiscard]] virtual SocketFeatures features() const noexcept { return {}; }
 
 protected:
     DatagramSocket() = default;
@@ -92,8 +106,10 @@ protected:
 
 // A non-blocking UDP socket of the host. On Windows its port is held exclusively and ICMP port- and TTL-unreachable
 // reports do not end receives (SIO_UDP_CONNRESET, SIO_UDP_NETRESET), so one unreachable peer never stops a server;
-// on Linux a batch is one recvmmsg or sendmmsg per 32 datagrams. Path behaviour (PMTU, ECN, pacing, offloads) is
-// NET-PATH's.
+// on Linux a batch is one recvmmsg or sendmmsg per 32 datagrams. ECN is read and marked per datagram on Linux
+// (IP_TOS and IPV6_TCLASS control messages) and Windows (IP_ECN and IPV6_ECN through WSARecvMsg and WSASendMsg),
+// each enabled where the host accepts it and reported by features(); macOS carries bytes alone until crd-net's port
+// there (MAC.1). Other path behaviour (PMTU, pacing, offloads) is NET-PATH's.
 class UdpSocket final : public DatagramSocket
 {
 public:
@@ -115,6 +131,7 @@ public:
     [[nodiscard]] BatchResult receive(cont::Span<ReceivedDatagram> slots) noexcept override;
     [[nodiscard]] BatchResult send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept override;
     [[nodiscard]] bool wait_readable(u64 timeout_ns) noexcept override;
+    [[nodiscard]] SocketFeatures features() const noexcept override { return m_features; }
 
 private:
     static constexpr u64 kNoHandle = ~u64{0};
@@ -122,6 +139,10 @@ private:
     u64 m_handle = kNoHandle; // the host's descriptor or SOCKET
     Endpoint m_local;
     bool m_dual_stack = false;
+    SocketFeatures m_features;
+#if CRD_OS_WINDOWS
+    void (*m_receive_message)() = nullptr; // WSARecvMsg, which Winsock hands out per provider, as a generic pointer
+#endif
 };
 
 } // namespace crd::net

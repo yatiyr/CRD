@@ -5,7 +5,7 @@
 # QUIC frames and transport parameters, QUIC packets per level, acknowledgements and loss recovery, byte streams and
 # flow control, the connection's stream set and datagrams, the connection carrying them, the server behind the
 # ingress and the client's host, byte-stream sockets on the loopback and QMux over them, also as WebSocket tunnels over
-# HTTP/2 and HTTP/3; NET-PATH's congestion control and pacing, alone and in the connection.
+# HTTP/2 and HTTP/3; NET-PATH's congestion control and pacing and ECN, alone and in the connection.
 add_executable(crd-net-tests
     test_admission.cpp
     test_channel_link.cpp
@@ -34,6 +34,7 @@ add_executable(crd-net-tests
     test_quic_congestion.cpp
     test_quic_connection.cpp
     test_quic_datagram.cpp
+    test_quic_ecn.cpp
     test_quic_frame.cpp
     test_quic_keyed.cpp
     test_quic_packet.cpp

@@ -18,6 +18,10 @@ namespace
 
 #if CRD_OS_LINUX
 constexpr usize kBatchChunk = 32U; // datagrams per recvmmsg or sendmmsg
+// Room for the one control message an ECN codepoint takes, received or sent.
+constexpr usize kControlBytes = CMSG_SPACE(sizeof(int));
+#elif CRD_OS_WINDOWS
+constexpr usize kControlBytes = WSA_CMSG_SPACE(sizeof(INT));
 #endif
 
 // An ICMP report about an earlier send, which says nothing about the datagrams still waiting.
@@ -80,8 +84,125 @@ void fill_slot(ReceivedDatagram& slot, usize size, bool truncated, const sockadd
 {
     slot.size = size < slot.storage.size() ? size : slot.storage.size();
     slot.truncated = truncated;
+    slot.ecn = Ecn::NotEct;
     slot.peer = from_native(peer);
 }
+
+#if CRD_OS_LINUX || CRD_OS_WINDOWS
+// Asks the host to report each datagram's ECN codepoint; an IPv6 socket that carries IPv4 asks for both families.
+// A host that refuses leaves the socket without ECN, which features() reports; it is never an open() failure.
+[[nodiscard]] SocketFeatures enable_ecn(NativeSocket handle, bool v6, bool dual_stack) noexcept
+{
+#if CRD_OS_LINUX
+    const int v4_option = IP_RECVTOS;
+    const int v6_option = IPV6_RECVTCLASS;
+#else
+    const int v4_option = IP_RECVECN;
+    const int v6_option = IPV6_RECVECN;
+#endif
+    const bool v4_read = (v6 && !dual_stack) || set_option(handle, IPPROTO_IP, v4_option, 1);
+    const bool v6_read = !v6 || set_option(handle, IPPROTO_IPV6, v6_option, 1);
+    SocketFeatures features;
+    features.ecn_reading = v4_read && v6_read;
+    features.ecn_marking = true; // per datagram; a host that refuses a marked send turns it off (send)
+    return features;
+}
+
+// The control message level and type that carry a codepoint toward `peer`, by its own family (an IPv4 peer of a
+// dual-stack socket takes IPv4's, which the host applies to the mapped address).
+void ecn_message(const Endpoint& peer, int& level, int& type) noexcept
+{
+    const bool v4 = peer.address.unmapped().family == AddressFamily::V4;
+    level = v4 ? IPPROTO_IP : IPPROTO_IPV6;
+#if CRD_OS_LINUX
+    type = v4 ? IP_TOS : IPV6_TCLASS;
+#else
+    type = v4 ? IP_ECN : IPV6_ECN;
+#endif
+}
+
+// The codepoint one received control message carries, or false for a message that carries none. Linux reports
+// IPv4's TOS as one byte and IPv6's Traffic Class as an int; Windows reports both as an INT.
+[[nodiscard]] bool ecn_from(int level, int type, const u8* data, usize bytes, Ecn& ecn) noexcept
+{
+#if CRD_OS_LINUX
+    const bool carries = (level == IPPROTO_IP && type == IP_TOS) || (level == IPPROTO_IPV6 && type == IPV6_TCLASS);
+#else
+    const bool carries = (level == IPPROTO_IP && type == IP_ECN) || (level == IPPROTO_IPV6 && type == IPV6_ECN);
+#endif
+    if (!carries || bytes == 0U)
+    {
+        return false;
+    }
+    int value = 0;
+    if (bytes >= sizeof(value))
+    {
+        std::memcpy(&value, data, sizeof(value));
+    }
+    else
+    {
+        value = data[0];
+    }
+    ecn = static_cast<Ecn>(static_cast<unsigned>(value) & 3U);
+    return true;
+}
+#endif
+
+#if CRD_OS_LINUX
+[[nodiscard]] Ecn received_ecn(msghdr& message) noexcept
+{
+    Ecn ecn = Ecn::NotEct;
+    for (cmsghdr* header = CMSG_FIRSTHDR(&message); header != nullptr; header = CMSG_NXTHDR(&message, header))
+    {
+        const usize bytes = header->cmsg_len - CMSG_LEN(0);
+        if (ecn_from(header->cmsg_level, header->cmsg_type, CMSG_DATA(header), bytes, ecn))
+        {
+            break;
+        }
+    }
+    return ecn;
+}
+
+// One control message carrying `ecn` toward `peer` in `control`, which `message` then points at.
+void mark(msghdr& message, u8 (&control)[kControlBytes], const Endpoint& peer, Ecn ecn) noexcept
+{
+    std::memset(control, 0, sizeof(control));
+    message.msg_control = control;
+    message.msg_controllen = sizeof(control);
+    cmsghdr* const header = CMSG_FIRSTHDR(&message);
+    ecn_message(peer, header->cmsg_level, header->cmsg_type);
+    header->cmsg_len = CMSG_LEN(sizeof(int));
+    const int value = static_cast<int>(ecn);
+    std::memcpy(CMSG_DATA(header), &value, sizeof(value));
+}
+#elif CRD_OS_WINDOWS
+[[nodiscard]] Ecn received_ecn(WSAMSG& message) noexcept
+{
+    Ecn ecn = Ecn::NotEct;
+    for (WSACMSGHDR* header = WSA_CMSG_FIRSTHDR(&message); header != nullptr;
+         header = WSA_CMSG_NXTHDR(&message, header))
+    {
+        const usize bytes = header->cmsg_len - WSA_CMSG_LEN(0);
+        if (ecn_from(header->cmsg_level, header->cmsg_type, WSA_CMSG_DATA(header), bytes, ecn))
+        {
+            break;
+        }
+    }
+    return ecn;
+}
+
+// One control message carrying `ecn` toward `peer` in `control`, which `message` then points at.
+void mark(WSAMSG& message, u8 (&control)[kControlBytes], const Endpoint& peer, Ecn ecn) noexcept
+{
+    std::memset(control, 0, sizeof(control));
+    message.Control = WSABUF{static_cast<ULONG>(sizeof(control)), reinterpret_cast<CHAR*>(control)};
+    WSACMSGHDR* const header = WSA_CMSG_FIRSTHDR(&message);
+    ecn_message(peer, header->cmsg_level, header->cmsg_type);
+    header->cmsg_len = WSA_CMSG_LEN(sizeof(INT));
+    const INT value = static_cast<INT>(ecn);
+    std::memcpy(WSA_CMSG_DATA(header), &value, sizeof(value));
+}
+#endif
 
 } // namespace
 
@@ -91,7 +212,12 @@ UdpSocket::~UdpSocket()
 }
 
 UdpSocket::UdpSocket(UdpSocket&& other) noexcept
-    : DatagramSocket(), m_handle(other.m_handle), m_local(other.m_local), m_dual_stack(other.m_dual_stack)
+    : DatagramSocket(), m_handle(other.m_handle), m_local(other.m_local), m_dual_stack(other.m_dual_stack),
+      m_features(other.m_features)
+#if CRD_OS_WINDOWS
+      ,
+      m_receive_message(other.m_receive_message)
+#endif
 {
     other.m_handle = kNoHandle;
 }
@@ -104,6 +230,10 @@ UdpSocket& UdpSocket::operator=(UdpSocket&& other) noexcept
         m_handle = other.m_handle;
         m_local = other.m_local;
         m_dual_stack = other.m_dual_stack;
+        m_features = other.m_features;
+#if CRD_OS_WINDOWS
+        m_receive_message = other.m_receive_message;
+#endif
         other.m_handle = kNoHandle;
     }
     return *this;
@@ -142,6 +272,26 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
     socket.m_handle = static_cast<u64>(handle);
     socket.m_dual_stack = v6 && options.dual_stack;
     error = configure(handle, v6, options);
+#if CRD_OS_WINDOWS
+    if (error == SocketError::None)
+    {
+        GUID guid = WSAID_WSARECVMSG;
+        LPFN_WSARECVMSG receive_message = nullptr;
+        DWORD returned = 0U;
+        const bool found = ::WSAIoctl(handle, SIO_GET_EXTENSION_FUNCTION_POINTER, &guid, sizeof(guid), &receive_message,
+                                      sizeof(receive_message), &returned, nullptr, nullptr) == 0;
+        error = (found && receive_message != nullptr) ? SocketError::None : SocketError::Failed;
+        // A function pointer kept as the generic one and cast back to call: a defined round trip.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        socket.m_receive_message = reinterpret_cast<void (*)()>(receive_message);
+    }
+#endif
+#if CRD_OS_LINUX || CRD_OS_WINDOWS
+    if (error == SocketError::None)
+    {
+        socket.m_features = enable_ecn(handle, v6, socket.m_dual_stack);
+    }
+#endif
     if (error == SocketError::None)
     {
         NativeAddress address;
@@ -188,6 +338,7 @@ void UdpSocket::close() noexcept
 #endif
     m_handle = kNoHandle;
     m_local = Endpoint{};
+    m_features = SocketFeatures{};
 }
 
 Endpoint UdpSocket::local_endpoint() const noexcept
@@ -211,6 +362,7 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
         mmsghdr messages[kBatchChunk];
         iovec vectors[kBatchChunk];
         sockaddr_storage peers[kBatchChunk];
+        alignas(cmsghdr) u8 controls[kBatchChunk][kControlBytes];
         for (usize index = 0U; index < chunk; ++index)
         {
             const ReceivedDatagram& slot = slots[result.count + index];
@@ -220,6 +372,8 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
             messages[index].msg_hdr.msg_namelen = sizeof(peers[index]);
             messages[index].msg_hdr.msg_iov = &vectors[index];
             messages[index].msg_hdr.msg_iovlen = 1U;
+            messages[index].msg_hdr.msg_control = controls[index];
+            messages[index].msg_hdr.msg_controllen = sizeof(controls[index]);
         }
         const int got = ::recvmmsg(handle, messages, static_cast<unsigned int>(chunk), MSG_DONTWAIT, nullptr);
         if (got < 0)
@@ -237,8 +391,10 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
         }
         for (usize index = 0U; index < static_cast<usize>(got); ++index)
         {
-            fill_slot(slots[result.count + index], messages[index].msg_len,
-                      (messages[index].msg_hdr.msg_flags & MSG_TRUNC) != 0, peers[index]);
+            ReceivedDatagram& slot = slots[result.count + index];
+            fill_slot(slot, messages[index].msg_len, (messages[index].msg_hdr.msg_flags & MSG_TRUNC) != 0,
+                      peers[index]);
+            slot.ecn = received_ecn(messages[index].msg_hdr);
         }
         result.count += static_cast<usize>(got);
         if (static_cast<usize>(got) < chunk)
@@ -252,20 +408,24 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
         ReceivedDatagram& slot = slots[result.count];
         sockaddr_storage peer{};
 #if CRD_OS_WINDOWS
-        NativeLength peer_length = static_cast<NativeLength>(sizeof(peer));
-        const int capacity = static_cast<int>(slot.storage.size() < INT_MAX ? slot.storage.size() : INT_MAX);
-        const int got = ::recvfrom(handle, reinterpret_cast<char*>(slot.storage.data()), capacity, 0,
-                                   reinterpret_cast<sockaddr*>(&peer), &peer_length);
-        if (got >= 0)
+        alignas(WSACMSGHDR) u8 control[kControlBytes];
+        WSABUF buffer{static_cast<ULONG>(slot.storage.size() < INT_MAX ? slot.storage.size() : INT_MAX),
+                      reinterpret_cast<CHAR*>(slot.storage.data())};
+        WSAMSG message{};
+        message.name = reinterpret_cast<sockaddr*>(&peer);
+        message.namelen = static_cast<INT>(sizeof(peer));
+        message.lpBuffers = &buffer;
+        message.dwBufferCount = 1U;
+        message.Control = WSABUF{static_cast<ULONG>(sizeof(control)), reinterpret_cast<CHAR*>(control)};
+        DWORD got = 0U;
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        const auto receive_message = reinterpret_cast<LPFN_WSARECVMSG>(m_receive_message);
+        const bool received = receive_message(handle, &message, &got, nullptr, nullptr) == 0;
+        const int code = received ? 0 : last_error();
+        if (received || code == WSAEMSGSIZE)
         {
-            fill_slot(slot, static_cast<usize>(got), false, peer);
-            ++result.count;
-            continue;
-        }
-        const int code = last_error();
-        if (code == WSAEMSGSIZE)
-        {
-            fill_slot(slot, slot.storage.size(), true, peer);
+            fill_slot(slot, received ? static_cast<usize>(got) : slot.storage.size(), !received, peer);
+            slot.ecn = received_ecn(message);
             ++result.count;
             continue;
         }
@@ -315,6 +475,8 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
         mmsghdr messages[kBatchChunk];
         iovec vectors[kBatchChunk];
         NativeAddress peers[kBatchChunk];
+        alignas(cmsghdr) u8 controls[kBatchChunk][kControlBytes];
+        bool marked = false;
         usize chunk = 0U;
         SocketError refused = SocketError::None;
         while (chunk < kBatchChunk && result.count + chunk < datagrams.size())
@@ -335,6 +497,11 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
             messages[chunk].msg_hdr.msg_namelen = peers[chunk].length;
             messages[chunk].msg_hdr.msg_iov = &vectors[chunk];
             messages[chunk].msg_hdr.msg_iovlen = 1U;
+            if (datagram.ecn != Ecn::NotEct && m_features.ecn_marking)
+            {
+                mark(messages[chunk].msg_hdr, controls[chunk], datagram.peer, datagram.ecn);
+                marked = true;
+            }
             ++chunk;
         }
         if (chunk != 0U)
@@ -346,6 +513,11 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
                 const int code = last_error();
                 if (sent < 0 && interrupted(code))
                 {
+                    continue;
+                }
+                if (sent < 0 && code == EINVAL && marked)
+                {
+                    m_features.ecn_marking = false; // a host that takes no codepoint: the batch goes unmarked
                     continue;
                 }
                 result.error = sent < 0 ? map_error(code, true) : SocketError::Failed;
@@ -364,6 +536,9 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
         }
     }
 #else
+#if CRD_OS_WINDOWS
+    bool plain = false; // the datagram the host refused marked goes again unmarked
+#endif
     while (result.count < datagrams.size())
     {
         const OutgoingDatagram& datagram = datagrams[result.count];
@@ -377,9 +552,23 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
             return result;
         }
 #if CRD_OS_WINDOWS
-        const int sent = ::sendto(handle, reinterpret_cast<const char*>(datagram.bytes.data()),
-                                  static_cast<int>(datagram.bytes.size()), 0,
-                                  reinterpret_cast<const sockaddr*>(&peer.storage), peer.length);
+        // WSASendMsg only reads the bytes; WSABUF has no const form.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+        WSABUF buffer{static_cast<ULONG>(datagram.bytes.size()),
+                      reinterpret_cast<CHAR*>(const_cast<u8*>(datagram.bytes.data()))};
+        WSAMSG message{};
+        message.name = reinterpret_cast<sockaddr*>(&peer.storage);
+        message.namelen = peer.length;
+        message.lpBuffers = &buffer;
+        message.dwBufferCount = 1U;
+        alignas(WSACMSGHDR) u8 control[kControlBytes];
+        const bool marked = !plain && datagram.ecn != Ecn::NotEct && m_features.ecn_marking;
+        if (marked)
+        {
+            mark(message, control, datagram.peer, datagram.ecn);
+        }
+        DWORD bytes_sent = 0U;
+        const int sent = ::WSASendMsg(handle, &message, 0U, &bytes_sent, nullptr, nullptr);
 #else
         const ssize_t sent = ::sendto(handle, datagram.bytes.data(), datagram.bytes.size(), 0,
                                       reinterpret_cast<const sockaddr*>(&peer.storage), peer.length);
@@ -391,9 +580,25 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
             {
                 continue;
             }
+#if CRD_OS_WINDOWS
+            if (code == WSAEINVAL && marked)
+            {
+                // Windows takes ECT(0) and ECT(1) but refuses CE, a router's mark, so that datagram goes unmarked;
+                // a host that refuses an ECT mark takes no codepoint at all.
+                if (datagram.ecn != Ecn::Ce)
+                {
+                    m_features.ecn_marking = false;
+                }
+                plain = true;
+                continue;
+            }
+#endif
             result.error = map_error(code, true);
             return result;
         }
+#if CRD_OS_WINDOWS
+        plain = false;
+#endif
         ++result.count;
     }
 #endif

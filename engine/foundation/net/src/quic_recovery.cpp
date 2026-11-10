@@ -50,11 +50,6 @@ constexpr u64 kNanosPerMicro = 1000U;
     return (a != 0U && b > kMaxU64 / a) ? kMaxU64 : a * b;
 }
 
-[[nodiscard]] constexpr usize index_of(QuicSpace space) noexcept
-{
-    return static_cast<usize>(space);
-}
-
 [[nodiscard]] constexpr bool lost(u8 state) noexcept
 {
     return state == kLost || state == kLostByTime;
@@ -135,7 +130,7 @@ void QuicAckTracker::insert(u64 number) noexcept
     ++m_count;
 }
 
-bool QuicAckTracker::on_received(u64 number, bool ack_eliciting, QuicEcn ecn, u64 received_ns,
+bool QuicAckTracker::on_received(u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns,
                                  u64 max_ack_delay_ns) noexcept
 {
     for (usize i = 0U; i < m_count; ++i)
@@ -151,14 +146,14 @@ bool QuicAckTracker::on_received(u64 number, bool ack_eliciting, QuicEcn ecn, u6
     }
     insert(number);
 
-    if (ecn != QuicEcn::NotEct)
+    if (ecn != Ecn::NotEct)
     {
         m_ecn_seen = true;
-        if (ecn == QuicEcn::Ect0)
+        if (ecn == Ecn::Ect0)
         {
             ++m_ecn.ect0;
         }
-        else if (ecn == QuicEcn::Ect1)
+        else if (ecn == Ecn::Ect1)
         {
             ++m_ecn.ect1;
         }
@@ -172,7 +167,7 @@ bool QuicAckTracker::on_received(u64 number, bool ack_eliciting, QuicEcn ecn, u6
         return true;
     }
 
-    bool immediate = m_space != QuicSpace::Application || ecn == QuicEcn::Ce;
+    bool immediate = m_space != QuicSpace::Application || ecn == Ecn::Ce;
     if (m_largest_eliciting != kQuicNoPacket && number < m_largest_eliciting)
     {
         immediate = true; // out of order
@@ -205,7 +200,7 @@ QuicAckWrite QuicAckTracker::write(cont::Span<u8> out, u64 now_ns, u64 exponent)
 {
     const u64 delay_us = (now_ns > m_largest_ns) ? (now_ns - m_largest_ns) / kNanosPerMicro : 0U;
     const u64 delay    = (exponent >= 64U) ? 0U : (delay_us >> exponent);
-    const QuicEcnCounts* const ecn = m_ecn_seen ? &m_ecn : nullptr;
+    const EcnCounts* const ecn = m_ecn_seen ? &m_ecn : nullptr;
     for (usize count = m_count; count > 0U; --count)
     {
         const cont::ConstSpan<QuicAckRange> ranges(m_ranges, count);
@@ -281,9 +276,9 @@ QuicRecovery::QuicRecovery(const QuicRecoveryConfig& config, cont::Span<QuicSent
       m_local_ack_delay_exponent(min_u64(config.local_ack_delay_exponent, kQuicMaxAckDelayExponent)),
       m_reserved_entries(config.reserved_entries)
 {
-    m_spaces[index_of(QuicSpace::Initial)].entries     = initial;
-    m_spaces[index_of(QuicSpace::Handshake)].entries   = handshake;
-    m_spaces[index_of(QuicSpace::Application)].entries = application;
+    m_spaces[quic_space_index(QuicSpace::Initial)].entries     = initial;
+    m_spaces[quic_space_index(QuicSpace::Handshake)].entries   = handshake;
+    m_spaces[quic_space_index(QuicSpace::Application)].entries = application;
     for (usize i = 0U; i < kQuicSpaces; ++i)
     {
         m_spaces[i].received.reset(static_cast<QuicSpace>(i));
@@ -359,7 +354,7 @@ bool QuicRecovery::held_lost(QuicSpace id, const QuicSentEntry& slot, u64 now_ns
 
 void QuicRecovery::compact(QuicSpace id, u64 now_ns, bool room) noexcept
 {
-    Space& space = m_spaces[index_of(id)];
+    Space& space = m_spaces[quic_space_index(id)];
     while (space.count > 0U && settled(entry(space, 0U).state) &&
            ((room && space.count >= space.entries.size()) || !held_lost(id, entry(space, 0U), now_ns)))
     {
@@ -512,7 +507,7 @@ bool QuicRecovery::discard(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events)
     {
         return false;
     }
-    Space& space = m_spaces[index_of(id)];
+    Space& space = m_spaces[quic_space_index(id)];
     if (space.discarded)
     {
         return true;
@@ -528,7 +523,7 @@ bool QuicRecovery::discard(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events)
 void QuicRecovery::retry(u64 now_ns, QuicRecoveryEvents& events) noexcept
 {
     // Only the first flight measures the path: after a probe the Retry may answer a later packet.
-    Space& initial = m_spaces[index_of(QuicSpace::Initial)];
+    Space& initial = m_spaces[quic_space_index(QuicSpace::Initial)];
     const u64 first_ns = (initial.count != 0U && m_pto_count == 0U) ? entry(initial, 0U).packet.sent_ns : now_ns;
     for (usize id = 0U; id < kQuicSpaces; ++id)
     {
@@ -552,7 +547,7 @@ void QuicRecovery::reject_early(u64 now_ns, QuicRecoveryEvents& events) noexcept
 
 void QuicRecovery::drop_outstanding(QuicSpace id, QuicRecoveryEvents& events) noexcept
 {
-    Space& space = m_spaces[index_of(id)];
+    Space& space = m_spaces[quic_space_index(id)];
     for (usize i = 0U; i < space.count; ++i)
     {
         QuicSentEntry& slot = entry(space, i);
@@ -571,20 +566,20 @@ void QuicRecovery::drop_outstanding(QuicSpace id, QuicRecoveryEvents& events) no
 
 bool QuicRecovery::can_send(QuicSpace id) const noexcept
 {
-    const Space& space = m_spaces[index_of(id)];
+    const Space& space = m_spaces[quic_space_index(id)];
     return !space.discarded && (space.count < space.entries.size() || settled(space.entries[space.head].state));
 }
 
 bool QuicRecovery::can_send_data(QuicSpace id) const noexcept
 {
-    const Space& space = m_spaces[index_of(id)];
+    const Space& space = m_spaces[quic_space_index(id)];
     return !space.discarded &&
            (space.count + m_reserved_entries < space.entries.size() || settled(space.entries[space.head].state));
 }
 
 QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& packet) noexcept
 {
-    Space& space = m_spaces[index_of(id)];
+    Space& space = m_spaces[quic_space_index(id)];
     if (space.discarded)
     {
         return QuicRecoveryError::Discarded;
@@ -622,7 +617,7 @@ QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& pack
 
 QuicAckWrite QuicRecovery::write_ack(QuicSpace id, cont::Span<u8> out, u64 now_ns) noexcept
 {
-    Space& space = m_spaces[index_of(id)];
+    Space& space = m_spaces[quic_space_index(id)];
     if (space.discarded)
     {
         return {};
@@ -631,9 +626,9 @@ QuicAckWrite QuicRecovery::write_ack(QuicSpace id, cont::Span<u8> out, u64 now_n
     return space.received.write(out, now_ns, exponent);
 }
 
-bool QuicRecovery::on_received(QuicSpace id, u64 number, bool ack_eliciting, QuicEcn ecn, u64 received_ns) noexcept
+bool QuicRecovery::on_received(QuicSpace id, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns) noexcept
 {
-    Space& space = m_spaces[index_of(id)];
+    Space& space = m_spaces[quic_space_index(id)];
     if (space.discarded)
     {
         return false;
@@ -644,7 +639,7 @@ bool QuicRecovery::on_received(QuicSpace id, u64 number, bool ack_eliciting, Qui
 
 QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events) noexcept
 {
-    Space&   space = m_spaces[index_of(id)];
+    Space&   space = m_spaces[quic_space_index(id)];
     QuicLoss loss;
     space.loss_time_ns = kNeverNs;
     if (space.largest_acked == kQuicNoPacket)
@@ -724,7 +719,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                                     QuicRecoveryEvents& events) noexcept
 {
     QuicAckOutcome out;
-    Space&         space = m_spaces[index_of(id)];
+    Space&         space = m_spaces[quic_space_index(id)];
     if (space.discarded)
     {
         out.error = QuicRecoveryError::Discarded;
@@ -740,6 +735,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
         m_handshake_acked = true;
     }
     const u64 prior_largest = space.largest_acked;
+    out.advanced = prior_largest == kQuicNoPacket || ack.largest > prior_largest;
     space.largest_acked =
         (space.largest_acked == kQuicNoPacket) ? ack.largest : max_u64(space.largest_acked, ack.largest);
 
@@ -784,6 +780,8 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                     continue;
                 }
                 eliciting = eliciting || slot.packet.ack_eliciting;
+                out.ect0_packets += (slot.packet.ecn == Ecn::Ect0) ? 1U : 0U;
+                out.ect1_packets += (slot.packet.ecn == Ecn::Ect1) ? 1U : 0U;
                 if (largest_newly == kQuicNoPacket || slot.packet.number > largest_newly)
                 {
                     largest_newly = slot.packet.number;
@@ -801,6 +799,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
     {
         return out;
     }
+    out.newest_sent_ns = largest_sent;
     if (out.spurious_packets != 0U)
     {
         // RFC 8985 section 6.2, step 4, before this frame's detection: the packet threshold to the reordering seen,
@@ -904,18 +903,18 @@ QuicTimeout QuicRecovery::on_timeout(u64 now_ns, QuicRecoveryEvents& events) noe
 
 u64 QuicRecovery::largest_acked(QuicSpace space) const noexcept
 {
-    return m_spaces[index_of(space)].largest_acked;
+    return m_spaces[quic_space_index(space)].largest_acked;
 }
 
 u64 QuicRecovery::ack_deadline_ns(QuicSpace space) const noexcept
 {
-    const Space& held = m_spaces[index_of(space)];
+    const Space& held = m_spaces[quic_space_index(space)];
     return held.discarded ? kNeverNs : held.received.ack_deadline_ns();
 }
 
 const QuicAckTracker& QuicRecovery::received(QuicSpace space) const noexcept
 {
-    return m_spaces[index_of(space)].received;
+    return m_spaces[quic_space_index(space)].received;
 }
 
 } // namespace crd::net

@@ -125,6 +125,7 @@ private:
         Endpoint peer;
         QuicConnectionId dcid;
         u32 bytes = 0U; // 0: a free or read entry
+        Ecn ecn = Ecn::NotEct;
     };
 
     void service(u32 index, QuicConnection& connection, u64 now_ns) noexcept override;

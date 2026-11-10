@@ -66,14 +66,14 @@ cont::Span<u8> SendQueue::room() noexcept
     return cont::Span<u8>(m_bytes + (usize{index} * m_slot_bytes), m_slot_bytes);
 }
 
-void SendQueue::push(usize bytes, const Endpoint& peer) noexcept
+void SendQueue::push(usize bytes, const Endpoint& peer, Ecn ecn) noexcept
 {
     const cont::Span<u8> slot = room();
     if (slot.empty() || bytes == 0U || bytes > slot.size())
     {
         return;
     }
-    m_datagrams[(m_head + m_queued) % m_slots] = OutgoingDatagram{slot.first(bytes), peer};
+    m_datagrams[(m_head + m_queued) % m_slots] = OutgoingDatagram{slot.first(bytes), peer, ecn};
     ++m_queued;
 }
 

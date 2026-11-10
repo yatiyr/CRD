@@ -43,6 +43,13 @@ crd_fuzz_target(crd-fuzz-net-quic-packet
 crd_fuzz_target(crd-fuzz-net-quic-recovery
     SOURCES fuzz_quic_recovery.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-recovery")
 
+# QUIC's ECN validation (NET-PATH).
+#   crd-fuzz-net-quic-ecn   any marked sends, time, losses, ACK frames with honest, absorbed, inflated, falling, short,
+#                           re-marked or arbitrary counts and new paths on one validator: each frame judged by the
+#                           restated rule, failures for good, signals only on a validated path, counts bounded.
+crd_fuzz_target(crd-fuzz-net-quic-ecn
+    SOURCES fuzz_quic_ecn.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-ecn")
+
 # Congestion control and pacing (NET-PATH).
 #   crd-fuzz-net-congestion   any sends, acknowledgements with RTT samples, losses, spurious losses, marks, persistent
 #                             congestion, held sends, time, live swaps and resets on one controller, and the pacer:

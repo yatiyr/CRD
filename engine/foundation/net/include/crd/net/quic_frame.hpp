@@ -16,6 +16,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/core/types.hpp>
+#include <crd/net/ecn.hpp>
 #include <crd/net/quic_header.hpp>
 
 namespace crd::net
@@ -197,22 +198,14 @@ private:
 // A Padding frame writes data.size() zero bytes (its contents are not read).
 [[nodiscard]] usize write_quic_frame(const QuicFrame& frame, cont::Span<u8> out) noexcept;
 
-// The ECN counts an ACK frame of type 0x03 reports.
-struct QuicEcnCounts
-{
-    u64 ect0 = 0U;
-    u64 ect1 = 0U;
-    u64 ce   = 0U;
-};
-
 // The bytes of an ACK frame for `ranges` (largest first, each range's smallest at least two above the next range's
 // largest, at least one range), ACK Delay `delay` and, when `ecn` is given, type 0x03 with its counts; 0 for ranges
 // out of that order or a value above kQuicMaxVarint.
 [[nodiscard]] usize quic_ack_bytes(cont::ConstSpan<QuicAckRange> ranges, u64 delay,
-                                   const QuicEcnCounts* ecn = nullptr) noexcept;
+                                   const EcnCounts* ecn = nullptr) noexcept;
 
 // Writes that ACK frame at the start of `out` and returns its bytes; 0, writing nothing, when refused or too large.
-[[nodiscard]] usize write_quic_ack(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const QuicEcnCounts* ecn,
+[[nodiscard]] usize write_quic_ack(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn,
                                    cont::Span<u8> out) noexcept;
 
 } // namespace crd::net

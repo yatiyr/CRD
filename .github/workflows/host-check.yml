@@ -87,6 +87,9 @@ jobs:
           # 4.2a's ticket cache and token index: three non-replaying local events, 2026-11-09.
           - {target: net-ticket-cache, seed: 8401, repeat: ''}
           - {target: net-quic-connection, seed: 8402, repeat: ''}
+          # NET-PATH's ECN in the connection: two non-replaying local events under fork mode (a stack underflow in memcpy,
+          # a wild read in AWS-LC's GCM tag), 2026-11-10.
+          - {target: net-quic-connection, seed: 8403, repeat: ''}
 
     steps:
       - name: Checkout

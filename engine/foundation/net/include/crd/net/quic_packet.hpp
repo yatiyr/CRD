@@ -93,6 +93,12 @@ enum class QuicSpace : u8
 };
 inline constexpr usize kQuicSpaces = 3U;
 
+// A space's place in per-space arrays.
+[[nodiscard]] constexpr usize quic_space_index(QuicSpace space) noexcept
+{
+    return static_cast<usize>(space);
+}
+
 [[nodiscard]] constexpr QuicSpace quic_space_of(QuicPacketType type) noexcept
 {
     if (type == QuicPacketType::Initial)

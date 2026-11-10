@@ -95,6 +95,10 @@ QuicConnection* QuicHost::build(u32 index, QuicConnectionConfig config) noexcept
 {
     u8 seed[crypto::kPrfKeyBytes] = {};
     config.ids = &m_ids[index];
+    if (!m_socket.features().ecn_marking)
+    {
+        config.ecn = Ecn::NotEct; // marks the socket would drop would only fail the path's validation
+    }
     if (config.entropy_seed.size() == sizeof(seed))
     {
         std::memcpy(seed, config.entropy_seed.data(), sizeof(seed));
@@ -195,7 +199,7 @@ void QuicHost::on_route(const IngressDecision& decision, const ReceivedDatagram&
         return;
     }
     const u64 opened = connection->counters().packets_opened;
-    connection->receive(datagram.storage.first(datagram.size), QuicEcn::NotEct, now_ns);
+    connection->receive(datagram.storage.first(datagram.size), datagram.ecn, now_ns);
     if (unbound && connection->counters().packets_opened != opened)
     {
         slot.peer = datagram.peer;
@@ -345,7 +349,7 @@ bool QuicHost::drain(Slot& slot, u64 now_ns) noexcept
         {
             return true;
         }
-        m_queue.push(written, slot.peer);
+        m_queue.push(written, slot.peer, slot.connection->marking());
     }
 }
 

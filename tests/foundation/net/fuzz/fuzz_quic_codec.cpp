@@ -69,7 +69,7 @@ void check_ack(const QuicAck& ack)
         ranges[count++] = range;
     }
     CRD_FUZZ_REQUIRE(count == ack.range_count + 1U);
-    const QuicEcnCounts counts{ack.ect0, ack.ect1, ack.ce};
+    const EcnCounts counts{ack.ect0, ack.ect1, ack.ce};
     static u8 out[crd::fuzz::kMaxInputBytes + 64U];
     const ConstSpan<QuicAckRange> view(ranges, count);
     const usize bytes = write_quic_ack(view, ack.delay, ack.ecn ? &counts : nullptr, Span<u8>(out, sizeof(out)));
@@ -305,7 +305,7 @@ usize frames_payload(u8* out, usize capacity)
                                   0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF};
     usize at = 0U;
     const QuicAckRange ranges[3] = {{90U, 100U}, {40U, 70U}, {0U, 5U}};
-    const QuicEcnCounts counts{3U, 0U, 1U};
+    const EcnCounts counts{3U, 0U, 1U};
     at += write_quic_ack(ConstSpan<QuicAckRange>(ranges, 3U), 2500U, &counts, Span<u8>(out + at, capacity - at));
     const auto put = [&](QuicFrame frame) { at += write_quic_frame(frame, Span<u8>(out + at, capacity - at)); };
     QuicFrame frame;

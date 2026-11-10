@@ -406,7 +406,7 @@ TEST_CASE("QUIC connection: closing resends at a falling rate, the peer drains, 
     for (usize i = 0U; i < 7U; ++i)
     {
         u8 junk[kQuicMinInitialDatagram] = {0x40U};
-        client.receive(Span<u8>(junk, sizeof(junk)), QuicEcn::NotEct, net->now);
+        client.receive(Span<u8>(junk, sizeof(junk)), Ecn::NotEct, net->now);
         u8 out[kDatagram];
         while (client.send(Span<u8>(out, sizeof(out)), net->now) != 0U)
         {
@@ -464,7 +464,7 @@ TEST_CASE("QUIC connection: an alert closes with CRYPTO_ERROR at its level and t
     for (usize i = 0U; i < 8U && size == 0U; ++i)
     {
         u8 junk[kQuicMinInitialDatagram] = {0x40U};
-        client.receive(Span<u8>(junk, sizeof(junk)), QuicEcn::NotEct, net->now);
+        client.receive(Span<u8>(junk, sizeof(junk)), Ecn::NotEct, net->now);
         size = client.send(Span<u8>(out, sizeof(out)), net->now);
     }
     REQUIRE(size != 0U);
@@ -505,7 +505,7 @@ TEST_CASE("QUIC connection: the peer's parameters are checked (connection IDs, v
         CHECK_FALSE(server.accept(accept, kStartNs)); // without retried, the original must be the Initial's
         accept.retried = true;
         REQUIRE(server.accept(accept, kStartNs));
-        server.receive(Span<u8>(first, size), QuicEcn::NotEct, kStartNs);
+        server.receive(Span<u8>(first, size), Ecn::NotEct, kStartNs);
         auto net = std::make_unique<Net>(client, server);
         REQUIRE(net->run_until([&] { return client.state() == QuicConnectionState::Closing; }));
         CHECK(client.close_info().error_code == static_cast<u64>(QuicTransportError::ProtocolViolation));
@@ -566,9 +566,9 @@ TEST_CASE("QUIC connection: a client's Version Negotiation packet is read by RFC
         u8 foreign[kQuicMaxVersionNegotiationBytes];
         std::memcpy(foreign, packet, size);
         foreign[6] ^= 0xFFU; // another client's ID: ignored
-        client.receive(Span<u8>(foreign, size), QuicEcn::NotEct, kStartNs);
+        client.receive(Span<u8>(foreign, size), Ecn::NotEct, kStartNs);
         CHECK(client.state() == QuicConnectionState::Handshaking);
-        client.receive(Span<u8>(packet, size), QuicEcn::NotEct, kStartNs);
+        client.receive(Span<u8>(packet, size), Ecn::NotEct, kStartNs);
         if (lists_own)
         {
             CHECK(client.state() == QuicConnectionState::Handshaking); // it lists the version run: not an answer
@@ -633,7 +633,7 @@ struct RetryFront
 void receive_copy(QuicConnection& connection, const Datagram& datagram, u64 now)
 {
     Datagram copy = datagram; // receiving opens in place
-    connection.receive(Span<u8>(copy.bytes, copy.size), QuicEcn::NotEct, now);
+    connection.receive(Span<u8>(copy.bytes, copy.size), Ecn::NotEct, now);
 }
 } // namespace
 
@@ -721,7 +721,7 @@ TEST_CASE("QUIC connection: a client takes one Retry, for its IDs, with a token 
             accept.retried = true;
             accept.validated = true;
             REQUIRE(server.accept(accept, at));
-            server.receive(Span<u8>(again, size), QuicEcn::NotEct, at);
+            server.receive(Span<u8>(again, size), Ecn::NotEct, at);
             auto net = std::make_unique<Net>(client, server);
             net->now = at;
             REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
@@ -746,7 +746,7 @@ TEST_CASE("QUIC connection: a client takes one Retry, for its IDs, with a token 
         accept.client_scid = own;
         accept.original_dcid = retry_scid;
         REQUIRE(server.accept(accept, kStartNs));
-        server.receive(Span<u8>(again, size), QuicEcn::NotEct, kStartNs);
+        server.receive(Span<u8>(again, size), Ecn::NotEct, kStartNs);
         auto net = std::make_unique<Net>(client, server);
         REQUIRE(net->run_until([&] { return client.state() == QuicConnectionState::Closing; }));
         CHECK(client.close_info().error_code == static_cast<u64>(QuicTransportError::ProtocolViolation));
@@ -1424,7 +1424,7 @@ public:
         const usize floor = (type == QuicPacketType::Initial && pad_initial) ? kQuicMinInitialDatagram : 0U;
         usize size = 0U;
         REQUIRE(raw.protection.seal(writer, used, {floor, 0U}, size) == QuicPacketError::None);
-        server.receive(Span<u8>(datagram, size), QuicEcn::NotEct, now);
+        server.receive(Span<u8>(datagram, size), Ecn::NotEct, now);
         drain();
     }
 
@@ -2662,7 +2662,7 @@ TEST_CASE("QUIC connection: a datagram of the largest size takes the first packe
             client.ping();
             const usize size = client.send(Span<u8>(out, sizeof(out)), net->now);
             REQUIRE(size != 0U);
-            server.receive(Span<u8>(out, size), QuicEcn::NotEct, net->now);
+            server.receive(Span<u8>(out, size), Ecn::NotEct, net->now);
         }
         REQUIRE((server.recovery().ack_deadline_ns(QuicSpace::Application) <= net->now) == owed);
         REQUIRE_FALSE(server.recovery().received(QuicSpace::Application).ranges().empty());
@@ -2673,7 +2673,7 @@ TEST_CASE("QUIC connection: a datagram of the largest size takes the first packe
         const u64 in_flight = server.recovery().bytes_in_flight();
         usize size = server.send(Span<u8>(out, sizeof(out)), net->now);
         REQUIRE(size != 0U);
-        client.receive(Span<u8>(out, size), QuicEcn::NotEct, net->now);
+        client.receive(Span<u8>(out, size), Ecn::NotEct, net->now);
         // A carried ACK waits behind the datagram; an owed one goes first and the datagram takes the next packet.
         CHECK(client.datagrams().held() == (owed ? 0U : 1U));
         const bool eliciting = server.recovery().bytes_in_flight() > in_flight; // a DATAGRAM frame elicits an ACK
@@ -2682,7 +2682,7 @@ TEST_CASE("QUIC connection: a datagram of the largest size takes the first packe
         {
             size = server.send(Span<u8>(out, sizeof(out)), net->now);
             REQUIRE(size != 0U);
-            client.receive(Span<u8>(out, size), QuicEcn::NotEct, net->now);
+            client.receive(Span<u8>(out, size), Ecn::NotEct, net->now);
             CHECK(client.datagrams().held() == 1U);
             CHECK(server.recovery().bytes_in_flight() > in_flight);
         }
@@ -3135,19 +3135,19 @@ TEST_CASE("QUIC connection: a stateless reset drains the connection, by the toke
 
         // Too short to be a reset, a token of an ID the client never sent to, or no token at all: nothing happens.
         ResetDatagram tiny(used, kQuicMinResetBytes - 1U);
-        client.receive(tiny.view(), QuicEcn::NotEct, pair.net->now);
+        client.receive(tiny.view(), Ecn::NotEct, pair.net->now);
         ResetDatagram unused(pair.server_host.tokens[0], 60U);
         const u64 dropped = client.counters().packets_dropped;
-        client.receive(unused.view(), QuicEcn::NotEct, pair.net->now);
+        client.receive(unused.view(), Ecn::NotEct, pair.net->now);
         CHECK(client.counters().packets_dropped == dropped + 1U);
         ResetDatagram forged(wrong, 60U);
-        client.receive(forged.view(), QuicEcn::NotEct, pair.net->now);
+        client.receive(forged.view(), Ecn::NotEct, pair.net->now);
         CHECK_FALSE(client.stateless_reset(ConstSpan<u8>(forged.bytes, forged.size), pair.net->now));
         CHECK(client.state() == QuicConnectionState::Established);
 
         // The token of the ID in use, at the least size: the client drains, sends nothing and ends.
         ResetDatagram reset(used, kQuicMinResetBytes);
-        client.receive(reset.view(), QuicEcn::NotEct, pair.net->now);
+        client.receive(reset.view(), Ecn::NotEct, pair.net->now);
         CHECK(client.state() == QuicConnectionState::Draining);
         CHECK(client.close_info().stateless_reset);
         CHECK_FALSE(client.close_info().local);
@@ -3164,7 +3164,7 @@ TEST_CASE("QUIC connection: a stateless reset drains the connection, by the toke
         u8 used[kQuicResetTokenBytes];
         pair.server_host.token_of(ConstSpan<u8>(kServerCid, sizeof(kServerCid)), used);
         ResetDatagram reset(used, 50U);
-        client.receive(reset.view(), QuicEcn::NotEct, pair.net->now);
+        client.receive(reset.view(), Ecn::NotEct, pair.net->now);
         CHECK(client.state() == QuicConnectionState::Draining);
         CHECK(client.close_info().application);
         CHECK(client.close_info().error_code == 7U);
@@ -3685,7 +3685,7 @@ usize deliver_flight(QuicConnection& to, Datagram* flight, usize count, bool ear
         REQUIRE(parse_quic_header(flight[index].view(), sizeof(kServerCid), header) == QuicHeaderError::None);
         if ((header.type == QuicPacketType::ZeroRtt) == early)
         {
-            to.receive(Span<u8>(flight[index].bytes, flight[index].size), QuicEcn::NotEct, kStartNs);
+            to.receive(Span<u8>(flight[index].bytes, flight[index].size), Ecn::NotEct, kStartNs);
             ++delivered;
         }
     }
@@ -3736,7 +3736,7 @@ TEST_CASE("QUIC connection: packets ahead of their keys are held in a bounded ri
         REQUIRE(answers >= 2U);
         for (usize index = answers; index-- > 0U;)
         {
-            client.receive(Span<u8>(answer[index].bytes, answer[index].size), QuicEcn::NotEct, kStartNs);
+            client.receive(Span<u8>(answer[index].bytes, answer[index].size), Ecn::NotEct, kStartNs);
         }
         CHECK(client.counters().packets_held != 0U);
         if (ring == 8U)

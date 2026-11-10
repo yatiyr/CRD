@@ -13,7 +13,9 @@
 // remains; lost packets come before acknowledged ones; AckOfUnsent is reported only for a range holding a number
 // never sent, always for one never sent above the oldest outstanding packet, and changes nothing. A spurious loss is
 // a lost packet in the frame's ranges within a probe period of its loss, counted once and with no event; the
-// thresholds stay within their caps and rise only on one. Bytes in flight equal the model's.
+// thresholds stay within their caps and rise only on one. Bytes in flight equal the model's. Each packet carries an
+// ECN codepoint of its number: a frame's outcome counts its newly acknowledged ECT(0) and ECT(1) packets (spurious
+// losses among them), says whether it raised the largest, and names a send time no later than now.
 // Received ranges stay ordered, separated, bounded and made of numbers received; a duplicate is refused exactly when
 // the ranges hold it; a written ACK frame reads back as the largest ranges. A loss or probe timeout fires only when
 // due, and the timer is armed while ack-eliciting packets are outstanding in a space it may serve.
@@ -53,6 +55,12 @@ struct Sent
     bool in_flight;
     u8   state;
 };
+
+// The codepoint a packet was sent with, from its number.
+[[nodiscard]] Ecn ecn_of(u64 number)
+{
+    return static_cast<Ecn>(number % 3U); // Not-ECT, ECT(1), ECT(0)
+}
 
 struct ModelSpace
 {
@@ -243,6 +251,7 @@ void op_send(World& w, QuicSpace id, u8 p)
     packet.in_flight     = (p & 8U) != 0U;
     packet.bytes         = 20U + 64U * (p >> 4U);
     packet.carried_ack   = space.carry;
+    packet.ecn           = ecn_of(packet.number);
     const bool              room  = w.recovery.can_send(id);
     const QuicRecoveryError error = w.recovery.on_sent(id, packet);
     if (space.discarded)
@@ -320,6 +329,7 @@ void op_ack(World& w, QuicSpace id, u8 p, const u8* more, usize more_bytes)
     const u64 held_for   = w.recovery.probe_period_ns(id);
     usize     candidates = 0U;
     u64       candidate_bytes = 0U;
+    u64       candidate_marks[2] = {}; // ECT(0), ECT(1)
     for (usize i = 0U; i < space.count; ++i)
     {
         Sent& sent = space.sent[i];
@@ -328,8 +338,11 @@ void op_ack(World& w, QuicSpace id, u8 p, const u8* more, usize more_bytes)
         {
             ++candidates;
             candidate_bytes += sent.in_flight ? sent.bytes : 0U;
+            candidate_marks[0] += (ecn_of(sent.number) == Ecn::Ect0) ? 1U : 0U;
+            candidate_marks[1] += (ecn_of(sent.number) == Ecn::Ect1) ? 1U : 0U;
         }
     }
+    const u64 largest_before = space.largest_acked;
     const u64            threshold_before = w.recovery.packet_threshold();
     const u32            steps_before = w.recovery.reorder_steps();
     const u64            before_bytes = w.recovery.bytes_in_flight();
@@ -369,12 +382,21 @@ void op_ack(World& w, QuicSpace id, u8 p, const u8* more, usize more_bytes)
     }
     CRD_FUZZ_REQUIRE(!unsent_above_outstanding);
     usize newly = 0U;
+    u64   newly_marks[2] = {};
     for (usize i = 0U; i < space.count; ++i)
     {
-        newly += (space.sent[i].state == kOut && ranges_hold(ConstSpan<QuicAckRange>(ranges, count),
-                                                             space.sent[i].number)) ? 1U : 0U;
+        const bool acked = space.sent[i].state == kOut &&
+                           ranges_hold(ConstSpan<QuicAckRange>(ranges, count), space.sent[i].number);
+        newly += acked ? 1U : 0U;
+        newly_marks[0] += (acked && ecn_of(space.sent[i].number) == Ecn::Ect0) ? 1U : 0U;
+        newly_marks[1] += (acked && ecn_of(space.sent[i].number) == Ecn::Ect1) ? 1U : 0U;
     }
     CRD_FUZZ_REQUIRE(out.acked_packets == newly);
+    CRD_FUZZ_REQUIRE(out.advanced == (largest_before == kQuicNoPacket || ranges[0].largest > largest_before));
+    CRD_FUZZ_REQUIRE(out.ect0_packets >= newly_marks[0] && out.ect0_packets <= newly_marks[0] + candidate_marks[0]);
+    CRD_FUZZ_REQUIRE(out.ect1_packets >= newly_marks[1] && out.ect1_packets <= newly_marks[1] + candidate_marks[1]);
+    CRD_FUZZ_REQUIRE(out.ect0_packets + out.ect1_packets <= out.acked_packets + out.spurious_packets);
+    CRD_FUZZ_REQUIRE(out.newest_sent_ns <= w.now);
     space.largest_acked = (space.largest_acked == kQuicNoPacket || ranges[0].largest > space.largest_acked)
                               ? ranges[0].largest
                               : space.largest_acked;
@@ -402,7 +424,7 @@ void op_receive(World& w, QuicSpace id, u8 p, u8 q)
     ModelSpace& space  = w.spaces[static_cast<usize>(id)];
     const u64   number = (static_cast<u64>(p) << 4U | (q >> 4U)) % kReceivedNumbers;
     const bool  held   = ranges_hold(w.recovery.received(id).ranges(), number);
-    const auto  ecn    = static_cast<QuicEcn>(q & 3U);
+    const auto  ecn    = static_cast<Ecn>(q & 3U);
     const bool  added  = w.recovery.on_received(id, number, (q & 4U) != 0U, ecn, w.now);
     CRD_FUZZ_REQUIRE(added == (!space.discarded && !held));
     if (added)

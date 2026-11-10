@@ -1,4 +1,5 @@
-// crd-net -- datagram sockets on the host's loopback (4.2a; docs/design/network-foundation.md#sockets).
+// crd-net -- datagram sockets on the host's loopback (4.2a; docs/design/network-foundation.md#sockets), and the ECN
+// codepoint each datagram carries (NET-PATH; #ecn).
 
 #include <crd/net/udp.hpp>
 
@@ -16,11 +17,13 @@ using crd::usize;
 using crd::containers::ConstSpan;
 using crd::containers::Span;
 using crd::net::BatchResult;
+using crd::net::Ecn;
 using crd::net::Endpoint;
 using crd::net::IpAddress;
 using crd::net::OutgoingDatagram;
 using crd::net::ReceivedDatagram;
 using crd::net::SocketError;
+using crd::net::SocketFeatures;
 using crd::net::UdpOptions;
 using crd::net::UdpSocket;
 
@@ -123,7 +126,86 @@ struct Slots
     }
 };
 
+// What arrives when CE is sent: Windows refuses a sender's CE, a router's mark, and sends that datagram unmarked.
+#if CRD_OS_WINDOWS
+constexpr Ecn kCeArrives = Ecn::NotEct;
+#else
+constexpr Ecn kCeArrives = Ecn::Ce;
+#endif
+
+// Sends one datagram with each codepoint from `from` to `to` and checks each arrives with its own: true when every
+// one did. A host that cannot carry codepoints must say so in features() instead.
+bool carries_every_codepoint(UdpSocket& from, UdpSocket& to, const Endpoint& to_endpoint, const Endpoint& from_seen)
+{
+    static u8 payload[4][48];
+    constexpr Ecn kCodepoints[4] = {Ecn::NotEct, Ecn::Ect1, Ecn::Ect0, Ecn::Ce};
+    constexpr Ecn kArrives[4] = {Ecn::NotEct, Ecn::Ect1, Ecn::Ect0, kCeArrives};
+    OutgoingDatagram datagrams[4];
+    for (u32 index = 0U; index < 4U; ++index)
+    {
+        pattern(payload[index], index);
+        datagrams[index] =
+            OutgoingDatagram{ConstSpan<u8>(payload[index], sizeof(payload[index])), to_endpoint, kCodepoints[index]};
+    }
+    REQUIRE(from.send(datagrams).count == 4U);
+    static Slots slots;
+    REQUIRE(receive_all(to, Span<ReceivedDatagram>(slots.slots, 4U), 4U) == 4U);
+    bool all = true;
+    for (u32 index = 0U; index < 4U; ++index)
+    {
+        const ReceivedDatagram& slot = slots.slots[index];
+        CHECK(slot.peer == from_seen);
+        const u32 sent = slot.storage[0]; // the datagram's index (pattern)
+        REQUIRE(sent < 4U);
+        INFO("datagram " << sent);
+        CHECK(slot.ecn == kArrives[sent]);
+        all = all && slot.ecn == kArrives[sent];
+    }
+    return all;
+}
+
 } // namespace
+
+TEST_CASE("a UDP socket carries each datagram's ECN codepoint over IPv4, IPv6 and dual-stack", "[net][udp][net-path]")
+{
+    UdpSocket a = open_on(IpAddress::v4_loopback());
+    UdpSocket b = open_on(IpAddress::v4_loopback());
+    const SocketFeatures features = a.features();
+#if CRD_OS_LINUX || CRD_OS_WINDOWS
+    REQUIRE(features.ecn_reading);
+    REQUIRE(features.ecn_marking);
+#else
+    // macOS carries bytes alone until crd-net's port there (MAC.1): every datagram arrives Not-ECT.
+    CHECK_FALSE(features.ecn_reading);
+    CHECK_FALSE(features.ecn_marking);
+    return;
+#endif
+    CHECK(carries_every_codepoint(a, b, b.local_endpoint(), a.local_endpoint()));
+    CHECK(carries_every_codepoint(b, a, a.local_endpoint(), b.local_endpoint()));
+    CHECK(a.features().ecn_marking); // a refused CE leaves marking on
+
+    UdpSocket v6a;
+    UdpSocket v6b;
+    if (!open_v6(v6a, false) || !open_v6(v6b, false))
+    {
+        SKIP("the host has no IPv6 loopback");
+    }
+    CHECK(carries_every_codepoint(v6a, v6b, v6b.local_endpoint(), v6a.local_endpoint()));
+
+    // A dual-stack socket marks toward an IPv4 peer with IPv4's message and reads IPv4's codepoints.
+    UdpOptions options;
+    options.bind = Endpoint{IpAddress::v6_any(), 0U};
+    SocketError error = SocketError::Failed;
+    UdpSocket dual = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    CHECK(dual.features().ecn_reading);
+    const Endpoint dual_v4 = reach(dual, IpAddress::v4_loopback());
+    CHECK(carries_every_codepoint(a, dual, dual_v4, a.local_endpoint()));
+    CHECK(carries_every_codepoint(dual, a, a.local_endpoint(), dual_v4));
+    const Endpoint dual_v6 = reach(dual, IpAddress::v6_loopback());
+    CHECK(carries_every_codepoint(v6a, dual, dual_v6, v6a.local_endpoint()));
+    CHECK(carries_every_codepoint(dual, v6a, v6a.local_endpoint(), dual_v6));
+}
 
 TEST_CASE("a UDP socket binds a loopback port of its own", "[net][udp]")
 {

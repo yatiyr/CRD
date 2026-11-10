@@ -2,7 +2,10 @@
 // congestion): a bulk transfer whose bytes in flight never pass the window as it grows, a live swap of the controller
 // half way that keeps the window, the pacer holding a window with room and its release time a timer that frees it,
 // a window that holds data back while ACK-only packets still go, transfers over paths that lose, duplicate and
-// reorder with reductions made and the bytes intact, and policies out of range refused.
+// reorder with reductions made and the bytes intact, and policies out of range refused. And ECN (#ecn): a path that
+// carries it validated in the handshake and marked from then on, CE marks reducing the window without a loss at most
+// once a round trip, paths that bleach, re-mark or drop marked packets failing validation while the data arrives
+// unmarked, validation holding over lossy, duplicating, reordering paths, ECT(1) for L4S and a policy that marks none.
 
 #include "ingress_fixture.hpp"
 #include "quic_connection_fixture.hpp"
@@ -107,9 +110,9 @@ struct Pair
     QuicConnection server;
     std::unique_ptr<Net> net;
 
-    explicit Pair(const CongestionPolicy& policy, usize seed = 0U)
-        : client(allocator, with(bulk_config(QuicSide::Client, identity, seed), policy)),
-          server(allocator, with(bulk_config(QuicSide::Server, identity, seed + 1U), policy))
+    explicit Pair(const CongestionPolicy& policy, usize seed = 0U, Ecn ecn = Ecn::Ect0)
+        : client(allocator, with(bulk_config(QuicSide::Client, identity, seed), policy, ecn)),
+          server(allocator, with(bulk_config(QuicSide::Server, identity, seed + 1U), policy, ecn))
     {
         REQUIRE(client.ready());
         REQUIRE(server.ready());
@@ -122,9 +125,10 @@ struct Pair
         }
     }
 
-    static QuicConnectionConfig with(QuicConnectionConfig config, const CongestionPolicy& policy)
+    static QuicConnectionConfig with(QuicConnectionConfig config, const CongestionPolicy& policy, Ecn ecn)
     {
         config.congestion = policy;
+        config.ecn = ecn;
         return config;
     }
 
@@ -251,7 +255,7 @@ TEST_CASE("QUIC congestion: a full window holds data while ACK-only packets stil
     u8 ping[kDatagram];
     const usize ping_bytes = pair.server.send(Span<u8>(ping, sizeof(ping)), now);
     REQUIRE(ping_bytes != 0U);
-    pair.client.receive(Span<u8>(ping, ping_bytes), QuicEcn::NotEct, now);
+    pair.client.receive(Span<u8>(ping, ping_bytes), Ecn::NotEct, now);
     const u64 due = pair.client.next_timer_ns();
     REQUIRE(due < now + 30U * kMs); // the ACK's delay
     pair.client.on_timeout(due);
@@ -301,4 +305,188 @@ TEST_CASE("QUIC congestion: a policy out of range is refused at construction", "
     config.congestion.pacing_gain = kCongestionMaxPacingGain;
     const QuicConnection accepted(allocator, config);
     CHECK(accepted.ready());
+}
+
+// ---- ECN (RFC 9000 section 13.4, RFC 9002 section 7.1) ----
+
+namespace
+{
+constexpr u64 kRoundTripNs = 50U * kMs; // the Pair's paths: 25 ms each way
+
+// Datagrams each end sent, and of those marked, as of construction.
+struct Marks
+{
+    explicit Marks(const Net& net) : sent{net.sent[0], net.sent[1]}, marked{net.marked[0], net.marked[1]}, m_net(net) {}
+
+    [[nodiscard]] usize sent_since(usize end) const { return m_net.sent[end] - sent[end]; }
+    [[nodiscard]] usize marked_since(usize end) const { return m_net.marked[end] - marked[end]; }
+
+    usize sent[2];
+    usize marked[2];
+
+private:
+    const Net& m_net;
+};
+} // namespace
+
+TEST_CASE("QUIC ECN: a path that carries ECN is validated in the handshake and every datagram is marked from then on",
+          "[net][net-path][quic-connection][quic-ecn]")
+{
+    Pair pair(CongestionPolicy{});
+    pair.confirm();
+    for (const QuicConnection* const end : {&pair.client, &pair.server})
+    {
+        CHECK(end->ecn().state() == QuicEcnState::Capable);
+    }
+    const Marks marks(*pair.net);
+    Bulk bulk{pair.client, pair.server, 1U << 18U};
+    REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
+    for (usize end = 0U; end < 2U; ++end)
+    {
+        CHECK(marks.sent_since(end) > 0U);
+        CHECK(marks.marked_since(end) == marks.sent_since(end));
+        CHECK(pair.net->end(end).ecn().state() == QuicEcnState::Capable);
+        CHECK(pair.net->end(end).counters().ecn_signals == 0U);
+    }
+    // The server counted every marked packet that arrived; the client holds those counts as reported, all ECT(0).
+    const EcnCounts& counted = pair.server.recovery().received(QuicSpace::Application).ecn();
+    const EcnCounts& reported = pair.client.ecn().reported(QuicSpace::Application);
+    CHECK(counted.ect0 > 100U);
+    CHECK(counted.ect1 == 0U);
+    CHECK(counted.ce == 0U);
+    CHECK(reported.ect0 > 0U);
+    CHECK(reported.ect0 <= counted.ect0);
+    CHECK(pair.client.congestion().state().reductions == 0U);
+}
+
+TEST_CASE("QUIC ECN: CE marks reduce the window without a loss, are never undone, and at most once a round trip",
+          "[net][net-path][quic-connection][quic-ecn]")
+{
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::Cubic, CongestionAlgorithm::NewReno})
+    {
+        // 3% of the client's datagrams marked CE, then every one of them: a congested queue, and a path (or a peer
+        // inflating its CE count) that signals all the time.
+        for (const u32 ce : {30U, 1000U})
+        {
+            CongestionPolicy policy;
+            policy.algorithm = algorithm;
+            Pair pair(policy, 7U);
+            pair.net->path[0].ce = ce;
+            INFO("algorithm " << static_cast<u32>(algorithm) << " CE permille " << ce);
+            pair.confirm();
+            const u64 start = pair.net->now;
+            Bulk bulk{pair.client, pair.server, 1U << 18U};
+            REQUIRE(pair.net->run_until([&] { return bulk.step(); }, 600000U * kMs));
+            const CongestionState state = pair.client.congestion().state();
+            CHECK(pair.client.ecn().state() == QuicEcnState::Capable);
+            CHECK(pair.net->congested[0] > 0U);
+            CHECK(pair.net->dropped[0] == 0U);
+            CHECK(pair.client.ecn().reported(QuicSpace::Application).ce > 0U);
+            CHECK(pair.client.counters().ecn_signals > 0U);
+            CHECK(state.reductions > 0U);
+            CHECK(state.reductions <= pair.client.counters().ecn_signals);
+            CHECK(state.undone == 0U);
+            CHECK(state.reductions <= (pair.net->now - start) / kRoundTripNs + 1U);
+            CHECK(state.window >= 2U * 1200U);
+            CHECK(pair.client.state() == QuicConnectionState::Established);
+        }
+    }
+}
+
+TEST_CASE("QUIC ECN: paths that bleach, re-mark or drop marked packets fail validation and the data arrives unmarked",
+          "[net][net-path][quic-connection][quic-ecn]")
+{
+    struct Case
+    {
+        EcnPath path;
+        QuicEcnFailure failure;
+    };
+    for (const Case& test :
+         {Case{EcnPath::Bleach, QuicEcnFailure::Missing}, Case{EcnPath::Remark, QuicEcnFailure::Exceeded},
+          Case{EcnPath::DropMarked, QuicEcnFailure::Lost}})
+    {
+        Pair pair(CongestionPolicy{});
+        for (Path& path : pair.net->path)
+        {
+            path.ecn = test.path;
+        }
+        INFO("path " << static_cast<u32>(test.path));
+        pair.confirm();
+        const Marks marks(*pair.net);
+        Bulk bulk{pair.client, pair.server, 1U << 17U};
+        REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
+        for (usize end = 0U; end < 2U; ++end)
+        {
+            const QuicEcnValidator& ecn = pair.net->end(end).ecn();
+            CHECK(ecn.state() == QuicEcnState::Failed);
+            CHECK(ecn.failure() == test.failure);
+            CHECK(marks.marked[end] <= kQuicEcnTestingPackets); // no more than the testing period's packets
+            CHECK(marks.marked_since(end) == 0U);
+            CHECK(pair.net->end(end).counters().ecn_signals == 0U);
+        }
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC ECN: validation holds over paths that lose, duplicate and reorder, CE included",
+          "[net][net-path][quic-connection][quic-ecn]")
+{
+    for (u64 seed = 1U; seed <= 4U; ++seed)
+    {
+        Pair pair(CongestionPolicy{}, seed);
+        pair.net->rng.state = seed;
+        for (Path& path : pair.net->path)
+        {
+            path.loss = 20U;
+            path.duplicate = 10U;
+            path.jitter_ns = 10U * kMs;
+            path.ce = 30U;
+        }
+        INFO("seed " << seed);
+        pair.confirm();
+        Bulk bulk{pair.client, pair.server, 1U << 18U};
+        REQUIRE(pair.net->run_until([&] { return bulk.step(); }, 600000U * kMs));
+        for (usize end = 0U; end < 2U; ++end)
+        {
+            CHECK(pair.net->end(end).ecn().state() == QuicEcnState::Capable);
+            CHECK(pair.net->end(end).ecn().failure() == QuicEcnFailure::None);
+        }
+        REQUIRE(pair.net->congested[0] > 0U);
+        CHECK(pair.client.counters().ecn_signals > 0U);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC ECN: an ECT(1) policy marks and validates ECT(1), and a policy without a codepoint marks nothing",
+          "[net][net-path][quic-connection][quic-ecn]")
+{
+    {
+        Pair pair(CongestionPolicy{}, 0U, Ecn::Ect1);
+        pair.confirm();
+        Bulk bulk{pair.client, pair.server, 1U << 16U};
+        REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
+        CHECK(pair.client.ecn().state() == QuicEcnState::Capable);
+        CHECK(pair.client.marking() == Ecn::Ect1);
+        const EcnCounts& counted = pair.server.recovery().received(QuicSpace::Application).ecn();
+        CHECK(counted.ect1 > 0U);
+        CHECK(counted.ect0 == 0U);
+    }
+    {
+        Pair pair(CongestionPolicy{}, 0U, Ecn::NotEct);
+        pair.confirm();
+        Bulk bulk{pair.client, pair.server, 1U << 16U};
+        REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
+        for (usize end = 0U; end < 2U; ++end)
+        {
+            CHECK(pair.net->end(end).ecn().state() == QuicEcnState::Off);
+            CHECK(pair.net->marked[end] == 0U);
+        }
+    }
+    // CE is no codepoint to send: refused.
+    Identity identity;
+    CountingAllocator allocator;
+    QuicConnectionConfig config = bulk_config(QuicSide::Client, identity, 0U);
+    config.ecn = Ecn::Ce;
+    const QuicConnection refused(allocator, config);
+    CHECK_FALSE(refused.ready());
 }

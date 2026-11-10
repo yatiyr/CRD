@@ -162,13 +162,13 @@ TEST_CASE("quic recovery: received numbers merge into ranges, largest first", "[
     tracker.reset(QuicSpace::Application);
     for (const u64 number : {0U, 1U, 2U, 5U, 4U, 9U, 7U})
     {
-        CHECK(tracker.on_received(number, false, QuicEcn::NotEct, 0U, kMaxAckDelay));
+        CHECK(tracker.on_received(number, false, Ecn::NotEct, 0U, kMaxAckDelay));
     }
     CHECK(same_ranges(tracker.ranges(), {{9U, 9U}, {7U, 7U}, {4U, 5U}, {0U, 2U}}));
-    CHECK(tracker.on_received(3U, false, QuicEcn::NotEct, 0U, kMaxAckDelay)); // joins two ranges
-    CHECK(tracker.on_received(8U, false, QuicEcn::NotEct, 0U, kMaxAckDelay));
+    CHECK(tracker.on_received(3U, false, Ecn::NotEct, 0U, kMaxAckDelay)); // joins two ranges
+    CHECK(tracker.on_received(8U, false, Ecn::NotEct, 0U, kMaxAckDelay));
     CHECK(same_ranges(tracker.ranges(), {{7U, 9U}, {0U, 5U}}));
-    CHECK_FALSE(tracker.on_received(4U, true, QuicEcn::Ce, 0U, kMaxAckDelay)); // a duplicate changes nothing
+    CHECK_FALSE(tracker.on_received(4U, true, Ecn::Ce, 0U, kMaxAckDelay)); // a duplicate changes nothing
     CHECK(tracker.ack_deadline_ns() == kNeverNs);
     CHECK(tracker.ecn().ce == 0U);
     CHECK(same_ranges(tracker.ranges(), {{7U, 9U}, {0U, 5U}}));
@@ -180,12 +180,12 @@ TEST_CASE("quic recovery: full ranges drop the smallest and leave out anything o
     tracker.reset(QuicSpace::Application);
     for (u64 i = 0U; i < kQuicAckRanges; ++i)
     {
-        CHECK(tracker.on_received(10U + 2U * i, false, QuicEcn::NotEct, 0U, kMaxAckDelay));
+        CHECK(tracker.on_received(10U + 2U * i, false, Ecn::NotEct, 0U, kMaxAckDelay));
     }
     REQUIRE(tracker.ranges().size() == kQuicAckRanges);
-    CHECK(tracker.on_received(1U, false, QuicEcn::NotEct, 0U, kMaxAckDelay)); // older than all: left out
+    CHECK(tracker.on_received(1U, false, Ecn::NotEct, 0U, kMaxAckDelay)); // older than all: left out
     CHECK(tracker.ranges()[kQuicAckRanges - 1U].smallest == 10U);
-    CHECK(tracker.on_received(500U, false, QuicEcn::NotEct, 0U, kMaxAckDelay)); // the smallest range makes room
+    CHECK(tracker.on_received(500U, false, Ecn::NotEct, 0U, kMaxAckDelay)); // the smallest range makes room
     CHECK(tracker.ranges().size() == kQuicAckRanges);
     CHECK(tracker.ranges()[0].largest == 500U);
     CHECK(tracker.ranges()[kQuicAckRanges - 1U].smallest == 12U);
@@ -195,33 +195,33 @@ TEST_CASE("quic recovery: when an ACK is owed (RFC 9000 13.2.1 and 13.2.2)", "[n
 {
     QuicAckTracker app;
     app.reset(QuicSpace::Application);
-    CHECK(app.on_received(0U, false, QuicEcn::NotEct, 100U, kMaxAckDelay));
+    CHECK(app.on_received(0U, false, Ecn::NotEct, 100U, kMaxAckDelay));
     CHECK(app.ack_deadline_ns() == kNeverNs); // non-ack-eliciting packets owe nothing
-    CHECK(app.on_received(1U, true, QuicEcn::NotEct, 200U, kMaxAckDelay));
+    CHECK(app.on_received(1U, true, Ecn::NotEct, 200U, kMaxAckDelay));
     CHECK(app.ack_deadline_ns() == 200U + kMaxAckDelay);
-    CHECK(app.on_received(2U, true, QuicEcn::NotEct, 300U, kMaxAckDelay));
+    CHECK(app.on_received(2U, true, Ecn::NotEct, 300U, kMaxAckDelay));
     CHECK(app.ack_deadline_ns() == 300U); // the second ack-eliciting packet
 
     u8 room[64];
     REQUIRE(app.write(Span<u8>(room, sizeof(room)), 400U, 3U).bytes != 0U);
     CHECK(app.ack_deadline_ns() == kNeverNs);
-    CHECK(app.on_received(4U, true, QuicEcn::NotEct, 500U, kMaxAckDelay));
+    CHECK(app.on_received(4U, true, Ecn::NotEct, 500U, kMaxAckDelay));
     CHECK(app.ack_deadline_ns() == 500U); // a gap before it
     REQUIRE(app.write(Span<u8>(room, sizeof(room)), 500U, 3U).bytes != 0U);
-    CHECK(app.on_received(3U, true, QuicEcn::NotEct, 600U, kMaxAckDelay));
+    CHECK(app.on_received(3U, true, Ecn::NotEct, 600U, kMaxAckDelay));
     CHECK(app.ack_deadline_ns() == 600U); // out of order
     REQUIRE(app.write(Span<u8>(room, sizeof(room)), 600U, 3U).bytes != 0U);
-    CHECK(app.on_received(5U, true, QuicEcn::Ce, 700U, kMaxAckDelay));
+    CHECK(app.on_received(5U, true, Ecn::Ce, 700U, kMaxAckDelay));
     CHECK(app.ack_deadline_ns() == 700U); // congestion experienced
     REQUIRE(app.write(Span<u8>(room, sizeof(room)), 700U, 3U).bytes != 0U);
-    CHECK(app.on_received(6U, true, QuicEcn::Ect0, 800U, kMaxAckDelay));
+    CHECK(app.on_received(6U, true, Ecn::Ect0, 800U, kMaxAckDelay));
     CHECK(app.ack_deadline_ns() == 800U + kMaxAckDelay); // in order, the first since the last ACK
 
     for (const QuicSpace space : {QuicSpace::Initial, QuicSpace::Handshake})
     {
         QuicAckTracker tracker;
         tracker.reset(space);
-        CHECK(tracker.on_received(0U, true, QuicEcn::NotEct, 50U, kMaxAckDelay));
+        CHECK(tracker.on_received(0U, true, Ecn::NotEct, 50U, kMaxAckDelay));
         CHECK(tracker.ack_deadline_ns() == 50U); // Initial and Handshake: at once
     }
 }
@@ -232,7 +232,7 @@ TEST_CASE("quic recovery: ACK frames carry the ranges, the delay and the ECN cou
     tracker.reset(QuicSpace::Application);
     for (const u64 number : {0U, 1U, 4U, 5U, 9U})
     {
-        CHECK(tracker.on_received(number, true, QuicEcn::NotEct, number * kMs, kMaxAckDelay));
+        CHECK(tracker.on_received(number, true, Ecn::NotEct, number * kMs, kMaxAckDelay));
     }
     u8                 room[64];
     const QuicAckWrite written = tracker.write(Span<u8>(room, sizeof(room)), 9U * kMs + 800000U, 3U);
@@ -254,8 +254,8 @@ TEST_CASE("quic recovery: ACK frames carry the ranges, the delay and the ECN cou
     CHECK(same_ranges(ConstSpan<QuicAckRange>(seen, count), {{9U, 9U}, {4U, 5U}, {0U, 1U}}));
 
     // Short room: the largest ranges that fit; no room for even one: nothing, and the ACK stays owed.
-    CHECK(tracker.on_received(11U, true, QuicEcn::Ect1, 11U * kMs, kMaxAckDelay));
-    CHECK(tracker.on_received(12U, true, QuicEcn::Ce, 12U * kMs, kMaxAckDelay));
+    CHECK(tracker.on_received(11U, true, Ecn::Ect1, 11U * kMs, kMaxAckDelay));
+    CHECK(tracker.on_received(12U, true, Ecn::Ce, 12U * kMs, kMaxAckDelay));
     CHECK(tracker.write(Span<u8>(room, 3U), 12U * kMs, 3U).bytes == 0U);
     CHECK(tracker.ack_deadline_ns() == 11U * kMs); // owed at once since 11: 10 is missing
     const usize one = quic_ack_bytes(ConstSpan<QuicAckRange>(tracker.ranges().data(), 1U), 0U,
@@ -280,7 +280,7 @@ TEST_CASE("quic recovery: an acknowledged ACK frame retires its ranges (RFC 9000
     tracker.reset(QuicSpace::Application);
     for (const u64 number : {0U, 1U, 2U, 5U, 6U, 7U, 9U})
     {
-        CHECK(tracker.on_received(number, false, QuicEcn::NotEct, 0U, kMaxAckDelay));
+        CHECK(tracker.on_received(number, false, Ecn::NotEct, 0U, kMaxAckDelay));
     }
     tracker.on_ack_acknowledged(5U);
     CHECK(same_ranges(tracker.ranges(), {{9U, 9U}, {6U, 7U}}));
@@ -431,12 +431,12 @@ TEST_CASE("quic recovery: a late acknowledgement shows a spurious loss and raise
     Fixture f;
     f.confirmed_with_rtt(100U * kMs);
     // Packet 1 carries an ACK frame of the Application space's received numbers.
-    CHECK(f.recovery.on_received(QuicSpace::Application, 0U, true, QuicEcn::NotEct, 0U));
-    CHECK(f.recovery.on_received(QuicSpace::Application, 2U, true, QuicEcn::NotEct, 0U));
+    CHECK(f.recovery.on_received(QuicSpace::Application, 0U, true, Ecn::NotEct, 0U));
+    CHECK(f.recovery.on_received(QuicSpace::Application, 2U, true, Ecn::NotEct, 0U));
     u8                 room[64];
     const QuicAckWrite written = f.recovery.write_ack(QuicSpace::Application, Span<u8>(room, sizeof(room)), kMs);
     REQUIRE(written.largest == 2U);
-    CHECK(f.recovery.on_received(QuicSpace::Application, 4U, true, QuicEcn::NotEct, 2U * kMs));
+    CHECK(f.recovery.on_received(QuicSpace::Application, 4U, true, Ecn::NotEct, 2U * kMs));
     QuicSentPacket carrier = packet(1U, 201U * kMs);
     carrier.carried_ack    = written.largest;
     REQUIRE(f.recovery.on_sent(QuicSpace::Application, carrier) == QuicRecoveryError::None);
@@ -771,7 +771,7 @@ TEST_CASE("quic recovery: discarding keys drops the space's packets from flight 
     f.send(QuicSpace::Initial, 0U, 0U);
     f.send(QuicSpace::Initial, 1U, 0U);
     f.send(QuicSpace::Handshake, 0U, kMs);
-    CHECK(f.recovery.on_received(QuicSpace::Initial, 0U, true, QuicEcn::NotEct, 0U));
+    CHECK(f.recovery.on_received(QuicSpace::Initial, 0U, true, Ecn::NotEct, 0U));
     REQUIRE(f.recovery.on_timeout(f.recovery.loss_timer_ns(), f.events).kind == QuicTimeoutKind::Probe);
     CHECK(f.recovery.pto_count() == 1U);
     REQUIRE(f.recovery.discard(QuicSpace::Initial, 2U * kMs, f.events));
@@ -783,7 +783,7 @@ TEST_CASE("quic recovery: discarding keys drops the space's packets from flight 
     CHECK_FALSE(f.recovery.can_send(QuicSpace::Initial));
     CHECK(f.recovery.on_sent(QuicSpace::Initial, packet(2U, 0U)) == QuicRecoveryError::Discarded);
     CHECK(f.ack(QuicSpace::Initial, 0U, 0U, 3U * kMs).error == QuicRecoveryError::Discarded);
-    CHECK_FALSE(f.recovery.on_received(QuicSpace::Initial, 1U, true, QuicEcn::NotEct, 0U));
+    CHECK_FALSE(f.recovery.on_received(QuicSpace::Initial, 1U, true, Ecn::NotEct, 0U));
     u8 room[32];
     CHECK(f.recovery.write_ack(QuicSpace::Initial, Span<u8>(room, sizeof(room)), 0U).bytes == 0U);
     CHECK(f.recovery.loss_timer_ns() == kMs + 3U * kQuicInitialRttNs); // the Handshake packet
@@ -882,7 +882,7 @@ TEST_CASE("quic recovery: an acknowledged packet that carried an ACK retires tho
     Fixture f;
     for (u64 n = 0U; n < 6U; ++n)
     {
-        CHECK(f.recovery.on_received(QuicSpace::Initial, n * 2U, true, QuicEcn::NotEct, n));
+        CHECK(f.recovery.on_received(QuicSpace::Initial, n * 2U, true, Ecn::NotEct, n));
     }
     u8                 room[128];
     const QuicAckWrite written = f.recovery.write_ack(QuicSpace::Initial, Span<u8>(room, sizeof(room)), 10U);
@@ -891,7 +891,7 @@ TEST_CASE("quic recovery: an acknowledged packet that carried an ACK retires tho
     QuicSentPacket carrier = packet(0U, 10U);
     carrier.carried_ack    = written.largest;
     REQUIRE(f.recovery.on_sent(QuicSpace::Initial, carrier) == QuicRecoveryError::None);
-    CHECK(f.recovery.on_received(QuicSpace::Initial, 12U, true, QuicEcn::NotEct, 20U));
+    CHECK(f.recovery.on_received(QuicSpace::Initial, 12U, true, Ecn::NotEct, 20U));
     REQUIRE(f.ack(QuicSpace::Initial, 0U, 0U, 30U).acked_packets == 1U);
     CHECK(same_ranges(f.recovery.received(QuicSpace::Initial).ranges(), {{12U, 12U}}));
 }
@@ -958,9 +958,9 @@ TEST_CASE("quic recovery: the next timer is the earliest of loss detection and e
 {
     Fixture f(QuicSide::Server);
     CHECK(f.recovery.next_timer_ns() == kNeverNs);
-    CHECK(f.recovery.on_received(QuicSpace::Application, 0U, true, QuicEcn::NotEct, 5U * kMs));
+    CHECK(f.recovery.on_received(QuicSpace::Application, 0U, true, Ecn::NotEct, 5U * kMs));
     CHECK(f.recovery.next_timer_ns() == 5U * kMs + kMaxAckDelay);
-    CHECK(f.recovery.on_received(QuicSpace::Handshake, 0U, true, QuicEcn::NotEct, 6U * kMs));
+    CHECK(f.recovery.on_received(QuicSpace::Handshake, 0U, true, Ecn::NotEct, 6U * kMs));
     CHECK(f.recovery.next_timer_ns() == 6U * kMs);
     u8 room[32];
     REQUIRE(f.recovery.write_ack(QuicSpace::Handshake, Span<u8>(room, sizeof(room)), 6U * kMs).bytes != 0U);

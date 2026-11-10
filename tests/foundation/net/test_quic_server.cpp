@@ -282,7 +282,7 @@ private:
                 socket.deliver(datagram, flight.peer);
                 continue;
             }
-            m_client[flight.to].connection->receive(Span<u8>(flight.bytes, flight.size), QuicEcn::NotEct, now);
+            m_client[flight.to].connection->receive(Span<u8>(flight.bytes, flight.size), Ecn::NotEct, now);
         }
         for (usize index = 0U; index < m_clients; ++index)
         {

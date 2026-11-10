@@ -37,7 +37,8 @@
 //                has not
 //
 // The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
-// is the same as ngtcp2_quic_peer.c's without what only OpenSSL reports. The application is `cerid-interop`, a private
+// is the same as ngtcp2_quic_peer.c's without what only OpenSSL reports, and with the path's ECN validation (`ecn`,
+// `ecn_failure`). The application is `cerid-interop`, a private
 // ALPN.
 
 #include <crd/containers/span.hpp>
@@ -286,6 +287,19 @@ void serve(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, u64 no
     }
 }
 
+// The path's ECN validation (quic_ecn.hpp) as the report names it.
+const char* ecn_state(QuicEcnState state) noexcept
+{
+    constexpr const char* kNames[] = {"off", "testing", "unknown", "capable", "failed"};
+    return kNames[static_cast<unsigned>(state)];
+}
+
+const char* ecn_failure(QuicEcnFailure failure) noexcept
+{
+    constexpr const char* kNames[] = {"none", "missing", "decreased", "exceeded", "short", "lost"};
+    return kNames[static_cast<unsigned>(failure)];
+}
+
 const char* close_kind(const QuicCloseInfo& info) noexcept
 {
     if (info.local)
@@ -328,9 +342,10 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
     {
         g_wt_exchanges[peer.index_of(handle)].report();
     }
-    std::printf("version=%u\nclose=%s\nclose_code=%llu\n", connection.version() == QuicVersion::V2 ? 2U : 1U,
-                close_kind(info),
-                static_cast<unsigned long long>(info.error_code));
+    std::printf("version=%u\nclose=%s\nclose_code=%llu\necn=%s\necn_failure=%s\n",
+                connection.version() == QuicVersion::V2 ? 2U : 1U, close_kind(info),
+                static_cast<unsigned long long>(info.error_code), ecn_state(connection.ecn().state()),
+                ecn_failure(connection.ecn().failure()));
     std::fflush(stdout);
     peer.ended(handle);
 }

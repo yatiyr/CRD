@@ -111,8 +111,8 @@ public:
     [[nodiscard]] bool ready() const noexcept { return m_datagrams != nullptr; }
     // The next free slot to write a datagram into; empty when the queue is full.
     [[nodiscard]] cont::Span<u8> room() noexcept;
-    // Queues the first `bytes` of room() for `peer`.
-    void push(usize bytes, const Endpoint& peer) noexcept;
+    // Queues the first `bytes` of room() for `peer`, its IP header marked `ecn` (stateless answers go Not-ECT).
+    void push(usize bytes, const Endpoint& peer, Ecn ecn = Ecn::NotEct) noexcept;
     // Hands the queued datagrams to `socket` until it is Busy or none is left.
     [[nodiscard]] SendFlush flush(DatagramSocket& socket) noexcept;
 

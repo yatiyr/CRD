@@ -129,6 +129,15 @@ struct Rng
     bool chance(u32 permille) { return (next() % 1000U) < permille; }
 };
 
+// What a path does to a datagram's ECN codepoint (RFC 9000 section 13.4.2's faulty paths).
+enum class EcnPath : u8
+{
+    Carry,      // as sent
+    Bleach,     // cleared to Not-ECT
+    Remark,     // ECT(0) re-marked ECT(1)
+    DropMarked, // a datagram with any codepoint is dropped
+};
+
 // A path's impairments, each datagram decided by the seeded generator.
 struct Path
 {
@@ -136,6 +145,8 @@ struct Path
     u32 duplicate = 0U; // permille
     u64 delay_ns = 10U * kMs;
     u64 jitter_ns = 0U; // a uniform extra delay, which reorders
+    EcnPath ecn = EcnPath::Carry;
+    u32 ce = 0U; // permille of datagrams with a codepoint marked CE, as a congested router's queue does
 };
 
 // A client's ticket store holding one ticket, handed out once.
@@ -231,6 +242,8 @@ public:
     u64 now = kStartNs;
     usize sent[2] = {};
     usize dropped[2] = {};
+    usize marked[2] = {};                       // datagrams each end sent with a codepoint
+    usize congested[2] = {};                    // of those, marked CE on the path
     bool client_initials_padded = true;         // every client datagram whose first packet is an Initial had 1200 bytes
     usize smallest[2] = {~usize{0}, ~usize{0}}; // each end's smallest datagram
     bool amplification_kept = true; // the server never sent more than three times what it received unvalidated
@@ -260,17 +273,21 @@ public:
                 }
                 ++sent[from];
                 check(from, ConstSpan<u8>(out, size));
-                const bool lost =
-                    rng.chance(path[from].loss) || (filter != nullptr && filter->drop(from, ConstSpan<u8>(out, size)));
+                Ecn ecn = m_ends[from]->marking();
+                marked[from] += (ecn != Ecn::NotEct) ? 1U : 0U;
+                const bool lost = rng.chance(path[from].loss) ||
+                                  (filter != nullptr && filter->drop(from, ConstSpan<u8>(out, size))) ||
+                                  (path[from].ecn == EcnPath::DropMarked && ecn != Ecn::NotEct);
                 if (lost)
                 {
                     ++dropped[from];
                     continue;
                 }
-                enqueue(from, ConstSpan<u8>(out, size));
+                ecn = on_path(from, ecn);
+                enqueue(from, ConstSpan<u8>(out, size), ecn);
                 if (rng.chance(path[from].duplicate))
                 {
-                    enqueue(from, ConstSpan<u8>(out, size));
+                    enqueue(from, ConstSpan<u8>(out, size), ecn);
                 }
             }
         }
@@ -365,7 +382,32 @@ private:
         usize size = 0U;
         u64 at = 0U;
         usize to = 0U;
+        Ecn ecn = Ecn::NotEct;
     };
+
+    // The codepoint a datagram arrives with. The generator is drawn only on a CE-marking path, so other paths' runs
+    // stay what they were.
+    Ecn on_path(usize from, Ecn ecn)
+    {
+        if (ecn == Ecn::NotEct)
+        {
+            return ecn;
+        }
+        if (path[from].ecn == EcnPath::Bleach)
+        {
+            return Ecn::NotEct;
+        }
+        if (path[from].ecn == EcnPath::Remark && ecn == Ecn::Ect0)
+        {
+            ecn = Ecn::Ect1;
+        }
+        if (path[from].ce != 0U && rng.chance(path[from].ce))
+        {
+            ++congested[from];
+            return Ecn::Ce;
+        }
+        return ecn;
+    }
 
     void check(usize from, ConstSpan<u8> datagram)
     {
@@ -385,7 +427,7 @@ private:
         }
     }
 
-    void enqueue(usize from, ConstSpan<u8> datagram)
+    void enqueue(usize from, ConstSpan<u8> datagram, Ecn ecn = Ecn::NotEct)
     {
         REQUIRE(m_count < kFlights);
         Flight& flight = m_flights[m_count++];
@@ -394,6 +436,7 @@ private:
         const u64 jitter = (path[from].jitter_ns == 0U) ? 0U : rng.next() % path[from].jitter_ns;
         flight.at = now + path[from].delay_ns + jitter;
         flight.to = 1U - from;
+        flight.ecn = ecn;
     }
 
     // The ingress's verdict on a datagram for the idle server: true when the server accepted it.
@@ -445,7 +488,7 @@ private:
             accept.original_dcid = header.dcid;
             REQUIRE(to.accept(accept, now));
         }
-        to.receive(Span<u8>(flight.bytes, flight.size), QuicEcn::NotEct, now);
+        to.receive(Span<u8>(flight.bytes, flight.size), flight.ecn, now);
         if (flight.to == 1U && tokens != nullptr && minted_bytes == 0U && to.peer_parameters_known())
         {
             CHECK_FALSE(to.give_new_token({}));
