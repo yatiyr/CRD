@@ -37,7 +37,8 @@ namespace crd::hesap::iterative
 // (matches BiCGSTAB). The bi-Lanczos adjoint sequence applies N⁻ᴴ, so a
 // preconditioner used here MUST provide apply_adjoint (asserted). Unpreconditioned
 // (m_inv == nullptr) is bit-identical (N = I: Nvₖ aliases vₖ, p aliases s, no
-// untransform). The solution is untransformed once after the loop: x ← N⁻¹·x.
+// untransform). The y-space correction gathers in dy and is untransformed once after
+// the loop: x ← x₀ + N⁻¹·dy, so a non-zero starting guess x₀ is kept as given.
 //
 // Recurrence: the coupled two-term form of Freund-Nachtigal 1991 (bi-Lanczos
 // tridiagonal reduced by successive plane rotations, direction wₖ from the last two
@@ -149,12 +150,13 @@ template <typename T>
 struct QmrWorkspace
 {
     // Bi-Lanczos vectors v*/u*, matvec scratch q/s, three w-recurrence directions,
-    // and (preconditioned only) the right-precond v-side Nv + adjoint-side p.
-    crd::hesap::dense::Vector<T> v_old, v, u_old, u, q, s, w0, w1, w2, nv, p;
+    // and (preconditioned only) the right-precond v-side Nv + adjoint-side p and the
+    // y-space correction dy.
+    crd::hesap::dense::Vector<T> v_old, v, u_old, u, q, s, w0, w1, w2, nv, p, dy;
 
     QmrWorkspace(crd::memory::IAllocator* alloc, crd::usize n)
         : v_old(alloc, n), v(alloc, n), u_old(alloc, n), u(alloc, n), q(alloc, n), s(alloc, n), w0(alloc, n),
-          w1(alloc, n), w2(alloc, n), nv(alloc, n), p(alloc, n)
+          w1(alloc, n), w2(alloc, n), nv(alloc, n), p(alloc, n), dy(alloc, n)
     {
     }
 
@@ -194,6 +196,7 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
     auto       w2    = ws.w2.span();
     const auto nv    = prec ? ws.nv.span() : v; // Nvₖ = N⁻¹vₖ (aliases vₖ when N = I)
     const auto p     = prec ? ws.p.span() : s;  // p = N⁻ᴴ·(Aᴴuₖ) (aliases s when N = I)
+    const auto dy    = prec ? ws.dy.span() : x; // y-space correction (the iterate itself when N = I)
 
     // Residual r₀ = b - A·x (A·x lands in q as scratch). It seeds the right
     // Lanczos vector; the left shadow vector is the same r₀.
@@ -205,6 +208,13 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
         u_old[i] = T{};
         w0[i]    = T{};
         w1[i]    = T{};
+    }
+    if (prec)
+    {
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            dy[i] = T{};
+        }
     }
     const R res0 = nrm2<T>(v);
     R       res  = res0;
@@ -349,7 +359,7 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
             dense::axpy<T>(-eps, w0, w2);
         }
         dense::scal<T>(T(1) / diag, w2);
-        dense::axpy<T>(zeta, w2, x);
+        dense::axpy<T>(zeta, w2, dy);
 
         // slide the direction window: (w₀, w₁, w₂) <- (w₁, w₂, old w₀)
         {
@@ -402,11 +412,11 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
         gamma    = gamma_n;
     }
 
-    // Right-precond untransform: x ← N⁻¹·x (q is free scratch after the loop).
+    // Right-precond untransform: x ← x₀ + N⁻¹·dy (q is free scratch after the loop).
     if (prec)
     {
-        (void)m_inv->apply(x, q);
-        dense::copy<T>(q, x);
+        (void)m_inv->apply(dy, q);
+        dense::axpy<T>(T(1), q, x);
     }
     return result;
 }

@@ -257,6 +257,32 @@ TEST_CASE("QMR with Jacobi right preconditioner (f64)", "[hesap-iterative][qmr][
     REQUIRE(true_residual<crd::f64>(op, x.span(), b.span(), &alloc) < 1e-8);
 }
 
+// A right preconditioner untransforms only the correction: from a non-zero starting guess the
+// answer is x₀ + N⁻¹·dy, never N⁻¹ applied to x₀ as well.
+TEST_CASE("QMR with a right preconditioner keeps a non-zero starting guess (f64)", "[hesap-iterative][qmr][precond]")
+{
+    crd::memory::TlsfAllocator alloc{16U << 20};
+    const crd::u32 n = 120;
+    auto a = nonsym_tridiag<crd::f64>(&alloc, n);
+    ParallelSpmvLeastSquaresOp<crd::f64> op(a, &alloc);
+    JacobiPreconditioner<crd::f64> m(a, &alloc);
+    dense::Vector<crd::f64> b(&alloc, n);
+    b.fill(1.0);
+    dense::Vector<crd::f64> x(&alloc, n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        x(i) = 0.5 + (0.01 * static_cast<crd::f64>(i % 7U));
+    }
+    IterativeOptions<crd::f64> opts;
+    opts.rel_tol = 1e-12;
+    opts.max_iter = 500;
+    QmrWorkspace<crd::f64> ws(&alloc, n);
+
+    auto res = qmr<crd::f64>(op, &m, b.span(), x.span(), opts, ws, &alloc);
+    REQUIRE(res.converged);
+    REQUIRE(true_residual<crd::f64>(op, x.span(), b.span(), &alloc) < 1e-8);
+}
+
 TEST_CASE("QMR solves a seeded-random nonsymmetric system (f64)", "[hesap-iterative][qmr]")
 {
     crd::memory::TlsfAllocator alloc{16U << 20};
