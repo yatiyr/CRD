@@ -28,9 +28,9 @@ namespace crd::hesap::iterative
 // storage. Eigen ships no QMR -- breadth + the determinism moat.
 //
 // INNER-PRODUCT CONVENTION: all dots are CONJUGATED (Hermitian `dotc`), matching
-// the single module policy (BiCGSTAB/LSQR) and the Krylov.jl formulation this is
-// transcribed from (which uses Aᴴ + conjugated dots, NOT the classic Aᵀ bilinear
-// form). The left shadow start is c = r₀ (deterministic; cᴴr₀ = ‖r₀‖² ≠ 0).
+// the single module policy (BiCGSTAB/LSQR): the Lanczos process runs on Aᴴ with
+// conjugated dots, NOT the classic Aᵀ bilinear form of the 1991 paper.
+// The left shadow start is c = r₀ (deterministic; cᴴr₀ = ‖r₀‖² ≠ 0).
 //
 // PRECONDITIONING: optional RIGHT preconditioner N = m_inv (solve A·N⁻¹·y = b,
 // x = N⁻¹·y). Right-side keeps the quasi-residual in the TRUE-residual norm
@@ -39,8 +39,10 @@ namespace crd::hesap::iterative
 // (m_inv == nullptr) is bit-identical (N = I: Nvₖ aliases vₖ, p aliases s, no
 // untransform). The solution is untransformed once after the loop: x ← N⁻¹·x.
 //
-// Recurrence (coupled two-term + sym_givens rotations) transcribed VERBATIM from
-// Krylov.jl `qmr.jl` / `sym_givens` to avoid sign errors in the rotations. The
+// Recurrence: the coupled two-term form of Freund-Nachtigal 1991 (bi-Lanczos
+// tridiagonal reduced by successive plane rotations, direction wₖ from the last two
+// directions, x += ζₖ·wₖ), with the Hermitian-conjugate rotations of
+// detail::sym_givens (Golub & Van Loan section 5.1.8; Bindel et al. 2002). The
 // reported rNorm = |ζ̄|·√τ is the QUASI-residual (an upper bound on ‖b−Ax‖);
 // tests verify the true residual separately. Determinism: reductions are
 // KBN-pairwise, the only parallel steps are the operator's spmv/adjoint-spmv
@@ -49,89 +51,97 @@ namespace crd::hesap::iterative
 
 namespace detail
 {
-// Symmetric Givens rotation (Paige-Saunders). Given a (T) and b (the real,
-// non-negative Lanczos β), returns (c real, s in T, r in T) with
-// [c sᴴ; -s c]·[a; b] = [r; 0]. Transcribed verbatim from Krylov.jl `sym_givens`
-// (the mixed Complex/real method promotes b to (b,0)). Reuses the shared
+// Plane rotation that annihilates the real, non-negative Lanczos subdiagonal
+// entry b against a (T). Returns (c real, s in T, r in T) with
+// [c sᴴ; -s c]·[a; b] = [r; 0], c² + |s|² = 1. This is the reflector-free
+// Givens form of Golub & Van Loan, "Matrix Computations", section 5.1.8, with the
+// complex phase handling of Bindel, Demmel, Kahan and Marques 2002 (the cosine
+// stays real, the phase of a moves into s). The real-case sign convention (r >= 0,
+// the cosine carries the sign of a, c = 1 when a = b = 0) is Paige and Saunders'
+// symmetric rotation. It is the rotation that
+// Freund-Nachtigal 1991 apply to the tridiagonal QR of QMR. The larger of |a|, |b|
+// is the divisor of the tangent so the root never overflows. Reuses the shared
 // detail::GivensRot<T> (a DIFFERENT convention from gmres_givens, hence its own fn).
 template <typename T>
 [[nodiscard]] inline GivensRot<T> sym_givens(T a, crd::hesap::dense::RealType<T> b) noexcept
 {
     using R = crd::hesap::dense::RealType<T>;
-    GivensRot<T> g{};
+    GivensRot<T> rot{};
     if constexpr (crd::hesap::dense::is_complex_v<T>)
     {
-        const R abs_a = detail::krylov_mag<T>(a);
-        const R abs_b = b < R(0) ? -b : b; // b is a norm (≥0); guard anyway
-        if (abs_b == R(0))
+        const R mag_a = detail::krylov_mag<T>(a);
+        const R mag_b = b < R(0) ? -b : b; // b is a norm (>= 0); guard anyway
+        if (mag_b == R(0))
         {
-            g.c   = R(1);
-            g.s   = T{};
-            g.r = a;
+            // nothing below the diagonal: identity rotation
+            rot.c = R(1);
+            rot.s = T{};
+            rot.r = a;
+            return rot;
         }
-        else if (abs_a == R(0))
+        if (mag_a == R(0))
         {
-            g.c   = R(0);
-            g.s   = T(R(1));
-            g.r = T(abs_b);
+            // a vanishes: swap the two rows
+            rot.c = R(0);
+            rot.s = T(R(1));
+            rot.r = T(mag_b);
+            return rot;
         }
-        else if (abs_b > abs_a)
+        // phase of a as a unit complex number; 1/phase carries it into s
+        if (mag_b > mag_a)
         {
-            const R t     = abs_a / abs_b;
-            R       c     = R(1) / std::sqrt(R(1) + t * t);
-            const T bb    = T(abs_b) / abs_b;   // (1,0)
-            const T aa    = a / abs_a;          // a/|a|
-            const T ratio = bb / aa;
-            g.s   = T(c) * crd::hesap::conj(ratio);
-            g.c   = c * t;
-            g.r = T(abs_b) / crd::hesap::conj(g.s);
+            const R tan_t     = mag_a / mag_b;
+            const R cosine    = R(1) / std::sqrt(R(1) + tan_t * tan_t);
+            const T inv_phase = T(1) / (a / mag_a);
+            rot.s             = T(cosine) * crd::hesap::conj(inv_phase);
+            rot.c             = cosine * tan_t;
+            rot.r             = T(mag_b) / crd::hesap::conj(rot.s);
         }
         else
         {
-            const R t     = abs_b / abs_a;
-            const R c     = R(1) / std::sqrt(R(1) + t * t);
-            const T bb    = T(abs_b) / abs_b;   // (1,0)
-            const T aa    = a / abs_a;          // a/|a|
-            const T ratio = bb / aa;
-            g.s   = T(c * t) * crd::hesap::conj(ratio);
-            g.c   = c;
-            g.r = a / T(c);
+            const R tan_t     = mag_b / mag_a;
+            const R cosine    = R(1) / std::sqrt(R(1) + tan_t * tan_t);
+            const T inv_phase = T(1) / (a / mag_a);
+            rot.s             = T(cosine * tan_t) * crd::hesap::conj(inv_phase);
+            rot.c             = cosine;
+            rot.r             = a / T(cosine);
         }
     }
     else
     {
-        const R sa = a > R(0) ? R(1) : (a < R(0) ? R(-1) : R(0));
-        const R sb = b > R(0) ? R(1) : (b < R(0) ? R(-1) : R(0));
-        const R aa = a < R(0) ? -a : a;
-        const R ab = b < R(0) ? -b : b;
+        const R abs_a = a < R(0) ? -a : a;
+        const R abs_b = b < R(0) ? -b : b;
+        const R dir_a = a > R(0) ? R(1) : (a < R(0) ? R(-1) : R(0)); // sign of a
+        const R dir_b = b > R(0) ? R(1) : (b < R(0) ? R(-1) : R(0)); // sign of b
         if (b == R(0))
         {
-            g.c   = sa + (a == R(0) ? R(1) : R(0));
-            g.s   = R(0);
-            g.r = aa;
+            // a is already the pivot; keep its sign in c so that r = |a|
+            rot.c = a == R(0) ? R(1) : dir_a;
+            rot.s = R(0);
+            rot.r = abs_a;
         }
         else if (a == R(0))
         {
-            g.c   = R(0);
-            g.s   = sb;
-            g.r = ab;
+            rot.c = R(0);
+            rot.s = dir_b;
+            rot.r = abs_b;
         }
-        else if (ab > aa)
+        else if (abs_b > abs_a)
         {
-            const R t = a / b;
-            g.s       = sb / std::sqrt(R(1) + t * t);
-            g.c       = g.s * t;
-            g.r     = b / g.s;
+            const R tan_t = a / b;
+            rot.s         = dir_b / std::sqrt(R(1) + tan_t * tan_t);
+            rot.c         = rot.s * tan_t;
+            rot.r         = b / rot.s;
         }
         else
         {
-            const R t = b / a;
-            g.c       = sa / std::sqrt(R(1) + t * t);
-            g.s       = g.c * t;
-            g.r     = a / g.c;
+            const R tan_t = b / a;
+            rot.c         = dir_a / std::sqrt(R(1) + tan_t * tan_t);
+            rot.s         = rot.c * tan_t;
+            rot.r         = a / rot.c;
         }
     }
-    return g;
+    return rot;
 }
 } // namespace detail
 
@@ -185,11 +195,12 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
     const auto nv    = prec ? ws.nv.span() : v; // Nvₖ = N⁻¹vₖ (aliases vₖ when N = I)
     const auto p     = prec ? ws.p.span() : s;  // p = N⁻ᴴ·(Aᴴuₖ) (aliases s when N = I)
 
-    // r₀ = b - A·x (into q as scratch), left shadow c = r₀.
+    // Residual r₀ = b - A·x (A·x lands in q as scratch). It seeds the right
+    // Lanczos vector; the left shadow vector is the same r₀.
     (void)a.apply(x, q);
     for (crd::usize i = 0; i < n; ++i)
     {
-        v[i]     = b[i] - q[i]; // r₀ (becomes v₁ after scaling)
+        v[i]     = b[i] - q[i];
         v_old[i] = T{};
         u_old[i] = T{};
         w0[i]    = T{};
@@ -209,96 +220,88 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
         return result;
     }
 
-    // cᴴb = ⟨c, r₀⟩ = ‖r₀‖² (c = r₀); βₖ = √|cᴴb|, γₖ = cᴴb/βₖ.
-    const T cb = detail::krylov_inner<T>(v, v); // c = r₀ copy of v ⇒ ⟨r₀,r₀⟩
-    if (detail::krylov_mag<T>(cb) < smlnum)
+    // Freund-Nachtigal 1991 scale the start pair so that uᴴv = 1 with
+    // |β₁| = |γ₁|: here ⟨c, r₀⟩ = ‖r₀‖², β₁ = sqrt|⟨c, r₀⟩|, γ₁ = ⟨c, r₀⟩/β₁.
+    const T start_dot = detail::krylov_inner<T>(v, v);
+    if (detail::krylov_mag<T>(start_dot) < smlnum)
     {
-        result.reason              = StopReason::Breakdown; // bᴴc = 0
+        result.reason              = StopReason::Breakdown; // ⟨c, r₀⟩ = 0
         result.final_residual_norm = res;
         return result;
     }
-    R beta  = std::sqrt(detail::krylov_mag<T>(cb));
-    T gamma = cb / T(beta);
-    // v₁ = r₀/βₖ ; u₁ = c/conj(γₖ) = r₀/conj(γₖ).
+    R beta  = std::sqrt(detail::krylov_mag<T>(start_dot));
+    T gamma = start_dot / T(beta);
+    // v₁ = r₀/β₁, u₁ = r₀/conj(γ₁)
     dense::copy<T>(v, u);
     dense::scal<T>(T(R(1) / beta), v);
-    {
-        const T inv = T(1) / detail::krylov_conj<T>(gamma);
-        dense::scal<T>(inv, u);
-    }
+    dense::scal<T>(T(1) / detail::krylov_conj<T>(gamma), u);
 
-    R cs_2 = R(0), cs_1 = R(0); // cₖ₋₂, cₖ₋₁ (real)
-    T sn_2 = T{}, sn_1 = T{};   // sₖ₋₂, sₖ₋₁
-    T zbar = T(beta);           // ζ̄ₖ
-    R tau  = detail::krylov_real<T>(detail::krylov_inner<T>(v, v)); // τₖ = ‖vₖ‖²
-
-    T lambda_bar{}, lambda{}, eps2{}, delta_bar{}, delta{};
+    // Rotations of the two previous steps (cosines real, sines in T), the
+    // right-hand-side entry ζ̄ of the transformed quasi-residual problem, and
+    // τ = Σ‖vⱼ‖² which scales it into the quasi-residual norm.
+    R prev2_cos = R(0), prev1_cos = R(0);
+    T prev2_sin = T{}, prev1_sin = T{};
+    T zeta_bar  = T(beta);
+    R tau       = detail::krylov_real<T>(detail::krylov_inner<T>(v, v));
 
     for (crd::usize k = 1; k <= opts.max_iter; ++k)
     {
-        // ---- bi-Lanczos step: build the next v and u ----
-        // v-side: Nvₖ = N⁻¹vₖ ; q = A·Nvₖ (= t, since left precond M = I).
+        // ---- two-sided Lanczos step ----
+        // right side: Nvₖ = N⁻¹vₖ, q = A·Nvₖ; left side: s = Aᴴuₖ, p = N⁻ᴴs
         if (prec)
         {
             (void)m_inv->apply(v, nv);
         }
         (void)a.apply(nv, q);
-        // u-side: s = Aᴴ·uₖ ; p = N⁻ᴴ·s.
         (void)a.apply_adjoint(u, s);
         if (prec)
         {
             (void)m_inv->apply_adjoint(s, p);
         }
 
-        // Orthogonalize against the previous pair, then against the current pair.
-        dense::axpy<T>(-gamma, v_old, q);              // q -= γₖ·vₖ₋₁
-        dense::axpy<T>(T(-beta), u_old, p);            // p -= βₖ·uₖ₋₁
-        const T alpha = detail::krylov_inner<T>(u, q);  // αₖ = ⟨uₖ, q⟩
-        dense::axpy<T>(-alpha, v, q);                   // q -= αₖ·vₖ
-        dense::axpy<T>(-detail::krylov_conj<T>(alpha), u, p); // p -= conj(αₖ)·uₖ
+        // three-term orthogonalisation: remove the older pair, then the current one
+        dense::axpy<T>(-gamma, v_old, q);
+        dense::axpy<T>(T(-beta), u_old, p);
+        const T alpha = detail::krylov_inner<T>(u, q);
+        dense::axpy<T>(-alpha, v, q);
+        dense::axpy<T>(-detail::krylov_conj<T>(alpha), u, p);
 
-        const T pq      = detail::krylov_inner<T>(p, q); // pᴴq
-        const R beta_n  = std::sqrt(detail::krylov_mag<T>(pq));
-        const bool brk  = beta_n < smlnum;               // pᴴq ≈ 0 ⇒ Lanczos breakdown
+        // next off-diagonal pair from ⟨p, q⟩; a vanishing product is a Lanczos breakdown
+        const T    cross             = detail::krylov_inner<T>(p, q);
+        const R    beta_n            = std::sqrt(detail::krylov_mag<T>(cross));
+        const bool lanczos_breakdown = beta_n < smlnum;
         T          gamma_n{};
-        if (!brk)
+        if (!lanczos_breakdown)
         {
-            gamma_n = pq / T(beta_n);
+            gamma_n = cross / T(beta_n);
         }
 
-        // ---- apply previous Givens reflections to the new tridiagonal column ----
-        if (k >= 3)
-        {
-            eps2       = sn_2 * gamma;       // ϵₖ₋₂
-            lambda_bar = -T(cs_2) * gamma;   // λ̄ₖ₋₁
-        }
+        // ---- column k of the tridiagonal, pushed through the earlier rotations ----
+        // entries above the diagonal: eps (row k-2) and lam (row k-1); bottom: diag_bar
+        T eps{}, lam{}, diag_bar = alpha;
         if (k >= 2)
         {
-            if (k == 2)
+            T raw_upper = gamma; // untouched entry in row k-1
+            if (k >= 3)
             {
-                lambda_bar = gamma;
+                eps       = prev2_sin * gamma;
+                raw_upper = -T(prev2_cos) * gamma;
             }
-            lambda    = T(cs_1) * lambda_bar + sn_1 * alpha;                          // λₖ₋₁
-            delta_bar = detail::krylov_conj<T>(sn_1) * lambda_bar - T(cs_1) * alpha;   // δ̄ₖ
-            sn_2      = sn_1;
-            cs_2      = cs_1;
-        }
-        if (k == 1)
-        {
-            delta_bar = alpha;
+            lam       = T(prev1_cos) * raw_upper + prev1_sin * alpha;
+            diag_bar  = detail::krylov_conj<T>(prev1_sin) * raw_upper - T(prev1_cos) * alpha;
+            prev2_sin = prev1_sin;
+            prev2_cos = prev1_cos;
         }
 
-        // current rotation eliminating βₖ₊₁ from the column
-        const detail::GivensRot<T> g = detail::sym_givens<T>(delta_bar, beta_n);
-        const R                    ck = g.c;
-        const T                    sk = g.s;
-        delta                         = g.r;
-        const T zeta                  = T(ck) * zbar;                    // ζₖ
-        const T zbar_n                = detail::krylov_conj<T>(sk) * zbar; // ζ̄ₖ₊₁
-        sn_1                          = sk;
-        cs_1                          = ck;
+        // the new rotation removes β from below the diagonal
+        const detail::GivensRot<T> rot        = detail::sym_givens<T>(diag_bar, beta_n);
+        const T                    diag       = rot.r;
+        const T                    zeta       = T(rot.c) * zeta_bar;
+        const T                    zeta_bar_n = detail::krylov_conj<T>(rot.s) * zeta_bar;
+        prev1_sin                             = rot.s;
+        prev1_cos                             = rot.c;
 
-        if (detail::krylov_mag<T>(delta) < smlnum)
+        if (detail::krylov_mag<T>(diag) < smlnum)
         {
             result.iterations          = k;
             result.reason              = StopReason::Breakdown;
@@ -306,42 +309,41 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
             break;
         }
 
-        // ---- w-recurrence direction wₖ, then x += ζₖ·wₖ ----
-        // w2 = (vₖ - λₖ₋₁·wₖ₋₁ - ϵₖ₋₂·wₖ₋₂) / δₖ   (missing terms are zero for k=1,2)
+        // ---- search direction wₖ = (vₖ - λ·wₖ₋₁ - ε·wₖ₋₂)/diag and the update x += ζ·wₖ ----
         dense::copy<T>(v, w2);
         if (k >= 2)
         {
-            dense::axpy<T>(-lambda, w1, w2);
+            dense::axpy<T>(-lam, w1, w2);
         }
         if (k >= 3)
         {
-            dense::axpy<T>(-eps2, w0, w2);
+            dense::axpy<T>(-eps, w0, w2);
         }
-        dense::scal<T>(T(1) / delta, w2);
-        dense::axpy<T>(zeta, w2, x); // x += ζₖ·wₖ
+        dense::scal<T>(T(1) / diag, w2);
+        dense::axpy<T>(zeta, w2, x);
 
-        // rotate w buffers: wₖ₋₂ ← wₖ₋₁ ← wₖ
+        // slide the direction window: (w₀, w₁, w₂) <- (w₁, w₂, old w₀)
         {
-            auto tmp = w0;
-            w0       = w1;
-            w1       = w2;
-            w2       = tmp;
+            auto recycled = w0;
+            w0            = w1;
+            w1            = w2;
+            w2            = recycled;
         }
 
-        // ---- advance the Lanczos vectors ----
+        // ---- shift the Lanczos pair and normalise the new one ----
         dense::copy<T>(v, v_old);
         dense::copy<T>(u, u_old);
-        if (!brk)
+        if (!lanczos_breakdown)
         {
             dense::copy<T>(q, v);
-            dense::scal<T>(T(R(1) / beta_n), v); // vₖ₊₁ = q/βₖ₊₁
+            dense::scal<T>(T(R(1) / beta_n), v);
             dense::copy<T>(p, u);
-            dense::scal<T>(T(1) / detail::krylov_conj<T>(gamma_n), u); // uₖ₊₁ = p/conj(γₖ₊₁)
+            dense::scal<T>(T(1) / detail::krylov_conj<T>(gamma_n), u);
         }
 
-        // ---- quasi-residual estimate + stopping ----
-        tau += detail::krylov_real<T>(detail::krylov_inner<T>(v, v)); // τₖ₊₁
-        res = detail::krylov_mag<T>(zbar_n) * std::sqrt(tau);
+        // ---- quasi-residual |ζ̄ₖ₊₁|·sqrt(τₖ₊₁) and the stopping tests ----
+        tau += detail::krylov_real<T>(detail::krylov_inner<T>(v, v));
+        res               = detail::krylov_mag<T>(zeta_bar_n) * std::sqrt(tau);
         result.iterations = k;
         if (opts.record_residuals)
         {
@@ -354,9 +356,9 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
             result.final_residual_norm = res;
             break;
         }
-        if (brk)
+        if (lanczos_breakdown)
         {
-            result.reason              = StopReason::Breakdown; // pᴴq ≈ 0
+            result.reason              = StopReason::Breakdown;
             result.final_residual_norm = res;
             break;
         }
@@ -366,9 +368,9 @@ IterativeResult<crd::hesap::dense::RealType<T>> qmr(const crd::hesap::LinearOp<T
             result.final_residual_norm = res;
         }
 
-        zbar  = zbar_n;
-        beta  = beta_n;
-        gamma = gamma_n;
+        zeta_bar = zeta_bar_n;
+        beta     = beta_n;
+        gamma    = gamma_n;
     }
 
     // Right-precond untransform: x ← N⁻¹·x (q is free scratch after the loop).
