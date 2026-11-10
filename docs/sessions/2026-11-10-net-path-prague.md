@@ -27,14 +27,14 @@ The last finished runs (42774048974, 42762080661, 42744641737, 42736485342) were
 - Fixtures: `bottleneck_fixture.hpp` (BBR's simulated bottleneck, now shared, with ECN feedback per packet). The
   QUIC fixture gains a DualQ-style ECT(1) step (`ce_queue`) and re-marks both ECTs.
 - `crd-quic-peer --congestion prague` reports `alpha` and `classic`.
-- Register: `path.l4s-ecn` implemented; `cc.prague` watched (its draft expired 2025-01-25 without a successor);
-  `cc.classic-ecn-detection` implemented.
+- Register: `path.l4s-ecn` implemented; `cc.prague` watched (draft -04, posted 2024-07-24, expired 185 days later
+  with no successor); `cc.classic-ecn-detection` implemented.
 
 ## Evidence
 
-- win-debug: `crd-net-tests [net]` ran 700 cases: 699 passed. The one failure, `test_stream_socket.cpp:137`
-  (`shutdown_send` returned Reset), came while a second test process loaded the host; `[tcp]` then passed alone (27
-  cases). `[prague]`: 9 cases, 17.2 million assertions. `crd-hesap-net-tests ~[kernels]`: 159 cases. Both fuzz
+- win-debug: `crd-net-tests [net]` ran 700 cases: 699 passed. The failure is `test_stream_socket.cpp:137`
+  (`shutdown_send` returned Reset), in code this batch did not touch, during a run beside a second test process;
+  `[tcp]` passed on its rerun (27 cases). Unexplained: CI's Windows lanes are watched for it. `[prague]`: 9 cases, 17.2 million assertions. `crd-hesap-net-tests ~[kernels]`: 159 cases. Both fuzz
   targets' seeds and corpora replay clean, with the new `prague-marks` seed.
 - WSL linux-gcc-debug: the four targets build with no warning; `[prague],[congestion],[bbr],[quic-ecn],[net-path],
   [delivery-rate]` pass (88 cases, 45.6 million assertions), and `[classic-ecn],[estimators]` (29 cases).
@@ -45,6 +45,7 @@ The last finished runs (42774048974, 42762080661, 42744641737, 42736485342) were
 
 ## Next
 
-Prague against picoquic's Prague (pinned, a testing download) through the interop relay with an ECT(1) step. A
-two-flow bottleneck: Prague beside CUBIC in one classic queue, to prove the fallback's coexistence. Then the
+The bottleneck at 2 and 5 ms steps and at 50 ms: utilization must rise toward the link as the step passes a seventh
+of the BDP, or the shortfall is Prague's. Then Prague against picoquic's Prague through the relay with an ECT(1)
+step, and a two-flow bottleneck (Prague beside CUBIC in one classic queue) for the fallback's coexistence. Then the
 delay-based controllers, migration and the fast paths.
