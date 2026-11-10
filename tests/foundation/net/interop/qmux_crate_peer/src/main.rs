@@ -1,10 +1,10 @@
 //! crd-qmux-crate-peer: a QMux endpoint over the `qmux` crate and rustls, real TCP on the loopback, the counterpart of
 //! crd-qmux-peer (crd-net). qmux_interop.py runs one of each and reads both reports.
 //!
-//! `--transport` picks what carries QMux: `tls` (the default), `ws` (WebSocket over HTTP/1.1 inside TLS, RFC 6455) or
-//! `h2` (WebSocket over HTTP/2 with prior knowledge, RFC 8441: the `h2` crate's extended CONNECT, tokio-tungstenite on
-//! the stream, `connections` tunnels at once on one connection) or `h3` (the same over HTTP/3, RFC 9220: the `h3` crate
-//! over Quinn, real UDP).
+//! `--transport` picks what carries QMux: `tls` (the default), `ws` (WebSocket over HTTP/1.1 inside TLS, RFC 6455),
+//! `h2` (WebSocket over HTTP/2 inside TLS with ALPN `h2`, RFC 8441: the `h2` crate's extended CONNECT, tokio-tungstenite
+//! on the stream, `connections` tunnels at once on one connection), `h2c` (the same with prior knowledge over TCP) or
+//! `h3` (the same over HTTP/3, RFC 9220: the `h3` crate over Quinn, real UDP).
 //!
 //! The application is interop_echo.hpp's, byte for byte. This crate does not expose a stream's ID, so a stream a peer
 //! opened is known by its pattern: its first bytes name exactly one of the IDs the run can use.
@@ -33,7 +33,7 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::crypto::{CryptoProvider, aws_lc_rs, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, ServerConfig, SignatureScheme};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
@@ -43,6 +43,7 @@ const SERVER_NAME: &str = "cerid.test";
 const PROTOCOL: &str = "cerid-interop";
 const WEBSOCKET_PATH: &str = "/interop";
 const HTTP_11: &[u8] = b"http/1.1";
+const H2_ALPN: &[u8] = b"h2";
 const CLOSE_REASON: &str = "cerid-interop done";
 const RUN: Duration = Duration::from_secs(60);
 const CLOSE_GRACE: Duration = Duration::from_millis(300);
@@ -754,13 +755,52 @@ async fn open_tunnel(
     run_tunnel(bridge(send, recv), Role::Client, &agreed, options, number).await;
 }
 
-async fn run_h2_client(options: Arc<Options>) {
+/// The HTTP/2 connection's byte stream: TCP with prior knowledge (`h2c`), or TLS that agreed on `h2` (RFC 9113
+/// section 3.2); `None` when TLS agreed on anything else.
+async fn h2_client_io(options: &Options) -> Option<Box<dyn H2Io>> {
     let tcp = TcpStream::connect(("127.0.0.1", options.port)).await.expect("a connection");
     tcp.set_nodelay(true).expect("no delay");
+    if options.transport == "h2c" {
+        return Some(Box::new(tcp));
+    }
+    let mut config = client_tls(options);
+    config.alpn_protocols = vec![H2_ALPN.to_vec()];
+    let name = ServerName::try_from(SERVER_NAME).expect("a server name");
+    let stream = TlsConnector::from(Arc::new(config)).connect(name, tcp).await.expect("a TLS session");
+    agreed_h2(stream.get_ref().1.alpn_protocol()).then(|| Box::new(stream) as Box<dyn H2Io>)
+}
+
+/// The server's side of `h2_client_io`.
+async fn h2_server_io(options: &Options, tcp: TcpStream) -> Option<Box<dyn H2Io>> {
+    tcp.set_nodelay(true).expect("no delay");
+    if options.transport == "h2c" {
+        return Some(Box::new(tcp));
+    }
+    let mut config = server_tls(options);
+    config.alpn_protocols = vec![H2_ALPN.to_vec()];
+    let stream = TlsAcceptor::from(Arc::new(config)).accept(tcp).await.expect("a TLS session");
+    agreed_h2(stream.get_ref().1.alpn_protocol()).then(|| Box::new(stream) as Box<dyn H2Io>)
+}
+
+/// Whether TLS agreed on `h2`, said as tunnel 1's refusal when it did not.
+fn agreed_h2(agreed: Option<&[u8]>) -> bool {
+    if agreed == Some(H2_ALPN) {
+        return true;
+    }
+    report_refused(1, &format!("TLS agreed on {agreed:?}, not h2"));
+    false
+}
+
+/// What HTTP/2 runs on: TCP, or TLS over it.
+trait H2Io: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> H2Io for T {}
+
+async fn run_h2_client(options: Arc<Options>) {
+    let Some(io) = h2_client_io(&options).await else { return };
     let (send, connection) = h2::client::Builder::new()
         .initial_window_size(H2_STREAM_WINDOW)
         .initial_connection_window_size(H2_CONNECTION_WINDOW)
-        .handshake::<_, Bytes>(tcp)
+        .handshake::<_, Bytes>(io)
         .await
         .expect("an HTTP/2 connection");
     let driver = tokio::spawn(connection);
@@ -847,12 +887,12 @@ async fn run_h2_server(options: Arc<Options>) {
     let listener = TcpListener::bind(("127.0.0.1", options.port)).await.expect("a listening socket");
     println!("port={}", listener.local_addr().expect("its address").port());
     let (tcp, _) = listener.accept().await.expect("a connection");
-    tcp.set_nodelay(true).expect("no delay");
+    let Some(io) = h2_server_io(&options, tcp).await else { return };
     let mut connection = h2::server::Builder::new()
         .enable_connect_protocol()
         .initial_window_size(H2_STREAM_WINDOW)
         .initial_connection_window_size(H2_CONNECTION_WINDOW)
-        .handshake::<_, Bytes>(tcp)
+        .handshake::<_, Bytes>(io)
         .await
         .expect("an HTTP/2 connection");
     let mut tunnels = JoinSet::new();
@@ -1111,8 +1151,8 @@ fn parse_options() -> Options {
 async fn main() {
     let options = Arc::new(parse_options());
     match (options.transport.as_str(), options.client) {
-        ("h2", true) => run_h2_client(options).await,
-        ("h2", false) => run_h2_server(options).await,
+        ("h2" | "h2c", true) => run_h2_client(options).await,
+        ("h2" | "h2c", false) => run_h2_server(options).await,
         ("h3", true) => run_h3_client(options).await,
         ("h3", false) => run_h3_server(options).await,
         (_, true) => run_client(options).await,

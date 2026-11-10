@@ -16,9 +16,12 @@ which each end's idle timeout ends; and a refusal when the two share no applicat
 
 WebSocket cases run the same application over WebSocket over HTTP/1.1 (RFC 6455) inside TLS, tokio-tungstenite on the
 crate's side: one Binary message per record, as the crate's WebSocket transport and crd-net both write them. Tunnel
-cases run it over WebSockets on one HTTP/2 connection with prior knowledge (RFC 8441), the `h2` crate's extended CONNECT
-on the crate's side and crd-net's WebSocketTunnels on the other, one tunnel or two at once, and through the cutting and
-the silent relay too; a subprotocol the server does not take is refused with 400 before any QMux. HTTP/3 tunnel cases
+cases run it over WebSockets on one HTTP/2 connection (RFC 8441), the `h2` crate's extended CONNECT on the crate's side
+and crd-net's WebSocketTunnels on the other, one tunnel or two at once, and through the cutting and the silent relay too;
+a subprotocol the server does not take is refused with 400 before any QMux. Over `h2` that connection is TLS with ALPN
+`h2` on crd-net's QmuxHost, whose server context lists QMux, http/1.1 and h2 on one port, each tunnel a connection of
+the host, and the Cerid end reports how the HTTP/2 connection ended (NO_ERROR, closed by the client); over `h2c` it is
+TCP with prior knowledge. HTTP/3 tunnel cases
 (RFC 9220) run the same between crd-quic-peer's tunnels and the `h3` crate's over Quinn, real UDP, also through a relay
 that loses, duplicates, delays and reorders datagrams; the Cerid end reports how the QUIC connection ended (H3_NO_ERROR,
 the client closing once the server's GOAWAY came).
@@ -128,7 +131,9 @@ class Case:
         self.hold_ms = hold_ms
         self.record_size = record_size
         self.crate_version = crate_version  # the crate offers or accepts only this QMux draft: a refusal
-        self.transport = transport  # tls, ws (WebSocket over HTTP/1.1), h2 or h3 (WebSocket tunnels over HTTP/2 or 3)
+        # tls, ws (WebSocket over HTTP/1.1), h2, h2c or h3 (WebSocket tunnels over HTTP/2 in TLS or with prior
+        # knowledge, or over HTTP/3)
+        self.transport = transport
         self.tunnels = tunnels  # tunnels at once on the one HTTP connection
         self.path = path  # the impairments of interop_common.Relay between two HTTP/3 ends
 
@@ -228,13 +233,21 @@ class Case:
         # Tunnels end in any order: each report names its tunnel.
         clients, servers = (sorted(reports, key=lambda report: int(report['connection']))
                             for reports in (clients, servers))
-        if self.transport == 'h3' and not self.crate_version:
-            self.check_quic_close(clients if self.cerid_is_client else servers, detail)
-        if self.crate_version and self.transport in ('h2', 'h3') and not self.cerid_is_client:
+        if self.crate_version and self.transport in ('h2', 'h2c', 'h3') and not self.cerid_is_client:
             # crd-net's WebSocketTunnels answers a refused CONNECT itself: no tunnel, so no report.
             expect(len(clients) == connections and not servers, f'other reports: {detail}')
             expect(all('400' in client.get('error', '') for client in clients), f'the crate failed otherwise: {detail}')
             return
+        cerid = clients if self.cerid_is_client else servers
+        if self.transport == 'h3' and not self.crate_version:
+            self.check_carrier_close(cerid, 'h3', H3_NO_ERROR, ('local',), ('application',), detail)
+        if self.transport == 'h2':
+            # The crate's server sends GOAWAY once its tunnels are done, which may reach the Cerid client before its
+            # own close does; behind the silent relay the server's connection idles out once its tunnels have.
+            ended = self.check_carrier_close(cerid, 'h2', '0', ('local', 'shutdown'),
+                                             ('idle',) if self.closer == 'none' else ('shutdown',), detail)
+            expect(ended.get('h2_alpn') == 'h2' and ended.get('h2_tls_error') == 'none',
+                   f'TLS agreed or ended otherwise: {detail}')
         expect(len(clients) == connections and len(servers) == connections, f'other reports: {detail}')
         for number in range(connections):
             client, server = clients[number], servers[number]
@@ -243,12 +256,14 @@ class Case:
             else:
                 self.check_connection(number, client, server, detail)
 
-    def check_quic_close(self, cerid, detail):
-        """The Cerid end's QUIC connection, reported after its tunnels: H3_NO_ERROR, closed by the client."""
-        ended = [report for report in cerid if 'h3_close' in report]
-        expect(len(ended) == 1 and ended[0].get('h3_close_code') == H3_NO_ERROR, f'HTTP/3 ended otherwise: {detail}')
-        expect(ended[0]['h3_close'] == ('local' if self.cerid_is_client else 'application'),
-               f'the other end closed HTTP/3: {detail}')
+    def check_carrier_close(self, cerid, carrier, code, as_client, as_server, detail):
+        """The Cerid end's HTTP/3 or HTTP/2 connection, reported once behind its last tunnel's report, ended with
+        `code` as one of `as_client` or `as_server` says; that report."""
+        ended = [report for report in cerid if f'{carrier}_close' in report]
+        expect(len(ended) == 1 and ended[0].get(f'{carrier}_close_code') == code, f'{carrier} ended otherwise: {detail}')
+        expect(ended[0][f'{carrier}_close'] in (as_client if self.cerid_is_client else as_server),
+               f'the other end closed {carrier}: {detail}')
+        return ended[0]
 
     def check_refused(self, client, server, detail):
         cerid, crate = (client, server) if self.cerid_is_client else (server, client)
@@ -283,7 +298,7 @@ class Case:
                 expect(report.get('bytes_received') == expected and report.get('bytes_sent') == expected,
                        f'{name} counted other bytes: {detail}')
         if self.transport != 'tls':
-            carrier = 'http/1.1' if self.transport == 'ws' else self.transport
+            carrier = {'ws': 'http/1.1', 'h2c': 'h2'}.get(self.transport, self.transport)
             expect(cerid.get('alpn') == carrier and cerid.get('websocket_protocol') == f'qmux-02.{PROTOCOL}',
                    f'crd-net agreed on another protocol: {detail}')
         else:
@@ -324,7 +339,7 @@ class Case:
 
 def websocket_cases(case, transport):
     """The application's cases over a WebSocket carrier, with the impaired paths it can take: the cutting and the silent
-    TCP relay under TLS, HTTP/1.1 and HTTP/2, a lossy and reordering UDP one under HTTP/3."""
+    TCP relay under TLS, HTTP/1.1 and HTTP/2 (inside TLS or not), a lossy and reordering UDP one under HTTP/3."""
     yield case(transport=transport)
     yield case(closer='server', code=0x2A, transport=transport)
     yield case(streams=1, size=16 << 20, transport=transport)
@@ -383,11 +398,13 @@ def cases(cerid, quic, crate):
             yield case(streams=2, size=64 << 10, relay=dict(seed=seed, largest=7))
         yield case(streams=0, closer='none', idle_ms=400, relay=dict(silent_after=0.2))
         yield case(streams=0, crate_version='01')
-        for transport in ('ws', 'h2'):
+        for transport in ('ws', 'h2c', 'h2'):
             yield from websocket_cases(case, transport)
-        yield case(transport='h2', tunnels=2)
-        yield case(streams=8, size=1 << 20, datagrams=64, closer='server', code=5, transport='h2', tunnels=2)
-        yield case(streams=2, size=64 << 10, relay=dict(seed=4, largest=7), transport='h2', tunnels=2)
+        for transport in ('h2c', 'h2'):
+            yield case(transport=transport, tunnels=2)
+            yield case(streams=8, size=1 << 20, datagrams=64, closer='server', code=5, transport=transport, tunnels=2)
+            yield case(streams=2, size=64 << 10, relay=dict(seed=4, largest=7), transport=transport, tunnels=2)
+        yield case(group='secp256r1mlkem768', cipher='chacha20', transport='h2', tunnels=2)
         yield from websocket_cases(case, 'h3')
         yield case(transport='h3', tunnels=2)
         yield case(streams=8, size=1 << 20, datagrams=64, closer='server', code=5, transport='h3', tunnels=2)

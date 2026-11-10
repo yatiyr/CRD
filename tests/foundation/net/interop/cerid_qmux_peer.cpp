@@ -1,24 +1,27 @@
 // crd-net interoperability test (4.2a) -- a QMux endpoint over crd-net's QmuxHost, or over WebSocket tunnels on an
-// HTTP/2 connection, real TCP on the loopback, the counterpart of qmux_crate_peer. qmux_interop.py runs one of each and
-// reads both reports.
+// HTTP/2 connection (the host's, inside TLS, or one with prior knowledge), real TCP on the loopback, the counterpart of
+// qmux_crate_peer. qmux_interop.py runs one of each and reads both reports.
 //
 // Usage: crd-qmux-peer --role client|server --port N --seed HEX --group NAME --cipher NAME --alpn NAME --streams N
 //                      --bytes N --closer client|server|none --code N --max-streams N [--uni N --uni-bytes N]
 //                      [--resets N] [--stops N] [--datagrams N --datagram-bytes N [--datagram-limit N]
 //                      [--datagram-probe 1]] [--connections 2 [--early 1]] [--idle-ms N] [--keepalive-ms N]
-//                      [--hold-ms N] [--transport tls|ws|h2]
+//                      [--hold-ms N] [--transport tls|ws|h2|h2c]
 //
 //   port, seed, group, cipher  as crd-quic-peer's; interop_echo.hpp describes the application
 //   alpn, idle-ms, keepalive-ms  interop_qmux.hpp's: `alpn` is the one application protocol this end offers or accepts
 //   closer        none: neither end closes, so the connection ends on its idle timeout
 //   early         a server's tickets allow 0-RTT, and a resuming client would use it
 //   hold-ms       this long with nothing to do before the closing end closes
-//   transport     tls: QMux over TLS (the default); ws: WebSocket over HTTP/1.1 inside TLS, `alpn` its subprotocol, a
-//                 server's TLS listing `alpn` as well; h2: WebSocket tunnels (RFC 8441) on one HTTP/2 connection with
-//                 prior knowledge, `connections` of them at once, `alpn` their subprotocol (interop_qmux.hpp)
+//   transport     tls: QMux over TLS (the default); ws: WebSocket over HTTP/1.1 inside TLS, `alpn` its subprotocol; h2:
+//                 `connections` WebSocket tunnels (RFC 8441) at once on the host's HTTP/2 connection inside TLS (ALPN
+//                 h2), `alpn` their subprotocol, and no early data on a client; h2c: the same on one HTTP/2 connection
+//                 with prior knowledge (interop_qmux.hpp). A ws or h2 server's one TLS context lists `alpn`, http/1.1
+//                 and h2, and serves each.
 //
 // The report of each connection goes to standard output when it has ended; the closing end closes with the reason
-// `cerid-interop done`.
+// `cerid-interop done`. Over h2, the HTTP/2 connection's own end follows its last tunnel's report: `h2_alpn`,
+// `h2_close` and `h2_close_code`.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -69,7 +72,8 @@ enum class Transport : crd::u8
 {
     Tls,
     WebSocket,
-    Http2,
+    Http2,              // the host's HTTP/2 inside TLS
+    Http2PriorKnowledge, // HTTP/2 over TCP with prior knowledge
 };
 
 struct Options : QmuxOptions
@@ -80,10 +84,17 @@ struct Options : QmuxOptions
 class App final : public QmuxHostEvents
 {
 public:
-    explicit App(EchoPeer& peer) noexcept : m_peer(peer) {}
+    // `tunnels`: the echo runs in the WebSocket tunnels of HTTP/2 connections, not in the connections themselves.
+    App(EchoPeer& peer, bool tunnels) noexcept : m_peer(peer), m_tunnels(tunnels) {}
 
-    void on_accept(QuicHandle handle, QmuxConnection&, const Endpoint&) noexcept override
+    void on_accept(QuicHandle handle, QmuxConnection& connection, const Endpoint&) noexcept override
     {
+        // A tunnel is accepted open; its bearer before TLS, when it cannot yet tell h2 from anything else.
+        if (m_tunnels && !connection.websocket())
+        {
+            m_bearer = handle;
+            return;
+        }
         m_peer.started(handle, nullptr);
     }
 
@@ -108,17 +119,36 @@ public:
     void on_closed(QuicHandle handle, const QmuxConnection& connection, SocketError transport) noexcept override
     {
         const Echo* const echo = m_peer.echo_of(handle);
-        if (echo == nullptr)
+        if (echo != nullptr)
         {
-            return;
+            echo->report(connection.handshake().resumed(), connection.handshake().early_data(), connection.datagrams());
+            // A tunnel has no TLS of its own: what carries it is HTTP/2.
+            report_qmux(connection, m_tunnels ? kHttp2 : connection.handshake().application_protocol(), transport);
+            m_peer.ended(handle);
         }
-        echo->report(connection.handshake().resumed(), connection.handshake().early_data(), connection.datagrams());
-        report_qmux(connection, connection.handshake().application_protocol(), transport);
-        m_peer.ended(handle);
+        else if (m_tunnels && handle == m_bearer)
+        {
+            const StringView alpn = connection.handshake().application_protocol();
+            const StringView tls_error = crd::crypto::tls_error_name(connection.tls_error());
+            std::printf("h2_alpn=%.*s\nh2_close=%s\nh2_close_code=%llu\nh2_tls_error=%.*s\n",
+                        static_cast<int>(alpn.size()), alpn.data(), qmux_close_name(connection.close_info()),
+                        static_cast<unsigned long long>(connection.close_info().error_code),
+                        static_cast<int>(tls_error.size()), tls_error.data());
+            std::fflush(stdout);
+            m_bearer_ended = true;
+        }
     }
+
+    // A client's HTTP/2 connection, from connect().
+    void bear(QuicHandle handle) noexcept { m_bearer = handle; }
+    [[nodiscard]] QuicHandle bearer() const noexcept { return m_bearer; }
+    [[nodiscard]] bool bearer_ended() const noexcept { return m_bearer_ended; }
 
 private:
     EchoPeer& m_peer;
+    QuicHandle m_bearer;
+    bool m_tunnels;
+    bool m_bearer_ended = false;
 };
 
 [[nodiscard]] bool parse_transport(const char* value, Transport& out) noexcept
@@ -127,7 +157,10 @@ private:
     {
         const char* name;
         Transport transport;
-    } kTransports[] = {{"tls", Transport::Tls}, {"ws", Transport::WebSocket}, {"h2", Transport::Http2}};
+    } kTransports[] = {{"tls", Transport::Tls},
+                       {"ws", Transport::WebSocket},
+                       {"h2", Transport::Http2},
+                       {"h2c", Transport::Http2PriorKnowledge}};
     for (const auto& entry : kTransports)
     {
         if (std::strcmp(entry.name, value) == 0)
@@ -356,6 +389,57 @@ int run_http2(crd::memory::IAllocator& allocator, const Options& options)
     return 1;
 }
 
+// A client's HTTP/2 connection inside TLS: opened first, its `connections` tunnels once it has agreed on h2 and the
+// server allows extended CONNECT, and closed with NO_ERROR once every tunnel has reported. False, said on stderr, when
+// the connection or a tunnel could not be opened.
+[[nodiscard]] bool bear_tunnels(QmuxHost& host, App& app, EchoPeer& peer, const TlsContext& context, const Options& options,
+                                u64 now_ns) noexcept
+{
+    SocketError socket = SocketError::None;
+    if (!app.bearer().valid())
+    {
+        QmuxConnect request;
+        request.server = Endpoint{IpAddress::v4_loopback(), static_cast<crd::u16>(options.port)};
+        request.tls = &context;
+        app.bear(host.connect(request, now_ns, socket));
+        if (!app.bearer().valid())
+        {
+            std::fputs("crd-qmux-peer: the connection could not be started\n", stderr);
+            return false;
+        }
+        return true;
+    }
+    QmuxConnection* const bearer = host.connection(app.bearer());
+    if (bearer == nullptr || !bearer->http2() || bearer->state() != QmuxState::Established)
+    {
+        return true;
+    }
+    if (peer.done())
+    {
+        bearer->close(0U, ConstSpan<u8>(), now_ns);
+        host.wake(app.bearer());
+        return true;
+    }
+    while (peer.count() < options.connections)
+    {
+        WsTunnelError error = WsTunnelError::None;
+        const QuicHandle tunnel = host.open_tunnel(app.bearer(), now_ns, error);
+        if (!tunnel.valid())
+        {
+            if (error == WsTunnelError::NotReady)
+            {
+                return true;
+            }
+            std::fputs("crd-qmux-peer: a tunnel could not be opened\n", stderr);
+            return false;
+        }
+        peer.started(tunnel, nullptr);
+    }
+    return true;
+}
+
+// The run over TLS: QMux connections one after another, or (h2) one HTTP/2 connection's tunnels at once, which ends with
+// that connection. A server over h2 may report no tunnel: it answers a CONNECT it refuses itself.
 int run(crd::memory::IAllocator& allocator, const Options& options, const TlsContext& context)
 {
     TcpListener listener;
@@ -368,14 +452,19 @@ int run(crd::memory::IAllocator& allocator, const Options& options, const TlsCon
     HandshakeBuckets buckets(allocator, HandshakeRules{});
     TicketCache tickets(allocator, TicketCacheConfig{});
     static EchoPeer peer(options);
-    App app(peer);
+    const bool tunnels = options.transport == Transport::Http2;
+    App app(peer, tunnels);
     static u8 early_context[sizeof(kEarlyContext)];
     std::memcpy(early_context, kEarlyContext, sizeof(kEarlyContext));
     const ConstSpan<u8> subprotocols[] = {bytes_of(options.alpn)};
     const WebSocketConfig websocket = websocket_config(subprotocols);
+    const bool carried = tunnels || options.transport == Transport::WebSocket;
+    Http2Config http2;
+    http2.connect_protocol = !options.client;
     QmuxHostConfig config;
     config.connection = qmux_config(options);
-    config.connection.websocket = options.transport == Transport::WebSocket ? &websocket : nullptr;
+    config.connection.websocket = carried ? &websocket : nullptr;
+    config.connection.http2 = carried ? &http2 : nullptr;
     config.connection.tls = options.client ? nullptr : &context;
     config.connection.tickets = options.client ? &tickets : nullptr;
     config.connection.early_context = options.early && !options.client ? ConstSpan<u8>(early_context) : ConstSpan<u8>();
@@ -392,11 +481,15 @@ int run(crd::memory::IAllocator& allocator, const Options& options, const TlsCon
         std::fflush(stdout);
     }
     const u64 deadline = clock.monotonic_ns() + kRunNs;
-    while (!peer.done() && clock.monotonic_ns() < deadline)
+    while (!(tunnels ? app.bearer_ended() : peer.done()) && clock.monotonic_ns() < deadline)
     {
         const u64 now_ns = clock.monotonic_ns();
         tickets.advance(now_ns);
-        if (options.client && peer.idle() && peer.count() < options.connections)
+        if (tunnels && options.client && !bear_tunnels(host, app, peer, context, options, now_ns))
+        {
+            return 1;
+        }
+        if (!tunnels && options.client && peer.idle() && peer.count() < options.connections)
         {
             QmuxConnect request;
             request.server = Endpoint{IpAddress::v4_loopback(), static_cast<crd::u16>(options.port)};
@@ -413,9 +506,11 @@ int run(crd::memory::IAllocator& allocator, const Options& options, const TlsCon
         static_cast<void>(host.poll(kWaitNs));
         peer.wake(host, clock.monotonic_ns());
     }
-    if (!peer.done())
+    if (tunnels ? !app.bearer_ended() || (options.client && !peer.done()) : !peer.done())
     {
-        std::fputs("crd-qmux-peer: the run outlasted its deadline\n", stderr);
+        std::fputs(app.bearer_ended() ? "crd-qmux-peer: the HTTP/2 connection ended before its tunnels\n"
+                                      : "crd-qmux-peer: the run outlasted its deadline\n",
+                   stderr);
         return 1;
     }
     return 0;
@@ -426,7 +521,7 @@ int usage()
     std::fputs("usage: crd-qmux-peer --role client|server --port N --seed HEX --group NAME --cipher NAME --alpn NAME "
                "--streams N --bytes N --closer client|server|none --code N --max-streams N [--uni N --uni-bytes N] "
                "[--resets N] [--stops N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]] "
-               "[--connections 2 [--early 1]] [--idle-ms N] [--keepalive-ms N] [--hold-ms N] [--transport tls|ws|h2]\n",
+               "[--connections 2 [--early 1]] [--idle-ms N] [--keepalive-ms N] [--hold-ms N] [--transport tls|ws|h2|h2c]\n",
                stderr);
     return 2;
 }
@@ -456,11 +551,12 @@ int main(int argc, char** argv)
             return usage();
         }
     }
-    if (argc % 2 == 0 || required != kRequiredEchoOptions || !echo_options_valid(options) || options.alpn.empty())
+    if (argc % 2 == 0 || required != kRequiredEchoOptions || !echo_options_valid(options) || options.alpn.empty() ||
+        (options.transport == Transport::Http2 && options.client && options.early))
     {
         return usage();
     }
-    if (options.transport == Transport::Http2)
+    if (options.transport == Transport::Http2PriorKnowledge)
     {
         return run_http2(*crd::memory::default_allocator(), options);
     }
@@ -476,18 +572,19 @@ int main(int argc, char** argv)
     const KeyId pin = credential.key_id();
     const AlgorithmId groups[] = {options.group};
     const AlgorithmId aeads[] = {options.cipher};
-    const StringView both[] = {options.alpn, kHttp11};
+    const StringView every[] = {options.alpn, kHttp11, kHttp2};
     const bool websocket = options.transport == Transport::WebSocket;
-    const StringView protocols[] = {websocket ? kHttp11 : options.alpn};
+    const bool http2 = options.transport == Transport::Http2;
+    const StringView protocols[] = {websocket ? kHttp11 : (http2 ? kHttp2 : options.alpn)};
     TlsConfig tls;
     tls.role = options.client ? TlsRole::Client : TlsRole::Server;
     tls.groups = ConstSpan<AlgorithmId>(groups, 1U);
     tls.aeads = ConstSpan<AlgorithmId>(aeads, 1U);
     tls.server_name = kServerName;
     tls.application_protocols = protocols;
-    if (websocket && !options.client)
+    if ((websocket || http2) && !options.client)
     {
-        tls.application_protocols = both;
+        tls.application_protocols = every;
     }
     if (options.client)
     {

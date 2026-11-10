@@ -253,7 +253,6 @@ struct EchoStream
     bool out_end = false;
     bool finished = false; // every byte and the FIN acknowledged
     bool stop_sent = false;
-    bool wrote_all = false; // of a stream to reset: a whole turn has passed since its last byte was written
 };
 
 // What one turn of a connection's service knows of the connection beyond its streams and datagrams.
@@ -460,14 +459,14 @@ private:
         }
         else if (index < m_options.uni + m_options.resets)
         {
-            // The reset waits a turn so the bytes go first: a stream whose first frame is its RESET_STREAM may never
-            // reach the peer's application.
-            if (stream.wrote_all && set.reset(id, kInteropResetCode) == crd::net::QuicStreamError::None)
+            // The reset waits until its bytes have left (QMux) or been acknowledged (QUIC), its send buffer empty
+            // again: a stream whose first frame is its RESET_STREAM may never reach the peer's application.
+            const bool left = stream.sent == kResetStreamBytes && set.send_room(id, 0U) == set.limits().send_bytes;
+            if (left && set.reset(id, kInteropResetCode) == crd::net::QuicStreamError::None)
             {
                 stream.out_end = true;
             }
             write(set, id, stream, tag, kResetStreamBytes, false);
-            stream.wrote_all = stream.sent == kResetStreamBytes;
         }
         else
         {
