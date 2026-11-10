@@ -39,9 +39,9 @@ struct Packet
 
 struct World
 {
+    CongestionSlot slot; // first, so its alignment pads nothing before it (ARM64 MSVC warns C4324)
     CongestionPolicy policy;
     u64 datagram = 1200U;
-    CongestionSlot slot;
     CongestionController* ctl = nullptr;
     Pacer pacer;
     Packet packets[kPackets];
