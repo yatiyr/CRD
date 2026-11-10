@@ -408,48 +408,215 @@ TEST_CASE("Prague: a classic sawtooth queue with marks turns the reduction to AB
     CHECK(l4s.ctl->state().classic == 0U);
 }
 
+namespace
+{
+using crd::net::testing::kBottleneckSecond;
+using crd::net::testing::Link;
+using crd::net::testing::run_flows;
+
+// Bulk flows over a bottleneck of kStepRate bytes per second.
+constexpr u64 kStepRate = 10000000U;
+
+struct FlowResult
+{
+    u64 goodput = 0U; // bytes per second over the measured span
+    u64 max_queue = 0U;
+    u64 dropped = 0U; // from the start
+    CongestionState state;
+};
+
+// One flow of `algorithm` over a `rtt_ms` round trip with a buffer of two BDPs and a CE step at `step` bytes,
+// `warm_ms` to settle and then `measure_ms`.
+FlowResult run_step(CongestionAlgorithm algorithm, u64 rtt_ms, u64 step, u64 warm_ms = 2000U, u64 measure_ms = 6000U)
+{
+    CongestionPolicy policy;
+    policy.algorithm = algorithm;
+    const u64 bdp = kStepRate / 1000U * rtt_ms;
+    Path path(policy, kStepRate, rtt_ms * kMs / 2U, 2U * bdp);
+    path.set_ce_queue(step);
+    path.run(warm_ms * kMs);
+    const u64 start = path.now;
+    const u64 acked = path.acked_bytes;
+    FlowResult out;
+    path.run(start + measure_ms * kMs,
+             [&]
+             {
+                 const u64 queue = path.queue_bytes();
+                 out.max_queue = (queue > out.max_queue) ? queue : out.max_queue;
+             });
+    out.goodput = (path.acked_bytes - acked) * kBottleneckSecond / (path.now - start);
+    out.dropped = path.dropped;
+    out.state = path.ctl->state();
+    return out;
+}
+
+// Two bulk flows sharing one link of kStepRate with a buffer of `buffer` bytes and CE from `step` (a ramp of `ramp`
+// bytes above it, or a step), each with its own round trip, `warm_ms` to settle and then `measure_ms`.
+struct Pair
+{
+    FlowResult a;
+    FlowResult b;
+    u64 max_queue = 0U;
+    u64 dropped = 0U; // both flows' over the measured span
+};
+
+Pair run_pair(CongestionAlgorithm a, u64 a_rtt_ms, CongestionAlgorithm b, u64 b_rtt_ms, u64 buffer, u64 step,
+              u64 warm_ms, u64 measure_ms, u64 ramp = 0U)
+{
+    Link link{kStepRate, buffer, step, ramp};
+    CongestionPolicy policy_a;
+    policy_a.algorithm = a;
+    CongestionPolicy policy_b;
+    policy_b.algorithm = b;
+    Path flow_a(policy_a, link, a_rtt_ms * kMs / 2U, 7U);
+    Path flow_b(policy_b, link, b_rtt_ms * kMs / 2U, 11U);
+    run_flows({&flow_a, &flow_b}, warm_ms * kMs, [] {});
+    const u64 start = flow_a.now;
+    const u64 acked_a = flow_a.acked_bytes;
+    const u64 acked_b = flow_b.acked_bytes;
+    const u64 dropped = flow_a.dropped + flow_b.dropped;
+    Pair out;
+    run_flows({&flow_a, &flow_b}, start + measure_ms * kMs,
+              [&]
+              {
+                  const u64 queue = link.queue_bytes(flow_a.now > flow_b.now ? flow_a.now : flow_b.now);
+                  out.max_queue = (queue > out.max_queue) ? queue : out.max_queue;
+              });
+    out.a.goodput = (flow_a.acked_bytes - acked_a) * kBottleneckSecond / (measure_ms * kMs);
+    out.b.goodput = (flow_b.acked_bytes - acked_b) * kBottleneckSecond / (measure_ms * kMs);
+    out.a.dropped = flow_a.dropped;
+    out.b.dropped = flow_b.dropped;
+    out.dropped = flow_a.dropped + flow_b.dropped - dropped;
+    out.a.state = flow_a.ctl->state();
+    out.b.state = flow_b.ctl->state();
+    return out;
+}
+
+} // namespace
+
 TEST_CASE("Prague: an L4S step keeps the queue at the step and the link full, where CUBIC and NewReno fall short",
           "[net][net-path][prague]")
 {
-    // 10 MB/s, 20 ms round trip (a 200 KB BDP), a buffer of two BDPs and a CE step at 1 ms (10 KB).
-    static constexpr u64 kRate = 10000000U;
-    static constexpr u64 kOneWay = 10U * kMs;
-    static constexpr u64 kBdp = kRate / 1000U * 20U;
-    static constexpr u64 kStep = kRate / 1000U;
-    struct Result
-    {
-        u64 goodput = 0U;
-        u64 max_queue = 0U;
-        u64 dropped = 0U;
-    };
-    const auto run = [](CongestionAlgorithm algorithm)
-    {
-        CongestionPolicy policy;
-        policy.algorithm = algorithm;
-        Path path(policy, kRate, kOneWay, 2U * kBdp);
-        path.set_ce_queue(kStep);
-        path.run(2000U * kMs);
-        const u64 start = path.now;
-        const u64 acked = path.acked_bytes;
-        Result out;
-        path.run(6000U * kMs,
-                 [&]
-                 {
-                     const u64 queue = path.queue_bytes();
-                     out.max_queue = (queue > out.max_queue) ? queue : out.max_queue;
-                 });
-        out.goodput = (path.acked_bytes - acked) * 1000U * kMs / (path.now - start);
-        out.dropped = path.dropped;
-        return out;
-    };
-    const Result prague = run(CongestionAlgorithm::Prague);
-    const Result cubic = run(CongestionAlgorithm::Cubic);
-    const Result reno = run(CongestionAlgorithm::NewReno);
+    // 10 MB/s, 20 ms round trip (a 200 KB BDP), a buffer of two BDPs and a CE step at 1 ms (10 KB), measured from
+    // 2 s (Prague still growing back from its slow start's exit) and after 20 s.
+    static constexpr u64 kStep = kStepRate / 1000U;
+    const FlowResult prague = run_step(CongestionAlgorithm::Prague, 20U, kStep);
+    const FlowResult cubic = run_step(CongestionAlgorithm::Cubic, 20U, kStep);
+    const FlowResult reno = run_step(CongestionAlgorithm::NewReno, 20U, kStep);
+    const FlowResult prague_settled = run_step(CongestionAlgorithm::Prague, 20U, kStep, 20000U);
+    const FlowResult cubic_settled = run_step(CongestionAlgorithm::Cubic, 20U, kStep, 20000U);
+    const FlowResult reno_settled = run_step(CongestionAlgorithm::NewReno, 20U, kStep, 20000U);
     INFO("Prague " << prague.goodput << " B/s, queue " << prague.max_queue << "; CUBIC " << cubic.goodput
                    << " B/s, queue " << cubic.max_queue << "; NewReno " << reno.goodput << " B/s");
     CHECK(prague.dropped == 0U);
-    CHECK(prague.goodput >= kRate * 92U / 100U);
+    CHECK(prague.goodput >= kStepRate * 92U / 100U);
     CHECK(prague.max_queue <= kStep + 2U * kMss); // the step and the datagram or two in flight to it
     CHECK(cubic.goodput < prague.goodput);
     CHECK(reno.goodput < cubic.goodput);
+    INFO("settled: Prague " << prague_settled.goodput << " B/s, CUBIC " << cubic_settled.goodput << " B/s, NewReno "
+                            << reno_settled.goodput << " B/s");
+    CHECK(prague_settled.goodput >= kStepRate * 99U / 100U);
+    CHECK(prague_settled.max_queue <= kStep + 2U * kMss);
+    CHECK(cubic_settled.goodput < prague_settled.goodput);
+    CHECK(reno_settled.goodput < cubic_settled.goodput);
+}
+
+TEST_CASE("Prague: settled, L4S steps of 1 and 2 ms fill the link at 20 and 50 ms; a classic-depth one is detected",
+          "[net][net-path][prague]")
+{
+    // Twenty seconds to settle: at 50 ms the first CE in slow start leaves a quarter of the BDP, which a datagram a
+    // round trip takes 15 s to grow back. Settled and paced, even a 1 ms step (a fiftieth of the 50 ms BDP) keeps 99%
+    // of the link: reductions by alpha / 2 seldom empty the queue (DCTCP's K >= C RTT / 7 is for synchronised,
+    // unpaced windows). Steps of 5 and 10 ms are classic AQM depths: the detector turns the reduction to ABE's 30%,
+    // which leaves a link short below 3/7 of the BDP (92% at 50 ms and a 5 ms step).
+    for (const u64 rtt_ms : {20U, 50U})
+    {
+        u64 previous = 0U;
+        for (const u64 step_ms : {1U, 2U, 5U, 10U})
+        {
+            const u64 step = kStepRate / 1000U * step_ms;
+            const FlowResult prague = run_step(CongestionAlgorithm::Prague, rtt_ms, step, 20000U);
+            INFO(rtt_ms << " ms, step " << step_ms << " ms: " << prague.goodput << " B/s, queue " << prague.max_queue
+                        << ", alpha " << prague.state.alpha << ", classic " << prague.state.classic);
+            CHECK(prague.dropped == 0U);
+            CHECK(prague.max_queue <= step + 2U * kMss);
+            if (step_ms <= 2U)
+            {
+                CHECK(prague.state.classic == 0U);
+                CHECK(prague.goodput >= kStepRate * 99U / 100U);
+                CHECK(prague.goodput > previous);
+                previous = prague.goodput;
+            }
+            else
+            {
+                CHECK(prague.state.classic == u32{1} << 16U);
+                CHECK(prague.goodput >= kStepRate * 92U / 100U);
+            }
+        }
+    }
+}
+
+TEST_CASE("Prague: two flows through an L4S queue share it, and RTT independence narrows round trips of 5 and 20 ms",
+          "[net][net-path][prague]")
+{
+    static constexpr u64 kStep = kStepRate / 1000U;
+    static constexpr u64 kBuffer = 2U * kStepRate / 50U; // two BDPs at 20 ms
+    const auto share = [](const Pair& pair) { return pair.a.goodput + pair.b.goodput; };
+
+    const Pair same = run_pair(CongestionAlgorithm::Prague, 20U, CongestionAlgorithm::Prague, 20U, kBuffer, kStep,
+                               4000U, 8000U);
+    INFO("same RTT: " << same.a.goodput << " and " << same.b.goodput << " B/s, queue " << same.max_queue);
+    CHECK(share(same) >= kStepRate * 97U / 100U);
+    CHECK(same.a.goodput * 100U >= same.b.goodput * 95U);
+    CHECK(same.b.goodput * 100U >= same.a.goodput * 95U);
+    CHECK(same.max_queue <= kStep + 3U * kMss);
+    CHECK(same.a.dropped + same.b.dropped == 0U);
+
+    // Past 500 rounds of the 20 ms flow, both grow and reduce on the 25 ms virtual round trip. Through a step the
+    // shorter flow's marks lag less, so it still takes more, but under a third of NewReno's ratio; through a ramp (CE
+    // with a probability rising across 2 ms, as a DualQ's L4S queue may mark) the two come within 1.6 to 1.
+    const Pair step = run_pair(CongestionAlgorithm::Prague, 5U, CongestionAlgorithm::Prague, 20U, kBuffer, kStep,
+                               15000U, 15000U);
+    const Pair reno = run_pair(CongestionAlgorithm::NewReno, 5U, CongestionAlgorithm::NewReno, 20U, kBuffer, kStep,
+                               15000U, 15000U);
+    const Pair ramp = run_pair(CongestionAlgorithm::Prague, 5U, CongestionAlgorithm::Prague, 20U, kBuffer, kStep / 2U,
+                               30000U, 15000U, 2U * kStep);
+    INFO("step: Prague " << step.a.goodput << " and " << step.b.goodput << " B/s (alpha " << step.a.state.alpha
+                         << " and " << step.b.state.alpha << "), NewReno " << reno.a.goodput << " and "
+                         << reno.b.goodput << " B/s; ramp: Prague " << ramp.a.goodput << " and " << ramp.b.goodput
+                         << " B/s, queue " << ramp.max_queue);
+    CHECK(share(step) >= kStepRate * 97U / 100U);
+    CHECK(share(ramp) >= kStepRate * 97U / 100U);
+    CHECK(reno.a.goodput >= 10U * reno.b.goodput);
+    CHECK(step.a.goodput * 3U <= reno.a.goodput * step.b.goodput / reno.b.goodput);
+    CHECK(ramp.a.goodput * 10U <= ramp.b.goodput * 16U);
+    CHECK(ramp.max_queue <= 3U * kStep);
+}
+
+TEST_CASE("Prague: beside CUBIC in one classic ECN queue it detects the AQM and stays within twice CUBIC's share",
+          "[net][net-path][prague]")
+{
+    // A single queue marking past 5 or 15 ms, as a classic AQM without flow isolation does, both flows at 20 ms. The
+    // detector turns Prague's reduction to ABE's 30%; TR-BB-2019-002 section 8 takes a Prague to CUBIC-ECN ratio
+    // within 0.5 to 2 as Reno-friendly, where a scalable answer alone reaches about 16. NewReno with ECN beside the
+    // same CUBIC is the classic reference.
+    for (const u64 step_ms : {5U, 15U})
+    {
+        const u64 step = kStepRate / 1000U * step_ms;
+        const Pair pair = run_pair(CongestionAlgorithm::Prague, 20U, CongestionAlgorithm::Cubic, 20U,
+                                   2U * kStepRate / 50U, step, 10000U, 20000U);
+        const Pair reno = run_pair(CongestionAlgorithm::NewReno, 20U, CongestionAlgorithm::Cubic, 20U,
+                                   2U * kStepRate / 50U, step, 10000U, 20000U);
+        INFO("step " << step_ms << " ms: Prague " << pair.a.goodput << " B/s (classic " << pair.a.state.classic
+                     << ", alpha " << pair.a.state.alpha << "), CUBIC " << pair.b.goodput << " B/s, queue "
+                     << pair.max_queue << "; NewReno " << reno.a.goodput << " beside CUBIC " << reno.b.goodput);
+        CHECK(pair.a.state.classic == u32{1} << 16U);
+        CHECK(pair.a.goodput <= 2U * pair.b.goodput);
+        CHECK(2U * pair.a.goodput >= pair.b.goodput);
+        CHECK(pair.a.goodput + pair.b.goodput >= kStepRate * 97U / 100U);
+        CHECK(pair.max_queue <= step + 3U * kMss);
+        CHECK(pair.dropped == 0U);
+        CHECK(reno.a.goodput <= 2U * reno.b.goodput);
+        CHECK(2U * reno.a.goodput >= reno.b.goodput);
+    }
 }

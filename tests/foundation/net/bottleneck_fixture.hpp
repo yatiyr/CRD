@@ -1,12 +1,14 @@
 #pragma once
 
 // A simulated bottleneck that the congestion controller tests share (NET-PATH; docs/design/network-foundation.md#bbr
-// and #prague): one controller with its delivery rate sampler and pacer, driven as a connection drives them, over a
-// rate, a drop-tail buffer, a propagation delay, random loss and a step-marking queue.
+// and #prague): flows of one controller each, with its delivery rate sampler and pacer, driven as a connection drives
+// them, over a link of a rate, a drop-tail buffer and a step-marking queue that one flow owns or several share, each
+// flow with its own propagation delay and random loss.
 
 #include <crd/net/congestion.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <initializer_list>
 #include <memory>
 
 namespace crd::net::testing
@@ -15,15 +17,38 @@ inline constexpr u64 kBottleneckSecond = kNanosPerSecond;
 inline constexpr u64 kBottleneckMss = 1200U;
 inline constexpr u64 kInfiniteData = ~u64{0};
 
-// A sender with one controller, its sampler and pacer, over a FIFO bottleneck of `rate` bytes per second and a
-// `buffer` byte queue, `one_way` propagation each way, with every packet acknowledged at once by its own ACK frame.
-// A dropped packet is declared lost when the ACK of the next packet arrives (or a probe timeout after the last), as
-// RFC 9002's packet threshold would within a few packets.
+// A FIFO bottleneck of `rate` bytes per second with a `buffer` byte drop-tail queue. With `ce_queue` set, a
+// step-marking AQM: CE on every packet that finds more than that many bytes queued (L4S's step, RFC 9332's 1 ms; a
+// classic one's deeper), and the packets of every flow through it are ECN-capable, their feedback reaching on_ecn().
+struct Link
+{
+    u64 rate = 0U;
+    u64 buffer = 0U;
+    u64 ce_queue = 0U;
+    u64 ce_ramp = 0U; // 0: a step; else CE with a probability rising from 0 at ce_queue to 1 this many bytes above it
+    u64 free_ns = 0U; // when the last queued packet has left
+
+    [[nodiscard]] u64 queue_bytes(u64 now_ns) const
+    {
+        return (free_ns > now_ns) ? (free_ns - now_ns) * rate / kBottleneckSecond : 0U;
+    }
+};
+
+// A sender with one controller, its sampler and pacer, over a link it owns or shares, `one_way` propagation each way,
+// with every packet acknowledged at once by its own ACK frame. A dropped packet is declared lost when the ACK of the
+// next packet arrives (or a probe timeout after the last), as RFC 9002's packet threshold would within a few packets.
 class Path
 {
 public:
     explicit Path(const CongestionPolicy& policy, u64 rate, u64 one_way_ns, u64 buffer, u64 entropy = 7U)
-        : m_rate(rate), m_one_way_ns(one_way_ns), m_buffer(buffer)
+        : m_own{rate, buffer}, m_link(&m_own), m_one_way_ns(one_way_ns)
+    {
+        ctl = make_congestion(policy, kBottleneckMss, nullptr, m_slot, delivery, entropy);
+        REQUIRE(ctl != nullptr);
+    }
+    // A flow through `link`, which outlives it and which other flows may share (run_flows).
+    Path(const CongestionPolicy& policy, Link& link, u64 one_way_ns, u64 entropy = 7U)
+        : m_link(&link), m_one_way_ns(one_way_ns)
     {
         ctl = make_congestion(policy, kBottleneckMss, nullptr, m_slot, delivery, entropy);
         REQUIRE(ctl != nullptr);
@@ -41,15 +66,10 @@ public:
         REQUIRE(ctl != nullptr);
     }
 
-    void set_rate(u64 rate) { m_rate = rate; }
+    void set_rate(u64 rate) { m_link->rate = rate; }
     void set_loss(u32 permille) { m_loss = permille; }
-    // CE on every packet that finds more than `bytes` queued: a step-marking AQM (L4S's, RFC 9332's step at 1 ms; a
-    // classic one's deeper). With a threshold, packets are ECN-capable and feedback reaches on_ecn().
-    void set_ce_queue(u64 bytes)
-    {
-        m_ce_queue = bytes;
-        m_ecn = bytes != 0U;
-    }
+    // The link's step-marking threshold (Link::ce_queue); 0 marks nothing and turns ECN off.
+    void set_ce_queue(u64 bytes) { m_link->ce_queue = bytes; }
     // Bytes the application has written so far; kInfiniteData for a bulk transfer.
     void set_data(u64 bytes) { m_data = bytes; }
     void add_data(u64 bytes) { m_data += bytes; }
@@ -59,23 +79,15 @@ public:
     {
         while (now < until_ns)
         {
-            const u64 ack = (m_head != m_tail) ? event_ns(m_flight[m_head % kFlight]) : kNeverNs;
-            const u64 send = next_send_ns();
-            const u64 next = (ack < send) ? ack : send;
-            if (next >= until_ns || next == kNeverNs)
+            const u64 next = next_event_ns();
+            if (next >= until_ns)
             {
                 now = until_ns;
                 return;
             }
-            now = (next > now) ? next : now;
-            if (ack <= send)
+            if (step(next))
             {
-                settle();
                 watch();
-            }
-            else
-            {
-                transmit();
             }
         }
     }
@@ -97,10 +109,28 @@ public:
     u64 marked = 0U;
     u64 max_queue = 0U;
 
-    // The bottleneck's queue in bytes at `now_ns`.
-    [[nodiscard]] u64 queue_bytes() const
+    // The bottleneck's queue in bytes now.
+    [[nodiscard]] u64 queue_bytes() const { return m_link->queue_bytes(now); }
+
+    // When this flow's next event comes, an ACK frame or a send; kNeverNs for none. It reads the controller now.
+    [[nodiscard]] u64 next_event_ns()
     {
-        return (m_link_free_ns > now) ? (m_link_free_ns - now) * m_rate / kBottleneckSecond : 0U;
+        m_ack_ns = (m_head != m_tail) ? event_ns(m_flight[m_head % kFlight]) : kNeverNs;
+        m_send_ns = next_send_ns();
+        return (m_ack_ns < m_send_ns) ? m_ack_ns : m_send_ns;
+    }
+
+    // Moves to `at_ns`, the time the last next_event_ns() returned, and handles that event: true for an ACK frame.
+    bool step(u64 at_ns)
+    {
+        now = (at_ns > now) ? at_ns : now;
+        if (m_ack_ns <= m_send_ns)
+        {
+            settle();
+            return true;
+        }
+        transmit();
+        return false;
     }
 
 private:
@@ -175,8 +205,8 @@ private:
         max_queue = (queue > max_queue) ? queue : max_queue;
         m_seed = m_seed * 6364136223846793005U + 1442695040888963407U;
         const bool random_loss = m_loss != 0U && (m_seed >> 33U) % 1000U < m_loss;
-        const u64 start = (m_link_free_ns > now) ? m_link_free_ns : now;
-        if (queue + kBottleneckMss > m_buffer || random_loss)
+        const u64 start = (m_link->free_ns > now) ? m_link->free_ns : now;
+        if (queue + kBottleneckMss > m_link->buffer || random_loss)
         {
             f.dropped = true;
             f.ack_ns = start + 2U * m_one_way_ns;
@@ -184,9 +214,10 @@ private:
         }
         else
         {
-            m_link_free_ns = start + kBottleneckMss * kBottleneckSecond / m_rate;
-            f.ack_ns = m_link_free_ns + 2U * m_one_way_ns;
-            f.ce = m_ce_queue != 0U && queue > m_ce_queue;
+            m_link->free_ns = start + kBottleneckMss * kBottleneckSecond / m_link->rate;
+            f.ack_ns = m_link->free_ns + 2U * m_one_way_ns;
+            const u64 over = (m_link->ce_queue != 0U && queue > m_link->ce_queue) ? queue - m_link->ce_queue : 0U;
+            f.ce = over != 0U && (m_link->ce_ramp == 0U || (m_seed >> 11U) % m_link->ce_ramp < over);
         }
         ++m_tail;
     }
@@ -209,7 +240,7 @@ private:
         ctl->on_acked(f.packet, now);
         rtt.sample(now - f.packet.sent_ns, 0U, true, 0U, now);
         delivery.on_ack_end(rtt.min_ns);
-        if (m_ecn)
+        if (m_link->ce_queue != 0U)
         {
             marked += f.ce ? 1U : 0U;
             ctl->on_ecn(1U, f.ce ? 1U : 0U, f.packet.sent_ns, now);
@@ -217,15 +248,14 @@ private:
         ctl->on_ack_end(rtt, true, in_flight, now);
     }
 
-    u64 m_rate;
+    Link m_own;
+    Link* m_link;
     u64 m_one_way_ns;
-    u64 m_buffer;
     u64 m_data = kInfiniteData;
     u32 m_loss = 0U;
-    u64 m_ce_queue = 0U;
-    bool m_ecn = false;
     u64 m_seed = 0x853C49E6748FEA9BU;
-    u64 m_link_free_ns = 0U;
+    u64 m_ack_ns = kNeverNs;
+    u64 m_send_ns = kNeverNs;
     u64 m_number = 0U;
     u64 m_head = 0U;
     u64 m_tail = 0U;
@@ -233,5 +263,37 @@ private:
     CongestionSlot m_slot;
     Pacer m_pacer;
 };
+
+// Runs flows that share a link until `until_ns`, every event in time order (a tie to the earlier flow), calling
+// `watch` after each ACK frame. A flow's next event reads only its own state, so it holds until that flow steps.
+template <typename Watch> void run_flows(std::initializer_list<Path*> flows, u64 until_ns, Watch watch)
+{
+    for (;;)
+    {
+        Path* first = nullptr;
+        u64 next = kNeverNs;
+        for (Path* flow : flows)
+        {
+            const u64 at = flow->next_event_ns();
+            if (at < next)
+            {
+                next = at;
+                first = flow;
+            }
+        }
+        if (next >= until_ns)
+        {
+            for (Path* flow : flows)
+            {
+                flow->now = until_ns;
+            }
+            return;
+        }
+        if (first->step(next))
+        {
+            watch();
+        }
+    }
+}
 
 } // namespace crd::net::testing
