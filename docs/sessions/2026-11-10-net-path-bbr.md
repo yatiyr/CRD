@@ -25,13 +25,18 @@ draft-ietf-ccwg-bbr-07 (2026-11-02, read from the IETF archive).
 - BBRv3 (`congestion.cpp`): all of section 5 in integer arithmetic. crd-net reads crd-hesap-net's headers only
   (windowed filters, delivery rate, Philox), so the export set is unchanged.
 - `cc.bbr` is in the standards register. The test fixture's `Path` gains a rate and a drop-tail buffer.
-- Commits: 1d964d5c fix, da8ec394 feat (core), 929c77eb feat (net), and this note's docs commit.
+- Commits: 1d964d5c fix, da8ec394 feat (core), 929c77eb feat (net), 5965b654 docs, the fuzz oracle test commit
+  and this note's update.
 
 ## Evidence
 
 - win-debug: `crd-net-tests [net]`, 692 cases and 92.2 million assertions; `[bbr],[delivery-rate]`, 19 cases;
   `crd-core-tests [wide-multiply]` and `crd-hesap-net-tests [estimators]`; the congestion fuzz seeds and corpus,
-  replayed.
+  replayed. WSL linux-gcc-debug: the net and core targets build clean, and `[bbr],[delivery-rate],[congestion],
+  [net-path]` pass (80 cases).
+- linux-clang-fuzz, `fuzz.py run --target net-congestion`: three early findings were oracle gaps (a window inherited
+  from BBR, BBR leaving ProbeRTT on a send, a pacer debt from a larger quantum), fixed and adopted; then 420 s and
+  1.72 million executions clean.
 - The simulated bottleneck (10 MB/s, 40 ms, a one-BDP buffer): 99.2% of the link with 35 KB queued; 82% under 1%
   random loss, where CUBIC gets 3.9%; 0.08% loss at 94% of the link behind a 0.1-BDP buffer; 3 KB of queue behind a
   CE-marking AQM. QUIC: 6 MiB through 2 MB/s, 50 ms at 85% or more of the link, Startup included, staying inside the
