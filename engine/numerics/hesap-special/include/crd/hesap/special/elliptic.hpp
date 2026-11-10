@@ -888,11 +888,65 @@ inline constexpr double kInvPi = 0.31830988618379067153776752674502872;
 // same for E and Π. Since sin(φ−jπ) = (−1)^j sin φ and cos² is unchanged, the principal-range formula evaluated at φ
 // itself is that value up to the sign (−1)^j. Returns j (never 0, for |φ| beyond the double nearest π/2, so that an
 // infinite K is not multiplied by zero), and sets `flip` when it is odd.
-[[nodiscard]] inline double quasi_period(double phi, bool& flip) noexcept
+// Within a few ulps of an odd multiple of π/2 the rounded |φ|/π can name the neighbouring j, which leaves φ − jπ a hair
+// outside [−π/2, π/2]. There cos(φ − jπ) = (−1)^j cos φ must not be negative, so a sign of c = cos φ that disagrees
+// with the parity of j moves j by one turn toward φ − jπ, whose sign is that of sin(φ − jπ) = (−1)^j sin φ.
+[[nodiscard]] inline double quasi_period(double phi, double s, double c, bool& flip) noexcept
 {
-    const double turns = std::max(1.0, crd::math::floor(crd::math::fabs(phi) * kInvPi + 0.5));
+    double turns = crd::math::copysign(std::max(1.0, crd::math::floor(crd::math::fabs(phi) * kInvPi + 0.5)), phi);
     flip = (turns - 2.0 * crd::math::floor(0.5 * turns)) != 0.0; // (turns is even above 2^53)
-    return crd::math::copysign(turns, phi);
+    if ((c < 0.0) != flip)
+    {
+        turns += ((s > 0.0) != flip) ? 1.0 : -1.0;
+        flip = !flip;
+    }
+    return turns;
+}
+
+// 1 − a·sin²φ as cos²φ + (1 − a)·sin²φ, which does not cancel for a ≤ 1 (1 − a·sin²φ loses the digits of a rounded
+// sin²φ near 1 when a is near 1, and is 0 for the double nearest π/2 at a = 1, where cos²φ is not). Above 1 both
+// forms cancel only where the integrand is singular; the cos² form carries the smaller rounding up to a = 2, the plain
+// form beyond it.
+[[nodiscard]] inline double one_minus_a_sin2(double a, double s2, double c2) noexcept
+{
+    return (a <= 2.0) ? c2 + (1.0 - a) * s2 : 1.0 - a * s2;
+}
+
+// The second argument 1 − m·sin²φ of F, E and Π. At the edge of the real domain for m > 1 (sin²φ = 1/m) its true value
+// is 0 and the rounding of the terms can make it negative, a NaN where the integral is finite: a value below 0 by no
+// more than 8 units of 2⁻⁵³ in c² + (m − 1)·s², the size of those terms, is taken as 0. Past that the input lies
+// outside the domain and stays NaN. For m ≤ 1 the value is a sum of non-negative terms and never below 0.
+[[nodiscard]] inline double one_minus_m_sin2(double m, double s2, double c2) noexcept
+{
+    const double delta = one_minus_a_sin2(m, s2, c2);
+    if (delta < 0.0) [[unlikely]]
+    {
+        const double terms = c2 + (m - 1.0) * s2;
+        if (-delta <= 0x1p-50 * terms)
+        {
+            return 0.0;
+        }
+    }
+    return delta;
+}
+
+// The last argument p = 1 − n·sin²φ of Π. Near the pole n·sin²φ = 1 for n in (√2, 4) both forms above cancel, at a = 2
+// and φ the double nearest π/4 to exactly 0 (s = c there) where p = cos 2φ ≈ 6.1e-17: there p is formed as
+// ((2 − n) + n·cos 2φ)/2, from the exact 2φ and the exact 2 − n, whose rounding is |2 − n|·2⁻⁵³ against the
+// (c² + |1 − n|·s²)·2⁻⁵³ of the cheap form. Only a cheap value below 2⁻⁶ of its terms pays for the extra cosine.
+[[nodiscard]] inline double one_minus_n_sin2(double n, double phi, double s2, double c2) noexcept
+{
+    const double p = one_minus_a_sin2(n, s2, c2);
+    if (n > 1.4142135623730951 && n < 4.0)
+    {
+        const double terms = c2 + crd::math::fabs(1.0 - n) * s2;
+        const double twice = 2.0 * phi;
+        if (crd::math::fabs(p) < 0x1p-6 * terms && crd::math::fabs(twice) < kInfinity) [[unlikely]]
+        {
+            return 0.5 * ((2.0 - n) + n * crd::math::cos(twice));
+        }
+    }
+    return p;
 }
 
 // F and E where their formulas meet sin(∞) or 0·∞ and so give NaN: φ = ±∞ (F and E grow by 2K and 2E every half turn,
@@ -933,7 +987,8 @@ template <Real T>
     double c;
     crd::math::sincos(phid, s, c); // one argument reduction for both, the same values as sin and cos
     const double md = static_cast<double>(m);
-    const double principal = s * detail::carlson_rf(c * c, 1.0 - md * s * s, 1.0);
+    const double c2 = c * c;
+    const double principal = s * detail::carlson_rf(c2, detail::one_minus_m_sin2(md, s * s, c2), 1.0);
     if (principal != principal)
     {
         return static_cast<T>(detail::incomplete_limit(phid, md, false));
@@ -943,7 +998,7 @@ template <Real T>
         return static_cast<T>(principal);
     }
     bool flip = false;
-    const double turns = detail::quasi_period(phid, flip);
+    const double turns = detail::quasi_period(phid, s, c, flip);
     return static_cast<T>(2.0 * turns * ellint_k(md) + (flip ? -principal : principal));
 }
 template <Real T>
@@ -954,8 +1009,10 @@ template <Real T>
     double c;
     crd::math::sincos(phid, s, c); // one argument reduction for both, the same values as sin and cos
     const double md = static_cast<double>(m);
-    const double rf = detail::carlson_rf(c * c, 1.0 - md * s * s, 1.0);
-    const double rd = detail::carlson_rd(c * c, 1.0 - md * s * s, 1.0);
+    const double c2 = c * c;
+    const double delta = detail::one_minus_m_sin2(md, s * s, c2);
+    const double rf = detail::carlson_rf(c2, delta, 1.0);
+    const double rd = detail::carlson_rd(c2, delta, 1.0);
     const double principal = s * rf - md / 3.0 * s * s * s * rd;
     if (principal != principal)
     {
@@ -966,7 +1023,7 @@ template <Real T>
         return static_cast<T>(principal);
     }
     bool flip = false;
-    const double turns = detail::quasi_period(phid, flip);
+    const double turns = detail::quasi_period(phid, s, c, flip);
     return static_cast<T>(2.0 * turns * ellint_e(md) + (flip ? -principal : principal));
 }
 
@@ -1075,13 +1132,16 @@ template <Real T>
 [[nodiscard]] T ellint_pi(T n, T phi, T m) noexcept
 {
     const double phid = static_cast<double>(phi);
-    const double s = crd::math::sin(phid);
-    const double c = crd::math::cos(phid);
+    double s;
+    double c;
+    crd::math::sincos(phid, s, c); // one argument reduction for both, the same values as sin and cos
     const double md = static_cast<double>(m);
     const double nd = static_cast<double>(n);
     const double s2 = s * s;
-    const double rf = detail::carlson_rf(c * c, 1.0 - md * s2, 1.0);
-    const double rj = detail::carlson_rj(c * c, 1.0 - md * s2, 1.0, 1.0 - nd * s2);
+    const double c2 = c * c;
+    const double delta = detail::one_minus_m_sin2(md, s2, c2);
+    const double rf = detail::carlson_rf(c2, delta, 1.0);
+    const double rj = detail::carlson_rj(c2, delta, 1.0, detail::one_minus_n_sin2(nd, phid, s2, c2));
     const double principal = s * rf + nd / 3.0 * s * s2 * rj;
     if (!(crd::math::fabs(phid) > detail::kHalfPi))
     {
@@ -1116,7 +1176,7 @@ template <Real T>
         return static_cast<T>(detail::kNaN);
     }
     bool flip = false;
-    const double turns = detail::quasi_period(phid, flip);
+    const double turns = detail::quasi_period(phid, s, c, flip);
     return static_cast<T>(2.0 * turns * complete + (flip ? -principal : principal));
 }
 

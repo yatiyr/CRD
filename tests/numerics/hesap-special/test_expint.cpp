@@ -492,6 +492,109 @@ TEST_CASE("elliptic: R_J principal value where the terms of the relation cancel 
     CHECK(sf::elliprj(1e-300, 1e-300, 1e-280, -1e-300) == -std::numeric_limits<f64>::infinity());
 }
 
+// Near phi = +-pi/2 (and its odd multiples) with m or n near 1, 1 - m sin^2(phi) cancels: a rounded sin^2 near 1 is
+// subtracted from 1, and at the double nearest pi/2 it is 0 where cos^2(phi) is not (F(that phi, 1) came out 38.718,
+// and Pi(1, that phi, 0.5) was NaN, the pole of R_J). Values from mpmath at 60 digits at the exact double inputs;
+// where n sin^2(phi) > 1, the real part of mpmath's complex ellippi, the Cauchy principal value.
+TEST_CASE("elliptic: F, E and Pi near phi = pi/2 with m or n near 1", "[v12-d][special][elliptic]")
+{
+    // {phi, m, F, E}: the last four past pi/2, on the doubles nearest 3 pi/2 and 5 pi/2, where the rounded phi/pi
+    // names the neighbouring half turn
+    static constexpr f64 kNear[][4] = {
+        {1.5707963267948966, 1.0, 38.025003373828866, 1.0},
+        {-1.5707963267948966, 1.0, -38.025003373828866, -1.0},
+        {1.5707963267948, 1.0, 30.660820794748968, 1.0},
+        {1.570796, 1.0, 15.627080271110785, 0.9999999999999466},
+        {1.5707, 1.0, 9.94091121365546, 0.9999999953605743},
+        {1.57, 1.0, 7.828648037733774, 0.9999996829318346},
+        {1.570796, 0.999999999999, 14.880571355345033, 1.0000000000070182},
+        {1.5707, 0.999999999999, 9.94088427235288, 0.9999999953650447},
+        {1.5707, 0.9999999, 9.145254601078321, 1.0000004163411913},
+        {-1.5707, 0.9999999, -9.145254601078321, -1.0000004163411913},
+        {4.71238898038469, 0.999999999999, 45.605447940026664, 3.000000000022052},
+        {-4.71238898038469, 0.999999999999, -45.605447940026664, -3.000000000022052},
+        {7.853981633974483, 0.999999999999, 76.00907990004444, 5.000000000036754},
+        {4.71238898038469, 0.9999999, 28.3360271939868, 3.0000013418013745},
+    };
+    // {Pi(0.3, phi, m)} at the {phi, m} of each row above
+    static constexpr f64 kNearPi[] = {
+        53.84012453751562,  -53.84012453751562,  43.31986371025862,  21.84309153363268,  13.719992882965505,
+        10.702474251503116, 20.776650225400022,  13.719954395393092, 12.583340816462773, -12.583340816462773,
+        63.706713353330855, -63.706713353330855, 106.17785558888475, 39.03611300592067,
+    };
+    static_assert(len(kNear) == len(kNearPi));
+    for (std::size_t i = 0; i < len(kNear); ++i)
+    {
+        const auto& row = kNear[i];
+        INFO("phi=" << row[0] << " m=" << row[1]);
+        CHECK(close(sf::ellint_f(row[0], row[1]), row[2], 1e-12, 1e-13));
+        CHECK(close(sf::ellint_e_inc(row[0], row[1]), row[3], 1e-12, 1e-13));
+        CHECK(close(sf::ellint_pi(0.3, row[0], row[1]), kNearPi[i], 1e-12, 1e-13));
+    }
+    // {n, phi, m, Pi}: n = 1 (1 - n sin^2 was the pole 0 of R_J at the first three) and n near 1 on both sides
+    static constexpr f64 kNearN[][4] = {
+        {1.0, 1.5707963267948966, 0.5, 2.3095860183650104e+16},
+        {1.0, -1.5707963267948966, 0.5, -2.3095860183650104e+16},
+        {1.0, 1.5707963267948, 0.5, 14632222078160.371},
+        {1.0, 1.57079632679, 0.5, 288816072323.16486},
+        {1.0, 1.570796, 0.5, 4327525.6146576265},
+        {1.0, 1.5707, 0.5, 14680.566884391386},
+        {1.0, 1.57, 0.5, 1775.074080665082},
+        {0.9999999, 1.5707, 0.5, 5701.634798123095},
+        {0.9999999, 1.570796, 0.5, 7019.346294793767},
+        {1.0000001, 1.5707, 0.5, 1406.0669757138107},
+        {1.0000001, 1.57, 0.5, 1878.3927800803745},
+        {1.0000001, -1.5707, 0.5, -1406.0669757138107},
+        {0.9999999, 4.71238898038469, 0.5, 21071.90361269435},
+    };
+    for (const auto& row : kNearN)
+    {
+        INFO("n=" << row[0] << " phi=" << row[1] << " m=" << row[2]);
+        CHECK(close(sf::ellint_pi(row[0], row[1], row[2]), row[3], 1e-12, 1e-13));
+    }
+}
+
+// The edge of the real domain for m > 1, sin^2(phi) = 1/m: 1 - m sin^2(phi) is within an ulp of 0 and its rounding
+// made it negative (NaN) at these inputs. F and Pi have an infinite derivative in phi there, so a rounding of the
+// argument moves them by about its square root (1e-8 relative); E has a finite one and holds the module limit. And
+// Pi(2, phi, m) at the double nearest pi/4, where 1 - 2 sin^2(phi) = cos(2 phi) = 6.1e-17 and the cheap forms give 0,
+// the pole of R_J (NaN). Values from mpmath at 60 digits at the exact doubles.
+TEST_CASE("elliptic: F, E and Pi at the edge of the domain for m > 1 and at the pole for n = 2",
+          "[v12-d][special][elliptic]")
+{
+    // {n, phi, m, F, E, Pi}
+    static constexpr f64 kEdge[][6] = {
+        {0.7695803858029941, 0.8000996602392672, 1.942881692827097, 1.339241614657019, 0.6095122980999521,
+         1.762836897566225},
+        {-0.4574675729976416, 1.1254950004925997, 1.2277895871829725, 2.0679560945217372, 0.8238444506618001,
+         1.7097301181712683},
+        {-0.8386869105032556, 0.816738998914119, 1.8821038247924684, 1.371501519603868, 0.6212698899587188,
+         1.1212400581253046},
+        {-0.5944603629927258, -0.9614909570597364, 1.4870440529168967, -1.6701669033468696, -0.7204108881455579,
+         -1.3796985219999118},
+    };
+    for (const auto& row : kEdge)
+    {
+        INFO("n=" << row[0] << " phi=" << row[1] << " m=" << row[2]);
+        CHECK(close(sf::ellint_f(row[1], row[2]), row[3], 1e-7, 0.0));
+        CHECK(close(sf::ellint_e_inc(row[1], row[2]), row[4], 1e-12, 1e-13));
+        CHECK(close(sf::ellint_pi(row[0], row[1], row[2]), row[5], 1e-7, 0.0));
+    }
+    // {phi, m, Pi(2, phi, m)}
+    static constexpr f64 kPole[][3] = {
+        {0.7853981633974483, 0.7408416310133681, 23.73003728978681},
+        {0.7853981633974483, 0.9136880963351484, 25.467575969688916},
+        {0.7853981633974483, 0.21348374788980548, 20.069401999771134},
+        {0.7853981633974483, 0.03998161321349682, 19.197422851763086},
+        {-0.7853981633974483, 0.25056667635707847, -20.272136360787982},
+    };
+    for (const auto& row : kPole)
+    {
+        INFO("phi=" << row[0] << " m=" << row[1]);
+        CHECK(close(sf::ellint_pi(2.0, row[0], row[1]), row[2], 1e-12, 1e-13));
+    }
+}
+
 TEST_CASE("expint: the limits E0(0), E1(0), Ei(+inf), Si/Ci at infinity, and Ei up to its overflow",
           "[v12-d][special][expint]")
 {
