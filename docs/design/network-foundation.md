@@ -1321,14 +1321,21 @@ Evidence: `test_http2.cpp` `[http2]` (41 cases: every frame's connection errors,
 - **Policy, one for every version.** `ws_check_connect()` holds the request to the HTTP/1.1 rules (`check_policy()`: exact path, Origin through `http_origin_allowed`, the server's subprotocol order); the key is ignored (RFC 8441 section 5). A version other than 13 is 400 with `sec-websocket-version: 13` (RFC 6455 section 4.4; there is no 426 without Upgrade). A request in 0-RTT is 425 (RFC 8470). A refusal ends the response and then the request's stream with NO_ERROR, so its body never reaches the owner. A client takes any 2xx naming one offered subprotocol once and no extension.
 - **Bounds.** A fixed pool of `tunnels` (at most 256); past it a CONNECT is REFUSED_STREAM or H3_REQUEST_REJECTED. Its streams and staging come from the allocator when a tunnel opens. A client's unanswered CONNECT is cancelled at `handshake_timeout_ns`.
 - **Writing.** Rounds of one view per tunnel from a rotating start, so one tunnel cannot take every turn; a write stops at the stream's credit or the connection's room and resumes on the next flush.
-- **Ends** (RFC 8441 section 5, RFC 9220 section 3). A clean end of the stream is the transport's end (Truncated without Close), a reset or STOP_SENDING its failure. A Closed tunnel's last bytes get one try; its stream is then finished, or cancelled with CANCEL or H3_REQUEST_CANCELLED when they could not go or it failed, NO_ERROR after both ends finished. A failed HTTP connection ends every tunnel.
+- **Ends** (RFC 8441 section 5, RFC 9220 section 3). A clean end of the stream is the transport's end (Truncated without Close), a reset its failure. STOP_SENDING ends this side's direction alone and the peer's is read to its end (RFC 9000 section 3.5): a peer's Close sent before it stopped reading arrives, and a request stopped before its answer takes the answer (RFC 9114 section 4.1.1), a refusal with its status and a 2xx refused. A Closed tunnel's last bytes get one try; its stream is then finished, or cancelled with CANCEL or H3_REQUEST_CANCELLED when they could not go or it failed, NO_ERROR after both ends finished. A failed HTTP connection ends every tunnel.
 
 Evidence: `test_websocket_tunnel.cpp` `[ws-tunnel]` (27 cases over both versions: the policy and every refusal by status, 200 KiB both ways and datagrams with the wire cut at 1 and 7 bytes, a reader that stops holding the writer by flow control, a `ChannelLink` over a tunnel, fragments with a Ping between them, every end, the timers, the pool) and `crd-fuzz-net-websocket-tunnel` ([session](../sessions/2026-11-10-4-2a-websocket-tunnels.md)). RFC 8441 against a
 second implementation: `qmux_interop.py`'s tunnel cases, 42 of 42 over HTTP/2 with prior knowledge against the `h2`
 crate's extended CONNECT with tokio-tungstenite and the `qmux` crate above it, both ways round: every application case
 of the HTTP/1.1 path, two tunnels at once on one connection, the byte stream cut into pieces of at most 7 bytes and a
 silent path, and a subprotocol the server does not take refused 400 by either end
-([session](../sessions/2026-11-10-4-2a-websocket-h2-interop.md)).
+([session](../sessions/2026-11-10-4-2a-websocket-h2-interop.md)). RFC 9220 against a second implementation: the same
+40 cases over HTTP/3 between `crd-quic-peer --transport h3` and the `h3` crate over Quinn (the pinned `h3-crates`
+archive: `Protocol::WEBSOCKET` is on its main branch only), real UDP both ways round, one tunnel or two, also through a
+relay that loses, duplicates, delays and reorders 5% of datagrams; the client closes the QUIC connection with
+H3_NO_ERROR once the server's GOAWAY says its tunnels are done. It found that STOP_SENDING ended a tunnel both ways:
+Quinn sends the frame ahead of stream data it still owes, so a refusal sent complete (RFC 9114 section 4.1.1) read as
+none and a peer's Close sent before it stopped reading was lost; STOP_SENDING now ends this side's direction alone
+([session](../sessions/2026-11-10-4-2a-websocket-h3-interop.md)).
 
 <a id="browsers"></a>
 ## Browser constraints
