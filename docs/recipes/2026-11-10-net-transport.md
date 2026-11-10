@@ -857,7 +857,11 @@ between the largest size acknowledged and the smallest that failed: for 1200 to 
 steps (arithmetic). A size fails after three probe losses. The socket forbids fragmentation, so a probe that is too
 large is simply lost rather than silently split. A **black hole** (a path that stops carrying large datagrams without
 any report) is suspected when a loss detection's lost packets are all over 1200 bytes and all sent after the newest
-large packet acknowledged; three suspect detections fall back to 1200.
+large packet acknowledged; three suspect detections fall back to 1200. A router that does report (an ICMP **Packet
+Too Big** message naming its limit and quoting the start of the dropped datagram) is believed only when the quote is
+one of the connection's own unacknowledged packets: the peer's connection ID, then four encrypted bytes no one off the
+path can know. Such a hint fails a probe at once and the next probe tries the router's limit, so a 1300-byte hop is
+found in two probes instead of a bisection over about nine sizes; a hint can only lower the size, never raise it.
 
 ### 3.14 Padding: what a size says
 
@@ -1362,7 +1366,7 @@ the session logs linked from the [4.2a row](../ROADMAP.md#slice-4.2a).
 - **No transport performance board exists**; NET.4 will publish one.
 - **HyStart++'s RTT threshold** formula above is RFC 9406's, stated from its constants in `congestion.cpp`
   (4 ms, 16 ms, divisor 8); the code itself was not traced line by line.
-- **NET-PATH** is Partial: ICMP hints, BBRv3, Prague and migration are open (PMTU discovery against real peers and
+- **NET-PATH** is Partial: the Linux socket half of ICMP hints, BBRv3, Prague and migration are open (PMTU discovery against real peers and
   the advertised receive slot landed on 2026-11-10).
 
 ---
