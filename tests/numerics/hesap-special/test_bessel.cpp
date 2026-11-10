@@ -873,9 +873,13 @@ TEST_CASE("bessel: complex J, Y and I where the series' first term leaves the do
           "[v12-b][special][bessel][complex]")
 {
     // mpmath at 70 digits at the exact double inputs. Base: NaN where the ascending series was priced by its ratios
-    // alone while (z/2)^nu/Gamma(nu+1) left the doubles (J, I) or the integer series of Y overflowed; Y_63 of
-    // integer order 1.2e-8 off from the integer series (its Gamma product left the doubles); I 0.16 off where the
-    // series of a negative order was taken by the price of |nu|.
+    // alone while (z/2)^nu/Gamma(nu+1) left the doubles (J, I) or the integer series of Y overflowed; 2.5e-8 off where
+    // the series of a negative order was priced as that of |nu|; Y_63 and Y_69 of integer order 1.2e-8 and 5.8e-9 off
+    // from the integer series (its Gamma product left the doubles, its finite sum cancelled); I 1.0e-10 and 0.16 off
+    // where the series was priced without the index of its largest term and as that of |nu|; J_-416.9 1.3e22 units off
+    // where its series' first term left the doubles; Y 8.7 and 337 units off near the orders 40 and 44 (Gamma's
+    // reflection near a pole in J_-nu's first term), 2.1e4 and 234 where the connection of two series was taken
+    // unpriced.
     struct Point
     {
         int kind; // 0 J, 1 Y, 2 I
@@ -890,12 +894,16 @@ TEST_CASE("bessel: complex J, Y and I where the series' first term leaves the do
          -12.5797939621286657464372096702},
         {0, 319.30981066241611, -30.691958838718616, 248.30491274730457, 2370095485298396116018463.36472,
          -270596341625591569899077042.699},
+        {0, -145.5, 38.929583640779519, 94.046427492541056, -1.68803529852467199295457864954,
+         -5.01984662670399489921341220672},
         {1, 109.0, 23.391402163596936, -71.686477592811826, 1.05424909634687318232064285595,
          0.633203148790511719481240276051},
         {1, 172.0, -1.2425384545899458, 124.25868743894463, -1608698.47482089549869305213927,
          -984637.100382650066308227097158},
         {1, 63.0, -34.234856129950309, -101.38864907561589, -4.58053723330288746652270966523e+34,
          -1.14263626717457926660332795069e+35},
+        {1, 69.0, 20.091564438796528, -42.103014575655834, 0.185016767717574498339020511906,
+         -0.0579774106098883867260747672392},
         {1, 162.97701435673508, 63.283577131302629, 227.70463254170471, 1.34208010982985912101678825628e+73,
          -2.4083326156925826543450224852e+74},
         {2, 146.48766912988205, 351.62557641097766, 0.0, 8.91670401996532602836984352017e+137, 0.0},
@@ -903,6 +911,18 @@ TEST_CASE("bessel: complex J, Y and I where the series' first term leaves the do
          -1.90314371113719461186867897064e+177},
         {2, -92.522988400794816, -575.97800463333931, -115.24495137861734, 7.14553154507136831282599546637e+244,
          -1.67539851375635497078293885075e+245},
+        {2, -63.160243369794557, -55.295994100396207, 50.867530441496413, -18854359027304.4559122164212522,
+         -72973239994037.1743753262132492},
+        {0, -416.90681999562833, 57.821346889626014, -280.50252784785027, -43863.0513651870914168088844264,
+         -7194.79882910835873742215072477},
+        {1, 39.999713074881001, 10.253027753293182, -25.700482709942893, -0.134000957316773177036640510251,
+         -0.142205462030626913022033443626},
+        {1, 43.999966619267717, 2.7100696541552263, -31.861633629606583, -7.01170091252183547076601177442,
+         0.806600651969152785762951160705},
+        {1, 147.13772025358705, 61.664300807124803, -285.47274774125708, 6.68713612116050582870961388309e+106,
+         -2.42164869787464198096969770919e+106},
+        {1, -169.03591809152238, 50.412795025659705, 139.73775627183215, 1399193827081896492236.50297171,
+         -10901626262792670359850.6614188},
     };
     for (const Point& p : points)
     {

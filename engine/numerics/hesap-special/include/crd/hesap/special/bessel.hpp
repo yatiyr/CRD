@@ -2310,11 +2310,29 @@ using cplx = std::complex<double>;
     }
     return sum;
 }
+// The first term (z/2)^ν/Γ(ν+1) of the series (Γ signed: ν may be below −1). Near a pole, s = ν + 1 negative within
+// 0.25 of an integer and 1e-3·|s| of it, gamma()'s reflection rounds πs before its sine, ε|πs|/|sin πs| of the term
+// (1.5e-11 at s = −38.9997, which the connection for Y at the order 39.9997 multiplies by 1/sin νπ: Y_39.9997(10.3 −
+// 25.7i) was 8.7 units off, Y_43.99997(2.7 − 31.9i) 337), and 1/Γ(s) = sin(πs)Γ(1 − s)/π is taken with the turn reduced
+// exactly; elsewhere the term is formed as before.
+[[nodiscard]] inline cplx bes_series_first(double nu, cplx cz) noexcept
+{
+    const double s = nu + 1.0;
+    if (s < 0.0 && s > -1.0e15) [[unlikely]]
+    {
+        const double up = static_cast<double>(static_cast<long long>(s)) - s; // the distance to the integer above
+        const double distance = (up < 1.0 - up) ? up : 1.0 - up;
+        if (distance < 0.25 && distance < 1.0e-3 * -s)
+        {
+            return crd::math::pow(cz, nu) * (-bes_sin_pi(-s) * gamma(1.0 - s) / kBesPi);
+        }
+    }
+    return crd::math::pow(cz, nu) / gamma(s);
+}
 [[nodiscard]] inline cplx bessel_ji_series(double nu, cplx z, double kind) noexcept
 {
     const cplx cz = 0.5 * z;
-    // (z/2)^ν / Γ(ν+1); SIGNED Γ (ν may be < 0 ⇒ Γ(ν+1) < 0)
-    return bes_ji_sum(nu, cz, kind, crd::math::pow(cz, nu) / gamma(nu + 1.0));
+    return bes_ji_sum(nu, cz, kind, bes_series_first(nu, cz));
 }
 // The same series as the last answer of the far paths: where the first term formed as a power over Γ is not a normal
 // number while the term itself may be (the power or Γ out of the doubles: (z/2)^{−162.98} is e^{−777} at |z| = 236,
@@ -2323,7 +2341,7 @@ using cplx = std::complex<double>;
 [[nodiscard]] inline cplx bessel_ji_series_far(double nu, cplx z, double kind) noexcept
 {
     const cplx cz = 0.5 * z;
-    cplx t = crd::math::pow(cz, nu) / gamma(nu + 1.0);
+    cplx t = bes_series_first(nu, cz);
     const double size = crd::math::fabs(t.real()) + crd::math::fabs(t.imag());
     if (!(size >= (std::numeric_limits<double>::min)() && size <= (std::numeric_limits<double>::max)())) [[unlikely]]
     {
@@ -2345,7 +2363,7 @@ using cplx = std::complex<double>;
 template <bool IsI> [[nodiscard]] inline cplx bessel_series_priced(double nu, cplx z, double& loss, int& at) noexcept
 {
     const cplx cz = 0.5 * z;
-    cplx t = crd::math::pow(cz, nu) / gamma(nu + 1.0);
+    cplx t = bes_series_first(nu, cz);
     cplx sum = t;
     double biggest = t.real() * t.real() + t.imag() * t.imag();
     const bool start_usable = biggest > 1e-200 && biggest < 1e200;
@@ -2380,7 +2398,8 @@ template <bool IsI> [[nodiscard]] inline cplx bessel_series_priced(double nu, cp
 // Cancellation of the ascending series of J, Y (kind −1) or I (kind +1) at z: the largest term of
 // Σ (kind·z²/4)^k/(k!(ν+1)_k) over the size of the sum. Rounding leaves about ε times it in the value, so it prices
 // the series against the asymptotic.
-[[nodiscard]] inline double bes_series_loss(double nu, cplx z, double kind) noexcept
+// With `at`, the index of the largest term is returned there as well (see kBesSeriesIndexUnit).
+[[nodiscard]] inline double bes_series_loss(double nu, cplx z, double kind, int* at = nullptr) noexcept
 {
     const cplx z2 = kind * (0.25 * z * z);
     cplx t = 1.0;
@@ -2395,6 +2414,10 @@ template <bool IsI> [[nodiscard]] inline cplx bessel_series_priced(double nu, cp
         if (!(total < std::numeric_limits<double>::max())) [[unlikely]]
         {
             return std::numeric_limits<double>::infinity(); // the terms left the doubles: not usable
+        }
+        if (at != nullptr && mag > biggest)
+        {
+            *at = k;
         }
         biggest = (mag > biggest) ? mag : biggest;
         if (mag <= 1e-18 * total)
@@ -2948,13 +2971,13 @@ CRD_NOINLINE inline cplx bes_j_far(double nu, cplx z, bool mirrored, double magn
         // e^{±νπi} J_ν(w) (DLMF 10.11.1) moves it to the right half-plane; the sign follows the side of the cut.
         return bes_turn_phase(nu, (z.imag() >= 0.0) ? 1.0 : -1.0) * besselj_c(nu, -z, true);
     }
-    double summed_loss = -1.0; // the cancellation of the series, once it has been summed
+    double summed_loss = -1.0; // the cancellation of the series, once it has been summed, times its index factor
     if (!mirrored && nu >= 0.0 && magnitude < 2.0 * nu)
     {
         // The range of the series in base (at the point itself: a mirrored point is not base's), where Hankel's
         // expansion is never the better method: the series is summed once and priced by its own terms (the rounding
         // of the terms up to the largest, see kBesSeriesIndexUnit), and taken while that is within the module's
-        // bar.
+        // bar; the methods below are priced against the same model.
         int largest_at = 0;
         const cplx summed = bessel_series_priced<false>(nu, z, summed_loss, largest_at);
         const double index_factor = (largest_at > kBesSeriesIndexUnit) ? largest_at / kBesSeriesIndexUnit : 1.0;
@@ -2962,6 +2985,7 @@ CRD_NOINLINE inline cplx bes_j_far(double nu, cplx z, bool mirrored, double magn
         {
             return summed;
         }
+        summed_loss = (summed_loss >= 0.0) ? summed_loss * index_factor : summed_loss;
     }
     cplx p;
     cplx q;
@@ -3000,6 +3024,49 @@ CRD_NOINLINE inline cplx bes_j_far(double nu, cplx z, bool mirrored, double magn
     {
         return asymptotic;
     }
+    if (nu < 0.0)
+    {
+        // The price of |ν| above chose the series, but the series summed is that of the order itself, whose terms
+        // alternate while ν + k < 0 (J_−145.5(38.9 + 94.0i): the series of |ν| has a loss of 8, that of ν 3.7e8, and
+        // the result was 2.5e-8 off): it is summed with its own price in the same pass (priced by its ratios where its
+        // first term left the doubles), and where that is beyond the bar the methods above are chosen again against
+        // it. Pricing it in a second loop cost the negative orders' row 43 %, pricing it instead of |ν| 19 %, as its
+        // larger losses led to the slower methods where the series was within the bar.
+        double own = -1.0;
+        int own_at = 0;
+        const cplx priced = bessel_series_priced<false>(nu, z, own, own_at);
+        const double own_error =
+            (own >= 0.0) ? kBesRoundoff * own * ((own_at > kBesSeriesIndexUnit) ? own_at / kBesSeriesIndexUnit : 1.0)
+                         : kBesRoundoff * bes_series_loss(nu, z, -1.0);
+        if (!(own_error <= kBesComplexUsable))
+        {
+            const double again = (asymptotic_error < own_error) ? asymptotic_error : own_error;
+            if (bes_complex_stable_wanted(crd::math::fabs(nu), z, again))
+            {
+                const BesComplexJY pair = bes_complex_stable_jy(nu, z);
+                if (pair.ok)
+                {
+                    return pair.j;
+                }
+            }
+            if (bes_complex_forward_wins(crd::math::fabs(nu), z, again))
+            {
+                const BesComplexJY pair = bes_complex_forward_jy(nu, z, again);
+                if (pair.ok)
+                {
+                    return pair.j;
+                }
+            }
+            if (asymptotic_error < own_error)
+            {
+                return asymptotic;
+            }
+        }
+        if (own >= 0.0)
+        {
+            return priced;
+        }
+    }
     const cplx summed = bessel_ji_series_far(nu, z, -1.0);
     if (!bes_complex_finite(summed) && bes_complex_stable_serves(nu, z)) [[unlikely]]
     {
@@ -3018,44 +3085,69 @@ CRD_NOINLINE inline cplx bes_j_far(double nu, cplx z, bool mirrored, double magn
 {
     return crd::math::fabs(v.real()) + crd::math::fabs(v.imag());
 }
-// With `truncated`, whether the sum stopped where the product of the two Γ of its terms had left the doubles: the terms
-// are 0 from there on while they still count (Y_63(34.2 + 101.4i) dropped 1e-8 of itself from k = 66 on).
-[[nodiscard]] inline cplx bessely_n_int(int n, cplx z, bool* truncated = nullptr) noexcept
+// With Priced set, `loss` receives the cancellation of the three parts: the sum of their sizes (the logarithmic term,
+// and the largest term of each sum times its factor) over the size of the result, which ε times prices the series as
+// bes_series_loss prices J's (the finite sum's terms grow as (n−k−1)!/k!·|z/2|^{2k−n} and cancel to a Y of the size of
+// 1 where |z| is near or above n: Y_69(20.1 − 42.1i) was 5.8e-9 off).
+template <bool Priced = false> [[nodiscard]] inline cplx bessely_n_int(int n, cplx z, double* loss = nullptr) noexcept
 {
     const cplx cz = 0.5 * z;
     const cplx z2 = cz * cz;
-    cplx r = (2.0 / kBesPi) * crd::math::log(cz) * besselj_c(static_cast<double>(n), z);
+    const cplx log_part = (2.0 / kBesPi) * crd::math::log(cz) * besselj_c(static_cast<double>(n), z);
+    cplx r = log_part;
+    [[maybe_unused]] double parts = 0.0;
     if (n > 0)
     {
         cplx finite = 0.0;
         cplx pw = 1.0; // (z²/4)^k
+        [[maybe_unused]] double largest = 0.0;
         for (int k = 0; k < n; ++k)
         {
-            finite += (gamma(static_cast<double>(n - k)) / gamma(static_cast<double>(k + 1))) * pw;
+            const cplx term = (gamma(static_cast<double>(n - k)) / gamma(static_cast<double>(k + 1))) * pw;
+            finite += term;
+            if constexpr (Priced)
+            {
+                largest = (bes_l1(term) > largest) ? bes_l1(term) : largest;
+            }
             pw *= z2;
         }
-        r -= (1.0 / kBesPi) * crd::math::pow(cz, -static_cast<double>(n)) * finite;
+        const cplx factor = (1.0 / kBesPi) * crd::math::pow(cz, -static_cast<double>(n));
+        r -= factor * finite;
+        if constexpr (Priced)
+        {
+            parts = largest * bes_l1(factor);
+        }
     }
     cplx s = 0.0;
     cplx pw = 1.0;
-    double denominator = 1.0;
+    [[maybe_unused]] double largest = 0.0;
     for (int k = 0; k <= 400; ++k)
     {
         const double psi = digamma(static_cast<double>(k + 1)) + digamma(static_cast<double>(n + k + 1));
-        denominator = gamma(static_cast<double>(k + 1)) * gamma(static_cast<double>(n + k + 1));
+        const double denominator = gamma(static_cast<double>(k + 1)) * gamma(static_cast<double>(n + k + 1));
         const cplx term = ((k & 1) ? -1.0 : 1.0) * psi / denominator * pw;
         s += term;
+        if constexpr (Priced)
+        {
+            // Past 1e308 the product of the Γ leaves the doubles and the terms become 0 while they still count
+            // (Y_63(34.2 + 101.4i) dropped 1e-8 of itself from k = 66 on): the series is then not priced at all.
+            largest = (denominator <= (std::numeric_limits<double>::max)())
+                          ? ((bes_l1(term) > largest) ? bes_l1(term) : largest)
+                          : std::numeric_limits<double>::infinity();
+        }
         if (k >= n && std::abs(term) <= 1e-18 * std::abs(s))
         {
             break;
         }
         pw *= z2;
     }
-    if (truncated != nullptr)
+    const cplx factor = (1.0 / kBesPi) * crd::math::pow(cz, static_cast<double>(n));
+    const cplx result = r - factor * s;
+    if constexpr (Priced)
     {
-        *truncated = !(denominator <= (std::numeric_limits<double>::max)());
+        *loss = (bes_l1(log_part) + parts + largest * bes_l1(factor)) / bes_l1(result);
     }
-    return r - (1.0 / kBesPi) * crd::math::pow(cz, static_cast<double>(n)) * s;
+    return result;
 }
 
 // Integer-order K_n(z) ascending series (n ≥ 0), DLMF 10.31.2 — exact (log + digamma). With Priced set, `loss` receives
@@ -3160,7 +3252,7 @@ CRD_NOINLINE inline BesFound bes_y_far(double nu, cplx z) noexcept
         }
         return BesFound{reflected, true};
     }
-    double summed_loss = -1.0; // the larger cancellation of the two series of the connection, once they are summed
+    double summed_loss = -1.0; // the connection's price (its larger weighted part), once its series are summed
     const double from_integer = crd::math::fabs(nu - crd::math::round(nu));
     if (nu > 0.0 && nu < kBesForwardSteps && std::abs(z) < 2.0 * nu && from_integer >= 1e-12 && from_integer != 0.5)
     {
@@ -3189,7 +3281,10 @@ CRD_NOINLINE inline BesFound bes_y_far(double nu, cplx z) noexcept
             {
                 return BesFound{connected, true};
             }
-            summed_loss = (plus_loss > minus_loss) ? plus_loss : minus_loss;
+            // Rejected, the connection is priced below by the same weighted parts (by the losses of its series alone
+            // it read as within the bar where 1/sin νπ or the share of J_{−ν} made it 337 units off: Y_43.99997(2.7 −
+            // 31.9i)), so that the methods below are chosen against what it would give.
+            summed_loss = (plus_part > minus_part) ? plus_part : minus_part;
         }
     }
     cplx p;
@@ -3234,6 +3329,17 @@ CRD_NOINLINE inline BesFound bes_y_far(double nu, cplx z) noexcept
     {
         return BesFound{asymptotic, true};
     }
+    if (bes_complex_stable_serves(nu, z))
+    {
+        // The series is the better method by its price, but Y would then be the connection of two series, which that
+        // price does not cover (1/sin νπ and the share of each, or a series whose first term left the doubles:
+        // Y_147.1(61.7 − 285.5i) was 2.1e4 units off, Y_−169.0(50.4 + 139.7i) 234): the stable method answers.
+        const BesComplexJY pair = bes_complex_stable_jy(nu, z);
+        if (pair.ok)
+        {
+            return BesFound{pair.y, true};
+        }
+    }
     return BesFound{cplx(0.0, 0.0), false};
 }
 // Y_ν(z) by its methods; bessely_c (below K) adds the value beyond the doubles.
@@ -3253,11 +3359,11 @@ CRD_NOINLINE inline BesFound bes_y_far(double nu, cplx z) noexcept
         const int n = static_cast<int>(crd::math::fabs(rn));
         if (bes_complex_stable_serves(nu, z)) [[unlikely]]
         {
-            // From |z| = kBesComplexForwardFrom the stable method answers where the series is not finite or was cut
-            // short by the range of its Γ (bessely_n_int).
-            bool truncated = false;
-            const cplx yn = bessely_n_int(n, z, &truncated);
-            if (truncated || !bes_complex_finite(yn))
+            // From |z| = kBesComplexForwardFrom the series is priced (bessely_n_int) and, where it loses more than the
+            // bar, the stable method answers.
+            double loss = 0.0;
+            const cplx yn = bessely_n_int<true>(n, z, &loss);
+            if (!(kBesRoundoff * loss <= kBesComplexYSeries))
             {
                 const BesComplexJY pair = bes_complex_stable_jy(nu, z);
                 if (pair.ok)
@@ -3325,18 +3431,26 @@ CRD_NOINLINE inline cplx bes_i_at_negative_integer(double nu, cplx z) noexcept
 }
 CRD_NOINLINE inline cplx bes_i_far(double nu, cplx z, double magnitude) noexcept
 {
-    double summed_loss = -1.0; // the cancellation of the series of this order, once it has been summed
+    double summed_loss = -1.0; // the cancellation of the series of this order, once summed, times its index factor
     if (magnitude < 17.5 || magnitude < 2.0 * crd::math::fabs(nu))
     {
         // The range of the series in base, where it is base's answer: summed once and priced by its own terms, and
-        // taken while that price is within the module's bar, as for J (kBesSeriesIndexUnit).
+        // taken while that price is within the module's bar, as for J (kBesSeriesIndexUnit); the methods below are
+        // priced against the same model (without the index factor I_−63.16(−55.3 + 50.9i), whose largest term is the
+        // 80th, was priced at 2.9e-11 and is 1.0e-10 off).
         int largest_at = 0;
         const cplx summed = bessel_series_priced<true>(nu, z, summed_loss, largest_at);
         const double index_factor = (largest_at > kBesSeriesIndexUnit) ? largest_at / kBesSeriesIndexUnit : 1.0;
+        // Taken while that price is within the bar, as in base. The price leaves out the rounding of the first term,
+        // (z/2)^ν/Γ(ν+1), about εν|ln(z/2)| of the result: six points of the 1515 sample priced at 0.83 to 1.0 of the
+        // bar are 1.08 to 1.44 units off (I_28.14(21.2 + 34.4i), I_101.3(73.2 − 61.7i)). A price with it, or with the
+        // index factor 1 + at/6 that envelopes them, sends base-correct points at the order of |z| to the stable
+        // method, 3.6 to 4.4 % on that row; the first term in extended precision would clear them without that.
         if (summed_loss >= 0.0 && kBesRoundoff * summed_loss * index_factor <= kBesComplexUsable)
         {
             return summed;
         }
+        summed_loss = (summed_loss >= 0.0) ? summed_loss * index_factor : summed_loss;
     }
     double error = 0.0;
     const cplx value = besselik_asymp<true>(nu, z, error);
@@ -3344,14 +3458,20 @@ CRD_NOINLINE inline cplx bes_i_far(double nu, cplx z, double magnitude) noexcept
     {
         return value;
     }
-    const double series_error = (summed_loss >= 0.0 && nu >= 0.0)
-                                    ? kBesRoundoff * summed_loss
-                                    : kBesRoundoff * bes_series_loss(crd::math::fabs(nu), z, 1.0);
+    // Not summed, the series is priced by bes_series_loss with the same index factor (I_292.1(271.8 − 111.1i), whose
+    // largest term is about the 150th, was priced at 2.7e-11 without it and is 2.4e-10 off).
+    const auto priced = [z](double order) noexcept
+    {
+        int at = 0;
+        const double loss = bes_series_loss(order, z, 1.0, &at);
+        return kBesRoundoff * loss * ((at > kBesSeriesIndexUnit) ? at / kBesSeriesIndexUnit : 1.0);
+    };
+    const double series_error =
+        (summed_loss >= 0.0 && nu >= 0.0) ? kBesRoundoff * summed_loss : priced(crd::math::fabs(nu));
     // At a negative order the series is that of the order itself, with its own loss (of the order |ν| would mistake
     // the alternating series, which the sum of J_{−ν} carries).
     const double stable_measure =
-        (nu < 0.0) ? (summed_loss >= 0.0 ? kBesRoundoff * summed_loss : kBesRoundoff * bes_series_loss(nu, z, 1.0))
-                   : series_error;
+        (nu < 0.0) ? (summed_loss >= 0.0 ? kBesRoundoff * summed_loss : priced(nu)) : series_error;
     const bool stable_serves =
         crd::math::fabs(nu) < kBesForwardSteps && crd::math::fabs(z.real()) < kBesComplexStableMax;
     cplx rotated;
