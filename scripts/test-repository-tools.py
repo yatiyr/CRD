@@ -3458,6 +3458,25 @@ class BuildPerformance(unittest.TestCase):
                 self.assertTrue(any(message in problem for problem in problems), (message, problems))
             write(root, [own, lib], '{ version = "=1.2.3", features = ["x"] }')
             self.assertEqual(check_pins.validate_lockfile('set', entry, root), [])
+            # A crate the build patches in from a pinned source archive is locked without a source, at its version.
+            archive = {'archive': {'sha256': good_sum}}
+            fork = {'name': 'fork', 'version': '0.0.8'}
+            patched = dict(entry, patched={'fork': '0.0.8'}, patched_from='archive')
+            write(root, [own, lib, fork])
+            self.assertEqual(check_pins.validate_lockfile('set', patched, root, archive), [])
+            for packages, archives, message in (
+                    ([own, lib, fork], {}, 'pinned package named by patched_from'),
+                    ([own, lib, fork], {'archive': {'sha256': 'abc'}}, 'pinned package named by patched_from'),
+                    ([own, lib, dict(fork, version='0.0.9')], archive, 'not the manifest'),
+                    ([own, lib, dict(fork, version='0.0.9')], archive, 'does not take fork 0.0.8'),
+                    ([own, lib, dict(fork, source=crates_io, checksum=good_sum)], archive, 'does not take fork'),
+                    ([own, lib], archive, 'does not take fork 0.0.8')):
+                write(root, packages)
+                problems = check_pins.validate_lockfile('set', patched, root, archives)
+                self.assertTrue(any(message in problem for problem in problems), (message, problems))
+            write(root, [own, lib, fork])
+            self.assertTrue(any('not the manifest' in problem
+                                for problem in check_pins.validate_lockfile('set', entry, root, archive)))
             (root / 'Cargo.lock').write_text('not toml [', encoding='utf-8')
             self.assertIn('readable TOML', check_pins.validate_lockfile('set', entry, root)[0])
             pins = {'tools': {'set': entry}}
@@ -3471,6 +3490,9 @@ class BuildPerformance(unittest.TestCase):
             [])
         registered = pins_registry.entry('tools', 'openmls-crates')
         self.assertEqual(check_pins.validate_lockfile('openmls-crates', registered), [])
+        packages = check_pins.load(check_pins.DEFAULT_PINS)['packages']
+        self.assertEqual(check_pins.validate_lockfile('qmux-crates', pins_registry.entry('tools', 'qmux-crates'),
+                                                      packages=packages), [])
 
     def test_a_go_module_set_is_pinned_by_its_committed_go_sum(self):
         module = 'example.invalid/lib'

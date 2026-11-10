@@ -42,10 +42,12 @@ def load(path):
     return json.loads(Path(path).read_text(encoding='utf-8'))
 
 
-def validate_lockfile(name, entry, root=ROOT):
+def validate_lockfile(name, entry, root=ROOT, packages=None):
     """A crate set pinned by its committed Cargo.lock: every package with a source comes from crates.io with a 64-hex
-    checksum (no git, path or other registry source), the one without is the manifest's own package, and the manifest
-    requires the pinned crate at exactly the pinned version, which the lockfile resolves."""
+    checksum (no git, path or other registry source); one without is the manifest's own package or a crate `patched`
+    names at its version, which the build takes by Cargo's `--config patch.crates-io` from the source archive of the
+    `patched_from` package, pinned by its SHA-256; and the manifest requires the pinned crate at exactly the pinned
+    version, which the lockfile resolves."""
     problems = []
     try:
         lock = tomllib.loads((root / entry['lockfile']).read_text(encoding='utf-8'))
@@ -54,13 +56,23 @@ def validate_lockfile(name, entry, root=ROOT):
         return ['tool %s: its lockfile and manifest must be readable TOML (%s)' % (name, error)]
     own = manifest.get('package', {}).get('name')
     locked = lock.get('package', [])
+    patched = entry.get('patched', {})
+    archive = (packages or {}).get(entry.get('patched_from'), {})
+    if patched and not HEX64.match(archive.get('sha256', '')):
+        problems.append('tool %s: its patched crates must come from a pinned package named by patched_from' % name)
     for package in locked:
         label = '%s %s' % (package.get('name'), package.get('version'))
         if 'source' not in package:
-            if package.get('name') != own:
-                problems.append("tool %s: %s has no source and is not the manifest's package" % (name, label))
+            if package.get('name') != own and patched.get(package.get('name')) != package.get('version'):
+                problems.append("tool %s: %s has no source and is not the manifest's package or a patched crate" %
+                                (name, label))
         elif package['source'] != CRATES_IO or not HEX64.match(package.get('checksum', '')):
             problems.append('tool %s: %s must come from crates.io with a 64-hex checksum' % (name, label))
+    for crate, version in patched.items():
+        if not any(package.get('name') == crate and package.get('version') == version and 'source' not in package
+                   for package in locked):
+            problems.append('tool %s: the lockfile does not take %s %s from the patched archive' % (name, crate,
+                                                                                                  version))
     crate = entry.get('crate')
     required = manifest.get('dependencies', {}).get(crate)
     required = required.get('version') if isinstance(required, dict) else required
@@ -161,7 +173,7 @@ def validate_registry(pins, root=ROOT):
             if entry['acquired_by'] not in pins.get('actions', {}):
                 problems.append('tool %s is acquired by an action outside the registry' % name)
         elif 'lockfile' in entry:
-            problems += validate_lockfile(name, entry, root)
+            problems += validate_lockfile(name, entry, root, pins.get('packages'))
         elif 'go_sum' in entry:
             problems += validate_go_sum(name, entry, root)
         else:

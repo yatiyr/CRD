@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **47** · tools: **52** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **48** · tools: **52** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -27,6 +27,7 @@
 | ngtcp2 | 1.26.0 | MIT | ngtcp2/ngtcp2 @ `v1.26.0` (6a22a4d7a111) | `ngtcp2-6a22a4d7.tar.gz` |
 | nghttp2 | 1.71.0 | MIT | nghttp2/nghttp2 @ `v1.71.0` (80dcb8140af0) | `nghttp2-1.71.0.tar.gz` |
 | h2spec | 2.6.0 | MIT | summerwind/h2spec @ `v2.6.0` (70ac22940108) | `h2spec_linux_amd64.tar.gz` |
+| h3-crates | 0.0.8 | MIT | hyperium/h3 @ `master` (43745ad87e95) | `h3-43745ad8.tar.gz` |
 | nghttp3 | 1.19.0 | MIT | ngtcp2/nghttp3 @ `v1.19.0` (dc83309ca5fd) | `nghttp3-1.19.0.tar.gz` |
 | qifs | da52cd93 | MIT | qpackers/qifs (da52cd936b3e) | `qifs-da52cd93.tar.gz` |
 | hpack_test_case | 8a1406e7 | MIT | http2jp/hpack-test-case (8a1406e7d14b) | `hpack-test-case-8a1406e7.tar.gz` |

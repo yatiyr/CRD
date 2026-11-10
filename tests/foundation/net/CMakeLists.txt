@@ -86,7 +86,7 @@ endif()
 add_subdirectory(fuzz)
 
 # crd-net's end of the QUIC and HTTP/3 interoperability tests, whichever peers this configuration builds.
-if(CRD_BUILD_QUIC_VS_NGTCP2 OR CRD_BUILD_HTTP3_VS_QUICHE OR CRD_BUILD_WEBTRANSPORT_VS_QUINN)
+if(CRD_BUILD_QUIC_VS_NGTCP2 OR CRD_BUILD_HTTP3_VS_QUICHE OR CRD_BUILD_WEBTRANSPORT_VS_QUINN OR CRD_BUILD_QMUX_VS_CRATE)
     add_executable(crd-quic-peer interop/cerid_quic_peer.cpp)
     target_link_libraries(crd-quic-peer PRIVATE crd-core crd-containers crd-crypto crd-memory crd-net)
 endif()
@@ -189,17 +189,20 @@ if(CRD_BUILD_WEBTRANSPORT_VS_GO)
 endif()
 
 # The QMux interoperability test against the `qmux` crate (CRD_BUILD_QMUX_VS_CRATE): crd-qmux-crate-peer is a Cargo
-# package over the crate and rustls (and the `h2` crate for the WebSocket tunnels), and qmux_interop.py runs it against
-# crd-qmux-peer over the loopback.
+# package over the crate and rustls (and the `h2` and `h3` crates for the WebSocket tunnels), and qmux_interop.py runs
+# it against crd-qmux-peer over the loopback, and against crd-quic-peer for the tunnels over HTTP/3.
 if(CRD_BUILD_QMUX_VS_CRATE)
     crd_add_cargo_peer(crd-qmux-crate-peer "${CMAKE_CURRENT_SOURCE_DIR}/interop/qmux_crate_peer/Cargo.toml"
-                       qmux-crate-peer crd-qmux-crate-peer qmux-vs-crate)
+                       qmux-crate-peer crd-qmux-crate-peer qmux-vs-crate
+                       PATCH h3 "${h3-crates_SOURCE_DIR}/h3" h3-quinn "${h3-crates_SOURCE_DIR}/h3-quinn")
     add_executable(crd-qmux-peer interop/cerid_qmux_peer.cpp)
     target_link_libraries(crd-qmux-peer PRIVATE crd-net)
     add_dependencies(crd-qmux-peer crd-qmux-crate-peer)
+    add_dependencies(crd-quic-peer crd-qmux-crate-peer)
     add_test(NAME crd-net-qmux-interop-crate
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/qmux_interop.py"
-                     --cerid "$<TARGET_FILE:crd-qmux-peer>" --crate "${crd-qmux-crate-peer_OUTPUT}")
+                     --cerid "$<TARGET_FILE:crd-qmux-peer>" --quic "$<TARGET_FILE:crd-quic-peer>"
+                     --crate "${crd-qmux-crate-peer_OUTPUT}")
     set_tests_properties(crd-net-qmux-interop-crate PROPERTIES TIMEOUT 2400 LABELS "net;qmux-interop")
 endif()
 

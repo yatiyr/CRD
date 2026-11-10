@@ -212,6 +212,19 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Retirement | When a newer pinned nghttp3 delivers such a response with the deferral removed, the deferral and this entry go |
 | Row | [4.2a](ROADMAP.md#slice-4.2a); evidence [the nghttp3 interop session](sessions/2026-11-09-4-2a-nghttp3-interop.md) |
 
+<a id="tp-14"></a>
+## TP-14: the qmux crate never surfaces a stream whose first frame is RESET_STREAM
+
+| Field | Value |
+|---|---|
+| Component | qmux 0.6.6 (`cmake/pins.json` `tools/qmux-crates`), the QMux peer of the interoperability test |
+| Symptom | A peer-initiated stream whose RESET_STREAM arrives before any STREAM frame is consumed (`session.rs`, "RESET_STREAM can be the first frame ... implicitly opens its index") without a frontend, so `accept_uni()` never yields it and an application waiting for that stream's reset waits forever |
+| Reproduction outside Cerid | The crate's own `recv_frame` branch for `Frame::ResetStream` with no live entry: it records the index and returns no stream. Cerid's only part is that RFC 9000 section 19.4 lets a sender reset a stream whose bytes never left, with final size 0 |
+| Affected | No hosted test fails: `crd-net-qmux-interop-crate` (the reset cases over HTTP/2 and HTTP/3 tunnels) on linux-gcc-public-checks gives each tunnel's stream a connection's room, below |
+| Engine handling | The test peers size the carrier so a QMux stream's bytes leave before its reset: the crate peer's HTTP/2 windows (2 MiB per stream) and `crd-quic-peer`'s tunnel stream buffers (2 MiB). No Cerid source changes: crd-net's QMux sends what RFC 9000 allows |
+| Retirement | When a pinned qmux release hands such a stream to `accept_uni()` (or `accept_bi()`) already reset, the sizing stays and this entry goes |
+| Row | [4.2a](ROADMAP.md#slice-4.2a); evidence [the RFC 8441 session](sessions/2026-11-10-4-2a-websocket-h2-interop.md) and [the RFC 9220 session](sessions/2026-11-10-4-2a-websocket-h3-interop.md) |
+
 ## The registered-failure gate
 
 `scripts/check-registered-failures.py --lane <preset> --junit <ctest --output-junit file> --ctest-exit <code>` reads

@@ -5,7 +5,7 @@
 //                      --bytes N --closer client|server --code N --max-streams N [--compat 1] [--retry 1]
 //                      [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]]
 //                      [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N]
-//                      [--http3 1 ...]
+//                      [--http3 1 ...] [--webtransport legacy|h3 ...] [--transport h3 --alpn NAME ...]
 //
 //   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
 //   seed         the 32-byte Ed25519 private key of the server's self-signed credential; a client pins its public key
@@ -29,6 +29,12 @@
 //   progress-at  a server prints `progress=1` once it has read this many bytes
 //   http3        HTTP/3 over Http3Connection instead of the echo: http_exchange.h has its options, ALPN `h3` instead
 //   webtransport WebTransport sessions instead, `legacy` or `h3`: interop_webtransport.hpp has its options
+//   transport    h3: WebSocket tunnels (RFC 9220) on one HTTP/3 connection instead, `connections` of them at once,
+//                each a QMux connection running the echo with `alpn` its subprotocol (interop_qmux.hpp has the
+//                options); crd-qmux-peer's report for each, and `h3_close`, `h3_close_code` once the connection ends.
+//                The client closes the connection with H3_NO_ERROR once its tunnels are done and the server's GOAWAY
+//                came; a server sends GOAWAY once its tunnels are done, and closes after kTunnelLingerNs if the client
+//                has not
 //
 // The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
 // is the same as ngtcp2_quic_peer.c's without what only OpenSSL reports. The application is `cerid-interop`, a private
@@ -52,6 +58,7 @@
 
 #include "interop_echo.hpp"
 #include "interop_http3.hpp"
+#include "interop_qmux.hpp"
 #include "interop_webtransport.hpp"
 
 #include <cstdio>
@@ -86,9 +93,13 @@ constexpr u64 kConnectionMaxWindow = 1U << 24U;
 constexpr u32 kDatagramRingBytes = 1U << 20U;
 constexpr u32 kDatagramRingCount = 2048U;
 constexpr u8 kEarlyContext[4] = {'e', 'c', 't', 'x'};
+constexpr StringView kTunnelVersion = "h3";
+constexpr u64 kTunnelLingerNs = 2000000000U; // how long an end waits for the other once its tunnels are done
+constexpr u32 kTunnelStreamBytes = 1U << 21U;
 
-struct Options : EchoOptions
+struct Options : QmuxOptions
 {
+    bool tunnels = false; // --transport h3; `connections` is then the tunnels' count, on one QUIC connection
     bool compat = false;
     bool retry = false;
     u64 key_update = 0U;
@@ -107,12 +118,90 @@ struct Options : EchoOptions
 // Whether the application speaks HTTP/3 at all, and so the ALPN and the streams HTTP/3 needs are in order.
 [[nodiscard]] bool runs_http3(const Options& options) noexcept
 {
-    return options.http3.enabled != 0 || runs_webtransport(options);
+    return options.http3.enabled != 0 || runs_webtransport(options) || options.tunnels;
 }
+
+// One QUIC connection's HTTP/3 whose WebSocket tunnels each run the echo (interop_qmux.hpp's TunnelPeer).
+class Http3Tunnels
+{
+public:
+    // `options` counts the tunnels; it and `websocket` outlive this.
+    Http3Tunnels(const QmuxOptions& options, const WebSocketConfig& websocket) noexcept
+        : m_options(options), m_websocket(websocket), m_peer(options, kTunnelVersion)
+    {
+    }
+    Http3Tunnels(const Http3Tunnels&) = delete;
+    Http3Tunnels& operator=(const Http3Tunnels&) = delete;
+    Http3Tunnels(Http3Tunnels&&) = delete;
+    Http3Tunnels& operator=(Http3Tunnels&&) = delete;
+    ~Http3Tunnels() = default;
+
+    // The error to close the connection with, 0 to go on; `done` when this end should close it with H3_NO_ERROR.
+    [[nodiscard]] u64 service(QuicConnection& connection, bool established, u64 now_ns, bool& done) noexcept
+    {
+        if (!m_made && !make(connection))
+        {
+            return kH3InternalError;
+        }
+        if (!m_h3.started() && (!established || !m_h3.start()))
+        {
+            return m_h3.error();
+        }
+        Http3Event event;
+        while (m_h3.poll(event))
+        {
+            static_cast<void>(m_peer.on_event(event, now_ns)); // the rest is no tunnel's, and this end opens no other
+        }
+        if (m_h3.error() != 0U)
+        {
+            return m_h3.error();
+        }
+        m_peer.service(now_ns);
+        if (m_peer.done() && m_done_ns == 0U)
+        {
+            m_done_ns = now_ns;
+            if (!m_options.client && !m_h3.goaway(true))
+            {
+                return m_h3.error();
+            }
+        }
+        const bool lingered = m_done_ns != 0U && now_ns - m_done_ns >= kTunnelLingerNs;
+        done = lingered || (m_done_ns != 0U && m_options.client && m_h3.goaway_received());
+        return m_h3.error();
+    }
+
+    // The connection has ended: after every tunnel's report, how.
+    static void report(const QuicConnection& connection, const char* kind) noexcept
+    {
+        std::printf("h3_close=%s\nh3_close_code=%llu\n", kind,
+                    static_cast<unsigned long long>(connection.close_info().error_code));
+        std::fflush(stdout);
+    }
+
+private:
+    [[nodiscard]] bool make(QuicConnection& connection) noexcept
+    {
+        m_made = true;
+        httpx_options_t http3;
+        httpx_default_options(&http3);
+        crd::memory::IAllocator& allocator = *crd::memory::default_allocator();
+        return m_h3.init(allocator, connection.streams(), nullptr, http3_config(http3, m_options.client, 0U)) &&
+               m_peer.init(allocator, m_h3, tunnel_config(m_options, m_websocket));
+    }
+
+    const QmuxOptions& m_options;
+    const WebSocketConfig& m_websocket;
+    Http3Connection m_h3;
+    TunnelPeer m_peer;
+    u64 m_done_ns = 0U;
+    bool m_made = false;
+};
 
 // The HTTP/3 or WebTransport application of each connection, in the order they started.
 Http3Exchange g_exchanges[kMaxConnections];
 WtExchange g_wt_exchanges[kMaxConnections];
+// The one connection's tunnels with --transport h3, ended with it: their HTTP/3 state reads its stream set.
+Http3Tunnels* g_tunnels = nullptr;
 const Options* g_options = nullptr;
 
 // One turn of WebTransport on a connection.
@@ -169,6 +258,16 @@ void serve(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, u64 no
     turn.early_data = connection.handshake().early_data();
     turn.can_open = turn.established || turn.early_data == TlsEarlyData::Offered;
     turn.now_ns = now_ns;
+    if (g_tunnels != nullptr)
+    {
+        bool done = false;
+        const u64 error = g_tunnels->service(connection, turn.established, now_ns, done);
+        if (error != 0U || done)
+        {
+            connection.close(error != 0U ? error : kH3NoError, {}, now_ns);
+        }
+        return;
+    }
     if (runs_webtransport(*g_options))
     {
         echo->note_established(turn.established);
@@ -212,6 +311,14 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
         return;
     }
     const QuicCloseInfo& info = connection.close_info();
+    if (g_tunnels != nullptr)
+    {
+        Http3Tunnels::report(connection, close_kind(info));
+        g_tunnels->~Http3Tunnels();
+        g_tunnels = nullptr;
+        peer.ended(handle);
+        return;
+    }
     echo->report(connection.handshake().resumed(), connection.handshake().early_data(), connection.datagrams());
     if (g_options->http3.enabled != 0)
     {
@@ -289,6 +396,16 @@ QuicStreamLimits stream_limits(const Options& options)
         limits.peer_uni = kHttp3UniStreams + static_cast<u32>(options.uni);
         limits.local_uni = kHttp3UniStreams + static_cast<u32>(options.uni);
     }
+    if (options.tunnels)
+    {
+        // A tunnel's stream carries a whole QMux connection: it gets a connection's room, as the HTTP/2 path's peer
+        // windows give it. With less, a QMux stream reset while its bytes wait behind others' goes as RESET_STREAM
+        // alone (final size 0, RFC 9000 section 19.4), which the qmux crate never hands to accept_uni()
+        // (docs/third-party-defects.md).
+        limits.receive_bytes = kTunnelStreamBytes;
+        limits.send_bytes = kTunnelStreamBytes;
+        limits.stream_window = kTunnelStreamBytes;
+    }
     limits.reset_stream_at = runs_webtransport(options);
     return limits;
 }
@@ -296,7 +413,7 @@ QuicStreamLimits stream_limits(const Options& options)
 QuicDatagramLimits datagram_limits(const Options& options)
 {
     QuicDatagramLimits limits;
-    if (options.datagrams != 0U || runs_webtransport(options))
+    if ((options.datagrams != 0U && !options.tunnels) || runs_webtransport(options))
     {
         limits.max_frame_bytes = static_cast<u32>(options.datagram_limit);
         limits.receive_bytes = kDatagramRingBytes;
@@ -478,7 +595,8 @@ int usage()
                "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] "
                "[--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] "
                "[--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] "
-               "[--progress-at N] [--http3 1 ...] [--webtransport legacy|h3 ...]\n",
+               "[--progress-at N] [--http3 1 ...] [--webtransport legacy|h3 ...] [--transport h3 --alpn NAME "
+               "[--idle-ms N] [--keepalive-ms N]]\n",
                stderr);
     return 2;
 }
@@ -494,11 +612,15 @@ int main(int argc, char** argv)
         const char* const name = argv[at];
         const char* const value = argv[at + 1];
         if (parse_echo_option(name, value, options, required) || httpx_parse_option(&options.http3, name, value) != 0 ||
-            wt_parse_option(options.wt, name, value))
+            wt_parse_option(options.wt, name, value) || parse_qmux_option(name, value, options))
         {
             continue;
         }
-        if (std::strcmp(name, "--version") == 0)
+        if (std::strcmp(name, "--transport") == 0 && std::strcmp(value, "h3") == 0)
+        {
+            options.tunnels = true;
+        }
+        else if (std::strcmp(name, "--version") == 0)
         {
             options.version = static_cast<u32>(std::strtoul(value, nullptr, 10));
         }
@@ -527,12 +649,24 @@ int main(int argc, char** argv)
             return usage();
         }
     }
+    const bool other_http3 = options.http3.enabled != 0 || runs_webtransport(options);
     if (argc % 2 == 0 || required != kRequiredEchoOptions || !echo_options_valid(options) ||
-        (options.version != 1U && options.version != 2U) || httpx_options_valid(&options.http3) == 0)
+        (options.version != 1U && options.version != 2U) || httpx_options_valid(&options.http3) == 0 ||
+        options.tunnels == options.alpn.empty() || (options.tunnels && other_http3))
     {
         return usage();
     }
     options.timed_service = runs_http3(options);
+    // The tunnels count `connections` and run their own echo; the QUIC run is one connection with none.
+    static const QmuxOptions tunnel_options = options;
+    static const ConstSpan<u8> subprotocols[] = {bytes_of(options.alpn)};
+    static const WebSocketConfig websocket = websocket_config(subprotocols);
+    alignas(Http3Tunnels) static unsigned char tunnel_storage[sizeof(Http3Tunnels)];
+    if (options.tunnels)
+    {
+        options.connections = 1U;
+        g_tunnels = new (tunnel_storage) Http3Tunnels(tunnel_options, websocket);
+    }
     g_options = &options;
 
     SigningKey key;

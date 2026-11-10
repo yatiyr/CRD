@@ -9,11 +9,9 @@
 //                      [--hold-ms N] [--transport tls|ws|h2]
 //
 //   port, seed, group, cipher  as crd-quic-peer's; interop_echo.hpp describes the application
-//   alpn          the one application protocol this end offers or accepts
+//   alpn, idle-ms, keepalive-ms  interop_qmux.hpp's: `alpn` is the one application protocol this end offers or accepts
 //   closer        none: neither end closes, so the connection ends on its idle timeout
 //   early         a server's tickets allow 0-RTT, and a resuming client would use it
-//   idle-ms       the idle timeout this end offers (default 30000)
-//   keepalive-ms  a QX_PING after this long with no record
 //   hold-ms       this long with nothing to do before the closing end closes
 //   transport     tls: QMux over TLS (the default); ws: WebSocket over HTTP/1.1 inside TLS, `alpn` its subprotocol, a
 //                 server's TLS listing `alpn` as well; h2: WebSocket tunnels (RFC 8441) on one HTTP/2 connection with
@@ -60,14 +58,8 @@ constexpr u64 kWaitNs = 1000000U;
 constexpr StringView kServerName = "cerid.test";
 constexpr StringView kCloseReason = kQmuxCloseReason;
 constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
-constexpr u32 kStreamBytes = 65536U;
-constexpr u64 kConnectionWindow = 1U << 22U;
-constexpr u64 kConnectionMaxWindow = 1U << 24U;
-constexpr u32 kDatagramRingBytes = 1U << 20U;
-constexpr u32 kDatagramRingCount = 2048U;
 constexpr u8 kEarlyContext[4] = {'e', 'c', 't', 'x'};
 constexpr StringView kHttp11 = "http/1.1";
-constexpr StringView kWebSocketPath = "/interop";
 constexpr StringView kHttp2 = "h2";
 constexpr usize kHttp2InputBytes = 1U << 17U;
 constexpr usize kHttp2OutputBytes = 1U << 18U;
@@ -80,18 +72,10 @@ enum class Transport : crd::u8
     Http2,
 };
 
-struct Options : EchoOptions
+struct Options : QmuxOptions
 {
-    StringView alpn;
-    u64 idle_ms = 30000U;
-    u64 keepalive_ms = 0U;
     Transport transport = Transport::Tls;
 };
-
-[[nodiscard]] ConstSpan<u8> bytes_of(StringView text) noexcept
-{
-    return ConstSpan<u8>(reinterpret_cast<const u8*>(text.data()), text.size());
-}
 
 class App final : public QmuxHostEvents
 {
@@ -137,32 +121,6 @@ private:
     EchoPeer& m_peer;
 };
 
-QmuxConfig connection_config(const Options& options)
-{
-    QmuxConfig config;
-    const u64 uni = options.uni + options.resets + options.stops;
-    config.streams.peer_bidi = static_cast<u32>(options.max_streams);
-    config.streams.local_bidi = static_cast<u32>(options.max_streams);
-    config.streams.peer_uni = static_cast<u32>(uni != 0U ? uni : 1U);
-    config.streams.local_uni = static_cast<u32>(uni != 0U ? uni : 1U);
-    config.streams.receive_bytes = kStreamBytes;
-    config.streams.send_bytes = kStreamBytes;
-    config.streams.stream_window = kStreamBytes;
-    config.streams.connection_window = kConnectionWindow;
-    config.streams.connection_max_window = kConnectionMaxWindow;
-    if (options.datagrams != 0U)
-    {
-        config.datagrams.max_frame_bytes = static_cast<u32>(options.datagram_limit);
-        config.datagrams.receive_bytes = kDatagramRingBytes;
-        config.datagrams.receive_count = kDatagramRingCount;
-        config.datagrams.send_bytes = kDatagramRingBytes;
-        config.datagrams.send_count = kDatagramRingCount;
-    }
-    config.idle_timeout_ns = options.idle_ms * 1000000U;
-    config.keepalive_ns = options.keepalive_ms * 1000000U;
-    return config;
-}
-
 [[nodiscard]] bool parse_transport(const char* value, Transport& out) noexcept
 {
     static constexpr struct
@@ -179,15 +137,6 @@ QmuxConfig connection_config(const Options& options)
         }
     }
     return false;
-}
-
-[[nodiscard]] WebSocketConfig websocket_config(ConstSpan<ConstSpan<u8>> protocols) noexcept
-{
-    WebSocketConfig websocket;
-    websocket.protocols = protocols;
-    websocket.path = bytes_of(kWebSocketPath);
-    websocket.host = bytes_of(kServerName);
-    return websocket;
 }
 
 // A server's listening socket on the loopback; false, said on stderr, when it could not be bound. A client's stays
@@ -223,11 +172,8 @@ public:
         config.side = options.client ? Http2Side::Client : Http2Side::Server;
         config.connect_protocol = !options.client;
         config.output_bytes = kHttp2OutputBytes;
-        WsTunnelConfig tunnels;
-        tunnels.connection = connection_config(options);
-        tunnels.connection.websocket = &websocket;
-        tunnels.tunnels = static_cast<u32>(options.connections);
-        return m_h2.init(allocator, config, now_ns) && m_tunnels.init(allocator, m_h2, tunnels);
+        return m_h2.init(allocator, config, now_ns) &&
+               m_tunnels.init(allocator, m_h2, tunnel_config(options, websocket));
     }
 
     // Reads, runs and writes until nothing moves; false once the socket has failed or the peer has hung up.
@@ -428,7 +374,7 @@ int run(crd::memory::IAllocator& allocator, const Options& options, const TlsCon
     const ConstSpan<u8> subprotocols[] = {bytes_of(options.alpn)};
     const WebSocketConfig websocket = websocket_config(subprotocols);
     QmuxHostConfig config;
-    config.connection = connection_config(options);
+    config.connection = qmux_config(options);
     config.connection.websocket = options.transport == Transport::WebSocket ? &websocket : nullptr;
     config.connection.tls = options.client ? nullptr : &context;
     config.connection.tickets = options.client ? &tickets : nullptr;
@@ -494,23 +440,11 @@ int main(int argc, char** argv)
     {
         const char* const name = argv[at];
         const char* const value = argv[at + 1];
-        if (parse_echo_option(name, value, options, required))
+        if (parse_echo_option(name, value, options, required) || parse_qmux_option(name, value, options))
         {
             continue;
         }
-        if (std::strcmp(name, "--alpn") == 0)
-        {
-            options.alpn = StringView(value, std::strlen(value));
-        }
-        else if (std::strcmp(name, "--idle-ms") == 0)
-        {
-            options.idle_ms = std::strtoull(value, nullptr, 10);
-        }
-        else if (std::strcmp(name, "--keepalive-ms") == 0)
-        {
-            options.keepalive_ms = std::strtoull(value, nullptr, 10);
-        }
-        else if (std::strcmp(name, "--transport") == 0)
+        if (std::strcmp(name, "--transport") == 0)
         {
             if (!parse_transport(value, options.transport))
             {

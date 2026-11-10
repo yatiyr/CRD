@@ -3,7 +3,8 @@
 //!
 //! `--transport` picks what carries QMux: `tls` (the default), `ws` (WebSocket over HTTP/1.1 inside TLS, RFC 6455) or
 //! `h2` (WebSocket over HTTP/2 with prior knowledge, RFC 8441: the `h2` crate's extended CONNECT, tokio-tungstenite on
-//! the stream, `connections` tunnels at once on one connection).
+//! the stream, `connections` tunnels at once on one connection) or `h3` (the same over HTTP/3, RFC 9220: the `h3` crate
+//! over Quinn, real UDP).
 //!
 //! The application is interop_echo.hpp's, byte for byte. This crate does not expose a stream's ID, so a stream a peer
 //! opened is known by its pattern: its first bytes name exactly one of the IDs the run can use.
@@ -17,6 +18,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use h2::ext::Protocol;
+use h3::ConnectionState as _;
 use qmux::tls;
 use qmux::ws;
 use qmux::ws::tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -25,6 +27,7 @@ use qmux::ws::tokio_tungstenite::tungstenite::http::{HeaderValue, Method, Reques
 use qmux::ws::tokio_tungstenite::tungstenite::protocol::Role;
 use qmux::ws::tokio_tungstenite::{WebSocketStream, client_async};
 use qmux::{Config, Error, RecvStream, SendStream, Session, Version};
+use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 use rcgen::{CertificateParams, KeyPair, PKCS_ED25519};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, aws_lc_rs, verify_tls13_signature};
@@ -57,6 +60,11 @@ const SETTINGS_POLL: Duration = Duration::from_millis(1);
 // 65,535 bytes for both).
 const H2_STREAM_WINDOW: u32 = 2 << 20;
 const H2_CONNECTION_WINDOW: u32 = 5 << 20;
+const H3_ALPN: &[u8] = b"h3";
+const H3_NO_ERROR: u32 = 0x100;
+/// How long an HTTP/3 end whose tunnels are done waits for the other: the server for its client to close, the client
+/// for the server's GOAWAY.
+const H3_LINGER: Duration = Duration::from_secs(2);
 const ED25519_PKCS8_PREFIX: [u8; 16] = [
     0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
 ];
@@ -554,18 +562,37 @@ fn version_of(options: &Options) -> Version {
     if options.alpn_version == "01" { Version::QMux01 } else { Version::QMux02 }
 }
 
-async fn run_client(options: Arc<Options>) {
-    let provider = provider_of(&options);
+/// TLS 1.3 with the run's group and cipher suite, the server's key pinned.
+fn client_tls(options: &Options) -> ClientConfig {
+    let provider = provider_of(options);
     let (key, _) = key_of(&options.seed);
     let mut spki = ED25519_SPKI_PREFIX.to_vec();
     spki.extend_from_slice(key.public_key_raw());
     let verifier = Arc::new(PinnedKey { spki, provider: provider.clone() });
-    let config = ClientConfig::builder_with_provider(provider)
+    ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])
         .expect("TLS 1.3")
         .dangerous()
         .with_custom_certificate_verifier(verifier)
-        .with_no_client_auth();
+        .with_no_client_auth()
+}
+
+/// TLS 1.3 with the run's group and cipher suite, and the certificate self-signed from the seed.
+fn server_tls(options: &Options) -> ServerConfig {
+    let (key, pkcs8) = key_of(&options.seed);
+    let params = CertificateParams::new(vec![SERVER_NAME.to_string()]).expect("a server name");
+    let certificate = params.self_signed(&key).expect("a certificate");
+    let chain = vec![certificate.der().clone()];
+    ServerConfig::builder_with_provider(provider_of(options))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("TLS 1.3")
+        .with_no_client_auth()
+        .with_single_cert(chain, PrivateKeyDer::Pkcs8(pkcs8.into()))
+        .expect("a certificate and its key")
+}
+
+async fn run_client(options: Arc<Options>) {
+    let config = client_tls(&options);
     if options.transport == "ws" {
         run_websocket_client(config, options).await;
         return;
@@ -631,17 +658,7 @@ async fn run_websocket_server(mut config: ServerConfig, options: Arc<Options>) {
 }
 
 async fn run_server(options: Arc<Options>) {
-    let provider = provider_of(&options);
-    let (key, pkcs8) = key_of(&options.seed);
-    let params = CertificateParams::new(vec![SERVER_NAME.to_string()]).expect("a server name");
-    let certificate = params.self_signed(&key).expect("a certificate");
-    let chain = vec![certificate.der().clone()];
-    let mut config = ServerConfig::builder_with_provider(provider)
-        .with_protocol_versions(&[&rustls::version::TLS13])
-        .expect("TLS 1.3")
-        .with_no_client_auth()
-        .with_single_cert(chain, PrivateKeyDer::Pkcs8(pkcs8.into()))
-        .expect("a certificate and its key");
+    let mut config = server_tls(&options);
     if options.transport == "ws" {
         run_websocket_server(config, options).await;
         return;
@@ -781,8 +798,24 @@ async fn run_h2_client(options: Arc<Options>) {
     let _ = tokio::time::timeout(CLOSE_GRACE, driver).await;
 }
 
-/// The server's answer to one extended CONNECT: RFC 8441's request, RFC 6455's version and a subprotocol this end
-/// takes, or 400.
+/// Whether a server takes an extended CONNECT whose `:protocol` is `protocol`: RFC 8441's and RFC 9220's request,
+/// RFC 6455's version and the subprotocol this end takes (`offered`).
+fn tunnel_acceptable<T>(request: &Request<T>, protocol: Option<&str>, offered: &str) -> bool {
+    let headers = request.headers();
+    let well_formed = request.method() == Method::CONNECT
+        && protocol == Some(WEBSOCKET)
+        && request.uri().path() == WEBSOCKET_PATH
+        && headers.get(SEC_WEBSOCKET_VERSION).is_some_and(|value| value == WEBSOCKET_VERSION);
+    well_formed
+        && headers
+            .get_all(SEC_WEBSOCKET_PROTOCOL)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .any(|token| token.trim() == offered)
+}
+
+/// The server's answer to one extended CONNECT on HTTP/2: the tunnel, or 400.
 async fn serve_tunnel(
     request: Request<h2::RecvStream>,
     mut respond: h2::server::SendResponse<Bytes>,
@@ -790,18 +823,8 @@ async fn serve_tunnel(
     number: u64,
 ) {
     let offered = offered_protocol(&options);
-    let headers = request.headers();
-    let well_formed = request.method() == Method::CONNECT
-        && request.extensions().get::<Protocol>().is_some_and(|protocol| protocol.as_str() == WEBSOCKET)
-        && request.uri().path() == WEBSOCKET_PATH
-        && headers.get(SEC_WEBSOCKET_VERSION).is_some_and(|value| value == WEBSOCKET_VERSION);
-    let taken = headers
-        .get_all(SEC_WEBSOCKET_PROTOCOL)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .any(|token| token.trim() == offered);
-    if !well_formed || !taken {
+    let protocol = request.extensions().get::<Protocol>().map(Protocol::as_str);
+    if !tunnel_acceptable(&request, protocol, &offered) {
         let refusal = Response::builder().status(StatusCode::BAD_REQUEST).body(()).expect("a response");
         let _ = respond.send_response(refusal, true);
         return report_refused(number, &"refused with status 400");
@@ -848,6 +871,189 @@ async fn run_h2_server(options: Arc<Options>) {
     connection.graceful_shutdown();
     let _ = tokio::time::timeout(CLOSE_GRACE, std::future::poll_fn(|context| connection.poll_closed(context))).await;
     while tunnels.join_next().await.is_some() {}
+}
+
+/// The tunnel's byte stream for tokio-tungstenite over an HTTP/3 request stream's halves, as `bridge` does for HTTP/2:
+/// QUIC's own flow control paces both tasks. h3 gives each end its own stream types, so this makes one function per
+/// end.
+macro_rules! h3_bridge {
+    ($name:ident, $end:ident) => {
+        fn $name(
+            mut send: h3::$end::RequestStream<h3_quinn::SendStream<Bytes>, Bytes>,
+            mut recv: h3::$end::RequestStream<h3_quinn::RecvStream, Bytes>,
+        ) -> DuplexStream {
+            let (near, far) = tokio::io::duplex(BRIDGE_BYTES);
+            let (mut far_read, mut far_write) = tokio::io::split(far);
+            tokio::spawn(async move {
+                while let Ok(Some(mut chunk)) = recv.recv_data().await {
+                    if far_write.write_all_buf(&mut chunk).await.is_err() {
+                        return;
+                    }
+                }
+                let _ = far_write.shutdown().await;
+            });
+            tokio::spawn(async move {
+                let mut buffer = vec![0u8; BRIDGE_BYTES];
+                loop {
+                    match far_read.read(&mut buffer).await {
+                        Ok(0) | Err(_) => {
+                            let _ = send.finish().await;
+                            return;
+                        }
+                        Ok(count) => {
+                            if send.send_data(Bytes::copy_from_slice(&buffer[..count])).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            });
+            near
+        }
+    };
+}
+
+h3_bridge!(bridge_h3_client, client);
+h3_bridge!(bridge_h3_server, server);
+
+/// QUIC's Initial packets use AES-128-GCM whatever suite the run negotiates (RFC 9001 section 5.2).
+fn initial_suite() -> rustls::quic::Suite {
+    let suite = aws_lc_rs::cipher_suite::TLS13_AES_128_GCM_SHA256.tls13().expect("a TLS 1.3 suite");
+    suite.quic_suite().expect("a QUIC suite")
+}
+
+fn loopback(port: u16) -> std::net::SocketAddr {
+    std::net::SocketAddr::from(([127, 0, 0, 1], port))
+}
+
+async fn open_h3_tunnel(
+    mut stream: h3::client::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+    options: Arc<Options>,
+    number: u64,
+) {
+    let response = match stream.recv_response().await {
+        Ok(response) => response,
+        Err(error) => return report_refused(number, &error),
+    };
+    if response.status() != StatusCode::OK {
+        return report_refused(number, &format!("status {}", response.status().as_u16()));
+    }
+    let agreed = response.headers().get(SEC_WEBSOCKET_PROTOCOL).and_then(|value| value.to_str().ok());
+    let agreed = agreed.unwrap_or_default().to_string();
+    let (send, recv) = stream.split();
+    run_tunnel(bridge_h3_client(send, recv), Role::Client, &agreed, options, number).await;
+}
+
+/// `connections` tunnels at once on one HTTP/3 connection over Quinn, once the server's SETTINGS allow them; then
+/// H3_NO_ERROR, once the server's GOAWAY says its tunnels are done too.
+async fn run_h3_client(options: Arc<Options>) {
+    let mut tls = client_tls(&options);
+    tls.alpn_protocols = vec![H3_ALPN.to_vec()];
+    let quic = QuicClientConfig::with_initial(Arc::new(tls), initial_suite()).expect("a QUIC client config");
+    let endpoint = quinn::Endpoint::client(loopback(0)).expect("a client endpoint");
+    let connecting = endpoint
+        .connect_with(quinn::ClientConfig::new(Arc::new(quic)), loopback(options.port), SERVER_NAME)
+        .expect("a connection");
+    let connection = connecting.await.expect("a handshake");
+    let (mut driver, mut send) =
+        h3::client::new(h3_quinn::Connection::new(connection.clone())).await.expect("an HTTP/3 connection");
+    let driver = tokio::spawn(async move { std::future::poll_fn(|context| driver.poll_close(context)).await });
+    // RFC 9220 section 3: no extended CONNECT before the server's SETTINGS_ENABLE_CONNECT_PROTOCOL.
+    let enabled = tokio::time::timeout(RUN, async {
+        while !send.settings().enable_extended_connect() {
+            tokio::time::sleep(SETTINGS_POLL).await;
+        }
+    });
+    if enabled.await.is_err() {
+        return report_refused(1, &"the server never enabled extended CONNECT");
+    }
+    let offered = offered_protocol(&options);
+    let mut tunnels = JoinSet::new();
+    for number in 1..=options.connections {
+        let request = Request::builder()
+            .method(Method::CONNECT)
+            .uri(format!("https://{SERVER_NAME}{WEBSOCKET_PATH}"))
+            .header(SEC_WEBSOCKET_VERSION, WEBSOCKET_VERSION)
+            .header(SEC_WEBSOCKET_PROTOCOL, offered.as_str())
+            .extension(h3::ext::Protocol::WEBSOCKET)
+            .body(())
+            .expect("a request");
+        match send.send_request(request).await {
+            Ok(stream) => {
+                tunnels.spawn(open_h3_tunnel(stream, options.clone(), number));
+            }
+            Err(error) => report_refused(number, &error),
+        }
+    }
+    while tunnels.join_next().await.is_some() {}
+    // With no request handle left, the driver ends at the server's GOAWAY.
+    drop(send);
+    let _ = tokio::time::timeout(H3_LINGER, driver).await;
+    connection.close(H3_NO_ERROR.into(), b"");
+    let _ = tokio::time::timeout(CLOSE_GRACE, endpoint.wait_idle()).await;
+}
+
+/// The server's answer to one extended CONNECT on HTTP/3: the tunnel, or 400.
+async fn serve_h3_tunnel(
+    resolver: h3::server::RequestResolver<h3_quinn::Connection, Bytes>,
+    options: Arc<Options>,
+    number: u64,
+) {
+    let (request, mut stream) = match resolver.resolve_request().await {
+        Ok(resolved) => resolved,
+        Err(error) => return report_refused(number, &error),
+    };
+    let offered = offered_protocol(&options);
+    let protocol = request.extensions().get::<h3::ext::Protocol>().map(h3::ext::Protocol::as_str);
+    if !tunnel_acceptable(&request, protocol, &offered) {
+        let refusal = Response::builder().status(StatusCode::BAD_REQUEST).body(()).expect("a response");
+        if stream.send_response(refusal).await.is_ok() {
+            let _ = stream.finish().await;
+        }
+        return report_refused(number, &"refused with status 400");
+    }
+    let accepted = Response::builder()
+        .status(StatusCode::OK)
+        .header(SEC_WEBSOCKET_PROTOCOL, offered.as_str())
+        .body(())
+        .expect("a response");
+    if let Err(error) = stream.send_response(accepted).await {
+        return report_refused(number, &error);
+    }
+    let (send, recv) = stream.split();
+    run_tunnel(bridge_h3_server(send, recv), Role::Server, &offered, options, number).await;
+}
+
+/// One HTTP/3 connection's tunnels, refused ones among them, then GOAWAY; the client closes the connection, or the
+/// grace ends it.
+async fn run_h3_server(options: Arc<Options>) {
+    let mut tls = server_tls(&options);
+    tls.alpn_protocols = vec![H3_ALPN.to_vec()];
+    let quic = QuicServerConfig::with_initial(Arc::new(tls), initial_suite()).expect("a QUIC server config");
+    let config = quinn::ServerConfig::with_crypto(Arc::new(quic));
+    let endpoint = quinn::Endpoint::server(config, loopback(options.port)).expect("a server endpoint");
+    println!("port={}", endpoint.local_addr().expect("its address").port());
+    let incoming = endpoint.accept().await.expect("a connection");
+    let connection = incoming.await.expect("a handshake");
+    let mut http = h3::server::builder()
+        .enable_extended_connect(true)
+        .build::<_, Bytes>(h3_quinn::Connection::new(connection.clone()))
+        .await
+        .expect("an HTTP/3 connection");
+    let mut tunnels = JoinSet::new();
+    for number in 1..=options.connections {
+        match http.accept().await {
+            Ok(Some(resolver)) => {
+                tunnels.spawn(serve_h3_tunnel(resolver, options.clone(), number));
+            }
+            Ok(None) | Err(_) => break,
+        }
+    }
+    while tunnels.join_next().await.is_some() {}
+    let _ = tokio::time::timeout(CLOSE_GRACE, http.shutdown(0)).await;
+    let _ = tokio::time::timeout(H3_LINGER, connection.closed()).await;
+    connection.close(H3_NO_ERROR.into(), b"");
+    let _ = tokio::time::timeout(CLOSE_GRACE, endpoint.wait_idle()).await;
 }
 
 fn parse_hex(text: &str) -> Vec<u8> {
@@ -907,6 +1113,8 @@ async fn main() {
     match (options.transport.as_str(), options.client) {
         ("h2", true) => run_h2_client(options).await,
         ("h2", false) => run_h2_server(options).await,
+        ("h3", true) => run_h3_client(options).await,
+        ("h3", false) => run_h3_server(options).await,
         (_, true) => run_client(options).await,
         (_, false) => run_server(options).await,
     }

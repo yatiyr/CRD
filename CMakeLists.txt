@@ -151,8 +151,9 @@ option(CRD_BUILD_HPACK_VS_CORPUS "Build the HPACK interoperability test against 
 # tests/foundation/net/interop/http2_interop.py. Linux x64 only, never in a shipped build.
 option(CRD_BUILD_HTTP2_VS_PEERS "Build the HTTP/2 interoperability test against nghttp2 and h2spec (Linux x64)" OFF)
 # QMux against the `qmux` crate over rustls (4.2a): crd-qmux-crate-peer, a Rust program whose crates the committed
-# Cargo.lock pins (cmake/pins.json tools/qmux-crates), built with the pinned Rust (CRD_CARGO). Linux only, never in a
-# shipped build; the crd-net-qmux-interop-crate CTest, locally and on the complete-tier linux-gcc-public-checks.
+# Cargo.lock pins (cmake/pins.json tools/qmux-crates), built with the pinned Rust (CRD_CARGO), with h3 and h3-quinn from
+# the pinned h3-crates archive. Linux only, never in a shipped build; the crd-net-qmux-interop-crate CTest, locally and
+# on the complete-tier linux-gcc-public-checks.
 option(CRD_BUILD_QMUX_VS_CRATE "Build the QMux interoperability test against the qmux crate (Linux, pinned Rust)" OFF)
 # HTTP/3 against Cloudflare's quiche over BoringSSL (4.2a): crd-quiche-peer, a Rust program whose crates the committed
 # Cargo.lock pins (cmake/pins.json tools/quiche-crates), built with the pinned Rust (CRD_CARGO); the boring-sys crate
@@ -1547,6 +1548,7 @@ if(CRD_BUILD_QMUX_VS_CRATE)
                             "crypto module")
     endif()
     crd_require_cargo(qmux-vs-crate)
+    crd_add_pinned_package(h3-crates DOWNLOAD_ONLY YES)
 endif()
 if(CRD_BUILD_HTTP3_VS_QUICHE)
     if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)

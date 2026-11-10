@@ -163,6 +163,20 @@
       "provenance": "https://github.com/summerwind/h2spec/releases/tag/v2.6.0 (the project's last release, 2020-08-04; the archive holds the one static Linux x64 binary; downloaded and hashed 2026-11-09)",
       "note": "h2spec 2.6.0, the conformance tester for HTTP/2 implementations: run against crd-http2-peer by crd-net-http2-interop (4.2a). Test-only."
     },
+    "h3-crates": {
+      "version": "0.0.8",
+      "repository": "hyperium/h3",
+      "ref": "master",
+      "commit": "43745ad87e95b0c035ac9c547aad467303213425",
+      "url": "https://github.com/hyperium/h3/archive/43745ad87e95b0c035ac9c547aad467303213425.tar.gz",
+      "file": "h3-43745ad8.tar.gz",
+      "sha256": "b722e710d90f7245c1754223aab494e2659f4507ab12dcd335d386e6579d480c",
+      "size": 248889,
+      "license": "MIT",
+      "gated": "CRD_BUILD_QMUX_VS_CRATE",
+      "provenance": "https://github.com/hyperium/h3/commit/43745ad87e95b0c035ac9c547aad467303213425 (the master branch head, 2026-09-20: h3 0.0.8 and h3-quinn 0.0.10 with RFC 9220's `websocket` `:protocol`, merged 2026-01-04 and in no release since 0.0.8 of 2025-05-06; downloaded twice and hashed 2026-11-10)",
+      "note": "The h3 and h3-quinn crates of the HTTP/3 implementation over Quinn, the second RFC 9220 peer of crd-quic-peer's WebSocket tunnels (4.2a): Cargo takes them over the registry crates by `--config patch.crates-io` (tools/qmux-crates `patched`), the rest of the set stays crates.io's. Test-only. Moves to the registry release that carries `Protocol::WEBSOCKET`."
+    },
     "nghttp3": {
       "version": "1.19.0",
       "repository": "ngtcp2/nghttp3",
@@ -1204,7 +1218,12 @@
       "ref": "qmux-v0.6.6",
       "commit": "ef8abdccdc0afbb23c993dd42611484eb1d655df",
       "license": "MIT OR Apache-2.0",
-      "note": "qmux 0.6.6 (2026-10-23, draft-ietf-quic-qmux-02) with its TLS and WebSocket (tokio-tungstenite 0.30) transports over rustls 0.23.46 and aws-lc-rs, h2 0.4.20 (2026-10-06) for its WebSocket tunnels over HTTP/2 (RFC 8441), and rcgen for the peer's self-signed certificate: the crate set of crd-qmux-crate-peer, the second implementation of the QMux interoperability test (CRD_BUILD_QMUX_VS_CRATE, 4.2a). The committed Cargo.lock is the pin: every crate from crates.io at the version and SHA-256 it names, which `cargo build --locked` verifies on download. Test-only, in no shipped build."
+      "note": "qmux 0.6.6 (2026-10-23, draft-ietf-quic-qmux-02) with its TLS and WebSocket (tokio-tungstenite 0.30) transports over rustls 0.23.46 and aws-lc-rs, h2 0.4.20 (2026-10-06) for its WebSocket tunnels over HTTP/2 (RFC 8441), h3 and h3-quinn from the pinned h3-crates archive over Quinn 0.11.12 for those over HTTP/3 (RFC 9220), and rcgen for the peer's self-signed certificate: the crate set of crd-qmux-crate-peer, the second implementation of the QMux interoperability test (CRD_BUILD_QMUX_VS_CRATE, 4.2a). The committed Cargo.lock is the pin: every other crate from crates.io at the version and SHA-256 it names, which `cargo build --locked` verifies on download. Test-only, in no shipped build.",
+      "patched": {
+        "h3": "0.0.8",
+        "h3-quinn": "0.0.10"
+      },
+      "patched_from": "h3-crates"
     },
     "cuda-linux-x64": {
       "version": "13.3.1",

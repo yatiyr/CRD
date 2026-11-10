@@ -18,7 +18,10 @@ WebSocket cases run the same application over WebSocket over HTTP/1.1 (RFC 6455)
 crate's side: one Binary message per record, as the crate's WebSocket transport and crd-net both write them. Tunnel
 cases run it over WebSockets on one HTTP/2 connection with prior knowledge (RFC 8441), the `h2` crate's extended CONNECT
 on the crate's side and crd-net's WebSocketTunnels on the other, one tunnel or two at once, and through the cutting and
-the silent relay too; a subprotocol the server does not take is refused with 400 before any QMux.
+the silent relay too; a subprotocol the server does not take is refused with 400 before any QMux. HTTP/3 tunnel cases
+(RFC 9220) run the same between crd-quic-peer's tunnels and the `h3` crate's over Quinn, real UDP, also through a relay
+that loses, duplicates, delays and reorders datagrams; the Cerid end reports how the QUIC connection ended (H3_NO_ERROR,
+the client closing once the server's GOAWAY came).
 
 0-RTT stays with crd-net's own tests and its fuzzing: the crate reads and writes QMux only after the handshake.
 """
@@ -30,6 +33,7 @@ import sys
 import threading
 import time
 
+import interop_common
 from interop_common import collect, expect, reports_of
 
 SEED = '11' * 32
@@ -38,6 +42,7 @@ CLOSE_REASON = 'cerid-interop done'
 RUN_SECONDS = 70
 RESET_CODE = '7'
 STOP_CODE = '9'
+H3_NO_ERROR = str(0x100)
 
 
 class Relay:
@@ -97,7 +102,8 @@ class Case:
     def __init__(self, cerid, crate, cerid_is_client, group='x25519mlkem768', cipher='aes128', streams=4,
                  size=256 << 10, closer='client', code=0, max_streams=16, uni=0, uni_size=0, resets=0, stops=0,
                  datagrams=0, datagram_bytes=1000, datagram_limit=None, resume=False, relay=None, idle_ms=None,
-                 keepalive_ms=None, hold_ms=None, record_size=None, crate_version=None, transport='tls', tunnels=1):
+                 keepalive_ms=None, hold_ms=None, record_size=None, crate_version=None, transport='tls', tunnels=1,
+                 path=None):
         self.cerid = cerid
         self.crate = crate
         self.cerid_is_client = cerid_is_client
@@ -122,8 +128,9 @@ class Case:
         self.hold_ms = hold_ms
         self.record_size = record_size
         self.crate_version = crate_version  # the crate offers or accepts only this QMux draft: a refusal
-        self.transport = transport  # tls, ws (WebSocket over HTTP/1.1) or h2 (WebSocket tunnels over HTTP/2)
-        self.tunnels = tunnels  # tunnels at once on the one HTTP/2 connection
+        self.transport = transport  # tls, ws (WebSocket over HTTP/1.1), h2 or h3 (WebSocket tunnels over HTTP/2 or 3)
+        self.tunnels = tunnels  # tunnels at once on the one HTTP connection
+        self.path = path  # the impairments of interop_common.Relay between two HTTP/3 ends
 
     def command(self, program, role, port):
         cerid = program == self.cerid
@@ -163,7 +170,8 @@ class Case:
             (f' {self.resets} resets' if self.resets else '') + (f' {self.stops} stops' if self.stops else '') + \
             (f' {self.datagrams} datagrams of {self.datagram_bytes}' if self.datagrams else '') + \
             (f' limit {self.datagram_limit}' if self.datagram_limit else '') + (' resume' if self.resume else '') + \
-            (f' relay {self.relay}' if self.relay else '') + (f' idle {self.idle_ms}' if self.idle_ms else '') + \
+            (f' relay {self.relay}' if self.relay else '') + (f' path {self.path}' if self.path else '') + \
+            (f' idle {self.idle_ms}' if self.idle_ms else '') + \
             (f' hold {self.hold_ms}' if self.hold_ms else '') + \
             (f' record {self.record_size}' if self.record_size else '') \
             + (f' crate draft {self.crate_version}' if self.crate_version else '') \
@@ -188,6 +196,9 @@ class Case:
             if self.relay is not None:
                 relay = Relay(port, **self.relay)
                 port = relay.port
+            elif self.path is not None:
+                relay = interop_common.Relay(port, **self.path)
+                port = relay.port
             client = subprocess.Popen(self.command(client_program, 'client', port), stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE, text=True)
             server_out = []
@@ -207,15 +218,19 @@ class Case:
                 if process is not None and process.poll() is None:
                     process.kill()
                     process.wait()
-            if relay is not None:
+            if isinstance(relay, Relay):
                 relay.close()
+            elif relay is not None:
+                relay.stop()
 
     def check(self, clients, servers, detail):
         connections = 2 if self.resume else self.tunnels
         # Tunnels end in any order: each report names its tunnel.
         clients, servers = (sorted(reports, key=lambda report: int(report['connection']))
                             for reports in (clients, servers))
-        if self.crate_version and self.transport == 'h2' and not self.cerid_is_client:
+        if self.transport == 'h3' and not self.crate_version:
+            self.check_quic_close(clients if self.cerid_is_client else servers, detail)
+        if self.crate_version and self.transport in ('h2', 'h3') and not self.cerid_is_client:
             # crd-net's WebSocketTunnels answers a refused CONNECT itself: no tunnel, so no report.
             expect(len(clients) == connections and not servers, f'other reports: {detail}')
             expect(all('400' in client.get('error', '') for client in clients), f'the crate failed otherwise: {detail}')
@@ -227,6 +242,13 @@ class Case:
                 self.check_refused(client, server, detail)
             else:
                 self.check_connection(number, client, server, detail)
+
+    def check_quic_close(self, cerid, detail):
+        """The Cerid end's QUIC connection, reported after its tunnels: H3_NO_ERROR, closed by the client."""
+        ended = [report for report in cerid if 'h3_close' in report]
+        expect(len(ended) == 1 and ended[0].get('h3_close_code') == H3_NO_ERROR, f'HTTP/3 ended otherwise: {detail}')
+        expect(ended[0]['h3_close'] == ('local' if self.cerid_is_client else 'application'),
+               f'the other end closed HTTP/3: {detail}')
 
     def check_refused(self, client, server, detail):
         cerid, crate = (client, server) if self.cerid_is_client else (server, client)
@@ -301,6 +323,8 @@ class Case:
 
 
 def websocket_cases(case, transport):
+    """The application's cases over a WebSocket carrier, with the impaired paths it can take: the cutting and the silent
+    TCP relay under TLS, HTTP/1.1 and HTTP/2, a lossy and reordering UDP one under HTTP/3."""
     yield case(transport=transport)
     yield case(closer='server', code=0x2A, transport=transport)
     yield case(streams=1, size=16 << 20, transport=transport)
@@ -317,16 +341,22 @@ def websocket_cases(case, transport):
     yield case(streams=4, datagrams=128, transport=transport)
     yield case(streams=0, datagrams=16, datagram_bytes=597, datagram_limit=600, transport=transport)
     yield case(streams=1, size=1024, idle_ms=900, keepalive_ms=250, hold_ms=2500, transport=transport)
-    for seed in (1, 2, 3):
-        yield case(streams=2, size=64 << 10, relay=dict(seed=seed, largest=7), transport=transport)
-    yield case(streams=0, closer='none', idle_ms=400, relay=dict(silent_after=0.2), transport=transport)
+    if transport == 'h3':
+        for seed in (1, 2, 3):
+            yield case(streams=2, size=256 << 10, transport=transport,
+                       path=dict(seed=seed, loss=0.05, duplicate=0.05, delay=0.005, jitter=0.01))
+    else:
+        for seed in (1, 2, 3):
+            yield case(streams=2, size=64 << 10, relay=dict(seed=seed, largest=7), transport=transport)
+        yield case(streams=0, closer='none', idle_ms=400, relay=dict(silent_after=0.2), transport=transport)
     yield case(streams=0, crate_version='01', transport=transport)
 
 
-def cases(cerid, crate):
+def cases(cerid, quic, crate):
     for cerid_is_client in (True, False):
         def case(**settings):
-            return Case(cerid, crate, cerid_is_client, **settings)
+            program = quic if settings.get('transport') == 'h3' else cerid
+            return Case(program, crate, cerid_is_client, **settings)
 
         for closer, code in (('client', 0), ('server', 0x2A)):
             yield case(closer=closer, code=code)
@@ -358,15 +388,22 @@ def cases(cerid, crate):
         yield case(transport='h2', tunnels=2)
         yield case(streams=8, size=1 << 20, datagrams=64, closer='server', code=5, transport='h2', tunnels=2)
         yield case(streams=2, size=64 << 10, relay=dict(seed=4, largest=7), transport='h2', tunnels=2)
+        yield from websocket_cases(case, 'h3')
+        yield case(transport='h3', tunnels=2)
+        yield case(streams=8, size=1 << 20, datagrams=64, closer='server', code=5, transport='h3', tunnels=2)
+        yield case(streams=2, size=256 << 10, transport='h3', tunnels=2,
+                   path=dict(seed=4, loss=0.05, duplicate=0.05, delay=0.005, jitter=0.01))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--cerid', required=True)
+    parser.add_argument('--cerid', required=True, help='crd-qmux-peer')
+    parser.add_argument('--quic', required=True, help='crd-quic-peer, the Cerid end of the HTTP/3 tunnels')
     parser.add_argument('--crate', required=True)
     parser.add_argument('--only', default='', help='run only the cases whose description contains this text')
     arguments = parser.parse_args()
-    all_cases = [case for case in cases(arguments.cerid, arguments.crate) if arguments.only in case.describe()]
+    all_cases = [case for case in cases(arguments.cerid, arguments.quic, arguments.crate)
+                 if arguments.only in case.describe()]
     failures = 0
     for index, case in enumerate(all_cases):
         try:

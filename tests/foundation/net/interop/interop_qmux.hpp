@@ -1,8 +1,11 @@
 #pragma once
 
-// crd-net interoperability tests (4.2a) -- what crd-qmux-peer reports of a QMux connection, and the WebSocket tunnels
-// (RFC 8441, RFC 9220) that carry QMux over an HTTP connection, each running interop_echo.hpp's application.
+// crd-net interoperability tests (4.2a) -- the QMux connection crd-qmux-peer runs and reports, and the WebSocket
+// tunnels (RFC 8441 in crd-qmux-peer, RFC 9220 in crd-quic-peer) that carry QMux over an HTTP connection, each running
+// interop_echo.hpp's application.
 //
+//   options  --alpn (the QMux protocol, a tunnel's subprotocol), --idle-ms (default 30000) and --keepalive-ms (a
+//            QX_PING after this long with no record)
 //   tunnels  a client opens `connections` tunnels at once on its one HTTP connection; a server serves that many, in the
 //            order they opened. Each tunnel's report goes out when it has ended, `connection=N` as on every other path.
 //   refusal  a client's tunnel the server refused reports `close=upgrade-refused` with the status; a server never sees
@@ -17,13 +20,101 @@
 #include <crd/net/host_handle.hpp>
 #include <crd/net/qmux.hpp>
 #include <crd/net/udp.hpp>
+#include <crd/net/websocket.hpp>
 #include <crd/net/websocket_tunnel.hpp>
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 namespace crd_net_interop
 {
 inline constexpr char kQmuxCloseReason[] = "cerid-interop done";
+inline constexpr StringView kQmuxHost = "cerid.test";
+inline constexpr StringView kQmuxPath = "/interop";
+inline constexpr u32 kQmuxStreamBytes = 65536U;
+inline constexpr u64 kQmuxConnectionWindow = 1U << 22U;
+inline constexpr u64 kQmuxConnectionMaxWindow = 1U << 24U;
+inline constexpr u32 kQmuxDatagramRingBytes = 1U << 20U;
+inline constexpr u32 kQmuxDatagramRingCount = 2048U;
+
+struct QmuxOptions : EchoOptions
+{
+    StringView alpn;
+    u64 idle_ms = 30000U;
+    u64 keepalive_ms = 0U;
+};
+
+// One of the options above: false when `name` is none of them.
+[[nodiscard]] inline bool parse_qmux_option(const char* name, const char* value, QmuxOptions& options) noexcept
+{
+    if (std::strcmp(name, "--alpn") == 0)
+    {
+        options.alpn = StringView(value, std::strlen(value));
+        return true;
+    }
+    u64* const number = std::strcmp(name, "--idle-ms") == 0        ? &options.idle_ms
+                        : std::strcmp(name, "--keepalive-ms") == 0 ? &options.keepalive_ms
+                                                                   : nullptr;
+    if (number != nullptr)
+    {
+        *number = std::strtoull(value, nullptr, 10);
+    }
+    return number != nullptr;
+}
+
+[[nodiscard]] inline ConstSpan<u8> bytes_of(StringView text) noexcept
+{
+    return ConstSpan<u8>(reinterpret_cast<const u8*>(text.data()), text.size());
+}
+
+// A QMux connection running the echo: its streams, datagrams and timers.
+[[nodiscard]] inline crd::net::QmuxConfig qmux_config(const QmuxOptions& options) noexcept
+{
+    crd::net::QmuxConfig config;
+    const u64 uni = options.uni + options.resets + options.stops;
+    config.streams.peer_bidi = static_cast<u32>(options.max_streams);
+    config.streams.local_bidi = static_cast<u32>(options.max_streams);
+    config.streams.peer_uni = static_cast<u32>(uni != 0U ? uni : 1U);
+    config.streams.local_uni = static_cast<u32>(uni != 0U ? uni : 1U);
+    config.streams.receive_bytes = kQmuxStreamBytes;
+    config.streams.send_bytes = kQmuxStreamBytes;
+    config.streams.stream_window = kQmuxStreamBytes;
+    config.streams.connection_window = kQmuxConnectionWindow;
+    config.streams.connection_max_window = kQmuxConnectionMaxWindow;
+    if (options.datagrams != 0U)
+    {
+        config.datagrams.max_frame_bytes = static_cast<u32>(options.datagram_limit);
+        config.datagrams.receive_bytes = kQmuxDatagramRingBytes;
+        config.datagrams.receive_count = kQmuxDatagramRingCount;
+        config.datagrams.send_bytes = kQmuxDatagramRingBytes;
+        config.datagrams.send_count = kQmuxDatagramRingCount;
+    }
+    config.idle_timeout_ns = options.idle_ms * 1000000U;
+    config.keepalive_ns = options.keepalive_ms * 1000000U;
+    return config;
+}
+
+// The WebSocket opening handshake's request; `protocols` outlive it.
+[[nodiscard]] inline crd::net::WebSocketConfig websocket_config(ConstSpan<ConstSpan<u8>> protocols) noexcept
+{
+    crd::net::WebSocketConfig websocket;
+    websocket.protocols = protocols;
+    websocket.path = bytes_of(kQmuxPath);
+    websocket.host = bytes_of(kQmuxHost);
+    return websocket;
+}
+
+// `connections` tunnels, each a QMux connection of `options` over `websocket` (which outlives what this makes).
+[[nodiscard]] inline crd::net::WsTunnelConfig tunnel_config(const QmuxOptions& options,
+                                                            const crd::net::WebSocketConfig& websocket) noexcept
+{
+    crd::net::WsTunnelConfig tunnels;
+    tunnels.connection = qmux_config(options);
+    tunnels.connection.websocket = &websocket;
+    tunnels.tunnels = static_cast<u32>(options.connections);
+    return tunnels;
+}
 
 [[nodiscard]] inline const char* qmux_close_name(const crd::net::QmuxCloseInfo& info) noexcept
 {
