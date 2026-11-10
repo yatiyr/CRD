@@ -1,72 +1,118 @@
 #!/usr/bin/env python3
-"""Iteration-free K(m), E(m) via minimax rationals (generate-don't-transcribe); replaces the ~6-sqrt AGM chain.
-Gate = 1e-12 rel + 1e-13 abs vs scipy. K direct-rational over [0,0.9] (the m=1 log-branch caps a wider range);
-its tail [0.9,1) uses the Cody form A(m1)+L·B(m1) (L=-ln m1 removes the branch). E is finite at m=1 ⇒ [0,0.94] rational."""
+"""Iteration-free K(m), E(m) on m in [0, 1): the Cody form F(m) = A(m1) + (-ln m1) B(m1), m1 = 1 - m (the -ln m1 carries
+the logarithmic branch at m = 1, so one fast path covers the whole interval).
+
+Two pieces, because the polynomials A and B are each singular (a logarithm) at m1 = 1 and a fit that also had to follow
+the small m1 side was good to only 1e-11 there:
+  * m1 in [kEllTail, 1]: A and B are degree-10 polynomials fitted to mpmath values (relative error, Chebyshev nodes, a
+    reweighted least squares that approaches the minimax);
+  * m1 below kEllTail: the exact expansion about m1 = 0, K = sum c_n^2 m1^n (L/2 + d(n)) (DLMF 19.12.1), c_n = (1/2)_n / n!,
+    d(n) = psi(1+n) - psi(1/2+n), L = -ln m1, and E from it through dK/dm = (E - (1 - m) K) / (2 m (1 - m)); cut at the degree
+    whose first omitted term is below 1e-17 relative at m1 = kEllTail.
+The gate is 1e-13 relative over the whole interval (the module's limit is 1e-12 + 1e-13): the run fails above it."""
 import sys
+import mpmath as mp
 import numpy as np
 from numpy.polynomial import chebyshev as Ch
-from scipy import special
+from numpy.polynomial import polynomial as P
+
+mp.mp.dps = 40
+TAIL = 0.01
+DEGREE = 10
+TAIL_DEGREE = 9  # coefficients 0..8
 
 
-def cheb_nodes(a, b, n):
+def truth(kind, m1):
+    m = 1 - mp.mpf(m1)
+    return mp.ellipk(m) if kind == "K" else mp.ellipe(m)
+
+
+def cody_fit(kind, lo, hi, deg, n=2500, passes=40):
     k = np.arange(n)
-    return 0.5 * (a + b) + 0.5 * (b - a) * np.cos((2 * k + 1) * np.pi / (2 * n))
-
-
-def rat_fit(x, f, scale, a, b, m, n, npass=60):
-    t = (2 * x - (a + b)) / (b - a)
-    ac = np.arccos(np.clip(t, -1, 1))
-    TP = np.cos(np.outer(ac, np.arange(m + 1)))
-    TQ = np.cos(np.outer(ac, np.arange(1, n + 1)))
-    w = 1.0 / scale
-    best = None
-    for _ in range(npass):
-        A = np.hstack([TP * w[:, None], -(f * w)[:, None] * TQ])
-        sol, *_ = np.linalg.lstsq(A, f * w, rcond=None)
-        p, qj = sol[:m + 1], sol[m + 1:]
-        Qv = 1.0 + TQ @ qj
-        r = np.abs((TP @ p) / Qv - f) / scale
-        if best is None or r.max() < best[1]:
-            best = ((p, np.concatenate([[1.0], qj])), r.max())
-        w = (1.0 / scale) / np.abs(Qv) * np.clip((r / max(r.max(), 1e-300)) ** 0.5, 0.25, 1.0)
-    (p, q), e = best
-    return Ch.cheb2poly(p), Ch.cheb2poly(q), e
-
-
-def cody_fit(func, a1, b1, deg):
-    # F(m) = A(m1) + (-ln m1) B(m1), m1=1-m in [a1,b1]; linear LSQ, relative-weighted. monomial-in-m1.
-    u = (np.arange(8000) + 0.5) / 8000.0
-    m1 = a1 + (b1 - a1) * u  # uniform grid (Chebyshev clustering near m1→0 wrecks the conditioning)
-    f = func(1.0 - m1)
-    L = -np.log(m1)
-    cols = [m1 ** j for j in range(deg + 1)] + [L * m1 ** j for j in range(deg + 1)]
-    M = np.vstack(cols).T
+    u = np.cos((2 * k + 1) * np.pi / (2 * n))
+    m1 = 0.5 * (lo + hi) + 0.5 * (hi - lo) * u
+    f = np.array([float(truth(kind, v)) for v in m1])
+    ell = -np.log(m1)
+    tv = Ch.chebvander(u, deg)
+    mat = np.hstack([tv, tv * ell[:, None]])
     w = 1.0 / np.abs(f)
-    coef, *_ = np.linalg.lstsq(M * w[:, None], f * w, rcond=None)
-    A, B = coef[:deg + 1], coef[deg + 1:]
-    approx = np.polyval(A[::-1], m1) + L * np.polyval(B[::-1], m1)
-    return A, B, (np.abs(approx - f) / np.abs(f)).max()
+    best = None
+    for _ in range(passes):
+        coef, *_ = np.linalg.lstsq(mat * w[:, None], f * w, rcond=None)
+        r = np.abs(mat @ coef - f) / np.abs(f)
+        worst = r.max()
+        if best is None or worst < best[0]:
+            best = (worst, coef.copy())
+        w = w * (0.5 + r / worst)
+        w = w / w.max() / np.abs(f).min()
+    coef = best[1]
+
+    def monomial(c):
+        pc = Ch.cheb2poly(c)  # in u = (2 m1 - (lo + hi)) / (hi - lo)
+        lin = np.array([-(lo + hi) / (hi - lo), 2.0 / (hi - lo)])
+        out = np.zeros(len(pc))
+        pw = np.array([1.0])
+        for cj in pc:
+            out[:len(pw)] += cj * pw
+            pw = P.polymul(pw, lin)
+        return out
+
+    return monomial(coef[:deg + 1]), monomial(coef[deg + 1:])
+
+
+def tail_series(kind, degree):
+    d = lambda n: mp.digamma(1 + n) - mp.digamma(mp.mpf(1) / 2 + n)
+    ka = [mp.mpf(0)] * (degree + 1)
+    kb = [mp.mpf(0)] * (degree + 1)
+    for n in range(degree + 1):
+        c2 = (mp.rf(mp.mpf(1) / 2, n) / mp.factorial(n)) ** 2
+        ka[n] = c2 * d(n)
+        kb[n] = c2 / 2
+    if kind == "K":
+        return [float(v) for v in ka[:degree]], [float(v) for v in kb[:degree]]
+    # E = m1 K - 2 m1 (1 - m1) dK/dm1 (the relation dK/dm = (E - (1 - m) K) / (2 m (1 - m)) in m1 = 1 - m), term by term
+    # on K = A + L B, L = -ln m1, dL/dm1 = -1/m1: E = [m1 A - 2 m1 (1 - m1) A' + 2 (1 - m1) B] + L [m1 B - 2 m1 (1 - m1) B'].
+    def at(c, j):
+        return c[j] if 0 <= j <= degree else mp.mpf(0)
+
+    ea = [(2 * j - 1) * at(ka, j - 1) - 2 * j * at(ka, j) + 2 * at(kb, j) - 2 * at(kb, j - 1) for j in range(degree)]
+    eb = [(2 * j - 1) * at(kb, j - 1) - 2 * j * at(kb, j) for j in range(degree)]
+    return [float(v) for v in ea], [float(v) for v in eb]
+
+
+def horner(c, x):
+    r = c[-1]
+    for v in c[-2::-1]:
+        r = r * x + v
+    return r
 
 
 def arr(name, c):
     print(f"inline constexpr double k{name}[] = {{{', '.join(f'{v:.17e}' for v in c)}}};")
 
 
-print("// GENERATED by gen_elliptic_poly.py — iteration-free K(m)/E(m) minimax (v12-d perf).")
+print("// GENERATED by gen_elliptic_poly.py — iteration-free K(m)/E(m): Cody-form polynomials on m1 = 1 - m in [kEllTail, 1] and")
+print("// the exact series about m1 = 0 below it.")
 print("#pragma once")
 print("namespace crd::hesap::special::detail {")
-errs = []
-# K full-range Cody form A(m1)+L·B(m1) over m1 in (1e-9, 1]  (the −ln m1 removes the m=1 branch ⇒ one fast path).
-A, B, e = cody_fit(special.ellipk, 1e-9, 1.0, 10)
-arr("EllKcodyA", A)
-arr("EllKcodyB", B)
-errs.append(("K-cody[0,1)", e))
-# E full-range Cody form likewise (E finite at m=1 ⇒ B(1)→0, the fit finds it).
-A, B, e = cody_fit(special.ellipe, 1e-9, 1.0, 10)
-arr("EllEcodyA", A)
-arr("EllEcodyB", B)
-errs.append(("E-cody[0,1)", e))
+print(f"inline constexpr double kEllTail = {TAIL!r};")
+worst = 0.0
+for kind in ("K", "E"):
+    a, b = cody_fit(kind, TAIL, 1.0, DEGREE)
+    ta, tb = tail_series(kind, TAIL_DEGREE)  # 9 coefficients, degree 8
+    arr(f"Ell{kind}codyA", a)
+    arr(f"Ell{kind}codyB", b)
+    arr(f"Ell{kind}tailA", ta)
+    arr(f"Ell{kind}tailB", tb)
+    grid = list(np.geomspace(1e-16, TAIL, 300, endpoint=False)) + list(np.geomspace(TAIL, 1.0, 600))
+    for m1 in grid:
+        ell = -np.log(m1)
+        if m1 < TAIL:
+            v = horner(ta, m1) + ell * horner(tb, m1)
+        else:
+            v = horner(a, m1) + ell * horner(b, m1)
+        t = truth(kind, m1)
+        worst = max(worst, float(abs(mp.mpf(v) - t) / t))
 print("} // namespace")
-for name, e in errs:
-    print(f"// {name}: {e:.2e}", file=sys.stderr)
-sys.exit(0 if max(e for _, e in errs) < 1e-12 else 1)
+print(f"// worst relative error against mpmath over the whole interval: {worst:.2e}", file=sys.stderr)
+sys.exit(0 if worst < 1e-13 else 1)

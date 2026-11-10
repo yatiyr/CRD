@@ -7,7 +7,8 @@
 // Ei via minimax (small/mid x) + the asymptotic series (large x, DLMF §6.12(i)); Si/Ci via the Maclaurin series
 // (|x|≤2, DLMF §6.6(i)) + the continued fraction of E₁(ix) (|x|>2, DLMF §6.9 with the §6.5 link to Si/Ci). Both
 // fractions are summed from their convergents' successive differences (Euler–Wallis form). Gated vs scipy.special
-// (exp1/expi/expn/sici) to <1e-13. (Internals f64, public templates cast for f32.)
+// (exp1/expi/expn/sici) to <1e-13. (Internals f64, public templates cast for f32.) Limits: E₀(0) = E₁(0) = +∞,
+// Ei(+∞) = +∞ (finite to x ≈ 716), Si(±∞) = ±π/2, Ci(±∞) = 0.
 
 #include <crd/hesap/special/gamma.hpp> // Real concept
 
@@ -25,13 +26,18 @@ inline constexpr double kEuler = 0.577215664901532860606512090082402431; // γ
 inline constexpr double kEiEps = 1.0e-16;
 inline constexpr double kEiFpMin = 1.0e-300;
 inline constexpr int kEiMaxIt = 10000;
+inline constexpr double kEiSplitExp = 700.0; // Ei: above this e^x is formed as (e^{x/2})² to keep it finite
 
 // Eₙ(x), n ≥ 0, x ≥ 0 (DLMF §8.19): the convergent series for x ≤ 1, the continued fraction for x > 1.
 [[nodiscard]] inline double expint_en_impl(int n, double x) noexcept
 {
-    if (n < 0 || x < 0.0 || (x == 0.0 && n < 2) || x != x)
+    if (n < 0 || x < 0.0 || x != x)
     {
         return std::numeric_limits<double>::quiet_NaN();
+    }
+    if (x == 0.0 && n < 2)
+    {
+        return std::numeric_limits<double>::infinity(); // E₀ and E₁ diverge at the origin
     }
     if (n == 0)
     {
@@ -179,6 +185,17 @@ inline constexpr int kEiMaxIt = 10000;
         tail += term;
         term *= static_cast<double>(k) * inv_x;
     }
+    if (x > kEiSplitExp)
+    {
+        // e^x overflows from x = 709.78 while Ei stays finite to x ≈ 716: form e^{x/2} twice, the second time after the
+        // division (and Ei(+∞) = +∞, where that division would give 0·∞).
+        if (!(x < std::numeric_limits<double>::infinity()))
+        {
+            return x;
+        }
+        const double half = crd::math::exp(0.5 * x);
+        return half * ((1.0 + tail) * inv_x * half);
+    }
     return crd::math::exp(x) * (1.0 + tail) / x;
 }
 
@@ -194,6 +211,12 @@ inline void cisi_impl(double x, double& ci, double& si) noexcept
     }
     if (t > 2.0)
     {
+        if (t == std::numeric_limits<double>::infinity())
+        {
+            ci = 0.0; // Ci(±∞) = 0, Si(±∞) = ±π/2 (DLMF §6.2(ii))
+            si = (x > 0.0) ? 1.5707963267948966 : -1.5707963267948966;
+            return;
+        }
         // E₁(it) = e^{−it}·K, K = 1/(β₁ + α₂/(β₂ + …)), β_k = 2k−1 + it, α_k = −(k−1)² (DLMF §6.9), and
         // Ci(t) = −Re E₁(it), Si(t) = π/2 + Im E₁(it) (§6.5). K is summed from its convergents' differences
         // Δ_k = −α_k·(q_{k−2}/q_k)·Δ_{k−1} (Δ₁ = 1/β₁, q_k = β_k·q_{k−1} + α_k·q_{k−2}), all complex, one division a

@@ -566,6 +566,21 @@ TEST_CASE("special erf: erf/erfc/erfcx/erfinv/erfcinv/dawson vs scipy", "[v12-a]
     }
 }
 
+TEST_CASE("special erf: dawson at infinity and past 1e300 (the lattice index overflows from 9e307)",
+          "[v12-a][special][erf]")
+{
+    const f64 inf = std::numeric_limits<f64>::infinity();
+    CHECK(sf::dawson(inf) == 0.0);
+    CHECK(sf::dawson(-inf) == 0.0);
+    CHECK(std::signbit(sf::dawson(-inf)));
+    CHECK(std::isnan(sf::dawson(std::numeric_limits<f64>::quiet_NaN())));
+    // D(x) = 1/(2x) to every digit there (scipy: 2.941176470588236e-309 at 1.7e308; subnormal results)
+    chk(sf::dawson(1.7e308), 2.941176470588236e-309, 1e-12, 0.0, "dawson", 0);
+    chk(sf::dawson(-1.0e300), -5.0e-301, 1e-12, 0.0, "dawson", 1);
+    chk(sf::dawson(9.5e307), 5.263157894736842e-309, 1e-12, 0.0, "dawson", 2);
+    CHECK(sf::dawson(std::numeric_limits<float>::infinity()) == 0.0F);
+}
+
 TEST_CASE("special: independent std:: cross-check (oracle without the .inc)", "[v12-a][special]")
 {
     for (double x : {0.3, 0.7, 1.0, 1.5, 2.0, 3.5, 7.0, 12.5, 30.0})

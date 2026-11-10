@@ -2,7 +2,9 @@
 
 // crd-hesap-special v12-d — Fresnel integrals S(x)=∫₀ˣ sin(πt²/2)dt, C(x)=∫₀ˣ cos(πt²/2)dt: the Maclaurin series
 // (DLMF §7.6(i)) for |x| ≤ 1.5, the complex continued fraction of erfc (DLMF §7.9 with §7.2(iii)) for larger |x|,
-// summed from its convergents' successive differences. Gated vs scipy.special.fresnel to <1e-13.
+// summed from its convergents' successive differences. Gated vs scipy.special.fresnel to <1e-13 (to |x| ≈ 5·10⁴;
+// beyond it scipy's own phase πx²/2 is rounded and loses digits, the phase here is reduced from x² mod 4). S, C → ±½
+// at ±∞.
 
 #include <crd/hesap/special/gamma.hpp> // Real concept
 
@@ -18,6 +20,7 @@ inline void fresnel_impl(double x, double& s, double& c) noexcept
     constexpr int maxit = 100;
     constexpr double fpmin = 1.0e-300;
     constexpr double xmin = 1.5;
+    constexpr double kPhaseSplit = 256.0; // beyond this the phase is formed from x² mod 4 (see the continued fraction)
     constexpr double piby2 = 1.5707963267948966192313216916397514;
     const double ax = crd::math::fabs(x);
     if (ax < crd::math::sqrt(fpmin))
@@ -56,6 +59,13 @@ inline void fresnel_impl(double x, double& s, double& c) noexcept
         }
         c = ax * cos_sum;
         s = ax * sin_sum;
+    }
+    else if (ax > 1.0e154)
+    {
+        // The correction e^{iπx²/2}(1−i)xK of the fraction has modulus ≈ √2/(πx) < 10⁻¹⁵⁴ (and πx² overflows from
+        // 7.5·10¹⁵³): C = S = ½ (sign applied below), also at ∞.
+        s = 0.5;
+        c = 0.5;
     }
     else
     {
@@ -110,9 +120,26 @@ inline void fresnel_impl(double x, double& s, double& c) noexcept
         // E = e^{iπx²/2}·(1−i)x·K
         const double hr = ax * (k_re + k_im);
         const double hi = ax * (k_im - k_re);
+        // The phase πx²/2 is needed to a fraction of a radian however large x² is, and a rounded πx² carries an error
+        // of 1.1·10⁻¹⁶·πx²: beyond kPhaseSplit that error shows in the result (about 10⁻¹⁶·x). Since the phase is
+        // (π/2)·x², only x² mod 4 matters. x² = sq + err exactly (Dekker's product: ax split into two 26-bit halves
+        // by Veltkamp's 2²⁷+1 multiplier), and sq − 4·n for the integer n nearest sq/4 (rounded by adding and removing
+        // 2⁵², exact beyond it too: a rounding error there is again an integer) is an exact subtraction of numbers of
+        // the same binade, in (−2, 2].
+        double phase = 0.5 * pix2;
+        if (ax > kPhaseSplit)
+        {
+            const double sq = ax * ax;
+            const double split = 134217729.0 * ax;
+            const double high = split - (split - ax);
+            const double low = ax - high;
+            const double err = ((high * high - sq) + 2.0 * high * low) + low * low;
+            const double whole = (0.25 * sq + 4503599627370496.0) - 4503599627370496.0;
+            phase = piby2 * ((sq - 4.0 * whole) + err);
+        }
         double sn;
         double cs;
-        crd::math::sincos(0.5 * pix2, sn, cs);
+        crd::math::sincos(phase, sn, cs);
         const double e_re = cs * hr - sn * hi;
         const double e_im = cs * hi + sn * hr;
         c = 0.5 * (1.0 - e_re + e_im);

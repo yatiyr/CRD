@@ -12,6 +12,8 @@
 
 #include <crd/math/cmath.hpp>
 
+#include <algorithm>
+#include <limits>
 #include <type_traits>
 
 namespace crd::hesap::special
@@ -340,6 +342,12 @@ template <Real T>
             sum += term;
         }
         return sum;
+    }
+    // The lattice index 2|x|/h overflows from x = 9·10³⁰⁷; beyond 10³⁰⁰ D(x) = 1/(2x) to every digit (the next term of
+    // D ~ 1/(2x) + 1/(4x³) + … is 10⁻⁶⁰⁰ of it). D(±∞) = ±0, and a NaN stays a NaN.
+    if (!(ax < static_cast<T>(std::min(1.0e300, static_cast<double>(std::numeric_limits<T>::max())))))
+    {
+        return crd::math::copysign(static_cast<T>(0.5) / ax, x);
     }
     // Narrow types run the rotation and the sum in double (the recurrence accumulates rounding that a binary32 sum
     // would carry into the result); the result is rounded once at the end.
