@@ -228,7 +228,9 @@ template <bool Trace>
         }
         if (crd::math::fabs(t) <= 1e-18 * crd::math::fabs(sum) && m >= ask_from)
         {
-            if (struve_may_stop(m, nu, half * half))
+            // H stops as before: its samples near the crossings (seeds 3013 and 7007) gave no point that the test
+            // changes, while asking it cost H at orders of −40 and below 3 to 11 %.
+            if (sign < 0.0 || struve_may_stop(m, nu, half * half))
             {
                 break;
             }
