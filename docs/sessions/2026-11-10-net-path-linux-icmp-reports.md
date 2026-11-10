@@ -9,7 +9,7 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S68](../design/network-f
 
 - Run 42774048974 (c5a06d38), win-tidy: `test_congestion.cpp`'s pacer case named its local constants `kRate` and
   `kBurst`, which the naming rule refuses for a non-static local; they are now `static constexpr` like the other net
-  tests' (868ceb65). Its other failure, `test_direct_search.cpp`, is the other owner's. win-arm64-debug's C4324 was
+  tests' (8eecd439). Its other failure, `test_direct_search.cpp`, is the other owner's. win-arm64-debug's C4324 was
   fixed by b2dac68b; no run with it has finished.
 
 ## What landed
@@ -26,6 +26,7 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S68](../design/network-f
   needs metric 256 to replace the link's). `[.netns]` cases; CTest `crd-net-router-namespace` under `unshare -Urn`
   (`CRD_BUILD_NET_NAMESPACE_TESTS`, linux-gcc-public-checks, whose CI step now also loads veth).
 - `test_quic_client.cpp`'s real-socket host setup is one `RealHosts` helper, shared by the loopback and router cases.
+- Commits: 8eecd439 fix, d5432c9c feat, 498bae34 docs.
 
 ## Evidence
 
