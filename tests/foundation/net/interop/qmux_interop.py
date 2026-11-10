@@ -386,7 +386,9 @@ def cases(cerid, quic, crate):
         # Nothing tells the closing end its resets were read, and a CONNECTION_CLOSE ends the crate's readers: the hold
         # gives them a second, the settling time the datagram cases use.
         yield case(streams=0, resets=4, hold_ms=1000)
-        yield case(streams=0, stops=4)
+        # The closing end completes in the turn it asks for its last stop, and its CONNECTION_CLOSE is immediate (RFC
+        # 9000 section 10.2): a STOP_SENDING still queued then goes nowhere. The hold lets it out first (1 run in 80).
+        yield case(streams=0, stops=4, hold_ms=1000)
         yield case(streams=2, size=64 << 10, uni=4, uni_size=64 << 10, resets=2, stops=2, closer='server', code=3)
         yield case(streams=0, datagrams=128)
         yield case(streams=4, datagrams=128)
