@@ -5,7 +5,7 @@
 # QUIC frames and transport parameters, QUIC packets per level, acknowledgements and loss recovery, byte streams and
 # flow control, the connection's stream set and datagrams, the connection carrying them, the server behind the
 # ingress and the client's host, byte-stream sockets on the loopback and QMux over them, also as WebSocket tunnels over
-# HTTP/2 and HTTP/3; NET-PATH's congestion control (BBRv3 with its delivery rate samples over a simulated
+# HTTP/2 and HTTP/3; NET-PATH's congestion control (BBRv3 with its delivery rate samples and Prague over a simulated
 # bottleneck), pacing and ECN, alone and in the connection.
 add_executable(crd-net-tests
     test_admission.cpp
@@ -29,6 +29,7 @@ add_executable(crd-net-tests
     test_ingress.cpp
     test_io_loop.cpp
     test_negotiation.cpp
+    test_prague.cpp
     test_qmux.cpp
     test_qmux_host.cpp
     test_qmux_http2.cpp

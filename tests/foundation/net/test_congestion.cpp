@@ -506,7 +506,9 @@ TEST_CASE("congestion: a period whose every loss proved spurious is undone, and 
         // An ECN mark is a congestion event no acknowledgement undoes.
         Controller marked(policy_of(algorithm));
         marked.send(0U, 9U, 0U);
-        marked->on_congestion(0U, 100U * kMs);
+        marked->on_ecn(9U, 0U, 0U, 100U * kMs); // marked packets without CE: no signal
+        CHECK(marked->window() == 12000U);
+        marked->on_ecn(9U, 1U, 0U, 100U * kMs);
         CHECK(marked->window() < 12000U);
         CHECK(marked->state().reductions == 1U);
         marked->on_lost(packet(1U, 0U), 110U * kMs); // inside the mark's period: no second reduction

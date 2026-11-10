@@ -5,7 +5,10 @@
 // reorder with reductions made and the bytes intact, and policies out of range refused. And ECN (#ecn): a path that
 // carries it validated in the handshake and marked from then on, CE marks reducing the window without a loss at most
 // once a round trip, paths that bleach, re-mark or drop marked packets failing validation while the data arrives
-// unmarked, validation holding over lossy, duplicating, reordering paths, ECT(1) for L4S and a policy that marks none.
+// unmarked, validation holding over lossy, duplicating, reordering paths, and a policy that marks none. And Prague
+// (#prague): ECT(1) marked and validated, its codepoint following a live swap both ways, ECT(1) re-marked as ECT(0)
+// failing validation, and a transfer through a DualQ bottleneck's L4S step that keeps the queue near its 1 ms step
+// at a full link, where CUBIC's ECT(0) fills the classic drop-tail queue.
 
 #include "ingress_fixture.hpp"
 #include "quic_connection_fixture.hpp"
@@ -110,7 +113,7 @@ struct Pair
     QuicConnection server;
     std::unique_ptr<Net> net;
 
-    explicit Pair(const CongestionPolicy& policy, usize seed = 0U, Ecn ecn = Ecn::Ect0)
+    explicit Pair(const CongestionPolicy& policy, usize seed = 0U, bool ecn = true)
         : client(allocator, with(bulk_config(QuicSide::Client, identity, seed), policy, ecn)),
           server(allocator, with(bulk_config(QuicSide::Server, identity, seed + 1U), policy, ecn))
     {
@@ -125,7 +128,7 @@ struct Pair
         }
     }
 
-    static QuicConnectionConfig with(QuicConnectionConfig config, const CongestionPolicy& policy, Ecn ecn)
+    static QuicConnectionConfig with(QuicConnectionConfig config, const CongestionPolicy& policy, bool ecn)
     {
         config.congestion = policy;
         config.ecn = ecn;
@@ -498,11 +501,13 @@ TEST_CASE("QUIC ECN: validation holds over paths that lose, duplicate and reorde
     }
 }
 
-TEST_CASE("QUIC ECN: an ECT(1) policy marks and validates ECT(1), and a policy without a codepoint marks nothing",
-          "[net][net-path][quic-connection][quic-ecn]")
+TEST_CASE("QUIC ECN: Prague marks and validates ECT(1), its codepoint follows a live swap, and no ECN marks nothing",
+          "[net][net-path][quic-connection][quic-ecn][prague]")
 {
+    CongestionPolicy prague;
+    prague.algorithm = CongestionAlgorithm::Prague;
     {
-        Pair pair(CongestionPolicy{}, 0U, Ecn::Ect1);
+        Pair pair(prague);
         pair.confirm();
         Bulk bulk{pair.client, pair.server, 1U << 16U};
         REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
@@ -511,9 +516,40 @@ TEST_CASE("QUIC ECN: an ECT(1) policy marks and validates ECT(1), and a policy w
         const EcnCounts& counted = pair.server.recovery().received(QuicSpace::Application).ecn();
         CHECK(counted.ect1 > 0U);
         CHECK(counted.ect0 == 0U);
+        // A live swap to CUBIC marks ECT(0) from then on, and back to Prague ECT(1), the path staying validated.
+        REQUIRE(pair.client.set_congestion(CongestionPolicy{}));
+        Bulk more{pair.client, pair.server, 1U << 16U};
+        more.written = bulk.total;
+        more.read = bulk.total;
+        more.total = 2U * bulk.total;
+        REQUIRE(pair.net->run_until([&] { return more.step(); }));
+        CHECK(pair.client.marking() == Ecn::Ect0);
+        CHECK(counted.ect0 > 0U);
+        const u64 ect1 = counted.ect1;
+        REQUIRE(pair.client.set_congestion(prague));
+        more.total = 3U * bulk.total;
+        REQUIRE(pair.net->run_until([&] { return more.step(); }));
+        CHECK(pair.client.marking() == Ecn::Ect1);
+        CHECK(counted.ect1 > ect1);
+        CHECK(pair.client.ecn().state() == QuicEcnState::Capable);
+        CHECK(pair.client.counters().ecn_signals == 0U);
     }
     {
-        Pair pair(CongestionPolicy{}, 0U, Ecn::NotEct);
+        // ECT(1) re-marked as ECT(0) on the way: counts above what was sent with that codepoint.
+        Pair pair(prague);
+        for (Path& path : pair.net->path)
+        {
+            path.ecn = EcnPath::Remark;
+        }
+        pair.confirm();
+        Bulk bulk{pair.client, pair.server, 1U << 16U};
+        REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
+        CHECK(pair.client.ecn().state() == QuicEcnState::Failed);
+        CHECK(pair.client.ecn().failure() == QuicEcnFailure::Exceeded);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+    }
+    {
+        Pair pair(prague, 0U, false);
         pair.confirm();
         Bulk bulk{pair.client, pair.server, 1U << 16U};
         REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
@@ -523,11 +559,60 @@ TEST_CASE("QUIC ECN: an ECT(1) policy marks and validates ECT(1), and a policy w
             CHECK(pair.net->marked[end] == 0U);
         }
     }
-    // CE is no codepoint to send: refused.
-    Identity identity;
-    CountingAllocator allocator;
-    QuicConnectionConfig config = bulk_config(QuicSide::Client, identity, 0U);
-    config.ecn = Ecn::Ce;
-    const QuicConnection refused(allocator, config);
-    CHECK_FALSE(refused.ready());
+}
+
+TEST_CASE("QUIC Prague: through an L4S step the queue stays near the step at a full link, CUBIC's fills the buffer",
+          "[net][net-path][quic-connection][quic-ecn][prague]")
+{
+    static constexpr u64 kRate = 2000000U;             // 16 Mbit/s
+    static constexpr usize kBdp = kRate / 1000U * 50U; // the Pair's 50 ms round trip: 100 KB
+    static constexpr usize kStep = kRate / 1000U;      // 1 ms of queue (RFC 9332 section 2.4's step)
+    struct Run
+    {
+        u64 goodput = 0U;    // bytes per second over the second half
+        u64 max_queued = 0U; // over the second half
+        u64 marks = 0U;
+        u64 overflowed = 0U;
+        CongestionState state;
+    };
+    const auto run = [](CongestionAlgorithm algorithm)
+    {
+        CongestionPolicy policy;
+        policy.algorithm = algorithm;
+        Pair pair(policy, 3U);
+        pair.net->path[0].rate = kRate;
+        pair.net->path[0].buffer = 2U * kBdp;
+        pair.net->path[0].ce_queue = kStep;
+        pair.confirm();
+        Bulk bulk{pair.client, pair.server, 8U << 20U};
+        REQUIRE(pair.net->run_until([&] { return bulk.read >= bulk.total / 2U || bulk.step(); }));
+        const u64 half_ns = pair.net->now;
+        const u64 half_read = bulk.read;
+        pair.net->max_queued[0] = 0U;
+        REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
+        Run out;
+        out.goodput = (bulk.read - half_read) * 1000U * kMs / (pair.net->now - half_ns);
+        out.max_queued = pair.net->max_queued[0];
+        out.marks = pair.net->congested[0];
+        out.overflowed = pair.net->overflowed[0];
+        out.state = pair.client.congestion().state();
+        CHECK(pair.client.ecn().state() == QuicEcnState::Capable);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+        return out;
+    };
+    const Run prague = run(CongestionAlgorithm::Prague);
+    const Run cubic = run(CongestionAlgorithm::Cubic);
+    INFO("Prague goodput " << prague.goodput << " max queue " << prague.max_queued << " alpha " << prague.state.alpha
+                           << "; CUBIC goodput " << cubic.goodput << " max queue " << cubic.max_queued << " window "
+                           << cubic.state.window << " reductions " << cubic.state.reductions << " marks " << cubic.marks
+                           << " overflowed " << cubic.overflowed);
+    CHECK(prague.marks > 0U);
+    CHECK(prague.overflowed == 0U);
+    CHECK(prague.goodput >= kRate * 93U / 100U);
+    CHECK(prague.max_queued <= 2U * kStep);               // a datagram past the step, never a classic sawtooth
+    CHECK(prague.state.alpha < kCongestionAlphaOne / 4U); // a small, steady fraction of marks
+    CHECK(prague.state.classic == 0U);
+    CHECK(cubic.marks == 0U); // ECT(0) is classic traffic: the drop-tail queue, unmarked
+    CHECK(cubic.goodput >= kRate * 90U / 100U);
+    CHECK(cubic.max_queued >= 20U * prague.max_queued);
 }

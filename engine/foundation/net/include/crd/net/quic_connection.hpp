@@ -50,9 +50,10 @@
 //              max_udp_payload_size. A black hole falls back to 1200 bytes; datagrams keep to 1200 bytes while a probe
 //              timeout is pending. The controller, the DATAGRAM size and the window's unit follow the size found;
 //              probe losses are no congestion signal (section 14.4).
-//   ecn        datagrams carry the configuration's codepoint while the path is tested and once it proved to carry
-//              ECN (quic_ecn.hpp: RFC 9000 section 13.4); a CE count the peer reports rising on a validated path is
-//              the controller's congestion signal (RFC 9002 section 7.1). Received codepoints are counted per space
+//   ecn        datagrams carry the controller's codepoint (ECT(1) for Prague) while the path is tested and once it
+//              proved to carry ECN (quic_ecn.hpp: RFC 9000 section 13.4); on a validated path each ACK frame's
+//              marked packets and CE rise go to the controller (RFC 9002 section 7.1), and a path that turns out to
+//              carry no ECN is reported to it once. Received codepoints are counted per space
 //              and reported in ACK frames (QuicAckTracker). The host stamps marking() on each datagram it sends.
 //   frames     every frame type is dispatched: stream and flow-control frames go to the QuicStreamSet (streams()),
 //              DATAGRAM frames to QuicDatagrams (datagrams()); 1-RTT packets carry the connection's own frames, then
@@ -232,9 +233,9 @@ struct QuicConnectionConfig
     u32 padding_block = 0U; // packets pad to the next multiple of this (NET.3's padded_size()); 0 pads none
     u64 initial_rtt_ns = kQuicInitialRttNs;
     CongestionPolicy congestion; // the controller and pacing (congestion_policy_valid), swappable by set_congestion()
-    // The codepoint datagrams are marked with while ECN validation allows (RFC 9000 section 13.4.2): ECT(0), ECT(1)
-    // for L4S, or Not-ECT for none. A host whose socket cannot mark clears it.
-    Ecn ecn = Ecn::Ect0;
+    // Datagrams are marked while ECN validation allows (RFC 9000 section 13.4.2), with the controller's codepoint
+    // (congestion_codepoint(): ECT(1) for Prague, ECT(0) for the rest). A host whose socket cannot mark clears it.
+    bool ecn = true;
     u64 key_update_interval = 0U; // 1-RTT packets one key seals before an update starts (0: the AEAD's limit alone)
     // kPrfKeyBytes seeding the connection's entropy (grease, skipped numbers) for a deterministic run (tests,
     // NET-SIM); empty draws a fresh key from the provider.
@@ -581,6 +582,8 @@ private:
     [[nodiscard]] usize send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept;
     // A loss detection ended: black hole detection, then the size found reaches the controller and the datagrams.
     void follow_path(u64 now_ns) noexcept;
+    // Once the path is known not to carry ECN (never marked, or validation failed), the controller hears it once.
+    void follow_ecn() noexcept;
     void apply_path_size() noexcept;
     [[nodiscard]] usize write_frames(QuicSpace space, bool early, cont::Span<u8> frames, u64 packet, u64 now_ns,
                                      Written& written) noexcept;
@@ -619,6 +622,7 @@ private:
     u32 m_path_bytes = kQuicPmtuFloor; // the size the controller and the datagrams last took
     Ecn m_marking = Ecn::NotEct;      // the codepoint of the datagram being written, then of the last one
     bool m_data_open = true;          // congestion control lets data go in the datagram being written
+    bool m_ecn_unavailable = false;   // the controller heard that the path carries no ECN
     u64 m_event_ns = 0U;              // the time recovery's events happen at (they carry none)
     QuicStreamSet m_streams;
     QuicDatagrams m_datagrams;

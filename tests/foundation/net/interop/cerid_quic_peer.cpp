@@ -5,7 +5,7 @@
 //                      --bytes N --closer client|server --code N --max-streams N [--compat 1] [--retry 1]
 //                      [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]]
 //                      [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N]
-//                      [--receive-bytes N] [--congestion newreno|cubic|bbr]
+//                      [--receive-bytes N] [--congestion newreno|cubic|bbr|prague]
 //                      [--http3 1 ...] [--webtransport legacy|h3 ...] [--transport h3 --alpn NAME ...]
 //
 //   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
@@ -45,7 +45,8 @@
 // the window (`reductions`), the path MTU search's datagram size (`pmtu`), probes lost (`pmtu_probes_lost`) and
 // black holes (`black_holes`), the peer's max_udp_payload_size (`peer_max_udp_payload`), and the controller
 // (`congestion`) with its model's bandwidth in bytes per second and minimum round trip (`bandwidth`, `min_rtt_ns`; 0
-// for a window controller). The application is `cerid-interop`, a private ALPN.
+// for a window controller) and Prague's alpha in 2^-20 and classic share in 2^-16 (`alpha`, `classic`; 0 for the
+// others). The application is `cerid-interop`, a private ALPN.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -311,7 +312,7 @@ const char* ecn_failure(QuicEcnFailure failure) noexcept
 }
 
 // The controllers (congestion.hpp) by --congestion's names, in CongestionAlgorithm's order.
-constexpr const char* kCongestionNames[] = {"newreno", "cubic", "bbr"};
+constexpr const char* kCongestionNames[] = {"newreno", "cubic", "bbr", "prague"};
 
 const char* congestion_name(CongestionAlgorithm algorithm) noexcept
 {
@@ -383,8 +384,9 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
                 static_cast<unsigned long long>(connection.congestion().state().reductions));
     const CongestionController& congestion = connection.congestion();
     const CongestionState model = congestion.state();
-    std::printf("congestion=%s\nbandwidth=%llu\nmin_rtt_ns=%llu\n", congestion_name(congestion.algorithm()),
-                static_cast<unsigned long long>(model.bandwidth), static_cast<unsigned long long>(model.min_rtt_ns));
+    std::printf("congestion=%s\nbandwidth=%llu\nmin_rtt_ns=%llu\nalpha=%u\nclassic=%u\n",
+                congestion_name(congestion.algorithm()), static_cast<unsigned long long>(model.bandwidth),
+                static_cast<unsigned long long>(model.min_rtt_ns), model.alpha, model.classic);
     const QuicPathMtu& path = connection.path_mtu();
     std::printf("pmtu=%u\npmtu_probes_lost=%llu\nblack_holes=%llu\npeer_max_udp_payload=%llu\n", path.size(),
                 static_cast<unsigned long long>(path.counters().probes_lost),
@@ -658,7 +660,7 @@ int usage()
                "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] "
                "[--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] "
                "[--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] "
-               "[--progress-at N] [--receive-bytes N] [--congestion newreno|cubic|bbr] [--http3 1 ...] "
+               "[--progress-at N] [--receive-bytes N] [--congestion newreno|cubic|bbr|prague] [--http3 1 ...] "
                "[--webtransport legacy|h3 ...] "
                "[--transport h3 --alpn NAME [--idle-ms N] [--keepalive-ms N]]\n",
                stderr);

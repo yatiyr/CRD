@@ -134,7 +134,7 @@ enum class EcnPath : u8
 {
     Carry,      // as sent
     Bleach,     // cleared to Not-ECT
-    Remark,     // ECT(0) re-marked ECT(1)
+    Remark,     // each ECT re-marked as the other: ECT(0) as ECT(1), ECT(1) as ECT(0)
     DropMarked, // a datagram with any codepoint is dropped
 };
 
@@ -156,6 +156,9 @@ struct Path
     // `buffer` bytes already queued is dropped (0: an unbounded queue), as a drop-tail router does.
     u64 rate = 0U;
     usize buffer = 0U;
+    // With a rate: an ECT(1) datagram that finds more than `ce_queue` bytes queued is marked CE, the L4S queue's step
+    // of a DualQ AQM (RFC 9332 section 2.4, 1 ms); classic traffic keeps the drop-tail queue. 0 marks none.
+    usize ce_queue = 0U;
 };
 
 // A client's ticket store holding one ticket, handed out once.
@@ -256,6 +259,7 @@ public:
     usize too_big_matched[2] = {};
     usize marked[2] = {};                       // datagrams each end sent with a codepoint
     usize congested[2] = {};                    // of those, marked CE on the path
+    u64 max_queued[2] = {};                     // the most bytes a bottleneck held when a datagram arrived
     bool client_initials_padded = true;         // every client datagram whose first packet is an Initial had 1200 bytes
     usize smallest[2] = {~usize{0}, ~usize{0}}; // each end's smallest datagram
     usize largest[2] = {};                      // and its largest
@@ -420,9 +424,9 @@ private:
         {
             return Ecn::NotEct;
         }
-        if (path[from].ecn == EcnPath::Remark && ecn == Ecn::Ect0)
+        if (path[from].ecn == EcnPath::Remark)
         {
-            ecn = Ecn::Ect1;
+            ecn = (ecn == Ecn::Ect0) ? Ecn::Ect1 : ((ecn == Ecn::Ect1) ? Ecn::Ect0 : ecn);
         }
         if (path[from].ce != 0U && rng.chance(path[from].ce))
         {
@@ -466,6 +470,12 @@ private:
             }
             m_link_free[from] = free + datagram.size() * 1000U * kMs / path[from].rate;
             departs = m_link_free[from];
+            max_queued[from] = (queued > max_queued[from]) ? queued : max_queued[from];
+            if (path[from].ce_queue != 0U && queued > path[from].ce_queue && ecn == Ecn::Ect1)
+            {
+                ecn = Ecn::Ce;
+                ++congested[from];
+            }
         }
         REQUIRE(m_count < kFlights);
         Flight& flight = m_flights[m_count++];

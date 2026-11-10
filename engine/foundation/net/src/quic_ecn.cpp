@@ -15,6 +15,14 @@ void QuicEcnValidator::start(Ecn codepoint) noexcept
     }
 }
 
+void QuicEcnValidator::set_codepoint(Ecn codepoint) noexcept
+{
+    if (m_state != QuicEcnState::Off && (codepoint == Ecn::Ect0 || codepoint == Ecn::Ect1))
+    {
+        m_codepoint = codepoint;
+    }
+}
+
 Ecn QuicEcnValidator::marking(u64 now_ns, u64 testing_ns) noexcept
 {
     if (m_state == QuicEcnState::Testing && m_testing_from_ns != kNeverNs && now_ns >= m_testing_from_ns &&
@@ -65,11 +73,11 @@ void QuicEcnValidator::on_gone(Ecn ecn) noexcept
     }
 }
 
-bool QuicEcnValidator::on_ack(QuicSpace id, const QuicAck& ack, const QuicAckOutcome& outcome) noexcept
+u64 QuicEcnValidator::on_ack(QuicSpace id, const QuicAck& ack, const QuicAckOutcome& outcome) noexcept
 {
     if (m_state == QuicEcnState::Off || m_state == QuicEcnState::Failed || !outcome.advanced)
     {
-        return false;
+        return 0U;
     }
     Space& space = m_spaces[quic_space_index(id)];
     const u64 marked = outcome.ect0_packets + outcome.ect1_packets;
@@ -79,33 +87,33 @@ bool QuicEcnValidator::on_ack(QuicSpace id, const QuicAck& ack, const QuicAckOut
         {
             fail(QuicEcnFailure::Missing);
         }
-        return false;
+        return 0U;
     }
     const EcnCounts& was = space.reported;
     if (ack.ect0 < was.ect0 || ack.ect1 < was.ect1 || ack.ce < was.ce)
     {
         fail(QuicEcnFailure::Decreased);
-        return false;
+        return 0U;
     }
     // Counts are varints below 2^62, so their sums do not wrap.
     if (ack.ect0 > space.sent.ect0 || ack.ect1 > space.sent.ect1 ||
         ack.ect0 + ack.ect1 + ack.ce > space.sent.ect0 + space.sent.ect1)
     {
         fail(QuicEcnFailure::Exceeded);
-        return false;
+        return 0U;
     }
     const u64 ce_rise = ack.ce - was.ce;
     if (ack.ect0 - was.ect0 + ce_rise < outcome.ect0_packets || ack.ect1 - was.ect1 + ce_rise < outcome.ect1_packets)
     {
         fail(QuicEcnFailure::Short);
-        return false;
+        return 0U;
     }
     space.reported = EcnCounts{ack.ect0, ack.ect1, ack.ce};
     if (marked != 0U && m_state != QuicEcnState::Capable)
     {
         m_state = QuicEcnState::Capable;
     }
-    return ce_rise != 0U && m_state == QuicEcnState::Capable;
+    return (m_state == QuicEcnState::Capable) ? ce_rise : 0U;
 }
 
 const EcnCounts& QuicEcnValidator::reported(QuicSpace space) const noexcept

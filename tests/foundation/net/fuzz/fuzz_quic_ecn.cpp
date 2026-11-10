@@ -4,15 +4,17 @@
 // Input: operations of two bytes, an operation (its low three bits the kind, the rest a parameter) and a parameter,
 // on one validator: packets marked as marking() says in any space, time, losses of any codepoint, ACK frames with
 // honest, absorbed, inflated, falling, short, re-marked or arbitrary counts (present or not, raising the largest or
-// not, newly acknowledging any marked packets), new paths with any codepoint, and marking() asked alone.
+// not, newly acknowledging any marked packets), new paths with any codepoint, codepoint changes of a live swap, and
+// marking() asked alone.
 //
 // Oracles, against a model of the packets sent marked per space and of the counts last accepted. marking() names the
 // path's codepoint only while testing or validated, and Not-ECT otherwise; testing marks at most
 // kQuicEcnTestingPackets packets. A frame that raises the largest on a live path is judged by the restated rule
 // (counts missing, falling, above what was sent, short of what was acknowledged, in that order): a failure is that
 // failure, for good; a pass records the counts and validates the path when it acknowledged marked packets. A frame
-// that does not raise the largest, or reaches an Off or failed path, changes nothing. A congestion signal is a CE
-// rise on a validated path. Reported counts never fall and never pass what was sent.
+// that does not raise the largest, or reaches an Off or failed path, changes nothing. A congestion signal is the CE
+// rise on a validated path. A codepoint change keeps the state and moves marking() to it, except on an Off path.
+// Reported counts never fall and never pass what was sent.
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_ecn.hpp>
 
@@ -125,7 +127,8 @@ void op_ack(World& w, QuicSpace space, u8 q, u8 p)
     }
     const u64 marked = n0 + n1;
     const QuicEcnState before = w.ecn.state();
-    const bool signal = w.ecn.on_ack(space, ack, outcome);
+    const u64 ce = w.ecn.on_ack(space, ack, outcome);
+    const bool signal = ce != 0U;
     const QuicEcnState state = w.ecn.state();
     if (!live(before) || !outcome.advanced)
     {
@@ -156,6 +159,7 @@ void op_ack(World& w, QuicSpace space, u8 q, u8 p)
         return;
     }
     const bool rose = ack.ecn && ack.ce > was.ce;
+    const u64 rise = ack.ce - was.ce; // read before `was`, the reported counts, takes the frame's
     if (ack.ecn)
     {
         w.reported[index] = EcnCounts{ack.ect0, ack.ect1, ack.ce};
@@ -163,6 +167,7 @@ void op_ack(World& w, QuicSpace space, u8 q, u8 p)
     const QuicEcnState expected = (ack.ecn && marked != 0U) ? QuicEcnState::Capable : before;
     CRD_FUZZ_REQUIRE(state == expected);
     CRD_FUZZ_REQUIRE(signal == (rose && state == QuicEcnState::Capable));
+    CRD_FUZZ_REQUIRE(!signal || ce == rise);
 }
 
 void run(World& w, u8 op, u8 p)
@@ -194,6 +199,18 @@ void run(World& w, u8 op, u8 p)
             w.codepoint = static_cast<Ecn>(p & 3U);
             w.ecn.start(w.codepoint);
             break;
+        case 5U: // a live swap of the controller: its codepoint from now on, on a path that marks
+        {
+            const QuicEcnState before = w.ecn.state();
+            const auto codepoint = static_cast<Ecn>(p & 3U);
+            w.ecn.set_codepoint(codepoint);
+            if (before != QuicEcnState::Off && (codepoint == Ecn::Ect0 || codepoint == Ecn::Ect1))
+            {
+                w.codepoint = codepoint;
+            }
+            CRD_FUZZ_REQUIRE(w.ecn.state() == before);
+            break;
+        }
         default:
         {
             const QuicEcnState before = w.ecn.state();

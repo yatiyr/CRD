@@ -136,7 +136,6 @@ constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries
            config.max_datagram_bytes >= kQuicMinInitialDatagram &&
            config.max_datagram_bytes <= kQuicDefaultMaxUdpPayload && config.base_datagram_bytes >= kQuicPmtuFloor &&
            config.base_datagram_bytes <= config.max_datagram_bytes && congestion_policy_valid(config.congestion) &&
-           config.ecn != Ecn::Ce &&
            (config.entropy_seed.empty() || config.entropy_seed.size() == crypto::kPrfKeyBytes) &&
            (config.token.size() <= kQuicMaxCarriedTokenBytes) && config.held_packets <= kQuicMaxHeldPackets &&
            (config.early_context.empty() || (config.side == crypto::QuicSide::Server && config.tls->early_data() &&
@@ -378,7 +377,8 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     // The policy and the datagram size were checked (config_valid).
     m_congestion =
         make_congestion(config.congestion, m_path_bytes, nullptr, m_congestion_slot, m_delivery, entropy());
-    m_ecn.start(config.ecn);
+    m_ecn.start(config.ecn ? congestion_codepoint(config.congestion.algorithm) : Ecn::NotEct);
+    follow_ecn();
     m_frames = frames;
     m_crypto_bytes = bytes;
     m_crypto_bits = bits;
@@ -1125,12 +1125,15 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             if (outcome.error == QuicRecoveryError::None)
             {
                 m_delivery.on_ack_end(m_recovery->rtt().min_ns);
-                if (m_ecn.on_ack(space, frame.ack, outcome))
+                const u64 ce = m_ecn.on_ack(space, frame.ack, outcome);
+                const u64 marked = outcome.ect0_packets + outcome.ect1_packets;
+                if (m_ecn.state() == QuicEcnState::Capable && (marked != 0U || ce != 0U))
                 {
                     // RFC 9002 appendix B.7: before the frame's growth, so its packets grow nothing of the period.
-                    m_congestion->on_congestion(outcome.newest_sent_ns, now_ns);
-                    ++m_counters.ecn_signals;
+                    m_congestion->on_ecn(marked, ce, outcome.newest_sent_ns, now_ns);
                 }
+                m_counters.ecn_signals += (ce != 0U) ? 1U : 0U;
+                follow_ecn();
                 m_congestion->on_ack_end(m_recovery->rtt(), outcome.rtt_sampled, m_recovery->bytes_in_flight(),
                                          now_ns);
                 if (outcome.lost.persistent_congestion)
@@ -1895,6 +1898,9 @@ bool QuicConnection::set_congestion(const CongestionPolicy& policy) noexcept
     m_congestion->~CongestionController();
     m_congestion = make_congestion(policy, m_path_bytes, &held, m_congestion_slot, m_delivery, entropy());
     m_config.congestion = policy;
+    m_ecn.set_codepoint(congestion_codepoint(policy.algorithm));
+    m_ecn_unavailable = false;
+    follow_ecn();
     return true;
 }
 
@@ -2419,6 +2425,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
     else
     {
         m_marking = m_ecn.marking(now_ns, m_recovery->persistent_congestion_ns());
+        follow_ecn();
         pull_crypto();
         issue_local_ids();
         gate_data(full, now_ns);
@@ -2525,6 +2532,16 @@ void QuicConnection::follow_path(u64 now_ns) noexcept
 {
     static_cast<void>(m_pmtu.end_detection(now_ns));
     apply_path_size();
+}
+
+void QuicConnection::follow_ecn() noexcept
+{
+    const QuicEcnState state = m_ecn.state();
+    if (!m_ecn_unavailable && (state == QuicEcnState::Off || state == QuicEcnState::Failed))
+    {
+        m_ecn_unavailable = true;
+        m_congestion->on_ecn_unavailable();
+    }
 }
 
 void QuicConnection::apply_path_size() noexcept

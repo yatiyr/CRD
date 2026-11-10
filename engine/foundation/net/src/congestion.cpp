@@ -1,8 +1,9 @@
-// crd-net -- congestion control and pacing (NET-PATH; contract: docs/design/network-foundation.md#congestion and
-// #bbr).
+// crd-net -- congestion control and pacing (NET-PATH; contract: docs/design/network-foundation.md#congestion, #bbr
+// and #prague).
 #include <crd/net/congestion.hpp>
 
 #include <crd/core/wide_multiply.hpp>
+#include <crd/hesap/net/classic_ecn.hpp>
 #include <crd/hesap/net/rate.hpp>
 #include <crd/hesap/stats/philox.hpp>
 
@@ -12,6 +13,7 @@ namespace crd::net
 {
 namespace
 {
+using hesap::net::ClassicEcnDetector;
 using hesap::net::WindowedMax;
 
 constexpr u64 kMaxDatagram = 65535U;
@@ -75,7 +77,7 @@ static_assert(kCongestionMaxWindow <= ~u64{0} / kCubicKScale);
     return y;
 }
 
-// The window skeleton both controllers share (RFC 9002 appendix B, RFC 9406, RFC 9438 section 4.9's undo); a
+// The window skeleton the window controllers share (RFC 9002 appendix B, RFC 9406, RFC 9438 section 4.9's undo); a
 // controller supplies congestion avoidance, the reduction and what an undo restores of its own.
 class WindowController : public CongestionController
 {
@@ -163,6 +165,7 @@ public:
                 m_threshold = m_window; // RFC 9406: CSS_ROUNDS rounds in CSS end slow start
                 m_phase = CongestionPhase::Avoidance;
             }
+            rounded(rtt, now_ns);
         }
     }
 
@@ -177,14 +180,21 @@ public:
         m_episode_lost = packet.bytes;
     }
 
-    void on_congestion(u64 newest_sent_ns, u64 now_ns) noexcept override
+    // RFC 9002 appendix B.7: a rise of CE is a congestion event, one per recovery period.
+    void on_ecn(u64 /*marked*/, u64 ce, u64 newest_sent_ns, u64 now_ns) noexcept override
     {
+        if (ce == 0U)
+        {
+            return;
+        }
         if (!in_recovery(newest_sent_ns))
         {
             reduce_window(now_ns, false);
         }
         m_undoable = false; // a mark is no spurious loss
     }
+
+    void on_ecn_unavailable() noexcept override {}
 
     void on_persistent_congestion(u64 /*now_ns*/) noexcept override
     {
@@ -260,9 +270,9 @@ public:
 protected:
     // Congestion avoidance by `acked` bytes.
     virtual void avoid(u64 acked, const QuicRtt& rtt, u64 now_ns) noexcept = 0;
-    // The reduction at a congestion event: the window and threshold from m_window; what it changes of its own is
-    // saved for restore().
-    virtual void reduce() noexcept = 0;
+    // The reduction at the congestion event of `now_ns`: the window and threshold from m_window; what it changes of
+    // its own is saved for restore().
+    virtual void reduce(u64 now_ns) noexcept = 0;
     virtual void restore() noexcept = 0;
     // The window fell to its minimum.
     virtual void collapse() noexcept = 0;
@@ -274,8 +284,23 @@ protected:
     }
     // m_datagram changed.
     virtual void resized() noexcept {}
+    // A round trip ended with the ACK frame of `now_ns`.
+    virtual void rounded(const QuicRtt& /*rtt*/, u64 /*now_ns*/) noexcept {}
 
     void add_window(u64 bytes) noexcept { m_window = min_u64(m_window + bytes, kCongestionMaxWindow); }
+
+    // A reduction to `window` by ECN marks alone that starts no recovery period, so growth goes on (Prague's CWR):
+    // counted, and the period's losses are no longer undone.
+    void reduce_to(u64 window) noexcept
+    {
+        m_window = min_u64(max_u64(window, m_minimum), kCongestionMaxWindow);
+        m_threshold = m_window;
+        m_phase = (m_phase == CongestionPhase::Recovery) ? m_phase : CongestionPhase::Avoidance;
+        m_undoable = false;
+        ++m_reductions;
+    }
+
+    void no_undo() noexcept { m_undoable = false; }
 
     CongestionPolicy m_policy;
     u64 m_datagram = 0U;
@@ -335,7 +360,7 @@ private:
     {
         m_prior = state();
         m_recovery_start_ns = now_ns;
-        reduce();
+        reduce(now_ns);
         m_window = min_u64(max_u64(m_window, m_minimum), kCongestionMaxWindow);
         m_threshold = max_u64(m_threshold, m_minimum);
         m_phase = CongestionPhase::Recovery;
@@ -442,7 +467,7 @@ protected:
         m_carry = total % m_window;
     }
 
-    void reduce() noexcept override
+    void reduce(u64 /*now_ns*/) noexcept override
     {
         m_prior_carry = m_carry;
         m_threshold = m_window / 2U;
@@ -504,7 +529,7 @@ protected:
         m_grow_carry = total % m_window;
     }
 
-    void reduce() noexcept override
+    void reduce(u64 /*now_ns*/) noexcept override
     {
         m_prior_cubic = m_cubic;
         // Section 4.6 and 4.7's fast convergence: a window that fell short of W_max releases bandwidth.
@@ -733,8 +758,12 @@ public:
 
     // Section 3.7: CE marks are congestion. Outside probing they count as a loss of the round; while probing
     // (Startup, ProbeBW_REFILL and ProbeBW_UP) they show the inflight was too high, and Startup ends.
-    void on_congestion(u64 /*newest_sent_ns*/, u64 now_ns) noexcept override
+    void on_ecn(u64 /*marked*/, u64 ce, u64 /*newest_sent_ns*/, u64 now_ns) noexcept override
     {
+        if (ce == 0U)
+        {
+            return;
+        }
         m_undoable = false; // a mark is no spurious loss
         note_loss();
         const DeliverySample& rs = m_delivery.sample();
@@ -749,6 +778,8 @@ public:
             handle_inflight_too_high(rs.tx_in_flight, rs.app_limited, now_ns);
         }
     }
+
+    void on_ecn_unavailable() noexcept override {}
 
     // Section 5.6.4.4's OnEnterRTO: QUIC's persistent congestion takes the window to RFC 9002's minimum.
     void on_persistent_congestion(u64 /*now_ns*/) noexcept override
@@ -1640,9 +1671,245 @@ private:
     bool m_undoable = false;
 };
 
+// ---- Prague (draft-briscoe-iccrg-prague-congestion-control-04; RFC 9331 section 4.3) ----
+
+constexpr u64 kPragueGainShift = 4U;             // section 2.3.2: g = 1/16
+constexpr u64 kPragueRttVirtMinNs = 25000000U;   // section 2.4.4's RTT_VIRT_MIN
+constexpr u64 kPragueRttTransitionRounds = 500U; // section 2.4.4's D
+constexpr u64 kPragueBurstNs = 250000U;          // section 2.5.2's MAX_BURST_DELAY
+constexpr u64 kPragueSlowStartPacingGain = 200U; // section 2.5.1: doubled while the window is under half the threshold
+// TR-BB-2019-002 section 6.1's changeover (its alternative 2): a classic bottleneck's reduction reaches that of ABE
+// (RFC 8511) at beta 0.7, an alpha of 2 (1 - 0.7).
+constexpr u64 kPragueAbeAlphaNumerator = 3U;
+constexpr u64 kPragueAbeAlphaDenominator = 5U;
+constexpr u64 kPragueAlphaScaledOne = u64{kCongestionAlphaOne} << kPragueGainShift;
+
+// The window skeleton with a scalable answer to ECN: slow start, recovery periods and the undo are the skeleton's; the
+// moving fraction of marked packets, the reduction by it, growth and pacing are the draft's; the classic ECN AQM
+// detector (TR-BB-2019-002) turns the reduction toward ABE's.
+class Prague final : public WindowController
+{
+public:
+    using WindowController::WindowController;
+
+    [[nodiscard]] CongestionAlgorithm algorithm() const noexcept override { return CongestionAlgorithm::Prague; }
+
+    void on_acked(const CongestionPacket& packet, u64 now_ns) noexcept override
+    {
+        m_round_acked = saturating_add(m_round_acked, packet.bytes);
+        m_round_self_limited = saturating_add(m_round_self_limited, packet.delivery.app_limited ? packet.bytes : 0U);
+        WindowController::on_acked(packet, now_ns);
+    }
+
+    void on_ack_end(const QuicRtt& rtt, bool sampled, u64 in_flight, u64 now_ns) noexcept override
+    {
+        m_srtt_ns = rtt.smoothed_ns;
+        m_idle_ns = rtt.probe_base_ns();
+        if (sampled)
+        {
+            m_detector.on_rtt(rtt.latest_ns, segments());
+        }
+        WindowController::on_ack_end(rtt, sampled, in_flight, now_ns);
+        m_frame_ce_bytes = 0U;
+    }
+
+    // Sections 2.3.2 and 2.4.2: every frame's counts feed alpha; the first CE outside CWR takes the window down by
+    // alpha / 2 (by more toward a classic bottleneck), and CWR lasts a round trip, a virtual one once RTT-independent.
+    void on_ecn(u64 marked, u64 ce, u64 newest_sent_ns, u64 now_ns) noexcept override
+    {
+        m_round_marked = saturating_add(m_round_marked, marked);
+        m_round_ce = saturating_add(m_round_ce, ce);
+        if (ce == 0U)
+        {
+            return;
+        }
+        m_frame_ce_bytes = saturating_add(m_frame_ce_bytes, min_u64(ce, kCongestionMaxWindow) * m_datagram);
+        m_saw_ce = true;
+        m_detector.on_ce();
+        no_undo(); // a mark is no spurious loss
+        if (m_cwr_start_ns != kNeverNs &&
+            (newest_sent_ns <= m_cwr_start_ns || now_ns - min_u64(m_cwr_start_ns, now_ns) < cwr_ns()))
+        {
+            return;
+        }
+        m_cwr_start_ns = now_ns;
+        m_cwr_prior = m_window;
+        const u64 alpha = max_u64(m_alpha_scaled >> kPragueGainShift, classic_alpha());
+        reduce_to(m_window - multiply_divide(m_window, alpha, 2U * u64{kCongestionAlphaOne}));
+    }
+
+    // Section 2.3.1.2: without ECN feedback Prague is a classic (Reno) controller.
+    void on_ecn_unavailable() noexcept override { m_ecn_unavailable = true; }
+
+    [[nodiscard]] u64 pacing_rate(const QuicRtt& rtt) const noexcept override { return rate(rtt.smoothed_ns); }
+
+    [[nodiscard]] u64 burst() const noexcept override
+    {
+        if (m_srtt_ns == 0U)
+        {
+            return WindowController::burst(); // the initial window, before a round trip is known (section 3.1.1)
+        }
+        return max_u64(multiply_divide(rate(m_srtt_ns), kPragueBurstNs, kNanosPerSecond), m_datagram);
+    }
+
+    [[nodiscard]] CongestionState state() const noexcept override
+    {
+        CongestionState out = WindowController::state();
+        out.alpha = static_cast<u32>(m_alpha_scaled >> kPragueGainShift);
+        out.classic = m_detector.classic();
+        return out;
+    }
+
+protected:
+    // Section 2.4.3: unmarked bytes alone grow the window, by (srtt / rtt_virt)^2 of Reno's per round trip once
+    // RTT-independent (section 2.4.4); Reno's without ECN.
+    void avoid(u64 acked, const QuicRtt& rtt, u64 /*now_ns*/) noexcept override
+    {
+        const u64 marked = min_u64(acked, m_frame_ce_bytes);
+        m_frame_ce_bytes -= marked;
+        u64 increase = (acked - marked) * m_datagram;
+        if (rtt_independent() && rtt.smoothed_ns < kPragueRttVirtMinNs)
+        {
+            increase = multiply_divide(multiply_divide(increase, rtt.smoothed_ns, kPragueRttVirtMinNs), rtt.smoothed_ns,
+                                       kPragueRttVirtMinNs);
+        }
+        const u64 total = increase + m_carry;
+        add_window(total / m_window);
+        m_carry = total % m_window;
+    }
+
+    // Section 2.4.1: Reno's half on loss; within a round trip of a mark's reduction, half the window before it, so
+    // the two together reduce as Reno's one does.
+    void reduce(u64 now_ns) noexcept override
+    {
+        m_prior_carry = m_carry;
+        const bool recent =
+            m_cwr_start_ns != kNeverNs && now_ns - min_u64(m_cwr_start_ns, now_ns) < max_u64(m_srtt_ns, cwr_ns());
+        const u64 base = recent ? max_u64(m_window, m_cwr_prior) : m_window;
+        m_threshold = min_u64(m_window, base / 2U);
+        m_window = m_threshold;
+        m_carry = 0U;
+    }
+
+    void restore() noexcept override { m_carry = m_prior_carry; }
+    void collapse() noexcept override { m_carry = 0U; }
+
+    void start_over() noexcept override
+    {
+        m_detector = ClassicEcnDetector{};
+        m_alpha_scaled = kPragueAlphaScaledOne;
+        m_alpha_ns = kNeverNs;
+        m_cwr_start_ns = kNeverNs;
+        m_cwr_prior = 0U;
+        m_rounds = 0U;
+        m_round_marked = 0U;
+        m_round_ce = 0U;
+        m_round_acked = 0U;
+        m_round_self_limited = 0U;
+        m_frame_ce_bytes = 0U;
+        m_carry = 0U;
+        m_last_sent_ns = kNeverNs;
+        m_saw_ce = false;
+    }
+
+    // TR-BB-2019-002 section 3.2: each idle timeout halves a classic score.
+    void sent(const CongestionPacket& packet, u64 in_flight, u64 now_ns) noexcept override
+    {
+        if (in_flight == packet.bytes && m_last_sent_ns != kNeverNs && m_idle_ns != 0U && now_ns > m_last_sent_ns)
+        {
+            m_detector.on_idle((now_ns - m_last_sent_ns) / m_idle_ns);
+        }
+        m_last_sent_ns = now_ns;
+    }
+
+    // Section 2.3.2: from the first CE (alpha is 1 until then), alpha moves once a (virtual) round trip by g toward
+    // the fraction of marked packets acknowledged with CE since its last move; the detector takes the round's queue
+    // and self-limited share.
+    void rounded(const QuicRtt& rtt, u64 now_ns) noexcept override
+    {
+        m_rounds = saturating_add(m_rounds, 1U);
+        const u64 share =
+            (m_round_acked == 0U) ? 0U : multiply_divide(m_round_self_limited, u64{1} << 16U, m_round_acked);
+        m_detector.on_round(rtt.min_ns, static_cast<u32>(share));
+        m_round_acked = 0U;
+        m_round_self_limited = 0U;
+        if (!m_saw_ce)
+        {
+            m_round_marked = 0U;
+            m_round_ce = 0U;
+            return;
+        }
+        if (m_round_marked == 0U || (m_alpha_ns != kNeverNs && now_ns - min_u64(m_alpha_ns, now_ns) < cwr_ns()))
+        {
+            return;
+        }
+        // A peer may report CE for more packets than the frames' marked ones (RFC 9000 section 13.4.2.1): at most 1.
+        const u64 fraction = multiply_divide(min_u64(m_round_ce, m_round_marked), kCongestionAlphaOne, m_round_marked);
+        m_alpha_scaled = m_alpha_scaled - (m_alpha_scaled >> kPragueGainShift) + fraction;
+        m_alpha_ns = now_ns;
+        m_round_marked = 0U;
+        m_round_ce = 0U;
+    }
+
+private:
+    [[nodiscard]] bool rtt_independent() const noexcept
+    {
+        return !m_ecn_unavailable && m_rounds >= kPragueRttTransitionRounds;
+    }
+
+    // CWR's and alpha's period beyond the round trip itself: the virtual round trip once RTT-independent.
+    [[nodiscard]] u64 cwr_ns() const noexcept
+    {
+        return rtt_independent() ? max_u64(m_srtt_ns, kPragueRttVirtMinNs) : 0U;
+    }
+
+    // ABE's alpha scaled by how classic the bottleneck looks, in 2^-20.
+    [[nodiscard]] u64 classic_alpha() const noexcept
+    {
+        return (u64{m_detector.classic()} << 4U) * kPragueAbeAlphaNumerator / kPragueAbeAlphaDenominator;
+    }
+
+    // Section 2.5.1: a window per smoothed round trip, doubled while under half the slow start threshold.
+    [[nodiscard]] u64 rate(u64 srtt_ns) const noexcept
+    {
+        if (!m_policy.pacing || srtt_ns == 0U)
+        {
+            return 0U;
+        }
+        const u64 gain = (m_window < m_threshold / 2U) ? kPragueSlowStartPacingGain : kPercent;
+        return m_window * gain * (kNanosPerSecond / kPercent) / srtt_ns;
+    }
+
+    // The slow start threshold (the window, before one is set) in datagrams, for the detector's gains.
+    [[nodiscard]] u64 segments() const noexcept
+    {
+        return ((m_threshold < kCongestionMaxWindow) ? m_threshold : m_window) / m_datagram;
+    }
+
+    ClassicEcnDetector m_detector;
+    u64 m_alpha_scaled = kPragueAlphaScaledOne; // alpha / g in 2^-20 (section 2.3.2): alpha starts at 1
+    u64 m_alpha_ns = kNeverNs;                  // alpha's last move
+    u64 m_cwr_start_ns = kNeverNs;              // the last reduction by marks
+    u64 m_cwr_prior = 0U;                       // the window before it
+    u64 m_rounds = 0U;
+    u64 m_round_marked = 0U;       // packets acknowledged ECN-capable since alpha's last move
+    u64 m_round_ce = 0U;           // of those, CE
+    u64 m_round_acked = 0U;        // bytes acknowledged this round
+    u64 m_round_self_limited = 0U; // of those, sent application limited
+    u64 m_frame_ce_bytes = 0U;     // the ACK frame's marked bytes, which do not grow the window
+    u64 m_carry = 0U;
+    u64 m_prior_carry = 0U;
+    u64 m_srtt_ns = 0U;
+    u64 m_idle_ns = 0U;
+    u64 m_last_sent_ns = kNeverNs;
+    bool m_ecn_unavailable = false;
+    bool m_saw_ce = false; // alpha moves from the first CE on
+};
+
 static_assert(sizeof(NewReno) <= kCongestionSlotBytes && alignof(NewReno) <= alignof(CongestionSlot));
 static_assert(sizeof(Cubic) <= kCongestionSlotBytes && alignof(Cubic) <= alignof(CongestionSlot));
 static_assert(sizeof(Bbr) <= kCongestionSlotBytes && alignof(Bbr) <= alignof(CongestionSlot));
+static_assert(sizeof(Prague) <= kCongestionSlotBytes && alignof(Prague) <= alignof(CongestionSlot));
 
 [[nodiscard]] i64 scaled_bytes(u64 bytes) noexcept
 {
@@ -1657,7 +1924,9 @@ bool congestion_policy_valid(const CongestionPolicy& policy) noexcept
         policy.algorithm == CongestionAlgorithm::NewReno || policy.algorithm == CongestionAlgorithm::Cubic;
     // BBR is version 2's and paces by its model: unpaced, its Startup would send each window at once.
     const bool bbr = policy.algorithm == CongestionAlgorithm::Bbr && policy.version >= 2U && policy.pacing;
-    return policy.version >= 1U && policy.version <= kCongestionInterfaceVersion && (window || bbr) &&
+    // Prague is version 3's and must pace (the draft's section 2.5.1).
+    const bool prague = policy.algorithm == CongestionAlgorithm::Prague && policy.version >= 3U && policy.pacing;
+    return policy.version >= 1U && policy.version <= kCongestionInterfaceVersion && (window || bbr || prague) &&
            policy.minimum_packets >= 2U &&
            policy.initial_packets >= policy.minimum_packets && policy.initial_packets <= kCongestionMaxInitialPackets &&
            policy.pacing_gain >= kCongestionMinPacingGain && policy.pacing_gain <= kCongestionMaxPacingGain;
@@ -1683,6 +1952,10 @@ CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_da
     if (policy.algorithm == CongestionAlgorithm::NewReno)
     {
         made = new (slot.bytes) NewReno(policy, max_datagram);
+    }
+    else if (policy.algorithm == CongestionAlgorithm::Prague)
+    {
+        made = new (slot.bytes) Prague(policy, max_datagram);
     }
     else
     {

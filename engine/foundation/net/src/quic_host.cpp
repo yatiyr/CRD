@@ -125,7 +125,7 @@ QuicConnection* QuicHost::build(u32 index, QuicConnectionConfig config, const En
     const SocketFeatures features = m_socket.features();
     if (!features.ecn_marking)
     {
-        config.ecn = Ecn::NotEct; // marks the socket would drop would only fail the path's validation
+        config.ecn = false; // marks the socket would drop would only fail the path's validation
     }
     // Probes the host may fragment prove nothing (RFC 8899 section 3); an IPv6 path carries its 1280-byte floor.
     config.path_mtu_discovery = config.path_mtu_discovery && features.dont_fragment;

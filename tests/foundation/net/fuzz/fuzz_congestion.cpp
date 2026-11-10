@@ -2,13 +2,13 @@
 // docs/design/network-foundation.md#congestion) under the bounded fuzz harness (REPO.DEV.9;
 // docs/design/test-instruments.md).
 //
-// Input: byte 0 picks the policy (bits 0 and 7: CUBIC, NewReno or BBRv3, bit 1: HyStart++, bit 2: pacing, which BBR
-// always has, bit 3: fast convergence, bits 4 to 6: the initial window's packets); byte 1 the datagram size step. Then
-// operations of two bytes, an operation and its parameter, on one controller, the delivery rate sampler and one pacer,
-// driven as a connection drives them: packets sent with their stamps, acknowledged in ACK frames with any RTT samples,
-// lost, acknowledged after their loss, ECN marks, persistent congestion, sends held back and application-limited
-// periods, time, live swaps through the three algorithms and resets, and the pacer's sends at its release times or
-// before them.
+// Input: byte 0 picks the policy (bits 0 and 7: CUBIC, NewReno, BBRv3 or Prague, bit 1: HyStart++, bit 2: pacing,
+// which BBR and Prague always have, bit 3: fast convergence, bits 4 to 6: the initial window's packets); byte 1 the
+// datagram size step. Then operations of two bytes, an operation and its parameter, on one controller, the delivery
+// rate sampler and one pacer, driven as a connection drives them: packets sent with their stamps, acknowledged in ACK
+// frames with any RTT samples, lost, acknowledged after their loss, ECN feedback (marked packets and CE, a peer's
+// inflated CE too) and a path without ECN, persistent congestion, sends held back and application-limited periods,
+// time, live swaps through the four algorithms and resets, and the pacer's sends at its release times or before them.
 //
 // Oracles. The window stays between the minimum and kCongestionMaxWindow and the threshold at or above the minimum;
 // avoidance holds a window at or above its threshold; reductions only rise, undos never pass them, and persistent
@@ -17,8 +17,10 @@
 // datagrams) or BBR leaving ProbeRTT on a restart from idle raises the window, and a reset restores the initial one.
 // A live swap keeps the window, threshold and recovery period. The pacing rate is 0 without pacing and never 0 for
 // BBR, whose bandwidth is never above a rate the sampler gave and whose window after an ACK frame is at least four
-// datagrams. The sampler's delivered bytes are what was acknowledged. The pacer's release time is never before now,
-// its credit stays within one burst above zero and the last send's burst below, and is positive at its release time.
+// datagrams; Prague's alpha stays within 0 and 1, its classic share within 0 and 2^16, and a mark's reduction takes
+// at most half the window. The sampler's delivered bytes are what was acknowledged. The pacer's release time is never
+// before now, its credit stays within one burst above zero and the last send's burst below, and is positive at its
+// release time.
 #include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/congestion.hpp>
@@ -86,6 +88,11 @@ struct World
     return w.policy.algorithm == CongestionAlgorithm::Bbr;
 }
 
+[[nodiscard]] bool is_prague(const World& w)
+{
+    return w.policy.algorithm == CongestionAlgorithm::Prague;
+}
+
 void check(const World& w)
 {
     const CongestionState state = w.ctl->state();
@@ -109,16 +116,31 @@ void check(const World& w)
     {
         CRD_FUZZ_REQUIRE(state.bandwidth == 0U && state.min_rtt_ns == 0U);
     }
+    if (is_prague(w))
+    {
+        CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) != 0U && w.ctl->burst() >= w.datagram);
+        CRD_FUZZ_REQUIRE(state.alpha <= kCongestionAlphaOne && state.classic <= (crd::u32{1} << 16U));
+    }
+    else
+    {
+        CRD_FUZZ_REQUIRE(state.alpha == 0U && state.classic == 0U);
+    }
 }
 
-// The next algorithm of a live swap: CUBIC, NewReno, BBR, and round again.
+// The next algorithm of a live swap: CUBIC, NewReno, BBR, Prague, and round again.
 [[nodiscard]] CongestionAlgorithm next_algorithm(CongestionAlgorithm algorithm)
 {
-    if (algorithm == CongestionAlgorithm::Cubic)
+    switch (algorithm)
     {
-        return CongestionAlgorithm::NewReno;
+        case CongestionAlgorithm::Cubic:
+            return CongestionAlgorithm::NewReno;
+        case CongestionAlgorithm::NewReno:
+            return CongestionAlgorithm::Bbr;
+        case CongestionAlgorithm::Bbr:
+            return CongestionAlgorithm::Prague;
+        default:
+            return CongestionAlgorithm::Cubic;
     }
-    return (algorithm == CongestionAlgorithm::NewReno) ? CongestionAlgorithm::Bbr : CongestionAlgorithm::Cubic;
 }
 
 Packet* pick(World& w, u8 parameter, u8 state)
@@ -218,14 +240,32 @@ void run(World& w, u8 op, u8 parameter)
             }
             break;
         }
-        case 5U: // an ECN mark up to a packet sent `parameter` ms ago
-            w.ctl->on_congestion(w.now - ((w.now < parameter * kMs) ? w.now : parameter * kMs), w.now);
+        case 5U: // ECN feedback: CE on the top two bits' packets of those plus the low three bits' marked ones (CE
+                 // above the marked count when they are 0: an inflating peer), up to a packet sent the low six bits'
+                 // ms ago
+        {
+            const u64 ce = parameter >> 6U;
+            const u64 marked = (parameter & 7U) == 0U ? 0U : ce + (parameter & 7U);
+            const u64 ago = (parameter & 0x3FU) * kMs;
+            if (marked != 0U || ce != 0U)
+            {
+                const u64 window = w.ctl->window();
+                w.ctl->on_ecn(marked, ce, w.now - ((w.now < ago) ? w.now : ago), w.now);
+                const u64 floor = w.policy.minimum_packets * w.datagram;
+                CRD_FUZZ_REQUIRE(!is_prague(w) || w.ctl->window() >= ((window / 2U > floor) ? window / 2U : floor) ||
+                                 w.ctl->window() == window);
+            }
             break;
+        }
         case 6U:
             w.ctl->on_persistent_congestion(w.now);
             CRD_FUZZ_REQUIRE(w.ctl->window() == w.policy.minimum_packets * w.datagram);
             break;
-        case 7U: // held back by the window or the pacer, or nothing to send
+        case 7U: // held back by the window or the pacer, or nothing to send; or the path carries no ECN
+            if ((parameter & 4U) != 0U)
+            {
+                w.ctl->on_ecn_unavailable();
+            }
             if ((parameter & 1U) != 0U)
             {
                 w.delivery.on_app_limited(w.in_flight);
@@ -243,7 +283,7 @@ void run(World& w, u8 op, u8 parameter)
             const CongestionState held = w.ctl->state();
             w.ctl->~CongestionController();
             w.policy.algorithm = next_algorithm(w.policy.algorithm);
-            w.policy.pacing = w.policy.pacing || is_bbr(w);
+            w.policy.pacing = w.policy.pacing || is_bbr(w) || is_prague(w);
             w.ctl = make_congestion(w.policy, w.datagram, &held, w.slot, w.delivery, parameter);
             CRD_FUZZ_REQUIRE(w.ctl != nullptr);
             w.max_rate = 0U;
@@ -325,9 +365,12 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     held = new (storage) World();
     World& w = *held;
     w.policy.algorithm = ((data[0] & 1U) != 0U) ? CongestionAlgorithm::NewReno : CongestionAlgorithm::Cubic;
-    w.policy.algorithm = ((data[0] & 0x80U) != 0U) ? CongestionAlgorithm::Bbr : w.policy.algorithm;
+    if ((data[0] & 0x80U) != 0U)
+    {
+        w.policy.algorithm = ((data[0] & 1U) != 0U) ? CongestionAlgorithm::Prague : CongestionAlgorithm::Bbr;
+    }
     w.policy.hystart = (data[0] & 2U) != 0U;
-    w.policy.pacing = (data[0] & 4U) != 0U || is_bbr(w);
+    w.policy.pacing = (data[0] & 4U) != 0U || is_bbr(w) || is_prague(w);
     w.ever_limited = is_bbr(w);
     w.policy.fast_convergence = (data[0] & 8U) != 0U;
     w.policy.initial_packets = 2U + ((data[0] >> 4U) & 7U) * 4U;
@@ -420,4 +463,22 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     }
     put(bbr, 0x09U, 0x00U);
     sink.add("bbr-cycle", bbr, at);
+    // Prague over 5 ms rounds: slow start, marked feedback each round (one CE in the first, then none and some), a
+    // loss within the mark's round trip, a path without ECN and a swap.
+    u8 prague[2U + 2U * 80U] = {0x87U, 0x00U};
+    at = 2U;
+    for (u8 round = 0U; round < 10U; ++round)
+    {
+        for (u8 i = 0U; i < 4U; ++i)
+        {
+            put(prague, 0x00U, 0x00U);
+        }
+        put(prague, 0x08U, 0x04U); // 4 ms
+        put(prague, 0x05U, static_cast<u8>(((round % 3U == 0U) ? 0x40U : 0x00U) | 0x04U));
+        put(prague, 0x01U, static_cast<u8>(0x40U | 0x14U | 3U));
+    }
+    put(prague, 0x03U, 0x00U);
+    put(prague, 0x07U, 0x04U);
+    put(prague, 0x09U, 0x00U);
+    sink.add("prague-marks", prague, at);
 }
