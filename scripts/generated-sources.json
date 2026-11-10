@@ -1682,7 +1682,7 @@
       "path": "tests/numerics/hesap-special/special_refs.inc",
       "generator": "gen_special_refs.py",
       "status": "generator-absent",
-      "sha256": "b0df1eec7f1f59d522a9f8d5e1ebe60e6d22d1b50fe582fa5a41a5e85a094beb"
+      "sha256": "84edec159cbb551dd26e454da4c4fe515074ffcc03ba149e3c1d0551f92c6a9d"
     },
     {
       "path": "tests/numerics/hesap-stats/continuous_refs.inc",
