@@ -24,11 +24,18 @@ def path_toward(path, toward):
     return fall[2] if fall and fall[0] == toward else path.get('mtu')
 
 
+def drops(path):
+    """Whether a Relay of keyword arguments `path` may drop datagrams the path MTU allows: random loss, or a
+    bottleneck's buffer overflowing."""
+    path = path or {}
+    return bool(path.get('loss') or path.get('rate'))
+
+
 def check_cerid_pmtu(report, path, toward_peer, settled, detail, peer_receive=None):
     """Cerid's path MTU search (its report's `pmtu`) against the path toward its peer and the peer's
     max_udp_payload_size (`peer_receive` when the driver knows it): found to the byte when `settled` (a transfer long
-    enough for the search to end) over a loss-free path, else a size the path carries; a path that fell was found as a
-    black hole."""
+    enough for the search to end) over a path that drops none, else a size the path carries; a path that fell was
+    found as a black hole."""
     advertised = int(report.get('peer_max_udp_payload', '0'))
     expect(advertised >= QUIC_MIN, f'Cerid read no max_udp_payload_size: {detail}')
     if peer_receive is not None:
@@ -36,7 +43,7 @@ def check_cerid_pmtu(report, path, toward_peer, settled, detail, peer_receive=No
                                            f'{detail}')
     ceiling = min(CERID_CEILING, advertised, path_toward(path, toward_peer) or CERID_CEILING)
     found = int(report.get('pmtu', '0'))
-    if settled and not (path or {}).get('loss'):
+    if settled and not drops(path):
         expect(found == ceiling, f'Cerid found {found}, not {ceiling}: {detail}')
     else:
         expect(QUIC_MIN <= found <= ceiling, f'Cerid found {found}, more than the path carries: {detail}')
@@ -78,15 +85,31 @@ class Relay:
     `mtu` is the largest UDP payload the path carries each way: a longer datagram is dropped, as a link that cannot
     fragment drops it, and counted. `fall` = (toward, after, mtu) lowers it toward 'server' or 'client' alone once that
     many datagrams have crossed that way, a route change onto a tunnel that no ICMP reports. `largest` keeps the longest
-    datagram that crossed each way."""
+    datagram that crossed each way.
+
+    `rate` in bytes per second makes each way a bottleneck: a datagram leaves after those queued before it, and one
+    that would take the queue past `buffer` bytes is dropped (drop-tail) and counted in `tail_drops`. `queued` sums
+    the seconds each datagram that entered waited, over `entered` of them, so their mean is the standing queue.
+    `utilisation` is the share of the link's rate that full datagrams (data, not acknowledgements) used each way, from
+    the first that entered until the last left."""
+
+    FULL = 1000  # bytes from which a datagram counts as carrying data
 
     MARKS = {None: 0, 'ect1': 1, 'ce': 3}
 
     def __init__(self, server_port, seed=0, loss=0.0, duplicate=0.0, delay=0.0, jitter=0.0, mark=None, mtu=None,
-                 fall=None):
+                 fall=None, rate=None, buffer=None):
+        expect((rate is None) == (buffer is None), 'a bottleneck needs a rate and a buffer')
         self.server = ('127.0.0.1', server_port)
         self.mtu = {'server': mtu, 'client': mtu}
         self.fall = fall
+        self.rate = rate
+        self.buffer = buffer
+        self.link_free = {'server': 0.0, 'client': 0.0}
+        self.tail_drops = {'server': 0, 'client': 0}
+        self.queued = {'server': 0.0, 'client': 0.0}
+        self.entered = {'server': 0, 'client': 0}
+        self.full = {'server': [0, 0.0, 0.0], 'client': [0, 0.0, 0.0]}  # bytes, the first entry, the last departure
         self.crossed = {'server': 0, 'client': 0}
         self.largest = {'server': 0, 'client': 0}
         self.oversized = {'server': 0, 'client': 0}
@@ -110,6 +133,10 @@ class Relay:
         self.order = 0
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
+
+    def utilisation(self, toward):
+        carried, first, last = self.full[toward]
+        return carried / (self.rate * (last - first)) if last > first else 0.0
 
     @staticmethod
     def is_retry(datagram):
@@ -138,9 +165,23 @@ class Relay:
         toward = 'server' if destination == self.server else 'client'
         if not self.carries(toward, datagram) or self.random.random() < self.loss:
             return
+        leaves = time.monotonic()
+        if self.rate is not None:
+            start = max(leaves, self.link_free[toward])
+            if (start - leaves) * self.rate + len(datagram) > self.buffer:
+                self.tail_drops[toward] += 1
+                return
+            self.queued[toward] += start - leaves
+            self.entered[toward] += 1
+            leaves = self.link_free[toward] = start + len(datagram) / self.rate
+            if len(datagram) >= self.FULL:
+                full = self.full[toward]
+                full[1] = full[1] if full[0] else start
+                full[0] += len(datagram)
+                full[2] = leaves
         copies = 2 if self.random.random() < self.duplicate else 1
         for _ in range(copies):
-            due = time.monotonic() + self.delay + (self.random.random() * self.jitter)
+            due = leaves + self.delay + (self.random.random() * self.jitter)
             self.order += 1
             heapq.heappush(self.heap, (due, self.order, sender, datagram, destination))
 

@@ -5,7 +5,7 @@
 //                      --bytes N --closer client|server --code N --max-streams N [--compat 1] [--retry 1]
 //                      [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]]
 //                      [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N]
-//                      [--receive-bytes N]
+//                      [--receive-bytes N] [--congestion newreno|cubic|bbr]
 //                      [--http3 1 ...] [--webtransport legacy|h3 ...] [--transport h3 --alpn NAME ...]
 //
 //   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
@@ -29,6 +29,7 @@
 //   only-version a server runs `version` alone and answers others with Version Negotiation
 //   progress-at  a server prints `progress=1` once it has read this many bytes
 //   receive-bytes  the largest datagram the loop reads whole (1500 by default), advertised as max_udp_payload_size
+//   congestion   the connections' controller (congestion.hpp; CUBIC by default)
 //   http3        HTTP/3 over Http3Connection instead of the echo: http_exchange.h has its options, ALPN `h3` instead
 //   webtransport WebTransport sessions instead, `legacy` or `h3`: interop_webtransport.hpp has its options
 //   transport    h3: WebSocket tunnels (RFC 9220) on one HTTP/3 connection instead, `connections` of them at once,
@@ -42,8 +43,9 @@
 // is the same as ngtcp2_quic_peer.c's without what only OpenSSL reports, and with the path's ECN validation (`ecn`,
 // `ecn_failure`), the CE count the peer reported over every space (`ecn_ce`), the congestion events that reduced
 // the window (`reductions`), the path MTU search's datagram size (`pmtu`), probes lost (`pmtu_probes_lost`) and
-// black holes (`black_holes`), and the peer's max_udp_payload_size (`peer_max_udp_payload`). The application is
-// `cerid-interop`, a private ALPN.
+// black holes (`black_holes`), the peer's max_udp_payload_size (`peer_max_udp_payload`), and the controller
+// (`congestion`) with its model's bandwidth in bytes per second and minimum round trip (`bandwidth`, `min_rtt_ns`; 0
+// for a window controller). The application is `cerid-interop`, a private ALPN.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -53,6 +55,7 @@
 #include <crd/crypto/replay.hpp>
 #include <crd/crypto/tls.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/net/congestion.hpp>
 #include <crd/net/connection_table.hpp>
 #include <crd/net/ingress.hpp>
 #include <crd/net/io_loop.hpp>
@@ -112,6 +115,7 @@ struct Options : QmuxOptions
     bool reject_early = false;
     bool only_version = false;
     u32 receive_bytes = 1500U;
+    CongestionAlgorithm congestion = CongestionAlgorithm::Cubic;
     httpx_options_t http3;
     WtOptions wt;
 };
@@ -306,6 +310,27 @@ const char* ecn_failure(QuicEcnFailure failure) noexcept
     return kEcnFailures[static_cast<unsigned>(failure)];
 }
 
+// The controllers (congestion.hpp) by --congestion's names, in CongestionAlgorithm's order.
+constexpr const char* kCongestionNames[] = {"newreno", "cubic", "bbr"};
+
+const char* congestion_name(CongestionAlgorithm algorithm) noexcept
+{
+    return kCongestionNames[static_cast<unsigned>(algorithm)];
+}
+
+bool congestion_named(const char* name, CongestionAlgorithm& algorithm) noexcept
+{
+    for (unsigned at = 0U; at < sizeof(kCongestionNames) / sizeof(kCongestionNames[0]); ++at)
+    {
+        if (std::strcmp(name, kCongestionNames[at]) == 0)
+        {
+            algorithm = static_cast<CongestionAlgorithm>(at);
+            return true;
+        }
+    }
+    return false;
+}
+
 const char* close_kind(const QuicCloseInfo& info) noexcept
 {
     if (info.local)
@@ -356,6 +381,10 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
                 static_cast<unsigned long long>(info.error_code), ecn_state(ecn.state()), ecn_failure(ecn.failure()),
                 static_cast<unsigned long long>(ce),
                 static_cast<unsigned long long>(connection.congestion().state().reductions));
+    const CongestionController& congestion = connection.congestion();
+    const CongestionState model = congestion.state();
+    std::printf("congestion=%s\nbandwidth=%llu\nmin_rtt_ns=%llu\n", congestion_name(congestion.algorithm()),
+                static_cast<unsigned long long>(model.bandwidth), static_cast<unsigned long long>(model.min_rtt_ns));
     const QuicPathMtu& path = connection.path_mtu();
     std::printf("pmtu=%u\npmtu_probes_lost=%llu\nblack_holes=%llu\npeer_max_udp_payload=%llu\n", path.size(),
                 static_cast<unsigned long long>(path.counters().probes_lost),
@@ -466,6 +495,7 @@ QuicConnectionConfig connection_config(const Options& options, const TlsContext&
     config.streams = stream_limits(options);
     config.datagrams = datagram_limits(options);
     config.key_update_interval = options.key_update;
+    config.congestion.algorithm = options.congestion;
     return config;
 }
 
@@ -628,7 +658,8 @@ int usage()
                "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] "
                "[--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] "
                "[--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] "
-               "[--progress-at N] [--receive-bytes N] [--http3 1 ...] [--webtransport legacy|h3 ...] "
+               "[--progress-at N] [--receive-bytes N] [--congestion newreno|cubic|bbr] [--http3 1 ...] "
+               "[--webtransport legacy|h3 ...] "
                "[--transport h3 --alpn NAME [--idle-ms N] [--keepalive-ms N]]\n",
                stderr);
     return 2;
@@ -680,6 +711,13 @@ int main(int argc, char** argv)
         else if (std::strcmp(name, "--receive-bytes") == 0)
         {
             options.receive_bytes = static_cast<u32>(std::strtoul(value, nullptr, 10));
+        }
+        else if (std::strcmp(name, "--congestion") == 0)
+        {
+            if (!congestion_named(value, options.congestion))
+            {
+                return usage();
+            }
         }
         else
         {

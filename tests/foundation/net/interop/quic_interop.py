@@ -29,6 +29,13 @@ bytes, Cerid's search finds that size to the byte and ngtcp2's settles on the la
 path carries; a Cerid end with a smaller receive slot holds ngtcp2's probes under it; a path toward the peer that falls
 in the middle of a transfer, which nothing reports, is found by Cerid's black hole detection and searched again; and
 over a lossy path both still find a size the path carries.
+
+Congestion control: each end runs the controller a case names (CUBIC by default; ngtcp2's own BBR, Reno or CUBIC on
+its side), and Cerid reports its own. Cerid's BBRv3 runs on the loopback, over the impaired relays above, and through
+a relay that is a bottleneck each way (a rate, a drop-tail buffer of two BDPs and a propagation delay): its model's
+minimum round trip matches the path's, it keeps the queue short and the buffer from overflowing, and a Cerid client,
+which no echo holds back, finds the rate and keeps the link busy, against ngtcp2's CUBIC, Reno and BBR, with and
+without random loss under BBR's threshold (where CUBIC uses a quarter of the link).
 """
 import argparse
 import subprocess
@@ -36,7 +43,7 @@ import sys
 import threading
 
 from interop_common import (CERID_RECEIVE, QUIC_MIN, Relay, check_cerid_pmtu, check_relay_sizes, collect,
-                            expect, path_toward, reports_of)
+                            drops, expect, path_toward, reports_of)
 
 SEED = '11' * 32
 OPENSSL_GROUPS = {
@@ -60,13 +67,17 @@ ECN_VERDICT_BYTES = 64 << 10  # enough each way for ngtcp2 to test, validate and
 NGTCP2_MAX_TX = 1452  # ngtcp2_settings_default's max_tx_udp_payload_size, which caps its probes
 NGTCP2_ADVERTISED = 65527  # ngtcp2_transport_params_default's max_udp_payload_size, which the peer keeps
 NGTCP2_PROBES = (1406, 1342, 1232, 1444)  # ngtcp2_pmtud.c's default probes, in the order it sends them
+BOTTLENECK_RATE = 2_500_000  # bytes per second each way: 20 Mbit/s
+BOTTLENECK_DELAY = 0.015  # seconds each way, a 30 ms round trip
+BOTTLENECK_BDP = int(BOTTLENECK_RATE * 2 * BOTTLENECK_DELAY)
+BOTTLENECK = dict(rate=BOTTLENECK_RATE, buffer=2 * BOTTLENECK_BDP, delay=BOTTLENECK_DELAY)
 
 
 class Case:
     def __init__(self, cerid, ngtcp2, cerid_is_client, version=1, group='x25519mlkem768', cipher='aes128', streams=1,
                  size=4096, closer='client', code=0, max_streams=16, compat=False, retry=False, updater=None,
                  updates=64, path=None, datagrams=0, datagram_bytes=1000, datagram_limit=None, resume=None,
-                 negotiate=False, reset=False, receive_bytes=None):
+                 negotiate=False, reset=False, receive_bytes=None, congestion=None, peer_cc=None):
         self.cerid = cerid
         self.ngtcp2 = ngtcp2
         self.cerid_is_client = cerid_is_client
@@ -90,6 +101,8 @@ class Case:
         self.negotiate = negotiate  # the client starts in `version`, and the server runs only the other one
         self.reset = reset
         self.receive_bytes = receive_bytes  # Cerid's receive slot, CERID_RECEIVE when None
+        self.congestion = congestion  # Cerid's controller: 'newreno', 'cubic' or 'bbr'; CUBIC when None
+        self.peer_cc = peer_cc  # ngtcp2's: 'reno', 'cubic' or 'bbr'; CUBIC when None
 
     def command(self, program, role, port):
         cerid = program == self.cerid
@@ -122,6 +135,10 @@ class Case:
                 command += ['--compat', '1']
         if cerid and self.receive_bytes:
             command += ['--receive-bytes', str(self.receive_bytes)]
+        if cerid and self.congestion:
+            command += ['--congestion', self.congestion]
+        if not cerid and self.peer_cc:
+            command += ['--cc', self.peer_cc]
         if self.reset and role == 'server':
             command += ['--progress-at', str(PROGRESS_BYTES)]
             command += [] if cerid else ['--resets', '1']
@@ -134,7 +151,9 @@ class Case:
             (f' limit {self.datagram_limit}' if self.datagram_limit else '') + \
             (f' resume {self.resume}' if self.resume else '') + (' version negotiation' if self.negotiate else '') + \
             (' stateless reset' if self.reset else '') + \
-            (f' receive {self.receive_bytes}' if self.receive_bytes else '')
+            (f' receive {self.receive_bytes}' if self.receive_bytes else '') + \
+            (f' cerid {self.congestion}' if self.congestion else '') + \
+            (f' ngtcp2 {self.peer_cc}' if self.peer_cc else '')
         return ('cerid client' if self.cerid_is_client else 'ngtcp2 client') + \
             f' v{self.version} {self.group} {self.cipher} {self.streams}x{self.size} {self.closer} closes {self.code}' \
             + extra
@@ -170,6 +189,7 @@ class Case:
             if relay is not None:
                 check_relay_sizes(relay, self.path, 'client' if self.cerid_is_client else 'server',
                                   self.receive_bytes or CERID_RECEIVE, f'client {clients}\nserver {servers}')
+                self.check_bottleneck(relay, clients[0] if self.cerid_is_client else servers[0])
             if self.retry:
                 # One per Initial of the first flight, which a hybrid key share makes two datagrams long.
                 expect(1 <= relay.retries <= 2, f'{relay.retries} Retry packets crossed the path')
@@ -260,6 +280,52 @@ class Case:
             self.check_datagrams(client, server, detail)
         self.check_ecn(client, server, detail)
         self.check_pmtu(client, server, detail)
+        self.check_congestion(client if self.cerid_is_client else server, detail)
+
+    def check_congestion(self, cerid, detail):
+        """Cerid ran the controller the case names; BBR's model holds a bandwidth and a round trip, a bottleneck's
+        within reach of its rate and its propagation delay, and a window controller has none."""
+        algorithm = self.congestion or 'cubic'
+        expect(cerid.get('congestion') == algorithm, f'Cerid ran another controller: {detail}')
+        bandwidth, min_rtt = int(cerid.get('bandwidth', '-1')), int(cerid.get('min_rtt_ns', '-1'))
+        if algorithm != 'bbr':
+            expect(bandwidth == 0 and min_rtt == 0, f'a window controller reported a model: {detail}')
+            return
+        expect(bandwidth > 0 and min_rtt > 0, f'BBR measured no bandwidth or round trip: {detail}')
+        rate = (self.path or {}).get('rate')
+        if rate is None:
+            return
+        # The model's rate is the bottleneck's, measured by a peer's ACK frames over a real socket and a relay
+        # scheduled by Python's clock; random loss under BBR's 2% threshold leaves it there. A relay thread that falls
+        # behind hands datagrams on in bursts, and ACK frames so compressed let a sample read the sending rate, up to
+        # ProbeBW_UP's 1.25 times the model's (draft-ietf-ccwg-bbr-07 section 4.1.2.3; 1.26 times the link was seen).
+        # A server's echo sends what it reads, so behind a client that loss holds back its model may hold no more
+        # than the client's rate (0.31 times the link was seen behind CUBIC under 1% loss).
+        floor = 0.6 * rate if self.cerid_is_client else 0
+        expect(floor <= bandwidth <= rate * 1.5, f'BBR found {bandwidth} B/s through {rate} B/s: {detail}')
+        base = int(2 * self.path['delay'] * 1e9)
+        expect(base <= min_rtt <= base + 10_000_000, f'BBR found a {min_rtt} ns round trip over {base} ns: {detail}')
+
+    def check_bottleneck(self, relay, cerid):
+        """Through a bottleneck, Cerid's BBR overflows the buffer toward its peer at most in Startup's overshoot and
+        keeps the standing queue under the round trip, which its window of two BDPs bounds even when a sample
+        overestimates the rate (seen 5% over through the Python relay). A Cerid client, whose sending no echo holds
+        back, keeps the link busy, random loss included, where CUBIC uses a quarter of it. ngtcp2's direction is
+        reported."""
+        if self.congestion != 'bbr' or relay.rate is None:
+            return
+        toward = 'server' if self.cerid_is_client else 'client'
+        other = 'client' if self.cerid_is_client else 'server'
+        entered, overflowed = relay.entered[toward], relay.tail_drops[toward]
+        queue = relay.queued[toward] / max(1, entered)
+        used = relay.utilisation(toward)
+        detail = f'toward the {toward}: {entered} entered, {overflowed} tail drops, a {queue * 1e3:.1f} ms mean ' \
+                 f'queue, {used:.2f} of the link; the other way {relay.tail_drops[other]} tail drops, ' \
+                 f'{relay.utilisation(other):.2f} of the link; cerid {cerid}'
+        expect(entered > 0 and overflowed <= 0.01 * (entered + overflowed), f'BBR overflowed the buffer: {detail}')
+        expect(queue <= 2 * self.path['delay'], f'BBR kept more than a round trip queued: {detail}')
+        if self.cerid_is_client:
+            expect(used >= 0.6, f'BBR left the link idle: {detail}')
 
     def check_ecn(self, client, server, detail):
         cerid, ngtcp2 = (client, server) if self.cerid_is_client else (server, client)
@@ -304,7 +370,7 @@ class Case:
         toward_cerid = path_toward(self.path, 'client' if self.cerid_is_client else 'server')
         expected = self.ngtcp2_reach(min(toward_cerid or receive, receive), min(receive, NGTCP2_MAX_TX))
         reached = int(ngtcp2.get('pmtu', '0'))
-        if settled and not (self.path or {}).get('loss'):
+        if settled and not drops(self.path):
             expect(reached == expected, f'ngtcp2 reached {reached}, not {expected}: {detail}')
         else:
             expect(QUIC_MIN <= reached <= expected, f'ngtcp2 reached {reached}, more than the path carries: {detail}')
@@ -389,6 +455,18 @@ def cases(cerid, ngtcp2):
         for seed in (1, 2):
             yield case(streams=4, size=1 << 20,
                        path=dict(seed=seed, loss=0.02, duplicate=0.02, delay=0.003, jitter=0.006, mtu=1350))
+        yield case(congestion='newreno', size=4 << 20)
+        yield case(congestion='bbr', size=8 << 20)
+        for version in (1, 2):
+            yield case(version=version, congestion='bbr', streams=4, size=1 << 20, path=BOTTLENECK)
+        yield case(congestion='bbr', peer_cc='bbr', streams=4, size=1 << 20, path=BOTTLENECK)
+        yield case(congestion='bbr', peer_cc='reno', streams=4, size=1 << 20, path=BOTTLENECK)
+        yield case(congestion='bbr', streams=4, size=1 << 20, path=dict(BOTTLENECK, seed=1, loss=0.01))
+        for seed in (1, 2):
+            yield case(congestion='bbr', streams=4, size=256 << 10,
+                       path=dict(seed=seed, loss=0.05, duplicate=0.03, delay=0.003, jitter=0.012))
+        yield case(congestion='bbr', streams=4, size=256 << 10, path=dict(mark='ce'))
+        yield case(congestion='bbr', streams=4, size=4 << 20, path=dict(mtu=1350))
         yield case(compat=True)
         yield case(compat=True, streams=8, size=64 << 10)
         for version in (1, 2):

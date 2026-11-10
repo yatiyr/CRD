@@ -5,7 +5,8 @@
  *                             --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1]
  *                             [--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N]
  *                             [--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]]
- *                             [--only-version 1] [--progress-at N] [--resets 1] [--http3 1 ...]
+ *                             [--only-version 1] [--progress-at N] [--resets 1] [--cc reno|cubic|bbr]
+ *                             [--http3 1 ...]
  *
  *   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
  *   seed         the 32-byte Ed25519 private key of the server's self-signed certificate; a client pins its public key
@@ -28,6 +29,7 @@
  *   progress-at  a server prints `progress=1` once it has read this many bytes
  *   resets       a server answers a short header for no connection with a stateless reset: its tokens are derived from
  *                a fixed key, so a restarted process answers for the connections of the one before
+ *   cc           ngtcp2's congestion controller (CUBIC by default): reno, cubic, or its BBR (ngtcp2_bbr.c)
  *
  *   http3        HTTP/3 over nghttp3 instead of the echo: http_exchange.h has its options, ALPN `h3` instead
  *
@@ -136,6 +138,7 @@ typedef struct
     int                     only_version;
     int                     resets;
     int                     datagram_probe;
+    ngtcp2_cc_algo          cc_algo;
     SSL_SESSION*            session; /* a client's newest ticket */
     uint8_t                 early_parameters[MAX_EARLY_PARAMETERS];
     size_t                  early_parameters_size;
@@ -664,6 +667,7 @@ static void default_parameters(peer_t* peer, ngtcp2_settings* settings, ngtcp2_t
 {
     ngtcp2_settings_default(settings);
     settings->initial_ts = now_ns();
+    settings->cc_algo    = peer->cc_algo;
     ngtcp2_transport_params_default(params);
     params->initial_max_stream_data_bidi_local  = 1U << 20U;
     params->initial_max_stream_data_bidi_remote = 1U << 20U;
@@ -1632,7 +1636,7 @@ static int usage(void)
           "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] [--retry 1]"
           " [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]]"
           " [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N] [--resets 1]"
-          " [--http3 1 ...]\n",
+          " [--cc reno|cubic|bbr] [--http3 1 ...]\n",
           stderr);
     return 2;
 }
@@ -1651,6 +1655,7 @@ int main(int argc, char** argv)
     peer.datagram_limit = MAX_DATAGRAM_BYTES;
     peer.connections    = 1U;
     peer.number         = 1U;
+    peer.cc_algo        = NGTCP2_CC_ALGO_CUBIC;
     httpx_default_options(&peer.http3);
     for (int at = 1; at + 1 < argc; at += 2)
     {
@@ -1754,6 +1759,18 @@ int main(int argc, char** argv)
         else if (strcmp(argv[at], "--resets") == 0)
         {
             peer.resets = atoi(value);
+        }
+        else if (strcmp(argv[at], "--cc") == 0 && strcmp(value, "reno") == 0)
+        {
+            peer.cc_algo = NGTCP2_CC_ALGO_RENO;
+        }
+        else if (strcmp(argv[at], "--cc") == 0 && strcmp(value, "cubic") == 0)
+        {
+            peer.cc_algo = NGTCP2_CC_ALGO_CUBIC;
+        }
+        else if (strcmp(argv[at], "--cc") == 0 && strcmp(value, "bbr") == 0)
+        {
+            peer.cc_algo = NGTCP2_CC_ALGO_BBR;
         }
         else
         {
