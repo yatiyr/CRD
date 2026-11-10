@@ -3727,6 +3727,28 @@ layers refused, a product installation's own saved state), `fuzz_policy.cpp` mod
 sequences against a model of the composition), `test_tls_policy.cpp` (a session under a product layer) and
 `test_ceridc_policy.cpp` (the layered verify and its refusals).
 
+<a id="congestion"></a>
+## Congestion control and pacing
+
+**S66. Congestion control and pacing** (NET-PATH, threats T05 and T16; [congestion.hpp](../../engine/foundation/net/include/crd/net/congestion.hpp), `quic.recovery`, `cc.cubic`, `cc.hystart`; RFC 9002 section 7 and appendix B, RFC 9438, RFC 9406; 2026-11-10). Every QUIC connection's 0-RTT and 1-RTT data now goes inside a congestion window and at a paced rate. Before this, only the sent-packet storage limited sending.
+
+- **One interface, versioned policy.** `CongestionController` sees each packet counted in flight leave, be acknowledged or be declared lost, each ACK frame's end with the RTT estimate, persistent congestion, spurious losses (a recovery event, `QuicRecoveryEvents::on_spurious`, with the time the loss was declared), ECN marks and a Retry's reset. It answers with a window, a pacing rate and a burst. `CongestionPolicy` (interface version 1) is authored data chosen per connection (`QuicConnectionConfig::congestion`). `QuicConnection::set_congestion()` swaps it live: the new controller is built in the same slot, seeded with the old window, slow-start threshold and recovery period. BBRv3, Prague and NET-LIVE's delay-based controllers implement the same interface.
+- **The window skeleton** shared by NewReno and CUBIC follows RFC 9002 appendix B:
+  - slow start, with one reduction per recovery period;
+  - persistent congestion drops the window to its minimum (two datagrams);
+  - no growth unless the window or the pacer held sending back that round or the round before (section 7.8);
+  - HyStart++ (RFC 9406) in the first slow start only: rounds by Application packet numbers, eight samples, the conservative phase growing by a quarter, and avoidance after five CSS rounds;
+  - an undo when every loss of the period proves spurious (RFC 9438 section 4.9). An ECN mark and persistent congestion are never undone.
+- **CUBIC in integers.** W_max, K and the curve are computed in bytes with time in 2^-10 s steps (an exact integer cube root and 128-bit products). Every platform computes the same window, which NET-SIM's replays need. Within one byte, the curve agrees with RFC 9438's floating-point formula. Also implemented: the Reno-friendly estimate (alpha 9/17, then 1 once past the window before the reduction), fast convergence (W_max to 0.85 of the window) and idle periods taken off the epoch.
+- **Pacing.** `Pacer` holds exact credit in byte-nanoseconds per second. It refills at the controller's rate (1.25 windows per smoothed RTT, RFC 9002 section 7.7) up to a burst of the initial window. A packet goes while any credit is left and may run it into debt, which is capped at one burst. The release time is a timer of `next_timer_ns()`.
+- **What the connection holds back.** Data goes only when the window has room for a whole datagram. A smaller room let only ACK frames through, packet after packet; the first connection test that showed this sent 128 ACK-only datagrams in one instant.
+- **What is never held back.** ACK-only packets and probes (sections 6.2.4 and 7.5), and the Initial and Handshake CRYPTO data, still count in bytes in flight but are not held by the window. A peer still handshaking reads no 1-RTT packet, so 1-RTT data filling the window is never acknowledged or declared lost. No probe timer serves the Application space before confirmation (appendix A.8). A lost Handshake flight held behind that data wedged both ends until idle: the twelve-connection client test over hostile paths found it. The handshake's size is bounded by the crypto buffers and, on a server, by the amplification limit. DATAGRAM frames are congestion controlled (RFC 9221 section 5.4).
+- **Proof.**
+  - `test_congestion.cpp`: the initial window, both controllers' arithmetic by hand, HyStart++'s phases, CUBIC against its curve, the undo, swaps and the pacer.
+  - `test_quic_congestion.cpp`: bytes in flight within a growing window, a live swap, the pacer's timer, a full window still acknowledging, and transfers over lossy, reordering paths.
+  - `fuzz_congestion.cpp`: the window's bounds, no growth without being held back, swaps, and the pacer's credit.
+- **Next in NET-PATH:** ECN marking and validation (RFC 9000 section 13.4) feeding `on_congestion`, DPLPMTUD, then BBRv3 (its first step: delivery-rate stamps in `QuicSentPacket` and crd-net linking crd-hesap-net's windowed filter and delivery rate, which then ships in the package), Prague, migration and the offloads.
+
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers
 
