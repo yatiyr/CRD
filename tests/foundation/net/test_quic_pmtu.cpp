@@ -383,7 +383,7 @@ QuicConnectionConfig path_config(QuicSide side, const Identity& identity, usize 
     return config;
 }
 
-// The client writes `total` bytes of the pattern on one stream; the server reads them.
+// The client writes `total` bytes of the pattern on `stream` (one it opens); the server reads them.
 struct Bulk
 {
     QuicConnection& client;
@@ -391,12 +391,13 @@ struct Bulk
     u64 total = 0U;
     u64 written = 0U;
     u64 read = 0U;
+    u64 stream = kStream;
 
     bool step()
     {
         if (written < total)
         {
-            static_cast<void>(write_pattern(client.streams(), kStream, written, total, kStream, false));
+            static_cast<void>(write_pattern(client.streams(), stream, written, total, stream, false));
         }
         QuicStreamEvent event;
         while (server.streams().poll(event))
@@ -405,9 +406,9 @@ struct Bulk
         while (client.streams().poll(event))
         {
         }
-        if (server.streams().recv_state(kStream) != QuicRecvState::None)
+        if (server.streams().recv_state(stream) != QuicRecvState::None)
         {
-            static_cast<void>(drain(server.streams(), kStream, read, kStream));
+            static_cast<void>(drain(server.streams(), stream, read, stream));
         }
         return read >= total;
     }
@@ -549,6 +550,49 @@ TEST_CASE("QUIC PMTU: a path whose MTU falls mid-transfer is a black hole found 
         CHECK(bulk.read == bulk.total);
         CHECK(pair.client.state() == QuicConnectionState::Established);
     }
+}
+
+TEST_CASE("QUIC PMTU: a path that falls toward one end of a two-way transfer is a black hole that end finds",
+          "[net][net-path][quic-pmtu]")
+{
+    // The server's acknowledgements ride in its full data packets, which the fallen path drops with the data: the
+    // client then hears nothing either, and only the server's own black hole detection ends the silence.
+    Pair pair(1500U,
+              [&](QuicSide, QuicConnectionConfig& config)
+              {
+                  config.streams.stream_window = 1U << 18U;
+                  config.streams.connection_window = 1U << 18U;
+                  config.streams.connection_max_window = 1U << 18U;
+              });
+    pair.confirm();
+    u64 id = 0U;
+    REQUIRE(pair.server.streams().open(true, id) == QuicStreamError::None);
+    Bulk up{pair.client, pair.server, 1U << 19U};
+    Bulk down{pair.server, pair.client, 1U << 19U, 0U, 0U, id};
+    const auto both = [&]
+    {
+        const bool sent = up.step();
+        return down.step() && sent;
+    };
+    REQUIRE(pair.net->run_until([&] { return both() && pair.searched(); }));
+    up.total += 1U << 20U;
+    down.total += 1U << 20U;
+    const u64 midway = down.read + (1U << 18U);
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(both());
+            return down.read >= midway;
+        }));
+    pair.net->path[1].mtu = 1300U; // toward the client alone
+    REQUIRE(pair.net->run_until([&] { return both() && pair.searched(); }, 600U * kSecond));
+    CHECK(pair.server.path_mtu().counters().black_holes == 1U);
+    CHECK(pair.server.path_mtu().size() == 1300U);
+    CHECK(pair.client.path_mtu().counters().black_holes == 0U);
+    CHECK(pair.client.path_mtu().size() == 1500U);
+    CHECK(up.read == up.total);
+    CHECK(down.read == down.total);
+    CHECK(pair.server.state() == QuicConnectionState::Established);
 }
 
 TEST_CASE("QUIC PMTU: the search holds over loss, duplication and reordering", "[net][net-path][quic-pmtu]")

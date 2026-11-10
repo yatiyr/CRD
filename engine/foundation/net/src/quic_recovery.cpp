@@ -716,6 +716,38 @@ QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents&
     return loss;
 }
 
+usize QuicRecovery::room(Space& space) noexcept
+{
+    usize free = space.entries.size() - space.count;
+    for (usize i = 0U; i < space.count && settled(entry(space, i).state); ++i)
+    {
+        ++free;
+    }
+    return free;
+}
+
+QuicLoss QuicRecovery::make_room(QuicSpace id, usize entries, u64 now_ns, QuicRecoveryEvents& events) noexcept
+{
+    Space&   space = m_spaces[quic_space_index(id)];
+    QuicLoss loss;
+    for (usize i = 0U; i < space.count && room(space) < entries; ++i)
+    {
+        QuicSentEntry& slot = entry(space, i);
+        if (slot.state != kOutstanding)
+        {
+            continue;
+        }
+        settle(space, slot);
+        slot.state   = kLost;
+        slot.lost_ns = now_ns;
+        ++loss.packets;
+        loss.bytes += slot.packet.in_flight ? slot.packet.bytes : 0U;
+        loss.newest_sent_ns = max_u64(loss.newest_sent_ns, slot.packet.sent_ns);
+        events.on_lost(id, slot.packet);
+    }
+    return loss;
+}
+
 QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns,
                                     QuicRecoveryEvents& events) noexcept
 {
@@ -894,6 +926,10 @@ QuicTimeout QuicRecovery::on_timeout(u64 now_ns, QuicRecoveryEvents& events) noe
         out.space  = id;
         out.probes = 2U;
     }
+    // The probes must leave (section 6.2.4: a sender MUST send one): a storage full of packets that nothing
+    // acknowledges, as behind a path that drops every one of them, or of ACK-only packets, would hold them back for
+    // good. Its oldest are declared lost instead, and their entries go to the probes.
+    out.lost = make_room(out.space, out.probes, now_ns, events);
     if (m_pto_count < 64U)
     {
         ++m_pto_count; // the backoff saturates long before: an idle timeout ends the connection

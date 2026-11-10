@@ -953,6 +953,72 @@ TEST_CASE("quic recovery: the storage bounds what is in flight; numbers only ris
           QuicRecoveryError::BadNumber);
 }
 
+TEST_CASE("quic recovery: a probe timeout over a storage full of unacknowledged packets declares the oldest lost so "
+          "its probes can leave",
+          "[net][quic][recovery]")
+{
+    // A path that drops every packet the storage holds (a black hole) leaves nothing to acknowledge them: without
+    // room the probes that would find out could never be sent.
+    QuicSentEntry initial[1];
+    QuicSentEntry handshake[1];
+    QuicSentEntry application[5];
+    QuicRecoveryConfig config{QuicSide::Server};
+    config.reserved_entries = 2U;
+    QuicRecovery recovery(config, Span<QuicSentEntry>(initial, 1U), Span<QuicSentEntry>(handshake, 1U),
+                          Span<QuicSentEntry>(application, 5U));
+    recovery.confirm_handshake(0U);
+    Events events;
+    for (u64 n = 0U; n < 5U; ++n)
+    {
+        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(n, kMs)) == QuicRecoveryError::None);
+    }
+    REQUIRE_FALSE(recovery.can_send(QuicSpace::Application));
+    const QuicTimeout timeout = recovery.on_timeout(recovery.loss_timer_ns(), events);
+    REQUIRE(timeout.kind == QuicTimeoutKind::Probe);
+    CHECK(timeout.probes == 2U);
+    // The two oldest give their entries to the two probes.
+    CHECK(timeout.lost.packets == 2U);
+    CHECK(timeout.lost.bytes == 2400U);
+    REQUIRE(events.of('l') == 2U);
+    CHECK(events.numbers[0] == 0U);
+    CHECK(events.numbers[1] == 1U);
+    CHECK(recovery.bytes_in_flight() == 3U * 1200U);
+    CHECK(recovery.pto_count() == 1U);
+    const u64 now = recovery.loss_timer_ns();
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(5U, now)) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(6U, now)) == QuicRecoveryError::None);
+    CHECK_FALSE(recovery.can_send(QuicSpace::Application));
+    // Their entries went to the probes, so a late acknowledgement of one finds nothing to report; with room, the
+    // next timeout only probes.
+    const QuicAckOutcome late = recovery.on_ack(QuicSpace::Application, ack_of(1U, 6U).ack(), now + kMs, events);
+    CHECK(late.error == QuicRecoveryError::None);
+    CHECK(late.acked_packets == 5U);
+    CHECK(late.spurious_packets == 0U);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(7U, now + kMs)) == QuicRecoveryError::None);
+    const QuicTimeout again = recovery.on_timeout(recovery.loss_timer_ns(), events);
+    CHECK(again.kind == QuicTimeoutKind::Probe);
+    CHECK(again.lost.packets == 0U);
+
+    // A client's anti-deadlock probe, its one Initial entry held by an ACK-only packet nothing acknowledges.
+    QuicSentEntry client_initial[2];
+    QuicSentEntry client_handshake[1];
+    QuicSentEntry client_application[1];
+    QuicRecovery client(QuicRecoveryConfig{QuicSide::Client}, Span<QuicSentEntry>(client_initial, 2U),
+                        Span<QuicSentEntry>(client_handshake, 1U), Span<QuicSentEntry>(client_application, 1U));
+    Events seen;
+    REQUIRE(client.on_sent(QuicSpace::Initial, packet(0U, 0U)) == QuicRecoveryError::None);
+    REQUIRE(client.on_ack(QuicSpace::Initial, ack_of(0U, 0U).ack(), 100U * kMs, seen).acked_packets == 1U);
+    REQUIRE(client.on_sent(QuicSpace::Initial, packet(1U, 150U * kMs, false)) == QuicRecoveryError::None);
+    REQUIRE(client.on_sent(QuicSpace::Initial, packet(2U, 160U * kMs, false)) == QuicRecoveryError::None);
+    REQUIRE_FALSE(client.can_send(QuicSpace::Initial));
+    const QuicTimeout stuck = client.on_timeout(client.loss_timer_ns(), seen);
+    CHECK(stuck.kind == QuicTimeoutKind::AntiDeadlock);
+    CHECK(stuck.space == QuicSpace::Initial);
+    CHECK(stuck.lost.packets == 1U);
+    CHECK(stuck.lost.bytes == 0U); // an ACK-only packet is not in flight
+    CHECK(client.can_send(QuicSpace::Initial));
+}
+
 TEST_CASE("quic recovery: the next timer is the earliest of loss detection and every owed ACK",
           "[net][quic][recovery]")
 {

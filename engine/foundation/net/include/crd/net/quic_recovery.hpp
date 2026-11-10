@@ -348,6 +348,10 @@ private:
     void compact(QuicSpace id, u64 now_ns, bool room) noexcept;
     [[nodiscard]] bool held_lost(QuicSpace id, const QuicSentEntry& slot, u64 now_ns) const noexcept;
     [[nodiscard]] QuicLoss detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events) noexcept;
+    // The entries `space` can still record: free ones and the settled run at the head that compact() gives up.
+    [[nodiscard]] usize room(Space& space) noexcept;
+    // Declares the oldest outstanding packets of `id` lost until it can record `entries` more (section 6.2.4).
+    [[nodiscard]] QuicLoss make_room(QuicSpace id, usize entries, u64 now_ns, QuicRecoveryEvents& events) noexcept;
     [[nodiscard]] bool peer_validated() const noexcept;
     [[nodiscard]] bool any_eliciting_in_flight() const noexcept;
     [[nodiscard]] u64 decoded_ack_delay_ns(QuicSpace id, u64 raw) const noexcept;

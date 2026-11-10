@@ -18,7 +18,9 @@
 // losses among them), says whether it raised the largest, and names a send time no later than now.
 // Received ranges stay ordered, separated, bounded and made of numbers received; a duplicate is refused exactly when
 // the ranges hold it; a written ACK frame reads back as the largest ranges. A loss or probe timeout fires only when
-// due, and the timer is armed while ack-eliciting packets are outstanding in a space it may serve.
+// due, and the timer is armed while ack-eliciting packets are outstanding in a space it may serve. A probe or
+// anti-deadlock timeout declares nothing lost but, in a space whose storage could not record a packet, its oldest
+// outstanding packets, in order; after it the space can record its probes.
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_recovery.hpp>
 
@@ -478,6 +480,11 @@ void op_timeout(World& w)
     const u64         threshold = w.recovery.packet_threshold();
     const u32         steps = w.recovery.reorder_steps();
     const usize       from = w.log.count;
+    bool              could[kQuicSpaces] = {};
+    for (usize s = 0U; s < kQuicSpaces; ++s)
+    {
+        could[s] = w.recovery.can_send(static_cast<QuicSpace>(s));
+    }
     const QuicTimeout out  = w.recovery.on_timeout(w.now, w.log);
     if (due == kNeverNs || w.now < due)
     {
@@ -491,7 +498,24 @@ void op_timeout(World& w)
         apply_events(w, from, ConstSpan<QuicAckRange>(), threshold, steps);
         return;
     }
-    CRD_FUZZ_REQUIRE(w.log.count == from && out.probes != 0U);
+    CRD_FUZZ_REQUIRE(out.probes != 0U);
+    // A probe must leave (RFC 9002 section 6.2.4): a storage that could not record it gives up its oldest packets.
+    ModelSpace& space = w.spaces[static_cast<usize>(out.space)];
+    CRD_FUZZ_REQUIRE(could[static_cast<usize>(out.space)] || w.log.count > from || space.discarded);
+    for (usize i = from; i < w.log.count; ++i)
+    {
+        const Log::Event& event = w.log.events[i];
+        CRD_FUZZ_REQUIRE(event.kind == 'l' && event.space == out.space);
+        Sent* const sent = space.find(event.number);
+        CRD_FUZZ_REQUIRE(sent != nullptr && sent->state == kOut);
+        for (usize j = 0U; j < space.count; ++j)
+        {
+            CRD_FUZZ_REQUIRE(space.sent[j].state != kOut || space.sent[j].number >= event.number);
+        }
+        sent->state   = kLost;
+        sent->lost_ns = w.now;
+    }
+    CRD_FUZZ_REQUIRE(w.recovery.can_send(out.space) || space.discarded);
     CRD_FUZZ_REQUIRE(w.recovery.pto_count() == ((pto < 64U) ? pto + 1U : pto));
     CRD_FUZZ_REQUIRE(out.kind != QuicTimeoutKind::AntiDeadlock || w.side == QuicSide::Client);
 }
@@ -610,6 +634,26 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     put(0x05U, 0xFFU);
     put(0x06U, 0x00U);
     sink.add("server-application", application, at);
+    // A confirmed server's Application storage filled with packets nothing acknowledges, then probe timeouts: each
+    // gives up the oldest for its probes.
+    u8 full[2U + 2U * 40U] = {0x01U};
+    at = 1U;
+    const auto add = [&](u8 op, u8 p)
+    {
+        full[at++] = op;
+        full[at++] = p;
+    };
+    add(0x07U, 0x00U);
+    for (u8 i = 0U; i < 33U; ++i)
+    {
+        add(0x10U, 0x04U);
+    }
+    for (u8 i = 0U; i < 3U; ++i)
+    {
+        add(0x05U, 0xFFU);
+        add(0x06U, 0x00U);
+    }
+    sink.add("full-storage-probe", full, at);
     // An optimistic acknowledgement past the last number sent.
     const u8 optimistic[] = {0x00U, 0x10U, 0x04U, 0x10U, 0x05U, 0x11U, 0x80U, 0x00U, 0x00U};
     sink.add("optimistic-ack", optimistic, sizeof(optimistic));
