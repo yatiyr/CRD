@@ -58,9 +58,10 @@ void QuicPathMtu::limit(u32 ceiling) noexcept
         m_state = QuicPmtuState::Disabled; // nothing above the floor is left to find
         return;
     }
-    if (m_state == QuicPmtuState::Base && m_low >= m_base)
+    if ((m_state == QuicPmtuState::Base || m_state == QuicPmtuState::Error) && m_low >= m_base)
     {
-        m_state = QuicPmtuState::Searching; // the base fell to a size already proved (the floor, at least)
+        // The base fell to a size already proved (the floor, at least): a failed base fails no more.
+        m_state = QuicPmtuState::Searching;
     }
     if (m_trying > bound)
     {

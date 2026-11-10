@@ -260,6 +260,21 @@ TEST_CASE("QUIC PMTU: the peer's ceiling lowers every bound, and stale probes se
     QuicPathMtu v6_floor = started(kQuicIpv6BaseDatagram, 1500U);
     v6_floor.limit(1200U);
     CHECK(v6_floor.state() == QuicPmtuState::Disabled);
+
+    // A failed base the ceiling lowers to a size a late probe proved fails no more: the raise probes nothing below it.
+    QuicPathMtu failed = started(1400U, 1500U);
+    for (u32 attempt = 0U; attempt < kQuicPmtuMaxProbes; ++attempt)
+    {
+        REQUIRE(failed.probe(0U, true) == 1400U);
+        failed.on_probe_sent(1400U);
+        failed.on_probe_lost(1400U, 0U);
+    }
+    REQUIRE(failed.state() == QuicPmtuState::Error);
+    failed.on_probe_acked(1300U, 0U); // a probe of an earlier search, late
+    CHECK(failed.size() == 1300U);
+    failed.limit(1300U);
+    CHECK(failed.state() == QuicPmtuState::SearchComplete);
+    CHECK(failed.probe(kQuicPmtuRaiseNs, true) == 0U); // fuzz_quic_pmtu.cpp found it probing the size it had
 }
 
 TEST_CASE("QUIC PMTU: a probe declared lost and then acknowledged proves its size", "[net][net-path][quic-pmtu]")
