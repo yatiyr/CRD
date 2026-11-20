@@ -1210,8 +1210,12 @@ them: what differs is negotiation and whether flow control exists.
   RESET_STREAM_AT at header + the offset the application names, so the session ID always arrives.
 - **Closing.** WT_CLOSE_SESSION (32-bit code, message at most 1024 bytes, cut on a UTF-8 boundary, a longer or invalid one
   H3_MESSAGE_ERROR), then FIN at once; a clean FIN means code 0; data after the capsule is H3_MESSAGE_ERROR. Every stream of
-  the session then resets and stops with WT_SESSION_GONE, no new stream or datagram. WT_DRAIN_SESSION and GOAWAY reach the
-  application and permit further use.
+  the session then resets and stops with WT_SESSION_GONE, no new stream or datagram. The closer never stops the CONNECT
+  stream's reading part (the draft's MAY): a STOP_SENDING outruns a capsule held back by flow control, and webtransport-go
+  ends the session on it with WT_SESSION_GONE before reading the capsule. It discards what the peer still sends until the
+  peer closes or resets its part, as the recipient must; a session whose capsule and FIN were acknowledged and whose peer
+  never answers is no longer counted, and is stopped with WT_SESSION_GONE when its slot is claimed (2026-11-20).
+  WT_DRAIN_SESSION and GOAWAY reach the application and permit further use.
 - **Exporter** (section 4.8). TLS exporter with label `EXPORTER-WebTransport` and the context struct: session ID (64),
   label length (8), label, context length (8), context; through `export_keying_material`.
 - **Channels.** A session presents the surface the channel layer runs on over a `QuicStreamSet`: open, write, peek,
