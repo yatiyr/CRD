@@ -35,7 +35,7 @@
 // that a stateless reset of the ID it sends to reaches drains, while a forged token changes nothing. A confirmed pair
 // agrees on whether a Retry was taken; the server accepts it only for an Initial to the Retry's ID. A confirmed pair
 // runs one version: the other one after a switch, the configured one otherwise. Paths: a confirmed pair that carried
-// its stream has the server sending to the client's address. 0-RTT: an offer ends Accepted or
+// its stream with neither end closed has the server sending to the client's address. 0-RTT: an offer ends Accepted or
 // Rejected on both ends alike; accepted, the server reads the early stream whole and unchanged, never marking more
 // bytes replayable than came; rejected, the client's streams were reset and the server opened none of them.
 #include <crd/core/platform.hpp>
@@ -380,6 +380,7 @@ struct Pair
     usize client_path = 0U;    // the client's address now (over paths)
     u64 path_received[4] = {}; // bytes the server was given from each address since it last did not know it
     u64 path_sent[4] = {};     // and sent there
+    u64 unbound_bytes = 0U;    // given to the server's first path before it was bound
 
     explicit Pair(QuicVersion run, bool switching = false, Tickets* tickets = nullptr, bool raw_path = false)
         : client_host(allocator, 0U,
@@ -525,29 +526,42 @@ struct Pair
         if (flight.to == 1U && over_paths())
         {
             const QuicPath& from = kClientPaths[flight.path];
-            if (server.paths().find(from) == kQuicNoPath)
+            // A path the server does not know starts its count again. Its unbound first path counts every datagram
+            // until one opens, and then belongs to that one's address (S55).
+            const bool unbound = server.path().peer.port == 0U;
+            if (!unbound && server.paths().find(from) == kQuicNoPath)
             {
-                path_received[flight.path] = 0U; // a path the server does not know starts its count again
+                path_received[flight.path] = 0U;
                 path_sent[flight.path] = 0U;
             }
-            path_received[flight.path] += flight.size;
+            unbound_bytes += unbound ? flight.size : 0U;
+            path_received[flight.path] += unbound ? 0U : flight.size;
             to.receive(from, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+            const usize bound = path_of(server.path());
+            if (unbound && bound < 4U)
+            {
+                path_received[bound] = unbound_bytes;
+            }
         }
         else
         {
             to.receive(Span<u8>(flight.bytes, flight.size), flight.ecn, now);
         }
         check_closed(to);
-        // Whatever the path does to codepoints, a failed validation stays failed.
+        // Whatever the path does to codepoints, a failed validation stays failed for the path's life: a new path
+        // (the recovery's path floor moved) validates again (RFC 9000 section 13.4.2).
         const bool failed = to.ecn().state() == QuicEcnState::Failed;
-        CRD_FUZZ_REQUIRE(failed || !ecn_failed[flight.to]);
+        const u64 floor = to.recovery().path_floor();
+        CRD_FUZZ_REQUIRE(failed || !ecn_failed[flight.to] || floor != path_floor[flight.to]);
         ecn_failed[flight.to] = failed;
+        path_floor[flight.to] = floor;
         check_hosts();
     }
 
     void remove(usize index) { flights[index] = flights[--count]; }
 
     bool ecn_failed[2] = {}; // each end's ECN validation failed
+    u64 path_floor[2] = {};  // and the path it failed on (QuicRecovery::path_floor)
 
     void timers()
     {
@@ -993,7 +1007,8 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             settle_early_datagram(pair, decided == TlsEarlyData::Accepted);
         }
         transfer(pair);
-        if (over_paths() && pair.established())
+        // A pair that carried its stream with neither end closed has the server sending to the client's address.
+        if (over_paths() && !finished(pair.client) && !finished(pair.server))
         {
             CRD_FUZZ_REQUIRE(pair.server.path() == kClientPaths[pair.client_path]);
         }

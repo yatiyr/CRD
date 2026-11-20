@@ -277,3 +277,31 @@ TEST_CASE("QUIC ECN: each space's counts stand apart, and a new path starts agai
     CHECK(ecn.marking(0U, kTesting) == Ecn::Ect1);
     CHECK(ecn.reported(QuicSpace::Handshake).ect0 == 0U);
 }
+
+TEST_CASE("QUIC ECN: a connection's new path tests again, and the peer's counts still compare with what was sent",
+          "[net][net-path][quic-ecn]")
+{
+    // Validated, then failed on the first path: three marked packets reported, then a count that falls.
+    QuicEcnValidator ecn = sent(3U);
+    CHECK_FALSE(ecn.on_ack(kApp, ack_of(2U, 3U, 0U, 0U), outcome_of(3U)));
+    REQUIRE(ecn.state() == QuicEcnState::Capable);
+    CHECK_FALSE(ecn.on_ack(kApp, ack_of(3U, 2U, 0U, 0U), outcome_of(0U)));
+    REQUIRE(ecn.state() == QuicEcnState::Failed);
+
+    ecn.restart(Ecn::Ect0);
+    CHECK(ecn.state() == QuicEcnState::Testing);
+    CHECK(ecn.failure() == QuicEcnFailure::None);
+    CHECK(ecn.reported(kApp).ect0 == 3U); // the counts so far are kept
+    ecn.on_sent(kApp, ecn.marking(0U, kTesting), 0U);
+    ecn.on_sent(kApp, ecn.marking(0U, kTesting), 0U);
+    // The peer's next counts run on from the connection's: five marked in all, two of them on the new path.
+    CHECK_FALSE(ecn.on_ack(kApp, ack_of(5U, 5U, 0U, 0U), outcome_of(2U)));
+    CHECK(ecn.state() == QuicEcnState::Capable);
+    // A CE rise on the validated new path is a signal.
+    ecn.on_sent(kApp, ecn.marking(0U, kTesting), 0U);
+    CHECK(ecn.on_ack(kApp, ack_of(6U, 5U, 0U, 1U), outcome_of(1U)) == 1U);
+    // Without a codepoint the new path marks nothing.
+    ecn.restart(Ecn::NotEct);
+    CHECK(ecn.state() == QuicEcnState::Off);
+    CHECK(ecn.marking(0U, kTesting) == Ecn::NotEct);
+}

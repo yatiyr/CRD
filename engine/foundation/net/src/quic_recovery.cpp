@@ -911,6 +911,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
     // was declared lost is acknowledged without an event and measures the reordering (section 6.1).
     u64  largest_newly = kQuicNoPacket;
     u64  largest_sent  = 0U;
+    bool largest_on_path = false; // the largest newly acknowledged was sent on the path the estimate follows
     u64  reordering    = 0U;
     u64  carried       = kQuicNoPacket; // the largest of the ACK frames those packets carried
     bool by_time       = false;
@@ -955,6 +956,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                 {
                     largest_newly = slot.packet.number;
                     largest_sent  = slot.packet.sent_ns;
+                    largest_on_path = counted;
                 }
                 if (slot.packet.carried_ack != kQuicNoPacket &&
                     (carried == kQuicNoPacket || slot.packet.carried_ack > carried))
@@ -981,7 +983,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
         }
         m_reorder_persist = kQuicReorderPersist;
     }
-    if (largest_newly == ack.largest && eliciting && (id != QuicSpace::Application || largest_newly >= m_path_floor))
+    if (largest_newly == ack.largest && eliciting && largest_on_path)
     {
         const u64 latest = (now_ns > largest_sent) ? now_ns - largest_sent : 0U;
         m_rtt.sample(latest, decoded_ack_delay_ns(id, ack.delay), m_confirmed, m_peer_max_ack_delay_ns, now_ns);

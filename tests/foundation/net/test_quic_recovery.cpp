@@ -1229,3 +1229,53 @@ TEST_CASE("quic recovery: receive timestamps take the room the ranges leave, the
     REQUIRE(walk.next(stamp));
     CHECK(stamp.number == 15U);
 }
+
+TEST_CASE("quic recovery: a new path starts the estimate again and keeps what the old path sent out of it",
+          "[net][quic][recovery][net-path]")
+{
+    Fixture f;
+    f.confirmed_with_rtt(50U * kMs);
+    const QuicSpace app = QuicSpace::Application;
+    f.send(app, 1U, 60U * kMs);
+    f.send(app, 2U, 60U * kMs);
+    f.send(app, 3U, 60U * kMs);
+    REQUIRE(f.recovery.bytes_in_flight() == 3U * 1200U);
+    CHECK(f.recovery.path_floor() == 0U);
+    f.recovery.restart_path(70U * kMs);
+    CHECK(f.recovery.path_floor() == 4U);
+    CHECK(f.recovery.bytes_in_flight() == 0U);
+    CHECK_FALSE(f.recovery.rtt().sampled());
+    CHECK(f.recovery.rtt().smoothed_ns == kQuicInitialRttNs);
+    CHECK(f.recovery.packet_threshold() == kQuicPacketThreshold);
+    CHECK(f.recovery.loss_timer_ns() != kNeverNs); // the old packets still have a probe timeout: their frames
+    // A packet on the new path counts; one sent off the path (a validation elsewhere) does not.
+    f.send(app, 4U, 80U * kMs);
+    QuicSentPacket off = packet(5U, 80U * kMs);
+    off.off_path = true;
+    REQUIRE(f.recovery.on_sent(app, off) == QuicRecoveryError::None);
+    CHECK(f.recovery.bytes_in_flight() == 1200U);
+    CHECK(f.recovery.on_path(app, packet(4U, 0U)));
+    CHECK_FALSE(f.recovery.on_path(app, packet(3U, 0U)));
+    CHECK_FALSE(f.recovery.on_path(app, off));
+    CHECK(f.recovery.on_path(QuicSpace::Handshake, packet(0U, 0U)));
+    // The old packets acknowledged alone: settled, no sample, no bytes.
+    QuicAckOutcome old = f.ack(app, 1U, 2U, 90U * kMs);
+    CHECK(old.acked_packets == 2U);
+    CHECK(old.acked_bytes == 0U);
+    CHECK_FALSE(old.rtt_sampled);
+    CHECK(f.recovery.bytes_in_flight() == 1200U);
+    // The off-path packet acknowledged as the largest: still no sample of the new path.
+    old = f.ack(app, 5U, 5U, 95U * kMs);
+    CHECK_FALSE(old.rtt_sampled);
+    CHECK(old.acked_bytes == 0U);
+    // The new path's packet: its sample and its bytes. Packet 3, outstanding below it, is lost by the threshold
+    // later, and its bytes count in no loss.
+    const QuicAckOutcome fresh = f.ack(app, 4U, 4U, 100U * kMs);
+    CHECK(fresh.rtt_sampled);
+    CHECK(fresh.acked_bytes == 1200U);
+    CHECK(f.recovery.rtt().latest_ns == 20U * kMs);
+    CHECK(f.recovery.bytes_in_flight() == 0U);
+    const QuicTimeout timeout = f.recovery.on_timeout(f.recovery.loss_timer_ns(), f.events);
+    CHECK(timeout.lost.bytes == 0U);
+    CHECK(f.events.of('l') == 1U);
+}
