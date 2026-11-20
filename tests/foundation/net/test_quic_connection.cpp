@@ -1437,9 +1437,8 @@ public:
         spec.number = raw.next[static_cast<usize>(quic_space_of(type))]++;
         REQUIRE(writer.begin(spec, Span<u8>(datagram, kQuicMinInitialDatagram)));
         const usize used = write(writer.frames());
-        const usize floor = (type == QuicPacketType::Initial && pad_initial) ? kQuicMinInitialDatagram
-                            : (type == QuicPacketType::OneRtt)               ? pad_to
-                                                                             : 0U;
+        usize floor = (type == QuicPacketType::OneRtt) ? pad_to : 0U;
+        floor = (type == QuicPacketType::Initial && pad_initial) ? kQuicMinInitialDatagram : floor;
         usize size = 0U;
         REQUIRE(raw.protection.seal(writer, used, {floor, 0U}, size) == QuicPacketError::None);
         server.receive(from, Span<u8>(datagram, size), Ecn::NotEct, now);

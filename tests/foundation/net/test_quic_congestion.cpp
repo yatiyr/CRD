@@ -331,28 +331,28 @@ TEST_CASE("QUIC paths: transfers both ways follow a NAT rebinding and then an ad
         pair.confirm();
         REQUIRE(pair.server.path().peer == net.client_at);
         // The client streams to the server and the server back on the same stream.
-        constexpr u64 kTotal = 1U << 19U;
-        Bulk up{pair.client, pair.server, kTotal};
+        constexpr u64 total = 1U << 19U;
+        Bulk up{pair.client, pair.server, total};
         u64 down_written = 0U;
         u64 down_read = 0U;
         const auto step = [&]
         {
             const bool up_done = up.step();
-            if (pair.server.streams().recv_state(kStream) != QuicRecvState::None && down_written < kTotal)
+            if (pair.server.streams().recv_state(kStream) != QuicRecvState::None && down_written < total)
             {
-                static_cast<void>(write_pattern(pair.server.streams(), kStream, down_written, kTotal, 7U, false));
+                static_cast<void>(write_pattern(pair.server.streams(), kStream, down_written, total, 7U, false));
             }
             if (pair.client.streams().recv_state(kStream) != QuicRecvState::None)
             {
                 static_cast<void>(drain(pair.client.streams(), kStream, down_read, 7U));
             }
-            return up_done && down_read >= kTotal;
+            return up_done && down_read >= total;
         };
-        REQUIRE(net.run_until([&] { return step() || (up.read >= kTotal / 3U && down_read >= kTotal / 3U); },
+        REQUIRE(net.run_until([&] { return step() || (up.read >= total / 3U && down_read >= total / 3U); },
                               600000U * kMs));
         // A NAT rebinding: the client's port changes and the old mapping is gone at once.
         net.client_at.port = 50001U;
-        REQUIRE(net.run_until([&] { return step() || (up.read >= 2U * kTotal / 3U && down_read >= 2U * kTotal / 3U); },
+        REQUIRE(net.run_until([&] { return step() || (up.read >= 2U * total / 3U && down_read >= 2U * total / 3U); },
                               600000U * kMs));
         CHECK(pair.server.path().peer == net.client_at);
         CHECK(pair.server.recovery().path_floor() == 0U); // only the port changed
