@@ -2590,6 +2590,558 @@ static_assert(kGccHistory * kGccHistorySlotNs >= kGccHistoryNs + kGccHistorySlot
     return y + y2 / 2U + y3 / 6U + y4 / 24U;
 }
 
+// ---- GCC's probing: libwebrtc's ProbeController, BitrateProber, ProbeBitrateEstimator and AlrDetector ----
+
+constexpr u64 kGccProbeMaxRate = 625000U;           // 5 Mbit/s, the probes' ceiling when the policy sets no maximum
+constexpr u64 kGccProbeFirstPercent = 300U;         // the start's probes: 3 and 6 times the start rate
+constexpr u64 kGccProbeSecondPercent = 600U;
+constexpr u64 kGccProbeFurtherPercent = 200U;       // a further probe and an ALR probe: twice the estimate
+constexpr u64 kGccProbeFurtherOfLast = 70U;         // percent of the last probe a target passes to probe further
+constexpr u64 kGccProbeWaitNs = 1000000000U;        // a probe's result is awaited this long
+constexpr u64 kGccInitialProbingNs = 5000000000U;   // repeated initial probing lasts this long, a probe each second
+constexpr u64 kGccDropPercent = 66U;                // a target under this share of the last is a large drop
+constexpr u64 kGccDropProbePercent = 85U;           // the probe back: this share of the rate before the drop
+constexpr u64 kGccDropExpectPercent = 95U;          // which, less its uncertainty, must pass the estimate
+constexpr u64 kGccDropWindowNs = 5000000000U;       // within this long of the drop, probes back this far apart
+constexpr u64 kGccAlrEndedNs = 3000000000U;         // or this long after the application limited region ended
+constexpr u64 kGccAlrProbeNs = 5000000000U;         // periodic ALR probes this far apart
+constexpr u64 kGccProbeDurationNs = 15000000U;      // a cluster's bytes: its rate for this long
+constexpr u64 kGccInitialProbeDurationNs = 100000000U;
+constexpr u32 kGccProbePackets = 5U;                // and at least this many packets
+constexpr u32 kGccProbeEnoughPackets = 4U;          // a result needs 80% of them
+constexpr u64 kGccProbeEnoughPercent = 80U;         // and of the bytes
+constexpr u64 kGccProbeLateNs = 10000000U;          // a cluster fallen this far behind its rate is given up
+constexpr u64 kGccClusterTimeoutNs = 5000000000U;   // a cluster not started this long after its request is dropped
+constexpr u64 kGccProbeIntervalNs = 1000000000U;    // a result's send and receive intervals are at most this
+constexpr u64 kGccClusterHistoryNs = 1000000000U;   // a cluster's feedback is kept this long after its last packet
+constexpr u64 kGccProbeMaxRatio = 2U;               // receiving faster than this times the sending rate is no result
+constexpr u64 kGccUnsaturatedPercent = 90U;         // receiving under this share of the sending rate found the link
+constexpr u64 kGccUtilizationPercent = 95U;         // and the result is this share of the receiving rate
+constexpr u64 kGccProbeThroughputPercent = 85U;     // a result is at least this share of the acknowledged rate
+constexpr u64 kGccAlrUsagePercent = 65U;            // the ALR budget's rate, a share of the target
+constexpr u64 kGccAlrStartPercent = 80U;            // the region starts with more of the budget left than this
+constexpr u64 kGccAlrStopPercent = 50U;             // and stops with less than this
+constexpr u64 kGccAlrWindowNs = 500000000U;         // the budget holds this long of its rate
+constexpr usize kGccClusters = 5U;                  // probe clusters pending, being sent or awaiting their feedback
+
+// A probe cluster: packets sent at its rate until it holds its bytes and packets, then their feedback. Its packets are
+// the Application space's numbers first_number to last_number; a connection's numbers rise, so no packet carries a
+// mark of its own.
+struct GccCluster
+{
+    enum class State : u8
+    {
+        Pending, // requested; its first packet has not left
+        Sending,
+        Sent, // complete or given up; its feedback is still read
+    };
+
+    u64 rate = 0U; // bytes per second
+    u64 started_ns = 0U;
+    u64 active_ns = 0U; // its request, then its last packet sent or acknowledged, on the local clock
+    u64 first_number = 0U;
+    u64 last_number = 0U;
+    // Of its acknowledged packets: the first and last sent and received (receive times on the peer's clock, or each
+    // ACK frame's arrival less its ACK delay where the peer gave none).
+    u64 first_send_ns = kNeverNs;
+    u64 last_send_ns = 0U;
+    u64 first_receive_ns = kNeverNs;
+    u64 last_receive_ns = 0U;
+    u32 min_bytes = 0U;
+    u32 sent_bytes = 0U;
+    u32 acked_bytes = 0U;
+    u32 last_send_bytes = 0U;     // the last sent packet's, which the send interval does not span
+    u32 first_receive_bytes = 0U; // the first received packets', which the receive interval does not span
+    u32 frame_bytes = 0U;         // acknowledged by the ACK frame in progress with no receive time
+    u32 sent_packets = 0U;
+    u32 acked_packets = 0U;
+    State state = State::Pending;
+    bool in_frame = false; // the ACK frame in progress acknowledged some of it
+};
+
+[[nodiscard]] constexpr u32 add_u32(u32 a, u64 b) noexcept
+{
+    const u64 sum = u64{a} + min_u64(b, ~u32{0});
+    return static_cast<u32>(min_u64(sum, ~u32{0}));
+}
+
+// GCC's probing, as libwebrtc's send side runs it: clusters of packets at a rate above the estimate, filled by the
+// sender when its source has too little (padding()), whose acknowledged send and receive spacing gives a rate the
+// delay-based control takes at once where its own growth would take tens of seconds. The start probes at 3 and 6
+// times the start rate and probes further at twice each target reaching 70% of the last probe; a large drop is probed
+// back while the source is application limited, which a budget at 65% of the target tells (the ALR detector); the
+// policy may add periodic ALR probes and repeated initial probes. Probes go up to the policy's maximum, or 5 Mbit/s.
+class GccProbing
+{
+public:
+    // Probing starts over from `rate`: the start's probes go with the Application space's next packet.
+    void reset(const CongestionPolicy& policy, u64 rate) noexcept
+    {
+        const bool versioned = policy.version >= 6U;
+        m_on = versioned && policy.probe;
+        m_alr_probes = versioned && policy.probe_alr;
+        m_initial_probes = versioned && policy.probe_initial;
+        m_cap = (policy.target_rate_max != 0U) ? policy.target_rate_max : kGccProbeMaxRate;
+        m_estimate = rate;
+        m_state = State::Init;
+        m_further = kNoRate;
+        m_held = false;
+        m_last_probe_ns = 0U;
+        m_initial_until_ns = 0U;
+        m_drop_ns = 0U;
+        m_before_drop = 0U;
+        m_drop_probe_ns = 0U;
+        m_alr_end_ns = kNeverNs;
+        m_count = 0U;
+        m_alr_start_ns = kNeverNs;
+        m_alr_last_ns = kNeverNs;
+        m_alr_was = false;
+        m_alr_budget = 0;
+        set_alr_rate(rate);
+    }
+
+    // A packet left: the ALR budget spends it, and an Application packet joins the cluster being sent (the start's
+    // probes begin with the first). A cluster requested more than 5 s ago and not started is dropped, and one that
+    // fell more than 10 ms behind its rate is given up (BitrateProber).
+    void on_sent(const CongestionPacket& packet, u64 now_ns) noexcept
+    {
+        spend(packet.bytes, now_ns);
+        if (!m_on || packet.space != QuicSpace::Application)
+        {
+            return;
+        }
+        if (m_state == State::Init)
+        {
+            start(now_ns);
+        }
+        GccCluster* const cluster = sending(now_ns);
+        if (cluster == nullptr)
+        {
+            return;
+        }
+        if (cluster->state == GccCluster::State::Pending)
+        {
+            cluster->state = GccCluster::State::Sending;
+            cluster->started_ns = now_ns;
+            cluster->first_number = packet.number;
+        }
+        cluster->last_number = packet.number;
+        cluster->sent_bytes = add_u32(cluster->sent_bytes, packet.bytes);
+        cluster->sent_packets = add_u32(cluster->sent_packets, 1U);
+        cluster->active_ns = now_ns;
+        if (cluster->sent_bytes >= cluster->min_bytes && cluster->sent_packets >= kGccProbePackets)
+        {
+            cluster->state = GccCluster::State::Sent;
+        }
+    }
+
+    // The cluster to send now, if any: its rate paces the sender, its room adds to the window, and its padding is
+    // what it still wants.
+    [[nodiscard]] const GccCluster* active() const noexcept
+    {
+        for (usize i = 0U; i < m_count; ++i)
+        {
+            if (m_clusters[i].state != GccCluster::State::Sent)
+            {
+                return &m_clusters[i];
+            }
+        }
+        return nullptr;
+    }
+
+    // Bytes the active cluster may put in flight beyond the window: all of it.
+    [[nodiscard]] static u64 room(const GccCluster& cluster, u64 datagram) noexcept
+    {
+        return max_u64(cluster.min_bytes, kGccProbePackets * datagram);
+    }
+
+    // Bytes it still wants: its least bytes and, in datagrams, its least packets.
+    [[nodiscard]] static u64 padding(const GccCluster& cluster, u64 datagram) noexcept
+    {
+        const u64 bytes = (cluster.min_bytes > cluster.sent_bytes) ? cluster.min_bytes - cluster.sent_bytes : 0U;
+        const u64 packets = (kGccProbePackets > cluster.sent_packets) ? kGccProbePackets - cluster.sent_packets : 0U;
+        return max_u64(bytes, packets * datagram);
+    }
+
+    // A packet acknowledged by the ACK frame in progress: its cluster's feedback, with the peer's receive time when
+    // given, else the frame's own (on_ack_end).
+    void on_acked(const CongestionPacket& packet, u64 now_ns) noexcept
+    {
+        if (packet.space != QuicSpace::Application)
+        {
+            return;
+        }
+        for (usize i = 0U; i < m_count; ++i)
+        {
+            GccCluster& c = m_clusters[i];
+            if (c.state == GccCluster::State::Pending || packet.number < c.first_number ||
+                packet.number > c.last_number)
+            {
+                continue;
+            }
+            c.first_send_ns = min_u64(c.first_send_ns, packet.sent_ns);
+            if (packet.sent_ns > c.last_send_ns || c.acked_packets == 0U)
+            {
+                c.last_send_ns = packet.sent_ns;
+                c.last_send_bytes = static_cast<u32>(min_u64(packet.bytes, ~u32{0}));
+            }
+            c.acked_bytes = add_u32(c.acked_bytes, packet.bytes);
+            c.acked_packets = add_u32(c.acked_packets, 1U);
+            c.active_ns = now_ns;
+            c.in_frame = true;
+            if (packet.received_ns != kNeverNs)
+            {
+                received(c, packet.received_ns, packet.bytes);
+            }
+            else
+            {
+                c.frame_bytes = add_u32(c.frame_bytes, packet.bytes);
+            }
+            return;
+        }
+    }
+
+    // The ACK frame's end: packets the peer gave no receive time were received at `frame_ns`, the frame's arrival less
+    // its ACK delay, all at once (so a cluster one frame acknowledges gives no interval). Returns the rate of the
+    // newest cluster whose feedback now makes one (0: none); clusters quiet for a second are forgotten.
+    [[nodiscard]] u64 on_ack_end(u64 frame_ns, u64 now_ns) noexcept
+    {
+        u64 result = 0U;
+        for (usize i = 0U; i < m_count; ++i)
+        {
+            GccCluster& c = m_clusters[i];
+            if (!c.in_frame)
+            {
+                continue;
+            }
+            c.in_frame = false;
+            if (c.frame_bytes != 0U)
+            {
+                received(c, frame_ns, c.frame_bytes);
+                c.frame_bytes = 0U;
+            }
+            const u64 rate = estimate(c);
+            result = (rate != 0U) ? rate : result;
+        }
+        usize i = 0U;
+        while (i < m_count)
+        {
+            const GccCluster& c = m_clusters[i];
+            const bool quiet = now_ns >= c.active_ns && now_ns - c.active_ns > kGccClusterHistoryNs;
+            if (c.state == GccCluster::State::Sent && quiet)
+            {
+                release(i);
+                continue;
+            }
+            ++i;
+        }
+        return result;
+    }
+
+    // The receive times change clocks (the peer starts reporting them): the feedback so far is not comparable.
+    void forget_receive_times() noexcept
+    {
+        for (usize i = 0U; i < m_count; ++i)
+        {
+            GccCluster& c = m_clusters[i];
+            c.first_send_ns = kNeverNs;
+            c.last_send_ns = 0U;
+            c.first_receive_ns = kNeverNs;
+            c.last_receive_ns = 0U;
+            c.acked_bytes = 0U;
+            c.acked_packets = 0U;
+            c.frame_bytes = 0U;
+            c.in_frame = false;
+        }
+    }
+
+    // The target after an ACK frame (SetEstimatedBitrate): a fall under 66% of the last is a large drop; while a
+    // result is awaited, a target past 70% of the last probe probes further at twice the target. `held` is the delay
+    // detector out of Normal, which allows no probe.
+    void on_target(u64 target, bool held, u64 now_ns) noexcept
+    {
+        m_held = held;
+        set_alr_rate(target);
+        if (multiply_divide(m_estimate, kGccDropPercent, kPercent) > target)
+        {
+            m_drop_ns = now_ns;
+            m_before_drop = m_estimate;
+        }
+        m_estimate = target;
+        if (m_state == State::Waiting && target > m_further)
+        {
+            initiate(now_ns, multiply_divide(target, kGccProbeFurtherPercent, kPercent), 0U, true);
+        }
+    }
+
+    // The delay detector came back to Normal from Underusing (RequestProbe): while the source is application limited,
+    // or was within 3 s, a large drop of the last 5 s is probed back to 85% of the rate before it, at most once 5 s.
+    void on_recovered(u64 now_ns) noexcept
+    {
+        const bool alr_recent =
+            m_alr_end_ns != kNeverNs && now_ns >= m_alr_end_ns && now_ns - m_alr_end_ns < kGccAlrEndedNs;
+        if (!(alr() || alr_recent) || m_state != State::Complete)
+        {
+            return;
+        }
+        const u64 suggested = multiply_divide(m_before_drop, kGccDropProbePercent, kPercent);
+        const bool expected = multiply_divide(suggested, kGccDropExpectPercent, kPercent) > m_estimate;
+        if (expected && now_ns - m_drop_ns < kGccDropWindowNs && now_ns - m_drop_probe_ns > kGccDropWindowNs)
+        {
+            m_drop_probe_ns = now_ns;
+            initiate(now_ns, suggested, 0U, false);
+        }
+    }
+
+    // The periodic part (Process), after each ACK frame: a result not come within a second is no longer awaited; a
+    // repeated initial probe or an ALR probe is due.
+    void process(u64 now_ns) noexcept
+    {
+        if (m_state == State::Waiting && now_ns - m_last_probe_ns > kGccProbeWaitNs)
+        {
+            m_state = State::Complete;
+            m_further = kNoRate;
+        }
+        if (m_estimate == 0U || m_state != State::Complete)
+        {
+            return;
+        }
+        if (m_initial_probes && now_ns < m_initial_until_ns && now_ns >= m_last_probe_ns + kGccProbeWaitNs)
+        {
+            initiate(now_ns, multiply_divide(m_estimate, kGccProbeFirstPercent, kPercent), 0U, true);
+            return;
+        }
+        if (m_alr_probes && alr() && now_ns >= max_u64(m_alr_start_ns, m_last_probe_ns) + kGccAlrProbeNs)
+        {
+            initiate(now_ns, multiply_divide(m_estimate, kGccProbeFurtherPercent, kPercent), 0U, true);
+        }
+    }
+
+    // Whether the source is application limited (the ALR detector).
+    [[nodiscard]] bool alr() const noexcept { return m_alr_start_ns != kNeverNs; }
+
+    // The region ended since the last call (one per ACK frame): it is noted at `now_ns`.
+    [[nodiscard]] bool alr_ended(u64 now_ns) noexcept
+    {
+        const bool ended = m_alr_was && !alr();
+        m_alr_was = alr();
+        if (ended)
+        {
+            m_alr_end_ns = now_ns;
+        }
+        return ended;
+    }
+
+private:
+    enum class State : u8
+    {
+        Init,     // nothing probed yet
+        Waiting,  // a result is awaited, and may probe further
+        Complete,
+    };
+
+    static constexpr u64 kNoRate = ~u64{0};
+
+    // InitiateExponentialProbing.
+    void start(u64 now_ns) noexcept
+    {
+        m_drop_ns = now_ns;
+        m_drop_probe_ns = now_ns;
+        m_before_drop = 0U;
+        if (m_initial_probes)
+        {
+            m_initial_until_ns = now_ns + kGccInitialProbingNs;
+        }
+        initiate(now_ns, multiply_divide(m_estimate, kGccProbeFirstPercent, kPercent),
+                 multiply_divide(m_estimate, kGccProbeSecondPercent, kPercent), true);
+    }
+
+    // InitiateProbing: probes at `first` and `second` (0: one probe), each at most the ceiling, which ends probing
+    // further; none while the delay detector is out of Normal.
+    void initiate(u64 now_ns, u64 first, u64 second, bool further) noexcept
+    {
+        if (m_held)
+        {
+            return;
+        }
+        const u64 duration = (now_ns < m_initial_until_ns) ? kGccInitialProbeDurationNs : kGccProbeDurationNs;
+        u64 last = 0U;
+        const u64 rates[2] = {first, second};
+        for (const u64 asked : rates)
+        {
+            if (asked == 0U)
+            {
+                continue;
+            }
+            last = min_u64(max_u64(asked, 1U), m_cap);
+            further = further && asked < m_cap;
+            add(now_ns, last, duration);
+        }
+        m_last_probe_ns = now_ns;
+        m_state = further ? State::Waiting : State::Complete;
+        m_further = further ? multiply_divide(last, kGccProbeFurtherOfLast, kPercent) : kNoRate;
+    }
+
+    void add(u64 now_ns, u64 rate, u64 duration_ns) noexcept
+    {
+        if (m_count == kGccClusters)
+        {
+            release(0U);
+        }
+        GccCluster& c = m_clusters[m_count];
+        c = GccCluster{};
+        c.rate = rate;
+        c.active_ns = now_ns;
+        c.min_bytes = static_cast<u32>(min_u64(multiply_divide(rate, duration_ns, kNanosPerSecond), ~u32{0}));
+        ++m_count;
+    }
+
+    void release(usize index) noexcept
+    {
+        for (usize i = index + 1U; i < m_count; ++i)
+        {
+            m_clusters[i - 1U] = m_clusters[i];
+        }
+        --m_count;
+    }
+
+    [[nodiscard]] GccCluster* sending(u64 now_ns) noexcept
+    {
+        usize i = 0U;
+        while (i < m_count)
+        {
+            GccCluster& c = m_clusters[i];
+            if (c.state == GccCluster::State::Pending && now_ns - c.active_ns > kGccClusterTimeoutNs)
+            {
+                release(i);
+                continue;
+            }
+            if (c.state == GccCluster::State::Sending)
+            {
+                const u64 due = c.started_ns + multiply_divide(c.sent_bytes, kNanosPerSecond, c.rate);
+                if (now_ns > due && now_ns - due > kGccProbeLateNs)
+                {
+                    c.state = GccCluster::State::Sent;
+                }
+            }
+            if (c.state != GccCluster::State::Sent)
+            {
+                return &c;
+            }
+            ++i;
+        }
+        return nullptr;
+    }
+
+    static void received(GccCluster& c, u64 received_ns, u64 bytes) noexcept
+    {
+        if (received_ns < c.first_receive_ns)
+        {
+            c.first_receive_ns = received_ns;
+            c.first_receive_bytes = static_cast<u32>(min_u64(bytes, ~u32{0}));
+        }
+        c.last_receive_ns = max_u64(c.last_receive_ns, received_ns);
+    }
+
+    // ProbeBitrateEstimator: with 80% of its packets and bytes acknowledged and both intervals within (0, 1 s], the
+    // lower of the sending and receiving rates, each over what its interval spans; none when receiving ran more than
+    // twice as fast; 95% of the receiving rate when it fell under 90% of the sending one (the link was found).
+    [[nodiscard]] static u64 estimate(const GccCluster& c) noexcept
+    {
+        if (c.acked_packets < kGccProbeEnoughPackets ||
+            u64{c.acked_bytes} * kPercent < u64{c.min_bytes} * kGccProbeEnoughPercent ||
+            c.first_receive_ns == kNeverNs || c.first_send_ns == kNeverNs)
+        {
+            return 0U;
+        }
+        const u64 send_interval = c.last_send_ns - c.first_send_ns;
+        const u64 receive_interval = c.last_receive_ns - c.first_receive_ns;
+        if (send_interval == 0U || send_interval > kGccProbeIntervalNs || receive_interval == 0U ||
+            receive_interval > kGccProbeIntervalNs || c.acked_bytes <= c.last_send_bytes ||
+            c.acked_bytes <= c.first_receive_bytes)
+        {
+            return 0U;
+        }
+        const u64 send_rate = multiply_divide(c.acked_bytes - c.last_send_bytes, kNanosPerSecond, send_interval);
+        const u64 receive_rate =
+            multiply_divide(c.acked_bytes - c.first_receive_bytes, kNanosPerSecond, receive_interval);
+        if (receive_rate > kGccProbeMaxRatio * send_rate)
+        {
+            return 0U;
+        }
+        if (receive_rate * kPercent < send_rate * kGccUnsaturatedPercent)
+        {
+            return multiply_divide(receive_rate, kGccUtilizationPercent, kPercent);
+        }
+        return min_u64(send_rate, receive_rate);
+    }
+
+    // The ALR detector's budget (IntervalBudget, its underuse building up): 500 ms of 65% of the target.
+    void set_alr_rate(u64 target) noexcept
+    {
+        m_alr_rate = multiply_divide(target, kGccAlrUsagePercent, kPercent);
+        const i64 most = alr_most();
+        m_alr_budget = (m_alr_budget > most) ? most : m_alr_budget;
+        m_alr_budget = (m_alr_budget < -most) ? -most : m_alr_budget;
+    }
+
+    [[nodiscard]] i64 alr_most() const noexcept
+    {
+        const u64 most = multiply_divide(m_alr_rate, kGccAlrWindowNs, kNanosPerSecond);
+        return static_cast<i64>(min_u64(most, kCongestionMaxWindow));
+    }
+
+    // AlrDetector::OnBytesSent: the budget pays for the packet and earns the time since the last; the region starts
+    // past 80% of it left and stops under 50%.
+    void spend(u64 bytes, u64 now_ns) noexcept
+    {
+        if (m_alr_last_ns == kNeverNs || now_ns < m_alr_last_ns)
+        {
+            m_alr_last_ns = now_ns;
+            return;
+        }
+        const i64 most = alr_most();
+        const u64 earned =
+            min_u64(multiply_divide(m_alr_rate, now_ns - m_alr_last_ns, kNanosPerSecond), kCongestionMaxWindow);
+        m_alr_last_ns = now_ns;
+        const i64 spent = m_alr_budget - static_cast<i64>(min_u64(bytes, kCongestionMaxWindow));
+        m_alr_budget = (spent < -most) ? -most : spent;
+        const i64 refilled = m_alr_budget + static_cast<i64>(earned);
+        m_alr_budget = (refilled > most) ? most : refilled;
+        const i64 scaled = m_alr_budget * static_cast<i64>(kPercent);
+        if (most != 0 && scaled > most * static_cast<i64>(kGccAlrStartPercent) && !alr())
+        {
+            m_alr_start_ns = now_ns;
+        }
+        else if ((most == 0 || scaled < most * static_cast<i64>(kGccAlrStopPercent)) && alr())
+        {
+            m_alr_start_ns = kNeverNs;
+        }
+    }
+
+    GccCluster m_clusters[kGccClusters] = {};
+    usize m_count = 0U;
+    u64 m_cap = kGccProbeMaxRate;
+    u64 m_estimate = 0U;     // the target as last told (estimated_bitrate_)
+    u64 m_further = kNoRate; // a target past this probes further
+    u64 m_last_probe_ns = 0U;
+    u64 m_initial_until_ns = 0U;
+    u64 m_drop_ns = 0U;
+    u64 m_before_drop = 0U;
+    u64 m_drop_probe_ns = 0U;
+    u64 m_alr_end_ns = kNeverNs;
+    u64 m_alr_rate = 0U;
+    u64 m_alr_last_ns = kNeverNs;
+    u64 m_alr_start_ns = kNeverNs;
+    i64 m_alr_budget = 0;
+    State m_state = State::Init;
+    bool m_on = false;
+    bool m_alr_probes = false;
+    bool m_initial_probes = false;
+    bool m_held = false;
+    bool m_alr_was = false;
+};
+
 class Gcc final : public CongestionController
 {
 public:
@@ -2620,27 +3172,43 @@ public:
 
     [[nodiscard]] CongestionAlgorithm algorithm() const noexcept override { return CongestionAlgorithm::Gcc; }
 
-    void on_sent(const CongestionPacket& /*packet*/, u64 /*in_flight*/, u64 /*now_ns*/) noexcept override {}
+    void on_sent(const CongestionPacket& packet, u64 /*in_flight*/, u64 now_ns) noexcept override
+    {
+        m_probing.on_sent(packet, now_ns);
+    }
 
     void on_limited(bool /*window*/, u64 /*now_ns*/) noexcept override {}
 
-    // The acknowledged rate counts the packet when its acknowledgement arrived (one clock); the delay trend takes its
-    // peer receive time, and the frame's largest packet is kept for the frame's own sample when the peer gives none.
+    // The acknowledged rate counts the packet when its acknowledgement arrived (one clock), application limited while
+    // the ALR detector says so, and moves fast again once a packet sent after the region's end is acknowledged; the
+    // delay trend and the probes take its peer receive time, and the frame's largest packet is kept for the frame's
+    // own sample when the peer gives none.
     void on_acked(const CongestionPacket& packet, u64 now_ns) noexcept override
     {
+        if (m_frame_packets == 0U && m_probing.alr_ended(now_ns))
+        {
+            m_alr_ended_ns = now_ns;
+        }
         ++m_frame_packets;
         m_frame_oldest_ns = min_u64(m_frame_oldest_ns, packet.sent_ns);
+        if (m_alr_ended_ns != kNeverNs && packet.sent_ns > m_alr_ended_ns)
+        {
+            m_acked.expect_fast_change();
+            m_alr_ended_ns = kNeverNs;
+        }
         m_acked.update(static_cast<i64>(min_u64(now_ns / 1000000U, AckedRateEstimator::kMaxTimeMs)),
-                       static_cast<u32>(min_u64(packet.bytes, ~u32{0})), packet.delivery.app_limited);
+                       static_cast<u32>(min_u64(packet.bytes, ~u32{0})), m_probing.alr());
         if (packet.received_ns != kNeverNs)
         {
             if (!m_timestamps)
             {
                 m_timestamps = true; // the peer's clock from here: the trend of the frames' samples starts over
                 restart_delay();
+                m_probing.forget_receive_times();
             }
             add_delay(packet.sent_ns, packet.received_ns, packet.bytes, now_ns);
         }
+        m_probing.on_acked(packet, now_ns);
         if (!m_frame_acked || packet.number > m_largest_number)
         {
             m_largest_number = packet.number;
@@ -2650,8 +3218,9 @@ public:
         m_frame_acked = true;
     }
 
-    // The feedback of one ACK frame: the delay trend's state through the rate control, the loss controller once the
-    // packets make a fraction, the window from the rate; the frame's counts start over.
+    // The feedback of one ACK frame: a probe's result or the delay trend's state through the rate control, the loss
+    // controller once the packets make a fraction, the probes the new target calls for, the window from the rate; the
+    // frame's counts start over.
     void on_ack_end(const QuicRtt& rtt, bool sampled, u64 /*in_flight*/, u64 now_ns) noexcept override
     {
         m_rtt_ns = (rtt.smoothed_ns != 0U) ? rtt.smoothed_ns : kGccDefaultRttNs;
@@ -2660,9 +3229,12 @@ public:
         {
             add_delay(m_largest_sent_ns, saturating_add(m_largest_sent_ns, rtt.adjusted_ns), m_largest_bytes, now_ns);
         }
+        // Packets the peer gave no receive time were received when the frame left it: its arrival less its ACK delay.
+        const u64 ack_delay = (sampled && rtt.latest_ns > rtt.adjusted_ns) ? rtt.latest_ns - rtt.adjusted_ns : 0U;
+        const u64 probe = m_probing.on_ack_end(now_ns - min_u64(ack_delay, now_ns), now_ns);
         if (m_frame_acked)
         {
-            update_delay_based(now_ns);
+            update_delay_based(probe, now_ns);
             m_feedback = true;
             if (m_frame_oldest_ns <= now_ns)
             {
@@ -2671,10 +3243,20 @@ public:
             }
         }
         update_packets_lost(now_ns);
+        if (m_frame_acked)
+        {
+            m_probing.on_target(m_target, m_trend.state() != DelayState::Normal, now_ns);
+            if (m_recovered)
+            {
+                m_probing.on_recovered(now_ns);
+            }
+        }
+        m_probing.process(now_ns);
         if (m_rtt_min.has_sample())
         {
             update_window();
         }
+        m_recovered = false;
         m_frame_acked = false;
         m_frame_packets = 0U;
         m_frame_lost = 0U;
@@ -2718,21 +3300,47 @@ public:
         m_window = initial ? m_initial : max_u64(m_window, m_min_window);
     }
 
-    [[nodiscard]] u64 window() const noexcept override { return m_window; }
+    // A probe being sent may put all of its bytes in flight beyond the window.
+    [[nodiscard]] u64 window() const noexcept override
+    {
+        const GccCluster* const probe = m_probing.active();
+        if (probe == nullptr)
+        {
+            return m_window;
+        }
+        return min_u64(saturating_add(m_window, GccProbing::room(*probe, m_datagram)), kCongestionMaxWindow);
+    }
 
-    // 1.1 times the target once feedback arrived, 2.5 times before (libwebrtc's pacing factors).
+    // A probe's own rate while it is sent, else 1.1 times the target once feedback arrived, 2.5 times before
+    // (libwebrtc's pacing factors).
     [[nodiscard]] u64 pacing_rate(const QuicRtt& /*rtt*/) const noexcept override
     {
+        const GccCluster* const probe = m_probing.active();
+        if (probe != nullptr)
+        {
+            return probe->rate;
+        }
         return multiply_divide(m_target, m_feedback ? kGccPacePercent : kGccFirstPacePercent, kPercent);
     }
 
+    // A probe leaves one datagram at a time, each when its rate allows (BitrateProber's next probe time).
     [[nodiscard]] u64 burst() const noexcept override
     {
+        if (m_probing.active() != nullptr)
+        {
+            return m_datagram;
+        }
         if (!m_sampled)
         {
             return m_initial;
         }
         return max_u64(multiply_divide(pacing_rate(QuicRtt{}), kGccBurstNs, kNanosPerSecond), 2U * m_datagram);
+    }
+
+    [[nodiscard]] u64 probe_bytes() const noexcept override
+    {
+        const GccCluster* const probe = m_probing.active();
+        return (probe != nullptr) ? GccProbing::padding(*probe, m_datagram) : 0U;
     }
 
     [[nodiscard]] CongestionState state() const noexcept override
@@ -2820,6 +3428,9 @@ private:
         m_loss_decrease_ns = kNeverNs;
         m_first_report_ns = kNeverNs;
         m_least_count = 0U;
+        m_probing.reset(m_policy, m_delay_rate);
+        m_alr_ended_ns = kNeverNs;
+        m_recovered = false;
     }
 
     // Sections 5.2 and 5.3: one packet's send and receive times, in microseconds, into the groups and the trend.
@@ -2834,8 +3445,10 @@ private:
         GroupDeltas deltas;
         if (m_groups.add(us(sent_ns), us(received_ns), us(now_ns), static_cast<u32>(min_u64(bytes, ~u32{0})), deltas))
         {
+            const DelayState before = m_trend.state();
             const bool taken = m_trend.update(deltas, us(received_ns));
             static_cast<void>(taken); // a delta outside the trend's domain changes nothing
+            m_recovered = m_recovered || (before == DelayState::Underusing && m_trend.state() == DelayState::Normal);
         }
     }
 
@@ -2850,12 +3463,30 @@ private:
     }
 
     // DelayBasedBwe::MaybeUpdateEstimate: an overuse reduces at most once a clamped RTT, or at once when the
-    // throughput fell below half the rate; with no acknowledged rate yet it halves the rate.
-    void update_delay_based(u64 now_ns) noexcept
+    // throughput fell below half the rate; with no acknowledged rate yet it halves the rate. Otherwise a probe's result
+    // `probe` (0: none), at least 85% of the acknowledged rate where that is under the rate, becomes the rate and the
+    // target at once (SetSendBitrate: the last second's least is forgotten); only without one may the detector's
+    // return to Normal call for a probe back.
+    void update_delay_based(u64 probe, u64 now_ns) noexcept
     {
         u64 acked = 0U;
         const bool has_acked = acked_rate(acked);
-        if (m_trend.state() != DelayState::Overusing)
+        const bool overusing = m_trend.state() == DelayState::Overusing;
+        m_recovered = m_recovered && !overusing && probe == 0U;
+        if (!overusing && probe != 0U)
+        {
+            if (has_acked)
+            {
+                const u64 floor = min_u64(m_delay_rate, multiply_divide(acked, kGccProbeThroughputPercent, kPercent));
+                probe = max_u64(probe, floor);
+            }
+            set_delay_rate(probe, now_ns);
+            m_delay_limit = m_delay_rate;
+            set_target(m_delay_rate);
+            m_least_count = 0U;
+            return;
+        }
+        if (!overusing)
         {
             change_rate(m_trend.state(), has_acked, acked, now_ns);
         }
@@ -3178,6 +3809,11 @@ private:
     bool m_feedback = false;
     bool m_feedback_window = false;
     bool m_sampled = false;
+
+    // The probes and the ALR detector.
+    GccProbing m_probing;
+    u64 m_alr_ended_ns = kNeverNs; // the region's end, until a packet sent after it is acknowledged
+    bool m_recovered = false;      // the detector came back to Normal from Underusing in this frame
 };
 
 static_assert(sizeof(NewReno) <= kCongestionSlotBytes && alignof(NewReno) <= alignof(CongestionSlot));

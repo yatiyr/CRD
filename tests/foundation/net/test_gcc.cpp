@@ -27,10 +27,12 @@ constexpr u64 kMs = 1000000U;
 constexpr u64 kMss = 1200U;
 constexpr u64 kStartRate = 12000U * kBottleneckSecond / kQuicInitialRttNs; // the initial window over 333 ms
 
+// The rate control alone: its probes (test_gcc_probe.cpp) would move the rate these cases restate.
 CongestionPolicy gcc_policy()
 {
     CongestionPolicy policy;
     policy.algorithm = CongestionAlgorithm::Gcc;
+    policy.probe = false;
     return policy;
 }
 
@@ -469,7 +471,7 @@ TEST_CASE("GCC: a media source runs near the link's rate in a sawtooth whose que
           "[net][net-path][gcc]")
 {
     // 10 Mbit/s, 40 ms round trip, half a second of buffer. From 288 kbit/s at 8% a second the climb takes about a
-    // minute (libwebrtc probes; this GCC does not yet). Near the capacity it learned, it grows half a packet per
+    // minute without probes (test_gcc_probe.cpp has them). Near the capacity it learned, it grows half a packet per
     // response time, and an excess under 2.5% of the link stays below the detector's least threshold (6 over 60
     // deltas and a gain of 4) while the queue builds: a slow sawtooth, measured over two minutes.
     Flow flow(gcc_policy(), kRate, 20U * kMs, kRate / 2U);

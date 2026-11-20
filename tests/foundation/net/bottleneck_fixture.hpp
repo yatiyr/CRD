@@ -4,7 +4,8 @@
 // and #prague): flows of one controller each, with its delivery rate sampler and pacer, driven as a connection drives
 // them, over a link of a rate, a drop-tail buffer and a step-marking queue that one flow owns or several share, each
 // flow with its own propagation delay and random loss, sending bulk data or a media source's frames (#scream), its
-// packets' receive times reported as QUIC receive timestamps would report them (#gcc) unless turned off.
+// packets' receive times reported as QUIC receive timestamps would report them (#gcc) unless turned off, and padding
+// when the controller's bandwidth probe wants bytes the source has not written (CongestionController::probe_bytes).
 
 #include <crd/net/congestion.hpp>
 
@@ -120,7 +121,8 @@ public:
     QuicRtt rtt;
     u64 now = 0U;
     u64 in_flight = 0U;
-    u64 sent_bytes = 0U;
+    u64 sent_bytes = 0U;    // the source's bytes sent
+    u64 padding_bytes = 0U; // padding sent for bandwidth probes
     u64 acked_bytes = 0U;
     u64 lost_bytes = 0U;
     u64 dropped = 0U;
@@ -192,7 +194,7 @@ private:
     [[nodiscard]] u64 next_send_ns()
     {
         const bool data = sent_bytes + kBottleneckMss <= m_data || m_data == kInfiniteData;
-        if (!data)
+        if (!data && ctl->probe_bytes() == 0U)
         {
             delivery.on_app_limited(in_flight);
             return kNeverNs;
@@ -231,7 +233,9 @@ private:
         f.packet.sent_ns = now;
         f.packet.space = QuicSpace::Application;
         in_flight += kBottleneckMss;
-        sent_bytes += kBottleneckMss;
+        const bool data = sent_bytes + kBottleneckMss <= m_data || m_data == kInfiniteData;
+        sent_bytes += data ? kBottleneckMss : 0U;
+        padding_bytes += data ? 0U : kBottleneckMss;
         f.packet.delivery = delivery.on_sent(kBottleneckMss, in_flight, now);
         ctl->on_sent(f.packet, in_flight, now);
         m_pacer.on_sent(kBottleneckMss, now, ctl->pacing_rate(rtt), ctl->burst());

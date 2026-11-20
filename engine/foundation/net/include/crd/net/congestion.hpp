@@ -48,7 +48,11 @@
 //               (more than 10% lost: 1 - p / 2; under 2%: 8% over the last second's least) caps it; the source's
 //               target rate is the lower of the two. A packet's peer receive time (received_ns) feeds the trend; a
 //               peer that reports none leaves one sample per ACK frame, its largest packet's RTT less the ACK delay.
-//               CE counts as a loss (RFC 3168 section 5), so its packets carry ECT(0).
+//               CE counts as a loss (RFC 3168 section 5), so its packets carry ECT(0). Its probing is libwebrtc's:
+//               clusters of packets at 3 and 6 times the start rate, then twice each result, whose acknowledged send
+//               and receive spacing sets the rate at once (the climb takes seconds, not a minute), filled with padding
+//               when the source has too little (probe_bytes()); and a probe back after a large drop, or every 5 s,
+//               while the source is application limited.
 //   pacing      Pacer spreads packets at the controller's rate (RFC 9002 section 7.7: 1.25 window per smoothed RTT
 //               for the window controllers, BBR's own gains of its bandwidth, Prague's window per smoothed RTT, doubled
 //               in early slow start) with a burst of the initial window (BBR:
@@ -65,9 +69,9 @@
 namespace crd::net
 {
 // 2 added BBRv3 and the delivery rate samples; 3 added Prague and the ECN feedback's extent (on_ecn); 4 added SCReAM
-// v2 and the source's target rate; 5 added GCC and the peer's receive time of a packet. A policy of an earlier version
-// still runs.
-inline constexpr u32 kCongestionInterfaceVersion = 5U;
+// v2 and the source's target rate; 5 added GCC and the peer's receive time of a packet; 6 added GCC's probing and
+// probe_bytes(). A policy of an earlier version still runs (a GCC of version 5 does not probe).
+inline constexpr u32 kCongestionInterfaceVersion = 6U;
 inline constexpr u64 kCongestionMaxWindow = u64{1} << 32U; // bytes: past 100 Gbit/s over 300 ms
 inline constexpr u32 kCongestionMaxInitialPackets = 64U;
 inline constexpr u32 kCongestionMinPacingGain = 100U; // percent of window per smoothed RTT
@@ -116,6 +120,15 @@ struct CongestionPolicy
     bool reduce_jitter = false;      // REDUCE_JITTER (section 4.2.1.4): growth and slack follow the delay's variation
     bool compete = true;             // section 4.5.4: the delay target rises beside loss-based flows
     bool tolerate_link_loss = false; // section 4.5.2: a loss reduces only past a 1% loss rate or a rising queue
+    // GCC's probing (version 6), up to target_rate_max or, with none, 5 Mbit/s: `probe` sends the start's probes at 3
+    // and 6 times the start rate, probes further at twice each result reaching 70% of its probe, and probes back to
+    // 85% of the rate before a large drop while the source is application limited (libwebrtc's defaults);
+    // `probe_alr` adds a probe at twice the estimate every 5 s while it is (periodic ALR probing, which libwebrtc's
+    // screen sharing asks for); `probe_initial` repeats a probe at 3 times the estimate each second of the first 5 s
+    // (repeated initial probing), its probes 100 ms long rather than 15.
+    bool probe = true;
+    bool probe_alr = false;
+    bool probe_initial = false;
 };
 
 // RFC 9002 section 7.2's initial window, min(10 * max_datagram, max(14720, 2 * max_datagram)) for 10 initial packets,
@@ -240,6 +253,10 @@ public:
     [[nodiscard]] virtual u64 pacing_rate(const QuicRtt& rtt) const noexcept = 0;
     // The burst the pacer allows after an idle period.
     [[nodiscard]] virtual u64 burst() const noexcept = 0;
+    // Bytes a bandwidth probe still wants sent at the pacing rate: a sender whose application has too little fills
+    // them with ack-eliciting padding, held by the window and the pacer as any packet (QuicConnection pads its 1-RTT
+    // packets to the datagram). 0 for none, and always for every controller but GCC.
+    [[nodiscard]] virtual u64 probe_bytes() const noexcept { return 0U; }
     [[nodiscard]] virtual CongestionState state() const noexcept = 0;
 
 protected:
@@ -247,7 +264,7 @@ protected:
 };
 
 // Room for any controller of this build.
-inline constexpr usize kCongestionSlotBytes = 1536U; // GCC, its delay trend's window included, is the largest
+inline constexpr usize kCongestionSlotBytes = 2240U; // GCC, its delay trend's window and probes, is the largest
 struct CongestionSlot
 {
     alignas(16) u8 bytes[kCongestionSlotBytes];

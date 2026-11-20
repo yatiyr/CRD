@@ -5,8 +5,9 @@
 // Input: byte 0 picks the policy (bits 0 and 7: CUBIC, NewReno, BBRv3 or Prague, SCReAM v2 with bits 3 and 7, and GCC
 // with bits 2, 3 and 7, bit 1: HyStart++, bit 2: pacing, which BBR, Prague, SCReAM and GCC always have, bit 3: fast
 // convergence, bits 4 to 6: the initial window's packets; for SCReAM bit 0 is L4S and bit 1 jitter reduction); byte 1
-// the datagram size step, for SCReAM its link loss tolerance (bit 0) and no delay target adjustment (bit 1), and for
-// SCReAM and GCC target rate bounds (bit 2).
+// the datagram size step, for SCReAM its link loss tolerance (bit 0) and no delay target adjustment (bit 1), for
+// SCReAM and GCC target rate bounds (bit 2), and for GCC its probing off (bit 0), ALR probes (bit 1) and repeated
+// initial probes (bit 3).
 // Then operations of two bytes, an operation and its parameter, on one controller, the delivery rate sampler and one
 // pacer, driven as a connection drives them: packets sent with their stamps, acknowledged in ACK frames with any RTT
 // samples and the peer's receive times (on any clock), lost, acknowledged after their loss, ECN feedback (marked
@@ -27,9 +28,11 @@
 // stays within the policy's bounds, its delay target within QDELAY_TARGET_LO and _HI, and it paces at least 1.5 times
 // RATE_PACE_MIN. GCC's window stays at or above its 3000-byte floor and halves on persistent congestion; its target
 // rate stays within the policy's bounds (its 5 kbit/s floor included) and under its delay-based estimate, and it paces
-// at 1.1 or 2.5 times that target. The sampler's delivered bytes are what was acknowledged. The pacer's release time is never
-// before now, its credit stays within one burst above zero and the last send's burst below, and is positive at its
-// release time.
+// at 1.1 or 2.5 times that target; while a probe wants bytes it paces at the probe's rate, at most the policy's
+// maximum or 5 Mbit/s, one datagram at a time, with the probe's bytes over its window (less at the largest window),
+// and no other controller ever wants any. The sampler's delivered bytes are what was acknowledged. The pacer's
+// release time is never before now, its credit stays within one burst above zero and the last send's burst below, and
+// is positive at its release time.
 #include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/congestion.hpp>
@@ -169,10 +172,11 @@ void check_scream(const World& w, const CongestionState& state)
     CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) >= kScreamMinPacingRate * 3U / 2U && w.ctl->burst() >= w.datagram);
 }
 
-// GCC's own bounds: its window, its target rate under its estimate and within the policy's bounds, and its pacing.
+// GCC's own bounds: its window, its target rate under its estimate and within the policy's bounds, its pacing, and
+// a probe's rate, room and bytes.
 void check_gcc(const World& w, const CongestionState& state)
 {
-    CRD_FUZZ_REQUIRE(state.window == w.ctl->window() && state.window >= gcc_floor(w));
+    CRD_FUZZ_REQUIRE(state.window >= gcc_floor(w));
     CRD_FUZZ_REQUIRE(state.slow_start_threshold == state.window);
     const u64 floor = (w.policy.target_rate_min > 625U) ? w.policy.target_rate_min : 625U;
     const u64 most = (w.policy.target_rate_max != 0U) ? w.policy.target_rate_max : ~u64{0};
@@ -182,8 +186,23 @@ void check_gcc(const World& w, const CongestionState& state)
     CRD_FUZZ_REQUIRE(state.bandwidth >= least && state.bandwidth <= 12500000000U);
     CRD_FUZZ_REQUIRE(state.queue_delay_ns == 0U && state.queue_delay_target_ns == 0U && state.min_rtt_ns == 0U);
     const u64 pace = w.ctl->pacing_rate(QuicRtt{});
-    CRD_FUZZ_REQUIRE(pace == state.target_rate * 110U / 100U || pace == state.target_rate * 250U / 100U);
-    CRD_FUZZ_REQUIRE(w.ctl->burst() >= 2U * w.datagram);
+    const u64 wanted = w.ctl->probe_bytes();
+    if (wanted == 0U)
+    {
+        CRD_FUZZ_REQUIRE(state.window == w.ctl->window());
+        CRD_FUZZ_REQUIRE(pace == state.target_rate * 110U / 100U || pace == state.target_rate * 250U / 100U);
+        CRD_FUZZ_REQUIRE(w.ctl->burst() >= 2U * w.datagram);
+        return;
+    }
+    CRD_FUZZ_REQUIRE(w.policy.probe);
+    const u64 ceiling = (w.policy.target_rate_max != 0U) ? w.policy.target_rate_max : 625000U;
+    const u64 longest = ceiling / 10U; // 100 ms of it, a repeated initial probe's
+    const u64 room = (longest > 5U * w.datagram) ? longest : 5U * w.datagram;
+    CRD_FUZZ_REQUIRE(pace != 0U && pace <= ceiling && w.ctl->burst() == w.datagram);
+    // The probe's room past the window, short only where the window is at its most.
+    const bool full = w.ctl->window() == kCongestionMaxWindow;
+    CRD_FUZZ_REQUIRE((w.ctl->window() > state.window || full) && w.ctl->window() <= state.window + room);
+    CRD_FUZZ_REQUIRE(wanted <= w.ctl->window() - state.window || full);
 }
 
 void check(const World& w)
@@ -203,6 +222,7 @@ void check(const World& w)
         CRD_FUZZ_REQUIRE(state.window == w.ctl->window());
         CRD_FUZZ_REQUIRE(state.target_rate == 0U && state.queue_delay_ns == 0U && state.queue_delay_target_ns == 0U);
     }
+    CRD_FUZZ_REQUIRE(is_gcc(w) || w.ctl->probe_bytes() == 0U);
     CRD_FUZZ_REQUIRE(state.window >= minimum && state.window <= kCongestionMaxWindow);
     CRD_FUZZ_REQUIRE(state.slow_start_threshold >= minimum);
     CRD_FUZZ_REQUIRE(state.phase != CongestionPhase::Avoidance || state.window >= state.slow_start_threshold);
@@ -265,9 +285,15 @@ Packet* pick(World& w, u8 parameter, u8 state)
     return nullptr;
 }
 
+// The window a step may not grow: GCC's own, whatever room a probe adds beyond it.
+[[nodiscard]] u64 held_window(const World& w)
+{
+    return is_gcc(w) ? w.ctl->state().window : w.ctl->window();
+}
+
 void run(World& w, u8 op, u8 parameter)
 {
-    const u64 before = w.ctl->window();
+    const u64 before = held_window(w);
     bool may_grow = false;
     switch (op % 12U)
     {
@@ -373,11 +399,11 @@ void run(World& w, u8 op, u8 parameter)
         }
         case 6U:
         {
-            const u64 halved = w.ctl->window() / 2U;
+            const u64 halved = held_window(w) / 2U;
             w.ctl->on_persistent_congestion(w.now);
             if (is_gcc(w))
             {
-                CRD_FUZZ_REQUIRE(w.ctl->window() == ((halved > gcc_floor(w)) ? halved : gcc_floor(w)));
+                CRD_FUZZ_REQUIRE(held_window(w) == ((halved > gcc_floor(w)) ? halved : gcc_floor(w)));
                 break;
             }
             CRD_FUZZ_REQUIRE(is_scream(w) ? w.ctl->state().window == scream_floor(w)
@@ -481,7 +507,7 @@ void run(World& w, u8 op, u8 parameter)
             break;
         }
     }
-    CRD_FUZZ_REQUIRE(may_grow || w.ctl->window() <= before);
+    CRD_FUZZ_REQUIRE(may_grow || held_window(w) <= before);
     w.reductions = w.ctl->state().reductions;
     check(w);
 }
@@ -515,6 +541,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
             w.policy.target_rate_min = 50000U;
             w.policy.target_rate_max = 400000U;
         }
+        w.policy.probe = (data[1] & 1U) == 0U;
+        w.policy.probe_alr = (data[1] & 2U) != 0U;
+        w.policy.probe_initial = (data[1] & 8U) != 0U;
     }
     else if ((data[0] & 0x88U) == 0x88U)
     {
@@ -694,4 +723,24 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     put(gcc, 0x0AU, 0x00U);
     put(gcc, 0x09U, 0x00U);
     sink.add("gcc-delay", gcc, at);
+    // GCC's probes with periodic ALR probes, then with repeated initial probes: 12 rounds of eight sends, each at
+    // the pacer's release time (the start's clusters take them), two ACK frames with receive times and a longer wait.
+    constexpr u8 probe_modes[2] = {0x02U, 0x08U};
+    for (const u8 mode : probe_modes)
+    {
+        u8 probe[2U + 2U * 228U] = {0xACU, mode};
+        at = 2U;
+        for (u8 round = 0U; round < 12U; ++round)
+        {
+            for (u8 i = 0U; i < 8U; ++i)
+            {
+                put(probe, 0x00U, 0x00U);
+                put(probe, 0x0BU, 0x00U);
+            }
+            put(probe, 0x01U, 0x63U);
+            put(probe, 0x01U, 0x63U);
+            put(probe, 0x08U, static_cast<u8>(0x10U + 4U * round));
+        }
+        sink.add((mode == 0x02U) ? "gcc-probe-alr" : "gcc-probe-initial", probe, at);
+    }
 }

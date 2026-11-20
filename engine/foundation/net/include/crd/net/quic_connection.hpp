@@ -43,6 +43,8 @@
 //              the pacer's release time has come (RFC 9002 sections 7 and 7.7; congestion.hpp); ACK-only packets,
 //              probes and the handshake's CRYPTO data are not held (data_allowed()). Data held back tells the
 //              controller its window is used (section 7.8), and a pacer's release time is a timer of next_timer_ns().
+//              While the controller's bandwidth probe wants bytes the application has not given (probe_bytes(), GCC),
+//              each 1-RTT packet is ack-eliciting and fills its datagram, inside the window and the pacer as any.
 //              The policy is the configuration's, swappable live.
 //   path MTU   datagrams take the path's size (quic_pmtu.hpp: RFC 8899, RFC 9000 section 14.3): 1200 bytes, or the
 //              configured base, until the handshake is confirmed, then PMTU probes (one 1-RTT packet of PING and
@@ -294,6 +296,7 @@ struct QuicConnectionCounters
     u64 packets_held = 0U;    // packets held until their keys came (RFC 9001 section 4.1.4)
     u64 ecn_signals = 0U;     // rises of the peer's CE counts taken as congestion (RFC 9002 section 7.1)
     u64 path_probes = 0U;     // PMTU probe datagrams sent
+    u64 probe_fills = 0U;     // 1-RTT packets padded to their datagram for the controller's bandwidth probe
     u64 receive_timestamps = 0U; // acknowledged packets the peer's ACK_RECEIVE_TIMESTAMPS frames gave a receive time
 };
 
@@ -488,6 +491,7 @@ private:
         u32 token = ~u32{0};
         bool eliciting = false;
         bool path_response = false;
+        bool fill = false; // the packet fills its datagram for a bandwidth probe
     };
 
     struct PeerCid
@@ -575,7 +579,8 @@ private:
     [[nodiscard]] bool data_allowed(QuicSpace space) const noexcept;
     // Opens or holds 0-RTT and 1-RTT data for the datagram of up to `datagram` bytes send() writes at `now_ns`
     // (m_data_open): it goes while probing, or when the window has room for all of it and the pacer's release time
-    // has come. Such data held back while some waits tells the controller, and a window with room arms the pacer.
+    // has come. Such data held back while some waits tells the controller, and a window with room arms the pacer. A
+    // bandwidth probe wanting bytes counts as data waiting (m_probe_fill).
     void gate_data(usize datagram, u64 now_ns) noexcept;
     // Whether a datagram can go now: one waits, and its outcome has a ledger record free when it is reported.
     [[nodiscard]] bool datagram_ready(u64 now_ns) const noexcept;
@@ -629,6 +634,7 @@ private:
     u32 m_path_bytes = kQuicPmtuFloor; // the size the controller and the datagrams last took
     Ecn m_marking = Ecn::NotEct;      // the codepoint of the datagram being written, then of the last one
     bool m_data_open = true;          // congestion control lets data go in the datagram being written
+    bool m_probe_fill = false;        // the controller's bandwidth probe wants bytes: 1-RTT packets fill the datagram
     bool m_ecn_unavailable = false;   // the controller heard that the path carries no ECN
     u64 m_event_ns = 0U;              // the time recovery's events happen at (they carry none)
     QuicStreamSet m_streams;

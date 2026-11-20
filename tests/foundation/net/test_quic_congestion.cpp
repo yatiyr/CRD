@@ -12,8 +12,10 @@
 // deep drop-tail queue held near its delay target at a full link, where CUBIC fills it, and ECT(1) in L4S mode. And
 // GCC (#gcc): with no receive timestamps, each ACK frame's RTT sample less the ACK delay drives its delay trend, and a
 // transfer through a deep drop-tail queue reaches the link from 288 kbit/s and backs off, where CUBIC fills it; with
-// receive timestamps (#receive-timestamps) the peer's arrival times drive it the same way. Receive timestamps are
-// reported only when both ends ask for them, and hold over paths that lose, duplicate and reorder.
+// receive timestamps (#receive-timestamps) the peer's arrival times drive it the same way. Its probes (#gcc-probing)
+// fill their clusters with padding where a media source has too little and find the path past the source's rate,
+// from ACK frames alone or from receive timestamps. Receive timestamps are reported only when both ends ask for
+// them, and hold over paths that lose, duplicate and reorder.
 
 #include "ingress_fixture.hpp"
 #include "quic_connection_fixture.hpp"
@@ -744,6 +746,114 @@ TEST_CASE("QUIC GCC: from ACK frames alone or from receive timestamps a transfer
         // With them nearly every data packet is timed: 16 MiB is about 14000 packets.
         CHECK(((times == 0U) ? delay.timestamps == 0U : delay.timestamps >= 10000U));
     }
+}
+
+TEST_CASE("QUIC GCC: probes padded where a media source has too little find the path past its rate, from ACK frames "
+          "alone or from receive timestamps",
+          "[net][net-path][quic-connection][gcc][gcc-probe][receive-timestamps]")
+{
+    // 4 Mbit/s and the Pair's 50 ms round trip under a 300 ms buffer; the client writes 1250 bytes every 20 ms, 500
+    // kbit/s. Without probes the estimate cannot pass 1.5 times what the source sends. The start's probes fill their
+    // clusters with padding, and their acknowledgements (each ACK frame's arrival less its ACK delay, or the peer's
+    // receive times) measure the path: 864 kbit/s, 1.7 and 3.5 Mbit/s, then the 5 Mbit/s ceiling, which the link
+    // holds to 4.
+    static constexpr u64 kRate = 500000U;
+    static constexpr usize kBuffer = kRate / 1000U * 300U;
+    static constexpr u64 kFrame = 1250U;
+    static constexpr u64 kSource = kFrame * 50U;
+    struct Run
+    {
+        u64 fills = 0U;
+        u64 overflowed = 0U;
+        u64 lag = 0U; // bytes written and not yet read at the end
+        CongestionState state;
+    };
+    const auto run = [](bool probe, u64 times)
+    {
+        CongestionPolicy gcc;
+        gcc.algorithm = CongestionAlgorithm::Gcc;
+        gcc.probe = probe;
+        Pair pair(gcc, 5U, true, times, times);
+        pair.net->path[0].rate = kRate;
+        pair.net->path[0].buffer = kBuffer;
+        pair.confirm();
+        Bulk bulk{pair.client, pair.server, 0U};
+        const u64 end = pair.net->now + 10000U * kMs;
+        while (pair.net->now < end)
+        {
+            bulk.total += kFrame;
+            static_cast<void>(bulk.step());
+            pair.net->advance(pair.net->now + 20U * kMs);
+        }
+        static_cast<void>(bulk.step());
+        Run out;
+        out.fills = pair.client.counters().probe_fills;
+        out.overflowed = pair.net->overflowed[0];
+        out.lag = bulk.total - bulk.read;
+        out.state = pair.client.congestion().state();
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+        return out;
+    };
+    for (const u64 times : {u64{0}, u64{kQuicMaxReceiveTimestamps}})
+    {
+        const Run probed = run(true, times);
+        const Run plain = run(false, times);
+        INFO("timestamps " << times << ": with probes " << probed.fills << " padded packets, estimate "
+                           << probed.state.bandwidth << ", target " << probed.state.target_rate << ", overflowed "
+                           << probed.overflowed << ", lag " << probed.lag << "; without, estimate "
+                           << plain.state.bandwidth << ", lag " << plain.lag);
+        CHECK(probed.fills > 0U);
+        CHECK(plain.fills == 0U);
+        CHECK(probed.state.bandwidth >= 3U * kSource);
+        CHECK(probed.state.bandwidth <= kRate);
+        CHECK(plain.state.bandwidth < 2U * kSource);
+        CHECK(probed.overflowed == 0U);
+        CHECK(probed.lag <= 4U * kFrame); // the source's frames arrive within a few frame times
+        CHECK(plain.lag >= 40U * kFrame); // a rate that starts under the source's falls behind it for seconds
+    }
+}
+
+TEST_CASE("QUIC GCC: probes pad and find the path inside the window while the prober also receives data",
+          "[net][net-path][quic-connection][gcc][gcc-probe]")
+{
+    // The client's 500 kbit/s source probes the path while the server sends it 1 Mbit/s back, so the client owes ACK
+    // frames all along: its probes still pad and find the path, the bytes in flight stay inside the window (a probe's
+    // room included), and the data back is read as it comes.
+    static constexpr u64 kRate = 500000U;
+    static constexpr u64 kFrame = 1250U;
+    static constexpr u64 kBack = 2500U;
+    CongestionPolicy gcc;
+    gcc.algorithm = CongestionAlgorithm::Gcc;
+    Pair pair(gcc, 5U);
+    pair.net->path[0].rate = kRate;
+    pair.net->path[0].buffer = kRate / 1000U * 300U;
+    WindowWatch watch(pair.client);
+    pair.net->filter = &watch;
+    pair.confirm();
+    Bulk bulk{pair.client, pair.server, 0U};
+    u64 back_total = 0U;
+    u64 back_sent = 0U;
+    u64 back_read = 0U;
+    const u64 end = pair.net->now + 5000U * kMs;
+    while (pair.net->now < end)
+    {
+        bulk.total += kFrame;
+        static_cast<void>(bulk.step());
+        back_total += kBack;
+        if (pair.server.streams().recv_state(kStream) != QuicRecvState::None)
+        {
+            static_cast<void>(write_pattern(pair.server.streams(), kStream, back_sent, back_total, kStream + 1U, false));
+        }
+        static_cast<void>(drain(pair.client.streams(), kStream, back_read, kStream + 1U));
+        pair.net->advance(pair.net->now + 20U * kMs);
+    }
+    INFO("padded " << pair.client.counters().probe_fills << ", peak in flight " << watch.peak << ", read back "
+                   << back_read << " of " << back_total << ", estimate " << pair.client.congestion().state().bandwidth);
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+    CHECK(pair.client.counters().probe_fills > 0U);
+    CHECK_FALSE(watch.over);
+    CHECK(back_read + 20U * kBack >= back_total);
+    CHECK(pair.client.congestion().state().bandwidth >= 3U * kFrame * 50U);
 }
 
 TEST_CASE("QUIC receive timestamps: reported only when both ends ask, and held over lossy, duplicating, reordering "

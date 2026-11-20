@@ -1871,7 +1871,7 @@ bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
     {
         ids_owed = ids_owed || m_local_ids[local].owed;
     }
-    return m_handshake_done_owed || m_path_response_owed || m_ping_owed || m_retire_owed_count > 0U ||
+    return m_handshake_done_owed || m_path_response_owed || m_ping_owed || m_probe_fill || m_retire_owed_count > 0U ||
            (m_frame_count < m_config.sent_frames && (m_streams.has_frame() || ids_owed || m_new_token_owed)) ||
            datagram_ready(now_ns);
 }
@@ -1879,6 +1879,7 @@ bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
 void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
 {
     m_pace_release_ns = kNeverNs;
+    m_probe_fill = false;
     bool probing = false;
     for (const u8 probes : m_probes)
     {
@@ -1889,6 +1890,8 @@ void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
         m_data_open = true; // RFC 9002 section 7.5: probes are not held by the window or the pacer
         return;
     }
+    const bool probe_wants =
+        send_type(QuicSpace::Application) == QuicPacketType::OneRtt && m_congestion->probe_bytes() != 0U;
     // A whole datagram must fit: a smaller room would let only ACKs and frames too small to matter through, packet
     // after packet. The window's floor of two datagrams always holds one.
     const u64 in_flight = m_recovery->bytes_in_flight();
@@ -1897,6 +1900,7 @@ void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
     const u64 release =
         m_pacer.release_ns(now_ns, m_congestion->pacing_rate(m_recovery->rtt()), m_congestion->burst());
     m_data_open = room && release <= now_ns;
+    m_probe_fill = m_data_open && probe_wants; // a probe's fill is data: the window and the pacer hold it as any
     const QuicSpace application = QuicSpace::Application;
     const bool sendable = !m_space_gone[quic_space_index(application)] &&
                           m_protection.can_send(send_type(application)) && m_recovery->can_send_data(application);
@@ -1910,7 +1914,7 @@ void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
         }
         return;
     }
-    if (sendable && has_data(application, now_ns))
+    if (sendable && (probe_wants || has_data(application, now_ns)))
     {
         // Section 7.8: the window is what holds sending back, so it may grow; a window with room waits for the pacer.
         m_congestion->on_limited(!room, now_ns);
@@ -2239,7 +2243,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
             static_cast<void>(record(space, packet, kRecordStream, taken, written));
         }
     }
-    if (space == QuicSpace::Application && m_ping_owed)
+    if (space == QuicSpace::Application && (m_ping_owed || m_probe_fill))
     {
         m_ping_owed = false;
         if (!written.eliciting)
@@ -2248,6 +2252,8 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
             ping.kind = QuicFrameKind::Ping;
             static_cast<void>(put(ping));
         }
+        // A bandwidth probe's packet is ack-eliciting and fills its datagram: its bytes, not its frames, are the probe.
+        written.fill = m_probe_fill && written.eliciting;
     }
     put_owed_ping();
     return used;
@@ -2331,7 +2337,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         return 0U;
     }
     usize floor = padded ? min_u64(quic_datagram_floor(true, datagram_used), room.size()) : 0U;
-    floor = (carry == Carry::Probe) ? room.size() : floor; // a probe is exactly the size it probes
+    floor = (carry == Carry::Probe || written.fill) ? room.size() : floor; // a probe is exactly the size it probes
     // Every datagram reaches kQuicResetPadding past this side's ID length, so a peer's stateless reset answering it
     // can be as long as a packet to this side (section 10.3).
     const usize reset_floor = m_local_cid.bytes + kQuicResetPadding;
@@ -2369,6 +2375,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         }
         static_cast<void>(m_recovery->on_sent(space, sent)); // can_send held and numbers rise
         m_ecn.on_sent(space, m_marking, now_ns);
+        m_counters.probe_fills += written.fill ? 1U : 0U;
         if (sent.in_flight)
         {
             m_congestion->on_sent(congestion_packet(space, sent), m_recovery->bytes_in_flight(), now_ns);
