@@ -4134,8 +4134,8 @@ TEST_CASE("QUIC paths: a NAT rebinding moves the server's datagrams at once, ins
     CHECK(run.server.state() == QuicConnectionState::Established);
 }
 
-TEST_CASE("QUIC paths: an address change restarts the RTT estimate, congestion control and the path MTU search from "
-          "its family's base",
+TEST_CASE("QUIC paths: an address change keeps datagrams to 1200 bytes until validated, then restarts the RTT "
+          "estimate, congestion control and the path MTU search from its family's base",
           "[net][net-path][quic-connection]")
 {
     Identity identity;
@@ -4151,6 +4151,15 @@ TEST_CASE("QUIC paths: an address change restarts the RTT estimate, congestion c
     run.pad_to = kQuicMinInitialDatagram;
     send_frame(run, QuicFrameKind::Ping);
     CHECK(run.server.path() == run.from);
+    // Not yet confirmed: the credit and the floor hold the path, and the estimate stands (section 9.4).
+    CHECK(run.server.recovery().path_floor() == 0U);
+    CHECK(run.server.recovery().rtt().sampled());
+    for (usize index = mark; index < run.raw.datagrams && index < 256U; ++index)
+    {
+        CHECK(run.raw.sent_size[index] <= kQuicMinInitialDatagram);
+    }
+    answer(run, run.from);
+    REQUIRE(run.server.address_validated());
     CHECK(run.server.recovery().path_floor() >= next);
     CHECK_FALSE(run.server.recovery().rtt().sampled());
     CHECK(run.server.path_mtu().size() == kQuicPmtuFloor);
@@ -4160,8 +4169,10 @@ TEST_CASE("QUIC paths: an address change restarts the RTT estimate, congestion c
     // An IPv6 address probes its 1232 bytes first (RFC 8899 section 5.2).
     constexpr u8 v6[16] = {0x20U, 0x01U, 0x0DU, 0xB8U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U};
     run.from = QuicPath{0U, Endpoint{IpAddress::v6(v6), 443U}};
+    run.pad_to = kQuicMinInitialDatagram;
     send_frame(run, QuicFrameKind::Ping);
     CHECK(run.server.path() == run.from);
+    answer(run, run.from);
     CHECK(run.server.path_mtu().size() == kQuicPmtuFloor);
     CHECK(run.server.path_mtu().state() == QuicPmtuState::Base);
     CHECK(run.server.counters().migrations == 2U);
@@ -4221,6 +4232,7 @@ TEST_CASE("QUIC paths: a validation that fails reverts to the last validated pat
         CHECK(run.server.path() == b);
         run_timers(run, run.now + 30000U * kMs);
         CHECK(run.server.path() == a); // section 9.3.2
+        CHECK(run.server.recovery().path_floor() == 0U); // b was never confirmed: a's state stands
         CHECK(run.server.paths().find(b) == kQuicNoPath);
         CHECK(run.server.counters().path_failures == 1U);
         CHECK(run.server.counters().migrations == 2U);
@@ -4243,6 +4255,46 @@ TEST_CASE("QUIC paths: a validation that fails reverts to the last validated pat
         CHECK_FALSE(run.raw.close_seen); // silently (section 9.3.2)
         CHECK(run.server.counters().path_failures == 2U);
     }
+}
+
+TEST_CASE("QUIC paths: an off-path attacker's forwarded copy moves the server for one packet and costs its "
+          "congestion state nothing; the spurious path is abandoned",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    RawRun run(identity);
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath attacker = QuicPath{0U, Endpoint{IpAddress::v4(203, 0, 113, 66), 9999U}};
+    run.from = a;
+    run.handshake();
+    run.drain();
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    REQUIRE(run.server.recovery().rtt().sampled());
+    const u64 smoothed = run.server.recovery().rtt().smoothed_ns;
+    const u64 window = run.server.congestion().window();
+    // The attacker's copy arrives first from its address, and moves the server there.
+    run.pad_to = kQuicMinInitialDatagram;
+    run.from = attacker;
+    send_frame(run, QuicFrameKind::Ping);
+    REQUIRE(run.server.path() == attacker);
+    CHECK_FALSE(run.server.address_validated());
+    // The client's next packet from its own address, higher-numbered: back at once, the copy's path abandoned
+    // (section 9.3.2), nothing restarted: a is validated and the state was never rebuilt.
+    run.from = a;
+    run.pad_to = 0U;
+    send_frame(run, QuicFrameKind::Ping);
+    CHECK(run.server.path() == a);
+    CHECK(run.server.address_validated());
+    CHECK(run.server.paths().find(attacker) == kQuicNoPath);
+    CHECK(run.server.counters().migrations == 2U);
+    CHECK(run.server.recovery().path_floor() == 0U);
+    CHECK(run.server.recovery().rtt().smoothed_ns == smoothed);
+    CHECK(run.server.congestion().window() == window);
+    // What went toward the attacker stayed inside three times its one datagram.
+    CHECK(bytes_to(run, attacker, 0U) <= 3U * kQuicMinInitialDatagram);
+    run_timers(run, run.now + 10000U * kMs);
+    CHECK(run.server.state() == QuicConnectionState::Established);
+    CHECK(run.server.path() == a);
 }
 
 TEST_CASE("QUIC paths: a client that changed its connection ID is answered on an unused one of its own, and an ID "

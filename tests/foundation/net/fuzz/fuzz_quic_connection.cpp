@@ -548,20 +548,20 @@ struct Pair
             to.receive(Span<u8>(flight.bytes, flight.size), flight.ecn, now);
         }
         check_closed(to);
-        // Whatever the path does to codepoints, a failed validation stays failed for the path's life: a new path
-        // (the recovery's path floor moved) validates again (RFC 9000 section 13.4.2).
+        // Whatever the path does to codepoints, a failed validation stays failed for the path's life: a move to
+        // another path validates again (RFC 9000 section 13.4.2).
         const bool failed = to.ecn().state() == QuicEcnState::Failed;
-        const u64 floor = to.recovery().path_floor();
-        CRD_FUZZ_REQUIRE(failed || !ecn_failed[flight.to] || floor != path_floor[flight.to]);
+        const u64 moves = to.counters().migrations;
+        CRD_FUZZ_REQUIRE(failed || !ecn_failed[flight.to] || moves != ecn_moves[flight.to]);
         ecn_failed[flight.to] = failed;
-        path_floor[flight.to] = floor;
+        ecn_moves[flight.to] = moves;
         check_hosts();
     }
 
     void remove(usize index) { flights[index] = flights[--count]; }
 
     bool ecn_failed[2] = {}; // each end's ECN validation failed
-    u64 path_floor[2] = {};  // and the path it failed on (QuicRecovery::path_floor)
+    u64 ecn_moves[2] = {};   // and the moves to another path before it (QuicConnectionCounters::migrations)
 
     void timers()
     {

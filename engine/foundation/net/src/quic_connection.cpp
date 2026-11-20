@@ -402,6 +402,7 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     m_ecn.start(config.ecn ? congestion_codepoint(config.congestion) : Ecn::NotEct);
     follow_ecn();
     m_paths.open(config.path, false, 0U);
+    m_congestion_path = config.path;
     m_frames = frames;
     m_crypto_bytes = bytes;
     m_crypto_bits = bits;
@@ -1076,6 +1077,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
     else if (m_receive_path == m_paths.active() && m_paths.path(m_receive_path).peer.port == 0U)
     {
         m_paths.bind(m_candidate);
+        m_congestion_path = m_candidate;
     }
     const QuicSpace space = quic_space_of(opened.type);
     m_packet_version = long_header ? header.version : 0U;
@@ -2573,10 +2575,11 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
     {
         limit = min_u64(limit, (m_peer_known ? m_peer : m_remembered).max_udp_payload_size);
     }
-    if (m_recovery->pto_count() != 0U)
+    if (m_recovery->pto_count() != 0U || (!address_validated() && !(m_congestion_path == path())))
     {
         // A probe timeout is pending: datagrams of the floor get an acknowledgement through a black hole that drops
-        // larger ones (quic_pmtu.hpp).
+        // larger ones (quic_pmtu.hpp). Or the peer moved to a path not yet confirmed: the floor is all it is known
+        // to carry.
         limit = min_u64(limit, kQuicPmtuFloor);
     }
     const usize full = limit; // a datagram's size before the amplification limit: what the window must have room for
@@ -2994,9 +2997,17 @@ void QuicConnection::follow_packet(u64 number, bool probing, u64 now_ns) noexcep
             {
                 m_paths.validate(path, now_ns, timeout);
             }
-            // An off-path attacker's copy looks like a rebinding: the path before it is challenged, and a peer still
-            // there answers and sends on it, which moves the connection back (section 9.3.3).
-            m_paths.validate(from, now_ns, timeout);
+            if (m_paths.validated(from))
+            {
+                // An off-path attacker's copy looks like a rebinding: the path before it is challenged, and a peer
+                // still there answers and sends on it, which moves the connection back (section 9.3.3).
+                m_paths.validate(from, now_ns, timeout);
+            }
+            else
+            {
+                // A move away from a path never validated abandons it: a spurious migration (section 9.3.2).
+                drop_path(from, now_ns);
+            }
         }
         return;
     }
@@ -3010,22 +3021,23 @@ void QuicConnection::follow_packet(u64 number, bool probing, u64 now_ns) noexcep
 void QuicConnection::move_to(usize index, u64 now_ns) noexcept
 {
     const usize from = m_paths.active();
-    const QuicPath before = m_paths.path(from);
     m_paths.set_peer_sequence(from, path_sequence(from));
     m_paths.activate(index);
+    if (m_paths.proven(index))
+    {
+        // Its check of section 9.3.3, if one runs, is answered: the peer is there. A path whose address an
+        // unexpanded challenge validated still owes its expanded one, which goes on.
+        m_paths.abandon(index);
+    }
     const usize cid = peer_index(m_paths.peer_sequence(index));
     m_peer_cid_current = (cid < m_peer_cid_count) ? cid : m_peer_cid_current;
     ++m_counters.migrations;
-    if (!quic_port_only_change(before, m_paths.path(index)))
-    {
-        restart_path(now_ns);
-    }
+    follow_congestion(now_ns);
     m_recovery->set_amplification_blocked(!address_validated() && amplification_credit() < kMinUsefulPacket, now_ns);
 }
 
-void QuicConnection::restart_path(u64 now_ns) noexcept
+void QuicConnection::restart_path_size() noexcept
 {
-    m_recovery->restart_path(now_ns);
     // A path of another family is the only thing known of it: its floor, then the search (RFC 8899 section 5.2).
     const bool v6 = m_paths.path(m_paths.active()).peer.address.unmapped().family == AddressFamily::V6;
     const u32 base = v6 ? kQuicIpv6BaseDatagram : kQuicPmtuFloor;
@@ -3035,15 +3047,35 @@ void QuicConnection::restart_path(u64 now_ns) noexcept
     {
         m_pmtu.limit(static_cast<u32>(min_u64(m_peer.max_udp_payload_size, kQuicDefaultMaxUdpPayload)));
     }
+    apply_path_size();
+    m_ecn.restart(m_config.ecn ? congestion_codepoint(m_config.congestion) : Ecn::NotEct);
+    m_ecn_unavailable = false;
+    follow_ecn();
+}
+
+void QuicConnection::follow_congestion(u64 now_ns) noexcept
+{
+    const QuicPath& active = m_paths.path(m_paths.active());
+    if (!address_validated() || m_congestion_path == active)
+    {
+        return;
+    }
+    // Section 9.4: on confirming the peer's address, initial values unless only its port changed. Until then the
+    // credit and 1200-byte datagrams hold the path, and a spurious move never confirmed costs the state nothing.
+    const bool kept = quic_port_only_change(m_congestion_path, active);
+    m_congestion_path = active;
+    if (kept)
+    {
+        return;
+    }
+    restart_path_size();
+    m_recovery->restart_path(now_ns);
     m_delivery.reset();
     m_pacer = Pacer{};
     m_pace_release_ns = kNeverNs;
     m_congestion->~CongestionController();
-    m_path_bytes = m_pmtu.size();
     m_congestion =
         make_congestion(m_config.congestion, m_path_bytes, nullptr, m_congestion_slot, m_delivery, entropy());
-    m_datagrams.set_path(m_peer_known ? min_u64(m_path_bytes, m_peer.max_udp_payload_size) : m_path_bytes);
-    m_ecn.restart(m_config.ecn ? congestion_codepoint(m_config.congestion) : Ecn::NotEct);
     m_ecn_unavailable = false;
     follow_ecn();
 }
@@ -3054,6 +3086,7 @@ void QuicConnection::on_validated(usize index, u64 now_ns) noexcept
     if (index == m_paths.active())
     {
         m_recovery->set_amplification_blocked(false, now_ns);
+        follow_congestion(now_ns);
     }
 }
 

@@ -170,12 +170,22 @@ TEST_CASE("QUIC paths: an answered challenge under 1200 bytes proves the address
     usize index = 0U;
     REQUIRE(paths.on_response(ConstSpan<u8>(small), index) == QuicPathResponse::Validated);
     CHECK(paths.validated(b)); // the address: the limit is lifted
+    CHECK_FALSE(paths.proven(b));
     CHECK(paths.validating(b));
     CHECK(paths.challenge_due(b, 10U * kMs)); // an expanded challenge goes now
     const u8 expanded[kQuicPathDataBytes] = {2U};
     paths.challenge_sent(b, ConstSpan<u8>(expanded), true, 10U * kMs, 500U * kMs);
     REQUIRE(paths.on_response(ConstSpan<u8>(expanded), index) == QuicPathResponse::Validated);
     CHECK_FALSE(paths.validating(b));
+    CHECK(paths.proven(b));
+    CHECK(paths.proven(0U)); // validated by the handshake
+    // A check of a proven path ended without a verdict: no timeout, and its answer validates nothing more.
+    paths.validate(b, 0U, 3000U * kMs);
+    paths.challenge_sent(b, ConstSpan<u8>(expanded), true, 0U, 500U * kMs);
+    paths.abandon(b);
+    CHECK_FALSE(paths.validating(b));
+    CHECK(paths.expired(3000U * kMs) == kQuicNoPath);
+    CHECK(paths.on_response(ConstSpan<u8>(expanded), index) == QuicPathResponse::Ignored);
     // A path whose expanded challenge is never answered fails as any.
     const usize c = paths.admit(at(3, 1000), 0U);
     paths.validate(c, 0U, 3000U * kMs);

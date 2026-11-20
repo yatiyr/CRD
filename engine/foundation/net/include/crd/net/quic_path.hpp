@@ -99,6 +99,11 @@ public:
     void challenge_sent(usize index, cont::ConstSpan<u8> data, bool expanded, u64 now_ns, u64 resend_ns) noexcept;
     // A PATH_RESPONSE's data: `index` names the path it validated.
     [[nodiscard]] QuicPathResponse on_response(cont::ConstSpan<u8> data, usize& index) noexcept;
+    // Ends `index`'s validation without a verdict.
+    void abandon(usize index) noexcept;
+    // Whether `index` is known to carry 1200-byte datagrams: validated by an expanded challenge, or by other means
+    // (set_validated: the handshake, a token).
+    [[nodiscard]] bool proven(usize index) const noexcept { return m_slots[index].proven; }
     // A path whose validation timed out at `now_ns`, abandoned (it stays in the table); kQuicNoPath for none.
     [[nodiscard]] usize expired(u64 now_ns) noexcept;
     // When the next PATH_CHALLENGE is due and when validation is abandoned; kNeverNs while none is underway.
@@ -146,6 +151,7 @@ private:
         u64 local_sequence = 0U;
         bool used = false;
         bool validated = false;
+        bool proven = false; // carries 1200-byte datagrams
         bool response_owed = false;
     };
 

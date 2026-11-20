@@ -26,6 +26,7 @@ void QuicPaths::open(const QuicPath& path, bool validated, u64 now_ns) noexcept
     slot.used = true;
     slot.path = path;
     slot.validated = validated;
+    slot.proven = validated;
     slot.last_ns = now_ns;
 }
 
@@ -128,6 +129,7 @@ usize QuicPaths::credit(usize index) const noexcept
 void QuicPaths::set_validated(usize index) noexcept
 {
     m_slots[index].validated = true;
+    m_slots[index].proven = true;
 }
 
 void QuicPaths::validate(usize index, u64 now_ns, u64 timeout_ns) noexcept
@@ -191,6 +193,7 @@ QuicPathResponse QuicPaths::on_response(cont::ConstSpan<u8> data, usize& index) 
     slot.validated = true;
     if (expanded)
     {
+        slot.proven = true;
         slot.deadline_ns = kNeverNs;
         slot.due_ns = kNeverNs;
         slot.challenge_count = 0U;
@@ -203,6 +206,14 @@ QuicPathResponse QuicPaths::on_response(cont::ConstSpan<u8> data, usize& index) 
     return QuicPathResponse::Validated;
 }
 
+void QuicPaths::abandon(usize index) noexcept
+{
+    Slot& slot = m_slots[index];
+    slot.deadline_ns = kNeverNs;
+    slot.due_ns = kNeverNs;
+    slot.challenge_count = 0U;
+}
+
 usize QuicPaths::expired(u64 now_ns) noexcept
 {
     for (usize index = 0U; index < kQuicMaxPaths; ++index)
@@ -210,9 +221,7 @@ usize QuicPaths::expired(u64 now_ns) noexcept
         Slot& slot = m_slots[index];
         if (slot.used && slot.deadline_ns != kNeverNs && now_ns >= slot.deadline_ns)
         {
-            slot.deadline_ns = kNeverNs;
-            slot.due_ns = kNeverNs;
-            slot.challenge_count = 0U;
+            abandon(index);
             return index;
         }
     }

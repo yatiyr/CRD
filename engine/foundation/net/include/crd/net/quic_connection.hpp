@@ -66,12 +66,14 @@
 //              once confirmed, the highest-numbered non-probing packet from another path moves its datagrams there
 //              (a NAT rebinding or the client's migration), with an unused peer connection ID when the client changed
 //              its own (section 9.5); the new path is validated and held to three times what arrived on it until
-//              then, and the path before it is challenged too (section 9.3.3). Unless only the port changed,
-//              congestion control, the RTT estimate, the pacer, ECN validation and the path MTU search start again,
-//              and nothing sent before reaches the new estimate (section 9.4). A validation that fails reverts to the
-//              last validated path, or closes silently without one (section 9.3.2). A validated path left behind stays
-//              known, so the client may return without another validation, until a new path needs its slot; its
-//              connection ID is then retired. A client takes datagrams from its server's address alone (section 9).
+//              then, and the path before it is challenged too (section 9.3.3), or abandoned if never validated
+//              (section 9.3.2). Datagrams to the new path keep to 1200 bytes until it is validated; then, unless
+//              only the port changed, the path MTU search, ECN validation, congestion control, the RTT estimate and
+//              the pacer start again, nothing sent before reaching the new estimate (section 9.4). A validation that
+//              fails reverts to the last validated path, or closes silently without one (section 9.3.2). A validated
+//              path left behind stays known, so the client may return without another validation, until a new path
+//              needs its slot; its connection ID is then retired. A client takes datagrams from its server's address
+//              alone (section 9).
 //   IDs        this side's connection IDs come from the host (QuicConnectionIds), which routes them and derives their
 //              stateless reset tokens from its QuicResetKey: after confirmation the peer is kept at its
 //              active_connection_id_limit (at most kQuicMaxLocalConnectionIds) with NEW_CONNECTION_ID frames resent
@@ -573,8 +575,11 @@ private:
     void follow_packet(u64 number, bool probing, u64 now_ns) noexcept;
     // Datagrams go on `index` from now on: the peer moved there, or a failed validation reverts there.
     void move_to(usize index, u64 now_ns) noexcept;
-    // Congestion control, the RTT estimate, the pacer, ECN validation and the path MTU search start again.
-    void restart_path(u64 now_ns) noexcept;
+    // The path MTU search and ECN validation start again.
+    void restart_path_size() noexcept;
+    // Once the active path is validated, the path MTU search, ECN validation, congestion control, the RTT estimate
+    // and the pacer start again unless only the port changed since the path they were built on (section 9.4).
+    void follow_congestion(u64 now_ns) noexcept;
     void on_validated(usize index, u64 now_ns) noexcept;
     // Paths whose validation timed out: reverted from, forgotten, or the connection closes (sections 8.2.4, 9.3.2).
     void expire_paths(u64 now_ns) noexcept;
@@ -765,6 +770,7 @@ private:
     QuicPath m_candidate;      // the path of a datagram being read from no known path
     usize m_receive_path = 0U; // the path of the datagram being read (kQuicNoPath: m_candidate, not yet admitted)
     usize m_send_path = 0U;    // the path of the datagram being written, then of the last one
+    QuicPath m_congestion_path; // the validated path the controller, the estimate and the PMTU search belong to
     u64 m_largest_non_probing = kQuicNoPacket; // the Application packet that last chose the path (section 9.3)
     u8 m_challenge[kQuicPathDataBytes] = {};   // the PATH_CHALLENGE data of the packet being written
     bool m_ping_owed = false;
