@@ -24,11 +24,14 @@
 #include <isa_availability.h>
 // The CRT's view of the CPU, one copy per image (vcruntime's cpu_disp.obj, set before any C++ initializer):
 // __isa_available is the level the compiler's vectorized paths and the STL test, __isa_enabled its bit set,
-// __isa_inverted the __IA_SUPPORT_* bits __check_isa_support() reads (a set bit: not supported).
+// __isa_inverted the __IA_SUPPORT_* bits __check_isa_support() reads (a set bit: not supported). MSVC 14.52's
+// <isa_availability.h> declares the first two itself; 14.51's does not, so they stay declared here.
 extern "C"
 {
-    extern int __isa_available;               // NOLINT(bugprone-reserved-identifier,readability-identifier-naming)
-    extern int __isa_enabled;                 // NOLINT(bugprone-reserved-identifier,readability-identifier-naming)
+    // NOLINTNEXTLINE(bugprone-reserved-identifier,readability-identifier-naming,readability-redundant-declaration)
+    extern int __isa_available;
+    // NOLINTNEXTLINE(bugprone-reserved-identifier,readability-identifier-naming,readability-redundant-declaration)
+    extern int __isa_enabled;
     extern unsigned long long __isa_inverted; // NOLINT(bugprone-reserved-identifier,readability-identifier-naming)
     extern unsigned __avx10_version;          // NOLINT(bugprone-reserved-identifier,readability-identifier-naming)
 }

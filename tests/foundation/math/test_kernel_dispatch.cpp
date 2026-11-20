@@ -17,6 +17,8 @@
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
+#include <cstring>
+#include <ios>
 #include <string_view>
 #include <type_traits>
 
@@ -474,27 +476,43 @@ TEST_CASE("float conversion kernels: every level the host runs is bit-identical 
             bad += std::bit_cast<crd::u32>(wide[i]) == want ? 0U : 1U;
         }
         CHECK(bad == 0U);
-        // Short calls from an odd offset: every tail, nothing written past n.
-        crd::usize short_bad = 0;
+        // Short calls from an odd offset: every tail, nothing written past n. The guard is a signalling NaN written
+        // as bytes: stored as an f32 value, MSVC 14.52's optimised builds quieted the constant, and every one of the
+        // 34 x 17 guard words read back changed while every converted value matched.
+        crd::usize short_values = 0;
+        crd::usize short_guards = 0;
+        crd::u32 first_bad = 0;
         for (crd::usize n = 0; n < 34U; ++n)
         {
             const crd::u32 guard = 0x7FA5A5A5U;
             for (crd::usize i = 0; i < n + kGuard; ++i)
             {
-                wide[i] = std::bit_cast<crd::f32>(guard);
+                std::memcpy(&wide[i], &guard, sizeof(guard));
             }
             k.f16_to_f32(halves + 0x7BF5U, wide, n); // the top normals, the infinity and the first NaNs
             for (crd::usize i = 0; i < n; ++i)
             {
                 const crd::u32 want = std::bit_cast<crd::u32>(crd::math::f16_bits_to_f32(halves[0x7BF5U + i]));
-                short_bad += std::bit_cast<crd::u32>(wide[i]) == want ? 0U : 1U;
+                const crd::u32 got = std::bit_cast<crd::u32>(wide[i]);
+                if (got != want && short_values + short_guards == 0U)
+                {
+                    first_bad = got;
+                }
+                short_values += got == want ? 0U : 1U;
             }
             for (crd::usize i = n; i < n + kGuard; ++i)
             {
-                short_bad += std::bit_cast<crd::u32>(wide[i]) == guard ? 0U : 1U;
+                const crd::u32 got = std::bit_cast<crd::u32>(wide[i]);
+                if (got != guard && short_values + short_guards == 0U)
+                {
+                    first_bad = got;
+                }
+                short_guards += got == guard ? 0U : 1U;
             }
         }
-        CHECK(short_bad == 0U);
+        INFO("first wrong word 0x" << std::hex << first_bad);
+        CHECK(short_values == 0U);
+        CHECK(short_guards == 0U);
     }
     CHECK(ran >= 1U); // portable runs everywhere
 }
