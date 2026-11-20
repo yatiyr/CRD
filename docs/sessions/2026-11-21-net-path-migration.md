@@ -9,10 +9,13 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S75](../design/network-f
 
 Run 44807121941 (730a2e86), on runner image 20261111.635 with MSVC 14.52.37025, failed three jobs:
 - win-tidy: the image's STL needs Clang 22 (STL1000), against the pinned LLVM 20; hosted tidy confirms nothing now,
-  and this batch's tidy evidence is local (below). It also flags `cpu_features.cpp`'s redundant declarations.
+  and this batch's tidy evidence is local (below). It also flags `cpu_features.cpp`'s redundant declarations:
+  14.52's `<isa_availability.h>` declares two of the CRT externs, 14.51's does not; they stay, under a NOLINT.
 - win-release and win-shipping: `test_kernel_dispatch.cpp:497`, f16-to-f32 of the top normals and NaNs, 578 wrong
   at every level. The last pass (44723313119, 6f4cfed5) ran MSVC 14.51.36231. The only math commit between is this
-  track's 6951b10a (division guards in `mat_types.hpp`, other code), so toolset or commit is not yet told apart.
+  track's 6951b10a (division guards in `mat_types.hpp`, other code). Told apart since: 578 = 34 x 17, every guard
+  word of the short calls and no converted value, at n = 0 too; the test's signalling-NaN guard, stored as an f32
+  value, is quieted by 14.52's optimiser. The test now writes it as bytes and counts values and guards apart.
 
 ## What landed
 
