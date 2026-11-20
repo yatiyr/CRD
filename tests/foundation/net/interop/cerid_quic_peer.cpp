@@ -36,8 +36,9 @@
 //                each a QMux connection running the echo with `alpn` its subprotocol (interop_qmux.hpp has the
 //                options); crd-qmux-peer's report for each, and `h3_close`, `h3_close_code` once the connection ends.
 //                The client closes the connection with H3_NO_ERROR once its tunnels are done and the server's GOAWAY
-//                came; a server sends GOAWAY once its tunnels are done, and closes after kTunnelLingerNs if the client
-//                has not
+//                came; a server sends GOAWAY once its tunnels are done, PINGs every kLingerPingNs while it waits, so
+//                that a client's CONNECTION_CLOSE lost on a lossy path comes again, and closes after kTunnelLingerNs if
+//                the client has not
 //
 // The report of each connection, one `name=value` per line from `connection=N` on standard output when it has ended,
 // is the same as ngtcp2_quic_peer.c's without what only OpenSSL reports, and with the path's ECN validation (`ecn`,
@@ -104,6 +105,7 @@ constexpr u32 kDatagramRingCount = 2048U;
 constexpr u8 kEarlyContext[4] = {'e', 'c', 't', 'x'};
 constexpr StringView kTunnelVersion = "h3";
 constexpr u64 kTunnelLingerNs = 2000000000U; // how long an end waits for the other once its tunnels are done
+constexpr u64 kLingerPingNs = 50000000U;     // a waiting server's PINGs: several within the client's drain
 constexpr u32 kTunnelStreamBytes = 1U << 21U;
 
 struct Options : QmuxOptions
@@ -176,6 +178,13 @@ public:
                 return m_h3.error();
             }
         }
+        // A client in its closing state answers each packet with its CONNECTION_CLOSE again (RFC 9000 section
+        // 10.2.1): the waiting server's PINGs make one lost on the path not the last.
+        if (m_done_ns != 0U && !m_options.client && now_ns >= m_ping_ns)
+        {
+            connection.ping();
+            m_ping_ns = now_ns + kLingerPingNs;
+        }
         const bool lingered = m_done_ns != 0U && now_ns - m_done_ns >= kTunnelLingerNs;
         done = lingered || (m_done_ns != 0U && m_options.client && m_h3.goaway_received());
         return m_h3.error();
@@ -205,6 +214,7 @@ private:
     Http3Connection m_h3;
     TunnelPeer m_peer;
     u64 m_done_ns = 0U;
+    u64 m_ping_ns = 0U; // a waiting server's next PING
     bool m_made = false;
 };
 
