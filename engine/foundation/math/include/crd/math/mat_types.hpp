@@ -290,13 +290,14 @@ template <MathScalar T> [[nodiscard]] constexpr Mat3<T> inverse(const Mat3<T>& m
     return detail::adjugate_over(cof, detail::determinant_of(m, cof));
 }
 
-// The inverse when |determinant(m)| >= min_abs_det (a NaN determinant passes, and gives NaNs); else false, `out`
-// untouched.
+// The inverse when |determinant(m)| >= min_abs_det and is not zero (a NaN determinant passes, and gives NaNs); else
+// false, `out` untouched. The zero test refuses only what a bound <= 0 would let divide by zero, and lets MSVC's LTCG
+// prove the division safe (C4723).
 template <MathScalar T> [[nodiscard]] constexpr bool try_inverse(const Mat3<T>& m, Mat3<T>& out, T min_abs_det) noexcept
 {
     const Mat3<T> cof = detail::cofactors(m);
     const T det = detail::determinant_of(m, cof);
-    if (abs(det) < min_abs_det)
+    if (abs(det) < min_abs_det || det == T{0})
     {
         return false;
     }
@@ -325,13 +326,13 @@ template <MathScalar T> [[nodiscard]] constexpr Vec3<T> solve(const Mat3<T>& m, 
     return c.numerators * (static_cast<T>(1) / c.det);
 }
 
-// solve(m, b) when the |determinant| it divides by is >= min_abs_det (a NaN passes, as in try_inverse); else false,
-// `out` untouched.
+// solve(m, b) when the |determinant| it divides by is >= min_abs_det and is not zero (a NaN passes, as in
+// try_inverse); else false, `out` untouched.
 template <MathScalar T>
 [[nodiscard]] constexpr bool try_solve(const Mat2<T>& m, const Vec2<T>& b, Vec2<T>& out, T min_abs_det) noexcept
 {
     const auto c = detail::cramer(m, b);
-    if (abs(c.det) < min_abs_det)
+    if (abs(c.det) < min_abs_det || c.det == T{0})
     {
         return false;
     }
@@ -343,7 +344,7 @@ template <MathScalar T>
 [[nodiscard]] constexpr bool try_solve(const Mat3<T>& m, const Vec3<T>& b, Vec3<T>& out, T min_abs_det) noexcept
 {
     const auto c = detail::cramer(m, b);
-    if (abs(c.det) < min_abs_det)
+    if (abs(c.det) < min_abs_det || c.det == T{0})
     {
         return false;
     }

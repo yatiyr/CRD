@@ -68,8 +68,12 @@ template <class Point> [[nodiscard]] LineSums line_sums(crd::u32 count, const Po
         sums.mean_x += w * x;
         sums.mean_y += w * y;
     }
-    sums.mean_x /= sums.sum_w;
-    sums.mean_y /= sums.sum_w;
+    // Every caller has a point of positive weight; the guard lets MSVC's LTCG prove the division safe (C4723).
+    if (sums.sum_w != 0.0)
+    {
+        sums.mean_x /= sums.sum_w;
+        sums.mean_y /= sums.sum_w;
+    }
     for (crd::u32 i = 0U; i < count; ++i)
     {
         double x = 0.0;

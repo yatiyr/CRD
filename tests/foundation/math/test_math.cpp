@@ -502,6 +502,15 @@ TEST_CASE("Mat3 try_inverse and try_solve refuse a determinant below their bound
     CHECK(x2 == sentinel2);
     CHECK_FALSE(try_solve(Mat2d::zero(), Vec2d(1.0, 1.0), x2, std::numeric_limits<f64>::min()));
     CHECK(x2 == sentinel2);
+
+    // A bound of 0 lets no zero determinant divide.
+    out = sentinel;
+    CHECK_FALSE(try_inverse(Mat3d::zero(), out, 0.0));
+    CHECK(out == sentinel);
+    CHECK_FALSE(try_solve(Mat3d::zero(), Vec3d(1.0, 2.0, 3.0), x3, 0.0));
+    CHECK(x3 == sentinel3);
+    CHECK_FALSE(try_solve(Mat2d::zero(), Vec2d(1.0, 1.0), x2, -1.0));
+    CHECK(x2 == sentinel2);
 }
 
 // ---------------------------------------------------------------------------
