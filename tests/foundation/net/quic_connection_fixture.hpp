@@ -13,7 +13,6 @@
 #include <crd/net/ingress.hpp>
 #include <crd/net/quic_connection.hpp>
 #include <crd/net/quic_header.hpp>
-#include <crd/net/quic_connection.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
@@ -272,10 +271,14 @@ public:
     usize answers = 0U; // the ingress's answers sent toward the client
     // Paths (design S75): with `paths` set the server takes each client datagram as arriving from `client_at` when it
     // left, and a server datagram reaches the client only when sent to `client_at` or to `also_at` (an address whose
-    // NAT mapping still stands; port 0 for none). The client sees its server at one address.
+    // NAT mapping still stands; port 0 for none). The client sees its server at one address. Its sockets 1 to 3
+    // (QuicPath::socket) are at `socket_at` (port 0: none); a datagram to or from a socket of `down` (a bit each) is
+    // lost, its network gone.
     bool paths = false;
     Endpoint client_at{IpAddress::v4(198, 51, 100, 7), 50000U};
     Endpoint also_at;
+    Endpoint socket_at[3];
+    u32 down = 0U;
     usize misdirected = 0U; // server datagrams sent to an address that no longer reaches the client
     u8 minted[kQuicMaxCarriedTokenBytes] = {};
     usize minted_bytes = 0U;
@@ -297,10 +300,20 @@ public:
                 }
                 ++sent[from];
                 check(from, ConstSpan<u8>(out, size));
-                if (from == 1U && paths && !reaches(m_ends[1]->sent_path().peer))
+                u32 socket = 0U;
+                if (paths)
+                {
+                    socket = (from == 0U) ? m_ends[0]->sent_path().socket : socket_of(m_ends[1]->sent_path().peer);
+                }
+                if (socket == kNoSocket)
                 {
                     ++misdirected;
                     ++dropped[1];
+                    continue;
+                }
+                if (socket < 32U && (down & (1U << socket)) != 0U)
+                {
+                    ++dropped[from];
                     continue;
                 }
                 Ecn ecn = m_ends[from]->marking();
@@ -324,10 +337,10 @@ public:
                     continue;
                 }
                 ecn = on_path(from, ecn);
-                enqueue(from, ConstSpan<u8>(out, size), ecn);
+                enqueue(from, ConstSpan<u8>(out, size), ecn, socket);
                 if (rng.chance(path[from].duplicate))
                 {
-                    enqueue(from, ConstSpan<u8>(out, size), ecn);
+                    enqueue(from, ConstSpan<u8>(out, size), ecn, socket);
                 }
             }
         }
@@ -424,11 +437,26 @@ private:
         usize to = 0U;
         Ecn ecn = Ecn::NotEct;
         Endpoint from; // a client datagram's source address as the server sees it
+        u32 socket = 0U; // the client's socket it left or reaches
     };
 
-    [[nodiscard]] bool reaches(const Endpoint& to) const
+    static constexpr u32 kNoSocket = ~u32{0};
+
+    // The client's socket a server datagram to `to` reaches; kNoSocket for none.
+    [[nodiscard]] u32 socket_of(const Endpoint& to) const
     {
-        return to == client_at || (also_at.port != 0U && to == also_at);
+        if (to == client_at || (also_at.port != 0U && to == also_at))
+        {
+            return 0U;
+        }
+        for (u32 index = 0U; index < 3U; ++index)
+        {
+            if (socket_at[index].port != 0U && to == socket_at[index])
+            {
+                return index + 1U;
+            }
+        }
+        return kNoSocket;
     }
 
     // The codepoint a datagram arrives with. The generator is drawn only on a CE-marking path, so other paths' runs
@@ -443,9 +471,13 @@ private:
         {
             return Ecn::NotEct;
         }
-        if (path[from].ecn == EcnPath::Remark)
+        if (path[from].ecn == EcnPath::Remark && ecn == Ecn::Ect0)
         {
-            ecn = (ecn == Ecn::Ect0) ? Ecn::Ect1 : ((ecn == Ecn::Ect1) ? Ecn::Ect0 : ecn);
+            ecn = Ecn::Ect1;
+        }
+        else if (path[from].ecn == EcnPath::Remark && ecn == Ecn::Ect1)
+        {
+            ecn = Ecn::Ect0;
         }
         if (path[from].ce != 0U && rng.chance(path[from].ce))
         {
@@ -474,7 +506,7 @@ private:
         }
     }
 
-    void enqueue(usize from, ConstSpan<u8> datagram, Ecn ecn = Ecn::NotEct)
+    void enqueue(usize from, ConstSpan<u8> datagram, Ecn ecn = Ecn::NotEct, u32 socket = 0U)
     {
         u64 departs = now;
         if (path[from].rate != 0U)
@@ -504,7 +536,12 @@ private:
         flight.at = departs + path[from].delay_ns + jitter;
         flight.to = 1U - from;
         flight.ecn = ecn;
-        flight.from = (from == 0U) ? client_at : Endpoint{};
+        flight.socket = socket;
+        flight.from = Endpoint{};
+        if (from == 0U)
+        {
+            flight.from = (socket == 0U) ? client_at : socket_at[socket - 1U];
+        }
     }
 
     // The ingress's verdict on a datagram for the idle server: true when the server accepted it.
@@ -559,6 +596,10 @@ private:
         if (flight.to == 1U && paths)
         {
             to.receive(QuicPath{0U, flight.from}, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+        }
+        else if (paths)
+        {
+            to.receive(QuicPath{flight.socket, to.path().peer}, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
         }
         else
         {

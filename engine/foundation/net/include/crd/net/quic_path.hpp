@@ -85,6 +85,9 @@ public:
     // What `index` may still carry: unlimited once validated.
     [[nodiscard]] usize credit(usize index) const noexcept;
     void set_validated(usize index) noexcept;
+    // The peer's address is already proven (a client's own new path to its server's address): no amplification
+    // limit, while the path itself still owes its validation (sections 8.1 and 9.2).
+    void trust(usize index) noexcept { m_slots[index].validated = true; }
     [[nodiscard]] bool validated(usize index) const noexcept { return m_slots[index].validated; }
 
     // ---- Validation ----
@@ -109,6 +112,8 @@ public:
     // When the next PATH_CHALLENGE is due and when validation is abandoned; kNeverNs while none is underway.
     [[nodiscard]] u64 due_ns(usize index) const noexcept { return m_slots[index].due_ns; }
     [[nodiscard]] u64 deadline_ns(usize index) const noexcept { return m_slots[index].deadline_ns; }
+    // When the last datagram from `index` arrived (or it joined).
+    [[nodiscard]] u64 last_ns(usize index) const noexcept { return m_slots[index].last_ns; }
 
     // ---- Responses ----
 

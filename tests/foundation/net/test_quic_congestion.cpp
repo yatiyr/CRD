@@ -16,7 +16,10 @@
 // fill their clusters with padding where a media source has too little and find the path past the source's rate,
 // from ACK frames alone or from receive timestamps. Receive timestamps are reported only when both ends ask for
 // them, and hold over paths that lose, duplicate and reorder. And paths (#migration): transfers both ways follow a NAT
-// rebinding and an address change over lossy, duplicating, reordering paths.
+// rebinding and an address change over lossy, duplicating, reordering paths. And a client's own migration: its
+// refusals, a probe that moves nothing, a move the server follows that restarts the path's state and leaves the old
+// path, a move without probing whose old network goes at once over lossy paths, a socket that reaches nothing
+// reverting to the path before it, and moves one after another on the IDs each leaves.
 
 #include "ingress_fixture.hpp"
 #include "quic_connection_fixture.hpp"
@@ -153,6 +156,78 @@ struct Pair
         REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
         REQUIRE(id == kStream);
     }
+};
+
+constexpr u8 kResetKeys[2][kQuicResetKeyBytes] = {{0x71U, 0x01U}, {0x72U, 0x02U}};
+
+// An end's connection IDs, routed by a table of its own: the IDs a move takes come from here.
+struct Ids
+{
+    ConnectionIdTable routes;
+    QuicResetKey key;
+    QuicRoutedIds ids;
+
+    Ids(CountingAllocator& allocator, u32 index, ConstSpan<u8> sequence0)
+        : routes(allocator, 64U), ids(routes, key, index)
+    {
+        REQUIRE(key.init(ConstSpan<u8>(kResetKeys[index])) == CryptoError::None);
+        REQUIRE(routes.insert(sequence0, index) == RouteError::None);
+    }
+};
+
+// A client and a server that issue connection IDs, on paths that follow the client's sockets.
+struct Hosted
+{
+    Identity identity;
+    CountingAllocator allocator;
+    Ids client_ids{allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))};
+    Ids server_ids{allocator, 1U, ConstSpan<u8>(kNetServerCid, sizeof(kNetServerCid))};
+    QuicConnection client;
+    QuicConnection server;
+    std::unique_ptr<Net> net;
+
+    explicit Hosted(usize seed = 0U, bool disable_migration = false)
+        : client(allocator, with(bulk_config(QuicSide::Client, identity, seed), client_ids, false)),
+          server(allocator, with(bulk_config(QuicSide::Server, identity, seed + 1U), server_ids, disable_migration))
+    {
+        REQUIRE(client.ready());
+        REQUIRE(server.ready());
+        REQUIRE(client.connect(ConstSpan<u8>(kClientCid, sizeof(kClientCid)),
+                               ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), kStartNs));
+        net = std::make_unique<Net>(client, server);
+        net->paths = true;
+        net->socket_at[0] = Endpoint{IpAddress::v4(203, 0, 113, 9), 41000U};
+        net->socket_at[1] = Endpoint{IpAddress::v4(192, 0, 2, 33), 42000U};
+        net->socket_at[2] = Endpoint{IpAddress::v4(198, 51, 100, 7), 43000U};
+        for (Path& path : net->path)
+        {
+            path.delay_ns = 25U * kMs;
+        }
+    }
+
+    static QuicConnectionConfig with(QuicConnectionConfig config, Ids& ids, bool disable_migration)
+    {
+        config.ids = &ids.ids;
+        if (config.side == QuicSide::Client)
+        {
+            config.path = QuicPath{0U, Endpoint{IpAddress::v4(192, 0, 2, 1), 443U}}; // the server's address
+        }
+        config.parameters.disable_active_migration = disable_migration;
+        return config;
+    }
+
+    // Confirmed, the stream open, and each end's spare connection IDs given.
+    void confirm()
+    {
+        REQUIRE(net->run_until([&] { return client.confirmed() && server.confirmed(); }));
+        net->advance(net->now + 200U * kMs);
+        u64 id = 0U;
+        REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+        REQUIRE(id == kStream);
+    }
+
+    // The client's path from its socket `socket` to the server.
+    [[nodiscard]] QuicPath socket(u32 socket) const { return QuicPath{socket, client.path().peer}; }
 };
 
 } // namespace
@@ -961,4 +1036,213 @@ TEST_CASE("QUIC receive timestamps: reported only when both ends ask, and held o
         CHECK(pair.client.state() == QuicConnectionState::Established);
         CHECK(pair.client.counters().receive_timestamps > 100U);
     }
+}
+
+TEST_CASE("QUIC client migration: a server, an unconfirmed handshake, the active path, another server, no spare ID and "
+          "disable_active_migration are refused, changing nothing",
+          "[net][net-path][quic-connection][client-migration]")
+{
+    Hosted pair;
+    CHECK(pair.client.migrate(pair.socket(1U), pair.net->now) == QuicMigration::NotConfirmed);
+    CHECK(pair.client.probe_path(pair.socket(1U), pair.net->now) == QuicMigration::NotConfirmed);
+    pair.confirm();
+    CHECK(pair.server.migrate(QuicPath{1U, pair.net->client_at}, pair.net->now) == QuicMigration::NotClient);
+    CHECK(pair.client.migrate(pair.client.path(), pair.net->now) == QuicMigration::ActivePath);
+    const QuicPath other{1U, Endpoint{IpAddress::v4(192, 0, 2, 99), 443U}};
+    CHECK(pair.client.probe_path(other, pair.net->now) == QuicMigration::OtherServer);
+    CHECK(pair.client.paths().find(other) == kQuicNoPath);
+    Pair unbound(CongestionPolicy{}); // a client whose path names no server address has none to keep
+    unbound.confirm();
+    CHECK(unbound.client.migrate(QuicPath{1U, unbound.client.path().peer}, unbound.net->now) ==
+          QuicMigration::OtherServer);
+    // The client's active_connection_id_limit of 2 holds one spare ID of the server's: one new socket takes it.
+    REQUIRE(pair.client.probe_path(pair.socket(1U), pair.net->now) == QuicMigration::Started);
+    CHECK(pair.client.probe_path(pair.socket(1U), pair.net->now) == QuicMigration::Started); // known: nothing new
+    CHECK(pair.client.probe_path(pair.socket(2U), pair.net->now) == QuicMigration::NoConnectionId);
+    CHECK(pair.client.paths().find(pair.socket(2U)) == kQuicNoPath);
+    CHECK(pair.client.path().socket == 0U);
+    CHECK(pair.client.counters().migrations == 0U);
+
+    Hosted disabled(0U, true);
+    disabled.confirm();
+    CHECK(disabled.client.probe_path(disabled.socket(1U), disabled.net->now) == QuicMigration::Disabled);
+    CHECK(disabled.client.migrate(disabled.socket(1U), disabled.net->now) == QuicMigration::Disabled);
+    CHECK(disabled.client.paths().find(disabled.socket(1U)) == kQuicNoPath);
+}
+
+TEST_CASE("QUIC client migration: a probe validates a new socket and moves nothing; the move restarts the path's "
+          "state, the server follows and the old path is left",
+          "[net][net-path][quic-connection][client-migration]")
+{
+    Hosted pair;
+    Net& net = *pair.net;
+    pair.confirm();
+    constexpr u64 total = 1U << 19U;
+    Bulk up{pair.client, pair.server, total};
+    REQUIRE(net.run_until([&] { return up.step() || up.read >= total / 4U; }, 600000U * kMs));
+    const usize sent_before = net.sent[0];
+    REQUIRE(pair.client.probe_path(pair.socket(1U), net.now) == QuicMigration::Started);
+    const usize probed = pair.client.paths().find(pair.socket(1U));
+    REQUIRE(probed != kQuicNoPath);
+    REQUIRE(net.run_until([&] { return pair.client.paths().proven(probed) || up.step(); }, 600000U * kMs));
+    CHECK(pair.client.paths().proven(probed));
+    CHECK(pair.client.path().socket == 0U); // probing moved nothing (section 9.1)
+    CHECK(pair.server.path().peer == net.client_at);
+    CHECK(pair.client.counters().path_validations >= 1U);
+    CHECK(pair.client.recovery().path_floor() == 0U);
+    CHECK(net.sent[0] > sent_before);
+
+    REQUIRE(up.read < total);
+    REQUIRE(pair.client.migrate(pair.socket(1U), net.now) == QuicMigration::Started);
+    CHECK(pair.client.path().socket == 1U);
+    CHECK(pair.client.counters().migrations == 1U);
+    CHECK(pair.client.recovery().path_floor() != 0U); // nothing sent from the old socket counts for the new path
+    CHECK(pair.client.congestion().window() == 12000U);
+    // The server's datagrams still reach the path it left, until the server follows.
+    CHECK(pair.client.paths().find(pair.socket(0U)) != kQuicNoPath);
+    REQUIRE(net.run_until([&] { return up.step(); }, 600000U * kMs));
+    // Proven and followed: the path it left is forgotten and its peer ID retired.
+    CHECK(pair.client.paths().find(pair.socket(0U)) == kQuicNoPath);
+    CHECK(pair.server.path().peer == net.socket_at[0]);
+    CHECK(pair.server.counters().migrations >= 1U);
+    CHECK(pair.server.counters().path_validations >= 1U);
+    CHECK(pair.server.address_validated());
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+    CHECK(pair.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC client migration: a move without probing, the old network gone at once, carries transfers both ways "
+          "over paths that lose, duplicate and reorder",
+          "[net][net-path][quic-connection][client-migration]")
+{
+    for (u64 seed = 1U; seed <= 3U; ++seed)
+    {
+        INFO("seed " << seed);
+        Hosted pair(seed);
+        Net& net = *pair.net;
+        net.rng.state = seed;
+        for (Path& path : net.path)
+        {
+            path.loss = 20U;
+            path.duplicate = 10U;
+            path.jitter_ns = 10U * kMs;
+        }
+        pair.confirm();
+        constexpr u64 total = 1U << 19U;
+        Bulk up{pair.client, pair.server, total};
+        u64 down_written = 0U;
+        u64 down_read = 0U;
+        const auto step = [&]
+        {
+            const bool up_done = up.step();
+            if (pair.server.streams().recv_state(kStream) != QuicRecvState::None && down_written < total)
+            {
+                static_cast<void>(write_pattern(pair.server.streams(), kStream, down_written, total, 7U, false));
+            }
+            if (pair.client.streams().recv_state(kStream) != QuicRecvState::None)
+            {
+                static_cast<void>(drain(pair.client.streams(), kStream, down_read, 7U));
+            }
+            return up_done && down_read >= total;
+        };
+        REQUIRE(net.run_until([&] { return step() || (up.read >= total / 3U && down_read >= total / 3U); },
+                              600000U * kMs));
+        REQUIRE(pair.client.migrate(pair.socket(1U), net.now) == QuicMigration::Started);
+        net.down = 1U; // socket 0's network is gone
+        REQUIRE(net.run_until([&] { return step(); }, 600000U * kMs));
+        CHECK(pair.client.path().socket == 1U);
+        CHECK(pair.client.paths().proven(pair.client.paths().active()));
+        CHECK(pair.client.paths().find(pair.socket(0U)) == kQuicNoPath);
+        CHECK(pair.server.path().peer == net.socket_at[0]);
+        CHECK(pair.server.recovery().path_floor() != 0U);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+        CHECK(pair.server.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC client migration: a socket that reaches nothing fails validation, and the client reverts to the path "
+          "before it; a probe that fails moves nothing",
+          "[net][net-path][quic-connection][client-migration]")
+{
+    Hosted pair;
+    Net& net = *pair.net;
+    pair.confirm();
+    net.down = 1U << 1U; // socket 1 reaches nothing
+    constexpr u64 total = 1U << 18U;
+    Bulk up{pair.client, pair.server, total};
+    REQUIRE(net.run_until([&] { return up.step() || up.read >= total / 4U; }, 600000U * kMs));
+    REQUIRE(pair.client.migrate(pair.socket(1U), net.now) == QuicMigration::Started);
+    CHECK(pair.client.path().socket == 1U);
+    REQUIRE(net.run_until([&] { return pair.client.path().socket == 0U; }, 600000U * kMs));
+    CHECK(pair.client.counters().path_failures == 1U);
+    CHECK(pair.client.counters().migrations == 2U); // there and back
+    CHECK(pair.client.paths().find(pair.socket(1U)) == kQuicNoPath);
+    // The ID the dead path took is retired and replaced: a probe of another socket finds one.
+    net.down |= 1U << 2U;
+    REQUIRE(net.run_until(
+        [&] { return pair.client.probe_path(pair.socket(2U), net.now) != QuicMigration::NoConnectionId; },
+        600000U * kMs));
+    REQUIRE(pair.client.paths().find(pair.socket(2U)) != kQuicNoPath);
+    REQUIRE(net.run_until([&] { return pair.client.counters().path_failures == 2U; }, 600000U * kMs));
+    CHECK(pair.client.path().socket == 0U);
+    CHECK(pair.client.counters().migrations == 2U);
+    CHECK(pair.client.paths().find(pair.socket(2U)) == kQuicNoPath);
+    REQUIRE(net.run_until([&] { return up.step(); }, 600000U * kMs));
+    CHECK(pair.server.path().peer == net.client_at);
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC client migration: moves one after another, back to the first socket too, each on the IDs the one "
+          "before left",
+          "[net][net-path][quic-connection][client-migration]")
+{
+    Hosted pair;
+    Net& net = *pair.net;
+    for (Path& path : net.path)
+    {
+        path.rate = 1000000U; // 8 Mbit/s and a 64 KB queue: the transfer outlasts four moves
+        path.buffer = 64000U;
+    }
+    pair.confirm();
+    constexpr u64 total = 1U << 24U;
+    Bulk up{pair.client, pair.server, total};
+    const auto settled = [&]
+    {
+        // The server follows the last move, and its check of the path before (section 9.3.3) ends: with
+        // active_connection_id_limit 2 at both ends, the IDs the next move takes are the ones these leave.
+        bool validating = false;
+        for (usize index = 0U; index < kQuicMaxPaths; ++index)
+        {
+            validating = validating || (pair.server.paths().used(index) && pair.server.paths().validating(index));
+        }
+        const u32 socket = pair.client.path().socket;
+        const Endpoint& at = (socket == 0U) ? net.client_at : net.socket_at[socket - 1U];
+        return pair.server.path().peer == at && !validating && pair.client.paths().fallback() == kQuicNoPath;
+    };
+    const u32 order[] = {1U, 2U, 3U, 0U};
+    for (const u32 socket : order)
+    {
+        INFO("socket " << socket);
+        REQUIRE(net.run_until([&] { return up.step() || settled(); }, 600000U * kMs));
+        // The server's replacement for the ID the client retired on leaving its last path may still be on its way.
+        QuicMigration result = QuicMigration::NoConnectionId;
+        REQUIRE(net.run_until(
+            [&]
+            {
+                result = pair.client.migrate(pair.socket(socket), net.now);
+                return result != QuicMigration::NoConnectionId;
+            },
+            600000U * kMs));
+        REQUIRE(result == QuicMigration::Started);
+        REQUIRE(up.read < total);
+        REQUIRE(net.run_until([&] { return settled() || up.step(); }, 600000U * kMs));
+        CHECK(pair.client.path().socket == socket);
+        CHECK(pair.client.paths().proven(pair.client.paths().active()));
+    }
+    REQUIRE(net.run_until([&] { return up.step(); }, 600000U * kMs));
+    CHECK(pair.client.counters().migrations == 4U);
+    CHECK(pair.client.counters().path_failures == 0U);
+    CHECK(pair.server.path().peer == net.client_at);
+    CHECK(pair.server.counters().migrations == 4U);
+    CHECK(pair.client.state() == QuicConnectionState::Established);
 }

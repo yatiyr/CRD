@@ -286,6 +286,19 @@ enum class QuicConnectionState : u8
     Closed,      // done: the connection may be destroyed
 };
 
+// A client's request to probe or move to a path of its own (RFC 9000 sections 9.1, 9.2 and 9.5).
+enum class QuicMigration : u8
+{
+    Started,        // the path is known and validating (or proven already); migrate() moved datagrams there
+    NotClient,      // a server follows its client and never moves itself (section 9)
+    NotConfirmed,   // the handshake is not confirmed (section 9), or the connection is closing
+    Disabled,       // the server sent disable_active_migration (section 9)
+    OtherServer,    // the path's peer is not the server's address (only preferred_address moves that, section
+                    // 9.6), or the active path names no address (port 0)
+    ActivePath,     // the path is the active one already
+    NoConnectionId, // no peer connection ID unused on any other path is left for a new local address (section 9.5)
+};
+
 // Why a connection closed.
 struct QuicCloseInfo
 {
@@ -375,6 +388,14 @@ public:
     void close(u64 application_error, cont::ConstSpan<u8> reason, u64 now_ns) noexcept;
     // Owes one ack-eliciting 1-RTT packet: a keep-alive before the idle timeout (section 10.1.2).
     void ping() noexcept { m_ping_owed = true; }
+    // A client's own paths: `path` is a socket of its own to the server's address. probe_path() validates it,
+    // datagrams staying where they are (section 9.1); migrate() moves them there now, validating it unless proven
+    // (section 9.2), and congestion control, the RTT estimate, the pacer, ECN validation and the path MTU search start
+    // again for it (section 9.4). Each path sends to a peer connection ID no other path uses (section 9.5) and carries
+    // no amplification limit (the server's address is proven); one that fails validation is forgotten, and a failed
+    // active path reverts to the last validated one (section 9.3.2). Anything but Started changes nothing.
+    [[nodiscard]] QuicMigration probe_path(const QuicPath& path, u64 now_ns) noexcept;
+    [[nodiscard]] QuicMigration migrate(const QuicPath& path, u64 now_ns) noexcept;
     // Issues a fresh set of connection IDs whose NEW_CONNECTION_ID frames retire every earlier one (Retire Prior To,
     // section 5.1.2); the earlier IDs stay routed until the peer retires them. False, changing nothing, before
     // confirmation, without a host, with zero-length IDs, while an earlier rotation waits for retirements, or when
@@ -571,10 +592,21 @@ private:
     [[nodiscard]] bool follows_peer() const noexcept;
     // A packet from m_candidate, a path not known, opened: the path joins, with the peer ID it is answered on.
     void admit_path(usize datagram_bytes, u64 now_ns) noexcept;
+    // A path joins (the least recently used one given up when the table is full).
+    [[nodiscard]] usize take_path(const QuicPath& path, u64 now_ns) noexcept;
+    // Each path but the active one that has no peer ID to send to takes an unused one; with none left, the least
+    // recently used path left behind that holds one is forgotten and its ID retired, for the peer's replacement.
+    void address_paths(u64 now_ns) noexcept;
+    // A peer ID's sequence no path but `index` sends to and none has sent to; kNoSequence for none.
+    [[nodiscard]] u64 unused_peer_sequence(usize index) const noexcept;
+    // probe_path()'s checks and the path's slot, validating unless proven; `index` names it on Started.
+    [[nodiscard]] QuicMigration open_own_path(const QuicPath& path, u64 now_ns, usize& index) noexcept;
     // An opened Application packet of m_receive_path: the migration it may be (section 9.3).
     void follow_packet(u64 number, bool probing, u64 now_ns) noexcept;
     // Datagrams go on `index` from now on: the peer moved there, or a failed validation reverts there.
     void move_to(usize index, u64 now_ns) noexcept;
+    // A client proven on its active path, and followed there by its server, forgets the fallback it moved from.
+    void leave_fallback(u64 now_ns) noexcept;
     // The path MTU search and ECN validation start again.
     void restart_path_size() noexcept;
     // Once the active path is validated, the path MTU search, ECN validation, congestion control, the RTT estimate
@@ -772,6 +804,7 @@ private:
     usize m_send_path = 0U;    // the path of the datagram being written, then of the last one
     QuicPath m_congestion_path; // the validated path the controller, the estimate and the PMTU search belong to
     u64 m_largest_non_probing = kQuicNoPacket; // the Application packet that last chose the path (section 9.3)
+    bool m_peer_followed = true; // a client's server sends on the client's active path: the latest move is followed
     u8 m_challenge[kQuicPathDataBytes] = {};   // the PATH_CHALLENGE data of the packet being written
     bool m_ping_owed = false;
     bool m_confirmed = false;

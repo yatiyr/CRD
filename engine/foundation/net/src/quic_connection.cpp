@@ -1626,6 +1626,7 @@ bool QuicConnection::new_connection_id(const QuicFrame& frame, u64 now_ns) noexc
         m_peer_cid_current = m_peer_cid_count; // the ID in use was retired: the new one replaces it
     }
     ++m_peer_cid_count;
+    address_paths(now_ns);
     return true;
 }
 
@@ -2939,12 +2940,7 @@ bool QuicConnection::follows_peer() const noexcept
 
 void QuicConnection::admit_path(usize datagram_bytes, u64 now_ns) noexcept
 {
-    usize index = m_paths.admit(m_candidate, now_ns);
-    if (index == kQuicNoPath)
-    {
-        drop_path(m_paths.least_recent(), now_ns);
-        index = m_paths.admit(m_candidate, now_ns);
-    }
+    const usize index = take_path(m_candidate, now_ns);
     m_receive_path = index;
     m_paths.on_received(index, datagram_bytes, now_ns);
     const usize active = m_paths.active();
@@ -2953,12 +2949,57 @@ void QuicConnection::admit_path(usize datagram_bytes, u64 now_ns) noexcept
     m_paths.set_local_sequence(index, local);
     // A peer that kept its connection ID did not choose to move (a NAT rebinding): this side may keep its own. One
     // that changed it gets an ID this side has not used, never one another path sends to (section 9.5).
-    u64 chosen = kNoSequence;
-    if (local == m_paths.local_sequence(active))
+    const bool kept = local == m_paths.local_sequence(active);
+    m_paths.set_peer_sequence(index, kept ? path_sequence(active) : kNoSequence);
+    address_paths(now_ns);
+}
+
+void QuicConnection::address_paths(u64 now_ns) noexcept
+{
+    for (usize index = 0U; index < kQuicMaxPaths; ++index)
     {
-        chosen = path_sequence(active);
+        if (!m_paths.used(index) || index == m_paths.active() ||
+            peer_index(m_paths.peer_sequence(index)) < m_peer_cid_count)
+        {
+            continue;
+        }
+        m_paths.set_peer_sequence(index, unused_peer_sequence(index));
+        if (peer_index(m_paths.peer_sequence(index)) < m_peer_cid_count)
+        {
+            continue;
+        }
+        // None is unused: a path left behind gives its ID up (forgotten, the ID retired), so the peer issues the one
+        // this path waits for (section 9.5). The fallback goes only once the active path is proven, needing no revert.
+        const bool fallback_spare = m_paths.proven(m_paths.active());
+        usize spare = kQuicNoPath;
+        for (usize other = 0U; other < kQuicMaxPaths; ++other)
+        {
+            const bool candidate = m_paths.used(other) && other != index && other != m_paths.active() &&
+                                   (other != m_paths.fallback() || fallback_spare) && !m_paths.validating(other) &&
+                                   peer_index(m_paths.peer_sequence(other)) < m_peer_cid_count;
+            if (candidate && (spare == kQuicNoPath || m_paths.last_ns(other) < m_paths.last_ns(spare)))
+            {
+                spare = other;
+            }
+        }
+        drop_path(spare, now_ns);
     }
-    for (usize held = 0U; held < m_peer_cid_count && chosen == kNoSequence; ++held)
+}
+
+usize QuicConnection::take_path(const QuicPath& path, u64 now_ns) noexcept
+{
+    usize index = m_paths.admit(path, now_ns);
+    if (index == kQuicNoPath)
+    {
+        drop_path(m_paths.least_recent(), now_ns);
+        index = m_paths.admit(path, now_ns);
+    }
+    return index;
+}
+
+u64 QuicConnection::unused_peer_sequence(usize index) const noexcept
+{
+    for (usize held = 0U; held < m_peer_cid_count; ++held)
     {
         const u64 sequence = m_peer_cids[held].sequence;
         bool taken = m_peer_cids[held].used;
@@ -2966,9 +3007,77 @@ void QuicConnection::admit_path(usize datagram_bytes, u64 now_ns) noexcept
         {
             taken = taken || (other != index && m_paths.used(other) && path_sequence(other) == sequence);
         }
-        chosen = taken ? kNoSequence : sequence;
+        if (!taken)
+        {
+            return sequence;
+        }
     }
-    m_paths.set_peer_sequence(index, chosen);
+    return kNoSequence;
+}
+
+QuicMigration QuicConnection::probe_path(const QuicPath& path, u64 now_ns) noexcept
+{
+    usize index = kQuicNoPath;
+    return open_own_path(path, now_ns, index);
+}
+
+QuicMigration QuicConnection::migrate(const QuicPath& path, u64 now_ns) noexcept
+{
+    usize index = kQuicNoPath;
+    const QuicMigration result = open_own_path(path, now_ns, index);
+    if (result == QuicMigration::Started)
+    {
+        move_to(index, now_ns);
+    }
+    return result;
+}
+
+QuicMigration QuicConnection::open_own_path(const QuicPath& path, u64 now_ns, usize& index) noexcept
+{
+    const QuicPath& active = m_paths.path(m_paths.active());
+    if (m_config.side != crypto::QuicSide::Client)
+    {
+        return QuicMigration::NotClient;
+    }
+    if (m_state != QuicConnectionState::Established || !m_confirmed)
+    {
+        return QuicMigration::NotConfirmed;
+    }
+    if (m_peer.disable_active_migration)
+    {
+        return QuicMigration::Disabled;
+    }
+    if (!(path.peer == active.peer) || active.peer.port == 0U)
+    {
+        return QuicMigration::OtherServer; // or the active path names no server address to keep
+    }
+    if (path == active)
+    {
+        return QuicMigration::ActivePath;
+    }
+    index = m_paths.find(path);
+    const bool addressed = index != kQuicNoPath && peer_index(m_paths.peer_sequence(index)) < m_peer_cid_count;
+    if (!addressed && unused_peer_sequence(index) == kNoSequence)
+    {
+        index = kQuicNoPath;
+        return QuicMigration::NoConnectionId;
+    }
+    if (index == kQuicNoPath)
+    {
+        index = take_path(path, now_ns);
+        // The server sends to the ID it last used here until it moves; the client's own address is not linked.
+        m_paths.set_local_sequence(index, m_paths.local_sequence(m_paths.active()));
+        m_paths.trust(index);
+    }
+    if (!addressed)
+    {
+        m_paths.set_peer_sequence(index, unused_peer_sequence(index));
+    }
+    if (!m_paths.proven(index))
+    {
+        m_paths.validate(index, now_ns, validation_timeout_ns());
+    }
+    return QuicMigration::Started;
 }
 
 void QuicConnection::follow_packet(u64 number, bool probing, u64 now_ns) noexcept
@@ -2988,6 +3097,11 @@ void QuicConnection::follow_packet(u64 number, bool probing, u64 now_ns) noexcep
     {
         // Only the highest-numbered non-probing packet moves the path, so a reordered one never moves it back.
         m_largest_non_probing = number;
+        if (m_config.side == crypto::QuicSide::Client && path == m_paths.active() && !m_peer_followed)
+        {
+            m_peer_followed = true; // the server's datagrams reach the path this side moved to
+            leave_fallback(now_ns);
+        }
         if (path != m_paths.active() && follows_peer() && sendable)
         {
             const usize from = m_paths.active();
@@ -3032,8 +3146,20 @@ void QuicConnection::move_to(usize index, u64 now_ns) noexcept
     const usize cid = peer_index(m_paths.peer_sequence(index));
     m_peer_cid_current = (cid < m_peer_cid_count) ? cid : m_peer_cid_current;
     ++m_counters.migrations;
+    m_peer_followed = false;
     follow_congestion(now_ns);
     m_recovery->set_amplification_blocked(!address_validated() && amplification_credit() < kMinUsefulPacket, now_ns);
+}
+
+void QuicConnection::leave_fallback(u64 now_ns) noexcept
+{
+    // A client proven on the path it moved to, whose server sends there too, forgets the path it left and retires
+    // that path's peer ID, so the server issues the ID the next move takes (section 9.5). Until then the server's
+    // datagrams to the old path still arrive.
+    if (m_config.side == crypto::QuicSide::Client && m_paths.proven(m_paths.active()) && m_peer_followed)
+    {
+        drop_path(m_paths.fallback(), now_ns);
+    }
 }
 
 void QuicConnection::restart_path_size() noexcept
@@ -3087,7 +3213,9 @@ void QuicConnection::on_validated(usize index, u64 now_ns) noexcept
     {
         m_recovery->set_amplification_blocked(false, now_ns);
         follow_congestion(now_ns);
+        leave_fallback(now_ns);
     }
+    address_paths(now_ns); // a path whose check ended may now give its ID to one that waits
 }
 
 void QuicConnection::expire_paths(u64 now_ns) noexcept
