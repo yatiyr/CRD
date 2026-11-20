@@ -25,7 +25,8 @@ scheduled failures on 6f4cfed5 were handled last batch. Nothing to fix.
 
 ## Evidence
 
-- win-debug (MSVC 14.51): 963 `crd-net-tests` cases; WSL linux-gcc-debug: 964 cases.
+- win-debug (MSVC 14.51): 963 `crd-net-tests` cases; WSL linux-gcc-debug: 964 cases; win-tidy (clang-tidy 20) clean
+  on the 14 changed sources after two fixes (a local constant's name, a nested conditional).
 - New: `test_quic_path.cpp` (7 cases), 8 raw-peer path cases, the restart cases in `test_quic_recovery.cpp` and
   `test_quic_ecn.cpp`, transfers both ways through a rebinding then an address change at 2% loss, 1% duplication and
   10 ms jitter (3 seeds), and a hosted client rebinding and moving with a token for each address.
