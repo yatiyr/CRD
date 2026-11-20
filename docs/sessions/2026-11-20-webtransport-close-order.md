@@ -29,21 +29,16 @@ or reset the stream.
 
 ## Evidence
 
-- Six new unit sections:
-  - nothing overtakes a held-back capsule;
-  - bytes after the close are discarded until the peer's FIN;
-  - a reset by the peer ends the session at once;
-  - a simultaneous close reports nothing at either end;
-  - a slot whose peer never answers is reclaimed by the next session;
-  - a slot whose capsule has not been acknowledged is not.
-
-  On HEAD's engine, four of the six fail. The first fails because the server sees Stopped while the capsule is held.
-- win-debug (MSVC 14.51): all 944 `crd-net-tests` cases pass.
-- WSL linux-gcc-public-checks: the Go `window 65536` cases ran 30 rounds, 120 runs in all, with no failure. The full Go
-  matrix passed 34 of 34, and the Quinn and Cerid matrix 94 of 94. The failure never showed locally before the fix,
-  so the unit test carries the proof of the order.
-- linux-clang-fuzz: `crd-fuzz-net-webtransport` replayed its corpus clean, then ran 300 s into a scratch directory:
-  35007 executions and 671 new units, with no finding.
+- Six new unit sections: a held-back capsule is not overtaken; the peer's bytes are discarded until its FIN; its reset
+  ends the session; a simultaneous close reports nothing; an unanswered slot goes to the next session, but not before
+  its capsule is acknowledged. Four of the six fail on HEAD's engine (the first: Stopped while the capsule is held).
+- win-debug (MSVC 14.51): all 944 `crd-net-tests` cases; WSL linux-gcc-debug: the 50 `[webtransport]` cases; clang-tidy
+  20 clean on the three changed sources.
+- linux-gcc-public-checks: the failing case (Cerid client closing against Go, window 65536) passed 30 times in a row.
+  The full Go matrix passed 34 of 34, and Quinn and Cerid 94 of 94. The pre-fix binary was not looped here, so the unit
+  test carries the proof of the order.
+- linux-clang-fuzz: `crd-fuzz-net-webtransport` replayed its corpus clean, then 300 s into a scratch directory: 35007
+  executions, 671 new units, no finding.
 
 ## Next
 

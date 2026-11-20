@@ -1613,7 +1613,8 @@ Http3Error WebTransport::accept(u64 session, cont::ConstSpan<HttpField> fields, 
         const cont::Span<u8> room(entry, sizeof(entry));
         for (usize at = 0U; !listed && wt_next_protocol(offered, at, room, entry_bytes);)
         {
-            listed = http_equal(cont::ConstSpan<u8>(entry, (entry_bytes <= sizeof(entry)) ? entry_bytes : 0U), protocol);
+            const usize kept = (entry_bytes <= sizeof(entry)) ? entry_bytes : 0U;
+            listed = http_equal(cont::ConstSpan<u8>(entry, kept), protocol);
         }
         if (!listed)
         {

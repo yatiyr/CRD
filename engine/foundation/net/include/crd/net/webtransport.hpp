@@ -173,8 +173,8 @@ private:
         Requested,  // a server's: the application has not answered
         Connecting, // a client's: no response yet
         Open,
-        // This side's WT_CLOSE_SESSION and FIN went or wait for room; the peer's bytes are discarded until it ends its
-        // part (section 6: it must close or reset). A peer that never does loses the slot once another session needs it.
+        // This side's WT_CLOSE_SESSION and FIN went or wait for room; the peer's bytes are discarded until it ends
+        // its part (section 6: it must close or reset). A peer that never does loses the slot to the next session.
         Closing,
         Ending, // the peer's WT_CLOSE_SESSION or FIN arrived: waiting for its FIN, or for room for this side's
     };

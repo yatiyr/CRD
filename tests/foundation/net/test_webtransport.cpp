@@ -1,6 +1,6 @@
 // crd-net -- WebTransport sessions (4.2a; docs/design/network-foundation.md#webtransport;
-// draft-ietf-webtrans-http3-17): the pool, what a server answers, protocol negotiation, capsules, streams and datagrams that arrive before their
-// session, flow control at both ends and every way a session ends.
+// draft-ietf-webtrans-http3-17): the pool, what a server answers, protocol negotiation, capsules, streams and datagrams
+// that arrive before their session, flow control at both ends and every way a session ends.
 
 #include "http3_fixture.hpp"
 #include "ingress_fixture.hpp"
