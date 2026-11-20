@@ -17,7 +17,9 @@
 //             headers, and are granted again as the application reads and closes. What a reset never sent is given
 //             back, so repeated resets cannot leak the window: the count follows the final size at both ends.
 //   closing   close() sends WT_CLOSE_SESSION and FIN and ends every stream of the session with WT_SESSION_GONE at once.
-//             A session error is a reset of the CONNECT stream with the draft's HTTP/3 code.
+//             The CONNECT stream's reading part is never stopped then, so nothing overtakes the capsule: the peer must
+//             end its own part, and one that never does is stopped once its slot is needed. A session error is a reset
+//             of the CONNECT stream with the draft's HTTP/3 code.
 //   memory    everything comes from the injected allocator at init(); nothing allocates after it.
 //   threads   the owning connection's.
 
@@ -158,6 +160,7 @@ public:
                                                           cont::ConstSpan<u8> label, cont::ConstSpan<u8> context,
                                                           cont::Span<u8> out) const noexcept;
 
+    // Sessions holding a slot, but for a closed one whose capsule arrived and that only waits for the peer's end.
     [[nodiscard]] u32 sessions_alive() const noexcept;
     [[nodiscard]] u32 streams_waiting() const noexcept { return m_waiting; }
 
@@ -170,8 +173,10 @@ private:
         Requested,  // a server's: the application has not answered
         Connecting, // a client's: no response yet
         Open,
-        Closing, // this side's WT_CLOSE_SESSION has not found room yet
-        Ending,  // the peer's WT_CLOSE_SESSION or FIN arrived: waiting for its FIN, or for room for this side's
+        // This side's WT_CLOSE_SESSION and FIN went or wait for room; the peer's bytes are discarded until it ends its
+        // part (section 6: it must close or reset). A peer that never does loses the slot once another session needs it.
+        Closing,
+        Ending, // the peer's WT_CLOSE_SESSION or FIN arrived: waiting for its FIN, or for room for this side's
     };
 
     // 0 unidirectional, 1 bidirectional, indexes the pairs below.
@@ -186,7 +191,7 @@ private:
         bool require_protocol = false;
         bool pump = false;           // capsules may be readable
         bool announce = false;       // streams and datagrams wait to be reported
-        bool peer_ended = false;     // Ending: the CONNECT stream's reading part ended
+        bool peer_ended = false;     // Closing and Ending: the CONNECT stream's reading part ended
         bool close_seen = false;     // a WT_CLOSE_SESSION arrived
         bool credit_wanted = false;  // a call met a limit
         bool credit_arrived = false; // SessionWritable is owed
@@ -241,6 +246,8 @@ private:
     [[nodiscard]] u32 session_index(const Session& session) const noexcept;
     [[nodiscard]] bool admits(bool legacy) const noexcept;
     [[nodiscard]] static bool session_unanswered(const Session& session) noexcept;
+    // A Closing session whose capsule and FIN were acknowledged: it only waits for the peer's end.
+    [[nodiscard]] bool lingering(const Session& session) const noexcept;
     [[nodiscard]] Session* claim_session(u64 id, bool legacy) noexcept;
     void free_session(Session& session) noexcept;
 
@@ -284,6 +291,7 @@ private:
     [[nodiscard]] bool write_capsule(Session& session, cont::ConstSpan<u8> bytes, bool fin) noexcept;
     void finish_close(Session& session) noexcept;
     void settle_ending(Session& session) noexcept;
+    void discard_input(Session& session) noexcept;
 
     memory::IAllocator* m_allocator = nullptr;
     Http3Connection* m_http3 = nullptr;

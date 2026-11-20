@@ -407,7 +407,7 @@ u32 WebTransport::sessions_alive() const noexcept
     u32 alive = 0U;
     for (u32 at = 0U; at < m_config.sessions; ++at)
     {
-        alive += (m_sessions[at].state != State::Free) ? 1U : 0U;
+        alive += (m_sessions[at].state != State::Free && !lingering(m_sessions[at])) ? 1U : 0U;
     }
     return alive;
 }
@@ -483,32 +483,51 @@ bool WebTransport::session_unanswered(const Session& session) noexcept
     return session.state == State::Requested || session.state == State::Connecting;
 }
 
+bool WebTransport::lingering(const Session& session) const noexcept
+{
+    if (session.state != State::Closing || session.owed != 0U)
+    {
+        return false;
+    }
+    const QuicSendState send = m_streams->send_state(session.id);
+    return send != QuicSendState::Ready && send != QuicSendState::Send && send != QuicSendState::DataSent;
+}
+
 WebTransport::Session* WebTransport::claim_session(u64 id, bool legacy) noexcept
 {
-    for (u32 at = 0U; at < m_config.sessions; ++at)
+    u32 chosen = kNone;
+    for (u32 at = 0U; at < m_config.sessions && chosen == kNone; ++at)
     {
-        Session& session = m_sessions[at];
-        if (session.state != State::Free)
-        {
-            continue;
-        }
-        const Http3WebTransportSettings& peer = m_http3->peer_settings().wt;
-        session.id = id;
-        session.state = State::Requested;
-        session.legacy = legacy;
-        session.flow = !legacy && any_limit(m_offer) && any_limit(peer);
-        if (session.flow)
-        {
-            session.peer_data = peer.max_data;
-            session.peer_streams[0] = peer.max_streams_uni;
-            session.peer_streams[1] = peer.max_streams_bidi;
-            session.local_data = m_offer.max_data;
-            session.local_streams[0] = m_offer.max_streams_uni;
-            session.local_streams[1] = m_offer.max_streams_bidi;
-        }
-        return &session;
+        chosen = (m_sessions[at].state == State::Free) ? at : kNone;
     }
-    return nullptr;
+    for (u32 at = 0U; at < m_config.sessions && chosen == kNone; ++at)
+    {
+        chosen = lingering(m_sessions[at]) ? at : kNone;
+    }
+    if (chosen == kNone)
+    {
+        return nullptr;
+    }
+    Session& session = m_sessions[chosen];
+    if (session.state != State::Free)
+    {
+        finish_close(session); // its peer never ended the CONNECT stream (section 6): stopped now
+    }
+    const Http3WebTransportSettings& peer = m_http3->peer_settings().wt;
+    session.id = id;
+    session.state = State::Requested;
+    session.legacy = legacy;
+    session.flow = !legacy && any_limit(m_offer) && any_limit(peer);
+    if (session.flow)
+    {
+        session.peer_data = peer.max_data;
+        session.peer_streams[0] = peer.max_streams_uni;
+        session.peer_streams[1] = peer.max_streams_bidi;
+        session.local_data = m_offer.max_data;
+        session.local_streams[0] = m_offer.max_streams_uni;
+        session.local_streams[1] = m_offer.max_streams_bidi;
+    }
+    return &session;
 }
 
 void WebTransport::free_session(Session& session) noexcept
@@ -558,6 +577,10 @@ bool WebTransport::service(WtEvent& event) noexcept
             read_capsules(session, event))
         {
             return true;
+        }
+        if (session.state == State::Closing && session.pump)
+        {
+            discard_input(session); // until the peer's end: a capsule crossing this side's close included
         }
         if (session.state != State::Open)
         {
@@ -650,7 +673,7 @@ bool WebTransport::on_session_event(Session& session, const Http3Event& in, WtEv
             flush(session);
             return false;
         case Http3EventKind::Finished:
-            if (session.state == State::Ending)
+            if (session.state == State::Ending || session.state == State::Closing)
             {
                 session.peer_ended = true;
                 settle_ending(session);
@@ -1410,10 +1433,23 @@ void WebTransport::finish_close(Session& session) noexcept
 
 void WebTransport::settle_ending(Session& session) noexcept
 {
-    if (session.state == State::Ending && session.peer_ended && session.owed == 0U)
+    const bool ending = session.state == State::Ending || session.state == State::Closing;
+    if (ending && session.peer_ended && session.owed == 0U)
     {
         free_session(session);
     }
+}
+
+void WebTransport::discard_input(Session& session) noexcept
+{
+    for (Http3Body body = m_http3->peek_body(session.id); !body.data.empty(); body = m_http3->peek_body(session.id))
+    {
+        if (m_http3->consume_body(session.id, body.data.size()) != Http3Error::None)
+        {
+            break;
+        }
+    }
+    session.pump = false;
 }
 
 bool WebTransport::write_capsule(Session& session, cont::ConstSpan<u8> bytes, bool fin) noexcept
@@ -1439,8 +1475,12 @@ void WebTransport::flush(Session& session) noexcept
         const u8 bit = static_cast<u8>(session.owed & static_cast<u8>(-session.owed));
         if (bit == kOweClose)
         {
-            if (write_capsule(session, cont::ConstSpan<u8>(session.text, session.text_bytes), true) ||
-                session.owed == 0U)
+            if (write_capsule(session, cont::ConstSpan<u8>(session.text, session.text_bytes), true))
+            {
+                session.owed = 0U;
+                settle_ending(session);
+            }
+            else if (session.owed == 0U)
             {
                 finish_close(session);
             }

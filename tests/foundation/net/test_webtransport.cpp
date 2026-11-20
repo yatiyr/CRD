@@ -1276,12 +1276,14 @@ TEST_CASE("webtransport sessions: a close, on the wire and at each end", "[webtr
         REQUIRE(rig.wt[kH3Client]->open_stream(id, true, stream) == Http3Error::None);
         rig.settle();
         REQUIRE(rig.wt[kH3Client]->close(id, 0x01020304U, text_span("bye")) == Http3Error::None);
-        CHECK(rig.wt[kH3Client]->sessions_alive() == 0U);
+        CHECK(rig.wt[kH3Client]->sessions_alive() == 1U); // until the capsule is acknowledged
         rig.settle();
         const H3Wire expected = capsule(kClose, close_value(0x01020304U, "bye"));
         CHECK(rig.base->received[kH3Server] == Text(reinterpret_cast<const char*>(expected.bytes), expected.size));
         CHECK(rig.base->find(kH3Server, Http3EventKind::Finished) != nullptr);
+        CHECK(rig.base->find(kH3Server, Http3EventKind::Stopped) == nullptr); // the peer ends its part itself
         CHECK(rig.find(kH3Client, WtEventKind::SessionClosed) == nullptr);
+        CHECK(rig.wt[kH3Client]->sessions_alive() == 0U);
 
         u64 refused = 0U;
         CHECK(rig.wt[kH3Client]->open_stream(id, false, refused) == Http3Error::Unknown);
@@ -1364,6 +1366,107 @@ TEST_CASE("webtransport sessions: a close, on the wire and at each end", "[webtr
         CHECK(rig.wt[kH3Client]->sessions_alive() == 1U);
         rig.settle();
         CHECK(rig.wt[kH3Client]->sessions_alive() == 0U);
+    }
+}
+
+TEST_CASE("webtransport sessions: a close waits for the peer's end of the CONNECT stream", "[webtransport]")
+{
+    SECTION("nothing overtakes a capsule that is held back")
+    {
+        Rig rig;
+        rig.make(true, false);
+        const u64 id = rig.session_with_hand_server();
+        rig.base->held_stream[kH3Client] = id;
+        REQUIRE(rig.wt[kH3Client]->close(id, 9U, text_span("held")) == Http3Error::None);
+        rig.settle();
+        CHECK(rig.base->find(kH3Server, Http3EventKind::Stopped) == nullptr);
+        CHECK(rig.base->find(kH3Server, Http3EventKind::Aborted) == nullptr);
+        CHECK(rig.wt[kH3Client]->sessions_alive() == 1U);
+        rig.base->held_stream[kH3Client] = ~u64{0};
+        rig.settle();
+        const H3Wire expected = capsule(kClose, close_value(9U, "held"));
+        CHECK(rig.base->received[kH3Server] == Text(reinterpret_cast<const char*>(expected.bytes), expected.size));
+        CHECK(rig.base->find(kH3Server, Http3EventKind::Finished) != nullptr);
+        CHECK(rig.base->find(kH3Server, Http3EventKind::Stopped) == nullptr);
+        CHECK(rig.wt[kH3Client]->sessions_alive() == 0U);
+    }
+    SECTION("the peer's bytes are discarded until its FIN, which frees the slot")
+    {
+        Rig rig;
+        rig.make(true, false);
+        const u64 id = rig.session_with_hand_server();
+        const usize http = rig.how_many(kH3Client, WtEventKind::Http); // SETTINGS
+        REQUIRE(rig.wt[kH3Client]->close(id, 0U) == Http3Error::None);
+        H3Wire value;
+        value.varint(7U);
+        rig.send_capsule(kH3Server, id, capsule(kMaxData, value)); // sent before it read the close
+        rig.send_capsule(kH3Server, id, capsule(kClose, close_value(5U, "crossed")), true);
+        CHECK(rig.find(kH3Client, WtEventKind::SessionClosed) == nullptr);
+        CHECK(rig.how_many(kH3Client, WtEventKind::Http) == http);
+        CHECK(rig.base->find(kH3Server, Http3EventKind::Stopped) == nullptr);
+        CHECK(rig.base->streams[kH3Client].stream_closed(id));
+        u64 again = 0U;
+        CHECK(rig.wt[kH3Client]->connect(h3_wt_connect().span(), again) == Http3Error::None);
+    }
+    SECTION("a peer's reset ends it at once")
+    {
+        Rig rig;
+        rig.make(true, false);
+        const u64 id = rig.session_with_hand_server();
+        const usize http = rig.how_many(kH3Client, WtEventKind::Http);
+        rig.base->held_stream[kH3Client] = id;
+        REQUIRE(rig.wt[kH3Client]->close(id, 0U) == Http3Error::None);
+        REQUIRE(rig.base->h3[kH3Server].cancel(id, kWtSessionGone) == Http3Error::None);
+        rig.settle();
+        CHECK(rig.wt[kH3Client]->sessions_alive() == 0U);
+        CHECK(rig.how_many(kH3Client, WtEventKind::Http) == http);
+    }
+    SECTION("a simultaneous close reports nothing at either end")
+    {
+        Rig rig;
+        rig.make(true, true);
+        const u64 id = rig.session();
+        REQUIRE(rig.wt[kH3Client]->close(id, 1U, text_span("client")) == Http3Error::None);
+        REQUIRE(rig.wt[kH3Server]->close(id, 2U, text_span("server")) == Http3Error::None);
+        rig.settle();
+        CHECK(rig.find(kH3Client, WtEventKind::SessionClosed) == nullptr);
+        CHECK(rig.find(kH3Server, WtEventKind::SessionClosed) == nullptr);
+        CHECK(rig.wt[kH3Client]->sessions_alive() == 0U);
+        CHECK(rig.wt[kH3Server]->sessions_alive() == 0U);
+        CHECK(rig.base->streams[kH3Client].stream_closed(id));
+        CHECK(rig.base->streams[kH3Server].stream_closed(id));
+    }
+    SECTION("a peer that never ends it loses the slot to the next session")
+    {
+        WebTransportConfig one = open_origins();
+        one.sessions = 1U;
+        Rig rig;
+        rig.make(true, false, h3_wt_config(QuicSide::Client), h3_wt_config(QuicSide::Server), one);
+        const u64 id = rig.session_with_hand_server();
+        REQUIRE(rig.wt[kH3Client]->close(id, 0U) == Http3Error::None);
+        rig.settle();
+        CHECK(rig.base->find(kH3Server, Http3EventKind::Stopped) == nullptr);
+        u64 again = 0U;
+        REQUIRE(rig.wt[kH3Client]->connect(h3_wt_connect().span(), again) == Http3Error::None);
+        rig.settle();
+        const H3Seen* const stopped = rig.base->find(kH3Server, Http3EventKind::Stopped);
+        REQUIRE(stopped != nullptr);
+        CHECK(stopped->event.stream == id);
+        CHECK(stopped->event.error == kWtSessionGone);
+        CHECK(rig.wt[kH3Client]->sessions_alive() == 1U);
+    }
+    SECTION("a slot still carrying its capsule is not taken")
+    {
+        WebTransportConfig one = open_origins();
+        one.sessions = 1U;
+        Rig rig;
+        rig.make(true, false, h3_wt_config(QuicSide::Client), h3_wt_config(QuicSide::Server), one);
+        const u64 id = rig.session_with_hand_server();
+        rig.base->held_stream[kH3Client] = id;
+        REQUIRE(rig.wt[kH3Client]->close(id, 0U) == Http3Error::None);
+        rig.settle();
+        u64 again = 0U;
+        CHECK(rig.wt[kH3Client]->connect(h3_wt_connect().span(), again) != Http3Error::None);
     }
 }
 
