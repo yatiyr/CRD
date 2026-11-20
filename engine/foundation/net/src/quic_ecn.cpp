@@ -15,6 +15,20 @@ void QuicEcnValidator::start(Ecn codepoint) noexcept
     }
 }
 
+void QuicEcnValidator::restart(Ecn codepoint) noexcept
+{
+    Space spaces[kQuicSpaces];
+    for (usize index = 0U; index < kQuicSpaces; ++index)
+    {
+        spaces[index] = m_spaces[index];
+    }
+    start(codepoint);
+    for (usize index = 0U; index < kQuicSpaces; ++index)
+    {
+        m_spaces[index] = spaces[index];
+    }
+}
+
 void QuicEcnValidator::set_codepoint(Ecn codepoint) noexcept
 {
     if (m_state != QuicEcnState::Off && (codepoint == Ecn::Ect0 || codepoint == Ecn::Ect1))

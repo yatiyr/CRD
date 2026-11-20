@@ -1328,6 +1328,18 @@ struct RawClient
     u8 path_response[kQuicPathDataBytes] = {};
     usize path_response_datagram = 0U;
     usize datagrams = 0U;
+    // The server's PATH_CHALLENGE frames (the first 32): each one's data, the path and size of its datagram, and the
+    // first byte of the Destination Connection ID it came to.
+    usize challenges = 0U;
+    u8 challenge[32][kQuicPathDataBytes] = {};
+    QuicPath challenge_path[32] = {};
+    usize challenge_datagram[32] = {};
+    u8 challenge_dcid[32] = {};
+    // PATH_RESPONSE frames the server sent in a packet with a non-probing frame (RFC 9000 section 9.3.3).
+    usize responses_non_probing = 0U;
+    // Every server datagram's path and size, in order (the first 256).
+    QuicPath sent_to[256] = {};
+    usize sent_size[256] = {};
     // The server's NEW_CONNECTION_ID frames, by sequence.
     u8 issued[8][20] = {};
     u8 issued_tokens[8][kQuicResetTokenBytes] = {};
@@ -1351,6 +1363,8 @@ public:
     u64 now = kStartNs;
     ConstSpan<u8> scid;      // a Source Connection ID other than the client's, when set
     bool pad_initial = true; // false sends an Initial in a datagram under 1200 bytes
+    QuicPath from;           // the path the raw client's datagrams arrive on (S75)
+    usize pad_to = 0U;       // a 1-RTT packet's datagram is padded to this many bytes
 
     // Runs the handshake to the server's completion; `before_finished` runs with the client holding Handshake keys.
     template <typename Before> void handshake(Before before_finished)
@@ -1423,10 +1437,12 @@ public:
         spec.number = raw.next[static_cast<usize>(quic_space_of(type))]++;
         REQUIRE(writer.begin(spec, Span<u8>(datagram, kQuicMinInitialDatagram)));
         const usize used = write(writer.frames());
-        const usize floor = (type == QuicPacketType::Initial && pad_initial) ? kQuicMinInitialDatagram : 0U;
+        const usize floor = (type == QuicPacketType::Initial && pad_initial) ? kQuicMinInitialDatagram
+                            : (type == QuicPacketType::OneRtt)               ? pad_to
+                                                                             : 0U;
         usize size = 0U;
         REQUIRE(raw.protection.seal(writer, used, {floor, 0U}, size) == QuicPacketError::None);
-        server.receive(Span<u8>(datagram, size), Ecn::NotEct, now);
+        server.receive(from, Span<u8>(datagram, size), Ecn::NotEct, now);
         drain();
     }
 
@@ -1441,7 +1457,13 @@ public:
             {
                 return;
             }
+            if (raw.datagrams < 256U)
+            {
+                raw.sent_to[raw.datagrams] = server.sent_path();
+                raw.sent_size[raw.datagrams] = size;
+            }
             ++raw.datagrams;
+            m_reading = server.sent_path();
             read(Span<u8>(datagram, size));
         }
     }
@@ -1464,11 +1486,14 @@ public:
             {
                 continue;
             }
+            m_dcid = header.dcid.empty() ? u8{0} : header.dcid[0];
             const usize space = static_cast<usize>(quic_space_of(opened.type));
             raw.largest[space] =
                 (raw.any[space] && raw.largest[space] > opened.number) ? raw.largest[space] : opened.number;
             raw.any[space] = true;
             bool eliciting = false;
+            bool probing = true;
+            bool response = false;
             WireReader in(opened.payload);
             while (!in.done())
             {
@@ -1476,8 +1501,13 @@ public:
                 REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);
                 REQUIRE(quic_frame_allowed(frame.kind, frame.application, opened.type, true));
                 eliciting = eliciting || quic_frame_ack_eliciting(frame.kind);
+                probing = probing && quic_frame_probing(frame.kind);
+                response = response || frame.kind == QuicFrameKind::PathResponse;
                 take(frame, opened.type, datagram.size());
             }
+            // A packet to another path than the active one carries probing frames alone (section 9.1).
+            CHECK((probing || m_reading == server.path()));
+            raw.responses_non_probing += (response && !probing) ? 1U : 0U;
             if (opened.type == QuicPacketType::OneRtt && opened.number < sizeof(raw.seen))
             {
                 raw.seen[opened.number] = true;
@@ -1547,6 +1577,16 @@ private:
                 raw.issued_bytes[frame.sequence] = frame.data.size();
                 raw.retire_prior_to = frame.retire_prior_to;
                 break;
+            case QuicFrameKind::PathChallenge:
+                if (raw.challenges < 32U)
+                {
+                    std::memcpy(raw.challenge[raw.challenges], frame.data.data(), kQuicPathDataBytes);
+                    raw.challenge_path[raw.challenges] = m_reading;
+                    raw.challenge_datagram[raw.challenges] = datagram_size;
+                    raw.challenge_dcid[raw.challenges] = m_dcid;
+                }
+                ++raw.challenges;
+                break;
             case QuicFrameKind::PathResponse:
                 raw.path_response_seen = true;
                 std::memcpy(raw.path_response, frame.data.data(), kQuicPathDataBytes);
@@ -1558,6 +1598,8 @@ private:
     }
 
     const Identity& m_identity;
+    QuicPath m_reading; // the path of the server datagram being read
+    u8 m_dcid = 0U;     // the first byte of its Destination Connection ID
 };
 
 // A frame of `kind` written by the caller's fields, sent in a 1-RTT packet after the handshake: the error the server
@@ -1742,13 +1784,6 @@ TEST_CASE("QUIC connection: frames this slice does not carry close with the erro
               {
                   f.kind = QuicFrameKind::RetireConnectionId;
                   f.sequence = 0U;
-              }) == code(QuicTransportError::ProtocolViolation));
-    constexpr u8 path_bytes[kQuicPathDataBytes] = {9U};
-    CHECK(refused(
-              [&](QuicFrame& f)
-              {
-                  f.kind = QuicFrameKind::PathResponse;
-                  f.data = path_bytes;
               }) == code(QuicTransportError::ProtocolViolation));
     // Only a server sends HANDSHAKE_DONE (section 19.20).
     CHECK(refused([](QuicFrame& f) { f.kind = QuicFrameKind::HandshakeDone; }) ==
@@ -3924,4 +3959,363 @@ TEST_CASE("QUIC connection: a server that rejects 0-RTT drops what it held, and 
     accept.client_scid = ConstSpan<u8>(kClientCid, sizeof(kClientCid));
     accept.original_dcid = accept.client_dcid;
     CHECK(server.accept(accept, kStartNs));
+}
+
+// ---- Paths and migration (S75) ----
+
+namespace
+{
+QuicPath client_at(u8 last, crd::u16 port)
+{
+    return QuicPath{0U, Endpoint{IpAddress::v4(198, 51, 100, last), port}};
+}
+
+void send_frame(RawRun& run, QuicFrameKind kind, ConstSpan<u8> data = {})
+{
+    QuicFrame frame;
+    frame.kind = kind;
+    frame.data = data;
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(frame, out); });
+}
+
+// The latest challenge the server sent on `path`: its index in the raw client's log, or 32 for none.
+usize latest_challenge(const RawRun& run, const QuicPath& path)
+{
+    const usize logged = (run.raw.challenges < 32U) ? run.raw.challenges : 32U;
+    for (usize index = logged; index-- > 0U;)
+    {
+        if (run.raw.challenge_path[index] == path)
+        {
+            return index;
+        }
+    }
+    return 32U;
+}
+
+// Answers the server's latest challenge on `on` with a PATH_RESPONSE (a probing packet) from the raw client's path.
+void answer(RawRun& run, const QuicPath& on)
+{
+    const usize index = latest_challenge(run, on);
+    REQUIRE(index < 32U);
+    send_frame(run, QuicFrameKind::PathResponse, ConstSpan<u8>(run.raw.challenge[index], kQuicPathDataBytes));
+}
+
+// The server's challenges sent on `path`.
+usize challenges_on(const RawRun& run, const QuicPath& path)
+{
+    usize count = 0U;
+    for (usize index = 0U; index < run.raw.challenges && index < 32U; ++index)
+    {
+        count += (run.raw.challenge_path[index] == path) ? 1U : 0U;
+    }
+    return count;
+}
+
+// The server's bytes sent on `path` since datagram `from` of the raw client's log.
+usize bytes_to(const RawRun& run, const QuicPath& path, usize from)
+{
+    usize total = 0U;
+    for (usize index = from; index < run.raw.datagrams && index < 256U; ++index)
+    {
+        total += (run.raw.sent_to[index] == path) ? run.raw.sent_size[index] : 0U;
+    }
+    return total;
+}
+
+// Runs the server's timers, reading what it sends, until `until`.
+void run_timers(RawRun& run, u64 until)
+{
+    for (u64 next = run.server.next_timer_ns(); next <= until; next = run.server.next_timer_ns())
+    {
+        run.now = (next > run.now) ? next : run.now;
+        run.server.on_timeout(run.now);
+        run.drain();
+        if (run.server.state() == QuicConnectionState::Closed)
+        {
+            return;
+        }
+    }
+    run.now = until;
+}
+} // namespace
+
+TEST_CASE("QUIC paths: a probing packet from a new path is answered there with a challenge of the server's, padded, "
+          "and moves nothing",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    RawRun run(identity);
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath b = client_at(8U, 50000U);
+    run.from = a;
+    run.handshake();
+    REQUIRE(run.server.path() == a);
+    CHECK(run.server.address_validated());
+    run.from = b;
+    run.pad_to = kQuicMinInitialDatagram;
+    const u8 data[kQuicPathDataBytes] = {0x31U, 0x32U, 0x33U, 0x34U, 0x35U, 0x36U, 0x37U, 0x38U};
+    send_frame(run, QuicFrameKind::PathChallenge, ConstSpan<u8>(data));
+    CHECK(run.server.path() == a);
+    CHECK(run.server.counters().migrations == 0U);
+    REQUIRE(run.raw.path_response_seen);
+    CHECK(std::memcmp(run.raw.path_response, data, sizeof(data)) == 0);
+    CHECK(run.raw.path_response_datagram >= kQuicMinInitialDatagram);
+    const usize challenge = latest_challenge(run, b);
+    REQUIRE(challenge < 32U); // section 9.6.3: the server validates the client's new address
+    CHECK(run.raw.challenge_datagram[challenge] >= kQuicMinInitialDatagram);
+    const usize b_slot = run.server.paths().find(b);
+    REQUIRE(b_slot != kQuicNoPath);
+    CHECK_FALSE(run.server.paths().validated(b_slot));
+    CHECK(bytes_to(run, b, 0U) <= 3U * kQuicMinInitialDatagram);
+    answer(run, b);
+    CHECK(run.server.paths().validated(b_slot));
+    CHECK(run.server.counters().path_validations == 1U);
+    CHECK(run.server.path() == a);
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC paths: a PATH_RESPONSE that answers no challenge is ignored, and a challenge on the active path is "
+          "answered with a non-probing packet",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    RawRun run(identity);
+    run.from = client_at(7U, 50000U);
+    run.handshake();
+    const u8 data[kQuicPathDataBytes] = {9U};
+    send_frame(run, QuicFrameKind::PathResponse, ConstSpan<u8>(data));
+    CHECK(run.server.state() == QuicConnectionState::Established);
+    CHECK(run.server.counters().path_validations == 0U);
+    send_frame(run, QuicFrameKind::PathChallenge, ConstSpan<u8>(data));
+    REQUIRE(run.raw.path_response_seen);
+    CHECK(run.raw.responses_non_probing == 1U);
+    CHECK(run.raw.path_response_datagram >= kQuicMinInitialDatagram);
+}
+
+TEST_CASE("QUIC paths: a NAT rebinding moves the server's datagrams at once, inside the amplification limit, keeps "
+          "congestion state, challenges both paths and expands an unexpanded challenge",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    RawRun run(identity);
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath rebound = client_at(7U, 50001U);
+    run.from = a;
+    run.handshake();
+    run.drain();
+    const u64 smoothed = run.server.recovery().rtt().smoothed_ns;
+    const usize mark = run.raw.datagrams;
+    run.from = rebound;
+    run.pad_to = 200U; // three times this is under 1200 bytes: the first challenge cannot be expanded
+    send_frame(run, QuicFrameKind::Ping);
+    CHECK(run.server.path() == rebound);
+    CHECK(run.server.counters().migrations == 1U);
+    CHECK_FALSE(run.server.address_validated());
+    CHECK(run.server.recovery().path_floor() == 0U); // only the port changed: the state is kept (section 9.4)
+    CHECK(run.server.recovery().rtt().smoothed_ns == smoothed);
+    CHECK(bytes_to(run, rebound, mark) <= 3U * 200U);
+    const usize first = latest_challenge(run, rebound);
+    REQUIRE(first < 32U);
+    CHECK(run.raw.challenge_datagram[first] < kQuicMinInitialDatagram);
+    REQUIRE(latest_challenge(run, a) < 32U); // section 9.3.3: the path before is challenged too
+    CHECK(run.raw.challenge_datagram[latest_challenge(run, a)] >= kQuicMinInitialDatagram);
+    run.pad_to = 0U;
+    answer(run, rebound);
+    CHECK(run.server.address_validated());
+    const usize expanded = latest_challenge(run, rebound);
+    REQUIRE(expanded > first);
+    CHECK(run.raw.challenge_datagram[expanded] >= kQuicMinInitialDatagram); // section 8.2.3
+    const usize slot = run.server.paths().find(rebound);
+    CHECK(run.server.paths().validating(slot));
+    answer(run, rebound);
+    CHECK_FALSE(run.server.paths().validating(slot));
+    answer(run, a);
+    CHECK(run.server.path() == rebound); // a probing packet from the old path moves nothing back
+    CHECK(run.server.counters().path_validations == 3U);
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC paths: an address change restarts the RTT estimate, congestion control and the path MTU search from "
+          "its family's base",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    RawRun run(identity);
+    run.from = client_at(7U, 50000U);
+    run.handshake();
+    run.drain();
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    REQUIRE(run.server.recovery().rtt().sampled());
+    const u64 next = run.server.next_packet_number(QuicSpace::Application);
+    const usize mark = run.raw.datagrams;
+    run.from = QuicPath{0U, Endpoint{IpAddress::v4(203, 0, 113, 5), 50000U}};
+    run.pad_to = kQuicMinInitialDatagram;
+    send_frame(run, QuicFrameKind::Ping);
+    CHECK(run.server.path() == run.from);
+    CHECK(run.server.recovery().path_floor() >= next);
+    CHECK_FALSE(run.server.recovery().rtt().sampled());
+    CHECK(run.server.path_mtu().size() == kQuicPmtuFloor);
+    CHECK(run.server.path_mtu().state() == QuicPmtuState::Searching); // an IPv4 path's base is the floor
+    // What was in flight before counts no more on the new path.
+    CHECK(run.server.recovery().bytes_in_flight() <= bytes_to(run, run.from, mark));
+    // An IPv6 address probes its 1232 bytes first (RFC 8899 section 5.2).
+    constexpr u8 v6[16] = {0x20U, 0x01U, 0x0DU, 0xB8U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U};
+    run.from = QuicPath{0U, Endpoint{IpAddress::v6(v6), 443U}};
+    send_frame(run, QuicFrameKind::Ping);
+    CHECK(run.server.path() == run.from);
+    CHECK(run.server.path_mtu().size() == kQuicPmtuFloor);
+    CHECK(run.server.path_mtu().state() == QuicPmtuState::Base);
+    CHECK(run.server.counters().migrations == 2U);
+}
+
+TEST_CASE("QUIC paths: only the highest-numbered non-probing packet moves the path, and a return to a validated path "
+          "needs no validation",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    RawRun run(identity);
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath b = client_at(8U, 50000U);
+    run.from = a;
+    run.handshake();
+    run.pad_to = kQuicMinInitialDatagram;
+    u64& next = run.raw.next[static_cast<usize>(QuicSpace::Application)];
+    const u64 skipped = next;
+    next += 4U; // a gap the late packet falls into
+    run.from = b;
+    send_frame(run, QuicFrameKind::Ping);
+    REQUIRE(run.server.path() == b);
+    const u64 after = next;
+    next = skipped; // a packet sent earlier from the old path, arriving late
+    run.from = a;
+    send_frame(run, QuicFrameKind::Ping);
+    CHECK(run.server.path() == b);
+    CHECK(run.server.counters().migrations == 1U);
+    next = after;
+    send_frame(run, QuicFrameKind::Ping);
+    CHECK(run.server.path() == a);
+    CHECK(run.server.counters().migrations == 2U);
+    CHECK(run.server.address_validated()); // validated in the handshake: no validation again (section 9.3)
+}
+
+TEST_CASE("QUIC paths: a validation that fails reverts to the last validated path, and with none left the "
+          "connection ends silently",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath b = client_at(8U, 50000U);
+    {
+        RawRun run(identity);
+        run.from = a;
+        run.handshake();
+        run.pad_to = kQuicMinInitialDatagram;
+        run.from = b;
+        const usize mark = run.raw.datagrams;
+        send_frame(run, QuicFrameKind::Ping);
+        REQUIRE(run.server.path() == b);
+        // The client still holds the old path (an attacker's copy moved the server): it answers there, but never
+        // sends on the new path again.
+        run.from = a;
+        run.pad_to = 0U;
+        answer(run, a);
+        CHECK(run.server.path() == b);
+        run_timers(run, run.now + 30000U * kMs);
+        CHECK(run.server.path() == a); // section 9.3.2
+        CHECK(run.server.paths().find(b) == kQuicNoPath);
+        CHECK(run.server.counters().path_failures == 1U);
+        CHECK(run.server.counters().migrations == 2U);
+        // Nothing more arrived on b: what went there stayed inside three times its one datagram.
+        CHECK(bytes_to(run, b, mark) <= 3U * kQuicMinInitialDatagram);
+        CHECK(run.server.state() == QuicConnectionState::Established);
+    }
+    {
+        RawRun run(identity);
+        run.from = a;
+        run.handshake();
+        run.pad_to = kQuicMinInitialDatagram;
+        run.from = b;
+        send_frame(run, QuicFrameKind::Ping);
+        REQUIRE(run.server.path() == b);
+        run_timers(run, run.now + 30000U * kMs);
+        CHECK(challenges_on(run, a) >= 2U); // the validated old path's challenge goes again until given up
+        CHECK(run.server.state() == QuicConnectionState::Closed);
+        CHECK(run.server.close_info().path_lost);
+        CHECK_FALSE(run.raw.close_seen); // silently (section 9.3.2)
+        CHECK(run.server.counters().path_failures == 2U);
+    }
+}
+
+TEST_CASE("QUIC paths: a client that changed its connection ID is answered on an unused one of its own, and an ID "
+          "left on a forgotten path is retired",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    Host host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host);
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath b = client_at(8U, 50000U);
+    run.from = a;
+    run.handshake();
+    run.drain();
+    REQUIRE(run.raw.issued_bytes[1] == sizeof(kServerCid));
+    // The client gives the server a second ID of its own first (section 9.5's SHOULD).
+    constexpr u8 second[sizeof(kClientCid)] = {0xC8U, 0xC9U, 0xCAU, 0xCBU, 0xCCU, 0xCDU, 0xCEU, 0xCFU};
+    constexpr u8 token[kQuicResetTokenBytes] = {0x7AU};
+    QuicFrame issue;
+    issue.kind = QuicFrameKind::NewConnectionId;
+    issue.sequence = 1U;
+    issue.data = ConstSpan<u8>(second);
+    issue.reset_token = ConstSpan<u8>(token);
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(issue, out); });
+    REQUIRE(run.server.peer_cid_count() == 2U);
+    // It moves to b with the server's sequence 1.
+    std::memcpy(run.raw.dcid, run.raw.issued[1], run.raw.issued_bytes[1]);
+    run.from = b;
+    run.pad_to = kQuicMinInitialDatagram;
+    send_frame(run, QuicFrameKind::Ping);
+    REQUIRE(run.server.path() == b);
+    CHECK(run.server.peer_cid()[0] == 0xC8U);
+    const usize on_b = latest_challenge(run, b);
+    const usize on_a = latest_challenge(run, a);
+    REQUIRE(on_b < 32U);
+    REQUIRE(on_a < 32U);
+    CHECK(run.raw.challenge_dcid[on_b] == 0xC8U); // an ID never used on another path (section 9.5)
+    CHECK(run.raw.challenge_dcid[on_a] == kClientCid[0]);
+    answer(run, b);
+    // The old path never answers: it is forgotten, and its ID retired so that nothing links the two.
+    run_timers(run, run.now + 30000U * kMs);
+    CHECK(run.server.paths().find(a) == kQuicNoPath);
+    CHECK(run.server.state() == QuicConnectionState::Established);
+    CHECK(run.raw.retire_seen);
+    CHECK(run.raw.retire_sequence == 0U);
+    CHECK(run.server.peer_cid_count() == 1U);
+    CHECK(run.server.peer_cid()[0] == 0xC8U);
+}
+
+TEST_CASE("QUIC paths: before confirmation a server takes nothing from another path",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    RawRun run(identity);
+    const QuicPath a = client_at(7U, 50000U);
+    run.from = a;
+    run.handshake(
+        [&]
+        {
+            // Mid-handshake: a datagram from another path is counted and dropped before it is opened.
+            run.from = client_at(9U, 50000U);
+            run.send(QuicPacketType::Handshake,
+                     [](Span<u8> out)
+                     {
+                         QuicFrame ping;
+                         ping.kind = QuicFrameKind::Ping;
+                         return write_quic_frame(ping, out);
+                     });
+            CHECK(run.server.counters().foreign_datagrams == 1U);
+            run.from = a;
+        });
+    CHECK(run.server.path() == a);
+    CHECK(run.server.counters().migrations == 0U);
 }

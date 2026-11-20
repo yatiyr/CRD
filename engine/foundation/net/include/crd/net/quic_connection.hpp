@@ -4,7 +4,7 @@
 // close (4.2a; contract: docs/design/network-foundation.md#quic-connection). Sources: RFC 9000 sections 2 to 4, 5.1,
 // 7, 8, 10 (10.3's stateless reset), 12, 13, 14, 17.2, 19 and 21.4, RFC 9001 sections 4 to 6 and 9.2, RFC 9002
 // sections 6, 6.4 and 7 and appendix A, RFC 9221 sections 3 to 5, RFC 9287, RFC 9368 sections 2 to 4 and RFC 9369
-// sections 4 and 5.
+// sections 4 and 5; for paths RFC 9000 sections 8.2 and 9.
 //
 //   sans-I/O   receive() takes one datagram from the peer with its arrival time, send() writes the next datagram into
 //              the caller's room (called until it returns 0 after every receive() and on_timeout()), and
@@ -60,8 +60,18 @@
 //   frames     every frame type is dispatched: stream and flow-control frames go to the QuicStreamSet (streams()),
 //              DATAGRAM frames to QuicDatagrams (datagrams()); 1-RTT packets carry the connection's own frames, then
 //              datagrams, then the stream set's. An ACK only carried along follows waiting datagrams.
-//              The peer's connection IDs are held up to this side's active_connection_id_limit with retirement; a
-//              PATH_CHALLENGE is answered.
+//              The peer's connection IDs are held up to this side's active_connection_id_limit with retirement.
+//   paths      every datagram arrives on a QuicPath and send() names the path of the one it wrote (sent_path(),
+//              quic_path.hpp; design S75). A PATH_CHALLENGE is answered on its own path. A server follows its client:
+//              once confirmed, the highest-numbered non-probing packet from another path moves its datagrams there
+//              (a NAT rebinding or the client's migration), with an unused peer connection ID when the client changed
+//              its own (section 9.5); the new path is validated and held to three times what arrived on it until
+//              then, and the path before it is challenged too (section 9.3.3). Unless only the port changed,
+//              congestion control, the RTT estimate, the pacer, ECN validation and the path MTU search start again,
+//              and nothing sent before reaches the new estimate (section 9.4). A validation that fails reverts to the
+//              last validated path, or closes silently without one (section 9.3.2). A validated path left behind stays
+//              known, so the client may return without another validation, until a new path needs its slot; its
+//              connection ID is then retired. A client takes datagrams from its server's address alone (section 9).
 //   IDs        this side's connection IDs come from the host (QuicConnectionIds), which routes them and derives their
 //              stateless reset tokens from its QuicResetKey: after confirmation the peer is kept at its
 //              active_connection_id_limit (at most kQuicMaxLocalConnectionIds) with NEW_CONNECTION_ID frames resent
@@ -91,6 +101,7 @@
 #include <crd/net/quic_datagram.hpp>
 #include <crd/net/quic_ecn.hpp>
 #include <crd/net/quic_packet.hpp>
+#include <crd/net/quic_path.hpp>
 #include <crd/net/quic_pmtu.hpp>
 #include <crd/net/quic_recovery.hpp>
 #include <crd/net/quic_stream.hpp>
@@ -244,6 +255,9 @@ struct QuicConnectionConfig
     // cannot mark clears it.
     bool ecn = true;
     u64 key_update_interval = 0U; // 1-RTT packets one key seals before an update starts (0: the AEAD's limit alone)
+    // The path the connection opens on (QuicHost sets the peer's address): a port of 0 takes the path of the first
+    // packet that opens.
+    QuicPath path;
     // kPrfKeyBytes seeding the connection's entropy (grease, skipped numbers) for a deterministic run (tests,
     // NET-SIM); empty draws a fresh key from the provider.
     cont::ConstSpan<u8> entropy_seed;
@@ -277,6 +291,7 @@ struct QuicCloseInfo
     bool local = false;           // this side closed
     bool idle = false;            // the idle timeout ended it, without a frame
     bool stateless_reset = false; // the peer's stateless reset ended it (RFC 9000 section 10.3.1)
+    bool path_lost = false;       // the active path failed validation with no validated one left: closed silently
     // A client's Version Negotiation packet listed none of the versions it runs: `retry_version` is the first of its
     // preference the packet offered (0 for none), for a new connection with after_version_negotiation set.
     bool version_negotiation = false;
@@ -298,6 +313,10 @@ struct QuicConnectionCounters
     u64 path_probes = 0U;     // PMTU probe datagrams sent
     u64 probe_fills = 0U;     // 1-RTT packets padded to their datagram for the controller's bandwidth probe
     u64 receive_timestamps = 0U; // acknowledged packets the peer's ACK_RECEIVE_TIMESTAMPS frames gave a receive time
+    u64 migrations = 0U;         // moves of the datagrams to another path, following the peer or reverting
+    u64 path_validations = 0U;   // paths a PATH_RESPONSE validated
+    u64 path_failures = 0U;      // validations abandoned on their timeout
+    u64 foreign_datagrams = 0U;  // datagrams from a path this side takes nothing from (a client's unknown server)
 };
 
 // (MSVC C4324 as for QuicPacketProtection, which it holds inline.)
@@ -332,13 +351,19 @@ public:
     // out of range or an AEAD the policy refuses.
     [[nodiscard]] bool open_keyed(const QuicKeyedStart& start, u64 now_ns) noexcept;
 
-    // One datagram from the peer, arrived at `now_ns` with `ecn`; its bytes are decrypted in place.
+    // One datagram from the peer, arrived on `path` at `now_ns` with `ecn`; its bytes are decrypted in place. Without
+    // a path it arrived on the active one.
+    void receive(const QuicPath& path, cont::Span<u8> datagram, Ecn ecn, u64 now_ns) noexcept;
     void receive(cont::Span<u8> datagram, Ecn ecn, u64 now_ns) noexcept;
     // Writes the next datagram into `out` (at least kQuicMinInitialDatagram bytes) and returns its size; 0 when
     // nothing is to be sent now.
     [[nodiscard]] usize send(cont::Span<u8> out, u64 now_ns) noexcept;
-    // The codepoint the datagram the last send() wrote is sent with.
+    // The codepoint the datagram the last send() wrote is sent with, and the path it goes on.
     [[nodiscard]] Ecn marking() const noexcept { return m_marking; }
+    [[nodiscard]] const QuicPath& sent_path() const noexcept { return m_paths.path(m_send_path); }
+    // The path datagrams go on, and every path the connection knows.
+    [[nodiscard]] const QuicPath& path() const noexcept { return m_paths.path(m_paths.active()); }
+    [[nodiscard]] const QuicPaths& paths() const noexcept { return m_paths; }
     // When on_timeout() is next due: kNeverNs for no timer.
     [[nodiscard]] u64 next_timer_ns() const noexcept;
     void on_timeout(u64 now_ns) noexcept;
@@ -374,7 +399,8 @@ public:
     // its client's parameters, and once a client has read its server's first packet in another version or CRYPTO
     // data in this one).
     [[nodiscard]] crypto::QuicVersion version() const noexcept { return m_protection.version(); }
-    [[nodiscard]] bool address_validated() const noexcept { return m_validated; }
+    // The active path's address is validated.
+    [[nodiscard]] bool address_validated() const noexcept { return m_paths.validated(m_paths.active()); }
     [[nodiscard]] const QuicCloseInfo& close_info() const noexcept { return m_close; }
     // The reason phrase sent or received (truncated to kQuicMaxReasonBytes).
     [[nodiscard]] cont::ConstSpan<u8> close_reason() const noexcept
@@ -420,7 +446,7 @@ public:
     // version(), which is final once peer_parameters_known(): RFC 9369 section 5), sent once the handshake is
     // confirmed and again until acknowledged (section 8.1.3). False, changing nothing, on a client, before
     // peer_parameters_known(), once closing, for an empty token or one over kQuicMaxCarriedTokenBytes, or when it
-    // has one.
+    // has one, unless that one is for another path than the validated path() (a client that moved: section 9.3).
     [[nodiscard]] bool give_new_token(cont::ConstSpan<u8> token) noexcept;
     // The packet number a space sends next, and whether `number` was skipped there (tests and NET-DEBUG).
     [[nodiscard]] u64 next_packet_number(QuicSpace space) const noexcept;
@@ -440,6 +466,7 @@ private:
         Frames, // what the space owes
         Close,  // CONNECTION_CLOSE
         Probe,  // a PMTU probe: PING, padded to the whole room
+        Path,   // the path frames owed on m_send_path, not the active path: a probing packet (section 9.1)
     };
 
     // A server's answer to its client's transport parameters (RFC 9368 section 2.3), asked by the TLS stack.
@@ -491,6 +518,7 @@ private:
         u32 token = ~u32{0};
         bool eliciting = false;
         bool path_response = false;
+        bool path_challenge = false; // its data is m_challenge
         bool fill = false; // the packet fills its datagram for a bandwidth probe
     };
 
@@ -536,6 +564,29 @@ private:
     // Whether the packet opened.
     [[nodiscard]] bool receive_packet(const QuicHeader& header, cont::Span<u8> packet, usize datagram_bytes, Ecn ecn,
                                       u64 now_ns) noexcept;
+    // Paths (S75).
+    // A server follows its client to other paths once confirmed.
+    [[nodiscard]] bool follows_peer() const noexcept;
+    // A packet from m_candidate, a path not known, opened: the path joins, with the peer ID it is answered on.
+    void admit_path(usize datagram_bytes, u64 now_ns) noexcept;
+    // An opened Application packet of m_receive_path: the migration it may be (section 9.3).
+    void follow_packet(u64 number, bool probing, u64 now_ns) noexcept;
+    // Datagrams go on `index` from now on: the peer moved there, or a failed validation reverts there.
+    void move_to(usize index, u64 now_ns) noexcept;
+    // Congestion control, the RTT estimate, the pacer, ECN validation and the path MTU search start again.
+    void restart_path(u64 now_ns) noexcept;
+    void on_validated(usize index, u64 now_ns) noexcept;
+    // Paths whose validation timed out: reverted from, forgotten, or the connection closes (sections 8.2.4, 9.3.2).
+    void expire_paths(u64 now_ns) noexcept;
+    // Forgets a path that is not the active one, retiring its peer ID unless another path sends to it.
+    void drop_path(usize index, u64 now_ns) noexcept;
+    // The peer ID a path sends to (its sequence), the index among m_peer_cids of a sequence (m_peer_cid_count for
+    // none), and whether a path has the room and an ID to send a datagram now.
+    [[nodiscard]] u64 path_sequence(usize index) const noexcept;
+    [[nodiscard]] usize peer_index(u64 sequence) const noexcept;
+    [[nodiscard]] bool path_sendable(usize index) const noexcept;
+    [[nodiscard]] u64 validation_timeout_ns() const noexcept;
+    [[nodiscard]] u64 path_timer_ns() const noexcept;
     [[nodiscard]] bool on_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
     [[nodiscard]] bool crypto_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
     [[nodiscard]] bool advance_handshake(u64 now_ns) noexcept;
@@ -588,6 +639,9 @@ private:
     // leaves is too small for another.
     [[nodiscard]] usize write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool last,
                                      Carry carry, u64 now_ns) noexcept;
+    // The path frames owed on a path other than the active one, a probing datagram written into `out`: its size, 0
+    // for none.
+    [[nodiscard]] usize send_path_frames(cont::Span<u8> out, u64 now_ns) noexcept;
     // The PMTU probe due now, written alone into `out`: its size, 0 when none goes (none due, a probe timeout or an
     // owed ACK pending, or the window, the pacer or the amplification limit holding it; a pacer arms its timer).
     [[nodiscard]] usize send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept;
@@ -599,6 +653,9 @@ private:
     [[nodiscard]] usize write_frames(QuicSpace space, bool early, cont::Span<u8> frames, u64 packet, u64 now_ns,
                                      Written& written) noexcept;
     [[nodiscard]] usize write_close(QuicSpace space, cont::Span<u8> frames) const noexcept;
+    // m_send_path's PATH_RESPONSE when owed, then a PATH_CHALLENGE when due (one a packet, section 8.2.1). Neither is
+    // sent again when lost: a response answers one challenge, and a challenge's timer sends another.
+    [[nodiscard]] usize write_path_frames(cont::Span<u8> frames, u64 now_ns, Written& written) noexcept;
     [[nodiscard]] usize send_closing(cont::Span<u8> out, u64 now_ns) noexcept;
     // Appends a record of a frame `written` holds to the ledger, naming it the packet's first when it is.
     [[nodiscard]] bool record(QuicSpace space, u64 packet, u8 kind, const QuicStreamRecord& frame,
@@ -606,7 +663,8 @@ private:
     void settle(QuicSpace space, const QuicSentPacket& packet, Settle how) noexcept;
     void pull_crypto() noexcept;
     [[nodiscard]] usize amplification_credit() const noexcept;
-    // Whether send() can write `space`'s owed ACK: a timer nothing serves is never reported due.
+    // Whether send() can write `space`'s owed ACK (the active path's amplification limit included): a timer nothing
+    // serves is never reported due.
     [[nodiscard]] bool can_acknowledge(QuicSpace space) const noexcept;
 
     // Closing and timers.
@@ -690,6 +748,8 @@ private:
     usize m_retire_outstanding = 0U; // owed or in flight
     u8 m_new_token[kQuicMaxCarriedTokenBytes] = {};
     usize m_new_token_bytes = 0U;
+    QuicPath m_new_token_path; // the path whose address the token is for
+    u64 m_new_token_generation = 0U;
     bool m_new_token_owed = false; // a server's, until acknowledged
     bool m_new_token_acked = false;
 
@@ -701,11 +761,14 @@ private:
     bool m_handshake_keys = false;
     bool m_handshake_done_owed = false;
     bool m_handshake_done_acked = false;
-    u8 m_path_response[kQuicPathDataBytes] = {};
-    bool m_path_response_owed = false;
+    QuicPaths m_paths;
+    QuicPath m_candidate;      // the path of a datagram being read from no known path
+    usize m_receive_path = 0U; // the path of the datagram being read (kQuicNoPath: m_candidate, not yet admitted)
+    usize m_send_path = 0U;    // the path of the datagram being written, then of the last one
+    u64 m_largest_non_probing = kQuicNoPacket; // the Application packet that last chose the path (section 9.3)
+    u8 m_challenge[kQuicPathDataBytes] = {};   // the PATH_CHALLENGE data of the packet being written
     bool m_ping_owed = false;
     bool m_confirmed = false;
-    bool m_validated = false;
     bool m_peer_greases = false;
     bool m_sent_since_receive = false;
 

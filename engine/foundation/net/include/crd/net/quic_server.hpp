@@ -15,9 +15,10 @@
 //             evicted when the ring is full; the Initial that creates the connection reads them after itself
 //             (section 5.2.2). A peer can make the server hold at most the ring (threat T10).
 //   host      routing by peer address, serving under a deadline heap, a peer's stateless reset and closing are
-//             QuicHost's (quic_host.hpp); every connection's parameters carry disable_active_migration until NET-PATH
-//             validates migrations. A connection's service adds, after the application's on_service, its NEW_TOKEN
-//             token once its version is final (QuicTokenKeys::mint_new_token for its address, section 8.1.3).
+//             QuicHost's (quic_host.hpp), the clients' migrations and NAT rebindings the connections' (S75). A
+//             connection's service adds, after the application's on_service, its NEW_TOKEN token once its version is
+//             final (QuicTokenKeys::mint_new_token for its address, section 8.1.3), and another for each validated
+//             address its client moves to (section 9.3).
 //   memory    the pool, the held ring, the heap and the send queue come from the injected allocator at construction;
 //             a connection's own buffers come from it when the connection is admitted, so a host bounds them with its
 //             allocator. Routing and serving allocate nothing.
@@ -44,9 +45,9 @@ inline constexpr u32 kQuicMaxEarlyDatagrams = 4096U;
 struct QuicServerConfig
 {
     // Every connection's configuration: side Server, with its TLS context and, in `versions`, every version the
-    // ingress runs. The server sets `version` (the client Initial's), `ids` (its routed IDs) and
-    // disable_active_migration; a non-empty `entropy_seed` is varied per connection (QuicHost::build). What its spans
-    // view (versions, early_context) must outlive the server.
+    // ingress runs. The server sets `version` (the client Initial's) and `ids` (its routed IDs); a non-empty
+    // `entropy_seed` is varied per connection (QuicHost::build). What its spans view (versions, early_context) must
+    // outlive the server.
     QuicConnectionConfig connection;
     u32 connections = 256U;             // live connections at most (1 to kQuicMaxHostConnections)
     u32 early_datagrams = 16U;          // 0-RTT datagrams held before their Initial (0: none held)
@@ -117,8 +118,10 @@ private:
     struct Admitted
     {
         QuicConnectionId client_dcid; // routed while `client_routed`
+        Endpoint token_peer;          // the address the last token given is for
         bool client_routed = false;
         bool token_given = false;
+        bool tokenless = false; // a keyed connection: its session proved the address
     };
 
     struct Early

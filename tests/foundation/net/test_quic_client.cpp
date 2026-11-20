@@ -1101,7 +1101,8 @@ TEST_CASE("QUIC client: its own ticket cache resumes the next connection once, m
     }
 }
 
-TEST_CASE("QUIC client: a datagram for a connection from another address is dropped and counted",
+TEST_CASE("QUIC client: a datagram for a connection from another address than its server's opens nothing and is "
+          "counted",
           "[net][4.2a][quic-client]")
 {
     Identity identity;
@@ -1126,14 +1127,17 @@ TEST_CASE("QUIC client: a datagram for a connection from another address is drop
     }
     REQUIRE(socket.sent_count >= 1U);
     const Datagram copy = socket.sent[0].datagram;
-    const u64 received = network->live(handle).counters().datagrams_received;
+    const QuicConnectionCounters before = network->live(handle).counters();
     network->deliver_to_client(copy.view(), kStranger);
     static_cast<void>(network->client_loop.poll());
+    // A client takes nothing from an address its server never used (RFC 9000 section 9), and keeps its path.
     CHECK(network->client.counters().foreign_path == 1U);
-    CHECK(network->live(handle).counters().datagrams_received == received);
+    CHECK(network->live(handle).counters().foreign_datagrams == before.foreign_datagrams + 1U);
+    CHECK(network->live(handle).counters().packets_opened == before.packets_opened);
+    CHECK(network->live(handle).path().peer == server_at(0U));
     network->deliver_to_client(copy.view(), server_at(0U));
     static_cast<void>(network->client_loop.poll());
-    CHECK(network->live(handle).counters().datagrams_received == received + 1U);
+    CHECK(network->live(handle).counters().packets_opened == before.packets_opened + 1U);
 }
 
 TEST_CASE("QUIC client: the pool's bounds, stale handles, a TLS context per connection and the configurations "
@@ -1297,12 +1301,18 @@ TEST_CASE("QUIC hosts: a server opened with no peer takes the first address whos
     REQUIRE(network->run_until([&] { return network->app.echoed(keyed); }));
     CHECK(server.counters().packets_opened != 0U);
 
-    // Bound: the same forgery is now a datagram from another address.
-    const u64 received = server.counters().datagrams_received;
+    // Bound: the same forgery is now a datagram from another address, which opens nothing, so no path joins and
+    // nothing is sent there.
+    const QuicConnectionCounters before = server.counters();
+    const usize sent = stack.socket.sent_count;
     stack.socket.deliver(forged, kStranger);
     static_cast<void>(stack.loop.poll());
     CHECK(stack.server.counters().foreign_path == 1U);
-    CHECK(server.counters().datagrams_received == received);
+    CHECK(server.counters().datagrams_received == before.datagrams_received + 1U);
+    CHECK(server.counters().packets_opened == before.packets_opened);
+    CHECK(server.paths().find(QuicPath{0U, kStranger}) == kQuicNoPath);
+    CHECK(server.path().peer != kStranger);
+    CHECK(stack.socket.sent_count == sent);
 }
 
 TEST_CASE("QUIC hosts: a raw UDP path refused leaves its slot and route free and its secret zeroed",

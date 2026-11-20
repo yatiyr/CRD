@@ -165,6 +165,9 @@ struct QuicSentPacket
     bool ack_eliciting = false;
     bool in_flight = false; // counted in bytes in flight: a packet carrying PADDING, and every ack-eliciting one
     bool path_probe = false; // a PMTU probe (quic_pmtu.hpp): its loss starts no persistent congestion
+    // Sent on a path other than the active one (a path validation, RFC 9000 section 9.4): outside the estimate,
+    // bytes in flight and congestion control, as a packet before path_floor() is.
+    bool off_path = false;
     Ecn  ecn = Ecn::NotEct; // the codepoint its datagram was marked with (quic_ecn.hpp)
     // Never 0 for a datagram of one 1-RTT packet: what an ICMP message quoting it must repeat (quic_pmtu.hpp's hints);
     // 0 for any other packet.
@@ -319,6 +322,19 @@ public:
     // discarded): every outstanding Application packet, all of them 0-RTT before the client's first 1-RTT packet,
     // leaves bytes in flight as on_discarded; packet numbers continue.
     void reject_early(u64 now_ns, QuicRecoveryEvents& events) noexcept;
+    // The connection's datagrams go on a new path (RFC 9000 section 9.4, RFC 9002 appendix A.3): the RTT estimate,
+    // the probe count and the reordering thresholds start again, and every Application packet sent so far leaves
+    // bytes in flight. Such a packet is still acknowledged and declared lost, for its frames, but gives no RTT
+    // sample and counts in no acknowledged, lost or spurious bytes and no ECN marks: nothing sent on the old path
+    // reaches the new path's estimate or its congestion controller.
+    void restart_path(u64 now_ns) noexcept;
+    // The first Application packet of the path the estimate follows (0 until a restart).
+    [[nodiscard]] u64 path_floor() const noexcept { return m_path_floor; }
+    // Whether `packet` of `space` was sent on the path the estimate follows: at or past path_floor() and not off_path.
+    [[nodiscard]] bool on_path(QuicSpace space, const QuicSentPacket& packet) const noexcept
+    {
+        return !packet.off_path && (space != QuicSpace::Application || packet.number >= m_path_floor);
+    }
 
     // ---- Sending ----
 
@@ -398,6 +414,7 @@ private:
     [[nodiscard]] static const QuicSentEntry& entry(const Space& space, usize index) noexcept;
     [[nodiscard]] static usize lower_bound(const Space& space, u64 number) noexcept;
     [[nodiscard]] bool acknowledges_unsent(Space& space, const QuicAck& ack) noexcept;
+    [[nodiscard]] bool on_path(const Space& space, const QuicSentPacket& packet) const noexcept;
     void settle(Space& space, QuicSentEntry& slot) noexcept;
     // Every outstanding packet of `id` leaves bytes in flight as on_discarded, and the space holds none.
     void drop_outstanding(QuicSpace id, QuicRecoveryEvents& events) noexcept;
@@ -425,7 +442,9 @@ private:
     u64              m_local_ack_delay_exponent;
     u64              m_peer_max_ack_delay_ns = kQuicDefaultMaxAckDelay * 1000000U;
     u64              m_peer_ack_delay_exponent = kQuicDefaultAckDelayExponent;
+    u64              m_initial_rtt_ns;
     u64              m_bytes_in_flight = 0U;
+    u64              m_path_floor = 0U;
     u64              m_timer_ns = kNeverNs;
     u64              m_packet_threshold = kQuicPacketThreshold;
     usize            m_reserved_entries = 0U;

@@ -270,6 +270,13 @@ public:
     Ingress* ingress = nullptr;
     const QuicTokenKeys* tokens = nullptr;
     usize answers = 0U; // the ingress's answers sent toward the client
+    // Paths (design S75): with `paths` set the server takes each client datagram as arriving from `client_at` when it
+    // left, and a server datagram reaches the client only when sent to `client_at` or to `also_at` (an address whose
+    // NAT mapping still stands; port 0 for none). The client sees its server at one address.
+    bool paths = false;
+    Endpoint client_at{IpAddress::v4(198, 51, 100, 7), 50000U};
+    Endpoint also_at;
+    usize misdirected = 0U; // server datagrams sent to an address that no longer reaches the client
     u8 minted[kQuicMaxCarriedTokenBytes] = {};
     usize minted_bytes = 0U;
 
@@ -290,6 +297,12 @@ public:
                 }
                 ++sent[from];
                 check(from, ConstSpan<u8>(out, size));
+                if (from == 1U && paths && !reaches(m_ends[1]->sent_path().peer))
+                {
+                    ++misdirected;
+                    ++dropped[1];
+                    continue;
+                }
                 Ecn ecn = m_ends[from]->marking();
                 marked[from] += (ecn != Ecn::NotEct) ? 1U : 0U;
                 const bool oversize = path[from].mtu != 0U && size > path[from].mtu;
@@ -410,7 +423,13 @@ private:
         u64 at = 0U;
         usize to = 0U;
         Ecn ecn = Ecn::NotEct;
+        Endpoint from; // a client datagram's source address as the server sees it
     };
+
+    [[nodiscard]] bool reaches(const Endpoint& to) const
+    {
+        return to == client_at || (also_at.port != 0U && to == also_at);
+    }
 
     // The codepoint a datagram arrives with. The generator is drawn only on a CE-marking path, so other paths' runs
     // stay what they were.
@@ -485,6 +504,7 @@ private:
         flight.at = departs + path[from].delay_ns + jitter;
         flight.to = 1U - from;
         flight.ecn = ecn;
+        flight.from = (from == 0U) ? client_at : Endpoint{};
     }
 
     // The ingress's verdict on a datagram for the idle server: true when the server accepted it.
@@ -536,7 +556,14 @@ private:
             accept.original_dcid = header.dcid;
             REQUIRE(to.accept(accept, now));
         }
-        to.receive(Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+        if (flight.to == 1U && paths)
+        {
+            to.receive(QuicPath{0U, flight.from}, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+        }
+        else
+        {
+            to.receive(Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+        }
         if (flight.to == 1U && tokens != nullptr && minted_bytes == 0U && to.peer_parameters_known())
         {
             CHECK_FALSE(to.give_new_token({}));

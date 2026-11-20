@@ -17,7 +17,8 @@
 //   congestion  a CE count that rises on a validated path is a congestion signal (RFC 9002 section 7.1), which the
 //               controller's on_ecn takes with the marked packets acknowledged and the newest one's send time (B.7).
 //               One reduction per recovery period bounds what a peer inflating CE can do.
-//   paths       one validator per path: a new path starts it again.
+//   paths       one validation per path: a connection's new path tests again (restart()), its counts kept, since
+//               the peer's counts in ACK frames span the connection's packet number spaces (RFC 9000 section 13.4.2).
 
 #include <crd/core/types.hpp>
 #include <crd/net/ecn.hpp>
@@ -53,6 +54,9 @@ class QuicEcnValidator
 public:
     // Starts on a new path marking with `codepoint`: Ect0 or Ect1. Anything else never marks (Off).
     void start(Ecn codepoint) noexcept;
+    // The connection moved to a new path: testing starts again with `codepoint` (Off when it marks nothing, as start()
+    // says), the counts sent and reported so far kept, so the peer's next counts still compare with them.
+    void restart(Ecn codepoint) noexcept;
     // Marks with `codepoint` (Ect0 or Ect1) from now on: the connection's controller changed. Nothing on a path that
     // never marks; the counts keep each codepoint's packets apart, so validation holds across the change.
     void set_codepoint(Ecn codepoint) noexcept;

@@ -565,8 +565,8 @@ TEST_CASE("QUIC server: an IPv6 client's stateless reset is found by its token, 
     CHECK(fleet->server.live_tokens() == 0U);
 }
 
-TEST_CASE("QUIC server: another address is dropped, a late first Initial opens nothing, and a client's stateless reset "
-          "ends its connection unanswered",
+TEST_CASE("QUIC server: an Initial from another address and a late first Initial open nothing, and a client's "
+          "stateless reset ends its connection unanswered",
           "[net][4.2a][quic-server]")
 {
     // The client's own IDs carry stateless reset tokens of its host's key (declared first: they outlive its
@@ -591,7 +591,7 @@ TEST_CASE("QUIC server: another address is dropped, a late first Initial opens n
 
     // A late copy of the first Initial reaches the connection, which no longer reads Initials: no second connection.
     fleet->inject(ConstSpan<u8>(first, first_bytes), client.peer, fleet->now + kMs);
-    // The same client datagram from another address is dropped (NET-PATH validates migrations).
+    // The same client datagram from another address opens nothing: a path not known opens only 1-RTT packets.
     fleet->inject(ConstSpan<u8>(first, first_bytes), client_peer(5U), fleet->now + kMs);
     fleet->advance(fleet->now + 50U * kMs);
     CHECK(fleet->server.live() == 1U);
@@ -751,4 +751,53 @@ TEST_CASE("QUIC server: configurations out of range and refused allocations leav
     }
     CHECK(built);
     CHECK(refusals > 8U);
+}
+
+TEST_CASE("QUIC server: a client's NAT rebinding and then its move to another address are followed, validated and "
+          "given a token for each address",
+          "[net][net-path][quic-server]")
+{
+    Identity identity;
+    auto fleet = std::make_unique<Fleet>(identity, Setup{});
+    Client& client = fleet->add(QuicVersion::V1, 0U, client_peer(0U));
+    REQUIRE(fleet->run_until(
+        [&] { return client.connection->confirmed() && client.echo() && !client.connection->new_token().empty(); }));
+    QuicConnection* const served = fleet->server.connection(fleet->app.last);
+    REQUIRE(served != nullptr);
+    CHECK(fleet->server.counters().new_tokens == 1U);
+    u8 token[kQuicMaxCarriedTokenBytes] = {};
+    usize token_bytes = 0U;
+    const auto keep_token = [&]
+    {
+        const ConstSpan<u8> held = client.connection->new_token();
+        std::memcpy(token, held.data(), held.size());
+        token_bytes = held.size();
+    };
+    const auto token_changed = [&]
+    {
+        const ConstSpan<u8> held = client.connection->new_token();
+        return held.size() != token_bytes || std::memcmp(token, held.data(), held.size()) != 0;
+    };
+    keep_token();
+
+    // A NAT rebinding: the client's port changes, and its old mapping is gone at once.
+    client.peer = Endpoint{client_peer(0U).address, 41000U};
+    client.connection->ping();
+    REQUIRE(fleet->run_until(
+        [&] { return served->path().peer == client.peer && served->address_validated() && token_changed(); }));
+    CHECK(served->recovery().path_floor() == 0U); // only the port changed
+    CHECK(fleet->server.counters().new_tokens == 2U);
+    CHECK(fleet->server.counters().foreign_path >= 1U);
+    keep_token();
+
+    // A move to another address: validated again, congestion control started again, and another token.
+    client.peer = Endpoint{IpAddress::v4(203, 0, 113, 9), 41000U};
+    client.connection->ping();
+    REQUIRE(fleet->run_until(
+        [&] { return served->path().peer == client.peer && served->address_validated() && token_changed(); }));
+    CHECK(served->recovery().path_floor() != 0U);
+    CHECK(fleet->server.counters().new_tokens == 3U);
+    CHECK(served->counters().migrations == 2U);
+    CHECK(client.connection->state() == QuicConnectionState::Established);
+    CHECK(served->state() == QuicConnectionState::Established);
 }

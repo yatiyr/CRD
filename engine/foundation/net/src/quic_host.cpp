@@ -118,6 +118,7 @@ QuicConnection* QuicHost::build(u32 index, QuicConnectionConfig config, const En
 {
     u8 seed[crypto::kPrfKeyBytes] = {};
     config.ids = &m_ids[index];
+    config.path = QuicPath{0U, peer};
     if (config.parameters.max_udp_payload_size > m_limits.receive_bytes)
     {
         config.parameters.max_udp_payload_size = m_limits.receive_bytes; // what the loop reads whole
@@ -208,6 +209,18 @@ void QuicHost::enlist(u32 index, QuicConnection& connection, const Endpoint& pee
     schedule(index, now_ns);
 }
 
+void QuicHost::follow_path(u32 index) noexcept
+{
+    Slot& slot = m_slots[index];
+    const Endpoint peer = slot.connection->path().peer;
+    if (!(peer == slot.peer))
+    {
+        unindex_peer(index);
+        slot.peer = peer;
+        index_peer(index);
+    }
+}
+
 void QuicHost::index_peer(u32 index) noexcept
 {
     Slot& slot = m_slots[index];
@@ -278,20 +291,13 @@ void QuicHost::on_route(const IngressDecision& decision, const ReceivedDatagram&
     {
         return;
     }
-    Slot& slot = m_slots[decision.connection];
-    const bool unbound = slot.peer.port == 0U;
-    if (!unbound && !(datagram.peer == slot.peer))
+    const Slot& slot = m_slots[decision.connection];
+    if (slot.peer.port != 0U && !(datagram.peer == slot.peer))
     {
-        ++m_counters.foreign_path;
-        return;
+        ++m_counters.foreign_path; // the connection validates the path or drops it (RFC 9000 section 9)
     }
-    const u64 opened = connection->counters().packets_opened;
-    connection->receive(datagram.storage.first(datagram.size), datagram.ecn, now_ns);
-    if (unbound && connection->counters().packets_opened != opened)
-    {
-        slot.peer = datagram.peer;
-        index_peer(decision.connection);
-    }
+    connection->receive(QuicPath{0U, datagram.peer}, datagram.storage.first(datagram.size), datagram.ecn, now_ns);
+    follow_path(decision.connection);
     schedule(decision.connection, now_ns);
 }
 
@@ -426,6 +432,7 @@ void QuicHost::serve(u32 index, u64 now_ns) noexcept
     {
         service(index, connection, now_ns);
     }
+    follow_path(index); // a failed validation may have reverted the path
     // A slot with no peer yet has no one to send to: what a stranger's datagrams credited waits for the binding packet.
     const bool drained = slot.peer.port == 0U || drain(slot, now_ns);
     if (connection.state() == QuicConnectionState::Closed)
@@ -455,7 +462,7 @@ bool QuicHost::drain(Slot& slot, u64 now_ns) noexcept
         {
             return true;
         }
-        m_queue.push(written, slot.peer, slot.connection->marking());
+        m_queue.push(written, slot.connection->sent_path().peer, slot.connection->marking());
     }
 }
 

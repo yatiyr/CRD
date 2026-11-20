@@ -15,7 +15,8 @@
 // receive timestamps (#receive-timestamps) the peer's arrival times drive it the same way. Its probes (#gcc-probing)
 // fill their clusters with padding where a media source has too little and find the path past the source's rate,
 // from ACK frames alone or from receive timestamps. Receive timestamps are reported only when both ends ask for
-// them, and hold over paths that lose, duplicate and reorder.
+// them, and hold over paths that lose, duplicate and reorder. And paths (#migration): transfers both ways follow a NAT
+// rebinding and an address change over lossy, duplicating, reordering paths.
 
 #include "ingress_fixture.hpp"
 #include "quic_connection_fixture.hpp"
@@ -307,6 +308,67 @@ TEST_CASE("QUIC congestion: transfers over paths that lose, duplicate and reorde
             CHECK(state.window >= ((algorithm == CongestionAlgorithm::Bbr) ? 4U : 2U) * 1200U);
             CHECK(pair.client.state() == QuicConnectionState::Established);
         }
+    }
+}
+
+TEST_CASE("QUIC paths: transfers both ways follow a NAT rebinding and then an address change over paths that lose, "
+          "duplicate and reorder, and arrive intact",
+          "[net][net-path][quic-connection]")
+{
+    for (u64 seed = 1U; seed <= 3U; ++seed)
+    {
+        INFO("seed " << seed);
+        Pair pair(CongestionPolicy{}, seed);
+        Net& net = *pair.net;
+        net.rng.state = seed;
+        net.paths = true;
+        for (Path& path : net.path)
+        {
+            path.loss = 20U;
+            path.duplicate = 10U;
+            path.jitter_ns = 10U * kMs;
+        }
+        pair.confirm();
+        REQUIRE(pair.server.path().peer == net.client_at);
+        // The client streams to the server and the server back on the same stream.
+        constexpr u64 kTotal = 1U << 19U;
+        Bulk up{pair.client, pair.server, kTotal};
+        u64 down_written = 0U;
+        u64 down_read = 0U;
+        const auto step = [&]
+        {
+            const bool up_done = up.step();
+            if (pair.server.streams().recv_state(kStream) != QuicRecvState::None && down_written < kTotal)
+            {
+                static_cast<void>(write_pattern(pair.server.streams(), kStream, down_written, kTotal, 7U, false));
+            }
+            if (pair.client.streams().recv_state(kStream) != QuicRecvState::None)
+            {
+                static_cast<void>(drain(pair.client.streams(), kStream, down_read, 7U));
+            }
+            return up_done && down_read >= kTotal;
+        };
+        REQUIRE(net.run_until([&] { return step() || (up.read >= kTotal / 3U && down_read >= kTotal / 3U); },
+                              600000U * kMs));
+        // A NAT rebinding: the client's port changes and the old mapping is gone at once.
+        net.client_at.port = 50001U;
+        REQUIRE(net.run_until([&] { return step() || (up.read >= 2U * kTotal / 3U && down_read >= 2U * kTotal / 3U); },
+                              600000U * kMs));
+        CHECK(pair.server.path().peer == net.client_at);
+        CHECK(pair.server.recovery().path_floor() == 0U); // only the port changed
+        CHECK(pair.server.address_validated());
+        const u64 rebound = pair.server.counters().migrations;
+        CHECK(rebound >= 1U);
+        // A move to another address: the server's congestion control and RTT estimate start again.
+        net.client_at = Endpoint{IpAddress::v4(203, 0, 113, 5), 40000U};
+        REQUIRE(net.run_until([&] { return step(); }, 600000U * kMs));
+        CHECK(pair.server.path().peer == net.client_at);
+        CHECK(pair.server.recovery().path_floor() != 0U);
+        CHECK(pair.server.counters().migrations > rebound);
+        CHECK(pair.server.counters().path_validations >= 2U);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+        CHECK(pair.server.state() == QuicConnectionState::Established);
+        CHECK(net.misdirected != 0U); // the server's datagrams that still went the old way were lost, and recovered
     }
 }
 

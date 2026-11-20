@@ -40,7 +40,6 @@ QuicServer::QuicServer(memory::IAllocator& allocator, DatagramSocket& socket, co
     {
         return;
     }
-    m_config.connection.parameters.disable_active_migration = true;
     {
         // One connection built from the configuration proves it before any client depends on it.
         QuicConnectionConfig probe = m_config.connection;
@@ -154,6 +153,7 @@ void QuicServer::on_admit(const IngressDecision& decision, const ReceivedDatagra
 
     admitted.client_routed = true;
     admitted.token_given = false;
+    admitted.tokenless = false;
     enlist(index, *connection, datagram.peer, now_ns);
     ++m_counters.admitted;
     m_events.on_accept(handle_of(index), *connection, datagram.peer);
@@ -180,7 +180,7 @@ QuicHandle QuicServer::open_keyed(const Endpoint& client, QuicKeyedStart start, 
         return handle;
     }
     m_admitted[index] = Admitted{};
-    m_admitted[index].token_given = true; // a keyed path proves its address by the session, and needs no token
+    m_admitted[index].tokenless = true; // a keyed path proves its address by the session, and needs no token
     ++m_counters.admitted;
     return handle;
 }
@@ -244,16 +244,22 @@ void QuicServer::service(u32 index, QuicConnection& connection, u64 now_ns) noex
 {
     m_events.on_service(handle_of(index), connection, now_ns);
     Admitted& admitted = m_admitted[index];
-    if (admitted.token_given || m_tokens == nullptr || !m_config.new_tokens || !connection.peer_parameters_known() ||
+    const Endpoint& peer = peer_of(index);
+    // One token for the address the connection opened on, and one more for each validated address the client moves
+    // to (RFC 9000 section 9.3).
+    const bool given = admitted.token_given && (admitted.token_peer == peer || !connection.address_validated());
+    if (given || admitted.tokenless || m_tokens == nullptr || !m_config.new_tokens ||
+        !connection.peer_parameters_known() ||
         (connection.state() != QuicConnectionState::Handshaking &&
          connection.state() != QuicConnectionState::Established))
     {
         return;
     }
     admitted.token_given = true;
+    admitted.token_peer = peer;
     u8 token[kQuicMaxCarriedTokenBytes] = {};
     usize written = 0U;
-    if (m_tokens->mint_new_token(connection.version(), quic_token_peer(peer_of(index)), m_clock.unix_seconds(),
+    if (m_tokens->mint_new_token(connection.version(), quic_token_peer(peer), m_clock.unix_seconds(),
                                  cont::Span<u8>(token, sizeof(token)), written) == crypto::CryptoError::None &&
         connection.give_new_token(cont::ConstSpan<u8>(token, written)))
     {

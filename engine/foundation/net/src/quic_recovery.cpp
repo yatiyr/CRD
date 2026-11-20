@@ -359,6 +359,7 @@ QuicRecovery::QuicRecovery(const QuicRecoveryConfig& config, cont::Span<QuicSent
     : m_side(config.side),
       m_local_max_ack_delay_ns(config.local_max_ack_delay_ns),
       m_local_ack_delay_exponent(min_u64(config.local_ack_delay_exponent, kQuicMaxAckDelayExponent)),
+      m_initial_rtt_ns(min_u64(config.initial_rtt_ns, kMaxRttNs)),
       m_reserved_entries(config.reserved_entries)
 {
     m_spaces[quic_space_index(QuicSpace::Initial)].entries     = initial;
@@ -368,8 +369,35 @@ QuicRecovery::QuicRecovery(const QuicRecoveryConfig& config, cont::Span<QuicSent
     {
         m_spaces[i].received.reset(static_cast<QuicSpace>(i));
     }
-    m_rtt.smoothed_ns = min_u64(config.initial_rtt_ns, kMaxRttNs);
+    m_rtt.smoothed_ns = m_initial_rtt_ns;
     m_rtt.variance_ns = m_rtt.smoothed_ns / 2U;
+}
+
+bool QuicRecovery::on_path(const Space& space, const QuicSentPacket& packet) const noexcept
+{
+    return on_path(static_cast<QuicSpace>(&space - m_spaces), packet);
+}
+
+void QuicRecovery::restart_path(u64 now_ns) noexcept
+{
+    Space& space = m_spaces[quic_space_index(QuicSpace::Application)];
+    for (usize i = 0U; i < space.count; ++i)
+    {
+        const QuicSentEntry& slot = entry(space, i);
+        if (slot.state == kOutstanding && slot.packet.in_flight && on_path(space, slot.packet))
+        {
+            m_bytes_in_flight -= slot.packet.bytes;
+        }
+    }
+    m_path_floor = space.next_number;
+    m_rtt = QuicRtt{};
+    m_rtt.smoothed_ns = m_initial_rtt_ns;
+    m_rtt.variance_ns = m_rtt.smoothed_ns / 2U;
+    m_packet_threshold = kQuicPacketThreshold;
+    m_reorder_steps = 0U;
+    m_reorder_persist = 0U;
+    m_pto_count = 0U;
+    arm(now_ns);
 }
 
 QuicSentEntry& QuicRecovery::entry(Space& space, usize index) noexcept
@@ -434,7 +462,7 @@ void QuicRecovery::settle(Space& space, QuicSentEntry& slot) noexcept
 {
     if (slot.packet.in_flight)
     {
-        m_bytes_in_flight -= slot.packet.bytes;
+        m_bytes_in_flight -= on_path(space, slot.packet) ? slot.packet.bytes : 0U;
         if (slot.packet.ack_eliciting)
         {
             --space.eliciting_in_flight;
@@ -699,7 +727,7 @@ QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& pack
     space.next_number = packet.number + 1U;
     if (slot.packet.in_flight)
     {
-        m_bytes_in_flight += packet.bytes;
+        m_bytes_in_flight += on_path(space, slot.packet) ? packet.bytes : 0U;
         if (packet.ack_eliciting)
         {
             ++space.eliciting_in_flight;
@@ -795,13 +823,14 @@ QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents&
         slot.state   = by_time ? kLostByTime : kLost;
         slot.lost_ns = now_ns;
         ++loss.packets;
-        if (packet.in_flight)
+        if (packet.in_flight && on_path(space, packet))
         {
             loss.bytes += packet.bytes;
         }
         loss.newest_sent_ns = max_u64(loss.newest_sent_ns, packet.sent_ns);
         // A lost PMTU probe says nothing of congestion (RFC 9000 section 14.4): it neither starts nor ends a run.
-        if (packet.ack_eliciting && !packet.path_probe && m_rtt.sampled() && packet.sent_ns >= m_rtt.first_sample_ns)
+        if (packet.ack_eliciting && !packet.path_probe && on_path(space, packet) && m_rtt.sampled() &&
+            packet.sent_ns >= m_rtt.first_sample_ns)
         {
             run_first = min_u64(run_first, packet.sent_ns);
             run_last  = max_u64(run_last, packet.sent_ns);
@@ -847,7 +876,7 @@ QuicLoss QuicRecovery::make_room(QuicSpace id, usize entries, u64 now_ns, QuicRe
         slot.state   = kLost;
         slot.lost_ns = now_ns;
         ++loss.packets;
-        loss.bytes += slot.packet.in_flight ? slot.packet.bytes : 0U;
+        loss.bytes += (slot.packet.in_flight && on_path(space, slot.packet)) ? slot.packet.bytes : 0U;
         loss.newest_sent_ns = max_u64(loss.newest_sent_ns, slot.packet.sent_ns);
         events.on_lost(id, slot.packet);
     }
@@ -895,13 +924,14 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
             for (usize i = lower_bound(space, range.smallest); i < end; ++i)
             {
                 QuicSentEntry& slot = entry(space, i);
+                const bool counted = on_path(space, slot.packet);
                 if (held_lost(id, slot, now_ns))
                 {
                     reordering = max_u64(reordering, prior_largest - slot.packet.number + 1U);
                     by_time    = by_time || slot.state == kLostByTime;
                     slot.state = kAcked;
                     ++out.spurious_packets;
-                    out.spurious_bytes += slot.packet.in_flight ? slot.packet.bytes : 0U;
+                    out.spurious_bytes += (slot.packet.in_flight && counted) ? slot.packet.bytes : 0U;
                     events.on_spurious(id, slot.packet, slot.lost_ns);
                 }
                 else if (slot.state == kOutstanding)
@@ -909,7 +939,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                     settle(space, slot);
                     slot.state = kAckedPending;
                     ++out.acked_packets;
-                    if (slot.packet.in_flight)
+                    if (slot.packet.in_flight && counted)
                     {
                         out.acked_bytes += slot.packet.bytes;
                     }
@@ -919,8 +949,8 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                     continue;
                 }
                 eliciting = eliciting || slot.packet.ack_eliciting;
-                out.ect0_packets += (slot.packet.ecn == Ecn::Ect0) ? 1U : 0U;
-                out.ect1_packets += (slot.packet.ecn == Ecn::Ect1) ? 1U : 0U;
+                out.ect0_packets += (counted && slot.packet.ecn == Ecn::Ect0) ? 1U : 0U;
+                out.ect1_packets += (counted && slot.packet.ecn == Ecn::Ect1) ? 1U : 0U;
                 if (largest_newly == kQuicNoPacket || slot.packet.number > largest_newly)
                 {
                     largest_newly = slot.packet.number;
@@ -951,7 +981,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
         }
         m_reorder_persist = kQuicReorderPersist;
     }
-    if (largest_newly == ack.largest && eliciting)
+    if (largest_newly == ack.largest && eliciting && (id != QuicSpace::Application || largest_newly >= m_path_floor))
     {
         const u64 latest = (now_ns > largest_sent) ? now_ns - largest_sent : 0U;
         m_rtt.sample(latest, decoded_ack_delay_ns(id, ack.delay), m_confirmed, m_peer_max_ack_delay_ns, now_ns);

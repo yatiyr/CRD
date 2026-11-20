@@ -8,8 +8,10 @@
 //             finds nothing. The connections' storage holds one more than the pool: the spare, where a connection is
 //             built before it goes live, and where a client's successor is built while its predecessor still stands
 //             (after Version Negotiation), so a refused successor leaves the predecessor to be reported.
-//   route     a connection reads datagrams from its peer's address only: another address would be a migration or a
-//             NAT rebinding, which NET-PATH validates (section 9); until then they are dropped and counted. A keyed
+//   route     a connection takes the datagrams routed to it from any address as arriving on that path, and the
+//             host's peer address follows the connection's path (QuicConnection::path(), section 9: a server follows
+//             its client's migration or NAT rebinding once the path validates, a client drops datagrams from an
+//             unknown server address). Each datagram goes on the path the connection named (sent_path()). A keyed
 //             server's slot opened with no peer takes the address of the first packet that opens (S55).
 //   service   a connection that received, whose timer is due or that the application woke is served in on_timers,
 //             once per turn: its timeout, the host's service (the application's turn), then its datagrams into the
@@ -79,7 +81,7 @@ struct QuicHostLimits
 struct QuicHostCounters
 {
     u64 closed = 0U;
-    u64 foreign_path = 0U;    // datagrams routed to a connection from another address (NET-PATH's migration)
+    u64 foreign_path = 0U;    // datagrams routed to a connection from an address other than its path's
     u64 peer_resets = 0U;     // a peer's stateless reset ended a connection
     u64 too_big = 0U;         // Packet Too Big reports a connection to their address matched (on_too_big)
     u64 too_big_refused = 0U; // and those none did: forged, stale or for a packet already acknowledged
@@ -181,6 +183,8 @@ private:
     virtual void after_turn(u64 now_ns) noexcept;
 
     void serve(u32 index, u64 now_ns) noexcept;
+    // The slot's bound peer follows its connection's path.
+    void follow_path(u32 index) noexcept;
     // Whether the connection's datagrams are all queued (false: the host is busy and the queue full).
     [[nodiscard]] bool drain(Slot& slot, u64 now_ns) noexcept;
     void flush() noexcept;

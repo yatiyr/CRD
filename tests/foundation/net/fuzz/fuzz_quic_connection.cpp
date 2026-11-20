@@ -15,9 +15,14 @@
 //   3  frames from a raw peer of the raw UDP path: its hello, then each [length][bytes] sealed as one 1-RTT packet.
 // With bit 5 mode 0 runs the raw UDP path (S55): both ends opened from one secret, no handshake on the wire. With
 // bit 6 every connection asks for four receive timestamps an ACK frame (draft-ietf-quic-receive-ts-03), so the pair
-// reports them and a raw peer's ACK_RECEIVE_TIMESTAMPS frames are read.
+// reports them and a raw peer's ACK_RECEIVE_TIMESTAMPS frames are read. With bit 7 mode 0 runs over paths (S75): each
+// client datagram reaches the server from the client's address when it left, a server datagram reaches the client
+// only when sent to its address now, a script byte 0xFC moves the client to the next of four addresses (a NAT
+// rebinding, an address change, an IPv6 address, back) and 0xFB delivers a copy of the first client datagram in
+// flight from another address first, as an off-path attacker forwarding it would.
 //
-// Oracles. Always: a server sends at most three times what it received before the address is proven; every client
+// Oracles. Always: a server sends at most three times what it received before the address is proven, and on paths
+// at most three times what arrived from each address it has not validated since it last knew it; every client
 // datagram carrying an Initial has 1200 bytes; a server's datagrams keep to its path's size but for PMTU probes, which
 // keep to its ceiling; nothing is allocated after construction; a close names a transport
 // error of RFC 9000 section 20.1 (or RFC 9368's) or CRYPTO_ERROR when this side closes. Script: after the clean path,
@@ -29,7 +34,8 @@
 // the IDs its connection holds, after every step; a script byte 0xFE rotates the server's IDs; and a confirmed client
 // that a stateless reset of the ID it sends to reaches drains, while a forged token changes nothing. A confirmed pair
 // agrees on whether a Retry was taken; the server accepts it only for an Initial to the Retry's ID. A confirmed pair
-// runs one version: the other one after a switch, the configured one otherwise. 0-RTT: an offer ends Accepted or
+// runs one version: the other one after a switch, the configured one otherwise. Paths: a confirmed pair that carried
+// its stream has the server sending to the client's address. 0-RTT: an offer ends Accepted or
 // Rejected on both ends alike; accepted, the server reads the early stream whole and unchanged, never marking more
 // bytes replayable than came; rejected, the client's streams were reset and the server opened none of them.
 #include <crd/core/platform.hpp>
@@ -334,7 +340,24 @@ struct Flight
     usize size = 0U;
     usize to = 0U;
     Ecn ecn = Ecn::NotEct; // as the sender marked it, or as the path rewrote it
+    usize path = 0U;       // a client datagram's address (kClientPaths) when it left
 };
+
+// The client's addresses over paths (byte 0's bit 7): a NAT rebinding of the first, another address, an IPv6 one.
+constexpr u8 kClientV6[16] = {0x20U, 0x01U, 0x0DU, 0xB8U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U};
+const QuicPath kClientPaths[4] = {
+    QuicPath{0U, Endpoint{IpAddress::v4(198, 51, 100, 7), 50000U}},
+    QuicPath{0U, Endpoint{IpAddress::v4(198, 51, 100, 7), 50001U}},
+    QuicPath{0U, Endpoint{IpAddress::v4(203, 0, 113, 5), 50000U}},
+    QuicPath{0U, Endpoint{IpAddress::v6(kClientV6), 443U}},
+};
+
+// Whether this input's script runs over paths (byte 0's bit 7).
+bool& over_paths()
+{
+    static bool paths = false;
+    return paths;
+}
 
 // MSVC C4324 as for crd::crypto::AeadKey: the connections are 16-byte aligned; ARM64 MSVC reports the padding.
 #if CRD_COMPILER_MSVC
@@ -354,6 +377,9 @@ struct Pair
     QuicVersion version;
     bool keyed = false; // the raw UDP path: no handshake to confirm, so it stands once both ends read the other's hello
     bool retry_sent = false;
+    usize client_path = 0U;    // the client's address now (over paths)
+    u64 path_received[4] = {}; // bytes the server was given from each address since it last did not know it
+    u64 path_sent[4] = {};     // and sent there
 
     explicit Pair(QuicVersion run, bool switching = false, Tickets* tickets = nullptr, bool raw_path = false)
         : client_host(allocator, 0U,
@@ -414,10 +440,32 @@ struct Pair
         {
             CRD_FUZZ_REQUIRE(datagram.size() >= kQuicMinInitialDatagram);
         }
-        if (from == 1U && !server.address_validated())
+        // Before its first path is proven (a later one is held to its own count below).
+        if (from == 1U && !server.address_validated() && server.counters().migrations == 0U)
         {
             CRD_FUZZ_REQUIRE(server.counters().bytes_sent <= 3U * server.counters().bytes_received);
         }
+        const usize to = path_of(server.sent_path());
+        if (from == 1U && to < 4U)
+        {
+            path_sent[to] += datagram.size();
+            const usize slot = server.paths().find(server.sent_path());
+            CRD_FUZZ_REQUIRE(slot != kQuicNoPath);
+            CRD_FUZZ_REQUIRE(server.paths().validated(slot) || path_sent[to] <= 3U * path_received[to]);
+        }
+    }
+
+    // The index of `path` among kClientPaths; 4 for none (the server's unbound first path).
+    [[nodiscard]] static usize path_of(const QuicPath& path)
+    {
+        for (usize index = 0U; index < 4U; ++index)
+        {
+            if (path == kClientPaths[index])
+            {
+                return index;
+            }
+        }
+        return 4U;
     }
 
     void flush()
@@ -434,12 +482,16 @@ struct Pair
                     break;
                 }
                 check_sent(from, ConstSpan<u8>(out, size));
-                if (count < kFlights)
+                // Over paths a server datagram to an address the client left is lost: its NAT mapping is gone.
+                const bool reaches = from == 0U || !over_paths() || path_of(server.sent_path()) == client_path ||
+                                     path_of(server.sent_path()) == 4U;
+                if (count < kFlights && reaches)
                 {
                     std::memcpy(flights[count].bytes, out, size);
                     flights[count].size = size;
                     flights[count].to = 1U - from;
                     flights[count].ecn = ends[from]->marking();
+                    flights[count].path = client_path;
                     ++count;
                 }
             }
@@ -470,7 +522,21 @@ struct Pair
                 return;
             }
         }
-        to.receive(Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+        if (flight.to == 1U && over_paths())
+        {
+            const QuicPath& from = kClientPaths[flight.path];
+            if (server.paths().find(from) == kQuicNoPath)
+            {
+                path_received[flight.path] = 0U; // a path the server does not know starts its count again
+                path_sent[flight.path] = 0U;
+            }
+            path_received[flight.path] += flight.size;
+            to.receive(from, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+        }
+        else
+        {
+            to.receive(Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+        }
         check_closed(to);
         // Whatever the path does to codepoints, a failed validation stays failed.
         const bool failed = to.ecn().state() == QuicEcnState::Failed;
@@ -817,6 +883,28 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             pair.retry();
             continue;
         }
+        if (op == 0xFCU && over_paths())
+        {
+            pair.client_path = (pair.client_path + 1U) % 4U;
+            continue;
+        }
+        if (op == 0xFBU && over_paths())
+        {
+            for (usize index = 0U; index < pair.count; ++index)
+            {
+                if (pair.flights[index].to == 1U && pair.count < kFlights)
+                {
+                    // The copy arrives first, from another address; the original follows from the client's.
+                    Flight& copy = pair.flights[pair.count++];
+                    copy = pair.flights[index];
+                    copy.path = (copy.path + 2U) % 4U;
+                    pair.deliver(pair.count - 1U);
+                    pair.remove(pair.count - 1U);
+                    break;
+                }
+            }
+            continue;
+        }
         switch (op & 7U)
         {
             case 0U:
@@ -905,6 +993,10 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             settle_early_datagram(pair, decided == TlsEarlyData::Accepted);
         }
         transfer(pair);
+        if (over_paths() && pair.established())
+        {
+            CRD_FUZZ_REQUIRE(pair.server.path() == kClientPaths[pair.client_path]);
+        }
         exchange_datagrams(pair, offered ? 1U : 0U);
         stateless_reset(pair);
     }
@@ -1173,6 +1265,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     const ConstSpan<u8> rest(data + 1U, size - 1U);
     const bool keyed = (data[0] & 32U) != 0U;
     receive_timestamps() = ((data[0] & 64U) != 0U) ? 4U : 0U;
+    over_paths() = (data[0] & 128U) != 0U;
     switch (data[0] & 3U)
     {
         case 0U:
@@ -1196,6 +1289,12 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     // A script: deliver everything in order with a timer step between flights.
     const u8 clean[] = {0x00U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
     sink.add("script-clean", clean, sizeof(clean));
+    // Over paths: confirmed, then a NAT rebinding, an address change and an off-path attacker's copy.
+    const u8 moved[] = {0x80U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x07U, 0x07U, 0xFCU, 0x07U,
+                        0x00U, 0x07U, 0x00U, 0x07U, 0xFCU, 0x07U, 0x00U, 0xFBU, 0x07U, 0x00U, 0x07U, 0x00U};
+    sink.add("script-paths", moved, sizeof(moved));
+    const u8 keyed_moved[] = {0xA0U, 0x00U, 0x07U, 0x00U, 0xFCU, 0xFCU, 0x07U, 0x00U, 0xFBU, 0x07U, 0x00U};
+    sink.add("script-paths-keyed", keyed_moved, sizeof(keyed_moved));
     // The same with receive timestamps, and a raw client's ACK_RECEIVE_TIMESTAMPS of the server's first 1-RTT packet.
     const u8 timed[] = {0x40U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
     sink.add("script-receive-timestamps", timed, sizeof(timed));
