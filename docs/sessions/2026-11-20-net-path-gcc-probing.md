@@ -7,17 +7,14 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S74](../design/network-f
 
 ## CI first (scheduled runs 43003055646 to 44723313119, all on 6f4cfed5)
 
-- win-relwithdebinfo (44723313119): the runner's MSVC moved from 14.51 to 14.52.37025, whose LTCG raises C4723
-  (potential divide by 0) under /WX in `clock.cpp`'s line sums and `mat_types.hpp`'s Mat2 `try_solve`. Both divisions
-  are now guarded as `otg.hpp`'s are: `line_sums` divides only by a non-zero weight (every caller has a point of
-  positive weight), and `try_inverse`/`try_solve` refuse an exact zero determinant, which only a bound of 0 or below
-  let divide (new cases). This PC's 14.51 never warned; only the next hosted run confirms it.
-- linux-gcc-public-checks, picoquic Prague (3 of 9 runs): Cerid's client direction ran 0.775 to 0.781 busy, under the
-  0.8 floor, whenever picoquic's echo was held by the same AQM about as often (577 to 720 marks) and itself ran 0.676 to
-  0.73; unheld runs reach 0.96. The floor is now peer-relative in that case (`busy_floor`).
-- linux-gcc-public-checks, qmux crate over h3 with 5% loss (3 of 9 runs): the Quinn client's one CONNECTION_CLOSE was
-  lost and the Cerid server lingered out (`h3_close=local`). A lingering server now PINGs every 50 ms, so a closing
-  client answers with its CONNECTION_CLOSE again (RFC 9000 section 10.2.1) within its 300 ms drain.
+- win-relwithdebinfo (44723313119): the runner's MSVC 14.52.37025 LTCG raises C4723 under /WX in `clock.cpp`'s line
+  sums and `mat_types.hpp`'s `try_solve`. Guarded as `otg.hpp` is: a non-zero weight; an exact zero determinant
+  refused (only a bound <= 0 let it divide; geometry callers pass positive bounds, their tests pass). Unconfirmed
+  until a hosted run: this PC's 14.51 never warned.
+- picoquic Prague (3 of 9 runs): Cerid ran 0.775 to 0.781 busy beside picoquic's own 0.676 to 0.73 when the AQM held
+  both ways; the 0.8 floor is now peer-relative then (`busy_floor`). qmux crate h3 at 5% loss (3 of 9): the Quinn
+  client's one CONNECTION_CLOSE was lost; a lingering server now PINGs every 50 ms (RFC 9000 section 10.2.1).
+  Both pass locally once; a 1-in-3 flake is confirmed only by hosted runs.
 - Open: webtransport-go `closer client window 65536` (1 of 9): the Go peer saw the CONNECT stream's STOP_SENDING
   (WT_SESSION_GONE) before Cerid's WT_CLOSE_SESSION capsule, which the 64 KiB window held back. Next batch.
 - Not this track's: linux-clang-tsan `test_fault_classification.cpp:929` (44723313119).
@@ -27,7 +24,7 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S74](../design/network-f
 - GCC's probing (interface version 6): libwebrtc's ProbeController, BitrateProber, ProbeBitrateEstimator and
   AlrDetector, as S74 describes; `probe`, `probe_alr`, `probe_initial`; `probe_bytes()`.
 - QUIC: 1-RTT packets pad to their datagram while a probe wants bytes, only when the window and the pacer let data go;
-  a probe wanting bytes arms the pacer's timer (`probe_fills`).
+  a probe wanting bytes arms the pacer's timer (`probe_fills`). No test yet fails with that gate removed (next).
 - Fuzzing: the switches in byte 1 and the probe's bounds; seeds `gcc-probe-alr`, `gcc-probe-initial` from the writer.
 
 ## Evidence

@@ -235,7 +235,8 @@ TEST_CASE("QUIC congestion: the pacer holds a window with room, and its release 
     CHECK(pair.client.next_timer_ns() > release);
 }
 
-TEST_CASE("QUIC congestion: a full window holds data while ACK-only packets still go", "[net][net-path][quic-connection]")
+TEST_CASE("QUIC congestion: a full window holds data while ACK-only packets still go",
+          "[net][net-path][quic-connection]")
 {
     CongestionPolicy unpaced;
     unpaced.pacing = false;
@@ -842,7 +843,8 @@ TEST_CASE("QUIC GCC: probes pad and find the path inside the window while the pr
         back_total += kBack;
         if (pair.server.streams().recv_state(kStream) != QuicRecvState::None)
         {
-            static_cast<void>(write_pattern(pair.server.streams(), kStream, back_sent, back_total, kStream + 1U, false));
+            static_cast<void>(
+                write_pattern(pair.server.streams(), kStream, back_sent, back_total, kStream + 1U, false));
         }
         static_cast<void>(drain(pair.client.streams(), kStream, back_read, kStream + 1U));
         pair.net->advance(pair.net->now + 20U * kMs);

@@ -3714,8 +3714,8 @@ private:
     void remember_least(u64 now_ns) noexcept
     {
         usize expired = 0U;
-        while (expired < m_least_count &&
-               (now_ns < m_least[expired].at_ns || now_ns - m_least[expired].at_ns + kGccHistorySlackNs > kGccHistoryNs))
+        while (expired < m_least_count && (now_ns < m_least[expired].at_ns ||
+                                           now_ns - m_least[expired].at_ns + kGccHistorySlackNs > kGccHistoryNs))
         {
             ++expired;
         }
