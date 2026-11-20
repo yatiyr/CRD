@@ -548,20 +548,20 @@ struct Pair
             to.receive(Span<u8>(flight.bytes, flight.size), flight.ecn, now);
         }
         check_closed(to);
-        // Whatever the path does to codepoints, a failed validation stays failed for the path's life: a move to
-        // another path validates again (RFC 9000 section 13.4.2).
+        // Whatever the path does to codepoints, a failed validation stays failed for the path's life: a confirmed new
+        // path, where recovery's path floor moves with it, validates again (RFC 9000 section 13.4.2).
         const bool failed = to.ecn().state() == QuicEcnState::Failed;
-        const u64 moves = to.counters().migrations;
-        CRD_FUZZ_REQUIRE(failed || !ecn_failed[flight.to] || moves != ecn_moves[flight.to]);
+        const u64 floor = to.recovery().path_floor();
+        CRD_FUZZ_REQUIRE(failed || !ecn_failed[flight.to] || floor != ecn_floor[flight.to]);
         ecn_failed[flight.to] = failed;
-        ecn_moves[flight.to] = moves;
+        ecn_floor[flight.to] = floor;
         check_hosts();
     }
 
     void remove(usize index) { flights[index] = flights[--count]; }
 
     bool ecn_failed[2] = {}; // each end's ECN validation failed
-    u64 ecn_moves[2] = {};   // and the moves to another path before it (QuicConnectionCounters::migrations)
+    u64 ecn_floor[2] = {};   // and the path it failed on (QuicRecovery::path_floor)
 
     void timers()
     {
@@ -736,8 +736,15 @@ void stateless_reset(Pair& pair)
     {
         return;
     }
-    client.ping(); // the ID it sends to is used from its next packet on
+    // The ID it sends to is used from its next packet on. A client whose window its silent server left full sends
+    // none (over paths a server may have closed without a word: section 9.3.2), and only a used ID's token counts.
+    const u64 sent = client.counters().datagrams_sent;
+    client.ping();
     pair.flush();
+    if (client.counters().datagrams_sent == sent)
+    {
+        return;
+    }
     u8 datagram[48];
     std::memset(datagram, 0x3C, sizeof(datagram));
     datagram[0] = 0x4BU;
