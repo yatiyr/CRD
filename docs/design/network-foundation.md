@@ -236,7 +236,8 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   (USO, URO, as msquic): a socket segments where `UDP_SEND_MSG_SIZE` reads back (never set on the socket, which
   would segment PMTU probes too); each train is one `WSASendMsg`, one `WSABUF` per datagram in place, with a
   `UDP_SEND_MSG_SIZE` control message. A refused train goes again a datagram a call (a CE train, which Windows
-  refuses, then leaves unmarked); `WSAEOPNOTSUPP`, or `WSAEINVAL` for an unmarked train, turns segmentation off.
+  refuses, then leaves unmarked); `WSAEOPNOTSUPP`, or `WSAEINVAL` for an unmarked train, turns segmentation off
+  (no local send reaches that branch: Windows refuses none of the shapes `segment_train` makes).
   `coalesce_receive` sets `UDP_RECV_MAX_COALESCED_SIZE` to the IPv6 UDP payload and reads `UDP_COALESCED_INFO`
   through the same control reader as `UDP_GRO`.
 - **Socket sets** (2026-11-21, NET-PATH). A loop and its host serve a `SocketSet` of up to four sockets, one per
