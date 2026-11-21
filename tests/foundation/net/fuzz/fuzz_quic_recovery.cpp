@@ -19,23 +19,24 @@
 // thresholds stay within their caps and rise only on one. Bytes in flight equal the model's. Each packet carries an
 // ECN codepoint of its number: a frame's outcome counts its newly acknowledged ECT(0) and ECT(1) packets (spurious
 // losses among them), says whether it raised the largest, and names a send time no later than now.
-// Received ranges stay ordered, separated, bounded and made of numbers received; a duplicate is refused exactly when
-// the ranges hold it; a written ACK frame reads back as the largest ranges. A loss or probe timeout fires only when
-// due, and the timer is armed while ack-eliciting packets are outstanding in a space it may serve. A probe or
+// Received ranges stay ordered, separated, bounded and made of numbers received; a copy of a number reaches recovery
+// only while the ranges hold it (the packet protection's replay window refuses any other) and is then refused, so a
+// number is recorded at most once; a written ACK frame reads back as the largest ranges. A loss or probe timeout fires
+// only when due, and the timer is armed while ack-eliciting packets are outstanding in a space it may serve. A probe or
 // anti-deadlock timeout declares nothing lost but, in a space whose storage could not record a packet, its oldest
 // outstanding packets, in order; after it the space can record its probes. Receive timestamps (draft-ietf-quic-
-// receive-ts-03): a written Application ACK frame reports at most the asked-for count of packets it acknowledges,
-// each received, with its arrival time from the first arrival less a nanosecond in the asked-for unit, the times never
-// rising; the sender's reading of a report times only packets outstanding or lost, and only when their one-way
-// delays spread no wider than the time since the oldest of them was sent. Paths: every slot keeps its own numbers,
-// estimate, thresholds, probe count and bytes in flight, and an operation on one leaves every other slot's exactly as
-// it was; a slot not open refuses every operation (NoPath) and reads empty; closing a slot declares each of its
-// outstanding packets lost, outside every estimate, and the slot then starts from nothing when it opens again; slot 0
-// closes only after the handshake's spaces, and its ACK frames then report no receive timestamps. Each open slot
-// drives its own QuicPathControl (quic_path_control.hpp) as a connection does: packets stamped and counted on their
-// slot's, the events of packets on their path, each ACK frame's end and each timeout's detection reach that slot's
-// alone, so the isolation above holds for every slot's window, delivery, losses, ECN state, path MTU and pacer too;
-// the window stays above its floor and the datagram size is the search's after every operation.
+// receive-ts-03): a written Application ACK frame reports at most the asked-for count of packets it acknowledges, each
+// received, with its arrival time from the first arrival less a nanosecond in the asked-for unit, the times never
+// rising; the sender's reading of a report times only packets outstanding or lost, and only when their one-way delays
+// spread no wider than the time since the oldest of them was sent. Paths: every slot keeps its own numbers, estimate,
+// thresholds, probe count and bytes in flight, and an operation on one leaves every other slot's exactly as it was; a
+// slot not open refuses every operation (NoPath) and reads empty; closing a slot declares each of its outstanding
+// packets lost, outside every estimate, and the slot then starts from nothing when it opens again; slot 0 closes only
+// after the handshake's spaces, and its ACK frames then report no receive timestamps. Each open slot drives its own
+// QuicPathControl (quic_path_control.hpp) as a connection does: packets stamped and counted on their slot's, the events
+// of packets on their path, each ACK frame's end and each timeout's detection reach that slot's alone, so the isolation
+// above holds for every slot's window, delivery, losses, ECN state, path MTU and pacer too; the window stays above its
+// floor and the datagram size is the search's after every operation.
 #include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_path_control.hpp>
@@ -681,9 +682,14 @@ void op_receive(World& w, QuicSpace id, usize path, u8 p, u8 q)
     ModelSpace& space  = w.spaces[model_index(id, path)];
     const u64   number = (static_cast<u64>(p) << 4U | (q >> 4U)) % kReceivedNumbers;
     const bool  held   = ranges_hold(w.recovery.received(id, path).ranges(), number);
+    if (space.received[number] && !held)
+    {
+        return; // its range forgotten: QuicPacketProtection's replay window refuses the copy (RFC 9000 section 12.3)
+    }
     const auto  ecn    = static_cast<Ecn>(q & 3U);
     const bool  added  = w.recovery.on_received(id, number, (q & 4U) != 0U, ecn, w.now, path);
     CRD_FUZZ_REQUIRE(added == (w.usable(id, path) && !space.discarded && !held));
+    CRD_FUZZ_REQUIRE(!added || !space.received[number]);
     if (added)
     {
         space.received[number] = true;
@@ -1104,6 +1110,12 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     put_handover(0x41U, 0x00U);
     put_handover(0x47U, 0x40U);
     sink.add("multipath-slot-zero-closed", handover, at);
+    // Timestamps (two an ACK frame, 1 us): a server receives 4081, writes an ACK frame for the next packet, receives
+    // 80, sends that packet and has it acknowledged, so 80's range is retired; a copy of 80 then never reaches
+    // recovery (the replay window refuses it), and the next ACK frame reports 80 once, at its one arrival.
+    const u8 retired[] = {0x07U, 0x12U, 0xFFU, 0x13U, 0xA6U, 0x04U, 0x03U, 0x12U, 0x05U, 0x04U, 0x03U, 0x10U,
+                          0x03U, 0x11U, 0x13U, 0x20U, 0x01U, 0x12U, 0x05U, 0x04U, 0x03U, 0x13U, 0x20U};
+    sink.add("copy-after-retired-range", retired, sizeof(retired));
     // An optimistic acknowledgement past the last number sent.
     const u8 optimistic[] = {0x00U, 0x10U, 0x04U, 0x10U, 0x05U, 0x11U, 0x80U, 0x00U, 0x00U};
     sink.add("optimistic-ack", optimistic, sizeof(optimistic));

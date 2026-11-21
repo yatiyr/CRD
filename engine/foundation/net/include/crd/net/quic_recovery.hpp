@@ -123,7 +123,9 @@ public:
 
     // Records packet `number`, which QuicPacketProtection opened and whose frames were processed, received at
     // `received_ns` (its datagram's arrival, so a packet buffered for its keys keeps its time). False for a number
-    // already recorded, which changes nothing. `max_ack_delay_ns` is this side's advertised max_ack_delay.
+    // already recorded, which changes nothing. `max_ack_delay_ns` is this side's advertised max_ack_delay. A number
+    // comes here once: duplicate suppression is the protection's replay window (RFC 9000 section 12.3), and the
+    // ranges forget what an acknowledged ACK frame or full storage retires.
     bool on_received(u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns, u64 max_ack_delay_ns) noexcept;
 
     // When the owed ACK must be sent: kNeverNs when none is owed. An ACK may still ride along in any packet while
@@ -443,7 +445,8 @@ public:
     // ---- Receiving ----
 
     // A packet of `space` and slot `path` opened and processed (QuicAckTracker::on_received, and the receive
-    // timestamp log for slot 0's Application space); false for a duplicate, a discarded space or a slot not open.
+    // timestamp log for slot 0's Application space), each number once (QuicAckTracker::on_received); false for a
+    // number still recorded, a discarded space or a slot not open.
     bool on_received(QuicSpace space, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns,
                      usize path = 0U) noexcept;
     // An ACK frame of `space` (appendix A.7) acknowledging slot `path`'s packets (an ACK frame's are slot 0's, a
