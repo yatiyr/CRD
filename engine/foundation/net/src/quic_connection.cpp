@@ -2966,7 +2966,7 @@ void QuicConnection::address_paths(u64 now_ns) noexcept
         m_paths.set_peer_sequence(index, unused_peer_sequence(index));
         if (peer_index(m_paths.peer_sequence(index)) < m_peer_cid_count)
         {
-            continue;
+            continue; // the peer's next non-probing packet there moves the connection
         }
         // None is unused: a path left behind gives its ID up (forgotten, the ID retired), so the peer issues the one
         // this path waits for (section 9.5). The fallback goes only once the active path is proven, needing no revert.

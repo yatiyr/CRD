@@ -273,12 +273,13 @@ public:
     // left, and a server datagram reaches the client only when sent to `client_at` or to `also_at` (an address whose
     // NAT mapping still stands; port 0 for none). The client sees its server at one address. Its sockets 1 to 3
     // (QuicPath::socket) are at `socket_at` (port 0: none); a datagram to or from a socket of `down` (a bit each) is
-    // lost, its network gone.
+    // lost, its network gone, and one to a socket of `down_in` too (a path that carries one way).
     bool paths = false;
     Endpoint client_at{IpAddress::v4(198, 51, 100, 7), 50000U};
     Endpoint also_at;
     Endpoint socket_at[3];
     u32 down = 0U;
+    u32 down_in = 0U;
     usize misdirected = 0U; // server datagrams sent to an address that no longer reaches the client
     u8 minted[kQuicMaxCarriedTokenBytes] = {};
     usize minted_bytes = 0U;
@@ -311,7 +312,8 @@ public:
                     ++dropped[1];
                     continue;
                 }
-                if (socket < 32U && (down & (1U << socket)) != 0U)
+                const u32 gone = (from == 1U) ? (down | down_in) : down;
+                if (socket < 32U && (gone & (1U << socket)) != 0U)
                 {
                     ++dropped[from];
                     continue;

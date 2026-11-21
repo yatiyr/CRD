@@ -186,9 +186,11 @@ struct Hosted
     QuicConnection server;
     std::unique_ptr<Net> net;
 
-    explicit Hosted(usize seed = 0U, bool disable_migration = false)
-        : client(allocator, with(bulk_config(QuicSide::Client, identity, seed), client_ids, false)),
-          server(allocator, with(bulk_config(QuicSide::Server, identity, seed + 1U), server_ids, disable_migration))
+    // `pmtu` false: no path MTU search, whose probes a restarted path would send.
+    explicit Hosted(usize seed = 0U, bool disable_migration = false, bool pmtu = true)
+        : client(allocator, with(bulk_config(QuicSide::Client, identity, seed), client_ids, false, pmtu)),
+          server(allocator,
+                 with(bulk_config(QuicSide::Server, identity, seed + 1U), server_ids, disable_migration, pmtu))
     {
         REQUIRE(client.ready());
         REQUIRE(server.ready());
@@ -205,9 +207,10 @@ struct Hosted
         }
     }
 
-    static QuicConnectionConfig with(QuicConnectionConfig config, Ids& ids, bool disable_migration)
+    static QuicConnectionConfig with(QuicConnectionConfig config, Ids& ids, bool disable_migration, bool pmtu)
     {
         config.ids = &ids.ids;
+        config.path_mtu_discovery = pmtu;
         if (config.side == QuicSide::Client)
         {
             config.path = QuicPath{0U, Endpoint{IpAddress::v4(192, 0, 2, 1), 443U}}; // the server's address
@@ -1245,4 +1248,39 @@ TEST_CASE("QUIC client migration: moves one after another, back to the first soc
     CHECK(pair.server.path().peer == net.client_at);
     CHECK(pair.server.counters().migrations == 4U);
     CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC client migration: a quiet client's move reaches its server in a packet of its own",
+          "[net][net-path][quic-connection][client-migration]")
+{
+    Hosted pair(0U, false, false);
+    Net& net = *pair.net;
+    pair.confirm();
+    net.advance(net.now + 1000U * kMs); // nothing left to send or acknowledge
+    REQUIRE(pair.client.migrate(pair.socket(1U), net.now) == QuicMigration::Started);
+    // The first datagram from socket 1, its PATH_CHALLENGE with an ACK frame, is non-probing (section 9.1): the
+    // server follows one way's 25 ms later.
+    REQUIRE(net.run_until([&] { return pair.server.path().peer == net.socket_at[0]; }, 30U * kMs));
+    REQUIRE(net.run_until([&] { return pair.client.paths().fallback() == kQuicNoPath; }, 10000U * kMs));
+    CHECK(pair.client.paths().proven(pair.client.paths().active()));
+    REQUIRE(net.run_until([&] { return pair.server.address_validated(); }, 10000U * kMs));
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC client migration: a quiet client that reverts from a path carrying one way tells its server at once",
+          "[net][net-path][quic-connection][client-migration]")
+{
+    Hosted pair(0U, false, false);
+    Net& net = *pair.net;
+    pair.confirm();
+    net.advance(net.now + 1000U * kMs);
+    net.down_in = 1U << 1U; // the server's datagrams to socket 1 are lost; the client's from it arrive
+    REQUIRE(pair.client.migrate(pair.socket(1U), net.now) == QuicMigration::Started);
+    REQUIRE(net.run_until([&] { return pair.server.path().peer == net.socket_at[0]; }, 10000U * kMs));
+    REQUIRE(net.run_until([&] { return pair.client.path().socket == 0U; }, 10000U * kMs));
+    CHECK(pair.client.counters().path_failures == 1U);
+    // Its return reaches the server one way's 25 ms later, in its first datagram from there.
+    REQUIRE(net.run_until([&] { return pair.server.path().peer == net.client_at; }, 30U * kMs));
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+    CHECK(pair.server.state() == QuicConnectionState::Established);
 }
