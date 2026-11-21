@@ -11,7 +11,9 @@
 // the same frame; an ACK's ranges descend with a packet number between each and below its largest, and written again
 // from them read back to the same ranges; an ACK_RECEIVE_TIMESTAMPS frame's timestamps number at most its largest
 // acknowledged with times that never rise, as many as its counts say, and those its ranges acknowledge written again
-// read back the same; a 0-RTT packet from a server carries nothing. Transport parameters: a
+// read back the same; a 0-RTT packet from a server carries nothing; an RFC 10069 frame names no path ID or Maximum
+// Path Identifier above 2^32 - 1, rides 1-RTT packets alone, and a PATH_ACK written again from its ranges for its path
+// reads back the same. Transport parameters: a
 // payload whose (identifier, length, value) layout is broken is refused; a refusal leaves the output untouched; an
 // accepted set writes back (its reserved versions left to the writer) with exactly one reserved parameter and reads
 // back to the same values; the version selections only return versions their inputs name.
@@ -54,7 +56,7 @@ bool same_frame(const QuicFrame& a, const QuicFrame& b)
            a.error_code == b.error_code && a.frame_type == b.frame_type && a.sequence == b.sequence &&
            a.retire_prior_to == b.retire_prior_to && same(a.data, b.data) && same(a.reset_token, b.reset_token) &&
            a.fin == b.fin && a.to_end == b.to_end && a.bidirectional == b.bidirectional &&
-           a.application == b.application;
+           a.application == b.application && a.path_id == b.path_id && a.backup == b.backup;
 }
 
 // Walks `ack`'s timestamps into `stamps`; whether every one lies in `ranges`.
@@ -80,8 +82,11 @@ bool walk_timestamps(const QuicAck& ack, ConstSpan<QuicAckRange> ranges, QuicRec
     return acknowledged;
 }
 
-void check_ack(const QuicAck& ack)
+// `frame` is an ACK or a PATH_ACK.
+void check_ack(const QuicFrame& frame)
 {
+    const QuicAck& ack = frame.ack;
+    const bool path = frame.kind == QuicFrameKind::PathAck;
     static QuicAckRange ranges[kMaxRanges];
     static QuicReceiveTimestamp stamps[crd::fuzz::kMaxInputBytes];
     static QuicReceiveTimestamp reread_stamps[crd::fuzz::kMaxInputBytes];
@@ -102,11 +107,15 @@ void check_ack(const QuicAck& ack)
     usize stamped = 0U;
     const bool acknowledged = ack.timestamps && walk_timestamps(ack, view, stamps, stamped);
     const ConstSpan<QuicReceiveTimestamp> times(stamps, acknowledged ? stamped : 0U);
-    const usize bytes = write_quic_ack(view, ack.delay, ack.ecn ? &counts : nullptr, Span<u8>(out, sizeof(out)), times);
+    CRD_FUZZ_REQUIRE(!(path && ack.timestamps)); // PATH_ACK has no timestamp form
+    const EcnCounts* ecn = ack.ecn ? &counts : nullptr;
+    const usize bytes = path ? write_quic_path_ack(frame.path_id, view, ack.delay, ecn, Span<u8>(out, sizeof(out)))
+                             : write_quic_ack(view, ack.delay, ecn, Span<u8>(out, sizeof(out)), times);
     CRD_FUZZ_REQUIRE(bytes != 0U);
     WireReader in(ConstSpan<u8>(out, bytes));
     QuicFrame again;
     CRD_FUZZ_REQUIRE(read_quic_frame(in, again) == QuicTransportError::NoError && in.done());
+    CRD_FUZZ_REQUIRE(again.kind == frame.kind && again.path_id == frame.path_id);
     CRD_FUZZ_REQUIRE(again.ack.largest == ack.largest && again.ack.delay == ack.delay &&
                      again.ack.range_count == ack.range_count && again.ack.ecn == ack.ecn);
     CRD_FUZZ_REQUIRE(again.ack.timestamps == !times.empty());
@@ -152,9 +161,15 @@ void check_frames(ConstSpan<u8> payload, u8 control)
                          inside(frame.ack.ranges, payload) && inside(frame.ack.timestamp_ranges, payload));
         CRD_FUZZ_REQUIRE(!(packet == QuicPacketType::ZeroRtt && from_server &&
                            quic_frame_allowed(frame.kind, frame.application, packet, from_server)));
-        if (frame.kind == QuicFrameKind::Ack)
+        if (quic_frame_multipath(frame.kind))
         {
-            check_ack(frame.ack);
+            CRD_FUZZ_REQUIRE(frame.path_id <= kQuicMaxPathId && frame.value <= kQuicMaxPathId);
+            CRD_FUZZ_REQUIRE(quic_frame_allowed(frame.kind, false, packet, from_server) ==
+                             (packet == QuicPacketType::OneRtt));
+        }
+        if (frame.kind == QuicFrameKind::Ack || frame.kind == QuicFrameKind::PathAck)
+        {
+            check_ack(frame);
             continue;
         }
         static u8 out[crd::fuzz::kMaxInputBytes + 64U];
@@ -292,7 +307,11 @@ void check_parameters(ConstSpan<u8> bytes, u8 control, u64 entropy)
         again.max_receive_timestamps_per_ack == write.max_receive_timestamps_per_ack &&
         again.receive_timestamps_exponent == write.receive_timestamps_exponent &&
         again.address_discovery == write.address_discovery &&
+        again.has_initial_max_path_id == write.has_initial_max_path_id &&
+        again.initial_max_path_id == write.initial_max_path_id &&
         again.disable_active_migration == write.disable_active_migration);
+    CRD_FUZZ_REQUIRE(!read.has_initial_max_path_id || read.initial_max_path_id <= kQuicMaxPathId);
+    CRD_FUZZ_REQUIRE(quic_multipath_negotiated(read, again) == read.has_initial_max_path_id);
     CRD_FUZZ_REQUIRE(same(again.initial_source_connection_id.view(), write.initial_source_connection_id.view()) &&
                      again.has_preferred_address == write.has_preferred_address &&
                      same(again.preferred_address.connection_id.view(), write.preferred_address.connection_id.view()));
@@ -398,6 +417,45 @@ usize frames_payload(u8* out, usize capacity)
     frame.data = ConstSpan<u8>(kV6, 16U);
     frame.value = 443U;
     put(frame);
+    // RFC 10069's frames: a PATH_ACK with ECN counts on path 2, then one of every other kind.
+    at += write_quic_path_ack(2U, ConstSpan<QuicAckRange>(ranges, 3U), 40U, &counts, Span<u8>(out + at, capacity - at));
+    frame = QuicFrame{};
+    frame.kind = QuicFrameKind::PathAbandon;
+    frame.path_id = 1U;
+    frame.error_code = static_cast<u64>(QuicTransportError::PathUnstableOrPoor);
+    put(frame);
+    frame = QuicFrame{};
+    frame.kind = QuicFrameKind::PathStatus;
+    frame.path_id = 3U;
+    frame.sequence = 5U;
+    frame.backup = true;
+    put(frame);
+    frame.backup = false;
+    frame.sequence = 6U;
+    put(frame);
+    frame = QuicFrame{};
+    frame.kind = QuicFrameKind::PathNewConnectionId;
+    frame.path_id = 2U;
+    frame.sequence = 1U;
+    frame.data = ConstSpan<u8>(kId, 8U);
+    frame.reset_token = ConstSpan<u8>(kToken, 16U);
+    put(frame);
+    frame = QuicFrame{};
+    frame.kind = QuicFrameKind::PathRetireConnectionId;
+    frame.path_id = 2U;
+    put(frame);
+    frame = QuicFrame{};
+    frame.kind = QuicFrameKind::MaxPathId;
+    frame.value = 0xFFFFFFFFU;
+    put(frame);
+    frame.kind = QuicFrameKind::PathsBlocked;
+    frame.value = 3U;
+    put(frame);
+    frame = QuicFrame{};
+    frame.kind = QuicFrameKind::PathCidsBlocked;
+    frame.path_id = 1U;
+    frame.sequence = 2U;
+    put(frame);
     frame = QuicFrame{};
     frame.kind = QuicFrameKind::Datagram;
     frame.data = ConstSpan<u8>(kData, 5U);
@@ -417,6 +475,9 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     add_seed(sink, "frames-initial", 0x03U, ConstSpan<u8>(initial, sizeof(initial)));
     const u8 refused[] = {0x01, 0x40, 0x01};
     add_seed(sink, "frames-long-type", 0x0DU, ConstSpan<u8>(refused, sizeof(refused)));
+    // MAX_PATH_ID 2^32, one above RFC 10069's largest path ID.
+    const u8 past_path[] = {0x01, 0x7E, 0x7A, 0xC0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00};
+    add_seed(sink, "frames-max-path-id-past", 0x0DU, ConstSpan<u8>(past_path, sizeof(past_path)));
 
     // RFC 9001 appendix A.2's client parameters.
     const u8 client[] = {0x04, 0x08, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x05, 0x04, 0x80, 0x00, 0xFF,
@@ -445,6 +506,8 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     server.max_receive_timestamps_per_ack = 8U;
     server.receive_timestamps_exponent = 3U;
     server.address_discovery = QuicAddressDiscovery::Both;
+    server.has_initial_max_path_id = true;
+    server.initial_max_path_id = 7U;
     server.disable_active_migration = true;
     server.has_version_information = true;
     server.version_information.chosen = iana::kQuicVersion2;

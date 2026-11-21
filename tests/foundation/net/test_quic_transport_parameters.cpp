@@ -133,6 +133,8 @@ QuicTransportParameters full_server()
     p.max_receive_timestamps_per_ack = 32U;
     p.receive_timestamps_exponent = kQuicMaxReceiveTimestampsExponent;
     p.address_discovery = QuicAddressDiscovery::Both;
+    p.has_initial_max_path_id = true;
+    p.initial_max_path_id = kQuicMaxPathId;
     p.has_version_information = true;
     p.version_information.chosen = kV2;
     p.version_information.available[0] = kV2;
@@ -186,6 +188,8 @@ void check_equal(const QuicTransportParameters& a, const QuicTransportParameters
     CHECK(a.max_receive_timestamps_per_ack == b.max_receive_timestamps_per_ack);
     CHECK(a.receive_timestamps_exponent == b.receive_timestamps_exponent);
     CHECK(a.address_discovery == b.address_discovery);
+    CHECK(a.has_initial_max_path_id == b.has_initial_max_path_id);
+    CHECK(a.initial_max_path_id == b.initial_max_path_id);
     CHECK(a.has_version_information == b.has_version_information);
     if (a.has_version_information)
     {
@@ -373,6 +377,16 @@ TEST_CASE("QUIC transport parameters: section 18, RFC 9287 and RFC 9368 refusals
     add("address_discovery 2^62 - 1", QuicSide::Server)
         .add_varint(iana::kQuicTpAddressDiscovery, crd::net::kQuicMaxVarint);
     add("address_discovery empty", QuicSide::Client).add(iana::kQuicTpAddressDiscovery, ConstSpan<u8>{});
+    // RFC 10069 section 2.1: a path ID past 2^32 - 1, a malformed value or a repeat.
+    add("initial_max_path_id 2^32", QuicSide::Client).add_varint(iana::kQuicTpInitialMaxPathId, u64{1} << 32U);
+    add("initial_max_path_id 2^62 - 1", QuicSide::Server)
+        .add_varint(iana::kQuicTpInitialMaxPathId, crd::net::kQuicMaxVarint);
+    add("initial_max_path_id empty", QuicSide::Client).add(iana::kQuicTpInitialMaxPathId, ConstSpan<u8>{});
+    {
+        Encoded& e = add("initial_max_path_id repeated", QuicSide::Server);
+        e.add_varint(iana::kQuicTpInitialMaxPathId, 1U);
+        e.add_varint(iana::kQuicTpInitialMaxPathId, 1U);
+    }
     {
         Encoded& e = add("address_discovery repeated", QuicSide::Server);
         e.add_varint(iana::kQuicTpAddressDiscovery, 1U);
@@ -523,6 +537,13 @@ TEST_CASE("QUIC transport parameters: writers refuse what readers refuse", "[net
     CHECK(changed([](QuicTransportParameters& c) { c.max_ack_delay = kQuicMaxAckDelayLimit; }));
     CHECK(changed([](QuicTransportParameters& c) { c.address_discovery = static_cast<QuicAddressDiscovery>(4U); }));
     CHECK(changed([](QuicTransportParameters& c) { c.active_connection_id_limit = 1U; }));
+    CHECK(changed([](QuicTransportParameters& c) { c.initial_max_path_id = kQuicMaxPathId + 1U; }));
+    CHECK_FALSE(changed(
+        [](QuicTransportParameters& c)
+        {
+            c.has_initial_max_path_id = false; // absent, its value is not written
+            c.initial_max_path_id = kQuicMaxPathId + 1U;
+        }));
     CHECK(changed([](QuicTransportParameters& c) { c.initial_max_streams_uni = kQuicMaxStreams + 1U; }));
     CHECK(changed([](QuicTransportParameters& c) { c.initial_max_data = crd::net::kQuicMaxVarint + 1U; }));
     CHECK(changed([](QuicTransportParameters& c) { c.preferred_address.connection_id.bytes = 0U; }));
@@ -787,5 +808,52 @@ TEST_CASE("QUIC transport parameters: a server's 0-RTT part of its early data co
     other.ack_delay_exponent = 0U;
     other.max_ack_delay = 1U;
     CHECK(quic_check_remembered_parameters(server, other) == QuicTransportError::NoError);
+    // Nor is initial_max_path_id remembered (RFC 10069 section 2.1): no part of the context, it may come and go.
+    QuicTransportParameters multipath = server;
+    multipath.has_initial_max_path_id = true;
+    multipath.initial_max_path_id = 3U;
+    REQUIRE(write_quic_early_parameters(multipath, Span<u8>(again)) == kQuicEarlyParameterBytes);
+    CHECK(std::memcmp(encoded, again, sizeof(encoded)) == 0);
+    CHECK(quic_check_remembered_parameters(multipath, server) == QuicTransportError::NoError);
+    CHECK(quic_check_remembered_parameters(server, multipath) == QuicTransportError::NoError);
+}
+
+TEST_CASE("QUIC transport parameters: RFC 10069's initial_max_path_id and its negotiation", "[net][quic-tp][multipath]")
+{
+    // Section 2.1: identifier 0x3e, a varint value up to 2^32 - 1, written only when offered.
+    QuicTransportParameters offer;
+    offer.has_initial_max_path_id = true;
+    for (const u64 value : {u64{0U}, u64{1U}, u64{63U}, u64{64U}, u64{kQuicMaxPathId}})
+    {
+        offer.initial_max_path_id = value;
+        u8 out[64] = {};
+        const usize bytes = write_quic_transport_parameters(offer, QuicSide::Client, {}, Span<u8>(out, sizeof(out)));
+        REQUIRE(bytes != 0U);
+        CHECK(out[0] == 0x3EU);
+        CHECK(out[1] == crd::net::quic_varint_bytes(value));
+        QuicTransportParameters read;
+        REQUIRE(read_quic_transport_parameters(ConstSpan<u8>(out, bytes), QuicSide::Client, read) ==
+                QuicTransportError::NoError);
+        CHECK(read.has_initial_max_path_id);
+        CHECK(read.initial_max_path_id == value);
+    }
+    QuicTransportParameters none;
+    u8 out[64] = {};
+    const usize bytes = write_quic_transport_parameters(none, QuicSide::Server, {}, Span<u8>(out, sizeof(out)));
+    QuicTransportParameters read;
+    REQUIRE(read_quic_transport_parameters(ConstSpan<u8>(out, bytes), QuicSide::Server, read) ==
+            QuicTransportError::NoError);
+    CHECK_FALSE(read.has_initial_max_path_id);
+
+    // Used only when both ends offer it; then a zero-length connection ID on either side is PROTOCOL_VIOLATION, and
+    // an end that does not offer it reads a peer's as an extension it does not implement.
+    CHECK(quic_multipath_negotiated(offer, offer));
+    CHECK_FALSE(quic_multipath_negotiated(offer, none));
+    CHECK_FALSE(quic_multipath_negotiated(none, offer));
+    CHECK_FALSE(quic_multipath_negotiated(none, none));
+    CHECK(quic_check_multipath(offer, offer, false) == QuicTransportError::NoError);
+    CHECK(quic_check_multipath(offer, offer, true) == QuicTransportError::ProtocolViolation);
+    CHECK(quic_check_multipath(none, offer, true) == QuicTransportError::NoError);
+    CHECK(quic_check_multipath(offer, none, true) == QuicTransportError::NoError);
 }
 } // namespace

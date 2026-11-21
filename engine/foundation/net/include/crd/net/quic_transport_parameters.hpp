@@ -3,8 +3,9 @@
 // crd-net -- QUIC transport parameters and compatible version negotiation (4.2a; contract:
 // docs/design/network-foundation.md#quic-transport-parameters). Sources: RFC 9000 sections 7.3, 7.4 and 18, RFC 9221
 // section 3 (max_datagram_frame_size), RFC 9287 section 3 (grease_quic_bit), RFC 9368 sections 2 to 4 and 8
-// (version_information), draft-ietf-quic-receive-ts-03 section 6 (receive timestamps) and
-// draft-ietf-quic-address-discovery-01 section 3 (address_discovery). The bytes travel in the TLS handshake's
+// (version_information), draft-ietf-quic-receive-ts-03 section 6 (receive timestamps),
+// draft-ietf-quic-address-discovery-01 section 3 (address_discovery) and RFC 10069 section 2.1 (initial_max_path_id).
+// The bytes travel in the TLS handshake's
 // quic_transport_parameters extension (crypto::QuicHandshake), authenticated; their encoding and every check is here.
 //
 //   reading   read_quic_transport_parameters takes a peer's bytes for the side that sent them and fills every
@@ -152,6 +153,10 @@ struct QuicTransportParameters
     u64 max_receive_timestamps_per_ack = 0U;
     u64 receive_timestamps_exponent = 0U;
     QuicAddressDiscovery address_discovery = QuicAddressDiscovery::Off; // draft-ietf-quic-address-discovery
+    // RFC 10069: the largest path ID the sender maintains from the start (at most kQuicMaxPathId), present exactly
+    // when it offers multipath. Never remembered for a later connection's 0-RTT (section 2.1).
+    bool has_initial_max_path_id = false;
+    u64 initial_max_path_id = 0U;
     bool                   has_version_information                = false; // RFC 9368
     QuicVersionInformation version_information;
 };
@@ -200,6 +205,21 @@ struct QuicConnectionIdExpectation
 [[nodiscard]] QuicTransportError quic_check_connection_ids(const QuicTransportParameters& parameters,
                                                            crypto::QuicSide peer,
                                                            const QuicConnectionIdExpectation& expected) noexcept;
+
+// ---- Multipath (RFC 10069 section 2.1) ----
+
+// Whether both ends offered initial_max_path_id: then the extension is used once the handshake completes.
+[[nodiscard]] bool quic_multipath_negotiated(const QuicTransportParameters& local,
+                                             const QuicTransportParameters& peer) noexcept;
+
+// The check of a peer's initial_max_path_id once its parameters are read: when both ends offered it, a zero-length
+// connection ID in the packets that carried the handshake (`zero_length_ids`: the peer's Source Connection ID or this
+// end's own) is PROTOCOL_VIOLATION. An end that did not offer it reads the parameter as one it does not implement.
+// Every QUIC AEAD's nonce is 12 bytes (crypto::quic_packet_nonce), so section 2.1's refusal of a shorter one never
+// applies.
+[[nodiscard]] QuicTransportError quic_check_multipath(const QuicTransportParameters& local,
+                                                      const QuicTransportParameters& peer,
+                                                      bool zero_length_ids) noexcept;
 
 // ---- 0-RTT (RFC 9000 section 7.4.1, RFC 9221 section 3) ----
 

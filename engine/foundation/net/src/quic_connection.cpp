@@ -1435,6 +1435,19 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             }
             return true;
         }
+        case QuicFrameKind::PathAck:
+        case QuicFrameKind::PathAbandon:
+        case QuicFrameKind::PathStatus:
+        case QuicFrameKind::PathNewConnectionId:
+        case QuicFrameKind::PathRetireConnectionId:
+        case QuicFrameKind::MaxPathId:
+        case QuicFrameKind::PathsBlocked:
+        case QuicFrameKind::PathCidsBlocked:
+            // RFC 10069 section 2: this end offers no initial_max_path_id (design S78), so multipath was never
+            // negotiated, and its frames are of no known type, as RFC 9000 section 12.4 reads an unnegotiated
+            // extension's.
+            fail(QuicTransportError::FrameEncodingError, 0U, now_ns);
+            return false;
     }
     return true;
 }

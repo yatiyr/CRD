@@ -4,7 +4,7 @@
 // short header packet and its key update), RFC 9000's packet number examples, every refusal and length rule, the
 // usage limits, tampering anywhere in a packet, random round trips in every suite and version, one key opening on
 // several threads, and a packet number space's window opening each packet once through reordering, duplication,
-// replay and forgery.
+// replay and forgery, and RFC 10069's multipath nonce with its path ID.
 
 #include "quic_vectors.hpp"
 #include "wycheproof.hpp"
@@ -536,6 +536,61 @@ TEST_CASE("QUIC: random packets round-trip in every suite and version", "[crypto
                 REQUIRE(key.open(decoded, Span<u8>(buffer, size), header) == CryptoError::None);
                 CHECK(std::memcmp(buffer, original, size - kQuicTagBytes) == 0);
             }
+        }
+    }
+}
+
+TEST_CASE("QUIC: a multipath packet's nonce carries its path ID and opens on that path alone",
+          "[crypto][net-path][quic][multipath]")
+{
+    // RFC 10069 section 2.4, figure 3: IV 6b26114b9cba2b63a9e8dd4f, path 3, packet 54321.
+    const Bytes iv = from_hex("6b26114b9cba2b63a9e8dd4f");
+    u8 iv_bytes[kAeadNonceBytes];
+    std::memcpy(iv_bytes, iv.data(), sizeof(iv_bytes));
+    u8 nonce[kAeadNonceBytes];
+    quic_packet_nonce(iv_bytes, 3U, 54321U, nonce);
+    CHECK(equal(ConstSpan<u8>(nonce, sizeof(nonce)), from_hex("6b2611489cba2b63a9e8097e")));
+    // Path 0 is RFC 9001's nonce; the largest path ID and packet number leave only the two zero bits between them.
+    quic_packet_nonce(iv_bytes, 0U, 54321U, nonce);
+    CHECK(equal(ConstSpan<u8>(nonce, sizeof(nonce)), from_hex("6b26114b9cba2b63a9e8097e")));
+    quic_packet_nonce(iv_bytes, 0xFFFFFFFFU, kQuicMaxPacketNumber, nonce);
+    CHECK(equal(ConstSpan<u8>(nonce, sizeof(nonce)), from_hex("94d9eeb4a345d49c561722b0")));
+    CHECK(kQuicMaxPathId == 0xFFFFFFFFU);
+
+    u8 secret[kQuicMaxSecretBytes];
+    u8 buffer[256];
+    u8 original[256];
+    constexpr usize kHeader = 1U + 8U + 2U;
+    for (const AlgorithmId aead : kAeads)
+    {
+        const usize secret_bytes = aead == AlgorithmId::Aes256Gcm ? 48U : 32U;
+        REQUIRE(random_bytes(Span<u8>(secret, secret_bytes)) == CryptoError::None);
+        QuicPacketKey key;
+        REQUIRE(key.init(QuicVersion::V1, aead, ConstSpan<u8>(secret, secret_bytes)) == CryptoError::None);
+        REQUIRE(random_bytes(Span<u8>(original, sizeof(original))) == CryptoError::None);
+        u64 sealed = 0U;
+        for (const u32 path : {0U, 1U, 2U, 0x10000U, 0xFFFFFFFFU})
+        {
+            // The same packet number on another path is another nonce: its packet opens there and nowhere else.
+            std::memcpy(buffer, original, sizeof(buffer));
+            REQUIRE(key.seal(7U, Span<u8>(buffer, sizeof(buffer)), kHeader, path) == CryptoError::None);
+            CHECK(key.sealed() == ++sealed); // one limit over every path (RFC 10069 section 7.3)
+            u8 copy[sizeof(buffer)];
+            for (const u32 other : {0U, 1U, 2U, 0x10000U, 0xFFFFFFFFU})
+            {
+                std::memcpy(copy, buffer, sizeof(copy));
+                const CryptoError opened = key.open(7U, Span<u8>(copy, sizeof(copy)), kHeader, other);
+                CHECK(opened == (other == path ? CryptoError::None : CryptoError::Forged));
+                if (other == path)
+                {
+                    CHECK(std::memcmp(copy, original, sizeof(copy) - kQuicTagBytes) == 0);
+                }
+            }
+            u8 path_zero[sizeof(buffer)];
+            std::memcpy(path_zero, original, sizeof(path_zero));
+            REQUIRE(key.seal(7U, Span<u8>(path_zero, sizeof(path_zero)), kHeader) == CryptoError::None);
+            ++sealed;
+            CHECK((std::memcmp(path_zero, buffer, sizeof(buffer)) == 0) == (path == 0U));
         }
     }
 }

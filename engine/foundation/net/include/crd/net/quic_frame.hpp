@@ -2,8 +2,8 @@
 
 // crd-net -- QUIC frames (4.2a; contract: docs/design/network-foundation.md#quic-frames). Sources: RFC 9000 sections
 // 12.4, 19 and 20.1, RFC 9221 section 4 (DATAGRAM), RFC 9368 section 10.2 (VERSION_NEGOTIATION_ERROR),
-// draft-ietf-quic-receive-ts-03 section 4 (ACK_RECEIVE_TIMESTAMPS) and draft-ietf-quic-address-discovery-01 section 4
-// (OBSERVED_ADDRESS).
+// draft-ietf-quic-receive-ts-03 section 4 (ACK_RECEIVE_TIMESTAMPS), draft-ietf-quic-address-discovery-01 section 4
+// (OBSERVED_ADDRESS) and RFC 10069 section 4 (the multipath frames).
 //
 //   reading   read_quic_frame takes one frame from a decrypted payload and returns the transport error that closes the
 //             connection when it is malformed (FRAME_ENCODING_ERROR, or PROTOCOL_VIOLATION for a frame type in a
@@ -47,13 +47,18 @@ enum class QuicTransportError : u64
     NoViablePath            = 0x10U,
     VersionNegotiationError = 0x11U,
     CryptoErrorFirst        = 0x0100U, // CRYPTO_ERROR: 0x0100 plus a TLS alert (crypto::quic_crypto_error)
+    // RFC 10069 section 4.2.1: the reasons a PATH_ABANDON gives besides NO_ERROR (the register's iana::kQuicError...).
+    ApplicationAbandonPath   = 0x3EU,
+    PathResourceLimitReached = 0x3E75U,
+    PathUnstableOrPoor       = 0x3E76U,
+    NoCidAvailableForPath    = 0x3E77U,
 };
 
 // ---- Frame types ----
 
 // The kinds of frame this module reads and writes; a kind covers every wire type of its family (the eight STREAM
-// types, both ACK and both ACK_RECEIVE_TIMESTAMPS, MAX_STREAMS, STREAMS_BLOCKED, CONNECTION_CLOSE, DATAGRAM and
-// OBSERVED_ADDRESS types).
+// types, both ACK and both ACK_RECEIVE_TIMESTAMPS, MAX_STREAMS, STREAMS_BLOCKED, CONNECTION_CLOSE, DATAGRAM,
+// OBSERVED_ADDRESS, PATH_ACK and PATH_STATUS types). The kinds from PathAck on are RFC 10069's.
 enum class QuicFrameKind : u8
 {
     Padding,
@@ -79,30 +84,42 @@ enum class QuicFrameKind : u8
     HandshakeDone,
     Datagram,
     ObservedAddress,
+    PathAck,
+    PathAbandon,
+    PathStatus,
+    PathNewConnectionId,
+    PathRetireConnectionId,
+    MaxPathId,
+    PathsBlocked,
+    PathCidsBlocked,
 };
 
 inline constexpr u64   kQuicMaxStreams         = u64{1} << 60U; // MAX_STREAMS and STREAMS_BLOCKED (section 19.11)
 using crypto::kQuicResetTokenBytes; // a stateless reset token (section 10.3), crd-crypto's QuicResetKey
+using crypto::kQuicMaxPathId;       // RFC 10069 section 2.1: the largest path ID, bounded by the AEAD nonce
 inline constexpr usize kQuicPathDataBytes      = 8U;            // PATH_CHALLENGE and PATH_RESPONSE data
 inline constexpr u64   kQuicStreamTypeBase     = 0x08U;
 inline constexpr u8    kQuicStreamBitFin       = 0x01U;
 inline constexpr u8    kQuicStreamBitLength    = 0x02U;
 inline constexpr u8    kQuicStreamBitOffset    = 0x04U;
 
-// What a frame does to its packet (section 12.4 and RFC 9002 section 2): an ACK, PADDING or CONNECTION_CLOSE frame
-// elicits no acknowledgement; an ACK is not congestion controlled; PADDING, NEW_CONNECTION_ID, PATH_CHALLENGE,
-// PATH_RESPONSE and OBSERVED_ADDRESS (draft-ietf-quic-address-discovery-01 section 4.1) are probing frames (section
+// What a frame does to its packet (section 12.4 and RFC 9002 section 2): an ACK, PATH_ACK, PADDING or
+// CONNECTION_CLOSE frame elicits no acknowledgement; an ACK or PATH_ACK is not congestion controlled; PADDING,
+// NEW_CONNECTION_ID, PATH_CHALLENGE, PATH_RESPONSE, OBSERVED_ADDRESS (draft-ietf-quic-address-discovery-01 section
+// 4.1) and PATH_NEW_CONNECTION_ID (NEW_CONNECTION_ID's extension, RFC 10069 section 4.4) are probing frames (section
 // 9.1); STREAM frames are flow controlled.
 [[nodiscard]] bool quic_frame_ack_eliciting(QuicFrameKind kind) noexcept;
 [[nodiscard]] bool quic_frame_congestion_controlled(QuicFrameKind kind) noexcept;
 [[nodiscard]] bool quic_frame_probing(QuicFrameKind kind) noexcept;
+// Whether `kind` is one of RFC 10069's frames, which only a connection that negotiated multipath reads.
+[[nodiscard]] bool quic_frame_multipath(QuicFrameKind kind) noexcept;
 
 // Whether `kind` (with `application_close` for CONNECTION_CLOSE's type 0x1d) may arrive in a packet of `packet` from
 // a server (`from_server`) or a client (section 12.4 table 3 and sections 19.7 and 19.20: only a server sends
 // NEW_TOKEN and HANDSHAKE_DONE; RFC 9221: DATAGRAM, and the address discovery draft: OBSERVED_ADDRESS, in 0-RTT and
-// 1-RTT). Initial and Handshake packets carry PADDING,
-// PING, ACK, CRYPTO and the transport CONNECTION_CLOSE; 0-RTT packets carry neither ACK, CRYPTO, NEW_TOKEN,
-// PATH_RESPONSE nor HANDSHAKE_DONE (and only clients send them); 1-RTT packets carry every frame. Version
+// 1-RTT; RFC 10069 section 4: its frames in 1-RTT packets alone). Initial and Handshake packets carry PADDING, PING,
+// ACK, CRYPTO and the transport CONNECTION_CLOSE; 0-RTT packets carry neither ACK, CRYPTO, NEW_TOKEN, PATH_RESPONSE,
+// HANDSHAKE_DONE nor a multipath frame (and only clients send them); 1-RTT packets carry every frame. Version
 // Negotiation, Retry and other versions carry none.
 [[nodiscard]] bool quic_frame_allowed(QuicFrameKind kind, bool application_close, QuicPacketType packet,
                                       bool from_server) noexcept;
@@ -125,7 +142,8 @@ struct QuicReceiveTimestamp
 };
 
 // An ACK frame as read: its largest acknowledged, raw ACK Delay (scaled by the peer's ack_delay_exponent), its first
-// range and the encoded further ranges, which QuicAckRanges walks, and the ECN counts of type 0x03 (and 0x03178308).
+// range and the encoded further ranges, which QuicAckRanges walks, and the ECN counts of type 0x03 (and 0x03178308,
+// and PATH_ACK's 0x3f).
 // An ACK_RECEIVE_TIMESTAMPS frame adds its Timestamp Ranges, which QuicAckTimestamps walks: read_quic_frame checked
 // that every range's packet numbers stay at or below the largest acknowledged and at or above 0, and that no time
 // falls below the basis (a Timestamp Delta larger than the time before it), so walking cannot underflow.
@@ -168,6 +186,17 @@ struct QuicAck
 //   ConnectionClose    application (type 0x1d), error_code, frame_type (0x1c only), data (the reason phrase)
 //   Datagram           data, to_end
 //   ObservedAddress    sequence, data (the address: 4 bytes for IPv4, 16 for IPv6, in network order), value (the port)
+// and RFC 10069's, each path ID at most kQuicMaxPathId (a larger one is above any limit: PROTOCOL_VIOLATION):
+//   PathAck            path_id, ack (read only: write_quic_path_ack writes PATH_ACK frames)
+//   PathAbandon        path_id, error_code
+//   PathStatus         path_id, sequence (the Path Status Sequence Number), backup (PATH_STATUS_BACKUP, else
+//                      PATH_STATUS_AVAILABLE)
+//   PathNewConnectionId path_id, sequence, retire_prior_to (at most sequence), data (the ID, 1 to 20 bytes),
+//                      reset_token
+//   PathRetireConnectionId path_id, sequence
+//   MaxPathId          value (the Maximum Path Identifier, at most kQuicMaxPathId)
+//   PathsBlocked       value (the Maximum Path Identifier, at most kQuicMaxPathId)
+//   PathCidsBlocked    path_id, sequence (the Next Sequence Number)
 // `to_end` is a STREAM or DATAGRAM frame without its Length field, whose data runs to the end of the packet: what
 // read_quic_frame reports, and what a writer chooses for a packet's last frame.
 struct QuicFrame
@@ -180,6 +209,7 @@ struct QuicFrame
     u64                 frame_type      = 0U;
     u64                 sequence        = 0U;
     u64                 retire_prior_to = 0U;
+    u64                 path_id         = 0U;
     cont::ConstSpan<u8> data;
     cont::ConstSpan<u8> reset_token;
     QuicAck             ack;
@@ -187,6 +217,7 @@ struct QuicFrame
     bool                to_end        = false;
     bool                bidirectional = false;
     bool                application   = false;
+    bool                backup        = false;
 };
 
 // Takes one frame from `in`, a packet's decrypted payload: NoError with `out` filled, or the error the connection
@@ -231,10 +262,11 @@ private:
     bool m_first = true;
 };
 
-// The bytes write_quic_frame writes for `frame`; 0 for a frame it refuses (an Ack, a field above kQuicMaxVarint or
-// above its section 19 bound, a NEW_CONNECTION_ID without a 1- to 20-byte ID and a 16-byte token, path data not 8
-// bytes, an empty NEW_TOKEN token, a STREAM or CRYPTO frame whose end passes 2^62 - 1, an empty PADDING frame, an
-// OBSERVED_ADDRESS whose address is neither 4 nor 16 bytes or whose port passes 65535).
+// The bytes write_quic_frame writes for `frame`; 0 for a frame it refuses (an Ack or PathAck, a field above
+// kQuicMaxVarint or above its section 19 bound, a NEW_CONNECTION_ID or PATH_NEW_CONNECTION_ID without a 1- to
+// 20-byte ID and a 16-byte token, path data not 8 bytes, an empty NEW_TOKEN token, a STREAM or CRYPTO frame whose end
+// passes 2^62 - 1, an empty PADDING frame, an OBSERVED_ADDRESS whose address is neither 4 nor 16 bytes or whose port
+// passes 65535, a path ID or Maximum Path Identifier above kQuicMaxPathId).
 [[nodiscard]] usize quic_frame_bytes(const QuicFrame& frame) noexcept;
 
 // Writes `frame` at the start of `out` and returns its bytes; 0, writing nothing, when it is refused or does not fit.
@@ -253,5 +285,15 @@ private:
 // Writes that frame at the start of `out` and returns its bytes; 0, writing nothing, when refused or too large.
 [[nodiscard]] usize write_quic_ack(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn,
                                    cont::Span<u8> out, cont::ConstSpan<QuicReceiveTimestamp> timestamps = {}) noexcept;
+
+// The bytes of a PATH_ACK frame (RFC 10069 section 4.1: type 0x3e, 0x3f with `ecn`) acknowledging `ranges` of path
+// `path`'s packet number space, as quic_ack_bytes's without timestamps; 0 as there, or for a path above
+// kQuicMaxPathId.
+[[nodiscard]] usize quic_path_ack_bytes(u64 path, cont::ConstSpan<QuicAckRange> ranges, u64 delay,
+                                        const EcnCounts* ecn = nullptr) noexcept;
+
+// Writes that frame at the start of `out` and returns its bytes; 0, writing nothing, when refused or too large.
+[[nodiscard]] usize write_quic_path_ack(u64 path, cont::ConstSpan<QuicAckRange> ranges, u64 delay,
+                                        const EcnCounts* ecn, cont::Span<u8> out) noexcept;
 
 } // namespace crd::net

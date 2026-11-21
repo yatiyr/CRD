@@ -60,6 +60,14 @@ inline constexpr usize kQuicInitialSecretBytes   = 32U; // SHA-256
 inline constexpr usize kQuicMaxConnectionIdBytes = 20U; // RFC 9000 section 17.2
 inline constexpr usize kQuicMaxRetryBytes        = 1472U; // the UDP payload of a 1500-byte IPv4 path
 inline constexpr u64   kQuicMaxPacketNumber      = (u64{1} << 62U) - 1U;
+inline constexpr u64   kQuicMaxPathId            = 0xFFFFFFFFU; // RFC 10069 section 2.1: 32 bits of the AEAD nonce
+
+// The AEAD nonce of packet `packet_number` on path `path` (RFC 9001 section 5.3, RFC 10069 section 2.4): the IV
+// exclusive-or the 96-bit path-and-packet-number, the path ID's 32 bits then the packet number's 64 in network order.
+// Path 0 is RFC 9001's nonce, so a connection without multipath and a multipath connection's first path match. Every
+// QUIC AEAD's nonce is 12 bytes, the shortest RFC 10069 accepts (provider.hpp's kAeadNonceBytes).
+void quic_packet_nonce(const u8 (&iv)[kAeadNonceBytes], u32 path, u64 packet_number,
+                       u8 (&nonce)[kAeadNonceBytes]) noexcept;
 
 // The encryption levels of a QUIC connection (RFC 9001 section 4.1.3). The first kQuicLevels carry CRYPTO data:
 // Initial packets are protected by quic_initial_secret's keys, the others by the handshake's own secrets. Early (0-RTT)
@@ -144,14 +152,17 @@ public:
     [[nodiscard]] bool update_due() const noexcept { return ready() && m_sealed >= m_limit - m_limit / 4U; }
 
     // Seals packet number `packet_number`'s packet in place: `packet` holds the header (`header_bytes`, the
-    // associated data), the plaintext payload, then kQuicTagBytes the tag is written to. The nonce is the IV
-    // exclusive-or the packet number. BadLength when the packet number passes kQuicMaxPacketNumber or the packet has
-    // no room for a tag; Exhausted at the confidentiality limit, with nothing written.
-    [[nodiscard]] CryptoError seal(u64 packet_number, cont::Span<u8> packet, usize header_bytes) noexcept;
+    // associated data), the plaintext payload, then kQuicTagBytes the tag is written to. The nonce is
+    // quic_packet_nonce's for `path` (a multipath connection's path ID; 0 otherwise). BadLength when the packet number
+    // passes kQuicMaxPacketNumber or the packet has no room for a tag; Exhausted at the confidentiality limit, with
+    // nothing written. The limit counts the packets of every path (RFC 10069 section 7.3).
+    [[nodiscard]] CryptoError seal(u64 packet_number, cont::Span<u8> packet, usize header_bytes,
+                                   u32 path = 0U) noexcept;
 
     // Opens a packet sealed as above, in place: the plaintext payload is then packet[header_bytes, size -
     // kQuicTagBytes). Forged zeroes it (no unauthenticated byte is released); the tag bytes stay as received.
-    [[nodiscard]] CryptoError open(u64 packet_number, cont::Span<u8> packet, usize header_bytes) const noexcept;
+    [[nodiscard]] CryptoError open(u64 packet_number, cont::Span<u8> packet, usize header_bytes,
+                                   u32 path = 0U) const noexcept;
 
 private:
     AeadKey     m_aead;

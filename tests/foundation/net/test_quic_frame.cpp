@@ -2,8 +2,8 @@
 // and written byte for byte, every frame kind through a round trip in its shortest encoding, every refusal of
 // sections 12.4 and 19 with nothing consumed, ACK ranges against a reference walk, ACK_RECEIVE_TIMESTAMPS
 // (draft-ietf-quic-receive-ts-03) byte for byte, reordered reports round tripped and every bound the draft sets
-// refused, OBSERVED_ADDRESS (draft-ietf-quic-address-discovery-01) byte for byte for both families, and the frame
-// placement table of section 12.4 restated.
+// refused, OBSERVED_ADDRESS (draft-ietf-quic-address-discovery-01) byte for byte for both families, RFC 10069's
+// multipath frames byte for byte with their path ID bounds, and the frame placement table of section 12.4 restated.
 
 #include "ingress_fixture.hpp"
 #include "quic_vectors.hpp"
@@ -45,7 +45,7 @@ bool same_frame(const QuicFrame& a, const QuicFrame& b)
            a.error_code == b.error_code && a.frame_type == b.frame_type && a.sequence == b.sequence &&
            a.retire_prior_to == b.retire_prior_to && same(a.data, b.data) && same(a.reset_token, b.reset_token) &&
            a.fin == b.fin && a.to_end == b.to_end && a.bidirectional == b.bidirectional &&
-           a.application == b.application;
+           a.application == b.application && a.path_id == b.path_id && a.backup == b.backup;
 }
 
 // One frame of every kind write_quic_frame writes, each with its fields away from zero.
@@ -144,6 +144,38 @@ crd::containers::Array<QuicFrame> every_frame()
         f.sequence = 1U;
         f.data = ConstSpan<u8>(kIpv6, sizeof(kIpv6));
         f.value = 443U;
+    }
+    {
+        QuicFrame& f = add(QuicFrameKind::PathAbandon);
+        f.path_id = kQuicMaxPathId;
+        f.error_code = static_cast<u64>(QuicTransportError::NoCidAvailableForPath);
+    }
+    for (const bool backup : {false, true})
+    {
+        QuicFrame& f = add(QuicFrameKind::PathStatus);
+        f.path_id = 5U;
+        f.sequence = backup ? 70000U : 1U;
+        f.backup = backup;
+    }
+    {
+        QuicFrame& f = add(QuicFrameKind::PathNewConnectionId);
+        f.path_id = 300U;
+        f.sequence = 4U;
+        f.retire_prior_to = 2U;
+        f.data = ConstSpan<u8>(kId, sizeof(kId));
+        f.reset_token = ConstSpan<u8>(kReset, sizeof(kReset));
+    }
+    {
+        QuicFrame& f = add(QuicFrameKind::PathRetireConnectionId);
+        f.path_id = 1U;
+        f.sequence = 9U;
+    }
+    add(QuicFrameKind::MaxPathId).value = kQuicMaxPathId;
+    add(QuicFrameKind::PathsBlocked).value = 16U;
+    {
+        QuicFrame& f = add(QuicFrameKind::PathCidsBlocked);
+        f.path_id = 2U;
+        f.sequence = 3U;
     }
     return frames;
 }
@@ -311,6 +343,18 @@ TEST_CASE("QUIC frames: unknown and longer-encoded types and section 19's bounds
         {"809f81a800", QuicTransportError::FrameEncodingError},             // past OBSERVED_ADDRESS's two types
         {"809f81a500", QuicTransportError::FrameEncodingError},             // below them
         {"c0000000009f81a600c633640701bb", QuicTransportError::ProtocolViolation}, // its type in eight bytes
+        {"7e7400", QuicTransportError::FrameEncodingError},                 // between RFC 10069's types
+        {"7e7d0000", QuicTransportError::FrameEncodingError},               // past them
+        {"7e75c000000100000000" "00", QuicTransportError::ProtocolViolation}, // PATH_ABANDON of path 2^32
+        {"7e7ac000000100000000", QuicTransportError::ProtocolViolation},      // MAX_PATH_ID 2^32
+        {"7e7bc000000100000000", QuicTransportError::ProtocolViolation},      // PATHS_BLOCKED 2^32
+        {"7e7cc000000100000000" "00", QuicTransportError::ProtocolViolation}, // PATH_CIDS_BLOCKED of path 2^32
+        {"3ec000000100000000" "00000000", QuicTransportError::ProtocolViolation}, // PATH_ACK of path 2^32
+        {"3e0100000001", QuicTransportError::FrameEncodingError},             // PATH_ACK: first range above largest
+        {"7e78010102" "08c0c1c2c3c4c5c6c7" "0102030405060708090a0b0c0d0e0f10",
+         QuicTransportError::FrameEncodingError},                             // retire prior to above sequence
+        {"7e7801000000", QuicTransportError::FrameEncodingError},             // PATH_NEW_CONNECTION_ID, empty ID
+        {"403e0100000000", QuicTransportError::ProtocolViolation},            // PATH_ACK's type in two bytes
     };
     for (const Case& test : cases)
     {
@@ -376,6 +420,39 @@ TEST_CASE("QUIC frames: writers refuse what no reader would accept", "[net][quic
     CHECK(refused(frame));
     frame.kind = QuicFrameKind::ConnectionClose;
     frame.error_code = crd::net::kQuicMaxVarint + 1U;
+    CHECK(refused(frame));
+    // RFC 10069: PATH_ACK frames are write_quic_path_ack's, and no path ID or maximum passes 2^32 - 1.
+    frame = QuicFrame{};
+    frame.kind = QuicFrameKind::PathAck;
+    CHECK(refused(frame));
+    for (const QuicFrameKind kind : {QuicFrameKind::PathAbandon, QuicFrameKind::PathStatus,
+                                     QuicFrameKind::PathRetireConnectionId, QuicFrameKind::PathCidsBlocked})
+    {
+        frame = QuicFrame{};
+        frame.kind = kind;
+        frame.path_id = kQuicMaxPathId + 1U;
+        CHECK(refused(frame));
+        frame.path_id = kQuicMaxPathId;
+        CHECK_FALSE(refused(frame));
+    }
+    for (const QuicFrameKind kind : {QuicFrameKind::MaxPathId, QuicFrameKind::PathsBlocked})
+    {
+        frame = QuicFrame{};
+        frame.kind = kind;
+        frame.value = kQuicMaxPathId + 1U;
+        CHECK(refused(frame));
+    }
+    frame = QuicFrame{};
+    frame.kind = QuicFrameKind::PathNewConnectionId;
+    frame.data = ConstSpan<u8>(kId, sizeof(kId));
+    frame.reset_token = ConstSpan<u8>(kReset, sizeof(kReset));
+    frame.path_id = kQuicMaxPathId + 1U;
+    CHECK(refused(frame));
+    frame.path_id = 0U;
+    frame.retire_prior_to = 1U;
+    CHECK(refused(frame));
+    frame.retire_prior_to = 0U;
+    frame.reset_token = ConstSpan<u8>(kReset, 15U);
     CHECK(refused(frame));
 }
 
@@ -653,6 +730,14 @@ TEST_CASE("QUIC frames: placement follows RFC 9000's table 3, RFC 9221 and the s
         {QuicFrameKind::HandshakeDone, false, "___1", true},
         {QuicFrameKind::Datagram, false, "__01", false},
         {QuicFrameKind::ObservedAddress, false, "__01", false}, // the application space alone (the draft's 4.1)
+        {QuicFrameKind::PathAck, false, "___1", false},         // RFC 10069 section 4: 1-RTT packets alone
+        {QuicFrameKind::PathAbandon, false, "___1", false},
+        {QuicFrameKind::PathStatus, false, "___1", false},
+        {QuicFrameKind::PathNewConnectionId, false, "___1", false},
+        {QuicFrameKind::PathRetireConnectionId, false, "___1", false},
+        {QuicFrameKind::MaxPathId, false, "___1", false},
+        {QuicFrameKind::PathsBlocked, false, "___1", false},
+        {QuicFrameKind::PathCidsBlocked, false, "___1", false},
     };
     const QuicPacketType packets[4] = {QuicPacketType::Initial, QuicPacketType::Handshake, QuicPacketType::ZeroRtt,
                                        QuicPacketType::OneRtt};
@@ -689,6 +774,18 @@ TEST_CASE("QUIC frames: placement follows RFC 9000's table 3, RFC 9221 and the s
     CHECK(quic_frame_ack_eliciting(QuicFrameKind::ObservedAddress));
     CHECK(quic_frame_congestion_controlled(QuicFrameKind::ObservedAddress));
     CHECK_FALSE(quic_frame_probing(QuicFrameKind::Stream));
+    for (const Row& row : rows)
+    {
+        // RFC 10069's frames, and nothing else, are its; every one but PATH_ACK elicits an acknowledgement.
+        const bool multipath = row.kind >= QuicFrameKind::PathAck;
+        CHECK(quic_frame_multipath(row.kind) == multipath);
+        if (multipath)
+        {
+            CHECK(quic_frame_ack_eliciting(row.kind) == (row.kind != QuicFrameKind::PathAck));
+            CHECK(quic_frame_congestion_controlled(row.kind) == (row.kind != QuicFrameKind::PathAck));
+            CHECK(quic_frame_probing(row.kind) == (row.kind == QuicFrameKind::PathNewConnectionId));
+        }
+    }
 }
 
 TEST_CASE("QUIC frames: OBSERVED_ADDRESS reads and writes both families byte for byte", "[net][quic-frame]")
@@ -728,6 +825,109 @@ TEST_CASE("QUIC frames: OBSERVED_ADDRESS reads and writes both families byte for
     bad = six;
     bad.sequence = crd::net::kQuicMaxVarint + 1U;
     CHECK(quic_frame_bytes(bad) == 0U);
+}
+
+TEST_CASE("QUIC frames: RFC 10069's multipath frames read and write byte for byte", "[net][quic-frame][multipath]")
+{
+    struct Wire
+    {
+        const char* bytes;
+        QuicFrameKind kind;
+        u64 path_id;
+        u64 second; // the error code, sequence or maximum
+        bool backup;
+    };
+    // Section 4's layouts: each type is a two-byte varint (0x3e75 to 0x3e7c), then its fields.
+    const Wire wires[] = {
+        {"7e75" "01" "7e76", QuicFrameKind::PathAbandon, 1U, 0x3E76U, false}, // PATH_UNSTABLE_OR_POOR
+        {"7e76" "03" "05", QuicFrameKind::PathStatus, 3U, 5U, true},
+        {"7e77" "03" "06", QuicFrameKind::PathStatus, 3U, 6U, false},
+        {"7e79" "02" "00", QuicFrameKind::PathRetireConnectionId, 2U, 0U, false},
+        {"7e7a" "c0000000ffffffff", QuicFrameKind::MaxPathId, 0U, 0xFFFFFFFFU, false},
+        {"7e7b" "10", QuicFrameKind::PathsBlocked, 0U, 16U, false},
+        {"7e7c" "01" "02", QuicFrameKind::PathCidsBlocked, 1U, 2U, false},
+    };
+    for (const Wire& wire : wires)
+    {
+        INFO(wire.bytes);
+        crd::containers::Array<char> text;
+        for (const char* c = wire.bytes; *c != '\0'; ++c)
+        {
+            text.push_back(*c);
+        }
+        text.push_back('\0');
+        u8 bytes[32] = {};
+        const usize size = hex(text.data(), bytes);
+        QuicFrame frame;
+        usize consumed = 0U;
+        REQUIRE(read_one(ConstSpan<u8>(bytes, size), frame, consumed) == QuicTransportError::NoError);
+        CHECK(consumed == size);
+        CHECK(frame.kind == wire.kind);
+        CHECK(frame.path_id == wire.path_id);
+        CHECK(frame.backup == wire.backup);
+        const u64 second = (wire.kind == QuicFrameKind::PathAbandon) ? frame.error_code
+                           : (wire.kind == QuicFrameKind::MaxPathId || wire.kind == QuicFrameKind::PathsBlocked)
+                               ? frame.value
+                               : frame.sequence;
+        CHECK(second == wire.second);
+        // Written back in the same, shortest, encodings (2^32 - 1 takes eight bytes).
+        u8 out[32] = {};
+        CHECK(write_quic_frame(frame, Span<u8>(out, sizeof(out))) == size);
+        CHECK(std::memcmp(out, bytes, size) == 0);
+    }
+
+    // PATH_NEW_CONNECTION_ID: path 1, sequence 0, retire prior to 0, an 8-byte ID and its token.
+    const u8 issued[] = {0x7EU, 0x78U, 0x01U, 0x00U, 0x00U, 0x08U, 0xC0U, 0xC1U, 0xC2U, 0xC3U, 0xC4U, 0xC5U, 0xC6U,
+                         0xC7U, 0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U, 0x07U, 0x08U, 0x09U, 0x0AU, 0x0BU, 0x0CU,
+                         0x0DU, 0x0EU, 0x0FU, 0x10U};
+    QuicFrame frame;
+    usize consumed = 0U;
+    REQUIRE(read_one(ConstSpan<u8>(issued, sizeof(issued)), frame, consumed) == QuicTransportError::NoError);
+    CHECK(frame.kind == QuicFrameKind::PathNewConnectionId);
+    CHECK(frame.path_id == 1U);
+    CHECK(same(frame.data, ConstSpan<u8>(kId, sizeof(kId))));
+    CHECK(same(frame.reset_token, ConstSpan<u8>(kReset, sizeof(kReset))));
+    u8 out[64] = {};
+    REQUIRE(write_quic_frame(frame, Span<u8>(out, sizeof(out))) == sizeof(issued));
+    CHECK(std::memcmp(out, issued, sizeof(issued)) == 0);
+
+    // PATH_ACK of path 2 (types 0x3e and 0x3f): largest 100, delay 25, one more range, then the ECN counts.
+    const QuicAckRange ranges[2] = {{90U, 100U}, {40U, 70U}};
+    const EcnCounts counts{3U, 0U, 1U};
+    const u8 plain[] = {0x3EU, 0x02U, 0x40U, 0x64U, 0x19U, 0x01U, 0x0AU, 0x12U, 0x1EU};
+    REQUIRE(quic_path_ack_bytes(2U, ConstSpan<QuicAckRange>(ranges, 2U), 25U) == sizeof(plain));
+    REQUIRE(write_quic_path_ack(2U, ConstSpan<QuicAckRange>(ranges, 2U), 25U, nullptr, Span<u8>(out, sizeof(out))) ==
+            sizeof(plain));
+    CHECK(std::memcmp(out, plain, sizeof(plain)) == 0);
+    const usize with_ecn =
+        write_quic_path_ack(2U, ConstSpan<QuicAckRange>(ranges, 2U), 25U, &counts, Span<u8>(out, sizeof(out)));
+    REQUIRE(with_ecn == sizeof(plain) + 3U);
+    CHECK(out[0] == 0x3FU);
+    CHECK((out[9] == 3U && out[10] == 0U && out[11] == 1U));
+    REQUIRE(read_one(ConstSpan<u8>(out, with_ecn), frame, consumed) == QuicTransportError::NoError);
+    CHECK(consumed == with_ecn);
+    CHECK(frame.kind == QuicFrameKind::PathAck);
+    CHECK(frame.path_id == 2U);
+    CHECK((frame.ack.largest == 100U && frame.ack.delay == 25U && frame.ack.range_count == 1U));
+    CHECK((frame.ack.ecn && frame.ack.ect0 == 3U && frame.ack.ce == 1U));
+    QuicAckRanges walk(frame.ack);
+    QuicAckRange range;
+    CHECK((walk.next(range) && range.smallest == 90U && range.largest == 100U));
+    CHECK((walk.next(range) && range.smallest == 40U && range.largest == 70U));
+    CHECK_FALSE(walk.next(range));
+    // Every cut of it is malformed, and a path above 2^32 - 1, or ranges out of order, are never written.
+    for (usize cut = 1U; cut < with_ecn; ++cut)
+    {
+        CHECK(read_one(ConstSpan<u8>(out, cut), frame, consumed) == QuicTransportError::FrameEncodingError);
+    }
+    CHECK(quic_path_ack_bytes(kQuicMaxPathId + 1U, ConstSpan<QuicAckRange>(ranges, 2U), 25U) == 0U);
+    CHECK(quic_path_ack_bytes(kQuicMaxPathId, ConstSpan<QuicAckRange>(ranges, 2U), 25U) == sizeof(plain) + 7U);
+    const QuicAckRange disordered[2] = {{40U, 70U}, {90U, 100U}};
+    CHECK(quic_path_ack_bytes(0U, ConstSpan<QuicAckRange>(disordered, 2U), 25U) == 0U);
+    u8 small[4] = {0xEEU, 0xEEU, 0xEEU, 0xEEU};
+    CHECK(write_quic_path_ack(2U, ConstSpan<QuicAckRange>(ranges, 2U), 25U, nullptr, Span<u8>(small, sizeof(small))) ==
+          0U);
+    CHECK(small[0] == 0xEEU);
 }
 } // namespace
 

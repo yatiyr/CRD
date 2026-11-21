@@ -23,6 +23,7 @@ constexpr u32   kSeenResetStreamAt = 20U;
 constexpr u32 kSeenReceiveTimes = 21U;
 constexpr u32 kSeenReceiveExponent = 22U;
 constexpr u32 kSeenAddressDiscovery = 23U;
+constexpr u32 kSeenInitialMaxPathId = 24U;
 constexpr u32 kNotRead = 64U;
 
 bool equal_bytes(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
@@ -193,8 +194,9 @@ bool writable(const QuicTransportParameters& p, crypto::QuicSide side) noexcept
     if (!varints_in_range(p) || p.max_udp_payload_size < kQuicMinMaxUdpPayload ||
         p.ack_delay_exponent > kQuicMaxAckDelayExponent || p.max_ack_delay >= kQuicMaxAckDelayLimit ||
         p.receive_timestamps_exponent > kQuicMaxReceiveTimestampsExponent ||
-        p.address_discovery > QuicAddressDiscovery::Both || p.active_connection_id_limit < kQuicDefaultActiveIdLimit || p.initial_max_streams_bidi > kQuicMaxStreams ||
-        p.initial_max_streams_uni > kQuicMaxStreams)
+        p.address_discovery > QuicAddressDiscovery::Both || p.active_connection_id_limit < kQuicDefaultActiveIdLimit ||
+        p.initial_max_streams_bidi > kQuicMaxStreams || p.initial_max_streams_uni > kQuicMaxStreams ||
+        (p.has_initial_max_path_id && p.initial_max_path_id > kQuicMaxPathId))
     {
         return false;
     }
@@ -288,6 +290,10 @@ void emit(const QuicTransportParameters& p, QuicTransportParameterGrease grease,
     if (p.max_datagram_frame_size != 0U)
     {
         out.varint(iana::kQuicTpMaxDatagramFrameSize, p.max_datagram_frame_size);
+    }
+    if (p.has_initial_max_path_id)
+    {
+        out.varint(iana::kQuicTpInitialMaxPathId, p.initial_max_path_id);
     }
     if (p.grease_quic_bit)
     {
@@ -429,6 +435,10 @@ u32 seen_bit(u64 id) noexcept
     {
         return kSeenAddressDiscovery;
     }
+    if (id == iana::kQuicTpInitialMaxPathId)
+    {
+        return kSeenInitialMaxPathId;
+    }
     if (id == iana::kQuicTpVersionInformation)
     {
         return kSeenVersionInfo;
@@ -478,6 +488,12 @@ bool read_known(u64 id, cont::ConstSpan<u8> value, crypto::QuicSide side, QuicTr
         }
         p.address_discovery = static_cast<QuicAddressDiscovery>(mode + 1U);
         return true;
+    }
+    if (id == iana::kQuicTpInitialMaxPathId)
+    {
+        // RFC 10069 section 2.1: above 2^32 - 1 is TRANSPORT_PARAMETER_ERROR.
+        p.has_initial_max_path_id = true;
+        return read_exact_varint(value, p.initial_max_path_id) && p.initial_max_path_id <= kQuicMaxPathId;
     }
     if (id == iana::kQuicTpVersionInformation)
     {
@@ -647,6 +663,18 @@ QuicTransportError quic_check_connection_ids(const QuicTransportParameters& para
         return QuicTransportError::ProtocolViolation;
     }
     return QuicTransportError::NoError;
+}
+
+bool quic_multipath_negotiated(const QuicTransportParameters& local, const QuicTransportParameters& peer) noexcept
+{
+    return local.has_initial_max_path_id && peer.has_initial_max_path_id;
+}
+
+QuicTransportError quic_check_multipath(const QuicTransportParameters& local, const QuicTransportParameters& peer,
+                                        bool zero_length_ids) noexcept
+{
+    return (quic_multipath_negotiated(local, peer) && zero_length_ids) ? QuicTransportError::ProtocolViolation
+                                                                       : QuicTransportError::NoError;
 }
 
 bool quic_versions_compatible(u32 from, u32 to) noexcept

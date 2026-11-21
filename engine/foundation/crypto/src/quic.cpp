@@ -142,15 +142,6 @@ CryptoError suite_of(QuicVersion version, AlgorithmId aead, cont::ConstSpan<u8> 
     return secret.size() == hkdf_hash_bytes(hkdf) ? CryptoError::None : CryptoError::BadLength;
 }
 
-void packet_nonce(const u8 (&iv)[kAeadNonceBytes], u64 packet_number, u8 (&nonce)[kAeadNonceBytes]) noexcept
-{
-    std::memcpy(nonce, iv, kAeadNonceBytes);
-    for (usize i = 0U; i < 8U; ++i)
-    {
-        nonce[kAeadNonceBytes - 1U - i] ^= static_cast<u8>(packet_number >> (8U * i));
-    }
-}
-
 // The sample's offset (RFC 9001 section 5.4.2: as if the packet number were 4 bytes long), or 0 when the packet is too
 // short to hold the sample.
 usize sample_offset(usize packet_bytes, usize packet_number_offset) noexcept
@@ -173,6 +164,21 @@ constexpr u64   kAesGcmIntegrityLimit       = u64{1} << 52U;
 constexpr u64   kChachaIntegrityLimit       = u64{1} << 36U;
 constexpr usize kRetryPseudoBytes           = 1U + kQuicMaxConnectionIdBytes + kQuicMaxRetryBytes;
 } // namespace
+
+void quic_packet_nonce(const u8 (&iv)[kAeadNonceBytes], u32 path, u64 packet_number,
+                       u8 (&nonce)[kAeadNonceBytes]) noexcept
+{
+    static_assert(kAeadNonceBytes == 12U, "RFC 10069 section 2.4's path-and-packet-number fills a 12-byte nonce");
+    std::memcpy(nonce, iv, kAeadNonceBytes);
+    for (usize i = 0U; i < 8U; ++i)
+    {
+        nonce[kAeadNonceBytes - 1U - i] ^= static_cast<u8>(packet_number >> (8U * i));
+    }
+    for (usize i = 0U; i < 4U; ++i)
+    {
+        nonce[3U - i] ^= static_cast<u8>(path >> (8U * i));
+    }
+}
 
 bool quic_version_supported(u32 version) noexcept
 {
@@ -354,7 +360,7 @@ void QuicPacketKey::clear() noexcept
     m_limit        = 0U;
 }
 
-CryptoError QuicPacketKey::seal(u64 packet_number, cont::Span<u8> packet, usize header_bytes) noexcept
+CryptoError QuicPacketKey::seal(u64 packet_number, cont::Span<u8> packet, usize header_bytes, u32 path) noexcept
 {
     if (!ready())
     {
@@ -370,7 +376,7 @@ CryptoError QuicPacketKey::seal(u64 packet_number, cont::Span<u8> packet, usize 
         return CryptoError::Exhausted;
     }
     u8 nonce[kAeadNonceBytes];
-    packet_nonce(m_iv, packet_number, nonce);
+    quic_packet_nonce(m_iv, path, packet_number, nonce);
     const usize       payload = packet.size() - header_bytes - kQuicTagBytes;
     const CryptoError error   = m_aead.seal(nonce, packet.subspan(header_bytes, payload), packet.first(header_bytes),
                                             packet.subspan(header_bytes));
@@ -381,7 +387,7 @@ CryptoError QuicPacketKey::seal(u64 packet_number, cont::Span<u8> packet, usize 
     return error;
 }
 
-CryptoError QuicPacketKey::open(u64 packet_number, cont::Span<u8> packet, usize header_bytes) const noexcept
+CryptoError QuicPacketKey::open(u64 packet_number, cont::Span<u8> packet, usize header_bytes, u32 path) const noexcept
 {
     if (!ready())
     {
@@ -393,7 +399,7 @@ CryptoError QuicPacketKey::open(u64 packet_number, cont::Span<u8> packet, usize 
         return CryptoError::BadLength;
     }
     u8 nonce[kAeadNonceBytes];
-    packet_nonce(m_iv, packet_number, nonce);
+    quic_packet_nonce(m_iv, path, packet_number, nonce);
     const usize payload = packet.size() - header_bytes - kQuicTagBytes;
     return m_aead.open(nonce, packet.subspan(header_bytes), packet.first(header_bytes),
                        packet.subspan(header_bytes, payload));

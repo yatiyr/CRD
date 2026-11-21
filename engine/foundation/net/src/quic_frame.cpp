@@ -40,6 +40,23 @@ constexpr u64 kTypeDatagram           = 0x30U; // RFC 9221: data to the end of t
 constexpr u64 kTypeDatagramLength     = 0x31U; // RFC 9221: with a Length field
 constexpr u64 kTypeObservedV4 = iana::kQuicFrameObservedAddressV4;
 constexpr u64 kTypeObservedV6 = iana::kQuicFrameObservedAddressV6;
+constexpr u64 kTypePathAck = iana::kQuicFramePathAck; // RFC 10069 section 4
+constexpr u64 kTypePathAckEcn = iana::kQuicFramePathAckEcn;
+constexpr u64 kTypePathAbandon = iana::kQuicFramePathAbandon;
+constexpr u64 kTypePathBackup = iana::kQuicFramePathStatusBackup;
+constexpr u64 kTypePathAvailable = iana::kQuicFramePathStatusAvailable;
+constexpr u64 kTypePathNewConnectionId = iana::kQuicFramePathNewConnectionId;
+constexpr u64 kTypePathRetireConnectionId = iana::kQuicFramePathRetireConnectionId;
+constexpr u64 kTypeMaxPathId = iana::kQuicFrameMaxPathId;
+constexpr u64 kTypePathsBlocked = iana::kQuicFramePathsBlocked;
+constexpr u64 kTypePathCidsBlocked = iana::kQuicFramePathCidsBlocked;
+
+static_assert(static_cast<u64>(QuicTransportError::ApplicationAbandonPath) == iana::kQuicErrorApplicationAbandonPath &&
+              static_cast<u64>(QuicTransportError::PathResourceLimitReached) ==
+                  iana::kQuicErrorPathResourceLimitReached &&
+              static_cast<u64>(QuicTransportError::PathUnstableOrPoor) == iana::kQuicErrorPathUnstableOrPoor &&
+              static_cast<u64>(QuicTransportError::NoCidAvailableForPath) == iana::kQuicErrorNoCidAvailableForPath,
+              "RFC 10069's error codes are the standards register's");
 constexpr usize kIpv4Bytes = 4U;
 constexpr usize kIpv6Bytes = 16U;
 constexpr u64 kMaxPort = 0xFFFFU;
@@ -184,6 +201,7 @@ QuicTransportError read_stream(cont::WireReader& in, u64 type, QuicFrame& frame)
                                                      : QuicTransportError::FrameEncodingError;
 }
 
+// NEW_CONNECTION_ID's fields (section 19.15), which PATH_NEW_CONNECTION_ID's follow (RFC 10069 section 4.4).
 QuicTransportError read_new_connection_id(cont::WireReader& in, QuicFrame& frame) noexcept
 {
     u8 length = 0U;
@@ -208,6 +226,68 @@ QuicTransportError read_close(cont::WireReader& in, bool application, QuicFrame&
         return QuicTransportError::FrameEncodingError;
     }
     return QuicTransportError::NoError;
+}
+
+// RFC 10069 section 4: a frame's path ID, or Maximum Path Identifier, above kQuicMaxPathId is above every limit an
+// end may announce, PROTOCOL_VIOLATION; a malformed field before it FRAME_ENCODING_ERROR.
+QuicTransportError path_bound(QuicTransportError read, u64 value) noexcept
+{
+    if (read != QuicTransportError::NoError)
+    {
+        return read;
+    }
+    return (value <= kQuicMaxPathId) ? QuicTransportError::NoError : QuicTransportError::ProtocolViolation;
+}
+
+// A multipath frame of a path ID and the varint `second` after it.
+QuicTransportError read_path_pair(cont::WireReader& in, QuicFrameKind kind, u64& second, QuicFrame& frame) noexcept
+{
+    frame.kind = kind;
+    const bool read = take_quic_varint(in, frame.path_id) && take_quic_varint(in, second);
+    return path_bound(read ? QuicTransportError::NoError : QuicTransportError::FrameEncodingError, frame.path_id);
+}
+
+QuicTransportError read_multipath(cont::WireReader& in, u64 type, QuicFrame& frame) noexcept
+{
+    switch (type)
+    {
+    case kTypePathAck:
+    case kTypePathAckEcn:
+    {
+        frame.kind = QuicFrameKind::PathAck;
+        if (!take_quic_varint(in, frame.path_id))
+        {
+            return QuicTransportError::FrameEncodingError;
+        }
+        return path_bound(read_ack(in, type == kTypePathAckEcn, frame.ack), frame.path_id);
+    }
+    case kTypePathAbandon:
+        return read_path_pair(in, QuicFrameKind::PathAbandon, frame.error_code, frame);
+    case kTypePathBackup:
+    case kTypePathAvailable:
+        frame.backup = type == kTypePathBackup;
+        return read_path_pair(in, QuicFrameKind::PathStatus, frame.sequence, frame);
+    case kTypePathNewConnectionId:
+        frame.kind = QuicFrameKind::PathNewConnectionId;
+        if (!take_quic_varint(in, frame.path_id))
+        {
+            return QuicTransportError::FrameEncodingError;
+        }
+        return path_bound(read_new_connection_id(in, frame), frame.path_id);
+    case kTypePathRetireConnectionId:
+        return read_path_pair(in, QuicFrameKind::PathRetireConnectionId, frame.sequence, frame);
+    case kTypeMaxPathId:
+    case kTypePathsBlocked:
+    {
+        frame.kind = (type == kTypeMaxPathId) ? QuicFrameKind::MaxPathId : QuicFrameKind::PathsBlocked;
+        const bool read = take_quic_varint(in, frame.value);
+        return path_bound(read ? QuicTransportError::NoError : QuicTransportError::FrameEncodingError, frame.value);
+    }
+    case kTypePathCidsBlocked:
+        return read_path_pair(in, QuicFrameKind::PathCidsBlocked, frame.sequence, frame);
+    default:
+        return QuicTransportError::FrameEncodingError; // section 12.4: an unknown frame type
+    }
 }
 
 // A frame of one varint field (`field`) and the kind it is.
@@ -339,7 +419,7 @@ QuicTransportError read_body(cont::WireReader& in, u64 type, QuicFrame& frame) n
         return read ? QuicTransportError::NoError : QuicTransportError::FrameEncodingError;
     }
     default:
-        return QuicTransportError::FrameEncodingError; // section 12.4: an unknown frame type
+        return read_multipath(in, type, frame);
     }
 }
 
@@ -395,6 +475,22 @@ u64 wire_type(const QuicFrame& frame) noexcept
         return frame.to_end ? kTypeDatagram : kTypeDatagramLength;
     case QuicFrameKind::ObservedAddress:
         return (frame.data.size() == kIpv4Bytes) ? kTypeObservedV4 : kTypeObservedV6;
+    case QuicFrameKind::PathAck:
+        return kTypePathAck;
+    case QuicFrameKind::PathAbandon:
+        return kTypePathAbandon;
+    case QuicFrameKind::PathStatus:
+        return frame.backup ? kTypePathBackup : kTypePathAvailable;
+    case QuicFrameKind::PathNewConnectionId:
+        return kTypePathNewConnectionId;
+    case QuicFrameKind::PathRetireConnectionId:
+        return kTypePathRetireConnectionId;
+    case QuicFrameKind::MaxPathId:
+        return kTypeMaxPathId;
+    case QuicFrameKind::PathsBlocked:
+        return kTypePathsBlocked;
+    case QuicFrameKind::PathCidsBlocked:
+        return kTypePathCidsBlocked;
     }
     return kTypePadding;
 }
@@ -407,7 +503,9 @@ bool add_body(const QuicFrame& frame, usize& total) noexcept
     {
     case QuicFrameKind::Padding:
     case QuicFrameKind::Ack:
-        return false; // PADDING is sized by quic_frame_bytes itself; ACK frames are write_quic_ack's
+    case QuicFrameKind::PathAck:
+        return false; // PADDING is sized by quic_frame_bytes itself; ACK frames are write_quic_ack's, PATH_ACK
+                      // frames write_quic_path_ack's
     case QuicFrameKind::Ping:
     case QuicFrameKind::HandshakeDone:
         return true;
@@ -439,10 +537,13 @@ bool add_body(const QuicFrame& frame, usize& total) noexcept
     case QuicFrameKind::StreamsBlocked:
         return frame.value <= kQuicMaxStreams && add_varint(total, frame.value);
     case QuicFrameKind::NewConnectionId:
+    case QuicFrameKind::PathNewConnectionId:
         total += 1U + data + kQuicResetTokenBytes;
         return data != 0U && data <= crypto::kQuicMaxConnectionIdBytes &&
                frame.reset_token.size() == kQuicResetTokenBytes && frame.retire_prior_to <= frame.sequence &&
-               add_varint(total, frame.sequence) && add_varint(total, frame.retire_prior_to);
+               add_varint(total, frame.sequence) && add_varint(total, frame.retire_prior_to) &&
+               (frame.kind == QuicFrameKind::NewConnectionId ||
+                (frame.path_id <= kQuicMaxPathId && add_varint(total, frame.path_id)));
     case QuicFrameKind::RetireConnectionId:
         return add_varint(total, frame.sequence);
     case QuicFrameKind::PathChallenge:
@@ -460,6 +561,17 @@ bool add_body(const QuicFrame& frame, usize& total) noexcept
         total += data + sizeof(u16);
         return (data == kIpv4Bytes || data == kIpv6Bytes) && frame.value <= kMaxPort &&
                add_varint(total, frame.sequence);
+    case QuicFrameKind::PathAbandon:
+        return frame.path_id <= kQuicMaxPathId && add_varint(total, frame.path_id) &&
+               add_varint(total, frame.error_code);
+    case QuicFrameKind::PathStatus:
+    case QuicFrameKind::PathRetireConnectionId:
+    case QuicFrameKind::PathCidsBlocked:
+        return frame.path_id <= kQuicMaxPathId && add_varint(total, frame.path_id) &&
+               add_varint(total, frame.sequence);
+    case QuicFrameKind::MaxPathId:
+    case QuicFrameKind::PathsBlocked:
+        return frame.value <= kQuicMaxPathId && add_varint(total, frame.value);
     }
     return false;
 }
@@ -470,6 +582,7 @@ void write_body(const QuicFrame& frame, cont::WireWriter& out) noexcept
     {
     case QuicFrameKind::Padding:
     case QuicFrameKind::Ack:
+    case QuicFrameKind::PathAck:
     case QuicFrameKind::Ping:
     case QuicFrameKind::HandshakeDone:
         break;
@@ -521,6 +634,11 @@ void write_body(const QuicFrame& frame, cont::WireWriter& out) noexcept
         put_quic_varint(out, frame.value);
         break;
     case QuicFrameKind::NewConnectionId:
+    case QuicFrameKind::PathNewConnectionId:
+        if (frame.kind == QuicFrameKind::PathNewConnectionId)
+        {
+            put_quic_varint(out, frame.path_id);
+        }
         put_quic_varint(out, frame.sequence);
         put_quic_varint(out, frame.retire_prior_to);
         out.put_u8(static_cast<u8>(frame.data.size()));
@@ -554,6 +672,20 @@ void write_body(const QuicFrame& frame, cont::WireWriter& out) noexcept
         put_quic_varint(out, frame.sequence);
         out.put_bytes(frame.data);
         out.put_u16(static_cast<u16>(frame.value));
+        break;
+    case QuicFrameKind::PathAbandon:
+        put_quic_varint(out, frame.path_id);
+        put_quic_varint(out, frame.error_code);
+        break;
+    case QuicFrameKind::PathStatus:
+    case QuicFrameKind::PathRetireConnectionId:
+    case QuicFrameKind::PathCidsBlocked:
+        put_quic_varint(out, frame.path_id);
+        put_quic_varint(out, frame.sequence);
+        break;
+    case QuicFrameKind::MaxPathId:
+    case QuicFrameKind::PathsBlocked:
+        put_quic_varint(out, frame.value);
         break;
     }
 }
@@ -647,23 +779,119 @@ void emit_timestamps(u64 largest, cont::ConstSpan<QuicReceiveTimestamp> timestam
         index += length;
     }
 }
+
+u64 ack_type(const EcnCounts* ecn) noexcept
+{
+    return (ecn != nullptr) ? kTypeAckEcn : kTypeAck;
+}
+
+// A frame of the ACK family: its wire type, the path ID PATH_ACK writes after it (none for ACK), and its fields.
+struct AckFrame
+{
+    u64 type = kTypeAck;
+    const u64* path = nullptr;
+    cont::ConstSpan<QuicAckRange> ranges;
+    u64 delay = 0U;
+    const EcnCounts* ecn = nullptr;
+    cont::ConstSpan<QuicReceiveTimestamp> timestamps;
+};
+
+// The frame's bytes; 0 for ranges or timestamps out of order, a value above kQuicMaxVarint or a path above
+// kQuicMaxPathId.
+usize ack_bytes(const AckFrame& frame) noexcept
+{
+    const cont::ConstSpan<QuicAckRange> ranges = frame.ranges;
+    if (!ack_ranges_valid(ranges) || !timestamps_valid(ranges, frame.timestamps) ||
+        (frame.path != nullptr && *frame.path > kQuicMaxPathId))
+    {
+        return 0U;
+    }
+    usize total = quic_varint_bytes(frame.type);
+    if ((frame.path != nullptr && !add_varint(total, *frame.path)) || !add_varint(total, ranges[0].largest) ||
+        !add_varint(total, frame.delay) || !add_varint(total, ranges.size() - 1U) ||
+        !add_varint(total, ranges[0].largest - ranges[0].smallest))
+    {
+        return 0U;
+    }
+    for (usize index = 1U; index < ranges.size(); ++index)
+    {
+        // Both values are below kQuicMaxVarint: ack_ranges_valid bounded every range.
+        static_cast<void>(add_varint(total, ranges[index - 1U].smallest - ranges[index].largest - 2U));
+        static_cast<void>(add_varint(total, ranges[index].largest - ranges[index].smallest));
+    }
+    const EcnCounts* ecn = frame.ecn;
+    if (ecn != nullptr &&
+        (!add_varint(total, ecn->ect0) || !add_varint(total, ecn->ect1) || !add_varint(total, ecn->ce)))
+    {
+        return 0U;
+    }
+    if (!frame.timestamps.empty())
+    {
+        emit_timestamps(ranges[0].largest, frame.timestamps, total, nullptr);
+    }
+    return total;
+}
+
+// Writes the frame at the start of `out` and returns its bytes; 0, writing nothing, when refused or too large.
+usize write_ack(const AckFrame& frame, cont::Span<u8> out) noexcept
+{
+    const usize bytes = ack_bytes(frame);
+    if (bytes == 0U || bytes > out.size())
+    {
+        return 0U;
+    }
+    const cont::ConstSpan<QuicAckRange> ranges = frame.ranges;
+    cont::WireWriter writer(out.first(bytes));
+    put_quic_varint(writer, frame.type);
+    if (frame.path != nullptr)
+    {
+        put_quic_varint(writer, *frame.path);
+    }
+    put_quic_varint(writer, ranges[0].largest);
+    put_quic_varint(writer, frame.delay);
+    put_quic_varint(writer, ranges.size() - 1U);
+    put_quic_varint(writer, ranges[0].largest - ranges[0].smallest);
+    for (usize index = 1U; index < ranges.size(); ++index)
+    {
+        put_quic_varint(writer, ranges[index - 1U].smallest - ranges[index].largest - 2U);
+        put_quic_varint(writer, ranges[index].largest - ranges[index].smallest);
+    }
+    if (frame.ecn != nullptr)
+    {
+        put_quic_varint(writer, frame.ecn->ect0);
+        put_quic_varint(writer, frame.ecn->ect1);
+        put_quic_varint(writer, frame.ecn->ce);
+    }
+    if (!frame.timestamps.empty())
+    {
+        usize total = 0U;
+        emit_timestamps(ranges[0].largest, frame.timestamps, total, &writer);
+    }
+    return bytes;
+}
 } // namespace
 
 bool quic_frame_ack_eliciting(QuicFrameKind kind) noexcept
 {
-    return kind != QuicFrameKind::Ack && kind != QuicFrameKind::Padding && kind != QuicFrameKind::ConnectionClose;
+    return kind != QuicFrameKind::Ack && kind != QuicFrameKind::PathAck && kind != QuicFrameKind::Padding &&
+           kind != QuicFrameKind::ConnectionClose;
 }
 
 bool quic_frame_congestion_controlled(QuicFrameKind kind) noexcept
 {
-    return kind != QuicFrameKind::Ack;
+    return kind != QuicFrameKind::Ack && kind != QuicFrameKind::PathAck;
 }
 
 bool quic_frame_probing(QuicFrameKind kind) noexcept
 {
     return kind == QuicFrameKind::Padding || kind == QuicFrameKind::NewConnectionId ||
            kind == QuicFrameKind::PathChallenge || kind == QuicFrameKind::PathResponse ||
-           kind == QuicFrameKind::ObservedAddress;
+           kind == QuicFrameKind::ObservedAddress || kind == QuicFrameKind::PathNewConnectionId;
+}
+
+bool quic_frame_multipath(QuicFrameKind kind) noexcept
+{
+    return kind >= QuicFrameKind::PathAck;
 }
 
 bool quic_frame_allowed(QuicFrameKind kind, bool application_close, QuicPacketType packet, bool from_server) noexcept
@@ -677,7 +905,7 @@ bool quic_frame_allowed(QuicFrameKind kind, bool application_close, QuicPacketTy
     case QuicPacketType::ZeroRtt:
         return !from_server && kind != QuicFrameKind::Ack && kind != QuicFrameKind::Crypto &&
                kind != QuicFrameKind::NewToken && kind != QuicFrameKind::PathResponse &&
-               kind != QuicFrameKind::HandshakeDone;
+               kind != QuicFrameKind::HandshakeDone && !quic_frame_multipath(kind);
     case QuicPacketType::OneRtt:
         return from_server || (kind != QuicFrameKind::NewToken && kind != QuicFrameKind::HandshakeDone);
     case QuicPacketType::Retry:
@@ -832,72 +1060,27 @@ usize write_quic_frame(const QuicFrame& frame, cont::Span<u8> out) noexcept
 usize quic_ack_bytes(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn,
                      cont::ConstSpan<QuicReceiveTimestamp> timestamps) noexcept
 {
-    if (!ack_ranges_valid(ranges) || !timestamps_valid(ranges, timestamps))
-    {
-        return 0U;
-    }
-    usize total = timestamps.empty() ? 1U : quic_varint_bytes(kTypeAckTimes);
-    if (!add_varint(total, ranges[0].largest) || !add_varint(total, delay) || !add_varint(total, ranges.size() - 1U) ||
-        !add_varint(total, ranges[0].largest - ranges[0].smallest))
-    {
-        return 0U;
-    }
-    for (usize index = 1U; index < ranges.size(); ++index)
-    {
-        // Both values are below kQuicMaxVarint: ack_ranges_valid bounded every range.
-        static_cast<void>(add_varint(total, ranges[index - 1U].smallest - ranges[index].largest - 2U));
-        static_cast<void>(add_varint(total, ranges[index].largest - ranges[index].smallest));
-    }
-    if (ecn != nullptr &&
-        (!add_varint(total, ecn->ect0) || !add_varint(total, ecn->ect1) || !add_varint(total, ecn->ce)))
-    {
-        return 0U;
-    }
-    if (!timestamps.empty())
-    {
-        emit_timestamps(ranges[0].largest, timestamps, total, nullptr);
-    }
-    return total;
+    const u64 times = (ecn != nullptr) ? kTypeAckTimesEcn : kTypeAckTimes;
+    return ack_bytes(AckFrame{timestamps.empty() ? ack_type(ecn) : times, nullptr, ranges, delay, ecn, timestamps});
 }
 
 usize write_quic_ack(cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn, cont::Span<u8> out,
                      cont::ConstSpan<QuicReceiveTimestamp> timestamps) noexcept
 {
-    const usize bytes = quic_ack_bytes(ranges, delay, ecn, timestamps);
-    if (bytes == 0U || bytes > out.size())
-    {
-        return 0U;
-    }
-    cont::WireWriter writer(out.first(bytes));
-    if (timestamps.empty())
-    {
-        writer.put_u8(static_cast<u8>(ecn != nullptr ? kTypeAckEcn : kTypeAck));
-    }
-    else
-    {
-        put_quic_varint(writer, ecn != nullptr ? kTypeAckTimesEcn : kTypeAckTimes);
-    }
-    put_quic_varint(writer, ranges[0].largest);
-    put_quic_varint(writer, delay);
-    put_quic_varint(writer, ranges.size() - 1U);
-    put_quic_varint(writer, ranges[0].largest - ranges[0].smallest);
-    for (usize index = 1U; index < ranges.size(); ++index)
-    {
-        put_quic_varint(writer, ranges[index - 1U].smallest - ranges[index].largest - 2U);
-        put_quic_varint(writer, ranges[index].largest - ranges[index].smallest);
-    }
-    if (ecn != nullptr)
-    {
-        put_quic_varint(writer, ecn->ect0);
-        put_quic_varint(writer, ecn->ect1);
-        put_quic_varint(writer, ecn->ce);
-    }
-    if (!timestamps.empty())
-    {
-        usize total = 0U;
-        emit_timestamps(ranges[0].largest, timestamps, total, &writer);
-    }
-    return bytes;
+    const u64 times = (ecn != nullptr) ? kTypeAckTimesEcn : kTypeAckTimes;
+    return write_ack(AckFrame{timestamps.empty() ? ack_type(ecn) : times, nullptr, ranges, delay, ecn, timestamps},
+                     out);
+}
+
+usize quic_path_ack_bytes(u64 path, cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn) noexcept
+{
+    return ack_bytes(AckFrame{(ecn != nullptr) ? kTypePathAckEcn : kTypePathAck, &path, ranges, delay, ecn, {}});
+}
+
+usize write_quic_path_ack(u64 path, cont::ConstSpan<QuicAckRange> ranges, u64 delay, const EcnCounts* ecn,
+                          cont::Span<u8> out) noexcept
+{
+    return write_ack(AckFrame{(ecn != nullptr) ? kTypePathAckEcn : kTypePathAck, &path, ranges, delay, ecn, {}}, out);
 }
 
 } // namespace crd::net

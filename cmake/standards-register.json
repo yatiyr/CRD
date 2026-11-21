@@ -1596,29 +1596,112 @@
     },
     {
       "id": "quic.multipath",
-      "title": "Multipath extension for QUIC",
+      "title": "Managing multiple paths for a QUIC connection",
       "kind": "extension",
-      "state": "watch",
+      "state": "planned",
       "owner": "net",
       "rows": [
         "NET-PATH"
       ],
       "spec": {
-        "type": "draft",
-        "ref": "draft-ietf-quic-multipath",
-        "status": "rfc-editor",
-        "revision": "21",
-        "posted": "2026-03-17"
+        "type": "rfc",
+        "ref": "RFC 10069",
+        "status": "current",
+        "added": "2026-11-21"
       },
       "cryptography": [],
+      "codepoints": [
+        {
+          "registry": "QUIC Transport Parameters",
+          "name": "initial_max_path_id",
+          "value": "0x3e"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "path_ack",
+          "value": "0x3e"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "path_ack_ecn",
+          "value": "0x3f"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "path_abandon",
+          "value": "0x3e75"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "path_status_backup",
+          "value": "0x3e76"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "path_status_available",
+          "value": "0x3e77"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "path_new_connection_id",
+          "value": "0x3e78"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "path_retire_connection_id",
+          "value": "0x3e79"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "max_path_id",
+          "value": "0x3e7a"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "paths_blocked",
+          "value": "0x3e7b"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "path_cids_blocked",
+          "value": "0x3e7c"
+        },
+        {
+          "registry": "QUIC Transport Error Codes",
+          "name": "application_abandon_path",
+          "value": "0x3e"
+        },
+        {
+          "registry": "QUIC Transport Error Codes",
+          "name": "path_resource_limit_reached",
+          "value": "0x3e75"
+        },
+        {
+          "registry": "QUIC Transport Error Codes",
+          "name": "path_unstable_or_poor",
+          "value": "0x3e76"
+        },
+        {
+          "registry": "QUIC Transport Error Codes",
+          "name": "no_cid_available_for_path",
+          "value": "0x3e77"
+        }
+      ],
       "source": {
-        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n01",
-        "read": "2026-10-27",
+        "ref": "docs/design/network-foundation.md#multipath",
+        "read": "2026-11-21",
         "verified": true
       },
       "review": "2026-12-15",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "engine/foundation/crypto/src/quic.cpp",
+        "tests/foundation/crypto/test_quic.cpp",
+        "tests/foundation/net/test_quic_frame.cpp",
+        "tests/foundation/net/test_quic_transport_parameters.cpp",
+        "tests/foundation/net/fuzz/fuzz_quic_codec.cpp"
+      ],
+      "deprecation": null,
+      "note": "Design S78 (docs/design/network-foundation.md#multipath). draft-ietf-quic-multipath-21 was published as RFC 10069 on 2026-11-07 with the draft's suggested codepoints, each checked against the IANA QUIC registry on 2026-11-21, when the RFC was read in full. The wire layer is in (the frames, the parameter, the error codes and the path ID in the AEAD nonce); a connection offers no initial_max_path_id until per-path recovery, the path lifecycle and interop with picoquic land, and until then refuses every multipath frame as an unnegotiated extension's."
     },
     {
       "id": "quic.address-discovery",

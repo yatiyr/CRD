@@ -132,6 +132,36 @@ inline constexpr u64 kQuicTpMaxRecordSize = 0x571C59429CD0845ULL;
 inline constexpr u64 kQuicTpResetStreamAt = 0x001DULL;
 // quic.reliable-reset: QUIC Frame Types, reset_stream_at
 inline constexpr u64 kQuicFrameResetStreamAt = 0x0024ULL;
+// quic.multipath: QUIC Transport Parameters, initial_max_path_id
+inline constexpr u64 kQuicTpInitialMaxPathId = 0x003EULL;
+// quic.multipath: QUIC Frame Types, path_ack
+inline constexpr u64 kQuicFramePathAck = 0x003EULL;
+// quic.multipath: QUIC Frame Types, path_ack_ecn
+inline constexpr u64 kQuicFramePathAckEcn = 0x003FULL;
+// quic.multipath: QUIC Frame Types, path_abandon
+inline constexpr u64 kQuicFramePathAbandon = 0x3E75ULL;
+// quic.multipath: QUIC Frame Types, path_status_backup
+inline constexpr u64 kQuicFramePathStatusBackup = 0x3E76ULL;
+// quic.multipath: QUIC Frame Types, path_status_available
+inline constexpr u64 kQuicFramePathStatusAvailable = 0x3E77ULL;
+// quic.multipath: QUIC Frame Types, path_new_connection_id
+inline constexpr u64 kQuicFramePathNewConnectionId = 0x3E78ULL;
+// quic.multipath: QUIC Frame Types, path_retire_connection_id
+inline constexpr u64 kQuicFramePathRetireConnectionId = 0x3E79ULL;
+// quic.multipath: QUIC Frame Types, max_path_id
+inline constexpr u64 kQuicFrameMaxPathId = 0x3E7AULL;
+// quic.multipath: QUIC Frame Types, paths_blocked
+inline constexpr u64 kQuicFramePathsBlocked = 0x3E7BULL;
+// quic.multipath: QUIC Frame Types, path_cids_blocked
+inline constexpr u64 kQuicFramePathCidsBlocked = 0x3E7CULL;
+// quic.multipath: QUIC Transport Error Codes, application_abandon_path
+inline constexpr u64 kQuicErrorApplicationAbandonPath = 0x003EULL;
+// quic.multipath: QUIC Transport Error Codes, path_resource_limit_reached
+inline constexpr u64 kQuicErrorPathResourceLimitReached = 0x3E75ULL;
+// quic.multipath: QUIC Transport Error Codes, path_unstable_or_poor
+inline constexpr u64 kQuicErrorPathUnstableOrPoor = 0x3E76ULL;
+// quic.multipath: QUIC Transport Error Codes, no_cid_available_for_path
+inline constexpr u64 kQuicErrorNoCidAvailableForPath = 0x3E77ULL;
 // quic.address-discovery: QUIC Transport Parameters, address_discovery
 inline constexpr u64 kQuicTpAddressDiscovery = 0x9F81A176ULL;
 // quic.address-discovery: QUIC Frame Types, observed_address_v4
