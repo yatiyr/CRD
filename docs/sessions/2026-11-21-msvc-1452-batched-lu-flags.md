@@ -25,9 +25,11 @@ every table the host runs gives the known answers" failed. f64, avx2 and every L
 - The checker now reports each routine, and the factorizations each part, separately. The 44 are all LU `info`:
   3 per matrix size from n = 2 to 16 and 10 at n = 22, 23 and 32. Values and pivots were exact.
 - `lu_lanes` reads its singular-lane mask from a stored vector as `bm[q] != T(0)`. A set lane is all ones, which is a
-  NaN, and `NaN != 0` is true. 14.52's optimised code read set lanes of the sixteen-lane f32 mask as clear, so the
-  flags were lost. Cholesky's `gm[q] == T(0)` reads the same kind of mask; it gave the right answer, but it relied on
-  the same float compare of a NaN.
+  NaN, and `NaN != 0` is true. With that read, 14.52's optimised avx512 code lost singular flags; reading the lane's
+  integer bits instead restores every one. The exact miscompiled step is not pinned down. n = 1 passed although it
+  has singular lanes (inputs 5 and 17), so the loss is not simply "every set lane reads clear". Sizes 2 to 16 lost 3
+  flags each and 22, 23 and 32 lost 10. Cholesky's `gm[q] == T(0)` reads the same kind of mask and gave the right
+  answer; it now reads the bits as well. The SVD's convergence read compares stored 0 and 1 values, not a NaN mask.
 
 ## Fix
 
@@ -50,5 +52,6 @@ every table the host runs gives the known answers" failed. f64, avx2 and every L
 - `crd-check-diag-runbooks` and `crd-check-provider-symbols` fail in this one-target tree because their inputs were
   never built (tests of unbuilt targets; AWS-LC's `crypto.lib`). Hosted CI runs them on full trees.
 - Speed: one integer test replaces one float compare per lane per column, outside the elimination loops.
-- Still needed: a hosted 14.52 run of win-release, win-shipping and win-shipping-profile that shows the six tests
-  passing.
+- Hosted proof: manual change-tier run [44895545159](https://github.com/yatiyr/CRD/actions/runs/44895545159) on
+  98617b60 (win-release with its avx512 SDE arms, win-shipping). win-shipping-profile and the scalar presets, the only
+  builders of the `vec4f.hpp` fallback, run in the next complete run.

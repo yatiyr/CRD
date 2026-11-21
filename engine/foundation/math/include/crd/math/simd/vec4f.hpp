@@ -378,8 +378,8 @@ CRD_FORCEINLINE Vec4f select(Vec4f mask, Vec4f true_v, Vec4f false_v) noexcept
     f32 m[4]; mask.store(m);
     f32 t[4]; true_v.store(t);
     f32 fv[4]; false_v.store(fv);
-    // A lane's bits, not a float compare: a true lane is a NaN, and MSVC 14.52's optimiser read a stored NaN mask's
-    // `!= 0` as false (tensor_batched_kernels.cpp's lane_set).
+    // A lane's bits, not a float compare: a true lane is a NaN, and MSVC 14.52 lost flags read from stored NaN
+    // masks by float compares (tensor_batched_kernels.cpp's lane_set).
     return Vec4f(__builtin_bit_cast(crd::u32, m[0]) != 0U ? t[0] : fv[0],
                  __builtin_bit_cast(crd::u32, m[1]) != 0U ? t[1] : fv[1],
                  __builtin_bit_cast(crd::u32, m[2]) != 0U ? t[2] : fv[2],
