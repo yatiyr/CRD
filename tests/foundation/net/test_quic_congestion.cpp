@@ -1927,10 +1927,11 @@ std::ostream& operator<<(std::ostream& out, const LeoRun& run)
 }
 
 // The client sends `total` bytes over a 10 Mbit/s link with 40 ms round trips and a queue of one bandwidth-delay
-// product, its first handover 3 s after confirmation and then every 15 s (Starlink's period).
-LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& link, Aware aware)
+// product, its first handover 3 s after confirmation and then every 15 s (Starlink's period); both ends ask for
+// `times` receive timestamps an ACK frame.
+LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& link, Aware aware, u64 times = 0U)
 {
-    Pair pair(policy, 3U, false);
+    Pair pair(policy, 3U, false, times, times);
     for (Path& path : pair.net->path)
     {
         path.delay_ns = kLeoOneWay;
@@ -2051,6 +2052,22 @@ TEST_CASE("QUIC handover: SCReAM and GCC hold their target rates through a hando
         CHECK(aware.after_bytes > blind.after_bytes);
         CHECK(aware.elapsed_ns <= blind.elapsed_ns);
     }
+    // GCC on the peer's receive times, through a 25 ms step alone: those of covered packets are no queue either.
+    CongestionPolicy gcc;
+    gcc.algorithm = CongestionAlgorithm::Gcc;
+    gcc.target_rate_max = 2U * kLeoRate;
+    LeoLink step;
+    step.outage_ns = 0U;
+    step.spike_ns = 25U * kMs;
+    step.spike_for_ns = 100U * kMs;
+    const LeoRun blind = leo_transfer(gcc, total, step, Aware::None, kQuicMaxReceiveTimestamps);
+    const LeoRun aware = leo_transfer(gcc, total, step, Aware::True, kQuicMaxReceiveTimestamps);
+    INFO("timestamps, blind: " << blind);
+    INFO("timestamps, aware: " << aware);
+    CHECK(aware.min_target_rate > blind.min_target_rate);
+    CHECK(blind.after_reductions != 0U);
+    CHECK(aware.after_reductions == 0U);
+    CHECK(aware.elapsed_ns < blind.elapsed_ns);
 }
 
 TEST_CASE("QUIC handover: an outage inside the guards reaches no persistent congestion; one that outlasts them does",
