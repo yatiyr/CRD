@@ -907,12 +907,12 @@ TEST_CASE("QUIC packets: each multipath path has its own number space, nonce and
 {
     Pair pair;
     start(pair);
-    constexpr crd::u32 kId1 = 7U;
-    constexpr crd::u32 kId2 = kQuicMaxPathId; // the largest path ID: the nonce's whole 32 bits
+    constexpr crd::u32 id1 = 7U;
+    constexpr crd::u32 id2 = kQuicMaxPathId; // the largest path ID: the nonce's whole 32 bits
     for (QuicPacketProtection* end : {&pair.client, &pair.server})
     {
-        REQUIRE(end->open_path(1U, kId1));
-        REQUIRE(end->open_path(2U, kId2));
+        REQUIRE(end->open_path(1U, id1));
+        REQUIRE(end->open_path(2U, id2));
     }
     // Four-byte packet numbers, or with `acked` (the largest the path's peer acknowledged) the shortest encoding.
     const auto send = [](QuicPacketProtection& from, u64 number, usize path, u64 acked = 0U)
@@ -938,9 +938,9 @@ TEST_CASE("QUIC packets: each multipath path has its own number space, nonce and
         CHECK_FALSE(fresh.open_path(kQuicMaxPaths, 1U));
         CHECK_FALSE(fresh.open_path(0U, 1U)); // open
         CHECK_FALSE(fresh.open_path(1U, 0U)); // path ID 0 is slot 0's
-        REQUIRE(fresh.open_path(3U, kId1));
-        CHECK(fresh.path_id(3U) == kId1);
-        CHECK_FALSE(fresh.open_path(1U, kId1));
+        REQUIRE(fresh.open_path(3U, id1));
+        CHECK(fresh.path_id(3U) == id1);
+        CHECK_FALSE(fresh.open_path(1U, id1));
         CHECK_FALSE(fresh.close_path(1U));
         CHECK_FALSE(fresh.close_path(kQuicMaxPaths));
         REQUIRE(fresh.close_path(0U));
@@ -1011,7 +1011,7 @@ TEST_CASE("QUIC packets: each multipath path has its own number space, nonce and
         for (QuicPacketProtection* end : {&pair.client, &pair.server})
         {
             REQUIRE(end->close_path(1U));
-            REQUIRE(end->open_path(1U, kId1 + 1U));
+            REQUIRE(end->open_path(1U, id1 + 1U));
         }
         u64 largest = 0U;
         CHECK_FALSE(pair.server.largest_opened(QuicSpace::Application, largest, 1U));
@@ -1032,30 +1032,30 @@ TEST_CASE("QUIC packets: each multipath path has its own number space, nonce and
         Bytes copy;
 
         REQUIRE(deliver(pair.server, crafted(raw.packet, raw.header, false, 1000U), 0U) == QuicPacketError::None);
-        REQUIRE(deliver(pair.server, crafted(raw.packet, raw.header, false, 0U, kId1), 1U) == QuicPacketError::None);
+        REQUIRE(deliver(pair.server, crafted(raw.packet, raw.header, false, 0U, id1), 1U) == QuicPacketError::None);
         REQUIRE(deliver(pair.server, crafted(phase1, raw.header, true, 1001U), opened, copy, 0U) ==
                 QuicPacketError::None);
         CHECK(opened.key_update);
         CHECK(pair.server.receive_phase() == 1U);
         // Path 1's numbers sit far below path 0's older packets, which say nothing about them.
-        REQUIRE(deliver(pair.server, crafted(phase1, raw.header, true, 1U, kId1), opened, copy, 1U) ==
+        REQUIRE(deliver(pair.server, crafted(phase1, raw.header, true, 1U, id1), opened, copy, 1U) ==
                 QuicPacketError::None);
         CHECK_FALSE(opened.key_update);
         // Path 2 has opened nothing under the new key: the key phase bit alone names the previous key.
-        REQUIRE(deliver(pair.server, crafted(raw.packet, raw.header, false, 50U, kId2), opened, copy, 2U) ==
+        REQUIRE(deliver(pair.server, crafted(raw.packet, raw.header, false, 50U, id2), opened, copy, 2U) ==
                 QuicPacketError::None);
         CHECK_FALSE(opened.key_update);
         CHECK(pair.server.receive_phase() == 1U);
         // Section 6.4 within path 2: the newer key below the older key's 50 is KEY_UPDATE_ERROR, above it is not.
-        CHECK(deliver(pair.server, crafted(phase1, raw.header, true, 40U, kId2), 2U) == QuicPacketError::KeyUpdate);
-        CHECK(deliver(pair.server, crafted(phase1, raw.header, true, 51U, kId2), 2U) == QuicPacketError::None);
+        CHECK(deliver(pair.server, crafted(phase1, raw.header, true, 40U, id2), 2U) == QuicPacketError::KeyUpdate);
+        CHECK(deliver(pair.server, crafted(phase1, raw.header, true, 51U, id2), 2U) == QuicPacketError::None);
         // On path 1 an older key above the newer key's first packet is tried as the next phase's and never opens.
-        CHECK(deliver(pair.server, crafted(raw.packet, raw.header, false, 5U, kId1), 1U) == QuicPacketError::Forged);
+        CHECK(deliver(pair.server, crafted(raw.packet, raw.header, false, 5U, id1), 1U) == QuicPacketError::Forged);
 
         // The next update arrives on path 1 at a number far below path 0's: it is the peer's update, not an error.
         pair.server.discard_previous();
         pair.server.sent_acknowledgement();
-        REQUIRE(deliver(pair.server, crafted(phase2, raw.header, false, 2U, kId1), opened, copy, 1U) ==
+        REQUIRE(deliver(pair.server, crafted(phase2, raw.header, false, 2U, id1), opened, copy, 1U) ==
                 QuicPacketError::None);
         CHECK(opened.key_update);
         CHECK(pair.server.receive_phase() == 2U);
@@ -1072,16 +1072,16 @@ TEST_CASE("QUIC packets: each multipath path has its own number space, nonce and
         crd::crypto::QuicPacketKey phase2;
         REQUIRE(phase1.update(raw.packet) == CryptoError::None);
         REQUIRE(phase2.update(phase1) == CryptoError::None);
-        REQUIRE(deliver(pair.server, crafted(raw.packet, raw.header, false, 100U, kId1), 1U) == QuicPacketError::None);
+        REQUIRE(deliver(pair.server, crafted(raw.packet, raw.header, false, 100U, id1), 1U) == QuicPacketError::None);
         REQUIRE(deliver(pair.server, crafted(phase1, raw.header, true, 1U), 0U) == QuicPacketError::None);
         pair.server.discard_previous();
         pair.server.sent_acknowledgement();
         // Path 1 opened nothing under phase 1, and phase 0's 100 bounds phase 2 there.
-        CHECK(deliver(pair.server, crafted(phase2, raw.header, false, 50U, kId1), 1U) == QuicPacketError::KeyUpdate);
+        CHECK(deliver(pair.server, crafted(phase2, raw.header, false, 50U, id1), 1U) == QuicPacketError::KeyUpdate);
         CHECK(pair.server.receive_phase() == 1U);
         QuicOpened opened;
         Bytes copy;
-        REQUIRE(deliver(pair.server, crafted(phase2, raw.header, false, 101U, kId1), opened, copy, 1U) ==
+        REQUIRE(deliver(pair.server, crafted(phase2, raw.header, false, 101U, id1), opened, copy, 1U) ==
                 QuicPacketError::None);
         CHECK(opened.key_update);
         CHECK(pair.server.receive_phase() == 2U);

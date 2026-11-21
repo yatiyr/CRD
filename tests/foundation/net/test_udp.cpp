@@ -1190,14 +1190,14 @@ TEST_CASE("a flood of Packet Too Big reports is read 64 a call, and the datagram
     UdpSocket far = path.open(RouterPath::Far, false);
     static u8 payload[1400];
     pattern(Span<u8>(payload, sizeof(payload)), 13U);
-    constexpr usize kFlood = 80U;
-    OutgoingDatagram flood[kFlood];
+    constexpr usize flood_size = 80U;
+    OutgoingDatagram flood[flood_size];
     for (OutgoingDatagram& datagram : flood)
     {
         datagram = OutgoingDatagram{ConstSpan<u8>(payload, sizeof(payload)), far.local_endpoint()};
     }
     usize sent = 0U;
-    while (sent < kFlood)
+    while (sent < flood_size)
     {
         const BatchResult result = near.send(ConstSpan<OutgoingDatagram>(flood).subspan(sent));
         REQUIRE(result.error == SocketError::None); // a report's error met by a send goes again once
@@ -1231,7 +1231,7 @@ TEST_CASE("a flood of Packet Too Big reports is read 64 a call, and the datagram
     // The rest come with the next call, and then nothing is left.
     const BatchResult rest = near.receive(slots.slots);
     CHECK(rest.error == SocketError::None);
-    CHECK(reports + rest.count == kFlood);
+    CHECK(reports + rest.count == flood_size);
     CHECK_FALSE(near.wait_readable(0U));
 }
 

@@ -63,8 +63,8 @@ public:
     // Where the near host's datagrams larger than kHopMtu are dropped by the host itself, past the socket.
     [[nodiscard]] static Endpoint dropping(bool v6)
     {
-        constexpr u8 kV6[16] = {0xFDU, 0x71U, 0U, 3U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 2U};
-        return Endpoint{v6 ? IpAddress::v6(kV6) : IpAddress::v4(10U, 71U, 3U, 2U), 9U};
+        constexpr u8 address_v6[16] = {0xFDU, 0x71U, 0U, 3U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 2U};
+        return Endpoint{v6 ? IpAddress::v6(address_v6) : IpAddress::v4(10U, 71U, 3U, 2U), 9U};
     }
 
     [[nodiscard]] static Endpoint at(Host host, bool v6, u16 port)
