@@ -988,10 +988,9 @@ TEST_CASE("A loop over two real UDP sockets answers on the one a datagram reache
     REQUIRE(loop.ready());
     CHECK_FALSE(set.wait_readable(20000000U)); // nothing waits: the time passes
 
-    // The loop runs on its own thread; its first turn finds nothing, its second the datagram and stops.
+    // The loop runs on its own thread, and its first turn finds nothing. A ring socket's first receive there moves
+    // the ring to that thread (udp.hpp), whose old receive's end may wake one turn more; the datagram wakes it then.
     std::atomic<bool> stop{false};
-    handler.stop = &stop;
-    handler.stop_after = 2U;
     std::thread runner([&] { loop.run(stop); });
     while (handler.polled.load(std::memory_order_acquire) == 0U)
     {
@@ -1002,8 +1001,13 @@ TEST_CASE("A loop over two real UDP sockets answers on the one a datagram reache
     const OutgoingDatagram outgoing{probe.view(), second.local_endpoint()};
     REQUIRE(client.send(ConstSpan<OutgoingDatagram>(&outgoing, 1U)).count == 1U);
     REQUIRE(client.wait_readable(10U * kSecond));
-    runner.join();
     CHECK(clock.monotonic_ns() - sent_at < 10U * kSecond);
+    // A datagram the ingress drops unanswered wakes the loop to see it is stopped.
+    stop.store(true, std::memory_order_release);
+    static const u8 noise[1] = {0U};
+    const OutgoingDatagram wake{ConstSpan<u8>(noise, 1U), first.local_endpoint()};
+    REQUIRE(client.send(ConstSpan<OutgoingDatagram>(&wake, 1U)).count == 1U);
+    runner.join();
     u8 storage[kDatagramBytes] = {};
     ReceivedDatagram slot;
     slot.storage = Span<u8>(storage, sizeof(storage));

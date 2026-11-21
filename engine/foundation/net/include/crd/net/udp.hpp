@@ -13,6 +13,9 @@
 
 namespace crd::net
 {
+#if CRD_OS_LINUX
+struct UdpRing;
+#endif
 
 enum class SocketError : u8
 {
@@ -61,9 +64,17 @@ struct UdpOptions
     // The host may join one sender's datagrams into one train per receive slot (SocketFeatures::coalesced_receive):
     // the caller then gives every slot kMaxTrainBytes, as IoLoop does.
     bool coalesce_receive = false;
+    // Linux's io_uring receive (SocketFeatures::lent_receive) where the host has it: `ring_buffers` buffers the host
+    // fills ahead of receive(), a power of two from 4 to 32768, each holding any datagram (kMaxUdpPayloadV6 bytes, or
+    // a train of kMaxTrainBytes with coalesce_receive). Their pages are backed as the host first writes them, so the
+    // memory a ring holds follows the datagrams that arrive. Any other count, or CRD_NET_UDP_RING=0 in the
+    // environment, keeps the recvmmsg path.
+    u32 ring_buffers = 64U;
 };
 
-// One receive slot: the caller points `storage` at its buffer before receive(), which fills the rest.
+// One receive slot: the caller points `storage` at its buffer before receive(), which fills the rest. A slot left
+// empty is lent instead, by a socket that lends (SocketFeatures::lent_receive): receive() points it at the socket's
+// own buffer, which holds the datagram, writable, until that socket's next receive().
 struct ReceivedDatagram
 {
     cont::Span<u8> storage;
@@ -108,6 +119,10 @@ struct SocketFeatures
     // where it cannot segment at all; a receive may fill a slot with a train (ReceivedDatagram::segment).
     bool segmented_send = false;
     bool coalesced_receive = false;
+    // Receives come from buffers the host filled ahead (Linux's io_uring), copied into a slot's storage or lent to
+    // an empty slot; also the socket's own. Nonzero, the longest datagram one of them holds whole, whatever the slot.
+    bool lent_receive = false;
+    u32 receive_bytes = 0U;
 };
 
 // What a socket's offloads did since it opened.
@@ -182,7 +197,14 @@ protected:
 // per train, one WSABUF per datagram, with a UDP_SEND_MSG_SIZE control message, where the option reads back; a train
 // it refuses goes again a datagram a call, and WSAEOPNOTSUPP (or WSAEINVAL for an unmarked train) turns segmentation
 // off. With coalesce_receive a socket takes UDP_GRO on Linux or URO (UDP_RECV_MAX_COALESCED_SIZE) on Windows and
-// reports each train's datagram size. macOS carries bytes alone until crd-net's port there (MAC.1).
+// reports each train's datagram size. On Linux 6.0 and later (not Android, whose sandbox forbids it) a socket
+// receives through io_uring where the host allows it: one multishot recvmsg the host keeps armed fills a ring of the
+// socket's buffers ahead of receive(), which reads the completions without a call while they wait, copies each into
+// its slot or lends it to an empty one, and reads the ICMP reports its ended receives name as above; the socket then
+// waits on the ring's descriptor. The host runs a receive's completions as the thread that armed it, so a receive on
+// another thread moves the ring there, and the old receive's end may wake the next wait once with nothing to read.
+// Anything the host refuses keeps recvmmsg, as features() reports. macOS carries bytes alone until crd-net's port
+// there (MAC.1).
 class UdpSocket final : public DatagramSocket
 {
 public:
@@ -205,7 +227,7 @@ public:
     [[nodiscard]] BatchResult send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept override;
     [[nodiscard]] bool wait_readable(u64 timeout_ns) noexcept override;
     [[nodiscard]] SocketFeatures features() const noexcept override { return m_features; }
-    [[nodiscard]] u64 wait_handle() const noexcept override { return m_handle; }
+    [[nodiscard]] u64 wait_handle() const noexcept override; // the ring's descriptor where it receives
     void waited(bool error) noexcept override;
     [[nodiscard]] const OffloadCounters& offload_counters() const noexcept { return m_offloads; }
 
@@ -223,7 +245,11 @@ private:
 #if CRD_OS_WINDOWS
     void (*m_receive_message)() = nullptr; // WSARecvMsg, which Winsock hands out per provider, as a generic pointer
 #elif CRD_OS_LINUX
+    // The ring's receive into `slots` from `count` on (receive's io_uring path).
+    void receive_ring(cont::Span<ReceivedDatagram> slots, BatchResult& result) noexcept;
+
     bool m_reports_waiting = false; // the error queue may hold reports: the next receive() reads them first
+    UdpRing* m_ring = nullptr;      // the io_uring receive, in pages of its own; null for recvmmsg
 #endif
 };
 

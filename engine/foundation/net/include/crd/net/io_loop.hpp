@@ -16,8 +16,10 @@
 //   memory    receive slots and the answer queue (a SendQueue) come from the injected allocator at construction; a
 //             turn allocates nothing. A socket that coalesces (SocketFeatures::coalesced_receive) reads into slots of
 //             a whole train each, which the loop splits in place: each datagram of a train is handed on as its own,
-//             its bytes where the host put them. An answer the host cannot take yet (Busy) waits in the queue; when
-//             the queue is full, a new answer is dropped and counted (answers are stateless; the client's
+//             its bytes where the host put them. A socket that lends (SocketFeatures::lent_receive) fills empty slots
+//             with buffers of its own, handed on in place and cut to slot_bytes as a slot of that size would cut
+//             them, so the loop holds no storage for it. An answer the host cannot take yet (Busy) waits in the
+//             queue; when the queue is full, a new answer is dropped and counted (answers are stateless; the client's
 //             retransmission asks again).
 //   threads   a loop runs on one thread at a time; its ingress, table, socket and handler are its own (the server's
 //             HandshakeBuckets are shared, ingress.hpp).
@@ -201,7 +203,8 @@ public:
     IoLoop& operator=(IoLoop&&) = delete;
 
     // False when the configuration is out of range (a zero count, slots under 1200 or over 65527 bytes; train_slots
-    // counts only where a socket of the set coalesces), the socket set is empty or the allocator refused.
+    // counts only where a socket of the set coalesces), a socket holds less than slot_bytes of a datagram
+    // (SocketFeatures::receive_bytes), the socket set is empty or the allocator refused.
     [[nodiscard]] bool ready() const noexcept { return m_slots != nullptr; }
 
     // One turn (see the file comment); returns the monotonic time it next needs to run.
@@ -226,11 +229,16 @@ private:
     Ingress& m_ingress;
     IngressHandler& m_handler;
     IoLoopConfig m_config;
-    ReceivedDatagram* m_slots = nullptr;
+    ReceivedDatagram* m_slots = nullptr; // `batch` slots, with storage where a socket reads into it
     u8* m_buffers = nullptr;
-    u32 m_coalescing = 0U; // bit i for socket i, which reads into the train slots
+    usize m_buffer_bytes = 0U;
+    u32 m_coalescing = 0U; // bit i for socket i, which reads into the train slots unless it lends
     ReceivedDatagram* m_trains = nullptr;
     u8* m_train_buffers = nullptr;
+    u32 m_train_count = 0U;
+    u32 m_lending = 0U; // bit i for socket i, which lends its own buffers to the empty slots of m_lent
+    ReceivedDatagram* m_lent = nullptr;
+    u32 m_lent_count = 0U;
     SendQueue m_answers; // `queued_answers` slots of kQuicMaxStatelessAnswerBytes
     IoLoopCounters m_counters;
 };

@@ -223,32 +223,50 @@ IoLoop::IoLoop(memory::IAllocator& allocator, const SocketSet& sockets, const Tr
         return;
     }
     u32 coalescing = 0U;
+    u32 lending = 0U;
     for (u32 socket = 0U; socket < sockets.size(); ++socket)
     {
-        coalescing |= sockets[socket].features().coalesced_receive ? (1U << socket) : 0U;
+        const SocketFeatures features = sockets[socket].features();
+        coalescing |= features.coalesced_receive ? (1U << socket) : 0U;
+        lending |= features.lent_receive ? (1U << socket) : 0U;
+        if (features.receive_bytes != 0U && features.receive_bytes < config.slot_bytes)
+        {
+            return; // a datagram the loop reads whole would arrive cut
+        }
     }
     if (coalescing != 0U && (config.train_slots == 0U || config.train_slots > kMaxBatch))
     {
         return;
     }
-    const u32 trains = (coalescing != 0U) ? config.train_slots : 0U;
-    const usize buffer_bytes = usize{config.batch} * config.slot_bytes;
+    // Storage only for the sockets that read into it: a socket that lends fills empty slots with its own buffers.
+    const u32 every = (1U << sockets.size()) - 1U;
+    const bool plain = ((coalescing | lending) & every) != every;
+    const u32 trains = ((coalescing & ~lending) != 0U) ? config.train_slots : 0U;
+    u32 lent = (lending != 0U) ? config.batch : 0U;
+    if ((coalescing & lending) != 0U && config.train_slots > lent)
+    {
+        lent = config.train_slots;
+    }
+    const usize buffer_bytes = plain ? usize{config.batch} * config.slot_bytes : 0U;
     const usize train_bytes = usize{trains} * kMaxTrainBytes;
     ReceivedDatagram* const slots = memory::try_construct_array<ReceivedDatagram>(allocator, config.batch);
-    u8* const buffers = memory::try_construct_array<u8>(allocator, buffer_bytes);
+    u8* const buffers = plain ? memory::try_construct_array<u8>(allocator, buffer_bytes) : nullptr;
     ReceivedDatagram* const train_slots =
         (trains != 0U) ? memory::try_construct_array<ReceivedDatagram>(allocator, trains) : nullptr;
     u8* const train_buffers = (trains != 0U) ? memory::try_construct_array<u8>(allocator, train_bytes) : nullptr;
+    ReceivedDatagram* const lent_slots =
+        (lent != 0U) ? memory::try_construct_array<ReceivedDatagram>(allocator, lent) : nullptr;
     const bool trains_held = trains == 0U || (train_slots != nullptr && train_buffers != nullptr);
-    if (slots == nullptr || buffers == nullptr || !trains_held)
+    if (slots == nullptr || (plain && buffers == nullptr) || !trains_held || (lent != 0U && lent_slots == nullptr))
     {
         memory::destroy_array(allocator, slots, config.batch);
         memory::destroy_array(allocator, buffers, buffer_bytes);
         memory::destroy_array(allocator, train_slots, trains);
         memory::destroy_array(allocator, train_buffers, train_bytes);
+        memory::destroy_array(allocator, lent_slots, lent);
         return;
     }
-    for (u32 index = 0U; index < config.batch; ++index)
+    for (u32 index = 0U; plain && index < config.batch; ++index)
     {
         slots[index].storage = cont::Span<u8>(buffers + (usize{index} * config.slot_bytes), config.slot_bytes);
     }
@@ -258,18 +276,23 @@ IoLoop::IoLoop(memory::IAllocator& allocator, const SocketSet& sockets, const Tr
     }
     m_slots = slots;
     m_buffers = buffers;
+    m_buffer_bytes = buffer_bytes;
     m_coalescing = coalescing;
     m_trains = train_slots;
     m_train_buffers = train_buffers;
+    m_train_count = trains;
+    m_lending = lending;
+    m_lent = lent_slots;
+    m_lent_count = lent;
 }
 
 IoLoop::~IoLoop()
 {
-    const u32 trains = (m_coalescing != 0U) ? m_config.train_slots : 0U;
     memory::destroy_array(m_allocator, m_slots, m_config.batch);
-    memory::destroy_array(m_allocator, m_buffers, usize{m_config.batch} * m_config.slot_bytes);
-    memory::destroy_array(m_allocator, m_trains, trains);
-    memory::destroy_array(m_allocator, m_train_buffers, usize{trains} * kMaxTrainBytes);
+    memory::destroy_array(m_allocator, m_buffers, m_buffer_bytes);
+    memory::destroy_array(m_allocator, m_trains, m_train_count);
+    memory::destroy_array(m_allocator, m_train_buffers, usize{m_train_count} * kMaxTrainBytes);
+    memory::destroy_array(m_allocator, m_lent, m_lent_count);
 }
 
 u64 IoLoop::poll() noexcept
@@ -330,14 +353,20 @@ void IoLoop::run(const std::atomic<bool>& stop) noexcept
 bool IoLoop::receive_batch(u32 socket, u64 now_ns, u64 unix_seconds, BatchResult& result) noexcept
 {
     const bool trains = (m_coalescing & (1U << socket)) != 0U;
-    ReceivedDatagram* const slots = trains ? m_trains : m_slots;
+    const bool lent = (m_lending & (1U << socket)) != 0U;
+    ReceivedDatagram* const slots = lent ? m_lent : (trains ? m_trains : m_slots);
     const u32 count = trains ? m_config.train_slots : m_config.batch;
+    for (u32 index = 0U; lent && index < count; ++index)
+    {
+        slots[index].storage = cont::Span<u8>(); // each slot asks for the socket's own buffer
+    }
     result = m_sockets[socket].receive(cont::Span<ReceivedDatagram>(slots, count));
     for (usize index = 0U; index < result.count; ++index)
     {
         ReceivedDatagram& slot = slots[index];
         slot.socket = socket;
-        if (!trains || slot.too_big != 0U)
+        // A lent datagram is cut to slot_bytes below as a slot of that size would have cut it.
+        if ((!trains && !lent) || slot.too_big != 0U)
         {
             ++m_counters.received;
             deliver(slot, now_ns, unix_seconds);

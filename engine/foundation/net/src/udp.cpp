@@ -1,7 +1,9 @@
 // crd-net -- datagram sockets (4.2a; docs/design/network-foundation.md#sockets).
 
 #include "native_socket.hpp"
+#include "udp_ring.hpp"
 
+#include <crd/core/environment.hpp>
 #include <crd/net/udp.hpp>
 
 #include <climits>
@@ -37,6 +39,18 @@ constexpr usize kReportControlBytes =
     CMSG_SPACE(sizeof(sock_extended_err) + sizeof(sockaddr_in6)) + 2U * CMSG_SPACE(sizeof(int));
 // The reports one receive() reads before the datagrams behind them, so a flood of ICMP errors never starves them.
 constexpr usize kReportsPerReceive = 2U * kBatchChunk;
+#if CRD_NET_RING
+static_assert(kRingReports == kReportsPerReceive, "a lent slot's report takes a report buffer of the ring");
+
+// Whether a socket opens its io_uring receive: asked for, and not turned off for the process (CRD_NET_UDP_RING=0, the
+// recvmmsg path's CTest arm and an operator's way back to it).
+[[nodiscard]] bool ring_allowed(const UdpOptions& options) noexcept
+{
+    char value[4] = {};
+    const bool set = read_environment("CRD_NET_UDP_RING", value, sizeof(value)) == EnvironmentRead::Set;
+    return options.ring_buffers != 0U && !(set && std::strcmp(value, "0") == 0);
+}
+#endif
 // The IPv4 or IPv6 header and the UDP header: what a hop's MTU carries beyond the UDP payload.
 constexpr u32 kV4Overhead = 28U;
 constexpr u32 kV6Overhead = 48U;
@@ -349,22 +363,35 @@ enum class Report : u8
 }
 
 // Reads reports into the slots from `count` on while `budget` lasts, Packet Too Big reports taking slots and the rest
-// dropped; `waiting` ends once the queue is seen empty.
+// dropped; `waiting` ends once the queue is seen empty. A lent slot (empty storage) takes its report in `spare`, cut
+// into kReportsPerReceive buffers, one per read of the budget.
 void read_reports(NativeSocket handle, cont::Span<ReceivedDatagram> slots, usize& count, usize& budget,
-                  bool& waiting) noexcept
+                  bool& waiting, cont::Span<u8> spare = {}) noexcept
 {
+    const usize spare_bytes = spare.size() / kReportsPerReceive;
     while (budget != 0U && count < slots.size())
     {
         --budget;
-        const Report report = read_report(handle, slots[count]);
+        ReceivedDatagram& slot = slots[count];
+        const bool lent = slot.storage.empty() && spare_bytes != 0U;
+        if (lent)
+        {
+            slot.storage = spare.subspan((kReportsPerReceive - budget - 1U) * spare_bytes, spare_bytes);
+        }
+        const Report report = read_report(handle, slot);
+        if (report == Report::TooBig)
+        {
+            ++count;
+            continue;
+        }
+        if (lent)
+        {
+            slot.storage = cont::Span<u8>();
+        }
         if (report == Report::None)
         {
             waiting = false;
             return;
-        }
-        if (report == Report::TooBig)
-        {
-            ++count;
         }
     }
 }
@@ -488,10 +515,13 @@ UdpSocket::UdpSocket(UdpSocket&& other) noexcept
       m_receive_message(other.m_receive_message)
 #elif CRD_OS_LINUX
       ,
-      m_reports_waiting(other.m_reports_waiting)
+      m_reports_waiting(other.m_reports_waiting), m_ring(other.m_ring)
 #endif
 {
     other.m_handle = kNoHandle;
+#if CRD_OS_LINUX
+    other.m_ring = nullptr;
+#endif
 }
 
 UdpSocket& UdpSocket::operator=(UdpSocket&& other) noexcept
@@ -508,6 +538,8 @@ UdpSocket& UdpSocket::operator=(UdpSocket&& other) noexcept
         m_receive_message = other.m_receive_message;
 #elif CRD_OS_LINUX
         m_reports_waiting = other.m_reports_waiting;
+        m_ring = other.m_ring;
+        other.m_ring = nullptr;
 #endif
         other.m_handle = kNoHandle;
     }
@@ -578,6 +610,16 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
         socket.m_features.segmented_send = options.segment_send && segments_trains(handle);
     }
 #endif
+#if CRD_NET_RING
+    if (error == SocketError::None && ring_allowed(options))
+    {
+        const u32 datagram_bytes =
+            static_cast<u32>(socket.m_features.coalesced_receive ? kMaxTrainBytes : kMaxUdpPayloadV6);
+        socket.m_ring = ring_open(handle, options.ring_buffers, datagram_bytes, static_cast<u32>(kControlBytes));
+        socket.m_features.lent_receive = socket.m_ring != nullptr;
+        socket.m_features.receive_bytes = (socket.m_ring != nullptr) ? datagram_bytes : 0U;
+    }
+#endif
     if (error == SocketError::None)
     {
         NativeAddress address;
@@ -620,6 +662,9 @@ void UdpSocket::close() noexcept
     ::closesocket(native(m_handle));
     ::WSACleanup();
 #else
+#if CRD_NET_RING
+    ring_close(m_ring); // before the socket: the host stops writing the ring's buffers first
+#endif
     ::close(native(m_handle));
 #endif
     m_handle = kNoHandle;
@@ -628,6 +673,7 @@ void UdpSocket::close() noexcept
     m_offloads = OffloadCounters{};
 #if CRD_OS_LINUX
     m_reports_waiting = false;
+    m_ring = nullptr;
 #endif
 }
 
@@ -645,6 +691,13 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
         return result;
     }
     const NativeSocket handle = native(m_handle);
+#if CRD_NET_RING
+    if (m_ring != nullptr)
+    {
+        receive_ring(slots, result);
+        return result;
+    }
+#endif
 #if CRD_OS_LINUX
     usize report_budget = kReportsPerReceive;
     usize stale_left = kReportsPerReceive;
@@ -995,13 +1048,123 @@ bool UdpSocket::wait_readable(u64 timeout_ns) noexcept
     {
         return false;
     }
-    const short events = wait_native(native(m_handle), kPollReadable, timeout_ns);
+#if CRD_NET_RING
+    if (m_ring != nullptr && !ring_armed(*m_ring))
+    {
+        static_cast<void>(ring_arm(*m_ring, true)); // what waits in the socket then completes into the ring
+    }
+#endif
+    const short events = wait_native(native(wait_handle()), kPollReadable, timeout_ns);
     if (events != 0)
     {
         waited((events & POLLERR) != 0);
     }
     return events != 0;
 }
+
+u64 UdpSocket::wait_handle() const noexcept
+{
+#if CRD_NET_RING
+    // The ring while it receives or holds completions; the socket while no receive is armed, so a datagram that
+    // arrives then is seen where it waits.
+    if (m_ring != nullptr && (ring_armed(*m_ring) || ring_pending(*m_ring)))
+    {
+        return static_cast<u64>(ring_handle(*m_ring));
+    }
+#endif
+    return m_handle;
+}
+
+#if CRD_OS_LINUX
+void UdpSocket::receive_ring([[maybe_unused]] cont::Span<ReceivedDatagram> slots,
+                             [[maybe_unused]] BatchResult& result) noexcept
+{
+#if CRD_NET_RING
+    UdpRing& ring = *m_ring;
+    const NativeSocket handle = native(m_handle);
+    const cont::Span<u8> reports = ring_reports(ring);
+    ring_recycle(ring); // the buffers the last call lent
+    static_cast<void>(ring_follow(ring));
+    usize report_budget = kReportsPerReceive;
+    if (m_reports_waiting)
+    {
+        read_reports(handle, slots, result.count, report_budget, m_reports_waiting, reports);
+    }
+    // An ended receive is armed again at most twice a call, so a host that keeps ending it cannot hold the call.
+    u32 arms_left = 2U;
+    while (result.count < slots.size())
+    {
+        RingCompletion completion;
+        if (!ring_next(ring, completion))
+        {
+            if (ring_armed(ring) || arms_left == 0U)
+            {
+                break;
+            }
+            --arms_left;
+            if (!ring_arm(ring, false))
+            {
+                break;
+            }
+            continue; // what waits in the socket completes as the receive arms
+        }
+        if (completion.report)
+        {
+            m_reports_waiting = true;
+            read_reports(handle, slots, result.count, report_budget, m_reports_waiting, reports);
+            continue;
+        }
+        if (completion.datagram)
+        {
+            ReceivedDatagram& slot = slots[result.count++];
+            const cont::Span<u8> payload = completion.message.payload;
+            bool truncated = completion.message.truncated;
+            if (slot.storage.empty())
+            {
+                slot.storage = payload;
+            }
+            else
+            {
+                const usize copied = (payload.size() < slot.storage.size()) ? payload.size() : slot.storage.size();
+                std::memcpy(slot.storage.data(), payload.data(), copied);
+                truncated = truncated || copied < payload.size();
+            }
+            sockaddr_storage peer{};
+            std::memcpy(&peer, completion.message.header.msg_name, completion.message.header.msg_namelen);
+            fill_slot(slot, payload.size(), truncated, peer);
+            read_controls(completion.message.header, slot);
+            count_train(slot, m_offloads);
+        }
+        if (completion.error == 0 || completion.error == ENOBUFS || completion.error == ECANCELED)
+        {
+            // No end, an end without an error, every buffer lent, or the thread that armed it gone: armed again
+            // here when it ended.
+            continue;
+        }
+        if (stale_report(completion.error))
+        {
+            // A report's error, which ended the receive in place of a datagram: the report is queued.
+            m_reports_waiting = true;
+            read_reports(handle, slots, result.count, report_budget, m_reports_waiting, reports);
+            continue;
+        }
+        result.error = map_error(completion.error, false);
+        break;
+    }
+    // An end the host posted right behind the last datagram taken, which carries nothing: read now, so it wakes no
+    // wait (the host ends a receive once it has filled every free buffer, whether more is coming or not).
+    RingCompletion end;
+    while (result.error == SocketError::None && ring_next(ring, end, true))
+    {
+        m_reports_waiting = m_reports_waiting || end.report || stale_report(end.error);
+    }
+    // Armed for the next wait unless every buffer is lent to these slots: the wait then watches the socket itself
+    // (wait_handle), and the next receive arms it once it has the buffers back. The error queue's watch, armed here
+    // alone, completes at once when reports are left past this call.
+    static_cast<void>(ring_arm(ring, true));
+#endif
+}
+#endif
 
 void UdpSocket::sent_train(usize datagrams, BatchResult& result) noexcept
 {
