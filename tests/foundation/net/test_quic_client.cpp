@@ -7,7 +7,8 @@
 // address dropped and the server's stateless reset ending the connection only from the server's address; the pool's
 // bounds, stale handles, a TLS context per connection and the configurations refused; and a client host served over
 // the host's loopback; a connection probing and moving to the host's second socket (the server following, a dead
-// network reverted, a busy or gone first socket, serial moves, refusals, real sockets on the loopback); and, on Linux,
+// network reverted, a busy or gone first socket, serial moves, refusals, real sockets on the loopback); a client
+// following its server's preferred address to the server's second real socket (RFC 9000 section 9.6); and, on Linux,
 // a router's real Packet Too Big messages finding each direction's path MTU through private network namespaces
 // ([.netns]).
 
@@ -585,12 +586,21 @@ struct HostKeys
     QuicResetKey client_reset;
 };
 
-QuicServerConfig echo_server_config(const Identity& identity)
+// `preferred` (port 0: none) is an IPv4 preferred address the server's socket 1 is at (RFC 9000 section 9.6).
+QuicServerConfig echo_server_config(const Identity& identity, const Endpoint& preferred = {})
 {
     QuicServerConfig config;
     config.connection = config_for(QuicSide::Server, identity, QuicVersion::V1, 1U);
     config.connection.streams = limits();
     config.connection.entropy_seed = {};
+    if (preferred.port != 0U)
+    {
+        QuicTransportParameters& parameters = config.connection.parameters;
+        parameters.has_preferred_address = true;
+        std::memcpy(parameters.preferred_address.ipv4, preferred.address.bytes, 4U);
+        parameters.preferred_address.ipv4_port = preferred.port;
+        config.connection.preferred_socket = 1U;
+    }
     return config;
 }
 
@@ -602,16 +612,18 @@ QuicClientConfig real_client_config(const Identity& identity)
 }
 
 // An echoing server host and a client host, each behind its own loop on real UDP sockets and the host's clock: the
-// client's are `client_sockets`.
+// server's are `server_sockets` (its second at `preferred`, its preferred address, when that has a port), the
+// client's `client_sockets`.
 struct RealHosts : HostKeys
 {
-    RealHosts(UdpSocket& server_socket, const SocketSet& client_sockets)
-        : server(allocator, server_socket, clock, ingress, routes, reset, &tokens, echo, echo_server_config(identity)),
-          server_loop(allocator, server_socket, clock, ingress, server, IoLoopConfig{}),
+    RealHosts(const SocketSet& server_sockets, const SocketSet& client_sockets, const Endpoint& preferred = {})
+        : server(allocator, server_sockets, clock, ingress, routes, reset, &tokens, echo,
+                 echo_server_config(identity, preferred)),
+          server_loop(allocator, server_sockets, clock, ingress, server, IoLoopConfig{}),
           client(allocator, client_sockets, client_ingress, client_routes, client_reset, app,
                  real_client_config(identity)),
           client_loop(allocator, client_sockets, clock, client_ingress, client, IoLoopConfig{}),
-          m_server_socket(server_socket), m_client_sockets(client_sockets)
+          m_server_sockets(server_sockets), m_client_sockets(client_sockets)
     {
         REQUIRE(server.ready());
         REQUIRE(server_loop.ready());
@@ -630,7 +642,7 @@ struct RealHosts : HostKeys
                 return false;
             }
             static_cast<void>(client_loop.poll());
-            static_cast<void>(m_server_socket.wait_readable(kMs));
+            static_cast<void>(m_server_sockets.wait_readable(kMs));
             static_cast<void>(server_loop.poll());
             static_cast<void>(m_client_sockets.wait_readable(kMs));
         }
@@ -653,7 +665,7 @@ struct RealHosts : HostKeys
     IoLoop client_loop;
 
 private:
-    UdpSocket& m_server_socket;
+    SocketSet m_server_sockets;
     SocketSet m_client_sockets;
 };
 
@@ -1724,6 +1736,52 @@ TEST_CASE("QUIC client: a client host moves its connection to a second real UDP 
     REQUIRE(connection != nullptr);
     CHECK(connection->path().socket == 1U);
     CHECK(connection->counters().path_validations != 0U);
+}
+
+TEST_CASE("QUIC hosts: a client follows its server's preferred address to the server's second real UDP socket over "
+          "the host's loopback, and the server moves there once it has validated the client's path",
+          "[net][net-path][quic-client][preferred-address]")
+{
+    UdpOptions options;
+    options.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), 0U};
+    SocketError error = SocketError::Failed;
+    UdpSocket first = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    UdpSocket preferred = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    UdpSocket client_socket = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    DatagramSocket* const both[] = {&first, &preferred};
+    RealHosts hosts(SocketSet(ConstSpan<DatagramSocket*>(both)), client_socket, preferred.local_endpoint());
+
+    QuicClientConnect request;
+    request.server = first.local_endpoint();
+    const QuicHandle handle = hosts.client.connect(request, hosts.clock.monotonic_ns());
+    hosts.app.begin(handle, 10U);
+    const auto moved = [&]
+    {
+        const QuicConnection* const connection = hosts.client.connection(handle);
+        const QuicConnection* const served = hosts.server.connection(hosts.echo.last);
+        return hosts.app.echoed(handle) && connection != nullptr && served != nullptr &&
+               connection->on_preferred_address() && served->on_preferred_address();
+    };
+    REQUIRE(hosts.serve_until(moved, 10U));
+    QuicConnection& connection = *hosts.client.connection(handle);
+    const QuicConnection& served = *hosts.server.connection(hosts.echo.last);
+    CHECK(connection.path() == QuicPath{0U, preferred.local_endpoint()});
+    CHECK(served.path() == QuicPath{1U, client_socket.local_endpoint()});
+    CHECK(served.paths().validated(served.paths().active()));
+    CHECK(connection.counters().path_failures == 0U);
+    // Once the server's datagrams come from there, the client forgets the server's first address.
+    const QuicPath left{0U, first.local_endpoint()};
+    REQUIRE(hosts.serve_until(
+        [&]
+        {
+            connection.ping();
+            hosts.client.wake(handle);
+            return connection.paths().find(left) == kQuicNoPath;
+        },
+        10U));
 }
 
 #if CRD_OS_LINUX

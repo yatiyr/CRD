@@ -19,7 +19,11 @@
 // rebinding and an address change over lossy, duplicating, reordering paths. And a client's own migration: its
 // refusals, a probe that moves nothing, a move the server follows that restarts the path's state and leaves the old
 // path, a move without probing whose old network goes at once over lossy paths, a socket that reaches nothing
-// reverting to the path before it, and moves one after another on the IDs each leaves.
+// reverting to the path before it, and moves one after another on the IDs each leaves. And the server's preferred
+// address (#migration, RFC 9000 section 9.6): followed once validated, the server moving only once it validated the
+// client's path there and then dropping its first socket's datagrams; an unreachable one failing; a client moving
+// only when told, disable_active_migration closing the handshake address alone; a client that moved first validating
+// it from its new socket; transfers both ways over hostile paths; and the configurations, families and forms.
 
 #include "ingress_fixture.hpp"
 #include "quic_connection_fixture.hpp"
@@ -176,6 +180,26 @@ struct Ids
     }
 };
 
+constexpr Endpoint kServerAt{IpAddress::v4(192, 0, 2, 1), 443U};
+constexpr Endpoint kPreferredAt{IpAddress::v4(192, 0, 2, 80), 4433U};
+
+// What a Hosted server offers as its preferred address (RFC 9000 section 9.6), on its socket 1, and whether its client
+// follows it by itself.
+enum class Preferred : u8
+{
+    None,
+    Follow,      // an IPv4 address, followed
+    Manual,      // an IPv4 address the client moves to only when told
+    V6Only,      // an IPv6 address, which an IPv4 client never follows by itself
+    Mapped,      // an IPv4 address, followed by a client whose server address is IPv4-mapped
+    OpenedThere, // offered, but the connection opened on that socket: none is sent
+};
+
+[[nodiscard]] Endpoint mapped(const Endpoint& at)
+{
+    return Endpoint{at.address.mapped(), at.port};
+}
+
 // A client and a server that issue connection IDs, on paths that follow the client's sockets.
 struct Hosted
 {
@@ -188,10 +212,13 @@ struct Hosted
     std::unique_ptr<Net> net;
 
     // `pmtu` false: no path MTU search, whose probes a restarted path would send.
-    explicit Hosted(usize seed = 0U, bool disable_migration = false, bool pmtu = true)
-        : client(allocator, with(bulk_config(QuicSide::Client, identity, seed), client_ids, false, pmtu)),
-          server(allocator,
-                 with(bulk_config(QuicSide::Server, identity, seed + 1U), server_ids, disable_migration, pmtu))
+    // `id_limit`: each end's active_connection_id_limit, the other end's IDs it holds.
+    explicit Hosted(usize seed = 0U, bool disable_migration = false, bool pmtu = true,
+                    Preferred preferred = Preferred::None, u64 id_limit = kQuicDefaultActiveIdLimit)
+        : client(allocator,
+                 with(bulk_config(QuicSide::Client, identity, seed), client_ids, false, pmtu, preferred, id_limit)),
+          server(allocator, with(bulk_config(QuicSide::Server, identity, seed + 1U), server_ids, disable_migration,
+                                 pmtu, preferred, id_limit))
     {
         REQUIRE(client.ready());
         REQUIRE(server.ready());
@@ -202,19 +229,56 @@ struct Hosted
         net->socket_at[0] = Endpoint{IpAddress::v4(203, 0, 113, 9), 41000U};
         net->socket_at[1] = Endpoint{IpAddress::v4(192, 0, 2, 33), 42000U};
         net->socket_at[2] = Endpoint{IpAddress::v4(198, 51, 100, 7), 43000U};
+        if (preferred != Preferred::None)
+        {
+            const bool v4_mapped = preferred == Preferred::Mapped;
+            net->server_at[0] = v4_mapped ? mapped(kServerAt) : kServerAt;
+            net->server_at[1] = v4_mapped ? mapped(kPreferredAt) : kPreferredAt;
+            if (preferred == Preferred::V6Only)
+            {
+                net->server_at[1] = preferred_v6();
+            }
+        }
         for (Path& path : net->path)
         {
             path.delay_ns = 25U * kMs;
         }
     }
 
-    static QuicConnectionConfig with(QuicConnectionConfig config, Ids& ids, bool disable_migration, bool pmtu)
+    static Endpoint preferred_v6()
+    {
+        constexpr u8 address[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80};
+        return Endpoint{IpAddress::v6(address), 4433U};
+    }
+
+    static QuicConnectionConfig with(QuicConnectionConfig config, Ids& ids, bool disable_migration, bool pmtu,
+                                     Preferred preferred, u64 id_limit)
     {
         config.ids = &ids.ids;
         config.path_mtu_discovery = pmtu;
+        config.parameters.active_connection_id_limit = id_limit;
         if (config.side == QuicSide::Client)
         {
-            config.path = QuicPath{0U, Endpoint{IpAddress::v4(192, 0, 2, 1), 443U}}; // the server's address
+            // The server's address.
+            config.path = QuicPath{0U, (preferred == Preferred::Mapped) ? mapped(kServerAt) : kServerAt};
+            config.follow_preferred_address = preferred != Preferred::Manual;
+        }
+        else if (preferred != Preferred::None)
+        {
+            QuicPreferredAddress& address = config.parameters.preferred_address;
+            config.parameters.has_preferred_address = true;
+            config.preferred_socket = 1U;
+            config.path.socket = (preferred == Preferred::OpenedThere) ? 1U : 0U;
+            if (preferred == Preferred::V6Only)
+            {
+                std::memcpy(address.ipv6, preferred_v6().address.bytes, 16U);
+                address.ipv6_port = preferred_v6().port;
+            }
+            else
+            {
+                std::memcpy(address.ipv4, kPreferredAt.address.bytes, 4U);
+                address.ipv4_port = kPreferredAt.port;
+            }
         }
         config.parameters.disable_active_migration = disable_migration;
         return config;
@@ -1399,4 +1463,333 @@ TEST_CASE("QUIC client migration: after a rebinding whose old mapping stands, a 
     REQUIRE(net.run_until([&] { return up.step(); }, 600000U * kMs));
     CHECK(pair.client.counters().path_failures == 0U);
     CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
+namespace
+{
+// Keeps a copy of the last client datagram that left. With `moved` set it loses the first one `moved` sends from
+// the preferred address once there, the PATH_RESPONSE it carries with it: the server sees the move before its
+// validation ends.
+class Capture final : public Filter
+{
+public:
+    bool drop(usize from, ConstSpan<u8> datagram) override
+    {
+        if (from != 0U)
+        {
+            return false;
+        }
+        std::memcpy(bytes, datagram.data(), datagram.size());
+        size = datagram.size();
+        const bool lose = moved != nullptr && !lost && moved->on_preferred_address();
+        lost = lost || lose;
+        return lose;
+    }
+
+    const QuicConnection* moved = nullptr;
+    bool lost = false;
+    u8 bytes[kDatagram] = {};
+    usize size = 0U;
+};
+
+// Every path a server knows is on `socket`.
+[[nodiscard]] bool all_on(const QuicConnection& server, u32 socket)
+{
+    for (usize index = 0U; index < kQuicMaxPaths; ++index)
+    {
+        if (server.paths().used(index) && server.paths().path(index).socket != socket)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+} // namespace
+
+TEST_CASE("QUIC preferred address: once confirmed the client validates it and moves; the server answers there, moves "
+          "only once it validated the client's path there, and then drops what reaches its first socket",
+          "[net][net-path][quic-connection][preferred-address]")
+{
+    Hosted pair(0U, false, true, Preferred::Follow);
+    Net& net = *pair.net;
+    Capture capture;
+    capture.moved = &pair.client;
+    net.filter = &capture;
+    REQUIRE(net.run_until([&] { return pair.client.confirmed() && pair.server.confirmed(); }));
+    const QuicTransportParameters& offered = pair.client.peer_parameters();
+    CHECK(offered.has_preferred_address);
+    CHECK(offered.preferred_address.connection_id.bytes == sizeof(kNetServerCid));
+    CHECK(pair.server.local_cid_count() == 2U); // sequence 1 is the preferred address's
+    CHECK(pair.client.paths().find(QuicPath{0U, kPreferredAt}) != kQuicNoPath);
+    CHECK_FALSE(pair.client.on_preferred_address()); // validated first (section 9.6.2)
+    CHECK(pair.client.path().peer == kServerAt);
+
+    // The server's datagrams stay on its first socket until it validated the client's path at its preferred one.
+    bool early = false;
+    bool client_first = false;
+    REQUIRE(net.run_until(
+        [&]
+        {
+            const QuicPaths& paths = pair.server.paths();
+            early = early || (pair.server.path().socket == 1U && !paths.validated(paths.active()));
+            client_first = client_first || (pair.client.on_preferred_address() && pair.server.path().socket == 0U);
+            return pair.client.on_preferred_address() && pair.server.on_preferred_address();
+        }));
+    CHECK_FALSE(early);
+    CHECK(client_first);
+    CHECK(capture.lost);
+    CHECK(pair.server.counters().path_validations >= 1U);
+    CHECK(pair.client.path() == QuicPath{0U, kPreferredAt});
+    CHECK(pair.server.path() == QuicPath{1U, net.client_at});
+    CHECK(pair.client.counters().migrations == 1U);
+    CHECK(pair.server.counters().migrations == 1U);
+    CHECK(all_on(pair.server, 1U)); // its first socket's paths are left for good
+
+    u64 id = 0U;
+    REQUIRE(pair.client.streams().open(true, id) == QuicStreamError::None);
+    Bulk up{pair.client, pair.server, 1U << 18U};
+    REQUIRE(net.run_until([&] { return up.step(); }, 600000U * kMs));
+    CHECK(pair.client.paths().find(QuicPath{0U, kServerAt}) == kQuicNoPath); // the server followed: forgotten
+    CHECK(pair.client.counters().path_failures == 0U);
+    CHECK(pair.server.counters().path_failures == 0U);
+
+    // A datagram still reaching the first socket is dropped unread.
+    REQUIRE(capture.size != 0U);
+    const QuicConnectionCounters before = pair.server.counters();
+    pair.server.receive(QuicPath{0U, net.client_at}, Span<u8>(capture.bytes, capture.size), Ecn::NotEct, net.now);
+    CHECK(pair.server.counters().foreign_datagrams == before.foreign_datagrams + 1U);
+    CHECK(pair.server.counters().packets_opened == before.packets_opened);
+    CHECK(pair.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC preferred address: a preferred socket that reaches nothing fails validation, and the client stays at "
+          "the first address",
+          "[net][net-path][quic-connection][preferred-address]")
+{
+    Hosted pair(0U, false, true, Preferred::Follow);
+    Net& net = *pair.net;
+    net.server_down = 0b10U;
+    pair.confirm();
+    Bulk up{pair.client, pair.server, 1U << 18U};
+    REQUIRE(net.run_until([&]
+                          { return up.step() && pair.client.paths().find(QuicPath{0U, kPreferredAt}) == kQuicNoPath; },
+                          600000U * kMs));
+    CHECK_FALSE(pair.client.on_preferred_address());
+    CHECK_FALSE(pair.server.on_preferred_address());
+    CHECK(pair.client.path() == QuicPath{0U, kServerAt});
+    CHECK(pair.server.path().socket == 0U);
+    CHECK(pair.client.counters().path_failures >= 1U);
+    CHECK(pair.client.counters().migrations == 0U);
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC preferred address: a client that does not follow it moves only when told, migrate() waiting for the "
+          "validation; disable_active_migration closes the handshake address alone",
+          "[net][net-path][quic-connection][preferred-address]")
+{
+    const QuicPath preferred{0U, kPreferredAt};
+    {
+        Hosted pair(0U, true, true, Preferred::Manual);
+        Net& net = *pair.net;
+        pair.confirm();
+        CHECK(pair.client.paths().find(preferred) == kQuicNoPath); // nothing by itself
+        CHECK(pair.client.migrate(pair.socket(1U), net.now) == QuicMigration::Disabled);
+        REQUIRE(pair.client.probe_path(preferred, net.now) == QuicMigration::Started);
+        const usize probed = pair.client.paths().find(preferred);
+        REQUIRE(probed != kQuicNoPath);
+        REQUIRE(net.run_until([&] { return pair.client.paths().proven(probed); }));
+        CHECK(pair.client.path().peer == kServerAt); // a probe moves nothing
+        CHECK_FALSE(pair.client.on_preferred_address());
+
+        // Proven: the move is at once, and the server follows once it validated the path.
+        REQUIRE(pair.client.migrate(preferred, net.now) == QuicMigration::Started);
+        CHECK(pair.client.path() == preferred);
+        CHECK(pair.client.on_preferred_address());
+        REQUIRE(net.run_until([&] { return pair.server.on_preferred_address(); }));
+
+        // The handshake address is left for good; from the preferred one, the client's own moves are open.
+        CHECK(pair.client.probe_path(QuicPath{1U, kServerAt}, net.now) == QuicMigration::OtherServer);
+        CHECK(pair.client.migrate(QuicPath{1U, kServerAt}, net.now) == QuicMigration::OtherServer);
+        pair.client.ping();
+        REQUIRE(net.run_until([&] { return pair.client.paths().fallback() == kQuicNoPath; }));
+        REQUIRE(net.run_until(
+            [&] { return pair.client.migrate(QuicPath{1U, kPreferredAt}, net.now) == QuicMigration::Started; }));
+        REQUIRE(net.run_until([&] { return pair.server.path().peer == net.socket_at[0]; }));
+        CHECK(pair.server.path().socket == 1U);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+    }
+    {
+        // Not proven: migrate() starts the validation and moves once it ends.
+        Hosted pair(0U, false, true, Preferred::Manual);
+        Net& net = *pair.net;
+        pair.confirm();
+        REQUIRE(pair.client.migrate(preferred, net.now) == QuicMigration::Started);
+        CHECK(pair.client.path().peer == kServerAt);
+        CHECK_FALSE(pair.client.on_preferred_address());
+        CHECK(pair.client.counters().migrations == 0U);
+        REQUIRE(net.run_until([&] { return pair.client.on_preferred_address(); }));
+        CHECK(pair.client.path() == preferred);
+        REQUIRE(net.run_until([&] { return pair.server.on_preferred_address(); }));
+    }
+    {
+        // A move asked for and still validating follows the client to the socket it moves to meanwhile: the socket
+        // left behind never draws it back.
+        Hosted pair(0U, false, true, Preferred::Manual, 4U);
+        Net& net = *pair.net;
+        pair.confirm();
+        net.server_down = 0b10U; // the validation from socket 0 is held back
+        REQUIRE(pair.client.migrate(preferred, net.now) == QuicMigration::Started);
+        net.advance(net.now + 50U * kMs);
+        REQUIRE(net.run_until([&] { return pair.client.migrate(pair.socket(1U), net.now) == QuicMigration::Started; }));
+        CHECK(pair.client.paths().find(preferred) == kQuicNoPath);
+        CHECK(pair.client.paths().find(QuicPath{1U, kPreferredAt}) != kQuicNoPath);
+        net.server_down = 0U;
+        REQUIRE(
+            net.run_until([&] { return pair.client.on_preferred_address() && pair.server.on_preferred_address(); }));
+        CHECK(pair.client.path() == QuicPath{1U, kPreferredAt});
+        CHECK(pair.server.path() == QuicPath{1U, net.socket_at[0]});
+    }
+}
+
+TEST_CASE("QUIC preferred address: a client that moves before reaching it validates it again from its new socket, "
+          "and moves there as its first network goes",
+          "[net][net-path][quic-connection][preferred-address]")
+{
+    // Each new address of either end takes an ID of the other's (section 9.5): the client's second socket to both
+    // server addresses, and the server's preferred one to both client addresses, need four at each end.
+    Hosted pair(0U, false, true, Preferred::Follow, 4U);
+    Net& net = *pair.net;
+    REQUIRE(net.run_until([&] { return pair.client.confirmed() && pair.server.confirmed(); }));
+    REQUIRE_FALSE(pair.client.on_preferred_address());
+    REQUIRE(pair.client.paths().find(QuicPath{0U, kPreferredAt}) != kQuicNoPath);
+    net.down = 0b1U; // socket 0's network is gone
+    REQUIRE(net.run_until([&] { return pair.client.migrate(pair.socket(1U), net.now) == QuicMigration::Started; }));
+    CHECK(pair.client.paths().find(QuicPath{0U, kPreferredAt}) == kQuicNoPath); // left with its socket
+    CHECK(pair.client.paths().find(QuicPath{1U, kPreferredAt}) != kQuicNoPath);
+    // Within a few round trips: the server answers the probe once an ID of the client's reaches it.
+    REQUIRE(net.run_until([&] { return pair.client.on_preferred_address() && pair.server.on_preferred_address(); },
+                          500U * kMs));
+    CHECK(pair.client.path() == QuicPath{1U, kPreferredAt});
+    CHECK(pair.server.path() == QuicPath{1U, net.socket_at[0]});
+    u64 id = 0U;
+    REQUIRE(pair.client.streams().open(true, id) == QuicStreamError::None);
+    Bulk up{pair.client, pair.server, 1U << 18U};
+    REQUIRE(net.run_until([&] { return up.step(); }, 600000U * kMs));
+    CHECK(all_on(pair.server, 1U));
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC preferred address: the move carries transfers both ways over paths that lose, duplicate and reorder",
+          "[net][net-path][quic-connection][preferred-address]")
+{
+    for (u64 seed = 1U; seed <= 3U; ++seed)
+    {
+        INFO("seed " << seed);
+        Hosted pair(seed, false, true, Preferred::Follow);
+        Net& net = *pair.net;
+        net.rng.state = seed;
+        for (Path& path : net.path)
+        {
+            path.loss = 20U;
+            path.duplicate = 10U;
+            path.jitter_ns = 10U * kMs;
+        }
+        pair.confirm();
+        constexpr u64 total = 1U << 18U;
+        Bulk up{pair.client, pair.server, total};
+        u64 back_sent = 0U;
+        u64 back_read = 0U;
+        REQUIRE(net.run_until(
+            [&]
+            {
+                const bool upward = up.step();
+                if (pair.server.streams().recv_state(kStream) != QuicRecvState::None && back_sent < total)
+                {
+                    static_cast<void>(
+                        write_pattern(pair.server.streams(), kStream, back_sent, total, kStream + 1U, false));
+                }
+                static_cast<void>(drain(pair.client.streams(), kStream, back_read, kStream + 1U));
+                return upward && back_read >= total && pair.server.on_preferred_address();
+            },
+            600000U * kMs));
+        CHECK(pair.client.on_preferred_address());
+        CHECK(pair.client.path() == QuicPath{0U, kPreferredAt});
+        CHECK(pair.server.path() == QuicPath{1U, net.client_at});
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+        CHECK(pair.server.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC preferred address: configurations out of range, a server without IDs or opened on that socket, an "
+          "address of the other family, an IPv4-mapped path, and a server without one",
+          "[net][net-path][quic-connection][preferred-address]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    const auto ready = [&](const QuicConnectionConfig& config)
+    {
+        return QuicConnection(allocator, config).ready();
+    };
+    QuicConnectionConfig server = config_for(QuicSide::Server, identity, QuicVersion::V1, 1U);
+    server.parameters.has_preferred_address = true;
+    server.preferred_socket = 1U;
+    CHECK_FALSE(ready(server)); // neither family given
+    server.parameters.preferred_address.ipv4[0] = 192U;
+    CHECK_FALSE(ready(server)); // an address without a port
+    server.parameters.preferred_address.ipv4_port = 4433U;
+    CHECK(ready(server));
+    server.parameters.preferred_address.connection_id.bytes = 8U;
+    CHECK_FALSE(ready(server)); // the connection issues its ID
+    server.parameters.preferred_address.connection_id.bytes = 0U;
+    QuicConnectionConfig client = config_for(QuicSide::Client, identity, QuicVersion::V1, 1U);
+    client.parameters = server.parameters;
+    CHECK_FALSE(ready(client)); // a server's parameter
+
+    // Without IDs a server cannot issue sequence 1: it refuses to start.
+    QuicConnection unrouted(allocator, server);
+    REQUIRE(unrouted.ready());
+    QuicAccept accept;
+    accept.local_cid = ConstSpan<u8>(kNetServerCid, sizeof(kNetServerCid));
+    accept.client_dcid = ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid));
+    accept.client_scid = ConstSpan<u8>(kClientCid, sizeof(kClientCid));
+    accept.original_dcid = accept.client_dcid;
+    CHECK_FALSE(unrouted.accept(accept, kStartNs));
+
+    {
+        Hosted there(0U, false, true, Preferred::OpenedThere);
+        there.confirm();
+        CHECK_FALSE(there.client.peer_parameters().has_preferred_address);
+        CHECK(there.server.local_cid_count() == 2U); // its next ID as a NEW_CONNECTION_ID frame
+    }
+    {
+        // An IPv4 client never follows an IPv6 address by itself, and may still probe it.
+        Hosted other(0U, false, true, Preferred::V6Only);
+        other.confirm();
+        CHECK(other.client.peer_parameters().has_preferred_address);
+        const QuicPath v6{0U, Hosted::preferred_v6()};
+        CHECK(other.client.paths().find(v6) == kQuicNoPath);
+        CHECK(other.client.probe_path(v6, other.net->now) == QuicMigration::Started);
+        CHECK_FALSE(other.client.on_preferred_address());
+    }
+    {
+        // A client whose server address is IPv4-mapped follows the address in that form.
+        Hosted v4_mapped(0U, false, true, Preferred::Mapped);
+        Net& net = *v4_mapped.net;
+        REQUIRE(net.run_until(
+            [&] { return v4_mapped.client.on_preferred_address() && v4_mapped.server.on_preferred_address(); }));
+        CHECK(v4_mapped.client.path() == QuicPath{0U, mapped(kPreferredAt)});
+    }
+    {
+        // A server without one drops what reaches any socket but its active path's.
+        Hosted plain;
+        Capture capture;
+        plain.net->filter = &capture;
+        plain.confirm();
+        REQUIRE(capture.size != 0U);
+        const QuicConnectionCounters before = plain.server.counters();
+        plain.server.receive(QuicPath{1U, plain.net->client_at}, Span<u8>(capture.bytes, capture.size), Ecn::NotEct,
+                             plain.net->now);
+        CHECK(plain.server.counters().foreign_datagrams == before.foreign_datagrams + 1U);
+        CHECK(plain.server.counters().packets_opened == before.packets_opened);
+    }
 }

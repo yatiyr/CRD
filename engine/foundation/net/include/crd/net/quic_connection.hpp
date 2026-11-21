@@ -260,6 +260,19 @@ struct QuicConnectionConfig
     // The path the connection opens on (QuicHost sets the peer's address): a port of 0 takes the path of the first
     // packet that opens.
     QuicPath path;
+    // A server's preferred address (RFC 9000 section 9.6): parameters.has_preferred_address with its IPv4 or IPv6
+    // address and port (or both; the connection ID and token left empty), reached through the host's socket
+    // `preferred_socket`. The connection issues the parameter's ID as sequence 1 from `ids` (refusing to start
+    // without them) and sends none when it opened on that socket. It answers there at once, but moves its datagrams
+    // there only once it validated the client's path there and the client's highest-numbered non-probing packet
+    // arrived on it; from then on what reaches its other sockets is dropped (section 9.6.2). A server's datagrams
+    // reaching any socket but its active path's and, until it moved, the preferred one are dropped: its address
+    // changes in no other way (section 9).
+    u32 preferred_socket = 0U;
+    // A client validates its server's preferred address of its active path's family from its active socket once the
+    // handshake is confirmed, and moves there once validated (section 9.6.1); again from a socket it migrates to
+    // first (section 9.6.3), as a move to it migrate() asked for does without this.
+    bool follow_preferred_address = true;
     // kPrfKeyBytes seeding the connection's entropy (grease, skipped numbers) for a deterministic run (tests,
     // NET-SIM); empty draws a fresh key from the provider.
     cont::ConstSpan<u8> entropy_seed;
@@ -292,9 +305,10 @@ enum class QuicMigration : u8
     Started,        // the path is known and validating (or proven already); migrate() moved datagrams there
     NotClient,      // a server follows its client and never moves itself (section 9)
     NotConfirmed,   // the handshake is not confirmed (section 9), or the connection is closing
-    Disabled,       // the server sent disable_active_migration (section 9)
-    OtherServer,    // the path's peer is not the server's address (only preferred_address moves that, section
-                    // 9.6), or the active path names no address (port 0)
+    Disabled,       // the server sent disable_active_migration, and the path's peer is its handshake address (section
+                    // 18.2: a preferred address, and every path once the client moved there, stay open)
+    OtherServer,    // the path's peer is neither the server's address nor, until the client moved there, its
+                    // preferred address (section 9.6), or the active path names no address (port 0)
     ActivePath,     // the path is the active one already
     NoConnectionId, // no peer connection ID unused on any other path is left for a new local address (section 9.5)
     NoConnection,   // the client host has no such connection (QuicClient: a stale handle)
@@ -384,6 +398,8 @@ public:
     // The path datagrams go on, and every path the connection knows.
     [[nodiscard]] const QuicPath& path() const noexcept { return m_paths.path(m_paths.active()); }
     [[nodiscard]] const QuicPaths& paths() const noexcept { return m_paths; }
+    // Whether datagrams moved to the server's preferred address (a client) or socket (a server): section 9.6.
+    [[nodiscard]] bool on_preferred_address() const noexcept { return m_on_preferred; }
     // When on_timeout() is next due: kNeverNs for no timer.
     [[nodiscard]] u64 next_timer_ns() const noexcept;
     void on_timeout(u64 now_ns) noexcept;
@@ -398,7 +414,11 @@ public:
     // (section 9.2), and congestion control, the RTT estimate, the pacer, ECN validation and the path MTU search start
     // again for it (section 9.4). Each path sends to a peer connection ID no other path uses (section 9.5) and carries
     // no amplification limit (the server's address is proven); one that fails validation is forgotten, and a failed
-    // active path reverts to the last validated one (section 9.3.2). Anything but Started changes nothing.
+    // active path reverts to the last validated one (section 9.3.2). A path to the server's preferred address is
+    // validated before datagrams move there (section 9.6.2): migrate() moves at once only when it is proven, and
+    // otherwise once validated, from whatever socket the client is on by then; on that move every path to the
+    // server's other address but the one moved from is forgotten, and that one once the server follows. Anything but
+    // Started changes nothing.
     [[nodiscard]] QuicMigration probe_path(const QuicPath& path, u64 now_ns) noexcept;
     [[nodiscard]] QuicMigration migrate(const QuicPath& path, u64 now_ns) noexcept;
     // Issues a fresh set of connection IDs whose NEW_CONNECTION_ID frames retire every earlier one (Retire Prior To,
@@ -608,8 +628,25 @@ private:
     void address_paths(u64 now_ns) noexcept;
     // A peer ID's sequence no path but `index` sends to and none has sent to; kNoSequence for none.
     [[nodiscard]] u64 unused_peer_sequence(usize index) const noexcept;
-    // probe_path()'s checks and the path's slot, validating unless proven; `index` names it on Started.
+    // probe_path()'s checks, then open_path(); `index` names the path on Started.
     [[nodiscard]] QuicMigration open_own_path(const QuicPath& path, u64 now_ns, usize& index) noexcept;
+    // A client's own path: its slot and a peer ID unused elsewhere, validating unless proven (NoConnectionId or
+    // Started); with `wait_for_id` one without an unused ID opens to wait for the peer's next.
+    [[nodiscard]] QuicMigration open_path(const QuicPath& path, u64 now_ns, usize& index,
+                                          bool wait_for_id = false) noexcept;
+    // The server's preferred address of `peer`'s family, in `peer`'s form (IPv4-mapped too); port 0 for none.
+    [[nodiscard]] Endpoint preferred_for(const Endpoint& peer) const noexcept;
+    // Whether `peer` is the preferred address, which the client has not moved to and which is not its server's
+    // address already.
+    [[nodiscard]] bool toward_preferred(const Endpoint& peer) const noexcept;
+    // A client validates the preferred address from its active socket, to move there once validated (section 9.6.1).
+    void follow_preferred(u64 now_ns) noexcept;
+    // Datagrams go on `index`, at the preferred address: a server forgets its other sockets' paths, a client every
+    // path to the server's other address but the one it moved from (sections 9.6.2 and 9.6.3).
+    void take_preferred(usize index, u64 now_ns) noexcept;
+    // Every ID of this side's the peer has not acknowledged goes again: from a new path, the one announced on the
+    // path left behind may never arrive.
+    void reannounce_local_ids() noexcept;
     // An opened Application packet of m_receive_path: the migration it may be (section 9.3).
     void follow_packet(u64 number, bool probing, u64 now_ns) noexcept;
     // Datagrams go on `index` from now on: the peer moved there, or a failed validation reverts there.
@@ -816,6 +853,10 @@ private:
     QuicPath m_congestion_path; // the validated path the controller, the estimate and the PMTU search belong to
     u64 m_largest_non_probing = kQuicNoPacket; // the Application packet that last chose the path (section 9.3)
     bool m_peer_followed = true; // a client's server sends on the client's active path: the latest move is followed
+    // The path datagrams move to once validated (section 9.6.2): a client's to the preferred address, a server's
+    // where its client's highest-numbered non-probing packet reached the preferred socket. kQuicNoPath for none.
+    usize m_deferred_move = kQuicNoPath;
+    bool m_on_preferred = false;
     u8 m_challenge[kQuicPathDataBytes] = {};   // the PATH_CHALLENGE data of the packet being written
     bool m_ping_owed = false;
     bool m_confirmed = false;

@@ -113,9 +113,50 @@ constexpr u64 kNoSequence = ~u64{0}; // a path with no peer connection ID to sen
     return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
 }
 
+// A preferred address's family is given when its address and port are not all zeros (section 18.2).
+[[nodiscard]] bool given(cont::ConstSpan<u8> address, u16 port) noexcept
+{
+    bool any = false;
+    for (const u8 byte : address)
+    {
+        any = any || byte != 0U;
+    }
+    return any && port != 0U;
+}
+
+// The preferred address of `like`'s family, in its form (an IPv4 address mapped where `like` is); port 0 for none.
+[[nodiscard]] Endpoint preferred_endpoint(const QuicPreferredAddress& preferred, const IpAddress& like) noexcept
+{
+    Endpoint out;
+    if (like.unmapped().family == AddressFamily::V4)
+    {
+        if (given(cont::ConstSpan<u8>(preferred.ipv4, 4U), preferred.ipv4_port))
+        {
+            const u8* const a = preferred.ipv4;
+            out.address = IpAddress::v4(a[0], a[1], a[2], a[3]);
+            out.address = (like.family == AddressFamily::V6) ? out.address.mapped() : out.address;
+            out.port = preferred.ipv4_port;
+        }
+        return out;
+    }
+    if (given(cont::ConstSpan<u8>(preferred.ipv6, 16U), preferred.ipv6_port))
+    {
+        out.address = IpAddress::v6(preferred.ipv6);
+        out.port = preferred.ipv6_port;
+    }
+    return out;
+}
+
 [[nodiscard]] bool config_valid(const QuicConnectionConfig& config) noexcept
 {
     const QuicTransportParameters& p = config.parameters;
+    const QuicPreferredAddress& preferred = p.preferred_address;
+    // A server's, with an address of either family, and its ID and token left to the connection.
+    const bool preferred_ok =
+        !p.has_preferred_address ||
+        (config.side == crypto::QuicSide::Server && config.tls != nullptr && preferred.connection_id.bytes == 0U &&
+         (given(cont::ConstSpan<u8>(preferred.ipv4, 4U), preferred.ipv4_port) ||
+          given(cont::ConstSpan<u8>(preferred.ipv6, 16U), preferred.ipv6_port)));
     const bool version_ok = config.version == crypto::QuicVersion::V1 || config.version == crypto::QuicVersion::V2;
     bool listed = config.versions.empty();
     for (const u32 version : config.versions)
@@ -126,7 +167,7 @@ constexpr u64 kNoSequence = ~u64{0}; // a path with no peer connection ID to sen
     const bool keyed_ok =
         config.tls != nullptr || (config.tickets == nullptr && config.token.empty() && config.early_context.empty() &&
                                   config.versions.empty() && !config.after_version_negotiation);
-    return keyed_ok && version_ok && listed && config.versions.size() < kQuicMaxAvailableVersions &&
+    return keyed_ok && preferred_ok && version_ok && listed && config.versions.size() < kQuicMaxAvailableVersions &&
            p.initial_max_data == 0U && p.initial_max_stream_data_bidi_local == 0U &&
            p.initial_max_stream_data_bidi_remote == 0U && p.initial_max_stream_data_uni == 0U &&
            p.initial_max_streams_bidi == 0U && p.initial_max_streams_uni == 0U && p.max_datagram_frame_size == 0U &&
@@ -498,6 +539,22 @@ bool QuicConnection::accept(const QuicAccept& accept, u64 now_ns) noexcept
     m_peer_cids[0] = PeerCid{};
     m_peer_cids[0].id = m_peer_scid;
     m_peer_cid_count = 1U;
+    if (m_config.parameters.has_preferred_address && m_config.path.socket != m_config.preferred_socket)
+    {
+        // The preferred address's ID is sequence 1 (section 5.1.1), routed as any other; the parameters carry it.
+        LocalCid& preferred = m_local_ids[1];
+        preferred = LocalCid{};
+        preferred.id.bytes = m_local_cid.bytes;
+        const cont::Span<u8> token(preferred.reset_token, kQuicResetTokenBytes);
+        if (m_config.ids == nullptr || !m_config.ids->issue(cont::Span<u8>(preferred.id.id, preferred.id.bytes), token))
+        {
+            return false;
+        }
+        preferred.sequence = 1U;
+        preferred.acked = true;
+        m_local_id_count = 2U;
+        m_local_next_sequence = 2U;
+    }
     return start(now_ns);
 }
 
@@ -570,6 +627,13 @@ void QuicConnection::fill_local_parameters() noexcept
         // Sequence 0's token: a client's transport parameters are not confidential, so only a server sends one.
         m_local.has_stateless_reset_token = m_config.ids != nullptr;
         std::memcpy(m_local.stateless_reset_token, m_local_ids[0].reset_token, kQuicResetTokenBytes);
+        // Sequence 1 is the preferred address's (accept()), absent when the connection opened on its socket.
+        m_local.has_preferred_address = m_local_id_count == 2U && m_local_ids[1].sequence == 1U;
+        if (m_local.has_preferred_address)
+        {
+            m_local.preferred_address.connection_id = m_local_ids[1].id;
+            std::memcpy(m_local.preferred_address.reset_token, m_local_ids[1].reset_token, kQuicResetTokenBytes);
+        }
     }
     m_local.grease_quic_bit = m_config.grease_quic_bit;
     m_local.has_version_information = true;
@@ -834,8 +898,19 @@ void QuicConnection::receive(const QuicPath& path, cont::Span<u8> datagram, Ecn 
     m_counters.bytes_received += datagram.size();
     const usize active = m_paths.active();
     // An unbound path counts every datagram toward itself until the first packet that opens names it.
-    m_receive_path = (m_paths.path(active).peer.port == 0U) ? active : m_paths.find(path);
+    const QuicPath& current = m_paths.path(active);
+    m_receive_path = (current.peer.port == 0U) ? active : m_paths.find(path);
     m_candidate = path;
+    // A server's address changes only to its preferred one (sections 9 and 9.6.2): its other sockets are not the
+    // connection's, nor, once it moved, the one it left.
+    const bool preferred_socket =
+        m_local.has_preferred_address && !m_on_preferred && path.socket == m_config.preferred_socket;
+    if (m_config.side == crypto::QuicSide::Server && current.peer.port != 0U && path.socket != current.socket &&
+        !preferred_socket)
+    {
+        ++m_counters.foreign_datagrams;
+        return;
+    }
     if (m_receive_path == kQuicNoPath && !follows_peer())
     {
         ++m_counters.foreign_datagrams; // a client's unknown server, or a server not yet confirmed (section 9)
@@ -1519,6 +1594,20 @@ bool QuicConnection::read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_n
             }
         }
     }
+    if (m_config.side == crypto::QuicSide::Client && m_peer.has_preferred_address)
+    {
+        // The preferred address's ID is the server's sequence 1 with its token (section 5.1.1), held and checked as
+        // a NEW_CONNECTION_ID frame's would be.
+        QuicFrame issued;
+        issued.kind = QuicFrameKind::NewConnectionId;
+        issued.sequence = 1U;
+        issued.data = m_peer.preferred_address.connection_id.view();
+        issued.reset_token = cont::ConstSpan<u8>(m_peer.preferred_address.reset_token, kQuicResetTokenBytes);
+        if (!new_connection_id(issued, now_ns))
+        {
+            return false;
+        }
+    }
     restart_idle(now_ns);
     return true;
 }
@@ -1862,6 +1951,7 @@ void QuicConnection::confirm(u64 now_ns) noexcept
     m_protection.confirm();
     m_recovery->confirm_handshake(now_ns);
     discard_space(QuicSpace::Handshake, now_ns);
+    follow_preferred(now_ns);
 }
 
 // ---- Sending ----
@@ -3072,18 +3162,41 @@ QuicMigration QuicConnection::migrate(const QuicPath& path, u64 now_ns) noexcept
 {
     usize index = kQuicNoPath;
     const QuicMigration result = open_own_path(path, now_ns, index);
-    if (result == QuicMigration::Started)
+    if (result != QuicMigration::Started)
     {
-        move_to(index, now_ns);
-        // The server answers on the new path only with an ID of this side's it holds unused (section 9.5), and one
-        // announced on the path left behind may never arrive: every one not yet acknowledged goes again from here.
-        for (usize local = 0U; local < m_local_id_count; ++local)
+        return result;
+    }
+    if (toward_preferred(path.peer))
+    {
+        // Validated before datagrams move there (section 9.6.2).
+        if (m_paths.proven(index))
         {
-            LocalCid& held = m_local_ids[local];
-            held.owed = held.owed || !held.acked;
+            take_preferred(index, now_ns);
         }
+        else
+        {
+            m_deferred_move = index;
+        }
+        return result;
+    }
+    move_to(index, now_ns);
+    reannounce_local_ids();
+    // Moved before reaching the preferred address: it is validated from here too (section 9.6.3).
+    if (!m_on_preferred)
+    {
+        follow_preferred(now_ns);
     }
     return result;
+}
+
+void QuicConnection::reannounce_local_ids() noexcept
+{
+    // The server answers on the new path only with an ID of this side's it holds unused (section 9.5).
+    for (usize local = 0U; local < m_local_id_count; ++local)
+    {
+        LocalCid& held = m_local_ids[local];
+        held.owed = held.owed || !held.acked;
+    }
 }
 
 QuicMigration QuicConnection::open_own_path(const QuicPath& path, u64 now_ns, usize& index) noexcept
@@ -3097,11 +3210,13 @@ QuicMigration QuicConnection::open_own_path(const QuicPath& path, u64 now_ns, us
     {
         return QuicMigration::NotConfirmed;
     }
-    if (m_peer.disable_active_migration)
+    const bool preferred = toward_preferred(path.peer);
+    // disable_active_migration covers the handshake's address alone (section 18.2).
+    if (m_peer.disable_active_migration && !m_on_preferred && !preferred)
     {
         return QuicMigration::Disabled;
     }
-    if (!(path.peer == active.peer) || active.peer.port == 0U)
+    if ((!(path.peer == active.peer) && !preferred) || active.peer.port == 0U)
     {
         return QuicMigration::OtherServer; // or the active path names no server address to keep
     }
@@ -3109,9 +3224,14 @@ QuicMigration QuicConnection::open_own_path(const QuicPath& path, u64 now_ns, us
     {
         return QuicMigration::ActivePath;
     }
+    return open_path(path, now_ns, index);
+}
+
+QuicMigration QuicConnection::open_path(const QuicPath& path, u64 now_ns, usize& index, bool wait_for_id) noexcept
+{
     index = m_paths.find(path);
     const bool addressed = index != kQuicNoPath && peer_index(m_paths.peer_sequence(index)) < m_peer_cid_count;
-    if (!addressed && unused_peer_sequence(index) == kNoSequence)
+    if (!addressed && !wait_for_id && unused_peer_sequence(index) == kNoSequence)
     {
         index = kQuicNoPath;
         return QuicMigration::NoConnectionId;
@@ -3156,6 +3276,27 @@ void QuicConnection::follow_packet(u64 number, bool probing, u64 now_ns) noexcep
             m_peer_followed = true; // the server's datagrams reach the path this side moved to
             leave_fallback(now_ns);
         }
+        if (m_config.side == crypto::QuicSide::Server)
+        {
+            m_deferred_move = kQuicNoPath; // a later packet elsewhere chose another path
+        }
+        if (path != m_paths.active() && follows_peer() &&
+            m_paths.path(path).socket != m_paths.path(m_paths.active()).socket)
+        {
+            // The client moved to the preferred socket: datagrams follow once this side validated the path there
+            // (section 9.6.2), never on the packet alone.
+            if (m_paths.validated(path) && sendable)
+            {
+                take_preferred(path, now_ns);
+                return;
+            }
+            m_deferred_move = path;
+            if (!m_paths.validating(path))
+            {
+                m_paths.validate(path, now_ns, validation_timeout_ns());
+            }
+            return;
+        }
         if (path != m_paths.active() && follows_peer() && sendable)
         {
             const usize from = m_paths.active();
@@ -3179,8 +3320,9 @@ void QuicConnection::follow_packet(u64 number, bool probing, u64 now_ns) noexcep
         }
         return;
     }
-    // A probe from a path not validated is answered with a challenge of this side's (section 9.6.3).
-    if (probing && path != m_paths.active() && follows_peer() && sendable && !m_paths.validated(path))
+    // A probe from a path not validated is answered with a challenge of this side's (section 9.6.3), which leaves
+    // once the path has a peer ID to send to: one that waits for it is validating, never a path left behind.
+    if (probing && path != m_paths.active() && follows_peer() && !m_paths.validated(path))
     {
         m_paths.validate(path, now_ns, validation_timeout_ns());
     }
@@ -3260,9 +3402,75 @@ void QuicConnection::follow_congestion(u64 now_ns) noexcept
     follow_ecn();
 }
 
+Endpoint QuicConnection::preferred_for(const Endpoint& peer) const noexcept
+{
+    return (m_peer_known && m_peer.has_preferred_address) ? preferred_endpoint(m_peer.preferred_address, peer.address)
+                                                          : Endpoint{};
+}
+
+bool QuicConnection::toward_preferred(const Endpoint& peer) const noexcept
+{
+    return m_config.side == crypto::QuicSide::Client && !m_on_preferred && peer.port != 0U &&
+           peer == preferred_for(peer) && !(peer == m_paths.path(m_paths.active()).peer);
+}
+
+void QuicConnection::follow_preferred(u64 now_ns) noexcept
+{
+    const QuicPath& active = m_paths.path(m_paths.active());
+    const QuicPath target{active.socket, preferred_for(active.peer)};
+    // By itself, or for a move migrate() asked for that waits for its validation (a socket left behind never draws
+    // the connection back).
+    const bool wanted = m_config.follow_preferred_address || m_deferred_move != kQuicNoPath;
+    if (!wanted || m_state != QuicConnectionState::Established || !m_confirmed || !toward_preferred(target.peer))
+    {
+        return;
+    }
+    if (m_deferred_move != kQuicNoPath && m_paths.path(m_deferred_move).socket != active.socket)
+    {
+        // The validation from a socket this side left ends; its ID retires, and the peer's replacement reaches the
+        // path from here (address_paths()), which waits for one when none is unused.
+        drop_path(m_deferred_move, now_ns);
+    }
+    usize index = kQuicNoPath;
+    if (open_path(target, now_ns, index, true) == QuicMigration::Started)
+    {
+        m_deferred_move = index;
+    }
+}
+
+void QuicConnection::take_preferred(usize index, u64 now_ns) noexcept
+{
+    const bool server = m_config.side == crypto::QuicSide::Server;
+    m_deferred_move = kQuicNoPath;
+    m_on_preferred = true;
+    move_to(index, now_ns);
+    const QuicPath& active = m_paths.path(index);
+    for (usize other = 0U; other < kQuicMaxPaths; ++other)
+    {
+        // A server's other sockets are no longer the connection's (section 9.6.2). A client stops using the
+        // server's other address (section 9.6.1), abandoning any validation there (section 9.6.3); the path it moved
+        // from stays until the server follows (leave_fallback()).
+        const QuicPath& known = m_paths.path(other);
+        const bool left =
+            server ? known.socket != active.socket : !(known.peer == active.peer) && other != m_paths.fallback();
+        if (m_paths.used(other) && other != index && left)
+        {
+            drop_path(other, now_ns);
+        }
+    }
+    if (!server)
+    {
+        reannounce_local_ids();
+    }
+}
+
 void QuicConnection::on_validated(usize index, u64 now_ns) noexcept
 {
     ++m_counters.path_validations;
+    if (index == m_deferred_move && path_sendable(index))
+    {
+        take_preferred(index, now_ns); // section 9.6.2: validated, so datagrams move there
+    }
     if (index == m_paths.active())
     {
         m_recovery->set_amplification_blocked(false, now_ns);
@@ -3302,6 +3510,7 @@ void QuicConnection::drop_path(usize index, u64 now_ns) noexcept
     {
         return;
     }
+    m_deferred_move = (m_deferred_move == index) ? kQuicNoPath : m_deferred_move;
     const u64 sequence = m_paths.peer_sequence(index);
     bool shared = sequence == kNoSequence;
     for (usize other = 0U; other < kQuicMaxPaths; ++other)

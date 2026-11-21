@@ -35,6 +35,7 @@ QuicServer::QuicServer(memory::IAllocator& allocator, const SocketSet& sockets, 
     const u32 early = config.early_datagrams;
     if (!ingress.ready() || !ingress.server() || connection.side != crypto::QuicSide::Server ||
         early > kQuicMaxEarlyDatagrams ||
+        (connection.parameters.has_preferred_address && connection.preferred_socket >= sockets.size()) ||
         (early != 0U && (config.early_per_client == 0U || config.early_lifetime_ns == 0U)) ||
         (!connection.entropy_seed.empty() && connection.entropy_seed.size() != crypto::kPrfKeyBytes))
     {

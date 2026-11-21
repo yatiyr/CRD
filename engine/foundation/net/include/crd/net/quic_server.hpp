@@ -46,8 +46,8 @@ struct QuicServerConfig
 {
     // Every connection's configuration: side Server, with its TLS context and, in `versions`, every version the
     // ingress runs. The server sets `version` (the client Initial's) and `ids` (its routed IDs); a non-empty
-    // `entropy_seed` is varied per connection (QuicHost::build). What its spans view (versions, early_context) must
-    // outlive the server.
+    // `entropy_seed` is varied per connection (QuicHost::build). A preferred address's socket is one of the set's.
+    // What its spans view (versions, early_context) must outlive the server.
     QuicConnectionConfig connection;
     u32 connections = 256U;             // live connections at most (1 to kQuicMaxHostConnections)
     u32 early_datagrams = 16U;          // 0-RTT datagrams held before their Initial (0: none held)

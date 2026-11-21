@@ -22,7 +22,8 @@
 // flight from another address first, as an off-path attacker forwarding it would. The client also has sockets 1 and
 // 2 at addresses of their own: 0xFA moves it to its next socket (migrate()) and 0xF9 probes that one (probe_path()),
 // and 0xF8 steps which of its three sockets its host holds back (send()'s held sockets, every mask in turn; none on
-// the clean path).
+// the clean path). The server offers a preferred address on its socket 1 (RFC 9000 section 9.6), which 0xF7 moves the
+// client to (migrate(): once validated).
 //
 // Oracles. Always: a server sends at most three times what it received before the address is proven, and on paths
 // at most three times what arrived from each address it has not validated since it last knew it; every client
@@ -40,7 +41,9 @@
 // runs one version: the other one after a switch, the configured one otherwise. Paths: a confirmed pair that carried
 // its stream with neither end closed has the server sending to its active socket's address once what is owed has
 // arrived; a move or a probe the client refuses changes its active path in nothing, one it starts moves it or not as
-// asked; no client datagram leaves by a held socket, and a send() held back changes no counter or packet number.
+// asked; no client datagram leaves by a held socket, and a send() held back changes no counter or packet number; a
+// server on its preferred socket moved there after its client, once it validated the path there, and keeps no path
+// on its first socket; a client there sends to that address alone.
 // 0-RTT: an offer ends Accepted or Rejected on both ends alike; accepted, the server reads the early stream
 // whole and unchanged, never marking more bytes replayable than came; rejected, the client's streams were reset and
 // the server opened none of them.
@@ -347,6 +350,7 @@ struct Flight
     usize to = 0U;
     Ecn ecn = Ecn::NotEct; // as the sender marked it, or as the path rewrote it
     usize path = 0U;       // the client's address (kClientPaths) a datagram left or was sent to
+    u32 server_socket = 0U; // the server's socket it reaches or left: 1 at the preferred address
 };
 
 // The client's addresses over paths (byte 0's bit 7): its socket 0's (a NAT rebinding of the first, another address,
@@ -363,6 +367,7 @@ const QuicPath kClientPaths[kClientAddresses] = {
     QuicPath{0U, Endpoint{IpAddress::v4(192, 0, 2, 41), 52000U}},
 };
 const Endpoint kServerAddress{IpAddress::v4(192, 0, 2, 1), 443U};
+const Endpoint kPreferredAddress{IpAddress::v4(192, 0, 2, 80), 4433U}; // the server's socket 1 (RFC 9000 section 9.6)
 
 // Whether this input's script runs over paths (byte 0's bit 7).
 bool& over_paths()
@@ -371,12 +376,26 @@ bool& over_paths()
     return paths;
 }
 
-// Over paths the client's first path names its server's address, which its own sockets' paths keep.
+// Over paths the client's first path names its server's address, which its own sockets' paths keep, and moves to
+// the server's preferred address only when the script says (0xF7); a server with a handshake offers that address on
+// its socket 1.
 QuicConnectionConfig on_paths(QuicConnectionConfig config)
 {
-    if (over_paths())
+    if (!over_paths())
+    {
+        return config;
+    }
+    if (config.side == QuicSide::Client)
     {
         config.path = QuicPath{0U, kServerAddress};
+        config.follow_preferred_address = false;
+    }
+    else if (config.tls != nullptr)
+    {
+        config.parameters.has_preferred_address = true;
+        std::memcpy(config.parameters.preferred_address.ipv4, kPreferredAddress.address.bytes, 4U);
+        config.parameters.preferred_address.ipv4_port = kPreferredAddress.port;
+        config.preferred_socket = 1U;
     }
     return config;
 }
@@ -400,11 +419,14 @@ struct Pair
     bool keyed = false; // the raw UDP path: no handshake to confirm, so it stands once both ends read the other's hello
     bool retry_sent = false;
     usize client_path = 0U; // socket 0's address now (over paths)
-    u64 path_received[kClientAddresses] = {}; // bytes the server was given from each address since it last did not
-    u64 path_sent[kClientAddresses] = {};     // know it, and sent there
+    // Bytes the server was given from each address at each of its sockets since it last did not know that path, and
+    // sent there.
+    u64 path_received[2][kClientAddresses] = {};
+    u64 path_sent[2][kClientAddresses] = {};
     u64 unbound_bytes = 0U;    // given to the server's first path before it was bound
     // The client's sockets its host holds back (over paths).
     u32 held = 0U;
+    bool server_preferred = false; // the server moved to its preferred socket (over paths)
 
     explicit Pair(QuicVersion run, bool switching = false, Tickets* tickets = nullptr, bool raw_path = false)
         : client_host(allocator, 0U,
@@ -413,7 +435,8 @@ struct Pair
                       raw_path ? keyed_id(QuicSide::Server).view() : ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
           client(allocator,
                  on_paths(config_for(QuicSide::Client, run, &client_host.ids, switching, tickets, raw_path))),
-          server(allocator, config_for(QuicSide::Server, run, &server_host.ids, switching, tickets, raw_path)),
+          server(allocator,
+                 on_paths(config_for(QuicSide::Server, run, &server_host.ids, switching, tickets, raw_path))),
           version(run), keyed(raw_path)
     {
     }
@@ -472,21 +495,23 @@ struct Pair
             CRD_FUZZ_REQUIRE(server.counters().bytes_sent <= 3U * server.counters().bytes_received);
         }
         const usize to = path_of(server.sent_path());
+        const u32 socket = server.sent_path().socket;
         if (from == 1U && to < kClientAddresses)
         {
-            path_sent[to] += datagram.size();
+            CRD_FUZZ_REQUIRE(socket < 2U);
+            path_sent[socket][to] += datagram.size();
             const usize slot = server.paths().find(server.sent_path());
             CRD_FUZZ_REQUIRE(slot != kQuicNoPath);
-            CRD_FUZZ_REQUIRE(server.paths().validated(slot) || path_sent[to] <= 3U * path_received[to]);
+            CRD_FUZZ_REQUIRE(server.paths().validated(slot) || path_sent[socket][to] <= 3U * path_received[socket][to]);
         }
     }
 
-    // The index of `path` among kClientPaths; kClientAddresses for none (the server's unbound first path).
+    // The index of `path`'s peer among kClientPaths; kClientAddresses for none (the server's unbound first path).
     [[nodiscard]] static usize path_of(const QuicPath& path)
     {
         for (usize index = 0U; index < kClientAddresses; ++index)
         {
-            if (path == kClientPaths[index])
+            if (path.peer == kClientPaths[index].peer)
             {
                 return index;
             }
@@ -543,6 +568,9 @@ struct Pair
                     flights[count].to = 1U - from;
                     flights[count].ecn = ends[from]->marking();
                     flights[count].path = address;
+                    const bool preferred = client.sent_path().peer == kPreferredAddress;
+                    flights[count].server_socket =
+                        (from == 0U) ? static_cast<u32>(preferred) : server.sent_path().socket;
                     ++count;
                 }
             }
@@ -575,30 +603,56 @@ struct Pair
         }
         if (flight.to == 1U && over_paths())
         {
-            const QuicPath& from = kClientPaths[flight.path];
+            const u32 socket = flight.server_socket;
+            const QuicPath from{socket, kClientPaths[flight.path].peer};
             // A path the server does not know starts its count again. Its unbound first path counts every datagram
             // until one opens, and then belongs to that one's address (S55).
             const bool unbound = server.path().peer.port == 0U;
             if (!unbound && server.paths().find(from) == kQuicNoPath)
             {
-                path_received[flight.path] = 0U;
-                path_sent[flight.path] = 0U;
+                path_received[socket][flight.path] = 0U;
+                path_sent[socket][flight.path] = 0U;
             }
             unbound_bytes += unbound ? flight.size : 0U;
-            path_received[flight.path] += unbound ? 0U : flight.size;
+            path_received[socket][flight.path] += unbound ? 0U : flight.size;
             to.receive(from, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
             const usize bound = path_of(server.path());
             if (unbound && bound < 4U)
             {
-                path_received[bound] = unbound_bytes;
+                path_received[server.path().socket][bound] = unbound_bytes;
             }
+            // The server's datagrams move to its preferred socket only once it validated the path there, after its
+            // client moved there, and leave every other socket's path for good (section 9.6.2); there it follows its
+            // client as anywhere.
+            if (server.on_preferred_address() && !server_preferred)
+            {
+                server_preferred = true;
+                // The path it moved to is validated: active, or left at once for a rebinding the same datagram
+                // showed, and then the fallback.
+                const QuicPaths& paths = server.paths();
+                const usize back = paths.fallback();
+                CRD_FUZZ_REQUIRE(paths.validated(paths.active()) ||
+                                 (back != kQuicNoPath && paths.validated(back) && paths.path(back).socket == 1U));
+                CRD_FUZZ_REQUIRE(client.on_preferred_address());
+            }
+            if (server_preferred)
+            {
+                CRD_FUZZ_REQUIRE(server.path().socket == 1U);
+                for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+                {
+                    CRD_FUZZ_REQUIRE(!server.paths().used(slot) || server.paths().path(slot).socket == 1U);
+                }
+            }
+            CRD_FUZZ_REQUIRE(server.on_preferred_address() || server.path().socket == 0U);
         }
         else if (over_paths())
         {
             const u32 socket = (flight.path >= kSocketZeroPaths && flight.path < kClientAddresses)
                                    ? static_cast<u32>(flight.path - kSocketZeroPaths + 1U)
                                    : 0U;
-            to.receive(QuicPath{socket, kServerAddress}, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+            const Endpoint& server_at = (flight.server_socket == 1U) ? kPreferredAddress : kServerAddress;
+            to.receive(QuicPath{socket, server_at}, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+            CRD_FUZZ_REQUIRE(!client.on_preferred_address() || client.path().peer == kPreferredAddress);
         }
         else
         {
@@ -606,12 +660,17 @@ struct Pair
         }
         check_closed(to);
         // Whatever the path does to codepoints, a failed validation stays failed for the path's life: a confirmed new
-        // path, where recovery's path floor moves with it, validates again (RFC 9000 section 13.4.2).
+        // path, where recovery's path floor moves with it, validates again (RFC 9000 section 13.4.2). The floor stays
+        // where no packet of the old path is held, so the path's change is read from the moves and validations that
+        // restart it.
         const bool failed = to.ecn().state() == QuicEcnState::Failed;
         const u64 floor = to.recovery().path_floor();
-        CRD_FUZZ_REQUIRE(failed || !ecn_failed[flight.to] || floor != ecn_floor[flight.to]);
+        const u64 changes = to.counters().migrations + to.counters().path_validations;
+        CRD_FUZZ_REQUIRE(failed || !ecn_failed[flight.to] || floor != ecn_floor[flight.to] ||
+                         changes != ecn_changes[flight.to]);
         ecn_failed[flight.to] = failed;
         ecn_floor[flight.to] = floor;
+        ecn_changes[flight.to] = changes;
         check_hosts();
     }
 
@@ -619,6 +678,7 @@ struct Pair
 
     bool ecn_failed[2] = {}; // each end's ECN validation failed
     u64 ecn_floor[2] = {};   // and the path it failed on (QuicRecovery::path_floor)
+    u64 ecn_changes[2] = {}; // each end's moves and validations then
 
     void timers()
     {
@@ -970,12 +1030,26 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         {
             // The client's next socket of three: moved to, or probed. Anything but Started changes nothing.
             const QuicPath before = pair.client.path();
-            const QuicPath next{(before.socket + 1U) % 3U, kServerAddress};
+            const QuicPath next{(before.socket + 1U) % 3U, before.peer};
             const QuicMigration result =
                 (op == 0xFAU) ? pair.client.migrate(next, pair.now) : pair.client.probe_path(next, pair.now);
             const bool moved = result == QuicMigration::Started && op == 0xFAU;
             CRD_FUZZ_REQUIRE(pair.client.path() == (moved ? next : before));
             CRD_FUZZ_REQUIRE(result != QuicMigration::Started || pair.client.paths().find(next) != kQuicNoPath);
+            continue;
+        }
+        if (op == 0xF7U && over_paths())
+        {
+            // The server's preferred address from the client's socket: moved to once validated (section 9.6.2).
+            const QuicPath before = pair.client.path();
+            const QuicPath preferred{before.socket, kPreferredAddress};
+            const usize known = pair.client.paths().find(preferred);
+            const bool proven = known != kQuicNoPath && pair.client.paths().proven(known);
+            const QuicMigration result = pair.client.migrate(preferred, pair.now);
+            const bool moved = result == QuicMigration::Started && proven;
+            CRD_FUZZ_REQUIRE(pair.client.path() == (moved ? preferred : before));
+            CRD_FUZZ_REQUIRE(result != QuicMigration::Started || pair.client.paths().find(preferred) != kQuicNoPath);
+            CRD_FUZZ_REQUIRE(!moved || pair.client.on_preferred_address());
             continue;
         }
         if (op == 0xF8U && over_paths())
@@ -1094,7 +1168,7 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         if (over_paths() && !finished(pair.client) && !finished(pair.server))
         {
             pair.settle(1U);
-            CRD_FUZZ_REQUIRE(pair.server.path() == kClientPaths[pair.address_of(pair.client.path().socket)]);
+            CRD_FUZZ_REQUIRE(pair.server.path().peer == kClientPaths[pair.address_of(pair.client.path().socket)].peer);
         }
         exchange_datagrams(pair, offered ? 1U : 0U);
         stateless_reset(pair);
@@ -1402,6 +1476,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     const u8 held[] = {0x80U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x07U, 0x07U, 0xF8U, 0xFAU,
                        0x07U, 0x00U, 0x07U, 0xF8U, 0x07U, 0x00U, 0xF8U, 0x07U, 0xF8U, 0x07U, 0x00U, 0x07U, 0x00U};
     sink.add("script-paths-held", held, sizeof(held));
+    // Over paths: confirmed, the client moves to the server's preferred address, then to its next socket there, and
+    // socket 0 rebinds.
+    const u8 preferred[] = {0x80U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x07U, 0x07U, 0xF7U,
+                            0x07U, 0x00U, 0x07U, 0x00U, 0x07U, 0xFAU, 0x07U, 0x00U, 0xFCU, 0x07U, 0x00U};
+    sink.add("script-paths-preferred", preferred, sizeof(preferred));
     // The same with receive timestamps, and a raw client's ACK_RECEIVE_TIMESTAMPS of the server's first 1-RTT packet.
     const u8 timed[] = {0x40U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
     sink.add("script-receive-timestamps", timed, sizeof(timed));

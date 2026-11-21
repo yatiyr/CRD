@@ -280,6 +280,12 @@ public:
     Endpoint socket_at[3];
     u32 down = 0U;
     u32 down_in = 0U;
+    // The server's sockets (its paths' QuicPath::socket): a client datagram to `server_at[1]` reaches its socket 1 (a
+    // preferred address, RFC 9000 section 9.6), any other its socket 0; a server datagram from socket s reaches the
+    // client from `server_at[s]` (port 0: from the address the client's active path names). What goes to or from a
+    // socket of `server_down` (a bit each) is lost.
+    Endpoint server_at[2];
+    u32 server_down = 0U;
     usize misdirected = 0U; // server datagrams sent to an address that no longer reaches the client
     u8 minted[kQuicMaxCarriedTokenBytes] = {};
     usize minted_bytes = 0U;
@@ -302,9 +308,12 @@ public:
                 ++sent[from];
                 check(from, ConstSpan<u8>(out, size));
                 u32 socket = 0U;
+                u32 server_socket = 0U;
                 if (paths)
                 {
                     socket = (from == 0U) ? m_ends[0]->sent_path().socket : socket_of(m_ends[1]->sent_path().peer);
+                    const bool preferred = server_at[1].port != 0U && m_ends[0]->sent_path().peer == server_at[1];
+                    server_socket = (from == 0U) ? static_cast<u32>(preferred) : m_ends[1]->sent_path().socket;
                 }
                 if (socket == kNoSocket)
                 {
@@ -313,7 +322,8 @@ public:
                     continue;
                 }
                 const u32 gone = (from == 1U) ? (down | down_in) : down;
-                if (socket < 32U && (gone & (1U << socket)) != 0U)
+                if ((socket < 32U && (gone & (1U << socket)) != 0U) ||
+                    (server_socket < 32U && (server_down & (1U << server_socket)) != 0U))
                 {
                     ++dropped[from];
                     continue;
@@ -339,10 +349,10 @@ public:
                     continue;
                 }
                 ecn = on_path(from, ecn);
-                enqueue(from, ConstSpan<u8>(out, size), ecn, socket);
+                enqueue(from, ConstSpan<u8>(out, size), ecn, socket, server_socket);
                 if (rng.chance(path[from].duplicate))
                 {
-                    enqueue(from, ConstSpan<u8>(out, size), ecn, socket);
+                    enqueue(from, ConstSpan<u8>(out, size), ecn, socket, server_socket);
                 }
             }
         }
@@ -440,6 +450,7 @@ private:
         Ecn ecn = Ecn::NotEct;
         Endpoint from; // a client datagram's source address as the server sees it
         u32 socket = 0U; // the client's socket it left or reaches
+        u32 server_socket = 0U; // and the server's
     };
 
     static constexpr u32 kNoSocket = ~u32{0};
@@ -508,7 +519,7 @@ private:
         }
     }
 
-    void enqueue(usize from, ConstSpan<u8> datagram, Ecn ecn = Ecn::NotEct, u32 socket = 0U)
+    void enqueue(usize from, ConstSpan<u8> datagram, Ecn ecn = Ecn::NotEct, u32 socket = 0U, u32 server_socket = 0U)
     {
         u64 departs = now;
         if (path[from].rate != 0U)
@@ -539,6 +550,7 @@ private:
         flight.to = 1U - from;
         flight.ecn = ecn;
         flight.socket = socket;
+        flight.server_socket = server_socket;
         flight.from = Endpoint{};
         if (from == 0U)
         {
@@ -597,11 +609,15 @@ private:
         }
         if (flight.to == 1U && paths)
         {
-            to.receive(QuicPath{0U, flight.from}, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+            to.receive(QuicPath{flight.server_socket, flight.from}, Span<u8>(flight.bytes, flight.size), flight.ecn,
+                       now);
         }
         else if (paths)
         {
-            to.receive(QuicPath{flight.socket, to.path().peer}, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+            REQUIRE(flight.server_socket < 2U);
+            const Endpoint& server = server_at[flight.server_socket];
+            const Endpoint& peer = (server.port != 0U) ? server : to.path().peer;
+            to.receive(QuicPath{flight.socket, peer}, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
         }
         else
         {
