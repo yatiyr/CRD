@@ -4,10 +4,10 @@
 // QuicCids holds both ends' connection IDs (RFC 9000 section 5.1) in one sequence space per path ID (RFC 10069
 // section 3.2): this side's, which the host routes and the peer sends to, and the peer's, which this side sends to.
 //   spaces     path ID 0's space is held inline and open from the start. A connection that uses multipath opens one
-//              for each further path ID (open()) on storage it allocated at construction, at most kQuicMaxPaths at
-//              once; close() gives it back. Each space numbers its IDs both ways from 0, keeps its own Retire Prior To
-//              both ways, and holds up to its active_connection_id_limit (per path: RFC 10069 section 2). An ID is
-//              unique in the connection whatever its path ID (section 3.2.1).
+//              for each further path ID (open()) on storage it holds (allocated at construction), at most
+//              kQuicMaxPaths at once; close() gives it back. Each space numbers its IDs both ways from 0, keeps its own
+//              Retire Prior To both ways, and holds up to its active_connection_id_limit (per path: RFC 10069
+//              section 2). An ID is unique in the connection whatever its path ID (section 3.2.1).
 //   peer's     a repeated frame changes nothing; one ID under two sequences or path IDs, or one stateless reset token
 //              under two IDs, is PROTOCOL_VIOLATION (RFC 9000 sections 10.3.2 and 19.15); past the limit is
 //              CONNECTION_ID_LIMIT_ERROR. A raised Retire Prior To retires every ID below it, and the one sent to is
@@ -173,7 +173,8 @@ public:
     // Path ID 0's sequence 0, the Source Connection ID of the peer's long headers, with no token yet: the one sent to.
     void first_peer(cont::ConstSpan<u8> id) noexcept;
     // A NEW_CONNECTION_ID frame (path ID 0) or PATH_NEW_CONNECTION_ID frame for an open space, under `limit` (this
-    // side's active_connection_id_limit, at most kQuicMaxPeerConnectionIds). `added`: an ID is held that was not.
+    // side's active_connection_id_limit, at most kQuicMaxPeerConnectionIds). `added`: an ID is held that was not. A
+    // refusal changes nothing, so the connection's close still goes to an ID the peer routes.
     [[nodiscard]] QuicTransportError add_peer(const QuicFrame& frame, u64 limit, bool& added) noexcept;
     // Path ID 0's sequence 0's token (the server's stateless_reset_token), when that ID is still held.
     void peer_reset_token(cont::ConstSpan<u8> token) noexcept;
@@ -186,8 +187,8 @@ public:
     void set_current(u64 path_id, u64 sequence) noexcept;
     // A packet goes to the ID: its token counts from now on.
     void use(u64 path_id, u64 sequence) noexcept;
-    // This side retires a held ID that is not the current one (its path forgotten, RFC 9000 section 9.5). False past
-    // the bound on retirements (CONNECTION_ID_LIMIT_ERROR); true for one not held.
+    // This side retires a held ID that is not the current one (its path forgotten, RFC 9000 section 9.5). False,
+    // changing nothing, past the bound on retirements (CONNECTION_ID_LIMIT_ERROR); true for one not held.
     [[nodiscard]] bool retire_peer(u64 path_id, u64 sequence, u64 limit) noexcept;
     // Whether `tail` (a datagram's last kQuicResetTokenBytes) is the token of a used ID still held, every one compared
     // in constant time.
@@ -240,14 +241,17 @@ private:
     [[nodiscard]] static QuicPeerCid* held(QuicCidSpace& space, u64 sequence) noexcept;
     [[nodiscard]] static QuicLocalCid* own(QuicCidSpace& space, u64 sequence) noexcept;
     [[nodiscard]] static QuicCidSpace::Retired* retired(QuicCidSpace& space, u64 sequence) noexcept;
-    // Owes the retirement of the peer's `sequence`: false past twice `limit` outstanding.
+    // Whether the retirement of `sequence` is owed or in flight, how many are, and owing it: false, owing nothing, past
+    // twice `limit` outstanding.
+    [[nodiscard]] static bool retiring(const QuicCidSpace& space, u64 sequence) noexcept;
+    [[nodiscard]] static usize outstanding(const QuicCidSpace& space) noexcept;
     [[nodiscard]] static bool owe(QuicCidSpace& space, u64 sequence, u64 limit) noexcept;
     void watch(const QuicPeerCid& id) noexcept;
     void unwatch(const QuicPeerCid& id) noexcept;
     // Forgets the peer's held ID at `index` (its token unwatched), and this side's IDs of a space (unrouted).
     void forget_peer(QuicCidSpace& space, usize index) noexcept;
     void unroute(QuicCidSpace& space) noexcept;
-    [[nodiscard]] usize active(const QuicCidSpace& space) const noexcept;
+    [[nodiscard]] static usize active(const QuicCidSpace& space) noexcept;
 
     QuicConnectionIds* m_host = nullptr;
     u8 m_local_bytes = 0U; // this side's IDs' length: sequence 0's

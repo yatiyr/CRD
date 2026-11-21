@@ -1322,6 +1322,7 @@ struct RawClient
     // What the server sent.
     bool close_seen = false;
     u64 close_code = 0U;
+    u8 close_dcid = 0U; // the first byte of the Destination Connection ID the close came to
     bool retire_seen = false;
     u64 retire_sequence = 0U;
     usize retirements = 0U; // RETIRE_CONNECTION_ID frames read
@@ -1590,6 +1591,7 @@ private:
             case QuicFrameKind::ConnectionClose:
                 raw.close_seen = true;
                 raw.close_code = frame.error_code;
+                raw.close_dcid = m_dcid;
                 break;
             case QuicFrameKind::RetireConnectionId:
                 raw.retire_seen = true;
@@ -2067,6 +2069,11 @@ TEST_CASE("QUIC connection: the peer's connection IDs are held to the limit and 
         CHECK(run.raw.retire_sequence == 3U);
         issue(run, 5U, 5U, id5, token5);
         CHECK(run.server.close_info().error_code == code(QuicTransportError::ConnectionIdLimitError));
+        // The refused frame changed nothing: the close goes to sequence 4, which the peer routes.
+        run.drain();
+        CHECK(run.raw.close_seen);
+        CHECK(run.raw.close_code == code(QuicTransportError::ConnectionIdLimitError));
+        CHECK(run.raw.close_dcid == id4[0]);
     }
     {
         // Retiring the ID in use while another stays held: the server moves to the newly issued one.

@@ -100,6 +100,11 @@ jobs:
           # working corpus or in a single-job session of the codec, 2026-11-21.
           - {target: net-quic-codec, seed: 8601, repeat: ''}
           - {target: net-quic-connection, seed: 8602, repeat: ''}
+          # NET-PATH's connection IDs per path ID: four non-replaying local events in two-job sessions (a span offset
+          # overflowing to 0x8 and a model oracle in the cids target, a packet offset producing null in the
+          # connection target), none replaying under the sanitized libFuzzer or the replay binaries, 2026-11-21.
+          - {target: net-quic-cids, seed: 8701, repeat: ''}
+          - {target: net-quic-connection, seed: 8702, repeat: ''}
 
     steps:
       - name: Checkout

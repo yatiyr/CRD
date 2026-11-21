@@ -482,8 +482,12 @@ void QuicConnection::fill_local_parameters() noexcept
             m_local.retry_source_connection_id = m_initial_dcid;
         }
         // Sequence 0's token: a client's transport parameters are not confidential, so only a server sends one.
-        m_local.has_stateless_reset_token = m_config.ids != nullptr;
-        std::memcpy(m_local.stateless_reset_token, m_cids.local(0U, 0U)->reset_token, kQuicResetTokenBytes);
+        const QuicLocalCid* first = m_cids.local(0U, 0U);
+        m_local.has_stateless_reset_token = m_config.ids != nullptr && first != nullptr;
+        if (first != nullptr)
+        {
+            std::memcpy(m_local.stateless_reset_token, first->reset_token, kQuicResetTokenBytes);
+        }
         // Sequence 1 is the preferred address's (accept()), absent when the connection opened on its socket.
         const QuicLocalCid* preferred = m_cids.local(0U, 1U);
         m_local.has_preferred_address = preferred != nullptr;

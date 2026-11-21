@@ -227,20 +227,40 @@ void QuicCids::forget_peer(QuicCidSpace& space, usize index) noexcept
     --space.m_peer_count;
 }
 
+bool QuicCids::retiring(const QuicCidSpace& space, u64 sequence) noexcept
+{
+    for (const QuicCidSpace::Retired& entry : space.m_retired)
+    {
+        if (entry.sequence == sequence && entry.state != QuicCidSpace::Retirement::Done)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+usize QuicCids::outstanding(const QuicCidSpace& space) noexcept
+{
+    usize count = 0U;
+    for (const QuicCidSpace::Retired& entry : space.m_retired)
+    {
+        count += (entry.sequence != kQuicNoSequence && entry.state != QuicCidSpace::Retirement::Done) ? 1U : 0U;
+    }
+    return count;
+}
+
 bool QuicCids::owe(QuicCidSpace& space, u64 sequence, u64 limit) noexcept
 {
-    QuicCidSpace::Retired* entry = retired(space, sequence);
-    if (entry != nullptr && entry->state != QuicCidSpace::Retirement::Done)
+    if (retiring(space, sequence))
     {
         return true; // owed or in flight already
     }
-    usize outstanding = 0U;
+    QuicCidSpace::Retired* entry = retired(space, sequence);
     QuicCidSpace::Retired* free = nullptr;
     for (QuicCidSpace::Retired& other : space.m_retired)
     {
         if (other.sequence != kQuicNoSequence && other.state != QuicCidSpace::Retirement::Done)
         {
-            ++outstanding;
             continue;
         }
         // An empty entry first, else the oldest settled one, which a repeated frame is least likely to name.
@@ -252,7 +272,7 @@ bool QuicCids::owe(QuicCidSpace& space, u64 sequence, u64 limit) noexcept
     }
     // Retirements owed and in flight stay within twice the limit (RFC 9000 section 5.1.2), which is at most the
     // entries a space holds, so one is free below it.
-    if (outstanding >= 2U * limit || free == nullptr)
+    if (outstanding(space) >= 2U * limit || free == nullptr)
     {
         return false;
     }
@@ -307,28 +327,35 @@ QuicTransportError QuicCids::add_peer(const QuicFrame& frame, u64 limit, bool& a
     {
         return QuicTransportError::NoError; // retired here alone: its repeated frame is not held again
     }
-    if (frame.retire_prior_to > target->m_retire_prior_to)
+    // The verdict comes before any change, so that a refused frame leaves the ID the close is sent to: what a raised
+    // Retire Prior To retires must fit the bound on retirements, and what is left must leave room for the frame's.
+    const u64 retire_prior_to =
+        (frame.retire_prior_to > target->m_retire_prior_to) ? frame.retire_prior_to : target->m_retire_prior_to;
+    usize swept = 0U;
+    usize owed = 0U;
+    for (usize index = 0U; index < target->m_peer_count; ++index)
     {
-        target->m_retire_prior_to = frame.retire_prior_to;
-        usize index = 0U;
-        while (index < target->m_peer_count)
-        {
-            const u64 sequence = target->m_peer[index].sequence;
-            if (sequence >= target->m_retire_prior_to)
-            {
-                ++index;
-                continue;
-            }
-            forget_peer(*target, index); // the one sent to is replaced by the frame's
-            if (!owe(*target, sequence, limit))
-            {
-                return QuicTransportError::ConnectionIdLimitError;
-            }
-        }
+        const u64 sequence = target->m_peer[index].sequence;
+        swept += (sequence < retire_prior_to) ? 1U : 0U;
+        owed += (sequence < retire_prior_to && !retiring(*target, sequence)) ? 1U : 0U;
     }
-    if (target->m_peer_count >= limit || target->m_peer_count >= kQuicMaxPeerConnectionIds)
+    const usize left = target->m_peer_count - swept;
+    if (outstanding(*target) + owed > 2U * limit || left >= limit || left >= kQuicMaxPeerConnectionIds)
     {
         return QuicTransportError::ConnectionIdLimitError;
+    }
+    target->m_retire_prior_to = retire_prior_to;
+    usize index = 0U;
+    while (index < target->m_peer_count)
+    {
+        const u64 sequence = target->m_peer[index].sequence;
+        if (sequence >= retire_prior_to)
+        {
+            ++index;
+            continue;
+        }
+        forget_peer(*target, index);                      // the one sent to is replaced by the frame's
+        static_cast<void>(owe(*target, sequence, limit)); // room was counted above
     }
     QuicPeerCid& id = target->m_peer[target->m_peer_count++];
     id = QuicPeerCid{};
@@ -410,11 +437,18 @@ bool QuicCids::retire_peer(u64 path_id, u64 sequence, u64 limit) noexcept
     QuicCidSpace* target = space(path_id);
     for (usize index = 0U; target != nullptr && index < target->m_peer_count; ++index)
     {
-        if (target->m_peer[index].sequence == sequence)
+        if (target->m_peer[index].sequence != sequence)
         {
-            forget_peer(*target, index);
-            return owe(*target, sequence, limit);
+            continue;
         }
+        // Past the bound nothing changes: the connection closes to the IDs it holds.
+        if (!retiring(*target, sequence) && outstanding(*target) >= 2U * limit)
+        {
+            return false;
+        }
+        forget_peer(*target, index);
+        static_cast<void>(owe(*target, sequence, limit));
+        return true;
     }
     return true;
 }
@@ -506,7 +540,7 @@ void QuicCids::first_local(cont::ConstSpan<u8> id, cont::ConstSpan<u8> token) no
     m_local_bytes = first.id.bytes;
 }
 
-usize QuicCids::active(const QuicCidSpace& space) const noexcept
+usize QuicCids::active(const QuicCidSpace& space) noexcept
 {
     usize count = 0U;
     for (usize index = 0U; index < space.m_local_count; ++index)
