@@ -92,7 +92,7 @@ three SPIRV-Reflect files; [install-vulkan-validation.py](../../scripts/install-
 [install-warp.py](../../scripts/install-warp.py) read their pins from the registry;
 [install-ninja.py](../../scripts/install-ninja.py) puts the pinned Ninja on every lane's `PATH` (its binary member
 verified and its `--version` checked), and [install-clang-tidy.py](../../scripts/install-clang-tidy.py) installs the
-clang-tidy lane's LLVM 20.1.8 `clang-tidy.exe` and builtin headers from LLVM's release archive in one pass over the
+clang-tidy lane's LLVM 22.1.8 `clang-tidy.exe` and builtin headers from LLVM's release archive in one pass over the
 tar (the binary's digest, the header count and the reported version checked).
 [install-sde.py](../../scripts/install-sde.py) extracts Intel SDE 10.13.1's whole kit below the pin's root through
 tarfile's `data` filter (the Linux kit's inner links kept, anything escaping refused), checks `-version` and

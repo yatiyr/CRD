@@ -1131,7 +1131,7 @@ class TidyTests(unittest.TestCase):
         entries = self.database()
         write_json(self.build / 'compile_commands.json', entries)
         stub = Path(self.temp.name) / 'stub'
-        launcher, config = stub_clang_tidy(stub, '20.1.8', {
+        launcher, config = stub_clang_tidy(stub, '22.1.8', {
             'b.cpp': {'output': 'tests/b/b.cpp:3:5: error: invalid case style [readability-identifier-naming,'
                                 '-warnings-as-errors]\n1 warning treated as error\n', 'exit': 1},
             'o.cpp': {'output': "engine/other/src/o.cpp:1:10: fatal error: 'crd/missing.hpp' file not found\n", 'exit': 1},
@@ -1147,7 +1147,7 @@ class TidyTests(unittest.TestCase):
                                     'engine/other/src/o.cpp': 'ungated', 'engine/a/include/crd/a/x.hpp': 'ungated',
                                     'engine/missing.cpp': 'missing'})
         self.assertEqual(summary['counts'], {'clean': 1, 'issues': 1, 'ungated': 2, 'missing': 1})
-        self.assertEqual((summary['status'], summary['exit_code'], summary['tool_version']), ('failed', 4, '20.1.8'))
+        self.assertEqual((summary['status'], summary['exit_code'], summary['tool_version']), ('failed', 4, '22.1.8'))
         mirror = json.loads((scratch / 'compile_commands.json').read_text(encoding='utf-8'))
         self.assertEqual(len(mirror), len(entries) + 1)
         self.assertTrue(all('cmake_pch' not in entry['command'] for entry in mirror))
@@ -1190,7 +1190,7 @@ class TidyTests(unittest.TestCase):
         summary = analyse(self.root, self.build, ['engine/a/src/a.cpp', 'tests/b/b.cpp'], environment, tool=str(stub18))
         self.assertEqual((summary['status'], summary['exit_code'], summary['tool']), ('unavailable', 99, None))
         self.assertIn('18.1.3', summary['tool_reason'])
-        self.assertIn('LLVM 20', summary['tool_reason'])
+        self.assertIn('LLVM 22', summary['tool_reason'])
         self.assertEqual([item['status'] for item in summary['files']], ['ungated', 'ungated'])
         invocations = (Path(self.temp.name) / 'stub18/argv.log').read_text(encoding='utf-8').splitlines()
         self.assertEqual(len(invocations), 1, 'a refused tool must not analyse anything')
@@ -1203,37 +1203,42 @@ class TidyTests(unittest.TestCase):
         resolution = resolve_clang_tidy(environment, str(stub18))
         self.assertIsNone(resolution['path'])
         self.assertEqual(len(resolution['rejected']), 1)
-        stub20, config20 = stub_clang_tidy(Path(self.temp.name) / 'stub20', '20.1.8')
-        resolution = resolve_clang_tidy(dict(os.environ, CRD_TIDY_STUB=str(config20)), str(stub20))
-        self.assertEqual((resolution['version'], resolution['candidate']), ('20.1.8', str(stub20)))
+        stub22, config22 = stub_clang_tidy(Path(self.temp.name) / 'stub22', '22.1.8')
+        resolution = resolve_clang_tidy(dict(os.environ, CRD_TIDY_STUB=str(config22)), str(stub22))
+        self.assertEqual((resolution['version'], resolution['candidate']), ('22.1.8', str(stub22)))
         # Without an explicit tool: the pinned install, then PATH names; nothing found is unavailable with reasons.
         empty = Path(self.temp.name) / 'empty'
         empty.mkdir()
-        # No HOME either: a host with the pinned Linux install below its home (install-clang-tidy.py) would find it.
+        # No HOME or USERPROFILE either: a host with the pinned install below its home (install-clang-tidy.py) would
+        # find it.
         bare = {key: value for key, value in os.environ.items()
-                if key.upper() not in ('PATH', 'CRD_CLANG_TIDY', 'HOME')}
-        with patch('cerid_dev.environment.PINNED_WINDOWS_TIDY', str(empty / 'absent-clang-tidy.exe')):
-            resolution = resolve_clang_tidy(dict(bare, PATH=str(empty)))
-            self.assertIsNone(resolution['path'])
-            self.assertIn('no candidate', resolution['reason'])
-            resolution = resolve_clang_tidy(dict(bare, PATH=str(stub20.parent), CRD_TIDY_STUB=str(config20)))
-            self.assertEqual((resolution['candidate'], resolution['version']), ('clang-tidy', '20.1.8'))
+                if key.upper() not in ('PATH', 'CRD_CLANG_TIDY', 'HOME', 'USERPROFILE')}
+        resolution = resolve_clang_tidy(dict(bare, PATH=str(empty)))
+        self.assertIsNone(resolution['path'])
+        self.assertIn('no candidate', resolution['reason'])
+        resolution = resolve_clang_tidy(dict(bare, PATH=str(stub22.parent), CRD_TIDY_STUB=str(config22)))
+        self.assertEqual((resolution['candidate'], resolution['version']), ('clang-tidy', '22.1.8'))
         with self.assertRaises(SelectionError):
             analyse(self.root, Path(self.temp.name) / 'unconfigured', ['engine/a/src/a.cpp'],
-                    dict(os.environ, CRD_TIDY_STUB=str(config20)), tool=str(stub20))
+                    dict(os.environ, CRD_TIDY_STUB=str(config22)), tool=str(stub22))
 
     def test_linux_hosts_find_the_pinned_install_under_home_without_path(self):
         home = Path(self.temp.name) / 'home'
         pinned = home / PINNED_LINUX_TIDY
         self.assertEqual(Path(pinned_clang_tidy({'HOME': str(home)}, windows=False)), pinned)
         self.assertIsNone(pinned_clang_tidy({}, windows=False), 'no HOME, no pinned candidate')
-        self.assertEqual(pinned_clang_tidy({'HOME': str(home)}, windows=True), PINNED_WINDOWS_TIDY)
-        # The installer's default install is the path the gate looks at.
+        # Windows looks below USERPROFILE, never HOME.
+        self.assertEqual(Path(pinned_clang_tidy({'USERPROFILE': str(home)}, windows=True)), home / PINNED_WINDOWS_TIDY)
+        self.assertIsNone(pinned_clang_tidy({'HOME': str(home)}, windows=True))
+        # The installer's default install is the path the gate looks at, on both hosts.
         self.assertEqual(install_clang_tidy.binary(install_clang_tidy.default_destination()),
                          Path.home() / PINNED_LINUX_TIDY)
+        windows_pin = {'member': 'clang+llvm-22.1.8-x86_64-pc-windows-msvc/bin/clang-tidy.exe'}
+        self.assertEqual(install_clang_tidy.binary(install_clang_tidy.default_destination(), windows_pin),
+                         Path.home() / PINNED_WINDOWS_TIDY)
         if os.name == 'nt':
-            return  # the stub below is a POSIX executable; the Windows branch is covered by the pinned 20.1.8 path
-        stub, config = stub_clang_tidy(pinned.parent, '20.1.0')
+            return  # the stub below is a POSIX executable
+        stub, config = stub_clang_tidy(pinned.parent, '22.1.8')
         self.assertEqual(stub, pinned)
         empty = Path(self.temp.name) / 'empty-path'
         empty.mkdir()
@@ -1242,10 +1247,9 @@ class TidyTests(unittest.TestCase):
         environment = dict(bare, HOME=str(home), PATH=str(empty), CRD_TIDY_STUB=str(config))
         resolution = resolve_clang_tidy(environment)
         self.assertEqual((resolution['path'], resolution['version'], resolution['candidate'], resolution['rejected']),
-                         (str(pinned.resolve()), '20.1.0', str(pinned), []))
+                         (str(pinned.resolve()), '22.1.8', str(pinned), []))
         # The Windows branch never looks below HOME.
-        with patch('cerid_dev.environment.PINNED_WINDOWS_TIDY', str(empty / 'absent-clang-tidy.exe')):
-            self.assertIsNone(resolve_clang_tidy(environment, windows=True)['path'])
+        self.assertIsNone(resolve_clang_tidy(environment, windows=True)['path'])
         # An explicit tool stays the only candidate even with the pinned install present.
         resolution = resolve_clang_tidy(dict(environment, CRD_CLANG_TIDY=str(empty / 'absent')))
         self.assertIsNone(resolution['path'])

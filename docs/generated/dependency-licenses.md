@@ -85,13 +85,13 @@
 | sde-linux | 10.13.1 | Intel Simplified Software License (Licenses/; third-party programs in Licenses/third-party-programs.txt) | downloadmirror.intel.com | `sde-external-10.13.1-2026-07-28-lin.tar.xz` |
 | mold-linux | 3.0.0 | MIT | github.com | `mold-3.0.0-x86_64-linux.tar.gz` |
 | clang-build-analyzer | 1.6.0 | Unlicense | aras-p/ClangBuildAnalyzer (bae0cb488cce) | `ClangBuildAnalyzer-bae0cb48.tar.gz` |
-| clang-tidy-linux | 20.1.0 | Apache-2.0 WITH LLVM-exception AND Apache-2.0 | files.pythonhosted.org | `clang_tidy-20.1.0-py2.py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` |
+| clang-tidy-linux | 22.1.8 | Apache-2.0 WITH LLVM-exception AND Apache-2.0 | files.pythonhosted.org | `clang_tidy-22.1.8-py2.py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl` |
 | tracy-capture-windows | 0.14.1 | BSD-3-Clause | github.com | `windows-0.14.1.zip` |
 | tracy-csvexport-windows | 0.14.1 | BSD-3-Clause | github.com | `windows-0.14.1.zip` |
 | ninja-windows | 1.11.1 | Apache-2.0 | github.com | `ninja-win.zip` |
 | ninja-linux | 1.11.1 | Apache-2.0 | github.com | `ninja-linux.zip` |
 | ninja-macos | 1.11.1 | Apache-2.0 | github.com | `ninja-mac.zip` |
-| llvm | 20.1.8 | Apache-2.0 WITH LLVM-exception | github.com | `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` |
+| llvm | 22.1.8 | Apache-2.0 WITH LLVM-exception | github.com | `clang+llvm-22.1.8-x86_64-pc-windows-msvc.tar.xz` |
 | genmc | 0.19.0 | Apache-2.0 OR MIT | MPI-SWS/genmc (9f6c4c0772d0) | `genmc-9f6c4c07.tar.gz` |
 | node-linux-x64 | 24.22.0 | MIT | nodejs.org | `node-v24.22.0-linux-x64.tar.xz` |
 | rust-linux-x64 | 1.99.1 | MIT OR Apache-2.0 | static.rust-lang.org | `rustc-1.99.1-x86_64-unknown-linux-gnu.tar.xz`, `rust-std-1.99.1-x86_64-unknown-linux-gnu.tar.xz`, `cargo-1.99.1-x86_64-unknown-linux-gnu.tar.xz`, `clippy-1.99.1-x86_64-unknown-linux-gnu.tar.xz` |

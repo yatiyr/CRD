@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Install the pinned clang-tidy 20 (the strict-analysis gate's tool) from cmake/pins.json.
+"""Install the pinned clang-tidy 22 (the strict-analysis gate's tool) from cmake/pins.json.
 
 On Linux (a developer host) the pin is tools/clang-tidy-linux, PyPI's clang-tidy wheel (a zip archive, members below
-`clang_tidy/data/`); on Windows (the hosted clang-tidy lane) it is tools/llvm, LLVM's own Windows release archive (a
-tar.xz, members below the pin's `root`), which replaced KyleMayes/install-llvm-action (no Node 24 release,
-2026-10-26). The archive is fetched through pins.fetch(), so it is verified before the final name exists (an already
+`clang_tidy/data/`); on Windows (the hosted clang-tidy lane and developer hosts) it is tools/llvm, LLVM's own Windows
+release archive (a tar.xz, members below the pin's `root`), which replaced KyleMayes/install-llvm-action (no Node 24
+release, 2026-10-26). The archive is fetched through pins.fetch(), so it is verified before the final name exists (an already
 downloaded copy in --download-dir, by default `~/.cerid/downloads`, is verified instead of downloaded). Only the
 pinned binary member and the pinned builtin-header directory are extracted, so the install keeps the layout
-clang-tidy finds its resource directory by: `bin/clang-tidy` (`bin/clang-tidy.exe`) and `lib/clang/20/include/`. Every
+clang-tidy finds its resource directory by: `bin/clang-tidy` (`bin/clang-tidy.exe`) and `lib/clang/22/include/`. Every
 member must be a regular file inside the destination; the binary's own SHA-256 and the header count must match the
 pin, and the binary must report the pinned LLVM version. The tree is assembled beside the destination and renamed
 into place only when it is complete. A stamp (`cerid-clang-tidy.json`) records the pin, so a matching install is
-reused. The default destination, `~/.cerid/tools/clang-tidy`, is where the gate looks before PATH on Linux
-(scripts/cerid_dev/environment.py); Windows developer hosts use LLVM 20.1.8 at C:/LLVM-20.1.8.
+reused. The default destination, `~/.cerid/tools/clang-tidy`, is where the gate looks before PATH on every host
+(scripts/cerid_dev/environment.py).
 Contract: docs/BUILDING.md (strict analysis) and docs/design/pinned-inputs.md.
 """
 from pathlib import Path, PurePosixPath
@@ -211,7 +211,7 @@ def install(destination=None, archive=None, download_dir=None, pin=None, check=T
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--destination', type=Path, default=default_destination(),
-                        help='install prefix (bin/clang-tidy and lib/clang/20/include land under it)')
+                        help='install prefix (bin/clang-tidy and lib/clang/22/include land under it)')
     parser.add_argument('--download-dir', type=Path, default=default_download_dir(),
                         help='where the verified archive is kept (default: ~/.cerid/downloads)')
     parser.add_argument('--archive', type=Path, help='an already downloaded archive to verify and use')

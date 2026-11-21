@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Strict LLVM-20 analysis of specific C++ files with the configured build's real compile flags, on any host.
+"""Strict LLVM-22 analysis of specific C++ files with the configured build's real compile flags, on any host.
 
-Exit code: the number of files not gated clean (issues + ungated + missing); 99 when clang-tidy 20 or the compile
+Exit code: the number of files not gated clean (issues + ungated + missing); 99 when clang-tidy 22 or the compile
 database is unavailable, so an unavailable gate can never read as a pass.
 """
 from pathlib import Path
@@ -19,7 +19,7 @@ def parser():
     result.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     result.add_argument('--build', type=Path, default=Path(DEFAULT_BUILD),
                         help=f'Configured build with compile_commands.json (default {DEFAULT_BUILD})')
-    result.add_argument('--clang-tidy', help='Explicit clang-tidy executable; must report LLVM 20')
+    result.add_argument('--clang-tidy', help='Explicit clang-tidy executable; must report LLVM 22')
     result.add_argument('--plan', type=Path, help='dev.py plan JSON whose owners map headers to their targets')
     result.add_argument('--summary', type=Path, help='Write the JSON summary here')
     result.add_argument('--export-fixes-directory', type=Path)

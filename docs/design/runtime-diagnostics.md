@@ -48,7 +48,7 @@ Validate the failing specimen without relying on tests that merely mirror implem
 evidence through retries. Quarantine or a clean rerun does not establish root cause; unknown-origin historical
 failures remain labelled unknown until explained or bounded by explicit evidence.
 
-Use one primary local configuration, affected consumers and incremental LLVM-20 tidy for changed C++. Add only
+Use one primary local configuration, affected consumers and incremental LLVM-22 tidy for changed C++. Add only
 the diagnostic route relevant to the risk. Broad qualification runs in CI. Do not run all configurations locally.
 Current tool availability is in [BUILDING](../BUILDING.md), [workflow](developer-workflow.md) and
 [test instruments](test-instruments.md); route names introduced below are deliverables, not commands that exist today.

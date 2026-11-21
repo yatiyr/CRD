@@ -5,7 +5,7 @@
 
 Read before code changes. [AGENTS](../AGENTS.md) governs conduct; [BUILDING](BUILDING.md) governs verification.
 Match the surrounding **hand-formatted** style. Do not run `clang-format -i`; the older auto-format instruction
-was superseded by the user's recorded formatting directive. Run incremental LLVM-20 clang-tidy on changed files.
+was superseded by the user's recorded formatting directive. Run incremental LLVM-22 clang-tidy on changed files.
 
 | Element | Style | Example |
 |---|---|---|

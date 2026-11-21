@@ -26,7 +26,7 @@ param(
     [int]$Jobs = 0,                       # 0 => derive from commit headroom (see below)
     [string]$Filter = '',
     [string]$BuildDir = '',
-    [string]$TidyExe = 'C:\LLVM-20.1.8\bin\clang-tidy.exe'
+    [string]$TidyExe = (Join-Path $HOME '.cerid\tools\clang-tidy\bin\clang-tidy.exe')
 )
 
 $ErrorActionPreference = 'Continue'
@@ -34,7 +34,7 @@ $repo = Split-Path -Parent $PSScriptRoot
 if (-not $BuildDir) { $BuildDir = Join-Path $repo 'build\win-debug' }
 $db = Join-Path $BuildDir 'compile_commands.json'
 
-if (-not (Test-Path $TidyExe)) { Write-Error "clang-tidy gate binary not found at $TidyExe (the gate is LLVM 20.1.8 -- docs/BUILDING.md)"; exit 99 }
+if (-not (Test-Path $TidyExe)) { Write-Error "clang-tidy gate binary not found at $TidyExe (the gate is LLVM 22.1.8, python scripts/install-clang-tidy.py -- docs/BUILDING.md)"; exit 99 }
 if (-not (Test-Path $db))      { Write-Error "no compile_commands.json at $db -- configure the build first"; exit 99 }
 
 # MSVC's PCH is the one thing clang cannot consume (/Yu + /Fp + the forced /FI cmake_pch.hxx). Mirror the DB with

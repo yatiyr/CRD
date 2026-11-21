@@ -60,7 +60,7 @@ The table owns status; this section defines requirements only.
    stage-linkage/attachment and resource-creation warnings; identify actual producer/consumer contracts before edits.
    Exercise B18, RT-4 and impostor unchanged oracles with hardware/WARP and the published failing-provider evidence.
    Assert nonzero execution, correct cull counts and visible pixels, validation silence and truthful skip accounting.
-   Rebuild every affected executable, run incremental LLVM-20 analysis and applicable adjacent consumers. Retain missing
+   Rebuild every affected executable, run incremental LLVM-22 analysis and applicable adjacent consumers. Retain missing
    CI evidence as Needs CI, never Done. Parent closure requires all children and its original complete contract.
 5. **REPO.3c.7 — inner coverage as a qualified route.** The native bit stays the contract on qualified Tier-3
    providers; the documented software provider takes the barycentric pixel-corner route; both are held to one CPU

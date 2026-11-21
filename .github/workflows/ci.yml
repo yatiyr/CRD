@@ -507,18 +507,16 @@ jobs:
         shell: pwsh
         run: Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List | Tee-Object -FilePath "$env:RUNNER_TEMP/adapters.txt"
 
-      # Pin clang-tidy to LLVM 20.1.8, the version VS2026 ships locally, so hosted
-      # and local analysis agree on every check. Constant naming follows
-      # `.clang-tidy` (corrected 2026-09-13): 20.1.8 has no
-      # `LocalConstexprVariable` option, a non-static function-local `constexpr`
-      # is a `LocalConstant` (lower_case) and namespace/class/static constants
-      # are `kCamelCase`; see docs/CODING.md. Pinning eliminates the skew that
-      # produced silent CI-only failures on patterns the local gate accepted.
+      # Pin clang-tidy to LLVM 22.1.8, the version scripts/install-clang-tidy.py installs on developer hosts, so
+      # hosted and local analysis agree on every check. MSVC 14.52's STL refuses a Clang older than 22 (STL1000).
+      # Constant naming follows `.clang-tidy`: a non-static function-local `constexpr` is a `LocalConstant`
+      # (lower_case) and namespace/class/static constants are `kCamelCase`; see docs/CODING.md. Pinning eliminates the
+      # skew that produced silent CI-only failures on patterns the local gate accepted.
       #
       # LLVM's Windows release archive is pinned by digest (cmake/pins.json tools/llvm); the installer verifies it,
-      # extracts only clang-tidy.exe (byte-identical to the developer host's LLVM 20.1.8) and clang's builtin headers,
-      # checks the binary's digest, the header count and the reported version, and names the binary in CRD_CI_TIDY.
-      - name: Install clang-tidy (LLVM 20.1.8, pinned)
+      # extracts only clang-tidy.exe and clang's builtin headers, checks the binary's digest, the header count and the
+      # reported version, and names the binary in CRD_CI_TIDY.
+      - name: Install clang-tidy (LLVM 22.1.8, pinned)
         shell: pwsh
         run: python scripts/install-clang-tidy.py --destination "$env:RUNNER_TEMP/clang-tidy" --download-dir "$env:RUNNER_TEMP" --github-env "$env:GITHUB_ENV"
 
@@ -526,8 +524,8 @@ jobs:
         shell: pwsh
         run: |
           $version = & $env:CRD_CI_TIDY --version
-          if ($LASTEXITCODE -ne 0 -or "$version" -notmatch '\b20\.1\.8\b') {
-            throw "Expected LLVM 20.1.8 at $env:CRD_CI_TIDY; got $version"
+          if ($LASTEXITCODE -ne 0 -or "$version" -notmatch '\b22\.1\.8\b') {
+            throw "Expected LLVM 22.1.8 at $env:CRD_CI_TIDY; got $version"
           }
           Write-Output $version
 

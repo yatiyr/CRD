@@ -393,7 +393,7 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `clang-tidy` | Install pinned Ninja 1.11.1 | `lane-<preset> (win-tidy)` | Lane.ninja |
 | `clang-tidy` | Setup MSVC | `lane-<preset> (win-tidy)` | Lane.msvc |
 | `clang-tidy` | Record graphics driver identity | `lane-<preset> (win-tidy)` | Lane.adapters |
-| `clang-tidy` | Install clang-tidy (LLVM 20.1.8, pinned) | `lane-<preset> (win-tidy)` | Lane.clang_tidy |
+| `clang-tidy` | Install clang-tidy (LLVM 22.1.8, pinned) | `lane-<preset> (win-tidy)` | Lane.clang_tidy |
 | `clang-tidy` | Verify clang-tidy version | `lane-<preset> (win-tidy)` | Lane.clang_tidy |
 | `clang-tidy` | Cache CPM downloads | `lane-<preset> (win-tidy)` | Lane.cpm_cache |
 | `clang-tidy` | Cache Vulkan SDK | `lane-<preset> (win-tidy)` | Lane.vulkan_sdk |

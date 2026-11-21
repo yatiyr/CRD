@@ -71,7 +71,7 @@ unresolved or a design gate is unaccepted. Never invent approval or tool results
 
 - Fulfil the entire row, its children and inherited contract: public behaviour, error paths, authored assets,
   persistence/reload and backend evidence; cooking alone is insufficient.
-- Keep warnings zero. Match surrounding hand formatting; **do not run `clang-format -i`**. Run the LLVM-20
+- Keep warnings zero. Match surrounding hand formatting; **do not run `clang-format -i`**. Run the LLVM-22
   incremental tidy helper on changed C++ and confirm it parsed them (BUILDING).
 - **CI first:** each item starts by reading the completed CI runs and fixing their failures. Locally build and test
   only changed targets and affected consumers on one primary configuration, plus scoped guards and tidy; CI runs the

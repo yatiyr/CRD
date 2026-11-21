@@ -94,11 +94,12 @@ def resolve_tool(name, environment):
     return shutil.which(name, path=env_value(environment, 'PATH'))
 
 
-REQUIRED_TIDY_MAJOR = 20
-PINNED_WINDOWS_TIDY = 'C:/LLVM-20.1.8/bin/clang-tidy.exe'
-# scripts/install-clang-tidy.py's default install below the user's home (cmake/pins.json tools/clang-tidy-linux).
+REQUIRED_TIDY_MAJOR = 22
+# scripts/install-clang-tidy.py's default install below the user's home (cmake/pins.json tools/llvm on Windows,
+# tools/clang-tidy-linux elsewhere).
+PINNED_WINDOWS_TIDY = '.cerid/tools/clang-tidy/bin/clang-tidy.exe'
 PINNED_LINUX_TIDY = '.cerid/tools/clang-tidy/bin/clang-tidy'
-TIDY_CANDIDATES = ('clang-tidy-20', 'clang-tidy')
+TIDY_CANDIDATES = ('clang-tidy-22', 'clang-tidy')
 LLVM_VERSION = re.compile(r'LLVM version (\d+)\.(\d+)\.(\d+)')
 
 
@@ -115,13 +116,11 @@ def probe_llvm_version(path, environment):
 
 
 def pinned_clang_tidy(environment, windows=None):
-    """The pinned install the gate tries before PATH: LLVM 20.1.8 at its fixed path on Windows; elsewhere
-    scripts/install-clang-tidy.py's install below the environment's HOME (none without a HOME)."""
+    """The pinned install the gate tries before PATH: scripts/install-clang-tidy.py's install below the user's home
+    (USERPROFILE on Windows, HOME elsewhere; none without one)."""
     windows = os.name == 'nt' if windows is None else windows
-    if windows:
-        return PINNED_WINDOWS_TIDY
-    home = env_value(environment, 'HOME')
-    return str(Path(home) / PINNED_LINUX_TIDY) if home else None
+    home = env_value(environment, 'USERPROFILE' if windows else 'HOME')
+    return str(Path(home) / (PINNED_WINDOWS_TIDY if windows else PINNED_LINUX_TIDY)) if home else None
 
 
 def resolve_clang_tidy(environment, override=None, windows=None):

@@ -1,4 +1,4 @@
-"""Portable strict LLVM-20 analysis of specific C++ files with the configured build's real compile flags.
+"""Portable strict LLVM-22 analysis of specific C++ files with the configured build's real compile flags.
 
 The compile database is the source of every flag. The only tokens removed are precompiled-header inputs, which clang
 cannot consume from another compiler: MSVC `/Yu`, `/Fp` and the forced `/FI cmake_pch.hxx`; GCC `-include cmake_pch.hxx`

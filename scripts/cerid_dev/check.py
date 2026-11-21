@@ -91,7 +91,7 @@ def execution_doctor(root, build, configuration):
 
 def tidy_outcome(summary_path, result):
     """Map the strict-analysis summary onto the check record: findings fail, anything short of every file parsed
-    and analysed by LLVM 20 is incomplete, and a run without a summary is an instrument failure. Never a pass."""
+    and analysed by LLVM 22 is incomplete, and a run without a summary is an instrument failure. Never a pass."""
     summary = None
     if Path(summary_path).is_file():
         try:
@@ -111,7 +111,7 @@ def tidy_outcome(summary_path, result):
                 'message': f'Changed C++ has strict-analysis findings ({detail}); inspect {result["log"]}'}
     reason = summary.get('tool_reason') or summary.get('error') or detail
     return {'summary': summary, 'status': 'incomplete', 'exit_code': 3,
-            'message': f'Strict LLVM-20 analysis did not qualify every changed C++ file ({reason}); '
+            'message': f'Strict LLVM-22 analysis did not qualify every changed C++ file ({reason}); '
                        'changed C++ remains ungated, never passed'}
 
 

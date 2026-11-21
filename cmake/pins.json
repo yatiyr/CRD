@@ -806,16 +806,16 @@
       "note": "Tag v1.6.0's commit, built from source into a user directory by scripts/install-clang-build-analyzer.py (CMake, the host compiler) to read -ftime-trace profiles (docs/design/build-performance.md#compile-time-profiles); a developer tool, never shipped. Bundled under src/external: cwalk (MIT), inih (BSD-3-Clause), enkiTS (Zlib), flat_hash_map (BSL-1.0), llvm-Demangle (Apache-2.0 WITH LLVM-exception), simdjson (Apache-2.0 OR MIT), xxHash (BSD-2-Clause), cute_files (Zlib OR Unlicense)."
     },
     "clang-tidy-linux": {
-      "version": "20.1.0",
-      "url": "https://files.pythonhosted.org/packages/52/76/42c61be1c1fdf8bacdbb265f0cd3e11321fee7362f91fa840717a6a41ad6/clang_tidy-20.1.0-py2.py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-      "file": "clang_tidy-20.1.0-py2.py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-      "sha256": "e205541e350044ffe0b0d1fcaf62b9953890f8ecba31458bbcdcfe73040e58b6",
+      "version": "22.1.8",
+      "url": "https://files.pythonhosted.org/packages/82/19/0f2668f8f5e2452b096a2b898f2b6bcecbceb6dd0c7f75d1755ce1f18d8b/clang_tidy-22.1.8-py2.py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "file": "clang_tidy-22.1.8-py2.py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "1a3de07ba82d4403d8b692ae63a5520d4db5c606014c92c24bbcef9259057bf1",
       "member": "clang_tidy/data/bin/clang-tidy",
-      "member_sha256": "8ad8c09fb4cf87b67a2dda1aed0036bb16a2daa78cd8eb930fcf2a90205b28e7",
-      "headers": "clang_tidy/data/lib/clang/20/include/",
-      "header_count": 273,
+      "member_sha256": "d77c4ac9c08b71a1e2b9a2950f91d2b398754237a23b3f60acb4601033461483",
+      "headers": "clang_tidy/data/lib/clang/22/include/",
+      "header_count": 284,
       "license": "Apache-2.0 WITH LLVM-exception AND Apache-2.0",
-      "note": "PyPI's clang-tidy wheel (ssciwr/clang-tidy-wheel); 20.1.0 is its only LLVM 20 release. The strict-analysis gate checks the LLVM major only (scripts/cerid_dev/environment.py), so it stands in for the hosted lanes' 20.1.8 on Linux developer hosts; installed into a user directory by scripts/install-clang-tidy.py (the binary and clang's builtin headers, laid out as bin/ and lib/clang/20/include so the binary finds its resource directory); a developer tool, never a lane step and never shipped. The binary and headers are LLVM's (Apache-2.0 WITH LLVM-exception), the wheel's packaging Apache-2.0."
+      "note": "PyPI's clang-tidy wheel (ssciwr/clang-tidy-wheel, 44,070,377 bytes, retrieved 2026-11-21), the same LLVM 22.1.8 as the Windows pin; the gate checks the LLVM major (scripts/cerid_dev/environment.py). Installed into a user directory by scripts/install-clang-tidy.py (the binary and clang's builtin headers, laid out as bin/ and lib/clang/22/include so the binary finds its resource directory); a developer tool, never a lane step and never shipped. The binary and headers are LLVM's (Apache-2.0 WITH LLVM-exception), the wheel's packaging Apache-2.0."
     },
     "tracy-capture-windows": {
       "version": "0.14.1",
@@ -868,17 +868,17 @@
       "note": "The same Ninja 1.11.1 release's macOS build (universal x86_64 and arm64) for the macOS lane (NET.2 decision K16, 2026-11-04); installed by scripts/install-ninja.py like the others. The release assets predate GitHub's recorded digests; the SHA-256 values were computed from the downloaded release file (277306 bytes)."
     },
     "llvm": {
-      "version": "20.1.8",
-      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz",
-      "file": "clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz",
-      "sha256": "f229769f11d6a6edc8ada599c0cda964b7dee6ab1a08c6cf9dd7f513e85b107f",
-      "root": "clang+llvm-20.1.8-x86_64-pc-windows-msvc/",
-      "member": "clang+llvm-20.1.8-x86_64-pc-windows-msvc/bin/clang-tidy.exe",
-      "member_sha256": "da206027b04525459f4eca441838a24e379e5237c3b9c861c586ebc5fa4c6c8f",
-      "headers": "clang+llvm-20.1.8-x86_64-pc-windows-msvc/lib/clang/20/include/",
-      "header_count": 294,
+      "version": "22.1.8",
+      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang+llvm-22.1.8-x86_64-pc-windows-msvc.tar.xz",
+      "file": "clang+llvm-22.1.8-x86_64-pc-windows-msvc.tar.xz",
+      "sha256": "d96c2cc1736f4eb7fa43cb9bbdf56d93551a9ae0a9aadb9c99c3c3b2b712a234",
+      "root": "clang+llvm-22.1.8-x86_64-pc-windows-msvc/",
+      "member": "clang+llvm-22.1.8-x86_64-pc-windows-msvc/bin/clang-tidy.exe",
+      "member_sha256": "57d30936cd2e8eb894e175e5bb2906e62cd82dbb7d926be3a68d1503247982d8",
+      "headers": "clang+llvm-22.1.8-x86_64-pc-windows-msvc/lib/clang/22/include/",
+      "header_count": 300,
       "license": "Apache-2.0 WITH LLVM-exception",
-      "note": "LLVM's Windows x64 release archive (GitHub's recorded digest matches); the hosted clang-tidy lane's strict-analysis tool, installed by scripts/install-clang-tidy.py: only bin/clang-tidy.exe and clang's builtin headers, laid out as bin/ and lib/clang/20/include. Its clang-tidy.exe is byte-identical to the developer host's C:/LLVM-20.1.8 (checked 2026-10-26). Replaced KyleMayes/install-llvm-action, which has no Node 24 release."
+      "note": "LLVM's Windows x64 release archive (862,053,924 bytes; GitHub's recorded digest matches, retrieved 2026-11-21); the hosted clang-tidy lane's strict-analysis tool and the Windows developer host's, installed by scripts/install-clang-tidy.py: only bin/clang-tidy.exe and clang's builtin headers, laid out as bin/ and lib/clang/22/include. LLVM 22, because MSVC 14.52's STL refuses an older Clang (STL1000), docs/sessions/2026-11-21-tidy-llvm-22.md."
     },
     "genmc": {
       "version": "0.19.0",

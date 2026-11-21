@@ -43,7 +43,7 @@ Local cache, mold, WSL mirror (`wsl-lane.sh`), `wait-for.py`, `-DCRD_COMPILER_LA
 |---|---|---|
 | Docs only | Documentation validator; hygiene guard for layout changes | Documentation/tooling guards |
 | Python/CMake/IDE | Changed-tool fixtures and a representative generated target | Windows/Linux tooling; native fixtures when affected |
-| Private C++ | Incremental LLVM-20 tidy; affected linked consumers | Affected primary Windows/Linux targets |
+| Private C++ | Incremental LLVM-22 tidy; affected linked consumers | Affected primary Windows/Linux targets |
 | Public/template headers, generated API, ABI | `check-headers.py --changed`; reverse consumers | Compiler diversity; public-check presets; ISA/profile lanes |
 | Memory/lifetime/concurrency | Scoped adversarial tests and detector controls | Sanitizer/stress; TSan qualification: DIAG.1b |
 | GPU/CEIR/CKIR/layout | Available affected provider, validation and declared CPU/image oracle | Affected backend/OS/device lanes; hardware truth retained |
@@ -56,8 +56,8 @@ Scoped WSL selects one target/CTest regex on native Linux storage; the unfiltere
 ## Qualification
 
 Keep warnings zero and hand formatting consistent; **never run `clang-format -i`**. Run
-[LLVM-20 tidy](../scripts/tidy-files.py) on changed headers/TUs on any host; confirm parsing. Unparsed files and
-hosts without clang-tidy 20 are ungated, never clean.
+[LLVM-22 tidy](../scripts/tidy-files.py) on changed headers/TUs on any host; confirm parsing. Unparsed files and
+hosts without clang-tidy 22 are ungated, never clean.
 GPU checks require `ValidationCapture` or its DX12 counterpart, validation silence, bit/ULP or declared
 quality oracles, and three repetitions to claim determinism. Asset changes need source/cook/execute,
 replacement/deletion and failure/reload lifetime proof. Save boards when measured.

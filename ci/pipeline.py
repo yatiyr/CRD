@@ -2231,7 +2231,7 @@ LANE_STEP_PHASES = {
     'Record system package versions': 'apt_census',
     'Install pinned Vulkan headers and SPIRV-Reflect': 'vulkan_headers',
     'Install matching Vulkan validation layer': 'vulkan_validation',
-    'Install clang-tidy (LLVM 20.1.8, pinned)': 'clang_tidy', 'Verify clang-tidy version': 'clang_tidy',
+    'Install clang-tidy (LLVM 22.1.8, pinned)': 'clang_tidy', 'Verify clang-tidy version': 'clang_tidy',
     'Add LLVM to PATH': 'llvm_path', 'Install the pinned Android NDK': 'android_ndk',
     'Open KVM to the runner user': 'kvm', 'Install the pinned Android test kit': 'android_emulator',
     'Boot the emulator': 'emulator_boot', 'Device log and shutdown': 'device_log',

@@ -1,7 +1,7 @@
-# tidy-files.ps1 -- Windows entry to the portable strict LLVM-20 gate for SPECIFIC files (the ones a slice touched).
+# tidy-files.ps1 -- Windows entry to the portable strict LLVM-22 gate for SPECIFIC files (the ones a slice touched).
 # The gate itself is scripts/tidy-files.py (scripts/cerid_dev/tidy.py) and runs the same way on every host:
-#   * clang-tidy must report LLVM 20 (the pinned C:\LLVM-20.1.8 install, CRD_CLANG_TIDY, or clang-tidy-20/clang-tidy
-#     on PATH); any other version is UNAVAILABLE, never a substitute;
+#   * clang-tidy must report LLVM 22 (scripts/install-clang-tidy.py's install under ~\.cerid\tools\clang-tidy,
+#     CRD_CLANG_TIDY, or clang-tidy-22/clang-tidy on PATH); any other version is UNAVAILABLE, never a substitute;
 #   * every .cpp is driven from the configured build's real compile_commands.json with only the PCH inputs stripped,
 #     and the MSVC flags clang-tidy drops (/EHsc, the CMake-owned /arch value) restated through --extra-arg;
 #   * every header is analysed as the main file of a translation unit of its owning target or module;
@@ -11,7 +11,7 @@
 # Usage (from repo root) -- pass BOTH the .cpp TUs AND any new/edited .hpp headers:
 #   powershell -File scripts/tidy-files.ps1 tests/numerics/hesap-autodiff/test_foo.cpp engine/numerics/hesap-autodiff/include/crd/hesap/autodiff/foo.hpp
 # Options: -BuildDir <configured build> (default build\win-debug), -ExportFixesDirectory <dir>.
-# Exit code = number of files not gated clean (0 = clean); 99 = clang-tidy 20 or the compile database is unavailable.
+# Exit code = number of files not gated clean (0 = clean); 99 = clang-tidy 22 or the compile database is unavailable.
 
 [CmdletBinding(PositionalBinding = $false)]
 param(
