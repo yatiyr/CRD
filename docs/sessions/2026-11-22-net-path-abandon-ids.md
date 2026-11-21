@@ -31,6 +31,11 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S78](../design/network-f
 - `crd-net-tests "[net]"`: 861 cases, 7 skipped as before (limit still 0, so slot 0 alone numbers).
 - The cids fuzzer gains an abandon operation (the close op's odd first byte) with the model's rules restated, plus
   an `abandoned()` oracle. New seed `path-abandoned` (seed-877a7e3e128750e6); the corpus replays clean.
+- libFuzzer, linux-clang-fuzz, 2 jobs for 300 s: 625 k runs, corpus 5 to 2470, and one artifact. Its input has no
+  abandon operation; it replays clean under ASan, under valgrind (GCC debug), 2000 times in one process, and with
+  the whole corpus. With ASan's fake stack off: 614 k runs clean. 86c068aa, before this slice, gives the same kind of
+  event (two artifacts that do not replay). This host's known misexecution (MEMORY: host-misexecutes) is the
+  likely cause, so fuzz host-check runs on GitHub's CPUs on d385dca4's successor (`net-quic-cids`, seed 8701).
 - Teeth: with the owed retirements kept through abandon, the new case fails (line 217) and the fuzzer's
   `retirement_owed` oracle fails on the new seed.
 
@@ -41,3 +46,7 @@ The path ID lifecycle in the connection, with the limit raised only once opening
 - a client opens a path; the server opens the number space at the first authenticated packet;
 - PATH_ABANDON both ways, with ledger records for it and MAX_PATH_ID, and three PTOs of retention;
 - PATH_ACK and PATH_STATUS per slot, and `send_slot()` choosing an open, validated path.
+- `write_packet` still reads slot 0 and path ID 0: `largest_acked` (number encoding), `probe_period_ns`,
+  `m_cids.peer(0U, ...)` and `m_cids.use(0U, ...)`. `m_largest_non_probing` is one value.
+- A case where two paths' same number settles only its own records (teeth for `SentFrame::path`).
+- MAX_PATH_ID rises only when a path ID's retention ends.

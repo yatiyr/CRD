@@ -1873,7 +1873,7 @@ bool QuicConnection::record(QuicSpace space, u64 packet, u8 kind, const QuicStre
     sent.packet = packet;
     sent.frame = frame;
     sent.space = static_cast<u8>(space);
-    sent.path = static_cast<u8>((space == QuicSpace::Application) ? send_slot() : 0U); // the packet's, as write_packet's
+    sent.path = static_cast<u8>((space == QuicSpace::Application) ? send_slot() : 0U); // as write_packet's slot
     sent.kind = kind;
     written.token = (written.token == kNoRecord) ? at : written.token;
     ++m_frame_count;

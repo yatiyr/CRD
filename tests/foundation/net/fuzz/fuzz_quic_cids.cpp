@@ -4,20 +4,22 @@
 //
 // Input: a first byte for this side's active_connection_id_limit (2 to 8), then operations of three bytes (the low
 // four bits of the first the kind, its high four the path ID: 0 to 13, then 2^32 - 1 and 2^32) on one QuicCids over a
-// counting host: spaces opened, abandoned and closed; the peer's NEW_CONNECTION_ID and PATH_NEW_CONNECTION_ID frames with fresh,
-// gapped, repeated or old sequences, any Retire Prior To and fresh, reused or crossed IDs and tokens; retirements of
-// the peer's IDs, sent and settled; IDs used, moved to and reset tokens matched; this side's IDs issued, topped up,
-// rotated, retired by the peer under any packet's ID, sent and settled, reannounced; and the end of the connection.
+// counting host: spaces opened, abandoned and closed; the peer's NEW_CONNECTION_ID and PATH_NEW_CONNECTION_ID frames
+// with fresh, gapped, repeated or old sequences, any Retire Prior To and fresh, reused or crossed IDs and tokens;
+// retirements of the peer's IDs, sent and settled; IDs used, moved to and reset tokens matched; this side's IDs
+// issued, topped up, rotated, retired by the peer under any packet's ID, sent and settled, reannounced; and the end of
+// the connection.
 //
 // Oracles, against a model of every space. Each verdict is the restated rule's: a frame for a closed or abandoned
 // space changes nothing; abandoning retires the space's peer IDs at once with no retirement owed and keeps this
-// side's routed, none issued, rotated or announced there again; one ID or token under two IDs anywhere is PROTOCOL_VIOLATION, a repeat changes nothing; below Retire Prior
-// To an ID is retired again; an ID retired here while its retirement is outstanding is never held again (once settled
-// it may be, as the 16 latest are remembered); a raised Retire Prior To retires every ID below it; past the limit, or
-// past twice the limit of retirements outstanding, CONNECTION_ID_LIMIT_ERROR. A refusal ends the input (the connection
-// closes). After every operation the class holds exactly the model's IDs both ways with their states; the host routes
-// exactly this side's held IDs and watches exactly the tokens of the peer's used IDs; each own ID is found in its own
-// space; owed retirements and frames are the model's.
+// side's routed, none issued, rotated or announced there again; one ID or token under two IDs anywhere is
+// PROTOCOL_VIOLATION, a repeat changes nothing; below Retire Prior To an ID is retired again; an ID retired here while
+// its retirement is outstanding is never held again (once settled it may be, as the 16 latest are remembered); a
+// raised Retire Prior To retires every ID below it; past the limit, or past twice the limit of retirements
+// outstanding, CONNECTION_ID_LIMIT_ERROR. A refusal ends the input (the connection closes). After every operation the
+// class holds exactly the model's IDs both ways with their states; the host routes exactly this side's held IDs and
+// watches exactly the tokens of the peer's used IDs; each own ID is found in its own space; owed retirements and
+// frames are the model's.
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_connection_ids.hpp>
 
@@ -270,7 +272,8 @@ void forget_peer(Space& space, usize index)
 // Whether the restated issue() gives `space` one more ID: room in it, a host that routes.
 [[nodiscard]] bool issuable(const World& w, const Space& space)
 {
-    return !space.abandoned && !w.host.refuse && w.host.next != kFirstLocal && space.local_count < 2U * kQuicMaxLocalConnectionIds;
+    return !space.abandoned && !w.host.refuse && w.host.next != kFirstLocal &&
+           space.local_count < 2U * kQuicMaxLocalConnectionIds;
 }
 
 // The model's record of an ID the class issued, its number read from the class (the host numbers IDs in the class's

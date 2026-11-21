@@ -102,9 +102,9 @@ crd_fuzz_target(crd-fuzz-net-quic-datagram
     SOURCES fuzz_quic_datagram.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-datagram")
 
 # QMux, QUIC's streams and datagrams over TLS on a byte stream (4.2a).
-#   crd-fuzz-net-qmux   a server behind a real TLS client under any records, frames, cuts, time, reads, pings, closes and
-#                       the transport's end: whole records of allowed frames only, its parameters first, nothing after
-#                       CONNECTION_CLOSE, the state only moving forward, nothing allocated.
+#   crd-fuzz-net-qmux   a server behind a real TLS client under any records, frames, cuts, time, reads, pings, closes
+#                       and the transport's end: whole records of allowed frames only, its parameters first, nothing
+#                       after CONNECTION_CLOSE, the state only moving forward, nothing allocated.
 crd_fuzz_target(crd-fuzz-net-qmux
     SOURCES fuzz_qmux.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-qmux")
 
@@ -158,9 +158,9 @@ if(TARGET crd-fuzz-net-hpack-libfuzzer)
 endif()
 
 # WebSockets over HTTP/2 and HTTP/3 (4.2a).
-#   crd-fuzz-net-websocket-tunnel   a client honest in HTTP/2 or HTTP/3 and hostile above it at a server's tunnels, which
-#                                   never break the connection or their pool's bound and empty once every stream ended;
-#                                   and two honest ends over a cut wire, a stream arriving whole both ways.
+#   crd-fuzz-net-websocket-tunnel   a client honest in HTTP/2 or HTTP/3 and hostile above it at a server's tunnels,
+#                                   which never break the connection or their pool's bound and empty once every stream
+#                                   ended; and two honest ends over a cut wire, a stream arriving whole both ways.
 crd_fuzz_target(crd-fuzz-net-websocket-tunnel
     SOURCES fuzz_websocket_tunnel.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-websocket-tunnel")
 target_include_directories(crd-fuzz-net-websocket-tunnel PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
