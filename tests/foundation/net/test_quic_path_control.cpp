@@ -136,6 +136,40 @@ TEST_CASE("A path control starts from its configuration and refuses what it cann
     CHECK(control.datagram_bytes() == kQuicPmtuFloor);
 }
 
+TEST_CASE("A path control's coupled controller is its coupling's member through starts, swaps, moves and resets",
+          "[path_control][multipath][coupled]")
+{
+    CongestionCoupling coupling;
+    QuicPathControlConfig config;
+    config.congestion.algorithm = CongestionAlgorithm::NewReno;
+    config.congestion.coupled = true;
+    {
+        QuicPathControl first;
+        QuicPathControl second;
+        REQUIRE(first.start(config, path_v4(1), 1U, &coupling));
+        CHECK(coupling.members() == 1U);
+        REQUIRE(second.start(config, path_v4(2), 2U, &coupling));
+        CHECK(coupling.members() == 2U);
+        REQUIRE(first.start(config, path_v4(1), 3U, &coupling)); // started again: the old controller left
+        CHECK(coupling.members() == 2U);
+
+        CongestionPolicy cubic;
+        REQUIRE(second.set_congestion(cubic, 4U));
+        CHECK(coupling.members() == 1U);
+        REQUIRE(second.set_congestion(config.congestion, 5U));
+        CHECK(coupling.members() == 2U);
+        CHECK(second.congestion().algorithm() == CongestionAlgorithm::NewReno);
+        second.restart(path_v4(9), kQuicPmtuFloor, 6U);
+        first.reset(0U);
+        CHECK(coupling.members() == 2U);
+
+        QuicPathControl alone; // no coupling: the same policy builds a lone controller
+        REQUIRE(alone.start(config, path_v4(3), 7U));
+        CHECK(coupling.members() == 2U);
+    }
+    CHECK(coupling.members() == 0U); // each control's destruction took its controller out
+}
+
 TEST_CASE("A path's loss reduces its own window and no other path's", "[path_control][multipath]")
 {
     Two two;

@@ -342,6 +342,28 @@ TEST_CASE("QUIC congestion: bytes in flight stay inside a growing window, and a 
     CHECK(pair.client.congestion().window() >= half.window);
 }
 
+TEST_CASE("QUIC congestion: a coupled NewReno's path joins the connection's coupling and a live swap keeps it exact",
+          "[net][net-path][quic-connection][coupled]")
+{
+    CongestionPolicy coupled;
+    coupled.algorithm = CongestionAlgorithm::NewReno;
+    coupled.coupled = true;
+    Pair pair(coupled);
+    pair.confirm();
+    CHECK(pair.client.coupling().members() == 1U);
+    CHECK(pair.server.coupling().members() == 1U);
+    Bulk bulk{pair.client, pair.server, 1U << 18U};
+    REQUIRE(pair.net->run_until([&] { return bulk.read >= bulk.total / 2U || bulk.step(); }));
+    REQUIRE(pair.client.set_congestion(CongestionPolicy{}));
+    CHECK(pair.client.coupling().members() == 0U);
+    const u64 window = pair.client.congestion().window();
+    REQUIRE(pair.client.set_congestion(coupled));
+    CHECK(pair.client.coupling().members() == 1U);
+    CHECK(pair.client.congestion().window() == window);
+    REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
+    CHECK(bulk.read == bulk.total);
+}
+
 TEST_CASE("QUIC congestion: the pacer holds a window with room, and its release time is a timer that frees it",
           "[net][net-path][quic-connection]")
 {

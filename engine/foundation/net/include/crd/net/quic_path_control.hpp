@@ -60,6 +60,8 @@ struct QuicPathSignals
 #pragma warning(push)
 #pragma warning(disable : 4324)
 #endif
+static_assert(kCongestionCouplingMembers >= kQuicMaxPaths, "a coupling holds one controller of every path slot");
+
 class QuicPathControl
 {
 public:
@@ -72,7 +74,8 @@ public:
 
     // Builds the path's state for `path` from `config`, discarding any it held: false, building nothing, for a
     // policy or a size make_congestion() refuses. `entropy` seeds the controller's randomised probing. A coupled
-    // policy's controllers join `coupling` (the connection's, which outlives the control) when given.
+    // policy's controllers join `coupling` when given: the connection's, which outlives the control and which at most
+    // kQuicMaxPaths controls share, so a join never finds it full.
     [[nodiscard]] bool start(const QuicPathControlConfig& config, const QuicPath& path, u64 entropy,
                              CongestionCoupling* coupling = nullptr) noexcept;
     [[nodiscard]] bool started() const noexcept { return m_controller != nullptr; }

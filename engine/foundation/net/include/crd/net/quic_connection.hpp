@@ -474,6 +474,8 @@ public:
     // The handshake's path's sending state (quic_path_control.hpp): its controller, sampler, ECN validation and path
     // MTU search, whose size() is what its datagrams take now.
     [[nodiscard]] const QuicPathControl& path_control() const noexcept { return *m_controls[0]; }
+    // The paths' coupled controllers (CongestionPolicy::coupled, RFC 6356).
+    [[nodiscard]] const CongestionCoupling& coupling() const noexcept { return m_coupling; }
     [[nodiscard]] const CongestionController& congestion() const noexcept { return path_control().congestion(); }
     [[nodiscard]] const DeliveryRateSampler& delivery() const noexcept { return path_control().delivery(); }
     [[nodiscard]] const QuicEcnValidator& ecn() const noexcept { return path_control().ecn(); }
