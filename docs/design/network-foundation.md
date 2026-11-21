@@ -294,6 +294,38 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   destructor's wait. Teeth seen failing: no destructor wait, lent slots outside admission, no fragment bound (EMSGSIZE
   refusals), no MSG_DONTWAIT (sends blocked past 50 ms), and a copied retry that did not stick to its message
   (two refusals for one).
+- **Registered I/O** (2026-11-21, NET-PATH; [udp_rio.cpp](../../engine/foundation/net/src/udp_rio.cpp)). With
+  `UdpOptions::registered_io`, a Windows `UdpSocket` is made with `WSA_FLAG_REGISTERED_IO` and posts
+  `ring_buffers` receives (`RIOReceiveEx`, deferred, one commit a call), each in a buffer of `ring_datagram_bytes`
+  (any datagram by default, a train with `coalesce_receive`) registered on its own, as the host's contract for a
+  buffer in use asks. `receive` dequeues completions in user mode, copies or lends them as io_uring's are, and posts a
+  copied buffer again at once and a lent one at the next call. Such a socket takes no other Winsock call (`WSAPoll`,
+  `WSARecvMsg` and `WSASendMsg` fail with WSAENOTSOCK, measured), so it also sends through Registered I/O: each
+  datagram is copied into one of 64 registered slots, a train end to end into one of 8 that hold `kMaxTrainBytes`,
+  and handed over with `RIO_MSG_DEFER` and one `RIO_MSG_COMMIT_ONLY` a call. Control messages (codepoint,
+  `UDP_SEND_MSG_SIZE`) go behind a `RIO_CMSG_BUFFER` header, without which the host ignores them (measured: no mark,
+  a train sent as one datagram), and USO then segments the train. A send's error arrives with its completion, read at
+  the next send and counted in `sends_failed` (the datagram is lost, as a path's drop is), except Busy while every
+  slot is in flight and MessageTooLarge past a slot (`send_bytes`); CE, which Windows refuses (WSAEINVAL, also late
+  here), leaves unmarked at once. The socket refuses FIONBIO and SIO_UDP_NETRESET, which it does not need. Its
+  receives are the posted buffers alone: a datagram that arrives while none is posted is lost whatever SO_RCVBUF
+  says (measured), so a host sizes `ring_buffers` for its bursts and lent slots, and the buffers' pages stay locked:
+  it is off by default. Anything the host refuses before the bind closes the socket and opens a plain one.
+- **Event waits.** Every Windows socket now waits on an event: Registered I/O's receive queue signals one
+  (`RIONotify`, armed after each receive, set at once while a completion waits, manual reset), and a plain socket's
+  `WSAEventSelect(FD_READ)` sets one, reset at each receive's start and set again by a read that leaves a datagram or
+  one that arrives after the last read; so a plain wait may wake once with nothing left. `SocketSet` waits on any mix
+  in one `WaitForMultipleObjects`.
+- **Registered I/O measured** (`[.udp-board]`, win-release on this host's loopback, 400000 datagrams of 1200 bytes 32 a
+  call, 3 rounds, cycles a datagram by `QueryThreadCycleTime`): receiver 523-573 against `WSARecvMsg`'s 1842-2347,
+  sender 5489-6881 against `WSASendMsg`'s 5976-7533; nothing lost with 4096 buffers. On loopback the sender's thread
+  also runs the delivery, so the receiver's 3.4-4.1 times is its own work; a real NIC's split is the cloud run's.
+- **Registered I/O proof.** `test_udp_rio.cpp`: taken exactly where asked and sized as named, the plain path for any
+  other count; lent and copied slots at 1, 7 and 64 a receive with every codepoint (CE arriving unmarked) to and from a
+  plain socket; four posted buffers holding four of a burst of twenty and the next ones arriving; a datagram cut past
+  its buffer and past a copied slot, a send past a slot refused with the ones before it sent; a 40-datagram train
+  through USO from one slot; a late failure counted; mixed sets waking for either kind and not after the last
+  datagram; a move and a reopen. The QUIC hosts' loopback cases run again over it (`test_quic_client.cpp`).
 - **Socket sets** (2026-11-21, NET-PATH). A loop and its host serve a `SocketSet` of up to four sockets, one per
   path a connection knows ([S75](#migration)); a single socket converts to a set of one, so a one-socket host is
   unchanged. Each received datagram names the socket it arrived on (`ReceivedDatagram::socket`), a stateless answer
@@ -4069,7 +4101,7 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
 - **Learned versus authored.** A configuration naming both is refused; `set_handover()` ends learning and `set_handover_learning()` replaces the schedule; `handover_learned()` reports which is in force and `handover_locks` counts locks. The learner is fed ahead of the coverage gates (a covered loss or RTT still reaches it, or a lock would blind itself), keyed by send time (so the phase includes the sender's distance, with no lead to configure), and a move that restarts the path's state starts it over. A learned schedule is network-influenced: an on-path party or the peer can shape losses and RTTs to make one, but it can only hide what an authored schedule may (guards of at most an eighth of the period), recurrence is required, and it decays when the pattern stops (T16).
 - **Learning proof.** `test_handover_phase.cpp`: bounds; Starlink's timetable on any clock (three origins, three offsets) locking within two periods of the fourth handover, to 12 ms; a delay step alone, a sample every 50 ms and a random loss a second; random losses at 1, 3 and 8 a second and a one-off burst never locking (the recurrence share alone would: removing the test locked on 1 a second); a clock 1000 ppm slow followed to 20 ms over 48 periods (the plain median lagged 121 ms); the release on the eleventh quiet period; any time sequence; the tail against a direct sum. `test_quic_congestion.cpp`: BBRv3 under its own losses with a handover every 2 s locks by 21 s (measured: 19 s, the phase 2 ms off), then 13 reductions after 9 handovers against the authored schedule's 10 and none's 28 (16 on a clock 1000 ppm slow); CUBIC and BBR on a congested path with no handovers never lock at 1 s or 2 s (removing the test locked); a lock released after the handovers stop, and one held on losses alone (feeding the learner behind the gate lost it). `fuzz_estimators` op 6 (learner and tail oracles; 2.1 million libFuzzer runs clean) and `fuzz_quic_connection` op 0xF5 (the learned schedule held to the learning; 30,953 runs clean), with seeds.
 - **Next.** The offloads ([S33](#sockets)): Linux GSO and GRO, Windows USO and URO, the io_uring receive and its
-  zero-copy send landed 2026-11-21; Windows RIO follows, and zero-copy receive needs a NIC that splits headers.
+  zero-copy send and Windows' Registered I/O landed 2026-11-21; zero-copy receive needs a NIC that splits headers.
 
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers
