@@ -295,22 +295,24 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   refusals), no MSG_DONTWAIT (sends blocked past 50 ms), and a copied retry that did not stick to its message
   (two refusals for one).
 - **Registered I/O** (2026-11-21, NET-PATH; [udp_rio.cpp](../../engine/foundation/net/src/udp_rio.cpp)). With
-  `UdpOptions::registered_io`, a Windows `UdpSocket` is made with `WSA_FLAG_REGISTERED_IO` and posts
-  `ring_buffers` receives (`RIOReceiveEx`, deferred, one commit a call), each in a buffer of `ring_datagram_bytes`
-  (any datagram by default, a train with `coalesce_receive`) registered on its own, as the host's contract for a
-  buffer in use asks. `receive` dequeues completions in user mode, copies or lends them as io_uring's are, and posts a
-  copied buffer again at once and a lent one at the next call. Such a socket takes no other Winsock call (`WSAPoll`,
-  `WSARecvMsg` and `WSASendMsg` fail with WSAENOTSOCK, measured), so it also sends through Registered I/O: each
-  datagram is copied into one of 64 registered slots, a train end to end into one of 8 that hold `kMaxTrainBytes`,
-  and handed over with `RIO_MSG_DEFER` and one `RIO_MSG_COMMIT_ONLY` a call. Control messages (codepoint,
-  `UDP_SEND_MSG_SIZE`) go behind a `RIO_CMSG_BUFFER` header, without which the host ignores them (measured: no mark,
-  a train sent as one datagram), and USO then segments the train. A send's error arrives with its completion, read at
-  the next send and counted in `sends_failed` (the datagram is lost, as a path's drop is), except Busy while every
-  slot is in flight and MessageTooLarge past a slot (`send_bytes`); CE, which Windows refuses (WSAEINVAL, also late
-  here), leaves unmarked at once. The socket refuses FIONBIO and SIO_UDP_NETRESET, which it does not need. Its
-  receives are the posted buffers alone: a datagram that arrives while none is posted is lost whatever SO_RCVBUF
-  says (measured), so a host sizes `ring_buffers` for its bursts and lent slots, and the buffers' pages stay locked:
-  it is off by default. Anything the host refuses before the bind closes the socket and opens a plain one.
+  `UdpOptions::registered_io`, a Windows `UdpSocket` is made with `WSA_FLAG_REGISTERED_IO` and posts `ring_buffers`
+  receives (`RIOReceiveEx`, deferred, one commit a call), each in a buffer of `ring_datagram_bytes` (any datagram by
+  default, a train with `coalesce_receive`) registered on its own, as the host's contract for a buffer in use asks.
+  `receive` dequeues completions in user mode, copies or lends them as io_uring's are, and posts a copied buffer again
+  at once and a lent one at the next call. Such a socket takes no other Winsock call (`WSAPoll`, `WSARecvMsg` and
+  `WSASendMsg` fail with WSAENOTSOCK, measured), so it also sends through Registered I/O: each datagram is copied into
+  one of 64 registered slots, a train end to end into one of 8 that hold `kMaxTrainBytes`, and handed over with
+  `RIO_MSG_DEFER` and one `RIO_MSG_COMMIT_ONLY` a call. Control messages (codepoint, `UDP_SEND_MSG_SIZE`) go behind a
+  `RIO_CMSG_BUFFER` header, without which the host ignores them (measured: no mark, a train sent as one datagram), and
+  USO then segments the train. A send's error arrives with its completion, read at the next send and counted in
+  `sends_failed` (the datagram is lost, as a path's drop is; a train also in `trains_refused`), and the errors that end
+  segmentation or marking in a `WSASendMsg` call end them here, except Busy while every slot is in flight and
+  MessageTooLarge past a slot (`send_bytes`); CE, which Windows refuses (WSAEINVAL, also late here), leaves unmarked at
+  once. The socket refuses FIONBIO and SIO_UDP_NETRESET, which it does not need. Its receives are the posted buffers
+  alone: a datagram that arrives while none is posted is lost whatever SO_RCVBUF says (measured), so a host sizes
+  `ring_buffers` for its bursts and lent slots, and the buffers' pages stay locked: it is off by default. The host's
+  request queue is unsynchronised, so one thread makes a socket's sends and receives (an `IoLoop` does). Anything the
+  host refuses before the bind closes the socket and opens a plain one.
 - **Event waits.** Every Windows socket now waits on an event: Registered I/O's receive queue signals one
   (`RIONotify`, armed after each receive, set at once while a completion waits, manual reset), and a plain socket's
   `WSAEventSelect(FD_READ)` sets one, reset at each receive's start and set again by a read that leaves a datagram or
@@ -324,7 +326,8 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   other count; lent and copied slots at 1, 7 and 64 a receive with every codepoint (CE arriving unmarked) to and from a
   plain socket; four posted buffers holding four of a burst of twenty and the next ones arriving; a datagram cut past
   its buffer and past a copied slot, a send past a slot refused with the ones before it sent; a 40-datagram train
-  through USO from one slot; a late failure counted; mixed sets waking for either kind and not after the last
+  through USO from one slot; a late failure counted, and a train failing late refused with segmenting left on; a
+  receive of no slot leaving the wait set; mixed sets waking for either kind and not after the last
   datagram; a move and a reopen. The QUIC hosts' loopback cases run again over it (`test_quic_client.cpp`).
 - **Socket sets** (2026-11-21, NET-PATH). A loop and its host serve a `SocketSet` of up to four sockets, one per
   path a connection knows ([S75](#migration)); a single socket converts to a set of one, so a one-socket host is

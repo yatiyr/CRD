@@ -14,6 +14,8 @@ CI first: run 44895376363 (cf3611f8) fails linux-gcc-shipping on GCC LTO's `-War
   lent or copied by `receive()`; 64 registered send slots and 8 train slots, `RIO_MSG_DEFER` and one commit a call.
 - `UdpOptions::registered_io` (off by default), `ring_datagram_bytes` (both platforms' buffer size),
   `SocketFeatures::send_bytes`, `OffloadCounters::sends_failed`.
+- Late send failures feed back as the call's errors do on the plain path (a train counts in `trains_refused`,
+  WSAEOPNOTSUPP or unmarked WSAEINVAL ends segmenting, marked WSAEINVAL ends marking).
 - Every Windows socket waits on an event (`RIONotify`, or `WSAEventSelect(FD_READ)` for a plain one), so `SocketSet`
   waits on any mix in one `WaitForMultipleObjects`.
 
@@ -29,7 +31,8 @@ CI first: run 44895376363 (cf3611f8) fails linux-gcc-shipping on GCC LTO's `-War
 
 - win-debug: all 1033 crd-net-tests cases; win-release: the UDP, Registered I/O, loop and QUIC client files;
   linux-gcc-debug: every crd-net case and the socket files again with `CRD_NET_UDP_RING=0`; linux-gcc-release
-  builds warning-free and runs the socket files; clang-tidy 22.1.8 clean on the changed sources (it found an enum,
+  builds warning-free and runs the socket files; win-asan and win-clang-cl run the socket files clean; the
+  `crd-check` and `crd-no-` CTest guards pass; clang-tidy 22.1.8 clean on the changed sources (it found an enum,
   the `CRD_NET_RIO` macro and `kInvalidSocket`'s unused-in-header constant, all fixed).
 - Board (`[.udp-board]`, win-release, loopback, 400000 datagrams of 1200 B, 3 rounds, cycles a datagram): receiver
   523-573 against 1842-2347, sender 5489-6881 against 5976-7533.
