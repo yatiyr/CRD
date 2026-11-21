@@ -227,9 +227,11 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   The set waits as one: sockets with a host descriptor (`wait_handle()`) in one `poll` or `WSAPoll`, the Linux error
   flag handed back (`waited()`); a set holding a simulated socket asks each without waiting, then the first for at
   most 1 ms, and returns so the caller turns again. `SendQueue` names each datagram's socket and hands each socket
-  its own in the order queued, so a busy socket holds back no other; slots stay where they were written (an order
-  array of slot indices is compacted, no bytes move), and one naming a socket the set lacks is dropped and
-  counted. ECN and path MTU discovery run only where every socket of the set offers them.
+  its own in the order queued, so a busy socket holds back no datagram queued for another; slots stay where they
+  were written (an order array of slot indices is compacted, no bytes move), and one naming a socket the set lacks
+  is dropped and counted. Open: a queue a stalled socket has filled admits no datagram for another until it drains
+  (the host asks for room before the connection names the datagram's path); per-socket admission comes next. ECN and
+  path MTU discovery run only where every socket of the set offers them.
 
 <a id="ingress"></a>
 ### Ingress

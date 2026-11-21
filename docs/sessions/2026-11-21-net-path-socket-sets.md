@@ -40,7 +40,12 @@ passes at HEAD). Its other jobs were still running.
 - linux-clang-fuzz `crd-fuzz-net-quic-connection` (its own-socket moves, ops 0xFA and 0xF9, now re-announcing IDs):
   481 s, 62355 runs, nothing found (scratch corpus; the committed corpus unchanged).
 
+- Rebuilt win-debug after the fixture's tidy fix: 985 cases pass; the 20 `crd-no-`/`crd-check-` CTest guards pass
+  (`crd-check-capability-owners` hit an impossible `re` internal error once, this host's fault, and passed rerun).
+  `crd-quic-peer` builds on linux-gcc-public-checks.
+
 ## Next
 
-preferred_address (section 9.6) on a server's second socket; interop with ngtcp2's migrating client and server
+Per-socket admission in the host's send queue: a queue a stalled socket has filled admits no datagram for another,
+because the host takes room before the connection names its path. Then preferred_address (section 9.6) on a server's second socket; interop with ngtcp2's migrating client and server
 through `QuicClient::migrate()` in `cerid_quic_peer`; LEO handover awareness.
