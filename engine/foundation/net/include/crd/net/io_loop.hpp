@@ -141,7 +141,11 @@ public:
     [[nodiscard]] u32 queued() const noexcept { return m_queued; }
     // The datagrams queued for `socket` (below `sockets`), and the slots each socket is guaranteed beside the others
     // (0 for a queue of one socket).
-    [[nodiscard]] u32 queued(u32 socket) const noexcept { return (socket < m_sockets) ? m_per_socket[socket] : 0U; }
+    [[nodiscard]] u32 queued(u32 socket) const noexcept
+    {
+        // m_sockets never passes kMaxSetSockets: the second bound says so to GCC's LTO, which cannot prove it.
+        return (socket < m_sockets && socket < kMaxSetSockets) ? m_per_socket[socket] : 0U;
+    }
     [[nodiscard]] u32 share() const noexcept { return m_share; }
     [[nodiscard]] bool full() const noexcept { return m_queued == m_slots; }
 
