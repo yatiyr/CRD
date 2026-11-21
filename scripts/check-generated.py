@@ -45,7 +45,7 @@ STATUSES = ('reproducible', 'formatted', 'host-dependent', 'network-sourced', 'h
             'generator-absent', 'measured')
 OWNED_STATUSES = ('drifted',)
 FORMATTERS = ('clang-format',)
-PINNED_WINDOWS_CLANG_FORMAT = 'C:/LLVM-20.1.8/bin/clang-format.exe'  # the pinned LLVM the tidy gate uses
+PINNED_WINDOWS_CLANG_FORMAT = 'C:/LLVM-20.1.8/bin/clang-format.exe'  # the pinned LLVM 20.1.8 formatter (the tidy gate is 22)
 SCAN_DIRS = ('engine', 'tests', 'tools', 'bench', 'docs/generated')
 SCAN_SUFFIXES = {'.hpp', '.cpp', '.inl', '.h', '.inc', '.cu', '.cuh', '.md'}
 # A file is generated when one of its first three lines is a comment that opens with GENERATED (optionally after
