@@ -3957,10 +3957,10 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
   server's datagrams on any other socket are dropped: its address changes in no other way (section 9). A client
   holds the ID as a NEW_CONNECTION_ID frame's, validates the address of its active path's family (IPv4-mapped where
   its path is) from its active socket once confirmed and moves once validated (`follow_preferred_address`, section
-  9.6.1; never from a path that names no server address); `migrate()` to it waits for the validation; a client that moves socket first validates it again from
-  there and never returns to the socket it left (section 9.6.3); once there, paths to the server's first address
-  are forgotten and refused (`OtherServer`), and disable_active_migration closes the handshake address alone
-  (section 18.2).
+  9.6.1; never from a path that names no server address); `migrate()` to it waits for the validation; a client
+  that moves socket first validates it again from there and never returns to the socket it left (section 9.6.3);
+  once there, paths to the server's first address are forgotten and refused (`OtherServer`), and
+  disable_active_migration closes the handshake address alone (section 18.2).
 - **Proof (preferred address).** `test_quic_congestion.cpp` `[preferred-address]`: the move (the client's
   PATH_RESPONSE lost, so the server sees the client there before its validation ends), a dropped first-socket
   datagram, an unreachable preferred socket, the manual moves and refusals, a pending move following the client to
@@ -3969,8 +3969,16 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
   host's second real UDP socket on the loopback. `fuzz_quic_connection` op 0xF7: its first runs found the pending
   move drawing a client back to a socket it left (fixed) and three oracles too strict; then 481 s, 60117 runs
   clean.
-- **Next.** interop with peers that migrate (ngtcp2's client and server, its preferred address too), then LEO
-  handover awareness.
+- **Proof (interop).** `quic_interop.py` against ngtcp2 1.26.0, each way: the relay is a NAT (a server-facing
+  socket per client address) that rebinds in the middle of a transfer on another port, on another address, and over
+  a lossy path; a client moves to its second socket a quarter of the way in, on the loopback, through a lossy relay
+  and after a rebinding; disable_active_migration refuses the move; a server offers its second socket as its
+  preferred address and a client follows it, declines it, or follows it and then moves. Both ends report the path
+  they ended on, held to each other and to the relay's mappings. The ngtcp2 peer sends each packet by the socket and
+  toward the address of the path ngtcp2 wrote it for. Teeth: a server that never follows its client fails every
+  ngtcp2-client move and rebinding; a client that never follows the preferred address fails every Cerid-client
+  preferred case but the declined one.
+- **Next.** LEO handover awareness.
 
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers
