@@ -4596,6 +4596,62 @@ TEST_CASE("QUIC address discovery: a server sends each path its address once, ag
     CHECK(run.server.state() == QuicConnectionState::Established);
 }
 
+TEST_CASE("QUIC address discovery: off the active path a report only rides a path frame, and a lost one waits there "
+          "for the next one",
+          "[net][net-path][quic-connection][address-discovery]")
+{
+    Identity identity;
+    RawRun run(identity, 2048U, {}, nullptr, {}, 0U, QuicAddressDiscovery::Provide);
+    run.discovery = QuicAddressDiscovery::Receive;
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath b = client_at(8U, 50000U);
+    run.from = a;
+    run.handshake();
+    collect_observations(run, 1U);
+    // A probe from another path: the answer there carries that path's report, and nothing moves.
+    // Padded, so that the amplification limit leaves b room for more than the answer.
+    constexpr u8 probe[kQuicPathDataBytes] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U};
+    run.from = b;
+    run.pad_to = kQuicMinInitialDatagram;
+    send_frame(run, QuicFrameKind::PathChallenge, ConstSpan<u8>(probe));
+    run.pad_to = 0U;
+    REQUIRE(run.server.paths().credit(run.server.paths().find(b)) >= kQuicMinInitialDatagram);
+    REQUIRE(run.raw.path_response_seen);
+    REQUIRE(run.raw.observations == 2U);
+    CHECK(run.raw.observed[1] == b.peer);
+    CHECK(run.raw.observed_path[1] == b);
+    CHECK(run.server.path() == a);
+    CHECK(run.server.counters().migrations == 0U);
+    // Lost there (three later packets acknowledged): owed again on that path, it draws no datagram of its own.
+    run.raw.seen[run.raw.observed_packet[1]] = false;
+    const usize mark = run.raw.datagrams;
+    const usize challenged = challenges_on(run, b);
+    run.from = a;
+    for (usize round = 0U; round < 6U; ++round)
+    {
+        run.server.ping();
+        run.drain();
+        run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    }
+    CHECK(bytes_to(run, b, mark) == 0U);
+    CHECK(run.raw.observations == 2U);
+    // The server's next challenge there carries it, at a higher sequence; every datagram there is a challenge's.
+    run_timers(run, run.now + 2000U * kMs);
+    REQUIRE(run.raw.observations == 3U);
+    CHECK(run.raw.observed_path[2] == b);
+    CHECK(run.raw.observed[2] == b.peer);
+    CHECK(run.raw.observed_sequence[2] > run.raw.observed_sequence[1]);
+    usize to_b = 0U;
+    for (usize index = mark; index < run.raw.datagrams && index < 256U; ++index)
+    {
+        to_b += (run.raw.sent_to[index] == b) ? 1U : 0U;
+    }
+    CHECK(to_b != 0U);
+    CHECK(to_b == challenges_on(run, b) - challenged);
+    CHECK(run.server.path() == a);
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
 TEST_CASE("QUIC address discovery: an IPv4-mapped peer is reported as IPv4, an IPv6 one without its scope",
           "[net][net-path][quic-connection][address-discovery]")
 {

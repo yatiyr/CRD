@@ -1595,6 +1595,15 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     sink.add("script-address-discovery", reported, sizeof(reported));
     const u8 observed[] = {0x41U, 0x0BU, 0x80U, 0x9FU, 0x81U, 0xA6U, 0x00U, 0xC6U, 0x33U, 0x64U, 0x07U, 0xC3U, 0x50U};
     sink.add("frames-observed-address", observed, sizeof(observed));
+    // The client's own sockets and the preferred address with reports on: each new path is reported.
+    u8 reported_own[sizeof(own)];
+    std::memcpy(reported_own, own, sizeof(own));
+    reported_own[0] = 0xC0U;
+    sink.add("script-address-discovery-client", reported_own, sizeof(reported_own));
+    u8 reported_preferred[sizeof(preferred)];
+    std::memcpy(reported_preferred, preferred, sizeof(preferred));
+    reported_preferred[0] = 0xC0U;
+    sink.add("script-address-discovery-preferred", reported_preferred, sizeof(reported_preferred));
     // A Retry in place of the first flight: the client goes again to its ID with its token.
     const u8 retried[] = {0x00U, 0xFDU, 0x00U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U};
     sink.add("script-retry", retried, sizeof(retried));

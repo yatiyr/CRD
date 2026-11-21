@@ -30,12 +30,14 @@ dispatched run 44895545159 (98617b60) is still queued. Nothing of this track's i
 
 ## Evidence
 
-- win-debug: all 1039 crd-net-tests cases (7 skipped as before); linux-gcc-debug: all 1040. The five
-  `[address-discovery]` cases, the frame and parameter cases and the new 0-RTT refusal pass. Two teeth (probing
-  classification removed, a lost report never owed again) each failed the tests, then were restored and rebuilt.
+- win-debug: all 1039 crd-net-tests cases (7 skipped as before); linux-gcc-debug: all 1040. The six
+  `[address-discovery]` cases, the frame and parameter cases and the new 0-RTT refusal pass. Three teeth each
+  failed the tests and were then restored and rebuilt: removing the probing classification, never owing a lost
+  report again, and letting an owed report open a datagram off the active path.
 - Fuzzing: codec and connection replays pass on both lanes. The connection target's bit 6 now runs every NET-STD
   draft, and a new oracle checks that each held report names a harness address. New seeds: OBSERVED_ADDRESS in the
-  codec payloads and the full server parameters, and a paths script and a raw frame for the connection target.
+  codec payloads and the full server parameters; for the connection target, paths, own-socket and preferred-address
+  scripts and a raw frame. All 29 net corpora replay on win-debug, and the QMux seeds are unchanged.
   libFuzzer ran 270 s with four jobs per target (8.4 M and 116 k executions). It logged four events that no input
   replays: alone, over the 4195-unit working corpus, or in a 150 s single-job codec session. Two were in AWS-LC, as
   in earlier sessions on this host. They follow the host's known faults (`host-misexecutes-local-faults`), so
