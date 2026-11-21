@@ -142,7 +142,7 @@ TEST_CASE("connection ID spaces open, refuse and close per path ID", "[quic][cid
     CHECK_FALSE(s.cids.open(u64{0x100000000U}, s.spaces[0])); // past 2^32 - 1
     REQUIRE(s.cids.open(1U, s.spaces[1]));
     REQUIRE(s.cids.open(2U, s.spaces[2]));
-    REQUIRE(s.cids.open(4U, s.spaces[0])); // path ID 3 passed over
+    REQUIRE(s.cids.open(4U, s.spaces[0]));     // path ID 3 passed over
     CHECK_FALSE(s.cids.open(5U, s.spaces[3])); // kQuicMaxPaths open
     CHECK_FALSE(s.cids.consumed(5U));
     // A path ID opens once and in rising order (RFC 10069 sections 2.4 and 3.4): closed, it never opens again, nor

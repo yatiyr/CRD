@@ -11,8 +11,9 @@
 // the connection.
 //
 // Oracles, against a model of every space. Each verdict is the restated rule's: a path ID opens once and in rising
-// order, one passed over never; a frame for a closed or abandoned space changes nothing; abandoning retires the space's peer IDs at once with no retirement owed and keeps this
-// side's routed, none issued, rotated or announced there again; one ID or token under two IDs anywhere is
+// order, one passed over never; a frame for a closed or abandoned space changes nothing; abandoning retires the
+// space's peer IDs at once with no retirement owed and keeps this side's routed, none issued, rotated or announced
+// there again; one ID or token under two IDs anywhere is
 // PROTOCOL_VIOLATION, a repeat changes nothing; below Retire Prior To an ID is retired again; an ID retired here while
 // its retirement is outstanding is never held again (once settled it may be, as the 16 latest are remembered); a
 // raised Retire Prior To retires every ID below it; past the limit, or past twice the limit of retirements
