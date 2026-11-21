@@ -3948,7 +3948,28 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
   `test_quic_client.cpp` fills a stalled first socket to its limit of an 8-slot queue and moves; `test_quic_server.cpp`
   refuses on the second socket; `test_quic_congestion.cpp` holds the active, probing and closing paths' sockets. `test_quic_pmtu.cpp`: reports from another socket or
   address refused.
-- **Next.** preferred_address (section 9.6), interop with peers that migrate (ngtcp2's client and server), then LEO
+- **The server's preferred address** (section 9.6, 2026-11-21). A server configured with one
+  (`QuicConnectionConfig::preferred_socket`, either family) issues its ID as sequence 1 with its token (section
+  5.1.1) and sends none when it opened on that socket. It answers there at once and challenges the client's path,
+  even before it holds a client ID for it (a path waiting for one is validating, never a path left behind to give
+  up); it moves its datagrams there only once it validated that path and the client's highest-numbered non-probing
+  packet arrived on it, and then forgets every other socket's path and drops their datagrams (section 9.6.2). A
+  server's datagrams on any other socket are dropped: its address changes in no other way (section 9). A client
+  holds the ID as a NEW_CONNECTION_ID frame's, validates the address of its active path's family (IPv4-mapped where
+  its path is) from its active socket once confirmed and moves once validated (`follow_preferred_address`, section
+  9.6.1); `migrate()` to it waits for the validation; a client that moves socket first validates it again from
+  there and never returns to the socket it left (section 9.6.3); once there, paths to the server's first address
+  are forgotten and refused (`OtherServer`), and disable_active_migration closes the handshake address alone
+  (section 18.2).
+- **Proof (preferred address).** `test_quic_congestion.cpp` `[preferred-address]`: the move (the client's
+  PATH_RESPONSE lost, so the server sees the client there before its validation ends), a dropped first-socket
+  datagram, an unreachable preferred socket, the manual moves and refusals, a pending move following the client to
+  a new socket, a move before reaching it as the first network goes, three hostile seeds both ways, and the
+  configurations, families and forms. `test_quic_client.cpp`: a client host follows its server to the server
+  host's second real UDP socket on the loopback. `fuzz_quic_connection` op 0xF7: its first runs found the pending
+  move drawing a client back to a socket it left (fixed) and three oracles too strict; then 481 s, 60117 runs
+  clean.
+- **Next.** interop with peers that migrate (ngtcp2's client and server, its preferred address too), then LEO
   handover awareness.
 
 <a id="path-privacy"></a>
