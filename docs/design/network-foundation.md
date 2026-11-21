@@ -220,6 +220,16 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
 - **The seam.** The transport drives only `DatagramSocket`; NET-SIM's virtual sockets and NET-DEBUG's conditioner
   implement it, and `wait_readable` is the one blocking call. Each datagram carries its ECN codepoint ([S67](#ecn));
   PMTU, pacing and offloads (GSO, GRO, USO, URO) are NET-PATH's, added behind the same interface.
+- **Socket sets** (2026-11-21, NET-PATH). A loop and its host serve a `SocketSet` of up to four sockets, one per
+  path a connection knows ([S75](#migration)); a single socket converts to a set of one, so a one-socket host is
+  unchanged. Each received datagram names the socket it arrived on (`ReceivedDatagram::socket`), a stateless answer
+  leaves by that socket, and each turn reads every socket within `batches_per_poll`, so a flood on one starves none.
+  The set waits as one: sockets with a host descriptor (`wait_handle()`) in one `poll` or `WSAPoll`, the Linux error
+  flag handed back (`waited()`); a set holding a simulated socket asks each without waiting, then the first for at
+  most 1 ms, and returns so the caller turns again. `SendQueue` names each datagram's socket and hands each socket
+  its own in the order queued, so a busy socket holds back no other; slots stay where they were written (an order
+  array of slot indices is compacted, no bytes move), and one naming a socket the set lacks is dropped and
+  counted. ECN and path MTU discovery run only where every socket of the set offers them.
 
 <a id="ingress"></a>
 ### Ingress
@@ -3902,7 +3912,26 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
 - **The client's own moves** (2026-11-21). `probe_path()` validates a socket of the client's own to its server's address and moves nothing (section 9.1); `migrate()` moves datagrams there now (section 9.2); the server follows on the first datagram from there (tested within one way's delay). Refused, changing nothing (`QuicMigration`): a server, before confirmation, the server's disable_active_migration, another server address or an unbound one, the active path, no peer ID unused on any other path (section 9.5). An own path has no amplification limit (`QuicPaths::trust`: the server's address is proven) but owes its validation; on moving, congestion control, the RTT estimate, the pacer, ECN validation and the path MTU search restart (section 9.4: the local socket changed). A failed validation reverts to the path before (section 9.3.2). Once the active path is proven and the server's non-probing packets arrive on it, the client forgets the path it left and retires that ID, so the server issues the next move's.
 - **IDs for waiting paths.** A path admitted without a peer ID takes one when a NEW_CONNECTION_ID arrives or a validation ends (`address_paths()`); before, it never got one. With none unused, every path left behind on the least recently used ID that is not the active path's is forgotten (the fallback only once the active path is proven, never one under validation), so the ID retires and the peer's replacement reaches the waiting path; the peer's next non-probing packet there moves the connection. A rebinding whose old mapping still answers leaves two paths on one ID: both go. With active_connection_id_limit 2 at both ends, serial moves each take the IDs the move before left.
 - **Proof (own moves).** `test_quic_congestion.cpp` `[client-migration]`: the refusals, a probe then a move the server follows, a move without probing as the old network goes over 2% loss, 1% duplication and 10 ms jitter (3 seeds, both directions), a dead socket reverting, four serial moves back to the first socket, a quiet client's move and a one-way path's revert reaching the server within one way's delay, and two moves after a rebinding whose two paths share an ID. `fuzz_quic_connection` ops 0xFA and 0xF9 (sockets 1 and 2); its first run found the oracle checked before a revert at the transfer's end was sent (two inputs kept), then 541 s, 67563 runs clean.
-- **Next.** The client host's second socket, preferred_address (section 9.6), interop with peers that migrate (ngtcp2's client and server), then LEO handover awareness.
+- **The client host's sockets** (2026-11-21). `QuicClient::probe_path()` and `migrate()` take a connection to
+  another socket of the host's set ([S33](#sockets)), refusing a stale handle (`NoConnection`) and a socket the set
+  lacks (`NoSocket`); the host routes each datagram by its path's socket. The server answers on a new path only with
+  an unused ID of the client's (section 9.5), and the NEW_CONNECTION_ID that gave it may be in flight on the path
+  left behind: a move announces every ID the server has not acknowledged again from the new path. Without that, a
+  client whose first network vanished at the move was never followed (the server waited for an ID) and its
+  validation failed back onto the dead path. A Packet Too Big report moves the search only when it arrived on the
+  active path and quotes a packet sent there since its state last started (`path_too_big(path, ...)`), so a report
+  about a path left behind never shrinks the new one.
+- **Proof (host).** `test_quic_client.cpp` `[client-migration]`: a probe then a move the server follows over three
+  hostile seeds (loss, duplication, jitter), the left socket quiet once followed; the refusals; a dead second network
+  reverting; a move while the first socket's host is busy and after its network is gone; four serial moves; a host
+  of two sockets that searches the path MTU only where both forbid fragmentation; and a move between two real UDP
+  sockets on the loopback. `test_io_loop.cpp`: datagrams naming their socket, answers leaving by it, the per-socket
+  receive bound, an empty or oversized set refused, the simulated wait, two real UDP sockets answered and `run()`
+  woken by the second, and the send queue's per-socket order, busy and refusing sockets and a socket the set lacks,
+  checked against a model over 32000 random operations. `test_quic_pmtu.cpp`: reports from another socket or
+  address refused.
+- **Next.** preferred_address (section 9.6), interop with peers that migrate (ngtcp2's client and server), then LEO
+  handover awareness.
 
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers
