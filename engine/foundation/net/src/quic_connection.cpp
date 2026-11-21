@@ -3,6 +3,7 @@
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/construct.hpp>
 #include <crd/net/quic_connection.hpp>
+#include <crd/net/wire.hpp>
 
 #include <cstring>
 #include <new>
@@ -13,13 +14,12 @@ namespace
 {
 constexpr u8 kRecordCrypto = 1U;
 constexpr u8 kRecordHandshakeDone = 2U;
-constexpr u8 kRecordRetire = 3U;
+constexpr u8 kRecordRetire = 3U;     // a RETIRE_CONNECTION_ID frame: value is its sequence, stream_id its path ID
 constexpr u8 kRecordStream = 4U;     // a frame of the stream set
 constexpr u8 kRecordDatagram = 5U;   // a DATAGRAM frame whose outcome is reported
-constexpr u8 kRecordNewId = 6U;      // a NEW_CONNECTION_ID frame: value is its sequence
+constexpr u8 kRecordNewId = 6U;      // a NEW_CONNECTION_ID frame: value is its sequence, stream_id its path ID
 constexpr u8 kRecordNewToken = 7U;   // a server's NEW_TOKEN frame
 constexpr u8 kRecordObserved = 8U;   // an OBSERVED_ADDRESS frame: value is its sequence, length its path
-constexpr usize kIssueAttempts = 4U; // random IDs a host draws before it gives up on a full table
 constexpr u32 kNoRecord = ~u32{0};
 constexpr u64 kNsPerMs = 1000000U;
 constexpr u64 kCryptoFrameType = 0x06U;
@@ -34,7 +34,7 @@ constexpr usize kPullChunk = 512U;
 constexpr usize kKeyedHelloPrefix = 2U; // a keyed connection's parameters follow their two-byte length
 constexpr u64 kSkipMask = 63U;   // one 1-RTT packet number in 64 is skipped (section 21.4)
 constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries a PING
-constexpr u64 kNoSequence = ~u64{0}; // a path with no peer connection ID to send to
+constexpr u64 kNoSequence = kQuicNoSequence; // a path with no peer connection ID to send to
 
 // What a congestion controller sees of a packet counted in flight.
 // The four bytes after a short header's Destination Connection ID of `dcid_bytes`: the protected packet number and
@@ -103,11 +103,6 @@ constexpr u64 kNoSequence = ~u64{0}; // a path with no peer connection ID to sen
 [[nodiscard]] constexpr u64 add_saturating(u64 a, u64 b) noexcept
 {
     return (a > kNeverNs - b) ? kNeverNs : a + b;
-}
-
-[[nodiscard]] bool same_bytes(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
-{
-    return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
 }
 
 // A preferred address's family is given when its address and port are not all zeros (section 18.2).
@@ -195,69 +190,6 @@ constexpr u64 kNoSequence = ~u64{0}; // a path with no peer connection ID to sen
 }
 } // namespace
 
-// ---- The host side of connection IDs ----
-
-bool QuicRoutedIds::issue(cont::Span<u8> id, cont::Span<u8> token) noexcept
-{
-    if (id.size() < 8U || id.size() > crypto::kQuicMaxConnectionIdBytes)
-    {
-        return false;
-    }
-    for (usize attempt = 0U; attempt < kIssueAttempts; ++attempt)
-    {
-        if (crypto::random_bytes(id) != crypto::CryptoError::None)
-        {
-            return false;
-        }
-        const RouteError routed = m_routes.insert(id, m_connection);
-        if (routed == RouteError::Exists)
-        {
-            continue;
-        }
-        if (routed != RouteError::None)
-        {
-            return false;
-        }
-        if (!this->token(id, token))
-        {
-            static_cast<void>(m_routes.erase(id));
-            return false;
-        }
-        return true;
-    }
-    return false;
-}
-
-bool QuicRoutedIds::token(cont::ConstSpan<u8> id, cont::Span<u8> token) noexcept
-{
-    return m_reset.token(id, token) == crypto::CryptoError::None;
-}
-
-void QuicRoutedIds::retire(cont::ConstSpan<u8> id) noexcept
-{
-    static_cast<void>(m_routes.erase(id));
-}
-
-void QuicConnectionIds::watch_reset(cont::ConstSpan<u8>) noexcept {}
-
-void QuicConnectionIds::unwatch_reset(cont::ConstSpan<u8>) noexcept {}
-
-void QuicRoutedIds::watch_reset(cont::ConstSpan<u8> token) noexcept
-{
-    if (m_peer_tokens != nullptr)
-    {
-        static_cast<void>(m_peer_tokens->insert(token, m_connection)); // a token held already stays its first holder's
-    }
-}
-
-void QuicRoutedIds::unwatch_reset(cont::ConstSpan<u8> token) noexcept
-{
-    if (m_peer_tokens != nullptr && m_peer_tokens->find(token) == m_connection)
-    {
-        static_cast<void>(m_peer_tokens->erase(token));
-    }
-}
-
 // ---- Events ----
 
 void QuicConnection::Events::on_acked(QuicSpace space, const QuicSentPacket& packet) noexcept
@@ -301,7 +233,7 @@ void QuicConnection::Events::on_discarded(QuicSpace space, const QuicSentPacket&
 // ---- Construction ----
 
 QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnectionConfig& config) noexcept
-    : m_allocator(allocator), m_config(config), m_events(*this), m_hello(*this)
+    : m_allocator(allocator), m_config(config), m_events(*this), m_hello(*this), m_cids(config.ids)
 {
     if (!config_valid(config))
     {
@@ -437,10 +369,7 @@ bool QuicConnection::connect(cont::ConstSpan<u8> local_cid, cont::ConstSpan<u8> 
     }
     static_cast<void>(m_local_cid.assign(local_cid)); // both bounded above
     static_cast<void>(m_initial_dcid.assign(initial_dcid));
-    m_local_ids[0] = LocalCid{};
-    m_local_ids[0].id = m_local_cid;
-    m_local_ids[0].acked = true;
-    m_local_id_count = 1U;
+    m_cids.first_local(m_local_cid.view(), {});
     m_original_dcid = m_initial_dcid;
     m_paths.set_validated(m_paths.active()); // a client's sending is not limited by its address
     return start(now_ns);
@@ -455,20 +384,18 @@ bool QuicConnection::accept(const QuicAccept& accept, u64 now_ns) noexcept
     if (!ready() || m_state != QuicConnectionState::Idle || m_config.side != crypto::QuicSide::Server ||
         m_config.tls == nullptr || accept.local_cid.empty() || accept.client_dcid.empty() ||
         !bounded(accept.local_cid) || !bounded(accept.client_dcid) || !bounded(accept.original_dcid) ||
-        !bounded(accept.client_scid) || (!accept.retried && !same_bytes(accept.original_dcid, accept.client_dcid)))
+        !bounded(accept.client_scid) ||
+        (!accept.retried && !wire::wire_same_bytes(accept.original_dcid, accept.client_dcid)))
     {
         return false;
     }
-    m_local_ids[0] = LocalCid{};
-    if (m_config.ids != nullptr &&
-        !m_config.ids->token(accept.local_cid, cont::Span<u8>(m_local_ids[0].reset_token, kQuicResetTokenBytes)))
+    u8 token[kQuicResetTokenBytes] = {};
+    if (m_config.ids != nullptr && !m_config.ids->token(accept.local_cid, cont::Span<u8>(token, sizeof(token))))
     {
         return false;
     }
     static_cast<void>(m_local_cid.assign(accept.local_cid)); // each bounded above
-    m_local_ids[0].id = m_local_cid;
-    m_local_ids[0].acked = true;
-    m_local_id_count = 1U;
+    m_cids.first_local(m_local_cid.view(), cont::ConstSpan<u8>(token, sizeof(token)));
     static_cast<void>(m_initial_dcid.assign(accept.client_dcid));
     static_cast<void>(m_original_dcid.assign(accept.original_dcid));
     static_cast<void>(m_peer_scid.assign(accept.client_scid));
@@ -478,24 +405,12 @@ bool QuicConnection::accept(const QuicAccept& accept, u64 now_ns) noexcept
         m_paths.set_validated(m_paths.active());
     }
     m_peer_scid_known = true;
-    m_peer_cids[0] = PeerCid{};
-    m_peer_cids[0].id = m_peer_scid;
-    m_peer_cid_count = 1U;
-    if (m_config.parameters.has_preferred_address && m_config.path.socket != m_config.preferred_socket)
+    m_cids.first_peer(m_peer_scid.view());
+    // The preferred address's ID is sequence 1 (section 5.1.1), routed as any other; the parameters carry it.
+    if (m_config.parameters.has_preferred_address && m_config.path.socket != m_config.preferred_socket &&
+        !m_cids.issue(0U, true))
     {
-        // The preferred address's ID is sequence 1 (section 5.1.1), routed as any other; the parameters carry it.
-        LocalCid& preferred = m_local_ids[1];
-        preferred = LocalCid{};
-        preferred.id.bytes = m_local_cid.bytes;
-        const cont::Span<u8> token(preferred.reset_token, kQuicResetTokenBytes);
-        if (m_config.ids == nullptr || !m_config.ids->issue(cont::Span<u8>(preferred.id.id, preferred.id.bytes), token))
-        {
-            return false;
-        }
-        preferred.sequence = 1U;
-        preferred.acked = true;
-        m_local_id_count = 2U;
-        m_local_next_sequence = 2U;
+        return false;
     }
     return start(now_ns);
 }
@@ -568,13 +483,14 @@ void QuicConnection::fill_local_parameters() noexcept
         }
         // Sequence 0's token: a client's transport parameters are not confidential, so only a server sends one.
         m_local.has_stateless_reset_token = m_config.ids != nullptr;
-        std::memcpy(m_local.stateless_reset_token, m_local_ids[0].reset_token, kQuicResetTokenBytes);
+        std::memcpy(m_local.stateless_reset_token, m_cids.local(0U, 0U)->reset_token, kQuicResetTokenBytes);
         // Sequence 1 is the preferred address's (accept()), absent when the connection opened on its socket.
-        m_local.has_preferred_address = m_local_id_count == 2U && m_local_ids[1].sequence == 1U;
-        if (m_local.has_preferred_address)
+        const QuicLocalCid* preferred = m_cids.local(0U, 1U);
+        m_local.has_preferred_address = preferred != nullptr;
+        if (preferred != nullptr)
         {
-            m_local.preferred_address.connection_id = m_local_ids[1].id;
-            std::memcpy(m_local.preferred_address.reset_token, m_local_ids[1].reset_token, kQuicResetTokenBytes);
+            m_local.preferred_address.connection_id = preferred->id;
+            std::memcpy(m_local.preferred_address.reset_token, preferred->reset_token, kQuicResetTokenBytes);
         }
     }
     m_local.grease_quic_bit = m_config.grease_quic_bit;
@@ -649,14 +565,8 @@ bool QuicConnection::start_keyed(const QuicKeyedStart& start, u64 now_ns) noexce
     m_initial_dcid = m_peer_scid;
     m_original_dcid = (side == crypto::QuicSide::Server) ? m_local_cid : m_peer_scid;
     m_peer_scid_known = true;
-    m_local_ids[0] = LocalCid{};
-    m_local_ids[0].id = m_local_cid;
-    m_local_ids[0].acked = true;
-    std::memcpy(m_local_ids[0].reset_token, reset_token, kQuicResetTokenBytes);
-    m_local_id_count = 1U;
-    m_peer_cids[0] = PeerCid{};
-    m_peer_cids[0].id = m_peer_scid;
-    m_peer_cid_count = 1U;
+    m_cids.first_local(m_local_cid.view(), cont::ConstSpan<u8>(reset_token, kQuicResetTokenBytes));
+    m_cids.first_peer(m_peer_scid.view());
     fill_local_parameters();
 
     u8 hello[kKeyedHelloPrefix + crypto::kQuicMaxTransportParameterBytes];
@@ -1021,19 +931,7 @@ bool QuicConnection::reset_by(cont::ConstSpan<u8> tail, u64 now_ns) noexcept
     {
         return false;
     }
-    // Every token of a used, unretired ID is compared in constant time, none skipped once one matches.
-    bool matched = false;
-    for (usize index = 0U; index < m_peer_cid_count; ++index)
-    {
-        const PeerCid& held = m_peer_cids[index];
-        if (held.has_token && held.used)
-        {
-            const bool equal =
-                crypto::constant_time_equal(tail, cont::ConstSpan<u8>(held.reset_token, kQuicResetTokenBytes));
-            matched = matched || equal;
-        }
-    }
-    if (!matched)
+    if (!m_cids.reset_by(tail))
     {
         return false;
     }
@@ -1061,15 +959,16 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
         return retry(header, packet, now_ns);
     }
     const bool long_header = header.type != QuicPacketType::OneRtt;
-    m_packet_local = local_index(header.dcid);
-    bool routed = m_packet_local != m_local_id_count ||
-                  (!client && long_header && same_bytes(header.dcid, m_initial_dcid.view()));
+    m_packet_local = m_cids.find(header.dcid);
+    bool routed =
+        m_packet_local.found() || (!client && long_header && wire::wire_same_bytes(header.dcid, m_initial_dcid.view()));
     if (long_header)
     {
         // Retry is taken above; other versions are not this connection's, and a server's Initial carries no token
         // (section 17.2.2).
         routed = routed && header.type != QuicPacketType::Retry && header.type != QuicPacketType::OtherVersion &&
-                 version_routed(header) && (!m_peer_scid_known || same_bytes(header.scid, m_peer_scid.view())) &&
+                 version_routed(header) &&
+                 (!m_peer_scid_known || wire::wire_same_bytes(header.scid, m_peer_scid.view())) &&
                  (!client || header.type != QuicPacketType::Initial || header.token.empty());
     }
     // A server discards a client Initial in a datagram under 1200 bytes (section 14.1); a path not known opens only a
@@ -1135,9 +1034,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
         // The server's first packet names the ID the client sends to from now on (section 7.2).
         static_cast<void>(m_peer_scid.assign(header.scid));
         m_peer_scid_known = true;
-        m_peer_cids[0] = PeerCid{};
-        m_peer_cids[0].id = m_peer_scid;
-        m_peer_cid_count = 1U;
+        m_cids.first_peer(m_peer_scid.view());
     }
     if (!client && opened.type == QuicPacketType::Handshake)
     {
@@ -1534,16 +1431,7 @@ bool QuicConnection::read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_n
     {
         // Sequence 0's token. A keyed connection's parameters are a packet like any other, and a reordered flight can
         // bring NEW_CONNECTION_ID first and retire sequence 0 before them.
-        for (usize index = 0U; index < m_peer_cid_count; ++index)
-        {
-            PeerCid& held = m_peer_cids[index];
-            if (held.sequence == 0U)
-            {
-                std::memcpy(held.reset_token, m_peer.stateless_reset_token, kQuicResetTokenBytes);
-                held.has_token = true;
-                watch(held);
-            }
-        }
+        m_cids.peer_reset_token(cont::ConstSpan<u8>(m_peer.stateless_reset_token, kQuicResetTokenBytes));
     }
     if (m_config.side == crypto::QuicSide::Client && m_peer.has_preferred_address)
     {
@@ -1563,35 +1451,6 @@ bool QuicConnection::read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_n
     return true;
 }
 
-bool QuicConnection::owe_retire(u64 sequence, u64 now_ns) noexcept
-{
-    // Retirements owed and in flight stay within twice the limit (section 5.1.2).
-    if (m_retire_outstanding >= 2U * m_local.active_connection_id_limit)
-    {
-        fail(QuicTransportError::ConnectionIdLimitError, 0U, now_ns);
-        return false;
-    }
-    m_retire_owed[m_retire_owed_count++] = sequence;
-    ++m_retire_outstanding;
-    return true;
-}
-
-void QuicConnection::watch(const PeerCid& held) noexcept
-{
-    if (m_config.ids != nullptr && held.has_token && held.used)
-    {
-        m_config.ids->watch_reset(cont::ConstSpan<u8>(held.reset_token, kQuicResetTokenBytes));
-    }
-}
-
-void QuicConnection::unwatch(const PeerCid& held) noexcept
-{
-    if (m_config.ids != nullptr && held.has_token && held.used)
-    {
-        m_config.ids->unwatch_reset(cont::ConstSpan<u8>(held.reset_token, kQuicResetTokenBytes));
-    }
-}
-
 bool QuicConnection::new_connection_id(const QuicFrame& frame, u64 now_ns) noexcept
 {
     if (m_peer_scid.bytes == 0U)
@@ -1600,212 +1459,57 @@ bool QuicConnection::new_connection_id(const QuicFrame& frame, u64 now_ns) noexc
         fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
         return false;
     }
-    for (usize index = 0U; index < m_peer_cid_count; ++index)
+    bool added = false;
+    const QuicTransportError error = m_cids.add_peer(frame, m_local.active_connection_id_limit, added);
+    if (error != QuicTransportError::NoError)
     {
-        const PeerCid& held = m_peer_cids[index];
-        const bool same_id = same_bytes(held.id.view(), frame.data);
-        if (held.sequence == frame.sequence)
-        {
-            // A repeat changes nothing; another ID or token under a sequence held is PROTOCOL_VIOLATION.
-            if (!same_id ||
-                (held.has_token && std::memcmp(held.reset_token, frame.reset_token.data(), kQuicResetTokenBytes) != 0))
-            {
-                fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
-                return false;
-            }
-            return true;
-        }
-        // One ID under two sequences, or one token under two IDs (section 10.3.2).
-        if (same_id ||
-            (held.has_token && std::memcmp(held.reset_token, frame.reset_token.data(), kQuicResetTokenBytes) == 0))
-        {
-            fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
-            return false;
-        }
-    }
-    if (frame.sequence < m_retire_prior_to)
-    {
-        return owe_retire(frame.sequence, now_ns); // already retired by an earlier Retire Prior To
-    }
-    if (frame.retire_prior_to > m_retire_prior_to)
-    {
-        m_retire_prior_to = frame.retire_prior_to;
-        const u64 current = m_peer_cids[m_peer_cid_current].sequence;
-        usize kept = 0U;
-        for (usize index = 0U; index < m_peer_cid_count; ++index)
-        {
-            if (m_peer_cids[index].sequence < m_retire_prior_to)
-            {
-                unwatch(m_peer_cids[index]);
-                if (!owe_retire(m_peer_cids[index].sequence, now_ns))
-                {
-                    return false;
-                }
-                continue;
-            }
-            m_peer_cids[kept++] = m_peer_cids[index];
-        }
-        m_peer_cid_count = kept;
-        m_peer_cid_current = kQuicMaxPeerConnectionIds;
-        for (usize index = 0U; index < m_peer_cid_count; ++index)
-        {
-            if (m_peer_cids[index].sequence == current)
-            {
-                m_peer_cid_current = index;
-            }
-        }
-    }
-    if (m_peer_cid_count >= m_local.active_connection_id_limit)
-    {
-        fail(QuicTransportError::ConnectionIdLimitError, 0U, now_ns);
+        fail(error, 0U, now_ns);
         return false;
     }
-    PeerCid& added = m_peer_cids[m_peer_cid_count];
-    added = PeerCid{};
-    added.sequence = frame.sequence;
-    static_cast<void>(added.id.assign(frame.data)); // read_quic_frame bounds it to 20 bytes
-    std::memcpy(added.reset_token, frame.reset_token.data(), kQuicResetTokenBytes);
-    added.has_token = true;
-    if (m_peer_cid_current == kQuicMaxPeerConnectionIds)
+    if (added)
     {
-        m_peer_cid_current = m_peer_cid_count; // the ID in use was retired: the new one replaces it
+        address_paths(now_ns);
     }
-    ++m_peer_cid_count;
-    address_paths(now_ns);
     return true;
-}
-
-usize QuicConnection::local_index(cont::ConstSpan<u8> id) const noexcept
-{
-    for (usize index = 0U; index < m_local_id_count; ++index)
-    {
-        if (same_bytes(m_local_ids[index].id.view(), id))
-        {
-            return index;
-        }
-    }
-    return m_local_id_count;
 }
 
 bool QuicConnection::retire_local(u64 sequence, u64 now_ns) noexcept
 {
-    // Never toward zero-length IDs, never past the IDs issued, never the one the packet was sent to (section 19.16).
-    if (m_local_cid.bytes == 0U || sequence >= m_local_next_sequence)
+    const QuicTransportError error = m_cids.retire_local(0U, sequence, m_packet_local);
+    if (error != QuicTransportError::NoError)
     {
-        fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
+        fail(error, 0U, now_ns);
         return false;
     }
-    usize index = 0U;
-    while (index < m_local_id_count && m_local_ids[index].sequence != sequence)
-    {
-        ++index;
-    }
-    if (index == m_local_id_count)
-    {
-        return true; // retired already
-    }
-    if (index == m_packet_local)
-    {
-        fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
-        return false;
-    }
-    if (m_config.ids != nullptr)
-    {
-        m_config.ids->retire(m_local_ids[index].id.view());
-    }
-    for (usize at = index + 1U; at < m_local_id_count; ++at)
-    {
-        m_local_ids[at - 1U] = m_local_ids[at];
-    }
-    --m_local_id_count;
-    m_packet_local = (m_packet_local > index) ? m_packet_local - 1U : m_packet_local;
     return true; // send() issues the replacement (section 5.1.1)
 }
 
 void QuicConnection::issue_local_ids() noexcept
 {
-    if (m_config.ids == nullptr || !m_confirmed || !m_peer_known || m_local_cid.bytes == 0U ||
-        m_state != QuicConnectionState::Established)
+    if (m_confirmed && m_peer_known && m_state == QuicConnectionState::Established)
     {
-        return;
-    }
-    const usize target = static_cast<usize>(min_u64(m_peer.active_connection_id_limit, kQuicMaxLocalConnectionIds));
-    usize active = 0U;
-    for (usize index = 0U; index < m_local_id_count; ++index)
-    {
-        active += (m_local_ids[index].sequence >= m_local_retire_prior_to) ? 1U : 0U;
-    }
-    constexpr usize capacity = sizeof(m_local_ids) / sizeof(m_local_ids[0]);
-    while (active < target && m_local_id_count < capacity && m_local_next_sequence < kQuicMaxVarint)
-    {
-        LocalCid& added = m_local_ids[m_local_id_count];
-        added = LocalCid{};
-        added.id.bytes = m_local_cid.bytes;
-        if (!m_config.ids->issue(cont::Span<u8>(added.id.id, added.id.bytes),
-                                 cont::Span<u8>(added.reset_token, kQuicResetTokenBytes)))
-        {
-            return;
-        }
-        added.sequence = m_local_next_sequence++;
-        added.owed = true;
-        ++m_local_id_count;
-        ++active;
+        m_cids.top_up(m_peer.active_connection_id_limit);
     }
 }
 
 bool QuicConnection::rotate_connection_ids() noexcept
 {
-    if (m_config.ids == nullptr || !m_confirmed || !m_peer_known || m_local_cid.bytes == 0U ||
-        m_state != QuicConnectionState::Established)
-    {
-        return false;
-    }
-    // An earlier Retire Prior To is retired in full first (section 5.1.2's SHOULD NOT).
-    for (usize index = 0U; index < m_local_id_count; ++index)
-    {
-        if (m_local_ids[index].sequence < m_local_retire_prior_to)
-        {
-            return false;
-        }
-    }
-    const u64 earlier = m_local_retire_prior_to;
-    const usize before = m_local_id_count;
-    m_local_retire_prior_to = m_local_next_sequence;
-    issue_local_ids();
-    if (m_local_id_count == before)
-    {
-        m_local_retire_prior_to = earlier;
-        return false;
-    }
-    return true;
+    return m_confirmed && m_peer_known && m_state == QuicConnectionState::Established &&
+           m_cids.rotate(0U, m_peer.active_connection_id_limit);
 }
 
 void QuicConnection::finish() noexcept
 {
     m_state = QuicConnectionState::Closed;
-    if (m_config.ids != nullptr)
-    {
-        for (usize index = 0U; index < m_local_id_count; ++index)
-        {
-            if (m_local_ids[index].id.bytes != 0U)
-            {
-                m_config.ids->retire(m_local_ids[index].id.view());
-            }
-        }
-        for (usize index = 0U; index < m_peer_cid_count; ++index)
-        {
-            unwatch(m_peer_cids[index]);
-            m_peer_cids[index].used = false;
-        }
-    }
-    m_local_id_count = 0U;
+    m_cids.finish();
 }
 
 void QuicConnection::version_negotiation(const QuicHeader& header, cont::ConstSpan<u8> packet) noexcept
 {
     // Only a client before any packet of its server opened, for the IDs it sent (RFC 9000 section 6.2).
     if (m_config.side != crypto::QuicSide::Client || m_peer_scid_known ||
-        !same_bytes(header.dcid, m_local_cid.view()) || !same_bytes(header.scid, m_initial_dcid.view()))
+        !wire::wire_same_bytes(header.dcid, m_local_cid.view()) ||
+        !wire::wire_same_bytes(header.scid, m_initial_dcid.view()))
     {
         ++m_counters.packets_dropped;
         return;
@@ -1845,8 +1549,8 @@ bool QuicConnection::retry(const QuicHeader& header, cont::ConstSpan<u8> packet,
     // a tag that verifies against the first Destination Connection ID (RFC 9000 sections 7.2 and 17.2.5.2).
     const usize body = 1U + 4U + 1U + header.dcid.size() + 1U + header.scid.size();
     if (m_retried || m_peer_scid_known || header.version != static_cast<u32>(m_config.version) ||
-        !same_bytes(header.dcid, m_local_cid.view()) || same_bytes(header.scid, m_initial_dcid.view()) ||
-        packet.size() <= body + crypto::kQuicTagBytes ||
+        !wire::wire_same_bytes(header.dcid, m_local_cid.view()) ||
+        wire::wire_same_bytes(header.scid, m_initial_dcid.view()) || packet.size() <= body + crypto::kQuicTagBytes ||
         packet.size() - body - crypto::kQuicTagBytes > sizeof(m_token) ||
         crypto::quic_retry_verify(m_config.version, m_original_dcid.view(), packet) != crypto::CryptoError::None)
     {
@@ -1991,13 +1695,9 @@ bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
     {
         return false;
     }
-    bool ids_owed = false;
-    for (usize local = 0U; local < m_local_id_count; ++local)
-    {
-        ids_owed = ids_owed || m_local_ids[local].owed;
-    }
-    return m_handshake_done_owed || m_ping_owed || m_probe_fill || m_retire_owed_count > 0U ||
-           (m_frame_count < m_config.sent_frames && (m_streams.has_frame() || ids_owed || m_new_token_owed)) ||
+    return m_handshake_done_owed || m_ping_owed || m_probe_fill || m_cids.retirement_owed() ||
+           (m_frame_count < m_config.sent_frames &&
+            (m_streams.has_frame() || m_cids.local_owed() || m_new_token_owed)) ||
            datagram_ready(now_ns);
 }
 
@@ -2168,15 +1868,9 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
             }
             else if (frame.kind == kRecordNewId)
             {
-                // Resent until acknowledged while held (section 13.3), a rotated one too: it asks the peer to retire.
-                for (usize local = 0U; local < m_local_id_count; ++local)
+                if (how != Settle::Discarded)
                 {
-                    LocalCid& held = m_local_ids[local];
-                    if (held.sequence == frame.frame.value)
-                    {
-                        held.acked = held.acked || how == Settle::Acked;
-                        held.owed = !held.acked && (held.owed || how == Settle::Lost);
-                    }
+                    m_cids.local_settled(frame.frame.stream_id, frame.frame.value, how == Settle::Acked);
                 }
             }
             else if (frame.kind == kRecordObserved)
@@ -2189,14 +1883,7 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
             }
             else
             {
-                if (how == Settle::Lost)
-                {
-                    m_retire_owed[m_retire_owed_count++] = frame.frame.value; // outstanding, so it fits
-                }
-                else
-                {
-                    --m_retire_outstanding;
-                }
+                m_cids.retirement_settled(frame.frame.stream_id, frame.frame.value, how != Settle::Lost);
             }
             frame.kind = 0U;
         }
@@ -2289,42 +1976,46 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
                 m_new_token_owed = false;
             }
         }
-        while (m_retire_owed_count > 0U && m_frame_count < m_config.sent_frames)
+        // Path ID 0's IDs go in NEW_CONNECTION_ID and RETIRE_CONNECTION_ID frames, any other's in their PATH_ forms
+        // (RFC 10069 section 3.2); a record names the frame's path ID and sequence.
+        u64 path_id = 0U;
+        u64 sequence = 0U;
+        while (m_frame_count < m_config.sent_frames && m_cids.next_retirement(path_id, sequence))
         {
             QuicFrame retire;
-            retire.kind = QuicFrameKind::RetireConnectionId;
-            retire.sequence = m_retire_owed[m_retire_owed_count - 1U];
+            retire.kind = (path_id == 0U) ? QuicFrameKind::RetireConnectionId : QuicFrameKind::PathRetireConnectionId;
+            retire.path_id = path_id;
+            retire.sequence = sequence;
             if (!put(retire))
             {
                 break;
             }
             QuicStreamRecord retired;
-            retired.value = retire.sequence;
+            retired.stream_id = path_id;
+            retired.value = sequence;
             static_cast<void>(record(space, packet, kRecordRetire, retired, written));
-            --m_retire_owed_count;
+            m_cids.retirement_sent(path_id, sequence);
         }
-        for (usize local = 0U; local < m_local_id_count && m_frame_count < m_config.sent_frames; ++local)
+        const QuicLocalCid* owed = nullptr;
+        while (m_frame_count < m_config.sent_frames && (owed = m_cids.next_owed(path_id)) != nullptr)
         {
-            LocalCid& held = m_local_ids[local];
-            if (!held.owed)
-            {
-                continue;
-            }
             // Retire Prior To never passes the frame's own sequence (section 19.15): a rotated ID carries its own.
             QuicFrame issued;
-            issued.kind = QuicFrameKind::NewConnectionId;
-            issued.sequence = held.sequence;
-            issued.retire_prior_to = min_u64(m_local_retire_prior_to, held.sequence);
-            issued.data = held.id.view();
-            issued.reset_token = cont::ConstSpan<u8>(held.reset_token, kQuicResetTokenBytes);
+            issued.kind = (path_id == 0U) ? QuicFrameKind::NewConnectionId : QuicFrameKind::PathNewConnectionId;
+            issued.path_id = path_id;
+            issued.sequence = owed->sequence;
+            issued.retire_prior_to = min_u64(m_cids.local_retire_prior_to(path_id), owed->sequence);
+            issued.data = owed->id.view();
+            issued.reset_token = cont::ConstSpan<u8>(owed->reset_token, kQuicResetTokenBytes);
             if (!put(issued))
             {
                 break;
             }
             QuicStreamRecord sent;
-            sent.value = held.sequence;
+            sent.stream_id = path_id;
+            sent.value = owed->sequence;
             static_cast<void>(record(space, packet, kRecordNewId, sent, written));
-            held.owed = false;
+            m_cids.local_sent(path_id, owed->sequence);
         }
     }
     QuicSendBuffer& out = m_levels[index].out;
@@ -2537,13 +2228,10 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     // 0-RTT packets keep the original version (RFC 9369 section 4.1).
     spec.version = static_cast<u32>(early ? m_protection.original_version() : m_protection.version());
     const bool off_path = m_send_path != m_paths.active();
-    const usize cid = off_path ? peer_index(m_paths.peer_sequence(m_send_path)) : m_peer_cid_current;
-    spec.dcid = (off_path && cid < m_peer_cid_count) ? m_peer_cids[cid].id.view() : peer_cid();
-    if (cid < m_peer_cid_count && !m_peer_cids[cid].used)
-    {
-        m_peer_cids[cid].used = true; // its token is checked from now on (section 10.3.1)
-        watch(m_peer_cids[cid]);
-    }
+    const u64 sequence = off_path ? m_paths.peer_sequence(m_send_path) : m_cids.current();
+    const QuicPeerCid* peer = m_cids.peer(0U, sequence);
+    spec.dcid = (off_path && peer != nullptr) ? peer->id.view() : peer_cid();
+    m_cids.use(0U, sequence); // its token is checked from now on (section 10.3.1)
     spec.scid = m_local_cid.view();
     if (space == QuicSpace::Initial && m_config.side == crypto::QuicSide::Client)
     {
@@ -3097,8 +2785,7 @@ void QuicConnection::admit_path(usize datagram_bytes, u64 now_ns) noexcept
     m_receive_path = index;
     m_paths.on_received(index, datagram_bytes, now_ns);
     const usize active = m_paths.active();
-    const u64 local =
-        (m_packet_local < m_local_id_count) ? m_local_ids[m_packet_local].sequence : m_paths.local_sequence(active);
+    const u64 local = m_packet_local.found() ? m_packet_local.sequence : m_paths.local_sequence(active);
     m_paths.set_local_sequence(index, local);
     // A peer that kept its connection ID did not choose to move (a NAT rebinding): this side may keep its own. One
     // that changed it gets an ID this side has not used, never one another path sends to (section 9.5).
@@ -3111,13 +2798,12 @@ void QuicConnection::address_paths(u64 now_ns) noexcept
 {
     for (usize index = 0U; index < kQuicMaxPaths; ++index)
     {
-        if (!m_paths.used(index) || index == m_paths.active() ||
-            peer_index(m_paths.peer_sequence(index)) < m_peer_cid_count)
+        if (!m_paths.used(index) || index == m_paths.active() || peer_held(m_paths.peer_sequence(index)))
         {
             continue;
         }
         m_paths.set_peer_sequence(index, unused_peer_sequence(index));
-        if (peer_index(m_paths.peer_sequence(index)) < m_peer_cid_count)
+        if (peer_held(m_paths.peer_sequence(index)))
         {
             continue; // the peer's next non-probing packet there moves the connection
         }
@@ -3134,7 +2820,7 @@ void QuicConnection::address_paths(u64 now_ns) noexcept
         for (usize other = 0U; other < kQuicMaxPaths; ++other)
         {
             const u64 sequence = path_sequence(other);
-            bool frees = m_paths.used(other) && spare(other) && peer_index(sequence) < m_peer_cid_count &&
+            bool frees = m_paths.used(other) && spare(other) && peer_held(sequence) &&
                          sequence != path_sequence(m_paths.active());
             for (usize holder = 0U; holder < kQuicMaxPaths && frees; ++holder)
             {
@@ -3169,10 +2855,11 @@ usize QuicConnection::take_path(const QuicPath& path, u64 now_ns) noexcept
 
 u64 QuicConnection::unused_peer_sequence(usize index) const noexcept
 {
-    for (usize held = 0U; held < m_peer_cid_count; ++held)
+    for (usize held = 0U; held < m_cids.peer_count(); ++held)
     {
-        const u64 sequence = m_peer_cids[held].sequence;
-        bool taken = m_peer_cids[held].used;
+        const QuicPeerCid& id = *m_cids.peer_at(0U, held);
+        const u64 sequence = id.sequence;
+        bool taken = id.used;
         for (usize other = 0U; other < kQuicMaxPaths; ++other)
         {
             taken = taken || (other != index && m_paths.used(other) && path_sequence(other) == sequence);
@@ -3225,11 +2912,7 @@ QuicMigration QuicConnection::migrate(const QuicPath& path, u64 now_ns) noexcept
 void QuicConnection::reannounce_local_ids() noexcept
 {
     // The server answers on the new path only with an ID of this side's it holds unused (section 9.5).
-    for (usize local = 0U; local < m_local_id_count; ++local)
-    {
-        LocalCid& held = m_local_ids[local];
-        held.owed = held.owed || !held.acked;
-    }
+    m_cids.reannounce();
 }
 
 QuicMigration QuicConnection::open_own_path(const QuicPath& path, u64 now_ns, usize& index) noexcept
@@ -3263,7 +2946,7 @@ QuicMigration QuicConnection::open_own_path(const QuicPath& path, u64 now_ns, us
 QuicMigration QuicConnection::open_path(const QuicPath& path, u64 now_ns, usize& index, bool wait_for_id) noexcept
 {
     index = m_paths.find(path);
-    const bool addressed = index != kQuicNoPath && peer_index(m_paths.peer_sequence(index)) < m_peer_cid_count;
+    const bool addressed = index != kQuicNoPath && peer_held(m_paths.peer_sequence(index));
     if (!addressed && !wait_for_id && unused_peer_sequence(index) == kNoSequence)
     {
         index = kQuicNoPath;
@@ -3295,11 +2978,11 @@ void QuicConnection::follow_packet(u64 number, bool probing, u64 now_ns) noexcep
     {
         return;
     }
-    if (m_packet_local < m_local_id_count)
+    if (m_packet_local.found())
     {
-        m_paths.set_local_sequence(path, m_local_ids[m_packet_local].sequence);
+        m_paths.set_local_sequence(path, m_packet_local.sequence);
     }
-    const bool sendable = peer_index(path_sequence(path)) < m_peer_cid_count;
+    const bool sendable = peer_held(path_sequence(path));
     if (!probing && (m_largest_non_probing == kQuicNoPacket || number > m_largest_non_probing))
     {
         // Only the highest-numbered non-probing packet moves the path, so a reordered one never moves it back.
@@ -3372,8 +3055,7 @@ void QuicConnection::move_to(usize index, u64 now_ns) noexcept
         // unexpanded challenge validated still owes its expanded one, which goes on.
         m_paths.abandon(index);
     }
-    const usize cid = peer_index(m_paths.peer_sequence(index));
-    m_peer_cid_current = (cid < m_peer_cid_count) ? cid : m_peer_cid_current;
+    m_cids.set_current(0U, m_paths.peer_sequence(index));
     ++m_counters.migrations;
     m_peer_followed = false;
     follow_congestion(now_ns);
@@ -3531,20 +3213,16 @@ void QuicConnection::drop_path(usize index, u64 now_ns) noexcept
         shared = shared || (other != index && m_paths.used(other) && path_sequence(other) == sequence);
     }
     m_paths.drop(index);
-    const usize held = peer_index(sequence);
-    if (shared || held == m_peer_cid_count || !m_peer_cids[held].used)
+    const QuicPeerCid* held = m_cids.peer(0U, sequence);
+    if (shared || held == nullptr || !held->used)
     {
         return;
     }
     // An ID sent to on the forgotten path alone is retired, so that no later path is linked to it (section 9.5).
-    unwatch(m_peer_cids[held]);
-    for (usize at = held; at + 1U < m_peer_cid_count; ++at)
+    if (!m_cids.retire_peer(0U, sequence, m_local.active_connection_id_limit))
     {
-        m_peer_cids[at] = m_peer_cids[at + 1U];
+        fail(QuicTransportError::ConnectionIdLimitError, 0U, now_ns);
     }
-    --m_peer_cid_count;
-    m_peer_cid_current -= (m_peer_cid_current > held) ? 1U : 0U;
-    static_cast<void>(owe_retire(sequence, now_ns));
 }
 
 u64 QuicConnection::path_sequence(usize index) const noexcept
@@ -3553,19 +3231,7 @@ u64 QuicConnection::path_sequence(usize index) const noexcept
     {
         return m_paths.peer_sequence(index);
     }
-    return (m_peer_cid_current < m_peer_cid_count) ? m_peer_cids[m_peer_cid_current].sequence : kNoSequence;
-}
-
-usize QuicConnection::peer_index(u64 sequence) const noexcept
-{
-    for (usize index = 0U; index < m_peer_cid_count; ++index)
-    {
-        if (m_peer_cids[index].sequence == sequence)
-        {
-            return index;
-        }
-    }
-    return m_peer_cid_count;
+    return m_cids.current();
 }
 
 bool QuicConnection::path_sendable(usize index) const noexcept
@@ -3573,7 +3239,7 @@ bool QuicConnection::path_sendable(usize index) const noexcept
     const usize application = quic_space_index(QuicSpace::Application);
     return m_state == QuicConnectionState::Established && m_confirmed && !m_space_gone[application] &&
            m_protection.can_send(QuicPacketType::OneRtt) && m_recovery->can_send(QuicSpace::Application) &&
-           m_paths.credit(index) >= kMinUsefulPacket && peer_index(path_sequence(index)) < m_peer_cid_count;
+           m_paths.credit(index) >= kMinUsefulPacket && peer_held(path_sequence(index));
 }
 
 bool QuicConnection::path_held(usize index, u32 held_sockets) const noexcept
@@ -3611,11 +3277,9 @@ u64 QuicConnection::path_timer_ns() const noexcept
 
 cont::ConstSpan<u8> QuicConnection::peer_cid() const noexcept
 {
-    if (m_peer_cid_count == 0U)
-    {
-        return m_initial_dcid.view(); // a client before its server's first packet
-    }
-    return m_peer_cids[m_peer_cid_current].id.view();
+    // A client before its server's first packet sends to its first Destination Connection ID.
+    const QuicPeerCid* current = m_cids.peer(0U, m_cids.current());
+    return (current == nullptr) ? m_initial_dcid.view() : current->id.view();
 }
 
 u64 QuicConnection::next_packet_number(QuicSpace space) const noexcept

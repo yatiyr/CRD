@@ -41,6 +41,7 @@ add_executable(crd-net-tests
     test_quic_client.cpp
     test_quic_congestion.cpp
     test_quic_connection.cpp
+    test_quic_connection_ids.cpp
     test_quic_datagram.cpp
     test_quic_ecn.cpp
     test_quic_frame.cpp

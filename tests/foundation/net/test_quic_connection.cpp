@@ -1324,6 +1324,7 @@ struct RawClient
     u64 close_code = 0U;
     bool retire_seen = false;
     u64 retire_sequence = 0U;
+    usize retirements = 0U; // RETIRE_CONNECTION_ID frames read
     bool path_response_seen = false;
     bool seen[4096] = {};      // the server's 1-RTT packet numbers received
     usize eliciting_seen = 0U; // the server's ack-eliciting 1-RTT packets received
@@ -1593,6 +1594,7 @@ private:
             case QuicFrameKind::RetireConnectionId:
                 raw.retire_seen = true;
                 raw.retire_sequence = frame.sequence;
+                ++raw.retirements;
                 break;
             case QuicFrameKind::NewConnectionId:
                 REQUIRE(frame.sequence < 8U);
@@ -2048,13 +2050,22 @@ TEST_CASE("QUIC connection: the peer's connection IDs are held to the limit and 
         CHECK(run.server.peer_cid_count() == 1U);
         CHECK(same(run.server.peer_cid(), ConstSpan<u8>(id2, sizeof(id2))));
         CHECK(run.raw.retire_seen);
-        issue(run, 1U, 0U, id3, token1); // below Retire Prior To: retired at once
-        CHECK(run.raw.retire_sequence == 1U);
+        const usize retirements = run.raw.retirements;
+        issue(run, 1U, 0U, id3, token1); // below Retire Prior To, its retirement in flight: not retired again
         CHECK(run.server.state() == QuicConnectionState::Established);
-        // Retirements owed or unacknowledged stay within twice the limit: the fourth is allowed, the fifth refused.
-        issue(run, 1U, 0U, id3, token1);
+        CHECK(run.raw.retirements == retirements);
+        // Retirements owed or unacknowledged stay within twice the limit, counted once per ID (section 5.1.2): with 0
+        // and 1 in flight, the third and the fourth are allowed, the fifth refused.
+        constexpr u8 id4[8] = {0x44U, 4U};
+        constexpr u8 id5[8] = {0x55U, 5U};
+        constexpr u8 token3[kQuicResetTokenBytes] = {0xA3U};
+        constexpr u8 token4[kQuicResetTokenBytes] = {0xA4U};
+        constexpr u8 token5[kQuicResetTokenBytes] = {0xA5U};
+        issue(run, 3U, 3U, id3, token3);
+        issue(run, 4U, 4U, id4, token4);
         CHECK(run.server.state() == QuicConnectionState::Established);
-        issue(run, 1U, 0U, id3, token1);
+        CHECK(run.raw.retire_sequence == 3U);
+        issue(run, 5U, 5U, id5, token5);
         CHECK(run.server.close_info().error_code == code(QuicTransportError::ConnectionIdLimitError));
     }
     {

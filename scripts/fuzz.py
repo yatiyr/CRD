@@ -89,6 +89,8 @@ TARGETS = {
                        'executable': 'tests/net/fuzz/crd-fuzz-net-quic-codec'},
     'net-quic-packet': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-packet',
                         'executable': 'tests/net/fuzz/crd-fuzz-net-quic-packet'},
+    'net-quic-cids': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-cids',
+                      'executable': 'tests/net/fuzz/crd-fuzz-net-quic-cids'},
     'net-quic-ecn': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-ecn',
                      'executable': 'tests/net/fuzz/crd-fuzz-net-quic-ecn'},
     'net-quic-pmtu': {'corpus': 'tests/foundation/net/fuzz/corpus-quic-pmtu',

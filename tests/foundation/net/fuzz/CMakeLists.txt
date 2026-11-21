@@ -50,6 +50,15 @@ crd_fuzz_target(crd-fuzz-net-quic-recovery
 crd_fuzz_target(crd-fuzz-net-quic-ecn
     SOURCES fuzz_quic_ecn.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-ecn")
 
+# A QUIC connection's connection IDs (NET-PATH).
+#   crd-fuzz-net-quic-cids   any spaces opened and closed, the peer's frames with fresh, gapped, repeated or old
+#                            sequences, any Retire Prior To and reused or crossed IDs and tokens, retirements sent and
+#                            settled, IDs used, this side's issued, topped up, rotated, retired, sent and settled, on one
+#                            QuicCids against a model of every path ID's space: every verdict restated, IDs unique in
+#                            the connection, retirements bounded, the host routing and watching exactly what is held.
+crd_fuzz_target(crd-fuzz-net-quic-cids
+    SOURCES fuzz_quic_cids.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-cids")
+
 # QUIC's path MTU search (NET-PATH).
 #   crd-fuzz-net-quic-pmtu   any probes asked and sent, probe settlements in flight, stale, spurious or forged, other
 #                            packets of any size acknowledged or lost, detections, lowered ceilings, time and new paths
