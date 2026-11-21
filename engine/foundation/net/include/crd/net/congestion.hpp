@@ -4,7 +4,7 @@
 // Sources: RFC 9002 section 7 and appendix B, RFC 9438 (CUBIC), RFC 9406 (HyStart++), RFC 8985 section 6,
 // draft-ietf-ccwg-bbr-07 (BBRv3), draft-briscoe-iccrg-prague-congestion-control-04 (Prague) with RFC 9331 section 4,
 // draft-ietf-ccwg-rfc8298bis-screamv2-03 (SCReAM v2) with RFC 6817's base delay, draft-ietf-rmcat-gcc-02 (GCC) as
-// libwebrtc's send side runs it.
+// libwebrtc's send side runs it, RFC 6356 (LIA, coupled across a multipath connection's paths).
 //
 //   interface   CongestionController is what every controller is to a connection: it sees each packet counted in
 //               flight leave and be acknowledged or lost, each ACK frame's end with the RTT estimate, the ECN feedback
@@ -53,6 +53,12 @@
 //               and receive spacing sets the rate at once (the climb takes seconds, not a minute), filled with padding
 //               when the source has too little (probe_bytes()); and a probe back after a large drop, or every 5 s,
 //               while the source is application limited.
+//   coupled     RFC 6356's Linked Increases Algorithm for the paths of one multipath connection (RFC 10069 section
+//               5.3), which may share a bottleneck: NewReno's controllers of a CongestionCoupling grow in congestion
+//               avoidance by min(alpha * acked * MSS / cwnd_total, acked * MSS / cwnd_i) (equations 1 and 2) and are
+//               NewReno in everything else (slow start, the reduction, recovery). Taken as one divisor, cwnd_total /
+//               alpha = (SUM s_j)^2 / MAX (s_j^2 / cwnd_j) with s_j = cwnd_j * rtt_max / rtt_j (section 4.2's
+//               scaling), computed exactly in integers at every ACK frame; one member alone is NewReno to the byte.
 //   pacing      Pacer spreads packets at the controller's rate (RFC 9002 section 7.7: 1.25 window per smoothed RTT
 //               for the window controllers, BBR's own gains of its bandwidth, Prague's window per smoothed RTT, doubled
 //               in early slow start) with a burst of the initial window (BBR:
@@ -70,8 +76,9 @@ namespace crd::net
 {
 // 2 added BBRv3 and the delivery rate samples; 3 added Prague and the ECN feedback's extent (on_ecn); 4 added SCReAM
 // v2 and the source's target rate; 5 added GCC and the peer's receive time of a packet; 6 added GCC's probing and
-// probe_bytes(). A policy of an earlier version still runs (a GCC of version 5 does not probe).
-inline constexpr u32 kCongestionInterfaceVersion = 6U;
+// probe_bytes(); 7 added coupling (RFC 6356). A policy of an earlier version still runs (a GCC of version 5 does not
+// probe, a NewReno of version 6 is not coupled).
+inline constexpr u32 kCongestionInterfaceVersion = 7U;
 inline constexpr u64 kCongestionMaxWindow = u64{1} << 32U; // bytes: past 100 Gbit/s over 300 ms
 inline constexpr u32 kCongestionMaxInitialPackets = 64U;
 inline constexpr u32 kCongestionMinPacingGain = 100U; // percent of window per smoothed RTT
@@ -129,6 +136,10 @@ struct CongestionPolicy
     bool probe = true;
     bool probe_alr = false;
     bool probe_initial = false;
+    // Version 7: NewReno coupled with the other paths of its CongestionCoupling (RFC 6356's LIA), for paths that may
+    // share a bottleneck; a path that never shares one keeps its own window (false). NewReno alone: RFC 6356 extends
+    // Reno's congestion avoidance, and defines no coupled CUBIC, BBR, Prague or delay-based controller.
+    bool coupled = false;
 };
 
 // RFC 9002 section 7.2's initial window, min(10 * max_datagram, max(14720, 2 * max_datagram)) for 10 initial packets,
@@ -271,15 +282,60 @@ struct CongestionSlot
     alignas(16) u8 bytes[kCongestionSlotBytes];
 };
 
+class CongestionCoupling;
+
 // Builds `policy`'s controller in `slot` for datagrams of `max_datagram` bytes, starting from `seed` when given (a
 // live swap: its window and slow start threshold carry over, clamped to this policy's bounds). It reads `delivery`,
 // the connection's sampler, which outlives it, and BBR may mark it application limited (ProbeRTT); `entropy` seeds
-// BBR's randomised probing. Null, building nothing, for a policy congestion_policy_valid() refuses or a datagram size
-// under kQuicMinInitialDatagram. The caller destroys the controller (its destructor) before building another in the
-// slot.
+// BBR's randomised probing. A coupled policy's controller joins `coupling` when given (a lone path without one) and
+// leaves it in its destructor. Null, building nothing, for a policy congestion_policy_valid() refuses, a datagram size
+// under kQuicMinInitialDatagram or a full coupling. The caller destroys the controller (its destructor) before
+// building another in the slot.
 [[nodiscard]] CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_datagram,
                                                     const CongestionState* seed, CongestionSlot& slot,
-                                                    DeliveryRateSampler& delivery, u64 entropy) noexcept;
+                                                    DeliveryRateSampler& delivery, u64 entropy,
+                                                    CongestionCoupling* coupling = nullptr) noexcept;
+
+// The paths of one connection whose coupled controllers grow together (RFC 6356). A member counts with min(cwnd_i,
+// flight_size_i) (section 3: an application-limited or idle path counts what it has in flight; after a reduction the
+// window is ssthresh already) once it has an RTT sample; one with neither counts nothing. The asking member counts
+// with its own window and smoothed RTT. An RTT under 2^-kCouplingRttRatioBits of the largest counts as that fraction
+// of it, which bounds the integers (an RTT that much shorter dominates alpha anyway). It outlives its members.
+inline constexpr usize kCongestionCouplingMembers = 4U; // kQuicMaxPaths: one per path slot
+inline constexpr u32 kCouplingRttRatioBits = 14U;
+inline constexpr usize kCongestionNoMember = ~usize{0};
+
+class CongestionCoupling
+{
+public:
+    CongestionCoupling() noexcept = default;
+    ~CongestionCoupling() = default;
+    CongestionCoupling(const CongestionCoupling&) = delete;
+    CongestionCoupling& operator=(const CongestionCoupling&) = delete;
+    CongestionCoupling(CongestionCoupling&&) = delete;
+    CongestionCoupling& operator=(CongestionCoupling&&) = delete;
+
+    // A controller joins and leaves (make_congestion and its destructor): its member index, kCongestionNoMember when
+    // every one is taken.
+    [[nodiscard]] usize join(const CongestionController& member) noexcept;
+    void leave(usize member) noexcept;
+    // What `member` has in flight (at each packet sent and ACK frame's end) and its smoothed RTT (0 until sampled).
+    void report(usize member, u64 flight, u64 rtt_ns) noexcept;
+    [[nodiscard]] usize members() const noexcept;
+
+    // RFC 6356's cwnd_total / alpha for `member` growing from `window` at `rtt_ns`: the window its congestion
+    // avoidance divides acked * MSS by, at least `window` (equation 1's minimum).
+    [[nodiscard]] u64 divisor(usize member, u64 window, u64 rtt_ns) const noexcept;
+
+private:
+    struct Member
+    {
+        const CongestionController* controller = nullptr;
+        u64 flight = 0U;
+        u64 rtt_ns = 0U;
+    };
+    Member m_members[kCongestionCouplingMembers];
+};
 
 // Packets spread at a rate: credit accrues at the rate up to a burst, a packet goes while any credit is left and
 // may take it below zero, and the next goes once the debt is paid. Credit is kept in byte-nanoseconds per second,

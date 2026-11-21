@@ -319,7 +319,7 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
                                              cont::Span<QuicSentEntry>(entries + per_space, per_space),
                                              cont::Span<QuicSentEntry>(entries + (2U * per_space), per_space));
     // The policy, the sizes and the handover were checked (config_valid).
-    static_cast<void>(m_first_control.start(path_config(config), config.path, entropy()));
+    static_cast<void>(m_first_control.start(path_config(config), config.path, entropy(), &m_coupling));
     m_datagram_bytes = m_first_control.datagram_bytes();
     m_paths.open(config.path, false, 0U);
     m_frames = frames;

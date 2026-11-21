@@ -139,8 +139,9 @@ public:
         m_acked += packet.bytes;
     }
 
-    void on_ack_end(const QuicRtt& rtt, bool sampled, u64 /*in_flight*/, u64 now_ns) noexcept override
+    void on_ack_end(const QuicRtt& rtt, bool sampled, u64 in_flight, u64 now_ns) noexcept override
     {
+        ack_ended(rtt, in_flight);
         if (sampled && hystart_running())
         {
             m_round_min_ns = min_u64(m_round_min_ns, rtt.latest_ns);
@@ -282,6 +283,8 @@ protected:
     virtual void sent(const CongestionPacket& /*packet*/, u64 /*in_flight*/, u64 /*now_ns*/) noexcept
     {
     }
+    // An ACK frame's end, before the window grows: the estimate and what is left in flight.
+    virtual void ack_ended(const QuicRtt& /*rtt*/, u64 /*in_flight*/) noexcept {}
     // m_datagram changed.
     virtual void resized() noexcept {}
     // A round trip ended with the ACK frame of `now_ns`.
@@ -448,21 +451,61 @@ private:
     bool m_undoable = false;
 };
 
-// RFC 9002 appendix B.
+// RFC 9002 appendix B; coupled, RFC 6356's LIA.
 class NewReno final : public WindowController
 {
 public:
     using WindowController::WindowController;
+    NewReno(const NewReno&) = delete;
+    NewReno& operator=(const NewReno&) = delete;
+    NewReno(NewReno&&) = delete;
+    NewReno& operator=(NewReno&&) = delete;
+    ~NewReno() override
+    {
+        if (m_coupling != nullptr)
+        {
+            m_coupling->leave(m_member);
+        }
+    }
+
+    // Joins `coupling`: false, staying alone, when it is full.
+    [[nodiscard]] bool couple(CongestionCoupling& coupling) noexcept
+    {
+        m_member = coupling.join(*this);
+        m_coupling = (m_member != kCongestionNoMember) ? &coupling : nullptr;
+        return m_coupling != nullptr;
+    }
 
     [[nodiscard]] CongestionAlgorithm algorithm() const noexcept override { return CongestionAlgorithm::NewReno; }
 
 protected:
-    void avoid(u64 acked, const QuicRtt& /*rtt*/, u64 /*now_ns*/) noexcept override
+    void avoid(u64 acked, const QuicRtt& rtt, u64 /*now_ns*/) noexcept override
     {
-        // One datagram per window acknowledged, its remainder carried.
+        // One datagram per window acknowledged, its remainder carried; coupled, per cwnd_total / alpha when that is
+        // larger (RFC 6356 equation 1). The carried remainder keeps every increase, which the RFC's floor of one byte
+        // where the quotient is 0 approximates.
+        const u64 divisor =
+            (m_coupling != nullptr) ? m_coupling->divisor(m_member, m_window, rtt.smoothed_ns) : m_window;
         const u64 total = acked * m_datagram + m_carry;
-        add_window(total / m_window);
-        m_carry = total % m_window;
+        add_window(total / divisor);
+        m_carry = total % divisor;
+    }
+
+    void sent(const CongestionPacket& /*packet*/, u64 in_flight, u64 /*now_ns*/) noexcept override
+    {
+        if (m_coupling != nullptr)
+        {
+            m_coupling->report(m_member, in_flight, m_rtt_ns);
+        }
+    }
+
+    void ack_ended(const QuicRtt& rtt, u64 in_flight) noexcept override
+    {
+        if (m_coupling != nullptr)
+        {
+            m_rtt_ns = rtt.sampled() ? rtt.smoothed_ns : 0U;
+            m_coupling->report(m_member, in_flight, m_rtt_ns);
+        }
     }
 
     void reduce(u64 /*now_ns*/) noexcept override
@@ -480,6 +523,9 @@ protected:
 private:
     u64 m_carry = 0U;
     u64 m_prior_carry = 0U;
+    CongestionCoupling* m_coupling = nullptr;
+    usize m_member = kCongestionNoMember;
+    u64 m_rtt_ns = 0U; // the smoothed RTT once sampled, as reported to the coupling
 };
 
 // RFC 9438, in bytes, with time in 2^-10 s steps.
@@ -3856,14 +3902,17 @@ bool congestion_policy_valid(const CongestionPolicy& policy) noexcept
     const bool gcc = policy.algorithm == CongestionAlgorithm::Gcc && policy.version >= 5U && policy.pacing &&
                      (policy.target_rate_max == 0U || policy.target_rate_min <= policy.target_rate_max);
     const bool algorithm = window || bbr || prague || scream || gcc;
-    return policy.version >= 1U && policy.version <= kCongestionInterfaceVersion && algorithm &&
+    // Coupling is version 7's and NewReno's alone (RFC 6356 extends Reno's congestion avoidance).
+    const bool coupling = policy.version < 7U || !policy.coupled || policy.algorithm == CongestionAlgorithm::NewReno;
+    return policy.version >= 1U && policy.version <= kCongestionInterfaceVersion && algorithm && coupling &&
            policy.minimum_packets >= 2U &&
            policy.initial_packets >= policy.minimum_packets && policy.initial_packets <= kCongestionMaxInitialPackets &&
            policy.pacing_gain >= kCongestionMinPacingGain && policy.pacing_gain <= kCongestionMaxPacingGain;
 }
 
 CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_datagram, const CongestionState* seed,
-                                      CongestionSlot& slot, DeliveryRateSampler& delivery, u64 entropy) noexcept
+                                      CongestionSlot& slot, DeliveryRateSampler& delivery, u64 entropy,
+                                      CongestionCoupling* coupling) noexcept
 {
     if (!congestion_policy_valid(policy) || max_datagram < kQuicMinInitialDatagram || max_datagram > kMaxDatagram)
     {
@@ -3899,7 +3948,13 @@ CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_da
     WindowController* made = nullptr;
     if (policy.algorithm == CongestionAlgorithm::NewReno)
     {
-        made = new (slot.bytes) NewReno(policy, max_datagram);
+        NewReno* const reno = new (slot.bytes) NewReno(policy, max_datagram);
+        if (policy.version >= 7U && policy.coupled && coupling != nullptr && !reno->couple(*coupling))
+        {
+            reno->~NewReno();
+            return nullptr;
+        }
+        made = reno;
     }
     else if (policy.algorithm == CongestionAlgorithm::Prague)
     {
@@ -3914,6 +3969,91 @@ CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_da
         made->seed(*seed);
     }
     return made;
+}
+
+// ---- Coupling (RFC 6356) ----
+
+usize CongestionCoupling::join(const CongestionController& member) noexcept
+{
+    for (usize index = 0U; index < kCongestionCouplingMembers; ++index)
+    {
+        if (m_members[index].controller == nullptr)
+        {
+            m_members[index] = Member{&member, 0U, 0U};
+            return index;
+        }
+    }
+    return kCongestionNoMember;
+}
+
+void CongestionCoupling::leave(usize member) noexcept
+{
+    if (member < kCongestionCouplingMembers)
+    {
+        m_members[member] = Member{};
+    }
+}
+
+void CongestionCoupling::report(usize member, u64 flight, u64 rtt_ns) noexcept
+{
+    if (member < kCongestionCouplingMembers)
+    {
+        m_members[member].flight = flight;
+        m_members[member].rtt_ns = rtt_ns;
+    }
+}
+
+usize CongestionCoupling::members() const noexcept
+{
+    usize count = 0U;
+    for (const Member& entry : m_members)
+    {
+        count += (entry.controller != nullptr) ? 1U : 0U;
+    }
+    return count;
+}
+
+u64 CongestionCoupling::divisor(usize member, u64 window, u64 rtt_ns) const noexcept
+{
+    u64 windows[kCongestionCouplingMembers] = {};
+    u64 rtts[kCongestionCouplingMembers] = {};
+    usize count = 0U;
+    u64 largest_rtt = 0U;
+    for (usize index = 0U; index < kCongestionCouplingMembers; ++index)
+    {
+        const Member& entry = m_members[index];
+        const bool self = index == member;
+        if (!self && entry.controller == nullptr)
+        {
+            continue;
+        }
+        const u64 counted = self ? window : min_u64(entry.controller->window(), entry.flight);
+        const u64 rtt = self ? rtt_ns : entry.rtt_ns;
+        if (counted == 0U || rtt == 0U)
+        {
+            continue;
+        }
+        windows[count] = counted;
+        rtts[count] = rtt;
+        ++count;
+        largest_rtt = max_u64(largest_rtt, rtt);
+    }
+    if (count == 0U)
+    {
+        return window;
+    }
+    // cwnd_total / alpha = (SUM s_j)^2 / MAX (s_j^2 / cwnd_j), s_j = cwnd_j * rtt_max / rtt_j: windows up to 2^32
+    // and RTT ratios up to 2^14 keep s_j under 2^46, s_j^2 / cwnd_j under 2^60 and the quotient under 16 windows.
+    const u64 floor_rtt = largest_rtt >> kCouplingRttRatioBits;
+    u64 sum = 0U;
+    u64 peak = 0U;
+    for (usize index = 0U; index < count; ++index)
+    {
+        const u64 scaled = multiply_divide(windows[index], largest_rtt, max_u64(rtts[index], floor_rtt));
+        sum += scaled;
+        peak = max_u64(peak, multiply_divide(scaled, scaled, windows[index]));
+    }
+    return max_u64(multiply_divide(sum, sum, peak), window);
 }
 
 // ---- Pacer ----

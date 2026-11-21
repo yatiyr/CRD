@@ -31,6 +31,7 @@ add_executable(crd-net-tests
     test_io_loop.cpp
     test_negotiation.cpp
     test_prague.cpp
+    test_coupled_congestion.cpp
     test_scream.cpp
     test_gcc.cpp
     test_gcc_probe.cpp

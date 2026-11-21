@@ -42,17 +42,20 @@ struct Link
 class Flow
 {
 public:
-    explicit Flow(const CongestionPolicy& policy, u64 rate, u64 one_way_ns, u64 buffer, u64 entropy = 7U)
-        : m_own{rate, buffer}, m_link(&m_own), m_one_way_ns(one_way_ns)
+    // A coupled policy's controller joins `coupling` (one multipath connection's paths), which outlives the flow.
+    explicit Flow(const CongestionPolicy& policy, u64 rate, u64 one_way_ns, u64 buffer, u64 entropy = 7U,
+                  CongestionCoupling* coupling = nullptr)
+        : m_own{rate, buffer}, m_link(&m_own), m_one_way_ns(one_way_ns), m_coupling(coupling)
     {
-        ctl = make_congestion(policy, kBottleneckMss, nullptr, m_slot, delivery, entropy);
+        ctl = make_congestion(policy, kBottleneckMss, nullptr, m_slot, delivery, entropy, coupling);
         REQUIRE(ctl != nullptr);
     }
     // A flow through `link`, which outlives it and which other flows may share (run_flows).
-    Flow(const CongestionPolicy& policy, Link& link, u64 one_way_ns, u64 entropy = 7U)
-        : m_link(&link), m_one_way_ns(one_way_ns)
+    Flow(const CongestionPolicy& policy, Link& link, u64 one_way_ns, u64 entropy = 7U,
+         CongestionCoupling* coupling = nullptr)
+        : m_link(&link), m_one_way_ns(one_way_ns), m_coupling(coupling)
     {
-        ctl = make_congestion(policy, kBottleneckMss, nullptr, m_slot, delivery, entropy);
+        ctl = make_congestion(policy, kBottleneckMss, nullptr, m_slot, delivery, entropy, coupling);
         REQUIRE(ctl != nullptr);
     }
     ~Flow() { ctl->~CongestionController(); }
@@ -64,7 +67,7 @@ public:
     {
         const CongestionState held = ctl->state();
         ctl->~CongestionController();
-        ctl = make_congestion(policy, kBottleneckMss, &held, m_slot, delivery, entropy);
+        ctl = make_congestion(policy, kBottleneckMss, &held, m_slot, delivery, entropy, m_coupling);
         REQUIRE(ctl != nullptr);
     }
 
@@ -290,6 +293,7 @@ private:
     Link m_own;
     Link* m_link;
     u64 m_one_way_ns;
+    CongestionCoupling* m_coupling = nullptr;
     u64 m_data = kInfiniteData;
     u64 m_frame_period_ns = 0U;
     u64 m_frame_ns = kNeverNs;

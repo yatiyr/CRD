@@ -71,8 +71,10 @@ public:
     QuicPathControl& operator=(QuicPathControl&&) = delete;
 
     // Builds the path's state for `path` from `config`, discarding any it held: false, building nothing, for a
-    // policy or a size make_congestion() refuses. `entropy` seeds the controller's randomised probing.
-    [[nodiscard]] bool start(const QuicPathControlConfig& config, const QuicPath& path, u64 entropy) noexcept;
+    // policy or a size make_congestion() refuses. `entropy` seeds the controller's randomised probing. A coupled
+    // policy's controllers join `coupling` (the connection's, which outlives the control) when given.
+    [[nodiscard]] bool start(const QuicPathControlConfig& config, const QuicPath& path, u64 entropy,
+                             CongestionCoupling* coupling = nullptr) noexcept;
     [[nodiscard]] bool started() const noexcept { return m_controller != nullptr; }
 
     // The 4-tuple the state was built on. bind() names another and keeps the state: a peer port not yet known, or a
@@ -165,6 +167,7 @@ private:
     QuicPath m_path;
     CongestionController* m_controller = nullptr; // built in m_controller_slot
     CongestionSlot m_controller_slot;
+    CongestionCoupling* m_coupling = nullptr;
     DeliveryRateSampler m_delivery; // every controller's delivery rate samples, stamped on each packet in flight
     Pacer m_pacer;
     u64 m_pace_timer_ns = kNeverNs;

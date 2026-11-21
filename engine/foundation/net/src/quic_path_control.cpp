@@ -62,7 +62,8 @@ QuicPathControl::~QuicPathControl() noexcept
     }
 }
 
-bool QuicPathControl::start(const QuicPathControlConfig& config, const QuicPath& path, u64 entropy) noexcept
+bool QuicPathControl::start(const QuicPathControlConfig& config, const QuicPath& path, u64 entropy,
+                            CongestionCoupling* coupling) noexcept
 {
     if (!congestion_policy_valid(config.congestion) || config.max_datagram_bytes < kQuicMinInitialDatagram ||
         config.base_datagram_bytes < kQuicPmtuFloor || config.base_datagram_bytes > config.max_datagram_bytes)
@@ -70,6 +71,7 @@ bool QuicPathControl::start(const QuicPathControlConfig& config, const QuicPath&
         return false;
     }
     m_config = config;
+    m_coupling = coupling;
     m_path = path;
     m_ceiling = 0U;
     m_handover = config.handover;
@@ -99,8 +101,8 @@ void QuicPathControl::build(u64 entropy) noexcept
     m_pacer = Pacer{};
     m_pace_timer_ns = kNeverNs;
     // The policy and the size were checked (start).
-    m_controller =
-        make_congestion(m_config.congestion, m_datagram_bytes, nullptr, m_controller_slot, m_delivery, entropy);
+    m_controller = make_congestion(m_config.congestion, m_datagram_bytes, nullptr, m_controller_slot, m_delivery,
+                                   entropy, m_coupling);
     m_ecn_unavailable = false;
     follow_ecn();
 }
@@ -142,7 +144,7 @@ bool QuicPathControl::set_congestion(const CongestionPolicy& policy, u64 entropy
     }
     const CongestionState held = m_controller->state();
     m_controller->~CongestionController();
-    m_controller = make_congestion(policy, m_datagram_bytes, &held, m_controller_slot, m_delivery, entropy);
+    m_controller = make_congestion(policy, m_datagram_bytes, &held, m_controller_slot, m_delivery, entropy, m_coupling);
     m_config.congestion = policy;
     m_ecn.set_codepoint(congestion_codepoint(policy));
     m_ecn_unavailable = false;

@@ -4,7 +4,8 @@
 //
 // Input: byte 0 picks the policy (bits 0 and 7: CUBIC, NewReno, BBRv3 or Prague, SCReAM v2 with bits 3 and 7, and GCC
 // with bits 2, 3 and 7, bit 1: HyStart++, bit 2: pacing, which BBR, Prague, SCReAM and GCC always have, bit 3: fast
-// convergence, bits 4 to 6: the initial window's packets; for SCReAM bit 0 is L4S and bit 1 jitter reduction); byte 1
+// convergence, for NewReno coupling, bits 4 to 6: the initial window's packets; for SCReAM bit 0 is L4S and bit 1
+// jitter reduction); byte 1
 // the datagram size step, for SCReAM its link loss tolerance (bit 0) and no delay target adjustment (bit 1), for
 // SCReAM and GCC target rate bounds (bit 2), and for GCC its probing off (bit 0), ALR probes (bit 1) and repeated
 // initial probes (bit 3).
@@ -32,11 +33,13 @@
 // maximum or 5 Mbit/s, one datagram at a time, with the probe's bytes over its window (less at the largest window),
 // and no other controller ever wants any. The sampler's delivered bytes are what was acknowledged. The pacer's
 // release time is never before now, its credit stays within one burst above zero and the last send's burst below, and
-// is positive at its release time.
+// is positive at its release time. A coupled NewReno is its coupling's one member until a swap, and a twin uncoupled
+// NewReno fed every same event keeps its state, window and pacing rate to the byte (RFC 6356: one path is Reno).
 #include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/congestion.hpp>
 
+#include <cstring>
 #include <new>
 
 namespace
@@ -65,7 +68,10 @@ struct Packet
 #endif
 struct World
 {
+    CongestionCoupling coupling; // a coupled NewReno's; it outlives both controllers
     CongestionSlot slot;
+    CongestionSlot twin_slot;
+    CongestionController* twin = nullptr; // the uncoupled NewReno beside a coupled one, until a swap
     DeliveryRateSampler delivery;
     CongestionPolicy policy;
     u64 datagram = 1200U;
@@ -91,11 +97,31 @@ struct World
         {
             ctl->~CongestionController();
         }
+        drop_twin();
+    }
+
+    void drop_twin()
+    {
+        if (twin != nullptr)
+        {
+            twin->~CongestionController();
+            twin = nullptr;
+        }
     }
 };
 #if CRD_COMPILER_MSVC
 #pragma warning(pop)
 #endif
+
+// Feeds an event to the controller and to its twin.
+template <typename Event> void each(World& w, Event event)
+{
+    event(*w.ctl);
+    if (w.twin != nullptr)
+    {
+        event(*w.twin);
+    }
+}
 
 [[nodiscard]] bool is_bbr(const World& w)
 {
@@ -209,6 +235,17 @@ void check(const World& w)
 {
     const CongestionState state = w.ctl->state();
     const u64 minimum = w.policy.minimum_packets * w.datagram;
+    CRD_FUZZ_REQUIRE(w.coupling.members() == (w.policy.coupled ? 1U : 0U));
+    if (w.twin != nullptr)
+    {
+        const CongestionState alone = w.twin->state();
+        CRD_FUZZ_REQUIRE(state.window == alone.window && state.slow_start_threshold == alone.slow_start_threshold &&
+                         state.phase == alone.phase && state.recovery_start_ns == alone.recovery_start_ns &&
+                         state.reductions == alone.reductions && state.undone == alone.undone &&
+                         state.limited == alone.limited);
+        QuicRtt rtt;
+        CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) == w.twin->pacing_rate(rtt) && w.ctl->burst() == w.twin->burst());
+    }
     if (is_scream(w))
     {
         check_scream(w, state);
@@ -314,7 +351,7 @@ void run(World& w, u8 op, u8 parameter)
             p.sent.delivery = w.delivery.on_sent(p.sent.bytes, w.in_flight, w.now);
             CRD_FUZZ_REQUIRE(p.sent.delivery.in_flight == w.in_flight && p.sent.delivery.delivered == w.acked);
             const CongestionPhase phase = w.ctl->state().phase;
-            w.ctl->on_sent(p.sent, w.in_flight, w.now);
+            each(w, [&](CongestionController& c) { c.on_sent(p.sent, w.in_flight, w.now); });
             // BBR restarting from idle may end ProbeRTT and restore its window (draft section 5.4).
             may_grow = is_bbr(w) && (phase == CongestionPhase::ProbeRtt || phase == CongestionPhase::Recovery) &&
                        w.ctl->state().phase != CongestionPhase::ProbeRtt;
@@ -337,7 +374,7 @@ void run(World& w, u8 op, u8 parameter)
                     p->sent.received_ns = ((parameter & 0x20U) != 0U)
                                               ? p->sent.sent_ns + offset + (k + 1U) * (parameter >> 2U) * kMs
                                               : kNeverNs;
-                    w.ctl->on_acked(p->sent, w.now);
+                    each(w, [&](CongestionController& c) { c.on_acked(p->sent, w.now); });
                 }
             }
             QuicRtt rtt;
@@ -349,7 +386,7 @@ void run(World& w, u8 op, u8 parameter)
             const DeliverySample& sample = w.delivery.sample();
             CRD_FUZZ_REQUIRE(sample.rate == 0U || (sample.acked && sample.interval_ns >= (sampled ? rtt.min_ns : 0U)));
             w.max_rate = (sample.rate > w.max_rate) ? sample.rate : w.max_rate;
-            w.ctl->on_ack_end(rtt, sampled, w.in_flight, w.now);
+            each(w, [&](CongestionController& c) { c.on_ack_end(rtt, sampled, w.in_flight, w.now); });
             CRD_FUZZ_REQUIRE(!is_bbr(w) || !sample.acked || w.ctl->window() >= 4U * w.datagram);
             may_grow = true;
             break;
@@ -363,7 +400,7 @@ void run(World& w, u8 op, u8 parameter)
                 p->lost_ns = w.now;
                 w.in_flight -= p->sent.bytes;
                 w.delivery.on_lost(p->sent.bytes);
-                w.ctl->on_lost(p->sent, w.now);
+                each(w, [&](CongestionController& c) { c.on_lost(p->sent, w.now); });
             }
             break;
         }
@@ -375,7 +412,7 @@ void run(World& w, u8 op, u8 parameter)
                 p->state = 3U;
                 w.acked += p->sent.bytes;
                 w.delivery.on_acked(p->sent.delivery, p->sent.bytes, p->sent.sent_ns, p->sent.number, w.now);
-                w.ctl->on_spurious(p->sent, p->lost_ns, w.now);
+                each(w, [&](CongestionController& c) { c.on_spurious(p->sent, p->lost_ns, w.now); });
                 may_grow = true; // an undo
             }
             break;
@@ -390,7 +427,8 @@ void run(World& w, u8 op, u8 parameter)
             if (marked != 0U || ce != 0U)
             {
                 const u64 window = w.ctl->window();
-                w.ctl->on_ecn(marked, ce, w.now - ((w.now < ago) ? w.now : ago), w.now);
+                each(w, [&](CongestionController& c)
+                     { c.on_ecn(marked, ce, w.now - ((w.now < ago) ? w.now : ago), w.now); });
                 const u64 floor = w.policy.minimum_packets * w.datagram;
                 CRD_FUZZ_REQUIRE(!is_prague(w) || w.ctl->window() >= ((window / 2U > floor) ? window / 2U : floor) ||
                                  w.ctl->window() == window);
@@ -400,7 +438,7 @@ void run(World& w, u8 op, u8 parameter)
         case 6U:
         {
             const u64 halved = held_window(w) / 2U;
-            w.ctl->on_persistent_congestion(w.now);
+            each(w, [&](CongestionController& c) { c.on_persistent_congestion(w.now); });
             if (is_gcc(w))
             {
                 CRD_FUZZ_REQUIRE(held_window(w) == ((halved > gcc_floor(w)) ? halved : gcc_floor(w)));
@@ -413,7 +451,7 @@ void run(World& w, u8 op, u8 parameter)
         case 7U: // held back by the window or the pacer, or nothing to send; or the path carries no ECN
             if ((parameter & 4U) != 0U)
             {
-                w.ctl->on_ecn_unavailable();
+                each(w, [&](CongestionController& c) { c.on_ecn_unavailable(); });
             }
             if ((parameter & 1U) != 0U)
             {
@@ -422,7 +460,7 @@ void run(World& w, u8 op, u8 parameter)
                 break;
             }
             w.ever_limited = true;
-            w.ctl->on_limited((parameter & 2U) != 0U, w.now);
+            each(w, [&](CongestionController& c) { c.on_limited((parameter & 2U) != 0U, w.now); });
             break;
         case 8U:
             w.now += (u64{parameter} * parameter) * kMs / 4U;
@@ -431,9 +469,12 @@ void run(World& w, u8 op, u8 parameter)
         {
             const CongestionState held = w.ctl->state();
             w.ctl->~CongestionController();
+            w.drop_twin();
+            CRD_FUZZ_REQUIRE(w.coupling.members() == 0U);
             w.policy.algorithm = next_algorithm(w.policy.algorithm);
+            w.policy.coupled = w.policy.coupled && w.policy.algorithm == CongestionAlgorithm::NewReno;
             w.policy.pacing = w.policy.pacing || is_bbr(w) || is_prague(w) || is_scream(w) || is_gcc(w);
-            w.ctl = make_congestion(w.policy, w.datagram, &held, w.slot, w.delivery, parameter);
+            w.ctl = make_congestion(w.policy, w.datagram, &held, w.slot, w.delivery, parameter, &w.coupling);
             CRD_FUZZ_REQUIRE(w.ctl != nullptr);
             w.max_rate = 0U;
             const CongestionState now = w.ctl->state();
@@ -475,7 +516,7 @@ void run(World& w, u8 op, u8 parameter)
                 w.acked = 0U;
                 w.max_rate = 0U;
                 w.delivery.reset();
-                w.ctl->reset(w.now);
+                each(w, [&](CongestionController& c) { c.reset(w.now); });
                 CRD_FUZZ_REQUIRE(w.ctl->state().window == initial_state_window(w));
                 scream_started(w);
                 may_grow = true;
@@ -562,10 +603,18 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     w.policy.pacing = (data[0] & 4U) != 0U || is_bbr(w) || is_prague(w) || is_scream(w) || is_gcc(w);
     w.ever_limited = is_bbr(w);
     w.policy.fast_convergence = (data[0] & 8U) != 0U;
+    w.policy.coupled = w.policy.algorithm == CongestionAlgorithm::NewReno && w.policy.fast_convergence;
     w.policy.initial_packets = 2U + ((data[0] >> 4U) & 7U) * 4U;
     w.datagram = 1200U + u64{data[1]} * 64U;
-    w.ctl = make_congestion(w.policy, w.datagram, nullptr, w.slot, w.delivery, data[1]);
+    w.ctl = make_congestion(w.policy, w.datagram, nullptr, w.slot, w.delivery, data[1], &w.coupling);
     CRD_FUZZ_REQUIRE(w.ctl != nullptr);
+    if (w.policy.coupled)
+    {
+        CongestionPolicy alone = w.policy;
+        alone.coupled = false;
+        w.twin = make_congestion(alone, w.datagram, nullptr, w.twin_slot, w.delivery, data[1]);
+        CRD_FUZZ_REQUIRE(w.twin != nullptr);
+    }
     w.initial = w.ctl->window();
     scream_started(w);
     check(w);
@@ -625,6 +674,32 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         put(reno, 0x00U, i);
     }
     sink.add("reno-avoidance", reno, at);
+    // The same NewReno coupled (byte 0's bit 3), its twin beside it: a loss, rounds of avoidance, a second loss and
+    // its spurious acknowledgement, more avoidance, a Retry's reset, then a swap away from coupling.
+    u8 coupled[2U + 2U * 260U] = {};
+    std::memcpy(coupled, reno, at);
+    coupled[0] = 0x39U;
+    for (u8 round = 0U; round < 32U; ++round)
+    {
+        if (round == 0U || round == 24U)
+        {
+            put(coupled, 0x03U, 0x00U); // a loss: avoidance from here
+        }
+        if (round == 24U)
+        {
+            put(coupled, 0x04U, 0x00U);
+        }
+        put(coupled, 0x08U, 0x04U); // 4 ms: later packets leave after the reduction
+        put(coupled, 0x07U, 0x00U); // the window holds sending back, so the window grows
+        put(coupled, 0x02U, static_cast<u8>(0x43U + (round & 0x0CU)));
+        for (u8 i = 0U; i < 4U; ++i)
+        {
+            put(coupled, 0x00U, static_cast<u8>(round + i));
+        }
+    }
+    put(coupled, 0x0AU, 0x00U);
+    put(coupled, 0x09U, 0x00U);
+    sink.add("reno-coupled", coupled, at);
     // BBRv3 on a steady path: a window sent and acknowledged each 20 ms round with RTT samples through Startup and
     // Drain into ProbeBW, a loss and its spurious acknowledgement, an application-limited period, an ECN mark, time
     // past the ten-second min RTT filter (ProbeRTT) and a swap.

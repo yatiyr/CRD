@@ -1046,6 +1046,36 @@
       "note": "The first slow start of both window controllers (design S66): rounds, eight RTT samples, the conservative phase and its five rounds."
     },
     {
+      "id": "cc.lia",
+      "title": "Coupled congestion control for multipath transport protocols (LIA)",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 6356",
+        "status": "current",
+        "added": "2026-11-21"
+      },
+      "cryptography": [],
+      "source": {
+        "ref": "docs/design/network-foundation.md#multipath",
+        "read": "2026-11-21",
+        "verified": true
+      },
+      "review": "2027-11-21",
+      "evidence": [
+        "engine/foundation/net/src/congestion.cpp",
+        "tests/foundation/net/test_coupled_congestion.cpp",
+        "tests/foundation/net/fuzz/fuzz_congestion.cpp"
+      ],
+      "deprecation": null,
+      "note": "Design S78 (2026-11-21): NewReno's congestion avoidance coupled across one connection's path slots by equations 1 and 2 (sections 3 and 4), the coupled scheme RFC 10069 section 5.3 names for paths that may share a bottleneck, as cwnd_total / alpha in exact integers with section 4.2's RTT scaling, each member counting min(cwnd, flight) once it has an RTT sample; one member alone is NewReno to the byte. A carried remainder replaces the one-byte floor where the quotient is 0. Over simulated bottlenecks: two coupled paths beside a NewReno flow take 1.19 of its share (uncoupled 1.96), disjoint links stay full, and a ten times lossier path carries 9.7% (uncoupled 25.4%) with the total 1.04 of the better path alone. OLIA and BALIA have no RFC and are not implemented."
+    },
+    {
       "id": "quic.datagram",
       "title": "An unreliable datagram extension to QUIC",
       "kind": "extension",

@@ -799,6 +799,8 @@ private:
     u64* m_crypto_bits = nullptr;
     QuicRecovery* m_recovery = nullptr;
     // Each open path slot's sending state: slot 0's is m_first_control, the others' are allocated with their slot.
+    // Their coupled controllers share m_coupling (RFC 6356), declared first so that it outlives them.
+    CongestionCoupling m_coupling;
     QuicPathControl m_first_control;
     QuicPathControl* m_controls[kQuicMaxPaths] = {&m_first_control};
     u32 m_datagram_bytes = kQuicPmtuFloor; // the smallest open path's size, which the datagrams last took
