@@ -579,6 +579,7 @@ u32 open_sockets(u64 port, bool second, UdpSocket (&sockets)[2], DatagramSocket*
     {
         UdpOptions udp;
         udp.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), index == 0U ? static_cast<crd::u16>(port) : crd::u16{0U}};
+        udp.coalesce_receive = true; // a peer's segmented sends arrive as trains, which the loop splits
         SocketError error = SocketError::Failed;
         sockets[index] = UdpSocket::open(udp, error);
         if (error != SocketError::None)

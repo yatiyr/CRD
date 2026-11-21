@@ -222,27 +222,54 @@ IoLoop::IoLoop(memory::IAllocator& allocator, const SocketSet& sockets, const Tr
     {
         return;
     }
+    u32 coalescing = 0U;
+    for (u32 socket = 0U; socket < sockets.size(); ++socket)
+    {
+        coalescing |= sockets[socket].features().coalesced_receive ? (1U << socket) : 0U;
+    }
+    if (coalescing != 0U && (config.train_slots == 0U || config.train_slots > kMaxBatch))
+    {
+        return;
+    }
+    const u32 trains = (coalescing != 0U) ? config.train_slots : 0U;
     const usize buffer_bytes = usize{config.batch} * config.slot_bytes;
+    const usize train_bytes = usize{trains} * kMaxTrainBytes;
     ReceivedDatagram* const slots = memory::try_construct_array<ReceivedDatagram>(allocator, config.batch);
     u8* const buffers = memory::try_construct_array<u8>(allocator, buffer_bytes);
-    if (slots == nullptr || buffers == nullptr)
+    ReceivedDatagram* const train_slots =
+        (trains != 0U) ? memory::try_construct_array<ReceivedDatagram>(allocator, trains) : nullptr;
+    u8* const train_buffers = (trains != 0U) ? memory::try_construct_array<u8>(allocator, train_bytes) : nullptr;
+    const bool trains_held = trains == 0U || (train_slots != nullptr && train_buffers != nullptr);
+    if (slots == nullptr || buffers == nullptr || !trains_held)
     {
         memory::destroy_array(allocator, slots, config.batch);
         memory::destroy_array(allocator, buffers, buffer_bytes);
+        memory::destroy_array(allocator, train_slots, trains);
+        memory::destroy_array(allocator, train_buffers, train_bytes);
         return;
     }
     for (u32 index = 0U; index < config.batch; ++index)
     {
         slots[index].storage = cont::Span<u8>(buffers + (usize{index} * config.slot_bytes), config.slot_bytes);
     }
+    for (u32 index = 0U; index < trains; ++index)
+    {
+        train_slots[index].storage = cont::Span<u8>(train_buffers + (usize{index} * kMaxTrainBytes), kMaxTrainBytes);
+    }
     m_slots = slots;
     m_buffers = buffers;
+    m_coalescing = coalescing;
+    m_trains = train_slots;
+    m_train_buffers = train_buffers;
 }
 
 IoLoop::~IoLoop()
 {
+    const u32 trains = (m_coalescing != 0U) ? m_config.train_slots : 0U;
     memory::destroy_array(m_allocator, m_slots, m_config.batch);
     memory::destroy_array(m_allocator, m_buffers, usize{m_config.batch} * m_config.slot_bytes);
+    memory::destroy_array(m_allocator, m_trains, trains);
+    memory::destroy_array(m_allocator, m_train_buffers, usize{trains} * kMaxTrainBytes);
 }
 
 u64 IoLoop::poll() noexcept
@@ -260,13 +287,13 @@ u64 IoLoop::poll() noexcept
         for (u32 batch = 0U; batch < m_config.batches_per_poll; ++batch)
         {
             BatchResult result;
-            receive_batch(socket, now, unix_seconds, result);
+            const bool full = receive_batch(socket, now, unix_seconds, result);
             if (result.error != SocketError::None)
             {
                 ++m_counters.receive_errors;
                 break;
             }
-            if (result.count < m_config.batch)
+            if (!full)
             {
                 break;
             }
@@ -300,54 +327,81 @@ void IoLoop::run(const std::atomic<bool>& stop) noexcept
     }
 }
 
-void IoLoop::receive_batch(u32 socket, u64 now_ns, u64 unix_seconds, BatchResult& result) noexcept
+bool IoLoop::receive_batch(u32 socket, u64 now_ns, u64 unix_seconds, BatchResult& result) noexcept
 {
-    result = m_sockets[socket].receive(cont::Span<ReceivedDatagram>(m_slots, m_config.batch));
-    m_counters.received += result.count;
+    const bool trains = (m_coalescing & (1U << socket)) != 0U;
+    ReceivedDatagram* const slots = trains ? m_trains : m_slots;
+    const u32 count = trains ? m_config.train_slots : m_config.batch;
+    result = m_sockets[socket].receive(cont::Span<ReceivedDatagram>(slots, count));
     for (usize index = 0U; index < result.count; ++index)
     {
-        ReceivedDatagram& datagram = m_slots[index];
-        datagram.socket = socket;
-        if (datagram.too_big != 0U)
+        ReceivedDatagram& slot = slots[index];
+        slot.socket = socket;
+        if (!trains || slot.segment == 0U || slot.too_big != 0U)
         {
-            ++m_counters.too_big;
-            m_handler.on_too_big(datagram, now_ns);
+            ++m_counters.received;
+            deliver(slot, now_ns, unix_seconds);
             continue;
         }
-        const IngressDecision decision =
-            m_ingress.classify(datagram.storage.first(datagram.size), datagram.truncated, datagram.peer, now_ns,
-                               unix_seconds);
-        switch (decision.action)
+        // A train: each datagram in place, a datagram past slot_bytes truncated as a slot of that size would have
+        // made it, and a truncated train's cut last datagram truncated (a shorter datagram only ever ends a train).
+        ++m_counters.trains;
+        const usize segment = slot.segment;
+        for (usize at = 0U; at < slot.size; at += segment)
         {
-        case IngressAction::Route:
-            m_handler.on_route(decision, datagram, now_ns);
-            break;
-        case IngressAction::Admit:
-            m_handler.on_admit(decision, datagram, now_ns);
-            break;
-        case IngressAction::Early:
-            m_handler.on_early(decision, datagram, now_ns);
-            break;
-        case IngressAction::StatelessReset:
-            if (!m_handler.on_unrouted(decision, datagram, now_ns))
-            {
-                queue_answer(decision, datagram, unix_seconds);
-            }
-            break;
-        case IngressAction::Retry:
-        case IngressAction::NegotiateVersion:
-        case IngressAction::InvalidToken:
-            queue_answer(decision, datagram, unix_seconds);
-            break;
-        case IngressAction::Drop:
-            // A stateless reset can be shorter than any packet this side would open (RFC 9000 section 10.3.1).
-            if (decision.reason == DropReason::UnknownConnection ||
-                (decision.reason == DropReason::TooShortToProtect && decision.header.type == QuicPacketType::OneRtt))
-            {
-                static_cast<void>(m_handler.on_unrouted(decision, datagram, now_ns));
-            }
-            break;
+            const usize size = (slot.size - at < segment) ? slot.size - at : segment;
+            ReceivedDatagram one = slot;
+            one.storage = slot.storage.subspan(at, size);
+            one.size = (size < m_config.slot_bytes) ? size : m_config.slot_bytes;
+            one.truncated = size > m_config.slot_bytes || (slot.truncated && size < segment);
+            one.segment = 0U;
+            ++m_counters.received;
+            deliver(one, now_ns, unix_seconds);
         }
+    }
+    return result.count == count;
+}
+
+void IoLoop::deliver(ReceivedDatagram& datagram, u64 now_ns, u64 unix_seconds) noexcept
+{
+    if (datagram.too_big != 0U)
+    {
+        ++m_counters.too_big;
+        m_handler.on_too_big(datagram, now_ns);
+        return;
+    }
+    const IngressDecision decision = m_ingress.classify(datagram.storage.first(datagram.size), datagram.truncated,
+                                                        datagram.peer, now_ns, unix_seconds);
+    switch (decision.action)
+    {
+    case IngressAction::Route:
+        m_handler.on_route(decision, datagram, now_ns);
+        break;
+    case IngressAction::Admit:
+        m_handler.on_admit(decision, datagram, now_ns);
+        break;
+    case IngressAction::Early:
+        m_handler.on_early(decision, datagram, now_ns);
+        break;
+    case IngressAction::StatelessReset:
+        if (!m_handler.on_unrouted(decision, datagram, now_ns))
+        {
+            queue_answer(decision, datagram, unix_seconds);
+        }
+        break;
+    case IngressAction::Retry:
+    case IngressAction::NegotiateVersion:
+    case IngressAction::InvalidToken:
+        queue_answer(decision, datagram, unix_seconds);
+        break;
+    case IngressAction::Drop:
+        // A stateless reset can be shorter than any packet this side would open (RFC 9000 section 10.3.1).
+        if (decision.reason == DropReason::UnknownConnection ||
+            (decision.reason == DropReason::TooShortToProtect && decision.header.type == QuicPacketType::OneRtt))
+        {
+            static_cast<void>(m_handler.on_unrouted(decision, datagram, now_ns));
+        }
+        break;
     }
 }
 

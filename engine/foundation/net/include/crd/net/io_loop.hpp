@@ -14,9 +14,11 @@
 //             (waiting in SocketSet::wait_readable until that time or a datagram), a game's frame, a job, or NET-SIM
 //             stepping virtual time. The transport takes no job system and starts no thread.
 //   memory    receive slots and the answer queue (a SendQueue) come from the injected allocator at construction; a
-//             turn allocates nothing. An answer the host cannot take yet (Busy) waits in the queue; when the queue is
-//             full, a new answer is dropped and counted (answers are stateless; the client's retransmission asks
-//             again).
+//             turn allocates nothing. A socket that coalesces (SocketFeatures::coalesced_receive) reads into slots of
+//             a whole train each, which the loop splits in place: each datagram of a train is handed on as its own,
+//             its bytes where the host put them. An answer the host cannot take yet (Busy) waits in the queue; when
+//             the queue is full, a new answer is dropped and counted (answers are stateless; the client's
+//             retransmission asks again).
 //   threads   a loop runs on one thread at a time; its ingress, table, socket and handler are its own (the server's
 //             HandshakeBuckets are shared, ingress.hpp).
 
@@ -170,6 +172,7 @@ struct IoLoopConfig
 {
     u32 batch = 32U;                // datagrams per receive
     u32 slot_bytes = 1500U;         // the largest datagram read whole; a longer one is truncated and dropped
+    u32 train_slots = 4U;           // trains per receive of a coalescing socket, kMaxTrainBytes each
     u32 batches_per_poll = 4U;      // receives per turn at most
     u32 queued_answers = 64U;       // answers waiting for the host at most
     u64 max_wait_ns = 100000000U;   // the longest run() waits without a turn (100 ms)
@@ -180,6 +183,7 @@ struct IoLoopCounters
     u64 polls = 0U;
     u64 received = 0U;
     u64 too_big = 0U; // of those, the socket's Packet Too Big reports
+    u64 trains = 0U;  // the trains coalescing sockets joined, each of their datagrams in `received`
     u64 receive_errors = 0U;
     u64 answers_sent = 0U;
     u64 answers_dropped = 0U; // the queue was full, or the host refused one for good
@@ -196,8 +200,8 @@ public:
     IoLoop(IoLoop&&) = delete;
     IoLoop& operator=(IoLoop&&) = delete;
 
-    // False when the configuration is out of range (a zero count, slots under 1200 or over 65527 bytes), the socket
-    // set is empty or the allocator refused.
+    // False when the configuration is out of range (a zero count, slots under 1200 or over 65527 bytes; train_slots
+    // counts only where a socket of the set coalesces), the socket set is empty or the allocator refused.
     [[nodiscard]] bool ready() const noexcept { return m_slots != nullptr; }
 
     // One turn (see the file comment); returns the monotonic time it next needs to run.
@@ -210,7 +214,9 @@ public:
     [[nodiscard]] u32 queued_answers() const noexcept { return m_answers.queued(); }
 
 private:
-    void receive_batch(u32 socket, u64 now_ns, u64 unix_seconds, BatchResult& result) noexcept;
+    // One receive from `socket`; true when it filled every slot, so the host may hold more.
+    [[nodiscard]] bool receive_batch(u32 socket, u64 now_ns, u64 unix_seconds, BatchResult& result) noexcept;
+    void deliver(ReceivedDatagram& datagram, u64 now_ns, u64 unix_seconds) noexcept;
     void queue_answer(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 unix_seconds) noexcept;
     void flush_answers() noexcept;
 
@@ -222,6 +228,9 @@ private:
     IoLoopConfig m_config;
     ReceivedDatagram* m_slots = nullptr;
     u8* m_buffers = nullptr;
+    u32 m_coalescing = 0U; // bit i for socket i, which reads into the train slots
+    ReceivedDatagram* m_trains = nullptr;
+    u8* m_train_buffers = nullptr;
     SendQueue m_answers; // `queued_answers` slots of kQuicMaxStatelessAnswerBytes
     IoLoopCounters m_counters;
 };

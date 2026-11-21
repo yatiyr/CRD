@@ -20,8 +20,13 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
+#include <linux/ethtool.h>
+#include <linux/sockios.h>
+#include <net/if.h>
 #include <sched.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 namespace crd::net::testing
@@ -81,10 +86,11 @@ public:
     }
 
     // A socket opened inside `host`'s namespace, where it stays. Port 0 takes an ephemeral one; `any` binds the
-    // unspecified address of the family (an IPv6 one carrying IPv4 too).
-    [[nodiscard]] UdpSocket open(Host host, bool v6, bool any = false)
+    // unspecified address of the family (an IPv6 one carrying IPv4 too); `segment_send` false sends a datagram a call.
+    [[nodiscard]] UdpSocket open(Host host, bool v6, bool any = false, bool segment_send = true)
     {
         UdpOptions options;
+        options.segment_send = segment_send;
         options.bind = any ? Endpoint{v6 ? IpAddress::v6_any() : IpAddress::v4_any(), 0U} : at(host, v6, 0U);
         options.receive_buffer_bytes = 1U << 21U;
         options.send_buffer_bytes = 1U << 21U;
@@ -94,6 +100,39 @@ public:
         enter(Near);
         REQUIRE(error == SocketError::None);
         return socket;
+    }
+
+    // Turns transmit checksum offload of `device` in `host`'s namespace on or off (ETHTOOL_STXCSUM): through a device
+    // without it the host refuses a segmented send (EIO).
+    void checksum_offload(Host host, const char* device, bool on)
+    {
+        enter(host);
+        const int fd = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+        ethtool_value value{ETHTOOL_STXCSUM, on ? 1U : 0U};
+        ifreq request{};
+        std::strncpy(request.ifr_name, device, IFNAMSIZ - 1U);
+        request.ifr_data = reinterpret_cast<char*>(&value);
+        const int status = (fd >= 0) ? ::ioctl(fd, SIOCETHTOOL, &request) : -1;
+        if (fd >= 0)
+        {
+            ::close(fd);
+        }
+        enter(Near);
+        REQUIRE(status == 0);
+    }
+
+    // Has the near host's queue toward dropping() drop every datagram (a pfifo of no room), so the host reports each
+    // send through it as lost past the socket (ENOBUFS); `on` false restores the link's own.
+    void full_queue(bool on)
+    {
+        if (on)
+        {
+            run(Near, "tc qdisc replace dev n0 root pfifo limit 0");
+        }
+        else
+        {
+            run(Near, "tc qdisc del dev n0 root");
+        }
     }
 
 private:

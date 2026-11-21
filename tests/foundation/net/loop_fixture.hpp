@@ -25,7 +25,8 @@ public:
 
 // A socket of fixed queues (on the heap: a test's stack holds the socket): what a test puts in arrives, what the loop
 // sends is kept with its codepoint; `busy_after` stops sends with Busy after that many, `refuse_next` fails the next
-// send for good, `offers` is what features() reports.
+// send for good, `offers` is what features() reports. With offers.coalesced_receive a train delivered whole
+// (deliver_train) fills the next receive's first slot, as a coalescing host's does.
 class VirtualSocket final : public DatagramSocket
 {
 public:
@@ -48,6 +49,19 @@ public:
         m_inbound[m_inbound_count++] = Inbound{datagram, peer, ecn, too_big};
     }
 
+    // A train of `segment`-byte datagrams from `peer`, cut short when `truncated`: the next receive puts it in one
+    // slot.
+    void deliver_train(cont::ConstSpan<u8> bytes, u32 segment, const Endpoint& peer, bool truncated = false)
+    {
+        REQUIRE(bytes.size() <= kMaxTrainBytes);
+        std::memcpy(m_train.get(), bytes.data(), bytes.size());
+        m_train_size = bytes.size();
+        m_train_segment = segment;
+        m_train_peer = peer;
+        m_train_truncated = truncated;
+        m_train_waiting = true;
+    }
+
     // Datagrams delivered and not yet received.
     [[nodiscard]] usize pending() const noexcept { return m_inbound_count - m_inbound_next; }
 
@@ -56,6 +70,19 @@ public:
     [[nodiscard]] BatchResult receive(cont::Span<ReceivedDatagram> slots) noexcept override
     {
         BatchResult result;
+        if (m_train_waiting && !slots.empty())
+        {
+            ReceivedDatagram& slot = slots[result.count++];
+            REQUIRE(slot.storage.size() >= m_train_size);
+            std::memcpy(slot.storage.data(), m_train.get(), m_train_size);
+            slot.size = m_train_size;
+            slot.truncated = m_train_truncated;
+            slot.segment = m_train_segment;
+            slot.peer = m_train_peer;
+            slot.ecn = Ecn::Ect0;
+            slot.too_big = 0U;
+            m_train_waiting = false;
+        }
         while (result.count < slots.size() && m_inbound_next < m_inbound_count)
         {
             const Inbound& inbound = m_inbound[m_inbound_next++];
@@ -67,6 +94,7 @@ public:
             slot.peer = inbound.peer;
             slot.ecn = inbound.ecn;
             slot.too_big = inbound.too_big;
+            slot.segment = 0U;
         }
         if (fail_receive)
         {
@@ -105,7 +133,7 @@ public:
     [[nodiscard]] bool wait_readable(u64) noexcept override
     {
         ++waits;
-        return m_inbound_next < m_inbound_count;
+        return m_train_waiting || m_inbound_next < m_inbound_count;
     }
 
     [[nodiscard]] SocketFeatures features() const noexcept override { return offers; }
@@ -147,6 +175,12 @@ private:
     };
 
     std::unique_ptr<Inbound[]> m_inbound = std::make_unique<Inbound[]>(kQueue);
+    std::unique_ptr<u8[]> m_train = std::make_unique<u8[]>(kMaxTrainBytes);
+    usize m_train_size = 0U;
+    u32 m_train_segment = 0U;
+    Endpoint m_train_peer;
+    bool m_train_truncated = false;
+    bool m_train_waiting = false;
     usize m_inbound_count = 0U;
     usize m_inbound_next = 0U;
 };

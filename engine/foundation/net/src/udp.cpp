@@ -14,6 +14,7 @@
 #include <linux/errqueue.h>
 #include <netinet/icmp6.h>
 #include <netinet/ip_icmp.h>
+#include <netinet/udp.h>
 #endif
 
 namespace crd::net
@@ -23,9 +24,13 @@ namespace
 constexpr u64 kSimulatedSliceNs = 1000000U; // a set the host cannot wait on whole waits a millisecond at a time
 
 #if CRD_OS_LINUX
-constexpr usize kBatchChunk = 32U; // datagrams per recvmmsg or sendmmsg
-// Room for the one control message an ECN codepoint takes, received or sent.
-constexpr usize kControlBytes = CMSG_SPACE(sizeof(int));
+constexpr usize kBatchChunk = 32U; // datagrams per recvmmsg, messages per sendmmsg
+// The datagrams one sendmmsg carries at most, an iovec each, however its messages group them into trains.
+constexpr usize kSendVectors = 4U * kMaxTrainDatagrams;
+// Room for the control messages one datagram or train takes: received, an ECN codepoint and a train's datagram size
+// (UDP_GRO); sent, a codepoint and the size the host segments a train at (UDP_SEGMENT).
+constexpr usize kControlBytes = 2U * CMSG_SPACE(sizeof(int));
+constexpr usize kSendControlBytes = CMSG_SPACE(sizeof(int)) + CMSG_SPACE(sizeof(u16));
 // Room for an ICMP report's control messages: the extended error with its sender's address, and the codepoint the
 // host adds for an ECN-reading socket.
 constexpr usize kReportControlBytes =
@@ -120,6 +125,7 @@ void fill_slot(ReceivedDatagram& slot, usize size, bool truncated, const sockadd
     slot.ecn = Ecn::NotEct;
     slot.peer = from_native(peer);
     slot.too_big = 0U;
+    slot.segment = 0U;
 }
 
 #if CRD_OS_LINUX || CRD_OS_WINDOWS
@@ -214,18 +220,22 @@ void ecn_message(const Endpoint& peer, int& level, int& type) noexcept
 #endif
 
 #if CRD_OS_LINUX
-[[nodiscard]] Ecn received_ecn(msghdr& message) noexcept
+// A received datagram's codepoint and, for a train the host joined (UDP_GRO), its datagrams' size: a slot holding
+// no more than one datagram stays a datagram.
+void read_controls(msghdr& message, ReceivedDatagram& slot) noexcept
 {
-    Ecn ecn = Ecn::NotEct;
     for (cmsghdr* header = CMSG_FIRSTHDR(&message); header != nullptr; header = CMSG_NXTHDR(&message, header))
     {
         const usize bytes = header->cmsg_len - CMSG_LEN(0);
-        if (ecn_from(header->cmsg_level, header->cmsg_type, CMSG_DATA(header), bytes, ecn))
+        if (header->cmsg_level == SOL_UDP && header->cmsg_type == UDP_GRO && bytes >= sizeof(int))
         {
-            break;
+            int segment = 0;
+            std::memcpy(&segment, CMSG_DATA(header), sizeof(segment));
+            slot.segment = (segment > 0 && slot.size > static_cast<usize>(segment)) ? static_cast<u32>(segment) : 0U;
+            continue;
         }
+        static_cast<void>(ecn_from(header->cmsg_level, header->cmsg_type, CMSG_DATA(header), bytes, slot.ecn));
     }
-    return ecn;
 }
 
 // The UDP payload a Packet Too Big report says its hop carries (IPv4's Fragmentation Needed or ICMPv6's Packet Too
@@ -318,17 +328,42 @@ void read_reports(NativeSocket handle, cont::Span<ReceivedDatagram> slots, usize
     }
 }
 
-// One control message carrying `ecn` toward `peer` in `control`, which `message` then points at.
-void mark(msghdr& message, u8 (&control)[kControlBytes], const Endpoint& peer, Ecn ecn) noexcept
+// The control messages of one sent message in `control`, which `message` then points at: `ecn` toward `peer` unless
+// Not-ECT, and the size the host segments a train at unless `segment` is 0. Neither leaves the message without one.
+void attach(msghdr& message, u8 (&control)[kSendControlBytes], const Endpoint& peer, Ecn ecn, u16 segment) noexcept
 {
+    if (ecn == Ecn::NotEct && segment == 0U)
+    {
+        return;
+    }
     std::memset(control, 0, sizeof(control));
     message.msg_control = control;
-    message.msg_controllen = sizeof(control);
-    cmsghdr* const header = CMSG_FIRSTHDR(&message);
-    ecn_message(peer, header->cmsg_level, header->cmsg_type);
-    header->cmsg_len = CMSG_LEN(sizeof(int));
-    const int value = static_cast<int>(ecn);
-    std::memcpy(CMSG_DATA(header), &value, sizeof(value));
+    message.msg_controllen =
+        (ecn != Ecn::NotEct ? CMSG_SPACE(sizeof(int)) : 0U) + (segment != 0U ? CMSG_SPACE(sizeof(u16)) : 0U);
+    cmsghdr* header = CMSG_FIRSTHDR(&message);
+    if (ecn != Ecn::NotEct)
+    {
+        ecn_message(peer, header->cmsg_level, header->cmsg_type);
+        header->cmsg_len = CMSG_LEN(sizeof(int));
+        const int value = static_cast<int>(ecn);
+        std::memcpy(CMSG_DATA(header), &value, sizeof(value));
+        header = CMSG_NXTHDR(&message, header);
+    }
+    if (segment != 0U)
+    {
+        header->cmsg_level = SOL_UDP;
+        header->cmsg_type = UDP_SEGMENT;
+        header->cmsg_len = CMSG_LEN(sizeof(u16));
+        std::memcpy(CMSG_DATA(header), &segment, sizeof(segment));
+    }
+}
+
+// Whether the host segments trains (UDP_SEGMENT, Linux 4.18): the option reads back where it is known.
+[[nodiscard]] bool segments_trains(NativeSocket handle) noexcept
+{
+    int value = 0;
+    socklen_t length = sizeof(value);
+    return ::getsockopt(handle, SOL_UDP, UDP_SEGMENT, &value, &length) == 0;
 }
 #elif CRD_OS_WINDOWS
 [[nodiscard]] Ecn received_ecn(WSAMSG& message) noexcept
@@ -361,6 +396,38 @@ void mark(WSAMSG& message, u8 (&control)[kControlBytes], const Endpoint& peer, E
 
 } // namespace
 
+usize segment_train(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept
+{
+    if (datagrams.empty())
+    {
+        return 0U;
+    }
+    const OutgoingDatagram& first = datagrams[0];
+    const usize size = first.bytes.size();
+    const usize limit = payload_limit(first.peer);
+    usize total = size;
+    usize count = 1U;
+    // A shorter datagram ends the train, as the host segments every datagram but the last at the first's size; one
+    // directly behind the first leaves it alone, so a lone longer datagram (a PMTU probe) never takes the next one's
+    // fate on a path that drops a train whole (a forwarding hop checks the train's datagram size).
+    if (datagrams.size() > 1U && datagrams[1].bytes.size() != size)
+    {
+        return 1U;
+    }
+    while (count < datagrams.size() && count < kMaxTrainDatagrams && datagrams[count - 1U].bytes.size() == size)
+    {
+        const OutgoingDatagram& next = datagrams[count];
+        if (next.peer != first.peer || next.ecn != first.ecn || next.bytes.empty() || next.bytes.size() > size ||
+            total + next.bytes.size() > limit)
+        {
+            break;
+        }
+        total += next.bytes.size();
+        ++count;
+    }
+    return count;
+}
+
 UdpSocket::~UdpSocket()
 {
     close();
@@ -368,7 +435,7 @@ UdpSocket::~UdpSocket()
 
 UdpSocket::UdpSocket(UdpSocket&& other) noexcept
     : DatagramSocket(), m_handle(other.m_handle), m_local(other.m_local), m_dual_stack(other.m_dual_stack),
-      m_features(other.m_features)
+      m_features(other.m_features), m_offloads(other.m_offloads)
 #if CRD_OS_WINDOWS
       ,
       m_receive_message(other.m_receive_message)
@@ -389,6 +456,7 @@ UdpSocket& UdpSocket::operator=(UdpSocket&& other) noexcept
         m_local = other.m_local;
         m_dual_stack = other.m_dual_stack;
         m_features = other.m_features;
+        m_offloads = other.m_offloads;
 #if CRD_OS_WINDOWS
         m_receive_message = other.m_receive_message;
 #elif CRD_OS_LINUX
@@ -453,6 +521,8 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
         socket.m_features.dont_fragment = forbid_fragmentation(handle, v6, socket.m_dual_stack);
 #if CRD_OS_LINUX
         socket.m_features.too_big_reports = queue_reports(handle, v6, socket.m_dual_stack);
+        socket.m_features.segmented_send = options.segment_send && segments_trains(handle);
+        socket.m_features.coalesced_receive = options.coalesce_receive && set_option(handle, SOL_UDP, UDP_GRO, 1);
 #endif
     }
 #endif
@@ -503,6 +573,7 @@ void UdpSocket::close() noexcept
     m_handle = kNoHandle;
     m_local = Endpoint{};
     m_features = SocketFeatures{};
+    m_offloads = OffloadCounters{};
 #if CRD_OS_LINUX
     m_reports_waiting = false;
 #endif
@@ -581,7 +652,12 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
             ReceivedDatagram& slot = slots[result.count + index];
             fill_slot(slot, messages[index].msg_len, (messages[index].msg_hdr.msg_flags & MSG_TRUNC) != 0,
                       peers[index]);
-            slot.ecn = received_ecn(messages[index].msg_hdr);
+            read_controls(messages[index].msg_hdr, slot);
+            if (slot.segment != 0U)
+            {
+                ++m_offloads.trains_received;
+                m_offloads.train_datagrams_received += (slot.size + slot.segment - 1U) / slot.segment;
+            }
         }
         result.count += static_cast<usize>(got);
         if (static_cast<usize>(got) < chunk)
@@ -657,19 +733,23 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
     const NativeSocket handle = native(m_handle);
     const bool v6 = m_local.address.family == AddressFamily::V6;
 #if CRD_OS_LINUX
-    bool resent = false; // the datagram at result.count went again after a report's error
+    bool resent = false;    // the message at result.count went again after a report's error
+    usize plain_until = 0U; // the datagrams before it go a message each: a train the host refused
     while (result.count < datagrams.size())
     {
         mmsghdr messages[kBatchChunk];
-        iovec vectors[kBatchChunk];
+        iovec vectors[kSendVectors];
+        usize carried[kBatchChunk]; // datagrams per message
         NativeAddress peers[kBatchChunk];
-        alignas(cmsghdr) u8 controls[kBatchChunk][kControlBytes];
+        alignas(cmsghdr) u8 controls[kBatchChunk][kSendControlBytes];
         bool marked = false;
         usize chunk = 0U;
+        usize vector = 0U;
+        usize next = result.count;
         SocketError refused = SocketError::None;
-        while (chunk < kBatchChunk && result.count + chunk < datagrams.size())
+        while (chunk < kBatchChunk && next < datagrams.size() && vector < kSendVectors)
         {
-            const OutgoingDatagram& datagram = datagrams[result.count + chunk];
+            const OutgoingDatagram& datagram = datagrams[next];
             refused = datagram.bytes.size() > payload_limit(datagram.peer)
                           ? SocketError::MessageTooLarge
                           : to_native(datagram.peer, v6, m_dual_stack, peers[chunk]);
@@ -677,20 +757,29 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
             {
                 break;
             }
-            // sendmmsg only reads the bytes; iovec has no const form.
-            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
-            vectors[chunk] = iovec{const_cast<u8*>(datagram.bytes.data()), datagram.bytes.size()};
+            // Every datagram of a train shares the first's peer, so the first's checks hold for all of them.
+            usize count =
+                (m_features.segmented_send && next >= plain_until) ? segment_train(datagrams.subspan(next)) : 1U;
+            count = (count < kSendVectors - vector) ? count : kSendVectors - vector;
+            for (usize index = 0U; index < count; ++index)
+            {
+                const cont::ConstSpan<u8> bytes = datagrams[next + index].bytes;
+                // sendmmsg only reads the bytes; iovec has no const form.
+                // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+                vectors[vector + index] = iovec{const_cast<u8*>(bytes.data()), bytes.size()};
+            }
             messages[chunk] = mmsghdr{};
             messages[chunk].msg_hdr.msg_name = &peers[chunk].storage;
             messages[chunk].msg_hdr.msg_namelen = peers[chunk].length;
-            messages[chunk].msg_hdr.msg_iov = &vectors[chunk];
-            messages[chunk].msg_hdr.msg_iovlen = 1U;
-            if (datagram.ecn != Ecn::NotEct && m_features.ecn_marking)
-            {
-                mark(messages[chunk].msg_hdr, controls[chunk], datagram.peer, datagram.ecn);
-                marked = true;
-            }
-            ++chunk;
+            messages[chunk].msg_hdr.msg_iov = &vectors[vector];
+            messages[chunk].msg_hdr.msg_iovlen = count;
+            const Ecn ecn = m_features.ecn_marking ? datagram.ecn : Ecn::NotEct;
+            marked = marked || ecn != Ecn::NotEct;
+            attach(messages[chunk].msg_hdr, controls[chunk], datagram.peer, ecn,
+                   count > 1U ? static_cast<u16>(datagram.bytes.size()) : u16{0U});
+            carried[chunk++] = count;
+            vector += count;
+            next += count;
         }
         if (chunk != 0U)
         {
@@ -707,8 +796,8 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
                 {
                     // The host took the datagram and dropped it past the socket (a full device queue, a link that
                     // refuses its size, no memory): lost on the way, as a network loses it. The host says so only to
-                    // a socket that asked for reports, and would send it the same way again.
-                    ++result.count;
+                    // a socket that asked for reports, and would send it the same way again. A train is lost whole.
+                    sent_train(carried[0], result);
                     resent = false;
                     continue;
                 }
@@ -724,6 +813,17 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
                         continue;
                     }
                 }
+                if (sent < 0 && carried[0] > 1U && !would_block(code))
+                {
+                    // A train the host refused (a segment past the device's MTU, a route through IPsec, a device
+                    // that cannot checksum it): its datagrams go a message each and meet their own errors. EIO is the
+                    // host refusing to segment at all, so this socket stops asking.
+                    ++m_offloads.trains_refused;
+                    m_features.segmented_send = m_features.segmented_send && code != EIO;
+                    plain_until = result.count + carried[0];
+                    resent = false;
+                    continue;
+                }
                 if (sent < 0 && code == EINVAL && marked)
                 {
                     m_features.ecn_marking = false; // a host that takes no codepoint: the batch goes unmarked
@@ -732,11 +832,14 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
                 result.error = sent < 0 ? map_error(code, true) : SocketError::Failed;
                 return result;
             }
-            result.count += static_cast<usize>(sent);
+            for (usize index = 0U; index < static_cast<usize>(sent); ++index)
+            {
+                sent_train(carried[index], result);
+            }
             resent = false;
             if (static_cast<usize>(sent) < chunk)
             {
-                continue; // the next call starts at the datagram that failed and reports why
+                continue; // the next call starts at the message that failed and reports why
             }
         }
         if (refused != SocketError::None)
@@ -827,6 +930,16 @@ bool UdpSocket::wait_readable(u64 timeout_ns) noexcept
         waited((events & POLLERR) != 0);
     }
     return events != 0;
+}
+
+void UdpSocket::sent_train(usize datagrams, BatchResult& result) noexcept
+{
+    result.count += datagrams;
+    if (datagrams > 1U)
+    {
+        ++m_offloads.trains_sent;
+        m_offloads.train_datagrams_sent += datagrams;
+    }
 }
 
 void UdpSocket::waited([[maybe_unused]] bool error) noexcept

@@ -42,6 +42,12 @@ inline constexpr usize kMaxUdpPayloadV6 = 65527U;
 inline constexpr u64 kNoWaitHandle = ~u64{0};
 // The most sockets one loop and its host serve together: one per path a QUIC connection knows (kQuicMaxPaths).
 inline constexpr u32 kMaxSetSockets = 4U;
+// A train: datagrams to one peer with one ECN codepoint, each the first's size but the last, which may be shorter, that
+// the host segments from one send (Linux's UDP_SEGMENT) or joins into one receive (UDP_GRO). One carries at most
+// kMaxTrainDatagrams of them (every kernel's UDP_MAX_SEGMENTS) and, sent, at most the peer family's UDP payload; a
+// receive slot of kMaxTrainBytes holds the longest train a host joins.
+inline constexpr usize kMaxTrainDatagrams = 64U;
+inline constexpr usize kMaxTrainBytes = 65535U;
 
 struct UdpOptions
 {
@@ -49,6 +55,12 @@ struct UdpOptions
     bool dual_stack = true;        // an IPv6 socket also carries IPv4, its peers reported as IPv4 endpoints
     u32 receive_buffer_bytes = 0U; // 0 keeps the host's default
     u32 send_buffer_bytes = 0U;    // 0 keeps the host's default
+    // A send hands the host each train in one call where it segments them (SocketFeatures::segmented_send); false
+    // keeps the portable path, one datagram a call.
+    bool segment_send = true;
+    // The host may join one sender's datagrams into one train per receive slot (SocketFeatures::coalesced_receive):
+    // the caller then gives every slot kMaxTrainBytes, as IoLoop does.
+    bool coalesce_receive = false;
 };
 
 // One receive slot: the caller points `storage` at its buffer before receive(), which fills the rest.
@@ -65,6 +77,10 @@ struct ReceivedDatagram
     u32 too_big = 0U;
     // The index of the socket it arrived on in its loop's SocketSet: the loop sets it, a socket leaves it.
     u32 socket = 0U;
+    // Nonzero for a train (SocketFeatures::coalesced_receive): storage then holds `size` bytes of datagrams of this
+    // many bytes each, the last one shorter or as long, all from `peer` with codepoint `ecn`; a truncated train's last
+    // datagram is cut and its whole ones are intact. A coalescing socket sets it on every slot it fills.
+    u32 segment = 0U;
 };
 
 struct OutgoingDatagram
@@ -87,7 +103,28 @@ struct SocketFeatures
     // The host's ICMP Packet Too Big messages about sent datagrams reach receive() as reports
     // (ReceivedDatagram::too_big); its other ICMP errors are read and dropped without failing a receive or a send.
     bool too_big_reports = false;
+    // Offloads, each the socket's own (a SocketSet reports none of them): a send hands the host a train in one call
+    // (segment_train), and a host that later refuses one has it sent again a datagram a call, turning this off for good
+    // where it cannot segment at all; a receive may fill a slot with a train (ReceivedDatagram::segment).
+    bool segmented_send = false;
+    bool coalesced_receive = false;
 };
+
+// What a socket's offloads did since it opened.
+struct OffloadCounters
+{
+    u64 trains_sent = 0U;              // trains of two or more datagrams the host took in one call
+    u64 train_datagrams_sent = 0U;     // the datagrams those carried
+    u64 trains_refused = 0U;           // trains the host refused, sent again a datagram a call
+    u64 trains_received = 0U;          // receive slots holding two or more datagrams
+    u64 train_datagrams_received = 0U; // the datagrams those held
+};
+
+// How many datagrams from the first form one train (0 for none): each to the first's peer with its codepoint and each
+// as long as the first but the last, which may be shorter and then ends it, at most kMaxTrainDatagrams and together
+// at most the peer family's UDP payload. A datagram longer than the first never joins, and a first datagram whose
+// next is shorter goes alone, so a path MTU probe neither joins a train nor leads one.
+[[nodiscard]] usize segment_train(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept;
 
 // What one batch did: `count` datagrams in order, then the reason it stopped. A receive stops with None when the host
 // holds no more; a send stops with None only when every datagram left, and otherwise at the datagram the error names,
@@ -138,7 +175,12 @@ protected:
 // datagram (IP_RECVERR, IPV6_RECVERR): receive() reads that queue first once a wait, a receive or a send has seen a
 // report, at most 64 reports a call so a flood never starves the datagrams, hands on Packet Too Big and drops the
 // rest; a send the host fails with an earlier datagram's report goes again once. Windows keeps its ICMP reports to
-// itself. macOS carries bytes alone until crd-net's port there (MAC.1). Pacing and the offloads are NET-PATH's.
+// itself. On Linux a send hands each train (segment_train) to the host in one message with UDP_SEGMENT, its datagrams
+// one iovec each where they lie, where the host takes the option; a train it refuses for any reason but back-pressure
+// goes again a datagram a message, so each meets its own error, and EIO (a device or route that cannot segment)
+// also turns segmentation off for good, as features() then reports. With coalesce_receive a Linux socket takes UDP_GRO
+// and reports each train's datagram size. Windows sockets send a datagram a call and never coalesce until its USO
+// and URO join (NET-PATH); macOS carries bytes alone until crd-net's port there (MAC.1).
 class UdpSocket final : public DatagramSocket
 {
 public:
@@ -163,14 +205,19 @@ public:
     [[nodiscard]] SocketFeatures features() const noexcept override { return m_features; }
     [[nodiscard]] u64 wait_handle() const noexcept override { return m_handle; }
     void waited(bool error) noexcept override;
+    [[nodiscard]] const OffloadCounters& offload_counters() const noexcept { return m_offloads; }
 
 private:
     static constexpr u64 kNoHandle = kNoWaitHandle;
+
+    // `datagrams` handed to the host in one message, a train when more than one: counted as sent.
+    void sent_train(usize datagrams, BatchResult& result) noexcept;
 
     u64 m_handle = kNoHandle; // the host's descriptor or SOCKET
     Endpoint m_local;
     bool m_dual_stack = false;
     SocketFeatures m_features;
+    OffloadCounters m_offloads;
 #if CRD_OS_WINDOWS
     void (*m_receive_message)() = nullptr; // WSARecvMsg, which Winsock hands out per provider, as a generic pointer
 #elif CRD_OS_LINUX

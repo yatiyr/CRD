@@ -1,6 +1,7 @@
 // crd-net -- datagram sockets on the host's loopback (4.2a; docs/design/network-foundation.md#sockets), the ECN
-// codepoint each datagram carries (NET-PATH; #ecn), and on Linux a router's Packet Too Big reports (#pmtu) through
-// private network namespaces ([.netns], router_namespace_fixture.hpp).
+// codepoint each datagram carries (NET-PATH; #ecn), trains sent in one host call and received whole (#offloads), and
+// on Linux a router's Packet Too Big reports (#pmtu) and the host refusing trains through private network namespaces
+// ([.netns], router_namespace_fixture.hpp).
 
 #include <crd/net/udp.hpp>
 
@@ -24,10 +25,14 @@ using crd::containers::ConstSpan;
 using crd::containers::Span;
 using crd::net::BatchResult;
 using crd::net::Ecn;
+using crd::net::kMaxTrainBytes;
+using crd::net::kMaxTrainDatagrams;
+using crd::net::OffloadCounters;
 using crd::net::Endpoint;
 using crd::net::IpAddress;
 using crd::net::OutgoingDatagram;
 using crd::net::ReceivedDatagram;
+using crd::net::segment_train;
 using crd::net::SocketError;
 using crd::net::SocketFeatures;
 using crd::net::UdpOptions;
@@ -539,6 +544,342 @@ TEST_CASE("a closed or moved-from UDP socket refuses every call", "[net][udp]")
     moved.close(); // twice is harmless
 }
 
+namespace
+{
+// The rule segment_train follows, read directly: whether the first `count` datagrams form one train.
+bool forms_train(ConstSpan<OutgoingDatagram> datagrams, usize count)
+{
+    if (count == 0U || count > datagrams.size() || count > kMaxTrainDatagrams)
+    {
+        return false;
+    }
+    const OutgoingDatagram& first = datagrams[0];
+    const usize limit = first.peer.address.unmapped().family == crd::net::AddressFamily::V4
+                            ? crd::net::kMaxUdpPayloadV4
+                            : crd::net::kMaxUdpPayloadV6;
+    usize total = 0U;
+    for (usize index = 0U; index < count; ++index)
+    {
+        const OutgoingDatagram& one = datagrams[index];
+        total += one.bytes.size();
+        const bool inner = index + 1U < count;
+        if (one.peer != first.peer || one.ecn != first.ecn || (index != 0U && one.bytes.empty()) ||
+            (inner && one.bytes.size() != first.bytes.size()) || one.bytes.size() > first.bytes.size())
+        {
+            return false;
+        }
+    }
+    // A datagram followed by a shorter one goes alone.
+    return total <= limit && (count == 1U || datagrams[1].bytes.size() == first.bytes.size());
+}
+
+// One planned datagram of a burst.
+struct Planned
+{
+    usize size = 0U;
+    Ecn ecn = Ecn::NotEct;
+};
+
+// A burst that forms trains and breaks them: an uneven tail, a probe-sized datagram, codepoint changes, a run past
+// kMaxTrainDatagrams and a lone datagram followed by a shorter one.
+constexpr usize kBurst = 112U;
+Planned burst_plan(usize index)
+{
+    if (index < 20U)
+    {
+        return {1200U, Ecn::Ect0};
+    }
+    if (index == 20U)
+    {
+        return {700U, Ecn::Ect0}; // the train's shorter last
+    }
+    if (index == 21U)
+    {
+        return {1400U, Ecn::Ect0}; // a probe: alone
+    }
+    if (index < 32U)
+    {
+        return {1200U, Ecn::Ect1};
+    }
+    if (index < 37U)
+    {
+        return {1200U, Ecn::NotEct};
+    }
+    if (index == 37U)
+    {
+        return {900U, Ecn::Ect1}; // a datagram followed by a shorter one goes alone
+    }
+    if (index == 38U)
+    {
+        return {100U, Ecn::Ect1};
+    }
+    return {1000U, Ecn::Ect0}; // 73 of them: a full train and the rest
+}
+
+// Sends the burst from `from` to `to_endpoint`, each datagram its index in its pattern, until all left.
+void send_burst(UdpSocket& from, const Endpoint& to_endpoint)
+{
+    static u8 payload[kBurst][1400];
+    OutgoingDatagram datagrams[kBurst];
+    for (usize index = 0U; index < kBurst; ++index)
+    {
+        const Planned plan = burst_plan(index);
+        pattern(Span<u8>(payload[index], plan.size), static_cast<u32>(index));
+        datagrams[index] = OutgoingDatagram{ConstSpan<u8>(payload[index], plan.size), to_endpoint, plan.ecn};
+    }
+    usize sent = 0U;
+    for (u32 attempt = 0U; sent < kBurst && attempt < 1000U; ++attempt)
+    {
+        const BatchResult result = from.send(ConstSpan<OutgoingDatagram>(datagrams).subspan(sent));
+        REQUIRE((result.error == SocketError::None || result.error == SocketError::Busy));
+        sent += result.count;
+    }
+    REQUIRE(sent == kBurst);
+}
+
+// The trains and their datagrams segment_train makes of the burst toward `peer`.
+OffloadCounters burst_trains(const Endpoint& peer)
+{
+    static u8 payload[1400];
+    OutgoingDatagram datagrams[kBurst];
+    for (usize index = 0U; index < kBurst; ++index)
+    {
+        const Planned plan = burst_plan(index);
+        datagrams[index] = OutgoingDatagram{ConstSpan<u8>(payload, plan.size), peer, plan.ecn};
+    }
+    OffloadCounters trains;
+    for (usize at = 0U; at < kBurst;)
+    {
+        const usize count = segment_train(ConstSpan<OutgoingDatagram>(datagrams).subspan(at));
+        if (count > 1U)
+        {
+            ++trains.trains_sent;
+            trains.train_datagrams_sent += count;
+        }
+        at += count;
+    }
+    return trains;
+}
+
+// Checks datagram `expected` of the burst arrived whole in `bytes` with its codepoint.
+void check_burst_datagram(ConstSpan<u8> bytes, Ecn ecn, usize expected)
+{
+    INFO("datagram " << expected);
+    const Planned plan = burst_plan(expected);
+    REQUIRE(bytes.size() == plan.size);
+    CHECK(matches(bytes, static_cast<u32>(expected)));
+    CHECK(ecn == plan.ecn);
+}
+
+// Receives the burst on a socket that does not coalesce and checks every datagram arrived whole, in order.
+void receive_burst(UdpSocket& to, const Endpoint& from_seen)
+{
+    static Slots slots;
+    REQUIRE(receive_all(to, Span<ReceivedDatagram>(slots.slots, kBurst), kBurst) == kBurst);
+    for (usize index = 0U; index < kBurst; ++index)
+    {
+        const ReceivedDatagram& slot = slots.slots[index];
+        CHECK(slot.peer == from_seen);
+        CHECK(slot.segment == 0U);
+        CHECK_FALSE(slot.truncated);
+        check_burst_datagram(slot.storage.first(slot.size), slot.ecn, index);
+    }
+}
+
+// Receives the burst on a coalescing socket, splitting each train as IoLoop does, and checks every datagram arrived
+// whole, in order: the trains it received.
+u64 receive_burst_coalesced(UdpSocket& to, const Endpoint& from_seen)
+{
+    static u8 storage[8][kMaxTrainBytes];
+    ReceivedDatagram slots[8];
+    for (usize index = 0U; index < 8U; ++index)
+    {
+        slots[index].storage = Span<u8>(storage[index], kMaxTrainBytes);
+    }
+    usize next = 0U;
+    u64 trains = 0U;
+    while (next < kBurst && to.wait_readable(kPatience))
+    {
+        const BatchResult result = to.receive(slots);
+        REQUIRE(result.error == SocketError::None);
+        for (usize slot_index = 0U; slot_index < result.count; ++slot_index)
+        {
+            const ReceivedDatagram& slot = slots[slot_index];
+            CHECK(slot.peer == from_seen);
+            CHECK_FALSE(slot.truncated);
+            const usize segment = (slot.segment == 0U) ? slot.size : slot.segment;
+            trains += (slot.segment != 0U) ? 1U : 0U;
+            for (usize at = 0U; at < slot.size && next < kBurst; at += segment, ++next)
+            {
+                const usize size = (slot.size - at < segment) ? slot.size - at : segment;
+                check_burst_datagram(slot.storage.subspan(at, size), slot.ecn, next);
+            }
+        }
+    }
+    CHECK(next == kBurst);
+    return trains;
+}
+
+// Opens a loopback socket of `address`'s family with the offloads chosen; false when the host lacks the family.
+bool open_offloaded(UdpSocket& out, const IpAddress& address, bool segment_send, bool coalesce_receive)
+{
+    UdpOptions options;
+    options.bind = Endpoint{address, 0U};
+    options.receive_buffer_bytes = 1U << 22U;
+    options.send_buffer_bytes = 1U << 22U;
+    options.segment_send = segment_send;
+    options.coalesce_receive = coalesce_receive;
+    SocketError error = SocketError::Failed;
+    out = UdpSocket::open(options, error);
+    if (error == SocketError::FamilyUnsupported || error == SocketError::AddressUnavailable)
+    {
+        return false;
+    }
+    REQUIRE(error == SocketError::None);
+    return true;
+}
+} // namespace
+
+TEST_CASE("segment_train takes exactly the longest run the rule allows, against a direct reading of it",
+          "[net][udp][net-path]")
+{
+    static u8 bytes[crd::net::kMaxUdpPayloadV6];
+    const Endpoint peers[] = {
+        {IpAddress::v4_loopback(), 1U}, {IpAddress::v4_loopback(), 2U}, {IpAddress::v6_loopback(), 1U}};
+    const usize bases[] = {0U, 1U, 1200U, 1472U, 1000U, 2000U, 30000U, 32763U};
+    constexpr Ecn codes[] = {Ecn::Ect0, Ecn::Ect1, Ecn::NotEct, Ecn::Ce};
+    u64 state = 0x9E3779B97F4A7C15ULL;
+    const auto next = [&state]()
+    {
+        state ^= state << 13U;
+        state ^= state >> 7U;
+        state ^= state << 17U;
+        return state;
+    };
+    CHECK(segment_train({}) == 0U);
+    for (u32 round = 0U; round < 20000U; ++round)
+    {
+        OutgoingDatagram datagrams[80];
+        const usize count = next() % 81U;
+        const usize base = bases[next() % 8U];
+        const Endpoint peer = peers[(next() % 4U == 0U) ? 2U : 0U];
+        for (usize index = 0U; index < count; ++index)
+        {
+            const u64 pick = next() % 16U;
+            usize size = base;
+            if (pick == 12U)
+            {
+                size = (base > 0U) ? base - 1U : 0U;
+            }
+            else if (pick == 13U)
+            {
+                size = base + 1U;
+            }
+            else if (pick == 14U)
+            {
+                size = next() % 3000U;
+            }
+            else if (pick == 15U)
+            {
+                size = 0U;
+            }
+            const bool stray = next() % 40U == 0U;
+            datagrams[index] = OutgoingDatagram{ConstSpan<u8>(bytes, size), stray ? peers[1] : peer,
+                                                codes[(next() % 30U == 0U) ? 1U + (next() % 3U) : 0U]};
+        }
+        const ConstSpan<OutgoingDatagram> run(datagrams, count);
+        usize want = 0U;
+        for (usize length = 1U; length <= count; ++length)
+        {
+            want = forms_train(run, length) ? length : want;
+        }
+        INFO("round " << round);
+        REQUIRE(segment_train(run) == want);
+    }
+}
+
+TEST_CASE("a burst leaves in trains where the host segments them and arrives as the same datagrams as without",
+          "[net][udp][net-path]")
+{
+    const IpAddress families[] = {IpAddress::v4_loopback(), IpAddress::v6_loopback()};
+    for (const IpAddress& family : families)
+    {
+        for (const bool segment : {true, false})
+        {
+            UdpSocket from;
+            UdpSocket to;
+            if (!open_offloaded(from, family, segment, false) || !open_offloaded(to, family, true, false))
+            {
+                SKIP("the host has no IPv6 loopback");
+            }
+            INFO("IPv" << (family.family == crd::net::AddressFamily::V4 ? 4 : 6) << ", segmenting " << segment);
+#if CRD_OS_LINUX
+            REQUIRE(from.features().segmented_send == segment);
+#else
+            CHECK_FALSE(from.features().segmented_send); // Windows' USO and macOS's offloads are not taken yet
+#endif
+            CHECK_FALSE(to.features().coalesced_receive); // only on request
+            send_burst(from, to.local_endpoint());
+            receive_burst(to, from.local_endpoint());
+            const OffloadCounters& sent = from.offload_counters();
+            const OffloadCounters planned = burst_trains(to.local_endpoint());
+            const bool trains = from.features().segmented_send;
+            CHECK(sent.trains_sent == (trains ? planned.trains_sent : 0U));
+            CHECK(sent.train_datagrams_sent == (trains ? planned.train_datagrams_sent : 0U));
+            CHECK(sent.trains_refused == 0U);
+            CHECK(to.offload_counters().trains_received == 0U);
+        }
+    }
+    CHECK(burst_trains(Endpoint{IpAddress::v4_loopback(), 9U}).trains_sent == 5U);
+
+    // A dual-stack socket's trains toward an IPv4 peer.
+    UdpOptions options;
+    options.bind = Endpoint{IpAddress::v6_any(), 0U};
+    options.send_buffer_bytes = 1U << 22U;
+    SocketError error = SocketError::Failed;
+    UdpSocket dual = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    UdpSocket v4 = open_on(IpAddress::v4_loopback());
+    send_burst(dual, v4.local_endpoint());
+    receive_burst(v4, reach(dual, IpAddress::v4_loopback()));
+#if CRD_OS_LINUX
+    CHECK(dual.offload_counters().trains_sent == 5U);
+#endif
+}
+
+TEST_CASE("a coalescing socket receives a sender's trains whole and each datagram as it was sent",
+          "[net][udp][net-path]")
+{
+    const IpAddress families[] = {IpAddress::v4_loopback(), IpAddress::v6_loopback()};
+    for (const IpAddress& family : families)
+    {
+        for (const bool segment : {true, false})
+        {
+            UdpSocket from;
+            UdpSocket to;
+            if (!open_offloaded(from, family, segment, false) || !open_offloaded(to, family, true, true))
+            {
+                SKIP("the host has no IPv6 loopback");
+            }
+            INFO("IPv" << (family.family == crd::net::AddressFamily::V4 ? 4 : 6) << ", segmenting " << segment);
+#if CRD_OS_LINUX
+            REQUIRE(to.features().coalesced_receive);
+#else
+            CHECK_FALSE(to.features().coalesced_receive); // Windows' URO and macOS's offloads are not taken yet
+#endif
+            send_burst(from, to.local_endpoint());
+            const u64 trains = receive_burst_coalesced(to, from.local_endpoint());
+            CHECK(to.offload_counters().trains_received == trains);
+#if CRD_OS_LINUX
+            // On the loopback a segmented send reaches a coalescing socket whole; single datagrams stay single.
+            CHECK(trains == (segment ? 5U : 0U));
+            CHECK(to.offload_counters().train_datagrams_received ==
+                  (segment ? burst_trains(to.local_endpoint()).train_datagrams_sent : 0U));
+#endif
+        }
+    }
+}
+
 #if CRD_OS_LINUX
 namespace
 {
@@ -701,13 +1042,17 @@ TEST_CASE("a datagram the host drops past the socket is lost on the way, and the
     const BatchResult sent = near.send(batch);
     CHECK(sent.error == SocketError::None);
     CHECK(sent.count == 4U);
+    // The two long datagrams and the short one behind them went as one train, lost whole and counted once.
+    CHECK(near.offload_counters().trains_sent == 1U);
+    CHECK(near.offload_counters().train_datagrams_sent == 3U);
 }
 
 TEST_CASE("a flood of Packet Too Big reports is read 64 a call, and the datagrams behind it are not held back",
           "[.netns]")
 {
     RouterPath& path = RouterPath::get();
-    UdpSocket near = path.open(RouterPath::Near, false);
+    // A datagram a send: a forwarding hop answers a train it drops with one report.
+    UdpSocket near = path.open(RouterPath::Near, false, false, false);
     UdpSocket far = path.open(RouterPath::Far, false);
     static u8 payload[1400];
     pattern(Span<u8>(payload, sizeof(payload)), 13U);
@@ -754,5 +1099,134 @@ TEST_CASE("a flood of Packet Too Big reports is read 64 a call, and the datagram
     CHECK(rest.error == SocketError::None);
     CHECK(reports + rest.count == kFlood);
     CHECK_FALSE(near.wait_readable(0U));
+}
+
+TEST_CASE("a train the host cannot segment goes a datagram a send, and the socket stops segmenting", "[.netns]")
+{
+    RouterPath& path = RouterPath::get();
+    for (const bool v6 : {false, true})
+    {
+        INFO("IPv" << (v6 ? 6 : 4));
+        UdpSocket near = path.open(RouterPath::Near, v6);
+        UdpSocket far = path.open(RouterPath::Far, v6);
+        REQUIRE(near.features().segmented_send);
+        // Without transmit checksum offload on the near link the host refuses every segmented send with EIO.
+        path.checksum_offload(RouterPath::Near, "a0", false);
+        static u8 payload[10][1000];
+        OutgoingDatagram datagrams[10];
+        for (usize index = 0U; index < 10U; ++index)
+        {
+            pattern(Span<u8>(payload[index], sizeof(payload[index])), static_cast<u32>(index));
+            datagrams[index] = OutgoingDatagram{ConstSpan<u8>(payload[index], sizeof(payload[index])),
+                                                far.local_endpoint(), Ecn::Ect0};
+        }
+        const BatchResult sent = near.send(datagrams);
+        path.checksum_offload(RouterPath::Near, "a0", true);
+        CHECK(sent.error == SocketError::None);
+        CHECK(sent.count == 10U);
+        CHECK(near.offload_counters().trains_refused == 1U);
+        CHECK(near.offload_counters().trains_sent == 0U);
+        CHECK_FALSE(near.features().segmented_send); // for good: later sends go a datagram a call
+        CHECK(near.features().ecn_marking);          // the refusal was the train's, not the codepoint's
+        static Slots slots;
+        REQUIRE(receive_all(far, Span<ReceivedDatagram>(slots.slots, 10U), 10U) == 10U);
+        for (usize index = 0U; index < 10U; ++index)
+        {
+            CHECK(slots.slots[index].size == 1000U);
+            CHECK(matches(slots.slots[index].storage.first(1000U), static_cast<u32>(index)));
+            CHECK(slots.slots[index].ecn == Ecn::Ect0);
+        }
+        CHECK(near.send(datagrams).count == 10U);
+        CHECK(near.offload_counters().trains_sent == 0U);
+        REQUIRE(receive_all(far, Span<ReceivedDatagram>(slots.slots, 10U), 10U) == 10U);
+    }
+}
+
+TEST_CASE("a train the host drops past the socket is lost whole and counted once, and the batch goes on", "[.netns]")
+{
+    RouterPath& path = RouterPath::get();
+    for (const bool v6 : {false, true})
+    {
+        INFO("IPv" << (v6 ? 6 : 4));
+        UdpSocket near = path.open(RouterPath::Near, v6);
+        static u8 payload[1000];
+        const Endpoint nowhere = RouterPath::dropping(v6);
+        OutgoingDatagram batch[11];
+        for (usize index = 0U; index < 11U; ++index)
+        {
+            // Two trains marked apart and a lone datagram.
+            batch[index] = OutgoingDatagram{ConstSpan<u8>(payload, (index == 10U) ? 64U : sizeof(payload)), nowhere,
+                                            (index < 5U) ? Ecn::Ect0 : Ecn::Ect1};
+        }
+        batch[10].ecn = Ecn::NotEct;
+        path.full_queue(true);
+        const BatchResult sent = near.send(batch);
+        path.full_queue(false);
+        CHECK(sent.error == SocketError::None);
+        CHECK(sent.count == 11U);
+        CHECK(near.offload_counters().trains_sent == 2U);
+        CHECK(near.offload_counters().train_datagrams_sent == 10U);
+        CHECK(near.features().segmented_send);
+    }
+}
+
+TEST_CASE("a train with datagrams past the link's MTU is refused as each would be, and segmenting stays on", "[.netns]")
+{
+    RouterPath& path = RouterPath::get();
+    for (const bool v6 : {false, true})
+    {
+        INFO("IPv" << (v6 ? 6 : 4));
+        for (const bool segment : {true, false})
+        {
+            UdpSocket near = path.open(RouterPath::Near, v6, false, segment);
+            UdpSocket far = path.open(RouterPath::Far, v6);
+            static u8 payload[1600];
+            const OutgoingDatagram datagrams[] = {
+                {ConstSpan<u8>(payload, link_payload(v6) + 1U), far.local_endpoint(), Ecn::Ect0},
+                {ConstSpan<u8>(payload, link_payload(v6) + 1U), far.local_endpoint(), Ecn::Ect0},
+            };
+            const BatchResult sent = near.send(datagrams);
+            CHECK(sent.count == 0U);
+            CHECK(sent.error == SocketError::MessageTooLarge);
+            CHECK(near.offload_counters().trains_refused == (segment ? 1U : 0U));
+            CHECK(near.features().segmented_send == segment); // a train's own refusal, not the host's
+            CHECK(near.features().ecn_marking);               // nor the codepoint's (the host's EINVAL)
+        }
+    }
+}
+
+TEST_CASE("a train across the router's narrow hop loses its longer datagrams there, never fragmented", "[.netns]")
+{
+    RouterPath& path = RouterPath::get();
+    for (const bool v6 : {false, true})
+    {
+        INFO("IPv" << (v6 ? 6 : 4));
+        UdpSocket near = path.open(RouterPath::Near, v6);
+        UdpSocket far = path.open(RouterPath::Far, v6);
+        static u8 payload[8][1400];
+        OutgoingDatagram datagrams[8];
+        for (usize index = 0U; index < 8U; ++index)
+        {
+            // Four datagrams the hop cannot carry, then four it can, marked apart: two trains.
+            const usize size = (index < 4U) ? hop_payload(v6) + 1U : hop_payload(v6);
+            pattern(Span<u8>(payload[index], size), static_cast<u32>(index));
+            datagrams[index] = OutgoingDatagram{ConstSpan<u8>(payload[index], size), far.local_endpoint(),
+                                                (index < 4U) ? Ecn::NotEct : Ecn::Ect0};
+        }
+        REQUIRE(near.send(datagrams).count == 8U);
+        CHECK(near.offload_counters().trains_sent == 2U);
+        static Slots slots;
+        REQUIRE(receive_all(far, Span<ReceivedDatagram>(slots.slots, 4U), 4U) == 4U);
+        for (usize index = 0U; index < 4U; ++index)
+        {
+            CHECK(slots.slots[index].size == hop_payload(v6));
+            CHECK(matches(slots.slots[index].storage.first(hop_payload(v6)), static_cast<u32>(4U + index)));
+        }
+        spin_for(std::chrono::milliseconds(50));
+        CHECK_FALSE(far.wait_readable(0U)); // no fragment of a longer datagram arrived reassembled
+        // The router reported the hop for the train it dropped.
+        const ReceivedDatagram& report = one_report(near, slots, 2048U);
+        CHECK(report.too_big == hop_payload(v6));
+    }
 }
 #endif

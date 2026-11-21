@@ -53,6 +53,11 @@ public:
 
     void on_route(const IngressDecision& decision, const ReceivedDatagram& datagram, u64) noexcept override
     {
+        if (routes < kKept)
+        {
+            route_bytes[routes] = datagram.storage.first(datagram.size);
+            route_ecn[routes] = datagram.ecn;
+        }
         ++routes;
         last_connection = decision.connection;
         last_size = datagram.size;
@@ -103,6 +108,9 @@ public:
         return (next_timer == kNeverNs) ? kNeverNs : now_ns + next_timer;
     }
 
+    static constexpr usize kKept = 64U;
+    ConstSpan<u8> route_bytes[kKept]; // each routed datagram's bytes where the loop held them, for the first kKept
+    Ecn route_ecn[kKept] = {};
     usize routes = 0U;
     usize admits = 0U;
     usize earlies = 0U;
@@ -439,6 +447,107 @@ TEST_CASE("run() turns until stopped and waits between turns", "[net][io-loop]")
     rig.loop.run(stop);
     CHECK(rig.handler.timer_calls == 3U);
     CHECK(rig.socket.waits == 2U); // none after the turn that stopped it
+}
+
+TEST_CASE("A coalescing socket's train reaches the handler a datagram at a time, in place, beside a plain socket's",
+          "[net][io-loop][net-path]")
+{
+    CountingAllocator allocator;
+    ConnectionIdTable routes(allocator, 64U, ConstSpan<u8>(kKey));
+    HandshakeBuckets buckets(allocator, HandshakeRules{}, ConstSpan<u8>(kKey));
+    Ingress ingress(IngressConfig{}, routes, buckets, nullptr, nullptr);
+    TestClock clock;
+    RecordingHandler handler(routes);
+    VirtualSocket coalescing;
+    coalescing.offers.coalesced_receive = true;
+    VirtualSocket plain;
+    DatagramSocket* const sockets[] = {&coalescing, &plain};
+    IoLoopConfig config;
+    config.slot_bytes = 1300U;
+    config.train_slots = 2U;
+    IoLoop loop(allocator, SocketSet(ConstSpan<DatagramSocket*>(sockets)), clock, ingress, handler, config);
+    REQUIRE(loop.ready());
+    const u8 routed[16] = {0x2A, 0x2B, 0x2C};
+    REQUIRE(routes.insert(view_of(routed, 16U), 7U) == RouteError::None);
+
+    // Five 1200-byte short packets and a 300-byte one, each its index in its last byte.
+    static u8 train[kMaxTrainBytes];
+    const usize sizes[] = {1200U, 1200U, 1200U, 1200U, 1200U, 300U};
+    usize at = 0U;
+    for (usize index = 0U; index < 6U; ++index)
+    {
+        const Datagram packet = short_packet(view_of(routed, 16U), sizes[index]);
+        std::memcpy(train + at, packet.bytes, packet.size);
+        train[at + packet.size - 1U] = static_cast<u8>(index);
+        at += packet.size;
+    }
+    coalescing.deliver_train(ConstSpan<u8>(train, at), 1200U, kClient);
+    plain.deliver(short_packet(view_of(routed, 16U), 100U), kClient);
+    const usize calls = allocator.calls();
+    (void)loop.poll();
+    CHECK(allocator.calls() == calls);
+    REQUIRE(handler.routes == 7U);
+    CHECK(loop.counters().trains == 1U);
+    CHECK(loop.counters().received == 7U);
+    for (usize index = 0U; index < 6U; ++index)
+    {
+        INFO("datagram " << index);
+        REQUIRE(handler.route_bytes[index].size() == sizes[index]);
+        CHECK(handler.route_bytes[index].back() == index);
+        CHECK(handler.route_ecn[index] == Ecn::Ect0);
+        // In place: each datagram where it lies in the train's slot, never copied.
+        CHECK(handler.route_bytes[index].data() == handler.route_bytes[0].data() + (1200U * index));
+    }
+    CHECK(handler.route_bytes[6].size() == 100U); // the plain socket's, read into a plain slot
+    CHECK(handler.last_socket == 1U);
+
+    // A truncated train's cut last datagram is truncated and dropped; its whole ones arrive.
+    coalescing.deliver_train(ConstSpan<u8>(train, 2400U + 500U), 1200U, kClient, true);
+    (void)loop.poll();
+    CHECK(handler.routes == 9U);
+    CHECK(ingress.counters().drops[static_cast<usize>(DropReason::Truncated)] == 1U);
+    // A train cut exactly at a datagram's end lost only datagrams it does not hold.
+    coalescing.deliver_train(ConstSpan<u8>(train, 2400U), 1200U, kClient, true);
+    (void)loop.poll();
+    CHECK(handler.routes == 11U);
+
+    // Datagrams longer than slot_bytes are truncated in a train as a plain slot of that size truncates them.
+    static u8 wide[3U * 1400U];
+    for (usize index = 0U; index < 3U; ++index)
+    {
+        const Datagram packet = short_packet(view_of(routed, 16U), 1400U);
+        std::memcpy(wide + (1400U * index), packet.bytes, packet.size);
+    }
+    coalescing.deliver_train(ConstSpan<u8>(wide), 1400U, kClient);
+    (void)loop.poll();
+    CHECK(handler.routes == 11U);
+    CHECK(ingress.counters().drops[static_cast<usize>(DropReason::Truncated)] == 4U);
+    CHECK(loop.counters().trains == 4U);
+
+    // A slot the socket says holds one datagram stays one, whatever its size.
+    plain.deliver(short_packet(view_of(routed, 16U), 1200U), kClient);
+    coalescing.deliver(short_packet(view_of(routed, 16U), 1200U), kClient);
+    (void)loop.poll();
+    CHECK(handler.routes == 13U);
+    CHECK(loop.counters().trains == 4U);
+
+    // Train slots exist only for a set that coalesces, and then need a count in range.
+    IoLoopConfig none = config;
+    none.train_slots = 0U;
+    CHECK_FALSE(
+        IoLoop(allocator, SocketSet(ConstSpan<DatagramSocket*>(sockets)), clock, ingress, handler, none).ready());
+    none.train_slots = 1025U;
+    CHECK_FALSE(
+        IoLoop(allocator, SocketSet(ConstSpan<DatagramSocket*>(sockets)), clock, ingress, handler, none).ready());
+    none.train_slots = 0U;
+    CHECK(IoLoop(allocator, plain, clock, ingress, handler, none).ready());
+    for (usize allowed = 0U; allowed < 6U; ++allowed)
+    {
+        CountingAllocator refusing;
+        refusing.refuse_after(allowed);
+        CHECK_FALSE(
+            IoLoop(refusing, SocketSet(ConstSpan<DatagramSocket*>(sockets)), clock, ingress, handler, config).ready());
+    }
 }
 
 TEST_CASE("The loop refuses configurations and allocations it cannot run on", "[net][io-loop]")
