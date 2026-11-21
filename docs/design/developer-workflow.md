@@ -73,7 +73,8 @@ scripts/wsl-lane.sh ...`: no POSIX path crosses a Windows shell (Git Bash rewrit
 quoting. The check keeps its one or two compile workers and refreshes a lane tree's missing File API reply itself. On
 a host without clang-tidy 22 a lane check ends incomplete after its build, tests and guards pass: changed C++ stays
 ungated there, never passed. A Linux host installs the pinned one once with `python3 scripts/install-clang-tidy.py`
-(below); the WSL reference host has it since 2026-10-25, and its lane checks now end passed.
+(below); the WSL reference host has had the 22.1.8 install since 2026-11-21 (20.1.0 from 2026-10-25), and its lane
+checks end passed.
 
 | Risk gate | Local route | Hosted lanes |
 |---|---|---|
