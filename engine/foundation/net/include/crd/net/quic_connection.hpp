@@ -508,10 +508,7 @@ public:
     // The largest path ID the peer accepts (its initial_max_path_id, raised by MAX_PATH_ID), once multipath().
     [[nodiscard]] u64 peer_max_path_id() const noexcept { return m_peer_max_path_id; }
     // The peer's preference for `path_id`, its newest PATH_STATUS frame's (section 3.3): Unknown before one.
-    [[nodiscard]] QuicPeerPathStatus peer_path_status(u64 path_id = 0U) const noexcept
-    {
-        return (path_id == 0U) ? m_peer_status : QuicPeerPathStatus::Unknown;
-    }
+    [[nodiscard]] QuicPeerPathStatus peer_path_status(u64 path_id = 0U) const noexcept;
     // The Destination Connection ID this side sends to, and the peer's IDs held (sequence 0 first among them).
     [[nodiscard]] cont::ConstSpan<u8> peer_cid() const noexcept;
     [[nodiscard]] usize peer_cid_count() const noexcept { return m_cids.peer_count(); }
@@ -759,6 +756,8 @@ private:
     // The sending state of path slot `slot` (open in the recovery), and the slot of the datagram being written: the
     // handshake's until multipath opens others (S78's scheduling).
     [[nodiscard]] QuicPathControl& control(usize slot) noexcept { return *m_controls[slot]; }
+    // The slot whose number space is path ID `path_id`'s (QuicPacketProtection::path_id); kQuicNoPath for none.
+    [[nodiscard]] usize slot_of(u64 path_id) const noexcept;
     [[nodiscard]] static constexpr usize send_slot() noexcept { return 0U; }
     // The datagram frames' room follows the smallest datagram of the open paths, any of which may carry one.
     void follow_datagram_size() noexcept;
@@ -836,10 +835,17 @@ private:
     QuicTransportParameters m_local;
     QuicTransportParameters m_peer;
     bool m_peer_known = false;
-    bool m_multipath = false;        // both ends offered initial_max_path_id (RFC 10069 section 2)
-    u64 m_peer_max_path_id = 0U;     // the largest path ID the peer accepts
-    u64 m_peer_status_sequence = 0U; // path ID 0's newest PATH_STATUS sequence, while m_peer_status is known
-    QuicPeerPathStatus m_peer_status = QuicPeerPathStatus::Unknown;
+    bool m_multipath = false;    // both ends offered initial_max_path_id (RFC 10069 section 2)
+    u64 m_peer_max_path_id = 0U; // the largest path ID the peer accepts
+    // The peer's newest PATH_STATUS frame per path ID (section 4.3), for any path ID under this side's limit, open
+    // or not yet: an entry whose status is Unknown is free.
+    struct PeerStatus
+    {
+        u64 path_id = 0U;
+        u64 sequence = 0U;
+        QuicPeerPathStatus status = QuicPeerPathStatus::Unknown;
+    };
+    PeerStatus m_peer_statuses[kQuicMaxPaths];
     QuicTransportParameters m_remembered; // a client's for 0-RTT: its server's from the ticket's connection
     bool m_early_sending = false;         // a client sends 0-RTT under m_remembered until its server decides
     bool m_early_settled = false;         // a server decided on 0-RTT
@@ -856,6 +862,7 @@ private:
     u32 m_packet_version = 0U;      // the long header version of the packet being read (0 for a short header)
     QuicCids m_cids;                // both ends' connection IDs, path ID 0's until multipath opens others
     QuicCidRef m_packet_local;      // this side's ID the packet being read was sent to (none: not found())
+    usize m_receive_slot = 0U;      // the path slot of the 1-RTT packet being read: its ID's path ID's (0 otherwise)
     u8 m_new_token[kQuicMaxCarriedTokenBytes] = {};
     usize m_new_token_bytes = 0U;
     QuicPath m_new_token_path; // the path whose address the token is for

@@ -991,8 +991,16 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
         hold(header.type, packet, ecn);
         return false;
     }
+    // A 1-RTT packet decodes and opens in the number space of its ID's path ID (RFC 10069 section 2).
+    m_receive_slot = long_header ? 0U : slot_of(m_packet_local.path_id);
+    if (m_receive_slot == kQuicNoPath)
+    {
+        ++m_counters.packets_dropped;
+        m_receive_slot = 0U;
+        return false;
+    }
     QuicOpened opened;
-    const QuicPacketError error = m_protection.open(header, packet, opened);
+    const QuicPacketError error = m_protection.open(header, packet, opened, m_receive_slot);
     if (error != QuicPacketError::None)
     {
         const QuicTransportError close = quic_packet_close(error);
@@ -1078,13 +1086,13 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
             return true;
         }
     }
-    if (space == QuicSpace::Application)
+    if (space == QuicSpace::Application && m_protection.path_id(m_receive_slot) == 0U)
     {
-        follow_packet(opened.number, probing, now_ns);
+        follow_packet(opened.number, probing, now_ns); // path ID 0's 4-tuples (S75)
     }
     if (!m_space_gone[quic_space_index(space)])
     {
-        static_cast<void>(m_recovery->on_received(space, opened.number, eliciting, ecn, now_ns));
+        static_cast<void>(m_recovery->on_received(space, opened.number, eliciting, ecn, now_ns, m_receive_slot));
     }
     if (opened.key_update)
     {
@@ -1211,10 +1219,20 @@ bool QuicConnection::ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_
         m_counters.receive_timestamps +=
             m_peer_times.read(frame.ack, m_local.receive_timestamps_exponent, *m_recovery, now_ns);
     }
+    // An ACK frame's packets are path ID 0's, a PATH_ACK's its path ID's (RFC 10069 section 2.3), received through
+    // the packet's own slot. A path ID whose state is gone is silently ignored (section 4).
+    const bool application = space == QuicSpace::Application;
+    const usize slot = application ? slot_of(frame.kind == QuicFrameKind::PathAck ? frame.path_id : 0U) : 0U;
+    if (slot == kQuicNoPath)
+    {
+        m_peer_times.clear();
+        return true;
+    }
+    const usize via = application ? m_receive_slot : 0U;
     m_event_ns = now_ns;
-    QuicPathControl& acknowledged = control(0U); // an ACK frame's packets are path ID 0's
+    QuicPathControl& acknowledged = control(slot);
     acknowledged.on_ack_begin();
-    const QuicAckOutcome outcome = m_recovery->on_ack(space, frame.ack, now_ns, m_events);
+    const QuicAckOutcome outcome = m_recovery->on_ack(space, frame.ack, now_ns, m_events, slot, via);
     m_peer_times.clear();
     if (outcome.error == QuicRecoveryError::AckOfUnsent)
     {
@@ -1223,13 +1241,13 @@ bool QuicConnection::ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_
     }
     if (outcome.error == QuicRecoveryError::None)
     {
-        count(acknowledged.on_ack_end(space, frame.ack, outcome, m_recovery->rtt(), m_recovery->bytes_in_flight(),
-                                      now_ns));
+        count(acknowledged.on_ack_end(space, frame.ack, outcome, m_recovery->rtt(slot),
+                                      m_recovery->bytes_in_flight(slot), now_ns));
         follow_datagram_size();
     }
-    if (space == QuicSpace::Application)
+    if (application)
     {
-        m_protection.acknowledged(frame.ack.largest);
+        m_protection.acknowledged(frame.ack.largest, slot);
     }
     if (m_keyed && !address_validated() && outcome.acked_packets != 0U)
     {
@@ -1275,13 +1293,27 @@ bool QuicConnection::multipath_frame(const QuicFrame& frame, QuicSpace space, u6
             fail(QuicTransportError::NoError, 0U, now_ns);
             return false;
         case QuicFrameKind::PathStatus:
-            // One sequence space for both frames, an older or repeated one ignored (section 4.3).
-            if (m_peer_status == QuicPeerPathStatus::Unknown || frame.sequence > m_peer_status_sequence)
+        {
+            // One sequence space for both frames per path ID, an older or repeated one ignored (section 4.3); any
+            // path ID under the limit may be named, open or not yet.
+            PeerStatus* entry = nullptr;
+            for (PeerStatus& held : m_peer_statuses)
             {
-                m_peer_status = frame.backup ? QuicPeerPathStatus::Backup : QuicPeerPathStatus::Available;
-                m_peer_status_sequence = frame.sequence;
+                const bool known = held.status != QuicPeerPathStatus::Unknown;
+                if (known && held.path_id == frame.path_id)
+                {
+                    entry = &held;
+                    break;
+                }
+                entry = (!known && entry == nullptr) ? &held : entry;
+            }
+            if (entry != nullptr && (entry->status == QuicPeerPathStatus::Unknown || frame.sequence > entry->sequence))
+            {
+                *entry = PeerStatus{frame.path_id, frame.sequence,
+                                    frame.backup ? QuicPeerPathStatus::Backup : QuicPeerPathStatus::Available};
             }
             return true;
+        }
         case QuicFrameKind::PathNewConnectionId:
             return new_connection_id(frame, now_ns);
         case QuicFrameKind::PathRetireConnectionId:
@@ -3366,6 +3398,30 @@ cont::ConstSpan<u8> QuicConnection::peer_cid() const noexcept
     // A client before its server's first packet sends to its first Destination Connection ID.
     const QuicPeerCid* current = m_cids.peer(0U, m_cids.current());
     return (current == nullptr) ? m_initial_dcid.view() : current->id.view();
+}
+
+usize QuicConnection::slot_of(u64 path_id) const noexcept
+{
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        if (m_protection.path_open(slot) && m_protection.path_id(slot) == path_id)
+        {
+            return slot;
+        }
+    }
+    return kQuicNoPath;
+}
+
+QuicPeerPathStatus QuicConnection::peer_path_status(u64 path_id) const noexcept
+{
+    for (const PeerStatus& held : m_peer_statuses)
+    {
+        if (held.status != QuicPeerPathStatus::Unknown && held.path_id == path_id)
+        {
+            return held.status;
+        }
+    }
+    return QuicPeerPathStatus::Unknown;
 }
 
 u64 QuicConnection::next_packet_number(QuicSpace space, usize slot) const noexcept
