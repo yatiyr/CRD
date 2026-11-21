@@ -7,7 +7,10 @@
 // (section 6.3) with the first flight's time as the initial estimate (section 6.2.2). And receive timestamps
 // (draft-ietf-quic-receive-ts-03, #receive-timestamps): the log's latest times of acknowledged packets in a frame the
 // room allows, read back for the sender's packets on the peer's clock, and implausible reports giving none. And packets
-// a scheduled handover may take (#handover): kept out of persistent congestion, their RTT samples named.
+// a scheduled handover may take (#handover): kept out of persistent congestion, their RTT samples named. And
+// multipath's paths (RFC 10069 section 5, S78): slots opened and closed, each path's numbers, estimate, loss
+// detection, thresholds and probe backoff its own under one timer, the minimum RTT restarted when acknowledgements
+// change path (section 5.4), a closed path's packets lost outside every estimate, and every path's owed ACK.
 
 #include <crd/containers/array.hpp>
 #include <crd/net/quic_recovery.hpp>
@@ -52,16 +55,23 @@ AckFrame ack_of(u64 smallest, u64 largest, u64 delay = 0U)
     return AckFrame(ConstSpan<QuicAckRange>(&range, 1U), delay);
 }
 
-// The events in order: 'a' acknowledged, 'l' lost, 'd' discarded, with the packet numbers.
+// The events in order: 'a' acknowledged, 'l' lost, 'd' discarded, with the packet numbers and path slots. With
+// `watch` set, `on_path` counts the events whose packet was on its path's estimate when the event came.
 struct Events final : QuicRecoveryEvents
 {
     char  kinds[64]   = {};
     u64   numbers[64] = {};
+    u8    paths[64]   = {};
     usize count       = 0U;
+    const QuicRecovery* watch = nullptr;
+    usize on_path = 0U;
 
-    void on_acked(QuicSpace /*space*/, const QuicSentPacket& packet) noexcept override { add('a', packet); }
-    void on_lost(QuicSpace /*space*/, const QuicSentPacket& packet) noexcept override { add('l', packet); }
-    void on_discarded(QuicSpace /*space*/, const QuicSentPacket& packet) noexcept override { add('d', packet); }
+    void on_acked(QuicSpace space, const QuicSentPacket& packet) noexcept override { add('a', space, packet); }
+    void on_lost(QuicSpace space, const QuicSentPacket& packet) noexcept override { add('l', space, packet); }
+    void on_discarded(QuicSpace space, const QuicSentPacket& packet) noexcept override
+    {
+        add('d', space, packet);
+    }
     // Spurious losses, apart: their loss was the event.
     void on_spurious(QuicSpace /*space*/, const QuicSentPacket& packet, u64 lost_ns) noexcept override
     {
@@ -73,14 +83,16 @@ struct Events final : QuicRecoveryEvents
     u64   spurious_bytes = 0U;
     u64   spurious_lost_ns = 0U;
 
-    void add(char kind, const QuicSentPacket& packet) noexcept
+    void add(char kind, QuicSpace space, const QuicSentPacket& packet) noexcept
     {
         if (count < 64U)
         {
             kinds[count]   = kind;
             numbers[count] = packet.number;
+            paths[count]   = packet.path;
             ++count;
         }
+        on_path += (watch != nullptr && watch->on_path(space, packet)) ? 1U : 0U;
     }
     [[nodiscard]] usize of(char kind) const
     {
@@ -1326,4 +1338,379 @@ TEST_CASE("quic recovery: a new path starts the estimate again and keeps what th
     const QuicTimeout timeout = f.recovery.on_timeout(f.recovery.loss_timer_ns(), f.events);
     CHECK(timeout.lost.bytes == 0U);
     CHECK(f.events.of('l') == 1U);
+}
+
+namespace
+{
+QuicSentPacket sent_on(usize path, u64 number, u64 sent_ns)
+{
+    QuicSentPacket out = packet(number, sent_ns);
+    out.path = static_cast<u8>(path);
+    return out;
+}
+
+// A Fixture with storage for slots 1 to 3 (and for slot 0 reopened).
+struct Paths : Fixture
+{
+    QuicSentEntry second[16];
+    QuicSentEntry third[16];
+    QuicSentEntry fourth[16];
+
+    using Fixture::Fixture;
+    bool open(usize path)
+    {
+        QuicSentEntry* const storage = (path == 1U) ? second : (path == 2U) ? third : fourth;
+        return recovery.open_path(path, Span<QuicSentEntry>(storage, 16U));
+    }
+    void send_on(usize path, u64 number, u64 sent_ns)
+    {
+        REQUIRE(recovery.on_sent(QuicSpace::Application, sent_on(path, number, sent_ns)) == QuicRecoveryError::None);
+    }
+    QuicAckOutcome ack_on(usize path, u64 smallest, u64 largest, u64 now_ns, usize via)
+    {
+        const AckFrame frame = ack_of(smallest, largest);
+        return recovery.on_ack(QuicSpace::Application, frame.ack(), now_ns, events, path, via);
+    }
+};
+
+// The ACK frame `out` holds.
+QuicAck read_ack(const u8* out, usize bytes)
+{
+    WireReader in(ConstSpan<u8>(out, bytes));
+    QuicFrame frame;
+    REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);
+    return frame.ack;
+}
+} // namespace
+
+TEST_CASE("quic recovery: path slots open with storage of their own, and a slot not open is refused and reads empty",
+          "[net][quic][recovery][multipath]")
+{
+    Paths f;
+    const QuicSpace app = QuicSpace::Application;
+    CHECK(f.recovery.path_open(0U));
+    CHECK_FALSE(f.open(0U)); // open from construction
+    CHECK_FALSE(f.recovery.open_path(kQuicMaxPaths, Span<QuicSentEntry>(f.second, 16U)));
+    CHECK_FALSE(f.recovery.open_path(1U, Span<QuicSentEntry>()));
+    CHECK_FALSE(f.recovery.path_open(1U));
+    REQUIRE(f.open(1U));
+    CHECK_FALSE(f.open(1U));
+    CHECK(f.recovery.path_open(1U));
+    CHECK_FALSE(f.recovery.path_open(2U));
+    CHECK_FALSE(f.recovery.path_open(kQuicMaxPaths));
+
+    // Slot 2 is not open; the Initial and Handshake spaces are slot 0's alone.
+    CHECK(f.recovery.on_sent(app, sent_on(2U, 0U, 0U)) == QuicRecoveryError::NoPath);
+    CHECK(f.recovery.on_sent(QuicSpace::Initial, sent_on(1U, 0U, 0U)) == QuicRecoveryError::NoPath);
+    CHECK(f.recovery.on_sent(app, sent_on(kQuicMaxPaths, 0U, 0U)) == QuicRecoveryError::NoPath);
+    CHECK_FALSE(f.recovery.can_send(app, 2U));
+    CHECK_FALSE(f.recovery.can_send_data(app, 2U));
+    CHECK_FALSE(f.recovery.can_send(QuicSpace::Handshake, 1U));
+    CHECK(f.recovery.can_send(app, 1U));
+    CHECK_FALSE(f.recovery.on_received(app, 0U, true, Ecn::NotEct, 0U, 2U));
+    CHECK_FALSE(f.recovery.on_received(QuicSpace::Initial, 0U, true, Ecn::NotEct, 0U, 1U));
+    u8 out[64];
+    CHECK(f.recovery.write_ack(app, Span<u8>(out, sizeof(out)), 0U, 2U).bytes == 0U);
+    f.send_on(1U, 0U, 0U);
+    const AckFrame frame = ack_of(0U, 0U);
+    CHECK(f.recovery.on_ack(app, frame.ack(), kMs, f.events, 2U).error == QuicRecoveryError::NoPath);
+    CHECK(f.recovery.on_ack(QuicSpace::Initial, frame.ack(), kMs, f.events, 1U).error == QuicRecoveryError::NoPath);
+    // Through a slot not open: nothing changes.
+    CHECK(f.recovery.on_ack(app, frame.ack(), kMs, f.events, 1U, 2U).error == QuicRecoveryError::NoPath);
+    CHECK(f.recovery.bytes_in_flight(1U) == 1200U);
+    CHECK(f.events.count == 0U);
+    CHECK(f.recovery.largest_acked(app, 1U) == kQuicNoPacket);
+
+    // Read empty: a closed slot and one out of range, and the Initial space asked for another slot.
+    REQUIRE(f.recovery.on_received(QuicSpace::Initial, 0U, true, Ecn::NotEct, 0U));
+    for (const usize path : {usize{2U}, kQuicMaxPaths})
+    {
+        CHECK_FALSE(f.recovery.rtt(path).sampled());
+        CHECK(f.recovery.rtt(path).smoothed_ns == kQuicInitialRttNs);
+        CHECK(f.recovery.bytes_in_flight(path) == 0U);
+        CHECK(f.recovery.pto_count(path) == 0U);
+        CHECK(f.recovery.largest_acked(app, path) == kQuicNoPacket);
+        CHECK(f.recovery.received(app, path).ranges().empty());
+        CHECK(f.recovery.ack_deadline_ns(app, path) == kNeverNs);
+        CHECK(f.recovery.unacknowledged_sent_ns(app, 0U, path) == kNeverNs);
+    }
+    CHECK(f.recovery.received(QuicSpace::Initial, 1U).ranges().empty());
+    CHECK_FALSE(f.recovery.received(QuicSpace::Initial).ranges().empty());
+}
+
+TEST_CASE("quic recovery: each path numbers, measures and counts its own packets", "[net][quic][recovery][multipath]")
+{
+    Paths f;
+    f.confirmed_with_rtt(50U * kMs);
+    const QuicSpace app = QuicSpace::Application;
+    REQUIRE(f.open(1U));
+    f.send(app, 1U, 60U * kMs);
+    f.send_on(1U, 0U, 60U * kMs);
+    f.send_on(1U, 1U, 60U * kMs);
+    f.send_on(1U, 2U, 60U * kMs);
+    CHECK(f.recovery.bytes_in_flight() == 1200U);
+    CHECK(f.recovery.bytes_in_flight(1U) == 3U * 1200U);
+    // Numbers rise within the path's own space; slot 0's are its own.
+    CHECK(f.recovery.on_sent(app, sent_on(1U, 2U, 61U * kMs)) == QuicRecoveryError::BadNumber);
+    CHECK(f.recovery.unacknowledged_sent_ns(app, 2U, 1U) == 60U * kMs);
+    CHECK(f.recovery.unacknowledged_sent_ns(app, 2U) == kNeverNs);
+    CHECK_FALSE(f.recovery.rtt(1U).sampled());
+
+    const QuicAckOutcome out = f.ack_on(1U, 0U, 2U, 260U * kMs, 1U);
+    CHECK(out.acked_packets == 3U);
+    CHECK(out.acked_bytes == 3U * 1200U);
+    CHECK(out.rtt_sampled);
+    CHECK(f.recovery.rtt(1U).latest_ns == 200U * kMs);
+    CHECK(f.recovery.rtt().latest_ns == 50U * kMs);
+    CHECK(f.recovery.bytes_in_flight(1U) == 0U);
+    CHECK(f.recovery.bytes_in_flight() == 1200U);
+    CHECK(f.recovery.largest_acked(app, 1U) == 2U);
+    CHECK(f.recovery.largest_acked(app) == 0U);
+    REQUIRE(f.events.count == 4U); // packet 0 of slot 0, then the three of slot 1
+    for (usize i = 1U; i < 4U; ++i)
+    {
+        CHECK(f.events.kinds[i] == 'a');
+        CHECK(f.events.paths[i] == 1U);
+    }
+    // Slot 0's acknowledgement of number 1 settles its own packet 1, not slot 1's.
+    CHECK(f.ack(app, 1U, 1U, 300U * kMs).acked_packets == 1U);
+    CHECK(f.events.paths[4] == 0U);
+    CHECK(f.recovery.bytes_in_flight() == 0U);
+}
+
+TEST_CASE("quic recovery: loss detection and the reordering thresholds are each path's own",
+          "[net][quic][recovery][multipath]")
+{
+    Paths f;
+    f.confirmed_with_rtt(10U * kMs);
+    const QuicSpace app = QuicSpace::Application;
+    REQUIRE(f.open(1U));
+    f.send_on(1U, 0U, 20U * kMs);
+    REQUIRE(f.ack_on(1U, 0U, 0U, 320U * kMs, 1U).rtt_sampled); // a 300 ms path beside a 10 ms one
+    for (u64 number = 1U; number <= 5U; ++number)
+    {
+        f.send_on(1U, number, 400U * kMs);
+    }
+    // Packets 1 and 2 by the packet threshold; 3 and 4 wait for slot 1's 9/8 of 300 ms (slot 0's would have taken
+    // them, 300 ms after their sending, at once).
+    const QuicAckOutcome out = f.ack_on(1U, 5U, 5U, 700U * kMs, 1U);
+    CHECK(out.lost.packets == 2U);
+    CHECK(f.recovery.loss_delay_ns(1U) == 337500U * 1000U);
+    CHECK(f.recovery.loss_delay_ns() < 20U * kMs);
+    CHECK(f.recovery.loss_timer_ns() == 400U * kMs + f.recovery.loss_delay_ns(1U));
+    const QuicTimeout timeout = f.recovery.on_timeout(f.recovery.loss_timer_ns(), f.events);
+    CHECK(timeout.kind == QuicTimeoutKind::Loss);
+    CHECK(timeout.space == app);
+    CHECK(timeout.path == 1U);
+    CHECK(timeout.lost.packets == 2U);
+    CHECK(f.events.of('l') == 4U);
+    // Packet 1 arrives late: slot 1's packet threshold rises to the reordering seen, slot 0's stays.
+    const QuicAckOutcome late = f.ack_on(1U, 1U, 1U, 740U * kMs, 1U);
+    CHECK(late.spurious_packets == 1U);
+    CHECK(f.recovery.packet_threshold(1U) == 5U);
+    CHECK(f.recovery.packet_threshold() == kQuicPacketThreshold);
+    CHECK(f.recovery.reorder_steps() == 0U);
+}
+
+TEST_CASE("quic recovery: one timer serves every path's probe timeout, and a probe backs off its own path alone",
+          "[net][quic][recovery][multipath]")
+{
+    Paths f;
+    const QuicSpace app = QuicSpace::Application;
+    REQUIRE(f.open(1U));
+    // Before confirmation, no Application space's timeout arms (RFC 9002 section 6.2.1).
+    f.send_on(1U, 0U, 0U);
+    CHECK(f.recovery.loss_timer_ns() == kNeverNs);
+    f.recovery.confirm_handshake(0U);
+    CHECK(f.recovery.loss_timer_ns() == f.recovery.probe_period_ns(app, 1U));
+    REQUIRE(f.ack_on(1U, 0U, 0U, 100U * kMs, 1U).rtt_sampled);
+    f.send(app, 0U, 100U * kMs);
+    REQUIRE(f.ack(app, 0U, 0U, 110U * kMs).rtt_sampled);
+    CHECK(f.recovery.probe_period_ns(app, 1U) > f.recovery.probe_period_ns(app, 0U));
+
+    constexpr u64 sent = 200U * kMs;
+    f.send(app, 1U, sent);
+    f.send_on(1U, 1U, sent);
+    // Slot 0's shorter period fires until its backoff passes slot 1's period.
+    usize first_path_probes = 0U;
+    for (;;)
+    {
+        const u64 zero = sent + f.recovery.probe_period_ns(app, 0U);
+        const u64 one = sent + f.recovery.probe_period_ns(app, 1U);
+        REQUIRE(f.recovery.loss_timer_ns() == ((zero < one) ? zero : one));
+        const u32 before_zero = f.recovery.pto_count(0U);
+        const u32 before_one = f.recovery.pto_count(1U);
+        const QuicTimeout timeout = f.recovery.on_timeout(f.recovery.loss_timer_ns(), f.events);
+        REQUIRE(timeout.kind == QuicTimeoutKind::Probe);
+        CHECK(timeout.space == app);
+        if (timeout.path == 1U)
+        {
+            CHECK(f.recovery.pto_count(1U) == before_one + 1U);
+            CHECK(f.recovery.pto_count(0U) == before_zero);
+            break;
+        }
+        CHECK(timeout.path == 0U);
+        CHECK(f.recovery.pto_count(0U) == before_zero + 1U);
+        CHECK(f.recovery.pto_count(1U) == before_one);
+        ++first_path_probes;
+    }
+    CHECK(first_path_probes == 3U); // slot 0's 55 ms period doubled three times passes slot 1's 325 ms
+    // An acknowledgement resets its own path's backoff.
+    REQUIRE(f.ack_on(1U, 1U, 1U, 900U * kMs, 1U).acked_packets == 1U);
+    CHECK(f.recovery.pto_count(1U) == 0U);
+    CHECK(f.recovery.pto_count(0U) == 3U);
+}
+
+TEST_CASE("quic recovery: a path's minimum RTT starts again when its acknowledgements come through another path",
+          "[net][quic][recovery][multipath]")
+{
+    Paths f;
+    REQUIRE(f.open(1U));
+    const auto exchange = [&f](u64 number, u64 sent_ns, u64 acked_ns, usize via)
+    {
+        f.send_on(1U, number, sent_ns);
+        REQUIRE(f.ack_on(1U, number, number, acked_ns, via).rtt_sampled);
+        return f.recovery.rtt(1U).min_ns;
+    };
+    CHECK(exchange(0U, 0U, 100U * kMs, 1U) == 100U * kMs);
+    CHECK(exchange(1U, 100U * kMs, 300U * kMs, 1U) == 100U * kMs);
+    // RFC 10069 section 5.4: acknowledgements through slot 0 now, so the minimum restarts from their samples.
+    CHECK(exchange(2U, 300U * kMs, 450U * kMs, 0U) == 150U * kMs);
+    CHECK(exchange(3U, 450U * kMs, 700U * kMs, 0U) == 150U * kMs);
+    CHECK(exchange(4U, 700U * kMs, 820U * kMs, 0U) == 120U * kMs);
+    // Through slot 2, which then closes: its next path ID's acknowledgements start the minimum again too.
+    REQUIRE(f.open(2U));
+    CHECK(exchange(5U, 820U * kMs, 1000U * kMs, 2U) == 180U * kMs);
+    REQUIRE(f.recovery.close_path(2U, 1000U * kMs, f.events));
+    REQUIRE(f.open(2U));
+    CHECK(exchange(6U, 1000U * kMs, 1250U * kMs, 2U) == 250U * kMs);
+    CHECK_FALSE(f.recovery.rtt().sampled());
+}
+
+TEST_CASE("quic recovery: a closed path's outstanding packets are lost outside every estimate, and its slot is free",
+          "[net][quic][recovery][multipath]")
+{
+    Paths f(QuicSide::Server);
+    const QuicSpace app = QuicSpace::Application;
+    f.recovery.confirm_handshake(0U);
+    f.recovery.set_receive_timestamps(4U, 0U);
+    REQUIRE(f.open(1U));
+    f.events.watch = &f.recovery;
+    for (u64 number = 0U; number < 3U; ++number)
+    {
+        f.send_on(1U, number, 10U * kMs);
+    }
+    f.send(app, 0U, 10U * kMs);
+    REQUIRE(f.ack_on(1U, 0U, 0U, 50U * kMs, 1U).acked_packets == 1U);
+    CHECK(f.events.on_path == 1U);
+    CHECK(f.recovery.bytes_in_flight(1U) == 2U * 1200U);
+
+    CHECK_FALSE(f.recovery.close_path(3U, 60U * kMs, f.events));
+    CHECK_FALSE(f.recovery.close_path(kQuicMaxPaths, 60U * kMs, f.events));
+    REQUIRE(f.recovery.close_path(1U, 60U * kMs, f.events));
+    REQUIRE(f.events.count == 3U);
+    for (usize i = 1U; i < 3U; ++i)
+    {
+        CHECK(f.events.kinds[i] == 'l');
+        CHECK(f.events.numbers[i] == i);
+        CHECK(f.events.paths[i] == 1U);
+    }
+    CHECK(f.events.on_path == 1U); // the slot closed before its packets were reported
+    CHECK_FALSE(f.recovery.path_open(1U));
+    CHECK_FALSE(f.recovery.on_path(app, sent_on(1U, 1U, 0U)));
+    CHECK(f.recovery.bytes_in_flight(1U) == 0U);
+    CHECK(f.recovery.bytes_in_flight() == 1200U);
+    CHECK_FALSE(f.recovery.can_send(app, 1U));
+    CHECK_FALSE(f.recovery.rtt(1U).sampled());
+    CHECK(f.recovery.largest_acked(app, 1U) == kQuicNoPacket);
+    CHECK(f.recovery.loss_timer_ns() == 10U * kMs + f.recovery.probe_period_ns(app, 0U));
+    // The slot takes the next path ID, numbered from 0 again.
+    REQUIRE(f.open(1U));
+    f.send_on(1U, 0U, 70U * kMs);
+    CHECK(f.recovery.bytes_in_flight(1U) == 1200U);
+
+    // Slot 0 closes only once the handshake's spaces are gone, and then its ACK frames carry no timestamps.
+    REQUIRE(f.recovery.on_received(app, 0U, true, Ecn::NotEct, 80U * kMs));
+    u8 out[64];
+    QuicAckWrite written = f.recovery.write_ack(app, Span<u8>(out, sizeof(out)), 80U * kMs);
+    REQUIRE(written.bytes != 0U);
+    CHECK(read_ack(out, written.bytes).timestamps);
+    CHECK_FALSE(f.recovery.close_path(0U, 90U * kMs, f.events));
+    REQUIRE(f.recovery.discard(QuicSpace::Initial, 90U * kMs, f.events));
+    CHECK_FALSE(f.recovery.close_path(0U, 90U * kMs, f.events));
+    REQUIRE(f.recovery.discard(QuicSpace::Handshake, 90U * kMs, f.events));
+    REQUIRE(f.recovery.close_path(0U, 90U * kMs, f.events));
+    CHECK_FALSE(f.recovery.close_path(1U, 90U * kMs, f.events)); // the last open
+    REQUIRE(f.open(0U));
+    REQUIRE(f.recovery.on_received(app, 0U, true, Ecn::NotEct, 95U * kMs));
+    written = f.recovery.write_ack(app, Span<u8>(out, sizeof(out)), 95U * kMs);
+    REQUIRE(written.bytes != 0U);
+    CHECK_FALSE(read_ack(out, written.bytes).timestamps);
+}
+
+TEST_CASE("quic recovery: every open path's owed ACK is a timer, and an ACK carried on another path retires its ranges",
+          "[net][quic][recovery][multipath]")
+{
+    Paths f;
+    const QuicSpace app = QuicSpace::Application;
+    f.recovery.set_receive_timestamps(4U, 0U);
+    REQUIRE(f.open(1U));
+    REQUIRE(f.recovery.on_received(app, 0U, true, Ecn::NotEct, 10U * kMs, 1U));
+    CHECK_FALSE(f.recovery.on_received(app, 0U, true, Ecn::NotEct, 11U * kMs, 1U));
+    CHECK(f.recovery.ack_deadline_ns(app, 1U) == 10U * kMs + kMaxAckDelay);
+    CHECK(f.recovery.ack_deadline_ns(app) == kNeverNs);
+    CHECK(f.recovery.next_timer_ns() == 10U * kMs + kMaxAckDelay);
+    for (u64 number = 1U; number < 6U; ++number)
+    {
+        REQUIRE(f.recovery.on_received(app, number, true, Ecn::NotEct, 12U * kMs, 1U));
+    }
+    CHECK(f.recovery.next_timer_ns() == 12U * kMs);
+    CHECK(f.recovery.received(app).ranges().empty());
+
+    // Slot 1's ranges, with no receive timestamps (only slot 0's ACK frames report them).
+    u8 out[64];
+    const QuicAckWrite written = f.recovery.write_ack(app, Span<u8>(out, sizeof(out)), 20U * kMs, 1U);
+    REQUIRE(written.bytes != 0U);
+    CHECK(written.largest == 5U);
+    const QuicAck ack = read_ack(out, written.bytes);
+    CHECK_FALSE(ack.timestamps);
+    CHECK(ack.largest == 5U);
+    CHECK(f.recovery.ack_deadline_ns(app, 1U) == kNeverNs);
+    f.recovery.on_ack_acknowledged(1U, 3U);
+    CHECK(same_ranges(f.recovery.received(app, 1U).ranges(), {{4U, 5U}}));
+    f.recovery.on_ack_acknowledged(2U, 3U); // not open: nothing
+    f.recovery.on_ack_acknowledged(kQuicMaxPaths, 3U);
+    CHECK(same_ranges(f.recovery.received(app, 1U).ranges(), {{4U, 5U}}));
+}
+
+TEST_CASE("quic recovery: key updates and closing wait on the largest probe period among the open paths, and a path's "
+          "new 4-tuple restarts its estimate alone",
+          "[net][quic][recovery][multipath]")
+{
+    Paths f;
+    f.confirmed_with_rtt(10U * kMs);
+    const QuicSpace app = QuicSpace::Application;
+    CHECK(f.recovery.largest_probe_period_ns() == f.recovery.probe_period_ns(app));
+    REQUIRE(f.open(1U));
+    f.send_on(1U, 0U, 20U * kMs);
+    REQUIRE(f.ack_on(1U, 0U, 0U, 320U * kMs, 1U).rtt_sampled);
+    CHECK(f.recovery.probe_period_ns(app, 1U) > f.recovery.probe_period_ns(app));
+    CHECK(f.recovery.largest_probe_period_ns() == f.recovery.probe_period_ns(app, 1U));
+
+    f.send_on(1U, 1U, 330U * kMs);
+    f.send(app, 1U, 330U * kMs);
+    f.recovery.restart_path(340U * kMs, 1U);
+    CHECK(f.recovery.path_floor(1U) == 2U);
+    CHECK(f.recovery.path_floor() == 0U);
+    CHECK(f.recovery.bytes_in_flight(1U) == 0U);
+    CHECK(f.recovery.bytes_in_flight() == 1200U);
+    CHECK_FALSE(f.recovery.rtt(1U).sampled());
+    CHECK(f.recovery.rtt().latest_ns == 10U * kMs);
+    CHECK_FALSE(f.recovery.on_path(app, sent_on(1U, 1U, 0U)));
+    CHECK(f.recovery.on_path(app, sent_on(1U, 2U, 0U)));
+    f.recovery.restart_path(340U * kMs, 3U); // not open: nothing
+    CHECK(f.recovery.path_floor(3U) == 0U);
+
+    REQUIRE(f.recovery.close_path(1U, 350U * kMs, f.events));
+    CHECK(f.recovery.largest_probe_period_ns() == f.recovery.probe_period_ns(app));
 }

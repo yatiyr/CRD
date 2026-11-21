@@ -31,6 +31,14 @@
 //               space's receive times until an ACK frame reports them (ACK_RECEIVE_TIMESTAMPS, only packets the frame
 //               acknowledges, the latest first); QuicPeerReceiveTimes reads a peer's report for the packets a frame
 //               acknowledges, for the congestion controller's receive times.
+//   paths       RFC 10069 section 5 (NET-PATH, design S78): every open path ID has its own Application space, RTT
+//               estimate, probe timeout and its backoff, loss detection, reordering thresholds and bytes in flight.
+//               Path IDs live in slots 0 to kQuicMaxPaths - 1, which the connection maps to the IDs (an ID is never
+//               reused; a slot is, through close_path and open_path). Slot 0 is the handshake's path, open from
+//               construction, and its estimate serves the Initial and Handshake spaces too, so a connection without
+//               multipath is slot 0 alone, every call's default. One loss detection timer serves every path, the
+//               earliest of theirs. A path's packets may be acknowledged through any open path: the minimum RTT
+//               restarts when the path such frames arrive through changes (section 5.4).
 //   congestion  NET-PATH's controllers (congestion.hpp) take the per-packet events (QuicRecoveryEvents, spurious
 //               losses among them) and the outcomes' RTT samples and persistent congestion; the connection applies
 //               their window and pacing, so nothing here limits sending beyond the storage.
@@ -44,6 +52,7 @@
 #include <crd/net/ecn.hpp>
 #include <crd/net/quic_frame.hpp>
 #include <crd/net/quic_packet.hpp>
+#include <crd/net/quic_path.hpp>
 #include <crd/net/quic_transport_parameters.hpp>
 #include <crd/net/quota.hpp>
 
@@ -173,6 +182,9 @@ struct QuicSentPacket
     // connection keeps its loss and delay from congestion control.
     bool handover = false;
     Ecn  ecn = Ecn::NotEct; // the codepoint its datagram was marked with (quic_ecn.hpp)
+    // The slot of the path ID it was sent on (QuicRecovery's paths): 0 for every Initial and Handshake packet and for
+    // a connection without multipath.
+    u8 path = 0U;
     // Never 0 for a datagram of one 1-RTT packet: what an ICMP message quoting it must repeat (quic_pmtu.hpp's hints);
     // 0 for any other packet.
     u32 tag = 0U;
@@ -216,6 +228,7 @@ enum class QuicRecoveryError : u8
     Full,        // the space's storage holds no room for another packet
     BadNumber,   // a packet number not above the space's last
     Discarded,   // the space's keys were discarded
+    NoPath,      // a path slot that is not open, or a slot other than 0 for the Initial or Handshake space
 };
 
 // The packets one detection declared lost.
@@ -259,6 +272,7 @@ struct QuicTimeout
 {
     QuicTimeoutKind kind = QuicTimeoutKind::None;
     QuicSpace       space = QuicSpace::Initial;
+    usize           path = 0U; // the slot whose timer fired: 0 for the Initial and Handshake spaces
     u8              probes = 0U;
     QuicLoss        lost;
 };
@@ -291,24 +305,42 @@ struct QuicRecoveryConfig
     usize            reserved_entries = 0U;
 };
 
-// A connection's acknowledgements and loss recovery across its three packet number spaces.
+// A connection's acknowledgements and loss recovery across its Initial and Handshake spaces and the Application space
+// of every open path (the paths note above). Calls name a path by its slot, 0 unless they say otherwise; a slot that
+// is not open reads as a path with nothing sent or received and the initial estimate.
 class QuicRecovery
 {
 public:
-    // `storage` holds each space's sent packets (Initial, Handshake, Application), each span at least one entry; it
-    // stays the caller's and must outlive the recovery.
+    // `storage` holds each space's sent packets (Initial, Handshake, and the Application space of slot 0), each span
+    // at least one entry; it stays the caller's and must outlive the recovery.
     QuicRecovery(const QuicRecoveryConfig& config, cont::Span<QuicSentEntry> initial,
                  cont::Span<QuicSentEntry> handshake, cont::Span<QuicSentEntry> application) noexcept;
+
+    // ---- Paths (RFC 10069) ----
+
+    // Opens slot `path` for a new path ID whose Application packets `storage` holds (at least one entry, the
+    // caller's until the slot closes): numbers from 0, nothing received, the initial RTT estimate. False, changing
+    // nothing, for a slot out of range or open, or empty storage.
+    [[nodiscard]] bool open_path(usize path, cont::Span<QuicSentEntry> storage) noexcept;
+    // The path ID in slot `path` is forgotten (RFC 10069 sections 3.4 and 3.4.3: abandoned, and its packets'
+    // acknowledgements waited for). The slot closes first, so on_path() is false for its packets; then each one still
+    // outstanding is declared lost (on_lost), for its frames to go on another path, which is no congestion signal. A
+    // path whose minimum RTT came from frames received through this slot restarts it (section 5.4). Closing slot 0
+    // ends the receive timestamps (only ACK frames, path ID 0's, report them). False, changing nothing, for a slot not
+    // open, the last one open, and slot 0 before the handshake is confirmed and the Initial and Handshake spaces
+    // discarded.
+    [[nodiscard]] bool close_path(usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept;
+    [[nodiscard]] bool path_open(usize path) const noexcept { return path < kQuicMaxPaths && m_paths[path].open; }
 
     // ---- What the connection learns ----
 
     // The peer's authenticated max_ack_delay and ack_delay_exponent (transport parameters).
     void set_peer_parameters(u64 max_ack_delay_ns, u64 ack_delay_exponent, u64 now_ns) noexcept;
-    // The Application space's ACK frames report receive timestamps (QuicReceiveTimestampLog::configure): at most
-    // `per_ack`, in units of 2^`exponent` microseconds; 0 reports none.
+    // Slot 0's ACK frames report receive timestamps (QuicReceiveTimestampLog::configure): at most `per_ack`, in units
+    // of 2^`exponent` microseconds; 0 reports none.
     void set_receive_timestamps(u64 per_ack, u64 exponent) noexcept { m_receive_log.configure(per_ack, exponent); }
-    // The handshake is confirmed (RFC 9001 section 4.1.2): max_ack_delay caps samples and the Application space's
-    // probe timeout arms.
+    // The handshake is confirmed (RFC 9001 section 4.1.2): max_ack_delay caps samples and the Application spaces'
+    // probe timeouts arm.
     void confirm_handshake(u64 now_ns) noexcept;
     // A client installed Handshake keys: its anti-deadlock probe is then a Handshake packet.
     void set_handshake_keys(u64 now_ns) noexcept;
@@ -316,7 +348,8 @@ public:
     // waits for a datagram. Clearing it re-arms the timer, which may then be due already (appendix A.6).
     void set_amplification_blocked(bool blocked, u64 now_ns) noexcept;
     // Initial or Handshake keys were discarded (section 6.4): the space's packets leave bytes in flight as
-    // on_discarded, its received ranges are forgotten and the probe count resets. False for the Application space.
+    // on_discarded, its received ranges are forgotten and slot 0's probe count resets. False for the Application
+    // space.
     [[nodiscard]] bool discard(QuicSpace space, u64 now_ns, QuicRecoveryEvents& events) noexcept;
     // A client accepted a Retry (section 6.3, RFC 9000 section 17.2.5.3): every outstanding packet leaves bytes in
     // flight as on_discarded, the timers and the probe count reset and packet numbers continue. The time from the
@@ -324,80 +357,89 @@ public:
     // sample.
     void retry(u64 now_ns, QuicRecoveryEvents& events) noexcept;
     // A client's server rejected 0-RTT (section 6.4: the recovery state of every 0-RTT packet in flight is
-    // discarded): every outstanding Application packet, all of them 0-RTT before the client's first 1-RTT packet,
-    // leaves bytes in flight as on_discarded; packet numbers continue.
+    // discarded): every outstanding Application packet of slot 0, all of them 0-RTT before the client's first 1-RTT
+    // packet, leaves bytes in flight as on_discarded; packet numbers continue.
     void reject_early(u64 now_ns, QuicRecoveryEvents& events) noexcept;
-    // The connection's datagrams go on a new path (RFC 9000 section 9.4, RFC 9002 appendix A.3): the RTT estimate,
-    // the probe count and the reordering thresholds start again, and every Application packet sent so far leaves
-    // bytes in flight. Such a packet is still acknowledged and declared lost, for its frames, but gives no RTT
-    // sample and counts in no acknowledged, lost or spurious bytes and no ECN marks: nothing sent on the old path
-    // reaches the new path's estimate or its congestion controller.
-    void restart_path(u64 now_ns) noexcept;
-    // The first Application packet of the path the estimate follows (0 until a restart).
-    [[nodiscard]] u64 path_floor() const noexcept { return m_path_floor; }
-    // Whether `packet` of `space` was sent on the path the estimate follows: at or past path_floor() and not off_path.
-    [[nodiscard]] bool on_path(QuicSpace space, const QuicSentPacket& packet) const noexcept
-    {
-        return !packet.off_path && (space != QuicSpace::Application || packet.number >= m_path_floor);
-    }
+    // The datagrams of slot `path`'s path ID go on a new 4-tuple (RFC 9000 section 9.4, RFC 9002 appendix A.3,
+    // RFC 10069 section 5.1): its RTT estimate, probe count and reordering thresholds start again, and every
+    // Application packet it sent so far leaves bytes in flight. Such a packet is still acknowledged and declared lost,
+    // for its frames, but gives no RTT sample and counts in no acknowledged, lost or spurious bytes and no ECN marks:
+    // nothing sent on the old 4-tuple reaches the new one's estimate or its congestion controller.
+    void restart_path(u64 now_ns, usize path = 0U) noexcept;
+    // The first Application packet of slot `path`'s current 4-tuple (0 until a restart).
+    [[nodiscard]] u64 path_floor(usize path = 0U) const noexcept { return view(path).floor; }
+    // Whether `packet` of `space` was sent where its path's estimate follows: on an open slot, at or past its
+    // path_floor() and not off_path.
+    [[nodiscard]] bool on_path(QuicSpace space, const QuicSentPacket& packet) const noexcept;
 
     // ---- Sending ----
 
-    // Whether `space` can record another packet; a connection writes none when it cannot.
-    [[nodiscard]] bool can_send(QuicSpace space) const noexcept;
+    // Whether `space` of slot `path` can record another packet; a connection writes none when it cannot.
+    [[nodiscard]] bool can_send(QuicSpace space, usize path = 0U) const noexcept;
     // Whether it can record one that is neither ACK-only nor a probe. Two ends full of each other's unacknowledged
     // data must still be able to acknowledge it, or neither ever frees a slot.
-    [[nodiscard]] bool can_send_data(QuicSpace space) const noexcept;
-    // Records `packet`, sent now (its sent_ns): numbers rise within a space and may leave gaps (skipped numbers).
+    [[nodiscard]] bool can_send_data(QuicSpace space, usize path = 0U) const noexcept;
+    // Records `packet`, sent now (its sent_ns) on its slot (its path): numbers rise within a space and may leave gaps
+    // (skipped numbers).
     [[nodiscard]] QuicRecoveryError on_sent(QuicSpace space, const QuicSentPacket& packet) noexcept;
-    // The ACK frame `space` owes or may carry, written into `out` (QuicAckTracker::write) with the exponent that
-    // space uses: this side's own for Application, the default 3 for Initial and Handshake, whose ACK frames are
-    // sent before the parameters are authenticated.
-    [[nodiscard]] QuicAckWrite write_ack(QuicSpace space, cont::Span<u8> out, u64 now_ns) noexcept;
+    // The ACK frame `space` of slot `path` owes or may carry, written into `out` (QuicAckTracker::write) with the
+    // exponent that space uses: this side's own for Application, the default 3 for Initial and Handshake, whose ACK
+    // frames are sent before the parameters are authenticated. Only slot 0's report receive timestamps.
+    [[nodiscard]] QuicAckWrite write_ack(QuicSpace space, cont::Span<u8> out, u64 now_ns, usize path = 0U) noexcept;
+    // A packet that carried slot `path`'s Application acknowledgement up to `largest` was acknowledged
+    // (QuicAckTracker::on_ack_acknowledged). A packet's carried_ack does this for its own space and slot; this is for
+    // an acknowledgement of one path that went on another (a PATH_ACK). Nothing for a slot not open.
+    void on_ack_acknowledged(usize path, u64 largest) noexcept;
 
     // ---- Receiving ----
 
-    // A packet of `space` opened and processed (QuicAckTracker::on_received, and the receive timestamp log for the
-    // Application space); false for a duplicate or a discarded space.
-    bool on_received(QuicSpace space, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns) noexcept;
-    // An ACK frame received in a packet of `space` (appendix A.7). An error changes nothing.
-    [[nodiscard]] QuicAckOutcome on_ack(QuicSpace space, const QuicAck& ack, u64 now_ns,
-                                        QuicRecoveryEvents& events) noexcept;
+    // A packet of `space` and slot `path` opened and processed (QuicAckTracker::on_received, and the receive
+    // timestamp log for slot 0's Application space); false for a duplicate, a discarded space or a slot not open.
+    bool on_received(QuicSpace space, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns,
+                     usize path = 0U) noexcept;
+    // An ACK frame of `space` (appendix A.7) acknowledging slot `path`'s packets (an ACK frame's are slot 0's, a
+    // PATH_ACK's its path ID's), received in a packet of slot `via`. NoPath for either slot not open; an error changes
+    // nothing.
+    [[nodiscard]] QuicAckOutcome on_ack(QuicSpace space, const QuicAck& ack, u64 now_ns, QuicRecoveryEvents& events,
+                                        usize path = 0U, usize via = 0U) noexcept;
 
     // ---- Timers ----
 
-    // The loss detection timer (appendix A.8): kNeverNs when disarmed.
+    // The loss detection timer (appendix A.8), the earliest of every path's: kNeverNs when disarmed.
     [[nodiscard]] u64 loss_timer_ns() const noexcept { return m_timer_ns; }
     // The earliest of the loss detection timer and every space's owed ACK.
     [[nodiscard]] u64 next_timer_ns() const noexcept;
-    // Runs the loss detection timer if it is due at `now_ns` (appendix A.9); owed ACKs are the connection's to send
-    // (ack_deadline_ns).
+    // Runs the loss detection timer if it is due at `now_ns` (appendix A.9) for the path whose timer it is; owed ACKs
+    // are the connection's to send (ack_deadline_ns).
     [[nodiscard]] QuicTimeout on_timeout(u64 now_ns, QuicRecoveryEvents& events) noexcept;
 
-    // ---- State ----
+    // ---- State, of slot `path` ----
 
-    [[nodiscard]] const QuicRtt& rtt() const noexcept { return m_rtt; }
-    [[nodiscard]] u64 bytes_in_flight() const noexcept { return m_bytes_in_flight; }
-    [[nodiscard]] u32 pto_count() const noexcept { return m_pto_count; }
-    [[nodiscard]] u64 largest_acked(QuicSpace space) const noexcept;
-    [[nodiscard]] u64 ack_deadline_ns(QuicSpace space) const noexcept;
-    [[nodiscard]] const QuicAckTracker& received(QuicSpace space) const noexcept;
+    [[nodiscard]] const QuicRtt& rtt(usize path = 0U) const noexcept { return view(path).rtt; }
+    [[nodiscard]] u64 bytes_in_flight(usize path = 0U) const noexcept { return view(path).bytes_in_flight; }
+    [[nodiscard]] u32 pto_count(usize path = 0U) const noexcept { return view(path).pto_count; }
+    [[nodiscard]] u64 largest_acked(QuicSpace space, usize path = 0U) const noexcept;
+    [[nodiscard]] u64 ack_deadline_ns(QuicSpace space, usize path = 0U) const noexcept;
+    [[nodiscard]] const QuicAckTracker& received(QuicSpace space, usize path = 0U) const noexcept;
     // The probe timeout's period now: probe_base + max_ack_delay (Application only) shifted by the backoff.
-    [[nodiscard]] u64 probe_period_ns(QuicSpace space) const noexcept;
+    [[nodiscard]] u64 probe_period_ns(QuicSpace space, usize path = 0U) const noexcept;
+    // The largest Application probe period among the open paths: three of them are what a key update and closing
+    // wait (RFC 10069 sections 2.5 and 2.6).
+    [[nodiscard]] u64 largest_probe_period_ns() const noexcept;
     // RFC 9002 section 7.6.1: (probe_base + max_ack_delay) * kQuicPersistentCongestionThreshold.
-    [[nodiscard]] u64 persistent_congestion_ns() const noexcept;
+    [[nodiscard]] u64 persistent_congestion_ns(usize path = 0U) const noexcept;
     // The packet threshold now: kQuicPacketThreshold, raised by spurious losses up to kQuicMaxPacketThreshold.
-    [[nodiscard]] u64 packet_threshold() const noexcept { return m_packet_threshold; }
+    [[nodiscard]] u64 packet_threshold(usize path = 0U) const noexcept { return view(path).packet_threshold; }
     // Quarters of min_rtt the time threshold's window holds (RFC 8985 section 6.2's reo_wnd_mult less one).
-    [[nodiscard]] u32 reorder_steps() const noexcept { return m_reorder_steps; }
+    [[nodiscard]] u32 reorder_steps(usize path = 0U) const noexcept { return view(path).reorder_steps; }
     // The time threshold now: max(9/8 max(smoothed, latest) + min(steps * min_rtt / 4, smoothed), 1 ms).
-    [[nodiscard]] u64 loss_delay_ns() const noexcept;
+    [[nodiscard]] u64 loss_delay_ns(usize path = 0U) const noexcept;
     // The newest packet of `space` sent with `tag` that no ACK frame acknowledged (lost ones included); null for none
     // and for a zero tag.
-    [[nodiscard]] const QuicSentPacket* unacknowledged(QuicSpace space, u32 tag) const noexcept;
+    [[nodiscard]] const QuicSentPacket* unacknowledged(QuicSpace space, u32 tag, usize path = 0U) const noexcept;
     // When packet `number` of `space` was sent, while no ACK frame acknowledged it (lost ones included); kNeverNs for
     // a packet acknowledged, never sent or no longer held.
-    [[nodiscard]] u64 unacknowledged_sent_ns(QuicSpace space, u64 number) const noexcept;
+    [[nodiscard]] u64 unacknowledged_sent_ns(QuicSpace space, u64 number, usize path = 0U) const noexcept;
 
 private:
     struct Space
@@ -415,47 +457,68 @@ private:
         QuicAckTracker            received;
     };
 
+    // One slot: its path ID's Application space and the estimate that slot 0's Initial and Handshake spaces share.
+    struct Path
+    {
+        Space   application;
+        QuicRtt rtt;
+        u64     bytes_in_flight = 0U;
+        u64     floor = 0U; // path_floor()
+        u64     packet_threshold = kQuicPacketThreshold;
+        u32     reorder_steps = 0U;
+        u32     reorder_persist = 0U; // loss detections before the thresholds return to RFC 9002's
+        u32     pto_count = 0U;
+        usize   min_via = 0U; // the slot whose frames gave rtt.min_ns; kQuicNoPath once it closed
+        bool    open = false;
+    };
+
+    // The slot the state accessors read: an empty path for one not open.
+    [[nodiscard]] const Path& view(usize path) const noexcept;
+    // Whether `space` of slot `path` is one: an open slot for Application, slot 0 for the others.
+    [[nodiscard]] bool usable(QuicSpace space, usize path) const noexcept;
+    // `space` of slot `path`, and the path whose estimate it follows; both for a usable() pair only.
+    [[nodiscard]] Space& space_of(QuicSpace space, usize path) noexcept;
+    [[nodiscard]] const Space& space_of(QuicSpace space, usize path) const noexcept;
+    [[nodiscard]] Path& owner(QuicSpace space, usize path) noexcept;
+    [[nodiscard]] const Path& owner(QuicSpace space, usize path) const noexcept;
+    // Starts `path`'s estimate, probe count and thresholds again, as a new path's.
+    void reset_estimate(Path& path) const noexcept;
     [[nodiscard]] static QuicSentEntry& entry(Space& space, usize index) noexcept;
     [[nodiscard]] static const QuicSentEntry& entry(const Space& space, usize index) noexcept;
     [[nodiscard]] static usize lower_bound(const Space& space, u64 number) noexcept;
-    [[nodiscard]] bool acknowledges_unsent(Space& space, const QuicAck& ack) noexcept;
-    [[nodiscard]] bool on_path(const Space& space, const QuicSentPacket& packet) const noexcept;
-    void settle(Space& space, QuicSentEntry& slot) noexcept;
-    // Every outstanding packet of `id` leaves bytes in flight as on_discarded, and the space holds none.
-    void drop_outstanding(QuicSpace id, QuicRecoveryEvents& events) noexcept;
+    [[nodiscard]] static bool acknowledges_unsent(const Space& space, const QuicAck& ack) noexcept;
+    void settle(QuicSpace id, Space& space, QuicSentEntry& slot) noexcept;
+    // Every outstanding packet of `id` in slot `path` leaves bytes in flight as on_discarded, and the space holds
+    // none.
+    void drop_outstanding(QuicSpace id, usize path, QuicRecoveryEvents& events) noexcept;
     // Drops settled entries from the head: acknowledged ones, and lost ones past their probe period or, when `room`
     // asks for a slot, until one is free.
-    void compact(QuicSpace id, u64 now_ns, bool room) noexcept;
-    [[nodiscard]] bool held_lost(QuicSpace id, const QuicSentEntry& slot, u64 now_ns) const noexcept;
-    [[nodiscard]] QuicLoss detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events) noexcept;
+    void compact(QuicSpace id, usize path, u64 now_ns, bool room) noexcept;
+    [[nodiscard]] bool held_lost(QuicSpace id, usize path, const QuicSentEntry& slot, u64 now_ns) const noexcept;
+    [[nodiscard]] QuicLoss detect_lost(QuicSpace id, usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept;
     // The entries `space` can still record: free ones and the settled run at the head that compact() gives up.
-    [[nodiscard]] usize room(Space& space) noexcept;
+    [[nodiscard]] static usize room(const Space& space) noexcept;
     // Declares the oldest outstanding packets of `id` lost until it can record `entries` more (section 6.2.4).
-    [[nodiscard]] QuicLoss make_room(QuicSpace id, usize entries, u64 now_ns, QuicRecoveryEvents& events) noexcept;
+    [[nodiscard]] QuicLoss make_room(QuicSpace id, usize path, usize entries, u64 now_ns,
+                                     QuicRecoveryEvents& events) noexcept;
     [[nodiscard]] bool peer_validated() const noexcept;
     [[nodiscard]] bool any_eliciting_in_flight() const noexcept;
     [[nodiscard]] u64 decoded_ack_delay_ns(QuicSpace id, u64 raw) const noexcept;
-    [[nodiscard]] bool earliest_loss(u64& time_ns, QuicSpace& id) const noexcept;
-    [[nodiscard]] u64 pto_time(u64 now_ns, QuicSpace& id) const noexcept;
+    [[nodiscard]] bool earliest_loss(u64& time_ns, QuicSpace& id, usize& path) const noexcept;
+    [[nodiscard]] u64 pto_time(u64 now_ns, QuicSpace& id, usize& path) const noexcept;
     void arm(u64 now_ns) noexcept;
 
-    Space            m_spaces[kQuicSpaces];
+    Space            m_spaces[2]; // Initial and Handshake
+    Path             m_paths[kQuicMaxPaths];
     QuicReceiveTimestampLog m_receive_log;
-    QuicRtt          m_rtt;
     crypto::QuicSide m_side;
     u64              m_local_max_ack_delay_ns;
     u64              m_local_ack_delay_exponent;
     u64              m_peer_max_ack_delay_ns = kQuicDefaultMaxAckDelay * 1000000U;
     u64              m_peer_ack_delay_exponent = kQuicDefaultAckDelayExponent;
     u64              m_initial_rtt_ns;
-    u64              m_bytes_in_flight = 0U;
-    u64              m_path_floor = 0U;
     u64              m_timer_ns = kNeverNs;
-    u64              m_packet_threshold = kQuicPacketThreshold;
     usize            m_reserved_entries = 0U;
-    u32              m_reorder_steps = 0U;
-    u32              m_reorder_persist = 0U; // loss detections before the thresholds return to RFC 9002's
-    u32              m_pto_count = 0U;
     bool             m_confirmed = false;
     bool             m_handshake_keys = false;
     bool             m_handshake_acked = false; // a client received an ACK in a Handshake packet

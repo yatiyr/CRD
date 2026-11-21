@@ -354,6 +354,9 @@ void QuicRtt::sample(u64 latest, u64 ack_delay_ns, bool confirmed, u64 max_ack_d
 
 // ---- QuicRecovery ----
 
+// The path slot fits the padding before the tag: per-packet storage stays as it was.
+static_assert(sizeof(QuicSentPacket) == (6U * sizeof(u64)) + sizeof(DeliveryStamp));
+
 QuicRecovery::QuicRecovery(const QuicRecoveryConfig& config, cont::Span<QuicSentEntry> initial,
                            cont::Span<QuicSentEntry> handshake, cont::Span<QuicSentEntry> application) noexcept
     : m_side(config.side),
@@ -362,41 +365,146 @@ QuicRecovery::QuicRecovery(const QuicRecoveryConfig& config, cont::Span<QuicSent
       m_initial_rtt_ns(min_u64(config.initial_rtt_ns, kMaxRttNs)),
       m_reserved_entries(config.reserved_entries)
 {
-    m_spaces[quic_space_index(QuicSpace::Initial)].entries     = initial;
-    m_spaces[quic_space_index(QuicSpace::Handshake)].entries   = handshake;
-    m_spaces[quic_space_index(QuicSpace::Application)].entries = application;
-    for (usize i = 0U; i < kQuicSpaces; ++i)
+    m_spaces[quic_space_index(QuicSpace::Initial)].entries   = initial;
+    m_spaces[quic_space_index(QuicSpace::Handshake)].entries = handshake;
+    m_spaces[quic_space_index(QuicSpace::Initial)].received.reset(QuicSpace::Initial);
+    m_spaces[quic_space_index(QuicSpace::Handshake)].received.reset(QuicSpace::Handshake);
+    for (Path& path : m_paths)
     {
-        m_spaces[i].received.reset(static_cast<QuicSpace>(i));
+        reset_estimate(path);
     }
-    m_rtt.smoothed_ns = m_initial_rtt_ns;
-    m_rtt.variance_ns = m_rtt.smoothed_ns / 2U;
+    static_cast<void>(open_path(0U, application));
 }
 
-bool QuicRecovery::on_path(const Space& space, const QuicSentPacket& packet) const noexcept
+const QuicRecovery::Path& QuicRecovery::view(usize path) const noexcept
 {
-    return on_path(static_cast<QuicSpace>(&space - m_spaces), packet);
+    static const Path out_of_range{};
+    return (path < kQuicMaxPaths) ? m_paths[path] : out_of_range;
 }
 
-void QuicRecovery::restart_path(u64 now_ns) noexcept
+bool QuicRecovery::usable(QuicSpace space, usize path) const noexcept
 {
-    Space& space = m_spaces[quic_space_index(QuicSpace::Application)];
+    return (space == QuicSpace::Application) ? path_open(path) : path == 0U;
+}
+
+QuicRecovery::Space& QuicRecovery::space_of(QuicSpace space, usize path) noexcept
+{
+    return (space == QuicSpace::Application) ? m_paths[path].application : m_spaces[quic_space_index(space)];
+}
+
+const QuicRecovery::Space& QuicRecovery::space_of(QuicSpace space, usize path) const noexcept
+{
+    if (space == QuicSpace::Application)
+    {
+        return view(path).application;
+    }
+    return (path == 0U) ? m_spaces[quic_space_index(space)] : view(kQuicNoPath).application;
+}
+
+QuicRecovery::Path& QuicRecovery::owner(QuicSpace space, usize path) noexcept
+{
+    return m_paths[(space == QuicSpace::Application) ? path : 0U];
+}
+
+const QuicRecovery::Path& QuicRecovery::owner(QuicSpace space, usize path) const noexcept
+{
+    return view((space == QuicSpace::Application || path == 0U) ? path : kQuicNoPath);
+}
+
+void QuicRecovery::reset_estimate(Path& path) const noexcept
+{
+    path.rtt = QuicRtt{};
+    path.rtt.smoothed_ns = m_initial_rtt_ns;
+    path.rtt.variance_ns = m_initial_rtt_ns / 2U;
+    path.packet_threshold = kQuicPacketThreshold;
+    path.reorder_steps = 0U;
+    path.reorder_persist = 0U;
+    path.pto_count = 0U;
+}
+
+bool QuicRecovery::open_path(usize path, cont::Span<QuicSentEntry> storage) noexcept
+{
+    if (path >= kQuicMaxPaths || m_paths[path].open || storage.empty())
+    {
+        return false;
+    }
+    Path& slot = m_paths[path];
+    slot = Path{};
+    reset_estimate(slot);
+    slot.application.entries = storage;
+    slot.application.received.reset(QuicSpace::Application);
+    slot.open = true;
+    return true;
+}
+
+bool QuicRecovery::close_path(usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept
+{
+    usize open = 0U;
+    for (const Path& each : m_paths)
+    {
+        open += each.open ? 1U : 0U;
+    }
+    const bool handshake_done = m_confirmed && m_spaces[quic_space_index(QuicSpace::Initial)].discarded &&
+                                m_spaces[quic_space_index(QuicSpace::Handshake)].discarded;
+    if (!path_open(path) || open == 1U || (path == 0U && !handshake_done))
+    {
+        return false;
+    }
+    Path& slot = m_paths[path];
+    slot.open = false;
+    Space& space = slot.application;
     for (usize i = 0U; i < space.count; ++i)
     {
-        const QuicSentEntry& slot = entry(space, i);
-        if (slot.state == kOutstanding && slot.packet.in_flight && on_path(space, slot.packet))
+        QuicSentEntry& sent = entry(space, i);
+        if (sent.state == kOutstanding)
         {
-            m_bytes_in_flight -= slot.packet.bytes;
+            settle(QuicSpace::Application, space, sent);
+            sent.state   = kLost;
+            sent.lost_ns = now_ns;
+            events.on_lost(QuicSpace::Application, sent.packet);
         }
     }
-    m_path_floor = space.next_number;
-    m_rtt = QuicRtt{};
-    m_rtt.smoothed_ns = m_initial_rtt_ns;
-    m_rtt.variance_ns = m_rtt.smoothed_ns / 2U;
-    m_packet_threshold = kQuicPacketThreshold;
-    m_reorder_steps = 0U;
-    m_reorder_persist = 0U;
-    m_pto_count = 0U;
+    slot = Path{};
+    reset_estimate(slot);
+    for (Path& each : m_paths)
+    {
+        each.min_via = (each.min_via == path) ? kQuicNoPath : each.min_via;
+    }
+    if (path == 0U)
+    {
+        m_receive_log.configure(0U, 0U);
+    }
+    arm(now_ns);
+    return true;
+}
+
+bool QuicRecovery::on_path(QuicSpace space, const QuicSentPacket& packet) const noexcept
+{
+    if (packet.off_path || !path_open(packet.path))
+    {
+        return false;
+    }
+    return space != QuicSpace::Application || packet.number >= m_paths[packet.path].floor;
+}
+
+void QuicRecovery::restart_path(u64 now_ns, usize path) noexcept
+{
+    if (!path_open(path))
+    {
+        return;
+    }
+    Path& slot = m_paths[path];
+    const Space& space = slot.application;
+    for (usize i = 0U; i < space.count; ++i)
+    {
+        const QuicSentEntry& sent = entry(space, i);
+        if (sent.state == kOutstanding && sent.packet.in_flight && on_path(QuicSpace::Application, sent.packet))
+        {
+            slot.bytes_in_flight -= sent.packet.bytes;
+        }
+    }
+    slot.floor = space.next_number;
+    reset_estimate(slot);
     arm(now_ns);
 }
 
@@ -439,7 +547,7 @@ usize QuicRecovery::lower_bound(const Space& space, u64 number) noexcept
     return low;
 }
 
-bool QuicRecovery::acknowledges_unsent(Space& space, const QuicAck& ack) noexcept
+bool QuicRecovery::acknowledges_unsent(const Space& space, const QuicAck& ack) noexcept
 {
     // Every number from the oldest entry up to the last sent is an entry unless this side never sent it, and a range
     // reaching the next number counts numbers no entry holds.
@@ -458,11 +566,11 @@ bool QuicRecovery::acknowledges_unsent(Space& space, const QuicAck& ack) noexcep
     return false;
 }
 
-void QuicRecovery::settle(Space& space, QuicSentEntry& slot) noexcept
+void QuicRecovery::settle(QuicSpace id, Space& space, QuicSentEntry& slot) noexcept
 {
     if (slot.packet.in_flight)
     {
-        m_bytes_in_flight -= on_path(space, slot.packet) ? slot.packet.bytes : 0U;
+        owner(id, slot.packet.path).bytes_in_flight -= on_path(id, slot.packet) ? slot.packet.bytes : 0U;
         if (slot.packet.ack_eliciting)
         {
             --space.eliciting_in_flight;
@@ -470,16 +578,16 @@ void QuicRecovery::settle(Space& space, QuicSentEntry& slot) noexcept
     }
 }
 
-bool QuicRecovery::held_lost(QuicSpace id, const QuicSentEntry& slot, u64 now_ns) const noexcept
+bool QuicRecovery::held_lost(QuicSpace id, usize path, const QuicSentEntry& slot, u64 now_ns) const noexcept
 {
-    return lost(slot.state) && now_ns - slot.lost_ns <= probe_period_ns(id); // times only rise
+    return lost(slot.state) && now_ns - slot.lost_ns <= probe_period_ns(id, path); // times only rise
 }
 
-void QuicRecovery::compact(QuicSpace id, u64 now_ns, bool room) noexcept
+void QuicRecovery::compact(QuicSpace id, usize path, u64 now_ns, bool room) noexcept
 {
-    Space& space = m_spaces[quic_space_index(id)];
+    Space& space = space_of(id, path);
     while (space.count > 0U && settled(entry(space, 0U).state) &&
-           ((room && space.count >= space.entries.size()) || !held_lost(id, entry(space, 0U), now_ns)))
+           ((room && space.count >= space.entries.size()) || !held_lost(id, path, entry(space, 0U), now_ns)))
     {
         space.head = (space.head + 1U == space.entries.size()) ? 0U : space.head + 1U;
         --space.count;
@@ -502,6 +610,10 @@ bool QuicRecovery::any_eliciting_in_flight() const noexcept
     {
         eliciting += space.eliciting_in_flight;
     }
+    for (const Path& path : m_paths)
+    {
+        eliciting += path.open ? path.application.eliciting_in_flight : 0U;
+    }
     return eliciting != 0U;
 }
 
@@ -515,63 +627,92 @@ u64 QuicRecovery::decoded_ack_delay_ns(QuicSpace id, u64 raw) const noexcept
     return mul_sat(shl_sat(raw, exponent), kNanosPerMicro);
 }
 
-u64 QuicRecovery::probe_period_ns(QuicSpace space) const noexcept
+u64 QuicRecovery::probe_period_ns(QuicSpace space, usize path) const noexcept
 {
-    const u64 base = shl_sat(m_rtt.probe_base_ns(), m_pto_count);
-    return (space == QuicSpace::Application) ? add_sat(base, shl_sat(m_peer_max_ack_delay_ns, m_pto_count)) : base;
+    const Path& estimate = owner(space, path);
+    const u64 base = shl_sat(estimate.rtt.probe_base_ns(), estimate.pto_count);
+    return (space == QuicSpace::Application) ? add_sat(base, shl_sat(m_peer_max_ack_delay_ns, estimate.pto_count))
+                                             : base;
 }
 
-u64 QuicRecovery::loss_delay_ns() const noexcept
+u64 QuicRecovery::largest_probe_period_ns() const noexcept
 {
-    const u64 rtt    = max_u64(m_rtt.latest_ns, m_rtt.smoothed_ns);
-    const u64 window = min_u64(mul_sat(m_reorder_steps, m_rtt.min_ns / 4U), m_rtt.smoothed_ns);
+    u64 largest = 0U;
+    for (usize path = 0U; path < kQuicMaxPaths; ++path)
+    {
+        largest = m_paths[path].open ? max_u64(largest, probe_period_ns(QuicSpace::Application, path)) : largest;
+    }
+    return largest;
+}
+
+u64 QuicRecovery::loss_delay_ns(usize path) const noexcept
+{
+    const Path& estimate = view(path);
+    const u64 rtt    = max_u64(estimate.rtt.latest_ns, estimate.rtt.smoothed_ns);
+    const u64 window = min_u64(mul_sat(estimate.reorder_steps, estimate.rtt.min_ns / 4U), estimate.rtt.smoothed_ns);
     return max_u64(add_sat(rtt * kQuicTimeThresholdNumerator / kQuicTimeThresholdDivisor, window),
                    kQuicGranularityNs);
 }
 
-u64 QuicRecovery::persistent_congestion_ns() const noexcept
+u64 QuicRecovery::persistent_congestion_ns(usize path) const noexcept
 {
-    return mul_sat(add_sat(m_rtt.probe_base_ns(), m_peer_max_ack_delay_ns), kQuicPersistentCongestionThreshold);
+    return mul_sat(add_sat(view(path).rtt.probe_base_ns(), m_peer_max_ack_delay_ns),
+                   kQuicPersistentCongestionThreshold);
 }
 
-bool QuicRecovery::earliest_loss(u64& time_ns, QuicSpace& id) const noexcept
+bool QuicRecovery::earliest_loss(u64& time_ns, QuicSpace& id, usize& path) const noexcept
 {
     time_ns = kNeverNs;
-    for (usize i = 0U; i < kQuicSpaces; ++i)
+    for (usize i = 0U; i < 2U; ++i)
     {
         if (m_spaces[i].loss_time_ns < time_ns)
         {
             time_ns = m_spaces[i].loss_time_ns;
             id      = static_cast<QuicSpace>(i);
+            path    = 0U;
+        }
+    }
+    for (usize i = 0U; i < kQuicMaxPaths; ++i)
+    {
+        if (m_paths[i].open && m_paths[i].application.loss_time_ns < time_ns)
+        {
+            time_ns = m_paths[i].application.loss_time_ns;
+            id      = QuicSpace::Application;
+            path    = i;
         }
     }
     return time_ns != kNeverNs;
 }
 
-u64 QuicRecovery::pto_time(u64 now_ns, QuicSpace& id) const noexcept
+u64 QuicRecovery::pto_time(u64 now_ns, QuicSpace& id, usize& path) const noexcept
 {
+    path = 0U;
     if (!any_eliciting_in_flight())
     {
         id = m_handshake_keys ? QuicSpace::Handshake : QuicSpace::Initial;
         return add_sat(now_ns, probe_period_ns(id));
     }
     u64 time = kNeverNs;
-    for (usize i = 0U; i < kQuicSpaces; ++i)
+    for (usize i = 0U; i < 2U; ++i)
     {
         const QuicSpace candidate = static_cast<QuicSpace>(i);
-        if (m_spaces[i].eliciting_in_flight == 0U)
-        {
-            continue;
-        }
-        if (candidate == QuicSpace::Application && !m_confirmed)
-        {
-            break; // the Application space's timeout waits for confirmation (section 6.2.1)
-        }
         const u64 at = add_sat(m_spaces[i].last_eliciting_ns, probe_period_ns(candidate));
-        if (at < time)
+        if (m_spaces[i].eliciting_in_flight != 0U && at < time)
         {
             time = at;
             id   = candidate;
+        }
+    }
+    // The Application spaces' timeouts wait for confirmation (section 6.2.1).
+    for (usize i = 0U; i < kQuicMaxPaths && m_confirmed; ++i)
+    {
+        const Space& space = m_paths[i].application;
+        const u64 at = add_sat(space.last_eliciting_ns, probe_period_ns(QuicSpace::Application, i));
+        if (m_paths[i].open && space.eliciting_in_flight != 0U && at < time)
+        {
+            time = at;
+            id   = QuicSpace::Application;
+            path = i;
         }
     }
     return time;
@@ -581,7 +722,8 @@ void QuicRecovery::arm(u64 now_ns) noexcept
 {
     u64       time = kNeverNs;
     QuicSpace id   = QuicSpace::Initial;
-    if (earliest_loss(time, id))
+    usize     path = 0U;
+    if (earliest_loss(time, id, path))
     {
         m_timer_ns = time;
         return;
@@ -596,7 +738,7 @@ void QuicRecovery::arm(u64 now_ns) noexcept
         m_timer_ns = kNeverNs;
         return;
     }
-    m_timer_ns = pto_time(now_ns, id);
+    m_timer_ns = pto_time(now_ns, id, path);
 }
 
 void QuicRecovery::set_peer_parameters(u64 max_ack_delay_ns, u64 ack_delay_exponent, u64 now_ns) noexcept
@@ -635,10 +777,10 @@ bool QuicRecovery::discard(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events)
     {
         return true;
     }
-    drop_outstanding(id, events);
+    drop_outstanding(id, 0U, events);
     space.discarded = true;
     space.received.reset(id);
-    m_pto_count = 0U;
+    m_paths[0].pto_count = 0U;
     arm(now_ns);
     return true;
 }
@@ -646,37 +788,46 @@ bool QuicRecovery::discard(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events)
 void QuicRecovery::retry(u64 now_ns, QuicRecoveryEvents& events) noexcept
 {
     // Only the first flight measures the path: after a probe the Retry may answer a later packet.
-    Space& initial = m_spaces[quic_space_index(QuicSpace::Initial)];
-    const u64 first_ns = (initial.count != 0U && m_pto_count == 0U) ? entry(initial, 0U).packet.sent_ns : now_ns;
-    for (usize id = 0U; id < kQuicSpaces; ++id)
+    Path& first = m_paths[0];
+    const Space& initial = m_spaces[quic_space_index(QuicSpace::Initial)];
+    const u64 first_ns = (initial.count != 0U && first.pto_count == 0U) ? entry(initial, 0U).packet.sent_ns : now_ns;
+    drop_outstanding(QuicSpace::Initial, 0U, events);
+    drop_outstanding(QuicSpace::Handshake, 0U, events);
+    for (usize path = 0U; path < kQuicMaxPaths; ++path)
     {
-        drop_outstanding(static_cast<QuicSpace>(id), events);
+        if (m_paths[path].open)
+        {
+            drop_outstanding(QuicSpace::Application, path, events);
+        }
     }
-    if (!m_rtt.sampled() && now_ns > first_ns)
+    if (!first.rtt.sampled() && now_ns > first_ns)
     {
-        m_rtt.smoothed_ns = min_u64(now_ns - first_ns, kMaxRttNs);
-        m_rtt.variance_ns = m_rtt.smoothed_ns / 2U;
+        first.rtt.smoothed_ns = min_u64(now_ns - first_ns, kMaxRttNs);
+        first.rtt.variance_ns = first.rtt.smoothed_ns / 2U;
     }
-    m_pto_count = 0U;
+    first.pto_count = 0U;
     arm(now_ns);
 }
 
 void QuicRecovery::reject_early(u64 now_ns, QuicRecoveryEvents& events) noexcept
 {
-    drop_outstanding(QuicSpace::Application, events);
-    m_pto_count = 0U;
+    if (m_paths[0].open)
+    {
+        drop_outstanding(QuicSpace::Application, 0U, events);
+    }
+    m_paths[0].pto_count = 0U;
     arm(now_ns);
 }
 
-void QuicRecovery::drop_outstanding(QuicSpace id, QuicRecoveryEvents& events) noexcept
+void QuicRecovery::drop_outstanding(QuicSpace id, usize path, QuicRecoveryEvents& events) noexcept
 {
-    Space& space = m_spaces[quic_space_index(id)];
+    Space& space = space_of(id, path);
     for (usize i = 0U; i < space.count; ++i)
     {
         QuicSentEntry& slot = entry(space, i);
         if (slot.state == kOutstanding)
         {
-            settle(space, slot);
+            settle(id, space, slot);
             slot.state = kLost;
             events.on_discarded(id, slot.packet);
         }
@@ -687,22 +838,35 @@ void QuicRecovery::drop_outstanding(QuicSpace id, QuicRecoveryEvents& events) no
     space.last_eliciting_ns = 0U;
 }
 
-bool QuicRecovery::can_send(QuicSpace id) const noexcept
+bool QuicRecovery::can_send(QuicSpace id, usize path) const noexcept
 {
-    const Space& space = m_spaces[quic_space_index(id)];
+    if (!usable(id, path))
+    {
+        return false;
+    }
+    const Space& space = space_of(id, path);
     return !space.discarded && (space.count < space.entries.size() || settled(space.entries[space.head].state));
 }
 
-bool QuicRecovery::can_send_data(QuicSpace id) const noexcept
+bool QuicRecovery::can_send_data(QuicSpace id, usize path) const noexcept
 {
-    const Space& space = m_spaces[quic_space_index(id)];
+    if (!usable(id, path))
+    {
+        return false;
+    }
+    const Space& space = space_of(id, path);
     return !space.discarded &&
            (space.count + m_reserved_entries < space.entries.size() || settled(space.entries[space.head].state));
 }
 
 QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& packet) noexcept
 {
-    Space& space = m_spaces[quic_space_index(id)];
+    const usize path = packet.path;
+    if (!usable(id, path))
+    {
+        return QuicRecoveryError::NoPath;
+    }
+    Space& space = space_of(id, path);
     if (space.discarded)
     {
         return QuicRecoveryError::Discarded;
@@ -713,7 +877,7 @@ QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& pack
     }
     if (space.count >= space.entries.size())
     {
-        compact(id, packet.sent_ns, true); // a lost packet held for a late acknowledgement gives up its slot
+        compact(id, path, packet.sent_ns, true); // a lost packet held for a late acknowledgement gives up its slot
         if (space.count >= space.entries.size())
         {
             return QuicRecoveryError::Full;
@@ -727,7 +891,7 @@ QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& pack
     space.next_number = packet.number + 1U;
     if (slot.packet.in_flight)
     {
-        m_bytes_in_flight += on_path(space, slot.packet) ? packet.bytes : 0U;
+        owner(id, path).bytes_in_flight += on_path(id, slot.packet) ? packet.bytes : 0U;
         if (packet.ack_eliciting)
         {
             ++space.eliciting_in_flight;
@@ -738,9 +902,13 @@ QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& pack
     return QuicRecoveryError::None;
 }
 
-QuicAckWrite QuicRecovery::write_ack(QuicSpace id, cont::Span<u8> out, u64 now_ns) noexcept
+QuicAckWrite QuicRecovery::write_ack(QuicSpace id, cont::Span<u8> out, u64 now_ns, usize path) noexcept
 {
-    Space& space = m_spaces[quic_space_index(id)];
+    if (!usable(id, path))
+    {
+        return {};
+    }
+    Space& space = space_of(id, path);
     if (space.discarded)
     {
         return {};
@@ -749,12 +917,25 @@ QuicAckWrite QuicRecovery::write_ack(QuicSpace id, cont::Span<u8> out, u64 now_n
     {
         return space.received.write(out, now_ns, kQuicDefaultAckDelayExponent);
     }
-    return space.received.write(out, now_ns, m_local_ack_delay_exponent, &m_receive_log);
+    return space.received.write(out, now_ns, m_local_ack_delay_exponent, (path == 0U) ? &m_receive_log : nullptr);
 }
 
-bool QuicRecovery::on_received(QuicSpace id, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns) noexcept
+void QuicRecovery::on_ack_acknowledged(usize path, u64 largest) noexcept
 {
-    Space& space = m_spaces[quic_space_index(id)];
+    if (path_open(path))
+    {
+        m_paths[path].application.received.on_ack_acknowledged(largest);
+    }
+}
+
+bool QuicRecovery::on_received(QuicSpace id, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns,
+                               usize path) noexcept
+{
+    if (!usable(id, path))
+    {
+        return false;
+    }
+    Space& space = space_of(id, path);
     if (space.discarded)
     {
         return false;
@@ -764,24 +945,25 @@ bool QuicRecovery::on_received(QuicSpace id, u64 number, bool ack_eliciting, Ecn
     {
         return false;
     }
-    if (id == QuicSpace::Application)
+    if (id == QuicSpace::Application && path == 0U)
     {
         m_receive_log.record(number, received_ns);
     }
     return true;
 }
 
-QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events) noexcept
+QuicLoss QuicRecovery::detect_lost(QuicSpace id, usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept
 {
-    Space&   space = m_spaces[quic_space_index(id)];
+    Space&   space = space_of(id, path);
+    Path&    estimate = owner(id, path);
     QuicLoss loss;
     space.loss_time_ns = kNeverNs;
     if (space.largest_acked == kQuicNoPacket)
     {
         return loss;
     }
-    const u64 loss_delay = loss_delay_ns();
-    const u64 congestion = persistent_congestion_ns();
+    const u64 loss_delay = loss_delay_ns(path);
+    const u64 congestion = persistent_congestion_ns(path);
 
     // A run of lost ack-eliciting packets sent after the first RTT sample with no acknowledged packet between
     // establishes persistent congestion when its send times span more than the duration (section 7.6.2).
@@ -813,25 +995,26 @@ QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents&
             continue;
         }
         const bool by_time   = now_ns >= packet.sent_ns && now_ns - packet.sent_ns >= loss_delay;
-        const bool by_number = space.largest_acked - packet.number >= m_packet_threshold;
+        const bool by_number = space.largest_acked - packet.number >= estimate.packet_threshold;
         if (!by_time && !by_number)
         {
             space.loss_time_ns = min_u64(space.loss_time_ns, add_sat(packet.sent_ns, loss_delay));
             continue;
         }
-        settle(space, slot);
+        settle(id, space, slot);
         slot.state   = by_time ? kLostByTime : kLost;
         slot.lost_ns = now_ns;
         ++loss.packets;
-        if (packet.in_flight && on_path(space, packet))
+        const bool counted = on_path(id, packet);
+        if (packet.in_flight && counted)
         {
             loss.bytes += packet.bytes;
         }
         loss.newest_sent_ns = max_u64(loss.newest_sent_ns, packet.sent_ns);
         // A lost PMTU probe says nothing of congestion (RFC 9000 section 14.4), nor does a packet a scheduled handover
         // may have taken (handover.hpp): neither starts nor ends a run.
-        if (packet.ack_eliciting && !packet.path_probe && !packet.handover && on_path(space, packet) &&
-            m_rtt.sampled() && packet.sent_ns >= m_rtt.first_sample_ns)
+        if (packet.ack_eliciting && !packet.path_probe && !packet.handover && counted && estimate.rtt.sampled() &&
+            packet.sent_ns >= estimate.rtt.first_sample_ns)
         {
             run_first = min_u64(run_first, packet.sent_ns);
             run_last  = max_u64(run_last, packet.sent_ns);
@@ -840,19 +1023,19 @@ QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents&
     }
     close_run();
     // RFC 8985 section 6.2, step 4: the raised thresholds persist for 16 loss detections with no spurious loss.
-    if (loss.packets != 0U && m_reorder_persist != 0U)
+    if (loss.packets != 0U && estimate.reorder_persist != 0U)
     {
-        --m_reorder_persist;
-        if (m_reorder_persist == 0U)
+        --estimate.reorder_persist;
+        if (estimate.reorder_persist == 0U)
         {
-            m_packet_threshold = kQuicPacketThreshold;
-            m_reorder_steps    = 0U;
+            estimate.packet_threshold = kQuicPacketThreshold;
+            estimate.reorder_steps    = 0U;
         }
     }
     return loss;
 }
 
-usize QuicRecovery::room(Space& space) noexcept
+usize QuicRecovery::room(const Space& space) noexcept
 {
     usize free = space.entries.size() - space.count;
     for (usize i = 0U; i < space.count && settled(entry(space, i).state); ++i)
@@ -862,9 +1045,10 @@ usize QuicRecovery::room(Space& space) noexcept
     return free;
 }
 
-QuicLoss QuicRecovery::make_room(QuicSpace id, usize entries, u64 now_ns, QuicRecoveryEvents& events) noexcept
+QuicLoss QuicRecovery::make_room(QuicSpace id, usize path, usize entries, u64 now_ns,
+                                 QuicRecoveryEvents& events) noexcept
 {
-    Space&   space = m_spaces[quic_space_index(id)];
+    Space&   space = space_of(id, path);
     QuicLoss loss;
     for (usize i = 0U; i < space.count && room(space) < entries; ++i)
     {
@@ -873,25 +1057,35 @@ QuicLoss QuicRecovery::make_room(QuicSpace id, usize entries, u64 now_ns, QuicRe
         {
             continue;
         }
-        settle(space, slot);
+        settle(id, space, slot);
         slot.state   = kLost;
         slot.lost_ns = now_ns;
         ++loss.packets;
-        loss.bytes += (slot.packet.in_flight && on_path(space, slot.packet)) ? slot.packet.bytes : 0U;
+        loss.bytes += (slot.packet.in_flight && on_path(id, slot.packet)) ? slot.packet.bytes : 0U;
         loss.newest_sent_ns = max_u64(loss.newest_sent_ns, slot.packet.sent_ns);
         events.on_lost(id, slot.packet);
     }
     return loss;
 }
 
-QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns,
-                                    QuicRecoveryEvents& events) noexcept
+QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns, QuicRecoveryEvents& events,
+                                    usize path, usize via) noexcept
 {
     QuicAckOutcome out;
-    Space&         space = m_spaces[quic_space_index(id)];
+    if (!usable(id, path))
+    {
+        out.error = QuicRecoveryError::NoPath;
+        return out;
+    }
+    Space& space = space_of(id, path);
     if (space.discarded)
     {
         out.error = QuicRecoveryError::Discarded;
+        return out;
+    }
+    if (!path_open(via))
+    {
+        out.error = QuicRecoveryError::NoPath;
         return out;
     }
     if (acknowledges_unsent(space, ack))
@@ -903,6 +1097,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
     {
         m_handshake_acked = true;
     }
+    Path& estimate = owner(id, path);
     const u64 prior_largest = space.largest_acked;
     out.advanced = prior_largest == kQuicNoPacket || ack.largest > prior_largest;
     space.largest_acked =
@@ -912,7 +1107,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
     // was declared lost is acknowledged without an event and measures the reordering (section 6.1).
     u64  largest_newly = kQuicNoPacket;
     u64  largest_sent  = 0U;
-    bool largest_on_path = false; // the largest newly acknowledged was sent on the path the estimate follows
+    bool largest_on_path = false; // the largest newly acknowledged was sent where the estimate follows
     bool largest_handover = false;
     u64  reordering    = 0U;
     u64  carried       = kQuicNoPacket; // the largest of the ACK frames those packets carried
@@ -927,8 +1122,8 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
             for (usize i = lower_bound(space, range.smallest); i < end; ++i)
             {
                 QuicSentEntry& slot = entry(space, i);
-                const bool counted = on_path(space, slot.packet);
-                if (held_lost(id, slot, now_ns))
+                const bool counted = on_path(id, slot.packet);
+                if (held_lost(id, path, slot, now_ns))
                 {
                     reordering = max_u64(reordering, prior_largest - slot.packet.number + 1U);
                     by_time    = by_time || slot.state == kLostByTime;
@@ -939,7 +1134,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                 }
                 else if (slot.state == kOutstanding)
                 {
-                    settle(space, slot);
+                    settle(id, space, slot);
                     slot.state = kAckedPending;
                     ++out.acked_packets;
                     if (slot.packet.in_flight && counted)
@@ -978,22 +1173,30 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
     {
         // RFC 8985 section 6.2, step 4, before this frame's detection: the packet threshold to the reordering seen,
         // the time threshold's window one step a round trip for a loss the time threshold declared.
-        m_packet_threshold = min_u64(max_u64(m_packet_threshold, reordering), kQuicMaxPacketThreshold);
-        if (by_time && space.largest_acked >= space.reorder_round && m_reorder_steps < kQuicMaxReorderSteps)
+        estimate.packet_threshold =
+            min_u64(max_u64(estimate.packet_threshold, reordering), kQuicMaxPacketThreshold);
+        if (by_time && space.largest_acked >= space.reorder_round && estimate.reorder_steps < kQuicMaxReorderSteps)
         {
-            ++m_reorder_steps;
+            ++estimate.reorder_steps;
             space.reorder_round = space.next_number;
         }
-        m_reorder_persist = kQuicReorderPersist;
+        estimate.reorder_persist = kQuicReorderPersist;
     }
     if (largest_newly == ack.largest && eliciting && largest_on_path)
     {
+        // RFC 10069 section 5.4: a sample through another path than the minimum's starts the minimum again.
+        if (estimate.rtt.sampled() && estimate.min_via != via)
+        {
+            estimate.rtt.min_ns = kMaxRttNs;
+        }
         const u64 latest = (now_ns > largest_sent) ? now_ns - largest_sent : 0U;
-        m_rtt.sample(latest, decoded_ack_delay_ns(id, ack.delay), m_confirmed, m_peer_max_ack_delay_ns, now_ns);
+        estimate.rtt.sample(latest, decoded_ack_delay_ns(id, ack.delay), m_confirmed, m_peer_max_ack_delay_ns,
+                            now_ns);
+        estimate.min_via = via;
         out.rtt_sampled = true;
         out.rtt_handover = largest_handover;
     }
-    out.lost = detect_lost(id, now_ns, events);
+    out.lost = detect_lost(id, path, now_ns, events);
 
     QuicAckRanges walk(ack);
     QuicAckRange  range;
@@ -1015,10 +1218,10 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
     {
         space.received.on_ack_acknowledged(carried);
     }
-    compact(id, now_ns, false);
+    compact(id, path, now_ns, false);
     if (peer_validated())
     {
-        m_pto_count = 0U;
+        estimate.pto_count = 0U;
     }
     arm(now_ns);
     return out;
@@ -1034,6 +1237,13 @@ u64 QuicRecovery::next_timer_ns() const noexcept
             time = min_u64(time, space.received.ack_deadline_ns());
         }
     }
+    for (const Path& path : m_paths)
+    {
+        if (path.open)
+        {
+            time = min_u64(time, path.application.received.ack_deadline_ns());
+        }
+    }
     return time;
 }
 
@@ -1046,12 +1256,14 @@ QuicTimeout QuicRecovery::on_timeout(u64 now_ns, QuicRecoveryEvents& events) noe
     }
     u64       time = kNeverNs;
     QuicSpace id   = QuicSpace::Initial;
-    if (earliest_loss(time, id))
+    usize     path = 0U;
+    if (earliest_loss(time, id, path))
     {
         out.kind  = QuicTimeoutKind::Loss;
         out.space = id;
-        out.lost  = detect_lost(id, now_ns, events);
-        compact(id, now_ns, false);
+        out.path  = path;
+        out.lost  = detect_lost(id, path, now_ns, events);
+        compact(id, path, now_ns, false);
         arm(now_ns);
         return out;
     }
@@ -1063,31 +1275,33 @@ QuicTimeout QuicRecovery::on_timeout(u64 now_ns, QuicRecoveryEvents& events) noe
     }
     else
     {
-        (void)pto_time(now_ns, id);
+        (void)pto_time(now_ns, id, path);
         out.kind   = QuicTimeoutKind::Probe;
         out.space  = id;
+        out.path   = path;
         out.probes = 2U;
     }
     // The probes must leave (section 6.2.4: a sender MUST send one): a storage full of packets that nothing
     // acknowledges, as behind a path that drops every one of them, or of ACK-only packets, would hold them back for
     // good. Its oldest are declared lost instead, and their entries go to the probes.
-    out.lost = make_room(out.space, out.probes, now_ns, events);
-    if (m_pto_count < 64U)
+    out.lost = make_room(out.space, out.path, out.probes, now_ns, events);
+    Path& estimate = owner(out.space, out.path);
+    if (estimate.pto_count < 64U)
     {
-        ++m_pto_count; // the backoff saturates long before: an idle timeout ends the connection
+        ++estimate.pto_count; // the backoff saturates long before: an idle timeout ends the connection
     }
     arm(now_ns);
     return out;
 }
 
-u64 QuicRecovery::largest_acked(QuicSpace space) const noexcept
+u64 QuicRecovery::largest_acked(QuicSpace space, usize path) const noexcept
 {
-    return m_spaces[quic_space_index(space)].largest_acked;
+    return space_of(space, path).largest_acked;
 }
 
-const QuicSentPacket* QuicRecovery::unacknowledged(QuicSpace space, u32 tag) const noexcept
+const QuicSentPacket* QuicRecovery::unacknowledged(QuicSpace space, u32 tag, usize path) const noexcept
 {
-    const Space& held = m_spaces[quic_space_index(space)];
+    const Space& held = space_of(space, path);
     for (usize index = held.count; tag != 0U && index > 0U; --index)
     {
         const QuicSentEntry& slot = entry(held, index - 1U);
@@ -1099,9 +1313,9 @@ const QuicSentPacket* QuicRecovery::unacknowledged(QuicSpace space, u32 tag) con
     return nullptr;
 }
 
-u64 QuicRecovery::unacknowledged_sent_ns(QuicSpace space, u64 number) const noexcept
+u64 QuicRecovery::unacknowledged_sent_ns(QuicSpace space, u64 number, usize path) const noexcept
 {
-    const Space& held = m_spaces[quic_space_index(space)];
+    const Space& held = space_of(space, path);
     const usize at = lower_bound(held, number);
     if (at == held.count)
     {
@@ -1112,15 +1326,15 @@ u64 QuicRecovery::unacknowledged_sent_ns(QuicSpace space, u64 number) const noex
                                                                                               : kNeverNs;
 }
 
-u64 QuicRecovery::ack_deadline_ns(QuicSpace space) const noexcept
+u64 QuicRecovery::ack_deadline_ns(QuicSpace space, usize path) const noexcept
 {
-    const Space& held = m_spaces[quic_space_index(space)];
+    const Space& held = space_of(space, path);
     return held.discarded ? kNeverNs : held.received.ack_deadline_ns();
 }
 
-const QuicAckTracker& QuicRecovery::received(QuicSpace space) const noexcept
+const QuicAckTracker& QuicRecovery::received(QuicSpace space, usize path) const noexcept
 {
-    return m_spaces[quic_space_index(space)].received;
+    return space_of(space, path).received;
 }
 
 // ---- QuicPeerReceiveTimes ----

@@ -3066,7 +3066,7 @@ void QuicConnection::apply_path_size() noexcept
 
 u64 QuicConnection::three_ptos() const noexcept
 {
-    const u64 period = m_recovery->probe_period_ns(QuicSpace::Application);
+    const u64 period = m_recovery->largest_probe_period_ns();
     return (period > kNeverNs / 3U) ? kNeverNs : 3U * period;
 }
 
