@@ -337,27 +337,30 @@ bool IoLoop::receive_batch(u32 socket, u64 now_ns, u64 unix_seconds, BatchResult
     {
         ReceivedDatagram& slot = slots[index];
         slot.socket = socket;
-        if (!trains || slot.segment == 0U || slot.too_big != 0U)
+        if (!trains || slot.too_big != 0U)
         {
             ++m_counters.received;
             deliver(slot, now_ns, unix_seconds);
             continue;
         }
-        // A train: each datagram in place, a datagram past slot_bytes truncated as a slot of that size would have
-        // made it, and a truncated train's cut last datagram truncated (a shorter datagram only ever ends a train).
-        ++m_counters.trains;
-        const usize segment = slot.segment;
-        for (usize at = 0U; at < slot.size; at += segment)
+        // A train slot holds a train or one datagram: each datagram in place, one past slot_bytes truncated as a slot
+        // of that size would have made it, and a truncated slot's cut last datagram truncated (a shorter datagram
+        // only ever ends a train).
+        const usize segment = (slot.segment != 0U) ? slot.segment : slot.size;
+        m_counters.trains += (slot.segment != 0U) ? 1U : 0U;
+        usize at = 0U;
+        do
         {
             const usize size = (slot.size - at < segment) ? slot.size - at : segment;
             ReceivedDatagram one = slot;
             one.storage = slot.storage.subspan(at, size);
             one.size = (size < m_config.slot_bytes) ? size : m_config.slot_bytes;
-            one.truncated = size > m_config.slot_bytes || (slot.truncated && size < segment);
+            one.truncated = size > m_config.slot_bytes || (slot.truncated && (slot.segment == 0U || size < segment));
             one.segment = 0U;
             ++m_counters.received;
             deliver(one, now_ns, unix_seconds);
-        }
+            at += segment;
+        } while (at < slot.size);
     }
     return result.count == count;
 }

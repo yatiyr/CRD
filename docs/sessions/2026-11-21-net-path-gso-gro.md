@@ -18,7 +18,8 @@ Nothing of this track failed. Run 44887080529 (70f94328) had not started; in 448
   ENOBUFS loses a train whole. `UdpOptions::segment_send` (on) and `coalesce_receive` (off) choose; `features()`
   reports `segmented_send` and `coalesced_receive`, `offload_counters()` what they did.
 - `UDP_GRO` receive: a train in a `kMaxTrainBytes` slot with `ReceivedDatagram::segment`. `IoLoop` reads a
-  coalescing socket into `train_slots` and hands each datagram on in place (no copy), truncating as a plain slot would.
+  coalescing socket into `train_slots` and hands each datagram on in place (no copy), truncating as a plain slot
+  would, a lone datagram in a train slot included.
 - The interop peer opts into coalesced receive.
 
 ## Evidence
@@ -26,13 +27,16 @@ Nothing of this track failed. Run 44887080529 (70f94328) had not started; in 448
 - WSL linux-gcc-debug: the train model test (20,000 random runs against a direct reading of the rule); loopback
   bursts over IPv4, IPv6 and dual-stack, segmenting on and off, arriving identical (5 trains, 109 of 112 datagrams);
   GSO into a GRO socket arriving as exactly those 5 trains; the IoLoop train test (in place, truncation, mixed set,
-  allocation refusals). `[.netns]` under `unshare -Urn`: EIO with transmit checksum offload off on the near link
-  (both families; segmentation off, marking kept, all 10 datagrams arrive), a train past the link MTU refused as each
-  datagram would be, a train across the 1280-byte hop lost whole with one report and nothing fragmented, a full
-  queue (pfifo limit 0) losing two trains whole and counting them once. The whole crd-net-tests (1014 cases), the 32
-  net corpus and drift CTests, and both interop suites (ngtcp2, picoquic) on linux-gcc-public-checks pass.
-- Windows win-debug: crd-net-tests builds and `[udp],[io-loop]` pass (segmentation reported off).
-- clang-tidy 22.1.8 (`tidy-files.py`): udp.cpp, io_loop.cpp and both test files clean.
+  allocation refusals, a lone datagram past `slot_bytes`). A real-UDP QUIC client and server: both hosts' bursts
+  leave as trains and each loop splits exactly the trains its socket joined. `[.netns]` under `unshare -Urn`: EIO
+  with transmit checksum offload off on the near link (both families; segmentation off, marking kept, all 10
+  datagrams arrive), a train past the link MTU refused as each datagram would be, a train across the 1280-byte hop
+  lost whole with one report and nothing fragmented, a full queue (pfifo limit 0) losing two trains whole and
+  counting them once. The whole crd-net-tests (1014 cases), the 32
+  net corpus and drift CTests, and both interop suites (ngtcp2, picoquic) on linux-gcc-public-checks pass;
+  linux-gcc-asan passes `[udp],[io-loop],[quic-client]` and `[.netns]`.
+- Windows win-debug: crd-net-tests builds and `[udp],[io-loop],[quic-client]` pass (offloads reported off).
+- clang-tidy 22.1.8 (`tidy-files.py`): udp.cpp, io_loop.cpp and the three test files clean.
 - Teeth, each caught: no train counted on ENOBUFS (full-queue test), no plain retry of a refused train (EIO and MTU
   tests), a probe leading a train (model and burst tests), a cut last datagram left whole (IoLoop test).
 

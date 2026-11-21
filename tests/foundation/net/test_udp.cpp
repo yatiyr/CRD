@@ -661,14 +661,15 @@ OffloadCounters burst_trains(const Endpoint& peer)
     return trains;
 }
 
-// Checks datagram `expected` of the burst arrived whole in `bytes` with its codepoint.
-void check_burst_datagram(ConstSpan<u8> bytes, Ecn ecn, usize expected)
+// Checks datagram `expected` of the burst arrived whole in `bytes` with its codepoint, or Not-ECT on a socket that
+// reads none (macOS until MAC.1).
+void check_burst_datagram(ConstSpan<u8> bytes, Ecn ecn, usize expected, bool ecn_reading)
 {
     INFO("datagram " << expected);
     const Planned plan = burst_plan(expected);
     REQUIRE(bytes.size() == plan.size);
     CHECK(matches(bytes, static_cast<u32>(expected)));
-    CHECK(ecn == plan.ecn);
+    CHECK(ecn == (ecn_reading ? plan.ecn : Ecn::NotEct));
 }
 
 // Receives the burst on a socket that does not coalesce and checks every datagram arrived whole, in order.
@@ -682,7 +683,7 @@ void receive_burst(UdpSocket& to, const Endpoint& from_seen)
         CHECK(slot.peer == from_seen);
         CHECK(slot.segment == 0U);
         CHECK_FALSE(slot.truncated);
-        check_burst_datagram(slot.storage.first(slot.size), slot.ecn, index);
+        check_burst_datagram(slot.storage.first(slot.size), slot.ecn, index, to.features().ecn_reading);
     }
 }
 
@@ -712,7 +713,7 @@ u64 receive_burst_coalesced(UdpSocket& to, const Endpoint& from_seen)
             for (usize at = 0U; at < slot.size && next < kBurst; at += segment, ++next)
             {
                 const usize size = (slot.size - at < segment) ? slot.size - at : segment;
-                check_burst_datagram(slot.storage.subspan(at, size), slot.ecn, next);
+                check_burst_datagram(slot.storage.subspan(at, size), slot.ecn, next, to.features().ecn_reading);
             }
         }
     }

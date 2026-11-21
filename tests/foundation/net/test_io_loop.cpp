@@ -524,12 +524,15 @@ TEST_CASE("A coalescing socket's train reaches the handler a datagram at a time,
     CHECK(ingress.counters().drops[static_cast<usize>(DropReason::Truncated)] == 4U);
     CHECK(loop.counters().trains == 4U);
 
-    // A slot the socket says holds one datagram stays one, whatever its size.
+    // A slot the socket says holds one datagram stays one, and one past slot_bytes in a train slot is truncated as a
+    // plain slot truncates it.
     plain.deliver(short_packet(view_of(routed, 16U), 1200U), kClient);
     coalescing.deliver(short_packet(view_of(routed, 16U), 1200U), kClient);
+    coalescing.deliver(short_packet(view_of(routed, 16U), 1400U), kClient);
     (void)loop.poll();
     CHECK(handler.routes == 13U);
     CHECK(loop.counters().trains == 4U);
+    CHECK(ingress.counters().drops[static_cast<usize>(DropReason::Truncated)] == 5U);
 
     // Train slots exist only for a set that coalesces, and then need a count in range.
     IoLoopConfig none = config;

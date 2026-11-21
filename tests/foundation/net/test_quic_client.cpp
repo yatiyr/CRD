@@ -1503,6 +1503,38 @@ TEST_CASE("QUIC client: a client host is served over the host's loopback through
     CHECK(hosts.serve_until([&] { return !hosts.client.token_for(request.server, QuicVersion::V1).empty(); }, 5U));
 }
 
+TEST_CASE("QUIC hosts: streams over real UDP sockets leave in segmented trains and arrive as coalesced ones",
+          "[net][net-path][quic-client]")
+{
+    UdpOptions options;
+    options.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), 0U};
+    options.coalesce_receive = true;
+    SocketError error = SocketError::Failed;
+    UdpSocket server_socket = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    UdpSocket client_socket = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    RealHosts hosts(server_socket, client_socket);
+    QuicClientConnect request;
+    request.server = server_socket.local_endpoint();
+    const QuicHandle handle = hosts.client.connect(request, hosts.clock.monotonic_ns());
+    hosts.app.begin(handle, 9U);
+    REQUIRE(hosts.serve_until([&] { return hosts.app.echoed(handle); }, 10U));
+#if CRD_OS_LINUX
+    // Both hosts' bursts leave as trains, and each loop splits the trains its socket joined.
+    REQUIRE(server_socket.features().segmented_send);
+    REQUIRE(client_socket.features().coalesced_receive);
+    CHECK(server_socket.offload_counters().trains_sent != 0U);
+    CHECK(client_socket.offload_counters().trains_sent != 0U);
+    CHECK(client_socket.offload_counters().trains_received != 0U);
+    CHECK(hosts.client_loop.counters().trains == client_socket.offload_counters().trains_received);
+    CHECK(hosts.server_loop.counters().trains == server_socket.offload_counters().trains_received);
+    CHECK(server_socket.offload_counters().trains_refused == 0U);
+#else
+    CHECK(hosts.client_loop.counters().trains == 0U);
+#endif
+}
+
 TEST_CASE("QUIC client: a connection probes the host's second socket, then moves there; the server follows and every "
           "stream finishes over hostile paths",
           "[net][net-path][quic-client][client-migration]")
