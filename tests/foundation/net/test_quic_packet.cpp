@@ -83,9 +83,37 @@ QuicPacketSpec spec_of(QuicPacketType type, u64 number, QuicVersion version = Qu
     return spec;
 }
 
+// A datagram's bytes, held on the heap: a test case holds dozens of them, which a debug build keeps apart on its stack
+// (the multipath case overflowed MSVC's 1 MiB with them inline).
 struct Buffer
 {
-    u8 bytes[20000] = {};
+    static constexpr usize kBytes = 20000U;
+
+    Buffer()
+    {
+        storage.resize(kBytes);
+        bytes = storage.data();
+    }
+    Buffer(const Buffer& other) : storage(other.storage), size(other.size) {}
+    Buffer(Buffer&& other) noexcept : storage(static_cast<Bytes&&>(other.storage)), size(other.size) {}
+    Buffer& operator=(const Buffer& other)
+    {
+        storage = other.storage;
+        bytes = storage.data();
+        size = other.size;
+        return *this;
+    }
+    Buffer& operator=(Buffer&& other) noexcept
+    {
+        storage = static_cast<Bytes&&>(other.storage);
+        bytes = storage.data();
+        size = other.size;
+        return *this;
+    }
+    ~Buffer() = default;
+
+    Bytes storage;
+    u8* bytes = storage.data();
     usize size = 0U;
 
     [[nodiscard]] Span<u8> rest(usize room = kRoom) { return Span<u8>(bytes + size, room); }
