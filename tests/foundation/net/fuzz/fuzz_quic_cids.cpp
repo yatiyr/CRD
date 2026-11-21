@@ -10,8 +10,8 @@
 // issued, topped up, rotated, retired by the peer under any packet's ID, sent and settled, reannounced; and the end of
 // the connection.
 //
-// Oracles, against a model of every space. Each verdict is the restated rule's: a frame for a closed or abandoned
-// space changes nothing; abandoning retires the space's peer IDs at once with no retirement owed and keeps this
+// Oracles, against a model of every space. Each verdict is the restated rule's: a path ID opens once and in rising
+// order, one passed over never; a frame for a closed or abandoned space changes nothing; abandoning retires the space's peer IDs at once with no retirement owed and keeps this
 // side's routed, none issued, rotated or announced there again; one ID or token under two IDs anywhere is
 // PROTOCOL_VIOLATION, a repeat changes nothing; below Retire Prior To an ID is retired again; an ID retired here while
 // its retirement is outstanding is never held again (once settled it may be, as the 16 latest are remembered); a
@@ -176,6 +176,7 @@ struct World
     usize free_count = 0U;
     Space spaces[kQuicMaxPaths];
     u64 limit = 2U;
+    u64 next_path = 1U; // the smallest path ID not consumed
     u8 next_value = 1U; // the next fresh peer ID value
     bool dead = false;
 };
@@ -345,12 +346,13 @@ void check(World& w)
     {
         const u64 path = path_of(selector);
         CRD_FUZZ_REQUIRE(w.cids.is_open(path) == (find(w, path) != nullptr));
+        CRD_FUZZ_REQUIRE(w.cids.consumed(path) == (path < w.next_path));
     }
 }
 
 void op_open(World& w, u64 path)
 {
-    const bool expected = path <= 0xFFFFFFFFU && find(w, path) == nullptr && open_count(w) < kQuicMaxPaths;
+    const bool expected = path <= 0xFFFFFFFFU && path >= w.next_path && open_count(w) < kQuicMaxPaths;
     if (w.free_count == 0U)
     {
         return;
@@ -362,6 +364,7 @@ void op_open(World& w, u64 path)
         return;
     }
     --w.free_count;
+    w.next_path = path + 1U;
     for (Space& space : w.spaces)
     {
         if (!space.open)

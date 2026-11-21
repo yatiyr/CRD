@@ -125,7 +125,7 @@ const QuicCidSpace* QuicCids::space(u64 path_id) const noexcept
 
 bool QuicCids::open(u64 path_id, QuicCidSpace& storage) noexcept
 {
-    if (path_id > kMaxPathId || is_open(path_id))
+    if (path_id > kMaxPathId || consumed(path_id))
     {
         return false;
     }
@@ -137,6 +137,7 @@ bool QuicCids::open(u64 path_id, QuicCidSpace& storage) noexcept
             storage.m_path_id = path_id;
             storage.m_open = true;
             slot = &storage;
+            m_next_path = path_id + 1U;
             return true;
         }
     }

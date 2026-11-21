@@ -136,12 +136,22 @@ TEST_CASE("connection ID spaces open, refuse and close per path ID", "[quic][cid
 {
     Started s;
     CHECK(s.cids.is_open(0U));
+    CHECK(s.cids.consumed(0U));
+    CHECK_FALSE(s.cids.consumed(1U));
     CHECK_FALSE(s.cids.open(0U, s.spaces[0]));                // open already
     CHECK_FALSE(s.cids.open(u64{0x100000000U}, s.spaces[0])); // past 2^32 - 1
-    REQUIRE(s.cids.open(0xFFFFFFFFU, s.spaces[0]));           // the largest path ID
     REQUIRE(s.cids.open(1U, s.spaces[1]));
     REQUIRE(s.cids.open(2U, s.spaces[2]));
-    CHECK_FALSE(s.cids.open(3U, s.spaces[3])); // kQuicMaxPaths open
+    REQUIRE(s.cids.open(4U, s.spaces[0])); // path ID 3 passed over
+    CHECK_FALSE(s.cids.open(5U, s.spaces[3])); // kQuicMaxPaths open
+    CHECK_FALSE(s.cids.consumed(5U));
+    // A path ID opens once and in rising order (RFC 10069 sections 2.4 and 3.4): closed, it never opens again, nor
+    // does one passed over.
+    REQUIRE(s.cids.close(4U) == &s.spaces[0]);
+    CHECK(s.cids.consumed(4U));
+    CHECK(s.cids.consumed(3U));
+    CHECK_FALSE(s.cids.open(4U, s.spaces[0]));
+    CHECK_FALSE(s.cids.open(3U, s.spaces[0]));
     // A space numbers this side's IDs from 0; path 0's started at 1 after the handshake's.
     REQUIRE(s.cids.issue(1U));
     REQUIRE(s.cids.issue(0U));
@@ -167,6 +177,7 @@ TEST_CASE("connection ID spaces open, refuse and close per path ID", "[quic][cid
     CHECK_FALSE(added);
     CHECK(s.cids.retire_local(1U, 0U, QuicCidRef{}) == QuicTransportError::NoError);
     CHECK_FALSE(s.cids.issue(1U));
+    CHECK_FALSE(s.cids.open(1U, *closed));
     // The storage opens again under another path ID, empty.
     REQUIRE(s.cids.open(7U, *closed));
     CHECK(s.cids.peer_count(7U) == 0U);
@@ -177,8 +188,11 @@ TEST_CASE("connection ID spaces open, refuse and close per path ID", "[quic][cid
     QuicCidSpace* first = s.cids.close(0U);
     REQUIRE(first != nullptr);
     CHECK(s.cids.current(0U) == kQuicNoSequence);
-    REQUIRE(s.cids.open(8U, *first));
-    CHECK(s.cids.is_open(8U));
+    REQUIRE(s.cids.open(0xFFFFFFFFU, *first)); // the largest path ID, after which none opens
+    CHECK(s.cids.is_open(0xFFFFFFFFU));
+    CHECK(s.cids.consumed(8U));
+    REQUIRE(s.cids.close(7U) != nullptr);
+    CHECK_FALSE(s.cids.open(8U, *closed));
 }
 
 TEST_CASE("abandoning a path ID retires the peer's IDs at once and keeps this side's until it closes",

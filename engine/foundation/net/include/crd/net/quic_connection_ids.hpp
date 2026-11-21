@@ -163,9 +163,14 @@ public:
     ~QuicCids() = default;
 
     // ---- Spaces ----
-    // Opens path ID `path_id`'s space on `storage`, empty both ways. False, changing nothing, when it is open already,
-    // kQuicMaxPaths are open, or `path_id` is past 2^32 - 1 (RFC 10069 section 2.1).
+    // Opens path ID `path_id`'s space on `storage`, empty both ways. Path IDs open in rising order and once each: a
+    // path ID is in every nonce of its path (RFC 10069 sections 2.4 and 3.4), and one passed over is consumed with
+    // the ones opened (consumed()). False, changing nothing, for a consumed path ID, when kQuicMaxPaths are open, or
+    // for one past 2^32 - 1 (section 2.1).
     [[nodiscard]] bool open(u64 path_id, QuicCidSpace& storage) noexcept;
+    // Whether `path_id` can no longer open: it is open, was opened, or lies below one that was (path ID 0 from the
+    // start). One consumed and not open is closed for good, its frames silently ignored (section 4).
+    [[nodiscard]] bool consumed(u64 path_id) const noexcept { return path_id < m_next_path; }
     // Closes `path_id`'s space: the host stops routing its own IDs and the peer's tokens there count no more (RFC
     // 10069 section 3.4: abandoning a path retires its IDs both ways). Its storage, for a later open(); null when it
     // is not open.
@@ -268,6 +273,7 @@ private:
 
     QuicConnectionIds* m_host = nullptr;
     u8 m_local_bytes = 0U; // this side's IDs' length: sequence 0's
+    u64 m_next_path = 1U;  // the smallest path ID not consumed
     QuicCidSpace m_first;
     QuicCidSpace* m_spaces[kQuicMaxPaths] = {&m_first};
 };
