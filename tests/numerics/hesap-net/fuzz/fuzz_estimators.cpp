@@ -471,7 +471,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     add(sink, "rate-extremes", {5U, 3U, 0U, 0U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 1U, 5U, 7U, 0U, 0U, 0U, 0U, 1U});
     // A 1 s period, then eight periods of 21 RTT samples three bins apart and one loss a bin after
     // them: the same bin lost each period, a timetable the learner locks on.
-    u8 timetable[11U + 8U * (21U * 5U + 4U)] = {6U, 0U, 0U}; // the start: a period of 1 s
+    u8 timetable[11U + 8U * (21U * 5U + 5U)] = {6U, 0U, 0U}; // the start: a period of 1 s
     usize size = 11U;
     for (u32 period = 0U; period < 8U; ++period)
     {
@@ -482,7 +482,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                 timetable[size++] = b;
             }
         }
-        for (const u8 b : {u8{6U}, u8{2U}, u8{1U}, u8{0U}})
+        for (const u8 b : {u8{6U}, u8{2U}, u8{1U}, u8{0U}, u8{0U}})
         {
             timetable[size++] = b;
         }
