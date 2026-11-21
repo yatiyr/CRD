@@ -105,18 +105,9 @@ void QuicPathControl::build(u64 entropy) noexcept
     follow_ecn();
 }
 
-bool QuicPathControl::move(const QuicPath& path, u32 base_datagram_bytes, u64 entropy) noexcept
+void QuicPathControl::restart(const QuicPath& path, u32 base_datagram_bytes, u64 entropy) noexcept
 {
-    if (m_path == path)
-    {
-        return false;
-    }
-    const bool kept = quic_port_only_change(m_path, path);
     m_path = path;
-    if (kept)
-    {
-        return false;
-    }
     m_handover = HandoverSchedule{}; // the schedule was the old link's, and so was what the learner learned
     HandoverLearner& learner = learner_in(m_learner.bytes);
     if (learner.learning())
@@ -134,7 +125,6 @@ bool QuicPathControl::move(const QuicPath& path, u32 base_datagram_bytes, u64 en
     m_datagram_bytes = m_pmtu.size();
     m_ecn.restart(codepoint());
     build(entropy);
-    return true;
 }
 
 void QuicPathControl::reset(u64 now_ns) noexcept

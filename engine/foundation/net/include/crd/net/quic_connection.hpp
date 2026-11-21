@@ -781,7 +781,6 @@ private:
     // The sending state of path slot `slot` (open in the recovery), and the slot of the datagram being written: the
     // handshake's until multipath opens others (S78's scheduling).
     [[nodiscard]] QuicPathControl& control(usize slot) noexcept { return *m_controls[slot]; }
-    [[nodiscard]] const QuicPathControl& control(usize slot) const noexcept { return *m_controls[slot]; }
     [[nodiscard]] static constexpr usize send_slot() noexcept { return 0U; }
     // The datagram frames' room follows the smallest datagram of the open paths, any of which may carry one.
     void follow_datagram_size() noexcept;

@@ -3393,21 +3393,24 @@ void QuicConnection::leave_fallback(u64 now_ns) noexcept
 
 void QuicConnection::follow_congestion(u64 now_ns) noexcept
 {
-    if (!address_validated())
+    const QuicPath& active = m_paths.path(m_paths.active());
+    if (!address_validated() || m_first_control.path() == active)
     {
         return;
     }
     // Section 9.4: on confirming the peer's address, initial values unless only its port changed. Until then the
-    // credit and 1200-byte datagrams hold the path, and a spurious move never confirmed costs the state nothing. A
-    // path of another family is the only thing known of it: its floor, then the search (RFC 8899 section 5.2).
-    const QuicPath& active = m_paths.path(m_paths.active());
+    // credit and 1200-byte datagrams hold the path, and a spurious move never confirmed costs the state nothing.
+    if (quic_port_only_change(m_first_control.path(), active))
+    {
+        m_first_control.bind(active);
+        return;
+    }
+    // A path of another family is the only thing known of it: its floor, then the search (RFC 8899 section 5.2).
     const u32 base =
         (active.peer.address.unmapped().family == AddressFamily::V6) ? kQuicIpv6BaseDatagram : kQuicPmtuFloor;
-    if (m_first_control.move(active, base, entropy()))
-    {
-        m_recovery->restart_path(now_ns);
-        follow_datagram_size();
-    }
+    m_first_control.restart(active, base, entropy());
+    m_recovery->restart_path(now_ns);
+    follow_datagram_size();
 }
 
 Endpoint QuicConnection::preferred_for(const Endpoint& peer) const noexcept

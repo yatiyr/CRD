@@ -13,14 +13,15 @@
 // The recovery's events reach the control of the slot their packet was sent on (QuicSentPacket::path), so one path's
 // losses, marks, black holes and handovers never reach another path's controller, sampler or search.
 //
-//   paths       built for a validated path (its 4-tuple, path()); a move to another 4-tuple starts it over unless
-//               only the peer's port changed (RFC 9000 section 9.4), and the schedule, which was the old link's, ends.
+//   paths       built for a validated path (its 4-tuple, path()); a move to another address starts it over and the
+//               schedule, which was the old link's, ends, while a new port alone keeps it (RFC 9000 section 9.4).
 //   ownership   the controller is built in the control's own storage and reads its sampler, so a control is never
 //               copied or moved; slot 0's lives in the connection, the others are allocated with their slot.
 //   allocation  none.
 //   threads     a connection's, on its loop's thread.
 //   time        the caller's clock, in nanoseconds.
 
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/net/congestion.hpp>
 #include <crd/net/delivery_rate.hpp>
@@ -54,6 +55,11 @@ struct QuicPathSignals
     bool ecn_signal = false;    // a rise of the peer's CE counts taken as congestion
 };
 
+// (MSVC C4324: the controller's storage is 16-byte aligned, so the members before it are padded.)
+#if CRD_COMPILER_MSVC
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 class QuicPathControl
 {
 public:
@@ -69,13 +75,13 @@ public:
     [[nodiscard]] bool start(const QuicPathControlConfig& config, const QuicPath& path, u64 entropy) noexcept;
     [[nodiscard]] bool started() const noexcept { return m_controller != nullptr; }
 
-    // The 4-tuple the state was built on; bind() names it for a path whose peer port was not yet known.
+    // The 4-tuple the state was built on. bind() names another and keeps the state: a peer port not yet known, or a
+    // NAT rebinding (only the port changed, RFC 9000 section 9.4).
     [[nodiscard]] const QuicPath& path() const noexcept { return m_path; }
     void bind(const QuicPath& path) noexcept { m_path = path; }
-    // A validated move to `path`: nothing when it is the path already, the state kept when only the peer's port
-    // changed, and otherwise every part starts over (the search from `base_datagram_bytes`, the peer's ceiling kept)
-    // and the schedule ends. True when it started over, for the caller to restart the RTT estimate too.
-    [[nodiscard]] bool move(const QuicPath& path, u32 base_datagram_bytes, u64 entropy) noexcept;
+    // A validated move to another address: every part starts over (the search from `base_datagram_bytes`, the peer's
+    // ceiling kept), learning starts again and the schedule, which was the old link's, ends.
+    void restart(const QuicPath& path, u32 base_datagram_bytes, u64 entropy) noexcept;
     // Recovery started over (a Retry, RFC 9002 section 6.3): congestion control, the sampler and the pacer too.
     void reset(u64 now_ns) noexcept;
 
@@ -172,4 +178,7 @@ private:
     LearnerSlot m_learner;
     u32 m_learner_revision = 0U; // the learner's estimate in force
 };
+#if CRD_COMPILER_MSVC
+#pragma warning(pop)
+#endif
 } // namespace crd::net
