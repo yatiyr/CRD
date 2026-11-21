@@ -45,6 +45,17 @@ template <typename T> using Wide = Group<T>;
 template <typename T, typename V> inline constexpr u64 kLanes = sizeof(V) / sizeof(T);
 static_assert(kLanes<f32, Group<f32>> == kEwLanes<f32> && kLanes<f64, Group<f64>> == kEwLanes<f64>);
 
+// A stored comparison mask's lane read as its integer bits: a set lane is all ones (a NaN as a float), a clear lane
+// all zeros. Never as a float compare against zero: MSVC 14.52's optimised builds read `m[q] != T(0)` over a
+// sixteen-lane f32 mask as false on set (NaN) lanes, so the avx512 LU lost its singular flags (14.51 correct;
+// reproduced 2026-11-21 under SDE with 14.52.37025). The builtin, not std::bit_cast, so no std template instance
+// leaves the level's namespace (check-isa-isolation).
+template <typename T> bool lane_set(T m) noexcept
+{
+    using Bits = std::conditional_t<sizeof(T) == 4U, u32, u64>;
+    return __builtin_bit_cast(Bits, m) != 0U;
+}
+
 // ---- tiny GEMM ----------------------------------------------------------------------------------------------------
 
 // The rows [i0, i0 + R) of c, R <= 4, in blocks of two column vectors.
@@ -299,7 +310,7 @@ template <typename T, typename V> void chol_lanes(T* buf, u64 n, i32* info, u64 
         good.store(gm);
         for (u64 q = 0; q < lanes; ++q)
         {
-            if (gm[q] == T(0) && flagged[q] == 0)
+            if (!lane_set(gm[q]) && flagged[q] == 0)
             {
                 flagged[q] = static_cast<i32>(j) + 1;
             }
@@ -385,7 +396,7 @@ template <typename T, typename V> void lu_lanes(T* buf, u64 n, i32* piv, i32* in
         bad.store(bm);
         for (u64 q = 0; q < lanes; ++q)
         {
-            if (bm[q] != T(0) && flagged[q] == 0)
+            if (lane_set(bm[q]) && flagged[q] == 0)
             {
                 flagged[q] = static_cast<i32>(j) + 1;
             }

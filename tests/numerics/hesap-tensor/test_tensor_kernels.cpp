@@ -1965,7 +1965,7 @@ template <typename T> void batched_inputs(T* p, u64 batch, u64 n, bool spd, u64 
 
 // Cholesky and LU against batched_core.hpp's scalar tier: every n of the lane tier's edges (one and two groups a
 // step), past it (the scalar tier), the batch in two ranges that split a group.
-template <typename T> u64 check_batched_factor(const tn::BatchedKernels<T>& kb, bool lu)
+template <typename T> void check_batched_factor(const tn::BatchedKernels<T>& kb, bool lu)
 {
     constexpr u64 batch = 19U;
     constexpr u64 cap = batch * (33U * 33U + 3U) + 3U;
@@ -1975,7 +1975,6 @@ template <typename T> u64 check_batched_factor(const tn::BatchedKernels<T>& kb, 
     crd::i32 got_info[batch];
     static crd::i32 want_piv[batch * 33U];
     static crd::i32 got_piv[batch * 33U];
-    u64 bad = 0;
     for (const u64 n : {1U, 2U, 3U, 4U, 5U, 8U, 11U, 16U, 22U, 23U, 32U, 33U})
     {
         const u64 s = n * n + 3U;
@@ -1999,11 +1998,11 @@ template <typename T> u64 check_batched_factor(const tn::BatchedKernels<T>& kb, 
         const tn::BatchedFactor<T> f{got, static_cast<i64>(s), got_info, got_piv, n};
         (lu ? kb.lu : kb.cholesky)(f, 0U, 5U);
         (lu ? kb.lu : kb.cholesky)(f, 5U, batch);
-        bad += nan_aside_mismatches(want, got, batch * s + 3U);
-        bad += i32_mismatches(want_info, got_info, batch);
-        bad += lu ? i32_mismatches(want_piv, got_piv, batch * n) : 0U;
+        INFO((lu ? "LU" : "Cholesky") << " n " << n);
+        CHECK(nan_aside_mismatches(want, got, batch * s + 3U) == 0U);
+        CHECK(i32_mismatches(want_info, got_info, batch) == 0U);
+        CHECK((lu ? i32_mismatches(want_piv, got_piv, batch * n) : 0U) == 0U);
     }
-    return bad;
 }
 
 // The SVD against batched_core.hpp's sweeps and post-pass, at max_sweeps 30 and 2 (some matrices still rotating).
@@ -2143,11 +2142,16 @@ template <typename T> u64 check_batched_solves(const tn::BatchedKernels<T>& kb)
     return bad;
 }
 
-template <typename T> u64 check_batched_level(const TensorKernels& k)
+// Each batched routine on its own check, so a failure names the routine and the element type.
+template <typename T> void check_batched_parts(const TensorKernels& k)
 {
     const tn::BatchedKernels<T>& kb = batched_of<T>(k);
-    return check_batched_gemm<T>(kb) + check_batched_factor<T>(kb, false) + check_batched_factor<T>(kb, true) +
-           check_batched_svd<T>(kb) + check_batched_solves<T>(kb);
+    INFO((std::is_same_v<T, f32> ? "f32" : "f64"));
+    CHECK(check_batched_gemm<T>(kb) == 0U);
+    check_batched_factor<T>(kb, false); // Cholesky
+    check_batched_factor<T>(kb, true);  // LU
+    CHECK(check_batched_svd<T>(kb) == 0U);
+    CHECK(check_batched_solves<T>(kb) == 0U);
 }
 
 TEST_CASE("tensor kernels: every level the host runs gives the scalar tier's batched bits", "[tensor][kernels]")
@@ -2161,8 +2165,8 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar tier's bat
         }
         ++ran;
         INFO(crd::cpu_level_name(level.level) << variant_suffix(level));
-        CHECK(check_batched_level<f32>(*level.table) == 0U);
-        CHECK(check_batched_level<f64>(*level.table) == 0U);
+        check_batched_parts<f32>(*level.table);
+        check_batched_parts<f64>(*level.table);
     }
     CHECK(ran >= 1U);
 }
