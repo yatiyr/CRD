@@ -1,12 +1,12 @@
 // crd-net -- GCC (NET-PATH; docs/design/network-foundation.md#gcc, draft-ietf-rmcat-gcc-02 as libwebrtc's send side
 // runs it): the policy rules, the start and its pacing; the delay-based rate control (8% a second far from the link's
 // capacity, half a packet per response time near it, 0.85 of the acknowledged rate on overuse at most once a clamped
-// RTT, the rate halved before any acknowledged rate, held on underuse); the loss controller (following the delay's
-// rate in its start phase, 1 - p / 2 past 10% at most once 300 ms and an RTT, holding from 2% to 10%, CE as a loss,
-// fractions over 20 packets); the frames' own samples when the peer reports no receive times, a peer clock's offset
-// changing nothing; the window, persistent congestion, a Retry, datagram sizes and live swaps; and over a simulated
-// bottleneck: a media source near the link's rate in a sawtooth whose queue stays under CUBIC's, a link that halves,
-// the same without receive timestamps, random loss, and its share beside CUBIC.
+// RTT, the rate halved before any acknowledged rate at most once 200 ms, held on underuse); the loss controller
+// (following the delay's rate in its start phase, 1 - p / 2 past 10% at most once 300 ms and an RTT, holding from 2% to
+// 10%, CE as a loss, fractions over 20 packets); the frames' own samples when the peer reports no receive times, a peer
+// clock's offset changing nothing; the window, persistent congestion, a Retry, datagram sizes and live swaps; and over
+// a simulated bottleneck: a media source near the link's rate in a sawtooth whose queue stays under CUBIC's, a link
+// that halves, the same without receive timestamps, random loss, and its share beside CUBIC.
 
 #include "bottleneck_fixture.hpp"
 
@@ -296,7 +296,7 @@ TEST_CASE("GCC: an overuse decreases to 0.85 of the acknowledged rate, then hold
     CHECK(grown * 100U <= expected * 120U);
 }
 
-TEST_CASE("GCC: an overuse before any acknowledged rate halves the rate", "[net][net-path][gcc]")
+TEST_CASE("GCC: an overuse before any acknowledged rate halves the rate, at most once 200 ms", "[net][net-path][gcc]")
 {
     // Steep growth in the first frames, a packet each 6 ms (a group each), before the acknowledged rate's first
     // 500 ms window closes.
@@ -312,6 +312,22 @@ TEST_CASE("GCC: an overuse before any acknowledged rate halves the rate", "[net]
     REQUIRE(d.state().reductions == 1U);
     CHECK(d.state().bandwidth == before / 2U);
     CHECK(d.state().target_rate == before / 2U);
+    // Frames of two packets, as QUIC's ACK frames come, that keep overusing halve it again at most once 200 ms
+    // (libwebrtc's initial backoff interval), not once a frame.
+    Driver::Frame quick = steep;
+    quick.packets = 2U;
+    quick.gap_ns = 3U * kMs;
+    quick.growth_ns = 2500000;
+    const u64 halved_ns = d.now;
+    u64 frames = 0U;
+    while (d.now + 15U * kMs < halved_ns + 200U * kMs)
+    {
+        d.frame(quick);
+        ++frames;
+    }
+    INFO("halved at " << halved_ns / kMs << " ms, " << frames << " frames");
+    CHECK(frames >= 10U);
+    CHECK(d.state().reductions == 1U);
 }
 
 TEST_CASE("GCC: the loss controller decreases past 10%, holds from 2% to 10%, grows below, and takes CE as loss",

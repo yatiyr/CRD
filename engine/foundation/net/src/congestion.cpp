@@ -2554,6 +2554,10 @@ constexpr u64 kGccPacketBytes = 1200U;           // and the packet size
 constexpr u64 kGccMinAdditiveRate = 500U;        // 4 kbit/s a second
 constexpr u64 kGccReduceMinNs = 10000000U;       // a further reduction waits clamp(rtt, 10 ms, 200 ms)
 constexpr u64 kGccReduceMaxNs = 200000000U;
+// Before any acknowledged rate an overuse halves the rate at most this often: libwebrtc's "every 200 ms"
+// (AimdRateControl's initial_backoff_interval), which its feedback's cadence of 50 to 250 ms keeps by itself, where
+// QUIC's ACK frames come every other packet.
+constexpr u64 kGccInitialBackoffNs = 200000000U;
 constexpr u64 kGccDeviationMin = u64{50} << 16U; // the capacity's normalised variance, 0.4 to 2.5 kbit/s, in 2^-16
 constexpr u64 kGccDeviationMax = u64{625} << 15U;
 constexpr u64 kGccCapacityNorm = 125U;           // its least normaliser, 1 kbit/s
@@ -3463,7 +3467,8 @@ private:
     }
 
     // DelayBasedBwe::MaybeUpdateEstimate: an overuse reduces at most once a clamped RTT, or at once when the
-    // throughput fell below half the rate; with no acknowledged rate yet it halves the rate. Otherwise a probe's result
+    // throughput fell below half the rate; with no acknowledged rate yet it halves the rate, at most once 200 ms
+    // (InitialTimeToReduceFurther with its initial backoff interval). Otherwise a probe's result
     // `probe` (0: none), at least 85% of the acknowledged rate where that is under the rate, becomes the rate and the
     // target at once (SetSendBitrate: the last second's least is forgotten); only without one may the detector's
     // return to Normal call for a probe back.
@@ -3492,7 +3497,10 @@ private:
         }
         else if (!has_acked)
         {
-            set_delay_rate(m_delay_rate / 2U, now_ns); // the throughput it tests, rate / 2 - 1 bit/s, is always low
+            if (m_decrease_ns == kNeverNs || now_ns - m_decrease_ns >= kGccInitialBackoffNs)
+            {
+                set_delay_rate(m_delay_rate / 2U, now_ns);
+            }
         }
         else if (reduce_further(now_ns, acked))
         {
