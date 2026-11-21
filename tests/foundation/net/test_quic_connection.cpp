@@ -1203,7 +1203,7 @@ TEST_CASE("QUIC connection: configurations and starts out of range are refused",
     const QuicConnectionConfig good = config_for(QuicSide::Client, identity, QuicVersion::V1);
     constexpr u32 other_versions[] = {static_cast<u32>(QuicVersion::V2)};
     constexpr u8 short_seed[4] = {};
-    for (usize which = 0U; which < 12U; ++which)
+    for (usize which = 0U; which < 13U; ++which)
     {
         QuicConnectionConfig config = good;
         switch (which)
@@ -1242,6 +1242,11 @@ TEST_CASE("QUIC connection: configurations and starts out of range are refused",
             case 10U:
                 config.parameters.active_connection_id_limit = kQuicMaxPeerConnectionIds + 1U;
                 break;
+            case 11U:
+                // RFC 10069: path ID 0 is this side's one limit until paths open (design S78).
+                config.parameters.has_initial_max_path_id = true;
+                config.parameters.initial_max_path_id = 1U;
+                break;
             default:
                 config.version = static_cast<QuicVersion>(0x0A0A0A0AU);
                 break;
@@ -1264,6 +1269,16 @@ TEST_CASE("QUIC connection: configurations and starts out of range are refused",
     CHECK_FALSE(client.connect(ConstSpan<u8>(kClientCid, 8U), ConstSpan<u8>(kInitialDcid, 8U), kStartNs));
     QuicConnection server(allocator, config_for(QuicSide::Server, identity, QuicVersion::V1));
     CHECK_FALSE(server.connect(ConstSpan<u8>(kClientCid, 8U), ConstSpan<u8>(kInitialDcid, 8U), kStartNs));
+    // A client offering multipath issues a connection ID of non-zero length (RFC 10069 section 2.1); one that does not
+    // offer it may issue a zero-length one.
+    QuicConnectionConfig offering = good;
+    offering.parameters.has_initial_max_path_id = true;
+    QuicConnection multipath(allocator, offering);
+    REQUIRE(multipath.ready());
+    CHECK_FALSE(multipath.connect({}, ConstSpan<u8>(kInitialDcid, 8U), kStartNs));
+    CHECK(multipath.connect(ConstSpan<u8>(kClientCid, 8U), ConstSpan<u8>(kInitialDcid, 8U), kStartNs));
+    QuicConnection plain(allocator, good);
+    CHECK(plain.connect({}, ConstSpan<u8>(kInitialDcid, 8U), kStartNs));
     u8 small[kQuicMinInitialDatagram - 1U];
     CHECK(client.send(Span<u8>(small, sizeof(small)), kStartNs) == 0U);
 }
@@ -1293,11 +1308,12 @@ QuicPacketType type_of(QuicLevel level)
 // The raw peers' server: room for the thousand packets a skipped number takes to appear.
 QuicConnectionConfig server_config(const Identity& identity, crd::u32 sent_packets, const QuicDatagramLimits& datagrams,
                                    QuicConnectionIds* ids, ConstSpan<u32> versions, u64 receive_timestamps,
-                                   QuicAddressDiscovery discovery)
+                                   QuicAddressDiscovery discovery, bool multipath)
 {
     QuicConnectionConfig config = config_for(QuicSide::Server, identity, QuicVersion::V1, 2U);
     config.parameters.max_receive_timestamps_per_ack = receive_timestamps;
     config.parameters.address_discovery = discovery;
+    config.parameters.has_initial_max_path_id = multipath;
     config.versions = versions;
     config.ids = ids;
     config.sent_packets = sent_packets;
@@ -1326,6 +1342,9 @@ struct RawClient
     bool retire_seen = false;
     u64 retire_sequence = 0U;
     usize retirements = 0U; // RETIRE_CONNECTION_ID frames read
+    // The server's NEW_CONNECTION_ID and RETIRE_CONNECTION_ID frames, and their PATH_ forms (RFC 10069), read.
+    usize plain_id_frames = 0U;
+    usize path_id_frames = 0U;
     bool path_response_seen = false;
     bool seen[4096] = {};      // the server's 1-RTT packet numbers received
     usize eliciting_seen = 0U; // the server's ack-eliciting 1-RTT packets received
@@ -1367,9 +1386,9 @@ class RawRun
 public:
     explicit RawRun(const Identity& identity, crd::u32 sent_packets = 2048U, const QuicDatagramLimits& datagrams = {},
                     QuicConnectionIds* ids = nullptr, ConstSpan<u32> versions = {}, u64 receive_timestamps = 0U,
-                    QuicAddressDiscovery server_discovery = QuicAddressDiscovery::Off)
+                    QuicAddressDiscovery server_discovery = QuicAddressDiscovery::Off, bool server_multipath = false)
         : server(allocator, server_config(identity, sent_packets, datagrams, ids, versions, receive_timestamps,
-                                          server_discovery)),
+                                          server_discovery, server_multipath)),
           m_identity(identity)
     {
     }
@@ -1383,7 +1402,8 @@ public:
     QuicPath from;           // the path the raw client's datagrams arrive on (S75)
     usize pad_to = 0U;       // a 1-RTT packet's datagram is padded to this many bytes
     QuicAddressDiscovery discovery = QuicAddressDiscovery::Off; // what the raw client's parameters offer
-    bool multipath = false; // the raw client's parameters offer initial_max_path_id (RFC 10069)
+    bool multipath = false;  // the raw client's parameters offer initial_max_path_id (RFC 10069)
+    bool empty_scid = false; // the raw client's own connection ID is zero-length
     u8 last[kDatagram] = {}; // the raw client's latest datagram, as sent
     usize last_bytes = 0U;
 
@@ -1396,7 +1416,7 @@ public:
         parameters.has_initial_max_path_id = multipath;
         parameters.initial_max_path_id = multipath ? 3U : 0U;
         parameters.has_initial_source_connection_id = true;
-        REQUIRE(parameters.initial_source_connection_id.assign(ConstSpan<u8>(kClientCid, sizeof(kClientCid))));
+        REQUIRE(parameters.initial_source_connection_id.assign(own_cid()));
         u8 encoded[512];
         const usize bytes =
             write_quic_transport_parameters(parameters, QuicSide::Client, {7U}, Span<u8>(encoded, sizeof(encoded)));
@@ -1409,10 +1429,14 @@ public:
         QuicAccept accept;
         accept.local_cid = ConstSpan<u8>(kServerCid, sizeof(kServerCid));
         accept.client_dcid = ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid));
-        accept.client_scid = ConstSpan<u8>(kClientCid, sizeof(kClientCid));
+        accept.client_scid = own_cid();
         accept.original_dcid = accept.client_dcid;
         REQUIRE(server.accept(accept, now));
         send_crypto(QuicLevel::Initial);
+        if (server.state() == QuicConnectionState::Closing)
+        {
+            return; // refused at the client's Initial: its parameters
+        }
         REQUIRE(raw.protection.can_open(QuicPacketType::Handshake));
         before_finished();
         if (server.state() != QuicConnectionState::Handshaking)
@@ -1457,7 +1481,7 @@ public:
         QuicPacketSpec spec;
         spec.type = type;
         spec.dcid = ConstSpan<u8>(raw.dcid, raw.dcid_bytes);
-        spec.scid = scid.empty() ? ConstSpan<u8>(kClientCid, sizeof(kClientCid)) : scid;
+        spec.scid = scid.empty() ? own_cid() : scid;
         spec.number = raw.next[static_cast<usize>(quic_space_of(type))]++;
         REQUIRE(writer.begin(spec, Span<u8>(datagram, kQuicMinInitialDatagram)));
         const usize used = write(writer.frames());
@@ -1469,6 +1493,12 @@ public:
         last_bytes = size;
         server.receive(from, Span<u8>(datagram, size), Ecn::NotEct, now);
         drain();
+    }
+
+    // The raw client's Source Connection ID: kClientCid, or none with empty_scid.
+    ConstSpan<u8> own_cid() const
+    {
+        return empty_scid ? ConstSpan<u8>() : ConstSpan<u8>(kClientCid, sizeof(kClientCid));
     }
 
     // Reads every datagram the server has to send now.
@@ -1594,12 +1624,18 @@ private:
                 raw.close_dcid = m_dcid;
                 break;
             case QuicFrameKind::RetireConnectionId:
+            case QuicFrameKind::PathRetireConnectionId:
+                REQUIRE(frame.path_id == 0U);
                 raw.retire_seen = true;
                 raw.retire_sequence = frame.sequence;
                 ++raw.retirements;
+                count_id_frame(frame.kind);
                 break;
             case QuicFrameKind::NewConnectionId:
+            case QuicFrameKind::PathNewConnectionId:
+                REQUIRE(frame.path_id == 0U);
                 REQUIRE(frame.sequence < 8U);
+                count_id_frame(frame.kind);
                 std::memcpy(raw.issued[frame.sequence], frame.data.data(), frame.data.size());
                 std::memcpy(raw.issued_tokens[frame.sequence], frame.reset_token.data(), kQuicResetTokenBytes);
                 raw.issued_bytes[frame.sequence] = frame.data.size();
@@ -1636,6 +1672,13 @@ private:
             default:
                 break;
         }
+    }
+
+    void count_id_frame(QuicFrameKind kind)
+    {
+        const bool path_form =
+            kind == QuicFrameKind::PathNewConnectionId || kind == QuicFrameKind::PathRetireConnectionId;
+        ++(path_form ? raw.path_id_frames : raw.plain_id_frames);
     }
 
     const Identity& m_identity;
@@ -1774,7 +1817,8 @@ TEST_CASE("QUIC connection: ACK_RECEIVE_TIMESTAMPS only where asked for, in 1-RT
     }
 }
 
-TEST_CASE("QUIC connection: multipath is not offered, and its frames are an unnegotiated extension's",
+TEST_CASE("QUIC connection: multipath offered by the client alone is not negotiated, and its frames are an "
+          "unnegotiated extension's",
           "[net][net-path][quic-connection][multipath]")
 {
     // RFC 10069's frames, each with valid fields (PATH_ACK from write_quic_path_ack).
@@ -1849,6 +1893,203 @@ TEST_CASE("QUIC connection: multipath is not offered, and its frames are an unne
         REQUIRE(run.server.state() == QuicConnectionState::Closing);
         CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
     }
+}
+
+namespace
+{
+// A raw client offering initial_max_path_id 3 to a server offering 0: multipath negotiated (RFC 10069 section 2).
+void negotiate(RawRun& run)
+{
+    run.multipath = true;
+    run.handshake();
+    run.drain();
+    REQUIRE(run.server.multipath());
+}
+
+void send_frame(RawRun& run, const QuicFrame& frame)
+{
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(frame, out); });
+}
+
+void send_path_ack(RawRun& run, u64 path_id, ConstSpan<QuicAckRange> ranges)
+{
+    run.send(QuicPacketType::OneRtt,
+             [&](Span<u8> out) { return write_quic_path_ack(path_id, ranges, 0U, nullptr, out); });
+}
+
+QuicFrame path_frame(QuicFrameKind kind, u64 path_id = 0U, u64 sequence = 0U, u64 value = 0U)
+{
+    QuicFrame frame;
+    frame.kind = kind;
+    frame.path_id = path_id;
+    frame.sequence = sequence;
+    frame.value = value;
+    return frame;
+}
+
+constexpr u8 kPathCid[8] = {0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7}; // not kClientCid
+constexpr u8 kPathToken[kQuicResetTokenBytes] = {1U};
+} // namespace
+
+TEST_CASE("QUIC connection: multipath negotiated for path ID 0 reads RFC 10069's frames under this side's limit",
+          "[net][net-path][quic-connection][multipath]")
+{
+    Identity identity;
+    {
+        RawRun run(identity, 2048U, {}, nullptr, {}, 0U, QuicAddressDiscovery::Off, true);
+        negotiate(run);
+        QuicTransportParameters offered;
+        REQUIRE(read_quic_transport_parameters(run.raw.handshake.peer_transport_parameters(), QuicSide::Server,
+                                               offered) == QuicTransportError::NoError);
+        CHECK(offered.has_initial_max_path_id);
+        CHECK(offered.initial_max_path_id == 0U);
+        CHECK(run.server.peer_max_path_id() == 3U);
+        CHECK(run.server.peer_path_status() == QuicPeerPathStatus::Unknown);
+        // MAX_PATH_ID raises the peer's limit and is ignored when it does not (section 4.6).
+        send_frame(run, path_frame(QuicFrameKind::MaxPathId, 0U, 0U, 3U));
+        CHECK(run.server.peer_max_path_id() == 3U);
+        send_frame(run, path_frame(QuicFrameKind::MaxPathId, 0U, 0U, 9U));
+        CHECK(run.server.peer_max_path_id() == 9U);
+        send_frame(run, path_frame(QuicFrameKind::MaxPathId, 0U, 0U, 5U));
+        CHECK(run.server.peer_max_path_id() == 9U);
+        // PATH_STATUS: the newest sequence wins, an older or repeated one is ignored (section 4.3).
+        QuicFrame status = path_frame(QuicFrameKind::PathStatus, 0U, 5U);
+        status.backup = true;
+        send_frame(run, status);
+        CHECK(run.server.peer_path_status() == QuicPeerPathStatus::Backup);
+        status.backup = false;
+        status.sequence = 4U;
+        send_frame(run, status);
+        status.sequence = 5U;
+        send_frame(run, status);
+        CHECK(run.server.peer_path_status() == QuicPeerPathStatus::Backup);
+        status.sequence = 6U;
+        send_frame(run, status);
+        CHECK(run.server.peer_path_status() == QuicPeerPathStatus::Available);
+        CHECK(run.server.peer_path_status(1U) == QuicPeerPathStatus::Unknown);
+        // The BLOCKED frames at this side's limit and next sequence inform only (section 4.7).
+        send_frame(run, path_frame(QuicFrameKind::PathsBlocked));
+        send_frame(run, path_frame(QuicFrameKind::PathCidsBlocked, 0U, 1U));
+        // PATH_NEW_CONNECTION_ID of path ID 0 is held as NEW_CONNECTION_ID is.
+        QuicFrame issued = path_frame(QuicFrameKind::PathNewConnectionId, 0U, 1U);
+        issued.data = ConstSpan<u8>(kPathCid, sizeof(kPathCid));
+        issued.reset_token = ConstSpan<u8>(kPathToken, sizeof(kPathToken));
+        send_frame(run, issued);
+        CHECK(run.server.peer_cid_count() == 2U);
+        // PATH_ACK of path ID 0 acknowledges the 1-RTT space as an ACK frame does (section 2.3).
+        const u64 in_flight = run.server.recovery().bytes_in_flight();
+        REQUIRE(in_flight > 0U);
+        QuicAckRange ranges[kQuicAckRanges];
+        usize count = 0U;
+        for (usize number = sizeof(run.raw.seen); number-- > 0U && count < kQuicAckRanges;)
+        {
+            if (!run.raw.seen[number])
+            {
+                continue;
+            }
+            if (count > 0U && ranges[count - 1U].smallest == number + 1U)
+            {
+                ranges[count - 1U].smallest = number;
+                continue;
+            }
+            ranges[count++] = QuicAckRange{number, number};
+        }
+        REQUIRE(count > 0U);
+        send_path_ack(run, 0U, ConstSpan<QuicAckRange>(ranges, count));
+        CHECK(run.server.recovery().bytes_in_flight() < in_flight);
+        CHECK(run.server.state() == QuicConnectionState::Established);
+    }
+    // Refusals: a path ID above this side's limit of 0 in any frame, a PATHS_BLOCKED above it, a MAX_PATH_ID below the
+    // peer's initial_max_path_id, a PATH_CIDS_BLOCKED past the next sequence, a retirement of a sequence never issued
+    // and a PATH_ACK of a packet never sent: PROTOCOL_VIOLATION (sections 4, 4.5 to 4.7; RFC 9000 section 13.1).
+    for (usize index = 0U; index < 12U; ++index)
+    {
+        INFO("refusal " << index);
+        RawRun run(identity, 2048U, {}, nullptr, {}, 0U, QuicAddressDiscovery::Off, true);
+        negotiate(run);
+        const QuicAckRange first{0U, 0U};
+        const QuicAckRange unsent{1000U, 1000U};
+        QuicFrame frame;
+        switch (index)
+        {
+            case 0U:
+                send_path_ack(run, 1U, ConstSpan<QuicAckRange>(&first, 1U));
+                break;
+            case 1U:
+                frame = path_frame(QuicFrameKind::PathAbandon, 1U);
+                break;
+            case 2U:
+                frame = path_frame(QuicFrameKind::PathStatus, 1U);
+                break;
+            case 3U:
+                frame = path_frame(QuicFrameKind::PathNewConnectionId, 1U);
+                frame.data = ConstSpan<u8>(kPathCid, sizeof(kPathCid));
+                frame.reset_token = ConstSpan<u8>(kPathToken, sizeof(kPathToken));
+                break;
+            case 4U:
+                frame = path_frame(QuicFrameKind::PathRetireConnectionId, 1U);
+                break;
+            case 5U:
+                frame = path_frame(QuicFrameKind::PathCidsBlocked, 1U);
+                break;
+            case 6U:
+                frame = path_frame(QuicFrameKind::PathsBlocked, 0U, 0U, 1U);
+                break;
+            case 7U:
+                frame = path_frame(QuicFrameKind::MaxPathId, 0U, 0U, 2U);
+                break;
+            case 8U:
+                frame = path_frame(QuicFrameKind::PathCidsBlocked, 0U, 2U);
+                break;
+            case 9U:
+                frame = path_frame(QuicFrameKind::PathRetireConnectionId, 0U, 5U);
+                break;
+            case 10U:
+                send_path_ack(run, 0U, ConstSpan<QuicAckRange>(&unsent, 1U));
+                break;
+            default:
+                frame = path_frame(QuicFrameKind::PathAbandon, kQuicMaxPathId);
+                break;
+        }
+        if (index != 0U && index != 10U)
+        {
+            send_frame(run, frame);
+        }
+        REQUIRE(run.server.state() == QuicConnectionState::Closing);
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+        CHECK(run.raw.close_code == run.server.close_info().error_code);
+    }
+    {
+        // PATH_ABANDON of path ID 0, the only path, closes the connection without an error (section 3.4).
+        RawRun run(identity, 2048U, {}, nullptr, {}, 0U, QuicAddressDiscovery::Off, true);
+        negotiate(run);
+        send_frame(run, path_frame(QuicFrameKind::PathAbandon));
+        REQUIRE(run.server.state() == QuicConnectionState::Closing);
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::NoError));
+        CHECK(run.raw.close_seen);
+    }
+}
+
+TEST_CASE("QUIC connection: multipath needs connection IDs of non-zero length both ways",
+          "[net][net-path][quic-connection][multipath]")
+{
+    Identity identity;
+    // A client offering multipath with a zero-length Source Connection ID to a server offering it: PROTOCOL_VIOLATION
+    // once the server reads its parameters (RFC 10069 section 2.1).
+    RawRun run(identity, 2048U, {}, nullptr, {}, 0U, QuicAddressDiscovery::Off, true);
+    run.multipath = true;
+    run.empty_scid = true;
+    run.handshake();
+    REQUIRE(run.server.state() == QuicConnectionState::Closing);
+    CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+    CHECK_FALSE(run.server.multipath());
+    // Without the server's offer the zero-length ID is RFC 9000's to allow.
+    RawRun plain(identity);
+    plain.multipath = true;
+    plain.empty_scid = true;
+    plain.handshake();
+    CHECK(plain.server.state() == QuicConnectionState::Established);
+    CHECK_FALSE(plain.server.multipath());
 }
 
 TEST_CASE("QUIC connection: frames this slice does not carry close with the error the RFCs name",
@@ -3197,6 +3438,79 @@ TEST_CASE("QUIC connection: a rotation retires every earlier ID by Retire Prior 
     // An end without a host never rotates.
     QuicConnection lone(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1));
     CHECK_FALSE(lone.rotate_connection_ids());
+}
+
+TEST_CASE("QUIC connection: with multipath, path ID 0's connection IDs go in the PATH_ frames, and the plain ones "
+          "still count for path ID 0",
+          "[net][net-path][quic-connection][multipath]")
+{
+    Identity identity;
+    for (const bool multipath : {false, true})
+    {
+        INFO("multipath " << multipath);
+        CountingAllocator allocator;
+        Host host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+        RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, multipath);
+        run.multipath = true;
+        run.handshake();
+        run.drain();
+        CHECK(run.server.multipath() == multipath);
+        // The raw client's limit is the default 2: sequence 1 is issued, in the form negotiation names.
+        REQUIRE(run.raw.issued_bytes[1] == sizeof(kServerCid));
+        CHECK(run.raw.plain_id_frames == (multipath ? 0U : 1U));
+        CHECK(run.raw.path_id_frames == (multipath ? 1U : 0U));
+        // Path ID 0's IDs retire by either form; each replacement goes in the negotiated one.
+        const QuicFrameKind path_form =
+            multipath ? QuicFrameKind::PathRetireConnectionId : QuicFrameKind::RetireConnectionId;
+        send_frame(run, path_frame(path_form, 0U, 1U));
+        CHECK(host.retired == 1U);
+        REQUIRE(run.raw.issued_bytes[2] == sizeof(kServerCid));
+        send_frame(run, path_frame(QuicFrameKind::RetireConnectionId, 0U, 2U));
+        CHECK(host.retired == 2U);
+        REQUIRE(run.raw.issued_bytes[3] == sizeof(kServerCid));
+        CHECK(run.raw.plain_id_frames == (multipath ? 0U : 3U));
+        CHECK(run.raw.path_id_frames == (multipath ? 3U : 0U));
+        CHECK(run.server.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC connection: two ends offering multipath negotiate it, keep their IDs topped up and rotate them",
+          "[net][net-path][quic-connection][multipath]")
+{
+    Identity identity;
+    for (const bool server_offers : {false, true})
+    {
+        INFO("server offers " << server_offers);
+        CountingAllocator allocator;
+        Host client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid)));
+        Host server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+        QuicConnectionConfig client_config =
+            hosted(config_for(QuicSide::Client, identity, QuicVersion::V1), client_host, 4U);
+        QuicConnectionConfig server_config =
+            hosted(config_for(QuicSide::Server, identity, QuicVersion::V1, 1U), server_host, 2U);
+        client_config.parameters.has_initial_max_path_id = true;
+        server_config.parameters.has_initial_max_path_id = server_offers;
+        QuicConnection client(allocator, client_config);
+        QuicConnection server(allocator, server_config);
+        connect(client);
+        auto net = std::make_unique<Net>(client, server);
+        settle(*net, client, server, 2U, 4U);
+        CHECK(client.multipath() == server_offers);
+        CHECK(server.multipath() == server_offers);
+        CHECK(client.peer_max_path_id() == 0U);
+        CHECK(server.peer_max_path_id() == 0U);
+        REQUIRE(server.rotate_connection_ids());
+        REQUIRE(net->run_until([&] { return server.local_cid_count() == 4U && net->in_flight() == 0U; }));
+        net->advance(net->now + 200U * kMs);
+        CHECK(server_host.retired == 4U);
+        CHECK(client.peer_cid_count() == 4U);
+        const u64 received = server.counters().datagrams_received;
+        client.ping();
+        REQUIRE(net->run_until(
+            [&] { return net->in_flight() == 0U && server.counters().datagrams_received > received; }));
+        CHECK(client.state() == QuicConnectionState::Established);
+        CHECK(server.state() == QuicConnectionState::Established);
+    }
 }
 
 TEST_CASE("QUIC connection: a retired ID is replaced, and retiring the packet's own ID or one never issued is refused",

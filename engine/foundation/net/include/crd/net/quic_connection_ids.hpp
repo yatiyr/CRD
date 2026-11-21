@@ -223,6 +223,9 @@ public:
     [[nodiscard]] const QuicLocalCid* local(u64 path_id, u64 sequence) const noexcept;
     [[nodiscard]] usize local_count(u64 path_id = 0U) const noexcept;
     [[nodiscard]] u64 local_retire_prior_to(u64 path_id) const noexcept;
+    // The sequence the next ID issued in `path_id`'s space takes (0 for a space not open): a PATH_CIDS_BLOCKED frame's
+    // Next Sequence Number above it is PROTOCOL_VIOLATION (RFC 10069 section 4.7).
+    [[nodiscard]] u64 local_next(u64 path_id) const noexcept;
     // The next ID whose frame is owed (its space in `path_id`), and how its frame went.
     [[nodiscard]] bool local_owed() const noexcept;
     [[nodiscard]] const QuicLocalCid* next_owed(u64& path_id) const noexcept;

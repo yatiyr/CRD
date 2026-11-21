@@ -166,8 +166,8 @@ constexpr u64 kNoSequence = kQuicNoSequence; // a path with no peer connection I
            p.max_receive_timestamps_per_ack <= kQuicMaxReceiveTimestamps &&
            p.receive_timestamps_exponent <= kQuicMaxReceiveTimestampsExponent &&
            p.address_discovery <= QuicAddressDiscovery::Both && !p.has_stateless_reset_token &&
-           QuicStreamSet::limits_valid(config.streams) && QuicDatagrams::limits_valid(config.datagrams) &&
-           p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
+           (!p.has_initial_max_path_id || p.initial_max_path_id == 0U) && QuicStreamSet::limits_valid(config.streams) &&
+           QuicDatagrams::limits_valid(config.datagrams) && p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
            p.active_connection_id_limit <= kQuicMaxPeerConnectionIds && config.sent_packets != 0U &&
            config.sent_packets <= kMaxSentPackets && config.sent_frames != 0U &&
            config.sent_frames <= kMaxSentPackets && config.crypto_bytes % kQuicStreamChunk == 0U &&
@@ -363,8 +363,11 @@ bool QuicConnection::connect(cont::ConstSpan<u8> local_cid, cont::ConstSpan<u8> 
 {
     if (!ready() || m_state != QuicConnectionState::Idle || m_config.side != crypto::QuicSide::Client ||
         m_config.tls == nullptr || initial_dcid.size() < 8U ||
-        initial_dcid.size() > crypto::kQuicMaxConnectionIdBytes || local_cid.size() > crypto::kQuicMaxConnectionIdBytes)
+        initial_dcid.size() > crypto::kQuicMaxConnectionIdBytes ||
+        local_cid.size() > crypto::kQuicMaxConnectionIdBytes ||
+        (m_config.parameters.has_initial_max_path_id && local_cid.empty()))
     {
+        // An end offering multipath uses connection IDs of non-zero length (RFC 10069 section 2.1).
         return false;
     }
     static_cast<void>(m_local_cid.assign(local_cid)); // both bounded above
@@ -1119,54 +1122,7 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             return true;
         }
         case QuicFrameKind::Ack:
-        {
-            if (frame.ack.timestamps)
-            {
-                // draft-ietf-quic-receive-ts-03: never asked for, the frame is of no known type (as RFC 9000 section
-                // 12.4 reads an unnegotiated extension's frame); outside 1-RTT packets or past the maximum asked
-                // for, it breaks the draft's sections 4 and 6.
-                if (m_local.max_receive_timestamps_per_ack == 0U)
-                {
-                    fail(QuicTransportError::FrameEncodingError, 0U, now_ns);
-                    return false;
-                }
-                if (space != QuicSpace::Application ||
-                    frame.ack.timestamp_count > m_local.max_receive_timestamps_per_ack)
-                {
-                    fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
-                    return false;
-                }
-                m_counters.receive_timestamps +=
-                    m_peer_times.read(frame.ack, m_local.receive_timestamps_exponent, *m_recovery, now_ns);
-            }
-            m_event_ns = now_ns;
-            QuicPathControl& acknowledged = control(0U); // an ACK frame's packets are path ID 0's
-            acknowledged.on_ack_begin();
-            const QuicAckOutcome outcome = m_recovery->on_ack(space, frame.ack, now_ns, m_events);
-            m_peer_times.clear();
-            if (outcome.error == QuicRecoveryError::AckOfUnsent)
-            {
-                fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
-                return false;
-            }
-            if (outcome.error == QuicRecoveryError::None)
-            {
-                count(acknowledged.on_ack_end(space, frame.ack, outcome, m_recovery->rtt(),
-                                              m_recovery->bytes_in_flight(), now_ns));
-                follow_datagram_size();
-            }
-            if (space == QuicSpace::Application)
-            {
-                m_protection.acknowledged(frame.ack.largest);
-            }
-            if (m_keyed && !address_validated() && outcome.acked_packets != 0U)
-            {
-                // Only an end that read a packet sent to this address can acknowledge it.
-                m_paths.set_validated(m_paths.active());
-                m_recovery->set_amplification_blocked(false, now_ns);
-            }
-            return true;
-        }
+            return ack_frame(frame, space, now_ns);
         case QuicFrameKind::Crypto:
             return crypto_frame(frame, space, now_ns);
         case QuicFrameKind::HandshakeDone:
@@ -1211,7 +1167,7 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             return true;
         }
         case QuicFrameKind::RetireConnectionId:
-            return retire_local(frame.sequence, now_ns);
+            return retire_local(0U, frame.sequence, now_ns);
         case QuicFrameKind::PathResponse:
         {
             // One that answers no live challenge is late or never asked for, and ignored (section 19.18's MAY left).
@@ -1230,13 +1186,118 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
         case QuicFrameKind::MaxPathId:
         case QuicFrameKind::PathsBlocked:
         case QuicFrameKind::PathCidsBlocked:
-            // RFC 10069 section 2: this end offers no initial_max_path_id (design S78), so multipath was never
-            // negotiated, and its frames are of no known type, as RFC 9000 section 12.4 reads an unnegotiated
-            // extension's.
-            fail(QuicTransportError::FrameEncodingError, 0U, now_ns);
-            return false;
+            return multipath_frame(frame, space, now_ns);
     }
     return true;
+}
+
+bool QuicConnection::ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept
+{
+    if (frame.ack.timestamps)
+    {
+        // draft-ietf-quic-receive-ts-03: never asked for, the frame is of no known type (as RFC 9000 section
+        // 12.4 reads an unnegotiated extension's frame); outside 1-RTT packets or past the maximum asked
+        // for, it breaks the draft's sections 4 and 6.
+        if (m_local.max_receive_timestamps_per_ack == 0U)
+        {
+            fail(QuicTransportError::FrameEncodingError, 0U, now_ns);
+            return false;
+        }
+        if (space != QuicSpace::Application || frame.ack.timestamp_count > m_local.max_receive_timestamps_per_ack)
+        {
+            fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
+            return false;
+        }
+        m_counters.receive_timestamps +=
+            m_peer_times.read(frame.ack, m_local.receive_timestamps_exponent, *m_recovery, now_ns);
+    }
+    m_event_ns = now_ns;
+    QuicPathControl& acknowledged = control(0U); // an ACK frame's packets are path ID 0's
+    acknowledged.on_ack_begin();
+    const QuicAckOutcome outcome = m_recovery->on_ack(space, frame.ack, now_ns, m_events);
+    m_peer_times.clear();
+    if (outcome.error == QuicRecoveryError::AckOfUnsent)
+    {
+        fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
+        return false;
+    }
+    if (outcome.error == QuicRecoveryError::None)
+    {
+        count(acknowledged.on_ack_end(space, frame.ack, outcome, m_recovery->rtt(), m_recovery->bytes_in_flight(),
+                                      now_ns));
+        follow_datagram_size();
+    }
+    if (space == QuicSpace::Application)
+    {
+        m_protection.acknowledged(frame.ack.largest);
+    }
+    if (m_keyed && !address_validated() && outcome.acked_packets != 0U)
+    {
+        // Only an end that read a packet sent to this address can acknowledge it.
+        m_paths.set_validated(m_paths.active());
+        m_recovery->set_amplification_blocked(false, now_ns);
+    }
+    return true;
+}
+
+bool QuicConnection::multipath_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept
+{
+    if (!m_multipath)
+    {
+        // RFC 10069 section 2: not offered by both ends, so of no known type (RFC 9000 section 12.4).
+        fail(QuicTransportError::FrameEncodingError, 0U, now_ns);
+        return false;
+    }
+    // This side's limit is its initial_max_path_id: it sends no MAX_PATH_ID until paths open (design S78). A path ID
+    // above it, or a PATHS_BLOCKED frame naming a larger one, is PROTOCOL_VIOLATION (sections 4 and 4.7).
+    const u64 local_max = m_local.initial_max_path_id;
+    const bool above = (frame.kind == QuicFrameKind::PathsBlocked) ? frame.value > local_max
+                       : (frame.kind == QuicFrameKind::MaxPathId)  ? frame.value < m_peer.initial_max_path_id
+                                                                   : frame.path_id > local_max;
+    if (above)
+    {
+        fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
+        return false;
+    }
+    switch (frame.kind)
+    {
+        case QuicFrameKind::PathAck:
+            return ack_frame(frame, space, now_ns);
+        case QuicFrameKind::PathAbandon:
+            // Path ID 0 is the only path, and no other can open under this side's limit: the connection closes
+            // (section 3.4).
+            fail(QuicTransportError::NoError, 0U, now_ns);
+            return false;
+        case QuicFrameKind::PathStatus:
+            // One sequence space for both frames, an older or repeated one ignored (section 4.3).
+            if (m_peer_status == QuicPeerPathStatus::Unknown || frame.sequence > m_peer_status_sequence)
+            {
+                m_peer_status = frame.backup ? QuicPeerPathStatus::Backup : QuicPeerPathStatus::Available;
+                m_peer_status_sequence = frame.sequence;
+            }
+            return true;
+        case QuicFrameKind::PathNewConnectionId:
+            return new_connection_id(frame, now_ns);
+        case QuicFrameKind::PathRetireConnectionId:
+            return retire_local(frame.path_id, frame.sequence, now_ns);
+        case QuicFrameKind::MaxPathId:
+            // A frame that does not raise the limit is late or repeated, and ignored (section 4.6).
+            m_peer_max_path_id = max_u64(m_peer_max_path_id, frame.value);
+            return true;
+        case QuicFrameKind::PathsBlocked:
+            return true; // informs only (section 4.7); this side's limit rises when paths open
+        case QuicFrameKind::PathCidsBlocked:
+            // Informs only, but may not name a sequence this side has not reached (section 4.7); IDs are topped up
+            // to the peer's limit whenever one is retired.
+            if (frame.sequence > m_cids.local_next(frame.path_id))
+            {
+                fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
+                return false;
+            }
+            return true;
+        default:
+            return true; // never reached: on_frame routes RFC 10069's kinds alone here
+    }
 }
 
 bool QuicConnection::version_routed(const QuicHeader& header) const noexcept
@@ -1413,12 +1474,18 @@ bool QuicConnection::read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_n
                                                             m_config.after_version_negotiation,
                                                             cont::ConstSpan<u32>(m_versions, m_version_count));
     }
+    if (error == QuicTransportError::NoError)
+    {
+        error = quic_check_multipath(m_local, m_peer, m_peer_scid.bytes == 0U || m_local_cid.bytes == 0U);
+    }
     if (error != QuicTransportError::NoError)
     {
         fail(error, 0U, now_ns);
         return false;
     }
     m_peer_known = true;
+    m_multipath = quic_multipath_negotiated(m_local, m_peer);
+    m_peer_max_path_id = m_multipath ? m_peer.initial_max_path_id : 0U;
     apply_peer_limits(m_peer);
     m_recovery->set_peer_parameters(m_peer.max_ack_delay * kNsPerMs, m_peer.ack_delay_exponent, now_ns);
     // Timestamps are reported only by a side that asks for them too: the draft is behind its NET-STD flag.
@@ -1477,9 +1544,9 @@ bool QuicConnection::new_connection_id(const QuicFrame& frame, u64 now_ns) noexc
     return true;
 }
 
-bool QuicConnection::retire_local(u64 sequence, u64 now_ns) noexcept
+bool QuicConnection::retire_local(u64 path_id, u64 sequence, u64 now_ns) noexcept
 {
-    const QuicTransportError error = m_cids.retire_local(0U, sequence, m_packet_local);
+    const QuicTransportError error = m_cids.retire_local(path_id, sequence, m_packet_local);
     if (error != QuicTransportError::NoError)
     {
         fail(error, 0U, now_ns);
@@ -1980,14 +2047,16 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
                 m_new_token_owed = false;
             }
         }
-        // Path ID 0's IDs go in NEW_CONNECTION_ID and RETIRE_CONNECTION_ID frames, any other's in their PATH_ forms
-        // (RFC 10069 section 3.2); a record names the frame's path ID and sequence.
+        // Path ID 0's IDs go in NEW_CONNECTION_ID and RETIRE_CONNECTION_ID frames without multipath, every one in
+        // their PATH_ forms with it (RFC 10069 section 3.2); a record names the frame's path ID and sequence.
+        const bool path_forms = m_multipath;
         u64 path_id = 0U;
         u64 sequence = 0U;
         while (m_frame_count < m_config.sent_frames && m_cids.next_retirement(path_id, sequence))
         {
             QuicFrame retire;
-            retire.kind = (path_id == 0U) ? QuicFrameKind::RetireConnectionId : QuicFrameKind::PathRetireConnectionId;
+            retire.kind = (path_id == 0U && !path_forms) ? QuicFrameKind::RetireConnectionId
+                                                         : QuicFrameKind::PathRetireConnectionId;
             retire.path_id = path_id;
             retire.sequence = sequence;
             if (!put(retire))
@@ -2005,7 +2074,8 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
         {
             // Retire Prior To never passes the frame's own sequence (section 19.15): a rotated ID carries its own.
             QuicFrame issued;
-            issued.kind = (path_id == 0U) ? QuicFrameKind::NewConnectionId : QuicFrameKind::PathNewConnectionId;
+            issued.kind =
+                (path_id == 0U && !path_forms) ? QuicFrameKind::NewConnectionId : QuicFrameKind::PathNewConnectionId;
             issued.path_id = path_id;
             issued.sequence = owed->sequence;
             issued.retire_prior_to = min_u64(m_cids.local_retire_prior_to(path_id), owed->sequence);

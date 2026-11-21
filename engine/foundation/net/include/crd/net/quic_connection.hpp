@@ -82,6 +82,14 @@
 //              a migration's), again there only when it is lost; off the active path it rides with a path frame
 //              alone. Reports taken (only when asked for: PROTOCOL_VIOLATION otherwise) are kept per path, the newest
 //              sequence winning (observed_address()).
+//   multipath  RFC 10069 behind parameters.has_initial_max_path_id (design S78): negotiated when both ends offer it
+//              (multipath()), with connection IDs of non-zero length both ways (PROTOCOL_VIOLATION otherwise). This
+//              side's limit is path ID 0 until paths open, so its IDs go in PATH_NEW_CONNECTION_ID and
+//              PATH_RETIRE_CONNECTION_ID frames for path ID 0 (section 3.2) and the peer's frames are read under that
+//              limit: a path ID above it is PROTOCOL_VIOLATION (section 4), PATH_ACK of path ID 0 is an ACK frame,
+//              MAX_PATH_ID raises the peer's limit only, PATH_STATUS keeps the newest status (peer_path_status()), the
+//              two BLOCKED frames are checked and inform, and PATH_ABANDON of path ID 0, the only path, closes the
+//              connection (section 3.4). Without negotiation every one is an unknown frame: FRAME_ENCODING_ERROR.
 //   IDs        both ends' IDs are held in QuicCids (quic_connection_ids.hpp), one sequence space per path ID; this
 //              side's come from the host (QuicConnectionIds), which routes them and derives their stateless reset
 //              tokens from its QuicResetKey: after confirmation the peer is kept at its
@@ -170,10 +178,11 @@ struct QuicConnectionConfig
     // of draft-ietf-quic-receive-ts-03: 0 (the default) neither asks for receive timestamps nor reports them; above 0
     // the connection asks for that many per ACK frame in receive_timestamps_exponent's unit, takes them as its
     // congestion controller's receive times, and reports its own when the peer asks too. address_discovery (Off by
-    // default) is the NET-STD flag of draft-ietf-quic-address-discovery-01 ("addresses" above). The connection fills
-    // the connection IDs and a server's stateless_reset_token, version_information, grease_quic_bit, the stream and
-    // flow-control parameters (from `streams`) and max_datagram_frame_size (from `datagrams`), so those
-    // stay 0 here; active_connection_id_limit is at most kQuicMaxPeerConnectionIds.
+    // default) is the NET-STD flag of draft-ietf-quic-address-discovery-01 ("addresses" above). has_initial_max_path_id
+    // offers RFC 10069 ("multipath" above) with initial_max_path_id 0, the one value until paths open. The connection
+    // fills the connection IDs and a server's stateless_reset_token, version_information, grease_quic_bit, the stream
+    // and flow-control parameters (from `streams`) and max_datagram_frame_size (from `datagrams`), so those stay 0
+    // here; active_connection_id_limit is at most kQuicMaxPeerConnectionIds.
     QuicTransportParameters parameters;
     QuicStreamLimits streams;     // what this side's streams hold (all zero: no streams)
     QuicDatagramLimits datagrams; // what this side's datagrams hold (all zero: none either way)
@@ -270,6 +279,15 @@ enum class QuicConnectionState : u8
     Closing,     // this side closed: CONNECTION_CLOSE is resent for three PTOs
     Draining,    // the peer closed: nothing is sent for three PTOs
     Closed,      // done: the connection may be destroyed
+};
+
+// A peer's preference for one path ID, from its PATH_STATUS_AVAILABLE and PATH_STATUS_BACKUP frames (RFC 10069
+// section 3.3).
+enum class QuicPeerPathStatus : u8
+{
+    Unknown,   // no frame came: this side decides alone
+    Available, // send on it by this side's own logic
+    Backup,    // send on it only when no available path is usable
 };
 
 // A client's request to probe or move to a path of its own (RFC 9000 sections 9.1, 9.2 and 9.5).
@@ -483,6 +501,15 @@ public:
     // The peer's parameters, valid once peer_parameters_known().
     [[nodiscard]] bool peer_parameters_known() const noexcept { return m_peer_known; }
     [[nodiscard]] const QuicTransportParameters& peer_parameters() const noexcept { return m_peer; }
+    // Whether both ends offered initial_max_path_id, once the peer's parameters are known (RFC 10069 section 2).
+    [[nodiscard]] bool multipath() const noexcept { return m_multipath; }
+    // The largest path ID the peer accepts (its initial_max_path_id, raised by MAX_PATH_ID), once multipath().
+    [[nodiscard]] u64 peer_max_path_id() const noexcept { return m_peer_max_path_id; }
+    // The peer's preference for `path_id`, its newest PATH_STATUS frame's (section 3.3): Unknown before one.
+    [[nodiscard]] QuicPeerPathStatus peer_path_status(u64 path_id = 0U) const noexcept
+    {
+        return (path_id == 0U) ? m_peer_status : QuicPeerPathStatus::Unknown;
+    }
     // The Destination Connection ID this side sends to, and the peer's IDs held (sequence 0 first among them).
     [[nodiscard]] cont::ConstSpan<u8> peer_cid() const noexcept;
     [[nodiscard]] usize peer_cid_count() const noexcept { return m_cids.peer_count(); }
@@ -666,7 +693,11 @@ private:
     // Reads the held packets whose keys came, until none more opens; drops those whose keys went.
     void read_held(u64 now_ns) noexcept;
     [[nodiscard]] bool new_connection_id(const QuicFrame& frame, u64 now_ns) noexcept;
-    [[nodiscard]] bool retire_local(u64 sequence, u64 now_ns) noexcept;
+    [[nodiscard]] bool retire_local(u64 path_id, u64 sequence, u64 now_ns) noexcept;
+    // An ACK frame, or a PATH_ACK frame of path ID 0's, which acknowledges the same space (RFC 10069 section 2.3).
+    [[nodiscard]] bool ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
+    // One of RFC 10069's frames (section 4).
+    [[nodiscard]] bool multipath_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
     // Issues IDs until the peer holds its active_connection_id_limit of this side's (after confirmation).
     void issue_local_ids() noexcept;
     // Hands every ID held back to the host and closes the connection.
@@ -783,6 +814,10 @@ private:
     QuicTransportParameters m_local;
     QuicTransportParameters m_peer;
     bool m_peer_known = false;
+    bool m_multipath = false;        // both ends offered initial_max_path_id (RFC 10069 section 2)
+    u64 m_peer_max_path_id = 0U;     // the largest path ID the peer accepts
+    u64 m_peer_status_sequence = 0U; // path ID 0's newest PATH_STATUS sequence, while m_peer_status is known
+    QuicPeerPathStatus m_peer_status = QuicPeerPathStatus::Unknown;
     QuicTransportParameters m_remembered; // a client's for 0-RTT: its server's from the ticket's connection
     bool m_early_sending = false;         // a client sends 0-RTT under m_remembered until its server decides
     bool m_early_settled = false;         // a server decided on 0-RTT

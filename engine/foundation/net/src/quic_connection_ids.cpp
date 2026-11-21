@@ -695,6 +695,12 @@ u64 QuicCids::local_retire_prior_to(u64 path_id) const noexcept
     return (held == nullptr) ? 0U : held->m_local_retire_prior_to;
 }
 
+u64 QuicCids::local_next(u64 path_id) const noexcept
+{
+    const QuicCidSpace* held = space(path_id);
+    return (held == nullptr) ? 0U : held->m_local_next;
+}
+
 bool QuicCids::local_owed() const noexcept
 {
     u64 path_id = 0U;

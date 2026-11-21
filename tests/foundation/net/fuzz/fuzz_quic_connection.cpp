@@ -311,6 +311,7 @@ QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnecti
     config.parameters.active_connection_id_limit = 4U;
     config.parameters.max_receive_timestamps_per_ack = extensions() ? 4U : 0U;
     config.parameters.address_discovery = extensions() ? QuicAddressDiscovery::Both : QuicAddressDiscovery::Off;
+    config.parameters.has_initial_max_path_id = extensions(); // RFC 10069, path ID 0 alone (design S78)
     config.version = version;
     config.tls = (side == QuicSide::Client) ? &identity().client : &identity().server;
     if (keyed)
@@ -778,6 +779,14 @@ void check_observations(const Pair& pair)
     }
     CRD_FUZZ_REQUIRE(extensions() || (pair.client.counters().address_observations == 0U &&
                                       pair.server.counters().address_observations == 0U));
+    // Multipath is negotiated exactly when both ends offered it, and a QuicConnection peer sends neither MAX_PATH_ID
+    // nor PATH_STATUS while its limit is path ID 0 (RFC 10069; design S78).
+    for (const QuicConnection* end : {&pair.client, &pair.server})
+    {
+        CRD_FUZZ_REQUIRE(end->multipath() == (extensions() && end->peer_parameters_known()));
+        CRD_FUZZ_REQUIRE(end->peer_max_path_id() == 0U);
+        CRD_FUZZ_REQUIRE(end->peer_path_status() == QuicPeerPathStatus::Unknown);
+    }
 }
 
 void transfer(Pair& pair)
@@ -1337,6 +1346,8 @@ struct Raw
         QuicTransportParameters parameters;
         parameters.has_initial_source_connection_id = true;
         static_cast<void>(parameters.initial_source_connection_id.assign(keyed_id(QuicSide::Client).view()));
+        parameters.has_initial_max_path_id = extensions();
+        parameters.initial_max_path_id = 2U;
         u8 hello[256];
         const usize bytes = write_quic_transport_parameters(parameters, QuicSide::Client, {3U},
                                                             Span<u8>(hello + 2U, sizeof(hello) - 2U));
@@ -1487,6 +1498,8 @@ void run_frames(QuicVersion version, ConstSpan<u8> input, bool initial, bool key
         parameters.has_initial_source_connection_id = true;
         static_cast<void>(
             parameters.initial_source_connection_id.assign(ConstSpan<u8>(kClientCid, sizeof(kClientCid))));
+        parameters.has_initial_max_path_id = extensions();
+        parameters.initial_max_path_id = 2U;
         u8 encoded[256];
         const usize bytes =
             write_quic_transport_parameters(parameters, QuicSide::Client, {3U}, Span<u8>(encoded, sizeof(encoded)));
@@ -1505,6 +1518,10 @@ void run_frames(QuicVersion version, ConstSpan<u8> input, bool initial, bool key
         raw.send(type, input.subspan(at, take));
         at += take;
         raw.host.check(raw.server);
+        // Multipath only when offered (byte 0's bit 6), and the peer's limit never below its initial_max_path_id.
+        CRD_FUZZ_REQUIRE(extensions() || !raw.server.multipath());
+        CRD_FUZZ_REQUIRE(!raw.server.multipath() ||
+                         raw.server.peer_max_path_id() >= raw.server.peer_parameters().initial_max_path_id);
         const QuicConnectionState state = raw.server.state();
         const QuicConnectionState open = initial ? QuicConnectionState::Handshaking : QuicConnectionState::Established;
         CRD_FUZZ_REQUIRE(state == open || state == QuicConnectionState::Closing ||
@@ -1595,6 +1612,12 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     sink.add("script-address-discovery", reported, sizeof(reported));
     const u8 observed[] = {0x41U, 0x0BU, 0x80U, 0x9FU, 0x81U, 0xA6U, 0x00U, 0xC6U, 0x33U, 0x64U, 0x07U, 0xC3U, 0x50U};
     sink.add("frames-observed-address", observed, sizeof(observed));
+    // Multipath negotiated for path ID 0: MAX_PATH_ID 5, PATH_STATUS_BACKUP, both BLOCKED frames, a PATH_ACK of path ID
+    // 0's packet 0, then PATH_ABANDON of path ID 0, the only path.
+    const u8 multipath[] = {0x41U, 0x03U, 0x7EU, 0x7AU, 0x05U, 0x04U, 0x7EU, 0x76U, 0x00U, 0x01U, 0x03U,
+                            0x7EU, 0x7BU, 0x00U, 0x04U, 0x7EU, 0x7CU, 0x00U, 0x01U, 0x06U, 0x3EU, 0x00U,
+                            0x00U, 0x00U, 0x00U, 0x00U, 0x04U, 0x7EU, 0x75U, 0x00U, 0x00U};
+    sink.add("frames-multipath", multipath, sizeof(multipath));
     // The client's own sockets and the preferred address with reports on: each new path is reported.
     u8 reported_own[sizeof(own)];
     std::memcpy(reported_own, own, sizeof(own));
