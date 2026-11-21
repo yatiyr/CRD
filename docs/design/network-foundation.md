@@ -240,6 +240,27 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   (no local send reaches that branch: Windows refuses none of the shapes `segment_train` makes).
   `coalesce_receive` sets `UDP_RECV_MAX_COALESCED_SIZE` to the IPv6 UDP payload and reads `UDP_COALESCED_INFO`
   through the same control reader as `UDP_GRO`.
+- **io_uring receive** (2026-11-21, NET-PATH; [udp_ring.cpp](../../engine/foundation/net/src/udp_ring.cpp)). On
+  Linux 6.0 and later (never Android, whose sandbox kills a process that calls io_uring) a `UdpSocket` arms one
+  multishot `recvmsg` over a ring of `UdpOptions::ring_buffers` buffers (64 by default) that the host selects itself,
+  and `receive` reads the completions back without a call while they wait. Each buffer holds any datagram
+  (`kMaxUdpPayloadV6`, or a train with `coalesce_receive`) and starts a page, so the memory a ring backs follows the
+  datagrams that arrive; `receive_bytes` reports the bound. A slot left empty is lent the buffer until that socket's
+  next `receive` (`lent_receive`), so `IoLoop` keeps no storage for such a socket and hands datagrams on in place,
+  cut to `slot_bytes` as a slot would cut them; a slot with storage takes a copy. The ring, its buffers, the request
+  shape and 64 report buffers live in pages of their own (`crd::vm`), never in the movable socket. A one-shot poll
+  watches the error queue (POLLERR) and is armed again after each receive: the receive alone learns of an ICMP
+  report only from the socket's error, which `sendmmsg` drops when it meets it past its first message, and reports a
+  receive leaves past its budget complete the watch again at once. The host runs a request's completions as the
+  thread that armed it, so the first receive on another thread cancels and rearms both requests there (a new
+  generation in each `user_data`; a datagram the old receive still completes is read as any other), which may wake
+  the next wait once. The host takes a buffer before it reads, so with every buffer lent the receive is not armed
+  again and the wait watches the socket itself until the next receive gives the buffers back; an end the host posts
+  right behind the last datagram taken is read at once, so it wakes no wait. Closing cancels the requests and reads
+  each one's last completion before the pages go. Anything the host refuses (no io_uring, a sandbox, a kernel before
+  6.0, which refuses the multishot flag at once on the still unbound socket) and `CRD_NET_UDP_RING=0` keep `recvmmsg`;
+  `crd-net-udp-recvmmsg` and `crd-net-router-namespace-recvmmsg` run every real-socket case again on that path.
+  Zero-copy receive (`IORING_OP_RECV_ZC`, Linux 6.15 and a NIC that splits headers) and zero-copy send follow.
 - **Socket sets** (2026-11-21, NET-PATH). A loop and its host serve a `SocketSet` of up to four sockets, one per
   path a connection knows ([S75](#migration)); a single socket converts to a set of one, so a one-socket host is
   unchanged. Each received datagram names the socket it arrived on (`ReceivedDatagram::socket`), a stateless answer
@@ -4014,7 +4035,8 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
 - **Learning the phase** (Cerid's own design, 2026-11-21; the published LEO controllers read UTC, StarQUIC, or detect each reconfiguration as it happens, LeoCC by 10 ms ICMP probing as OrbCC describes it, arXiv 2508.19067). `HandoverLearning` names the period and guards alone (`starlink_handover_learning()`); `HandoverPhaseLearner` ([handover_phase.hpp](../../engine/numerics/hesap-net/include/crd/hesap/net/handover_phase.hpp), HESAP-NET) folds the connection's own packets at that period (epoch folding, Leahy et al., ApJ 266:160, 1983): 64 bins a period, a bin observed when a packet sent in it was acknowledged or lost and disturbed when one was lost or its RTT rose by at least max(2 ms, 8 J) over the previous sample (J the RFC 3550 jitter of successive RTTs). Periods are counted, not packets. A two-bin window locks when at least 4 periods disturbed it, half of those observing it, and an exact binomial tail against the other bins' rate (Laplace's rule of succession) is at most 10^-3 over the 64 windows (integer Q62, rounded towards refusing); it keeps while 3 periods and a third of the observed ones disturb a window overlapping it, so it is released once the handovers stop. The phase is each disturbing period's first disturbance from the window's onset bin, as a Theil-Sen line (Sen, JASA 63:1379, 1968) read at the period being sent, so a skewed clock is followed without lag. 15 periods are held (about 1.4 KB, in a slot of the connection since crd-net's public headers never include HESAP-NET's).
 - **Learned versus authored.** A configuration naming both is refused; `set_handover()` ends learning and `set_handover_learning()` replaces the schedule; `handover_learned()` reports which is in force and `handover_locks` counts locks. The learner is fed ahead of the coverage gates (a covered loss or RTT still reaches it, or a lock would blind itself), keyed by send time (so the phase includes the sender's distance, with no lead to configure), and a move that restarts the path's state starts it over. A learned schedule is network-influenced: an on-path party or the peer can shape losses and RTTs to make one, but it can only hide what an authored schedule may (guards of at most an eighth of the period), recurrence is required, and it decays when the pattern stops (T16).
 - **Learning proof.** `test_handover_phase.cpp`: bounds; Starlink's timetable on any clock (three origins, three offsets) locking within two periods of the fourth handover, to 12 ms; a delay step alone, a sample every 50 ms and a random loss a second; random losses at 1, 3 and 8 a second and a one-off burst never locking (the recurrence share alone would: removing the test locked on 1 a second); a clock 1000 ppm slow followed to 20 ms over 48 periods (the plain median lagged 121 ms); the release on the eleventh quiet period; any time sequence; the tail against a direct sum. `test_quic_congestion.cpp`: BBRv3 under its own losses with a handover every 2 s locks by 21 s (measured: 19 s, the phase 2 ms off), then 13 reductions after 9 handovers against the authored schedule's 10 and none's 28 (16 on a clock 1000 ppm slow); CUBIC and BBR on a congested path with no handovers never lock at 1 s or 2 s (removing the test locked); a lock released after the handovers stop, and one held on losses alone (feeding the learner behind the gate lost it). `fuzz_estimators` op 6 (learner and tail oracles; 2.1 million libFuzzer runs clean) and `fuzz_quic_connection` op 0xF5 (the learned schedule held to the learning; 30,953 runs clean), with seeds.
-- **Next.** The offloads ([S33](#sockets)): Linux GSO and GRO landed 2026-11-21; Windows USO and URO, io_uring and RIO follow.
+- **Next.** The offloads ([S33](#sockets)): Linux GSO and GRO, Windows USO and URO and the io_uring receive landed
+  2026-11-21; io_uring's zero-copy send and receive and Windows RIO follow.
 
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers
