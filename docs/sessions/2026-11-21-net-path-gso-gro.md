@@ -46,8 +46,6 @@ Windows USO (`UDP_SEND_MSG_SIZE`) and URO (`UDP_RECV_MAX_COALESCED_SIZE`) behind
 
 ## CI follow-up (2026-11-21, 6ce80283)
 
-- linux-gcc-public-checks (run 44913028609): both `[.netns]` CTests failed the EIO case on GitHub's runner. Linux
-  6.11 segments a train past a device without transmit checksum offload in software, so the
-  train was sent. The case now sends through an IPsec route (ESP transport mode, AES-GCM, one association a family,
-  `RouterPath::ipsec`), which every kernel refuses with EIO; `[.netns]` passes on WSL 6.6 with io_uring and recvmmsg.
-- win-tidy (same run): `SendQueue` and `SocketSet` usings in test_udp_zero_copy.cpp moved into the Linux-only block.
+Run 44913028609: since Linux 6.11 the host segments past a device without checksum offload in software (v6.10 and
+v6.11 `udp_send_skb`), so the `[.netns]` EIO case now sends through an IPsec route (`RouterPath::ipsec`), which still
+returns EIO in mainline; passes on WSL 6.6, hosted proof pending. win-tidy: two unused usings moved under their guard.
