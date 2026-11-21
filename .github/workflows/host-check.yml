@@ -95,6 +95,11 @@ jobs:
           # write), and one seed that stopped once ran clean when repeated, 2026-11-10.
           - {target: net-congestion, seed: 8501, repeat: ''}
           - {target: net-congestion, seed: 8502, repeat: ''}
+          # NET-PATH's address discovery: four non-replaying local events in four-job sessions (a codec round-trip
+          # oracle, a span offset producing null, AWS-LC's CBS and GCM state), none replaying alone, over the whole
+          # working corpus or in a single-job session of the codec, 2026-11-21.
+          - {target: net-quic-codec, seed: 8601, repeat: ''}
+          - {target: net-quic-connection, seed: 8602, repeat: ''}
 
     steps:
       - name: Checkout
