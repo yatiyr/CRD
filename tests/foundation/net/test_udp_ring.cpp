@@ -466,3 +466,81 @@ TEST_CASE("a lent slot takes a router's Packet Too Big report in a buffer of the
     CHECK_FALSE(near.wait_readable(100'000'000U));
 }
 #endif
+
+#if CRD_TEST_RING
+#include <ctime>
+#include <cstdio>
+
+namespace
+{
+// The receiving thread's CPU time, in nanoseconds.
+u64 thread_cpu_ns()
+{
+    timespec now{};
+    ::clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
+    return (static_cast<u64>(now.tv_sec) * 1'000'000'000U) + static_cast<u64>(now.tv_nsec);
+}
+
+// A sender thread blasts `count` datagrams of 1200 bytes; this thread receives them 32 a call, lent from a ring or
+// into storage of its own: the receiver's CPU per datagram that arrived.
+void board_round(bool ring, u32 count)
+{
+    UdpOptions options;
+    options.ring_buffers = ring ? 256U : 0U;
+    options.bind = Endpoint{IpAddress::v4_loopback(), 0U};
+    options.receive_buffer_bytes = 8U << 20U;
+    SocketError error = SocketError::Failed;
+    UdpSocket receiver = UdpSocket::open(options, error);
+    REQUIRE(receiver.features().lent_receive == ring);
+    UdpSocket sender = open_with(UdpOptions{});
+    static u8 storage[32][1200];
+    ReceivedDatagram slots[32];
+    std::atomic<bool> done{false};
+    std::thread blaster(
+        [&]
+        {
+            static u8 payload[1200];
+            OutgoingDatagram burst[32];
+            for (OutgoingDatagram& datagram : burst)
+            {
+                datagram = OutgoingDatagram{ConstSpan<u8>(payload, sizeof(payload)), receiver.local_endpoint()};
+            }
+            for (u32 sent = 0U; sent < count;)
+            {
+                sent += static_cast<u32>(sender.send(burst).count);
+            }
+            done.store(true);
+        });
+    const auto start = std::chrono::steady_clock::now();
+    const u64 cpu_start = thread_cpu_ns();
+    u64 received = 0U;
+    while (received < count && (receiver.wait_readable(200'000'000U) || !done.load()))
+    {
+        for (usize index = 0U; index < 32U; ++index)
+        {
+            slots[index].storage = ring ? Span<u8>() : Span<u8>(storage[index], sizeof(storage[index]));
+        }
+        received += receiver.receive(slots).count;
+    }
+    const u64 cpu = thread_cpu_ns() - cpu_start;
+    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    blaster.join();
+    std::printf("%-9s received %7llu of %u in %.3f s, receiver %.0f ns CPU a datagram\n",
+                ring ? "io_uring" : "recvmmsg", static_cast<unsigned long long>(received), count, wall,
+                (received != 0U) ? static_cast<double>(cpu) / static_cast<double>(received) : 0.0);
+}
+} // namespace
+
+TEST_CASE("board: the receiver's CPU a datagram through io_uring and through recvmmsg", "[.udp-board]")
+{
+    if (!host_runs_ring())
+    {
+        SKIP("the host runs no io_uring receive");
+    }
+    for (u32 round = 0U; round < 3U; ++round)
+    {
+        board_round(true, 400000U);
+        board_round(false, 400000U);
+    }
+}
+#endif
