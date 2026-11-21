@@ -901,9 +901,11 @@ QuicPacketError QuicPacketProtection::open_application(cont::Span<u8> packet, us
         space.older_any = true;
         return QuicPacketError::None;
     }
-    // A packet of the next phase: the peer's update or its answer to ours. A second update before this side
-    // acknowledged the first in the new phase is section 6.2's KEY_UPDATE_ERROR.
-    if ((space.recv_any && number < space.recv_largest) || m_phases.answer_owed)
+    // A packet of the next phase: the peer's update or its answer to ours, never below a number this path opened under
+    // an older key (section 6.4; a path quiet since the last update has only older ones). A second update before this
+    // side acknowledged the first in the new phase is section 6.2's KEY_UPDATE_ERROR.
+    if ((space.recv_any && number < space.recv_largest) || (space.older_any && number < space.older_largest) ||
+        m_phases.answer_owed)
     {
         return QuicPacketError::KeyUpdate;
     }

@@ -1036,6 +1036,28 @@ TEST_CASE("QUIC packets: each multipath path has its own number space, nonce and
         // Path 0's own older packets bound it: phase 1's 1001 was opened there.
         CHECK(deliver(pair.server, crafted(phase2, raw.header, false, 999U), 0U) == QuicPacketError::KeyUpdate);
     }
+    SECTION("a path quiet since the last update bounds the next update by the numbers it opened under older keys")
+    {
+        QuicKeys raw;
+        REQUIRE(raw.init(QuicVersion::V1, AlgorithmId::Aes128Gcm, secret(2U)) == CryptoError::None);
+        crd::crypto::QuicPacketKey phase1;
+        crd::crypto::QuicPacketKey phase2;
+        REQUIRE(phase1.update(raw.packet) == CryptoError::None);
+        REQUIRE(phase2.update(phase1) == CryptoError::None);
+        REQUIRE(deliver(pair.server, crafted(raw.packet, raw.header, false, 100U, kId1), 1U) == QuicPacketError::None);
+        REQUIRE(deliver(pair.server, crafted(phase1, raw.header, true, 1U), 0U) == QuicPacketError::None);
+        pair.server.discard_previous();
+        pair.server.sent_acknowledgement();
+        // Path 1 opened nothing under phase 1, and phase 0's 100 bounds phase 2 there.
+        CHECK(deliver(pair.server, crafted(phase2, raw.header, false, 50U, kId1), 1U) == QuicPacketError::KeyUpdate);
+        CHECK(pair.server.receive_phase() == 1U);
+        QuicOpened opened;
+        Bytes copy;
+        REQUIRE(deliver(pair.server, crafted(phase2, raw.header, false, 101U, kId1), opened, copy, 1U) ==
+                QuicPacketError::None);
+        CHECK(opened.key_update);
+        CHECK(pair.server.receive_phase() == 2U);
+    }
     SECTION("an acknowledgement allows the next update only in the number space its packet was sent in")
     {
         REQUIRE(deliver(pair.server, send(pair.client, 10U, 0U), 0U) == QuicPacketError::None);

@@ -21,10 +21,12 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S78](../design/network-f
   after an update, and tried a late packet on a quiet path under the next key, where it fails as forged.
 - An acknowledgement allows the next update only if it covers the first packet the current phase sealed on that
   path. A late previous-phase packet now also sets the path's older bound (its flag was left unset before).
+- A next-phase packet is also refused below any number its path opened under an older key. Without that check, a
+  path that stayed quiet through the last update had no lower bound for the next one.
 
 ## Evidence
 
-- linux-gcc-debug: `crd-net-tests "[quic-packet]"` 13 cases and 1817 assertions; `"[net]"` 857 cases (850 passed,
+- linux-gcc-debug: `crd-net-tests "[quic-packet]"` 13 cases and 1857 assertions; `"[net]"` 857 cases (850 passed,
   7 skipped as before).
 - The new `[multipath]` case covers slot refusals and close; one number on every path; copies and stale numbers per
   window; a one-byte number decoded against its own path (forged as path 0's 45); forged opens across paths under
@@ -32,7 +34,7 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S78](../design/network-f
   per space.
 - Packet fuzzer: control bit 3 runs a round trip on slot 1 to 3 under path ID 1 to 15 or 2^32 - 1, across key
   updates. Its oracle requires the packet to be forged in slot 0, to open in its own slot, and to be that slot's
-  largest. Two new seeds; the eight committed seeds regenerate byte for byte; the 18-input replay is clean.
+  largest. Two new seeds; the eight committed seeds regenerate byte for byte; the replays are clean (814 inputs after fuzzing).
 - libFuzzer (linux-clang-fuzz), two sessions of 2 jobs for 240 s, about 1.75 M runs at 1831 edges. Each session
   stopped one job on an input that does not replay, three times each, on the libFuzzer binary or linux-gcc-debug.
   The second stop was a wild 136 TB memcpy inside AWS-LC from a stack-garbage return address, in a received-mode V2
