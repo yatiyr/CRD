@@ -1,13 +1,11 @@
 // crd-net -- a QUIC connection (4.2a; contract: docs/design/network-foundation.md#quic-connection).
 #include <crd/containers/wire_bytes.hpp>
-#include <crd/hesap/net/handover_phase.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/construct.hpp>
 #include <crd/net/quic_connection.hpp>
 
 #include <cstring>
 #include <new>
-#include <type_traits>
 
 namespace crd::net
 {
@@ -32,22 +30,6 @@ constexpr u32 kMaxSentPackets = 1U << 16U;
 constexpr u32 kSentPacketReserve = 8U;
 constexpr usize kMinUsefulPacket = 64U; // a server with less credit than this waits for a datagram
 
-using HandoverLearner = hesap::net::HandoverPhaseLearner;
-
-// The learner built in a connection's slot (its constructor builds it first).
-[[nodiscard]] HandoverLearner& learner_in(u8* bytes) noexcept
-{
-    return *std::launder(reinterpret_cast<HandoverLearner*>(bytes));
-}
-
-// Starts `learner` on `learning` (handover_learning_valid, so it takes it), or stops it for none.
-void learn(HandoverLearner& learner, const HandoverLearning& learning) noexcept
-{
-    if (learning.period_ns == 0U || !learner.start(learning.period_ns))
-    {
-        learner.stop();
-    }
-}
 constexpr usize kPullChunk = 512U;
 constexpr usize kKeyedHelloPrefix = 2U; // a keyed connection's parameters follow their two-byte length
 constexpr u64 kSkipMask = 63U;   // one 1-RTT packet number in 64 is skipped (section 21.4)
@@ -69,23 +51,18 @@ constexpr u64 kNoSequence = ~u64{0}; // a path with no peer connection ID to sen
     return (tag == 0U) ? 1U : tag;
 }
 
-[[nodiscard]] CongestionPacket congestion_packet(QuicSpace space, const QuicSentPacket& packet,
-                                                 u64 received_ns = kNeverNs) noexcept
+// What the handshake's path starts from.
+[[nodiscard]] QuicPathControlConfig path_config(const QuicConnectionConfig& config) noexcept
 {
-    CongestionPacket out;
-    out.bytes = packet.bytes;
-    out.number = packet.number;
-    out.sent_ns = packet.sent_ns;
-    out.received_ns = received_ns;
-    out.space = space;
-    out.delivery = packet.delivery;
+    QuicPathControlConfig out;
+    out.congestion = config.congestion;
+    out.base_datagram_bytes = config.base_datagram_bytes;
+    out.max_datagram_bytes = config.max_datagram_bytes;
+    out.path_mtu_discovery = config.path_mtu_discovery;
+    out.ecn = config.ecn;
+    out.handover = config.handover;
+    out.handover_learning = config.handover_learning;
     return out;
-}
-
-// The sampler's order of packets that left at one time: a coalesced datagram's later packet is in a later space.
-[[nodiscard]] constexpr u64 delivery_order(QuicSpace space, u64 number) noexcept
-{
-    return (u64{quic_space_index(space)} << 62U) | number;
 }
 
 [[nodiscard]] constexpr QuicPacketType packet_type(QuicSpace space) noexcept
@@ -288,91 +265,27 @@ void QuicConnection::Events::on_acked(QuicSpace space, const QuicSentPacket& pac
     m_connection.settle(space, packet, Settle::Acked);
     if (!m_connection.m_recovery->on_path(space, packet))
     {
-        return; // sent on another path: it says nothing of this one (RFC 9000 section 9.4)
+        return; // sent on another path, or on a slot now closed: it says nothing of this one (RFC 9000 section 9.4)
     }
-    if (packet.path_probe)
-    {
-        m_connection.m_pmtu.on_probe_acked(packet.bytes, m_connection.m_event_ns);
-    }
-    else if (space == QuicSpace::Application)
-    {
-        m_connection.m_pmtu.on_acked(packet.number, packet.bytes);
-    }
-    if (packet.in_flight)
-    {
-        m_connection.m_delivery.on_acked(packet.delivery, packet.bytes, packet.sent_ns,
-                                         delivery_order(space, packet.number), m_connection.m_event_ns);
-        // A packet a scheduled handover may have delayed carries no queue's delay.
-        const u64 received_ns = (space == QuicSpace::Application && !packet.handover)
-                                    ? m_connection.m_peer_times.find(packet.number)
-                                    : kNeverNs;
-        m_connection.m_congestion->on_acked(congestion_packet(space, packet, received_ns), m_connection.m_event_ns);
-    }
+    const u64 received_ns =
+        (space == QuicSpace::Application) ? m_connection.m_peer_times.find(packet.number) : kNeverNs;
+    m_connection.control(packet.path).on_acked(space, packet, received_ns, m_connection.m_event_ns);
 }
 
 void QuicConnection::Events::on_lost(QuicSpace space, const QuicSentPacket& packet) noexcept
 {
     m_connection.settle(space, packet, Settle::Lost);
-    if (!m_connection.m_recovery->on_path(space, packet))
+    if (m_connection.m_recovery->on_path(space, packet))
     {
-        return;
-    }
-    m_connection.m_ecn.on_gone(packet.ecn);
-    if (packet.path_probe)
-    {
-        // RFC 9000 section 14.4: a lost probe is no congestion signal.
-        m_connection.m_pmtu.on_probe_lost(packet.bytes, m_connection.m_event_ns);
-        return;
-    }
-    if (packet.in_flight)
-    {
-        // Covered or not: a learned schedule must keep seeing what the handovers do.
-        learner_in(m_connection.m_learner_slot.bytes).on_loss(packet.sent_ns);
-        m_connection.follow_handover();
-    }
-    if (packet.handover)
-    {
-        // Lost where a scheduled handover may have taken it: no congestion, and no black hole (StarQUIC section 3.2).
-        ++m_connection.m_counters.handover_losses;
-        return;
-    }
-    if (space == QuicSpace::Application)
-    {
-        m_connection.m_pmtu.on_lost(packet.number, packet.bytes);
-    }
-    if (packet.in_flight)
-    {
-        m_connection.m_delivery.on_lost(packet.bytes);
-        m_connection.m_congestion->on_lost(congestion_packet(space, packet), m_connection.m_event_ns);
+        m_connection.count(m_connection.control(packet.path).on_lost(space, packet, m_connection.m_event_ns));
     }
 }
 
 void QuicConnection::Events::on_spurious(QuicSpace space, const QuicSentPacket& packet, u64 lost_ns) noexcept
 {
-    if (!m_connection.m_recovery->on_path(space, packet))
+    if (m_connection.m_recovery->on_path(space, packet))
     {
-        return;
-    }
-    if (packet.in_flight)
-    {
-        // Its data was delivered after all (draft-ietf-ccwg-bbr-07 section 2.2's C.delivered).
-        m_connection.m_delivery.on_acked(packet.delivery, packet.bytes, packet.sent_ns,
-                                         delivery_order(space, packet.number), m_connection.m_event_ns);
-    }
-    if (packet.path_probe)
-    {
-        // Its loss reduced nothing; its arrival proves its size.
-        m_connection.m_pmtu.on_probe_acked(packet.bytes, m_connection.m_event_ns);
-        return;
-    }
-    if (space == QuicSpace::Application)
-    {
-        m_connection.m_pmtu.on_acked(packet.number, packet.bytes); // a large packet arrived: no black hole behind it
-    }
-    // A handover's loss reduced nothing, so its arrival undoes nothing.
-    if (packet.in_flight && !packet.handover)
-    {
-        m_connection.m_congestion->on_spurious(congestion_packet(space, packet), lost_ns, m_connection.m_event_ns);
+        m_connection.control(packet.path).on_spurious(space, packet, lost_ns, m_connection.m_event_ns);
     }
 }
 
@@ -381,7 +294,7 @@ void QuicConnection::Events::on_discarded(QuicSpace space, const QuicSentPacket&
     m_connection.settle(space, packet, Settle::Discarded);
     if (m_connection.m_recovery->on_path(space, packet))
     {
-        m_connection.m_ecn.on_gone(packet.ecn);
+        m_connection.control(packet.path).on_discarded(packet);
     }
 }
 
@@ -390,15 +303,10 @@ void QuicConnection::Events::on_discarded(QuicSpace space, const QuicSentPacket&
 QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnectionConfig& config) noexcept
     : m_allocator(allocator), m_config(config), m_events(*this), m_hello(*this)
 {
-    static_assert(sizeof(HandoverLearner) <= sizeof(m_learner_slot.bytes) && alignof(HandoverLearner) <= 8U);
-    static_assert(std::is_trivially_destructible_v<HandoverLearner>); // the slot is never destroyed
-    HandoverLearner& learner = *new (m_learner_slot.bytes) HandoverLearner();
     if (!config_valid(config))
     {
         return;
     }
-    learn(learner, config.handover_learning);
-    m_learner_revision = learner.revision();
     m_version_count = 0U;
     if (config.versions.empty())
     {
@@ -478,15 +386,10 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     m_recovery = new (recovery) QuicRecovery(recovery_config, cont::Span<QuicSentEntry>(entries, per_space),
                                              cont::Span<QuicSentEntry>(entries + per_space, per_space),
                                              cont::Span<QuicSentEntry>(entries + (2U * per_space), per_space));
-    m_pmtu.start(config.base_datagram_bytes, config.max_datagram_bytes, config.path_mtu_discovery);
-    m_path_bytes = m_pmtu.size();
-    // The policy and the datagram size were checked (config_valid).
-    m_congestion =
-        make_congestion(config.congestion, m_path_bytes, nullptr, m_congestion_slot, m_delivery, entropy());
-    m_ecn.start(config.ecn ? congestion_codepoint(config.congestion) : Ecn::NotEct);
-    follow_ecn();
+    // The policy, the sizes and the handover were checked (config_valid).
+    static_cast<void>(m_first_control.start(path_config(config), config.path, entropy()));
+    m_datagram_bytes = m_first_control.datagram_bytes();
     m_paths.open(config.path, false, 0U);
-    m_congestion_path = config.path;
     m_frames = frames;
     m_crypto_bytes = bytes;
     m_crypto_bits = bits;
@@ -496,10 +399,6 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
 QuicConnection::~QuicConnection() noexcept
 {
     finish();
-    if (m_congestion != nullptr)
-    {
-        m_congestion->~CongestionController();
-    }
     if (m_recovery != nullptr)
     {
         m_recovery->~QuicRecovery();
@@ -805,10 +704,17 @@ void QuicConnection::apply_peer_limits(const QuicTransportParameters& peer) noex
     m_streams.set_peer_parameters(peer);
     if (&peer == &m_peer)
     {
-        m_pmtu.limit(static_cast<u32>(min_u64(peer.max_udp_payload_size, kQuicDefaultMaxUdpPayload)));
-        apply_path_size();
+        const u32 ceiling = static_cast<u32>(min_u64(peer.max_udp_payload_size, kQuicDefaultMaxUdpPayload));
+        for (QuicPathControl* const control : m_controls)
+        {
+            if (control != nullptr)
+            {
+                control->limit(ceiling);
+            }
+        }
+        follow_datagram_size();
     }
-    m_datagrams.set_peer(peer.max_datagram_frame_size, min_u64(m_path_bytes, peer.max_udp_payload_size));
+    m_datagrams.set_peer(peer.max_datagram_frame_size, min_u64(m_datagram_bytes, peer.max_udp_payload_size));
 }
 
 bool QuicConnection::settle_early(u64 now_ns) noexcept
@@ -1103,8 +1009,8 @@ bool QuicConnection::path_too_big(const QuicPath& from, cont::ConstSpan<u8> quot
     {
         return false;
     }
-    static_cast<void>(m_pmtu.on_too_big(packet->bytes, limit, now_ns));
-    apply_path_size();
+    control(packet->path).on_too_big(packet->bytes, limit, now_ns);
+    follow_datagram_size();
     return true;
 }
 
@@ -1200,7 +1106,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
     else if (m_receive_path == m_paths.active() && m_paths.path(m_receive_path).peer.port == 0U)
     {
         m_paths.bind(m_candidate);
-        m_congestion_path = m_candidate;
+        m_first_control.bind(m_candidate);
     }
     const QuicSpace space = quic_space_of(opened.type);
     m_packet_version = long_header ? header.version : 0U;
@@ -1333,7 +1239,8 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
                     m_peer_times.read(frame.ack, m_local.receive_timestamps_exponent, *m_recovery, now_ns);
             }
             m_event_ns = now_ns;
-            m_delivery.on_ack_begin();
+            QuicPathControl& acknowledged = control(0U); // an ACK frame's packets are path ID 0's
+            acknowledged.on_ack_begin();
             const QuicAckOutcome outcome = m_recovery->on_ack(space, frame.ack, now_ns, m_events);
             m_peer_times.clear();
             if (outcome.error == QuicRecoveryError::AckOfUnsent)
@@ -1343,30 +1250,9 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             }
             if (outcome.error == QuicRecoveryError::None)
             {
-                m_delivery.on_ack_end(m_recovery->rtt().min_ns);
-                const u64 ce = m_ecn.on_ack(space, frame.ack, outcome);
-                const u64 marked = outcome.ect0_packets + outcome.ect1_packets;
-                if (m_ecn.state() == QuicEcnState::Capable && (marked != 0U || ce != 0U))
-                {
-                    // RFC 9002 appendix B.7: before the frame's growth, so its packets grow nothing of the period.
-                    m_congestion->on_ecn(marked, ce, outcome.newest_sent_ns, now_ns);
-                }
-                m_counters.ecn_signals += (ce != 0U) ? 1U : 0U;
-                follow_ecn();
-                if (outcome.rtt_sampled)
-                {
-                    // The sample is the newest packet's: the learner keys it by that packet's send time.
-                    learner_in(m_learner_slot.bytes).on_rtt(outcome.newest_sent_ns, m_recovery->rtt().adjusted_ns);
-                    follow_handover();
-                }
-                // An RTT a scheduled handover may have lengthened is the estimate's, never a delay signal.
-                m_congestion->on_ack_end(m_recovery->rtt(), outcome.rtt_sampled && !outcome.rtt_handover,
-                                         m_recovery->bytes_in_flight(), now_ns);
-                if (outcome.lost.persistent_congestion)
-                {
-                    m_congestion->on_persistent_congestion(now_ns);
-                }
-                follow_path(now_ns);
+                count(acknowledged.on_ack_end(space, frame.ack, outcome, m_recovery->rtt(),
+                                              m_recovery->bytes_in_flight(), now_ns));
+                follow_datagram_size();
             }
             if (space == QuicSpace::Application)
             {
@@ -1979,9 +1865,7 @@ bool QuicConnection::retry(const QuicHeader& header, cont::ConstSpan<u8> packet,
     // Recovery starts over and the Initial's CRYPTO data goes again under the new keys; packet numbers continue
     // (section 17.2.5.3).
     m_recovery->retry(now_ns, m_events);
-    m_delivery.reset();
-    m_congestion->reset(now_ns); // RFC 9002 section 6.3: congestion control starts over with recovery
-    m_pacer = Pacer{};
+    m_first_control.reset(now_ns);
     for (u8& probes : m_probes)
     {
         probes = 0U;
@@ -2119,7 +2003,9 @@ bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
 
 void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
 {
-    m_pace_release_ns = kNeverNs;
+    const usize slot = send_slot();
+    QuicPathControl& path = control(slot);
+    path.disarm_pace();
     m_probe_fill = false;
     bool probing = false;
     for (const u8 probes : m_probes)
@@ -2132,34 +2018,35 @@ void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
         return;
     }
     const bool probe_wants =
-        send_type(QuicSpace::Application) == QuicPacketType::OneRtt && m_congestion->probe_bytes() != 0U;
+        send_type(QuicSpace::Application) == QuicPacketType::OneRtt && path.congestion().probe_bytes() != 0U;
     // A whole datagram must fit: a smaller room would let only ACKs and frames too small to matter through, packet
     // after packet. The window's floor of two datagrams always holds one.
-    const u64 in_flight = m_recovery->bytes_in_flight();
-    const u64 window = m_congestion->window();
-    const bool room = in_flight + datagram <= window;
-    const u64 release =
-        m_pacer.release_ns(now_ns, m_congestion->pacing_rate(m_recovery->rtt()), m_congestion->burst());
+    const u64 in_flight = m_recovery->bytes_in_flight(slot);
+    const bool room = in_flight + datagram <= path.congestion().window();
+    const u64 release = path.release_ns(now_ns, m_recovery->rtt(slot));
     m_data_open = room && release <= now_ns;
     m_probe_fill = m_data_open && probe_wants; // a probe's fill is data: the window and the pacer hold it as any
     const QuicSpace application = QuicSpace::Application;
     const bool sendable = !m_space_gone[quic_space_index(application)] &&
-                          m_protection.can_send(send_type(application)) && m_recovery->can_send_data(application);
+                          m_protection.can_send(send_type(application)) && m_recovery->can_send_data(application, slot);
     if (m_data_open)
     {
         if (sendable && !has_data(application, now_ns) && !m_streams.has_frame())
         {
             // The window and the pacer allow sending and nothing waits: until what is in flight is delivered, a rate
             // sample shows the application's rate, not the path's (draft-ietf-ccwg-bbr-07 section 4.1.2.4).
-            m_delivery.on_app_limited(in_flight);
+            path.on_app_limited(in_flight);
         }
         return;
     }
     if (sendable && (probe_wants || has_data(application, now_ns)))
     {
         // Section 7.8: the window is what holds sending back, so it may grow; a window with room waits for the pacer.
-        m_congestion->on_limited(!room, now_ns);
-        m_pace_release_ns = room ? release : kNeverNs;
+        path.on_limited(!room, now_ns);
+        if (room)
+        {
+            path.arm_pace(release);
+        }
     }
 }
 
@@ -2169,62 +2056,32 @@ bool QuicConnection::set_congestion(const CongestionPolicy& policy) noexcept
     {
         return false;
     }
-    const CongestionState held = m_congestion->state();
-    m_congestion->~CongestionController();
-    m_congestion = make_congestion(policy, m_path_bytes, &held, m_congestion_slot, m_delivery, entropy());
-    m_config.congestion = policy;
-    m_ecn.set_codepoint(congestion_codepoint(policy));
-    m_ecn_unavailable = false;
-    follow_ecn();
+    for (QuicPathControl* const path : m_controls)
+    {
+        if (path != nullptr)
+        {
+            static_cast<void>(path->set_congestion(policy, entropy()));
+        }
+    }
+    m_config.congestion = policy; // the policy paths opened from now start on
     return true;
 }
 
 bool QuicConnection::set_handover(const HandoverSchedule& schedule) noexcept
 {
-    if (!ready() || !handover_schedule_valid(schedule))
-    {
-        return false;
-    }
-    m_config.handover = schedule;
-    // An authored schedule ends learning.
-    m_config.handover_learning = HandoverLearning{};
-    HandoverLearner& learner = learner_in(m_learner_slot.bytes);
-    learner.stop();
-    m_learner_revision = learner.revision();
-    return true;
+    return ready() && m_first_control.set_handover(schedule);
 }
 
 bool QuicConnection::set_handover_learning(const HandoverLearning& learning) noexcept
 {
-    if (!ready() || !handover_learning_valid(learning))
-    {
-        return false;
-    }
-    m_config.handover_learning = learning;
-    m_config.handover = HandoverSchedule{};
-    HandoverLearner& learner = learner_in(m_learner_slot.bytes);
-    learn(learner, learning);
-    m_learner_revision = learner.revision();
-    return true;
+    return ready() && m_first_control.set_handover_learning(learning);
 }
 
-void QuicConnection::follow_handover() noexcept
+void QuicConnection::count(const QuicPathSignals& signals) noexcept
 {
-    const HandoverLearner& learner = learner_in(m_learner_slot.bytes);
-    if (!learner.learning() || learner.revision() == m_learner_revision)
-    {
-        return;
-    }
-    m_learner_revision = learner.revision();
-    const hesap::net::HandoverPhase& phase = learner.phase();
-    HandoverSchedule schedule;
-    if (phase.locked)
-    {
-        const HandoverLearning& learning = m_config.handover_learning;
-        schedule = HandoverSchedule{learning.period_ns, phase.phase_ns, learning.before_ns, learning.after_ns};
-        m_counters.handover_locks += (m_config.handover.period_ns == 0U) ? 1U : 0U;
-    }
-    m_config.handover = schedule;
+    m_counters.handover_losses += signals.handover_loss ? 1U : 0U;
+    m_counters.handover_locks += signals.handover_lock ? 1U : 0U;
+    m_counters.ecn_signals += signals.ecn_signal ? 1U : 0U;
 }
 
 bool QuicConnection::datagram_ready(u64 now_ns) const noexcept
@@ -2753,6 +2610,8 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     }
     if (!closing)
     {
+        const usize slot = send_slot();
+        QuicPathControl& path = control(slot);
         QuicSentPacket sent;
         sent.number = number;
         sent.sent_ns = now_ns;
@@ -2763,24 +2622,20 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         sent.in_flight = written.eliciting || floor != 0U;
         sent.path_probe = carry == Carry::Probe;
         sent.off_path = off_path;
-        sent.handover = handover_covers(m_config.handover, now_ns);
+        sent.handover = path.covered(now_ns);
         sent.ecn = m_marking;
         // Only a datagram that starts with this short header is one an ICMP message can quote and match.
         sent.tag = (spec.type == QuicPacketType::OneRtt && datagram_used == 0U && !off_path)
                        ? packet_tag(room.first(bytes), spec.dcid.size())
                        : 0U;
-        if (sent.in_flight && !off_path)
+        const bool controlled = sent.in_flight && !off_path;
+        if (controlled)
         {
-            sent.delivery = m_delivery.on_sent(bytes, m_recovery->bytes_in_flight() + bytes, now_ns);
+            sent.delivery = path.stamp(bytes, m_recovery->bytes_in_flight(slot) + bytes, now_ns);
         }
         static_cast<void>(m_recovery->on_sent(space, sent)); // can_send held and numbers rise
-        m_ecn.on_sent(space, m_marking, now_ns);
+        path.on_sent(space, sent, controlled, m_recovery->bytes_in_flight(slot), m_recovery->rtt(slot), now_ns);
         m_counters.probe_fills += written.fill ? 1U : 0U;
-        if (sent.in_flight && !off_path)
-        {
-            m_congestion->on_sent(congestion_packet(space, sent), m_recovery->bytes_in_flight(), now_ns);
-            m_pacer.on_sent(bytes, now_ns, m_congestion->pacing_rate(m_recovery->rtt()), m_congestion->burst());
-        }
         if (written.eliciting && m_probes[index] > 0U && carry != Carry::Probe && !off_path)
         {
             --m_probes[index];
@@ -2841,12 +2696,13 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
     {
         return 0U;
     }
-    usize limit = min_u64(out.size(), m_path_bytes);
+    const usize slot = send_slot();
+    usize limit = min_u64(out.size(), control(slot).datagram_bytes());
     if (m_peer_known || m_early_sending)
     {
         limit = min_u64(limit, (m_peer_known ? m_peer : m_remembered).max_udp_payload_size);
     }
-    if (m_recovery->pto_count() != 0U || (!address_validated() && !(m_congestion_path == path())))
+    if (m_recovery->pto_count(slot) != 0U || (!address_validated() && !(control(slot).path() == path())))
     {
         // A probe timeout is pending: datagrams of the floor get an acknowledgement through a black hole that drops
         // larger ones (quic_pmtu.hpp). Or the peer moved to a path not yet confirmed: the floor is all it is known
@@ -2882,8 +2738,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
             m_held_back = true; // nothing below runs: no number, window, probe or amplification state moves
             return 0U;
         }
-        m_marking = m_ecn.marking(now_ns, m_recovery->persistent_congestion_ns());
-        follow_ecn();
+        m_marking = control(slot).marking(now_ns, m_recovery->persistent_congestion_ns(slot));
         gate_data(full, now_ns);
         used = send_path_probe(out, now_ns);
         if (used != 0U)
@@ -2991,9 +2846,11 @@ usize QuicConnection::send_path_frames(cont::Span<u8> out, u64 now_ns, u32 held_
 usize QuicConnection::send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept
 {
     const QuicSpace application = QuicSpace::Application;
-    if (m_state != QuicConnectionState::Established || !m_confirmed || !m_peer_known || m_recovery->pto_count() != 0U ||
-        m_space_gone[quic_space_index(application)] || !m_protection.can_send(QuicPacketType::OneRtt) ||
-        !m_recovery->can_send_data(application))
+    const usize slot = send_slot();
+    QuicPathControl& path = control(slot);
+    if (m_state != QuicConnectionState::Established || !m_confirmed || !m_peer_known ||
+        m_recovery->pto_count(slot) != 0U || m_space_gone[quic_space_index(application)] ||
+        !m_protection.can_send(QuicPacketType::OneRtt) || !m_recovery->can_send_data(application, slot))
     {
         return 0U;
     }
@@ -3006,59 +2863,49 @@ usize QuicConnection::send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept
         }
     }
     // A probe a scheduled handover took would read as a size the path cannot carry: it waits for the handover to pass.
-    if (handover_covers(m_config.handover, now_ns))
+    if (path.covered(now_ns))
     {
         return 0U;
     }
-    const usize probe = m_pmtu.probe(now_ns, has_data(application, now_ns));
+    const usize probe = path.probe(now_ns, has_data(application, now_ns));
     if (probe == 0U || probe > out.size() || probe > amplification_credit())
     {
         return 0U;
     }
     // RFC 8899 section 3: probes are congestion controlled, though their loss is no signal.
-    if (m_recovery->bytes_in_flight() + probe > m_congestion->window())
+    if (m_recovery->bytes_in_flight(slot) + probe > path.congestion().window())
     {
         return 0U;
     }
-    const u64 release = m_pacer.release_ns(now_ns, m_congestion->pacing_rate(m_recovery->rtt()), m_congestion->burst());
+    const u64 release = path.release_ns(now_ns, m_recovery->rtt(slot));
     if (release > now_ns)
     {
-        m_pace_release_ns = min_u64(m_pace_release_ns, release);
+        path.arm_pace(release);
         return 0U;
     }
     const usize bytes = write_packet(application, out.first(probe), 0U, false, true, Carry::Probe, now_ns);
     if (bytes != 0U)
     {
-        m_pmtu.on_probe_sent(static_cast<u32>(bytes));
+        path.on_probe_sent(static_cast<u32>(bytes));
     }
     return bytes;
 }
 
-void QuicConnection::follow_path(u64 now_ns) noexcept
+void QuicConnection::follow_datagram_size() noexcept
 {
-    static_cast<void>(m_pmtu.end_detection(now_ns));
-    apply_path_size();
-}
-
-void QuicConnection::follow_ecn() noexcept
-{
-    const QuicEcnState state = m_ecn.state();
-    if (!m_ecn_unavailable && (state == QuicEcnState::Off || state == QuicEcnState::Failed))
+    u32 bytes = ~u32{0};
+    for (const QuicPathControl* const path : m_controls)
     {
-        m_ecn_unavailable = true;
-        m_congestion->on_ecn_unavailable();
+        if (path != nullptr && path->datagram_bytes() < bytes)
+        {
+            bytes = path->datagram_bytes();
+        }
     }
-}
-
-void QuicConnection::apply_path_size() noexcept
-{
-    const u32 bytes = m_pmtu.size();
-    if (bytes == m_path_bytes)
+    if (bytes == m_datagram_bytes)
     {
         return;
     }
-    m_path_bytes = bytes;
-    m_congestion->set_max_datagram(bytes);
+    m_datagram_bytes = bytes;
     m_datagrams.set_path(m_peer_known ? min_u64(bytes, m_peer.max_udp_payload_size) : bytes);
 }
 
@@ -3089,7 +2936,14 @@ u64 QuicConnection::next_timer_ns() const noexcept
     // space's full storage or keys not yet installed, which would report a timer due that nothing serves.
     u64 next =
         min_u64(min_u64(m_recovery->loss_timer_ns(), m_idle_deadline_ns), min_u64(m_previous_key_ns, m_early_key_ns));
-    next = min_u64(min_u64(next, m_pace_release_ns), path_timer_ns());
+    next = min_u64(next, path_timer_ns());
+    for (const QuicPathControl* const path : m_controls)
+    {
+        if (path != nullptr)
+        {
+            next = min_u64(next, path->pace_timer_ns());
+        }
+    }
     for (usize index = 0U; index < kQuicSpaces; ++index)
     {
         const QuicSpace space = static_cast<QuicSpace>(index);
@@ -3132,9 +2986,12 @@ void QuicConnection::on_timeout(u64 now_ns) noexcept
         m_protection.discard(crypto::QuicLevel::Early);
         m_early_key_ns = kNeverNs;
     }
-    if (now_ns >= m_pace_release_ns)
+    for (QuicPathControl* const path : m_controls)
     {
-        m_pace_release_ns = kNeverNs; // send() writes what the pacer held, or arms it again
+        if (path != nullptr && now_ns >= path->pace_timer_ns())
+        {
+            path->disarm_pace(); // send() writes what the pacer held, or arms it again
+        }
     }
     expire_paths(now_ns);
     if (m_state == QuicConnectionState::Closed)
@@ -3147,11 +3004,8 @@ void QuicConnection::on_timeout(u64 now_ns) noexcept
     }
     m_event_ns = now_ns;
     const QuicTimeout timeout = m_recovery->on_timeout(now_ns, m_events);
-    if (timeout.lost.persistent_congestion)
-    {
-        m_congestion->on_persistent_congestion(now_ns);
-    }
-    follow_path(now_ns);
+    control(timeout.path).end_detection(timeout.lost, now_ns);
+    follow_datagram_size();
     if (timeout.kind != QuicTimeoutKind::Probe && timeout.kind != QuicTimeoutKind::AntiDeadlock)
     {
         return;
@@ -3537,55 +3391,23 @@ void QuicConnection::leave_fallback(u64 now_ns) noexcept
     }
 }
 
-void QuicConnection::restart_path_size() noexcept
-{
-    // A path of another family is the only thing known of it: its floor, then the search (RFC 8899 section 5.2).
-    const bool v6 = m_paths.path(m_paths.active()).peer.address.unmapped().family == AddressFamily::V6;
-    const u32 base = v6 ? kQuicIpv6BaseDatagram : kQuicPmtuFloor;
-    m_pmtu.start(static_cast<u32>(min_u64(base, m_config.max_datagram_bytes)), m_config.max_datagram_bytes,
-                 m_config.path_mtu_discovery);
-    if (m_peer_known)
-    {
-        m_pmtu.limit(static_cast<u32>(min_u64(m_peer.max_udp_payload_size, kQuicDefaultMaxUdpPayload)));
-    }
-    apply_path_size();
-    m_ecn.restart(m_config.ecn ? congestion_codepoint(m_config.congestion) : Ecn::NotEct);
-    m_ecn_unavailable = false;
-    follow_ecn();
-}
-
 void QuicConnection::follow_congestion(u64 now_ns) noexcept
 {
-    const QuicPath& active = m_paths.path(m_paths.active());
-    if (!address_validated() || m_congestion_path == active)
+    if (!address_validated())
     {
         return;
     }
     // Section 9.4: on confirming the peer's address, initial values unless only its port changed. Until then the
-    // credit and 1200-byte datagrams hold the path, and a spurious move never confirmed costs the state nothing.
-    const bool kept = quic_port_only_change(m_congestion_path, active);
-    m_congestion_path = active;
-    if (kept)
+    // credit and 1200-byte datagrams hold the path, and a spurious move never confirmed costs the state nothing. A
+    // path of another family is the only thing known of it: its floor, then the search (RFC 8899 section 5.2).
+    const QuicPath& active = m_paths.path(m_paths.active());
+    const u32 base =
+        (active.peer.address.unmapped().family == AddressFamily::V6) ? kQuicIpv6BaseDatagram : kQuicPmtuFloor;
+    if (m_first_control.move(active, base, entropy()))
     {
-        return;
+        m_recovery->restart_path(now_ns);
+        follow_datagram_size();
     }
-    m_config.handover = HandoverSchedule{}; // the schedule was the old link's, and so was what the learner learned
-    HandoverLearner& learner = learner_in(m_learner_slot.bytes);
-    if (learner.learning())
-    {
-        learner.restart();
-    }
-    m_learner_revision = learner.revision();
-    restart_path_size();
-    m_recovery->restart_path(now_ns);
-    m_delivery.reset();
-    m_pacer = Pacer{};
-    m_pace_release_ns = kNeverNs;
-    m_congestion->~CongestionController();
-    m_congestion =
-        make_congestion(m_config.congestion, m_path_bytes, nullptr, m_congestion_slot, m_delivery, entropy());
-    m_ecn_unavailable = false;
-    follow_ecn();
 }
 
 Endpoint QuicConnection::preferred_for(const Endpoint& peer) const noexcept

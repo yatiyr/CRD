@@ -113,6 +113,7 @@
 #include <crd/net/quic_ecn.hpp>
 #include <crd/net/quic_packet.hpp>
 #include <crd/net/quic_path.hpp>
+#include <crd/net/quic_path_control.hpp>
 #include <crd/net/quic_pmtu.hpp>
 #include <crd/net/quic_recovery.hpp>
 #include <crd/net/quic_stream.hpp>
@@ -502,27 +503,32 @@ public:
     [[nodiscard]] const QuicDatagrams& datagrams() const noexcept { return m_datagrams; }
     [[nodiscard]] const QuicPacketProtection& protection() const noexcept { return m_protection; }
     [[nodiscard]] const QuicRecovery& recovery() const noexcept { return *m_recovery; }
-    [[nodiscard]] const CongestionController& congestion() const noexcept { return *m_congestion; }
-    [[nodiscard]] const DeliveryRateSampler& delivery() const noexcept { return m_delivery; }
-    [[nodiscard]] const QuicEcnValidator& ecn() const noexcept { return m_ecn; }
-    // The path MTU search: size() is what datagrams take now.
-    [[nodiscard]] const QuicPathMtu& path_mtu() const noexcept { return m_pmtu; }
-    // Replaces the congestion policy live: the new controller starts from the current window, slow start threshold
-    // and recovery period. False, changing nothing, for a policy congestion_policy_valid() refuses.
+    // The handshake's path's sending state (quic_path_control.hpp): its controller, sampler, ECN validation and path
+    // MTU search, whose size() is what its datagrams take now.
+    [[nodiscard]] const QuicPathControl& path_control() const noexcept { return *m_controls[0]; }
+    [[nodiscard]] const CongestionController& congestion() const noexcept { return path_control().congestion(); }
+    [[nodiscard]] const DeliveryRateSampler& delivery() const noexcept { return path_control().delivery(); }
+    [[nodiscard]] const QuicEcnValidator& ecn() const noexcept { return path_control().ecn(); }
+    [[nodiscard]] const QuicPathMtu& path_mtu() const noexcept { return path_control().path_mtu(); }
+    // Replaces the congestion policy live on every path: each new controller starts from its path's window, slow start
+    // threshold and recovery period. False, changing nothing, for a policy congestion_policy_valid() refuses.
     [[nodiscard]] bool set_congestion(const CongestionPolicy& policy) noexcept;
-    // Replaces the handover schedule live (QuicConnectionConfig::handover), for packets sent from now; none clears it.
-    // False, changing nothing, for a schedule handover_schedule_valid() refuses.
+    // Replaces the handshake's path's handover schedule live (QuicConnectionConfig::handover), for packets sent from
+    // now; none clears it. False, changing nothing, for a schedule handover_schedule_valid() refuses.
     [[nodiscard]] bool set_handover(const HandoverSchedule& schedule) noexcept;
-    [[nodiscard]] const HandoverSchedule& handover() const noexcept { return m_config.handover; }
+    [[nodiscard]] const HandoverSchedule& handover() const noexcept { return path_control().handover(); }
     // Learns the handover phase of `learning`'s link from now (QuicConnectionConfig::handover_learning), clearing the
     // schedule in force; none ends learning and clears it. False, changing nothing, for one handover_learning_valid()
     // refuses.
     [[nodiscard]] bool set_handover_learning(const HandoverLearning& learning) noexcept;
-    [[nodiscard]] const HandoverLearning& handover_learning() const noexcept { return m_config.handover_learning; }
+    [[nodiscard]] const HandoverLearning& handover_learning() const noexcept
+    {
+        return path_control().handover_learning();
+    }
     // Whether handover() is a schedule learned rather than authored (none is neither).
     [[nodiscard]] bool handover_learned() const noexcept
     {
-        return m_config.handover_learning.period_ns != 0U && m_config.handover.period_ns != 0U;
+        return handover_learning().period_ns != 0U && handover().period_ns != 0U;
     }
     // The peer's parameters, valid once peer_parameters_known().
     [[nodiscard]] bool peer_parameters_known() const noexcept { return m_peer_known; }
@@ -697,8 +703,6 @@ private:
     void move_to(usize index, u64 now_ns) noexcept;
     // A client proven on its active path, and followed there by its server, forgets the fallback it moved from.
     void leave_fallback(u64 now_ns) noexcept;
-    // The path MTU search and ECN validation start again.
-    void restart_path_size() noexcept;
     // Once the active path is validated, the path MTU search, ECN validation, congestion control, the RTT estimate
     // and the pacer start again unless only the port changed since the path they were built on (section 9.4).
     void follow_congestion(u64 now_ns) noexcept;
@@ -774,13 +778,14 @@ private:
     // The PMTU probe due now, written alone into `out`: its size, 0 when none goes (none due, a probe timeout or an
     // owed ACK pending, or the window, the pacer or the amplification limit holding it; a pacer arms its timer).
     [[nodiscard]] usize send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept;
-    // A loss detection ended: black hole detection, then the size found reaches the controller and the datagrams.
-    void follow_path(u64 now_ns) noexcept;
-    // Once the path is known not to carry ECN (never marked, or validation failed), the controller hears it once.
-    void follow_ecn() noexcept;
-    // Puts the handover learner's estimate in force when it changed.
-    void follow_handover() noexcept;
-    void apply_path_size() noexcept;
+    // The sending state of path slot `slot` (open in the recovery), and the slot of the datagram being written: the
+    // handshake's until multipath opens others (S78's scheduling).
+    [[nodiscard]] QuicPathControl& control(usize slot) noexcept { return *m_controls[slot]; }
+    [[nodiscard]] const QuicPathControl& control(usize slot) const noexcept { return *m_controls[slot]; }
+    [[nodiscard]] static constexpr usize send_slot() noexcept { return 0U; }
+    // The datagram frames' room follows the smallest datagram of the open paths, any of which may carry one.
+    void follow_datagram_size() noexcept;
+    void count(const QuicPathSignals& signals) noexcept;
     [[nodiscard]] usize write_frames(QuicSpace space, bool early, cont::Span<u8> frames, u64 packet, u64 now_ns,
                                      Written& written) noexcept;
     [[nodiscard]] usize write_close(QuicSpace space, cont::Span<u8> frames) const noexcept;
@@ -818,25 +823,14 @@ private:
     u8* m_crypto_bytes = nullptr;
     u64* m_crypto_bits = nullptr;
     QuicRecovery* m_recovery = nullptr;
-    CongestionController* m_congestion = nullptr; // built in m_congestion_slot
-    CongestionSlot m_congestion_slot;
-    // crd-hesap-net's handover phase learner (handover_phase.hpp), which no public header of crd-net includes.
-    struct HandoverLearnerSlot
-    {
-        alignas(8) u8 bytes[1488U];
-    } m_learner_slot;
-    u32 m_learner_revision = 0U;    // the learner's estimate in force
-    DeliveryRateSampler m_delivery; // every controller's delivery rate samples, stamped on each packet in flight
-    Pacer m_pacer;
-    u64 m_pace_release_ns = kNeverNs; // data waits for the pacer until then
-    QuicEcnValidator m_ecn;
-    QuicPeerReceiveTimes m_peer_times; // the receive times of the ACK frame being processed
-    QuicPathMtu m_pmtu;
-    u32 m_path_bytes = kQuicPmtuFloor; // the size the controller and the datagrams last took
+    // Each open path slot's sending state: slot 0's is m_first_control, the others' are allocated with their slot.
+    QuicPathControl m_first_control;
+    QuicPathControl* m_controls[kQuicMaxPaths] = {&m_first_control};
+    u32 m_datagram_bytes = kQuicPmtuFloor; // the smallest open path's size, which the datagrams last took
+    QuicPeerReceiveTimes m_peer_times;     // the receive times of the ACK frame being processed
     Ecn m_marking = Ecn::NotEct;      // the codepoint of the datagram being written, then of the last one
     bool m_data_open = true;          // congestion control lets data go in the datagram being written
     bool m_probe_fill = false;        // the controller's bandwidth probe wants bytes: 1-RTT packets fill the datagram
-    bool m_ecn_unavailable = false;   // the controller heard that the path carries no ECN
     u64 m_event_ns = 0U;              // the time recovery's events happen at (they carry none)
     QuicStreamSet m_streams;
     QuicDatagrams m_datagrams;
@@ -908,7 +902,6 @@ private:
     QuicPath m_candidate;      // the path of a datagram being read from no known path
     usize m_receive_path = 0U; // the path of the datagram being read (kQuicNoPath: m_candidate, not yet admitted)
     usize m_send_path = 0U;    // the path of the datagram being written, then of the last one
-    QuicPath m_congestion_path; // the validated path the controller, the estimate and the PMTU search belong to
     u64 m_largest_non_probing = kQuicNoPacket; // the Application packet that last chose the path (section 9.3)
     bool m_peer_followed = true; // a client's server sends on the client's active path: the latest move is followed
     // The path datagrams move to once validated (section 9.6.2): a client's to the preferred address, a server's
