@@ -1347,6 +1347,11 @@ struct RawClient
     u64 retire_prior_to = 0U;
 };
 
+// (MSVC C4324 as for QuicPacketProtection, which the connection holds inline.)
+#if CRD_COMPILER_MSVC
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 class RawRun
 {
 public:
@@ -1600,6 +1605,9 @@ private:
     QuicPath m_reading; // the path of the server datagram being read
     u8 m_dcid = 0U;     // the first byte of its Destination Connection ID
 };
+#if CRD_COMPILER_MSVC
+#pragma warning(pop)
+#endif
 
 // A frame of `kind` written by the caller's fields, sent in a 1-RTT packet after the handshake: the error the server
 // closes with.
