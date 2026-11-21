@@ -229,9 +229,19 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   most 1 ms, and returns so the caller turns again. `SendQueue` names each datagram's socket and hands each socket
   its own in the order queued, so a busy socket holds back no datagram queued for another; slots stay where they
   were written (an order array of slot indices is compacted, no bytes move), and one naming a socket the set lacks
-  is dropped and counted. Open: a queue a stalled socket has filled admits no datagram for another until it drains
-  (the host asks for room before the connection names the datagram's path); per-socket admission comes next. ECN and
-  path MTU discovery run only where every socket of the set offers them.
+  is dropped and counted. ECN and path MTU discovery run only where every socket of the set offers them.
+- **Send admission** (2026-11-21, NET-PATH). The sockets share the queue's slots with a guaranteed share each,
+  slots / (2 x sockets) and at least one where the slots allow (a reserved minimum per queue over a shared buffer); a
+  socket takes a free slot only while as many stay free as the other sockets' shares still lack, so a stalled socket
+  fills at most the rest and the invariant (the sum over sockets of max(queued, share) never exceeds the slots) keeps
+  every share reachable. The host passes the held sockets to `QuicConnection::send(out, now, held)`: a path on a held
+  socket gets nothing and moves no packet number, counter, ECN or amplification state (`held_back()` asks for a
+  retry), so a connection's new path leaves while its old socket's backlog stands, and a held connection whose ACK
+  or pacer deadline has passed is served again after `send_retry_ns`, not at once. A server's refusal leaves by the
+  socket its Initial reached. A server whose padded Initial the amplification limit cannot carry sends what later
+  spaces owe (an ACK of 0-RTT, Handshake data) unpadded within the credit, the PTO staying disarmed for the held
+  Initial (RFC 9000 sections 8.1 and 14.1, RFC 9002 section 6.2.2.1): before, its owed ACK reported a timer due that
+  nothing served.
 
 <a id="ingress"></a>
 ### Ingress
@@ -3930,7 +3940,10 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
   sockets on the loopback. `test_io_loop.cpp`: datagrams naming their socket, answers leaving by it, the per-socket
   receive bound, an empty or oversized set refused, the simulated wait, two real UDP sockets answered and `run()`
   woken by the second, and the send queue's per-socket order, busy and refusing sockets and a socket the set lacks,
-  checked against a model over 32000 random operations. `test_quic_pmtu.cpp`: reports from another socket or
+  checked against a model over 32000 random operations with a stalled stretch (each socket's count recounted, a
+  socket under its share never refused); a stalled socket's answers leaving the other's share. Admission:
+  `test_quic_client.cpp` fills a stalled first socket to its limit of an 8-slot queue and moves; `test_quic_server.cpp`
+  refuses on the second socket; `test_quic_congestion.cpp` holds the active, probing and closing paths' sockets. `test_quic_pmtu.cpp`: reports from another socket or
   address refused.
 - **Next.** preferred_address (section 9.6), interop with peers that migrate (ngtcp2's client and server), then LEO
   handover awareness.
