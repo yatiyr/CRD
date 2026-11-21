@@ -799,6 +799,56 @@ TEST_CASE("A send queue keeps every socket's order and accounts for every datagr
     }
 }
 
+TEST_CASE("A send queue refuses socket counts out of range and gives each socket a share its slots allow",
+          "[net][io-loop][net-path]")
+{
+    CountingAllocator allocator;
+    for (const u32 sockets : {0U, kMaxSetSockets + 1U})
+    {
+        SendQueue refused(allocator, 16U, 64U, sockets);
+        CHECK_FALSE(refused.ready());
+        CHECK(refused.room(0U).empty());
+        CHECK(refused.held() == 0U); // a queue with no sockets holds none
+        CHECK(refused.queued(kMaxSetSockets) == 0U);
+        CHECK_FALSE(refused.push(1U, kClient, Ecn::NotEct, 0U));
+    }
+    CHECK(allocator.calls() == 0U); // refused before allocating anything
+
+    // Fewer slots than sockets: no shares, and every slot goes to whichever asks first.
+    SendQueue scarce(allocator, 3U, 64U, 4U);
+    REQUIRE(scarce.ready());
+    CHECK(scarce.share() == 0U);
+    for (u32 socket = 0U; socket < 3U; ++socket)
+    {
+        CHECK(scarce.push(1U, kClient, Ecn::NotEct, 0U));
+    }
+    CHECK(scarce.held() == 0b1111U);
+
+    // As many slots as sockets: one each, so a socket that takes the first holds none of the others' back.
+    SendQueue even(allocator, 4U, 64U, 4U);
+    REQUIRE(even.ready());
+    CHECK(even.share() == 1U);
+    CHECK(even.push(1U, kClient, Ecn::NotEct, 2U));
+    CHECK(even.held() == 0b0100U);
+    for (u32 socket : {0U, 1U, 3U})
+    {
+        CHECK(even.push(1U, kClient, Ecn::NotEct, socket));
+    }
+    CHECK(even.full());
+    CHECK(even.held() == 0b1111U);
+
+    // One socket: every slot.
+    SendQueue alone(allocator, 5U, 64U);
+    REQUIRE(alone.ready());
+    CHECK(alone.share() == 0U);
+    for (u32 index = 0U; index < 5U; ++index)
+    {
+        CHECK(alone.push(1U, kClient, Ecn::NotEct, 0U));
+    }
+    CHECK(alone.held() == 0b1U);
+    CHECK_FALSE(alone.push(1U, kClient, Ecn::NotEct, 0U));
+}
+
 TEST_CASE("A loop over two real UDP sockets answers on the one a datagram reached, and run() wakes on either",
           "[net][io-loop][net-path]")
 {

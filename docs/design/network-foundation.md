@@ -237,7 +237,10 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   every share reachable. The host passes the held sockets to `QuicConnection::send(out, now, held)`: a path on a held
   socket gets nothing and moves no packet number, counter, ECN or amplification state (`held_back()` asks for a
   retry), so a connection's new path leaves while its old socket's backlog stands, and a held connection whose ACK
-  or pacer deadline has passed is served again after `send_retry_ns`, not at once. A server's refusal leaves by the
+  or pacer deadline has passed is served again after `send_retry_ns`, not at once. The held check runs before the
+  connection knows whether it has anything to write, so one on a held socket with nothing owed is also served again
+  each `send_retry_ns` while the socket stalls, as a full queue made every connection before (no regression; a
+  precise answer is open). A server's refusal leaves by the
   socket its Initial reached. A server whose padded Initial the amplification limit cannot carry sends what later
   spaces owe (an ACK of 0-RTT, Handshake data) unpadded within the credit, the PTO staying disarmed for the held
   Initial (RFC 9000 sections 8.1 and 14.1, RFC 9002 section 6.2.2.1): before, its owed ACK reported a timer due that

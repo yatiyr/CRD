@@ -32,13 +32,14 @@ u64 HostClock::unix_seconds() const noexcept
 // ---- SendQueue ----
 
 SendQueue::SendQueue(memory::IAllocator& allocator, u32 slots, usize slot_bytes, u32 sockets) noexcept
-    : m_allocator(allocator), m_slots(slots), m_slot_bytes(slot_bytes), m_sockets(sockets)
+    : m_allocator(allocator), m_slots(slots), m_slot_bytes(slot_bytes)
 {
     if (slots == 0U || slots > kMaxQueueSlots || slot_bytes == 0U || slot_bytes > kMaxUdpPayloadV6 || sockets == 0U ||
         sockets > kMaxSetSockets)
     {
-        return;
+        return; // not ready, with no sockets: every room() is empty and nothing is held or counted
     }
+    m_sockets = sockets;
     if (sockets > 1U && slots >= sockets)
     {
         // The shares together take at most half the slots, and one each where only the slots for one each exist.
