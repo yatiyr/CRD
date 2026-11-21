@@ -204,8 +204,9 @@ struct CongestionPacket
     u64 sent_ns = 0U;
     QuicSpace space = QuicSpace::Initial;
     DeliveryStamp delivery; // the sampler's stamp from when it left
-    // When the peer received it, on the peer's clock (a QUIC receive timestamp); kNeverNs when it did not say. Only
-    // differences between two such times mean anything.
+    // When the peer received it, on the peer's clock (a QUIC receive timestamp); kNeverNs when it did not say, or
+    // when a scheduled handover may have delayed it (handover.hpp). Only differences between two such times mean
+    // anything.
     u64 received_ns = kNeverNs;
 };
 

@@ -828,9 +828,10 @@ QuicLoss QuicRecovery::detect_lost(QuicSpace id, u64 now_ns, QuicRecoveryEvents&
             loss.bytes += packet.bytes;
         }
         loss.newest_sent_ns = max_u64(loss.newest_sent_ns, packet.sent_ns);
-        // A lost PMTU probe says nothing of congestion (RFC 9000 section 14.4): it neither starts nor ends a run.
-        if (packet.ack_eliciting && !packet.path_probe && on_path(space, packet) && m_rtt.sampled() &&
-            packet.sent_ns >= m_rtt.first_sample_ns)
+        // A lost PMTU probe says nothing of congestion (RFC 9000 section 14.4), nor does a packet a scheduled handover
+        // may have taken (handover.hpp): neither starts nor ends a run.
+        if (packet.ack_eliciting && !packet.path_probe && !packet.handover && on_path(space, packet) &&
+            m_rtt.sampled() && packet.sent_ns >= m_rtt.first_sample_ns)
         {
             run_first = min_u64(run_first, packet.sent_ns);
             run_last  = max_u64(run_last, packet.sent_ns);
@@ -912,6 +913,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
     u64  largest_newly = kQuicNoPacket;
     u64  largest_sent  = 0U;
     bool largest_on_path = false; // the largest newly acknowledged was sent on the path the estimate follows
+    bool largest_handover = false;
     u64  reordering    = 0U;
     u64  carried       = kQuicNoPacket; // the largest of the ACK frames those packets carried
     bool by_time       = false;
@@ -957,6 +959,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                     largest_newly = slot.packet.number;
                     largest_sent  = slot.packet.sent_ns;
                     largest_on_path = counted;
+                    largest_handover = slot.packet.handover;
                 }
                 if (slot.packet.carried_ack != kQuicNoPacket &&
                     (carried == kQuicNoPacket || slot.packet.carried_ack > carried))
@@ -988,6 +991,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
         const u64 latest = (now_ns > largest_sent) ? now_ns - largest_sent : 0U;
         m_rtt.sample(latest, decoded_ack_delay_ns(id, ack.delay), m_confirmed, m_peer_max_ack_delay_ns, now_ns);
         out.rtt_sampled = true;
+        out.rtt_handover = largest_handover;
     }
     out.lost = detect_lost(id, now_ns, events);
 

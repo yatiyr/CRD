@@ -23,7 +23,8 @@
 // 2 at addresses of their own: 0xFA moves it to its next socket (migrate()) and 0xF9 probes that one (probe_path()),
 // and 0xF8 steps which of its three sockets its host holds back (send()'s held sockets, every mask in turn; none on
 // the clean path). The server offers a preferred address on its socket 1 (RFC 9000 section 9.6), which 0xF7 moves the
-// client to (migrate(): once validated).
+// client to (migrate(): once validated). In any script 0xF6 sets both ends' handover schedule (S76) from the next
+// byte: an event every second from now, its guards from the byte, a refused schedule changing nothing.
 //
 // Oracles. Always: a server sends at most three times what it received before the address is proven, and on paths
 // at most three times what arrived from each address it has not validated since it last knew it; every client
@@ -1052,6 +1053,28 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             CRD_FUZZ_REQUIRE(!moved || pair.client.on_preferred_address());
             continue;
         }
+        if (op == 0xF6U && at + 1U < script.size())
+        {
+            // Both ends' handover schedule (handover.hpp): an event every second, one now, guards from the next byte
+            // (8 ms a step each side, past the share at times; 0 clears it). A schedule refused changes nothing.
+            const u8 guards = script[++at];
+            HandoverSchedule schedule;
+            if (guards != 0U)
+            {
+                schedule.period_ns = kHandoverMinPeriodNs;
+                schedule.phase_ns = pair.now % kHandoverMinPeriodNs;
+                schedule.before_ns = static_cast<u64>(guards & 0x0FU) * 8000000U;
+                schedule.after_ns = static_cast<u64>(guards >> 4U) * 8000000U;
+            }
+            const bool valid = handover_schedule_valid(schedule);
+            for (QuicConnection* end : {&pair.client, &pair.server})
+            {
+                const HandoverSchedule before = end->handover();
+                CRD_FUZZ_REQUIRE(end->set_handover(schedule) == valid);
+                CRD_FUZZ_REQUIRE(end->handover() == (valid ? schedule : before));
+            }
+            continue;
+        }
         if (op == 0xF8U && over_paths())
         {
             pair.held = (pair.held + 1U) % 8U;
@@ -1481,6 +1504,10 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     const u8 preferred[] = {0x80U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x07U, 0x07U, 0xF7U,
                             0x07U, 0x00U, 0x07U, 0x00U, 0x07U, 0xFAU, 0x07U, 0x00U, 0xFCU, 0x07U, 0x00U};
     sink.add("script-paths-preferred", preferred, sizeof(preferred));
+    // Handover schedules on a lossy, reordering script: guards of 40 and 24 ms, one past the share, then cleared.
+    const u8 handover[] = {0x00U, 0xF6U, 0x35U, 0x00U, 0x00U, 0x00U, 0x07U, 0x02U, 0x00U, 0x03U, 0x07U, 0xF6U,
+                           0xFFU, 0x00U, 0x02U, 0x07U, 0x00U, 0xF6U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U};
+    sink.add("script-handover", handover, sizeof(handover));
     // The same with receive timestamps, and a raw client's ACK_RECEIVE_TIMESTAMPS of the server's first 1-RTT packet.
     const u8 timed[] = {0x40U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
     sink.add("script-receive-timestamps", timed, sizeof(timed));

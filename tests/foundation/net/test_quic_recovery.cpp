@@ -6,7 +6,8 @@
 // thresholds (RFC 9002 section 6.1 by RFC 8985's mechanism) within their caps, and a Retry starting recovery over
 // (section 6.3) with the first flight's time as the initial estimate (section 6.2.2). And receive timestamps
 // (draft-ietf-quic-receive-ts-03, #receive-timestamps): the log's latest times of acknowledged packets in a frame the
-// room allows, read back for the sender's packets on the peer's clock, and implausible reports giving none.
+// room allows, read back for the sender's packets on the peer's clock, and implausible reports giving none. And packets
+// a scheduled handover may take (#handover): kept out of persistent congestion, their RTT samples named.
 
 #include <crd/containers/array.hpp>
 #include <crd/net/quic_recovery.hpp>
@@ -878,6 +879,53 @@ TEST_CASE("quic recovery: persistent congestion needs a span, no acknowledgement
     const QuicAckOutcome out = early.ack(QuicSpace::Application, 5U, 5U, 10U * kQuicInitialRttNs + kMs);
     CHECK(out.lost.packets == 2U);
     CHECK_FALSE(out.lost.persistent_congestion);
+}
+
+TEST_CASE("quic recovery: packets a scheduled handover may take neither start nor end persistent congestion, and "
+          "name the RTT samples they give",
+          "[net][quic][recovery][handover]")
+{
+    // Packets 1 to 4 lost over 1.5 durations, those named `covered` sent in a handover (handover.hpp).
+    const auto run = [](std::initializer_list<u64> covered)
+    {
+        Fixture f;
+        f.confirmed_with_rtt(10U * kMs);
+        const u64 spacing = f.recovery.persistent_congestion_ns() / 2U;
+        const u64 start = 20U * kMs;
+        for (u64 n = 1U; n <= 4U; ++n)
+        {
+            QuicSentPacket sent = packet(n, start + (n - 1U) * spacing);
+            for (const u64 c : covered)
+            {
+                sent.handover = sent.handover || c == n;
+            }
+            REQUIRE(f.recovery.on_sent(QuicSpace::Application, sent) == QuicRecoveryError::None);
+        }
+        f.send(QuicSpace::Application, 8U, start + 4U * spacing);
+        return f.ack(QuicSpace::Application, 8U, 8U, start + 4U * spacing + kMs).lost;
+    };
+    CHECK(run({}).persistent_congestion);
+    const QuicLoss inside = run({1U, 2U, 3U, 4U});
+    CHECK(inside.packets == 4U); // still lost, and resent
+    CHECK_FALSE(inside.persistent_congestion);
+    CHECK_FALSE(run({1U, 2U}).persistent_congestion); // 3 to 4 span 0.5 durations
+    CHECK_FALSE(run({3U, 4U}).persistent_congestion); // 1 to 2 too
+    CHECK(run({2U, 3U}).persistent_congestion);       // 1 and 4 still span 1.5: a handover breaks no run
+
+    // The RTT sample of a covered packet is taken for the estimate and named.
+    Fixture f;
+    f.recovery.confirm_handshake(0U);
+    QuicSentPacket covered = packet(0U, 0U);
+    covered.handover = true;
+    REQUIRE(f.recovery.on_sent(QuicSpace::Application, covered) == QuicRecoveryError::None);
+    f.send(QuicSpace::Application, 1U, kMs);
+    const QuicAckOutcome first = f.ack(QuicSpace::Application, 0U, 0U, 150U * kMs);
+    CHECK(first.rtt_sampled);
+    CHECK(first.rtt_handover);
+    CHECK(f.recovery.rtt().latest_ns == 150U * kMs);
+    const QuicAckOutcome second = f.ack(QuicSpace::Application, 1U, 1U, 160U * kMs);
+    CHECK(second.rtt_sampled);
+    CHECK_FALSE(second.rtt_handover);
 }
 
 TEST_CASE("quic recovery: an acknowledged packet that carried an ACK retires those ranges", "[net][quic][recovery]")

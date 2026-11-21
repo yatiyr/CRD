@@ -182,6 +182,7 @@ constexpr u64 kNoSequence = ~u64{0}; // a path with no peer connection ID to sen
            config.max_datagram_bytes >= kQuicMinInitialDatagram &&
            config.max_datagram_bytes <= kQuicDefaultMaxUdpPayload && config.base_datagram_bytes >= kQuicPmtuFloor &&
            config.base_datagram_bytes <= config.max_datagram_bytes && congestion_policy_valid(config.congestion) &&
+           handover_schedule_valid(config.handover) &&
            (config.entropy_seed.empty() || config.entropy_seed.size() == crypto::kPrfKeyBytes) &&
            (config.token.size() <= kQuicMaxCarriedTokenBytes) && config.held_packets <= kQuicMaxHeldPackets &&
            (config.early_context.empty() || (config.side == crypto::QuicSide::Server && config.tls->early_data() &&
@@ -279,8 +280,10 @@ void QuicConnection::Events::on_acked(QuicSpace space, const QuicSentPacket& pac
     {
         m_connection.m_delivery.on_acked(packet.delivery, packet.bytes, packet.sent_ns,
                                          delivery_order(space, packet.number), m_connection.m_event_ns);
-        const u64 received_ns =
-            (space == QuicSpace::Application) ? m_connection.m_peer_times.find(packet.number) : kNeverNs;
+        // A packet a scheduled handover may have delayed carries no queue's delay.
+        const u64 received_ns = (space == QuicSpace::Application && !packet.handover)
+                                    ? m_connection.m_peer_times.find(packet.number)
+                                    : kNeverNs;
         m_connection.m_congestion->on_acked(congestion_packet(space, packet, received_ns), m_connection.m_event_ns);
     }
 }
@@ -297,6 +300,12 @@ void QuicConnection::Events::on_lost(QuicSpace space, const QuicSentPacket& pack
     {
         // RFC 9000 section 14.4: a lost probe is no congestion signal.
         m_connection.m_pmtu.on_probe_lost(packet.bytes, m_connection.m_event_ns);
+        return;
+    }
+    if (packet.handover)
+    {
+        // Lost where a scheduled handover may have taken it: no congestion, and no black hole (StarQUIC section 3.2).
+        ++m_connection.m_counters.handover_losses;
         return;
     }
     if (space == QuicSpace::Application)
@@ -332,7 +341,8 @@ void QuicConnection::Events::on_spurious(QuicSpace space, const QuicSentPacket& 
     {
         m_connection.m_pmtu.on_acked(packet.number, packet.bytes); // a large packet arrived: no black hole behind it
     }
-    if (packet.in_flight)
+    // A handover's loss reduced nothing, so its arrival undoes nothing.
+    if (packet.in_flight && !packet.handover)
     {
         m_connection.m_congestion->on_spurious(congestion_packet(space, packet), lost_ns, m_connection.m_event_ns);
     }
@@ -1310,8 +1320,9 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
                 }
                 m_counters.ecn_signals += (ce != 0U) ? 1U : 0U;
                 follow_ecn();
-                m_congestion->on_ack_end(m_recovery->rtt(), outcome.rtt_sampled, m_recovery->bytes_in_flight(),
-                                         now_ns);
+                // An RTT a scheduled handover may have lengthened is the estimate's, never a delay signal.
+                m_congestion->on_ack_end(m_recovery->rtt(), outcome.rtt_sampled && !outcome.rtt_handover,
+                                         m_recovery->bytes_in_flight(), now_ns);
                 if (outcome.lost.persistent_congestion)
                 {
                     m_congestion->on_persistent_congestion(now_ns);
@@ -2111,6 +2122,16 @@ bool QuicConnection::set_congestion(const CongestionPolicy& policy) noexcept
     return true;
 }
 
+bool QuicConnection::set_handover(const HandoverSchedule& schedule) noexcept
+{
+    if (!ready() || !handover_schedule_valid(schedule))
+    {
+        return false;
+    }
+    m_config.handover = schedule;
+    return true;
+}
+
 bool QuicConnection::datagram_ready(u64 now_ns) const noexcept
 {
     return m_datagrams.has_frame(now_ns) && (!m_datagrams.outcomes() || m_frame_count < m_config.sent_frames);
@@ -2590,6 +2611,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         sent.in_flight = written.eliciting || floor != 0U;
         sent.path_probe = carry == Carry::Probe;
         sent.off_path = off_path;
+        sent.handover = handover_covers(m_config.handover, now_ns);
         sent.ecn = m_marking;
         // Only a datagram that starts with this short header is one an ICMP message can quote and match.
         sent.tag = (spec.type == QuicPacketType::OneRtt && datagram_used == 0U && !off_path)
@@ -2830,6 +2852,11 @@ usize QuicConnection::send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept
         {
             return 0U; // an ACK the probe would not carry goes first; the probe takes the next datagram
         }
+    }
+    // A probe a scheduled handover took would read as a size the path cannot carry: it waits for the handover to pass.
+    if (handover_covers(m_config.handover, now_ns))
+    {
+        return 0U;
     }
     const usize probe = m_pmtu.probe(now_ns, has_data(application, now_ns));
     if (probe == 0U || probe > out.size() || probe > amplification_credit())
@@ -3390,6 +3417,7 @@ void QuicConnection::follow_congestion(u64 now_ns) noexcept
     {
         return;
     }
+    m_config.handover = HandoverSchedule{}; // the schedule was the old link's
     restart_path_size();
     m_recovery->restart_path(now_ns);
     m_delivery.reset();

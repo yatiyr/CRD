@@ -45,7 +45,9 @@
 //              controller its window is used (section 7.8), and a pacer's release time is a timer of next_timer_ns().
 //              While the controller's bandwidth probe wants bytes the application has not given (probe_bytes(), GCC),
 //              each 1-RTT packet is ack-eliciting and fills its datagram, inside the window and the pacer as any.
-//              The policy is the configuration's, swappable live.
+//              The policy is the configuration's, swappable live. A link that hands over on a timetable (handover.hpp,
+//              LEO satellites) has its schedule: a packet sent where a handover may take it gives its controller no
+//              loss or delay signal (StarQUIC's window freeze).
 //   path MTU   datagrams take the path's size (quic_pmtu.hpp: RFC 8899, RFC 9000 section 14.3): 1200 bytes, or the
 //              configured base, until the handshake is confirmed, then PMTU probes (one 1-RTT packet of PING and
 //              PADDING, alone in its datagram and inside the window) search up to max_datagram_bytes and the peer's
@@ -100,6 +102,7 @@
 #include <crd/net/congestion.hpp>
 #include <crd/net/connection_table.hpp>
 #include <crd/net/ecn.hpp>
+#include <crd/net/handover.hpp>
 #include <crd/net/quic_datagram.hpp>
 #include <crd/net/quic_ecn.hpp>
 #include <crd/net/quic_packet.hpp>
@@ -252,6 +255,13 @@ struct QuicConnectionConfig
     u32 padding_block = 0U; // packets pad to the next multiple of this (NET.3's padded_size()); 0 pads none
     u64 initial_rtt_ns = kQuicInitialRttNs;
     CongestionPolicy congestion; // the controller and pacing (congestion_policy_valid), swappable by set_congestion()
+    // The scheduled handovers of the link this connection's path crosses (handover.hpp; handover_schedule_valid): a
+    // packet sent where one may take it is a covered packet. Its loss is no congestion signal (no reduction, no loss
+    // rate, no persistent congestion, no black hole for the path MTU search) and its RTT and receive time no delay
+    // signal, while loss detection, retransmission and the RTT estimate stay as they are; no PMTU probe leaves while
+    // one is covered. The schedule describes the link the congestion state was built on: a move that restarts that
+    // state (RFC 9000 section 9.4) clears it. Live: set_handover().
+    HandoverSchedule handover;
     // Datagrams are marked while ECN validation allows (RFC 9000 section 13.4.2), with the controller's codepoint
     // (congestion_codepoint(): ECT(1) for Prague and a scalable SCReAM, ECT(0) for the rest). A host whose socket
     // cannot mark clears it.
@@ -348,6 +358,7 @@ struct QuicConnectionCounters
     u64 path_validations = 0U;   // paths a PATH_RESPONSE validated
     u64 path_failures = 0U;      // validations abandoned on their timeout
     u64 foreign_datagrams = 0U;  // datagrams from a path this side takes nothing from (a client's unknown server)
+    u64 handover_losses = 0U;    // losses of packets a scheduled handover may have taken, kept from congestion control
 };
 
 // (MSVC C4324 as for QuicPacketProtection, which it holds inline.)
@@ -480,6 +491,10 @@ public:
     // Replaces the congestion policy live: the new controller starts from the current window, slow start threshold
     // and recovery period. False, changing nothing, for a policy congestion_policy_valid() refuses.
     [[nodiscard]] bool set_congestion(const CongestionPolicy& policy) noexcept;
+    // Replaces the handover schedule live (QuicConnectionConfig::handover), for packets sent from now; none clears it.
+    // False, changing nothing, for a schedule handover_schedule_valid() refuses.
+    [[nodiscard]] bool set_handover(const HandoverSchedule& schedule) noexcept;
+    [[nodiscard]] const HandoverSchedule& handover() const noexcept { return m_config.handover; }
     // The peer's parameters, valid once peer_parameters_known().
     [[nodiscard]] bool peer_parameters_known() const noexcept { return m_peer_known; }
     [[nodiscard]] const QuicTransportParameters& peer_parameters() const noexcept { return m_peer; }

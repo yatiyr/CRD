@@ -6,7 +6,7 @@
 # flow control, the connection's stream set and datagrams, the connection carrying them, the server behind the
 # ingress and the client's host, byte-stream sockets on the loopback and QMux over them, also as WebSocket tunnels over
 # HTTP/2 and HTTP/3; NET-PATH's congestion control (BBRv3 with its delivery rate samples, Prague and SCReAM v2 over a
-# simulated bottleneck), pacing and ECN, alone and in the connection.
+# simulated bottleneck), pacing and ECN, alone and in the connection, and the scheduled handovers of LEO links.
 add_executable(crd-net-tests
     test_admission.cpp
     test_bbr.cpp
@@ -17,6 +17,7 @@ add_executable(crd-net-tests
     test_delta.cpp
     test_endpoint.cpp
     test_frame_integrity.cpp
+    test_handover.cpp
     test_hpack.cpp
     test_http2.cpp
     test_http3.cpp

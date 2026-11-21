@@ -19,7 +19,8 @@
 //   recovery    QuicRecovery is appendix A in code: RTT samples (section 5), loss by the packet and time thresholds
 //               (6.1), the probe timeout with its backoff, the Application space held until confirmation, a client's
 //               anti-deadlock probe and a server blocked by the amplification limit (6.2), key discards (6.4) and
-//               persistent congestion's establishment (7.6.2).
+//               persistent congestion's establishment (7.6.2), which neither PMTU probes nor packets sent in a
+//               scheduled handover (handover.hpp) start or end.
 //   reordering  a packet declared lost stays held until a probe period passes (or its slot is needed), so a late
 //               acknowledgement shows the loss was spurious; the thresholds then rise (6.1) by RFC 8985's mechanism:
 //               the packet threshold to the reordering seen, the time threshold by a quarter of min_rtt per round
@@ -168,6 +169,9 @@ struct QuicSentPacket
     // Sent on a path other than the active one (a path validation, RFC 9000 section 9.4): outside the estimate,
     // bytes in flight and congestion control, as a packet before path_floor() is.
     bool off_path = false;
+    // Sent where a scheduled handover may take it (handover.hpp): its loss starts no persistent congestion, and the
+    // connection keeps its loss and delay from congestion control.
+    bool handover = false;
     Ecn  ecn = Ecn::NotEct; // the codepoint its datagram was marked with (quic_ecn.hpp)
     // Never 0 for a datagram of one 1-RTT packet: what an ICMP message quoting it must repeat (quic_pmtu.hpp's hints);
     // 0 for any other packet.
@@ -239,6 +243,7 @@ struct QuicAckOutcome
     u64               ect1_packets = 0U;
     u64               newest_sent_ns = 0U;
     bool              rtt_sampled = false;
+    bool              rtt_handover = false; // the sample's packet was sent in a scheduled handover (handover.hpp)
     QuicLoss          lost;
 };
 

@@ -23,7 +23,10 @@
 // address (#migration, RFC 9000 section 9.6): followed once validated, the server moving only once it validated the
 // client's path there and then dropping its first socket's datagrams; an unreachable one failing; a client moving
 // only when told, disable_active_migration closing the handshake address alone; a client that moved first validating
-// it from its new socket; transfers both ways over hostile paths; and the configurations, families and forms.
+// it from its new socket; transfers both ways over hostile paths; and the configurations, families and forms. And
+// scheduled handovers (#handover) over a LEO link: CUBIC, BBR, SCReAM and GCC through them with the schedule, without
+// it and with a wrong one; persistent congestion inside and past the guards; reordered covered packets undoing no
+// genuine reduction; no path MTU probe while covered; refusals, and the schedule cleared by a move.
 
 #include "ingress_fixture.hpp"
 #include "quic_connection_fixture.hpp"
@@ -34,6 +37,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
 #include <memory>
+#include <ostream>
 
 namespace
 {
@@ -1805,4 +1809,366 @@ TEST_CASE("QUIC preferred address: configurations out of range, a server without
         CHECK(plain.server.counters().foreign_datagrams == before.foreign_datagrams + 1U);
         CHECK(plain.server.counters().packets_opened == before.packets_opened);
     }
+}
+
+namespace
+{
+// A LEO access link at the client (#handover), as Starlink's are measured: every `period` from `first` its terminal
+// hands over, losing each datagram that crosses its link in the first `outage` (the client's as they leave the
+// bottleneck, the server's as they reach the terminal) and adding `spike` to each one-way delay for `spike_for` from
+// the event.
+class Handovers final : public Filter
+{
+public:
+    Handovers(Net& net, u64 first, u64 period, u64 outage, u64 spike, u64 spike_for)
+        : m_net(net), m_base_ns(net.path[0].delay_ns), m_first_ns(first), m_period_ns(period), m_spike_ns(spike),
+          m_spike_for_ns(spike_for)
+    {
+        for (Path& path : net.path)
+        {
+            path.outage_first_ns = first;
+            path.outage_period_ns = period;
+            path.outage_ns = outage;
+        }
+        net.path[1].outage_after_ns = m_base_ns;
+    }
+
+    bool drop(usize from, ConstSpan<u8> /*datagram*/) override
+    {
+        if (from == 0U && m_net.now >= drop_at)
+        {
+            drop_at = kNeverNs; // the one other loss asked for
+            return true;
+        }
+        return false;
+    }
+
+    // Both paths' one-way delay as of now; called between events.
+    void follow()
+    {
+        const bool spiking = m_net.now >= m_first_ns && (m_net.now - m_first_ns) % m_period_ns < m_spike_for_ns;
+        for (Path& path : m_net.path)
+        {
+            path.delay_ns = m_base_ns + (spiking ? m_spike_ns : 0U);
+        }
+    }
+
+    // These handovers on the connection's clock, moved by `shift` (a wrong schedule).
+    [[nodiscard]] HandoverSchedule schedule(u64 before, u64 after, u64 shift) const
+    {
+        HandoverSchedule out;
+        out.period_ns = m_period_ns;
+        out.phase_ns = (m_first_ns + shift) % m_period_ns;
+        out.before_ns = before;
+        out.after_ns = after;
+        return out;
+    }
+
+    [[nodiscard]] u64 first_ns() const { return m_first_ns; }
+    [[nodiscard]] u64 taken() const { return m_net.outaged[0] + m_net.outaged[1]; }
+
+    u64 drop_at = kNeverNs; // the first client datagram sent from then is lost too
+
+private:
+    Net& m_net;
+    u64 m_base_ns;
+    u64 m_first_ns;
+    u64 m_period_ns;
+    u64 m_spike_ns;
+    u64 m_spike_for_ns;
+};
+
+constexpr u64 kLeoRate = 1250000U; // 10 Mbit/s
+constexpr u64 kLeoOneWay = 20U * kMs;
+constexpr u64 kLeoFirst = 3000U * kMs; // the first handover, from confirmation
+constexpr u64 kLeoAfter = 2000U * kMs; // what follows a handover, measured
+
+// What the client's schedule is: none, the handovers' own, or one 7 s off them.
+enum class Aware : u8
+{
+    None,
+    True,
+    Wrong,
+};
+
+// A LEO link's handovers: their outage, delay spike and its length; a genuine loss `genuine_at_ns` after
+// confirmation (kNeverNs: none); the schedule's guard after each event.
+struct LeoLink
+{
+    u64 outage_ns = 60U * kMs;
+    u64 spike_ns = 30U * kMs;
+    u64 spike_for_ns = 150U * kMs;
+    u64 genuine_at_ns = kNeverNs;
+    u64 guard_after_ns = kStarlinkHandoverGuardNs;
+};
+
+// What a transfer over a LEO link showed.
+struct LeoRun
+{
+    u64 elapsed_ns = 0U;
+    u64 handovers_lost = 0U;  // datagrams the handovers took
+    u64 handover_losses = 0U; // the client's losses it kept from congestion control
+    CongestionState state;
+    u64 min_window = kNeverNs;      // the window's least from the first handover on
+    u64 min_target_rate = kNeverNs; // a real-time controller's least target rate then
+    u32 min_mtu = ~0U;              // the path MTU's least then
+    u64 after_reductions = 0U;      // reductions in the 2 s from each handover
+    u64 after_undone = 0U;          // reductions undone then
+    u64 after_bytes = 0U;           // bytes the server read then
+};
+
+std::ostream& operator<<(std::ostream& out, const LeoRun& run)
+{
+    return out << run.elapsed_ns / kMs << " ms, reductions " << run.state.reductions << ", undone " << run.state.undone
+               << ", least window " << run.min_window << "; least target " << run.min_target_rate << ", least MTU "
+               << run.min_mtu << ", taken " << run.handovers_lost << ", kept " << run.handover_losses
+               << "; after: reductions " << run.after_reductions << ", undone " << run.after_undone << ", bytes "
+               << run.after_bytes;
+}
+
+// The client sends `total` bytes over a 10 Mbit/s link with 40 ms round trips and a queue of one bandwidth-delay
+// product, its first handover 3 s after confirmation and then every 15 s (Starlink's period).
+LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& link, Aware aware)
+{
+    Pair pair(policy, 3U, false);
+    for (Path& path : pair.net->path)
+    {
+        path.delay_ns = kLeoOneWay;
+    }
+    pair.net->path[0].rate = kLeoRate;
+    pair.net->path[0].buffer = kLeoRate / 1000U * 40U;
+    pair.confirm();
+    const u64 start = pair.net->now;
+    Handovers handovers(*pair.net, start + kLeoFirst, kStarlinkHandoverPeriodNs, link.outage_ns, link.spike_ns,
+                        link.spike_for_ns);
+    handovers.drop_at = (link.genuine_at_ns == kNeverNs) ? kNeverNs : start + link.genuine_at_ns;
+    pair.net->filter = &handovers;
+    if (aware != Aware::None)
+    {
+        const u64 shift = (aware == Aware::Wrong) ? 7000U * kMs : 0U;
+        REQUIRE(pair.client.set_handover(handovers.schedule(kStarlinkHandoverGuardNs, link.guard_after_ns, shift)));
+    }
+    LeoRun run;
+    Bulk bulk{pair.client, pair.server, total};
+    u64 next_event = handovers.first_ns();
+    u64 window_end = kNeverNs;
+    CongestionState at_event;
+    u64 read_at = 0U;
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            handovers.follow();
+            const CongestionState state = pair.client.congestion().state();
+            if (pair.net->now >= next_event)
+            {
+                at_event = state;
+                read_at = bulk.read;
+                window_end = next_event + kLeoAfter;
+                next_event += kStarlinkHandoverPeriodNs;
+            }
+            if (pair.net->now >= window_end)
+            {
+                run.after_reductions += state.reductions - at_event.reductions;
+                run.after_undone += state.undone - at_event.undone;
+                run.after_bytes += bulk.read - read_at;
+                window_end = kNeverNs;
+            }
+            if (pair.net->now >= handovers.first_ns())
+            {
+                run.min_window = (state.window < run.min_window) ? state.window : run.min_window;
+                run.min_target_rate =
+                    (state.target_rate < run.min_target_rate) ? state.target_rate : run.min_target_rate;
+                const u32 mtu = pair.client.path_mtu().size();
+                run.min_mtu = (mtu < run.min_mtu) ? mtu : run.min_mtu;
+            }
+            return bulk.step();
+        },
+        600000U * kMs));
+    run.elapsed_ns = pair.net->now - start;
+    run.handovers_lost = handovers.taken();
+    run.handover_losses = pair.client.counters().handover_losses;
+    run.state = pair.client.congestion().state();
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+    CHECK(pair.server.state() == QuicConnectionState::Established);
+    return run;
+}
+
+} // namespace
+
+TEST_CASE("QUIC handover: CUBIC and BBR keep their windows through a LEO link's scheduled handovers, which reduce them "
+          "without the schedule or with a wrong one",
+          "[net][net-path][quic-connection][handover]")
+{
+    // Two handovers in a transfer of about 20 s: 60 ms lost each, then 30 ms more delay for 150 ms.
+    constexpr u64 total = 24U << 20U;
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::Cubic, CongestionAlgorithm::Bbr})
+    {
+        INFO("algorithm " << static_cast<u32>(algorithm));
+        CongestionPolicy policy;
+        policy.algorithm = algorithm;
+        const LeoRun blind = leo_transfer(policy, total, LeoLink{}, Aware::None);
+        const LeoRun aware = leo_transfer(policy, total, LeoLink{}, Aware::True);
+        const LeoRun off = leo_transfer(policy, total, LeoLink{}, Aware::Wrong);
+        INFO("blind: " << blind);
+        INFO("aware: " << aware);
+        INFO("off: " << off);
+        CHECK(blind.handovers_lost >= 80U);
+        CHECK(blind.handover_losses == 0U);
+        CHECK(off.handover_losses == 0U);
+        CHECK(aware.handover_losses >= 40U);
+        CHECK(aware.after_reductions < blind.after_reductions);
+        CHECK(aware.after_bytes > blind.after_bytes);
+        CHECK(aware.elapsed_ns < blind.elapsed_ns);
+        CHECK(off.after_reductions > aware.after_reductions);
+        CHECK(off.after_bytes < aware.after_bytes);
+        // The handovers' losses never pass for a black hole: the path MTU search keeps its size.
+        CHECK(blind.min_mtu == kQuicDefaultMaxDatagram);
+        CHECK(aware.min_mtu == kQuicDefaultMaxDatagram);
+    }
+}
+
+TEST_CASE("QUIC handover: SCReAM and GCC hold their target rates through a handover's delay spike, which reads as a "
+          "queue without the schedule",
+          "[net][net-path][quic-connection][handover]")
+{
+    constexpr u64 total = 16U << 20U;
+    LeoLink spike;
+    spike.outage_ns = 40U * kMs;
+    spike.spike_ns = 80U * kMs;
+    spike.spike_for_ns = 100U * kMs;
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::Scream, CongestionAlgorithm::Gcc})
+    {
+        INFO("algorithm " << static_cast<u32>(algorithm));
+        CongestionPolicy policy;
+        policy.algorithm = algorithm;
+        policy.target_rate_max = 2U * kLeoRate;
+        const LeoRun blind = leo_transfer(policy, total, spike, Aware::None);
+        const LeoRun aware = leo_transfer(policy, total, spike, Aware::True);
+        INFO("blind: " << blind);
+        INFO("aware: " << aware);
+        CHECK(aware.handover_losses != 0U);
+        CHECK(aware.min_target_rate > blind.min_target_rate);
+        CHECK(aware.after_bytes > blind.after_bytes);
+        CHECK(aware.elapsed_ns <= blind.elapsed_ns);
+    }
+}
+
+TEST_CASE("QUIC handover: an outage inside the guards reaches no persistent congestion; one that outlasts them does",
+          "[net][net-path][quic-connection][handover]")
+{
+    // 1.2 s down: the probe timeout's probes are lost over more than three times the persistent congestion duration.
+    constexpr u64 total = 8U << 20U;
+    LeoLink outage;
+    outage.outage_ns = 1200U * kMs;
+    outage.spike_ns = 0U;
+    outage.guard_after_ns = 1300U * kMs;
+    CongestionPolicy policy;
+    const LeoRun blind = leo_transfer(policy, total, outage, Aware::None);
+    const LeoRun aware = leo_transfer(policy, total, outage, Aware::True);
+    LeoLink short_guard = outage;
+    short_guard.guard_after_ns = kStarlinkHandoverGuardNs;
+    const LeoRun outlasting = leo_transfer(policy, total, short_guard, Aware::True);
+    INFO("blind: " << blind);
+    INFO("aware: " << aware);
+    INFO("outlasting: " << outlasting);
+    const u64 minimum = policy.minimum_packets * kQuicDefaultMaxDatagram;
+    CHECK(blind.min_window == minimum);
+    CHECK(outlasting.min_window == minimum);
+    CHECK(aware.min_window >= 20U * minimum);
+    CHECK(aware.handover_losses != 0U);
+    CHECK(aware.after_bytes > blind.after_bytes);
+    CHECK(aware.elapsed_ns < blind.elapsed_ns);
+}
+
+TEST_CASE("QUIC handover: a handover's reordered packets acknowledged after their loss undo no genuine reduction",
+          "[net][net-path][quic-connection][handover]")
+{
+    // A genuine loss 100 ms before the handover reduces the window; the handover only delays (30 ms for 150 ms), so the
+    // packets sent at the end of the spike arrive after those sent once it ended, are declared lost and then arrive.
+    constexpr u64 total = 8U << 20U;
+    LeoLink reorder;
+    reorder.outage_ns = 0U;
+    reorder.genuine_at_ns = kLeoFirst - 100U * kMs;
+    reorder.guard_after_ns = 200U * kMs; // the spike's packets, all covered
+    CongestionPolicy policy;
+    const LeoRun blind = leo_transfer(policy, total, reorder, Aware::None);
+    const LeoRun aware = leo_transfer(policy, total, reorder, Aware::True);
+    INFO("blind: " << blind);
+    INFO("aware: " << aware);
+    CHECK(aware.after_undone == 0U);
+    CHECK(aware.handover_losses != 0U);
+}
+
+TEST_CASE("QUIC handover: no path MTU probe leaves while a handover may take it; the search follows once it passes",
+          "[net][net-path][quic-connection][handover]")
+{
+    Pair pair(CongestionPolicy{}, 5U);
+    pair.net->path[0].rate = kLeoRate;
+    pair.net->path[0].buffer = kLeoRate / 1000U * 50U;
+    HandoverSchedule covering;
+    covering.period_ns = kStarlinkHandoverPeriodNs;
+    covering.phase_ns = pair.net->now % kStarlinkHandoverPeriodNs;
+    covering.after_ns = 1500U * kMs;
+    REQUIRE(pair.client.set_handover(covering));
+    pair.confirm();
+    Bulk bulk{pair.client, pair.server, 8U << 20U};
+    const u64 start = pair.net->now;
+    REQUIRE(pair.net->run_until([&] { return bulk.step() || pair.net->now >= start + 1000U * kMs; }));
+    CHECK(pair.client.counters().path_probes == 0U);
+    CHECK(pair.client.path_mtu().size() == kQuicPmtuFloor);
+    REQUIRE(pair.net->run_until([&] { return bulk.step() || pair.net->now >= start + 3000U * kMs; }));
+    CHECK(pair.client.counters().path_probes != 0U);
+    CHECK(pair.client.path_mtu().size() == pair.client.path_mtu().ceiling());
+}
+
+TEST_CASE("QUIC handover: schedules out of range are refused, and a move that restarts the congestion state clears "
+          "one where a rebinding keeps it",
+          "[net][net-path][quic-connection][handover]")
+{
+    HandoverSchedule bad;
+    bad.phase_ns = 1U; // none names nothing else
+    {
+        Identity identity;
+        CountingAllocator allocator;
+        QuicConnectionConfig config = bulk_config(QuicSide::Client, identity, 0U);
+        config.handover = bad;
+        const QuicConnection refused(allocator, config);
+        CHECK_FALSE(refused.ready());
+        config.handover = starlink_handover_schedule(0U, 0U);
+        const QuicConnection accepted(allocator, config);
+        CHECK(accepted.ready());
+        CHECK(accepted.handover() == config.handover);
+    }
+    Pair pair(CongestionPolicy{}, 7U);
+    Net& net = *pair.net;
+    net.paths = true;
+    net.path[0].rate = kLeoRate;
+    net.path[0].buffer = kLeoRate / 1000U * 50U;
+    pair.confirm();
+    const HandoverSchedule schedule = starlink_handover_schedule(net.now, 0U, 20U * kMs);
+    CHECK_FALSE(pair.server.set_handover(bad));
+    HandoverSchedule wide = schedule;
+    wide.after_ns = kStarlinkHandoverPeriodNs / kHandoverMaxShare;
+    CHECK_FALSE(pair.server.set_handover(wide));
+    CHECK(pair.server.handover() == HandoverSchedule{});
+    REQUIRE(pair.server.set_handover(schedule));
+    CHECK(pair.server.handover() == schedule);
+    Bulk bulk{pair.client, pair.server, 4U << 20U};
+    REQUIRE(net.run_until([&] { return bulk.step() || bulk.read >= bulk.total / 4U; }));
+    net.client_at.port = 50001U; // a rebinding: the same link
+    REQUIRE(net.run_until([&] { return bulk.step() || bulk.read >= bulk.total / 2U; }));
+    REQUIRE(pair.server.path().peer == net.client_at);
+    CHECK(pair.server.handover() == schedule);
+    net.client_at = Endpoint{IpAddress::v4(203, 0, 113, 5), 40000U}; // another network
+    REQUIRE(net.run_until(
+        [&]
+        {
+            static_cast<void>(bulk.step());
+            return pair.server.recovery().path_floor() != 0U;
+        }));
+    CHECK(pair.server.path().peer == net.client_at);
+    CHECK(pair.server.handover() == HandoverSchedule{});
+    REQUIRE(pair.server.set_handover(schedule)); // the application names the new link's, if it has one
+    CHECK(pair.server.handover() == schedule);
+    REQUIRE(net.run_until([&] { return bulk.step(); }));
 }

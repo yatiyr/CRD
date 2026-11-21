@@ -158,6 +158,19 @@ struct Path
     // With a rate: an ECT(1) datagram that finds more than `ce_queue` bytes queued is marked CE, the L4S queue's step
     // of a DualQ AQM (RFC 9332 section 2.4, 1 ms); classic traffic keeps the drop-tail queue. 0 marks none.
     usize ce_queue = 0U;
+    // A hop that goes down on a timetable, as a LEO terminal's link does at each handover: every `outage_period_ns`
+    // from `outage_first_ns` it loses, for `outage_ns`, each datagram crossing it, `outage_after_ns` after the datagram
+    // leaves the bottleneck (or is sent, without one). 0 periods: never down.
+    u64 outage_first_ns = 0U;
+    u64 outage_period_ns = 0U;
+    u64 outage_ns = 0U;
+    u64 outage_after_ns = 0U;
+
+    [[nodiscard]] bool down_at(u64 departs_ns) const
+    {
+        const u64 at = departs_ns + outage_after_ns;
+        return outage_period_ns != 0U && at >= outage_first_ns && (at - outage_first_ns) % outage_period_ns < outage_ns;
+    }
 };
 
 // A client's ticket store holding one ticket, handed out once.
@@ -254,6 +267,7 @@ public:
     usize sent[2] = {};
     usize dropped[2] = {};
     usize overflowed[2] = {}; // of those, dropped by a full bottleneck queue
+    usize outaged[2] = {};    // and by a hop down (Path::down_at)
     usize too_big[2] = {}; // Packet Too Big messages each end was handed, and those it matched
     usize too_big_matched[2] = {};
     usize marked[2] = {};                       // datagrams each end sent with a codepoint
@@ -540,6 +554,12 @@ private:
                 ecn = Ecn::Ce;
                 ++congested[from];
             }
+        }
+        if (path[from].down_at(departs))
+        {
+            ++dropped[from];
+            ++outaged[from];
+            return;
         }
         REQUIRE(m_count < kFlights);
         Flight& flight = m_flights[m_count++];
