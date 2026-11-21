@@ -12,9 +12,10 @@
 //             SocketSet), as arriving on that path, and the host's peer address follows the connection's path
 //             (QuicConnection::path(), section 9: a server follows its client's migration or NAT rebinding once the
 //             path validates, a client drops datagrams from an unknown server address or on a socket it never
-//             probed). Each datagram goes on the path the connection named (sent_path()), by its socket; one naming a
-//             socket the set lacks is dropped and counted. A keyed server's slot opened with no peer takes the
-//             address of the first packet that opens (S55).
+//             probed, a server those on any socket but its path's and its preferred address's until it moved there,
+//             section 9.6). Each datagram goes on the path the connection named (sent_path()), by its socket; one
+//             naming a socket the set lacks is dropped and counted. A keyed server's slot opened with no peer takes
+//             the address of the first packet that opens (S55).
 //   features  ECN and path MTU discovery run only where every socket of the set offers them (SocketSet::features),
 //             so a connection that moves to another socket keeps what it was built with.
 //   service   a connection that received, whose timer is due or that the application woke is served in on_timers,

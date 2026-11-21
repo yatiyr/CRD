@@ -637,7 +637,7 @@ private:
     // The server's preferred address of `peer`'s family, in `peer`'s form (IPv4-mapped too); port 0 for none.
     [[nodiscard]] Endpoint preferred_for(const Endpoint& peer) const noexcept;
     // Whether `peer` is the preferred address, which the client has not moved to and which is not its server's
-    // address already.
+    // address already, from an active path that names one.
     [[nodiscard]] bool toward_preferred(const Endpoint& peer) const noexcept;
     // A client validates the preferred address from its active socket, to move there once validated (section 9.6.1).
     void follow_preferred(u64 now_ns) noexcept;

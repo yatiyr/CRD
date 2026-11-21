@@ -3410,8 +3410,10 @@ Endpoint QuicConnection::preferred_for(const Endpoint& peer) const noexcept
 
 bool QuicConnection::toward_preferred(const Endpoint& peer) const noexcept
 {
-    return m_config.side == crypto::QuicSide::Client && !m_on_preferred && peer.port != 0U &&
-           peer == preferred_for(peer) && !(peer == m_paths.path(m_paths.active()).peer);
+    // A path that names no server address (port 0) has none to move from.
+    const Endpoint& server = m_paths.path(m_paths.active()).peer;
+    return m_config.side == crypto::QuicSide::Client && !m_on_preferred && peer.port != 0U && server.port != 0U &&
+           peer == preferred_for(peer) && !(peer == server);
 }
 
 void QuicConnection::follow_preferred(u64 now_ns) noexcept

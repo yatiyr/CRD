@@ -3957,7 +3957,7 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
   server's datagrams on any other socket are dropped: its address changes in no other way (section 9). A client
   holds the ID as a NEW_CONNECTION_ID frame's, validates the address of its active path's family (IPv4-mapped where
   its path is) from its active socket once confirmed and moves once validated (`follow_preferred_address`, section
-  9.6.1); `migrate()` to it waits for the validation; a client that moves socket first validates it again from
+  9.6.1; never from a path that names no server address); `migrate()` to it waits for the validation; a client that moves socket first validates it again from
   there and never returns to the socket it left (section 9.6.3); once there, paths to the server's first address
   are forgotten and refused (`OtherServer`), and disable_active_migration closes the handshake address alone
   (section 18.2).

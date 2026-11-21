@@ -193,6 +193,7 @@ enum class Preferred : u8
     V6Only,      // an IPv6 address, which an IPv4 client never follows by itself
     Mapped,      // an IPv4 address, followed by a client whose server address is IPv4-mapped
     OpenedThere, // offered, but the connection opened on that socket: none is sent
+    Unbound,     // offered to a client whose path names no server address: it has none to move from
 };
 
 [[nodiscard]] Endpoint mapped(const Endpoint& at)
@@ -229,7 +230,7 @@ struct Hosted
         net->socket_at[0] = Endpoint{IpAddress::v4(203, 0, 113, 9), 41000U};
         net->socket_at[1] = Endpoint{IpAddress::v4(192, 0, 2, 33), 42000U};
         net->socket_at[2] = Endpoint{IpAddress::v4(198, 51, 100, 7), 43000U};
-        if (preferred != Preferred::None)
+        if (preferred != Preferred::None && preferred != Preferred::Unbound)
         {
             const bool v4_mapped = preferred == Preferred::Mapped;
             net->server_at[0] = v4_mapped ? mapped(kServerAt) : kServerAt;
@@ -261,6 +262,7 @@ struct Hosted
         {
             // The server's address.
             config.path = QuicPath{0U, (preferred == Preferred::Mapped) ? mapped(kServerAt) : kServerAt};
+            config.path = (preferred == Preferred::Unbound) ? QuicPath{} : config.path;
             config.follow_preferred_address = preferred != Preferred::Manual;
         }
         else if (preferred != Preferred::None)
@@ -1778,6 +1780,17 @@ TEST_CASE("QUIC preferred address: configurations out of range, a server without
         REQUIRE(net.run_until(
             [&] { return v4_mapped.client.on_preferred_address() && v4_mapped.server.on_preferred_address(); }));
         CHECK(v4_mapped.client.path() == QuicPath{0U, mapped(kPreferredAt)});
+    }
+    {
+        // A client whose path names no server address never follows one, nor probes it.
+        Hosted unbound(0U, false, true, Preferred::Unbound);
+        unbound.confirm();
+        REQUIRE(unbound.client.peer_parameters().has_preferred_address);
+        CHECK(unbound.client.paths().find(QuicPath{0U, kPreferredAt}) == kQuicNoPath);
+        CHECK(unbound.client.probe_path(QuicPath{0U, kPreferredAt}, unbound.net->now) == QuicMigration::OtherServer);
+        unbound.net->advance(unbound.net->now + 2000U * kMs);
+        CHECK_FALSE(unbound.client.on_preferred_address());
+        CHECK(unbound.client.counters().migrations == 0U);
     }
     {
         // A server without one drops what reaches any socket but its active path's.
