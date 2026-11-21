@@ -1,10 +1,11 @@
 #pragma once
 
-// crd-net -- Linux's io_uring under a UdpSocket's receive (NET-PATH; docs/design/network-foundation.md#sockets): one
-// multishot recvmsg the host keeps armed fills a ring of buffers it selects itself, and receive() reads the
-// completions back without a call while they wait. The ring, its buffers and everything the host reads or writes live
-// in pages of the ring's own, never in the movable socket. What a datagram means (its peer, codepoint and train) stays
-// udp.cpp's; this is the host interface alone. Private to crd-net's sources.
+// crd-net -- Linux's io_uring under a UdpSocket's receive and zero-copy send (NET-PATH;
+// docs/design/network-foundation.md#sockets): one multishot recvmsg the host keeps armed fills a ring of buffers it
+// selects itself, and receive() reads the completions back without a call while they wait. The ring, its buffers and
+// everything the host reads or writes live in pages of the ring's own, never in the movable socket. What a datagram
+// means (its peer, codepoint and train) stays udp.cpp's; this is the host interface alone. Private to crd-net's
+// sources.
 
 #include <crd/containers/span.hpp>
 #include <crd/core/platform.hpp>
@@ -17,12 +18,22 @@
 #if defined(IORING_RECV_MULTISHOT)
 #define CRD_NET_RING 1
 #endif
+// The zero-copy send reads its notifications' copy reports (6.2) and runs their task work only on a kernel
+// transition it asks for (COOP_TASKRUN with TASKRUN_FLAG, 5.19); headers without them build sendmmsg alone.
+#if defined(IORING_SEND_ZC_REPORT_USAGE) && defined(IORING_FEAT_REG_REG_RING) && defined(IORING_SETUP_TASKRUN_FLAG)
+#define CRD_NET_SEND_RING 1
+#endif
 #endif
 #ifndef CRD_NET_RING
 #define CRD_NET_RING 0
 #endif
+#ifndef CRD_NET_SEND_RING
+#define CRD_NET_SEND_RING 0
+#endif
 
 #if CRD_NET_RING
+#include <crd/net/udp.hpp>
+
 #include <poll.h>
 #include <sys/socket.h>
 
@@ -91,6 +102,36 @@ void ring_close(UdpRing* ring) noexcept;
 void ring_recycle(UdpRing& ring) noexcept;
 // The kRingReports report buffers of kRingReportBytes each, end to end, for the ICMP reports lent slots hold.
 [[nodiscard]] cont::Span<u8> ring_reports(UdpRing& ring) noexcept;
+
+#if CRD_NET_SEND_RING
+// The zero-copy send, a ring of its own beside the receive's so its completions never wake a wait on that one. A
+// message goes as IORING_OP_SENDMSG_ZC, which hands the host the caller's pages: its first completion says whether
+// it was sent, and a notification follows (IORING_CQE_F_MORE) once the host holds the pages no more, saying whether
+// it copied them after all. The messages of one send go as one linked chain, so they leave in order and the first
+// failure ends it; each fails or succeeds in the call, with MSG_DONTWAIT, so a full socket is Busy, never a wait.
+inline constexpr u32 kSendRingMessages = 32U; // messages one send hands the host at most
+inline constexpr u32 kSendRingRequests = 128U; // zero-copy messages whose notification may wait at once
+
+// A send ring for `socket`, or nullptr where the host lacks any part of it (a kernel before 6.3, a sandbox, memory).
+[[nodiscard]] UdpSendRing* send_ring_open(int socket) noexcept;
+// Waits until the host holds no page of any message sent, and gives the ring back. Null is a no-op.
+void send_ring_close(UdpSendRing* ring) noexcept;
+// Whether a send that has a message to send zero-copy should use the ring: zero-copy is paying (the host's last
+// notifications reported pages sent in place), or a probe of it is due on a socket where the host copied them.
+[[nodiscard]] bool send_ring_wanted(UdpSendRing& ring) noexcept;
+// Whether a message's bytes become no more fragments than one of the host's buffers holds (MAX_SKB_FRAGS pages,
+// where an iovec that goes on inside the page the last one ended in shares its fragment): a message past that fails
+// zero-copy with EMSGSIZE.
+[[nodiscard]] bool send_ring_fits(const msghdr& message) noexcept;
+// Sends `count` messages (at most kSendRingMessages) as sendmmsg() with MSG_DONTWAIT would: the number sent from
+// the first, or -1 and errno for the first one's failure. Message i goes zero-copy where bit i of `zero_copy` asks
+// and a request is free, its datagrams numbered from first[i]; `first_zero_copy` says whether message 0 went so.
+[[nodiscard]] int send_ring_send(UdpSendRing& ring, mmsghdr* messages, u32 count, u32 zero_copy, const u64* first,
+                                 bool& first_zero_copy, OffloadCounters& counters) noexcept;
+// Reads the notifications that arrived: every datagram numbered below the result, of the `taken` the socket took,
+// is the caller's again. With `wait`, returns only once the host holds no page of any message.
+[[nodiscard]] u64 send_ring_released(UdpSendRing& ring, u64 taken, bool wait, OffloadCounters& counters) noexcept;
+#endif
 
 } // namespace crd::net
 #endif

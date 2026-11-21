@@ -67,6 +67,13 @@ SendQueue::SendQueue(memory::IAllocator& allocator, u32 slots, usize slot_bytes,
 
 SendQueue::~SendQueue()
 {
+    for (u32 socket = 0U; socket < kMaxSetSockets; ++socket)
+    {
+        if (m_lent_per_socket[socket] != 0U)
+        {
+            static_cast<void>(m_lenders[socket]->sends_released(true)); // then the host reads none of its slots
+        }
+    }
     if (m_entries != nullptr)
     {
         memory::destroy_array(m_allocator, m_entries, m_slots);
@@ -77,20 +84,21 @@ SendQueue::~SendQueue()
 
 bool SendQueue::admits(u32 socket) const noexcept
 {
-    if (m_entries == nullptr || m_queued == m_slots || socket >= m_sockets)
+    if (m_entries == nullptr || m_queued + m_lent == m_slots || socket >= m_sockets)
     {
         return false;
     }
-    // The slots the other sockets' shares still lack stay free (S33, #sockets).
+    // The slots the other sockets' shares still lack stay free (S33, #sockets), lent ones counted as queued.
     u32 owed = 0U;
     for (u32 other = 0U; other < m_sockets; ++other)
     {
-        if (other != socket && m_per_socket[other] < m_share)
+        const u32 holds = m_per_socket[other] + m_lent_per_socket[other];
+        if (other != socket && holds < m_share)
         {
-            owed += m_share - m_per_socket[other];
+            owed += m_share - holds;
         }
     }
-    return m_slots - m_queued > owed;
+    return m_slots - m_queued - m_lent > owed;
 }
 
 cont::Span<u8> SendQueue::room(u32 socket) noexcept
@@ -99,7 +107,7 @@ cont::Span<u8> SendQueue::room(u32 socket) noexcept
     {
         return {};
     }
-    return cont::Span<u8>(m_bytes + (usize{m_order[m_queued]} * m_slot_bytes), m_slot_bytes);
+    return cont::Span<u8>(m_bytes + (usize{m_order[m_queued + m_lent]} * m_slot_bytes), m_slot_bytes);
 }
 
 u32 SendQueue::held() const noexcept
@@ -119,7 +127,11 @@ bool SendQueue::push(usize bytes, const Endpoint& peer, Ecn ecn, u32 socket) noe
     {
         return false;
     }
-    m_entries[m_order[m_queued]] = Entry{OutgoingDatagram{slot.first(bytes), peer, ecn}, socket, false};
+    // The first free slot joins the queued ones, the first lent one moving behind the rest.
+    const u32 free = m_order[m_queued + m_lent];
+    m_order[m_queued + m_lent] = m_order[m_queued];
+    m_order[m_queued] = free;
+    m_entries[free] = Entry{OutgoingDatagram{slot.first(bytes), peer, ecn}, socket};
     ++m_queued;
     ++m_per_socket[socket];
     return true;
@@ -128,21 +140,25 @@ bool SendQueue::push(usize bytes, const Endpoint& peer, Ecn ecn, u32 socket) noe
 SendFlush SendQueue::flush(const SocketSet& sockets) noexcept
 {
     SendFlush flushed;
-    if (m_queued == 0U)
+    if (m_queued + m_lent == 0U)
     {
         return flushed;
     }
-    for (u32 index = 0U; index < sockets.size(); ++index)
+    for (u32 index = 0U; index < sockets.size() && m_queued != 0U; ++index)
     {
         send_through(sockets[index], index, flushed);
     }
-    // What is left in order, recounted per socket; the slots that left or were dropped become free.
-    u32 kept = 0U;
-    for (u32& count : m_per_socket)
+    u64 released[kMaxSetSockets];
+    for (u32 socket = 0U; socket < kMaxSetSockets; ++socket)
     {
-        count = 0U;
+        released[socket] = (m_lenders[socket] != nullptr) ? m_lenders[socket]->sends_released(false) : 0U;
+        m_per_socket[socket] = 0U;
+        m_lent_per_socket[socket] = 0U;
     }
-    for (u32 position = 0U; position < m_queued; ++position)
+    // What is left in order, then what the host still reads, recounted per socket; the rest becomes free.
+    const u32 used = m_queued + m_lent;
+    u32 kept = 0U;
+    for (u32 position = 0U; position < used; ++position)
     {
         Entry& entry = m_entries[m_order[position]];
         if (!entry.done && entry.socket >= sockets.size())
@@ -162,6 +178,19 @@ SendFlush SendQueue::flush(const SocketSet& sockets) noexcept
         }
     }
     m_queued = kept;
+    for (u32 position = m_queued; position < used; ++position)
+    {
+        Entry& entry = m_entries[m_order[position]];
+        entry.lent = entry.lent && entry.socket < m_sockets && entry.number >= released[entry.socket];
+        if (entry.lent)
+        {
+            const u32 slot = m_order[position];
+            m_order[position] = m_order[kept];
+            m_order[kept++] = slot;
+            ++m_lent_per_socket[entry.socket];
+        }
+    }
+    m_lent = kept - m_queued;
     return flushed;
 }
 
@@ -182,12 +211,18 @@ void SendQueue::send_through(DatagramSocket& socket, u32 index, SendFlush& flush
                 slots[count++] = m_order[position];
             }
         }
+        const bool lends = socket.features().lent_send;
+        m_lenders[index] = lends ? &socket : m_lenders[index];
         for (usize at = 0U; at < count;)
         {
-            const BatchResult result = socket.send(cont::ConstSpan<OutgoingDatagram>(batch + at, count - at));
+            const u64 first = lends ? socket.sends_taken() : 0U;
+            const BatchResult result = socket.send_stable(cont::ConstSpan<OutgoingDatagram>(batch + at, count - at));
             for (usize sent = 0U; sent < result.count; ++sent)
             {
-                m_entries[slots[at + sent]].done = true;
+                Entry& entry = m_entries[slots[at + sent]];
+                entry.done = true;
+                entry.lent = lends;
+                entry.number = first + sent;
             }
             at += result.count;
             flushed.sent += result.count;

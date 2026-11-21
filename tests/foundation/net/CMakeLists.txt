@@ -60,6 +60,7 @@ add_executable(crd-net-tests
     test_ticket_cache.cpp
     test_udp.cpp
     test_udp_ring.cpp
+    test_udp_zero_copy.cpp
     test_wire.cpp
 )
 
@@ -89,12 +90,13 @@ if(CRD_BUILD_NET_NAMESPACE_TESTS)
     set_tests_properties(crd-net-router-namespace PROPERTIES TIMEOUT 600 LABELS "net")
 endif()
 
-# Linux's sockets receive through io_uring where the host runs it; every real-socket case runs again on recvmmsg
-# (CRD_NET_UDP_RING=0), the router's namespaces too where this tree builds them.
+# Linux's sockets receive and send zero-copy through io_uring where the host runs it; every real-socket case runs
+# again on recvmmsg and sendmmsg (CRD_NET_UDP_RING=0), the router's namespaces too where this tree builds them.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME crd-net-udp-recvmmsg
              COMMAND crd-net-tests --filenames-as-tags
-                     "[#test_udp]~[.netns],[#test_udp_ring]~[.netns],[#test_io_loop],[#test_quic_client]~[.netns]")
+                     "[#test_udp]~[.netns],[#test_udp_ring]~[.netns],[#test_udp_zero_copy]~[.netns]"
+                     "[#test_io_loop],[#test_quic_client]~[.netns]")
     set_tests_properties(crd-net-udp-recvmmsg PROPERTIES TIMEOUT 600 LABELS "net" ENVIRONMENT "CRD_NET_UDP_RING=0")
     if(CRD_BUILD_NET_NAMESPACE_TESTS)
         add_test(NAME crd-net-router-namespace-recvmmsg COMMAND unshare -Urn $<TARGET_FILE:crd-net-tests> "[.netns]")

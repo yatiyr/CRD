@@ -15,6 +15,7 @@ namespace crd::net
 {
 #if CRD_OS_LINUX
 struct UdpRing;
+struct UdpSendRing;
 #endif
 
 enum class SocketError : u8
@@ -70,6 +71,12 @@ struct UdpOptions
     // memory a ring holds follows the datagrams that arrive. Any other count, or CRD_NET_UDP_RING=0 in the
     // environment, keeps the recvmmsg path.
     u32 ring_buffers = 64U;
+    // A message of at least this many bytes (a train, or one large datagram) that send_stable() hands over leaves
+    // through io_uring's zero-copy send where the host has it (SocketFeatures::lent_send): the host reads its bytes
+    // in place until sends_released() passes them. 0, the default, or CRD_NET_UDP_RING=0 copies every send: the
+    // board measured zero-copy at 1.4 to 2.2 times a copy's sender CPU at every size (S33's zero-copy send), so a
+    // host turns it on where its own board shows it gains (a NIC that segments and sends in place).
+    u32 zero_copy_bytes = 0U;
 };
 
 // One receive slot: the caller points `storage` at its buffer before receive(), which fills the rest. A slot left
@@ -123,6 +130,9 @@ struct SocketFeatures
     // an empty slot; also the socket's own. Nonzero, the longest datagram one of them holds whole, whatever the slot.
     bool lent_receive = false;
     u32 receive_bytes = 0U;
+    // send_stable() may leave a datagram's bytes to the host after it returns (Linux's io_uring zero-copy send),
+    // until sends_released() passes it; a host that turns out to take no zero-copy send turns this off for good.
+    bool lent_send = false;
 };
 
 // What a socket's offloads did since it opened.
@@ -133,6 +143,9 @@ struct OffloadCounters
     u64 trains_refused = 0U;           // trains the host refused, sent again a datagram a call
     u64 trains_received = 0U;          // receive slots holding two or more datagrams
     u64 train_datagrams_received = 0U; // the datagrams those held
+    u64 zero_copy_sent = 0U;           // zero-copy messages the host sent from the caller's pages
+    u64 zero_copy_copied = 0U;         // zero-copy messages the host copied after all (loopback, a device without it)
+    u64 zero_copy_refused = 0U;        // zero-copy messages the host failed, sent again copied
 };
 
 // How many datagrams from the first form one train (0 for none): each to the first's peer with its codepoint and each
@@ -158,8 +171,18 @@ public:
     [[nodiscard]] virtual Endpoint local_endpoint() const noexcept = 0;
     // Fills slots in order with what has arrived, without waiting.
     [[nodiscard]] virtual BatchResult receive(cont::Span<ReceivedDatagram> slots) noexcept = 0;
-    // Hands datagrams to the host in order, without waiting.
+    // Hands datagrams to the host in order, without waiting; their bytes are the caller's again when it returns.
     [[nodiscard]] virtual BatchResult send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept = 0;
+    // As send(), from a caller that keeps each datagram's bytes unchanged until sends_released() passes it: a socket
+    // that lends sends (SocketFeatures::lent_send) may then hand the host the pages without a copy. A socket numbers
+    // the datagrams it takes through either call in order from 0, sends_taken() of them so far, and the host no
+    // longer reads any numbered below sends_released(); with `wait` that returns only once the host holds none.
+    [[nodiscard]] virtual BatchResult send_stable(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept
+    {
+        return send(datagrams);
+    }
+    [[nodiscard]] virtual u64 sends_taken() const noexcept { return 0U; }
+    [[nodiscard]] virtual u64 sends_released(bool /*wait*/) noexcept { return ~u64{0}; }
     // True once a datagram (or an error receive() reports) is waiting, false when `timeout_ns` passes first. A signal
     // that interrupts the wait restarts it.
     [[nodiscard]] virtual bool wait_readable(u64 timeout_ns) noexcept = 0;
@@ -203,7 +226,12 @@ protected:
 // its slot or lends it to an empty one, and reads the ICMP reports its ended receives name as above; the socket then
 // waits on the ring's descriptor. The host runs a receive's completions as the thread that armed it, so a receive on
 // another thread moves the ring there, and the old receive's end may wake the next wait once with nothing to read.
-// Anything the host refuses keeps recvmmsg, as features() reports. macOS carries bytes alone until crd-net's port
+// Anything the host refuses keeps recvmmsg, as features() reports. With zero_copy_bytes set, Linux 6.3 and later send
+// each message send_stable() hands over of that size, and of no more page fragments than the host's buffer holds,
+// through io_uring's SENDMSG_ZC on a ring of its own (one linked chain a send, MSG_DONTWAIT): the host reads the
+// caller's pages until sends_released() passes them. A message the host fails zero-copy goes again copied; eight
+// copy reports in a row (loopback) turn it off until a probe every 1024 sends; close() waits until the host holds no
+// page. macOS carries bytes alone until crd-net's port
 // there (MAC.1).
 class UdpSocket final : public DatagramSocket
 {
@@ -225,6 +253,9 @@ public:
     [[nodiscard]] Endpoint local_endpoint() const noexcept override;
     [[nodiscard]] BatchResult receive(cont::Span<ReceivedDatagram> slots) noexcept override;
     [[nodiscard]] BatchResult send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept override;
+    [[nodiscard]] BatchResult send_stable(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept override;
+    [[nodiscard]] u64 sends_taken() const noexcept override { return m_sends_taken; }
+    [[nodiscard]] u64 sends_released(bool wait) noexcept override;
     [[nodiscard]] bool wait_readable(u64 timeout_ns) noexcept override;
     [[nodiscard]] SocketFeatures features() const noexcept override { return m_features; }
     [[nodiscard]] u64 wait_handle() const noexcept override; // the ring's descriptor where it receives
@@ -234,6 +265,8 @@ public:
 private:
     static constexpr u64 kNoHandle = kNoWaitHandle;
 
+    // send() and, with `stable`, send_stable().
+    [[nodiscard]] BatchResult transmit(cont::ConstSpan<OutgoingDatagram> datagrams, bool stable) noexcept;
     // `datagrams` handed to the host in one message, a train when more than one: counted as sent.
     void sent_train(usize datagrams, BatchResult& result) noexcept;
 
@@ -242,6 +275,7 @@ private:
     bool m_dual_stack = false;
     SocketFeatures m_features;
     OffloadCounters m_offloads;
+    u64 m_sends_taken = 0U;
 #if CRD_OS_WINDOWS
     void (*m_receive_message)() = nullptr; // WSARecvMsg, which Winsock hands out per provider, as a generic pointer
 #elif CRD_OS_LINUX
@@ -250,6 +284,8 @@ private:
 
     bool m_reports_waiting = false; // the error queue may hold reports: the next receive() reads them first
     UdpRing* m_ring = nullptr;      // the io_uring receive, in pages of its own; null for recvmmsg
+    UdpSendRing* m_send_ring = nullptr; // the io_uring zero-copy send; null for sendmmsg alone
+    u32 m_zero_copy_bytes = 0U;
 #endif
 };
 

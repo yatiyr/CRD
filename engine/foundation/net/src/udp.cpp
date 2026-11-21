@@ -41,16 +41,30 @@ constexpr usize kReportControlBytes =
 constexpr usize kReportsPerReceive = 2U * kBatchChunk;
 #if CRD_NET_RING
 static_assert(kRingReports == kReportsPerReceive, "a lent slot's report takes a report buffer of the ring");
+#if CRD_NET_SEND_RING
+static_assert(kSendRingMessages == kBatchChunk, "the send ring takes every message of a sendmmsg's chunk");
+#endif
 
-// Whether a socket opens its io_uring receive: asked for, and not turned off for the process (CRD_NET_UDP_RING=0, the
-// recvmmsg path's CTest arm and an operator's way back to it).
-[[nodiscard]] bool ring_allowed(const UdpOptions& options) noexcept
+// Whether sockets may use io_uring: not turned off for the process (CRD_NET_UDP_RING=0, the recvmmsg and sendmmsg
+// path's CTest arm and an operator's way back to it).
+[[nodiscard]] bool rings_allowed() noexcept
 {
     char value[4] = {};
     const bool set = read_environment("CRD_NET_UDP_RING", value, sizeof(value)) == EnvironmentRead::Set;
-    return options.ring_buffers != 0U && !(set && std::strcmp(value, "0") == 0);
+    return !(set && std::strcmp(value, "0") == 0);
 }
 #endif
+
+// Whether a message fits one of the host's zero-copy buffers (send_ring_fits); none does without the send ring.
+[[nodiscard]] bool lends_whole([[maybe_unused]] const msghdr& message) noexcept
+{
+#if CRD_NET_SEND_RING
+    return send_ring_fits(message);
+#else
+    return false;
+#endif
+}
+
 // The IPv4 or IPv6 header and the UDP header: what a hop's MTU carries beyond the UDP payload.
 constexpr u32 kV4Overhead = 28U;
 constexpr u32 kV6Overhead = 48U;
@@ -509,18 +523,20 @@ UdpSocket::~UdpSocket()
 
 UdpSocket::UdpSocket(UdpSocket&& other) noexcept
     : DatagramSocket(), m_handle(other.m_handle), m_local(other.m_local), m_dual_stack(other.m_dual_stack),
-      m_features(other.m_features), m_offloads(other.m_offloads)
+      m_features(other.m_features), m_offloads(other.m_offloads), m_sends_taken(other.m_sends_taken)
 #if CRD_OS_WINDOWS
       ,
       m_receive_message(other.m_receive_message)
 #elif CRD_OS_LINUX
       ,
-      m_reports_waiting(other.m_reports_waiting), m_ring(other.m_ring)
+      m_reports_waiting(other.m_reports_waiting), m_ring(other.m_ring), m_send_ring(other.m_send_ring),
+      m_zero_copy_bytes(other.m_zero_copy_bytes)
 #endif
 {
     other.m_handle = kNoHandle;
 #if CRD_OS_LINUX
     other.m_ring = nullptr;
+    other.m_send_ring = nullptr;
 #endif
 }
 
@@ -534,12 +550,16 @@ UdpSocket& UdpSocket::operator=(UdpSocket&& other) noexcept
         m_dual_stack = other.m_dual_stack;
         m_features = other.m_features;
         m_offloads = other.m_offloads;
+        m_sends_taken = other.m_sends_taken;
 #if CRD_OS_WINDOWS
         m_receive_message = other.m_receive_message;
 #elif CRD_OS_LINUX
         m_reports_waiting = other.m_reports_waiting;
         m_ring = other.m_ring;
+        m_send_ring = other.m_send_ring;
+        m_zero_copy_bytes = other.m_zero_copy_bytes;
         other.m_ring = nullptr;
+        other.m_send_ring = nullptr;
 #endif
         other.m_handle = kNoHandle;
     }
@@ -611,13 +631,21 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
     }
 #endif
 #if CRD_NET_RING
-    if (error == SocketError::None && ring_allowed(options))
+    if (error == SocketError::None && options.ring_buffers != 0U && rings_allowed())
     {
         const u32 datagram_bytes =
             static_cast<u32>(socket.m_features.coalesced_receive ? kMaxTrainBytes : kMaxUdpPayloadV6);
         socket.m_ring = ring_open(handle, options.ring_buffers, datagram_bytes, static_cast<u32>(kControlBytes));
         socket.m_features.lent_receive = socket.m_ring != nullptr;
         socket.m_features.receive_bytes = (socket.m_ring != nullptr) ? datagram_bytes : 0U;
+    }
+#endif
+#if CRD_NET_SEND_RING
+    if (error == SocketError::None && options.zero_copy_bytes != 0U && rings_allowed())
+    {
+        socket.m_send_ring = send_ring_open(handle);
+        socket.m_features.lent_send = socket.m_send_ring != nullptr;
+        socket.m_zero_copy_bytes = options.zero_copy_bytes;
     }
 #endif
     if (error == SocketError::None)
@@ -665,15 +693,21 @@ void UdpSocket::close() noexcept
 #if CRD_NET_RING
     ring_close(m_ring); // before the socket: the host stops writing the ring's buffers first
 #endif
+#if CRD_NET_SEND_RING
+    send_ring_close(m_send_ring); // the host holds no page of the caller's once it returns
+#endif
     ::close(native(m_handle));
 #endif
     m_handle = kNoHandle;
     m_local = Endpoint{};
     m_features = SocketFeatures{};
     m_offloads = OffloadCounters{};
+    m_sends_taken = 0U;
 #if CRD_OS_LINUX
     m_reports_waiting = false;
     m_ring = nullptr;
+    m_send_ring = nullptr;
+    m_zero_copy_bytes = 0U;
 #endif
 }
 
@@ -826,6 +860,27 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
 
 BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept
 {
+    return transmit(datagrams, false);
+}
+
+BatchResult UdpSocket::send_stable(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept
+{
+    return transmit(datagrams, true);
+}
+
+u64 UdpSocket::sends_released([[maybe_unused]] bool wait) noexcept
+{
+#if CRD_NET_SEND_RING
+    if (m_send_ring != nullptr)
+    {
+        return send_ring_released(*m_send_ring, m_sends_taken, wait, m_offloads);
+    }
+#endif
+    return m_sends_taken;
+}
+
+BatchResult UdpSocket::transmit(cont::ConstSpan<OutgoingDatagram> datagrams, [[maybe_unused]] bool stable) noexcept
+{
     BatchResult result;
     if (!is_open())
     {
@@ -837,6 +892,7 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
 #if CRD_OS_LINUX
     bool resent = false;    // the message at result.count went again after a report's error
     usize plain_until = 0U; // the datagrams before it go a message each: a train the host refused
+    usize copied_at = ~usize{0}; // a message starting at this datagram goes copied: the host failed it zero-copy
     while (result.count < datagrams.size())
     {
         mmsghdr messages[kBatchChunk];
@@ -844,6 +900,8 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
         usize carried[kBatchChunk]; // datagrams per message
         NativeAddress peers[kBatchChunk];
         alignas(cmsghdr) u8 controls[kBatchChunk][kSendControlBytes];
+        u64 first[kBatchChunk]; // the number of each message's first datagram
+        u32 zero_copy = 0U;     // bit i: message i may go zero-copy
         bool marked = false;
         usize chunk = 0U;
         usize vector = 0U;
@@ -863,18 +921,25 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
             usize count =
                 (m_features.segmented_send && next >= plain_until) ? segment_train(datagrams.subspan(next)) : 1U;
             count = (count < kSendVectors - vector) ? count : kSendVectors - vector;
+            usize message_bytes = 0U;
             for (usize index = 0U; index < count; ++index)
             {
                 const cont::ConstSpan<u8> bytes = datagrams[next + index].bytes;
                 // sendmmsg only reads the bytes; iovec has no const form.
                 // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
                 vectors[vector + index] = iovec{const_cast<u8*>(bytes.data()), bytes.size()};
+                message_bytes += bytes.size();
             }
             messages[chunk] = mmsghdr{};
             messages[chunk].msg_hdr.msg_name = &peers[chunk].storage;
             messages[chunk].msg_hdr.msg_namelen = peers[chunk].length;
             messages[chunk].msg_hdr.msg_iov = &vectors[vector];
             messages[chunk].msg_hdr.msg_iovlen = count;
+            // Numbered as the datagrams before it in this call will be once they leave.
+            first[chunk] = m_sends_taken + (next - result.count);
+            const bool lend = stable && m_features.lent_send && message_bytes >= m_zero_copy_bytes &&
+                              next != copied_at && lends_whole(messages[chunk].msg_hdr);
+            zero_copy |= lend ? (1U << chunk) : 0U;
             const Ecn ecn = m_features.ecn_marking ? datagram.ecn : Ecn::NotEct;
             marked = marked || ecn != Ecn::NotEct;
             attach(messages[chunk].msg_hdr, controls[chunk], datagram.peer, ecn,
@@ -885,13 +950,33 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
         }
         if (chunk != 0U)
         {
+            bool lent_first = false; // message 0 went zero-copy
+#if CRD_NET_SEND_RING
+            const int sent = (zero_copy != 0U && send_ring_wanted(*m_send_ring))
+                                 ? send_ring_send(*m_send_ring, messages, static_cast<u32>(chunk), zero_copy, first,
+                                                  lent_first, m_offloads)
+                                 : ::sendmmsg(handle, messages, static_cast<unsigned int>(chunk),
+                                              MSG_DONTWAIT | MSG_NOSIGNAL);
+#else
+            static_cast<void>(zero_copy); // no socket lends without the ring
             const int sent =
                 ::sendmmsg(handle, messages, static_cast<unsigned int>(chunk), MSG_DONTWAIT | MSG_NOSIGNAL);
+#endif
             if (sent <= 0)
             {
                 const int code = last_error();
                 if (sent < 0 && interrupted(code))
                 {
+                    continue;
+                }
+                if (sent < 0 && lent_first && !would_block(code))
+                {
+                    // The host failed the message zero-copy (pinning past RLIMIT_MEMLOCK, a socket that takes no
+                    // zero-copy send, more fragments than its buffer holds): it goes again copied, which meets any
+                    // error of its own as every copied send does, and a socket that takes none stops lending.
+                    ++m_offloads.zero_copy_refused;
+                    m_features.lent_send = m_features.lent_send && code != EOPNOTSUPP;
+                    copied_at = result.count;
                     continue;
                 }
                 if (sent < 0 && code == ENOBUFS)
@@ -996,6 +1081,7 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
 #else
         const ssize_t sent = ::sendto(handle, datagram.bytes.data(), datagram.bytes.size(), 0,
                                       reinterpret_cast<const sockaddr*>(&peer.storage), peer.length);
+        const usize count = 1U;
 #endif
         if (sent < 0)
         {
@@ -1033,10 +1119,8 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
         }
 #if CRD_OS_WINDOWS
         plain = false;
-        sent_train(count, result);
-#else
-        ++result.count;
 #endif
+        sent_train(count, result);
     }
 #endif
     return result;
@@ -1169,6 +1253,7 @@ void UdpSocket::receive_ring([[maybe_unused]] cont::Span<ReceivedDatagram> slots
 void UdpSocket::sent_train(usize datagrams, BatchResult& result) noexcept
 {
     result.count += datagrams;
+    m_sends_taken += datagrams;
     if (datagrams > 1U)
     {
         ++m_offloads.trains_sent;

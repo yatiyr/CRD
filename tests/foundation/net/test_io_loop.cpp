@@ -961,6 +961,122 @@ TEST_CASE("A send queue refuses socket counts out of range and gives each socket
     CHECK_FALSE(alone.push(1U, kClient, Ecn::NotEct, 0U));
 }
 
+TEST_CASE("A send queue keeps each slot a lending socket sent until the socket releases it, counted against that "
+          "socket's share, and its end waits for the host",
+          "[net][io-loop][net-path]")
+{
+    CountingAllocator allocator;
+    // The sockets outlive the queue, as every queue's do.
+    VirtualSocket lender;
+    lender.offers.lent_send = true;
+    VirtualSocket plain;
+    DatagramSocket* const both[] = {&lender, &plain};
+    const SocketSet set{ConstSpan<DatagramSocket*>(both)};
+    {
+        SendQueue queue(allocator, 8U, 64U, 2U);
+        REQUIRE(queue.share() == 2U);
+        const u8* slots_lent[8] = {};
+        usize lent_count = 0U;
+        const auto lent_overlaps = [&](Span<u8> room)
+        {
+            for (usize index = 0U; index < lent_count; ++index)
+            {
+                if (room.data() == slots_lent[index])
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        const auto push = [&](u8 tag, u32 socket)
+        {
+            const Span<u8> room = queue.room(socket);
+            REQUIRE(room.size() == 64U);
+            CHECK_FALSE(lent_overlaps(room)); // a slot the host may read is never written
+            room[0] = tag;
+            REQUIRE(queue.push(1U, kClient, Ecn::NotEct, socket));
+        };
+
+        for (u8 tag = 0U; tag < 4U; ++tag)
+        {
+            push(tag, 0U);
+        }
+        SendFlush flushed = queue.flush(set);
+        CHECK(flushed.sent == 4U);
+        CHECK(lender.stable_calls == 1U); // the queue's bytes stay put, so it hands them over as stable
+        CHECK(queue.queued() == 0U);
+        CHECK(queue.lent() == 4U);
+        CHECK(queue.lent(0U) == 4U);
+        CHECK_FALSE(queue.full());
+        for (usize index = 0U; index < 4U; ++index)
+        {
+            slots_lent[lent_count++] = lender.sent[index].from;
+        }
+
+        // Lent slots count against the lender's share: two more fill it to what the other's share leaves.
+        push(4U, 0U);
+        push(5U, 0U);
+        CHECK(queue.room(0U).empty());
+        CHECK(queue.held() == 0b01U);
+        push(0x80U, 1U);
+        push(0x81U, 1U);
+        CHECK(queue.full());
+        CHECK(queue.held() == 0b11U);
+
+        // The plain socket's slots come back at the flush; the lender's two more are lent, numbered 4 and 5.
+        lender.released = 2U;
+        flushed = queue.flush(set);
+        CHECK(flushed.sent == 4U);
+        CHECK(plain.sent_count == 2U);
+        CHECK(queue.lent() == 4U); // 2 to 5
+        CHECK(queue.lent(1U) == 0U);
+        lent_count = 0U;
+        for (usize index = 2U; index < 6U; ++index)
+        {
+            slots_lent[lent_count++] = lender.sent[index].from;
+        }
+        // Numbers 0 and 1 came back: their slots, and the two the plain socket left, are free.
+        for (u8 tag = 0U; tag < 2U; ++tag)
+        {
+            push(static_cast<u8>(0x90U + tag), 1U);
+        }
+
+        // Datagrams sent through the lender by another caller take numbers too: the queue's next ones count after
+        // them, so releasing up to the other caller's leaves the queue's held.
+        const u8 other_bytes[1] = {0xEEU};
+        const OutgoingDatagram other[3] = {{ConstSpan<u8>(other_bytes, 1U), kClient},
+                                           {ConstSpan<u8>(other_bytes, 1U), kClient},
+                                           {ConstSpan<u8>(other_bytes, 1U), kClient}};
+        REQUIRE(lender.send(ConstSpan<OutgoingDatagram>(other)).count == 3U); // numbers 6 to 8
+        lender.released = 9U;
+        flushed = queue.flush(set);
+        CHECK(flushed.sent == 2U);
+        CHECK(queue.lent() == 0U); // every lent number is below 9
+        lent_count = 0U;
+        push(6U, 0U);
+        push(7U, 0U);
+        lender.refuse_next = true; // a dropped datagram is not lent: its slot is free at once
+        flushed = queue.flush(set);
+        CHECK(flushed.sent == 1U);
+        CHECK(flushed.dropped == 1U);
+        CHECK(queue.lent() == 1U); // number 9 only
+        CHECK(lender.release_waits == 0U);
+    }
+    CHECK(lender.release_waits == 1U); // the queue's end waited for the lender's host
+    CHECK(plain.release_waits == 0U);
+
+    // A queue whose lent slots all came back waits for nothing.
+    {
+        SendQueue queue(allocator, 4U, 64U);
+        REQUIRE(queue.push(1U, kClient, Ecn::NotEct, 0U));
+        static_cast<void>(queue.flush(SocketSet(lender)));
+        lender.released = lender.taken;
+        static_cast<void>(queue.flush(SocketSet(lender)));
+        CHECK(queue.lent() == 0U);
+    }
+    CHECK(lender.release_waits == 1U);
+}
+
 TEST_CASE("A loop over two real UDP sockets answers on the one a datagram reached, and run() wakes on either",
           "[net][io-loop][net-path]")
 {

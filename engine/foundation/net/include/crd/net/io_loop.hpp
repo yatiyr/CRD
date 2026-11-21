@@ -109,11 +109,17 @@ struct SendFlush
 // counted, as is one naming a socket the flushed set lacks. Its storage comes from the injected allocator at
 // construction; nothing is allocated after, and no datagram's bytes move once written.
 //
+// Lent slots: the queue hands its datagrams over with send_stable(), as its bytes stay put. A slot whose datagram a
+// lending socket (SocketFeatures::lent_send) sent is lent until that socket's sends_released() passes it, read at
+// each flush: the host may still be sending from it, so it is neither written nor reused meanwhile, and the queue's
+// destructor waits until every socket that lent one holds none.
+//
 // Admission: the `sockets` sockets share the slots, each with a guaranteed share of slots / (2 * sockets), at least
 // one where the slots allow one for each (none for fewer slots than sockets). A socket takes a free slot only while
 // as many stay free as the other sockets' shares still lack, so a stalled socket fills at most the rest and every
 // other socket always finds room for its share: a connection's datagrams for a working socket are never held behind a
-// busy one's. A queue of one socket admits into every slot.
+// busy one's. A lent slot counts against its socket as a queued one does. A queue of one socket admits into every
+// slot.
 class SendQueue
 {
 public:
@@ -128,14 +134,15 @@ public:
 
     [[nodiscard]] bool ready() const noexcept { return m_entries != nullptr; }
     // The slot a datagram for `socket` is written into; empty when admission holds that socket back (always when the
-    // queue is full) or for a socket from `sockets` on.
+    // queue is full, lent slots included) or for a socket from `sockets` on.
     [[nodiscard]] cont::Span<u8> room(u32 socket) noexcept;
     // The sockets admission holds back now, bit i for socket i: all of them exactly when the queue is full.
     [[nodiscard]] u32 held() const noexcept;
     // Queues the first `bytes` of room(socket) for `peer` through the set's socket `socket`, its IP header marked
     // `ecn` (stateless answers go Not-ECT); false, queuing nothing, when room(socket) is empty or shorter.
     [[nodiscard]] bool push(usize bytes, const Endpoint& peer, Ecn ecn = Ecn::NotEct, u32 socket = 0U) noexcept;
-    // Hands each socket of `sockets` its queued datagrams until it is Busy or none of its own is left.
+    // Hands each socket of `sockets` its queued datagrams until it is Busy or none of its own is left, and frees the
+    // lent slots their sockets released.
     [[nodiscard]] SendFlush flush(const SocketSet& sockets) noexcept;
 
     [[nodiscard]] u32 queued() const noexcept { return m_queued; }
@@ -146,16 +153,25 @@ public:
         // m_sockets never passes kMaxSetSockets: the second bound says so to GCC's LTO, which cannot prove it.
         return (socket < m_sockets && socket < kMaxSetSockets) ? m_per_socket[socket] : 0U;
     }
+    // The slots whose datagrams the host may still be sending from, and those of `socket`.
+    [[nodiscard]] u32 lent() const noexcept { return m_lent; }
+    [[nodiscard]] u32 lent(u32 socket) const noexcept
+    {
+        return (socket < m_sockets && socket < kMaxSetSockets) ? m_lent_per_socket[socket] : 0U;
+    }
     [[nodiscard]] u32 share() const noexcept { return m_share; }
-    [[nodiscard]] bool full() const noexcept { return m_queued == m_slots; }
+    [[nodiscard]] bool full() const noexcept { return m_queued + m_lent == m_slots; }
 
 private:
-    // A slot's datagram and the socket it leaves by; `done` once it left or was dropped, until the flush ends.
+    // A slot's datagram and the socket it leaves by; `done` once it left or was dropped, until the flush ends, and
+    // `lent` while the host may read it, the socket's datagram `number`.
     struct Entry
     {
         OutgoingDatagram datagram;
         u32 socket = 0U;
         bool done = false;
+        bool lent = false;
+        u64 number = 0U;
     };
 
     [[nodiscard]] bool admits(u32 socket) const noexcept;
@@ -168,10 +184,13 @@ private:
     u32 m_sockets = 0U;
     u32 m_share = 0U;
     Entry* m_entries = nullptr; // per slot
-    u32* m_order = nullptr;     // the queued slots in order, then the free ones
+    u32* m_order = nullptr;     // the queued slots in order, the lent ones, then the free ones
     u8* m_bytes = nullptr;
     u32 m_queued = 0U;
+    u32 m_lent = 0U;
     u32 m_per_socket[kMaxSetSockets] = {};
+    u32 m_lent_per_socket[kMaxSetSockets] = {};
+    DatagramSocket* m_lenders[kMaxSetSockets] = {}; // each socket that lent a slot, which outlives the queue
 };
 
 struct IoLoopConfig

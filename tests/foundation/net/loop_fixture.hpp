@@ -26,7 +26,8 @@ public:
 // A socket of fixed queues (on the heap: a test's stack holds the socket): what a test puts in arrives, what the loop
 // sends is kept with its codepoint; `busy_after` stops sends with Busy after that many, `refuse_next` fails the next
 // send for good, `offers` is what features() reports. With offers.coalesced_receive a train delivered whole
-// (deliver_train) fills the next receive's first slot, as a coalescing host's does.
+// (deliver_train) fills the next receive's first slot, as a coalescing host's does. With offers.lent_send the host
+// reads every datagram numbered from `released` on (the test moves it), and a waiting sends_released() releases all.
 class VirtualSocket final : public DatagramSocket
 {
 public:
@@ -125,9 +126,29 @@ public:
             out.datagram.size = datagram.bytes.size();
             out.peer = datagram.peer;
             out.ecn = datagram.ecn;
+            out.from = datagram.bytes.data();
             ++result.count;
+            ++taken;
         }
         return result;
+    }
+
+    [[nodiscard]] BatchResult send_stable(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept override
+    {
+        ++stable_calls;
+        return send(datagrams);
+    }
+
+    [[nodiscard]] u64 sends_taken() const noexcept override { return taken; }
+
+    [[nodiscard]] u64 sends_released(bool wait) noexcept override
+    {
+        if (wait)
+        {
+            ++release_waits;
+            released = taken;
+        }
+        return offers.lent_send ? released : taken;
     }
 
     [[nodiscard]] bool wait_readable(u64) noexcept override
@@ -143,6 +164,7 @@ public:
         Datagram datagram;
         Endpoint peer;
         Ecn ecn = Ecn::NotEct;
+        const u8* from = nullptr; // where the sender's bytes lay
     };
 
     // A busy host's turn: no send on one turn, one send on the next; unbounded sends when it is not busy.
@@ -163,7 +185,11 @@ public:
     bool fail_receive = false;
     SocketFeatures offers;
     usize send_calls = 0U;
+    usize stable_calls = 0U;
     usize waits = 0U;
+    u64 taken = 0U;
+    u64 released = 0U;
+    usize release_waits = 0U;
 
 private:
     struct Inbound

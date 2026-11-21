@@ -17,13 +17,10 @@
 namespace crd::net
 {
 
-// The ring in the first bytes of its own pages; the buffer ring, the lent list, the buffers and the report buffers
-// follow in that order, each starting on a page or a cache line.
-struct UdpRing
+// An io_uring instance's descriptor and the queues it shares with the host.
+struct RingQueues
 {
-    vm::VmRegion region;
     int fd = -1;
-    int socket = -1;
     void* rings = nullptr; // the submission and completion rings, one mapping where the host shares them
     usize rings_bytes = 0U;
     void* completions_map = nullptr; // the completion ring where the host maps it apart
@@ -32,11 +29,20 @@ struct UdpRing
     usize sqes_bytes = 0U;
     u32* sq_tail = nullptr;
     u32* sq_array = nullptr;
+    u32* sq_flags = nullptr;
     u32 sq_mask = 0U;
     u32* cq_head = nullptr;
     u32* cq_tail = nullptr;
     u32 cq_mask = 0U;
     io_uring_cqe* cqes = nullptr;
+};
+
+// The ring in the first bytes of its own pages; the buffer ring, the lent list, the buffers and the report buffers
+// follow in that order, each starting on a page or a cache line.
+struct UdpRing : RingQueues
+{
+    vm::VmRegion region;
+    int socket = -1;
     io_uring_buf* buffer_ring = nullptr; // the host's ring of free buffers; its tail overlays entry 0's resv
     u16* lent = nullptr;                 // buffers completions handed out since the last recycle
     u32 lent_count = 0U;
@@ -84,8 +90,8 @@ constexpr u32 kSubmissionEntries = 4U;
 // The calling thread, as the host names the task a request's completions run as.
 [[nodiscard]] pid_t this_thread() noexcept
 {
-    thread_local const pid_t id = static_cast<pid_t>(::syscall(SYS_gettid));
-    return id;
+    thread_local const pid_t kThread = static_cast<pid_t>(::syscall(SYS_gettid));
+    return kThread;
 }
 
 [[nodiscard]] constexpr usize round_up(usize value, usize to) noexcept
@@ -117,7 +123,7 @@ void release(u32* at, u32 value) noexcept
 
 // The entry `queued` places past the submission ring's tail. The host consumes every entry each enter() submits, so
 // the ring holds no more than one call's.
-[[nodiscard]] io_uring_sqe& next_entry(UdpRing& ring, u32 queued) noexcept
+[[nodiscard]] io_uring_sqe& next_entry(RingQueues& ring, u32 queued) noexcept
 {
     const u32 index = (*ring.sq_tail + queued) & ring.sq_mask;
     io_uring_sqe& entry = ring.sqes[index];
@@ -127,7 +133,7 @@ void release(u32* at, u32 value) noexcept
 }
 
 // Submits the `count` entries next_entry() placed; false, taking them back, when the host took none of them now.
-[[nodiscard]] bool submit(UdpRing& ring, u32 count) noexcept
+[[nodiscard]] bool submit(RingQueues& ring, u32 count) noexcept
 {
     const u32 tail = *ring.sq_tail;
     release(ring.sq_tail, tail + count);
@@ -226,7 +232,8 @@ void publish_buffers(UdpRing& ring) noexcept
     std::atomic_ref<u16>(ring.buffer_ring[0].resv).store(ring.buffer_tail, std::memory_order_release);
 }
 
-void unmap(UdpRing& ring) noexcept
+// Unmaps the queues and closes the descriptor.
+void close_queues(RingQueues& ring) noexcept
 {
     if (ring.sqes != nullptr)
     {
@@ -240,6 +247,10 @@ void unmap(UdpRing& ring) noexcept
     {
         ::munmap(ring.rings, ring.rings_bytes);
     }
+    if (ring.fd >= 0)
+    {
+        ::close(ring.fd);
+    }
 }
 
 // Releases what ring_open() made, the host holding no buffer of it any more.
@@ -251,18 +262,14 @@ void destroy(UdpRing* ring) noexcept
         unregister.bgid = 0U;
         static_cast<void>(register_with(ring->fd, IORING_UNREGISTER_PBUF_RING, &unregister, 1U));
     }
-    unmap(*ring);
-    if (ring->fd >= 0)
-    {
-        ::close(ring->fd);
-    }
+    close_queues(*ring);
     vm::VmRegion region = ring->region;
     ring->~UdpRing();
     vm::release(region);
 }
 
 // Maps the rings of a set-up ring; false where the host refuses a mapping.
-[[nodiscard]] bool map_rings(UdpRing& ring, const io_uring_params& params) noexcept
+[[nodiscard]] bool map_rings(RingQueues& ring, const io_uring_params& params) noexcept
 {
     const usize submission_bytes = params.sq_off.array + (params.sq_entries * sizeof(u32));
     const usize completion_bytes = params.cq_off.cqes + (params.cq_entries * sizeof(io_uring_cqe));
@@ -293,6 +300,7 @@ void destroy(UdpRing* ring) noexcept
     u8* const submissions = static_cast<u8*>(ring.rings);
     ring.sq_tail = reinterpret_cast<u32*>(submissions + params.sq_off.tail);
     ring.sq_array = reinterpret_cast<u32*>(submissions + params.sq_off.array);
+    ring.sq_flags = reinterpret_cast<u32*>(submissions + params.sq_off.flags);
     ring.sq_mask = *reinterpret_cast<u32*>(submissions + params.sq_off.ring_mask);
     ring.cq_head = reinterpret_cast<u32*>(completions + params.cq_off.head);
     ring.cq_tail = reinterpret_cast<u32*>(completions + params.cq_off.tail);
@@ -540,6 +548,328 @@ cont::Span<u8> ring_reports(UdpRing& ring) noexcept
 {
     return cont::Span<u8>(ring.reports, usize{kRingReports} * kRingReportBytes);
 }
+
+#if CRD_NET_SEND_RING
+// ---- the zero-copy send ----
+
+namespace
+{
+constexpr u64 kPlainSendTag = 4U; // a message sent copied, its index in the call above the tag
+constexpr u64 kZeroCopyTag = 5U;  // a zero-copy message, its request's number above the tag
+static_assert((kSendRingRequests & (kSendRingRequests - 1U)) == 0U, "requests are numbered around a power of two");
+// Notifications in a row reporting copied pages (loopback, a veth pair, a device without scatter-gather) turn
+// zero-copy off for the socket, and every kZeroCopyProbe-th send that wants it then tries it again, so a socket whose
+// route moves to a device that sends in place finds out.
+constexpr u32 kCopiedStreak = 8U;
+constexpr u32 kZeroCopyProbe = 1024U;
+// The fragments one zero-copy message may take: its pages become fragments of the host's buffer, which holds
+// MAX_SKB_FRAGS of them (17 unless the kernel is built with more), and a message past that fails EMSGSIZE.
+constexpr usize kZeroCopyFragments = 17U;
+
+// A zero-copy message from its submission until its notification.
+struct SendRequest
+{
+    u64 first = 0U;      // the number of its first datagram
+    u32 message = 0U;    // its index in the send that submitted it
+    bool result = false; // its first completion arrived
+    bool taken = false;  // that completion said it was sent
+    bool more = false;   // a notification follows
+    bool notified = false;
+    bool copied = false; // the notification said the host copied the pages
+};
+} // namespace
+
+// The ring in the first bytes of its own pages.
+struct UdpSendRing : RingQueues
+{
+    vm::VmRegion region;
+    int socket = -1;
+    SendRequest requests[kSendRingRequests]; // numbered in submission order, `head` the oldest not yet done
+    u32 head = 0U;
+    u32 tail = 0U;
+    u32 streak = 0U; // notifications in a row that reported copied pages
+    u32 probe = 0U;  // wanted sends left until the next probe while zero-copy is off
+    bool zero_copy = true;
+};
+
+namespace
+{
+[[nodiscard]] bool request_done(const SendRequest& request) noexcept
+{
+    return request.result && (!request.more || request.notified);
+}
+
+// A request done: a sent message's notification moves the copy policy.
+void settle_request(UdpSendRing& ring, const SendRequest& request, OffloadCounters& counters) noexcept
+{
+    if (!request.taken || !request.more)
+    {
+        return; // a failed message sent nothing, so its notification reports nothing
+    }
+    if (request.copied)
+    {
+        ++counters.zero_copy_copied;
+        ring.streak = (ring.streak < kCopiedStreak) ? ring.streak + 1U : kCopiedStreak;
+        if (ring.streak == kCopiedStreak && ring.zero_copy)
+        {
+            ring.zero_copy = false;
+            ring.probe = kZeroCopyProbe;
+        }
+        return;
+    }
+    ++counters.zero_copy_sent;
+    ring.streak = 0U;
+    ring.zero_copy = true;
+}
+
+// Reads every completion waiting: a result of the send in flight into `results` (one per message, `seen` counting
+// them), a notification into its request; the requests done at the oldest end are given back.
+void reap(UdpSendRing& ring, int* results, u32& seen, OffloadCounters& counters) noexcept
+{
+    for (;;)
+    {
+        const u32 head = *ring.cq_head;
+        if (head == acquire(ring.cq_tail))
+        {
+            break;
+        }
+        const io_uring_cqe entry = ring.cqes[head & ring.cq_mask];
+        release(ring.cq_head, head + 1U);
+        const u64 tag = entry.user_data & kTagMask;
+        const u32 number = static_cast<u32>(entry.user_data >> 8U);
+        if (tag == kPlainSendTag)
+        {
+            results[number] = entry.res;
+            ++seen;
+            continue;
+        }
+        SendRequest& request = ring.requests[number & (kSendRingRequests - 1U)];
+        if ((entry.flags & IORING_CQE_F_NOTIF) != 0U)
+        {
+            request.notified = true;
+            request.copied = (static_cast<u32>(entry.res) & IORING_NOTIF_USAGE_ZC_COPIED) != 0U;
+        }
+        else
+        {
+            request.result = true;
+            request.taken = entry.res >= 0;
+            request.more = (entry.flags & IORING_CQE_F_MORE) != 0U;
+            results[request.message] = entry.res;
+            ++seen;
+        }
+        if (request_done(request))
+        {
+            settle_request(ring, request, counters);
+        }
+    }
+    while (ring.head != ring.tail && request_done(ring.requests[ring.head & (kSendRingRequests - 1U)]))
+    {
+        ++ring.head;
+    }
+}
+
+// The fragments a message's bytes become: a page each, where an iovec that goes on where the last ended, inside its
+// page, joins that page's fragment as the host joins it.
+[[nodiscard]] usize fragments_of(const msghdr& message) noexcept
+{
+    const usize page = vm::page_size();
+    usize fragments = 0U;
+    usize end = 0U;
+    for (usize index = 0U; index < message.msg_iovlen; ++index)
+    {
+        const iovec& vector = message.msg_iov[index];
+        const usize from = reinterpret_cast<usize>(vector.iov_base);
+        if (vector.iov_len == 0U)
+        {
+            continue;
+        }
+        fragments += ((from + vector.iov_len - 1U) / page) - (from / page) + 1U;
+        fragments -= (from == end && from % page != 0U) ? 1U : 0U;
+        end = from + vector.iov_len;
+    }
+    return fragments;
+}
+
+// Runs the task work that posts notifications where the host flagged some waiting (TASKRUN_FLAG), then reads them.
+void collect(UdpSendRing& ring, OffloadCounters& counters) noexcept
+{
+    if ((acquire(ring.sq_flags) & IORING_SQ_TASKRUN) != 0U)
+    {
+        static_cast<void>(enter(ring.fd, 0U, 0U, IORING_ENTER_GETEVENTS));
+    }
+    int results[kSendRingMessages];
+    u32 seen = 0U;
+    reap(ring, results, seen, counters);
+}
+
+void destroy(UdpSendRing* ring) noexcept
+{
+    close_queues(*ring);
+    vm::VmRegion region = ring->region;
+    ring->~UdpSendRing();
+    vm::release(region);
+}
+} // namespace
+
+UdpSendRing* send_ring_open(int socket) noexcept
+{
+    vm::VmRegion region = vm::reserve(round_up(sizeof(UdpSendRing), vm::page_size()));
+    if (!region.valid())
+    {
+        return nullptr;
+    }
+    if (!vm::commit(region.base, region.size))
+    {
+        vm::release(region);
+        return nullptr;
+    }
+    UdpSendRing* const ring = new (region.base) UdpSendRing{};
+    ring->region = region;
+    ring->socket = socket;
+    // Room for a send's results and every request's two completions, so the host never holds one back. Task work
+    // (what posts a notification) runs at the next kernel transition and is flagged meanwhile, never an interrupt.
+    io_uring_params params{};
+    params.flags = IORING_SETUP_CQSIZE | IORING_SETUP_CLAMP | IORING_SETUP_SUBMIT_ALL | IORING_SETUP_COOP_TASKRUN |
+                   IORING_SETUP_TASKRUN_FLAG;
+    params.cq_entries = 2U * (kSendRingRequests + kSendRingMessages);
+    ring->fd = setup(kSendRingMessages, params);
+    // IORING_FEAT_REG_REG_RING marks Linux 6.3, which has every flag the send asks for (copy reports from 6.2).
+    if (ring->fd < 0 || (params.features & IORING_FEAT_REG_REG_RING) == 0U || !map_rings(*ring, params))
+    {
+        destroy(ring);
+        return nullptr;
+    }
+    return ring;
+}
+
+void send_ring_close(UdpSendRing* ring) noexcept
+{
+    if (ring == nullptr)
+    {
+        return;
+    }
+    OffloadCounters ignored;
+    static_cast<void>(send_ring_released(*ring, 0U, true, ignored));
+    destroy(ring);
+}
+
+bool send_ring_wanted(UdpSendRing& ring) noexcept
+{
+    if (ring.zero_copy)
+    {
+        return true;
+    }
+    if (--ring.probe != 0U)
+    {
+        return false;
+    }
+    ring.probe = kZeroCopyProbe;
+    return true;
+}
+
+bool send_ring_fits(const msghdr& message) noexcept
+{
+    return fragments_of(message) <= kZeroCopyFragments;
+}
+
+int send_ring_send(UdpSendRing& ring, mmsghdr* messages, u32 count, u32 zero_copy, const u64* first,
+                   bool& first_zero_copy, OffloadCounters& counters) noexcept
+{
+    first_zero_copy = false;
+    count = (count < kSendRingMessages) ? count : kSendRingMessages;
+    collect(ring, counters);      // requests the host has given back since
+    u32 tails[kSendRingMessages]; // the request tail before each message, to give back what the host did not take
+    for (u32 index = 0U; index < count; ++index)
+    {
+        io_uring_sqe& entry = next_entry(ring, index);
+        tails[index] = ring.tail;
+        const bool lend = ((zero_copy >> index) & 1U) != 0U && ring.tail - ring.head < kSendRingRequests;
+        if (lend)
+        {
+            ring.requests[ring.tail & (kSendRingRequests - 1U)] = SendRequest{first[index], index};
+            entry.opcode = IORING_OP_SENDMSG_ZC;
+            entry.ioprio = IORING_SEND_ZC_REPORT_USAGE;
+            entry.user_data = (u64{ring.tail++} << 8U) | kZeroCopyTag;
+        }
+        else
+        {
+            entry.opcode = IORING_OP_SENDMSG;
+            entry.user_data = (u64{index} << 8U) | kPlainSendTag;
+        }
+        first_zero_copy = first_zero_copy || (index == 0U && lend);
+        entry.fd = ring.socket;
+        entry.addr = reinterpret_cast<u64>(&messages[index].msg_hdr);
+        entry.len = 1U;
+        // MSG_DONTWAIT has the host fail a send it cannot take now (EAGAIN) rather than wait for room.
+        entry.msg_flags = MSG_DONTWAIT | MSG_NOSIGNAL;
+        entry.flags = (index + 1U < count) ? IOSQE_IO_LINK : 0U;
+    }
+    const u32 tail = *ring.sq_tail;
+    release(ring.sq_tail, tail + count);
+    int submitted = -1;
+    do
+    {
+        submitted = enter(ring.fd, count, 0U, 0U);
+    } while (submitted < 0 && errno == EINTR);
+    const u32 taken = (submitted > 0) ? static_cast<u32>(submitted) : 0U;
+    if (taken < count)
+    {
+        // What the host did not read is taken back before it can: the next enter() would read stale messages.
+        release(ring.sq_tail, tail + taken);
+        ring.tail = tails[taken];
+    }
+    if (taken == 0U)
+    {
+        errno = EAGAIN;
+        return -1;
+    }
+    int results[kSendRingMessages];
+    u32 seen = 0U;
+    for (;;)
+    {
+        reap(ring, results, seen, counters);
+        if (seen >= taken)
+        {
+            break;
+        }
+        // Each result comes within the call (MSG_DONTWAIT): the chain's later messages run as task work.
+        static_cast<void>(enter(ring.fd, 0U, 1U, IORING_ENTER_GETEVENTS));
+    }
+    for (u32 index = 0U; index < taken; ++index)
+    {
+        if (results[index] < 0)
+        {
+            if (index == 0U)
+            {
+                errno = -results[0];
+                return -1;
+            }
+            return static_cast<int>(index);
+        }
+    }
+    return static_cast<int>(taken);
+}
+
+u64 send_ring_released(UdpSendRing& ring, u64 taken, bool wait, OffloadCounters& counters) noexcept
+{
+    collect(ring, counters);
+    while (wait && ring.head != ring.tail)
+    {
+        static_cast<void>(enter(ring.fd, 0U, 1U, IORING_ENTER_GETEVENTS));
+        collect(ring, counters);
+    }
+    // Sent messages are numbered in submission order, so the oldest one still lent holds the lowest number.
+    for (u32 at = ring.head; at != ring.tail; ++at)
+    {
+        const SendRequest& request = ring.requests[at & (kSendRingRequests - 1U)];
+        if (request.taken && !request_done(request))
+        {
+            return request.first;
+        }
+    }
+    return taken;
+}
+#endif
 
 } // namespace crd::net
 #endif
