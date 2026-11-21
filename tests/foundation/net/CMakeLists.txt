@@ -47,6 +47,7 @@ add_executable(crd-net-tests
     test_quic_keyed.cpp
     test_quic_packet.cpp
     test_quic_path.cpp
+    test_quic_path_control.cpp
     test_quic_pmtu.cpp
     test_quic_recovery.cpp
     test_quic_server.cpp

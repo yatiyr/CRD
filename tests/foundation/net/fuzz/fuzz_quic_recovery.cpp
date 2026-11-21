@@ -31,8 +31,13 @@
 // estimate, thresholds, probe count and bytes in flight, and an operation on one leaves every other slot's exactly as
 // it was; a slot not open refuses every operation (NoPath) and reads empty; closing a slot declares each of its
 // outstanding packets lost, outside every estimate, and the slot then starts from nothing when it opens again; slot 0
-// closes only after the handshake's spaces, and its ACK frames then report no receive timestamps.
+// closes only after the handshake's spaces, and its ACK frames then report no receive timestamps. Each open slot
+// drives its own QuicPathControl (quic_path_control.hpp) as a connection does: packets stamped and counted on their
+// slot's, the events of packets on their path, each ACK frame's end and each timeout's detection reach that slot's
+// alone, so the isolation above holds for every slot's window, delivery, losses, ECN state, path MTU and pacer too;
+// the window stays above its floor and the datagram size is the search's after every operation.
 #include <crd/fuzz/harness.hpp>
+#include <crd/net/quic_path_control.hpp>
 #include <crd/net/quic_recovery.hpp>
 
 #include <new>
@@ -124,16 +129,46 @@ struct Log final : QuicRecoveryEvents
         bool      on_path; // the packet was on its path's estimate when the event came
     };
     const QuicRecovery* recovery = nullptr;
+    QuicPathControl* controls = nullptr; // each slot's, which the events of its packets on their path reach
+    const u64* now = nullptr;
     Event events[kModelPackets * 3U];
     usize count = 0U;
 
-    void on_acked(QuicSpace space, const QuicSentPacket& packet) noexcept override { add('a', space, packet); }
-    void on_lost(QuicSpace space, const QuicSentPacket& packet) noexcept override { add('l', space, packet); }
-    void on_discarded(QuicSpace space, const QuicSentPacket& packet) noexcept override { add('d', space, packet); }
-    void add(char kind, QuicSpace space, const QuicSentPacket& packet) noexcept
+    void on_acked(QuicSpace space, const QuicSentPacket& packet) noexcept override
+    {
+        if (add('a', space, packet))
+        {
+            controls[packet.path].on_acked(space, packet, kNeverNs, *now);
+        }
+    }
+    void on_lost(QuicSpace space, const QuicSentPacket& packet) noexcept override
+    {
+        if (add('l', space, packet))
+        {
+            static_cast<void>(controls[packet.path].on_lost(space, packet, *now));
+        }
+    }
+    void on_discarded(QuicSpace space, const QuicSentPacket& packet) noexcept override
+    {
+        if (add('d', space, packet))
+        {
+            controls[packet.path].on_discarded(packet);
+        }
+    }
+    void on_spurious(QuicSpace space, const QuicSentPacket& packet, u64 lost_ns) noexcept override
+    {
+        if (recovery->on_path(space, packet))
+        {
+            controls[packet.path].on_spurious(space, packet, lost_ns, *now);
+        }
+    }
+    // Whether the packet was on its path's estimate.
+    bool add(char kind, QuicSpace space, const QuicSentPacket& packet) noexcept
     {
         CRD_FUZZ_REQUIRE(count < kModelPackets * 3U);
-        events[count++] = Event{kind, space, packet.path, packet.number, recovery->on_path(space, packet)};
+        const bool on_path = recovery->on_path(space, packet);
+        events[count++] = Event{kind, space, packet.path, packet.number, on_path};
+        return on_path;
     }
 };
 
@@ -143,6 +178,7 @@ struct World
     QuicSentEntry handshake[8];
     QuicSentEntry application[kQuicMaxPaths][32];
     QuicPathRecovery states[kQuicMaxPaths]; // each slot's, slot 0's once it reopens
+    QuicPathControl controls[kQuicMaxPaths]; // each open slot's, started when it opens
     QuicRecovery  recovery;
     ModelSpace    spaces[kModelSpaces];
     bool          open[kQuicMaxPaths] = {true};
@@ -167,6 +203,9 @@ struct World
           side(s)
     {
         log.recovery = &recovery;
+        log.controls = controls;
+        log.now = &now;
+        CRD_FUZZ_REQUIRE(controls[0].start(QuicPathControlConfig{}, QuicPath{}, 1U));
         for (usize& via : last_via)
         {
             via = kQuicNoPath;
@@ -190,13 +229,23 @@ struct PathState
     u64 largest_acked;
     u32 steps;
     u32 pto;
+    // Its control's.
+    u64 window;
+    u64 delivered;
+    u64 lost;
+    u64 pace_timer_ns;
+    u32 datagram_bytes;
+    QuicEcnState ecn;
 };
 
-void snapshot(const QuicRecovery& recovery, PathState (&out)[kQuicMaxPaths])
+void snapshot(const QuicRecovery& recovery, const QuicPathControl (&controls)[kQuicMaxPaths],
+              PathState (&out)[kQuicMaxPaths])
 {
     for (usize path = 0U; path < kQuicMaxPaths; ++path)
     {
         const QuicRtt& rtt = recovery.rtt(path);
+        const QuicPathControl& control = controls[path];
+        const bool started = control.started();
         out[path] = PathState{rtt.latest_ns,
                               rtt.min_ns,
                               rtt.smoothed_ns,
@@ -205,7 +254,13 @@ void snapshot(const QuicRecovery& recovery, PathState (&out)[kQuicMaxPaths])
                               recovery.packet_threshold(path),
                               recovery.largest_acked(QuicSpace::Application, path),
                               recovery.reorder_steps(path),
-                              recovery.pto_count(path)};
+                              recovery.pto_count(path),
+                              started ? control.congestion().window() : 0U,
+                              control.delivery().delivered(),
+                              control.delivery().lost(),
+                              control.pace_timer_ns(),
+                              control.datagram_bytes(),
+                              control.ecn().state()};
     }
 }
 
@@ -213,7 +268,9 @@ void snapshot(const QuicRecovery& recovery, PathState (&out)[kQuicMaxPaths])
 {
     return a.latest_ns == b.latest_ns && a.min_ns == b.min_ns && a.smoothed_ns == b.smoothed_ns &&
            a.variance_ns == b.variance_ns && a.bytes == b.bytes && a.threshold == b.threshold &&
-           a.largest_acked == b.largest_acked && a.steps == b.steps && a.pto == b.pto;
+           a.largest_acked == b.largest_acked && a.steps == b.steps && a.pto == b.pto && a.window == b.window &&
+           a.delivered == b.delivered && a.lost == b.lost && a.pace_timer_ns == b.pace_timer_ns &&
+           a.datagram_bytes == b.datagram_bytes && a.ecn == b.ecn;
 }
 
 u64 model_in_flight(World& w, usize path)
@@ -309,6 +366,10 @@ void check_state(World& w)
     for (usize path = 0U; path < kQuicMaxPaths; ++path)
     {
         CRD_FUZZ_REQUIRE(w.recovery.path_open(path) == w.open[path]);
+        const QuicPathControl& control = w.controls[path];
+        CRD_FUZZ_REQUIRE(!w.open[path] || control.started());
+        CRD_FUZZ_REQUIRE(!control.started() || (control.congestion().window() >= 2U * kQuicPmtuFloor &&
+                                                control.datagram_bytes() == control.path_mtu().size()));
         CRD_FUZZ_REQUIRE(w.recovery.bytes_in_flight(path) == model_in_flight(w, path));
         CRD_FUZZ_REQUIRE(w.recovery.pto_count(path) <= 64U);
         const QuicRtt& rtt = w.recovery.rtt(path);
@@ -358,6 +419,12 @@ void op_send(World& w, QuicSpace id, usize path, u8 p)
     packet.ecn           = ecn_of(packet.number);
     packet.path          = static_cast<u8>(path);
     const bool              room  = w.recovery.can_send(id, path);
+    QuicPathControl& control = w.controls[path];
+    const bool in_flight = packet.in_flight || packet.ack_eliciting; // as recovery records it
+    if (room && in_flight)
+    {
+        packet.delivery = control.stamp(packet.bytes, w.recovery.bytes_in_flight(path) + packet.bytes, w.now);
+    }
     const QuicRecoveryError error = w.recovery.on_sent(id, packet);
     if (!w.usable(id, path))
     {
@@ -372,6 +439,7 @@ void op_send(World& w, QuicSpace id, usize path, u8 p)
     CRD_FUZZ_REQUIRE(error == (room ? QuicRecoveryError::None : QuicRecoveryError::Full));
     if (error == QuicRecoveryError::None)
     {
+        control.on_sent(id, packet, in_flight, w.recovery.bytes_in_flight(path), w.recovery.rtt(path), w.now);
         space.sent[space.count++] =
             Sent{packet.number, w.now, 0U, packet.bytes, packet.ack_eliciting,
                  packet.in_flight || packet.ack_eliciting, kOut};
@@ -507,7 +575,14 @@ void op_ack(World& w, QuicSpace id, usize path, usize via, u8 p, const u8* more,
     const u32            steps_before = w.recovery.reorder_steps(owner);
     const u64            before_bytes = w.recovery.bytes_in_flight(owner);
     const usize          from = w.log.count;
+    QuicPathControl& control = w.controls[owner];
+    control.on_ack_begin();
     const QuicAckOutcome out = w.recovery.on_ack(id, frame.ack, w.now, w.log, path, via);
+    if (out.error == QuicRecoveryError::None)
+    {
+        static_cast<void>(
+            control.on_ack_end(id, frame.ack, out, w.recovery.rtt(owner), w.recovery.bytes_in_flight(owner), w.now));
+    }
     if (!w.usable(id, path) || (!space.discarded && !w.open[via]))
     {
         CRD_FUZZ_REQUIRE(out.error == QuicRecoveryError::NoPath && w.log.count == from);
@@ -693,6 +768,7 @@ usize op_timeout(World& w)
     }
     CRD_FUZZ_REQUIRE(out.kind != QuicTimeoutKind::None);
     CRD_FUZZ_REQUIRE(out.path < kQuicMaxPaths && w.usable(out.space, out.path));
+    w.controls[out.path].end_detection(out.lost, w.now);
     const usize owner = owner_of(out.space, out.path);
     if (out.kind == QuicTimeoutKind::Loss)
     {
@@ -736,6 +812,7 @@ void op_toggle(World& w, usize path)
     if (!w.open[path])
     {
         CRD_FUZZ_REQUIRE(w.recovery.open_path(path, w.states[path], Span<QuicSentEntry>(w.application[path], 32U)));
+        CRD_FUZZ_REQUIRE(w.controls[path].start(QuicPathControlConfig{}, QuicPath{}, path + 1U));
         w.spaces[2U + path] = ModelSpace{};
         w.open[path] = true;
         w.last_via[path] = kQuicNoPath;
@@ -850,7 +927,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         const usize path = (id == QuicSpace::Application) ? (op >> 5U) & 3U : 0U;
         const usize via = (id == QuicSpace::Application && (op & 0x80U) != 0U) ? (path + 1U) % kQuicMaxPaths : path;
         PathState before[kQuicMaxPaths];
-        snapshot(w.recovery, before);
+        snapshot(w.recovery, w.controls, before);
         usize touched = owner_of(id, path); // the slot this operation may change
         switch (op & 7U)
         {
@@ -878,7 +955,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
             break;
         }
         PathState after[kQuicMaxPaths];
-        snapshot(w.recovery, after);
+        snapshot(w.recovery, w.controls, after);
         for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
         {
             CRD_FUZZ_REQUIRE(slot == touched || same(before[slot], after[slot]));
