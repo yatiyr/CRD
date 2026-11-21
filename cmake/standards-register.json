@@ -1698,10 +1698,13 @@
         "tests/foundation/crypto/test_quic.cpp",
         "tests/foundation/net/test_quic_frame.cpp",
         "tests/foundation/net/test_quic_transport_parameters.cpp",
-        "tests/foundation/net/fuzz/fuzz_quic_codec.cpp"
+        "tests/foundation/net/fuzz/fuzz_quic_codec.cpp",
+        "engine/foundation/net/src/quic_connection.cpp",
+        "tests/foundation/net/test_quic_connection.cpp",
+        "tests/foundation/net/fuzz/fuzz_quic_connection.cpp"
       ],
       "deprecation": null,
-      "note": "Design S78 (docs/design/network-foundation.md#multipath). draft-ietf-quic-multipath-21 was published as RFC 10069 on 2026-11-07 with the draft's suggested codepoints, each checked against the IANA QUIC registry on 2026-11-21, when the RFC was read in full. The wire layer is in (the frames, the parameter, the error codes and the path ID in the AEAD nonce); a connection offers no initial_max_path_id until per-path recovery, the path lifecycle and interop with picoquic land, and until then refuses every multipath frame as an unnegotiated extension's."
+      "note": "Design S78 (docs/design/network-foundation.md#multipath). draft-ietf-quic-multipath-21 was published as RFC 10069 on 2026-11-07 with the draft's suggested codepoints, each checked against the IANA QUIC registry on 2026-11-21, when the RFC was read in full. The wire layer is in (the frames, the parameter, the error codes and the path ID in the AEAD nonce), with per-path protection, recovery, control and connection IDs. A connection offers initial_max_path_id 0 behind its parameters' has_initial_max_path_id (absent by default), negotiates it and reads every multipath frame under that limit (2026-11-22); without negotiation each is an unnegotiated extension's. Opening further paths and interop with picoquic remain."
     },
     {
       "id": "quic.address-discovery",

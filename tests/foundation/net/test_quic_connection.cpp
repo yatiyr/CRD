@@ -1433,9 +1433,9 @@ public:
         accept.original_dcid = accept.client_dcid;
         REQUIRE(server.accept(accept, now));
         send_crypto(QuicLevel::Initial);
-        if (server.state() == QuicConnectionState::Closing)
+        if (empty_scid && server.state() == QuicConnectionState::Closing)
         {
-            return; // refused at the client's Initial: its parameters
+            return; // a zero-length ID refused with the client's parameters (RFC 10069 section 2.1)
         }
         REQUIRE(raw.protection.can_open(QuicPacketType::Handshake));
         before_finished();
@@ -3445,13 +3445,17 @@ TEST_CASE("QUIC connection: with multipath, path ID 0's connection IDs go in the
           "[net][net-path][quic-connection][multipath]")
 {
     Identity identity;
-    for (const bool multipath : {false, true})
+    // Each offer combination: negotiated only when both ends offered (RFC 10069 section 2).
+    for (usize offers = 0U; offers < 4U; ++offers)
     {
-        INFO("multipath " << multipath);
+        const bool client_offers = (offers & 1U) != 0U;
+        const bool server_offers = (offers & 2U) != 0U;
+        const bool multipath = client_offers && server_offers;
+        INFO("client offers " << client_offers << ", server offers " << server_offers);
         CountingAllocator allocator;
         Host host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
-        RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, multipath);
-        run.multipath = true;
+        RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, server_offers);
+        run.multipath = client_offers;
         run.handshake();
         run.drain();
         CHECK(run.server.multipath() == multipath);
@@ -3459,17 +3463,23 @@ TEST_CASE("QUIC connection: with multipath, path ID 0's connection IDs go in the
         REQUIRE(run.raw.issued_bytes[1] == sizeof(kServerCid));
         CHECK(run.raw.plain_id_frames == (multipath ? 0U : 1U));
         CHECK(run.raw.path_id_frames == (multipath ? 1U : 0U));
+        if (!multipath)
+        {
+            // One end's offer alone: a multipath frame is of no known type (RFC 9000 section 12.4).
+            send_frame(run, path_frame(QuicFrameKind::PathRetireConnectionId, 0U, 1U));
+            REQUIRE(run.server.state() == QuicConnectionState::Closing);
+            CHECK(run.server.close_info().error_code == code(QuicTransportError::FrameEncodingError));
+            continue;
+        }
         // Path ID 0's IDs retire by either form; each replacement goes in the negotiated one.
-        const QuicFrameKind path_form =
-            multipath ? QuicFrameKind::PathRetireConnectionId : QuicFrameKind::RetireConnectionId;
-        send_frame(run, path_frame(path_form, 0U, 1U));
+        send_frame(run, path_frame(QuicFrameKind::PathRetireConnectionId, 0U, 1U));
         CHECK(host.retired == 1U);
         REQUIRE(run.raw.issued_bytes[2] == sizeof(kServerCid));
         send_frame(run, path_frame(QuicFrameKind::RetireConnectionId, 0U, 2U));
         CHECK(host.retired == 2U);
         REQUIRE(run.raw.issued_bytes[3] == sizeof(kServerCid));
-        CHECK(run.raw.plain_id_frames == (multipath ? 0U : 3U));
-        CHECK(run.raw.path_id_frames == (multipath ? 3U : 0U));
+        CHECK(run.raw.plain_id_frames == 0U);
+        CHECK(run.raw.path_id_frames == 3U);
         CHECK(run.server.state() == QuicConnectionState::Established);
     }
 }
@@ -3506,8 +3516,8 @@ TEST_CASE("QUIC connection: two ends offering multipath negotiate it, keep their
         CHECK(client.peer_cid_count() == 4U);
         const u64 received = server.counters().datagrams_received;
         client.ping();
-        REQUIRE(net->run_until(
-            [&] { return net->in_flight() == 0U && server.counters().datagrams_received > received; }));
+        REQUIRE(
+            net->run_until([&] { return net->in_flight() == 0U && server.counters().datagrams_received > received; }));
         CHECK(client.state() == QuicConnectionState::Established);
         CHECK(server.state() == QuicConnectionState::Established);
     }

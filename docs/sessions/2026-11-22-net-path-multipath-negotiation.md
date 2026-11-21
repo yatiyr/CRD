@@ -29,7 +29,7 @@ artifacts replay clean on a linux-clang-fuzz build of HEAD. Nothing else of this
 
 - `[multipath]`: 29 cases on linux-gcc-debug. New in `test_quic_connection.cpp`:
   - every accepted frame and 12 refusals;
-  - both ID forms, with and without negotiation;
+  - both ID forms in every offer combination, and FRAME_ENCODING_ERROR when one end alone offers;
   - zero-length IDs, with and without the server's offer;
   - a pair that negotiates (or not), tops up and rotates;
   - the config refusal and the `connect()` refusal.
@@ -38,6 +38,7 @@ artifacts replay clean on a linux-clang-fuzz build of HEAD. Nothing else of this
 - The connection fuzzer's NET-STD bit now offers multipath from both ends and from the raw client. New oracles:
   negotiated exactly when offered, and the peer's limit never below its initial value. New seed: `frames-multipath`
   (seed-73efb2a38134ec77).
+- Register: `quic.multipath` stays planned; its note and evidence name the negotiation.
 - libFuzzer, linux-clang-fuzz, 2 jobs for 300 s: 68 k runs, no artifact, corpus 41 to 2199.
 
 ## Next
