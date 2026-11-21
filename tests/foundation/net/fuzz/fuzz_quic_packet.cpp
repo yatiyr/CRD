@@ -2,16 +2,18 @@
 // docs/design/network-foundation.md#quic-packets) under the bounded fuzz harness (REPO.DEV.9;
 // docs/design/test-instruments.md).
 //
-// Input: byte 0 picks the mode (bit 0: a round trip, else a received datagram), the version (bit 1) and whether a
-// cleared QUIC bit is accepted (bit 2); bytes 1 to 8 are entropy; the rest is a datagram, or a round trip's frames.
-// Both ends hold every level's keys from fixed secrets, so seeds carry packets that open.
+// Input: byte 0 picks the mode (bit 0: a round trip, else a received datagram), the version (bit 1), whether a
+// cleared QUIC bit is accepted (bit 2) and whether a round trip's 1-RTT packet rides a multipath path (bit 3, its path
+// ID from bits 4 to 7, its slot from entropy bits 30 and 31); bytes 1 to 8 are entropy; the rest is a datagram, or a
+// round trip's frames. Both ends hold every level's keys from fixed secrets, so seeds carry packets that open.
 //
 // Oracles. Received: the walk yields packets inside the datagram, in order, without overlap; an opened packet's
 // payload lies inside it and is not empty, its number is the largest its space opened or below, and the same bytes
 // again are a duplicate; a refusal is one of the errors open() names, never a crash. Round trip: the writer refuses
 // exactly what its contract refuses (restated); an accepted packet reaches its floor and its block (when they fit),
 // carries the shortest Length a long header can, walks as one packet and opens at the peer to its frames followed by
-// PADDING, under the key phase the sender sealed it in.
+// PADDING, under the key phase the sender sealed it in; a multipath packet opens only in its own path's slot (in
+// slot 0 it is forged) and is that slot's largest, slot 0 opening none.
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_packet.hpp>
 
@@ -163,6 +165,14 @@ bool check_round_trip(ConstSpan<u8> frames, u8 control, u64 entropy)
     {
         finish_client(ends);
     }
+    // A multipath path: slot 1 to 3 at both ends under a path ID from 1 to 15, or the largest.
+    usize path = 0U;
+    if (spec.type == QuicPacketType::OneRtt && (control & 8U) != 0U)
+    {
+        path = 1U + static_cast<usize>((entropy >> 30U) & 3U) % (kQuicMaxPaths - 1U);
+        const u32 id = ((control >> 4U) == 15U) ? static_cast<u32>(kQuicMaxPathId) : u32{1} + (control >> 4U);
+        CRD_FUZZ_REQUIRE(ends.client.open_path(path, id) && ends.server.open_path(path, id));
+    }
     const bool update = spec.type == QuicPacketType::OneRtt && ((entropy >> 29U) & 1U) != 0U;
     if (update)
     {
@@ -177,8 +187,8 @@ bool check_round_trip(ConstSpan<u8> frames, u8 control, u64 entropy)
         CRD_FUZZ_REQUIRE(writer.begin(ping, Span<u8>(first, kRoom)));
         put_ping(writer);
         usize written = 0U;
-        CRD_FUZZ_REQUIRE(ends.client.seal(writer, 1U, {}, written) == QuicPacketError::None);
-        ends.client.acknowledged(ping.number);
+        CRD_FUZZ_REQUIRE(ends.client.seal(writer, 1U, {}, written, path) == QuicPacketError::None);
+        ends.client.acknowledged(ping.number, path);
         CRD_FUZZ_REQUIRE(ends.client.update_keys());
         spec.number = ping.number + 1U;
     }
@@ -203,7 +213,7 @@ bool check_round_trip(ConstSpan<u8> frames, u8 control, u64 entropy)
     const usize used = (frames.size() < writer.frames().size()) ? frames.size() : writer.frames().size();
     std::memcpy(writer.frames().data(), frames.data(), used);
     usize size = 0U;
-    const QuicPacketError error = ends.client.seal(writer, used, padding, size);
+    const QuicPacketError error = ends.client.seal(writer, used, padding, size, path);
     if (padding.min_bytes > room)
     {
         CRD_FUZZ_REQUIRE(error == QuicPacketError::Refused);
@@ -224,7 +234,13 @@ bool check_round_trip(ConstSpan<u8> frames, u8 control, u64 entropy)
                          read.number_offset - header == quic_varint_bytes(declared + 1U)); // a padded boundary
     }
     QuicOpened out;
-    const QuicPacketError opened_error = ends.server.open(read, packet, out);
+    if (path != 0U)
+    {
+        static u8 copy[kRoom];
+        std::memcpy(copy, packet.data(), packet.size());
+        CRD_FUZZ_REQUIRE(ends.server.open(read, Span<u8>(copy, packet.size()), out, 0U) == QuicPacketError::Forged);
+    }
+    const QuicPacketError opened_error = ends.server.open(read, packet, out, path);
     if (used == 0U && number == 4U && size == read.number_offset + 4U + kQuicTagBytes)
     {
         CRD_FUZZ_REQUIRE(opened_error == QuicPacketError::Empty);
@@ -238,6 +254,12 @@ bool check_round_trip(ConstSpan<u8> frames, u8 control, u64 entropy)
         CRD_FUZZ_REQUIRE(out.payload[i] == 0U);
     }
     CRD_FUZZ_REQUIRE(out.spin == (spec.spin && spec.type == QuicPacketType::OneRtt));
+    if (path != 0U)
+    {
+        u64 largest = 0U;
+        CRD_FUZZ_REQUIRE(ends.server.largest_opened(QuicSpace::Application, largest, path) && largest == out.number);
+        CRD_FUZZ_REQUIRE(!ends.server.largest_opened(QuicSpace::Application, largest, 0U));
+    }
     return true;
 }
 
@@ -294,8 +316,9 @@ usize append(Ends& ends, QuicPacketSpec spec, u8* out, usize at, usize min_bytes
 void crd_fuzz_seeds(crd::fuzz::SeedSink& next)
 {
     static const char* const kAccepted[] = {
-        "received-coalesced-v1",      "received-coalesced-v2",     "received-cleared-bit", "round-trip-initial",
-        "round-trip-handshake-block", "round-trip-one-rtt-update", "round-trip-zero-rtt"};
+        "received-coalesced-v1", "received-coalesced-v2",      "received-cleared-bit",
+        "round-trip-initial",    "round-trip-handshake-block", "round-trip-one-rtt-update",
+        "round-trip-zero-rtt",   "round-trip-path-update",     "round-trip-path-largest-id"};
     crd::fuzz::VerdictSink sink(next, run, kAccepted, sizeof(kAccepted) / sizeof(kAccepted[0]));
     static u8 body[kRoom * 3U];
     for (const u8 version : {u8{0}, u8{2}})
@@ -332,4 +355,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& next)
     add_seed(sink, "round-trip-handshake-block", 0x03U, 0x80BD8B389E276576ULL, ConstSpan<u8>(frames, 6U));
     add_seed(sink, "round-trip-one-rtt-update", 0x01U, 0xF04C9A92BDBDD3DBULL, ConstSpan<u8>(frames, 6U));
     add_seed(sink, "round-trip-zero-rtt", 0x01U, 0x50781FCA41B810C1ULL, ConstSpan<u8>(frames, 0U));
+    // 1-RTT on path ID 7 in slot 3 across a key update, and on the largest path ID in slot 1.
+    add_seed(sink, "round-trip-path-update", 0x69U, 0x00000000A0001203ULL, ConstSpan<u8>(frames, 6U));
+    add_seed(sink, "round-trip-path-largest-id", 0xF9U, 0x0000000000002A03ULL, ConstSpan<u8>(frames, 2U));
 }

@@ -8,8 +8,9 @@
 //               packet out of order or after a gap and a CE-marked packet, after two ack-eliciting packets, otherwise
 //               within max_ack_delay. It writes the ACK frame (the smallest ranges left out when the room is short,
 //               the delay measured from the largest's arrival) and forgets what an acknowledged ACK covered (13.2.4).
-//               Dropping ranges is legal because QuicPacketProtection's window refuses a number already opened and
-//               every number below its span, so a forgotten packet is never accepted twice (13.2.3).
+//               Dropping ranges is legal because QuicPacketProtection's window of the space (each path's own, with
+//               multipath) refuses a number already opened and every number below its span, so a forgotten packet
+//               is never accepted twice (13.2.3).
 //   sending     each space's sent packets sit in number order in the caller's QuicSentEntry storage, which bounds
 //               the packets a connection holds in flight: a full space refuses the next packet (can_send), and data
 //               stops short of the last entries, which ACK-only packets and probes keep for themselves. An

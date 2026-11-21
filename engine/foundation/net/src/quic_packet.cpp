@@ -178,7 +178,8 @@ cont::Span<u8> QuicPacketWriter::frames() const noexcept
 }
 
 crypto::CryptoError QuicPacketWriter::seal(crypto::QuicPacketKey& packet, const crypto::QuicHeaderKey& header,
-                                           bool key_phase, usize used, QuicPadding padding, usize& written) noexcept
+                                           bool key_phase, usize used, QuicPadding padding, usize& written,
+                                           u32 path) noexcept
 {
     if (!m_open)
     {
@@ -248,7 +249,7 @@ crypto::CryptoError QuicPacketWriter::seal(crypto::QuicPacketKey& packet, const 
     }
 
     const cont::Span<u8> sealed = m_room.first(total);
-    crypto::CryptoError error = packet.seal(m_number, sealed, header_end);
+    crypto::CryptoError error = packet.seal(m_number, sealed, header_end, path);
     if (error == crypto::CryptoError::None)
     {
         error = header.protect(sealed, number_at);
@@ -343,6 +344,11 @@ void QuicPacketProtection::clear_all() noexcept
     {
         window = crypto::QuicPacketWindow{};
     }
+    for (PathSpace& space : m_paths)
+    {
+        space = PathSpace{};
+    }
+    m_paths[0].open = true;
     m_recv_current = 0U;
     m_phases = Phases{};
     m_forged = 0U;
@@ -685,14 +691,15 @@ void QuicPacketProtection::confirm() noexcept
     discard(crypto::QuicLevel::Handshake);
 }
 
-QuicPacketError QuicPacketProtection::seal(QuicPacketWriter& writer, usize used, QuicPadding padding,
-                                           usize& written) noexcept
+QuicPacketError QuicPacketProtection::seal(QuicPacketWriter& writer, usize used, QuicPadding padding, usize& written,
+                                           usize path) noexcept
 {
     const QuicPacketType type = writer.type();
-    if (!can_send(type))
+    if (!can_send(type) || (type == QuicPacketType::OneRtt && !path_open(path)))
     {
         return QuicPacketError::NoKeys;
     }
+    const bool one_rtt = type == QuicPacketType::OneRtt;
     crypto::QuicPacketKey* packet = nullptr;
     const crypto::QuicHeaderKey* header = nullptr;
     switch (type)
@@ -718,7 +725,8 @@ QuicPacketError QuicPacketProtection::seal(QuicPacketWriter& writer, usize used,
             header = &m_send_header;
             break;
     }
-    const crypto::CryptoError error = writer.seal(*packet, *header, (m_phases.send & 1U) != 0U, used, padding, written);
+    const crypto::CryptoError error = writer.seal(*packet, *header, (m_phases.send & 1U) != 0U, used, padding, written,
+                                                  one_rtt ? m_paths[path].id : 0U);
     if (error == crypto::CryptoError::Exhausted)
     {
         return QuicPacketError::Exhausted;
@@ -727,10 +735,10 @@ QuicPacketError QuicPacketProtection::seal(QuicPacketWriter& writer, usize used,
     {
         return QuicPacketError::Refused;
     }
-    if (type == QuicPacketType::OneRtt && !m_phases.send_first_known)
+    if (one_rtt && !m_paths[path].send_first_known)
     {
-        m_phases.send_first = writer.number();
-        m_phases.send_first_known = true;
+        m_paths[path].send_first = writer.number();
+        m_paths[path].send_first_known = true;
     }
     // A client's first Handshake packet ends its Initial keys (RFC 9001 section 4.9.1).
     if (type == QuicPacketType::Handshake && m_side == crypto::QuicSide::Client)
@@ -751,10 +759,14 @@ QuicPacketError QuicPacketProtection::forged(crypto::AlgorithmId aead) noexcept
     return (limit != 0U && m_forged >= limit) ? QuicPacketError::IntegrityLimit : QuicPacketError::Forged;
 }
 
-QuicPacketError QuicPacketProtection::open(const QuicHeader& header, cont::Span<u8> packet, QuicOpened& out) noexcept
+QuicPacketError QuicPacketProtection::open(const QuicHeader& header, cont::Span<u8> packet, QuicOpened& out,
+                                           usize path) noexcept
 {
     const QuicPacketType type = header.type;
-    if (!can_open(type))
+    const QuicSpace number_space = quic_space_of(type);
+    // 0-RTT packets are path 0's; only 1-RTT packets name a slot.
+    const usize slot = (type == QuicPacketType::OneRtt) ? path : 0U;
+    if (!can_open(type) || (number_space == QuicSpace::Application && !path_open(slot)))
     {
         return QuicPacketError::NoKeys;
     }
@@ -796,7 +808,8 @@ QuicPacketError QuicPacketProtection::open(const QuicHeader& header, cont::Span<
     {
         return QuicPacketError::Unprotectable;
     }
-    crypto::QuicPacketWindow& window = m_windows[static_cast<usize>(quic_space_of(type))];
+    crypto::QuicPacketWindow& window =
+        (number_space == QuicSpace::Application) ? m_paths[slot].window : m_windows[static_cast<usize>(number_space)];
     const u64 expected = window.any() ? window.largest() + 1U : 0U;
     const u64 number = crypto::quic_decode_packet_number(truncated, number_bytes, expected);
     const usize header_bytes = header.number_offset + number_bytes;
@@ -814,7 +827,8 @@ QuicPacketError QuicPacketProtection::open(const QuicHeader& header, cont::Span<
     out = QuicOpened{};
     if (keys == nullptr)
     {
-        const QuicPacketError error = open_application(packet, header_bytes, number, (first & kKeyPhaseBit) != 0U, out);
+        const QuicPacketError error =
+            open_application(packet, header_bytes, number, (first & kKeyPhaseBit) != 0U, m_paths[slot], out);
         if (error != QuicPacketError::None)
         {
             return error;
@@ -848,13 +862,15 @@ QuicPacketError QuicPacketProtection::open(const QuicHeader& header, cont::Span<
 }
 
 QuicPacketError QuicPacketProtection::open_application(cont::Span<u8> packet, usize header_bytes, u64 number,
-                                                       bool phase, QuicOpened& out) noexcept
+                                                       bool phase, PathSpace& space, QuicOpened& out) noexcept
 {
     const bool current_phase = ((m_phases.recv & 1U) != 0U) == phase;
     usize slot = m_recv_current;
     if (!current_phase)
     {
-        const bool older = m_phases.previous_held && m_phases.recv_any && number < m_phases.recv_smallest;
+        // Packet numbers compare only within this path's space. A path that has opened nothing under the current key
+        // relies on the key phase bit alone (RFC 10069 section 2.5): while the previous key is held, it is that one.
+        const bool older = m_phases.previous_held && (!space.recv_any || number < space.recv_smallest);
         slot = (m_recv_current + (older ? 2U : 1U)) % 3U;
     }
     const crypto::QuicPacketKey& key = m_recv[slot];
@@ -862,36 +878,36 @@ QuicPacketError QuicPacketProtection::open_application(cont::Span<u8> packet, us
     {
         return QuicPacketError::NoKeys;
     }
-    if (key.open(number, packet, header_bytes) != crypto::CryptoError::None)
+    if (key.open(number, packet, header_bytes, space.id) != crypto::CryptoError::None)
     {
         return forged(key.algorithm());
     }
-    // Section 6.4: packets of older keys never carry higher packet numbers than packets of newer ones.
+    // Section 6.4: packets of older keys never carry higher packet numbers than packets of newer ones (in one space).
     if (current_phase)
     {
-        if (m_phases.older_any && number < m_phases.older_largest)
+        if (space.older_any && number < space.older_largest)
         {
             return QuicPacketError::KeyUpdate;
         }
-        m_phases.recv_smallest =
-            (!m_phases.recv_any || number < m_phases.recv_smallest) ? number : m_phases.recv_smallest;
-        m_phases.recv_largest = (!m_phases.recv_any || number > m_phases.recv_largest) ? number : m_phases.recv_largest;
-        m_phases.recv_any = true;
+        space.recv_smallest = (!space.recv_any || number < space.recv_smallest) ? number : space.recv_smallest;
+        space.recv_largest = (!space.recv_any || number > space.recv_largest) ? number : space.recv_largest;
+        space.recv_any = true;
         return QuicPacketError::None;
     }
     if (slot != (m_recv_current + 1U) % 3U)
     {
-        m_phases.older_largest =
-            (number > m_phases.older_largest) ? number : m_phases.older_largest; // a late packet of the previous phase
+        // A late packet of the previous phase.
+        space.older_largest = (!space.older_any || number > space.older_largest) ? number : space.older_largest;
+        space.older_any = true;
         return QuicPacketError::None;
     }
     // A packet of the next phase: the peer's update or its answer to ours. A second update before this side
     // acknowledged the first in the new phase is section 6.2's KEY_UPDATE_ERROR.
-    if ((m_phases.recv_any && number < m_phases.recv_largest) || m_phases.answer_owed)
+    if ((space.recv_any && number < space.recv_largest) || m_phases.answer_owed)
     {
         return QuicPacketError::KeyUpdate;
     }
-    rotate_receive(number);
+    rotate_receive(number, space);
     out.key_update = true;
     if (m_phases.send < m_phases.recv)
     {
@@ -900,23 +916,25 @@ QuicPacketError QuicPacketProtection::open_application(cont::Span<u8> packet, us
         {
             next.set_limit(send_limit());
             m_send[m_phases.send & 1U].clear();
-            m_phases.send = m_phases.recv;
-            m_phases.send_first_known = false;
-            m_phases.send_acked = false;
+            start_send_phase(m_phases.recv);
             m_phases.answer_owed = true;
         }
     }
     return QuicPacketError::None;
 }
 
-void QuicPacketProtection::rotate_receive(u64 number) noexcept
+void QuicPacketProtection::rotate_receive(u64 number, PathSpace& space) noexcept
 {
-    if (m_phases.recv_any)
+    // Every space's numbers of the current key become older ones; only the opening path has one in the new key yet.
+    for (PathSpace& each : m_paths)
     {
-        m_phases.older_largest = (!m_phases.older_any || m_phases.recv_largest > m_phases.older_largest)
-                                     ? m_phases.recv_largest
-                                     : m_phases.older_largest;
-        m_phases.older_any = true;
+        if (each.recv_any)
+        {
+            each.older_largest =
+                (!each.older_any || each.recv_largest > each.older_largest) ? each.recv_largest : each.older_largest;
+            each.older_any = true;
+        }
+        each.recv_any = false;
     }
     const usize next = (m_recv_current + 1U) % 3U;
     const usize free = (m_recv_current + 2U) % 3U; // the key before the current one, if any, is dropped
@@ -925,14 +943,67 @@ void QuicPacketProtection::rotate_receive(u64 number) noexcept
                                              // drops the next phase's packets
     m_phases.previous_held = true;
     m_phases.recv = m_phases.recv + 1U;
-    m_phases.recv_smallest = number;
-    m_phases.recv_largest = number;
-    m_phases.recv_any = true;
+    space.recv_smallest = number;
+    space.recv_largest = number;
+    space.recv_any = true;
 }
 
-bool QuicPacketProtection::largest_opened(QuicSpace space, u64& out) const noexcept
+void QuicPacketProtection::start_send_phase(u64 phase) noexcept
 {
-    const crypto::QuicPacketWindow& window = m_windows[static_cast<usize>(space)];
+    m_phases.send = phase;
+    m_phases.send_acked = false;
+    for (PathSpace& each : m_paths)
+    {
+        each.send_first_known = false;
+    }
+}
+
+bool QuicPacketProtection::open_path(usize path, u32 id) noexcept
+{
+    if (path >= kQuicMaxPaths || m_paths[path].open)
+    {
+        return false;
+    }
+    for (const PathSpace& each : m_paths)
+    {
+        if (each.open && each.id == id)
+        {
+            return false;
+        }
+    }
+    m_paths[path] = PathSpace{};
+    m_paths[path].id = id;
+    m_paths[path].open = true;
+    return true;
+}
+
+bool QuicPacketProtection::close_path(usize path) noexcept
+{
+    if (!path_open(path))
+    {
+        return false;
+    }
+    usize open = 0U;
+    for (const PathSpace& each : m_paths)
+    {
+        open += each.open ? 1U : 0U;
+    }
+    if (open == 1U)
+    {
+        return false;
+    }
+    m_paths[path] = PathSpace{};
+    return true;
+}
+
+bool QuicPacketProtection::largest_opened(QuicSpace space, u64& out, usize path) const noexcept
+{
+    if (space == QuicSpace::Application && !path_open(path))
+    {
+        return false;
+    }
+    const crypto::QuicPacketWindow& window =
+        (space == QuicSpace::Application) ? m_paths[path].window : m_windows[static_cast<usize>(space)];
     if (!window.any())
     {
         return false;
@@ -941,9 +1012,9 @@ bool QuicPacketProtection::largest_opened(QuicSpace space, u64& out) const noexc
     return true;
 }
 
-void QuicPacketProtection::acknowledged(u64 largest) noexcept
+void QuicPacketProtection::acknowledged(u64 largest, usize path) noexcept
 {
-    if (m_phases.send_first_known && largest >= m_phases.send_first)
+    if (path_open(path) && m_paths[path].send_first_known && largest >= m_paths[path].send_first)
     {
         m_phases.send_acked = true;
     }
@@ -976,9 +1047,7 @@ bool QuicPacketProtection::update_keys() noexcept
     }
     m_send[(m_phases.send + 1U) & 1U].set_limit(send_limit());
     current.clear();
-    ++m_phases.send;
-    m_phases.send_first_known = false;
-    m_phases.send_acked = false;
+    start_send_phase(m_phases.send + 1U);
     return true;
 }
 

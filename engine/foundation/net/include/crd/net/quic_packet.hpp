@@ -140,11 +140,13 @@ public:
 
     // Seals the packet whose first `used` bytes of frames() hold its frames: pads it with PADDING frames as
     // `padding` asks and to the sample's floor, writes the Length (long headers) and the key phase bit (short
-    // headers), seals it under `packet`, protects its header under `header` and returns its size in `written`.
-    // BadLength when `used` passes frames() or the padding does not fit; the AEAD's errors (Exhausted at its
-    // limit) with nothing protected. A writer seals once per begin().
+    // headers), seals it under `packet` with the nonce of path ID `path` (RFC 10069 section 2.4; 0 is RFC 9001's),
+    // protects its header under `header` and returns its size in `written`. BadLength when `used` passes frames()
+    // or the padding does not fit; the AEAD's errors (Exhausted at its limit) with nothing protected. A writer seals
+    // once per begin().
     [[nodiscard]] crypto::CryptoError seal(crypto::QuicPacketKey& packet, const crypto::QuicHeaderKey& header,
-                                           bool key_phase, usize used, QuicPadding padding, usize& written) noexcept;
+                                           bool key_phase, usize used, QuicPadding padding, usize& written,
+                                           u32 path = 0U) noexcept;
 
     [[nodiscard]] QuicPacketType type() const noexcept { return m_type; }
     [[nodiscard]] u64 number() const noexcept { return m_number; }
@@ -216,8 +218,12 @@ struct QuicOpened
     bool key_update = false; // this packet moved the receive key phase: the previous key is now held
 };
 
-// A connection's packet protection: its keys per level and the receive windows of its packet number spaces. (MSVC
-// C4324 as for crypto::AeadKey: the keys it holds inline are 16-byte aligned; ARM64 MSVC reports the padding.)
+// A connection's packet protection: its keys per level and the receive windows of its packet number spaces. With
+// multipath (RFC 10069) each open path has its own 1-RTT number space: a slot of kQuicMaxPaths, named by the
+// connection as QuicRecovery's slots are, holds the path's ID (in every 1-RTT nonce), its replay window and the packet
+// numbers its key phases are checked against. Slot 0 is path ID 0, the handshake's path, open from start(); 0-RTT
+// packets are path 0's (section 2.3) and every long header packet ignores the slot. (MSVC C4324 as for
+// crypto::AeadKey: the keys it holds inline are 16-byte aligned; ARM64 MSVC reports the padding.)
 #if CRD_COMPILER_MSVC
 #pragma warning(push)
 #pragma warning(disable : 4324)
@@ -287,22 +293,34 @@ public:
     // Whether a cleared QUIC bit is accepted: true once this endpoint sent grease_quic_bit (RFC 9287 section 3).
     void accept_cleared_quic_bit(bool accept) noexcept { m_accept_cleared_bit = accept; }
 
-    // Seals `writer`'s packet under this side's keys at its level, as QuicPacketWriter::seal. A Handshake packet
-    // from a client discards the Initial keys. A 1-RTT packet first starts a key update when the key is due and
-    // one is allowed (section 6.1). NoKeys, Exhausted, Refused.
-    [[nodiscard]] QuicPacketError seal(QuicPacketWriter& writer, usize used, QuicPadding padding,
-                                       usize& written) noexcept;
+    // Multipath (RFC 10069): opens slot `path` for path ID `id` with an empty window and no packet number yet, or
+    // closes it, after which its packets neither seal nor open. False for a slot past kQuicMaxPaths, an open slot or
+    // an ID open in another slot; closing, for a closed slot or the last open one. A path ID is used once (it is in
+    // the nonce): the connection never opens one again, so a reused slot never repeats a nonce.
+    [[nodiscard]] bool open_path(usize path, u32 id) noexcept;
+    [[nodiscard]] bool close_path(usize path) noexcept;
+    [[nodiscard]] bool path_open(usize path) const noexcept { return path < kQuicMaxPaths && m_paths[path].open; }
+    [[nodiscard]] u32 path_id(usize path) const noexcept { return path < kQuicMaxPaths ? m_paths[path].id : 0U; }
 
-    // Opens `packet` (a QuicDatagramPackets extent, modified in place) whose header is `header`.
-    [[nodiscard]] QuicPacketError open(const QuicHeader& header, cont::Span<u8> packet, QuicOpened& out) noexcept;
+    // Seals `writer`'s packet under this side's keys at its level, as QuicPacketWriter::seal; a 1-RTT packet in slot
+    // `path`'s number space, under its path ID's nonce. A Handshake packet from a client discards the Initial keys.
+    // A 1-RTT packet first starts a key update when the key is due and one is allowed (section 6.1). NoKeys (also
+    // for a closed slot), Exhausted, Refused.
+    [[nodiscard]] QuicPacketError seal(QuicPacketWriter& writer, usize used, QuicPadding padding, usize& written,
+                                       usize path = 0U) noexcept;
 
-    // The largest packet number opened in `space`, which the next packet's decoding expects one past; false before
-    // any.
-    [[nodiscard]] bool largest_opened(QuicSpace space, u64& out) const noexcept;
+    // Opens `packet` (a QuicDatagramPackets extent, modified in place) whose header is `header`; a 1-RTT packet in
+    // slot `path`'s number space, the one its Destination Connection ID names: NoKeys for a closed slot.
+    [[nodiscard]] QuicPacketError open(const QuicHeader& header, cont::Span<u8> packet, QuicOpened& out,
+                                       usize path = 0U) noexcept;
 
-    // The peer acknowledged 1-RTT packets up to `largest`: a key update is allowed again once a packet of the current
-    // send phase is acknowledged (section 6.1).
-    void acknowledged(u64 largest) noexcept;
+    // The largest packet number opened in `space` (the Application space: slot `path`'s), which the next packet's
+    // decoding expects one past; false before any.
+    [[nodiscard]] bool largest_opened(QuicSpace space, u64& out, usize path = 0U) const noexcept;
+
+    // The peer acknowledged slot `path`'s 1-RTT packets up to `largest`: a key update is allowed again once a packet
+    // of the current send phase is acknowledged in the number space it was sent in (section 6.1).
+    void acknowledged(u64 largest, usize path = 0U) noexcept;
     // This side sent an acknowledgement in a 1-RTT packet of the current send phase: the peer may update again (a
     // second update before it is KEY_UPDATE_ERROR, section 6.2).
     void sent_acknowledgement() noexcept;
@@ -331,26 +349,35 @@ public:
     [[nodiscard]] u64 failed_opens() const noexcept { return m_forged; }
 
 private:
-    // 1-RTT key phase bookkeeping (RFC 9001 section 6).
+    // 1-RTT key phase bookkeeping (RFC 9001 section 6): one set of phases across every path (RFC 10069 section 2.5).
     struct Phases
     {
-        u64 send = 0U;          // the send key phase
-        u64 send_first = 0U;    // the first packet number sealed in it
-        u64 recv = 0U;          // the receive key phase
-        u64 recv_smallest = 0U; // the packet numbers opened under the current receive key
-        u64 recv_largest = 0U;
-        u64 older_largest = 0U; // the largest opened under any older key
-        bool send_first_known = false;
+        u64 send = 0U;           // the send key phase
+        u64 recv = 0U;           // the receive key phase
         bool send_acked = false; // a packet of the current send phase is acknowledged
-        bool recv_any = false;   // a packet opened under the current receive key
-        bool older_any = false;  // a packet opened under an older key
         bool previous_held = false;
         bool answer_owed = false; // the peer updated and has not yet seen an acknowledgement in the new phase
     };
 
+    // One path's 1-RTT number space: its replay window and the packet numbers the key phases are checked against,
+    // which compare only within one space.
+    struct PathSpace
+    {
+        crypto::QuicPacketWindow window;
+        u64 send_first = 0U;    // the first packet number sealed in the current send phase
+        u64 recv_smallest = 0U; // the packet numbers opened under the current receive key
+        u64 recv_largest = 0U;
+        u64 older_largest = 0U; // the largest opened under any older key
+        u32 id = 0U;
+        bool open = false;
+        bool send_first_known = false;
+        bool recv_any = false;  // a packet opened under the current receive key
+        bool older_any = false; // a packet opened under an older key
+    };
+
     [[nodiscard]] crypto::CryptoError finish_install(crypto::QuicLevel level, bool sending) noexcept;
     [[nodiscard]] QuicPacketError open_application(cont::Span<u8> packet, usize header_bytes, u64 number, bool phase,
-                                                   QuicOpened& out) noexcept;
+                                                   PathSpace& space, QuicOpened& out) noexcept;
     [[nodiscard]] QuicPacketError forged(crypto::AlgorithmId aead) noexcept;
     // What a 1-RTT send key may seal: the transport's cap, or above every AEAD's limit, which set_limit lowers to its
     // own.
@@ -360,7 +387,8 @@ private:
         return key.update_due() ||
                (m_update_interval != 0U && key.sealed() >= m_update_interval - (m_update_interval / 4U));
     }
-    void rotate_receive(u64 number) noexcept;
+    void rotate_receive(u64 number, PathSpace& space) noexcept;
+    void start_send_phase(u64 phase) noexcept; // no packet of `phase` sealed or acknowledged on any path yet
     [[nodiscard]] QuicKeys& initial_receive() noexcept { return m_initial[m_initial_receive]; }
     [[nodiscard]] const QuicKeys& initial_receive() const noexcept { return m_initial[m_initial_receive]; }
     [[nodiscard]] QuicKeys& initial_other() noexcept { return m_initial[3U - m_initial_receive]; }
@@ -383,7 +411,8 @@ private:
     usize m_recv_current = 0U;
     Phases m_phases;
 
-    crypto::QuicPacketWindow m_windows[kQuicSpaces];
+    crypto::QuicPacketWindow m_windows[kQuicSpaces - 1U]; // Initial and Handshake; the Application space is per path
+    PathSpace m_paths[kQuicMaxPaths];
 
     crypto::QuicVersion m_version = crypto::QuicVersion::V1;
     crypto::QuicVersion m_original = crypto::QuicVersion::V1;

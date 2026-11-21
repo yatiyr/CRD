@@ -32,8 +32,6 @@
 
 namespace crd::net
 {
-inline constexpr usize kQuicMaxPaths = 4U;
-inline constexpr usize kQuicNoPath = kQuicMaxPaths;
 inline constexpr usize kQuicPathChallengesKept = 4U; // per path: a response to an older one is late and ignored
 inline constexpr u64 kQuicNoObservation = ~u64{0};   // no OBSERVED_ADDRESS sequence
 

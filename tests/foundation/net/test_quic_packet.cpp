@@ -3,8 +3,9 @@
 // floor with the shortest Length, every refusal of the writer, coalesced datagrams and their foreign packets, the key
 // discards of RFC 9001 section 4.9, nothing under protection trusted before the AEAD opens (reserved bits, empty
 // packets, the QUIC bit, forgeries, duplicates, stale packets, the integrity limit), key updates initiated, followed
-// and checked (section 6), a key's own update interval, and a real TLS handshake carried in these packets to 1-RTT in
-// both versions.
+// and checked (section 6), a key's own update interval, each multipath path's own number space, nonce and key phase
+// bounds (RFC 10069 sections 2.4 and 2.5), and a real TLS handshake carried in these packets to 1-RTT in both
+// versions.
 
 #include "ingress_fixture.hpp"
 #include "quic_vectors.hpp"
@@ -101,7 +102,7 @@ void put_frame(const QuicPacketWriter& writer, u8 frame)
 
 // Appends one packet of `spec` carrying `frames` to `datagram`; the error of the seal.
 QuicPacketError append(QuicPacketProtection& from, Buffer& datagram, const QuicPacketSpec& spec, ConstSpan<u8> frames,
-                       QuicPadding padding = {}, usize room = kRoom)
+                       QuicPadding padding = {}, usize room = kRoom, usize path = 0U)
 {
     QuicPacketWriter writer;
     REQUIRE(writer.begin(spec, datagram.rest(room)));
@@ -111,7 +112,7 @@ QuicPacketError append(QuicPacketProtection& from, Buffer& datagram, const QuicP
         std::memcpy(writer.frames().data(), frames.data(), frames.size()); // an empty span may hold null
     }
     usize written = 0U;
-    const QuicPacketError error = from.seal(writer, frames.size(), padding, written);
+    const QuicPacketError error = from.seal(writer, frames.size(), padding, written, path);
     if (error == QuicPacketError::None)
     {
         datagram.size += written;
@@ -119,8 +120,8 @@ QuicPacketError append(QuicPacketProtection& from, Buffer& datagram, const QuicP
     return error;
 }
 
-// Opens the first packet of `datagram` at `to` (a copy, so the datagram can be delivered again).
-QuicPacketError deliver(QuicPacketProtection& to, const Buffer& datagram, QuicOpened& out, Bytes& copy)
+// Opens the first packet of `datagram` at `to` in slot `path` (a copy, so the datagram can be delivered again).
+QuicPacketError deliver(QuicPacketProtection& to, const Buffer& datagram, QuicOpened& out, Bytes& copy, usize path = 0U)
 {
     copy.resize(datagram.size);
     std::memcpy(copy.data(), datagram.bytes, datagram.size);
@@ -128,18 +129,19 @@ QuicPacketError deliver(QuicPacketProtection& to, const Buffer& datagram, QuicOp
     QuicHeader header;
     Span<u8> packet;
     REQUIRE(packets.next(header, packet));
-    return to.open(header, packet, out);
+    return to.open(header, packet, out, path);
 }
 
-QuicPacketError deliver(QuicPacketProtection& to, const Buffer& datagram)
+QuicPacketError deliver(QuicPacketProtection& to, const Buffer& datagram, usize path = 0U)
 {
     QuicOpened opened;
     Bytes copy;
-    return deliver(to, datagram, opened, copy);
+    return deliver(to, datagram, opened, copy, path);
 }
 
-// A 1-RTT packet sealed directly under `key` with the key phase bit `phase`: a peer this side cannot otherwise make.
-Buffer crafted(crd::crypto::QuicPacketKey& key, const QuicHeaderKey& header, bool phase, u64 number)
+// A 1-RTT packet sealed directly under `key` with the key phase bit `phase` on path ID `id`: a peer this side cannot
+// otherwise make.
+Buffer crafted(crd::crypto::QuicPacketKey& key, const QuicHeaderKey& header, bool phase, u64 number, crd::u32 id = 0U)
 {
     Buffer datagram;
     QuicPacketWriter writer;
@@ -147,7 +149,7 @@ Buffer crafted(crd::crypto::QuicPacketKey& key, const QuicHeaderKey& header, boo
     spec.number_bytes = 4U;
     REQUIRE(writer.begin(spec, datagram.rest()));
     put_frame(writer, kPing[0]);
-    REQUIRE(writer.seal(key, header, phase, 1U, {}, datagram.size) == CryptoError::None);
+    REQUIRE(writer.seal(key, header, phase, 1U, {}, datagram.size, id) == CryptoError::None);
     return datagram;
 }
 } // namespace
@@ -869,6 +871,197 @@ TEST_CASE("QUIC packets: key updates are initiated, followed and checked as RFC 
         CHECK(deliver(pair.server, crafted(raw.packet, raw.header, false, 2U)) == QuicPacketError::None);
         pair.server.discard_previous();
         CHECK(deliver(pair.server, crafted(raw.packet, raw.header, false, 1U)) == QuicPacketError::Forged);
+    }
+}
+
+TEST_CASE("QUIC packets: each multipath path has its own number space, nonce and key phase bounds",
+          "[net][4.2a][quic-packet][multipath]")
+{
+    Pair pair;
+    start(pair);
+    constexpr crd::u32 kId1 = 7U;
+    constexpr crd::u32 kId2 = kQuicMaxPathId; // the largest path ID: the nonce's whole 32 bits
+    for (QuicPacketProtection* end : {&pair.client, &pair.server})
+    {
+        REQUIRE(end->open_path(1U, kId1));
+        REQUIRE(end->open_path(2U, kId2));
+    }
+    // Four-byte packet numbers, or with `acked` (the largest the path's peer acknowledged) the shortest encoding.
+    const auto send = [](QuicPacketProtection& from, u64 number, usize path, u64 acked = 0U)
+    {
+        Buffer datagram;
+        QuicPacketSpec spec = spec_of(QuicPacketType::OneRtt, number);
+        spec.number_bytes = (acked != 0U) ? 0U : 4U;
+        spec.largest_acked = acked;
+        spec.acknowledged = acked != 0U;
+        REQUIRE(append(from, datagram, spec, kPing, {}, kRoom, path) == QuicPacketError::None);
+        return datagram;
+    };
+
+    SECTION("slots open and close as the connection names them, and a closed slot neither seals nor opens")
+    {
+        QuicPacketProtection fresh;
+        REQUIRE(fresh.start(QuicSide::Server, QuicVersion::V1, ConstSpan<u8>(kDcid, kCid)) == CryptoError::None);
+        CHECK(fresh.path_open(0U));
+        CHECK(fresh.path_id(0U) == 0U);
+        CHECK_FALSE(fresh.path_open(1U));
+        CHECK_FALSE(fresh.path_open(kQuicMaxPaths));
+        CHECK(fresh.path_id(kQuicMaxPaths) == 0U);
+        CHECK_FALSE(fresh.open_path(kQuicMaxPaths, 1U));
+        CHECK_FALSE(fresh.open_path(0U, 1U)); // open
+        CHECK_FALSE(fresh.open_path(1U, 0U)); // path ID 0 is slot 0's
+        REQUIRE(fresh.open_path(3U, kId1));
+        CHECK(fresh.path_id(3U) == kId1);
+        CHECK_FALSE(fresh.open_path(1U, kId1));
+        CHECK_FALSE(fresh.close_path(1U));
+        CHECK_FALSE(fresh.close_path(kQuicMaxPaths));
+        REQUIRE(fresh.close_path(0U));
+        CHECK_FALSE(fresh.close_path(3U)); // the last open slot
+        CHECK_FALSE(fresh.path_open(0U));
+        REQUIRE(fresh.open_path(1U, 0U)); // path ID 0 is free again; the connection decides whether it may be used
+
+        REQUIRE(pair.server.close_path(1U));
+        Buffer refused;
+        CHECK(append(pair.server, refused, spec_of(QuicPacketType::OneRtt, 0U), kPing, {}, kRoom, 1U) ==
+              QuicPacketError::NoKeys);
+        CHECK(append(pair.server, refused, spec_of(QuicPacketType::OneRtt, 0U), kPing, {}, kRoom, kQuicMaxPaths) ==
+              QuicPacketError::NoKeys);
+        CHECK(deliver(pair.server, send(pair.client, 0U, 1U), 1U) == QuicPacketError::NoKeys);
+        u64 largest = 0U;
+        CHECK_FALSE(pair.server.largest_opened(QuicSpace::Application, largest, 1U));
+        CHECK_FALSE(pair.server.largest_opened(QuicSpace::Application, largest, kQuicMaxPaths));
+        // Long header packets name no slot: a Handshake packet opens whatever slot the caller passes.
+        Buffer handshake;
+        REQUIRE(append(pair.client, handshake, spec_of(QuicPacketType::Handshake, 0U), kPing) == QuicPacketError::None);
+        CHECK(deliver(pair.server, handshake, 1U) == QuicPacketError::None);
+    }
+    SECTION("one number opens on every path, and each path's window refuses its own copies and stale numbers")
+    {
+        const Buffer first0 = send(pair.client, 0U, 0U);
+        const Buffer first1 = send(pair.client, 0U, 1U);
+        const Buffer first2 = send(pair.client, 0U, 2U);
+        REQUIRE(deliver(pair.server, first0, 0U) == QuicPacketError::None);
+        REQUIRE(deliver(pair.server, first1, 1U) == QuicPacketError::None);
+        REQUIRE(deliver(pair.server, first2, 2U) == QuicPacketError::None);
+        CHECK(deliver(pair.server, first1, 1U) == QuicPacketError::Duplicate);
+        CHECK(deliver(pair.server, first0, 0U) == QuicPacketError::Duplicate);
+
+        REQUIRE(deliver(pair.server, send(pair.client, 300U, 1U), 1U) == QuicPacketError::None);
+        CHECK(deliver(pair.server, send(pair.client, 1U, 1U), 1U) == QuicPacketError::Stale);
+        CHECK(deliver(pair.server, send(pair.client, 1U, 0U), 0U) == QuicPacketError::None); // path 0's window
+        // A one-byte packet number decodes against its own path's largest: 301 on path 1, 2 on path 0.
+        QuicOpened opened;
+        Bytes copy;
+        const Buffer short1 = send(pair.client, 301U, 1U, 300U);
+        CHECK(deliver(pair.server, short1, 0U) == QuicPacketError::Forged); // read as path 0's 45
+        REQUIRE(deliver(pair.server, short1, opened, copy, 1U) == QuicPacketError::None);
+        CHECK(opened.number == 301U);
+        REQUIRE(deliver(pair.server, send(pair.client, 2U, 0U, 1U), opened, copy, 0U) == QuicPacketError::None);
+        CHECK(opened.number == 2U);
+        u64 largest = 0U;
+        REQUIRE(pair.server.largest_opened(QuicSpace::Application, largest, 1U));
+        CHECK(largest == 301U);
+        REQUIRE(pair.server.largest_opened(QuicSpace::Application, largest, 0U));
+        CHECK(largest == 2U);
+        REQUIRE(pair.server.largest_opened(QuicSpace::Application, largest, 2U));
+        CHECK(largest == 0U);
+    }
+    SECTION("a packet opened in another path's slot is forged, and every path counts toward one integrity limit")
+    {
+        pair.server.limit_failed_opens(3U);
+        const Buffer on1 = send(pair.client, 4U, 1U);
+        CHECK(deliver(pair.server, on1, 0U) == QuicPacketError::Forged); // path ID 0's nonce
+        CHECK(deliver(pair.server, on1, 1U) == QuicPacketError::None);   // the failure left path 1's window as it was
+        CHECK(deliver(pair.server, send(pair.client, 6U, 2U), 1U) == QuicPacketError::Forged);
+        CHECK(deliver(pair.server, send(pair.client, 4U, 0U), 2U) == QuicPacketError::IntegrityLimit);
+        CHECK(pair.server.failed_opens() == 3U);
+    }
+    SECTION("a reused slot starts empty under its new path ID, and the old ID's packets no longer open there")
+    {
+        const Buffer old = send(pair.client, 5U, 1U);
+        REQUIRE(deliver(pair.server, old, 1U) == QuicPacketError::None);
+        for (QuicPacketProtection* end : {&pair.client, &pair.server})
+        {
+            REQUIRE(end->close_path(1U));
+            REQUIRE(end->open_path(1U, kId1 + 1U));
+        }
+        u64 largest = 0U;
+        CHECK_FALSE(pair.server.largest_opened(QuicSpace::Application, largest, 1U));
+        CHECK(deliver(pair.server, old, 1U) == QuicPacketError::Forged);
+        REQUIRE(deliver(pair.server, send(pair.client, 5U, 1U), 1U) == QuicPacketError::None);
+        REQUIRE(pair.server.largest_opened(QuicSpace::Application, largest, 1U));
+        CHECK(largest == 5U);
+    }
+    SECTION("key phases are one across paths, and their packet number checks stay within each path's space")
+    {
+        QuicKeys raw; // the client's 1-RTT keys of phase 0, for packets the client itself would never send
+        REQUIRE(raw.init(QuicVersion::V1, AlgorithmId::Aes128Gcm, secret(2U)) == CryptoError::None);
+        crd::crypto::QuicPacketKey phase1;
+        crd::crypto::QuicPacketKey phase2;
+        REQUIRE(phase1.update(raw.packet) == CryptoError::None);
+        REQUIRE(phase2.update(phase1) == CryptoError::None);
+        QuicOpened opened;
+        Bytes copy;
+
+        REQUIRE(deliver(pair.server, crafted(raw.packet, raw.header, false, 1000U), 0U) == QuicPacketError::None);
+        REQUIRE(deliver(pair.server, crafted(raw.packet, raw.header, false, 0U, kId1), 1U) == QuicPacketError::None);
+        REQUIRE(deliver(pair.server, crafted(phase1, raw.header, true, 1001U), opened, copy, 0U) ==
+                QuicPacketError::None);
+        CHECK(opened.key_update);
+        CHECK(pair.server.receive_phase() == 1U);
+        // Path 1's numbers sit far below path 0's older packets, which say nothing about them.
+        REQUIRE(deliver(pair.server, crafted(phase1, raw.header, true, 1U, kId1), opened, copy, 1U) ==
+                QuicPacketError::None);
+        CHECK_FALSE(opened.key_update);
+        // Path 2 has opened nothing under the new key: the key phase bit alone names the previous key.
+        REQUIRE(deliver(pair.server, crafted(raw.packet, raw.header, false, 50U, kId2), opened, copy, 2U) ==
+                QuicPacketError::None);
+        CHECK_FALSE(opened.key_update);
+        CHECK(pair.server.receive_phase() == 1U);
+        // Section 6.4 within path 2: the newer key below the older key's 50 is KEY_UPDATE_ERROR, above it is not.
+        CHECK(deliver(pair.server, crafted(phase1, raw.header, true, 40U, kId2), 2U) == QuicPacketError::KeyUpdate);
+        CHECK(deliver(pair.server, crafted(phase1, raw.header, true, 51U, kId2), 2U) == QuicPacketError::None);
+        // On path 1 an older key above the newer key's first packet is tried as the next phase's and never opens.
+        CHECK(deliver(pair.server, crafted(raw.packet, raw.header, false, 5U, kId1), 1U) == QuicPacketError::Forged);
+
+        // The next update arrives on path 1 at a number far below path 0's: it is the peer's update, not an error.
+        pair.server.discard_previous();
+        pair.server.sent_acknowledgement();
+        REQUIRE(deliver(pair.server, crafted(phase2, raw.header, false, 2U, kId1), opened, copy, 1U) ==
+                QuicPacketError::None);
+        CHECK(opened.key_update);
+        CHECK(pair.server.receive_phase() == 2U);
+        CHECK(pair.server.send_phase() == 2U);
+        CHECK(deliver(pair.server, crafted(phase2, raw.header, false, 1002U), 0U) == QuicPacketError::None);
+        // Path 0's own older packets bound it: phase 1's 1001 was opened there.
+        CHECK(deliver(pair.server, crafted(phase2, raw.header, false, 999U), 0U) == QuicPacketError::KeyUpdate);
+    }
+    SECTION("an acknowledgement allows the next update only in the number space its packet was sent in")
+    {
+        REQUIRE(deliver(pair.server, send(pair.client, 10U, 0U), 0U) == QuicPacketError::None);
+        REQUIRE(deliver(pair.server, send(pair.client, 0U, 1U), 1U) == QuicPacketError::None);
+        pair.client.confirm();
+        pair.server.confirm();
+        pair.client.acknowledged(5U, 0U); // below path 0's first packet of the phase
+        pair.client.acknowledged(9U, 3U); // a closed slot
+        pair.client.acknowledged(9U, kQuicMaxPaths);
+        CHECK_FALSE(pair.client.can_update_keys());
+        pair.client.acknowledged(0U, 1U);
+        REQUIRE(pair.client.can_update_keys());
+        REQUIRE(pair.client.update_keys());
+
+        QuicOpened opened;
+        Bytes copy;
+        REQUIRE(deliver(pair.server, send(pair.client, 11U, 0U), opened, copy, 0U) == QuicPacketError::None);
+        CHECK(opened.key_update);
+        REQUIRE(deliver(pair.client, send(pair.server, 0U, 2U), opened, copy, 2U) == QuicPacketError::None);
+        CHECK(opened.key_update);
+        pair.client.discard_previous();
+        pair.client.acknowledged(30U, 1U); // path 1 sealed nothing in phase 1
+        pair.client.acknowledged(10U, 0U); // a phase 0 packet of path 0
+        CHECK_FALSE(pair.client.can_update_keys());
+        pair.client.acknowledged(11U, 0U);
+        CHECK(pair.client.can_update_keys());
     }
 }
 
