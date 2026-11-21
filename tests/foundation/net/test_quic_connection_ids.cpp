@@ -181,6 +181,87 @@ TEST_CASE("connection ID spaces open, refuse and close per path ID", "[quic][cid
     CHECK(s.cids.is_open(8U));
 }
 
+TEST_CASE("abandoning a path ID retires the peer's IDs at once and keeps this side's until it closes",
+          "[quic][cids][multipath]")
+{
+    Started s;
+    REQUIRE(s.cids.open(1U, s.spaces[1]));
+    REQUIRE(s.cids.open(2U, s.spaces[2]));
+    s.cids.top_up(2U);
+    REQUIRE(add(s.cids, new_id(1U, 0U, PeerId(1U))) == QuicTransportError::NoError);
+    REQUIRE(add(s.cids, new_id(1U, 1U, PeerId(2U))) == QuicTransportError::NoError);
+    REQUIRE(add(s.cids, new_id(2U, 0U, PeerId(3U))) == QuicTransportError::NoError);
+    s.cids.use(1U, 0U);
+    REQUIRE(s.cids.retire_peer(1U, 1U, kLimit)); // a retirement owed there
+    u64 path = 0U;
+    u64 sequence = 0U;
+    REQUIRE(s.cids.next_retirement(path, sequence));
+    REQUIRE(path == 1U);
+    const QuicLocalCid* kept = s.cids.local(1U, 0U);
+    REQUIRE(kept != nullptr);
+    const QuicConnectionId straggler = kept->id; // the peer's packets in transit still name it
+    const int routed = s.host.routed;
+    const int unwatched = s.host.unwatched;
+
+    REQUIRE(s.cids.abandon(1U));
+    CHECK(s.cids.abandoned(1U));
+    CHECK_FALSE(s.cids.abandoned(2U));
+    CHECK_FALSE(s.cids.abandon(1U)); // once
+    CHECK_FALSE(s.cids.abandon(5U)); // not open
+    // The peer's IDs are retired at once: none held or sent to, the used one's token no longer counts, and no
+    // retirement frame is owed for them, the PATH_ABANDON frame retiring them all (RFC 10069 section 3.4).
+    CHECK(s.cids.peer_count(1U) == 0U);
+    CHECK(s.cids.current(1U) == kQuicNoSequence);
+    CHECK(s.host.unwatched == unwatched + 1);
+    CHECK_FALSE(s.cids.reset_by(cont::ConstSpan<u8>(PeerId(1U).token, kToken)));
+    CHECK_FALSE(s.cids.next_retirement(path, sequence));
+    // This side's stay routed and found, so a straggler opens and draws no stateless reset (section 3.4.2), but none
+    // is issued, rotated or announced there again.
+    CHECK(s.host.routed == routed);
+    const QuicCidRef found = s.cids.find(straggler.view());
+    CHECK(found.found());
+    CHECK(found.path_id == 1U);
+    for (u64 owed = 0U; owed < 2U; ++owed)
+    {
+        s.cids.local_settled(1U, owed, false); // a lost frame is not owed again
+    }
+    s.cids.reannounce();
+    const QuicLocalCid* next = nullptr;
+    while ((next = s.cids.next_owed(path)) != nullptr)
+    {
+        CHECK(path != 1U);
+        s.cids.local_sent(path, next->sequence);
+    }
+    const usize before = s.cids.local_count(1U);
+    CHECK_FALSE(s.cids.issue(1U));
+    CHECK_FALSE(s.cids.rotate(1U, 2U));
+    s.cids.top_up(4U);
+    CHECK(s.cids.local_count(1U) == before);
+    CHECK(s.cids.local_count(2U) == 4U);
+    // The peer's frames for the path ID are ignored from now on (section 4), a repeat of a retired ID's too.
+    bool added = true;
+    CHECK(add(s.cids, new_id(1U, 2U, PeerId(4U)), &added) == QuicTransportError::NoError);
+    CHECK_FALSE(added);
+    CHECK(add(s.cids, new_id(1U, 0U, PeerId(1U)), &added) == QuicTransportError::NoError);
+    CHECK_FALSE(added);
+    CHECK(s.cids.peer_count(1U) == 0U);
+    CHECK(s.cids.retire_local(1U, 0U, QuicCidRef{}) == QuicTransportError::NoError);
+    CHECK(s.cids.local_count(1U) == before);
+    // The other path IDs are untouched.
+    CHECK(s.cids.peer_count(2U) == 1U);
+    CHECK(s.cids.current(2U) == 0U);
+    // Retention over (three PTOs): closing unroutes this side's IDs, and the straggler finds nothing.
+    const int open_routes = s.host.routed;
+    REQUIRE(s.cids.close(1U) == &s.spaces[1]);
+    CHECK(s.host.routed == open_routes - static_cast<int>(before));
+    CHECK_FALSE(s.cids.find(straggler.view()).found());
+    CHECK_FALSE(s.cids.abandoned(1U));
+    // Its storage opens again under a new path ID, not abandoned.
+    REQUIRE(s.cids.open(3U, s.spaces[1]));
+    CHECK_FALSE(s.cids.abandoned(3U));
+    CHECK(s.cids.issue(3U));
+}
+
 TEST_CASE("the datagram's connection ID names its path ID's space", "[quic][cids][multipath]")
 {
     Started s;

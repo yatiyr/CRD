@@ -4,13 +4,14 @@
 //
 // Input: a first byte for this side's active_connection_id_limit (2 to 8), then operations of three bytes (the low
 // four bits of the first the kind, its high four the path ID: 0 to 13, then 2^32 - 1 and 2^32) on one QuicCids over a
-// counting host: spaces opened and closed; the peer's NEW_CONNECTION_ID and PATH_NEW_CONNECTION_ID frames with fresh,
+// counting host: spaces opened, abandoned and closed; the peer's NEW_CONNECTION_ID and PATH_NEW_CONNECTION_ID frames with fresh,
 // gapped, repeated or old sequences, any Retire Prior To and fresh, reused or crossed IDs and tokens; retirements of
 // the peer's IDs, sent and settled; IDs used, moved to and reset tokens matched; this side's IDs issued, topped up,
 // rotated, retired by the peer under any packet's ID, sent and settled, reannounced; and the end of the connection.
 //
-// Oracles, against a model of every space. Each verdict is the restated rule's: a frame for a closed space changes
-// nothing; one ID or token under two IDs anywhere is PROTOCOL_VIOLATION, a repeat changes nothing; below Retire Prior
+// Oracles, against a model of every space. Each verdict is the restated rule's: a frame for a closed or abandoned
+// space changes nothing; abandoning retires the space's peer IDs at once with no retirement owed and keeps this
+// side's routed, none issued, rotated or announced there again; one ID or token under two IDs anywhere is PROTOCOL_VIOLATION, a repeat changes nothing; below Retire Prior
 // To an ID is retired again; an ID retired here while its retirement is outstanding is never held again (once settled
 // it may be, as the 16 latest are remembered); a raised Retire Prior To retires every ID below it; past the limit, or
 // past twice the limit of retirements outstanding, CONNECTION_ID_LIMIT_ERROR. A refusal ends the input (the connection
@@ -145,6 +146,7 @@ struct Local
 struct Space
 {
     bool open = false;
+    bool abandoned = false;
     u64 path = 0U;
     QuicCidSpace* storage = nullptr;
     Peer peers[kQuicMaxPeerConnectionIds];
@@ -268,7 +270,7 @@ void forget_peer(Space& space, usize index)
 // Whether the restated issue() gives `space` one more ID: room in it, a host that routes.
 [[nodiscard]] bool issuable(const World& w, const Space& space)
 {
-    return !w.host.refuse && w.host.next != kFirstLocal && space.local_count < 2U * kQuicMaxLocalConnectionIds;
+    return !space.abandoned && !w.host.refuse && w.host.next != kFirstLocal && space.local_count < 2U * kQuicMaxLocalConnectionIds;
 }
 
 // The model's record of an ID the class issued, its number read from the class (the host numbers IDs in the class's
@@ -299,6 +301,7 @@ void check(World& w)
             continue;
         }
         CRD_FUZZ_REQUIRE(w.cids.is_open(space.path));
+        CRD_FUZZ_REQUIRE(w.cids.abandoned(space.path) == space.abandoned);
         CRD_FUZZ_REQUIRE(w.cids.peer_count(space.path) == space.peer_count);
         CRD_FUZZ_REQUIRE(w.cids.current(space.path) == space.current);
         for (usize index = 0U; index < space.peer_count; ++index)
@@ -382,6 +385,25 @@ void op_close(World& w, u64 path)
     }
 }
 
+void op_abandon(World& w, u64 path)
+{
+    Space* space = find(w, path);
+    const bool expected = space != nullptr && !space->abandoned;
+    CRD_FUZZ_REQUIRE(w.cids.abandon(path) == expected);
+    if (!expected)
+    {
+        return;
+    }
+    space->abandoned = true;
+    space->peer_count = 0U;
+    space->current = kQuicNoSequence;
+    space->out_count = 0U;
+    for (usize index = 0U; index < space->local_count; ++index)
+    {
+        space->locals[index].owed = false;
+    }
+}
+
 void op_add(World& w, u64 selected, u8 a, u8 b)
 {
     const bool plain = (b & 0x80U) != 0U; // NEW_CONNECTION_ID: path ID 0's
@@ -432,7 +454,7 @@ void op_add(World& w, u64 selected, u8 a, u8 b)
     frame.reset_token = cont::ConstSpan<u8>(reset.token, kToken);
     bool added = false;
     const QuicTransportError error = w.cids.add_peer(frame, w.limit, added);
-    if (space == nullptr)
+    if (space == nullptr || space->abandoned)
     {
         CRD_FUZZ_REQUIRE(error == QuicTransportError::NoError && !added);
         return;
@@ -711,7 +733,7 @@ void op_issue(World& w, u64 path, u8 a)
         case 2U:
         {
             // A rotation: refused while an earlier one is not retired in full, or when nothing is issued.
-            bool expected = space != nullptr;
+            bool expected = space != nullptr && !space->abandoned;
             for (usize index = 0U; expected && index < space->local_count; ++index)
             {
                 expected = space->locals[index].sequence >= space->local_rpt;
@@ -755,7 +777,7 @@ void op_retire_local(World& w, u64 path, u8 a, u8 b)
         packet = QuicCidRef{static_cast<u64>((b >> 2U) & 3U), static_cast<u64>(b >> 4U)};
     }
     const QuicTransportError error = w.cids.retire_local(path, sequence, packet);
-    if (space == nullptr)
+    if (space == nullptr || space->abandoned)
     {
         CRD_FUZZ_REQUIRE(error == QuicTransportError::NoError);
         return;
@@ -821,7 +843,7 @@ void op_local_frames(World& w, u8 a)
                     Local& local = space.locals[index];
                     w.cids.local_settled(space.path, local.sequence, acked);
                     local.acked = local.acked || acked;
-                    local.owed = !local.acked;
+                    local.owed = !local.acked && !space.abandoned;
                     return;
                 }
             }
@@ -834,7 +856,8 @@ void op_local_frames(World& w, u8 a)
             {
                 for (usize index = 0U; space.open && index < space.local_count; ++index)
                 {
-                    space.locals[index].owed = space.locals[index].owed || !space.locals[index].acked;
+                    Local& local = space.locals[index];
+                    local.owed = local.owed || (!local.acked && !space.abandoned);
                 }
             }
             return;
@@ -875,7 +898,14 @@ void run(World& w, u8 op, u8 a, u8 b)
             op_open(w, path);
             break;
         case 1U:
-            op_close(w, path);
+            if ((a & 1U) != 0U)
+            {
+                op_abandon(w, path);
+            }
+            else
+            {
+                op_close(w, path);
+            }
             break;
         case 2U:
         case 3U:
@@ -993,4 +1023,14 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         0x00U, 0x0EU, 0x02U, 0x00U, 0x0EU, 0x03U, 0x00U, 0x3CU, 0x00U, 0x01U, 0x0FU, 0x00U, 0x00U,
     };
     sink.add("spaces-refused-and-reused", spaces, sizeof(spaces));
+    // Path 1 abandoned with IDs both ways, a retirement owed and frames in flight: its frames ignored, nothing issued
+    // there, a lost frame not owed again, then closed and its storage reopened.
+    const u8 abandoned[] = {
+        0x02U, 0x10U, 0x00U, 0x00U, 0x12U, 0x00U, 0x00U, 0x12U, 0x00U, 0x00U, 0x18U, 0x00U, 0x00U, // limit 4, path 1
+        0x0AU, 0x43U, 0x00U, 0x0DU, 0x00U, 0x00U, 0x15U, 0x01U, 0x00U,                            // top-up, retire
+        0x11U, 0x01U, 0x00U, 0x11U, 0x01U, 0x00U, 0x12U, 0x00U, 0x00U, 0x1CU, 0x00U, 0x00U,       // abandon twice
+        0x1AU, 0x00U, 0x00U, 0x1AU, 0x82U, 0x00U, 0x0EU, 0x01U, 0x00U, 0x0EU, 0x02U, 0x00U,       // issue, rotate
+        0x09U, 0x00U, 0x01U, 0x11U, 0x00U, 0x00U, 0x30U, 0x00U, 0x00U, 0x3AU, 0x00U, 0x00U, 0x0FU, 0x00U, 0x00U,
+    };
+    sink.add("path-abandoned", abandoned, sizeof(abandoned));
 }

@@ -162,6 +162,35 @@ QuicCidSpace* QuicCids::close(u64 path_id) noexcept
     return nullptr;
 }
 
+bool QuicCids::abandon(u64 path_id) noexcept
+{
+    QuicCidSpace* target = space(path_id);
+    if (target == nullptr || target->m_abandoned)
+    {
+        return false;
+    }
+    while (target->m_peer_count > 0U)
+    {
+        forget_peer(*target, target->m_peer_count - 1U);
+    }
+    for (QuicCidSpace::Retired& entry : target->m_retired)
+    {
+        entry = QuicCidSpace::Retired{}; // nothing is owed: the PATH_ABANDON frame retires every one
+    }
+    for (usize index = 0U; index < target->m_local_count; ++index)
+    {
+        target->m_local[index].owed = false;
+    }
+    target->m_abandoned = true;
+    return true;
+}
+
+bool QuicCids::abandoned(u64 path_id) const noexcept
+{
+    const QuicCidSpace* held = space(path_id);
+    return held != nullptr && held->m_abandoned;
+}
+
 QuicPeerCid* QuicCids::held(QuicCidSpace& space, u64 sequence) noexcept
 {
     for (usize index = 0U; index < space.m_peer_count; ++index)
@@ -294,9 +323,9 @@ QuicTransportError QuicCids::add_peer(const QuicFrame& frame, u64 limit, bool& a
 {
     added = false;
     QuicCidSpace* target = space(path_of(frame));
-    if (target == nullptr)
+    if (target == nullptr || target->m_abandoned)
     {
-        return QuicTransportError::NoError; // a space closed: the frame is ignored (RFC 10069 section 4)
+        return QuicTransportError::NoError; // a space closed or abandoned: the frame is ignored (RFC 10069 section 4)
     }
     for (QuicCidSpace* other : m_spaces)
     {
@@ -553,8 +582,8 @@ usize QuicCids::active(const QuicCidSpace& space) noexcept
 bool QuicCids::issue(u64 path_id, bool announced) noexcept
 {
     QuicCidSpace* target = space(path_id);
-    if (m_host == nullptr || m_local_bytes == 0U || target == nullptr || target->m_local_count >= kLocalSlots ||
-        target->m_local_next >= kQuicMaxVarint)
+    if (m_host == nullptr || m_local_bytes == 0U || target == nullptr || target->m_abandoned ||
+        target->m_local_count >= kLocalSlots || target->m_local_next >= kQuicMaxVarint)
     {
         return false;
     }
@@ -593,7 +622,7 @@ void QuicCids::top_up(u64 limit) noexcept
 bool QuicCids::rotate(u64 path_id, u64 limit) noexcept
 {
     QuicCidSpace* target = space(path_id);
-    if (target == nullptr || m_host == nullptr || m_local_bytes == 0U)
+    if (target == nullptr || target->m_abandoned || m_host == nullptr || m_local_bytes == 0U)
     {
         return false;
     }
@@ -625,9 +654,9 @@ bool QuicCids::rotate(u64 path_id, u64 limit) noexcept
 QuicTransportError QuicCids::retire_local(u64 path_id, u64 sequence, QuicCidRef packet) noexcept
 {
     QuicCidSpace* target = space(path_id);
-    if (target == nullptr)
+    if (target == nullptr || target->m_abandoned)
     {
-        return QuicTransportError::NoError; // a space closed: the frame is ignored (RFC 10069 section 4)
+        return QuicTransportError::NoError; // a space closed or abandoned: the frame is ignored (RFC 10069 section 4)
     }
     // Never toward zero-length IDs, never past the IDs issued, never the one the packet was sent to (section 19.16).
     if (m_local_bytes == 0U || sequence >= target->m_local_next ||
@@ -741,7 +770,7 @@ void QuicCids::local_settled(u64 path_id, u64 sequence, bool acked) noexcept
     if (id != nullptr)
     {
         id->acked = id->acked || acked;
-        id->owed = !id->acked;
+        id->owed = !id->acked && !target->m_abandoned;
     }
 }
 
@@ -752,7 +781,7 @@ void QuicCids::reannounce() noexcept
         for (usize index = 0U; held != nullptr && index < held->m_local_count; ++index)
         {
             QuicLocalCid& id = held->m_local[index];
-            id.owed = id.owed || !id.acked;
+            id.owed = id.owed || (!id.acked && !held->m_abandoned);
         }
     }
 }

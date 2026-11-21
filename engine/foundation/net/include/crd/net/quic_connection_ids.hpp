@@ -7,7 +7,9 @@
 //              for each further path ID (open()) on storage it holds (allocated at construction), at most
 //              kQuicMaxPaths at once; close() gives it back. Each space numbers its IDs both ways from 0, keeps its own
 //              Retire Prior To both ways, and holds up to its active_connection_id_limit (per path: RFC 10069
-//              section 2). An ID is unique in the connection whatever its path ID (section 3.2.1).
+//              section 2). An ID is unique in the connection whatever its path ID (section 3.2.1). Abandoning a path
+//              ID (abandon()) retires the peer's IDs at once and keeps this side's routed until close(), for the
+//              peer's packets in transit (section 3.4).
 //   peer's     a repeated frame changes nothing; one ID under two sequences or path IDs, or one stateless reset token
 //              under two IDs, is PROTOCOL_VIOLATION (RFC 9000 sections 10.3.2 and 19.15); past the limit is
 //              CONNECTION_ID_LIMIT_ERROR. A raised Retire Prior To retires every ID below it, and the one sent to is
@@ -137,6 +139,7 @@ private:
 
     u64 m_path_id = 0U;
     bool m_open = false;
+    bool m_abandoned = false; // abandon(): the peer's IDs retired, this side's routed until close()
     QuicPeerCid m_peer[kQuicMaxPeerConnectionIds];
     usize m_peer_count = 0U;
     u64 m_current = kQuicNoSequence; // the peer ID this path sends to
@@ -168,6 +171,13 @@ public:
     // is not open.
     [[nodiscard]] QuicCidSpace* close(u64 path_id) noexcept;
     [[nodiscard]] bool is_open(u64 path_id) const noexcept { return space(path_id) != nullptr; }
+    // Abandons `path_id`'s open space (RFC 10069 section 3.4): the peer's IDs there are retired at once, their tokens
+    // counting no more and no retirement frame owed for them (the PATH_ABANDON frame retires them), and the peer's
+    // frames for it are ignored from now on (section 4). This side's IDs stay routed and find() names them until
+    // close(), so the peer's packets still in transit open and draw no stateless reset (section 3.4.2); none is
+    // issued, rotated or announced there again. False, changing nothing, for a space not open or abandoned already.
+    [[nodiscard]] bool abandon(u64 path_id) noexcept;
+    [[nodiscard]] bool abandoned(u64 path_id) const noexcept;
 
     // ---- The peer's IDs ----
     // Path ID 0's sequence 0, the Source Connection ID of the peer's long headers, with no token yet: the one sent to.
