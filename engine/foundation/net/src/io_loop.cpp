@@ -354,7 +354,11 @@ bool IoLoop::receive_batch(u32 socket, u64 now_ns, u64 unix_seconds, BatchResult
 {
     const bool trains = (m_coalescing & (1U << socket)) != 0U;
     const bool lent = (m_lending & (1U << socket)) != 0U;
-    ReceivedDatagram* const slots = lent ? m_lent : (trains ? m_trains : m_slots);
+    ReceivedDatagram* slots = trains ? m_trains : m_slots;
+    if (lent)
+    {
+        slots = m_lent;
+    }
     const u32 count = trains ? m_config.train_slots : m_config.batch;
     for (u32 index = 0U; lent && index < count; ++index)
     {

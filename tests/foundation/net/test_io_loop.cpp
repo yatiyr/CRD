@@ -1004,8 +1004,8 @@ TEST_CASE("A loop over two real UDP sockets answers on the one a datagram reache
     CHECK(clock.monotonic_ns() - sent_at < 10U * kSecond);
     // A datagram the ingress drops unanswered wakes the loop to see it is stopped.
     stop.store(true, std::memory_order_release);
-    static const u8 noise[1] = {0U};
-    const OutgoingDatagram wake{ConstSpan<u8>(noise, 1U), first.local_endpoint()};
+    static const u8 kNoise[1] = {0U};
+    const OutgoingDatagram wake{ConstSpan<u8>(kNoise, 1U), first.local_endpoint()};
     REQUIRE(client.send(ConstSpan<OutgoingDatagram>(&wake, 1U)).count == 1U);
     runner.join();
     u8 storage[kDatagramBytes] = {};

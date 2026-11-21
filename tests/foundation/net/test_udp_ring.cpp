@@ -14,6 +14,7 @@
 #include <cstring>
 #include <thread>
 
+// NOLINTBEGIN(cppcoreguidelines-macro-usage): selects the io_uring probe and board
 #if CRD_OS_LINUX && !CRD_OS_ANDROID && __has_include(<linux/io_uring.h>)
 #include <linux/io_uring.h>
 #include <sys/syscall.h>
@@ -23,13 +24,13 @@
 #else
 #define CRD_TEST_RING 0
 #endif
+// NOLINTEND(cppcoreguidelines-macro-usage)
 #if CRD_OS_LINUX
 #include "router_namespace_fixture.hpp"
 #endif
 
 namespace
 {
-using crd::u16;
 using crd::u32;
 using crd::u64;
 using crd::u8;
