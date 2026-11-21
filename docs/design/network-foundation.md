@@ -259,8 +259,39 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   right behind the last datagram taken is read at once, so it wakes no wait. Closing cancels the requests and reads
   each one's last completion before the pages go. Anything the host refuses (no io_uring, a sandbox, a kernel before
   6.0, which refuses the multishot flag at once on the still unbound socket) and `CRD_NET_UDP_RING=0` keep `recvmmsg`;
-  `crd-net-udp-recvmmsg` and `crd-net-router-namespace-recvmmsg` run every real-socket case again on that path.
-  Zero-copy receive (`IORING_OP_RECV_ZC`, Linux 6.15 and a NIC that splits headers) and zero-copy send follow.
+  `crd-net-udp-recvmmsg` and `crd-net-router-namespace-recvmmsg` run every real-socket case again on that path
+  (and on `sendmmsg` alone). Zero-copy receive (`IORING_OP_RECV_ZC`) needs Linux 6.15 and a NIC that splits headers.
+- **Zero-copy send** (2026-11-21, NET-PATH; [udp_ring.cpp](../../engine/foundation/net/src/udp_ring.cpp)).
+  `DatagramSocket::send_stable` is `send` from a caller that keeps each datagram's bytes unchanged until
+  `sends_released()` passes its number (a socket numbers what it takes, `sends_taken()`); the default copies, so
+  NET-SIM's sockets and the conditioner are unchanged. `SendQueue` hands its slots over that way and keeps a slot a
+  lending socket sent (`lent()`) until released, counted against that socket's admission share, written by no one; its
+  destructor waits for the host. With `UdpOptions::zero_copy_bytes` set, a Linux 6.3 `UdpSocket` opens a second
+  io_uring, whose completions never wake the receive ring's wait, and sends each message of that size and of at most
+  17 page fragments (MAX_SKB_FRAGS: past it the host fails EMSGSIZE, which slots 1500 bytes apart reach past about 12
+  datagrams) as `IORING_OP_SENDMSG_ZC` with copy reports. The messages of one send form one linked chain with
+  MSG_DONTWAIT, so they leave in order, the first failure ends it and a full socket is Busy within the call; the result
+  is what `sendmmsg` would return, so every copied path's error handling applies. A message the host fails zero-copy
+  goes again copied (EOPNOTSUPP also ends lending). A notification follows each result flagged `IORING_CQE_F_MORE`;
+  COOP_TASKRUN with TASKRUN_FLAG posts it on the next kernel transition the socket asks for, never by interrupt. Eight
+  notifications in a row reporting a copy (loopback, veth) turn zero-copy off, and every 1024th send that wants it
+  probes again. `close()` waits for every notification.
+- **Zero-copy measured** (`[.udp-board]` under `unshare -Urn`, WSL2 Linux 6.6, a dummy device that sends in place, 20000
+  messages, 3 rounds; sender CPU a KiB, zero-copy against copied): 1 datagram of 1200 B 928-1044 ns against 620-654;
+  8 in slots 186-195 against 127-134, contiguous 257-260 against 125-133; 12 in slots 149 against 106-107, contiguous
+  217-219 against 98-101; 54 contiguous (64800 B, 16 pages) 148 against 66. Zero-copy costs 1.4 to 2.2 times a copy
+  here at every size, so `zero_copy_bytes` defaults to 0; a host whose own board shows a gain (a NIC that segments UDP
+  and sends from the pages) sets it. A real NIC's numbers are the cloud run's.
+- **Zero-copy proof.** `test_udp_zero_copy.cpp`: lending exactly where the host has it, never through `send()` or under
+  the size; loopback's copy reports turning it off after eight and the 1024th send probing; a move. `[.netns]` (a
+  dummy device behind a 500 kbit/s token bucket, which keeps buffers charged to the socket): a 12-datagram train held
+  about 230 ms and given back with no copy; Busy within 50 ms with every datagram before it numbered; a `SendQueue`
+  keeping the twelve slots it lent full until the bucket sent them, its end waiting; a train in slots past 17 fragments
+  sent copied as one train; a datagram past the MTU failing zero-copy, again copied and `MessageTooLarge` there.
+  `test_io_loop.cpp`: lent slots, their share, numbering beside another caller's sends, dropped datagrams freed, the
+  destructor's wait. Teeth seen failing: no destructor wait, lent slots outside admission, no fragment bound (EMSGSIZE
+  refusals), no MSG_DONTWAIT (sends blocked past 50 ms), and a copied retry that did not stick to its message
+  (two refusals for one).
 - **Socket sets** (2026-11-21, NET-PATH). A loop and its host serve a `SocketSet` of up to four sockets, one per
   path a connection knows ([S75](#migration)); a single socket converts to a set of one, so a one-socket host is
   unchanged. Each received datagram names the socket it arrived on (`ReceivedDatagram::socket`), a stateless answer
@@ -4035,8 +4066,8 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
 - **Learning the phase** (Cerid's own design, 2026-11-21; the published LEO controllers read UTC, StarQUIC, or detect each reconfiguration as it happens, LeoCC by 10 ms ICMP probing as OrbCC describes it, arXiv 2508.19067). `HandoverLearning` names the period and guards alone (`starlink_handover_learning()`); `HandoverPhaseLearner` ([handover_phase.hpp](../../engine/numerics/hesap-net/include/crd/hesap/net/handover_phase.hpp), HESAP-NET) folds the connection's own packets at that period (epoch folding, Leahy et al., ApJ 266:160, 1983): 64 bins a period, a bin observed when a packet sent in it was acknowledged or lost and disturbed when one was lost or its RTT rose by at least max(2 ms, 8 J) over the previous sample (J the RFC 3550 jitter of successive RTTs). Periods are counted, not packets. A two-bin window locks when at least 4 periods disturbed it, half of those observing it, and an exact binomial tail against the other bins' rate (Laplace's rule of succession) is at most 10^-3 over the 64 windows (integer Q62, rounded towards refusing); it keeps while 3 periods and a third of the observed ones disturb a window overlapping it, so it is released once the handovers stop. The phase is each disturbing period's first disturbance from the window's onset bin, as a Theil-Sen line (Sen, JASA 63:1379, 1968) read at the period being sent, so a skewed clock is followed without lag. 15 periods are held (about 1.4 KB, in a slot of the connection since crd-net's public headers never include HESAP-NET's).
 - **Learned versus authored.** A configuration naming both is refused; `set_handover()` ends learning and `set_handover_learning()` replaces the schedule; `handover_learned()` reports which is in force and `handover_locks` counts locks. The learner is fed ahead of the coverage gates (a covered loss or RTT still reaches it, or a lock would blind itself), keyed by send time (so the phase includes the sender's distance, with no lead to configure), and a move that restarts the path's state starts it over. A learned schedule is network-influenced: an on-path party or the peer can shape losses and RTTs to make one, but it can only hide what an authored schedule may (guards of at most an eighth of the period), recurrence is required, and it decays when the pattern stops (T16).
 - **Learning proof.** `test_handover_phase.cpp`: bounds; Starlink's timetable on any clock (three origins, three offsets) locking within two periods of the fourth handover, to 12 ms; a delay step alone, a sample every 50 ms and a random loss a second; random losses at 1, 3 and 8 a second and a one-off burst never locking (the recurrence share alone would: removing the test locked on 1 a second); a clock 1000 ppm slow followed to 20 ms over 48 periods (the plain median lagged 121 ms); the release on the eleventh quiet period; any time sequence; the tail against a direct sum. `test_quic_congestion.cpp`: BBRv3 under its own losses with a handover every 2 s locks by 21 s (measured: 19 s, the phase 2 ms off), then 13 reductions after 9 handovers against the authored schedule's 10 and none's 28 (16 on a clock 1000 ppm slow); CUBIC and BBR on a congested path with no handovers never lock at 1 s or 2 s (removing the test locked); a lock released after the handovers stop, and one held on losses alone (feeding the learner behind the gate lost it). `fuzz_estimators` op 6 (learner and tail oracles; 2.1 million libFuzzer runs clean) and `fuzz_quic_connection` op 0xF5 (the learned schedule held to the learning; 30,953 runs clean), with seeds.
-- **Next.** The offloads ([S33](#sockets)): Linux GSO and GRO, Windows USO and URO and the io_uring receive landed
-  2026-11-21; io_uring's zero-copy send and receive and Windows RIO follow.
+- **Next.** The offloads ([S33](#sockets)): Linux GSO and GRO, Windows USO and URO, the io_uring receive and its
+  zero-copy send landed 2026-11-21; Windows RIO follows, and zero-copy receive needs a NIC that splits headers.
 
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers
