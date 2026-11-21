@@ -7,10 +7,11 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path) (Partial). Design: [S76](../design
 
 ## CI first
 
-No finished run contains c20b43c6..70796a17 yet (44880441302 pending). In run 44861565940 (15bea98a) win-shipping
-and win-shipping-profile fail six hesap-tensor tests, not net: the f32 batched check at avx512 and avx512+vnni (44
-mismatches, f64 passes), so the self-check refuses avx512 ("selected avx512, running avx2"). It is the MSVC 14.52
-failure batch 11 saw on the `-sde-skx` arms, now on a native AVX-512 runner; this track's code is not in it.
+No finished run contains c20b43c6..70796a17 yet (44880441302 pending). In run 44861565940 (15bea98a)
+win-shipping-profile (MSVC 14.52.37025) fails six hesap-tensor tests, not net: the f32 batched check at avx512 and
+avx512+vnni (44 mismatches, f64 passes), so the self-check refuses avx512 ("selected avx512, running avx2"),
+consistent with the MSVC 14.52 failure batch 11 saw on the `-sde-skx` arms. win-shipping's log ends at test 3914 of
+11086 (cause unread). No track owns the tensor failure; it keeps both shipping lanes red.
 
 ## What landed
 
@@ -24,7 +25,10 @@ failure batch 11 saw on the `-sde-skx` arms, now on a native AVX-512 runner; thi
 ## Evidence
 
 - WSL linux-gcc-debug: crd-hesap-net-tests 192 cases (`[handover]` 8); crd-net-tests `[handover]` 12 cases; the
-  guard, net and hesap fuzz-corpus CTests (37) pass; both fuzz targets' seed sets replay clean.
+  guard, net and hesap fuzz-corpus CTests (37) pass; the whole crd-net-tests (1010 cases) passes; both fuzz
+  targets' seed sets replay clean, the timetable seed reaching a lock.
+- libFuzzer (linux-clang-fuzz, 241 s each): `fuzz_estimators` 2,135,907 runs and `fuzz_quic_connection` 30,953
+  runs, both clean.
 - clang-tidy 22.1.8 (`tidy-files.py`) on the nine changed files: clean after renaming four local constants and one
   widening cast.
 - Teeth: no binomial test locked on random losses (unit) and on a congested CUBIC path (connection); a plain median
