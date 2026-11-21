@@ -36,6 +36,7 @@
 // slot's, the events of packets on their path, each ACK frame's end and each timeout's detection reach that slot's
 // alone, so the isolation above holds for every slot's window, delivery, losses, ECN state, path MTU and pacer too;
 // the window stays above its floor and the datagram size is the search's after every operation.
+#include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_path_control.hpp>
 #include <crd/net/quic_recovery.hpp>
@@ -172,6 +173,11 @@ struct Log final : QuicRecoveryEvents
     }
 };
 
+// (MSVC C4324: the path controls are 16-byte aligned.)
+#if CRD_COMPILER_MSVC
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 struct World
 {
     QuicSentEntry initial[8];
@@ -216,6 +222,9 @@ struct World
         return (id == QuicSpace::Application) ? open[path] : path == 0U;
     }
 };
+#if CRD_COMPILER_MSVC
+#pragma warning(pop)
+#endif
 
 // What an operation on another slot must leave exactly as it was.
 struct PathState

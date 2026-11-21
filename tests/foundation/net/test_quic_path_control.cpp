@@ -1,7 +1,7 @@
 // crd-net -- a QUIC path's sending state (NET-PATH; docs/design/network-foundation.md#multipath): what start()
 // builds and refuses, each recovery event's meaning (a lost PMTU probe and a handover's loss are no congestion
 // signal, a spurious loss's data was delivered), ECN validation and CE, the PMTU search's size reaching the
-// controller, persistent congestion, a move that keeps or restarts the state, a live policy swap, the handover
+// controller, persistent congestion, a rebinding that keeps the state and a restart, a live policy swap, the handover
 // schedule and learning, the pacer's timer, a Retry's reset, and two paths' controls never touching each other.
 
 #include <crd/net/quic_path_control.hpp>
@@ -257,7 +257,7 @@ TEST_CASE("A path's MTU search sets its own datagram size", "[path_control][mult
     two.b.limit(1300U);
     CHECK(two.b.path_mtu().ceiling() == 1300U);
     CHECK(two.a.path_mtu().ceiling() == kQuicDefaultMaxDatagram);
-    REQUIRE(two.b.move(path_v4(9), kQuicPmtuFloor, 3U));
+    two.b.restart(path_v4(9), kQuicPmtuFloor, 3U);
     CHECK(two.b.path_mtu().ceiling() == 1300U);
 
     // A Packet Too Big quoting a packet of the path lowers no other path's search.
@@ -268,7 +268,7 @@ TEST_CASE("A path's MTU search sets its own datagram size", "[path_control][mult
     CHECK(two.a.datagram_bytes() == two.a.path_mtu().size());
 }
 
-TEST_CASE("A move keeps a path's state for a new port and starts it over otherwise", "[path_control][multipath]")
+TEST_CASE("A rebinding keeps a path's state and a restart starts every part over", "[path_control][multipath]")
 {
     QuicPathControlConfig config;
     config.handover = HandoverSchedule{15U * kSecond, 12U * kSecond, 100U * kMs, 100U * kMs};
@@ -281,14 +281,13 @@ TEST_CASE("A move keeps a path's state for a new port and starts it over otherwi
     const u64 reduced = control.congestion().window();
     REQUIRE(reduced < initial);
 
-    CHECK_FALSE(control.move(path_v4(1), kQuicPmtuFloor, 2U));        // the same path
-    CHECK_FALSE(control.move(path_v4(1, 5000U), kQuicPmtuFloor, 2U)); // a NAT rebinding: only the port changed
+    control.bind(path_v4(1, 5000U)); // a NAT rebinding: only the port changed
     CHECK(control.path() == path_v4(1, 5000U));
     CHECK(control.congestion().window() == reduced);
     CHECK(control.handover() == config.handover);
 
     control.arm_pace(500U * kMs);
-    CHECK(control.move(path_v6(), kQuicIpv6BaseDatagram, 2U)); // another address: everything starts over
+    control.restart(path_v6(), kQuicIpv6BaseDatagram, 2U); // another address: everything starts over
     CHECK(control.path() == path_v6());
     CHECK(control.congestion().window() == initial);
     CHECK(control.datagram_bytes() == kQuicPmtuFloor);
@@ -320,7 +319,7 @@ TEST_CASE("A path's policy swaps live and its ECN codepoint follows", "[path_con
     CHECK(control.congestion().window() == window);
     CHECK(control.marking(120U * kMs, 300U * kMs) == Ecn::Ect1);
     // A move restarts on the swapped policy.
-    REQUIRE(control.move(path_v4(2), kQuicPmtuFloor, 3U));
+    control.restart(path_v4(2), kQuicPmtuFloor, 3U);
     CHECK(control.congestion().algorithm() == CongestionAlgorithm::Prague);
 }
 
