@@ -1520,17 +1520,19 @@ TEST_CASE("QUIC hosts: streams over real UDP sockets leave in segmented trains a
     const QuicHandle handle = hosts.client.connect(request, hosts.clock.monotonic_ns());
     hosts.app.begin(handle, 9U);
     REQUIRE(hosts.serve_until([&] { return hosts.app.echoed(handle); }, 10U));
-#if CRD_OS_LINUX
-    // Both hosts' bursts leave as trains, and each loop splits the trains its socket joined.
+#if CRD_OS_LINUX || CRD_OS_WINDOWS
+    // Both hosts' bursts leave as trains (UDP_SEGMENT, USO), and each loop splits the trains its socket joined.
     REQUIRE(server_socket.features().segmented_send);
     REQUIRE(client_socket.features().coalesced_receive);
     CHECK(server_socket.offload_counters().trains_sent != 0U);
     CHECK(client_socket.offload_counters().trains_sent != 0U);
-    CHECK(client_socket.offload_counters().trains_received != 0U);
     CHECK(hosts.client_loop.counters().trains == client_socket.offload_counters().trains_received);
     CHECK(hosts.server_loop.counters().trains == server_socket.offload_counters().trains_received);
     CHECK(server_socket.offload_counters().trains_refused == 0U);
-#else
+#endif
+#if CRD_OS_LINUX
+    CHECK(client_socket.offload_counters().trains_received != 0U); // Windows' loopback hands URO datagrams singly
+#elif !CRD_OS_WINDOWS
     CHECK(hosts.client_loop.counters().trains == 0U);
 #endif
 }

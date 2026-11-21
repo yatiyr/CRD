@@ -232,7 +232,13 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   datagram size (`ReceivedDatagram::segment`); one train has one codepoint (GRO joins only equal TOS and traffic
   classes). `IoLoop` reads a coalescing socket into `train_slots` such slots and hands each datagram on in place,
   a datagram past `slot_bytes` or a truncated train's cut last one truncated. `segment_send = false` keeps the
-  portable path; `features()` reports both offloads per socket and `offload_counters()` what they did.
+  portable path; `features()` reports both offloads per socket and `offload_counters()` what they did. Windows
+  (USO, URO, as msquic): a socket segments where `UDP_SEND_MSG_SIZE` reads back (never set on the socket, which
+  would segment PMTU probes too); each train is one `WSASendMsg`, one `WSABUF` per datagram in place, with a
+  `UDP_SEND_MSG_SIZE` control message. A refused train goes again a datagram a call (a CE train, which Windows
+  refuses, then leaves unmarked); `WSAEOPNOTSUPP`, or `WSAEINVAL` for an unmarked train, turns segmentation off.
+  `coalesce_receive` sets `UDP_RECV_MAX_COALESCED_SIZE` to the IPv6 UDP payload and reads `UDP_COALESCED_INFO`
+  through the same control reader as `UDP_GRO`.
 - **Socket sets** (2026-11-21, NET-PATH). A loop and its host serve a `SocketSet` of up to four sockets, one per
   path a connection knows ([S75](#migration)); a single socket converts to a set of one, so a one-socket host is
   unchanged. Each received datagram names the socket it arrived on (`ReceivedDatagram::socket`), a stateless answer

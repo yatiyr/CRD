@@ -814,10 +814,10 @@ TEST_CASE("a burst leaves in trains where the host segments them and arrives as 
                 SKIP("the host has no IPv6 loopback");
             }
             INFO("IPv" << (family.family == crd::net::AddressFamily::V4 ? 4 : 6) << ", segmenting " << segment);
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX || CRD_OS_WINDOWS
             REQUIRE(from.features().segmented_send == segment);
 #else
-            CHECK_FALSE(from.features().segmented_send); // Windows' USO and macOS's offloads are not taken yet
+            CHECK_FALSE(from.features().segmented_send); // macOS's offloads are not taken yet
 #endif
             CHECK_FALSE(to.features().coalesced_receive); // only on request
             send_burst(from, to.local_endpoint());
@@ -843,7 +843,7 @@ TEST_CASE("a burst leaves in trains where the host segments them and arrives as 
     UdpSocket v4 = open_on(IpAddress::v4_loopback());
     send_burst(dual, v4.local_endpoint());
     receive_burst(v4, reach(dual, IpAddress::v4_loopback()));
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX || CRD_OS_WINDOWS
     CHECK(dual.offload_counters().trains_sent == 5U);
 #endif
 }
@@ -863,22 +863,89 @@ TEST_CASE("a coalescing socket receives a sender's trains whole and each datagra
                 SKIP("the host has no IPv6 loopback");
             }
             INFO("IPv" << (family.family == crd::net::AddressFamily::V4 ? 4 : 6) << ", segmenting " << segment);
-#if CRD_OS_LINUX
+#if CRD_OS_LINUX || CRD_OS_WINDOWS
             REQUIRE(to.features().coalesced_receive);
 #else
-            CHECK_FALSE(to.features().coalesced_receive); // Windows' URO and macOS's offloads are not taken yet
+            CHECK_FALSE(to.features().coalesced_receive); // macOS's offloads are not taken yet
 #endif
             send_burst(from, to.local_endpoint());
             const u64 trains = receive_burst_coalesced(to, from.local_endpoint());
             CHECK(to.offload_counters().trains_received == trains);
 #if CRD_OS_LINUX
             // On the loopback a segmented send reaches a coalescing socket whole; single datagrams stay single.
+            // Windows' loopback hands even a segmented send on a datagram at a time (no URO there).
             CHECK(trains == (segment ? 5U : 0U));
             CHECK(to.offload_counters().train_datagrams_received ==
                   (segment ? burst_trains(to.local_endpoint()).train_datagrams_sent : 0U));
 #endif
         }
     }
+}
+
+TEST_CASE("a CE train goes as the host takes CE, and segmenting and marking stay on", "[net][udp][net-path]")
+{
+    UdpSocket from;
+    UdpSocket to;
+    REQUIRE(open_offloaded(from, IpAddress::v4_loopback(), true, false));
+    REQUIRE(open_offloaded(to, IpAddress::v4_loopback(), true, false));
+    static u8 payload[4][64];
+    OutgoingDatagram datagrams[4];
+    for (u32 index = 0U; index < 4U; ++index)
+    {
+        pattern(payload[index], index);
+        datagrams[index] = OutgoingDatagram{ConstSpan<u8>(payload[index]), to.local_endpoint(), Ecn::Ce};
+    }
+    REQUIRE(segment_train(datagrams) == 4U);
+    REQUIRE(from.send(datagrams).count == 4U);
+    static Slots slots;
+    REQUIRE(receive_all(to, Span<ReceivedDatagram>(slots.slots, 4U), 4U) == 4U);
+    for (u32 index = 0U; index < 4U; ++index)
+    {
+        const ReceivedDatagram& slot = slots.slots[index];
+        INFO("datagram " << index);
+        CHECK(slot.size == sizeof(payload[index]));
+        CHECK(matches(slot.storage.first(slot.size), index));
+        CHECK(slot.ecn == (to.features().ecn_reading ? kCeArrives : Ecn::NotEct));
+    }
+    const OffloadCounters& sent = from.offload_counters();
+#if CRD_OS_WINDOWS
+    // Windows refuses a sender's CE: the train goes again a datagram a call, each then sent unmarked.
+    CHECK(sent.trains_refused == 1U);
+    CHECK(sent.trains_sent == 0U);
+#elif CRD_OS_LINUX
+    CHECK(sent.trains_sent == 1U);
+    CHECK(sent.train_datagrams_sent == 4U);
+    CHECK(sent.trains_refused == 0U);
+#endif
+    CHECK(from.features().segmented_send == (CRD_OS_LINUX != 0 || CRD_OS_WINDOWS != 0));
+    CHECK(from.features().ecn_marking == (CRD_OS_LINUX != 0 || CRD_OS_WINDOWS != 0));
+}
+
+TEST_CASE("a train past the route's MTU is refused as each datagram would be, and segmenting stays on",
+          "[net][udp][net-path]")
+{
+#if CRD_OS_LINUX || CRD_OS_WINDOWS
+    UdpSocket from;
+    REQUIRE(open_offloaded(from, IpAddress::v4_any(), true, false));
+    // Past any Ethernet's MTU, jumbo frames included, so neither the train nor a datagram of it leaves the host.
+    static u8 payload[2][9500];
+    const Endpoint documentation{IpAddress::v4(192, 0, 2, 1), 9U}; // TEST-NET-1 (RFC 5737)
+    const OutgoingDatagram datagrams[2] = {{ConstSpan<u8>(payload[0]), documentation, Ecn::NotEct},
+                                           {ConstSpan<u8>(payload[1]), documentation, Ecn::NotEct}};
+    REQUIRE(segment_train(datagrams) == 2U);
+    const BatchResult result = from.send(datagrams);
+    if (result.error == SocketError::Unreachable)
+    {
+        SKIP("the host has no route off the machine");
+    }
+    CHECK(result.error == SocketError::MessageTooLarge);
+    CHECK(result.count == 0U);
+    CHECK(from.offload_counters().trains_refused == 1U);
+    CHECK(from.offload_counters().trains_sent == 0U);
+    CHECK(from.features().segmented_send); // the train's own refusal, not the host's
+#else
+    SKIP("macOS lets the host fragment until crd-net's port there (MAC.1)");
+#endif
 }
 
 #if CRD_OS_LINUX

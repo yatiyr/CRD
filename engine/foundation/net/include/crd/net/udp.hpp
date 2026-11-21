@@ -43,9 +43,9 @@ inline constexpr u64 kNoWaitHandle = ~u64{0};
 // The most sockets one loop and its host serve together: one per path a QUIC connection knows (kQuicMaxPaths).
 inline constexpr u32 kMaxSetSockets = 4U;
 // A train: datagrams to one peer with one ECN codepoint, each the first's size but the last, which may be shorter, that
-// the host segments from one send (Linux's UDP_SEGMENT) or joins into one receive (UDP_GRO). One carries at most
-// kMaxTrainDatagrams of them (every kernel's UDP_MAX_SEGMENTS) and, sent, at most the peer family's UDP payload; a
-// receive slot of kMaxTrainBytes holds the longest train a host joins.
+// the host segments from one send (Linux's UDP_SEGMENT, Windows' USO) or joins into one receive (UDP_GRO, URO). One
+// carries at most kMaxTrainDatagrams of them (every Linux kernel's UDP_MAX_SEGMENTS) and, sent, at most the peer
+// family's UDP payload; a receive slot of kMaxTrainBytes holds the longest train a host joins.
 inline constexpr usize kMaxTrainDatagrams = 64U;
 inline constexpr usize kMaxTrainBytes = 65535U;
 
@@ -178,9 +178,11 @@ protected:
 // itself. On Linux a send hands each train (segment_train) to the host in one message with UDP_SEGMENT, its datagrams
 // one iovec each where they lie, where the host takes the option; a train it refuses for any reason but back-pressure
 // goes again a datagram a message, so each meets its own error, and EIO (a device or route that cannot segment)
-// also turns segmentation off for good, as features() then reports. With coalesce_receive a Linux socket takes UDP_GRO
-// and reports each train's datagram size. Windows sockets send a datagram a call and never coalesce until its USO
-// and URO join (NET-PATH); macOS carries bytes alone until crd-net's port there (MAC.1).
+// also turns segmentation off for good, as features() then reports. Windows does the same through USO: one WSASendMsg
+// per train, one WSABUF per datagram, with a UDP_SEND_MSG_SIZE control message, where the option reads back; a train
+// it refuses goes again a datagram a call, and WSAEOPNOTSUPP (or WSAEINVAL for an unmarked train) turns segmentation
+// off. With coalesce_receive a socket takes UDP_GRO on Linux or URO (UDP_RECV_MAX_COALESCED_SIZE) on Windows and
+// reports each train's datagram size. macOS carries bytes alone until crd-net's port there (MAC.1).
 class UdpSocket final : public DatagramSocket
 {
 public:

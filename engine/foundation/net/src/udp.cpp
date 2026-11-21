@@ -41,7 +41,20 @@ constexpr usize kReportsPerReceive = 2U * kBatchChunk;
 constexpr u32 kV4Overhead = 28U;
 constexpr u32 kV6Overhead = 48U;
 #elif CRD_OS_WINDOWS
-constexpr usize kControlBytes = WSA_CMSG_SPACE(sizeof(INT));
+// Room for the control messages one datagram or train takes: a codepoint and, received, a train's datagram size
+// (UDP_COALESCED_INFO) or, sent, the size the host segments it at (UDP_SEND_MSG_SIZE).
+constexpr usize kControlBytes = WSA_CMSG_SPACE(sizeof(INT)) + WSA_CMSG_SPACE(sizeof(DWORD));
+#endif
+#if CRD_OS_LINUX
+constexpr int kTrainLevel = SOL_UDP;
+constexpr int kTrainReceived = UDP_GRO;    // a received train's datagram size, an int
+constexpr int kTrainSegment = UDP_SEGMENT; // the size a sent train is segmented at, a u16
+using TrainSegment = u16;
+#elif CRD_OS_WINDOWS
+constexpr int kTrainLevel = IPPROTO_UDP;
+constexpr int kTrainReceived = UDP_COALESCED_INFO; // a DWORD
+constexpr int kTrainSegment = UDP_SEND_MSG_SIZE;   // a DWORD
+using TrainSegment = DWORD;
 #endif
 
 // An ICMP report about an earlier send, which says nothing about the datagrams still waiting. Linux hands the error
@@ -219,22 +232,50 @@ void ecn_message(const Endpoint& peer, int& level, int& type) noexcept
 }
 #endif
 
+#if CRD_OS_LINUX || CRD_OS_WINDOWS
+// One received control message: the datagram's codepoint or, for a train the host joined (UDP_GRO,
+// UDP_COALESCED_INFO), its datagrams' size, 32 bits on both hosts. A slot holding no more than one datagram stays a
+// datagram, and a size no slot can hold (Linux's int below zero) names none.
+void read_control(int level, int type, const u8* data, usize bytes, ReceivedDatagram& slot) noexcept
+{
+    if (level == kTrainLevel && type == kTrainReceived && bytes >= sizeof(u32))
+    {
+        u32 segment = 0U;
+        std::memcpy(&segment, data, sizeof(segment));
+        slot.segment = (segment != 0U && slot.size > segment) ? segment : 0U;
+        return;
+    }
+    static_cast<void>(ecn_from(level, type, data, bytes, slot.ecn));
+}
+
+// A slot holding a train, counted as the socket's offload did it.
+void count_train(const ReceivedDatagram& slot, OffloadCounters& offloads) noexcept
+{
+    if (slot.segment != 0U)
+    {
+        ++offloads.trains_received;
+        offloads.train_datagrams_received += (slot.size + slot.segment - 1U) / slot.segment;
+    }
+}
+
+// Whether the host segments trains (Linux 4.18's UDP_SEGMENT, Windows 10 2004's UDP_SEND_MSG_SIZE): the option reads
+// back where it is known. It is never set on the socket, which would segment every send, PMTU probes included; each
+// train names its size in its own message.
+[[nodiscard]] bool segments_trains(NativeSocket handle) noexcept
+{
+    TrainSegment value = 0U;
+    NativeLength length = static_cast<NativeLength>(sizeof(value));
+    return ::getsockopt(handle, kTrainLevel, kTrainSegment, reinterpret_cast<char*>(&value), &length) == 0;
+}
+#endif
+
 #if CRD_OS_LINUX
-// A received datagram's codepoint and, for a train the host joined (UDP_GRO), its datagrams' size: a slot holding
-// no more than one datagram stays a datagram.
+// A received datagram's control messages into its slot.
 void read_controls(msghdr& message, ReceivedDatagram& slot) noexcept
 {
     for (cmsghdr* header = CMSG_FIRSTHDR(&message); header != nullptr; header = CMSG_NXTHDR(&message, header))
     {
-        const usize bytes = header->cmsg_len - CMSG_LEN(0);
-        if (header->cmsg_level == SOL_UDP && header->cmsg_type == UDP_GRO && bytes >= sizeof(int))
-        {
-            int segment = 0;
-            std::memcpy(&segment, CMSG_DATA(header), sizeof(segment));
-            slot.segment = (segment > 0 && slot.size > static_cast<usize>(segment)) ? static_cast<u32>(segment) : 0U;
-            continue;
-        }
-        static_cast<void>(ecn_from(header->cmsg_level, header->cmsg_type, CMSG_DATA(header), bytes, slot.ecn));
+        read_control(header->cmsg_level, header->cmsg_type, CMSG_DATA(header), header->cmsg_len - CMSG_LEN(0), slot);
     }
 }
 
@@ -351,46 +392,52 @@ void attach(msghdr& message, u8 (&control)[kSendControlBytes], const Endpoint& p
     }
     if (segment != 0U)
     {
-        header->cmsg_level = SOL_UDP;
-        header->cmsg_type = UDP_SEGMENT;
+        header->cmsg_level = kTrainLevel;
+        header->cmsg_type = kTrainSegment;
         header->cmsg_len = CMSG_LEN(sizeof(u16));
         std::memcpy(CMSG_DATA(header), &segment, sizeof(segment));
     }
 }
-
-// Whether the host segments trains (UDP_SEGMENT, Linux 4.18): the option reads back where it is known.
-[[nodiscard]] bool segments_trains(NativeSocket handle) noexcept
-{
-    int value = 0;
-    socklen_t length = sizeof(value);
-    return ::getsockopt(handle, SOL_UDP, UDP_SEGMENT, &value, &length) == 0;
-}
 #elif CRD_OS_WINDOWS
-[[nodiscard]] Ecn received_ecn(WSAMSG& message) noexcept
+// A received datagram's control messages into its slot.
+void read_controls(WSAMSG& message, ReceivedDatagram& slot) noexcept
 {
-    Ecn ecn = Ecn::NotEct;
     for (WSACMSGHDR* header = WSA_CMSG_FIRSTHDR(&message); header != nullptr;
          header = WSA_CMSG_NXTHDR(&message, header))
     {
-        const usize bytes = header->cmsg_len - WSA_CMSG_LEN(0);
-        if (ecn_from(header->cmsg_level, header->cmsg_type, WSA_CMSG_DATA(header), bytes, ecn))
-        {
-            break;
-        }
+        read_control(header->cmsg_level, header->cmsg_type, WSA_CMSG_DATA(header), header->cmsg_len - WSA_CMSG_LEN(0),
+                     slot);
     }
-    return ecn;
 }
 
-// One control message carrying `ecn` toward `peer` in `control`, which `message` then points at.
-void mark(WSAMSG& message, u8 (&control)[kControlBytes], const Endpoint& peer, Ecn ecn) noexcept
+// The control messages of one sent message in `control`, which `message` then points at: `ecn` toward `peer` unless
+// Not-ECT, and the size the host segments a train at unless `segment` is 0. Neither leaves the message without one.
+void attach(WSAMSG& message, u8 (&control)[kControlBytes], const Endpoint& peer, Ecn ecn, DWORD segment) noexcept
 {
+    if (ecn == Ecn::NotEct && segment == 0U)
+    {
+        return;
+    }
     std::memset(control, 0, sizeof(control));
-    message.Control = WSABUF{static_cast<ULONG>(sizeof(control)), reinterpret_cast<CHAR*>(control)};
-    WSACMSGHDR* const header = WSA_CMSG_FIRSTHDR(&message);
-    ecn_message(peer, header->cmsg_level, header->cmsg_type);
-    header->cmsg_len = WSA_CMSG_LEN(sizeof(INT));
-    const INT value = static_cast<INT>(ecn);
-    std::memcpy(WSA_CMSG_DATA(header), &value, sizeof(value));
+    const usize length =
+        (ecn != Ecn::NotEct ? WSA_CMSG_SPACE(sizeof(INT)) : 0U) + (segment != 0U ? WSA_CMSG_SPACE(sizeof(DWORD)) : 0U);
+    message.Control = WSABUF{static_cast<ULONG>(length), reinterpret_cast<CHAR*>(control)};
+    WSACMSGHDR* header = WSA_CMSG_FIRSTHDR(&message);
+    if (ecn != Ecn::NotEct)
+    {
+        ecn_message(peer, header->cmsg_level, header->cmsg_type);
+        header->cmsg_len = WSA_CMSG_LEN(sizeof(INT));
+        const INT value = static_cast<INT>(ecn);
+        std::memcpy(WSA_CMSG_DATA(header), &value, sizeof(value));
+        header = WSA_CMSG_NXTHDR(&message, header);
+    }
+    if (segment != 0U)
+    {
+        header->cmsg_level = kTrainLevel;
+        header->cmsg_type = kTrainSegment;
+        header->cmsg_len = WSA_CMSG_LEN(sizeof(DWORD));
+        std::memcpy(WSA_CMSG_DATA(header), &segment, sizeof(segment));
+    }
 }
 #endif
 
@@ -521,9 +568,14 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
         socket.m_features.dont_fragment = forbid_fragmentation(handle, v6, socket.m_dual_stack);
 #if CRD_OS_LINUX
         socket.m_features.too_big_reports = queue_reports(handle, v6, socket.m_dual_stack);
-        socket.m_features.segmented_send = options.segment_send && segments_trains(handle);
         socket.m_features.coalesced_receive = options.coalesce_receive && set_option(handle, SOL_UDP, UDP_GRO, 1);
+#else
+        // The host joins trains of at most one IPv6 UDP payload (msquic's bound), so a kMaxTrainBytes slot holds any.
+        socket.m_features.coalesced_receive =
+            options.coalesce_receive &&
+            set_option(handle, IPPROTO_UDP, UDP_RECV_MAX_COALESCED_SIZE, static_cast<int>(kMaxUdpPayloadV6));
 #endif
+        socket.m_features.segmented_send = options.segment_send && segments_trains(handle);
     }
 #endif
     if (error == SocketError::None)
@@ -653,11 +705,7 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
             fill_slot(slot, messages[index].msg_len, (messages[index].msg_hdr.msg_flags & MSG_TRUNC) != 0,
                       peers[index]);
             read_controls(messages[index].msg_hdr, slot);
-            if (slot.segment != 0U)
-            {
-                ++m_offloads.trains_received;
-                m_offloads.train_datagrams_received += (slot.size + slot.segment - 1U) / slot.segment;
-            }
+            count_train(slot, m_offloads);
         }
         result.count += static_cast<usize>(got);
         if (static_cast<usize>(got) < chunk)
@@ -688,7 +736,8 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
         if (received || code == WSAEMSGSIZE)
         {
             fill_slot(slot, received ? static_cast<usize>(got) : slot.storage.size(), !received, peer);
-            slot.ecn = received_ecn(message);
+            read_controls(message, slot);
+            count_train(slot, m_offloads);
             ++result.count;
             continue;
         }
@@ -850,7 +899,8 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
     }
 #else
 #if CRD_OS_WINDOWS
-    bool plain = false; // the datagram the host refused marked goes again unmarked
+    bool plain = false;     // the datagram the host refused marked goes again unmarked
+    usize plain_until = 0U; // the datagrams before it go a call each: a train the host refused
 #endif
     while (result.count < datagrams.size())
     {
@@ -865,21 +915,29 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
             return result;
         }
 #if CRD_OS_WINDOWS
-        // WSASendMsg only reads the bytes; WSABUF has no const form.
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
-        CHAR* const bytes = reinterpret_cast<CHAR*>(const_cast<u8*>(datagram.bytes.data()));
-        WSABUF buffer{static_cast<ULONG>(datagram.bytes.size()), bytes};
+        // A train goes as one message gathering its datagrams in place, the host segmenting it at the first's size
+        // (USO); every datagram of it shares the first's peer, so the first's checks hold for all of them.
+        const usize count = (m_features.segmented_send && result.count >= plain_until)
+                                ? segment_train(datagrams.subspan(result.count))
+                                : 1U;
+        WSABUF buffers[kMaxTrainDatagrams];
+        for (usize index = 0U; index < count; ++index)
+        {
+            const cont::ConstSpan<u8> bytes = datagrams[result.count + index].bytes;
+            // WSASendMsg only reads the bytes; WSABUF has no const form.
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+            CHAR* const data = reinterpret_cast<CHAR*>(const_cast<u8*>(bytes.data()));
+            buffers[index] = WSABUF{static_cast<ULONG>(bytes.size()), data};
+        }
         WSAMSG message{};
         message.name = reinterpret_cast<sockaddr*>(&peer.storage);
         message.namelen = peer.length;
-        message.lpBuffers = &buffer;
-        message.dwBufferCount = 1U;
+        message.lpBuffers = buffers;
+        message.dwBufferCount = static_cast<DWORD>(count);
         alignas(WSACMSGHDR) u8 control[kControlBytes];
         const bool marked = !plain && datagram.ecn != Ecn::NotEct && m_features.ecn_marking;
-        if (marked)
-        {
-            mark(message, control, datagram.peer, datagram.ecn);
-        }
+        attach(message, control, datagram.peer, marked ? datagram.ecn : Ecn::NotEct,
+               count > 1U ? static_cast<DWORD>(datagram.bytes.size()) : 0U);
         DWORD bytes_sent = 0U;
         const int sent = ::WSASendMsg(handle, &message, 0U, &bytes_sent, nullptr, nullptr);
 #else
@@ -894,6 +952,17 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
                 continue;
             }
 #if CRD_OS_WINDOWS
+            if (count > 1U && !would_block(code))
+            {
+                // A train the host refused (a segment past the interface's MTU, a codepoint it refuses): its
+                // datagrams go a call each and meet their own errors. A host that refuses to segment at all, an
+                // unmarked train refused as invalid included, has this socket stop asking.
+                ++m_offloads.trains_refused;
+                const bool unsegmented = code == WSAEOPNOTSUPP || (code == WSAEINVAL && !marked);
+                m_features.segmented_send = m_features.segmented_send && !unsegmented;
+                plain_until = result.count + count;
+                continue;
+            }
             if (code == WSAEINVAL && marked)
             {
                 // Windows takes ECT(0) and ECT(1) but refuses CE, a router's mark, so that datagram goes unmarked;
@@ -911,8 +980,10 @@ BatchResult UdpSocket::send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcep
         }
 #if CRD_OS_WINDOWS
         plain = false;
-#endif
+        sent_train(count, result);
+#else
         ++result.count;
+#endif
     }
 #endif
     return result;
