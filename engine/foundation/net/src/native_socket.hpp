@@ -33,7 +33,7 @@ namespace crd::net
 #if CRD_OS_WINDOWS
 using NativeSocket = SOCKET;
 using NativeLength = int;
-const NativeSocket kInvalidSocket = INVALID_SOCKET;
+inline const NativeSocket kInvalidSocket = INVALID_SOCKET;
 #else
 using NativeSocket = int;
 using NativeLength = socklen_t;
@@ -291,6 +291,39 @@ using NativePoll = pollfd;
         left = timeout_ns - spent;
     }
 }
+
+#if CRD_OS_WINDOWS
+// A wait handle that is an event object (DatagramSocket::wait_handle on Windows).
+[[nodiscard]] inline HANDLE event_of(u64 handle) noexcept
+{
+    // The integer a HANDLE was carried as: the round trip back is defined.
+    // NOLINTNEXTLINE(performance-no-int-to-ptr)
+    return reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle));
+}
+
+// Waits until one of the `count` events is set or `timeout_ns` passes; false when the time passed. A failed wait
+// reports one set, so the next calls report what went wrong; a host timer that fires early waits again for what is
+// left, as wait_native() does.
+[[nodiscard]] inline bool wait_events(const HANDLE* events, usize count, u64 timeout_ns) noexcept
+{
+    const i64 start = time::TickClock::now_ns();
+    for (u64 left = timeout_ns;;)
+    {
+        const DWORD ready = ::WaitForMultipleObjects(static_cast<DWORD>(count), events, FALSE,
+                                                     static_cast<DWORD>(wait_milliseconds(left)));
+        if (ready != WAIT_TIMEOUT)
+        {
+            return true;
+        }
+        const u64 spent = static_cast<u64>(time::TickClock::now_ns() - start);
+        if (spent >= timeout_ns)
+        {
+            return false;
+        }
+        left = timeout_ns - spent;
+    }
+}
+#endif
 
 // One socket's wait: the events that arrived, 0 when the time passed.
 [[nodiscard]] inline short wait_native(NativeSocket handle, short events, u64 timeout_ns) noexcept

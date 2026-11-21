@@ -1468,13 +1468,23 @@ TEST_CASE("QUIC client: a client host is served over the host's loopback through
           "[net][4.2a][quic-client]")
 {
     const bool raw_path = GENERATE(false, true);
+    // Windows' Registered I/O carries the hosts as the plain path does (a no-op elsewhere): posted buffers for the
+    // bursts, each a datagram of the loop's slots.
+    const bool registered = GENERATE(false, true);
     UdpOptions options;
     options.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), 0U};
+    options.registered_io = registered;
+    options.ring_buffers = registered ? 1024U : options.ring_buffers;
+    options.ring_datagram_bytes = registered ? 1500U : 0U;
     SocketError error = SocketError::Failed;
     UdpSocket server_socket = UdpSocket::open(options, error);
     REQUIRE(error == SocketError::None);
     UdpSocket client_socket = UdpSocket::open(options, error);
     REQUIRE(error == SocketError::None);
+#if CRD_OS_WINDOWS
+    CHECK(server_socket.features().lent_receive == registered);
+    CHECK(client_socket.features().lent_receive == registered);
+#endif
     RealHosts hosts(server_socket, client_socket);
 
     QuicClientConnect request;
@@ -1506,14 +1516,20 @@ TEST_CASE("QUIC client: a client host is served over the host's loopback through
 TEST_CASE("QUIC hosts: streams over real UDP sockets leave in segmented trains and arrive as coalesced ones",
           "[net][net-path][quic-client]")
 {
+    const bool registered = GENERATE(false, true); // Windows' Registered I/O, a no-op elsewhere
     UdpOptions options;
     options.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), 0U};
     options.coalesce_receive = true;
+    options.registered_io = registered;
     SocketError error = SocketError::Failed;
     UdpSocket server_socket = UdpSocket::open(options, error);
     REQUIRE(error == SocketError::None);
     UdpSocket client_socket = UdpSocket::open(options, error);
     REQUIRE(error == SocketError::None);
+#if CRD_OS_WINDOWS
+    CHECK(server_socket.features().lent_receive == registered);
+    CHECK(client_socket.features().lent_receive == registered);
+#endif
     RealHosts hosts(server_socket, client_socket);
     QuicClientConnect request;
     request.server = server_socket.local_endpoint();

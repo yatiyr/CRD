@@ -2,6 +2,7 @@
 
 #include "native_socket.hpp"
 #include "udp_ring.hpp"
+#include "udp_rio.hpp"
 
 #include <crd/core/environment.hpp>
 #include <crd/net/udp.hpp>
@@ -25,6 +26,28 @@ namespace
 {
 constexpr u64 kSimulatedSliceNs = 1000000U; // a set the host cannot wait on whole waits a millisecond at a time
 
+#if CRD_NET_RING || CRD_OS_WINDOWS
+// Whether sockets may use io_uring or Registered I/O: not turned off for the process (CRD_NET_UDP_RING=0, the plain
+// path's CTest arm and an operator's way back to it).
+[[nodiscard]] bool rings_allowed() noexcept
+{
+    char value[4] = {};
+    const bool set = read_environment("CRD_NET_UDP_RING", value, sizeof(value)) == EnvironmentRead::Set;
+    return !(set && std::strcmp(value, "0") == 0);
+}
+
+// The longest datagram each ring buffer holds (UdpOptions::ring_datagram_bytes).
+[[nodiscard]] u32 ring_datagram_bytes(const UdpOptions& options, bool coalescing) noexcept
+{
+    const u32 asked = options.ring_datagram_bytes;
+    if (coalescing)
+    {
+        return static_cast<u32>(kMaxTrainBytes);
+    }
+    return (asked == 0U || asked > kMaxUdpPayloadV6) ? static_cast<u32>(kMaxUdpPayloadV6) : asked;
+}
+#endif
+
 #if CRD_OS_LINUX
 constexpr usize kBatchChunk = 32U; // datagrams per recvmmsg, messages per sendmmsg
 // The datagrams one sendmmsg carries at most, an iovec each, however its messages group them into trains.
@@ -44,15 +67,6 @@ static_assert(kRingReports == kReportsPerReceive, "a lent slot's report takes a 
 #if CRD_NET_SEND_RING
 static_assert(kSendRingMessages == kBatchChunk, "the send ring takes every message of a sendmmsg's chunk");
 #endif
-
-// Whether sockets may use io_uring: not turned off for the process (CRD_NET_UDP_RING=0, the recvmmsg and sendmmsg
-// path's CTest arm and an operator's way back to it).
-[[nodiscard]] bool rings_allowed() noexcept
-{
-    char value[4] = {};
-    const bool set = read_environment("CRD_NET_UDP_RING", value, sizeof(value)) == EnvironmentRead::Set;
-    return !(set && std::strcmp(value, "0") == 0);
-}
 #endif
 
 // Whether a message fits one of the host's zero-copy buffers (send_ring_fits); none does without the send ring.
@@ -72,6 +86,7 @@ constexpr u32 kV6Overhead = 48U;
 // Room for the control messages one datagram or train takes: a codepoint and, received, a train's datagram size
 // (UDP_COALESCED_INFO) or, sent, the size the host segments it at (UDP_SEND_MSG_SIZE).
 constexpr usize kControlBytes = WSA_CMSG_SPACE(sizeof(INT)) + WSA_CMSG_SPACE(sizeof(DWORD));
+static_assert(RIO_CMSG_BASE_SIZE + kControlBytes <= kRioControlBytes, "a slot holds a datagram's control messages");
 #endif
 #if CRD_OS_LINUX
 constexpr int kTrainLevel = SOL_UDP;
@@ -119,12 +134,15 @@ using TrainSegment = DWORD;
 }
 
 // Everything before bind: non-blocking and not inherited, the family split, Windows' exclusive port and ICMP
-// suppression, and the buffer sizes asked for.
-[[nodiscard]] SocketError configure(NativeSocket handle, bool v6, const UdpOptions& options) noexcept
+// suppression, and the buffer sizes asked for. A Windows socket made for Registered I/O (`registered`) never blocks
+// and refuses FIONBIO, and refuses SIO_UDP_NETRESET: a TTL report ends one of its receives, which then carries nothing.
+[[nodiscard]] SocketError configure(NativeSocket handle, bool v6, const UdpOptions& options,
+                                    [[maybe_unused]] bool registered) noexcept
 {
 #if CRD_OS_WINDOWS
     u_long non_blocking = 1U;
-    if (::ioctlsocket(handle, FIONBIO, &non_blocking) != 0 || !set_option(handle, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1))
+    if ((!registered && ::ioctlsocket(handle, FIONBIO, &non_blocking) != 0) ||
+        !set_option(handle, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1))
     {
         return map_error(last_error(), false);
     }
@@ -133,7 +151,8 @@ using TrainSegment = DWORD;
     {
         BOOL report = FALSE;
         DWORD returned = 0U;
-        if (::WSAIoctl(handle, control, &report, sizeof(report), nullptr, 0U, &returned, nullptr, nullptr) != 0)
+        if (::WSAIoctl(handle, control, &report, sizeof(report), nullptr, 0U, &returned, nullptr, nullptr) != 0 &&
+            !(registered && control == SIO_UDP_NETRESET))
         {
             return map_error(last_error(), false);
         }
@@ -526,7 +545,7 @@ UdpSocket::UdpSocket(UdpSocket&& other) noexcept
       m_features(other.m_features), m_offloads(other.m_offloads), m_sends_taken(other.m_sends_taken)
 #if CRD_OS_WINDOWS
       ,
-      m_receive_message(other.m_receive_message)
+      m_receive_message(other.m_receive_message), m_rio(other.m_rio), m_read_event(other.m_read_event)
 #elif CRD_OS_LINUX
       ,
       m_reports_waiting(other.m_reports_waiting), m_ring(other.m_ring), m_send_ring(other.m_send_ring),
@@ -534,7 +553,10 @@ UdpSocket::UdpSocket(UdpSocket&& other) noexcept
 #endif
 {
     other.m_handle = kNoHandle;
-#if CRD_OS_LINUX
+#if CRD_OS_WINDOWS
+    other.m_rio = nullptr;
+    other.m_read_event = 0U;
+#elif CRD_OS_LINUX
     other.m_ring = nullptr;
     other.m_send_ring = nullptr;
 #endif
@@ -553,6 +575,10 @@ UdpSocket& UdpSocket::operator=(UdpSocket&& other) noexcept
         m_sends_taken = other.m_sends_taken;
 #if CRD_OS_WINDOWS
         m_receive_message = other.m_receive_message;
+        m_rio = other.m_rio;
+        m_read_event = other.m_read_event;
+        other.m_rio = nullptr;
+        other.m_read_event = 0U;
 #elif CRD_OS_LINUX
         m_reports_waiting = other.m_reports_waiting;
         m_ring = other.m_ring;
@@ -581,8 +607,14 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
     const bool v6 = options.bind.address.unmapped().family == AddressFamily::V6;
     const int family = v6 ? AF_INET6 : AF_INET;
 #if CRD_OS_WINDOWS
-    const NativeSocket handle =
-        ::WSASocketW(family, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0U, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+    // Registered I/O first where it may serve. A socket made for it takes no other call, so one the host refuses any
+    // part of before the bind is closed and a plain one opened in its place.
+    const NativeSocket registered =
+        (options.registered_io && options.ring_buffers != 0U && rings_allowed()) ? rio_socket(family) : kInvalidSocket;
+    const NativeSocket handle = (registered != kInvalidSocket)
+                                    ? registered
+                                    : ::WSASocketW(family, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0U,
+                                                   WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
 #elif CRD_OS_LINUX
     const NativeSocket handle = ::socket(family, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_UDP);
 #else
@@ -598,9 +630,13 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
     }
     socket.m_handle = static_cast<u64>(handle);
     socket.m_dual_stack = v6 && options.dual_stack;
-    error = configure(handle, v6, options);
 #if CRD_OS_WINDOWS
-    if (error == SocketError::None)
+    error = configure(handle, v6, options, registered != kInvalidSocket);
+#else
+    error = configure(handle, v6, options, false);
+#endif
+#if CRD_OS_WINDOWS
+    if (error == SocketError::None && registered == kInvalidSocket)
     {
         GUID guid = WSAID_WSARECVMSG;
         LPFN_WSARECVMSG receive_message = nullptr;
@@ -611,6 +647,15 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
         // A function pointer kept as the generic one and cast back to call: a defined round trip.
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         socket.m_receive_message = reinterpret_cast<void (*)()>(receive_message);
+        // Every wait of a plain socket is on this event, which WSAEventSelect sets while a datagram waits, so a
+        // SocketSet waits on it beside Registered I/O's.
+        const WSAEVENT event = (error == SocketError::None) ? ::WSACreateEvent() : WSA_INVALID_EVENT;
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        socket.m_read_event = (event != WSA_INVALID_EVENT) ? static_cast<u64>(reinterpret_cast<uintptr_t>(event)) : 0U;
+        if (error == SocketError::None && (event == WSA_INVALID_EVENT || ::WSAEventSelect(handle, event, FD_READ) != 0))
+        {
+            error = (event == WSA_INVALID_EVENT) ? SocketError::Resources : map_error(last_error(), false);
+        }
     }
 #endif
 #if CRD_OS_LINUX || CRD_OS_WINDOWS
@@ -630,11 +675,30 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
         socket.m_features.segmented_send = options.segment_send && segments_trains(handle);
     }
 #endif
+#if CRD_OS_WINDOWS
+    if (registered != kInvalidSocket)
+    {
+        const u32 datagram_bytes = ring_datagram_bytes(options, socket.m_features.coalesced_receive);
+        socket.m_rio = (error == SocketError::None)
+                           ? rio_open(handle, options.ring_buffers, datagram_bytes, socket.m_features.segmented_send)
+                           : nullptr;
+        if (socket.m_rio == nullptr)
+        {
+            socket.close();
+            UdpOptions plain = options;
+            plain.registered_io = false;
+            return open(plain, error);
+        }
+        static_cast<void>(rio_watch(*socket.m_rio));
+        socket.m_features.lent_receive = true;
+        socket.m_features.receive_bytes = datagram_bytes;
+        socket.m_features.send_bytes = datagram_bytes;
+    }
+#endif
 #if CRD_NET_RING
     if (error == SocketError::None && options.ring_buffers != 0U && rings_allowed())
     {
-        const u32 datagram_bytes =
-            static_cast<u32>(socket.m_features.coalesced_receive ? kMaxTrainBytes : kMaxUdpPayloadV6);
+        const u32 datagram_bytes = ring_datagram_bytes(options, socket.m_features.coalesced_receive);
         socket.m_ring = ring_open(handle, options.ring_buffers, datagram_bytes, static_cast<u32>(kControlBytes));
         socket.m_features.lent_receive = socket.m_ring != nullptr;
         socket.m_features.receive_bytes = (socket.m_ring != nullptr) ? datagram_bytes : 0U;
@@ -688,6 +752,11 @@ void UdpSocket::close() noexcept
     }
 #if CRD_OS_WINDOWS
     ::closesocket(native(m_handle));
+    rio_close(m_rio); // after the socket, whose close ends every request on its buffers
+    if (m_read_event != 0U)
+    {
+        ::WSACloseEvent(event_of(m_read_event));
+    }
     ::WSACleanup();
 #else
 #if CRD_NET_RING
@@ -703,7 +772,10 @@ void UdpSocket::close() noexcept
     m_features = SocketFeatures{};
     m_offloads = OffloadCounters{};
     m_sends_taken = 0U;
-#if CRD_OS_LINUX
+#if CRD_OS_WINDOWS
+    m_rio = nullptr;
+    m_read_event = 0U;
+#elif CRD_OS_LINUX
     m_reports_waiting = false;
     m_ring = nullptr;
     m_send_ring = nullptr;
@@ -731,6 +803,15 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
         receive_ring(slots, result);
         return result;
     }
+#elif CRD_OS_WINDOWS
+    if (m_rio != nullptr)
+    {
+        receive_rio(slots, result);
+        return result;
+    }
+    // The event is set again by the first read that leaves a datagram waiting, or by one that arrives after the
+    // last; left set, it would wake a wait with nothing to read.
+    static_cast<void>(::WSAResetEvent(event_of(m_read_event)));
 #endif
 #if CRD_OS_LINUX
     usize report_budget = kReportsPerReceive;
@@ -887,6 +968,12 @@ BatchResult UdpSocket::transmit(cont::ConstSpan<OutgoingDatagram> datagrams, [[m
         result.error = SocketError::Closed;
         return result;
     }
+#if CRD_OS_WINDOWS
+    if (m_rio != nullptr)
+    {
+        return transmit_rio(datagrams);
+    }
+#endif
     const NativeSocket handle = native(m_handle);
     const bool v6 = m_local.address.family == AddressFamily::V6;
 #if CRD_OS_LINUX
@@ -1138,16 +1225,32 @@ bool UdpSocket::wait_readable(u64 timeout_ns) noexcept
         static_cast<void>(ring_arm(*m_ring, true)); // what waits in the socket then completes into the ring
     }
 #endif
+#if CRD_OS_WINDOWS
+    if (m_rio != nullptr)
+    {
+        static_cast<void>(rio_watch(*m_rio)); // set at once if a completion waits
+    }
+    const HANDLE event = event_of(wait_handle());
+    return wait_events(&event, 1U, timeout_ns);
+#else
     const short events = wait_native(native(wait_handle()), kPollReadable, timeout_ns);
     if (events != 0)
     {
         waited((events & POLLERR) != 0);
     }
     return events != 0;
+#endif
 }
 
 u64 UdpSocket::wait_handle() const noexcept
 {
+#if CRD_OS_WINDOWS
+    if (m_rio != nullptr)
+    {
+        return rio_event(*m_rio);
+    }
+    return is_open() ? m_read_event : kNoWaitHandle;
+#else
 #if CRD_NET_RING
     // The ring while it receives or holds completions; the socket while no receive is armed, so a datagram that
     // arrives then is seen where it waits.
@@ -1157,6 +1260,7 @@ u64 UdpSocket::wait_handle() const noexcept
     }
 #endif
     return m_handle;
+#endif
 }
 
 #if CRD_OS_LINUX
@@ -1250,6 +1354,118 @@ void UdpSocket::receive_ring([[maybe_unused]] cont::Span<ReceivedDatagram> slots
 }
 #endif
 
+#if CRD_OS_WINDOWS
+void UdpSocket::receive_rio(cont::Span<ReceivedDatagram> slots, BatchResult& result) noexcept
+{
+    UdpRio& rio = *m_rio;
+    rio_recycle(rio); // the buffers the last call lent
+    while (result.count < slots.size())
+    {
+        RioReceived received;
+        if (!rio_next(rio, received))
+        {
+            break;
+        }
+        if (received.error != 0)
+        {
+            rio_release(rio, received.buffer, false);
+            // An ICMP report's error (the socket asks for none) or a receive the host cancelled carries nothing.
+            if (stale_report(received.error) || received.error == WSA_OPERATION_ABORTED)
+            {
+                continue;
+            }
+            result.error = map_error(received.error, false);
+            break;
+        }
+        ReceivedDatagram& slot = slots[result.count++];
+        const cont::Span<u8> payload = received.payload;
+        const bool lend = slot.storage.empty();
+        bool truncated = received.truncated;
+        if (lend)
+        {
+            slot.storage = payload;
+        }
+        else
+        {
+            const usize copied = (payload.size() < slot.storage.size()) ? payload.size() : slot.storage.size();
+            std::memcpy(slot.storage.data(), payload.data(), copied);
+            truncated = truncated || copied < payload.size();
+        }
+        fill_slot(slot, payload.size(), truncated, received.peer);
+        read_controls(received.control, slot);
+        count_train(slot, m_offloads);
+        rio_release(rio, received.buffer, lend); // a copied datagram's buffer is posted again at once
+    }
+    rio_flush(rio);
+    static_cast<void>(rio_watch(rio)); // the event for the next wait, set at once if completions are left
+}
+
+BatchResult UdpSocket::transmit_rio(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept
+{
+    BatchResult result;
+    UdpRio& rio = *m_rio;
+    const bool v6 = m_local.address.family == AddressFamily::V6;
+    rio_reap(rio, m_offloads); // the sends since the last call that completed, and those that failed
+    while (result.count < datagrams.size())
+    {
+        const OutgoingDatagram& datagram = datagrams[result.count];
+        NativeAddress peer;
+        const usize bytes = datagram.bytes.size();
+        result.error = (bytes > payload_limit(datagram.peer) || bytes > m_features.send_bytes)
+                           ? SocketError::MessageTooLarge
+                           : to_native(datagram.peer, v6, m_dual_stack, peer);
+        // A train goes end to end in a train slot, which the host segments at the first's size (USO); every
+        // datagram of it shares the first's peer and is no longer, so the first's checks hold for all of them. One
+        // with no train slot free leaves its first datagram alone and tries again with the next.
+        usize count = m_features.segmented_send ? segment_train(datagrams.subspan(result.count)) : 1U;
+        RioSendSlot slot;
+        bool held = result.error == SocketError::None && rio_send_slot(rio, count > 1U, slot, m_offloads);
+        if (!held && result.error == SocketError::None && count > 1U)
+        {
+            count = 1U;
+            held = rio_send_slot(rio, false, slot, m_offloads);
+        }
+        if (result.error == SocketError::None && !held)
+        {
+            result.error = SocketError::Busy;
+        }
+        if (result.error != SocketError::None)
+        {
+            break;
+        }
+        usize filled = 0U;
+        for (usize index = 0U; index < count; ++index)
+        {
+            const cont::ConstSpan<u8> part = datagrams[result.count + index].bytes;
+            std::memcpy(slot.bytes.data() + filled, part.data(), part.size());
+            filled += part.size();
+        }
+        *slot.peer = SOCKADDR_INET{};
+        std::memcpy(slot.peer, &peer.storage, static_cast<usize>(peer.length));
+        // Windows refuses a sender's CE, a router's mark (the WSASendMsg path learns it from WSAEINVAL); here it
+        // would fail only as the send completes, so that datagram leaves unmarked.
+        const Ecn ecn = (m_features.ecn_marking && datagram.ecn != Ecn::Ce) ? datagram.ecn : Ecn::NotEct;
+        WSAMSG message{};
+        alignas(WSACMSGHDR) u8 control[kControlBytes];
+        attach(message, control, datagram.peer, ecn, count > 1U ? static_cast<DWORD>(bytes) : 0U);
+        if (message.Control.len != 0U)
+        {
+            std::memcpy(slot.control.data(), control, message.Control.len);
+        }
+        int code = 0;
+        if (!rio_send(rio, slot, filled, message.Control.len, code))
+        {
+            // The request queue full is the slots all in flight; anything else is this datagram's alone.
+            result.error = (code == WSAENOBUFS) ? SocketError::Busy : map_error(code, true);
+            break;
+        }
+        sent_train(count, result);
+    }
+    rio_commit(rio);
+    return result;
+}
+#endif
+
 void UdpSocket::sent_train(usize datagrams, BatchResult& result) noexcept
 {
     result.count += datagrams;
@@ -1322,6 +1538,20 @@ bool SocketSet::wait_readable(u64 timeout_ns) const noexcept
     {
         return m_count == 1U && m_sockets[0]->wait_readable(timeout_ns);
     }
+#if CRD_OS_WINDOWS
+    HANDLE events[kMaxSetSockets] = {};
+    bool host = true;
+    for (u32 index = 0U; index < m_count; ++index)
+    {
+        const u64 handle = m_sockets[index]->wait_handle();
+        host = host && handle != kNoWaitHandle;
+        events[index] = event_of(handle);
+    }
+    if (host)
+    {
+        return wait_events(events, m_count, timeout_ns);
+    }
+#else
     NativePoll entries[kMaxSetSockets] = {};
     bool host = true;
     for (u32 index = 0U; index < m_count; ++index)
@@ -1346,6 +1576,7 @@ bool SocketSet::wait_readable(u64 timeout_ns) const noexcept
         }
         return true;
     }
+#endif
     for (u32 index = 0U; index < m_count; ++index)
     {
         if (m_sockets[index]->wait_readable(0U))

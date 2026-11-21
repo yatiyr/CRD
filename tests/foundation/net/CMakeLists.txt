@@ -60,6 +60,7 @@ add_executable(crd-net-tests
     test_ticket_cache.cpp
     test_udp.cpp
     test_udp_ring.cpp
+    test_udp_rio.cpp
     test_udp_zero_copy.cpp
     test_wire.cpp
 )

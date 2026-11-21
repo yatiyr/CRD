@@ -16,6 +16,8 @@ namespace crd::net
 #if CRD_OS_LINUX
 struct UdpRing;
 struct UdpSendRing;
+#elif CRD_OS_WINDOWS
+struct UdpRio;
 #endif
 
 enum class SocketError : u8
@@ -65,12 +67,22 @@ struct UdpOptions
     // The host may join one sender's datagrams into one train per receive slot (SocketFeatures::coalesced_receive):
     // the caller then gives every slot kMaxTrainBytes, as IoLoop does.
     bool coalesce_receive = false;
-    // Linux's io_uring receive (SocketFeatures::lent_receive) where the host has it: `ring_buffers` buffers the host
-    // fills ahead of receive(), a power of two from 4 to 32768, each holding any datagram (kMaxUdpPayloadV6 bytes, or
-    // a train of kMaxTrainBytes with coalesce_receive). Their pages are backed as the host first writes them, so the
-    // memory a ring holds follows the datagrams that arrive. Any other count, or CRD_NET_UDP_RING=0 in the
-    // environment, keeps the recvmmsg path.
+    // Linux's io_uring receive (SocketFeatures::lent_receive) where the host has it, and with registered_io Windows'
+    // Registered I/O: `ring_buffers` buffers the host fills ahead of receive(), a power of two from 4 to 32768, each
+    // holding a datagram of ring_datagram_bytes. Linux backs their pages as the host first writes them, so the memory
+    // a ring holds follows the datagrams that arrive. Any other count, or CRD_NET_UDP_RING=0 in the environment, keeps
+    // the recvmmsg or WSARecvMsg path.
     u32 ring_buffers = 64U;
+    // The longest datagram a ring buffer (and a Windows send slot) holds whole: 0, or anything over kMaxUdpPayloadV6,
+    // holds any; coalesce_receive's buffers hold kMaxTrainBytes whatever it says. A host that sends no datagram
+    // longer than its path's MTU sets that here (SocketFeatures::receive_bytes and send_bytes report it).
+    u32 ring_datagram_bytes = 0U;
+    // Windows' Registered I/O for the receives and the sends, where the host has it. Its receives are the posted ring
+    // buffers alone: a datagram that arrives while all of them are out is lost, whatever receive_buffer_bytes says,
+    // so a host sizes ring_buffers for its bursts and ring_datagram_bytes for its path's MTU. Their pages, and 64
+    // send slots of ring_datagram_bytes beside them (and 8 of kMaxTrainBytes for trains), stay locked while the
+    // socket is open. Off by default: S33's Registered I/O board.
+    bool registered_io = false;
     // A message of at least this many bytes (a train, or one large datagram) that send_stable() hands over leaves
     // through io_uring's zero-copy send where the host has it (SocketFeatures::lent_send): the host reads its bytes
     // in place until sends_released() passes them. 0, the default, or CRD_NET_UDP_RING=0 copies every send: the
@@ -130,6 +142,9 @@ struct SocketFeatures
     // an empty slot; also the socket's own. Nonzero, the longest datagram one of them holds whole, whatever the slot.
     bool lent_receive = false;
     u32 receive_bytes = 0U;
+    // Nonzero, the longest datagram a send takes (Windows' Registered I/O slots); a longer one fails with
+    // MessageTooLarge.
+    u32 send_bytes = 0U;
     // send_stable() may leave a datagram's bytes to the host after it returns (Linux's io_uring zero-copy send),
     // until sends_released() passes it; a host that turns out to take no zero-copy send turns this off for good.
     bool lent_send = false;
@@ -146,6 +161,9 @@ struct OffloadCounters
     u64 zero_copy_sent = 0U;           // zero-copy messages the host sent from the caller's pages
     u64 zero_copy_copied = 0U;         // zero-copy messages the host copied after all (loopback, a device without it)
     u64 zero_copy_refused = 0U;        // zero-copy messages the host failed, sent again copied
+    // Datagrams a send took that the host failed only once they had left the call (Windows' Registered I/O, which
+    // reports a send's error as it completes): lost, as a datagram the path drops is.
+    u64 sends_failed = 0U;
 };
 
 // How many datagrams from the first form one train (0 for none): each to the first's peer with its codepoint and each
@@ -188,8 +206,9 @@ public:
     [[nodiscard]] virtual bool wait_readable(u64 timeout_ns) noexcept = 0;
     // None by default: a socket that carries only bytes.
     [[nodiscard]] virtual SocketFeatures features() const noexcept { return {}; }
-    // The host's descriptor, through which a SocketSet waits on several sockets at once; kNoWaitHandle (the default)
-    // for a socket the host cannot wait on, such as a simulated one.
+    // What a SocketSet waits on to wait on several sockets at once: a descriptor poll() takes or, on Windows, an event
+    // object that is set while the socket has something to read; kNoWaitHandle (the default) for a socket the host
+    // cannot wait on, such as a simulated one.
     [[nodiscard]] virtual u64 wait_handle() const noexcept { return kNoWaitHandle; }
     // A SocketSet's wait found this socket readable, `error` when the host also flagged an error: what
     // wait_readable() notes for the next receive().
@@ -231,8 +250,15 @@ protected:
 // through io_uring's SENDMSG_ZC on a ring of its own (one linked chain a send, MSG_DONTWAIT): the host reads the
 // caller's pages until sends_released() passes them. A message the host fails zero-copy goes again copied; eight
 // copy reports in a row (loopback) turn it off until a probe every 1024 sends; close() waits until the host holds no
-// page. macOS carries bytes alone until crd-net's port
-// there (MAC.1).
+// page. On Windows a socket goes through Registered I/O where the host has it (registered_io): its receives wait posted
+// in registered buffers the host fills, read back without a call while they wait and copied or lent as io_uring's are,
+// so a datagram that arrives while every buffer is out is lost, as one past a full receive buffer is; its sends are
+// copied into registered slots (a train end to end in one of eight that hold kMaxTrainBytes, segmented through USO),
+// deferred, and started with one commit a call. Such a socket takes no other Winsock call, so a send's error arrives as
+// it completes, counted in sends_failed, except Busy while every slot is in flight and MessageTooLarge past a slot, and
+// a CE mark, which Windows refuses, leaves unmarked at once. Every Windows socket waits on an event (its completion
+// queue's, or one WSAEventSelect sets on reads, which may wake a wait once with nothing left to read), so a SocketSet
+// waits on any mix of them in one host wait. macOS carries bytes alone until crd-net's port there (MAC.1).
 class UdpSocket final : public DatagramSocket
 {
 public:
@@ -258,7 +284,8 @@ public:
     [[nodiscard]] u64 sends_released(bool wait) noexcept override;
     [[nodiscard]] bool wait_readable(u64 timeout_ns) noexcept override;
     [[nodiscard]] SocketFeatures features() const noexcept override { return m_features; }
-    [[nodiscard]] u64 wait_handle() const noexcept override; // the ring's descriptor where it receives
+    // The ring's descriptor where it receives; on Windows an event object (wait_handle's note).
+    [[nodiscard]] u64 wait_handle() const noexcept override;
     void waited(bool error) noexcept override;
     [[nodiscard]] const OffloadCounters& offload_counters() const noexcept { return m_offloads; }
 
@@ -277,7 +304,13 @@ private:
     OffloadCounters m_offloads;
     u64 m_sends_taken = 0U;
 #if CRD_OS_WINDOWS
+    // The Registered I/O paths of receive() and send().
+    void receive_rio(cont::Span<ReceivedDatagram> slots, BatchResult& result) noexcept;
+    [[nodiscard]] BatchResult transmit_rio(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept;
+
     void (*m_receive_message)() = nullptr; // WSARecvMsg, which Winsock hands out per provider, as a generic pointer
+    UdpRio* m_rio = nullptr;               // the Registered I/O queues and buffers; null for WSARecvMsg and WSASendMsg
+    u64 m_read_event = 0U;                 // a plain socket's event, which WSAEventSelect sets once it is readable
 #elif CRD_OS_LINUX
     // The ring's receive into `slots` from `count` on (receive's io_uring path).
     void receive_ring(cont::Span<ReceivedDatagram> slots, BatchResult& result) noexcept;
