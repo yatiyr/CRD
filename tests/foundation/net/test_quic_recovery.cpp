@@ -1355,12 +1355,13 @@ struct Paths : Fixture
     QuicSentEntry second[16];
     QuicSentEntry third[16];
     QuicSentEntry fourth[16];
+    QuicPathRecovery states[kQuicMaxPaths];
 
     using Fixture::Fixture;
     bool open(usize path)
     {
         QuicSentEntry* const storage[kQuicMaxPaths] = {fourth, second, third, fourth};
-        return recovery.open_path(path, Span<QuicSentEntry>(storage[path], 16U));
+        return recovery.open_path(path, states[path], Span<QuicSentEntry>(storage[path], 16U));
     }
     void send_on(usize path, u64 number, u64 sent_ns)
     {
@@ -1390,11 +1391,13 @@ TEST_CASE("quic recovery: path slots open with storage of their own, and a slot 
     const QuicSpace app = QuicSpace::Application;
     CHECK(f.recovery.path_open(0U));
     CHECK_FALSE(f.open(0U)); // open from construction
-    CHECK_FALSE(f.recovery.open_path(kQuicMaxPaths, Span<QuicSentEntry>(f.second, 16U)));
-    CHECK_FALSE(f.recovery.open_path(1U, Span<QuicSentEntry>()));
+    CHECK_FALSE(f.recovery.open_path(kQuicMaxPaths, f.states[1], Span<QuicSentEntry>(f.second, 16U)));
+    CHECK_FALSE(f.recovery.open_path(1U, f.states[1], Span<QuicSentEntry>()));
     CHECK_FALSE(f.recovery.path_open(1U));
     REQUIRE(f.open(1U));
     CHECK_FALSE(f.open(1U));
+    // A state an open slot holds is lent to no other.
+    CHECK_FALSE(f.recovery.open_path(2U, f.states[1], Span<QuicSentEntry>(f.third, 16U)));
     CHECK(f.recovery.path_open(1U));
     CHECK_FALSE(f.recovery.path_open(2U));
     CHECK_FALSE(f.recovery.path_open(kQuicMaxPaths));

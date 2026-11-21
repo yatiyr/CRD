@@ -305,9 +305,49 @@ struct QuicRecoveryConfig
     usize            reserved_entries = 0U;
 };
 
+// One path slot's recovery: its path ID's Application space and the estimate, which slot 0's Initial and Handshake
+// spaces share. A connection allocates one, with the slot's sent-packet storage, when a path validates (RFC 10069
+// section 7.1) and lends both to QuicRecovery::open_path until close_path returns; slot 0's first is the recovery's
+// own, so a connection without multipath allocates none. Only QuicRecovery reads or writes it.
+class QuicPathRecovery
+{
+    friend class QuicRecovery;
+
+    // One packet number space's sent packets and received numbers.
+    struct Space
+    {
+        cont::Span<QuicSentEntry> entries;
+        usize                     head = 0U;  // the oldest entry
+        usize                     count = 0U; // entries held, settled ones included until they reach the head
+        u64                       next_number = 0U;   // the last sent number plus one
+        u64                       largest_acked = kQuicNoPacket;
+        u64                       loss_time_ns = kNeverNs;
+        u64                       last_eliciting_ns = 0U;
+        u64                       reorder_round = 0U; // next_number when the window last grew: one step a round
+        usize                     eliciting_in_flight = 0U;
+        bool                      discarded = false;
+        QuicAckTracker            received;
+    };
+
+    struct State
+    {
+        Space   application;
+        QuicRtt rtt;
+        u64     bytes_in_flight = 0U;
+        u64     floor = 0U; // QuicRecovery::path_floor()
+        u64     packet_threshold = kQuicPacketThreshold;
+        u32     reorder_steps = 0U;
+        u32     reorder_persist = 0U; // loss detections before the thresholds return to RFC 9002's
+        u32     pto_count = 0U;
+        usize   min_via = 0U; // the slot whose frames gave rtt.min_ns; kQuicNoPath once it closed
+    };
+
+    State m_state;
+};
+
 // A connection's acknowledgements and loss recovery across its Initial and Handshake spaces and the Application space
 // of every open path (the paths note above). Calls name a path by its slot, 0 unless they say otherwise; a slot that
-// is not open reads as a path with nothing sent or received and the initial estimate.
+// is not open reads as a path with nothing sent or received and RFC 9002's initial estimate.
 class QuicRecovery
 {
 public:
@@ -315,22 +355,31 @@ public:
     // at least one entry; it stays the caller's and must outlive the recovery.
     QuicRecovery(const QuicRecoveryConfig& config, cont::Span<QuicSentEntry> initial,
                  cont::Span<QuicSentEntry> handshake, cont::Span<QuicSentEntry> application) noexcept;
+    // Slot 0 lives inside: a copy would point at the original's.
+    QuicRecovery(const QuicRecovery&) = delete;
+    QuicRecovery& operator=(const QuicRecovery&) = delete;
+    QuicRecovery(QuicRecovery&&) = delete;
+    QuicRecovery& operator=(QuicRecovery&&) = delete;
+    ~QuicRecovery() = default;
 
     // ---- Paths (RFC 10069) ----
 
-    // Opens slot `path` for a new path ID whose Application packets `storage` holds (at least one entry, the
-    // caller's until the slot closes): numbers from 0, nothing received, the initial RTT estimate. False, changing
-    // nothing, for a slot out of range or open, or empty storage.
-    [[nodiscard]] bool open_path(usize path, cont::Span<QuicSentEntry> storage) noexcept;
+    // Opens slot `path` for a new path ID, its recovery in `state` and its Application packets in `storage` (at least
+    // one entry), both the caller's until the slot closes: numbers from 0, nothing received, the initial RTT estimate.
+    // False, changing nothing, for a slot out of range or open, empty storage, or a `state` an open slot holds.
+    [[nodiscard]] bool open_path(usize path, QuicPathRecovery& state, cont::Span<QuicSentEntry> storage) noexcept;
     // The path ID in slot `path` is forgotten (RFC 10069 sections 3.4 and 3.4.3: abandoned, and its packets'
     // acknowledgements waited for). The slot closes first, so on_path() is false for its packets; then each one still
     // outstanding is declared lost (on_lost), for its frames to go on another path, which is no congestion signal. A
     // path whose minimum RTT came from frames received through this slot restarts it (section 5.4). Closing slot 0
     // ends the receive timestamps (only ACK frames, path ID 0's, report them). False, changing nothing, for a slot not
     // open, the last one open, and slot 0 before the handshake is confirmed and the Initial and Handshake spaces
-    // discarded.
+    // discarded. The slot's state and storage are the caller's again when it returns.
     [[nodiscard]] bool close_path(usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept;
-    [[nodiscard]] bool path_open(usize path) const noexcept { return path < kQuicMaxPaths && m_paths[path].open; }
+    [[nodiscard]] bool path_open(usize path) const noexcept
+    {
+        return path < kQuicMaxPaths && m_paths[path] != nullptr;
+    }
 
     // ---- What the connection learns ----
 
@@ -442,35 +491,8 @@ public:
     [[nodiscard]] u64 unacknowledged_sent_ns(QuicSpace space, u64 number, usize path = 0U) const noexcept;
 
 private:
-    struct Space
-    {
-        cont::Span<QuicSentEntry> entries;
-        usize                     head = 0U;  // the oldest entry
-        usize                     count = 0U; // entries held, settled ones included until they reach the head
-        u64                       next_number = 0U;   // the last sent number plus one
-        u64                       largest_acked = kQuicNoPacket;
-        u64                       loss_time_ns = kNeverNs;
-        u64                       last_eliciting_ns = 0U;
-        u64                       reorder_round = 0U; // next_number when the window last grew: one step a round
-        usize                     eliciting_in_flight = 0U;
-        bool                      discarded = false;
-        QuicAckTracker            received;
-    };
-
-    // One slot: its path ID's Application space and the estimate that slot 0's Initial and Handshake spaces share.
-    struct Path
-    {
-        Space   application;
-        QuicRtt rtt;
-        u64     bytes_in_flight = 0U;
-        u64     floor = 0U; // path_floor()
-        u64     packet_threshold = kQuicPacketThreshold;
-        u32     reorder_steps = 0U;
-        u32     reorder_persist = 0U; // loss detections before the thresholds return to RFC 9002's
-        u32     pto_count = 0U;
-        usize   min_via = 0U; // the slot whose frames gave rtt.min_ns; kQuicNoPath once it closed
-        bool    open = false;
-    };
+    using Space = QuicPathRecovery::Space;
+    using Path = QuicPathRecovery::State;
 
     // The slot the state accessors read: an empty path for one not open.
     [[nodiscard]] const Path& view(usize path) const noexcept;
@@ -509,7 +531,8 @@ private:
     void arm(u64 now_ns) noexcept;
 
     Space            m_spaces[2]; // Initial and Handshake
-    Path             m_paths[kQuicMaxPaths];
+    QuicPathRecovery m_first; // slot 0's from construction
+    Path*            m_paths[kQuicMaxPaths] = {}; // each open slot's; null for a slot not open
     QuicReceiveTimestampLog m_receive_log;
     crypto::QuicSide m_side;
     u64              m_local_max_ack_delay_ns;

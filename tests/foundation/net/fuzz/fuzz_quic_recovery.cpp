@@ -142,6 +142,7 @@ struct World
     QuicSentEntry initial[8];
     QuicSentEntry handshake[8];
     QuicSentEntry application[kQuicMaxPaths][32];
+    QuicPathRecovery states[kQuicMaxPaths]; // each slot's, slot 0's once it reopens
     QuicRecovery  recovery;
     ModelSpace    spaces[kModelSpaces];
     bool          open[kQuicMaxPaths] = {true};
@@ -734,7 +735,7 @@ void op_toggle(World& w, usize path)
     const usize from = w.log.count;
     if (!w.open[path])
     {
-        CRD_FUZZ_REQUIRE(w.recovery.open_path(path, Span<QuicSentEntry>(w.application[path], 32U)));
+        CRD_FUZZ_REQUIRE(w.recovery.open_path(path, w.states[path], Span<QuicSentEntry>(w.application[path], 32U)));
         w.spaces[2U + path] = ModelSpace{};
         w.open[path] = true;
         w.last_via[path] = kQuicNoPath;

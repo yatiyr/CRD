@@ -369,17 +369,13 @@ QuicRecovery::QuicRecovery(const QuicRecoveryConfig& config, cont::Span<QuicSent
     m_spaces[quic_space_index(QuicSpace::Handshake)].entries = handshake;
     m_spaces[quic_space_index(QuicSpace::Initial)].received.reset(QuicSpace::Initial);
     m_spaces[quic_space_index(QuicSpace::Handshake)].received.reset(QuicSpace::Handshake);
-    for (Path& path : m_paths)
-    {
-        reset_estimate(path);
-    }
-    static_cast<void>(open_path(0U, application));
+    static_cast<void>(open_path(0U, m_first, application));
 }
 
 const QuicRecovery::Path& QuicRecovery::view(usize path) const noexcept
 {
     static const Path kOutOfRange{};
-    return (path < kQuicMaxPaths) ? m_paths[path] : kOutOfRange;
+    return path_open(path) ? *m_paths[path] : kOutOfRange;
 }
 
 bool QuicRecovery::usable(QuicSpace space, usize path) const noexcept
@@ -389,7 +385,7 @@ bool QuicRecovery::usable(QuicSpace space, usize path) const noexcept
 
 QuicRecovery::Space& QuicRecovery::space_of(QuicSpace space, usize path) noexcept
 {
-    return (space == QuicSpace::Application) ? m_paths[path].application : m_spaces[quic_space_index(space)];
+    return (space == QuicSpace::Application) ? m_paths[path]->application : m_spaces[quic_space_index(space)];
 }
 
 const QuicRecovery::Space& QuicRecovery::space_of(QuicSpace space, usize path) const noexcept
@@ -403,7 +399,7 @@ const QuicRecovery::Space& QuicRecovery::space_of(QuicSpace space, usize path) c
 
 QuicRecovery::Path& QuicRecovery::owner(QuicSpace space, usize path) noexcept
 {
-    return m_paths[(space == QuicSpace::Application) ? path : 0U];
+    return *m_paths[(space == QuicSpace::Application) ? path : 0U];
 }
 
 const QuicRecovery::Path& QuicRecovery::owner(QuicSpace space, usize path) const noexcept
@@ -422,27 +418,34 @@ void QuicRecovery::reset_estimate(Path& path) const noexcept
     path.pto_count = 0U;
 }
 
-bool QuicRecovery::open_path(usize path, cont::Span<QuicSentEntry> storage) noexcept
+bool QuicRecovery::open_path(usize path, QuicPathRecovery& state, cont::Span<QuicSentEntry> storage) noexcept
 {
-    if (path >= kQuicMaxPaths || m_paths[path].open || storage.empty())
+    if (path >= kQuicMaxPaths || m_paths[path] != nullptr || storage.empty())
     {
         return false;
     }
-    Path& slot = m_paths[path];
+    Path& slot = state.m_state;
+    for (const Path* held : m_paths)
+    {
+        if (held == &slot)
+        {
+            return false;
+        }
+    }
     slot = Path{};
     reset_estimate(slot);
     slot.application.entries = storage;
     slot.application.received.reset(QuicSpace::Application);
-    slot.open = true;
+    m_paths[path] = &slot;
     return true;
 }
 
 bool QuicRecovery::close_path(usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept
 {
     usize open = 0U;
-    for (const Path& each : m_paths)
+    for (const Path* each : m_paths)
     {
-        open += each.open ? 1U : 0U;
+        open += (each != nullptr) ? 1U : 0U;
     }
     const bool handshake_done = m_confirmed && m_spaces[quic_space_index(QuicSpace::Initial)].discarded &&
                                 m_spaces[quic_space_index(QuicSpace::Handshake)].discarded;
@@ -450,25 +453,25 @@ bool QuicRecovery::close_path(usize path, u64 now_ns, QuicRecoveryEvents& events
     {
         return false;
     }
-    Path& slot = m_paths[path];
-    slot.open = false;
-    Space& space = slot.application;
+    // The slot's counts end with it: its packets are reported once it is closed, so on_path() is false for them.
+    Space& space = m_paths[path]->application;
+    m_paths[path] = nullptr;
     for (usize i = 0U; i < space.count; ++i)
     {
         QuicSentEntry& sent = entry(space, i);
         if (sent.state == kOutstanding)
         {
-            settle(QuicSpace::Application, space, sent);
             sent.state   = kLost;
             sent.lost_ns = now_ns;
             events.on_lost(QuicSpace::Application, sent.packet);
         }
     }
-    slot = Path{};
-    reset_estimate(slot);
-    for (Path& each : m_paths)
+    for (Path* each : m_paths)
     {
-        each.min_via = (each.min_via == path) ? kQuicNoPath : each.min_via;
+        if (each != nullptr && each->min_via == path)
+        {
+            each->min_via = kQuicNoPath;
+        }
     }
     if (path == 0U)
     {
@@ -484,7 +487,7 @@ bool QuicRecovery::on_path(QuicSpace space, const QuicSentPacket& packet) const 
     {
         return false;
     }
-    return space != QuicSpace::Application || packet.number >= m_paths[packet.path].floor;
+    return space != QuicSpace::Application || packet.number >= m_paths[packet.path]->floor;
 }
 
 void QuicRecovery::restart_path(u64 now_ns, usize path) noexcept
@@ -493,7 +496,7 @@ void QuicRecovery::restart_path(u64 now_ns, usize path) noexcept
     {
         return;
     }
-    Path& slot = m_paths[path];
+    Path& slot = *m_paths[path];
     const Space& space = slot.application;
     for (usize i = 0U; i < space.count; ++i)
     {
@@ -610,9 +613,9 @@ bool QuicRecovery::any_eliciting_in_flight() const noexcept
     {
         eliciting += space.eliciting_in_flight;
     }
-    for (const Path& path : m_paths)
+    for (const Path* path : m_paths)
     {
-        eliciting += path.open ? path.application.eliciting_in_flight : 0U;
+        eliciting += (path != nullptr) ? path->application.eliciting_in_flight : 0U;
     }
     return eliciting != 0U;
 }
@@ -640,7 +643,7 @@ u64 QuicRecovery::largest_probe_period_ns() const noexcept
     u64 largest = 0U;
     for (usize path = 0U; path < kQuicMaxPaths; ++path)
     {
-        largest = m_paths[path].open ? max_u64(largest, probe_period_ns(QuicSpace::Application, path)) : largest;
+        largest = path_open(path) ? max_u64(largest, probe_period_ns(QuicSpace::Application, path)) : largest;
     }
     return largest;
 }
@@ -674,9 +677,9 @@ bool QuicRecovery::earliest_loss(u64& time_ns, QuicSpace& id, usize& path) const
     }
     for (usize i = 0U; i < kQuicMaxPaths; ++i)
     {
-        if (m_paths[i].open && m_paths[i].application.loss_time_ns < time_ns)
+        if (m_paths[i] != nullptr && m_paths[i]->application.loss_time_ns < time_ns)
         {
-            time_ns = m_paths[i].application.loss_time_ns;
+            time_ns = m_paths[i]->application.loss_time_ns;
             id      = QuicSpace::Application;
             path    = i;
         }
@@ -706,9 +709,9 @@ u64 QuicRecovery::pto_time(u64 now_ns, QuicSpace& id, usize& path) const noexcep
     // The Application spaces' timeouts wait for confirmation (section 6.2.1).
     for (usize i = 0U; i < kQuicMaxPaths && m_confirmed; ++i)
     {
-        const Space& space = m_paths[i].application;
+        const Space& space = view(i).application;
         const u64 at = add_sat(space.last_eliciting_ns, probe_period_ns(QuicSpace::Application, i));
-        if (m_paths[i].open && space.eliciting_in_flight != 0U && at < time)
+        if (space.eliciting_in_flight != 0U && at < time)
         {
             time = at;
             id   = QuicSpace::Application;
@@ -780,22 +783,29 @@ bool QuicRecovery::discard(QuicSpace id, u64 now_ns, QuicRecoveryEvents& events)
     drop_outstanding(id, 0U, events);
     space.discarded = true;
     space.received.reset(id);
-    m_paths[0].pto_count = 0U;
+    if (m_paths[0] != nullptr)
+    {
+        m_paths[0]->pto_count = 0U;
+    }
     arm(now_ns);
     return true;
 }
 
 void QuicRecovery::retry(u64 now_ns, QuicRecoveryEvents& events) noexcept
 {
+    if (m_paths[0] == nullptr)
+    {
+        return; // no Retry comes once slot 0 can close: the handshake is confirmed by then
+    }
     // Only the first flight measures the path: after a probe the Retry may answer a later packet.
-    Path& first = m_paths[0];
+    Path& first = *m_paths[0];
     const Space& initial = m_spaces[quic_space_index(QuicSpace::Initial)];
     const u64 first_ns = (initial.count != 0U && first.pto_count == 0U) ? entry(initial, 0U).packet.sent_ns : now_ns;
     drop_outstanding(QuicSpace::Initial, 0U, events);
     drop_outstanding(QuicSpace::Handshake, 0U, events);
     for (usize path = 0U; path < kQuicMaxPaths; ++path)
     {
-        if (m_paths[path].open)
+        if (path_open(path))
         {
             drop_outstanding(QuicSpace::Application, path, events);
         }
@@ -811,11 +821,11 @@ void QuicRecovery::retry(u64 now_ns, QuicRecoveryEvents& events) noexcept
 
 void QuicRecovery::reject_early(u64 now_ns, QuicRecoveryEvents& events) noexcept
 {
-    if (m_paths[0].open)
+    if (m_paths[0] != nullptr)
     {
         drop_outstanding(QuicSpace::Application, 0U, events);
+        m_paths[0]->pto_count = 0U;
     }
-    m_paths[0].pto_count = 0U;
     arm(now_ns);
 }
 
@@ -924,7 +934,7 @@ void QuicRecovery::on_ack_acknowledged(usize path, u64 largest) noexcept
 {
     if (path_open(path))
     {
-        m_paths[path].application.received.on_ack_acknowledged(largest);
+        m_paths[path]->application.received.on_ack_acknowledged(largest);
     }
 }
 
@@ -1237,11 +1247,11 @@ u64 QuicRecovery::next_timer_ns() const noexcept
             time = min_u64(time, space.received.ack_deadline_ns());
         }
     }
-    for (const Path& path : m_paths)
+    for (const Path* path : m_paths)
     {
-        if (path.open)
+        if (path != nullptr)
         {
-            time = min_u64(time, path.application.received.ack_deadline_ns());
+            time = min_u64(time, path->application.received.ack_deadline_ns());
         }
     }
     return time;
