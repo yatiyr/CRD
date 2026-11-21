@@ -51,8 +51,15 @@ struct TempDir
     }
     ~TempDir()
     {
-        std::error_code ec;
-        fs::remove_all(path, ec);
+        try
+        {
+            std::error_code ec;
+            fs::remove_all(path, ec);
+        }
+        catch (...)
+        {
+            return; // a directory left behind under the temp directory, never std::terminate
+        }
     }
     TempDir(const TempDir&)            = delete;
     TempDir& operator=(const TempDir&) = delete;

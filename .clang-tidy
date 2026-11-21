@@ -38,6 +38,7 @@ Checks: >
   -misc-use-internal-linkage,
   -misc-misplaced-const,
   -misc-no-recursion,
+  -misc-multiple-inheritance,
   modernize-*,
   -modernize-use-trailing-return-type,
   -modernize-avoid-c-arrays,
@@ -95,6 +96,11 @@ Checks: >
 # `engine/foundation/math/src/deterministic.cpp` and the explicit `kPiD` in
 # `engine/foundation/units/src/unit_preferences.cpp` are intentional, not accidental
 # "magic numbers."
+#
+# Note on `-misc-multiple-inheritance` (disabled above): LLVM 22 renamed fuchsia-multiple-inheritance into misc-,
+# where the glob enabled it; the project never enabled fuchsia-*. A backend's frame graph implements IFrameGraph and
+# IFrameContext (crd/gpu/frame_graph.hpp), interfaces whose optional members have default bodies by design, so the
+# check would forbid the shape every backend has.
 WarningsAsErrors: '*'
 
 HeaderFilterRegex: '.*\/crd\/.*'
@@ -128,9 +134,9 @@ CheckOptions:
     value: CamelCase
   - key: readability-identifier-naming.GlobalConstantPrefix
     value: 'k'
-  # Constant categories (added 2026-05-17, corrected 2026-09-13). The pinned
-  # LLVM 20.1.8 readability-identifier-naming has no `LocalConstexprVariable`
-  # or `StaticConstexprVariable` option; the former keys were ignored. A
+  # Constant categories (added 2026-05-17, corrected 2026-09-13). LLVM 20.1.8
+  # readability-identifier-naming had no `LocalConstexprVariable` or
+  # `StaticConstexprVariable` option; the pinned 22.1.8 keeps the same answers. A
   # function-local `constexpr` resolves to `ConstexprVariable` when that rule
   # is set and otherwise to `LocalConstant`; a function-local `static const`
   # resolves to `StaticConstant`; namespace-scope constants are

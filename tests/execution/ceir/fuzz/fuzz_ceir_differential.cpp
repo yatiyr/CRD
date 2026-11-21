@@ -69,33 +69,30 @@ constexpr u32 kMaxDepth     = 4U;   // region nesting below a function body
 constexpr u32 kMaxScript    = 15U;  // host input values a script holds (16 selects no input source at all)
 constexpr u64 kFuelBase     = 64U;  // the step budget is kFuelBase << (header byte % 12): 64 .. 131,072
 
-// The op choices of a body stream (a byte modulo OpCount).
-enum Code : u8
-{
-    OpConst = 0,
-    OpAdd,
-    OpMul,
-    OpCmp,
-    OpIf,
-    OpFor,
-    OpWhile,
-    OpSwitch,
-    OpScope,
-    OpState,
-    OpCall,
-    OpLaunch,
-    OpAwait,
-    OpJoin,
-    OpRace,
-    OpCancel,
-    OpContinuation,
-    OpParallelFor,
-    OpMapReduce,
-    OpRandom,
-    OpTime,
-    OpEvent,
-    OpCount,
-};
+// The op choices of a body stream (a byte modulo kOpCount).
+constexpr u8 kOpConst = 0U;
+constexpr u8 kOpAdd = 1U;
+constexpr u8 kOpMul = 2U;
+constexpr u8 kOpCmp = 3U;
+constexpr u8 kOpIf = 4U;
+constexpr u8 kOpFor = 5U;
+constexpr u8 kOpWhile = 6U;
+constexpr u8 kOpSwitch = 7U;
+constexpr u8 kOpScope = 8U;
+constexpr u8 kOpState = 9U;
+constexpr u8 kOpCall = 10U;
+constexpr u8 kOpLaunch = 11U;
+constexpr u8 kOpAwait = 12U;
+constexpr u8 kOpJoin = 13U;
+constexpr u8 kOpRace = 14U;
+constexpr u8 kOpCancel = 15U;
+constexpr u8 kOpContinuation = 16U;
+constexpr u8 kOpParallelFor = 17U;
+constexpr u8 kOpMapReduce = 18U;
+constexpr u8 kOpRandom = 19U;
+constexpr u8 kOpTime = 20U;
+constexpr u8 kOpEvent = 21U;
+constexpr u8 kOpCount = 22U;
 
 // Edge values a value byte with the top bit set selects (index = byte & 0x7F); 0xFF is followed by eight raw bytes.
 constexpr i64 kEdges[] = {
@@ -395,234 +392,239 @@ private:
 
     void op(Block* b, Array<Value*>& scope, Array<Token>& tokens, Array<Feedback>& feedback, u32 depth, bool isolated)
     {
-        u8 code = static_cast<u8>(m_in.byte() % OpCount);
+        u8 code = static_cast<u8>(m_in.byte() % kOpCount);
         // Nesting and the op budget end region ops; an isolated body holds no cell and reads no host input (both
         // would be refused whole by the parallel pre-flight, which calls may still reach).
         const bool regions = depth < kMaxDepth && m_ops + 8U < kMaxOps;
-        const bool nested  = code == OpIf || code == OpFor || code == OpWhile || code == OpSwitch || code == OpScope ||
-                            code == OpLaunch || code == OpContinuation || code == OpParallelFor || code == OpMapReduce;
+        const bool nested = code == kOpIf || code == kOpFor || code == kOpWhile || code == kOpSwitch ||
+                            code == kOpScope || code == kOpLaunch || code == kOpContinuation ||
+                            code == kOpParallelFor || code == kOpMapReduce;
         if ((nested && !regions) ||
-            (isolated && (code == OpState || code == OpRandom || code == OpTime || code == OpEvent)))
+            (isolated && (code == kOpState || code == kOpRandom || code == kOpTime || code == kOpEvent)))
         {
-            code = OpConst;
+            code = kOpConst;
         }
         switch (code)
         {
-        case OpConst: (void)constant(b, scope, m_in.value()); break;
-        case OpAdd:
-        case OpMul:
-        case OpCmp:
-        {
-            Value* operands[2] = {pick(b, scope), pick(b, scope)};
-            const OpId kinds[] = {m_k.addi, m_k.muli, m_k.cmpi}; // OpAdd, OpMul, OpCmp in order
-            Operation* const o = make(b, kinds[code - OpAdd], ConstSpan<Value*>(operands, 2U), 1U);
-            if (code == OpCmp)
+            case kOpConst:
+                (void)constant(b, scope, m_in.value());
+                break;
+            case kOpAdd:
+            case kOpMul:
+            case kOpCmp:
             {
-                static const char* const kPredicates[] = {"eq",  "ne",  "slt", "sle", "sgt",
-                                                          "sge", "ult", "ule", "ugt", "uge"};
-                m_ctx.set_attr(o, "predicate", m_ctx.attr_string(kPredicates[m_in.byte() % 10U]));
-            }
-            publish(o, scope);
-            break;
-        }
-        case OpIf:
-        {
-            Value* cond[1]     = {pick(b, scope)};
-            const u32 results  = m_in.byte() % 3U;
-            Operation* const o = make(b, m_k.cif, ConstSpan<Value*>(cond, 1U), results, 2U);
-            child(region_block(o, 0U, 0U), scope, depth + 1U, isolated, results, End::Yield);
-            child(region_block(o, 1U, 0U), scope, depth + 1U, isolated, results, End::Yield);
-            publish(o, scope);
-            break;
-        }
-        case OpFor:
-        case OpParallelFor:
-        {
-            Value* range[3]    = {pick(b, scope), pick(b, scope), pick(b, scope)};
-            Operation* const o = make(b, code == OpFor ? m_k.cfor : m_k.pfor, ConstSpan<Value*>(range, 3U), 0U, 1U);
-            if (code == OpFor)
-            {
-                child(region_block(o, 0U, 1U), scope, depth + 1U, isolated, 0U, End::Statement);
-            }
-            else
-            {
-                isolated_body(region_block(o, 0U, 1U), depth + 1U);
-            }
-            break;
-        }
-        case OpMapReduce:
-        {
-            Value* range[4]    = {pick(b, scope), pick(b, scope), pick(b, scope), pick(b, scope)};
-            Operation* const o = make(b, m_k.mreduce, ConstSpan<Value*>(range, 4U), 1U, 2U);
-            isolated_body(region_block(o, 0U, 1U), depth + 1U);
-            isolated_body(region_block(o, 1U, 2U), depth + 1U);
-            publish(o, scope);
-            break;
-        }
-        case OpWhile:
-        {
-            Operation* const o = make(b, m_k.cwhile, {}, 0U, 2U);
-            child(region_block(o, 0U, 0U), scope, depth + 1U, isolated, 1U, End::Yield);
-            child(region_block(o, 1U, 0U), scope, depth + 1U, isolated, 0U, End::Statement);
-            break;
-        }
-        case OpSwitch:
-        {
-            Value* selector[1] = {pick(b, scope)};
-            const u8  shape    = m_in.byte();
-            const u32 arms     = 1U + shape % 3U;
-            Operation* const o =
-                make(b, (shape & 0x10U) != 0U ? m_k.cmatch : m_k.cswitch, ConstSpan<Value*>(selector, 1U), 0U, arms);
-            for (u32 r = 0U; r < arms; ++r)
-            {
-                child(region_block(o, r, 0U), scope, depth + 1U, isolated, 0U, End::Statement);
-            }
-            break;
-        }
-        case OpScope:
-        {
-            const u8  shape    = m_in.byte();
-            const OpId kinds[] = {m_k.cscope, m_k.ascope, m_k.tgroup};
-            const u32 results  = (shape >> 2U) % 3U;
-            Operation* const o = make(b, kinds[shape % 3U], {}, results, 1U);
-            child(region_block(o, 0U, 0U), scope, depth + 1U, isolated, results, End::Yield);
-            publish(o, scope);
-            break;
-        }
-        case OpState:
-        {
-            const u8   shape   = m_in.byte();
-            const OpId kinds[] = {m_k.state, m_k.delay, m_k.history};
-            Value* const init  = pick(b, scope);
-            Value* operands[2] = {init, init}; // the feedback is chosen at the block's end
-            Operation* const o = make(b, kinds[shape % 3U], ConstSpan<Value*>(operands, 2U), 1U);
-            if ((shape & 0x0CU) != 0U)
-            {
-                m_ctx.set_attr(o, "depth", m_ctx.attr_int(1 + static_cast<i64>((shape >> 4U) & 3U)));
-            }
-            publish(o, scope);
-            feedback.push_back(Feedback{o, scope.size()});
-            break;
-        }
-        case OpCall:
-        {
-            const u32     callee = m_in.byte() % m_h.functions;
-            Array<Value*> args(m_alloc);
-            for (u32 a = 0U; a < m_h.params[callee]; ++a)
-            {
-                args.push_back(pick(b, scope));
-            }
-            char name[4] = {'f', static_cast<char>('0' + callee), '\0', '\0'};
-            const ConstSpan<Value*> span(args.data(), args.size());
-            Operation* const        o = append(b, crd::ceir::func::create_call(m_ctx, StringView(name, 2U), span,
-                                                                               m_h.results[callee], m_ctx.type_i32()));
-            publish(o, scope);
-            break;
-        }
-        case OpLaunch:
-        {
-            const u8   shape   = m_in.byte();
-            const OpId kinds[] = {m_k.alaunch, m_k.tspawn, m_k.tmain, m_k.tworker};
-            const u32  yields  = (shape >> 2U) % 3U;
-            Operation* const o = make(b, kinds[shape % 4U], {}, 1U, 1U);
-            child(region_block(o, 0U, 0U), scope, depth + 1U, isolated, yields, End::Yield);
-            tokens.push_back(Token{o->result(0U), yields});
-            break;
-        }
-        case OpAwait:
-        {
-            const u8   shape = m_in.byte();
-            const OpId kind  = (shape & 1U) != 0U ? m_k.tfiber : m_k.aawait;
-            if (!tokens.empty() && (shape & 6U) != 0U)
-            {
-                const Token t      = take(tokens, m_in.byte());
-                Value* operand[1]  = {t.value};
-                Operation* const o = make(b, kind, ConstSpan<Value*>(operand, 1U), (shape >> 3U) % (t.yields + 1U));
+                Value* operands[2] = {pick(b, scope), pick(b, scope)};
+                const OpId kinds[] = {m_k.addi, m_k.muli, m_k.cmpi}; // OpAdd, OpMul, OpCmp in order
+                Operation* const o = make(b, kinds[code - kOpAdd], ConstSpan<Value*>(operands, 2U), 1U);
+                if (code == kOpCmp)
+                {
+                    static const char* const kPredicates[] = {"eq",  "ne",  "slt", "sle", "sgt",
+                                                              "sge", "ult", "ule", "ugt", "uge"};
+                    m_ctx.set_attr(o, "predicate", m_ctx.attr_string(kPredicates[m_in.byte() % 10U]));
+                }
                 publish(o, scope);
-            }
-            else // a forged handle: any value (a live handle number reads that token; anything else is BadToken)
-            {
-                Value* operand[1] = {pick(b, scope)};
-                (void)make(b, kind, ConstSpan<Value*>(operand, 1U), 0U);
-            }
-            break;
-        }
-        case OpJoin:
-        case OpRace:
-        {
-            const u32     want = m_in.byte() % 4U;
-            Array<Value*> operands(m_alloc);
-            u32           yields = 0U;
-            for (u32 i = 0U; i < want && !tokens.empty(); ++i)
-            {
-                const Token t = take(tokens, m_in.byte());
-                operands.push_back(t.value);
-                yields += t.yields;
-            }
-            const ConstSpan<Value*> span(operands.data(), operands.size());
-            Operation* const        o = make(b, code == OpJoin ? m_k.ajoin : m_k.arace, span, 1U);
-            if (code == OpJoin)
-            {
-                tokens.push_back(Token{o->result(0U), yields});
-            }
-            else
-            {
-                publish(o, scope);
-            }
-            break;
-        }
-        case OpCancel:
-        {
-            if (!tokens.empty())
-            {
-                Value* operand[1] = {take(tokens, m_in.byte()).value};
-                (void)make(b, m_k.acancel, ConstSpan<Value*>(operand, 1U), 0U);
-            }
-            break;
-        }
-        case OpContinuation:
-        {
-            const u8 shape = m_in.byte();
-            if (tokens.empty())
-            {
                 break;
             }
-            const Token t = take(tokens, m_in.byte());
-            // Its body takes the antecedent's values as block arguments; one in eight takes a wrong count.
-            const u32 args     = (shape & 7U) == 0U ? (t.yields + 1U) % 3U : t.yields;
-            const u32 yields   = (shape >> 3U) % 3U;
-            Value* operand[1]  = {t.value};
-            Operation* const o = make(b, m_k.tcont, ConstSpan<Value*>(operand, 1U), 1U, 1U);
-            child(region_block(o, 0U, args), scope, depth + 1U, isolated, yields, End::Yield);
-            tokens.push_back(Token{o->result(0U), yields});
-            break;
-        }
-        case OpRandom:
-        {
-            Operation* const o = make(b, m_k.irandom, {}, 1U);
-            const u8         s = m_in.byte();
-            const u8         n = m_in.byte();
-            m_ctx.set_attr(o, "stream", m_ctx.attr_int(static_cast<i64>(s)));
-            m_ctx.set_attr(o, "bound", m_ctx.attr_int(n == 0xFFU ? i64{0xFFFFFFFF} : static_cast<i64>(n) + 1));
-            publish(o, scope);
-            break;
-        }
-        case OpTime:
-        {
-            const u8         shape = m_in.byte();
-            Operation* const o     = make(b, (shape & 0x80U) != 0U ? m_k.istep : m_k.iclock, {}, 1U);
-            const StringView name  = crd::ceir::time::builtin_domain_name(shape % crd::ceir::time::kBuiltinDomainCount);
-            m_ctx.set_attr(o, "domain", m_ctx.attr_string(name));
-            publish(o, scope);
-            break;
-        }
-        case OpEvent:
-        {
-            Operation* const o = make(b, m_k.ievent, {}, 5U);
-            m_ctx.set_attr(o, "queue", m_ctx.attr_int(static_cast<i64>(m_in.byte() % 4U)));
-            publish(o, scope);
-            break;
-        }
+            case kOpIf:
+            {
+                Value* cond[1] = {pick(b, scope)};
+                const u32 results = m_in.byte() % 3U;
+                Operation* const o = make(b, m_k.cif, ConstSpan<Value*>(cond, 1U), results, 2U);
+                child(region_block(o, 0U, 0U), scope, depth + 1U, isolated, results, End::Yield);
+                child(region_block(o, 1U, 0U), scope, depth + 1U, isolated, results, End::Yield);
+                publish(o, scope);
+                break;
+            }
+            case kOpFor:
+            case kOpParallelFor:
+            {
+                Value* range[3] = {pick(b, scope), pick(b, scope), pick(b, scope)};
+                Operation* const o =
+                    make(b, code == kOpFor ? m_k.cfor : m_k.pfor, ConstSpan<Value*>(range, 3U), 0U, 1U);
+                if (code == kOpFor)
+                {
+                    child(region_block(o, 0U, 1U), scope, depth + 1U, isolated, 0U, End::Statement);
+                }
+                else
+                {
+                    isolated_body(region_block(o, 0U, 1U), depth + 1U);
+                }
+                break;
+            }
+            case kOpMapReduce:
+            {
+                Value* range[4] = {pick(b, scope), pick(b, scope), pick(b, scope), pick(b, scope)};
+                Operation* const o = make(b, m_k.mreduce, ConstSpan<Value*>(range, 4U), 1U, 2U);
+                isolated_body(region_block(o, 0U, 1U), depth + 1U);
+                isolated_body(region_block(o, 1U, 2U), depth + 1U);
+                publish(o, scope);
+                break;
+            }
+            case kOpWhile:
+            {
+                Operation* const o = make(b, m_k.cwhile, {}, 0U, 2U);
+                child(region_block(o, 0U, 0U), scope, depth + 1U, isolated, 1U, End::Yield);
+                child(region_block(o, 1U, 0U), scope, depth + 1U, isolated, 0U, End::Statement);
+                break;
+            }
+            case kOpSwitch:
+            {
+                Value* selector[1] = {pick(b, scope)};
+                const u8 shape = m_in.byte();
+                const u32 arms = 1U + shape % 3U;
+                Operation* const o = make(b, (shape & 0x10U) != 0U ? m_k.cmatch : m_k.cswitch,
+                                          ConstSpan<Value*>(selector, 1U), 0U, arms);
+                for (u32 r = 0U; r < arms; ++r)
+                {
+                    child(region_block(o, r, 0U), scope, depth + 1U, isolated, 0U, End::Statement);
+                }
+                break;
+            }
+            case kOpScope:
+            {
+                const u8 shape = m_in.byte();
+                const OpId kinds[] = {m_k.cscope, m_k.ascope, m_k.tgroup};
+                const u32 results = (shape >> 2U) % 3U;
+                Operation* const o = make(b, kinds[shape % 3U], {}, results, 1U);
+                child(region_block(o, 0U, 0U), scope, depth + 1U, isolated, results, End::Yield);
+                publish(o, scope);
+                break;
+            }
+            case kOpState:
+            {
+                const u8 shape = m_in.byte();
+                const OpId kinds[] = {m_k.state, m_k.delay, m_k.history};
+                Value* const init = pick(b, scope);
+                Value* operands[2] = {init, init}; // the feedback is chosen at the block's end
+                Operation* const o = make(b, kinds[shape % 3U], ConstSpan<Value*>(operands, 2U), 1U);
+                if ((shape & 0x0CU) != 0U)
+                {
+                    m_ctx.set_attr(o, "depth", m_ctx.attr_int(1 + static_cast<i64>((shape >> 4U) & 3U)));
+                }
+                publish(o, scope);
+                feedback.push_back(Feedback{o, scope.size()});
+                break;
+            }
+            case kOpCall:
+            {
+                const u32 callee = m_in.byte() % m_h.functions;
+                Array<Value*> args(m_alloc);
+                for (u32 a = 0U; a < m_h.params[callee]; ++a)
+                {
+                    args.push_back(pick(b, scope));
+                }
+                char name[4] = {'f', static_cast<char>('0' + callee), '\0', '\0'};
+                const ConstSpan<Value*> span(args.data(), args.size());
+                Operation* const o = append(b, crd::ceir::func::create_call(m_ctx, StringView(name, 2U), span,
+                                                                            m_h.results[callee], m_ctx.type_i32()));
+                publish(o, scope);
+                break;
+            }
+            case kOpLaunch:
+            {
+                const u8 shape = m_in.byte();
+                const OpId kinds[] = {m_k.alaunch, m_k.tspawn, m_k.tmain, m_k.tworker};
+                const u32 yields = (shape >> 2U) % 3U;
+                Operation* const o = make(b, kinds[shape % 4U], {}, 1U, 1U);
+                child(region_block(o, 0U, 0U), scope, depth + 1U, isolated, yields, End::Yield);
+                tokens.push_back(Token{o->result(0U), yields});
+                break;
+            }
+            case kOpAwait:
+            {
+                const u8 shape = m_in.byte();
+                const OpId kind = (shape & 1U) != 0U ? m_k.tfiber : m_k.aawait;
+                if (!tokens.empty() && (shape & 6U) != 0U)
+                {
+                    const Token t = take(tokens, m_in.byte());
+                    Value* operand[1] = {t.value};
+                    Operation* const o = make(b, kind, ConstSpan<Value*>(operand, 1U), (shape >> 3U) % (t.yields + 1U));
+                    publish(o, scope);
+                }
+                else // a forged handle: any value (a live handle number reads that token; anything else is BadToken)
+                {
+                    Value* operand[1] = {pick(b, scope)};
+                    (void)make(b, kind, ConstSpan<Value*>(operand, 1U), 0U);
+                }
+                break;
+            }
+            case kOpJoin:
+            case kOpRace:
+            {
+                const u32 want = m_in.byte() % 4U;
+                Array<Value*> operands(m_alloc);
+                u32 yields = 0U;
+                for (u32 i = 0U; i < want && !tokens.empty(); ++i)
+                {
+                    const Token t = take(tokens, m_in.byte());
+                    operands.push_back(t.value);
+                    yields += t.yields;
+                }
+                const ConstSpan<Value*> span(operands.data(), operands.size());
+                Operation* const o = make(b, code == kOpJoin ? m_k.ajoin : m_k.arace, span, 1U);
+                if (code == kOpJoin)
+                {
+                    tokens.push_back(Token{o->result(0U), yields});
+                }
+                else
+                {
+                    publish(o, scope);
+                }
+                break;
+            }
+            case kOpCancel:
+            {
+                if (!tokens.empty())
+                {
+                    Value* operand[1] = {take(tokens, m_in.byte()).value};
+                    (void)make(b, m_k.acancel, ConstSpan<Value*>(operand, 1U), 0U);
+                }
+                break;
+            }
+            case kOpContinuation:
+            {
+                const u8 shape = m_in.byte();
+                if (tokens.empty())
+                {
+                    break;
+                }
+                const Token t = take(tokens, m_in.byte());
+                // Its body takes the antecedent's values as block arguments; one in eight takes a wrong count.
+                const u32 args = (shape & 7U) == 0U ? (t.yields + 1U) % 3U : t.yields;
+                const u32 yields = (shape >> 3U) % 3U;
+                Value* operand[1] = {t.value};
+                Operation* const o = make(b, m_k.tcont, ConstSpan<Value*>(operand, 1U), 1U, 1U);
+                child(region_block(o, 0U, args), scope, depth + 1U, isolated, yields, End::Yield);
+                tokens.push_back(Token{o->result(0U), yields});
+                break;
+            }
+            case kOpRandom:
+            {
+                Operation* const o = make(b, m_k.irandom, {}, 1U);
+                const u8 s = m_in.byte();
+                const u8 n = m_in.byte();
+                m_ctx.set_attr(o, "stream", m_ctx.attr_int(static_cast<i64>(s)));
+                m_ctx.set_attr(o, "bound", m_ctx.attr_int(n == 0xFFU ? i64{0xFFFFFFFF} : static_cast<i64>(n) + 1));
+                publish(o, scope);
+                break;
+            }
+            case kOpTime:
+            {
+                const u8 shape = m_in.byte();
+                Operation* const o = make(b, (shape & 0x80U) != 0U ? m_k.istep : m_k.iclock, {}, 1U);
+                const StringView name =
+                    crd::ceir::time::builtin_domain_name(shape % crd::ceir::time::kBuiltinDomainCount);
+                m_ctx.set_attr(o, "domain", m_ctx.attr_string(name));
+                publish(o, scope);
+                break;
+            }
+            case kOpEvent:
+            {
+                Operation* const o = make(b, m_k.ievent, {}, 5U);
+                m_ctx.set_attr(o, "queue", m_ctx.attr_int(static_cast<i64>(m_in.byte() % 4U)));
+                publish(o, scope);
+                break;
+            }
         default: break;
         }
     }
@@ -1214,8 +1216,8 @@ private:
 void recursion(Enc& e, i64 n)
 {
     e.head(1U, 11U, {shape(1U, 0U)}).v(n);
-    e.b(3U).b(OpConst).v(-1).bs({OpAdd, 0, 1, OpIf, 0, 0});
-    e.bs({1, OpCall, 0, 2}); // then: call f0(m)
+    e.b(3U).b(kOpConst).v(-1).bs({kOpAdd, 0, 1, kOpIf, 0, 0});
+    e.bs({1, kOpCall, 0, 2}); // then: call f0(m)
     e.b(0U);                // else: nothing
 }
 
@@ -1224,9 +1226,9 @@ void recursion(Enc& e, i64 n)
 void map_reduce_recursion(Enc& e, i64 n)
 {
     e.head(1U, 11U, {shape(1U, 0U)}).v(n);
-    e.b(3U).b(OpConst).v(-1).bs({OpAdd, 0, 1, OpIf, 0, 0});
-    e.b(2U).b(OpConst).v(1).bs({OpMapReduce, 2, 0, 3, 2}); // then: c = 1; map_reduce(m, n, c, m)
-    e.bs({1, OpCall, 0, 0, 0});                            // map: call f0(iv); yield iv
+    e.b(3U).b(kOpConst).v(-1).bs({kOpAdd, 0, 1, kOpIf, 0, 0});
+    e.b(2U).b(kOpConst).v(1).bs({kOpMapReduce, 2, 0, 3, 2}); // then: c = 1; map_reduce(m, n, c, m)
+    e.bs({1, kOpCall, 0, 0, 0});                             // map: call f0(iv); yield iv
     e.bs({0, 0});                                         // combine: yield a
     e.b(0U);                                              // else: nothing
 }
@@ -1235,7 +1237,7 @@ void map_reduce_recursion(Enc& e, i64 n)
 void parallel_range(Enc& e, i64 lo, i64 hi, i64 step)
 {
     e.head(1U, 6U, {shape(0U, 0U)});
-    e.b(4U).b(OpConst).v(lo).b(OpConst).v(hi).b(OpConst).v(step).bs({OpParallelFor, 0, 1, 2});
+    e.b(4U).b(kOpConst).v(lo).b(kOpConst).v(hi).b(kOpConst).v(step).bs({kOpParallelFor, 0, 1, 2});
     e.bs({0, 0}); // body: yield iv
 }
 
@@ -1243,7 +1245,7 @@ void parallel_range(Enc& e, i64 lo, i64 hi, i64 step)
 void host_inputs(Enc& e, std::initializer_list<i64> script, bool source)
 {
     e.head(1U, 4U, {shape(0U, 2U)}, script, source);
-    e.bs({6, OpRandom, 3, 9, OpTime, 0, OpTime, 0x80, OpEvent, 1, OpAdd, 0, 1, OpAdd, 8, 2});
+    e.bs({6, kOpRandom, 3, 9, kOpTime, 0, kOpTime, 0x80, kOpEvent, 1, kOpAdd, 0, 1, kOpAdd, 8, 2});
     e.bs({9, 4});
 }
 
@@ -1254,88 +1256,91 @@ void write_seeds(Seeds& s)
     // add and multiply.
     s.add("arith-predicates-edges", [](Enc& e) {
         e.head(1U, 4U, {shape(2U, 2U)}).v(INT64_MIN).v(1);
-        e.bs({10, OpCmp, 0, 1, 0, OpCmp, 0, 1, 2, OpCmp, 0, 1, 6, OpCmp, 1, 0, 9, OpAdd, 0, 1, OpMul, 0, 1});
-        e.bs({OpCmp, 6, 7, 4, OpMul, 3, 4, OpAdd, 9, 5, OpAdd, 10, 8});
+        e.bs({10, kOpCmp, 0, 1, 0, kOpCmp, 0, 1, 2, kOpCmp, 0, 1, 6, kOpCmp, 1, 0, 9, kOpAdd, 0, 1, kOpMul, 0, 1});
+        e.bs({kOpCmp, 6, 7, 4, kOpMul, 3, 4, kOpAdd, 9, 5, kOpAdd, 10, 8});
         e.bs({7, 11});
     });
     // f0(c): a two-result if, else branch taken.
     s.add("if-yields", [](Enc& e) {
         e.head(1U, 4U, {shape(1U, 2U)}).v(0);
-        e.bs({2, OpIf, 0, 2});
-        e.b(2U).b(OpConst).v(7).b(OpConst).v(9).bs({1, 2}); // then: yield 7, 9
-        e.bs({1, OpAdd, 0, 0, 1, 0});                      // else: yield c + c, c
-        e.bs({OpAdd, 1, 2, 3, 1});
+        e.bs({2, kOpIf, 0, 2});
+        e.b(2U).b(kOpConst).v(7).b(kOpConst).v(9).bs({1, 2}); // then: yield 7, 9
+        e.bs({1, kOpAdd, 0, 0, 1, 0});                        // else: yield c + c, c
+        e.bs({kOpAdd, 1, 2, 3, 1});
     });
     // f0(n): for iv in [1, n): a depth-3 state cell fed back with cell + iv.
     s.add("for-cell-accumulator", [](Enc& e) {
         e.head(1U, 6U, {shape(1U, 1U)}).v(6);
-        e.b(3U).b(OpConst).v(0).b(OpConst).v(1).bs({OpFor, 1, 0, 2});
-        e.bs({2, OpState, 0x24, 1, OpAdd, 4, 3, 0}); // body: s = state(0) depth 3; s + iv feeds it back
+        e.b(3U).b(kOpConst).v(0).b(kOpConst).v(1).bs({kOpFor, 1, 0, 2});
+        e.bs({2, kOpState, 0x24, 1, kOpAdd, 4, 3, 0}); // body: s = state(0) depth 3; s + iv feeds it back
         e.b(0U);
     });
     // A for loop whose step reaches past INT64_MAX: one iteration (the increment used to overflow).
     s.add("for-step-near-max", [](Enc& e) {
         e.head(1U, 6U, {shape(0U, 1U)});
-        e.b(4U).b(OpConst).v(INT64_MAX - 1).b(OpConst).v(INT64_MAX).bs({OpFor, 0, 1, 1});
-        e.bs({1, OpAdd, 2, 2});
-        e.b(OpConst).v(5).b(2U);
+        e.b(4U).b(kOpConst).v(INT64_MAX - 1).b(kOpConst).v(INT64_MAX).bs({kOpFor, 0, 1, 1});
+        e.bs({1, kOpAdd, 2, 2});
+        e.b(kOpConst).v(5).b(2U);
     });
     s.add("for-bad-step", [](Enc& e) {
         e.head(1U, 4U, {shape(0U, 0U)});
-        e.b(4U).b(OpConst).v(0).b(OpConst).v(5).b(OpConst).v(0).bs({OpFor, 0, 1, 2, 0});
+        e.b(4U).b(kOpConst).v(0).b(kOpConst).v(5).b(kOpConst).v(0).bs({kOpFor, 0, 1, 2, 0});
     });
     // A while whose condition yields true forever at a 64-step budget: both tiers exhaust at the same op (the
     // reference used to charge the condition's core.yield a step).
     s.add("while-cond-yield-fuel", [](Enc& e) {
         e.head(1U, 0U, {shape(1U, 0U)}).v(1);
-        e.bs({1, OpWhile, 1, OpCmp, 0, 0, 0, 1}); // cond: x == x
-        e.b(1U).b(OpConst).v(3);                 // body
+        e.bs({1, kOpWhile, 1, kOpCmp, 0, 0, 0, 1}); // cond: x == x
+        e.b(1U).b(kOpConst).v(3);                   // body
     });
     // A while counting a cell up to n inside its condition region.
     s.add("while-cell-counter", [](Enc& e) {
         e.head(1U, 8U, {shape(1U, 0U)}).v(5);
-        e.b(3U).b(OpConst).v(0).b(OpConst).v(1).b(OpWhile);
-        e.bs({3, OpState, 0, 1, OpAdd, 3, 2, OpCmp, 3, 0, 2, 0, 5}); // cond: s = state(0); s + 1 feeds it; yield s < n
-        e.b(1U).b(OpConst).v(9);
+        e.b(3U).b(kOpConst).v(0).b(kOpConst).v(1).b(kOpWhile);
+        e.bs({3, kOpState, 0, 1, kOpAdd, 3, 2, kOpCmp, 3, 0, 2, 0,
+              5}); // cond: s = state(0); s + 1 feeds it; yield s < n
+        e.b(1U).b(kOpConst).v(9);
     });
     s.add("switch-arms", [](Enc& e) {
         e.head(1U, 4U, {shape(1U, 0U)}).v(1);
-        e.bs({2, OpSwitch, 0, 2});
-        e.b(1U).b(OpConst).v(10).b(1U).b(OpConst).v(11).b(1U).b(OpConst).v(12);
-        e.bs({OpSwitch, 0, 0x10});
-        e.b(1U).b(OpConst).v(20).b(1U).b(OpConst).v(21);
+        e.bs({2, kOpSwitch, 0, 2});
+        e.b(1U).b(kOpConst).v(10).b(1U).b(kOpConst).v(11).b(1U).b(kOpConst).v(12);
+        e.bs({kOpSwitch, 0, 0x10});
+        e.b(1U).b(kOpConst).v(20).b(1U).b(kOpConst).v(21);
     });
     s.add("switch-selector-out-of-range", [](Enc& e) {
         e.head(1U, 4U, {shape(1U, 0U)}).v(-1);
-        e.bs({1, OpSwitch, 0, 1});
-        e.b(1U).b(OpConst).v(10).b(1U).b(OpConst).v(11);
+        e.bs({1, kOpSwitch, 0, 1});
+        e.b(1U).b(kOpConst).v(10).b(1U).b(kOpConst).v(11);
     });
     // core.scope (two results), async.scope (one) and task.group (none).
     s.add("scope-kinds", [](Enc& e) {
         e.head(1U, 4U, {shape(0U, 2U)});
-        e.bs({3, OpScope, 9});
-        e.b(2U).b(OpConst).v(1).b(OpConst).v(2).bs({0, 1});
-        e.bs({OpScope, 4, 1, OpAdd, 0, 1, 2});
-        e.bs({OpScope, 2, 1, OpMul, 2, 2});
+        e.bs({3, kOpScope, 9});
+        e.b(2U).b(kOpConst).v(1).b(kOpConst).v(2).bs({0, 1});
+        e.bs({kOpScope, 4, 1, kOpAdd, 0, 1, 2});
+        e.bs({kOpScope, 2, 1, kOpMul, 2, 2});
         e.bs({2, 0});
     });
     // f0(n) loops calling f1 (a counter cell) and feeds a delay and a depth-3 history; cells persist across calls.
     s.add("cells-delay-history-calls", [](Enc& e) {
         e.head(2U, 6U, {shape(1U, 1U), shape(0U, 1U)}).v(4);
-        e.b(4U).b(OpConst).v(0).b(OpConst).v(1).bs({OpFor, 1, 0, 2});
-        e.bs({4, OpCall, 1, OpState, 0x01, 4, OpState, 0x26, 3, OpAdd, 5, 6, 2, 0}); // delay(r); history(iv) depth 3
-        e.bs({OpCall, 1, 3});
-        e.b(4U).b(OpConst).v(0).bs({OpState, 0, 0}).b(OpConst).v(1).bs({OpAdd, 1, 2, 2, 3}); // f1: c = state(0); c + 1
+        e.b(4U).b(kOpConst).v(0).b(kOpConst).v(1).bs({kOpFor, 1, 0, 2});
+        e.bs(
+            {4, kOpCall, 1, kOpState, 0x01, 4, kOpState, 0x26, 3, kOpAdd, 5, 6, 2, 0}); // delay(r); history(iv) depth 3
+        e.bs({kOpCall, 1, 3});
+        e.b(4U).b(kOpConst).v(0).bs({kOpState, 0, 0}).b(kOpConst).v(1).bs({kOpAdd, 1, 2, 2, 3}); // f1: c = state(0); c
+                                                                                                 // + 1
     });
     // f0(x) = r0 * r1 where (r0, r1) = f1(x, x); f1(a, b) = (f2(a), b); f2(a) = a + 1.
     s.add("call-chain", [](Enc& e) {
         e.head(3U, 4U, {shape(1U, 1U), shape(2U, 2U), shape(1U, 1U)}).v(5);
-        e.bs({2, OpCall, 1, 0, 0, OpMul, 1, 2, 3});
-        e.bs({1, OpCall, 2, 0, 2, 1});
-        e.b(2U).b(OpConst).v(1).bs({OpAdd, 0, 1, 2});
+        e.bs({2, kOpCall, 1, 0, 0, kOpMul, 1, 2, 3});
+        e.bs({1, kOpCall, 2, 0, 2, 1});
+        e.b(2U).b(kOpConst).v(1).bs({kOpAdd, 0, 1, 2});
     });
     // f0() { call f0 }: refused at the nesting bound before the native stack runs out, by both tiers at the same call.
-    s.add("recursion-unbounded", [](Enc& e) { e.head(1U, 11U, {shape(0U, 0U)}).bs({1, OpCall, 0}); });
+    s.add("recursion-unbounded", [](Enc& e) { e.head(1U, 11U, {shape(0U, 0U)}).bs({1, kOpCall, 0}); });
     s.add("recursion-at-bound", [](Enc& e) { recursion(e, 31); });
     s.add("recursion-past-bound", [](Enc& e) { recursion(e, 32); });
     s.add("map-reduce-recursion-at-bound", [](Enc& e) { map_reduce_recursion(e, 21); });
@@ -1349,47 +1354,46 @@ void write_seeds(Seeds& s)
     // map iv * iv over [0, 5), fold acc * 31 + elem: a non-associative fold in index order.
     s.add("map-reduce-index-order", [](Enc& e) {
         e.head(1U, 6U, {shape(0U, 1U)});
-        e.b(5U).b(OpConst).v(0).b(OpConst).v(5).b(OpConst).v(1).b(OpConst).v(0).bs({OpMapReduce, 0, 1, 2, 3});
-        e.bs({1, OpMul, 0, 0, 1});
-        e.b(3U).b(OpConst).v(31).bs({OpMul, 0, 2, OpAdd, 3, 1, 4});
+        e.b(5U).b(kOpConst).v(0).b(kOpConst).v(5).b(kOpConst).v(1).b(kOpConst).v(0).bs({kOpMapReduce, 0, 1, 2, 3});
+        e.bs({1, kOpMul, 0, 0, 1});
+        e.b(3U).b(kOpConst).v(31).bs({kOpMul, 0, 2, kOpAdd, 3, 1, 4});
         e.b(4U);
     });
     // map_reduce over [0, 40) at a 64-step budget: the map (one step per index) fits, the fold (two steps per element:
     // the step and the combine's add) runs out inside the combine body, at the same op in both tiers.
     s.add("map-reduce-fold-fuel", [](Enc& e) {
         e.head(1U, 0U, {shape(0U, 1U)});
-        e.b(5U).b(OpConst).v(0).b(OpConst).v(40).b(OpConst).v(1).b(OpConst).v(0).bs({OpMapReduce, 0, 1, 2, 3});
+        e.b(5U).b(kOpConst).v(0).b(kOpConst).v(40).b(kOpConst).v(1).b(kOpConst).v(0).bs({kOpMapReduce, 0, 1, 2, 3});
         e.bs({0, 0});
-        e.bs({1, OpAdd, 0, 1, 2});
+        e.bs({1, kOpAdd, 0, 1, 2});
         e.b(4U);
     });
     // launch (two values), spawn (one), join, await three, worker, continuation, main_thread, race, fiber_wait.
     s.add("tokens", [](Enc& e) {
         e.head(1U, 6U, {shape(0U, 1U)});
-        e.b(11U).bs({OpLaunch, 8}).b(2U).b(OpConst).v(3).b(OpConst).v(4).bs({0, 1});
-        e.bs({OpLaunch, 5}).b(1U).b(OpConst).v(10).b(0U);
-        e.bs({OpJoin, 2, 0, 0, OpAwait, 26, 0});
-        e.bs({OpLaunch, 7}).b(1U).b(OpConst).v(7).b(3U);
-        e.bs({OpContinuation, 9, 0, 1, OpAdd, 3, 0, 4});
-        e.bs({OpLaunch, 2, 0});
-        e.bs({OpRace, 1, 1, OpAwait, 11, 0, OpAdd, 0, 4, OpAdd, 5, 3});
+        e.b(11U).bs({kOpLaunch, 8}).b(2U).b(kOpConst).v(3).b(kOpConst).v(4).bs({0, 1});
+        e.bs({kOpLaunch, 5}).b(1U).b(kOpConst).v(10).b(0U);
+        e.bs({kOpJoin, 2, 0, 0, kOpAwait, 26, 0});
+        e.bs({kOpLaunch, 7}).b(1U).b(kOpConst).v(7).b(3U);
+        e.bs({kOpContinuation, 9, 0, 1, kOpAdd, 3, 0, 4});
+        e.bs({kOpLaunch, 2, 0});
+        e.bs({kOpRace, 1, 1, kOpAwait, 11, 0, kOpAdd, 0, 4, kOpAdd, 5, 3});
         e.b(6U);
     });
     // 8000 iterations that each launch a token and run a parallel_for: the compiled plan moved the whole run-wide
     // token store out and back for every parallel activation (quadratic: 7.7 s on win-debug, 0.15 s now).
     s.add("tokens-in-a-loop-with-a-parallel-op", [](Enc& e) {
         e.head(1U, 11U, {shape(0U, 0U)});
-        e.b(4U).b(OpConst).v(0).b(OpConst).v(8000).b(OpConst).v(1).bs({OpFor, 0, 1, 2});
-        e.b(4U).bs({OpLaunch, 0, 0}).b(OpConst).v(0).b(OpConst).v(1).bs({OpParallelFor, 4, 5, 2, 0, 0});
+        e.b(4U).b(kOpConst).v(0).b(kOpConst).v(8000).b(kOpConst).v(1).bs({kOpFor, 0, 1, 2});
+        e.b(4U).bs({kOpLaunch, 0, 0}).b(kOpConst).v(0).b(kOpConst).v(1).bs({kOpParallelFor, 4, 5, 2, 0, 0});
     });
-    s.add("await-forged-dead", [](Enc& e) { e.head(1U, 4U, {shape(1U, 0U)}).v(5).bs({1, OpAwait, 0, 0}); });
-    s.add("await-forged-live", [](Enc& e) {
-        e.head(1U, 4U, {shape(1U, 0U)}).v(0).bs({2, OpLaunch, 0, 0, OpAwait, 0, 0});
-    });
+    s.add("await-forged-dead", [](Enc& e) { e.head(1U, 4U, {shape(1U, 0U)}).v(5).bs({1, kOpAwait, 0, 0}); });
+    s.add("await-forged-live",
+          [](Enc& e) { e.head(1U, 4U, {shape(1U, 0U)}).v(0).bs({2, kOpLaunch, 0, 0, kOpAwait, 0, 0}); });
     s.add("continuation-arity", [](Enc& e) {
         e.head(1U, 4U, {shape(0U, 0U)});
-        e.bs({2, OpLaunch, 4}).b(1U).b(OpConst).v(1).b(0U);
-        e.bs({OpContinuation, 0, 0, 0});
+        e.bs({2, kOpLaunch, 4}).b(1U).b(kOpConst).v(1).b(0U);
+        e.bs({kOpContinuation, 0, 0, 0});
     });
     s.add("host-inputs", [](Enc& e) { host_inputs(e, {12345, 1000, 16, 1 + (65 << 8)}, true); });
     s.add("host-inputs-exhausted", [](Enc& e) { host_inputs(e, {12345, 1000}, true); });
@@ -1398,9 +1402,9 @@ void write_seeds(Seeds& s)
     // ParallelBodyStateful when the op runs.
     s.add("parallel-body-stateful", [](Enc& e) {
         e.head(2U, 4U, {shape(0U, 0U), shape(1U, 1U)});
-        e.b(4U).b(OpConst).v(0).b(OpConst).v(2).b(OpConst).v(1).bs({OpParallelFor, 0, 1, 2});
-        e.bs({1, OpCall, 1, 0, 1});
-        e.bs({1, OpState, 0, 0, 0, 1});
+        e.b(4U).b(kOpConst).v(0).b(kOpConst).v(2).b(kOpConst).v(1).bs({kOpParallelFor, 0, 1, 2});
+        e.bs({1, kOpCall, 1, 0, 1});
+        e.bs({1, kOpState, 0, 0, 0, 1});
     });
 }
 } // namespace

@@ -1732,7 +1732,7 @@ TEST_CASE("REN-37.8 GATE: TWO viewports contribute to ONE graph and cost ONE sub
     auto fg = raster->create_frame_graph();
     REQUIRE(fg != nullptr);
     fg->set_readback_enabled(true);
-    fg->reset();
+    (*fg).reset();
     renderer.begin_frame(); // recycles the contribution arena the recorded user pointers live in
     const auto s_main  = renderer.contribute(*fg, *main_rt, proj * v_main, light, clear, nullptr);
     const auto s_thumb = renderer.contribute(*fg, *thumb_rt, proj * v_thumb, light, clear, nullptr);
@@ -1870,7 +1870,7 @@ TEST_CASE("REN-37.10 GATE: the viewport scheduler drives contributions into ONE 
     // ── FRAME 0: all three are selected (the two thumbnails start dirty) and compose into ONE submission. ──
     framecook::select_viewports(reg, budget, 0U, sel);
     REQUIRE(sel.active.size() == 3U);
-    fg->reset();
+    (*fg).reset();
     renderer.begin_frame();
     u32 drew = 0;
     for (usize i = 0; i < sel.active.size(); ++i)

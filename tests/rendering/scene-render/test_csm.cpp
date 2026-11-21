@@ -59,8 +59,9 @@ TEST_CASE("REN-3.2-b: the practical split matches the Zhang PSSM formula and is 
     }
     // the last split ALWAYS lands exactly on the shadow distance, whatever lambda - a cascade set that stopped
     // short would leave a band of unshadowed world with no visible cause
-    for (float lambda = 0.0F; lambda <= 1.0F; lambda += 0.25F)
+    for (crd::u32 quarter = 0U; quarter <= 4U; ++quarter)
     {
+        const float lambda = 0.25F * static_cast<float>(quarter);
         CHECK(m::abs(sr::csm_split_practical_cpu(n, f, lambda, 3U, 4U) - f) < 1.0e-2F);
     }
     // strictly increasing

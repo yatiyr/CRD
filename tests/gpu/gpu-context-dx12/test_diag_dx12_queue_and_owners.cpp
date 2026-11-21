@@ -221,7 +221,7 @@ TEST_CASE("diag10c: a DX12 frame graph that defers its wait leaves its frame in 
         graph->set_readback_enabled(false); // the deferred wait: one submission, observed at the next execute/reset
         for (crd::u32 frame = 0U; frame < 3U; ++frame)
         {
-            graph->reset();
+            (*graph).reset();
             // The previous frame's step was observed by the reset: nothing is left in flight.
             CHECK(ctx->queue_pressure().counts.in_flight == 0U);
             const g::FgImage out = graph->import_target(*target);
@@ -234,7 +234,7 @@ TEST_CASE("diag10c: a DX12 frame graph that defers its wait leaves its frame in 
             REQUIRE(r.depth.read);
             CHECK(r.counts.in_flight >= 1U); // the frame's submission, not yet observed
         }
-        graph->reset();
+        (*graph).reset();
         const g::QueueDepthCounts end = ctx->queue_pressure().counts;
         CHECK(end.in_flight == 0U);
         CHECK(end.submitted >= begin.submitted + 3U);
@@ -382,7 +382,7 @@ TEST_CASE("diag10c: an injected DX12 removal abandons the pending steps and the 
         CHECK(lost.counts.retired == pending.counts.retired);
 
         // Waiting on the removed device observes nothing.
-        graph->reset();
+        (*graph).reset();
         CHECK(ctx->queue_pressure().counts.retired == pending.counts.retired);
     }
     // The removed device's last queue is gone, so its counts ended; every native object was still released.

@@ -48,7 +48,7 @@ constexpr u8 kFrameGoAway = 0x7U;
 constexpr u8 kEndHeaders = 0x4U;
 constexpr char kPreface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
-ConstSpan<u8> span_of(const char* text)
+ConstSpan<u8> span_of(const char* text) noexcept
 {
     return ConstSpan<u8>(reinterpret_cast<const u8*>(text), std::strlen(text));
 }
@@ -68,7 +68,7 @@ ConstSpan<u8> view(const Bytes& bytes)
     return ConstSpan<u8>(bytes.data(), bytes.size());
 }
 
-HttpField field(const char* name, const char* value)
+HttpField field(const char* name, const char* value) noexcept
 {
     HttpField out;
     out.name = span_of(name);

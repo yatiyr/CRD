@@ -1,6 +1,8 @@
 // COMPLY.0: `ceridc comply` answers crd-comply's query over the committed rule generations (assets/comply); the verb
 // and the real binary give the same bytes, and every malformed request or generation is refused before it answers.
 
+#include "ceridc_shell.hpp"
+
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -11,12 +13,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdio>
-#include <cstdlib>
 
 namespace
 {
 namespace fs = crd::platform::fs;
 namespace cont = crd::containers;
+using crd::ceridc::test::run_shell;
 
 constexpr const char* kRules = CRD_REPO_DIR "/assets/comply";
 
@@ -128,7 +130,7 @@ TEST_CASE("comply verb: the real ceridc binary answers the same bytes", "[ceridc
                         "%s\"%s\" comply --rules \"%s\" --scope product.purchases --jurisdiction TR,EU,PLATFORM "
                         "--day 2027-12-11 > ceridc_comply_out.json%s",
                         kShellQuote, exe.c_str(), kRules, kShellQuote);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     cont::String out;
     REQUIRE(fs::read_file_text(fs::Path("ceridc_comply_out.json"), out));
     while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
@@ -140,5 +142,5 @@ TEST_CASE("comply verb: the real ceridc binary answers the same bytes", "[ceridc
 
     (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" comply --rules "%s" --scope x > ceridc_comply_out.json%s)",
                         kShellQuote, exe.c_str(), kRules, kShellQuote);
-    CHECK(std::system(cmd) != 0);
+    CHECK(run_shell(cmd) != 0);
 }

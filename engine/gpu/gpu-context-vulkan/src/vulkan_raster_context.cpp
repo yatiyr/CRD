@@ -8057,6 +8057,7 @@ private:
         static_cast<VulkanRasterContext*>(ctx)->drain_upload_batches();
     }
 
+public:
     void begin_upload_batch() override
     {
         if (m_batch_open || m_device == VK_NULL_HANDLE)
@@ -8153,6 +8154,7 @@ private:
         m_upload_slot = (m_upload_slot + 1U) % kUploadBatches;
     }
 
+private:
     // the in-batch append: ring memcpy + one recorded copy region. False falls back to the synchronous path.
     [[nodiscard]] bool upload_batched(VulkanStorageBuffer& sb, crd::u32 byte_offset, const void* data,
                                       crd::u32 size_bytes)

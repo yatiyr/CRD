@@ -3,6 +3,8 @@
 // hash that schema pins too. What it reports is what crd-net's coder sends, every refusal leaves no model behind, and the
 // real binary gives the same bytes.
 
+#include "ceridc_shell.hpp"
+
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -15,7 +17,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <coding_fixture.hpp>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 namespace
@@ -23,11 +24,12 @@ namespace
 namespace fs = crd::platform::fs;
 namespace cont = crd::containers;
 namespace net_test = crd::net::test;
-using crd::u8;
 using crd::u32;
 using crd::u64;
+using crd::u8;
 using crd::usize;
 using crd::ceridc::ModelFlags;
+using crd::ceridc::test::run_shell;
 using crd::net::BodyCoder;
 using crd::net::BodyModel;
 using crd::net::wire::CodecKind;
@@ -447,7 +449,7 @@ TEST_CASE("model verb: the real ceridc binary answers the same bytes", "[ceridc]
                         "%s\"%s\" model train --kind dictionary --samples notes --out n.dict --dictionary-bytes 512 "
                         "--holdout 4 > ceridc_model_out.json%s",
                         kShellQuote, exe.c_str(), kShellQuote);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     cont::String out;
     REQUIRE(fs::read_file_text(fs::Path("ceridc_model_out.json"), out));
     while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
@@ -465,5 +467,5 @@ TEST_CASE("model verb: the real ceridc binary answers the same bytes", "[ceridc]
 
     (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" model train --kind entropy --samples notes > ceridc_model_out.json%s)",
                         kShellQuote, exe.c_str(), kShellQuote);
-    CHECK(std::system(cmd) != 0);
+    CHECK(run_shell(cmd) != 0);
 }

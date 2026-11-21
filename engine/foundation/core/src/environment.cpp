@@ -2,12 +2,11 @@
 
 #include <crd/core/assert.hpp>
 #include <crd/core/environment.hpp>
+#include <crd/core/parse_integer.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/utf16.hpp>
 
-#include <charconv>
 #include <cstring>
-#include <system_error>
 
 #if CRD_OS_WINDOWS
 #ifndef NOMINMAX
@@ -129,8 +128,7 @@ bool read_environment_integer(const char* name, crd::i64 low, crd::i64 high, crd
     }
     const char* const end = buffer + std::strlen(buffer);
     crd::i64 n = 0;
-    const std::from_chars_result parsed = std::from_chars(buffer, end, n);
-    if (parsed.ec != std::errc{} || parsed.ptr != end || n < low || n > high)
+    if (!crd::parse_i64(buffer, end, n) || n < low || n > high)
     {
         return false;
     }

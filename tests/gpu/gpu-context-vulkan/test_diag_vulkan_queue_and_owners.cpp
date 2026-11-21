@@ -241,7 +241,7 @@ TEST_CASE("diag10c: Vulkan one-shot and deferred frame-graph submissions are in 
             graph->set_readback_enabled(false); // the deferred wait: a frame is observed when its slot is reused
             for (crd::u32 frame = 0U; frame < 4U; ++frame)
             {
-                graph->reset();
+                (*graph).reset();
                 const g::FgImage out = graph->import_target(*target);
                 graph->add_pass("paint").writes(out).execute(&record_nothing, nullptr);
                 REQUIRE(graph->build());
@@ -361,7 +361,7 @@ TEST_CASE("diag10c: an injected Vulkan loss abandons the pending submissions and
         CHECK(lost.counts.abandoned == in_flight);
         CHECK(lost.counts.retired == pending.counts.retired);
 
-        graph->reset(); // a wait on the lost device observes nothing
+        (*graph).reset(); // a wait on the lost device observes nothing
         CHECK(ctx->queue_pressure().counts.retired == pending.counts.retired);
     }
     raster.reset();

@@ -72,6 +72,18 @@
       ]
     },
     {
+      "id": "text.parse-integer",
+      "summary": "The parse of one decimal integer: digits only (an optional '-' for a signed value), no whitespace or '+', refused past its bound, no allocation.",
+      "owner": "core",
+      "decision": "crd-core, beside text.parse-float: the diagnostic commands, fault plans, CEIR text, the Matrix Market reader, the environment's integers and every tool's numeric flags read one parser, docs/sessions/2026-11-21-tidy-llvm-22.md.",
+      "api": [
+        "engine/foundation/core/include/crd/core/parse_integer.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\bfrom_chars\\s*\\(", "what": "a std::from_chars parse of a number"}
+      ]
+    },
+    {
       "id": "hash.fnv1a",
       "summary": "FNV-1a hashing, 32- and 64-bit, over bytes and text (constant-expression capable), little-endian integer folds and the runtime word step: identities, cache keys and cooked-content hashes.",
       "owner": "core",

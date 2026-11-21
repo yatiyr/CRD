@@ -24,7 +24,7 @@ namespace kir = crd::kir;
 namespace lgt = crd::kir::lighting;
 namespace ck  = crd::kir::cook;
 namespace mat = crd::kir::material;
-namespace rn  = crd::kir::render;
+namespace kir_render = crd::kir::render;
 namespace scr = crd::kir::screen;
 namespace pst = crd::kir::post;
 namespace taa = crd::kir::taa;
@@ -66,13 +66,13 @@ double ref_brdf(const double base[3], double metallic, double perceptual, const 
     const double loh = rclamp01(rdot3(l, h));
 
     const double a  = noh * alpha;
-    const double dd = ((alpha / ((1.0 - noh * noh) + a * a)) < (453.5) ? (alpha / ((1.0 - noh * noh) + a * a)) : (453.5));
+    const double dd = ((alpha / ((1.0 - noh * noh) + a * a)) < 453.5 ? (alpha / ((1.0 - noh * noh) + a * a)) : 453.5);
     const double dterm = dd * (dd * (1.0 / kPi));
 
     const double a2 = alpha * alpha;
     const double lv = nol * crd::math::sqrt((nov - a2 * nov) * nov + a2);
     const double ll = nov * crd::math::sqrt((nol - a2 * nol) * nol + a2);
-    const double vterm = 0.5 / ((lv + ll) > (0.0000077) ? (lv + ll) : (0.0000077));
+    const double vterm = 0.5 / ((lv + ll) > 0.0000077 ? (lv + ll) : 0.0000077);
 
     const double fterm = f0[c] + (f90 - f0[c]) * rpow5(1.0 - loh);
     const double fr    = (dterm * vterm) * fterm;
@@ -3200,8 +3200,8 @@ TEST_CASE("B8-l: render-path math (clustered light cull / deferred G-buffer deco
     };
 
     // Forward+ : the exponential z-slice + the froxel coord + the light-sphere-vs-cluster cull.
-    chk(rn::cluster_z_slice(g, vz, kc(0.1), kc(100.0), kc(16.0)), [&](int i) { return rcluster_z_slice(vzv[i], 0.1, 100.0, 16.0); });
-    chk3(rn::cluster_coord(g, g.vec2(ux, uy), vz, kc(16.0), kc(8.0), kc(16.0), kc(0.1), kc(100.0)),
+    chk(kir_render::cluster_z_slice(g, vz, kc(0.1), kc(100.0), kc(16.0)), [&](int i) { return rcluster_z_slice(vzv[i], 0.1, 100.0, 16.0); });
+    chk3(kir_render::cluster_coord(g, g.vec2(ux, uy), vz, kc(16.0), kc(8.0), kc(16.0), kc(0.1), kc(100.0)),
          [&](int i, int c)
          {
              if (c == 0)
@@ -3215,13 +3215,13 @@ TEST_CASE("B8-l: render-path math (clustered light cull / deferred G-buffer deco
              return rcluster_z_slice(vzv[i], 0.1, 100.0, 16.0); });
     const int amin = g.vec3(kc(-1.0), kc(-1.0), kc(-1.0));
     const int amax = g.vec3(kc(1.0), kc(1.0), kc(1.0));
-    chk(rn::sphere_aabb_sq_dist(g, g.vec3(cx, cy, cz), amin, amax), [&](int i) { const double c[3] = {cxv[i], cyv[i], czv[i]}; const double lo[3] = {-1, -1, -1}; const double hi[3] = {1, 1, 1}; return rsq_dist_aabb(c, lo, hi); });
-    chk(rn::light_cluster_cull(g, g.vec3(cx, cy, cz), rad, amin, amax), [&](int i) { const double c[3] = {cxv[i], cyv[i], czv[i]}; const double lo[3] = {-1, -1, -1}; const double hi[3] = {1, 1, 1}; const double sq = rsq_dist_aabb(c, lo, hi); return (radv[i] * radv[i] < sq) ? 0.0 : 1.0; });
+    chk(kir_render::sphere_aabb_sq_dist(g, g.vec3(cx, cy, cz), amin, amax), [&](int i) { const double c[3] = {cxv[i], cyv[i], czv[i]}; const double lo[3] = {-1, -1, -1}; const double hi[3] = {1, 1, 1}; return rsq_dist_aabb(c, lo, hi); });
+    chk(kir_render::light_cluster_cull(g, g.vec3(cx, cy, cz), rad, amin, amax), [&](int i) { const double c[3] = {cxv[i], cyv[i], czv[i]}; const double lo[3] = {-1, -1, -1}; const double hi[3] = {1, 1, 1}; const double sq = rsq_dist_aabb(c, lo, hi); return (radv[i] * radv[i] < sq) ? 0.0 : 1.0; });
 
     // Clustered decals : project a world point into the decal box (inv = scale 1.5) → uv + inside.
     const double dm[16] = {1.5, 0, 0, 0, 0, 1.5, 0, 0, 0, 0, 1.5, 0, 0, 0, 0, 1};
     const int    dminv  = g.mat4(g.vec4(kc(1.5), kc(0), kc(0), kc(0)), g.vec4(kc(0), kc(1.5), kc(0), kc(0)), g.vec4(kc(0), kc(0), kc(1.5), kc(0)), g.vec4(kc(0), kc(0), kc(0), kc(1)));
-    chk3(rn::decal_project(g, g.vec3(wx, wy, wz), dminv), [&](int i, int c) {
+    chk3(kir_render::decal_project(g, g.vec3(wx, wy, wz), dminv), [&](int i, int c) {
         const double wp[4] = {wxv[i], wyv[i], wzv[i], 1.0}; double loc[4]; rmatvec4(dm, wp, loc);
         if (c == 0)
         {

@@ -282,7 +282,7 @@ void nlerp_of(const f32* a, const f32* b, f32 t, f32* out, f32& length2) noexcep
         const auto index = static_cast<f32>(i);
         const f32 odd = (2.0F * index) + 1.0F;
         const f32 scale = (i == 16U) ? 1.902F : 1.0F;
-        product = 1.0F + ((((((scale / (index * odd)) * square) - ((scale * index) / odd))) * x) * product);
+        product = 1.0F + (((((scale / (index * odd)) * square) - ((scale * index) / odd)) * x) * product);
     }
     return t * product;
 }

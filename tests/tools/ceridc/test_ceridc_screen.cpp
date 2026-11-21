@@ -3,24 +3,24 @@
 // not yet published list, every malformed request refused before a file is read, malformed and misnamed lists
 // refused with their file, and the real binary answering the same bytes. Every name is invented.
 
+#include "ceridc_shell.hpp"
+
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
-#include <crd/core/utf16.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 
 namespace
 {
 namespace fs = crd::platform::fs;
 namespace cont = crd::containers;
+using crd::ceridc::test::run_shell;
 
 constexpr const char* kOfac = R"toml(format = "cerid-sanctions/1"
 authority = "test.ofac"
@@ -153,21 +153,6 @@ constexpr const char* kShellQuote = "\"";
 #else
 constexpr const char* kShellQuote = "";
 #endif
-
-// Runs a UTF-8 command line through the shell: sh takes its bytes, cmd.exe its UTF-16 form (std::system would hand it
-// over in the ANSI code page, so a Turkish name would reach ceridc as other characters).
-int run_shell(const char* command)
-{
-#if CRD_OS_WINDOWS
-    const crd::usize bytes = std::strlen(command);
-    cont::Array<wchar_t> wide;
-    wide.resize(bytes + 1U); // UTF-16 takes at most a unit per UTF-8 byte; the last stays the NUL
-    (void)crd::utf8_to_utf16(reinterpret_cast<const crd::u8*>(command), bytes, wide.data(), bytes);
-    return _wsystem(wide.data());
-#else
-    return std::system(command);
-#endif
-}
 
 // The verb's report a real-binary run wrote to `path`, without the line end.
 cont::String report_file(const char* path)

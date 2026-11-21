@@ -1,14 +1,12 @@
-#include <crd/ceir/parse.hpp>
-
 #include <crd/ceir/attr.hpp>
 #include <crd/ceir/detail/symbol_registration.hpp>
+#include <crd/ceir/parse.hpp>
 #include <crd/ceir/symbol_table.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/parse_float.hpp>
-
-#include <charconv> // std::from_chars — allocation-free integer parsing (the exact inverse of the printer's to_chars)
+#include <crd/core/parse_integer.hpp>
 
 namespace crd::ceir
 {
@@ -1475,9 +1473,8 @@ private:
         {
             return float_from_word(run);
         }
-        i64        v   = 0;
-        const auto res = std::from_chars(run.data(), run.data() + run.size(), v);
-        if (res.ec != std::errc{} || res.ptr != run.data() + run.size())
+        i64 v = 0;
+        if (!crd::parse_i64(run.data(), run.data() + run.size(), v))
         {
             fail("malformed integer attribute");
             return {};

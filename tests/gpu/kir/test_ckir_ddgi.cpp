@@ -332,11 +332,11 @@ TEST_CASE("DDGI probe update: aligned rays ACCUMULATE irradiance + set the depth
             pdp[uz(i)] = odp[uz(i)];
         }
     }
-    const auto rn = max_r();
+    const auto last = max_r();
     CHECK(r1 > 0.0);                          // one frame already deposits some irradiance in the +Y texel
-    CHECK(rn.first > r1 * 3.0);               // temporal accumulation grows it substantially over 40 frames
-    CHECK(rn.first > 0.3);                    // converging toward the ray radiance 0.8 (cosine-weighted, hysteresis-limited)
-    CHECK(odp[uz(rn.second * 2)] > 2.0);      // the +Y texel's depth MEAN converged toward the 5.0 hit distance
+    CHECK(last.first > r1 * 3.0);             // temporal accumulation grows it substantially over 40 frames
+    CHECK(last.first > 0.3); // converging toward the ray radiance 0.8 (cosine-weighted, hysteresis-limited)
+    CHECK(odp[uz(last.second * 2)] > 2.0); // the +Y texel's depth MEAN converged toward the 5.0 hit distance
     // a texel facing AWAY from +Y (e.g. the −Y direction) receives no aligned rays ⇒ stays ~0
     double min_r = 1.0;
     for (int t = 0; t < r * r; ++t)

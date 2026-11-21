@@ -260,7 +260,7 @@ TEST_CASE("REN-1 GATE (DX12): frame graph composes two pull passes in ONE submis
     CHECK(out->read_pixel(dim - 6U, dim / 2U) == sync_right);
 
     // reuse across frames: reset + rebuild + re-execute still submits exactly once
-    fgraph->reset();
+    (*fgraph).reset();
     const g::FgImage  img2  = fgraph->import_target(*out);
     const g::FgBuffer fred2 = fgraph->import_storage(*red);
     ScenePass         p2{img2, fred2, prog.get()};
@@ -764,7 +764,7 @@ TEST_CASE("DX12 authored fullscreen clears survive cooking and reach uncovered p
         fc::FrameRecorder recorder(&alloc);
         for (crd::u32 frame = 0U; frame < 3U; ++frame)
         {
-            graph->reset();
+            (*graph).reset();
             recorder.begin_frame();
             REQUIRE(recorder.record(loaded, *graph, *raster, host, nullptr, nullptr, &plans));
             REQUIRE(graph->build());
@@ -775,7 +775,7 @@ TEST_CASE("DX12 authored fullscreen clears survive cooking and reach uncovered p
             CHECK(target->read_pixel(16U, 16U) == 0xff0000ffU);
         }
         // Retire callbacks before their borrowed recorder/plans leave scope.
-        graph->reset();
+        (*graph).reset();
     });
 }
 
@@ -963,7 +963,7 @@ TEST_CASE("REN-3.1 BENCH (DX12): depth-only pre-pass cost vs the equivalent colo
                         fgraph->add_pass("p").reads(b).writes(im).execute(arm == 0 ? rec_depth : rec_color, &st);
                         REQUIRE(fgraph->build());
                         fgraph->execute();
-                        fgraph->reset();
+                        (*fgraph).reset();
                     }
                     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / frames;
                     if (arm == 0)
@@ -1054,7 +1054,7 @@ TEST_CASE("REN-1 BENCH (DX12): one-submission batching vs the synchronous per-dr
         const auto g0 = std::chrono::steady_clock::now();
         for (crd::u32 f = 0; f < frames; ++f)
         {
-            fgraph->reset();
+            (*fgraph).reset();
             const g::FgImage  img = fgraph->import_target(*tgt);
             const g::FgBuffer buf = fgraph->import_storage(*sb);
             BenchState        st{img, buf, prog.get(), n};
@@ -1582,7 +1582,7 @@ TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across re
         fgraph->execute();
     }
 
-    fgraph->reset(); // ⛔ the operation that destroys every transient
+    (*fgraph).reset(); // ⛔ the operation that destroys every transient
     // An optimization-only hint change must not recreate a persistent image or erase the pixels below.
     pdesc.optimized_clear.color[0] = 1.0F;
     pdesc.optimized_clear.color[1] = 0.0F;
@@ -1607,7 +1607,7 @@ TEST_CASE("REN-37.5 GATE (DX12): a PERSISTENT image keeps its contents across re
     CHECK((corner & 0xFFU) < 80U);
 
     // a RESIZE invalidates the history rather than silently reinterpreting it
-    fgraph->reset();
+    (*fgraph).reset();
     g::FgImageDesc bigger = pdesc;
     bigger.width          = dim * 2U;
     bigger.height         = dim * 2U;
@@ -2052,7 +2052,7 @@ TEST_CASE("REN-38-A5 GATE (DX12): an authored PRESENT pass hands the frame to a 
     CHECK((dst->read_pixel(2U, 2U) & 0xFFFFFFU) == 0U);
 
     // a SECOND frame through the same graph presents again — the counters are per-execute, not cumulative-once.
-    fgraph->reset();
+    (*fgraph).reset();
     rec.begin_frame();
     REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where, &plans)); // CEIR-18c: reuse the one replay plan
     REQUIRE(fgraph->build());
@@ -4824,7 +4824,7 @@ TEST_CASE("D2c-dx12: a frame-graph pass mints one Pass identity, retired on rese
         REQUIRE(fgraph->build()); // build() is CPU-side ordering (no target/window needed)
         CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before + 2U); // build() mints nothing
 
-        fgraph->reset(); // the mid-life flush -- m_passes.clear()
+        (*fgraph).reset(); // the mid-life flush -- m_passes.clear()
         CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before); // reset() retired BOTH pass identities
 
         const g::FgBuffer fb2 = fgraph->import_storage(*out);

@@ -7393,6 +7393,7 @@ private:
         (void)submit_and_wait();
     }
 
+public:
     // ── ⛔ REN-38-A10: `download_storage` was MISSING on DX12. ──
     // The base returns false, so `read_u32` reflected whatever the last DRAW happened to leave behind — and a
     // buffer written by a COMPUTE pass could not be read back at all. Vulkan has had it since RET-4; the
@@ -7426,6 +7427,7 @@ private:
         return true;
     }
 
+private:
     void copy_to_readback(Dx12RasterTarget& t)
     {
         D3D12_TEXTURE_COPY_LOCATION d{};
@@ -7487,6 +7489,7 @@ private:
     bool wait_submitted() { return wait_value(m_fence_val); }
     bool submit_and_wait() { return submit_no_wait() && wait_submitted(); }
 
+public:
     // ── ⭐⭐ DX12 UPLOAD BATCHING — parity with Vulkan's 38-G1 fast path (the 40-B DX12 upload gap). ──────────────
     // Before this, every sync-phase upload took the SYNCHRONOUS `upload_storage` body: a fresh
     // CreateCommittedResource + m_cmd_alloc->Reset() + submit_and_wait PER CALL. At 1M the renderer issues dozens of
@@ -7564,6 +7567,7 @@ private:
         m_upload_slot = (m_upload_slot + 1U) % kUploadBatches;
     }
 
+private:
     // the in-batch append: ring memcpy + one recorded copy (bracketed by the UAV<->COPY_DEST pair the synchronous
     // path already uses per upload). False falls back to the synchronous path. Grows the ring by doubling on demand.
     [[nodiscard]] bool upload_batched(Dx12StorageBuffer& s, crd::u32 byte_offset, const void* data,
@@ -8544,6 +8548,7 @@ private:
     bool                               m_last_submit_executed = false;
     bool                               m_next_load_depth = false; // REN-40-G1: consumed by the next geometry verb
 
+public:
     void set_next_draw_load_depth(bool load) override { m_next_load_depth = load; }
 };
 

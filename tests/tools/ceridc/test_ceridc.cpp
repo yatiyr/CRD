@@ -5,6 +5,9 @@
 // files on disk and query verbs, zero GUI. A second case drives the REAL binary's stdio loop end to end, and the
 // MCP-ADAPT.0 cases hold the protocol: revision 2026-07-28, the 2025-11-25 handshake and the argument checks.
 
+#include "ceridc_shell.hpp"
+#include "mcp_test_support.hpp"
+
 #include <crd/assetio/otio.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/string.hpp>
@@ -15,16 +18,13 @@
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/hdr_image.hpp>
 
-#include "mcp_test_support.hpp"
-
 #include <catch2/catch_test_macros.hpp>
-
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <initializer_list>
 
 namespace fs = crd::platform::fs;
+using crd::ceridc::test::run_shell;
 
 namespace
 {
@@ -293,7 +293,7 @@ TEST_CASE("the stdio transport: the real binary answers over pipes, byte for byt
     // the absolute exe path has no spaces ⇒ one level of quotes; cmd opens the redirection files in the CWD
     char cmd[1024];
     std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp < ceridc_mcp_in.jsonl > ceridc_mcp_out.jsonl", exe_text.c_str());
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     crd::containers::Array<crd::u8> out(&g_alloc);
     REQUIRE(fs::read_file_binary(fs::Path(crd::containers::StringView("ceridc_mcp_out.jsonl")), out));
     const crd::containers::StringView text{reinterpret_cast<const char*>(out.data()), out.size()};
@@ -325,6 +325,40 @@ TEST_CASE("the stdio transport: the real binary answers over pipes, byte for byt
         ++n;
     }
     CHECK(n == sizeof(expected) / sizeof(expected[0]));
+}
+
+// A numeric flag is read whole through crd-core's parses: text that is not a number in the flag's range refuses the
+// verb before it runs and names the flag (atoll and atof read any such text as 0).
+TEST_CASE("ceridc numeric flags: a malformed or out-of-range number refuses the verb", "[ceridc]")
+{
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text));
+    struct Case
+    {
+        const char* args;
+        const char* message;
+    };
+    const Case cases[] = {
+        {"instantiate --x 1.5abc", "ceridc instantiate: --x takes a number in its range, not '1.5abc'"},
+        {"instantiate --z 1e39", "ceridc instantiate: --z takes"}, // past f32
+        {"instantiate --y nan", "ceridc instantiate: --y takes"},
+        {"render --max-frames 12x", "ceridc render: --max-frames takes"},
+        {"sequence --frames-a -", "ceridc sequence: --frames-a takes"},
+        {"diag --command x --page-items 4294967296", "ceridc diag: --page-items takes"}, // past u32
+        {"diag --command x --cursor 18446744073709551616", "ceridc diag: --cursor takes"},
+        {"inspect --program p --break -1", "ceridc inspect: --break takes"},
+        {"inspect --program p --arg 9223372036854775808", "ceridc inspect: --arg takes"},
+    };
+    for (const Case& c : cases)
+    {
+        INFO(c.args);
+        char cmd[1024];
+        std::snprintf(cmd, sizeof(cmd), "\"%s\" %s 2> ceridc_number_err.txt", exe_text.c_str(), c.args);
+        CHECK(run_shell(cmd) != 0);
+        crd::containers::String err(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView("ceridc_number_err.txt")), err));
+        CHECK(crd::containers::StringView{err.data(), err.size()}.find(c.message) != crd::containers::StringView::npos);
+    }
 }
 
 TEST_CASE("MCP 2026-07-28: discovery, the per-request _meta and the version error", "[ceridc][mcp]")

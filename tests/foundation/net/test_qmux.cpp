@@ -1440,8 +1440,6 @@ struct RawServer
     }
 };
 
-const Parameters kRawLimits = {{0x04U, 1U << 16U}, {0x05U, 1U << 15U}, {0x06U, 1U << 15U}, {0x08U, 8U}};
-
 // A connection to a RawServer that leaves a ticket remembering `limits`.
 void remember(Early& early, const Parameters& limits)
 {
@@ -1692,7 +1690,8 @@ TEST_CASE("QMux 0-RTT: a server's parameters may not fall below what the early f
           "[net][qmux][qmux-early]")
 {
     Early early;
-    remember(early, kRawLimits);
+    const Parameters raw_limits = {{0x04U, 1U << 16U}, {0x05U, 1U << 15U}, {0x06U, 1U << 15U}, {0x08U, 8U}};
+    remember(early, raw_limits);
     struct Case
     {
         u64 max_data;

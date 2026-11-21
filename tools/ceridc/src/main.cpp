@@ -5,6 +5,8 @@
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/core/parse_float.hpp>
+#include <crd/core/parse_integer.hpp>
 #include <crd/crypto/key_store.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
@@ -15,10 +17,12 @@
 #include <crd/platform/filesystem.hpp>
 #include <crd/platform/standard_streams.hpp>
 
+#include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <optional>
+#include <type_traits>
 
 namespace
 {
@@ -49,6 +53,49 @@ crd::memory::GrowableTlsfAllocator g_alloc;
         }
     }
     return false;
+}
+
+// The whole of a flag's `text` as `T` through crd-core's parses: an unsigned integer within T's range, an i64, or a
+// finite f32. A refusal names the verb and the flag on stderr, and the verb exits 2.
+template <typename T> [[nodiscard]] bool number_of(const char* verb, const char* name, const char* text, T& out)
+{
+    const char* const end = text + std::strlen(text);
+    bool parsed = false;
+    if constexpr (std::is_same_v<T, crd::f32>)
+    {
+        crd::f64 value = 0.0;
+        parsed = crd::parse_f64(text, end, value) && std::isfinite(value) &&
+                 std::fabs(value) <= static_cast<crd::f64>(std::numeric_limits<crd::f32>::max());
+        if (parsed)
+        {
+            out = static_cast<crd::f32>(value);
+        }
+    }
+    else if constexpr (std::is_same_v<T, crd::i64>)
+    {
+        parsed = crd::parse_i64(text, end, out);
+    }
+    else
+    {
+        static_assert(std::is_unsigned_v<T>, "number_of reads u32, u64, i64 or f32");
+        crd::u64 value = 0U;
+        parsed = crd::parse_u64(text, end, std::numeric_limits<T>::max(), value);
+        if (parsed)
+        {
+            out = static_cast<T>(value);
+        }
+    }
+    if (!parsed)
+    {
+        std::fprintf(stderr, "ceridc %s: %s takes a number in its range, not '%s'\n", verb, name, text);
+    }
+    return parsed;
+}
+
+// number_of over the flag `name`, or over `def` when it is absent.
+template <typename T> [[nodiscard]] bool number_flag(int argc, char** argv, const char* name, const char* def, T& out)
+{
+    return number_of(argv[1], name, flag_of(argc, argv, name, def), out);
 }
 
 // Every value of a repeatable flag (`--break 7 --break 9`), in order.
@@ -349,11 +396,13 @@ int main(int argc, char* argv[])
         const char*            path    = flag_of(argc, argv, "--path", nullptr);
         request.command                = command != nullptr ? command : "";
         request.path                   = path != nullptr ? path : "";
-        request.cursor                 = std::strtoull(flag_of(argc, argv, "--cursor", "0"), nullptr, 10);
-        request.page_items = static_cast<crd::u32>(std::strtoul(flag_of(argc, argv, "--page-items", "0"), nullptr, 10));
-        request.page_bytes = static_cast<crd::u32>(std::strtoul(flag_of(argc, argv, "--page-bytes", "0"), nullptr, 10));
-        request.schema_version =
-            static_cast<crd::u32>(std::strtoul(flag_of(argc, argv, "--schema", "1"), nullptr, 10));
+        if (!number_flag(argc, argv, "--cursor", "0", request.cursor) ||
+            !number_flag(argc, argv, "--page-items", "0", request.page_items) ||
+            !number_flag(argc, argv, "--page-bytes", "0", request.page_bytes) ||
+            !number_flag(argc, argv, "--schema", "1", request.schema_version))
+        {
+            return 2;
+        }
         // Each --param is one named argument, split at its first '='; one without '=' is a name with an empty value.
         crd::containers::Array<const char*>        params(&g_alloc);
         crd::containers::Array<crd::perf::DiagArg> named(&g_alloc);
@@ -473,27 +522,41 @@ int main(int argc, char* argv[])
     }
     if (std::strcmp(verb, "instantiate") == 0)
     {
-        const crd::f32 translate[3] = {static_cast<crd::f32>(std::atof(flag_of(argc, argv, "--x", "0"))),
-                                       static_cast<crd::f32>(std::atof(flag_of(argc, argv, "--y", "0"))),
-                                       static_cast<crd::f32>(std::atof(flag_of(argc, argv, "--z", "0")))};
+        crd::f32 translate[3] = {};
+        if (!number_flag(argc, argv, "--x", "0", translate[0]) || !number_flag(argc, argv, "--y", "0", translate[1]) ||
+            !number_flag(argc, argv, "--z", "0", translate[2]))
+        {
+            return 2;
+        }
         return emit(crd::ceridc::verb_instantiate(
             flag_of(argc, argv, "--pack", nullptr), flag_of(argc, argv, "--asset", nullptr), translate,
             has_flag(argc, argv, "--dry-run"), flag_of(argc, argv, "--out", nullptr), &g_alloc));
     }
     if (std::strcmp(verb, "sequence") == 0)
     {
+        crd::i64 frames_a = 0;
+        crd::i64 frames_b = 0;
+        crd::i64 transition = 0;
+        if (!number_flag(argc, argv, "--frames-a", "0", frames_a) ||
+            !number_flag(argc, argv, "--frames-b", "0", frames_b) ||
+            !number_flag(argc, argv, "--transition", "0", transition))
+        {
+            return 2;
+        }
         return emit(crd::ceridc::verb_sequence(
-            flag_of(argc, argv, "--name", "sequence"), flag_of(argc, argv, "--clip-a", nullptr),
-            std::atoll(flag_of(argc, argv, "--frames-a", "0")), flag_of(argc, argv, "--clip-b", nullptr),
-            std::atoll(flag_of(argc, argv, "--frames-b", "0")),
-            std::atoll(flag_of(argc, argv, "--transition", "0")), flag_of(argc, argv, "--out-timl", nullptr),
+            flag_of(argc, argv, "--name", "sequence"), flag_of(argc, argv, "--clip-a", nullptr), frames_a,
+            flag_of(argc, argv, "--clip-b", nullptr), frames_b, transition, flag_of(argc, argv, "--out-timl", nullptr),
             flag_of(argc, argv, "--out-otio", nullptr), &g_alloc));
     }
     if (std::strcmp(verb, "render") == 0)
     {
+        crd::i64 max_frames = 0;
+        if (!number_flag(argc, argv, "--max-frames", "0", max_frames))
+        {
+            return 2;
+        }
         return emit(crd::ceridc::verb_render(flag_of(argc, argv, "--otio", nullptr),
-                                             flag_of(argc, argv, "--dir", nullptr),
-                                             std::atoll(flag_of(argc, argv, "--max-frames", "0")), &g_alloc));
+                                             flag_of(argc, argv, "--dir", nullptr), max_frames, &g_alloc));
     }
     if (std::strcmp(verb, "export") == 0)
     {
@@ -510,19 +573,39 @@ int main(int argc, char* argv[])
         flags_of(argc, argv, "--arg", raw);
         for (const char* a : raw)
         {
-            args.push_back(std::atoll(a));
+            crd::i64 value = 0;
+            if (!number_of(verb, "--arg", a, value))
+            {
+                return 2;
+            }
+            args.push_back(value);
         }
         raw.clear();
         flags_of(argc, argv, "--break", raw);
         for (const char* b : raw)
         {
-            breaks.push_back(static_cast<crd::u32>(std::strtoul(b, nullptr, 10)));
+            crd::u32 value = 0U;
+            if (!number_of(verb, "--break", b, value))
+            {
+                return 2;
+            }
+            breaks.push_back(value);
         }
         raw.clear();
         flags_of(argc, argv, "--watch", raw);
         for (const char* v : raw)
         {
-            watches.push_back(static_cast<crd::u32>(std::strtoul(v, nullptr, 10)));
+            crd::u32 value = 0U;
+            if (!number_of(verb, "--watch", v, value))
+            {
+                return 2;
+            }
+            watches.push_back(value);
+        }
+        crd::u32 max_stops = 0U;
+        if (!number_flag(argc, argv, "--max-stops", "0", max_stops))
+        {
+            return 2;
         }
         flags_of(argc, argv, "--step", steps);
         const crd::ceridc::InspectClockFlags clock{flag_of(argc, argv, "--clock", nullptr),
@@ -531,8 +614,7 @@ int main(int argc, char* argv[])
         return emit(crd::ceridc::verb_inspect(
             flag_of(argc, argv, "--program", nullptr), flag_of(argc, argv, "--entry", nullptr),
             crd::containers::as_const_span(args), crd::containers::as_const_span(breaks),
-            crd::containers::as_const_span(watches), crd::containers::as_const_span(steps),
-            static_cast<crd::u32>(std::strtoul(flag_of(argc, argv, "--max-stops", "0"), nullptr, 10)), &g_alloc,
+            crd::containers::as_const_span(watches), crd::containers::as_const_span(steps), max_stops, &g_alloc,
             flag_of(argc, argv, "--record", nullptr), flag_of(argc, argv, "--seed", nullptr), &clock,
             flag_of(argc, argv, "--events", nullptr)));
     }

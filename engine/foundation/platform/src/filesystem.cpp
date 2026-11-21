@@ -267,30 +267,58 @@ Path temp_directory() noexcept
 
 bool exists(const Path& path) noexcept
 {
-    std::error_code ec;
-    const bool ok = stdfs::exists(to_native_path(path), ec);
-    return !ec && ok;
+    try
+    {
+        std::error_code ec;
+        const bool ok = stdfs::exists(to_native_path(path), ec);
+        return !ec && ok;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 bool is_file(const Path& path) noexcept
 {
-    std::error_code ec;
-    const bool ok = stdfs::is_regular_file(to_native_path(path), ec);
-    return !ec && ok;
+    try
+    {
+        std::error_code ec;
+        const bool ok = stdfs::is_regular_file(to_native_path(path), ec);
+        return !ec && ok;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 bool is_directory(const Path& path) noexcept
 {
-    std::error_code ec;
-    const bool ok = stdfs::is_directory(to_native_path(path), ec);
-    return !ec && ok;
+    try
+    {
+        std::error_code ec;
+        const bool ok = stdfs::is_directory(to_native_path(path), ec);
+        return !ec && ok;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 u64 file_size(const Path& path) noexcept
 {
-    std::error_code ec;
-    const auto size = stdfs::file_size(to_native_path(path), ec);
-    return ec ? 0ULL : static_cast<u64>(size);
+    try
+    {
+        std::error_code ec;
+        const auto size = stdfs::file_size(to_native_path(path), ec);
+        return ec ? 0ULL : static_cast<u64>(size);
+    }
+    catch (...)
+    {
+        return 0ULL;
+    }
 }
 
 namespace
@@ -549,18 +577,32 @@ bool create_directories(const Path& path) noexcept
 
 bool remove_file(const Path& path) noexcept
 {
-    std::error_code ec;
-    const bool ok = stdfs::remove(to_native_path(path), ec);
-    return !ec && ok;
+    try
+    {
+        std::error_code ec;
+        const bool ok = stdfs::remove(to_native_path(path), ec);
+        return !ec && ok;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 bool rename_file(const Path& from, const Path& to) noexcept
 {
-    // replaces an existing destination on both platforms (POSIX rename semantics; std::filesystem guarantees the
-    // overwrite) — the atomic-publish primitive the GEO-6 cook database/artifact writes lean on
-    std::error_code ec;
-    stdfs::rename(to_native_path(from), to_native_path(to), ec);
-    return !ec;
+    try
+    {
+        // replaces an existing destination on both platforms (POSIX rename semantics; std::filesystem guarantees the
+        // overwrite) — the atomic-publish primitive the GEO-6 cook database/artifact writes lean on
+        std::error_code ec;
+        stdfs::rename(to_native_path(from), to_native_path(to), ec);
+        return !ec;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 namespace
@@ -689,9 +731,16 @@ void FileLock::release() noexcept
 
 bool remove_all(const Path& path) noexcept
 {
-    std::error_code ec;
-    (void)stdfs::remove_all(to_native_path(path), ec);
-    return !ec;
+    try
+    {
+        std::error_code ec;
+        (void)stdfs::remove_all(to_native_path(path), ec);
+        return !ec;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 void list_directory(const Path& path, containers::Array<Path>& out) noexcept

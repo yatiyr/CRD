@@ -59,16 +59,21 @@ int fail(const char* msg)
     std::fprintf(stderr, "[smoke_hesap_substrate] FAIL: %s\n", msg);
     return 1;
 }
-} // namespace
 
-CRD_HESAP_CLI_REGISTER_MODULE([](crd::hesap::cli::CommandRegistry& reg) {
+// The echo command's schema, as the engine's modules build theirs.
+crd::hesap::cli::CommandSchema echo_schema() noexcept
+{
     crd::hesap::cli::CommandSchema s{};
     s.name = crd::containers::String{"hesap.smoke.echo"};
     s.description = crd::containers::String{"Smoke echo for the v0a substrate."};
     s.output.kind = crd::hesap::cli::OutputKind::Text;
     s.idempotent = true;
-    reg.register_command(std::move(s), &echo_impl);
-})
+    return s;
+}
+} // namespace
+
+CRD_HESAP_CLI_REGISTER_MODULE([](crd::hesap::cli::CommandRegistry& reg)
+                              { reg.register_command(echo_schema(), &echo_impl); })
 
 int main()
 {

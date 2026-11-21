@@ -79,7 +79,14 @@ void hang_dumps(const crd::jobs::HangReport& report, void* /*user*/) noexcept
     g_evidence_bytes.store(note.evidence_bytes, std::memory_order_relaxed);
     if (wr == WriteResult::Ok && path != nullptr)
     {
-        g_dump_path = fs::path{reinterpret_cast<const char8_t*>(path)}; // UTF-8; capture_dump returned, threads resumed
+        try
+        {
+            g_dump_path = fs::path{reinterpret_cast<const char8_t*>(path)}; // UTF-8; the threads have resumed
+        }
+        catch (...)
+        {
+            g_dump_path.clear(); // no path to check: the test fails on it
+        }
     }
     g_dump_done.store(true, std::memory_order_release);
 }

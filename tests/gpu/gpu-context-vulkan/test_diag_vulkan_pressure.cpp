@@ -242,7 +242,7 @@ TEST_CASE("diag10c: the Vulkan frame graph reports its transient budget as a rea
         CHECK(tight->transient_pressure().in_use == footprint); // the first build's transients, not a second set
 
         // The recovery an author takes: reset, record again, build within the raised budget.
-        tight->reset();
+        (*tight).reset();
         CHECK(tight->transient_pressure().in_use == 0U);
         REQUIRE(build_two_transients(*tight, side));
         const crd::BudgetReading rebuilt = tight->transient_pressure();

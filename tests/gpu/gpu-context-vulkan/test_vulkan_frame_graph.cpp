@@ -262,7 +262,7 @@ TEST_CASE("REN-1 GATE: frame graph composes scene + overlay in ONE submission, r
     CHECK(capture.warning_count() == 0U);
 
     // reuse across frames: reset + rebuild + re-execute still submits exactly once
-    fgraph->reset();
+    (*fgraph).reset();
     const g::FgImage  img2 = fgraph->import_target(*out);
     const g::FgBuffer buf2 = fgraph->import_storage(*sb_b);
     PassState         st2{img2, buf2, prog.get()};
@@ -1356,7 +1356,7 @@ TEST_CASE("REN-3.1 BENCH: depth-only pre-pass cost vs the equivalent colour pass
                         fgraph->add_pass("depth").reads(b).writes(im).execute(rec_depth, &st);
                         REQUIRE(fgraph->build());
                         fgraph->execute();
-                        fgraph->reset();
+                        (*fgraph).reset();
                     }
                     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / frames;
                     if (ms < best_d)
@@ -1376,7 +1376,7 @@ TEST_CASE("REN-3.1 BENCH: depth-only pre-pass cost vs the equivalent colour pass
                         fgraph->add_pass("colour").reads(b).writes(im).execute(rec_color, &st);
                         REQUIRE(fgraph->build());
                         fgraph->execute();
-                        fgraph->reset();
+                        (*fgraph).reset();
                     }
                     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / frames;
                     if (ms < best_c)
@@ -1458,7 +1458,7 @@ TEST_CASE("REN-1 BENCH: the frame graph's one-submission batching vs the synchro
         const auto g0 = std::chrono::steady_clock::now();
         for (crd::u32 f = 0; f < frames; ++f)
         {
-            fgraph->reset();
+            (*fgraph).reset();
             const g::FgImage  img = fgraph->import_target(*tgt);
             const g::FgBuffer buf = fgraph->import_storage(*sb);
             BenchState        st{img, buf, prog.get(), n};
@@ -2053,7 +2053,7 @@ TEST_CASE("REN-37.5 GATE: a PERSISTENT image keeps its contents across reset() a
 
     // ⛔ THE RESET. This is the operation that destroys (or retires) every transient. A persistent image must
     // walk straight through it.
-    fgraph->reset();
+    (*fgraph).reset();
 
     // ── FRAME 1: ask for the SAME key and READ what frame 0 wrote. ──
     {
@@ -2076,7 +2076,7 @@ TEST_CASE("REN-37.5 GATE: a PERSISTENT image keeps its contents across reset() a
     CHECK((corner & 0xFFU) < 80U);
 
     // claim 4: a RESIZE invalidates the history rather than silently reinterpreting it.
-    fgraph->reset();
+    (*fgraph).reset();
     g::FgImageDesc bigger = pdesc;
     bigger.width          = dim * 2U;
     bigger.height         = dim * 2U;
@@ -2134,7 +2134,7 @@ TEST_CASE("REN-37.5 GATE: a PING-PONG pair alternates prev/curr without the auth
     CHECK(fgraph->create_persistent_image(prev_key(0U), d).valid());
     CHECK_FALSE(fgraph->persistent_image_was_live(curr_key(0U)));
     CHECK_FALSE(fgraph->persistent_image_was_live(prev_key(0U)));
-    fgraph->reset();
+    (*fgraph).reset();
 
     // frame 1: prev is now the buffer frame 0 called curr — the roles swapped, and BOTH are live.
     CHECK(fgraph->create_persistent_image(curr_key(1U), d).valid());
@@ -2838,7 +2838,7 @@ TEST_CASE("REN-38-A5 GATE: an authored PRESENT pass hands the frame to a surface
     CHECK((dst->read_pixel(2U, 2U) & 0xFFFFFFU) == 0U);
 
     // a SECOND frame through the same graph presents again — the counters are per-execute, not cumulative-once.
-    fgraph->reset();
+    (*fgraph).reset();
     rec.begin_frame();
     REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where, &plans)); // CEIR-17z: reuse the same replay plan
     REQUIRE(fgraph->build());
@@ -5373,7 +5373,7 @@ TEST_CASE("REN-38-B1 GATE: an authored PING-PONG history survives the frame and 
     // builds and executes twice IS the proof that the pair rotated.
     for (crd::u32 frame = 0; frame < 2U; ++frame)
     {
-        fgraph->reset();
+        (*fgraph).reset();
         rec.begin_frame();
         REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where, &plans));
         CHECK(err == framecook::FrameExecError::Ok);
@@ -5551,7 +5551,7 @@ TEST_CASE("REN-38-B3 GATE: an authored COUNTER buffer is ZEROED every frame",
     // from there. Running the SAME graph twice and demanding the SAME answer is what pins the reset.
     for (crd::u32 frame = 0; frame < 2U; ++frame)
     {
-        fgraph->reset();
+        (*fgraph).reset();
         rec.begin_frame();
         REQUIRE(rec.record(desc, *fgraph, raster, host, &err, &where));
         CHECK(err == framecook::FrameExecError::Ok);
@@ -9270,7 +9270,7 @@ TEST_CASE("D2c-vk: a frame-graph pass mints one Pass identity, retired on reset 
         CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before + 2U); // execute() mints nothing (labels transient)
         CHECK(capture.error_count() == 0U); // DIAG.7a(d2c-vk label): pass labels emit BALANCED (no End-without-Begin)
 
-        fgraph->reset(); // the mid-life flush -- framecook rebuilds the graph every frame
+        (*fgraph).reset(); // the mid-life flush -- framecook rebuilds the graph every frame
         CHECK(g::identity_registry().live_count(g::ObjectKind::Pass) == before); // reset() retired BOTH pass identities
 
         const g::FgBuffer fb2 = fgraph->import_storage(*out);

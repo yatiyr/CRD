@@ -1,10 +1,9 @@
 // crd-perf -- seeded, authorized fault injection (DIAG.9b). See crd/perf/fault_injection.hpp.
 
-#include <crd/perf/fault_injection.hpp>
-
+#include <crd/core/parse_integer.hpp>
 #include <crd/core/seed_generators.hpp>
-
 #include <crd/perf/diag_assets.hpp>
+#include <crd/perf/fault_injection.hpp>
 #include <crd/perf/flight_recorder.hpp>
 
 #include <cstdio>
@@ -116,30 +115,10 @@ void write_plan(FixedText& out, const FaultPlan& plan)
     }
 }
 
-// Parse a decimal u64 that must make up all of `text`.
+// A decimal u64 that makes up all of `text` (crd-core's parse_u64).
 [[nodiscard]] bool parse_u64(cont::StringView text, crd::u64& out) noexcept
 {
-    if (text.empty() || text.size() > 20U)
-    {
-        return false;
-    }
-    crd::u64 v = 0U;
-    for (crd::usize i = 0U; i < text.size(); ++i)
-    {
-        const char c = text[i];
-        if (c < '0' || c > '9')
-        {
-            return false;
-        }
-        const auto digit = static_cast<crd::u64>(c - '0');
-        if (v > (~0ULL - digit) / 10U)
-        {
-            return false;
-        }
-        v = v * 10U + digit;
-    }
-    out = v;
-    return true;
+    return crd::parse_u64(text.data(), text.data() + text.size(), out);
 }
 
 [[nodiscard]] crd::usize find_char(cont::StringView text, char c, crd::usize from) noexcept

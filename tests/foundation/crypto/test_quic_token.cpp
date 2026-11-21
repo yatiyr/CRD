@@ -59,7 +59,7 @@ struct Token
     [[nodiscard]] ConstSpan<u8> view() const { return ConstSpan<u8>(bytes, size); }
 };
 
-QuicTokenPeer peer_of(ConstSpan<u8> address, u16 port)
+QuicTokenPeer peer_of(ConstSpan<u8> address, u16 port) noexcept
 {
     QuicTokenPeer peer;
     peer.address = address;

@@ -32,14 +32,11 @@ constexpr CK_ULONG kFoundMax    = 4U * kIds;
 constexpr CK_BYTE kP256[] = {0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07};
 constexpr CK_BYTE kP384[] = {0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x22};
 
-// An object's handle: its kind times 32 plus its slot's CKA_ID.
-enum Kind : unsigned char
-{
-    PrivateKey  = 1U,
-    PublicKey   = 2U,
-    Certificate = 3U, // the slot's, a token object
-    Attestation = 4U, // a session object
-};
+// The object kinds: an object's handle is its kind times 32 plus its slot's CKA_ID.
+constexpr CK_ULONG kPrivateKey = 1U;
+constexpr CK_ULONG kPublicKey = 2U;
+constexpr CK_ULONG kCertificate = 3U; // the slot's, a token object
+constexpr CK_ULONG kAttestation = 4U; // a session object
 
 [[nodiscard]] CK_OBJECT_HANDLE handle_of(CK_ULONG kind, CK_ULONG id)
 {
@@ -116,15 +113,15 @@ Card& card()
     const Slot& slot = c.slots[id];
     switch (kind)
     {
-    case PrivateKey:
-    case PublicKey:
-        return slot.key >= 0;
-    case Certificate:
-        return slot.certificate;
-    case Attestation:
-        return slot.key >= 0 && slot.local;
-    default:
-        return false;
+        case kPrivateKey:
+        case kPublicKey:
+            return slot.key >= 0;
+        case kCertificate:
+            return slot.certificate;
+        case kAttestation:
+            return slot.key >= 0 && slot.local;
+        default:
+            return false;
     }
 }
 
@@ -155,24 +152,24 @@ Card& card()
     switch (type)
     {
     case CKA_CLASS:
-        if (kind == PrivateKey)
+        if (kind == kPrivateKey)
         {
             return put_word(CKO_PRIVATE_KEY);
         }
-        return put_word(kind == PublicKey ? CKO_PUBLIC_KEY : CKO_CERTIFICATE);
+        return put_word(kind == kPublicKey ? CKO_PUBLIC_KEY : CKO_CERTIFICATE);
     case CKA_ID:
     {
         const CK_BYTE id = static_cast<CK_BYTE>(handle % 32U);
         return put(&id, 1U);
     }
     case CKA_TOKEN:
-        return put_flag(kind != Attestation);
+        return put_flag(kind != kAttestation);
     case CKA_LABEL:
         return put("Retired Key", 11U); // ykcs11's labels are fixed per object
     default:
         break;
     }
-    if (kind == Certificate || kind == Attestation)
+    if (kind == kCertificate || kind == kAttestation)
     {
         return false;
     }
@@ -184,11 +181,11 @@ Card& card()
     case CKA_EC_PARAMS:
         return p256 ? put(kP256, sizeof(kP256)) : put(kP384, sizeof(kP384));
     case CKA_PRIVATE:
-        return put_flag(kind == PrivateKey);
+        return put_flag(kind == kPrivateKey);
     default:
         break;
     }
-    if (kind == PublicKey)
+    if (kind == kPublicKey)
     {
         switch (type)
         {
@@ -659,7 +656,7 @@ CK_RV find_init(CK_SESSION_HANDLE handle, CK_ATTRIBUTE_PTR terms, CK_ULONG count
     session->finding     = true;
     session->found_count = 0U;
     session->found_next  = 0U;
-    for (CK_ULONG kind = PrivateKey; kind <= Attestation; ++kind)
+    for (CK_ULONG kind = kPrivateKey; kind <= kAttestation; ++kind)
     {
         for (CK_ULONG id = 1U; id <= kIds; ++id)
         {
@@ -763,8 +760,8 @@ CK_RV generate_key_pair(CK_SESSION_HANDLE handle, CK_MECHANISM_PTR mechanism, CK
     slot.local       = true;
     slot.certificate = true; // token_generate_key writes the slot's certificate with the key
     ++slot.generations;
-    *public_half  = handle_of(PublicKey, id);
-    *private_half = handle_of(PrivateKey, id);
+    *public_half = handle_of(kPublicKey, id);
+    *private_half = handle_of(kPrivateKey, id);
     return CKR_OK;
 }
 
@@ -802,7 +799,7 @@ CK_RV sign_init(CK_SESSION_HANDLE handle, CK_MECHANISM_PTR mechanism, CK_OBJECT_
     {
         return CKR_MECHANISM_INVALID;
     }
-    if (key / 32U != PrivateKey || !exists(c, key))
+    if (key / 32U != kPrivateKey || !exists(c, key))
     {
         return CKR_KEY_HANDLE_INVALID;
     }

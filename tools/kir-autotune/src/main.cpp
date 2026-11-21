@@ -3,12 +3,59 @@
 // offline, replay from the DB, never at runtime" (ADR-0098). Usage:
 //   kir_autotune [SIZE ...] [out.inc]
 // SIZE args are square-GEMM sizes (default 512 1024 2048); a trailing non-numeric arg is the output path (else stdout).
+#include <crd/core/parse_integer.hpp>
 #include <crd/kir/cuda/autotune_cuda.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/arguments.hpp>
 
 #include <cstdio>
-#include <cstdlib>
+#include <cstring>
+
+namespace
+{
+
+struct Shape
+{
+    int m;
+    int n;
+    int k;
+};
+
+// One shape argument: "MxNxK" (rectangular) or a bare "S" (square S x S x S), each side a decimal in [1, 2^31 - 1]
+// (crd-core's parse). False for anything else, which is the output path.
+bool shape_of(const char* text, Shape& out)
+{
+    crd::u64 sides[3] = {};
+    const char* at = text;
+    const char* const end = text + std::strlen(text);
+    int count = 0;
+    while (true)
+    {
+        const void* const found = std::memchr(at, 'x', static_cast<crd::usize>(end - at));
+        const char* const stop = found != nullptr ? static_cast<const char*>(found) : end;
+        if (count == 3 || !crd::parse_u64(at, stop, 0x7FFFFFFFULL, sides[count]) || sides[count] == 0U)
+        {
+            return false;
+        }
+        ++count;
+        if (stop == end)
+        {
+            break;
+        }
+        at = stop + 1;
+    }
+    if (count == 2)
+    {
+        return false;
+    }
+    const crd::u64 m = sides[0];
+    const crd::u64 n = count == 1 ? m : sides[1];
+    const crd::u64 k = count == 1 ? m : sides[2];
+    out = {static_cast<int>(m), static_cast<int>(n), static_cast<int>(k)};
+    return true;
+}
+
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -23,34 +70,19 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    struct Shape { int m; int n; int k; };
     Shape       shapes[64];
     int         nshapes = 0;
     const char* outpath = nullptr;
     for (int i = 1; i < argc; ++i)
     {
-        // "MxNxK" (rectangular) or a bare "S" (square S×S×S); a non-numeric arg is the output path.
-        int         m = 0;
-        int         n = 0;
-        int         k = 0;
-        const char* p = argv[i];
-        if (std::sscanf(p, "%dx%dx%d", &m, &n, &k) == 3 && m > 0 && n > 0 && k > 0)
+        Shape shape{};
+        if (!shape_of(argv[i], shape))
         {
-            if (nshapes < 64)
-            {
-                shapes[nshapes++] = {m, n, k};
-            }
+            outpath = argv[i];
         }
-        else if (const int s = std::atoi(p); s > 0)
+        else if (nshapes < 64)
         {
-            if (nshapes < 64)
-            {
-                shapes[nshapes++] = {s, s, s};
-            }
-        }
-        else
-        {
-            outpath = p;
+            shapes[nshapes++] = shape;
         }
     }
     if (nshapes == 0)

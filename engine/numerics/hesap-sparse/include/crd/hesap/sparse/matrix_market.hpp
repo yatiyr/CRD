@@ -3,6 +3,8 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
+#include <crd/core/parse_float.hpp>
+#include <crd/core/parse_integer.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
@@ -39,6 +41,7 @@ struct MatrixMarketError
 
 namespace detail
 {
+// NOLINTBEGIN(readability-identifier-naming): standard-library-style traits, as crd/hesap/dense/real_type.hpp
 template <typename T>
 struct mm_is_complex : std::false_type
 {
@@ -60,6 +63,7 @@ struct mm_real_of<crd::hesap::Complex<U>>
 {
     using type = U;
 };
+// NOLINTEND(readability-identifier-naming)
 
 inline bool mm_isws(char c) noexcept { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 
@@ -87,18 +91,6 @@ inline bool mm_token(const char*& p, const char* end, const char*& tb, const cha
     }
     te = p;
     return true;
-}
-
-inline bool mm_parse_i64(const char* b, const char* e, crd::i64& out) noexcept
-{
-    auto [ptr, ec] = std::from_chars(b, e, out);
-    return ec == std::errc() && ptr == e;
-}
-
-inline bool mm_parse_f64(const char* b, const char* e, crd::f64& out) noexcept
-{
-    auto [ptr, ec] = std::from_chars(b, e, out);
-    return ec == std::errc() && ptr == e;
 }
 
 inline bool mm_token_ci_eq(const char* b, const char* e, const char* lit) noexcept
@@ -151,7 +143,8 @@ template <typename T>
     const char* end = text.data() + text.size();
 
     // ---- banner line ----
-    const char *tb = nullptr, *te = nullptr;
+    const char* tb = nullptr;
+    const char* te = nullptr;
     auto        fail = [&](const char* msg) {
         err.ok      = false;
         err.message = crd::containers::String{msg, alloc};
@@ -227,9 +220,11 @@ template <typename T>
     {
         return fail("matrix_market: missing size line");
     }
-    crd::i64 nrows = 0, ncols = 0, nnz = 0;
-    if (!mm_token(p, end, tb, te) || !mm_parse_i64(tb, te, nrows) || !mm_token(p, end, tb, te) ||
-        !mm_parse_i64(tb, te, ncols) || !mm_token(p, end, tb, te) || !mm_parse_i64(tb, te, nnz))
+    crd::i64 nrows = 0;
+    crd::i64 ncols = 0;
+    crd::i64 nnz = 0;
+    if (!mm_token(p, end, tb, te) || !crd::parse_i64(tb, te, nrows) || !mm_token(p, end, tb, te) ||
+        !crd::parse_i64(tb, te, ncols) || !mm_token(p, end, tb, te) || !crd::parse_i64(tb, te, nnz))
     {
         return fail("matrix_market: malformed size line");
     }
@@ -239,26 +234,28 @@ template <typename T>
     }
 
     TripletBuilder<T> builder(alloc, static_cast<crd::u32>(nrows), static_cast<crd::u32>(ncols));
-    builder.reserve(static_cast<crd::usize>(nnz) * ((q_general) ? 1U : 2U));
+    builder.reserve(static_cast<crd::usize>(nnz) * (q_general ? 1U : 2U));
 
     for (crd::i64 e = 0; e < nnz; ++e)
     {
-        crd::i64 ri = 0, ci = 0;
-        if (!mm_token(p, end, tb, te) || !mm_parse_i64(tb, te, ri) || !mm_token(p, end, tb, te) ||
-            !mm_parse_i64(tb, te, ci))
+        crd::i64 ri = 0;
+        crd::i64 ci = 0;
+        if (!mm_token(p, end, tb, te) || !crd::parse_i64(tb, te, ri) || !mm_token(p, end, tb, te) ||
+            !crd::parse_i64(tb, te, ci))
         {
             return fail("matrix_market: truncated/malformed entry");
         }
-        crd::f64 re = 1.0, im = 0.0;
+        crd::f64 re = 1.0;
+        crd::f64 im = 0.0;
         if (!is_pattern)
         {
-            if (!mm_token(p, end, tb, te) || !mm_parse_f64(tb, te, re))
+            if (!mm_token(p, end, tb, te) || !crd::parse_f64(tb, te, re))
             {
                 return fail("matrix_market: malformed entry value");
             }
             if (is_complex)
             {
-                if (!mm_token(p, end, tb, te) || !mm_parse_f64(tb, te, im))
+                if (!mm_token(p, end, tb, te) || !crd::parse_f64(tb, te, im))
                 {
                     return fail("matrix_market: malformed complex imaginary part");
                 }
@@ -269,7 +266,8 @@ template <typename T>
         mm_set_value<T>(builder, r, c, re, im);
         if (!q_general && r != c)  // expand the mirrored entry
         {
-            crd::f64 mre = re, mim = im;
+            crd::f64 mre = re;
+            crd::f64 mim = im;
             if (q_skew)
             {
                 mre = -re;

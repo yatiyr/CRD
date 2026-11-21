@@ -4,6 +4,8 @@
 // request, source, signed file and trust set is refused before any file is written. Contract:
 // docs/design/network-foundation.md#policy-issue.
 
+#include "ceridc_shell.hpp"
+
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -17,7 +19,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <initializer_list>
 
@@ -29,6 +30,7 @@ namespace crypto = crd::crypto;
 using crd::u64;
 using crd::u8;
 using crd::usize;
+using crd::ceridc::test::run_shell;
 using crypto::AlgorithmId;
 using crypto::PolicyError;
 using crypto::PolicyScope;
@@ -704,7 +706,7 @@ TEST_CASE("policy: the real binary gives the verb's bytes", "[ceridc][policy][ne
     char cmd[1024];
     (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" policy body --source "%s" --out bin.body > policy_out.json%s)",
                         kShellQuote, exe.c_str(), kSource, kShellQuote);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     cont::String out;
     REQUIRE(fs::read_file_text(fs::Path("policy_out.json"), out));
     while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
@@ -716,14 +718,14 @@ TEST_CASE("policy: the real binary gives the verb's bytes", "[ceridc][policy][ne
 
     (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" policy seal > policy_out.json%s)", kShellQuote, exe.c_str(),
                         kShellQuote);
-    CHECK(std::system(cmd) != 0);
+    CHECK(run_shell(cmd) != 0);
     CHECK(has(read_text("policy_out.json"), "the action must be body, assemble, verify, key or sign"));
     (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" policy key --protector vault > policy_out.json%s)", kShellQuote,
                         exe.c_str(), kShellQuote);
-    CHECK(std::system(cmd) != 0); // an unknown protector is a usage error
+    CHECK(run_shell(cmd) != 0); // an unknown protector is a usage error
     (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" policy key --protector platform --device pkcs11 > out.json%s)",
                         kShellQuote, exe.c_str(), kShellQuote);
-    CHECK(std::system(cmd) != 0); // a PKCS #11 device needs its module, label and PIN file
+    CHECK(run_shell(cmd) != 0); // a PKCS #11 device needs its module, label and PIN file
 }
 
 TEST_CASE("policy: the real binary keeps the key holders' keys under the operating system's protector",
@@ -738,7 +740,7 @@ TEST_CASE("policy: the real binary keeps the key holders' keys under the operati
     {
         (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" policy %s --protector platform > %s%s)", kShellQuote,
                             exe.c_str(), arguments, out, kShellQuote);
-        CHECK(std::system(cmd) != -1); // the shell ran; the exit status is the report's "ok"
+        CHECK(run_shell(cmd) != -1); // the shell ran; the exit status is the report's "ok"
         return read_text(out);
     };
     const cont::String pq = run("key --store os-keys-pq --name policy-pq --algorithm ml-dsa-65", "os_pq.json");

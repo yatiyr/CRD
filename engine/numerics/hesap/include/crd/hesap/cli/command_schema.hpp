@@ -81,11 +81,11 @@ struct Capability
 {
     crd::u32 bits = 0;
 
-    static constexpr crd::u32 kHesapRead = 1u << 0;
-    static constexpr crd::u32 kHesapWrite = 1u << 1;
-    static constexpr crd::u32 kHesapCompute = 1u << 2;
-    static constexpr crd::u32 kFsRead = 1u << 3;
-    static constexpr crd::u32 kFsWrite = 1u << 4;
+    static constexpr crd::u32 kHesapRead = 1U << 0;
+    static constexpr crd::u32 kHesapWrite = 1U << 1;
+    static constexpr crd::u32 kHesapCompute = 1U << 2;
+    static constexpr crd::u32 kFsRead = 1U << 3;
+    static constexpr crd::u32 kFsWrite = 1U << 4;
 
     [[nodiscard]] constexpr bool has(crd::u32 flag) const noexcept { return (bits & flag) == flag; }
     [[nodiscard]] constexpr bool subset_of(Capability other) const noexcept { return (bits & ~other.bits) == 0; }
@@ -111,7 +111,7 @@ struct ParamSchema
 
     bool required = true;
 
-    explicit ParamSchema(crd::memory::IAllocator* alloc = crd::memory::default_allocator())
+    explicit ParamSchema(crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept
         : name(alloc), description(alloc), enum_values(alloc), default_value(alloc)
     {
     }
@@ -122,7 +122,10 @@ struct OutputSchema
     OutputKind kind = OutputKind::Void;
     crd::containers::String description;
 
-    explicit OutputSchema(crd::memory::IAllocator* alloc = crd::memory::default_allocator()) : description(alloc) {}
+    explicit OutputSchema(crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept
+        : description(alloc)
+    {
+    }
 };
 
 // ---- The schema itself -----------------------------------------------
@@ -142,7 +145,7 @@ struct CommandSchema
     // For DeprecationStatus::Deprecated: which command replaces this one.
     crd::containers::String replaced_by;
 
-    explicit CommandSchema(crd::memory::IAllocator* alloc = crd::memory::default_allocator())
+    explicit CommandSchema(crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept
         : name(alloc), description(alloc), params(alloc), output(alloc), replaced_by(alloc)
     {
     }

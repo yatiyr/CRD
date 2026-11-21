@@ -12,6 +12,7 @@
 // eigenvalues = same accuracy), then compare the iteration counts. NOT linked into any external reference.
 
 #include <crd/containers/array.hpp>
+#include <crd/core/parse_integer.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/amg/amg.hpp>
 #include <crd/hesap/eigen/eigen.hpp>
@@ -21,6 +22,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 namespace
 {
@@ -84,7 +86,16 @@ int main(int argc, char** argv)
     std::printf("%4s %9s %13s %9s %s\n", "s", "n", "amg_nnz", "nnz/row", "smallest4 (iters,conv)");
     for (crd::u32 mi = 0; mi < (argc > 1 ? static_cast<crd::u32>(argc - 1) : 5U); ++mi)
     {
-        const crd::u32 s = (argc > 1) ? static_cast<crd::u32>(std::atoi(argv[mi + 1])) : ss[mi];
+        // A size from the command line is a decimal in [1, 1024] (crd-core's parse); the default ladder otherwise.
+        crd::u64 size = argc > 1 ? 0U : ss[mi];
+        if (argc > 1 &&
+            (!crd::parse_u64(argv[mi + 1], argv[mi + 1] + std::strlen(argv[mi + 1]), 1024U, size) || size == 0U))
+        {
+            std::fprintf(stderr, "bench_hesap_eigen_gen_lobpcg: a size is a decimal in [1, 1024], not '%s'\n",
+                         argv[mi + 1]);
+            return 2;
+        }
+        const auto s = static_cast<crd::u32>(size);
         const crd::u32 mx = s; // rectangular ⇒ non-degenerate
         const crd::u32 my = s + 3;
         const crd::u32 mz = s + 7;

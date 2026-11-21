@@ -1,15 +1,15 @@
 #define CATCH_CONFIG_RUNNER
-#include <catch2/catch_session.hpp>
-#include <crd/core/crash.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/crash.hpp>
 
+#include <catch2/catch_session.hpp>
+#include <cstdio>
 #include <filesystem>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <cstdio>
 
 // Vectored exception handler fires before SetUnhandledExceptionFilter,
 // including for some fast-fail paths.  Prints ExceptionCode+Address to
@@ -30,17 +30,25 @@ LONG CALLBACK fiber_diag_veh(EXCEPTION_POINTERS* ep) noexcept
 
 int main(int argc, char* argv[])
 {
-    // Minidump + stderr exception info for all crash types.
-    // Install under the system temp dir, not the repo root: install() creates the directory, and a repo-root
-    // crashes/ would trip the repository structure check.
-    const crd::containers::String crash_dir{(std::filesystem::temp_directory_path() / "crd-test-crashes").string()};
-    (void)crd::crash::install(crash_dir.c_str());
+    try
+    {
+        // Minidump + stderr exception info for all crash types.
+        // Install under the system temp dir, not the repo root: install() creates the directory, and a repo-root
+        // crashes/ would trip the repository structure check.
+        const crd::containers::String crash_dir{(std::filesystem::temp_directory_path() / "crd-test-crashes").string()};
+        (void)crd::crash::install(crash_dir.c_str());
 
 #if defined(_WIN32)
-    // VEH fires before the unhandled-exception filter — catches CET violations
-    // (0xC0000409) that bypass SetUnhandledExceptionFilter.
-    AddVectoredExceptionHandler(1, &fiber_diag_veh);
+        // VEH fires before the unhandled-exception filter — catches CET violations
+        // (0xC0000409) that bypass SetUnhandledExceptionFilter.
+        AddVectoredExceptionHandler(1, &fiber_diag_veh);
 #endif
 
-    return Catch::Session().run(argc, argv);
+        return Catch::Session().run(argc, argv);
+    }
+    catch (...)
+    {
+        (void)std::fputs("crd-jobs-tests: the session ended on an exception\n", stderr);
+        return 1;
+    }
 }

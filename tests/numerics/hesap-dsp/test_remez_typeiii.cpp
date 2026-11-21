@@ -45,8 +45,9 @@ TEST_CASE("dsp remez: Hilbert transformer (type III) is ~unity in band + antisym
     {
         CHECK_THAT(h[m - n], WithinAbs(-h[m + n], 1e-12)); // antisymmetric
     }
-    for (f64 f = 0.08; f <= 0.42; f += 0.01) // |A(w)| ≈ 1 across the passband (equiripple within a few %)
+    for (usize step = 8; step <= 42; ++step) // |A(w)| ≈ 1 across the passband (equiripple within a few %)
     {
+        const f64 f = static_cast<f64>(step) / 100.0;
         INFO("f=" << f);
         CHECK_THAT(std::abs(amp(h, 2 * kPi * f)), WithinAbs(1.0, 0.03));
     }
@@ -58,8 +59,9 @@ TEST_CASE("dsp remez: differentiator (type III) has |H(w)| ~ w", "[v11-d][dsp][r
     const usize numtaps = 41;
     const auto h = dsp::remez_differentiator<f64>(&alloc, numtaps, 0.4);
     REQUIRE(h.size() == numtaps);
-    for (f64 f = 0.05; f <= 0.35; f += 0.02) // A(w) ≈ 2π·f (the ideal differentiator gain)
+    for (usize step = 0; step <= 15; ++step) // A(w) ≈ 2π·f (the ideal differentiator gain), f = 0.05 to 0.35
     {
+        const f64 f = 0.05 + 0.02 * static_cast<f64>(step);
         const f64 w = 2 * kPi * f;
         INFO("f=" << f);
         CHECK_THAT(amp(h, w), WithinAbs(w, 0.05 * w + 0.02));

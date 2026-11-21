@@ -7,24 +7,32 @@
 //     run-mode of the harness uses the scheduler; double-init crashes, so no
 //     individual test may call jobs::init().
 #define CATCH_CONFIG_RUNNER
-#include <crd/core/crash.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/crash.hpp>
 #include <crd/jobs/jobs.hpp>
 
 #include <catch2/catch_session.hpp>
-
+#include <cstdio>
 #include <filesystem>
 
 int main(int argc, char* argv[])
 {
-    // Install under the system temp dir, not the repo root: install() creates the directory, and a repo-root
-    // crashes/ would trip the repository structure check.
-    const crd::containers::String crash_dir{(std::filesystem::temp_directory_path() / "crd-test-crashes").string()};
-    (void)crd::crash::install(crash_dir.c_str());
+    try
+    {
+        // Install under the system temp dir, not the repo root: install() creates the directory, and a repo-root
+        // crashes/ would trip the repository structure check.
+        const crd::containers::String crash_dir{(std::filesystem::temp_directory_path() / "crd-test-crashes").string()};
+        (void)crd::crash::install(crash_dir.c_str());
 
-    crd::jobs::init(); // num_threads = hardware_concurrency()
-    const int rc = Catch::Session().run(argc, argv);
-    crd::jobs::shutdown();
+        crd::jobs::init(); // num_threads = hardware_concurrency()
+        const int rc = Catch::Session().run(argc, argv);
+        crd::jobs::shutdown();
 
-    return rc;
+        return rc;
+    }
+    catch (...)
+    {
+        (void)std::fputs("crd-stress-tests: the session ended on an exception\n", stderr);
+        return 1;
+    }
 }

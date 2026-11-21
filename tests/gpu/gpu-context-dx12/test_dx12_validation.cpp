@@ -953,7 +953,7 @@ TEST_CASE("DX12 descriptors preserve queued compute bindings beyond capacity and
             CAPTURE(count);
             struct State { g::IGpuProgram* kernel; std::unique_ptr<g::IStorageBuffer>* buffers; crd::u32 count; g::IStorageBuffer* cleared; };
             State state{kernel.get(), buffers, count, cleared.get()};
-            graph->reset();
+            (*graph).reset();
             auto& pass = graph->add_pass("queued-distinct-bindings", g::FgPassKind::Compute);
             for (auto& storage : buffers)
             {
@@ -978,7 +978,7 @@ TEST_CASE("DX12 descriptors preserve queued compute bindings beyond capacity and
                 REQUIRE(raster->valid());
                 CHECK(graph->last_submit_count() == 1U);
             }
-            graph->reset(); // Retire the final deferred submit before inspecting or reusing its descriptors.
+            (*graph).reset(); // Retire the final deferred submit before inspecting or reusing its descriptors.
             REQUIRE(raster->download_storage(*cleared));
             CHECK(cleared->read_u32(0U) == count + 1U);
             for (crd::u32 i = 0; i != 64U; ++i)
@@ -1214,7 +1214,7 @@ TEST_CASE("DX12 descriptors cancel an unsubmitted frame on allocator failure",
         CHECK(capture.report().execution_failures == 1U);
         CHECK(capture.report().errors == 1U);
         CHECK(capture.report().warnings == 0U);
-        graph.reset();
+        graph = nullptr;
         CHECK(pages.live == 0U);
     }
     print_messages(capture);

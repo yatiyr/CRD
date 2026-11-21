@@ -9,6 +9,7 @@
 // lack. Build in release for the timing; the Python peer runs separately (scripts/svds_ref.py).
 
 #include <crd/containers/array.hpp>
+#include <crd/core/parse_integer.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/eigen/eigen.hpp>
 #include <crd/hesap/sparse/sparse_linear_op.hpp>
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 
 namespace
 {
@@ -68,7 +70,15 @@ int main(int argc, char** argv)
     std::printf("%4s %9s %9s %9s %9s  %s\n", "gx", "m", "n", "cycles", "svds_s", "largest4");
     for (crd::u32 mi = 0; mi < (argc > 1 ? static_cast<crd::u32>(argc - 1) : 4U); ++mi)
     {
-        const crd::u32 gx = (argc > 1) ? static_cast<crd::u32>(std::atoi(argv[mi + 1])) : gs[mi];
+        // A size from the command line is a decimal in [1, 1024] (crd-core's parse); the default ladder otherwise.
+        crd::u64 size = argc > 1 ? 0U : gs[mi];
+        if (argc > 1 &&
+            (!crd::parse_u64(argv[mi + 1], argv[mi + 1] + std::strlen(argv[mi + 1]), 1024U, size) || size == 0U))
+        {
+            std::fprintf(stderr, "bench_hesap_svds: a size is a decimal in [1, 1024], not '%s'\n", argv[mi + 1]);
+            return 2;
+        }
+        const auto gx = static_cast<crd::u32>(size);
         const crd::u32 gy = gx + 3; // rectangular ⇒ non-degenerate
         crd::memory::GrowableTlsfAllocator alloc;
         Csr b = incidence_2d(&alloc, gx, gy);

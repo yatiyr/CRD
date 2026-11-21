@@ -399,7 +399,7 @@ void grow_descriptor_table(EditablePack& pack, Format f, crd::u32 total)
 
 constexpr crd::usize kSecondRelation = sizeof(sc::SceneRelationRecord);
 
-const Corruption kCorruptions[] = {
+constexpr Corruption kCorruptions[] = {
     {"at most kMaxComponents descriptors",
      [](EditablePack& p, Format f)
      {
@@ -672,7 +672,7 @@ struct ObekCorruption
     void (*apply)(EditablePack& pack);
 };
 
-const ObekCorruption kObekCorruptions[] = {
+constexpr ObekCorruption kObekCorruptions[] = {
     {"an entity record names its own position",
      [](EditablePack& p)
      {

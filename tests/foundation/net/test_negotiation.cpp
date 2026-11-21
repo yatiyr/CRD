@@ -85,7 +85,7 @@ struct Wire
     }
 };
 
-ConstSpan<u8> text(const char* value)
+ConstSpan<u8> text(const char* value) noexcept
 {
     return ConstSpan<u8>(reinterpret_cast<const u8*>(value), std::strlen(value));
 }

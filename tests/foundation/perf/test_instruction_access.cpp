@@ -110,7 +110,7 @@ __extension__ using I128 = __int128;
 #endif
 
 // Each access the instruction makes, in the decoder's order.
-const Case kCases[] = {
+constexpr Case kCases[] = {
     {"8b 01", 2U, 1U, {{0x2000U, 4U, kRd}}},                                        // mov eax, [rcx]
     {"48 8b 44 24 08", 5U, 1U, {{kRsp + 8U, 8U, kRd}}},                             // mov rax, [rsp+8]
     {"89 0c 25 00 10 00 00", 7U, 1U, {{0x1000U, 4U, kWr}}},                         // mov [0x1000], ecx

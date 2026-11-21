@@ -5,6 +5,7 @@
 // a file.
 
 #include <crd/containers/string_view.hpp>
+#include <crd/core/parse_integer.hpp>
 #include <crd/core/types.hpp>
 
 namespace crd::perf
@@ -45,11 +46,17 @@ template <class Fn>
     return true;
 }
 
-// A decimal in [0, max] (1 to 20 digits, no sign).
-[[nodiscard]] bool parse_u64(containers::StringView text, crd::u64 max, crd::u64& out) noexcept;
+// A decimal in [0, max] (1 to 20 digits, no sign): crd-core's parse_u64 over the view.
+[[nodiscard]] inline bool parse_u64(containers::StringView text, crd::u64 max, crd::u64& out) noexcept
+{
+    return crd::parse_u64(text.data(), text.data() + text.size(), max, out);
+}
 
-// A decimal i64 with an optional leading '-'.
-[[nodiscard]] bool parse_i64(containers::StringView text, crd::i64& out) noexcept;
+// A decimal i64 with an optional leading '-': crd-core's parse_i64 over the view.
+[[nodiscard]] inline bool parse_i64(containers::StringView text, crd::i64& out) noexcept
+{
+    return crd::parse_i64(text.data(), text.data() + text.size(), out);
+}
 
 // An entry function name: 1 to `max_bytes` bytes of [A-Za-z0-9_.].
 [[nodiscard]] bool valid_entry_name(containers::StringView name, crd::u32 max_bytes) noexcept;

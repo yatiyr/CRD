@@ -19,6 +19,9 @@
 // another process with no queue after the program was edited, naming the edited read.
 // Expected lines come from scanning the committed text; the expected JSON fragments are built here.
 
+#include "ceridc_shell.hpp"
+#include "mcp_test_support.hpp"
+
 #include <crd/ceir/cook/replay_record.hpp>
 #include <crd/ceir/input.hpp>
 #include <crd/ceridc/verbs.hpp>
@@ -28,15 +31,12 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include "mcp_test_support.hpp"
-
 #include <catch2/catch_test_macros.hpp>
-
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 namespace fs = crd::platform::fs;
+using crd::ceridc::test::run_shell;
 
 namespace
 {
@@ -304,7 +304,7 @@ TEST_CASE("diag 8b: the real ceridc binary inspects from the command line", "[ce
                         "\"%s\" inspect --program %s --arg 3 --break %u --watch %u --step into > "
                         "ceridc_inspect_out.json",
                         exe, kProgram, ln.call, ln.a);
-    REQUIRE(std::system(cmd) == 0); // the exit code mirrors the report's ok
+    REQUIRE(run_shell(cmd) == 0); // the exit code mirrors the report's ok
     String out(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView("ceridc_inspect_out.json")), out));
     INFO(out.c_str());
@@ -372,7 +372,7 @@ TEST_CASE("diag 9a: ceridc inspect --record writes the inspected run as a record
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" inspect --program %s --arg 1 --break %u --step into --step out --record %s > %s", exe,
                         kReplayDemo, call, kCliRecord, kOut);
-    CHECK(std::system(cmd) != 0); // the run faults, so the report's ok is false
+    CHECK(run_shell(cmd) != 0); // the run faults, so the report's ok is false
     String cli(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), cli));
     INFO(cli.c_str());
@@ -381,7 +381,7 @@ TEST_CASE("diag 9a: ceridc inspect --record writes the inspected run as a record
     {
         (void)std::snprintf(cmd, sizeof(cmd),
                             "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s", exe, rec, kOut);
-        REQUIRE(std::system(cmd) == 0);
+        REQUIRE(run_shell(cmd) == 0);
         String replayed(&g_alloc);
         REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), replayed));
         INFO(replayed.c_str());
@@ -480,7 +480,7 @@ TEST_CASE("diag 9a: ceridc inspect --seed reads a seeded host's draws and its re
     char cmd[2048];
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" inspect --program %s --arg 4 --seed %s --record %s > %s", exe,
                         kSeedProgram, seed_text, kCliSeedRecord, kOut);
-    CHECK(std::system(cmd) != 0); // the run faults, so the report's ok is false
+    CHECK(run_shell(cmd) != 0); // the run faults, so the report's ok is false
     String cli(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), cli));
     INFO(cli.c_str());
@@ -497,7 +497,7 @@ TEST_CASE("diag 9a: ceridc inspect --seed reads a seeded host's draws and its re
                                 crd::containers::StringView(edited.c_str(), edited.size())));
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
                         exe, kCliSeedRecord, kOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     String replayed(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), replayed));
     INFO(replayed.c_str());
@@ -506,7 +506,7 @@ TEST_CASE("diag 9a: ceridc inspect --seed reads a seeded host's draws and its re
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
                         exe, kCliSeedRecord, kSeedProgram, kOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     String diverged(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), diverged));
     INFO(diverged.c_str());
@@ -592,7 +592,7 @@ TEST_CASE("diag 9a: ceridc inspect reads the host clock it is given and its reco
                         "\"%s\" inspect --program %s --arg 7 --sim-time 4000000000 --sim-step 50000000 --record %s "
                         "> %s",
                         exe, kClockProgram, kCliClockRecord, kOut);
-    CHECK(std::system(cmd) != 0); // the run faults, so the report's ok is false
+    CHECK(run_shell(cmd) != 0); // the run faults, so the report's ok is false
     String cli(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), cli));
     INFO(cli.c_str());
@@ -603,7 +603,7 @@ TEST_CASE("diag 9a: ceridc inspect reads the host clock it is given and its reco
                         "\"%s\" inspect --program %s --arg 7 --clock wall --sim-time 4000000000 --sim-step 16666667 "
                         "--record %s > %s",
                         exe, kClockProgram, kCliWallRecord, kOut);
-    REQUIRE(std::system(cmd) == 0); // the run finishes
+    REQUIRE(run_shell(cmd) == 0); // the run finishes
     String wall(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), wall));
     INFO(wall.c_str());
@@ -629,7 +629,7 @@ TEST_CASE("diag 9a: ceridc inspect reads the host clock it is given and its reco
         INFO(rec);
         (void)std::snprintf(cmd, sizeof(cmd),
                             "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s", exe, rec, kOut);
-        REQUIRE(std::system(cmd) == 0);
+        REQUIRE(run_shell(cmd) == 0);
         String replayed(&g_alloc);
         REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), replayed));
         INFO(replayed.c_str());
@@ -638,7 +638,7 @@ TEST_CASE("diag 9a: ceridc inspect reads the host clock it is given and its reco
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
                         exe, kCliClockRecord, kClockProgram, kOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     String diverged(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), diverged));
     INFO(diverged.c_str());
@@ -722,7 +722,7 @@ TEST_CASE("diag 9a event: ceridc inspect reads the input events it is given and 
                         "\"%s\" inspect --program %s --arg 7 --break %u --events key_down:65:3,resize:1280:720 "
                         "--record %s > %s",
                         exe, kEventProgram, sw, kCliEventRecord, kOut);
-    CHECK(std::system(cmd) != 0); // the run faults, so the report's ok is false
+    CHECK(run_shell(cmd) != 0); // the run faults, so the report's ok is false
     String cli(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), cli));
     INFO(cli.c_str());
@@ -733,7 +733,7 @@ TEST_CASE("diag 9a event: ceridc inspect reads the input events it is given and 
                         "\"%s\" diag --command replay.record --path %s --param out=%s --param args=7 "
                         "--param events=key_down:65:3,resize:1280:720 --grant execute,record --root . > %s",
                         exe, kEventProgram, kPlainEventRecord, kOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     {
         const auto decode = [](const char* path, crd::ceir::cook::ReplayRecord& rec)
         {
@@ -782,7 +782,7 @@ TEST_CASE("diag 9a event: ceridc inspect reads the input events it is given and 
         INFO(rec);
         (void)std::snprintf(cmd, sizeof(cmd),
                             "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s", exe, rec, kOut);
-        REQUIRE(std::system(cmd) == 0);
+        REQUIRE(run_shell(cmd) == 0);
         String replayed(&g_alloc);
         REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), replayed));
         INFO(replayed.c_str());
@@ -791,7 +791,7 @@ TEST_CASE("diag 9a event: ceridc inspect reads the input events it is given and 
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
                         exe, kCliEventRecord, kEventProgram, kOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     String diverged(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), diverged));
     INFO(diverged.c_str());

@@ -17,6 +17,7 @@
 // them all, so another process reproduces it after a kernel file is edited and names the edit at its dispatch.
 
 #include "../../execution/ceir-cook/device_replay_fixture.hpp"
+#include "ceridc_shell.hpp"
 #include "mcp_test_support.hpp"
 
 #include <crd/ceir/input.hpp>
@@ -37,13 +38,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
 #include <catch2/reporters/catch_reporter_registrars.hpp>
-
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 namespace fs   = crd::platform::fs;
 namespace json = crd::json;
+using crd::ceridc::test::run_shell;
 
 namespace
 {
@@ -579,7 +579,7 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
             (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command %s --root . > ceridc_diag_out.json", exe,
                                 c.command);
         }
-        REQUIRE(std::system(cmd) == 0);
+        REQUIRE(run_shell(cmd) == 0);
         String out(&g_alloc);
         REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.json")), out));
         while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
@@ -592,7 +592,7 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
     // The grant is the binary's start-up flag: record is refused without it and reaches the command with it.
     {
         (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command capture.start > ceridc_diag_out.json", exe);
-        CHECK(std::system(cmd) != 0); // ok:false
+        CHECK(run_shell(cmd) != 0); // ok:false
         String out(&g_alloc);
         REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.json")), out));
         CHECK(has(out, "\"status\":\"unauthorized\""));
@@ -603,7 +603,7 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         const crd::perf::DiagResult expected = native.execute(r);
         (void)std::snprintf(cmd, sizeof(cmd),
                             "\"%s\" diag --command capture.start --grant record > ceridc_diag_out.json", exe);
-        const int granted = std::system(cmd);
+        const int granted = run_shell(cmd);
         out.clear();
         REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.json")), out));
         CHECK((granted == 0) == has(out, "\"ok\":true")); // the exit code follows the report's ok
@@ -613,7 +613,7 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
 
         (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command diag.commands --grant root > ceridc_diag_out.json",
                             exe);
-        CHECK(std::system(cmd) != 0);
+        CHECK(run_shell(cmd) != 0);
         out.clear();
         REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.json")), out));
         CHECK(has(out, "\"ok\":false"));
@@ -652,7 +652,7 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_diag_in.jsonl")), view(script)));
         (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-root . < ceridc_diag_in.jsonl > ceridc_diag_out.jsonl",
                             exe);
-        REQUIRE(std::system(cmd) == 0);
+        REQUIRE(run_shell(cmd) == 0);
         String out(&g_alloc);
         REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.jsonl")), out));
         const StringView all = view(out);
@@ -724,7 +724,7 @@ TEST_CASE("diag: the real ceridc binary runs program.inspect only under its exec
                         "--param watches=%s --param steps=into,out --page-items %u --grant read,execute --root . "
                         "> ceridc_diag_inspect_out.json",
                         exe, kInspectBinary, breaks, watches, crd::perf::kDiagMaxPageItems);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     String out(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_inspect_out.json")), out));
     while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
@@ -738,7 +738,7 @@ TEST_CASE("diag: the real ceridc binary runs program.inspect only under its exec
                         "\"%s\" diag --command program.inspect --path %s --param args=3 --root . "
                         "> ceridc_diag_inspect_out.json",
                         exe, kInspectBinary);
-    CHECK(std::system(cmd) != 0);
+    CHECK(run_shell(cmd) != 0);
     out.clear();
     REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_inspect_out.json")), out));
     CHECK(has(out, "\"status\":\"unauthorized\""));
@@ -753,7 +753,7 @@ TEST_CASE("diag: the real ceridc binary runs program.inspect only under its exec
                         "\"%s\" mcp --diag-grant read,execute --diag-root . < ceridc_diag_inspect_in.jsonl "
                         "> ceridc_diag_inspect_out.jsonl",
                         exe);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     out.clear();
     REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_inspect_out.jsonl")), out));
     const StringView all = view(out);
@@ -820,7 +820,7 @@ TEST_CASE("diag: a run record made by one ceridc process reproduces in another a
                         "\"%s\" diag --command replay.record --path %s --param out=%s --param args=1 "
                         "--grant execute,record --root . > %s",
                         exe, kReplayProgram, kReplayRecord, kReplayOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String recorded = read_out();
     INFO(recorded.c_str());
     CHECK(has(recorded, "\"error\":\"selector-out-of-range\""));
@@ -836,7 +836,7 @@ TEST_CASE("diag: a run record made by one ceridc process reproduces in another a
     // Process 2 replays the record from its own artifact: the failure reproduces.
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
                         exe, kReplayRecord, kReplayOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String same = read_out();
     INFO(same.c_str());
     CHECK(has(same, "\"result\":\"reproduced\""));
@@ -848,7 +848,7 @@ TEST_CASE("diag: a run record made by one ceridc process reproduces in another a
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
                         exe, kReplayRecord, kReplayProgram, kReplayOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String diff = read_out();
     INFO(diff.c_str());
     CHECK(has(diff, "\"result\":\"diverged\""));
@@ -871,7 +871,7 @@ TEST_CASE("diag: a run record made by one ceridc process reproduces in another a
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" mcp --diag-grant execute --diag-root . < ceridc_diag_replay_in.jsonl > %s", exe,
                         kReplayOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String     mcp = read_out();
     const StringView all = view(mcp);
     const ToolReply  got = reply_of(all.substr(0U, all.find('\n')));
@@ -885,7 +885,7 @@ TEST_CASE("diag: a run record made by one ceridc process reproduces in another a
                         "\"%s\" diag --command replay.record --path %s --param out=%s --param args=1 "
                         "--grant execute --root . > %s",
                         exe, kReplayProgram, kReplayRecord, kReplayOut);
-    CHECK(std::system(cmd) != 0);
+    CHECK(run_shell(cmd) != 0);
     CHECK(has(read_out(), "the command needs record authority"));
     CHECK_FALSE(fs::exists(fs::Path(StringView(kReplayRecord))));
 
@@ -967,7 +967,7 @@ TEST_CASE("diag: a seeded random failure recorded by one ceridc process reproduc
                         "\"%s\" diag --command replay.record --path %s --param out=%s --param args=4 --param seed=%s "
                         "--grant execute,record --root . > %s",
                         exe, kRandomProgram, kRandomRecord, seed_text, kRandomOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String recorded = read_out();
     INFO(recorded.c_str());
     CHECK(has(recorded, "\"error\":\"selector-out-of-range\""));
@@ -1005,7 +1005,7 @@ TEST_CASE("diag: a seeded random failure recorded by one ceridc process reproduc
     // Process 2 replays the record, with no seed: the failure reproduces from the recorded draws.
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
                         exe, kRandomRecord, kRandomOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String same = read_out();
     INFO(same.c_str());
     CHECK(has(same, "\"result\":\"reproduced\""));
@@ -1017,7 +1017,7 @@ TEST_CASE("diag: a seeded random failure recorded by one ceridc process reproduc
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
                         exe, kRandomRecord, kRandomProgram, kRandomOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String diff = read_out();
     INFO(diff.c_str());
     CHECK(has(diff, "\"result\":\"diverged\""));
@@ -1040,7 +1040,7 @@ TEST_CASE("diag: a seeded random failure recorded by one ceridc process reproduc
     REQUIRE(fs::write_file_text(fs::Path(StringView(kRandomIn)), view(line)));
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-grant execute --diag-root . < %s > %s", exe, kRandomIn,
                         kRandomOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String     mcp = read_out();
     const StringView all = view(mcp);
     const ToolReply  got = reply_of(all.substr(0U, all.find('\n')));
@@ -1122,7 +1122,7 @@ TEST_CASE("diag: a host record made by one ceridc process reproduces in another 
                         "\"%s\" diag --command replay.record --path %s --param out=%s --param args=0 "
                         "--param executor=host --param jobs=3 --grant execute,record --root . > %s",
                         exe, kHostProgram, kHostRecord, kHostOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String recorded = read_out();
     INFO(recorded.c_str());
     CHECK(has(recorded, "\"executor\":\"host\",\"jobs\":3,"));
@@ -1157,7 +1157,7 @@ TEST_CASE("diag: a host record made by one ceridc process reproduces in another 
     // Process 2 replays the record from its own artifact: the failure reproduces.
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
                         exe, kHostRecord, kHostOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String same = read_out();
     INFO(same.c_str());
     CHECK(has(same, "\"result\":\"reproduced\""));
@@ -1168,7 +1168,7 @@ TEST_CASE("diag: a host record made by one ceridc process reproduces in another 
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
                         exe, kHostRecord, kHostProgram, kHostOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String diff = read_out();
     INFO(diff.c_str());
     CHECK(has(diff, "\"result\":\"diverged\""));
@@ -1192,7 +1192,7 @@ TEST_CASE("diag: a host record made by one ceridc process reproduces in another 
     REQUIRE(fs::write_file_text(fs::Path(StringView(kHostIn)), view(line)));
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-grant execute --diag-root . < %s > %s", exe, kHostIn,
                         kHostOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String     mcp = read_out();
     const StringView all = view(mcp);
     const ToolReply  got = reply_of(all.substr(0U, all.find('\n')));
@@ -1269,7 +1269,7 @@ TEST_CASE("diag: a time-step failure recorded by one ceridc process reproduces i
                         "--param sim_step=50000000 --param sim_time=4000000000 --param clock=wall "
                         "--grant execute,record --root . > %s",
                         exe, kClockProgram, kClockRecord, kClockOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String recorded = read_out();
     INFO(recorded.c_str());
     CHECK(has(recorded, "\"error\":\"selector-out-of-range\""));
@@ -1311,7 +1311,7 @@ TEST_CASE("diag: a time-step failure recorded by one ceridc process reproduces i
     // Process 2 replays the record, with no clock: the failure reproduces from the recorded step.
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
                         exe, kClockRecord, kClockOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String same = read_out();
     INFO(same.c_str());
     CHECK(has(same, "\"result\":\"reproduced\""));
@@ -1323,7 +1323,7 @@ TEST_CASE("diag: a time-step failure recorded by one ceridc process reproduces i
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
                         exe, kClockRecord, kClockProgram, kClockOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String diff = read_out();
     INFO(diff.c_str());
     CHECK(has(diff, "\"result\":\"diverged\""));
@@ -1343,7 +1343,7 @@ TEST_CASE("diag: a time-step failure recorded by one ceridc process reproduces i
                         "--param sim_step=16666667 --param sim_time=4000000000 --param clock=wall "
                         "--grant execute,record --root . > %s",
                         exe, kClockProgram, kClockPass, kClockOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String passed = read_out();
     INFO(passed.c_str());
     CHECK(has(passed, "\"error\":\"none\""));
@@ -1353,7 +1353,7 @@ TEST_CASE("diag: a time-step failure recorded by one ceridc process reproduces i
     // Process 5, with no clock, reproduces it: the wall reading it returns is the one process 4 read.
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
                         exe, kClockPass, kClockOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String again = read_out();
     INFO(again.c_str());
     CHECK(has(again, "\"result\":\"reproduced\""));
@@ -1371,7 +1371,7 @@ TEST_CASE("diag: a time-step failure recorded by one ceridc process reproduces i
     REQUIRE(fs::write_file_text(fs::Path(StringView(kClockIn)), view(line)));
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-grant execute --diag-root . < %s > %s", exe, kClockIn,
                         kClockOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String     mcp = read_out();
     const StringView all = view(mcp);
     const ToolReply  got = reply_of(all.substr(0U, all.find('\n')));
@@ -1444,7 +1444,7 @@ TEST_CASE("diag: an unhandled event recorded by one ceridc process reproduces in
                         "\"%s\" diag --command replay.record --path %s --param out=%s --param args=7 "
                         "--param events=key_down:65:3,resize:1280:720 --grant execute,record --root . > %s",
                         exe, kEventProgram, kEventRecord, kEventOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String recorded = read_out();
     INFO(recorded.c_str());
     CHECK(has(recorded, "\"error\":\"selector-out-of-range\""));
@@ -1481,7 +1481,7 @@ TEST_CASE("diag: an unhandled event recorded by one ceridc process reproduces in
     // Process 2 replays the record with no event queue: the failure reproduces from the recorded events.
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
                         exe, kEventRecord, kEventOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String same = read_out();
     INFO(same.c_str());
     CHECK(has(same, "\"result\":\"reproduced\""));
@@ -1493,7 +1493,7 @@ TEST_CASE("diag: an unhandled event recorded by one ceridc process reproduces in
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
                         exe, kEventRecord, kEventProgram, kEventOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String diff = read_out();
     INFO(diff.c_str());
     CHECK(has(diff, "\"result\":\"diverged\""));
@@ -1513,7 +1513,7 @@ TEST_CASE("diag: an unhandled event recorded by one ceridc process reproduces in
                         "--param events=key_down:65:3,resize:1280:720 --param executor=host "
                         "--grant execute,record --root . > %s",
                         exe, kEventProgram, kEventHost, kEventOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String host = read_out();
     INFO(host.c_str());
     CHECK(has(host, "\"executor\":\"host\""));
@@ -1521,7 +1521,7 @@ TEST_CASE("diag: an unhandled event recorded by one ceridc process reproduces in
     CHECK(has(host, "\"input_reads\":2,"));
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
                         exe, kEventHost, kEventOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String host_again = read_out();
     INFO(host_again.c_str());
     CHECK(has(host_again, "\"result\":\"reproduced\""));
@@ -1538,7 +1538,7 @@ TEST_CASE("diag: an unhandled event recorded by one ceridc process reproduces in
     REQUIRE(fs::write_file_text(fs::Path(StringView(kEventIn)), view(line)));
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-grant execute --diag-root . < %s > %s", exe, kEventIn,
                         kEventOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String     mcp = read_out();
     const StringView all = view(mcp);
     const ToolReply  got = reply_of(all.substr(0U, all.find('\n')));
@@ -1606,7 +1606,7 @@ TEST_CASE("diag: a device record made by one ceridc process reproduces in anothe
                         "--param envelope=ulp:4 --param kernel_dir=%s --param buffers=%s --grant execute,record "
                         "--root %s > %s",
                         exe, fx::kFile, fx::kKernelDir, fx::kBufferFiles, kDeviceRoot, kDeviceOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String recorded = read_out();
     INFO(recorded.c_str());
     CHECK(has(recorded, "\"executor\":\"device\""));
@@ -1641,7 +1641,7 @@ TEST_CASE("diag: a device record made by one ceridc process reproduces in anothe
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" diag --command replay.run --path device.crpl --grant execute --root %s > %s", exe,
                         kDeviceRoot, kDeviceOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String same = read_out();
     INFO(same.c_str());
     CHECK(has(same, "\"result\":\"reproduced\""));
@@ -1653,7 +1653,7 @@ TEST_CASE("diag: a device record made by one ceridc process reproduces in anothe
                         "\"%s\" diag --command replay.run --path device.crpl --param kernel_dir=%s --grant execute "
                         "--root %s > %s",
                         exe, fx::kKernelDir, kDeviceRoot, kDeviceOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String diff = read_out();
     INFO(diff.c_str());
     CHECK(has(diff, "\"result\":\"diverged\""));
@@ -1677,7 +1677,7 @@ TEST_CASE("diag: a device record made by one ceridc process reproduces in anothe
     REQUIRE(fs::write_file_text(fs::Path(StringView(kDeviceIn)), view(line)));
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-grant execute --diag-root %s < %s > %s", exe, kDeviceRoot,
                         kDeviceIn, kDeviceOut);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     const String     mcp = read_out();
     const StringView all = view(mcp);
     const ToolReply  got = reply_of(all.substr(0U, all.find('\n')));
@@ -1724,7 +1724,7 @@ TEST_CASE("diag 11a: the real ceridc binary hosts the diagnostic host from an au
                         "\"%s\" mcp --diag-host ceridc_host.host.toml --diag-root . < ceridc_host_in.jsonl > "
                         "ceridc_host_out.jsonl",
                         exe);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     String out(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_host_out.jsonl")), out));
     const StringView all = view(out);
@@ -1745,7 +1745,7 @@ TEST_CASE("diag 11a: the real ceridc binary hosts the diagnostic host from an au
                         "\"%s\" diag --command bundle.inspect --path ceridc_host_captures/flight-0.cdb --root . > "
                         "ceridc_host_out.json",
                         exe);
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     String inspected(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_host_out.json")), inspected));
     CHECK(has(inspected, "\"ok\":true"));
@@ -1760,12 +1760,12 @@ TEST_CASE("diag 11a: the real ceridc binary hosts the diagnostic host from an au
                         "\"%s\" mcp --diag-host ceridc_host_bad.host.toml < ceridc_host_in.jsonl > "
                         "ceridc_host_out.jsonl",
                         exe);
-    CHECK(std::system(cmd) != 0);
+    CHECK(run_shell(cmd) != 0);
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" mcp --diag-host ceridc_host.host.toml --diag-grant read,remote-enable < "
                         "ceridc_host_in.jsonl > ceridc_host_out.jsonl",
                         exe);
-    CHECK(std::system(cmd) != 0);
+    CHECK(run_shell(cmd) != 0);
 
     (void)fs::remove_file(fs::Path(StringView("ceridc_host.host.toml")));
     (void)fs::remove_file(fs::Path(StringView("ceridc_host_bad.host.toml")));
@@ -1792,7 +1792,7 @@ TEST_CASE("doctor: the real ceridc binary reports its diagnostics and runs the h
     REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
     char cmd[1024];
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" doctor > ceridc_doctor_out.json", exe_text.c_str());
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     String out(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_doctor_out.json")), out));
     CHECK(has(out, "\"command\":\"diag.capabilities\""));
@@ -1801,7 +1801,7 @@ TEST_CASE("doctor: the real ceridc binary reports its diagnostics and runs the h
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" doctor --hardware --seconds 0.005 --memory-mib 1 > ceridc_doctor_out.json",
                         exe_text.c_str());
-    REQUIRE(std::system(cmd) == 0);
+    REQUIRE(run_shell(cmd) == 0);
     out.clear();
     REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_doctor_out.json")), out));
     CHECK(has(out, "\"command\":\"hardware.check\""));
@@ -1812,7 +1812,7 @@ TEST_CASE("doctor: the real ceridc binary reports its diagnostics and runs the h
     // A bound the check refuses is a failed doctor.
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" doctor --hardware --seconds 0 > ceridc_doctor_out.json",
                         exe_text.c_str());
-    CHECK(std::system(cmd) != 0);
+    CHECK(run_shell(cmd) != 0);
     out.clear();
     REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_doctor_out.json")), out));
     CHECK(has(out, "\"status\":\"bad-argument\""));
