@@ -58,7 +58,9 @@ UdpSocket open_with(const UdpOptions& base)
     return socket;
 }
 
-UdpOptions registered(u32 buffers = 128U, u32 datagram_bytes = 0U)
+// Buffers of 1500 bytes by default: each one's pages stay locked, so a case asks for any datagram only where it needs
+// one.
+UdpOptions registered(u32 buffers = 128U, u32 datagram_bytes = 1500U)
 {
     UdpOptions options;
     options.registered_io = true;
@@ -166,7 +168,7 @@ TEST_CASE("a UDP socket goes through Registered I/O exactly where asked, with bu
           "[net][udp][net-path]")
 {
     CHECK(open_with(UdpOptions{}).features().send_bytes == 0U); // off unless asked
-    UdpSocket socket = open_rio();
+    UdpSocket socket = open_rio(registered(16U, 0U));
     CHECK(socket.features().receive_bytes == crd::net::kMaxUdpPayloadV6);
     CHECK(socket.features().send_bytes == crd::net::kMaxUdpPayloadV6);
     CHECK(socket.features().ecn_reading);
@@ -274,7 +276,7 @@ TEST_CASE("a Registered I/O socket cuts a datagram past its buffers and refuses 
 TEST_CASE("a Registered I/O socket sends a train through USO from one slot and counts a send the host fails late",
           "[net][udp][net-path]")
 {
-    UdpSocket sender = open_rio();
+    UdpSocket sender = open_rio(registered(16U, 0U));
     UdpSocket receiver = open_with(UdpOptions{});
     if (!sender.features().segmented_send)
     {
@@ -323,6 +325,28 @@ TEST_CASE("a Registered I/O socket sends a train through USO from one slot and c
         std::this_thread::yield();
     }
     CHECK(sender.offload_counters().sends_failed == 1U);
+    CHECK(sender.offload_counters().trains_refused == 0U);
+
+    // A train past any link's MTU, from a socket on every address, fails as it completes as each datagram would:
+    // both datagrams counted, the train refused, and segmenting stays on (the train's own refusal, not the host's).
+    UdpOptions any = registered(16U, 0U);
+    any.bind = Endpoint{IpAddress::v4_any(), 0U};
+    SocketError error = SocketError::Failed;
+    UdpSocket wide = UdpSocket::open(any, error);
+    REQUIRE(error == SocketError::None);
+    REQUIRE(wide.features().segmented_send);
+    const OutgoingDatagram both[2] = {away, away};
+    REQUIRE(wide.send(ConstSpan<OutgoingDatagram>(both, 2U)).count == 2U);
+    CHECK(wide.offload_counters().trains_sent == 1U);
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (wide.offload_counters().trains_refused == 0U && std::chrono::steady_clock::now() < until)
+    {
+        CHECK(wide.send(ConstSpan<OutgoingDatagram>()).error == SocketError::None);
+        std::this_thread::yield();
+    }
+    CHECK(wide.offload_counters().trains_refused == 1U);
+    CHECK(wide.offload_counters().sends_failed == 2U);
+    CHECK(wide.features().segmented_send);
 }
 
 TEST_CASE("Registered I/O and plain sockets wait on events, alone and mixed in one set, and wake for what arrives",
@@ -353,6 +377,9 @@ TEST_CASE("Registered I/O and plain sockets wait on events, alone and mixed in o
         // that finds nothing clears a plain socket's event, which its last read may have set again (udp.hpp).
         CHECK(take(*target, sender.local_endpoint(), 1U, 1U, target == &rio, next) == 1U);
         CHECK(set.wait_readable(0U));
+        // A receive of no slot reads nothing and leaves the wait as it was.
+        CHECK(target->receive(Span<ReceivedDatagram>()).count == 0U);
+        CHECK(target->wait_readable(0U));
         CHECK(take(*target, sender.local_endpoint(), 2U, 2U, false, next + 1U) == 2U);
         u8 spare[64];
         ReceivedDatagram empty;

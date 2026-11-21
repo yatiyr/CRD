@@ -30,6 +30,7 @@ struct UdpRio
     RIO_CQ send_queue = RIO_INVALID_CQ;
     RIO_RQ requests = RIO_INVALID_RQ;
     RIO_BUFFERID* ids = nullptr; // one registration per slot, by slot number
+    u32* sent = nullptr;         // per send slot in flight: its datagrams, and kMarked where it carries a codepoint
     u32* lent = nullptr;         // receive buffers the last receive() lent
     u32* free[kPools] = {};      // each send pool's slots not in flight, a stack (kReceives' is the lent list)
     u8* base[kPools] = {};
@@ -46,6 +47,7 @@ struct UdpRio
 namespace
 {
 constexpr usize kLine = 64U;
+constexpr u32 kMarked = 1U << 16U; // in UdpRio::sent, above the datagram count
 
 [[nodiscard]] constexpr usize round_up(usize value, usize to) noexcept
 {
@@ -147,7 +149,7 @@ UdpRio* rio_open(NativeSocket socket, u32 buffers, u32 datagram_bytes, bool trai
     const u32 bytes[kPools] = {datagram_bytes, datagram_bytes, static_cast<u32>(kMaxTrainBytes)};
     const u32 slots = counts[kReceives] + counts[kSends] + counts[kTrains];
     const usize head = round_up(sizeof(UdpRio), kLine);
-    const usize lists = round_up(usize{slots} * (sizeof(RIO_BUFFERID) + sizeof(u32)), kLine);
+    const usize lists = round_up(usize{slots} * (sizeof(RIO_BUFFERID) + (2U * sizeof(u32))), kLine);
     usize total = head + lists;
     for (u32 pool = 0U; pool < kPools; ++pool)
     {
@@ -168,7 +170,8 @@ UdpRio* rio_open(NativeSocket socket, u32 buffers, u32 datagram_bytes, bool trai
     rio->region = region;
     rio->ids = reinterpret_cast<RIO_BUFFERID*>(base + head);
     // Slot numbers are the receive buffers', then the send slots' and the train slots': each list in that order.
-    u32* list = reinterpret_cast<u32*>(rio->ids + slots);
+    rio->sent = reinterpret_cast<u32*>(rio->ids + slots);
+    u32* list = rio->sent + slots;
     u8* at = base + head + lists;
     u32 number = 0U;
     for (u32 pool = 0U; pool < kPools; ++pool)
@@ -321,7 +324,7 @@ void rio_flush(UdpRio& rio) noexcept
     }
 }
 
-void rio_reap(UdpRio& rio, OffloadCounters& counters) noexcept
+void rio_reap(UdpRio& rio, RioFailures& failures) noexcept
 {
     RIORESULT results[kRioSends + kRioTrains];
     for (;;)
@@ -335,19 +338,29 @@ void rio_reap(UdpRio& rio, OffloadCounters& counters) noexcept
         {
             const u32 slot = static_cast<u32>(results[at].RequestContext);
             const u32 pool = pool_of(rio, slot);
-            counters.sends_failed += (results[at].Status != 0) ? 1U : 0U;
+            const LONG status = results[at].Status;
+            const bool marked = (rio.sent[slot] & kMarked) != 0U;
+            if (status != 0)
+            {
+                const bool train = pool == kTrains;
+                failures.datagrams += rio.sent[slot] & (kMarked - 1U);
+                failures.trains += train ? 1U : 0U;
+                failures.unsegmented =
+                    failures.unsegmented || (train && (status == WSAEOPNOTSUPP || (status == WSAEINVAL && !marked)));
+                failures.unmarked = failures.unmarked || (status == WSAEINVAL && marked);
+            }
             rio.free[pool][rio.free_count[pool]++] = slot;
         }
     }
 }
 
-bool rio_send_slot(UdpRio& rio, bool train, RioSendSlot& slot, OffloadCounters& counters) noexcept
+bool rio_send_slot(UdpRio& rio, bool train, RioSendSlot& slot, RioFailures& failures) noexcept
 {
     const u32 pool = train ? kTrains : kSends;
     if (rio.free_count[pool] == 0U)
     {
         rio_commit(rio); // the deferred sends start, so their slots come back
-        rio_reap(rio, counters);
+        rio_reap(rio, failures);
         if (rio.free_count[pool] == 0U)
         {
             return false;
@@ -364,7 +377,8 @@ bool rio_send_slot(UdpRio& rio, bool train, RioSendSlot& slot, OffloadCounters& 
     return true;
 }
 
-bool rio_send(UdpRio& rio, const RioSendSlot& slot, usize bytes, usize control_bytes, int& error) noexcept
+bool rio_send(UdpRio& rio, const RioSendSlot& slot, usize bytes, usize control_bytes, u32 datagrams, bool marked,
+              int& error) noexcept
 {
     const u32 pool = pool_of(rio, slot.index);
     const usize control_at = control_offset(rio.bytes[pool]);
@@ -382,6 +396,7 @@ bool rio_send(UdpRio& rio, const RioSendSlot& slot, usize bytes, usize control_b
         rio.free[pool][rio.free_count[pool]++] = slot.index;
         return false;
     }
+    rio.sent[slot.index] = datagrams | (marked ? kMarked : 0U);
     rio.deferred_sends = true;
     return true;
 }

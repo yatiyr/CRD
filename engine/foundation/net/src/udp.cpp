@@ -810,8 +810,12 @@ BatchResult UdpSocket::receive(cont::Span<ReceivedDatagram> slots) noexcept
         return result;
     }
     // The event is set again by the first read that leaves a datagram waiting, or by one that arrives after the
-    // last; left set, it would wake a wait with nothing to read.
-    static_cast<void>(::WSAResetEvent(event_of(m_read_event)));
+    // last; left set, it would wake a wait with nothing to read. A receive of no slot makes no read, which alone
+    // would set it again, so it leaves the event as it is.
+    if (!slots.empty())
+    {
+        static_cast<void>(::WSAResetEvent(event_of(m_read_event)));
+    }
 #endif
 #if CRD_OS_LINUX
     usize report_budget = kReportsPerReceive;
@@ -1405,7 +1409,8 @@ BatchResult UdpSocket::transmit_rio(cont::ConstSpan<OutgoingDatagram> datagrams)
     BatchResult result;
     UdpRio& rio = *m_rio;
     const bool v6 = m_local.address.family == AddressFamily::V6;
-    rio_reap(rio, m_offloads); // the sends since the last call that completed, and those that failed
+    RioFailures failures;
+    rio_reap(rio, failures); // the sends since the last call that completed, and those that failed
     while (result.count < datagrams.size())
     {
         const OutgoingDatagram& datagram = datagrams[result.count];
@@ -1419,11 +1424,11 @@ BatchResult UdpSocket::transmit_rio(cont::ConstSpan<OutgoingDatagram> datagrams)
         // with no train slot free leaves its first datagram alone and tries again with the next.
         usize count = m_features.segmented_send ? segment_train(datagrams.subspan(result.count)) : 1U;
         RioSendSlot slot;
-        bool held = result.error == SocketError::None && rio_send_slot(rio, count > 1U, slot, m_offloads);
+        bool held = result.error == SocketError::None && rio_send_slot(rio, count > 1U, slot, failures);
         if (!held && result.error == SocketError::None && count > 1U)
         {
             count = 1U;
-            held = rio_send_slot(rio, false, slot, m_offloads);
+            held = rio_send_slot(rio, false, slot, failures);
         }
         if (result.error == SocketError::None && !held)
         {
@@ -1453,7 +1458,7 @@ BatchResult UdpSocket::transmit_rio(cont::ConstSpan<OutgoingDatagram> datagrams)
             std::memcpy(slot.control.data(), control, message.Control.len);
         }
         int code = 0;
-        if (!rio_send(rio, slot, filled, message.Control.len, code))
+        if (!rio_send(rio, slot, filled, message.Control.len, static_cast<u32>(count), ecn != Ecn::NotEct, code))
         {
             // The request queue full is the slots all in flight; anything else is this datagram's alone.
             result.error = (code == WSAENOBUFS) ? SocketError::Busy : map_error(code, true);
@@ -1462,6 +1467,11 @@ BatchResult UdpSocket::transmit_rio(cont::ConstSpan<OutgoingDatagram> datagrams)
         sent_train(count, result);
     }
     rio_commit(rio);
+    // What failed late changes what the next sends ask, as the same errors in the call do on the WSASendMsg path.
+    m_offloads.sends_failed += failures.datagrams;
+    m_offloads.trains_refused += failures.trains;
+    m_features.segmented_send = m_features.segmented_send && !failures.unsegmented;
+    m_features.ecn_marking = m_features.ecn_marking && !failures.unmarked;
     return result;
 }
 #endif

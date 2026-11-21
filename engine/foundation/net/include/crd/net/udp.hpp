@@ -81,7 +81,8 @@ struct UdpOptions
     // buffers alone: a datagram that arrives while all of them are out is lost, whatever receive_buffer_bytes says,
     // so a host sizes ring_buffers for its bursts and ring_datagram_bytes for its path's MTU. Their pages, and 64
     // send slots of ring_datagram_bytes beside them (and 8 of kMaxTrainBytes for trains), stay locked while the
-    // socket is open. Off by default: S33's Registered I/O board.
+    // socket is open. The host's request queue is unsynchronised: the socket's sends and receives never run on two
+    // threads at once (an IoLoop makes both on its own thread). Off by default (S33's Registered I/O).
     bool registered_io = false;
     // A message of at least this many bytes (a train, or one large datagram) that send_stable() hands over leaves
     // through io_uring's zero-copy send where the host has it (SocketFeatures::lent_send): the host reads its bytes
@@ -162,7 +163,8 @@ struct OffloadCounters
     u64 zero_copy_copied = 0U;         // zero-copy messages the host copied after all (loopback, a device without it)
     u64 zero_copy_refused = 0U;        // zero-copy messages the host failed, sent again copied
     // Datagrams a send took that the host failed only once they had left the call (Windows' Registered I/O, which
-    // reports a send's error as it completes): lost, as a datagram the path drops is.
+    // reports a send's error as it completes): lost, as a datagram the path drops is. Such a train also counts in
+    // trains_refused, and the errors that end segmentation or marking in the call end them here too.
     u64 sends_failed = 0U;
 };
 

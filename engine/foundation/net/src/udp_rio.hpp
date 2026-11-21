@@ -83,15 +83,25 @@ struct RioSendSlot
     cont::Span<u8> control; // the messages alone; the header before them is rio_send()'s
     u32 index = 0U;
 };
-// Reads the send completions that arrived: each slot is free again, and each failure counted in `counters`.
-void rio_reap(UdpRio& rio, OffloadCounters& counters) noexcept;
+// What the send completions read so far reported: the datagrams and trains the host failed after the call took
+// them, and whether a failure says the host segments no train or marks no codepoint, as the WSASendMsg path learns
+// from the same errors in the call.
+struct RioFailures
+{
+    u64 datagrams = 0U;
+    u64 trains = 0U;
+    bool unsegmented = false; // a train failed WSAEOPNOTSUPP, or WSAEINVAL unmarked
+    bool unmarked = false;    // a marked send failed WSAEINVAL
+};
+// Reads the send completions that arrived: each slot is free again, and each failure added to `failures`.
+void rio_reap(UdpRio& rio, RioFailures& failures) noexcept;
 // A free slot, a train's with `train`, after starting the deferred sends and reading their completions where none is
 // free; false while every slot of that kind is in flight, or for a train on a socket without train slots.
-[[nodiscard]] bool rio_send_slot(UdpRio& rio, bool train, RioSendSlot& slot, OffloadCounters& counters) noexcept;
-// Hands the host `slot` with `bytes` of datagrams and `control_bytes` of control messages, deferred; false and the
-// host's error where it refused (the slot is then free again).
-[[nodiscard]] bool rio_send(UdpRio& rio, const RioSendSlot& slot, usize bytes, usize control_bytes,
-                            int& error) noexcept;
+[[nodiscard]] bool rio_send_slot(UdpRio& rio, bool train, RioSendSlot& slot, RioFailures& failures) noexcept;
+// Hands the host `slot` with `bytes` of `datagrams` datagrams, `marked` with a codepoint, and `control_bytes` of
+// control messages, deferred; false and the host's error where it refused (the slot is then free again).
+[[nodiscard]] bool rio_send(UdpRio& rio, const RioSendSlot& slot, usize bytes, usize control_bytes, u32 datagrams,
+                            bool marked, int& error) noexcept;
 // Starts every deferred send.
 void rio_commit(UdpRio& rio) noexcept;
 
