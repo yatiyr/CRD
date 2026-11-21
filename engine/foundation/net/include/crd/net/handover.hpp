@@ -17,6 +17,9 @@
 //              that share of a path's losses: congestion outside the guards is answered as on any path.
 //   time       every call takes the time in nanoseconds; nothing reads a clock. starlink_handover_schedule() takes a
 //              reading of the connection's clock and of UTC made together (the terminal's own NTP server gives one).
+//   learning   without such a reading, a HandoverLearning names the period and the guards alone, and the connection
+//              learns the phase from the losses and RTT steps the handovers leave on its own packets
+//              (crd/hesap/net/handover_phase.hpp): the schedule it builds is in force while the learner holds a lock.
 
 #include <crd/core/types.hpp>
 
@@ -68,6 +71,29 @@ struct HandoverSchedule
     }
     const u64 since = (now_ns % schedule.period_ns + schedule.period_ns - schedule.phase_ns) % schedule.period_ns;
     return since <= schedule.after_ns || schedule.period_ns - since <= schedule.before_ns;
+}
+
+// A link known to hand over every period_ns, its phase to be learned, with these guards; a period of 0 learns
+// nothing, with every field 0.
+struct HandoverLearning
+{
+    u64 period_ns = 0U;
+    u64 before_ns = 0U;
+    u64 after_ns = 0U;
+
+    [[nodiscard]] constexpr bool operator==(const HandoverLearning&) const noexcept = default;
+};
+
+// As handover_schedule_valid() for the schedule it builds at any phase.
+[[nodiscard]] constexpr bool handover_learning_valid(const HandoverLearning& learning) noexcept
+{
+    return handover_schedule_valid(HandoverSchedule{learning.period_ns, 0U, learning.before_ns, learning.after_ns});
+}
+
+// Starlink's period and guards, its phase learned: for a sender with no UTC reading made with its clock.
+[[nodiscard]] constexpr HandoverLearning starlink_handover_learning() noexcept
+{
+    return HandoverLearning{kStarlinkHandoverPeriodNs, kStarlinkHandoverGuardNs, kStarlinkHandoverGuardNs};
 }
 
 // Starlink's timetable on the connection's clock, from `now_ns` on it and `utc_ns` (nanoseconds since 1970 in UTC, as

@@ -125,6 +125,7 @@ add_executable(crd-hesap-net-tests
     test_estimators.cpp
     test_classic_ecn.cpp
     test_queue_delay.cpp
+    test_handover_phase.cpp
     test_clock.cpp
     test_quantize.cpp
     test_motion.cpp

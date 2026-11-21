@@ -41,6 +41,7 @@
 
 namespace
 {
+using crd::i64;
 using crd::u32;
 using crd::u64;
 using crd::u8;
@@ -1843,10 +1844,18 @@ public:
         return false;
     }
 
-    // Both paths' one-way delay as of now; called between events.
+    // Both paths' one-way delay as of now, and no handover from stop_at; called between events.
     void follow()
     {
-        const bool spiking = m_net.now >= m_first_ns && (m_net.now - m_first_ns) % m_period_ns < m_spike_for_ns;
+        if (m_net.now >= stop_at)
+        {
+            for (Path& path : m_net.path)
+            {
+                path.outage_ns = 0U;
+            }
+        }
+        const bool spiking =
+            m_net.now >= m_first_ns && m_net.now < stop_at && (m_net.now - m_first_ns) % m_period_ns < m_spike_for_ns;
         for (Path& path : m_net.path)
         {
             path.delay_ns = m_base_ns + (spiking ? m_spike_ns : 0U);
@@ -1868,6 +1877,7 @@ public:
     [[nodiscard]] u64 taken() const { return m_net.outaged[0] + m_net.outaged[1]; }
 
     u64 drop_at = kNeverNs; // the first client datagram sent from then is lost too
+    u64 stop_at = kNeverNs; // the link hands over no more from then
 
 private:
     Net& m_net;
@@ -1883,12 +1893,13 @@ constexpr u64 kLeoOneWay = 20U * kMs;
 constexpr u64 kLeoFirst = 3000U * kMs; // the first handover, from confirmation
 constexpr u64 kLeoAfter = 2000U * kMs; // what follows a handover, measured
 
-// What the client's schedule is: none, the handovers' own, or one 7 s off them.
+// What the client's schedule is: none, the handovers' own, one 7 s off them, or one it learns.
 enum class Aware : u8
 {
     None,
     True,
     Wrong,
+    Learned,
 };
 
 // A LEO link's handovers: their outage, delay spike and its length; a genuine loss `genuine_at_ns` after
@@ -1900,6 +1911,12 @@ struct LeoLink
     u64 spike_for_ns = 150U * kMs;
     u64 genuine_at_ns = kNeverNs;
     u64 guard_after_ns = kStarlinkHandoverGuardNs;
+    u64 guard_before_ns = kStarlinkHandoverGuardNs;
+    u64 period_ns = kStarlinkHandoverPeriodNs; // the handovers' on the connection's clock
+    u64 learn_period_ns = 0U;                  // the period a learner is told (0: period_ns)
+    u64 measure_from_ns = 0U;                  // handovers before then are not measured
+    u64 after_ns = kLeoAfter;                  // what is measured after each
+    u64 stop_ns = kNeverNs;                    // no handover from then
 };
 
 // What a transfer over a LEO link showed.
@@ -1915,6 +1932,11 @@ struct LeoRun
     u64 after_reductions = 0U;      // reductions in the 2 s from each handover
     u64 after_undone = 0U;          // reductions undone then
     u64 after_bytes = 0U;           // bytes the server read then
+    u64 measured = 0U;              // handovers measured
+    u64 locks = 0U;                 // learned schedules put in force
+    bool learned = false;           // the schedule at the end was learned
+    i64 phase_offset_ns = 0;        // its phase less the handovers' at the end, within half a period
+    u64 lock_ns = kNeverNs;         // when a learned schedule first came in force, from confirmation
 };
 
 std::ostream& operator<<(std::ostream& out, const LeoRun& run)
@@ -1923,7 +1945,8 @@ std::ostream& operator<<(std::ostream& out, const LeoRun& run)
                << ", least window " << run.min_window << "; least target " << run.min_target_rate << ", least MTU "
                << run.min_mtu << ", taken " << run.handovers_lost << ", kept " << run.handover_losses
                << "; after: reductions " << run.after_reductions << ", undone " << run.after_undone << ", bytes "
-               << run.after_bytes;
+               << run.after_bytes << " over " << run.measured << "; locks " << run.locks << ", learned " << run.learned
+               << ", phase offset " << run.phase_offset_ns / 1000 << " us, locked at " << run.lock_ns / kMs << " ms";
 }
 
 // The client sends `total` bytes over a 10 Mbit/s link with 40 ms round trips and a queue of one bandwidth-delay
@@ -1940,14 +1963,20 @@ LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& li
     pair.net->path[0].buffer = kLeoRate / 1000U * 40U;
     pair.confirm();
     const u64 start = pair.net->now;
-    Handovers handovers(*pair.net, start + kLeoFirst, kStarlinkHandoverPeriodNs, link.outage_ns, link.spike_ns,
-                        link.spike_for_ns);
+    Handovers handovers(*pair.net, start + kLeoFirst, link.period_ns, link.outage_ns, link.spike_ns, link.spike_for_ns);
     handovers.drop_at = (link.genuine_at_ns == kNeverNs) ? kNeverNs : start + link.genuine_at_ns;
+    handovers.stop_at = (link.stop_ns == kNeverNs) ? kNeverNs : start + link.stop_ns;
     pair.net->filter = &handovers;
-    if (aware != Aware::None)
+    const u64 learn_period = (link.learn_period_ns == 0U) ? link.period_ns : link.learn_period_ns;
+    if (aware == Aware::Learned)
+    {
+        REQUIRE(pair.client.set_handover_learning(
+            HandoverLearning{learn_period, link.guard_before_ns, link.guard_after_ns}));
+    }
+    else if (aware != Aware::None)
     {
         const u64 shift = (aware == Aware::Wrong) ? 7000U * kMs : 0U;
-        REQUIRE(pair.client.set_handover(handovers.schedule(kStarlinkHandoverGuardNs, link.guard_after_ns, shift)));
+        REQUIRE(pair.client.set_handover(handovers.schedule(link.guard_before_ns, link.guard_after_ns, shift)));
     }
     LeoRun run;
     Bulk bulk{pair.client, pair.server, total};
@@ -1959,13 +1988,19 @@ LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& li
         [&]
         {
             handovers.follow();
+            if (run.lock_ns == kNeverNs && pair.client.handover_learned())
+            {
+                run.lock_ns = pair.net->now - start;
+            }
             const CongestionState state = pair.client.congestion().state();
             if (pair.net->now >= next_event)
             {
                 at_event = state;
                 read_at = bulk.read;
-                window_end = next_event + kLeoAfter;
-                next_event += kStarlinkHandoverPeriodNs;
+                const bool measured = next_event >= start + link.measure_from_ns && next_event < handovers.stop_at;
+                window_end = measured ? next_event + link.after_ns : kNeverNs;
+                run.measured += measured ? 1U : 0U;
+                next_event += link.period_ns;
             }
             if (pair.net->now >= window_end)
             {
@@ -1988,6 +2023,16 @@ LeoRun leo_transfer(const CongestionPolicy& policy, u64 total, const LeoLink& li
     run.elapsed_ns = pair.net->now - start;
     run.handovers_lost = handovers.taken();
     run.handover_losses = pair.client.counters().handover_losses;
+    run.locks = pair.client.counters().handover_locks;
+    run.learned = pair.client.handover_learned();
+    if (run.learned)
+    {
+        // The handovers' phase on the clock, read the way the learner's period folds it.
+        const u64 first = start + kLeoFirst;
+        const u64 truth = (first + ((pair.net->now - first) / link.period_ns) * link.period_ns) % learn_period;
+        const u64 d = (pair.client.handover().phase_ns + learn_period - truth) % learn_period;
+        run.phase_offset_ns = (d <= learn_period / 2U) ? static_cast<i64>(d) : -static_cast<i64>(learn_period - d);
+    }
     run.state = pair.client.congestion().state();
     CHECK(pair.client.state() == QuicConnectionState::Established);
     CHECK(pair.server.state() == QuicConnectionState::Established);
@@ -2068,6 +2113,104 @@ TEST_CASE("QUIC handover: SCReAM and GCC hold their target rates through a hando
     CHECK(blind.after_reductions != 0U);
     CHECK(aware.after_reductions == 0U);
     CHECK(aware.elapsed_ns < blind.elapsed_ns);
+}
+
+TEST_CASE("QUIC handover: a schedule learned without a clock reading answers the handovers as the authored one does, "
+          "on a skewed clock too",
+          "[net][net-path][quic-connection][handover]")
+{
+    // A handover every 2 s from 3 s under BBR's own losses: the learner locks within eight of them (by 21 s), and from
+    // then each is measured for 1.5 s after it.
+    constexpr u64 total = 40U << 20U;
+    constexpr u64 locked_by = 21000U * kMs;
+    LeoLink link;
+    link.period_ns = 2000U * kMs;
+    link.measure_from_ns = locked_by;
+    link.after_ns = 1500U * kMs;
+    CongestionPolicy policy;
+    policy.algorithm = CongestionAlgorithm::Bbr;
+    const LeoRun blind = leo_transfer(policy, total, link, Aware::None);
+    const LeoRun aware = leo_transfer(policy, total, link, Aware::True);
+    const LeoRun learned = leo_transfer(policy, total, link, Aware::Learned);
+    // The link's period 1000 ppm longer than the learner is told: 2 ms a period, 36 ms over the run.
+    LeoLink skewed = link;
+    skewed.period_ns = 2002U * kMs;
+    skewed.learn_period_ns = 2000U * kMs;
+    const LeoRun drifting = leo_transfer(policy, total, skewed, Aware::Learned);
+    INFO("blind: " << blind);
+    INFO("aware: " << aware);
+    INFO("learned: " << learned);
+    INFO("skewed: " << drifting);
+    REQUIRE(learned.measured >= 6U);
+    CHECK(blind.locks == 0U);
+    CHECK(aware.after_reductions < blind.after_reductions);
+    for (const LeoRun* run : {&learned, &drifting})
+    {
+        CHECK(run->locks == 1U);
+        CHECK(run->lock_ns <= locked_by);
+        CHECK(run->learned);
+        CHECK(run->phase_offset_ns >= -15 * static_cast<i64>(kMs));
+        CHECK(run->phase_offset_ns <= 15 * static_cast<i64>(kMs));
+        CHECK(run->handover_losses >= 40U);
+        // Nearer the authored schedule's reductions than the blind ones (measured: 13 and 16 against 10 and 28).
+        CHECK(2U * run->after_reductions <= aware.after_reductions + blind.after_reductions);
+    }
+}
+
+TEST_CASE("QUIC handover: a congested path that never hands over teaches no schedule, and a learned one is released "
+          "once the handovers stop",
+          "[net][net-path][quic-connection][handover]")
+{
+    // CUBIC and BBR filling a one-BDP drop-tail queue: their losses fall at no fixed phase of a 1 s or 2 s period.
+    LeoLink quiet;
+    quiet.outage_ns = 0U;
+    quiet.spike_ns = 0U;
+    quiet.guard_before_ns = 60U * kMs; // within an eighth of 1 s
+    quiet.guard_after_ns = 60U * kMs;
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::Cubic, CongestionAlgorithm::Bbr})
+    {
+        for (const u64 period : {1000U * kMs, 2000U * kMs})
+        {
+            INFO("algorithm " << static_cast<u32>(algorithm) << ", period " << period / kMs);
+            CongestionPolicy policy;
+            policy.algorithm = algorithm;
+            quiet.period_ns = period;
+            quiet.after_ns = period / 2U;
+            const LeoRun run = leo_transfer(policy, 24U << 20U, quiet, Aware::Learned);
+            INFO(run);
+            CHECK(run.state.reductions != 0U);
+            CHECK(run.locks == 0U);
+            CHECK_FALSE(run.learned);
+        }
+    }
+    // A handover every second until 12 s: the lock comes by 8 s and goes eleven quiet periods after the last.
+    LeoLink stopping;
+    stopping.period_ns = 1000U * kMs;
+    stopping.guard_before_ns = 60U * kMs;
+    stopping.guard_after_ns = 60U * kMs;
+    stopping.after_ns = 500U * kMs;
+    stopping.stop_ns = 12000U * kMs;
+    CongestionPolicy cubic;
+    const LeoRun run = leo_transfer(cubic, 30U << 20U, stopping, Aware::Learned);
+    INFO(run);
+    REQUIRE(run.elapsed_ns >= 25000U * kMs);
+    CHECK(run.locks == 1U);
+    CHECK(run.handover_losses != 0U);
+    CHECK_FALSE(run.learned);
+    // Handovers that only lose packets, to the end: the lock holds on the losses its own schedule covers, which the
+    // learner still sees. CUBIC fills the 40 ms queue, so the packets the outage takes left up to that much before
+    // the event, and the learned phase is theirs (coverage is by send time): at most 40 ms early, never late.
+    LeoLink losing = stopping;
+    losing.spike_ns = 0U;
+    losing.stop_ns = kNeverNs;
+    const LeoRun held = leo_transfer(cubic, 30U << 20U, losing, Aware::Learned);
+    INFO(held);
+    REQUIRE(held.elapsed_ns >= 22000U * kMs);
+    CHECK(held.locks == 1U);
+    CHECK(held.lock_ns <= 13000U * kMs);
+    CHECK(held.learned);
+    CHECK(held.phase_offset_ns >= -45 * static_cast<i64>(kMs));
+    CHECK(held.phase_offset_ns <= 5 * static_cast<i64>(kMs));
 }
 
 TEST_CASE("QUIC handover: an outage inside the guards reaches no persistent congestion; one that outlasts them does",
@@ -2155,6 +2298,20 @@ TEST_CASE("QUIC handover: schedules out of range are refused, and a move that re
         const QuicConnection accepted(allocator, config);
         CHECK(accepted.ready());
         CHECK(accepted.handover() == config.handover);
+        CHECK_FALSE(accepted.handover_learned());
+        // An authored schedule and a learning together, or a learning past the share, are refused.
+        config.handover_learning = starlink_handover_learning();
+        const QuicConnection both(allocator, config);
+        CHECK_FALSE(both.ready());
+        config.handover = HandoverSchedule{};
+        config.handover_learning.after_ns = kStarlinkHandoverPeriodNs / kHandoverMaxShare;
+        const QuicConnection wide(allocator, config);
+        CHECK_FALSE(wide.ready());
+        config.handover_learning = starlink_handover_learning();
+        const QuicConnection learning(allocator, config);
+        CHECK(learning.ready());
+        CHECK(learning.handover_learning() == starlink_handover_learning());
+        CHECK(learning.handover() == HandoverSchedule{});
     }
     Pair pair(CongestionPolicy{}, 7U);
     Net& net = *pair.net;
@@ -2187,5 +2344,30 @@ TEST_CASE("QUIC handover: schedules out of range are refused, and a move that re
     CHECK(pair.server.handover() == HandoverSchedule{});
     REQUIRE(pair.server.set_handover(schedule)); // the application names the new link's, if it has one
     CHECK(pair.server.handover() == schedule);
+    // Learning replaces the schedule and an authored one ends learning; a refused learning changes nothing.
+    HandoverLearning wide_learning = starlink_handover_learning();
+    wide_learning.before_ns = kStarlinkHandoverPeriodNs / kHandoverMaxShare;
+    CHECK_FALSE(pair.server.set_handover_learning(wide_learning));
+    CHECK(pair.server.handover() == schedule);
+    REQUIRE(pair.server.set_handover_learning(starlink_handover_learning()));
+    CHECK(pair.server.handover() == HandoverSchedule{});
+    CHECK(pair.server.handover_learning() == starlink_handover_learning());
+    REQUIRE(pair.server.set_handover(schedule));
+    CHECK(pair.server.handover_learning() == HandoverLearning{});
+    // A move that restarts the path's state starts the learning over on the new link: nothing learned, still learning.
+    REQUIRE(pair.server.set_handover_learning(starlink_handover_learning()));
+    const u64 floor = pair.server.recovery().path_floor();
+    net.client_at = Endpoint{IpAddress::v4(198, 51, 100, 9), 40000U};
+    REQUIRE(net.run_until(
+        [&]
+        {
+            static_cast<void>(bulk.step());
+            return pair.server.recovery().path_floor() != floor;
+        }));
+    CHECK(pair.server.handover_learning() == starlink_handover_learning());
+    CHECK(pair.server.handover() == HandoverSchedule{});
+    REQUIRE(pair.server.set_handover_learning(HandoverLearning{}));
+    CHECK(pair.server.handover_learning() == HandoverLearning{});
+    CHECK(pair.server.handover() == HandoverSchedule{});
     REQUIRE(net.run_until([&] { return bulk.step(); }));
 }

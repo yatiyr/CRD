@@ -24,7 +24,8 @@
 // and 0xF8 steps which of its three sockets its host holds back (send()'s held sockets, every mask in turn; none on
 // the clean path). The server offers a preferred address on its socket 1 (RFC 9000 section 9.6), which 0xF7 moves the
 // client to (migrate(): once validated). In any script 0xF6 sets both ends' handover schedule (S76) from the next
-// byte: an event every second from now, its guards from the byte, a refused schedule changing nothing.
+// byte: an event every second from now, its guards from the byte, a refused schedule changing nothing; 0xF5 has
+// both learn the phase instead (a period and guards from the next byte), the learned schedule held to the learning.
 //
 // Oracles. Always: a server sends at most three times what it received before the address is proven, and on paths
 // at most three times what arrived from each address it has not validated since it last knew it; every client
@@ -105,6 +106,16 @@ void check_closed(const QuicConnection& end)
     if (end.close_info().local && !end.close_info().application)
     {
         CRD_FUZZ_REQUIRE(valid_close(end.close_info().error_code));
+    }
+    // While it learns, the schedule in force is none or the learning's period and guards at a phase below the period.
+    const HandoverLearning& learning = end.handover_learning();
+    const HandoverSchedule& schedule = end.handover();
+    if (learning.period_ns != 0U)
+    {
+        CRD_FUZZ_REQUIRE(schedule == HandoverSchedule{} ||
+                         (schedule.period_ns == learning.period_ns && schedule.phase_ns < learning.period_ns &&
+                          schedule.before_ns == learning.before_ns && schedule.after_ns == learning.after_ns));
+        CRD_FUZZ_REQUIRE(end.handover_learned() == (schedule.period_ns != 0U));
     }
 }
 
@@ -1053,6 +1064,29 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             CRD_FUZZ_REQUIRE(!moved || pair.client.on_preferred_address());
             continue;
         }
+        if (op == 0xF5U && at + 1U < script.size())
+        {
+            // Both ends learn their handover phase (S76) from the next byte: a period of 1 to 4 s, guards of 20 ms a
+            // step each side (past the share at times; 0 learns nothing). A learning refused changes nothing.
+            const u8 shape = script[++at];
+            HandoverLearning learning;
+            if (shape != 0U)
+            {
+                learning.period_ns = kHandoverMinPeriodNs * (1U + (shape & 3U));
+                learning.before_ns = static_cast<u64>((shape >> 2U) & 7U) * 20000000U;
+                learning.after_ns = static_cast<u64>(shape >> 5U) * 20000000U;
+            }
+            const bool valid = handover_learning_valid(learning);
+            for (QuicConnection* end : {&pair.client, &pair.server})
+            {
+                const HandoverLearning before = end->handover_learning();
+                const HandoverSchedule schedule = end->handover();
+                CRD_FUZZ_REQUIRE(end->set_handover_learning(learning) == valid);
+                CRD_FUZZ_REQUIRE(end->handover_learning() == (valid ? learning : before));
+                CRD_FUZZ_REQUIRE(end->handover() == (valid ? HandoverSchedule{} : schedule));
+            }
+            continue;
+        }
         if (op == 0xF6U && at + 1U < script.size())
         {
             // Both ends' handover schedule (handover.hpp): an event every second, one now, guards from the next byte
@@ -1070,8 +1104,10 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             for (QuicConnection* end : {&pair.client, &pair.server})
             {
                 const HandoverSchedule before = end->handover();
+                const HandoverLearning learning = end->handover_learning();
                 CRD_FUZZ_REQUIRE(end->set_handover(schedule) == valid);
                 CRD_FUZZ_REQUIRE(end->handover() == (valid ? schedule : before));
+                CRD_FUZZ_REQUIRE(end->handover_learning() == (valid ? HandoverLearning{} : learning));
             }
             continue;
         }
@@ -1508,6 +1544,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     const u8 handover[] = {0x00U, 0xF6U, 0x35U, 0x00U, 0x00U, 0x00U, 0x07U, 0x02U, 0x00U, 0x03U, 0x07U, 0xF6U,
                            0xFFU, 0x00U, 0x02U, 0x07U, 0x00U, 0xF6U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U};
     sink.add("script-handover", handover, sizeof(handover));
+    // Learning a 1 s period with guards of 40 and 20 ms on a lossy script, a 2 s one past the share refused, an
+    // authored schedule ending it, then learning again.
+    const u8 learned[] = {0x00U, 0xF5U, 0x28U, 0x00U, 0x00U, 0x00U, 0x07U, 0x02U, 0x00U, 0x03U, 0x07U, 0xF5U, 0xFDU,
+                          0x00U, 0x02U, 0x07U, 0xF6U, 0x35U, 0x07U, 0x00U, 0xF5U, 0x28U, 0x07U, 0x00U, 0x00U};
+    sink.add("script-handover-learning", learned, sizeof(learned));
     // The same with receive timestamps, and a raw client's ACK_RECEIVE_TIMESTAMPS of the server's first 1-RTT packet.
     const u8 timed[] = {0x40U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
     sink.add("script-receive-timestamps", timed, sizeof(timed));

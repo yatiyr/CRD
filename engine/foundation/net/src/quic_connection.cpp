@@ -1,11 +1,13 @@
 // crd-net -- a QUIC connection (4.2a; contract: docs/design/network-foundation.md#quic-connection).
 #include <crd/containers/wire_bytes.hpp>
+#include <crd/hesap/net/handover_phase.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/construct.hpp>
 #include <crd/net/quic_connection.hpp>
 
 #include <cstring>
 #include <new>
+#include <type_traits>
 
 namespace crd::net
 {
@@ -28,6 +30,23 @@ constexpr u32 kMaxSentPackets = 1U << 16U;
 // Past sent_packets, per space: what ACK-only packets and probes have when data has filled the rest.
 constexpr u32 kSentPacketReserve = 8U;
 constexpr usize kMinUsefulPacket = 64U; // a server with less credit than this waits for a datagram
+
+using HandoverLearner = hesap::net::HandoverPhaseLearner;
+
+// The learner built in a connection's slot (its constructor builds it first).
+[[nodiscard]] HandoverLearner& learner_in(u8* bytes) noexcept
+{
+    return *std::launder(reinterpret_cast<HandoverLearner*>(bytes));
+}
+
+// Starts `learner` on `learning` (handover_learning_valid, so it takes it), or stops it for none.
+void learn(HandoverLearner& learner, const HandoverLearning& learning) noexcept
+{
+    if (learning.period_ns == 0U || !learner.start(learning.period_ns))
+    {
+        learner.stop();
+    }
+}
 constexpr usize kPullChunk = 512U;
 constexpr usize kKeyedHelloPrefix = 2U; // a keyed connection's parameters follow their two-byte length
 constexpr u64 kSkipMask = 63U;   // one 1-RTT packet number in 64 is skipped (section 21.4)
@@ -182,7 +201,8 @@ constexpr u64 kNoSequence = ~u64{0}; // a path with no peer connection ID to sen
            config.max_datagram_bytes >= kQuicMinInitialDatagram &&
            config.max_datagram_bytes <= kQuicDefaultMaxUdpPayload && config.base_datagram_bytes >= kQuicPmtuFloor &&
            config.base_datagram_bytes <= config.max_datagram_bytes && congestion_policy_valid(config.congestion) &&
-           handover_schedule_valid(config.handover) &&
+           handover_schedule_valid(config.handover) && handover_learning_valid(config.handover_learning) &&
+           (config.handover.period_ns == 0U || config.handover_learning.period_ns == 0U) &&
            (config.entropy_seed.empty() || config.entropy_seed.size() == crypto::kPrfKeyBytes) &&
            (config.token.size() <= kQuicMaxCarriedTokenBytes) && config.held_packets <= kQuicMaxHeldPackets &&
            (config.early_context.empty() || (config.side == crypto::QuicSide::Server && config.tls->early_data() &&
@@ -302,6 +322,12 @@ void QuicConnection::Events::on_lost(QuicSpace space, const QuicSentPacket& pack
         m_connection.m_pmtu.on_probe_lost(packet.bytes, m_connection.m_event_ns);
         return;
     }
+    if (packet.in_flight)
+    {
+        // Covered or not: a learned schedule must keep seeing what the handovers do.
+        learner_in(m_connection.m_learner_slot.bytes).on_loss(packet.sent_ns);
+        m_connection.follow_handover();
+    }
     if (packet.handover)
     {
         // Lost where a scheduled handover may have taken it: no congestion, and no black hole (StarQUIC section 3.2).
@@ -362,10 +388,15 @@ void QuicConnection::Events::on_discarded(QuicSpace space, const QuicSentPacket&
 QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnectionConfig& config) noexcept
     : m_allocator(allocator), m_config(config), m_events(*this), m_hello(*this)
 {
+    static_assert(sizeof(HandoverLearner) <= sizeof(m_learner_slot.bytes) && alignof(HandoverLearner) <= 8U);
+    static_assert(std::is_trivially_destructible_v<HandoverLearner>); // the slot is never destroyed
+    HandoverLearner& learner = *new (m_learner_slot.bytes) HandoverLearner();
     if (!config_valid(config))
     {
         return;
     }
+    learn(learner, config.handover_learning);
+    m_learner_revision = learner.revision();
     m_version_count = 0U;
     if (config.versions.empty())
     {
@@ -1320,6 +1351,12 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
                 }
                 m_counters.ecn_signals += (ce != 0U) ? 1U : 0U;
                 follow_ecn();
+                if (outcome.rtt_sampled)
+                {
+                    // The sample is the newest packet's: the learner keys it by that packet's send time.
+                    learner_in(m_learner_slot.bytes).on_rtt(outcome.newest_sent_ns, m_recovery->rtt().adjusted_ns);
+                    follow_handover();
+                }
                 // An RTT a scheduled handover may have lengthened is the estimate's, never a delay signal.
                 m_congestion->on_ack_end(m_recovery->rtt(), outcome.rtt_sampled && !outcome.rtt_handover,
                                          m_recovery->bytes_in_flight(), now_ns);
@@ -2129,7 +2166,45 @@ bool QuicConnection::set_handover(const HandoverSchedule& schedule) noexcept
         return false;
     }
     m_config.handover = schedule;
+    // An authored schedule ends learning.
+    m_config.handover_learning = HandoverLearning{};
+    HandoverLearner& learner = learner_in(m_learner_slot.bytes);
+    learner.stop();
+    m_learner_revision = learner.revision();
     return true;
+}
+
+bool QuicConnection::set_handover_learning(const HandoverLearning& learning) noexcept
+{
+    if (!ready() || !handover_learning_valid(learning))
+    {
+        return false;
+    }
+    m_config.handover_learning = learning;
+    m_config.handover = HandoverSchedule{};
+    HandoverLearner& learner = learner_in(m_learner_slot.bytes);
+    learn(learner, learning);
+    m_learner_revision = learner.revision();
+    return true;
+}
+
+void QuicConnection::follow_handover() noexcept
+{
+    const HandoverLearner& learner = learner_in(m_learner_slot.bytes);
+    if (!learner.learning() || learner.revision() == m_learner_revision)
+    {
+        return;
+    }
+    m_learner_revision = learner.revision();
+    const hesap::net::HandoverPhase& phase = learner.phase();
+    HandoverSchedule schedule;
+    if (phase.locked)
+    {
+        const HandoverLearning& learning = m_config.handover_learning;
+        schedule = HandoverSchedule{learning.period_ns, phase.phase_ns, learning.before_ns, learning.after_ns};
+        m_counters.handover_locks += (m_config.handover.period_ns == 0U) ? 1U : 0U;
+    }
+    m_config.handover = schedule;
 }
 
 bool QuicConnection::datagram_ready(u64 now_ns) const noexcept
@@ -3417,7 +3492,13 @@ void QuicConnection::follow_congestion(u64 now_ns) noexcept
     {
         return;
     }
-    m_config.handover = HandoverSchedule{}; // the schedule was the old link's
+    m_config.handover = HandoverSchedule{}; // the schedule was the old link's, and so was what the learner learned
+    HandoverLearner& learner = learner_in(m_learner_slot.bytes);
+    if (learner.learning())
+    {
+        learner.restart();
+    }
+    m_learner_revision = learner.revision();
     restart_path_size();
     m_recovery->restart_path(now_ns);
     m_delivery.reset();

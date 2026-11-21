@@ -262,6 +262,12 @@ struct QuicConnectionConfig
     // one is covered. The schedule describes the link the congestion state was built on: a move that restarts that
     // state (RFC 9000 section 9.4) clears it. Live: set_handover().
     HandoverSchedule handover;
+    // A link whose handovers come every period with these guards at a phase this side learns (handover.hpp,
+    // handover_learning_valid; none learns nothing): while the learner holds a lock, `handover` is the schedule it
+    // built, and none otherwise. An authored schedule is the stronger knowledge: a configuration naming both is
+    // refused, and set_handover() ends learning. Losses and RTT samples reach the learner whether a schedule covers
+    // them or not; a move that restarts the path's state starts it over. Live: set_handover_learning().
+    HandoverLearning handover_learning;
     // Datagrams are marked while ECN validation allows (RFC 9000 section 13.4.2), with the controller's codepoint
     // (congestion_codepoint(): ECT(1) for Prague and a scalable SCReAM, ECT(0) for the rest). A host whose socket
     // cannot mark clears it.
@@ -359,6 +365,7 @@ struct QuicConnectionCounters
     u64 path_failures = 0U;      // validations abandoned on their timeout
     u64 foreign_datagrams = 0U;  // datagrams from a path this side takes nothing from (a client's unknown server)
     u64 handover_losses = 0U;    // losses of packets a scheduled handover may have taken, kept from congestion control
+    u64 handover_locks = 0U;     // learned schedules put in force where none was
 };
 
 // (MSVC C4324 as for QuicPacketProtection, which it holds inline.)
@@ -495,6 +502,16 @@ public:
     // False, changing nothing, for a schedule handover_schedule_valid() refuses.
     [[nodiscard]] bool set_handover(const HandoverSchedule& schedule) noexcept;
     [[nodiscard]] const HandoverSchedule& handover() const noexcept { return m_config.handover; }
+    // Learns the handover phase of `learning`'s link from now (QuicConnectionConfig::handover_learning), clearing the
+    // schedule in force; none ends learning and clears it. False, changing nothing, for one handover_learning_valid()
+    // refuses.
+    [[nodiscard]] bool set_handover_learning(const HandoverLearning& learning) noexcept;
+    [[nodiscard]] const HandoverLearning& handover_learning() const noexcept { return m_config.handover_learning; }
+    // Whether handover() is a schedule learned rather than authored (none is neither).
+    [[nodiscard]] bool handover_learned() const noexcept
+    {
+        return m_config.handover_learning.period_ns != 0U && m_config.handover.period_ns != 0U;
+    }
     // The peer's parameters, valid once peer_parameters_known().
     [[nodiscard]] bool peer_parameters_known() const noexcept { return m_peer_known; }
     [[nodiscard]] const QuicTransportParameters& peer_parameters() const noexcept { return m_peer; }
@@ -749,6 +766,8 @@ private:
     void follow_path(u64 now_ns) noexcept;
     // Once the path is known not to carry ECN (never marked, or validation failed), the controller hears it once.
     void follow_ecn() noexcept;
+    // Puts the handover learner's estimate in force when it changed.
+    void follow_handover() noexcept;
     void apply_path_size() noexcept;
     [[nodiscard]] usize write_frames(QuicSpace space, bool early, cont::Span<u8> frames, u64 packet, u64 now_ns,
                                      Written& written) noexcept;
@@ -783,6 +802,12 @@ private:
     QuicRecovery* m_recovery = nullptr;
     CongestionController* m_congestion = nullptr; // built in m_congestion_slot
     CongestionSlot m_congestion_slot;
+    // crd-hesap-net's handover phase learner (handover_phase.hpp), which no public header of crd-net includes.
+    struct HandoverLearnerSlot
+    {
+        alignas(8) u8 bytes[1488U];
+    } m_learner_slot;
+    u32 m_learner_revision = 0U;    // the learner's estimate in force
     DeliveryRateSampler m_delivery; // every controller's delivery rate samples, stamped on each packet in flight
     Pacer m_pacer;
     u64 m_pace_release_ns = kNeverNs; // data waits for the pacer until then

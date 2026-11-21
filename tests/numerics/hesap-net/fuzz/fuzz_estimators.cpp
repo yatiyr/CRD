@@ -13,9 +13,13 @@
 //     variance at least 1, a refused update changes nothing;
 //   * the windowed filter: best() against a brute-force history of the window (a sample of it, not worse than the
 //     newest);
-//   * the acknowledged rate: the estimate finite, never below the floor once set, the variance not negative.
+//   * the acknowledged rate: the estimate finite, never below the floor once set, the variance not negative;
+//   * the handover phase learner: a refused start changes nothing, the estimate below the period, locked with the
+//     support its keep rule needs or empty, its revision moving with it; the binomial tail at most one, falling as
+//     the hits rise, never below the tail summed in long double and within 1e-11 of it (the Q62 roundings up).
 #include <crd/fuzz/harness.hpp>
 #include <crd/hesap/net/delay_trend.hpp>
+#include <crd/hesap/net/handover_phase.hpp>
 #include <crd/hesap/net/jitter.hpp>
 #include <crd/hesap/net/rate.hpp>
 #include <crd/hesap/net/rtt.hpp>
@@ -117,6 +121,43 @@ struct Sample
     u32 value = 0U;
     u64 time = 0U;
 };
+
+// The binomial tail against its sum in long double: at most one, never below it, falling as the hits rise.
+// Rounding up loses at most C(16, 8) * 17 units of 2^-62 a term, below 1e-12 in all.
+void tail(u32 periods, u32 hits, u64 q)
+{
+    constexpr long double one = 4611686018427387904.0L; // 2^62
+    const u64 bounded = (q < HandoverPhaseLearner::kOneQ62) ? q : HandoverPhaseLearner::kOneQ62;
+    const u64 value = HandoverPhaseLearner::binomial_tail_q62(periods, hits, q);
+    CRD_FUZZ_REQUIRE(value <= HandoverPhaseLearner::kOneQ62);
+    CRD_FUZZ_REQUIRE(hits == 0U || value <= HandoverPhaseLearner::binomial_tail_q62(periods, hits - 1U, q));
+    if (periods > HandoverPhaseLearner::kHistory || hits == 0U || hits > periods)
+    {
+        return;
+    }
+    const long double p = static_cast<long double>(bounded) / one;
+    long double sum = 0.0L;
+    for (u32 x = hits; x <= periods; ++x)
+    {
+        long double term = 1.0L;
+        for (u32 k = 1U; k <= x; ++k)
+        {
+            term = term * static_cast<long double>(periods - k + 1U) / static_cast<long double>(k);
+        }
+        for (u32 k = 0U; k < x; ++k)
+        {
+            term *= p;
+        }
+        for (u32 k = x; k < periods; ++k)
+        {
+            term *= 1.0L - p;
+        }
+        sum += term;
+    }
+    const long double got = static_cast<long double>(value) / one;
+    CRD_FUZZ_REQUIRE(got >= sum * (1.0L - 1e-12L) - 1e-18L);
+    CRD_FUZZ_REQUIRE(got <= sum * (1.0L + 1e-12L) + 1e-11L);
+}
 
 class Run
 {
@@ -251,6 +292,80 @@ public:
         CRD_FUZZ_REQUIRE(found);
     }
 
+    // The handover phase learner: a start, sends near a running clock (mostly a step forwards, a bin's worth at a
+    // time, so a timetable can form), sends anywhere, a restart or a stop; or the binomial tail.
+    void handover(Reader& in)
+    {
+        const u8 kind = in.next();
+        const HandoverPhase before = m_learner.phase();
+        const u32 revision = m_learner.revision();
+        switch (kind % 6U)
+        {
+        case 0U:
+        {
+            const u32 bits = in.next() % 44U;
+            const u64 period = HandoverPhaseLearner::kMinPeriodNs + in.next_u64() % (u64{1} << bits);
+            const bool valid = period <= HandoverPhaseLearner::kMaxPeriodNs;
+            const u64 had = m_learner.period_ns();
+            CRD_FUZZ_REQUIRE(m_learner.start(period) == valid);
+            CRD_FUZZ_REQUIRE(valid || (m_learner.period_ns() == had && m_learner.phase() == before &&
+                                       m_learner.revision() == revision));
+            CRD_FUZZ_REQUIRE(!valid || (m_learner.period_ns() == period && m_learner.phase() == HandoverPhase{}));
+            return;
+        }
+        case 1U:
+        case 2U:
+        {
+            const u64 learned = m_learner.period_ns();
+            const u64 period = (learned == 0U) ? HandoverPhaseLearner::kMinPeriodNs : learned;
+            const u64 bins = in.next() % 4U;
+            const u64 micros = in.next();
+            m_clock += period / HandoverPhaseLearner::kBins * bins + micros * 1000U;
+            const u64 rtt = u64{in.next()} * 1000000U;
+            if (kind % 6U == 1U)
+            {
+                m_learner.on_rtt(m_clock, rtt);
+            }
+            else
+            {
+                m_learner.on_loss(m_clock);
+            }
+            break;
+        }
+        case 3U:
+            m_learner.on_rtt(in.next_u64(), in.next_u64());
+            break;
+        case 4U:
+            if ((kind & 0x80U) != 0U)
+            {
+                m_learner.stop();
+                CRD_FUZZ_REQUIRE(!m_learner.learning());
+            }
+            else
+            {
+                const u64 period = m_learner.period_ns();
+                m_learner.restart();
+                CRD_FUZZ_REQUIRE(m_learner.period_ns() == period);
+            }
+            CRD_FUZZ_REQUIRE(m_learner.phase() == HandoverPhase{} && m_learner.revision() != revision);
+            return;
+        default:
+        {
+            const u32 periods = in.next() % 18U;
+            const u32 hits = in.next() % 18U;
+            tail(periods, hits, in.next_u64() >> 1U);
+            return;
+        }
+        }
+        const HandoverPhase& phase = m_learner.phase();
+        CRD_FUZZ_REQUIRE(m_learner.period_ns() == 0U || phase.phase_ns < m_learner.period_ns());
+        CRD_FUZZ_REQUIRE(phase.periods <= HandoverPhaseLearner::kHistory);
+        CRD_FUZZ_REQUIRE(phase.locked ? (phase.support >= HandoverPhaseLearner::kMinKeep &&
+                                         3U * phase.support >= phase.periods && phase.support <= phase.periods)
+                                      : phase == HandoverPhase{});
+        CRD_FUZZ_REQUIRE((phase == before) == (m_learner.revision() == revision));
+    }
+
     void rate(Reader& in)
     {
         const i64 now = in.next_time();
@@ -283,6 +398,8 @@ private:
     bool m_jitter_started = false;
     bool m_rtt_seen = false;
     bool m_rtt_congested = false;
+    HandoverPhaseLearner m_learner;
+    u64 m_clock = 0U;
 };
 
 void add(crd::fuzz::SeedSink& sink, const char* name, std::initializer_list<u8> bytes)
@@ -308,7 +425,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     Run run;
     while (in.size != 0U)
     {
-        switch (in.next() % 6U)
+        switch (in.next() % 7U)
         {
         case 0U:
             run.rtt(in);
@@ -325,8 +442,11 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         case 4U:
             run.windowed(in);
             break;
-        default:
+        case 5U:
             run.rate(in);
+            break;
+        default:
+            run.handover(in);
             break;
         }
     }
@@ -349,4 +469,23 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     add(sink, "windowed-aging", {4U, 15U, 0U, 0U, 0U, 9U, 0U, 4U, 15U, 0U, 0U, 0U, 5U, 0U, 4U, 15U, 0U, 0U, 0U, 3U, 0U});
     add(sink, "rate-window", {5U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 16U, 0U, 0U});
     add(sink, "rate-extremes", {5U, 3U, 0U, 0U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 1U, 5U, 7U, 0U, 0U, 0U, 0U, 1U});
+    // A 1 s period, then eight periods of 21 RTT samples three bins apart and one loss a bin after
+    // them: the same bin lost each period, a timetable the learner locks on.
+    u8 timetable[11U + 8U * (21U * 5U + 4U)] = {6U, 0U, 0U}; // the start: a period of 1 s
+    usize size = 11U;
+    for (u32 period = 0U; period < 8U; ++period)
+    {
+        for (u32 sample = 0U; sample < 21U; ++sample)
+        {
+            for (const u8 b : {u8{6U}, u8{1U}, u8{3U}, u8{0U}, u8{40U}})
+            {
+                timetable[size++] = b;
+            }
+        }
+        for (const u8 b : {u8{6U}, u8{2U}, u8{1U}, u8{0U}})
+        {
+            timetable[size++] = b;
+        }
+    }
+    sink.add("handover-timetable", timetable, size);
 }
