@@ -24,6 +24,11 @@ own queue to the same bound. Through the classic AQM, which also marks picoquic'
 classic depth and a Cerid client its link busy; alone in its direction, Prague may keep that queue too steady for the
 detector (TR-BB-2019-002), which test_prague.cpp proves beside a classic flow. A Cerid server echoes what its client
 sends, so under loss its direction may build no queue and see no CE.
+
+Address discovery (draft-ietf-quic-address-discovery-01, design S77): with each end offering what a case names (off,
+provide, receive or both), an end that asked and whose peer offered ends holding its own address as the peer saw it
+(127.0.0.1 and its socket's port), and every other end holds none: picoquic is the one pinned peer that implements
+the draft (its address_discovery_mode).
 """
 import argparse
 import subprocess
@@ -49,11 +54,13 @@ ALPHA_ONE = 1 << 20  # Prague's alpha of 1, in 2^-20
 SETTLE = 2.0
 BULK = 4 << 20  # bytes per stream through an AQM: about 7 s of transfer each way
 CODEPOINTS = {'prague': 'ect1', 'cubic': 'ect0', 'newreno': 'ect0', 'bbr': 'ect0'}
+PROVIDES = ('provide', 'both')
+WANTS = ('receive', 'both')
 
 
 class Case:
     def __init__(self, cerid, picoquic, cerid_is_client, version=1, streams=4, size=256 << 10, path=None,
-                 peer_cc='prague'):
+                 peer_cc='prague', discovery=None):
         self.cerid = cerid
         self.picoquic = picoquic
         self.cerid_is_client = cerid_is_client
@@ -62,10 +69,13 @@ class Case:
         self.size = size
         self.path = path  # a Relay's settings, as a dictionary; None: the loopback
         self.peer_cc = peer_cc  # picoquic's controller
+        self.discovery = discovery  # (Cerid's, picoquic's) address discovery offers; None: neither sends one
 
     def command(self, program, role, port):
         common = ['--role', role, '--port', str(port), '--seed', SEED, '--version', str(self.version), '--streams',
                   str(self.streams), '--bytes', str(self.size), '--code', str(CODE)]
+        if self.discovery is not None:
+            common += ['--address-discovery', self.discovery[0 if program == self.cerid else 1]]
         if program == self.cerid:
             return [program] + common + ['--group', 'x25519', '--cipher', 'aes128', '--closer', 'client',
                                          '--max-streams', '16', '--congestion', 'prague']
@@ -76,8 +86,9 @@ class Case:
         if self.path is not None:
             path = ' '.join(f'{name} {self.path[name]}' for name in ('step', 'ramp', 'classic', 'loss')
                             if name in self.path) or 'bottleneck'
+        discovery = '' if self.discovery is None else f' address discovery {self.discovery[0]}/{self.discovery[1]}'
         return ('cerid client' if self.cerid_is_client else 'picoquic client') + \
-            f' v{self.version} {self.streams}x{self.size} picoquic {self.peer_cc} {path}'
+            f' v{self.version} {self.streams}x{self.size} picoquic {self.peer_cc} {path}{discovery}'
 
     def run(self):
         server_program, client_program = self.picoquic, self.cerid
@@ -113,6 +124,7 @@ class Case:
             cerid, picoquic = (clients[0], servers[0]) if self.cerid_is_client else (servers[0], clients[0])
             self.check_connection(clients[0], servers[0], detail)
             self.check_ecn(cerid, picoquic, detail)
+            self.check_discovery(cerid, picoquic, detail)
             if relay is not None:
                 self.check_relay(relay, cerid, picoquic, detail)
         finally:
@@ -153,6 +165,17 @@ class Case:
         if self.path is None:
             expect(int(cerid.get('ecn_ce', '0')) == 0 and picoquic.get('ecn_received_ce') == '0',
                    f'CE on the loopback: {detail}')
+
+    def check_discovery(self, cerid, picoquic, detail):
+        """Each end holds its own loopback address as its peer reported it exactly where it asked and the peer
+        offered, and none otherwise."""
+        cerid_mode, peer_mode = self.discovery or ('off', 'off')
+        cerid_at = f'127.0.0.1:{cerid.get("path_local_port")}'
+        peer_at = f'127.0.0.1:{picoquic.get("local_port")}'
+        expected = cerid_at if cerid_mode in WANTS and peer_mode in PROVIDES else 'none'
+        expect(cerid.get('observed') == expected, f'Cerid holds another report than {expected}: {detail}')
+        expected = peer_at if peer_mode in WANTS and cerid_mode in PROVIDES else 'none'
+        expect(picoquic.get('observed') == expected, f'picoquic holds another report than {expected}: {detail}')
 
     def check_relay(self, relay, cerid, picoquic, detail):
         """The AQM's marks against both ends' counts, and Prague's state, queue and rate through it. A Cerid client
@@ -222,6 +245,9 @@ def cases(cerid, picoquic):
 
         for version in (1, 2):
             yield case(version=version)
+        for discovery in (('both', 'both'), ('receive', 'provide'), ('provide', 'receive'), ('both', 'off'),
+                          ('off', 'both')):
+            yield case(discovery=discovery)
         for peer_cc in ('cubic', 'bbr'):
             yield case(peer_cc=peer_cc)
         for version in (1, 2):

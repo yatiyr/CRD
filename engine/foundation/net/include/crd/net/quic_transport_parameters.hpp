@@ -3,9 +3,9 @@
 // crd-net -- QUIC transport parameters and compatible version negotiation (4.2a; contract:
 // docs/design/network-foundation.md#quic-transport-parameters). Sources: RFC 9000 sections 7.3, 7.4 and 18, RFC 9221
 // section 3 (max_datagram_frame_size), RFC 9287 section 3 (grease_quic_bit), RFC 9368 sections 2 to 4 and 8
-// (version_information) and draft-ietf-quic-receive-ts-03 section 6 (receive timestamps). The bytes travel in the TLS
-// handshake's quic_transport_parameters extension (crypto::QuicHandshake), authenticated; their encoding and every
-// check is here.
+// (version_information), draft-ietf-quic-receive-ts-03 section 6 (receive timestamps) and
+// draft-ietf-quic-address-discovery-01 section 3 (address_discovery). The bytes travel in the TLS handshake's
+// quic_transport_parameters extension (crypto::QuicHandshake), authenticated; their encoding and every check is here.
 //
 //   reading   read_quic_transport_parameters takes a peer's bytes for the side that sent them and fills every
 //             parameter, the defaults for those absent; unknown and reserved parameters are skipped (section 7.4.2).
@@ -60,6 +60,27 @@ inline constexpr u64   kQuicMaxAckDelayLimit          = u64{1} << 14U;    // max
 inline constexpr u64   kQuicDefaultActiveIdLimit      = 2U;
 inline constexpr usize kQuicMaxAvailableVersions      = 16U; // version_information's list this module keeps
 inline constexpr usize kQuicMaxGreaseParameterBytes   = 8U;
+
+// What an end offers of draft-ietf-quic-address-discovery-01 (section 3): Off sends no address_discovery parameter;
+// the others send theirs, Provide 0 (it reports the addresses it sees, wanting none), Receive 1 (it wants reports,
+// giving none) and Both 2.
+enum class QuicAddressDiscovery : u8
+{
+    Off,
+    Provide,
+    Receive,
+    Both,
+};
+
+[[nodiscard]] constexpr bool quic_provides_addresses(QuicAddressDiscovery mode) noexcept
+{
+    return mode == QuicAddressDiscovery::Provide || mode == QuicAddressDiscovery::Both;
+}
+
+[[nodiscard]] constexpr bool quic_wants_addresses(QuicAddressDiscovery mode) noexcept
+{
+    return mode == QuicAddressDiscovery::Receive || mode == QuicAddressDiscovery::Both;
+}
 
 // A connection ID carried in a transport parameter, held inline.
 struct QuicConnectionId
@@ -130,6 +151,7 @@ struct QuicTransportParameters
     // read as 0 when the maximum is 0, as the draft ignores it then).
     u64 max_receive_timestamps_per_ack = 0U;
     u64 receive_timestamps_exponent = 0U;
+    QuicAddressDiscovery address_discovery = QuicAddressDiscovery::Off; // draft-ietf-quic-address-discovery
     bool                   has_version_information                = false; // RFC 9368
     QuicVersionInformation version_information;
 };
@@ -181,22 +203,24 @@ struct QuicConnectionIdExpectation
 
 // ---- 0-RTT (RFC 9000 section 7.4.1, RFC 9221 section 3) ----
 
-// The bytes write_quic_early_parameters writes at most: a format byte and eleven varints.
-inline constexpr usize kQuicEarlyParameterBytes = 1U + (12U * 8U);
+// The bytes write_quic_early_parameters writes: a format byte and thirteen 64-bit values.
+inline constexpr usize kQuicEarlyParameterBytes = 1U + (13U * 8U);
 // The application's part of a server's early data context at most (QuicConnectionConfig and QmuxConfig early_context).
 inline constexpr usize kQuicMaxEarlyContextBytes = crypto::kTlsMaxEarlyDataContextBytes - kQuicEarlyParameterBytes;
 
 // A server's parameters that its 0-RTT depends on, the first part of its early data context: every limit a client's
 // 0-RTT packets keep to (initial_max_data, the five stream parameters, active_connection_id_limit and
-// max_datagram_frame_size) and the values a server may refuse 0-RTT over (max_idle_timeout, max_udp_payload_size,
-// disable_active_migration), in one fixed order without grease, so that one server's encoding is the same on every
+// max_datagram_frame_size), the values a server may refuse 0-RTT over (max_idle_timeout, max_udp_payload_size,
+// disable_active_migration) and the extensions it keeps on a connection whose 0-RTT it accepts (reset_stream_at, and
+// address_discovery, which draft-ietf-quic-address-discovery-01 section 3 forbids it to change), in one fixed order without grease, so that one server's encoding is the same on every
 // connection and a ticket's 0-RTT is refused once any of them changed. Writes into `out` (kQuicEarlyParameterBytes
 // hold any) and returns the bytes; 0 when `out` is too small.
 [[nodiscard]] usize write_quic_early_parameters(const QuicTransportParameters& server, cont::Span<u8> out) noexcept;
 
 // A client's check once its server accepted 0-RTT: PROTOCOL_VIOLATION when `accepted` lowers a limit its 0-RTT
 // packets kept to from `remembered` (initial_max_data, the five stream parameters, active_connection_id_limit, and
-// max_datagram_frame_size, whose lowering RFC 9221 section 3 closes with PROTOCOL_VIOLATION).
+// max_datagram_frame_size, whose lowering RFC 9221 section 3 closes with PROTOCOL_VIOLATION), drops reset_stream_at
+// or changes address_discovery (draft-ietf-quic-address-discovery-01 section 3).
 [[nodiscard]] QuicTransportError quic_check_remembered_parameters(const QuicTransportParameters& remembered,
                                                                   const QuicTransportParameters& accepted) noexcept;
 

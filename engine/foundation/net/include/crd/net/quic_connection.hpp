@@ -76,6 +76,12 @@
 //              path left behind stays known, so the client may return without another validation, until a new path
 //              needs its slot; its connection ID is then retired. A client takes datagrams from its server's address
 //              alone (section 9).
+//   addresses  draft-ietf-quic-address-discovery-01 behind parameters.address_discovery (design S77): an end that
+//              offers reports to a peer that asks for them sends each path one OBSERVED_ADDRESS, the address the
+//              peer's datagrams come from there, in the first 1-RTT packet on it (the handshake's path, a rebinding's,
+//              a migration's), again there only when it is lost; off the active path it rides with a path frame
+//              alone. Reports taken (only when asked for: PROTOCOL_VIOLATION otherwise) are kept per path, the newest
+//              sequence winning (observed_address()).
 //   IDs        this side's connection IDs come from the host (QuicConnectionIds), which routes them and derives their
 //              stateless reset tokens from its QuicResetKey: after confirmation the peer is kept at its
 //              active_connection_id_limit (at most kQuicMaxLocalConnectionIds) with NEW_CONNECTION_ID frames resent
@@ -212,10 +218,10 @@ struct QuicConnectionConfig
     // This side's parameters. max_receive_timestamps_per_ack (at most kQuicMaxReceiveTimestamps) is the NET-STD flag
     // of draft-ietf-quic-receive-ts-03: 0 (the default) neither asks for receive timestamps nor reports them; above 0
     // the connection asks for that many per ACK frame in receive_timestamps_exponent's unit, takes them as its
-    // congestion controller's receive times, and reports its own when the peer asks too. The connection fills the
-    // connection IDs and a server's stateless_reset_token,
-    // version_information, grease_quic_bit, the
-    // stream and flow-control parameters (from `streams`) and max_datagram_frame_size (from `datagrams`), so those
+    // congestion controller's receive times, and reports its own when the peer asks too. address_discovery (Off by
+    // default) is the NET-STD flag of draft-ietf-quic-address-discovery-01 ("addresses" above). The connection fills
+    // the connection IDs and a server's stateless_reset_token, version_information, grease_quic_bit, the stream and
+    // flow-control parameters (from `streams`) and max_datagram_frame_size (from `datagrams`), so those
     // stay 0 here; active_connection_id_limit is at most kQuicMaxPeerConnectionIds.
     QuicTransportParameters parameters;
     QuicStreamLimits streams;     // what this side's streams hold (all zero: no streams)
@@ -366,6 +372,7 @@ struct QuicConnectionCounters
     u64 foreign_datagrams = 0U;  // datagrams from a path this side takes nothing from (a client's unknown server)
     u64 handover_losses = 0U;    // losses of packets a scheduled handover may have taken, kept from congestion control
     u64 handover_locks = 0U;     // learned schedules put in force where none was
+    u64 address_observations = 0U; // OBSERVED_ADDRESS reports taken (each newer than its path's last)
 };
 
 // (MSVC C4324 as for QuicPacketProtection, which it holds inline.)
@@ -418,6 +425,11 @@ public:
     [[nodiscard]] const QuicPaths& paths() const noexcept { return m_paths; }
     // Whether datagrams moved to the server's preferred address (a client) or socket (a server): section 9.6.
     [[nodiscard]] bool on_preferred_address() const noexcept { return m_on_preferred; }
+    // The address the peer last reported seeing this side's datagrams come from on the active path (OBSERVED_ADDRESS,
+    // draft-ietf-quic-address-discovery-01), port 0 before any report; paths().observed() holds every path's. Reports
+    // arrive only when parameters.address_discovery asks for them, and a peer may lie (section 6.1): a caller trusts
+    // one only as far as other peers' reports agree.
+    [[nodiscard]] const Endpoint& observed_address() const noexcept { return m_paths.observed(m_paths.active()); }
     // When on_timeout() is next due: kNeverNs for no timer.
     [[nodiscard]] u64 next_timer_ns() const noexcept;
     void on_timeout(u64 now_ns) noexcept;
@@ -773,8 +785,14 @@ private:
                                      Written& written) noexcept;
     [[nodiscard]] usize write_close(QuicSpace space, cont::Span<u8> frames) const noexcept;
     // m_send_path's PATH_RESPONSE when owed, then a PATH_CHALLENGE when due (one a packet, section 8.2.1). Neither is
-    // sent again when lost: a response answers one challenge, and a challenge's timer sends another.
-    [[nodiscard]] usize write_path_frames(cont::Span<u8> frames, u64 now_ns, Written& written) noexcept;
+    // sent again when lost: a response answers one challenge, and a challenge's timer sends another. Then the path's
+    // OBSERVED_ADDRESS when due, recorded so that a lost one is owed there again (`packet` names the record).
+    [[nodiscard]] usize write_path_frames(cont::Span<u8> frames, u64 packet, u64 now_ns, Written& written) noexcept;
+    // Whether path `index` is to carry an OBSERVED_ADDRESS now: this side offered reports, its peer asked for them,
+    // the path owes one and is bound, and the ledger has room for its record.
+    [[nodiscard]] bool observation_due(usize index) const noexcept;
+    // A peer's OBSERVED_ADDRESS on the path of the packet being read.
+    [[nodiscard]] bool observed_address_frame(const QuicFrame& frame, u64 now_ns) noexcept;
     [[nodiscard]] usize send_closing(cont::Span<u8> out, u64 now_ns) noexcept;
     // Appends a record of a frame `written` holds to the ledger, naming it the packet's first when it is.
     [[nodiscard]] bool record(QuicSpace space, u64 packet, u8 kind, const QuicStreamRecord& frame,
@@ -898,6 +916,7 @@ private:
     usize m_deferred_move = kQuicNoPath;
     bool m_on_preferred = false;
     u8 m_challenge[kQuicPathDataBytes] = {};   // the PATH_CHALLENGE data of the packet being written
+    u64 m_observation_next = 0U;               // the next OBSERVED_ADDRESS sequence (rising on every path)
     bool m_ping_owed = false;
     bool m_confirmed = false;
     bool m_held_back = false; // the last send() skipped a path whose socket was held back

@@ -132,6 +132,7 @@ QuicTransportParameters full_server()
     p.reset_stream_at = true;
     p.max_receive_timestamps_per_ack = 32U;
     p.receive_timestamps_exponent = kQuicMaxReceiveTimestampsExponent;
+    p.address_discovery = QuicAddressDiscovery::Both;
     p.has_version_information = true;
     p.version_information.chosen = kV2;
     p.version_information.available[0] = kV2;
@@ -184,6 +185,7 @@ void check_equal(const QuicTransportParameters& a, const QuicTransportParameters
     CHECK(a.reset_stream_at == b.reset_stream_at);
     CHECK(a.max_receive_timestamps_per_ack == b.max_receive_timestamps_per_ack);
     CHECK(a.receive_timestamps_exponent == b.receive_timestamps_exponent);
+    CHECK(a.address_discovery == b.address_discovery);
     CHECK(a.has_version_information == b.has_version_information);
     if (a.has_version_information)
     {
@@ -367,6 +369,15 @@ TEST_CASE("QUIC transport parameters: section 18, RFC 9287 and RFC 9368 refusals
         e.add_varint(iana::kQuicTpMaxReceiveTimestampsPerAck, 4U);
         e.add_varint(iana::kQuicTpReceiveTimestampsExponent, 21U);
     }
+    add("address_discovery 3", QuicSide::Client).add_varint(iana::kQuicTpAddressDiscovery, 3U);
+    add("address_discovery 2^62 - 1", QuicSide::Server)
+        .add_varint(iana::kQuicTpAddressDiscovery, crd::net::kQuicMaxVarint);
+    add("address_discovery empty", QuicSide::Client).add(iana::kQuicTpAddressDiscovery, ConstSpan<u8>{});
+    {
+        Encoded& e = add("address_discovery repeated", QuicSide::Server);
+        e.add_varint(iana::kQuicTpAddressDiscovery, 1U);
+        e.add_varint(iana::kQuicTpAddressDiscovery, 1U);
+    }
     {
         Encoded& e = add("receive_timestamps_exponent repeated", QuicSide::Client);
         e.add_varint(iana::kQuicTpReceiveTimestampsExponent, 1U);
@@ -435,6 +446,41 @@ TEST_CASE("QUIC transport parameters: section 18, RFC 9287 and RFC 9368 refusals
         CHECK(out.receive_timestamps_exponent == 0U);
     }
 
+    // draft-ietf-quic-address-discovery-01 section 3: each value read from either side and written back the same; the
+    // parameter absent reads as Off and is never written for it.
+    const QuicAddressDiscovery modes[] = {QuicAddressDiscovery::Provide, QuicAddressDiscovery::Receive,
+                                          QuicAddressDiscovery::Both};
+    for (u64 value = 0U; value < 3U; ++value)
+    {
+        Encoded discovery;
+        discovery.add_varint(iana::kQuicTpAddressDiscovery, value);
+        for (const QuicSide side : {QuicSide::Client, QuicSide::Server})
+        {
+            REQUIRE(read_quic_transport_parameters(discovery.view(), side, out) == QuicTransportError::NoError);
+            CHECK(out.address_discovery == modes[value]);
+        }
+        QuicTransportParameters mode;
+        mode.address_discovery = modes[value];
+        u8 written[64] = {};
+        const usize bytes =
+            write_quic_transport_parameters(mode, QuicSide::Client, {}, Span<u8>(written, sizeof(written)));
+        REQUIRE(bytes != 0U);
+        QuicTransportParameters read;
+        REQUIRE(read_quic_transport_parameters(ConstSpan<u8>(written, bytes), QuicSide::Client, read) ==
+                QuicTransportError::NoError);
+        CHECK(read.address_discovery == modes[value]);
+    }
+    REQUIRE(read_quic_transport_parameters(ConstSpan<u8>{}, QuicSide::Server, out) == QuicTransportError::NoError);
+    CHECK(out.address_discovery == QuicAddressDiscovery::Off);
+    CHECK(quic_provides_addresses(QuicAddressDiscovery::Provide));
+    CHECK(quic_provides_addresses(QuicAddressDiscovery::Both));
+    CHECK_FALSE(quic_provides_addresses(QuicAddressDiscovery::Receive));
+    CHECK_FALSE(quic_provides_addresses(QuicAddressDiscovery::Off));
+    CHECK(quic_wants_addresses(QuicAddressDiscovery::Receive));
+    CHECK(quic_wants_addresses(QuicAddressDiscovery::Both));
+    CHECK_FALSE(quic_wants_addresses(QuicAddressDiscovery::Provide));
+    CHECK_FALSE(quic_wants_addresses(QuicAddressDiscovery::Off));
+
     // Entropy picking either draft identifier for the reserved parameter moves it to the next free slot.
     for (const u64 picked : {iana::kQuicTpMaxReceiveTimestampsPerAck, iana::kQuicTpReceiveTimestampsExponent})
     {
@@ -475,6 +521,7 @@ TEST_CASE("QUIC transport parameters: writers refuse what readers refuse", "[net
     CHECK(
         changed([](QuicTransportParameters& c) { c.max_receive_timestamps_per_ack = crd::net::kQuicMaxVarint + 1U; }));
     CHECK(changed([](QuicTransportParameters& c) { c.max_ack_delay = kQuicMaxAckDelayLimit; }));
+    CHECK(changed([](QuicTransportParameters& c) { c.address_discovery = static_cast<QuicAddressDiscovery>(4U); }));
     CHECK(changed([](QuicTransportParameters& c) { c.active_connection_id_limit = 1U; }));
     CHECK(changed([](QuicTransportParameters& c) { c.initial_max_streams_uni = kQuicMaxStreams + 1U; }));
     CHECK(changed([](QuicTransportParameters& c) { c.initial_max_data = crd::net::kQuicMaxVarint + 1U; }));
@@ -652,11 +699,11 @@ TEST_CASE("QUIC transport parameters: a server's 0-RTT part of its early data co
     server.max_udp_payload_size = 1500U;
     u8 encoded[kQuicEarlyParameterBytes];
     REQUIRE(write_quic_early_parameters(server, Span<u8>(encoded)) == kQuicEarlyParameterBytes);
-    CHECK(encoded[0] == 2U); // the format
+    CHECK(encoded[0] == 3U); // the format
     WireReader in{ConstSpan<u8>(encoded)};
     u8 format = 0U;
     REQUIRE(in.take_u8(format));
-    const u64 order[] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 1500U, 0U, 0U};
+    const u64 order[] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 1500U, 0U, 0U, 0U};
     for (const u64 expected : order)
     {
         u64 value = 0U;
@@ -705,6 +752,22 @@ TEST_CASE("QUIC transport parameters: a server's 0-RTT part of its early data co
     CHECK(quic_check_remembered_parameters(resets, server) == QuicTransportError::ProtocolViolation);
     CHECK(quic_check_remembered_parameters(server, resets) == QuicTransportError::NoError);
     CHECK(quic_check_remembered_parameters(resets, resets) == QuicTransportError::NoError);
+    // Nor change address discovery in any way (draft-ietf-quic-address-discovery-01 section 3).
+    for (const QuicAddressDiscovery mode :
+         {QuicAddressDiscovery::Provide, QuicAddressDiscovery::Receive, QuicAddressDiscovery::Both})
+    {
+        QuicTransportParameters discovery = server;
+        discovery.address_discovery = mode;
+        REQUIRE(write_quic_early_parameters(discovery, Span<u8>(again)) == kQuicEarlyParameterBytes);
+        CHECK(std::memcmp(encoded, again, sizeof(encoded)) != 0);
+        CHECK(quic_check_remembered_parameters(discovery, server) == QuicTransportError::ProtocolViolation);
+        CHECK(quic_check_remembered_parameters(server, discovery) == QuicTransportError::ProtocolViolation);
+        CHECK(quic_check_remembered_parameters(discovery, discovery) == QuicTransportError::NoError);
+        QuicTransportParameters other = discovery;
+        other.address_discovery =
+            (mode == QuicAddressDiscovery::Both) ? QuicAddressDiscovery::Provide : QuicAddressDiscovery::Both;
+        CHECK(quic_check_remembered_parameters(discovery, other) == QuicTransportError::ProtocolViolation);
+    }
 
     // A client's check: any limit its 0-RTT kept to that the accepted parameters lower is PROTOCOL_VIOLATION.
     CHECK(quic_check_remembered_parameters(server, server) == QuicTransportError::NoError);

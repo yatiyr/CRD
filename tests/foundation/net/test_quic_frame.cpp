@@ -2,7 +2,8 @@
 // and written byte for byte, every frame kind through a round trip in its shortest encoding, every refusal of
 // sections 12.4 and 19 with nothing consumed, ACK ranges against a reference walk, ACK_RECEIVE_TIMESTAMPS
 // (draft-ietf-quic-receive-ts-03) byte for byte, reordered reports round tripped and every bound the draft sets
-// refused, and the frame placement table of section 12.4 restated.
+// refused, OBSERVED_ADDRESS (draft-ietf-quic-address-discovery-01) byte for byte for both families, and the frame
+// placement table of section 12.4 restated.
 
 #include "ingress_fixture.hpp"
 #include "quic_vectors.hpp"
@@ -35,6 +36,8 @@ constexpr u8 kReset[16]      = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
 constexpr u8 kPath[8]        = {0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58};
 constexpr u8 kReason[4]      = {'b', 'y', 'e', '!'};
 constexpr u8 kZeros[3]       = {}; // what a PADDING frame reads as
+constexpr u8 kIpv4[4]        = {198, 51, 100, 7};
+constexpr u8 kIpv6[16]       = {0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x12, 0x34};
 
 bool same_frame(const QuicFrame& a, const QuicFrame& b)
 {
@@ -129,6 +132,18 @@ crd::containers::Array<QuicFrame> every_frame()
         QuicFrame& f = add(QuicFrameKind::Datagram);
         f.to_end = to_end;
         f.data = ConstSpan<u8>(kData, sizeof(kData));
+    }
+    {
+        QuicFrame& f = add(QuicFrameKind::ObservedAddress);
+        f.sequence = 70000U;
+        f.data = ConstSpan<u8>(kIpv4, sizeof(kIpv4));
+        f.value = 65535U;
+    }
+    {
+        QuicFrame& f = add(QuicFrameKind::ObservedAddress);
+        f.sequence = 1U;
+        f.data = ConstSpan<u8>(kIpv6, sizeof(kIpv6));
+        f.value = 443U;
     }
     return frames;
 }
@@ -293,6 +308,9 @@ TEST_CASE("QUIC frames: unknown and longer-encoded types and section 19's bounds
         {"1a01020304050607", QuicTransportError::FrameEncodingError},       // 7 bytes of path data
         {"1c0a0605626f", QuicTransportError::FrameEncodingError},           // a reason past the packet
         {"3106aabbcc", QuicTransportError::FrameEncodingError},             // a DATAGRAM past the packet
+        {"809f81a800", QuicTransportError::FrameEncodingError},             // past OBSERVED_ADDRESS's two types
+        {"809f81a500", QuicTransportError::FrameEncodingError},             // below them
+        {"c0000000009f81a600c633640701bb", QuicTransportError::ProtocolViolation}, // its type in eight bytes
     };
     for (const Case& test : cases)
     {
@@ -634,6 +652,7 @@ TEST_CASE("QUIC frames: placement follows RFC 9000's table 3, RFC 9221 and the s
         {QuicFrameKind::ConnectionClose, true, "__01", false},
         {QuicFrameKind::HandshakeDone, false, "___1", true},
         {QuicFrameKind::Datagram, false, "__01", false},
+        {QuicFrameKind::ObservedAddress, false, "__01", false}, // the application space alone (the draft's 4.1)
     };
     const QuicPacketType packets[4] = {QuicPacketType::Initial, QuicPacketType::Handshake, QuicPacketType::ZeroRtt,
                                        QuicPacketType::OneRtt};
@@ -666,7 +685,49 @@ TEST_CASE("QUIC frames: placement follows RFC 9000's table 3, RFC 9221 and the s
     CHECK(quic_frame_congestion_controlled(QuicFrameKind::Padding));
     CHECK(quic_frame_probing(QuicFrameKind::PathChallenge));
     CHECK(quic_frame_probing(QuicFrameKind::NewConnectionId));
+    CHECK(quic_frame_probing(QuicFrameKind::ObservedAddress));
+    CHECK(quic_frame_ack_eliciting(QuicFrameKind::ObservedAddress));
+    CHECK(quic_frame_congestion_controlled(QuicFrameKind::ObservedAddress));
     CHECK_FALSE(quic_frame_probing(QuicFrameKind::Stream));
+}
+
+TEST_CASE("QUIC frames: OBSERVED_ADDRESS reads and writes both families byte for byte", "[net][quic-frame]")
+{
+    // draft-ietf-quic-address-discovery-01 section 4.1: type 0x9f81a6 (IPv4) or 0x9f81a7 (IPv6) as a four-byte
+    // varint, the sequence, the address and the port in network order.
+    const u8 v4[] = {0x80U, 0x9FU, 0x81U, 0xA6U, 0x45U, 0x00U, 198U, 51U, 100U, 7U, 0x1FU, 0x90U};
+    WireReader in(ConstSpan<u8>(v4, sizeof(v4)));
+    QuicFrame frame;
+    REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);
+    CHECK(in.done());
+    CHECK(frame.kind == QuicFrameKind::ObservedAddress);
+    CHECK(frame.sequence == 0x500U);
+    CHECK(same(frame.data, ConstSpan<u8>(kIpv4, sizeof(kIpv4))));
+    CHECK(frame.value == 8080U);
+    u8 out[32] = {};
+    REQUIRE(write_quic_frame(frame, Span<u8>(out, sizeof(out))) == sizeof(v4));
+    CHECK(std::memcmp(out, v4, sizeof(v4)) == 0);
+
+    QuicFrame six;
+    six.kind = QuicFrameKind::ObservedAddress;
+    six.sequence = 0U;
+    six.data = ConstSpan<u8>(kIpv6, sizeof(kIpv6));
+    six.value = 1U;
+    REQUIRE(write_quic_frame(six, Span<u8>(out, sizeof(out))) == 4U + 1U + 16U + 2U);
+    CHECK((out[0] == 0x80U && out[1] == 0x9FU && out[2] == 0x81U && out[3] == 0xA7U && out[4] == 0x00U));
+    CHECK(std::memcmp(out + 5U, kIpv6, sizeof(kIpv6)) == 0);
+    CHECK((out[21] == 0x00U && out[22] == 0x01U));
+
+    // An address of neither length, or a port past 16 bits, is never written.
+    QuicFrame bad = six;
+    bad.data = ConstSpan<u8>(kIpv6, 5U);
+    CHECK(quic_frame_bytes(bad) == 0U);
+    bad = six;
+    bad.value = 65536U;
+    CHECK(quic_frame_bytes(bad) == 0U);
+    bad = six;
+    bad.sequence = crd::net::kQuicMaxVarint + 1U;
+    CHECK(quic_frame_bytes(bad) == 0U);
 }
 } // namespace
 

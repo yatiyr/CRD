@@ -22,6 +22,7 @@ constexpr u32   kSeenVersionInfo  = 19U;
 constexpr u32   kSeenResetStreamAt = 20U;
 constexpr u32 kSeenReceiveTimes = 21U;
 constexpr u32 kSeenReceiveExponent = 22U;
+constexpr u32 kSeenAddressDiscovery = 23U;
 constexpr u32 kNotRead = 64U;
 
 bool equal_bytes(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
@@ -192,7 +193,7 @@ bool writable(const QuicTransportParameters& p, crypto::QuicSide side) noexcept
     if (!varints_in_range(p) || p.max_udp_payload_size < kQuicMinMaxUdpPayload ||
         p.ack_delay_exponent > kQuicMaxAckDelayExponent || p.max_ack_delay >= kQuicMaxAckDelayLimit ||
         p.receive_timestamps_exponent > kQuicMaxReceiveTimestampsExponent ||
-        p.active_connection_id_limit < kQuicDefaultActiveIdLimit || p.initial_max_streams_bidi > kQuicMaxStreams ||
+        p.address_discovery > QuicAddressDiscovery::Both || p.active_connection_id_limit < kQuicDefaultActiveIdLimit || p.initial_max_streams_bidi > kQuicMaxStreams ||
         p.initial_max_streams_uni > kQuicMaxStreams)
     {
         return false;
@@ -303,6 +304,10 @@ void emit(const QuicTransportParameters& p, QuicTransportParameterGrease grease,
         {
             out.varint(iana::kQuicTpReceiveTimestampsExponent, p.receive_timestamps_exponent);
         }
+    }
+    if (p.address_discovery != QuicAddressDiscovery::Off)
+    {
+        out.varint(iana::kQuicTpAddressDiscovery, static_cast<u64>(p.address_discovery) - 1U);
     }
 
     // The reserved parameter: N below (2^62 - 1 - 27) / 31, so the identifier is a varint; its value is up to eight
@@ -420,6 +425,10 @@ u32 seen_bit(u64 id) noexcept
     {
         return kSeenReceiveExponent;
     }
+    if (id == iana::kQuicTpAddressDiscovery)
+    {
+        return kSeenAddressDiscovery;
+    }
     if (id == iana::kQuicTpVersionInformation)
     {
         return kSeenVersionInfo;
@@ -458,6 +467,17 @@ bool read_known(u64 id, cont::ConstSpan<u8> value, crypto::QuicSide side, QuicTr
     if (id == iana::kQuicTpReceiveTimestampsExponent)
     {
         return read_exact_varint(value, p.receive_timestamps_exponent); // bounded once the maximum is known
+    }
+    if (id == iana::kQuicTpAddressDiscovery)
+    {
+        // Section 3 of the draft: 0, 1 or 2; any other value is TRANSPORT_PARAMETER_ERROR.
+        u64 mode = 0U;
+        if (!read_exact_varint(value, mode) || mode > static_cast<u64>(QuicAddressDiscovery::Both) - 1U)
+        {
+            return false;
+        }
+        p.address_discovery = static_cast<QuicAddressDiscovery>(mode + 1U);
+        return true;
     }
     if (id == iana::kQuicTpVersionInformation)
     {
@@ -665,7 +685,7 @@ u32 quic_server_select_version(const QuicTransportParameters& client, u32 origin
 
 usize write_quic_early_parameters(const QuicTransportParameters& server, cont::Span<u8> out) noexcept
 {
-    static constexpr u8 kFormat = 2U; // this encoding's revision: a ticket of another one meets another context
+    static constexpr u8 kFormat = 3U; // this encoding's revision: a ticket of another one meets another context
     if (out.size() < kQuicEarlyParameterBytes)
     {
         return 0U;
@@ -681,7 +701,8 @@ usize write_quic_early_parameters(const QuicTransportParameters& server, cont::S
                           server.max_idle_timeout,
                           server.max_udp_payload_size,
                           server.disable_active_migration ? 1U : 0U,
-                          server.reset_stream_at ? 1U : 0U};
+                          server.reset_stream_at ? 1U : 0U,
+                          static_cast<u64>(server.address_discovery)};
     static_assert(1U + (sizeof(values) / sizeof(values[0])) * 8U == kQuicEarlyParameterBytes);
     cont::WireWriter writer(out.first(kQuicEarlyParameterBytes));
     writer.put_u8(kFormat);
@@ -703,7 +724,8 @@ QuicTransportError quic_check_remembered_parameters(const QuicTransportParameter
                       accepted.initial_max_streams_uni >= remembered.initial_max_streams_uni &&
                       accepted.active_connection_id_limit >= remembered.active_connection_id_limit &&
                       accepted.max_datagram_frame_size >= remembered.max_datagram_frame_size &&
-                      (accepted.reset_stream_at || !remembered.reset_stream_at);
+                      (accepted.reset_stream_at || !remembered.reset_stream_at) &&
+                      accepted.address_discovery == remembered.address_discovery;
     return kept ? QuicTransportError::NoError : QuicTransportError::ProtocolViolation;
 }
 

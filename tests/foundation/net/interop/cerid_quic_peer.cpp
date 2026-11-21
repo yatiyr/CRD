@@ -36,6 +36,7 @@
 //   preferred    a server also binds a second socket and offers it as its preferred address (section 9.6)
 //   follow-preferred  0: a client stays on the server's handshake address (follow_preferred_address off)
 //   disable-migration  a server sends disable_active_migration (section 18.2)
+//   address-discovery  off (the default), provide, receive or both: draft-ietf-quic-address-discovery-01's parameter
 //   http3        HTTP/3 over Http3Connection instead of the echo: http_exchange.h has its options, ALPN `h3` instead
 //   webtransport WebTransport sessions instead, `legacy` or `h3`: interop_webtransport.hpp has its options
 //   transport    h3: WebSocket tunnels (RFC 9220) on one HTTP/3 connection instead, `connections` of them at once,
@@ -56,8 +57,9 @@
 // others). This end's first socket's port (`first_port`), and the path the connection ended on: the socket
 // (`path_socket`, 0 the first) and its port (`path_local_port`), the peer's address and port there
 // (`path_peer_address`, `path_peer_port`), whether datagrams moved to the server's preferred address (`preferred`), a
-// client's last migrate() answer (`migration`: none, started, disabled, ...), and a server's preferred port
-// (`preferred_port`, 0 for none). The application is `cerid-interop`, a private ALPN.
+// client's last migrate() answer (`migration`: none, started, disabled, ...), a server's preferred port
+// (`preferred_port`, 0 for none), and the address the peer last reported seeing this end at on that path
+// (`observed`, `none` before any report). The application is `cerid-interop`, a private ALPN.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -133,6 +135,7 @@ struct Options : QmuxOptions
     bool preferred = false;
     bool follow_preferred = true;
     bool disable_migration = false;
+    QuicAddressDiscovery discovery = QuicAddressDiscovery::Off;
     httpx_options_t http3;
     WtOptions wt;
 };
@@ -349,6 +352,7 @@ const char* migration_name(QuicMigration migration) noexcept
 
 // The controllers (congestion.hpp) by --congestion's names, in CongestionAlgorithm's order.
 constexpr const char* kCongestionNames[] = {"newreno", "cubic", "bbr", "prague"};
+constexpr const char* kDiscoveryNames[] = {"off", "provide", "receive", "both"}; // QuicAddressDiscovery's order
 
 const char* congestion_name(CongestionAlgorithm algorithm) noexcept
 {
@@ -362,6 +366,19 @@ bool congestion_named(const char* name, CongestionAlgorithm& algorithm) noexcept
         if (std::strcmp(name, kCongestionNames[at]) == 0)
         {
             algorithm = static_cast<CongestionAlgorithm>(at);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool discovery_named(const char* name, QuicAddressDiscovery& mode) noexcept
+{
+    for (unsigned at = 0U; at < sizeof(kDiscoveryNames) / sizeof(kDiscoveryNames[0]); ++at)
+    {
+        if (std::strcmp(name, kDiscoveryNames[at]) == 0)
+        {
+            mode = static_cast<QuicAddressDiscovery>(at);
             return true;
         }
     }
@@ -438,6 +455,10 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
                 peer_address[1], peer_address[2], peer_address[3], static_cast<unsigned>(active.peer.port),
                 connection.on_preferred_address() ? 1 : 0, g_migration != nullptr ? g_migration : "none",
                 static_cast<unsigned>(g_options->preferred ? g_local_ports[1] : 0U));
+    char observed[kMaxEndpointText + 1U] = {};
+    const Endpoint& seen = connection.observed_address();
+    const usize written = (seen.port != 0U) ? format_endpoint(seen, Span<char>(observed, kMaxEndpointText)) : 0U;
+    std::printf("observed=%s\n", (written != 0U) ? observed : "none");
     std::fflush(stdout);
     peer.ended(handle);
 }
@@ -543,6 +564,7 @@ QuicConnectionConfig connection_config(const Options& options, const TlsContext&
     config.datagrams = datagram_limits(options);
     config.key_update_interval = options.key_update;
     config.congestion.algorithm = options.congestion;
+    config.parameters.address_discovery = options.discovery;
     return config;
 }
 
@@ -747,7 +769,8 @@ int usage()
                "[--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] "
                "[--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] "
                "[--progress-at N] [--receive-bytes N] [--congestion newreno|cubic|bbr|prague] [--migrate-at N] "
-               "[--preferred 1] [--follow-preferred 0] [--disable-migration 1] [--http3 1 ...] "
+               "[--preferred 1] [--follow-preferred 0] [--disable-migration 1] "
+               "[--address-discovery off|provide|receive|both] [--http3 1 ...] "
                "[--webtransport legacy|h3 ...] "
                "[--transport h3 --alpn NAME [--idle-ms N] [--keepalive-ms N]]\n",
                stderr);
@@ -820,6 +843,13 @@ int main(int argc, char** argv)
         else if (std::strcmp(name, "--congestion") == 0)
         {
             if (!congestion_named(value, options.congestion))
+            {
+                return usage();
+            }
+        }
+        else if (std::strcmp(name, "--address-discovery") == 0)
+        {
+            if (!discovery_named(value, options.discovery))
             {
                 return usage();
             }

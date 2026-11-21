@@ -291,6 +291,7 @@ void check_parameters(ConstSpan<u8> bytes, u8 control, u64 entropy)
         again.grease_quic_bit == write.grease_quic_bit &&
         again.max_receive_timestamps_per_ack == write.max_receive_timestamps_per_ack &&
         again.receive_timestamps_exponent == write.receive_timestamps_exponent &&
+        again.address_discovery == write.address_discovery &&
         again.disable_active_migration == write.disable_active_migration);
     CRD_FUZZ_REQUIRE(same(again.initial_source_connection_id.view(), write.initial_source_connection_id.view()) &&
                      again.has_preferred_address == write.has_preferred_address &&
@@ -385,6 +386,18 @@ usize frames_payload(u8* out, usize capacity)
     frame.frame_type = 0x06U;
     frame.data = ConstSpan<u8>(kData, 3U);
     put(frame);
+    static const u8 kV4[4] = {198, 51, 100, 7};
+    static const u8 kV6[16] = {0x20, 0x01, 0x0D, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+    frame = QuicFrame{};
+    frame.kind = QuicFrameKind::ObservedAddress;
+    frame.sequence = 3U;
+    frame.data = ConstSpan<u8>(kV4, 4U);
+    frame.value = 50000U;
+    put(frame);
+    frame.sequence = 4U;
+    frame.data = ConstSpan<u8>(kV6, 16U);
+    frame.value = 443U;
+    put(frame);
     frame = QuicFrame{};
     frame.kind = QuicFrameKind::Datagram;
     frame.data = ConstSpan<u8>(kData, 5U);
@@ -431,6 +444,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     server.grease_quic_bit = true;
     server.max_receive_timestamps_per_ack = 8U;
     server.receive_timestamps_exponent = 3U;
+    server.address_discovery = QuicAddressDiscovery::Both;
     server.disable_active_migration = true;
     server.has_version_information = true;
     server.version_information.chosen = iana::kQuicVersion2;

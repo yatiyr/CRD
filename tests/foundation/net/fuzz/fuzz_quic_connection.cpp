@@ -14,8 +14,10 @@
 //      [length][bytes] to a fresh server.
 //   3  frames from a raw peer of the raw UDP path: its hello, then each [length][bytes] sealed as one 1-RTT packet.
 // With bit 5 mode 0 runs the raw UDP path (S55): both ends opened from one secret, no handshake on the wire. With
-// bit 6 every connection asks for four receive timestamps an ACK frame (draft-ietf-quic-receive-ts-03), so the pair
-// reports them and a raw peer's ACK_RECEIVE_TIMESTAMPS frames are read. With bit 7 mode 0 runs over paths (S75): each
+// bit 6 every connection runs the NET-STD drafts: it asks for four receive timestamps an ACK frame
+// (draft-ietf-quic-receive-ts-03), so the pair reports them and a raw peer's ACK_RECEIVE_TIMESTAMPS frames are read,
+// and offers and asks for address reports (draft-ietf-quic-address-discovery-01), so a raw peer's OBSERVED_ADDRESS
+// frames are taken. With bit 7 mode 0 runs over paths (S75): each
 // client datagram reaches the server from the client's address when it left, a server datagram reaches the client
 // only when sent to its address now, a script byte 0xFC moves the client to the next of four addresses (a NAT
 // rebinding, an address change, an IPv6 address, back) and 0xFB delivers a copy of the first client datagram in
@@ -286,11 +288,11 @@ void open_keyed(QuicConnection& end, u64 now)
     CRD_FUZZ_REQUIRE(end.open_keyed(start, now));
 }
 
-// The receive timestamps every connection of this input asks for (byte 0's bit 6).
-u64& receive_timestamps()
+// Whether every connection of this input runs the NET-STD drafts (byte 0's bit 6).
+bool& extensions()
 {
-    static u64 asked = 0U;
-    return asked;
+    static bool on = false;
+    return on;
 }
 
 // With `switching` the client lists its version first and the server the other one; with `tickets` both ends run
@@ -307,7 +309,8 @@ QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnecti
     }
     config.ids = ids;
     config.parameters.active_connection_id_limit = 4U;
-    config.parameters.max_receive_timestamps_per_ack = receive_timestamps();
+    config.parameters.max_receive_timestamps_per_ack = extensions() ? 4U : 0U;
+    config.parameters.address_discovery = extensions() ? QuicAddressDiscovery::Both : QuicAddressDiscovery::Off;
     config.version = version;
     config.tls = (side == QuicSide::Client) ? &identity().client : &identity().server;
     if (keyed)
@@ -747,6 +750,36 @@ constexpr u64 kTransferBytes = 5000U; // more than every stream and connection w
 
 // After the script, a confirmed pair carries a stream of more than every window over the clean path: each byte the
 // server reads is the byte written, and all of it arrives with the FIN, or one side has closed.
+// Address reports (draft-ietf-quic-address-discovery-01): none arrives unasked, and every report a path holds names an
+// address the other end has (a client's addresses, the server's two), as each end saw it.
+void check_observations(const Pair& pair)
+{
+    const auto client_address = [](const Endpoint& at)
+    {
+        bool known = at.port == 0U;
+        for (const QuicPath& path : kClientPaths)
+        {
+            known = known || at == path.peer;
+        }
+        return known;
+    };
+    for (usize index = 0U; index < kQuicMaxPaths; ++index)
+    {
+        if (pair.client.paths().used(index))
+        {
+            const Endpoint& seen = pair.client.paths().observed(index);
+            CRD_FUZZ_REQUIRE(client_address(seen));
+        }
+        if (pair.server.paths().used(index))
+        {
+            const Endpoint& seen = pair.server.paths().observed(index);
+            CRD_FUZZ_REQUIRE(seen.port == 0U || seen == kServerAddress || seen == kPreferredAddress);
+        }
+    }
+    CRD_FUZZ_REQUIRE(extensions() || (pair.client.counters().address_observations == 0U &&
+                                      pair.server.counters().address_observations == 0U));
+}
+
 void transfer(Pair& pair)
 {
     QuicStreamSet& client = pair.client.streams();
@@ -1229,6 +1262,7 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             pair.settle(1U);
             CRD_FUZZ_REQUIRE(pair.server.path().peer == kClientPaths[pair.address_of(pair.client.path().socket)].peer);
         }
+        check_observations(pair);
         exchange_datagrams(pair, offered ? 1U : 0U);
         stateless_reset(pair);
     }
@@ -1496,7 +1530,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     const QuicVersion version = ((data[0] & 4U) != 0U) ? QuicVersion::V2 : QuicVersion::V1;
     const ConstSpan<u8> rest(data + 1U, size - 1U);
     const bool keyed = (data[0] & 32U) != 0U;
-    receive_timestamps() = ((data[0] & 64U) != 0U) ? 4U : 0U;
+    extensions() = (data[0] & 64U) != 0U;
     over_paths() = (data[0] & 128U) != 0U;
     switch (data[0] & 3U)
     {
@@ -1555,6 +1589,12 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     const u8 timed_frame[] = {0x41U, 0x0CU, 0x83U, 0x17U, 0x83U, 0x07U, 0x00U,
                               0x00U, 0x00U, 0x00U, 0x01U, 0x00U, 0x01U, 0x05U};
     sink.add("frames-receive-timestamps", timed_frame, sizeof(timed_frame));
+    // Address reports over paths that rebind and change address, and a raw client's OBSERVED_ADDRESS (IPv4, port 50000).
+    const u8 reported[] = {0xC0U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x07U, 0x07U, 0xFCU, 0x07U,
+                           0x00U, 0x07U, 0x00U, 0x07U, 0xFCU, 0x07U, 0x00U, 0xFBU, 0x07U, 0x00U, 0x07U, 0x00U};
+    sink.add("script-address-discovery", reported, sizeof(reported));
+    const u8 observed[] = {0x41U, 0x0BU, 0x80U, 0x9FU, 0x81U, 0xA6U, 0x00U, 0xC6U, 0x33U, 0x64U, 0x07U, 0xC3U, 0x50U};
+    sink.add("frames-observed-address", observed, sizeof(observed));
     // A Retry in place of the first flight: the client goes again to its ID with its token.
     const u8 retried[] = {0x00U, 0xFDU, 0x00U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U};
     sink.add("script-retry", retried, sizeof(retried));

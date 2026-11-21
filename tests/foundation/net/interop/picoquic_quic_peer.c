@@ -3,7 +3,7 @@
  * reads both reports.
  *
  * Usage: crd-picoquic-quic-peer --role client|server --port N --seed HEX --version 1|2 --streams N --bytes N
- *                               --code N [--cc prague|cubic|newreno|bbr]
+ *                               --code N [--cc prague|cubic|newreno|bbr] [--address-discovery off|provide|receive|both]
  *
  *   port     a server's to bind on 127.0.0.1 (0: any, printed as `port=N`), a client's to reach
  *   seed     the 32-byte Ed25519 private key of the server's self-signed credential; a client pins its public key and
@@ -15,6 +15,8 @@
  *   cc       picoquic's own controller (prague.c, cubic.c, newreno.c, bbr.c; Prague by default). The socket marks every
  *            datagram with the codepoint that controller asks for, ECT(1) for Prague and ECT(0) for the others, as
  *            picoquic's own packet loop does (sockloop.c)
+ *   address-discovery  what this end offers of draft-ietf-quic-address-discovery-01 (off by default): reports of the
+ *            addresses it sees, reports of its own, or both (picoquic's address_discovery_mode 1, 2 and 3)
  *
  * The loop is picoquic's API over its own socket helpers (picosocks.h: ECN and the destination address read from
  * each datagram's control data), driven here so that a server binds port 0 and reports it and each end stops when its
@@ -24,8 +26,9 @@
  * (`congestion`) and the codepoint it marks (`ecn_mark`), the codepoints of the packets read (`ecn_received_ect0`,
  * `_ect1`, `_ce`) and those the peer's ACK frames reported of this end's (`ecn_acked_ect0`, `_ect1`, `_ce`), the
  * window when the connection ended (`cwin`), the packets declared lost (`losses`), the path MTU picoquic's search
- * reached (`pmtu`) and the peer's max_udp_payload_size (`peer_max_udp_payload`). The application is `cerid-interop`,
- * a private ALPN. */
+ * reached (`pmtu`), the peer's max_udp_payload_size (`peer_max_udp_payload`), this end's port (`local_port`) and the
+ * address its peer last reported seeing it at (`observed`, `none` before any report). The application is
+ * `cerid-interop`, a private ALPN. */
 #define _GNU_SOURCE /* ppoll */
 #include "openssl_self_signed.h"
 #include "http_exchange.h"
@@ -83,6 +86,7 @@ typedef struct
     uint64_t losses;
     uint64_t pmtu;
     uint64_t peer_max_udp_payload;
+    char     observed[64]; /* "a.b.c.d:port", or "none" */
 } snapshot_t;
 
 typedef struct
@@ -358,9 +362,22 @@ static void take_snapshot(peer_t* peer, picoquic_cnx_t* cnx)
     out->losses          = cnx->nb_retransmission_total;
     out->pmtu            = cnx->path[0]->send_mtu;
     out->peer_max_udp_payload = cnx->remote_parameters_received ? cnx->remote_parameters.max_packet_size : 0U;
+    struct sockaddr_storage observed;
+    memset(&observed, 0, sizeof(observed));
+    const struct sockaddr_in* v4 = (const struct sockaddr_in*)&observed;
+    char text[INET_ADDRSTRLEN] = "";
+    if (picoquic_get_path_addr(cnx, 0U, 3, &observed) == 0 && observed.ss_family == AF_INET &&
+        inet_ntop(AF_INET, &v4->sin_addr, text, sizeof(text)) != NULL)
+    {
+        (void)snprintf(out->observed, sizeof(out->observed), "%s:%u", text, (unsigned)ntohs(v4->sin_port));
+    }
+    else
+    {
+        (void)snprintf(out->observed, sizeof(out->observed), "none");
+    }
 }
 
-static void report(const peer_t* peer)
+static void report(const peer_t* peer, uint16_t local_port)
 {
     static const char* const codepoints[4] = {"not-ect", "ect1", "ect0", "ce"};
     const snapshot_t*        s             = &peer->snapshot;
@@ -378,6 +395,7 @@ static void report(const peer_t* peer)
            (unsigned long long)s->ecn_acked[1], (unsigned long long)s->ecn_acked[2]);
     printf("cwin=%llu\nlosses=%llu\npmtu=%llu\npeer_max_udp_payload=%llu\n", (unsigned long long)s->cwin,
            (unsigned long long)s->losses, (unsigned long long)s->pmtu, (unsigned long long)s->peer_max_udp_payload);
+    printf("local_port=%u\nobserved=%s\n", (unsigned)local_port, s->observed[0] != '\0' ? s->observed : "none");
     fflush(stdout);
 }
 
@@ -485,7 +503,7 @@ static int parse_seed(const char* text, unsigned char* out)
 static int usage(void)
 {
     fputs("usage: crd-picoquic-quic-peer --role client|server --port N --seed HEX --version 1|2 --streams N --bytes N "
-          "--code N [--cc prague|cubic|newreno|bbr]\n",
+          "--code N [--cc prague|cubic|newreno|bbr] [--address-discovery off|provide|receive|both]\n",
           stderr);
     return 2;
 }
@@ -498,6 +516,7 @@ int main(int argc, char** argv)
     const char*   cc      = "prague";
     unsigned long port    = 0UL;
     unsigned long version = 1UL;
+    int           discovery = 0;
     for (int at = 1; at + 1 < argc; at += 2)
     {
         const char* name  = argv[at];
@@ -534,6 +553,19 @@ int main(int argc, char** argv)
         {
             cc = value;
         }
+        else if (strcmp(name, "--address-discovery") == 0)
+        {
+            static const char* const modes[4] = {"off", "provide", "receive", "both"};
+            discovery = -1;
+            for (int mode = 0; mode < 4; ++mode)
+            {
+                discovery = (strcmp(value, modes[mode]) == 0) ? mode : discovery;
+            }
+            if (discovery < 0)
+            {
+                return usage();
+            }
+        }
         else
         {
             return usage();
@@ -567,6 +599,7 @@ int main(int argc, char** argv)
         fputs("crd-picoquic-quic-peer: no picoquic context\n", stderr);
         return 1;
     }
+    picoquic_set_default_address_discovery_mode(quic, discovery);
     if (peer.client)
     {
         peer.pin.super.cb    = verify_certificate;
@@ -617,7 +650,7 @@ int main(int argc, char** argv)
         fflush(stdout);
     }
     const int timed_out = run(&peer, quic, fd, ntohs(local.sin_port));
-    report(&peer);
+    report(&peer, ntohs(local.sin_port));
     picoquic_free(quic);
     (void)close(fd);
     return timed_out;

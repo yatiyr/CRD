@@ -1,8 +1,9 @@
 #pragma once
 
 // crd-net -- QUIC frames (4.2a; contract: docs/design/network-foundation.md#quic-frames). Sources: RFC 9000 sections
-// 12.4, 19 and 20.1, RFC 9221 section 4 (DATAGRAM), RFC 9368 section 10.2 (VERSION_NEGOTIATION_ERROR) and
-// draft-ietf-quic-receive-ts-03 section 4 (ACK_RECEIVE_TIMESTAMPS).
+// 12.4, 19 and 20.1, RFC 9221 section 4 (DATAGRAM), RFC 9368 section 10.2 (VERSION_NEGOTIATION_ERROR),
+// draft-ietf-quic-receive-ts-03 section 4 (ACK_RECEIVE_TIMESTAMPS) and draft-ietf-quic-address-discovery-01 section 4
+// (OBSERVED_ADDRESS).
 //
 //   reading   read_quic_frame takes one frame from a decrypted payload and returns the transport error that closes the
 //             connection when it is malformed (FRAME_ENCODING_ERROR, or PROTOCOL_VIOLATION for a frame type in a
@@ -51,7 +52,8 @@ enum class QuicTransportError : u64
 // ---- Frame types ----
 
 // The kinds of frame this module reads and writes; a kind covers every wire type of its family (the eight STREAM
-// types, both ACK and both ACK_RECEIVE_TIMESTAMPS, MAX_STREAMS, STREAMS_BLOCKED, CONNECTION_CLOSE and DATAGRAM types).
+// types, both ACK and both ACK_RECEIVE_TIMESTAMPS, MAX_STREAMS, STREAMS_BLOCKED, CONNECTION_CLOSE, DATAGRAM and
+// OBSERVED_ADDRESS types).
 enum class QuicFrameKind : u8
 {
     Padding,
@@ -76,6 +78,7 @@ enum class QuicFrameKind : u8
     ConnectionClose,
     HandshakeDone,
     Datagram,
+    ObservedAddress,
 };
 
 inline constexpr u64   kQuicMaxStreams         = u64{1} << 60U; // MAX_STREAMS and STREAMS_BLOCKED (section 19.11)
@@ -87,15 +90,17 @@ inline constexpr u8    kQuicStreamBitLength    = 0x02U;
 inline constexpr u8    kQuicStreamBitOffset    = 0x04U;
 
 // What a frame does to its packet (section 12.4 and RFC 9002 section 2): an ACK, PADDING or CONNECTION_CLOSE frame
-// elicits no acknowledgement; an ACK is not congestion controlled; PADDING, NEW_CONNECTION_ID, PATH_CHALLENGE and
-// PATH_RESPONSE are probing frames (section 9.1); STREAM frames are flow controlled.
+// elicits no acknowledgement; an ACK is not congestion controlled; PADDING, NEW_CONNECTION_ID, PATH_CHALLENGE,
+// PATH_RESPONSE and OBSERVED_ADDRESS (draft-ietf-quic-address-discovery-01 section 4.1) are probing frames (section
+// 9.1); STREAM frames are flow controlled.
 [[nodiscard]] bool quic_frame_ack_eliciting(QuicFrameKind kind) noexcept;
 [[nodiscard]] bool quic_frame_congestion_controlled(QuicFrameKind kind) noexcept;
 [[nodiscard]] bool quic_frame_probing(QuicFrameKind kind) noexcept;
 
 // Whether `kind` (with `application_close` for CONNECTION_CLOSE's type 0x1d) may arrive in a packet of `packet` from
 // a server (`from_server`) or a client (section 12.4 table 3 and sections 19.7 and 19.20: only a server sends
-// NEW_TOKEN and HANDSHAKE_DONE; RFC 9221: DATAGRAM in 0-RTT and 1-RTT). Initial and Handshake packets carry PADDING,
+// NEW_TOKEN and HANDSHAKE_DONE; RFC 9221: DATAGRAM, and the address discovery draft: OBSERVED_ADDRESS, in 0-RTT and
+// 1-RTT). Initial and Handshake packets carry PADDING,
 // PING, ACK, CRYPTO and the transport CONNECTION_CLOSE; 0-RTT packets carry neither ACK, CRYPTO, NEW_TOKEN,
 // PATH_RESPONSE nor HANDSHAKE_DONE (and only clients send them); 1-RTT packets carry every frame. Version
 // Negotiation, Retry and other versions carry none.
@@ -162,6 +167,7 @@ struct QuicAck
 //   PathResponse       data (kQuicPathDataBytes)
 //   ConnectionClose    application (type 0x1d), error_code, frame_type (0x1c only), data (the reason phrase)
 //   Datagram           data, to_end
+//   ObservedAddress    sequence, data (the address: 4 bytes for IPv4, 16 for IPv6, in network order), value (the port)
 // `to_end` is a STREAM or DATAGRAM frame without its Length field, whose data runs to the end of the packet: what
 // read_quic_frame reports, and what a writer chooses for a packet's last frame.
 struct QuicFrame
@@ -227,7 +233,8 @@ private:
 
 // The bytes write_quic_frame writes for `frame`; 0 for a frame it refuses (an Ack, a field above kQuicMaxVarint or
 // above its section 19 bound, a NEW_CONNECTION_ID without a 1- to 20-byte ID and a 16-byte token, path data not 8
-// bytes, an empty NEW_TOKEN token, a STREAM or CRYPTO frame whose end passes 2^62 - 1, an empty PADDING frame).
+// bytes, an empty NEW_TOKEN token, a STREAM or CRYPTO frame whose end passes 2^62 - 1, an empty PADDING frame, an
+// OBSERVED_ADDRESS whose address is neither 4 nor 16 bytes or whose port passes 65535).
 [[nodiscard]] usize quic_frame_bytes(const QuicFrame& frame) noexcept;
 
 // Writes `frame` at the start of `out` and returns its bytes; 0, writing nothing, when it is refused or does not fit.

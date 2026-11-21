@@ -19,6 +19,9 @@
 //               address only; validation goes on with an expanded one (section 8.2.3), and a path whose expanded
 //               challenge is never answered fails as any.
 //   responses   each path holds the latest challenge received on it, answered once and only there (section 8.2.2).
+//   observations  draft-ietf-quic-address-discovery-01: each path owes the peer an OBSERVED_ADDRESS from the moment it
+//               joins, and again when the one sent there is lost, and holds the newest report the peer sent on it
+//               (section 4.1: an older or equal sequence is ignored).
 //   time        integer state and the caller's clock alone.
 
 #include <crd/containers/span.hpp>
@@ -32,6 +35,7 @@ namespace crd::net
 inline constexpr usize kQuicMaxPaths = 4U;
 inline constexpr usize kQuicNoPath = kQuicMaxPaths;
 inline constexpr usize kQuicPathChallengesKept = 4U; // per path: a response to an older one is late and ignored
+inline constexpr u64 kQuicNoObservation = ~u64{0};   // no OBSERVED_ADDRESS sequence
 
 // A path as the host names it: the socket it sends through (0 for the one the connection opened on) and the peer's
 // address there. Port 0 is a path not yet bound (a keyed server's slot before its first packet).
@@ -125,6 +129,19 @@ public:
     }
     void response_sent(usize index) noexcept { m_slots[index].response_owed = false; }
 
+    // ---- Address observations ----
+
+    // Whether `index` still owes the peer the address seen there.
+    [[nodiscard]] bool observation_owed(usize index) const noexcept { return m_slots[index].observation_owed; }
+    // One went there with `sequence`.
+    void observation_sent(usize index, u64 sequence) noexcept;
+    // The one of `sequence` was lost: owed again when it is the latest sent there (a reused slot's is not).
+    void observation_lost(usize index, u64 sequence) noexcept;
+    // The peer's report of `sequence` on `index`: false, changing nothing, unless it is newer than the one held.
+    [[nodiscard]] bool on_observed(usize index, u64 sequence, const Endpoint& observed) noexcept;
+    // The newest report on `index`; port 0 for none.
+    [[nodiscard]] const Endpoint& observed(usize index) const noexcept { return m_slots[index].observed; }
+
     // ---- The connection's own bookkeeping, kept on the path ----
 
     // The peer's connection ID (its sequence) this side sends to on the path, and this side's the peer last sent to.
@@ -158,6 +175,10 @@ private:
         bool validated = false;
         bool proven = false; // carries 1200-byte datagrams
         bool response_owed = false;
+        bool observation_owed = true;
+        u64 observation_sequence = kQuicNoObservation; // the latest sent there
+        u64 observed_sequence = kQuicNoObservation;    // the newest the peer sent there
+        Endpoint observed;
     };
 
     Slot m_slots[kQuicMaxPaths];

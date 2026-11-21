@@ -1624,9 +1624,10 @@
       "id": "quic.address-discovery",
       "title": "QUIC address discovery",
       "kind": "extension",
-      "state": "watch",
+      "state": "implemented",
       "owner": "net",
       "rows": [
+        "NET-PATH",
         "NET-REACH"
       ],
       "spec": {
@@ -1637,14 +1638,40 @@
         "posted": "2026-08-15"
       },
       "cryptography": [],
+      "codepoints": [
+        {
+          "registry": "QUIC Transport Parameters",
+          "name": "address_discovery",
+          "value": "0x9f81a176"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "observed_address_v4",
+          "value": "0x9f81a6"
+        },
+        {
+          "registry": "QUIC Frame Types",
+          "name": "observed_address_v6",
+          "value": "0x9f81a7"
+        }
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n06",
         "read": "2026-10-27",
         "verified": true
       },
       "review": "2026-12-15",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "engine/foundation/net/src/quic_connection.cpp",
+        "tests/foundation/net/test_quic_frame.cpp",
+        "tests/foundation/net/test_quic_transport_parameters.cpp",
+        "tests/foundation/net/test_quic_connection.cpp",
+        "tests/foundation/net/fuzz/fuzz_quic_codec.cpp",
+        "tests/foundation/net/fuzz/fuzz_quic_connection.cpp",
+        "tests/foundation/net/interop/picoquic_interop.py"
+      ],
+      "deprecation": null,
+      "note": "Design S77 (docs/design/network-foundation.md#address-discovery): OBSERVED_ADDRESS on every path, behind a connection's address_discovery parameter (absent by default). Draft -01 read in full (2026-11-21); proven against picoquic v2026.11.08 in both roles, the one pinned peer that implements it. Temporary draft codepoints: a renumbering is this one entry."
     },
     {
       "id": "quic.ack-frequency",

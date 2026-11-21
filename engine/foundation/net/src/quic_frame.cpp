@@ -38,6 +38,11 @@ constexpr u64 kTypeCloseApplication   = 0x1DU;
 constexpr u64 kTypeHandshakeDone      = 0x1EU;
 constexpr u64 kTypeDatagram           = 0x30U; // RFC 9221: data to the end of the packet
 constexpr u64 kTypeDatagramLength     = 0x31U; // RFC 9221: with a Length field
+constexpr u64 kTypeObservedV4 = iana::kQuicFrameObservedAddressV4;
+constexpr u64 kTypeObservedV6 = iana::kQuicFrameObservedAddressV6;
+constexpr usize kIpv4Bytes = 4U;
+constexpr usize kIpv6Bytes = 16U;
+constexpr u64 kMaxPort = 0xFFFFU;
 
 // Takes a varint length field and that many bytes.
 bool take_length_bytes(cont::WireReader& in, cont::ConstSpan<u8>& out) noexcept
@@ -321,6 +326,18 @@ QuicTransportError read_body(cont::WireReader& in, u64 type, QuicFrame& frame) n
         frame.kind = QuicFrameKind::Datagram;
         return take_length_bytes(in, frame.data) ? QuicTransportError::NoError
                                                  : QuicTransportError::FrameEncodingError;
+    case kTypeObservedV4:
+    case kTypeObservedV6:
+    {
+        // The type's least significant bit names the family (draft-ietf-quic-address-discovery-01 section 4.1).
+        frame.kind = QuicFrameKind::ObservedAddress;
+        u16 port = 0U;
+        const bool read = take_quic_varint(in, frame.sequence) &&
+                          in.take_bytes((type == kTypeObservedV4) ? kIpv4Bytes : kIpv6Bytes, frame.data) &&
+                          in.take_u16(port);
+        frame.value = port;
+        return read ? QuicTransportError::NoError : QuicTransportError::FrameEncodingError;
+    }
     default:
         return QuicTransportError::FrameEncodingError; // section 12.4: an unknown frame type
     }
@@ -376,6 +393,8 @@ u64 wire_type(const QuicFrame& frame) noexcept
         return kTypeHandshakeDone;
     case QuicFrameKind::Datagram:
         return frame.to_end ? kTypeDatagram : kTypeDatagramLength;
+    case QuicFrameKind::ObservedAddress:
+        return (frame.data.size() == kIpv4Bytes) ? kTypeObservedV4 : kTypeObservedV6;
     }
     return kTypePadding;
 }
@@ -437,6 +456,10 @@ bool add_body(const QuicFrame& frame, usize& total) noexcept
     case QuicFrameKind::Datagram:
         total += data;
         return frame.to_end || add_varint(total, data);
+    case QuicFrameKind::ObservedAddress:
+        total += data + sizeof(u16);
+        return (data == kIpv4Bytes || data == kIpv6Bytes) && frame.value <= kMaxPort &&
+               add_varint(total, frame.sequence);
     }
     return false;
 }
@@ -526,6 +549,11 @@ void write_body(const QuicFrame& frame, cont::WireWriter& out) noexcept
             put_quic_varint(out, frame.data.size());
         }
         out.put_bytes(frame.data);
+        break;
+    case QuicFrameKind::ObservedAddress:
+        put_quic_varint(out, frame.sequence);
+        out.put_bytes(frame.data);
+        out.put_u16(static_cast<u16>(frame.value));
         break;
     }
 }
@@ -634,7 +662,8 @@ bool quic_frame_congestion_controlled(QuicFrameKind kind) noexcept
 bool quic_frame_probing(QuicFrameKind kind) noexcept
 {
     return kind == QuicFrameKind::Padding || kind == QuicFrameKind::NewConnectionId ||
-           kind == QuicFrameKind::PathChallenge || kind == QuicFrameKind::PathResponse;
+           kind == QuicFrameKind::PathChallenge || kind == QuicFrameKind::PathResponse ||
+           kind == QuicFrameKind::ObservedAddress;
 }
 
 bool quic_frame_allowed(QuicFrameKind kind, bool application_close, QuicPacketType packet, bool from_server) noexcept

@@ -87,6 +87,30 @@ void QuicPaths::drop(usize index) noexcept
     m_fallback = (m_fallback == index) ? kQuicNoPath : m_fallback;
 }
 
+void QuicPaths::observation_sent(usize index, u64 sequence) noexcept
+{
+    m_slots[index].observation_owed = false;
+    m_slots[index].observation_sequence = sequence;
+}
+
+void QuicPaths::observation_lost(usize index, u64 sequence) noexcept
+{
+    Slot& slot = m_slots[index];
+    slot.observation_owed = slot.observation_owed || (slot.used && slot.observation_sequence == sequence);
+}
+
+bool QuicPaths::on_observed(usize index, u64 sequence, const Endpoint& observed) noexcept
+{
+    Slot& slot = m_slots[index];
+    if (slot.observed_sequence != kQuicNoObservation && sequence <= slot.observed_sequence)
+    {
+        return false;
+    }
+    slot.observed_sequence = sequence;
+    slot.observed = observed;
+    return true;
+}
+
 void QuicPaths::bind(const QuicPath& path) noexcept
 {
     m_slots[m_active].path = path;

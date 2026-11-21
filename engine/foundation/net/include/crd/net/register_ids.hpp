@@ -132,6 +132,12 @@ inline constexpr u64 kQuicTpMaxRecordSize = 0x571C59429CD0845ULL;
 inline constexpr u64 kQuicTpResetStreamAt = 0x001DULL;
 // quic.reliable-reset: QUIC Frame Types, reset_stream_at
 inline constexpr u64 kQuicFrameResetStreamAt = 0x0024ULL;
+// quic.address-discovery: QUIC Transport Parameters, address_discovery
+inline constexpr u64 kQuicTpAddressDiscovery = 0x9F81A176ULL;
+// quic.address-discovery: QUIC Frame Types, observed_address_v4
+inline constexpr u64 kQuicFrameObservedAddressV4 = 0x9F81A6ULL;
+// quic.address-discovery: QUIC Frame Types, observed_address_v6
+inline constexpr u64 kQuicFrameObservedAddressV6 = 0x9F81A7ULL;
 // quic.receive-timestamps: QUIC Transport Parameters, max_receive_timestamps_per_ack
 inline constexpr u64 kQuicTpMaxReceiveTimestampsPerAck = 0x4AC07ULL;
 // quic.receive-timestamps: QUIC Transport Parameters, receive_timestamps_exponent

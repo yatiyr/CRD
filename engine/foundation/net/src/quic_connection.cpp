@@ -20,6 +20,7 @@ constexpr u8 kRecordStream = 4U;     // a frame of the stream set
 constexpr u8 kRecordDatagram = 5U;   // a DATAGRAM frame whose outcome is reported
 constexpr u8 kRecordNewId = 6U;      // a NEW_CONNECTION_ID frame: value is its sequence
 constexpr u8 kRecordNewToken = 7U;   // a server's NEW_TOKEN frame
+constexpr u8 kRecordObserved = 8U;   // an OBSERVED_ADDRESS frame: value is its sequence, length its path
 constexpr usize kIssueAttempts = 4U; // random IDs a host draws before it gives up on a full table
 constexpr u32 kNoRecord = ~u32{0};
 constexpr u64 kNsPerMs = 1000000U;
@@ -191,7 +192,8 @@ constexpr u64 kNoSequence = ~u64{0}; // a path with no peer connection ID to sen
            p.initial_max_stream_data_bidi_remote == 0U && p.initial_max_stream_data_uni == 0U &&
            p.initial_max_streams_bidi == 0U && p.initial_max_streams_uni == 0U && p.max_datagram_frame_size == 0U &&
            p.max_receive_timestamps_per_ack <= kQuicMaxReceiveTimestamps &&
-           p.receive_timestamps_exponent <= kQuicMaxReceiveTimestampsExponent && !p.has_stateless_reset_token &&
+           p.receive_timestamps_exponent <= kQuicMaxReceiveTimestampsExponent &&
+           p.address_discovery <= QuicAddressDiscovery::Both && !p.has_stateless_reset_token &&
            QuicStreamSet::limits_valid(config.streams) && QuicDatagrams::limits_valid(config.datagrams) &&
            p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
            p.active_connection_id_limit <= kQuicMaxPeerConnectionIds && config.sent_packets != 0U &&
@@ -1409,6 +1411,8 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             // A challenge on the active path is answered with a non-probing packet as well (section 9.3.3).
             m_ping_owed = m_ping_owed || m_receive_path == m_paths.active();
             return true;
+        case QuicFrameKind::ObservedAddress:
+            return observed_address_frame(frame, now_ns);
         case QuicFrameKind::Datagram:
         {
             const QuicTransportError error = m_datagrams.on_frame(frame, m_packet_early);
@@ -2055,10 +2059,13 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
     {
         return false;
     }
-    // The active path's PATH_RESPONSE and PATH_CHALLENGE go as ACKs do, never held by the window or the pacer.
+    // The active path's PATH_RESPONSE, PATH_CHALLENGE and OBSERVED_ADDRESS go as ACKs do, never held by the window or
+    // the pacer. On another path an OBSERVED_ADDRESS only rides with the others: packets replayed from spoofed
+    // addresses then draw no more datagrams than they did (the draft's section 6.2).
     const usize active = m_paths.active();
     const bool path_owed = space == QuicSpace::Application && send_type(space) == QuicPacketType::OneRtt &&
-                           (m_paths.response_owed(active) || m_paths.challenge_due(active, now_ns));
+                           (m_paths.response_owed(active) || m_paths.challenge_due(active, now_ns) ||
+                            observation_due(active));
     if (m_recovery->ack_deadline_ns(space) <= now_ns || m_probes[index] > 0U || path_owed)
     {
         return true;
@@ -2302,6 +2309,14 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
                     }
                 }
             }
+            else if (frame.kind == kRecordObserved)
+            {
+                // Resent only on its own path (draft-ietf-quic-address-discovery-01 section 4.1).
+                if (how == Settle::Lost)
+                {
+                    m_paths.observation_lost(frame.frame.length, frame.frame.value);
+                }
+            }
             else
             {
                 if (how == Settle::Lost)
@@ -2368,7 +2383,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     // The active path's PATH_RESPONSE and PATH_CHALLENGE, never held for data: a peer validating its path waits.
     if (space == QuicSpace::Application && !early)
     {
-        used += write_path_frames(frames.subspan(used), now_ns, written);
+        used += write_path_frames(frames.subspan(used), packet, now_ns, written);
     }
     if (!data_allowed(space))
     {
@@ -2527,7 +2542,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     return used;
 }
 
-usize QuicConnection::write_path_frames(cont::Span<u8> frames, u64 now_ns, Written& written) noexcept
+usize QuicConnection::write_path_frames(cont::Span<u8> frames, u64 packet, u64 now_ns, Written& written) noexcept
 {
     const usize path = m_send_path;
     usize used = 0U;
@@ -2563,7 +2578,56 @@ usize QuicConnection::write_path_frames(cont::Span<u8> frames, u64 now_ns, Writt
             written.eliciting = true;
         }
     }
+    if (observation_due(path))
+    {
+        // The address the peer's datagrams come from on this path, an IPv4-mapped one as IPv4, without its scope.
+        const Endpoint& peer = m_paths.path(path).peer;
+        const IpAddress address = peer.address.unmapped();
+        QuicFrame observed;
+        observed.kind = QuicFrameKind::ObservedAddress;
+        observed.sequence = m_observation_next;
+        observed.data = address.view();
+        observed.value = peer.port;
+        const usize bytes = write_quic_frame(observed, frames.subspan(used));
+        if (bytes != 0U)
+        {
+            used += bytes;
+            written.eliciting = true;
+            QuicStreamRecord sent;
+            sent.value = m_observation_next;
+            sent.length = static_cast<u32>(path);
+            static_cast<void>(record(QuicSpace::Application, packet, kRecordObserved, sent, written)); // room checked
+            m_paths.observation_sent(path, m_observation_next);
+            ++m_observation_next;
+        }
+    }
     return used;
+}
+
+bool QuicConnection::observation_due(usize index) const noexcept
+{
+    return m_peer_known && quic_provides_addresses(m_local.address_discovery) &&
+           quic_wants_addresses(m_peer.address_discovery) && m_paths.observation_owed(index) &&
+           m_paths.path(index).peer.port != 0U && m_frame_count < m_config.sent_frames;
+}
+
+bool QuicConnection::observed_address_frame(const QuicFrame& frame, u64 now_ns) noexcept
+{
+    // Only an end that asked for reports takes them (draft-ietf-quic-address-discovery-01 section 4.1).
+    if (!quic_wants_addresses(m_local.address_discovery))
+    {
+        fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
+        return false;
+    }
+    Endpoint observed;
+    observed.address.family = (frame.data.size() == 4U) ? AddressFamily::V4 : AddressFamily::V6;
+    std::memcpy(observed.address.bytes, frame.data.data(), frame.data.size());
+    observed.port = static_cast<u16>(frame.value);
+    if (m_paths.on_observed(m_receive_path, frame.sequence, observed))
+    {
+        ++m_counters.address_observations;
+    }
+    return true;
 }
 
 usize QuicConnection::write_close(QuicSpace space, cont::Span<u8> frames) const noexcept
@@ -2636,7 +2700,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     }
     else if (carry == Carry::Path)
     {
-        used = write_path_frames(writer.frames(), now_ns, written);
+        used = write_path_frames(writer.frames(), number, now_ns, written);
     }
     else
     {

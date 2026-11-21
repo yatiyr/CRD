@@ -1292,10 +1292,12 @@ QuicPacketType type_of(QuicLevel level)
 
 // The raw peers' server: room for the thousand packets a skipped number takes to appear.
 QuicConnectionConfig server_config(const Identity& identity, crd::u32 sent_packets, const QuicDatagramLimits& datagrams,
-                                   QuicConnectionIds* ids, ConstSpan<u32> versions, u64 receive_timestamps)
+                                   QuicConnectionIds* ids, ConstSpan<u32> versions, u64 receive_timestamps,
+                                   QuicAddressDiscovery discovery)
 {
     QuicConnectionConfig config = config_for(QuicSide::Server, identity, QuicVersion::V1, 2U);
     config.parameters.max_receive_timestamps_per_ack = receive_timestamps;
+    config.parameters.address_discovery = discovery;
     config.versions = versions;
     config.ids = ids;
     config.sent_packets = sent_packets;
@@ -1345,6 +1347,12 @@ struct RawClient
     u8 issued_tokens[8][kQuicResetTokenBytes] = {};
     usize issued_bytes[8] = {};
     u64 retire_prior_to = 0U;
+    // The server's OBSERVED_ADDRESS frames (the first 32): each one's sequence, address, path and packet number.
+    usize observations = 0U;
+    u64 observed_sequence[32] = {};
+    Endpoint observed[32] = {};
+    QuicPath observed_path[32] = {};
+    u64 observed_packet[32] = {};
 };
 
 // (MSVC C4324 as for QuicPacketProtection, which the connection holds inline.)
@@ -1356,8 +1364,10 @@ class RawRun
 {
 public:
     explicit RawRun(const Identity& identity, crd::u32 sent_packets = 2048U, const QuicDatagramLimits& datagrams = {},
-                    QuicConnectionIds* ids = nullptr, ConstSpan<u32> versions = {}, u64 receive_timestamps = 0U)
-        : server(allocator, server_config(identity, sent_packets, datagrams, ids, versions, receive_timestamps)),
+                    QuicConnectionIds* ids = nullptr, ConstSpan<u32> versions = {}, u64 receive_timestamps = 0U,
+                    QuicAddressDiscovery server_discovery = QuicAddressDiscovery::Off)
+        : server(allocator, server_config(identity, sent_packets, datagrams, ids, versions, receive_timestamps,
+                                          server_discovery)),
           m_identity(identity)
     {
     }
@@ -1370,12 +1380,16 @@ public:
     bool pad_initial = true; // false sends an Initial in a datagram under 1200 bytes
     QuicPath from;           // the path the raw client's datagrams arrive on (S75)
     usize pad_to = 0U;       // a 1-RTT packet's datagram is padded to this many bytes
+    QuicAddressDiscovery discovery = QuicAddressDiscovery::Off; // what the raw client's parameters offer
+    u8 last[kDatagram] = {}; // the raw client's latest datagram, as sent
+    usize last_bytes = 0U;
 
     // Runs the handshake to the server's completion; `before_finished` runs with the client holding Handshake keys.
     template <typename Before> void handshake(Before before_finished)
     {
         QuicTransportParameters parameters;
         parameters.max_idle_timeout = 30000U;
+        parameters.address_discovery = discovery;
         parameters.has_initial_source_connection_id = true;
         REQUIRE(parameters.initial_source_connection_id.assign(ConstSpan<u8>(kClientCid, sizeof(kClientCid))));
         u8 encoded[512];
@@ -1446,6 +1460,8 @@ public:
         floor = (type == QuicPacketType::Initial && pad_initial) ? kQuicMinInitialDatagram : floor;
         usize size = 0U;
         REQUIRE(raw.protection.seal(writer, used, {floor, 0U}, size) == QuicPacketError::None);
+        std::memcpy(last, datagram, size);
+        last_bytes = size;
         server.receive(from, Span<u8>(datagram, size), Ecn::NotEct, now);
         drain();
     }
@@ -1491,6 +1507,7 @@ public:
                 continue;
             }
             m_dcid = header.dcid.empty() ? u8{0} : header.dcid[0];
+            m_number = opened.number;
             const usize space = static_cast<usize>(quic_space_of(opened.type));
             raw.largest[space] =
                 (raw.any[space] && raw.largest[space] > opened.number) ? raw.largest[space] : opened.number;
@@ -1596,6 +1613,19 @@ private:
                 std::memcpy(raw.path_response, frame.data.data(), kQuicPathDataBytes);
                 raw.path_response_datagram = datagram_size;
                 break;
+            case QuicFrameKind::ObservedAddress:
+                if (raw.observations < 32U)
+                {
+                    Endpoint& seen = raw.observed[raw.observations];
+                    seen.address.family = (frame.data.size() == 4U) ? AddressFamily::V4 : AddressFamily::V6;
+                    std::memcpy(seen.address.bytes, frame.data.data(), frame.data.size());
+                    seen.port = static_cast<crd::u16>(frame.value);
+                    raw.observed_sequence[raw.observations] = frame.sequence;
+                    raw.observed_path[raw.observations] = m_reading;
+                    raw.observed_packet[raw.observations] = m_number;
+                }
+                ++raw.observations;
+                break;
             default:
                 break;
         }
@@ -1604,6 +1634,7 @@ private:
     const Identity& m_identity;
     QuicPath m_reading; // the path of the server datagram being read
     u8 m_dcid = 0U;     // the first byte of its Destination Connection ID
+    u64 m_number = 0U;  // the number of the server packet being read
 };
 #if CRD_COMPILER_MSVC
 #pragma warning(pop)
@@ -3674,10 +3705,12 @@ TEST_CASE("QUIC connection: a rejected 0-RTT resets every stream and drops the q
         OtherContext, // another application context
         LowerLimit,   // a lower stream window: the parameters' part of the context differs
         Switch,       // a server that switches versions: the ticket belongs to the original one (RFC 9369 section 5)
+        Discovery,    // address discovery turned on: a server never changes it under accepted 0-RTT (the draft's 3)
     };
     const u32 client_versions[] = {static_cast<u32>(QuicVersion::V1), static_cast<u32>(QuicVersion::V2)};
     const u32 server_versions[] = {static_cast<u32>(QuicVersion::V2), static_cast<u32>(QuicVersion::V1)};
-    for (const Refusal refusal : {Refusal::NoEarlyData, Refusal::OtherContext, Refusal::LowerLimit, Refusal::Switch})
+    for (const Refusal refusal :
+         {Refusal::NoEarlyData, Refusal::OtherContext, Refusal::LowerLimit, Refusal::Switch, Refusal::Discovery})
     {
         INFO("refusal " << static_cast<u32>(refusal));
         EarlyFleet fleet;
@@ -3703,6 +3736,9 @@ TEST_CASE("QUIC connection: a rejected 0-RTT resets every stream and drops the q
             case Refusal::Switch:
                 client_config.versions = client_versions;
                 server_config.versions = server_versions;
+                break;
+            case Refusal::Discovery:
+                server_config.parameters.address_discovery = QuicAddressDiscovery::Both;
                 break;
         }
         QuicConnection client(allocator, client_config);
@@ -4377,4 +4413,290 @@ TEST_CASE("QUIC paths: before confirmation a server takes nothing from another p
         });
     CHECK(run.server.path() == a);
     CHECK(run.server.counters().migrations == 0U);
+}
+
+// ---- Address discovery (draft-ietf-quic-address-discovery-01, design S77) ----
+
+namespace
+{
+const Endpoint kServerAt{IpAddress::v4(203, 0, 113, 80), 443U};
+
+void send_observed(RawRun& run, u64 sequence, const Endpoint& observed)
+{
+    QuicFrame frame;
+    frame.kind = QuicFrameKind::ObservedAddress;
+    frame.sequence = sequence;
+    frame.data = observed.address.view();
+    frame.value = observed.port;
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(frame, out); });
+}
+
+// Has the server send ack-eliciting packets, acknowledging what the raw client opened, until it sent `count`
+// OBSERVED_ADDRESS frames in all (its first may come before the raw client holds 1-RTT keys, and then goes again).
+void collect_observations(RawRun& run, usize count)
+{
+    for (usize round = 0U; round < 16U && run.raw.observations < count; ++round)
+    {
+        run.server.ping();
+        run.drain();
+        run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    }
+    REQUIRE(run.raw.observations == count);
+}
+
+usize observations_on(const RawRun& run, const QuicPath& path)
+{
+    usize count = 0U;
+    for (usize index = 0U; index < run.raw.observations && index < 32U; ++index)
+    {
+        count += (run.raw.observed_path[index] == path) ? 1U : 0U;
+    }
+    return count;
+}
+
+QuicConnectionConfig discovery_config(QuicSide side, const Identity& identity, QuicAddressDiscovery mode, usize seed)
+{
+    QuicConnectionConfig config = config_for(side, identity, QuicVersion::V1, seed);
+    config.parameters.address_discovery = mode;
+    if (side == QuicSide::Client)
+    {
+        config.path = QuicPath{0U, kServerAt};
+    }
+    return config;
+}
+
+constexpr QuicAddressDiscovery kModes[] = {QuicAddressDiscovery::Off, QuicAddressDiscovery::Provide,
+                                           QuicAddressDiscovery::Receive, QuicAddressDiscovery::Both};
+} // namespace
+
+TEST_CASE("QUIC address discovery: OBSERVED_ADDRESS is taken only where asked for, in the application space, the "
+          "newest sequence on each path winning",
+          "[net][net-path][quic-connection][address-discovery]")
+{
+    const Endpoint first{IpAddress::v4(192, 0, 2, 40), 6000U};
+    const Endpoint second{IpAddress::v4(192, 0, 2, 41), 6001U};
+    constexpr u8 v6[16] = {0x20U, 0x01U, 0x0DU, 0xB8U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 9U};
+    const Endpoint third{IpAddress::v6(v6), 7000U};
+    // Not asked for, by sending no parameter or by offering reports alone: PROTOCOL_VIOLATION (section 4.1).
+    CHECK(refused(
+              [&](QuicFrame& f)
+              {
+                  f.kind = QuicFrameKind::ObservedAddress;
+                  f.data = first.address.view();
+                  f.value = first.port;
+              }) == code(QuicTransportError::ProtocolViolation));
+    Identity identity;
+    {
+        RawRun run(identity, 2048U, {}, nullptr, {}, 0U, QuicAddressDiscovery::Provide);
+        run.from = client_at(7U, 50000U);
+        run.handshake();
+        send_observed(run, 0U, first);
+        REQUIRE(run.server.state() == QuicConnectionState::Closing);
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+    }
+    // Outside the application space: a frame out of place.
+    {
+        RawRun run(identity, 2048U, {}, nullptr, {}, 0U, QuicAddressDiscovery::Both);
+        run.handshake(
+            [&]
+            {
+                QuicFrame frame;
+                frame.kind = QuicFrameKind::ObservedAddress;
+                frame.data = first.address.view();
+                frame.value = first.port;
+                run.send(QuicPacketType::Handshake, [&](Span<u8> out) { return write_quic_frame(frame, out); });
+            });
+        REQUIRE(run.server.state() == QuicConnectionState::Closing);
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+    }
+    // Asked for: each path keeps its newest report; an older or equal sequence there changes nothing.
+    RawRun run(identity, 2048U, {}, nullptr, {}, 0U, QuicAddressDiscovery::Receive);
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath b = client_at(7U, 50001U);
+    run.from = a;
+    run.handshake();
+    run.drain();
+    CHECK(run.server.observed_address() == Endpoint{});
+    send_observed(run, 5U, first);
+    CHECK(run.server.observed_address() == first);
+    send_observed(run, 3U, second);
+    send_observed(run, 5U, second);
+    CHECK(run.server.observed_address() == first);
+    CHECK(run.server.counters().address_observations == 1U);
+    send_observed(run, 9U, third);
+    CHECK(run.server.observed_address() == third);
+    // Another path's first report counts there, whatever its sequence; a packet of it alone probes, moving nothing.
+    run.from = b;
+    send_observed(run, 4U, second);
+    CHECK(run.server.path() == a);
+    CHECK(run.server.counters().migrations == 0U);
+    CHECK(run.server.paths().observed(run.server.paths().find(b)) == second);
+    CHECK(run.server.observed_address() == third);
+    CHECK(run.server.counters().address_observations == 3U);
+    CHECK(run.raw.observations == 0U); // a server that does not offer reports sends none
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC address discovery: a server sends each path its address once, again on that path alone when lost, "
+          "never for a replayed packet from a spoofed address",
+          "[net][net-path][quic-connection][address-discovery]")
+{
+    Identity identity;
+    RawRun run(identity, 2048U, {}, nullptr, {}, 0U, QuicAddressDiscovery::Provide);
+    run.discovery = QuicAddressDiscovery::Receive;
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath rebound = client_at(7U, 50001U);
+    run.from = a;
+    run.handshake();
+    collect_observations(run, 1U);
+    CHECK(run.raw.observed[0] == a.peer);
+    CHECK(run.raw.observed_path[0] == a);
+    for (usize round = 0U; round < 4U; ++round)
+    {
+        run.server.ping();
+        run.drain();
+        run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    }
+    CHECK(run.raw.observations == 1U); // acknowledged: never again on that path
+
+    // A NAT rebinding: the new path's report rides with its challenge, at a higher sequence.
+    run.from = rebound;
+    send_frame(run, QuicFrameKind::Ping);
+    REQUIRE(run.server.path() == rebound);
+    REQUIRE(run.raw.observations == 2U);
+    CHECK(run.raw.observed[1] == rebound.peer);
+    CHECK(run.raw.observed_path[1] == rebound);
+    CHECK(run.raw.observed_sequence[1] > run.raw.observed_sequence[0]);
+    // Lost: the raw client never acknowledges its packet, so later ones acknowledged declare it lost.
+    run.raw.seen[run.raw.observed_packet[1]] = false;
+    answer(run, rebound);
+    REQUIRE(run.server.address_validated());
+    for (usize round = 0U; round < 6U && run.raw.observations < 3U; ++round)
+    {
+        run.server.ping();
+        run.drain();
+        run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    }
+    REQUIRE(run.raw.observations == 3U);
+    CHECK(run.raw.observed[2] == rebound.peer);
+    CHECK(run.raw.observed_path[2] == rebound);
+    CHECK(run.raw.observed_sequence[2] > run.raw.observed_sequence[1]);
+    CHECK(observations_on(run, a) == 1U); // the path left behind was challenged, but owed no report
+
+    // A replay of the raw client's last datagram from a spoofed address is a duplicate: no path, nothing sent.
+    const QuicPath spoofed = client_at(66U, 1234U);
+    u8 replay[kDatagram];
+    std::memcpy(replay, run.last, run.last_bytes);
+    const usize mark = run.raw.datagrams;
+    run.server.receive(spoofed, Span<u8>(replay, run.last_bytes), Ecn::NotEct, run.now);
+    run.drain();
+    CHECK(run.server.paths().find(spoofed) == kQuicNoPath);
+    CHECK(bytes_to(run, spoofed, mark) == 0U);
+    CHECK(run.raw.observations == 3U);
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC address discovery: an IPv4-mapped peer is reported as IPv4, an IPv6 one without its scope",
+          "[net][net-path][quic-connection][address-discovery]")
+{
+    Identity identity;
+    constexpr u8 link_local[16] = {0xFEU, 0x80U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 0x21U};
+    const QuicPath mapped{0U, Endpoint{IpAddress::v4(198, 51, 100, 7).mapped(), 50000U}};
+    const QuicPath scoped{0U, Endpoint{IpAddress::v6(link_local, 3U), 50002U}};
+    const Endpoint plain_v4{IpAddress::v4(198, 51, 100, 7), 50000U};
+    const Endpoint plain_v6{IpAddress::v6(link_local), 50002U};
+    for (const bool v6 : {false, true})
+    {
+        RawRun run(identity, 2048U, {}, nullptr, {}, 0U, QuicAddressDiscovery::Both);
+        run.discovery = QuicAddressDiscovery::Both;
+        run.from = v6 ? scoped : mapped;
+        run.handshake();
+        collect_observations(run, 1U);
+        CHECK(run.raw.observed[0] == (v6 ? plain_v6 : plain_v4));
+    }
+}
+
+TEST_CASE("QUIC address discovery: every pair of modes reports exactly where one end offers and the other asks, over "
+          "paths that lose, duplicate and reorder",
+          "[net][net-path][quic-connection][address-discovery]")
+{
+    Identity identity;
+    for (const QuicAddressDiscovery client_mode : kModes)
+    {
+        for (const QuicAddressDiscovery server_mode : kModes)
+        {
+            const u64 seed = (static_cast<u64>(client_mode) * 4U) + static_cast<u64>(server_mode) + 1U;
+            INFO("client " << static_cast<u32>(client_mode) << " server " << static_cast<u32>(server_mode));
+            CountingAllocator allocator;
+            QuicConnection client(allocator, discovery_config(QuicSide::Client, identity, client_mode, 0U));
+            QuicConnection server(allocator, discovery_config(QuicSide::Server, identity, server_mode, 1U));
+            connect(client);
+            auto net = std::make_unique<Net>(client, server);
+            net->paths = true;
+            net->rng.state = seed;
+            for (Path& path : net->path)
+            {
+                path.loss = 150U;
+                path.duplicate = 50U;
+                path.jitter_ns = 8U * kMs;
+            }
+            const bool down = quic_provides_addresses(server_mode) && quic_wants_addresses(client_mode);
+            const bool up = quic_provides_addresses(client_mode) && quic_wants_addresses(server_mode);
+            REQUIRE(net->run_until(
+                [&]
+                {
+                    return both_confirmed(client, server) && (!down || client.observed_address().port != 0U) &&
+                           (!up || server.observed_address().port != 0U);
+                },
+                300000U * kMs));
+            net->advance(net->now + 3000U * kMs);
+            CHECK(client.observed_address() == (down ? net->client_at : Endpoint{}));
+            CHECK(server.observed_address() == (up ? kServerAt : Endpoint{}));
+            CHECK((client.counters().address_observations != 0U) == down);
+            CHECK((server.counters().address_observations != 0U) == up);
+            CHECK(client.state() == QuicConnectionState::Established);
+            CHECK(server.state() == QuicConnectionState::Established);
+        }
+    }
+}
+
+TEST_CASE("QUIC address discovery: a client learns of its NAT rebinding and of an address change from its server's "
+          "reports over a hostile path",
+          "[net][net-path][quic-connection][address-discovery]")
+{
+    for (u64 seed = 1U; seed <= 3U; ++seed)
+    {
+        INFO("seed " << seed);
+        Identity identity;
+        CountingAllocator allocator;
+        QuicConnection client(allocator,
+                              discovery_config(QuicSide::Client, identity, QuicAddressDiscovery::Receive, 0U));
+        QuicConnection server(allocator,
+                              discovery_config(QuicSide::Server, identity, QuicAddressDiscovery::Provide, 1U));
+        connect(client);
+        auto net = std::make_unique<Net>(client, server);
+        net->paths = true;
+        net->rng.state = seed;
+        for (Path& path : net->path)
+        {
+            path.loss = 100U;
+            path.duplicate = 50U;
+            path.jitter_ns = 10U * kMs;
+        }
+        REQUIRE(net->run_until(
+            [&] { return both_confirmed(client, server) && client.observed_address() == net->client_at; },
+            300000U * kMs));
+        const Endpoint moves[] = {Endpoint{net->client_at.address, 50001U},
+                                  Endpoint{IpAddress::v4(203, 0, 113, 5), 40000U}};
+        for (const Endpoint& move : moves)
+        {
+            net->client_at = move;
+            client.ping(); // the server sees the new address in its next datagram, resent until acknowledged
+            REQUIRE(net->run_until([&] { return client.observed_address() == move; }, 300000U * kMs));
+        }
+        CHECK(client.path().peer == kServerAt); // the client's own path never changed
+        CHECK(client.counters().address_observations >= 3U);
+        CHECK(client.state() == QuicConnectionState::Established);
+        CHECK(server.state() == QuicConnectionState::Established);
+    }
 }
