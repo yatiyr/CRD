@@ -44,9 +44,7 @@ using crd::net::Endpoint;
 using crd::net::IpAddress;
 using crd::net::OutgoingDatagram;
 using crd::net::ReceivedDatagram;
-using crd::net::SendQueue;
 using crd::net::SocketError;
-using crd::net::SocketSet;
 using crd::net::UdpOptions;
 using crd::net::UdpSocket;
 
@@ -247,6 +245,9 @@ TEST_CASE("a zero-copy message reaches its peer whole, copies the host reports o
 #if CRD_TEST_ZERO_COPY
 namespace
 {
+using crd::net::SendQueue;
+using crd::net::SocketSet;
+
 // A dummy device at 10.72.0.1/24 with a 1500-byte MTU, which sends every datagram in place and drops it: behind a
 // token bucket of 500 kbit/s when `slow` (a qdisc that keeps each buffer charged to its socket until it leaves),
 // behind a plain queue otherwise. False where this process may not make devices (outside a namespace of its own).

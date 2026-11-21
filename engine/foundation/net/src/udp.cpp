@@ -1094,8 +1094,8 @@ BatchResult UdpSocket::transmit(cont::ConstSpan<OutgoingDatagram> datagrams, [[m
                 if (sent < 0 && carried[0] > 1U && !would_block(code))
                 {
                     // A train the host refused (a segment past the device's MTU, a route through IPsec, a device
-                    // that cannot checksum it): its datagrams go a message each and meet their own errors. EIO is the
-                    // host refusing to segment at all, so this socket stops asking.
+                    // that cannot checksum it before Linux 6.11): its datagrams go a message each and meet their own
+                    // errors. EIO is the host refusing to segment at all, so this socket stops asking.
                     ++m_offloads.trains_refused;
                     m_features.segmented_send = m_features.segmented_send && code != EIO;
                     plain_until = result.count + carried[0];

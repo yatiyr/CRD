@@ -1244,8 +1244,8 @@ TEST_CASE("a train the host cannot segment goes a datagram a send, and the socke
         UdpSocket near = path.open(RouterPath::Near, v6);
         UdpSocket far = path.open(RouterPath::Far, v6);
         REQUIRE(near.features().segmented_send);
-        // Without transmit checksum offload on the near link the host refuses every segmented send with EIO.
-        path.checksum_offload(RouterPath::Near, "a0", false);
+        // Through an IPsec route the host refuses every segmented send with EIO.
+        path.ipsec(true);
         static u8 payload[10][1000];
         OutgoingDatagram datagrams[10];
         for (usize index = 0U; index < 10U; ++index)
@@ -1255,7 +1255,6 @@ TEST_CASE("a train the host cannot segment goes a datagram a send, and the socke
                                                 far.local_endpoint(), Ecn::Ect0};
         }
         const BatchResult sent = near.send(datagrams);
-        path.checksum_offload(RouterPath::Near, "a0", true);
         CHECK(sent.error == SocketError::None);
         CHECK(sent.count == 10U);
         CHECK(near.offload_counters().trains_refused == 1U);
@@ -1270,6 +1269,7 @@ TEST_CASE("a train the host cannot segment goes a datagram a send, and the socke
             CHECK(matches(slots.slots[index].storage.first(1000U), static_cast<u32>(index)));
             CHECK(slots.slots[index].ecn == Ecn::Ect0);
         }
+        path.ipsec(false);
         CHECK(near.send(datagrams).count == 10U);
         CHECK(near.offload_counters().trains_sent == 0U);
         REQUIRE(receive_all(far, Span<ReceivedDatagram>(slots.slots, 10U), 10U) == 10U);

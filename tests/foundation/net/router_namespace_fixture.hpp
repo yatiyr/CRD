@@ -20,13 +20,8 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <fcntl.h>
-#include <linux/ethtool.h>
-#include <linux/sockios.h>
-#include <net/if.h>
 #include <sched.h>
-#include <sys/ioctl.h>
 #include <unistd.h>
 
 namespace crd::net::testing
@@ -102,23 +97,32 @@ public:
         return socket;
     }
 
-    // Turns transmit checksum offload of `device` in `host`'s namespace on or off (ETHTOOL_STXCSUM): through a device
-    // without it the host refuses a segmented send (EIO).
-    void checksum_offload(Host host, const char* device, bool on)
+    // Sends the near host's datagrams toward the far host through IPsec, ESP in transport mode with AES-GCM under one
+    // security association a family in both hosts, or `on` false takes it away. Through such a route every Linux
+    // refuses a segmented send (EIO); Linux 6.11 and later segment past a device without checksum offload in software.
+    void ipsec(bool on)
     {
-        enter(host);
-        const int fd = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
-        ethtool_value value{ETHTOOL_STXCSUM, on ? 1U : 0U};
-        ifreq request{};
-        std::strncpy(request.ifr_name, device, IFNAMSIZ - 1U);
-        request.ifr_data = reinterpret_cast<char*>(&value);
-        const int status = (fd >= 0) ? ::ioctl(fd, SIOCETHTOOL, &request) : -1;
-        if (fd >= 0)
+        for (const char* const pair : {"10.71.1.2 dst 10.71.2.2", "fd71:1::2 dst fd71:2::2"})
         {
-            ::close(fd);
+            for (const Host host : {Near, Far})
+            {
+                if (on)
+                {
+                    run(host,
+                        "ip xfrm state add src %s proto esp spi 0x71 reqid 71 mode transport aead 'rfc4106(gcm(aes))' "
+                        "0x000102030405060708090a0b0c0d0e0f10111213 128",
+                        pair);
+                }
+                else
+                {
+                    run(host, "ip xfrm state delete src %s proto esp spi 0x71", pair);
+                }
+            }
+            run(Near,
+                on ? "ip xfrm policy add src %s dir out tmpl proto esp reqid 71 mode transport"
+                   : "ip xfrm policy delete src %s dir out",
+                pair);
         }
-        enter(Near);
-        REQUIRE(status == 0);
     }
 
     // Has the near host's queue toward dropping() drop every datagram (a pfifo of no room), so the host reports each

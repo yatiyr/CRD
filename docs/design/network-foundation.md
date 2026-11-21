@@ -226,12 +226,12 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   drops a train whole when its datagram size exceeds the hop: one ICMP report, every datagram lost). On Linux
   `send` hands each train to the host as one `sendmmsg` message with `UDP_SEGMENT`, its datagrams one iovec each
   where they lie in the send queue (no copy, no contiguous slots); a train the host refuses for anything but
-  back-pressure goes again a datagram a message so each meets its own error, EIO (a device without checksum
-  offload, an IPsec route) also turns segmentation off for the socket, and a train lost past the socket (ENOBUFS) is
-  lost whole. `UdpOptions::coalesce_receive` takes `UDP_GRO`: a slot of `kMaxTrainBytes` then holds a train and its
-  datagram size (`ReceivedDatagram::segment`); one train has one codepoint (GRO joins only equal TOS and traffic
-  classes). `IoLoop` reads a coalescing socket into `train_slots` such slots and hands each datagram on in place,
-  a datagram past `slot_bytes` or a truncated train's cut last one truncated. `segment_send = false` keeps the
+  back-pressure goes again a datagram a message so each meets its own error, EIO (an IPsec route, or before Linux
+  6.11 a device without checksum offload) also turns segmentation off for the socket, and a train lost past the
+  socket (ENOBUFS) is lost whole. `UdpOptions::coalesce_receive` takes `UDP_GRO`: a slot of `kMaxTrainBytes` then
+  holds a train and its datagram size (`ReceivedDatagram::segment`); one train has one codepoint (GRO joins only
+  equal TOS and traffic classes). `IoLoop` reads a coalescing socket into `train_slots` such slots and hands each
+  datagram on in place, a datagram past `slot_bytes` or a truncated train's cut last one truncated. `segment_send = false` keeps the
   portable path; `features()` reports both offloads per socket and `offload_counters()` what they did. Windows
   (USO, URO, as msquic): a socket segments where `UDP_SEND_MSG_SIZE` reads back (never set on the socket, which
   would segment PMTU probes too); each train is one `WSASendMsg`, one `WSABUF` per datagram in place, with a
