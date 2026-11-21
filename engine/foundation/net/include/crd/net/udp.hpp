@@ -74,7 +74,7 @@ struct UdpOptions
     // A message of at least this many bytes (a train, or one large datagram) that send_stable() hands over leaves
     // through io_uring's zero-copy send where the host has it (SocketFeatures::lent_send): the host reads its bytes
     // in place until sends_released() passes them. 0, the default, or CRD_NET_UDP_RING=0 copies every send: the
-    // board measured zero-copy at 1.4 to 2.2 times a copy's sender CPU at every size (S33's zero-copy send), so a
+    // board measured zero-copy at 1.4 to 2.9 times a copy's sender CPU at every size (S33's zero-copy send), so a
     // host turns it on where its own board shows it gains (a NIC that segments and sends in place).
     u32 zero_copy_bytes = 0U;
 };

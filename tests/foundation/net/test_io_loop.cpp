@@ -805,18 +805,21 @@ TEST_CASE("A send queue hands each socket its own datagrams in order: a busy one
     CHECK(queue.queued(0U) == 0U);
 }
 
-TEST_CASE("A send queue keeps every socket's order and accounts for every datagram under random busy and refusing "
-          "sockets",
+TEST_CASE("A send queue keeps every socket's order and accounts for every datagram under random busy, refusing "
+          "and lending sockets",
           "[net][io-loop][net-path]")
 {
     for (u64 seed = 1U; seed <= 8U; ++seed)
     {
         INFO("seed " << seed);
         CountingAllocator allocator;
+        // The second socket lends: its host releases what it sent at random moments. The sockets outlive the queue.
+        VirtualSocket sockets[3];
+        sockets[1].offers.lent_send = true;
         SendQueue queue(allocator, 48U, 16U, 4U); // the fourth socket's datagrams drop at the flush of three
         REQUIRE(queue.ready());
         REQUIRE(queue.share() == 6U);
-        VirtualSocket sockets[3];
+        const u8* lent_at[4096] = {}; // where each datagram the lender took lay
         DatagramSocket* const pointers[] = {&sockets[0], &sockets[1], &sockets[2]};
         const SocketSet set{ConstSpan<DatagramSocket*>(pointers)};
         Rng rng;
@@ -836,9 +839,10 @@ TEST_CASE("A send queue keeps every socket's order and accounts for every datagr
                 const u64 pick = rng.next() % 8U;
                 const auto socket = static_cast<u32>((pick < 4U) ? 0U : pick - 4U);
                 const Span<u8> room = queue.room(socket);
-                // Admission: a socket below its share always finds room; held() names exactly the refused.
+                // Admission: a socket below its share, lent slots counted, always finds room; held() names exactly
+                // the refused; no slot the lender's host may read is handed out.
                 CHECK((room.empty() == (((queue.held() >> socket) & 1U) != 0U)));
-                if (queue.queued(socket) < queue.share())
+                if (queue.queued(socket) + queue.lent(socket) < queue.share())
                 {
                     CHECK_FALSE(room.empty());
                 }
@@ -846,6 +850,10 @@ TEST_CASE("A send queue keeps every socket's order and accounts for every datagr
                 {
                     ++refused[socket];
                     continue;
+                }
+                for (u64 number = sockets[1].released; number < sockets[1].taken; ++number)
+                {
+                    CHECK(room.data() != lent_at[number]);
                 }
                 std::memcpy(room.data(), &next[socket], sizeof(u32));
                 ++next[socket];
@@ -863,6 +871,7 @@ TEST_CASE("A send queue keeps every socket's order and accounts for every datagr
                 socket.refuse_next = rng.next() % 8U == 0U;
                 refusing[index] = socket.refuse_next;
             }
+            sockets[1].released += rng.next() % (sockets[1].taken - sockets[1].released + 1U);
             if (step >= 1000U && step < 2000U)
             {
                 sockets[0].busy_after = 0U; // stalled: its backlog grows to its limit
@@ -886,6 +895,15 @@ TEST_CASE("A send queue keeps every socket's order and accounts for every datagr
                 }
             }
             CHECK(seen == flushed.sent);
+            for (usize at = 0U; at < sockets[1].sent_count; ++at)
+            {
+                REQUIRE(sockets[1].taken - sockets[1].sent_count + at < 4096U);
+                lent_at[sockets[1].taken - sockets[1].sent_count + at] = sockets[1].sent[at].from;
+            }
+            // The lender's slots are those it took and its host has not released; every slot is queued, lent or free.
+            CHECK(queue.lent() == queue.lent(1U));
+            CHECK(queue.lent(1U) == sockets[1].taken - sockets[1].released);
+            CHECK(queue.queued() + queue.lent() <= 48U);
             // Each socket's count is what was pushed for it less what left or was refused; the fourth's all drop.
             u32 counted = 0U;
             for (u32 socket = 0U; socket < 4U; ++socket)
@@ -908,6 +926,7 @@ TEST_CASE("A send queue keeps every socket's order and accounts for every datagr
         CHECK(refused[0] != 0U); // the stalled first socket reached its limit
         CHECK(next[3] != 0U);    // and the one the set lacks was queued, then dropped
         CHECK(dropped >= next[3]);
+        CHECK(sockets[1].taken > 100U); // the lender's datagrams came and went
     }
 }
 

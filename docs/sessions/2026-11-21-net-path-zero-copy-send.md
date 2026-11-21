@@ -31,11 +31,14 @@ CI first: run 44887080529 (70f94328) fails linux-gcc-release, -shipping and -rel
   buffers, so a socket behind it never fills (a token bucket does); a scattered 16-datagram train fails EMSGSIZE
   (MAX_SKB_FRAGS); a copied retry has to stick to its message, or a stale-report resend asks zero-copy again.
 - Teeth seen failing: no destructor wait, lent slots outside admission, no fragment bound, no MSG_DONTWAIT.
-- Board (`[.udp-board]`, dummy device, 3 rounds, sender CPU a KiB, zero-copy against copied): 1 datagram 928-1044 ns
-  against 620-654; 8 in slots 186-195 against 127-134; 12 in slots 149 against 106-107; 54 contiguous (64800 B) 148
-  against 66. Zero-copy loses 1.4 to 2.2 times at every size on this host.
+- Board (`[.udp-board]`, linux-gcc-release, dummy device, 3 rounds, sender CPU a KiB, zero-copy against copied): 1
+  datagram 764-783 ns against 560-566; 8 in slots 139-147 against 93-98; 12 in slots 110-111 against 74-77; 54
+  contiguous (64800 B) 121-123 against 41-42. Zero-copy loses 1.4 to 2.9 times at every size on this host.
+- Follow-up: the randomized send-queue test now has a lending socket released at random (order, accounting, no lent
+  slot handed out, the share counting lent slots); the namespace case skips where the kernel makes no dummy device.
 
 ## Next
 
-Zero-copy measured on a real NIC with UDP segmentation offload (the cloud run) to set its default; Windows RIO; then
+Zero-copy measured on a real NIC with UDP segmentation offload (the cloud run, through `QuicHost` too: its slots
+lend trains of about 12 datagrams at most) to set its default; Windows RIO; then
 multipath and address discovery behind their NET-STD flags.

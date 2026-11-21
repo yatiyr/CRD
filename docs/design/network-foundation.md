@@ -276,12 +276,14 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   COOP_TASKRUN with TASKRUN_FLAG posts it on the next kernel transition the socket asks for, never by interrupt. Eight
   notifications in a row reporting a copy (loopback, veth) turn zero-copy off, and every 1024th send that wants it
   probes again. `close()` waits for every notification.
-- **Zero-copy measured** (`[.udp-board]` under `unshare -Urn`, WSL2 Linux 6.6, a dummy device that sends in place, 20000
-  messages, 3 rounds; sender CPU a KiB, zero-copy against copied): 1 datagram of 1200 B 928-1044 ns against 620-654;
-  8 in slots 186-195 against 127-134, contiguous 257-260 against 125-133; 12 in slots 149 against 106-107, contiguous
-  217-219 against 98-101; 54 contiguous (64800 B, 16 pages) 148 against 66. Zero-copy costs 1.4 to 2.2 times a copy
-  here at every size, so `zero_copy_bytes` defaults to 0; a host whose own board shows a gain (a NIC that segments UDP
-  and sends from the pages) sets it. A real NIC's numbers are the cloud run's.
+- **Zero-copy measured** (`[.udp-board]` under `unshare -Urn`, linux-gcc-release, WSL2 Linux 6.6, a dummy device that
+  sends in place, 20000 messages, 3 rounds; sender CPU a KiB, zero-copy against copied): 1 datagram of 1200 B 764-783
+  ns against 560-566; 8 in slots 139-147 against 93-98, contiguous 201-213 against 89-92; 12 in slots 110-111 against
+  74-77, contiguous 174-182 against 69-72; 54 contiguous (64800 B, 16 pages) 121-123 against 41-42. Zero-copy costs
+  1.4 to 2.9 times a copy here at every size, so `zero_copy_bytes` defaults to 0; a host whose own board shows a gain
+  (a NIC that segments UDP and sends from the pages) sets it. A real NIC's numbers are the cloud run's, through
+  `QuicHost` as well as `send_stable`: in send-queue slots a datagram apart a train past about 12 datagrams exceeds
+  the fragment bound and goes copied, so a host train lends only when its slots lie end to end.
 - **Zero-copy proof.** `test_udp_zero_copy.cpp`: lending exactly where the host has it, never through `send()` or under
   the size; loopback's copy reports turning it off after eight and the 1024th send probing; a move. `[.netns]` (a
   dummy device behind a 500 kbit/s token bucket, which keeps buffers charged to the socket): a 12-datagram train held

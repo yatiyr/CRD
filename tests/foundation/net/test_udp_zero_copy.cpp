@@ -280,7 +280,10 @@ TEST_CASE("a device that sends in place holds a zero-copy train's pages until it
           "once, and a message the host fails zero-copy goes again copied",
           "[.netns]")
 {
-    REQUIRE(dummy_route(true));
+    if (!dummy_route(true))
+    {
+        SKIP("this kernel makes no dummy device or token bucket in a namespace of the test's own");
+    }
     UdpSocket sender = open_at(Endpoint{IpAddress::v4(10, 72, 0, 1), 0U}, 1024U, 1U << 16U);
     if (!sender.features().lent_send)
     {
