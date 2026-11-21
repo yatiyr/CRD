@@ -378,8 +378,8 @@ QuicRecovery::QuicRecovery(const QuicRecoveryConfig& config, cont::Span<QuicSent
 
 const QuicRecovery::Path& QuicRecovery::view(usize path) const noexcept
 {
-    static const Path out_of_range{};
-    return (path < kQuicMaxPaths) ? m_paths[path] : out_of_range;
+    static const Path kOutOfRange{};
+    return (path < kQuicMaxPaths) ? m_paths[path] : kOutOfRange;
 }
 
 bool QuicRecovery::usable(QuicSpace space, usize path) const noexcept

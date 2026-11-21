@@ -1359,8 +1359,8 @@ struct Paths : Fixture
     using Fixture::Fixture;
     bool open(usize path)
     {
-        QuicSentEntry* const storage = (path == 1U) ? second : (path == 2U) ? third : fourth;
-        return recovery.open_path(path, Span<QuicSentEntry>(storage, 16U));
+        QuicSentEntry* const storage[kQuicMaxPaths] = {fourth, second, third, fourth};
+        return recovery.open_path(path, Span<QuicSentEntry>(storage[path], 16U));
     }
     void send_on(usize path, u64 number, u64 sent_ns)
     {
