@@ -36,6 +36,14 @@ a relay that is a bottleneck each way (a rate, a drop-tail buffer of two BDPs an
 minimum round trip matches the path's, it keeps the queue short and the buffer from overflowing, and a Cerid client,
 which no echo holds back, finds the rate and keeps the link busy, against ngtcp2's CUBIC, Reno and BBR, with and
 without random loss under BBR's threshold (where CUBIC uses a quarter of the link).
+
+Paths (RFC 9000 section 9): each end reports the path its connection ended on, and both are held to it and to the
+relay. A relay that rebinds its NAT mapping in the middle of a transfer, on another port or another address and over
+a lossy path, leaves the client unaware and the server following it to the new address. A client that moves to a
+second socket of its own a quarter of the way in (section 9.2), on the loopback and through a lossy relay, ends there
+with the server following; a server's disable_active_migration keeps it where it was. A server that offers a second
+socket as its preferred address (section 9.6) ends there with a client that follows it, alone or before the client's
+own move, and on its handshake address with one that declines it.
 """
 import argparse
 import subprocess
@@ -77,7 +85,8 @@ class Case:
     def __init__(self, cerid, ngtcp2, cerid_is_client, version=1, group='x25519mlkem768', cipher='aes128', streams=1,
                  size=4096, closer='client', code=0, max_streams=16, compat=False, retry=False, updater=None,
                  updates=64, path=None, datagrams=0, datagram_bytes=1000, datagram_limit=None, resume=None,
-                 negotiate=False, reset=False, receive_bytes=None, congestion=None, peer_cc=None):
+                 negotiate=False, reset=False, receive_bytes=None, congestion=None, peer_cc=None, migrate_at=None,
+                 preferred=False, follow=True, disable=False):
         self.cerid = cerid
         self.ngtcp2 = ngtcp2
         self.cerid_is_client = cerid_is_client
@@ -103,6 +112,10 @@ class Case:
         self.receive_bytes = receive_bytes  # Cerid's receive slot, CERID_RECEIVE when None
         self.congestion = congestion  # Cerid's controller: 'newreno', 'cubic' or 'bbr'; CUBIC when None
         self.peer_cc = peer_cc  # ngtcp2's: 'reno', 'cubic' or 'bbr'; CUBIC when None
+        self.migrate_at = migrate_at  # the stream bytes a client reads before it moves to its second socket
+        self.preferred = preferred  # the server offers a second socket as its preferred address
+        self.follow = follow  # the client follows a preferred address
+        self.disable = disable  # the server sends disable_active_migration
 
     def command(self, program, role, port):
         cerid = program == self.cerid
@@ -139,6 +152,14 @@ class Case:
             command += ['--congestion', self.congestion]
         if not cerid and self.peer_cc:
             command += ['--cc', self.peer_cc]
+        if self.migrate_at and role == 'client':
+            command += ['--migrate-at', str(self.migrate_at)]
+        if not self.follow and role == 'client':
+            command += ['--follow-preferred', '0']
+        if self.preferred and role == 'server':
+            command += ['--preferred', '1']
+        if self.disable and role == 'server':
+            command += ['--disable-migration', '1']
         if self.reset and role == 'server':
             command += ['--progress-at', str(PROGRESS_BYTES)]
             command += [] if cerid else ['--resets', '1']
@@ -153,7 +174,10 @@ class Case:
             (' stateless reset' if self.reset else '') + \
             (f' receive {self.receive_bytes}' if self.receive_bytes else '') + \
             (f' cerid {self.congestion}' if self.congestion else '') + \
-            (f' ngtcp2 {self.peer_cc}' if self.peer_cc else '')
+            (f' ngtcp2 {self.peer_cc}' if self.peer_cc else '') + \
+            (f' moves at {self.migrate_at}' if self.migrate_at else '') + \
+            (' preferred address' if self.preferred else '') + (' declined' if not self.follow else '') + \
+            (' migration disabled' if self.disable else '')
         return ('cerid client' if self.cerid_is_client else 'ngtcp2 client') + \
             f' v{self.version} {self.group} {self.cipher} {self.streams}x{self.size} {self.closer} closes {self.code}' \
             + extra
@@ -170,7 +194,7 @@ class Case:
             first = server.stdout.readline().strip()
             if not first.startswith('port='):
                 raise AssertionError(f'the server printed {first!r}; {server.stderr.read()}')
-            port = int(first[len('port='):])
+            port = server_port = int(first[len('port='):])
             if self.path is not None or self.retry or self.negotiate:
                 relay = Relay(port, **(self.path or {}))
                 port = relay.port
@@ -186,6 +210,7 @@ class Case:
             server_err = server.stderr.read()
             clients, servers = reports_of(client_out), reports_of(server_out[0])
             self.check(clients, servers, client.returncode, server.returncode, client_err, server_err)
+            self.check_paths(clients[-1], servers[-1], server_port, relay, f'client {clients}\nserver {servers}')
             if relay is not None:
                 check_relay_sizes(relay, self.path, 'client' if self.cerid_is_client else 'server',
                                   self.receive_bytes or CERID_RECEIVE, f'client {clients}\nserver {servers}')
@@ -282,6 +307,35 @@ class Case:
         self.check_pmtu(client, server, detail)
         self.check_congestion(client if self.cerid_is_client else server, detail)
 
+    def check_paths(self, client, server, server_port, relay, detail):
+        """The path each end ended on: the client's own socket, its first or the one it moved to; the server's
+        handshake address or the preferred one it moved to; and the client's address as the server reads it, through
+        the relay's newest mapping. A rebinding and a move through the relay each made a mapping."""
+        moved = bool(self.migrate_at) and not self.disable
+        followed = self.preferred and self.follow
+        expect(client.get('migration') == ('disabled' if self.disable else 'started' if moved else 'none'),
+               f'the client\'s move was answered otherwise: {detail}')
+        client_port = int(client.get('path_local_port', '0'))
+        first_port = int(client.get('first_port', '0'))
+        expect(first_port > 0 and (client_port != first_port) == moved, f'the client ended on another socket: {detail}')
+        server_at = int(server.get('preferred_port', '0')) if followed else server_port
+        expect(not self.preferred or int(server.get('preferred_port', '0')) not in (0, server_port),
+               f'the server offered no preferred address of its own: {detail}')
+        expect(int(server.get('path_local_port', '0')) == server_at, f'the server ended on another socket: {detail}')
+        expect(int(client.get('path_peer_port', '0')) == (relay.port if relay and not followed else server_at),
+               f'the client ended toward another server address: {detail}')
+        expect(client.get('path_peer_address') == '127.0.0.1', f'the client sends elsewhere: {detail}')
+        for name, report in (('client', client), ('server', server)):
+            expect(report.get('preferred') == ('1' if followed else '0'), f'{name} reports another address: {detail}')
+        seen = (server.get('path_peer_address'), int(server.get('path_peer_port', '0')))
+        if relay is None:
+            expect(seen == ('127.0.0.1', client_port), f'the server did not follow the client: {detail}')
+            return
+        expect(seen == relay.facing[-1], f'the server did not follow the relay\'s mapping {relay.facing}: {detail}')
+        rebind = (self.path or {}).get('rebind')
+        expect(relay.rebinds == (1 if rebind else 0) and relay.mappings == 1 + relay.rebinds + int(moved),
+               f'the relay made {relay.mappings} mappings, {relay.rebinds} rebinding: {detail}')
+
     def check_congestion(self, cerid, detail):
         """Cerid ran the controller the case names; BBR's model holds a bandwidth and a round trip, a bottleneck's
         within reach of its rate and its propagation delay, and a window controller has none."""
@@ -344,8 +398,10 @@ class Case:
             failure = 'exceeded' if mark == 'ect1' else 'missing'
             expect(cerid.get('ecn') == 'failed' and cerid.get('ecn_failure') == failure,
                    f'Cerid did not fail ECN validation as {failure}: {detail}')
-            # A Retry or Version Negotiation starts a client's testing again (a new connection, for the latter).
-            tests = 2 if self.retry or self.negotiate else 1
+            # A Retry or Version Negotiation starts a client's testing again (a new connection, for the latter), and
+            # ngtcp2 tests again on each new path: the relay's rebinding and the client's move.
+            tests = (2 if self.retry or self.negotiate else 1) + int(bool((self.path or {}).get('rebind'))) + \
+                int(bool(self.migrate_at) and not self.disable)
             expect(0 <= marked <= tests * ECN_TESTING_PACKETS, f'ngtcp2 marked past its testing: {detail}')
             if verdict:
                 expect(ngtcp2.get('ecn_last') == 'not-ect', f'ngtcp2 did not fail ECN validation: {detail}')
@@ -467,6 +523,20 @@ def cases(cerid, ngtcp2):
                        path=dict(seed=seed, loss=0.05, duplicate=0.03, delay=0.003, jitter=0.012))
         yield case(congestion='bbr', streams=4, size=256 << 10, path=dict(mark='ce'))
         yield case(congestion='bbr', streams=4, size=4 << 20, path=dict(mtu=1350))
+        # Paths: a quarter of the echo read before the client moves, and transfers shorter than a settled MTU search.
+        quarter = 512 << 10
+        hostile = dict(loss=0.02, duplicate=0.02, delay=0.003, jitter=0.006)
+        for host in ('127.0.0.1', '127.0.0.2'):
+            yield case(streams=4, size=quarter, path=dict(rebind=(200, host)))
+        yield case(streams=4, size=quarter, path=dict(hostile, seed=1, rebind=(200, '127.0.0.2')))
+        for version in (1, 2):
+            yield case(version=version, streams=4, size=quarter, migrate_at=quarter)
+            yield case(version=version, streams=4, size=quarter, preferred=True)
+        yield case(streams=4, size=quarter, migrate_at=quarter, path=dict(hostile, seed=2))
+        yield case(streams=4, size=quarter, migrate_at=quarter, path=dict(rebind=(200, '127.0.0.2')))
+        yield case(streams=4, size=quarter, migrate_at=quarter, disable=True)
+        yield case(streams=4, size=quarter, preferred=True, follow=False)
+        yield case(streams=4, size=quarter, preferred=True, migrate_at=quarter)
         yield case(compat=True)
         yield case(compat=True, streams=8, size=64 << 10)
         for version in (1, 2):

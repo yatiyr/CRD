@@ -6,6 +6,7 @@
  *                             [--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N]
  *                             [--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]]
  *                             [--only-version 1] [--progress-at N] [--resets 1] [--cc reno|cubic|bbr]
+ *                             [--migrate-at N] [--preferred 1] [--follow-preferred 0] [--disable-migration 1]
  *                             [--http3 1 ...]
  *
  *   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
@@ -30,6 +31,12 @@
  *   resets       a server answers a short header for no connection with a stateless reset: its tokens are derived from
  *                a fixed key, so a restarted process answers for the connections of the one before
  *   cc           ngtcp2's congestion controller (CUBIC by default): reno, cubic, or its BBR (ngtcp2_bbr.c)
+ *   migrate-at   a client moves its connection to a second socket of its own once it has read this many stream bytes
+ *                (ngtcp2_conn_initiate_migration, which validates the path first: RFC 9000 section 9.2), asking
+ *                again while ngtcp2 answers that the handshake is unconfirmed or no connection ID is free
+ *   preferred    a server also binds a second socket and offers it as its preferred address (section 9.6)
+ *   follow-preferred  0: a client declines the preferred address (select_preferred_addr leaves the path)
+ *   disable-migration  a server sends disable_active_migration (section 18.2)
  *
  *   http3        HTTP/3 over nghttp3 instead of the echo: http_exchange.h has its options, ALPN `h3` instead
  *
@@ -39,7 +46,13 @@
  * More than NGTCP2_ECN_MAX_NUM_VALIDATION_PKTS (10) datagrams marked ECT(0) means it found the path capable, as it
  * marks no more while testing; the last packet unmarked means it stopped. `pmtu` is the datagram size its path MTU
  * discovery reached (RFC 8899 over its fixed probe sizes) and `peer_max_udp_payload` the max_udp_payload_size its peer
- * advertised. The application is `cerid-interop`, a private ALPN. */
+ * advertised. This end's first socket's port (`first_port`) and the path the connection ended on
+ * (ngtcp2_conn_get_path) are reported as cerid_quic_peer.cpp reports its own: `path_local_port`, `path_peer_address`,
+ * `path_peer_port`, `preferred` (a client validated the preferred address and moved there, a server's path is on its
+ * preferred socket), a client's `migration` (none, started, disabled, or ngtcp2's error) and a server's
+ * `preferred_port`. Every packet leaves by the socket and toward the
+ * address of the path ngtcp2 wrote it for, and each datagram is read with the path it arrived on. The application is
+ * `cerid-interop`, a private ALPN. */
 #define _GNU_SOURCE /* ppoll */
 #include "ngtcp2_http3.h"
 #include "openssl_self_signed.h"
@@ -112,9 +125,11 @@ typedef struct
     uint64_t                bytes;
     uint64_t                max_streams;
     uint32_t                version;
-    int                     fd;
-    struct sockaddr_in      local;
-    struct sockaddr_in      remote;
+    int                     fd[2]; /* the first socket, and a second for a client's move or a preferred address */
+    struct sockaddr_in      local[2];
+    unsigned                sockets;
+    unsigned                arrival; /* the socket a datagram before any connection arrived on */
+    struct sockaddr_in      remote;  /* a client's server; a server's last sender before its connection */
     SSL_CTX*                ctx;
     SSL*                    ssl;
     ngtcp2_crypto_ossl_ctx* ossl;
@@ -138,6 +153,10 @@ typedef struct
     int                     only_version;
     int                     resets;
     int                     datagram_probe;
+    uint64_t                migrate_at;
+    int                     preferred;
+    int                     follow_preferred;
+    int                     disable_migration;
     ngtcp2_cc_algo          cc_algo;
     SSL_SESSION*            session; /* a client's newest ticket */
     uint8_t                 early_parameters[MAX_EARLY_PARAMETERS];
@@ -174,6 +193,9 @@ typedef struct
     int                     unverified;
     int                     established;
     int                     pin_matched;
+    int                     on_preferred;  /* a client's path to the preferred address was validated */
+    const char*             migration;     /* a client's last answer to its move, NULL before it asked */
+    int                     moved;         /* that answer is final */
     uint8_t                 ecn_last; /* the codepoint of the last packet written that was not a close */
 } peer_t;
 
@@ -495,6 +517,33 @@ static int handshake_completed(ngtcp2_conn* conn, void* user)
     return 0;
 }
 
+/* A client takes the server's IPv4 preferred address from the socket it is on, unless told to decline it. */
+static int select_preferred(ngtcp2_conn* conn, ngtcp2_path* dest, const ngtcp2_preferred_addr* preferred, void* user)
+{
+    (void)conn;
+    const peer_t* peer = user;
+    if (peer->follow_preferred && preferred->ipv4_present)
+    {
+        memcpy(dest->remote.addr, &preferred->ipv4, sizeof(preferred->ipv4));
+        dest->remote.addrlen = sizeof(preferred->ipv4);
+    }
+    return 0;
+}
+
+static int path_validated(ngtcp2_conn* conn, uint32_t flags, const ngtcp2_path* path,
+                          const ngtcp2_path* fallback, ngtcp2_path_validation_result result, void* user)
+{
+    (void)conn;
+    (void)path;
+    (void)fallback;
+    peer_t* peer = user;
+    if (result == NGTCP2_PATH_VALIDATION_RESULT_SUCCESS && (flags & NGTCP2_PATH_VALIDATION_FLAG_PREFERRED_ADDR) != 0U)
+    {
+        peer->on_preferred = 1;
+    }
+    return 0;
+}
+
 static ngtcp2_conn* conn_of(ngtcp2_crypto_conn_ref* ref)
 {
     return ((peer_t*)ref->user_data)->conn;
@@ -619,12 +668,13 @@ static int make_tls(peer_t* peer, const char* group, const char* cipher, const u
     return make_session(peer);
 }
 
-static ngtcp2_path path_of(peer_t* peer)
+/* The path from socket `index` to the remote address this end knows. */
+static ngtcp2_path path_of(peer_t* peer, unsigned index)
 {
     ngtcp2_path path;
     memset(&path, 0, sizeof(path));
-    path.local.addr     = (ngtcp2_sockaddr*)&peer->local;
-    path.local.addrlen  = sizeof(peer->local);
+    path.local.addr     = (ngtcp2_sockaddr*)&peer->local[index];
+    path.local.addrlen  = sizeof(peer->local[index]);
     path.remote.addr    = (ngtcp2_sockaddr*)&peer->remote;
     path.remote.addrlen = sizeof(peer->remote);
     return path;
@@ -653,6 +703,8 @@ static void default_callbacks(const peer_t* peer, ngtcp2_callbacks* callbacks)
     callbacks->recv_version_negotiation  = recv_version_negotiation;
     callbacks->handshake_completed       = handshake_completed;
     callbacks->tls_early_data_rejected   = early_data_rejected;
+    callbacks->select_preferred_addr     = select_preferred;
+    callbacks->path_validation           = path_validated;
     if (peer->app != NULL)
     {
         callbacks->acked_stream_data_offset       = acked_stream_data;
@@ -716,7 +768,7 @@ static int start_client(peer_t* peer)
     {
         return 0;
     }
-    ngtcp2_path path = path_of(peer);
+    ngtcp2_path path = path_of(peer, 0U);
     if (ngtcp2_conn_client_new(&peer->conn, &dcid, &scid, &path, peer->version, &callbacks, &settings, &params, NULL,
                                peer) != 0)
     {
@@ -732,7 +784,8 @@ static int start_client(peer_t* peer)
     return 1;
 }
 
-static int send_datagram(peer_t* peer, const uint8_t* data, size_t size, uint8_t ecn);
+static int send_datagram(peer_t* peer, unsigned index, const struct sockaddr_in* to, const uint8_t* data, size_t size,
+                         uint8_t ecn);
 
 /* A Retry for `header`'s client Initial, with a token proving its address. */
 static int send_retry(peer_t* peer, const ngtcp2_pkt_hd* header)
@@ -756,7 +809,7 @@ static int send_retry(peer_t* peer, const ngtcp2_pkt_hd* header)
     }
     const ngtcp2_ssize wrote = ngtcp2_crypto_write_retry(packet, sizeof(packet), header->version, &header->scid, &scid,
                                                          &header->dcid, token, (size_t)token_bytes);
-    return wrote > 0 && send_datagram(peer, packet, (size_t)wrote, NGTCP2_ECN_NOT_ECT);
+    return wrote > 0 && send_datagram(peer, peer->arrival, &peer->remote, packet, (size_t)wrote, NGTCP2_ECN_NOT_ECT);
 }
 
 /* A client Initial makes the connection; a datagram before it that is none is dropped. */
@@ -811,7 +864,22 @@ static int start_server(peer_t* peer, const uint8_t* data, size_t size)
     {
         return 0;
     }
-    ngtcp2_path path = path_of(peer);
+    if (peer->preferred)
+    {
+        ngtcp2_preferred_addr* preferred = &params.preferred_addr;
+        preferred->cid.datalen           = SERVER_CID_BYTES;
+        if (RAND_bytes(preferred->cid.data, (int)preferred->cid.datalen) != 1 ||
+            ngtcp2_crypto_generate_stateless_reset_token(preferred->stateless_reset_token, RESET_SECRET,
+                                                         sizeof(RESET_SECRET), &preferred->cid) != 0)
+        {
+            return 0;
+        }
+        memcpy(&preferred->ipv4, &peer->local[1], sizeof(preferred->ipv4));
+        preferred->ipv4_present      = 1U;
+        params.preferred_addr_present = 1U;
+    }
+    params.disable_active_migration = (uint8_t)(peer->disable_migration != 0);
+    ngtcp2_path path = path_of(peer, peer->arrival);
     if (ngtcp2_conn_server_new(&peer->conn, &header.scid, &scid, &path, header.version, &callbacks, &settings, &params,
                                NULL, peer) != 0)
     {
@@ -828,16 +896,17 @@ typedef union
     struct cmsghdr align;
 } control_t;
 
-/* One datagram, its IP header carrying `ecn` (RFC 3168) as ngtcp2 chose it. */
-static int send_datagram(peer_t* peer, const uint8_t* data, size_t size, uint8_t ecn)
+/* One datagram from socket `index` to `to`, its IP header carrying `ecn` (RFC 3168) as ngtcp2 chose it. */
+static int send_datagram(peer_t* peer, unsigned index, const struct sockaddr_in* to, const uint8_t* data, size_t size,
+                         uint8_t ecn)
 {
     control_t     control;
     struct iovec  piece = {(void*)(uintptr_t)data, size}; /* sendmsg reads it only */
     struct msghdr message;
     memset(&control, 0, sizeof(control));
     memset(&message, 0, sizeof(message));
-    message.msg_name       = &peer->remote;
-    message.msg_namelen    = sizeof(peer->remote);
+    message.msg_name       = (void*)(uintptr_t)to; /* sendmsg reads it only */
+    message.msg_namelen    = sizeof(*to);
     message.msg_iov        = &piece;
     message.msg_iovlen     = 1U;
     message.msg_control    = control.bytes;
@@ -851,10 +920,28 @@ static int send_datagram(peer_t* peer, const uint8_t* data, size_t size, uint8_t
     ssize_t sent;
     do
     {
-        sent = sendmsg(peer->fd, &message, 0);
+        sent = sendmsg(peer->fd[index], &message, 0);
     } while (sent < 0 && errno == EINTR);
     /* A full socket buffer loses a datagram, as a path may. */
     return sent >= 0 || errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS;
+}
+
+/* A packet ngtcp2 wrote for `path`: from the socket bound to its local address, to its remote one. */
+static int send_on_path(peer_t* peer, const ngtcp2_path* path, const uint8_t* data, size_t size, uint8_t ecn)
+{
+    unsigned index = 0U;
+    for (unsigned at = 0U; at < peer->sockets; ++at)
+    {
+        if (path->local.addrlen == sizeof(peer->local[at]) &&
+            memcmp(path->local.addr, &peer->local[at], sizeof(peer->local[at])) == 0)
+        {
+            index = at;
+        }
+    }
+    const struct sockaddr_in* to = path->remote.addrlen == sizeof(struct sockaddr_in)
+                                       ? (const struct sockaddr_in*)path->remote.addr
+                                       : &peer->remote;
+    return send_datagram(peer, index, to, data, size, ecn);
 }
 
 /* RFC 9000 section 10.3: for a short header of no connection, a reset no longer than what it answers. */
@@ -877,7 +964,7 @@ static int send_reset(peer_t* peer, const uint8_t* data, size_t size)
         return 0;
     }
     const ngtcp2_ssize wrote = ngtcp2_pkt_write_stateless_reset2(packet, sizeof(packet), &token, filler, filler_size);
-    return wrote > 0 && send_datagram(peer, packet, (size_t)wrote, NGTCP2_ECN_NOT_ECT);
+    return wrote > 0 && send_datagram(peer, peer->arrival, &peer->remote, packet, (size_t)wrote, NGTCP2_ECN_NOT_ECT);
 }
 
 /* Version Negotiation for a client Initial of another version: 1 when it was one, and answered. */
@@ -897,7 +984,7 @@ static int answer_other_version(peer_t* peer, const uint8_t* data, size_t size)
                                           packet, sizeof(packet), unused, version.scid, version.scidlen, version.dcid,
                                           version.dcidlen, &peer->version, 1U)
                                     : -1;
-    return wrote > 0 && send_datagram(peer, packet, (size_t)wrote, NGTCP2_ECN_NOT_ECT);
+    return wrote > 0 && send_datagram(peer, peer->arrival, &peer->remote, packet, (size_t)wrote, NGTCP2_ECN_NOT_ECT);
 }
 
 /* A client's streams, or a turn of HTTP/3; 0 when the connection cannot go on. */
@@ -974,9 +1061,10 @@ static int datagram_ready(const peer_t* peer)
 }
 
 /* What goes after a packet is written, marked `ecn`: 1 to carry on, 0 to give up. */
-static int packet_written(peer_t* peer, const uint8_t* packet, size_t size, uint8_t ecn, uint64_t now)
+static int packet_written(peer_t* peer, const ngtcp2_path* path, const uint8_t* packet, size_t size, uint8_t ecn,
+                          uint64_t now)
 {
-    if (!send_datagram(peer, packet, size, ecn))
+    if (!send_on_path(peer, path, packet, size, ecn))
     {
         return 0;
     }
@@ -1051,7 +1139,7 @@ static int write_one_datagram(peer_t* peer, ngtcp2_path_storage* storage, ngtcp2
         *held = 1;
         return 1;
     }
-    return packet_written(peer, datagram, (size_t)wrote, info->ecn, now);
+    return packet_written(peer, &storage->path, datagram, (size_t)wrote, info->ecn, now);
 }
 
 /* What nghttp3 has to write, and HTTP datagrams beside it. */
@@ -1118,7 +1206,7 @@ static int write_http3(peer_t* peer)
             ngtcp2_conn_update_pkt_tx_time(peer->conn, now);
             return 1;
         }
-        if (!packet_written(peer, datagram, (size_t)wrote, info.ecn, now))
+        if (!packet_written(peer, &storage.path, datagram, (size_t)wrote, info.ecn, now))
         {
             return 0;
         }
@@ -1219,7 +1307,7 @@ static int write_streams(peer_t* peer)
             }
             continue;
         }
-        if (!packet_written(peer, datagram, (size_t)wrote, info.ecn, now))
+        if (!packet_written(peer, &storage.path, datagram, (size_t)wrote, info.ecn, now))
         {
             return 0;
         }
@@ -1342,6 +1430,18 @@ static void report(peer_t* peer, const char* close_kind, uint64_t close_code)
     printf("pmtu=%zu\npeer_max_udp_payload=%llu\n",
            peer->conn != NULL ? ngtcp2_conn_get_path_max_tx_udp_payload_size2(peer->conn) : (size_t)0,
            remote != NULL ? (unsigned long long)remote->max_udp_payload_size : 0ULL);
+    const ngtcp2_path*        path  = peer->conn != NULL ? ngtcp2_conn_get_path(peer->conn) : NULL;
+    const struct sockaddr_in* local = path != NULL ? (const struct sockaddr_in*)path->local.addr : &peer->local[0];
+    const struct sockaddr_in* to    = path != NULL ? (const struct sockaddr_in*)path->remote.addr : &peer->remote;
+    char                      address[INET_ADDRSTRLEN] = "";
+    (void)inet_ntop(AF_INET, &to->sin_addr, address, sizeof(address));
+    const int on_preferred =
+        peer->client ? peer->on_preferred : peer->preferred && local->sin_port == peer->local[1].sin_port;
+    printf("first_port=%u\npath_local_port=%u\npath_peer_address=%s\npath_peer_port=%u\npreferred=%d\n"
+           "migration=%s\npreferred_port=%u\n",
+           (unsigned)ntohs(peer->local[0].sin_port), (unsigned)ntohs(local->sin_port), address,
+           (unsigned)ntohs(to->sin_port), on_preferred, peer->migration != NULL ? peer->migration : "none",
+           peer->preferred ? (unsigned)ntohs(peer->local[1].sin_port) : 0U);
     if (peer->app != NULL)
     {
         http3_report(peer->app);
@@ -1367,20 +1467,23 @@ static void close_connection(peer_t* peer, uint64_t code)
     {
         return;
     }
-    (void)send_datagram(peer, datagram, (size_t)wrote, info.ecn);
+    (void)send_on_path(peer, &storage.path, datagram, (size_t)wrote, info.ecn);
     const uint64_t deadline = now_ns() + CLOSING_NS;
     uint64_t       quiet    = now_ns() + CLOSING_QUIET_NS;
     while (now_ns() < deadline && now_ns() < quiet)
     {
-        struct pollfd   entry   = {peer->fd, POLLIN, 0};
-        struct timespec timeout = {0, (long)(10U * NGTCP2_MILLISECONDS)};
-        if (ppoll(&entry, 1U, &timeout, NULL) > 0)
+        struct pollfd   entries[2] = {{peer->fd[0], POLLIN, 0}, {peer->fd[1], POLLIN, 0}};
+        struct timespec timeout    = {0, (long)(10U * NGTCP2_MILLISECONDS)};
+        if (ppoll(entries, peer->sockets, &timeout, NULL) > 0)
         {
             uint8_t ignored[DATAGRAM_BYTES];
-            while (recv(peer->fd, ignored, sizeof(ignored), MSG_DONTWAIT) > 0)
+            for (unsigned index = 0U; index < peer->sockets; ++index)
             {
-                (void)send_datagram(peer, datagram, (size_t)wrote, info.ecn);
-                quiet = now_ns() + CLOSING_QUIET_NS;
+                while (recv(peer->fd[index], ignored, sizeof(ignored), MSG_DONTWAIT) > 0)
+                {
+                    (void)send_on_path(peer, &storage.path, datagram, (size_t)wrote, info.ecn);
+                    quiet = now_ns() + CLOSING_QUIET_NS;
+                }
             }
         }
     }
@@ -1444,8 +1547,8 @@ static uint8_t received_ecn(struct msghdr* message)
     return NGTCP2_ECN_NOT_ECT;
 }
 
-/* Reads every datagram waiting; 0 when the connection has ended (the report written). */
-static int read_datagrams(peer_t* peer)
+/* Reads every datagram waiting on socket `index`; 0 when the connection has ended (the report written). */
+static int read_socket(peer_t* peer, unsigned index)
 {
     uint8_t datagram[65536];
     for (;;)
@@ -1461,7 +1564,7 @@ static int read_datagrams(peer_t* peer)
         message.msg_iovlen     = 1U;
         message.msg_control    = control.bytes;
         message.msg_controllen = sizeof(control.bytes);
-        const ssize_t size     = recvmsg(peer->fd, &message, MSG_DONTWAIT);
+        const ssize_t size     = recvmsg(peer->fd[index], &message, MSG_DONTWAIT);
         if (size < 0)
         {
             return 1;
@@ -1470,7 +1573,8 @@ static int read_datagrams(peer_t* peer)
         ++peer->ecn_received[ecn];
         if (peer->conn == NULL)
         {
-            peer->remote = from;
+            peer->remote  = from;
+            peer->arrival = index;
             if (peer->resets && size > 0 && (datagram[0] & 0x80U) == 0U)
             {
                 if (!send_reset(peer, datagram, (size_t)size))
@@ -1494,7 +1598,8 @@ static int read_datagrams(peer_t* peer)
             }
         }
         ngtcp2_pkt_info info = {ecn};
-        ngtcp2_path     path = path_of(peer);
+        ngtcp2_path     path = path_of(peer, index);
+        path.remote.addr     = (ngtcp2_sockaddr*)&from;
         const int result = ngtcp2_conn_read_pkt(peer->conn, &path, &info, datagram, (size_t)size, now_ns());
         if (result == NGTCP2_ERR_DRAINING)
         {
@@ -1535,6 +1640,47 @@ static int read_datagrams(peer_t* peer)
     }
 }
 
+/* Reads every socket; 0 when the connection has ended. */
+static int read_datagrams(peer_t* peer)
+{
+    for (unsigned index = 0U; index < peer->sockets; ++index)
+    {
+        if (!read_socket(peer, index))
+        {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* A client's move to its second socket once it has read `migrate_at` bytes: 0 when ngtcp2 fails it. */
+static int migrate(peer_t* peer, uint64_t now)
+{
+    if (!peer->client || peer->migrate_at == 0U || peer->moved || peer->bytes_received < peer->migrate_at)
+    {
+        return 1;
+    }
+    const ngtcp2_transport_params* remote = ngtcp2_conn_get_remote_transport_params(peer->conn);
+    if (remote != NULL && remote->disable_active_migration)
+    {
+        peer->migration = "disabled";
+        peer->moved     = 1;
+        return 1;
+    }
+    ngtcp2_path path = *ngtcp2_conn_get_path(peer->conn);
+    path.local.addr    = (ngtcp2_sockaddr*)&peer->local[1];
+    path.local.addrlen = sizeof(peer->local[1]);
+    const int result   = ngtcp2_conn_initiate_migration(peer->conn, &path, now);
+    if (result == NGTCP2_ERR_INVALID_STATE || result == NGTCP2_ERR_CONN_ID_BLOCKED)
+    {
+        peer->migration = result == NGTCP2_ERR_INVALID_STATE ? "not-confirmed" : "no-connection-id";
+        return 1;
+    }
+    peer->migration = result == 0 ? "started" : ngtcp2_strerror(result);
+    peer->moved     = 1;
+    return result == 0;
+}
+
 static int run(peer_t* peer)
 {
     const uint64_t deadline = now_ns() + (RUN_SECONDS * NGTCP2_SECONDS);
@@ -1554,9 +1700,9 @@ static int run(peer_t* peer)
             /* A datagram that never comes tells ngtcp2 nothing: the wait for it is this program's, and HTTP/3's turns. */
             wait = ((peer->datagrams != 0U || peer->app != NULL) && wait > DATAGRAM_WAKE_NS) ? DATAGRAM_WAKE_NS : wait;
         }
-        struct pollfd   entry   = {peer->fd, POLLIN, 0};
-        struct timespec timeout = {(time_t)(wait / NGTCP2_SECONDS), (long)(wait % NGTCP2_SECONDS)};
-        (void)ppoll(&entry, 1U, &timeout, NULL);
+        struct pollfd   entries[2] = {{peer->fd[0], POLLIN, 0}, {peer->fd[1], POLLIN, 0}};
+        struct timespec timeout    = {(time_t)(wait / NGTCP2_SECONDS), (long)(wait % NGTCP2_SECONDS)};
+        (void)ppoll(entries, peer->sockets, &timeout, NULL);
         if (!read_datagrams(peer))
         {
             return peer->established;
@@ -1577,7 +1723,7 @@ static int run(peer_t* peer)
             }
         }
         peer->first_ns = peer->first_ns != 0U ? peer->first_ns : current;
-        if (!open_streams(peer) || !write_streams(peer))
+        if (!migrate(peer, current) || !open_streams(peer) || !write_streams(peer))
         {
             report(peer, "failed", 0U);
             return 0;
@@ -1636,7 +1782,8 @@ static int usage(void)
           "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] [--retry 1]"
           " [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]]"
           " [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N] [--resets 1]"
-          " [--cc reno|cubic|bbr] [--http3 1 ...]\n",
+          " [--cc reno|cubic|bbr] [--migrate-at N] [--preferred 1] [--follow-preferred 0] [--disable-migration 1]"
+          " [--http3 1 ...]\n",
           stderr);
     return 2;
 }
@@ -1656,6 +1803,7 @@ int main(int argc, char** argv)
     peer.connections    = 1U;
     peer.number         = 1U;
     peer.cc_algo        = NGTCP2_CC_ALGO_CUBIC;
+    peer.follow_preferred = 1;
     httpx_default_options(&peer.http3);
     for (int at = 1; at + 1 < argc; at += 2)
     {
@@ -1760,6 +1908,22 @@ int main(int argc, char** argv)
         {
             peer.resets = atoi(value);
         }
+        else if (strcmp(argv[at], "--migrate-at") == 0)
+        {
+            peer.migrate_at = strtoull(value, NULL, 10);
+        }
+        else if (strcmp(argv[at], "--preferred") == 0)
+        {
+            peer.preferred = atoi(value);
+        }
+        else if (strcmp(argv[at], "--follow-preferred") == 0)
+        {
+            peer.follow_preferred = atoi(value);
+        }
+        else if (strcmp(argv[at], "--disable-migration") == 0)
+        {
+            peer.disable_migration = atoi(value);
+        }
         else if (strcmp(argv[at], "--cc") == 0 && strcmp(value, "reno") == 0)
         {
             peer.cc_algo = NGTCP2_CC_ALGO_RENO;
@@ -1795,21 +1959,28 @@ int main(int argc, char** argv)
         fputs("crd-ngtcp2-quic-peer: TLS could not be set up\n", stderr);
         return 1;
     }
-    peer.fd = socket(AF_INET, SOCK_DGRAM, 0);
     struct sockaddr_in bound;
     memset(&bound, 0, sizeof(bound));
     bound.sin_family      = AF_INET;
     bound.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    bound.sin_port        = peer.client ? 0U : htons((uint16_t)port);
-    socklen_t size        = sizeof(bound);
-    const int receive_tos = 1;
-    if (peer.fd < 0 || setsockopt(peer.fd, IPPROTO_IP, IP_RECVTOS, &receive_tos, sizeof(receive_tos)) != 0 ||
-        bind(peer.fd, (struct sockaddr*)&bound, sizeof(bound)) != 0 ||
-        getsockname(peer.fd, (struct sockaddr*)&peer.local, &size) != 0)
+    peer.sockets          = (peer.client ? peer.migrate_at != 0U : peer.preferred) ? 2U : 1U;
+    peer.fd[1]            = -1;
+    for (unsigned index = 0U; index < peer.sockets; ++index)
     {
-        perror("crd-ngtcp2-quic-peer: socket");
-        return 1;
+        bound.sin_port        = peer.client || index != 0U ? 0U : htons((uint16_t)port);
+        socklen_t size        = sizeof(peer.local[index]);
+        const int receive_tos = 1;
+        peer.fd[index]        = socket(AF_INET, SOCK_DGRAM, 0);
+        if (peer.fd[index] < 0 ||
+            setsockopt(peer.fd[index], IPPROTO_IP, IP_RECVTOS, &receive_tos, sizeof(receive_tos)) != 0 ||
+            bind(peer.fd[index], (struct sockaddr*)&bound, sizeof(bound)) != 0 ||
+            getsockname(peer.fd[index], (struct sockaddr*)&peer.local[index], &size) != 0)
+        {
+            perror("crd-ngtcp2-quic-peer: socket");
+            return 1;
+        }
     }
+    bound.sin_port = 0U;
     if (peer.client)
     {
         peer.remote           = bound;
@@ -1817,7 +1988,7 @@ int main(int argc, char** argv)
     }
     else
     {
-        printf("port=%u\n", (unsigned)ntohs(peer.local.sin_port));
+        printf("port=%u\n", (unsigned)ntohs(peer.local[0].sin_port));
         fflush(stdout);
     }
     const uint64_t connections = peer.connections;

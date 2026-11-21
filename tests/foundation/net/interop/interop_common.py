@@ -97,7 +97,15 @@ class Relay:
     that would take the queue past `buffer` bytes is dropped (drop-tail) and counted in `tail_drops`. `queued` sums
     the seconds each datagram that entered waited, over `entered` of them, so their mean is the standing queue.
     `utilisation` is the share of the link's rate that full datagrams (data, not acknowledgements) used each way, from
-    `after` seconds past the first that entered until the last left."""
+    `after` seconds past the first that entered until the last left.
+
+    The relay is a NAT toward the server: each client address it hears from gets a socket of its own facing the
+    server, so a client that migrates to another socket reaches the server from another address (`mappings` counts
+    them). `rebind` = (after, host) gives the client's address a new socket bound on `host` at its first datagram
+    once that many have crossed toward the server, a NAT rebinding (RFC 9000 section 9.3): a port change alone on
+    127.0.0.1, an address change on another loopback address. The mapping given up stays open, as a NAT that forgot
+    it, and what the server still sends there is dropped and counted in `unmapped`. `facing` lists the server-facing
+    addresses in the order they were made."""
 
     FULL = 1000  # bytes from which a datagram counts as carrying data
 
@@ -106,7 +114,7 @@ class Relay:
     RECVTOS = getattr(socket, 'IP_RECVTOS', 13)  # Linux's value, where Python does not name it
 
     def __init__(self, server_port, seed=0, loss=0.0, duplicate=0.0, delay=0.0, jitter=0.0, mark=None, mtu=None,
-                 fall=None, rate=None, buffer=None, step=None, ramp=None, classic=None):
+                 fall=None, rate=None, buffer=None, step=None, ramp=None, classic=None, rebind=None):
         expect((rate is None) == (buffer is None), 'a bottleneck needs a rate and a buffer')
         aqm = step is not None or ramp is not None or classic is not None
         expect(not aqm or (mark == 'keep' and rate is not None), 'an AQM marks kept codepoints at a bottleneck')
@@ -134,17 +142,18 @@ class Relay:
         self.duplicate = duplicate
         self.delay = delay
         self.jitter = jitter
-        self.client_side = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.client_side.bind(('127.0.0.1', 0))
-        self.server_side = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.server_side.bind(('127.0.0.1', 0))
-        for side in (self.client_side, self.server_side):
-            if self.keep:
-                side.setsockopt(socket.IPPROTO_IP, self.RECVTOS, 1)
-            else:
-                side.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, self.MARKS[mark])
+        self.mark = mark
+        self.rebind = rebind
+        self.client_side = self.open_side('127.0.0.1')
         self.port = self.client_side.getsockname()[1]
-        self.client = None
+        self.first_side = self.open_side('127.0.0.1')  # the first client address's, made before it is heard from
+        self.facing = [self.first_side.getsockname()]
+        self.toward_server = {}  # a client address: its socket facing the server
+        self.client_of = {}  # a socket facing the server: the client address it carries
+        self.retired = []
+        self.mappings = 0
+        self.rebinds = 0
+        self.unmapped = 0
         self.retries = 0
         self.negotiations = 0
         self.running = True
@@ -152,6 +161,37 @@ class Relay:
         self.order = 0
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
+
+    def open_side(self, host):
+        side = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        side.bind((host, 0))
+        if self.keep:
+            side.setsockopt(socket.IPPROTO_IP, self.RECVTOS, 1)
+        else:
+            side.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, self.MARKS[self.mark])
+        return side
+
+    def facing_server(self, client):
+        """The socket that carries `client`'s datagrams toward the server: its mapping, made when it has none (the
+        first client address takes the socket made with the relay) and remade on the rebinding."""
+        side = self.toward_server.get(client)
+        if side is None:
+            side = self.first_side if self.mappings == 0 else self.open_side('127.0.0.1')
+            self.map(client, side)
+        elif self.rebind is not None and self.rebinds == 0 and self.crossed['server'] >= self.rebind[0]:
+            del self.client_of[side]
+            self.retired.append(side)
+            side = self.open_side(self.rebind[1])
+            self.rebinds += 1
+            self.map(client, side)
+        return side
+
+    def map(self, client, side):
+        self.toward_server[client] = side
+        self.client_of[side] = client
+        self.mappings += 1
+        if side is not self.first_side:
+            self.facing.append(side.getsockname())
 
     def utilisation(self, toward, after=0.0):
         full = self.full[toward]
@@ -241,19 +281,20 @@ class Relay:
             sender.sendto(datagram, destination)
 
     def run(self):
-        sockets = [self.client_side, self.server_side]
         while self.running:
             wait = max(0.0, self.heap[0][0] - time.monotonic()) if self.heap else 0.05
+            sockets = list(dict.fromkeys((self.client_side, self.first_side, *self.client_of, *self.retired)))
             ready, _, _ = select.select(sockets, [], [], min(wait, 0.05))
             for side in ready:
                 datagram, sender, codepoint = self.receive(side)
                 if side is self.client_side:
-                    self.client = sender
-                    self.schedule(self.server_side, datagram, self.server, codepoint)
-                elif self.client is not None:
+                    self.schedule(self.facing_server(sender), datagram, self.server, codepoint)
+                elif side in self.client_of:
                     self.retries += 1 if self.is_retry(datagram) else 0
                     self.negotiations += 1 if self.is_version_negotiation(datagram) else 0
-                    self.schedule(self.client_side, datagram, self.client, codepoint)
+                    self.schedule(self.client_side, datagram, self.client_of[side], codepoint)
+                elif side in self.retired:
+                    self.unmapped += 1
             while self.heap and self.heap[0][0] <= time.monotonic():
                 _, _, sender, datagram, destination, codepoint = heapq.heappop(self.heap)
                 self.send(sender, datagram, destination, codepoint)
@@ -261,8 +302,8 @@ class Relay:
     def stop(self):
         self.running = False
         self.thread.join(5)
-        self.client_side.close()
-        self.server_side.close()
+        for side in {self.client_side, self.first_side, *self.client_of, *self.retired}:
+            side.close()
 
 
 class Chopper:

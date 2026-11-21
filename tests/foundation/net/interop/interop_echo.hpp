@@ -340,6 +340,8 @@ public:
     }
 
     [[nodiscard]] const crd::net::TicketCache* tickets() const noexcept { return m_tickets; }
+    // The stream bytes read so far.
+    [[nodiscard]] u64 received() const noexcept { return m_received; }
 
     // For another application over the connection, which reports through this one.
     void note_established(bool established) noexcept { m_established = m_established || established; }

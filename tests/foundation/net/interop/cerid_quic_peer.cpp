@@ -5,7 +5,8 @@
 //                      --bytes N --closer client|server --code N --max-streams N [--compat 1] [--retry 1]
 //                      [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]]
 //                      [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N]
-//                      [--receive-bytes N] [--congestion newreno|cubic|bbr|prague]
+//                      [--receive-bytes N] [--congestion newreno|cubic|bbr|prague] [--migrate-at N]
+//                      [--preferred 1] [--follow-preferred 0] [--disable-migration 1]
 //                      [--http3 1 ...] [--webtransport legacy|h3 ...] [--transport h3 --alpn NAME ...]
 //
 //   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
@@ -30,6 +31,11 @@
 //   progress-at  a server prints `progress=1` once it has read this many bytes
 //   receive-bytes  the largest datagram the loop reads whole (1500 by default), advertised as max_udp_payload_size
 //   congestion   the connections' controller (congestion.hpp; CUBIC by default)
+//   migrate-at   a client moves its connection to a second socket of its own once it has read this many stream bytes
+//                (RFC 9000 section 9.2), asking again while the connection answers NotConfirmed or NoConnectionId
+//   preferred    a server also binds a second socket and offers it as its preferred address (section 9.6)
+//   follow-preferred  0: a client stays on the server's handshake address (follow_preferred_address off)
+//   disable-migration  a server sends disable_active_migration (section 18.2)
 //   http3        HTTP/3 over Http3Connection instead of the echo: http_exchange.h has its options, ALPN `h3` instead
 //   webtransport WebTransport sessions instead, `legacy` or `h3`: interop_webtransport.hpp has its options
 //   transport    h3: WebSocket tunnels (RFC 9220) on one HTTP/3 connection instead, `connections` of them at once,
@@ -47,7 +53,11 @@
 // black holes (`black_holes`), the peer's max_udp_payload_size (`peer_max_udp_payload`), and the controller
 // (`congestion`) with its model's bandwidth in bytes per second and minimum round trip (`bandwidth`, `min_rtt_ns`; 0
 // for a window controller) and Prague's alpha in 2^-20 and classic share in 2^-16 (`alpha`, `classic`; 0 for the
-// others). The application is `cerid-interop`, a private ALPN.
+// others). This end's first socket's port (`first_port`), and the path the connection ended on: the socket
+// (`path_socket`, 0 the first) and its port (`path_local_port`), the peer's address and port there
+// (`path_peer_address`, `path_peer_port`), whether datagrams moved to the server's preferred address (`preferred`), a
+// client's last migrate() answer (`migration`: none, started, disabled, ...), and a server's preferred port
+// (`preferred_port`, 0 for none). The application is `cerid-interop`, a private ALPN.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -119,6 +129,10 @@ struct Options : QmuxOptions
     bool only_version = false;
     u32 receive_bytes = 1500U;
     CongestionAlgorithm congestion = CongestionAlgorithm::Cubic;
+    u64 migrate_at = 0U;
+    bool preferred = false;
+    bool follow_preferred = true;
+    bool disable_migration = false;
     httpx_options_t http3;
     WtOptions wt;
 };
@@ -224,6 +238,9 @@ WtExchange g_wt_exchanges[kMaxConnections];
 // The one connection's tunnels with --transport h3, ended with it: their HTTP/3 state reads its stream set.
 Http3Tunnels* g_tunnels = nullptr;
 const Options* g_options = nullptr;
+// The ports of this end's sockets, in the set's order, and a client's last migrate() answer (null: none asked).
+crd::u16 g_local_ports[2] = {};
+const char* g_migration = nullptr;
 
 // One turn of WebTransport on a connection.
 void serve_webtransport(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, const EchoTurn& turn) noexcept
@@ -321,6 +338,15 @@ const char* ecn_failure(QuicEcnFailure failure) noexcept
     return kEcnFailures[static_cast<unsigned>(failure)];
 }
 
+// QuicMigration as the report names it, in the enumeration's order.
+constexpr const char* kMigrations[] = {"started",     "not-client",       "not-confirmed", "disabled", "other-server",
+                                       "active-path", "no-connection-id", "no-connection", "no-socket"};
+
+const char* migration_name(QuicMigration migration) noexcept
+{
+    return kMigrations[static_cast<unsigned>(migration)];
+}
+
 // The controllers (congestion.hpp) by --congestion's names, in CongestionAlgorithm's order.
 constexpr const char* kCongestionNames[] = {"newreno", "cubic", "bbr", "prague"};
 
@@ -403,6 +429,15 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
                 static_cast<unsigned long long>(path.counters().black_holes),
                 static_cast<unsigned long long>(
                     connection.peer_parameters_known() ? connection.peer_parameters().max_udp_payload_size : 0U));
+    const QuicPath& active = connection.path();
+    const u8* const peer_address = active.peer.address.bytes;
+    std::printf("first_port=%u\npath_socket=%u\npath_local_port=%u\npath_peer_address=%u.%u.%u.%u\n"
+                "path_peer_port=%u\npreferred=%d\nmigration=%s\npreferred_port=%u\n",
+                static_cast<unsigned>(g_local_ports[0]), active.socket,
+                static_cast<unsigned>(g_local_ports[active.socket < 2U ? active.socket : 0U]), peer_address[0],
+                peer_address[1], peer_address[2], peer_address[3], static_cast<unsigned>(active.peer.port),
+                connection.on_preferred_address() ? 1 : 0, g_migration != nullptr ? g_migration : "none",
+                static_cast<unsigned>(g_options->preferred ? g_local_ports[1] : 0U));
     std::fflush(stdout);
     peer.ended(handle);
 }
@@ -513,7 +548,7 @@ QuicConnectionConfig connection_config(const Options& options, const TlsContext&
 
 // `turn` runs before each pass and returns false to end the run.
 template <typename Turn>
-int drive(const HostClock& clock, DatagramSocket& socket, IoLoop& loop, QuicHost& host, EchoPeer& peer,
+int drive(const HostClock& clock, const SocketSet& sockets, IoLoop& loop, QuicHost& host, EchoPeer& peer,
           const Turn& turn)
 {
     const u64 deadline = clock.monotonic_ns() + kRunNs;
@@ -525,7 +560,7 @@ int drive(const HostClock& clock, DatagramSocket& socket, IoLoop& loop, QuicHost
         }
         static_cast<void>(loop.poll());
         peer.wake(host, clock.monotonic_ns());
-        static_cast<void>(socket.wait_readable(kWaitNs));
+        static_cast<void>(sockets.wait_readable(kWaitNs));
     }
     if (!peer.done())
     {
@@ -535,17 +570,38 @@ int drive(const HostClock& clock, DatagramSocket& socket, IoLoop& loop, QuicHost
     return 0;
 }
 
+// This end's sockets on the loopback, the first on `port` and, when `second`, another on any port, kept in `members`
+// for a SocketSet and their ports in g_local_ports: how many, 0 when one could not be bound.
+u32 open_sockets(u64 port, bool second, UdpSocket (&sockets)[2], DatagramSocket* (&members)[2]) noexcept
+{
+    const u32 count = second ? 2U : 1U;
+    for (u32 index = 0U; index < count; ++index)
+    {
+        UdpOptions udp;
+        udp.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), index == 0U ? static_cast<crd::u16>(port) : crd::u16{0U}};
+        SocketError error = SocketError::Failed;
+        sockets[index] = UdpSocket::open(udp, error);
+        if (error != SocketError::None)
+        {
+            return 0U;
+        }
+        members[index] = &sockets[index];
+        g_local_ports[index] = sockets[index].local_endpoint().port;
+    }
+    return count;
+}
+
 int run_server(crd::memory::IAllocator& allocator, const Options& options, const TlsContext& context)
 {
-    UdpOptions udp;
-    udp.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), static_cast<crd::u16>(options.port)};
-    SocketError error = SocketError::Failed;
-    UdpSocket socket = UdpSocket::open(udp, error);
-    if (error != SocketError::None)
+    UdpSocket opened[2];
+    DatagramSocket* members[2] = {};
+    const u32 count = open_sockets(options.port, options.preferred, opened, members);
+    if (count == 0U)
     {
         std::fputs("crd-quic-peer: the socket could not be bound\n", stderr);
         return 1;
     }
+    const SocketSet sockets(ConstSpan<DatagramSocket*>(members, count));
     const HostClock clock;
     ConnectionIdTable routes(allocator, 64U);
     HandshakeRules rules;
@@ -593,30 +649,39 @@ int run_server(crd::memory::IAllocator& allocator, const Options& options, const
     {
         config.connection.early_context = ConstSpan<u8>(early_context, early_bytes);
     }
+    config.connection.parameters.disable_active_migration = options.disable_migration;
+    if (options.preferred)
+    {
+        QuicTransportParameters& parameters = config.connection.parameters;
+        parameters.has_preferred_address = true;
+        std::memcpy(parameters.preferred_address.ipv4, IpAddress::v4(127, 0, 0, 1).bytes, 4U);
+        parameters.preferred_address.ipv4_port = g_local_ports[1];
+        config.connection.preferred_socket = 1U;
+    }
     config.connections = kServerSlots;
     config.receive_bytes = options.receive_bytes;
-    QuicServer server(allocator, socket, clock, ingress, routes, reset, &tokens, app, config);
-    IoLoop loop(allocator, socket, clock, ingress, server, IoLoopConfig{.slot_bytes = options.receive_bytes});
+    QuicServer server(allocator, sockets, clock, ingress, routes, reset, &tokens, app, config);
+    IoLoop loop(allocator, sockets, clock, ingress, server, IoLoopConfig{.slot_bytes = options.receive_bytes});
     if (!server.ready() || !loop.ready())
     {
         std::fputs("crd-quic-peer: the server could not be made\n", stderr);
         return 1;
     }
-    std::printf("port=%u\n", static_cast<unsigned>(socket.local_endpoint().port));
+    std::printf("port=%u\n", static_cast<unsigned>(g_local_ports[0]));
     std::fflush(stdout);
-    return drive(clock, socket, loop, server, peer, [](u64) { return true; });
+    return drive(clock, sockets, loop, server, peer, [](u64) { return true; });
 }
 
 int run_client(crd::memory::IAllocator& allocator, const Options& options, const TlsContext& context)
 {
-    UdpOptions udp;
-    udp.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), 0U};
-    SocketError error = SocketError::Failed;
-    UdpSocket socket = UdpSocket::open(udp, error);
-    if (error != SocketError::None)
+    UdpSocket opened[2];
+    DatagramSocket* members[2] = {};
+    const u32 count = open_sockets(0U, options.migrate_at != 0U, opened, members);
+    if (count == 0U)
     {
         return 1;
     }
+    const SocketSet sockets(ConstSpan<DatagramSocket*>(members, count));
     const HostClock clock;
     ConnectionIdTable routes(allocator, 64U);
     QuicResetKey reset;
@@ -635,10 +700,11 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
     {
         config.connection.versions = ConstSpan<u32>(kBothVersions);
     }
+    config.connection.follow_preferred_address = options.follow_preferred;
     config.connections = 1U;
     config.receive_bytes = options.receive_bytes;
-    QuicClient client(allocator, socket, ingress, routes, reset, app, config);
-    IoLoop loop(allocator, socket, clock, ingress, client, IoLoopConfig{.slot_bytes = options.receive_bytes});
+    QuicClient client(allocator, sockets, ingress, routes, reset, app, config);
+    IoLoop loop(allocator, sockets, clock, ingress, client, IoLoopConfig{.slot_bytes = options.receive_bytes});
     if (!client.ready() || !loop.ready())
     {
         std::fputs("crd-quic-peer: the client could not be made\n", stderr);
@@ -646,13 +712,22 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
     }
     QuicClientConnect request;
     request.server = Endpoint{IpAddress::v4(127, 0, 0, 1), static_cast<crd::u16>(options.port)};
+    QuicHandle handle;
+    bool moving = options.migrate_at != 0U; // the move to the second socket is still to be asked for
     const auto next_connection = [&](u64 now_ns)
     {
+        const Echo* const echo = handle.valid() ? peer.echo_of(handle) : nullptr;
+        if (moving && echo != nullptr && echo->received() >= options.migrate_at)
+        {
+            const QuicMigration migration = client.migrate(handle, 1U, now_ns);
+            g_migration = migration_name(migration);
+            moving = migration == QuicMigration::NotConfirmed || migration == QuicMigration::NoConnectionId;
+        }
         if (!peer.idle() || peer.count() >= options.connections)
         {
             return true;
         }
-        const QuicHandle handle = client.connect(request, now_ns);
+        handle = client.connect(request, now_ns);
         if (!handle.valid())
         {
             std::fputs("crd-quic-peer: the connection could not be started\n", stderr);
@@ -661,7 +736,7 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
         peer.started(handle, peer.count() + 1U < options.connections ? &client.tickets() : nullptr);
         return true;
     };
-    return drive(clock, socket, loop, client, peer, next_connection);
+    return drive(clock, sockets, loop, client, peer, next_connection);
 }
 
 int usage()
@@ -670,7 +745,8 @@ int usage()
                "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] "
                "[--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] "
                "[--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] "
-               "[--progress-at N] [--receive-bytes N] [--congestion newreno|cubic|bbr|prague] [--http3 1 ...] "
+               "[--progress-at N] [--receive-bytes N] [--congestion newreno|cubic|bbr|prague] [--migrate-at N] "
+               "[--preferred 1] [--follow-preferred 0] [--disable-migration 1] [--http3 1 ...] "
                "[--webtransport legacy|h3 ...] "
                "[--transport h3 --alpn NAME [--idle-ms N] [--keepalive-ms N]]\n",
                stderr);
@@ -724,6 +800,22 @@ int main(int argc, char** argv)
         {
             options.receive_bytes = static_cast<u32>(std::strtoul(value, nullptr, 10));
         }
+        else if (std::strcmp(name, "--migrate-at") == 0)
+        {
+            options.migrate_at = std::strtoull(value, nullptr, 10);
+        }
+        else if (std::strcmp(name, "--preferred") == 0)
+        {
+            options.preferred = std::strcmp(value, "0") != 0;
+        }
+        else if (std::strcmp(name, "--follow-preferred") == 0)
+        {
+            options.follow_preferred = std::strcmp(value, "0") != 0;
+        }
+        else if (std::strcmp(name, "--disable-migration") == 0)
+        {
+            options.disable_migration = std::strcmp(value, "0") != 0;
+        }
         else if (std::strcmp(name, "--congestion") == 0)
         {
             if (!congestion_named(value, options.congestion))
@@ -745,14 +837,14 @@ int main(int argc, char** argv)
     }
     options.timed_service = runs_http3(options);
     // The tunnels count `connections` and run their own echo; the QUIC run is one connection with none.
-    static const QmuxOptions tunnel_options = options;
-    static const ConstSpan<u8> subprotocols[] = {bytes_of(options.alpn)};
-    static const WebSocketConfig websocket = websocket_config(subprotocols);
+    static const QmuxOptions kTunnelOptions = static_cast<const QmuxOptions&>(options); // the QMux part alone
+    static const ConstSpan<u8> kSubprotocols[] = {bytes_of(options.alpn)};
+    static const WebSocketConfig kWebSocket = websocket_config(kSubprotocols);
     alignas(Http3Tunnels) static unsigned char tunnel_storage[sizeof(Http3Tunnels)];
     if (options.tunnels)
     {
         options.connections = 1U;
-        g_tunnels = new (tunnel_storage) Http3Tunnels(tunnel_options, websocket);
+        g_tunnels = new (tunnel_storage) Http3Tunnels(kTunnelOptions, kWebSocket);
     }
     g_options = &options;
 
