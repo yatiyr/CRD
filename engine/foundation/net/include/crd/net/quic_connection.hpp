@@ -527,9 +527,10 @@ public:
     // peer_parameters_known(), once closing, for an empty token or one over kQuicMaxCarriedTokenBytes, or when it
     // has one, unless that one is for another path than the validated path() (a client that moved: section 9.3).
     [[nodiscard]] bool give_new_token(cont::ConstSpan<u8> token) noexcept;
-    // The packet number a space sends next, and whether `number` was skipped there (tests and NET-DEBUG).
-    [[nodiscard]] u64 next_packet_number(QuicSpace space) const noexcept;
-    [[nodiscard]] bool skipped(QuicSpace space, u64 number) const noexcept;
+    // The packet number a space sends next, and whether `number` was skipped there (tests and NET-DEBUG); the
+    // Application space's of path slot `slot`.
+    [[nodiscard]] u64 next_packet_number(QuicSpace space, usize slot = 0U) const noexcept;
+    [[nodiscard]] bool skipped(QuicSpace space, u64 number, usize slot = 0U) const noexcept;
 
 private:
     enum class Settle : u8
@@ -581,14 +582,31 @@ private:
     };
 
     // A frame a sent packet carried that is settled when the packet is acknowledged, lost or discarded. A packet's
-    // records are consecutive in the ring, the first named by its QuicSentPacket::token.
+    // records are consecutive in the ring, the first named by its QuicSentPacket::token; a packet is its space, its
+    // path slot (each path's numbers start at 0) and its number.
     struct SentFrame
     {
         u64 packet = 0U;
         QuicStreamRecord frame; // CRYPTO: value and length; RETIRE_CONNECTION_ID: value; a stream set's frame
         u8 space = 0U;
+        u8 path = 0U;
         u8 kind = 0U; // 0 for a settled record
     };
+
+    // One packet number space this side sends in: Initial, Handshake, or a path slot's Application space (RFC 10069
+    // section 2: one per path ID), indexed by number_space().
+    struct Numbering
+    {
+        u64 next = 0U;
+        u64 skipped = kQuicNoPacket; // the latest number skipped
+        u8 probes = 0U;              // probe packets the space owes
+        u32 ack_only = 0U;           // ACK-only packets sent since the last ack-eliciting one
+    };
+    static constexpr usize kNumberSpaces = kQuicSpaces - 1U + kQuicMaxPaths;
+    [[nodiscard]] static constexpr usize number_space(QuicSpace space, usize slot) noexcept
+    {
+        return quic_space_index(space) + ((space == QuicSpace::Application) ? slot : 0U);
+    }
 
     // What write_frames put into a packet.
     struct Written
@@ -841,10 +859,7 @@ private:
     bool m_new_token_owed = false; // a server's, until acknowledged
     bool m_new_token_acked = false;
 
-    u64 m_next_number[kQuicSpaces] = {};
-    u64 m_skipped[kQuicSpaces] = {kQuicNoPacket, kQuicNoPacket, kQuicNoPacket}; // the latest number skipped
-    u8 m_probes[kQuicSpaces] = {};
-    u32 m_ack_only[kQuicSpaces] = {}; // ACK-only packets sent since the last ack-eliciting one
+    Numbering m_numbers[kNumberSpaces];
     bool m_space_gone[kQuicSpaces] = {};
     bool m_handshake_keys = false;
     bool m_handshake_done_owed = false;

@@ -1641,9 +1641,9 @@ bool QuicConnection::retry(const QuicHeader& header, cont::ConstSpan<u8> packet,
     // (section 17.2.5.3).
     m_recovery->retry(now_ns, m_events);
     m_first_control.reset(now_ns);
-    for (u8& probes : m_probes)
+    for (Numbering& numbers : m_numbers)
     {
-        probes = 0U;
+        numbers.probes = 0U;
     }
     QuicSendBuffer& out = m_levels[quic_space_index(QuicSpace::Initial)].out;
     if (out.sent_end() > out.acked_end())
@@ -1661,7 +1661,7 @@ void QuicConnection::discard_space(QuicSpace space, u64 now_ns) noexcept
         return;
     }
     m_space_gone[index] = true;
-    m_probes[index] = 0U;
+    m_numbers[number_space(space, 0U)].probes = 0U; // never the Application space, which is never discarded
     static_cast<void>(m_recovery->discard(space, now_ns, m_events));
 }
 
@@ -1738,7 +1738,8 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
     const bool path_owed = space == QuicSpace::Application && send_type(space) == QuicPacketType::OneRtt &&
                            (m_paths.response_owed(active) || m_paths.challenge_due(active, now_ns) ||
                             observation_due(active));
-    if (m_recovery->ack_deadline_ns(space) <= now_ns || m_probes[index] > 0U || path_owed)
+    if (m_recovery->ack_deadline_ns(space) <= now_ns || m_numbers[number_space(space, send_slot())].probes > 0U ||
+        path_owed)
     {
         return true;
     }
@@ -1779,9 +1780,9 @@ void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
     path.disarm_pace();
     m_probe_fill = false;
     bool probing = false;
-    for (const u8 probes : m_probes)
+    for (const Numbering& numbers : m_numbers)
     {
-        probing = probing || probes > 0U;
+        probing = probing || numbers.probes > 0U;
     }
     if (probing)
     {
@@ -1872,6 +1873,7 @@ bool QuicConnection::record(QuicSpace space, u64 packet, u8 kind, const QuicStre
     sent.packet = packet;
     sent.frame = frame;
     sent.space = static_cast<u8>(space);
+    sent.path = static_cast<u8>((space == QuicSpace::Application) ? send_slot() : 0U); // the packet's, as write_packet's
     sent.kind = kind;
     written.token = (written.token == kNoRecord) ? at : written.token;
     ++m_frame_count;
@@ -1886,7 +1888,8 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
              at = (at + 1U) % m_config.sent_frames, ++walked)
         {
             SentFrame& frame = m_frames[at];
-            if (frame.kind == 0U || frame.packet != packet.number || frame.space != static_cast<u8>(space))
+            if (frame.kind == 0U || frame.packet != packet.number || frame.space != static_cast<u8>(space) ||
+                frame.path != packet.path)
             {
                 break;
             }
@@ -2001,7 +2004,8 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     // by themselves, so a PING lets the peer's ACK free their storage (RFC 9000 section 13.2.4).
     const auto put_owed_ping = [&]
     {
-        if (!written.eliciting && (m_probes[index] > 0U || m_ack_only[index] >= kAckOnlyRun))
+        const Numbering& numbers = m_numbers[number_space(space, send_slot())];
+        if (!written.eliciting && (numbers.probes > 0U || numbers.ack_only >= kAckOnlyRun))
         {
             QuicFrame ping;
             ping.kind = QuicFrameKind::Ping;
@@ -2288,8 +2292,9 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
                                    Carry carry, u64 now_ns) noexcept
 {
     const bool closing = carry == Carry::Close;
-    const usize index = quic_space_index(space);
-    u64 number = m_next_number[index];
+    const usize slot = (space == QuicSpace::Application) ? send_slot() : 0U;
+    Numbering& numbers = m_numbers[number_space(space, slot)];
+    u64 number = numbers.next;
     bool skip = false;
     if (space == QuicSpace::Application && !closing && (entropy() & kSkipMask) == 0U && number < kQuicMaxVarint)
     {
@@ -2362,8 +2367,8 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         fail((error == QuicTransportError::NoError) ? QuicTransportError::InternalError : error, 0U, now_ns);
         return 0U;
     }
-    m_skipped[index] = skip ? number - 1U : m_skipped[index];
-    m_next_number[index] = number + 1U;
+    numbers.skipped = skip ? number - 1U : numbers.skipped;
+    numbers.next = number + 1U;
     if (written.path_challenge)
     {
         m_paths.challenge_sent(m_send_path, cont::ConstSpan<u8>(m_challenge, kQuicPathDataBytes),
@@ -2372,10 +2377,10 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     }
     if (!closing)
     {
-        const usize slot = send_slot();
         QuicPathControl& path = control(slot);
         QuicSentPacket sent;
         sent.number = number;
+        sent.path = static_cast<u8>(slot);
         sent.sent_ns = now_ns;
         sent.carried_ack = written.carried_ack;
         sent.token = written.token;
@@ -2398,11 +2403,11 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         static_cast<void>(m_recovery->on_sent(space, sent)); // can_send held and numbers rise
         path.on_sent(space, sent, controlled, m_recovery->bytes_in_flight(slot), m_recovery->rtt(slot), now_ns);
         m_counters.probe_fills += written.fill ? 1U : 0U;
-        if (written.eliciting && m_probes[index] > 0U && carry != Carry::Probe && !off_path)
+        if (written.eliciting && numbers.probes > 0U && carry != Carry::Probe && !off_path)
         {
-            --m_probes[index];
+            --numbers.probes;
         }
-        m_ack_only[index] = written.eliciting ? 0U : m_ack_only[index] + 1U;
+        numbers.ack_only = written.eliciting ? 0U : numbers.ack_only + 1U;
         if (written.eliciting && !m_sent_since_receive)
         {
             m_sent_since_receive = true;
@@ -2526,7 +2531,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
         const usize initial = quic_space_index(QuicSpace::Initial);
         // A client pads every datagram with an Initial, a server those with an ack-eliciting one (section 14.1).
         bool pad = content[initial] && (m_config.side == crypto::QuicSide::Client || m_levels[initial].out.pending() ||
-                                        m_probes[initial] > 0U);
+                                        m_numbers[number_space(QuicSpace::Initial, 0U)].probes > 0U);
         // A padded Initial the amplification limit cannot carry waits for the peer's next datagram (section 8.1); what
         // a later space owes (an ACK of 0-RTT, Handshake data) still goes, unpadded, within the credit.
         if (pad && limit < kQuicMinInitialDatagram && last != QuicSpace::Initial)
@@ -2773,7 +2778,8 @@ void QuicConnection::on_timeout(u64 now_ns) noexcept
         return;
     }
     const usize index = quic_space_index(timeout.space);
-    m_probes[index] = (timeout.kind == QuicTimeoutKind::Probe) ? timeout.probes : u8{1};
+    m_numbers[number_space(timeout.space, timeout.path)].probes =
+        (timeout.kind == QuicTimeoutKind::Probe) ? timeout.probes : u8{1};
     // A probe carries the data still unacknowledged (RFC 9002 section 6.2.4): it goes again as if lost.
     QuicSendBuffer& out = m_levels[index].out;
     if (out.sent_end() > out.acked_end())
@@ -3356,14 +3362,14 @@ cont::ConstSpan<u8> QuicConnection::peer_cid() const noexcept
     return (current == nullptr) ? m_initial_dcid.view() : current->id.view();
 }
 
-u64 QuicConnection::next_packet_number(QuicSpace space) const noexcept
+u64 QuicConnection::next_packet_number(QuicSpace space, usize slot) const noexcept
 {
-    return m_next_number[quic_space_index(space)];
+    return (slot < kQuicMaxPaths) ? m_numbers[number_space(space, slot)].next : 0U;
 }
 
-bool QuicConnection::skipped(QuicSpace space, u64 number) const noexcept
+bool QuicConnection::skipped(QuicSpace space, u64 number, usize slot) const noexcept
 {
-    return m_skipped[quic_space_index(space)] == number;
+    return slot < kQuicMaxPaths && m_numbers[number_space(space, slot)].skipped == number;
 }
 
 } // namespace crd::net
