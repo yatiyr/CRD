@@ -1258,8 +1258,7 @@ TEST_CASE("QUIC client migration: a quiet client's move reaches its server in a 
     pair.confirm();
     net.advance(net.now + 1000U * kMs); // nothing left to send or acknowledge
     REQUIRE(pair.client.migrate(pair.socket(1U), net.now) == QuicMigration::Started);
-    // The first datagram from socket 1, its PATH_CHALLENGE with an ACK frame, is non-probing (section 9.1): the
-    // server follows one way's 25 ms later.
+    // The server follows on the first datagram from socket 1, one way's 25 ms later.
     REQUIRE(net.run_until([&] { return pair.server.path().peer == net.socket_at[0]; }, 30U * kMs));
     REQUIRE(net.run_until([&] { return pair.client.paths().fallback() == kQuicNoPath; }, 10000U * kMs));
     CHECK(pair.client.paths().proven(pair.client.paths().active()));
@@ -1283,4 +1282,59 @@ TEST_CASE("QUIC client migration: a quiet client that reverts from a path carryi
     REQUIRE(net.run_until([&] { return pair.server.path().peer == net.client_at; }, 30U * kMs));
     CHECK(pair.client.state() == QuicConnectionState::Established);
     CHECK(pair.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC client migration: after a rebinding whose old mapping stands, a server frees the ID both of its paths "
+          "hold for a move that waits",
+          "[net][net-path][quic-connection][client-migration]")
+{
+    Hosted pair;
+    Net& net = *pair.net;
+    for (Path& path : net.path)
+    {
+        path.rate = 1000000U;
+        path.buffer = 64000U;
+    }
+    pair.confirm();
+    constexpr u64 total = 1U << 24U;
+    Bulk up{pair.client, pair.server, total};
+    REQUIRE(net.run_until([&] { return up.step() || up.read >= total / 8U; }, 600000U * kMs));
+    // A NAT rebinding: the server follows on the same ID and checks the old mapping, which still answers.
+    net.also_at = net.client_at;
+    net.client_at.port = 50001U;
+    const auto quiet = [&]
+    {
+        bool validating = false;
+        for (usize index = 0U; index < kQuicMaxPaths; ++index)
+        {
+            validating = validating || (pair.server.paths().used(index) && pair.server.paths().validating(index));
+        }
+        return !validating;
+    };
+    REQUIRE(net.run_until([&] { return up.step() || (pair.server.path().peer == net.client_at && quiet()); },
+                          600000U * kMs));
+    REQUIRE(pair.server.paths().find(QuicPath{0U, net.also_at}) != kQuicNoPath);
+    for (const u32 socket : {1U, 2U})
+    {
+        INFO("socket " << socket);
+        QuicMigration result = QuicMigration::NoConnectionId;
+        REQUIRE(net.run_until(
+            [&]
+            {
+                result = pair.client.migrate(pair.socket(socket), net.now);
+                return result != QuicMigration::NoConnectionId;
+            },
+            600000U * kMs));
+        REQUIRE(result == QuicMigration::Started);
+        REQUIRE(net.run_until(
+            [&] { return up.step() || (pair.server.path().peer == net.socket_at[socket - 1U] && quiet()); },
+            600000U * kMs));
+        CHECK(pair.server.path().peer == net.socket_at[socket - 1U]);
+    }
+    // The two paths of the rebinding held one ID: both are forgotten so that it retires.
+    CHECK(pair.server.paths().find(QuicPath{0U, net.also_at}) == kQuicNoPath);
+    CHECK(pair.server.paths().find(QuicPath{0U, net.client_at}) == kQuicNoPath);
+    REQUIRE(net.run_until([&] { return up.step(); }, 600000U * kMs));
+    CHECK(pair.client.counters().path_failures == 0U);
+    CHECK(pair.client.state() == QuicConnectionState::Established);
 }

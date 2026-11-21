@@ -594,8 +594,8 @@ private:
     void admit_path(usize datagram_bytes, u64 now_ns) noexcept;
     // A path joins (the least recently used one given up when the table is full).
     [[nodiscard]] usize take_path(const QuicPath& path, u64 now_ns) noexcept;
-    // Each path but the active one that has no peer ID to send to takes an unused one; with none left, the least
-    // recently used path left behind that holds one is forgotten and its ID retired, for the peer's replacement.
+    // Each path but the active one that has no peer ID to send to takes an unused one; with none left, every path
+    // left behind on the least recently used other ID is forgotten and that ID retired, for the peer's replacement.
     void address_paths(u64 now_ns) noexcept;
     // A peer ID's sequence no path but `index` sends to and none has sent to; kNoSequence for none.
     [[nodiscard]] u64 unused_peer_sequence(usize index) const noexcept;

@@ -2968,21 +2968,38 @@ void QuicConnection::address_paths(u64 now_ns) noexcept
         {
             continue; // the peer's next non-probing packet there moves the connection
         }
-        // None is unused: a path left behind gives its ID up (forgotten, the ID retired), so the peer issues the one
-        // this path waits for (section 9.5). The fallback goes only once the active path is proven, needing no revert.
+        // None is unused: the paths left behind on one ID give it up (forgotten, the ID retired), so the peer issues
+        // the one this path waits for (section 9.5). The active path's ID stays, the fallback goes only once the
+        // active path is proven (no revert is left to need it), and a path under validation stays.
         const bool fallback_spare = m_paths.proven(m_paths.active());
-        usize spare = kQuicNoPath;
+        const auto spare = [&](usize other)
+        {
+            return other != index && other != m_paths.active() && (other != m_paths.fallback() || fallback_spare) &&
+                   !m_paths.validating(other);
+        };
+        usize chosen = kQuicNoPath;
         for (usize other = 0U; other < kQuicMaxPaths; ++other)
         {
-            const bool candidate = m_paths.used(other) && other != index && other != m_paths.active() &&
-                                   (other != m_paths.fallback() || fallback_spare) && !m_paths.validating(other) &&
-                                   peer_index(m_paths.peer_sequence(other)) < m_peer_cid_count;
-            if (candidate && (spare == kQuicNoPath || m_paths.last_ns(other) < m_paths.last_ns(spare)))
+            const u64 sequence = path_sequence(other);
+            bool frees = m_paths.used(other) && spare(other) && peer_index(sequence) < m_peer_cid_count &&
+                         sequence != path_sequence(m_paths.active());
+            for (usize holder = 0U; holder < kQuicMaxPaths && frees; ++holder)
             {
-                spare = other;
+                frees = !m_paths.used(holder) || path_sequence(holder) != sequence || spare(holder);
+            }
+            if (frees && (chosen == kQuicNoPath || m_paths.last_ns(other) < m_paths.last_ns(chosen)))
+            {
+                chosen = other;
             }
         }
-        drop_path(spare, now_ns);
+        const u64 given = (chosen == kQuicNoPath) ? kNoSequence : path_sequence(chosen);
+        for (usize holder = 0U; holder < kQuicMaxPaths && given != kNoSequence; ++holder)
+        {
+            if (m_paths.used(holder) && holder != m_paths.active() && path_sequence(holder) == given)
+            {
+                drop_path(holder, now_ns); // the last one retires the ID
+            }
+        }
     }
 }
 

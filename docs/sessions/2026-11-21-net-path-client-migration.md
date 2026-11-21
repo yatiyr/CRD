@@ -21,19 +21,20 @@ client's own moves" and "IDs for waiting paths".
 - b5a252dd: `QuicConnection::probe_path()` and `migrate()`, `QuicMigration` refusals, `QuicPaths::trust()`, the
   restart on a move, revert on failure, the left path forgotten once proven and followed. Waiting paths take an ID
   on NEW_CONNECTION_ID or a validation's end (`address_paths()`); before, a server whose client moved with no spare
-  ID never followed. With none unused, a left path gives its ID up.
+  ID never followed. With none unused, every left path on one ID gives it up (a rebinding's two paths share one).
 - 87a791df: the fuzzer's own-socket ops, the one-way test network, the quiet and one-way cases. The fixture's
   duplicate include and nested conditional (tidy) are gone.
 
 ## Evidence
 
-- win-debug (MSVC 14.51): 971 `crd-net-tests` cases, 7 `[client-migration]`; WSL linux-gcc-debug: 972 cases; local
+- win-debug (MSVC 14.51): 972 `crd-net-tests` cases, 8 `[client-migration]`; WSL linux-gcc-debug: 973 cases; local
   tidy (LLVM 20.1.8) clean on every changed source; Allman, 120 columns.
 - linux-clang-fuzz `crd-fuzz-net-quic-connection`: two findings (90.9 s and 310.3 s), both the path oracle checked
   before a client's revert at the transfer's end was sent; the oracle now settles first, both inputs kept. Then
-  541.1 s, 67563 runs, nothing found.
+  541.1 s, 67563 runs, and after the whole-ID give-up 481.1 s, 57987 runs, nothing found.
 - Teeth: an owed PING on a move and a server move completed when its ID arrives were tried and removed, as no test
-  or fuzz input needed them (the first datagram from a new path carries an ACK frame, so it is non-probing).
+  or fuzz input needed them (the server follows a quiet client within one way's delay without them). The shared-ID
+  case fails under the first give-up rule (one path dropped, its ID still held) and passes under the final one.
 
 ## Next
 
