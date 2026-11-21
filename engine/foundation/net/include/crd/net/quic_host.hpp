@@ -19,8 +19,10 @@
 //             so a connection that moves to another socket keeps what it was built with.
 //   service   a connection that received, whose timer is due or that the application woke is served in on_timers,
 //             once per turn: its timeout, the host's service (the application's turn), then its datagrams into the
-//             host's SendQueue until it has none or the host is busy (served again within `send_retry_ns`). The
-//             deadlines are a binary min-heap, so a turn costs O(log n) per connection served, never a scan.
+//             host's SendQueue until it has none or the host is busy (served again within `send_retry_ns`). It writes
+//             only for the sockets the queue admits (SendQueue's shares), so a stalled socket's backlog holds back no
+//             path on another. The deadlines are a binary min-heap, so a turn costs O(log n) per connection served,
+//             never a scan.
 //   reset     a short header for no connection is looked up by its last 16 bytes among every connection's live peer
 //             tokens, a table under a secret SipHash key whose walk says nothing of a token's value, and checked as a
 //             stateless reset by the connection the token belongs to, in constant time and only from that
@@ -117,7 +119,9 @@ public:
     [[nodiscard]] u32 live() const noexcept { return m_live; }
     // The sockets of the host's set: a connection's paths name sockets 0 to sockets() - 1.
     [[nodiscard]] u32 sockets() const noexcept { return m_sockets.size(); }
+    // The datagrams waiting in the host's queue, all of them or socket `socket`'s.
     [[nodiscard]] u32 queued() const noexcept { return m_queue.queued(); }
+    [[nodiscard]] u32 queued(u32 socket) const noexcept { return m_queue.queued(socket); }
     // The peer tokens the host matches stateless resets against (diagnostics and tests).
     [[nodiscard]] u32 live_tokens() const noexcept { return m_peer_tokens.size(); }
 
@@ -162,9 +166,10 @@ protected:
     // The live connection in `index`; null for none.
     [[nodiscard]] QuicConnection* live_connection(u32 index) noexcept;
     void schedule(u32 index, u64 due_ns) noexcept;
-    // Queues one datagram the host writes itself (a server's refusal): room() flushes once when the queue is full.
-    [[nodiscard]] cont::Span<u8> room() noexcept;
-    void push(usize bytes, const Endpoint& peer) noexcept;
+    // Queues one datagram the host writes itself (a server's refusal) through socket `socket`: room() flushes once
+    // when the queue holds that socket back.
+    [[nodiscard]] cont::Span<u8> room(u32 socket) noexcept;
+    void push(usize bytes, const Endpoint& peer, u32 socket) noexcept;
     [[nodiscard]] const QuicHostCounters& host_counters() const noexcept { return m_counters; }
     [[nodiscard]] QuicHostEvents& events() noexcept { return m_events; }
 

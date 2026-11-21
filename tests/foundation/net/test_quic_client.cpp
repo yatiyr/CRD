@@ -1621,6 +1621,41 @@ TEST_CASE("QUIC client: a move leaves while the first socket's host takes nothin
     }
 }
 
+TEST_CASE("QUIC client: a first socket that stalls fills only its part of the host's queue, so the move leaves at once",
+          "[net][net-path][quic-client][client-migration]")
+{
+    Identity identity;
+    QuicClientConfig config = client_config(identity, QuicVersion::V1, {});
+    config.send_slots = 8U; // the second socket's share is 2
+    auto network = std::make_unique<Network>(identity, Setup{}, config, 1U, 2U);
+    const QuicHandle handle = network->connect(0U, 9U);
+    REQUIRE(network->run_until([&] { return network->live(handle).confirmed(); }));
+
+    // The first socket takes nothing: the streams' datagrams wait for it until it has all but the second's share.
+    network->stuck[0] = true;
+    REQUIRE(network->run_until([&] { return network->client.queued(0U) == 6U; }));
+    const u64 until = network->now + (50U * kMs);
+    REQUIRE(network->run_until([&] { return network->now >= until; }));
+    CHECK(network->client.queued(0U) == 6U);
+    CHECK(network->client.queued() == 6U);
+
+    // The move's datagrams leave by the second socket while the first's backlog stands.
+    const usize second_before = network->sent_from[1];
+    REQUIRE(network->client.migrate(handle, 1U, network->now) == QuicMigration::Started);
+    REQUIRE(network->run_until(
+        [&]
+        {
+            return network->app.echoed(handle) &&
+                   network->served(0U, network->server(0U).app.last).path().peer == kClientMovedAt;
+        }));
+    CHECK(network->sent_from[1] > second_before);
+    CHECK(network->client.queued(0U) == 6U);
+    CHECK(network->live(handle).path().socket == 1U);
+    CHECK(network->live(handle).counters().path_failures == 0U);
+    CHECK(network->client.counters().send_dropped == 0U);
+    CHECK_FALSE(network->app.state(handle).closed);
+}
+
 TEST_CASE("QUIC client: serial moves among the host's sockets each reach the server, back to the first",
           "[net][net-path][quic-client][client-migration]")
 {

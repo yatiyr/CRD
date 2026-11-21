@@ -108,6 +108,7 @@ struct Setup
     bool always_retry = false;
     bool only_v2 = false; // the server runs version 2 alone
     bool raw_only = false; // no TLS context: the raw UDP path alone
+    u32 sockets = 1U;      // 2: the server also serves `second`, the next port of its address
     const u8* early_context = nullptr;
     usize early_context_bytes = 0U;
 };
@@ -121,8 +122,9 @@ public:
         : routes(allocator, 256U, cont::ConstSpan<u8>(kHostPrf)),
           buckets(allocator, rules(setup), cont::ConstSpan<u8>(kHostPrf)),
           ingress(ingress_config(setup), routes, buckets, &tokens, &new_tokens, &reset),
-          server(allocator, socket, clock, ingress, routes, reset, &tokens, app, server_config(identity, setup)),
-          loop(allocator, socket, clock, ingress, server, IoLoopConfig{.slot_bytes = setup.receive_bytes})
+          server(allocator, sockets_of(setup), clock, ingress, routes, reset, &tokens, app,
+                 server_config(identity, setup)),
+          loop(allocator, sockets_of(setup), clock, ingress, server, IoLoopConfig{.slot_bytes = setup.receive_bytes})
     {
         REQUIRE(tokens.init(cont::ConstSpan<u8>(kTokenKey), {}) == crypto::CryptoError::None);
         REQUIRE(new_tokens.init(1024U, crypto::kQuicNewTokenLifetime, kUnix) == crypto::CryptoError::None);
@@ -130,6 +132,7 @@ public:
         REQUIRE(server.ready());
         REQUIRE(loop.ready());
         socket.local = local;
+        second.local = Endpoint{local.address, static_cast<u16>(local.port + 1U)};
         clock.now = kStartNs;
     }
 
@@ -141,12 +144,19 @@ public:
     crypto::QuicResetKey reset;
     Ingress ingress;
     VirtualSocket socket;
+    VirtualSocket second;
     TestClock clock;
     EchoApp app;
     QuicServer server;
     IoLoop loop;
 
 private:
+    SocketSet sockets_of(const Setup& setup)
+    {
+        DatagramSocket* const both[] = {&socket, &second};
+        return SocketSet(cont::ConstSpan<DatagramSocket*>(both, (setup.sockets == 2U) ? 2U : 1U));
+    }
+
     static HandshakeRules rules(const Setup& setup)
     {
         HandshakeRules out;

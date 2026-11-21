@@ -41,6 +41,17 @@ bool limits_valid(const QuicHostLimits& limits) noexcept
            limits.datagram_bytes >= kQuicMinInitialDatagram && limits.receive_bytes >= kQuicMinInitialDatagram &&
            limits.receive_bytes <= kMaxUdpPayloadV6;
 }
+
+// The lowest socket whose bit `held` leaves clear.
+[[nodiscard]] u32 lowest_clear(u32 held) noexcept
+{
+    u32 socket = 0U;
+    while (((held >> socket) & 1U) != 0U)
+    {
+        ++socket;
+    }
+    return socket;
+}
 } // namespace
 
 QuicHost::QuicHost(memory::IAllocator& allocator, const SocketSet& sockets, ConnectionIdTable& routes,
@@ -48,7 +59,7 @@ QuicHost::QuicHost(memory::IAllocator& allocator, const SocketSet& sockets, Conn
     : m_allocator(allocator), m_sockets(sockets), m_routes(routes), m_reset(reset), m_events(events), m_limits(limits),
       m_peer_tokens(allocator, limits_valid(limits) ? limits.connections * kQuicHostTokensPerConnection : 1U),
       m_peer_paths(allocator, limits_valid(limits) ? limits.connections : 1U),
-      m_queue(allocator, limits.send_slots, limits.datagram_bytes), m_heap(allocator)
+      m_queue(allocator, limits.send_slots, limits.datagram_bytes, sockets.size()), m_heap(allocator)
 {
 }
 
@@ -400,20 +411,20 @@ const Endpoint& QuicHost::peer_of(u32 index) const noexcept
     return m_slots[index].peer;
 }
 
-cont::Span<u8> QuicHost::room() noexcept
+cont::Span<u8> QuicHost::room(u32 socket) noexcept
 {
-    cont::Span<u8> room = m_queue.room();
+    cont::Span<u8> room = m_queue.room(socket);
     if (room.empty())
     {
         flush();
-        room = m_queue.room();
+        room = m_queue.room(socket);
     }
     return room;
 }
 
-void QuicHost::push(usize bytes, const Endpoint& peer) noexcept
+void QuicHost::push(usize bytes, const Endpoint& peer, u32 socket) noexcept
 {
-    m_queue.push(bytes, peer);
+    static_cast<void>(m_queue.push(bytes, peer, Ecn::NotEct, socket)); // from room(socket); 0 bytes queue nothing
 }
 
 // ---- Serving ----
@@ -448,7 +459,9 @@ void QuicHost::serve(u32 index, u64 now_ns) noexcept
         return;
     }
     u64 due = connection.next_timer_ns();
-    if (!drained && now_ns + m_limits.send_retry_ns < due)
+    // Held back, it is served again within the retry; a deadline already past (an ACK owed, a pacer's release) waits
+    // for the socket too, not spinning at this instant.
+    if (!drained && (due <= now_ns || now_ns + m_limits.send_retry_ns < due))
     {
         due = now_ns + m_limits.send_retry_ns;
     }
@@ -457,20 +470,33 @@ void QuicHost::serve(u32 index, u64 now_ns) noexcept
 
 bool QuicHost::drain(Slot& slot, u64 now_ns) noexcept
 {
+    QuicConnection& connection = *slot.connection;
+    bool flushed = false;
     for (;;)
     {
-        const cont::Span<u8> out = room();
-        if (out.empty())
+        // The connection writes only for a socket the queue admits now (S33), so what it writes is always queued.
+        const u32 held = m_queue.held();
+        const u32 every = (1U << m_sockets.size()) - 1U;
+        const usize written = (held == every) ? 0U : connection.send(m_queue.room(lowest_clear(held)), now_ns, held);
+        if (written != 0U)
         {
-            return false;
+            const QuicPath& path = connection.sent_path();
+            if (!m_queue.push(written, path.peer, connection.marking(), path.socket))
+            {
+                ++m_counters.send_dropped; // a path on a socket the set lacks
+            }
+            continue;
         }
-        const usize written = slot.connection->send(out, now_ns);
-        if (written == 0U)
+        if (held != every && !connection.held_back())
         {
             return true;
         }
-        const QuicPath& path = slot.connection->sent_path();
-        m_queue.push(written, path.peer, slot.connection->marking(), path.socket);
+        if (flushed)
+        {
+            return false; // the host is busy: served again within send_retry_ns
+        }
+        flush(); // once: the sockets may take what waits, freeing room
+        flushed = true;
     }
 }
 

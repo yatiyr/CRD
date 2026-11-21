@@ -276,6 +276,40 @@ TEST_CASE("Answers the host cannot take yet wait in the queue, and a full queue 
     CHECK(rig.loop.counters().answers_sent == 6U);
 }
 
+TEST_CASE("A stalled socket's answers fill only its part of the queue: the other socket's still leave",
+          "[net][io-loop][net-path]")
+{
+    IoLoopConfig config;
+    config.queued_answers = 8U; // a share of 2 for each of two sockets
+    Rig rig(config, HandshakeRules{}, nullptr, 2U);
+    rig.socket.busy_after = 0U;
+    for (usize index = 0U; index < 8U; ++index)
+    {
+        rig.socket.deliver(unsupported_version(), kClient);
+    }
+    rig.second.deliver(unsupported_version(), kClient);
+    rig.second.deliver(unsupported_version(), kClient);
+    (void)rig.loop.poll();
+    CHECK(rig.loop.queued_answers() == 6U); // the first socket's, all but the second's share
+    CHECK(rig.loop.counters().answers_dropped == 2U);
+    CHECK(rig.second.sent_count == 2U);
+    CHECK(rig.socket.sent_count == 0U);
+
+    // Still stalled: the second socket keeps its share turn after turn.
+    for (usize turn = 0U; turn < 3U; ++turn)
+    {
+        rig.socket.deliver(unsupported_version(), kClient);
+        rig.second.deliver(unsupported_version(), kClient);
+        (void)rig.loop.poll();
+    }
+    CHECK(rig.second.sent_count == 5U);
+    CHECK(rig.loop.counters().answers_dropped == 5U);
+    rig.socket.busy_after = ~usize{0};
+    (void)rig.loop.poll();
+    CHECK(rig.socket.sent_count == 6U);
+    CHECK(rig.loop.queued_answers() == 0U);
+}
+
 TEST_CASE("A turn reads at most batches_per_poll batches, so timers run under a flood", "[net][io-loop]")
 {
     IoLoopConfig config;
@@ -561,18 +595,19 @@ TEST_CASE("A send queue hands each socket its own datagrams in order: a busy one
           "[net][io-loop][net-path]")
 {
     CountingAllocator allocator;
-    SendQueue queue(allocator, 64U, 64U);
+    SendQueue queue(allocator, 64U, 64U, 3U); // shared by three sockets, flushed through a set of the first two
     REQUIRE(queue.ready());
+    CHECK(queue.share() == 10U);
     VirtualSocket first;
     VirtualSocket second;
     DatagramSocket* const both[] = {&first, &second};
     const SocketSet set{ConstSpan<DatagramSocket*>(both)};
     const auto push = [&](u8 tag, u32 socket)
     {
-        const Span<u8> room = queue.room();
+        const Span<u8> room = queue.room(socket);
         REQUIRE(room.size() == 64U);
         room[0] = tag;
-        queue.push(1U, kClient, Ecn::NotEct, socket);
+        REQUIRE(queue.push(1U, kClient, Ecn::NotEct, socket));
     };
     const auto tags = [](const VirtualSocket& socket)
     {
@@ -588,7 +623,11 @@ TEST_CASE("A send queue hands each socket its own datagrams in order: a busy one
     push(0xB0U, 1U);
     push(0xA1U, 0U);
     push(0xB1U, 1U);
-    push(0xC0U, 2U); // the set has two sockets
+    push(0xC0U, 2U); // the flushed set has two sockets
+
+    // The queue's sockets are three: a fourth is refused at once.
+    CHECK(queue.room(3U).empty());
+    CHECK_FALSE(queue.push(1U, kClient, Ecn::NotEct, 3U));
     first.busy_after = 0U;
     SendFlush flushed = queue.flush(set);
     CHECK(flushed.sent == 2U);
@@ -616,36 +655,42 @@ TEST_CASE("A send queue hands each socket its own datagrams in order: a busy one
     CHECK(flushed.dropped == 1U);
     CHECK(tags(second) == 0xB4U);
 
-    // More than one send's batch of each, interleaved: every one leaves, each socket's in order, in few calls.
+    // Interleaved up to what the third socket's share leaves: every one leaves, each socket's in order, in one call.
     first.sent_count = 0U;
     second.sent_count = 0U;
     first.send_calls = 0U;
-    for (u8 index = 0U; index < 30U; ++index)
+    for (u8 index = 0U; index < 27U; ++index)
     {
         push(index, 0U);
         push(static_cast<u8>(0x80U + index), 1U);
     }
+    CHECK(queue.held() == 0b011U); // the third's share stays free for it
+    CHECK(queue.room(2U).size() == 64U);
     flushed = queue.flush(set);
-    CHECK(flushed.sent == 60U);
-    REQUIRE(first.sent_count == 30U);
-    REQUIRE(second.sent_count == 30U);
-    for (usize index = 0U; index < 30U; ++index)
+    CHECK(flushed.sent == 54U);
+    REQUIRE(first.sent_count == 27U);
+    REQUIRE(second.sent_count == 27U);
+    for (usize index = 0U; index < 27U; ++index)
     {
         CHECK(first.sent[index].datagram.bytes[0] == index);
         CHECK(second.sent[index].datagram.bytes[0] == 0x80U + index);
     }
     CHECK(first.send_calls == 1U);
-    for (u8 index = 0U; index < 64U; ++index)
+    // One socket fills all but the others' shares.
+    for (u8 index = 0U; index < 44U; ++index)
     {
         push(index, 0U);
     }
-    CHECK(queue.room().empty());
+    CHECK(queue.room(0U).empty());
+    CHECK(queue.held() == 0b001U);
+    CHECK(queue.queued(0U) == 44U);
     first.sent_count = 0U;
     first.send_calls = 0U;
     flushed = queue.flush(set);
-    CHECK(flushed.sent == 64U);
+    CHECK(flushed.sent == 44U);
     CHECK(first.send_calls == 2U); // 32 a call
-    CHECK(first.sent[63].datagram.bytes[0] == 63U);
+    CHECK(first.sent[43].datagram.bytes[0] == 43U);
+    CHECK(queue.queued(0U) == 0U);
 }
 
 TEST_CASE("A send queue keeps every socket's order and accounts for every datagram under random busy and refusing "
@@ -656,15 +701,18 @@ TEST_CASE("A send queue keeps every socket's order and accounts for every datagr
     {
         INFO("seed " << seed);
         CountingAllocator allocator;
-        SendQueue queue(allocator, 48U, 16U);
+        SendQueue queue(allocator, 48U, 16U, 4U); // the fourth socket's datagrams drop at the flush of three
         REQUIRE(queue.ready());
+        REQUIRE(queue.share() == 6U);
         VirtualSocket sockets[3];
         DatagramSocket* const pointers[] = {&sockets[0], &sockets[1], &sockets[2]};
         const SocketSet set{ConstSpan<DatagramSocket*>(pointers)};
         Rng rng;
         rng.state = seed;
-        u32 next[4] = {};     // per socket (3: one the set lacks), the next number pushed
-        u32 expected[3] = {}; // per socket, the next number its sends may carry at least
+        u32 next[4] = {};      // per socket (3: one the set lacks), the next number pushed
+        usize refused[4] = {}; // per socket, the pushes admission held back
+        u32 model[4] = {};     // per socket, the datagrams it has queued
+        u32 expected[3] = {};  // per socket, the next number its sends may carry at least
         usize pushed = 0U;
         usize sent = 0U;
         usize dropped = 0U;
@@ -672,23 +720,42 @@ TEST_CASE("A send queue keeps every socket's order and accounts for every datagr
         {
             if (rng.next() % 3U != 0U)
             {
-                const Span<u8> room = queue.room();
+                // Mostly the first socket, which then fills what the others' shares leave.
+                const u64 pick = rng.next() % 8U;
+                const auto socket = static_cast<u32>((pick < 4U) ? 0U : pick - 4U);
+                const Span<u8> room = queue.room(socket);
+                // Admission: a socket below its share always finds room; held() names exactly the refused.
+                CHECK((room.empty() == (((queue.held() >> socket) & 1U) != 0U)));
+                if (queue.queued(socket) < queue.share())
+                {
+                    CHECK_FALSE(room.empty());
+                }
                 if (room.empty())
                 {
+                    ++refused[socket];
                     continue;
                 }
-                const auto socket = static_cast<u32>(rng.next() % 4U);
                 std::memcpy(room.data(), &next[socket], sizeof(u32));
                 ++next[socket];
-                queue.push(sizeof(u32), kClient, Ecn::NotEct, socket);
+                REQUIRE(queue.push(sizeof(u32), kClient, Ecn::NotEct, socket));
+                ++model[socket];
                 ++pushed;
                 continue;
             }
-            for (VirtualSocket& socket : sockets)
+            bool refusing[3] = {};
+            for (u32 index = 0U; index < 3U; ++index)
             {
+                VirtualSocket& socket = sockets[index];
                 socket.sent_count = 0U;
                 socket.busy_after = (rng.next() % 3U == 0U) ? rng.next() % 4U : ~usize{0};
                 socket.refuse_next = rng.next() % 8U == 0U;
+                refusing[index] = socket.refuse_next;
+            }
+            if (step >= 1000U && step < 2000U)
+            {
+                sockets[0].busy_after = 0U; // stalled: its backlog grows to its limit
+                sockets[0].refuse_next = false;
+                refusing[0] = false;
             }
             const SendFlush flushed = queue.flush(set);
             sent += flushed.sent;
@@ -707,8 +774,28 @@ TEST_CASE("A send queue keeps every socket's order and accounts for every datagr
                 }
             }
             CHECK(seen == flushed.sent);
+            // Each socket's count is what was pushed for it less what left or was refused; the fourth's all drop.
+            u32 counted = 0U;
+            for (u32 socket = 0U; socket < 4U; ++socket)
+            {
+                if (socket < 3U)
+                {
+                    model[socket] -= static_cast<u32>(sockets[socket].sent_count);
+                    model[socket] -= (refusing[socket] && !sockets[socket].refuse_next) ? 1U : 0U;
+                }
+                else
+                {
+                    model[socket] = 0U;
+                }
+                CHECK(queue.queued(socket) == model[socket]);
+                counted += queue.queued(socket);
+            }
+            CHECK(counted == queue.queued());
         }
         CHECK(pushed == sent + dropped + queue.queued());
+        CHECK(refused[0] != 0U); // the stalled first socket reached its limit
+        CHECK(next[3] != 0U);    // and the one the set lacks was queued, then dropped
+        CHECK(dropped >= next[3]);
     }
 }
 

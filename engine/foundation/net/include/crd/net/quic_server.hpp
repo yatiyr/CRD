@@ -138,7 +138,7 @@ private:
     void release(u32 index, const QuicConnection& connection) noexcept override;
     void after_turn(u64 now_ns) noexcept override;
 
-    void refuse(const IngressDecision& decision, const Endpoint& peer, u64 now_ns) noexcept;
+    void refuse(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept;
     // The held 0-RTT datagrams of `dcid` from `peer`, read by the connection in `index` in arrival order.
     void read_early(u32 index, QuicConnection& connection, cont::ConstSpan<u8> dcid, u64 now_ns) noexcept;
     void expire_early(u64 now_ns) noexcept;

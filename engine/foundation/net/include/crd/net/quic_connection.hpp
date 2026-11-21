@@ -373,8 +373,11 @@ public:
     void receive(const QuicPath& path, cont::Span<u8> datagram, Ecn ecn, u64 now_ns) noexcept;
     void receive(cont::Span<u8> datagram, Ecn ecn, u64 now_ns) noexcept;
     // Writes the next datagram into `out` (at least kQuicMinInitialDatagram bytes) and returns its size; 0 when
-    // nothing is to be sent now.
-    [[nodiscard]] usize send(cont::Span<u8> out, u64 now_ns) noexcept;
+    // nothing is to be sent now. A path whose socket is in `held_sockets` (bit i for socket i: the host's queue holds
+    // it back) gets nothing and changes nothing; held_back() then says something waits for it.
+    [[nodiscard]] usize send(cont::Span<u8> out, u64 now_ns, u32 held_sockets = 0U) noexcept;
+    // Whether the last send() left a datagram unwritten for a path whose socket was held back.
+    [[nodiscard]] bool held_back() const noexcept { return m_held_back; }
     // The codepoint the datagram the last send() wrote is sent with, and the path it goes on.
     [[nodiscard]] Ecn marking() const noexcept { return m_marking; }
     [[nodiscard]] const QuicPath& sent_path() const noexcept { return m_paths.path(m_send_path); }
@@ -628,6 +631,8 @@ private:
     [[nodiscard]] u64 path_sequence(usize index) const noexcept;
     [[nodiscard]] usize peer_index(u64 sequence) const noexcept;
     [[nodiscard]] bool path_sendable(usize index) const noexcept;
+    // Whether path `index`'s socket is one of `held_sockets`.
+    [[nodiscard]] bool path_held(usize index, u32 held_sockets) const noexcept;
     [[nodiscard]] u64 validation_timeout_ns() const noexcept;
     [[nodiscard]] u64 path_timer_ns() const noexcept;
     [[nodiscard]] bool on_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
@@ -682,9 +687,9 @@ private:
     // leaves is too small for another.
     [[nodiscard]] usize write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool last,
                                      Carry carry, u64 now_ns) noexcept;
-    // The path frames owed on a path other than the active one, a probing datagram written into `out`: its size, 0
-    // for none.
-    [[nodiscard]] usize send_path_frames(cont::Span<u8> out, u64 now_ns) noexcept;
+    // The path frames owed on a path other than the active one and not on a held socket, a probing datagram written
+    // into `out`: its size, 0 for none.
+    [[nodiscard]] usize send_path_frames(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noexcept;
     // The PMTU probe due now, written alone into `out`: its size, 0 when none goes (none due, a probe timeout or an
     // owed ACK pending, or the window, the pacer or the amplification limit holding it; a pacer arms its timer).
     [[nodiscard]] usize send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept;
@@ -814,6 +819,7 @@ private:
     u8 m_challenge[kQuicPathDataBytes] = {};   // the PATH_CHALLENGE data of the packet being written
     bool m_ping_owed = false;
     bool m_confirmed = false;
+    bool m_held_back = false; // the last send() skipped a path whose socket was held back
     bool m_peer_greases = false;
     bool m_sent_since_receive = false;
 

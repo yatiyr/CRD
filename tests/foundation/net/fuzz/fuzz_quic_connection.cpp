@@ -20,7 +20,9 @@
 // only when sent to its address now, a script byte 0xFC moves the client to the next of four addresses (a NAT
 // rebinding, an address change, an IPv6 address, back) and 0xFB delivers a copy of the first client datagram in
 // flight from another address first, as an off-path attacker forwarding it would. The client also has sockets 1 and
-// 2 at addresses of their own: 0xFA moves it to its next socket (migrate()) and 0xF9 probes that one (probe_path()).
+// 2 at addresses of their own: 0xFA moves it to its next socket (migrate()) and 0xF9 probes that one (probe_path()),
+// and 0xF8 steps which of its three sockets its host holds back (send()'s held sockets, every mask in turn; none on
+// the clean path).
 //
 // Oracles. Always: a server sends at most three times what it received before the address is proven, and on paths
 // at most three times what arrived from each address it has not validated since it last knew it; every client
@@ -38,7 +40,8 @@
 // runs one version: the other one after a switch, the configured one otherwise. Paths: a confirmed pair that carried
 // its stream with neither end closed has the server sending to its active socket's address once what is owed has
 // arrived; a move or a probe the client refuses changes its active path in nothing, one it starts moves it or not as
-// asked. 0-RTT: an offer ends Accepted or Rejected on both ends alike; accepted, the server reads the early stream
+// asked; no client datagram leaves by a held socket, and a send() held back changes no counter or packet number.
+// 0-RTT: an offer ends Accepted or Rejected on both ends alike; accepted, the server reads the early stream
 // whole and unchanged, never marking more bytes replayable than came; rejected, the client's streams were reset and
 // the server opened none of them.
 #include <crd/core/platform.hpp>
@@ -400,6 +403,8 @@ struct Pair
     u64 path_received[kClientAddresses] = {}; // bytes the server was given from each address since it last did not
     u64 path_sent[kClientAddresses] = {};     // know it, and sent there
     u64 unbound_bytes = 0U;    // given to the server's first path before it was bound
+    // The client's sockets its host holds back (over paths).
+    u32 held = 0U;
 
     explicit Pair(QuicVersion run, bool switching = false, Tickets* tickets = nullptr, bool raw_path = false)
         : client_host(allocator, 0U,
@@ -503,11 +508,27 @@ struct Pair
             for (usize guard = 0U; guard < 64U; ++guard)
             {
                 u8 out[kDatagram];
-                const usize size = ends[from]->send(Span<u8>(out, sizeof(out)), now);
+                QuicConnection& end = *ends[from];
+                const QuicConnectionCounters before = end.counters();
+                u64 numbers[kQuicSpaces] = {};
+                for (usize space = 0U; space < kQuicSpaces; ++space)
+                {
+                    numbers[space] = end.next_packet_number(static_cast<QuicSpace>(space));
+                }
+                const usize size = end.send(Span<u8>(out, sizeof(out)), now, (from == 0U) ? held : 0U);
                 if (size == 0U)
                 {
+                    if (end.held_back())
+                    {
+                        CRD_FUZZ_REQUIRE(std::memcmp(&before, &end.counters(), sizeof(before)) == 0);
+                        for (usize space = 0U; space < kQuicSpaces; ++space)
+                        {
+                            CRD_FUZZ_REQUIRE(end.next_packet_number(static_cast<QuicSpace>(space)) == numbers[space]);
+                        }
+                    }
                     break;
                 }
+                CRD_FUZZ_REQUIRE(((held >> end.sent_path().socket) & 1U) == 0U || from == 1U);
                 check_sent(from, ConstSpan<u8>(out, size));
                 // Over paths a server datagram to an address socket 0 left is lost: its NAT mapping is gone. Sockets 1
                 // and 2 keep theirs.
@@ -957,6 +978,11 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             CRD_FUZZ_REQUIRE(result != QuicMigration::Started || pair.client.paths().find(next) != kQuicNoPath);
             continue;
         }
+        if (op == 0xF8U && over_paths())
+        {
+            pair.held = (pair.held + 1U) % 8U;
+            continue;
+        }
         if (op == 0xFBU && over_paths())
         {
             for (usize index = 0U; index < pair.count; ++index)
@@ -1034,6 +1060,7 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             break;
         }
     }
+    pair.held = 0U;
     pair.settle(4096U);
     CRD_FUZZ_REQUIRE(pair.established() || finished(pair.client) || finished(pair.server));
     if (pair.established())
@@ -1371,6 +1398,10 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     const u8 own[] = {0x80U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x07U, 0x07U, 0xF9U, 0x07U,
                       0x00U, 0x07U, 0xFAU, 0x07U, 0x00U, 0x07U, 0xFCU, 0xFAU, 0x07U, 0x00U, 0x07U, 0xFAU, 0x07U, 0x00U};
     sink.add("script-paths-client", own, sizeof(own));
+    // Over paths: confirmed, socket 0 held, the move to socket 1, then socket 1 held and both, then none.
+    const u8 held[] = {0x80U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x07U, 0x07U, 0xF8U, 0xFAU,
+                       0x07U, 0x00U, 0x07U, 0xF8U, 0x07U, 0x00U, 0xF8U, 0x07U, 0xF8U, 0x07U, 0x00U, 0x07U, 0x00U};
+    sink.add("script-paths-held", held, sizeof(held));
     // The same with receive timestamps, and a raw client's ACK_RECEIVE_TIMESTAMPS of the server's first 1-RTT packet.
     const u8 timed[] = {0x40U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
     sink.add("script-receive-timestamps", timed, sizeof(timed));

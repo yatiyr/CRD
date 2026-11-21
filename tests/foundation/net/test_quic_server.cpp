@@ -468,6 +468,50 @@ TEST_CASE("QUIC server: 0-RTT ahead of its Initial is held and read by the conne
     }
 }
 
+TEST_CASE("QUIC server: a refusal leaves by the socket its Initial reached", "[net][net-path][quic-server]")
+{
+    Identity identity;
+    Setup setup;
+    setup.connections = 1U;
+    setup.sockets = 2U;
+    ServerStack stack(identity, setup);
+    CountingAllocator client_allocator;
+    const auto initial_of = [&](QuicConnection& client, u8 tag, Datagram& out)
+    {
+        const u8 local[8] = {0xC0, tag, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7};
+        const u8 dcid[8] = {0xD0, tag, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7};
+        REQUIRE(client.connect(ConstSpan<u8>(local), ConstSpan<u8>(dcid), stack.clock.now));
+        out.size = client.send(Span<u8>(out.bytes, sizeof(out.bytes)), stack.clock.now);
+        REQUIRE(out.size >= kQuicMinInitialDatagram);
+    };
+    QuicConnectionConfig config = config_for(QuicSide::Client, identity, QuicVersion::V1, 1U);
+    config.streams = limits();
+    QuicConnection taken(client_allocator, config);
+    QuicConnection refused(client_allocator, config);
+    Datagram first;
+    Datagram second;
+    initial_of(taken, 1U, first);
+    initial_of(refused, 2U, second);
+
+    // The first takes the one slot through the first socket; the second, on the second socket, is refused there.
+    stack.socket.deliver(first, client_peer(0U));
+    (void)stack.loop.poll();
+    REQUIRE(stack.server.live() == 1U);
+    const usize answered = stack.socket.sent_count;
+    CHECK(answered != 0U);
+    stack.second.deliver(second, client_peer(1U));
+    (void)stack.loop.poll();
+    CHECK(stack.server.counters().refused == 1U);
+    CHECK(stack.socket.sent_count == answered);
+    REQUIRE(stack.second.sent_count == 1U);
+    CHECK(stack.second.sent[0].peer == client_peer(1U));
+    Datagram refusal;
+    std::memcpy(refusal.bytes, stack.second.sent[0].datagram.bytes, stack.second.sent[0].datagram.size);
+    refusal.size = stack.second.sent[0].datagram.size;
+    refused.receive(Span<u8>(refusal.bytes, refusal.size), Ecn::NotEct, stack.clock.now);
+    CHECK(refused.close_info().error_code == static_cast<u64>(QuicTransportError::ConnectionRefused));
+}
+
 TEST_CASE("QUIC server: a full pool answers CONNECTION_REFUSED, a closed connection's slot is reused and its handle "
           "goes stale",
           "[net][4.2a][quic-server]")

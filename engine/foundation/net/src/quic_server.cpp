@@ -108,7 +108,7 @@ void QuicServer::on_admit(const IngressDecision& decision, const ReceivedDatagra
     const u32 index = free_slot();
     if (index == kNoConnection)
     {
-        refuse(decision, datagram.peer, now_ns);
+        refuse(decision, datagram, now_ns);
         return;
     }
     const QuicHeader& header = decision.header;
@@ -118,7 +118,7 @@ void QuicServer::on_admit(const IngressDecision& decision, const ReceivedDatagra
     const cont::Span<u8> local_cid(local, m_ingress.config().local_cid_bytes);
     if (!routed_ids.issue(local_cid, cont::Span<u8>(token, sizeof(token))))
     {
-        refuse(decision, datagram.peer, now_ns);
+        refuse(decision, datagram, now_ns);
         return;
     }
     QuicConnectionConfig config = m_config.connection;
@@ -147,7 +147,7 @@ void QuicServer::on_admit(const IngressDecision& decision, const ReceivedDatagra
             discard(*connection);
         }
         routed_ids.retire(local_cid);
-        refuse(decision, datagram.peer, now_ns);
+        refuse(decision, datagram, now_ns);
         return;
     }
 
@@ -287,13 +287,13 @@ void QuicServer::after_turn(u64 now_ns) noexcept
     }
 }
 
-void QuicServer::refuse(const IngressDecision& decision, const Endpoint& peer, u64 now_ns) noexcept
+void QuicServer::refuse(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 now_ns) noexcept
 {
     ++m_counters.refused;
-    const cont::Span<u8> out = room();
+    const cont::Span<u8> out = room(datagram.socket);
     if (!out.empty())
     {
-        push(m_ingress.refuse(decision, now_ns, out), peer);
+        push(m_ingress.refuse(decision, now_ns, out), datagram.peer, datagram.socket); // by the socket it reached
     }
 }
 

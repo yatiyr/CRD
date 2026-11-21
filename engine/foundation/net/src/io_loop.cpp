@@ -31,12 +31,19 @@ u64 HostClock::unix_seconds() const noexcept
 
 // ---- SendQueue ----
 
-SendQueue::SendQueue(memory::IAllocator& allocator, u32 slots, usize slot_bytes) noexcept
-    : m_allocator(allocator), m_slots(slots), m_slot_bytes(slot_bytes)
+SendQueue::SendQueue(memory::IAllocator& allocator, u32 slots, usize slot_bytes, u32 sockets) noexcept
+    : m_allocator(allocator), m_slots(slots), m_slot_bytes(slot_bytes), m_sockets(sockets)
 {
-    if (slots == 0U || slots > kMaxQueueSlots || slot_bytes == 0U || slot_bytes > kMaxUdpPayloadV6)
+    if (slots == 0U || slots > kMaxQueueSlots || slot_bytes == 0U || slot_bytes > kMaxUdpPayloadV6 || sockets == 0U ||
+        sockets > kMaxSetSockets)
     {
         return;
+    }
+    if (sockets > 1U && slots >= sockets)
+    {
+        // The shares together take at most half the slots, and one each where only the slots for one each exist.
+        const u32 half = slots / (2U * sockets);
+        m_share = (half > 1U) ? half : 1U;
     }
     Entry* const entries = memory::try_construct_array<Entry>(allocator, slots);
     u32* const order = memory::try_construct_array<u32>(allocator, slots);
@@ -67,24 +74,54 @@ SendQueue::~SendQueue()
     }
 }
 
-cont::Span<u8> SendQueue::room() noexcept
+bool SendQueue::admits(u32 socket) const noexcept
 {
-    if (m_entries == nullptr || m_queued == m_slots)
+    if (m_entries == nullptr || m_queued == m_slots || socket >= m_sockets)
+    {
+        return false;
+    }
+    // The slots the other sockets' shares still lack stay free (S33, #sockets).
+    u32 owed = 0U;
+    for (u32 other = 0U; other < m_sockets; ++other)
+    {
+        if (other != socket && m_per_socket[other] < m_share)
+        {
+            owed += m_share - m_per_socket[other];
+        }
+    }
+    return m_slots - m_queued > owed;
+}
+
+cont::Span<u8> SendQueue::room(u32 socket) noexcept
+{
+    if (!admits(socket))
     {
         return {};
     }
     return cont::Span<u8>(m_bytes + (usize{m_order[m_queued]} * m_slot_bytes), m_slot_bytes);
 }
 
-void SendQueue::push(usize bytes, const Endpoint& peer, Ecn ecn, u32 socket) noexcept
+u32 SendQueue::held() const noexcept
 {
-    const cont::Span<u8> slot = room();
+    u32 held = 0U;
+    for (u32 socket = 0U; socket < m_sockets; ++socket)
+    {
+        held |= admits(socket) ? 0U : (1U << socket);
+    }
+    return held;
+}
+
+bool SendQueue::push(usize bytes, const Endpoint& peer, Ecn ecn, u32 socket) noexcept
+{
+    const cont::Span<u8> slot = room(socket);
     if (slot.empty() || bytes == 0U || bytes > slot.size())
     {
-        return;
+        return false;
     }
     m_entries[m_order[m_queued]] = Entry{OutgoingDatagram{slot.first(bytes), peer, ecn}, socket, false};
     ++m_queued;
+    ++m_per_socket[socket];
+    return true;
 }
 
 SendFlush SendQueue::flush(const SocketSet& sockets) noexcept
@@ -98,8 +135,12 @@ SendFlush SendQueue::flush(const SocketSet& sockets) noexcept
     {
         send_through(sockets[index], index, flushed);
     }
-    // What is left in order; the slots that left or were dropped become free.
+    // What is left in order, recounted per socket; the slots that left or were dropped become free.
     u32 kept = 0U;
+    for (u32& count : m_per_socket)
+    {
+        count = 0U;
+    }
     for (u32 position = 0U; position < m_queued; ++position)
     {
         Entry& entry = m_entries[m_order[position]];
@@ -113,6 +154,10 @@ SendFlush SendQueue::flush(const SocketSet& sockets) noexcept
             const u32 slot = m_order[position];
             m_order[position] = m_order[kept];
             m_order[kept++] = slot;
+            if (entry.socket < m_sockets)
+            {
+                ++m_per_socket[entry.socket];
+            }
         }
     }
     m_queued = kept;
@@ -168,7 +213,7 @@ void SendQueue::send_through(DatagramSocket& socket, u32 index, SendFlush& flush
 IoLoop::IoLoop(memory::IAllocator& allocator, const SocketSet& sockets, const TransportClock& clock, Ingress& ingress,
                IngressHandler& handler, const IoLoopConfig& config) noexcept
     : m_allocator(allocator), m_sockets(sockets), m_clock(clock), m_ingress(ingress), m_handler(handler),
-      m_config(config), m_answers(allocator, config.queued_answers, kQuicMaxStatelessAnswerBytes)
+      m_config(config), m_answers(allocator, config.queued_answers, kQuicMaxStatelessAnswerBytes, sockets.size())
 {
     if (!sockets.ready() || !ingress.ready() || !m_answers.ready() || config.batch == 0U || config.batch > kMaxBatch ||
         config.slot_bytes < kQuicMinInitialDatagram || config.slot_bytes > kMaxUdpPayloadV6 ||
@@ -308,14 +353,15 @@ void IoLoop::receive_batch(u32 socket, u64 now_ns, u64 unix_seconds, BatchResult
 void IoLoop::queue_answer(const IngressDecision& decision, const ReceivedDatagram& datagram,
                           u64 unix_seconds) noexcept
 {
-    const cont::Span<u8> out = m_answers.room();
+    const cont::Span<u8> out = m_answers.room(datagram.socket);
     if (out.empty())
     {
         ++m_counters.answers_dropped;
         return;
     }
     const usize bytes = m_ingress.answer(decision, datagram.peer, unix_seconds, out);
-    m_answers.push(bytes, datagram.peer, Ecn::NotEct, datagram.socket);
+    // Admitted just now, so it queues; an answer not built (0 bytes) queues nothing and is the ingress's to count.
+    static_cast<void>(m_answers.push(bytes, datagram.peer, Ecn::NotEct, datagram.socket));
 }
 
 void IoLoop::flush_answers() noexcept

@@ -102,13 +102,20 @@ struct SendFlush
 // SocketSet it leaves by, handed to each socket in the order queued: what a socket cannot take yet (Busy) waits for
 // the next flush without holding back another socket's (a connection's new path leaves while its old socket is
 // busy), and a datagram the host refuses for good (an unreachable peer, a refused address) is dropped alone and
-// counted, as is one naming a socket the set lacks. Its storage comes from the injected allocator at construction;
-// nothing is allocated after, and no datagram's bytes move once written.
+// counted, as is one naming a socket the flushed set lacks. Its storage comes from the injected allocator at
+// construction; nothing is allocated after, and no datagram's bytes move once written.
+//
+// Admission: the `sockets` sockets share the slots, each with a guaranteed share of slots / (2 * sockets), at least
+// one where the slots allow one for each (none for fewer slots than sockets). A socket takes a free slot only while
+// as many stay free as the other sockets' shares still lack, so a stalled socket fills at most the rest and every
+// other socket always finds room for its share: a connection's datagrams for a working socket are never held behind a
+// busy one's. A queue of one socket admits into every slot.
 class SendQueue
 {
 public:
-    // `slots` from 1 to 65536 of `slot_bytes` from 1 to kMaxUdpPayloadV6.
-    SendQueue(memory::IAllocator& allocator, u32 slots, usize slot_bytes) noexcept;
+    // `slots` from 1 to 65536 of `slot_bytes` from 1 to kMaxUdpPayloadV6, shared by `sockets` from 1 to
+    // kMaxSetSockets.
+    SendQueue(memory::IAllocator& allocator, u32 slots, usize slot_bytes, u32 sockets = 1U) noexcept;
     ~SendQueue();
     SendQueue(const SendQueue&) = delete;
     SendQueue& operator=(const SendQueue&) = delete;
@@ -116,15 +123,22 @@ public:
     SendQueue& operator=(SendQueue&&) = delete;
 
     [[nodiscard]] bool ready() const noexcept { return m_entries != nullptr; }
-    // The next free slot to write a datagram into; empty when the queue is full.
-    [[nodiscard]] cont::Span<u8> room() noexcept;
-    // Queues the first `bytes` of room() for `peer` through the set's socket `socket`, its IP header marked `ecn`
-    // (stateless answers go Not-ECT).
-    void push(usize bytes, const Endpoint& peer, Ecn ecn = Ecn::NotEct, u32 socket = 0U) noexcept;
+    // The slot a datagram for `socket` is written into; empty when admission holds that socket back (always when the
+    // queue is full) or for a socket from `sockets` on.
+    [[nodiscard]] cont::Span<u8> room(u32 socket) noexcept;
+    // The sockets admission holds back now, bit i for socket i: all of them exactly when the queue is full.
+    [[nodiscard]] u32 held() const noexcept;
+    // Queues the first `bytes` of room(socket) for `peer` through the set's socket `socket`, its IP header marked
+    // `ecn` (stateless answers go Not-ECT); false, queuing nothing, when room(socket) is empty or shorter.
+    [[nodiscard]] bool push(usize bytes, const Endpoint& peer, Ecn ecn = Ecn::NotEct, u32 socket = 0U) noexcept;
     // Hands each socket of `sockets` its queued datagrams until it is Busy or none of its own is left.
     [[nodiscard]] SendFlush flush(const SocketSet& sockets) noexcept;
 
     [[nodiscard]] u32 queued() const noexcept { return m_queued; }
+    // The datagrams queued for `socket` (below `sockets`), and the slots each socket is guaranteed beside the others
+    // (0 for a queue of one socket).
+    [[nodiscard]] u32 queued(u32 socket) const noexcept { return (socket < m_sockets) ? m_per_socket[socket] : 0U; }
+    [[nodiscard]] u32 share() const noexcept { return m_share; }
     [[nodiscard]] bool full() const noexcept { return m_queued == m_slots; }
 
 private:
@@ -136,16 +150,20 @@ private:
         bool done = false;
     };
 
+    [[nodiscard]] bool admits(u32 socket) const noexcept;
     // Sends socket `index`'s datagrams in the order queued, marking each one that left or was dropped.
     void send_through(DatagramSocket& socket, u32 index, SendFlush& flushed) noexcept;
 
     memory::IAllocator& m_allocator;
     u32 m_slots = 0U;
     usize m_slot_bytes = 0U;
+    u32 m_sockets = 0U;
+    u32 m_share = 0U;
     Entry* m_entries = nullptr; // per slot
     u32* m_order = nullptr;     // the queued slots in order, then the free ones
     u8* m_bytes = nullptr;
     u32 m_queued = 0U;
+    u32 m_per_socket[kMaxSetSockets] = {};
 };
 
 struct IoLoopConfig

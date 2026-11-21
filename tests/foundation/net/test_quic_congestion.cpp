@@ -28,6 +28,7 @@
 #include <crd/net/quic_connection.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstring>
 #include <memory>
 
 namespace
@@ -1112,6 +1113,67 @@ TEST_CASE("QUIC client migration: a probe validates a new socket and moves nothi
     CHECK(pair.server.address_validated());
     CHECK(pair.client.state() == QuicConnectionState::Established);
     CHECK(pair.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC client migration: a path on a held socket gets nothing and changes nothing, while a path on another "
+          "still leaves",
+          "[net][net-path][quic-connection][client-migration]")
+{
+    Hosted pair(0U, false, false);
+    pair.confirm();
+    const u64 now = pair.net->now + (100U * kMs); // past any pacing of what confirm() left
+    u8 out[1500];
+    const Span<u8> room(out, sizeof(out));
+    while (pair.client.send(room, now) != 0U)
+    {
+    }
+    CHECK_FALSE(pair.client.held_back()); // nothing owed: nothing waits
+    const auto unchanged = [&](u32 held)
+    {
+        const QuicConnectionCounters before = pair.client.counters();
+        u64 numbers[kQuicSpaces] = {};
+        for (usize space = 0U; space < kQuicSpaces; ++space)
+        {
+            numbers[space] = pair.client.next_packet_number(static_cast<QuicSpace>(space));
+        }
+        const Ecn marking = pair.client.marking();
+        CHECK(pair.client.send(room, now, held) == 0U);
+        CHECK(pair.client.held_back());
+        CHECK(std::memcmp(&before, &pair.client.counters(), sizeof(before)) == 0);
+        for (usize space = 0U; space < kQuicSpaces; ++space)
+        {
+            CHECK(pair.client.next_packet_number(static_cast<QuicSpace>(space)) == numbers[space]);
+        }
+        CHECK(pair.client.marking() == marking);
+    };
+
+    // The active path's socket held: the ping waits, then leaves once the socket is free.
+    pair.client.ping();
+    unchanged(0b01U);
+    unchanged(0b11U);
+    CHECK(pair.client.send(room, now, 0b10U) != 0U); // another socket held: the active path's leaves
+    CHECK(pair.client.sent_path().socket == 0U);
+    CHECK_FALSE(pair.client.held_back());
+
+    // A probe on socket 1 leaves while socket 0 is held; held itself, it waits behind the active path's datagram.
+    REQUIRE(pair.client.probe_path(pair.socket(1U), now) == QuicMigration::Started);
+    pair.client.ping();
+    usize written = pair.client.send(room, now, 0b10U);
+    CHECK(written != 0U);
+    CHECK(pair.client.sent_path().socket == 0U);
+    CHECK(pair.client.held_back()); // the challenge waits for socket 1
+    CHECK(pair.client.send(room, now, 0b10U) == 0U);
+    CHECK(pair.client.held_back());
+    written = pair.client.send(room, now, 0b01U);
+    CHECK(written == kQuicMinInitialDatagram); // the probing datagram, padded to the floor
+    CHECK(pair.client.sent_path() == pair.socket(1U));
+    CHECK_FALSE(pair.client.held_back());
+
+    // A closing connection's close waits for its socket too.
+    pair.client.close(3U, {}, now);
+    unchanged(0b01U);
+    CHECK(pair.client.send(room, now, 0b10U) != 0U);
+    CHECK(pair.client.sent_path().socket == 0U);
 }
 
 TEST_CASE("QUIC client migration: a move without probing, the old network gone at once, carries transfers both ways "

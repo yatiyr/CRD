@@ -2568,9 +2568,10 @@ usize QuicConnection::send_closing(cont::Span<u8> out, u64 now_ns) noexcept
     return used;
 }
 
-usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
+usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noexcept
 {
     m_send_path = m_paths.active();
+    m_held_back = false;
     if (out.size() < kQuicMinInitialDatagram || m_state == QuicConnectionState::Idle ||
         m_state == QuicConnectionState::Draining || m_state == QuicConnectionState::Closed)
     {
@@ -2592,22 +2593,33 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
     const usize credit = amplification_credit();
     limit = min_u64(limit, credit);
     usize used = 0U;
+    bool initial_held = false; // the amplification limit holds back a padded Initial
     if (m_state == QuicConnectionState::Closing)
     {
+        if (path_held(m_send_path, held_sockets))
+        {
+            m_held_back = true;
+            return 0U;
+        }
         m_marking = Ecn::NotEct; // nothing of a closing connection is acknowledged
         used = (limit >= kMinUsefulPacket) ? send_closing(out.first(limit), now_ns) : 0U;
     }
     else
     {
-        m_marking = m_ecn.marking(now_ns, m_recovery->persistent_congestion_ns());
-        follow_ecn();
         pull_crypto();
         issue_local_ids();
-        used = send_path_frames(out, now_ns);
+        used = send_path_frames(out, now_ns, held_sockets);
         if (used != 0U)
         {
             return used;
         }
+        if (path_held(m_send_path, held_sockets))
+        {
+            m_held_back = true; // nothing below runs: no number, window, probe or amplification state moves
+            return 0U;
+        }
+        m_marking = m_ecn.marking(now_ns, m_recovery->persistent_congestion_ns());
+        follow_ecn();
         gate_data(full, now_ns);
         used = send_path_probe(out, now_ns);
         if (used != 0U)
@@ -2632,8 +2644,16 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
         }
         const usize initial = quic_space_index(QuicSpace::Initial);
         // A client pads every datagram with an Initial, a server those with an ack-eliciting one (section 14.1).
-        const bool pad = content[initial] && (m_config.side == crypto::QuicSide::Client ||
-                                              m_levels[initial].out.pending() || m_probes[initial] > 0U);
+        bool pad = content[initial] && (m_config.side == crypto::QuicSide::Client || m_levels[initial].out.pending() ||
+                                        m_probes[initial] > 0U);
+        // A padded Initial the amplification limit cannot carry waits for the peer's next datagram (section 8.1); what
+        // a later space owes (an ACK of 0-RTT, Handshake data) still goes, unpadded, within the credit.
+        if (pad && limit < kQuicMinInitialDatagram && last != QuicSpace::Initial)
+        {
+            content[initial] = false;
+            pad = false;
+            initial_held = true;
+        }
         const cont::Span<u8> room = out.first(limit);
         if (!any || limit < kMinUsefulPacket || (pad && limit < kQuicMinInitialDatagram))
         {
@@ -2663,13 +2683,13 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns) noexcept
         m_paths.on_sent(m_send_path, used);
         if (!address_validated())
         {
-            m_recovery->set_amplification_blocked(amplification_credit() < kMinUsefulPacket, now_ns);
+            m_recovery->set_amplification_blocked(initial_held || amplification_credit() < kMinUsefulPacket, now_ns);
         }
     }
     return used;
 }
 
-usize QuicConnection::send_path_frames(cont::Span<u8> out, u64 now_ns) noexcept
+usize QuicConnection::send_path_frames(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noexcept
 {
     const usize active = m_paths.active();
     for (usize index = 0U; index < kQuicMaxPaths; ++index)
@@ -2678,6 +2698,11 @@ usize QuicConnection::send_path_frames(cont::Span<u8> out, u64 now_ns) noexcept
                           (m_paths.response_owed(index) || m_paths.challenge_due(index, now_ns));
         if (!owed || !path_sendable(index))
         {
+            continue;
+        }
+        if (path_held(index, held_sockets))
+        {
+            m_held_back = true;
             continue;
         }
         // A probing datagram of 1200 bytes, the floor every path carries, unmarked: ECN is validated per path.
@@ -3327,6 +3352,12 @@ bool QuicConnection::path_sendable(usize index) const noexcept
     return m_state == QuicConnectionState::Established && m_confirmed && !m_space_gone[application] &&
            m_protection.can_send(QuicPacketType::OneRtt) && m_recovery->can_send(QuicSpace::Application) &&
            m_paths.credit(index) >= kMinUsefulPacket && peer_index(path_sequence(index)) < m_peer_cid_count;
+}
+
+bool QuicConnection::path_held(usize index, u32 held_sockets) const noexcept
+{
+    const u32 socket = m_paths.path(index).socket;
+    return socket < 32U && ((held_sockets >> socket) & 1U) != 0U;
 }
 
 u64 QuicConnection::validation_timeout_ns() const noexcept
