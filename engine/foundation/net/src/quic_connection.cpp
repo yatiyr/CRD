@@ -1251,9 +1251,15 @@ bool QuicConnection::multipath_frame(const QuicFrame& frame, QuicSpace space, u6
     // This side's limit is its initial_max_path_id: it sends no MAX_PATH_ID until paths open (design S78). A path ID
     // above it, or a PATHS_BLOCKED frame naming a larger one, is PROTOCOL_VIOLATION (sections 4 and 4.7).
     const u64 local_max = m_local.initial_max_path_id;
-    const bool above = (frame.kind == QuicFrameKind::PathsBlocked) ? frame.value > local_max
-                       : (frame.kind == QuicFrameKind::MaxPathId)  ? frame.value < m_peer.initial_max_path_id
-                                                                   : frame.path_id > local_max;
+    bool above = frame.path_id > local_max;
+    if (frame.kind == QuicFrameKind::PathsBlocked)
+    {
+        above = frame.value > local_max;
+    }
+    else if (frame.kind == QuicFrameKind::MaxPathId)
+    {
+        above = frame.value < m_peer.initial_max_path_id;
+    }
     if (above)
     {
         fail(QuicTransportError::ProtocolViolation, 0U, now_ns);

@@ -3,6 +3,7 @@
 #include <crd/net/quic_connection_ids.hpp>
 #include <crd/net/wire.hpp>
 
+#include <algorithm>
 #include <cstring>
 
 namespace crd::net
@@ -258,14 +259,8 @@ void QuicCids::forget_peer(QuicCidSpace& space, usize index) noexcept
 
 bool QuicCids::retiring(const QuicCidSpace& space, u64 sequence) noexcept
 {
-    for (const QuicCidSpace::Retired& entry : space.m_retired)
-    {
-        if (entry.sequence == sequence && entry.state != QuicCidSpace::Retirement::Done)
-        {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(space.m_retired, [sequence](const QuicCidSpace::Retired& entry)
+                               { return entry.sequence == sequence && entry.state != QuicCidSpace::Retirement::Done; });
 }
 
 usize QuicCids::outstanding(const QuicCidSpace& space) noexcept

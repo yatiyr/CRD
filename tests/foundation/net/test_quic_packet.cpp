@@ -98,6 +98,10 @@ struct Buffer
     Buffer(Buffer&& other) noexcept : storage(static_cast<Bytes&&>(other.storage)), size(other.size) {}
     Buffer& operator=(const Buffer& other)
     {
+        if (this == &other)
+        {
+            return *this;
+        }
         storage = other.storage;
         bytes = storage.data();
         size = other.size;
