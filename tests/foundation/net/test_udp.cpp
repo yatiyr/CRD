@@ -9,6 +9,7 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include <chrono>
+#include <cstring>
 
 #if CRD_OS_LINUX
 #include "router_namespace_fixture.hpp"
@@ -882,6 +883,71 @@ TEST_CASE("a coalescing socket receives a sender's trains whole and each datagra
     }
 }
 
+TEST_CASE("every train shape segment_train makes leaves in one call and arrives as the datagrams sent",
+          "[net][udp][net-path]")
+{
+    struct Shape
+    {
+        usize size;  // every datagram's but the last
+        usize count; // datagrams
+        usize last;  // the last datagram's
+    };
+    // One-byte and ACK-sized segments, a short last one, a run past one train's payload, one train at the payload
+    // limit, segments past any Ethernet MTU, and two datagrams together one short of the IPv4 payload.
+    constexpr Shape shapes[] = {{1U, 64U, 1U},       {40U, 64U, 40U},  {40U, 3U, 17U},      {1200U, 64U, 1200U},
+                                {1472U, 44U, 1472U}, {8000U, 16U, 3U}, {32753U, 2U, 32753U}};
+    UdpSocket from;
+    UdpSocket to;
+    REQUIRE(open_offloaded(from, IpAddress::v4_loopback(), true, false));
+    REQUIRE(open_offloaded(to, IpAddress::v4_loopback(), true, false));
+    static u8 out[1U << 17U];
+    static u8 in[1U << 17U];
+    OffloadCounters planned;
+    for (u32 shape_index = 0U; shape_index < sizeof(shapes) / sizeof(shapes[0]); ++shape_index)
+    {
+        const Shape& shape = shapes[shape_index];
+        INFO(shape.count << " datagrams of " << shape.size << " bytes, the last " << shape.last);
+        OutgoingDatagram datagrams[kMaxTrainDatagrams];
+        ReceivedDatagram slots[kMaxTrainDatagrams];
+        usize at = 0U;
+        for (usize index = 0U; index < shape.count; ++index)
+        {
+            const usize size = (index + 1U == shape.count) ? shape.last : shape.size;
+            pattern(Span<u8>(out + at, size), (shape_index << 8U) | static_cast<u32>(index));
+            datagrams[index] = OutgoingDatagram{ConstSpan<u8>(out + at, size), to.local_endpoint(), Ecn::NotEct};
+            slots[index].storage = Span<u8>(in + at, size);
+            at += size;
+        }
+        const ConstSpan<OutgoingDatagram> run(datagrams, shape.count);
+        for (usize next = 0U; next < shape.count;)
+        {
+            const usize train = segment_train(run.subspan(next));
+            planned.trains_sent += (train > 1U) ? 1U : 0U;
+            planned.train_datagrams_sent += (train > 1U) ? train : 0U;
+            next += train;
+        }
+        REQUIRE(from.send(run).count == shape.count);
+        REQUIRE(receive_all(to, Span<ReceivedDatagram>(slots, shape.count), shape.count) == shape.count);
+        for (usize index = 0U; index < shape.count; ++index)
+        {
+            INFO("datagram " << index);
+            CHECK_FALSE(slots[index].truncated);
+            CHECK(slots[index].size == datagrams[index].bytes.size());
+            const bool same = std::memcmp(slots[index].storage.data(), datagrams[index].bytes.data(),
+                                          datagrams[index].bytes.size()) == 0;
+            CHECK(same);
+        }
+    }
+    const OffloadCounters& sent = from.offload_counters();
+    CHECK(planned.trains_sent == 9U); // 54 and 10 of the 1200-byte run, 8 and 8 of the 8000-byte one
+    CHECK(sent.trains_refused == 0U);
+#if CRD_OS_LINUX || CRD_OS_WINDOWS
+    CHECK(from.features().segmented_send);
+    CHECK(sent.trains_sent == planned.trains_sent);
+    CHECK(sent.train_datagrams_sent == planned.train_datagrams_sent);
+#endif
+}
+
 TEST_CASE("a CE train goes as the host takes CE, and segmenting and marking stay on", "[net][udp][net-path]")
 {
     UdpSocket from;
@@ -927,8 +993,8 @@ TEST_CASE("a train past the route's MTU is refused as each datagram would be, an
 #if CRD_OS_LINUX || CRD_OS_WINDOWS
     UdpSocket from;
     REQUIRE(open_offloaded(from, IpAddress::v4_any(), true, false));
-    // Past any Ethernet's MTU, jumbo frames included, so neither the train nor a datagram of it leaves the host.
-    static u8 payload[2][9500];
+    // Past any link's MTU but a loopback's, jumbo frames and tunnels included, so nothing leaves the host.
+    static u8 payload[2][32000];
     const Endpoint documentation{IpAddress::v4(192, 0, 2, 1), 9U}; // TEST-NET-1 (RFC 5737)
     const OutgoingDatagram datagrams[2] = {{ConstSpan<u8>(payload[0]), documentation, Ecn::NotEct},
                                            {ConstSpan<u8>(payload[1]), documentation, Ecn::NotEct}};
