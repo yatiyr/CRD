@@ -41,9 +41,9 @@ in lower case, a nested conditional, `std::ranges::any_of`, and a self-assignmen
   `reno-coupled` (seed-3a00952bf7a40d62). The corpus replays clean.
 - libFuzzer on linux-clang-fuzz, 2 jobs for 292 s: 1.8 M runs, and the corpus grew from 13 to 4725. It reported
   one artifact that does not replay and whose cause is unconfirmed: an ASan "stack-overflow" in GCC's trendline with
-  the program counter on the stack. That path is untouched here, apart from the `each()` event wrapper. The artifact replays clean in the libFuzzer build, in the
-  GCC debug build and under valgrind, and does not recur in 3000 mutated runs from it. All 4725 corpus inputs
-  replay clean. This host's known misexecution (MEMORY: host-misexecutes) is the likely cause, so the fuzz
+  the program counter on the stack. That path is untouched here, apart from the `each()` event wrapper. The
+  artifact replays clean in the libFuzzer build, in the GCC debug build and under valgrind, and does not recur in
+  3000 mutated runs from it. All 4725 corpus inputs replay clean. This host's known misexecution (MEMORY: host-misexecutes) is the likely cause, so the fuzz
   host-check runs on GitHub's CPUs (net-congestion 8501/8502).
 - Teeth: a divisor one too large fails three cases and the twin oracle. Coupling switched off fails both
   bottleneck goals. A control or connection that does not pass the coupling fails both membership cases.
