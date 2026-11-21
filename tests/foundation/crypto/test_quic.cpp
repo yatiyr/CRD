@@ -560,7 +560,7 @@ TEST_CASE("QUIC: a multipath packet's nonce carries its path ID and opens on tha
     u8 secret[kQuicMaxSecretBytes];
     u8 buffer[256];
     u8 original[256];
-    constexpr usize kHeader = 1U + 8U + 2U;
+    constexpr usize header_bytes = 1U + 8U + 2U;
     for (const AlgorithmId aead : kAeads)
     {
         const usize secret_bytes = aead == AlgorithmId::Aes256Gcm ? 48U : 32U;
@@ -573,13 +573,13 @@ TEST_CASE("QUIC: a multipath packet's nonce carries its path ID and opens on tha
         {
             // The same packet number on another path is another nonce: its packet opens there and nowhere else.
             std::memcpy(buffer, original, sizeof(buffer));
-            REQUIRE(key.seal(7U, Span<u8>(buffer, sizeof(buffer)), kHeader, path) == CryptoError::None);
+            REQUIRE(key.seal(7U, Span<u8>(buffer, sizeof(buffer)), header_bytes, path) == CryptoError::None);
             CHECK(key.sealed() == ++sealed); // one limit over every path (RFC 10069 section 7.3)
             u8 copy[sizeof(buffer)];
             for (const u32 other : {0U, 1U, 2U, 0x10000U, 0xFFFFFFFFU})
             {
                 std::memcpy(copy, buffer, sizeof(copy));
-                const CryptoError opened = key.open(7U, Span<u8>(copy, sizeof(copy)), kHeader, other);
+                const CryptoError opened = key.open(7U, Span<u8>(copy, sizeof(copy)), header_bytes, other);
                 CHECK(opened == (other == path ? CryptoError::None : CryptoError::Forged));
                 if (other == path)
                 {
@@ -588,7 +588,7 @@ TEST_CASE("QUIC: a multipath packet's nonce carries its path ID and opens on tha
             }
             u8 path_zero[sizeof(buffer)];
             std::memcpy(path_zero, original, sizeof(path_zero));
-            REQUIRE(key.seal(7U, Span<u8>(path_zero, sizeof(path_zero)), kHeader) == CryptoError::None);
+            REQUIRE(key.seal(7U, Span<u8>(path_zero, sizeof(path_zero)), header_bytes) == CryptoError::None);
             ++sealed;
             CHECK((std::memcmp(path_zero, buffer, sizeof(buffer)) == 0) == (path == 0U));
         }

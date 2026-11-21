@@ -1381,6 +1381,7 @@ public:
     QuicPath from;           // the path the raw client's datagrams arrive on (S75)
     usize pad_to = 0U;       // a 1-RTT packet's datagram is padded to this many bytes
     QuicAddressDiscovery discovery = QuicAddressDiscovery::Off; // what the raw client's parameters offer
+    bool multipath = false; // the raw client's parameters offer initial_max_path_id (RFC 10069)
     u8 last[kDatagram] = {}; // the raw client's latest datagram, as sent
     usize last_bytes = 0U;
 
@@ -1390,6 +1391,8 @@ public:
         QuicTransportParameters parameters;
         parameters.max_idle_timeout = 30000U;
         parameters.address_discovery = discovery;
+        parameters.has_initial_max_path_id = multipath;
+        parameters.initial_max_path_id = multipath ? 3U : 0U;
         parameters.has_initial_source_connection_id = true;
         REQUIRE(parameters.initial_source_connection_id.assign(ConstSpan<u8>(kClientCid, sizeof(kClientCid))));
         u8 encoded[512];
@@ -1762,6 +1765,83 @@ TEST_CASE("QUIC connection: ACK_RECEIVE_TIMESTAMPS only where asked for, in 1-RT
     {
         RawRun run(identity, 2048U, {}, nullptr, {}, 4U);
         run.handshake([&] { send_timed_ack(run, QuicPacketType::Handshake, {0U}, 5000U, 0U); });
+        REQUIRE(run.server.state() == QuicConnectionState::Closing);
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+    }
+}
+
+TEST_CASE("QUIC connection: multipath is not offered, and its frames are an unnegotiated extension's",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069's frames, each with valid fields (PATH_ACK from write_quic_path_ack).
+    const u8 id[8] = {0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7};
+    const u8 token[16] = {};
+    const auto frames = [&](usize index, Span<u8> out) -> usize
+    {
+        QuicFrame frame;
+        frame.path_id = 1U;
+        switch (index)
+        {
+        case 0U:
+        {
+            const QuicAckRange range{0U, 0U};
+            return write_quic_path_ack(0U, ConstSpan<QuicAckRange>(&range, 1U), 0U, nullptr, out);
+        }
+        case 1U:
+            frame.kind = QuicFrameKind::PathAbandon;
+            break;
+        case 2U:
+            frame.kind = QuicFrameKind::PathStatus;
+            frame.backup = true;
+            break;
+        case 3U:
+            frame.kind = QuicFrameKind::PathNewConnectionId;
+            frame.data = ConstSpan<u8>(id, sizeof(id));
+            frame.reset_token = ConstSpan<u8>(token, sizeof(token));
+            break;
+        case 4U:
+            frame.kind = QuicFrameKind::PathRetireConnectionId;
+            break;
+        case 5U:
+            frame.kind = QuicFrameKind::MaxPathId;
+            frame.value = 4U;
+            break;
+        case 6U:
+            frame.kind = QuicFrameKind::PathsBlocked;
+            frame.value = 3U;
+            break;
+        default:
+            frame.kind = QuicFrameKind::PathCidsBlocked;
+            break;
+        }
+        return write_quic_frame(frame, out);
+    };
+    Identity identity;
+    for (usize index = 0U; index < 8U; ++index)
+    {
+        INFO("frame " << index);
+        // A client that offers initial_max_path_id still completes its handshake; the server offers none, so
+        // multipath is never negotiated and each frame is of no known type (RFC 9000 section 12.4).
+        RawRun run(identity);
+        run.multipath = true;
+        run.handshake();
+        CHECK(run.server.peer_parameters().has_initial_max_path_id);
+        QuicTransportParameters offered;
+        REQUIRE(read_quic_transport_parameters(run.raw.handshake.peer_transport_parameters(), QuicSide::Server,
+                                               offered) == QuicTransportError::NoError);
+        CHECK_FALSE(offered.has_initial_max_path_id);
+        CHECK_FALSE(quic_multipath_negotiated(offered, run.server.peer_parameters()));
+        run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return frames(index, out); });
+        REQUIRE(run.server.state() == QuicConnectionState::Closing);
+        CHECK(run.server.close_info().error_code == code(QuicTransportError::FrameEncodingError));
+        CHECK(run.raw.close_code == run.server.close_info().error_code);
+    }
+    // In a Handshake packet each is PROTOCOL_VIOLATION (RFC 10069 section 4: 1-RTT packets alone).
+    for (usize index = 0U; index < 8U; ++index)
+    {
+        INFO("frame " << index);
+        RawRun run(identity);
+        run.handshake([&] { run.send(QuicPacketType::Handshake, [&](Span<u8> out) { return frames(index, out); }); });
         REQUIRE(run.server.state() == QuicConnectionState::Closing);
         CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
     }

@@ -865,10 +865,15 @@ TEST_CASE("QUIC frames: RFC 10069's multipath frames read and write byte for byt
         CHECK(frame.kind == wire.kind);
         CHECK(frame.path_id == wire.path_id);
         CHECK(frame.backup == wire.backup);
-        const u64 second = (wire.kind == QuicFrameKind::PathAbandon) ? frame.error_code
-                           : (wire.kind == QuicFrameKind::MaxPathId || wire.kind == QuicFrameKind::PathsBlocked)
-                               ? frame.value
-                               : frame.sequence;
+        u64 second = frame.sequence;
+        if (wire.kind == QuicFrameKind::PathAbandon)
+        {
+            second = frame.error_code;
+        }
+        else if (wire.kind == QuicFrameKind::MaxPathId || wire.kind == QuicFrameKind::PathsBlocked)
+        {
+            second = frame.value;
+        }
         CHECK(second == wire.second);
         // Written back in the same, shortest, encodings (2^32 - 1 takes eight bytes).
         u8 out[32] = {};

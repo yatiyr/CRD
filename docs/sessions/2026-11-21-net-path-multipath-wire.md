@@ -5,44 +5,45 @@
 
 Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S78](../design/network-foundation.md#multipath).
 
-## CI first
-
-No run has finished on 089cbcd3. Host-check 44913047111 (legs 8601 and 8602) is still queued. The three red lanes
-in scheduled run 44895376363 (linux-gcc-release, -relwithdebinfo, -shipping) built cf3611f8. That commit predates
-7ed26c44, which already fixes their LTO array-bounds error in `SendQueue::queued`.
+**CI first.** No run has finished on 089cbcd3, and host-check 44913047111 is still queued. Scheduled run 44895376363
+(cf3611f8) fails linux-gcc-release, -relwithdebinfo and -shipping with the LTO array-bounds error that 7ed26c44 fixes.
 
 ## What landed
 
-- draft-ietf-quic-multipath-21 became RFC 10069 on 2026-11-07 (datatracker record; `rfc10069.txt` SHA-256
-  c5e80af1...dcdc69, read in full). The suggested codepoints match the IANA QUIC registry (`quic.xml` 04ac5756...6443).
-  The pinned picoquic sends the same codepoints. The register entry is re-pinned to the RFC (`planned`, 15 codepoints).
-  gen-register-ids gains the QUIC Transport Error Codes registry.
-- Frames: all nine of section 4, accepted in 1-RTT packets only. A path ID or maximum above 2^32 - 1 is
-  PROTOCOL_VIOLATION. PATH_ACK is written through the ACK family's one writer. PATH_NEW_CONNECTION_ID shares
-  NEW_CONNECTION_ID's reader and counts as probing.
-- Transport parameter: `initial_max_path_id` must be at most 2^32 - 1. It is not in the early-data context.
-  `quic_multipath_negotiated` and `quic_check_multipath` refuse a zero-length connection ID once both ends offer it.
-- Nonce: crd-crypto's `quic_packet_nonce` puts the path ID into the AEAD nonce. `seal` and `open` take the path;
-  path 0 gives RFC 9001's nonce.
-- The connection does not offer multipath yet. It reads every multipath frame as FRAME_ENCODING_ERROR, the error for
-  an extension that was never negotiated.
+- draft-ietf-quic-multipath-21 became RFC 10069 on 2026-11-07. Read in full: `rfc10069.txt`, SHA-256 c5e80af1...dcdc69.
+  Its codepoints match IANA's `quic.xml` (04ac5756...6443) and the pinned picoquic. The register entry is re-pinned
+  to the RFC (`planned`, 15 codepoints), and gen-register-ids gains the QUIC Transport Error Codes registry.
+- All nine frames of section 4, in 1-RTT packets only. A path ID or maximum above 2^32 - 1 is PROTOCOL_VIOLATION.
+  PATH_ACK goes through the ACK family's one writer. PATH_NEW_CONNECTION_ID shares NEW_CONNECTION_ID's reader and
+  counts as probing.
+- `initial_max_path_id` is at most 2^32 - 1 and is never remembered for 0-RTT. Once both ends offer it,
+  `quic_check_multipath` refuses zero-length connection IDs.
+- crd-crypto's `quic_packet_nonce` puts the path ID into the nonce. `seal` and `open` take the path, and path 0 is
+  RFC 9001's nonce.
+- A connection offers no multipath yet. It refuses each multipath frame with FRAME_ENCODING_ERROR, or with
+  PROTOCOL_VIOLATION outside 1-RTT packets.
 
 ## Evidence
 
-- `[quic-frame]`, `[quic-tp]` and `[multipath]` pass on win-debug and linux-gcc-debug (20 cases, 400817 assertions).
-  So does crd-crypto `[quic]` (15 cases): section 2.4's example nonce, path separation under all three AEADs, and one
-  confidentiality limit shared across paths.
-- Full crd-net-tests: win-debug 1042 cases, linux-gcc-debug 1043, 7 skipped as before. linux-gcc-debug built with no
-  warnings. On win-debug, all 29 net corpora replay and the 53 `crd-no-*`, `crd-check*` and drift guards pass.
-- Codec fuzzer: new oracles cover the path bounds, 1-RTT-only placement and PATH_ACK round trips. The seeds now
-  include every multipath frame, the parameter, and a MAX_PATH_ID of 2^32.
-- libFuzzer ran 300 s with four jobs, about 5.3 M runs per job. It logged two null-page SEGVs inside
-  `take_quic_varint`, reported at a line that holds no such call. Neither replays: not with the libFuzzer binary run
-  three times, not on linux-gcc-debug, and not in the 5276-input working corpus. This is the host's known fault
-  pattern (`host-misexecutes-local-faults`). Host-check leg 8601 covers the target on hosted runners.
+- On win-debug and linux-gcc-debug: `[quic-frame]`, `[quic-tp]` and `[multipath]` (21 cases) and crd-crypto `[quic]`
+  (15 cases) pass. The crypto cases cover section 2.4's example nonce, path separation under all three AEADs and one
+  limit shared across paths.
+- The connection case uses a raw client that offers the parameter. Its handshake completes, and each of the eight
+  frames then closes the connection with the expected error. With the refusal removed, the case fails.
+- Full crd-net-tests pass: 1042 cases on win-debug and 1043 on linux-gcc-debug, with 7 skipped as before. On
+  win-debug, all 29 net corpora replay and the 53 `crd-no-*`, `crd-check*` and drift guards pass. LLVM-22 tidy finds
+  nothing in the changed sources or tests.
+- Codec fuzzer: new oracles check path bounds, 1-RTT placement and PATH_ACK round trips; new seeds cover every
+  frame, the parameter and a MAX_PATH_ID of 2^32. libFuzzer ran the current binary with four jobs for 300 s, and
+  coverage rose from 946 to 1036 edges. One job ran the full time (6.0 M runs). The other three stopped on
+  wild-jump SEGVs: a PC in non-executable memory or a zero frame pointer, with no frame in our code. A stale-binary
+  run of the old codec stopped the same way. No artifact replays, either on the libFuzzer binary three times or on
+  linux-gcc-debug, and the 5422-input working corpus replays clean on both. This is the host's known fault pattern
+  (`host-misexecutes-local-faults`); a hosted fuzz host-check on this head will confirm it.
 
 ## Next
 
-S78's connection slices, in order: per-path Application recovery with path 0 alone, keeping every existing case
-unchanged; path IDs, connection IDs and the lifecycle, proven against picoquic on two paths; then scheduling,
-hostile-path tests and the fuzz oracles.
+S78's connection slices, in order:
+- Per-path Application recovery with path 0 only, keeping every existing case unchanged.
+- Path IDs, connection IDs and the lifecycle, proven against picoquic on two paths.
+- Scheduling, hostile-path tests and the fuzz oracles.
