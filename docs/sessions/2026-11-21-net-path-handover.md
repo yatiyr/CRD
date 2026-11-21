@@ -10,7 +10,8 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path) (Partial). Design: [S76](../design
 
 Runs 44861565940 (15bea98a) and 44875047802 (cf247ec8) had no failed job when this batch started. Later
 44861565940's win-shipping failed with its log cut off mid-way through the numerics tests and its Test step never
-completed: the hosted runner was lost, not a test failure. 44875047802 had not started.
+completed; the job ended 55 minutes later (a lost runner or a hung test, cause unread). 44875047802 had not
+started.
 
 ## What landed
 
@@ -32,8 +33,9 @@ completed: the hosted runner was lost, not a test failure. 44875047802 had not s
 
 - WSL linux-gcc-debug: crd-net-tests 1008 cases pass; `[handover]` 10 cases; the fuzz seeds and every
   `crd-check-*`/`crd-no-*` guard pass (the ISA guard after rebuilding a stale crd-core-tests).
-- Teeth, one build: restoring the spurious undo, the RTT and receive-time signal, the PMTU probe, the clear on a
-  move and the persistent congestion run each failed its test.
+- Teeth, one build: restoring the spurious undo, the RTT signal, the PMTU probe, the clear on a move and the
+  persistent congestion run each failed its test. The receive-time guard alone, on GCC with receive timestamps
+  through a 25 ms step: 2 reductions after the handovers instead of 0, 24.0 s instead of 17.0 s.
 - Measured (design S76): BBRv3 4 reductions instead of 6 in the 2 s after each handover and 7% more delivered;
   SCReAM's least target 23% higher, GCC's 53% with 36% more delivered; a 1.2 s outage inside the guards keeps
   CUBIC out of persistent congestion (57% more delivered after it).
