@@ -970,13 +970,18 @@ bool QuicConnection::stateless_reset(cont::ConstSpan<u8> datagram, u64 now_ns) n
 
 bool QuicConnection::path_too_big(cont::ConstSpan<u8> quote, u32 limit, u64 now_ns) noexcept
 {
+    return path_too_big(path(), quote, limit, now_ns);
+}
+
+bool QuicConnection::path_too_big(const QuicPath& from, cont::ConstSpan<u8> quote, u32 limit, u64 now_ns) noexcept
+{
     const cont::ConstSpan<u8> dcid = peer_cid();
-    const bool ours = m_state == QuicConnectionState::Established && quote.size() >= 1U + dcid.size() &&
-                      (quote[0] & 0x80U) == 0U &&
+    const bool ours = m_state == QuicConnectionState::Established && from == path() &&
+                      quote.size() >= 1U + dcid.size() && (quote[0] & 0x80U) == 0U &&
                       (dcid.empty() || std::memcmp(quote.data() + 1U, dcid.data(), dcid.size()) == 0);
     const QuicSentPacket* const packet =
         ours ? m_recovery->unacknowledged(QuicSpace::Application, packet_tag(quote, dcid.size())) : nullptr;
-    if (packet == nullptr)
+    if (packet == nullptr || !m_recovery->on_path(QuicSpace::Application, *packet))
     {
         return false;
     }
@@ -3045,6 +3050,13 @@ QuicMigration QuicConnection::migrate(const QuicPath& path, u64 now_ns) noexcept
     if (result == QuicMigration::Started)
     {
         move_to(index, now_ns);
+        // The server answers on the new path only with an ID of this side's it holds unused (section 9.5), and one
+        // announced on the path left behind may never arrive: every one not yet acknowledged goes again from here.
+        for (usize local = 0U; local < m_local_id_count; ++local)
+        {
+            LocalCid& held = m_local_ids[local];
+            held.owed = held.owed || !held.acked;
+        }
     }
     return result;
 }

@@ -33,10 +33,10 @@ TicketCacheConfig tickets_of(const QuicClientConfig& config) noexcept
 }
 } // namespace
 
-QuicClient::QuicClient(memory::IAllocator& allocator, DatagramSocket& socket, const Ingress& ingress,
+QuicClient::QuicClient(memory::IAllocator& allocator, const SocketSet& sockets, const Ingress& ingress,
                        ConnectionIdTable& routes, const crypto::QuicResetKey& reset, QuicClientEvents& events,
                        const QuicClientConfig& config) noexcept
-    : QuicHost(allocator, socket, routes, reset, events, limits_of(config)), m_ingress(ingress), m_events(events),
+    : QuicHost(allocator, sockets, routes, reset, events, limits_of(config)), m_ingress(ingress), m_events(events),
       m_config(config), m_tickets(allocator, tickets_of(config))
 {
     const QuicConnectionConfig& connection = config.connection;
@@ -122,7 +122,7 @@ QuicHandle QuicClient::connect(const QuicClientConnect& request, u64 now_ns) noe
         ++m_counters.tokens_used;
     }
     m_started[index] = Started{config.tls, false, false};
-    enlist(index, *connection, request.server, now_ns);
+    enlist(index, *connection, now_ns);
     ++m_counters.connected;
     return handle_of(index);
 }
@@ -170,7 +170,7 @@ QuicConnection* QuicClient::start(u32 index, const Endpoint& server, const QuicC
     built.token = token;
     QuicConnection* const connection =
         (crypto::random_bytes(cont::Span<u8>(dcid, sizeof(dcid))) == crypto::CryptoError::None)
-            ? build(index, built, server)
+            ? build(index, built, QuicPath{0U, server})
             : nullptr;
     if (connection == nullptr || !connection->connect(local_cid, cont::ConstSpan<u8>(dcid, sizeof(dcid)), now_ns))
     {
@@ -251,6 +251,38 @@ void QuicClient::on_admit(const IngressDecision&, const ReceivedDatagram&, u64) 
 void QuicClient::on_early(const IngressDecision&, const ReceivedDatagram&, u64) noexcept
 {
     ++m_counters.unexpected;
+}
+
+// ---- Moves ----
+
+QuicMigration QuicClient::probe_path(QuicHandle handle, u32 socket, u64 now_ns) noexcept
+{
+    return move_to(handle, socket, true, now_ns);
+}
+
+QuicMigration QuicClient::migrate(QuicHandle handle, u32 socket, u64 now_ns) noexcept
+{
+    return move_to(handle, socket, false, now_ns);
+}
+
+QuicMigration QuicClient::move_to(QuicHandle handle, u32 socket, bool probe_only, u64 now_ns) noexcept
+{
+    QuicConnection* const moving = connection(handle);
+    if (moving == nullptr)
+    {
+        return QuicMigration::NoConnection;
+    }
+    if (socket >= sockets())
+    {
+        return QuicMigration::NoSocket;
+    }
+    const QuicPath path{socket, moving->path().peer};
+    const QuicMigration started = probe_only ? moving->probe_path(path, now_ns) : moving->migrate(path, now_ns);
+    if (started == QuicMigration::Started)
+    {
+        wake(handle);
+    }
+    return started;
 }
 
 // ---- Tokens ----

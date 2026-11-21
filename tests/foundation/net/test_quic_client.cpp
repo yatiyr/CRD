@@ -1,13 +1,15 @@
 // crd-net -- a QUIC client host behind its I/O loop and a client's ingress (4.2a;
-// docs/design/network-foundation.md#quic-client): its connections share one virtual socket and reach servers behind
+// docs/design/network-foundation.md#quic-client): its connections share a virtual socket and reach servers behind
 // their own loops over seeded paths that lose, duplicate and reorder. Many connections to two servers in both versions
 // echoed and closed with no allocation while serving; Version Negotiation followed once into the version the client
 // prefers, a second one and one listing nothing it runs ending the connection; a Retry taken and the NEW_TOKEN token
 // carried by the next connection, which is not retried; a ticket's 0-RTT written in the first service; another
 // address dropped and the server's stateless reset ending the connection only from the server's address; the pool's
 // bounds, stale handles, a TLS context per connection and the configurations refused; and a client host served over
-// the host's loopback; and, on Linux, a router's real Packet Too Big messages finding each direction's path MTU
-// through private network namespaces ([.netns]).
+// the host's loopback; a connection probing and moving to the host's second socket (the server following, a dead
+// network reverted, a busy or gone first socket, serial moves, refusals, real sockets on the loopback); and, on Linux,
+// a router's real Packet Too Big messages finding each direction's path MTU through private network namespaces
+// ([.netns]).
 
 #include "ingress_fixture.hpp"
 #include "loop_fixture.hpp"
@@ -44,6 +46,7 @@ constexpr u8 kClientSecret[kQuicResetKeyBytes] = {0xC5, 0xC6};
 constexpr usize kClientCid = 8U;
 constexpr usize kMaxServers = 2U;
 const Endpoint kClientAt{IpAddress::v4(198, 51, 100, 7), 50000U};
+const Endpoint kClientMovedAt{IpAddress::v4(203, 0, 113, 40), 61000U}; // the host's second socket (another network)
 const Endpoint kStranger{IpAddress::v4(10, 0, 0, 9), 443U};
 
 Endpoint server_at(usize index)
@@ -167,20 +170,23 @@ IngressConfig client_ingress_config()
     return config;
 }
 
-// A client host and `servers` server stacks on one virtual clock, joined by seeded impaired paths: what the client's
-// socket sends goes to the server whose address it names, what a server sends to the client's address goes back from
-// the server's address.
+// A client host and `servers` server stacks on one virtual clock, joined by seeded impaired paths: what a client
+// socket sends goes to the server whose address it names, what a server sends to a client socket's address goes back
+// from the server's address. With `sockets` 2 the client host serves a second socket, `moved_socket`, on another
+// network; a client socket marked `dead` loses everything to and from it, and one marked `stuck` takes no datagram.
 class Network
 {
 public:
     static constexpr usize kFlights = 4096U;
     static constexpr usize kToClient = ~usize{0};
+    static constexpr usize kToMoved = kToClient - 1U;
 
-    Network(const Identity& identity, const Setup& setup, const QuicClientConfig& config, usize servers = 1U)
+    Network(const Identity& identity, const Setup& setup, const QuicClientConfig& config, usize servers = 1U,
+            usize sockets = 1U)
         : client_routes(client_allocator, 128U, ConstSpan<u8>(kHostPrf)),
           client_ingress(client_ingress_config(), client_routes),
-          client(client_allocator, client_socket, client_ingress, client_routes, client_reset, app, config),
-          client_loop(client_allocator, client_socket, client_clock, client_ingress, client,
+          client(client_allocator, client_sockets(sockets), client_ingress, client_routes, client_reset, app, config),
+          client_loop(client_allocator, client_sockets(sockets), client_clock, client_ingress, client,
                       IoLoopConfig{.slot_bytes = config.receive_bytes}),
           m_servers(servers)
     {
@@ -188,6 +194,7 @@ public:
         REQUIRE(client.ready());
         REQUIRE(client_loop.ready());
         client_socket.local = kClientAt;
+        moved_socket.local = kClientMovedAt;
         client_clock.now = now;
         for (usize index = 0U; index < servers; ++index)
         {
@@ -332,18 +339,29 @@ public:
     u64 now = kStartNs;
     bool busy = false; // the client's host takes one datagram per send call at most, and none every other turn
     usize stray = 0U;  // datagrams sent to no one
+    bool dead[2] = {};  // per client socket: its network carries nothing
+    bool stuck[2] = {}; // per client socket: the host takes no datagram from it (Busy)
+    usize sent_from[2] = {}; // datagrams each client socket sent
 
     CountingAllocator client_allocator;
     ConnectionIdTable client_routes;
     QuicResetKey client_reset;
     Ingress client_ingress;
     VirtualSocket client_socket;
+    VirtualSocket moved_socket;
     TestClock client_clock;
     ClientApp app;
     QuicClient client;
     IoLoop client_loop;
 
 private:
+    // The client host's first `count` sockets.
+    SocketSet client_sockets(usize count)
+    {
+        DatagramSocket* const sockets[] = {&client_socket, &moved_socket};
+        return SocketSet(ConstSpan<DatagramSocket*>(sockets, count));
+    }
+
     struct Flight
     {
         u8 bytes[kDatagram] = {};
@@ -374,22 +392,28 @@ private:
 
     void send_all()
     {
-        for (usize index = 0U; index < client_socket.sent_count; ++index)
+        VirtualSocket* const sockets[] = {&client_socket, &moved_socket};
+        for (usize from = 0U; from < 2U; ++from)
         {
-            const VirtualSocket::Outbound& out = client_socket.sent[index];
-            usize to = m_servers;
-            for (usize target = 0U; target < m_servers; ++target)
+            VirtualSocket& socket = *sockets[from];
+            sent_from[from] += socket.sent_count;
+            for (usize index = 0U; index < socket.sent_count && !dead[from]; ++index)
             {
-                to = (server_at(target) == out.peer) ? target : to;
+                const VirtualSocket::Outbound& out = socket.sent[index];
+                usize to = m_servers;
+                for (usize target = 0U; target < m_servers; ++target)
+                {
+                    to = (server_at(target) == out.peer) ? target : to;
+                }
+                if (to == m_servers)
+                {
+                    ++stray;
+                    continue;
+                }
+                enqueue(to, out.datagram.view(), socket.local);
             }
-            if (to == m_servers)
-            {
-                ++stray;
-                continue;
-            }
-            enqueue(to, out.datagram.view(), kClientAt);
+            socket.sent_count = 0U;
         }
-        client_socket.sent_count = 0U;
         for (usize index = 0U; index < m_servers; ++index)
         {
             VirtualSocket& socket = m_server[index]->socket;
@@ -398,7 +422,11 @@ private:
                 const VirtualSocket::Outbound& out = socket.sent[sent];
                 if (out.peer == kClientAt)
                 {
-                    enqueue(kToClient, out.datagram.view(), server_at(index));
+                    send_to_client(0U, out.datagram.view(), server_at(index));
+                }
+                else if (out.peer == kClientMovedAt)
+                {
+                    send_to_client(1U, out.datagram.view(), server_at(index));
                 }
                 else
                 {
@@ -409,10 +437,34 @@ private:
         }
     }
 
+    // A server's datagram toward client socket `socket`, lost while its network is dead.
+    void send_to_client(usize socket, ConstSpan<u8> datagram, const Endpoint& from)
+    {
+        if (!dead[socket])
+        {
+            enqueue((socket == 0U) ? kToClient : kToMoved, datagram, from);
+        }
+    }
+
+    // Where a flight arrives.
+    VirtualSocket& arrival(usize to)
+    {
+        if (to == kToClient)
+        {
+            return client_socket;
+        }
+        if (to == kToMoved)
+        {
+            return moved_socket;
+        }
+        return m_server[to]->socket;
+    }
+
     u64 next_event()
     {
         send_all();
-        u64 next = (client_socket.wait_readable(0U) || m_client_next <= now) ? now : m_client_next;
+        const bool arrived = client_socket.wait_readable(0U) || moved_socket.wait_readable(0U);
+        u64 next = (arrived || m_client_next <= now) ? now : m_client_next;
         for (usize index = 0U; index < m_servers; ++index)
         {
             if (m_server[index]->socket.wait_readable(0U) || m_server_next[index] <= now)
@@ -452,7 +504,7 @@ private:
                 ++kept;
                 continue;
             }
-            VirtualSocket& socket = (flight.to == kToClient) ? client_socket : m_server[flight.to]->socket;
+            VirtualSocket& socket = arrival(flight.to);
             if (socket.pending() == VirtualSocket::kQueue)
             {
                 continue; // the host's buffer is full: dropped, as a kernel drops it
@@ -465,6 +517,9 @@ private:
         m_count = kept;
         m_turn = !m_turn;
         client_socket.throttle(busy, m_turn);
+        moved_socket.throttle(busy, m_turn);
+        client_socket.busy_after = stuck[0] ? 0U : client_socket.busy_after;
+        moved_socket.busy_after = stuck[1] ? 0U : moved_socket.busy_after;
         m_client_next = client_loop.poll();
         for (usize index = 0U; index < m_servers; ++index)
         {
@@ -546,16 +601,17 @@ QuicClientConfig real_client_config(const Identity& identity)
     return config;
 }
 
-// An echoing server host and a client host, each behind its own loop on a real UDP socket and the host's clock.
+// An echoing server host and a client host, each behind its own loop on real UDP sockets and the host's clock: the
+// client's are `client_sockets`.
 struct RealHosts : HostKeys
 {
-    RealHosts(UdpSocket& server_socket, UdpSocket& client_socket)
+    RealHosts(UdpSocket& server_socket, const SocketSet& client_sockets)
         : server(allocator, server_socket, clock, ingress, routes, reset, &tokens, echo, echo_server_config(identity)),
           server_loop(allocator, server_socket, clock, ingress, server, IoLoopConfig{}),
-          client(allocator, client_socket, client_ingress, client_routes, client_reset, app,
+          client(allocator, client_sockets, client_ingress, client_routes, client_reset, app,
                  real_client_config(identity)),
-          client_loop(allocator, client_socket, clock, client_ingress, client, IoLoopConfig{}),
-          m_server_socket(server_socket), m_client_socket(client_socket)
+          client_loop(allocator, client_sockets, clock, client_ingress, client, IoLoopConfig{}),
+          m_server_socket(server_socket), m_client_sockets(client_sockets)
     {
         REQUIRE(server.ready());
         REQUIRE(server_loop.ready());
@@ -576,7 +632,7 @@ struct RealHosts : HostKeys
             static_cast<void>(client_loop.poll());
             static_cast<void>(m_server_socket.wait_readable(kMs));
             static_cast<void>(server_loop.poll());
-            static_cast<void>(m_client_socket.wait_readable(kMs));
+            static_cast<void>(m_client_sockets.wait_readable(kMs));
         }
         return true;
     }
@@ -598,7 +654,7 @@ struct RealHosts : HostKeys
 
 private:
     UdpSocket& m_server_socket;
-    UdpSocket& m_client_socket;
+    SocketSet m_client_sockets;
 };
 
 void hostile(Network& network, u64 seed)
@@ -852,6 +908,25 @@ TEST_CASE("QUIC client: the host searches the path MTU only through a socket tha
         CHECK(path.state() == (forbids ? QuicPmtuState::Base : QuicPmtuState::Disabled));
         CHECK(path.size() == (forbids ? kQuicPmtuFloor : kQuicIpv6BaseDatagram));
         CHECK(path.ceiling() == kQuicDefaultMaxDatagram);
+    }
+}
+
+TEST_CASE("QUIC client: a host of two sockets searches the path MTU only where both forbid fragmentation",
+          "[net][net-path][quic-client][quic-pmtu][client-migration]")
+{
+    for (const bool second_can : {true, false})
+    {
+        INFO("the second socket forbids fragmentation " << second_can);
+        Identity identity;
+        auto network =
+            std::make_unique<Network>(identity, Setup{}, client_config(identity, QuicVersion::V1, {}), 1U, 2U);
+        network->client_socket.offers.dont_fragment = true;
+        network->moved_socket.offers.dont_fragment = second_can;
+        const QuicHandle handle = network->connect(0U, 11U);
+        REQUIRE(network->run_until([&] { return network->app.echoed(handle); }));
+        const QuicConnection& connection = network->live(handle);
+        CHECK((connection.path_mtu().state() != QuicPmtuState::Disabled) == second_can);
+        CHECK((connection.counters().path_probes != 0U) == second_can);
     }
 }
 
@@ -1414,6 +1489,206 @@ TEST_CASE("QUIC client: a client host is served over the host's loopback through
     }
     // The server's NEW_TOKEN token is remembered for its address.
     CHECK(hosts.serve_until([&] { return !hosts.client.token_for(request.server, QuicVersion::V1).empty(); }, 5U));
+}
+
+TEST_CASE("QUIC client: a connection probes the host's second socket, then moves there; the server follows and every "
+          "stream finishes over hostile paths",
+          "[net][net-path][quic-client][client-migration]")
+{
+    for (u64 seed = 1U; seed <= 3U; ++seed)
+    {
+        INFO("seed " << seed);
+        Identity identity;
+        auto network =
+            std::make_unique<Network>(identity, Setup{}, client_config(identity, QuicVersion::V1, {}), 1U, 2U);
+        hostile(*network, seed);
+        CHECK(network->client.sockets() == 2U);
+        const QuicHandle handle = network->connect(0U, seed);
+        REQUIRE(network->run_until([&] { return network->live(handle).confirmed(); }));
+        const QuicPath second{1U, server_at(0U)};
+
+        // A probe validates the second socket's path and moves nothing (RFC 9000 section 9.1).
+        REQUIRE(network->client.probe_path(handle, 1U, network->now) == QuicMigration::Started);
+        REQUIRE(network->run_until(
+            [&]
+            {
+                const QuicPaths& paths = network->live(handle).paths();
+                const usize index = paths.find(second);
+                return index != kQuicNoPath && paths.proven(index);
+            }));
+        CHECK(network->live(handle).path().socket == 0U);
+        CHECK(network->sent_from[1] != 0U);
+        const QuicConnection& served = network->served(0U, network->server(0U).app.last);
+        CHECK(served.path().peer == kClientAt);
+
+        // The move: the client's datagrams leave by the second socket and the server follows its new address.
+        REQUIRE(network->client.migrate(handle, 1U, network->now) == QuicMigration::Started);
+        CHECK(network->live(handle).path() == second);
+        REQUIRE(network->run_until(
+            [&]
+            {
+                return network->app.echoed(handle) &&
+                       network->served(0U, network->server(0U).app.last).path().peer == kClientMovedAt;
+            }));
+        CHECK(network->live(handle).path() == second);
+        CHECK(network->live(handle).counters().path_failures == 0U);
+        CHECK(network->client.counters().send_dropped == 0U);
+
+        // Once the server is proven to follow, the path left behind goes quiet: nothing more leaves the first socket.
+        network->live(handle).ping();
+        network->wake(handle);
+        REQUIRE(network->run_until([&] { return network->live(handle).paths().fallback() == kQuicNoPath; }));
+        const usize first_before = network->sent_from[0];
+        const usize second_before = network->sent_from[1];
+        network->live(handle).ping();
+        network->wake(handle);
+        REQUIRE(network->run_until([&] { return network->sent_from[1] > second_before + 1U; }));
+        CHECK(network->sent_from[0] == first_before);
+        CHECK(network->stray == 0U);
+    }
+}
+
+TEST_CASE("QUIC client: a move to a socket the host lacks, of a stale handle or before confirmation changes nothing",
+          "[net][net-path][quic-client][client-migration]")
+{
+    Identity identity;
+    auto network = std::make_unique<Network>(identity, Setup{}, client_config(identity, QuicVersion::V1, {}), 1U, 2U);
+    const QuicHandle handle = network->connect(0U, 4U);
+    CHECK(network->client.migrate(handle, 1U, network->now) == QuicMigration::NotConfirmed);
+    REQUIRE(network->run_until([&] { return network->live(handle).confirmed(); }));
+    CHECK(network->client.migrate(handle, 2U, network->now) == QuicMigration::NoSocket);
+    CHECK(network->client.probe_path(handle, kMaxSetSockets, network->now) == QuicMigration::NoSocket);
+    CHECK(network->client.migrate(handle, 0U, network->now) == QuicMigration::ActivePath);
+    CHECK(network->client.migrate(QuicHandle{}, 1U, network->now) == QuicMigration::NoConnection);
+    QuicHandle stale = handle;
+    ++stale.generation;
+    CHECK(network->client.probe_path(stale, 1U, network->now) == QuicMigration::NoConnection);
+    CHECK(network->live(handle).path().socket == 0U);
+    CHECK(network->live(handle).paths().find(QuicPath{1U, server_at(0U)}) == kQuicNoPath);
+    REQUIRE(network->run_until([&] { return network->app.echoed(handle); }));
+    CHECK(network->sent_from[1] == 0U);
+
+    // A host of one socket has no second to move to.
+    Identity alone_identity;
+    auto alone = std::make_unique<Network>(alone_identity, Setup{}, client_config(alone_identity, QuicVersion::V1, {}));
+    CHECK(alone->client.sockets() == 1U);
+    const QuicHandle only = alone->connect(0U, 5U);
+    REQUIRE(alone->run_until([&] { return alone->live(only).confirmed(); }));
+    CHECK(alone->client.migrate(only, 1U, alone->now) == QuicMigration::NoSocket);
+}
+
+TEST_CASE("QUIC client: a move to a socket whose network carries nothing reverts to the first, and the streams finish",
+          "[net][net-path][quic-client][client-migration]")
+{
+    Identity identity;
+    auto network = std::make_unique<Network>(identity, Setup{}, client_config(identity, QuicVersion::V1, {}), 1U, 2U);
+    const QuicHandle handle = network->connect(0U, 6U);
+    REQUIRE(network->run_until([&] { return network->live(handle).confirmed(); }));
+    network->dead[1] = true;
+    REQUIRE(network->client.migrate(handle, 1U, network->now) == QuicMigration::Started);
+    REQUIRE(network->run_until([&] { return network->live(handle).counters().path_failures != 0U; }));
+    CHECK(network->live(handle).path().socket == 0U);
+    REQUIRE(network->run_until([&] { return network->app.echoed(handle); }));
+    CHECK(network->live(handle).path().socket == 0U);
+    CHECK(network->served(0U, network->server(0U).app.last).path().peer == kClientAt);
+    CHECK_FALSE(network->app.state(handle).closed);
+}
+
+TEST_CASE("QUIC client: a move leaves while the first socket's host takes nothing, and after the first network goes",
+          "[net][net-path][quic-client][client-migration]")
+{
+    for (const bool gone : {false, true})
+    {
+        INFO("first network gone " << gone);
+        Identity identity;
+        auto network =
+            std::make_unique<Network>(identity, Setup{}, client_config(identity, QuicVersion::V1, {}), 1U, 2U);
+        network->path.loss = 20U;
+        const QuicHandle handle = network->connect(0U, 7U);
+        REQUIRE(network->run_until([&] { return network->live(handle).confirmed(); }));
+        REQUIRE(network->client.migrate(handle, 1U, network->now) == QuicMigration::Started);
+        network->stuck[0] = !gone; // its datagrams wait in the host's queue, holding back none of the second's
+        network->dead[0] = gone;
+        REQUIRE(network->run_until(
+            [&]
+            {
+                return network->app.echoed(handle) &&
+                       network->served(0U, network->server(0U).app.last).path().peer == kClientMovedAt;
+            }));
+        CHECK(network->live(handle).path().socket == 1U);
+        CHECK(network->live(handle).counters().path_failures == 0U);
+        CHECK_FALSE(network->app.state(handle).closed);
+    }
+}
+
+TEST_CASE("QUIC client: serial moves among the host's sockets each reach the server, back to the first",
+          "[net][net-path][quic-client][client-migration]")
+{
+    Identity identity;
+    auto network = std::make_unique<Network>(identity, Setup{}, client_config(identity, QuicVersion::V1, {}), 1U, 2U);
+    hostile(*network, 21U);
+    const QuicHandle handle = network->connect(0U, 8U);
+    REQUIRE(network->run_until([&] { return network->live(handle).confirmed(); }));
+    for (u32 move = 0U; move < 4U; ++move)
+    {
+        const u32 socket = (move % 2U == 0U) ? 1U : 0U;
+        const Endpoint& address = (socket == 1U) ? kClientMovedAt : kClientAt;
+        INFO("move " << move);
+        // The next move needs an ID the server issued once the last one retired; it is asked again until one comes.
+        REQUIRE(network->run_until(
+            [&] { return network->client.migrate(handle, socket, network->now) == QuicMigration::Started; }));
+        network->live(handle).ping();
+        network->wake(handle);
+        REQUIRE(network->run_until(
+            [&]
+            {
+                const QuicConnection& served = network->served(0U, network->server(0U).app.last);
+                return served.path().peer == address && network->live(handle).paths().fallback() == kQuicNoPath;
+            }));
+        CHECK(network->live(handle).path().socket == socket);
+    }
+    REQUIRE(network->run_until([&] { return network->app.echoed(handle); }));
+    CHECK(network->live(handle).counters().path_failures == 0U);
+}
+
+TEST_CASE("QUIC client: a client host moves its connection to a second real UDP socket over the host's loopback",
+          "[net][net-path][quic-client][client-migration]")
+{
+    UdpOptions options;
+    options.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), 0U};
+    SocketError error = SocketError::Failed;
+    UdpSocket server_socket = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    UdpSocket first = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    UdpSocket second = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    DatagramSocket* const both[] = {&first, &second};
+    RealHosts hosts(server_socket, SocketSet(ConstSpan<DatagramSocket*>(both)));
+
+    QuicClientConnect request;
+    request.server = server_socket.local_endpoint();
+    const QuicHandle handle = hosts.client.connect(request, hosts.clock.monotonic_ns());
+    hosts.app.begin(handle, 10U);
+    REQUIRE(hosts.serve_until(
+        [&]
+        {
+            const QuicConnection* const connection = hosts.client.connection(handle);
+            return connection != nullptr && connection->confirmed();
+        },
+        10U));
+    REQUIRE(hosts.client.migrate(handle, 1U, hosts.clock.monotonic_ns()) == QuicMigration::Started);
+    CHECK(hosts.serve_until(
+        [&]
+        {
+            const QuicConnection* const served = hosts.server.connection(hosts.echo.last);
+            return hosts.app.echoed(handle) && served != nullptr && served->path().peer == second.local_endpoint();
+        },
+        10U));
+    const QuicConnection* const connection = hosts.client.connection(handle);
+    REQUIRE(connection != nullptr);
+    CHECK(connection->path().socket == 1U);
+    CHECK(connection->counters().path_validations != 0U);
 }
 
 #if CRD_OS_LINUX

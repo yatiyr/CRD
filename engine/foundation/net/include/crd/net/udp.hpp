@@ -38,6 +38,11 @@ enum class SocketError : u8
 inline constexpr usize kMaxUdpPayloadV4 = 65507U;
 inline constexpr usize kMaxUdpPayloadV6 = 65527U;
 
+// A socket the host cannot wait on together with others (DatagramSocket::wait_handle).
+inline constexpr u64 kNoWaitHandle = ~u64{0};
+// The most sockets one loop and its host serve together: one per path a QUIC connection knows (kQuicMaxPaths).
+inline constexpr u32 kMaxSetSockets = 4U;
+
 struct UdpOptions
 {
     Endpoint bind;                 // port 0 takes an ephemeral port; the address picks the socket's family
@@ -58,6 +63,8 @@ struct ReceivedDatagram
     // this socket sent to `peer` met a hop carrying this many bytes of UDP payload; storage then holds as much of
     // that datagram's start as the message quoted.
     u32 too_big = 0U;
+    // The index of the socket it arrived on in its loop's SocketSet: the loop sets it, a socket leaves it.
+    u32 socket = 0U;
 };
 
 struct OutgoingDatagram
@@ -106,6 +113,12 @@ public:
     [[nodiscard]] virtual bool wait_readable(u64 timeout_ns) noexcept = 0;
     // None by default: a socket that carries only bytes.
     [[nodiscard]] virtual SocketFeatures features() const noexcept { return {}; }
+    // The host's descriptor, through which a SocketSet waits on several sockets at once; kNoWaitHandle (the default)
+    // for a socket the host cannot wait on, such as a simulated one.
+    [[nodiscard]] virtual u64 wait_handle() const noexcept { return kNoWaitHandle; }
+    // A SocketSet's wait found this socket readable, `error` when the host also flagged an error: what
+    // wait_readable() notes for the next receive().
+    virtual void waited(bool /*error*/) noexcept {}
 
 protected:
     DatagramSocket() = default;
@@ -148,9 +161,11 @@ public:
     [[nodiscard]] BatchResult send(cont::ConstSpan<OutgoingDatagram> datagrams) noexcept override;
     [[nodiscard]] bool wait_readable(u64 timeout_ns) noexcept override;
     [[nodiscard]] SocketFeatures features() const noexcept override { return m_features; }
+    [[nodiscard]] u64 wait_handle() const noexcept override { return m_handle; }
+    void waited(bool error) noexcept override;
 
 private:
-    static constexpr u64 kNoHandle = ~u64{0};
+    static constexpr u64 kNoHandle = kNoWaitHandle;
 
     u64 m_handle = kNoHandle; // the host's descriptor or SOCKET
     Endpoint m_local;
@@ -161,6 +176,34 @@ private:
 #elif CRD_OS_LINUX
     bool m_reports_waiting = false; // the error queue may hold reports: the next receive() reads them first
 #endif
+};
+
+// The sockets one I/O loop and its host serve together, by index (RFC 9000 section 9: a client's own paths each leave
+// from a socket of their own). Socket 0 is the one connections open on; a datagram names the socket it arrived on
+// (ReceivedDatagram::socket) and a connection the one each of its datagrams leaves by (QuicPath::socket). The set is
+// fixed when made, and its sockets outlive everything holding it.
+class SocketSet
+{
+public:
+    // A set of one: what a host of one socket passes.
+    SocketSet(DatagramSocket& socket) noexcept; // NOLINT(google-explicit-constructor): every one-socket host
+    // `sockets` in order, 1 to kMaxSetSockets of them and none null; otherwise an empty set, which is not ready.
+    explicit SocketSet(cont::ConstSpan<DatagramSocket*> sockets) noexcept;
+
+    [[nodiscard]] bool ready() const noexcept { return m_count != 0U; }
+    [[nodiscard]] u32 size() const noexcept { return m_count; }
+    [[nodiscard]] DatagramSocket& operator[](u32 index) const noexcept { return *m_sockets[index]; }
+    // What every socket of the set carries: a feature only where each offers it, as a connection may move among them.
+    [[nodiscard]] SocketFeatures features() const noexcept;
+    // True once a socket of the set has a datagram (or an error receive() reports) waiting, false when `timeout_ns`
+    // passes first. One socket waits alone; sockets that all have a wait_handle() wait in one host wait. A set holding
+    // any other socket asks each without waiting, then the first for at most a millisecond and the rest again, and
+    // returns false after that slice: its caller turns and waits again.
+    [[nodiscard]] bool wait_readable(u64 timeout_ns) const noexcept;
+
+private:
+    DatagramSocket* m_sockets[kMaxSetSockets] = {};
+    u32 m_count = 0U;
 };
 
 } // namespace crd::net

@@ -1,10 +1,13 @@
 // crd-net -- the transport's I/O loop (4.2a; docs/design/network-foundation.md#ingress): turns over a virtual socket
 // and a test clock (the seams NET-SIM drives), every action reaching the handler or the wire, back-pressure and hard
 // send errors, the per-turn receive bound, no allocation in a turn, run() and its stop, the host clock, and a real
-// UDP socket on the loopback answered with Version Negotiation.
+// UDP socket on the loopback answered with Version Negotiation; a loop over a socket set (each datagram naming its
+// socket, answers leaving by it, no socket starved, run() waking on any, real sockets included) and the send queue
+// handing each socket its own datagrams in order, a busy one holding back no other.
 
 #include "ingress_fixture.hpp"
 #include "loop_fixture.hpp"
+#include "quic_connection_fixture.hpp"
 
 #include <crd/net/io_loop.hpp>
 #include <crd/net/udp.hpp>
@@ -14,6 +17,7 @@
 #include <atomic>
 #include <cstring>
 #include <memory>
+#include <thread>
 
 namespace
 {
@@ -52,6 +56,8 @@ public:
         ++routes;
         last_connection = decision.connection;
         last_size = datagram.size;
+        last_socket = datagram.socket;
+        per_socket[datagram.socket % 2U] += 1U;
     }
 
     void on_admit(const IngressDecision& decision, const ReceivedDatagram& datagram, u64) noexcept override
@@ -68,9 +74,12 @@ public:
         last_size = datagram.size;
     }
 
-    [[nodiscard]] bool on_unrouted(const IngressDecision& decision, const ReceivedDatagram&, u64) noexcept override
+    [[nodiscard]] bool on_unrouted(const IngressDecision& decision, const ReceivedDatagram& datagram,
+                                   u64) noexcept override
     {
         ++unrouted;
+        last_socket = datagram.socket;
+        per_socket[datagram.socket % 2U] += 1U;
         last_answered = decision.action == IngressAction::StatelessReset;
         return claim_unrouted;
     }
@@ -86,6 +95,7 @@ public:
     [[nodiscard]] u64 on_timers(u64 now_ns) noexcept override
     {
         ++timer_calls;
+        polled.fetch_add(1U, std::memory_order_release);
         if (stop_after != 0U && timer_calls >= stop_after && stop != nullptr)
         {
             stop->store(true, std::memory_order_release);
@@ -104,22 +114,26 @@ public:
     usize timer_calls = 0U;
     u32 last_connection = kNoConnection;
     usize last_size = 0U;
+    u32 last_socket = ~u32{0};
+    usize per_socket[2] = {}; // routed and unrouted datagrams by the socket they arrived on
     Endpoint last_peer;
     u64 next_timer = kNeverNs;
     usize stop_after = 0U;
     std::atomic<bool>* stop = nullptr;
+    std::atomic<usize> polled{0U}; // turns, read from another thread
 
 private:
     ConnectionIdTable& m_table;
 };
 
+// A loop over `socket`, or over `socket` and `second` with `sockets` 2.
 struct Rig
 {
     explicit Rig(const IoLoopConfig& config = IoLoopConfig{}, const HandshakeRules& rules = HandshakeRules{},
-                 const crd::crypto::QuicResetKey* reset = nullptr)
+                 const crd::crypto::QuicResetKey* reset = nullptr, usize sockets = 1U)
         : routes(allocator, 64U, ConstSpan<u8>(kKey)), buckets(allocator, rules, ConstSpan<u8>(kKey)),
           ingress(IngressConfig{}, routes, buckets, &tokens, nullptr, reset), handler(routes),
-          loop(allocator, socket, clock, ingress, handler, config)
+          loop(allocator, set(sockets), clock, ingress, handler, config)
     {
         REQUIRE(tokens.init(ConstSpan<u8>(kTokenKey), {}) == CryptoError::None);
         REQUIRE(loop.ready());
@@ -131,9 +145,17 @@ struct Rig
     QuicTokenKeys tokens;
     Ingress ingress;
     VirtualSocket socket;
+    VirtualSocket second;
     TestClock clock;
     RecordingHandler handler;
     IoLoop loop;
+
+private:
+    SocketSet set(usize count)
+    {
+        DatagramSocket* const sockets[] = {&socket, &second};
+        return SocketSet(ConstSpan<DatagramSocket*>(sockets, count));
+    }
 };
 
 Datagram unsupported_version()
@@ -426,6 +448,319 @@ TEST_CASE("The loop refuses configurations and allocations it cannot run on", "[
     }
     IoLoop dead(allocator, socket, clock, ingress, handler, config);
     CHECK(dead.poll() == kNeverNs);
+}
+
+TEST_CASE("The loop refuses an empty socket set", "[net][io-loop]")
+{
+    CountingAllocator allocator;
+    ConnectionIdTable routes(allocator, 4U);
+    HandshakeBuckets buckets(allocator, HandshakeRules{});
+    Ingress ingress(IngressConfig{}, routes, buckets, nullptr, nullptr);
+    TestClock clock;
+    RecordingHandler handler(routes);
+    VirtualSocket socket;
+    DatagramSocket* const sockets[] = {&socket, &socket, &socket, &socket, &socket};
+    for (const usize count : {usize{0}, usize{kMaxSetSockets + 1U}})
+    {
+        const SocketSet set{ConstSpan<DatagramSocket*>(sockets, count)};
+        CHECK_FALSE(set.ready());
+        IoLoop loop(allocator, set, clock, ingress, handler, IoLoopConfig{});
+        CHECK_FALSE(loop.ready());
+        CHECK(loop.poll() == kNeverNs);
+    }
+    DatagramSocket* const holed[] = {&socket, nullptr};
+    CHECK_FALSE(SocketSet(ConstSpan<DatagramSocket*>(holed)).ready());
+    const SocketSet full{ConstSpan<DatagramSocket*>(sockets, kMaxSetSockets)};
+    CHECK(full.size() == kMaxSetSockets);
+    CHECK(IoLoop(allocator, full, clock, ingress, handler, IoLoopConfig{}).ready());
+}
+
+TEST_CASE("A loop serves each socket of its set: a datagram names the socket it arrived on, an answer leaves by it, "
+          "and a flood on one starves no other",
+          "[net][io-loop][net-path]")
+{
+    IoLoopConfig config;
+    config.batch = 8U;
+    config.batches_per_poll = 2U;
+    Rig rig(config, HandshakeRules{}, nullptr, 2U);
+    rig.second.local = Endpoint{IpAddress::v4(10, 0, 0, 2), 443U};
+
+    // A routed datagram on the second socket, then one on the first.
+    const u8 routed[16] = {0x2A, 0x2B};
+    REQUIRE(rig.routes.insert(view_of(routed, 16U), 7U) == RouteError::None);
+    rig.second.deliver(short_packet(view_of(routed, 16U)), kClient);
+    (void)rig.loop.poll();
+    CHECK(rig.handler.routes == 1U);
+    CHECK(rig.handler.last_socket == 1U);
+    rig.socket.deliver(short_packet(view_of(routed, 16U)), kClient);
+    (void)rig.loop.poll();
+    CHECK(rig.handler.last_socket == 0U);
+
+    // An unsupported version is answered from the socket it reached.
+    rig.second.deliver(unsupported_version(), kClient);
+    (void)rig.loop.poll();
+    CHECK(rig.socket.sent_count == 0U);
+    REQUIRE(rig.second.sent_count == 1U);
+    CHECK(rig.second.sent[0].peer == kClient);
+    rig.socket.deliver(unsupported_version(), kClient);
+    (void)rig.loop.poll();
+    CHECK(rig.socket.sent_count == 1U);
+    CHECK(rig.second.sent_count == 1U);
+    CHECK(rig.loop.counters().answers_sent == 2U);
+
+    // 100 datagrams on the first socket and 3 on the second: one turn reads 16 of the first's and all three.
+    const u8 unknown[16] = {1};
+    for (usize index = 0U; index < 100U; ++index)
+    {
+        rig.socket.deliver(short_packet(view_of(unknown, 16U)), kClient);
+    }
+    for (usize index = 0U; index < 3U; ++index)
+    {
+        rig.second.deliver(short_packet(view_of(unknown, 16U)), kClient);
+    }
+    rig.handler.per_socket[0] = 0U;
+    rig.handler.per_socket[1] = 0U;
+    (void)rig.loop.poll();
+    CHECK(rig.handler.per_socket[0] == 16U);
+    CHECK(rig.handler.per_socket[1] == 3U);
+    CHECK(rig.handler.timer_calls == 5U);
+
+    // A failing receive on one socket is counted and the next socket is still read.
+    rig.socket.fail_receive = true;
+    rig.second.deliver(short_packet(view_of(unknown, 16U)), kClient);
+    rig.handler.per_socket[1] = 0U;
+    (void)rig.loop.poll();
+    CHECK(rig.loop.counters().receive_errors == 1U);
+    CHECK(rig.handler.per_socket[1] == 1U);
+}
+
+TEST_CASE("run() over a set of simulated sockets asks each and waits a slice at most", "[net][io-loop][net-path]")
+{
+    Rig rig(IoLoopConfig{}, HandshakeRules{}, nullptr, 2U);
+    std::atomic<bool> stop{false};
+    rig.handler.stop = &stop;
+    rig.handler.stop_after = 3U;
+    rig.handler.next_timer = 1000U * kSecond; // longer than any wait: only the slice ends one
+    rig.loop.run(stop);
+    CHECK(rig.handler.timer_calls == 3U);
+    CHECK(rig.socket.waits == 2U * 2U); // each of two waits: asked, then the slice
+    CHECK(rig.second.waits == 2U * 2U); // asked, then again after the slice
+
+    // A datagram waiting on the second ends the wait at once, the first asked only without waiting.
+    rig.socket.waits = 0U;
+    rig.second.waits = 0U;
+    rig.second.deliver(unsupported_version(), kClient);
+    DatagramSocket* const both[] = {&rig.socket, &rig.second};
+    CHECK(SocketSet(ConstSpan<DatagramSocket*>(both)).wait_readable(kSecond));
+    CHECK(rig.socket.waits == 1U);
+    CHECK(rig.second.waits == 1U);
+}
+
+TEST_CASE("A send queue hands each socket its own datagrams in order: a busy one holds back no other, a refusal drops "
+          "one, and a socket the set lacks drops what names it",
+          "[net][io-loop][net-path]")
+{
+    CountingAllocator allocator;
+    SendQueue queue(allocator, 64U, 64U);
+    REQUIRE(queue.ready());
+    VirtualSocket first;
+    VirtualSocket second;
+    DatagramSocket* const both[] = {&first, &second};
+    const SocketSet set{ConstSpan<DatagramSocket*>(both)};
+    const auto push = [&](u8 tag, u32 socket)
+    {
+        const Span<u8> room = queue.room();
+        REQUIRE(room.size() == 64U);
+        room[0] = tag;
+        queue.push(1U, kClient, Ecn::NotEct, socket);
+    };
+    const auto tags = [](const VirtualSocket& socket)
+    {
+        u64 out = 0U;
+        for (usize index = 0U; index < socket.sent_count; ++index)
+        {
+            out = (out << 8U) | socket.sent[index].datagram.bytes[0];
+        }
+        return out;
+    };
+
+    push(0xA0U, 0U);
+    push(0xB0U, 1U);
+    push(0xA1U, 0U);
+    push(0xB1U, 1U);
+    push(0xC0U, 2U); // the set has two sockets
+    first.busy_after = 0U;
+    SendFlush flushed = queue.flush(set);
+    CHECK(flushed.sent == 2U);
+    CHECK(flushed.dropped == 1U);
+    CHECK(queue.queued() == 2U);
+    CHECK(tags(second) == 0xB0B1U);
+    CHECK(first.sent_count == 0U);
+
+    push(0xB2U, 1U); // the second leaves while the first is still busy
+    flushed = queue.flush(set);
+    CHECK(flushed.sent == 1U);
+    CHECK(tags(second) == 0xB0B1B2U);
+    first.busy_after = ~usize{0};
+    flushed = queue.flush(set);
+    CHECK(flushed.sent == 2U);
+    CHECK(tags(first) == 0xA0A1U);
+    CHECK(queue.queued() == 0U);
+
+    second.sent_count = 0U;
+    push(0xB3U, 1U);
+    push(0xB4U, 1U);
+    second.refuse_next = true;
+    flushed = queue.flush(set);
+    CHECK(flushed.sent == 1U);
+    CHECK(flushed.dropped == 1U);
+    CHECK(tags(second) == 0xB4U);
+
+    // More than one send's batch of each, interleaved: every one leaves, each socket's in order, in few calls.
+    first.sent_count = 0U;
+    second.sent_count = 0U;
+    first.send_calls = 0U;
+    for (u8 index = 0U; index < 30U; ++index)
+    {
+        push(index, 0U);
+        push(static_cast<u8>(0x80U + index), 1U);
+    }
+    flushed = queue.flush(set);
+    CHECK(flushed.sent == 60U);
+    REQUIRE(first.sent_count == 30U);
+    REQUIRE(second.sent_count == 30U);
+    for (usize index = 0U; index < 30U; ++index)
+    {
+        CHECK(first.sent[index].datagram.bytes[0] == index);
+        CHECK(second.sent[index].datagram.bytes[0] == 0x80U + index);
+    }
+    CHECK(first.send_calls == 1U);
+    for (u8 index = 0U; index < 64U; ++index)
+    {
+        push(index, 0U);
+    }
+    CHECK(queue.room().empty());
+    first.sent_count = 0U;
+    first.send_calls = 0U;
+    flushed = queue.flush(set);
+    CHECK(flushed.sent == 64U);
+    CHECK(first.send_calls == 2U); // 32 a call
+    CHECK(first.sent[63].datagram.bytes[0] == 63U);
+}
+
+TEST_CASE("A send queue keeps every socket's order and accounts for every datagram under random busy and refusing "
+          "sockets",
+          "[net][io-loop][net-path]")
+{
+    for (u64 seed = 1U; seed <= 8U; ++seed)
+    {
+        INFO("seed " << seed);
+        CountingAllocator allocator;
+        SendQueue queue(allocator, 48U, 16U);
+        REQUIRE(queue.ready());
+        VirtualSocket sockets[3];
+        DatagramSocket* const pointers[] = {&sockets[0], &sockets[1], &sockets[2]};
+        const SocketSet set{ConstSpan<DatagramSocket*>(pointers)};
+        Rng rng;
+        rng.state = seed;
+        u32 next[4] = {};     // per socket (3: one the set lacks), the next number pushed
+        u32 expected[3] = {}; // per socket, the next number its sends may carry at least
+        usize pushed = 0U;
+        usize sent = 0U;
+        usize dropped = 0U;
+        for (usize step = 0U; step < 4000U; ++step)
+        {
+            if (rng.next() % 3U != 0U)
+            {
+                const Span<u8> room = queue.room();
+                if (room.empty())
+                {
+                    continue;
+                }
+                const auto socket = static_cast<u32>(rng.next() % 4U);
+                std::memcpy(room.data(), &next[socket], sizeof(u32));
+                ++next[socket];
+                queue.push(sizeof(u32), kClient, Ecn::NotEct, socket);
+                ++pushed;
+                continue;
+            }
+            for (VirtualSocket& socket : sockets)
+            {
+                socket.sent_count = 0U;
+                socket.busy_after = (rng.next() % 3U == 0U) ? rng.next() % 4U : ~usize{0};
+                socket.refuse_next = rng.next() % 8U == 0U;
+            }
+            const SendFlush flushed = queue.flush(set);
+            sent += flushed.sent;
+            dropped += flushed.dropped;
+            usize seen = 0U;
+            for (u32 index = 0U; index < 3U; ++index)
+            {
+                const VirtualSocket& socket = sockets[index];
+                seen += socket.sent_count;
+                for (usize at = 0U; at < socket.sent_count; ++at)
+                {
+                    u32 number = 0U;
+                    std::memcpy(&number, socket.sent[at].datagram.bytes, sizeof(u32));
+                    CHECK(number >= expected[index]); // in order; a refused one is skipped
+                    expected[index] = number + 1U;
+                }
+            }
+            CHECK(seen == flushed.sent);
+        }
+        CHECK(pushed == sent + dropped + queue.queued());
+    }
+}
+
+TEST_CASE("A loop over two real UDP sockets answers on the one a datagram reached, and run() wakes on either",
+          "[net][io-loop][net-path]")
+{
+    UdpOptions options;
+    options.bind = Endpoint{IpAddress::v4(127, 0, 0, 1), 0U};
+    SocketError error = SocketError::Failed;
+    UdpSocket first = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    UdpSocket second = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    UdpSocket client = UdpSocket::open(options, error);
+    REQUIRE(error == SocketError::None);
+    DatagramSocket* const both[] = {&first, &second};
+    const SocketSet set{ConstSpan<DatagramSocket*>(both)};
+
+    CountingAllocator allocator;
+    ConnectionIdTable routes(allocator, 16U);
+    HandshakeBuckets buckets(allocator, HandshakeRules{});
+    Ingress ingress(IngressConfig{}, routes, buckets, nullptr, nullptr);
+    RecordingHandler handler(routes);
+    const HostClock clock;
+    IoLoopConfig config;
+    config.max_wait_ns = 30U * kSecond; // only a datagram ends a wait in time
+    IoLoop loop(allocator, set, clock, ingress, handler, config);
+    REQUIRE(loop.ready());
+    CHECK_FALSE(set.wait_readable(20000000U)); // nothing waits: the time passes
+
+    // The loop runs on its own thread; its first turn finds nothing, its second the datagram and stops.
+    std::atomic<bool> stop{false};
+    handler.stop = &stop;
+    handler.stop_after = 2U;
+    std::thread runner([&] { loop.run(stop); });
+    while (handler.polled.load(std::memory_order_acquire) == 0U)
+    {
+        std::this_thread::yield(); // the first turn is over before the datagram leaves
+    }
+    const Datagram probe = unsupported_version();
+    const u64 sent_at = clock.monotonic_ns();
+    const OutgoingDatagram outgoing{probe.view(), second.local_endpoint()};
+    REQUIRE(client.send(ConstSpan<OutgoingDatagram>(&outgoing, 1U)).count == 1U);
+    REQUIRE(client.wait_readable(10U * kSecond));
+    runner.join();
+    CHECK(clock.monotonic_ns() - sent_at < 10U * kSecond);
+    u8 storage[kDatagramBytes] = {};
+    ReceivedDatagram slot;
+    slot.storage = Span<u8>(storage, sizeof(storage));
+    REQUIRE(client.receive(Span<ReceivedDatagram>(&slot, 1U)).count == 1U);
+    CHECK(slot.peer == second.local_endpoint()); // answered from the socket it reached
+    CHECK(loop.counters().answers_sent == 1U);
 }
 
 TEST_CASE("The host clock runs forward and reads the Unix time", "[net][io-loop]")

@@ -20,6 +20,7 @@ namespace crd::net
 {
 namespace
 {
+constexpr u64 kSimulatedSliceNs = 1000000U; // a set the host cannot wait on whole waits a millisecond at a time
 
 #if CRD_OS_LINUX
 constexpr usize kBatchChunk = 32U; // datagrams per recvmmsg or sendmmsg
@@ -821,13 +822,117 @@ bool UdpSocket::wait_readable(u64 timeout_ns) noexcept
         return false;
     }
     const short events = wait_native(native(m_handle), kPollReadable, timeout_ns);
+    if (events != 0)
+    {
+        waited((events & POLLERR) != 0);
+    }
+    return events != 0;
+}
+
+void UdpSocket::waited([[maybe_unused]] bool error) noexcept
+{
 #if CRD_OS_LINUX
-    if ((events & POLLERR) != 0)
+    if (error)
     {
         m_reports_waiting = true; // the error queue holds a report, or the socket an error one left
     }
 #endif
-    return events != 0;
+}
+
+// ---- SocketSet ----
+
+SocketSet::SocketSet(DatagramSocket& socket) noexcept : m_count(1U)
+{
+    m_sockets[0] = &socket;
+}
+
+SocketSet::SocketSet(cont::ConstSpan<DatagramSocket*> sockets) noexcept
+{
+    if (sockets.empty() || sockets.size() > kMaxSetSockets)
+    {
+        return;
+    }
+    for (DatagramSocket* const socket : sockets)
+    {
+        if (socket == nullptr)
+        {
+            return;
+        }
+    }
+    for (usize index = 0U; index < sockets.size(); ++index)
+    {
+        m_sockets[index] = sockets[index];
+    }
+    m_count = static_cast<u32>(sockets.size());
+}
+
+SocketFeatures SocketSet::features() const noexcept
+{
+    SocketFeatures all;
+    all.ecn_reading = m_count != 0U;
+    all.ecn_marking = all.ecn_reading;
+    all.dont_fragment = all.ecn_reading;
+    all.too_big_reports = all.ecn_reading;
+    for (u32 index = 0U; index < m_count; ++index)
+    {
+        const SocketFeatures one = m_sockets[index]->features();
+        all.ecn_reading = all.ecn_reading && one.ecn_reading;
+        all.ecn_marking = all.ecn_marking && one.ecn_marking;
+        all.dont_fragment = all.dont_fragment && one.dont_fragment;
+        all.too_big_reports = all.too_big_reports && one.too_big_reports;
+    }
+    return all;
+}
+
+bool SocketSet::wait_readable(u64 timeout_ns) const noexcept
+{
+    if (m_count <= 1U)
+    {
+        return m_count == 1U && m_sockets[0]->wait_readable(timeout_ns);
+    }
+    NativePoll entries[kMaxSetSockets] = {};
+    bool host = true;
+    for (u32 index = 0U; index < m_count; ++index)
+    {
+        const u64 handle = m_sockets[index]->wait_handle();
+        host = host && handle != kNoWaitHandle;
+        entries[index].fd = native(handle);
+        entries[index].events = kPollReadable;
+    }
+    if (host)
+    {
+        if (wait_native(entries, m_count, timeout_ns) == 0U)
+        {
+            return false;
+        }
+        for (u32 index = 0U; index < m_count; ++index)
+        {
+            if (entries[index].revents != 0)
+            {
+                m_sockets[index]->waited((entries[index].revents & POLLERR) != 0);
+            }
+        }
+        return true;
+    }
+    for (u32 index = 0U; index < m_count; ++index)
+    {
+        if (m_sockets[index]->wait_readable(0U))
+        {
+            return true;
+        }
+    }
+    if (m_sockets[0]->wait_readable((timeout_ns < kSimulatedSliceNs) ? timeout_ns : kSimulatedSliceNs))
+    {
+        return true;
+    }
+    for (u32 index = 1U; index < m_count; ++index)
+    {
+        if (m_sockets[index]->wait_readable(0U))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace crd::net

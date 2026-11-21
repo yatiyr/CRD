@@ -8,11 +8,15 @@
 //             finds nothing. The connections' storage holds one more than the pool: the spare, where a connection is
 //             built before it goes live, and where a client's successor is built while its predecessor still stands
 //             (after Version Negotiation), so a refused successor leaves the predecessor to be reported.
-//   route     a connection takes the datagrams routed to it from any address as arriving on that path, and the
-//             host's peer address follows the connection's path (QuicConnection::path(), section 9: a server follows
-//             its client's migration or NAT rebinding once the path validates, a client drops datagrams from an
-//             unknown server address). Each datagram goes on the path the connection named (sent_path()). A keyed
-//             server's slot opened with no peer takes the address of the first packet that opens (S55).
+//   route     a connection takes the datagrams routed to it from any address, on any of the host's sockets (its
+//             SocketSet), as arriving on that path, and the host's peer address follows the connection's path
+//             (QuicConnection::path(), section 9: a server follows its client's migration or NAT rebinding once the
+//             path validates, a client drops datagrams from an unknown server address or on a socket it never
+//             probed). Each datagram goes on the path the connection named (sent_path()), by its socket; one naming a
+//             socket the set lacks is dropped and counted. A keyed server's slot opened with no peer takes the
+//             address of the first packet that opens (S55).
+//   features  ECN and path MTU discovery run only where every socket of the set offers them (SocketSet::features),
+//             so a connection that moves to another socket keeps what it was built with.
 //   service   a connection that received, whose timer is due or that the application woke is served in on_timers,
 //             once per turn: its timeout, the host's service (the application's turn), then its datagrams into the
 //             host's SendQueue until it has none or the host is busy (served again within `send_retry_ns`). The
@@ -81,7 +85,7 @@ struct QuicHostLimits
 struct QuicHostCounters
 {
     u64 closed = 0U;
-    u64 foreign_path = 0U;    // datagrams routed to a connection from an address other than its path's
+    u64 foreign_path = 0U;    // datagrams routed to a connection on a path other than its active one
     u64 peer_resets = 0U;     // a peer's stateless reset ended a connection
     u64 too_big = 0U;         // Packet Too Big reports a connection to their address matched (on_too_big)
     u64 too_big_refused = 0U; // and those none did: forged, stale or for a packet already acknowledged
@@ -111,18 +115,21 @@ public:
     void wake(QuicHandle handle) noexcept;
 
     [[nodiscard]] u32 live() const noexcept { return m_live; }
+    // The sockets of the host's set: a connection's paths name sockets 0 to sockets() - 1.
+    [[nodiscard]] u32 sockets() const noexcept { return m_sockets.size(); }
     [[nodiscard]] u32 queued() const noexcept { return m_queue.queued(); }
     // The peer tokens the host matches stateless resets against (diagnostics and tests).
     [[nodiscard]] u32 live_tokens() const noexcept { return m_peer_tokens.size(); }
 
 protected:
-    // `routes` is the loop's table, `reset` derives the stateless reset tokens of the IDs the host issues; both and
-    // `events` outlive the host. Nothing is allocated before open_pool().
-    QuicHost(memory::IAllocator& allocator, DatagramSocket& socket, ConnectionIdTable& routes,
+    // `sockets` are the loop's, `routes` its table, `reset` derives the stateless reset tokens of the IDs the host
+    // issues; they and `events` outlive the host. Nothing is allocated before open_pool().
+    QuicHost(memory::IAllocator& allocator, const SocketSet& sockets, ConnectionIdTable& routes,
              const crypto::QuicResetKey& reset, QuicHostEvents& events, const QuicHostLimits& limits) noexcept;
 
     // Allocates the pool (a derived host's constructor calls it once its own checks passed); false, holding nothing,
-    // when the limits are out of range, the table or queue is not ready, or the allocator refused.
+    // when the limits are out of range, the socket set is empty, the table or queue is not ready, or the allocator
+    // refused.
     [[nodiscard]] bool open_pool() noexcept;
     [[nodiscard]] bool pool_open() const noexcept { return m_slots != nullptr; }
     [[nodiscard]] memory::IAllocator& allocator() noexcept { return m_allocator; }
@@ -137,15 +144,15 @@ protected:
     // zeroed in every case.
     [[nodiscard]] QuicHandle start_keyed(QuicConnectionConfig config, const Endpoint& peer, const QuicKeyedStart& start,
                                          u64 now_ns) noexcept;
-    // Builds a connection of `config` for slot `index` in the spare storage, its further IDs routed to the slot and a
-    // non-empty entropy seed varied by the count of connections built (a deterministic run stays deterministic
-    // without two connections drawing alike), its codepoint and path MTU discovery as the socket allows and an
-    // IPv6 `peer`'s base size; null, destroying it, when it is not ready.
-    [[nodiscard]] QuicConnection* build(u32 index, QuicConnectionConfig config, const Endpoint& peer) noexcept;
+    // Builds a connection of `config` on `path` for slot `index` in the spare storage, its further IDs routed to the
+    // slot and a non-empty entropy seed varied by the count of connections built (a deterministic run stays
+    // deterministic without two connections drawing alike), its codepoint and path MTU discovery as the socket set
+    // allows and an IPv6 peer's base size; null, destroying it, when it is not ready.
+    [[nodiscard]] QuicConnection* build(u32 index, QuicConnectionConfig config, const QuicPath& path) noexcept;
     // Destroys a built connection that went live nowhere.
     void discard(QuicConnection& connection) noexcept;
-    // A built connection of the free slot `index` goes live for `peer` and is served now.
-    void enlist(u32 index, QuicConnection& connection, const Endpoint& peer, u64 now_ns) noexcept;
+    // A built connection of the free slot `index` goes live on its path and is served now.
+    void enlist(u32 index, QuicConnection& connection, u64 now_ns) noexcept;
     // From replace(): slot `index`'s Closed connection is destroyed and `successor`, built for it, takes its place
     // under the same handle and peer, served now.
     void succeed(u32 index, QuicConnection& successor, u64 now_ns) noexcept;
@@ -167,6 +174,7 @@ private:
         QuicConnection* connection = nullptr; // live: in `cell`
         QuicConnection* cell = nullptr;       // the storage this slot holds
         Endpoint peer;
+        u32 socket = 0U; // the socket of the connection's active path
         u32 generation = 0U;
         u32 next_free = kNoConnection;
         u32 same_peer = kNoConnection; // the next live slot whose bound peer is this one's (m_peer_paths)
@@ -183,7 +191,7 @@ private:
     virtual void after_turn(u64 now_ns) noexcept;
 
     void serve(u32 index, u64 now_ns) noexcept;
-    // The slot's bound peer follows its connection's path.
+    // The slot's bound peer and socket follow its connection's path.
     void follow_path(u32 index) noexcept;
     // Whether the connection's datagrams are all queued (false: the host is busy and the queue full).
     [[nodiscard]] bool drain(Slot& slot, u64 now_ns) noexcept;
@@ -194,7 +202,7 @@ private:
     void unindex_peer(u32 index) noexcept;
 
     memory::IAllocator& m_allocator;
-    DatagramSocket& m_socket;
+    SocketSet m_sockets;
     ConnectionIdTable& m_routes;
     const crypto::QuicResetKey& m_reset;
     QuicHostEvents& m_events;

@@ -5,12 +5,14 @@
 //
 //   clock     the loop reads time only through a TransportClock: HostClock in a process, NET-SIM's virtual clock in a
 //             simulation, a test's own in a test. Nothing in the transport reads a host clock.
-//   executor  poll() is one bounded turn that never blocks: S0's batched receive (at most `batches_per_poll` batches,
-//             so timers run under a flood), S1 to S3 through the Ingress, routed, admitted and early datagrams and
-//             short headers for no connection to the handler, the stateless answers sent, the handler's timers. It
-//             returns when it next needs to run. Who calls it is the executor: run() on a thread of its own (waiting in
-//             DatagramSocket::wait_readable until that time or a datagram), a game's frame, a job, or NET-SIM stepping
-//             virtual time. The transport takes no job system and starts no thread.
+//   sockets   a loop serves the sockets of a SocketSet (udp.hpp): each turn reads every socket in order, each datagram
+//             naming the one it arrived on (ReceivedDatagram::socket), and a stateless answer leaves by that socket.
+//   executor  poll() is one bounded turn that never blocks: S0's batched receive (at most `batches_per_poll` batches
+//             per socket, so timers run under a flood), S1 to S3 through the Ingress, routed, admitted and early
+//             datagrams and short headers for no connection to the handler, the stateless answers sent, the handler's
+//             timers. It returns when it next needs to run. Who calls it is the executor: run() on a thread of its own
+//             (waiting in SocketSet::wait_readable until that time or a datagram), a game's frame, a job, or NET-SIM
+//             stepping virtual time. The transport takes no job system and starts no thread.
 //   memory    receive slots and the answer queue (a SendQueue) come from the injected allocator at construction; a
 //             turn allocates nothing. An answer the host cannot take yet (Busy) waits in the queue; when the queue is
 //             full, a new answer is dropped and counted (answers are stateless; the client's retransmission asks
@@ -96,10 +98,12 @@ struct SendFlush
     usize dropped = 0U; // refused for good
 };
 
-// A fixed ring of outgoing datagrams, each written in place into a slot of `slot_bytes`, handed to a socket in order:
-// what the host cannot take yet (Busy) waits for the next flush, and a datagram the host refuses for good (an
-// unreachable peer, a refused address) is dropped alone and counted. Its storage comes from the injected allocator at
-// construction; nothing is allocated after.
+// A fixed queue of outgoing datagrams, each written in place into a slot of `slot_bytes` and naming the socket of a
+// SocketSet it leaves by, handed to each socket in the order queued: what a socket cannot take yet (Busy) waits for
+// the next flush without holding back another socket's (a connection's new path leaves while its old socket is
+// busy), and a datagram the host refuses for good (an unreachable peer, a refused address) is dropped alone and
+// counted, as is one naming a socket the set lacks. Its storage comes from the injected allocator at construction;
+// nothing is allocated after, and no datagram's bytes move once written.
 class SendQueue
 {
 public:
@@ -111,24 +115,36 @@ public:
     SendQueue(SendQueue&&) = delete;
     SendQueue& operator=(SendQueue&&) = delete;
 
-    [[nodiscard]] bool ready() const noexcept { return m_datagrams != nullptr; }
+    [[nodiscard]] bool ready() const noexcept { return m_entries != nullptr; }
     // The next free slot to write a datagram into; empty when the queue is full.
     [[nodiscard]] cont::Span<u8> room() noexcept;
-    // Queues the first `bytes` of room() for `peer`, its IP header marked `ecn` (stateless answers go Not-ECT).
-    void push(usize bytes, const Endpoint& peer, Ecn ecn = Ecn::NotEct) noexcept;
-    // Hands the queued datagrams to `socket` until it is Busy or none is left.
-    [[nodiscard]] SendFlush flush(DatagramSocket& socket) noexcept;
+    // Queues the first `bytes` of room() for `peer` through the set's socket `socket`, its IP header marked `ecn`
+    // (stateless answers go Not-ECT).
+    void push(usize bytes, const Endpoint& peer, Ecn ecn = Ecn::NotEct, u32 socket = 0U) noexcept;
+    // Hands each socket of `sockets` its queued datagrams until it is Busy or none of its own is left.
+    [[nodiscard]] SendFlush flush(const SocketSet& sockets) noexcept;
 
     [[nodiscard]] u32 queued() const noexcept { return m_queued; }
     [[nodiscard]] bool full() const noexcept { return m_queued == m_slots; }
 
 private:
+    // A slot's datagram and the socket it leaves by; `done` once it left or was dropped, until the flush ends.
+    struct Entry
+    {
+        OutgoingDatagram datagram;
+        u32 socket = 0U;
+        bool done = false;
+    };
+
+    // Sends socket `index`'s datagrams in the order queued, marking each one that left or was dropped.
+    void send_through(DatagramSocket& socket, u32 index, SendFlush& flushed) noexcept;
+
     memory::IAllocator& m_allocator;
     u32 m_slots = 0U;
     usize m_slot_bytes = 0U;
-    OutgoingDatagram* m_datagrams = nullptr;
+    Entry* m_entries = nullptr; // per slot
+    u32* m_order = nullptr;     // the queued slots in order, then the free ones
     u8* m_bytes = nullptr;
-    u32 m_head = 0U;
     u32 m_queued = 0U;
 };
 
@@ -154,7 +170,7 @@ struct IoLoopCounters
 class IoLoop
 {
 public:
-    IoLoop(memory::IAllocator& allocator, DatagramSocket& socket, const TransportClock& clock, Ingress& ingress,
+    IoLoop(memory::IAllocator& allocator, const SocketSet& sockets, const TransportClock& clock, Ingress& ingress,
            IngressHandler& handler, const IoLoopConfig& config) noexcept;
     ~IoLoop();
     IoLoop(const IoLoop&) = delete;
@@ -162,26 +178,26 @@ public:
     IoLoop(IoLoop&&) = delete;
     IoLoop& operator=(IoLoop&&) = delete;
 
-    // False when the configuration is out of range (a zero count, slots under 1200 or over 65527 bytes) or the
-    // allocator refused.
+    // False when the configuration is out of range (a zero count, slots under 1200 or over 65527 bytes), the socket
+    // set is empty or the allocator refused.
     [[nodiscard]] bool ready() const noexcept { return m_slots != nullptr; }
 
     // One turn (see the file comment); returns the monotonic time it next needs to run.
     [[nodiscard]] u64 poll() noexcept;
-    // Turns until `stop` is set, waiting for a datagram between turns until the time poll() named, at most
-    // max_wait_ns.
+    // Turns until `stop` is set, waiting for a datagram on any socket between turns until the time poll() named, at
+    // most max_wait_ns.
     void run(const std::atomic<bool>& stop) noexcept;
 
     [[nodiscard]] const IoLoopCounters& counters() const noexcept { return m_counters; }
     [[nodiscard]] u32 queued_answers() const noexcept { return m_answers.queued(); }
 
 private:
-    void receive_batch(u64 now_ns, u64 unix_seconds, BatchResult& result) noexcept;
-    void queue_answer(const IngressDecision& decision, const Endpoint& peer, u64 unix_seconds) noexcept;
+    void receive_batch(u32 socket, u64 now_ns, u64 unix_seconds, BatchResult& result) noexcept;
+    void queue_answer(const IngressDecision& decision, const ReceivedDatagram& datagram, u64 unix_seconds) noexcept;
     void flush_answers() noexcept;
 
     memory::IAllocator& m_allocator;
-    DatagramSocket& m_socket;
+    SocketSet m_sockets;
     const TransportClock& m_clock;
     Ingress& m_ingress;
     IngressHandler& m_handler;

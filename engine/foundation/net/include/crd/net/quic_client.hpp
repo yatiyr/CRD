@@ -1,12 +1,15 @@
 #pragma once
 
-// crd-net -- a QUIC client: its connections behind an I/O loop over one socket (4.2a; contract:
-// docs/design/network-foundation.md#quic-client). Sources: RFC 9000 sections 5.2.1, 6.2, 7.2, 8.1.3 and 10.3, RFC
+// crd-net -- a QUIC client: its connections behind an I/O loop over a socket set (4.2a; contract:
+// docs/design/network-foundation.md#quic-client). Sources: RFC 9000 sections 5.2.1, 6.2, 7.2, 8.1.3, 9 and 10.3, RFC
 // 9368 sections 2.1 and 4, RFC 9369 section 5.
 //
 //   loop      the client's IoLoop runs a client's Ingress (S1 and S2 alone): every datagram goes to the connection its
-//             Destination Connection ID routes to, so a client's connections, to one server or many, share one
-//             socket. Each issues IDs of the ingress's length (8 to 20 bytes) through the loop's table.
+//             Destination Connection ID routes to, so a client's connections, to one server or many, share the
+//             sockets. Each issues IDs of the ingress's length (8 to 20 bytes) through the loop's table.
+//   moves     connections open on socket 0; probe_path() and migrate() take one to another socket of the set
+//             (RFC 9000 sections 9.1 and 9.2: a new local address, as a phone's second interface gives), the
+//             connection validating that path and the server following (quic_connection.hpp).
 //   connect   connect() takes a slot of a fixed pool and starts a connection to its server: a fresh sequence 0 ID
 //             routed to it, a first Destination Connection ID of kQuicClientInitialDcidBytes from the provider's
 //             randomness (section 7.2), and the token the client remembers for that server and version, if any.
@@ -95,11 +98,12 @@ struct QuicClientCounters : QuicHostCounters
 class QuicClient final : public QuicHost
 {
 public:
-    // `ingress` is a client's (!Ingress::server()) over the loop's table `routes`; `reset` derives the stateless reset
-    // tokens of the IDs the client issues. All must outlive the client, and the loop that calls it must be destroyed
-    // first.
-    QuicClient(memory::IAllocator& allocator, DatagramSocket& socket, const Ingress& ingress, ConnectionIdTable& routes,
-               const crypto::QuicResetKey& reset, QuicClientEvents& events, const QuicClientConfig& config) noexcept;
+    // `sockets` are the loop's; `ingress` is a client's (!Ingress::server()) over the loop's table `routes`; `reset`
+    // derives the stateless reset tokens of the IDs the client issues. All must outlive the client, and the loop that
+    // calls it must be destroyed first.
+    QuicClient(memory::IAllocator& allocator, const SocketSet& sockets, const Ingress& ingress,
+               ConnectionIdTable& routes, const crypto::QuicResetKey& reset, QuicClientEvents& events,
+               const QuicClientConfig& config) noexcept;
     ~QuicClient() override;
     QuicClient(const QuicClient&) = delete;
     QuicClient& operator=(const QuicClient&) = delete;
@@ -120,6 +124,13 @@ public:
     // configuration's limits; `start.secret` is zeroed in every case. An invalid handle when every connection is in
     // use, the server's port is 0, or QuicConnection::open_keyed refuses.
     [[nodiscard]] QuicHandle open_keyed(const Endpoint& server, QuicKeyedStart start, u64 now_ns) noexcept;
+
+    // Validates the path from socket `socket` of the set to the connection's server, its datagrams staying where they
+    // are (QuicConnection::probe_path), or moves them there now (QuicConnection::migrate); the connection is served
+    // in the loop's next turn. NoConnection for a stale handle, NoSocket for a socket the set lacks; anything but
+    // Started changes nothing.
+    [[nodiscard]] QuicMigration probe_path(QuicHandle handle, u32 socket, u64 now_ns) noexcept;
+    [[nodiscard]] QuicMigration migrate(QuicHandle handle, u32 socket, u64 now_ns) noexcept;
 
     // The token remembered for `server` and `version`; empty for none (tests and diagnostics: it stays remembered).
     [[nodiscard]] cont::ConstSpan<u8> token_for(const Endpoint& server, crypto::QuicVersion version) const noexcept;
@@ -158,6 +169,7 @@ private:
     [[nodiscard]] QuicConnection* start(u32 index, const Endpoint& server, const QuicConnectionConfig& config,
                                         cont::ConstSpan<u8> token, u64 now_ns) noexcept;
     void keep_token(const Endpoint& server, const QuicConnection& connection) noexcept;
+    [[nodiscard]] QuicMigration move_to(QuicHandle handle, u32 socket, bool probe_only, u64 now_ns) noexcept;
     // The entry of `server` and `version`; `tokens` for none.
     [[nodiscard]] u32 find_token(const Endpoint& server, u32 version) const noexcept;
 

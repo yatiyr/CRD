@@ -251,41 +251,54 @@ inline constexpr short kPollWritable = POLLOUT;
     return static_cast<int>(whole_ms < static_cast<u64>(INT_MAX) ? whole_ms : INT_MAX);
 }
 
-// Waits until `events` (or an error the next call reports) or `timeout_ns`; the events that arrived, 0 when the time
-// passed. A signal that interrupts the wait, or a host timer that fires early (Windows ends a timed wait up to one
-// timer tick before its time), waits again for what is left.
-[[nodiscard]] inline short wait_native(NativeSocket handle, short events, u64 timeout_ns) noexcept
-{
 #if CRD_OS_WINDOWS
-    WSAPOLLFD wanted{};
+using NativePoll = WSAPOLLFD;
 #else
-    pollfd wanted{};
+using NativePoll = pollfd;
 #endif
-    wanted.fd = handle;
-    wanted.events = events;
+
+// Waits until one of the `count` entries has its `events` (or an error the next call reports) or `timeout_ns` passes;
+// how many are ready, their `revents` set, 0 when the time passed. A failed wait reports every entry ready with its
+// events, so the next calls report what went wrong. A signal that interrupts the wait, or a host timer that fires
+// early (Windows ends a timed wait up to one timer tick before its time), waits again for what is left.
+[[nodiscard]] inline usize wait_native(NativePoll* entries, usize count, u64 timeout_ns) noexcept
+{
     const i64 start = time::TickClock::now_ns();
     for (u64 left = timeout_ns;;)
     {
 #if CRD_OS_WINDOWS
-        const int ready = ::WSAPoll(&wanted, 1U, wait_milliseconds(left));
+        const int ready = ::WSAPoll(entries, static_cast<ULONG>(count), wait_milliseconds(left));
 #else
-        const int ready = ::poll(&wanted, 1U, wait_milliseconds(left));
+        const int ready = ::poll(entries, static_cast<nfds_t>(count), wait_milliseconds(left));
 #endif
         if (ready > 0)
         {
-            return wanted.revents;
+            return static_cast<usize>(ready);
         }
         if (ready < 0 && !interrupted(last_error()))
         {
-            return events; // the next call reports what went wrong
+            for (usize index = 0U; index < count; ++index)
+            {
+                entries[index].revents = entries[index].events;
+            }
+            return count;
         }
         const u64 spent = static_cast<u64>(time::TickClock::now_ns() - start);
         if (spent >= timeout_ns)
         {
-            return 0;
+            return 0U;
         }
         left = timeout_ns - spent;
     }
+}
+
+// One socket's wait: the events that arrived, 0 when the time passed.
+[[nodiscard]] inline short wait_native(NativeSocket handle, short events, u64 timeout_ns) noexcept
+{
+    NativePoll wanted{};
+    wanted.fd = handle;
+    wanted.events = events;
+    return (wait_native(&wanted, 1U, timeout_ns) != 0U) ? wanted.revents : short{0};
 }
 
 } // namespace crd::net

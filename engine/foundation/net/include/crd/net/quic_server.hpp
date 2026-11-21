@@ -87,7 +87,7 @@ public:
     // `ingress` is a server's (Ingress::server()) over the loop's table `routes`, `reset` derives the stateless reset
     // tokens of the IDs the server issues, `tokens` mints NEW_TOKEN tokens (null: none sent). All must outlive the
     // server, and the loop that calls it must be destroyed first.
-    QuicServer(memory::IAllocator& allocator, DatagramSocket& socket, const TransportClock& clock, Ingress& ingress,
+    QuicServer(memory::IAllocator& allocator, const SocketSet& sockets, const TransportClock& clock, Ingress& ingress,
                ConnectionIdTable& routes, const crypto::QuicResetKey& reset, const crypto::QuicTokenKeys* tokens,
                QuicServerEvents& events, const QuicServerConfig& config) noexcept;
     ~QuicServer() override;
@@ -128,6 +128,7 @@ private:
     {
         u64 arrived_ns = 0U;
         Endpoint peer;
+        u32 socket = 0U; // the socket it arrived on
         QuicConnectionId dcid;
         u32 bytes = 0U; // 0: a free or read entry
         Ecn ecn = Ecn::NotEct;

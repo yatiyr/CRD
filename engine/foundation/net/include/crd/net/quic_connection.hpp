@@ -297,6 +297,8 @@ enum class QuicMigration : u8
                     // 9.6), or the active path names no address (port 0)
     ActivePath,     // the path is the active one already
     NoConnectionId, // no peer connection ID unused on any other path is left for a new local address (section 9.5)
+    NoConnection,   // the client host has no such connection (QuicClient: a stale handle)
+    NoSocket,       // the client host's socket set has no such socket (QuicClient)
 };
 
 // Why a connection closed.
@@ -412,6 +414,10 @@ public:
     // connection ID in use, then the four protected bytes the packet was sent with, which no one off the path can
     // know. The search then takes the hint or finds it inconsistent (QuicPathMtu::on_too_big); any other report
     // changes nothing.
+    // `from` names where the report arrived: only one on the active path, quoting a packet sent there since the path
+    // state last started (QuicRecovery::on_path), moves the search, so a report about a path left behind never
+    // shrinks the new one. The form without a path is the active one.
+    bool path_too_big(const QuicPath& from, cont::ConstSpan<u8> quote, u32 limit, u64 now_ns) noexcept;
     bool path_too_big(cont::ConstSpan<u8> quote, u32 limit, u64 now_ns) noexcept;
 
     [[nodiscard]] QuicConnectionState state() const noexcept { return m_state; }

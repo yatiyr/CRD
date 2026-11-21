@@ -23,11 +23,11 @@ QuicHostLimits limits_of(const QuicServerConfig& config) noexcept
 }
 } // namespace
 
-QuicServer::QuicServer(memory::IAllocator& allocator, DatagramSocket& socket, const TransportClock& clock,
+QuicServer::QuicServer(memory::IAllocator& allocator, const SocketSet& sockets, const TransportClock& clock,
                        Ingress& ingress, ConnectionIdTable& routes, const crypto::QuicResetKey& reset,
                        const crypto::QuicTokenKeys* tokens, QuicServerEvents& events,
                        const QuicServerConfig& config) noexcept
-    : QuicHost(allocator, socket, routes, reset, events, limits_of(config)), m_clock(clock), m_ingress(ingress),
+    : QuicHost(allocator, sockets, routes, reset, events, limits_of(config)), m_clock(clock), m_ingress(ingress),
       m_routes(routes), m_tokens(tokens), m_events(events), m_config(config)
 {
     const QuicConnectionConfig& connection = config.connection;
@@ -123,7 +123,7 @@ void QuicServer::on_admit(const IngressDecision& decision, const ReceivedDatagra
     }
     QuicConnectionConfig config = m_config.connection;
     config.version = static_cast<crypto::QuicVersion>(header.version); // one the ingress runs
-    QuicConnection* const connection = build(index, config, datagram.peer);
+    QuicConnection* const connection = build(index, config, QuicPath{datagram.socket, datagram.peer});
 
     const bool retried = decision.claims.kind == crypto::QuicTokenKind::Retry;
     QuicAccept accept;
@@ -154,7 +154,7 @@ void QuicServer::on_admit(const IngressDecision& decision, const ReceivedDatagra
     admitted.client_routed = true;
     admitted.token_given = false;
     admitted.tokenless = false;
-    enlist(index, *connection, datagram.peer, now_ns);
+    enlist(index, *connection, now_ns);
     ++m_counters.admitted;
     m_events.on_accept(handle_of(index), *connection, datagram.peer);
     connection->receive(datagram.storage.first(datagram.size), datagram.ecn, now_ns);
@@ -198,7 +198,8 @@ void QuicServer::on_early(const IngressDecision& decision, const ReceivedDatagra
     for (u32 offset = 0U; offset < m_early_count; ++offset)
     {
         const Early& entry = m_early[(m_early_head + offset) % capacity];
-        same += (entry.bytes != 0U && entry.peer == datagram.peer && same_id(entry.dcid.view(), decision.header.dcid))
+        same += (entry.bytes != 0U && entry.peer == datagram.peer && entry.socket == datagram.socket &&
+                 same_id(entry.dcid.view(), decision.header.dcid))
                     ? 1U
                     : 0U;
     }
@@ -220,6 +221,7 @@ void QuicServer::on_early(const IngressDecision& decision, const ReceivedDatagra
     Early& entry = m_early[place];
     entry.arrived_ns = now_ns;
     entry.peer = datagram.peer;
+    entry.socket = datagram.socket;
     entry.ecn = datagram.ecn;
     static_cast<void>(entry.dcid.assign(decision.header.dcid)); // a header's ID, at most 20 bytes
     entry.bytes = static_cast<u32>(datagram.size);
@@ -302,13 +304,13 @@ void QuicServer::read_early(u32 index, QuicConnection& connection, cont::ConstSp
         return;
     }
     expire_early(now_ns);
-    const Endpoint& peer = peer_of(index);
+    const QuicPath path{connection.path().socket, peer_of(index)};
     const u32 capacity = m_config.early_datagrams;
     for (u32 offset = 0U; offset < m_early_count; ++offset)
     {
         const u32 place = (m_early_head + offset) % capacity;
         Early& entry = m_early[place];
-        if (entry.bytes == 0U || !(entry.peer == peer) || !same_id(entry.dcid.view(), dcid))
+        if (entry.bytes == 0U || !(QuicPath{entry.socket, entry.peer} == path) || !same_id(entry.dcid.view(), dcid))
         {
             continue;
         }

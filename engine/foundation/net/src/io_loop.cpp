@@ -11,6 +11,7 @@ namespace
 {
 constexpr u32 kMaxBatch = 1024U;
 constexpr u32 kMaxQueueSlots = 65536U;
+constexpr usize kSendBatch = 32U; // datagrams one send() of a flush hands a socket at most
 constexpr u64 kAnswerRetryNs = 1000000U; // an answer the host was too busy to take is offered again within 1 ms
 } // namespace
 
@@ -37,86 +38,139 @@ SendQueue::SendQueue(memory::IAllocator& allocator, u32 slots, usize slot_bytes)
     {
         return;
     }
-    OutgoingDatagram* const datagrams = memory::try_construct_array<OutgoingDatagram>(allocator, slots);
+    Entry* const entries = memory::try_construct_array<Entry>(allocator, slots);
+    u32* const order = memory::try_construct_array<u32>(allocator, slots);
     u8* const bytes = memory::try_construct_array<u8>(allocator, usize{slots} * slot_bytes);
-    if (datagrams == nullptr || bytes == nullptr)
+    if (entries == nullptr || order == nullptr || bytes == nullptr)
     {
-        memory::destroy_array(allocator, datagrams, slots);
+        memory::destroy_array(allocator, entries, slots);
+        memory::destroy_array(allocator, order, slots);
         memory::destroy_array(allocator, bytes, usize{slots} * slot_bytes);
         return;
     }
-    m_datagrams = datagrams;
+    for (u32 index = 0U; index < slots; ++index)
+    {
+        order[index] = index;
+    }
+    m_entries = entries;
+    m_order = order;
     m_bytes = bytes;
 }
 
 SendQueue::~SendQueue()
 {
-    if (m_datagrams != nullptr)
+    if (m_entries != nullptr)
     {
-        memory::destroy_array(m_allocator, m_datagrams, m_slots);
+        memory::destroy_array(m_allocator, m_entries, m_slots);
+        memory::destroy_array(m_allocator, m_order, m_slots);
         memory::destroy_array(m_allocator, m_bytes, usize{m_slots} * m_slot_bytes);
     }
 }
 
 cont::Span<u8> SendQueue::room() noexcept
 {
-    if (m_datagrams == nullptr || m_queued == m_slots)
+    if (m_entries == nullptr || m_queued == m_slots)
     {
         return {};
     }
-    const u32 index = (m_head + m_queued) % m_slots;
-    return cont::Span<u8>(m_bytes + (usize{index} * m_slot_bytes), m_slot_bytes);
+    return cont::Span<u8>(m_bytes + (usize{m_order[m_queued]} * m_slot_bytes), m_slot_bytes);
 }
 
-void SendQueue::push(usize bytes, const Endpoint& peer, Ecn ecn) noexcept
+void SendQueue::push(usize bytes, const Endpoint& peer, Ecn ecn, u32 socket) noexcept
 {
     const cont::Span<u8> slot = room();
     if (slot.empty() || bytes == 0U || bytes > slot.size())
     {
         return;
     }
-    m_datagrams[(m_head + m_queued) % m_slots] = OutgoingDatagram{slot.first(bytes), peer, ecn};
+    m_entries[m_order[m_queued]] = Entry{OutgoingDatagram{slot.first(bytes), peer, ecn}, socket, false};
     ++m_queued;
 }
 
-SendFlush SendQueue::flush(DatagramSocket& socket) noexcept
+SendFlush SendQueue::flush(const SocketSet& sockets) noexcept
 {
     SendFlush flushed;
-    while (m_queued != 0U)
+    if (m_queued == 0U)
     {
-        const u32 run = (m_queued < m_slots - m_head) ? m_queued : m_slots - m_head;
-        const BatchResult result = socket.send(cont::ConstSpan<OutgoingDatagram>(m_datagrams + m_head, run));
-        const auto sent = static_cast<u32>(result.count);
-        m_head = (m_head + sent) % m_slots;
-        m_queued -= sent;
-        flushed.sent += sent;
-        if (result.error == SocketError::Busy)
+        return flushed;
+    }
+    for (u32 index = 0U; index < sockets.size(); ++index)
+    {
+        send_through(sockets[index], index, flushed);
+    }
+    // What is left in order; the slots that left or were dropped become free.
+    u32 kept = 0U;
+    for (u32 position = 0U; position < m_queued; ++position)
+    {
+        Entry& entry = m_entries[m_order[position]];
+        if (!entry.done && entry.socket >= sockets.size())
         {
-            return flushed;
-        }
-        if (result.error != SocketError::None && m_queued != 0U)
-        {
-            // That datagram alone cannot leave (an unreachable peer, a refused address): it is given up.
-            m_head = (m_head + 1U) % m_slots;
-            --m_queued;
+            entry.done = true; // no such socket: it can never leave
             ++flushed.dropped;
         }
-        else if (sent == 0U)
+        if (!entry.done)
         {
-            return flushed;
+            const u32 slot = m_order[position];
+            m_order[position] = m_order[kept];
+            m_order[kept++] = slot;
         }
     }
+    m_queued = kept;
     return flushed;
+}
+
+void SendQueue::send_through(DatagramSocket& socket, u32 index, SendFlush& flushed) noexcept
+{
+    OutgoingDatagram batch[kSendBatch];
+    u32 slots[kSendBatch];
+    u32 position = 0U;
+    for (;;)
+    {
+        usize count = 0U;
+        for (; position < m_queued && count < kSendBatch; ++position)
+        {
+            const Entry& entry = m_entries[m_order[position]];
+            if (!entry.done && entry.socket == index)
+            {
+                batch[count] = entry.datagram;
+                slots[count++] = m_order[position];
+            }
+        }
+        for (usize at = 0U; at < count;)
+        {
+            const BatchResult result = socket.send(cont::ConstSpan<OutgoingDatagram>(batch + at, count - at));
+            for (usize sent = 0U; sent < result.count; ++sent)
+            {
+                m_entries[slots[at + sent]].done = true;
+            }
+            at += result.count;
+            flushed.sent += result.count;
+            if (result.error == SocketError::Busy || (result.error == SocketError::None && result.count == 0U))
+            {
+                return; // the rest of this socket's wait for the next flush
+            }
+            if (result.error != SocketError::None && at < count)
+            {
+                // That datagram alone cannot leave (an unreachable peer, a refused address): it is given up.
+                m_entries[slots[at++]].done = true;
+                ++flushed.dropped;
+            }
+        }
+        if (count < kSendBatch)
+        {
+            return;
+        }
+    }
 }
 
 // ---- IoLoop ----
 
-IoLoop::IoLoop(memory::IAllocator& allocator, DatagramSocket& socket, const TransportClock& clock, Ingress& ingress,
+IoLoop::IoLoop(memory::IAllocator& allocator, const SocketSet& sockets, const TransportClock& clock, Ingress& ingress,
                IngressHandler& handler, const IoLoopConfig& config) noexcept
-    : m_allocator(allocator), m_socket(socket), m_clock(clock), m_ingress(ingress), m_handler(handler),
+    : m_allocator(allocator), m_sockets(sockets), m_clock(clock), m_ingress(ingress), m_handler(handler),
       m_config(config), m_answers(allocator, config.queued_answers, kQuicMaxStatelessAnswerBytes)
 {
-    if (!ingress.ready() || !m_answers.ready() || config.batch == 0U || config.batch > kMaxBatch ||
+    if (!sockets.ready() || !ingress.ready() || !m_answers.ready() || config.batch == 0U || config.batch > kMaxBatch ||
         config.slot_bytes < kQuicMinInitialDatagram || config.slot_bytes > kMaxUdpPayloadV6 ||
         config.batches_per_poll == 0U || config.max_wait_ns == 0U)
     {
@@ -155,18 +209,21 @@ u64 IoLoop::poll() noexcept
     const u64 now = m_clock.monotonic_ns();
     const u64 unix_seconds = m_clock.unix_seconds();
     flush_answers();
-    for (u32 batch = 0U; batch < m_config.batches_per_poll; ++batch)
+    for (u32 socket = 0U; socket < m_sockets.size(); ++socket)
     {
-        BatchResult result;
-        receive_batch(now, unix_seconds, result);
-        if (result.error != SocketError::None)
+        for (u32 batch = 0U; batch < m_config.batches_per_poll; ++batch)
         {
-            ++m_counters.receive_errors;
-            break;
-        }
-        if (result.count < m_config.batch)
-        {
-            break;
+            BatchResult result;
+            receive_batch(socket, now, unix_seconds, result);
+            if (result.error != SocketError::None)
+            {
+                ++m_counters.receive_errors;
+                break;
+            }
+            if (result.count < m_config.batch)
+            {
+                break;
+            }
         }
     }
     flush_answers();
@@ -193,17 +250,18 @@ void IoLoop::run(const std::atomic<bool>& stop) noexcept
         {
             wait = kAnswerRetryNs;
         }
-        (void)m_socket.wait_readable(wait);
+        (void)m_sockets.wait_readable(wait);
     }
 }
 
-void IoLoop::receive_batch(u64 now_ns, u64 unix_seconds, BatchResult& result) noexcept
+void IoLoop::receive_batch(u32 socket, u64 now_ns, u64 unix_seconds, BatchResult& result) noexcept
 {
-    result = m_socket.receive(cont::Span<ReceivedDatagram>(m_slots, m_config.batch));
+    result = m_sockets[socket].receive(cont::Span<ReceivedDatagram>(m_slots, m_config.batch));
     m_counters.received += result.count;
     for (usize index = 0U; index < result.count; ++index)
     {
-        const ReceivedDatagram& datagram = m_slots[index];
+        ReceivedDatagram& datagram = m_slots[index];
+        datagram.socket = socket;
         if (datagram.too_big != 0U)
         {
             ++m_counters.too_big;
@@ -227,13 +285,13 @@ void IoLoop::receive_batch(u64 now_ns, u64 unix_seconds, BatchResult& result) no
         case IngressAction::StatelessReset:
             if (!m_handler.on_unrouted(decision, datagram, now_ns))
             {
-                queue_answer(decision, datagram.peer, unix_seconds);
+                queue_answer(decision, datagram, unix_seconds);
             }
             break;
         case IngressAction::Retry:
         case IngressAction::NegotiateVersion:
         case IngressAction::InvalidToken:
-            queue_answer(decision, datagram.peer, unix_seconds);
+            queue_answer(decision, datagram, unix_seconds);
             break;
         case IngressAction::Drop:
             // A stateless reset can be shorter than any packet this side would open (RFC 9000 section 10.3.1).
@@ -247,7 +305,8 @@ void IoLoop::receive_batch(u64 now_ns, u64 unix_seconds, BatchResult& result) no
     }
 }
 
-void IoLoop::queue_answer(const IngressDecision& decision, const Endpoint& peer, u64 unix_seconds) noexcept
+void IoLoop::queue_answer(const IngressDecision& decision, const ReceivedDatagram& datagram,
+                          u64 unix_seconds) noexcept
 {
     const cont::Span<u8> out = m_answers.room();
     if (out.empty())
@@ -255,12 +314,13 @@ void IoLoop::queue_answer(const IngressDecision& decision, const Endpoint& peer,
         ++m_counters.answers_dropped;
         return;
     }
-    m_answers.push(m_ingress.answer(decision, peer, unix_seconds, out), peer);
+    const usize bytes = m_ingress.answer(decision, datagram.peer, unix_seconds, out);
+    m_answers.push(bytes, datagram.peer, Ecn::NotEct, datagram.socket);
 }
 
 void IoLoop::flush_answers() noexcept
 {
-    const SendFlush flushed = m_answers.flush(m_socket);
+    const SendFlush flushed = m_answers.flush(m_sockets);
     m_counters.answers_sent += flushed.sent;
     m_counters.answers_dropped += flushed.dropped;
 }

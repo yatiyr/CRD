@@ -899,6 +899,11 @@ TEST_CASE("QUIC PMTU: Packet Too Big messages that quote no unacknowledged packe
         size = client.send(Span<u8>(out, sizeof(out)), now);
     }
     REQUIRE(size > kQuicPmtuFloor);
+    // A report that arrived on another path, another socket or from another address, says nothing of this one.
+    const QuicPath active = client.path();
+    CHECK_FALSE(client.path_too_big(QuicPath{active.socket + 1U, active.peer}, ConstSpan<u8>(out, 64U), 1300U, now));
+    CHECK_FALSE(client.path_too_big(QuicPath{active.socket, kClientPeer}, ConstSpan<u8>(out, 64U), 1300U, now));
+    CHECK(client.path_mtu().counters().hints == before.hints);
     CHECK(client.path_too_big(ConstSpan<u8>(out, 64U), static_cast<u32>(size), now));
     CHECK(client.path_mtu().counters().hints_ignored == before.hints_ignored + 1U);
     CHECK(client.path_mtu().size() == 1500U);

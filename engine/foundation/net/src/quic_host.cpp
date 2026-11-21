@@ -10,6 +10,8 @@
 
 namespace crd::net
 {
+static_assert(kMaxSetSockets <= kQuicMaxPaths, "a connection knows a path through each socket of its host");
+
 namespace
 {
 // A peer address as m_peer_paths keys it: the address's own bytes, then the port (6 or 18 bytes, so the families
@@ -41,9 +43,9 @@ bool limits_valid(const QuicHostLimits& limits) noexcept
 }
 } // namespace
 
-QuicHost::QuicHost(memory::IAllocator& allocator, DatagramSocket& socket, ConnectionIdTable& routes,
+QuicHost::QuicHost(memory::IAllocator& allocator, const SocketSet& sockets, ConnectionIdTable& routes,
                    const crypto::QuicResetKey& reset, QuicHostEvents& events, const QuicHostLimits& limits) noexcept
-    : m_allocator(allocator), m_socket(socket), m_routes(routes), m_reset(reset), m_events(events), m_limits(limits),
+    : m_allocator(allocator), m_sockets(sockets), m_routes(routes), m_reset(reset), m_events(events), m_limits(limits),
       m_peer_tokens(allocator, limits_valid(limits) ? limits.connections * kQuicHostTokensPerConnection : 1U),
       m_peer_paths(allocator, limits_valid(limits) ? limits.connections : 1U),
       m_queue(allocator, limits.send_slots, limits.datagram_bytes), m_heap(allocator)
@@ -53,8 +55,8 @@ QuicHost::QuicHost(memory::IAllocator& allocator, DatagramSocket& socket, Connec
 bool QuicHost::open_pool() noexcept
 {
     const u32 count = m_limits.connections;
-    if (m_slots != nullptr || !limits_valid(m_limits) || !m_routes.ready() || !m_peer_tokens.ready() ||
-        !m_peer_paths.ready() || !m_queue.ready())
+    if (m_slots != nullptr || !limits_valid(m_limits) || !m_sockets.ready() || !m_routes.ready() ||
+        !m_peer_tokens.ready() || !m_peer_paths.ready() || !m_queue.ready())
     {
         return false;
     }
@@ -114,16 +116,17 @@ QuicHost::~QuicHost()
 
 // ---- Building connections ----
 
-QuicConnection* QuicHost::build(u32 index, QuicConnectionConfig config, const Endpoint& peer) noexcept
+QuicConnection* QuicHost::build(u32 index, QuicConnectionConfig config, const QuicPath& path) noexcept
 {
     u8 seed[crypto::kPrfKeyBytes] = {};
+    const Endpoint& peer = path.peer;
     config.ids = &m_ids[index];
-    config.path = QuicPath{0U, peer};
+    config.path = path;
     if (config.parameters.max_udp_payload_size > m_limits.receive_bytes)
     {
         config.parameters.max_udp_payload_size = m_limits.receive_bytes; // what the loop reads whole
     }
-    const SocketFeatures features = m_socket.features();
+    const SocketFeatures features = m_sockets.features();
     if (!features.ecn_marking)
     {
         config.ecn = false; // marks the socket would drop would only fail the path's validation
@@ -175,7 +178,7 @@ QuicHandle QuicHost::start_keyed(QuicConnectionConfig config, const Endpoint& pe
     config.versions = {};
     config.after_version_negotiation = false;
     config.held_packets = 0U;
-    QuicConnection* const connection = build(index, config, peer);
+    QuicConnection* const connection = build(index, config, QuicPath{0U, peer});
     if (connection == nullptr || !connection->open_keyed(start, now_ns))
     {
         crypto::secure_zero(start.secret);
@@ -186,7 +189,7 @@ QuicHandle QuicHost::start_keyed(QuicConnectionConfig config, const Endpoint& pe
         m_ids[index].retire(local_id);
         return QuicHandle{};
     }
-    enlist(index, *connection, peer, now_ns);
+    enlist(index, *connection, now_ns);
     return handle_of(index);
 }
 
@@ -195,7 +198,7 @@ void QuicHost::discard(QuicConnection& connection) noexcept
     connection.~QuicConnection(); // in the spare, which stays the spare
 }
 
-void QuicHost::enlist(u32 index, QuicConnection& connection, const Endpoint& peer, u64 now_ns) noexcept
+void QuicHost::enlist(u32 index, QuicConnection& connection, u64 now_ns) noexcept
 {
     Slot& slot = m_slots[index];
     m_free = slot.next_free;
@@ -203,7 +206,8 @@ void QuicHost::enlist(u32 index, QuicConnection& connection, const Endpoint& pee
     m_spare = slot.cell;
     slot.cell = &connection;
     slot.connection = &connection;
-    slot.peer = peer;
+    slot.peer = connection.path().peer;
+    slot.socket = connection.path().socket;
     index_peer(index);
     ++m_live;
     schedule(index, now_ns);
@@ -212,7 +216,9 @@ void QuicHost::enlist(u32 index, QuicConnection& connection, const Endpoint& pee
 void QuicHost::follow_path(u32 index) noexcept
 {
     Slot& slot = m_slots[index];
-    const Endpoint peer = slot.connection->path().peer;
+    const QuicPath& path = slot.connection->path();
+    const Endpoint peer = path.peer;
+    slot.socket = path.socket;
     if (!(peer == slot.peer))
     {
         unindex_peer(index);
@@ -292,11 +298,12 @@ void QuicHost::on_route(const IngressDecision& decision, const ReceivedDatagram&
         return;
     }
     const Slot& slot = m_slots[decision.connection];
-    if (slot.peer.port != 0U && !(datagram.peer == slot.peer))
+    const QuicPath path{datagram.socket, datagram.peer};
+    if (slot.peer.port != 0U && !(path == QuicPath{slot.socket, slot.peer}))
     {
         ++m_counters.foreign_path; // the connection validates the path or drops it (RFC 9000 section 9)
     }
-    connection->receive(QuicPath{0U, datagram.peer}, datagram.storage.first(datagram.size), datagram.ecn, now_ns);
+    connection->receive(path, datagram.storage.first(datagram.size), datagram.ecn, now_ns);
     follow_path(decision.connection);
     schedule(decision.connection, now_ns);
 }
@@ -309,7 +316,7 @@ void QuicHost::on_too_big(const ReceivedDatagram& report, u64 now_ns) noexcept
     {
         QuicConnection* const connection = m_slots[index].connection;
         if (connection != nullptr && m_slots[index].peer == report.peer &&
-            connection->path_too_big(quote, report.too_big, now_ns))
+            connection->path_too_big(QuicPath{report.socket, report.peer}, quote, report.too_big, now_ns))
         {
             ++m_counters.too_big;
             schedule(index, now_ns);
@@ -462,13 +469,14 @@ bool QuicHost::drain(Slot& slot, u64 now_ns) noexcept
         {
             return true;
         }
-        m_queue.push(written, slot.connection->sent_path().peer, slot.connection->marking());
+        const QuicPath& path = slot.connection->sent_path();
+        m_queue.push(written, path.peer, slot.connection->marking(), path.socket);
     }
 }
 
 void QuicHost::flush() noexcept
 {
-    const SendFlush flushed = m_queue.flush(m_socket);
+    const SendFlush flushed = m_queue.flush(m_sockets);
     m_counters.datagrams_sent += flushed.sent;
     m_counters.send_dropped += flushed.dropped;
 }
