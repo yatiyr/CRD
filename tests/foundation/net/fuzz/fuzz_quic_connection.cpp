@@ -1293,28 +1293,31 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         // A pair that carried its stream with neither end closed has the server sending to the client's address once
         // what is owed has arrived (a client that reverted at the end sends from there now). Until then it is
         // validating that address: a validation whose challenge or response the script lost, or whose packets came
-        // after their ID's retirement, ends on its next challenge (RFC 9000 section 8.2.1), and then it follows.
+        // after their ID's retirement, ends on its next challenge (RFC 9000 section 8.2.1). Once it validated the
+        // address it follows; only an end that closed first leaves it unvalidated.
         if (over_paths() && !finished(pair.client) && !finished(pair.server))
         {
             pair.settle(1U);
-            const auto follows = [&pair]
-            {
-                return pair.server.path().peer == kClientPaths[pair.address_of(pair.client.path().socket)].peer;
-            };
+            const auto client_at = [&pair] { return kClientPaths[pair.address_of(pair.client.path().socket)].peer; };
+            const auto follows = [&] { return pair.server.path().peer == client_at(); };
             const auto ended = [&pair] { return finished(pair.client) || finished(pair.server); };
-            if (!follows())
+            // Whether a path of the server's to the client's address is validating, or validated.
+            const auto proving = [&](bool validated)
             {
                 const QuicPaths& paths = pair.server.paths();
-                const Endpoint& client_at = kClientPaths[pair.address_of(pair.client.path().socket)].peer;
-                bool validating = false;
+                bool found = false;
                 for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
                 {
-                    validating = validating || (paths.used(slot) && paths.path(slot).peer == client_at &&
-                                                paths.validating(slot));
+                    const bool state = validated ? paths.validated(slot) : paths.validating(slot);
+                    found = found || (paths.used(slot) && paths.path(slot).peer == client_at() && state);
                 }
-                CRD_FUZZ_REQUIRE(validating);
-                pair.settle_until(256U, [&] { return follows() || ended(); });
-                CRD_FUZZ_REQUIRE(follows() || ended());
+                return found;
+            };
+            if (!follows())
+            {
+                CRD_FUZZ_REQUIRE(proving(false));
+                pair.settle_until(256U, [&] { return follows() || ended() || !proving(false); });
+                CRD_FUZZ_REQUIRE(follows() || (ended() && !proving(true)));
             }
         }
         check_observations(pair);
