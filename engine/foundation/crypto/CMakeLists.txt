@@ -34,6 +34,7 @@ target_link_libraries(crd-crypto
         crd-compression # NET.2 decision S10: TLS certificate compression (RFC 8879) through the engine's zstd and zlib
         crd-platform    # NET.2 decision K3: the key store's owner-only directory, lock and durable save (no cycle:
                         # crd-platform links no cryptography)
+        crd-time        # the wall clock TLS and its provider read (tls.cpp): ticket ages, replay window, policy dates
         ssl
         crypto
 )

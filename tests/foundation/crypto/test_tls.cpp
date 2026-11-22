@@ -19,6 +19,7 @@
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
 
+#include "pinned_wall_clock.hpp"
 #include "tls_key_log.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -32,7 +33,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <cstring>
 #include <initializer_list>
 #include <iterator>
@@ -1903,25 +1903,43 @@ TEST_CASE("TLS: a ticket changed at rest or past its lifetime runs a full handsh
         store.flip_mask = 0U;
         CHECK(resume(client, server, store));
     }
-    SECTION("a ticket past its lifetime is not offered")
+    SECTION("a ticket past its lifetime, or from the future, is not offered")
     {
         // A resumption keeps the longer of the ticket's remaining lifetime and the configured one, so a new key
-        // forces the full handshake whose ticket lives one second.
+        // forces the full handshake whose ticket lives one second. The ticket comes at a pinned second, which both
+        // TLS and the provider read (WallClock::pin).
         u8 other_key[kTlsTicketKeyBytes];
         fill_key(other_key, 0x99U);
         server_context(server.context, server.credential, [&](TlsConfig& c) {
             c.ticket_key      = ConstSpan<u8>(other_key);
             c.ticket_lifetime = 1U;
         });
+        crd::crypto::test::PinnedWallClock clock;
+        constexpr u64                      kPinned = crd::crypto::test::kPinnedUnixSeconds;
         CHECK_FALSE(resume(client, server, store));
         REQUIRE(store.size() == 1U);
-        std::this_thread::sleep_for(std::chrono::milliseconds(2100));
-        reconnect(client, server, &store);
-        Bytes flights[8];
-        (void)run_flights(client, server, flights);
-        CHECK_FALSE(read_psk(flights[0]).offered);
-        CHECK(client.session.state() == TlsState::Established);
-        CHECK_FALSE(client.session.resumed());
+        const Bytes      kept    = store.ticket(0U);
+        const TlsBinding binding = store.binding(0U);
+        // Its last second, a second past it and a second before it came (a client clock that stepped back).
+        struct Moment
+        {
+            u64  seconds;
+            bool offered;
+        };
+        constexpr Moment moments[] = {{kPinned, true}, {kPinned + 2U, false}, {kPinned - 1U, false}};
+        for (const Moment& moment : moments)
+        {
+            CAPTURE(moment.seconds);
+            Store held;
+            held.keep(binding, ConstSpan<u8>(kept.data(), kept.size()));
+            clock.set(moment.seconds);
+            reconnect(client, server, &held);
+            Bytes flights[8];
+            (void)run_flights(client, server, flights);
+            CHECK(read_psk(flights[0]).offered == moment.offered);
+            CHECK(client.session.state() == TlsState::Established);
+            CHECK(client.session.resumed() == moment.offered);
+        }
     }
 }
 

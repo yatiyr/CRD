@@ -48,6 +48,7 @@
 //     zlib, its bytes can reach (restated here: DEFLATE's 1032 bytes per byte between zlib's 6 framing bytes), and a
 //     refused claim leaves the output untouched; a zlib decoding carries the Adler-32 of its output (restated) and a
 //     decoding is the same twice.
+#include "../pinned_wall_clock.hpp"
 #include "../policy_test_signer.hpp"
 
 #include <crd/fuzz/harness.hpp>
@@ -61,7 +62,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
-#include <ctime>
 #include <initializer_list>
 
 namespace
@@ -130,6 +130,7 @@ void make_ech_key(TlsEchKey& key, usize index) noexcept
 // holding two ECH keys (a current and a previous one).
 struct Contexts
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the policy read it from the first session
     SigningKey    key;
     TlsCredential credential;
     TlsEchKey     ech_keys[2];
@@ -148,6 +149,7 @@ struct Contexts
 
     Contexts() noexcept
     {
+        const crd::u64 now = crd::crypto::test::kPinnedUnixSeconds; // `clock`'s, the tickets' and the policy's
         u8 seed[32];
         for (usize i = 0U; i < sizeof(seed); ++i)
         {
@@ -174,7 +176,6 @@ struct Contexts
         {
             return;
         }
-        const auto    now        = static_cast<crd::u64>(std::time(nullptr));
         PolicyContent generation = crd::crypto::test::accepting_all(1U, now - 60U);
         crd::crypto::test::refuse_rule(generation, AlgorithmId::Chacha20Poly1305);
         if (no_chacha.apply(generation, now) != PolicyError::None)
@@ -196,7 +197,7 @@ struct Contexts
         config.previous_ech_keys = {};
         config.early_data = true;
         config.early_data_filter = &early_filter;
-        if (early_filter.init(16U, kEarlyPeriod, static_cast<crd::u64>(std::time(nullptr))) != CryptoError::None ||
+        if (early_filter.init(16U, kEarlyPeriod, now) != CryptoError::None ||
             early_server.init(config) != TlsError::None)
         {
             return;
@@ -304,7 +305,7 @@ bool move(QuicHandshake& from, QuicHandshake& to) noexcept
 bool earn_ticket(KeepStore& store, bool quic) noexcept
 {
     Contexts& shared = contexts();
-    if (shared.early_filter.init(16U, kEarlyPeriod, static_cast<crd::u64>(std::time(nullptr))) != CryptoError::None)
+    if (shared.early_filter.init(16U, kEarlyPeriod, crd::crypto::test::kPinnedUnixSeconds) != CryptoError::None)
     {
         return false;
     }

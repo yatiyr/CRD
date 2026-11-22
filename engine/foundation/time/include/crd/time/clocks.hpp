@@ -132,6 +132,13 @@ public:
     //
     // The returned Instant uses Unix epoch (1970-01-01 UTC) as t=0.
     [[nodiscard]] static Instant now() noexcept;
+
+    // Every later read returns `at` (Unix epoch), on every thread, until the next pin or unpin(): a process on
+    // simulated time (a test, a fuzz target, a network simulator, which pins each step's time) and every reader of
+    // civil time in it, TLS's ticket ages and lifetimes, its 0-RTT replay window and policy dates included. A host
+    // clock that steps (WSL's time sync does, about every 31 s) then never moves such a run.
+    static void pin(Instant at) noexcept;
+    static void unpin() noexcept;
 };
 
 // ===========================================================================

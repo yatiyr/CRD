@@ -51,6 +51,8 @@
 // 0-RTT: an offer ends Accepted or Rejected on both ends alike; accepted, the server reads the early stream
 // whole and unchanged, never marking more bytes replayable than came; rejected, the client's streams were reset and
 // the server opened none of them.
+#include "../../crypto/pinned_wall_clock.hpp"
+
 #include <crd/core/platform.hpp>
 #include <crd/crypto/replay.hpp>
 #include <crd/crypto/tls.hpp>
@@ -59,7 +61,6 @@
 #include <crd/net/quic_header.hpp>
 
 #include <cstring>
-#include <ctime>
 
 namespace
 {
@@ -124,6 +125,7 @@ void check_closed(const QuicConnection& end)
 
 struct Identity
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets read it from the first connection
     SigningKey key;
     TlsCredential credential;
     TlsContext client;
@@ -174,7 +176,7 @@ struct Identity
     {
         filter.clear();
         const u64 period = kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew;
-        return filter.init(64U, period, static_cast<u64>(std::time(nullptr))) == CryptoError::None;
+        return filter.init(64U, period, crd::crypto::test::kPinnedUnixSeconds) == CryptoError::None;
     }
 };
 

@@ -69,6 +69,26 @@ TEST_CASE("WallClock: now() returns a recent year (post-2020)",
     CHECK(t.ns_since_epoch() > static_cast<crd::i64>(1'500'000'000) * 1'000'000'000);
 }
 
+TEST_CASE("WallClock: a pinned reading holds on every thread until the next pin or unpin", "[d-006][clocks][wall]")
+{
+    constexpr crd::i64 kPinned = 1'790'000'000'123'456'789;
+    WallClock::pin(Instant{kPinned});
+    CHECK(WallClock::now().ns_since_epoch() == kPinned);
+    std::atomic<crd::i64> seen{0};
+    std::thread reader([&seen] { seen.store(WallClock::now().ns_since_epoch()); });
+    reader.join();
+    CHECK(seen.load() == kPinned);
+    // Pinned earlier than 1970 and back again: a simulated run may step its clock either way.
+    WallClock::pin(Instant{-5});
+    CHECK(WallClock::now().ns_since_epoch() == -5);
+    WallClock::pin(Instant{kPinned + 1});
+    CHECK(WallClock::now().ns_since_epoch() == kPinned + 1);
+    WallClock::unpin();
+    const crd::i64 system = WallClock::now().ns_since_epoch();
+    CHECK(system > static_cast<crd::i64>(1'500'000'000) * 1'000'000'000);
+    CHECK(system != kPinned + 1);
+}
+
 TEST_CASE("CycleCounter: now() returns a non-zero u64",
           "[d-006][clocks][cycle]")
 {

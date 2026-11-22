@@ -730,7 +730,7 @@ crd_module(engine/foundation/compression engine/compression DEPENDS containers c
 # working group's and the HPKE working group's post-quantum vectors are the tests' oracles, and the OpenSSL peer
 # decodes certificates with the pinned zstd; on Linux the TPM protector and device compile against tss2's headers, and
 # the PKCS #11 key device against OASIS's on every platform
-crd_module(engine/foundation/crypto engine/crypto DEPENDS compression containers core platform
+crd_module(engine/foundation/crypto engine/crypto DEPENDS compression containers core platform time
     PACKAGES aws-lc tpm2-tss pkcs11
     TESTS foundation/crypto support/fuzz TEST_DEPENDS json memory
     TEST_PACKAGES wycheproof mls-vectors hpke-pq-vectors zstd)

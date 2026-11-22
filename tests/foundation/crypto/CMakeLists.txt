@@ -42,6 +42,7 @@ target_link_libraries(crd-crypto-tests PRIVATE
     crd-json # the Wycheproof, MLS and HPKE vectors
     crd-memory
     crd-platform
+    crd-time # WallClock::pin: tickets on a pinned clock, which TLS and the provider read (test_tls.cpp)
     Catch2::Catch2WithMain
     # The provider itself, for the ML-KEM encapsulation vectors only: their known answers fix the randomness m,
     # which only the provider's deterministic encapsulation takes (test_kem_prf.cpp); its TLS stack, to read back the

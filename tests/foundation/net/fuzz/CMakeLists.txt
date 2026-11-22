@@ -120,7 +120,7 @@ crd_fuzz_target(crd-fuzz-net-websocket
 #                             to a real TLS server that accepts, refuses or answers anything: what each side sends stays
 #                             valid, nothing counts as delivered before the answer, nothing allocated.
 crd_fuzz_target(crd-fuzz-net-qmux-early
-    SOURCES fuzz_qmux_early.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-qmux-early")
+    SOURCES fuzz_qmux_early.cpp LIBRARIES crd-net crd-time CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-qmux-early")
 
 # The TCP and TLS path's host (4.2a).
 #   crd-fuzz-net-qmux-host   a server and a client host over pipes under any connects, resets, cuts, stalls, raw bytes,
@@ -220,7 +220,8 @@ endif()
 #                                  raw peer in 1-RTT and in Initial packets: the server stays open or closes with an
 #                                  error RFC 9000 names, its close the only frame it sends then.
 crd_fuzz_target(crd-fuzz-net-quic-connection
-    SOURCES fuzz_quic_connection.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-connection")
+    SOURCES fuzz_quic_connection.cpp LIBRARIES crd-net crd-time
+    CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-connection")
 
 # Frames and admission (NET.3).
 #   crd-fuzz-net-admission   any bytes on a stream and in datagrams, against a restated frame layout and admission

@@ -70,6 +70,6 @@ crd_fuzz_target(crd-fuzz-crypto-policy
 crd_fuzz_target(crd-fuzz-crypto-provider
     SOURCES fuzz_provider.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-provider")
 crd_fuzz_target(crd-fuzz-crypto-tls
-    SOURCES fuzz_tls.cpp LIBRARIES crd-crypto crd-compression CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-tls")
+    SOURCES fuzz_tls.cpp LIBRARIES crd-crypto crd-compression crd-time CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-tls")
 crd_fuzz_target(crd-fuzz-crypto-quic
     SOURCES fuzz_quic.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic")

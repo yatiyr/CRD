@@ -63,12 +63,15 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
+#include <crd/core/platform.hpp>
+#include <crd/time/clocks.hpp>
+
 #include <algorithm>
 #include <climits>
 #include <cstring>
-#include <ctime>
 #include <initializer_list>
 #include <iterator>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -608,11 +611,37 @@ void zero_ticket_keys(TlsSettings& settings) noexcept
     secure_zero(cont::Span<u8>(&settings.ticket_keys[0][0], sizeof(settings.ticket_keys)));
 }
 
-// The wall clock's seconds since 1970, which the provider's ticket ages read too.
+// crd-time's wall clock in seconds since 1970 (none before), a pinned one included (WallClock::pin).
 u64 unix_now() noexcept
 {
-    const std::time_t now = std::time(nullptr);
-    return now > 0 ? static_cast<u64>(now) : 0U;
+    const i64 now = time::WallClock::now().ns_since_epoch();
+    return now > 0 ? static_cast<u64>(now / 1'000'000'000) : 0U;
+}
+
+#if CRD_OS_WINDOWS
+// Winsock's struct timeval, which the provider only declares there (its layout is the Windows ABI's).
+struct ProviderTimeval
+{
+    long tv_sec;
+    long tv_usec;
+};
+#else
+using ProviderTimeval = timeval;
+#endif
+
+// The provider's clock, which its ticket lifetimes and ages read (each context's current time callback): the same
+// wall clock, so a pinned one moves both, and a ticket Cerid's checks see as valid is never one the provider drops as
+// from the future.
+void provider_time(const SSL*, timeval* out) noexcept
+{
+    using Seconds         = decltype(ProviderTimeval{}.tv_sec);
+    const i64       now   = time::WallClock::now().ns_since_epoch();
+    const i64       at    = now > 0 ? now : 0;
+    const i64       most  = static_cast<i64>(std::numeric_limits<Seconds>::max());
+    ProviderTimeval clock = {};
+    clock.tv_sec          = static_cast<Seconds>(std::min(at / 1'000'000'000, most));
+    clock.tv_usec         = static_cast<decltype(clock.tv_usec)>((at % 1'000'000'000) / 1'000);
+    std::memcpy(static_cast<void*>(out), &clock, sizeof(clock));
 }
 
 // The provider's TLS 1.3 cipher suite list of `aeads`, each a known AEAD:
@@ -2618,6 +2647,7 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     }
     // Server preference orders the groups (the provider's TLS 1.3 AEAD choice follows the client, see tls.hpp).
     SSL_CTX_set_options(context.get(), SSL_OP_CIPHER_SERVER_PREFERENCE);
+    SSL_CTX_set_current_time_cb(context.get(), provider_time);
     // Early data (S17): a client offers it on a ticket that allows it, a server issues such tickets and accepts it.
     SSL_CTX_set_early_data_enabled(context.get(), config.early_data ? 1 : 0);
     // Tickets are stateless: a server keeps no session cache (no memory an unauthenticated peer could fill) and issues

@@ -12,13 +12,13 @@
 // whose first frame is its transport parameters and whose frames are all ones QMux allows, nothing after its
 // CONNECTION_CLOSE. Its state only moves forward. A client reports no datagram delivered before its server has
 // answered, and a server's early marks never exceed what it read.
+#include "../../crypto/pinned_wall_clock.hpp"
 #include "qmux_fuzz_fixture.hpp"
 
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/replay.hpp>
 #include <crd/crypto/tls.hpp>
 
-#include <ctime>
 #include <new>
 
 namespace
@@ -82,6 +82,7 @@ private:
 // Contexts that allow early data, under one replay filter: a run's own, so that a run's ticket is always fresh.
 struct Fleet
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets read it from the first connection
     SigningKey key;
     TlsCredential credential;
     ReplayFilter filter;
@@ -95,7 +96,7 @@ struct Fleet
         CRD_FUZZ_REQUIRE(key.from_seed(AlgorithmId::Ed25519, ConstSpan<u8>(seed)) == CryptoError::None);
         CRD_FUZZ_REQUIRE(credential.init(key, "game.cerid.test") == TlsError::None);
         CRD_FUZZ_REQUIRE(filter.init(64U, kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew,
-                                     static_cast<u64>(std::time(nullptr))) == CryptoError::None);
+                                     crd::crypto::test::kPinnedUnixSeconds) == CryptoError::None);
         const KeyId pin = credential.key_id();
         TlsConfig config;
         config.role = TlsRole::Client;

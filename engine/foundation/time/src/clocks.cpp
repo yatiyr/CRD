@@ -3,12 +3,14 @@
 #include <crd/time/clocks.hpp>
 #include <crd/time/deadline.hpp> // yield_thread
 
+#include <crd/core/assert.hpp>
 #include <crd/core/cpu_features.hpp>
 #include <crd/core/platform.hpp> // CRD_NOINLINE
 #include <crd/core/wide_multiply.hpp>
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 
 #if defined(_MSC_VER)
     #include <intrin.h>
@@ -33,8 +35,31 @@ Instant MonotonicClock::now() noexcept
 // WallClock
 // ===========================================================================
 
+namespace
+{
+// The pinned reading, or kUnpinned for the system clock (Instant's least, which no run pins).
+constexpr crd::i64 kUnpinned = INT64_MIN;
+std::atomic<crd::i64> g_wall_pin{kUnpinned};
+} // namespace
+
+void WallClock::pin(Instant at) noexcept
+{
+    CRD_ASSERT(at.ns_since_epoch() != kUnpinned);
+    g_wall_pin.store(at.ns_since_epoch(), std::memory_order_release);
+}
+
+void WallClock::unpin() noexcept
+{
+    g_wall_pin.store(kUnpinned, std::memory_order_release);
+}
+
 Instant WallClock::now() noexcept
 {
+    const crd::i64 pinned = g_wall_pin.load(std::memory_order_acquire);
+    if (pinned != kUnpinned)
+    {
+        return Instant{pinned};
+    }
     const auto tp = std::chrono::system_clock::now();
     const auto since_epoch =
         std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
