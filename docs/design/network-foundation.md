@@ -2553,6 +2553,11 @@ set `TlsConfig::early_data`:
   flight gets no early data from that server, and the full handshake's ticket allows 0-RTT again. The scope is one
   server (RFC 8446 section 8's zones): another server of a fleet accepts the same replay once, which is why only
   operations their schema declares idempotent run on early data.
+- **One wall clock (2026-11-22).** Cerid's ticket, replay and policy checks and the provider's ticket lifetimes and
+  ages read crd-time's `WallClock` (each context's current time callback), so a process on simulated time pins one
+  clock for both (`WallClock::pin`: tests, fuzz targets, NET-SIM). A client whose clock stepped back past a ticket's
+  arrival offers it to no one, as one from the future; before, a host clock that stepped (WSL's time sync) between a
+  ticket and its offer failed a fuzz oracle no input replayed.
 - **The provider's refusals.** The provider refuses early data whose client's ticket age is more than 60 seconds
   from the server's (`Stale`, RFC 8446 section 8.3), after a HelloRetryRequest, on another application protocol,
   from a server without early data and under another early data context (`Rejected`; over QUIC the provider's
