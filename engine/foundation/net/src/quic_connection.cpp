@@ -1351,8 +1351,8 @@ bool QuicConnection::multipath_frame(const QuicFrame& frame, QuicSpace space, u6
         case QuicFrameKind::PathAck:
             return ack_frame(frame, space, now_ns);
         case QuicFrameKind::PathAbandon:
-            // Path ID 0 is the only path, and no other can open under this side's limit: the connection closes
-            // (section 3.4).
+            // No path ID closes on its own here: abandoning any closes the connection, as abandoning the last path
+            // does (section 3.4).
             fail(QuicTransportError::NoError, 0U, now_ns);
             return false;
         case QuicFrameKind::PathStatus:
@@ -1796,7 +1796,12 @@ void QuicConnection::confirm(u64 now_ns) noexcept
 bool QuicConnection::can_acknowledge(QuicSpace space, usize slot) const noexcept
 {
     return !m_space_gone[quic_space_index(space)] && m_protection.can_send(packet_type(space)) &&
-           m_recovery->can_send(space, slot) && amplification_credit(slot) >= kMinUsefulPacket;
+           m_recovery->can_send(space, slot) && amplification_credit(slot) >= kMinUsefulPacket && addressed(slot);
+}
+
+bool QuicConnection::addressed(usize slot) const noexcept
+{
+    return slot == 0U || peer_held(slot, m_cids.current(m_protection.path_id(slot)));
 }
 
 usize QuicConnection::amplification_credit(usize slot) const noexcept
@@ -2603,7 +2608,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
     for (usize turn = 1U; turn <= kQuicMaxPaths; ++turn)
     {
         const usize slot = (m_send_slot + turn) % kQuicMaxPaths;
-        if (!m_protection.path_open(slot))
+        if (!m_protection.path_open(slot) || !addressed(slot))
         {
             continue;
         }
@@ -2777,9 +2782,12 @@ usize QuicConnection::send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept
     const QuicSpace application = QuicSpace::Application;
     const usize slot = send_slot();
     QuicPathControl& path = control(slot);
+    // A further slot's path is searched once its 4-tuple validates (RFC 10069 section 3.1).
+    const QuicPaths& paths = tuples(slot);
     if (m_state != QuicConnectionState::Established || !m_confirmed || !m_peer_known ||
         m_recovery->pto_count(slot) != 0U || m_space_gone[quic_space_index(application)] ||
-        !m_protection.can_send(QuicPacketType::OneRtt) || !m_recovery->can_send_data(application, slot))
+        !m_protection.can_send(QuicPacketType::OneRtt) || !m_recovery->can_send_data(application, slot) ||
+        (slot != 0U && !paths.validated(paths.active())))
     {
         return 0U;
     }

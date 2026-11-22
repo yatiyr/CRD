@@ -5423,3 +5423,117 @@ TEST_CASE("QUIC connection: a multipath limit allocates the path slots up front,
         allocator.refuse_after(~usize{0});
     }
 }
+
+namespace
+{
+// A raw client's ID for path ID 1, kClientPathCid, sent to the server on path ID 0.
+void announce_path_one(RawRun& run)
+{
+    QuicFrame issued;
+    issued.kind = QuicFrameKind::PathNewConnectionId;
+    issued.path_id = 1U;
+    issued.data = ConstSpan<u8>(kClientPathCid, sizeof(kClientPathCid));
+    const u8 token[kQuicResetTokenBytes] = {0x7A, 0x7B};
+    issued.reset_token = ConstSpan<u8>(token, sizeof(token));
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(issued, out); });
+}
+
+// A raw client's path ID 1: its ID to the server (unless `announce` is false), its protection slot, and its first
+// packet there, a PATH_CHALLENGE from `second`.
+void open_path_one(RawRun& run, const QuicPath& second, bool announce = true)
+{
+    if (announce)
+    {
+        announce_path_one(run);
+    }
+    REQUIRE(run.raw.protection.open_path(1U, 1U));
+    run.raw.path_slot = 1U;
+    const u8 data[kQuicPathDataBytes] = {9, 8, 7, 6, 5, 4, 3, 2};
+    run.send_on_path(ConstSpan<u8>(run.raw.further_issued[1], run.raw.further_bytes[1]), second,
+                     [&](Span<u8> out)
+                     {
+                         QuicFrame frame;
+                         frame.kind = QuicFrameKind::PathChallenge;
+                         frame.data = ConstSpan<u8>(data, sizeof(data));
+                         return write_quic_frame(frame, out);
+                     });
+    REQUIRE(run.server.counters().paths_opened == 1U);
+}
+
+// What the server sent to `path`: its datagrams' bytes and its PATH_CHALLENGE frames there.
+usize bytes_to(const RawRun& run, const QuicPath& path)
+{
+    usize bytes = 0U;
+    for (usize index = 0U; index < run.raw.datagrams && index < 256U; ++index)
+    {
+        bytes += (run.raw.sent_to[index] == path) ? run.raw.sent_size[index] : 0U;
+    }
+    return bytes;
+}
+
+usize challenges_to(const RawRun& run, const QuicPath& path)
+{
+    usize count = 0U;
+    for (usize index = 0U; index < run.raw.challenges && index < 32U; ++index)
+    {
+        count += (run.raw.challenge_path[index] == path) ? 1U : 0U;
+    }
+    return count;
+}
+} // namespace
+
+TEST_CASE("QUIC connection: a path ID opened before the client's ID for it answers once the ID arrives",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 section 3.1: an endpoint without an ID for the path may delay its PATH_RESPONSE; nothing goes to
+    // another path ID's ID meanwhile.
+    Identity identity;
+    CountingAllocator host_allocator;
+    Host host(host_allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, true, 3U);
+    run.multipath = true;
+    run.handshake();
+    const QuicPath second = client_at(9U, 40000U);
+    open_path_one(run, second, false);
+    CHECK(bytes_to(run, second) == 0U);
+    CHECK_FALSE(run.raw.path_response_seen);
+    CHECK(run.server.next_timer_ns() > run.now); // the owed answer is no timer send() cannot serve
+    announce_path_one(run);
+    REQUIRE(run.raw.path_response_seen);
+    CHECK(bytes_to(run, second) != 0U);
+    CHECK(challenges_to(run, second) == 1U);
+    CHECK(run.raw.challenge_dcid[(run.raw.challenges - 1U) % 32U] == kClientPathCid[0]);
+}
+
+TEST_CASE("QUIC connection: a further path's challenge timers and expiry run, within its amplification limit",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // The client goes silent after its first packet on path ID 1: the server's challenge goes again on its timer,
+    // never past three times the 1200 bytes that arrived, and the validation fails at its deadline with no data sent
+    // there (RFC 9000 sections 8.2 and 8.2.4, RFC 10069 section 3.1). Every timer reported due is one send() serves.
+    Identity identity;
+    CountingAllocator host_allocator;
+    Host host(host_allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, true, 3U);
+    run.multipath = true;
+    run.handshake();
+    const QuicPath second = client_at(9U, 40000U);
+    open_path_one(run, second);
+    REQUIRE(challenges_to(run, second) == 1U);
+    const QuicPaths& paths = run.server.paths(1U);
+    for (usize guard = 0U; guard < 256U && run.server.counters().path_failures == 0U; ++guard)
+    {
+        const u64 next = run.server.next_timer_ns();
+        REQUIRE(next != kNeverNs);
+        run.now = (next > run.now) ? next : run.now;
+        run.server.on_timeout(run.now);
+        run.drain();
+        CHECK(run.server.next_timer_ns() > run.now);
+        CHECK(bytes_to(run, second) <= 3U * kQuicMinInitialDatagram);
+    }
+    CHECK(run.server.counters().path_failures == 1U);
+    CHECK(challenges_to(run, second) >= 2U);
+    CHECK_FALSE(paths.validated(paths.active()));
+    CHECK(run.server.state() == QuicConnectionState::Established);
+    CHECK(run.server.path() == run.from);
+}

@@ -818,6 +818,9 @@ private:
     // Whether send() can write the ACK `space` of slot `slot` owes (its active 4-tuple's amplification limit
     // included): a timer nothing serves is never reported due.
     [[nodiscard]] bool can_acknowledge(QuicSpace space, usize slot = 0U) const noexcept;
+    // Whether slot `slot` holds a peer ID of its path ID to send to: a further slot opened before the peer's ID for
+    // it arrived waits for one, answering nothing until then (RFC 10069 section 3.1).
+    [[nodiscard]] bool addressed(usize slot) const noexcept;
 
     // Closing and timers.
     void fail(QuicTransportError error, u64 frame_type, u64 now_ns) noexcept;
