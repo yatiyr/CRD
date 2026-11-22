@@ -6535,6 +6535,188 @@ TEST_CASE("QUIC connection: either end abandons path ID 0 while path ID 1 lives,
     }
 }
 
+TEST_CASE("QUIC connection: once path ID 0 closes its slot is reclaimed, so four path IDs stay open; path ID 4 opens "
+          "in slot 0 on both ends, leads once validated and alone carries a stream over a hostile link",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 sections 3.2.1, 3.4 and 4.6: a closed path ID's slot holds the next one, path ID 0's as any other.
+    const Endpoint fourth{IpAddress::v4(198, 18, 0, 10), 43000U}; // the client's socket 3
+    for (u64 seed = 1U; seed <= 4U; ++seed)
+    {
+        const bool by_client = (seed % 2U) != 0U;
+        INFO("seed " << seed << (by_client ? ", the client abandons" : ", the server abandons"));
+        MultipathPair pair(3U, 3U);
+        pair.net->rng.state = seed;
+        pair.net->socket_at[2] = fourth;
+        for (Path& path : pair.net->path)
+        {
+            path.loss = 20U;
+            path.duplicate = 20U;
+            path.jitter_ns = 3U * kMs;
+        }
+        pair.confirm();
+        // Path IDs 1 to 3 take slots 1 to 3, one socket each: every slot is held.
+        for (u64 next = 1U; next <= 3U; ++next)
+        {
+            REQUIRE(pair.net->run_until(
+                [&] { return pair.client.peer_cid_count(next) != 0U && pair.server.peer_cid_count(next) != 0U; }));
+            u64 path_id = 0U;
+            REQUIRE(pair.client.add_path(QuicPath{static_cast<u32>(next), kServerAt}, pair.net->now, path_id) ==
+                    QuicMigration::Started);
+            CHECK(path_id == next);
+            REQUIRE(pair.net->run_until([&] { return pair.open_both(static_cast<usize>(next)); }));
+        }
+        QuicConnection& abandoning = by_client ? pair.client : pair.server;
+        const u64 error = code(QuicTransportError::ApplicationAbandonPath);
+        REQUIRE(abandoning.abandon_path(0U, error, pair.net->now) == QuicAbandon::Abandoned);
+        // Its close raises both limits to 4 although no further slot is spare: slot 0 is.
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                return pair.client.counters().paths_closed == 1U && pair.server.counters().paths_closed == 1U &&
+                       pair.client.peer_max_path_id() == 4U && pair.server.peer_max_path_id() == 4U &&
+                       pair.client.peer_cid_count(4U) != 0U && pair.server.peer_cid_count(4U) != 0U;
+            },
+            600000U * kMs));
+        for (const QuicConnection* end : {&pair.client, &pair.server})
+        {
+            CHECK(end->local_max_path_id() == 4U);
+            CHECK_FALSE(end->protection().path_open(0U));
+            CHECK_FALSE(end->recovery().path_open(0U));
+        }
+        // Path ID 4 goes to the server's address path ID 0 sent to, here from the 4-tuple path ID 0 left.
+        u64 path_id = 0U;
+        CHECK(pair.client.add_path(QuicPath{0U, kSecondAt}, pair.net->now, path_id) == QuicMigration::OtherServer);
+        REQUIRE(pair.client.add_path(QuicPath{0U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+        CHECK(path_id == 4U);
+        CHECK(pair.client.protection().path_id(0U) == 4U);
+        // Still validating, it leads nothing: path ID 1 keeps path() and the close.
+        CHECK(pair.client.path() == pair.client.paths(1U).path(pair.client.paths(1U).active()));
+        REQUIRE(pair.net->run_until([&] { return pair.open_both(0U); }));
+        CHECK(pair.server.protection().path_id(0U) == 4U);
+        // Path ID 0's moves stay ended though slot 0 sends again.
+        CHECK(pair.client.migrate(QuicPath{1U, kServerAt}, pair.net->now) == QuicMigration::Abandoned);
+        CHECK(pair.client.probe_path(QuicPath{1U, kServerAt}, pair.net->now) == QuicMigration::Abandoned);
+        // Path IDs 1 to 3 leave; path ID 4 alone carries the data, numbered from 0 in slot 0 and acknowledged in
+        // PATH_ACK frames (an ACK frame's packets are path ID 0's, and nothing would acknowledge these).
+        for (u64 leaving = 1U; leaving <= 3U; ++leaving)
+        {
+            REQUIRE(abandoning.abandon_path(leaving, error, pair.net->now) == QuicAbandon::Abandoned);
+        }
+        REQUIRE(pair.net->run_until(
+            [&] { return pair.client.counters().paths_closed == 4U && pair.server.counters().paths_closed == 4U; },
+            600000U * kMs));
+        const u64 sent = pair.client.next_packet_number(QuicSpace::Application, 0U);
+        pair.stream_to_server(64U * 1024U);
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                return pair.client.recovery().bytes_in_flight(0U) == 0U &&
+                       pair.server.recovery().bytes_in_flight(0U) == 0U;
+            },
+            600000U * kMs));
+        CHECK(pair.client.next_packet_number(QuicSpace::Application, 0U) > sent + 40U);
+        for (QuicConnection* end : {&pair.client, &pair.server})
+        {
+            CHECK(end->state() == QuicConnectionState::Established);
+            CHECK(end->path() == end->paths(0U).path(end->paths(0U).active()));
+            CHECK(end->local_max_path_id() == 7U);
+            CHECK(end->abandon_path(4U, 0U, pair.net->now) == QuicAbandon::LastPath);
+        }
+        // Path ID 5 opens in slot 1, and the close goes on path ID 4, the leading path.
+        REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(5U) != 0U; }));
+        REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+        CHECK(path_id == 5U);
+        CHECK(pair.client.protection().path_id(1U) == 5U);
+        REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+        CHECK(pair.client.path() == pair.client.paths(0U).path(pair.client.paths(0U).active()));
+        pair.client.close(0x2AU, ConstSpan<u8>(), pair.net->now);
+        REQUIRE(pair.net->run_until([&] { return pair.server.state() == QuicConnectionState::Draining; }));
+        CHECK(pair.server.close_info().error_code == 0x2AU);
+    }
+}
+
+TEST_CASE("QUIC connection: a path ID in a reclaimed slot 0 that never validates leaves the handshake's amplification "
+          "guard alone: the server's stream still recovers its losses on path ID 1, and the path ID is abandoned",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 9002 section 6.2.2.1's guard is the handshake path's: a later path ID's amplification limit (RFC 10069
+    // section 7.2) never stops the probe timer the other paths' data needs.
+    for (u64 seed = 1U; seed <= 4U; ++seed)
+    {
+        INFO("seed " << seed);
+        MultipathPair pair;
+        pair.net->rng.state = seed;
+        for (Path& path : pair.net->path)
+        {
+            path.loss = 20U;
+            path.duplicate = 20U;
+            path.jitter_ns = 3U * kMs;
+        }
+        pair.confirm();
+        REQUIRE(pair.net->run_until(
+            [&] { return pair.client.peer_cid_count(1U) != 0U && pair.server.peer_cid_count(1U) != 0U; }));
+        u64 path_id = 0U;
+        REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+        REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+        REQUIRE(pair.client.abandon_path(0U, code(QuicTransportError::NoError), pair.net->now) ==
+                QuicAbandon::Abandoned);
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                return pair.client.counters().paths_closed == 1U && pair.server.counters().paths_closed == 1U &&
+                       pair.client.peer_cid_count(2U) != 0U && pair.server.peer_cid_count(2U) != 0U;
+            },
+            600000U * kMs));
+        // Nothing reaches the client's socket 2: the server's slot 0 spends its credit on a path that never answers.
+        pair.net->down_in = 1U << 2U;
+        REQUIRE(pair.client.add_path(QuicPath{2U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+        CHECK(path_id == 2U);
+        CHECK(pair.client.protection().path_id(0U) == 2U);
+        REQUIRE(pair.net->run_until([&] { return pair.server.protection().path_open(0U); }));
+        CHECK(pair.server.protection().path_id(0U) == 2U);
+        u64 stream = 0U;
+        REQUIRE(pair.server.streams().open(true, stream) == QuicStreamError::None);
+        constexpr u64 total = 96U * 1024U;
+        u64 written = 0U;
+        u64 read = 0U;
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                static_cast<void>(write_pattern(pair.server.streams(), stream, written, total, stream));
+                return pair.client.streams().recv_state(stream) != QuicRecvState::None &&
+                       drain(pair.client.streams(), stream, read, stream) &&
+                       pair.client.counters().paths_closed == 2U && pair.server.counters().paths_closed == 2U;
+            },
+            600000U * kMs));
+        CHECK(read == total);
+        // A tail only the server's probe timeout recovers: everything it sends for 300 ms is lost.
+        u64 tail = 0U;
+        REQUIRE(pair.server.streams().open(true, tail) == QuicStreamError::None);
+        u64 tail_written = 0U;
+        u64 tail_read = 0U;
+        static_cast<void>(write_pattern(pair.server.streams(), tail, tail_written, 8U * 1024U, tail));
+        pair.net->path[1].loss = 1000U;
+        pair.net->run_at(pair.net->now + 300U * kMs);
+        pair.net->path[1].loss = 20U;
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                return pair.client.streams().recv_state(tail) != QuicRecvState::None &&
+                       drain(pair.client.streams(), tail, tail_read, tail);
+            },
+            600000U * kMs));
+        CHECK(tail_read == 8U * 1024U);
+        for (const QuicConnection* end : {&pair.client, &pair.server})
+        {
+            CHECK(end->state() == QuicConnectionState::Established);
+            CHECK_FALSE(end->protection().path_open(0U));
+            CHECK(end->path() == end->paths(1U).path(end->paths(1U).active()));
+        }
+        CHECK(pair.client.counters().path_failures != 0U);
+    }
+}
+
 TEST_CASE("QUIC connection: ends that abandon each other's last path at once both close the connection with "
           "NO_ERROR",
           "[net][net-path][quic-connection][multipath]")
