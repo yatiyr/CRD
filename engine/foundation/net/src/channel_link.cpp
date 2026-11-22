@@ -66,6 +66,7 @@ namespace
         case QuicDatagramError::NotReady:
             return ChannelError::Blocked;
         case QuicDatagramError::Unsupported:
+        case QuicDatagramError::NoPath: // a channel's datagrams are pinned to no path
             break;
     }
     return ChannelError::Closed;

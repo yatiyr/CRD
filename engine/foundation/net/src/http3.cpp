@@ -1782,6 +1782,7 @@ Http3Error Http3Connection::send_datagram(u64 id, cont::ConstSpan<u8> payload, u
             return Http3Error::Blocked;
         case QuicDatagramError::NotReady:
         case QuicDatagramError::Unsupported:
+        case QuicDatagramError::NoPath: // pinned to no path
             return Http3Error::NotReady;
     }
     return Http3Error::NotReady;

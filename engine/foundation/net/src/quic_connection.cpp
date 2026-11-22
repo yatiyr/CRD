@@ -2073,18 +2073,30 @@ void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 
                           m_protection.can_send(send_type(application)) && m_recovery->can_send_data(application, slot);
     if (yields_data(slot, out_bytes, now_ns, held_sockets))
     {
-        // Another path takes the data (S78's scheduling): this window waits unused by the application's choice, so a
-        // rate sample here shows the application's rate, and neither the window nor the pacer held anything back.
-        // Copies of redundant datagrams the other path sent still go here, in this window and pacer.
+        // Another path takes the data (S78's scheduling). Copies of redundant datagrams the other path sent and the
+        // datagrams pinned here still go, in this window and pacer, which hold them back as they hold data; with
+        // none waiting the window waits unused by the application's choice, so a rate sample here shows the
+        // application's rate.
         m_data_open = false;
         const u64 release = path.release_ns(now_ns, m_recovery->rtt(slot));
         m_copies_open = room && release <= now_ns;
-        if (room && sendable)
+        if (!sendable)
         {
-            path.on_app_limited(in_flight);
-            if (!m_copies_open && datagram_ready(now_ns, datagram_paths(true)))
+            return;
+        }
+        if (!datagram_ready(now_ns, datagram_paths(true)))
+        {
+            if (room)
             {
-                path.arm_pace(release); // a copy waits for this pacer
+                path.on_app_limited(in_flight);
+            }
+        }
+        else if (!m_copies_open)
+        {
+            path.on_limited(!room, now_ns);
+            if (room)
+            {
+                path.arm_pace(release);
             }
         }
         return;
@@ -4229,6 +4241,7 @@ void QuicConnection::commit_path(usize slot, u64 now_ns) noexcept
     static_cast<void>(m_recovery->open_path(slot, recovery, cont::Span<QuicSentEntry>(entries, per_space)));
     control.limit(peer_ceiling());
     m_controls[slot] = &control;
+    m_datagrams.open_path(slot, m_protection.path_id(slot));
     follow_datagram_size();
     // A server validates the client's address before any data goes there, a client its server's (section 3.1).
     validate_path(slot, paths.active(), now_ns, validation_timeout_ns());
@@ -4301,6 +4314,7 @@ QuicPathAbandon* QuicConnection::begin_abandon(u64 path_id, u64 error_code, u64 
         static_cast<void>(m_recovery->stop_path(slot, now_ns, m_events));
         control(slot).stop();
         m_controls[slot] = nullptr;
+        m_datagrams.stop_path(slot);
         follow_datagram_size();
         // Path ID 0's own moves end with it: a move it deferred and its pending ones (S75) wait for nothing more.
         m_deferred_move = handshake_slot(slot) ? kQuicNoPath : m_deferred_move;

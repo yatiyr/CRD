@@ -8147,19 +8147,36 @@ struct Arrivals
     }
 };
 
-void queue_redundant(QuicConnection& from, usize id, u64 now_ns)
+// Queues voice datagram `id` as `how` says: its queue() answer, the id checked when it took it.
+QuicDatagramError queue_voice(QuicConnection& from, usize id, u64 now_ns, const QuicDatagramSend& how)
 {
     u8 payload[kVoiceBytes];
     for (usize offset = 0U; offset < kVoiceBytes; ++offset)
     {
         payload[offset] = static_cast<u8>(id + offset);
     }
+    u64 queued = ~u64{0};
+    const QuicDatagramError error = from.datagrams().queue(ConstSpan<u8>(payload, kVoiceBytes), now_ns, queued, how);
+    if (error == QuicDatagramError::None)
+    {
+        CHECK(queued == id);
+    }
+    return error;
+}
+
+void queue_redundant(QuicConnection& from, usize id, u64 now_ns)
+{
     QuicDatagramSend how;
     how.redundant = true;
-    u64 queued = ~u64{0};
-    REQUIRE(from.datagrams().queue(ConstSpan<u8>(payload, kVoiceBytes), now_ns, queued, how) ==
-            QuicDatagramError::None);
-    CHECK(queued == id);
+    REQUIRE(queue_voice(from, id, now_ns, how) == QuicDatagramError::None);
+}
+
+QuicDatagramSend pinned_to(u64 path_id)
+{
+    QuicDatagramSend how;
+    how.pinned = true;
+    how.path_id = path_id;
+    return how;
 }
 } // namespace
 
@@ -8251,5 +8268,116 @@ TEST_CASE("QUIC connection: a redundant datagram crosses every path carrying dat
     REQUIRE(pair.net->run_until([&] { return client.recovery().pto_count(0U) != 0U; }));
     voice(23U, Arrivals::kCount, 51U * kMs, true);
     CHECK(arrivals.each(12U, Arrivals::kCount, 1U));
+    CHECK(client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: a pinned datagram crosses only its path ID, the slower one yielding its data or marked "
+          "backup, from either end, and those waiting when their path ID is abandoned are Lost there",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // S78's scheduling: a flow kept on one path. Path ID 1 is 30 ms slower each way (50 ms against 20 ms), so under
+    // LowestRtt it carries no data of its own, yet its window and pacer send what is pinned to it.
+    MultipathPair pair(2U, 2U, false, true, 256U, true);
+    pair.net->socket_delay_ns[1] = 30U * kMs;
+    pair.open_second();
+    QuicConnection& client = pair.client;
+    QuicConnection& server = pair.server;
+    Arrivals at_server;
+    Arrivals at_client;
+    usize acked[2] = {};
+    usize lost = 0U;
+    const auto settle = [&]
+    {
+        at_server.read(server, pair.net->now);
+        at_client.read(client, pair.net->now);
+        QuicDatagramReport report;
+        for (usize end = 0U; end < 2U; ++end)
+        {
+            QuicConnection& from = (end == 0U) ? client : server;
+            while (from.datagrams().poll(report))
+            {
+                acked[end] += (report.outcome == QuicDatagramOutcome::Acked) ? 1U : 0U;
+                lost += (report.outcome == QuicDatagramOutcome::Lost) ? 1U : 0U;
+            }
+        }
+    };
+    // One datagram each 20 ms from `first` to `last`, pinned to `path_id` by `from`: each arrives once, between
+    // `low_ns` and `high_ns` after it was queued, and is reported Acked.
+    const auto flow = [&](QuicConnection& from, Arrivals& arrivals, usize first, usize last, u64 path_id, u64 low_ns,
+                          u64 high_ns)
+    {
+        const usize end = (&from == &client) ? 0U : 1U;
+        const usize before = acked[end];
+        for (usize id = first; id < last; ++id)
+        {
+            INFO("datagram " << id);
+            const u64 queued_ns = pair.net->now;
+            REQUIRE(queue_voice(from, id, queued_ns, pinned_to(path_id)) == QuicDatagramError::None);
+            REQUIRE(pair.net->run_until(
+                [&]
+                {
+                    settle();
+                    return arrivals.copies[id] != 0U;
+                }));
+            CHECK(arrivals.first_ns[id] - queued_ns >= low_ns);
+            CHECK(arrivals.first_ns[id] - queued_ns <= high_ns);
+            pair.net->advance(queued_ns + 20U * kMs);
+        }
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                settle();
+                return acked[end] - before == last - first;
+            }));
+        CHECK(arrivals.each(first, last, 1U));
+    };
+    // A stream trickles beside the client's flow on path ID 1: its data rides path ID 0 alone (DataWatch).
+    DataWatch watch(client, 0U, pair.net->now);
+    pair.net->filter = &watch;
+    u64 stream = 0U;
+    REQUIRE(open_uni(pair, stream));
+    u64 written = 0U;
+    for (usize id = 0U; id < 8U; ++id)
+    {
+        static_cast<void>(write_pattern(client.streams(), stream, written, (id + 1U) * 1000U, stream, false));
+        flow(client, at_server, id, id + 1U, 1U, 50U * kMs, 51U * kMs);
+    }
+    CHECK(watch.data(0U) != 0U);
+    CHECK(watch.data(1U) == 0U);
+    CHECK(watch.kept());
+    pair.net->filter = nullptr;
+    // The server pins to either path ID of its own: path ID 0's arrive in its one way, path ID 1's in its own.
+    flow(server, at_client, 0U, 4U, 1U, 50U * kMs, 51U * kMs);
+    flow(server, at_client, 4U, 8U, 0U, 0U, 21U * kMs);
+    // The server marks path ID 1 backup (RFC 10069 section 3.3): the client's pinned flow still takes it.
+    REQUIRE(server.set_path_status(1U, true) == QuicPathStatusChange::Set);
+    REQUIRE(pair.net->run_until([&] { return client.peer_path_status(1U) == QuicPathStatus::Backup; }));
+    flow(client, at_server, 8U, 12U, 1U, 50U * kMs, 51U * kMs);
+    // A path ID open in no slot is refused.
+    CHECK(queue_voice(client, 12U, pair.net->now, pinned_to(2U)) == QuicDatagramError::NoPath);
+    // Three pinned to path ID 1 wait unsent beside a plain one when the client abandons it: each Lost at once, counted
+    // unrouted, never sent; the plain one crosses path ID 0, and path ID 1 is refused from then on.
+    for (usize id = 12U; id < 15U; ++id)
+    {
+        REQUIRE(queue_voice(client, id, pair.net->now, pinned_to(1U)) == QuicDatagramError::None);
+    }
+    REQUIRE(queue_voice(client, 15U, pair.net->now, QuicDatagramSend{}) == QuicDatagramError::None);
+    const u64 sent = client.datagrams().counters().sent;
+    REQUIRE(client.abandon_path(1U, 0U, pair.net->now) == QuicAbandon::Abandoned);
+    CHECK(client.datagrams().counters().unrouted == 3U);
+    settle();
+    CHECK(lost == 3U);
+    CHECK(queue_voice(client, 16U, pair.net->now, pinned_to(1U)) == QuicDatagramError::NoPath);
+    const u64 queued_ns = pair.net->now;
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            settle();
+            return at_server.copies[15U] != 0U && acked[0] == 13U;
+        }));
+    CHECK(at_server.first_ns[15U] - queued_ns <= 21U * kMs);
+    CHECK(client.datagrams().counters().sent == sent + 1U);
+    CHECK(at_server.each(12U, 15U, 0U));
+    CHECK(lost == 3U);
     CHECK(client.state() == QuicConnectionState::Established);
 }

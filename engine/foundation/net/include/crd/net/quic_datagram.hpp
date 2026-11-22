@@ -23,6 +23,12 @@
 //                refuses a new datagram as Full. It is reported once: Acked at its first acknowledged copy, Lost
 //                once every copy sent was lost and none is owed. DATAGRAM frames carry no identifier, so the peer's
 //                application may receive it once per copy: it numbers its own payloads.
+//   pinned       a datagram queued pinned (QuicDatagramSend::path_id, S78's scheduling: a flow kept on one path) goes
+//                only on the slot of that path ID, open there at queue() (open_path; slot 0 holds path ID 0 until
+//                stopped), even while the slot yields its data (copies_only) or the peer marked it backup; it is never
+//                redundant. Other slots pass it by; until it goes it holds its room in the ring, as any datagram
+//                queued (max_age_ns bounds that). Its path stopping first drops it unsent (Lost with outcomes, counted
+//                unrouted): a pin is a route, and the application may queue it again unpinned.
 //   receiving    a peer's payload is copied into a byte ring the application reads in place (peek, pop); a full
 //                ring drops it and counts it (a receiver may drop datagrams, section 5). A server marks the
 //                payloads that came in 0-RTT packets: they are replayable.
@@ -76,6 +82,8 @@ struct QuicDatagramLimits
 struct QuicDatagramSend
 {
     bool redundant = false; // once on each path slot carrying data
+    bool pinned = false;    // only on path ID path_id's slot ("pinned" above)
+    u64 path_id = 0U;
 };
 
 // Which path slot writes a frame, and the path slots that carry data now (a bit each): a redundant datagram's copies
@@ -91,7 +99,9 @@ enum class QuicDatagramError : u8
 {
     None,
     NotReady,    // the peer's transport parameters have not arrived
-    Unsupported, // the peer takes no DATAGRAM frames, this side has no send ring, or redundant_count is 0
+    Unsupported, // the peer takes no DATAGRAM frames, this side has no send ring, redundant_count is 0 for a
+                 // redundant datagram, or one is both redundant and pinned
+    NoPath,      // pinned to a path ID open in no slot (not yet opened, or stopped)
     TooLarge,    // the payload is over max_payload()
     Full,        // the ring, send_count or redundant_count is full: poll reports, or wait for the queue to drain
 };
@@ -117,6 +127,7 @@ struct QuicDatagramCounters
     u64 expired = 0U;  // datagrams dropped unsent at max_age_ns
     u64 oversized = 0U; // datagrams dropped unsent when the path's size fell below them
     u64 copies = 0U;    // a redundant datagram's frames after its first
+    u64 unrouted = 0U;  // pinned datagrams dropped unsent when their path stopped
 };
 
 class QuicDatagrams
@@ -144,6 +155,12 @@ public:
     // The path's datagrams now take `udp_payload` bytes (DPLPMTUD, quic_pmtu.hpp): max_payload() follows, and a
     // queued payload over it is dropped unsent once it is the oldest (Lost with outcomes). Nothing before set_peer().
     void set_path(usize udp_payload) noexcept;
+    // Path slot `slot` now holds path ID `path_id`: queue() pins datagrams to it. Slot 0 holds path ID 0 from the
+    // start; a slot opens again only after stop_path().
+    void open_path(usize slot, u64 path_id) noexcept;
+    // The path in `slot` stopped sending: the datagrams pinned to it and not sent are dropped (Lost with outcomes,
+    // counted unrouted), and queue() refuses its path ID.
+    void stop_path(usize slot) noexcept;
 
     // A DATAGRAM frame from the peer: NoError (held, or dropped when the ring is full), or PROTOCOL_VIOLATION. `early`
     // for a frame of a 0-RTT packet: its payload is marked replayable.
@@ -194,6 +211,8 @@ public:
     [[nodiscard]] const QuicDatagramCounters& counters() const noexcept { return m_counters; }
 
 private:
+    static constexpr u8 kNoPin = 0xFFU; // an Entry's pin: none
+
     struct Entry
     {
         u64 at = 0U; // the ring position of the first byte
@@ -202,6 +221,7 @@ private:
         u32 bytes = 0U;
         u32 copy = 0U;   // a redundant datagram's record
         u8 written = 0U; // the path slots that sent it (kEverySlot: no more copies go)
+        u8 pin = kNoPin; // the path slot of a pinned datagram's path ID while it is open there
         bool redundant = false;
         bool early = false; // received in a 0-RTT packet
     };
@@ -249,14 +269,20 @@ private:
     void report(u64 id, QuicDatagramOutcome outcome) noexcept;
     [[nodiscard]] bool expired(const Entry& entry, u64 now_ns) const noexcept;
     void expire(u64 now_ns) noexcept;
-    // Whether `paths.slot` may write `entry`: one never sent, or a copy owed to it as a slot of `copies`.
+    // Whether `paths.slot` may write `entry`: one never sent and pinned to no other slot (to it alone while it yields
+    // its data), or a copy owed to it as a slot of `copies`.
     [[nodiscard]] static bool writable(const Entry& entry, const QuicDatagramPaths& paths) noexcept;
+    // Moves `slot`'s cursor past what it can never write again: a cache, so it moves in const reads too.
+    void advance(usize slot) const noexcept;
     // The ordinal of the entry write_next() writes next for `paths` at `now_ns`; end() for none.
     [[nodiscard]] u64 next_for(const QuicDatagramPaths& paths, u64 now_ns) const noexcept;
     [[nodiscard]] u64 end() const noexcept { return m_send_base + m_send.count(); }
     [[nodiscard]] Entry& entry(u64 ordinal) noexcept { return m_send.at(ordinal - m_send_base); }
     // Takes the oldest entry off the send ring; one never sent is reported `unsent` with outcomes.
     void pop_oldest(QuicDatagramOutcome unsent) noexcept;
+    // Drops an entry never sent where it stands, reported `outcome` with outcomes: it is left with nothing more to
+    // send, so pop_done() takes it off once it is the oldest.
+    void drop_unsent(Entry& entry, QuicDatagramOutcome outcome) noexcept;
     // Takes off every oldest entry with nothing more to send to `copies`.
     void pop_done(u32 copies) noexcept;
     // Whether the oldest entry was sent and owes only copies: queue() gives those up for room.
@@ -279,7 +305,10 @@ private:
     u32 m_unreported = 0U; // queued, and with outcomes in flight or reported and not polled
     u64 m_next_id = 0U;
     u64 m_send_base = 0U;              // the ordinal of the send ring's oldest entry
-    u64 m_cursors[kQuicMaxPaths] = {}; // each slot's: no entry before it is one the slot may still write
+    mutable u64 m_cursors[kQuicMaxPaths] = {}; // each slot's: no entry before it is one the slot may still write
+    u64 m_path_ids[kQuicMaxPaths] = {}; // each open slot's path ID
+    u32 m_pinned[kQuicMaxPaths] = {};   // each slot's pinned entries not yet sent
+    u8 m_open = 1U;                     // the slots holding a path ID, a bit each
     u32 m_free_copy = 0U;              // the first free Copy (redundant_count: none)
     usize m_max_payload = 0U;
     u64 m_peer_frame = 0U; // the peer's max_datagram_frame_size

@@ -888,13 +888,17 @@ TEST_CASE("QUIC datagrams: owed copies hold the queue's order until they go, and
         CHECK(datagrams.counters().oversized == 0U);
         datagrams.on_lost(first);
         reported(datagrams, 0U, QuicDatagramOutcome::Lost);
-        // One never sent behind an owed copy: the copy gives way, the datagram is dropped as Lost.
+        // One never sent behind an owed copy: dropped as Lost where it stands, the copy still owed to slot 1 until
+        // slot 1 finds it too large in turn.
         datagrams.set_path(kUdp);
         REQUIRE(put(datagrams, 1U, 600U, 0U, redundantly()) == QuicDatagramError::None);
         REQUIRE(put(datagrams, 2U, 600U, 0U) == QuicDatagramError::None);
         const u64 second = sends(datagrams, on(0U, kBoth), 0U, 1U, 600U);
         datagrams.set_path(400U + kQuicShortPacketOverhead);
         CHECK(datagrams.write_next(Span<u8>(frame, sizeof(frame)), 0U, ticket, on(0U, kBoth)) == 0U);
+        CHECK(datagrams.queued() == 2U);
+        CHECK(datagrams.counters().oversized == 1U);
+        CHECK(datagrams.write_next(Span<u8>(frame, sizeof(frame)), 0U, ticket, on(1U, kBoth, true)) == 0U);
         CHECK(datagrams.queued() == 0U);
         CHECK(datagrams.counters().oversized == 1U);
         reported(datagrams, 2U, QuicDatagramOutcome::Lost);
@@ -967,4 +971,152 @@ TEST_CASE("QUIC datagrams: on one path a redundant datagram goes once, and a rej
     datagrams.set_peer(1200U, kUdp);
     REQUIRE(put(datagrams, 3U, 16U, 0U, redundantly()) == QuicDatagramError::None);
     REQUIRE(put(datagrams, 4U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+}
+
+namespace
+{
+QuicDatagramSend pinned_to(u64 path_id)
+{
+    QuicDatagramSend how;
+    how.pinned = true;
+    how.path_id = path_id;
+    return how;
+}
+} // namespace
+
+TEST_CASE("QUIC datagrams: a pinned datagram goes only on its path ID's slot, even one yielding its data, passes no "
+          "other flow's way, and is dropped as Lost when its path stops first",
+          "[net][net-path][quic-datagram][multipath]")
+{
+    CountingAllocator allocator;
+    for (const bool outcomes : {true, false})
+    {
+        QuicDatagrams datagrams;
+        REQUIRE(datagrams.init(allocator, redundant_limits(4096U, 8U, 2U, outcomes)));
+        datagrams.set_peer(1200U, kUdp);
+        // Slot 0 holds path ID 0 from the start; path ID 5 opens in slot 1. A pin to a path ID open nowhere, and a
+        // redundant pin, are refused with nothing queued.
+        CHECK(put(datagrams, 0U, 8U, 0U, pinned_to(5U)) == QuicDatagramError::NoPath);
+        datagrams.open_path(1U, 5U);
+        QuicDatagramSend both = pinned_to(5U);
+        both.redundant = true;
+        CHECK(put(datagrams, 0U, 8U, 0U, both) == QuicDatagramError::Unsupported);
+        CHECK(datagrams.queued() == 0U);
+        REQUIRE(put(datagrams, 0U, 16U, 0U, pinned_to(5U)) == QuicDatagramError::None);
+        REQUIRE(put(datagrams, 1U, 17U, 0U) == QuicDatagramError::None);
+        REQUIRE(put(datagrams, 2U, 18U, 0U, pinned_to(0U)) == QuicDatagramError::None);
+        // Slot 0 yielding writes only its own pinned one, past slot 1's and the plain one; then the plain one.
+        const u64 third = sends(datagrams, on(0U, kBoth, true), 0U, 2U, 18U);
+        nothing(datagrams, on(0U, kBoth, true), 0U);
+        const u64 second = sends(datagrams, on(0U, kBoth), 0U, 1U, 17U);
+        nothing(datagrams, on(0U, kBoth), 0U);
+        CHECK(datagrams.queued() == 3U); // slot 1's pinned one holds the ring's head
+        // Slot 1 yielding, backup or plain: it alone writes its pinned one, once.
+        const u64 first = sends(datagrams, on(1U, kBoth, true), 0U, 0U, 16U);
+        nothing(datagrams, on(1U, kBoth), 0U);
+        CHECK(datagrams.queued() == 0U);
+        CHECK((first == 0U && second == 1U && third == 2U));
+        datagrams.on_acked(first);
+        datagrams.on_lost(second);
+        datagrams.on_acked(third);
+        if (outcomes)
+        {
+            reported(datagrams, 0U, QuicDatagramOutcome::Acked);
+            reported(datagrams, 1U, QuicDatagramOutcome::Lost);
+            reported(datagrams, 2U, QuicDatagramOutcome::Acked);
+        }
+        CHECK(datagrams.unreported() == 0U);
+
+        // Path ID 5 stops with two pinned to it waiting between plain ones: both Lost there and then, counted
+        // unrouted, and the plain ones go on slot 0 in order. Its path ID is refused from then on.
+        REQUIRE(put(datagrams, 3U, 8U, 0U, pinned_to(5U)) == QuicDatagramError::None);
+        REQUIRE(put(datagrams, 4U, 9U, 0U) == QuicDatagramError::None);
+        REQUIRE(put(datagrams, 5U, 10U, 0U, pinned_to(5U)) == QuicDatagramError::None);
+        REQUIRE(put(datagrams, 6U, 11U, 0U) == QuicDatagramError::None);
+        datagrams.stop_path(1U);
+        CHECK(datagrams.counters().unrouted == 2U);
+        CHECK(datagrams.unreported() == (outcomes ? 4U : 2U));
+        if (outcomes)
+        {
+            reported(datagrams, 3U, QuicDatagramOutcome::Lost);
+            reported(datagrams, 5U, QuicDatagramOutcome::Lost);
+        }
+        CHECK(put(datagrams, 7U, 8U, 0U, pinned_to(5U)) == QuicDatagramError::NoPath);
+        nothing(datagrams, on(1U, 0x1U, true), 0U);
+        const u64 fourth = sends(datagrams, on(0U, 0x1U), 0U, 4U, 9U);
+        const u64 sixth = sends(datagrams, on(0U, 0x1U), 0U, 6U, 11U);
+        CHECK(datagrams.queued() == 0U);
+        datagrams.on_acked(fourth);
+        datagrams.on_acked(sixth);
+        if (outcomes)
+        {
+            reported(datagrams, 4U, QuicDatagramOutcome::Acked);
+            reported(datagrams, 6U, QuicDatagramOutcome::Acked);
+        }
+        CHECK(datagrams.unreported() == 0U);
+
+        // The slot reused under path ID 6: a pin to 6 goes there, one to 5 stays refused.
+        datagrams.open_path(1U, 6U);
+        CHECK(put(datagrams, 7U, 8U, 0U, pinned_to(5U)) == QuicDatagramError::NoPath);
+        REQUIRE(put(datagrams, 7U, 12U, 0U, pinned_to(6U)) == QuicDatagramError::None);
+        nothing(datagrams, on(0U, kBoth), 0U);
+        datagrams.on_acked(sends(datagrams, on(1U, kBoth, true), 0U, 7U, 12U));
+        if (outcomes)
+        {
+            reported(datagrams, 7U, QuicDatagramOutcome::Acked);
+        }
+        CHECK(datagrams.unreported() == 0U);
+        CHECK(datagrams.counters().unrouted == 2U);
+    }
+}
+
+TEST_CASE("QUIC datagrams: a datagram grown too large is dropped where it stands, a pinned one before it waiting on "
+          "unexpired, and a pinned one expires and is rejected with 0-RTT as any",
+          "[net][net-path][quic-datagram][multipath]")
+{
+    CountingAllocator allocator;
+    QuicDatagramLimits l = limits(8192U, 8U, true);
+    l.max_age_ns = 10U * kMs;
+    QuicDatagrams datagrams;
+    REQUIRE(datagrams.init(allocator, l));
+    datagrams.set_peer(kQuicMaxDatagramFrame, 1500U);
+    const usize grown = datagrams.max_payload();
+    datagrams.open_path(1U, 1U);
+    REQUIRE(put(datagrams, 0U, 20U, 0U, pinned_to(1U)) == QuicDatagramError::None);
+    u8 large[1500] = {};
+    u64 id = 0U;
+    REQUIRE(datagrams.queue(ConstSpan<u8>(large, grown), 0U, id) == QuicDatagramError::None);
+    CHECK(id == 1U);
+    REQUIRE(put(datagrams, 2U, 21U, 0U) == QuicDatagramError::None);
+    datagrams.set_path(kUdp);
+    // Slot 0 drops the plain one too large for the path, then writes the next; slot 1's pinned one is not touched.
+    const u64 third = sends(datagrams, on(0U, 0x3U), 1U, 2U, 21U);
+    CHECK(datagrams.counters().oversized == 1U);
+    CHECK(datagrams.counters().expired == 0U);
+    reported(datagrams, 1U, QuicDatagramOutcome::Lost);
+    const u64 first = sends(datagrams, on(1U, 0x3U), 1U, 0U, 20U);
+    CHECK(datagrams.queued() == 0U);
+    datagrams.on_acked(first);
+    datagrams.on_acked(third);
+    reported(datagrams, 0U, QuicDatagramOutcome::Acked);
+    reported(datagrams, 2U, QuicDatagramOutcome::Acked);
+
+    // A pinned one past max_age_ns: Expired unsent, and its slot sees nothing more.
+    REQUIRE(put(datagrams, 3U, 8U, 20U * kMs, pinned_to(1U)) == QuicDatagramError::None);
+    nothing(datagrams, on(1U, 0x3U, true), 31U * kMs);
+    reported(datagrams, 3U, QuicDatagramOutcome::Expired);
+    CHECK(datagrams.counters().expired == 1U);
+
+    // Rejected 0-RTT: a pinned one is Lost as any, and after it a yielding slot with no pins writes nothing.
+    REQUIRE(put(datagrams, 4U, 8U, 40U * kMs, pinned_to(1U)) == QuicDatagramError::None);
+    REQUIRE(put(datagrams, 5U, 8U, 40U * kMs) == QuicDatagramError::None);
+    datagrams.reject_early();
+    reported(datagrams, 4U, QuicDatagramOutcome::Lost);
+    reported(datagrams, 5U, QuicDatagramOutcome::Lost);
+    datagrams.set_peer(kQuicMaxDatagramFrame, kUdp);
+    REQUIRE(put(datagrams, 6U, 8U, 40U * kMs) == QuicDatagramError::None);
+    nothing(datagrams, on(1U, 0x3U, true), 40U * kMs);
+    datagrams.on_acked(sends(datagrams, on(1U, 0x3U), 40U * kMs, 6U, 8U));
+    reported(datagrams, 6U, QuicDatagramOutcome::Acked);
+    CHECK(datagrams.unreported() == 0U);
 }

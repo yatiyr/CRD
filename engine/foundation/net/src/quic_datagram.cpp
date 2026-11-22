@@ -76,6 +76,7 @@ bool QuicDatagrams::Ring::push(cont::ConstSpan<u8> payload, u64 id, u64 now_ns, 
     entry.queued_ns = now_ns;
     entry.bytes = static_cast<u32>(payload.size());
     entry.written = 0U;
+    entry.pin = kNoPin;
     entry.redundant = false;
     entry.early = early;
     m_tail = at + payload.size();
@@ -193,6 +194,33 @@ void QuicDatagrams::set_path(usize udp_payload) noexcept
     m_sendable = true;
 }
 
+void QuicDatagrams::open_path(usize slot, u64 path_id) noexcept
+{
+    if (slot < kQuicMaxPaths)
+    {
+        m_path_ids[slot] = path_id;
+        m_open = static_cast<u8>(m_open | (1U << slot));
+    }
+}
+
+void QuicDatagrams::stop_path(usize slot) noexcept
+{
+    if (slot >= kQuicMaxPaths)
+    {
+        return;
+    }
+    m_open = static_cast<u8>(m_open & ~(1U << slot));
+    for (u64 at = m_send_base; m_pinned[slot] != 0U && at < end(); ++at)
+    {
+        Entry& held = entry(at);
+        if (held.written == 0U && held.pin == slot)
+        {
+            ++m_counters.unrouted;
+            drop_unsent(held, QuicDatagramOutcome::Lost);
+        }
+    }
+}
+
 // ---- Receiving ----
 
 QuicTransportError QuicDatagrams::on_frame(const QuicFrame& frame, bool early) noexcept
@@ -244,9 +272,18 @@ QuicDatagramError QuicDatagrams::queue(cont::ConstSpan<u8> payload, u64 now_ns, 
     {
         return QuicDatagramError::NotReady;
     }
-    if (!m_sendable || (how.redundant && m_limits.redundant_count == 0U))
+    if (!m_sendable || (how.redundant && (m_limits.redundant_count == 0U || how.pinned)))
     {
         return QuicDatagramError::Unsupported;
+    }
+    u8 pin = kNoPin;
+    for (usize slot = 0U; how.pinned && pin == kNoPin && slot < kQuicMaxPaths; ++slot)
+    {
+        pin = ((m_open & (1U << slot)) != 0U && m_path_ids[slot] == how.path_id) ? static_cast<u8>(slot) : kNoPin;
+    }
+    if (how.pinned && pin == kNoPin)
+    {
+        return QuicDatagramError::NoPath;
     }
     if (payload.size() > m_max_payload)
     {
@@ -274,6 +311,11 @@ QuicDatagramError QuicDatagrams::queue(cont::ConstSpan<u8> payload, u64 now_ns, 
             return QuicDatagramError::Full;
         }
     }
+    if (pin != kNoPin)
+    {
+        entry(end() - 1U).pin = pin;
+        ++m_pinned[pin];
+    }
     if (how.redundant)
     {
         const u32 copy = m_free_copy;
@@ -299,20 +341,43 @@ bool QuicDatagrams::expired(const Entry& entry, u64 now_ns) const noexcept
 
 bool QuicDatagrams::writable(const Entry& entry, const QuicDatagramPaths& paths) noexcept
 {
+    if (entry.written == 0U)
+    {
+        return (entry.pin == kNoPin) ? !paths.copies_only : entry.pin == paths.slot;
+    }
     const u32 bit = 1U << paths.slot;
-    return entry.written == 0U || (entry.redundant && (entry.written & bit) == 0U && (paths.copies & bit) != 0U);
+    return entry.redundant && (entry.written & bit) == 0U && (paths.copies & bit) != 0U;
+}
+
+void QuicDatagrams::advance(usize slot) const noexcept
+{
+    // Past every entry the slot can never write again: sent by it, sent once and owing no copies, or pinned to
+    // another slot (which stop_path() drops rather than unpins).
+    const u32 bit = 1U << slot;
+    u64& cursor = m_cursors[slot];
+    cursor = (cursor > m_send_base) ? cursor : m_send_base;
+    for (; cursor < end(); ++cursor)
+    {
+        const Entry& passed = m_send.at(cursor - m_send_base);
+        const bool open = (passed.written == 0U) ? (passed.pin == kNoPin || passed.pin == slot)
+                                                 : (passed.redundant && (passed.written & bit) == 0U);
+        if (open)
+        {
+            return;
+        }
+    }
 }
 
 u64 QuicDatagrams::next_for(const QuicDatagramPaths& paths, u64 now_ns) const noexcept
 {
+    advance(paths.slot);
     const u64 last = end();
-    const u64 cursor = m_cursors[paths.slot];
-    for (u64 at = (cursor > m_send_base) ? cursor : m_send_base; at < last; ++at)
+    for (u64 at = m_cursors[paths.slot]; at < last; ++at)
     {
         const Entry& next = m_send.at(at - m_send_base);
-        if (next.written == 0U && paths.copies_only)
+        if (next.written == 0U && next.pin == kNoPin && paths.copies_only && m_pinned[paths.slot] == 0U)
         {
-            return last; // what was sent is a prefix: nothing after it was sent either
+            return last; // what was sent is a prefix of the datagrams pinned to none: nothing after it owes a copy
         }
         if (writable(next, paths) && !expired(next, now_ns))
         {
@@ -343,6 +408,10 @@ void QuicDatagrams::pop_oldest(QuicDatagramOutcome unsent) noexcept
     const bool sent = oldest.written != 0U;
     const bool redundant = oldest.redundant;
     const u32 copy = oldest.copy;
+    if (!sent && oldest.pin != kNoPin)
+    {
+        --m_pinned[oldest.pin];
+    }
     m_send.pop();
     ++m_send_base;
     if (!sent && m_limits.outcomes)
@@ -375,6 +444,27 @@ void QuicDatagrams::pop_done(u32 copies) noexcept
     }
 }
 
+void QuicDatagrams::drop_unsent(Entry& entry, QuicDatagramOutcome outcome) noexcept
+{
+    if (entry.pin != kNoPin)
+    {
+        --m_pinned[entry.pin];
+    }
+    entry.written = kEverySlot;
+    if (m_limits.outcomes)
+    {
+        report(entry.id, outcome);
+    }
+    else if (!entry.redundant)
+    {
+        --m_unreported; // a redundant one counts until it leaves the ring, as pop_oldest() finds it sent
+    }
+    if (entry.redundant)
+    {
+        m_copies[entry.copy].settled = true; // reported here: its record is freed as it leaves the ring
+    }
+}
+
 bool QuicDatagrams::give_up_copies() noexcept
 {
     if (m_send.count() == 0U || m_send.front().written == 0U)
@@ -401,20 +491,18 @@ usize QuicDatagrams::write_next(cont::Span<u8> out, u64 now_ns, u64& ticket, con
         if (next.bytes > m_max_payload)
         {
             // Queued before the path's size fell: it fits no packet now. A copy is skipped on this slot; a datagram
-            // never sent is dropped, the copies owed before it (and any expired) giving way first.
+            // never sent is dropped where it stands, so what waits before it (pinned elsewhere, or owing copies) waits
+            // on.
             if (next.written != 0U)
             {
                 next.written = static_cast<u8>(next.written | bit);
-                pop_done(paths.copies);
-                continue;
             }
-            while (m_send_base != at)
+            else
             {
-                m_counters.expired += (m_send.front().written == 0U) ? 1U : 0U; // only an expired one is skipped
-                pop_oldest(QuicDatagramOutcome::Expired);
+                ++m_counters.oversized;
+                drop_unsent(next, QuicDatagramOutcome::Lost);
             }
-            ++m_counters.oversized;
-            pop_oldest(QuicDatagramOutcome::Lost);
+            pop_done(paths.copies);
             continue;
         }
         QuicFrame frame;
@@ -426,6 +514,10 @@ usize QuicDatagrams::write_next(cont::Span<u8> out, u64 now_ns, u64& ticket, con
             return 0U;
         }
         m_counters.copies += (next.written != 0U) ? 1U : 0U;
+        if (next.written == 0U && next.pin != kNoPin)
+        {
+            --m_pinned[next.pin];
+        }
         next.written = static_cast<u8>(next.written | bit);
         if (next.redundant)
         {
@@ -438,17 +530,6 @@ usize QuicDatagrams::write_next(cont::Span<u8> out, u64 now_ns, u64& ticket, con
             m_unreported -= m_limits.outcomes ? 0U : 1U;
         }
         ++m_counters.sent;
-        // Past every entry this slot can never write again: sent by it, or sent once and owing no copies.
-        u64& cursor = m_cursors[paths.slot];
-        cursor = (cursor > m_send_base) ? cursor : m_send_base;
-        for (; cursor < end(); ++cursor)
-        {
-            const Entry& passed = entry(cursor);
-            if (passed.written == 0U || (passed.redundant && (passed.written & bit) == 0U))
-            {
-                break;
-            }
-        }
         pop_done(paths.copies);
         return bytes;
     }

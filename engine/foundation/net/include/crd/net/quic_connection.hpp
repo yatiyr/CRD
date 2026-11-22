@@ -182,8 +182,9 @@ struct QuicKeyedStart
 // Which open path carries the next data (S78's scheduling; RFC 10069 section 5.5 leaves it to the implementation).
 // Under either choice a peer's backup path carries none while one of its other paths is usable (section 3.3), and a
 // path with a probe timeout pending none while another has fewer (section 5.7). Acknowledgements, path frames and
-// probes go on their own path whatever the choice, and a redundant datagram (QuicDatagramSend) once on every path
-// that carries data, each copy inside its own path's window and pacer.
+// probes go on their own path whatever the choice, a redundant datagram (QuicDatagramSend) once on every path that
+// carries data, each copy inside its own path's window and pacer, and a pinned one on its own path alone, inside that
+// path's window and pacer even while it yields its data or is a backup path.
 enum class QuicPathChoice : u8
 {
     LowestRtt, // the path with the lowest smoothed RTT whose window and pacer let a datagram go now, the next one
