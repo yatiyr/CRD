@@ -65,11 +65,12 @@ def verify(path, expected, label):
 
 
 # A transfer that fails in the network (a stalled read, a reset or refused connection, a truncated body, a server-side
-# HTTP status, a 403 that says it throttles) is tried again after these waits in seconds; any other client-side HTTP status
-# and a checksum mismatch never are.
+# HTTP status, a 403 that says it throttles) is tried again after these waits in seconds; any other client-side HTTP
+# status and a checksum mismatch never are.
 # The last two outlast a release host's gateway outage: on 2026-11-08 GitHub answered 504 for over a minute and every
 # job of two runs lost its tools to it.
 RETRY_WAITS = (5, 15, 45, 120, 300)
+THROTTLE_HEADERS = ('Retry-After', 'X-RateLimit-Remaining')
 
 
 def transient(error):
@@ -78,7 +79,7 @@ def transient(error):
         # (seen 2026-11-22: a release download's 403 failed one job of a run whose siblings fetched the same file).
         headers = error.headers or {}
         throttled = error.code == 403 and (
-            headers.get('Retry-After') is not None or headers.get('X-RateLimit-Remaining') == '0')
+            headers.get(THROTTLE_HEADERS[0]) is not None or headers.get(THROTTLE_HEADERS[1]) == '0')
         return error.code >= 500 or error.code in (408, 429) or throttled
     return isinstance(error, (TimeoutError, ConnectionError, http.client.HTTPException, urllib.error.URLError))
 
@@ -97,7 +98,9 @@ def download(url, destination, expected, label, sleep=time.sleep):
         except (OSError, http.client.HTTPException) as error:
             partial.unlink(missing_ok=True)
             if attempt == len(RETRY_WAITS) or not transient(error):
-                print(f'{label}: download of {url} failed ({error!r})', file=sys.stderr)
+                headers = getattr(error, 'headers', None) or {}
+                throttle = ', '.join(f'{name}: {headers.get(name)}' for name in THROTTLE_HEADERS)
+                print(f'{label}: download of {url} failed ({error!r}; {throttle})', file=sys.stderr)
                 raise
             print(f'{label}: download attempt {attempt + 1} failed ({error!r}); retrying in {RETRY_WAITS[attempt]} s',
                   file=sys.stderr)

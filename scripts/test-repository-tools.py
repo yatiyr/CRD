@@ -1612,6 +1612,7 @@ class PinnedInputs(unittest.TestCase):
                     with self.assertRaises(urllib.error.HTTPError):
                         pins_registry.download(url, target, digest, 'a', sleep=waits.append)
                 self.assertIn(url, log.getvalue())
+                self.assertIn('Retry-After: None, X-RateLimit-Remaining: None', log.getvalue())
             self.assertEqual(waits, [])
             stalls = [TimeoutError('read timed out')] * (len(pins_registry.RETRY_WAITS) + 1)
             with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=stalls), \
