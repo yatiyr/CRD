@@ -122,6 +122,32 @@ TEST_CASE("QUIC paths: challenges are due at once, again after the probe period 
     CHECK_FALSE(paths.validated(b));
 }
 
+// A deadline is never kNeverNs, which marks no validation underway: the sum, saturated one short of it.
+static_assert(quic_validation_deadline(100U, 50U) == 150U);
+static_assert(quic_validation_deadline(kNeverNs - 51U, 50U) == kNeverNs - 1U);
+static_assert(quic_validation_deadline(kNeverNs - 50U, 50U) == kNeverNs - 1U);
+static_assert(quic_validation_deadline(kNeverNs - 1U, 0U) == kNeverNs - 1U);
+static_assert(quic_validation_deadline(5U, kNeverNs) == kNeverNs - 1U);
+
+TEST_CASE("QUIC paths: a validation whose timeout saturates still runs, its challenge due, and expires never",
+          "[net][net-path][quic-path]")
+{
+    QuicPaths paths;
+    paths.open(at(1, 1000), true, 0U);
+    const usize b = paths.admit(at(2, 1000), 0U);
+    paths.validate(b, 100U * kMs, kNeverNs);
+    CHECK(paths.validating(b));
+    CHECK(paths.challenge_due(b, 100U * kMs));
+    CHECK(paths.deadline_ns(b) == kNeverNs - 1U);
+    CHECK(paths.expired(kNeverNs - 2U) == kQuicNoPath);
+    const u8 data[kQuicPathDataBytes] = {7U};
+    paths.challenge_sent(b, ConstSpan<u8>(data), true, 100U * kMs, 300U * kMs);
+    usize index = kQuicNoPath;
+    CHECK(paths.on_response(ConstSpan<u8>(data), index) == QuicPathResponse::Validated);
+    CHECK(index == b);
+    CHECK(paths.validated(b));
+}
+
 TEST_CASE("QUIC paths: a response to any of a path's last challenges validates it from whatever path it came, others "
           "are ignored",
           "[net][net-path][quic-path]")

@@ -6987,10 +6987,10 @@ TEST_CASE("QUIC connection: a peer's validations of addresses it chose are paced
 {
     // RFC 10069 section 7.2: a peer can make the server challenge an address of its choosing on each 4-tuple of each
     // path ID at once. Path IDs 1 and 2 open from two addresses, path ID 0 is probed from a third three times and
-    // rebinds to a fourth: four turns, the old address's check (section 9.3.3) and path ID 3 opening on that
-    // validated address taking none. A second rebinding's
-    // validation waits for the earliest turn to end, then runs its own full timeout and validates. Nothing is
-    // acknowledged and the clock stands still until then, so every timeout is the same.
+    // rebinds to a fourth: four turns, path ID 1's held though answered, while the old address's check (section
+    // 9.3.3) and path ID 3 opening on that validated address take none. A second rebinding's validation waits for
+    // the earliest turn to end, then runs its own full timeout and validates. Nothing is acknowledged, so every
+    // timeout is the same.
     Identity identity;
     CountingAllocator host_allocator;
     Host host(host_allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
@@ -7006,6 +7006,11 @@ TEST_CASE("QUIC connection: a peer's validations of addresses it chose are paced
     CHECK(challenges_on(run, first) == 1U);
     const u64 turn_end = validation_deadline(run, 1U, first);
     const u64 timeout = turn_end - start;
+    // Path ID 1's address is answered at once, yet its turn stays held to turn_end; the others start 1 ms later, so
+    // the deferred start below is the only timer then.
+    validate_path_one(run, first);
+    run.now += kMs;
+    const u64 later_end = turn_end + kMs;
     const QuicPath second = client_at(10U, 40000U);
     REQUIRE(run.raw.protection.open_path(2U, 2U));
     run.raw.path_slot = 2U;
@@ -7021,7 +7026,7 @@ TEST_CASE("QUIC connection: a peer's validations of addresses it chose are paced
     run.raw.path_slot = 1U;
     REQUIRE(run.server.counters().paths_opened == 2U);
     REQUIRE(run.server.protection().path_id(2U) == 2U);
-    CHECK(validation_deadline(run, 2U, second) == turn_end); // started at once (the raw client reads path ID 2 not)
+    CHECK(validation_deadline(run, 2U, second) == later_end); // at once (the raw client reads path ID 2 not)
     CHECK(bytes_to(run, second) != 0U);
     run.pad_to = kQuicMinInitialDatagram;
     const QuicPath probe = client_at(11U, 40000U);
@@ -7032,17 +7037,17 @@ TEST_CASE("QUIC connection: a peer's validations of addresses it chose are paced
     }
     CHECK(run.server.path() == home);
     CHECK(challenges_on(run, probe) == 1U);
-    CHECK(validation_deadline(run, 0U, probe) == turn_end);
-    CHECK(validations_underway(run, timeout) == 3U);
+    CHECK(validation_deadline(run, 0U, probe) == later_end);
+    CHECK(validations_underway(run, timeout) == 2U);
     const usize home_checks = challenges_on(run, home);
     const QuicPath rebound = client_at(12U, 40000U);
     run.from = rebound;
     send_frame(run, QuicFrameKind::Ping);
     REQUIRE(run.server.path() == rebound);
     CHECK(challenges_on(run, rebound) == 1U);
-    CHECK(validation_deadline(run, 0U, rebound) == turn_end);
+    CHECK(validation_deadline(run, 0U, rebound) == later_end);
     CHECK(challenges_on(run, home) == home_checks + 1U); // the validated address's check, at once
-    CHECK(validations_underway(run, timeout) == kQuicMaxPaths);
+    CHECK(validations_underway(run, timeout) == kQuicMaxPaths - 1U); // and path ID 1's answered turn
     // Path ID 3 opens on path ID 0's validated 4-tuple (section 5.2): its own validation waits for no turn either.
     announce_path(run, 3U, ConstSpan<u8>(kClientPathThreeCid, sizeof(kClientPathThreeCid)));
     REQUIRE(run.raw.protection.open_path(3U, 3U));
@@ -7059,9 +7064,9 @@ TEST_CASE("QUIC connection: a peer's validations of addresses it chose are paced
     run.raw.path_slot = 1U;
     REQUIRE(run.server.counters().paths_opened == 3U);
     REQUIRE(run.server.protection().path_id(3U) == 3U);
-    CHECK(validation_deadline(run, 3U, home) == turn_end);
+    CHECK(validation_deadline(run, 3U, home) == later_end);
     CHECK(bytes_to(run, home) > home_bytes);
-    CHECK(validations_underway(run, timeout) == kQuicMaxPaths);
+    CHECK(validations_underway(run, timeout) == kQuicMaxPaths - 1U);
     // Every turn is held: the next address waits for the earliest to end, its deadline a full timeout after that.
     const QuicPath late = client_at(13U, 40000U);
     run.from = late;
@@ -7074,7 +7079,7 @@ TEST_CASE("QUIC connection: a peer's validations of addresses it chose are paced
     REQUIRE(paths.validating(waiting));
     CHECK(paths.due_ns(waiting) == turn_end);
     CHECK(paths.deadline_ns(waiting) == turn_end + timeout);
-    CHECK(validations_underway(run, timeout) == kQuicMaxPaths - 1U); // the rebinding's turn is held, its path gone
+    CHECK(validations_underway(run, timeout) == kQuicMaxPaths - 2U); // the rebinding's turn is held, its path gone
     for (usize guard = 0U; guard < 512U && challenges_on(run, late) == 0U; ++guard)
     {
         const u64 next = run.server.next_timer_ns();
