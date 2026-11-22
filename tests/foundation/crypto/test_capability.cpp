@@ -3,6 +3,7 @@
 // generations and a policy snapshot, every refusal in the contract's order, with the provider's real signatures; and
 // the message schemas the issuers sign (S18): their codec, verification order, operation verdicts and early data on a
 // resumed TLS session bound to the schema's digest.
+#include "pinned_wall_clock.hpp"
 #include "policy_test_signer.hpp"
 
 #include <crd/containers/array.hpp>
@@ -15,7 +16,6 @@
 
 #include <atomic>
 #include <cstring>
-#include <ctime>
 #include <memory>
 #include <thread>
 
@@ -1371,7 +1371,7 @@ struct EarlyLink
         REQUIRE(server_credential.init(server_key, "game.cerid.test") == TlsError::None);
         REQUIRE(client_credential.init(world.holder, "player.cerid.test") == TlsError::None);
         REQUIRE(filter.init(64U, kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew,
-                            static_cast<u64>(std::time(nullptr))) == CryptoError::None);
+                            crd::crypto::test::kPinnedUnixSeconds) == CryptoError::None);
         const KeyId server_pin = server_credential.key_id();
         const KeyId client_pin = client_credential.key_id();
         TlsConfig   client_config;
@@ -1431,6 +1431,8 @@ struct EarlyLink
         REQUIRE(client.read(Span<u8>(&byte, 1U), written) == TlsError::None); // takes in the server's ticket
     }
 
+    // First: the replay filter and the ticket read it, on one clock that a host step cannot move.
+    crd::crypto::test::PinnedWallClock clock;
     SigningKey    server_key;
     TlsCredential server_credential;
     TlsCredential client_credential;

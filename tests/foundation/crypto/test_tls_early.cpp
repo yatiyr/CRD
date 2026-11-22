@@ -22,6 +22,7 @@
 #include <crd/crypto/replay.hpp>
 #include <crd/crypto/tls.hpp>
 
+#include "pinned_wall_clock.hpp"
 #include "tls_key_log.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -31,7 +32,6 @@
 #include <atomic>
 #include <cstring>
 #include <iterator>
-#include <ctime>
 #include <initializer_list>
 #include <thread>
 
@@ -87,9 +87,11 @@ constexpr u8 kOtherSchema[]   = {0x5CU, 0x11U, 0xE7U, 0x02U, 0x9AU, 0x43U, 0x0DU
 // A filter whose period is exactly what a context with the default ticket lifetime needs.
 constexpr u64 kPeriod = kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew;
 
+// The pinned clock's second (each case pins it first): a host clock that steps between a ticket and its offer (WSL's
+// time sync does, about every 31 s) would otherwise have the provider drop the ticket as one from the future.
 u64 now()
 {
-    return static_cast<u64>(std::time(nullptr));
+    return crd::crypto::test::kPinnedUnixSeconds;
 }
 
 void make_key(SigningKey& key, AlgorithmId algorithm, u8 salt)
@@ -440,6 +442,7 @@ TEST_CASE("TLS 0-RTT: a resumed client's early data reaches its server once, thr
           "1-RTT data",
           "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
     Pair pair;
@@ -534,6 +537,7 @@ TEST_CASE("TLS 0-RTT: a resumed client's early data reaches its server once, thr
 TEST_CASE("TLS 0-RTT: a stream protocol's parameters reach its tickets, before or after them",
           "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
     Pair pair;
@@ -640,6 +644,7 @@ TEST_CASE("TLS 0-RTT: a stream protocol's parameters reach its tickets, before o
 
 TEST_CASE("TLS 0-RTT: a server that accepted early data answers it at 0.5-RTT", "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
     Pair pair;
@@ -690,6 +695,7 @@ TEST_CASE("TLS 0-RTT: a replayed first flight gets no early data from the server
           "the fleet accepts it",
           "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     ReplayFilter other_filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
@@ -745,6 +751,7 @@ TEST_CASE("TLS 0-RTT: a ticket offered twice resumes nothing the second time; th
           "its next ticket allows early data",
           "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
     Pair pair;
@@ -798,6 +805,7 @@ TEST_CASE("TLS 0-RTT: a ticket offered twice resumes nothing the second time; th
 TEST_CASE("TLS 0-RTT: the provider refuses early data whose ticket age is more than a minute off",
           "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
     Pair pair;
@@ -862,6 +870,7 @@ TEST_CASE("TLS 0-RTT: a HelloRetryRequest, another application protocol and a se
           "and the client sends again",
           "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     // The client shares X25519MLKEM768 and X25519; the server prefers SecP384r1MLKEM1024, so every hello is retried.
     constexpr AlgorithmId client_groups[] = {AlgorithmId::X25519Mlkem768, AlgorithmId::X25519,
                                              AlgorithmId::Secp384r1Mlkem1024};
@@ -933,6 +942,7 @@ TEST_CASE("TLS 0-RTT: a HelloRetryRequest, another application protocol and a se
 TEST_CASE("TLS 0-RTT: early data stays off unless both ends configure it, and a ticket states what it allows",
           "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
     for (const bool client_early : {false, true})
@@ -971,6 +981,7 @@ TEST_CASE("TLS 0-RTT: early data stays off unless both ends configure it, and a 
 
 TEST_CASE("TLS 0-RTT: a ticket's allowance is exact, whole messages or nothing", "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
     Pair pair;
@@ -1006,6 +1017,7 @@ TEST_CASE("TLS 0-RTT: a ticket's allowance is exact, whole messages or nothing",
 TEST_CASE("TLS 0-RTT: under mutual authentication the server knows its client's key before the first early byte",
           "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
     Pair pair;
@@ -1034,6 +1046,7 @@ TEST_CASE("TLS 0-RTT: a ticket sealed under another early data context resumes w
           "no filter entry",
           "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
     Pair pair;
@@ -1101,6 +1114,7 @@ TEST_CASE("TLS 0-RTT: a ticket sealed under another early data context resumes w
 TEST_CASE("TLS 0-RTT: an early data context only where early data is accepted, within its bound",
           "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(16U, kPeriod, now()) == CryptoError::None);
     Pair pair;
@@ -1133,6 +1147,7 @@ TEST_CASE("TLS 0-RTT: an early data context only where early data is accepted, w
 TEST_CASE("TLS 0-RTT: early bytes changed on the way fail the session with bad_record_mac",
           "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
     Pair pair;
@@ -1165,6 +1180,7 @@ TEST_CASE("TLS 0-RTT: early bytes changed on the way fail the session with bad_r
 
 TEST_CASE("TLS 0-RTT: configurations without a fit filter are refused", "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     SigningKey key;
     TlsCredential credential;
     make_key(key, AlgorithmId::Ed25519, 0U);
@@ -1229,6 +1245,7 @@ TEST_CASE("TLS 0-RTT: configurations without a fit filter are refused", "[crypto
 
 TEST_CASE("TLS 0-RTT: one server context and filter serve early data on several threads", "[crypto][tls][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(4096U, kPeriod, now()) == CryptoError::None);
     Pair pair;
@@ -1414,6 +1431,7 @@ void quic_first(QuicPair& quic, Store& store, ConstSpan<u8> context)
 TEST_CASE("QUIC 0-RTT: the client's early keys meet the server's, with the transport parameters it remembered",
           "[crypto][quic-handshake][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
     for (const QuicVersion version : {QuicVersion::V1, QuicVersion::V2})
@@ -1467,6 +1485,7 @@ TEST_CASE("QUIC 0-RTT: another early data context, a HelloRetryRequest or a repl
           "client's early keys go",
           "[crypto][quic-handshake][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
 
@@ -1549,6 +1568,7 @@ TEST_CASE("QUIC 0-RTT: another early data context, a HelloRetryRequest or a repl
 TEST_CASE("QUIC 0-RTT: an early data context only where early data is accepted, within its bound",
           "[crypto][quic-handshake][early][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     ReplayFilter filter;
     REQUIRE(filter.init(16U, kPeriod, now()) == CryptoError::None);
     QuicPair quic;
@@ -1580,6 +1600,7 @@ TEST_CASE("QUIC 0-RTT: an early data context only where early data is accepted, 
 TEST_CASE("TLS 0-RTT: the client logs its early traffic secret, and a server logs it only when it accepts early data",
           "[crypto][tls][early][key-log][net-2]")
 {
+    crd::crypto::test::PinnedWallClock clock; // first: the tickets and the replay filter read it
     if (!tls_key_log_compiled())
     {
         SKIP("key logging is compiled out of this build");

@@ -78,6 +78,7 @@ target_link_libraries(crd-net-tests PRIVATE
     crd-crypto
     crd-net
     crd-net-quantized
+    crd-time # WallClock::pin: the QUIC and QMux fixtures' tickets on a pinned clock (quic_connection_fixture.hpp)
     Catch2::Catch2WithMain
 )
 

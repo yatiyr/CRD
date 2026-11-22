@@ -14,9 +14,10 @@
 #include <crd/net/quic_connection.hpp>
 #include <crd/net/quic_header.hpp>
 
+#include "../crypto/pinned_wall_clock.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
-#include <ctime>
 
 namespace crd::net::testing
 {
@@ -211,14 +212,16 @@ private:
 // The window a ticket can be presented in: what the early data replay filter covers.
 inline constexpr u64 kTicketPeriod = crypto::kTlsDefaultTicketLifetime + crypto::kTlsMaxTicketAgeSkew;
 
-// A replay filter ready before the contexts that hold it are built.
+// A replay filter ready before the contexts that hold it are built, on the pinned wall clock for as long as it lives:
+// the tickets its servers issue and their clients offer then age on one clock that a host step cannot move.
 struct ReadyFilter
 {
+    crypto::test::PinnedWallClock clock; // first: the filter and every ticket read it
     crypto::ReplayFilter filter;
 
     ReadyFilter()
     {
-        REQUIRE(filter.init(1024U, kTicketPeriod, static_cast<u64>(std::time(nullptr))) == crypto::CryptoError::None);
+        REQUIRE(filter.init(1024U, kTicketPeriod, crypto::test::kPinnedUnixSeconds) == crypto::CryptoError::None);
     }
 };
 
