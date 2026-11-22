@@ -1844,6 +1844,27 @@ bool QuicConnection::carries_data(usize slot, usize index) const noexcept
            (m_config.side == crypto::QuicSide::Server ? paths.validated(index) : paths.proven(index));
 }
 
+bool QuicConnection::fresher_path(usize slot, u32 timeouts) const noexcept
+{
+    for (usize other = 0U; other < kQuicMaxPaths; ++other)
+    {
+        if (other != slot && m_controls[other] != nullptr && m_protection.path_open(other) && addressed(other) &&
+            carries_data(other, tuples(other).active()) && m_recovery->pto_count(other) < timeouts)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool QuicConnection::held_dark(usize slot) const noexcept
+{
+    // Ranked, not live or not: a path dark for long stays held while the path carrying its data takes a timeout of
+    // its own, and the path with the fewest timeouts pending sends as RFC 9002's single path does.
+    const u32 timeouts = m_recovery->pto_count(slot);
+    return timeouts != 0U && fresher_path(slot, timeouts);
+}
+
 usize QuicConnection::amplification_credit(usize slot) const noexcept
 {
     const QuicPaths& paths = tuples(slot);
@@ -1915,7 +1936,7 @@ bool QuicConnection::data_allowed(QuicSpace space) const noexcept
     // behind it would wedge both ends. Its size is bounded by the crypto buffers and, on a server, by the
     // amplification limit; it still counts in bytes in flight.
     const usize slot = send_slot();
-    return (space != QuicSpace::Application || (m_data_open && carries_data(slot, m_send_path))) &&
+    return (space != QuicSpace::Application || (m_data_open && carries_data(slot, m_send_path) && !held_dark(slot))) &&
            m_recovery->can_send_data(space, (space == QuicSpace::Application) ? slot : 0U);
 }
 
@@ -1948,11 +1969,13 @@ void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
     QuicPathControl& path = control(slot);
     path.disarm_pace();
     m_probe_fill = false;
-    bool probing = false;
-    for (const Numbering& numbers : m_numbers)
+    // This slot's own probes alone: another path's owed probe opens neither this window nor this pacer.
+    const auto owes = [&](QuicSpace space)
     {
-        probing = probing || numbers.probes > 0U;
-    }
+        return m_numbers[number_space(space, slot)].probes > 0U;
+    };
+    const bool probing = owes(QuicSpace::Application) ||
+                         (handshake_slot(slot) && (owes(QuicSpace::Initial) || owes(QuicSpace::Handshake)));
     if (probing)
     {
         m_data_open = true; // RFC 9002 section 7.5: probes are not held by the window or the pacer
@@ -2064,112 +2087,137 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
             {
                 break;
             }
-            if (frame.kind == kRecordCrypto)
-            {
-                QuicSendBuffer& out = m_levels[frame.space].out;
-                if (how == Settle::Acked)
-                {
-                    out.on_acked(frame.frame.value, frame.frame.length, false);
-                }
-                else if (how == Settle::Lost)
-                {
-                    out.on_lost(frame.frame.value, frame.frame.length, false);
-                }
-            }
-            else if (frame.kind == kRecordStream)
-            {
-                if (how == Settle::Acked)
-                {
-                    m_streams.on_acked(frame.frame);
-                }
-                else
-                {
-                    m_streams.on_lost(frame.frame); // a Retry discards 0-RTT packets: their data goes again
-                }
-            }
-            else if (frame.kind == kRecordDatagram)
-            {
-                if (how == Settle::Acked)
-                {
-                    m_datagrams.on_acked(frame.frame.value);
-                }
-                else
-                {
-                    m_datagrams.on_lost(frame.frame.value); // discarded with its space: never delivered
-                }
-            }
-            else if (frame.kind == kRecordHandshakeDone)
-            {
-                m_handshake_done_acked = m_handshake_done_acked || how == Settle::Acked;
-                m_handshake_done_owed = !m_handshake_done_acked && (m_handshake_done_owed || how == Settle::Lost);
-            }
-            else if (frame.kind == kRecordNewToken)
-            {
-                if (frame.frame.value == m_new_token_generation) // a replaced token's outcome settles nothing
-                {
-                    m_new_token_acked = m_new_token_acked || how == Settle::Acked;
-                    m_new_token_owed = !m_new_token_acked && (m_new_token_owed || how == Settle::Lost);
-                }
-            }
-            else if (frame.kind == kRecordMaxPathId)
-            {
-                // Sent again when lost unless a larger limit went since (RFC 10069 section 4.6).
-                m_max_path_id_owed =
-                    m_max_path_id_owed || (how == Settle::Lost && frame.frame.value == m_local_max_path_id);
-            }
-            else if (frame.kind == kRecordPathsBlocked)
-            {
-                // Sent again only while the server's limit stands (RFC 10069 section 4.7, as RFC 9000 section 13.3).
-                m_paths_blocked_owed =
-                    m_paths_blocked_owed || (how == Settle::Lost && frame.frame.value == m_peer_max_path_id);
-            }
-            else if (frame.kind == kRecordPathCidsBlocked)
-            {
-                const u64 path_id = frame.frame.stream_id;
-                const bool still = m_cids.is_open(path_id) && !m_cids.abandoned(path_id) &&
-                                   m_cids.current(path_id) == kNoSequence &&
-                                   m_cids.peer_next(path_id) == frame.frame.value;
-                m_cids_blocked = (how == Settle::Lost && m_cids_blocked == 0U && still) ? path_id : m_cids_blocked;
-            }
-            else if (frame.kind == kRecordPathAbandon)
-            {
-                // Sent again when lost while its path ID is still being abandoned (section 4.2); acknowledged, it
-                // starts the bound on its retention (section 3.4).
-                QuicPathAbandon* const entry = find_abandon(frame.frame.stream_id);
-                if (entry != nullptr && !entry->acked)
-                {
-                    entry->owed = how != Settle::Acked;
-                    entry->acked = how == Settle::Acked;
-                    entry->deadline_ns = entry->acked ? retention_end_ns(entry->path_id, m_event_ns) : kNeverNs;
-                }
-            }
-            else if (frame.kind == kRecordNewId)
-            {
-                if (how != Settle::Discarded)
-                {
-                    m_cids.local_settled(frame.frame.stream_id, frame.frame.value, how == Settle::Acked);
-                }
-            }
-            else if (frame.kind == kRecordObserved)
-            {
-                // Resent only on its own path (draft-ietf-quic-address-discovery-01 section 4.1).
-                if (how == Settle::Lost)
-                {
-                    tuples(packet.path).observation_lost(frame.frame.length, frame.frame.value);
-                }
-            }
-            else
-            {
-                m_cids.retirement_settled(frame.frame.stream_id, frame.frame.value, how != Settle::Lost);
-            }
-            frame.kind = 0U;
+            settle_frame(frame, how);
         }
     }
+    free_settled_frames();
+}
+
+void QuicConnection::settle_frame(SentFrame& frame, Settle how) noexcept
+{
+    if (frame.kind == kRecordCrypto)
+    {
+        QuicSendBuffer& out = m_levels[frame.space].out;
+        if (how == Settle::Acked)
+        {
+            out.on_acked(frame.frame.value, frame.frame.length, false);
+        }
+        else if (how == Settle::Lost)
+        {
+            out.on_lost(frame.frame.value, frame.frame.length, false);
+        }
+    }
+    else if (frame.kind == kRecordStream)
+    {
+        if (how == Settle::Acked)
+        {
+            m_streams.on_acked(frame.frame);
+        }
+        else
+        {
+            m_streams.on_lost(frame.frame); // a Retry discards 0-RTT packets: their data goes again
+        }
+    }
+    else if (frame.kind == kRecordDatagram)
+    {
+        if (how == Settle::Acked)
+        {
+            m_datagrams.on_acked(frame.frame.value);
+        }
+        else
+        {
+            m_datagrams.on_lost(frame.frame.value); // discarded with its space: never delivered
+        }
+    }
+    else if (frame.kind == kRecordHandshakeDone)
+    {
+        m_handshake_done_acked = m_handshake_done_acked || how == Settle::Acked;
+        m_handshake_done_owed = !m_handshake_done_acked && (m_handshake_done_owed || how == Settle::Lost);
+    }
+    else if (frame.kind == kRecordNewToken)
+    {
+        if (frame.frame.value == m_new_token_generation) // a replaced token's outcome settles nothing
+        {
+            m_new_token_acked = m_new_token_acked || how == Settle::Acked;
+            m_new_token_owed = !m_new_token_acked && (m_new_token_owed || how == Settle::Lost);
+        }
+    }
+    else if (frame.kind == kRecordMaxPathId)
+    {
+        // Sent again when lost unless a larger limit went since (RFC 10069 section 4.6).
+        m_max_path_id_owed = m_max_path_id_owed || (how == Settle::Lost && frame.frame.value == m_local_max_path_id);
+    }
+    else if (frame.kind == kRecordPathsBlocked)
+    {
+        // Sent again only while the server's limit stands (RFC 10069 section 4.7, as RFC 9000 section 13.3).
+        m_paths_blocked_owed = m_paths_blocked_owed || (how == Settle::Lost && frame.frame.value == m_peer_max_path_id);
+    }
+    else if (frame.kind == kRecordPathCidsBlocked)
+    {
+        const u64 path_id = frame.frame.stream_id;
+        const bool still = m_cids.is_open(path_id) && !m_cids.abandoned(path_id) &&
+                           m_cids.current(path_id) == kNoSequence && m_cids.peer_next(path_id) == frame.frame.value;
+        m_cids_blocked = (how == Settle::Lost && m_cids_blocked == 0U && still) ? path_id : m_cids_blocked;
+    }
+    else if (frame.kind == kRecordPathAbandon)
+    {
+        // Sent again when lost while its path ID is still being abandoned (section 4.2); acknowledged, it
+        // starts the bound on its retention (section 3.4).
+        QuicPathAbandon* const entry = find_abandon(frame.frame.stream_id);
+        if (entry != nullptr && !entry->acked)
+        {
+            entry->owed = how != Settle::Acked;
+            entry->acked = how == Settle::Acked;
+            entry->deadline_ns = entry->acked ? retention_end_ns(entry->path_id, m_event_ns) : kNeverNs;
+        }
+    }
+    else if (frame.kind == kRecordNewId)
+    {
+        if (how != Settle::Discarded)
+        {
+            m_cids.local_settled(frame.frame.stream_id, frame.frame.value, how == Settle::Acked);
+        }
+    }
+    else if (frame.kind == kRecordObserved)
+    {
+        // Resent only on its own path (draft-ietf-quic-address-discovery-01 section 4.1).
+        if (how == Settle::Lost)
+        {
+            tuples(frame.path).observation_lost(frame.frame.length, frame.frame.value);
+        }
+    }
+    else
+    {
+        m_cids.retirement_settled(frame.frame.stream_id, frame.frame.value, how != Settle::Lost);
+    }
+    frame.kind = 0U;
+}
+
+void QuicConnection::free_settled_frames() noexcept
+{
     while (m_frame_count > 0U && m_frames[m_frame_head].kind == 0U)
     {
         m_frame_head = (m_frame_head + 1U) % m_config.sent_frames;
         --m_frame_count;
     }
+}
+
+void QuicConnection::release_frames(usize slot) noexcept
+{
+    // Every record of the slot's packets in flight is settled as lost, its packets left in flight: a later
+    // acknowledgement or loss of one finds no record (settle() stops at a settled or reused one) and moves only
+    // recovery and the slot's controller, so nothing is counted twice and the ledger's head is never held.
+    const auto application = static_cast<u8>(QuicSpace::Application);
+    for (u32 at = m_frame_head, walked = 0U; walked < m_frame_count; at = (at + 1U) % m_config.sent_frames, ++walked)
+    {
+        SentFrame& frame = m_frames[at];
+        if (frame.kind != 0U && frame.space == application && frame.path == slot)
+        {
+            settle_frame(frame, Settle::Lost);
+            ++m_counters.pto_resends;
+        }
+    }
+    free_settled_frames();
 }
 
 usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> frames, u64 packet, u64 now_ns,
@@ -3133,6 +3181,13 @@ void QuicConnection::on_timeout(u64 now_ns) noexcept
     {
         m_handshake_done_owed = m_handshake_done_owed || !m_handshake_done_acked;
         m_new_token_owed = m_new_token_owed || (m_new_token_bytes != 0U && !m_new_token_acked);
+    }
+    // RFC 10069 section 5.7: no packet of the path is declared lost before an acknowledgement on it or its end, so
+    // what it holds goes again on the live paths, within their windows, while its probes carry none (held_dark()).
+    if (timeout.kind == QuicTimeoutKind::Probe && timeout.space == QuicSpace::Application &&
+        fresher_path(timeout.path, 1U))
+    {
+        release_frames(timeout.path);
     }
 }
 

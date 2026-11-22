@@ -387,6 +387,7 @@ struct QuicConnectionCounters
     u64 paths_abandoned = 0U;    // path IDs abandoned by either end (RFC 10069 section 3.4)
     u64 paths_closed = 0U;       // abandoned path IDs whose slot and ID space closed
     u64 paths_blocked = 0U;      // PATHS_BLOCKED and PATH_CIDS_BLOCKED frames taken (RFC 10069 section 4.7)
+    u64 pto_resends = 0U;        // frames a probe timeout of a dark path sent again on a live one (section 5.7)
     u64 foreign_datagrams = 0U;  // datagrams from a path this side takes nothing from (a client's unknown server)
     u64 handover_losses = 0U;    // losses of packets a scheduled handover may have taken, kept from congestion control
     u64 handover_locks = 0U;     // learned schedules put in force where none was
@@ -543,6 +544,11 @@ public:
     {
         const QuicPathControl* const lead = m_controls[lead_slot()];
         return (lead != nullptr) ? *lead : m_first_control;
+    }
+    // Path slot `slot`'s sending state, null for a slot that sends nothing (one per open path ID, RFC 10069).
+    [[nodiscard]] const QuicPathControl* path_control(usize slot) const noexcept
+    {
+        return (slot < kQuicMaxPaths) ? m_controls[slot] : nullptr;
     }
     // The paths' coupled controllers (CongestionPolicy::coupled, RFC 6356).
     [[nodiscard]] const CongestionCoupling& coupling() const noexcept { return m_coupling; }
@@ -925,6 +931,19 @@ private:
     [[nodiscard]] bool record(QuicSpace space, u64 packet, u8 kind, const QuicStreamRecord& frame,
                               Written& written) noexcept;
     void settle(QuicSpace space, const QuicSentPacket& packet, Settle how) noexcept;
+    // One record's frame acknowledged, lost or discarded, the record then settled.
+    void settle_frame(SentFrame& frame, Settle how) noexcept;
+    // Frees the settled records at the ledger's head.
+    void free_settled_frames() noexcept;
+    // RFC 10069 section 5.7: a probe timeout on `slot` while another path is live sends the frames of its packets in
+    // flight again as if lost (on the live paths, held_dark()), the packets left to recovery and the controller.
+    void release_frames(usize slot) noexcept;
+    // Whether another slot sends, carries data on its active 4-tuple and has fewer than `timeouts` probe timeouts
+    // pending (1: none, a live path).
+    [[nodiscard]] bool fresher_path(usize slot, u32 timeouts) const noexcept;
+    // Whether `slot` has a probe timeout pending while another path has fewer: it then carries no data, only its
+    // probes, acknowledgements and path frames, so a path gone dark holds nothing back (section 5.7).
+    [[nodiscard]] bool held_dark(usize slot) const noexcept;
     void pull_crypto() noexcept;
     // What path slot `slot`'s active 4-tuple may still carry under its amplification limit (RFC 10069 section 7.2).
     [[nodiscard]] usize amplification_credit(usize slot = 0U) const noexcept;
