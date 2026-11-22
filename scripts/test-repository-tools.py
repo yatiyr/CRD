@@ -1591,10 +1591,14 @@ class PinnedInputs(unittest.TestCase):
         url = 'https://example.invalid/a.bin'
         missing = urllib.error.HTTPError(url, 404, 'Not Found', {}, None)
         busy = urllib.error.HTTPError(url, 503, 'Service Unavailable', {}, None)
+        forbidden = urllib.error.HTTPError(url, 403, 'Forbidden', {}, None)
+        throttled = urllib.error.HTTPError(url, 403, 'Forbidden', {'Retry-After': '60'}, None)
+        spent = urllib.error.HTTPError(url, 403, 'Forbidden', {'X-RateLimit-Remaining': '0'}, None)
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp) / 'a.bin'
             waits = []
-            stalls = [TimeoutError('read timed out'), http.client.IncompleteRead(b'pin'), busy, io.BytesIO(good)]
+            stalls = [TimeoutError('read timed out'), http.client.IncompleteRead(b'pin'), busy, throttled, spent,
+                      io.BytesIO(good)]
             with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=stalls), \
                     contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(pins_registry.download(url, target, digest, 'a', sleep=waits.append), target)
@@ -1602,9 +1606,12 @@ class PinnedInputs(unittest.TestCase):
             self.assertEqual(waits, list(pins_registry.RETRY_WAITS[:len(stalls) - 1]))
             target.unlink()
             waits.clear()
-            with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=[missing]):
-                with self.assertRaises(urllib.error.HTTPError):
-                    pins_registry.download(url, target, digest, 'a', sleep=waits.append)
+            for final in (missing, forbidden):
+                log = io.StringIO()
+                with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=[final]),                         contextlib.redirect_stderr(log):
+                    with self.assertRaises(urllib.error.HTTPError):
+                        pins_registry.download(url, target, digest, 'a', sleep=waits.append)
+                self.assertIn(url, log.getvalue())
             self.assertEqual(waits, [])
             stalls = [TimeoutError('read timed out')] * (len(pins_registry.RETRY_WAITS) + 1)
             with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=stalls), \
