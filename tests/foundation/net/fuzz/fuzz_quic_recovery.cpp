@@ -860,9 +860,16 @@ void take_closing_losses(World& w, usize path, usize from)
 void op_toggle(World& w, usize path, u8 p)
 {
     const usize from = w.log.count;
+    const bool handshake_done = w.confirmed && w.spaces[0].discarded && w.spaces[1].discarded;
     if ((p & 0x80U) != 0U)
     {
-        const bool stops = path != 0U && w.open[path] && !w.stopped[path];
+        usize sending = 0U;
+        for (usize each = 0U; each < kQuicMaxPaths; ++each)
+        {
+            sending += (w.open[each] && !w.stopped[each]) ? 1U : 0U;
+        }
+        // Never the last slot sending; slot 0 only once the handshake is gone, as it closes.
+        const bool stops = w.open[path] && !w.stopped[path] && sending > 1U && (path != 0U || handshake_done);
         CRD_FUZZ_REQUIRE(w.recovery.stop_path(path, w.now, w.log) == stops);
         if (!stops)
         {
@@ -890,7 +897,6 @@ void op_toggle(World& w, usize path, u8 p)
     {
         open += each ? 1U : 0U;
     }
-    const bool handshake_done = w.confirmed && w.spaces[0].discarded && w.spaces[1].discarded;
     const bool closes = open > 1U && (path != 0U || handshake_done);
     CRD_FUZZ_REQUIRE(w.recovery.close_path(path, w.now, w.log) == closes);
     if (!closes)

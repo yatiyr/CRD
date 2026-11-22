@@ -839,7 +839,7 @@ void QuicConnection::receive(const QuicPath& path, cont::Span<u8> datagram, Ecn 
     {
         paths.on_received(m_receive_path, datagram.size(), now_ns);
     }
-    if (!address_validated())
+    if (!handshake_validated())
     {
         m_recovery->set_amplification_blocked(amplification_credit() < kMinUsefulPacket, now_ns);
     }
@@ -849,9 +849,9 @@ void QuicConnection::receive(const QuicPath& path, cont::Span<u8> datagram, Ecn 
     }
     if (m_state == QuicConnectionState::Closing)
     {
-        if (m_receive_slot != 0U || m_receive_path != active)
+        if (m_receive_slot != lead_slot() || m_receive_path != active)
         {
-            return; // the close answers the handshake slot's active path alone
+            return; // the close answers the leading slot's active path alone
         }
         if (stateless_reset(datagram, now_ns))
         {
@@ -973,12 +973,13 @@ bool QuicConnection::path_too_big(cont::ConstSpan<u8> quote, u32 limit, u64 now_
 
 bool QuicConnection::path_too_big(const QuicPath& from, cont::ConstSpan<u8> quote, u32 limit, u64 now_ns) noexcept
 {
-    const cont::ConstSpan<u8> dcid = peer_cid();
+    const cont::ConstSpan<u8> dcid = peer_cid(lead_slot()); // path()'s
     const bool ours = m_state == QuicConnectionState::Established && from == path() &&
                       quote.size() >= 1U + dcid.size() && (quote[0] & 0x80U) == 0U &&
                       (dcid.empty() || std::memcmp(quote.data() + 1U, dcid.data(), dcid.size()) == 0);
     const QuicSentPacket* const packet =
-        ours ? m_recovery->unacknowledged(QuicSpace::Application, packet_tag(quote, dcid.size())) : nullptr;
+        ours ? m_recovery->unacknowledged(QuicSpace::Application, packet_tag(quote, dcid.size()), lead_slot())
+             : nullptr;
     if (packet == nullptr || !m_recovery->on_path(QuicSpace::Application, *packet))
     {
         return false;
@@ -1081,7 +1082,10 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
     else if (m_receive_path == paths.active() && paths.path(m_receive_path).peer.port == 0U)
     {
         paths.bind(m_candidate);
-        control(m_receive_slot).bind(m_candidate);
+        if (m_controls[m_receive_slot] != nullptr)
+        {
+            control(m_receive_slot).bind(m_candidate); // a stopped slot sends nothing more
+        }
     }
     const QuicSpace space = quic_space_of(opened.type);
     m_packet_version = long_header ? header.version : 0U;
@@ -1223,7 +1227,8 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             // A challenge on the active path is answered with a non-probing packet as well (section 9.3.3). On a
             // further slot the response rides with that slot's PATH_ACK, which is not probing either: a PING would
             // go on the handshake slot's path, which the challenge says nothing of.
-            m_ping_owed = m_ping_owed || (m_receive_slot == 0U && m_receive_path == tuples(0U).active());
+            m_ping_owed = m_ping_owed ||
+                          (m_receive_slot == 0U && !stopped(0U) && m_receive_path == tuples(0U).active());
             return true;
         case QuicFrameKind::ObservedAddress:
             return observed_address_frame(frame, now_ns);
@@ -1326,7 +1331,7 @@ bool QuicConnection::ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_
     {
         m_protection.acknowledged(frame.ack.largest, slot);
     }
-    if (m_keyed && !address_validated() && outcome.acked_packets != 0U)
+    if (m_keyed && !handshake_validated() && outcome.acked_packets != 0U)
     {
         // Only an end that read a packet sent to this address can acknowledge it.
         m_first_paths.paths.set_validated(m_first_paths.paths.active());
@@ -1874,7 +1879,8 @@ QuicPacketType QuicConnection::send_type(QuicSpace space) const noexcept
 bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
 {
     const usize index = quic_space_index(space);
-    if (m_space_gone[index] || !m_protection.can_send(send_type(space)) || !m_recovery->can_send(space))
+    const usize slot = (space == QuicSpace::Application) ? send_slot() : 0U;
+    if (m_space_gone[index] || !m_protection.can_send(send_type(space)) || !m_recovery->can_send(space, slot))
     {
         return false;
     }
@@ -1886,7 +1892,6 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
     const bool path_owed =
         space == QuicSpace::Application && send_type(space) == QuicPacketType::OneRtt &&
         (paths.response_owed(active) || paths.challenge_due(active, now_ns) || observation_due(active));
-    const usize slot = (space == QuicSpace::Application) ? send_slot() : 0U;
     if (m_recovery->ack_deadline_ns(space, slot) <= now_ns || m_numbers[number_space(space, slot)].probes > 0U ||
         path_owed || (space == QuicSpace::Application && stopped_ack_due(now_ns)))
     {
@@ -1997,12 +2002,14 @@ bool QuicConnection::set_congestion(const CongestionPolicy& policy) noexcept
 
 bool QuicConnection::set_handover(const HandoverSchedule& schedule) noexcept
 {
-    return ready() && m_first_control.set_handover(schedule);
+    QuicPathControl* const lead = m_controls[lead_slot()];
+    return ready() && lead != nullptr && lead->set_handover(schedule);
 }
 
 bool QuicConnection::set_handover_learning(const HandoverLearning& learning) noexcept
 {
-    return ready() && m_first_control.set_handover_learning(learning);
+    QuicPathControl* const lead = m_controls[lead_slot()];
+    return ready() && lead != nullptr && lead->set_handover_learning(learning);
 }
 
 void QuicConnection::count(const QuicPathSignals& signals) noexcept
@@ -2170,20 +2177,19 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     {
         // Each slot acknowledges its own space, path ID 0's in an ACK frame and the others' in PATH_ACK frames
         // (RFC 10069 section 2.3), so a carried acknowledgement is always settled in the slot that sent it.
+        const auto ack_form = [this](usize of) { return (of == 0U) ? kQuicAckFrame : m_protection.path_id(of); };
         if (!m_recovery->received(space, slot).ranges().empty())
         {
-            const u64 path_id = (slot == 0U) ? kQuicAckFrame : m_protection.path_id(slot);
-            const QuicAckWrite ack = m_recovery->write_ack(space, frames.subspan(used), now_ns, slot, path_id);
+            const QuicAckWrite ack = m_recovery->write_ack(space, frames.subspan(used), now_ns, slot, ack_form(slot));
             used += ack.bytes;
             written.carried_ack = (ack.bytes != 0U) ? ack.largest : kQuicNoPacket;
         }
-        // An abandoned path's stragglers are acknowledged at once on this one (RFC 10069 section 3.4.3).
-        for (usize other = 1U; space == QuicSpace::Application && other < kQuicMaxPaths; ++other)
+        // An abandoned path's stragglers, path ID 0's too, are acknowledged at once on this one (section 3.4.3).
+        for (usize other = 0U; space == QuicSpace::Application && other < kQuicMaxPaths; ++other)
         {
             if (other != slot && stopped(other) && m_recovery->ack_deadline_ns(space, other) != kNeverNs)
             {
-                used += m_recovery->write_ack(space, frames.subspan(used), now_ns, other, m_protection.path_id(other))
-                            .bytes;
+                used += m_recovery->write_ack(space, frames.subspan(used), now_ns, other, ack_form(other)).bytes;
             }
         }
     };
@@ -2394,7 +2400,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
             put_ack();
         }
         // The stream set's frames after the connection's own; each fits the room it was offered.
-        const u64 rtt_ns = m_recovery->rtt().smoothed_ns;
+        const u64 rtt_ns = m_recovery->rtt(slot).smoothed_ns;
         QuicFrame frame;
         QuicStreamRecord taken;
         while (m_frame_count < m_config.sent_frames &&
@@ -2711,11 +2717,11 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
         m_send_path = tuples(send_slot()).active();
         return 0U;
     }
-    // The close goes on the handshake slot alone. Otherwise the open slots take turns, starting after the one that
+    // The close goes on the leading slot alone. Otherwise the open slots take turns, starting after the one that
     // wrote the last datagram, so one slot's data never starves another's owed frames (S78's scheduling).
     if (m_state == QuicConnectionState::Closing)
     {
-        m_send_slot = 0U;
+        m_send_slot = lead_slot();
         return send_on_slot(out, now_ns, held_sockets);
     }
     pull_crypto();
@@ -2731,7 +2737,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
         const usize used = send_on_slot(out, now_ns, held_sockets);
         if (used != 0U || m_state != QuicConnectionState::Established)
         {
-            return used; // a close a seal failure began goes on the next call, on the handshake slot
+            return used; // a close a seal failure began goes on the next call, on the leading slot
         }
     }
     return 0U;
@@ -3009,9 +3015,9 @@ u64 QuicConnection::next_timer_ns() const noexcept
             }
         }
     }
-    // A stopped slot's acknowledgement rides the handshake slot's packets (or any other open one's), due when slot 0
+    // A stopped slot's acknowledgement rides the leading slot's packets (or any other open one's), due when that one
     // can carry it; its state closes at its retention's end.
-    for (usize slot = 1U; slot < kQuicMaxPaths && can_acknowledge(QuicSpace::Application); ++slot)
+    for (usize slot = 0U; slot < kQuicMaxPaths && can_acknowledge(QuicSpace::Application, lead_slot()); ++slot)
     {
         if (stopped(slot))
         {
@@ -3317,6 +3323,10 @@ QuicMigration QuicConnection::open_own_path(const QuicPath& path, u64 now_ns, us
     {
         return QuicMigration::NotConfirmed;
     }
+    if (m_controls[0] == nullptr)
+    {
+        return QuicMigration::Abandoned; // path ID 0's 4-tuples are the ones these move (RFC 10069 section 3.1.2)
+    }
     const bool preferred = toward_preferred(path.peer);
     // disable_active_migration covers the handshake's address alone (section 18.2).
     if (m_peer.disable_active_migration && !m_on_preferred && !preferred)
@@ -3454,7 +3464,8 @@ void QuicConnection::move_to(usize slot, usize index, u64 now_ns) noexcept
     ++m_counters.migrations;
     m_tuples[slot]->peer_followed = false;
     follow_congestion(slot, now_ns);
-    m_recovery->set_amplification_blocked(!address_validated() && amplification_credit() < kMinUsefulPacket, now_ns);
+    m_recovery->set_amplification_blocked(!handshake_validated() && amplification_credit() < kMinUsefulPacket,
+                                          now_ns);
 }
 
 void QuicConnection::leave_fallback(usize slot, u64 now_ns) noexcept
@@ -3514,9 +3525,10 @@ void QuicConnection::follow_preferred(u64 now_ns) noexcept
     // By itself, or for a move migrate() asked for that waits for its validation (a socket left behind never draws
     // the connection back).
     const bool wanted = m_config.follow_preferred_address || m_deferred_move != kQuicNoPath;
-    if (!wanted || m_state != QuicConnectionState::Established || !m_confirmed || !toward_preferred(target.peer))
+    if (!wanted || m_state != QuicConnectionState::Established || !m_confirmed || m_controls[0] == nullptr ||
+        !toward_preferred(target.peer))
     {
-        return;
+        return; // the preferred address is path ID 0's (RFC 10069 section 2.2): nothing once that is abandoned
     }
     if (m_deferred_move != kQuicNoPath && paths.path(m_deferred_move).socket != active.socket)
     {
@@ -3584,47 +3596,41 @@ void QuicConnection::on_validated(usize slot, usize index, u64 now_ns) noexcept
 
 void QuicConnection::expire_paths(u64 now_ns) noexcept
 {
-    // A further slot's 4-tuples that failed validation are forgotten. Its active one's failure abandons its path ID
-    // (RFC 10069 section 3.1), with the code of a path that does not work.
-    for (usize slot = 1U; slot < kQuicMaxPaths; ++slot)
+    // A sending slot's 4-tuples that failed validation are forgotten. When the active one fails, the handshake slot
+    // falls back to its last validated one (RFC 9000 section 9.3.2); with none, or in a further slot, its path ID is
+    // abandoned (RFC 10069 section 3.1) with the code of a path that does not work, and the last path still sending
+    // ends the connection silently (section 9.3.2: no validated path is left).
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
     {
-        if (!m_protection.path_open(slot) || stopped(slot))
+        if (!m_protection.path_open(slot) || m_controls[slot] == nullptr)
         {
             continue;
         }
-        QuicPaths& further = tuples(slot);
-        for (usize index = further.expired(now_ns); index != kQuicNoPath; index = further.expired(now_ns))
+        QuicPaths& paths = tuples(slot);
+        for (usize index = paths.expired(now_ns); index != kQuicNoPath; index = paths.expired(now_ns))
         {
             ++m_counters.path_failures;
-            if (index == further.active())
+            const usize back = (slot == 0U) ? paths.fallback() : kQuicNoPath;
+            if (index != paths.active() || back != kQuicNoPath)
             {
-                static_cast<void>(begin_abandon(m_protection.path_id(slot),
-                                                static_cast<u64>(QuicTransportError::PathUnstableOrPoor), now_ns));
-                break;
+                if (index == paths.active())
+                {
+                    move_to(slot, back, now_ns);
+                }
+                drop_path(slot, index, now_ns);
+                continue;
             }
-            drop_path(slot, index, now_ns);
+            if (sending_slots() == 1U)
+            {
+                m_close = QuicCloseInfo{};
+                m_close.path_lost = true;
+                finish();
+                return;
+            }
+            static_cast<void>(begin_abandon(m_protection.path_id(slot),
+                                            static_cast<u64>(QuicTransportError::PathUnstableOrPoor), now_ns));
+            break;
         }
-    }
-    QuicPaths& paths = m_first_paths.paths;
-    for (usize index = paths.expired(now_ns); index != kQuicNoPath; index = paths.expired(now_ns))
-    {
-        ++m_counters.path_failures;
-        if (index != paths.active())
-        {
-            drop_path(0U, index, now_ns);
-            continue;
-        }
-        const usize back = paths.fallback();
-        if (back == kQuicNoPath)
-        {
-            // No validated path is left: the connection's state is discarded silently (section 9.3.2).
-            m_close = QuicCloseInfo{};
-            m_close.path_lost = true;
-            finish();
-            return;
-        }
-        move_to(0U, back, now_ns);
-        drop_path(0U, index, now_ns);
     }
 }
 
@@ -3684,11 +3690,11 @@ bool QuicConnection::path_held(usize slot, usize index, u32 held_sockets) const 
 
 u64 QuicConnection::validation_timeout_ns() const noexcept
 {
-    // Three times the larger of the current probe period and a new path's, from the initial RTT (section 8.2.4):
+    // Three times the larger of the leading path's probe period and a new path's, from the initial RTT (8.2.4):
     // smoothed plus four variances is three initial RTTs, then the peer's max_ack_delay.
     const u64 fresh = add_saturating(m_config.initial_rtt_ns > kNeverNs / 3U ? kNeverNs : 3U * m_config.initial_rtt_ns,
                                      m_peer.max_ack_delay * kNsPerMs);
-    const u64 period = max_u64(m_recovery->probe_period_ns(QuicSpace::Application), fresh);
+    const u64 period = max_u64(m_recovery->probe_period_ns(QuicSpace::Application, lead_slot()), fresh);
     return (period > kNeverNs / 3U) ? kNeverNs : 3U * period;
 }
 
@@ -3729,14 +3735,14 @@ cont::ConstSpan<u8> QuicConnection::peer_cid(usize slot) const noexcept
 usize QuicConnection::datagram_slot(cont::ConstSpan<u8> datagram) const noexcept
 {
     // A long header is the handshake's; a short header's Destination Connection ID is as long as this side's IDs. An
-    // ID not this side's leaves the datagram to slot 0, whose stateless reset check it may be.
+    // ID not this side's leaves the datagram to the leading slot, whose stateless reset check it may be.
     const usize bytes = m_local_cid.bytes;
     if (bytes == 0U || datagram.size() <= bytes || (datagram[0] & 0x80U) != 0U)
     {
-        return 0U;
+        return lead_slot();
     }
     const QuicCidRef local = m_cids.find(cont::ConstSpan<u8>(datagram.data() + 1U, bytes));
-    return local.found() ? slot_of(local.path_id) : 0U;
+    return local.found() ? slot_of(local.path_id) : lead_slot();
 }
 
 usize QuicConnection::begin_path(cont::ConstSpan<u8> datagram, const QuicPath& from, u64 now_ns) noexcept
@@ -3902,10 +3908,6 @@ QuicAbandon QuicConnection::abandon_path(u64 path_id, u64 error_code, u64 now_ns
     {
         return QuicAbandon::NoMultipath;
     }
-    if (path_id == 0U)
-    {
-        return QuicAbandon::HandshakePath;
-    }
     if (error_code > kQuicMaxVarint)
     {
         return QuicAbandon::BadError;
@@ -3915,6 +3917,12 @@ QuicAbandon QuicConnection::abandon_path(u64 path_id, u64 error_code, u64 now_ns
     if (path_id > m_peer_max_path_id)
     {
         return QuicAbandon::NotOpen;
+    }
+    // The last path still sending would leave none to carry the frame: closing the connection ends it (section 3.4).
+    const usize slot = slot_of(path_id);
+    if (slot != kQuicNoPath && m_controls[slot] != nullptr && sending_slots() == 1U)
+    {
+        return QuicAbandon::LastPath;
     }
     return (begin_abandon(path_id, error_code, now_ns) != nullptr) ? QuicAbandon::Abandoned : QuicAbandon::NotOpen;
 }
@@ -3927,7 +3935,11 @@ QuicPathAbandon* QuicConnection::begin_abandon(u64 path_id, u64 error_code, u64 
     {
         entry = (entry == nullptr && !held.used) ? &held : entry;
     }
-    if (entry == nullptr || path_id == 0U || !m_cids.abandon(path_id))
+    // A slot still sending is never the last one here (abandon_path() and peer_abandon() close or refuse that), and
+    // a second one opens only after confirmation, so path ID 0's handshake spaces are gone by then.
+    const usize slot = slot_of(path_id);
+    const bool sending = slot != kQuicNoPath && m_controls[slot] != nullptr;
+    if (entry == nullptr || !m_cids.abandon(path_id))
     {
         return nullptr;
     }
@@ -3938,23 +3950,26 @@ QuicPathAbandon* QuicConnection::begin_abandon(u64 path_id, u64 error_code, u64 
     entry->owed = true;
     m_cids_blocked = (m_cids_blocked == path_id) ? 0U : m_cids_blocked;
     ++m_counters.paths_abandoned;
-    const usize slot = slot_of(path_id);
-    if (slot != kQuicNoPath && m_controls[slot] != nullptr)
+    if (sending)
     {
         m_event_ns = now_ns;
         static_cast<void>(m_recovery->stop_path(slot, now_ns, m_events));
         control(slot).stop();
         m_controls[slot] = nullptr;
         follow_datagram_size();
+        // Path ID 0's own moves end with it: a move it deferred and its pending ones (S75) wait for nothing more.
+        m_deferred_move = (slot == 0U) ? kQuicNoPath : m_deferred_move;
     }
     return entry;
 }
 
 bool QuicConnection::peer_abandon(const QuicFrame& frame, u64 now_ns) noexcept
 {
-    if (frame.path_id == 0U)
+    // The last path still sending (path ID 0 before confirmation, when no other can have opened): the connection
+    // closes, the close going on that path (section 3.4's SHOULD; its MAYs need a path validated first).
+    const usize slot = slot_of(frame.path_id);
+    if (slot != kQuicNoPath && m_controls[slot] != nullptr && sending_slots() == 1U)
     {
-        // The handshake's path: abandoning it closes the connection, as abandoning the last path does (section 3.4).
         fail(QuicTransportError::NoError, 0U, now_ns);
         return false;
     }
@@ -4034,7 +4049,10 @@ void QuicConnection::close_abandoned(u64 now_ns) noexcept
             m_event_ns = now_ns;
             static_cast<void>(m_recovery->close_path(slot, now_ns, m_events));
             static_cast<void>(m_protection.close_path(slot));
-            *m_tuples[slot] = Tuples{};
+            if (slot != 0U)
+            {
+                *m_tuples[slot] = Tuples{}; // the handshake's stay: its validation and the server's address (add_path)
+            }
             m_numbers[number_space(QuicSpace::Application, slot)] = Numbering{};
         }
         // Its IDs unrouted; the storage stays the slot pool's, for the path IDs a raised MAX_PATH_ID opens.
@@ -4053,7 +4071,7 @@ void QuicConnection::close_abandoned(u64 now_ns) noexcept
 
 bool QuicConnection::stopped_ack_due(u64 now_ns) const noexcept
 {
-    for (usize slot = 1U; slot < kQuicMaxPaths; ++slot)
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
     {
         if (stopped(slot) && m_recovery->ack_deadline_ns(QuicSpace::Application, slot) <= now_ns)
         {
@@ -4061,6 +4079,26 @@ bool QuicConnection::stopped_ack_due(u64 now_ns) const noexcept
         }
     }
     return false;
+}
+
+usize QuicConnection::lead_slot() const noexcept
+{
+    usize slot = 0U;
+    while (slot < kQuicMaxPaths && m_controls[slot] == nullptr)
+    {
+        ++slot;
+    }
+    return (slot < kQuicMaxPaths) ? slot : 0U;
+}
+
+usize QuicConnection::sending_slots() const noexcept
+{
+    usize count = 0U;
+    for (const QuicPathControl* control : m_controls)
+    {
+        count += (control != nullptr) ? 1U : 0U;
+    }
+    return count;
 }
 
 usize QuicConnection::slot_of(u64 path_id) const noexcept

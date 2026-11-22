@@ -387,7 +387,8 @@ public:
     // for its PATH_ACK frames to go on another path until close_path (section 3.4.3). Each packet still outstanding
     // is declared lost at once, for its frames to go on another path, which no controller hears as congestion; from
     // then on can_send() is false there, no timer is armed for it, the largest probe period leaves it out and its
-    // own probe period loses its backoff. False, changing nothing, for slot 0, a slot not open or stopped already.
+    // own probe period loses its backoff. False, changing nothing, for a slot not open or stopped already, the last
+    // one sending, and slot 0 before the handshake is confirmed and both handshake spaces discarded (close_path's).
     [[nodiscard]] bool stop_path(usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept;
     [[nodiscard]] bool path_open(usize path) const noexcept
     {
@@ -543,6 +544,8 @@ private:
     [[nodiscard]] QuicLoss make_room(QuicSpace id, usize path, usize entries, u64 now_ns,
                                      QuicRecoveryEvents& events) noexcept;
     [[nodiscard]] bool peer_validated() const noexcept;
+    // Confirmed, the Initial and Handshake spaces discarded: slot 0 may stop or close.
+    [[nodiscard]] bool handshake_gone() const noexcept;
     [[nodiscard]] bool any_eliciting_in_flight() const noexcept;
     [[nodiscard]] u64 decoded_ack_delay_ns(QuicSpace id, u64 raw) const noexcept;
     [[nodiscard]] bool earliest_loss(u64& time_ns, QuicSpace& id, usize& path) const noexcept;

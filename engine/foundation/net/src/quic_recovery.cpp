@@ -456,9 +456,7 @@ bool QuicRecovery::close_path(usize path, u64 now_ns, QuicRecoveryEvents& events
     {
         open += (each != nullptr) ? 1U : 0U;
     }
-    const bool handshake_done = m_confirmed && m_spaces[quic_space_index(QuicSpace::Initial)].discarded &&
-                                m_spaces[quic_space_index(QuicSpace::Handshake)].discarded;
-    if (!path_open(path) || open == 1U || (path == 0U && !handshake_done))
+    if (!path_open(path) || open == 1U || (path == 0U && !handshake_gone()))
     {
         return false;
     }
@@ -490,9 +488,20 @@ bool QuicRecovery::close_path(usize path, u64 now_ns, QuicRecoveryEvents& events
     return true;
 }
 
+bool QuicRecovery::handshake_gone() const noexcept
+{
+    return m_confirmed && m_spaces[quic_space_index(QuicSpace::Initial)].discarded &&
+           m_spaces[quic_space_index(QuicSpace::Handshake)].discarded;
+}
+
 bool QuicRecovery::stop_path(usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept
 {
-    if (path == 0U || !path_sending(path))
+    usize sending = 0U;
+    for (usize each = 0U; each < kQuicMaxPaths; ++each)
+    {
+        sending += path_sending(each) ? 1U : 0U;
+    }
+    if (!path_sending(path) || sending == 1U || (path == 0U && !handshake_gone()))
     {
         return false;
     }

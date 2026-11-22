@@ -93,11 +93,13 @@
 //              under this side's limit: a path ID above it is PROTOCOL_VIOLATION (section 4), as is a PATH_ACK of a
 //              path ID whose number space never opened; one whose state is gone is ignored. MAX_PATH_ID raises the
 //              peer's limit only, PATH_STATUS keeps the newest status (peer_path_status()), the two BLOCKED frames are
-//              checked and inform. A path ID other than 0 is abandoned by either end (abandon_path(), the peer's
+//              checked and inform. Any path ID, 0 included, is abandoned by either end (abandon_path(), the peer's
 //              PATH_ABANDON, or its validation failing): both ends send PATH_ABANDON, its slot sends nothing more and
 //              its ID space retires the peer's IDs, its stragglers are read and acknowledged on other paths, and its
-//              slot and ID space close three PTOs later (section 3.4; QuicPathAbandon). PATH_ABANDON of path ID 0
-//              closes the connection. Without negotiation every one is an unknown frame: FRAME_ENCODING_ERROR.
+//              slot and ID space close three PTOs later (section 3.4; QuicPathAbandon). Once path ID 0 is abandoned
+//              the lowest path slot still sending leads (path(), the close); the peer's PATH_ABANDON of the last path
+//              still sending closes the connection, and a last path whose validation fails ends it silently. Without
+//              negotiation every one is an unknown frame: FRAME_ENCODING_ERROR.
 //   IDs        both ends' IDs are held in QuicCids (quic_connection_ids.hpp), one sequence space per path ID; this
 //              side's come from the host (QuicConnectionIds), which routes them and derives their stateless reset
 //              tokens from its QuicResetKey: after confirmation the peer is kept at its
@@ -315,6 +317,7 @@ enum class QuicMigration : u8
     NoPathId,       // add_path(): every path ID under both sides' limits is used, or every path slot is taken
     NoConnection,   // the client host has no such connection (QuicClient: a stale handle)
     NoSocket,       // the client host's socket set has no such socket (QuicClient)
+    Abandoned,      // probe_path() and migrate(): path ID 0, whose 4-tuples they move, is abandoned (RFC 10069 3.4)
 };
 
 // QuicConnection::abandon_path's answer: Abandoned, or why nothing changed.
@@ -323,7 +326,7 @@ enum class QuicAbandon : u8
     Abandoned,      // PATH_ABANDON goes on another path, and the path ID's slot sends nothing more
     NotEstablished, // the connection is still handshaking, or closing
     NoMultipath,    // multipath is not negotiated
-    HandshakePath,  // path ID 0, the handshake's path, which only closing the connection ends here
+    LastPath,       // the only path still sending, which only closing the connection ends here (section 3.4)
     NotOpen,        // the path ID is above either side's limit, closed, or being abandoned already
     BadError,       // the error code is above 2^62 - 1
 };
@@ -432,10 +435,12 @@ public:
     // The codepoint the datagram the last send() wrote is sent with, and the path it goes on.
     [[nodiscard]] Ecn marking() const noexcept { return m_marking; }
     [[nodiscard]] const QuicPath& sent_path() const noexcept { return tuples(send_slot()).path(m_send_path); }
-    // The path datagrams go on, and every 4-tuple path slot `slot` knows (the handshake's by default; each path ID
-    // has its own: RFC 10069 section 3.1.2).
+    // The path datagrams go on, and every 4-tuple path slot `slot` knows (each path ID has its own: RFC 10069
+    // section 3.1.2). Without a slot, the leading one's: the handshake's until path ID 0 is abandoned, then the
+    // lowest slot still sending.
     [[nodiscard]] const QuicPath& path() const noexcept { return paths().path(paths().active()); }
-    [[nodiscard]] const QuicPaths& paths(usize slot = 0U) const noexcept { return tuples(slot); }
+    [[nodiscard]] const QuicPaths& paths() const noexcept { return tuples(lead_slot()); }
+    [[nodiscard]] const QuicPaths& paths(usize slot) const noexcept { return tuples(slot); }
     // Whether datagrams moved to the server's preferred address (a client) or socket (a server): section 9.6.
     [[nodiscard]] bool on_preferred_address() const noexcept { return m_on_preferred; }
     // The address the peer last reported seeing this side's datagrams come from on the active path (OBSERVED_ADDRESS,
@@ -474,8 +479,9 @@ public:
     [[nodiscard]] QuicMigration add_path(const QuicPath& path, u64 now_ns, u64& path_id) noexcept;
     // Abandons path ID `path_id` (RFC 10069 section 3.4), open in a slot or not yet used, with `error_code` in its
     // PATH_ABANDON frame (NO_ERROR or one of section 4.2.1's): the frame goes on another path, the peer's IDs for it
-    // are retired at once, and its slot sends nothing more (abandon_of()). A host's caller wakes the connection.
-    // Anything but Abandoned changes nothing.
+    // are retired at once, and its slot sends nothing more (abandon_of()). Path ID 0 too, once another path sends:
+    // the lowest slot still sending then leads. A host's caller wakes the connection. Anything but Abandoned changes
+    // nothing.
     [[nodiscard]] QuicAbandon abandon_path(u64 path_id, u64 error_code, u64 now_ns) noexcept;
     // Issues a fresh set of connection IDs whose NEW_CONNECTION_ID frames retire every earlier one (Retire Prior To,
     // section 5.1.2); the earlier IDs stay routed until the peer retires them. False, changing nothing, before
@@ -528,9 +534,13 @@ public:
     [[nodiscard]] const QuicDatagrams& datagrams() const noexcept { return m_datagrams; }
     [[nodiscard]] const QuicPacketProtection& protection() const noexcept { return m_protection; }
     [[nodiscard]] const QuicRecovery& recovery() const noexcept { return *m_recovery; }
-    // The handshake's path's sending state (quic_path_control.hpp): its controller, sampler, ECN validation and path
-    // MTU search, whose size() is what its datagrams take now.
-    [[nodiscard]] const QuicPathControl& path_control() const noexcept { return *m_controls[0]; }
+    // The leading path's sending state (quic_path_control.hpp, the handshake's until path ID 0 is abandoned): its
+    // controller, sampler, ECN validation and path MTU search, whose size() is what its datagrams take now.
+    [[nodiscard]] const QuicPathControl& path_control() const noexcept
+    {
+        const QuicPathControl* const lead = m_controls[lead_slot()];
+        return (lead != nullptr) ? *lead : m_first_control;
+    }
     // The paths' coupled controllers (CongestionPolicy::coupled, RFC 6356).
     [[nodiscard]] const CongestionCoupling& coupling() const noexcept { return m_coupling; }
     [[nodiscard]] const CongestionController& congestion() const noexcept { return path_control().congestion(); }
@@ -540,7 +550,7 @@ public:
     // Replaces the congestion policy live on every path: each new controller starts from its path's window, slow start
     // threshold and recovery period. False, changing nothing, for a policy congestion_policy_valid() refuses.
     [[nodiscard]] bool set_congestion(const CongestionPolicy& policy) noexcept;
-    // Replaces the handshake's path's handover schedule live (QuicConnectionConfig::handover), for packets sent from
+    // Replaces the leading path's handover schedule live (QuicConnectionConfig::handover), for packets sent from
     // now; none clears it. False, changing nothing, for a schedule handover_schedule_valid() refuses.
     [[nodiscard]] bool set_handover(const HandoverSchedule& schedule) noexcept;
     [[nodiscard]] const HandoverSchedule& handover() const noexcept { return path_control().handover(); }
@@ -871,7 +881,11 @@ private:
     // The slot whose number space is path ID `path_id`'s (QuicPacketProtection::path_id); kQuicNoPath for none.
     [[nodiscard]] usize slot_of(u64 path_id) const noexcept;
     [[nodiscard]] usize send_slot() const noexcept { return m_send_slot; }
-    // send()'s datagram on send_slot(): the handshake slot's close while Closing, else its owed frames and data.
+    // The leading slot: the handshake's while path ID 0 sends, else the lowest slot still sending (0 when none
+    // does), which carries the close and reads datagrams no slot claims; and how many slots still send.
+    [[nodiscard]] usize lead_slot() const noexcept;
+    [[nodiscard]] usize sending_slots() const noexcept;
+    // send()'s datagram on send_slot(): the leading slot's close while Closing, else its owed frames and data.
     [[nodiscard]] usize send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noexcept;
     // Path slot `slot`'s 4-tuples.
     [[nodiscard]] QuicPaths& tuples(usize slot) noexcept { return m_tuples[slot]->paths; }
@@ -899,6 +913,8 @@ private:
     void pull_crypto() noexcept;
     // What path slot `slot`'s active 4-tuple may still carry under its amplification limit (RFC 10069 section 7.2).
     [[nodiscard]] usize amplification_credit(usize slot = 0U) const noexcept;
+    // The handshake slot's active 4-tuple is validated: the amplification guard of RFC 9002 section 6.2.2.1.
+    [[nodiscard]] bool handshake_validated() const noexcept { return tuples(0U).validated(tuples(0U).active()); }
     // Whether send() can write the ACK `space` of slot `slot` owes (its active 4-tuple's amplification limit
     // included): a timer nothing serves is never reported due.
     [[nodiscard]] bool can_acknowledge(QuicSpace space, usize slot = 0U) const noexcept;
