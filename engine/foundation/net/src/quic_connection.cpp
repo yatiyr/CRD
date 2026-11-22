@@ -2159,7 +2159,7 @@ QuicDatagramPaths QuicConnection::datagram_paths(bool copies_only) const noexcep
 {
     QuicDatagramPaths paths;
     paths.slot = send_slot();
-    paths.copies = copy_paths();
+    paths.copies = (m_datagrams.queued() != 0U) ? copy_paths() : 0U; // nothing queued: nothing to ask
     paths.copies_only = copies_only;
     return paths;
 }

@@ -303,8 +303,7 @@ private:
             CRD_FUZZ_REQUIRE(error == QuicDatagramError::Full);
             return;
         }
-        while (!m_limits.outcomes && unreported() == m_limits.send_count && m_front < m_queued &&
-               m_datagrams[m_front].written != 0U)
+        while (unreported() == m_limits.send_count && m_front < m_queued && m_datagrams[m_front].written != 0U)
         {
             pop_front(QuicDatagramOutcome::Lost); // owed copies give way
         }

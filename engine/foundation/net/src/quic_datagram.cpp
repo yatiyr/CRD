@@ -257,9 +257,10 @@ QuicDatagramError QuicDatagrams::queue(cont::ConstSpan<u8> payload, u64 now_ns, 
     {
         return QuicDatagramError::Full;
     }
-    // Owed copies never refuse a datagram: the oldest datagram's give way first. Without outcomes a redundant
-    // datagram counts until it leaves the ring; with them, until its report is polled.
-    while (m_unreported == m_limits.send_count && !m_limits.outcomes && give_up_copies())
+    // Owed copies never hold a datagram back: the oldest datagram's give way first. Without outcomes a redundant
+    // datagram counts until it leaves the ring, so that makes room; with them it counts until its report is polled,
+    // and giving its copies up lets that report come once its copies in flight settle.
+    while (m_unreported == m_limits.send_count && give_up_copies())
     {
     }
     if (m_unreported == m_limits.send_count)

@@ -925,6 +925,18 @@ TEST_CASE("QUIC datagrams: owed copies hold the queue's order until they go, and
         REQUIRE(put(counted, 1U, 16U, 0U) == QuicDatagramError::None);
         CHECK(counted.queued() == 1U);
         CHECK(put(counted, 2U, 16U, 0U) == QuicDatagramError::Full);
+        // With outcomes: every copy sent was lost and one is still owed. Full gives the owed copy up, so its Lost
+        // report comes and polling it makes room.
+        QuicDatagrams reported_full;
+        REQUIRE(reported_full.init(allocator, redundant_limits(4096U, 1U, 1U, true)));
+        reported_full.set_peer(1200U, kUdp);
+        REQUIRE(put(reported_full, 0U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+        reported_full.on_lost(sends(reported_full, on(0U, kBoth), 0U, 0U, 16U));
+        CHECK(reported_full.queued() == 1U);
+        CHECK(put(reported_full, 1U, 16U, 0U) == QuicDatagramError::Full);
+        CHECK(reported_full.queued() == 0U);
+        reported(reported_full, 0U, QuicDatagramOutcome::Lost);
+        REQUIRE(put(reported_full, 1U, 16U, 0U) == QuicDatagramError::None);
     }
 }
 

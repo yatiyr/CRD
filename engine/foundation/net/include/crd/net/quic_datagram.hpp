@@ -19,8 +19,8 @@
 //                carrying data (QuicDatagramPaths::copies): the first slot to write it sends it as any, every other
 //                slot of `copies` sends a copy, even one yielding its data to a faster path (copies_only). Copies go
 //                in their own path's window. A datagram's copies stop once any copy is acknowledged, at max_age_ns,
-//                and for a slot that leaves `copies`; queue() gives up the oldest datagram's owed copies before it
-//                refuses a new datagram for room. It is reported once: Acked at its first acknowledged copy, Lost
+//                and for a slot that leaves `copies`; queue() gives up the oldest datagrams' owed copies before it
+//                refuses a new datagram as Full. It is reported once: Acked at its first acknowledged copy, Lost
 //                once every copy sent was lost and none is owed. DATAGRAM frames carry no identifier, so the peer's
 //                application may receive it once per copy: it numbers its own payloads.
 //   receiving    a peer's payload is copied into a byte ring the application reads in place (peek, pop); a full
