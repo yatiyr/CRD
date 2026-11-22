@@ -53,6 +53,7 @@ constexpr u8 kServerCid[16] = {0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
                                0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F};
 constexpr u8 kInitialDcid[8] = {0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7};
 constexpr u8 kClientPathCid[8] = {0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF}; // a raw client's path ID 1
+constexpr u8 kClientPathTwoCid[8] = {0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF}; // and its path ID 2
 constexpr u8 kLongCid[20] = {0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9,
                              0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF2, 0xF3};
 
@@ -1430,6 +1431,7 @@ public:
     bool pad_initial = true; // false sends an Initial in a datagram under 1200 bytes
     QuicPath from;           // the path the raw client's datagrams arrive on (S75)
     usize pad_to = 0U;       // a 1-RTT packet's datagram is padded to this many bytes
+    usize path_pad_to = kQuicMinInitialDatagram; // ... and one of send_on_path()
     QuicAddressDiscovery discovery = QuicAddressDiscovery::Off; // what the raw client's parameters offer
     bool multipath = false;  // the raw client's parameters offer initial_max_path_id (RFC 10069)
     u64 max_path_id = 3U;    // ... as this
@@ -1525,8 +1527,8 @@ public:
         drain();
     }
 
-    // One 1-RTT packet in the raw client's path slot (raw.path_slot, path ID 1) to `dcid` from `path`, padded to 1200
-    // bytes, with its authentication tag broken when `forged`, then the server's answers read.
+    // One 1-RTT packet in the raw client's path slot (raw.path_slot, path ID 1) to `dcid` from `path`, padded to
+    // path_pad_to bytes, with its authentication tag broken when `forged`, then the server's answers read.
     template <typename Write>
     void send_on_path(ConstSpan<u8> dcid, const QuicPath& path, Write write, bool forged = false)
     {
@@ -1539,8 +1541,7 @@ public:
         REQUIRE(writer.begin(spec, Span<u8>(datagram, kQuicMinInitialDatagram)));
         const usize used = write(writer.frames());
         usize size = 0U;
-        REQUIRE(raw.protection.seal(writer, used, {kQuicMinInitialDatagram, 0U}, size, raw.path_slot) ==
-                QuicPacketError::None);
+        REQUIRE(raw.protection.seal(writer, used, {path_pad_to, 0U}, size, raw.path_slot) == QuicPacketError::None);
         datagram[size - 1U] ^= forged ? 0x01U : 0x00U;
         server.receive(path, Span<u8>(datagram, size), Ecn::NotEct, now);
         drain();
@@ -5476,16 +5477,22 @@ TEST_CASE("QUIC connection: a multipath limit allocates the path slots up front,
 
 namespace
 {
-// A raw client's ID for path ID 1, kClientPathCid, sent to the server on path ID 0.
-void announce_path_one(RawRun& run)
+// A raw client's ID `id` for path ID `path_id`, sent to the server on path ID 0.
+void announce_path(RawRun& run, u64 path_id, ConstSpan<u8> id)
 {
     QuicFrame issued;
     issued.kind = QuicFrameKind::PathNewConnectionId;
-    issued.path_id = 1U;
-    issued.data = ConstSpan<u8>(kClientPathCid, sizeof(kClientPathCid));
-    const u8 token[kQuicResetTokenBytes] = {0x7A, 0x7B};
+    issued.path_id = path_id;
+    issued.data = id;
+    const u8 token[kQuicResetTokenBytes] = {0x7A, 0x7B, static_cast<u8>(path_id)};
     issued.reset_token = ConstSpan<u8>(token, sizeof(token));
     run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(issued, out); });
+}
+
+// Its ID for path ID 1, kClientPathCid.
+void announce_path_one(RawRun& run)
+{
+    announce_path(run, 1U, ConstSpan<u8>(kClientPathCid, sizeof(kClientPathCid)));
 }
 
 // A raw client's path ID 1: its ID to the server (unless `announce` is false), its protection slot, and its first
@@ -5508,6 +5515,23 @@ void open_path_one(RawRun& run, const QuicPath& second, bool announce = true)
                          return write_quic_frame(frame, out);
                      });
     REQUIRE(run.server.counters().paths_opened == 1U);
+}
+
+// The raw client answers the server's latest PATH_CHALLENGE on path ID 1 from `second`: path ID 1 validates.
+void validate_path_one(RawRun& run, const QuicPath& second)
+{
+    REQUIRE(run.raw.challenges != 0U);
+    u8 answer[kQuicPathDataBytes] = {};
+    std::memcpy(answer, run.raw.challenge[(run.raw.challenges - 1U) % 32U], kQuicPathDataBytes);
+    run.send_on_path(ConstSpan<u8>(run.raw.further_issued[1], run.raw.further_bytes[1]), second,
+                     [&](Span<u8> out)
+                     {
+                         QuicFrame frame;
+                         frame.kind = QuicFrameKind::PathResponse;
+                         frame.data = ConstSpan<u8>(answer, sizeof(answer));
+                         return write_quic_frame(frame, out);
+                     });
+    REQUIRE(run.server.paths(1U).validated(run.server.paths(1U).active()));
 }
 
 // What the server sent to `path`: its datagrams' bytes and its PATH_CHALLENGE frames there.
@@ -6772,17 +6796,7 @@ TEST_CASE("QUIC connection: a PATH_ABANDON of path ID 0 sent on path ID 0 itself
     };
     // The server's challenge on path ID 1 answered there: the path validates.
     REQUIRE(challenges_to(run, second) == 1U);
-    u8 answer[kQuicPathDataBytes] = {};
-    std::memcpy(answer, run.raw.challenge[run.raw.challenges - 1U], kQuicPathDataBytes);
-    run.send_on_path(further, second,
-                     [&](Span<u8> out)
-                     {
-                         QuicFrame frame;
-                         frame.kind = QuicFrameKind::PathResponse;
-                         frame.data = ConstSpan<u8>(answer, sizeof(answer));
-                         return write_quic_frame(frame, out);
-                     });
-    REQUIRE(run.server.paths(1U).validated(run.server.paths(1U).active()));
+    validate_path_one(run, second);
     const u64 unstable = code(QuicTransportError::PathUnstableOrPoor);
     QuicFrame abandon = path_frame(QuicFrameKind::PathAbandon, 0U);
     abandon.error_code = unstable;
@@ -6838,6 +6852,87 @@ TEST_CASE("QUIC connection: a PATH_ABANDON of path ID 0 sent on path ID 0 itself
     CHECK(run.raw.sent_to[(run.raw.datagrams - 1U) % 256U] == second);
 }
 
+TEST_CASE("QUIC connection: a path ID that spends its amplification credit in a reclaimed slot 0 leaves the probe "
+          "timeout armed, and what path ID 1 has in flight is probed while the client is silent",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 9002 section 6.2.2.1's deadlock guard is the handshake's: once path ID 0 closes, a later path ID validating
+    // in slot 0 spends only its own credit (RFC 9000 section 8.2, RFC 10069 section 3.1) and never disarms the
+    // connection's probe timeout, which still serves what is in flight on path ID 1.
+    Identity identity;
+    CountingAllocator host_allocator;
+    Host host(host_allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, true, 3U);
+    run.multipath = true;
+    run.handshake();
+    announce_path(run, 2U, ConstSpan<u8>(kClientPathTwoCid, sizeof(kClientPathTwoCid)));
+    const QuicPath second = client_at(9U, 40000U);
+    open_path_one(run, second);
+    validate_path_one(run, second);
+    const ConstSpan<u8> further(run.raw.further_issued[1], run.raw.further_bytes[1]);
+    send_frame(run, path_frame(QuicFrameKind::PathAbandon, 0U));
+    run.send_on_path(further, second, [&](Span<u8> out) { return run.ack_further(out); });
+    REQUIRE(run.server.abandon_of(0U) != nullptr);
+    REQUIRE(run.server.abandon_of(0U)->acked);
+    run_timers(run, run.server.abandon_of(0U)->deadline_ns);
+    REQUIRE(run.server.counters().paths_closed == 1U);
+    // An ack-eliciting PING in flight on path ID 1, never acknowledged.
+    const usize before = bytes_to(run, second);
+    run.server.ping();
+    run.drain();
+    const usize to_second = bytes_to(run, second);
+    REQUIRE(to_second > before);
+    // Path ID 2 opens in the reclaimed slot 0 from a third address with one unpadded datagram, then nothing more:
+    // three times its size is all the server may send there.
+    REQUIRE(run.raw.further_bytes[2] != 0U);
+    REQUIRE(run.raw.protection.open_path(2U, 2U)); // the raw client's own slot 2
+    run.raw.path_slot = 2U;
+    const QuicPath third = client_at(10U, 40000U);
+    run.path_pad_to = 0U;
+    const u8 data[kQuicPathDataBytes] = {1, 2, 3, 4, 5, 6, 7, 8};
+    run.send_on_path(ConstSpan<u8>(run.raw.further_issued[2], run.raw.further_bytes[2]), third,
+                     [&](Span<u8> out)
+                     {
+                         QuicFrame frame;
+                         frame.kind = QuicFrameKind::PathChallenge;
+                         frame.data = ConstSpan<u8>(data, sizeof(data));
+                         return write_quic_frame(frame, out);
+                     });
+    run.raw.path_slot = 1U;
+    run.path_pad_to = kQuicMinInitialDatagram;
+    REQUIRE(run.server.protection().path_open(0U));
+    REQUIRE(run.server.protection().path_id(0U) == 2U);
+    // Slot 0 spends its credit to under one useful packet (64 bytes); path ID 1's probe timeout still fires after
+    // that, until path ID 2's validation fails and then on.
+    const QuicRecovery& recovery = run.server.recovery();
+    bool spent = false;
+    u32 ptos_at_spent = 0U;
+    for (usize guard = 0U; guard < 512U && (run.server.counters().path_failures == 0U || !spent ||
+                                            recovery.pto_count(1U) < ptos_at_spent + 2U);
+         ++guard)
+    {
+        if (!spent && run.server.protection().path_open(0U))
+        {
+            const QuicPaths& paths = run.server.paths(0U);
+            spent = paths.credit(paths.active()) < 64U;
+            ptos_at_spent = recovery.pto_count(1U);
+        }
+        REQUIRE(recovery.loss_timer_ns() != kNeverNs);
+        const u64 next = run.server.next_timer_ns();
+        REQUIRE(next != kNeverNs);
+        run.now = (next > run.now) ? next : run.now;
+        run.server.on_timeout(run.now);
+        run.drain();
+        REQUIRE(run.server.state() == QuicConnectionState::Established);
+    }
+    REQUIRE(spent);
+    CHECK(bytes_to(run, third) != 0U);
+    CHECK(recovery.pto_count(1U) >= ptos_at_spent + 2U);
+    CHECK(bytes_to(run, second) > to_second);
+    CHECK(run.server.counters().path_failures == 1U);
+    CHECK_FALSE(run.server.recovery().path_sending(0U));
+}
+
 TEST_CASE("QUIC connection: once path ID 0 is abandoned, the last path failing its validation ends the connection "
           "silently",
           "[net][net-path][quic-connection][multipath]")
@@ -6889,17 +6984,7 @@ TEST_CASE("QUIC connection: the handshake slot's validation failing with no path
     open_path_one(run, second);
     const ConstSpan<u8> further(run.raw.further_issued[1], run.raw.further_bytes[1]);
     REQUIRE(challenges_to(run, second) == 1U);
-    u8 answer[kQuicPathDataBytes] = {};
-    std::memcpy(answer, run.raw.challenge[run.raw.challenges - 1U], kQuicPathDataBytes);
-    run.send_on_path(further, second,
-                     [&](Span<u8> out)
-                     {
-                         QuicFrame frame;
-                         frame.kind = QuicFrameKind::PathResponse;
-                         frame.data = ConstSpan<u8>(answer, sizeof(answer));
-                         return write_quic_frame(frame, out);
-                     });
-    REQUIRE(run.server.paths(1U).validated(run.server.paths(1U).active()));
+    validate_path_one(run, second);
     // Path ID 0 moves to b, whose challenge (and a's again) the client never answers; path ID 1 keeps acknowledging.
     run.pad_to = kQuicMinInitialDatagram;
     run.from = b;
