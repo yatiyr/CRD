@@ -1382,10 +1382,13 @@ struct RawClient
     u64 largest_issued = 0U; // the largest path ID the server issued an ID for
     u8 further_issued[kQuicMaxPaths][20] = {};
     usize further_bytes[kQuicMaxPaths] = {};
+    u8 further_second[kQuicMaxPaths][20] = {}; // ... and each one's sequence 1
+    usize further_second_bytes[kQuicMaxPaths] = {};
     usize path_acks = 0U;
     u64 path_ack_id = 0U;
     u64 path_ack_largest = 0U;
     usize path_slot = 0U;
+    u8 path_next_cid[sizeof(kClientPathCid)] = {}; // a second ID of the raw client's for path ID 1, once given
     u64 path_next = 0U;
     // The server's PATH_ABANDON frames: how many, and the latest one's path ID, error code and path.
     usize abandons = 0U;
@@ -1599,9 +1602,11 @@ public:
                 std::memcpy(raw.dcid, header.scid.data(), header.scid.size());
                 raw.dcid_bytes = header.scid.size();
             }
-            // A packet to kClientPathCid is path ID 1's, opened in its slot (RFC 10069 section 2).
+            // A packet to kClientPathCid, or the raw client's next ID for path ID 1, is path ID 1's, opened in its
+            // slot (RFC 10069 section 2).
             const bool further = raw.path_slot != 0U && header.type == QuicPacketType::OneRtt &&
-                                 same(header.dcid, ConstSpan<u8>(kClientPathCid, sizeof(kClientPathCid)));
+                                 (same(header.dcid, ConstSpan<u8>(kClientPathCid, sizeof(kClientPathCid))) ||
+                                  same(header.dcid, ConstSpan<u8>(raw.path_next_cid, sizeof(raw.path_next_cid))));
             QuicOpened opened;
             if (raw.protection.open(header, packet, opened, further ? raw.path_slot : 0U) != QuicPacketError::None)
             {
@@ -1725,6 +1730,11 @@ private:
                     {
                         std::memcpy(raw.further_issued[frame.path_id], frame.data.data(), frame.data.size());
                         raw.further_bytes[frame.path_id] = frame.data.size();
+                    }
+                    if (frame.sequence == 1U)
+                    {
+                        std::memcpy(raw.further_second[frame.path_id], frame.data.data(), frame.data.size());
+                        raw.further_second_bytes[frame.path_id] = frame.data.size();
                     }
                     count_id_frame(frame.kind);
                     break;
@@ -5758,6 +5768,46 @@ TEST_CASE("QUIC connection: a path ID opened before the client's ID for it answe
     CHECK(bytes_to(run, second) != 0U);
     CHECK(challenges_to(run, second) == 1U);
     CHECK(run.raw.challenge_dcid[(run.raw.challenges - 1U) % 32U] == kClientPathCid[0]);
+}
+
+TEST_CASE("QUIC connection: a client's move on path ID 1 with no ID of its own unused completes when the ID comes "
+          "in path ID 0's packet",
+          "[net][net-path][quic-connection][multipath]")
+{
+    Identity identity;
+    CountingAllocator host_allocator;
+    Host host(host_allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, true, 3U);
+    run.multipath = true;
+    run.handshake();
+    const QuicPath second = client_at(9U, 40000U);
+    const QuicPath third = client_at(10U, 40000U);
+    open_path_one(run, second);
+    validate_path_one(run, second);
+    REQUIRE(run.raw.further_second_bytes[1] != 0U);
+    // Path ID 1 moves to third with the server's sequence 1 there, before the client gave a second ID for it.
+    const usize start = run.raw.datagrams;
+    run.send_on_path(ConstSpan<u8>(run.raw.further_second[1], run.raw.further_second_bytes[1]), third,
+                     [&](Span<u8> out) { return write_quic_frame(path_frame(QuicFrameKind::Ping), out); });
+    const QuicPaths& paths = run.server.paths(1U);
+    CHECK(paths.path(paths.active()) == second);
+    const usize waiting = paths.find(third);
+    REQUIRE(waiting != kQuicNoPath);
+    CHECK(paths.validating(waiting));
+    CHECK(bytes_to(run, third, start) == 0U);
+    // Its ID for path ID 1 comes on path ID 0: path ID 1's move happens on that packet.
+    constexpr u8 next[sizeof(kClientPathCid)] = {0xD8U, 0xD9U, 0xDAU, 0xDBU, 0xDCU, 0xDDU, 0xDEU, 0xDFU};
+    std::memcpy(run.raw.path_next_cid, next, sizeof(next));
+    QuicFrame issued = path_frame(QuicFrameKind::PathNewConnectionId, 1U, 1U);
+    issued.data = ConstSpan<u8>(next);
+    const u8 token[kQuicResetTokenBytes] = {0x7C};
+    issued.reset_token = ConstSpan<u8>(token, sizeof(token));
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(issued, out); });
+    CHECK(paths.path(paths.active()) == third);
+    CHECK(paths.validating(waiting));
+    CHECK(challenges_to(run, third) != 0U);
+    CHECK(only_id_to(run, third, start, 0xD8U)); // never the ID sent to second (section 9.5)
+    CHECK(run.server.state() == QuicConnectionState::Established);
 }
 
 TEST_CASE("QUIC connection: a further path's challenge timers and expiry run, within its amplification limit",

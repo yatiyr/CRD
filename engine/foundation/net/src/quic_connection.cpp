@@ -1668,6 +1668,10 @@ bool QuicConnection::new_connection_id(const QuicFrame& frame, u64 now_ns) noexc
     if (added && slot != kQuicNoPath)
     {
         address_paths(slot, now_ns);
+        if (slot != m_receive_slot)
+        {
+            follow_waiting(slot, now_ns); // in its own slot's packet, follow_packet() decides once the frames are read
+        }
     }
     return true;
 }
@@ -3677,8 +3681,9 @@ void QuicConnection::follow_packet(usize slot, u64 number, bool probing, u64 now
                 follow_peer(slot, path, now_ns);
                 return;
             }
-            // No ID of the peer's is unused for it (section 9.5): the move waits for the next one, which this side's
-            // retirements draw, and the path validates meanwhile, its challenge waiting for the ID too.
+            // No ID of the peer's is unused for it (section 9.5): the move waits for the peer's next one, and the
+            // path validates meanwhile, its challenge waiting for the ID too. address_paths() retires an ID left on
+            // other paths to draw one; with none to retire, the validation times out and the path is forgotten.
             waiting = path;
             if (!paths.validated(path))
             {
@@ -3687,21 +3692,26 @@ void QuicConnection::follow_packet(usize slot, u64 number, bool probing, u64 now
         }
         return;
     }
-    if (waiting != kQuicNoPath && waiting != paths.active() && follows_peer() &&
-        peer_held(slot, path_sequence(slot, waiting)))
-    {
-        // The ID came in this packet: the move the peer's latest non-probing packet chose happens now.
-        const usize to = waiting;
-        waiting = kQuicNoPath;
-        follow_peer(slot, to, now_ns);
-        return;
-    }
+    follow_waiting(slot, now_ns); // the ID may have come in this packet
     // A probe from a path not validated is answered with a challenge of this side's (section 9.6.3), which leaves
     // once the path has a peer ID to send to: one that waits for it is validating, never a path left behind.
     if (probing && path != paths.active() && follows_peer() && !paths.validated(path))
     {
         validate_path(slot, path, now_ns, validation_timeout_ns());
     }
+}
+
+void QuicConnection::follow_waiting(usize slot, u64 now_ns) noexcept
+{
+    usize& waiting = m_tuples[slot]->waiting;
+    if (waiting == kQuicNoPath || waiting == tuples(slot).active() || !follows_peer() || stopped(slot) ||
+        !peer_held(slot, path_sequence(slot, waiting)))
+    {
+        return;
+    }
+    const usize to = waiting;
+    waiting = kQuicNoPath;
+    follow_peer(slot, to, now_ns);
 }
 
 void QuicConnection::follow_peer(usize slot, usize index, u64 now_ns) noexcept

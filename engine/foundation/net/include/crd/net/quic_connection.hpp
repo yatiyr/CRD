@@ -819,6 +819,8 @@ private:
     // A server follows its peer to `index`: datagrams move there, it validates unless validated, and the path left
     // is checked when validated or forgotten when not (sections 9.3.2 and 9.3.3).
     void follow_peer(usize slot, usize index, u64 now_ns) noexcept;
+    // The move to `slot`'s waiting path, once a peer ID reached it (section 9.5), unless the slot stopped.
+    void follow_waiting(usize slot, u64 now_ns) noexcept;
     // Datagrams go on `index` from now on: the peer moved there, or a failed validation reverts there.
     void move_to(usize slot, usize index, u64 now_ns) noexcept;
     // A client proven on its active path, and followed there by its server, forgets the fallback it moved from.
