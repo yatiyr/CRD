@@ -31,13 +31,16 @@ are still queued.
 
 ## Evidence
 
-- linux-gcc-debug (WSL): `crd-net-tests` 1111 cases (1104 passed, 7 skipped); four new `[multipath]` cases: either end
-  abandons path ID 0 under 40% loss, 30% duplication and jitter over four seeds (data finishes on path ID 1, both close
-  path ID 0, the close crosses on path ID 1); both ends abandoning each other's last path close with NO_ERROR; Figure 5
-  with the frame sent on path ID 0 itself; the last path's failed validation ends silently. Guards and the recovery,
-  cids and connection corpora pass.
+- linux-gcc-debug (WSL): `crd-net-tests` 1113 cases (1106 passed, 7 skipped). New cases: either end abandons path ID 0
+  under 40% loss, 30% duplication and jitter over four seeds (data finishes on path ID 1, both close path ID 0, the
+  close crosses on path ID 1); both ends abandoning each other's last path close with NO_ERROR; Figure 5 with the frame
+  sent on path ID 0 itself, then path ID 0's late NEW_CONNECTION_ID, RETIRE_CONNECTION_ID, ACK and packets ignored once
+  it closed; the handshake slot's failed validation with no fallback abandons path ID 0 on path ID 1; the last path's
+  failed validation ends silently; `stop_path`'s refusals (`test_quic_recovery.cpp`). Guards and the recovery, cids and
+  connection corpora pass. win-debug: `[multipath],[recovery]` 91 cases. linux-gcc-release (LTO) links clean. Pinned
+  clang-tidy 22: the changed sources and tests clean.
 - Teeth: the close on slot 0 crashes the pair case; straggler ACKs from slot 1 only fail Figure 5's ACK checks; no
-  silent close for the last path crashes its case.
+  silent close for the last path crashes its case; the handshake slot's failure always closing fails its case.
 - linux-clang-fuzz: quic-recovery seed 8901, 180 s, 80804 runs; quic-connection seed 8902, 240 s, 22693 runs; clean.
 
 ## Next
