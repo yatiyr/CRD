@@ -13,18 +13,18 @@
 // Oracles, against a model of the send ring (the datagrams from the oldest held to the newest, each with the slots
 // that sent it and its copies in flight). has_frame() is exact and names the model's next datagram for the slot: the
 // oldest it may write (never sent, or a redundant one's copy owed to it among the slots carrying data; only copies when
-// it yields, and one pinned to it), pinned to no other slot, that has not expired; a room of a whole packet gets that frame exactly when it said so. Every frame
-// written fits its room, reads back as a DATAGRAM with its Length and holds that datagram's payload, a plain one
-// ticketed by its id; the receiver accepts every frame the sender wrote and holds what it took in order, byte-exact;
-// an injected frame is refused exactly when it passes the size advertised. The ring leaves exactly as the model's:
-// expiry at max_age_ns, datagrams with nothing left to send to the slots carrying data, the copies owed for a
-// datagram acknowledged, and only sent datagrams (owing copies) giving way for room. queued(), unreported(), the
-// expired, copies and unrouted counters and the redundant records held (a Full at queue()) are the model's; a pin is
-// refused exactly when its path ID is open in no slot (NoPath) or it is redundant (Unsupported), and a pinned datagram
-// is written only by its slot; every id is reported exactly once, as the model expects: a plain one Acked or Lost by
-// its frame, a redundant one Acked at its first acknowledged copy, Lost once every copy was lost and none can go,
-// Expired only unsent, a pinned one Lost unsent when its slot stops; after a final drain on every slot every id is
-// accounted for; nothing allocates after init().
+// it yields, and one pinned to it), pinned to no other slot, that has not expired; a room of a whole packet gets that
+// frame exactly when it said so. Every frame written fits its room, reads back as a DATAGRAM with its Length and holds
+// that datagram's payload, a plain one ticketed by its id; the receiver accepts every frame the sender wrote and holds
+// what it took in order, byte-exact; an injected frame is refused exactly when it passes the size advertised. The ring
+// leaves exactly as the model's: expiry at max_age_ns, datagrams with nothing left to send to the slots carrying data,
+// the copies owed for a datagram acknowledged, and only sent datagrams (owing copies) giving way for room. queued(),
+// unreported(), the expired, copies and unrouted counters and the redundant records held (a Full at queue()) are the
+// model's; a pin is refused exactly when its path ID is open in no slot (NoPath) or it is redundant (Unsupported), and
+// a pinned datagram is written only by its slot; every id is reported exactly once, as the model expects: a plain one
+// Acked or Lost by its frame, a redundant one Acked at its first acknowledged copy, Lost once every copy was lost and
+// none can go, Expired only unsent, a pinned one Lost unsent when its slot stops; after a final drain on every slot
+// every id is accounted for; nothing allocates after init().
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_datagram.hpp>
@@ -682,9 +682,8 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     // Pinned datagrams with outcomes: slot 1 opened under path ID 1, one pinned to it and one plain; slot 0 yielding
     // writes nothing, slot 1 yielding its pinned one, slot 0 the plain one; a pin to a path ID never open is refused;
     // one more pinned to slot 1, which stops before it goes (Lost); then a pin to its path ID is refused.
-    const u8 pinned[] = {0x48U, 0x03U, 0x00U, 0x40U, 0xF1U, 0x00U, 0x00U, 0x20U, 0x81U, 0x00U, 0x00U, 0x21U,
-                         0x00U, 0x02U, 0x40U, 0x02U, 0x41U, 0x02U, 0x00U, 0x00U, 0x00U, 0x10U, 0xC1U, 0x00U,
-                         0x00U, 0x22U, 0x81U, 0xF1U, 0x00U, 0x00U, 0x20U, 0x81U, 0x05U, 0x80U, 0x05U, 0x81U,
-                         0x05U, 0x82U, 0x06U};
+    const u8 pinned[] = {0x48U, 0x03U, 0x00U, 0x40U, 0xF1U, 0x00U, 0x00U, 0x20U, 0x81U, 0x00U, 0x00U, 0x21U, 0x00U,
+                         0x02U, 0x40U, 0x02U, 0x41U, 0x02U, 0x00U, 0x00U, 0x00U, 0x10U, 0xC1U, 0x00U, 0x00U, 0x22U,
+                         0x81U, 0xF1U, 0x00U, 0x00U, 0x20U, 0x81U, 0x05U, 0x80U, 0x05U, 0x81U, 0x05U, 0x82U, 0x06U};
     sink.add("pinned", pinned, sizeof(pinned));
 }

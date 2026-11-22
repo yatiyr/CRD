@@ -304,12 +304,12 @@ private:
     bool m_outcomes_held = false;
     u32 m_unreported = 0U; // queued, and with outcomes in flight or reported and not polled
     u64 m_next_id = 0U;
-    u64 m_send_base = 0U;              // the ordinal of the send ring's oldest entry
+    u64 m_send_base = 0U;                      // the ordinal of the send ring's oldest entry
     mutable u64 m_cursors[kQuicMaxPaths] = {}; // each slot's: no entry before it is one the slot may still write
-    u64 m_path_ids[kQuicMaxPaths] = {}; // each open slot's path ID
-    u32 m_pinned[kQuicMaxPaths] = {};   // each slot's pinned entries not yet sent
-    u8 m_open = 1U;                     // the slots holding a path ID, a bit each
-    u32 m_free_copy = 0U;              // the first free Copy (redundant_count: none)
+    u64 m_path_ids[kQuicMaxPaths] = {};        // each open slot's path ID
+    u32 m_pinned[kQuicMaxPaths] = {};          // each slot's pinned entries not yet sent
+    u8 m_open = 1U;                            // the slots holding a path ID, a bit each
+    u32 m_free_copy = 0U;                      // the first free Copy (redundant_count: none)
     usize m_max_payload = 0U;
     u64 m_peer_frame = 0U; // the peer's max_datagram_frame_size
     bool m_peer_known = false;

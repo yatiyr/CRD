@@ -8303,8 +8303,8 @@ TEST_CASE("QUIC connection: a pinned datagram crosses only its path ID, the slow
     };
     // One datagram each 20 ms from `first` to `last`, pinned to `path_id` by `from`: each arrives once, between
     // `low_ns` and `high_ns` after it was queued, and is reported Acked.
-    const auto flow = [&](QuicConnection& from, Arrivals& arrivals, usize first, usize last, u64 path_id, u64 low_ns,
-                          u64 high_ns)
+    const auto flow =
+        [&](QuicConnection& from, Arrivals& arrivals, usize first, usize last, u64 path_id, u64 low_ns, u64 high_ns)
     {
         const usize end = (&from == &client) ? 0U : 1U;
         const usize before = acked[end];
@@ -8379,5 +8379,53 @@ TEST_CASE("QUIC connection: a pinned datagram crosses only its path ID, the slow
     CHECK(client.datagrams().counters().sent == sent + 1U);
     CHECK(at_server.each(12U, 15U, 0U));
     CHECK(lost == 3U);
+    CHECK(client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: a backlog pinned to a path that yields its data grows that path's window, held by the "
+          "window and pacer as data, not by the application",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // Path ID 1 is 30 ms slower each way, so under LowestRtt it yields its data; a full queue pinned to it keeps its
+    // window the limit, which slow start then grows (RFC 9002 section 7.8).
+    MultipathPair pair(2U, 2U, false, true, 256U, true);
+    pair.net->socket_delay_ns[1] = 30U * kMs;
+    pair.open_second();
+    QuicConnection& client = pair.client;
+    const QuicPathControl& slow = *client.path_control(1U);
+    const u64 initial = slow.congestion().window();
+    constexpr usize kBulk = 1000U;
+    u8 payload[kBulk] = {};
+    usize received = 0U;
+    usize lost = 0U;
+    const u64 start_ns = pair.net->now;
+    const bool grown = pair.net->run_until(
+        [&]
+        {
+            u64 id = 0U;
+            while (client.datagrams().queue(ConstSpan<u8>(payload, kBulk), pair.net->now, id, pinned_to(1U)) ==
+                   QuicDatagramError::None)
+            {
+            }
+            ConstSpan<u8> held;
+            while (pair.server.datagrams().peek(held))
+            {
+                REQUIRE(held.size() == kBulk);
+                ++received;
+                pair.server.datagrams().pop();
+            }
+            QuicDatagramReport report;
+            while (client.datagrams().poll(report))
+            {
+                lost += (report.outcome == QuicDatagramOutcome::Lost) ? 1U : 0U;
+            }
+            return slow.congestion().window() >= 4U * initial;
+        },
+        3000U * kMs);
+    INFO("window " << slow.congestion().window() << " from " << initial << " after " << (pair.net->now - start_ns) / kMs
+                   << " ms");
+    CHECK(grown);
+    CHECK(received != 0U);
+    CHECK(lost == 0U);
     CHECK(client.state() == QuicConnectionState::Established);
 }
