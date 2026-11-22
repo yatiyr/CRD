@@ -1359,7 +1359,10 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         // what is owed has arrived (a client that reverted at the end sends from there now). Until then it is
         // validating that address: a validation whose challenge or response the script lost, or whose packets came
         // after their ID's retirement, ends on its next challenge (RFC 9000 section 8.2.1). Once it validated the
-        // address it follows; only an end that closed first leaves it unvalidated.
+        // address it follows; only an end that closed first leaves it unvalidated. Or that validation failed after
+        // the client's last packet, its challenges or responses lost before the timer (section 8.2.4): the server
+        // reverted to its last validated address (section 9.3.2) and learns the client's again only from its next
+        // packet, which brings it back.
         if (over_paths() && !finished(pair.client) && !finished(pair.server))
         {
             pair.settle(1U);
@@ -1380,8 +1383,16 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             };
             if (!follows())
             {
-                CRD_FUZZ_REQUIRE(proving(false));
-                pair.settle_until(256U, [&] { return follows() || ended() || !proving(false); });
+                pair.settle_until(256U,
+                                  [&]
+                                  {
+                                      if (!follows() && !ended() && !proving(false))
+                                      {
+                                          CRD_FUZZ_REQUIRE(pair.server.counters().path_failures != 0U);
+                                          pair.client.ping(); // the client's next packet, from its address
+                                      }
+                                      return follows() || ended();
+                                  });
                 CRD_FUZZ_REQUIRE(follows() || (ended() && !proving(true)));
             }
         }
