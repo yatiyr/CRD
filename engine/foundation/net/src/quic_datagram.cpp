@@ -297,20 +297,22 @@ QuicDatagramError QuicDatagrams::queue(cont::ConstSpan<u8> payload, u64 now_ns, 
     // Owed copies never hold a datagram back: the oldest datagram's give way first. Without outcomes a redundant
     // datagram counts until it leaves the ring, so that makes room; with them it counts until its report is polled,
     // and giving its copies up lets that report come once its copies in flight settle.
-    while (m_unreported == m_limits.send_count && give_up_copies())
+    while (m_unreported == m_limits.send_count && give_way(false))
     {
     }
     if (m_unreported == m_limits.send_count)
     {
         return QuicDatagramError::Full;
     }
+    // The ring's own room: a pinned datagram holding back what other paths sent gives way too.
     while (!m_send.push(payload, m_next_id, now_ns))
     {
-        if (!give_up_copies())
+        if (!give_way(true))
         {
             return QuicDatagramError::Full;
         }
     }
+    ++m_unsent;
     if (pin != kNoPin)
     {
         entry(end() - 1U).pin = pin;
@@ -408,9 +410,13 @@ void QuicDatagrams::pop_oldest(QuicDatagramOutcome unsent) noexcept
     const bool sent = oldest.written != 0U;
     const bool redundant = oldest.redundant;
     const u32 copy = oldest.copy;
-    if (!sent && oldest.pin != kNoPin)
+    if (!sent)
     {
-        --m_pinned[oldest.pin];
+        --m_unsent;
+        if (oldest.pin != kNoPin)
+        {
+            --m_pinned[oldest.pin];
+        }
     }
     m_send.pop();
     ++m_send_base;
@@ -446,6 +452,7 @@ void QuicDatagrams::pop_done(u32 copies) noexcept
 
 void QuicDatagrams::drop_unsent(Entry& entry, QuicDatagramOutcome outcome) noexcept
 {
+    --m_unsent;
     if (entry.pin != kNoPin)
     {
         --m_pinned[entry.pin];
@@ -465,13 +472,25 @@ void QuicDatagrams::drop_unsent(Entry& entry, QuicDatagramOutcome outcome) noexc
     }
 }
 
-bool QuicDatagrams::give_up_copies() noexcept
+bool QuicDatagrams::give_way(bool pinned) noexcept
 {
-    if (m_send.count() == 0U || m_send.front().written == 0U)
+    if (m_send.count() == 0U)
     {
         return false;
     }
-    pop_oldest(QuicDatagramOutcome::Lost); // sent: its copies in flight report it
+    const Entry& oldest = m_send.front();
+    if (oldest.written != 0U)
+    {
+        pop_oldest(QuicDatagramOutcome::Lost); // sent: its copies in flight report it
+        return true;
+    }
+    // Never sent, so every entry sent is behind it: their room comes free with it.
+    if (!pinned || oldest.pin == kNoPin || m_send.count() == m_unsent)
+    {
+        return false;
+    }
+    ++m_counters.unrouted;
+    pop_oldest(QuicDatagramOutcome::Lost);
     return true;
 }
 
@@ -514,9 +533,13 @@ usize QuicDatagrams::write_next(cont::Span<u8> out, u64 now_ns, u64& ticket, con
             return 0U;
         }
         m_counters.copies += (next.written != 0U) ? 1U : 0U;
-        if (next.written == 0U && next.pin != kNoPin)
+        if (next.written == 0U)
         {
-            --m_pinned[next.pin];
+            --m_unsent;
+            if (next.pin != kNoPin)
+            {
+                --m_pinned[next.pin];
+            }
         }
         next.written = static_cast<u8>(next.written | bit);
         if (next.redundant)

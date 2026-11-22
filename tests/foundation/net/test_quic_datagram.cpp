@@ -1140,3 +1140,93 @@ TEST_CASE("QUIC datagrams: a datagram grown too large is dropped where it stands
     reported(datagrams, 6U, QuicDatagramOutcome::Acked);
     CHECK(datagrams.unreported() == 0U);
 }
+
+TEST_CASE("QUIC datagrams: a pinned datagram holding back what other slots sent gives way for room, pinned ones alone "
+          "wait, and a redundant one grown too large is dropped where it stands once",
+          "[net][net-path][quic-datagram][multipath]")
+{
+    CountingAllocator allocator;
+    for (const bool outcomes : {true, false})
+    {
+        INFO("outcomes " << outcomes);
+        QuicDatagrams datagrams;
+        REQUIRE(datagrams.init(allocator, limits(4096U, 4U, outcomes)));
+        datagrams.set_peer(1200U, kUdp);
+        datagrams.open_path(1U, 1U);
+        // Path ID 1 sends nothing (dark, or slower) while slot 0 sends three behind its pinned one: the ring is full.
+        REQUIRE(put(datagrams, 0U, 8U, 0U, pinned_to(1U)) == QuicDatagramError::None);
+        for (u64 id = 1U; id <= 3U; ++id)
+        {
+            REQUIRE(put(datagrams, id, 8U, 0U) == QuicDatagramError::None);
+            datagrams.on_acked(sends(datagrams, on(0U, 0x3U), 0U, id, 8U));
+            if (outcomes)
+            {
+                reported(datagrams, id, QuicDatagramOutcome::Acked);
+            }
+        }
+        CHECK(datagrams.queued() == 4U);
+        // The next takes the room: the pinned one gives way, Lost and counted unrouted, and what waited behind it goes.
+        REQUIRE(put(datagrams, 4U, 8U, 0U) == QuicDatagramError::None);
+        CHECK(datagrams.counters().unrouted == 1U);
+        if (outcomes)
+        {
+            reported(datagrams, 0U, QuicDatagramOutcome::Lost);
+        }
+        nothing(datagrams, on(1U, 0x3U, true), 0U);
+        datagrams.on_acked(sends(datagrams, on(0U, 0x3U), 0U, 4U, 8U));
+        if (outcomes)
+        {
+            reported(datagrams, 4U, QuicDatagramOutcome::Acked);
+        }
+        CHECK(datagrams.queued() == 0U);
+        CHECK(datagrams.unreported() == 0U);
+        // Pinned ones alone hold no one back: the application waits for them, by count and by bytes.
+        for (u64 id = 5U; id <= 8U; ++id)
+        {
+            REQUIRE(put(datagrams, id, 8U, 0U, pinned_to(1U)) == QuicDatagramError::None);
+        }
+        CHECK(put(datagrams, 9U, 8U, 0U) == QuicDatagramError::Full);
+        CHECK(datagrams.counters().unrouted == 1U);
+        for (u64 id = 5U; id <= 8U; ++id)
+        {
+            datagrams.on_acked(sends(datagrams, on(1U, 0x3U, true), 0U, id, 8U));
+            if (outcomes)
+            {
+                reported(datagrams, id, QuicDatagramOutcome::Acked);
+            }
+        }
+        CHECK(datagrams.unreported() == 0U);
+        QuicDatagrams small;
+        REQUIRE(small.init(allocator, limits(64U, 8U, outcomes)));
+        small.set_peer(1200U, kUdp);
+        small.open_path(1U, 1U);
+        REQUIRE(put(small, 0U, 30U, 0U, pinned_to(1U)) == QuicDatagramError::None);
+        REQUIRE(put(small, 1U, 30U, 0U, pinned_to(1U)) == QuicDatagramError::None);
+        CHECK(put(small, 2U, 8U, 0U) == QuicDatagramError::Full);
+        CHECK(small.counters().unrouted == 0U);
+
+        // A redundant datagram never sent and grown too large: Lost once, its record freed for the next.
+        QuicDatagrams copies;
+        REQUIRE(copies.init(allocator, redundant_limits(4096U, 8U, 1U, outcomes)));
+        copies.set_peer(kQuicMaxDatagramFrame, 1500U);
+        u8 large[1500] = {};
+        u64 id = 0U;
+        REQUIRE(copies.queue(ConstSpan<u8>(large, copies.max_payload()), 0U, id, redundantly()) ==
+                QuicDatagramError::None);
+        copies.set_path(kUdp);
+        CHECK(put(copies, 1U, 8U, 0U, redundantly()) == QuicDatagramError::Full); // its record is held
+        u8 frame[kUdp];
+        u64 ticket = 0U;
+        CHECK(copies.write_next(Span<u8>(frame, sizeof(frame)), 0U, ticket, on(0U, 0x3U)) == 0U);
+        CHECK(copies.counters().oversized == 1U);
+        CHECK(copies.queued() == 0U);
+        if (outcomes)
+        {
+            reported(copies, 0U, QuicDatagramOutcome::Lost);
+        }
+        QuicDatagramReport report;
+        CHECK_FALSE(copies.poll(report));
+        CHECK(copies.unreported() == 0U);
+        REQUIRE(put(copies, 1U, 8U, 0U, redundantly()) == QuicDatagramError::None);
+    }
+}

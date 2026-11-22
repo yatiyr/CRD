@@ -18,13 +18,14 @@
 // that datagram's payload, a plain one ticketed by its id; the receiver accepts every frame the sender wrote and holds
 // what it took in order, byte-exact; an injected frame is refused exactly when it passes the size advertised. The ring
 // leaves exactly as the model's: expiry at max_age_ns, datagrams with nothing left to send to the slots carrying data,
-// the copies owed for a datagram acknowledged, and only sent datagrams (owing copies) giving way for room. queued(),
-// unreported(), the expired, copies and unrouted counters and the redundant records held (a Full at queue()) are the
-// model's; a pin is refused exactly when its path ID is open in no slot (NoPath) or it is redundant (Unsupported), and
-// a pinned datagram is written only by its slot; every id is reported exactly once, as the model expects: a plain one
-// Acked or Lost by its frame, a redundant one Acked at its first acknowledged copy, Lost once every copy was lost and
-// none can go, Expired only unsent, a pinned one Lost unsent when its slot stops; after a final drain on every slot
-// every id is accounted for; nothing allocates after init().
+// the copies owed for a datagram acknowledged, and only sent datagrams (owing copies) and pinned ones holding sent
+// ones back giving way for the ring's room. queued(), unreported(), the expired, copies and unrouted counters and the
+// redundant records held (a Full at queue()) are the model's; a pin is refused exactly when its path ID is open in no
+// slot (NoPath) or it is redundant (Unsupported), and a pinned datagram is written only by its slot; every id is
+// reported exactly once, as the model expects: a plain one Acked or Lost by its frame, a redundant one Acked at its
+// first acknowledged copy, Lost once every copy was lost and none can go, Expired only unsent, a pinned one Lost unsent
+// when its slot stops or it gives way; after a final drain on every slot every id is accounted for; nothing allocates
+// after init().
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_datagram.hpp>
@@ -270,6 +271,23 @@ private:
         return kIds;
     }
 
+    // Whether the oldest gives way for the ring's room: sent (owing copies), or never sent, pinned, with one sent
+    // behind.
+    [[nodiscard]] bool gives_way() const
+    {
+        if (m_front == m_queued)
+        {
+            return false;
+        }
+        const Datagram& oldest = m_datagrams[m_front];
+        bool behind = false;
+        for (u64 id = m_front + 1U; id < m_queued && oldest.written == 0U && oldest.pin != kNoPin; ++id)
+        {
+            behind = behind || m_datagrams[id].written != 0U;
+        }
+        return oldest.written != 0U || behind;
+    }
+
     [[nodiscard]] u32 unreported() const
     {
         u32 count = 0U;
@@ -353,12 +371,13 @@ private:
         CRD_FUZZ_REQUIRE(m_sender.queued() >= added && m_sender.queued() - added <= m_queued - m_front);
         while (m_queued - m_front > m_sender.queued() - added)
         {
-            CRD_FUZZ_REQUIRE(m_datagrams[m_front].written != 0U);
+            CRD_FUZZ_REQUIRE(gives_way());
+            m_unrouted += (m_datagrams[m_front].written == 0U) ? 1U : 0U;
             pop_front(QuicDatagramOutcome::Lost);
         }
         if (error == QuicDatagramError::Full)
         {
-            CRD_FUZZ_REQUIRE(m_front == m_queued || m_datagrams[m_front].written == 0U); // nothing more gives way
+            CRD_FUZZ_REQUIRE(!gives_way()); // nothing more gives way
             return;
         }
         CRD_FUZZ_REQUIRE(id == m_queued);
@@ -687,4 +706,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                          0x02U, 0x40U, 0x02U, 0x41U, 0x02U, 0x00U, 0x00U, 0x00U, 0x10U, 0xC1U, 0x00U, 0x00U, 0x22U,
                          0x81U, 0xF1U, 0x00U, 0x00U, 0x20U, 0x81U, 0x05U, 0x80U, 0x05U, 0x81U, 0x05U, 0x82U, 0x06U};
     sink.add("pinned", pinned, sizeof(pinned));
+    // A pinned datagram whose slot sends nothing while slot 0 sends three behind it, each acknowledged and polled: the
+    // ring is full, and the next plain one takes its room (Lost, unrouted).
+    const u8 gives_way[] = {0x48U, 0x03U, 0x00U, 0x40U, 0xF1U, 0x00U, 0x00U, 0x08U, 0x81U, 0x00U, 0x00U, 0x08U,
+                            0x00U, 0x02U, 0x00U, 0x05U, 0x80U, 0x06U, 0x00U, 0x00U, 0x08U, 0x00U, 0x02U, 0x00U,
+                            0x05U, 0x80U, 0x06U, 0x00U, 0x00U, 0x08U, 0x00U, 0x02U, 0x00U, 0x05U, 0x80U, 0x06U,
+                            0x00U, 0x00U, 0x08U, 0x00U, 0x02U, 0x00U, 0x05U, 0x80U, 0x06U};
+    sink.add("pinned-gives-way", gives_way, sizeof(gives_way));
 }

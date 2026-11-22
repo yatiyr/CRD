@@ -8113,7 +8113,7 @@ constexpr usize kVoiceBytes = 64U;
 // counted, and its first one's time.
 struct Arrivals
 {
-    static constexpr usize kCount = 32U;
+    static constexpr usize kCount = 64U;
     usize copies[kCount] = {};
     u64 first_ns[kCount] = {};
 
@@ -8266,8 +8266,8 @@ TEST_CASE("QUIC connection: a redundant datagram crosses every path carrying dat
     pair.net->down = 1U << 0U;
     voice(20U, 23U, 51U * kMs, false);
     REQUIRE(pair.net->run_until([&] { return client.recovery().pto_count(0U) != 0U; }));
-    voice(23U, Arrivals::kCount, 51U * kMs, true);
-    CHECK(arrivals.each(12U, Arrivals::kCount, 1U));
+    voice(23U, 32U, 51U * kMs, true);
+    CHECK(arrivals.each(12U, 32U, 1U));
     CHECK(client.state() == QuicConnectionState::Established);
 }
 
@@ -8424,5 +8424,66 @@ TEST_CASE("QUIC connection: a backlog pinned to a path that yields its data grow
     CHECK(slow.congestion().window() >= 4U * initial);
     CHECK_FALSE(marked);
     CHECK(received != 0U);
+    CHECK(client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: a datagram pinned to a dark path gives way once what other paths sent waits on it, so "
+          "the live path's datagrams never meet a full queue",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // Path ID 1 goes down after its first pinned datagram: once its probe timeout is pending it is held dark (S78's
+    // Scheduling), so the next pinned to it waits unsent at the queue's head, and every plain datagram slot 0 sends
+    // waits behind it in the ring until the room is needed.
+    MultipathPair pair(2U, 2U, false, true, 256U, true);
+    pair.open_second();
+    QuicConnection& client = pair.client;
+    Arrivals arrivals;
+    usize acked = 0U;
+    usize lost = 0U;
+    const auto settle = [&]
+    {
+        arrivals.read(pair.server, pair.net->now);
+        QuicDatagramReport report;
+        while (client.datagrams().poll(report))
+        {
+            acked += (report.outcome == QuicDatagramOutcome::Acked) ? 1U : 0U;
+            lost += (report.outcome == QuicDatagramOutcome::Lost) ? 1U : 0U;
+        }
+    };
+    pair.net->down = 1U << 1U;
+    REQUIRE(queue_voice(client, 0U, pair.net->now, pinned_to(1U)) == QuicDatagramError::None);
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            settle();
+            return client.recovery().pto_count(1U) != 0U;
+        }));
+    REQUIRE(queue_voice(client, 1U, pair.net->now, pinned_to(1U)) == QuicDatagramError::None);
+    const usize send_count = datagram_limits(true).send_count;
+    for (usize id = 2U; id < send_count + 8U; ++id)
+    {
+        INFO("datagram " << id);
+        const u64 queued_ns = pair.net->now;
+        REQUIRE(queue_voice(client, id, queued_ns, QuicDatagramSend{}) == QuicDatagramError::None);
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                settle();
+                return arrivals.copies[id] != 0U;
+            }));
+        CHECK(arrivals.first_ns[id] - queued_ns <= 21U * kMs);
+        pair.net->advance(queued_ns + 20U * kMs);
+    }
+    // The waiting one gave way exactly once, Lost; the one sent into the outage is Lost by its packet; neither arrived.
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            settle();
+            return acked == send_count + 6U && lost == 2U;
+        }));
+    CHECK(client.datagrams().counters().unrouted == 1U);
+    CHECK(client.abandon_of(1U) == nullptr); // it gave way: its path never stopped
+    CHECK(arrivals.each(0U, 2U, 0U));
+    CHECK(arrivals.each(2U, send_count + 8U, 1U));
     CHECK(client.state() == QuicConnectionState::Established);
 }

@@ -26,9 +26,11 @@
 //   pinned       a datagram queued pinned (QuicDatagramSend::path_id, S78's scheduling: a flow kept on one path) goes
 //                only on the slot of that path ID, open there at queue() (open_path; slot 0 holds path ID 0 until
 //                stopped), even while the slot yields its data (copies_only) or the peer marked it backup; it is never
-//                redundant. Other slots pass it by; until it goes it holds its room in the ring, as any datagram
-//                queued (max_age_ns bounds that). Its path stopping first drops it unsent (Lost with outcomes, counted
-//                unrouted): a pin is a route, and the application may queue it again unpinned.
+//                redundant. Other slots pass it by, but the ring frees in order, so what they sent behind it waits
+//                for it: the oldest datagram, never sent and pinned, gives way when queue() needs the room it holds
+//                that way (its path not sending, dark or slower, while another path sends), as owed copies do. Its
+//                path stopping first drops it unsent too. Either way it is Lost with outcomes and counted unrouted: a
+//                pin is a route, and the application may queue it again unpinned.
 //   receiving    a peer's payload is copied into a byte ring the application reads in place (peek, pop); a full
 //                ring drops it and counts it (a receiver may drop datagrams, section 5). A server marks the
 //                payloads that came in 0-RTT packets: they are replayable.
@@ -127,7 +129,7 @@ struct QuicDatagramCounters
     u64 expired = 0U;  // datagrams dropped unsent at max_age_ns
     u64 oversized = 0U; // datagrams dropped unsent when the path's size fell below them
     u64 copies = 0U;    // a redundant datagram's frames after its first
-    u64 unrouted = 0U;  // pinned datagrams dropped unsent when their path stopped
+    u64 unrouted = 0U;  // pinned datagrams dropped unsent: their path stopped, or later ones needed their room
 };
 
 class QuicDatagrams
@@ -285,8 +287,9 @@ private:
     void drop_unsent(Entry& entry, QuicDatagramOutcome outcome) noexcept;
     // Takes off every oldest entry with nothing more to send to `copies`.
     void pop_done(u32 copies) noexcept;
-    // Whether the oldest entry was sent and owes only copies: queue() gives those up for room.
-    [[nodiscard]] bool give_up_copies() noexcept;
+    // Takes the oldest entry off for room: one sent that owes only copies, or with `pinned` one never sent, pinned,
+    // with entries sent behind it (whose room it holds). False when the oldest is neither.
+    [[nodiscard]] bool give_way(bool pinned) noexcept;
     // A redundant datagram's record once a copy settled or its entry left the ring: Lost once every copy sent was
     // lost and none may go, freed once it left the ring and settled every copy.
     void finish(u32 copy) noexcept;
@@ -308,6 +311,7 @@ private:
     mutable u64 m_cursors[kQuicMaxPaths] = {}; // each slot's: no entry before it is one the slot may still write
     u64 m_path_ids[kQuicMaxPaths] = {};        // each open slot's path ID
     u32 m_pinned[kQuicMaxPaths] = {};          // each slot's pinned entries not yet sent
+    u32 m_unsent = 0U;                         // entries never sent (and not dropped where they stand)
     u8 m_open = 1U;                            // the slots holding a path ID, a bit each
     u32 m_free_copy = 0U;                      // the first free Copy (redundant_count: none)
     usize m_max_payload = 0U;
