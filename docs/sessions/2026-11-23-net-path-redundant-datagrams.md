@@ -24,17 +24,21 @@ host-check 45051033311 passed; 45063142671 and 45057262362 are still queued.
 - One report per datagram: Acked at the first acknowledged copy, Lost once every copy was lost and none can go. A plain
   datagram's ticket stays its id, so QMux and the single-path callers are unchanged.
 - The connection fuzzer's follow oracle: a 102-byte input (now in the corpus) failed it on b818c4b5 too. The server's
-  validation of the client's address failed after the client's last packet: both challenges were lost before the
-  3-PTO timer, and the server reverted to its last validated address (RFC 9000 sections 8.2.4 and 9.3.2). The engine
-  recovers on the client's next packet, which the oracle now sends and requires to bring the server back.
+  validation of the client's address failed after the client's last packet (measured: two challenges, both lost, the
+  third due exactly at the 3-PTO timer), and the server reverted to its last validated address (RFC 9000 sections
+  8.2.4 and 9.3.2). The oracle now pings from the client while the server neither follows nor validates, and requires
+  it back within the bound. In the unminimised input the first ping's packet opened the address's slot without a
+  move or a validation: the server held no peer connection ID for it (`follow_packet`'s `sendable`). A later packet
+  brought it back.
 
 ## Evidence
 
 - `test_quic_datagram.cpp`: three `[multipath]` cases. `test_quic_connection.cpp`: one case over two paths 60 ms
   apart. In it each datagram arrives once per path, a stream rides path ID 0 alone (DataWatch), nothing goes to a
   backup path, and with path ID 0 dark each datagram arrives over path ID 1 within its one-way delay.
-- 11 source mutations, each rebuilt alone and each caught. One that left `give_up_copies` unguarded hung a run; it
-  was replaced and the process was killed.
+- 12 source mutations, each rebuilt alone and each caught; copies carrying stream data was caught by the path-choice
+  case's watch, not the new one's. One mutation that left `give_up_copies` unguarded hung a run; it was replaced and
+  the process was killed.
 - linux-gcc-debug (WSL): 49 CTests pass, including `crd-net-tests` and every `crd-check|crd-no-|crd-fuzz-net` guard.
   linux-gcc-release (LTO) and linux-gcc-asan `[quic-datagram],[multipath],[qmux]` pass.
 - `crd-fuzz-net-quic-datagram` now checks against a model of the send ring (new seed `redundant`). linux-clang-fuzz
@@ -44,5 +48,7 @@ host-check 45051033311 passed; 45063142671 and 45057262362 are still queued.
 
 ## Next
 
-NET-PATH's scheduling: streams or datagram flows pinned to a path (`QuicDatagramSend` takes the pin), an idle path's
+First: a rebinding client's packet whose new address has no unused peer connection ID moves nothing. RFC 9000
+section 9.5 lets the server keep the current one for a NAT rebinding; prove that on the first packet. Then NET-PATH's
+scheduling: streams or datagram flows pinned to a path (`QuicDatagramSend` takes the pin), an idle path's
 RTT kept fresh, PATH_ACK placement; then the fuzzers opening path IDs.
