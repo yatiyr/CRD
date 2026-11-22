@@ -1375,6 +1375,7 @@ struct RawClient
     // PATH_ACK frames (the latest one's path ID and largest), and the raw client's path slot opened for path ID 1
     // (kClientPathCid), 0 for none, with its next packet number.
     usize further_ids[kQuicMaxPaths] = {};
+    u64 largest_issued = 0U; // the largest path ID the server issued an ID for
     u8 further_issued[kQuicMaxPaths][20] = {};
     usize further_bytes[kQuicMaxPaths] = {};
     usize path_acks = 0U;
@@ -1387,6 +1388,10 @@ struct RawClient
     u64 abandon_id = 0U;
     u64 abandon_error = 0U;
     bool abandon_further = false;
+    // The server's MAX_PATH_ID frames: how many, and the latest one's Maximum Path Identifier and packet number.
+    usize max_path_ids = 0U;
+    u64 max_path_id = 0U;
+    u64 max_path_id_packet = 0U;
     // The server's ACK frames (path ID 0's, RFC 10069 section 2.3) in path ID 1's packets, and the latest one's
     // largest.
     usize acks_further = 0U;
@@ -1699,9 +1704,9 @@ private:
                 break;
             case QuicFrameKind::NewConnectionId:
             case QuicFrameKind::PathNewConnectionId:
-                REQUIRE(frame.path_id < kQuicMaxPaths);
                 REQUIRE(frame.sequence < 8U);
-                if (frame.path_id != 0U)
+                raw.largest_issued = (frame.path_id > raw.largest_issued) ? frame.path_id : raw.largest_issued;
+                if (frame.path_id != 0U && frame.path_id < kQuicMaxPaths)
                 {
                     ++raw.further_ids[frame.path_id];
                     if (frame.sequence == 0U)
@@ -1733,6 +1738,11 @@ private:
                 raw.abandon_id = frame.path_id;
                 raw.abandon_error = frame.error_code;
                 raw.abandon_further = m_further;
+                break;
+            case QuicFrameKind::MaxPathId:
+                ++raw.max_path_ids;
+                raw.max_path_id = frame.value;
+                raw.max_path_id_packet = m_number;
                 break;
             case QuicFrameKind::Ack:
                 if (m_further)
@@ -5732,6 +5742,76 @@ TEST_CASE("QUIC connection: a peer that acknowledges PATH_ABANDON and never answ
     CHECK(run.server.state() == QuicConnectionState::Established);
 }
 
+TEST_CASE("QUIC connection: each path ID that closes raises the server's limit by one; its MAX_PATH_ID goes again "
+          "when lost, never once a larger one went, and a path ID under the raised limit is read",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 sections 3.2.1 and 4.6: MAX_PATH_ID raises the limit initial_max_path_id set, is ack-eliciting and
+    // is sent again when lost unless a more recent one went; a path ID above the limit is PROTOCOL_VIOLATION.
+    Identity identity;
+    CountingAllocator host_allocator;
+    Host host(host_allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, true, 2U);
+    run.multipath = true;
+    run.max_path_id = 8U;
+    run.handshake();
+    REQUIRE(run.server.multipath());
+    CHECK(run.server.local_max_path_id() == 2U);
+    // The raw client abandons a path ID it never used and acknowledges the answer: when the path ID closes.
+    const auto abandon = [&](u64 path_id)
+    {
+        send_frame(run, path_frame(QuicFrameKind::PathAbandon, path_id));
+        run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+        const QuicPathAbandon* const entry = run.server.abandon_of(path_id);
+        REQUIRE(entry != nullptr);
+        REQUIRE(entry->deadline_ns != kNeverNs);
+        return entry->deadline_ns;
+    };
+    run_timers(run, abandon(2U));
+    CHECK(run.server.counters().paths_closed == 1U);
+    CHECK(run.server.local_max_path_id() == 3U);
+    REQUIRE(run.raw.max_path_ids == 1U);
+    CHECK(run.raw.max_path_id == 3U);
+    // Lost: the raw client acknowledges only the probe after it, and the frame goes again.
+    run.raw.seen[run.raw.max_path_id_packet] = false;
+    run_timers(run, run.now + 200U * kMs);
+    CHECK(run.raw.max_path_ids == 1U); // a probe carries no copy
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    REQUIRE(run.raw.max_path_ids == 2U);
+    CHECK(run.raw.max_path_id == 3U);
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    // Two closes apart: the earlier one's frame is lost after the later one's went, and goes no more.
+    const u64 three = abandon(3U);
+    run.now += kMs;
+    const u64 one = abandon(1U);
+    REQUIRE(three != one);
+    const u64 earlier = (three < one) ? three : one;
+    const u64 later = (three < one) ? one : three;
+    run_timers(run, earlier);
+    CHECK(run.server.local_max_path_id() == 4U);
+    REQUIRE(run.raw.max_path_ids == 3U);
+    CHECK(run.raw.max_path_id == 4U);
+    run.raw.seen[run.raw.max_path_id_packet] = false;
+    run_timers(run, later);
+    CHECK(run.server.counters().paths_closed == 3U);
+    CHECK(run.server.local_max_path_id() == 5U);
+    REQUIRE(run.raw.max_path_ids == 4U);
+    CHECK(run.raw.max_path_id == 5U);
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    run_timers(run, run.now + 200U * kMs);
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    CHECK(run.raw.max_path_ids == 4U);
+    // IDs go out for the raised path IDs within the raw client's limit, and frames of them are read.
+    CHECK(run.server.local_cid_count(5U) != 0U);
+    CHECK(run.raw.largest_issued == 5U);
+    send_frame(run, path_frame(QuicFrameKind::PathStatus, 5U, 1U));
+    CHECK(run.server.peer_path_status(5U) == QuicPeerPathStatus::Available);
+    REQUIRE(run.server.state() == QuicConnectionState::Established);
+    send_frame(run, path_frame(QuicFrameKind::PathStatus, 6U, 1U));
+    CHECK(run.server.state() == QuicConnectionState::Closing);
+    CHECK(run.server.close_info().error_code == code(QuicTransportError::ProtocolViolation));
+}
+
 namespace
 {
 const Endpoint kSecondAt{IpAddress::v4(192, 0, 2, 66), 41000U}; // a client's socket 1
@@ -6178,12 +6258,142 @@ TEST_CASE("QUIC connection: a lost PATH_ABANDON goes again, and a path ID never 
     CHECK(pair.server.counters().paths_abandoned == 1U);
     CHECK(pair.server.local_cid_count(2U) == 0U);
     CHECK(pair.client.local_cid_count(2U) == 0U);
-    // The hole removed, path ID 1 still opens.
+    // The hole removed, path ID 1 still opens, and path ID 3, which the close let in, opens beside it; then the
+    // limits stand at three path IDs open.
     u64 path_id = 0U;
     REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
     CHECK(path_id == 1U);
     REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
-    CHECK(pair.client.add_path(QuicPath{2U, kServerAt}, pair.net->now, path_id) == QuicMigration::NoPathId);
+    for (const QuicConnection* end : {&pair.client, &pair.server})
+    {
+        CHECK(end->local_max_path_id() == 3U);
+        CHECK(end->peer_max_path_id() == 3U);
+    }
+    REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(3U) != 0U; }));
+    REQUIRE(pair.client.add_path(QuicPath{2U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+    CHECK(path_id == 3U);
+    REQUIRE(pair.net->run_until([&] { return pair.open_both(2U); }));
+    CHECK(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::NoPathId);
+}
+
+namespace
+{
+// `end`'s path IDs up to its limit after `closed` closed: none at or below it holds an ID but path ID 0, three hold
+// some, and `host` routes exactly those IDs and watches at most three tokens.
+void holds_three(const QuicConnection& end, const Host& host, u64 closed)
+{
+    usize routed = 0U;
+    usize open = 0U;
+    for (u64 path_id = 0U; path_id <= end.local_max_path_id(); ++path_id)
+    {
+        const usize count = end.local_cid_count(path_id);
+        CHECK((path_id == 0U || path_id > closed || count == 0U));
+        routed += count;
+        open += (count != 0U) ? 1U : 0U;
+    }
+    CHECK(open == 3U);
+    CHECK(host.routes.size() == routed);
+    CHECK(host.watches - host.unwatches <= 3U);
+}
+} // namespace
+
+TEST_CASE("QUIC connection: path IDs opened and abandoned twenty times over a hostile link raise both limits past "
+          "kQuicMaxPaths, three path IDs open throughout",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 sections 3.2.1, 3.4 and 4.6: a closed path ID is never reused, so MAX_PATH_ID lets a new one in; the
+    // ID spaces, routes and slots a connection holds stay those of 1 + initial_max_path_id path IDs.
+    MultipathPair pair;
+    pair.net->rng.state = 7U;
+    for (Path& path : pair.net->path)
+    {
+        path.loss = 20U;
+        path.duplicate = 20U;
+        path.jitter_ns = 3U * kMs;
+    }
+    pair.confirm();
+    for (u64 cycle = 0U; cycle < 20U; ++cycle)
+    {
+        INFO("cycle " << cycle);
+        // Path IDs open in rising order: each cycle's is the smallest still open, 1 + its cycle.
+        u64 path_id = 0U;
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                return pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started;
+            }));
+        CHECK(path_id == cycle + 1U);
+        REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+        QuicConnection& abandoning = ((cycle % 2U) == 0U) ? pair.client : pair.server;
+        REQUIRE(abandoning.abandon_path(path_id, code(QuicTransportError::NoError), pair.net->now) ==
+                QuicAbandon::Abandoned);
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                return pair.client.counters().paths_closed == cycle + 1U &&
+                       pair.server.counters().paths_closed == cycle + 1U &&
+                       pair.client.peer_max_path_id() == cycle + 3U && pair.server.peer_max_path_id() == cycle + 3U;
+            },
+            600000U * kMs));
+        for (const QuicConnection* end : {&pair.client, &pair.server})
+        {
+            CHECK(end->local_max_path_id() == cycle + 3U);
+            CHECK(end->state() == QuicConnectionState::Established);
+        }
+        // The raised path ID's IDs go out; every path ID up to the limit is then open or closed for good, three are
+        // open, and the host routes exactly the IDs of those and watches the tokens of the peer's IDs sent to.
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                return pair.client.local_cid_count(cycle + 3U) != 0U && pair.server.local_cid_count(cycle + 3U) != 0U;
+            }));
+        holds_three(pair.client, pair.client_host, path_id);
+        holds_three(pair.server, pair.server_host, path_id);
+    }
+    CHECK(pair.client.local_max_path_id() > kQuicMaxPaths);
+    CHECK(pair.client.counters().paths_opened == 20U);
+    CHECK(pair.server.counters().paths_opened == 20U);
+    // The last open path ID still carries data on its own path, numbered from 0 in its slot.
+    u64 path_id = 0U;
+    REQUIRE(pair.net->run_until(
+        [&]
+        { return pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started; }));
+    CHECK(path_id == 21U);
+    REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+    pair.stream_to_server(32U * 1024U);
+    CHECK(pair.server.next_packet_number(QuicSpace::Application, 1U) != 0U);
+}
+
+TEST_CASE("QUIC connection: a client's PATHS_BLOCKED owed at the server's old limit is not sent once MAX_PATH_ID "
+          "raises it, and the path then opens",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 section 4.7: PATHS_BLOCKED reports the limit that prevented a path; one raised before the frame went
+    // prevents nothing.
+    MultipathPair pair(3U, 1U);
+    pair.confirm();
+    REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(1U) != 0U; }));
+    u64 path_id = 0U;
+    REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+    REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+    REQUIRE(pair.server.abandon_path(1U, code(QuicTransportError::NoError), pair.net->now) == QuicAbandon::Abandoned);
+    // The server's close raises its limit; its MAX_PATH_ID is owed, not yet sent.
+    REQUIRE(pair.net->run_until([&] { return pair.server.local_max_path_id() == 2U; }, 600000U * kMs));
+    REQUIRE(pair.client.peer_max_path_id() == 1U);
+    pair.net->flush();
+    // The client, still at the old limit, owes PATHS_BLOCKED; the MAX_PATH_ID arrives before it sends.
+    CHECK(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::NoPathId);
+    pair.net->run_at(pair.net->now + 25U * kMs);
+    REQUIRE(pair.client.peer_max_path_id() == 2U);
+    const u64 blocked = pair.server.counters().paths_blocked;
+    REQUIRE(pair.net->run_until(
+        [&] { return pair.client.peer_cid_count(2U) != 0U && pair.client.counters().paths_closed == 1U; },
+        600000U * kMs));
+    pair.net->advance(pair.net->now + 300U * kMs);
+    CHECK(pair.server.counters().paths_blocked == blocked);
+    REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+    CHECK(path_id == 2U);
+    REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
 }
 
 TEST_CASE("QUIC connection: abandon_path is refused, changing nothing, before the handshake, without multipath, for "

@@ -349,6 +349,22 @@ void check(World& w)
         CRD_FUZZ_REQUIRE(w.cids.is_open(path) == (find(w, path) != nullptr));
         CRD_FUZZ_REQUIRE(w.cids.consumed(path) == (path < w.next_path));
     }
+    // The open spaces in rising order: the model's, each the smallest open path ID above the last.
+    u64 after = 0U;
+    for (u64 next = w.cids.open_after(after); next != kQuicNoSequence; next = w.cids.open_after(after))
+    {
+        u64 smallest = kQuicNoSequence;
+        for (const Space& space : w.spaces)
+        {
+            smallest = (space.open && space.path > after && space.path < smallest) ? space.path : smallest;
+        }
+        CRD_FUZZ_REQUIRE(next == smallest);
+        after = next;
+    }
+    for (const Space& space : w.spaces)
+    {
+        CRD_FUZZ_REQUIRE(!space.open || space.path == 0U || space.path <= after);
+    }
 }
 
 void op_open(World& w, u64 path)

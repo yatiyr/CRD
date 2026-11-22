@@ -145,6 +145,11 @@ TEST_CASE("connection ID spaces open, refuse and close per path ID", "[quic][cid
     REQUIRE(s.cids.open(4U, s.spaces[0]));     // path ID 3 passed over
     CHECK_FALSE(s.cids.open(5U, s.spaces[3])); // kQuicMaxPaths open
     CHECK_FALSE(s.cids.consumed(5U));
+    // The open ones in rising order, whatever storage holds them.
+    CHECK(s.cids.open_after(0U) == 1U);
+    CHECK(s.cids.open_after(1U) == 2U);
+    CHECK(s.cids.open_after(2U) == 4U);
+    CHECK(s.cids.open_after(4U) == kQuicNoSequence);
     // A path ID opens once and in rising order (RFC 10069 sections 2.4 and 3.4): closed, it never opens again, nor
     // does one passed over.
     REQUIRE(s.cids.close(4U) == &s.spaces[0]);
@@ -190,6 +195,9 @@ TEST_CASE("connection ID spaces open, refuse and close per path ID", "[quic][cid
     CHECK(s.cids.current(0U) == kQuicNoSequence);
     REQUIRE(s.cids.open(0xFFFFFFFFU, *first)); // the largest path ID, after which none opens
     CHECK(s.cids.is_open(0xFFFFFFFFU));
+    CHECK(s.cids.open_after(0U) == 2U); // path ID 0 is closed
+    CHECK(s.cids.open_after(7U) == 0xFFFFFFFFU);
+    CHECK(s.cids.open_after(0xFFFFFFFFU) == kQuicNoSequence);
     CHECK(s.cids.consumed(8U));
     REQUIRE(s.cids.close(7U) != nullptr);
     CHECK_FALSE(s.cids.open(8U, *closed));

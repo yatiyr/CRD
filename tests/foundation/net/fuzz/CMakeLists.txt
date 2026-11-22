@@ -55,8 +55,8 @@ crd_fuzz_target(crd-fuzz-net-quic-ecn
 #                            or old sequences, any Retire Prior To and reused or crossed IDs and tokens, retirements
 #                            sent and settled, IDs used, this side's issued, topped up, rotated, retired, sent and
 #                            settled, on one QuicCids against a model of every path ID's space: every verdict restated,
-#                            IDs unique in the connection, retirements bounded, the host routing and watching exactly
-#                            what is held.
+#                            the open path IDs walked in rising order, IDs unique in the connection, retirements
+#                            bounded, the host routing and watching exactly what is held.
 crd_fuzz_target(crd-fuzz-net-quic-cids
     SOURCES fuzz_quic_cids.cpp LIBRARIES crd-net CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic-cids")
 
