@@ -95,7 +95,9 @@
 //              raises its limit; this side's (local_max_path_id()) rises by one as each path ID closes, the closed
 //              one's ID space opening the next and a MAX_PATH_ID owed (sections 3.2.1 and 4.6), so that 1 +
 //              initial_max_path_id path IDs stay open for good. PATH_STATUS keeps the newest status
-//              (peer_path_status()), the two BLOCKED frames are checked and inform. Any path ID, 0 included, is
+//              (peer_path_status()) and sends this side's (set_path_status()); the two BLOCKED frames are checked and
+//              inform. Data goes by the path choice (QuicPathChoice), never on a peer's backup path while one of its
+//              others is usable. Any path ID, 0 included, is
 //              abandoned by either end (abandon_path(), the peer's PATH_ABANDON, or its validation failing): both ends
 //              send PATH_ABANDON, its slot sends nothing more and its ID space retires the peer's IDs, its stragglers
 //              are read and acknowledged on other paths, and its slot and ID space close three PTOs later (section 3.4;
@@ -177,6 +179,17 @@ struct QuicKeyedStart
     u64 unix_seconds = 0U;
 };
 
+// Which open path carries the next data (S78's scheduling; RFC 10069 section 5.5 leaves it to the implementation).
+// Under either choice a peer's backup path carries none while one of its other paths is usable (section 3.3), and a
+// path with a probe timeout pending none while another has fewer (section 5.7). Acknowledgements, path frames and
+// probes go on their own path whatever the choice.
+enum class QuicPathChoice : u8
+{
+    LowestRtt, // the path with the lowest smoothed RTT whose window and pacer let a datagram go now, the next one
+               // while they hold it: latency first, every path's capacity used
+    Turns,     // each path as its own window and pacer allow, in turn
+};
+
 struct QuicConnectionConfig
 {
     crypto::QuicSide side = crypto::QuicSide::Client;
@@ -234,6 +247,7 @@ struct QuicConnectionConfig
     u32 padding_block = 0U; // packets pad to the next multiple of this (NET.3's padded_size()); 0 pads none
     u64 initial_rtt_ns = kQuicInitialRttNs;
     CongestionPolicy congestion; // the controller and pacing (congestion_policy_valid), swappable by set_congestion()
+    QuicPathChoice path_choice = QuicPathChoice::LowestRtt; // which path carries data; live: set_path_choice()
     // The scheduled handovers of the link this connection's path crosses (handover.hpp; handover_schedule_valid): a
     // packet sent where one may take it is a covered packet. Its loss is no congestion signal (no reduction, no loss
     // rate, no persistent congestion, no black hole for the path MTU search) and its RTT and receive time no delay
@@ -294,13 +308,22 @@ enum class QuicConnectionState : u8
     Closed,      // done: the connection may be destroyed
 };
 
-// A peer's preference for one path ID, from its PATH_STATUS_AVAILABLE and PATH_STATUS_BACKUP frames (RFC 10069
-// section 3.3).
-enum class QuicPeerPathStatus : u8
+// One end's preference for one path ID, in its PATH_STATUS_AVAILABLE and PATH_STATUS_BACKUP frames (RFC 10069
+// section 3.3): the peer's as received, or this side's as sent.
+enum class QuicPathStatus : u8
 {
-    Unknown,   // no frame came: this side decides alone
-    Available, // send on it by this side's own logic
+    Unknown,   // no frame: the sender decides alone
+    Available, // send on it by the sender's own logic
     Backup,    // send on it only when no available path is usable
+};
+
+// QuicConnection::set_path_status's answer: Set, or why nothing changed.
+enum class QuicPathStatusChange : u8
+{
+    Set,            // the status is this side's for the path ID; a frame goes on any path when it changed
+    NotEstablished, // the connection is still handshaking, or closing
+    NoMultipath,    // multipath is not negotiated
+    NotOpen,        // the path ID is above either side's limit, closed, or being abandoned
 };
 
 // A client's request to probe or move to a path of its own (RFC 9000 sections 9.1, 9.2 and 9.5).
@@ -586,7 +609,18 @@ public:
     // The largest path ID this side accepts: its initial_max_path_id, raised by one for each path ID that closes.
     [[nodiscard]] u64 local_max_path_id() const noexcept { return m_local_max_path_id; }
     // The peer's preference for `path_id`, its newest PATH_STATUS frame's (section 3.3): Unknown before one.
-    [[nodiscard]] QuicPeerPathStatus peer_path_status(u64 path_id = 0U) const noexcept;
+    [[nodiscard]] QuicPathStatus peer_path_status(u64 path_id = 0U) const noexcept;
+    // Tells the peer this side's preference for `path_id` (RFC 10069 sections 3.3 and 4.3), open in a slot or not yet
+    // used: a PATH_STATUS_BACKUP or PATH_STATUS_AVAILABLE frame on any path, numbered after the last for that path ID
+    // and sent again when lost while it is the newest. A status already in force sends nothing; it is forgotten with
+    // the path ID. Anything but Set changes nothing. The peer weighs it; this side's own sending follows the peer's.
+    [[nodiscard]] QuicPathStatusChange set_path_status(u64 path_id, bool backup) noexcept;
+    // This side's newest status for `path_id`: Unknown before set_path_status().
+    [[nodiscard]] QuicPathStatus path_status(u64 path_id = 0U) const noexcept;
+    // Replaces the path choice live (QuicConnectionConfig::path_choice), from the next datagram. False, changing
+    // nothing, for a value outside QuicPathChoice.
+    [[nodiscard]] bool set_path_choice(QuicPathChoice choice) noexcept;
+    [[nodiscard]] QuicPathChoice path_choice() const noexcept { return m_config.path_choice; }
     // `path_id`'s abandonment while its state is kept (section 3.4); null for a path ID not abandoned or closed.
     [[nodiscard]] const QuicPathAbandon* abandon_of(u64 path_id) const noexcept;
     // The Destination Connection ID this side sends to on path slot `slot`, and the peer's IDs held for `path_id`
@@ -879,10 +913,32 @@ private:
     // data go (m_data_open).
     [[nodiscard]] bool data_allowed(QuicSpace space) const noexcept;
     // Opens or holds 0-RTT and 1-RTT data for the datagram of up to `datagram` bytes send() writes at `now_ns`
-    // (m_data_open): it goes while probing, or when the window has room for all of it and the pacer's release time
-    // has come. Such data held back while some waits tells the controller, and a window with room arms the pacer. A
-    // bandwidth probe wanting bytes counts as data waiting (m_probe_fill).
-    void gate_data(usize datagram, u64 now_ns) noexcept;
+    // (m_data_open): it goes while probing, or when the window has room for all of it, the pacer's release time has
+    // come and no other path takes the data first (yields_data(), with send()'s `out_bytes` and `held_sockets`). Such
+    // data held back while some waits tells the controller, and a window with room arms the pacer; a window left to
+    // another path's data is the application's limit. A bandwidth probe wanting bytes counts as data waiting
+    // (m_probe_fill).
+    void gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 held_sockets) noexcept;
+    // The largest datagram path slot `slot` sends into `out_bytes`: its datagram size and the peer's
+    // max_udp_payload_size, the floor while a probe timeout is pending or its active 4-tuple is unconfirmed.
+    [[nodiscard]] usize datagram_limit(usize slot, usize out_bytes) const noexcept;
+    // Whether path slot `slot` sends, and its active 4-tuple carries data.
+    [[nodiscard]] bool data_path(usize slot) const noexcept;
+    // Whether the peer marked `slot`'s path ID backup, and whether it then carries no data: another path that the
+    // peer did not mark is usable, a data path with no probe timeout pending (section 3.3).
+    [[nodiscard]] bool peer_backup(usize slot) const noexcept;
+    [[nodiscard]] bool backup_held(usize slot) const noexcept;
+    // Whether slot `a` goes before slot `b` under QuicPathChoice::LowestRtt: the lower smoothed RTT, then the lower
+    // slot.
+    [[nodiscard]] bool ranks_before(usize a, usize b) const noexcept;
+    // Whether `slot` leaves its data to another path: it is backup_held(), or, by the lowest RTT, a slot that ranks
+    // before it would send data in a datagram of send()'s at `now_ns` (a usable data path not held for backup, with
+    // room in its window and ledger for a whole datagram, its pacer released, its socket not held and amplification
+    // credit left), so that the slot never yields to one that then sends nothing. Data a better path's window or
+    // pacer holds goes on the next one: sparse data rides the lowest RTT, a backlog every path's capacity.
+    [[nodiscard]] bool yields_data(usize slot, usize out_bytes, u64 now_ns, u32 held_sockets) const noexcept;
+    // Whether a local PATH_STATUS frame waits.
+    [[nodiscard]] bool status_owed() const noexcept;
     // Whether a datagram can go now: one waits, and its outcome has a ledger record free when it is reported.
     [[nodiscard]] bool datagram_ready(u64 now_ns) const noexcept;
     // `pad`: the datagram reaches 1200 bytes (section 14.1), by this packet when it is the `last` or when what it
@@ -1025,15 +1081,20 @@ private:
     bool m_max_path_id_owed = false;   // a MAX_PATH_ID at this side's limit (RFC 10069 section 4.6)
     bool m_paths_blocked_owed = false; // a client's PATHS_BLOCKED at the peer's limit (RFC 10069 section 4.7)
     u64 m_cids_blocked = 0U;           // a client's PATH_CIDS_BLOCKED owed for this path ID (0: none)
-    // The peer's newest PATH_STATUS frame per path ID (section 4.3), for any path ID under this side's limit, open
-    // or not yet: an entry whose status is Unknown is free.
-    struct PeerStatus
+    // The newest PATH_STATUS frame per path ID (section 4.3): the peer's, for any path ID under this side's limit,
+    // open or not yet, and this side's, for those also under the peer's (`owed` while it waits to be sent). An entry
+    // whose status is Unknown is free.
+    struct PathStatusEntry
     {
         u64 path_id = 0U;
         u64 sequence = 0U;
-        QuicPeerPathStatus status = QuicPeerPathStatus::Unknown;
+        QuicPathStatus status = QuicPathStatus::Unknown;
+        bool owed = false;
     };
-    PeerStatus m_peer_statuses[kQuicMaxPaths];
+    // `path_id`'s entry in `table`, else a free one (null: none free).
+    [[nodiscard]] static PathStatusEntry* status_entry(PathStatusEntry (&table)[kQuicMaxPaths], u64 path_id) noexcept;
+    PathStatusEntry m_peer_statuses[kQuicMaxPaths];
+    PathStatusEntry m_local_statuses[kQuicMaxPaths];
     // The path IDs being abandoned: at most one per ID space open, so kQuicMaxPaths. An entry is free unless used.
     QuicPathAbandon m_abandons[kQuicMaxPaths];
     QuicTransportParameters m_remembered; // a client's for 0-RTT: its server's from the ticket's connection

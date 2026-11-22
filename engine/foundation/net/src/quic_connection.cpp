@@ -24,6 +24,7 @@ constexpr u8 kRecordPathsBlocked = 9U;     // a PATHS_BLOCKED frame: value is it
 constexpr u8 kRecordPathCidsBlocked = 10U; // a PATH_CIDS_BLOCKED frame: value is its sequence, stream_id its path ID
 constexpr u8 kRecordPathAbandon = 11U;     // a PATH_ABANDON frame: stream_id is its path ID
 constexpr u8 kRecordMaxPathId = 12U;       // a MAX_PATH_ID frame: value is its Maximum Path Identifier
+constexpr u8 kRecordPathStatus = 13U;      // a PATH_STATUS frame: value is its sequence, stream_id its path ID
 constexpr u32 kNoRecord = ~u32{0};
 constexpr u64 kNsPerMs = 1000000U;
 constexpr u64 kCryptoFrameType = 0x06U;
@@ -184,6 +185,7 @@ constexpr u64 kNoSequence = kQuicNoSequence; // a path with no peer connection I
            p.receive_timestamps_exponent <= kQuicMaxReceiveTimestampsExponent &&
            p.address_discovery <= QuicAddressDiscovery::Both && !p.has_stateless_reset_token &&
            (!p.has_initial_max_path_id || p.initial_max_path_id < kQuicMaxPaths) &&
+           config.path_choice <= QuicPathChoice::Turns &&
            QuicStreamSet::limits_valid(config.streams) && QuicDatagrams::limits_valid(config.datagrams) &&
            p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
            p.active_connection_id_limit <= kQuicMaxPeerConnectionIds && config.sent_packets != 0U &&
@@ -1382,21 +1384,11 @@ bool QuicConnection::multipath_frame(const QuicFrame& frame, QuicSpace space, u6
             {
                 return true;
             }
-            PeerStatus* entry = nullptr;
-            for (PeerStatus& held : m_peer_statuses)
+            PathStatusEntry* const entry = status_entry(m_peer_statuses, frame.path_id);
+            if (entry != nullptr && (entry->status == QuicPathStatus::Unknown || frame.sequence > entry->sequence))
             {
-                const bool known = held.status != QuicPeerPathStatus::Unknown;
-                if (known && held.path_id == frame.path_id)
-                {
-                    entry = &held;
-                    break;
-                }
-                entry = (!known && entry == nullptr) ? &held : entry;
-            }
-            if (entry != nullptr && (entry->status == QuicPeerPathStatus::Unknown || frame.sequence > entry->sequence))
-            {
-                *entry = PeerStatus{frame.path_id, frame.sequence,
-                                    frame.backup ? QuicPeerPathStatus::Backup : QuicPeerPathStatus::Available};
+                *entry = PathStatusEntry{frame.path_id, frame.sequence,
+                                         frame.backup ? QuicPathStatus::Backup : QuicPathStatus::Available, false};
             }
             return true;
         }
@@ -1844,12 +1836,78 @@ bool QuicConnection::carries_data(usize slot, usize index) const noexcept
            (m_config.side == crypto::QuicSide::Server ? paths.validated(index) : paths.proven(index));
 }
 
+bool QuicConnection::data_path(usize slot) const noexcept
+{
+    return m_controls[slot] != nullptr && m_protection.path_open(slot) && addressed(slot) &&
+           carries_data(slot, tuples(slot).active());
+}
+
 bool QuicConnection::fresher_path(usize slot, u32 timeouts) const noexcept
 {
     for (usize other = 0U; other < kQuicMaxPaths; ++other)
     {
-        if (other != slot && m_controls[other] != nullptr && m_protection.path_open(other) && addressed(other) &&
-            carries_data(other, tuples(other).active()) && m_recovery->pto_count(other) < timeouts)
+        if (other != slot && data_path(other) && m_recovery->pto_count(other) < timeouts)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool QuicConnection::peer_backup(usize slot) const noexcept
+{
+    return peer_path_status(m_protection.path_id(slot)) == QuicPathStatus::Backup;
+}
+
+bool QuicConnection::backup_held(usize slot) const noexcept
+{
+    if (!peer_backup(slot))
+    {
+        return false;
+    }
+    // With every usable path backup, or the others dark, the peer's marks give no guidance (section 3.3).
+    for (usize other = 0U; other < kQuicMaxPaths; ++other)
+    {
+        if (other != slot && data_path(other) && m_recovery->pto_count(other) == 0U && !peer_backup(other))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool QuicConnection::ranks_before(usize a, usize b) const noexcept
+{
+    const u64 first = m_recovery->rtt(a).smoothed_ns;
+    const u64 second = m_recovery->rtt(b).smoothed_ns;
+    return (first != second) ? first < second : a < b;
+}
+
+bool QuicConnection::yields_data(usize slot, usize out_bytes, u64 now_ns, u32 held_sockets) const noexcept
+{
+    if (backup_held(slot))
+    {
+        return true;
+    }
+    if (m_config.path_choice != QuicPathChoice::LowestRtt)
+    {
+        return false;
+    }
+    // Every term below is one that lets the other slot's data go in the same send() round, so a slot never yields
+    // to one that then sends nothing: work goes on, on the next path in rank.
+    for (usize other = 0U; other < kQuicMaxPaths; ++other)
+    {
+        if (other == slot || !data_path(other) || m_recovery->pto_count(other) != 0U || backup_held(other) ||
+            !ranks_before(other, slot))
+        {
+            continue;
+        }
+        const QuicPathControl& path = *m_controls[other];
+        const u64 in_flight = m_recovery->bytes_in_flight(other);
+        const bool room = in_flight + datagram_limit(other, out_bytes) <= path.congestion().window();
+        if (room && path.release_ns(now_ns, m_recovery->rtt(other)) <= now_ns &&
+            m_recovery->can_send_data(QuicSpace::Application, other) &&
+            !path_held(other, tuples(other).active(), held_sockets) && amplification_credit(other) >= kMinUsefulPacket)
         {
             return true;
         }
@@ -1959,11 +2017,11 @@ bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
     return m_handshake_done_owed || m_ping_owed || m_probe_fill || m_cids.retirement_owed() ||
            (m_frame_count < m_config.sent_frames &&
             (m_streams.has_frame() || m_cids.local_owed() || m_new_token_owed || m_max_path_id_owed ||
-             m_paths_blocked_owed || m_cids_blocked != 0U || abandon_owed)) ||
+             m_paths_blocked_owed || m_cids_blocked != 0U || abandon_owed || status_owed())) ||
            datagram_ready(now_ns);
 }
 
-void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
+void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 held_sockets) noexcept
 {
     const usize slot = send_slot();
     QuicPathControl& path = control(slot);
@@ -1987,12 +2045,23 @@ void QuicConnection::gate_data(usize datagram, u64 now_ns) noexcept
     // after packet. The window's floor of two datagrams always holds one.
     const u64 in_flight = m_recovery->bytes_in_flight(slot);
     const bool room = in_flight + datagram <= path.congestion().window();
-    const u64 release = path.release_ns(now_ns, m_recovery->rtt(slot));
-    m_data_open = room && release <= now_ns;
-    m_probe_fill = m_data_open && probe_wants; // a probe's fill is data: the window and the pacer hold it as any
     const QuicSpace application = QuicSpace::Application;
     const bool sendable = !m_space_gone[quic_space_index(application)] &&
                           m_protection.can_send(send_type(application)) && m_recovery->can_send_data(application, slot);
+    if (yields_data(slot, out_bytes, now_ns, held_sockets))
+    {
+        // Another path takes the data (S78's scheduling): this window waits unused by the application's choice, so a
+        // rate sample here shows the application's rate, and neither the window nor the pacer held anything back.
+        m_data_open = false;
+        if (room && sendable)
+        {
+            path.on_app_limited(in_flight);
+        }
+        return;
+    }
+    const u64 release = path.release_ns(now_ns, m_recovery->rtt(slot));
+    m_data_open = room && release <= now_ns;
+    m_probe_fill = m_data_open && probe_wants; // a probe's fill is data: the window and the pacer hold it as any
     if (m_data_open)
     {
         if (sendable && !has_data(application, now_ns) && !m_streams.has_frame())
@@ -2028,6 +2097,16 @@ bool QuicConnection::set_congestion(const CongestionPolicy& policy) noexcept
         }
     }
     m_config.congestion = policy; // the policy paths opened from now start on
+    return true;
+}
+
+bool QuicConnection::set_path_choice(QuicPathChoice choice) noexcept
+{
+    if (choice > QuicPathChoice::Turns)
+    {
+        return false;
+    }
+    m_config.path_choice = choice;
     return true;
 }
 
@@ -2146,6 +2225,16 @@ void QuicConnection::settle_frame(SentFrame& frame, Settle how) noexcept
     {
         // Sent again when lost unless a larger limit went since (RFC 10069 section 4.6).
         m_max_path_id_owed = m_max_path_id_owed || (how == Settle::Lost && frame.frame.value == m_local_max_path_id);
+    }
+    else if (frame.kind == kRecordPathStatus)
+    {
+        // Sent again when lost only while it carries the newest status for its path ID (RFC 10069 section 4.3).
+        for (PathStatusEntry& entry : m_local_statuses)
+        {
+            const bool newest = entry.status != QuicPathStatus::Unknown && entry.path_id == frame.frame.stream_id &&
+                                entry.sequence == frame.frame.value;
+            entry.owed = entry.owed || (how == Settle::Lost && newest);
+        }
     }
     else if (frame.kind == kRecordPathsBlocked)
     {
@@ -2330,6 +2419,28 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
                 static_cast<void>(record(space, packet, kRecordMaxPathId, limit, written));
                 m_max_path_id_owed = false;
             }
+        }
+        for (PathStatusEntry& entry : m_local_statuses)
+        {
+            // An abandoned path ID's status is read by no one (section 4); it is forgotten as the path ID closes.
+            if (!entry.owed || m_cids.abandoned(entry.path_id) || m_frame_count == m_config.sent_frames)
+            {
+                continue;
+            }
+            QuicFrame status;
+            status.kind = QuicFrameKind::PathStatus;
+            status.path_id = entry.path_id;
+            status.sequence = entry.sequence;
+            status.backup = entry.status == QuicPathStatus::Backup;
+            if (!put(status))
+            {
+                break;
+            }
+            QuicStreamRecord sent;
+            sent.stream_id = entry.path_id;
+            sent.value = entry.sequence;
+            static_cast<void>(record(space, packet, kRecordPathStatus, sent, written));
+            entry.owed = false;
         }
         if (m_paths_blocked_owed && m_frame_count < m_config.sent_frames)
         {
@@ -2828,20 +2939,8 @@ usize QuicConnection::send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sock
 {
     const usize slot = send_slot();
     m_send_path = tuples(slot).active();
-    usize limit = min_u64(out.size(), control(slot).datagram_bytes());
-    if (m_peer_known || m_early_sending)
-    {
-        limit = min_u64(limit, (m_peer_known ? m_peer : m_remembered).max_udp_payload_size);
-    }
-    const QuicPaths& paths = tuples(slot);
-    const bool validated = paths.validated(m_send_path);
-    if (m_recovery->pto_count(slot) != 0U || (!validated && !(control(slot).path() == paths.path(m_send_path))))
-    {
-        // A probe timeout is pending: datagrams of the floor get an acknowledgement through a black hole that drops
-        // larger ones (quic_pmtu.hpp). Or the peer moved to a path not yet confirmed: the floor is all it is known
-        // to carry.
-        limit = min_u64(limit, kQuicPmtuFloor);
-    }
+    const bool validated = tuples(slot).validated(m_send_path);
+    usize limit = datagram_limit(slot, out.size());
     const usize full = limit; // a datagram's size before the amplification limit: what the window must have room for
     const usize credit = amplification_credit(slot);
     limit = min_u64(limit, credit);
@@ -2870,7 +2969,7 @@ usize QuicConnection::send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sock
             return 0U;
         }
         m_marking = control(slot).marking(now_ns, m_recovery->persistent_congestion_ns(slot));
-        gate_data(full, now_ns);
+        gate_data(full, out.size(), now_ns, held_sockets);
         used = send_path_probe(out, now_ns);
         if (used != 0U)
         {
@@ -2940,6 +3039,26 @@ usize QuicConnection::send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sock
         }
     }
     return used;
+}
+
+usize QuicConnection::datagram_limit(usize slot, usize out_bytes) const noexcept
+{
+    const QuicPathControl& path = *m_controls[slot];
+    usize limit = min_u64(out_bytes, path.datagram_bytes());
+    if (m_peer_known || m_early_sending)
+    {
+        limit = min_u64(limit, (m_peer_known ? m_peer : m_remembered).max_udp_payload_size);
+    }
+    const QuicPaths& paths = tuples(slot);
+    const usize active = paths.active();
+    if (m_recovery->pto_count(slot) != 0U || (!paths.validated(active) && !(path.path() == paths.path(active))))
+    {
+        // A probe timeout is pending: datagrams of the floor get an acknowledgement through a black hole that drops
+        // larger ones (quic_pmtu.hpp). Or the peer moved to a path not yet confirmed: the floor is all it is known
+        // to carry.
+        limit = min_u64(limit, kQuicPmtuFloor);
+    }
+    return limit;
 }
 
 usize QuicConnection::send_path_frames(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noexcept
@@ -4201,11 +4320,14 @@ void QuicConnection::close_abandoned(u64 now_ns) noexcept
             ++m_local_max_path_id;
             m_max_path_id_owed = true;
         }
-        for (PeerStatus& status : m_peer_statuses)
+        for (usize index = 0U; index < kQuicMaxPaths; ++index)
         {
-            if (status.status != QuicPeerPathStatus::Unknown && status.path_id == entry.path_id)
+            for (PathStatusEntry* const held : {&m_peer_statuses[index], &m_local_statuses[index]})
             {
-                status = PeerStatus{};
+                if (held->status != QuicPathStatus::Unknown && held->path_id == entry.path_id)
+                {
+                    *held = PathStatusEntry{};
+                }
             }
         }
         entry = QuicPathAbandon{};
@@ -4273,16 +4395,84 @@ usize QuicConnection::slot_of(u64 path_id) const noexcept
     return kQuicNoPath;
 }
 
-QuicPeerPathStatus QuicConnection::peer_path_status(u64 path_id) const noexcept
+QuicConnection::PathStatusEntry* QuicConnection::status_entry(PathStatusEntry (&table)[kQuicMaxPaths],
+                                                              u64 path_id) noexcept
 {
-    for (const PeerStatus& held : m_peer_statuses)
+    PathStatusEntry* entry = nullptr;
+    for (PathStatusEntry& held : table)
     {
-        if (held.status != QuicPeerPathStatus::Unknown && held.path_id == path_id)
+        const bool known = held.status != QuicPathStatus::Unknown;
+        if (known && held.path_id == path_id)
+        {
+            return &held;
+        }
+        entry = (!known && entry == nullptr) ? &held : entry;
+    }
+    return entry;
+}
+
+QuicPathStatus QuicConnection::peer_path_status(u64 path_id) const noexcept
+{
+    for (const PathStatusEntry& held : m_peer_statuses)
+    {
+        if (held.status != QuicPathStatus::Unknown && held.path_id == path_id)
         {
             return held.status;
         }
     }
-    return QuicPeerPathStatus::Unknown;
+    return QuicPathStatus::Unknown;
+}
+
+QuicPathStatus QuicConnection::path_status(u64 path_id) const noexcept
+{
+    for (const PathStatusEntry& held : m_local_statuses)
+    {
+        if (held.status != QuicPathStatus::Unknown && held.path_id == path_id)
+        {
+            return held.status;
+        }
+    }
+    return QuicPathStatus::Unknown;
+}
+
+QuicPathStatusChange QuicConnection::set_path_status(u64 path_id, bool backup) noexcept
+{
+    if (m_state != QuicConnectionState::Established)
+    {
+        return QuicPathStatusChange::NotEstablished;
+    }
+    if (!m_multipath)
+    {
+        return QuicPathStatusChange::NoMultipath;
+    }
+    // A frame naming a path ID above the peer's limit is PROTOCOL_VIOLATION there (section 4); one this side has not
+    // opened, or abandoned, names no path it may use. At most kQuicMaxPaths ID spaces are open, so an entry is free
+    // for every path ID that passes.
+    PathStatusEntry* const held = status_entry(m_local_statuses, path_id);
+    if (path_id > m_peer_max_path_id || !m_cids.is_open(path_id) || m_cids.abandoned(path_id) || held == nullptr)
+    {
+        return QuicPathStatusChange::NotOpen;
+    }
+    PathStatusEntry& entry = *held;
+    const QuicPathStatus status = backup ? QuicPathStatus::Backup : QuicPathStatus::Available;
+    if (entry.status == status)
+    {
+        return QuicPathStatusChange::Set;
+    }
+    // Numbers rise per path ID, from 0 (section 4.3).
+    const u64 sequence = (entry.status == QuicPathStatus::Unknown) ? 0U : entry.sequence + 1U;
+    entry = PathStatusEntry{path_id, sequence, status, true};
+    return QuicPathStatusChange::Set;
+}
+
+bool QuicConnection::status_owed() const noexcept
+{
+    bool owed = false;
+    for (const PathStatusEntry& entry : m_local_statuses)
+    {
+        owed = owed || (entry.owed && !m_cids.abandoned(entry.path_id));
+    }
+    return owed;
 }
 
 u64 QuicConnection::next_packet_number(QuicSpace space, usize slot) const noexcept
