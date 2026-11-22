@@ -324,7 +324,7 @@ enum class QuicAbandon : u8
     NotEstablished, // the connection is still handshaking, or closing
     NoMultipath,    // multipath is not negotiated
     HandshakePath,  // path ID 0, the handshake's path, which only closing the connection ends here
-    NotOpen,        // the path ID is above this side's limit, closed, or being abandoned already
+    NotOpen,        // the path ID is above either side's limit, closed, or being abandoned already
     BadError,       // the error code is above 2^62 - 1
 };
 

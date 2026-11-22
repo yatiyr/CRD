@@ -3910,6 +3910,12 @@ QuicAbandon QuicConnection::abandon_path(u64 path_id, u64 error_code, u64 now_ns
     {
         return QuicAbandon::BadError;
     }
+    // A frame naming a path ID above the peer's limit is PROTOCOL_VIOLATION there (section 4), and no path of it can
+    // have opened.
+    if (path_id > m_peer_max_path_id)
+    {
+        return QuicAbandon::NotOpen;
+    }
     return (begin_abandon(path_id, error_code, now_ns) != nullptr) ? QuicAbandon::Abandoned : QuicAbandon::NotOpen;
 }
 
@@ -3954,8 +3960,16 @@ bool QuicConnection::peer_abandon(const QuicFrame& frame, u64 now_ns) noexcept
     }
     // Answered whether its path was used or not (section 3.4); a path ID closed already is ignored (section 4).
     QuicPathAbandon* entry = find_abandon(frame.path_id);
-    entry = (entry != nullptr) ? entry
-                               : begin_abandon(frame.path_id, static_cast<u64>(QuicTransportError::NoError), now_ns);
+    if (entry == nullptr)
+    {
+        entry = begin_abandon(frame.path_id, static_cast<u64>(QuicTransportError::NoError), now_ns);
+        if (entry != nullptr && frame.path_id > m_peer_max_path_id)
+        {
+            // Above the peer's own limit, which no frame of this side may name (section 4): nothing to answer.
+            entry->owed = false;
+            entry->acked = true;
+        }
+    }
     if (entry == nullptr || entry->answered)
     {
         return true; // a repeat: the retention runs from the first, which no flood of copies extends
@@ -3964,7 +3978,9 @@ bool QuicConnection::peer_abandon(const QuicFrame& frame, u64 now_ns) noexcept
     entry->peer_error_code = frame.error_code;
     if (entry->acked)
     {
-        entry->deadline_ns = max_u64(entry->deadline_ns, retention_end_ns(entry->path_id, now_ns));
+        // Three PTOs from this frame, or from this side's acknowledgement when that ends later.
+        const u64 end = retention_end_ns(entry->path_id, now_ns);
+        entry->deadline_ns = (entry->deadline_ns == kNeverNs) ? end : max_u64(entry->deadline_ns, end);
     }
     return true;
 }

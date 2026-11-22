@@ -1422,6 +1422,7 @@ public:
     usize pad_to = 0U;       // a 1-RTT packet's datagram is padded to this many bytes
     QuicAddressDiscovery discovery = QuicAddressDiscovery::Off; // what the raw client's parameters offer
     bool multipath = false;  // the raw client's parameters offer initial_max_path_id (RFC 10069)
+    u64 max_path_id = 3U;    // ... as this
     bool empty_scid = false; // the raw client's own connection ID is zero-length
     u8 last[kDatagram] = {}; // the raw client's latest datagram, as sent
     usize last_bytes = 0U;
@@ -1433,7 +1434,7 @@ public:
         parameters.max_idle_timeout = 30000U;
         parameters.address_discovery = discovery;
         parameters.has_initial_max_path_id = multipath;
-        parameters.initial_max_path_id = multipath ? 3U : 0U;
+        parameters.initial_max_path_id = multipath ? max_path_id : 0U;
         parameters.has_initial_source_connection_id = true;
         REQUIRE(parameters.initial_source_connection_id.assign(own_cid()));
         u8 encoded[512];
@@ -5654,6 +5655,56 @@ TEST_CASE("QUIC connection: a peer's PATH_ABANDON is answered once however often
     CHECK(run.server.state() == QuicConnectionState::Established);
 }
 
+TEST_CASE("QUIC connection: a peer that acknowledges PATH_ABANDON and never answers holds the path ID three PTOs, and "
+          "one naming a path ID above the peer's own limit is not answered",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 section 3.4 leaves an unanswered PATH_ABANDON to the implementation: its state closes three PTOs after
+    // the frame's acknowledgement. Section 4: no frame of the server's may name a path ID above the client's limit.
+    Identity identity;
+    CountingAllocator host_allocator;
+    Host host(host_allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, true, 3U);
+    run.multipath = true;
+    run.max_path_id = 2U;
+    run.handshake();
+    const QuicPath second = client_at(9U, 40000U);
+    open_path_one(run, second);
+    run.drain();
+    const u64 resource = code(QuicTransportError::PathResourceLimitReached);
+    CHECK(run.server.abandon_path(3U, resource, run.now) == QuicAbandon::NotOpen); // above the client's limit
+    REQUIRE(run.server.abandon_path(1U, resource, run.now) == QuicAbandon::Abandoned);
+    run.drain();
+    CHECK(run.raw.abandons == 1U);
+    CHECK(run.raw.abandon_id == 1U);
+    CHECK(run.raw.abandon_error == resource);
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    const QuicPathAbandon* const entry = run.server.abandon_of(1U);
+    REQUIRE(entry != nullptr);
+    CHECK(entry->acked);
+    CHECK_FALSE(entry->answered);
+    REQUIRE(entry->deadline_ns != kNeverNs);
+    const u64 deadline = entry->deadline_ns;
+    run_timers(run, deadline - 1U);
+    CHECK(run.server.counters().paths_closed == 0U);
+    run_timers(run, deadline);
+    CHECK(run.server.counters().paths_closed == 1U);
+    CHECK(run.server.local_cid_count(1U) == 0U);
+    CHECK_FALSE(run.server.recovery().path_open(1U));
+    // The client names path ID 3, under the server's limit and above its own: abandoned with no answer.
+    send_frame(run, path_frame(QuicFrameKind::PathAbandon, 3U));
+    run.drain();
+    CHECK(run.raw.abandons == 1U);
+    const QuicPathAbandon* const above = run.server.abandon_of(3U);
+    REQUIRE(above != nullptr);
+    CHECK_FALSE(above->owed);
+    REQUIRE(above->deadline_ns != kNeverNs);
+    run_timers(run, above->deadline_ns);
+    CHECK(run.server.counters().paths_closed == 2U);
+    CHECK(run.raw.abandons == 1U);
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
 namespace
 {
 const Endpoint kSecondAt{IpAddress::v4(192, 0, 2, 66), 41000U}; // a client's socket 1
@@ -6129,5 +6180,21 @@ TEST_CASE("QUIC connection: abandon_path is refused, changing nothing, before th
         MultipathPair pair(2U, 2U, false, false); // the server does not offer it
         pair.confirm();
         CHECK(pair.client.abandon_path(1U, 0U, pair.net->now) == QuicAbandon::NoMultipath);
+    }
+    {
+        // A path ID under this side's limit and above the peer's: no frame may name it there (section 4).
+        MultipathPair pair(1U, 3U);
+        pair.confirm();
+        CHECK(pair.server.abandon_path(2U, 0U, pair.net->now) == QuicAbandon::NotOpen);
+        CHECK(pair.server.abandon_path(1U, 0U, pair.net->now) == QuicAbandon::Abandoned);
+        REQUIRE(pair.net->run_until(
+            [&] { return pair.client.counters().paths_closed == 1U && pair.server.counters().paths_closed == 1U; }));
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+    }
+    {
+        MultipathPair pair(3U, 1U);
+        pair.confirm();
+        CHECK(pair.client.abandon_path(2U, 0U, pair.net->now) == QuicAbandon::NotOpen);
+        CHECK(pair.server.state() == QuicConnectionState::Established);
     }
 }
