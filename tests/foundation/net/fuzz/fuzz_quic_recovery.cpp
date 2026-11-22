@@ -8,7 +8,7 @@
 // reaching numbers never sent), received packets, ACK frames written and carried, time, timeouts, key discards and
 // the handshake's milestones. An Application operation names a path slot (RFC 10069 section 5) in bits 5 and 6 of its
 // operation byte, and bit 7 has an ACK frame arrive through the next slot; an Application state operation with bit 6
-// of its parameter opens its slot, or closes it.
+// of its parameter opens its slot, or closes it, or with bit 7 too stops it (its path ID abandoned).
 //
 // Oracles, against a model of every packet sent and received. Each packet is settled at most once, by one event; an
 // acknowledged packet lay in the frame's ranges and was outstanding; a lost one lay at or below the largest
@@ -32,7 +32,10 @@
 // thresholds, probe count and bytes in flight, and an operation on one leaves every other slot's exactly as it was; a
 // slot not open refuses every operation (NoPath) and reads empty; closing a slot declares each of its outstanding
 // packets lost, outside every estimate, and the slot then starts from nothing when it opens again; slot 0 closes only
-// after the handshake's spaces, and its ACK frames then report no receive timestamps. Each open slot drives its own
+// after the handshake's spaces, and its ACK frames then report no receive timestamps. Stopping a slot other than 0
+// declares each of its outstanding packets lost in the same way at once; it then refuses sends and ACK frames (NoPath),
+// is never a timeout's, holds no bytes in flight or probe count, and still records and acknowledges what it receives
+// until it closes, which reports nothing more. Each open slot drives its own
 // QuicPathControl (quic_path_control.hpp) as a connection does: packets stamped and counted on their slot's, the events
 // of packets on their path, each ACK frame's end and each timeout's detection reach that slot's alone, so the isolation
 // above holds for every slot's window, delivery, losses, ECN state, path MTU and pacer too; the window stays above its
@@ -189,6 +192,7 @@ struct World
     QuicRecovery  recovery;
     ModelSpace    spaces[kModelSpaces];
     bool          open[kQuicMaxPaths] = {true};
+    bool          stopped[kQuicMaxPaths] = {};
     bool          log_ended = false; // slot 0 closed: its ACK frames report no receive timestamps
     // RFC 10069 section 5.4: the slot each path's last RTT sample came through, whether its minimum may have
     // restarted since (min_rtt is then above smoothed_rtt at times) and whether the next sample restarts it.
@@ -221,6 +225,11 @@ struct World
     [[nodiscard]] bool usable(QuicSpace id, usize path) const
     {
         return (id == QuicSpace::Application) ? open[path] : path == 0U;
+    }
+    // Usable, and not stopped: what sends and ACK frames take.
+    [[nodiscard]] bool sending(QuicSpace id, usize path) const
+    {
+        return usable(id, path) && (id != QuicSpace::Application || !stopped[path]);
     }
 };
 #if CRD_COMPILER_MSVC
@@ -376,6 +385,8 @@ void check_state(World& w)
     for (usize path = 0U; path < kQuicMaxPaths; ++path)
     {
         CRD_FUZZ_REQUIRE(w.recovery.path_open(path) == w.open[path]);
+        CRD_FUZZ_REQUIRE(w.recovery.path_sending(path) == (w.open[path] && !w.stopped[path]));
+        CRD_FUZZ_REQUIRE(!w.stopped[path] || (w.recovery.pto_count(path) == 0U && model_in_flight(w, path) == 0U));
         const QuicPathControl& control = w.controls[path];
         CRD_FUZZ_REQUIRE(!w.open[path] || control.started());
         CRD_FUZZ_REQUIRE(!control.started() || (control.congestion().window() >= 2U * kQuicPmtuFloor &&
@@ -436,7 +447,7 @@ void op_send(World& w, QuicSpace id, usize path, u8 p)
         packet.delivery = control.stamp(packet.bytes, w.recovery.bytes_in_flight(path) + packet.bytes, w.now);
     }
     const QuicRecoveryError error = w.recovery.on_sent(id, packet);
-    if (!w.usable(id, path))
+    if (!w.sending(id, path))
     {
         CRD_FUZZ_REQUIRE(!room && error == QuicRecoveryError::NoPath);
         return;
@@ -593,7 +604,7 @@ void op_ack(World& w, QuicSpace id, usize path, usize via, u8 p, const u8* more,
         static_cast<void>(
             control.on_ack_end(id, frame.ack, out, w.recovery.rtt(owner), w.recovery.bytes_in_flight(owner), w.now));
     }
-    if (!w.usable(id, path) || (!space.discarded && !w.open[via]))
+    if (!w.sending(id, path) || (!space.discarded && !w.open[via]))
     {
         CRD_FUZZ_REQUIRE(out.error == QuicRecoveryError::NoPath && w.log.count == from);
         return;
@@ -782,7 +793,7 @@ usize op_timeout(World& w)
         return kQuicMaxPaths;
     }
     CRD_FUZZ_REQUIRE(out.kind != QuicTimeoutKind::None);
-    CRD_FUZZ_REQUIRE(out.path < kQuicMaxPaths && w.usable(out.space, out.path));
+    CRD_FUZZ_REQUIRE(out.path < kQuicMaxPaths && w.sending(out.space, out.path));
     w.controls[out.path].end_detection(out.lost, w.now);
     const usize owner = owner_of(out.space, out.path);
     if (out.kind == QuicTimeoutKind::Loss)
@@ -819,11 +830,50 @@ usize op_timeout(World& w)
     return out.path;
 }
 
-// Opens slot `path`, or closes it: a closed slot's outstanding packets are all lost, each off every estimate when
-// reported, and the slot starts from nothing.
-void op_toggle(World& w, usize path)
+// Each outstanding packet of slot `path`'s, reported lost from `from` on, in rising order and off every estimate, is
+// lost in the model too.
+void take_closing_losses(World& w, usize path, usize from)
+{
+    ModelSpace& space = w.spaces[2U + path];
+    usize outstanding = 0U;
+    for (usize i = 0U; i < space.count; ++i)
+    {
+        outstanding += (space.sent[i].state == kOut) ? 1U : 0U;
+    }
+    CRD_FUZZ_REQUIRE(w.log.count - from == outstanding);
+    u64 previous = 0U;
+    for (usize i = from; i < w.log.count; ++i)
+    {
+        const Log::Event& event = w.log.events[i];
+        CRD_FUZZ_REQUIRE(event.kind == 'l' && event.space == QuicSpace::Application && event.path == path);
+        CRD_FUZZ_REQUIRE(!event.on_path && (i == from || event.number > previous));
+        Sent* const sent = space.find(event.number);
+        CRD_FUZZ_REQUIRE(sent != nullptr && sent->state == kOut);
+        sent->state = kLost;
+        sent->lost_ns = w.now;
+        previous = event.number;
+    }
+}
+
+// Stops slot `path` (bit 7 of `p`), opens it, or closes it: a stopped or closed slot's outstanding packets are all
+// lost, each off every estimate when reported; a closed one starts from nothing.
+void op_toggle(World& w, usize path, u8 p)
 {
     const usize from = w.log.count;
+    if ((p & 0x80U) != 0U)
+    {
+        const bool stops = path != 0U && w.open[path] && !w.stopped[path];
+        CRD_FUZZ_REQUIRE(w.recovery.stop_path(path, w.now, w.log) == stops);
+        if (!stops)
+        {
+            CRD_FUZZ_REQUIRE(w.log.count == from);
+            return;
+        }
+        take_closing_losses(w, path, from);
+        w.stopped[path] = true;
+        CRD_FUZZ_REQUIRE(!w.recovery.can_send(QuicSpace::Application, path));
+        return;
+    }
     if (!w.open[path])
     {
         CRD_FUZZ_REQUIRE(w.recovery.open_path(path, w.states[path], Span<QuicSentEntry>(w.application[path], 32U)));
@@ -848,25 +898,10 @@ void op_toggle(World& w, usize path)
         CRD_FUZZ_REQUIRE(w.log.count == from);
         return;
     }
-    ModelSpace& space = w.spaces[2U + path];
-    usize outstanding = 0U;
-    for (usize i = 0U; i < space.count; ++i)
-    {
-        outstanding += (space.sent[i].state == kOut) ? 1U : 0U;
-    }
-    CRD_FUZZ_REQUIRE(w.log.count - from == outstanding);
-    u64 previous = 0U;
-    for (usize i = from; i < w.log.count; ++i)
-    {
-        const Log::Event& event = w.log.events[i];
-        CRD_FUZZ_REQUIRE(event.kind == 'l' && event.space == QuicSpace::Application && event.path == path);
-        CRD_FUZZ_REQUIRE(!event.on_path && (i == from || event.number > previous));
-        const Sent* const sent = space.find(event.number);
-        CRD_FUZZ_REQUIRE(sent != nullptr && sent->state == kOut);
-        previous = event.number;
-    }
-    space = ModelSpace{};
+    take_closing_losses(w, path, from);
+    w.spaces[2U + path] = ModelSpace{};
     w.open[path] = false;
+    w.stopped[path] = false;
     for (usize other = 0U; other < kQuicMaxPaths; ++other)
     {
         w.restart_due[other] = w.restart_due[other] || w.last_via[other] == path;
@@ -908,7 +943,7 @@ void op_state(World& w, QuicSpace id, usize path, u8 p)
     }
     if (id == QuicSpace::Application && (p & 0x40U) != 0U)
     {
-        op_toggle(w, path);
+        op_toggle(w, path, p);
     }
 }
 } // namespace

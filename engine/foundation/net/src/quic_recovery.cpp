@@ -387,6 +387,11 @@ bool QuicRecovery::usable(QuicSpace space, usize path) const noexcept
     return (space == QuicSpace::Application) ? path_open(path) : path == 0U;
 }
 
+bool QuicRecovery::stopped(QuicSpace space, usize path) const noexcept
+{
+    return space == QuicSpace::Application && path_open(path) && !m_paths[path]->sending;
+}
+
 QuicRecovery::Space& QuicRecovery::space_of(QuicSpace space, usize path) noexcept
 {
     return (space == QuicSpace::Application) ? m_paths[path]->application : m_spaces[quic_space_index(space)];
@@ -480,6 +485,35 @@ bool QuicRecovery::close_path(usize path, u64 now_ns, QuicRecoveryEvents& events
     if (path == 0U)
     {
         m_receive_log.configure(0U, 0U);
+    }
+    arm(now_ns);
+    return true;
+}
+
+bool QuicRecovery::stop_path(usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept
+{
+    if (path == 0U || !path_sending(path))
+    {
+        return false;
+    }
+    // The floor passes every packet sent there, so on_path() is false for the ones reported lost below.
+    Path& stopped = *m_paths[path];
+    Space& space = stopped.application;
+    stopped.sending = false;
+    stopped.floor = space.next_number;
+    stopped.bytes_in_flight = 0U;
+    stopped.pto_count = 0U;
+    space.eliciting_in_flight = 0U;
+    space.loss_time_ns = kNeverNs;
+    for (usize i = 0U; i < space.count; ++i)
+    {
+        QuicSentEntry& sent = entry(space, i);
+        if (sent.state == kOutstanding)
+        {
+            sent.state   = kLost;
+            sent.lost_ns = now_ns;
+            events.on_lost(QuicSpace::Application, sent.packet);
+        }
     }
     arm(now_ns);
     return true;
@@ -647,7 +681,7 @@ u64 QuicRecovery::largest_probe_period_ns() const noexcept
     u64 largest = 0U;
     for (usize path = 0U; path < kQuicMaxPaths; ++path)
     {
-        largest = path_open(path) ? max_u64(largest, probe_period_ns(QuicSpace::Application, path)) : largest;
+        largest = path_sending(path) ? max_u64(largest, probe_period_ns(QuicSpace::Application, path)) : largest;
     }
     return largest;
 }
@@ -854,7 +888,7 @@ void QuicRecovery::drop_outstanding(QuicSpace id, usize path, QuicRecoveryEvents
 
 bool QuicRecovery::can_send(QuicSpace id, usize path) const noexcept
 {
-    if (!usable(id, path))
+    if (!usable(id, path) || stopped(id, path))
     {
         return false;
     }
@@ -864,7 +898,7 @@ bool QuicRecovery::can_send(QuicSpace id, usize path) const noexcept
 
 bool QuicRecovery::can_send_data(QuicSpace id, usize path) const noexcept
 {
-    if (!usable(id, path))
+    if (!usable(id, path) || stopped(id, path))
     {
         return false;
     }
@@ -876,7 +910,7 @@ bool QuicRecovery::can_send_data(QuicSpace id, usize path) const noexcept
 QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& packet) noexcept
 {
     const usize path = packet.path;
-    if (!usable(id, path))
+    if (!usable(id, path) || stopped(id, path))
     {
         return QuicRecoveryError::NoPath;
     }
@@ -1087,7 +1121,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                                     usize path, usize via) noexcept
 {
     QuicAckOutcome out;
-    if (!usable(id, path))
+    if (!usable(id, path) || stopped(id, path))
     {
         out.error = QuicRecoveryError::NoPath;
         return out;

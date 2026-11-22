@@ -1381,6 +1381,11 @@ struct RawClient
     u64 path_ack_largest = 0U;
     usize path_slot = 0U;
     u64 path_next = 0U;
+    // The server's PATH_ABANDON frames: how many, and the latest one's path ID, error code and path.
+    usize abandons = 0U;
+    u64 abandon_id = 0U;
+    u64 abandon_error = 0U;
+    bool abandon_further = false;
     // The server's OBSERVED_ADDRESS frames (the first 32): each one's sequence, address, path and packet number.
     usize observations = 0U;
     u64 observed_sequence[32] = {};
@@ -1702,9 +1707,16 @@ private:
                 }
                 ++raw.challenges;
                 break;
+            case QuicFrameKind::PathAbandon:
+                ++raw.abandons;
+                raw.abandon_id = frame.path_id;
+                raw.abandon_error = frame.error_code;
+                raw.abandon_further = m_further;
+                break;
             case QuicFrameKind::PathAck:
-                // Each path ID's PATH_ACK goes on that path ID's own packets (the server's policy, section 3.1).
-                CHECK(m_further == (frame.path_id != 0U));
+                // Each path ID's PATH_ACK goes on that path ID's own packets (the server's policy, section 3.1), an
+                // abandoned one's on path ID 0's (section 3.4.3).
+                CHECK((m_further == (frame.path_id != 0U) || (!m_further && raw.abandons != 0U)));
                 ++raw.path_acks;
                 raw.path_ack_id = frame.path_id;
                 raw.path_ack_largest = frame.ack.largest;
@@ -2119,7 +2131,7 @@ TEST_CASE("QUIC connection: multipath negotiated for path ID 0 reads RFC 10069's
         CHECK(run.raw.close_code == run.server.close_info().error_code);
     }
     {
-        // PATH_ABANDON of path ID 0, the only path, closes the connection without an error (section 3.4).
+        // PATH_ABANDON of path ID 0, the handshake's path, closes the connection without an error (section 3.4).
         RawRun run(identity, 2048U, {}, nullptr, {}, 0U, QuicAddressDiscovery::Off, true);
         negotiate(run);
         send_frame(run, path_frame(QuicFrameKind::PathAbandon));
@@ -5536,6 +5548,110 @@ TEST_CASE("QUIC connection: a further path's challenge timers and expiry run, wi
     CHECK_FALSE(paths.validated(paths.active()));
     CHECK(run.server.state() == QuicConnectionState::Established);
     CHECK(run.server.path() == run.from);
+    // The failure abandons path ID 1 (RFC 10069 section 3.1), on path ID 0: the slot sends nothing more.
+    run.drain();
+    CHECK(run.raw.abandons == 1U);
+    CHECK(run.raw.abandon_id == 1U);
+    CHECK(run.raw.abandon_error == code(QuicTransportError::PathUnstableOrPoor));
+    CHECK_FALSE(run.raw.abandon_further);
+    REQUIRE(run.server.abandon_of(1U) != nullptr);
+    CHECK_FALSE(run.server.recovery().path_sending(1U));
+    CHECK(run.server.counters().paths_abandoned == 1U);
+}
+
+TEST_CASE("QUIC connection: a peer's PATH_ABANDON is answered once however often it repeats, the path's stragglers "
+          "are acknowledged on path ID 0, and its frames are ignored once it closes",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 sections 3.4 to 4: the receiver answers, keeps the path's state three PTOs from the first frame (no
+    // copy extends it), acknowledges what still arrives there on another path, and ignores frames of the path ID.
+    Identity identity;
+    CountingAllocator host_allocator;
+    Host host(host_allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, true, 3U);
+    run.multipath = true;
+    run.handshake();
+    const QuicPath second = client_at(9U, 40000U);
+    open_path_one(run, second);
+    run.drain();
+    const u64 unstable = code(QuicTransportError::PathUnstableOrPoor);
+    QuicFrame abandon = path_frame(QuicFrameKind::PathAbandon, 1U);
+    abandon.error_code = unstable;
+    send_frame(run, abandon);
+    const QuicPathAbandon* const entry = run.server.abandon_of(1U);
+    REQUIRE(entry != nullptr);
+    CHECK(entry->answered);
+    CHECK(entry->peer_error_code == unstable);
+    CHECK_FALSE(run.server.recovery().path_sending(1U));
+    run.drain();
+    CHECK(run.raw.abandons == 1U);
+    CHECK(run.raw.abandon_id == 1U);
+    CHECK(run.raw.abandon_error == code(QuicTransportError::NoError));
+    CHECK_FALSE(run.raw.abandon_further);
+    for (u64 copy = 0U; copy < 64U; ++copy)
+    {
+        abandon.error_code = copy;
+        send_frame(run, abandon);
+    }
+    run.drain();
+    CHECK(entry->peer_error_code == unstable);
+    CHECK(entry->deadline_ns == kNeverNs); // its own frame is not yet acknowledged
+    CHECK(run.raw.abandons == 1U);
+    CHECK(run.server.counters().paths_abandoned == 1U);
+    // PATH_STATUS, PATH_CIDS_BLOCKED (past any sequence) and PATH_ACK frames of it are ignored.
+    send_frame(run, path_frame(QuicFrameKind::PathStatus, 1U, 1U));
+    CHECK(run.server.peer_path_status(1U) == QuicPeerPathStatus::Unknown);
+    send_frame(run, path_frame(QuicFrameKind::PathCidsBlocked, 1U, 50U));
+    const QuicAckRange first{0U, 0U};
+    send_path_ack(run, 1U, ConstSpan<QuicAckRange>(&first, 1U));
+    REQUIRE(run.server.state() == QuicConnectionState::Established);
+    // A straggler on path ID 1 is read and acknowledged on path ID 0 (section 3.4.3), nothing sent on path ID 1.
+    const auto ping_on_one = [&]
+    {
+        run.send_on_path(ConstSpan<u8>(run.raw.further_issued[1], run.raw.further_bytes[1]), second,
+                         [&](Span<u8> out)
+                         {
+                             QuicFrame ping;
+                             ping.kind = QuicFrameKind::Ping;
+                             return write_quic_frame(ping, out);
+                         });
+    };
+    const u64 opened = run.server.counters().packets_opened;
+    const usize acks = run.raw.path_acks;
+    const u64 sent_on_one = run.server.next_packet_number(QuicSpace::Application, 1U);
+    ping_on_one();
+    CHECK(run.server.counters().packets_opened == opened + 1U);
+    run_timers(run, run.now + 100U * kMs);
+    CHECK(run.raw.path_acks == acks + 1U);
+    CHECK(run.raw.path_ack_id == 1U);
+    CHECK(run.server.next_packet_number(QuicSpace::Application, 1U) == sent_on_one);
+    // Its PATH_ABANDON acknowledged, the path ID closes three PTOs later.
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return run.ack_received(out); });
+    REQUIRE(run.server.abandon_of(1U) != nullptr);
+    const u64 deadline = run.server.abandon_of(1U)->deadline_ns;
+    const QuicRecovery& recovery = run.server.recovery();
+    const u64 own = recovery.probe_period_ns(QuicSpace::Application, 1U);
+    const u64 period = (recovery.largest_probe_period_ns() > own) ? recovery.largest_probe_period_ns() : own;
+    CHECK(deadline == run.now + 3U * period);
+    run_timers(run, deadline);
+    CHECK(run.server.counters().paths_closed == 1U);
+    CHECK(run.server.abandon_of(1U) == nullptr);
+    CHECK(run.server.local_cid_count(1U) == 0U);
+    CHECK_FALSE(run.server.recovery().path_open(1U));
+    // Gone: its frames and packets are ignored.
+    const u64 dropped = run.server.counters().packets_dropped;
+    ping_on_one();
+    CHECK(run.server.counters().packets_dropped == dropped + 1U);
+    send_frame(run, path_frame(QuicFrameKind::PathAbandon, 1U));
+    send_frame(run, path_frame(QuicFrameKind::PathCidsBlocked, 1U, 50U));
+    send_path_ack(run, 1U, ConstSpan<QuicAckRange>(&first, 1U));
+    CHECK(run.server.counters().paths_abandoned == 1U);
+    // A path ID never used is answered all the same (section 3.4).
+    send_frame(run, path_frame(QuicFrameKind::PathAbandon, 2U));
+    run.drain();
+    CHECK(run.raw.abandon_id == 2U);
+    CHECK(run.server.counters().paths_abandoned == 2U);
+    CHECK(run.server.state() == QuicConnectionState::Established);
 }
 
 namespace
@@ -5844,8 +5960,174 @@ TEST_CASE("QUIC connection: a client's further path carries no data before its s
     const QuicPaths& mine = pair.client.paths(1U);
     CHECK_FALSE(mine.proven(mine.active()));
     CHECK_FALSE(mine.validating(mine.active()));
+    // The failure abandons path ID 1 ("the endpoint MUST explicitly close the path"): its slot sends nothing more,
+    // the server, which never opened it, answers on path ID 0, and both close it.
+    const QuicPathAbandon* const abandon = pair.client.abandon_of(1U);
+    REQUIRE(abandon != nullptr);
+    CHECK(abandon->error_code == code(QuicTransportError::PathUnstableOrPoor));
+    CHECK_FALSE(pair.client.recovery().path_sending(1U));
+    REQUIRE(pair.net->run_until([&]
+                                {
+                                    CHECK(pair.client.next_packet_number(QuicSpace::Application, 1U) ==
+                                          (pair.client.recovery().path_open(1U) ? challenges : 0U));
+                                    return pair.client.counters().paths_closed == 1U &&
+                                           pair.server.counters().paths_closed == 1U;
+                                }));
     pair.stream_to_server(48U * 1024U);
-    CHECK(pair.client.next_packet_number(QuicSpace::Application, 1U) <= challenges + 3U);
+    CHECK_FALSE(pair.client.recovery().path_open(1U));
+    CHECK(pair.server.local_cid_count(1U) == 0U);
+    CHECK(pair.client.local_cid_count(1U) == 0U);
     CHECK(pair.server.counters().paths_opened == 0U);
     CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: either end abandons path ID 1 over links that lose, duplicate and jitter; both send "
+          "PATH_ABANDON on path ID 0, its data in flight finishes there, and both close it three PTOs later",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 section 3.4: the abandoning end retires the peer's IDs for the path at once and sends no packet there
+    // again; the receiver answers with its own PATH_ABANDON; each keeps its issued IDs and the path's received state
+    // three PTOs, then frees both. Packets in flight there go back to the queues (section 3.4.3).
+    for (u64 seed = 1U; seed <= 4U; ++seed)
+    {
+        const bool by_client = (seed % 2U) != 0U;
+        INFO("seed " << seed << (by_client ? ", the client abandons" : ", the server abandons"));
+        MultipathPair pair;
+        pair.net->rng.state = seed;
+        for (Path& path : pair.net->path)
+        {
+            path.loss = 40U;
+            path.duplicate = 30U;
+            path.jitter_ns = 4U * kMs;
+        }
+        pair.confirm();
+        REQUIRE(pair.net->run_until(
+            [&] { return pair.client.peer_cid_count(1U) != 0U && pair.server.peer_cid_count(1U) != 0U; }));
+        u64 path_id = 0U;
+        REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+        REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+        QuicConnection& abandoning = by_client ? pair.client : pair.server;
+        QuicConnection& answering = by_client ? pair.server : pair.client;
+        u64 stream = 0U;
+        REQUIRE(pair.client.streams().open(true, stream) == QuicStreamError::None);
+        constexpr u64 total = 160U * 1024U;
+        u64 written = 0U;
+        u64 read = 0U;
+        const auto flow = [&]
+        {
+            static_cast<void>(write_pattern(pair.client.streams(), stream, written, total, stream));
+            return pair.server.streams().recv_state(stream) != QuicRecvState::None &&
+                   drain(pair.server.streams(), stream, read, stream);
+        };
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                static_cast<void>(flow());
+                return pair.client.recovery().bytes_in_flight(1U) != 0U;
+            }));
+        const u64 error = code(QuicTransportError::ApplicationAbandonPath);
+        CHECK(abandoning.abandon_path(1U, error, pair.net->now) == QuicAbandon::Abandoned);
+        CHECK(abandoning.abandon_path(1U, error, pair.net->now) == QuicAbandon::NotOpen); // once
+        CHECK(abandoning.peer_cid_count(1U) == 0U);
+        CHECK_FALSE(abandoning.recovery().path_sending(1U));
+        CHECK(abandoning.recovery().bytes_in_flight(1U) == 0U);
+        const u64 last = abandoning.next_packet_number(QuicSpace::Application, 1U);
+        u64 answered_error = ~u64{0};
+        u64 peer_error = ~u64{0};
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                static_cast<void>(flow());
+                // Nothing goes on the abandoned path again, from the end that abandoned it or the one that answered.
+                const QuicPathAbandon* const own = abandoning.abandon_of(1U);
+                if (own != nullptr)
+                {
+                    CHECK(abandoning.next_packet_number(QuicSpace::Application, 1U) == last);
+                    answered_error = own->peer_error_code;
+                }
+                const QuicPathAbandon* const theirs = answering.abandon_of(1U);
+                if (theirs != nullptr)
+                {
+                    CHECK_FALSE(answering.recovery().path_sending(1U));
+                    peer_error = theirs->peer_error_code;
+                }
+                return pair.client.counters().paths_closed == 1U && pair.server.counters().paths_closed == 1U;
+            },
+            600000U * kMs));
+        CHECK(peer_error == error);
+        CHECK(answered_error == code(QuicTransportError::NoError));
+        REQUIRE(pair.net->run_until(flow, 600000U * kMs));
+        CHECK(read == total);
+        for (QuicConnection* end : {&pair.client, &pair.server})
+        {
+            CHECK(end->counters().paths_abandoned == 1U);
+            CHECK(end->abandon_of(1U) == nullptr);
+            CHECK_FALSE(end->recovery().path_open(1U));
+            CHECK(end->local_cid_count(1U) == 0U);
+            CHECK(end->peer_cid_count(1U) == 0U);
+            CHECK(end->state() == QuicConnectionState::Established);
+        }
+        // Path ID 1 is consumed: the client cannot open it again (section 3.4); path ID 2 takes the freed slot, its
+        // packets numbered from 0.
+        REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(2U) != 0U; }));
+        REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+        CHECK(path_id == 2U);
+        CHECK(pair.client.next_packet_number(QuicSpace::Application, 1U) <= 2U);
+        REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+        pair.stream_to_server(32U * 1024U);
+        CHECK(pair.server.next_packet_number(QuicSpace::Application, 1U) != 0U);
+    }
+}
+
+TEST_CASE("QUIC connection: a lost PATH_ABANDON goes again, and a path ID never used is abandoned and closed",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // Sections 3.4 and 4.2: PATH_ABANDON is ack-eliciting and repeated when lost; abandoning an unused path ID, to
+    // remove a hole from the path IDs in use, is not an error, and the receiver answers it all the same.
+    MultipathPair pair;
+    DropFirst lose(0U, 1U);
+    lose.armed = false;
+    pair.net->filter = &lose;
+    pair.confirm();
+    REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(2U) != 0U; }));
+    const usize dropped = pair.net->dropped[0];
+    lose.armed = true; // the client's next datagram, the one carrying its PATH_ABANDON, is lost
+    CHECK(pair.client.abandon_path(2U, code(QuicTransportError::NoError), pair.net->now) == QuicAbandon::Abandoned);
+    CHECK(pair.client.peer_cid_count(2U) == 0U);
+    REQUIRE(pair.net->run_until(
+        [&] { return pair.client.counters().paths_closed == 1U && pair.server.counters().paths_closed == 1U; }));
+    CHECK(pair.net->dropped[0] == dropped + 1U);
+    CHECK(pair.server.counters().paths_abandoned == 1U);
+    CHECK(pair.server.local_cid_count(2U) == 0U);
+    CHECK(pair.client.local_cid_count(2U) == 0U);
+    // The hole removed, path ID 1 still opens.
+    u64 path_id = 0U;
+    REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+    CHECK(path_id == 1U);
+    REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+    CHECK(pair.client.add_path(QuicPath{2U, kServerAt}, pair.net->now, path_id) == QuicMigration::NoPathId);
+}
+
+TEST_CASE("QUIC connection: abandon_path is refused, changing nothing, before the handshake, without multipath, for "
+          "path ID 0, for a path ID not open and for an error code past 2^62 - 1",
+          "[net][net-path][quic-connection][multipath]")
+{
+    {
+        MultipathPair pair;
+        CHECK(pair.client.abandon_path(1U, 0U, pair.net->now) == QuicAbandon::NotEstablished);
+        pair.confirm();
+        CHECK(pair.client.abandon_path(0U, 0U, pair.net->now) == QuicAbandon::HandshakePath);
+        CHECK(pair.client.abandon_path(3U, 0U, pair.net->now) == QuicAbandon::NotOpen); // above the limit of 2
+        CHECK(pair.client.abandon_path(1U, kQuicMaxVarint + 1U, pair.net->now) == QuicAbandon::BadError);
+        CHECK(pair.client.abandon_of(1U) == nullptr);
+        CHECK(pair.client.counters().paths_abandoned == 0U);
+        pair.net->advance(pair.net->now + 500U * kMs);
+        CHECK(pair.server.counters().paths_abandoned == 0U);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+    }
+    {
+        MultipathPair pair(2U, 2U, false, false); // the server does not offer it
+        pair.confirm();
+        CHECK(pair.client.abandon_path(1U, 0U, pair.net->now) == QuicAbandon::NoMultipath);
+    }
 }

@@ -79,6 +79,9 @@ public:
     [[nodiscard]] bool start(const QuicPathControlConfig& config, const QuicPath& path, u64 entropy,
                              CongestionCoupling* coupling = nullptr) noexcept;
     [[nodiscard]] bool started() const noexcept { return m_controller != nullptr; }
+    // The path sends no more (its path ID abandoned): the controller ends, leaving its coupling, and nothing but
+    // start() may be called until it starts again.
+    void stop() noexcept;
 
     // The 4-tuple the state was built on. bind() names another and keeps the state: a peer port not yet known, or a
     // NAT rebinding (only the port changed, RFC 9000 section 9.4).

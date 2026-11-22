@@ -234,7 +234,7 @@ enum class QuicRecoveryError : u8
     Full,        // the space's storage holds no room for another packet
     BadNumber,   // a packet number not above the space's last
     Discarded,   // the space's keys were discarded
-    NoPath,      // a path slot that is not open, or a slot other than 0 for the Initial or Handshake space
+    NoPath,      // a path slot not open or stopped, or a slot other than 0 for the Initial or Handshake space
 };
 
 // The packets one detection declared lost.
@@ -346,6 +346,7 @@ class QuicPathRecovery
         u32     reorder_persist = 0U; // loss detections before the thresholds return to RFC 9002's
         u32     pto_count = 0U;
         usize   min_via = 0U; // the slot whose frames gave rtt.min_ns; kQuicNoPath once it closed
+        bool    sending = true; // false once stop_path() left it receiving alone
     };
 
     State m_state;
@@ -382,10 +383,17 @@ public:
     // open, the last one open, and slot 0 before the handshake is confirmed and the Initial and Handshake spaces
     // discarded. The slot's state and storage are the caller's again when it returns.
     [[nodiscard]] bool close_path(usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept;
+    // Slot `path` sends no more (RFC 10069 section 3.4: its path ID abandoned) but still records what it receives,
+    // for its PATH_ACK frames to go on another path until close_path (section 3.4.3). Each packet still outstanding
+    // is declared lost at once, for its frames to go on another path, which no controller hears as congestion; from
+    // then on can_send() is false there, no timer is armed for it, the largest probe period leaves it out and its
+    // own probe period loses its backoff. False, changing nothing, for slot 0, a slot not open or stopped already.
+    [[nodiscard]] bool stop_path(usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept;
     [[nodiscard]] bool path_open(usize path) const noexcept
     {
         return path < kQuicMaxPaths && m_paths[path] != nullptr;
     }
+    [[nodiscard]] bool path_sending(usize path) const noexcept { return path_open(path) && m_paths[path]->sending; }
 
     // ---- What the connection learns ----
 
@@ -456,8 +464,8 @@ public:
     bool on_received(QuicSpace space, u64 number, bool ack_eliciting, Ecn ecn, u64 received_ns,
                      usize path = 0U) noexcept;
     // An ACK frame of `space` (appendix A.7) acknowledging slot `path`'s packets (an ACK frame's are slot 0's, a
-    // PATH_ACK's its path ID's), received in a packet of slot `via`. NoPath for either slot not open; an error changes
-    // nothing.
+    // PATH_ACK's its path ID's), received in a packet of slot `via`. NoPath for either slot not open or `path`
+    // stopped (stop_path: its packets are lost already); an error changes nothing.
     [[nodiscard]] QuicAckOutcome on_ack(QuicSpace space, const QuicAck& ack, u64 now_ns, QuicRecoveryEvents& events,
                                         usize path = 0U, usize via = 0U) noexcept;
 
@@ -481,8 +489,8 @@ public:
     [[nodiscard]] const QuicAckTracker& received(QuicSpace space, usize path = 0U) const noexcept;
     // The probe timeout's period now: probe_base + max_ack_delay (Application only) shifted by the backoff.
     [[nodiscard]] u64 probe_period_ns(QuicSpace space, usize path = 0U) const noexcept;
-    // The largest Application probe period among the open paths: three of them are what a key update and closing
-    // wait (RFC 10069 sections 2.5 and 2.6).
+    // The largest Application probe period among the open paths still sending: three of them are what a key update
+    // and closing wait (RFC 10069 sections 2.5 and 2.6).
     [[nodiscard]] u64 largest_probe_period_ns() const noexcept;
     // RFC 9002 section 7.6.1: (probe_base + max_ack_delay) * kQuicPersistentCongestionThreshold.
     [[nodiscard]] u64 persistent_congestion_ns(usize path = 0U) const noexcept;
@@ -507,6 +515,8 @@ private:
     [[nodiscard]] const Path& view(usize path) const noexcept;
     // Whether `space` of slot `path` is one: an open slot for Application, slot 0 for the others.
     [[nodiscard]] bool usable(QuicSpace space, usize path) const noexcept;
+    // An Application space of an open slot stop_path() stopped: it records and acknowledges, and sends nothing.
+    [[nodiscard]] bool stopped(QuicSpace space, usize path) const noexcept;
     // `space` of slot `path`, and the path whose estimate it follows; both for a usable() pair only.
     [[nodiscard]] Space& space_of(QuicSpace space, usize path) noexcept;
     [[nodiscard]] const Space& space_of(QuicSpace space, usize path) const noexcept;

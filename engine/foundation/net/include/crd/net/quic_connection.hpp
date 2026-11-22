@@ -93,8 +93,11 @@
 //              under this side's limit: a path ID above it is PROTOCOL_VIOLATION (section 4), as is a PATH_ACK of a
 //              path ID whose number space never opened; one whose state is gone is ignored. MAX_PATH_ID raises the
 //              peer's limit only, PATH_STATUS keeps the newest status (peer_path_status()), the two BLOCKED frames are
-//              checked and inform, and PATH_ABANDON closes the connection (section 3.4). Without negotiation every
-//              one is an unknown frame: FRAME_ENCODING_ERROR.
+//              checked and inform. A path ID other than 0 is abandoned by either end (abandon_path(), the peer's
+//              PATH_ABANDON, or its validation failing): both ends send PATH_ABANDON, its slot sends nothing more and
+//              its ID space retires the peer's IDs, its stragglers are read and acknowledged on other paths, and its
+//              slot and ID space close three PTOs later (section 3.4; QuicPathAbandon). PATH_ABANDON of path ID 0
+//              closes the connection. Without negotiation every one is an unknown frame: FRAME_ENCODING_ERROR.
 //   IDs        both ends' IDs are held in QuicCids (quic_connection_ids.hpp), one sequence space per path ID; this
 //              side's come from the host (QuicConnectionIds), which routes them and derives their stateless reset
 //              tokens from its QuicResetKey: after confirmation the peer is kept at its
@@ -314,6 +317,34 @@ enum class QuicMigration : u8
     NoSocket,       // the client host's socket set has no such socket (QuicClient)
 };
 
+// QuicConnection::abandon_path's answer: Abandoned, or why nothing changed.
+enum class QuicAbandon : u8
+{
+    Abandoned,      // PATH_ABANDON goes on another path, and the path ID's slot sends nothing more
+    NotEstablished, // the connection is still handshaking, or closing
+    NoMultipath,    // multipath is not negotiated
+    HandshakePath,  // path ID 0, the handshake's path, which only closing the connection ends here
+    NotOpen,        // the path ID is above this side's limit, closed, or being abandoned already
+    BadError,       // the error code is above 2^62 - 1
+};
+
+// A path ID being abandoned (RFC 10069 section 3.4), from either end's PATH_ABANDON until its state closes: its slot
+// (if one held it) sends nothing more, its packets in flight went back to the other paths' queues, and what still
+// arrives there is read and acknowledged in PATH_ACK frames on other paths (section 3.4.3). Its slot and ID space
+// close three PTOs after this side's frame is acknowledged and the peer's arrived; a peer that acknowledged it and
+// never answers holds nothing past those three PTOs either.
+struct QuicPathAbandon
+{
+    u64 path_id = 0U;
+    u64 error_code = 0U;        // this side's PATH_ABANDON's (NO_ERROR when it answers the peer's)
+    u64 peer_error_code = 0U;   // the peer's, once answered
+    u64 deadline_ns = kNeverNs; // when its state closes, set once this side's frame is acknowledged
+    bool used = false;
+    bool owed = false;     // this side's frame waits for a packet, again when lost
+    bool acked = false;    // ... and was acknowledged
+    bool answered = false; // the peer's frame arrived
+};
+
 // Why a connection closed.
 struct QuicCloseInfo
 {
@@ -347,6 +378,8 @@ struct QuicConnectionCounters
     u64 path_validations = 0U;   // paths a PATH_RESPONSE validated
     u64 paths_opened = 0U;       // path IDs whose number space opened in a slot of their own (RFC 10069)
     u64 path_failures = 0U;      // validations abandoned on their timeout
+    u64 paths_abandoned = 0U;    // path IDs abandoned by either end (RFC 10069 section 3.4)
+    u64 paths_closed = 0U;       // abandoned path IDs whose slot and ID space closed
     u64 paths_blocked = 0U;      // PATHS_BLOCKED and PATH_CIDS_BLOCKED frames taken (RFC 10069 section 4.7)
     u64 foreign_datagrams = 0U;  // datagrams from a path this side takes nothing from (a client's unknown server)
     u64 handover_losses = 0U;    // losses of packets a scheduled handover may have taken, kept from congestion control
@@ -439,6 +472,11 @@ public:
     // PATHS_BLOCKED, and NoConnectionId with no ID of the server's for the smallest unused path ID a
     // PATH_CIDS_BLOCKED (sections 3.2.1 and 4.7). Anything but Started changes nothing else.
     [[nodiscard]] QuicMigration add_path(const QuicPath& path, u64 now_ns, u64& path_id) noexcept;
+    // Abandons path ID `path_id` (RFC 10069 section 3.4), open in a slot or not yet used, with `error_code` in its
+    // PATH_ABANDON frame (NO_ERROR or one of section 4.2.1's): the frame goes on another path, the peer's IDs for it
+    // are retired at once, and its slot sends nothing more (abandon_of()). A host's caller wakes the connection.
+    // Anything but Abandoned changes nothing.
+    [[nodiscard]] QuicAbandon abandon_path(u64 path_id, u64 error_code, u64 now_ns) noexcept;
     // Issues a fresh set of connection IDs whose NEW_CONNECTION_ID frames retire every earlier one (Retire Prior To,
     // section 5.1.2); the earlier IDs stay routed until the peer retires them. False, changing nothing, before
     // confirmation, without a host, with zero-length IDs, while an earlier rotation waits for retirements, or when
@@ -528,6 +566,8 @@ public:
     [[nodiscard]] u64 peer_max_path_id() const noexcept { return m_peer_max_path_id; }
     // The peer's preference for `path_id`, its newest PATH_STATUS frame's (section 3.3): Unknown before one.
     [[nodiscard]] QuicPeerPathStatus peer_path_status(u64 path_id = 0U) const noexcept;
+    // `path_id`'s abandonment while its state is kept (section 3.4); null for a path ID not abandoned or closed.
+    [[nodiscard]] const QuicPathAbandon* abandon_of(u64 path_id) const noexcept;
     // The Destination Connection ID this side sends to on path slot `slot`, and the peer's IDs held for `path_id`
     // (path ID 0's sequence 0 first among them; 0 for a path ID whose ID space is not open).
     [[nodiscard]] cont::ConstSpan<u8> peer_cid(usize slot = 0U) const noexcept;
@@ -727,9 +767,31 @@ private:
     // and the pacer start again unless only the port changed since the path they were built on (section 9.4).
     void follow_congestion(usize slot, u64 now_ns) noexcept;
     void on_validated(usize slot, usize index, u64 now_ns) noexcept;
-    // The handshake slot's paths whose validation timed out: reverted from, forgotten, or the connection closes
-    // (sections 8.2.4, 9.3.2).
+    // The paths whose validation timed out: the handshake slot's reverted from, forgotten, or the connection closes
+    // (sections 8.2.4, 9.3.2); a further slot's forgotten, and its active one's failure abandons its path ID (RFC
+    // 10069 section 3.1: "the endpoint MUST explicitly close the path").
     void expire_paths(u64 now_ns) noexcept;
+    // Abandoning a path ID (RFC 10069 section 3.4), this side's decision or its answer to the peer's (`error_code`
+    // NO_ERROR then): the peer's IDs for it retired, this side's PATH_ABANDON owed, and its slot, if one holds it,
+    // stopped (QuicRecovery::stop_path: its packets in flight go back to the queues, its control ends). Null for a
+    // path ID whose ID space is not open or is abandoned already.
+    QuicPathAbandon* begin_abandon(u64 path_id, u64 error_code, u64 now_ns) noexcept;
+    [[nodiscard]] bool peer_abandon(const QuicFrame& frame, u64 now_ns) noexcept;
+    // The entry of `path_id` (kQuicMaxPaths for none), and the entry itself (null for none).
+    [[nodiscard]] usize abandon_index(u64 path_id) const noexcept;
+    [[nodiscard]] QuicPathAbandon* find_abandon(u64 path_id) noexcept;
+    // When an abandoned path ID's state may close: three of the largest probe period of the paths still sending and
+    // of its own path's (without backoff), from now.
+    [[nodiscard]] u64 retention_end_ns(u64 path_id, u64 now_ns) const noexcept;
+    // The abandoned path IDs whose retention ended: their slots, ID spaces and peer statuses close.
+    void close_abandoned(u64 now_ns) noexcept;
+    // Whether slot `slot` is open but stopped (its path ID abandoned), and whether one owes its PATH_ACK now, which
+    // another slot's packet carries (section 3.4.3).
+    [[nodiscard]] bool stopped(usize slot) const noexcept
+    {
+        return m_recovery->path_open(slot) && !m_recovery->path_sending(slot);
+    }
+    [[nodiscard]] bool stopped_ack_due(u64 now_ns) const noexcept;
     // Forgets a path that is not the active one, retiring its peer ID unless another path sends to it.
     void drop_path(usize slot, usize index, u64 now_ns) noexcept;
     // The peer ID a path sends to (its sequence), whether the peer's ID of a sequence is held, and whether a path has
@@ -907,6 +969,8 @@ private:
         QuicPeerPathStatus status = QuicPeerPathStatus::Unknown;
     };
     PeerStatus m_peer_statuses[kQuicMaxPaths];
+    // The path IDs being abandoned: at most one per ID space open, so kQuicMaxPaths. An entry is free unless used.
+    QuicPathAbandon m_abandons[kQuicMaxPaths];
     QuicTransportParameters m_remembered; // a client's for 0-RTT: its server's from the ticket's connection
     bool m_early_sending = false;         // a client sends 0-RTT under m_remembered until its server decides
     bool m_early_settled = false;         // a server decided on 0-RTT

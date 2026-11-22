@@ -91,6 +91,16 @@ Ecn QuicPathControl::codepoint() const noexcept
     return m_config.ecn ? congestion_codepoint(m_config.congestion) : Ecn::NotEct;
 }
 
+void QuicPathControl::stop() noexcept
+{
+    if (m_controller != nullptr)
+    {
+        m_controller->~CongestionController();
+        m_controller = nullptr;
+    }
+    m_pace_timer_ns = kNeverNs;
+}
+
 void QuicPathControl::build(u64 entropy) noexcept
 {
     if (m_controller != nullptr)
