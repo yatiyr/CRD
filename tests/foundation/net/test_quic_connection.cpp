@@ -5855,12 +5855,14 @@ struct MultipathPair
     QuicConnection server;
     std::unique_ptr<Net> net;
 
+    // `sent_frames` sizes each end's frame ledger; `datagrams` offers DATAGRAM frames with their outcomes.
     explicit MultipathPair(u64 client_limit = 2U, u64 server_limit = 2U, bool disable_migration = false,
-                           bool server_offers = true)
+                           bool server_offers = true, u32 sent_frames = 1024U, bool datagrams = false)
         : client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
           server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
-          client(allocator, made(QuicSide::Client, client_limit, true, false, client_host)),
-          server(allocator, made(QuicSide::Server, server_limit, server_offers, disable_migration, server_host))
+          client(allocator, made(QuicSide::Client, client_limit, true, false, client_host, sent_frames, datagrams)),
+          server(allocator, made(QuicSide::Server, server_limit, server_offers, disable_migration, server_host,
+                                 sent_frames, datagrams))
     {
         REQUIRE(client.ready());
         REQUIRE(server.ready());
@@ -5875,11 +5877,17 @@ struct MultipathPair
         }
     }
 
-    QuicConnectionConfig made(QuicSide side, u64 limit, bool offers, bool disable_migration, Host& host) const
+    QuicConnectionConfig made(QuicSide side, u64 limit, bool offers, bool disable_migration, Host& host,
+                              u32 sent_frames, bool datagrams) const
     {
         const usize seed = (side == QuicSide::Server) ? 1U : 0U;
         QuicConnectionConfig config = hosted(config_for(side, identity, QuicVersion::V1, seed), host, 4U);
         config.streams = stream_limits();
+        config.sent_frames = sent_frames;
+        if (datagrams)
+        {
+            config.datagrams = datagram_limits(true);
+        }
         config.parameters.has_initial_max_path_id = offers;
         config.parameters.initial_max_path_id = limit;
         config.parameters.disable_active_migration = disable_migration;
@@ -5895,6 +5903,16 @@ struct MultipathPair
     {
         REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
         net->advance(net->now + 300U * kMs);
+    }
+
+    // Confirmed, with path ID 1 opened from the client's socket 1 and validated by both ends.
+    void open_second()
+    {
+        confirm();
+        REQUIRE(net->run_until([&] { return client.peer_cid_count(1U) != 0U && server.peer_cid_count(1U) != 0U; }));
+        u64 path_id = 0U;
+        REQUIRE(client.add_path(QuicPath{1U, kServerAt}, net->now, path_id) == QuicMigration::Started);
+        REQUIRE(net->run_until([&] { return open_both(1U); }));
     }
 
     // The client's further path in `slot` is validated, and so is the server's for it.
@@ -5973,6 +5991,297 @@ TEST_CASE("QUIC connection: a client opens path ID 1 from a socket of its own, e
         CHECK(pair.client.state() == QuicConnectionState::Established);
         CHECK(pair.server.state() == QuicConnectionState::Established);
     }
+}
+
+namespace
+{
+// At each datagram of the sender's `slot` that carries more than acknowledgements, that slot's bytes in flight are
+// within its window unless it owes its own probe: another path's owed probe opens neither its window nor its pacer.
+class WindowWatch final : public Filter
+{
+public:
+    WindowWatch(const QuicConnection& sender, usize from, usize slot) : m_sender(sender), m_from(from), m_slot(slot) {}
+
+    bool drop(usize from, ConstSpan<u8> datagram) override
+    {
+        const u64 next = m_sender.next_packet_number(QuicSpace::Application, m_slot);
+        const QuicPathControl* const control = m_sender.path_control(m_slot);
+        if (from == m_from && next != m_next && datagram.size() >= kQuicMinInitialDatagram / 2U && control != nullptr &&
+            m_sender.recovery().pto_count(m_slot) == 0U)
+        {
+            m_kept = m_kept && m_sender.recovery().bytes_in_flight(m_slot) <= control->congestion().window();
+            ++m_checked;
+        }
+        m_next = (from == m_from) ? next : m_next;
+        return false;
+    }
+
+    [[nodiscard]] bool kept() const { return m_kept; }
+    [[nodiscard]] usize checked() const { return m_checked; }
+
+private:
+    const QuicConnection& m_sender;
+    usize m_from;
+    usize m_slot;
+    u64 m_next = 0U;
+    bool m_kept = true;
+    usize m_checked = 0U;
+};
+} // namespace
+
+TEST_CASE("QUIC connection: a path that goes dark holds no data back: its probe timeout sends its frames again on the "
+          "live path, its probes carry none, and once it returns it carries data again",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 section 5.7: no packet of a dark path is declared lost before an acknowledgement on it, so without the
+    // resend its stream data would hold the stream, its datagrams their outcomes and its records the 64-record ledger
+    // until the idle timeout. Either end sends; path ID 1 or path ID 0 goes dark, both ways.
+    for (usize run = 0U; run < 4U; ++run)
+    {
+        const bool by_client = (run % 2U) == 0U;
+        const usize dark = (run < 2U) ? 1U : 0U; // its slot, and the client's socket it leaves from
+        INFO((by_client ? "the client sends" : "the server sends") << ", path ID " << dark << " goes dark");
+        MultipathPair pair(2U, 2U, false, true, 64U, true);
+        QuicConnection& sender = by_client ? pair.client : pair.server;
+        QuicConnection& receiver = by_client ? pair.server : pair.client;
+        // Path ID 1 opens with a window of two datagrams, so the live path waits on its window as the dark one probes.
+        CongestionPolicy policy;
+        policy.algorithm = CongestionAlgorithm::NewReno;
+        policy.initial_packets = 2U;
+        policy.hystart = false;
+        REQUIRE(sender.set_congestion(policy));
+        for (Path& path : pair.net->path)
+        {
+            path.rate = 150000U; // a drop-tail bottleneck both paths share keeps each window below what waits
+            path.buffer = 6000U;
+        }
+        pair.open_second();
+        const usize live = 1U - dark;
+        const QuicRecovery& recovery = sender.recovery();
+        u64 stream = 0U;
+        REQUIRE(sender.streams().open(true, stream) == QuicStreamError::None);
+        constexpr u64 total = 256U * 1024U;
+        DatagramFlow datagrams(sender, receiver, run + 1U, false);
+        u64 written = 0U;
+        u64 read = 0U;
+        u64 dark_ns = kNeverNs;
+        u64 dark_number = 0U; // the dark slot's next packet number and bytes in flight at its first probe timeout
+        u64 dark_flight = 0U;
+        WindowWatch watch(sender, by_client ? 0U : 1U, live);
+        pair.net->filter = &watch;
+        const auto flow = [&]
+        {
+            static_cast<void>(write_pattern(sender.streams(), stream, written, total, stream));
+            const bool all_read = receiver.streams().recv_state(stream) != QuicRecvState::None &&
+                                  drain(receiver.streams(), stream, read, stream);
+            const bool reported = datagrams.step(pair.net->now);
+            if (dark_ns == kNeverNs && written > total / 4U && recovery.bytes_in_flight(dark) > 4096U)
+            {
+                pair.net->down = 1U << dark;
+                dark_ns = pair.net->now;
+            }
+            if (dark_ns != kNeverNs && dark_number == 0U && recovery.pto_count(dark) != 0U)
+            {
+                dark_number = sender.next_packet_number(QuicSpace::Application, dark);
+                dark_flight = recovery.bytes_in_flight(dark);
+            }
+            return all_read && reported;
+        };
+        REQUIRE(pair.net->run_until(flow, 20000U * kMs));
+        REQUIRE(dark_ns != kNeverNs);
+        CHECK(read == total);
+        CHECK(pair.net->now - dark_ns < 8000U * kMs);
+        datagrams.check();
+        CHECK(datagrams.lost() != 0U); // the dark path's and the bottleneck's, each reported once
+        CHECK(sender.counters().pto_resends != 0U);
+        CHECK(watch.checked() > 64U);
+        CHECK(watch.kept());
+        pair.net->filter = nullptr;
+        for (Path& path : pair.net->path)
+        {
+            path.rate = 0U; // and no loss from here: no probe timeout but the dark path's
+            path.buffer = 0U;
+        }
+        // Its later probes carry an ack-eliciting frame, no data: a few dozen bytes each, never a datagram's worth.
+        REQUIRE(pair.net->run_until([&] { return recovery.pto_count(dark) >= 3U; }));
+        const u64 probes = sender.next_packet_number(QuicSpace::Application, dark) - dark_number;
+        CHECK(probes >= 2U);
+        CHECK(recovery.bytes_in_flight(dark) - dark_flight <= probes * 128U);
+        const u64 resent = sender.counters().pto_resends;
+        CHECK(sender.counters().paths_abandoned == 0U);
+        CHECK(sender.state() == QuicConnectionState::Established);
+        CHECK(receiver.state() == QuicConnectionState::Established);
+
+        // It returns: its probes are answered, the timeout clears and data rides it again; nothing more was resent.
+        pair.net->down = 0U;
+        REQUIRE(pair.net->run_until([&] { return recovery.pto_count(dark) == 0U; }));
+        CHECK(sender.counters().pto_resends == resent);
+        const u64 before = sender.next_packet_number(QuicSpace::Application, dark);
+        u64 again = 0U;
+        REQUIRE(sender.streams().open(true, again) == QuicStreamError::None);
+        written = 0U;
+        read = 0U;
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                static_cast<void>(write_pattern(sender.streams(), again, written, total, again));
+                return receiver.streams().recv_state(again) != QuicRecvState::None &&
+                       drain(receiver.streams(), again, read, again);
+            }));
+        CHECK(sender.next_packet_number(QuicSpace::Application, dark) > before + 16U);
+        CHECK(sender.counters().pto_resends == resent);
+    }
+}
+
+TEST_CASE("QUIC connection: a path dark for long stays held while the path carrying its data takes a timeout of its "
+          "own, so its probes still carry no data",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // Path ID 1 goes dark past four probe timeouts; path ID 0 then goes dark too until path ID 1 times out again, with
+    // path ID 0's own timeouts pending; then path ID 0 returns alone. Path ID 1, with more timeouts pending than path
+    // ID 0 throughout, carries none of the data waiting: its datagrams are probes of a few dozen bytes.
+    MultipathPair pair;
+    for (Path& path : pair.net->path)
+    {
+        path.rate = 150000U; // the window, not the stream's buffer, holds data back: data waits throughout
+        path.buffer = 6000U;
+    }
+    pair.open_second();
+    QuicConnection& client = pair.client;
+    const QuicRecovery& recovery = client.recovery();
+    u64 stream = 0U;
+    REQUIRE(client.streams().open(true, stream) == QuicStreamError::None);
+    constexpr u64 total = 3U * 1024U * 1024U;
+    u64 written = 0U;
+    u64 read = 0U;
+    const auto move = [&]
+    {
+        static_cast<void>(write_pattern(client.streams(), stream, written, total, stream));
+        return pair.server.streams().recv_state(stream) != QuicRecvState::None &&
+               drain(pair.server.streams(), stream, read, stream);
+    };
+    REQUIRE(pair.net->run_until([&] { return !move() && recovery.bytes_in_flight(1U) > 4096U; }));
+    pair.net->down = 1U << 1U;
+    REQUIRE(pair.net->run_until([&] { return !move() && recovery.pto_count(1U) >= 4U; }));
+    const u64 number = client.next_packet_number(QuicSpace::Application, 1U);
+    const u64 flight = recovery.bytes_in_flight(1U);
+    const u32 timeouts = recovery.pto_count(1U);
+    pair.net->down = (1U << 0U) | (1U << 1U);
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(move());
+            return recovery.pto_count(0U) != 0U && recovery.pto_count(1U) > timeouts;
+        }));
+    CHECK(recovery.pto_count(0U) < recovery.pto_count(1U));
+    pair.net->down = 1U << 1U;
+    REQUIRE(pair.net->run_until(move));
+    CHECK(read == total);
+    const u64 probes = client.next_packet_number(QuicSpace::Application, 1U) - number;
+    CHECK(probes >= 2U);
+    CHECK(recovery.bytes_in_flight(1U) - flight <= probes * 128U);
+    CHECK(client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: a path whose acknowledgements go dark has its frames sent again on the live path, and "
+          "their late acknowledgements count nothing twice",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // Path ID 1 carries the client's packets to the server but nothing back: the server holds the originals, the
+    // client's probe timeout sends their frames again on path ID 0, and the PATH_ACKs that come once the path returns
+    // acknowledge packets whose records were settled. Every datagram is reported once, the stream is acknowledged.
+    MultipathPair pair(2U, 2U, false, true, 64U, true);
+    pair.open_second();
+    QuicConnection& client = pair.client;
+    const QuicRecovery& recovery = client.recovery();
+    u64 stream = 0U;
+    REQUIRE(client.streams().open(true, stream) == QuicStreamError::None);
+    constexpr u64 total = 128U * 1024U;
+    DatagramFlow datagrams(client, pair.server, 7U, false);
+    u64 written = 0U;
+    u64 read = 0U;
+    bool gone = false;
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(write_pattern(client.streams(), stream, written, total, stream));
+            const bool all_read = pair.server.streams().recv_state(stream) != QuicRecvState::None &&
+                                  drain(pair.server.streams(), stream, read, stream);
+            const bool reported = datagrams.step(pair.net->now);
+            if (!gone && written > total / 4U && recovery.bytes_in_flight(1U) > 4096U)
+            {
+                pair.net->down_in = 1U << 1U;
+                gone = true;
+            }
+            return all_read && reported && recovery.pto_count(1U) >= 2U;
+        },
+        20000U * kMs));
+    CHECK(read == total);
+    CHECK(client.counters().pto_resends != 0U);
+    const u64 resent = client.counters().pto_resends;
+    pair.net->down_in = 0U;
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(datagrams.step(pair.net->now));
+            return recovery.pto_count(1U) == 0U && recovery.bytes_in_flight(1U) == 0U &&
+                   client.streams().send_state(stream) == QuicSendState::DataRecvd;
+        }));
+    datagrams.check();
+    CHECK(client.counters().pto_resends == resent);
+    CHECK(client.state() == QuicConnectionState::Established);
+    CHECK(pair.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: with every path dark frames move once, to the path not yet known dark, never back, and "
+          "the transfer ends once they return",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // Both paths go dark at once. The first to time out still sees the other live and hands it its frames; the other's
+    // timeouts then find no live path and keep RFC 9002's probes, as on one path, so nothing moves again.
+    MultipathPair pair(2U, 2U, false, true, 64U);
+    pair.open_second();
+    QuicConnection& client = pair.client;
+    const QuicRecovery& recovery = client.recovery();
+    u64 stream = 0U;
+    REQUIRE(client.streams().open(true, stream) == QuicStreamError::None);
+    constexpr u64 total = 128U * 1024U;
+    u64 written = 0U;
+    u64 read = 0U;
+    bool gone = false;
+    u64 first = kNeverNs; // pto_resends once a path first timed out
+    bool moved_once = true;
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(write_pattern(client.streams(), stream, written, total, stream));
+            static_cast<void>(pair.server.streams().recv_state(stream) != QuicRecvState::None &&
+                              drain(pair.server.streams(), stream, read, stream));
+            if (!gone && written > total / 4U && recovery.bytes_in_flight(0U) != 0U &&
+                recovery.bytes_in_flight(1U) != 0U)
+            {
+                pair.net->down = (1U << 0U) | (1U << 1U);
+                gone = true;
+            }
+            if (gone && first == kNeverNs && (recovery.pto_count(0U) != 0U || recovery.pto_count(1U) != 0U))
+            {
+                first = client.counters().pto_resends;
+            }
+            moved_once = moved_once && (first == kNeverNs || client.counters().pto_resends == first);
+            return gone && recovery.pto_count(0U) >= 3U && recovery.pto_count(1U) >= 3U;
+        }));
+    CHECK(first != 0U);
+    CHECK(moved_once);
+    pair.net->down = 0U;
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(write_pattern(client.streams(), stream, written, total, stream));
+            return pair.server.streams().recv_state(stream) != QuicRecvState::None &&
+                   drain(pair.server.streams(), stream, read, stream);
+        }));
+    CHECK(read == total);
+    CHECK(client.state() == QuicConnectionState::Established);
 }
 
 TEST_CASE("QUIC connection: a client takes path IDs in rising order up to both limits and reports the server's limit "
