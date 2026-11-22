@@ -1362,7 +1362,8 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         // address it follows; only an end that closed first leaves it unvalidated. Or that validation failed after
         // the client's last packet, its challenges or responses lost before the timer (section 8.2.4): the server
         // reverted to its last validated address (section 9.3.2) and learns the client's again only from its next
-        // packet, which brings it back.
+        // packet, which moves it back or, with no ID of the client's for it, validates the address while the move
+        // waits for one (section 9.5). A packet of the client's it opened never leaves it doing neither.
         if (over_paths() && !finished(pair.client) && !finished(pair.server))
         {
             pair.settle(1U);
@@ -1383,12 +1384,22 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             };
             if (!follows())
             {
+                bool pinged = false;
+                u64 failures = 0U;
+                u64 opened = 0U;
                 pair.settle_until(256U,
                                   [&]
                                   {
                                       if (!follows() && !ended() && !proving(false))
                                       {
-                                          CRD_FUZZ_REQUIRE(pair.server.counters().path_failures != 0U);
+                                          const QuicConnectionCounters& counters = pair.server.counters();
+                                          CRD_FUZZ_REQUIRE(counters.path_failures != 0U);
+                                          // Again only after another validation failed, or when nothing opened.
+                                          CRD_FUZZ_REQUIRE(!pinged || counters.path_failures > failures ||
+                                                           counters.packets_opened == opened);
+                                          pinged = true;
+                                          failures = counters.path_failures;
+                                          opened = counters.packets_opened;
                                           pair.client.ping(); // the client's next packet, from its address
                                       }
                                       return follows() || ended();
