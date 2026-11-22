@@ -322,18 +322,21 @@ TEST_CASE("the peer's IDs are held per path ID under one connection-wide uniquen
     CHECK(add(s.cids, new_id(1U, 2U, PeerId(0x42U)), &added) == QuicTransportError::NoError);
     CHECK_FALSE(added);
     CHECK(add(s.cids, new_id(1U, 2U, PeerId(0x60U))) == QuicTransportError::ProtocolViolation);
-    QuicFrame forged_token = new_id(1U, 2U, PeerId(0x42U));
+    const PeerId repeated(0x42U); // a frame's spans point into it
+    QuicFrame forged_token = new_id(1U, 2U, repeated);
     const PeerId other(0x61U);
     forged_token.reset_token = cont::ConstSpan<u8>(other.token, kToken);
     CHECK(add(s.cids, forged_token) == QuicTransportError::ProtocolViolation);
     // One ID or token under two path IDs or sequences is PROTOCOL_VIOLATION (RFC 9000 section 10.3.2).
     CHECK(add(s.cids, new_id(0U, 2U, PeerId(0x41U))) == QuicTransportError::ProtocolViolation);
-    QuicFrame shared_token = new_id(0U, 2U, PeerId(0x62U));
+    const PeerId fresh(0x62U);
+    QuicFrame shared_token = new_id(0U, 2U, fresh);
     const PeerId holder(0x43U);
     shared_token.reset_token = cont::ConstSpan<u8>(holder.token, kToken);
     CHECK(add(s.cids, shared_token) == QuicTransportError::ProtocolViolation);
     // NEW_CONNECTION_ID is path ID 0's whatever its path field (RFC 10069 section 4.4).
-    QuicFrame plain = new_id(1U, 2U, PeerId(0x63U));
+    const PeerId unpathed(0x63U);
+    QuicFrame plain = new_id(1U, 2U, unpathed);
     plain.kind = QuicFrameKind::NewConnectionId;
     REQUIRE(add(s.cids, plain, &added) == QuicTransportError::NoError);
     CHECK(added);
