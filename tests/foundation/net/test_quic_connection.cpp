@@ -7957,8 +7957,15 @@ TEST_CASE("QUIC connection: a redundant datagram crosses every path carrying dat
             ++acked;
         }
     };
-    // One datagram each 20 ms, as voice frames, from `first` to `last`: each arrives within `within_ns`. With
-    // `released` the queue holds nothing once it arrived, before any acknowledgement: no copy is owed.
+    // A stream trickles beside them: its data rides path ID 0 alone, never in a packet of copies (DataWatch).
+    DataWatch watch(client, 0U, pair.net->now);
+    pair.net->filter = &watch;
+    u64 stream = 0U;
+    REQUIRE(open_uni(pair, stream));
+    u64 written = 0U;
+    // One datagram each 20 ms, as voice frames, from `first` to `last`, with 1000 stream bytes: each arrives within
+    // `within_ns`. With `released` the queue holds nothing once it arrived, before any acknowledgement: no copy is
+    // owed.
     const auto voice = [&](usize first, usize last, u64 within_ns, bool released)
     {
         for (usize id = first; id < last; ++id)
@@ -7966,6 +7973,7 @@ TEST_CASE("QUIC connection: a redundant datagram crosses every path carrying dat
             INFO("datagram " << id);
             const u64 queued_ns = pair.net->now;
             queue_redundant(client, id, queued_ns);
+            static_cast<void>(write_pattern(client.streams(), stream, written, (id + 1U) * 1000U, stream, false));
             REQUIRE(pair.net->run_until(
                 [&]
                 {
@@ -8001,6 +8009,10 @@ TEST_CASE("QUIC connection: a redundant datagram crosses every path carrying dat
         }));
     CHECK(client.datagrams().counters().copies == 12U);
     CHECK(client.datagrams().queued() == 0U);
+    CHECK(watch.data(0U) != 0U);
+    CHECK(watch.data(1U) == 0U);
+    CHECK(watch.kept());
+    pair.net->filter = nullptr;
     // The server marks path ID 1 backup (RFC 10069 section 3.3): it carries no copy while path ID 0 is usable.
     REQUIRE(pair.server.set_path_status(1U, true) == QuicPathStatusChange::Set);
     REQUIRE(pair.net->run_until([&] { return client.peer_path_status(1U) == QuicPathStatus::Backup; }));
