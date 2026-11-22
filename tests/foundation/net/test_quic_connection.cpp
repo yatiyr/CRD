@@ -6636,12 +6636,12 @@ TEST_CASE("QUIC connection: once path ID 0 closes its slot is reclaimed, so four
     }
 }
 
-TEST_CASE("QUIC connection: a path ID in a reclaimed slot 0 that never validates leaves the handshake's amplification "
-          "guard alone: the server's stream still recovers its losses on path ID 1, and the path ID is abandoned",
+TEST_CASE("QUIC connection: a path ID in a reclaimed slot 0 that never validates is abandoned, and the server's "
+          "stream and a tail only its probe timeout recovers still complete on path ID 1",
           "[net][net-path][quic-connection][multipath]")
 {
-    // RFC 9002 section 6.2.2.1's guard is the handshake path's: a later path ID's amplification limit (RFC 10069
-    // section 7.2) never stops the probe timer the other paths' data needs.
+    // RFC 10069 sections 3.1 and 7.2: the new path ID spends only its own amplification credit, and its failed
+    // validation abandons it while path ID 1 carries the data.
     for (u64 seed = 1U; seed <= 4U; ++seed)
     {
         INFO("seed " << seed);

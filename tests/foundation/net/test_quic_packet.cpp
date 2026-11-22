@@ -1024,6 +1024,27 @@ TEST_CASE("QUIC packets: each multipath path has its own number space, nonce and
         REQUIRE(pair.server.largest_opened(QuicSpace::Application, largest, 1U));
         CHECK(largest == 5U);
     }
+    SECTION("slot 0 reclaimed once path ID 0 closes seals under its new path ID's nonce, numbered from 0")
+    {
+        // The connection reclaims slot 0 for a later path ID (RFC 10069 section 3.4): a packet number it repeats
+        // there never repeats a nonce, as the path ID is in it (section 2.4).
+        const Buffer zero = send(pair.client, 0U, 0U);
+        REQUIRE(deliver(pair.server, zero, 0U) == QuicPacketError::None);
+        for (QuicPacketProtection* end : {&pair.client, &pair.server})
+        {
+            REQUIRE(end->close_path(0U));
+            REQUIRE(end->open_path(0U, id1 + 2U));
+        }
+        CHECK(pair.server.path_id(0U) == id1 + 2U);
+        u64 largest = 0U;
+        CHECK_FALSE(pair.server.largest_opened(QuicSpace::Application, largest, 0U));
+        CHECK(deliver(pair.server, zero, 0U) == QuicPacketError::Forged); // path ID 0's nonce
+        const Buffer reclaimed = send(pair.client, 0U, 0U);
+        CHECK(deliver(pair.server, reclaimed, 1U) == QuicPacketError::Forged); // path ID 7's nonce
+        REQUIRE(deliver(pair.server, reclaimed, 0U) == QuicPacketError::None);
+        REQUIRE(pair.server.largest_opened(QuicSpace::Application, largest, 0U));
+        CHECK(largest == 0U);
+    }
     SECTION("key phases are one across paths, and their packet number checks stay within each path's space")
     {
         QuicKeys raw; // the client's 1-RTT keys of phase 0, for packets the client itself would never send

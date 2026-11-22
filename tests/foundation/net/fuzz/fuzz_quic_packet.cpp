@@ -165,12 +165,20 @@ bool check_round_trip(ConstSpan<u8> frames, u8 control, u64 entropy)
     {
         finish_client(ends);
     }
-    // A multipath path: slot 1 to 3 at both ends under a path ID from 1 to 15, or the largest.
+    // A multipath path at both ends under a path ID from 1 to 15, or the largest: slot 1 to 3, or slot 0 reclaimed
+    // once path ID 0 closed (slot 1 holding another path ID keeps one open).
     usize path = 0U;
     if (spec.type == QuicPacketType::OneRtt && (control & 8U) != 0U)
     {
-        path = 1U + static_cast<usize>((entropy >> 30U) & 3U) % (kQuicMaxPaths - 1U);
+        const usize pick = static_cast<usize>((entropy >> 30U) & 3U);
+        path = (pick == 3U) ? 0U : 1U + pick;
         const u32 id = ((control >> 4U) == 15U) ? static_cast<u32>(kQuicMaxPathId) : u32{1} + (control >> 4U);
+        if (path == 0U)
+        {
+            const u32 other = (id == kQuicMaxPathId) ? 1U : id + 1U;
+            CRD_FUZZ_REQUIRE(ends.client.open_path(1U, other) && ends.server.open_path(1U, other));
+            CRD_FUZZ_REQUIRE(ends.client.close_path(0U) && ends.server.close_path(0U));
+        }
         CRD_FUZZ_REQUIRE(ends.client.open_path(path, id) && ends.server.open_path(path, id));
     }
     const bool update = spec.type == QuicPacketType::OneRtt && ((entropy >> 29U) & 1U) != 0U;
