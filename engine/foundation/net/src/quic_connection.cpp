@@ -3023,7 +3023,7 @@ QuicMigration QuicConnection::probe_path(const QuicPath& path, u64 now_ns) noexc
 
 QuicMigration QuicConnection::migrate(const QuicPath& path, u64 now_ns) noexcept
 {
-    QuicPaths& paths = m_first_paths.paths;
+    const QuicPaths& paths = m_first_paths.paths;
     usize index = kQuicNoPath;
     const QuicMigration result = open_own_path(path, now_ns, index);
     if (result != QuicMigration::Started)
@@ -3061,7 +3061,7 @@ void QuicConnection::reannounce_local_ids() noexcept
 
 QuicMigration QuicConnection::open_own_path(const QuicPath& path, u64 now_ns, usize& index) noexcept
 {
-    QuicPaths& paths = m_first_paths.paths;
+    const QuicPaths& paths = m_first_paths.paths;
     const QuicPath& active = paths.path(paths.active());
     if (m_config.side != crypto::QuicSide::Client)
     {
@@ -3213,7 +3213,7 @@ void QuicConnection::move_to(usize slot, usize index, u64 now_ns) noexcept
 
 void QuicConnection::leave_fallback(usize slot, u64 now_ns) noexcept
 {
-    QuicPaths& paths = tuples(slot);
+    const QuicPaths& paths = tuples(slot);
     // A client proven on the path it moved to, whose server sends there too, forgets the path it left and retires
     // that path's peer ID, so the server issues the ID the next move takes (section 9.5). Until then the server's
     // datagrams to the old path still arrive.
@@ -3225,7 +3225,7 @@ void QuicConnection::leave_fallback(usize slot, u64 now_ns) noexcept
 
 void QuicConnection::follow_congestion(usize slot, u64 now_ns) noexcept
 {
-    QuicPaths& paths = tuples(slot);
+    const QuicPaths& paths = tuples(slot);
     const QuicPath& active = paths.path(paths.active());
     QuicPathControl& sending = control(slot);
     if (!paths.validated(paths.active()) || sending.path() == active)
@@ -3264,7 +3264,7 @@ bool QuicConnection::toward_preferred(const Endpoint& peer) const noexcept
 
 void QuicConnection::follow_preferred(u64 now_ns) noexcept
 {
-    QuicPaths& paths = m_first_paths.paths;
+    const QuicPaths& paths = m_first_paths.paths;
     const QuicPath& active = paths.path(paths.active());
     const QuicPath target{active.socket, preferred_for(active.peer)};
     // By itself, or for a move migrate() asked for that waits for its validation (a socket left behind never draws
@@ -3289,7 +3289,7 @@ void QuicConnection::follow_preferred(u64 now_ns) noexcept
 
 void QuicConnection::take_preferred(usize index, u64 now_ns) noexcept
 {
-    QuicPaths& paths = m_first_paths.paths;
+    const QuicPaths& paths = m_first_paths.paths;
     const bool server = m_config.side == crypto::QuicSide::Server;
     m_deferred_move = kQuicNoPath;
     m_on_preferred = true;
@@ -3316,7 +3316,7 @@ void QuicConnection::take_preferred(usize index, u64 now_ns) noexcept
 
 void QuicConnection::on_validated(usize slot, usize index, u64 now_ns) noexcept
 {
-    QuicPaths& paths = tuples(slot);
+    const QuicPaths& paths = tuples(slot);
     ++m_counters.path_validations;
     if (slot == 0U && index == m_deferred_move && path_sendable(slot, index))
     {
