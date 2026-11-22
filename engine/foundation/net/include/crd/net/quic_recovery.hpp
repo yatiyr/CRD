@@ -73,6 +73,8 @@ inline constexpr usize kQuicAckRanges              = 32U;         // the ranges 
 // The receive timestamps one ACK frame carries at most, either way: what a connection asks for and reports at most.
 inline constexpr usize kQuicMaxReceiveTimestamps = 32U;
 inline constexpr u64   kQuicNoPacket               = ~u64{0};
+// QuicAckTracker::write's path ID for an ACK frame (path ID 0's space without naming it, RFC 10069 section 2.3).
+inline constexpr u64 kQuicAckFrame = ~u64{0};
 
 // What an ACK frame the tracker wrote acknowledges: its bytes (0 for nothing written) and its largest packet number,
 // which the packet carrying it records (QuicSentPacket::carried_ack).
@@ -136,10 +138,11 @@ public:
     // Writes the ACK frame for the recorded ranges at the start of `out`, as many of the largest ranges as fit, with
     // the delay since the largest arrived scaled down by `exponent` and the ECN counts once a marked packet arrived.
     // With an enabled `log` holding times of packets those ranges acknowledge, it is an ACK_RECEIVE_TIMESTAMPS frame
-    // reporting as many of them, the latest first, as the room left by the ranges holds. Writing settles the owed
-    // ACK. Nothing is written when no range is recorded or not even one range fits.
+    // reporting as many of them, the latest first, as the room left by the ranges holds. With a `path_id` (at most
+    // kQuicMaxPathId) it is a PATH_ACK frame of that path ID's space (RFC 10069 section 4.1), which reports no
+    // timestamps. Writing settles the owed ACK. Nothing is written when no range is recorded or not even one fits.
     [[nodiscard]] QuicAckWrite write(cont::Span<u8> out, u64 now_ns, u64 exponent,
-                                     QuicReceiveTimestampLog* log = nullptr) noexcept;
+                                     QuicReceiveTimestampLog* log = nullptr, u64 path_id = kQuicAckFrame) noexcept;
 
     // The peer acknowledged a packet that carried an ACK frame up to `largest`: the ranges at or below it are no
     // longer sent, except that the largest received number always stays (section 13.2.4).
@@ -436,8 +439,10 @@ public:
     [[nodiscard]] QuicRecoveryError on_sent(QuicSpace space, const QuicSentPacket& packet) noexcept;
     // The ACK frame `space` of slot `path` owes or may carry, written into `out` (QuicAckTracker::write) with the
     // exponent that space uses: this side's own for Application, the default 3 for Initial and Handshake, whose ACK
-    // frames are sent before the parameters are authenticated. Only slot 0's report receive timestamps.
-    [[nodiscard]] QuicAckWrite write_ack(QuicSpace space, cont::Span<u8> out, u64 now_ns, usize path = 0U) noexcept;
+    // frames are sent before the parameters are authenticated. Only slot 0's report receive timestamps, and only in
+    // an ACK frame; with a `path_id` it is the slot's PATH_ACK frame.
+    [[nodiscard]] QuicAckWrite write_ack(QuicSpace space, cont::Span<u8> out, u64 now_ns, usize path = 0U,
+                                         u64 path_id = kQuicAckFrame) noexcept;
     // A packet that carried slot `path`'s Application acknowledgement up to `largest` was acknowledged
     // (QuicAckTracker::on_ack_acknowledged). A packet's carried_ack does this for its own space and slot; this is for
     // an acknowledgement of one path that went on another (a PATH_ACK). Nothing for a slot not open.

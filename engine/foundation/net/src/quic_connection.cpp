@@ -1732,15 +1732,16 @@ void QuicConnection::confirm(u64 now_ns) noexcept
 
 // ---- Sending ----
 
-bool QuicConnection::can_acknowledge(QuicSpace space) const noexcept
+bool QuicConnection::can_acknowledge(QuicSpace space, usize slot) const noexcept
 {
     return !m_space_gone[quic_space_index(space)] && m_protection.can_send(packet_type(space)) &&
-           m_recovery->can_send(space) && amplification_credit() >= kMinUsefulPacket;
+           m_recovery->can_send(space, slot) && amplification_credit(slot) >= kMinUsefulPacket;
 }
 
-usize QuicConnection::amplification_credit() const noexcept
+usize QuicConnection::amplification_credit(usize slot) const noexcept
 {
-    return m_first_paths.paths.credit(m_first_paths.paths.active());
+    const QuicPaths& paths = tuples(slot);
+    return paths.credit(paths.active());
 }
 
 void QuicConnection::pull_crypto() noexcept
@@ -1791,7 +1792,8 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
     const bool path_owed =
         space == QuicSpace::Application && send_type(space) == QuicPacketType::OneRtt &&
         (paths.response_owed(active) || paths.challenge_due(active, now_ns) || observation_due(active));
-    if (m_recovery->ack_deadline_ns(space) <= now_ns || m_numbers[number_space(space, send_slot())].probes > 0U ||
+    const usize slot = (space == QuicSpace::Application) ? send_slot() : 0U;
+    if (m_recovery->ack_deadline_ns(space, slot) <= now_ns || m_numbers[number_space(space, slot)].probes > 0U ||
         path_owed)
     {
         return true;
@@ -2026,6 +2028,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
                                    Written& written) noexcept
 {
     const usize index = quic_space_index(space);
+    const usize slot = (space == QuicSpace::Application) ? send_slot() : 0U;
     usize used = 0U;
     const auto put = [&](const QuicFrame& frame) -> bool
     {
@@ -2038,9 +2041,12 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     // largest size fits the next packet while every packet carries an ACK.
     const auto put_ack = [&]
     {
-        if (!m_recovery->received(space).ranges().empty())
+        // Each slot acknowledges its own space, path ID 0's in an ACK frame and the others' in PATH_ACK frames
+        // (RFC 10069 section 2.3), so a carried acknowledgement is always settled in the slot that sent it.
+        if (!m_recovery->received(space, slot).ranges().empty())
         {
-            const QuicAckWrite ack = m_recovery->write_ack(space, frames.subspan(used), now_ns);
+            const u64 path_id = (slot == 0U) ? kQuicAckFrame : m_protection.path_id(slot);
+            const QuicAckWrite ack = m_recovery->write_ack(space, frames.subspan(used), now_ns, slot, path_id);
             used += ack.bytes;
             written.carried_ack = (ack.bytes != 0U) ? ack.largest : kQuicNoPacket;
         }
@@ -2048,7 +2054,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     // A 0-RTT packet carries no ACK, CRYPTO, HANDSHAKE_DONE, NEW_TOKEN or PATH_RESPONSE frame (RFC 9000 section
     // 12.4, table 3), and no RETIRE_CONNECTION_ID either: nothing is retired before the server's IDs arrive.
     const bool ack_later =
-        space == QuicSpace::Application && m_recovery->ack_deadline_ns(space) > now_ns && datagram_ready(now_ns);
+        space == QuicSpace::Application && m_recovery->ack_deadline_ns(space, slot) > now_ns && datagram_ready(now_ns);
     if (!ack_later && !early)
     {
         put_ack();
@@ -2057,7 +2063,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     // by themselves, so a PING lets the peer's ACK free their storage (RFC 9000 section 13.2.4).
     const auto put_owed_ping = [&]
     {
-        const Numbering& numbers = m_numbers[number_space(space, send_slot())];
+        const Numbering& numbers = m_numbers[number_space(space, slot)];
         if (!written.eliciting && (numbers.probes > 0U || numbers.ack_only >= kAckOnlyRun))
         {
             QuicFrame ping;
@@ -2512,20 +2518,51 @@ usize QuicConnection::send_closing(cont::Span<u8> out, u64 now_ns) noexcept
 
 usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noexcept
 {
-    m_send_path = tuples(send_slot()).active();
     m_held_back = false;
     if (out.size() < kQuicMinInitialDatagram || m_state == QuicConnectionState::Idle ||
         m_state == QuicConnectionState::Draining || m_state == QuicConnectionState::Closed)
     {
+        m_send_path = tuples(send_slot()).active();
         return 0U;
     }
+    // The close goes on the handshake slot alone. Otherwise the open slots take turns, starting after the one that
+    // wrote the last datagram, so one slot's data never starves another's owed frames (S78's scheduling).
+    if (m_state == QuicConnectionState::Closing)
+    {
+        m_send_slot = 0U;
+        return send_on_slot(out, now_ns, held_sockets);
+    }
+    pull_crypto();
+    issue_local_ids();
+    for (usize turn = 1U; turn <= kQuicMaxPaths; ++turn)
+    {
+        const usize slot = (m_send_slot + turn) % kQuicMaxPaths;
+        if (!m_protection.path_open(slot))
+        {
+            continue;
+        }
+        m_send_slot = slot;
+        const usize used = send_on_slot(out, now_ns, held_sockets);
+        if (used != 0U || m_state != QuicConnectionState::Established)
+        {
+            return used; // a close a seal failure began goes on the next call, on the handshake slot
+        }
+    }
+    return 0U;
+}
+
+usize QuicConnection::send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noexcept
+{
     const usize slot = send_slot();
+    m_send_path = tuples(slot).active();
     usize limit = min_u64(out.size(), control(slot).datagram_bytes());
     if (m_peer_known || m_early_sending)
     {
         limit = min_u64(limit, (m_peer_known ? m_peer : m_remembered).max_udp_payload_size);
     }
-    if (m_recovery->pto_count(slot) != 0U || (!address_validated() && !(control(slot).path() == path())))
+    const QuicPaths& paths = tuples(slot);
+    const bool validated = paths.validated(m_send_path);
+    if (m_recovery->pto_count(slot) != 0U || (!validated && !(control(slot).path() == paths.path(m_send_path))))
     {
         // A probe timeout is pending: datagrams of the floor get an acknowledgement through a black hole that drops
         // larger ones (quic_pmtu.hpp). Or the peer moved to a path not yet confirmed: the floor is all it is known
@@ -2533,13 +2570,13 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
         limit = min_u64(limit, kQuicPmtuFloor);
     }
     const usize full = limit; // a datagram's size before the amplification limit: what the window must have room for
-    const usize credit = amplification_credit();
+    const usize credit = amplification_credit(slot);
     limit = min_u64(limit, credit);
     usize used = 0U;
     bool initial_held = false; // the amplification limit holds back a padded Initial
     if (m_state == QuicConnectionState::Closing)
     {
-        if (path_held(send_slot(), m_send_path, held_sockets))
+        if (path_held(slot, m_send_path, held_sockets))
         {
             m_held_back = true;
             return 0U;
@@ -2549,14 +2586,12 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
     }
     else
     {
-        pull_crypto();
-        issue_local_ids();
         used = send_path_frames(out, now_ns, held_sockets);
         if (used != 0U)
         {
             return used;
         }
-        if (path_held(send_slot(), m_send_path, held_sockets))
+        if (path_held(slot, m_send_path, held_sockets))
         {
             m_held_back = true; // nothing below runs: no number, window, probe or amplification state moves
             return 0U;
@@ -2569,7 +2604,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
             ++m_counters.datagrams_sent;
             m_counters.bytes_sent += used;
             ++m_counters.path_probes;
-            tuples(send_slot()).on_sent(m_send_path, used);
+            tuples(slot).on_sent(m_send_path, used);
             return used;
         }
         bool content[kQuicSpaces] = {};
@@ -2577,7 +2612,9 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
         bool any = false;
         for (usize index = 0U; index < kQuicSpaces; ++index)
         {
-            content[index] = has_content(static_cast<QuicSpace>(index), now_ns);
+            // Only the handshake slot carries the Initial and Handshake spaces.
+            const auto space = static_cast<QuicSpace>(index);
+            content[index] = (slot == 0U || space == QuicSpace::Application) && has_content(space, now_ns);
             if (content[index])
             {
                 last = static_cast<QuicSpace>(index);
@@ -2599,7 +2636,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
         const cont::Span<u8> room = out.first(limit);
         if (!any || limit < kMinUsefulPacket || (pad && limit < kQuicMinInitialDatagram))
         {
-            if (any && !address_validated())
+            if (any && slot == 0U && !validated)
             {
                 m_recovery->set_amplification_blocked(true, now_ns);
             }
@@ -2622,9 +2659,10 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
     {
         ++m_counters.datagrams_sent;
         m_counters.bytes_sent += used;
-        tuples(send_slot()).on_sent(m_send_path, used);
-        if (!address_validated())
+        tuples(slot).on_sent(m_send_path, used);
+        if (slot == 0U && !validated)
         {
+            // The handshake's amplification deadlock guard (RFC 9002 section 6.2.2.1) is the handshake slot's.
             m_recovery->set_amplification_blocked(initial_held || amplification_credit() < kMinUsefulPacket, now_ns);
         }
     }
@@ -2682,7 +2720,8 @@ usize QuicConnection::send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept
     for (usize index = 0U; index < kQuicSpaces; ++index)
     {
         const QuicSpace space = static_cast<QuicSpace>(index);
-        if (can_acknowledge(space) && m_recovery->ack_deadline_ns(space) != kNeverNs)
+        const usize owner = (space == application) ? slot : 0U;
+        if (can_acknowledge(space, owner) && m_recovery->ack_deadline_ns(space, owner) != kNeverNs)
         {
             return 0U; // an ACK the probe would not carry goes first; the probe takes the next datagram
         }
@@ -2693,7 +2732,7 @@ usize QuicConnection::send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept
         return 0U;
     }
     const usize probe = path.probe(now_ns, has_data(application, now_ns));
-    if (probe == 0U || probe > out.size() || probe > amplification_credit())
+    if (probe == 0U || probe > out.size() || probe > amplification_credit(slot))
     {
         return 0U;
     }
@@ -2772,9 +2811,14 @@ u64 QuicConnection::next_timer_ns() const noexcept
     for (usize index = 0U; index < kQuicSpaces; ++index)
     {
         const QuicSpace space = static_cast<QuicSpace>(index);
-        if (can_acknowledge(space))
+        // The Application space's owed ACKs are each open slot's.
+        const usize slots = (space == QuicSpace::Application) ? kQuicMaxPaths : 1U;
+        for (usize slot = 0U; slot < slots; ++slot)
         {
-            next = min_u64(next, m_recovery->ack_deadline_ns(space));
+            if (m_protection.path_open(slot) && can_acknowledge(space, slot))
+            {
+                next = min_u64(next, m_recovery->ack_deadline_ns(space, slot));
+            }
         }
     }
     return next;

@@ -261,21 +261,23 @@ bool QuicAckTracker::on_received(u64 number, bool ack_eliciting, Ecn ecn, u64 re
     return true;
 }
 
-QuicAckWrite QuicAckTracker::write(cont::Span<u8> out, u64 now_ns, u64 exponent, QuicReceiveTimestampLog* log) noexcept
+QuicAckWrite QuicAckTracker::write(cont::Span<u8> out, u64 now_ns, u64 exponent, QuicReceiveTimestampLog* log,
+                                   u64 path_id) noexcept
 {
+    const bool path_form = path_id != kQuicAckFrame;
     const u64 delay_us = (now_ns > m_largest_ns) ? (now_ns - m_largest_ns) / kNanosPerMicro : 0U;
     const u64 delay    = (exponent >= 64U) ? 0U : (delay_us >> exponent);
     const EcnCounts* const ecn = m_ecn_seen ? &m_ecn : nullptr;
     for (usize count = m_count; count > 0U; --count)
     {
         const cont::ConstSpan<QuicAckRange> ranges(m_ranges, count);
-        usize bytes = quic_ack_bytes(ranges, delay, ecn);
+        usize bytes = path_form ? quic_path_ack_bytes(path_id, ranges, delay, ecn) : quic_ack_bytes(ranges, delay, ecn);
         if (bytes != 0U && bytes <= out.size())
         {
             // The ranges first; the timestamps take the room they leave, the oldest given up first.
             QuicReceiveTimestamp stamps[kQuicMaxReceiveTimestamps];
             usize reported = 0U;
-            if (log != nullptr && log->enabled())
+            if (!path_form && log != nullptr && log->enabled())
             {
                 reported = log->take(ranges, cont::Span<QuicReceiveTimestamp>(stamps, kQuicMaxReceiveTimestamps));
             }
@@ -289,8 +291,10 @@ QuicAckWrite QuicAckTracker::write(cont::Span<u8> out, u64 now_ns, u64 exponent,
                     break;
                 }
             }
-            if (write_quic_ack(ranges, delay, ecn, out, cont::ConstSpan<QuicReceiveTimestamp>(stamps, reported)) !=
-                bytes)
+            const cont::ConstSpan<QuicReceiveTimestamp> reports(stamps, reported);
+            const usize wrote = path_form ? write_quic_path_ack(path_id, ranges, delay, ecn, out)
+                                          : write_quic_ack(ranges, delay, ecn, out, reports);
+            if (wrote != bytes)
             {
                 return {};
             }
@@ -912,7 +916,7 @@ QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& pack
     return QuicRecoveryError::None;
 }
 
-QuicAckWrite QuicRecovery::write_ack(QuicSpace id, cont::Span<u8> out, u64 now_ns, usize path) noexcept
+QuicAckWrite QuicRecovery::write_ack(QuicSpace id, cont::Span<u8> out, u64 now_ns, usize path, u64 path_id) noexcept
 {
     if (!usable(id, path))
     {
@@ -927,7 +931,8 @@ QuicAckWrite QuicRecovery::write_ack(QuicSpace id, cont::Span<u8> out, u64 now_n
     {
         return space.received.write(out, now_ns, kQuicDefaultAckDelayExponent);
     }
-    return space.received.write(out, now_ns, m_local_ack_delay_exponent, (path == 0U) ? &m_receive_log : nullptr);
+    return space.received.write(out, now_ns, m_local_ack_delay_exponent, (path == 0U) ? &m_receive_log : nullptr,
+                                path_id);
 }
 
 void QuicRecovery::on_ack_acknowledged(usize path, u64 largest) noexcept

@@ -763,12 +763,14 @@ private:
     // The PMTU probe due now, written alone into `out`: its size, 0 when none goes (none due, a probe timeout or an
     // owed ACK pending, or the window, the pacer or the amplification limit holding it; a pacer arms its timer).
     [[nodiscard]] usize send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept;
-    // The sending state of path slot `slot` (open in the recovery), and the slot of the datagram being written: the
-    // handshake's until multipath opens others (S78's scheduling).
+    // The sending state of path slot `slot` (open in the recovery), and the slot of the datagram being written, then
+    // of the last one (send() gives the open slots turns, S78's scheduling).
     [[nodiscard]] QuicPathControl& control(usize slot) noexcept { return *m_controls[slot]; }
     // The slot whose number space is path ID `path_id`'s (QuicPacketProtection::path_id); kQuicNoPath for none.
     [[nodiscard]] usize slot_of(u64 path_id) const noexcept;
-    [[nodiscard]] static constexpr usize send_slot() noexcept { return 0U; }
+    [[nodiscard]] usize send_slot() const noexcept { return m_send_slot; }
+    // send()'s datagram on send_slot(): the handshake slot's close while Closing, else its owed frames and data.
+    [[nodiscard]] usize send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noexcept;
     // Path slot `slot`'s 4-tuples.
     [[nodiscard]] QuicPaths& tuples(usize slot) noexcept { return m_tuples[slot]->paths; }
     [[nodiscard]] const QuicPaths& tuples(usize slot) const noexcept { return m_tuples[slot]->paths; }
@@ -793,10 +795,11 @@ private:
                               Written& written) noexcept;
     void settle(QuicSpace space, const QuicSentPacket& packet, Settle how) noexcept;
     void pull_crypto() noexcept;
-    [[nodiscard]] usize amplification_credit() const noexcept;
-    // Whether send() can write `space`'s owed ACK (the active path's amplification limit included): a timer nothing
-    // serves is never reported due.
-    [[nodiscard]] bool can_acknowledge(QuicSpace space) const noexcept;
+    // What path slot `slot`'s active 4-tuple may still carry under its amplification limit (RFC 10069 section 7.2).
+    [[nodiscard]] usize amplification_credit(usize slot = 0U) const noexcept;
+    // Whether send() can write the ACK `space` of slot `slot` owes (its active 4-tuple's amplification limit
+    // included): a timer nothing serves is never reported due.
+    [[nodiscard]] bool can_acknowledge(QuicSpace space, usize slot = 0U) const noexcept;
 
     // Closing and timers.
     void fail(QuicTransportError error, u64 frame_type, u64 now_ns) noexcept;
@@ -900,6 +903,7 @@ private:
     Tuples* m_tuples[kQuicMaxPaths] = {&m_first_paths};
     QuicPath m_candidate;      // the path of a datagram being read from no known path
     usize m_receive_path = 0U; // the 4-tuple of the datagram being read, in m_receive_slot's (kQuicNoPath: m_candidate)
+    usize m_send_slot = 0U;    // the path slot of the datagram being written, then of the last one
     usize m_send_path = 0U;    // the 4-tuple of the datagram being written, then of the last one, in send_slot()'s
     // The path datagrams move to once validated (section 9.6.2): a client's to the preferred address, a server's
     // where its client's highest-numbered non-probing packet reached the preferred socket. kQuicNoPath for none.

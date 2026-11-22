@@ -290,6 +290,47 @@ TEST_CASE("quic recovery: ACK frames carry the ranges, the delay and the ECN cou
     CHECK(frame.ack.range_count == 0U);
 }
 
+TEST_CASE("quic recovery: PATH_ACK frames carry one path ID's ranges and ECN counts, never timestamps",
+          "[net][quic][recovery][multipath]")
+{
+    QuicAckTracker tracker;
+    tracker.reset(QuicSpace::Application);
+    QuicReceiveTimestampLog log;
+    log.configure(4U, 0U);
+    for (const u64 number : {0U, 1U, 4U})
+    {
+        CHECK(tracker.on_received(number, true, (number == 4U) ? Ecn::Ce : Ecn::NotEct, number * kMs, kMaxAckDelay));
+        log.record(number, (number + 1U) * kMs);
+    }
+    u8 room[64];
+    // Too small for even one range: nothing, and the ACK stays owed.
+    CHECK(tracker.write(Span<u8>(room, 4U), 4U * kMs, 3U, &log, 7U).bytes == 0U);
+    CHECK(tracker.ack_deadline_ns() != kNeverNs);
+    const QuicAckWrite written = tracker.write(Span<u8>(room, sizeof(room)), 4U * kMs + 800000U, 3U, &log, 7U);
+    REQUIRE(written.bytes != 0U);
+    CHECK(written.largest == 4U);
+    CHECK(tracker.ack_deadline_ns() == kNeverNs);
+    WireReader in(ConstSpan<u8>(room, written.bytes));
+    QuicFrame frame;
+    REQUIRE(read_quic_frame(in, frame) == QuicTransportError::NoError);
+    CHECK(in.done());
+    CHECK(frame.kind == QuicFrameKind::PathAck);
+    CHECK(frame.path_id == 7U);
+    CHECK(frame.ack.delay == 100U);
+    CHECK(frame.ack.ecn);
+    CHECK(frame.ack.ce == 1U);
+    CHECK(frame.ack.largest == 4U);
+    CHECK(frame.ack.first_range == 0U);
+    CHECK(frame.ack.range_count == 1U);
+    // The log kept its records: a PATH_ACK reports none, so the next ACK frame of path ID 0 still can.
+    QuicReceiveTimestamp stamps[kQuicMaxReceiveTimestamps];
+    const QuicAckRange all{0U, 4U};
+    CHECK(log.take(ConstSpan<QuicAckRange>(&all, 1U), Span<QuicReceiveTimestamp>(stamps, kQuicMaxReceiveTimestamps)) ==
+          3U);
+    // A path ID above kQuicMaxPathId has no PATH_ACK frame.
+    CHECK(tracker.write(Span<u8>(room, sizeof(room)), 5U * kMs, 3U, nullptr, u64{kQuicMaxPathId} + 1U).bytes == 0U);
+}
+
 TEST_CASE("quic recovery: an acknowledged ACK frame retires its ranges (RFC 9000 13.2.4)", "[net][quic][recovery]")
 {
     QuicAckTracker tracker;
