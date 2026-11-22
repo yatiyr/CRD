@@ -94,6 +94,7 @@ constexpr u64 kEarlyBytes = 800U; // within the stream and connection windows of
 constexpr u8 kEarlyPayload[] = {0xDA, 0x7A};
 constexpr u8 kKeyedSecret[kQuicKeyedSecretBytes] = {0x4D, 0x11, 0x7E};
 constexpr usize kKeyedIdBytes = 8U;
+constexpr u64 kMaxPathId = 2U; // RFC 10069: both ends' initial_max_path_id when byte 0 offers the extensions
 
 bool valid_close(u64 code)
 {
@@ -194,7 +195,7 @@ struct Host
 
     Host(crd::memory::IAllocator& allocator, u32 index, ConstSpan<u8> sequence0)
         : routes(allocator, 32U, ConstSpan<u8>(kSeeds[index], kPrfKeyBytes)),
-          tokens(allocator, kQuicMaxPeerConnectionIds, ConstSpan<u8>(kSeeds[index], kPrfKeyBytes)),
+          tokens(allocator, kQuicMaxPeerConnectionIds * (kMaxPathId + 1U), ConstSpan<u8>(kSeeds[index], kPrfKeyBytes)),
           ids(routes, key, index, &tokens)
     {
         u8 secret[kQuicResetKeyBytes] = {static_cast<u8>(0xA0U + index)};
@@ -202,12 +203,20 @@ struct Host
         CRD_FUZZ_REQUIRE(routes.insert(sequence0, index) == RouteError::None);
     }
 
-    // The host routes exactly the IDs its connection holds (sequence 0 is routed until the connection is accepted).
+    // The host routes exactly the IDs its connection holds for every path ID (sequence 0 is routed until the
+    // connection is accepted).
     void check(const QuicConnection& end) const
     {
-        CRD_FUZZ_REQUIRE(end.state() == QuicConnectionState::Idle || routes.size() == end.local_cid_count());
+        usize local = 0U;
+        usize peer = 0U;
+        for (u64 path_id = 0U; path_id <= kMaxPathId; ++path_id)
+        {
+            local += end.local_cid_count(path_id);
+            peer += end.peer_cid_count(path_id);
+        }
+        CRD_FUZZ_REQUIRE(end.state() == QuicConnectionState::Idle || routes.size() == local);
         // Its peer tokens stay within the IDs held, and none outlives the connection.
-        CRD_FUZZ_REQUIRE(tokens.size() <= end.peer_cid_count());
+        CRD_FUZZ_REQUIRE(tokens.size() <= peer);
         CRD_FUZZ_REQUIRE(end.state() != QuicConnectionState::Closed || tokens.size() == 0U);
     }
 };
@@ -311,7 +320,10 @@ QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnecti
     config.parameters.active_connection_id_limit = 4U;
     config.parameters.max_receive_timestamps_per_ack = extensions() ? 4U : 0U;
     config.parameters.address_discovery = extensions() ? QuicAddressDiscovery::Both : QuicAddressDiscovery::Off;
-    config.parameters.has_initial_max_path_id = extensions(); // RFC 10069, path ID 0 alone (design S78)
+    // RFC 10069 (design S78): ID spaces for path IDs 1 and 2, whose frames the peer may name, and a server's path
+    // slots for them.
+    config.parameters.has_initial_max_path_id = extensions();
+    config.parameters.initial_max_path_id = extensions() ? kMaxPathId : 0U;
     config.version = version;
     config.tls = (side == QuicSide::Client) ? &identity().client : &identity().server;
     if (keyed)
@@ -780,12 +792,19 @@ void check_observations(const Pair& pair)
     CRD_FUZZ_REQUIRE(extensions() || (pair.client.counters().address_observations == 0U &&
                                       pair.server.counters().address_observations == 0U));
     // Multipath is negotiated exactly when both ends offered it, and a QuicConnection peer sends neither MAX_PATH_ID
-    // nor PATH_STATUS while its limit is path ID 0 (RFC 10069; design S78).
+    // nor PATH_STATUS, nor opens a path ID, while no client opens paths (RFC 10069; design S78). Each path ID's IDs
+    // stay within the peer's active_connection_id_limit.
     for (const QuicConnection* end : {&pair.client, &pair.server})
     {
         CRD_FUZZ_REQUIRE(end->multipath() == (extensions() && end->peer_parameters_known()));
-        CRD_FUZZ_REQUIRE(end->peer_max_path_id() == 0U);
+        CRD_FUZZ_REQUIRE(end->peer_max_path_id() == (end->multipath() ? kMaxPathId : 0U));
         CRD_FUZZ_REQUIRE(end->peer_path_status() == QuicPeerPathStatus::Unknown);
+        CRD_FUZZ_REQUIRE(end->counters().paths_opened == 0U);
+        for (u64 path_id = 1U; path_id <= kMaxPathId; ++path_id)
+        {
+            CRD_FUZZ_REQUIRE(end->multipath() || end->local_cid_count(path_id) == 0U);
+            CRD_FUZZ_REQUIRE(end->local_cid_count(path_id) <= 4U); // config_for's active_connection_id_limit
+        }
     }
 }
 
@@ -1347,7 +1366,7 @@ struct Raw
         parameters.has_initial_source_connection_id = true;
         static_cast<void>(parameters.initial_source_connection_id.assign(keyed_id(QuicSide::Client).view()));
         parameters.has_initial_max_path_id = extensions();
-        parameters.initial_max_path_id = 2U;
+        parameters.initial_max_path_id = kMaxPathId;
         u8 hello[256];
         const usize bytes = write_quic_transport_parameters(parameters, QuicSide::Client, {3U},
                                                             Span<u8>(hello + 2U, sizeof(hello) - 2U));
@@ -1499,7 +1518,7 @@ void run_frames(QuicVersion version, ConstSpan<u8> input, bool initial, bool key
         static_cast<void>(
             parameters.initial_source_connection_id.assign(ConstSpan<u8>(kClientCid, sizeof(kClientCid))));
         parameters.has_initial_max_path_id = extensions();
-        parameters.initial_max_path_id = 2U;
+        parameters.initial_max_path_id = kMaxPathId;
         u8 encoded[256];
         const usize bytes =
             write_quic_transport_parameters(parameters, QuicSide::Client, {3U}, Span<u8>(encoded, sizeof(encoded)));

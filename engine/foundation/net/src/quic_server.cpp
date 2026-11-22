@@ -18,8 +18,8 @@ bool same_id(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
 
 QuicHostLimits limits_of(const QuicServerConfig& config) noexcept
 {
-    return QuicHostLimits{config.connections, config.send_slots, config.connection.max_datagram_bytes,
-                          config.receive_bytes, config.send_retry_ns};
+    return QuicHostLimits{config.connections,   config.send_slots,    config.connection.max_datagram_bytes,
+                          config.receive_bytes, config.send_retry_ns, quic_path_ids(config.connection.parameters)};
 }
 } // namespace
 

@@ -845,3 +845,39 @@ TEST_CASE("QUIC server: a client's NAT rebinding and then its move to another ad
     CHECK(client.connection->state() == QuicConnectionState::Established);
     CHECK(served->state() == QuicConnectionState::Established);
 }
+
+TEST_CASE("QUIC server: its host watches the peer tokens of every path ID its connections keep open",
+          "[net][net-path][quic-server][multipath]")
+{
+    // RFC 10069: a connection holds the peer's IDs, each with its token, for 1 + initial_max_path_id path IDs.
+    QuicTransportParameters parameters;
+    CHECK(quic_path_ids(parameters) == 1U);
+    parameters.initial_max_path_id = 3U;
+    CHECK(quic_path_ids(parameters) == 1U); // not offered
+    parameters.has_initial_max_path_id = true;
+    parameters.initial_max_path_id = 0U;
+    CHECK(quic_path_ids(parameters) == 1U);
+    parameters.initial_max_path_id = 3U;
+    CHECK(quic_path_ids(parameters) == 4U);
+    parameters.initial_max_path_id = ~u64{0};
+    CHECK(quic_path_ids(parameters) == kQuicMaxPaths + 1U); // past every host's limit, as the connection refuses it
+    Identity identity;
+    CountingAllocator allocator;
+    ConnectionIdTable routes(allocator, 64U, ConstSpan<u8>(kHostPrf));
+    HandshakeBuckets buckets(allocator, HandshakeRules{}, ConstSpan<u8>(kHostPrf));
+    QuicResetKey reset;
+    REQUIRE(reset.init(ConstSpan<u8>(kResetSecret)) == CryptoError::None);
+    Ingress ingress(IngressConfig{}, routes, buckets, nullptr, nullptr, &reset);
+    VirtualSocket socket;
+    TestClock clock;
+    EchoApp app;
+    QuicServerConfig config;
+    config.connection = config_for(QuicSide::Server, identity, QuicVersion::V1, 1U);
+    config.connection.parameters.has_initial_max_path_id = true;
+    config.connection.parameters.initial_max_path_id = kQuicMaxPaths - 1U;
+    const QuicServer multipath(allocator, socket, clock, ingress, routes, reset, nullptr, app, config);
+    CHECK(multipath.ready());
+    config.connection.parameters.initial_max_path_id = kQuicMaxPaths;
+    const QuicServer refused(allocator, socket, clock, ingress, routes, reset, nullptr, app, config);
+    CHECK_FALSE(refused.ready());
+}

@@ -39,7 +39,7 @@ bool limits_valid(const QuicHostLimits& limits) noexcept
 {
     return limits.connections != 0U && limits.connections <= kQuicMaxHostConnections && limits.send_retry_ns != 0U &&
            limits.datagram_bytes >= kQuicMinInitialDatagram && limits.receive_bytes >= kQuicMinInitialDatagram &&
-           limits.receive_bytes <= kMaxUdpPayloadV6;
+           limits.receive_bytes <= kMaxUdpPayloadV6 && limits.path_ids != 0U && limits.path_ids <= kQuicMaxPaths;
 }
 
 // The lowest socket whose bit `held` leaves clear.
@@ -57,7 +57,8 @@ bool limits_valid(const QuicHostLimits& limits) noexcept
 QuicHost::QuicHost(memory::IAllocator& allocator, const SocketSet& sockets, ConnectionIdTable& routes,
                    const crypto::QuicResetKey& reset, QuicHostEvents& events, const QuicHostLimits& limits) noexcept
     : m_allocator(allocator), m_sockets(sockets), m_routes(routes), m_reset(reset), m_events(events), m_limits(limits),
-      m_peer_tokens(allocator, limits_valid(limits) ? limits.connections * kQuicHostTokensPerConnection : 1U),
+      m_peer_tokens(allocator,
+                    limits_valid(limits) ? limits.connections * limits.path_ids * kQuicHostTokensPerPath : 1U),
       m_peer_paths(allocator, limits_valid(limits) ? limits.connections : 1U),
       m_queue(allocator, limits.send_slots, limits.datagram_bytes, sockets.size()), m_heap(allocator)
 {
@@ -136,6 +137,10 @@ QuicConnection* QuicHost::build(u32 index, QuicConnectionConfig config, const Qu
     if (config.parameters.max_udp_payload_size > m_limits.receive_bytes)
     {
         config.parameters.max_udp_payload_size = m_limits.receive_bytes; // what the loop reads whole
+    }
+    if (config.parameters.initial_max_path_id >= m_limits.path_ids)
+    {
+        config.parameters.initial_max_path_id = m_limits.path_ids - 1U; // the path IDs whose tokens the host watches
     }
     const SocketFeatures features = m_sockets.features();
     if (!features.ecn_marking)

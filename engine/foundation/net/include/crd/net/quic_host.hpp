@@ -51,8 +51,8 @@ class IAllocator;
 
 namespace crd::net
 {
-// The peer tokens a connection can have live: one per peer ID it holds.
-inline constexpr u32 kQuicHostTokensPerConnection = static_cast<u32>(kQuicMaxPeerConnectionIds);
+// The peer tokens a connection can have live per path ID it keeps open: one per peer ID it holds there.
+inline constexpr u32 kQuicHostTokensPerPath = static_cast<u32>(kQuicMaxPeerConnectionIds);
 
 // The application's side of either host, called on the loop's thread.
 class QuicHostEvents
@@ -83,7 +83,18 @@ struct QuicHostLimits
     // advertises at most this as its max_udp_payload_size (RFC 9000 section 18.2), so no peer sends one the loop drops.
     u32 receive_bytes = 0U;
     u64 send_retry_ns = 0U;    // a connection the busy host held back is served again within this
+    // The path IDs a connection keeps open at once (RFC 10069), 1 to kQuicMaxPaths: every connection's
+    // initial_max_path_id is kept below it, and the host watches that many path IDs' peer tokens per connection.
+    u32 path_ids = 1U;
 };
+
+// The path IDs a connection of `parameters` keeps open at once: 1 + its initial_max_path_id when it offers
+// multipath (QuicHostLimits::path_ids; past kQuicMaxPaths for a limit QuicConnectionConfig refuses).
+[[nodiscard]] constexpr u32 quic_path_ids(const QuicTransportParameters& parameters) noexcept
+{
+    const u64 limit = (parameters.initial_max_path_id < kQuicMaxPaths) ? parameters.initial_max_path_id : kQuicMaxPaths;
+    return parameters.has_initial_max_path_id ? static_cast<u32>(limit) + 1U : 1U;
+}
 
 struct QuicHostCounters
 {

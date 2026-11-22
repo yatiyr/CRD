@@ -596,3 +596,20 @@ TEST_CASE("a move to another held peer ID", "[quic][cids]")
     REQUIRE(add(s.cids, new_id(0U, 2U, PeerId(0x52U))) == QuicTransportError::NoError);
     CHECK(s.cids.current() == 2U);
 }
+
+TEST_CASE("IDs are issued only for path IDs within the peer's limit", "[quic][cids][multipath]")
+{
+    // RFC 10069 section 3.2.1: none past the peer's Maximum Path Identifier; the spaces above it wait, open.
+    Started s;
+    REQUIRE(s.cids.open(1U, s.spaces[1]));
+    REQUIRE(s.cids.open(2U, s.spaces[2]));
+    s.cids.top_up(2U, 1U);
+    CHECK(s.cids.local_count(0U) == 2U);
+    CHECK(s.cids.local_count(1U) == 2U);
+    CHECK(s.cids.local_count(2U) == 0U);
+    CHECK(s.cids.local_next(2U) == 0U);
+    // The limit rises (MAX_PATH_ID): the next top-up fills path ID 2 as well.
+    s.cids.top_up(2U, 2U);
+    CHECK(s.cids.local_count(2U) == 2U);
+    CHECK(s.cids.local_count(1U) == 2U);
+}

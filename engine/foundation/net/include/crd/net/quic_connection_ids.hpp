@@ -224,9 +224,10 @@ public:
     // server's preferred address, sequence 1). False when none could be routed, the space is not open, holds no
     // room, or this side's IDs are zero-length.
     [[nodiscard]] bool issue(u64 path_id, bool announced = false) noexcept;
-    // Issues IDs until every open space holds `limit` active ones (the peer's active_connection_id_limit, at most
+    // Issues IDs until every open space of a path ID at most `max_path_id` (the peer's limit, which none may pass:
+    // RFC 10069 section 3.2.1) holds `limit` active ones (the peer's active_connection_id_limit, at most
     // kQuicMaxLocalConnectionIds).
-    void top_up(u64 limit) noexcept;
+    void top_up(u64 limit, u64 max_path_id = kQuicMaxPathId) noexcept;
     // A rotation of `path_id`'s: a fresh set whose frames retire every earlier one (Retire Prior To). False, changing
     // nothing, while an earlier rotation's IDs are not all retired or none could be issued.
     [[nodiscard]] bool rotate(u64 path_id, u64 limit) noexcept;

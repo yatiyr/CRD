@@ -598,12 +598,12 @@ bool QuicCids::issue(u64 path_id, bool announced) noexcept
     return true;
 }
 
-void QuicCids::top_up(u64 limit) noexcept
+void QuicCids::top_up(u64 limit, u64 max_path_id) noexcept
 {
     const usize target = static_cast<usize>((limit < kQuicMaxLocalConnectionIds) ? limit : kQuicMaxLocalConnectionIds);
     for (QuicCidSpace* held : m_spaces)
     {
-        if (held == nullptr)
+        if (held == nullptr || held->m_path_id > max_path_id)
         {
             continue;
         }

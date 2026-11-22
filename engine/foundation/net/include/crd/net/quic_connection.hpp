@@ -83,13 +83,18 @@
 //              alone. Reports taken (only when asked for: PROTOCOL_VIOLATION otherwise) are kept per path, the newest
 //              sequence winning (observed_address()).
 //   multipath  RFC 10069 behind parameters.has_initial_max_path_id (design S78): negotiated when both ends offer it
-//              (multipath()), with connection IDs of non-zero length both ways (PROTOCOL_VIOLATION otherwise). This
-//              side's limit is path ID 0 until paths open, so its IDs go in PATH_NEW_CONNECTION_ID and
-//              PATH_RETIRE_CONNECTION_ID frames for path ID 0 (section 3.2) and the peer's frames are read under that
-//              limit: a path ID above it is PROTOCOL_VIOLATION (section 4), PATH_ACK of path ID 0 is an ACK frame,
-//              MAX_PATH_ID raises the peer's limit only, PATH_STATUS keeps the newest status (peer_path_status()), the
-//              two BLOCKED frames are checked and inform, and PATH_ABANDON of path ID 0, the only path, closes the
-//              connection (section 3.4). Without negotiation every one is an unknown frame: FRAME_ENCODING_ERROR.
+//              (multipath()), with connection IDs of non-zero length both ways (PROTOCOL_VIOLATION otherwise). Each
+//              path ID's IDs go in PATH_NEW_CONNECTION_ID and PATH_RETIRE_CONNECTION_ID frames (section 3.2): an ID
+//              space opens for each path ID up to this side's limit (initial_max_path_id, at most kQuicMaxPaths - 1),
+//              and IDs are issued in those up to the peer's (section 3.2.1). A server opens a path ID's number space
+//              in a path slot of its own at the first packet sent to one of that path ID's IDs that authenticates,
+//              validates the 4-tuple it came from and sends no data there before (section 3.1); every packet of a
+//              path ID is read, acknowledged in PATH_ACK frames and answered in its slot. The peer's frames are read
+//              under this side's limit: a path ID above it is PROTOCOL_VIOLATION (section 4), as is a PATH_ACK of a
+//              path ID whose number space never opened; one whose state is gone is ignored. MAX_PATH_ID raises the
+//              peer's limit only, PATH_STATUS keeps the newest status (peer_path_status()), the two BLOCKED frames are
+//              checked and inform, and PATH_ABANDON closes the connection (section 3.4). Without negotiation every
+//              one is an unknown frame: FRAME_ENCODING_ERROR.
 //   IDs        both ends' IDs are held in QuicCids (quic_connection_ids.hpp), one sequence space per path ID; this
 //              side's come from the host (QuicConnectionIds), which routes them and derives their stateless reset
 //              tokens from its QuicResetKey: after confirmation the peer is kept at its
@@ -179,7 +184,7 @@ struct QuicConnectionConfig
     // the connection asks for that many per ACK frame in receive_timestamps_exponent's unit, takes them as its
     // congestion controller's receive times, and reports its own when the peer asks too. address_discovery (Off by
     // default) is the NET-STD flag of draft-ietf-quic-address-discovery-01 ("addresses" above). has_initial_max_path_id
-    // offers RFC 10069 ("multipath" above) with initial_max_path_id 0, the one value until paths open. The connection
+    // offers RFC 10069 ("multipath" above) with initial_max_path_id at most kQuicMaxPaths - 1. The connection
     // fills the connection IDs and a server's stateless_reset_token, version_information, grease_quic_bit, the stream
     // and flow-control parameters (from `streams`) and max_datagram_frame_size (from `datagrams`), so those stay 0
     // here; active_connection_id_limit is at most kQuicMaxPeerConnectionIds.
@@ -337,6 +342,7 @@ struct QuicConnectionCounters
     u64 receive_timestamps = 0U; // acknowledged packets the peer's ACK_RECEIVE_TIMESTAMPS frames gave a receive time
     u64 migrations = 0U;         // moves of the datagrams to another path, following the peer or reverting
     u64 path_validations = 0U;   // paths a PATH_RESPONSE validated
+    u64 paths_opened = 0U;       // path IDs whose number space opened in a slot of their own (RFC 10069)
     u64 path_failures = 0U;      // validations abandoned on their timeout
     u64 foreign_datagrams = 0U;  // datagrams from a path this side takes nothing from (a client's unknown server)
     u64 handover_losses = 0U;    // losses of packets a scheduled handover may have taken, kept from congestion control
@@ -510,12 +516,12 @@ public:
     [[nodiscard]] u64 peer_max_path_id() const noexcept { return m_peer_max_path_id; }
     // The peer's preference for `path_id`, its newest PATH_STATUS frame's (section 3.3): Unknown before one.
     [[nodiscard]] QuicPeerPathStatus peer_path_status(u64 path_id = 0U) const noexcept;
-    // The Destination Connection ID this side sends to on path slot `slot`, and the peer's IDs held (sequence 0 first
-    // among them).
+    // The Destination Connection ID this side sends to on path slot `slot`, and the peer's IDs held for `path_id`
+    // (path ID 0's sequence 0 first among them; 0 for a path ID whose ID space is not open).
     [[nodiscard]] cont::ConstSpan<u8> peer_cid(usize slot = 0U) const noexcept;
-    [[nodiscard]] usize peer_cid_count() const noexcept { return m_cids.peer_count(); }
-    // This side's IDs still routed (sequence 0 included until retired).
-    [[nodiscard]] usize local_cid_count() const noexcept { return m_cids.local_count(); }
+    [[nodiscard]] usize peer_cid_count(u64 path_id = 0U) const noexcept { return m_cids.peer_count(path_id); }
+    // This side's IDs for `path_id` still routed (path ID 0's sequence 0 included until retired).
+    [[nodiscard]] usize local_cid_count(u64 path_id = 0U) const noexcept { return m_cids.local_count(path_id); }
     // A client: the latest NEW_TOKEN token its server sent (empty for none), for its next connection there in
     // version(). A server: the token it sends.
     [[nodiscard]] cont::ConstSpan<u8> new_token() const noexcept
@@ -651,6 +657,16 @@ private:
     // The path slot of a datagram: its first packet's, by its ID's path ID (0 for a long header or an ID not this
     // side's); kQuicNoPath for a path ID open in no slot.
     [[nodiscard]] usize datagram_slot(cont::ConstSpan<u8> datagram) const noexcept;
+    // A server's path ID whose number space never opened, named by `datagram`'s first packet: a free path slot opened
+    // for it tentatively (the protection's number space and the 4-tuples, from `from`), kQuicNoPath for none. The
+    // first packet that authenticates there commits it (commit_path); undo_path() forgets it otherwise.
+    [[nodiscard]] usize begin_path(cont::ConstSpan<u8> datagram, const QuicPath& from, u64 now_ns) noexcept;
+    // The tentative slot's recovery and sending state open (the pool's: nothing is allocated), its 4-tuple validated
+    // before data goes there (RFC 10069 section 3.1).
+    void commit_path(usize slot, u64 now_ns) noexcept;
+    void undo_path(usize slot) noexcept;
+    // Opens an ID space for each path ID up to this side's limit once multipath is negotiated (section 3.2.1).
+    void open_id_spaces() noexcept;
     // A packet from m_candidate, a path not known, opened: the path joins, with the peer ID it is answered on.
     void admit_path(usize slot, usize datagram_bytes, u64 now_ns) noexcept;
     // A path joins (the least recently used one given up when the table is full).
@@ -712,6 +728,8 @@ private:
     [[nodiscard]] bool read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_ns) noexcept;
     // The peer's grants to this side's streams and datagrams: a client's remembered ones for 0-RTT, then its server's.
     void apply_peer_limits(const QuicTransportParameters& peer) noexcept;
+    // The peer's max_udp_payload_size, capped: every path's search ceiling.
+    [[nodiscard]] u32 peer_ceiling() const noexcept;
     // A client: starts 0-RTT on the parameters its ticket remembers. Both: acts on the server's 0-RTT decision.
     [[nodiscard]] bool begin_early() noexcept;
     [[nodiscard]] bool settle_early(u64 now_ns) noexcept;
@@ -892,7 +910,7 @@ private:
     bool m_handshake_done_owed = false;
     bool m_handshake_done_acked = false;
     // A path slot's 4-tuples and how they were chosen (S75 per path ID, RFC 10069 section 3.1.2): slot 0's are
-    // m_first_paths, the others' to be allocated with their slot.
+    // m_first_paths, the others' in m_slots.
     struct Tuples
     {
         QuicPaths paths;
@@ -901,6 +919,20 @@ private:
     };
     Tuples m_first_paths;
     Tuples* m_tuples[kQuicMaxPaths] = {&m_first_paths};
+    // Path slots 1 to kQuicMaxPaths - 1 (RFC 10069), allocated at construction when this side's limit is above 0, so
+    // opening a path allocates nothing: each one's recovery (its Application packets in m_slot_entries) and sending
+    // state, its 4-tuples, and one ID space, which serves whichever path ID it holds (its own slot's or another's).
+    struct PathSlot
+    {
+        QuicPathRecovery recovery;
+        QuicPathControl control;
+        Tuples tuples;
+        QuicCidSpace ids;
+    };
+    static constexpr usize kFurtherSlots = kQuicMaxPaths - 1U;
+    PathSlot* m_slots = nullptr;
+    QuicSentEntry* m_slot_entries = nullptr; // kFurtherSlots times sent_packets + kSentPacketReserve
+    usize m_tentative_slot = kQuicNoPath;    // begin_path()'s, until commit_path() or undo_path()
     QuicPath m_candidate;      // the path of a datagram being read from no known path
     usize m_receive_path = 0U; // the 4-tuple of the datagram being read, in m_receive_slot's (kQuicNoPath: m_candidate)
     usize m_send_slot = 0U;    // the path slot of the datagram being written, then of the last one

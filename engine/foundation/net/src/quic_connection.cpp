@@ -65,6 +65,14 @@ constexpr u64 kNoSequence = kQuicNoSequence; // a path with no peer connection I
     return out;
 }
 
+// What a path not yet searched is known to carry: its family's floor (RFC 8899 section 5.2), within `most`.
+[[nodiscard]] u32 family_base(const QuicPath& path, u32 most) noexcept
+{
+    const u32 base =
+        (path.peer.address.unmapped().family == AddressFamily::V6) ? kQuicIpv6BaseDatagram : kQuicPmtuFloor;
+    return (base < most) ? base : most;
+}
+
 [[nodiscard]] constexpr QuicPacketType packet_type(QuicSpace space) noexcept
 {
     if (space == QuicSpace::Initial)
@@ -166,8 +174,9 @@ constexpr u64 kNoSequence = kQuicNoSequence; // a path with no peer connection I
            p.max_receive_timestamps_per_ack <= kQuicMaxReceiveTimestamps &&
            p.receive_timestamps_exponent <= kQuicMaxReceiveTimestampsExponent &&
            p.address_discovery <= QuicAddressDiscovery::Both && !p.has_stateless_reset_token &&
-           (!p.has_initial_max_path_id || p.initial_max_path_id == 0U) && QuicStreamSet::limits_valid(config.streams) &&
-           QuicDatagrams::limits_valid(config.datagrams) && p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
+           (!p.has_initial_max_path_id || p.initial_max_path_id < kQuicMaxPaths) &&
+           QuicStreamSet::limits_valid(config.streams) && QuicDatagrams::limits_valid(config.datagrams) &&
+           p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
            p.active_connection_id_limit <= kQuicMaxPeerConnectionIds && config.sent_packets != 0U &&
            config.sent_packets <= kMaxSentPackets && config.sent_frames != 0U &&
            config.sent_frames <= kMaxSentPackets && config.crypto_bytes % kQuicStreamChunk == 0U &&
@@ -275,10 +284,16 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     u8* const held = (held_bytes != 0U) ? memory::try_construct_array<u8>(allocator, held_bytes) : nullptr;
     Held* const held_entries =
         (held_bytes != 0U) ? memory::try_construct_array<Held>(allocator, config.held_packets) : nullptr;
+    // Further path slots only for a limit above path ID 0 (RFC 10069 section 2.1).
+    const bool further = config.parameters.has_initial_max_path_id && config.parameters.initial_max_path_id != 0U;
+    PathSlot* const slots = further ? memory::try_construct_array<PathSlot>(allocator, kFurtherSlots) : nullptr;
+    QuicSentEntry* const slot_entries =
+        further ? memory::try_construct_array<QuicSentEntry>(allocator, kFurtherSlots * per_space) : nullptr;
     void* const recovery = allocator.try_allocate(sizeof(QuicRecovery), alignof(QuicRecovery));
     if (seeded != crypto::CryptoError::None || entries == nullptr || frames == nullptr || bytes == nullptr ||
         bits == nullptr || recovery == nullptr || !streams || !datagrams || (early_bytes != 0U && early == nullptr) ||
-        (held_bytes != 0U && (held == nullptr || held_entries == nullptr)))
+        (held_bytes != 0U && (held == nullptr || held_entries == nullptr)) ||
+        (further && (slots == nullptr || slot_entries == nullptr)))
     {
         memory::destroy_array(allocator, entries, kQuicSpaces * per_space);
         memory::destroy_array(allocator, frames, config.sent_frames);
@@ -288,6 +303,8 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
         memory::destroy_array(allocator, early, early_bytes);
         memory::destroy_array(allocator, held, held_bytes);
         memory::destroy_array(allocator, held_entries, config.held_packets);
+        memory::destroy_array(allocator, slots, further ? kFurtherSlots : 0U);
+        memory::destroy_array(allocator, slot_entries, further ? kFurtherSlots * per_space : 0U);
         return;
     }
     if (early_bytes != 0U && !config.early_context.empty())
@@ -322,6 +339,12 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     static_cast<void>(m_first_control.start(path_config(config), config.path, entropy(), &m_coupling));
     m_datagram_bytes = m_first_control.datagram_bytes();
     m_first_paths.paths.open(config.path, false, 0U);
+    m_slots = slots;
+    m_slot_entries = slot_entries;
+    for (usize slot = 1U; further && slot < kQuicMaxPaths; ++slot)
+    {
+        m_tuples[slot] = &m_slots[slot - 1U].tuples;
+    }
     m_frames = frames;
     m_crypto_bytes = bytes;
     m_crypto_bits = bits;
@@ -344,6 +367,9 @@ QuicConnection::~QuicConnection() noexcept
     memory::destroy_array(m_allocator, m_early_context, m_early_context_bytes);
     memory::destroy_array(m_allocator, m_held_bytes, usize{m_config.held_packets} * m_config.max_datagram_bytes);
     memory::destroy_array(m_allocator, m_held, m_config.held_packets);
+    const usize further = (m_slots != nullptr) ? kFurtherSlots : 0U;
+    memory::destroy_array(m_allocator, m_slots, further);
+    memory::destroy_array(m_allocator, m_slot_entries, further * (usize{m_config.sent_packets} + kSentPacketReserve));
 }
 
 u64 QuicConnection::entropy() noexcept
@@ -618,17 +644,21 @@ bool QuicConnection::begin_early() noexcept
     return m_protection.install(m_handshake) == crypto::CryptoError::None;
 }
 
+u32 QuicConnection::peer_ceiling() const noexcept
+{
+    return static_cast<u32>(min_u64(m_peer.max_udp_payload_size, kQuicDefaultMaxUdpPayload));
+}
+
 void QuicConnection::apply_peer_limits(const QuicTransportParameters& peer) noexcept
 {
     m_streams.set_peer_parameters(peer);
     if (&peer == &m_peer)
     {
-        const u32 ceiling = static_cast<u32>(min_u64(peer.max_udp_payload_size, kQuicDefaultMaxUdpPayload));
         for (QuicPathControl* const control : m_controls)
         {
             if (control != nullptr)
             {
-                control->limit(ceiling);
+                control->limit(peer_ceiling());
             }
         }
         follow_datagram_size();
@@ -768,6 +798,10 @@ void QuicConnection::receive(const QuicPath& path, cont::Span<u8> datagram, Ecn 
     m_receive_slot = datagram_slot(datagram);
     if (m_receive_slot == kQuicNoPath)
     {
+        m_receive_slot = begin_path(datagram, path, now_ns); // a path ID the client opens (section 3.1)
+    }
+    if (m_receive_slot == kQuicNoPath)
+    {
         m_receive_slot = 0U;
         ++m_counters.packets_dropped;
         return;
@@ -847,6 +881,10 @@ void QuicConnection::receive(const QuicPath& path, cont::Span<u8> datagram, Ecn 
     if (live && (packets.foreign() || packets.error() != QuicHeaderError::None))
     {
         ++m_counters.packets_dropped;
+    }
+    if (m_tentative_slot != kQuicNoPath)
+    {
+        undo_path(m_tentative_slot); // its first packet did not authenticate: the path ID stays unopened
     }
     // The comparison is owed when the first packet cannot be associated or opened; it is skipped otherwise, and for a
     // path that no packet opened on.
@@ -1022,6 +1060,10 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
         fail(close, 0U, now_ns);
         return false;
     }
+    if (m_receive_slot == m_tentative_slot)
+    {
+        commit_path(m_receive_slot, now_ns);
+    }
     ++m_counters.packets_opened;
     QuicPaths& paths = tuples(m_receive_slot);
     if (m_receive_path == kQuicNoPath)
@@ -1170,8 +1212,10 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             return new_connection_id(frame, now_ns);
         case QuicFrameKind::PathChallenge:
             tuples(m_receive_slot).on_challenge(m_receive_path, frame.data);
-            // A challenge on the active path is answered with a non-probing packet as well (section 9.3.3).
-            m_ping_owed = m_ping_owed || m_receive_path == tuples(m_receive_slot).active();
+            // A challenge on the active path is answered with a non-probing packet as well (section 9.3.3). On a
+            // further slot the response rides with that slot's PATH_ACK, which is not probing either: a PING would
+            // go on the handshake slot's path, which the challenge says nothing of.
+            m_ping_owed = m_ping_owed || (m_receive_slot == 0U && m_receive_path == tuples(0U).active());
             return true;
         case QuicFrameKind::ObservedAddress:
             return observed_address_frame(frame, now_ns);
@@ -1238,6 +1282,13 @@ bool QuicConnection::ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_
     if (slot == kQuicNoPath)
     {
         m_peer_times.clear();
+        // A path ID whose ID space is open and not abandoned never had a number space here: none of its packets were
+        // sent to acknowledge (RFC 9000 section 13.1). A path ID whose state is gone is ignored.
+        if (frame.kind == QuicFrameKind::PathAck && m_cids.is_open(frame.path_id) && !m_cids.abandoned(frame.path_id))
+        {
+            fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
+            return false;
+        }
         return true;
     }
     const usize via = application ? m_receive_slot : 0U;
@@ -1536,6 +1587,7 @@ bool QuicConnection::read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_n
     m_peer_known = true;
     m_multipath = quic_multipath_negotiated(m_local, m_peer);
     m_peer_max_path_id = m_multipath ? m_peer.initial_max_path_id : 0U;
+    open_id_spaces();
     apply_peer_limits(m_peer);
     m_recovery->set_peer_parameters(m_peer.max_ack_delay * kNsPerMs, m_peer.ack_delay_exponent, now_ns);
     // Timestamps are reported only by a side that asks for them too: the draft is behind its NET-STD flag.
@@ -1611,7 +1663,16 @@ void QuicConnection::issue_local_ids() noexcept
 {
     if (m_confirmed && m_peer_known && m_state == QuicConnectionState::Established)
     {
-        m_cids.top_up(m_peer.active_connection_id_limit);
+        m_cids.top_up(m_peer.active_connection_id_limit, m_peer_max_path_id);
+    }
+}
+
+void QuicConnection::open_id_spaces() noexcept
+{
+    // Rising path IDs from 1, one ID space of the pool each: within kQuicMaxPaths, never consumed before.
+    for (u64 path_id = 1U; m_multipath && m_slots != nullptr && path_id <= m_local.initial_max_path_id; ++path_id)
+    {
+        static_cast<void>(m_cids.open(path_id, m_slots[path_id - 1U].ids));
     }
 }
 
@@ -1808,7 +1869,10 @@ bool QuicConnection::data_allowed(QuicSpace space) const noexcept
     // timer serves the Application space before confirmation (RFC 9002 appendix A.8). A lost Handshake flight held
     // behind it would wedge both ends. Its size is bounded by the crypto buffers and, on a server, by the
     // amplification limit; it still counts in bytes in flight.
-    return (space != QuicSpace::Application || m_data_open) && m_recovery->can_send_data(space);
+    // On a further path slot, data waits for its 4-tuple's validation (RFC 10069 section 3.1).
+    const usize slot = send_slot();
+    return (space != QuicSpace::Application || (m_data_open && (slot == 0U || tuples(slot).validated(m_send_path)))) &&
+           m_recovery->can_send_data(space, (space == QuicSpace::Application) ? slot : 0U);
 }
 
 bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
@@ -2422,7 +2486,9 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     const usize least = (datagram_used < reset_floor) ? min_u64(reset_floor - datagram_used, room.size()) : 0U;
     usize bytes = 0U;
     const u32 block = (carry == Carry::Probe) ? 0U : m_config.padding_block;
-    const QuicPacketError sealed = m_protection.seal(writer, used, QuicPadding{max_u64(floor, least), block}, bytes);
+    // In the slot's number space, under its path ID's nonce (RFC 10069 section 2.4).
+    const QuicPadding padding{max_u64(floor, least), block};
+    const QuicPacketError sealed = m_protection.seal(writer, used, padding, bytes, slot);
     if (sealed != QuicPacketError::None)
     {
         const QuicTransportError error = quic_packet_close(sealed);
@@ -3284,9 +3350,7 @@ void QuicConnection::follow_congestion(usize slot, u64 now_ns) noexcept
         return;
     }
     // A path of another family is the only thing known of it: its floor, then the search (RFC 8899 section 5.2).
-    const u32 base =
-        (active.peer.address.unmapped().family == AddressFamily::V6) ? kQuicIpv6BaseDatagram : kQuicPmtuFloor;
-    sending.restart(active, base, entropy());
+    sending.restart(active, family_base(active, m_config.max_datagram_bytes), entropy());
     m_recovery->restart_path(now_ns, slot);
     follow_datagram_size();
 }
@@ -3380,6 +3444,21 @@ void QuicConnection::on_validated(usize slot, usize index, u64 now_ns) noexcept
 
 void QuicConnection::expire_paths(u64 now_ns) noexcept
 {
+    // A further slot's 4-tuples that failed validation are forgotten; its active one stays unvalidated, which holds
+    // back data there (RFC 10069 section 3.1).
+    for (usize slot = 1U; slot < kQuicMaxPaths; ++slot)
+    {
+        if (!m_protection.path_open(slot))
+        {
+            continue;
+        }
+        QuicPaths& further = tuples(slot);
+        for (usize index = further.expired(now_ns); index != kQuicNoPath; index = further.expired(now_ns))
+        {
+            ++m_counters.path_failures;
+            drop_path(slot, index, now_ns); // nothing for the active one
+        }
+    }
     QuicPaths& paths = m_first_paths.paths;
     for (usize index = paths.expired(now_ns); index != kQuicNoPath; index = paths.expired(now_ns))
     {
@@ -3469,16 +3548,23 @@ u64 QuicConnection::validation_timeout_ns() const noexcept
 
 u64 QuicConnection::path_timer_ns() const noexcept
 {
-    // A challenge is due only where it can go: one the amplification limit holds waits for a datagram instead.
+    // A challenge is due only where it can go: one the amplification limit holds waits for a datagram instead. Every
+    // open slot's, which send() and expire_paths() serve.
     u64 next = kNeverNs;
-    // The handshake slot's, which send_path_frames() and expire_paths() serve.
-    const QuicPaths& paths = m_first_paths.paths;
-    for (usize index = 0U; index < kQuicMaxPaths; ++index)
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
     {
-        if (paths.used(index))
+        if (!m_protection.path_open(slot))
         {
-            next = min_u64(next, paths.deadline_ns(index));
-            next = path_sendable(0U, index) ? min_u64(next, paths.due_ns(index)) : next;
+            continue;
+        }
+        const QuicPaths& paths = tuples(slot);
+        for (usize index = 0U; index < kQuicMaxPaths; ++index)
+        {
+            if (paths.used(index))
+            {
+                next = min_u64(next, paths.deadline_ns(index));
+                next = path_sendable(slot, index) ? min_u64(next, paths.due_ns(index)) : next;
+            }
         }
     }
     return next;
@@ -3505,6 +3591,74 @@ usize QuicConnection::datagram_slot(cont::ConstSpan<u8> datagram) const noexcept
     }
     const QuicCidRef local = m_cids.find(cont::ConstSpan<u8>(datagram.data() + 1U, bytes));
     return local.found() ? slot_of(local.path_id) : 0U;
+}
+
+usize QuicConnection::begin_path(cont::ConstSpan<u8> datagram, const QuicPath& from, u64 now_ns) noexcept
+{
+    // Only a client opens a path, after the handshake (RFC 10069 section 3), to an ID this side issued for a path ID
+    // still open for it; the slot's state is the pool's, so nothing is allocated on the peer's behalf.
+    const usize bytes = m_local_cid.bytes;
+    if (m_config.side != crypto::QuicSide::Server || !m_multipath || !m_confirmed ||
+        m_state != QuicConnectionState::Established || m_slots == nullptr || datagram.size() <= bytes ||
+        (datagram[0] & 0x80U) != 0U)
+    {
+        return kQuicNoPath;
+    }
+    const QuicCidRef local = m_cids.find(cont::ConstSpan<u8>(datagram.data() + 1U, bytes));
+    if (!local.found() || m_cids.abandoned(local.path_id))
+    {
+        return kQuicNoPath;
+    }
+    for (usize slot = 1U; slot < kQuicMaxPaths; ++slot)
+    {
+        if (m_protection.path_open(slot) || m_recovery->path_open(slot))
+        {
+            continue;
+        }
+        // The ID's path ID is at most this side's limit, below kQuicMaxPaths: it fits the nonce's 32 bits.
+        if (!m_protection.open_path(slot, static_cast<u32>(local.path_id)))
+        {
+            return kQuicNoPath;
+        }
+        Tuples& held = *m_tuples[slot];
+        held = Tuples{};
+        held.paths.open(from, false, now_ns);
+        m_numbers[number_space(QuicSpace::Application, slot)] = Numbering{};
+        m_tentative_slot = slot;
+        return slot;
+    }
+    return kQuicNoPath; // every slot is taken: the path waits for one to close (section 3.1)
+}
+
+void QuicConnection::commit_path(usize slot, u64 now_ns) noexcept
+{
+    PathSlot& held = m_slots[slot - 1U];
+    QuicPaths& paths = held.tuples.paths;
+    const QuicPath& from = paths.path(paths.active());
+    // The handshake link's handover schedule says nothing of this one; learning may still find its own.
+    QuicPathControlConfig config = path_config(m_config);
+    config.handover = HandoverSchedule{};
+    config.base_datagram_bytes = family_base(from, m_config.max_datagram_bytes);
+    // The policy and sizes were checked (config_valid, family_base); the controller is built in place.
+    static_cast<void>(held.control.start(config, from, entropy(), &m_coupling));
+    const usize per_space = usize{m_config.sent_packets} + kSentPacketReserve;
+    // Free in the recovery (begin_path), with storage of its own.
+    static_cast<void>(m_recovery->open_path(
+        slot, held.recovery, cont::Span<QuicSentEntry>(m_slot_entries + ((slot - 1U) * per_space), per_space)));
+    held.control.limit(peer_ceiling());
+    m_controls[slot] = &held.control;
+    follow_datagram_size();
+    // The server validates the client's address before any data goes there (section 3.1).
+    paths.validate(paths.active(), now_ns, validation_timeout_ns());
+    m_tentative_slot = kQuicNoPath;
+    ++m_counters.paths_opened;
+}
+
+void QuicConnection::undo_path(usize slot) noexcept
+{
+    static_cast<void>(m_protection.close_path(slot)); // opened by begin_path, never the last one open
+    *m_tuples[slot] = Tuples{};
+    m_tentative_slot = kQuicNoPath;
 }
 
 usize QuicConnection::slot_of(u64 path_id) const noexcept
