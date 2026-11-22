@@ -388,17 +388,18 @@ public:
     [[nodiscard]] bool held_back() const noexcept { return m_held_back; }
     // The codepoint the datagram the last send() wrote is sent with, and the path it goes on.
     [[nodiscard]] Ecn marking() const noexcept { return m_marking; }
-    [[nodiscard]] const QuicPath& sent_path() const noexcept { return m_paths.path(m_send_path); }
-    // The path datagrams go on, and every path the connection knows.
-    [[nodiscard]] const QuicPath& path() const noexcept { return m_paths.path(m_paths.active()); }
-    [[nodiscard]] const QuicPaths& paths() const noexcept { return m_paths; }
+    [[nodiscard]] const QuicPath& sent_path() const noexcept { return tuples(send_slot()).path(m_send_path); }
+    // The path datagrams go on, and every 4-tuple path slot `slot` knows (the handshake's by default; each path ID
+    // has its own: RFC 10069 section 3.1.2).
+    [[nodiscard]] const QuicPath& path() const noexcept { return paths().path(paths().active()); }
+    [[nodiscard]] const QuicPaths& paths(usize slot = 0U) const noexcept { return tuples(slot); }
     // Whether datagrams moved to the server's preferred address (a client) or socket (a server): section 9.6.
     [[nodiscard]] bool on_preferred_address() const noexcept { return m_on_preferred; }
     // The address the peer last reported seeing this side's datagrams come from on the active path (OBSERVED_ADDRESS,
     // draft-ietf-quic-address-discovery-01), port 0 before any report; paths().observed() holds every path's. Reports
     // arrive only when parameters.address_discovery asks for them, and a peer may lie (section 6.1): a caller trusts
     // one only as far as other peers' reports agree.
-    [[nodiscard]] const Endpoint& observed_address() const noexcept { return m_paths.observed(m_paths.active()); }
+    [[nodiscard]] const Endpoint& observed_address() const noexcept { return paths().observed(paths().active()); }
     // When on_timeout() is next due: kNeverNs for no timer.
     [[nodiscard]] u64 next_timer_ns() const noexcept;
     void on_timeout(u64 now_ns) noexcept;
@@ -451,7 +452,7 @@ public:
     // data in this one).
     [[nodiscard]] crypto::QuicVersion version() const noexcept { return m_protection.version(); }
     // The active path's address is validated.
-    [[nodiscard]] bool address_validated() const noexcept { return m_paths.validated(m_paths.active()); }
+    [[nodiscard]] bool address_validated() const noexcept { return paths().validated(paths().active()); }
     [[nodiscard]] const QuicCloseInfo& close_info() const noexcept { return m_close; }
     // The reason phrase sent or received (truncated to kQuicMaxReasonBytes).
     [[nodiscard]] cont::ConstSpan<u8> close_reason() const noexcept
@@ -509,8 +510,9 @@ public:
     [[nodiscard]] u64 peer_max_path_id() const noexcept { return m_peer_max_path_id; }
     // The peer's preference for `path_id`, its newest PATH_STATUS frame's (section 3.3): Unknown before one.
     [[nodiscard]] QuicPeerPathStatus peer_path_status(u64 path_id = 0U) const noexcept;
-    // The Destination Connection ID this side sends to, and the peer's IDs held (sequence 0 first among them).
-    [[nodiscard]] cont::ConstSpan<u8> peer_cid() const noexcept;
+    // The Destination Connection ID this side sends to on path slot `slot`, and the peer's IDs held (sequence 0 first
+    // among them).
+    [[nodiscard]] cont::ConstSpan<u8> peer_cid(usize slot = 0U) const noexcept;
     [[nodiscard]] usize peer_cid_count() const noexcept { return m_cids.peer_count(); }
     // This side's IDs still routed (sequence 0 included until retired).
     [[nodiscard]] usize local_cid_count() const noexcept { return m_cids.local_count(); }
@@ -642,18 +644,22 @@ private:
     // Whether the packet opened.
     [[nodiscard]] bool receive_packet(const QuicHeader& header, cont::Span<u8> packet, usize datagram_bytes, Ecn ecn,
                                       u64 now_ns) noexcept;
-    // Paths (S75).
+    // Paths (S75): each path slot's 4-tuples apart, with its path ID's connection IDs (`slot` below; RFC 10069
+    // section 3.1.2). The client's own moves and the preferred address are the handshake slot's (section 2.2).
     // A server follows its client to other paths once confirmed.
     [[nodiscard]] bool follows_peer() const noexcept;
+    // The path slot of a datagram: its first packet's, by its ID's path ID (0 for a long header or an ID not this
+    // side's); kQuicNoPath for a path ID open in no slot.
+    [[nodiscard]] usize datagram_slot(cont::ConstSpan<u8> datagram) const noexcept;
     // A packet from m_candidate, a path not known, opened: the path joins, with the peer ID it is answered on.
-    void admit_path(usize datagram_bytes, u64 now_ns) noexcept;
+    void admit_path(usize slot, usize datagram_bytes, u64 now_ns) noexcept;
     // A path joins (the least recently used one given up when the table is full).
-    [[nodiscard]] usize take_path(const QuicPath& path, u64 now_ns) noexcept;
+    [[nodiscard]] usize take_path(usize slot, const QuicPath& path, u64 now_ns) noexcept;
     // Each path but the active one that has no peer ID to send to takes an unused one; with none left, every path
     // left behind on the least recently used other ID is forgotten and that ID retired, for the peer's replacement.
-    void address_paths(u64 now_ns) noexcept;
+    void address_paths(usize slot, u64 now_ns) noexcept;
     // A peer ID's sequence no path but `index` sends to and none has sent to; kNoSequence for none.
-    [[nodiscard]] u64 unused_peer_sequence(usize index) const noexcept;
+    [[nodiscard]] u64 unused_peer_sequence(usize slot, usize index) const noexcept;
     // probe_path()'s checks, then open_path(); `index` names the path on Started.
     [[nodiscard]] QuicMigration open_own_path(const QuicPath& path, u64 now_ns, usize& index) noexcept;
     // A client's own path: its slot and a peer ID unused elsewhere, validating unless proven (NoConnectionId or
@@ -674,26 +680,30 @@ private:
     // path left behind may never arrive.
     void reannounce_local_ids() noexcept;
     // An opened Application packet of m_receive_path: the migration it may be (section 9.3).
-    void follow_packet(u64 number, bool probing, u64 now_ns) noexcept;
+    void follow_packet(usize slot, u64 number, bool probing, u64 now_ns) noexcept;
     // Datagrams go on `index` from now on: the peer moved there, or a failed validation reverts there.
-    void move_to(usize index, u64 now_ns) noexcept;
+    void move_to(usize slot, usize index, u64 now_ns) noexcept;
     // A client proven on its active path, and followed there by its server, forgets the fallback it moved from.
-    void leave_fallback(u64 now_ns) noexcept;
+    void leave_fallback(usize slot, u64 now_ns) noexcept;
     // Once the active path is validated, the path MTU search, ECN validation, congestion control, the RTT estimate
     // and the pacer start again unless only the port changed since the path they were built on (section 9.4).
-    void follow_congestion(u64 now_ns) noexcept;
-    void on_validated(usize index, u64 now_ns) noexcept;
-    // Paths whose validation timed out: reverted from, forgotten, or the connection closes (sections 8.2.4, 9.3.2).
+    void follow_congestion(usize slot, u64 now_ns) noexcept;
+    void on_validated(usize slot, usize index, u64 now_ns) noexcept;
+    // The handshake slot's paths whose validation timed out: reverted from, forgotten, or the connection closes
+    // (sections 8.2.4, 9.3.2).
     void expire_paths(u64 now_ns) noexcept;
     // Forgets a path that is not the active one, retiring its peer ID unless another path sends to it.
-    void drop_path(usize index, u64 now_ns) noexcept;
+    void drop_path(usize slot, usize index, u64 now_ns) noexcept;
     // The peer ID a path sends to (its sequence), whether the peer's ID of a sequence is held, and whether a path has
     // the room and an ID to send a datagram now.
-    [[nodiscard]] u64 path_sequence(usize index) const noexcept;
-    [[nodiscard]] bool peer_held(u64 sequence) const noexcept { return m_cids.peer(0U, sequence) != nullptr; }
-    [[nodiscard]] bool path_sendable(usize index) const noexcept;
+    [[nodiscard]] u64 path_sequence(usize slot, usize index) const noexcept;
+    [[nodiscard]] bool peer_held(usize slot, u64 sequence) const noexcept
+    {
+        return m_cids.peer(m_protection.path_id(slot), sequence) != nullptr;
+    }
+    [[nodiscard]] bool path_sendable(usize slot, usize index) const noexcept;
     // Whether path `index`'s socket is one of `held_sockets`.
-    [[nodiscard]] bool path_held(usize index, u32 held_sockets) const noexcept;
+    [[nodiscard]] bool path_held(usize slot, usize index, u32 held_sockets) const noexcept;
     [[nodiscard]] u64 validation_timeout_ns() const noexcept;
     [[nodiscard]] u64 path_timer_ns() const noexcept;
     [[nodiscard]] bool on_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
@@ -759,6 +769,9 @@ private:
     // The slot whose number space is path ID `path_id`'s (QuicPacketProtection::path_id); kQuicNoPath for none.
     [[nodiscard]] usize slot_of(u64 path_id) const noexcept;
     [[nodiscard]] static constexpr usize send_slot() noexcept { return 0U; }
+    // Path slot `slot`'s 4-tuples.
+    [[nodiscard]] QuicPaths& tuples(usize slot) noexcept { return m_tuples[slot]->paths; }
+    [[nodiscard]] const QuicPaths& tuples(usize slot) const noexcept { return m_tuples[slot]->paths; }
     // The datagram frames' room follows the smallest datagram of the open paths, any of which may carry one.
     void follow_datagram_size() noexcept;
     void count(const QuicPathSignals& signals) noexcept;
@@ -875,12 +888,19 @@ private:
     bool m_handshake_keys = false;
     bool m_handshake_done_owed = false;
     bool m_handshake_done_acked = false;
-    QuicPaths m_paths;
+    // A path slot's 4-tuples and how they were chosen (S75 per path ID, RFC 10069 section 3.1.2): slot 0's are
+    // m_first_paths, the others' to be allocated with their slot.
+    struct Tuples
+    {
+        QuicPaths paths;
+        u64 largest_non_probing = kQuicNoPacket; // the Application packet that last chose the path (section 9.3)
+        bool peer_followed = true; // a client's server sends on its active path: the latest move is followed
+    };
+    Tuples m_first_paths;
+    Tuples* m_tuples[kQuicMaxPaths] = {&m_first_paths};
     QuicPath m_candidate;      // the path of a datagram being read from no known path
-    usize m_receive_path = 0U; // the path of the datagram being read (kQuicNoPath: m_candidate, not yet admitted)
-    usize m_send_path = 0U;    // the path of the datagram being written, then of the last one
-    u64 m_largest_non_probing = kQuicNoPacket; // the Application packet that last chose the path (section 9.3)
-    bool m_peer_followed = true; // a client's server sends on the client's active path: the latest move is followed
+    usize m_receive_path = 0U; // the 4-tuple of the datagram being read, in m_receive_slot's (kQuicNoPath: m_candidate)
+    usize m_send_path = 0U;    // the 4-tuple of the datagram being written, then of the last one, in send_slot()'s
     // The path datagrams move to once validated (section 9.6.2): a client's to the preferred address, a server's
     // where its client's highest-numbered non-probing packet reached the preferred socket. kQuicNoPath for none.
     usize m_deferred_move = kQuicNoPath;

@@ -321,7 +321,7 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     // The policy, the sizes and the handover were checked (config_valid).
     static_cast<void>(m_first_control.start(path_config(config), config.path, entropy(), &m_coupling));
     m_datagram_bytes = m_first_control.datagram_bytes();
-    m_paths.open(config.path, false, 0U);
+    m_first_paths.paths.open(config.path, false, 0U);
     m_frames = frames;
     m_crypto_bytes = bytes;
     m_crypto_bits = bits;
@@ -374,7 +374,8 @@ bool QuicConnection::connect(cont::ConstSpan<u8> local_cid, cont::ConstSpan<u8> 
     static_cast<void>(m_initial_dcid.assign(initial_dcid));
     m_cids.first_local(m_local_cid.view(), {});
     m_original_dcid = m_initial_dcid;
-    m_paths.set_validated(m_paths.active()); // a client's sending is not limited by its address
+    // A client's sending is not limited by its address.
+    m_first_paths.paths.set_validated(m_first_paths.paths.active());
     return start(now_ns);
 }
 
@@ -405,7 +406,7 @@ bool QuicConnection::accept(const QuicAccept& accept, u64 now_ns) noexcept
     m_retried = accept.retried;
     if (accept.validated)
     {
-        m_paths.set_validated(m_paths.active());
+        m_first_paths.paths.set_validated(m_first_paths.paths.active());
     }
     m_peer_scid_known = true;
     m_cids.first_peer(m_peer_scid.view());
@@ -589,7 +590,8 @@ bool QuicConnection::start_keyed(const QuicKeyedStart& start, u64 now_ns) noexce
     m_keyed = true;
     if (side == crypto::QuicSide::Client)
     {
-        m_paths.set_validated(m_paths.active()); // a server's limit lasts until its client acknowledges a packet
+        // A server's limit lasts until its client acknowledges a packet.
+        m_first_paths.paths.set_validated(m_first_paths.paths.active());
     }
     m_state = QuicConnectionState::Established;
     m_idle_ns = m_local.max_idle_timeout * kNsPerMs;
@@ -762,15 +764,24 @@ void QuicConnection::receive(const QuicPath& path, cont::Span<u8> datagram, Ecn 
     }
     ++m_counters.datagrams_received;
     m_counters.bytes_received += datagram.size();
-    const usize active = m_paths.active();
+    // A datagram is one path slot's, its first packet's (RFC 10069 section 2), read among that slot's 4-tuples.
+    m_receive_slot = datagram_slot(datagram);
+    if (m_receive_slot == kQuicNoPath)
+    {
+        m_receive_slot = 0U;
+        ++m_counters.packets_dropped;
+        return;
+    }
+    QuicPaths& paths = tuples(m_receive_slot);
+    const usize active = paths.active();
     // An unbound path counts every datagram toward itself until the first packet that opens names it.
-    const QuicPath& current = m_paths.path(active);
-    m_receive_path = (current.peer.port == 0U) ? active : m_paths.find(path);
+    const QuicPath& current = paths.path(active);
+    m_receive_path = (current.peer.port == 0U) ? active : paths.find(path);
     m_candidate = path;
     // A server's address changes only to its preferred one (sections 9 and 9.6.2): its other sockets are not the
     // connection's, nor, once it moved, the one it left.
-    const bool preferred_socket =
-        m_local.has_preferred_address && !m_on_preferred && path.socket == m_config.preferred_socket;
+    const bool preferred_socket = m_receive_slot == 0U && m_local.has_preferred_address && !m_on_preferred &&
+                                  path.socket == m_config.preferred_socket;
     if (m_config.side == crypto::QuicSide::Server && current.peer.port != 0U && path.socket != current.socket &&
         !preferred_socket)
     {
@@ -784,7 +795,7 @@ void QuicConnection::receive(const QuicPath& path, cont::Span<u8> datagram, Ecn 
     }
     if (m_receive_path != kQuicNoPath)
     {
-        m_paths.on_received(m_receive_path, datagram.size(), now_ns);
+        paths.on_received(m_receive_path, datagram.size(), now_ns);
     }
     if (!address_validated())
     {
@@ -796,9 +807,9 @@ void QuicConnection::receive(const QuicPath& path, cont::Span<u8> datagram, Ecn 
     }
     if (m_state == QuicConnectionState::Closing)
     {
-        if (m_receive_path != active)
+        if (m_receive_slot != 0U || m_receive_path != active)
         {
-            return; // the close answers the active path alone
+            return; // the close answers the handshake slot's active path alone
         }
         if (stateless_reset(datagram, now_ns))
         {
@@ -991,12 +1002,11 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
         hold(header.type, packet, ecn);
         return false;
     }
-    // A 1-RTT packet decodes and opens in the number space of its ID's path ID (RFC 10069 section 2).
-    m_receive_slot = long_header ? 0U : slot_of(m_packet_local.path_id);
-    if (m_receive_slot == kQuicNoPath)
+    // A packet decodes and opens in its datagram's path slot: a long header in the handshake's, slot 0, a 1-RTT
+    // packet in its ID's path ID's (RFC 10069 section 2). One of another slot is dropped.
+    if ((long_header ? 0U : slot_of(m_packet_local.path_id)) != m_receive_slot)
     {
         ++m_counters.packets_dropped;
-        m_receive_slot = 0U;
         return false;
     }
     QuicOpened opened;
@@ -1013,14 +1023,15 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
         return false;
     }
     ++m_counters.packets_opened;
+    QuicPaths& paths = tuples(m_receive_slot);
     if (m_receive_path == kQuicNoPath)
     {
-        admit_path(datagram_bytes, now_ns);
+        admit_path(m_receive_slot, datagram_bytes, now_ns);
     }
-    else if (m_receive_path == m_paths.active() && m_paths.path(m_receive_path).peer.port == 0U)
+    else if (m_receive_path == paths.active() && paths.path(m_receive_path).peer.port == 0U)
     {
-        m_paths.bind(m_candidate);
-        m_first_control.bind(m_candidate);
+        paths.bind(m_candidate);
+        control(m_receive_slot).bind(m_candidate);
     }
     const QuicSpace space = quic_space_of(opened.type);
     m_packet_version = long_header ? header.version : 0U;
@@ -1054,7 +1065,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
     if (!client && opened.type == QuicPacketType::Handshake)
     {
         // A Handshake packet proves the client's address (section 8.1).
-        m_paths.set_validated(m_paths.active());
+        m_first_paths.paths.set_validated(m_first_paths.paths.active());
         m_recovery->set_amplification_blocked(false, now_ns);
     }
     if (!m_protection.can_open(QuicPacketType::Initial))
@@ -1086,9 +1097,9 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
             return true;
         }
     }
-    if (space == QuicSpace::Application && m_protection.path_id(m_receive_slot) == 0U)
+    if (space == QuicSpace::Application)
     {
-        follow_packet(opened.number, probing, now_ns); // path ID 0's 4-tuples (S75)
+        follow_packet(m_receive_slot, opened.number, probing, now_ns); // its path ID's 4-tuples (S75)
     }
     if (!m_space_gone[quic_space_index(space)])
     {
@@ -1158,9 +1169,9 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
         case QuicFrameKind::NewConnectionId:
             return new_connection_id(frame, now_ns);
         case QuicFrameKind::PathChallenge:
-            m_paths.on_challenge(m_receive_path, frame.data);
+            tuples(m_receive_slot).on_challenge(m_receive_path, frame.data);
             // A challenge on the active path is answered with a non-probing packet as well (section 9.3.3).
-            m_ping_owed = m_ping_owed || m_receive_path == m_paths.active();
+            m_ping_owed = m_ping_owed || m_receive_path == tuples(m_receive_slot).active();
             return true;
         case QuicFrameKind::ObservedAddress:
             return observed_address_frame(frame, now_ns);
@@ -1178,11 +1189,12 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             return retire_local(0U, frame.sequence, now_ns);
         case QuicFrameKind::PathResponse:
         {
-            // One that answers no live challenge is late or never asked for, and ignored (section 19.18's MAY left).
+            // One that answers no live challenge of its path ID's is late or never asked for, and ignored (section
+            // 19.18's MAY left; RFC 10069 section 3.1 sends it with an ID of the challenge's path ID).
             usize index = kQuicNoPath;
-            if (m_paths.on_response(frame.data, index) == QuicPathResponse::Validated)
+            if (tuples(m_receive_slot).on_response(frame.data, index) == QuicPathResponse::Validated)
             {
-                on_validated(index, now_ns);
+                on_validated(m_receive_slot, index, now_ns);
             }
             return true;
         }
@@ -1252,7 +1264,7 @@ bool QuicConnection::ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_
     if (m_keyed && !address_validated() && outcome.acked_packets != 0U)
     {
         // Only an end that read a packet sent to this address can acknowledge it.
-        m_paths.set_validated(m_paths.active());
+        m_first_paths.paths.set_validated(m_first_paths.paths.active());
         m_recovery->set_amplification_blocked(false, now_ns);
     }
     return true;
@@ -1575,9 +1587,11 @@ bool QuicConnection::new_connection_id(const QuicFrame& frame, u64 now_ns) noexc
         fail(error, 0U, now_ns);
         return false;
     }
-    if (added)
+    // The paths of the ID's path ID that wait for one (NEW_CONNECTION_ID's is 0).
+    const usize slot = slot_of(frame.path_id);
+    if (added && slot != kQuicNoPath)
     {
-        address_paths(now_ns);
+        address_paths(slot, now_ns);
     }
     return true;
 }
@@ -1726,7 +1740,7 @@ bool QuicConnection::can_acknowledge(QuicSpace space) const noexcept
 
 usize QuicConnection::amplification_credit() const noexcept
 {
-    return m_paths.credit(m_paths.active());
+    return m_first_paths.paths.credit(m_first_paths.paths.active());
 }
 
 void QuicConnection::pull_crypto() noexcept
@@ -1772,10 +1786,11 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
     // The active path's PATH_RESPONSE, PATH_CHALLENGE and OBSERVED_ADDRESS go as ACKs do, never held by the window or
     // the pacer. On another path an OBSERVED_ADDRESS only rides with the others: packets replayed from spoofed
     // addresses then draw no more datagrams than they did (the draft's section 6.2).
-    const usize active = m_paths.active();
-    const bool path_owed = space == QuicSpace::Application && send_type(space) == QuicPacketType::OneRtt &&
-                           (m_paths.response_owed(active) || m_paths.challenge_due(active, now_ns) ||
-                            observation_due(active));
+    const QuicPaths& paths = tuples(send_slot());
+    const usize active = paths.active();
+    const bool path_owed =
+        space == QuicSpace::Application && send_type(space) == QuicPacketType::OneRtt &&
+        (paths.response_owed(active) || paths.challenge_due(active, now_ns) || observation_due(active));
     if (m_recovery->ack_deadline_ns(space) <= now_ns || m_numbers[number_space(space, send_slot())].probes > 0U ||
         path_owed)
     {
@@ -1990,7 +2005,7 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
                 // Resent only on its own path (draft-ietf-quic-address-discovery-01 section 4.1).
                 if (how == Settle::Lost)
                 {
-                    m_paths.observation_lost(frame.frame.length, frame.frame.value);
+                    tuples(packet.path).observation_lost(frame.frame.length, frame.frame.value);
                 }
             }
             else
@@ -2221,23 +2236,24 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
 
 usize QuicConnection::write_path_frames(cont::Span<u8> frames, u64 packet, u64 now_ns, Written& written) noexcept
 {
+    QuicPaths& paths = tuples(send_slot());
     const usize path = m_send_path;
     usize used = 0U;
-    if (m_paths.response_owed(path))
+    if (paths.response_owed(path))
     {
         QuicFrame response;
         response.kind = QuicFrameKind::PathResponse;
-        response.data = m_paths.response(path);
+        response.data = paths.response(path);
         const usize bytes = write_quic_frame(response, frames);
         if (bytes != 0U)
         {
             used += bytes;
-            m_paths.response_sent(path);
+            paths.response_sent(path);
             written.path_response = true;
             written.eliciting = true;
         }
     }
-    if (m_paths.challenge_due(path, now_ns))
+    if (paths.challenge_due(path, now_ns))
     {
         const u64 draw = entropy(); // from the connection's PRF: unpredictable off the path (section 8.2.1)
         for (usize index = 0U; index < kQuicPathDataBytes; ++index)
@@ -2258,7 +2274,7 @@ usize QuicConnection::write_path_frames(cont::Span<u8> frames, u64 packet, u64 n
     if (observation_due(path))
     {
         // The address the peer's datagrams come from on this path, an IPv4-mapped one as IPv4, without its scope.
-        const Endpoint& peer = m_paths.path(path).peer;
+        const Endpoint& peer = paths.path(path).peer;
         const IpAddress address = peer.address.unmapped();
         QuicFrame observed;
         observed.kind = QuicFrameKind::ObservedAddress;
@@ -2274,7 +2290,7 @@ usize QuicConnection::write_path_frames(cont::Span<u8> frames, u64 packet, u64 n
             sent.value = m_observation_next;
             sent.length = static_cast<u32>(path);
             static_cast<void>(record(QuicSpace::Application, packet, kRecordObserved, sent, written)); // room checked
-            m_paths.observation_sent(path, m_observation_next);
+            paths.observation_sent(path, m_observation_next);
             ++m_observation_next;
         }
     }
@@ -2284,8 +2300,8 @@ usize QuicConnection::write_path_frames(cont::Span<u8> frames, u64 packet, u64 n
 bool QuicConnection::observation_due(usize index) const noexcept
 {
     return m_peer_known && quic_provides_addresses(m_local.address_discovery) &&
-           quic_wants_addresses(m_peer.address_discovery) && m_paths.observation_owed(index) &&
-           m_paths.path(index).peer.port != 0U && m_frame_count < m_config.sent_frames;
+           quic_wants_addresses(m_peer.address_discovery) && tuples(send_slot()).observation_owed(index) &&
+           tuples(send_slot()).path(index).peer.port != 0U && m_frame_count < m_config.sent_frames;
 }
 
 bool QuicConnection::observed_address_frame(const QuicFrame& frame, u64 now_ns) noexcept
@@ -2300,7 +2316,7 @@ bool QuicConnection::observed_address_frame(const QuicFrame& frame, u64 now_ns) 
     observed.address.family = (frame.data.size() == 4U) ? AddressFamily::V4 : AddressFamily::V6;
     std::memcpy(observed.address.bytes, frame.data.data(), frame.data.size());
     observed.port = static_cast<u16>(frame.value);
-    if (m_paths.on_observed(m_receive_path, frame.sequence, observed))
+    if (tuples(m_receive_slot).on_observed(m_receive_path, frame.sequence, observed))
     {
         ++m_counters.address_observations;
     }
@@ -2344,18 +2360,20 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     const bool early = spec.type == QuicPacketType::ZeroRtt;
     // 0-RTT packets keep the original version (RFC 9369 section 4.1).
     spec.version = static_cast<u32>(early ? m_protection.original_version() : m_protection.version());
-    const bool off_path = m_send_path != m_paths.active();
-    const u64 sequence = off_path ? m_paths.peer_sequence(m_send_path) : m_cids.current();
-    const QuicPeerCid* peer = m_cids.peer(0U, sequence);
-    spec.dcid = (off_path && peer != nullptr) ? peer->id.view() : peer_cid();
-    m_cids.use(0U, sequence); // its token is checked from now on (section 10.3.1)
+    // An ID of the slot's own path ID (RFC 10069 section 3.1): the one its 4-tuple sends to.
+    const u64 path_id = m_protection.path_id(slot);
+    const bool off_path = m_send_path != tuples(slot).active();
+    const u64 sequence = off_path ? tuples(slot).peer_sequence(m_send_path) : m_cids.current(path_id);
+    const QuicPeerCid* peer = m_cids.peer(path_id, sequence);
+    spec.dcid = (off_path && peer != nullptr) ? peer->id.view() : peer_cid(slot);
+    m_cids.use(path_id, sequence); // its token is checked from now on (section 10.3.1)
     spec.scid = m_local_cid.view();
     if (space == QuicSpace::Initial && m_config.side == crypto::QuicSide::Client)
     {
         spec.token = cont::ConstSpan<u8>(m_token, m_token_bytes);
     }
     spec.number = number;
-    const u64 largest = m_recovery->largest_acked(space);
+    const u64 largest = m_recovery->largest_acked(space, slot);
     spec.acknowledged = largest != kQuicNoPacket;
     spec.largest_acked = spec.acknowledged ? largest : 0U;
     spec.clear_quic_bit = quic_grease_bit_clear(m_peer_greases, entropy());
@@ -2409,9 +2427,9 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
     numbers.next = number + 1U;
     if (written.path_challenge)
     {
-        m_paths.challenge_sent(m_send_path, cont::ConstSpan<u8>(m_challenge, kQuicPathDataBytes),
-                               datagram_used + bytes >= kQuicMinInitialDatagram, now_ns,
-                               m_recovery->probe_period_ns(QuicSpace::Application));
+        tuples(slot).challenge_sent(m_send_path, cont::ConstSpan<u8>(m_challenge, kQuicPathDataBytes),
+                                    datagram_used + bytes >= kQuicMinInitialDatagram, now_ns,
+                                    m_recovery->probe_period_ns(QuicSpace::Application, slot));
     }
     if (!closing)
     {
@@ -2494,7 +2512,7 @@ usize QuicConnection::send_closing(cont::Span<u8> out, u64 now_ns) noexcept
 
 usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noexcept
 {
-    m_send_path = m_paths.active();
+    m_send_path = tuples(send_slot()).active();
     m_held_back = false;
     if (out.size() < kQuicMinInitialDatagram || m_state == QuicConnectionState::Idle ||
         m_state == QuicConnectionState::Draining || m_state == QuicConnectionState::Closed)
@@ -2521,7 +2539,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
     bool initial_held = false; // the amplification limit holds back a padded Initial
     if (m_state == QuicConnectionState::Closing)
     {
-        if (path_held(m_send_path, held_sockets))
+        if (path_held(send_slot(), m_send_path, held_sockets))
         {
             m_held_back = true;
             return 0U;
@@ -2538,7 +2556,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
         {
             return used;
         }
-        if (path_held(m_send_path, held_sockets))
+        if (path_held(send_slot(), m_send_path, held_sockets))
         {
             m_held_back = true; // nothing below runs: no number, window, probe or amplification state moves
             return 0U;
@@ -2551,7 +2569,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
             ++m_counters.datagrams_sent;
             m_counters.bytes_sent += used;
             ++m_counters.path_probes;
-            m_paths.on_sent(m_send_path, used);
+            tuples(send_slot()).on_sent(m_send_path, used);
             return used;
         }
         bool content[kQuicSpaces] = {};
@@ -2604,7 +2622,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
     {
         ++m_counters.datagrams_sent;
         m_counters.bytes_sent += used;
-        m_paths.on_sent(m_send_path, used);
+        tuples(send_slot()).on_sent(m_send_path, used);
         if (!address_validated())
         {
             m_recovery->set_amplification_blocked(initial_held || amplification_credit() < kMinUsefulPacket, now_ns);
@@ -2615,16 +2633,18 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
 
 usize QuicConnection::send_path_frames(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noexcept
 {
-    const usize active = m_paths.active();
+    const usize slot = send_slot();
+    QuicPaths& paths = tuples(slot);
+    const usize active = paths.active();
     for (usize index = 0U; index < kQuicMaxPaths; ++index)
     {
-        const bool owed = index != active && m_paths.used(index) &&
-                          (m_paths.response_owed(index) || m_paths.challenge_due(index, now_ns));
-        if (!owed || !path_sendable(index))
+        const bool owed =
+            index != active && paths.used(index) && (paths.response_owed(index) || paths.challenge_due(index, now_ns));
+        if (!owed || !path_sendable(slot, index))
         {
             continue;
         }
-        if (path_held(index, held_sockets))
+        if (path_held(slot, index, held_sockets))
         {
             m_held_back = true;
             continue;
@@ -2633,13 +2653,13 @@ usize QuicConnection::send_path_frames(cont::Span<u8> out, u64 now_ns, u32 held_
         m_send_path = index;
         const Ecn marking = m_marking;
         m_marking = Ecn::NotEct;
-        const usize room = min_u64(min_u64(out.size(), kQuicMinInitialDatagram), m_paths.credit(index));
+        const usize room = min_u64(min_u64(out.size(), kQuicMinInitialDatagram), paths.credit(index));
         const usize bytes = write_packet(QuicSpace::Application, out.first(room), 0U, true, true, Carry::Path, now_ns);
         if (bytes != 0U)
         {
             ++m_counters.datagrams_sent;
             m_counters.bytes_sent += bytes;
-            m_paths.on_sent(index, bytes);
+            paths.on_sent(index, bytes);
             return bytes;
         }
         m_marking = marking;
@@ -2897,90 +2917,95 @@ bool QuicConnection::follows_peer() const noexcept
     return m_config.side == crypto::QuicSide::Server && m_state == QuicConnectionState::Established && m_confirmed;
 }
 
-void QuicConnection::admit_path(usize datagram_bytes, u64 now_ns) noexcept
+void QuicConnection::admit_path(usize slot, usize datagram_bytes, u64 now_ns) noexcept
 {
-    const usize index = take_path(m_candidate, now_ns);
+    QuicPaths& paths = tuples(slot);
+    const usize index = take_path(slot, m_candidate, now_ns);
     m_receive_path = index;
-    m_paths.on_received(index, datagram_bytes, now_ns);
-    const usize active = m_paths.active();
-    const u64 local = m_packet_local.found() ? m_packet_local.sequence : m_paths.local_sequence(active);
-    m_paths.set_local_sequence(index, local);
+    paths.on_received(index, datagram_bytes, now_ns);
+    const usize active = paths.active();
+    const u64 local = m_packet_local.found() ? m_packet_local.sequence : paths.local_sequence(active);
+    paths.set_local_sequence(index, local);
     // A peer that kept its connection ID did not choose to move (a NAT rebinding): this side may keep its own. One
     // that changed it gets an ID this side has not used, never one another path sends to (section 9.5).
-    const bool kept = local == m_paths.local_sequence(active);
-    m_paths.set_peer_sequence(index, kept ? path_sequence(active) : kNoSequence);
-    address_paths(now_ns);
+    const bool kept = local == paths.local_sequence(active);
+    paths.set_peer_sequence(index, kept ? path_sequence(slot, active) : kNoSequence);
+    address_paths(slot, now_ns);
 }
 
-void QuicConnection::address_paths(u64 now_ns) noexcept
+void QuicConnection::address_paths(usize slot, u64 now_ns) noexcept
 {
+    QuicPaths& paths = tuples(slot);
     for (usize index = 0U; index < kQuicMaxPaths; ++index)
     {
-        if (!m_paths.used(index) || index == m_paths.active() || peer_held(m_paths.peer_sequence(index)))
+        if (!paths.used(index) || index == paths.active() || peer_held(slot, paths.peer_sequence(index)))
         {
             continue;
         }
-        m_paths.set_peer_sequence(index, unused_peer_sequence(index));
-        if (peer_held(m_paths.peer_sequence(index)))
+        paths.set_peer_sequence(index, unused_peer_sequence(slot, index));
+        if (peer_held(slot, paths.peer_sequence(index)))
         {
             continue; // the peer's next non-probing packet there moves the connection
         }
         // None is unused: the paths left behind on one ID give it up (forgotten, the ID retired), so the peer issues
         // the one this path waits for (section 9.5). The active path's ID stays, the fallback goes only once the
         // active path is proven (no revert is left to need it), and a path under validation stays.
-        const bool fallback_spare = m_paths.proven(m_paths.active());
+        const bool fallback_spare = paths.proven(paths.active());
         const auto spare = [&](usize other)
         {
-            return other != index && other != m_paths.active() && (other != m_paths.fallback() || fallback_spare) &&
-                   !m_paths.validating(other);
+            return other != index && other != paths.active() && (other != paths.fallback() || fallback_spare) &&
+                   !paths.validating(other);
         };
         usize chosen = kQuicNoPath;
         for (usize other = 0U; other < kQuicMaxPaths; ++other)
         {
-            const u64 sequence = path_sequence(other);
-            bool frees = m_paths.used(other) && spare(other) && peer_held(sequence) &&
-                         sequence != path_sequence(m_paths.active());
+            const u64 sequence = path_sequence(slot, other);
+            bool frees = paths.used(other) && spare(other) && peer_held(slot, sequence) &&
+                         sequence != path_sequence(slot, paths.active());
             for (usize holder = 0U; holder < kQuicMaxPaths && frees; ++holder)
             {
-                frees = !m_paths.used(holder) || path_sequence(holder) != sequence || spare(holder);
+                frees = !paths.used(holder) || path_sequence(slot, holder) != sequence || spare(holder);
             }
-            if (frees && (chosen == kQuicNoPath || m_paths.last_ns(other) < m_paths.last_ns(chosen)))
+            if (frees && (chosen == kQuicNoPath || paths.last_ns(other) < paths.last_ns(chosen)))
             {
                 chosen = other;
             }
         }
-        const u64 given = (chosen == kQuicNoPath) ? kNoSequence : path_sequence(chosen);
+        const u64 given = (chosen == kQuicNoPath) ? kNoSequence : path_sequence(slot, chosen);
         for (usize holder = 0U; holder < kQuicMaxPaths && given != kNoSequence; ++holder)
         {
-            if (m_paths.used(holder) && holder != m_paths.active() && path_sequence(holder) == given)
+            if (paths.used(holder) && holder != paths.active() && path_sequence(slot, holder) == given)
             {
-                drop_path(holder, now_ns); // the last one retires the ID
+                drop_path(slot, holder, now_ns); // the last one retires the ID
             }
         }
     }
 }
 
-usize QuicConnection::take_path(const QuicPath& path, u64 now_ns) noexcept
+usize QuicConnection::take_path(usize slot, const QuicPath& path, u64 now_ns) noexcept
 {
-    usize index = m_paths.admit(path, now_ns);
+    QuicPaths& paths = tuples(slot);
+    usize index = paths.admit(path, now_ns);
     if (index == kQuicNoPath)
     {
-        drop_path(m_paths.least_recent(), now_ns);
-        index = m_paths.admit(path, now_ns);
+        drop_path(slot, paths.least_recent(), now_ns);
+        index = paths.admit(path, now_ns);
     }
     return index;
 }
 
-u64 QuicConnection::unused_peer_sequence(usize index) const noexcept
+u64 QuicConnection::unused_peer_sequence(usize slot, usize index) const noexcept
 {
-    for (usize held = 0U; held < m_cids.peer_count(); ++held)
+    const QuicPaths& paths = tuples(slot);
+    const u64 path_id = m_protection.path_id(slot);
+    for (usize held = 0U; held < m_cids.peer_count(path_id); ++held)
     {
-        const QuicPeerCid& id = *m_cids.peer_at(0U, held);
+        const QuicPeerCid& id = *m_cids.peer_at(path_id, held);
         const u64 sequence = id.sequence;
         bool taken = id.used;
         for (usize other = 0U; other < kQuicMaxPaths; ++other)
         {
-            taken = taken || (other != index && m_paths.used(other) && path_sequence(other) == sequence);
+            taken = taken || (other != index && paths.used(other) && path_sequence(slot, other) == sequence);
         }
         if (!taken)
         {
@@ -2998,6 +3023,7 @@ QuicMigration QuicConnection::probe_path(const QuicPath& path, u64 now_ns) noexc
 
 QuicMigration QuicConnection::migrate(const QuicPath& path, u64 now_ns) noexcept
 {
+    QuicPaths& paths = m_first_paths.paths;
     usize index = kQuicNoPath;
     const QuicMigration result = open_own_path(path, now_ns, index);
     if (result != QuicMigration::Started)
@@ -3007,7 +3033,7 @@ QuicMigration QuicConnection::migrate(const QuicPath& path, u64 now_ns) noexcept
     if (toward_preferred(path.peer))
     {
         // Validated before datagrams move there (section 9.6.2).
-        if (m_paths.proven(index))
+        if (paths.proven(index))
         {
             take_preferred(index, now_ns);
         }
@@ -3017,7 +3043,7 @@ QuicMigration QuicConnection::migrate(const QuicPath& path, u64 now_ns) noexcept
         }
         return result;
     }
-    move_to(index, now_ns);
+    move_to(0U, index, now_ns);
     reannounce_local_ids();
     // Moved before reaching the preferred address: it is validated from here too (section 9.6.3).
     if (!m_on_preferred)
@@ -3035,7 +3061,8 @@ void QuicConnection::reannounce_local_ids() noexcept
 
 QuicMigration QuicConnection::open_own_path(const QuicPath& path, u64 now_ns, usize& index) noexcept
 {
-    const QuicPath& active = m_paths.path(m_paths.active());
+    QuicPaths& paths = m_first_paths.paths;
+    const QuicPath& active = paths.path(paths.active());
     if (m_config.side != crypto::QuicSide::Client)
     {
         return QuicMigration::NotClient;
@@ -3063,33 +3090,35 @@ QuicMigration QuicConnection::open_own_path(const QuicPath& path, u64 now_ns, us
 
 QuicMigration QuicConnection::open_path(const QuicPath& path, u64 now_ns, usize& index, bool wait_for_id) noexcept
 {
-    index = m_paths.find(path);
-    const bool addressed = index != kQuicNoPath && peer_held(m_paths.peer_sequence(index));
-    if (!addressed && !wait_for_id && unused_peer_sequence(index) == kNoSequence)
+    QuicPaths& paths = m_first_paths.paths;
+    index = paths.find(path);
+    const bool addressed = index != kQuicNoPath && peer_held(0U, paths.peer_sequence(index));
+    if (!addressed && !wait_for_id && unused_peer_sequence(0U, index) == kNoSequence)
     {
         index = kQuicNoPath;
         return QuicMigration::NoConnectionId;
     }
     if (index == kQuicNoPath)
     {
-        index = take_path(path, now_ns);
+        index = take_path(0U, path, now_ns);
         // The server sends to the ID it last used here until it moves; the client's own address is not linked.
-        m_paths.set_local_sequence(index, m_paths.local_sequence(m_paths.active()));
-        m_paths.trust(index);
+        paths.set_local_sequence(index, paths.local_sequence(paths.active()));
+        paths.trust(index);
     }
     if (!addressed)
     {
-        m_paths.set_peer_sequence(index, unused_peer_sequence(index));
+        paths.set_peer_sequence(index, unused_peer_sequence(0U, index));
     }
-    if (!m_paths.proven(index))
+    if (!paths.proven(index))
     {
-        m_paths.validate(index, now_ns, validation_timeout_ns());
+        paths.validate(index, now_ns, validation_timeout_ns());
     }
     return QuicMigration::Started;
 }
 
-void QuicConnection::follow_packet(u64 number, bool probing, u64 now_ns) noexcept
+void QuicConnection::follow_packet(usize slot, u64 number, bool probing, u64 now_ns) noexcept
 {
+    QuicPaths& paths = tuples(slot);
     const usize path = m_receive_path;
     if (path == kQuicNoPath ||
         (m_state != QuicConnectionState::Established && m_state != QuicConnectionState::Handshaking))
@@ -3098,118 +3127,123 @@ void QuicConnection::follow_packet(u64 number, bool probing, u64 now_ns) noexcep
     }
     if (m_packet_local.found())
     {
-        m_paths.set_local_sequence(path, m_packet_local.sequence);
+        paths.set_local_sequence(path, m_packet_local.sequence);
     }
-    const bool sendable = peer_held(path_sequence(path));
-    if (!probing && (m_largest_non_probing == kQuicNoPacket || number > m_largest_non_probing))
+    const bool sendable = peer_held(slot, path_sequence(slot, path));
+    u64& largest = m_tuples[slot]->largest_non_probing;
+    if (!probing && (largest == kQuicNoPacket || number > largest))
     {
         // Only the highest-numbered non-probing packet moves the path, so a reordered one never moves it back.
-        m_largest_non_probing = number;
-        if (m_config.side == crypto::QuicSide::Client && path == m_paths.active() && !m_peer_followed)
+        largest = number;
+        if (m_config.side == crypto::QuicSide::Client && path == paths.active() && !m_tuples[slot]->peer_followed)
         {
-            m_peer_followed = true; // the server's datagrams reach the path this side moved to
-            leave_fallback(now_ns);
+            m_tuples[slot]->peer_followed = true; // the server's datagrams reach the path this side moved to
+            leave_fallback(slot, now_ns);
         }
-        if (m_config.side == crypto::QuicSide::Server)
+        if (m_config.side == crypto::QuicSide::Server && slot == 0U)
         {
             m_deferred_move = kQuicNoPath; // a later packet elsewhere chose another path
         }
-        if (path != m_paths.active() && follows_peer() &&
-            m_paths.path(path).socket != m_paths.path(m_paths.active()).socket)
+        if (slot == 0U && path != paths.active() && follows_peer() &&
+            paths.path(path).socket != paths.path(paths.active()).socket)
         {
             // The client moved to the preferred socket: datagrams follow once this side validated the path there
             // (section 9.6.2), never on the packet alone.
-            if (m_paths.validated(path) && sendable)
+            if (paths.validated(path) && sendable)
             {
                 take_preferred(path, now_ns);
                 return;
             }
             m_deferred_move = path;
-            if (!m_paths.validating(path))
+            if (!paths.validating(path))
             {
-                m_paths.validate(path, now_ns, validation_timeout_ns());
+                paths.validate(path, now_ns, validation_timeout_ns());
             }
             return;
         }
-        if (path != m_paths.active() && follows_peer() && sendable)
+        if (path != paths.active() && follows_peer() && sendable)
         {
-            const usize from = m_paths.active();
+            const usize from = paths.active();
             const u64 timeout = validation_timeout_ns();
-            move_to(path, now_ns);
-            if (!m_paths.validated(path))
+            move_to(slot, path, now_ns);
+            if (!paths.validated(path))
             {
-                m_paths.validate(path, now_ns, timeout);
+                paths.validate(path, now_ns, timeout);
             }
-            if (m_paths.validated(from))
+            if (paths.validated(from))
             {
                 // An off-path attacker's copy looks like a rebinding: the path before it is challenged, and a peer
                 // still there answers and sends on it, which moves the connection back (section 9.3.3).
-                m_paths.validate(from, now_ns, timeout);
+                paths.validate(from, now_ns, timeout);
             }
             else
             {
                 // A move away from a path never validated abandons it: a spurious migration (section 9.3.2).
-                drop_path(from, now_ns);
+                drop_path(slot, from, now_ns);
             }
         }
         return;
     }
     // A probe from a path not validated is answered with a challenge of this side's (section 9.6.3), which leaves
     // once the path has a peer ID to send to: one that waits for it is validating, never a path left behind.
-    if (probing && path != m_paths.active() && follows_peer() && !m_paths.validated(path))
+    if (probing && path != paths.active() && follows_peer() && !paths.validated(path))
     {
-        m_paths.validate(path, now_ns, validation_timeout_ns());
+        paths.validate(path, now_ns, validation_timeout_ns());
     }
 }
 
-void QuicConnection::move_to(usize index, u64 now_ns) noexcept
+void QuicConnection::move_to(usize slot, usize index, u64 now_ns) noexcept
 {
-    const usize from = m_paths.active();
-    m_paths.set_peer_sequence(from, path_sequence(from));
-    m_paths.activate(index);
-    if (m_paths.proven(index))
+    QuicPaths& paths = tuples(slot);
+    const usize from = paths.active();
+    paths.set_peer_sequence(from, path_sequence(slot, from));
+    paths.activate(index);
+    if (paths.proven(index))
     {
         // Its check of section 9.3.3, if one runs, is answered: the peer is there. A path whose address an
         // unexpanded challenge validated still owes its expanded one, which goes on.
-        m_paths.abandon(index);
+        paths.abandon(index);
     }
-    m_cids.set_current(0U, m_paths.peer_sequence(index));
+    m_cids.set_current(m_protection.path_id(slot), paths.peer_sequence(index));
     ++m_counters.migrations;
-    m_peer_followed = false;
-    follow_congestion(now_ns);
+    m_tuples[slot]->peer_followed = false;
+    follow_congestion(slot, now_ns);
     m_recovery->set_amplification_blocked(!address_validated() && amplification_credit() < kMinUsefulPacket, now_ns);
 }
 
-void QuicConnection::leave_fallback(u64 now_ns) noexcept
+void QuicConnection::leave_fallback(usize slot, u64 now_ns) noexcept
 {
+    QuicPaths& paths = tuples(slot);
     // A client proven on the path it moved to, whose server sends there too, forgets the path it left and retires
     // that path's peer ID, so the server issues the ID the next move takes (section 9.5). Until then the server's
     // datagrams to the old path still arrive.
-    if (m_config.side == crypto::QuicSide::Client && m_paths.proven(m_paths.active()) && m_peer_followed)
+    if (m_config.side == crypto::QuicSide::Client && paths.proven(paths.active()) && m_tuples[slot]->peer_followed)
     {
-        drop_path(m_paths.fallback(), now_ns);
+        drop_path(slot, paths.fallback(), now_ns);
     }
 }
 
-void QuicConnection::follow_congestion(u64 now_ns) noexcept
+void QuicConnection::follow_congestion(usize slot, u64 now_ns) noexcept
 {
-    const QuicPath& active = m_paths.path(m_paths.active());
-    if (!address_validated() || m_first_control.path() == active)
+    QuicPaths& paths = tuples(slot);
+    const QuicPath& active = paths.path(paths.active());
+    QuicPathControl& sending = control(slot);
+    if (!paths.validated(paths.active()) || sending.path() == active)
     {
         return;
     }
     // Section 9.4: on confirming the peer's address, initial values unless only its port changed. Until then the
     // credit and 1200-byte datagrams hold the path, and a spurious move never confirmed costs the state nothing.
-    if (quic_port_only_change(m_first_control.path(), active))
+    if (quic_port_only_change(sending.path(), active))
     {
-        m_first_control.bind(active);
+        sending.bind(active);
         return;
     }
     // A path of another family is the only thing known of it: its floor, then the search (RFC 8899 section 5.2).
     const u32 base =
         (active.peer.address.unmapped().family == AddressFamily::V6) ? kQuicIpv6BaseDatagram : kQuicPmtuFloor;
-    m_first_control.restart(active, base, entropy());
-    m_recovery->restart_path(now_ns);
+    sending.restart(active, base, entropy());
+    m_recovery->restart_path(now_ns, slot);
     follow_datagram_size();
 }
 
@@ -3221,15 +3255,17 @@ Endpoint QuicConnection::preferred_for(const Endpoint& peer) const noexcept
 
 bool QuicConnection::toward_preferred(const Endpoint& peer) const noexcept
 {
+    const QuicPaths& paths = m_first_paths.paths;
     // A path that names no server address (port 0) has none to move from.
-    const Endpoint& server = m_paths.path(m_paths.active()).peer;
+    const Endpoint& server = paths.path(paths.active()).peer;
     return m_config.side == crypto::QuicSide::Client && !m_on_preferred && peer.port != 0U && server.port != 0U &&
            peer == preferred_for(peer) && !(peer == server);
 }
 
 void QuicConnection::follow_preferred(u64 now_ns) noexcept
 {
-    const QuicPath& active = m_paths.path(m_paths.active());
+    QuicPaths& paths = m_first_paths.paths;
+    const QuicPath& active = paths.path(paths.active());
     const QuicPath target{active.socket, preferred_for(active.peer)};
     // By itself, or for a move migrate() asked for that waits for its validation (a socket left behind never draws
     // the connection back).
@@ -3238,11 +3274,11 @@ void QuicConnection::follow_preferred(u64 now_ns) noexcept
     {
         return;
     }
-    if (m_deferred_move != kQuicNoPath && m_paths.path(m_deferred_move).socket != active.socket)
+    if (m_deferred_move != kQuicNoPath && paths.path(m_deferred_move).socket != active.socket)
     {
         // The validation from a socket this side left ends; its ID retires, and the peer's replacement reaches the
         // path from here (address_paths()), which waits for one when none is unused.
-        drop_path(m_deferred_move, now_ns);
+        drop_path(0U, m_deferred_move, now_ns);
     }
     usize index = kQuicNoPath;
     if (open_path(target, now_ns, index, true) == QuicMigration::Started)
@@ -3253,22 +3289,23 @@ void QuicConnection::follow_preferred(u64 now_ns) noexcept
 
 void QuicConnection::take_preferred(usize index, u64 now_ns) noexcept
 {
+    QuicPaths& paths = m_first_paths.paths;
     const bool server = m_config.side == crypto::QuicSide::Server;
     m_deferred_move = kQuicNoPath;
     m_on_preferred = true;
-    move_to(index, now_ns);
-    const QuicPath& active = m_paths.path(index);
+    move_to(0U, index, now_ns);
+    const QuicPath& active = paths.path(index);
     for (usize other = 0U; other < kQuicMaxPaths; ++other)
     {
         // A server's other sockets are no longer the connection's (section 9.6.2). A client stops using the
         // server's other address (section 9.6.1), abandoning any validation there (section 9.6.3); the path it moved
         // from stays until the server follows (leave_fallback()).
-        const QuicPath& known = m_paths.path(other);
+        const QuicPath& known = paths.path(other);
         const bool left =
-            server ? known.socket != active.socket : !(known.peer == active.peer) && other != m_paths.fallback();
-        if (m_paths.used(other) && other != index && left)
+            server ? known.socket != active.socket : !(known.peer == active.peer) && other != paths.fallback();
+        if (paths.used(other) && other != index && left)
         {
-            drop_path(other, now_ns);
+            drop_path(0U, other, now_ns);
         }
     }
     if (!server)
@@ -3277,33 +3314,38 @@ void QuicConnection::take_preferred(usize index, u64 now_ns) noexcept
     }
 }
 
-void QuicConnection::on_validated(usize index, u64 now_ns) noexcept
+void QuicConnection::on_validated(usize slot, usize index, u64 now_ns) noexcept
 {
+    QuicPaths& paths = tuples(slot);
     ++m_counters.path_validations;
-    if (index == m_deferred_move && path_sendable(index))
+    if (slot == 0U && index == m_deferred_move && path_sendable(slot, index))
     {
         take_preferred(index, now_ns); // section 9.6.2: validated, so datagrams move there
     }
-    if (index == m_paths.active())
+    if (index == paths.active())
     {
-        m_recovery->set_amplification_blocked(false, now_ns);
-        follow_congestion(now_ns);
-        leave_fallback(now_ns);
+        if (slot == 0U)
+        {
+            m_recovery->set_amplification_blocked(false, now_ns); // the handshake's path, which the limit covers
+        }
+        follow_congestion(slot, now_ns);
+        leave_fallback(slot, now_ns);
     }
-    address_paths(now_ns); // a path whose check ended may now give its ID to one that waits
+    address_paths(slot, now_ns); // a path whose check ended may now give its ID to one that waits
 }
 
 void QuicConnection::expire_paths(u64 now_ns) noexcept
 {
-    for (usize index = m_paths.expired(now_ns); index != kQuicNoPath; index = m_paths.expired(now_ns))
+    QuicPaths& paths = m_first_paths.paths;
+    for (usize index = paths.expired(now_ns); index != kQuicNoPath; index = paths.expired(now_ns))
     {
         ++m_counters.path_failures;
-        if (index != m_paths.active())
+        if (index != paths.active())
         {
-            drop_path(index, now_ns);
+            drop_path(0U, index, now_ns);
             continue;
         }
-        const usize back = m_paths.fallback();
+        const usize back = paths.fallback();
         if (back == kQuicNoPath)
         {
             // No validated path is left: the connection's state is discarded silently (section 9.3.2).
@@ -3312,57 +3354,62 @@ void QuicConnection::expire_paths(u64 now_ns) noexcept
             finish();
             return;
         }
-        move_to(back, now_ns);
-        drop_path(index, now_ns);
+        move_to(0U, back, now_ns);
+        drop_path(0U, index, now_ns);
     }
 }
 
-void QuicConnection::drop_path(usize index, u64 now_ns) noexcept
+void QuicConnection::drop_path(usize slot, usize index, u64 now_ns) noexcept
 {
-    if (!m_paths.used(index) || index == m_paths.active())
+    QuicPaths& paths = tuples(slot);
+    if (!paths.used(index) || index == paths.active())
     {
         return;
     }
-    m_deferred_move = (m_deferred_move == index) ? kQuicNoPath : m_deferred_move;
-    const u64 sequence = m_paths.peer_sequence(index);
+    m_deferred_move = (slot == 0U && m_deferred_move == index) ? kQuicNoPath : m_deferred_move;
+    const u64 sequence = paths.peer_sequence(index);
     bool shared = sequence == kNoSequence;
     for (usize other = 0U; other < kQuicMaxPaths; ++other)
     {
-        shared = shared || (other != index && m_paths.used(other) && path_sequence(other) == sequence);
+        shared = shared || (other != index && paths.used(other) && path_sequence(slot, other) == sequence);
     }
-    m_paths.drop(index);
-    const QuicPeerCid* held = m_cids.peer(0U, sequence);
+    paths.drop(index);
+    const u64 path_id = m_protection.path_id(slot);
+    const QuicPeerCid* held = m_cids.peer(path_id, sequence);
     if (shared || held == nullptr || !held->used)
     {
         return;
     }
     // An ID sent to on the forgotten path alone is retired, so that no later path is linked to it (section 9.5).
-    if (!m_cids.retire_peer(0U, sequence, m_local.active_connection_id_limit))
+    if (!m_cids.retire_peer(path_id, sequence, m_local.active_connection_id_limit))
     {
         fail(QuicTransportError::ConnectionIdLimitError, 0U, now_ns);
     }
 }
 
-u64 QuicConnection::path_sequence(usize index) const noexcept
+u64 QuicConnection::path_sequence(usize slot, usize index) const noexcept
 {
-    if (index != m_paths.active())
+    const QuicPaths& paths = tuples(slot);
+    if (index != paths.active())
     {
-        return m_paths.peer_sequence(index);
+        return paths.peer_sequence(index);
     }
-    return m_cids.current();
+    return m_cids.current(m_protection.path_id(slot));
 }
 
-bool QuicConnection::path_sendable(usize index) const noexcept
+bool QuicConnection::path_sendable(usize slot, usize index) const noexcept
 {
+    const QuicPaths& paths = tuples(slot);
     const usize application = quic_space_index(QuicSpace::Application);
     return m_state == QuicConnectionState::Established && m_confirmed && !m_space_gone[application] &&
-           m_protection.can_send(QuicPacketType::OneRtt) && m_recovery->can_send(QuicSpace::Application) &&
-           m_paths.credit(index) >= kMinUsefulPacket && peer_held(path_sequence(index));
+           m_protection.can_send(QuicPacketType::OneRtt) && m_recovery->can_send(QuicSpace::Application, slot) &&
+           paths.credit(index) >= kMinUsefulPacket && peer_held(slot, path_sequence(slot, index));
 }
 
-bool QuicConnection::path_held(usize index, u32 held_sockets) const noexcept
+bool QuicConnection::path_held(usize slot, usize index, u32 held_sockets) const noexcept
 {
-    const u32 socket = m_paths.path(index).socket;
+    const QuicPaths& paths = tuples(slot);
+    const u32 socket = paths.path(index).socket;
     return socket < 32U && ((held_sockets >> socket) & 1U) != 0U;
 }
 
@@ -3380,12 +3427,14 @@ u64 QuicConnection::path_timer_ns() const noexcept
 {
     // A challenge is due only where it can go: one the amplification limit holds waits for a datagram instead.
     u64 next = kNeverNs;
+    // The handshake slot's, which send_path_frames() and expire_paths() serve.
+    const QuicPaths& paths = m_first_paths.paths;
     for (usize index = 0U; index < kQuicMaxPaths; ++index)
     {
-        if (m_paths.used(index))
+        if (paths.used(index))
         {
-            next = min_u64(next, m_paths.deadline_ns(index));
-            next = path_sendable(index) ? min_u64(next, m_paths.due_ns(index)) : next;
+            next = min_u64(next, paths.deadline_ns(index));
+            next = path_sendable(0U, index) ? min_u64(next, paths.due_ns(index)) : next;
         }
     }
     return next;
@@ -3393,11 +3442,25 @@ u64 QuicConnection::path_timer_ns() const noexcept
 
 // ---- State ----
 
-cont::ConstSpan<u8> QuicConnection::peer_cid() const noexcept
+cont::ConstSpan<u8> QuicConnection::peer_cid(usize slot) const noexcept
 {
     // A client before its server's first packet sends to its first Destination Connection ID.
-    const QuicPeerCid* current = m_cids.peer(0U, m_cids.current());
+    const u64 path_id = m_protection.path_id(slot);
+    const QuicPeerCid* current = m_cids.peer(path_id, m_cids.current(path_id));
     return (current == nullptr) ? m_initial_dcid.view() : current->id.view();
+}
+
+usize QuicConnection::datagram_slot(cont::ConstSpan<u8> datagram) const noexcept
+{
+    // A long header is the handshake's; a short header's Destination Connection ID is as long as this side's IDs. An
+    // ID not this side's leaves the datagram to slot 0, whose stateless reset check it may be.
+    const usize bytes = m_local_cid.bytes;
+    if (bytes == 0U || datagram.size() <= bytes || (datagram[0] & 0x80U) != 0U)
+    {
+        return 0U;
+    }
+    const QuicCidRef local = m_cids.find(cont::ConstSpan<u8>(datagram.data() + 1U, bytes));
+    return local.found() ? slot_of(local.path_id) : 0U;
 }
 
 usize QuicConnection::slot_of(u64 path_id) const noexcept
