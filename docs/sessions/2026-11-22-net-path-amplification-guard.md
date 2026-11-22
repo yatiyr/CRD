@@ -29,10 +29,11 @@ The harness gains `path_pad_to` (send_on_path's padding), `announce_path()` for 
 
 ## Evidence
 
-- linux-gcc-debug (WSL): `crd-net-tests` ran 1119 cases: 1112 passed, 7 skipped (the `[.netns]` cases need root).
+- linux-gcc-debug (WSL): `crd-net-tests` ran 1119 cases: 1112 passed, 7 skipped.
 - Teeth, each alone, rebuilt: `slot == 0U` for `handshake_slot(slot)` at the guard before a held send, and at the
   guard after a sent datagram. Both leave `loss_timer_ns()` at never and fail the case. Restored and rebuilt: green.
-- No production code changed; clang-format is clean on the added lines and check-allman-braces passes.
+- No production code changed; pinned clang-tidy 22.1.8 and clang-format are clean on the file, and
+  check-allman-braces passes.
 
 ## Next
 
