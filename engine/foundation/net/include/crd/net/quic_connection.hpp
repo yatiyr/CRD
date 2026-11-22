@@ -728,7 +728,8 @@ private:
     // for it tentatively (the protection's number space and the 4-tuples, from `from`), kQuicNoPath for none. The
     // first packet that authenticates there commits it (commit_path); undo_path() forgets it otherwise.
     [[nodiscard]] usize begin_path(cont::ConstSpan<u8> datagram, const QuicPath& from, u64 now_ns) noexcept;
-    // A path slot no path ID holds in the protection or the recovery; kQuicNoPath for none.
+    // A path slot no path ID holds in the protection or the recovery (slot 0 once path ID 0 closed); kQuicNoPath for
+    // none.
     [[nodiscard]] usize free_slot() const noexcept;
     // Opens `path_id`'s number space in free slot `slot` and its 4-tuples on `from`, a client's own one trusted (no
     // amplification limit: the server's address is what it proves). False, changing nothing, when the protection
@@ -737,9 +738,9 @@ private:
     // A claimed slot's recovery and sending state open (the pool's: nothing is allocated), its 4-tuple validated
     // before data goes there (RFC 10069 section 3.1).
     void commit_path(usize slot, u64 now_ns) noexcept;
-    // Whether `slot`'s 4-tuple `index` carries data: slot 0's always (RFC 9000's migration rules hold there), a
-    // further slot's once validated (RFC 10069 section 3.1): a server's by its client's answer, which lifts the
-    // amplification limit, a client's by its server's answer to its own expanded challenge.
+    // Whether `slot`'s 4-tuple `index` carries data: the handshake slot's always (RFC 9000's migration rules hold
+    // there), any other slot's once validated (RFC 10069 section 3.1): a server's by its client's answer, which lifts
+    // the amplification limit, a client's by its server's answer to its own expanded challenge.
     [[nodiscard]] bool carries_data(usize slot, usize index) const noexcept;
     void undo_path(usize slot) noexcept;
     // Opens an ID space for each path ID up to this side's limit once multipath is negotiated (section 3.2.1).
@@ -783,7 +784,7 @@ private:
     void follow_congestion(usize slot, u64 now_ns) noexcept;
     void on_validated(usize slot, usize index, u64 now_ns) noexcept;
     // The paths whose validation timed out: the handshake slot's reverted from, forgotten, or the connection closes
-    // (sections 8.2.4, 9.3.2); a further slot's forgotten, and its active one's failure abandons its path ID (RFC
+    // (sections 8.2.4, 9.3.2); any other slot's forgotten, and its active one's failure abandons its path ID (RFC
     // 10069 section 3.1: "the endpoint MUST explicitly close the path").
     void expire_paths(u64 now_ns) noexcept;
     // Abandoning a path ID (RFC 10069 section 3.4), this side's decision or its answer to the peer's (`error_code`
@@ -886,8 +887,9 @@ private:
     // The slot whose number space is path ID `path_id`'s (QuicPacketProtection::path_id); kQuicNoPath for none.
     [[nodiscard]] usize slot_of(u64 path_id) const noexcept;
     [[nodiscard]] usize send_slot() const noexcept { return m_send_slot; }
-    // The leading slot: the handshake's while path ID 0 sends, else the lowest slot still sending (0 when none
-    // does), which carries the close and reads datagrams no slot claims; and how many slots still send.
+    // The leading slot: the lowest one still sending whose active 4-tuple carries data (the handshake's while path ID
+    // 0 sends), else the lowest one still sending (0 when none does), which carries the close and reads datagrams no
+    // slot claims; and how many slots still send.
     [[nodiscard]] usize lead_slot() const noexcept;
     [[nodiscard]] usize sending_slots() const noexcept;
     // send()'s datagram on send_slot(): the leading slot's close while Closing, else its owed frames and data.
@@ -918,13 +920,25 @@ private:
     void pull_crypto() noexcept;
     // What path slot `slot`'s active 4-tuple may still carry under its amplification limit (RFC 10069 section 7.2).
     [[nodiscard]] usize amplification_credit(usize slot = 0U) const noexcept;
+    // Whether `slot` is the handshake's: slot 0 while it holds path ID 0, which only it carries (with the Initial and
+    // Handshake spaces, the amplification guard, the preferred address and RFC 9000's migration). Once path ID 0
+    // closes, slot 0 is reclaimed for later path IDs like any other (RFC 10069 sections 3.2.1 and 3.4).
+    [[nodiscard]] bool handshake_slot(usize slot) const noexcept { return slot == 0U && !m_zero_closed; }
+    // Path ID 0 still sends: what migrate(), probe_path() and the preferred address move.
+    [[nodiscard]] bool zero_sending() const noexcept { return handshake_slot(0U) && m_controls[0] != nullptr; }
+    // The server's address path ID 0 sends to (its handshake address, or the preferred one once it moved there, RFC
+    // 9000 section 9.6), kept when that path ID closes: the paths add_path() opens go there.
+    [[nodiscard]] const Endpoint& server_address() const noexcept;
     // The handshake slot's active 4-tuple is validated: the amplification guard of RFC 9002 section 6.2.2.1.
-    [[nodiscard]] bool handshake_validated() const noexcept { return tuples(0U).validated(tuples(0U).active()); }
+    [[nodiscard]] bool handshake_validated() const noexcept
+    {
+        return m_zero_closed || tuples(0U).validated(tuples(0U).active());
+    }
     // Whether send() can write the ACK `space` of slot `slot` owes (its active 4-tuple's amplification limit
     // included): a timer nothing serves is never reported due.
     [[nodiscard]] bool can_acknowledge(QuicSpace space, usize slot = 0U) const noexcept;
-    // Whether slot `slot` holds a peer ID of its path ID to send to: a further slot opened before the peer's ID for
-    // it arrived waits for one, answering nothing until then (RFC 10069 section 3.1).
+    // Whether slot `slot` holds a peer ID of its path ID to send to: a slot other than the handshake's, opened before
+    // the peer's ID for it arrived, waits for one, answering nothing until then (RFC 10069 section 3.1).
     [[nodiscard]] bool addressed(usize slot) const noexcept;
 
     // Closing and timers.
@@ -941,7 +955,8 @@ private:
     u8* m_crypto_bytes = nullptr;
     u64* m_crypto_bits = nullptr;
     QuicRecovery* m_recovery = nullptr;
-    // Each open path slot's sending state: slot 0's is m_first_control, the others' are allocated with their slot.
+    // Each open path slot's sending state: slot 0's is m_first_control (path ID 0's, then a reclaimed slot's), the
+    // others' are allocated with their slot.
     // Their coupled controllers share m_coupling (RFC 6356), declared first so that it outlives them.
     CongestionCoupling m_coupling;
     QuicPathControl m_first_control;
@@ -1024,7 +1039,7 @@ private:
     bool m_handshake_done_owed = false;
     bool m_handshake_done_acked = false;
     // A path slot's 4-tuples and how they were chosen (S75 per path ID, RFC 10069 section 3.1.2): slot 0's are
-    // m_first_paths, the others' in m_slots.
+    // m_first_paths (path ID 0's, then those of the later path IDs slot 0 is reclaimed for), the others' in m_slots.
     struct Tuples
     {
         QuicPaths paths;
@@ -1033,6 +1048,8 @@ private:
     };
     Tuples m_first_paths;
     Tuples* m_tuples[kQuicMaxPaths] = {&m_first_paths};
+    bool m_zero_closed = false; // path ID 0 closed (close_abandoned): slot 0 is no longer the handshake's
+    Endpoint m_zero_server;     // server_address() once path ID 0 closed
     // Path slots 1 to kQuicMaxPaths - 1 (RFC 10069), allocated at construction when this side's limit is above 0, so
     // opening a path allocates nothing: each one's recovery (its Application packets in m_slot_entries) and sending
     // state, its 4-tuples, and one ID space, which serves whichever path ID it holds (its own slot's or another's).

@@ -37,7 +37,8 @@
 //               Path IDs live in slots 0 to kQuicMaxPaths - 1, which the connection maps to the IDs (an ID is never
 //               reused; a slot is, through close_path and open_path). Slot 0 is the handshake's path, open from
 //               construction, and its estimate serves the Initial and Handshake spaces too, so a connection without
-//               multipath is slot 0 alone, every call's default. One loss detection timer serves every path, the
+//               multipath is slot 0 alone, every call's default; once closed it opens for a later path ID like any
+//               other, with the recovery's own state (first_path()). One loss detection timer serves every path, the
 //               earliest of theirs. A path's packets may be acknowledged through any open path: the minimum RTT
 //               restarts when the path such frames arrive through changes (section 5.4).
 //   congestion  NET-PATH's controllers (congestion.hpp) take the per-packet events (QuicRecoveryEvents, spurious
@@ -395,6 +396,9 @@ public:
         return path < kQuicMaxPaths && m_paths[path] != nullptr;
     }
     [[nodiscard]] bool path_sending(usize path) const noexcept { return path_open(path) && m_paths[path]->sending; }
+    // Slot 0's state from construction, the recovery's own: open_path lends it again when slot 0 is reclaimed for a
+    // later path ID once close_path returned it (the receive timestamps, path ID 0's, stay ended).
+    [[nodiscard]] QuicPathRecovery& first_path() noexcept { return m_first; }
 
     // ---- What the connection learns ----
 

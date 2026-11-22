@@ -823,7 +823,7 @@ void QuicConnection::receive(const QuicPath& path, cont::Span<u8> datagram, Ecn 
     m_candidate = path;
     // A server's address changes only to its preferred one (sections 9 and 9.6.2): its other sockets are not the
     // connection's, nor, once it moved, the one it left.
-    const bool preferred_socket = m_receive_slot == 0U && m_local.has_preferred_address && !m_on_preferred &&
+    const bool preferred_socket = handshake_slot(m_receive_slot) && m_local.has_preferred_address && !m_on_preferred &&
                                   path.socket == m_config.preferred_socket;
     if (m_config.side == crypto::QuicSide::Server && current.peer.port != 0U && path.socket != current.socket &&
         !preferred_socket)
@@ -1229,7 +1229,7 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             // further slot the response rides with that slot's PATH_ACK, which is not probing either: a PING would
             // go on the handshake slot's path, which the challenge says nothing of.
             m_ping_owed = m_ping_owed ||
-                          (m_receive_slot == 0U && !stopped(0U) && m_receive_path == tuples(0U).active());
+                          (handshake_slot(m_receive_slot) && !stopped(0U) && m_receive_path == tuples(0U).active());
             return true;
         case QuicFrameKind::ObservedAddress:
             return observed_address_frame(frame, now_ns);
@@ -1286,8 +1286,6 @@ bool QuicConnection::ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_
             fail(QuicTransportError::ProtocolViolation, 0U, now_ns);
             return false;
         }
-        m_counters.receive_timestamps +=
-            m_peer_times.read(frame.ack, m_local.receive_timestamps_exponent, *m_recovery, now_ns);
     }
     // An ACK frame's packets are path ID 0's, a PATH_ACK's its path ID's (RFC 10069 section 2.3), received through
     // the packet's own slot. A path ID whose state is gone is silently ignored (section 4).
@@ -1295,13 +1293,10 @@ bool QuicConnection::ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_
     const usize slot = application ? slot_of(frame.kind == QuicFrameKind::PathAck ? frame.path_id : 0U) : 0U;
     if (slot != kQuicNoPath && stopped(slot))
     {
-        // Abandoned: its packets went back to the queues as lost when it stopped (section 3.4.3).
-        m_peer_times.clear();
-        return true;
+        return true; // abandoned: its packets went back to the queues as lost when it stopped (section 3.4.3)
     }
     if (slot == kQuicNoPath)
     {
-        m_peer_times.clear();
         // A path ID whose ID space is open and not abandoned never had a number space here: none of its packets were
         // sent to acknowledge (RFC 9000 section 13.1). A path ID whose state is gone is ignored.
         if (frame.kind == QuicFrameKind::PathAck && m_cids.is_open(frame.path_id) && !m_cids.abandoned(frame.path_id))
@@ -1310,6 +1305,12 @@ bool QuicConnection::ack_frame(const QuicFrame& frame, QuicSpace space, u64 now_
             return false;
         }
         return true;
+    }
+    if (frame.ack.timestamps)
+    {
+        // Path ID 0's packets, read in its own slot: never those of a later path ID slot 0 was reclaimed for.
+        m_counters.receive_timestamps +=
+            m_peer_times.read(frame.ack, m_local.receive_timestamps_exponent, *m_recovery, now_ns);
     }
     const usize via = application ? m_receive_slot : 0U;
     m_event_ns = now_ns;
@@ -1833,13 +1834,14 @@ bool QuicConnection::can_acknowledge(QuicSpace space, usize slot) const noexcept
 
 bool QuicConnection::addressed(usize slot) const noexcept
 {
-    return slot == 0U || peer_held(slot, m_cids.current(m_protection.path_id(slot)));
+    return handshake_slot(slot) || peer_held(slot, m_cids.current(m_protection.path_id(slot)));
 }
 
 bool QuicConnection::carries_data(usize slot, usize index) const noexcept
 {
     const QuicPaths& paths = tuples(slot);
-    return slot == 0U || (m_config.side == crypto::QuicSide::Server ? paths.validated(index) : paths.proven(index));
+    return handshake_slot(slot) ||
+           (m_config.side == crypto::QuicSide::Server ? paths.validated(index) : paths.proven(index));
 }
 
 usize QuicConnection::amplification_credit(usize slot) const noexcept
@@ -2189,7 +2191,11 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     {
         // Each slot acknowledges its own space, path ID 0's in an ACK frame and the others' in PATH_ACK frames
         // (RFC 10069 section 2.3), so a carried acknowledgement is always settled in the slot that sent it.
-        const auto ack_form = [this](usize of) { return (of == 0U) ? kQuicAckFrame : m_protection.path_id(of); };
+        const auto ack_form = [this](usize of)
+        {
+            const u64 path_id = m_protection.path_id(of); // a reclaimed slot 0's later path ID takes PATH_ACK
+            return (path_id == 0U) ? kQuicAckFrame : path_id;
+        };
         if (!m_recovery->received(space, slot).ranges().empty())
         {
             const QuicAckWrite ack = m_recovery->write_ack(space, frames.subspan(used), now_ns, slot, ack_form(slot));
@@ -2833,7 +2839,7 @@ usize QuicConnection::send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sock
         {
             // Only the handshake slot carries the Initial and Handshake spaces.
             const auto space = static_cast<QuicSpace>(index);
-            content[index] = (slot == 0U || space == QuicSpace::Application) && has_content(space, now_ns);
+            content[index] = (handshake_slot(slot) || space == QuicSpace::Application) && has_content(space, now_ns);
             if (content[index])
             {
                 last = static_cast<QuicSpace>(index);
@@ -2855,7 +2861,7 @@ usize QuicConnection::send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sock
         const cont::Span<u8> room = out.first(limit);
         if (!any || limit < kMinUsefulPacket || (pad && limit < kQuicMinInitialDatagram))
         {
-            if (any && slot == 0U && !validated)
+            if (any && handshake_slot(slot) && !validated)
             {
                 m_recovery->set_amplification_blocked(true, now_ns);
             }
@@ -2879,7 +2885,7 @@ usize QuicConnection::send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sock
         ++m_counters.datagrams_sent;
         m_counters.bytes_sent += used;
         tuples(slot).on_sent(m_send_path, used);
-        if (slot == 0U && !validated)
+        if (handshake_slot(slot) && !validated)
         {
             // The handshake's amplification deadlock guard (RFC 9002 section 6.2.2.1) is the handshake slot's.
             m_recovery->set_amplification_blocked(initial_held || amplification_credit() < kMinUsefulPacket, now_ns);
@@ -3350,7 +3356,7 @@ QuicMigration QuicConnection::open_own_path(const QuicPath& path, u64 now_ns, us
     {
         return QuicMigration::NotConfirmed;
     }
-    if (m_controls[0] == nullptr)
+    if (!zero_sending())
     {
         return QuicMigration::Abandoned; // path ID 0's 4-tuples are the ones these move (RFC 10069 section 3.1.2)
     }
@@ -3423,11 +3429,11 @@ void QuicConnection::follow_packet(usize slot, u64 number, bool probing, u64 now
             m_tuples[slot]->peer_followed = true; // the server's datagrams reach the path this side moved to
             leave_fallback(slot, now_ns);
         }
-        if (m_config.side == crypto::QuicSide::Server && slot == 0U)
+        if (m_config.side == crypto::QuicSide::Server && handshake_slot(slot))
         {
             m_deferred_move = kQuicNoPath; // a later packet elsewhere chose another path
         }
-        if (slot == 0U && path != paths.active() && follows_peer() &&
+        if (handshake_slot(slot) && path != paths.active() && follows_peer() &&
             paths.path(path).socket != paths.path(paths.active()).socket)
         {
             // The client moved to the preferred socket: datagrams follow once this side validated the path there
@@ -3537,9 +3543,8 @@ Endpoint QuicConnection::preferred_for(const Endpoint& peer) const noexcept
 
 bool QuicConnection::toward_preferred(const Endpoint& peer) const noexcept
 {
-    const QuicPaths& paths = m_first_paths.paths;
     // A path that names no server address (port 0) has none to move from.
-    const Endpoint& server = paths.path(paths.active()).peer;
+    const Endpoint& server = server_address();
     return m_config.side == crypto::QuicSide::Client && !m_on_preferred && peer.port != 0U && server.port != 0U &&
            peer == preferred_for(peer) && !(peer == server);
 }
@@ -3552,7 +3557,7 @@ void QuicConnection::follow_preferred(u64 now_ns) noexcept
     // By itself, or for a move migrate() asked for that waits for its validation (a socket left behind never draws
     // the connection back).
     const bool wanted = m_config.follow_preferred_address || m_deferred_move != kQuicNoPath;
-    if (!wanted || m_state != QuicConnectionState::Established || !m_confirmed || m_controls[0] == nullptr ||
+    if (!wanted || m_state != QuicConnectionState::Established || !m_confirmed || !zero_sending() ||
         !toward_preferred(target.peer))
     {
         return; // the preferred address is path ID 0's (RFC 10069 section 2.2): nothing once that is abandoned
@@ -3605,13 +3610,13 @@ void QuicConnection::on_validated(usize slot, usize index, u64 now_ns) noexcept
         return; // abandoned: nothing goes there again
     }
     ++m_counters.path_validations;
-    if (slot == 0U && index == m_deferred_move && path_sendable(slot, index))
+    if (handshake_slot(slot) && index == m_deferred_move && path_sendable(slot, index))
     {
         take_preferred(index, now_ns); // section 9.6.2: validated, so datagrams move there
     }
     if (index == paths.active())
     {
-        if (slot == 0U)
+        if (handshake_slot(slot))
         {
             m_recovery->set_amplification_blocked(false, now_ns); // the handshake's path, which the limit covers
         }
@@ -3637,7 +3642,7 @@ void QuicConnection::expire_paths(u64 now_ns) noexcept
         for (usize index = paths.expired(now_ns); index != kQuicNoPath; index = paths.expired(now_ns))
         {
             ++m_counters.path_failures;
-            const usize back = (slot == 0U) ? paths.fallback() : kQuicNoPath;
+            const usize back = handshake_slot(slot) ? paths.fallback() : kQuicNoPath;
             if (index != paths.active() || back != kQuicNoPath)
             {
                 if (index == paths.active())
@@ -3668,7 +3673,7 @@ void QuicConnection::drop_path(usize slot, usize index, u64 now_ns) noexcept
     {
         return;
     }
-    m_deferred_move = (slot == 0U && m_deferred_move == index) ? kQuicNoPath : m_deferred_move;
+    m_deferred_move = (handshake_slot(slot) && m_deferred_move == index) ? kQuicNoPath : m_deferred_move;
     const u64 sequence = paths.peer_sequence(index);
     bool shared = sequence == kNoSequence;
     for (usize other = 0U; other < kQuicMaxPaths; ++other)
@@ -3800,7 +3805,8 @@ usize QuicConnection::begin_path(cont::ConstSpan<u8> datagram, const QuicPath& f
 
 usize QuicConnection::free_slot() const noexcept
 {
-    for (usize slot = 1U; slot < kQuicMaxPaths; ++slot)
+    // Slot 0 is free once path ID 0 closed (close_abandoned): reclaimed like any other.
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
     {
         if (!m_protection.path_open(slot) && !m_recovery->path_open(slot))
         {
@@ -3831,7 +3837,7 @@ bool QuicConnection::claim_slot(usize slot, u64 path_id, const QuicPath& from, u
 QuicMigration QuicConnection::add_path(const QuicPath& path, u64 now_ns, u64& path_id) noexcept
 {
     path_id = 0U;
-    const QuicPath& active = m_first_paths.paths.path(m_first_paths.paths.active());
+    const Endpoint& server = server_address();
     if (m_config.side != crypto::QuicSide::Client)
     {
         return QuicMigration::NotClient;
@@ -3850,7 +3856,7 @@ QuicMigration QuicConnection::add_path(const QuicPath& path, u64 now_ns, u64& pa
     {
         return QuicMigration::Disabled;
     }
-    if ((!(path.peer == active.peer) && !preferred) || active.peer.port == 0U)
+    if ((!(path.peer == server) && !preferred) || server.port == 0U)
     {
         return QuicMigration::OtherServer;
     }
@@ -3898,21 +3904,26 @@ QuicMigration QuicConnection::add_path(const QuicPath& path, u64 now_ns, u64& pa
 
 void QuicConnection::commit_path(usize slot, u64 now_ns) noexcept
 {
-    PathSlot& held = m_slots[slot - 1U];
-    QuicPaths& paths = held.tuples.paths;
+    // A reclaimed slot 0's state is path ID 0's: the connection's own controller and the recovery's own, over the
+    // Application packets' first storage; a further slot's is the pool's.
+    const usize per_space = usize{m_config.sent_packets} + kSentPacketReserve;
+    const bool first = slot == 0U;
+    QuicPathControl& control = first ? m_first_control : m_slots[slot - 1U].control;
+    QuicPathRecovery& recovery = first ? m_recovery->first_path() : m_slots[slot - 1U].recovery;
+    QuicSentEntry* const entries = first ? m_storage + (quic_space_index(QuicSpace::Application) * per_space)
+                                         : m_slot_entries + ((slot - 1U) * per_space);
+    QuicPaths& paths = tuples(slot);
     const QuicPath& from = paths.path(paths.active());
     // The handshake link's handover schedule says nothing of this one; learning may still find its own.
     QuicPathControlConfig config = path_config(m_config);
     config.handover = HandoverSchedule{};
     config.base_datagram_bytes = family_base(from, m_config.max_datagram_bytes);
     // The policy and sizes were checked (config_valid, family_base); the controller is built in place.
-    static_cast<void>(held.control.start(config, from, entropy(), &m_coupling));
-    const usize per_space = usize{m_config.sent_packets} + kSentPacketReserve;
-    // Free in the recovery (begin_path), with storage of its own.
-    static_cast<void>(m_recovery->open_path(
-        slot, held.recovery, cont::Span<QuicSentEntry>(m_slot_entries + ((slot - 1U) * per_space), per_space)));
-    held.control.limit(peer_ceiling());
-    m_controls[slot] = &held.control;
+    static_cast<void>(control.start(config, from, entropy(), &m_coupling));
+    // Free in the recovery (free_slot), with storage of its own.
+    static_cast<void>(m_recovery->open_path(slot, recovery, cont::Span<QuicSentEntry>(entries, per_space)));
+    control.limit(peer_ceiling());
+    m_controls[slot] = &control;
     follow_datagram_size();
     // A server validates the client's address before any data goes there, a client its server's (section 3.1).
     paths.validate(paths.active(), now_ns, validation_timeout_ns());
@@ -3987,7 +3998,7 @@ QuicPathAbandon* QuicConnection::begin_abandon(u64 path_id, u64 error_code, u64 
         m_controls[slot] = nullptr;
         follow_datagram_size();
         // Path ID 0's own moves end with it: a move it deferred and its pending ones (S75) wait for nothing more.
-        m_deferred_move = (slot == 0U) ? kQuicNoPath : m_deferred_move;
+        m_deferred_move = handshake_slot(slot) ? kQuicNoPath : m_deferred_move;
     }
     return entry;
 }
@@ -4078,18 +4089,20 @@ void QuicConnection::close_abandoned(u64 now_ns) noexcept
             m_event_ns = now_ns;
             static_cast<void>(m_recovery->close_path(slot, now_ns, m_events));
             static_cast<void>(m_protection.close_path(slot));
-            if (slot != 0U)
+            if (entry.path_id == 0U)
             {
-                *m_tuples[slot] = Tuples{}; // the handshake's stay: its validation and the server's address (add_path)
+                // The handshake slot is reclaimed for later path IDs (free_slot); add_path() still opens paths to
+                // the server's address it sent to.
+                m_zero_server = server_address();
+                m_zero_closed = true;
             }
+            *m_tuples[slot] = Tuples{};
             m_numbers[number_space(QuicSpace::Application, slot)] = Numbering{};
         }
         // Its IDs unrouted, its storage opens the path ID past this side's limit, which MAX_PATH_ID raises (sections
-        // 3.2.1 and 4.6): 1 + initial_max_path_id path IDs stay open. The handshake slot is never reclaimed, so path
-        // ID 0's close raises it only while a further slot is spare for the new path ID.
+        // 3.2.1 and 4.6), as its slot is free for one: 1 + initial_max_path_id path IDs stay open.
         QuicCidSpace* const storage = m_cids.close(entry.path_id);
-        const bool spare = entry.path_id != 0U || m_local.initial_max_path_id < kFurtherSlots;
-        if (storage != nullptr && spare && m_local_max_path_id < kQuicMaxPathId &&
+        if (storage != nullptr && m_local_max_path_id < kQuicMaxPathId &&
             m_cids.open(m_local_max_path_id + 1U, *storage))
         {
             ++m_local_max_path_id;
@@ -4121,12 +4134,28 @@ bool QuicConnection::stopped_ack_due(u64 now_ns) const noexcept
 
 usize QuicConnection::lead_slot() const noexcept
 {
-    usize slot = 0U;
-    while (slot < kQuicMaxPaths && m_controls[slot] == nullptr)
+    // A path still validating leads only while no other can carry data: a path ID opened in a lower slot (a
+    // reclaimed slot 0 among them) takes over the close and path() once validated, never before.
+    usize first = kQuicNoPath;
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
     {
-        ++slot;
+        if (m_controls[slot] == nullptr)
+        {
+            continue;
+        }
+        if (carries_data(slot, tuples(slot).active()))
+        {
+            return slot;
+        }
+        first = (first == kQuicNoPath) ? slot : first;
     }
-    return (slot < kQuicMaxPaths) ? slot : 0U;
+    return (first != kQuicNoPath) ? first : 0U;
+}
+
+const Endpoint& QuicConnection::server_address() const noexcept
+{
+    const QuicPaths& paths = m_first_paths.paths;
+    return m_zero_closed ? m_zero_server : paths.path(paths.active()).peer;
 }
 
 usize QuicConnection::sending_slots() const noexcept
