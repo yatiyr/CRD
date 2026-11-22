@@ -1,20 +1,27 @@
-// crd-fuzz-net-quic-datagram: a QUIC connection's datagrams in crd-net (4.2a;
+// crd-fuzz-net-quic-datagram: a QUIC connection's datagrams in crd-net (4.2a, NET-PATH;
 // docs/design/network-foundation.md#quic-datagrams) under the bounded fuzz harness (REPO.DEV.9;
 // docs/design/test-instruments.md).
 //
-// Input: four bytes of limits (the send ring, send_count, outcomes and an age limit, the receive ring), then
-// operations, each an operation byte and the parameter bytes it reads (0 past the end): queue a payload, write the
-// next frame into a room of any size and keep it in a bounded flight, deliver a flight frame to the receiver (any
-// number of times), acknowledge or lose it, poll reports, read and pop, advance time, and inject any frame bytes into
-// the receiver.
+// Input: four bytes of limits (the send ring, send_count, outcomes, redundant datagrams and an age limit, the receive
+// ring), then operations, each an operation byte and the parameter bytes it reads (0 past the end): queue a payload
+// (redundant or not), write the next frame for a path slot (with the slots carrying data, and whether it writes only
+// copies) into a room of any size and keep it in a bounded flight, deliver a flight frame to the receiver (any number
+// of times), acknowledge or lose it, poll reports, read and pop, advance time, and inject any frame bytes into the
+// receiver.
 //
-// Oracles. has_frame() is exact: a room of a whole packet gets a frame exactly when it said so. Every frame written
-// fits its room, reads back as a DATAGRAM with its Length and holds the payload queued under its id; the receiver
-// accepts every frame the sender wrote and holds what it took in order, byte-exact; an injected frame is refused
-// exactly when it passes the size advertised. The accounting holds: unreported() is the datagrams queued, and with
-// outcomes those in flight and the reports not polled; every id is reported at most once, Acked or Lost only after
-// it was written, Expired only unwritten; after a final drain every id is accounted for; nothing allocates after
-// init().
+// Oracles, against a model of the send ring (the datagrams from the oldest held to the newest, each with the slots
+// that sent it and its copies in flight). has_frame() is exact and names the model's next datagram for the slot: the
+// oldest it may write (never sent, or a redundant one's copy owed to it among the slots carrying data; only copies when
+// it yields) that has not expired; a room of a whole packet gets that frame exactly when it said so. Every frame
+// written fits its room, reads back as a DATAGRAM with its Length and holds that datagram's payload, a plain one
+// ticketed by its id; the receiver accepts every frame the sender wrote and holds what it took in order, byte-exact;
+// an injected frame is refused exactly when it passes the size advertised. The ring leaves exactly as the model's:
+// expiry at max_age_ns, datagrams with nothing left to send to the slots carrying data, the copies owed for a
+// datagram acknowledged, and only sent datagrams (owing copies) giving way for room. queued(), unreported(), the
+// expired and copies counters and the redundant records held (a Full at queue()) are the model's; every id is reported
+// exactly once, as the model expects: a plain one Acked or Lost by its frame, a redundant one Acked at its first
+// acknowledged copy, Lost once every copy was lost and none can go, Expired only unsent; after a final drain every id
+// is accounted for; nothing allocates after init().
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_datagram.hpp>
@@ -37,6 +44,7 @@ constexpr usize kFlight = 8U;  // frames written and not settled
 constexpr usize kIds = 512U;   // datagrams the oracle follows
 constexpr usize kHeld = 64U;   // the receiver's ring at most
 constexpr u64 kMsNs = 1000000U;
+constexpr u8 kEverySlot = (1U << kQuicMaxPaths) - 1U;
 
 struct Input
 {
@@ -53,21 +61,28 @@ u8 pattern(u64 id, usize offset)
     return static_cast<u8>((id * 151U) + (offset * 11U) + 3U);
 }
 
-enum class Fate : u8
-{
-    Unknown, // not queued
-    Queued,
-    Written,
-    Settled, // its packet was acknowledged or lost
-    Reported,
-};
-
 struct Frame
 {
     u8 bytes[kRoom] = {};
     usize size = 0U;
     u64 id = 0U;
+    u64 ticket = 0U;
     bool live = false;
+};
+
+// What the model knows of one datagram.
+struct Datagram
+{
+    usize size = 0U;
+    u64 queued_ns = 0U;
+    bool redundant = false;
+    u8 written = 0U;      // the slots that sent it (kEverySlot once a copy was acknowledged)
+    u8 flying = 0U;       // a redundant one's copies in flight
+    bool settled = false; // a redundant one's: a copy acknowledged, or its report decided
+    bool freed = false;   // its redundant record came free
+    bool pending = false; // a report is due and not polled
+    bool polled = false;
+    QuicDatagramOutcome expect = QuicDatagramOutcome::Acked;
 };
 
 class Run
@@ -84,6 +99,7 @@ public:
         send.send_bytes = 64U + (u32{shape & 0x3FU} * 64U); // 64 to 4096
         send.send_count = 1U + (u32{count} % 16U);
         send.outcomes = (shape & 0x40U) != 0U;
+        send.redundant_count = ((shape & 0x80U) != 0U) ? 1U + ((u32{count} >> 4U) % send.send_count) : 0U;
         send.max_age_ns = ((age & 0x80U) != 0U) ? u64{age & 0x7FU} * kMsNs : 0U;
         QuicDatagramLimits receive;
         receive.max_frame_bytes = 2U + (u32{ring} * 5U); // 2 to 1277
@@ -94,7 +110,8 @@ public:
         CRD_FUZZ_REQUIRE(m_receiver.init(m_allocator, receive));
         const usize live = m_allocator.live_bytes();
         m_sender.set_peer(receive.max_frame_bytes, kRoom + kQuicShortPacketOverhead);
-        m_outcomes = send.outcomes;
+        m_limits = send;
+        CRD_FUZZ_REQUIRE(m_sender.settles() == (send.outcomes || send.redundant_count != 0U));
         while (m_in->more())
         {
             step(m_in->byte());
@@ -114,10 +131,10 @@ private:
                 queue();
                 break;
             case 2U:
-                write(true);
+                write(true, paths());
                 break;
             case 3U:
-                write(false);
+                write(false, paths());
                 break;
             case 4U:
                 deliver(m_in->byte() % kFlight);
@@ -138,10 +155,129 @@ private:
         }
     }
 
+    // With redundant datagrams, a byte names the writing slot, the slots carrying data and copies_only.
+    QuicDatagramPaths paths()
+    {
+        QuicDatagramPaths paths;
+        if (m_limits.redundant_count != 0U)
+        {
+            const u8 choice = m_in->byte();
+            paths.slot = choice & 3U;
+            paths.copies = (choice >> 2U) & kEverySlot;
+            paths.copies_only = (choice & 0x40U) != 0U;
+        }
+        return paths;
+    }
+
+    // ---- The model ----
+
+    [[nodiscard]] bool expired(const Datagram& datagram) const
+    {
+        return m_limits.max_age_ns != 0U && m_now >= datagram.queued_ns &&
+               m_now - datagram.queued_ns > m_limits.max_age_ns;
+    }
+
+    void expect(u64 id, QuicDatagramOutcome outcome)
+    {
+        Datagram& datagram = m_datagrams[id];
+        CRD_FUZZ_REQUIRE(!datagram.pending && !datagram.polled); // once
+        datagram.pending = true;
+        datagram.expect = outcome;
+    }
+
+    void finish(u64 id)
+    {
+        Datagram& datagram = m_datagrams[id];
+        if (!datagram.redundant || datagram.freed || id >= m_front || datagram.flying != 0U)
+        {
+            return;
+        }
+        if (!datagram.settled && m_limits.outcomes)
+        {
+            expect(id, QuicDatagramOutcome::Lost);
+        }
+        datagram.settled = true;
+        datagram.freed = true;
+        --m_records;
+    }
+
+    void pop_front(QuicDatagramOutcome unsent)
+    {
+        const u64 id = m_front++;
+        Datagram& datagram = m_datagrams[id];
+        if (datagram.written == 0U)
+        {
+            if (m_limits.outcomes)
+            {
+                expect(id, unsent);
+            }
+            datagram.settled = true;
+        }
+        finish(id);
+    }
+
+    void expire()
+    {
+        while (m_front < m_queued && expired(m_datagrams[m_front]))
+        {
+            m_expired += (m_datagrams[m_front].written == 0U) ? 1U : 0U;
+            pop_front(QuicDatagramOutcome::Expired);
+        }
+    }
+
+    void pop_done(u32 copies)
+    {
+        while (m_front < m_queued)
+        {
+            const Datagram& oldest = m_datagrams[m_front];
+            if (oldest.written == 0U || (oldest.redundant && (copies & ~u32{oldest.written} & kEverySlot) != 0U))
+            {
+                return;
+            }
+            pop_front(QuicDatagramOutcome::Lost);
+        }
+    }
+
+    // The datagram write_next() writes next for `paths`: kIds for none.
+    [[nodiscard]] u64 next_for(const QuicDatagramPaths& paths) const
+    {
+        const u32 bit = 1U << paths.slot;
+        for (u64 id = m_front; id < m_queued; ++id)
+        {
+            const Datagram& datagram = m_datagrams[id];
+            if (datagram.written == 0U && paths.copies_only)
+            {
+                return kIds;
+            }
+            const bool writable = datagram.written == 0U || (datagram.redundant && (datagram.written & bit) == 0U &&
+                                                              (paths.copies & bit) != 0U);
+            if (writable && !expired(datagram))
+            {
+                return id;
+            }
+        }
+        return kIds;
+    }
+
+    [[nodiscard]] u32 unreported() const
+    {
+        u32 count = 0U;
+        for (u64 id = 0U; id < m_queued; ++id)
+        {
+            const Datagram& datagram = m_datagrams[id];
+            const bool held = id >= m_front && (datagram.written == 0U || datagram.redundant);
+            count += (m_limits.outcomes ? !datagram.polled : held) ? 1U : 0U;
+        }
+        return count;
+    }
+
+    // ---- Operations ----
+
     void queue()
     {
         const usize wanted = (usize{m_in->byte()} << 8U) | m_in->byte();
-        const usize bytes = wanted % (m_sender.max_payload() + 2U); // one past the largest
+        const usize bytes = (wanted & 0x7FFFU) % (m_sender.max_payload() + 2U); // one past the largest
+        const bool redundant = m_limits.redundant_count != 0U && (wanted & 0x8000U) != 0U;
         if (m_queued == kIds)
         {
             return;
@@ -151,42 +287,55 @@ private:
         {
             payload[offset] = pattern(m_queued, offset);
         }
+        QuicDatagramSend how;
+        how.redundant = redundant;
         u64 id = 0U;
-        const QuicDatagramError error = m_sender.queue(ConstSpan<u8>(payload, bytes), m_now, id);
-        expire_model();
+        const u32 before = m_sender.queued();
+        const QuicDatagramError error = m_sender.queue(ConstSpan<u8>(payload, bytes), m_now, id, how);
         if (bytes > m_sender.max_payload())
         {
-            CRD_FUZZ_REQUIRE(error == QuicDatagramError::TooLarge);
+            CRD_FUZZ_REQUIRE(error == QuicDatagramError::TooLarge && m_sender.queued() == before);
             return;
         }
+        expire();
+        if (redundant && m_records == m_limits.redundant_count)
+        {
+            CRD_FUZZ_REQUIRE(error == QuicDatagramError::Full);
+            return;
+        }
+        while (!m_limits.outcomes && unreported() == m_limits.send_count && m_front < m_queued &&
+               m_datagrams[m_front].written != 0U)
+        {
+            pop_front(QuicDatagramOutcome::Lost); // owed copies give way
+        }
+        if (unreported() == m_limits.send_count)
+        {
+            CRD_FUZZ_REQUIRE(error == QuicDatagramError::Full);
+            return;
+        }
+        // The byte ring's room is not modelled: whatever it took, only sent datagrams at the front gave way.
         CRD_FUZZ_REQUIRE(error == QuicDatagramError::None || error == QuicDatagramError::Full);
-        if (error == QuicDatagramError::None)
+        const u32 added = (error == QuicDatagramError::None) ? 1U : 0U;
+        CRD_FUZZ_REQUIRE(m_sender.queued() >= added && m_sender.queued() - added <= m_queued - m_front);
+        while (m_queued - m_front > m_sender.queued() - added)
         {
-            CRD_FUZZ_REQUIRE(id == m_queued);
-            m_size[m_queued] = bytes;
-            m_fate[m_queued++] = Fate::Queued;
+            CRD_FUZZ_REQUIRE(m_datagrams[m_front].written != 0U);
+            pop_front(QuicDatagramOutcome::Lost);
         }
+        if (error == QuicDatagramError::Full)
+        {
+            CRD_FUZZ_REQUIRE(m_front == m_queued || m_datagrams[m_front].written == 0U); // nothing more gives way
+            return;
+        }
+        CRD_FUZZ_REQUIRE(id == m_queued);
+        Datagram& datagram = m_datagrams[m_queued++];
+        datagram.size = bytes;
+        datagram.queued_ns = m_now;
+        datagram.redundant = redundant;
+        m_records += redundant ? 1U : 0U;
     }
 
-    // The model of expiry: what the sender dropped at m_now, oldest first, is what is past the age limit.
-    void expire_model()
-    {
-        for (; m_oldest < m_queued && m_fate[m_oldest] != Fate::Queued; ++m_oldest)
-        {
-        }
-        const u64 expired = m_sender.counters().expired;
-        for (; m_expired < expired; ++m_expired)
-        {
-            CRD_FUZZ_REQUIRE(m_oldest < m_queued && m_fate[m_oldest] == Fate::Queued);
-            m_fate[m_oldest] = m_outcomes ? Fate::Settled : Fate::Reported;
-            m_expired_ids[m_oldest] = true;
-            for (++m_oldest; m_oldest < m_queued && m_fate[m_oldest] != Fate::Queued; ++m_oldest)
-            {
-            }
-        }
-    }
-
-    void write(bool whole)
+    void write(bool whole, const QuicDatagramPaths& paths)
     {
         usize slot = kFlight;
         for (usize index = 0U; index < kFlight && slot == kFlight; ++index)
@@ -199,10 +348,14 @@ private:
         }
         Frame& frame = m_flight[slot];
         const usize room = whole ? kRoom : (usize{m_in->byte()} * 5U) % (kRoom + 1U);
-        const bool promised = m_sender.has_frame(m_now);
-        u64 id = kIds;
-        frame.size = m_sender.write_next(Span<u8>(frame.bytes, room), m_now, id);
-        expire_model();
+        const bool promised = m_sender.has_frame(m_now, paths);
+        const u64 next = next_for(paths);
+        CRD_FUZZ_REQUIRE(promised == (next != kIds));
+        u64 ticket = ~u64{0};
+        frame.size = m_sender.write_next(Span<u8>(frame.bytes, room), m_now, ticket, paths);
+        expire();
+        pop_done(paths.copies);
+        CRD_FUZZ_REQUIRE(next_for(paths) == next); // what is due is never what gave way
         if (whole)
         {
             CRD_FUZZ_REQUIRE((frame.size != 0U) == promised);
@@ -211,17 +364,23 @@ private:
         {
             return;
         }
-        CRD_FUZZ_REQUIRE(frame.size <= room && id < m_queued && m_fate[id] == Fate::Queued);
+        Datagram& datagram = m_datagrams[next];
+        CRD_FUZZ_REQUIRE(frame.size <= room);
         WireReader in(ConstSpan<u8>(frame.bytes, frame.size));
         QuicFrame read;
         CRD_FUZZ_REQUIRE(read_quic_frame(in, read) == QuicTransportError::NoError && in.done());
-        CRD_FUZZ_REQUIRE(read.kind == QuicFrameKind::Datagram && !read.to_end && read.data.size() == m_size[id]);
+        CRD_FUZZ_REQUIRE(read.kind == QuicFrameKind::Datagram && !read.to_end && read.data.size() == datagram.size);
         for (usize offset = 0U; offset < read.data.size(); ++offset)
         {
-            CRD_FUZZ_REQUIRE(read.data[offset] == pattern(id, offset));
+            CRD_FUZZ_REQUIRE(read.data[offset] == pattern(next, offset));
         }
-        m_fate[id] = m_outcomes ? Fate::Written : Fate::Reported;
-        frame.id = id;
+        CRD_FUZZ_REQUIRE(datagram.redundant || ticket == next);
+        m_copies += (datagram.written != 0U) ? 1U : 0U;
+        datagram.written = static_cast<u8>(datagram.written | (1U << paths.slot));
+        datagram.flying = static_cast<u8>(datagram.flying + (datagram.redundant ? 1U : 0U));
+        pop_done(paths.copies);
+        frame.id = next;
+        frame.ticket = ticket;
         frame.live = true;
     }
 
@@ -252,19 +411,41 @@ private:
             return;
         }
         frame.live = false;
-        if ((choice & 0x80U) != 0U)
+        const bool acked = (choice & 0x80U) != 0U;
+        if (acked)
         {
-            m_sender.on_acked(frame.id);
+            m_sender.on_acked(frame.ticket);
         }
         else
         {
-            m_sender.on_lost(frame.id);
+            m_sender.on_lost(frame.ticket);
         }
-        if (m_outcomes)
+        Datagram& datagram = m_datagrams[frame.id];
+        if (!datagram.redundant)
         {
-            m_fate[frame.id] = Fate::Settled;
-            m_acked[frame.id] = (choice & 0x80U) != 0U;
+            if (m_limits.outcomes)
+            {
+                expect(frame.id, acked ? QuicDatagramOutcome::Acked : QuicDatagramOutcome::Lost);
+            }
+            return;
         }
+        CRD_FUZZ_REQUIRE(datagram.flying != 0U);
+        --datagram.flying;
+        if (acked && !datagram.settled)
+        {
+            datagram.settled = true;
+            if (m_limits.outcomes)
+            {
+                expect(frame.id, QuicDatagramOutcome::Acked);
+            }
+            if (frame.id >= m_front)
+            {
+                datagram.written = kEverySlot; // the peer has it: no more copies
+                pop_done(kEverySlot);
+                return;
+            }
+        }
+        finish(frame.id);
     }
 
     void poll()
@@ -272,14 +453,11 @@ private:
         QuicDatagramReport report;
         while (m_sender.poll(report))
         {
-            CRD_FUZZ_REQUIRE(m_outcomes && report.id < m_queued && m_fate[report.id] == Fate::Settled);
-            QuicDatagramOutcome expected = m_acked[report.id] ? QuicDatagramOutcome::Acked : QuicDatagramOutcome::Lost;
-            if (m_expired_ids[report.id])
-            {
-                expected = QuicDatagramOutcome::Expired;
-            }
-            CRD_FUZZ_REQUIRE(report.outcome == expected);
-            m_fate[report.id] = Fate::Reported;
+            CRD_FUZZ_REQUIRE(m_limits.outcomes && report.id < m_queued);
+            Datagram& datagram = m_datagrams[report.id];
+            CRD_FUZZ_REQUIRE(datagram.pending && report.outcome == datagram.expect);
+            datagram.pending = false;
+            datagram.polled = true;
         }
     }
 
@@ -296,7 +474,7 @@ private:
             }
             else
             {
-                CRD_FUZZ_REQUIRE(held.size() == m_size[id]);
+                CRD_FUZZ_REQUIRE(held.size() == m_datagrams[id].size);
                 for (usize offset = 0U; offset < held.size(); ++offset)
                 {
                     CRD_FUZZ_REQUIRE(held[offset] == pattern(id, offset));
@@ -338,51 +516,46 @@ private:
 
     void check_accounting() const
     {
-        u32 queued = 0U;
-        u32 unreported = 0U;
-        for (usize id = 0U; id < m_queued; ++id)
-        {
-            queued += (m_fate[id] == Fate::Queued) ? 1U : 0U;
-            unreported += (m_fate[id] != Fate::Reported) ? 1U : 0U;
-        }
-        CRD_FUZZ_REQUIRE(m_sender.queued() == queued && m_sender.unreported() == unreported);
+        CRD_FUZZ_REQUIRE(m_sender.queued() == m_queued - m_front && m_sender.unreported() == unreported());
+        CRD_FUZZ_REQUIRE(m_sender.counters().expired == m_expired && m_sender.counters().copies == m_copies);
         CRD_FUZZ_REQUIRE(m_receiver.held() == m_held_count);
     }
 
-    // Everything written, every flight frame settled and every report polled: each id accounted for.
+    // Everything written on slot 0 alone, every flight frame acknowledged and every report polled: each id accounted
+    // for.
     void drain()
     {
-        for (usize round = 0U; round <= kIds; ++round)
+        for (usize round = 0U; round <= 2U * kIds; ++round)
         {
-            write(true);
+            write(true, QuicDatagramPaths{});
             for (usize slot = 0U; slot < kFlight; ++slot)
             {
                 settle(static_cast<u8>(slot | 0x80U));
             }
             poll();
             read();
+            check_accounting();
         }
-        for (usize id = 0U; id < m_queued; ++id)
+        for (u64 id = 0U; id < m_queued; ++id)
         {
-            CRD_FUZZ_REQUIRE(m_fate[id] == Fate::Reported);
+            CRD_FUZZ_REQUIRE(!m_datagrams[id].pending && (m_datagrams[id].polled || !m_limits.outcomes));
         }
-        CRD_FUZZ_REQUIRE(m_sender.unreported() == 0U && m_sender.queued() == 0U);
+        CRD_FUZZ_REQUIRE(m_sender.unreported() == 0U && m_sender.queued() == 0U && m_records == 0U);
     }
 
     Input* m_in = nullptr;
     crd::fuzz::BudgetAllocator m_allocator;
     QuicDatagrams m_sender;
     QuicDatagrams m_receiver;
-    bool m_outcomes = false;
+    QuicDatagramLimits m_limits;
     u64 m_now = 0U;
     Frame m_flight[kFlight];
-    usize m_size[kIds] = {};
-    Fate m_fate[kIds] = {};
-    bool m_acked[kIds] = {};
-    bool m_expired_ids[kIds] = {};
-    usize m_queued = 0U;
-    usize m_oldest = 0U;
+    Datagram m_datagrams[kIds];
+    u64 m_queued = 0U;  // ids given
+    u64 m_front = 0U;   // the oldest held: the send ring holds ids m_front to m_queued - 1
+    u32 m_records = 0U; // redundant ones not freed
     u64 m_expired = 0U;
+    u64 m_copies = 0U;
     u64 m_held[kHeld] = {};
     usize m_injected[kHeld] = {};
     usize m_held_first = 0U;
@@ -424,4 +597,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     const u8 injected[] = {0x10U, 0x31U, 0x00U, 0x05U, 0x08U, 0x00U, 0x30U, 0x08U, 0x00U, 0x31U,
                            0x08U, 0x00U, 0x32U, 0x08U, 0x00U, 0x33U, 0x06U, 0x08U, 0x0FU, 0xFFU};
     sink.add("injected", injected, sizeof(injected));
+    // Redundant datagrams with outcomes over slots 0 and 1: one queued redundant and one plain, the first copy on slot
+    // 0, the copy on slot 1 while it yields, the plain one on slot 1; one copy lost, the other acknowledged; then a
+    // slot that leaves the slots carrying data.
+    const u8 redundant[] = {0xC8U, 0x33U, 0x00U, 0x40U, 0x00U, 0x80U, 0x20U, 0x01U, 0x00U, 0x20U, 0x02U, 0x0CU,
+                            0x02U, 0x4DU, 0x02U, 0x0DU, 0x04U, 0x00U, 0x04U, 0x01U, 0x05U, 0x00U, 0x05U, 0x81U,
+                            0x05U, 0x82U, 0x00U, 0x80U, 0x10U, 0x02U, 0x0CU, 0x02U, 0x04U, 0x06U};
+    sink.add("redundant", redundant, sizeof(redundant));
 }

@@ -652,3 +652,307 @@ TEST_CASE("QUIC datagrams: payloads of 0-RTT packets are marked, and a rejected 
         CHECK(datagrams.queue(ConstSpan<u8>(bytes, sizeof(bytes)), 0U, id) == QuicDatagramError::None);
     }
 }
+
+namespace
+{
+// Path slot `slot` writing while the slots of `copies` carry data.
+QuicDatagramPaths on(usize slot, u32 copies, bool copies_only = false)
+{
+    QuicDatagramPaths paths;
+    paths.slot = slot;
+    paths.copies = copies;
+    paths.copies_only = copies_only;
+    return paths;
+}
+
+QuicDatagramLimits redundant_limits(u32 send_bytes, u32 send_count, u32 redundant, bool outcomes)
+{
+    QuicDatagramLimits l = limits(send_bytes, send_count, outcomes);
+    l.redundant_count = redundant;
+    return l;
+}
+
+QuicDatagramSend redundantly()
+{
+    QuicDatagramSend how;
+    how.redundant = true;
+    return how;
+}
+
+// Queues datagram `id`'s `bytes` of pattern.
+QuicDatagramError put(QuicDatagrams& datagrams, u64 id, usize bytes, u64 now_ns, const QuicDatagramSend& how = {})
+{
+    u8 payload[kUdp];
+    fill(payload, bytes, id);
+    u64 queued = ~u64{0};
+    const QuicDatagramError error = datagrams.queue(ConstSpan<u8>(payload, bytes), now_ns, queued, how);
+    if (error == QuicDatagramError::None)
+    {
+        CHECK(queued == id);
+    }
+    return error;
+}
+
+// Writes the next frame for `paths` into a whole packet, which holds datagram `id`'s `bytes`; returns its ticket.
+u64 sends(QuicDatagrams& datagrams, const QuicDatagramPaths& paths, u64 now_ns, u64 id, usize bytes)
+{
+    REQUIRE(datagrams.has_frame(now_ns, paths));
+    u8 frame[kUdp];
+    u64 ticket = ~u64{0};
+    const usize written = datagrams.write_next(Span<u8>(frame, sizeof(frame)), now_ns, ticket, paths);
+    REQUIRE(written != 0U);
+    CHECK(holds(read_back(frame, written).data, bytes, id));
+    return ticket;
+}
+
+// Nothing is due for `paths`, and write_next() agrees.
+void nothing(QuicDatagrams& datagrams, const QuicDatagramPaths& paths, u64 now_ns)
+{
+    CHECK_FALSE(datagrams.has_frame(now_ns, paths));
+    u8 frame[kUdp];
+    u64 ticket = 0U;
+    CHECK(datagrams.write_next(Span<u8>(frame, sizeof(frame)), now_ns, ticket, paths) == 0U);
+}
+
+void reported(QuicDatagrams& datagrams, u64 id, QuicDatagramOutcome outcome)
+{
+    QuicDatagramReport report;
+    REQUIRE(datagrams.poll(report));
+    CHECK(report.id == id);
+    CHECK(report.outcome == outcome);
+}
+
+constexpr u32 kBoth = 0x3U; // path slots 0 and 1 carry data
+} // namespace
+
+TEST_CASE("QUIC datagrams: a redundant datagram goes once on each path slot carrying data and is reported once",
+          "[net][net-path][quic-datagram][multipath]")
+{
+    CountingAllocator allocator;
+    QuicDatagrams datagrams;
+    REQUIRE(datagrams.init(allocator, redundant_limits(4096U, 8U, 2U, true)));
+    datagrams.set_peer(1200U, kUdp);
+    CHECK(datagrams.settles());
+    REQUIRE(put(datagrams, 0U, 32U, 0U, redundantly()) == QuicDatagramError::None);
+    REQUIRE(put(datagrams, 1U, 32U, 0U) == QuicDatagramError::None);
+    // Before its first frame no copy is owed: a slot yielding its data writes nothing.
+    nothing(datagrams, on(1U, kBoth, true), 0U);
+    const u64 first = sends(datagrams, on(0U, kBoth), 0U, 0U, 32U);
+    CHECK(datagrams.queued() == 2U); // its copy is owed to slot 1
+    const u64 copy = sends(datagrams, on(1U, kBoth, true), 0U, 0U, 32U);
+    CHECK(datagrams.counters().copies == 1U);
+    CHECK(datagrams.queued() == 1U);
+    // The plain one goes once, on the first slot to write it; a slot yielding its data never sends it.
+    nothing(datagrams, on(1U, kBoth, true), 0U);
+    CHECK(sends(datagrams, on(1U, kBoth), 0U, 1U, 32U) == 1U); // a plain datagram's ticket is its id
+    nothing(datagrams, on(0U, kBoth), 0U);
+    CHECK(datagrams.queued() == 0U);
+    CHECK(datagrams.counters().sent == 3U);
+    // A copy lost while another is in flight reports nothing; the other's acknowledgement reports Acked.
+    QuicDatagramReport report;
+    datagrams.on_lost(first);
+    CHECK_FALSE(datagrams.poll(report));
+    datagrams.on_acked(copy);
+    reported(datagrams, 0U, QuicDatagramOutcome::Acked);
+    datagrams.on_acked(1U);
+    reported(datagrams, 1U, QuicDatagramOutcome::Acked);
+
+    // Every copy lost: Lost once, at the last.
+    REQUIRE(put(datagrams, 2U, 40U, 0U, redundantly()) == QuicDatagramError::None);
+    const u64 lost_first = sends(datagrams, on(1U, kBoth), 0U, 2U, 40U);
+    const u64 lost_copy = sends(datagrams, on(0U, kBoth, true), 0U, 2U, 40U);
+    datagrams.on_lost(lost_copy);
+    CHECK_FALSE(datagrams.poll(report));
+    datagrams.on_lost(lost_first);
+    reported(datagrams, 2U, QuicDatagramOutcome::Lost);
+
+    // Acknowledged before its copy went: the copy is no longer owed.
+    REQUIRE(put(datagrams, 3U, 8U, 0U, redundantly()) == QuicDatagramError::None);
+    const u64 only = sends(datagrams, on(0U, kBoth), 0U, 3U, 8U);
+    CHECK(datagrams.queued() == 1U);
+    datagrams.on_acked(only);
+    CHECK(datagrams.queued() == 0U);
+    nothing(datagrams, on(1U, kBoth, true), 0U);
+    reported(datagrams, 3U, QuicDatagramOutcome::Acked);
+
+    // Acknowledged, then another copy lost: one report.
+    REQUIRE(put(datagrams, 4U, 8U, 0U, redundantly()) == QuicDatagramError::None);
+    const u64 acked = sends(datagrams, on(0U, kBoth), 0U, 4U, 8U);
+    const u64 late = sends(datagrams, on(1U, kBoth), 0U, 4U, 8U);
+    datagrams.on_acked(acked);
+    datagrams.on_lost(late);
+    reported(datagrams, 4U, QuicDatagramOutcome::Acked);
+    CHECK_FALSE(datagrams.poll(report));
+    CHECK(datagrams.unreported() == 0U);
+
+    // redundant_count records at once, each held from queue() until its every copy settled.
+    REQUIRE(put(datagrams, 5U, 8U, 0U, redundantly()) == QuicDatagramError::None);
+    const u64 fifth = sends(datagrams, on(0U, kBoth), 0U, 5U, 8U);
+    REQUIRE(put(datagrams, 6U, 8U, 0U, redundantly()) == QuicDatagramError::None);
+    CHECK(put(datagrams, 7U, 8U, 0U, redundantly()) == QuicDatagramError::Full);
+    REQUIRE(put(datagrams, 7U, 8U, 0U) == QuicDatagramError::None); // a plain one takes no record
+    const u64 fifth_copy = sends(datagrams, on(1U, kBoth), 0U, 5U, 8U);
+    datagrams.on_acked(fifth);
+    CHECK(put(datagrams, 8U, 8U, 0U, redundantly()) == QuicDatagramError::Full); // a copy is still in flight
+    datagrams.on_lost(fifth_copy);
+    REQUIRE(put(datagrams, 8U, 8U, 0U, redundantly()) == QuicDatagramError::None);
+
+    // Without records nothing is queued redundant; without outcomes or records nothing is settled.
+    QuicDatagrams plain;
+    REQUIRE(plain.init(allocator, limits(4096U, 8U, true)));
+    plain.set_peer(1200U, kUdp);
+    CHECK(put(plain, 0U, 8U, 0U, redundantly()) == QuicDatagramError::Unsupported);
+    CHECK(plain.settles());
+    QuicDatagrams bare;
+    REQUIRE(bare.init(allocator, limits(4096U, 8U)));
+    CHECK_FALSE(bare.settles());
+    CHECK_FALSE(QuicDatagrams::limits_valid(redundant_limits(4096U, 8U, 9U, false))); // more records than datagrams
+    CHECK_FALSE(QuicDatagrams::limits_valid(redundant_limits(0U, 0U, 1U, false)));    // records without a send ring
+    CHECK(QuicDatagrams::limits_valid(redundant_limits(4096U, 8U, 8U, false)));
+}
+
+TEST_CASE("QUIC datagrams: owed copies hold the queue's order until they go, and stop for a slot that stops carrying "
+          "data, at max_age_ns, for a path grown too small, and before a new datagram is refused room",
+          "[net][net-path][quic-datagram][multipath]")
+{
+    CountingAllocator allocator;
+    SECTION("a slot that stops carrying data")
+    {
+        QuicDatagrams datagrams;
+        REQUIRE(datagrams.init(allocator, redundant_limits(4096U, 8U, 4U, false)));
+        datagrams.set_peer(1200U, kUdp);
+        REQUIRE(put(datagrams, 0U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+        for (u64 id = 1U; id <= 2U; ++id)
+        {
+            REQUIRE(put(datagrams, id, 16U, 0U) == QuicDatagramError::None);
+        }
+        static_cast<void>(sends(datagrams, on(0U, kBoth), 0U, 0U, 16U));
+        static_cast<void>(sends(datagrams, on(0U, kBoth), 0U, 1U, 16U));
+        static_cast<void>(sends(datagrams, on(0U, kBoth), 0U, 2U, 16U));
+        // Sent datagrams wait behind the copy slot 1 owes: without outcomes the redundant one counts until it goes.
+        CHECK(datagrams.queued() == 3U);
+        CHECK(datagrams.unreported() == 1U);
+        nothing(datagrams, on(0U, kBoth), 0U);
+        static_cast<void>(sends(datagrams, on(1U, kBoth, true), 0U, 0U, 16U));
+        CHECK(datagrams.queued() == 0U);
+        CHECK(datagrams.unreported() == 0U);
+        // Slot 1 stops carrying data (dark, held for backup, closed): what it owed is dropped at the next write, one
+        // that writes nothing too, and so after a write.
+        REQUIRE(put(datagrams, 3U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+        static_cast<void>(sends(datagrams, on(0U, kBoth), 0U, 3U, 16U));
+        nothing(datagrams, on(0U, 0x1U), 0U);
+        CHECK(datagrams.queued() == 0U);
+        REQUIRE(put(datagrams, 4U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+        static_cast<void>(sends(datagrams, on(0U, kBoth), 0U, 4U, 16U));
+        REQUIRE(put(datagrams, 5U, 16U, 0U) == QuicDatagramError::None);
+        static_cast<void>(sends(datagrams, on(0U, 0x1U), 0U, 5U, 16U));
+        CHECK(datagrams.queued() == 0U);
+        nothing(datagrams, on(1U, kBoth, true), 0U);
+        CHECK(datagrams.counters().copies == 1U);
+    }
+    SECTION("max_age_ns")
+    {
+        QuicDatagrams datagrams;
+        QuicDatagramLimits l = redundant_limits(4096U, 8U, 4U, true);
+        l.max_age_ns = 10U * kMs;
+        REQUIRE(datagrams.init(allocator, l));
+        datagrams.set_peer(1200U, kUdp);
+        REQUIRE(put(datagrams, 0U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+        const u64 ticket = sends(datagrams, on(0U, kBoth), 1U * kMs, 0U, 16U);
+        CHECK(datagrams.has_frame(10U * kMs, on(1U, kBoth, true)));
+        nothing(datagrams, on(1U, kBoth, true), 10U * kMs + 1U);
+        CHECK(datagrams.queued() == 0U);
+        CHECK(datagrams.counters().expired == 0U); // it was sent: only its copies stop
+        datagrams.on_acked(ticket);
+        reported(datagrams, 0U, QuicDatagramOutcome::Acked);
+        // One never sent expires as any.
+        REQUIRE(put(datagrams, 1U, 16U, 20U * kMs, redundantly()) == QuicDatagramError::None);
+        nothing(datagrams, on(0U, kBoth), 31U * kMs);
+        CHECK(datagrams.counters().expired == 1U);
+        reported(datagrams, 1U, QuicDatagramOutcome::Expired);
+        CHECK(datagrams.unreported() == 0U);
+    }
+    SECTION("a path grown too small")
+    {
+        QuicDatagrams datagrams;
+        REQUIRE(datagrams.init(allocator, redundant_limits(4096U, 8U, 4U, true)));
+        datagrams.set_peer(1200U, kUdp);
+        REQUIRE(put(datagrams, 0U, 600U, 0U, redundantly()) == QuicDatagramError::None);
+        const u64 first = sends(datagrams, on(0U, kBoth), 0U, 0U, 600U);
+        datagrams.set_path(400U + kQuicShortPacketOverhead);
+        // The copy fits no packet now: skipped on slot 1, and nothing is dropped unsent.
+        u8 frame[kUdp];
+        u64 ticket = 0U;
+        CHECK(datagrams.write_next(Span<u8>(frame, sizeof(frame)), 0U, ticket, on(1U, kBoth, true)) == 0U);
+        CHECK(datagrams.queued() == 0U);
+        CHECK(datagrams.counters().oversized == 0U);
+        datagrams.on_lost(first);
+        reported(datagrams, 0U, QuicDatagramOutcome::Lost);
+        // One never sent behind an owed copy: the copy gives way, the datagram is dropped as Lost.
+        datagrams.set_path(kUdp);
+        REQUIRE(put(datagrams, 1U, 600U, 0U, redundantly()) == QuicDatagramError::None);
+        REQUIRE(put(datagrams, 2U, 600U, 0U) == QuicDatagramError::None);
+        const u64 second = sends(datagrams, on(0U, kBoth), 0U, 1U, 600U);
+        datagrams.set_path(400U + kQuicShortPacketOverhead);
+        CHECK(datagrams.write_next(Span<u8>(frame, sizeof(frame)), 0U, ticket, on(0U, kBoth)) == 0U);
+        CHECK(datagrams.queued() == 0U);
+        CHECK(datagrams.counters().oversized == 1U);
+        reported(datagrams, 2U, QuicDatagramOutcome::Lost);
+        datagrams.on_acked(second);
+        reported(datagrams, 1U, QuicDatagramOutcome::Acked);
+    }
+    SECTION("room for a new datagram")
+    {
+        // The byte ring: an owed copy gives way to a new datagram, never one waiting to be sent.
+        QuicDatagrams datagrams;
+        REQUIRE(datagrams.init(allocator, redundant_limits(128U, 4U, 1U, true)));
+        datagrams.set_peer(1200U, kUdp);
+        REQUIRE(put(datagrams, 0U, 100U, 0U, redundantly()) == QuicDatagramError::None);
+        const u64 first = sends(datagrams, on(0U, kBoth), 0U, 0U, 100U);
+        REQUIRE(put(datagrams, 1U, 100U, 0U) == QuicDatagramError::None);
+        CHECK(datagrams.queued() == 1U);
+        nothing(datagrams, on(1U, kBoth, true), 0U);
+        CHECK(put(datagrams, 2U, 100U, 0U) == QuicDatagramError::Full);
+        datagrams.on_lost(first);
+        reported(datagrams, 0U, QuicDatagramOutcome::Lost);
+        // send_count without outcomes: the redundant one counts until it leaves the ring, and gives way.
+        QuicDatagrams counted;
+        REQUIRE(counted.init(allocator, redundant_limits(4096U, 1U, 1U, false)));
+        counted.set_peer(1200U, kUdp);
+        REQUIRE(put(counted, 0U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+        static_cast<void>(sends(counted, on(0U, kBoth), 0U, 0U, 16U));
+        CHECK(counted.unreported() == 1U);
+        REQUIRE(put(counted, 1U, 16U, 0U) == QuicDatagramError::None);
+        CHECK(counted.queued() == 1U);
+        CHECK(put(counted, 2U, 16U, 0U) == QuicDatagramError::Full);
+    }
+}
+
+TEST_CASE("QUIC datagrams: on one path a redundant datagram goes once, and a rejected 0-RTT settles its copies' "
+          "records",
+          "[net][net-path][quic-datagram][multipath][quic-early]")
+{
+    CountingAllocator allocator;
+    QuicDatagrams datagrams;
+    REQUIRE(datagrams.init(allocator, redundant_limits(4096U, 8U, 2U, true)));
+    datagrams.set_peer(1200U, kUdp);
+    REQUIRE(put(datagrams, 0U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+    const u64 only = sends(datagrams, QuicDatagramPaths{}, 0U, 0U, 16U);
+    CHECK(datagrams.queued() == 0U);
+    datagrams.on_acked(only);
+    reported(datagrams, 0U, QuicDatagramOutcome::Acked);
+    // One sent with its copy owed, one never sent: the rejection drops both from the ring, the unsent one Lost at
+    // once, the sent one Lost when its packet's state goes; both records come free.
+    REQUIRE(put(datagrams, 1U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+    const u64 sent = sends(datagrams, on(0U, kBoth), 0U, 1U, 16U);
+    REQUIRE(put(datagrams, 2U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+    datagrams.reject_early();
+    CHECK(datagrams.queued() == 0U);
+    reported(datagrams, 2U, QuicDatagramOutcome::Lost);
+    datagrams.on_lost(sent);
+    reported(datagrams, 1U, QuicDatagramOutcome::Lost);
+    CHECK(datagrams.unreported() == 0U);
+    datagrams.set_peer(1200U, kUdp);
+    REQUIRE(put(datagrams, 3U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+    REQUIRE(put(datagrams, 4U, 16U, 0U, redundantly()) == QuicDatagramError::None);
+}

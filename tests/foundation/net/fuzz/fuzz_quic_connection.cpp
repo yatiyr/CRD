@@ -35,8 +35,8 @@
 // keep to its ceiling; nothing is allocated after construction; a close names a transport
 // error of RFC 9000 section 20.1 (or RFC 9368's) or CRYPTO_ERROR when this side closes. Script: after the clean path,
 // both ends are confirmed or one has closed (no handshake hangs), and a confirmed pair agrees on the application
-// protocol, and then carries a stream larger than every window whole and unchanged and datagrams each at most once,
-// byte-exact and each reported (or one side closes). Frames: the server, which grants streams and takes datagrams of
+// protocol, and then carries a stream larger than every window whole and unchanged and datagrams (every other one
+// redundant, sent once on its one path) each at most once, byte-exact and each reported once (or one side closes). Frames: the server, which grants streams and takes datagrams of
 // up to 600 bytes, stays Established (Handshaking for Initial frames) or closes; a closed server sends a
 // CONNECTION_CLOSE only. Both modes route each end's own IDs through a host (QuicRoutedIds): its table holds exactly
 // the IDs its connection holds, after every step; a script byte 0xFE rotates the server's IDs; and a confirmed client
@@ -357,6 +357,7 @@ QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnecti
     config.datagrams.receive_count = 4U;
     config.datagrams.send_bytes = 1024U;
     config.datagrams.send_count = 4U;
+    config.datagrams.redundant_count = 2U;
     config.datagrams.outcomes = true;
     config.entropy_seed = ConstSpan<u8>(kSeeds[side == QuicSide::Client ? 0U : 1U], kPrfKeyBytes);
     return config;
@@ -889,13 +890,15 @@ void transfer(Pair& pair)
 
 constexpr u64 kDatagrams = 12U;
 
-// Then datagrams of rising sizes from the client, their ids from `base`: each the server reads arrives once and
-// byte-exact, and every one is reported acknowledged or lost (or one side closes).
+// Then datagrams of rising sizes from the client, every other one redundant, their ids from `base`: on one path each
+// the server reads arrives once and byte-exact, no copy is sent, and every one is reported once, acknowledged or lost
+// (or one side closes).
 void exchange_datagrams(Pair& pair, u64 base)
 {
     QuicDatagrams& out = pair.client.datagrams();
     QuicDatagrams& in = pair.server.datagrams();
     bool arrived[kDatagrams] = {};
+    bool settled[kDatagrams] = {};
     u64 queued = 0U;
     u64 reported = 0U;
     for (usize round = 0U; round < 256U && reported < kDatagrams && !finished(pair.client) && !finished(pair.server);
@@ -911,7 +914,9 @@ void exchange_datagrams(Pair& pair, u64 base)
             {
                 payload[at] = static_cast<u8>((queued * 31U) + at);
             }
-            if (out.queue(ConstSpan<u8>(payload, bytes), pair.now, id) != QuicDatagramError::None)
+            QuicDatagramSend how;
+            how.redundant = (queued & 1U) != 0U;
+            if (out.queue(ConstSpan<u8>(payload, bytes), pair.now, id, how) != QuicDatagramError::None)
             {
                 break;
             }
@@ -936,7 +941,8 @@ void exchange_datagrams(Pair& pair, u64 base)
         {
             const u64 index = report.id - base;
             CRD_FUZZ_REQUIRE(report.id >= base && index < queued && report.outcome != QuicDatagramOutcome::Expired);
-            CRD_FUZZ_REQUIRE(report.outcome == QuicDatagramOutcome::Lost || arrived[index]);
+            CRD_FUZZ_REQUIRE((report.outcome == QuicDatagramOutcome::Lost || arrived[index]) && !settled[index]);
+            settled[index] = true;
             ++reported;
         }
         const u64 next = (pair.client.next_timer_ns() < pair.server.next_timer_ns()) ? pair.client.next_timer_ns()
@@ -944,7 +950,7 @@ void exchange_datagrams(Pair& pair, u64 base)
         pair.now = (next != kNeverNs && next > pair.now) ? next : pair.now;
         pair.timers();
     }
-    CRD_FUZZ_REQUIRE(in.counters().dropped == 0U);
+    CRD_FUZZ_REQUIRE(in.counters().dropped == 0U && out.counters().copies == 0U);
     CRD_FUZZ_REQUIRE(reported == kDatagrams || finished(pair.client) || finished(pair.server));
 }
 

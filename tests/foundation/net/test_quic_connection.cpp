@@ -5867,14 +5867,17 @@ struct MultipathPair
     QuicConnection server;
     std::unique_ptr<Net> net;
 
-    // `sent_frames` sizes each end's frame ledger; `datagrams` offers DATAGRAM frames with their outcomes.
+    // `sent_frames` sizes each end's frame ledger; `datagrams` offers DATAGRAM frames with their outcomes, and
+    // `redundant` that many redundant ones followed at once.
     explicit MultipathPair(u64 client_limit = 2U, u64 server_limit = 2U, bool disable_migration = false,
-                           bool server_offers = true, u32 sent_frames = 1024U, bool datagrams = false)
+                           bool server_offers = true, u32 sent_frames = 1024U, bool datagrams = false,
+                           u32 redundant = 0U)
         : client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
           server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
-          client(allocator, made(QuicSide::Client, client_limit, true, false, client_host, sent_frames, datagrams)),
+          client(allocator,
+                 made(QuicSide::Client, client_limit, true, false, client_host, sent_frames, datagrams, redundant)),
           server(allocator, made(QuicSide::Server, server_limit, server_offers, disable_migration, server_host,
-                                 sent_frames, datagrams))
+                                 sent_frames, datagrams, redundant))
     {
         REQUIRE(client.ready());
         REQUIRE(server.ready());
@@ -5890,7 +5893,7 @@ struct MultipathPair
     }
 
     QuicConnectionConfig made(QuicSide side, u64 limit, bool offers, bool disable_migration, Host& host,
-                              u32 sent_frames, bool datagrams) const
+                              u32 sent_frames, bool datagrams, u32 redundant = 0U) const
     {
         const usize seed = (side == QuicSide::Server) ? 1U : 0U;
         QuicConnectionConfig config = hosted(config_for(side, identity, QuicVersion::V1, seed), host, 4U);
@@ -5899,6 +5902,7 @@ struct MultipathPair
         if (datagrams)
         {
             config.datagrams = datagram_limits(true);
+            config.datagrams.redundant_count = redundant;
         }
         config.parameters.has_initial_max_path_id = offers;
         config.parameters.initial_max_path_id = limit;
@@ -7881,4 +7885,138 @@ TEST_CASE("QUIC connection: the handshake slot's validation failing with no path
     CHECK(run.raw.abandon_error == code(QuicTransportError::PathUnstableOrPoor));
     CHECK(run.raw.abandon_further);
     CHECK_FALSE(run.raw.close_seen);
+}
+
+namespace
+{
+constexpr usize kVoiceBytes = 64U;
+
+// The server's reads of the client's redundant datagrams, each `kVoiceBytes` starting with its id: every arrival
+// counted, and its first one's time.
+struct Arrivals
+{
+    static constexpr usize kCount = 32U;
+    usize copies[kCount] = {};
+    u64 first_ns[kCount] = {};
+
+    void read(QuicConnection& to, u64 now_ns)
+    {
+        ConstSpan<u8> held;
+        while (to.datagrams().peek(held))
+        {
+            REQUIRE(held.size() == kVoiceBytes);
+            const usize id = held[0];
+            REQUIRE(id < kCount);
+            for (usize offset = 1U; offset < kVoiceBytes; ++offset)
+            {
+                REQUIRE(held[offset] == static_cast<u8>(id + offset));
+            }
+            first_ns[id] = (copies[id] == 0U) ? now_ns : first_ns[id];
+            ++copies[id];
+            to.datagrams().pop();
+        }
+    }
+};
+
+void queue_redundant(QuicConnection& from, usize id, u64 now_ns)
+{
+    u8 payload[kVoiceBytes];
+    for (usize offset = 0U; offset < kVoiceBytes; ++offset)
+    {
+        payload[offset] = static_cast<u8>(id + offset);
+    }
+    QuicDatagramSend how;
+    how.redundant = true;
+    u64 queued = ~u64{0};
+    REQUIRE(from.datagrams().queue(ConstSpan<u8>(payload, kVoiceBytes), now_ns, queued, how) ==
+            QuicDatagramError::None);
+    CHECK(queued == id);
+}
+} // namespace
+
+TEST_CASE("QUIC connection: a redundant datagram crosses every path carrying data, the slower one yielding its data "
+          "still sending copies, none to a backup path, is reported once, and arrives at once while the faster path "
+          "goes dark",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // S78's scheduling: input and voice want the first copy that arrives. Path ID 1 is 60 ms slower each round trip,
+    // so under LowestRtt it carries no data of its own, yet its window and pacer send each datagram's copy.
+    MultipathPair pair(2U, 2U, false, true, 256U, true, 32U);
+    pair.net->socket_delay_ns[1] = 30U * kMs;
+    pair.open_second();
+    QuicConnection& client = pair.client;
+    Arrivals arrivals;
+    usize acked = 0U;
+    const auto settle = [&]
+    {
+        arrivals.read(pair.server, pair.net->now);
+        QuicDatagramReport report;
+        while (client.datagrams().poll(report))
+        {
+            REQUIRE(report.outcome == QuicDatagramOutcome::Acked); // one copy at least always arrives
+            ++acked;
+        }
+    };
+    // One datagram each 20 ms, as voice frames, from `first` to `last`: each arrives within `within_ns`. With
+    // `released` the queue holds nothing once it arrived, before any acknowledgement: no copy is owed.
+    const auto voice = [&](usize first, usize last, u64 within_ns, bool released)
+    {
+        for (usize id = first; id < last; ++id)
+        {
+            INFO("datagram " << id);
+            const u64 queued_ns = pair.net->now;
+            queue_redundant(client, id, queued_ns);
+            REQUIRE(pair.net->run_until(
+                [&]
+                {
+                    settle();
+                    return arrivals.copies[id] != 0U;
+                }));
+            CHECK(arrivals.first_ns[id] - queued_ns <= within_ns);
+            if (released)
+            {
+                CHECK(client.datagrams().queued() == 0U);
+            }
+            pair.net->advance(queued_ns + 20U * kMs);
+        }
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                settle();
+                return acked == last;
+            }));
+    };
+    // Clean paths: the first copy rides path ID 0 (20 ms one way), the other path ID 1.
+    voice(0U, 12U, 21U * kMs, false);
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            settle();
+            bool all = true;
+            for (usize id = 0U; id < 12U; ++id)
+            {
+                all = all && arrivals.copies[id] == 2U;
+            }
+            return all;
+        }));
+    CHECK(client.datagrams().counters().copies == 12U);
+    CHECK(client.datagrams().queued() == 0U);
+    // The server marks path ID 1 backup (RFC 10069 section 3.3): it carries no copy while path ID 0 is usable.
+    REQUIRE(pair.server.set_path_status(1U, true) == QuicPathStatusChange::Set);
+    REQUIRE(pair.net->run_until([&] { return client.peer_path_status(1U) == QuicPathStatus::Backup; }));
+    voice(12U, 20U, 21U * kMs, true);
+    CHECK(client.datagrams().counters().copies == 12U);
+    REQUIRE(pair.server.set_path_status(1U, false) == QuicPathStatusChange::Set);
+    REQUIRE(pair.net->run_until([&] { return client.peer_path_status(1U) == QuicPathStatus::Available; }));
+    // Path ID 0 goes dark: each datagram still arrives within path ID 1's one way (50 ms), with no timeout waited for.
+    // Once path ID 0 is known dark it is owed no copies.
+    pair.net->down = 1U << 0U;
+    voice(20U, 23U, 51U * kMs, false);
+    REQUIRE(pair.net->run_until([&] { return client.recovery().pto_count(0U) != 0U; }));
+    voice(23U, Arrivals::kCount, 51U * kMs, true);
+    for (usize id = 12U; id < Arrivals::kCount; ++id)
+    {
+        CHECK(arrivals.copies[id] == 1U);
+    }
+    CHECK(client.state() == QuicConnectionState::Established);
 }
