@@ -18,9 +18,10 @@ wake and two connection cases), and this batch finished and tested them.
   "the server sends to the client's address" ran with no time passing after the transfer. In one input the script
   lost the client's PATH_RESPONSE. In the other, a `rotate_connection_ids()` retirement reached the server before the
   client's responses, which carried the retired IDs. In both, the server was still validating the address, with its
-  next challenge on a timer (RFC 9000 section 8.2.1). The engine was right. The oracle now requires a validation of
-  the client's address to be under way, runs the clean path with timers (`Pair::settle_until`), and requires the
-  server to follow unless an end closed.
+  next challenge on a timer (RFC 9000 section 8.2.1). The engine was right: both inputs now end with the server
+  following, with neither end closed. The oracle requires that validation to be under way, and runs the clean path with
+  timers (`Pair::settle_until`) until it resolves. Then the server must follow; only an end that closed with the
+  address unvalidated is excused.
 
 ## What landed
 
@@ -36,7 +37,12 @@ wake and two connection cases), and this batch finished and tested them.
   the 42-input corpus replay clean (44 inputs).
 - linux-gcc-asan: `crd-net-tests "[cids],[multipath]"`: 51 cases pass.
 - linux-gcc-release (LTO, `-Wnull-dereference`): `crd-net-tests` and `crd-fuzz-net-quic-connection` link clean.
-- Teeth: restoring the conditional wake fails the hosted case (line 1720, the 100 ms bound).
+- linux-clang-fuzz: `crd-fuzz-net-quic-connection-libfuzzer -seed=8402 -max_total_time=240`, seeded with the
+  corpus and both inputs in a scratch directory: 25146 runs, no fault.
+- Teeth: restoring the conditional wake fails the hosted case (line 1720, the 100 ms bound). A server that never
+  takes the preferred path once it validates the address (a server-only mutation of both `take_preferred` calls)
+  fails the oracle on both inputs. The first form of the oracle (a755cb40) passed that server, because its idle close
+  counted as a pass.
 
 ## Next
 
