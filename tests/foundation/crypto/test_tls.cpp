@@ -1916,8 +1916,8 @@ TEST_CASE("TLS: a ticket changed at rest or past its lifetime runs a full handsh
             c.ticket_lifetime = 1U;
         });
         crd::crypto::test::PinnedWallClock clock;
-        constexpr u64 kBases[] = {crd::crypto::test::kPinnedUnixSeconds, 2'200'000'000U};
-        for (const u64 base : kBases)
+        constexpr u64 bases[] = {crd::crypto::test::kPinnedUnixSeconds, 2'200'000'000U};
+        for (const u64 base : bases)
         {
             CAPTURE(base);
             clock.set(base);
