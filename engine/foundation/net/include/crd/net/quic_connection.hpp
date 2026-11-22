@@ -816,6 +816,9 @@ private:
     void reannounce_local_ids() noexcept;
     // An opened Application packet of m_receive_path: the migration it may be (section 9.3).
     void follow_packet(usize slot, u64 number, bool probing, u64 now_ns) noexcept;
+    // A server follows its peer to `index`: datagrams move there, it validates unless validated, and the path left
+    // is checked when validated or forgotten when not (sections 9.3.2 and 9.3.3).
+    void follow_peer(usize slot, usize index, u64 now_ns) noexcept;
     // Datagrams go on `index` from now on: the peer moved there, or a failed validation reverts there.
     void move_to(usize slot, usize index, u64 now_ns) noexcept;
     // A client proven on its active path, and followed there by its server, forgets the fallback it moved from.
@@ -824,9 +827,9 @@ private:
     // and the pacer start again unless only the port changed since the path they were built on (section 9.4).
     void follow_congestion(usize slot, u64 now_ns) noexcept;
     void on_validated(usize slot, usize index, u64 now_ns) noexcept;
-    // The paths whose validation timed out: the handshake slot's reverted from, forgotten, or the connection closes
-    // (sections 8.2.4, 9.3.2); any other slot's forgotten, and its active one's failure abandons its path ID (RFC
-    // 10069 section 3.1: "the endpoint MUST explicitly close the path").
+    // The paths whose validation timed out: the handshake slot's reverted from (a server keeps that one), forgotten,
+    // or the connection closes (sections 8.2.4, 9.3.2); any other slot's forgotten, and its active one's failure
+    // abandons its path ID (RFC 10069 section 3.1: "the endpoint MUST explicitly close the path").
     void expire_paths(u64 now_ns) noexcept;
     // Abandoning a path ID (RFC 10069 section 3.4), this side's decision or its answer to the peer's (`error_code`
     // NO_ERROR then): the peer's IDs for it retired, this side's PATH_ABANDON owed, and its slot, if one holds it,
@@ -1146,6 +1149,7 @@ private:
         QuicPaths paths;
         u64 largest_non_probing = kQuicNoPacket; // the Application packet that last chose the path (section 9.3)
         bool peer_followed = true; // a client's server sends on its active path: the latest move is followed
+        usize waiting = kQuicNoPath; // where that packet came from, a move waiting for a peer ID (section 9.5)
     };
     Tuples m_first_paths;
     Tuples* m_tuples[kQuicMaxPaths] = {&m_first_paths};

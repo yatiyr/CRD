@@ -3641,10 +3641,12 @@ void QuicConnection::follow_packet(usize slot, u64 number, bool probing, u64 now
     }
     const bool sendable = peer_held(slot, path_sequence(slot, path));
     u64& largest = m_tuples[slot]->largest_non_probing;
+    usize& waiting = m_tuples[slot]->waiting;
     if (!probing && (largest == kQuicNoPacket || number > largest))
     {
         // Only the highest-numbered non-probing packet moves the path, so a reordered one never moves it back.
         largest = number;
+        waiting = kQuicNoPath; // this packet chose its path
         if (m_config.side == crypto::QuicSide::Client && path == paths.active() && !m_tuples[slot]->peer_followed)
         {
             m_tuples[slot]->peer_followed = true; // the server's datagrams reach the path this side moved to
@@ -3668,28 +3670,30 @@ void QuicConnection::follow_packet(usize slot, u64 number, bool probing, u64 now
             validate_path(slot, path, now_ns, validation_timeout_ns());
             return;
         }
-        if (path != paths.active() && follows_peer() && sendable)
+        if (path != paths.active() && follows_peer())
         {
-            const usize from = paths.active();
-            const u64 timeout = validation_timeout_ns();
-            move_to(slot, path, now_ns);
+            if (sendable)
+            {
+                follow_peer(slot, path, now_ns);
+                return;
+            }
+            // No ID of the peer's is unused for it (section 9.5): the move waits for the next one, which this side's
+            // retirements draw, and the path validates meanwhile, its challenge waiting for the ID too.
+            waiting = path;
             if (!paths.validated(path))
             {
-                validate_path(slot, path, now_ns, timeout);
-            }
-            if (paths.validated(from))
-            {
-                // An off-path attacker's copy looks like a rebinding: the path before it is challenged, and a peer
-                // still there answers and sends on it, which moves the connection back (section 9.3.3). Its address
-                // is validated, so the check goes at once.
-                validate_path(slot, from, now_ns, timeout);
-            }
-            else
-            {
-                // A move away from a path never validated abandons it: a spurious migration (section 9.3.2).
-                drop_path(slot, from, now_ns);
+                validate_path(slot, path, now_ns, validation_timeout_ns());
             }
         }
+        return;
+    }
+    if (waiting != kQuicNoPath && waiting != paths.active() && follows_peer() &&
+        peer_held(slot, path_sequence(slot, waiting)))
+    {
+        // The ID came in this packet: the move the peer's latest non-probing packet chose happens now.
+        const usize to = waiting;
+        waiting = kQuicNoPath;
+        follow_peer(slot, to, now_ns);
         return;
     }
     // A probe from a path not validated is answered with a challenge of this side's (section 9.6.3), which leaves
@@ -3697,6 +3701,30 @@ void QuicConnection::follow_packet(usize slot, u64 number, bool probing, u64 now
     if (probing && path != paths.active() && follows_peer() && !paths.validated(path))
     {
         validate_path(slot, path, now_ns, validation_timeout_ns());
+    }
+}
+
+void QuicConnection::follow_peer(usize slot, usize index, u64 now_ns) noexcept
+{
+    const QuicPaths& paths = tuples(slot);
+    const usize from = paths.active();
+    const u64 timeout = validation_timeout_ns();
+    move_to(slot, index, now_ns);
+    if (!paths.validated(index))
+    {
+        validate_path(slot, index, now_ns, timeout);
+    }
+    if (paths.validated(from))
+    {
+        // An off-path attacker's copy looks like a rebinding: the path before it is challenged, and a peer still
+        // there answers and sends on it, which moves the connection back (section 9.3.3). Its address is validated,
+        // so the check goes at once.
+        validate_path(slot, from, now_ns, timeout);
+    }
+    else
+    {
+        // A move away from a path never validated abandons it: a spurious migration (section 9.3.2).
+        drop_path(slot, from, now_ns);
     }
 }
 
@@ -3867,6 +3895,13 @@ void QuicConnection::expire_paths(u64 now_ns) noexcept
                 if (index == paths.active())
                 {
                     move_to(slot, back, now_ns);
+                    if (follows_peer())
+                    {
+                        // A server keeps the address it reverted from, with the ID it sent there: the client's next
+                        // packet from there moves it back at once (section 9.3), linking nothing new (section 9.5).
+                        // Not validating, it gives the ID up when another path needs one (address_paths()).
+                        continue;
+                    }
                 }
                 drop_path(slot, index, now_ns);
                 continue;
@@ -3893,6 +3928,7 @@ void QuicConnection::drop_path(usize slot, usize index, u64 now_ns) noexcept
         return;
     }
     m_deferred_move = (handshake_slot(slot) && m_deferred_move == index) ? kQuicNoPath : m_deferred_move;
+    m_tuples[slot]->waiting = (m_tuples[slot]->waiting == index) ? kQuicNoPath : m_tuples[slot]->waiting;
     const u64 sequence = paths.peer_sequence(index);
     bool shared = sequence == kNoSequence;
     for (usize other = 0U; other < kQuicMaxPaths; ++other)

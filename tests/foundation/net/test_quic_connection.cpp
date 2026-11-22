@@ -1365,9 +1365,11 @@ struct RawClient
     u8 challenge_dcid[32] = {};
     // PATH_RESPONSE frames the server sent in a packet with a non-probing frame (RFC 9000 section 9.3.3).
     usize responses_non_probing = 0U;
-    // Every server datagram's path and size, in order (the first 256).
+    // Every server datagram's path, size and the first byte of its last packet's Destination Connection ID, in order
+    // (the first 256).
     QuicPath sent_to[256] = {};
     usize sent_size[256] = {};
+    u8 sent_dcid[256] = {};
     // The server's NEW_CONNECTION_ID frames, by sequence.
     u8 issued[8][20] = {};
     u8 issued_tokens[8][kQuicResetTokenBytes] = {};
@@ -1574,9 +1576,13 @@ public:
                 raw.sent_to[raw.datagrams] = server.sent_path();
                 raw.sent_size[raw.datagrams] = size;
             }
-            ++raw.datagrams;
             m_reading = server.sent_path();
             read(Span<u8>(datagram, size));
+            if (raw.datagrams < 256U)
+            {
+                raw.sent_dcid[raw.datagrams] = m_dcid;
+            }
+            ++raw.datagrams;
         }
     }
 
@@ -4822,7 +4828,11 @@ TEST_CASE("QUIC paths: a validation that fails reverts to the last validated pat
         run_timers(run, run.now + 30000U * kMs);
         CHECK(run.server.path() == a); // section 9.3.2
         CHECK(run.server.recovery().path_floor() == 0U); // b was never confirmed: a's state stands
-        CHECK(run.server.paths().find(b) == kQuicNoPath);
+        // b stays known, no longer validating, with the ID sent there (shared with a here).
+        const usize left = run.server.paths().find(b);
+        REQUIRE(left != kQuicNoPath);
+        CHECK_FALSE(run.server.paths().validating(left));
+        CHECK_FALSE(run.server.paths().validated(left));
         CHECK(run.server.counters().path_failures == 1U);
         CHECK(run.server.counters().migrations == 2U);
         // Nothing more arrived on b: what went there stayed inside three times its one datagram.
@@ -4932,6 +4942,164 @@ TEST_CASE("QUIC paths: a client that changed its connection ID is answered on an
     CHECK(run.raw.retire_sequence == 0U);
     CHECK(run.server.peer_cid_count() == 1U);
     CHECK(run.server.peer_cid()[0] == 0xC8U);
+}
+
+// A raw client of `run` gives the server its second ID (sequence 1, first byte 0xC8): section 9.5's SHOULD.
+void issue_second_id(RawRun& run)
+{
+    static constexpr u8 kSecond[sizeof(kClientCid)] = {0xC8U, 0xC9U, 0xCAU, 0xCBU, 0xCCU, 0xCDU, 0xCEU, 0xCFU};
+    static constexpr u8 kToken[kQuicResetTokenBytes] = {0x7AU};
+    QuicFrame issue;
+    issue.kind = QuicFrameKind::NewConnectionId;
+    issue.sequence = 1U;
+    issue.data = ConstSpan<u8>(kSecond);
+    issue.reset_token = ConstSpan<u8>(kToken);
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(issue, out); });
+}
+
+// Whether every server datagram to `path` since datagram `from` of the raw client's log came to an ID starting `id`.
+bool only_id_to(const RawRun& run, const QuicPath& path, usize from, u8 id)
+{
+    bool only = true;
+    for (usize index = from; index < run.raw.datagrams && index < 256U; ++index)
+    {
+        only = only && (!(run.raw.sent_to[index] == path) || run.raw.sent_dcid[index] == id);
+    }
+    return only;
+}
+
+TEST_CASE("QUIC paths: a server keeps the address it reverted from with the ID it sent there, so the client's next "
+          "packet from there moves it back on that packet, to that ID alone",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    Host host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host);
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath b = client_at(8U, 50000U);
+    run.from = a;
+    run.handshake();
+    run.drain();
+    REQUIRE(run.raw.issued_bytes[1] == sizeof(kServerCid));
+    issue_second_id(run);
+    REQUIRE(run.server.peer_cid_count() == 2U);
+    // The client moves to b with the server's sequence 1; b's challenges are lost, and it answers a's check.
+    std::memcpy(run.raw.dcid, run.raw.issued[1], run.raw.issued_bytes[1]);
+    run.from = b;
+    run.pad_to = kQuicMinInitialDatagram;
+    const usize start = run.raw.datagrams;
+    send_frame(run, QuicFrameKind::Ping);
+    REQUIRE(run.server.path() == b);
+    run.from = a;
+    run.pad_to = 0U;
+    answer(run, a);
+    run_timers(run, run.now + 30000U * kMs);
+    REQUIRE(run.server.path() == a); // section 9.3.2
+    REQUIRE(run.server.counters().path_failures == 1U);
+    // b is kept, its validation over, and the ID sent there is neither retired nor sent to anywhere else.
+    const usize left = run.server.paths().find(b);
+    REQUIRE(left != kQuicNoPath);
+    CHECK_FALSE(run.server.paths().validating(left));
+    CHECK_FALSE(run.raw.retire_seen);
+    CHECK(run.server.peer_cid_count() == 2U);
+    CHECK(only_id_to(run, a, start, kClientCid[0]));
+    // The client, at b all along, sends again from there with the ID it used: the server moves on that packet.
+    const usize back = run.raw.datagrams;
+    const usize challenged = challenges_on(run, b);
+    run.from = b;
+    run.pad_to = kQuicMinInitialDatagram;
+    send_frame(run, QuicFrameKind::Ping);
+    CHECK(run.server.path() == b);
+    CHECK(run.server.counters().migrations == 3U);
+    CHECK(run.server.peer_cid()[0] == 0xC8U);
+    CHECK(run.server.paths().validating(left));
+    REQUIRE(challenges_on(run, b) > challenged);
+    CHECK(run.raw.challenge_dcid[latest_challenge(run, b)] == 0xC8U);
+    CHECK(bytes_to(run, b, back) != 0U);
+    CHECK(only_id_to(run, b, start, 0xC8U)); // never a's ID (section 9.5)
+    run.pad_to = 0U;
+    answer(run, b);
+    CHECK(run.server.address_validated());
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC paths: a client's move with no ID of its own unused waits, validating, for the next one and happens "
+          "when it arrives; a later packet from elsewhere cancels it, as the address's failed validation does",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath b = client_at(8U, 50000U);
+    const QuicPath c = client_at(9U, 50000U);
+    enum class Then : u8
+    {
+        Moves,
+        Cancelled, // the client sends from a again
+        Expired,   // b's validation fails; a probe from c takes its slot
+    };
+    for (const Then then : {Then::Moves, Then::Cancelled, Then::Expired})
+    {
+        CAPTURE(static_cast<u32>(then));
+        CountingAllocator allocator;
+        Host host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+        RawRun run(identity, 2048U, {}, &host);
+        run.from = a;
+        run.handshake();
+        run.drain();
+        REQUIRE(run.raw.issued_bytes[1] == sizeof(kServerCid));
+        u8 first[sizeof(run.raw.dcid)] = {};
+        std::memcpy(first, run.raw.dcid, sizeof(first));
+        // The client moves to b with the server's sequence 1 before it gave a second ID of its own.
+        std::memcpy(run.raw.dcid, run.raw.issued[1], run.raw.issued_bytes[1]);
+        run.from = b;
+        run.pad_to = kQuicMinInitialDatagram;
+        const usize start = run.raw.datagrams;
+        send_frame(run, QuicFrameKind::Ping);
+        CHECK(run.server.path() == a);
+        const usize waiting = run.server.paths().find(b);
+        REQUIRE(waiting != kQuicNoPath);
+        CHECK(run.server.paths().validating(waiting)); // its challenge waits for the ID
+        CHECK(bytes_to(run, b, start) == 0U);          // a's ID never goes there (section 9.5)
+        CHECK(run.server.counters().migrations == 0U);
+        QuicPath probed = b;
+        if (then == Then::Cancelled)
+        {
+            // Back at a with the ID it used there: the client's latest choice, so the ID arriving moves nothing.
+            std::memcpy(run.raw.dcid, first, sizeof(first));
+            run.from = a;
+            run.pad_to = 0U;
+            send_frame(run, QuicFrameKind::Ping);
+        }
+        if (then == Then::Expired)
+        {
+            run_timers(run, run.now + 10000U * kMs);
+            REQUIRE(run.server.counters().path_failures == 1U);
+            REQUIRE(run.server.paths().find(b) == kQuicNoPath);
+            constexpr u8 data[kQuicPathDataBytes] = {0x5AU};
+            run.from = c;
+            send_frame(run, QuicFrameKind::PathChallenge, ConstSpan<u8>(data));
+            REQUIRE(run.server.paths().find(c) == waiting); // the slot b held: never the move b waited for
+            probed = c;
+            run.from = a;
+        }
+        // The ID comes in a packet of probing frames alone (section 9.1).
+        issue_second_id(run);
+        REQUIRE(run.server.peer_cid_count() == 2U);
+        const bool moved = then == Then::Moves;
+        CHECK(run.server.path() == (moved ? b : a));
+        CHECK(run.server.counters().migrations == (moved ? 1U : 0U));
+        REQUIRE(latest_challenge(run, probed) < 32U); // the validation goes on either way
+        CHECK(run.raw.challenge_dcid[latest_challenge(run, probed)] == 0xC8U);
+        CHECK(only_id_to(run, probed, start, 0xC8U));
+        CHECK(only_id_to(run, a, start, kClientCid[0]));
+        run.pad_to = 0U;
+        run.from = probed;
+        answer(run, probed);
+        CHECK(run.server.paths().validated(run.server.paths().find(probed)));
+        CHECK(run.server.path() == (moved ? b : a)); // a response is probing: it moves nothing
+        CHECK(run.server.state() == QuicConnectionState::Established);
+    }
 }
 
 TEST_CASE("QUIC paths: before confirmation a server takes nothing from another path",
