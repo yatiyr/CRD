@@ -3167,11 +3167,11 @@ u64 QuicConnection::unused_peer_sequence(usize slot, usize index) const noexcept
 {
     const QuicPaths& paths = tuples(slot);
     const u64 path_id = m_protection.path_id(slot);
-    for (usize held = 0U; held < m_cids.peer_count(path_id); ++held)
+    usize held = 0U;
+    for (const QuicPeerCid* id = m_cids.peer_at(path_id, held); id != nullptr; id = m_cids.peer_at(path_id, ++held))
     {
-        const QuicPeerCid& id = *m_cids.peer_at(path_id, held);
-        const u64 sequence = id.sequence;
-        bool taken = id.used;
+        const u64 sequence = id->sequence;
+        bool taken = id->used;
         for (usize other = 0U; other < kQuicMaxPaths; ++other)
         {
             taken = taken || (other != index && paths.used(other) && path_sequence(slot, other) == sequence);
