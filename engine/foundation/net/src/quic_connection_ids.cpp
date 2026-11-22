@@ -313,6 +313,7 @@ void QuicCids::first_peer(cont::ConstSpan<u8> id) noexcept
     static_cast<void>(m_first.m_peer[0].id.assign(id)); // a header's, bounded to 20 bytes
     m_first.m_peer_count = 1U;
     m_first.m_current = 0U;
+    m_first.m_peer_next = 1U;
 }
 
 QuicTransportError QuicCids::add_peer(const QuicFrame& frame, u64 limit, bool& added) noexcept
@@ -389,6 +390,8 @@ QuicTransportError QuicCids::add_peer(const QuicFrame& frame, u64 limit, bool& a
     std::memcpy(id.reset_token, frame.reset_token.data(), crypto::kQuicResetTokenBytes);
     id.has_token = true;
     target->m_current = (target->m_current == kQuicNoSequence) ? frame.sequence : target->m_current;
+    // A sequence below Retire Prior To or retired here was below an earlier frame's: only a held one raises it.
+    target->m_peer_next = (frame.sequence >= target->m_peer_next) ? frame.sequence + 1U : target->m_peer_next;
     added = true;
     return QuicTransportError::NoError;
 }
@@ -718,6 +721,12 @@ u64 QuicCids::local_retire_prior_to(u64 path_id) const noexcept
 {
     const QuicCidSpace* held = space(path_id);
     return (held == nullptr) ? 0U : held->m_local_retire_prior_to;
+}
+
+u64 QuicCids::peer_next(u64 path_id) const noexcept
+{
+    const QuicCidSpace* held = space(path_id);
+    return (held == nullptr) ? 0U : held->m_peer_next;
 }
 
 u64 QuicCids::local_next(u64 path_id) const noexcept

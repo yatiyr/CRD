@@ -306,7 +306,10 @@ enum class QuicMigration : u8
     OtherServer,    // the path's peer is neither the server's address nor, until the client moved there, its
                     // preferred address (section 9.6), or the active path names no address (port 0)
     ActivePath,     // the path is the active one already
-    NoConnectionId, // no peer connection ID unused on any other path is left for a new local address (section 9.5)
+    NoConnectionId, // no peer connection ID unused on any other path is left for a new local address (section 9.5);
+                    // add_path(): no unused path ID holds connection IDs both ways
+    NoMultipath,    // add_path(): multipath is not negotiated, or this side's initial_max_path_id is 0
+    NoPathId,       // add_path(): every path ID under both sides' limits is used, or every path slot is taken
     NoConnection,   // the client host has no such connection (QuicClient: a stale handle)
     NoSocket,       // the client host's socket set has no such socket (QuicClient)
 };
@@ -344,6 +347,7 @@ struct QuicConnectionCounters
     u64 path_validations = 0U;   // paths a PATH_RESPONSE validated
     u64 paths_opened = 0U;       // path IDs whose number space opened in a slot of their own (RFC 10069)
     u64 path_failures = 0U;      // validations abandoned on their timeout
+    u64 paths_blocked = 0U;      // PATHS_BLOCKED and PATH_CIDS_BLOCKED frames taken (RFC 10069 section 4.7)
     u64 foreign_datagrams = 0U;  // datagrams from a path this side takes nothing from (a client's unknown server)
     u64 handover_losses = 0U;    // losses of packets a scheduled handover may have taken, kept from congestion control
     u64 handover_locks = 0U;     // learned schedules put in force where none was
@@ -427,6 +431,14 @@ public:
     // Started changes nothing.
     [[nodiscard]] QuicMigration probe_path(const QuicPath& path, u64 now_ns) noexcept;
     [[nodiscard]] QuicMigration migrate(const QuicPath& path, u64 now_ns) noexcept;
+    // A client opens a further path on `path` (RFC 10069 section 3.1), to the server's address or its preferred one
+    // with probe_path()'s checks (disable_active_migration forbids the handshake address alone, section 2.2): the
+    // smallest unused path ID under both sides' limits that holds connection IDs both ways, in a free path slot.
+    // Its PATH_CHALLENGE goes at once; data goes there only once the server answered it, never after the validation
+    // failed. `path_id` names the path ID on Started, 0 otherwise. NoPathId under the server's limit sends it a
+    // PATHS_BLOCKED, and NoConnectionId with no ID of the server's for the smallest unused path ID a
+    // PATH_CIDS_BLOCKED (sections 3.2.1 and 4.7). Anything but Started changes nothing else.
+    [[nodiscard]] QuicMigration add_path(const QuicPath& path, u64 now_ns, u64& path_id) noexcept;
     // Issues a fresh set of connection IDs whose NEW_CONNECTION_ID frames retire every earlier one (Retire Prior To,
     // section 5.1.2); the earlier IDs stay routed until the peer retires them. False, changing nothing, before
     // confirmation, without a host, with zero-length IDs, while an earlier rotation waits for retirements, or when
@@ -661,9 +673,19 @@ private:
     // for it tentatively (the protection's number space and the 4-tuples, from `from`), kQuicNoPath for none. The
     // first packet that authenticates there commits it (commit_path); undo_path() forgets it otherwise.
     [[nodiscard]] usize begin_path(cont::ConstSpan<u8> datagram, const QuicPath& from, u64 now_ns) noexcept;
-    // The tentative slot's recovery and sending state open (the pool's: nothing is allocated), its 4-tuple validated
+    // A path slot no path ID holds in the protection or the recovery; kQuicNoPath for none.
+    [[nodiscard]] usize free_slot() const noexcept;
+    // Opens `path_id`'s number space in free slot `slot` and its 4-tuples on `from`, a client's own one trusted (no
+    // amplification limit: the server's address is what it proves). False, changing nothing, when the protection
+    // refuses it.
+    [[nodiscard]] bool claim_slot(usize slot, u64 path_id, const QuicPath& from, u64 now_ns) noexcept;
+    // A claimed slot's recovery and sending state open (the pool's: nothing is allocated), its 4-tuple validated
     // before data goes there (RFC 10069 section 3.1).
     void commit_path(usize slot, u64 now_ns) noexcept;
+    // Whether `slot`'s 4-tuple `index` carries data: slot 0's always (RFC 9000's migration rules hold there), a
+    // further slot's once validated (RFC 10069 section 3.1): a server's by its client's answer, which lifts the
+    // amplification limit, a client's by its server's answer to its own expanded challenge.
+    [[nodiscard]] bool carries_data(usize slot, usize index) const noexcept;
     void undo_path(usize slot) noexcept;
     // Opens an ID space for each path ID up to this side's limit once multipath is negotiated (section 3.2.1).
     void open_id_spaces() noexcept;
@@ -874,6 +896,8 @@ private:
     bool m_peer_known = false;
     bool m_multipath = false;    // both ends offered initial_max_path_id (RFC 10069 section 2)
     u64 m_peer_max_path_id = 0U; // the largest path ID the peer accepts
+    bool m_paths_blocked_owed = false; // a client's PATHS_BLOCKED at that limit (RFC 10069 section 4.7)
+    u64 m_cids_blocked = 0U;           // a client's PATH_CIDS_BLOCKED owed for this path ID (0: none)
     // The peer's newest PATH_STATUS frame per path ID (section 4.3), for any path ID under this side's limit, open
     // or not yet: an entry whose status is Unknown is free.
     struct PeerStatus

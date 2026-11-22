@@ -143,6 +143,7 @@ private:
     QuicPeerCid m_peer[kQuicMaxPeerConnectionIds];
     usize m_peer_count = 0U;
     u64 m_current = kQuicNoSequence; // the peer ID this path sends to
+    u64 m_peer_next = 0U;            // one past the largest sequence of the peer's held so far
     u64 m_retire_prior_to = 0U;      // the peer's
     Retired m_retired[2U * kQuicMaxPeerConnectionIds];
     QuicLocalCid m_local[2U * kQuicMaxLocalConnectionIds]; // the active ones and those a rotation retires
@@ -200,6 +201,9 @@ public:
     // The ID a path ID's path sends to (kQuicNoSequence for none), and a move to another one held.
     [[nodiscard]] u64 current(u64 path_id = 0U) const noexcept;
     void set_current(u64 path_id, u64 sequence) noexcept;
+    // One past the largest sequence of the peer's IDs held so far in `path_id`'s space (0 for none, or a space not
+    // open): the Next Sequence Number of a PATH_CIDS_BLOCKED frame this side sends (RFC 10069 section 4.7).
+    [[nodiscard]] u64 peer_next(u64 path_id) const noexcept;
     // A packet goes to the ID: its token counts from now on.
     void use(u64 path_id, u64 sequence) noexcept;
     // This side retires a held ID that is not the current one (its path forgotten, RFC 9000 section 9.5). False,

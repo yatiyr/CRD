@@ -265,6 +265,26 @@ QuicMigration QuicClient::migrate(QuicHandle handle, u32 socket, u64 now_ns) noe
     return move_to(handle, socket, false, now_ns);
 }
 
+QuicMigration QuicClient::add_path(QuicHandle handle, u32 socket, u64 now_ns, u64& path_id) noexcept
+{
+    path_id = 0U;
+    QuicConnection* const opening = connection(handle);
+    if (opening == nullptr)
+    {
+        return QuicMigration::NoConnection;
+    }
+    if (socket >= sockets())
+    {
+        return QuicMigration::NoSocket;
+    }
+    const QuicMigration started = opening->add_path(QuicPath{socket, opening->path().peer}, now_ns, path_id);
+    if (started == QuicMigration::Started)
+    {
+        wake(handle);
+    }
+    return started;
+}
+
 QuicMigration QuicClient::move_to(QuicHandle handle, u32 socket, bool probe_only, u64 now_ns) noexcept
 {
     QuicConnection* const moving = connection(handle);

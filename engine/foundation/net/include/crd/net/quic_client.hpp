@@ -9,7 +9,8 @@
 //             sockets. Each issues IDs of the ingress's length (8 to 20 bytes) through the loop's table.
 //   moves     connections open on socket 0; probe_path() and migrate() take one to another socket of the set
 //             (RFC 9000 sections 9.1 and 9.2: a new local address, as a phone's second interface gives), the
-//             connection validating that path and the server following (quic_connection.hpp).
+//             connection validating that path and the server following (quic_connection.hpp); add_path() opens a
+//             further multipath path from one (RFC 10069 section 3.1).
 //   connect   connect() takes a slot of a fixed pool and starts a connection to its server: a fresh sequence 0 ID
 //             routed to it, a first Destination Connection ID of kQuicClientInitialDcidBytes from the provider's
 //             randomness (section 7.2), and the token the client remembers for that server and version, if any.
@@ -131,6 +132,9 @@ public:
     // Started changes nothing.
     [[nodiscard]] QuicMigration probe_path(QuicHandle handle, u32 socket, u64 now_ns) noexcept;
     [[nodiscard]] QuicMigration migrate(QuicHandle handle, u32 socket, u64 now_ns) noexcept;
+    // Opens a further multipath path from socket `socket` to the connection's server (QuicConnection::add_path), its
+    // path ID in `path_id`; the connection is served in the loop's next turn. NoConnection and NoSocket as above.
+    [[nodiscard]] QuicMigration add_path(QuicHandle handle, u32 socket, u64 now_ns, u64& path_id) noexcept;
 
     // The token remembered for `server` and `version`; empty for none (tests and diagnostics: it stays remembered).
     [[nodiscard]] cont::ConstSpan<u8> token_for(const Endpoint& server, crypto::QuicVersion version) const noexcept;
