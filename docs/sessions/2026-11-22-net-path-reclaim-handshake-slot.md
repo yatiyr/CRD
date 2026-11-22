@@ -13,41 +13,34 @@ failed job so far. Every later CI run was cancelled by a newer push, and CI 4503
 
 ## What landed
 
-- Once path ID 0 closes, slot 0 is free (`free_slot()` starts at 0) and holds a later path ID. It reuses the
-  connection's own controller, the recovery's own state (`QuicRecovery::first_path()`) and the Application space's
-  first storage. Every close now raises the limit, so 1 + initial_max_path_id path IDs stay open at every limit. Before
-  this, a close at initial_max_path_id 3 left one path ID short.
-- `handshake_slot()` keys path ID 0's roles to path ID 0 rather than to slot 0: the Initial and Handshake spaces, the
-  amplification guard, `addressed()` and `carries_data()`, the preferred address, deferred moves, RFC 9000's fallback,
-  and the PING owed for a challenge. `zero_sending()` replaces `m_controls[0]` as the "path ID 0 is gone" check, so
-  `migrate()` and `probe_path()` still answer `Abandoned`. An acknowledgement takes the ACK form by path ID, so a later
-  path ID in slot 0 is acknowledged in PATH_ACK frames.
-- `server_address()` keeps the server's address that path ID 0 sent to after slot 0's 4-tuples are cleared. Both
-  `add_path()` and `toward_preferred()` read it.
-- The leading slot is the lowest sending slot whose active 4-tuple carries data. A path ID still validating in a lower
-  slot no longer takes `path()` or the close. This was also wrong before reclaim, for a new path in a freed slot 1.
-- ACK receive timestamps are read only after the frame's slot is known, so they are path ID 0's packets only. They are
-  no longer counted for a stopped or closed slot 0.
+- Once path ID 0 closes, slot 0 is free and holds a later path ID. It uses the connection's own controller, the
+  recovery's own state (`QuicRecovery::first_path()`) and the first Application storage. Every close now raises the
+  limit, so 1 + initial_max_path_id path IDs stay open; at initial_max_path_id 3 one was lost before.
+- `handshake_slot()` keys path ID 0's roles to path ID 0, not to slot 0. These are the handshake spaces, the
+  amplification guard, `addressed()`, `carries_data()`, the preferred address, deferred moves, RFC 9000's fallback and
+  the challenge PING. `migrate()` and `probe_path()` still answer `Abandoned`. The ACK form follows the path ID.
+- `server_address()` keeps the server's address for `add_path()`. The lead is the lowest sending slot that carries
+  data, so a path still validating never takes `path()` or the close; that was wrong in a freed slot 1 too.
+- ACK receive timestamps are read only for path ID 0's open slot.
 
 ## Evidence
 
-- linux-gcc-debug (WSL): `crd-net-tests` ran 1118 cases: 1111 passed, 7 skipped. Two cases are new.
-  - The first runs four seeds over a hostile link (loss, duplication, jitter). Path IDs 1 to 3 hold slots 1 to 3, and
-    either end abandons path ID 0. Both limits then rise to 4, and path ID 4 opens in slot 0 on both ends. It does not
-    lead while it is validating. Path IDs 1 to 3 then leave, and path ID 4 alone carries 64 KiB, numbered from 0 and
-    acknowledged. The limits reach 7, path ID 5 opens in slot 1, and the close goes on path ID 4.
-  - The second opens a path ID in a reclaimed slot 0 that never validates, because nothing reaches that client
-    socket. The server's 96 KiB stream and a tail lost for 300 ms still complete, and the client abandons the path.
-- Teeth that bite: a slot-keyed ACK form (the data is never acknowledged), the old lead (a validating path leads), the
-  `spare` rule (the limits stay at 3), and the server's address taken from slot 0's 4-tuples (`add_path()` is refused).
-  `carries_data()` keyed to slot 0 also bites. The two amplification-guard sites survive as teeth: in these runs the
-  reclaimed slot never set the server's guard.
-- linux-gcc-release (LTO) links clean, and `[multipath],[cids]` passes: 67 cases. Pinned clang-tidy 22.1.8 is clean on
-  the four changed files.
-- linux-clang-fuzz: both corpora replay clean. quic-cids ran 120 s on seed 9001 (302589 runs) and quic-connection ran
-  300 s on seed 9002 (31354 runs), with no crash.
+- linux-gcc-debug (WSL): `crd-net-tests` ran 1118 cases: 1111 passed, 7 skipped. Two connection cases are new.
+  - Path IDs 1 to 3 hold slots 1 to 3, and either end abandons path ID 0 over a hostile link (four seeds). Path ID 4
+    then opens in slot 0 on both ends and does not lead while it is validating. It alone carries 64 KiB once 1 to 3
+    leave. Path ID 5 then opens in slot 1, and the close goes on path ID 4.
+  - A path ID in a reclaimed slot 0 that never validates is abandoned. The server's stream, and a tail only its PTO
+    recovers, still complete on path ID 1.
+- A new `[quic-packet]` section seals in reclaimed slot 0 under the new path ID's nonce, numbered from 0. Path ID 0's
+  packet and the same packet in slot 1 are both forged. The packet fuzzer now also reclaims slot 0.
+- Teeth that bite: the ACK form keyed to the slot, the old lead, the `spare` rule, the server's address read from slot
+  0, and `carries_data()` keyed to slot 0. The two amplification-guard sites survive: these runs never left a
+  reclaimed slot's send below a packet's credit. The second case does not prove the guard.
+- linux-gcc-release (LTO): `[multipath],[cids]` 67 cases pass. Pinned clang-tidy 22.1.8 is clean on the changed files.
+- linux-clang-fuzz: the corpora replay clean. Clean runs: quic-cids seed 9001 for 120 s (302589 runs),
+  quic-connection seed 9002 for 300 s (31354), quic-packet seed 9003 for 180 s (649375).
 
 ## Next
 
-NET-PATH: pace concurrent validations (RFC 10069 section 7.2), then scheduling. A PTO resends on another path, and a
-validated path that goes dark holds no data back. Then the fuzzers open path IDs.
+NET-PATH: prove the guard with a raw client that goes quiet on the new path ID, checking `loss_timer_ns()`. Then pace
+concurrent validations (section 7.2), and schedule a PTO's resend on another path.
