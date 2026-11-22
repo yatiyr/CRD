@@ -16,7 +16,7 @@ constexpr u8 kRecordCrypto = 1U;
 constexpr u8 kRecordHandshakeDone = 2U;
 constexpr u8 kRecordRetire = 3U;     // a RETIRE_CONNECTION_ID frame: value is its sequence, stream_id its path ID
 constexpr u8 kRecordStream = 4U;     // a frame of the stream set
-constexpr u8 kRecordDatagram = 5U;   // a DATAGRAM frame whose outcome is reported
+constexpr u8 kRecordDatagram = 5U;   // a DATAGRAM frame whose acknowledgement or loss is passed on
 constexpr u8 kRecordNewId = 6U;      // a NEW_CONNECTION_ID frame: value is its sequence, stream_id its path ID
 constexpr u8 kRecordNewToken = 7U;   // a server's NEW_TOKEN frame
 constexpr u8 kRecordObserved = 8U;   // an OBSERVED_ADDRESS frame: value is its sequence, length its path
@@ -1983,7 +1983,8 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
     {
         return true;
     }
-    return data_allowed(space) && has_data(space, now_ns);
+    return (data_allowed(space) && has_data(space, now_ns)) ||
+           (copies_allowed(space) && datagram_ready(now_ns, datagram_paths(true)));
 }
 
 bool QuicConnection::data_allowed(QuicSpace space) const noexcept
@@ -1996,6 +1997,23 @@ bool QuicConnection::data_allowed(QuicSpace space) const noexcept
     const usize slot = send_slot();
     return (space != QuicSpace::Application || (m_data_open && carries_data(slot, m_send_path) && !held_dark(slot))) &&
            m_recovery->can_send_data(space, (space == QuicSpace::Application) ? slot : 0U);
+}
+
+bool QuicConnection::copies_allowed(QuicSpace space) const noexcept
+{
+    const usize slot = send_slot();
+    return space == QuicSpace::Application && m_copies_open && carries_data(slot, m_send_path) && !held_dark(slot) &&
+           m_recovery->can_send_data(space, slot);
+}
+
+u32 QuicConnection::copy_paths() const noexcept
+{
+    u32 copies = 0U;
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        copies |= (data_path(slot) && !held_dark(slot) && !backup_held(slot)) ? (1U << slot) : 0U;
+    }
+    return copies;
 }
 
 bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
@@ -2018,7 +2036,7 @@ bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
            (m_frame_count < m_config.sent_frames &&
             (m_streams.has_frame() || m_cids.local_owed() || m_new_token_owed || m_max_path_id_owed ||
              m_paths_blocked_owed || m_cids_blocked != 0U || abandon_owed || status_owed())) ||
-           datagram_ready(now_ns);
+           datagram_ready(now_ns, datagram_paths(false));
 }
 
 void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 held_sockets) noexcept
@@ -2027,6 +2045,7 @@ void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 
     QuicPathControl& path = control(slot);
     path.disarm_pace();
     m_probe_fill = false;
+    m_copies_open = false;
     // This slot's own probes alone: another path's owed probe opens neither this window nor this pacer.
     const auto owes = [&](QuicSpace space)
     {
@@ -2052,10 +2071,17 @@ void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 
     {
         // Another path takes the data (S78's scheduling): this window waits unused by the application's choice, so a
         // rate sample here shows the application's rate, and neither the window nor the pacer held anything back.
+        // Copies of redundant datagrams the other path sent still go here, in this window and pacer.
         m_data_open = false;
+        const u64 release = path.release_ns(now_ns, m_recovery->rtt(slot));
+        m_copies_open = room && release <= now_ns;
         if (room && sendable)
         {
             path.on_app_limited(in_flight);
+            if (!m_copies_open && datagram_ready(now_ns, datagram_paths(true)))
+            {
+                path.arm_pace(release); // a copy waits for this pacer
+            }
         }
         return;
     }
@@ -2129,9 +2155,42 @@ void QuicConnection::count(const QuicPathSignals& signals) noexcept
     m_counters.ecn_signals += signals.ecn_signal ? 1U : 0U;
 }
 
-bool QuicConnection::datagram_ready(u64 now_ns) const noexcept
+QuicDatagramPaths QuicConnection::datagram_paths(bool copies_only) const noexcept
 {
-    return m_datagrams.has_frame(now_ns) && (!m_datagrams.outcomes() || m_frame_count < m_config.sent_frames);
+    QuicDatagramPaths paths;
+    paths.slot = send_slot();
+    paths.copies = copy_paths();
+    paths.copies_only = copies_only;
+    return paths;
+}
+
+bool QuicConnection::datagram_ready(u64 now_ns, const QuicDatagramPaths& paths) const noexcept
+{
+    return m_datagrams.has_frame(now_ns, paths) && (!m_datagrams.settles() || m_frame_count < m_config.sent_frames);
+}
+
+usize QuicConnection::write_datagrams(cont::Span<u8> frames, usize used, u64 packet, u64 now_ns,
+                                      Written& written) noexcept
+{
+    const QuicDatagramPaths paths = datagram_paths(!m_data_open);
+    while (datagram_ready(now_ns, paths))
+    {
+        u64 ticket = 0U;
+        const usize bytes = m_datagrams.write_next(frames.subspan(used), now_ns, ticket, paths);
+        if (bytes == 0U)
+        {
+            break;
+        }
+        used += bytes;
+        written.eliciting = true;
+        if (m_datagrams.settles())
+        {
+            QuicStreamRecord sent;
+            sent.value = ticket;
+            static_cast<void>(record(QuicSpace::Application, packet, kRecordDatagram, sent, written)); // room checked
+        }
+    }
+    return used;
 }
 
 bool QuicConnection::record(QuicSpace space, u64 packet, u8 kind, const QuicStreamRecord& frame,
@@ -2351,7 +2410,8 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     // A 0-RTT packet carries no ACK, CRYPTO, HANDSHAKE_DONE, NEW_TOKEN or PATH_RESPONSE frame (RFC 9000 section
     // 12.4, table 3), and no RETIRE_CONNECTION_ID either: nothing is retired before the server's IDs arrive.
     const bool ack_later =
-        space == QuicSpace::Application && m_recovery->ack_deadline_ns(space, slot) > now_ns && datagram_ready(now_ns);
+        space == QuicSpace::Application && m_recovery->ack_deadline_ns(space, slot) > now_ns &&
+        datagram_ready(now_ns, datagram_paths(!m_data_open));
     if (!ack_later && !early)
     {
         put_ack();
@@ -2375,6 +2435,10 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     }
     if (!data_allowed(space))
     {
+        if (copies_allowed(space))
+        {
+            used = write_datagrams(frames, used, packet, now_ns, written);
+        }
         if (ack_later && !early)
         {
             put_ack();
@@ -2568,23 +2632,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     if (space == QuicSpace::Application)
     {
         // Datagrams after the connection's own frames and before stream data; one that does not fit waits.
-        while (datagram_ready(now_ns))
-        {
-            u64 id = 0U;
-            const usize bytes = m_datagrams.write_next(frames.subspan(used), now_ns, id);
-            if (bytes == 0U)
-            {
-                break;
-            }
-            used += bytes;
-            written.eliciting = true;
-            if (m_datagrams.outcomes())
-            {
-                QuicStreamRecord sent;
-                sent.value = id;
-                static_cast<void>(record(space, packet, kRecordDatagram, sent, written)); // room was checked
-            }
-        }
+        used = write_datagrams(frames, used, packet, now_ns, written);
         if (ack_later && !early)
         {
             put_ack();

@@ -182,7 +182,8 @@ struct QuicKeyedStart
 // Which open path carries the next data (S78's scheduling; RFC 10069 section 5.5 leaves it to the implementation).
 // Under either choice a peer's backup path carries none while one of its other paths is usable (section 3.3), and a
 // path with a probe timeout pending none while another has fewer (section 5.7). Acknowledgements, path frames and
-// probes go on their own path whatever the choice.
+// probes go on their own path whatever the choice, and a redundant datagram (QuicDatagramSend) once on every path
+// that carries data, each copy inside its own path's window and pacer.
 enum class QuicPathChoice : u8
 {
     LowestRtt, // the path with the lowest smoothed RTT whose window and pacer let a datagram go now, the next one
@@ -912,6 +913,12 @@ private:
     // Whether `space` may carry data now: its storage has room and, in the Application space, congestion control lets
     // data go (m_data_open).
     [[nodiscard]] bool data_allowed(QuicSpace space) const noexcept;
+    // Whether the Application space may carry copies of redundant datagrams another path sent while this slot yields
+    // its data (m_copies_open): inside its own window and pacer, as data.
+    [[nodiscard]] bool copies_allowed(QuicSpace space) const noexcept;
+    // The path slots carrying data now, a bit each: data paths neither held dark nor held for backup. A redundant
+    // datagram goes once on each.
+    [[nodiscard]] u32 copy_paths() const noexcept;
     // Opens or holds 0-RTT and 1-RTT data for the datagram of up to `datagram` bytes send() writes at `now_ns`
     // (m_data_open): it goes while probing, or when the window has room for all of it, the pacer's release time has
     // come and no other path takes the data first (yields_data(), with send()'s `out_bytes` and `held_sockets`). Such
@@ -939,8 +946,13 @@ private:
     [[nodiscard]] bool yields_data(usize slot, usize out_bytes, u64 now_ns, u32 held_sockets) const noexcept;
     // Whether a local PATH_STATUS frame waits.
     [[nodiscard]] bool status_owed() const noexcept;
-    // Whether a datagram can go now: one waits, and its outcome has a ledger record free when it is reported.
-    [[nodiscard]] bool datagram_ready(u64 now_ns) const noexcept;
+    // The slot being written and the slots carrying data, for the datagrams: `copies_only` while it yields its data.
+    [[nodiscard]] QuicDatagramPaths datagram_paths(bool copies_only) const noexcept;
+    // Whether a datagram can go now for `paths`: one waits, and it has a ledger record free when its acknowledgement
+    // or loss is passed on.
+    [[nodiscard]] bool datagram_ready(u64 now_ns, const QuicDatagramPaths& paths) const noexcept;
+    // Writes what datagram_ready() allows into `frames` from `used`, recording each one passed on; returns `used`.
+    usize write_datagrams(cont::Span<u8> frames, usize used, u64 packet, u64 now_ns, Written& written) noexcept;
     // `pad`: the datagram reaches 1200 bytes (section 14.1), by this packet when it is the `last` or when what it
     // leaves is too small for another.
     [[nodiscard]] usize write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool last,
@@ -1048,6 +1060,7 @@ private:
     QuicPeerReceiveTimes m_peer_times;     // the receive times of the ACK frame being processed
     Ecn m_marking = Ecn::NotEct;      // the codepoint of the datagram being written, then of the last one
     bool m_data_open = true;          // congestion control lets data go in the datagram being written
+    bool m_copies_open = false;       // the slot yields its data, and its window and pacer let datagram copies go
     bool m_probe_fill = false;        // the controller's bandwidth probe wants bytes: 1-RTT packets fill the datagram
     u64 m_event_ns = 0U;              // the time recovery's events happen at (they carry none)
     QuicStreamSet m_streams;

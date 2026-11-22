@@ -75,6 +75,8 @@ bool QuicDatagrams::Ring::push(cont::ConstSpan<u8> payload, u64 id, u64 now_ns, 
     entry.id = id;
     entry.queued_ns = now_ns;
     entry.bytes = static_cast<u32>(payload.size());
+    entry.written = 0U;
+    entry.redundant = false;
     entry.early = early;
     m_tail = at + payload.size();
     ++m_count;
@@ -102,6 +104,7 @@ QuicDatagrams::~QuicDatagrams() noexcept
         memory::destroy_array(*m_allocator, m_bytes, usize{m_limits.receive_bytes} + m_limits.send_bytes);
         memory::destroy_array(*m_allocator, m_entries, usize{m_limits.receive_count} + m_limits.send_count);
         memory::destroy_array(*m_allocator, m_reports, usize{m_limits.send_count});
+        memory::destroy_array(*m_allocator, m_copies, usize{m_limits.redundant_count});
     }
 }
 
@@ -116,8 +119,9 @@ bool QuicDatagrams::limits_valid(const QuicDatagramLimits& limits) noexcept
                                      : (limits.receive_bytes == 0U && limits.receive_count == 0U);
     const bool sends = limits.send_bytes != 0U;
     const bool send_ok = sends ? (limits.send_bytes <= kQuicMaxDatagramRing && limits.send_count != 0U &&
-                                  limits.send_count <= kQuicMaxDatagramCount)
-                               : (limits.send_count == 0U && !limits.outcomes);
+                                  limits.send_count <= kQuicMaxDatagramCount &&
+                                  limits.redundant_count <= limits.send_count)
+                               : (limits.send_count == 0U && !limits.outcomes && limits.redundant_count == 0U);
     return receive_ok && send_ok;
 }
 
@@ -133,12 +137,14 @@ bool QuicDatagrams::init(memory::IAllocator& allocator, const QuicDatagramLimits
     u8* const ring = memory::try_construct_array<u8>(allocator, bytes);
     Entry* const slots = memory::try_construct_array<Entry>(allocator, entries);
     QuicDatagramReport* const outcomes = memory::try_construct_array<QuicDatagramReport>(allocator, reports);
+    Copy* const copies = memory::try_construct_array<Copy>(allocator, limits.redundant_count);
     if ((bytes != 0U && ring == nullptr) || (entries != 0U && slots == nullptr) ||
-        (reports != 0U && outcomes == nullptr))
+        (reports != 0U && outcomes == nullptr) || (limits.redundant_count != 0U && copies == nullptr))
     {
         memory::destroy_array(allocator, ring, bytes);
         memory::destroy_array(allocator, slots, entries);
         memory::destroy_array(allocator, outcomes, reports);
+        memory::destroy_array(allocator, copies, usize{limits.redundant_count});
         return false;
     }
     m_allocator = &allocator;
@@ -146,6 +152,11 @@ bool QuicDatagrams::init(memory::IAllocator& allocator, const QuicDatagramLimits
     m_bytes = ring;
     m_entries = slots;
     m_reports = outcomes;
+    m_copies = copies;
+    for (u32 copy = 0U; copy < limits.redundant_count; ++copy)
+    {
+        copies[copy].next_free = copy + 1U;
+    }
     m_receive.bind(ring, limits.receive_bytes, slots, limits.receive_count);
     m_send.bind(ring + limits.receive_bytes, limits.send_bytes, slots + limits.receive_count, limits.send_count);
     return true;
@@ -226,13 +237,14 @@ void QuicDatagrams::pop() noexcept
 
 // ---- Sending ----
 
-QuicDatagramError QuicDatagrams::queue(cont::ConstSpan<u8> payload, u64 now_ns, u64& id) noexcept
+QuicDatagramError QuicDatagrams::queue(cont::ConstSpan<u8> payload, u64 now_ns, u64& id,
+                                       const QuicDatagramSend& how) noexcept
 {
     if (!m_peer_known)
     {
         return QuicDatagramError::NotReady;
     }
-    if (!m_sendable)
+    if (!m_sendable || (how.redundant && m_limits.redundant_count == 0U))
     {
         return QuicDatagramError::Unsupported;
     }
@@ -241,86 +253,204 @@ QuicDatagramError QuicDatagrams::queue(cont::ConstSpan<u8> payload, u64 now_ns, 
         return QuicDatagramError::TooLarge;
     }
     expire(now_ns);
-    if (m_unreported == m_limits.send_count || !m_send.push(payload, m_next_id, now_ns))
+    if (how.redundant && m_free_copy == m_limits.redundant_count)
     {
         return QuicDatagramError::Full;
+    }
+    // Owed copies never refuse a datagram: the oldest datagram's give way first. Without outcomes a redundant
+    // datagram counts until it leaves the ring; with them, until its report is polled.
+    while (m_unreported == m_limits.send_count && !m_limits.outcomes && give_up_copies())
+    {
+    }
+    if (m_unreported == m_limits.send_count)
+    {
+        return QuicDatagramError::Full;
+    }
+    while (!m_send.push(payload, m_next_id, now_ns))
+    {
+        if (!give_up_copies())
+        {
+            return QuicDatagramError::Full;
+        }
+    }
+    if (how.redundant)
+    {
+        const u32 copy = m_free_copy;
+        Copy& record = m_copies[copy];
+        m_free_copy = record.next_free;
+        record = Copy{};
+        record.id = m_next_id;
+        record.ordinal = end() - 1U;
+        record.queued = true;
+        Entry& added = entry(record.ordinal);
+        added.redundant = true;
+        added.copy = copy;
     }
     id = m_next_id++;
     ++m_unreported;
     return QuicDatagramError::None;
 }
 
-bool QuicDatagrams::has_frame(u64 now_ns) const noexcept
+bool QuicDatagrams::expired(const Entry& entry, u64 now_ns) const noexcept
 {
-    if (m_send.count() == 0U)
+    return m_limits.max_age_ns != 0U && now_ns >= entry.queued_ns && now_ns - entry.queued_ns > m_limits.max_age_ns;
+}
+
+bool QuicDatagrams::writable(const Entry& entry, const QuicDatagramPaths& paths) noexcept
+{
+    const u32 bit = 1U << paths.slot;
+    return entry.written == 0U || (entry.redundant && (entry.written & bit) == 0U && (paths.copies & bit) != 0U);
+}
+
+u64 QuicDatagrams::next_for(const QuicDatagramPaths& paths, u64 now_ns) const noexcept
+{
+    const u64 last = end();
+    const u64 cursor = m_cursors[paths.slot];
+    for (u64 at = (cursor > m_send_base) ? cursor : m_send_base; at < last; ++at)
     {
-        return false;
+        const Entry& next = m_send.at(at - m_send_base);
+        if (next.written == 0U && paths.copies_only)
+        {
+            return last; // what was sent is a prefix: nothing after it was sent either
+        }
+        if (writable(next, paths) && !expired(next, now_ns))
+        {
+            return at;
+        }
     }
-    const u64 queued_ns = m_send.back().queued_ns; // the newest expires last
-    return m_limits.max_age_ns == 0U || now_ns < queued_ns || now_ns - queued_ns <= m_limits.max_age_ns;
+    return last;
+}
+
+bool QuicDatagrams::has_frame(u64 now_ns, const QuicDatagramPaths& paths) const noexcept
+{
+    return next_for(paths, now_ns) != end();
 }
 
 void QuicDatagrams::expire(u64 now_ns) noexcept
 {
-    if (m_limits.max_age_ns == 0U)
+    while (m_send.count() != 0U && expired(m_send.front(), now_ns))
     {
-        return;
+        m_counters.expired += (m_send.front().written == 0U) ? 1U : 0U; // a sent one's copies just stop
+        pop_oldest(QuicDatagramOutcome::Expired);
     }
+}
+
+void QuicDatagrams::pop_oldest(QuicDatagramOutcome unsent) noexcept
+{
+    const Entry& oldest = m_send.front();
+    const u64 id = oldest.id;
+    const bool sent = oldest.written != 0U;
+    const bool redundant = oldest.redundant;
+    const u32 copy = oldest.copy;
+    m_send.pop();
+    ++m_send_base;
+    if (!sent && m_limits.outcomes)
+    {
+        report(id, unsent);
+    }
+    else if (!sent || (redundant && !m_limits.outcomes))
+    {
+        --m_unreported;
+    }
+    if (redundant)
+    {
+        Copy& record = m_copies[copy];
+        record.queued = false;
+        record.settled = record.settled || !sent; // reported here
+        finish(copy);
+    }
+}
+
+void QuicDatagrams::pop_done(u32 copies) noexcept
+{
     while (m_send.count() != 0U)
     {
         const Entry& oldest = m_send.front();
-        if (now_ns < oldest.queued_ns || now_ns - oldest.queued_ns <= m_limits.max_age_ns)
+        if (oldest.written == 0U || (oldest.redundant && (copies & ~u32{oldest.written} & kEverySlot) != 0U))
         {
             return;
         }
-        ++m_counters.expired;
-        drop_oldest(QuicDatagramOutcome::Expired);
+        pop_oldest(QuicDatagramOutcome::Lost); // sent: nothing is reported here
     }
 }
 
-void QuicDatagrams::drop_oldest(QuicDatagramOutcome outcome) noexcept
+bool QuicDatagrams::give_up_copies() noexcept
 {
-    const u64 id = m_send.front().id;
-    m_send.pop();
-    if (m_limits.outcomes)
+    if (m_send.count() == 0U || m_send.front().written == 0U)
     {
-        report(id, outcome);
+        return false;
     }
-    else
-    {
-        --m_unreported;
-    }
+    pop_oldest(QuicDatagramOutcome::Lost); // sent: its copies in flight report it
+    return true;
 }
 
-usize QuicDatagrams::write_next(cont::Span<u8> out, u64 now_ns, u64& id) noexcept
+usize QuicDatagrams::write_next(cont::Span<u8> out, u64 now_ns, u64& ticket, const QuicDatagramPaths& paths) noexcept
 {
     expire(now_ns);
-    while (m_send.count() != 0U && m_send.front().bytes > m_max_payload)
+    pop_done(paths.copies);
+    const u32 bit = 1U << paths.slot;
+    for (;;)
     {
-        ++m_counters.oversized; // queued before the path's size fell: it fits no packet now
-        drop_oldest(QuicDatagramOutcome::Lost);
+        const u64 at = next_for(paths, now_ns);
+        if (at == end())
+        {
+            return 0U;
+        }
+        Entry& next = entry(at);
+        if (next.bytes > m_max_payload)
+        {
+            // Queued before the path's size fell: it fits no packet now. A copy is skipped on this slot; a datagram
+            // never sent is dropped, the copies owed before it (and any expired) giving way first.
+            if (next.written != 0U)
+            {
+                next.written = static_cast<u8>(next.written | bit);
+                pop_done(paths.copies);
+                continue;
+            }
+            while (m_send_base != at)
+            {
+                m_counters.expired += (m_send.front().written == 0U) ? 1U : 0U; // only an expired one is skipped
+                pop_oldest(QuicDatagramOutcome::Expired);
+            }
+            ++m_counters.oversized;
+            pop_oldest(QuicDatagramOutcome::Lost);
+            continue;
+        }
+        QuicFrame frame;
+        frame.kind = QuicFrameKind::Datagram;
+        frame.data = m_send.bytes_of(next); // with its Length, so padding may follow (to_end false)
+        const usize bytes = write_quic_frame(frame, out);
+        if (bytes == 0U)
+        {
+            return 0U;
+        }
+        m_counters.copies += (next.written != 0U) ? 1U : 0U;
+        next.written = static_cast<u8>(next.written | bit);
+        if (next.redundant)
+        {
+            ++m_copies[next.copy].in_flight;
+            ticket = kCopyTicket | next.copy;
+        }
+        else
+        {
+            ticket = next.id;
+            m_unreported -= m_limits.outcomes ? 0U : 1U;
+        }
+        ++m_counters.sent;
+        // Past every entry this slot can never write again: sent by it, or sent once and owing no copies.
+        u64& cursor = m_cursors[paths.slot];
+        cursor = (cursor > m_send_base) ? cursor : m_send_base;
+        for (; cursor < end(); ++cursor)
+        {
+            const Entry& passed = entry(cursor);
+            if (passed.written == 0U || (passed.redundant && (passed.written & bit) == 0U))
+            {
+                break;
+            }
+        }
+        pop_done(paths.copies);
+        return bytes;
     }
-    if (m_send.count() == 0U)
-    {
-        return 0U;
-    }
-    const Entry& oldest = m_send.front();
-    QuicFrame frame;
-    frame.kind = QuicFrameKind::Datagram;
-    frame.data = m_send.bytes_of(oldest); // with its Length, so padding may follow (to_end false)
-    const usize bytes = write_quic_frame(frame, out);
-    if (bytes == 0U)
-    {
-        return 0U;
-    }
-    id = oldest.id;
-    m_send.pop();
-    ++m_counters.sent;
-    if (!m_limits.outcomes)
-    {
-        --m_unreported;
-    }
-    return bytes;
 }
 
 // ---- Outcomes ----
@@ -334,27 +464,71 @@ void QuicDatagrams::report(u64 id, QuicDatagramOutcome outcome) noexcept
     ++m_report_count;
 }
 
-void QuicDatagrams::on_acked(u64 id) noexcept
+void QuicDatagrams::on_acked(u64 ticket) noexcept
 {
-    if (m_limits.outcomes)
+    if ((ticket & kCopyTicket) == 0U)
     {
-        report(id, QuicDatagramOutcome::Acked);
+        if (m_limits.outcomes)
+        {
+            report(ticket, QuicDatagramOutcome::Acked);
+        }
+        return;
     }
+    const auto copy = static_cast<u32>(ticket & ~kCopyTicket);
+    Copy& record = m_copies[copy];
+    --record.in_flight;
+    if (!record.settled)
+    {
+        record.settled = true;
+        if (m_limits.outcomes)
+        {
+            report(record.id, QuicDatagramOutcome::Acked);
+        }
+        if (record.queued)
+        {
+            entry(record.ordinal).written = kEverySlot; // the peer has it: no more copies
+            pop_done(kEverySlot);                       // which finishes the record once it leaves the ring
+            return;
+        }
+    }
+    finish(copy);
 }
 
-void QuicDatagrams::on_lost(u64 id) noexcept
+void QuicDatagrams::on_lost(u64 ticket) noexcept
 {
-    if (m_limits.outcomes)
+    if ((ticket & kCopyTicket) == 0U)
     {
-        report(id, QuicDatagramOutcome::Lost);
+        if (m_limits.outcomes)
+        {
+            report(ticket, QuicDatagramOutcome::Lost);
+        }
+        return;
     }
+    const auto copy = static_cast<u32>(ticket & ~kCopyTicket);
+    --m_copies[copy].in_flight;
+    finish(copy);
+}
+
+void QuicDatagrams::finish(u32 copy) noexcept
+{
+    Copy& record = m_copies[copy];
+    if (record.queued || record.in_flight != 0U)
+    {
+        return;
+    }
+    if (!record.settled && m_limits.outcomes)
+    {
+        report(record.id, QuicDatagramOutcome::Lost); // every copy sent was lost
+    }
+    record.next_free = m_free_copy;
+    m_free_copy = copy;
 }
 
 void QuicDatagrams::reject_early() noexcept
 {
     while (m_send.count() != 0U)
     {
-        drop_oldest(QuicDatagramOutcome::Lost);
+        pop_oldest(QuicDatagramOutcome::Lost);
     }
     if (m_outcomes_held)
     {
