@@ -1349,6 +1349,7 @@ struct RawClient
     usize path_id_frames = 0U;
     bool path_response_seen = false;
     bool seen[4096] = {};      // the server's 1-RTT packet numbers received
+    bool further_seen[1024] = {}; // and its path ID 1 packet numbers
     usize eliciting_seen = 0U; // the server's ack-eliciting 1-RTT packets received
     u8 path_response[kQuicPathDataBytes] = {};
     usize path_response_datagram = 0U;
@@ -1619,19 +1620,29 @@ public:
                 raw.seen[opened.number] = true;
                 raw.eliciting_seen += eliciting ? 1U : 0U;
             }
+            if (further && opened.number < sizeof(raw.further_seen))
+            {
+                raw.further_seen[opened.number] = true;
+            }
             REQUIRE(raw.protection.install(raw.handshake) == CryptoError::None);
         }
     }
 
     // An ACK of exactly the server's 1-RTT packets received, as a peer that acknowledges only ack-eliciting
     // packets sends it once one arrived.
-    usize ack_received(Span<u8> out) const
+    usize ack_received(Span<u8> out) const { return ack_seen(out, ConstSpan<bool>(raw.seen, sizeof(raw.seen)), false); }
+    // A PATH_ACK of exactly the server's path ID 1 packets received.
+    usize ack_further(Span<u8> out) const
+    {
+        return ack_seen(out, ConstSpan<bool>(raw.further_seen, sizeof(raw.further_seen)), true);
+    }
+    static usize ack_seen(Span<u8> out, ConstSpan<bool> seen, bool further)
     {
         QuicAckRange ranges[kQuicAckRanges];
         usize count = 0U;
-        for (usize number = sizeof(raw.seen); number-- > 0U && count < kQuicAckRanges;)
+        for (usize number = seen.size(); number-- > 0U && count < kQuicAckRanges;)
         {
-            if (!raw.seen[number])
+            if (!seen[number])
             {
                 continue;
             }
@@ -1642,7 +1653,12 @@ public:
             }
             ranges[count++] = QuicAckRange{number, number};
         }
-        return (count == 0U) ? 0U : write_quic_ack(ConstSpan<QuicAckRange>(ranges, count), 0U, nullptr, out);
+        const ConstSpan<QuicAckRange> acked(ranges, count);
+        if (count == 0U)
+        {
+            return 0U;
+        }
+        return further ? write_quic_path_ack(1U, acked, 0U, nullptr, out) : write_quic_ack(acked, 0U, nullptr, out);
     }
 
     // An ACK of every packet number up to `largest`.
@@ -6398,6 +6414,28 @@ TEST_CASE("QUIC connection: a PATH_ABANDON of path ID 0 sent on path ID 0 itself
     CHECK(run.raw.acks_further > acks);
     CHECK(run.raw.ack_further_largest == straggler);
     CHECK(run.server.next_packet_number(QuicSpace::Application, 0U) == sent_on_zero);
+    // Its PATH_ABANDON acknowledged, path ID 0 closes three PTOs later; then its frames and packets are ignored.
+    run.send_on_path(further, second, [&](Span<u8> out) { return run.ack_further(out); });
+    REQUIRE(run.server.abandon_of(0U) != nullptr);
+    REQUIRE(run.server.abandon_of(0U)->acked);
+    run_timers(run, run.server.abandon_of(0U)->deadline_ns);
+    REQUIRE(run.server.counters().paths_closed == 1U);
+    CHECK_FALSE(run.server.protection().path_open(0U));
+    QuicFrame issued = path_frame(QuicFrameKind::NewConnectionId, 0U, 5U);
+    const u8 late_id[sizeof(kClientCid)] = {0x51U, 0x52U, 0x53U};
+    const u8 token[kQuicResetTokenBytes] = {0x5AU, 0x5BU};
+    issued.data = ConstSpan<u8>(late_id, sizeof(late_id));
+    issued.reset_token = ConstSpan<u8>(token, sizeof(token));
+    const QuicFrame retire = path_frame(QuicFrameKind::RetireConnectionId, 0U, 0U);
+    run.send_on_path(further, second, [&](Span<u8> out) { return write_quic_frame(issued, out); });
+    run.send_on_path(further, second, [&](Span<u8> out) { return write_quic_frame(retire, out); });
+    run.send_on_path(further, second, [&](Span<u8> out) { return RawRun::ack(out, 0U); });
+    CHECK(run.server.state() == QuicConnectionState::Established);
+    CHECK(run.server.peer_cid_count(0U) == 0U);
+    const u64 dropped = run.server.counters().packets_dropped;
+    run.send(QuicPacketType::OneRtt, ping);
+    CHECK(run.server.counters().packets_dropped == dropped + 1U);
+    CHECK(run.server.state() == QuicConnectionState::Established);
     // Path ID 1 is the last path: its PATH_ABANDON closes the connection, answered there.
     const QuicFrame last = path_frame(QuicFrameKind::PathAbandon, 1U);
     run.send_on_path(further, second, [&](Span<u8> out) { return write_quic_frame(last, out); });
@@ -6438,4 +6476,61 @@ TEST_CASE("QUIC connection: once path ID 0 is abandoned, the last path failing i
     CHECK(run.server.counters().path_failures == 1U);
     CHECK_FALSE(run.raw.close_seen);
     CHECK(bytes_to(run, second) <= 3U * kQuicMinInitialDatagram);
+}
+
+TEST_CASE("QUIC connection: the handshake slot's validation failing with no path to fall back to abandons path ID 0 "
+          "while path ID 1 sends",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 9000 section 9.3.2 and RFC 10069 section 3.1: with no validated 4-tuple left on path ID 0 the path is not
+    // used again; another path still sending keeps the connection, and the path ID is abandoned on it.
+    Identity identity;
+    CountingAllocator host_allocator;
+    Host host(host_allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, true, 3U);
+    run.multipath = true;
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath b = client_at(8U, 50000U);
+    run.from = a;
+    run.handshake();
+    const QuicPath second = client_at(9U, 40000U);
+    open_path_one(run, second);
+    const ConstSpan<u8> further(run.raw.further_issued[1], run.raw.further_bytes[1]);
+    REQUIRE(challenges_to(run, second) == 1U);
+    u8 answer[kQuicPathDataBytes] = {};
+    std::memcpy(answer, run.raw.challenge[run.raw.challenges - 1U], kQuicPathDataBytes);
+    run.send_on_path(further, second,
+                     [&](Span<u8> out)
+                     {
+                         QuicFrame frame;
+                         frame.kind = QuicFrameKind::PathResponse;
+                         frame.data = ConstSpan<u8>(answer, sizeof(answer));
+                         return write_quic_frame(frame, out);
+                     });
+    REQUIRE(run.server.paths(1U).validated(run.server.paths(1U).active()));
+    // Path ID 0 moves to b, whose challenge (and a's again) the client never answers; path ID 1 keeps acknowledging.
+    run.pad_to = kQuicMinInitialDatagram;
+    run.from = b;
+    send_frame(run, QuicFrameKind::Ping);
+    REQUIRE(run.server.paths(0U).path(run.server.paths(0U).active()) == b);
+    run.pad_to = 0U;
+    for (usize guard = 0U; guard < 512U && run.server.abandon_of(0U) == nullptr; ++guard)
+    {
+        const u64 next = run.server.next_timer_ns();
+        REQUIRE(next != kNeverNs);
+        run.now = (next > run.now) ? next : run.now;
+        run.server.on_timeout(run.now);
+        run.drain();
+        run.send_on_path(further, second, [&](Span<u8> out) { return run.ack_further(out); });
+        REQUIRE(run.server.state() == QuicConnectionState::Established);
+    }
+    REQUIRE(run.server.abandon_of(0U) != nullptr);
+    CHECK(run.server.counters().path_failures == 2U);
+    CHECK_FALSE(run.server.recovery().path_sending(0U));
+    CHECK(run.server.path() == second);
+    run.drain();
+    CHECK(run.raw.abandon_id == 0U);
+    CHECK(run.raw.abandon_error == code(QuicTransportError::PathUnstableOrPoor));
+    CHECK(run.raw.abandon_further);
+    CHECK_FALSE(run.raw.close_seen);
 }

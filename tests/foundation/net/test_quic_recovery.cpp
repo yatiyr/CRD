@@ -1692,6 +1692,44 @@ TEST_CASE("quic recovery: a closed path's outstanding packets are lost outside e
     CHECK_FALSE(read_ack(out, written.bytes).timestamps);
 }
 
+TEST_CASE("quic recovery: a stopped path sends nothing more and still records; slot 0 stops only once the "
+          "handshake's spaces are gone, and the last path sending never stops",
+          "[net][quic][recovery][multipath]")
+{
+    // RFC 10069 section 3.4: an abandoned path's packets in flight go back to the queues at once, its received ones
+    // are still acknowledged on another path (section 3.4.3), and path ID 0 is abandoned as any other.
+    Paths f(QuicSide::Server);
+    const QuicSpace app = QuicSpace::Application;
+    f.recovery.confirm_handshake(0U);
+    REQUIRE(f.open(1U));
+    f.events.watch = &f.recovery;
+    f.send(app, 0U, 10U * kMs);
+    f.send_on(1U, 0U, 10U * kMs);
+    CHECK_FALSE(f.recovery.stop_path(0U, 20U * kMs, f.events)); // the Initial and Handshake spaces stand
+    CHECK_FALSE(f.recovery.stop_path(2U, 20U * kMs, f.events));
+    CHECK_FALSE(f.recovery.stop_path(kQuicMaxPaths, 20U * kMs, f.events));
+    REQUIRE(f.recovery.discard(QuicSpace::Initial, 20U * kMs, f.events));
+    REQUIRE(f.recovery.discard(QuicSpace::Handshake, 20U * kMs, f.events));
+    const usize before = f.events.count;
+    REQUIRE(f.recovery.stop_path(0U, 30U * kMs, f.events));
+    REQUIRE(f.events.count == before + 1U);
+    CHECK(f.events.kinds[before] == 'l');
+    CHECK(f.events.numbers[before] == 0U);
+    CHECK(f.events.paths[before] == 0U);
+    CHECK(f.recovery.path_open(0U));
+    CHECK_FALSE(f.recovery.path_sending(0U));
+    CHECK_FALSE(f.recovery.can_send(app, 0U));
+    CHECK(f.recovery.bytes_in_flight(0U) == 0U);
+    CHECK_FALSE(f.recovery.stop_path(0U, 30U * kMs, f.events)); // stopped already
+    CHECK_FALSE(f.recovery.stop_path(1U, 30U * kMs, f.events)); // the last path sending
+    CHECK(f.recovery.path_sending(1U));
+    CHECK(f.recovery.bytes_in_flight(1U) == 1200U);
+    CHECK(f.events.count == before + 1U);
+    // Still recorded, its acknowledgement owed for another path's packet.
+    REQUIRE(f.recovery.on_received(app, 0U, true, Ecn::NotEct, 40U * kMs, 0U));
+    CHECK(f.recovery.ack_deadline_ns(app, 0U) != kNeverNs);
+}
+
 TEST_CASE("quic recovery: every open path's owed ACK is a timer, and an ACK carried on another path retires its ranges",
           "[net][quic][recovery][multipath]")
 {
