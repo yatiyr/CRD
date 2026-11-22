@@ -35,6 +35,13 @@ namespace crd::net
 inline constexpr usize kQuicPathChallengesKept = 4U; // per path: a response to an older one is late and ignored
 inline constexpr u64 kQuicNoObservation = ~u64{0};   // no OBSERVED_ADDRESS sequence
 
+// When a validation started at `start_ns` is abandoned: never kNeverNs, which marks none underway, so one whose
+// timeout saturates still runs.
+[[nodiscard]] constexpr u64 quic_validation_deadline(u64 start_ns, u64 timeout_ns) noexcept
+{
+    return (timeout_ns >= kNeverNs - start_ns) ? kNeverNs - 1U : start_ns + timeout_ns;
+}
+
 // A path as the host names it: the socket it sends through (0 for the one the connection opened on) and the peer's
 // address there. Port 0 is a path not yet bound (a keyed server's slot before its first packet).
 struct QuicPath
@@ -94,7 +101,8 @@ public:
 
     // ---- Validation ----
 
-    // Starts validating `index`, abandoned at `now_ns` + `timeout_ns`; nothing when it is underway.
+    // Starts validating `index` at `now_ns` (its first challenge due then), abandoned at quic_validation_deadline;
+    // nothing when it is underway.
     void validate(usize index, u64 now_ns, u64 timeout_ns) noexcept;
     [[nodiscard]] bool validating(usize index) const noexcept { return m_slots[index].deadline_ns != kNeverNs; }
     // A PATH_CHALLENGE is due on `index` at `now_ns`.

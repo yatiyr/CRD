@@ -163,7 +163,7 @@ void QuicPaths::validate(usize index, u64 now_ns, u64 timeout_ns) noexcept
     {
         return;
     }
-    slot.deadline_ns = add_saturating(now_ns, timeout_ns);
+    slot.deadline_ns = quic_validation_deadline(now_ns, timeout_ns);
     slot.due_ns = now_ns;
     slot.challenge_count = 0U;
 }

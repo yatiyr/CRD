@@ -54,6 +54,7 @@ constexpr u8 kServerCid[16] = {0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
 constexpr u8 kInitialDcid[8] = {0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7};
 constexpr u8 kClientPathCid[8] = {0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF}; // a raw client's path ID 1
 constexpr u8 kClientPathTwoCid[8] = {0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF}; // and its path ID 2
+constexpr u8 kClientPathThreeCid[8] = {0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF}; // and its path ID 3
 constexpr u8 kLongCid[20] = {0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9,
                              0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF2, 0xF3};
 
@@ -6931,6 +6932,168 @@ TEST_CASE("QUIC connection: a path ID that spends its amplification credit in a 
     CHECK(bytes_to(run, second) > to_second);
     CHECK(run.server.counters().path_failures == 1U);
     CHECK_FALSE(run.server.recovery().path_sending(0U));
+}
+
+namespace
+{
+// Whether the server validated `path` on any path ID's 4-tuples.
+bool proven_anywhere(const RawRun& run, const QuicPath& path)
+{
+    bool proven = false;
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        const usize index = run.server.protection().path_open(slot) ? run.server.paths(slot).find(path) : kQuicNoPath;
+        proven = proven || (index != kQuicNoPath && run.server.paths(slot).validated(index));
+    }
+    return proven;
+}
+
+// The server's validations of addresses validated on no path ID that have started by now, each of them `timeout_ns`
+// long: a paced one has not.
+usize validations_underway(const RawRun& run, u64 timeout_ns)
+{
+    usize count = 0U;
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        if (!run.server.protection().path_open(slot))
+        {
+            continue;
+        }
+        const QuicPaths& paths = run.server.paths(slot);
+        for (usize index = 0U; index < kQuicMaxPaths; ++index)
+        {
+            const bool started = paths.deadline_ns(index) - timeout_ns <= run.now;
+            const bool paced = paths.used(index) && !proven_anywhere(run, paths.path(index));
+            count += (paced && paths.validating(index) && started) ? 1U : 0U;
+        }
+    }
+    return count;
+}
+
+// When the validation of `path` in the server's slot `slot` is abandoned.
+u64 validation_deadline(const RawRun& run, usize slot, const QuicPath& path)
+{
+    const QuicPaths& paths = run.server.paths(slot);
+    const usize index = paths.find(path);
+    REQUIRE(index != kQuicNoPath);
+    REQUIRE(paths.validating(index));
+    return paths.deadline_ns(index);
+}
+} // namespace
+
+TEST_CASE("QUIC connection: a peer's validations of addresses it chose are paced, kQuicMaxPaths at once over every "
+          "path ID; a repeat takes no turn, a validated address waits for none, and a paced one validates late",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 section 7.2: a peer can make the server challenge an address of its choosing on each 4-tuple of each
+    // path ID at once. Path IDs 1 and 2 open from two addresses, path ID 0 is probed from a third three times and
+    // rebinds to a fourth: four turns, the old address's check (section 9.3.3) and path ID 3 opening on that
+    // validated address taking none. A second rebinding's
+    // validation waits for the earliest turn to end, then runs its own full timeout and validates. Nothing is
+    // acknowledged and the clock stands still until then, so every timeout is the same.
+    Identity identity;
+    CountingAllocator host_allocator;
+    Host host(host_allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host, {}, 0U, QuicAddressDiscovery::Off, true, 3U);
+    run.multipath = true;
+    const QuicPath home = client_at(7U, 50000U);
+    run.from = home;
+    run.handshake();
+    announce_path(run, 2U, ConstSpan<u8>(kClientPathTwoCid, sizeof(kClientPathTwoCid)));
+    const u64 start = run.now;
+    const QuicPath first = client_at(9U, 40000U);
+    open_path_one(run, first);
+    CHECK(challenges_on(run, first) == 1U);
+    const u64 turn_end = validation_deadline(run, 1U, first);
+    const u64 timeout = turn_end - start;
+    const QuicPath second = client_at(10U, 40000U);
+    REQUIRE(run.raw.protection.open_path(2U, 2U));
+    run.raw.path_slot = 2U;
+    const u8 data[kQuicPathDataBytes] = {1, 2, 3, 4, 5, 6, 7, 8};
+    run.send_on_path(ConstSpan<u8>(run.raw.further_issued[2], run.raw.further_bytes[2]), second,
+                     [&](Span<u8> out)
+                     {
+                         QuicFrame frame;
+                         frame.kind = QuicFrameKind::PathChallenge;
+                         frame.data = ConstSpan<u8>(data, sizeof(data));
+                         return write_quic_frame(frame, out);
+                     });
+    run.raw.path_slot = 1U;
+    REQUIRE(run.server.counters().paths_opened == 2U);
+    REQUIRE(run.server.protection().path_id(2U) == 2U);
+    CHECK(validation_deadline(run, 2U, second) == turn_end); // started at once (the raw client reads path ID 2 not)
+    CHECK(bytes_to(run, second) != 0U);
+    run.pad_to = kQuicMinInitialDatagram;
+    const QuicPath probe = client_at(11U, 40000U);
+    run.from = probe;
+    for (usize repeat = 0U; repeat < 3U; ++repeat)
+    {
+        send_frame(run, QuicFrameKind::PathChallenge, ConstSpan<u8>(data));
+    }
+    CHECK(run.server.path() == home);
+    CHECK(challenges_on(run, probe) == 1U);
+    CHECK(validation_deadline(run, 0U, probe) == turn_end);
+    CHECK(validations_underway(run, timeout) == 3U);
+    const usize home_checks = challenges_on(run, home);
+    const QuicPath rebound = client_at(12U, 40000U);
+    run.from = rebound;
+    send_frame(run, QuicFrameKind::Ping);
+    REQUIRE(run.server.path() == rebound);
+    CHECK(challenges_on(run, rebound) == 1U);
+    CHECK(validation_deadline(run, 0U, rebound) == turn_end);
+    CHECK(challenges_on(run, home) == home_checks + 1U); // the validated address's check, at once
+    CHECK(validations_underway(run, timeout) == kQuicMaxPaths);
+    // Path ID 3 opens on path ID 0's validated 4-tuple (section 5.2): its own validation waits for no turn either.
+    announce_path(run, 3U, ConstSpan<u8>(kClientPathThreeCid, sizeof(kClientPathThreeCid)));
+    REQUIRE(run.raw.protection.open_path(3U, 3U));
+    run.raw.path_slot = 3U;
+    const usize home_bytes = bytes_to(run, home);
+    run.send_on_path(ConstSpan<u8>(run.raw.further_issued[3], run.raw.further_bytes[3]), home,
+                     [&](Span<u8> out)
+                     {
+                         QuicFrame frame;
+                         frame.kind = QuicFrameKind::PathChallenge;
+                         frame.data = ConstSpan<u8>(data, sizeof(data));
+                         return write_quic_frame(frame, out);
+                     });
+    run.raw.path_slot = 1U;
+    REQUIRE(run.server.counters().paths_opened == 3U);
+    REQUIRE(run.server.protection().path_id(3U) == 3U);
+    CHECK(validation_deadline(run, 3U, home) == turn_end);
+    CHECK(bytes_to(run, home) > home_bytes);
+    CHECK(validations_underway(run, timeout) == kQuicMaxPaths);
+    // Every turn is held: the next address waits for the earliest to end, its deadline a full timeout after that.
+    const QuicPath late = client_at(13U, 40000U);
+    run.from = late;
+    send_frame(run, QuicFrameKind::Ping);
+    REQUIRE(run.server.path() == late);
+    CHECK(challenges_on(run, late) == 0U);
+    const QuicPaths& paths = run.server.paths(0U);
+    const usize waiting = paths.find(late);
+    REQUIRE(waiting != kQuicNoPath);
+    REQUIRE(paths.validating(waiting));
+    CHECK(paths.due_ns(waiting) == turn_end);
+    CHECK(paths.deadline_ns(waiting) == turn_end + timeout);
+    CHECK(validations_underway(run, timeout) == kQuicMaxPaths - 1U); // the rebinding's turn is held, its path gone
+    for (usize guard = 0U; guard < 512U && challenges_on(run, late) == 0U; ++guard)
+    {
+        const u64 next = run.server.next_timer_ns();
+        REQUIRE(next != kNeverNs);
+        run.now = (next > run.now) ? next : run.now;
+        run.server.on_timeout(run.now);
+        run.drain();
+        REQUIRE(run.server.state() == QuicConnectionState::Established);
+        CHECK(validations_underway(run, timeout) <= kQuicMaxPaths);
+        CHECK((challenges_on(run, late) == 0U || run.now >= turn_end));
+    }
+    REQUIRE(challenges_on(run, late) != 0U);
+    CHECK(run.now == turn_end);
+    answer(run, late);
+    const usize validated = run.server.paths(0U).find(late);
+    REQUIRE(validated != kQuicNoPath);
+    CHECK(run.server.paths(0U).validated(validated));
+    CHECK(run.server.path() == late);
+    CHECK(run.server.state() == QuicConnectionState::Established);
 }
 
 TEST_CASE("QUIC connection: once path ID 0 is abandoned, the last path failing its validation ends the connection "

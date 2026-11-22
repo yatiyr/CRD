@@ -3400,7 +3400,7 @@ QuicMigration QuicConnection::open_path(const QuicPath& path, u64 now_ns, usize&
     }
     if (!paths.proven(index))
     {
-        paths.validate(index, now_ns, validation_timeout_ns());
+        validate_path(0U, index, now_ns, validation_timeout_ns());
     }
     return QuicMigration::Started;
 }
@@ -3444,10 +3444,7 @@ void QuicConnection::follow_packet(usize slot, u64 number, bool probing, u64 now
                 return;
             }
             m_deferred_move = path;
-            if (!paths.validating(path))
-            {
-                paths.validate(path, now_ns, validation_timeout_ns());
-            }
+            validate_path(slot, path, now_ns, validation_timeout_ns());
             return;
         }
         if (path != paths.active() && follows_peer() && sendable)
@@ -3457,13 +3454,14 @@ void QuicConnection::follow_packet(usize slot, u64 number, bool probing, u64 now
             move_to(slot, path, now_ns);
             if (!paths.validated(path))
             {
-                paths.validate(path, now_ns, timeout);
+                validate_path(slot, path, now_ns, timeout);
             }
             if (paths.validated(from))
             {
                 // An off-path attacker's copy looks like a rebinding: the path before it is challenged, and a peer
-                // still there answers and sends on it, which moves the connection back (section 9.3.3).
-                paths.validate(from, now_ns, timeout);
+                // still there answers and sends on it, which moves the connection back (section 9.3.3). Its address
+                // is validated, so the check goes at once.
+                validate_path(slot, from, now_ns, timeout);
             }
             else
             {
@@ -3477,7 +3475,7 @@ void QuicConnection::follow_packet(usize slot, u64 number, bool probing, u64 now
     // once the path has a peer ID to send to: one that waits for it is validating, never a path left behind.
     if (probing && path != paths.active() && follows_peer() && !paths.validated(path))
     {
-        paths.validate(path, now_ns, validation_timeout_ns());
+        validate_path(slot, path, now_ns, validation_timeout_ns());
     }
 }
 
@@ -3730,6 +3728,46 @@ u64 QuicConnection::validation_timeout_ns() const noexcept
     return (period > kNeverNs / 3U) ? kNeverNs : 3U * period;
 }
 
+void QuicConnection::validate_path(usize slot, usize index, u64 now_ns, u64 timeout_ns) noexcept
+{
+    QuicPaths& paths = tuples(slot);
+    if (paths.validating(index))
+    {
+        return; // a repeat takes no turn
+    }
+    paths.validate(index, address_proven(paths.path(index)) ? now_ns : validation_turn(now_ns, timeout_ns), timeout_ns);
+}
+
+bool QuicConnection::address_proven(const QuicPath& path) const noexcept
+{
+    // Validated on any path ID's 4-tuples: the peer's own address, never a target of its choosing.
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        const usize index = m_protection.path_open(slot) ? tuples(slot).find(path) : kQuicNoPath;
+        if (index != kQuicNoPath && tuples(slot).validated(index))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+u64 QuicConnection::validation_turn(u64 now_ns, u64 timeout_ns) noexcept
+{
+    // A peer may make this side challenge an address on each of its 4-tuples of every path ID at once, each a target
+    // it chose (RFC 10069 section 7.2). Each validation of an address not validated holds a turn until its deadline,
+    // which it cannot outlive, so at most kQuicMaxPaths run at once: every further path ID and a rebinding together.
+    // An address validated on any path ID is the peer's, and its checks (section 9.3.3) wait for no turn.
+    usize earliest = 0U;
+    for (usize turn = 1U; turn < kQuicMaxPaths; ++turn)
+    {
+        earliest = (m_turn_ends_ns[turn] < m_turn_ends_ns[earliest]) ? turn : earliest;
+    }
+    const u64 start = max_u64(now_ns, m_turn_ends_ns[earliest]);
+    m_turn_ends_ns[earliest] = quic_validation_deadline(start, timeout_ns);
+    return start;
+}
+
 u64 QuicConnection::path_timer_ns() const noexcept
 {
     // A challenge is due only where it can go: one the amplification limit holds waits for a datagram instead. Every
@@ -3926,7 +3964,7 @@ void QuicConnection::commit_path(usize slot, u64 now_ns) noexcept
     m_controls[slot] = &control;
     follow_datagram_size();
     // A server validates the client's address before any data goes there, a client its server's (section 3.1).
-    paths.validate(paths.active(), now_ns, validation_timeout_ns());
+    validate_path(slot, paths.active(), now_ns, validation_timeout_ns());
     m_tentative_slot = kQuicNoPath;
     ++m_counters.paths_opened;
 }

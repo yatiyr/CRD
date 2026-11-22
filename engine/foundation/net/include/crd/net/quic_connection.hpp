@@ -821,6 +821,14 @@ private:
     // Whether path `index`'s socket is one of `held_sockets`.
     [[nodiscard]] bool path_held(usize slot, usize index, u32 held_sockets) const noexcept;
     [[nodiscard]] u64 validation_timeout_ns() const noexcept;
+    // Starts validating `slot`'s path `index` unless it is underway: at once when address_proven(), else at the
+    // paced start of validation_turn().
+    void validate_path(usize slot, usize index, u64 now_ns, u64 timeout_ns) noexcept;
+    // Whether `path`'s address is validated on the 4-tuples of any open path ID.
+    [[nodiscard]] bool address_proven(const QuicPath& path) const noexcept;
+    // When a validation of an address not validated may start, from `now_ns`, taking the earliest free turn until
+    // that start plus `timeout_ns` (RFC 10069 section 7.2).
+    [[nodiscard]] u64 validation_turn(u64 now_ns, u64 timeout_ns) noexcept;
     [[nodiscard]] u64 path_timer_ns() const noexcept;
     [[nodiscard]] bool on_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
     [[nodiscard]] bool crypto_frame(const QuicFrame& frame, QuicSpace space, u64 now_ns) noexcept;
@@ -1071,6 +1079,9 @@ private:
     // The path datagrams move to once validated (section 9.6.2): a client's to the preferred address, a server's
     // where its client's highest-numbered non-probing packet reached the preferred socket. kQuicNoPath for none.
     usize m_deferred_move = kQuicNoPath;
+    // Validations of addresses not validated hold one of these turns each until their deadline, however they end
+    // (RFC 10069 section 7.2): at most kQuicMaxPaths run at once over every path ID, and a further one waits.
+    u64 m_turn_ends_ns[kQuicMaxPaths] = {};
     bool m_on_preferred = false;
     u8 m_challenge[kQuicPathDataBytes] = {};   // the PATH_CHALLENGE data of the packet being written
     u64 m_observation_next = 0U;               // the next OBSERVED_ADDRESS sequence (rising on every path)
