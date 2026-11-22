@@ -1306,7 +1306,11 @@ TEST_CASE("REN-8 GATE (DX12): the frame graph reports PER-PASS GPU time from dev
     REQUIRE(fgraph->build());
 
     CHECK(fgraph->pass_count() == 0U); // no stale numbers before the first execute
+    // execute() submits once and waits, so both passes' device timestamps fall inside its host wall-clock span
+    const auto exec_start = std::chrono::steady_clock::now();
     fgraph->execute();
+    const double exec_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - exec_start).count();
 
     REQUIRE(fgraph->pass_count() == 2U);
     CHECK(std::strcmp(fgraph->pass_name(0), "shadow_depth") == 0);
@@ -1320,7 +1324,9 @@ TEST_CASE("REN-8 GATE (DX12): the frame graph reports PER-PASS GPU time from dev
     CHECK(tot > 0.0);
     CHECK(tot >= p0);
     CHECK(tot >= p1);
-    CHECK(tot < 200.0); // a wild value would mean the tick->ms scale is wrong
+    // The tick scale: the GPU span lies inside execute()'s submit-and-wait, so it cannot pass that host wall time
+    // (plus one tick of quantization); an absolute bound would judge the device's speed (WARP, sanitizers).
+    CHECK(tot <= exec_ms + fgraph->gpu_timestamp_period_ns() * 1.0e-6);
     CHECK(fgraph->pass_gpu_ms(99U) == 0.0);
     CHECK(fgraph->pass_name(99U) == nullptr);
 

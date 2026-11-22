@@ -1654,7 +1654,11 @@ TEST_CASE("REN-8 GATE: the frame graph reports PER-PASS GPU time from device tim
 
     // BEFORE execute() there is nothing to report — timing must never carry stale numbers into a new frame
     CHECK(fgraph->pass_count() == 0U);
+    // execute() submits once and waits, so both passes' device timestamps fall inside its host wall-clock span
+    const auto exec_start = std::chrono::steady_clock::now();
     fgraph->execute();
+    const double exec_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - exec_start).count();
 
     REQUIRE(fgraph->pass_count() == 2U);
     CHECK(std::strcmp(fgraph->pass_name(0), "shadow_depth") == 0);
@@ -1671,8 +1675,10 @@ TEST_CASE("REN-8 GATE: the frame graph reports PER-PASS GPU time from device tim
     // the submission, so it is >= either individual pass but need not equal their sum (barriers/gaps live in it).
     CHECK(tot >= p0);
     CHECK(tot >= p1);
-    // sanity: a 64x64 two-pass frame is sub-millisecond-ish on any real GPU; a wild number means a bad tick scale
-    CHECK(tot < 200.0);
+    // The tick scale: the GPU span lies inside execute()'s submit-and-wait, so it cannot pass that host wall time
+    // (plus one tick of quantization). An absolute bound would instead judge the device's speed: a software
+    // device under a sanitizer (lavapipe under TSan in CI) takes hundreds of milliseconds for this frame.
+    CHECK(tot <= exec_ms + fgraph->gpu_timestamp_period_ns() * 1.0e-6);
     // out-of-range indices are safe + zero, never UB
     CHECK(fgraph->pass_gpu_ms(99U) == 0.0);
     CHECK(fgraph->pass_name(99U) == nullptr);
