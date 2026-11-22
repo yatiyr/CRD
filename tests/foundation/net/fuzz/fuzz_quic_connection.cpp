@@ -801,14 +801,13 @@ void check_observations(const Pair& pair)
     }
     CRD_FUZZ_REQUIRE(extensions() || (pair.client.counters().address_observations == 0U &&
                                       pair.server.counters().address_observations == 0U));
-    // Multipath is negotiated exactly when both ends offered it, and a QuicConnection peer sends neither MAX_PATH_ID
-    // nor PATH_STATUS, nor opens a path ID, while no client opens paths (RFC 10069; design S78). Each path ID's IDs
-    // stay within the peer's active_connection_id_limit.
+    // Multipath is negotiated exactly when both ends offered it, and a QuicConnection peer neither sends MAX_PATH_ID
+    // nor opens a path ID while no client opens paths (RFC 10069; design S78). Each path ID's IDs stay within the
+    // peer's active_connection_id_limit.
     for (const QuicConnection* end : {&pair.client, &pair.server})
     {
         CRD_FUZZ_REQUIRE(end->multipath() == (extensions() && end->peer_parameters_known()));
         CRD_FUZZ_REQUIRE(end->peer_max_path_id() == (end->multipath() ? kMaxPathId : 0U));
-        CRD_FUZZ_REQUIRE(end->peer_path_status() == QuicPeerPathStatus::Unknown);
         CRD_FUZZ_REQUIRE(end->counters().paths_opened == 0U);
         for (u64 path_id = 1U; path_id <= kMaxPathId; ++path_id)
         {
@@ -816,6 +815,28 @@ void check_observations(const Pair& pair)
             CRD_FUZZ_REQUIRE(end->local_cid_count(path_id) <= 4U); // config_for's active_connection_id_limit
         }
     }
+}
+
+// PATH_STATUS (RFC 10069 section 4.3): once what is owed has arrived, each end holds for every path ID the newest
+// status the other set (a lost frame sent again while newest, an older one never after it), or none.
+void check_path_statuses(Pair& pair)
+{
+    const auto agree = [&pair]
+    {
+        bool same = true;
+        for (u64 path_id = 0U; path_id <= kMaxPathId; ++path_id)
+        {
+            same = same && pair.client.peer_path_status(path_id) == pair.server.path_status(path_id) &&
+                   pair.server.peer_path_status(path_id) == pair.client.path_status(path_id);
+        }
+        return same;
+    };
+    const auto ended = [&pair]
+    {
+        return finished(pair.client) || finished(pair.server);
+    };
+    pair.settle_until(4096U, [&] { return agree() || ended(); });
+    CRD_FUZZ_REQUIRE(agree() || ended());
 }
 
 void transfer(Pair& pair)
@@ -1182,6 +1203,40 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             }
             continue;
         }
+        if (op == 0xF4U && at + 1U < script.size())
+        {
+            // One end's path choice and its status for a path ID from the next byte (RFC 10069 sections 3.3 and
+            // 4.3): bit 0 the end, bit 1 backup, bits 2 and 3 the path ID (kMaxPathId + 1 is above both limits), bits
+            // 4 and 5 the choice (2 and 3 are none). No path ID opens or closes here, so every ID space up to the
+            // end's limit is open. Anything refused changes nothing.
+            const u8 shape = script[++at];
+            QuicConnection& end = ((shape & 1U) == 0U) ? pair.client : pair.server;
+            const bool backup = (shape & 2U) != 0U;
+            const u64 path_id = (shape >> 2U) & 3U;
+            const auto choice = static_cast<QuicPathChoice>((shape >> 4U) & 3U);
+            const QuicPathChoice was = end.path_choice();
+            const bool valid = choice <= QuicPathChoice::Turns;
+            CRD_FUZZ_REQUIRE(end.set_path_choice(choice) == valid);
+            CRD_FUZZ_REQUIRE(end.path_choice() == (valid ? choice : was));
+            QuicPathStatusChange expected = QuicPathStatusChange::Set;
+            if (end.state() != QuicConnectionState::Established)
+            {
+                expected = QuicPathStatusChange::NotEstablished;
+            }
+            else if (!end.multipath())
+            {
+                expected = QuicPathStatusChange::NoMultipath;
+            }
+            else if (path_id > end.peer_max_path_id() || path_id > end.local_max_path_id())
+            {
+                expected = QuicPathStatusChange::NotOpen;
+            }
+            const QuicPathStatus held = end.path_status(path_id);
+            const QuicPathStatus wanted = backup ? QuicPathStatus::Backup : QuicPathStatus::Available;
+            CRD_FUZZ_REQUIRE(end.set_path_status(path_id, backup) == expected);
+            CRD_FUZZ_REQUIRE(end.path_status(path_id) == ((expected == QuicPathStatusChange::Set) ? wanted : held));
+            continue;
+        }
         if (op == 0xF8U && over_paths())
         {
             pair.held = (pair.held + 1U) % 8U;
@@ -1323,6 +1378,7 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
                 CRD_FUZZ_REQUIRE(follows() || (ended() && !proving(true)));
             }
         }
+        check_path_statuses(pair);
         check_observations(pair);
         exchange_datagrams(pair, offered ? 1U : 0U);
         stateless_reset(pair);
@@ -1670,6 +1726,12 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                             0x7EU, 0x7BU, 0x00U, 0x04U, 0x7EU, 0x7CU, 0x00U, 0x01U, 0x06U, 0x3EU, 0x00U,
                             0x00U, 0x00U, 0x00U, 0x00U, 0x04U, 0x7EU, 0x75U, 0x00U, 0x00U};
     sink.add("frames-multipath", multipath, sizeof(multipath));
+    // Path statuses with multipath: one refused before the handshake, then the client's backup for path ID 1 lost,
+    // the server's under the Turns choice, a path ID above both limits and a choice that is none, then path ID 0's.
+    const u8 statuses[] = {0x40U, 0xF4U, 0x06U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U,
+                           0x07U, 0xF4U, 0x06U, 0x02U, 0xF4U, 0x17U, 0x07U, 0x00U, 0xF4U, 0x0CU,
+                           0xF4U, 0x24U, 0x02U, 0x07U, 0xF4U, 0x02U, 0x00U, 0x07U, 0x00U, 0x00U};
+    sink.add("script-path-status", statuses, sizeof(statuses));
     // The client's own sockets and the preferred address with reports on: each new path is reported.
     u8 reported_own[sizeof(own)];
     std::memcpy(reported_own, own, sizeof(own));

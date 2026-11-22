@@ -295,6 +295,10 @@ public:
     Endpoint client_at{IpAddress::v4(198, 51, 100, 7), 50000U};
     Endpoint also_at;
     Endpoint socket_at[3];
+    // An extra delay each way for datagrams from or to the client's socket 0 to 3: paths of different RTTs (S78).
+    u64 socket_delay_ns[4] = {};
+    // Each end's sockets whose send would block (send()'s held_sockets, a bit per QuicPath::socket).
+    u32 held[2] = {};
     u32 down = 0U;
     u32 down_in = 0U;
     // The server's sockets (its paths' QuicPath::socket): a client datagram to `server_at[1]` reaches its socket 1 (a
@@ -317,7 +321,7 @@ public:
             for (usize guard = 0U; guard < 256U; ++guard)
             {
                 u8 out[kDatagram];
-                const usize size = m_ends[from]->send(Span<u8>(out, sizeof(out)), now);
+                const usize size = m_ends[from]->send(Span<u8>(out, sizeof(out)), now, held[from]);
                 if (size == 0U)
                 {
                     break;
@@ -386,17 +390,24 @@ public:
         }
         for (QuicConnection* const end : m_ends)
         {
-            const u64 timer = end->next_timer_ns();
+            // An end that held something back waits for its socket, served again a millisecond on as QuicHost's
+            // send_retry_ns serves it.
+            const u64 timer = (end->held_back() && end->next_timer_ns() <= now) ? now + kMs : end->next_timer_ns();
             next = (timer < next) ? timer : next;
         }
         return next;
     }
 
-    // Moves time to `at` and runs every arrival and timer due. A timer that stays due while nothing arrives is a
+    // Moves time to `at` and runs every arrival and timer due. A timer that stays due while nothing arrives now is a
     // connection that would spin its loop: the run fails.
     void run_at(u64 at)
     {
-        m_stalled = (at <= now && m_count == 0U) ? m_stalled + 1U : 0U;
+        bool arrives = false;
+        for (usize index = 0U; index < m_count; ++index)
+        {
+            arrives = arrives || m_flights[index].at <= now;
+        }
+        m_stalled = (at <= now && !arrives) ? m_stalled + 1U : 0U;
         REQUIRE(m_stalled < 64U);
         now = (at > now) ? at : now;
         for (usize index = 0U; index < m_count;)
@@ -569,7 +580,7 @@ private:
         std::memcpy(flight.bytes, datagram.data(), datagram.size());
         flight.size = datagram.size();
         const u64 jitter = (path[from].jitter_ns == 0U) ? 0U : rng.next() % path[from].jitter_ns;
-        flight.at = departs + path[from].delay_ns + jitter;
+        flight.at = departs + path[from].delay_ns + jitter + ((socket < 4U) ? socket_delay_ns[socket] : 0U);
         flight.to = 1U - from;
         flight.ecn = ecn;
         flight.socket = socket;
