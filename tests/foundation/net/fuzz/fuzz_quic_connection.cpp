@@ -726,6 +726,13 @@ struct Pair
     // ends every connection that neither confirms nor closes.
     void settle(usize events)
     {
+        settle_until(events, [this] { return established(); });
+    }
+
+    // The same until `done` holds after a delivery round, past the handshake: a challenge or frame the script lost
+    // is sent again on its timer.
+    template <typename Done> void settle_until(usize events, Done done)
+    {
         usize stalled = 0U;
         for (usize event = 0U; event < events; ++event)
         {
@@ -738,7 +745,7 @@ struct Pair
             }
             const u64 next =
                 (client.next_timer_ns() < server.next_timer_ns()) ? client.next_timer_ns() : server.next_timer_ns();
-            if (next == kNeverNs || established())
+            if (next == kNeverNs || done())
             {
                 return;
             }
@@ -1284,11 +1291,31 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         }
         transfer(pair);
         // A pair that carried its stream with neither end closed has the server sending to the client's address once
-        // what is owed has arrived (a client that reverted at the end sends from there now).
+        // what is owed has arrived (a client that reverted at the end sends from there now). Until then it is
+        // validating that address: a validation whose challenge or response the script lost, or whose packets came
+        // after their ID's retirement, ends on its next challenge (RFC 9000 section 8.2.1), and then it follows.
         if (over_paths() && !finished(pair.client) && !finished(pair.server))
         {
             pair.settle(1U);
-            CRD_FUZZ_REQUIRE(pair.server.path().peer == kClientPaths[pair.address_of(pair.client.path().socket)].peer);
+            const auto follows = [&pair]
+            {
+                return pair.server.path().peer == kClientPaths[pair.address_of(pair.client.path().socket)].peer;
+            };
+            const auto ended = [&pair] { return finished(pair.client) || finished(pair.server); };
+            if (!follows())
+            {
+                const QuicPaths& paths = pair.server.paths();
+                const Endpoint& client_at = kClientPaths[pair.address_of(pair.client.path().socket)].peer;
+                bool validating = false;
+                for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+                {
+                    validating = validating || (paths.used(slot) && paths.path(slot).peer == client_at &&
+                                                paths.validating(slot));
+                }
+                CRD_FUZZ_REQUIRE(validating);
+                pair.settle_until(256U, [&] { return follows() || ended(); });
+                CRD_FUZZ_REQUIRE(follows() || ended());
+            }
         }
         check_observations(pair);
         exchange_datagrams(pair, offered ? 1U : 0U);
