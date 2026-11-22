@@ -6085,17 +6085,17 @@ struct MultipathPair
     QuicConnection server;
     std::unique_ptr<Net> net;
 
-    // `sent_frames` sizes each end's frame ledger; `datagrams` offers DATAGRAM frames with their outcomes, and
-    // `redundant` that many redundant ones followed at once.
+    // `sent_frames` sizes each end's frame ledger; `datagrams` offers DATAGRAM frames, with their outcomes unless
+    // `outcomes` is false, and `redundant` that many redundant ones followed at once.
     explicit MultipathPair(u64 client_limit = 2U, u64 server_limit = 2U, bool disable_migration = false,
                            bool server_offers = true, u32 sent_frames = 1024U, bool datagrams = false,
-                           u32 redundant = 0U)
+                           u32 redundant = 0U, bool outcomes = true)
         : client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
           server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
-          client(allocator,
-                 made(QuicSide::Client, client_limit, true, false, client_host, sent_frames, datagrams, redundant)),
+          client(allocator, made(QuicSide::Client, client_limit, true, false, client_host, sent_frames, datagrams,
+                                 redundant, outcomes)),
           server(allocator, made(QuicSide::Server, server_limit, server_offers, disable_migration, server_host,
-                                 sent_frames, datagrams, redundant))
+                                 sent_frames, datagrams, redundant, outcomes))
     {
         REQUIRE(client.ready());
         REQUIRE(server.ready());
@@ -6111,7 +6111,7 @@ struct MultipathPair
     }
 
     QuicConnectionConfig made(QuicSide side, u64 limit, bool offers, bool disable_migration, Host& host,
-                              u32 sent_frames, bool datagrams, u32 redundant = 0U) const
+                              u32 sent_frames, bool datagrams, u32 redundant = 0U, bool outcomes = true) const
     {
         const usize seed = (side == QuicSide::Server) ? 1U : 0U;
         QuicConnectionConfig config = hosted(config_for(side, identity, QuicVersion::V1, seed), host, 4U);
@@ -6119,7 +6119,7 @@ struct MultipathPair
         config.sent_frames = sent_frames;
         if (datagrams)
         {
-            config.datagrams = datagram_limits(true);
+            config.datagrams = datagram_limits(outcomes);
             config.datagrams.redundant_count = redundant;
         }
         config.parameters.has_initial_max_path_id = offers;
@@ -8386,46 +8386,43 @@ TEST_CASE("QUIC connection: a backlog pinned to a path that yields its data grow
           "window and pacer as data, not by the application",
           "[net][net-path][quic-connection][multipath]")
 {
-    // Path ID 1 is 30 ms slower each way, so under LowestRtt it yields its data; a full queue pinned to it keeps its
-    // window the limit, which slow start then grows (RFC 9002 section 7.8).
-    MultipathPair pair(2U, 2U, false, true, 256U, true);
+    // Path ID 1 is 30 ms slower each way, so under LowestRtt it yields its data; a queue kept full pinned to it (no
+    // outcomes, so nothing but the ring holds the application back) keeps its window and pacer the limit, which slow
+    // start then grows (RFC 9002 section 7.8), and never marks its delivery rate application-limited.
+    MultipathPair pair(2U, 2U, false, true, 256U, true, 0U, false);
     pair.net->socket_delay_ns[1] = 30U * kMs;
     pair.open_second();
     QuicConnection& client = pair.client;
     const QuicPathControl& slow = *client.path_control(1U);
     const u64 initial = slow.congestion().window();
-    constexpr usize kBulk = 1000U;
-    u8 payload[kBulk] = {};
+    constexpr usize bulk_bytes = 1000U;
+    u8 payload[bulk_bytes] = {};
     usize received = 0U;
-    usize lost = 0U;
+    bool marked = false; // the slow path's delivery rate marked application-limited once a round trip has passed
     const u64 start_ns = pair.net->now;
     const bool grown = pair.net->run_until(
         [&]
         {
+            marked = marked || (pair.net->now > start_ns + 200U * kMs && slow.delivery().app_limited());
             u64 id = 0U;
-            while (client.datagrams().queue(ConstSpan<u8>(payload, kBulk), pair.net->now, id, pinned_to(1U)) ==
+            while (client.datagrams().queue(ConstSpan<u8>(payload, bulk_bytes), pair.net->now, id, pinned_to(1U)) ==
                    QuicDatagramError::None)
             {
             }
             ConstSpan<u8> held;
             while (pair.server.datagrams().peek(held))
             {
-                REQUIRE(held.size() == kBulk);
+                REQUIRE(held.size() == bulk_bytes);
                 ++received;
                 pair.server.datagrams().pop();
             }
-            QuicDatagramReport report;
-            while (client.datagrams().poll(report))
-            {
-                lost += (report.outcome == QuicDatagramOutcome::Lost) ? 1U : 0U;
-            }
-            return slow.congestion().window() >= 4U * initial;
+            return pair.net->now >= start_ns + 1000U * kMs;
         },
-        3000U * kMs);
-    INFO("window " << slow.congestion().window() << " from " << initial << " after " << (pair.net->now - start_ns) / kMs
-                   << " ms");
+        2000U * kMs);
+    INFO("window " << slow.congestion().window() << " from " << initial);
     CHECK(grown);
+    CHECK(slow.congestion().window() >= 4U * initial);
+    CHECK_FALSE(marked);
     CHECK(received != 0U);
-    CHECK(lost == 0U);
     CHECK(client.state() == QuicConnectionState::Established);
 }

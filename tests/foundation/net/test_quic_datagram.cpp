@@ -1067,6 +1067,26 @@ TEST_CASE("QUIC datagrams: a pinned datagram goes only on its path ID's slot, ev
         }
         CHECK(datagrams.unreported() == 0U);
         CHECK(datagrams.counters().unrouted == 2U);
+
+        // Behind a plain one that a yielding slot passes by, one pinned to the other slot is still not its own.
+        REQUIRE(put(datagrams, 8U, 13U, 0U) == QuicDatagramError::None);
+        REQUIRE(put(datagrams, 9U, 14U, 0U, pinned_to(6U)) == QuicDatagramError::None);
+        REQUIRE(put(datagrams, 10U, 15U, 0U, pinned_to(0U)) == QuicDatagramError::None);
+        const u64 tenth = sends(datagrams, on(0U, kBoth, true), 0U, 10U, 15U);
+        nothing(datagrams, on(0U, kBoth, true), 0U);
+        const u64 eighth = sends(datagrams, on(0U, kBoth), 0U, 8U, 13U);
+        nothing(datagrams, on(0U, kBoth), 0U);
+        const u64 ninth = sends(datagrams, on(1U, kBoth, true), 0U, 9U, 14U);
+        CHECK(datagrams.queued() == 0U);
+        for (const u64 ticket : {eighth, ninth, tenth})
+        {
+            datagrams.on_acked(ticket);
+        }
+        for (u64 id = 8U; id <= 10U && outcomes; ++id)
+        {
+            reported(datagrams, id, QuicDatagramOutcome::Acked);
+        }
+        CHECK(datagrams.unreported() == 0U);
     }
 }
 

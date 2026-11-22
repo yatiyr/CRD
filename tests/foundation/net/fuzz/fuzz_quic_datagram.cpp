@@ -257,10 +257,11 @@ private:
         for (u64 id = m_front; id < m_queued; ++id)
         {
             const Datagram& datagram = m_datagrams[id];
-            const bool writable =
-                (datagram.written == 0U)
-                    ? (datagram.pin == kNoPin ? !paths.copies_only : datagram.pin == paths.slot)
-                    : (datagram.redundant && (datagram.written & bit) == 0U && (paths.copies & bit) != 0U);
+            bool writable = datagram.redundant && (datagram.written & bit) == 0U && (paths.copies & bit) != 0U;
+            if (datagram.written == 0U)
+            {
+                writable = (datagram.pin == kNoPin) ? !paths.copies_only : datagram.pin == paths.slot;
+            }
             if (writable && !expired(datagram))
             {
                 return id;
