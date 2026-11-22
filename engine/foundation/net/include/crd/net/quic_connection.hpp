@@ -91,15 +91,18 @@
 //              validates the 4-tuple it came from and sends no data there before (section 3.1); every packet of a
 //              path ID is read, acknowledged in PATH_ACK frames and answered in its slot. The peer's frames are read
 //              under this side's limit: a path ID above it is PROTOCOL_VIOLATION (section 4), as is a PATH_ACK of a
-//              path ID whose number space never opened; one whose state is gone is ignored. MAX_PATH_ID raises the
-//              peer's limit only, PATH_STATUS keeps the newest status (peer_path_status()), the two BLOCKED frames are
-//              checked and inform. Any path ID, 0 included, is abandoned by either end (abandon_path(), the peer's
-//              PATH_ABANDON, or its validation failing): both ends send PATH_ABANDON, its slot sends nothing more and
-//              its ID space retires the peer's IDs, its stragglers are read and acknowledged on other paths, and its
-//              slot and ID space close three PTOs later (section 3.4; QuicPathAbandon). Once path ID 0 is abandoned
-//              the lowest path slot still sending leads (path(), the close); the peer's PATH_ABANDON of the last path
-//              still sending closes the connection, and a last path whose validation fails ends it silently. Without
-//              negotiation every one is an unknown frame: FRAME_ENCODING_ERROR.
+//              path ID whose number space never opened; one whose state is gone is ignored. The peer's MAX_PATH_ID
+//              raises its limit; this side's (local_max_path_id()) rises by one as each path ID closes, the closed
+//              one's ID space opening the next and a MAX_PATH_ID owed (sections 3.2.1 and 4.6), so that 1 +
+//              initial_max_path_id path IDs stay open for good. PATH_STATUS keeps the newest status
+//              (peer_path_status()), the two BLOCKED frames are checked and inform. Any path ID, 0 included, is
+//              abandoned by either end (abandon_path(), the peer's PATH_ABANDON, or its validation failing): both ends
+//              send PATH_ABANDON, its slot sends nothing more and its ID space retires the peer's IDs, its stragglers
+//              are read and acknowledged on other paths, and its slot and ID space close three PTOs later (section 3.4;
+//              QuicPathAbandon). Once path ID 0 is abandoned the lowest path slot still sending leads (path(), the
+//              close); the peer's PATH_ABANDON of the last path still sending closes the connection, and a last path
+//              whose validation fails ends it silently. Without negotiation every one is an unknown frame:
+//              FRAME_ENCODING_ERROR.
 //   IDs        both ends' IDs are held in QuicCids (quic_connection_ids.hpp), one sequence space per path ID; this
 //              side's come from the host (QuicConnectionIds), which routes them and derives their stateless reset
 //              tokens from its QuicResetKey: after confirmation the peer is kept at its
@@ -574,6 +577,8 @@ public:
     [[nodiscard]] bool multipath() const noexcept { return m_multipath; }
     // The largest path ID the peer accepts (its initial_max_path_id, raised by MAX_PATH_ID), once multipath().
     [[nodiscard]] u64 peer_max_path_id() const noexcept { return m_peer_max_path_id; }
+    // The largest path ID this side accepts: its initial_max_path_id, raised by one for each path ID that closes.
+    [[nodiscard]] u64 local_max_path_id() const noexcept { return m_local_max_path_id; }
     // The peer's preference for `path_id`, its newest PATH_STATUS frame's (section 3.3): Unknown before one.
     [[nodiscard]] QuicPeerPathStatus peer_path_status(u64 path_id = 0U) const noexcept;
     // `path_id`'s abandonment while its state is kept (section 3.4); null for a path ID not abandoned or closed.
@@ -974,7 +979,9 @@ private:
     bool m_peer_known = false;
     bool m_multipath = false;    // both ends offered initial_max_path_id (RFC 10069 section 2)
     u64 m_peer_max_path_id = 0U; // the largest path ID the peer accepts
-    bool m_paths_blocked_owed = false; // a client's PATHS_BLOCKED at that limit (RFC 10069 section 4.7)
+    u64 m_local_max_path_id = 0U;      // the largest path ID this side accepts
+    bool m_max_path_id_owed = false;   // a MAX_PATH_ID at this side's limit (RFC 10069 section 4.6)
+    bool m_paths_blocked_owed = false; // a client's PATHS_BLOCKED at the peer's limit (RFC 10069 section 4.7)
     u64 m_cids_blocked = 0U;           // a client's PATH_CIDS_BLOCKED owed for this path ID (0: none)
     // The peer's newest PATH_STATUS frame per path ID (section 4.3), for any path ID under this side's limit, open
     // or not yet: an entry whose status is Unknown is free.

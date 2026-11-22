@@ -164,6 +164,19 @@ QuicCidSpace* QuicCids::close(u64 path_id) noexcept
     return nullptr;
 }
 
+u64 QuicCids::open_after(u64 path_id) const noexcept
+{
+    u64 next = kQuicNoSequence;
+    for (const QuicCidSpace* held : m_spaces)
+    {
+        if (held != nullptr && held->m_path_id > path_id && held->m_path_id < next)
+        {
+            next = held->m_path_id;
+        }
+    }
+    return next;
+}
+
 bool QuicCids::abandon(u64 path_id) noexcept
 {
     QuicCidSpace* target = space(path_id);

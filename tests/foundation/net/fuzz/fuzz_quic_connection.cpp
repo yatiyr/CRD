@@ -205,13 +205,14 @@ struct Host
         CRD_FUZZ_REQUIRE(routes.insert(sequence0, index) == RouteError::None);
     }
 
-    // The host routes exactly the IDs its connection holds for every path ID (sequence 0 is routed until the
-    // connection is accepted).
+    // The host routes exactly the IDs its connection holds for every path ID up to its limit, which rises as path IDs
+    // close (sequence 0 is routed until the connection is accepted).
     void check(const QuicConnection& end) const
     {
         usize local = 0U;
         usize peer = 0U;
-        for (u64 path_id = 0U; path_id <= kMaxPathId; ++path_id)
+        const u64 limit = (end.local_max_path_id() > kMaxPathId) ? end.local_max_path_id() : kMaxPathId;
+        for (u64 path_id = 0U; path_id <= limit; ++path_id)
         {
             local += end.local_cid_count(path_id);
             peer += end.peer_cid_count(path_id);

@@ -23,6 +23,7 @@ constexpr u8 kRecordObserved = 8U;   // an OBSERVED_ADDRESS frame: value is its 
 constexpr u8 kRecordPathsBlocked = 9U;     // a PATHS_BLOCKED frame: value is its Maximum Path Identifier
 constexpr u8 kRecordPathCidsBlocked = 10U; // a PATH_CIDS_BLOCKED frame: value is its sequence, stream_id its path ID
 constexpr u8 kRecordPathAbandon = 11U;     // a PATH_ABANDON frame: stream_id is its path ID
+constexpr u8 kRecordMaxPathId = 12U;       // a MAX_PATH_ID frame: value is its Maximum Path Identifier
 constexpr u32 kNoRecord = ~u32{0};
 constexpr u64 kNsPerMs = 1000000U;
 constexpr u64 kCryptoFrameType = 0x06U;
@@ -1348,9 +1349,9 @@ bool QuicConnection::multipath_frame(const QuicFrame& frame, QuicSpace space, u6
         fail(QuicTransportError::FrameEncodingError, 0U, now_ns);
         return false;
     }
-    // This side's limit is its initial_max_path_id: it sends no MAX_PATH_ID until paths open (design S78). A path ID
-    // above it, or a PATHS_BLOCKED frame naming a larger one, is PROTOCOL_VIOLATION (sections 4 and 4.7).
-    const u64 local_max = m_local.initial_max_path_id;
+    // This side's limit, raised as path IDs close (design S78): a path ID above it, or a PATHS_BLOCKED frame naming a
+    // larger one, is PROTOCOL_VIOLATION (sections 4 and 4.7).
+    const u64 local_max = m_local_max_path_id;
     bool above = frame.path_id > local_max;
     if (frame.kind == QuicFrameKind::PathsBlocked)
     {
@@ -1403,12 +1404,14 @@ bool QuicConnection::multipath_frame(const QuicFrame& frame, QuicSpace space, u6
         case QuicFrameKind::PathRetireConnectionId:
             return retire_local(frame.path_id, frame.sequence, now_ns);
         case QuicFrameKind::MaxPathId:
-            // A frame that does not raise the limit is late or repeated, and ignored (section 4.6).
+            // A frame that does not raise the limit is late or repeated, and ignored (section 4.6); one that does ends
+            // a PATHS_BLOCKED owed at the old limit.
+            m_paths_blocked_owed = m_paths_blocked_owed && frame.value <= m_peer_max_path_id;
             m_peer_max_path_id = max_u64(m_peer_max_path_id, frame.value);
             return true;
         case QuicFrameKind::PathsBlocked:
             ++m_counters.paths_blocked;
-            return true; // informs only (section 4.7); this side's limit rises when paths open
+            return true; // informs only (section 4.7); this side's limit rises as path IDs close
         case QuicFrameKind::PathCidsBlocked:
             // Informs only, but may not name a sequence this side has not reached (section 4.7); IDs are topped up
             // to the peer's limit whenever one is retired. A path ID abandoned or closed is ignored (section 4).
@@ -1614,6 +1617,7 @@ bool QuicConnection::read_peer_parameters(cont::ConstSpan<u8> encoded, u64 now_n
     m_peer_known = true;
     m_multipath = quic_multipath_negotiated(m_local, m_peer);
     m_peer_max_path_id = m_multipath ? m_peer.initial_max_path_id : 0U;
+    m_local_max_path_id = m_multipath ? m_local.initial_max_path_id : 0U;
     open_id_spaces();
     apply_peer_limits(m_peer);
     m_recovery->set_peer_parameters(m_peer.max_ack_delay * kNsPerMs, m_peer.ack_delay_exponent, now_ns);
@@ -1696,7 +1700,8 @@ void QuicConnection::issue_local_ids() noexcept
 
 void QuicConnection::open_id_spaces() noexcept
 {
-    // Rising path IDs from 1, one ID space of the pool each: within kQuicMaxPaths, never consumed before.
+    // Rising path IDs from 1, one ID space of the pool each: within kQuicMaxPaths, never consumed before. A path ID
+    // that closes hands its storage to the next one (close_abandoned).
     for (u64 path_id = 1U; m_multipath && m_slots != nullptr && path_id <= m_local.initial_max_path_id; ++path_id)
     {
         static_cast<void>(m_cids.open(path_id, m_slots[path_id - 1U].ids));
@@ -1929,8 +1934,9 @@ bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
         abandon_owed = abandon_owed || (entry.owed && slot_of(entry.path_id) != send_slot());
     }
     return m_handshake_done_owed || m_ping_owed || m_probe_fill || m_cids.retirement_owed() ||
-           (m_frame_count < m_config.sent_frames && (m_streams.has_frame() || m_cids.local_owed() || m_new_token_owed ||
-                                                     m_paths_blocked_owed || m_cids_blocked != 0U || abandon_owed)) ||
+           (m_frame_count < m_config.sent_frames &&
+            (m_streams.has_frame() || m_cids.local_owed() || m_new_token_owed || m_max_path_id_owed ||
+             m_paths_blocked_owed || m_cids_blocked != 0U || abandon_owed)) ||
            datagram_ready(now_ns);
 }
 
@@ -2103,6 +2109,12 @@ void QuicConnection::settle(QuicSpace space, const QuicSentPacket& packet, Settl
                     m_new_token_owed = !m_new_token_acked && (m_new_token_owed || how == Settle::Lost);
                 }
             }
+            else if (frame.kind == kRecordMaxPathId)
+            {
+                // Sent again when lost unless a larger limit went since (RFC 10069 section 4.6).
+                m_max_path_id_owed =
+                    m_max_path_id_owed || (how == Settle::Lost && frame.frame.value == m_local_max_path_id);
+            }
             else if (frame.kind == kRecordPathsBlocked)
             {
                 // Sent again only while the server's limit stands (RFC 10069 section 4.7, as RFC 9000 section 13.3).
@@ -2250,6 +2262,19 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
                 generation.value = m_new_token_generation;
                 static_cast<void>(record(space, packet, kRecordNewToken, generation, written));
                 m_new_token_owed = false;
+            }
+        }
+        if (m_max_path_id_owed && m_frame_count < m_config.sent_frames)
+        {
+            QuicFrame raised;
+            raised.kind = QuicFrameKind::MaxPathId;
+            raised.value = m_local_max_path_id;
+            if (put(raised))
+            {
+                QuicStreamRecord limit;
+                limit.value = raised.value;
+                static_cast<void>(record(space, packet, kRecordMaxPathId, limit, written));
+                m_max_path_id_owed = false;
             }
         }
         if (m_paths_blocked_owed && m_frame_count < m_config.sent_frames)
@@ -3787,7 +3812,7 @@ usize QuicConnection::free_slot() const noexcept
 
 bool QuicConnection::claim_slot(usize slot, u64 path_id, const QuicPath& from, u64 now_ns) noexcept
 {
-    // The path ID is at most this side's limit, below kQuicMaxPaths: it fits the nonce's 32 bits.
+    // The path ID is at most this side's limit, at most 2^32 - 1: it fits the nonce's 32 bits (section 2.4).
     if (!m_protection.open_path(slot, static_cast<u32>(path_id)))
     {
         return false;
@@ -3831,13 +3856,15 @@ QuicMigration QuicConnection::add_path(const QuicPath& path, u64 now_ns, u64& pa
     }
     // Path IDs are taken in rising order (section 3.2.1); one unused is open in no slot, its ID space open and not
     // abandoned (a closed or abandoned one is consumed). The first with IDs both ways is opened.
-    const u64 limit = min_u64(m_local.initial_max_path_id, m_peer_max_path_id);
+    // The open ID spaces are walked, at most kQuicMaxPaths however far the limits have risen.
+    const u64 limit = min_u64(m_local_max_path_id, m_peer_max_path_id);
     u64 unaddressed = 0U;  // the smallest unused one without an ID of the server's
     bool unissued = false; // an unused one without an ID of this side's
     u64 chosen = 0U;
-    for (u64 candidate = 1U; candidate <= limit && chosen == 0U; ++candidate)
+    for (u64 candidate = m_cids.open_after(0U); candidate <= limit && chosen == 0U;
+         candidate = m_cids.open_after(candidate))
     {
-        if (slot_of(candidate) != kQuicNoPath || !m_cids.is_open(candidate) || m_cids.abandoned(candidate))
+        if (slot_of(candidate) != kQuicNoPath || m_cids.abandoned(candidate))
         {
             continue;
         }
@@ -3856,7 +3883,7 @@ QuicMigration QuicConnection::add_path(const QuicPath& path, u64 now_ns, u64& pa
             m_cids_blocked = (unaddressed != 0U) ? unaddressed : m_cids_blocked;
             return QuicMigration::NoConnectionId;
         }
-        m_paths_blocked_owed = m_paths_blocked_owed || m_peer_max_path_id < m_local.initial_max_path_id;
+        m_paths_blocked_owed = m_paths_blocked_owed || m_peer_max_path_id < m_local_max_path_id;
         return QuicMigration::NoPathId;
     }
     const usize slot = free_slot();
@@ -4057,8 +4084,17 @@ void QuicConnection::close_abandoned(u64 now_ns) noexcept
             }
             m_numbers[number_space(QuicSpace::Application, slot)] = Numbering{};
         }
-        // Its IDs unrouted; the storage stays the slot pool's, for the path IDs a raised MAX_PATH_ID opens.
-        static_cast<void>(m_cids.close(entry.path_id));
+        // Its IDs unrouted, its storage opens the path ID past this side's limit, which MAX_PATH_ID raises (sections
+        // 3.2.1 and 4.6): 1 + initial_max_path_id path IDs stay open. The handshake slot is never reclaimed, so path
+        // ID 0's close raises it only while a further slot is spare for the new path ID.
+        QuicCidSpace* const storage = m_cids.close(entry.path_id);
+        const bool spare = entry.path_id != 0U || m_local.initial_max_path_id < kFurtherSlots;
+        if (storage != nullptr && spare && m_local_max_path_id < kQuicMaxPathId &&
+            m_cids.open(m_local_max_path_id + 1U, *storage))
+        {
+            ++m_local_max_path_id;
+            m_max_path_id_owed = true;
+        }
         for (PeerStatus& status : m_peer_statuses)
         {
             if (status.status != QuicPeerPathStatus::Unknown && status.path_id == entry.path_id)

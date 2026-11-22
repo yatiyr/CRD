@@ -177,6 +177,9 @@ public:
     // is not open.
     [[nodiscard]] QuicCidSpace* close(u64 path_id) noexcept;
     [[nodiscard]] bool is_open(u64 path_id) const noexcept { return space(path_id) != nullptr; }
+    // The smallest path ID above `path_id` whose space is open (kQuicNoSequence for none): the open ones in rising
+    // order, at most kQuicMaxPaths however far the limits have risen.
+    [[nodiscard]] u64 open_after(u64 path_id) const noexcept;
     // Abandons `path_id`'s open space (RFC 10069 section 3.4): the peer's IDs there are retired at once, their tokens
     // counting no more and no retirement frame owed for them (the PATH_ABANDON frame retires them), and the peer's
     // frames for it are ignored from now on (section 4). This side's IDs stay routed and find() names them until
