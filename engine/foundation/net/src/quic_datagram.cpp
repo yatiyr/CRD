@@ -118,10 +118,10 @@ bool QuicDatagrams::limits_valid(const QuicDatagramLimits& limits) noexcept
                                         limits.receive_count != 0U && limits.receive_count <= kQuicMaxDatagramCount)
                                      : (limits.receive_bytes == 0U && limits.receive_count == 0U);
     const bool sends = limits.send_bytes != 0U;
-    const bool send_ok = sends ? (limits.send_bytes <= kQuicMaxDatagramRing && limits.send_count != 0U &&
-                                  limits.send_count <= kQuicMaxDatagramCount &&
-                                  limits.redundant_count <= limits.send_count)
-                               : (limits.send_count == 0U && !limits.outcomes && limits.redundant_count == 0U);
+    const bool send_ok =
+        sends ? (limits.send_bytes <= kQuicMaxDatagramRing && limits.send_count != 0U &&
+                 limits.send_count <= kQuicMaxDatagramCount && limits.redundant_count <= limits.send_count)
+              : (limits.send_count == 0U && !limits.outcomes && limits.redundant_count == 0U);
     return receive_ok && send_ok;
 }
 

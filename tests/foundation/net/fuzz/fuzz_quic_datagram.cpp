@@ -249,8 +249,8 @@ private:
             {
                 return kIds;
             }
-            const bool writable = datagram.written == 0U || (datagram.redundant && (datagram.written & bit) == 0U &&
-                                                              (paths.copies & bit) != 0U);
+            const bool writable = datagram.written == 0U ||
+                                  (datagram.redundant && (datagram.written & bit) == 0U && (paths.copies & bit) != 0U);
             if (writable && !expired(datagram))
             {
                 return id;
@@ -265,8 +265,10 @@ private:
         for (u64 id = 0U; id < m_queued; ++id)
         {
             const Datagram& datagram = m_datagrams[id];
+            // With outcomes, until its report is polled; without, while it is queued unsent or redundant.
             const bool held = id >= m_front && (datagram.written == 0U || datagram.redundant);
-            count += (m_limits.outcomes ? !datagram.polled : held) ? 1U : 0U;
+            const bool counted = m_limits.outcomes ? !datagram.polled : held;
+            count += counted ? 1U : 0U;
         }
         return count;
     }

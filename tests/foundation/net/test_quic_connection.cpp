@@ -7916,6 +7916,17 @@ struct Arrivals
             to.datagrams().pop();
         }
     }
+
+    // Whether datagrams `first` to `last` (excluded) each arrived `times` times.
+    [[nodiscard]] bool each(usize first, usize last, usize times) const
+    {
+        usize matched = 0U;
+        for (usize id = first; id < last; ++id)
+        {
+            matched += (copies[id] == times) ? 1U : 0U;
+        }
+        return matched == last - first;
+    }
 };
 
 void queue_redundant(QuicConnection& from, usize id, u64 now_ns)
@@ -8000,12 +8011,7 @@ TEST_CASE("QUIC connection: a redundant datagram crosses every path carrying dat
         [&]
         {
             settle();
-            bool all = true;
-            for (usize id = 0U; id < 12U; ++id)
-            {
-                all = all && arrivals.copies[id] == 2U;
-            }
-            return all;
+            return arrivals.each(0U, 12U, 2U);
         }));
     CHECK(client.datagrams().counters().copies == 12U);
     CHECK(client.datagrams().queued() == 0U);
@@ -8026,9 +8032,6 @@ TEST_CASE("QUIC connection: a redundant datagram crosses every path carrying dat
     voice(20U, 23U, 51U * kMs, false);
     REQUIRE(pair.net->run_until([&] { return client.recovery().pto_count(0U) != 0U; }));
     voice(23U, Arrivals::kCount, 51U * kMs, true);
-    for (usize id = 12U; id < Arrivals::kCount; ++id)
-    {
-        CHECK(arrivals.copies[id] == 1U);
-    }
+    CHECK(arrivals.each(12U, Arrivals::kCount, 1U));
     CHECK(client.state() == QuicConnectionState::Established);
 }

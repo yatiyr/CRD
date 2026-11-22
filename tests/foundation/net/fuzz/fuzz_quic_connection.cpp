@@ -36,8 +36,9 @@
 // error of RFC 9000 section 20.1 (or RFC 9368's) or CRYPTO_ERROR when this side closes. Script: after the clean path,
 // both ends are confirmed or one has closed (no handshake hangs), and a confirmed pair agrees on the application
 // protocol, and then carries a stream larger than every window whole and unchanged and datagrams (every other one
-// redundant, sent once on its one path) each at most once, byte-exact and each reported once (or one side closes). Frames: the server, which grants streams and takes datagrams of
-// up to 600 bytes, stays Established (Handshaking for Initial frames) or closes; a closed server sends a
+// redundant, sent once on its one path) each at most once, byte-exact and each reported once (or one side closes).
+// Frames: the server, which grants streams and takes datagrams of up to 600 bytes, stays Established (Handshaking
+// for Initial frames) or closes; a closed server sends a
 // CONNECTION_CLOSE only. Both modes route each end's own IDs through a host (QuicRoutedIds): its table holds exactly
 // the IDs its connection holds, after every step; a script byte 0xFE rotates the server's IDs; and a confirmed client
 // that a stateless reset of the ID it sends to reaches drains, while a forged token changes nothing. A confirmed pair
