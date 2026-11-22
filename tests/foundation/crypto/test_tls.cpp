@@ -1906,8 +1906,9 @@ TEST_CASE("TLS: a ticket changed at rest or past its lifetime runs a full handsh
     SECTION("a ticket past its lifetime, or from the future, is not offered")
     {
         // A resumption keeps the longer of the ticket's remaining lifetime and the configured one, so a new key
-        // forces the full handshake whose ticket lives one second. The ticket comes at a pinned second, which both
-        // TLS and the provider read (WallClock::pin).
+        // forces the full handshake whose ticket lives one second. It comes at a pinned second, which both TLS and the
+        // provider read (WallClock::pin): this year's, and one past 2038, when a 32-bit second (the provider's
+        // callback's on Windows) has run out.
         u8 other_key[kTlsTicketKeyBytes];
         fill_key(other_key, 0x99U);
         server_context(server.context, server.credential, [&](TlsConfig& c) {
@@ -1915,30 +1916,36 @@ TEST_CASE("TLS: a ticket changed at rest or past its lifetime runs a full handsh
             c.ticket_lifetime = 1U;
         });
         crd::crypto::test::PinnedWallClock clock;
-        constexpr u64                      kPinned = crd::crypto::test::kPinnedUnixSeconds;
-        CHECK_FALSE(resume(client, server, store));
-        REQUIRE(store.size() == 1U);
-        const Bytes      kept    = store.ticket(0U);
-        const TlsBinding binding = store.binding(0U);
-        // Its last second, a second past it and a second before it came (a client clock that stepped back).
-        struct Moment
+        constexpr u64 kBases[] = {crd::crypto::test::kPinnedUnixSeconds, 2'200'000'000U};
+        for (const u64 base : kBases)
         {
-            u64  seconds;
-            bool offered;
-        };
-        constexpr Moment moments[] = {{kPinned, true}, {kPinned + 2U, false}, {kPinned - 1U, false}};
-        for (const Moment& moment : moments)
-        {
-            CAPTURE(moment.seconds);
-            Store held;
-            held.keep(binding, ConstSpan<u8>(kept.data(), kept.size()));
-            clock.set(moment.seconds);
-            reconnect(client, server, &held);
-            Bytes flights[8];
-            (void)run_flights(client, server, flights);
-            CHECK(read_psk(flights[0]).offered == moment.offered);
-            CHECK(client.session.state() == TlsState::Established);
-            CHECK(client.session.resumed() == moment.offered);
+            CAPTURE(base);
+            clock.set(base);
+            Store fresh;
+            CHECK_FALSE(resume(client, server, fresh));
+            REQUIRE(fresh.size() == 1U);
+            const Bytes kept = fresh.ticket(0U);
+            const TlsBinding binding = fresh.binding(0U);
+            // Its last second, a second past it and a second before it came (a client clock that stepped back).
+            struct Moment
+            {
+                u64 seconds;
+                bool offered;
+            };
+            const Moment moments[] = {{base, true}, {base + 2U, false}, {base - 1U, false}};
+            for (const Moment& moment : moments)
+            {
+                CAPTURE(moment.seconds);
+                Store held;
+                held.keep(binding, ConstSpan<u8>(kept.data(), kept.size()));
+                clock.set(moment.seconds);
+                reconnect(client, server, &held);
+                Bytes flights[8];
+                (void)run_flights(client, server, flights);
+                CHECK(read_psk(flights[0]).offered == moment.offered);
+                CHECK(client.session.state() == TlsState::Established);
+                CHECK(client.session.resumed() == moment.offered);
+            }
         }
     }
 }

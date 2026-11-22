@@ -45,9 +45,11 @@
 
 #include <crd/compression/deflate.hpp>
 #include <crd/compression/zstd.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/crypto/hpke.hpp>
 #include <crd/crypto/key_store.hpp>
 #include <crd/crypto/replay.hpp>
+#include <crd/time/clocks.hpp>
 
 #include <openssl/aead.h>
 #include <openssl/asn1.h>
@@ -62,9 +64,6 @@
 #include <openssl/pool.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
-
-#include <crd/core/platform.hpp>
-#include <crd/time/clocks.hpp>
 
 #include <algorithm>
 #include <climits>
@@ -631,16 +630,20 @@ using ProviderTimeval = timeval;
 
 // The provider's clock, which its ticket lifetimes and ages read (each context's current time callback): the same
 // wall clock, so a pinned one moves both, and a ticket Cerid's checks see as valid is never one the provider drops as
-// from the future.
+// from the future. It counts from 2020-01-01: the provider only compares its own readings (a session's time with now),
+// and the callback's seconds are a 32-bit long on Windows, which from there last until 2088 rather than 2038. Every
+// platform counts so, as a fleet of mixed servers opens the times inside each other's tickets.
+constexpr i64 kProviderEpochNs = 1'577'836'800'000'000'000;
+
 void provider_time(const SSL*, timeval* out) noexcept
 {
-    using Seconds         = decltype(ProviderTimeval{}.tv_sec);
-    const i64       now   = time::WallClock::now().ns_since_epoch();
-    const i64       at    = now > 0 ? now : 0;
-    const i64       most  = static_cast<i64>(std::numeric_limits<Seconds>::max());
+    using Seconds = decltype(ProviderTimeval{}.tv_sec);
+    const i64 now = time::WallClock::now().ns_since_epoch();
+    const i64 at = now > kProviderEpochNs ? now - kProviderEpochNs : 0;
+    const i64 most = static_cast<i64>(std::numeric_limits<Seconds>::max());
     ProviderTimeval clock = {};
-    clock.tv_sec          = static_cast<Seconds>(std::min(at / 1'000'000'000, most));
-    clock.tv_usec         = static_cast<decltype(clock.tv_usec)>((at % 1'000'000'000) / 1'000);
+    clock.tv_sec = static_cast<Seconds>(std::min(at / 1'000'000'000, most));
+    clock.tv_usec = static_cast<decltype(clock.tv_usec)>((at % 1'000'000'000) / 1'000);
     std::memcpy(static_cast<void*>(out), &clock, sizeof(clock));
 }
 

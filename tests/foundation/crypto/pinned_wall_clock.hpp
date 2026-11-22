@@ -14,10 +14,10 @@ class PinnedWallClock
 public:
     explicit PinnedWallClock(u64 seconds = kPinnedUnixSeconds) noexcept { set(seconds); }
     ~PinnedWallClock() { time::WallClock::unpin(); }
-    PinnedWallClock(const PinnedWallClock&)            = delete;
+    PinnedWallClock(const PinnedWallClock&) = delete;
     PinnedWallClock& operator=(const PinnedWallClock&) = delete;
-    PinnedWallClock(PinnedWallClock&&)                 = delete;
-    PinnedWallClock& operator=(PinnedWallClock&&)      = delete;
+    PinnedWallClock(PinnedWallClock&&) = delete;
+    PinnedWallClock& operator=(PinnedWallClock&&) = delete;
 
     void set(u64 seconds) noexcept { time::WallClock::pin(time::Instant{static_cast<i64>(seconds) * 1'000'000'000}); }
 };
