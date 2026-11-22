@@ -11,7 +11,9 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: S78's Lifecycle bullet in
 Fuzz host-check 45043107595 (ccc35d64) passed. CI 45044166180 (310a45be) had one red so far: linux-gcc-debug lost its
 pinned Ninja to an HTTP 403 from GitHub's release host while the run's other jobs fetched the same file. `pins.py` now
 retries a 403 that names a wait or a spent limit (`Retry-After`, `X-RateLimit-Remaining: 0`), any other 403 stays
-final, and a final failure prints its URL; the retry test covers both arms.
+final, and a final failure prints its URL and both headers; the retry test covers both arms. Whether that 403
+carried either header is not known, so the retry may not have covered it; the next one will say. Its win-tidy red
+(`kPinned`, `kBases`) was fixed upstream by f3e88cde.
 
 ## What landed
 
@@ -30,15 +32,22 @@ ID at once (16 here). Every validation now starts through `validate_path()`:
 
 ## Evidence
 
-- New RawRun case: path IDs 1 and 2 open from two addresses, path ID 0 is probed three times from a third and rebinds
-  to a fourth; the old address and path ID 3 on it are challenged at once; a second rebinding's challenge waits for
-  the earliest turn exactly, its deadline one timeout later, validates, and at most kQuicMaxPaths run at every step.
-- linux-gcc-debug (WSL): `crd-net-tests` 1120 cases, 1113 passed, 7 skipped; `[multipath],[net-path]` 296 cases.
-- Teeth, each alone and rebuilt, all fail the case: no turn taken; no gate for a validation underway; validated
-  addresses paced; proven only in the path's own slot. Restored and rebuilt: green.
+- New RawRun case: path ID 1 opens and is answered at once, its turn still held; 1 ms later path ID 2 opens, path ID
+  0 is probed three times from a third address and rebinds to a fourth; the old address and path ID 3 on it are
+  challenged at once; a second rebinding's challenge waits for path ID 1's turn exactly (then the only timer), its
+  deadline one timeout later, validates, and at most kQuicMaxPaths run at every step.
+- New `test_quic_path.cpp` case and static asserts: a saturating timeout validates, its deadline kNeverNs - 1.
+- linux-gcc-debug (WSL): `crd-net-tests` 1121 cases, 1114 passed, 7 skipped; the 19 `crd-check|crd-no-` CTests
+  pass. linux-gcc-release (LTO, `-Wnull-dereference`): `crd-net-tests` and the connection fuzzer link clean, and
+  `[multipath],[quic-path]` (74 cases) pass.
+- Teeth, each alone and rebuilt, each fails its case: no turn taken; no gate for a validation underway; validated
+  addresses paced; proven only in the path's own slot; `add_saturating` back in `validate`; a deferred start arming
+  no timer. Restored and rebuilt: green.
 - linux-clang-fuzz `crd-fuzz-net-quic-connection`: the 42-input corpus replays clean, then 306.6 s with 2 jobs,
   91757 executions, corpus 42 to 2190 in a scratch directory, no artifact.
 - Pinned clang-tidy 22.1.8 clean on every touched source; clang-format clean on the added lines.
+
+Fuzz host-check 45051033311 was dispatched on 8fff897d.
 
 ## Next
 
