@@ -2726,9 +2726,11 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
     }
     pull_crypto();
     issue_local_ids();
+    // Each open slot once, counted from the last writer; the writer of this call moves only m_send_slot.
+    const usize last = m_send_slot;
     for (usize turn = 1U; turn <= kQuicMaxPaths; ++turn)
     {
-        const usize slot = (m_send_slot + turn) % kQuicMaxPaths;
+        const usize slot = (last + turn) % kQuicMaxPaths;
         if (!m_protection.path_open(slot) || !addressed(slot) || m_controls[slot] == nullptr)
         {
             continue;
