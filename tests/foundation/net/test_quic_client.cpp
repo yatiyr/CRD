@@ -1622,6 +1622,11 @@ TEST_CASE("QUIC client: a move to a socket the host lacks, of a stale handle or 
     CHECK(network->client.probe_path(handle, kMaxSetSockets, network->now) == QuicMigration::NoSocket);
     CHECK(network->client.migrate(handle, 0U, network->now) == QuicMigration::ActivePath);
     CHECK(network->client.migrate(QuicHandle{}, 1U, network->now) == QuicMigration::NoConnection);
+    u64 path_id = 9U;
+    CHECK(network->client.add_path(QuicHandle{}, 1U, network->now, path_id) == QuicMigration::NoConnection);
+    CHECK(path_id == 0U);
+    CHECK(network->client.add_path(handle, 2U, network->now, path_id) == QuicMigration::NoSocket);
+    CHECK(network->client.add_path(handle, 1U, network->now, path_id) == QuicMigration::NoMultipath);
     QuicHandle stale = handle;
     ++stale.generation;
     CHECK(network->client.probe_path(stale, 1U, network->now) == QuicMigration::NoConnection);
@@ -1637,6 +1642,48 @@ TEST_CASE("QUIC client: a move to a socket the host lacks, of a stale handle or 
     const QuicHandle only = alone->connect(0U, 5U);
     REQUIRE(alone->run_until([&] { return alone->live(only).confirmed(); }));
     CHECK(alone->client.migrate(only, 1U, alone->now) == QuicMigration::NoSocket);
+}
+
+TEST_CASE("QUIC client: a multipath path from the host's second socket reaches the server's ingress by its path ID's "
+          "ID, opens there and validates both ways while the streams finish over hostile paths",
+          "[net][net-path][quic-client][multipath]")
+{
+    // RFC 10069 section 3.1, through QuicClient's and QuicServer's loops and ingresses.
+    for (u64 seed = 1U; seed <= 2U; ++seed)
+    {
+        INFO("seed " << seed);
+        Identity identity;
+        Setup setup;
+        setup.multipath = true;
+        QuicClientConfig config = client_config(identity, QuicVersion::V1, {});
+        config.connection.parameters.has_initial_max_path_id = true;
+        config.connection.parameters.initial_max_path_id = 2U;
+        auto network = std::make_unique<Network>(identity, setup, config, 1U, 2U);
+        hostile(*network, seed);
+        const QuicHandle handle = network->connect(0U, seed);
+        REQUIRE(network->run_until(
+            [&] { return network->live(handle).confirmed() && network->live(handle).peer_cid_count(1U) != 0U; }));
+        REQUIRE(network->live(handle).multipath());
+        u64 path_id = 0U;
+        REQUIRE(network->client.add_path(handle, 1U, network->now, path_id) == QuicMigration::Started);
+        CHECK(path_id == 1U);
+        REQUIRE(network->run_until(
+            [&]
+            {
+                const QuicPaths& paths = network->live(handle).paths(1U);
+                return paths.proven(paths.active());
+            }));
+        const QuicConnection& served = network->served(0U, network->server(0U).app.last);
+        CHECK(served.counters().paths_opened == 1U);
+        const QuicPaths& theirs = served.paths(1U);
+        CHECK(theirs.path(theirs.active()).peer == kClientMovedAt);
+        REQUIRE(network->run_until([&] { return network->app.echoed(handle) && theirs.validated(theirs.active()); }));
+        CHECK(network->live(handle).path().socket == 0U);
+        CHECK(served.path().peer == kClientAt);
+        CHECK(network->sent_from[1] != 0U);
+        CHECK(network->live(handle).counters().path_failures == 0U);
+        CHECK(network->stray == 0U);
+    }
 }
 
 TEST_CASE("QUIC client: a move to a socket whose network carries nothing reverts to the first, and the streams finish",

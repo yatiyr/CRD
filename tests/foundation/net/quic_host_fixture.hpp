@@ -109,6 +109,7 @@ struct Setup
     bool only_v2 = false; // the server runs version 2 alone
     bool raw_only = false; // no TLS context: the raw UDP path alone
     u32 sockets = 1U;      // 2: the server also serves `second`, the next port of its address
+    bool multipath = false; // offers multipath with path IDs up to 2 (RFC 10069)
     const u8* early_context = nullptr;
     usize early_context_bytes = 0U;
 };
@@ -189,6 +190,8 @@ private:
             config.connection.versions = {};
         }
         config.connection.early_context = cont::ConstSpan<u8>(setup.early_context, setup.early_context_bytes);
+        config.connection.parameters.has_initial_max_path_id = setup.multipath;
+        config.connection.parameters.initial_max_path_id = setup.multipath ? 2U : 0U;
         config.connections = setup.connections;
         config.early_datagrams = setup.early_datagrams;
         config.early_per_client = setup.early_per_client;

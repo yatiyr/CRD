@@ -5537,3 +5537,287 @@ TEST_CASE("QUIC connection: a further path's challenge timers and expiry run, wi
     CHECK(run.server.state() == QuicConnectionState::Established);
     CHECK(run.server.path() == run.from);
 }
+
+namespace
+{
+const Endpoint kSecondAt{IpAddress::v4(192, 0, 2, 66), 41000U}; // a client's socket 1
+const Endpoint kThirdAt{IpAddress::v4(198, 18, 0, 9), 42000U};  // and its socket 2
+
+// Two ends offering multipath with further path IDs up to `client_limit` and `server_limit` (the server not at all
+// unless `server_offers`), issuing IDs through hosts, on Net's paths: the client's sockets 1 and 2 at kSecondAt and
+// kThirdAt, the server at kServerAt.
+struct MultipathPair
+{
+    Identity identity;
+    CountingAllocator allocator;
+    Host client_host;
+    Host server_host;
+    QuicConnection client;
+    QuicConnection server;
+    std::unique_ptr<Net> net;
+
+    explicit MultipathPair(u64 client_limit = 2U, u64 server_limit = 2U, bool disable_migration = false,
+                           bool server_offers = true)
+        : client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
+          server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
+          client(allocator, made(QuicSide::Client, client_limit, true, false, client_host)),
+          server(allocator, made(QuicSide::Server, server_limit, server_offers, disable_migration, server_host))
+    {
+        REQUIRE(client.ready());
+        REQUIRE(server.ready());
+        connect(client);
+        net = std::make_unique<Net>(client, server);
+        net->paths = true;
+        net->socket_at[0] = kSecondAt;
+        net->socket_at[1] = kThirdAt;
+        for (Path& path : net->path)
+        {
+            path.delay_ns = 20U * kMs;
+        }
+    }
+
+    QuicConnectionConfig made(QuicSide side, u64 limit, bool offers, bool disable_migration, Host& host) const
+    {
+        const usize seed = (side == QuicSide::Server) ? 1U : 0U;
+        QuicConnectionConfig config = hosted(config_for(side, identity, QuicVersion::V1, seed), host, 4U);
+        config.streams = stream_limits();
+        config.parameters.has_initial_max_path_id = offers;
+        config.parameters.initial_max_path_id = limit;
+        config.parameters.disable_active_migration = disable_migration;
+        if (side == QuicSide::Client)
+        {
+            config.path = QuicPath{0U, kServerAt};
+        }
+        return config;
+    }
+
+    // Confirmed, every ID issued at negotiation acknowledged.
+    void confirm()
+    {
+        REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+        net->advance(net->now + 300U * kMs);
+    }
+
+    // The client's further path in `slot` is validated, and so is the server's for it.
+    [[nodiscard]] bool open_both(usize slot) const
+    {
+        const QuicPaths& mine = client.paths(slot);
+        const QuicPaths& theirs = server.paths(slot);
+        return mine.used(mine.active()) && mine.proven(mine.active()) && theirs.used(theirs.active()) &&
+               theirs.validated(theirs.active());
+    }
+
+    // Writes `bytes` of a new stream of the client's (its FIN after them) until the server read them all.
+    void stream_to_server(u64 bytes)
+    {
+        u64 stream = 0U;
+        REQUIRE(client.streams().open(true, stream) == QuicStreamError::None);
+        u64 written = 0U;
+        u64 read = 0U;
+        REQUIRE(net->run_until(
+            [&]
+            {
+                static_cast<void>(write_pattern(client.streams(), stream, written, bytes, stream));
+                return server.streams().recv_state(stream) != QuicRecvState::None &&
+                       drain(server.streams(), stream, read, stream);
+            },
+            600000U * kMs));
+        CHECK(read == bytes);
+    }
+};
+} // namespace
+
+TEST_CASE("QUIC connection: a client opens path ID 1 from a socket of its own, each end validates it and data crosses "
+          "both paths over links that lose, duplicate and jitter",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 section 3.1: the client's PATH_CHALLENGE opens path ID 1 at the server; each end validates the other's
+    // address before data goes there, and path ID 0 stays where it was.
+    for (u64 seed = 1U; seed <= 3U; ++seed)
+    {
+        INFO("seed " << seed);
+        MultipathPair pair;
+        pair.net->rng.state = seed;
+        for (Path& path : pair.net->path)
+        {
+            path.loss = 40U;
+            path.duplicate = 30U;
+            path.jitter_ns = 4U * kMs;
+        }
+        pair.confirm();
+        REQUIRE(pair.net->run_until(
+            [&] { return pair.client.peer_cid_count(1U) != 0U && pair.server.peer_cid_count(1U) != 0U; }));
+        const QuicPath second{1U, kServerAt};
+        u64 path_id = 9U;
+        REQUIRE(pair.client.add_path(second, pair.net->now, path_id) == QuicMigration::Started);
+        CHECK(path_id == 1U);
+        CHECK(pair.client.counters().paths_opened == 1U);
+        const QuicPaths& mine = pair.client.paths(1U);
+        CHECK(mine.path(mine.active()) == second);
+        CHECK_FALSE(mine.proven(mine.active()));
+        REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+        CHECK(pair.server.counters().paths_opened == 1U);
+        const QuicPaths& theirs = pair.server.paths(1U);
+        CHECK(theirs.path(theirs.active()).peer == kSecondAt);
+        CHECK(pair.client.path() == QuicPath{0U, kServerAt});
+        CHECK(pair.server.path().peer == pair.net->client_at);
+
+        // A stream to the server rides both paths, each numbering its own packets.
+        const u64 first_before = pair.client.next_packet_number(QuicSpace::Application, 0U);
+        const u64 second_before = pair.client.next_packet_number(QuicSpace::Application, 1U);
+        pair.stream_to_server(96U * 1024U);
+        CHECK(pair.client.next_packet_number(QuicSpace::Application, 0U) > first_before + 16U);
+        CHECK(pair.client.next_packet_number(QuicSpace::Application, 1U) > second_before + 16U);
+        CHECK(pair.server.next_packet_number(QuicSpace::Application, 1U) != 0U);
+        REQUIRE(pair.net->run_until([&] { return pair.client.recovery().bytes_in_flight(1U) == 0U; }));
+        CHECK(pair.client.counters().path_failures == 0U);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+        CHECK(pair.server.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC connection: a client takes path IDs in rising order up to both limits and reports the server's limit "
+          "alone in a PATHS_BLOCKED frame, sent again when lost",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 sections 3.2.1 and 4.7: PATHS_BLOCKED carries the server's limit, the one that held the path back.
+    {
+        MultipathPair pair(3U, 1U);
+        DropFirst lose(0U, 1U);
+        lose.armed = false;
+        pair.net->filter = &lose;
+        pair.confirm();
+        REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(1U) != 0U; }));
+        u64 path_id = 0U;
+        REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+        CHECK(path_id == 1U);
+        REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+        pair.net->advance(pair.net->now + 500U * kMs);
+        const usize dropped = pair.net->dropped[0];
+        lose.armed = true; // the datagram carrying the first PATHS_BLOCKED is lost
+        CHECK(pair.client.add_path(QuicPath{2U, kServerAt}, pair.net->now, path_id) == QuicMigration::NoPathId);
+        CHECK(path_id == 0U);
+        REQUIRE(pair.net->run_until([&] { return pair.server.counters().paths_blocked != 0U; }));
+        CHECK(pair.net->dropped[0] == dropped + 1U);
+        pair.net->advance(pair.net->now + 2000U * kMs);
+        CHECK(pair.server.counters().paths_blocked == 1U); // acknowledged, so never repeated
+        CHECK(pair.client.counters().paths_opened == 1U);
+        CHECK(pair.server.state() == QuicConnectionState::Established);
+    }
+    {
+        // Both limits 2: path IDs 1 and 2 open from two sockets, and the client's own limit is never reported.
+        MultipathPair pair(2U, 2U);
+        pair.confirm();
+        REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(2U) != 0U; }));
+        u64 path_id = 0U;
+        REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+        CHECK(path_id == 1U);
+        REQUIRE(pair.client.add_path(QuicPath{2U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+        CHECK(path_id == 2U);
+        REQUIRE(pair.net->run_until([&] { return pair.open_both(1U) && pair.open_both(2U); }));
+        const QuicPaths& third = pair.server.paths(2U);
+        CHECK(third.path(third.active()).peer == kThirdAt);
+        CHECK(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::NoPathId);
+        pair.net->advance(pair.net->now + 2000U * kMs);
+        CHECK(pair.server.counters().paths_blocked == 0U);
+        CHECK(pair.server.counters().paths_opened == 2U);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC connection: a client without the server's IDs for its next path ID sends PATH_CIDS_BLOCKED and opens "
+          "the path once they come",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 section 4.7: the Next Sequence Number is the next one the client expects, 0 before any.
+    MultipathPair pair;
+    pair.server_host.refuse = true; // the server issues no ID past path ID 0's first
+    pair.confirm();
+    CHECK(pair.client.peer_cid_count(1U) == 0U);
+    u64 path_id = 0U;
+    CHECK(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::NoConnectionId);
+    CHECK(path_id == 0U);
+    CHECK(pair.client.counters().paths_opened == 0U);
+    REQUIRE(pair.net->run_until([&] { return pair.server.counters().paths_blocked == 1U; }));
+    CHECK(pair.server.state() == QuicConnectionState::Established);
+    pair.server_host.refuse = false;
+    pair.server.ping();
+    REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(1U) != 0U; }));
+    REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+    CHECK(path_id == 1U);
+    REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+    CHECK(pair.server.counters().paths_blocked == 1U);
+}
+
+TEST_CASE("QUIC connection: a client's path open is refused, changing nothing, before confirmation, without "
+          "multipath, toward another server or the handshake address the server closed to new paths",
+          "[net][net-path][quic-connection][multipath]")
+{
+    const QuicPath second{1U, kServerAt};
+    u64 path_id = 9U;
+    {
+        MultipathPair pair;
+        CHECK(pair.client.add_path(second, pair.net->now, path_id) == QuicMigration::NotConfirmed);
+        CHECK(path_id == 0U);
+        pair.confirm();
+        REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(1U) != 0U; }));
+        CHECK(pair.server.add_path(QuicPath{0U, pair.net->client_at}, pair.net->now, path_id) ==
+              QuicMigration::NotClient);
+        CHECK(pair.client.add_path(QuicPath{1U, Endpoint{IpAddress::v4(203, 0, 113, 99), 443U}}, pair.net->now,
+                                   path_id) == QuicMigration::OtherServer);
+        CHECK(pair.client.counters().paths_opened == 0U);
+        CHECK_FALSE(pair.client.paths(1U).used(0U));
+        // Two path IDs may share a 4-tuple (section 5.2): the handshake path's own opens path ID 1.
+        CHECK(pair.client.add_path(QuicPath{0U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+        CHECK(path_id == 1U);
+        REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+        CHECK(pair.server.paths(1U).path(pair.server.paths(1U).active()) == pair.server.path());
+    }
+    {
+        MultipathPair pair(2U, 2U, true); // disable_active_migration: no new path to the handshake address (2.2)
+        pair.confirm();
+        CHECK(pair.client.add_path(second, pair.net->now, path_id) == QuicMigration::Disabled);
+        CHECK(pair.client.counters().paths_opened == 0U);
+    }
+    {
+        MultipathPair pair(2U, 2U, false, false); // the server does not offer it
+        pair.confirm();
+        CHECK_FALSE(pair.client.multipath());
+        CHECK(pair.client.add_path(second, pair.net->now, path_id) == QuicMigration::NoMultipath);
+    }
+    {
+        MultipathPair pair(0U, 2U); // negotiated, but the client keeps path ID 0 alone
+        pair.confirm();
+        CHECK(pair.client.multipath());
+        CHECK(pair.client.add_path(second, pair.net->now, path_id) == QuicMigration::NoMultipath);
+        pair.net->advance(pair.net->now + 500U * kMs);
+        CHECK(pair.server.counters().paths_blocked == 0U);
+    }
+}
+
+TEST_CASE("QUIC connection: a client's further path carries no data before its server answers, nor after its "
+          "validation failed",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 section 3.1: "If validation fails, the client MUST NOT use the path." Socket 1's network carries
+    // nothing, so path ID 1's space numbers its PATH_CHALLENGE packets and, once they are outstanding, its probe
+    // timeouts' PINGs alone (each twice as late as the one before); the streams finish on path ID 0.
+    MultipathPair pair;
+    pair.confirm();
+    REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(1U) != 0U; }));
+    pair.net->down = 1U << 1U;
+    u64 path_id = 0U;
+    REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+    pair.stream_to_server(48U * 1024U);
+    REQUIRE(pair.net->run_until([&] { return pair.client.counters().path_failures == 1U; }, 600000U * kMs));
+    const u64 challenges = pair.client.next_packet_number(QuicSpace::Application, 1U);
+    CHECK(challenges != 0U);
+    CHECK(challenges <= 6U);
+    const QuicPaths& mine = pair.client.paths(1U);
+    CHECK_FALSE(mine.proven(mine.active()));
+    CHECK_FALSE(mine.validating(mine.active()));
+    pair.stream_to_server(48U * 1024U);
+    CHECK(pair.client.next_packet_number(QuicSpace::Application, 1U) <= challenges + 3U);
+    CHECK(pair.server.counters().paths_opened == 0U);
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+}
