@@ -5729,16 +5729,25 @@ TEST_CASE("QUIC connection: a client without the server's IDs for its next path 
           "the path once they come",
           "[net][net-path][quic-connection][multipath]")
 {
-    // RFC 10069 section 4.7: the Next Sequence Number is the next one the client expects, 0 before any.
+    // RFC 10069 section 4.7: the Next Sequence Number is the next one the client expects, 0 before any. The first
+    // frame is lost and sent again, as the server still issued none.
     MultipathPair pair;
+    DropFirst lose(0U, 1U);
+    lose.armed = false;
+    pair.net->filter = &lose;
     pair.server_host.refuse = true; // the server issues no ID past path ID 0's first
     pair.confirm();
     CHECK(pair.client.peer_cid_count(1U) == 0U);
     u64 path_id = 0U;
+    const usize dropped = pair.net->dropped[0];
+    lose.armed = true;
     CHECK(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::NoConnectionId);
     CHECK(path_id == 0U);
     CHECK(pair.client.counters().paths_opened == 0U);
     REQUIRE(pair.net->run_until([&] { return pair.server.counters().paths_blocked == 1U; }));
+    CHECK(pair.net->dropped[0] == dropped + 1U);
+    pair.net->advance(pair.net->now + 2000U * kMs);
+    CHECK(pair.server.counters().paths_blocked == 1U);
     CHECK(pair.server.state() == QuicConnectionState::Established);
     pair.server_host.refuse = false;
     pair.server.ping();
@@ -5747,6 +5756,25 @@ TEST_CASE("QUIC connection: a client without the server's IDs for its next path 
     CHECK(path_id == 1U);
     REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
     CHECK(pair.server.counters().paths_blocked == 1U);
+}
+
+TEST_CASE("QUIC connection: a client that issued no ID of its own for a path ID does not open it and owes no frame",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // The server could not answer there (RFC 10069 section 3.1); its own IDs are not what holds the path back.
+    MultipathPair pair;
+    pair.client_host.refuse = true;
+    pair.confirm();
+    REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(2U) != 0U; }));
+    CHECK(pair.client.local_cid_count(1U) == 0U);
+    u64 path_id = 9U;
+    CHECK(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::NoConnectionId);
+    CHECK(path_id == 0U);
+    pair.net->advance(pair.net->now + 1000U * kMs);
+    CHECK(pair.server.counters().paths_blocked == 0U);
+    CHECK(pair.client.counters().paths_opened == 0U);
+    CHECK(pair.server.counters().paths_opened == 0U);
+    CHECK(pair.client.state() == QuicConnectionState::Established);
 }
 
 TEST_CASE("QUIC connection: a client's path open is refused, changing nothing, before confirmation, without "

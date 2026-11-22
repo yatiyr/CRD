@@ -133,7 +133,8 @@ public:
     [[nodiscard]] QuicMigration probe_path(QuicHandle handle, u32 socket, u64 now_ns) noexcept;
     [[nodiscard]] QuicMigration migrate(QuicHandle handle, u32 socket, u64 now_ns) noexcept;
     // Opens a further multipath path from socket `socket` to the connection's server (QuicConnection::add_path), its
-    // path ID in `path_id`; the connection is served in the loop's next turn. NoConnection and NoSocket as above.
+    // path ID in `path_id`; the connection is served in the loop's next turn whatever the answer (a refusal may owe
+    // a BLOCKED frame). NoConnection and NoSocket as above, changing nothing.
     [[nodiscard]] QuicMigration add_path(QuicHandle handle, u32 socket, u64 now_ns, u64& path_id) noexcept;
 
     // The token remembered for `server` and `version`; empty for none (tests and diagnostics: it stays remembered).

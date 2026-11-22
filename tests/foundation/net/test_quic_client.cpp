@@ -1686,6 +1686,41 @@ TEST_CASE("QUIC client: a multipath path from the host's second socket reaches t
     }
 }
 
+TEST_CASE("QUIC client: a path open the server's limit refuses is served at once and tells the server so",
+          "[net][net-path][quic-client][multipath]")
+{
+    // RFC 10069 section 4.7: the refusal owes a PATHS_BLOCKED frame, which leaves in the loop's next turn, not at
+    // the connection's next timer.
+    Identity identity;
+    Setup setup;
+    setup.multipath = true; // the server's limit is path ID 2
+    QuicClientConfig config = client_config(identity, QuicVersion::V1, {});
+    config.connection.parameters.has_initial_max_path_id = true;
+    config.connection.parameters.initial_max_path_id = 3U;
+    auto network = std::make_unique<Network>(identity, setup, config, 1U, 2U);
+    const QuicHandle handle = network->connect(0U, 7U);
+    REQUIRE(network->run_until(
+        [&]
+        {
+            const QuicConnection& live = network->live(handle);
+            return live.confirmed() && live.peer_cid_count(1U) != 0U && live.peer_cid_count(2U) != 0U;
+        }));
+    u64 path_id = 0U;
+    REQUIRE(network->client.add_path(handle, 1U, network->now, path_id) == QuicMigration::Started);
+    REQUIRE(network->client.add_path(handle, 1U, network->now, path_id) == QuicMigration::Started);
+    CHECK(path_id == 2U);
+    REQUIRE(network->run_until([&] { return network->app.echoed(handle); }));
+    const QuicConnection& served = network->served(0U, network->server(0U).app.last);
+    REQUIRE(served.counters().paths_blocked == 0U);
+    // Quiet first: no timer of the client's comes within the bound below.
+    REQUIRE(network->run_until([&] { return network->live(handle).next_timer_ns() > network->now + 400U * kMs; }));
+    const u64 asked = network->now;
+    CHECK(network->client.add_path(handle, 1U, network->now, path_id) == QuicMigration::NoPathId);
+    network->set_clock(network->now); // the loop's next turn, with no connection timer due
+    REQUIRE(network->run_until([&] { return served.counters().paths_blocked == 1U; }));
+    CHECK(network->now - asked < 100U * kMs);
+}
+
 TEST_CASE("QUIC client: a move to a socket whose network carries nothing reverts to the first, and the streams finish",
           "[net][net-path][quic-client][client-migration]")
 {

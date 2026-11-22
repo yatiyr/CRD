@@ -277,12 +277,9 @@ QuicMigration QuicClient::add_path(QuicHandle handle, u32 socket, u64 now_ns, u6
     {
         return QuicMigration::NoSocket;
     }
-    const QuicMigration started = opening->add_path(QuicPath{socket, opening->path().peer}, now_ns, path_id);
-    if (started == QuicMigration::Started)
-    {
-        wake(handle);
-    }
-    return started;
+    // Served next turn whatever the answer: a refusal may owe the server a PATHS_BLOCKED or PATH_CIDS_BLOCKED.
+    wake(handle);
+    return opening->add_path(QuicPath{socket, opening->path().peer}, now_ns, path_id);
 }
 
 QuicMigration QuicClient::move_to(QuicHandle handle, u32 socket, bool probe_only, u64 now_ns) noexcept
