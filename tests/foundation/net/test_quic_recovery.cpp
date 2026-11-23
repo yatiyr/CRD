@@ -1070,6 +1070,23 @@ TEST_CASE("quic recovery: the storage bounds what is in flight; numbers only ris
           QuicRecoveryError::BadNumber);
 }
 
+TEST_CASE("quic recovery: a skipped number stays unsent once the packets around it settle", "[net][quic][recovery]")
+{
+    // RFC 9000 section 21.4: the skipped numbers are what an optimistic acknowledgement gives itself away by. A run
+    // is the packet's after it, so it stays unsent while that packet is held, below the oldest one too.
+    Fixture f(QuicSide::Server);
+    f.send(QuicSpace::Application, 0U, 0U);
+    f.send(QuicSpace::Application, 2U, kMs); // 1 skipped
+    f.send(QuicSpace::Application, 5U, kMs); // 3 and 4 skipped
+    REQUIRE(f.ack(QuicSpace::Application, 0U, 0U, 10U * kMs).acked_packets == 1U);
+    CHECK(f.ack(QuicSpace::Application, 1U, 1U, 11U * kMs).error == QuicRecoveryError::AckOfUnsent);
+    CHECK(f.ack(QuicSpace::Application, 0U, 2U, 12U * kMs).error == QuicRecoveryError::AckOfUnsent);
+    CHECK(f.ack(QuicSpace::Application, 4U, 4U, 13U * kMs).error == QuicRecoveryError::AckOfUnsent);
+    CHECK(f.ack(QuicSpace::Application, 5U, 6U, 14U * kMs).error == QuicRecoveryError::AckOfUnsent);
+    CHECK(f.ack(QuicSpace::Application, 2U, 2U, 15U * kMs).acked_packets == 1U);
+    CHECK(f.ack(QuicSpace::Application, 5U, 5U, 16U * kMs).acked_packets == 1U);
+}
+
 TEST_CASE("quic recovery: a probe timeout over a storage full of unacknowledged packets declares the oldest lost so "
           "its probes can leave",
           "[net][quic][recovery]")

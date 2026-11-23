@@ -205,7 +205,8 @@ struct QuicSentPacket
 struct QuicSentEntry
 {
     QuicSentPacket packet;
-    u64            lost_ns = 0U; // when it was declared lost
+    u64            lost_ns = 0U;     // when it was declared lost
+    u64            unsent_from = 0U; // the first of the numbers skipped right before it: its own number when none
     u8             state = 0U;
 };
 

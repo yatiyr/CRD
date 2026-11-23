@@ -606,18 +606,25 @@ usize QuicRecovery::lower_bound(const Space& space, u64 number) noexcept
 
 bool QuicRecovery::acknowledges_unsent(const Space& space, const QuicAck& ack) noexcept
 {
-    // Every number from the oldest entry up to the last sent is an entry unless this side never sent it, and a range
-    // reaching the next number counts numbers no entry holds.
-    const u64     oldest = (space.count > 0U) ? entry(space, 0U).packet.number : space.next_number;
+    // A number at or past the next was never sent, nor was one an entry's skipped run holds (from its unsent_from up
+    // to its own number). The entries above a range's smallest number, up to the first above the range, hold those
+    // that could meet it.
     QuicAckRanges walk(ack);
     QuicAckRange  range;
-    while (walk.next(range) && range.largest >= oldest)
+    while (walk.next(range))
     {
-        const u64   from = max_u64(range.smallest, oldest);
-        const usize held = lower_bound(space, range.largest + 1U) - lower_bound(space, from);
-        if (static_cast<u64>(held) != range.largest - from + 1U)
+        if (range.largest >= space.next_number)
         {
             return true;
+        }
+        const usize last = lower_bound(space, range.largest + 1U);
+        for (usize i = lower_bound(space, range.smallest + 1U); i <= last && i < space.count; ++i)
+        {
+            const QuicSentEntry& held = entry(space, i);
+            if (held.unsent_from < held.packet.number && held.unsent_from <= range.largest)
+            {
+                return true;
+            }
         }
     }
     return false;
@@ -949,6 +956,7 @@ QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& pack
     }
     QuicSentEntry& slot = entry(space, space.count);
     slot.packet         = packet;
+    slot.unsent_from    = space.next_number;
     slot.packet.in_flight = packet.in_flight || packet.ack_eliciting; // an ack-eliciting packet is in flight
     slot.state          = kOutstanding;
     ++space.count;
