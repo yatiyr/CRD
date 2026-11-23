@@ -107,6 +107,8 @@ def check(arm, statuses, reports, connections, size, detail):
         for key, want in (('cipher', 'aes128'), ('version', '1'), ('group', GROUP if arm.group else 'unreported')):
             if report.get(key) != want:
                 raise AssertionError(f'{arm.name}: the {name} negotiated {key}={report.get(key)}, not {want}')
+    if server.get('refused', '0') != '0':
+        raise AssertionError(f'{arm.name}: the server refused {server["refused"]} connections')
     if client.get('bytes_sent') != str(size) or server.get('bytes_received') != str(size):
         raise AssertionError(f'{arm.name}: {client.get("bytes_sent")} bytes sent, {server.get("bytes_received")} '
                              f'received, not {size}')

@@ -20,8 +20,8 @@
 //
 // The report, one `name=value` per line on standard output once the run has ended: `connections` that closed,
 // `established` among them, `bytes_received` and `bytes_sent` on the streams, and what every established connection
-// negotiated (`group`, `cipher`, `version`; `mixed` when two differed). The CPU time and memory are the driver's to
-// measure, from outside.
+// negotiated (`group`, `cipher`, `version`; `mixed` when two differed), and a server's Initials it `refused`. Why a
+// connection ended unestablished goes to standard error. The CPU time and memory are the driver's to measure.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -51,7 +51,9 @@ using namespace crd_net_interop;
 
 constexpr u64 kRunNs = 300000000000U;
 constexpr u64 kMaxWaitNs = 10000000U;
-constexpr u32 kSlots = 256U; // live connections at most, closing ones included
+// Live connections at most, closing ones included: a full server refuses a new one (CONNECTION_REFUSED), and each
+// closing one holds its slot for three PTOs (RFC 9000 section 10.2), about a tenth of a second at the board's rates.
+constexpr u32 kSlots = 4096U;
 constexpr u32 kRoutes = 8192U;
 constexpr u8 kResetKey[kQuicResetKeyBytes] = {0x5E, 0x5F};
 constexpr u8 kTokenKey[kQuicTokenKeyBytes] = {0x10, 0x11, 0x12};
@@ -157,6 +159,14 @@ private:
         const TlsState state = connection.handshake().state();
         if (state != TlsState::Established && state != TlsState::Closed)
         {
+            // Why a connection ended unestablished, on standard error for the driver's failure message.
+            const QuicCloseInfo& close = connection.close_info();
+            std::fprintf(stderr,
+                         "unestablished: tls=%u local=%d application=%d idle=%d reset=%d code=%llu frame=%llu\n",
+                         static_cast<unsigned>(state),close.local ? 1 : 0, close.application ? 1 : 0,
+                         close.idle ? 1 : 0, close.stateless_reset ? 1 : 0,
+                         static_cast<unsigned long long>(close.error_code),
+                         static_cast<unsigned long long>(close.frame_type));
             return;
         }
         const AlgorithmId group = connection.handshake().group();
@@ -324,6 +334,8 @@ int run_server(crd::memory::IAllocator& allocator, const Options& options, const
     std::fflush(stdout);
     const int result = drive(clock, sockets, loop, board, [](u64) { return true; });
     board.report();
+    std::printf("refused=%llu\n", static_cast<unsigned long long>(server.counters().refused));
+    std::fflush(stdout);
     return result;
 }
 
