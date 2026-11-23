@@ -1131,7 +1131,7 @@ openssl), the server's credential the seed's Ed25519 key as PKCS #12 and the cli
 msquic hands it. `crd-net-quic-interop-msquic` (10 cases): each way, v1 and v2, 16 one-byte streams, 4 MiB on one
 stream, and a seeded relay with 2% loss, 1% duplication and reordering jitter. The transport budget board
 ([quic_board.py](../../tests/foundation/net/interop/quic_board.py); 2026-11-23) runs each implementation against
-itself with equal, checked settings: `crd-quic-board` and `crd-msquic-quic-board` (`msquic_common.h` holds what both
+itself, settings checked where both ends report them: `crd-quic-board` and `crd-msquic-quic-board` (`msquic_common.h` holds what both
 msquic programs set up), handshakes and bytes per CPU-second of both ends as the slope between two sizes, crd-net with
 and without segmentation and coalescing; `crd-net-quic-board-check` runs its short round. Each board connection ends
 with one empty exchange, so both ends finish the handshake before the close. First board:
