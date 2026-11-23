@@ -205,9 +205,9 @@ struct QuicSentPacket
 struct QuicSentEntry
 {
     QuicSentPacket packet;
-    u64            lost_ns = 0U;     // when it was declared lost
-    u64            unsent_from = 0U; // the first of the numbers skipped right before it: its own number when none
-    u8             state = 0U;
+    u64 lost_ns = 0U;     // when it was declared lost
+    u64 unsent_from = 0U; // the first of the numbers skipped right before it: its own number when none
+    u8 state = 0U;
 };
 
 // What the recovery tells the connection and its congestion controller about each packet it settles. Lost packets
@@ -338,6 +338,7 @@ class QuicPathRecovery
         u64                       last_eliciting_ns = 0U;
         u64                       reorder_round = 0U; // next_number when the window last grew: one step a round
         usize                     eliciting_in_flight = 0U;
+        usize spares = 0U; // outstanding ACK-only entries on_sent() may take (QuicRecovery::spare)
         bool                      discarded = false;
         QuicAckTracker            received;
     };
@@ -448,14 +449,19 @@ public:
 
     // ---- Sending ----
 
-    // Whether `space` of slot `path` can record another packet; a connection writes none when it cannot.
+    // Whether `space` of slot `path` can record another packet; a connection writes none when it cannot. An
+    // outstanding ACK-only packet (neither ack-eliciting nor in flight) holds its entry only until another packet
+    // needs it: nothing acknowledges one by itself, so a storage full of them would otherwise hold every packet back
+    // until a probe timeout (RFC 9000 section 13.2.4).
     [[nodiscard]] bool can_send(QuicSpace space, usize path = 0U) const noexcept;
     // Whether it can record one that is neither ACK-only nor a probe. Two ends full of each other's unacknowledged
     // data must still be able to acknowledge it, or neither ever frees a slot.
     [[nodiscard]] bool can_send_data(QuicSpace space, usize path = 0U) const noexcept;
     // Records `packet`, sent now (its sent_ns) on its slot (its path): numbers rise within a space and may leave gaps
-    // (skipped numbers).
-    [[nodiscard]] QuicRecoveryError on_sent(QuicSpace space, const QuicSentPacket& packet) noexcept;
+    // (skipped numbers). In a full storage it takes the oldest ACK-only packet's entry, whose discard `events` hears;
+    // a packet after skipped numbers keeps its entry, the record that they were never sent.
+    [[nodiscard]] QuicRecoveryError on_sent(QuicSpace space, const QuicSentPacket& packet,
+                                            QuicRecoveryEvents& events) noexcept;
     // The ACK frame `space` of slot `path` owes or may carry, written into `out` (QuicAckTracker::write) with the
     // exponent that space uses: this side's own for Application, the default 3 for Initial and Handshake, whose ACK
     // frames are sent before the parameters are authenticated. Only slot 0's report receive timestamps, and only in
@@ -548,7 +554,8 @@ private:
     void compact(QuicSpace id, usize path, u64 now_ns, bool room) noexcept;
     [[nodiscard]] bool held_lost(QuicSpace id, usize path, const QuicSentEntry& slot, u64 now_ns) const noexcept;
     [[nodiscard]] QuicLoss detect_lost(QuicSpace id, usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept;
-    // The entries `space` can still record: free ones and the settled run at the head that compact() gives up.
+    // The entries `space` can still record: free ones, the settled run at the head that compact() gives up, and the
+    // ACK-only packets' that on_sent() takes.
     [[nodiscard]] static usize room(const Space& space) noexcept;
     // Declares the oldest outstanding packets of `id` lost until it can record `entries` more (section 6.2.4).
     [[nodiscard]] QuicLoss make_room(QuicSpace id, usize path, usize entries, u64 now_ns,

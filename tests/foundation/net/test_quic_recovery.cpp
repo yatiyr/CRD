@@ -132,7 +132,7 @@ struct Fixture
     }
     void send(QuicSpace space, u64 number, u64 sent_ns, bool ack_eliciting = true)
     {
-        REQUIRE(recovery.on_sent(space, packet(number, sent_ns, ack_eliciting)) == QuicRecoveryError::None);
+        REQUIRE(recovery.on_sent(space, packet(number, sent_ns, ack_eliciting), events) == QuicRecoveryError::None);
     }
     QuicAckOutcome ack(QuicSpace space, u64 smallest, u64 largest, u64 now_ns, u64 delay = 0U)
     {
@@ -509,7 +509,7 @@ TEST_CASE("quic recovery: a late acknowledgement shows a spurious loss and raise
     CHECK(f.recovery.on_received(QuicSpace::Application, 4U, true, Ecn::NotEct, 2U * kMs));
     QuicSentPacket carrier = packet(1U, 201U * kMs);
     carrier.carried_ack    = written.largest;
-    REQUIRE(f.recovery.on_sent(QuicSpace::Application, carrier) == QuicRecoveryError::None);
+    REQUIRE(f.recovery.on_sent(QuicSpace::Application, carrier, f.events) == QuicRecoveryError::None);
     for (u64 n = 2U; n <= 5U; ++n)
     {
         f.send(QuicSpace::Application, n, 200U * kMs + n * kMs, n != 2U); // 2 is neither eliciting nor in flight
@@ -582,7 +582,7 @@ TEST_CASE("quic recovery: a lost packet waits one probe period for a late acknow
     Events        events;
     for (u64 n = 0U; n < 4U; ++n)
     {
-        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(n, 0U)) == QuicRecoveryError::None);
+        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(n, 0U), events) == QuicRecoveryError::None);
     }
     REQUIRE(recovery.on_ack(QuicSpace::Application, ack_of(3U, 3U).ack(), 10U * kMs, events).lost.packets == 1U);
     const u64 period = recovery.probe_period_ns(QuicSpace::Application);
@@ -609,13 +609,13 @@ TEST_CASE("quic recovery: a lost packet waits one probe period for a late acknow
     SECTION("a send takes only the slot it needs")
     {
         REQUIRE(recovery.on_timeout(recovery.loss_timer_ns(), events).lost.packets == 2U); // 1 and 2, by time
-        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(4U, 12U * kMs)) == QuicRecoveryError::None);
+        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(4U, 12U * kMs), events) == QuicRecoveryError::None);
         CHECK(recovery.on_ack(QuicSpace::Application, ack_of(1U, 2U).ack(), 13U * kMs, events).spurious_packets == 2U);
         CHECK(recovery.on_ack(QuicSpace::Application, ack_of(0U, 0U).ack(), 13U * kMs, events).spurious_packets == 0U);
     }
     SECTION("a send takes the slot; the late acknowledgement then names a number older than any held")
     {
-        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(4U, 20U * kMs)) == QuicRecoveryError::None);
+        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(4U, 20U * kMs), events) == QuicRecoveryError::None);
         CHECK_FALSE(recovery.can_send(QuicSpace::Application));
         const QuicAckOutcome late = recovery.on_ack(QuicSpace::Application, ack_of(0U, 0U).ack(), 21U * kMs, events);
         CHECK(late.error == QuicRecoveryError::None);
@@ -851,7 +851,7 @@ TEST_CASE("quic recovery: discarding keys drops the space's packets from flight 
     CHECK(f.recovery.ack_deadline_ns(QuicSpace::Initial) == kNeverNs);
     CHECK(f.recovery.received(QuicSpace::Initial).ranges().empty());
     CHECK_FALSE(f.recovery.can_send(QuicSpace::Initial));
-    CHECK(f.recovery.on_sent(QuicSpace::Initial, packet(2U, 0U)) == QuicRecoveryError::Discarded);
+    CHECK(f.recovery.on_sent(QuicSpace::Initial, packet(2U, 0U), f.events) == QuicRecoveryError::Discarded);
     CHECK(f.ack(QuicSpace::Initial, 0U, 0U, 3U * kMs).error == QuicRecoveryError::Discarded);
     CHECK_FALSE(f.recovery.on_received(QuicSpace::Initial, 1U, true, Ecn::NotEct, 0U));
     u8 room[32];
@@ -878,7 +878,7 @@ TEST_CASE("quic recovery: a Retry starts recovery over, numbers continue and the
         // Nothing in flight: the client's anti-deadlock timer, from now with the new estimate (appendix A.8).
         CHECK(f.recovery.loss_timer_ns() == 31U * kMs + 30U * kMs + 4U * 15U * kMs);
         CHECK(f.recovery.can_send(QuicSpace::Initial));
-        CHECK(f.recovery.on_sent(QuicSpace::Initial, packet(1U, 31U * kMs)) == QuicRecoveryError::BadNumber);
+        CHECK(f.recovery.on_sent(QuicSpace::Initial, packet(1U, 31U * kMs), f.events) == QuicRecoveryError::BadNumber);
         f.send(QuicSpace::Initial, 2U, 31U * kMs);
         CHECK(f.recovery.loss_timer_ns() == 31U * kMs + 30U * kMs + 4U * 15U * kMs); // the new estimate's PTO
         CHECK(f.ack(QuicSpace::Initial, 2U, 2U, 51U * kMs).rtt_sampled);
@@ -965,7 +965,7 @@ TEST_CASE("quic recovery: packets a scheduled handover may take neither start no
             {
                 sent.handover = sent.handover || c == n;
             }
-            REQUIRE(f.recovery.on_sent(QuicSpace::Application, sent) == QuicRecoveryError::None);
+            REQUIRE(f.recovery.on_sent(QuicSpace::Application, sent, f.events) == QuicRecoveryError::None);
         }
         f.send(QuicSpace::Application, 8U, start + 4U * spacing);
         return f.ack(QuicSpace::Application, 8U, 8U, start + 4U * spacing + kMs).lost;
@@ -983,7 +983,7 @@ TEST_CASE("quic recovery: packets a scheduled handover may take neither start no
     f.recovery.confirm_handshake(0U);
     QuicSentPacket covered = packet(0U, 0U);
     covered.handover = true;
-    REQUIRE(f.recovery.on_sent(QuicSpace::Application, covered) == QuicRecoveryError::None);
+    REQUIRE(f.recovery.on_sent(QuicSpace::Application, covered, f.events) == QuicRecoveryError::None);
     f.send(QuicSpace::Application, 1U, kMs);
     const QuicAckOutcome first = f.ack(QuicSpace::Application, 0U, 0U, 150U * kMs);
     CHECK(first.rtt_sampled);
@@ -1007,7 +1007,7 @@ TEST_CASE("quic recovery: an acknowledged packet that carried an ACK retires tho
     CHECK(written.largest == 10U);
     QuicSentPacket carrier = packet(0U, 10U);
     carrier.carried_ack    = written.largest;
-    REQUIRE(f.recovery.on_sent(QuicSpace::Initial, carrier) == QuicRecoveryError::None);
+    REQUIRE(f.recovery.on_sent(QuicSpace::Initial, carrier, f.events) == QuicRecoveryError::None);
     CHECK(f.recovery.on_received(QuicSpace::Initial, 12U, true, Ecn::NotEct, 20U));
     REQUIRE(f.ack(QuicSpace::Initial, 0U, 0U, 30U).acked_packets == 1U);
     CHECK(same_ranges(f.recovery.received(QuicSpace::Initial).ranges(), {{12U, 12U}}));
@@ -1024,17 +1024,62 @@ TEST_CASE("quic recovery: data stops short of the entries kept for ACK-only pack
     QuicRecovery recovery(config, Span<QuicSentEntry>(initial, 1U), Span<QuicSentEntry>(handshake, 1U),
                           Span<QuicSentEntry>(application, 4U));
     Events events;
-    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(0U, 0U)) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(0U, 0U), events) == QuicRecoveryError::None);
     CHECK(recovery.can_send_data(QuicSpace::Application));
-    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(1U, 1U)) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(1U, 1U), events) == QuicRecoveryError::None);
     CHECK_FALSE(recovery.can_send_data(QuicSpace::Application));
     CHECK(recovery.can_send(QuicSpace::Application));
-    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(2U, 2U)) == QuicRecoveryError::None);
-    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(3U, 3U)) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(2U, 2U), events) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(3U, 3U), events) == QuicRecoveryError::None);
     CHECK_FALSE(recovery.can_send(QuicSpace::Application));
     // Settling the oldest three frees their entries, which gives data room again.
     CHECK(recovery.on_ack(QuicSpace::Application, ack_of(0U, 2U).ack(), kMs, events).acked_packets == 3U);
     CHECK(recovery.can_send_data(QuicSpace::Application));
+}
+
+TEST_CASE("quic recovery: an ACK-only packet gives its entry to the next packet that needs one",
+          "[net][quic][recovery]")
+{
+    QuicSentEntry initial[1];
+    QuicSentEntry handshake[1];
+    QuicSentEntry application[6];
+    QuicRecoveryConfig config{QuicSide::Server};
+    config.reserved_entries = 2U;
+    QuicRecovery recovery(config, Span<QuicSentEntry>(initial, 1U), Span<QuicSentEntry>(handshake, 1U),
+                          Span<QuicSentEntry>(application, 6U));
+    recovery.confirm_handshake(0U);
+    Events events;
+    // ACK-only 0 and 1, a PING at 2, ACK-only 3, 5 after skipping 4, and 6: nothing acknowledges any of them.
+    for (const u64 n : {0U, 1U, 2U, 3U, 5U, 6U})
+    {
+        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(n, n * kMs, n == 2U), events) ==
+                QuicRecoveryError::None);
+    }
+    CHECK(recovery.can_send(QuicSpace::Application));
+    CHECK(recovery.can_send_data(QuicSpace::Application));
+    // Each packet takes the oldest ACK-only entry, past the PING; its discard settles it, out of nothing in flight.
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(7U, 7U * kMs), events) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(8U, 8U * kMs), events) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(9U, 9U * kMs), events) == QuicRecoveryError::None);
+    REQUIRE(events.of('d') == 3U);
+    CHECK(events.numbers[0] == 0U);
+    CHECK(events.numbers[1] == 1U);
+    CHECK(events.numbers[2] == 3U); // 5 keeps its entry, the record of the skipped 4
+    CHECK(recovery.bytes_in_flight() == 4U * 1200U);
+    // Only 6 is left to give (5 holds the skipped 4): data stops at the reserve, a probe still goes, then nothing.
+    CHECK_FALSE(recovery.can_send_data(QuicSpace::Application));
+    REQUIRE(recovery.can_send(QuicSpace::Application));
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(10U, 10U * kMs), events) == QuicRecoveryError::None);
+    CHECK(events.of('d') == 4U);
+    CHECK_FALSE(recovery.can_send(QuicSpace::Application));
+    CHECK(recovery.on_sent(QuicSpace::Application, packet(11U, 11U * kMs), events) == QuicRecoveryError::Full);
+    // A given-up number was sent: acknowledging it is no error and reports nothing; the skipped one still is.
+    const QuicAckOutcome late = recovery.on_ack(QuicSpace::Application, ack_of(0U, 3U).ack(), 20U * kMs, events);
+    CHECK(late.error == QuicRecoveryError::None);
+    CHECK(late.acked_packets == 1U); // the PING
+    CHECK(recovery.on_ack(QuicSpace::Application, ack_of(4U, 6U).ack(), 21U * kMs, events).error ==
+          QuicRecoveryError::AckOfUnsent);
+    CHECK(recovery.on_ack(QuicSpace::Application, ack_of(5U, 10U).ack(), 22U * kMs, events).acked_packets == 5U);
 }
 
 TEST_CASE("quic recovery: the storage bounds what is in flight; numbers only rise", "[net][quic][recovery]")
@@ -1047,18 +1092,18 @@ TEST_CASE("quic recovery: the storage bounds what is in flight; numbers only ris
     Events        events;
     for (u64 n = 0U; n < 3U; ++n)
     {
-        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(n, n)) == QuicRecoveryError::None);
+        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(n, n), events) == QuicRecoveryError::None);
     }
     CHECK_FALSE(recovery.can_send(QuicSpace::Application));
-    CHECK(recovery.on_sent(QuicSpace::Application, packet(3U, 3U)) == QuicRecoveryError::Full);
+    CHECK(recovery.on_sent(QuicSpace::Application, packet(3U, 3U), events) == QuicRecoveryError::Full);
     // Acknowledging the middle packet frees nothing until the oldest settles; the ring then wraps.
     CHECK(recovery.on_ack(QuicSpace::Application, ack_of(1U, 1U).ack(), kMs, events).acked_packets == 1U);
     CHECK_FALSE(recovery.can_send(QuicSpace::Application));
     CHECK(recovery.on_ack(QuicSpace::Application, ack_of(0U, 0U).ack(), kMs, events).acked_packets == 1U);
     CHECK(recovery.can_send(QuicSpace::Application));
-    CHECK(recovery.on_sent(QuicSpace::Application, packet(2U, 4U)) == QuicRecoveryError::BadNumber);
-    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(7U, 4U)) == QuicRecoveryError::None);
-    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(8U, 5U)) == QuicRecoveryError::None);
+    CHECK(recovery.on_sent(QuicSpace::Application, packet(2U, 4U), events) == QuicRecoveryError::BadNumber);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(7U, 4U), events) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(8U, 5U), events) == QuicRecoveryError::None);
     CHECK(recovery.on_ack(QuicSpace::Application, ack_of(5U, 7U).ack(), kMs, events).error ==
           QuicRecoveryError::AckOfUnsent); // 3 to 6 were skipped
     const QuicAckOutcome late = recovery.on_ack(QuicSpace::Application, ack_of(7U, 8U).ack(), kMs, events);
@@ -1066,7 +1111,7 @@ TEST_CASE("quic recovery: the storage bounds what is in flight; numbers only ris
     CHECK(late.lost.packets == 1U); // 2, six below the largest acknowledged
     CHECK(recovery.bytes_in_flight() == 0U);
     CHECK(recovery.can_send(QuicSpace::Application));
-    CHECK(recovery.on_sent(QuicSpace::Application, packet(crd::crypto::kQuicMaxPacketNumber + 1U, 6U)) ==
+    CHECK(recovery.on_sent(QuicSpace::Application, packet(crd::crypto::kQuicMaxPacketNumber + 1U, 6U), events) ==
           QuicRecoveryError::BadNumber);
 }
 
@@ -1104,7 +1149,7 @@ TEST_CASE("quic recovery: a probe timeout over a storage full of unacknowledged 
     Events events;
     for (u64 n = 0U; n < 5U; ++n)
     {
-        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(n, kMs)) == QuicRecoveryError::None);
+        REQUIRE(recovery.on_sent(QuicSpace::Application, packet(n, kMs), events) == QuicRecoveryError::None);
     }
     REQUIRE_FALSE(recovery.can_send(QuicSpace::Application));
     const QuicTimeout timeout = recovery.on_timeout(recovery.loss_timer_ns(), events);
@@ -1119,8 +1164,8 @@ TEST_CASE("quic recovery: a probe timeout over a storage full of unacknowledged 
     CHECK(recovery.bytes_in_flight() == 3U * 1200U);
     CHECK(recovery.pto_count() == 1U);
     const u64 now = recovery.loss_timer_ns();
-    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(5U, now)) == QuicRecoveryError::None);
-    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(6U, now)) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(5U, now), events) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(6U, now), events) == QuicRecoveryError::None);
     CHECK_FALSE(recovery.can_send(QuicSpace::Application));
     // Their entries went to the probes, so a late acknowledgement of one finds nothing to report; with room, the
     // next timeout only probes.
@@ -1128,28 +1173,33 @@ TEST_CASE("quic recovery: a probe timeout over a storage full of unacknowledged 
     CHECK(late.error == QuicRecoveryError::None);
     CHECK(late.acked_packets == 5U);
     CHECK(late.spurious_packets == 0U);
-    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(7U, now + kMs)) == QuicRecoveryError::None);
+    REQUIRE(recovery.on_sent(QuicSpace::Application, packet(7U, now + kMs), events) == QuicRecoveryError::None);
     const QuicTimeout again = recovery.on_timeout(recovery.loss_timer_ns(), events);
     CHECK(again.kind == QuicTimeoutKind::Probe);
     CHECK(again.lost.packets == 0U);
 
-    // A client's anti-deadlock probe, its one Initial entry held by an ACK-only packet nothing acknowledges.
+    // A client's anti-deadlock probe, its Initial entries held by padded ACK packets nothing acknowledges: in flight,
+    // they keep their entries as ACK-only packets would not.
     QuicSentEntry client_initial[2];
     QuicSentEntry client_handshake[1];
     QuicSentEntry client_application[1];
     QuicRecovery client(QuicRecoveryConfig{QuicSide::Client}, Span<QuicSentEntry>(client_initial, 2U),
                         Span<QuicSentEntry>(client_handshake, 1U), Span<QuicSentEntry>(client_application, 1U));
     Events seen;
-    REQUIRE(client.on_sent(QuicSpace::Initial, packet(0U, 0U)) == QuicRecoveryError::None);
+    REQUIRE(client.on_sent(QuicSpace::Initial, packet(0U, 0U), seen) == QuicRecoveryError::None);
     REQUIRE(client.on_ack(QuicSpace::Initial, ack_of(0U, 0U).ack(), 100U * kMs, seen).acked_packets == 1U);
-    REQUIRE(client.on_sent(QuicSpace::Initial, packet(1U, 150U * kMs, false)) == QuicRecoveryError::None);
-    REQUIRE(client.on_sent(QuicSpace::Initial, packet(2U, 160U * kMs, false)) == QuicRecoveryError::None);
+    for (const u64 n : {1U, 2U})
+    {
+        QuicSentPacket padded = packet(n, (140U + (10U * n)) * kMs, false);
+        padded.in_flight = true;
+        REQUIRE(client.on_sent(QuicSpace::Initial, padded, seen) == QuicRecoveryError::None);
+    }
     REQUIRE_FALSE(client.can_send(QuicSpace::Initial));
     const QuicTimeout stuck = client.on_timeout(client.loss_timer_ns(), seen);
     CHECK(stuck.kind == QuicTimeoutKind::AntiDeadlock);
     CHECK(stuck.space == QuicSpace::Initial);
     CHECK(stuck.lost.packets == 1U);
-    CHECK(stuck.lost.bytes == 0U); // an ACK-only packet is not in flight
+    CHECK(stuck.lost.bytes == 1200U);
     CHECK(client.can_send(QuicSpace::Initial));
 }
 
@@ -1183,7 +1233,7 @@ TEST_CASE("quic recovery: a rejected 0-RTT leaves the Application space's packet
     CHECK(f.events.of('l') == 0U);
     CHECK(f.recovery.bytes_in_flight() == 1200U); // the Initial stays in flight
     CHECK(f.recovery.can_send(QuicSpace::Application));
-    CHECK(f.recovery.on_sent(QuicSpace::Application, packet(1U, 2U * kMs)) == QuicRecoveryError::BadNumber);
+    CHECK(f.recovery.on_sent(QuicSpace::Application, packet(1U, 2U * kMs), f.events) == QuicRecoveryError::BadNumber);
     f.send(QuicSpace::Application, 2U, 2U * kMs);
     CHECK(f.ack(QuicSpace::Initial, 0U, 0U, 3U * kMs).rtt_sampled);
     CHECK(f.events.of('a') == 1U);
@@ -1383,7 +1433,7 @@ TEST_CASE("quic recovery: a new path starts the estimate again and keeps what th
     f.send(app, 4U, 80U * kMs);
     QuicSentPacket off = packet(5U, 80U * kMs);
     off.off_path = true;
-    REQUIRE(f.recovery.on_sent(app, off) == QuicRecoveryError::None);
+    REQUIRE(f.recovery.on_sent(app, off, f.events) == QuicRecoveryError::None);
     CHECK(f.recovery.bytes_in_flight() == 1200U);
     CHECK(f.recovery.on_path(app, packet(4U, 0U)));
     CHECK_FALSE(f.recovery.on_path(app, packet(3U, 0U)));
@@ -1436,7 +1486,8 @@ struct Paths : Fixture
     }
     void send_on(usize path, u64 number, u64 sent_ns)
     {
-        REQUIRE(recovery.on_sent(QuicSpace::Application, sent_on(path, number, sent_ns)) == QuicRecoveryError::None);
+        REQUIRE(recovery.on_sent(QuicSpace::Application, sent_on(path, number, sent_ns), events) ==
+                QuicRecoveryError::None);
     }
     QuicAckOutcome ack_on(usize path, u64 smallest, u64 largest, u64 now_ns, usize via)
     {
@@ -1474,9 +1525,9 @@ TEST_CASE("quic recovery: path slots open with storage of their own, and a slot 
     CHECK_FALSE(f.recovery.path_open(kQuicMaxPaths));
 
     // Slot 2 is not open; the Initial and Handshake spaces are slot 0's alone.
-    CHECK(f.recovery.on_sent(app, sent_on(2U, 0U, 0U)) == QuicRecoveryError::NoPath);
-    CHECK(f.recovery.on_sent(QuicSpace::Initial, sent_on(1U, 0U, 0U)) == QuicRecoveryError::NoPath);
-    CHECK(f.recovery.on_sent(app, sent_on(kQuicMaxPaths, 0U, 0U)) == QuicRecoveryError::NoPath);
+    CHECK(f.recovery.on_sent(app, sent_on(2U, 0U, 0U), f.events) == QuicRecoveryError::NoPath);
+    CHECK(f.recovery.on_sent(QuicSpace::Initial, sent_on(1U, 0U, 0U), f.events) == QuicRecoveryError::NoPath);
+    CHECK(f.recovery.on_sent(app, sent_on(kQuicMaxPaths, 0U, 0U), f.events) == QuicRecoveryError::NoPath);
     CHECK_FALSE(f.recovery.can_send(app, 2U));
     CHECK_FALSE(f.recovery.can_send_data(app, 2U));
     CHECK_FALSE(f.recovery.can_send(QuicSpace::Handshake, 1U));
@@ -1525,7 +1576,7 @@ TEST_CASE("quic recovery: each path numbers, measures and counts its own packets
     CHECK(f.recovery.bytes_in_flight() == 1200U);
     CHECK(f.recovery.bytes_in_flight(1U) == 3U * 1200U);
     // Numbers rise within the path's own space; slot 0's are its own.
-    CHECK(f.recovery.on_sent(app, sent_on(1U, 2U, 61U * kMs)) == QuicRecoveryError::BadNumber);
+    CHECK(f.recovery.on_sent(app, sent_on(1U, 2U, 61U * kMs), f.events) == QuicRecoveryError::BadNumber);
     CHECK(f.recovery.unacknowledged_sent_ns(app, 2U, 1U) == 60U * kMs);
     CHECK(f.recovery.unacknowledged_sent_ns(app, 2U) == kNeverNs);
     CHECK_FALSE(f.recovery.rtt(1U).sampled());

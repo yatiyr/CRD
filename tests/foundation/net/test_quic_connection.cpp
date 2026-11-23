@@ -2506,13 +2506,15 @@ TEST_CASE("QUIC connection: a client Initial in a datagram under 1200 bytes is d
     CHECK(run.server.state() == QuicConnectionState::Established);
 }
 
-TEST_CASE("QUIC connection: a run of ACK-only packets carries a PING, so a peer's ACKs free their storage",
+TEST_CASE("QUIC connection: a server that only acknowledges retires what its ACK frames reported",
           "[net][4.2a][quic-connection]")
 {
+    // RFC 9000 section 13.2.4: the client's PINGs carry ACK frames for the server's ACK-only packets too, so each
+    // frame the server sends reports only the client's numbers since the last one acknowledged.
     Identity identity;
     CountingAllocator allocator;
     QuicConnectionConfig server_config = config_for(QuicSide::Server, identity, QuicVersion::V1, 1U);
-    server_config.sent_packets = 24U; // the server only acknowledges: without PINGs its ACK-only packets fill this
+    server_config.sent_packets = 24U;
     QuicConnection client(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1));
     QuicConnection server(allocator, server_config);
     connect(client);
@@ -2525,9 +2527,52 @@ TEST_CASE("QUIC connection: a run of ACK-only packets carries a PING, so a peer'
     }
     net->advance(net->now + 500U * kMs);
     CHECK(server.state() == QuicConnectionState::Established);
-    CHECK(server.recovery().can_send(QuicSpace::Application));
+    const ConstSpan<QuicAckRange> reported = server.recovery().received(QuicSpace::Application).ranges();
+    REQUIRE(reported.size() == 1U);
+    CHECK(reported[0].largest - reported[0].smallest < 4U);
     CHECK(client.recovery().bytes_in_flight() == 0U); // every PING acknowledged
     CHECK(client.recovery().pto_count() == 0U);
+}
+
+TEST_CASE("QUIC connection: ACK-only packets nothing acknowledges never hold back the next packet",
+          "[net][4.2a][quic-connection]")
+{
+    // A client whose sends all vanish answers each of the server's PINGs with an ACK-only packet. Those fill its
+    // storage, yet its own PING leaves at once instead of waiting for a backed-off probe timeout.
+    Identity identity;
+    CountingAllocator allocator;
+    QuicConnectionConfig client_config = config_for(QuicSide::Client, identity, QuicVersion::V1);
+    client_config.sent_packets = 24U;
+    QuicConnection client(allocator, client_config);
+    QuicConnection server(allocator, config_for(QuicSide::Server, identity, QuicVersion::V1, 1U));
+    connect(client);
+    auto net = std::make_unique<Net>(client, server);
+    REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+    DropClientAfter dark(0U);
+    net->filter = &dark;
+    for (usize round = 0U; round < 120U; ++round)
+    {
+        server.ping();
+        net->advance(net->now + 5U * kMs);
+    }
+    REQUIRE(client.state() == QuicConnectionState::Established);
+    const u32 backoff = client.recovery().pto_count();
+    REQUIRE(backoff > 0U);
+    REQUIRE(client.recovery().can_send(QuicSpace::Application));
+    for (usize round = 0U; round < 8U; ++round)
+    {
+        const u64 sent = client.counters().datagrams_sent;
+        client.ping();
+        net->flush();
+        CHECK(client.counters().datagrams_sent > sent);
+    }
+    // The uplink heals: the next PING is acknowledged and nothing the storage gave up is missed.
+    dark.stop();
+    client.ping();
+    net->advance(net->now + 300U * kMs);
+    CHECK(client.state() == QuicConnectionState::Established);
+    CHECK(client.recovery().pto_count() == 0U);
+    CHECK(client.recovery().can_send_data(QuicSpace::Application));
 }
 
 TEST_CASE("QUIC connection: a peer that acknowledges only ack-eliciting packets still frees the ACK-only ones",
@@ -2559,17 +2604,22 @@ TEST_CASE("QUIC connection: a peer that acknowledges only ack-eliciting packets 
 TEST_CASE("QUIC connection: a space whose storage is full reports no ACK timer it cannot serve",
           "[net][4.2a][quic-connection]")
 {
+    // The raw peer acknowledges nothing: the server's ACK-only packets give their entries up, and the PINGs riding
+    // their runs fill the storage.
     Identity identity;
-    RawRun run(identity, 16U); // the raw peer acknowledges nothing
+    RawRun run(identity, 16U);
     run.handshake();
-    for (usize round = 0U; round < 60U; ++round)
+    QuicFrame ping;
+    ping.kind = QuicFrameKind::Ping;
+    for (usize round = 0U; round < 4000U && run.server.recovery().can_send(QuicSpace::Application); ++round)
     {
-        QuicFrame ping;
-        ping.kind = QuicFrameKind::Ping;
         run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(ping, out); });
         run.now += kMs;
     }
-    CHECK_FALSE(run.server.recovery().can_send(QuicSpace::Application));
+    REQUIRE_FALSE(run.server.recovery().can_send(QuicSpace::Application));
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(ping, out); });
+    run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(ping, out); });
+    REQUIRE_FALSE(run.server.recovery().can_send(QuicSpace::Application));
     CHECK(run.server.recovery().ack_deadline_ns(QuicSpace::Application) <= run.now); // owed, unsendable
     CHECK(run.server.next_timer_ns() > run.now);
     CHECK(run.server.state() == QuicConnectionState::Established);

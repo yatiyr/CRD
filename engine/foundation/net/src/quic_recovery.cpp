@@ -60,6 +60,14 @@ constexpr u64 kNanosPerMicro = 1000U;
     return state == kAcked || lost(state);
 }
 
+// An outstanding ACK-only packet whose entry another packet may take: no skipped number before it, whose record the
+// entry is (QuicSentEntry::unsent_from).
+[[nodiscard]] bool spare_entry(const QuicSentEntry& slot) noexcept
+{
+    return slot.state == kOutstanding && !slot.packet.ack_eliciting && !slot.packet.in_flight &&
+           slot.unsent_from == slot.packet.number;
+}
+
 [[nodiscard]] constexpr bool acknowledged(u8 state) noexcept
 {
     return state == kAcked || state == kAckedPending;
@@ -520,6 +528,7 @@ bool QuicRecovery::stop_path(usize path, u64 now_ns, QuicRecoveryEvents& events)
     stopped.bytes_in_flight = 0U;
     stopped.pto_count = 0U;
     space.eliciting_in_flight = 0U;
+    space.spares = 0U;
     space.loss_time_ns = kNeverNs;
     for (usize i = 0U; i < space.count; ++i)
     {
@@ -632,6 +641,7 @@ bool QuicRecovery::acknowledges_unsent(const Space& space, const QuicAck& ack) n
 
 void QuicRecovery::settle(QuicSpace id, Space& space, QuicSentEntry& slot) noexcept
 {
+    space.spares -= spare_entry(slot) ? 1U : 0U;
     if (slot.packet.in_flight)
     {
         owner(id, slot.packet.path).bytes_in_flight -= on_path(id, slot.packet) ? slot.packet.bytes : 0U;
@@ -916,7 +926,8 @@ bool QuicRecovery::can_send(QuicSpace id, usize path) const noexcept
         return false;
     }
     const Space& space = space_of(id, path);
-    return !space.discarded && (space.count < space.entries.size() || settled(space.entries[space.head].state));
+    return !space.discarded &&
+           (space.count < space.entries.size() || settled(space.entries[space.head].state) || space.spares != 0U);
 }
 
 bool QuicRecovery::can_send_data(QuicSpace id, usize path) const noexcept
@@ -927,10 +938,11 @@ bool QuicRecovery::can_send_data(QuicSpace id, usize path) const noexcept
     }
     const Space& space = space_of(id, path);
     return !space.discarded &&
-           (space.count + m_reserved_entries < space.entries.size() || settled(space.entries[space.head].state));
+           (space.count + m_reserved_entries < space.entries.size() || settled(space.entries[space.head].state) ||
+            space.count - space.spares + m_reserved_entries < space.entries.size());
 }
 
-QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& packet) noexcept
+QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& packet, QuicRecoveryEvents& events) noexcept
 {
     const usize path = packet.path;
     if (!usable(id, path) || stopped(id, path))
@@ -949,17 +961,36 @@ QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& pack
     if (space.count >= space.entries.size())
     {
         compact(id, path, packet.sent_ns, true); // a lost packet held for a late acknowledgement gives up its slot
-        if (space.count >= space.entries.size())
+    }
+    if (space.count >= space.entries.size())
+    {
+        // The oldest ACK-only packet's entry, the ones before it moving up one so the numbers stay in order.
+        usize given = 0U;
+        while (given < space.count && !spare_entry(entry(space, given)))
+        {
+            ++given;
+        }
+        if (given == space.count)
         {
             return QuicRecoveryError::Full;
         }
+        const QuicSentPacket gone = entry(space, given).packet;
+        for (usize i = given; i > 0U; --i)
+        {
+            entry(space, i) = entry(space, i - 1U);
+        }
+        space.head = (space.head + 1U == space.entries.size()) ? 0U : space.head + 1U;
+        --space.count;
+        --space.spares;
+        events.on_discarded(id, gone);
     }
     QuicSentEntry& slot = entry(space, space.count);
     slot.packet         = packet;
-    slot.unsent_from    = space.next_number;
+    slot.unsent_from = space.next_number;
     slot.packet.in_flight = packet.in_flight || packet.ack_eliciting; // an ack-eliciting packet is in flight
     slot.state          = kOutstanding;
     ++space.count;
+    space.spares += spare_entry(slot) ? 1U : 0U;
     space.next_number = packet.number + 1U;
     if (slot.packet.in_flight)
     {
@@ -1110,7 +1141,7 @@ QuicLoss QuicRecovery::detect_lost(QuicSpace id, usize path, u64 now_ns, QuicRec
 
 usize QuicRecovery::room(const Space& space) noexcept
 {
-    usize free = space.entries.size() - space.count;
+    usize free = space.entries.size() - space.count + space.spares;
     for (usize i = 0U; i < space.count && settled(entry(space, i).state); ++i)
     {
         ++free;
@@ -1357,8 +1388,8 @@ QuicTimeout QuicRecovery::on_timeout(u64 now_ns, QuicRecoveryEvents& events) noe
         out.probes = 2U;
     }
     // The probes must leave (section 6.2.4: a sender MUST send one): a storage full of packets that nothing
-    // acknowledges, as behind a path that drops every one of them, or of ACK-only packets, would hold them back for
-    // good. Its oldest are declared lost instead, and their entries go to the probes.
+    // acknowledges, as behind a path that drops every one of them, would hold them back for good. Its oldest are
+    // declared lost instead, and their entries go to the probes.
     out.lost = make_room(out.space, out.path, out.probes, now_ns, events);
     Path& estimate = owner(out.space, out.path);
     if (estimate.pto_count < 64U)

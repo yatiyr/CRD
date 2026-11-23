@@ -3033,7 +3033,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         {
             sent.delivery = path.stamp(bytes, m_recovery->bytes_in_flight(slot) + bytes, now_ns);
         }
-        static_cast<void>(m_recovery->on_sent(space, sent)); // can_send held and numbers rise
+        static_cast<void>(m_recovery->on_sent(space, sent, m_events)); // can_send held and numbers rise
         path.on_sent(space, sent, controlled, m_recovery->bytes_in_flight(slot), m_recovery->rtt(slot), now_ns);
         m_counters.probe_fills += written.fill ? 1U : 0U;
         if (written.eliciting && numbers.probes > 0U && carry != Carry::Probe && !off_path)

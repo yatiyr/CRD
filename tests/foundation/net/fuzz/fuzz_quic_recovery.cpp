@@ -13,33 +13,33 @@
 // Oracles, against a model of every packet sent and received. Each packet is settled at most once, by one event; an
 // acknowledged packet lay in the frame's ranges and was outstanding; a lost one lay at or below the largest
 // acknowledged and met a threshold, and after an ACK no outstanding packet the packet threshold below the largest
-// remains; lost packets come before acknowledged ones; AckOfUnsent is reported only for a range holding a number
-// never sent, always for one never sent above the oldest outstanding packet, and changes nothing. A spurious loss is
-// a lost packet in the frame's ranges within a probe period of its loss, counted once and with no event; the
-// thresholds stay within their caps and rise only on one. Bytes in flight equal the model's. Each packet carries an
-// ECN codepoint of its number: a frame's outcome counts its newly acknowledged ECT(0) and ECT(1) packets (spurious
-// losses among them), says whether it raised the largest, and names a send time no later than now.
-// Received ranges stay ordered, separated, bounded and made of numbers received; a copy of a number reaches recovery
-// only while the ranges hold it (the packet protection's replay window refuses any other) and is then refused, so a
-// number is recorded at most once; a written ACK frame reads back as the largest ranges. A loss or probe timeout fires
-// only when due, and the timer is armed while ack-eliciting packets are outstanding in a space it may serve. A probe or
-// anti-deadlock timeout declares nothing lost but, in a space whose storage could not record a packet, its oldest
-// outstanding packets, in order; after it the space can record its probes. Receive timestamps (draft-ietf-quic-
-// receive-ts-03): a written Application ACK frame reports at most the asked-for count of packets it acknowledges, each
-// received, with its arrival time from the first arrival less a nanosecond in the asked-for unit, the times never
-// rising; the sender's reading of a report times only packets outstanding or lost, and only when their one-way delays
-// spread no wider than the time since the oldest of them was sent. Paths: every slot keeps its own numbers, estimate,
-// thresholds, probe count and bytes in flight, and an operation on one leaves every other slot's exactly as it was; a
-// slot not open refuses every operation (NoPath) and reads empty; closing a slot declares each of its outstanding
-// packets lost, outside every estimate, and the slot then starts from nothing when it opens again; slot 0 closes only
-// after the handshake's spaces, and its ACK frames then report no receive timestamps. Stopping a slot other than 0
-// declares each of its outstanding packets lost in the same way at once; it then refuses sends and ACK frames (NoPath),
-// is never a timeout's, holds no bytes in flight or probe count, and still records and acknowledges what it receives
-// until it closes, which reports nothing more. Each open slot drives its own
-// QuicPathControl (quic_path_control.hpp) as a connection does: packets stamped and counted on their slot's, the events
-// of packets on their path, each ACK frame's end and each timeout's detection reach that slot's alone, so the isolation
-// above holds for every slot's window, delivery, losses, ECN state, path MTU and pacer too; the window stays above its
-// floor and the datagram size is the search's after every operation.
+// remains; lost packets come before acknowledged ones; AckOfUnsent is reported only for a range holding a number never
+// sent, always for one never sent above the oldest outstanding packet, and changes nothing. A spurious loss is a lost
+// packet in the frame's ranges within a probe period of its loss, counted once and with no event; the thresholds stay
+// within their caps and rise only on one. Bytes in flight equal the model's. Each packet carries an ECN codepoint of
+// its number: a frame's outcome counts its newly acknowledged ECT(0) and ECT(1) packets (spurious losses among them),
+// says whether it raised the largest, and names a send time no later than now. Received ranges stay ordered, separated,
+// bounded and made of numbers received; a copy of a number reaches recovery only while the ranges hold it (the packet
+// protection's replay window refuses any other) and is then refused, so a number is recorded at most once; a written
+// ACK frame reads back as the largest ranges. A loss or probe timeout fires only when due, and the timer is armed while
+// ack-eliciting packets are outstanding in a space it may serve. A probe or anti-deadlock timeout declares nothing lost
+// but, in a space whose storage could not record a packet, its oldest outstanding packets, in order; after it the space
+// can record its probes. A send records whenever the space says it can, discarding at most the oldest outstanding
+// ACK-only packet with no skipped number before it. Receive timestamps (draft-ietf-quic-receive-ts-03): a written
+// Application ACK frame reports at most the asked-for count of packets it acknowledges, each received, with its arrival
+// time from the first arrival less a nanosecond in the asked-for unit, the times never rising; the sender's reading of
+// a report times only packets outstanding or lost, and only when their one-way delays spread no wider than the time
+// since the oldest of them was sent. Paths: every slot keeps its own numbers, estimate, thresholds, probe count and
+// bytes in flight, and an operation on one leaves every other slot's exactly as it was; a slot not open refuses every
+// operation (NoPath) and reads empty; closing a slot declares each of its outstanding packets lost, outside every
+// estimate, and the slot then starts from nothing when it opens again; slot 0 closes only after the handshake's spaces,
+// and its ACK frames then report no receive timestamps. Stopping a slot other than 0 declares each of its outstanding
+// packets lost in the same way at once; it then refuses sends and ACK frames (NoPath), is never a timeout's, holds no
+// bytes in flight or probe count, and still records and acknowledges what it receives until it closes, which reports
+// nothing more. Each open slot drives its own QuicPathControl (quic_path_control.hpp) as a connection does: packets
+// stamped and counted on their slot's, the events of packets on their path, each ACK frame's end and each timeout's
+// detection reach that slot's alone, so the isolation above holds for every slot's window, delivery, losses, ECN state,
+// path MTU and pacer too; the window stays above its floor and the datagram size is the search's after every operation.
 #include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_path_control.hpp>
@@ -423,6 +423,22 @@ void check_state(World& w)
     }
 }
 
+// The oldest outstanding ACK-only packet with no skipped number before it: the one whose entry a full storage gives
+// to the next packet (QuicRecovery::on_sent).
+[[nodiscard]] u64 oldest_spare(const ModelSpace& space)
+{
+    for (usize i = 0U; i < space.count; ++i)
+    {
+        const Sent& sent = space.sent[i];
+        const u64 before = (i == 0U) ? 0U : space.sent[i - 1U].number + 1U;
+        if (sent.state == kOut && !sent.eliciting && !sent.in_flight && sent.number == before)
+        {
+            return sent.number;
+        }
+    }
+    return kQuicNoPacket;
+}
+
 void op_send(World& w, QuicSpace id, usize path, u8 p)
 {
     ModelSpace& space = w.spaces[model_index(id, path)];
@@ -446,7 +462,19 @@ void op_send(World& w, QuicSpace id, usize path, u8 p)
     {
         packet.delivery = control.stamp(packet.bytes, w.recovery.bytes_in_flight(path) + packet.bytes, w.now);
     }
-    const QuicRecoveryError error = w.recovery.on_sent(id, packet);
+    const u64 spare = oldest_spare(space);
+    const usize from = w.log.count;
+    const QuicRecoveryError error = w.recovery.on_sent(id, packet, w.log);
+    // At most one event: the oldest spare ACK-only packet discarded for the entry, and only for a recorded packet.
+    CRD_FUZZ_REQUIRE(w.log.count == from || (error == QuicRecoveryError::None && w.log.count == from + 1U));
+    if (w.log.count != from)
+    {
+        const Log::Event& event = w.log.events[from];
+        Sent* const gone = space.find(event.number);
+        CRD_FUZZ_REQUIRE(event.kind == 'd' && event.space == id && event.path == path && event.number == spare &&
+                         gone != nullptr);
+        gone->state = kDiscarded;
+    }
     if (!w.sending(id, path))
     {
         CRD_FUZZ_REQUIRE(!room && error == QuicRecoveryError::NoPath);
