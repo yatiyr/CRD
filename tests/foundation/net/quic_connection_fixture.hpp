@@ -241,6 +241,8 @@ class Filter
 {
 public:
     virtual ~Filter() = default;
+    // Every datagram end `from` sends, before the network decides its fate; then drop() for one the network carries.
+    virtual void sent(usize /*from*/, ConstSpan<u8> /*datagram*/) {}
     virtual bool drop(usize from, ConstSpan<u8> datagram) = 0;
 
 protected:
@@ -328,6 +330,10 @@ public:
                 }
                 ++sent[from];
                 check(from, ConstSpan<u8>(out, size));
+                if (filter != nullptr)
+                {
+                    filter->sent(from, ConstSpan<u8>(out, size));
+                }
                 u32 socket = 0U;
                 u32 server_socket = 0U;
                 if (paths)

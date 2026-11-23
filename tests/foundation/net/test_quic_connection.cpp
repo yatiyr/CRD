@@ -6626,7 +6626,8 @@ TEST_CASE("QUIC connection: with every path dark frames move once, to the path n
 
 namespace
 {
-// Counts the datagrams `sender` (Net's end `from`) sends with data, by the path slot whose packet number moved: over
+// Counts the datagrams `sender` (Net's end `from`) sends with data, by the path slot whose packet number moved for it
+// (sent(), which also sees the datagrams a socket down loses): over
 // 900 bytes and no larger than that slot's datagram size (a PMTU probe is larger), with no probe timeout pending on
 // it. Under QuicPathChoice::LowestRtt none may leave a slot while a slot ranked before it (the lower smoothed RTT,
 // then the lower slot), live and not a peer's backup path, had room in its window and ledger for a whole datagram
@@ -6642,19 +6643,28 @@ public:
         }
     }
 
+    void sent(usize from, ConstSpan<u8> /*datagram*/) override
+    {
+        if (from != m_from)
+        {
+            return;
+        }
+        m_sent = kQuicMaxPaths;
+        for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+        {
+            const u64 next = m_sender.next_packet_number(QuicSpace::Application, slot);
+            m_sent = (next != m_next[slot]) ? slot : m_sent;
+            m_next[slot] = next;
+        }
+    }
+
     bool drop(usize from, ConstSpan<u8> datagram) override
     {
         if (from != m_from)
         {
             return false;
         }
-        usize sent = kQuicMaxPaths;
-        for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
-        {
-            const u64 next = m_sender.next_packet_number(QuicSpace::Application, slot);
-            sent = (next != m_next[slot]) ? slot : sent;
-            m_next[slot] = next;
-        }
+        const usize sent = m_sent;
         const QuicRecovery& recovery = m_sender.recovery();
         const QuicPathControl* const control = (sent < kQuicMaxPaths) ? m_sender.path_control(sent) : nullptr;
         if (control == nullptr || datagram.size() < 900U || datagram.size() > control->datagram_bytes() ||
@@ -6701,6 +6711,7 @@ private:
     usize m_from;
     const u64& m_now;
     u64 m_next[kQuicMaxPaths] = {};
+    usize m_sent = kQuicMaxPaths;
     usize m_data[kQuicMaxPaths] = {};
     bool m_kept = true;
 };
@@ -6914,8 +6925,8 @@ TEST_CASE("QUIC connection: a path left without data is measured again each seco
           "[net][net-path][quic-connection][multipath]")
 {
     // S78's scheduling (RFC 10069 section 5.9: an idle path probed before it is switched to). Path ID 1 is 60 ms
-    // slower each round trip, then 60 ms faster than path ID 0; a trickle never fills path ID 0's window, so path ID 1
-    // learns it only from its refreshes.
+    // slower each round trip, then 20 ms faster than path ID 0, less than the peer's ACK delay; a trickle never fills
+    // path ID 0's window, so path ID 1 learns it only from its refreshes, whose sample carries no ACK delay.
     MultipathPair pair;
     Host spare(pair.allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid)));
     QuicConnectionConfig config =
@@ -6935,20 +6946,22 @@ TEST_CASE("QUIC connection: a path left without data is measured again each seco
     CHECK(pair.client.counters().path_refreshes >= 1U);
     CHECK(pair.client.counters().path_refreshes <= 2U);
     CHECK(recovery.rtt(0U).smoothed_ns < recovery.rtt(1U).smoothed_ns);
-    pair.net->socket_delay_ns[0] = 30U * kMs;
+    pair.net->socket_delay_ns[0] = 10U * kMs;
     pair.net->socket_delay_ns[1] = 0U;
     watch.reset();
     trickle(pair, 150U);
     CHECK(recovery.rtt(1U).smoothed_ns < recovery.rtt(0U).smoothed_ns);
     CHECK(watch.data(1U) >= 90U);
     CHECK(watch.kept());
-    // Without refreshes, live: path ID 0 is the faster again, 20 ms each round trip, but its last measure is the
-    // slower and the trickle never learns it; with them it does.
+    // A bulk transfer measures both paths. Then, without refreshes, live: path ID 0 is the faster, by 10 ms each
+    // round trip, but its last measure is the slower and the trickle never learns it; with them it does.
+    flood(pair, 512U * 1024U);
+    REQUIRE(recovery.rtt(1U).smoothed_ns < recovery.rtt(0U).smoothed_ns);
     CHECK_FALSE(pair.client.set_path_refresh(kQuicGranularityNs - 1U));
     CHECK(pair.client.path_refresh_ns() == kQuicPathRefreshNs);
     REQUIRE(pair.client.set_path_refresh(0U));
     pair.net->socket_delay_ns[0] = 0U;
-    pair.net->socket_delay_ns[1] = 10U * kMs;
+    pair.net->socket_delay_ns[1] = 5U * kMs;
     u64 refreshes = pair.client.counters().path_refreshes;
     watch.reset();
     trickle(pair, 150U);
@@ -6979,6 +6992,33 @@ TEST_CASE("QUIC connection: a path left without data is measured again each seco
     pair.net->filter = nullptr;
     CHECK(pair.client.counters().path_failures == 0U);
     CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: an idle path gone dark is found by its refresh's probe timeout and carries no data, "
+          "while without refreshes it is not",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 sections 5.7 and 5.9: the refresh lost on a dead path becomes its probe timeout, so the path is held
+    // dark before any data goes there; the trickle stays whole on path ID 0.
+    for (const bool refresh : {true, false})
+    {
+        INFO("refresh " << refresh);
+        MultipathPair pair;
+        pair.net->socket_delay_ns[1] = 30U * kMs;
+        pair.open_second();
+        REQUIRE(pair.client.set_path_refresh(refresh ? kQuicPathRefreshNs : 0U));
+        pair.net->advance(pair.net->now + 1000U * kMs); // what the opening owed is acknowledged
+        DataWatch watch(pair.client, 0U, pair.net->now);
+        pair.net->filter = &watch;
+        pair.net->down = 2U; // the client's socket 1, path ID 1's
+        trickle(pair, 100U);
+        CHECK(watch.data(1U) == 0U);
+        CHECK((pair.client.recovery().pto_count(1U) != 0U) == refresh);
+        CHECK(pair.client.counters().path_refreshes == (refresh ? 1U : 0U)); // then it times out, and owes none
+        pair.net->filter = nullptr;
+        CHECK(pair.client.counters().path_failures == 0U);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+    }
 }
 
 TEST_CASE("QUIC connection: this side's PATH_STATUS frames are numbered per path ID, go again when lost only while "
