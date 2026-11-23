@@ -1129,8 +1129,8 @@ msquic (NET-PATH; [msquic_interop.py](../../tests/foundation/net/interop/msquic_
 echo: `crd-msquic-quic-peer` over the pinned msquic 2.6.4 with its TLS on the same OpenSSL 4.0.3 (`QUIC_TLS_LIB`
 openssl), the server's credential the seed's Ed25519 key as PKCS #12 and the client's pin read from the certificate
 msquic hands it. `crd-net-quic-interop-msquic` (10 cases): each way, v1 and v2, 16 one-byte streams, 4 MiB on one
-stream, and a seeded relay with 2% loss, 1% duplication and reordering jitter. It is also the msquic end of the
-transport budget boards.
+stream, and a seeded relay with 2% loss, 1% duplication and reordering jitter. The transport budget boards are to
+run this peer as msquic's end.
 
 <a id="admission"></a>
 ## Bounded admission

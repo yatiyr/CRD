@@ -29,7 +29,7 @@ paragraph.
 
 ## Evidence
 
-- `crd-net-quic-interop-msquic`: 5 of 5 runs pass on linux-gcc-public-checks. A mutant msquic server echoing another
+- `crd-net-quic-interop-msquic`: 30 of 30 runs pass on linux-gcc-public-checks (5, then a loop of 25). A mutant msquic server echoing another
   pattern fails all five Cerid-client cases ("client read a wrong byte").
 - The ngtcp2 and picoquic peers rebuilt: `quic_interop.py --only v1` 122 of 122, the picoquic prague loopback cases 11
   of 11. `crd-pins`, `crd-license-manifest`, `crd-check-source-routes` and the repository validators pass.
