@@ -1129,8 +1129,13 @@ msquic (NET-PATH; [msquic_interop.py](../../tests/foundation/net/interop/msquic_
 echo: `crd-msquic-quic-peer` over the pinned msquic 2.6.4 with its TLS on the same OpenSSL 4.0.3 (`QUIC_TLS_LIB`
 openssl), the server's credential the seed's Ed25519 key as PKCS #12 and the client's pin read from the certificate
 msquic hands it. `crd-net-quic-interop-msquic` (10 cases): each way, v1 and v2, 16 one-byte streams, 4 MiB on one
-stream, and a seeded relay with 2% loss, 1% duplication and reordering jitter. The transport budget boards are to
-run this peer as msquic's end.
+stream, and a seeded relay with 2% loss, 1% duplication and reordering jitter. The transport budget board
+([quic_board.py](../../tests/foundation/net/interop/quic_board.py); 2026-11-23) runs each implementation against
+itself with equal, checked settings: `crd-quic-board` and `crd-msquic-quic-board` (`msquic_common.h` holds what both
+msquic programs set up), handshakes and bytes per CPU-second of both ends as the slope between two sizes, crd-net with
+and without segmentation and coalescing; `crd-net-quic-board-check` runs its short round. Each board connection ends
+with one empty exchange, so both ends finish the handshake before the close. First board:
+[2026-11-23](../bench/2026-11-23-net-path-quic-board.md).
 
 <a id="admission"></a>
 ## Bounded admission
