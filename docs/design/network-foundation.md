@@ -639,7 +639,9 @@ credits and their frames. It knows nothing of packets: the connection asks it fo
   do); a send buffer that cannot grow takes less, and a slot refused its first buffers opens no stream (NoMemory, or
   INTERNAL_ERROR for the peer's). `whole_buffers` takes every slot's buffers at their limits in `init()` for fixed
   memory. `buffer_allocations()` and `buffer_bytes()` say what the buffers took. Measured: on the QUIC board a
-  connection made its 1 MiB windows' buffers whole at connect, so its handshakes per CPU-second followed the window. Open streams of a type are kept in ID order (IDs open in rising order, so an
+  connection made its 1 MiB windows' buffers whole at connect, so its handshakes per CPU-second followed the window
+  (915); grown on demand, 3,693 at 1 MiB and 3,626 at 64 KiB, bytes unchanged
+  ([board](../bench/2026-11-24-net-path-stream-buffers.md)). Open streams of a type are kept in ID order (IDs open in rising order, so an
   append keeps it) and found by binary search; a free stack hands out slots. A peer's frame for a higher stream of
   its own opens every lower one (section 3.2); a frame for a stream already freed is ignored; a stream this side
   never opened is STREAM_STATE_ERROR, as is a frame for the part a unidirectional stream lacks, and one past this
@@ -1150,8 +1152,10 @@ stream, and a seeded relay with 2% loss, 1% duplication and reordering jitter. T
 itself, settings checked where both ends report them: `crd-quic-board` and `crd-msquic-quic-board` (`msquic_common.h` holds what both
 msquic programs set up), handshakes and bytes per CPU-second of both ends as the slope between two sizes, crd-net with
 and without segmentation and coalescing; `crd-net-quic-board-check` runs its short round. Each board connection ends
-with one empty exchange, so both ends finish the handshake before the close. First board:
-[2026-11-23](../bench/2026-11-23-net-path-quic-board.md).
+with one empty exchange, so both ends finish the handshake before the close (a client closing as its handshake
+completes closes its server in the Handshake space, which then drains three PTOs at the initial RTT, 3.07 s). First
+board: [2026-11-23](../bench/2026-11-23-net-path-quic-board.md); with stream buffers grown on demand:
+[2026-11-24](../bench/2026-11-24-net-path-stream-buffers.md).
 
 <a id="admission"></a>
 ## Bounded admission
