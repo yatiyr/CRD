@@ -2078,8 +2078,11 @@ u32 QuicConnection::copy_paths() const noexcept
 
 bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
 {
+    // A frame that settles through a record waits for room in the ledger, as write_frames() writes it: owed without
+    // that room, it would draw packet after packet of nothing but an ACK.
     const usize index = quic_space_index(space);
-    if (m_levels[index].out.pending())
+    const bool ledger = m_frame_count < m_config.sent_frames;
+    if (ledger && m_levels[index].out.pending())
     {
         return true;
     }
@@ -2092,10 +2095,10 @@ bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
     {
         abandon_owed = abandon_owed || (entry.owed && slot_of(entry.path_id) != send_slot());
     }
-    return m_handshake_done_owed || m_ping_owed || m_probe_fill || m_cids.retirement_owed() ||
-           (m_frame_count < m_config.sent_frames &&
-            (m_streams.has_frame(stream_route(true)) || m_cids.local_owed() || m_new_token_owed || m_max_path_id_owed ||
-             m_paths_blocked_owed || m_cids_blocked != 0U || abandon_owed || status_owed())) ||
+    return m_ping_owed || m_probe_fill ||
+           (ledger && (m_handshake_done_owed || m_cids.retirement_owed() || m_streams.has_frame(stream_route(true)) ||
+                       m_cids.local_owed() || m_new_token_owed || m_max_path_id_owed || m_paths_blocked_owed ||
+                       m_cids_blocked != 0U || abandon_owed || status_owed())) ||
            datagram_ready(now_ns, datagram_paths(false));
 }
 
@@ -2561,7 +2564,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
             used = write_datagrams(frames, used, packet, now_ns, written);
             used = write_streams(frames, used, packet, now_ns, written);
         }
-        if (ack_later && !early)
+        if (ack_later && !early && used != 0U) // an ACK not yet owed never leaves alone
         {
             put_ack();
         }
@@ -2753,9 +2756,11 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     }
     if (space == QuicSpace::Application)
     {
-        // Datagrams after the connection's own frames and before stream data; one that does not fit waits.
+        // Datagrams after the connection's own frames and before stream data; one that does not fit waits (a probe
+        // timeout's floor, datagram_limit). The ACK it carries along is not yet owed: it rides only with other frames,
+        // or a datagram waiting for room would draw ACK-only packets, one after another.
         used = write_datagrams(frames, used, packet, now_ns, written);
-        if (ack_later && !early)
+        if (ack_later && !early && (used != 0U || m_streams.has_frame(stream_route(m_data_open))))
         {
             put_ack();
         }

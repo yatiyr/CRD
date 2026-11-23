@@ -745,7 +745,10 @@ struct Pair
         QuicConnection* const ends[2] = {&client, &server};
         for (usize from = 0U; from < 2U; ++from)
         {
-            for (usize guard = 0U; guard < 64U; ++guard)
+            // Each end drains within the guard: what it sends at one instant is bounded by its window, pacer and
+            // owed frames, so one still sending after 64 datagrams sends packets that free nothing, one after another.
+            bool drained = false;
+            for (usize guard = 0U; guard < 64U && !drained; ++guard)
             {
                 u8 out[kDatagram];
                 QuicConnection& end = *ends[from];
@@ -781,7 +784,8 @@ struct Pair
                             CRD_FUZZ_REQUIRE(end.next_packet_number(static_cast<QuicSpace>(space)) == numbers[space]);
                         }
                     }
-                    break;
+                    drained = true;
+                    continue;
                 }
                 CRD_FUZZ_REQUIRE(((held >> end.sent_path().socket) & 1U) == 0U || from == 1U);
                 check_sent(from, ConstSpan<u8>(out, size), sent_slot);
@@ -806,6 +810,7 @@ struct Pair
                     ++count;
                 }
             }
+            CRD_FUZZ_REQUIRE(drained);
         }
     }
 
@@ -1819,9 +1824,9 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
                                           CRD_FUZZ_REQUIRE(!heard || counters.path_failures != 0U);
                                           // Asked for a packet and still unheard only while it cannot record one.
                                           const usize own = slot_of(pair.client, kept);
-                                          CRD_FUZZ_REQUIRE(heard || !pinged || own == kQuicNoPath ||
-                                                           !pair.client.recovery().can_send(QuicSpace::Application,
-                                                                                            own));
+                                          CRD_FUZZ_REQUIRE(
+                                              heard || !pinged || own == kQuicNoPath ||
+                                              !pair.client.recovery().can_send(QuicSpace::Application, own));
                                           // Again only after another validation failed, or when nothing opened.
                                           CRD_FUZZ_REQUIRE(!pinged || counters.path_failures > failures ||
                                                            counters.packets_opened == opened);
