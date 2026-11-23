@@ -330,7 +330,8 @@ u64 QuicRtt::probe_base_ns() const noexcept
     return smoothed_ns + max_u64(4U * variance_ns, kQuicGranularityNs);
 }
 
-void QuicRtt::sample(u64 latest, u64 ack_delay_ns, bool confirmed, u64 max_ack_delay_ns, u64 now_ns) noexcept
+void QuicRtt::sample(u64 latest, u64 ack_delay_ns, bool confirmed, u64 max_ack_delay_ns, u64 now_ns,
+                     bool renew) noexcept
 {
     latest_ns = min_u64(latest, kMaxRttNs);
     if (!sampled())
@@ -351,6 +352,12 @@ void QuicRtt::sample(u64 latest, u64 ack_delay_ns, bool confirmed, u64 max_ack_d
     // The delay is taken off only while the sample stays at or above min_rtt (section 5.3).
     const u64 adjusted = (latest_ns - min_ns >= delay) ? latest_ns - delay : latest_ns;
     adjusted_ns = adjusted;
+    if (renew)
+    {
+        smoothed_ns = adjusted;
+        variance_ns = adjusted / 2U;
+        return;
+    }
     const u64 deviation = (smoothed_ns > adjusted) ? smoothed_ns - adjusted : adjusted - smoothed_ns;
     variance_ns = (3U * variance_ns + deviation) / 4U;
     smoothed_ns = (7U * smoothed_ns + adjusted) / 8U;
@@ -1167,6 +1174,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
     u64  largest_sent  = 0U;
     bool largest_on_path = false; // the largest newly acknowledged was sent where the estimate follows
     bool largest_handover = false;
+    bool largest_refresh = false;
     u64  reordering    = 0U;
     u64  carried       = kQuicNoPacket; // the largest of the ACK frames those packets carried
     bool by_time       = false;
@@ -1213,6 +1221,7 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
                     largest_sent  = slot.packet.sent_ns;
                     largest_on_path = counted;
                     largest_handover = slot.packet.handover;
+                    largest_refresh = slot.packet.refresh;
                 }
                 if (slot.packet.carried_ack != kQuicNoPacket &&
                     (carried == kQuicNoPacket || slot.packet.carried_ack > carried))
@@ -1248,8 +1257,8 @@ QuicAckOutcome QuicRecovery::on_ack(QuicSpace id, const QuicAck& ack, u64 now_ns
             estimate.rtt.min_ns = kMaxRttNs;
         }
         const u64 latest = (now_ns > largest_sent) ? now_ns - largest_sent : 0U;
-        estimate.rtt.sample(latest, decoded_ack_delay_ns(id, ack.delay), m_confirmed, m_peer_max_ack_delay_ns,
-                            now_ns);
+        estimate.rtt.sample(latest, decoded_ack_delay_ns(id, ack.delay), m_confirmed, m_peer_max_ack_delay_ns, now_ns,
+                            largest_refresh);
         estimate.min_via = via;
         out.rtt_sampled = true;
         out.rtt_handover = largest_handover;

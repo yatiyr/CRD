@@ -186,6 +186,7 @@ constexpr u64 kNoSequence = kQuicNoSequence; // a path with no peer connection I
            p.address_discovery <= QuicAddressDiscovery::Both && !p.has_stateless_reset_token &&
            (!p.has_initial_max_path_id || p.initial_max_path_id < kQuicMaxPaths) &&
            config.path_choice <= QuicPathChoice::Turns &&
+           (config.path_refresh_ns == 0U || config.path_refresh_ns >= kQuicGranularityNs) &&
            QuicStreamSet::limits_valid(config.streams) && QuicDatagrams::limits_valid(config.datagrams) &&
            p.active_connection_id_limit >= kQuicDefaultActiveIdLimit &&
            p.active_connection_id_limit <= kQuicMaxPeerConnectionIds && config.sent_packets != 0U &&
@@ -1882,6 +1883,32 @@ bool QuicConnection::backup_held(usize slot) const noexcept
     return false;
 }
 
+bool QuicConnection::refreshable(usize slot) const noexcept
+{
+    // Nothing in flight: a sample is not already on its way, and the PING fits any window. A backup path stays
+    // unused while another is usable (section 3.3).
+    return data_path(slot) && !stopped(slot) && !backup_held(slot) && m_recovery->bytes_in_flight(slot) == 0U &&
+           m_recovery->pto_count(slot) == 0U;
+}
+
+bool QuicConnection::refresh_owed(usize slot) const noexcept
+{
+    return m_numbers[number_space(QuicSpace::Application, slot)].refresh && refreshable(slot);
+}
+
+void QuicConnection::owe_refreshes(usize from, u64 now_ns) noexcept
+{
+    for (usize slot = 0U; slot < kQuicMaxPaths && m_config.path_refresh_ns != 0U; ++slot)
+    {
+        Numbering& numbers = m_numbers[number_space(QuicSpace::Application, slot)];
+        if (slot != from && add_saturating(numbers.eliciting_ns, m_config.path_refresh_ns) <= now_ns &&
+            refreshable(slot))
+        {
+            numbers.refresh = true;
+        }
+    }
+}
+
 bool QuicConnection::ranks_before(usize a, usize b) const noexcept
 {
     const u64 first = m_recovery->rtt(a).smoothed_ns;
@@ -1985,7 +2012,7 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
         space == QuicSpace::Application && send_type(space) == QuicPacketType::OneRtt &&
         (paths.response_owed(active) || paths.challenge_due(active, now_ns) || observation_due(active));
     if (m_recovery->ack_deadline_ns(space, slot) <= now_ns || m_numbers[number_space(space, slot)].probes > 0U ||
-        path_owed || (space == QuicSpace::Application && stopped_ack_due(now_ns)))
+        path_owed || (space == QuicSpace::Application && (stopped_ack_due(now_ns) || refresh_owed(slot))))
     {
         return true;
     }
@@ -2167,6 +2194,16 @@ bool QuicConnection::set_path_choice(QuicPathChoice choice) noexcept
     return true;
 }
 
+bool QuicConnection::set_path_refresh(u64 refresh_ns) noexcept
+{
+    if (refresh_ns != 0U && refresh_ns < kQuicGranularityNs)
+    {
+        return false;
+    }
+    m_config.path_refresh_ns = refresh_ns;
+    return true;
+}
+
 bool QuicConnection::set_handover(const HandoverSchedule& schedule) noexcept
 {
     QuicPathControl* const lead = m_controls[lead_slot()];
@@ -2214,6 +2251,7 @@ usize QuicConnection::write_datagrams(cont::Span<u8> frames, usize used, u64 pac
         }
         used += bytes;
         written.eliciting = true;
+        written.data = true;
         if (m_datagrams.settles())
         {
             QuicStreamRecord sent;
@@ -2451,7 +2489,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     const auto put_owed_ping = [&]
     {
         const Numbering& numbers = m_numbers[number_space(space, slot)];
-        if (!written.eliciting && (numbers.probes > 0U || numbers.ack_only >= kAckOnlyRun))
+        if (!written.eliciting && (numbers.probes > 0U || numbers.ack_only >= kAckOnlyRun || refresh_owed(slot)))
         {
             QuicFrame ping;
             ping.kind = QuicFrameKind::Ping;
@@ -2706,6 +2744,7 @@ usize QuicConnection::write_streams(cont::Span<u8> frames, usize used, u64 packe
         }
         used += bytes;
         written.eliciting = written.eliciting || quic_frame_ack_eliciting(frame.kind);
+        written.data = written.data || frame.kind == QuicFrameKind::Stream;
         static_cast<void>(record(QuicSpace::Application, packet, kRecordStream, taken, written));
     }
     return used;
@@ -2924,6 +2963,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         sent.in_flight = written.eliciting || floor != 0U;
         sent.path_probe = carry == Carry::Probe;
         sent.off_path = off_path;
+        sent.refresh = numbers.refresh && written.eliciting && !off_path;
         sent.handover = path.covered(now_ns);
         sent.ecn = m_marking;
         // Only a datagram that starts with this short header is one an ICMP message can quote and match.
@@ -2943,6 +2983,16 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
             --numbers.probes;
         }
         numbers.ack_only = written.eliciting ? 0U : numbers.ack_only + 1U;
+        if (written.eliciting && !off_path) // a packet to another 4-tuple measures not this path's RTT
+        {
+            m_counters.path_refreshes += numbers.refresh ? 1U : 0U;
+            numbers.eliciting_ns = now_ns;
+            numbers.refresh = false;
+        }
+        if (written.data && space == QuicSpace::Application && !off_path)
+        {
+            owe_refreshes(slot, now_ns);
+        }
         if (written.eliciting && !m_sent_since_receive)
         {
             m_sent_since_receive = true;

@@ -192,6 +192,9 @@ struct QuicSentPacket
     // The slot of the path ID it was sent on (QuicRecovery's paths): 0 for every Initial and Handshake packet and for
     // a connection without multipath.
     u8 path = 0U;
+    // A path's RTT refresh (QuicConnectionConfig::path_refresh_ns): the path sent nothing ack-eliciting for that long,
+    // so its sample renews the estimate (QuicRtt::sample).
+    bool refresh = false;
     // Never 0 for a datagram of one 1-RTT packet: what an ICMP message quoting it must repeat (quic_pmtu.hpp's hints);
     // 0 for any other packet.
     u32 tag = 0U;
@@ -298,8 +301,10 @@ struct QuicRtt
     // smoothed + max(4 * rttvar, kGranularity): the probe timeout before max_ack_delay and the backoff.
     [[nodiscard]] u64 probe_base_ns() const noexcept;
     // Takes `latest_ns`, the time from a packet's sending to its acknowledgement, at `now_ns`, with the peer's
-    // `ack_delay_ns`, capped at `max_ack_delay_ns` once `confirmed`.
-    void sample(u64 latest_ns, u64 ack_delay_ns, bool confirmed, u64 max_ack_delay_ns, u64 now_ns) noexcept;
+    // `ack_delay_ns`, capped at `max_ack_delay_ns` once `confirmed`. A `renew` sample, of an estimate gone stale,
+    // replaces the smoothed RTT and its variance as a first sample does, the minimum and the delay taken off kept.
+    void sample(u64 latest_ns, u64 ack_delay_ns, bool confirmed, u64 max_ack_delay_ns, u64 now_ns,
+                bool renew = false) noexcept;
 };
 
 struct QuicRecoveryConfig

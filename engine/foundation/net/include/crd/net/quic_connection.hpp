@@ -192,6 +192,11 @@ enum class QuicPathChoice : u8
     Turns,     // each path as its own window and pacer allow, in turn
 };
 
+// How long a path left without data keeps its RTT unmeasured while another carries data (S78's scheduling;
+// QuicConnectionConfig::path_refresh_ns): then one PING measures it again, so that the path choice ranks paths by
+// what they are now.
+inline constexpr u64 kQuicPathRefreshNs = 1000000000U;
+
 struct QuicConnectionConfig
 {
     crypto::QuicSide side = crypto::QuicSide::Client;
@@ -250,6 +255,14 @@ struct QuicConnectionConfig
     u64 initial_rtt_ns = kQuicInitialRttNs;
     CongestionPolicy congestion; // the controller and pacing (congestion_policy_valid), swappable by set_congestion()
     QuicPathChoice path_choice = QuicPathChoice::LowestRtt; // which path carries data; live: set_path_choice()
+    // A data path (not the peer's backup while another is usable, RFC 10069 section 3.3) that has sent no
+    // ack-eliciting packet for this long when another path sends STREAM or DATAGRAM frames, with nothing of its own in
+    // flight and no probe timeout pending, sends one PING (section 5.9: an idle path probed before it is switched to),
+    // whose sample renews its estimate: its RTT stays current for the path choice, and a path gone dark meanwhile is
+    // found by its probe timeout before data goes there. Only this side's data starts one, so an end that only
+    // acknowledges sends none, and a connection without data idles out as it would without them. 0 for none, else at
+    // least kQuicGranularityNs; live: set_path_refresh().
+    u64 path_refresh_ns = kQuicPathRefreshNs;
     // The scheduled handovers of the link this connection's path crosses (handover.hpp; handover_schedule_valid): a
     // packet sent where one may take it is a covered packet. Its loss is no congestion signal (no reduction, no loss
     // rate, no persistent congestion, no black hole for the path MTU search) and its RTT and receive time no delay
@@ -413,6 +426,7 @@ struct QuicConnectionCounters
     u64 paths_closed = 0U;       // abandoned path IDs whose slot and ID space closed
     u64 paths_blocked = 0U;      // PATHS_BLOCKED and PATH_CIDS_BLOCKED frames taken (RFC 10069 section 4.7)
     u64 pto_resends = 0U;        // frames a probe timeout of a dark path sent again on a live one (section 5.7)
+    u64 path_refreshes = 0U;     // idle paths' RTTs measured again while another path carried data (path_refresh_ns)
     u64 foreign_datagrams = 0U;  // datagrams from a path this side takes nothing from (a client's unknown server)
     u64 handover_losses = 0U;    // losses of packets a scheduled handover may have taken, kept from congestion control
     u64 handover_locks = 0U;     // learned schedules put in force where none was
@@ -623,6 +637,10 @@ public:
     // nothing, for a value outside QuicPathChoice.
     [[nodiscard]] bool set_path_choice(QuicPathChoice choice) noexcept;
     [[nodiscard]] QuicPathChoice path_choice() const noexcept { return m_config.path_choice; }
+    // Replaces QuicConnectionConfig::path_refresh_ns live, for the refreshes owed from the next data sent. False,
+    // changing nothing, below kQuicGranularityNs but for 0.
+    [[nodiscard]] bool set_path_refresh(u64 refresh_ns) noexcept;
+    [[nodiscard]] u64 path_refresh_ns() const noexcept { return m_config.path_refresh_ns; }
     // `path_id`'s abandonment while its state is kept (section 3.4); null for a path ID not abandoned or closed.
     [[nodiscard]] const QuicPathAbandon* abandon_of(u64 path_id) const noexcept;
     // The Destination Connection ID this side sends to on path slot `slot`, and the peer's IDs held for `path_id`
@@ -717,6 +735,8 @@ private:
         u64 skipped = kQuicNoPacket; // the latest number skipped
         u8 probes = 0U;              // probe packets the space owes
         u32 ack_only = 0U;           // ACK-only packets sent since the last ack-eliciting one
+        u64 eliciting_ns = 0U;       // when the space's last ack-eliciting packet left
+        bool refresh = false;        // a path slot's space owes a PING that measures its RTT (owe_refreshes())
     };
     static constexpr usize kNumberSpaces = kQuicSpaces - 1U + kQuicMaxPaths;
     [[nodiscard]] static constexpr usize number_space(QuicSpace space, usize slot) noexcept
@@ -733,6 +753,7 @@ private:
         bool path_response = false;
         bool path_challenge = false; // its data is m_challenge
         bool fill = false; // the packet fills its datagram for a bandwidth probe
+        bool data = false; // a STREAM or DATAGRAM frame: what the path choice places
     };
 
     // A packet held until its keys come; its bytes are a max_datagram_bytes slot of m_held_bytes.
@@ -950,6 +971,13 @@ private:
     // peer did not mark is usable, a data path with no probe timeout pending (section 3.3).
     [[nodiscard]] bool peer_backup(usize slot) const noexcept;
     [[nodiscard]] bool backup_held(usize slot) const noexcept;
+    // Whether `slot` may send a PING that measures its RTT again (QuicConnectionConfig::path_refresh_ns): a data path
+    // still sending, not backup_held(), with nothing in flight and no probe timeout pending; and whether it owes one.
+    [[nodiscard]] bool refreshable(usize slot) const noexcept;
+    [[nodiscard]] bool refresh_owed(usize slot) const noexcept;
+    // Data left on slot `from` at `now_ns`: every other refreshable slot whose last ack-eliciting packet is
+    // path_refresh_ns old owes its PING.
+    void owe_refreshes(usize from, u64 now_ns) noexcept;
     // Whether slot `a` goes before slot `b` under QuicPathChoice::LowestRtt: the lower smoothed RTT, then the lower
     // slot.
     [[nodiscard]] bool ranks_before(usize a, usize b) const noexcept;
