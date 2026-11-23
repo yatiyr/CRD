@@ -762,6 +762,7 @@ private:
         bool path_challenge = false; // its data is m_challenge
         bool fill = false; // the packet fills its datagram for a bandwidth probe
         bool data = false; // a STREAM or DATAGRAM frame: what the path choice places
+        bool steers = false;        // a frame that is not probing (section 9.1): the packet moves its peer to its path
         bool carried_other = false; // another slot's acknowledgement of more than PINGs (m_beyond_ping)
     };
 
@@ -1250,6 +1251,8 @@ private:
     u8 m_challenge[kQuicPathDataBytes] = {};   // the PATH_CHALLENGE data of the packet being written
     u64 m_observation_next = 0U;               // the next OBSERVED_ADDRESS sequence (rising on every path)
     bool m_ping_owed = false;
+    // A challenge came on the handshake slot's active path: that slot's next packet is not probing (section 9.3.3).
+    bool m_answer_owed = false;
     bool m_confirmed = false;
     bool m_held_back = false; // the last send() skipped a path whose socket was held back
     bool m_peer_greases = false;

@@ -7389,6 +7389,65 @@ TEST_CASE("QUIC connection: a send held back leaves the PATH_ACKs where they wer
     CHECK(pair.server.state() == QuicConnectionState::Established);
 }
 
+TEST_CASE("QUIC connection: a challenge on path ID 0's active path is answered there by a packet that is not probing "
+          "while its data and acknowledgements ride a faster path, so a server an attacker's copy moved returns at "
+          "once",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 9000 section 9.3.3. The connection fuzzer's find: an off-path copy of a client packet moves the server's path
+    // ID 0, which challenges the client's address; the client's PATH_RESPONSE alone moves nothing back. Path ID 1 is
+    // the shorter, so the client's packets on path ID 0 carry neither data nor ACKs: the PING that answers the
+    // challenge goes on path ID 0 itself, with the response (its window closed to data) or after it.
+    for (const bool pinned : {false, true})
+    {
+        INFO((pinned ? "path ID 0 keeps the stream, with nothing to send" : "path ID 0 yields its data"));
+        MultipathPair pair;
+        pair.net->socket_delay_ns[0] = 30U * kMs;
+        pair.open_second();
+        pair.net->advance(pair.net->now + 3000U * kMs); // the path MTU searches end
+        u64 stream = 0U;
+        REQUIRE(open_uni(pair, stream));
+        REQUIRE(pair.client.streams().pin(stream, 0U) == QuicStreamError::None);
+        u64 written = 0U;
+        u64 read = 0U;
+        chunks_over(pair, pair.client, pair.server, stream, 10U, written, read);
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                read_some(pair.server, stream, read);
+                return read == written;
+            }));
+        const QuicPaths& theirs = pair.server.paths(0U);
+        const Endpoint client_at = pair.net->client_at;
+        REQUIRE(theirs.path(theirs.active()).peer == client_at);
+        // One chunk leaves path ID 0 while the attacker's copy of it reaches the server first, from its own address.
+        const Endpoint attacker{IpAddress::v4(203, 0, 113, 66), 9999U};
+        const u64 moves = pair.server.counters().migrations;
+        pair.net->client_at = attacker;
+        pair.net->also_at = client_at;
+        static_cast<void>(write_pattern(pair.client.streams(), stream, written, written + 500U, stream, false));
+        REQUIRE(pair.net->run_until([&] { return pair.server.counters().migrations == moves + 1U; }));
+        CHECK(theirs.path(theirs.active()).peer == attacker);
+        pair.net->client_at = client_at;
+        pair.net->also_at = Endpoint{};
+        if (!pinned)
+        {
+            REQUIRE(pair.client.streams().pin(stream, 1U) == QuicStreamError::None);
+        }
+        // Within two round trips of path ID 0, far inside the attacker address's validation, the server is back.
+        const u64 sent_on_zero = pair.client.next_packet_number(QuicSpace::Application, 0U);
+        pair.net->advance(pair.net->now + 200U * kMs);
+        CHECK(pair.client.next_packet_number(QuicSpace::Application, 0U) > sent_on_zero);
+        CHECK(theirs.path(theirs.active()).peer == client_at);
+        CHECK(pair.server.counters().migrations == moves + 2U);
+        CHECK(pair.server.counters().path_failures == 0U);
+        chunks_over(pair, pair.client, pair.server, stream, 10U, written, read);
+        CHECK(read + 1500U >= written);
+        CHECK(pair.client.counters().path_failures == 0U);
+        CHECK(pair.server.state() == QuicConnectionState::Established);
+    }
+}
+
 TEST_CASE("QUIC connection: an end whose shortest path stops carrying its packets, one way or both, under a flood, a "
           "trickle or datagrams pinned to the other path, finds it by the PING it sends there each round trip, and its "
           "PATH_ACKs return to their own paths until it carries again",
