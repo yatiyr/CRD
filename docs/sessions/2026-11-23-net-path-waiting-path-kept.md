@@ -13,8 +13,8 @@ A trace showed the cause. The client sent its stream from its socket 2 to the se
 was validating that path while the move waited (`m_deferred_move`), and its 4-tuple table for path ID 0 was full.
 The client then probed from socket 0, and `take_path()` gave up the least recently used spare path. That was the move
 target: it tied with an idle validated path on `last_ns`, and the lower slot won the tie. The move and its validation
-were gone, with no failure recorded. The server neither followed nor validated until the client's next packet. The
-same eviction had already used up three of the client's IDs earlier in the run.
+were gone, with no failure recorded. The server neither followed nor validated until the client's next packet. Earlier
+in the run the same eviction had already dropped that path once while it was the deferred move.
 
 ## The fix
 
@@ -29,8 +29,10 @@ slot's `waiting` path, which waits for a peer ID (section 9.5). A newcomer gives
   `least_recent(kept)`.
 - Teeth: without the kept path the case fails 3 checks (b gone, no move, no migration).
 - The input `bb4b5a5c...` is in `corpus-quic-connection` and replays clean, which covers the deferred-move branch.
-- linux-gcc-debug: crd-net-tests passes; the connection, packet, cids and recovery corpora replay clean; libFuzzer ran
-  on the fixed connection target.
+- linux-gcc-debug: crd-net-tests passes; the connection, packet, cids and recovery corpora replay clean; the 19
+  `crd-no-|crd-check` guards pass. libFuzzer ran on the fixed connection target (360 s, 33783 runs, clean). LLVM
+  22.1.8 tidy is clean on the four touched sources; linux-gcc-release links the connection fuzzer and crd-net-tests
+  under LTO.
 - CI: win-asan in 45100344604 failed `Provider: one verifier and one key serve several threads` a third time. Its
   register entry now records this sighting: a stall, with two threads refused after 12.7 s and a second signing
   succeeding at once. The other three reds in that run are the LTO link fixed in aeb18868.
