@@ -154,7 +154,7 @@ WeightedGraph contract(const WeightedGraph& g, crd::containers::ConstSpan<crd::u
     // Group fine vertices by coarse id (counting sort; ascending fine order
     // within each group → deterministic).
     crd::containers::Array<crd::u32> group_ptr(alloc);
-    group_ptr.resize(n_coarse + 1U);
+    group_ptr.resize(crd::usize{n_coarse} + 1U); // in usize: a u32 sum wraps to 0 at the top vertex count
     for (crd::u32 k = 0; k <= n_coarse; ++k)
     {
         group_ptr[k] = 0U;
@@ -194,7 +194,7 @@ WeightedGraph contract(const WeightedGraph& g, crd::containers::ConstSpan<crd::u
     wsum.resize(n_coarse);
     crd::containers::Array<crd::u32> touched(alloc);
 
-    c.xadj.resize(n_coarse + 1U);
+    c.xadj.resize(crd::usize{n_coarse} + 1U); // in usize: a u32 sum wraps to 0 at the top vertex count
     c.xadj[0] = 0U;
     for (crd::u32 cv = 0; cv < n_coarse; ++cv)
     {
@@ -679,7 +679,7 @@ crd::containers::Array<crd::u32> vertex_separator(const AdjacencyGraph& g, crd::
 
     // Left-vertex CSR adjacency over cut edges (right-local ids, ascending).
     crd::containers::Array<crd::u32> lptr(alloc);
-    lptr.resize(num_l + 1U);
+    lptr.resize(crd::usize{num_l} + 1U); // in usize: a u32 sum wraps to 0 at the top vertex count
     lptr[0] = 0U;
     crd::containers::Array<crd::u32> ladj(alloc);
     for (crd::u32 l = 0; l < num_l; ++l)
@@ -946,7 +946,7 @@ AdjacencyGraph induced_subgraph(const AdjacencyGraph& g, crd::containers::ConstS
     {
         local[verts[i]] = static_cast<crd::i32>(i); // verts ascending -> local monotonic in original id
     }
-    s.xadj.resize(k + 1U);
+    s.xadj.resize(crd::usize{k} + 1U); // in usize: a u32 sum wraps to 0 at the top vertex count
     s.xadj[0] = 0U;
     for (crd::u32 i = 0; i < k; ++i)
     {

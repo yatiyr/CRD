@@ -111,13 +111,14 @@ static bool verify_resource_manager_path(const hs::SparseMatrix<crd::f64, hs::Sp
         if (mid.is_valid())
         {
             auto h = rm.load_sync<hr::SparseMatrixResource>(mid_res);
-            if (h.state() == LoadState::Ready && h.get() != nullptr &&
-                h.get()->nnz() == static_cast<crd::u64>(m.nnz()) &&
-                h.get()->topology_hash() == m.pattern().topology_hash)
+            // Read once: the null check and the reads below then hold the same pointer.
+            const hr::SparseMatrixResource* const loaded = (h.state() == LoadState::Ready) ? h.get() : nullptr;
+            if (loaded != nullptr && loaded->nnz() == static_cast<crd::u64>(m.nnz()) &&
+                loaded->topology_hash() == m.pattern().topology_hash)
             {
                 // Real-data + typed-materialize round-trip: build_csr<f64> on the
                 // loaded resource and spot-check against the source matrix.
-                auto built = h.get()->build_csr<crd::f64>(&g_alloc);
+                auto built = loaded->build_csr<crd::f64>(&g_alloc);
                 ok = (built.nnz() == m.nnz()) && (built.coeff(0, 0) == m.coeff(0, 0));
             }
         }

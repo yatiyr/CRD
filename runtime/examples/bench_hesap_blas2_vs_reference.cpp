@@ -377,6 +377,9 @@ int main(int argc, char** argv)
     {
         SetProcessAffinityMask(GetCurrentProcess(), 0xFFFFULL);
     }
+#else
+    // The P-core pinning is Windows-only: elsewhere --all-cores is accepted and every core stays in use.
+    static_cast<void>(p_cores_only);
 #endif
     crd_peer::eigen::set_threads(1);
     openblas_set_num_threads(1);

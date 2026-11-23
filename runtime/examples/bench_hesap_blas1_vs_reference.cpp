@@ -265,6 +265,9 @@ int main(int argc, char** argv)
     {
         SetProcessAffinityMask(GetCurrentProcess(), 0xFFFFULL);
     }
+#else
+    // The P-core pinning is Windows-only: elsewhere --all-cores is accepted and every core stays in use.
+    static_cast<void>(p_cores_only);
 #endif
     // Eigen + OpenBLAS run single-threaded for L1 (vector ops scale only at
     // very large N where memory bandwidth dominates). Use 1 thread for fair
