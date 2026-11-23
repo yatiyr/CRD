@@ -3110,6 +3110,9 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
     }
     pull_crypto();
     issue_local_ids();
+    // A send held back moves nothing, the PATH_ACKs' carrier neither: the next send chooses it again.
+    const usize carrier = m_ack_slot;
+    const u64 moves = m_counters.ack_path_moves;
     choose_ack_slot();
     // Each open slot once, counted from the last writer; the writer of this call moves only m_send_slot.
     const usize last = m_send_slot;
@@ -3126,6 +3129,11 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
         {
             return used; // a close a seal failure began goes on the next call, on the leading slot
         }
+    }
+    if (m_held_back)
+    {
+        m_ack_slot = carrier;
+        m_counters.ack_path_moves = moves;
     }
     return 0U;
 }
