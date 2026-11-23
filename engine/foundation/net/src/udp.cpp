@@ -609,8 +609,10 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
 #if CRD_OS_WINDOWS
     // Registered I/O first where it may serve. A socket made for it takes no other call, so one the host refuses any
     // part of before the bind is closed and a plain one opened in its place.
-    const NativeSocket registered =
-        (options.registered_io && options.ring_buffers != 0U && rings_allowed()) ? rio_socket(family) : kInvalidSocket;
+    const bool rio_asked = options.registered_io && options.ring_buffers != 0U;
+    const bool rio_allowed = rio_asked && rings_allowed();
+    const NativeSocket registered = rio_allowed ? rio_socket(family) : kInvalidSocket;
+    const int rio_socket_error = (rio_allowed && registered == kInvalidSocket) ? last_error() : 0;
     const NativeSocket handle = (registered != kInvalidSocket)
                                     ? registered
                                     : ::WSASocketW(family, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0U,
@@ -676,18 +678,28 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
     }
 #endif
 #if CRD_OS_WINDOWS
+    if (rio_asked && registered == kInvalidSocket)
+    {
+        socket.m_features.ring_refusal = rio_allowed ? RingRefusal::Setup : RingRefusal::Off;
+        socket.m_features.ring_error = rio_socket_error;
+    }
     if (registered != kInvalidSocket)
     {
         const u32 datagram_bytes = ring_datagram_bytes(options, socket.m_features.coalesced_receive);
-        socket.m_rio = (error == SocketError::None)
-                           ? rio_open(handle, options.ring_buffers, datagram_bytes, socket.m_features.segmented_send)
-                           : nullptr;
+        RingRefusal refusal = RingRefusal::None;
+        int refusal_error = 0;
+        socket.m_rio = (error == SocketError::None) ? rio_open(handle, options.ring_buffers, datagram_bytes,
+                                                               socket.m_features.segmented_send, refusal, refusal_error)
+                                                    : nullptr;
         if (socket.m_rio == nullptr)
         {
             socket.close();
             UdpOptions plain = options;
             plain.registered_io = false;
-            return open(plain, error);
+            UdpSocket fallback = open(plain, error);
+            fallback.m_features.ring_refusal = refusal;
+            fallback.m_features.ring_error = refusal_error;
+            return fallback;
         }
         static_cast<void>(rio_watch(*socket.m_rio));
         socket.m_features.lent_receive = true;
@@ -696,12 +708,22 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
     }
 #endif
 #if CRD_NET_RING
-    if (error == SocketError::None && options.ring_buffers != 0U && rings_allowed())
+    if (error == SocketError::None && options.ring_buffers != 0U && !rings_allowed())
+    {
+        socket.m_features.ring_refusal = RingRefusal::Off;
+    }
+    else if (error == SocketError::None && options.ring_buffers != 0U)
     {
         const u32 datagram_bytes = ring_datagram_bytes(options, socket.m_features.coalesced_receive);
-        socket.m_ring = ring_open(handle, options.ring_buffers, datagram_bytes, static_cast<u32>(kControlBytes));
+        socket.m_ring = ring_open(handle, options.ring_buffers, datagram_bytes, static_cast<u32>(kControlBytes),
+                                  socket.m_features.ring_refusal, socket.m_features.ring_error);
         socket.m_features.lent_receive = socket.m_ring != nullptr;
         socket.m_features.receive_bytes = (socket.m_ring != nullptr) ? datagram_bytes : 0U;
+    }
+#elif !CRD_OS_WINDOWS
+    if (error == SocketError::None && options.ring_buffers != 0U)
+    {
+        socket.m_features.ring_refusal = RingRefusal::Off; // a host with neither io_uring nor Registered I/O
     }
 #endif
 #if CRD_NET_SEND_RING

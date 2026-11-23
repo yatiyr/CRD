@@ -44,6 +44,19 @@ enum class SocketError : u8
 inline constexpr usize kMaxUdpPayloadV4 = 65507U;
 inline constexpr usize kMaxUdpPayloadV6 = 65527U;
 
+// The step at which the host refused the ring UdpOptions::ring_buffers asked for (SocketFeatures::ring_refusal); the
+// socket then receives through its plain path.
+enum class RingRefusal : u8
+{
+    None,     // the socket lends, or asked for no ring (ring_buffers 0; Windows without registered_io)
+    Count,    // ring_buffers is not a power of two from 4 to 32768
+    Off,      // CRD_NET_UDP_RING=0, or a host with neither io_uring nor Registered I/O
+    Memory,   // the pages of its buffers
+    Setup,    // the ring itself: io_uring_setup and its mappings, or Registered I/O's table and queues
+    Register, // handing its buffers to the host
+    Arm,      // the first receive (a kernel before 6.0 refuses the multishot recvmsg)
+};
+
 // A socket the host cannot wait on together with others (DatagramSocket::wait_handle).
 inline constexpr u64 kNoWaitHandle = ~u64{0};
 // The most sockets one loop and its host serve together: one per path a QUIC connection knows (kQuicMaxPaths).
@@ -143,6 +156,10 @@ struct SocketFeatures
     // an empty slot; also the socket's own. Nonzero, the longest datagram one of them holds whole, whatever the slot.
     bool lent_receive = false;
     u32 receive_bytes = 0U;
+    // Where a ring was asked for and none lends, the step the host refused and its error code there (errno, or
+    // Windows' error), for an operator to read why: a resource refusal (ENOMEM, EMFILE) is the host's limits.
+    RingRefusal ring_refusal = RingRefusal::None;
+    int ring_error = 0;
     // Nonzero, the longest datagram a send takes (Windows' Registered I/O slots); a longer one fails with
     // MessageTooLarge.
     u32 send_bytes = 0U;

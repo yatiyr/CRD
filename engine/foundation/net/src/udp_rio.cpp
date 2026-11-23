@@ -138,11 +138,14 @@ NativeSocket rio_socket(int family) noexcept
                         WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT | WSA_FLAG_REGISTERED_IO);
 }
 
-UdpRio* rio_open(NativeSocket socket, u32 buffers, u32 datagram_bytes, bool trains) noexcept
+UdpRio* rio_open(NativeSocket socket, u32 buffers, u32 datagram_bytes, bool trains, RingRefusal& refusal,
+                 int& error) noexcept
 {
     if (buffers < kRioMinBuffers || buffers > kRioMaxBuffers || (buffers & (buffers - 1U)) != 0U ||
         datagram_bytes == 0U || datagram_bytes > kMaxTrainBytes)
     {
+        refusal = RingRefusal::Count;
+        error = 0;
         return nullptr;
     }
     const u32 counts[kPools] = {buffers, kRioSends, trains ? kRioTrains : 0U};
@@ -156,12 +159,11 @@ UdpRio* rio_open(NativeSocket socket, u32 buffers, u32 datagram_bytes, bool trai
         total += usize{counts[pool]} * slot_stride(bytes[pool]);
     }
     vm::VmRegion region = vm::reserve(round_up(total, vm::page_size()));
-    if (!region.valid())
+    const bool committed = region.valid() && vm::commit(region.base, region.size);
+    if (!committed)
     {
-        return nullptr;
-    }
-    if (!vm::commit(region.base, region.size))
-    {
+        refusal = RingRefusal::Memory;
+        error = static_cast<int>(::GetLastError());
         vm::release(region);
         return nullptr;
     }
@@ -200,6 +202,8 @@ UdpRio* rio_open(NativeSocket socket, u32 buffers, u32 datagram_bytes, bool trai
     // Manual reset, so a set event stays set until the next rio_watch() (NotifyReset) clears and arms it again.
     rio->event = ready ? ::CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
     ready = rio->event != nullptr;
+    // The step a refusal stops at; every call before the posts reports its error through GetLastError().
+    RingRefusal step = RingRefusal::Setup;
     const u32 sends = counts[kSends] + counts[kTrains];
     if (ready)
     {
@@ -211,6 +215,7 @@ UdpRio* rio_open(NativeSocket socket, u32 buffers, u32 datagram_bytes, bool trai
         rio->send_queue = rio->table.RIOCreateCompletionQueue(sends, nullptr); // read as slots are wanted
         ready = rio->receive_queue != RIO_INVALID_CQ && rio->send_queue != RIO_INVALID_CQ;
     }
+    step = ready ? RingRefusal::Register : step;
     for (u32 slot = 0U; ready && slot < slots; ++slot)
     {
         rio->ids[slot] = rio->table.RIORegisterBuffer(reinterpret_cast<PCHAR>(slot_at(*rio, slot)),
@@ -219,16 +224,20 @@ UdpRio* rio_open(NativeSocket socket, u32 buffers, u32 datagram_bytes, bool trai
     }
     if (ready)
     {
+        step = RingRefusal::Setup;
         rio->requests = rio->table.RIOCreateRequestQueue(socket, buffers, 1U, sends, 1U, rio->receive_queue,
                                                          rio->send_queue, nullptr);
         ready = rio->requests != RIO_INVALID_RQ;
     }
+    step = ready ? RingRefusal::Arm : step;
     for (u32 slot = 0U; ready && slot < buffers; ++slot)
     {
         ready = post_receive(*rio, slot);
     }
     if (!ready)
     {
+        refusal = step;
+        error = static_cast<int>(::GetLastError());
         release(*rio);
         return nullptr;
     }

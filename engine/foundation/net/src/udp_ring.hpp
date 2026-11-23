@@ -75,8 +75,10 @@ struct RingCompletion
 // A ring of `buffers` buffers (a power of two from kRingMinBuffers to kRingMaxBuffers), each holding a datagram of
 // up to `datagram_bytes` and `control_bytes` of control messages, armed on `socket`, unbound yet (what
 // is waiting at once is then a refusal); nullptr where the host refuses any part of it (no io_uring, a kernel before
-// 6.0, a sandbox, no memory), and the socket then keeps its plain path.
-[[nodiscard]] UdpRing* ring_open(int socket, u32 buffers, u32 datagram_bytes, u32 control_bytes) noexcept;
+// 6.0, a sandbox, no memory), `refusal` and `error` then naming the step and its errno, and the socket keeps its plain
+// path.
+[[nodiscard]] UdpRing* ring_open(int socket, u32 buffers, u32 datagram_bytes, u32 control_bytes, RingRefusal& refusal,
+                                 int& error) noexcept;
 // Ends the receive, waits until the host is done with every buffer, and gives the pages back. Null is a no-op.
 void ring_close(UdpRing* ring) noexcept;
 

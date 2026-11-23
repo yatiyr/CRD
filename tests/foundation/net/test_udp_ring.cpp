@@ -9,19 +9,29 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
 
-// NOLINTBEGIN(cppcoreguidelines-macro-usage): selects the io_uring probe and board
+// NOLINTBEGIN(cppcoreguidelines-macro-usage): selects the io_uring probe and board, as crd-net selects the ring
 #if CRD_OS_LINUX && !CRD_OS_ANDROID && __has_include(<linux/io_uring.h>)
 #include <linux/io_uring.h>
+#if defined(IORING_RECV_MULTISHOT)
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 #define CRD_TEST_RING 1
-#else
+#endif
+#endif
+#ifndef CRD_TEST_RING
 #define CRD_TEST_RING 0
 #endif
 // NOLINTEND(cppcoreguidelines-macro-usage)
@@ -43,6 +53,8 @@ using crd::net::Endpoint;
 using crd::net::IpAddress;
 using crd::net::OutgoingDatagram;
 using crd::net::ReceivedDatagram;
+using crd::net::RingRefusal;
+using crd::net::SocketFeatures;
 using crd::net::SocketError;
 using crd::net::SocketSet;
 using crd::net::UdpOptions;
@@ -51,14 +63,20 @@ using crd::net::UdpSocket;
 constexpr u64 kPatience = 2'000'000'000U;
 constexpr Ecn kCodepoints[4] = {Ecn::NotEct, Ecn::Ect0, Ecn::Ect1, Ecn::Ce};
 
+// CRD_NET_UDP_RING=0 in the environment.
+bool rings_turned_off()
+{
+    char value[4] = {};
+    return crd::read_environment("CRD_NET_UDP_RING", value, sizeof(value)) == crd::EnvironmentRead::Set &&
+           std::strcmp(value, "0") == 0;
+}
+
 // Whether this host runs io_uring's multishot recvmsg for this process, read apart from crd-net: Linux 6.0 or later
 // that sets a ring up here, and no CRD_NET_UDP_RING=0 in the environment.
 bool host_runs_ring()
 {
 #if CRD_TEST_RING
-    char value[4] = {};
-    if (crd::read_environment("CRD_NET_UDP_RING", value, sizeof(value)) == crd::EnvironmentRead::Set &&
-        std::strcmp(value, "0") == 0)
+    if (rings_turned_off())
     {
         return false;
     }
@@ -204,6 +222,43 @@ usize take_lent(UdpSocket& socket, const Endpoint& from, usize count, usize per_
     return got;
 }
 
+// What a socket reports for a count the ring cannot take: Count where the ring could run, Off where the environment
+// or the build has none, and None where it asked for none (Windows takes ring_buffers only with registered_io,
+// test_udp_rio.cpp).
+RingRefusal count_refusal(u32 buffers)
+{
+    if (CRD_OS_WINDOWS != 0 || buffers == 0U)
+    {
+        return RingRefusal::None;
+    }
+    return (CRD_TEST_RING == 0 || rings_turned_off()) ? RingRefusal::Off : RingRefusal::Count;
+}
+
+// What a socket asking for a valid ring reports on a host that runs none: Off where the environment or the build has
+// none, the setup or first receive the host refused where it lacks io_uring's (a kernel before 6.0, a sandbox).
+bool reports_no_ring(const SocketFeatures& features)
+{
+    const RingRefusal step = features.ring_refusal;
+    if (CRD_OS_WINDOWS != 0)
+    {
+        return step == RingRefusal::None;
+    }
+    if (CRD_TEST_RING == 0 || rings_turned_off())
+    {
+        return step == RingRefusal::Off;
+    }
+    return step == RingRefusal::Setup || step == RingRefusal::Arm;
+}
+
+// A refusal of the host's limits: memory, descriptors or a quota, at a step that asks for them.
+bool resource_refusal(const SocketFeatures& features)
+{
+    const RingRefusal step = features.ring_refusal;
+    const int code = features.ring_error;
+    return (step == RingRefusal::Memory || step == RingRefusal::Setup || step == RingRefusal::Register) &&
+           (code == ENOMEM || code == EMFILE || code == ENFILE || code == EAGAIN);
+}
+
 } // namespace
 
 TEST_CASE("a UDP socket receives through io_uring exactly where the host runs it, and through recvmmsg elsewhere",
@@ -211,23 +266,43 @@ TEST_CASE("a UDP socket receives through io_uring exactly where the host runs it
 {
     const bool ring = host_runs_ring();
     const UdpSocket socket = open_with(UdpOptions{});
+    INFO("refused at step " << static_cast<int>(socket.features().ring_refusal) << ", error "
+                            << socket.features().ring_error);
     CHECK(socket.features().lent_receive == ring);
     CHECK(socket.features().receive_bytes == (ring ? crd::net::kMaxUdpPayloadV6 : 0U));
+    CHECK((ring ? socket.features().ring_refusal == RingRefusal::None : reports_no_ring(socket.features())));
 
-    // A power of two from 4 to 32768 buffers; any other count keeps recvmmsg.
+    // A power of two from 4 to 32768 buffers; any other count keeps recvmmsg and says so.
     for (const u32 buffers : {0U, 1U, 2U, 3U, 5U, 48U, 65536U})
     {
         INFO(buffers << " buffers");
         UdpOptions options;
         options.ring_buffers = buffers;
-        CHECK_FALSE(open_with(options).features().lent_receive);
+        const UdpSocket plain = open_with(options);
+        CHECK_FALSE(plain.features().lent_receive);
+        CHECK(plain.features().ring_refusal == count_refusal(buffers));
+        CHECK(plain.features().ring_error == 0);
     }
+    // A valid count lends where the host runs the ring, or reports the host's limits refusing it (the largest asks
+    // for 32768 buffers of a whole datagram each); nothing else stops it.
     for (const u32 buffers : {4U, 8U, 1024U, 32768U})
     {
-        INFO(buffers << " buffers");
         UdpOptions options;
         options.ring_buffers = buffers;
-        CHECK(open_with(options).features().lent_receive == ring);
+        const UdpSocket opened = open_with(options);
+        const SocketFeatures features = opened.features();
+        INFO(buffers << " buffers, refused at step " << static_cast<int>(features.ring_refusal) << ", error "
+                     << features.ring_error);
+        if (ring)
+        {
+            CHECK((features.ring_refusal == RingRefusal::None) == features.lent_receive);
+            CHECK((features.lent_receive || (buffers > 1024U && resource_refusal(features))));
+        }
+        else
+        {
+            CHECK_FALSE(features.lent_receive);
+            CHECK(reports_no_ring(features));
+        }
     }
     UdpOptions trains; // a coalescing socket's buffers each hold a whole train
     trains.coalesce_receive = true;
@@ -238,6 +313,149 @@ TEST_CASE("a UDP socket receives through io_uring exactly where the host runs it
         CHECK(coalescing.features().receive_bytes == crd::net::kMaxTrainBytes);
     }
 }
+
+#if CRD_TEST_RING
+namespace
+{
+// A soft limit of this process lowered for one scope and given back after, whatever the scope throws.
+class LoweredLimit
+{
+public:
+    LoweredLimit(int resource, rlim_t soft) : m_resource(resource)
+    {
+        REQUIRE(::getrlimit(resource, &m_saved) == 0);
+        rlimit lowered = m_saved;
+        lowered.rlim_cur = soft;
+        m_lowered = ::setrlimit(resource, &lowered) == 0;
+    }
+    ~LoweredLimit()
+    {
+        static_cast<void>(::setrlimit(m_resource, &m_saved));
+    }
+    LoweredLimit(const LoweredLimit&) = delete;
+    LoweredLimit& operator=(const LoweredLimit&) = delete;
+    LoweredLimit(LoweredLimit&&) = delete;
+    LoweredLimit& operator=(LoweredLimit&&) = delete;
+
+    [[nodiscard]] bool lowered() const noexcept
+    {
+        return m_lowered;
+    }
+
+private:
+    int m_resource;
+    rlimit m_saved{};
+    bool m_lowered = false;
+};
+
+// Answers io_uring_setup with EPERM on the calling thread alone, as a container's seccomp profile (Docker's default
+// among them) does, every other call allowed: true where the filter holds. It ends with the thread.
+bool refuse_ring_setup()
+{
+    sock_filter program[] = {
+        {BPF_LD | BPF_W | BPF_ABS, 0U, 0U, static_cast<u32>(offsetof(seccomp_data, nr))},
+        {BPF_JMP | BPF_JEQ | BPF_K, 0U, 1U, static_cast<u32>(__NR_io_uring_setup)},
+        {BPF_RET | BPF_K, 0U, 0U, SECCOMP_RET_ERRNO | (static_cast<u32>(EPERM) & SECCOMP_RET_DATA)},
+        {BPF_RET | BPF_K, 0U, 0U, SECCOMP_RET_ALLOW},
+    };
+    const sock_fprog filter{static_cast<unsigned short>(sizeof(program) / sizeof(program[0])), program};
+    return ::prctl(PR_SET_NO_NEW_PRIVS, 1UL, 0UL, 0UL, 0UL) == 0 &&
+           ::prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &filter) == 0;
+}
+
+// Opens a socket asking for a ring of `buffers` buffers of a whole datagram, with nothing around the open that
+// allocates or opens a descriptor, so a lowered limit refuses the ring alone.
+UdpSocket open_bare(SocketError& error, u32 buffers = 64U)
+{
+    UdpOptions options;
+    options.bind = Endpoint{IpAddress::v4_loopback(), 0U};
+    options.ring_buffers = buffers;
+    return UdpSocket::open(options, error);
+}
+
+// The refused socket still receives, through recvmmsg into the slot's own storage.
+void receives_plainly(UdpSocket& socket)
+{
+    UdpSocket sender = open_with(UdpOptions{});
+    REQUIRE(send_burst(sender, socket.local_endpoint(), 1U));
+    u8 storage[2048];
+    ReceivedDatagram slot;
+    slot.storage = Span<u8>(storage, sizeof(storage));
+    REQUIRE(socket.wait_readable(kPatience));
+    const BatchResult result = socket.receive(Span<ReceivedDatagram>(&slot, 1U));
+    CHECK(result.error == SocketError::None);
+    CHECK(result.count == 1U);
+    CHECK(slot.size == size_of(0U));
+    CHECK(same_pattern(ConstSpan<u8>(storage, slot.size), 0U));
+}
+} // namespace
+
+TEST_CASE("a ring the host refuses names the step and its errno, and the socket receives through recvmmsg",
+          "[net][udp][net-path]")
+{
+    if (!host_runs_ring())
+    {
+        SKIP("the host runs no io_uring receive");
+    }
+    SECTION("a sandbox refuses io_uring_setup: Setup, EPERM")
+    {
+        SocketError error = SocketError::Failed;
+        UdpSocket socket;
+        bool filtered = false;
+        std::thread sandboxed(
+            [&]
+            {
+                filtered = refuse_ring_setup();
+                socket = filtered ? open_bare(error) : UdpSocket{};
+            });
+        sandboxed.join();
+        REQUIRE(filtered);
+        REQUIRE(error == SocketError::None);
+        CHECK_FALSE(socket.features().lent_receive);
+        CHECK(socket.features().ring_refusal == RingRefusal::Setup);
+        CHECK(socket.features().ring_error == EPERM);
+        CHECK_FALSE(resource_refusal(socket.features()));
+        receives_plainly(socket);
+    }
+    SECTION("the buffers' pages pass the address space left: Memory, ENOMEM")
+    {
+        // The largest ring asks for 32768 buffers of a whole datagram's pages each, over 2 GiB; 256 MiB past the
+        // process's address space holds none of it and leaves the sanitizers' runtimes their room.
+        char line[128] = {};
+        std::FILE* const statm = std::fopen("/proc/self/statm", "r");
+        REQUIRE(statm != nullptr);
+        const bool read = std::fgets(line, sizeof(line), statm) != nullptr;
+        std::fclose(statm);
+        REQUIRE(read);
+        char* end = nullptr;
+        errno = 0;
+        const unsigned long long pages = std::strtoull(line, &end, 10); // the first field: the whole size in pages
+        REQUIRE((errno == 0 && end != line && pages != 0U));
+        const rlim_t room = (static_cast<rlim_t>(pages) * static_cast<rlim_t>(::sysconf(_SC_PAGESIZE))) + (256U << 20U);
+        SocketError error = SocketError::Failed;
+        UdpSocket socket;
+        bool lowered = false;
+        {
+            const LoweredLimit limit(RLIMIT_AS, room);
+            lowered = limit.lowered();
+            socket = lowered ? open_bare(error, 32768U) : UdpSocket{};
+        }
+        REQUIRE(lowered);
+        REQUIRE(error == SocketError::None);
+        CHECK_FALSE(socket.features().lent_receive);
+        CHECK(socket.features().ring_refusal == RingRefusal::Memory);
+        CHECK(socket.features().ring_error == ENOMEM);
+        CHECK(resource_refusal(socket.features()));
+        receives_plainly(socket);
+    }
+    // Each limit given back, the same open lends again.
+    SocketError error = SocketError::Failed;
+    const UdpSocket again = open_bare(error);
+    REQUIRE(error == SocketError::None);
+    CHECK(again.features().lent_receive);
+    CHECK(again.features().ring_refusal == RingRefusal::None);
+}
+#endif
 
 TEST_CASE("a ring socket lends its own buffers to empty slots, each holding its datagram until the next receive",
           "[net][udp][net-path]")

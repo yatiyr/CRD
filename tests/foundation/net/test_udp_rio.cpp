@@ -36,6 +36,7 @@ using crd::net::Endpoint;
 using crd::net::IpAddress;
 using crd::net::OutgoingDatagram;
 using crd::net::ReceivedDatagram;
+using crd::net::RingRefusal;
 using crd::net::SocketError;
 using crd::net::SocketSet;
 using crd::net::UdpOptions;
@@ -174,7 +175,9 @@ TEST_CASE("a UDP socket goes through Registered I/O exactly where asked, with bu
     CHECK(socket.features().ecn_reading);
     CHECK(socket.wait_handle() != crd::net::kNoWaitHandle);
 
-    // A power of two from 4 to 32768 buffers; any other count keeps the plain path, open all the same.
+    CHECK(socket.features().ring_refusal == RingRefusal::None);
+
+    // A power of two from 4 to 32768 buffers; any other count keeps the plain path, open all the same, and says why.
     for (const u32 buffers : {0U, 1U, 3U, 48U, 65536U})
     {
         INFO(buffers << " buffers");
@@ -182,11 +185,15 @@ TEST_CASE("a UDP socket goes through Registered I/O exactly where asked, with bu
         CHECK(plain.is_open());
         CHECK_FALSE(plain.features().lent_receive);
         CHECK(plain.features().send_bytes == 0U);
+        CHECK(plain.features().ring_refusal == ((buffers == 0U) ? RingRefusal::None : RingRefusal::Count));
+        CHECK(plain.features().ring_error == 0);
     }
     for (const u32 buffers : {4U, 1024U})
     {
         INFO(buffers << " buffers");
-        CHECK(open_with(registered(buffers)).features().lent_receive);
+        const UdpSocket ring = open_with(registered(buffers));
+        CHECK(ring.features().lent_receive);
+        CHECK(ring.features().ring_refusal == RingRefusal::None);
     }
     const UdpSocket sized = open_with(registered(64U, 1500U));
     CHECK(sized.features().receive_bytes == 1500U);

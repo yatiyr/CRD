@@ -311,12 +311,20 @@ void destroy(UdpRing* ring) noexcept
 
 } // namespace
 
-UdpRing* ring_open(int socket, u32 buffers, u32 datagram_bytes, u32 control_bytes) noexcept
+UdpRing* ring_open(int socket, u32 buffers, u32 datagram_bytes, u32 control_bytes, RingRefusal& refusal,
+                   int& error) noexcept
 {
+    // The step and errno a refusal reports, read before the release behind it can change errno.
+    const auto refuse = [&refusal, &error](RingRefusal step, int code) noexcept -> UdpRing*
+    {
+        refusal = step;
+        error = code;
+        return nullptr;
+    };
     if (buffers < kRingMinBuffers || buffers > kRingMaxBuffers || (buffers & (buffers - 1U)) != 0U ||
         datagram_bytes == 0U)
     {
-        return nullptr;
+        return refuse(RingRefusal::Count, 0);
     }
     // Each buffer starts a page, so a short datagram backs one page of it and a long one only the pages it fills.
     const usize page = vm::page_size();
@@ -330,12 +338,13 @@ UdpRing* ring_open(int socket, u32 buffers, u32 datagram_bytes, u32 control_byte
     vm::VmRegion region = vm::reserve(total);
     if (!region.valid())
     {
-        return nullptr;
+        return refuse(RingRefusal::Memory, errno);
     }
     if (!vm::commit(region.base, region.size))
     {
+        const int code = errno;
         vm::release(region);
-        return nullptr;
+        return refuse(RingRefusal::Memory, code);
     }
     u8* const base = static_cast<u8*>(region.base);
     UdpRing* const ring = new (base) UdpRing{};
@@ -360,8 +369,9 @@ UdpRing* ring_open(int socket, u32 buffers, u32 datagram_bytes, u32 control_byte
     ring->fd = setup(kSubmissionEntries, params);
     if (ring->fd < 0 || !map_rings(*ring, params))
     {
+        const int code = errno;
         destroy(ring);
-        return nullptr;
+        return refuse(RingRefusal::Setup, code);
     }
     io_uring_buf_reg registration{};
     registration.ring_addr = reinterpret_cast<u64>(ring->buffer_ring);
@@ -370,8 +380,9 @@ UdpRing* ring_open(int socket, u32 buffers, u32 datagram_bytes, u32 control_byte
     ring->registered = register_with(ring->fd, IORING_REGISTER_PBUF_RING, &registration, 1U) == 0;
     if (!ring->registered)
     {
+        const int code = errno;
         destroy(ring);
-        return nullptr;
+        return refuse(RingRefusal::Register, code);
     }
     for (u32 buffer = 0U; buffer < buffers; ++buffer)
     {
@@ -380,16 +391,18 @@ UdpRing* ring_open(int socket, u32 buffers, u32 datagram_bytes, u32 control_byte
     publish_buffers(*ring);
     // Armed before the socket binds, so nothing can have arrived: a completion already waiting is the host refusing
     // a request (a kernel before 6.0 refuses the multishot flag at once).
+    errno = 0;
     if (!arm(*ring, false, true, true))
     {
+        const int code = errno; // 0 where the host took no entry and named no error
         destroy(ring);
-        return nullptr;
+        return refuse(RingRefusal::Arm, code);
     }
     RingCompletion refused;
     if (ring_next(*ring, refused))
     {
         ring_close(ring);
-        return nullptr;
+        return refuse(RingRefusal::Arm, refused.error);
     }
     return ring;
 }

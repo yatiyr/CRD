@@ -41,8 +41,9 @@ inline constexpr u32 kRioControlBytes = 64U;
 // power of two from kRioMinBuffers to kRioMaxBuffers) of `datagram_bytes`, kRioSends send slots of as many, and with
 // `trains` kRioTrains train slots, every one registered on its own as the host's contract for a buffer in use asks,
 // so their pages stay locked while the socket is open. Every receive is posted. nullptr where the host refuses any
-// part of it (memory, the locked-page quota).
-[[nodiscard]] UdpRio* rio_open(NativeSocket socket, u32 buffers, u32 datagram_bytes, bool trains) noexcept;
+// part of it (memory, the locked-page quota), `refusal` and `error` then naming the step and its GetLastError().
+[[nodiscard]] UdpRio* rio_open(NativeSocket socket, u32 buffers, u32 datagram_bytes, bool trains, RingRefusal& refusal,
+                               int& error) noexcept;
 // After the socket is closed, which ends every request: deregisters the buffers and gives the pages back. Null is a
 // no-op.
 void rio_close(UdpRio* rio) noexcept;
