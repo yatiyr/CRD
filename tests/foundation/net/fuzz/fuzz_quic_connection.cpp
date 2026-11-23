@@ -1817,6 +1817,11 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
                                           const QuicConnectionCounters& counters = pair.server.counters();
                                           const bool heard = (pair.opened_from[client_address()] & id_bit(kept)) != 0U;
                                           CRD_FUZZ_REQUIRE(!heard || counters.path_failures != 0U);
+                                          // Asked for a packet and still unheard only while it cannot record one.
+                                          const usize own = slot_of(pair.client, kept);
+                                          CRD_FUZZ_REQUIRE(heard || !pinged || own == kQuicNoPath ||
+                                                           !pair.client.recovery().can_send(QuicSpace::Application,
+                                                                                            own));
                                           // Again only after another validation failed, or when nothing opened.
                                           CRD_FUZZ_REQUIRE(!pinged || counters.path_failures > failures ||
                                                            counters.packets_opened == opened);
