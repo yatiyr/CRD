@@ -1004,7 +1004,8 @@ int main(int argc, char** argv)
     {
         return usage();
     }
-    options.timed_service = runs_http3(options);
+    // An abandon-added client's close waits for the path ID's space, which closes on a timer with no packet to serve.
+    options.timed_service = runs_http3(options) || options.abandon_added;
     // The tunnels count `connections` and run their own echo; the QUIC run is one connection with none.
     static const QmuxOptions kTunnelOptions = static_cast<const QmuxOptions&>(options); // the QMux part alone
     static const ConstSpan<u8> kSubprotocols[] = {bytes_of(options.alpn)};
