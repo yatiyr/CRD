@@ -7144,6 +7144,36 @@ TEST_CASE("QUIC connection: by the lowest RTT an end's PATH_ACKs for a slower pa
     }
 }
 
+TEST_CASE("QUIC connection: a send held back leaves the PATH_ACKs where they were, and the next one moves them",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // The connection fuzzer's find: with its sockets held, the server's send() wrote nothing yet moved its PATH_ACKs
+    // off path ID 0 once the client marked that path backup, counting the move (send()'s held sockets change nothing).
+    MultipathPair pair;
+    pair.net->socket_delay_ns[1] = 30U * kMs;
+    pair.open_second();
+    pair.net->advance(pair.net->now + 3000U * kMs);
+    u64 stream = 0U;
+    REQUIRE(open_uni(pair, stream));
+    REQUIRE(pair.client.streams().pin(stream, 1U) == QuicStreamError::None);
+    u64 written = 0U;
+    u64 read = 0U;
+    chunks_over(pair, pair.client, pair.server, stream, 50U, written, read);
+    REQUIRE(pair.server.counters().ack_path_moves == 0U);
+    pair.net->held[1] = ~0U;
+    REQUIRE(pair.client.set_path_status(0U, true) == QuicPathStatusChange::Set);
+    REQUIRE(pair.net->run_until([&] { return pair.server.peer_path_status(0U) == QuicPathStatus::Backup; }));
+    u8 out[kDatagram];
+    CHECK(pair.server.send(Span<u8>(out, sizeof(out)), pair.net->now, ~0U) == 0U);
+    CHECK(pair.server.held_back());
+    CHECK(pair.server.counters().ack_path_moves == 0U);
+    pair.net->held[1] = 0U;
+    chunks_over(pair, pair.client, pair.server, stream, 50U, written, read);
+    CHECK(pair.server.counters().ack_path_moves == 1U);
+    CHECK(read + 1500U >= written);
+    CHECK(pair.server.state() == QuicConnectionState::Established);
+}
+
 TEST_CASE("QUIC connection: an end whose shortest path stops carrying its packets, one way or both, under a flood, a "
           "trickle or datagrams pinned to the other path, finds it by the PING it sends there each round trip, and its "
           "PATH_ACKs return to their own paths until it carries again",

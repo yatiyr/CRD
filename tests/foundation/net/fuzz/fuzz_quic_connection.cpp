@@ -29,7 +29,10 @@
 // may wait for one (section 9.5), or four after a leading 0xF3. In any script 0xF6 sets both ends' handover schedule
 // (S76) from the next byte: an event every second from now, its guards from the byte, a refused schedule changing
 // nothing; 0xF5 has both learn the phase instead (a period and guards from the next byte), the learned schedule held
-// to the learning.
+// to the learning. With bit 6 (RFC 10069, design S78) 0xF0 has one end abandon a path ID (abandon_path()) from the
+// next byte: bit 0 the end, bits 1 to 3 the path ID, bits 4 and 5 the error code (NO_ERROR, 0x3E, the largest
+// varint, one past it); and over paths 0xF2 has the client open a further path ID (add_path()) on its socket in the
+// next byte's bits 0 and 1 (3 is socket 0), to the server's address or, with bit 2, its preferred one.
 //
 // Oracles. Always: a server sends at most three times what it received before the address is proven, and on paths
 // at most three times what arrived from each address it has not validated since it last knew it; every client
@@ -50,7 +53,12 @@
 // arrived; a move or a probe the client refuses changes its active path in nothing, one it starts moves it or not as
 // asked; no client datagram leaves by a held socket, and a send() held back changes no counter or packet number; a
 // server on its preferred socket moved there after its client, once it validated the path there, and keeps no path
-// on its first socket; a client there sends to that address alone.
+// on its first socket; a client there sends to that address alone. These path checks read path ID 0's slots while
+// it is open; the server's credit holds per address over every slot. Multipath: no path ID opens in a slot of either
+// end twice (RFC 10069 section 2.4, its nonce); add_path() and abandon_path() answer as the limits, the paths still
+// sending and the earlier abandonments say, and nothing refused changes a counter; each end's limit rises by one per
+// path ID closed, which its peer learns. A confirmed pair keeps the client's lowest open path ID once the stream
+// arrived, abandoning its others, and the server follows the client on it.
 // 0-RTT: an offer ends Accepted or Rejected on both ends alike; accepted, the server reads the early stream
 // whole and unchanged, never marking more bytes replayable than came; rejected, the client's streams were reset and
 // the server opened none of them.
@@ -99,6 +107,7 @@ constexpr u8 kEarlyPayload[] = {0xDA, 0x7A};
 constexpr u8 kKeyedSecret[kQuicKeyedSecretBytes] = {0x4D, 0x11, 0x7E};
 constexpr usize kKeyedIdBytes = 8U;
 constexpr u64 kMaxPathId = 2U; // RFC 10069: both ends' initial_max_path_id when byte 0 offers the extensions
+constexpr u64 kNoPathId = ~u64{0};
 
 bool valid_close(u64 code)
 {
@@ -450,6 +459,48 @@ QuicConnectionConfig on_paths(QuicConnectionConfig config)
     return config;
 }
 
+// The slot whose number space is `path_id`'s at `end` (RFC 10069: one per open path ID); kQuicNoPath for none.
+usize slot_of(const QuicConnection& end, u64 path_id)
+{
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        if (end.protection().path_open(slot) && end.protection().path_id(slot) == path_id)
+        {
+            return slot;
+        }
+    }
+    return kQuicNoPath;
+}
+
+// Whether a slot of `end`'s knows the 4-tuple `path` (validated, with `validated`).
+bool knows(const QuicConnection& end, const QuicPath& path, bool validated = false)
+{
+    bool found = false;
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        const usize index = end.protection().path_open(slot) ? end.paths(slot).find(path) : kQuicNoPath;
+        found = found || (index != kQuicNoPath && (!validated || end.paths(slot).validated(index)));
+    }
+    return found;
+}
+
+// The bit of a path ID below 64 in a mask of path IDs (0 above: the scripts name none).
+u64 id_bit(u64 path_id)
+{
+    return (path_id < 64U) ? (u64{1} << path_id) : 0U;
+}
+
+// The slots that send at `end` (RFC 10069 section 3.4: the last one is never abandoned).
+usize sending_slots(const QuicConnection& end)
+{
+    usize count = 0U;
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        count += (end.path_control(slot) != nullptr) ? 1U : 0U;
+    }
+    return count;
+}
+
 // MSVC C4324 as for crd::crypto::AeadKey: the connections are 16-byte aligned; ARM64 MSVC reports the padding.
 #if CRD_COMPILER_MSVC
 #pragma warning(push)
@@ -469,14 +520,19 @@ struct Pair
     bool keyed = false; // the raw UDP path: no handshake to confirm, so it stands once both ends read the other's hello
     bool retry_sent = false;
     usize client_path = 0U; // socket 0's address now (over paths)
-    // Bytes the server was given from each address at each of its sockets since it last did not know that path, and
-    // sent there.
+    // Bytes the server was given from each address at each of its sockets since no slot of its knew that path, and
+    // sent there while no slot had proven it.
     u64 path_received[2][kClientAddresses] = {};
     u64 path_sent[2][kClientAddresses] = {};
     u64 unbound_bytes = 0U;    // given to the server's first path before it was bound
     // The client's sockets its host holds back (over paths).
     u32 held = 0U;
     bool server_preferred = false; // the server moved to its preferred socket (over paths)
+    // Each end's (the client's first) path IDs below 64 that opened in a slot, that left it, and that were abandoned.
+    u64 opened_ids[2] = {};
+    u64 closed_ids[2] = {};
+    u64 abandoned_ids[2] = {};
+    u64 added = 0U; // path IDs the client's add_path() opened
 
     explicit Pair(QuicVersion run, bool switching = false, Tickets* tickets = nullptr, bool raw_path = false)
         : client_host(allocator, 0U,
@@ -525,13 +581,33 @@ struct Pair
         retry_sent = true;
     }
 
-    void check_hosts() const
+    // After every step: both hosts route what their ends hold, and no path ID opens in a slot of either end twice
+    // (RFC 10069 section 2.4: the path ID is in the nonce).
+    void check_hosts()
     {
         client_host.check(client);
         server_host.check(server);
+        const QuicConnection* const ends[2] = {&client, &server};
+        for (usize side = 0U; side < 2U; ++side)
+        {
+            u64 open = 0U;
+            for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+            {
+                const QuicPacketProtection& protection = ends[side]->protection();
+                open |= protection.path_open(slot) ? id_bit(protection.path_id(slot)) : 0U;
+            }
+            CRD_FUZZ_REQUIRE((open & closed_ids[side]) == 0U);
+            closed_ids[side] |= opened_ids[side] & ~open;
+            opened_ids[side] |= open;
+            for (u64 path_id = 0U; path_id < 64U; ++path_id)
+            {
+                abandoned_ids[side] |= (ends[side]->abandon_of(path_id) != nullptr) ? id_bit(path_id) : 0U;
+            }
+        }
     }
 
-    void check_sent(usize from, ConstSpan<u8> datagram)
+    // `slot` is the server's slot the datagram went on.
+    void check_sent(usize from, ConstSpan<u8> datagram, usize slot)
     {
         QuicHeader header;
         if (from == 0U && parse_quic_header(datagram, sizeof(kServerCid), header) == QuicHeaderError::None &&
@@ -539,8 +615,9 @@ struct Pair
         {
             CRD_FUZZ_REQUIRE(datagram.size() >= kQuicMinInitialDatagram);
         }
-        // Before its first path is proven (a later one is held to its own count below).
-        if (from == 1U && !server.address_validated() && server.counters().migrations == 0U)
+        // Before its first path is proven (a later one, and a further path ID's, is held to its own count below).
+        if (from == 1U && !server.address_validated() && server.counters().migrations == 0U &&
+            server.counters().paths_opened == 0U)
         {
             CRD_FUZZ_REQUIRE(server.counters().bytes_sent <= 3U * server.counters().bytes_received);
         }
@@ -548,11 +625,16 @@ struct Pair
         const u32 socket = server.sent_path().socket;
         if (from == 1U && to < kClientAddresses)
         {
+            // What goes to an address no slot has proven is at most three times what came from it over every slot
+            // (RFC 9000 section 8; each slot holds its own credit, which the sum bounds).
             CRD_FUZZ_REQUIRE(socket < 2U);
-            path_sent[socket][to] += datagram.size();
-            const usize slot = server.paths().find(server.sent_path());
-            CRD_FUZZ_REQUIRE(slot != kQuicNoPath);
-            CRD_FUZZ_REQUIRE(server.paths().validated(slot) || path_sent[socket][to] <= 3U * path_received[socket][to]);
+            const usize index = server.paths(slot).find(server.sent_path());
+            CRD_FUZZ_REQUIRE(index != kQuicNoPath);
+            if (!server.paths(slot).validated(index) && !knows(server, server.sent_path(), true))
+            {
+                path_sent[socket][to] += datagram.size();
+                CRD_FUZZ_REQUIRE(path_sent[socket][to] <= 3U * path_received[socket][to]);
+            }
         }
     }
 
@@ -590,7 +672,18 @@ struct Pair
                 {
                     numbers[space] = end.next_packet_number(static_cast<QuicSpace>(space));
                 }
+                u64 slot_numbers[kQuicMaxPaths] = {}; // each slot's 1-RTT numbers: a datagram is one slot's
+                for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+                {
+                    slot_numbers[slot] = end.next_packet_number(QuicSpace::Application, slot);
+                }
                 const usize size = end.send(Span<u8>(out, sizeof(out)), now, (from == 0U) ? held : 0U);
+                usize sent_slot = 0U; // the handshake's, for a datagram of no 1-RTT packet
+                for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+                {
+                    const bool moved = end.next_packet_number(QuicSpace::Application, slot) != slot_numbers[slot];
+                    sent_slot = moved ? slot : sent_slot;
+                }
                 if (size == 0U)
                 {
                     if (end.held_back())
@@ -604,7 +697,7 @@ struct Pair
                     break;
                 }
                 CRD_FUZZ_REQUIRE(((held >> end.sent_path().socket) & 1U) == 0U || from == 1U);
-                check_sent(from, ConstSpan<u8>(out, size));
+                check_sent(from, ConstSpan<u8>(out, size), sent_slot);
                 // Over paths a server datagram to an address socket 0 left is lost: its NAT mapping is gone. Sockets 1
                 // and 2 keep theirs.
                 const usize address =
@@ -655,10 +748,10 @@ struct Pair
         {
             const u32 socket = flight.server_socket;
             const QuicPath from{socket, kClientPaths[flight.path].peer};
-            // A path the server does not know starts its count again. Its unbound first path counts every datagram
-            // until one opens, and then belongs to that one's address (S55).
+            // A path no slot of the server's knows starts its count again. Its unbound first path counts every
+            // datagram until one opens, and then belongs to that one's address (S55).
             const bool unbound = server.path().peer.port == 0U;
-            if (!unbound && server.paths().find(from) == kQuicNoPath)
+            if (!unbound && !knows(server, from))
             {
                 path_received[socket][flight.path] = 0U;
                 path_sent[socket][flight.path] = 0U;
@@ -673,27 +766,32 @@ struct Pair
             }
             // The server's datagrams move to its preferred socket only once it validated the path there, after its
             // client moved there, and leave every other socket's path for good (section 9.6.2); there it follows its
-            // client as anywhere.
+            // client as anywhere. These are path ID 0's 4-tuples, while it is open (a further path ID keeps its own,
+            // RFC 10069 section 3.1.2).
+            const usize zero = slot_of(server, 0U);
             if (server.on_preferred_address() && !server_preferred)
             {
                 server_preferred = true;
                 // The path it moved to is validated: active, or left at once for a rebinding the same datagram
                 // showed, and then the fallback.
-                const QuicPaths& paths = server.paths();
-                const usize back = paths.fallback();
-                CRD_FUZZ_REQUIRE(paths.validated(paths.active()) ||
-                                 (back != kQuicNoPath && paths.validated(back) && paths.path(back).socket == 1U));
+                if (zero != kQuicNoPath)
+                {
+                    const QuicPaths& paths = server.paths(zero);
+                    const usize back = paths.fallback();
+                    CRD_FUZZ_REQUIRE(paths.validated(paths.active()) ||
+                                     (back != kQuicNoPath && paths.validated(back) && paths.path(back).socket == 1U));
+                }
                 CRD_FUZZ_REQUIRE(client.on_preferred_address());
             }
-            if (server_preferred)
+            if (zero != kQuicNoPath)
             {
-                CRD_FUZZ_REQUIRE(server.path().socket == 1U);
-                for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+                const QuicPaths& paths = server.paths(zero);
+                for (usize tuple = 0U; server_preferred && tuple < kQuicMaxPaths; ++tuple)
                 {
-                    CRD_FUZZ_REQUIRE(!server.paths().used(slot) || server.paths().path(slot).socket == 1U);
+                    CRD_FUZZ_REQUIRE(!paths.used(tuple) || paths.path(tuple).socket == 1U);
                 }
+                CRD_FUZZ_REQUIRE(paths.path(paths.active()).socket == (server_preferred ? 1U : 0U));
             }
-            CRD_FUZZ_REQUIRE(server.on_preferred_address() || server.path().socket == 0U);
         }
         else if (over_paths())
         {
@@ -702,7 +800,9 @@ struct Pair
                                    : 0U;
             const Endpoint& server_at = (flight.server_socket == 1U) ? kPreferredAddress : kServerAddress;
             to.receive(QuicPath{socket, server_at}, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
-            CRD_FUZZ_REQUIRE(!client.on_preferred_address() || client.path().peer == kPreferredAddress);
+            const usize zero = slot_of(client, 0U);
+            CRD_FUZZ_REQUIRE(!client.on_preferred_address() || zero == kQuicNoPath ||
+                             client.paths(zero).path(client.paths(zero).active()).peer == kPreferredAddress);
         }
         else
         {
@@ -712,23 +812,34 @@ struct Pair
         // Whatever the path does to codepoints, a failed validation stays failed for the path's life: a confirmed new
         // path, where recovery's path floor moves with it, validates again (RFC 9000 section 13.4.2). The floor stays
         // where no packet of the old path is held, so the path's change is read from the moves and validations that
-        // restart it.
-        const bool failed = to.ecn().state() == QuicEcnState::Failed;
-        const u64 floor = to.recovery().path_floor();
+        // restart it. Each slot sending holds its own path ID's validation.
         const u64 changes = to.counters().migrations + to.counters().path_validations;
-        CRD_FUZZ_REQUIRE(failed || !ecn_failed[flight.to] || floor != ecn_floor[flight.to] ||
-                         changes != ecn_changes[flight.to]);
-        ecn_failed[flight.to] = failed;
-        ecn_floor[flight.to] = floor;
-        ecn_changes[flight.to] = changes;
+        for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+        {
+            const QuicPathControl* const control = to.path_control(slot);
+            const EcnSeen now_seen{(control != nullptr) ? to.protection().path_id(slot) : kNoPathId,
+                                   control != nullptr && control->ecn().state() == QuicEcnState::Failed,
+                                   to.recovery().path_floor(slot), changes};
+            const EcnSeen& seen = ecn_seen[flight.to][slot];
+            CRD_FUZZ_REQUIRE(now_seen.failed || !seen.failed || now_seen.path_id != seen.path_id ||
+                             now_seen.floor != seen.floor || changes != seen.changes);
+            ecn_seen[flight.to][slot] = now_seen;
+        }
         check_hosts();
     }
 
     void remove(usize index) { flights[index] = flights[--count]; }
 
-    bool ecn_failed[2] = {}; // each end's ECN validation failed
-    u64 ecn_floor[2] = {};   // and the path it failed on (QuicRecovery::path_floor)
-    u64 ecn_changes[2] = {}; // each end's moves and validations then
+    // Each end's slots: the path ID sending there, whether its ECN validation failed, the path it failed on
+    // (QuicRecovery::path_floor) and the end's moves and validations then.
+    struct EcnSeen
+    {
+        u64 path_id = kNoPathId;
+        bool failed = false;
+        u64 floor = 0U;
+        u64 changes = 0U;
+    };
+    EcnSeen ecn_seen[2][kQuicMaxPaths] = {};
 
     void timers()
     {
@@ -788,7 +899,8 @@ bool finished(const QuicConnection& end)
            end.state() == QuicConnectionState::Closed;
 }
 
-constexpr u64 kTransferBytes = 5000U; // more than every stream and connection window of config_for
+constexpr u64 kTransferBytes = 5000U;        // more than every stream and connection window of config_for
+constexpr u64 kTransferWaitNs = 5000U * kMs; // a sixth of config_for's idle timeout
 
 // After the script, a confirmed pair carries a stream of more than every window over the clean path: each byte the
 // server reads is the byte written, and all of it arrives with the FIN, or one side has closed.
@@ -805,30 +917,40 @@ void check_observations(const Pair& pair)
         }
         return known;
     };
-    for (usize index = 0U; index < kQuicMaxPaths; ++index)
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
     {
-        if (pair.client.paths().used(index))
+        for (usize index = 0U; index < kQuicMaxPaths; ++index)
         {
-            const Endpoint& seen = pair.client.paths().observed(index);
-            CRD_FUZZ_REQUIRE(client_address(seen));
-        }
-        if (pair.server.paths().used(index))
-        {
-            const Endpoint& seen = pair.server.paths().observed(index);
-            CRD_FUZZ_REQUIRE(seen.port == 0U || seen == kServerAddress || seen == kPreferredAddress);
+            if (pair.client.protection().path_open(slot) && pair.client.paths(slot).used(index))
+            {
+                const Endpoint& seen = pair.client.paths(slot).observed(index);
+                CRD_FUZZ_REQUIRE(client_address(seen));
+            }
+            if (pair.server.protection().path_open(slot) && pair.server.paths(slot).used(index))
+            {
+                const Endpoint& seen = pair.server.paths(slot).observed(index);
+                CRD_FUZZ_REQUIRE(seen.port == 0U || seen == kServerAddress || seen == kPreferredAddress);
+            }
         }
     }
     CRD_FUZZ_REQUIRE(extensions() || (pair.client.counters().address_observations == 0U &&
                                       pair.server.counters().address_observations == 0U));
-    // Multipath is negotiated exactly when both ends offered it, and a QuicConnection peer neither sends MAX_PATH_ID
-    // nor opens a path ID while no client opens paths (RFC 10069; design S78). Each path ID's IDs stay within the
-    // peer's active_connection_id_limit.
+    // Multipath is negotiated exactly when both ends offered it (RFC 10069; design S78). Path IDs open only as the
+    // client adds them, the server's on their first packet; each end's limit rises by one per path ID closed (section
+    // 3.2.1), and its peer's view of it is never above it. Each path ID's IDs stay within the peer's
+    // active_connection_id_limit.
+    CRD_FUZZ_REQUIRE(pair.client.counters().paths_opened == pair.added);
+    CRD_FUZZ_REQUIRE(pair.server.counters().paths_opened <= pair.added);
     for (const QuicConnection* end : {&pair.client, &pair.server})
     {
+        const QuicConnection& other = (end == &pair.client) ? pair.server : pair.client;
         CRD_FUZZ_REQUIRE(end->multipath() == (extensions() && end->peer_parameters_known()));
-        CRD_FUZZ_REQUIRE(end->peer_max_path_id() == (end->multipath() ? kMaxPathId : 0U));
-        CRD_FUZZ_REQUIRE(end->counters().paths_opened == 0U);
-        for (u64 path_id = 1U; path_id <= kMaxPathId; ++path_id)
+        const u64 limit = end->multipath() ? kMaxPathId + end->counters().paths_closed : 0U;
+        CRD_FUZZ_REQUIRE(end->local_max_path_id() == limit);
+        CRD_FUZZ_REQUIRE(end->multipath() ? (end->peer_max_path_id() >= kMaxPathId &&
+                                             end->peer_max_path_id() <= other.local_max_path_id())
+                                          : end->peer_max_path_id() == 0U);
+        for (u64 path_id = 1U; path_id <= end->local_max_path_id() || path_id <= kMaxPathId; ++path_id)
         {
             CRD_FUZZ_REQUIRE(end->multipath() || end->local_cid_count(path_id) == 0U);
             const QuicSide peer = (end == &pair.client) ? QuicSide::Server : QuicSide::Client;
@@ -838,16 +960,22 @@ void check_observations(const Pair& pair)
 }
 
 // PATH_STATUS (RFC 10069 section 4.3): once what is owed has arrived, each end holds for every path ID the newest
-// status the other set (a lost frame sent again while newest, an older one never after it), or none.
+// status the other set (a lost frame sent again while newest, an older one never after it), or none. A path ID either
+// end abandoned has no status sent any more (section 3.4), so only the others are compared.
 void check_path_statuses(Pair& pair)
 {
     const auto agree = [&pair]
     {
         bool same = true;
-        for (u64 path_id = 0U; path_id <= kMaxPathId; ++path_id)
+        const u64 abandoned = pair.abandoned_ids[0] | pair.abandoned_ids[1];
+        const u64 client_limit = pair.client.local_max_path_id();
+        const u64 limit =
+            (client_limit > pair.server.local_max_path_id()) ? client_limit : pair.server.local_max_path_id();
+        for (u64 path_id = 0U; path_id <= limit; ++path_id)
         {
-            same = same && pair.client.peer_path_status(path_id) == pair.server.path_status(path_id) &&
-                   pair.server.peer_path_status(path_id) == pair.client.path_status(path_id);
+            same = same && ((abandoned & id_bit(path_id)) != 0U ||
+                            (pair.client.peer_path_status(path_id) == pair.server.path_status(path_id) &&
+                             pair.server.peer_path_status(path_id) == pair.client.path_status(path_id)));
         }
         return same;
     };
@@ -898,13 +1026,42 @@ void transfer(Pair& pair)
                 break;
             }
         }
-        // Time moves to the next timer (a delayed ACK frees the send buffer).
+        // Time moves to the next timer (a delayed ACK frees the send buffer), kTransferWaitNs at most: a pair with
+        // nothing outstanding has only its idle timeout left, which a writer with more to send never waits out (paths
+        // that acknowledge at once leave no timer between writes).
         const u64 next = (pair.client.next_timer_ns() < pair.server.next_timer_ns()) ? pair.client.next_timer_ns()
                                                                                      : pair.server.next_timer_ns();
-        pair.now = (next != kNeverNs && next > pair.now) ? next : pair.now;
+        const u64 wait = pair.now + kTransferWaitNs;
+        const u64 until = (next < wait) ? next : wait;
+        pair.now = (until > pair.now) ? until : pair.now;
         pair.timers();
     }
     CRD_FUZZ_REQUIRE((fin && read == kTransferBytes) || finished(pair.client) || finished(pair.server));
+}
+
+// Once its stream arrived, the open client keeps its lowest path ID still sending and abandons the others (RFC 10069
+// section 3.4), each abandonment taken, so that the checks after it read one path; returns the path ID it kept.
+u64 keep_one_path(Pair& pair)
+{
+    const QuicPacketProtection& protection = pair.client.protection();
+    usize kept = kQuicNoPath;
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        const bool lower = kept == kQuicNoPath || protection.path_id(slot) < protection.path_id(kept);
+        kept = (pair.client.path_control(slot) != nullptr && lower) ? slot : kept;
+    }
+    CRD_FUZZ_REQUIRE(kept != kQuicNoPath);
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        if (slot != kept && pair.client.path_control(slot) != nullptr)
+        {
+            const u64 path_id = protection.path_id(slot);
+            CRD_FUZZ_REQUIRE(pair.client.abandon_path(path_id, 0U, pair.now) == QuicAbandon::Abandoned);
+            pair.abandoned_ids[0] |= id_bit(path_id);
+        }
+    }
+    CRD_FUZZ_REQUIRE(sending_slots(pair.client) == 1U);
+    return protection.path_id(kept);
 }
 
 constexpr u64 kDatagrams = 12U;
@@ -985,17 +1142,28 @@ void stateless_reset(Pair& pair)
     // The ID it sends to is used from its next packet on. A client whose window its silent server left full sends
     // none (over paths a server may have closed without a word: section 9.3.2), and only a used ID's token counts.
     const u64 sent = client.counters().datagrams_sent;
+    u64 numbers[kQuicMaxPaths] = {};
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        numbers[slot] = client.next_packet_number(QuicSpace::Application, slot);
+    }
     client.ping();
     pair.flush();
     if (client.counters().datagrams_sent == sent)
     {
         return;
     }
+    usize slot = 0U; // a path that sent: its ID is used
+    while (slot + 1U < kQuicMaxPaths && client.next_packet_number(QuicSpace::Application, slot) == numbers[slot])
+    {
+        ++slot;
+    }
     u8 datagram[48];
     std::memset(datagram, 0x3C, sizeof(datagram));
     datagram[0] = 0x4BU;
     const Span<u8> token(datagram + sizeof(datagram) - kQuicResetTokenBytes, kQuicResetTokenBytes);
-    CRD_FUZZ_REQUIRE(pair.server_host.key.token(client.peer_cid(), token) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(client.next_packet_number(QuicSpace::Application, slot) != numbers[slot]);
+    CRD_FUZZ_REQUIRE(pair.server_host.key.token(client.peer_cid(slot), token) == CryptoError::None);
     token[0] ^= 0x01U;
     CRD_FUZZ_REQUIRE(!client.stateless_reset(ConstSpan<u8>(datagram), pair.now));
     token[0] ^= 0x01U;
@@ -1157,27 +1325,36 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         }
         if ((op == 0xFAU || op == 0xF9U) && over_paths())
         {
-            // The client's next socket of three: moved to, or probed. Anything but Started changes nothing.
-            const QuicPath before = pair.client.path();
+            // The client's next socket of three for path ID 0, whose 4-tuples these move (RFC 10069 section 3.1.2):
+            // moved to, or probed. Anything but Started changes nothing, and nothing starts once it is abandoned.
+            const usize zero = slot_of(pair.client, 0U);
+            const QuicPaths& paths = pair.client.paths((zero != kQuicNoPath) ? zero : 0U);
+            const QuicPath before = paths.path(paths.active());
             const QuicPath next{(before.socket + 1U) % 3U, before.peer};
             const QuicMigration result =
                 (op == 0xFAU) ? pair.client.migrate(next, pair.now) : pair.client.probe_path(next, pair.now);
             const bool moved = result == QuicMigration::Started && op == 0xFAU;
-            CRD_FUZZ_REQUIRE(pair.client.path() == (moved ? next : before));
-            CRD_FUZZ_REQUIRE(result != QuicMigration::Started || pair.client.paths().find(next) != kQuicNoPath);
+            CRD_FUZZ_REQUIRE(paths.path(paths.active()) == (moved ? next : before));
+            CRD_FUZZ_REQUIRE(result != QuicMigration::Started || paths.find(next) != kQuicNoPath);
+            CRD_FUZZ_REQUIRE(result != QuicMigration::Started ||
+                             (zero != kQuicNoPath && pair.client.abandon_of(0U) == nullptr));
             continue;
         }
         if (op == 0xF7U && over_paths())
         {
-            // The server's preferred address from the client's socket: moved to once validated (section 9.6.2).
-            const QuicPath before = pair.client.path();
+            // The server's preferred address from path ID 0's socket: moved to once validated (section 9.6.2).
+            const usize zero = slot_of(pair.client, 0U);
+            const QuicPaths& paths = pair.client.paths((zero != kQuicNoPath) ? zero : 0U);
+            const QuicPath before = paths.path(paths.active());
             const QuicPath preferred{before.socket, kPreferredAddress};
-            const usize known = pair.client.paths().find(preferred);
-            const bool proven = known != kQuicNoPath && pair.client.paths().proven(known);
+            const usize known = paths.find(preferred);
+            const bool proven = known != kQuicNoPath && paths.proven(known);
             const QuicMigration result = pair.client.migrate(preferred, pair.now);
             const bool moved = result == QuicMigration::Started && proven;
-            CRD_FUZZ_REQUIRE(pair.client.path() == (moved ? preferred : before));
-            CRD_FUZZ_REQUIRE(result != QuicMigration::Started || pair.client.paths().find(preferred) != kQuicNoPath);
+            CRD_FUZZ_REQUIRE(paths.path(paths.active()) == (moved ? preferred : before));
+            CRD_FUZZ_REQUIRE(result != QuicMigration::Started || paths.find(preferred) != kQuicNoPath);
+            CRD_FUZZ_REQUIRE(result != QuicMigration::Started ||
+                             (zero != kQuicNoPath && pair.client.abandon_of(0U) == nullptr));
             CRD_FUZZ_REQUIRE(!moved || pair.client.on_preferred_address());
             continue;
         }
@@ -1233,10 +1410,11 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             // One end's path choice and its status for a path ID from the next byte (RFC 10069 sections 3.3 and
             // 4.3): bit 0 the end, bit 1 backup, bits 2 and 3 the path ID (kMaxPathId + 1 is above both limits), bits
             // 4 and 5 the choice (2 and 3 are none), bits 6 and 7 its RTT refresh (0 kept, 1 none, 2 the shortest,
-            // 3 below it: refused). No path ID opens or closes here, so every ID space up to the end's limit is open.
-            // Anything refused changes nothing.
+            // 3 below it: refused). Every ID space up to the end's limit is open but those abandoned, which name no
+            // path to use any more. Anything refused changes nothing.
             const u8 shape = script[++at];
-            QuicConnection& end = ((shape & 1U) == 0U) ? pair.client : pair.server;
+            const usize side = shape & 1U;
+            QuicConnection& end = (side == 0U) ? pair.client : pair.server;
             const bool backup = (shape & 2U) != 0U;
             const u64 path_id = (shape >> 2U) & 3U;
             const auto choice = static_cast<QuicPathChoice>((shape >> 4U) & 3U);
@@ -1261,7 +1439,8 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             {
                 expected = QuicPathStatusChange::NoMultipath;
             }
-            else if (path_id > end.peer_max_path_id() || path_id > end.local_max_path_id())
+            else if (path_id > end.peer_max_path_id() || path_id > end.local_max_path_id() ||
+                     (pair.abandoned_ids[side] & id_bit(path_id)) != 0U || end.abandon_of(path_id) != nullptr)
             {
                 expected = QuicPathStatusChange::NotOpen;
             }
@@ -1269,6 +1448,95 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             const QuicPathStatus wanted = backup ? QuicPathStatus::Backup : QuicPathStatus::Available;
             CRD_FUZZ_REQUIRE(end.set_path_status(path_id, backup) == expected);
             CRD_FUZZ_REQUIRE(end.path_status(path_id) == ((expected == QuicPathStatusChange::Set) ? wanted : held));
+            continue;
+        }
+        if (op == 0xF2U && over_paths() && extensions() && at + 1U < script.size())
+        {
+            // The client opens a further path ID (RFC 10069 section 3.1) on its socket in the next byte's bits 0 and
+            // 1 (3 is socket 0), to the server's address or, with bit 2, its preferred one. Started names a path ID
+            // under both limits, never abandoned and never open before, now open in a slot that knows the path;
+            // anything else changes no counter. A server opens none.
+            const u8 shape = script[++at];
+            const QuicPath path{static_cast<u32>((shape & 3U) % 3U),
+                                ((shape & 4U) != 0U) ? kPreferredAddress : kServerAddress};
+            u64 path_id = 1U;
+            CRD_FUZZ_REQUIRE(pair.server.add_path(path, pair.now, path_id) == QuicMigration::NotClient);
+            CRD_FUZZ_REQUIRE(path_id == 0U);
+            QuicConnection& client = pair.client;
+            const QuicConnectionCounters before = client.counters();
+            const QuicMigration result = client.add_path(path, pair.now, path_id);
+            const bool confirmed = client.state() == QuicConnectionState::Established && client.confirmed();
+            CRD_FUZZ_REQUIRE((result == QuicMigration::NotConfirmed) == !confirmed);
+            CRD_FUZZ_REQUIRE((result == QuicMigration::NoMultipath) == (confirmed && !client.multipath()));
+            if (result == QuicMigration::Started)
+            {
+                CRD_FUZZ_REQUIRE(path_id != 0U && path_id <= client.local_max_path_id() &&
+                                 path_id <= client.peer_max_path_id());
+                CRD_FUZZ_REQUIRE(((pair.opened_ids[0] | pair.abandoned_ids[0]) & id_bit(path_id)) == 0U);
+                const usize slot = slot_of(client, path_id);
+                CRD_FUZZ_REQUIRE(slot != kQuicNoPath && client.paths(slot).find(path) != kQuicNoPath);
+                CRD_FUZZ_REQUIRE(client.counters().paths_opened == before.paths_opened + 1U);
+                ++pair.added;
+                pair.check_hosts();
+            }
+            else
+            {
+                CRD_FUZZ_REQUIRE(path_id == 0U);
+                CRD_FUZZ_REQUIRE(std::memcmp(&before, &client.counters(), sizeof(before)) == 0);
+            }
+            continue;
+        }
+        if (op == 0xF0U && extensions() && at + 1U < script.size())
+        {
+            // One end abandons a path ID from the next byte (RFC 10069 section 3.4): bit 0 the end, bits 1 to 3 the
+            // path ID, bits 4 and 5 the error code. The answer follows from the state, the limits, the paths still
+            // sending and the abandonments before (a free entry is left while a space is open and not abandoned);
+            // an abandoned path ID's slot sends nothing more, and anything refused changes no counter.
+            const u8 shape = script[++at];
+            const usize side = shape & 1U;
+            QuicConnection& end = (side == 0U) ? pair.client : pair.server;
+            const u64 path_id = (shape >> 1U) & 7U;
+            const u64 codes[4] = {0U, 0x3EU, kQuicMaxVarint, kQuicMaxVarint + 1U};
+            const u64 code = codes[(shape >> 4U) & 3U];
+            const usize slot = slot_of(end, path_id);
+            const bool above = path_id > end.peer_max_path_id(); // a frame naming it is refused first (section 4)
+            QuicAbandon expected = QuicAbandon::Abandoned;
+            if (end.state() != QuicConnectionState::Established)
+            {
+                expected = QuicAbandon::NotEstablished;
+            }
+            else if (!end.multipath())
+            {
+                expected = QuicAbandon::NoMultipath;
+            }
+            else if (code > kQuicMaxVarint)
+            {
+                expected = QuicAbandon::BadError;
+            }
+            else if (!above && slot != kQuicNoPath && end.path_control(slot) != nullptr && sending_slots(end) == 1U)
+            {
+                expected = QuicAbandon::LastPath;
+            }
+            else if (above || path_id > end.local_max_path_id() || (pair.abandoned_ids[side] & id_bit(path_id)) != 0U ||
+                     end.abandon_of(path_id) != nullptr)
+            {
+                expected = QuicAbandon::NotOpen;
+            }
+            const QuicConnectionCounters before = end.counters();
+            CRD_FUZZ_REQUIRE(end.abandon_path(path_id, code, pair.now) == expected);
+            if (expected == QuicAbandon::Abandoned)
+            {
+                const QuicPathAbandon* const entry = end.abandon_of(path_id);
+                CRD_FUZZ_REQUIRE(entry != nullptr && entry->error_code == code);
+                CRD_FUZZ_REQUIRE(end.counters().paths_abandoned == before.paths_abandoned + 1U);
+                CRD_FUZZ_REQUIRE(slot == kQuicNoPath || end.path_control(slot) == nullptr);
+                CRD_FUZZ_REQUIRE(sending_slots(end) != 0U);
+                pair.abandoned_ids[side] |= id_bit(path_id);
+            }
+            else
+            {
+                CRD_FUZZ_REQUIRE(std::memcmp(&before, &end.counters(), sizeof(before)) == 0);
+            }
             continue;
         }
         if (op == 0xF8U && over_paths())
@@ -1391,21 +1659,40 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         // reverted to its last validated address (section 9.3.2) and learns the client's again only from its next
         // packet, which moves it back or, with no ID of the client's for it, validates the address while the move
         // waits for one (section 9.5). A packet of the client's it opened never leaves it doing neither.
+        // All of it on the one path ID the client keeps (keep_one_path), at both ends.
+        const u64 kept = (finished(pair.client) || finished(pair.server)) ? 0U : keep_one_path(pair);
         if (over_paths() && !finished(pair.client) && !finished(pair.server))
         {
             pair.settle(1U);
-            const auto client_at = [&pair] { return kClientPaths[pair.address_of(pair.client.path().socket)].peer; };
-            const auto follows = [&] { return pair.server.path().peer == client_at(); };
+            const auto tuples = [kept](const QuicConnection& end) -> const QuicPaths*
+            {
+                const usize slot = slot_of(end, kept);
+                return (slot != kQuicNoPath) ? &end.paths(slot) : nullptr;
+            };
+            const auto client_at = [&]
+            {
+                const QuicPaths* const paths = tuples(pair.client);
+                const u32 socket = (paths != nullptr) ? paths->path(paths->active()).socket : 0U;
+                return kClientPaths[pair.address_of(socket)].peer;
+            };
+            const auto follows = [&]
+            {
+                const QuicPaths* const paths = tuples(pair.server);
+                return paths != nullptr && paths->path(paths->active()).peer == client_at();
+            };
             const auto ended = [&pair] { return finished(pair.client) || finished(pair.server); };
-            // Whether a path of the server's to the client's address is validating, or validated.
+            // Whether a path of the server's to the client's address is validating, or validated. The client validating
+            // its own address counts as validating: a path ID that carried nothing since it moved there (another one
+            // took its data) reaches the server from there first with its next challenge.
             const auto proving = [&](bool validated)
             {
-                const QuicPaths& paths = pair.server.paths();
-                bool found = false;
-                for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+                const QuicPaths* const paths = tuples(pair.server);
+                const QuicPaths* const own = tuples(pair.client);
+                bool found = !validated && own != nullptr && own->validating(own->active());
+                for (usize index = 0U; paths != nullptr && index < kQuicMaxPaths; ++index)
                 {
-                    const bool state = validated ? paths.validated(slot) : paths.validating(slot);
-                    found = found || (paths.used(slot) && paths.path(slot).peer == client_at() && state);
+                    const bool state = validated ? paths->validated(index) : paths->validating(index);
+                    found = found || (paths->used(index) && paths->path(index).peer == client_at() && state);
                 }
                 return found;
             };
@@ -1675,6 +1962,7 @@ void run_frames(QuicVersion version, ConstSpan<u8> input, bool initial, bool key
         raw.protection.confirm();
     }
     const QuicPacketType type = initial ? QuicPacketType::Initial : QuicPacketType::OneRtt;
+    bool closing = false; // the server closed or drained: three PTOs on, it is Closed
     for (usize at = 0U; at < input.size();)
     {
         const usize length = input[at++];
@@ -1689,7 +1977,8 @@ void run_frames(QuicVersion version, ConstSpan<u8> input, bool initial, bool key
         const QuicConnectionState state = raw.server.state();
         const QuicConnectionState open = initial ? QuicConnectionState::Handshaking : QuicConnectionState::Established;
         CRD_FUZZ_REQUIRE(state == open || state == QuicConnectionState::Closing ||
-                         state == QuicConnectionState::Draining);
+                         state == QuicConnectionState::Draining || (state == QuicConnectionState::Closed && closing));
+        closing = state != open;
         raw.now += kMs;
         if (raw.server.next_timer_ns() <= raw.now)
         {
@@ -1700,6 +1989,33 @@ void run_frames(QuicVersion version, ConstSpan<u8> input, bool initial, bool key
     }
     CRD_FUZZ_REQUIRE(raw.allocator.peak_bytes() == allocations);
 }
+
+// A seed script over paths with multipath (byte 0's bits 6 and 7) that confirms first; each of steps() moves 250 ms
+// and delivers everything in flight, so no step waits out the idle timeout.
+struct PathScript
+{
+    u8 bytes[512] = {0xC0U, 0x00U, 0x00U, 0x00U, 0x07U, 0x00U, 0x00U, 0x00U, 0x07U, 0x07U, 0x07U};
+    usize size = 11U;
+
+    template <usize N> PathScript& ops(const u8 (&more)[N])
+    {
+        CRD_FUZZ_REQUIRE(size + N <= sizeof(bytes));
+        for (const u8 op : more)
+        {
+            bytes[size++] = op;
+        }
+        return *this;
+    }
+
+    PathScript& steps(usize count)
+    {
+        for (usize step = 0U; step < count; ++step)
+        {
+            ops({0xCEU, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U});
+        }
+        return *this;
+    }
+};
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
@@ -1791,6 +2107,29 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                            0x07U, 0xF4U, 0x06U, 0x02U, 0xF4U, 0x17U, 0x07U, 0x00U, 0xF4U, 0x0CU,
                            0xF4U, 0x24U, 0x02U, 0x07U, 0xF4U, 0x02U, 0x00U, 0x07U, 0x00U, 0x00U};
     sink.add("script-path-status", statuses, sizeof(statuses));
+    // Path IDs over paths (RFC 10069): opened on sockets 1 and 2, the first abandoned by the client with too large a
+    // code and then the largest, and by the server, then path ID 0 by the client while path ID 2 sends.
+    PathScript opened;
+    opened.ops({0xF2U, 0x01U}).steps(2).ops({0xF2U, 0x02U}).steps(2).ops({0xF0U, 0x32U, 0xF0U, 0x22U}).steps(1);
+    opened.ops({0xF0U, 0x03U}).steps(1).ops({0xF0U, 0x00U}).steps(1);
+    sink.add("script-path-ids", opened.bytes, opened.size);
+    // Path ID 0 abandoned once path ID 1 sends, its slot reclaimed after three PTOs by path ID 2 on socket 0, and
+    // path ID 3 to the preferred address from socket 2.
+    PathScript reclaimed;
+    reclaimed.ops({0xF2U, 0x01U}).steps(2).ops({0xF0U, 0x00U}).steps(32).ops({0xF2U, 0x00U}).steps(2);
+    reclaimed.ops({0xF2U, 0x06U}).steps(1);
+    sink.add("script-path-ids-reclaimed", reclaimed.bytes, reclaimed.size);
+    // Path ID 0 refused as the last path by either end, then path IDs 1 and 2 abandoned unused by the client and the
+    // server: no path opens until both close and the limits rise past them, and then path ID 3.
+    PathScript unused;
+    unused.ops({0xF0U, 0x00U, 0xF0U, 0x01U, 0xF0U, 0x02U, 0xF0U, 0x05U}).steps(2).ops({0xF2U, 0x01U}).steps(32);
+    unused.ops({0xF2U, 0x01U}).steps(2);
+    sink.add("script-path-ids-unused", unused.bytes, unused.size);
+    // A path ID opened on a socket its host holds back, then released; the server's status for it.
+    PathScript held_open;
+    held_open.ops({0xF8U, 0xF8U, 0xF2U, 0x01U}).steps(1).ops({0xF8U}).steps(1);
+    held_open.ops({0xF4U, 0x07U, 0xF8U, 0xF8U, 0xF8U, 0xF8U, 0xF8U}).steps(2);
+    sink.add("script-path-ids-held", held_open.bytes, held_open.size);
     // The client's own sockets and the preferred address with reports on: each new path is reported.
     u8 reported_own[sizeof(own)];
     std::memcpy(reported_own, own, sizeof(own));
