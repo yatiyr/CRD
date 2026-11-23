@@ -1125,6 +1125,13 @@ server killed in mid-transfer and restarted on its port with the same key: both 
 fixed key, so the second process answers for the first one's connections. NET.4 adds the interop runner and the other
 peers.
 
+msquic (NET-PATH; [msquic_interop.py](../../tests/foundation/net/interop/msquic_interop.py); 2026-11-23) runs the same
+echo: `crd-msquic-quic-peer` over the pinned msquic 2.6.4 with its TLS on the same OpenSSL 4.0.3 (`QUIC_TLS_LIB`
+openssl), the server's credential the seed's Ed25519 key as PKCS #12 and the client's pin read from the certificate
+msquic hands it. `crd-net-quic-interop-msquic` (10 cases): each way, v1 and v2, 16 one-byte streams, 4 MiB on one
+stream, and a seeded relay with 2% loss, 1% duplication and reordering jitter. It is also the msquic end of the
+transport budget boards.
+
 <a id="admission"></a>
 ## Bounded admission
 
