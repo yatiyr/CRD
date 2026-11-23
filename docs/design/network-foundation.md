@@ -4101,10 +4101,19 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
   that moves socket first validates it again from there and never returns to the socket it left (section 9.6.3);
   once there, paths to the server's first address are forgotten and refused (`OtherServer`), and
   disable_active_migration closes the handshake address alone (section 18.2).
+- **A client rebound on its way there** (2026-11-23). Until the server moved there, the client's paths to its
+  preferred socket are its one move there: a new address that carries the ID a path there was sent to is that path
+  rebound and shares its peer ID (section 9.5), as one with the active path's ID does anywhere. Before, it waited
+  for an ID the client could not send once its old mapping was gone (the server holding both of its IDs in use).
+  While the move waits for its validation, the server sends from its first socket to the client's new address when
+  its path there is validated and addressed (sections 9.3 and 9.6.2), not to the old mapping until a validation
+  fails and closes the connection.
 - **Proof (preferred address).** `test_quic_congestion.cpp` `[preferred-address]`: the move (the client's
   PATH_RESPONSE lost, so the server sees the client there before its validation ends), a dropped first-socket
   datagram, an unreachable preferred socket, the manual moves and refusals, a pending move following the client to
-  a new socket, a move before reaching it as the first network goes, three hostile seeds both ways, and the
+  a new socket, a move before reaching it as the first network goes, a rebinding on the way there (the shared ID)
+  and a rebinding while the server cannot yet validate there (its first socket following), three hostile seeds both
+  ways, and the
   configurations, families and forms. `test_quic_client.cpp`: a client host follows its server to the server
   host's second real UDP socket on the loopback. `fuzz_quic_connection` op 0xF7: its first runs found the pending
   move drawing a client back to a socket it left (fixed) and three oracles too strict; then 481 s, 60117 runs
