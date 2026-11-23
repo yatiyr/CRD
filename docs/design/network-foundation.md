@@ -628,8 +628,8 @@ is the one owner of a connection's streams (RFC 9000 sections 2 to 4, 13.3 and 1
 credits and their frames. It knows nothing of packets: the connection asks it for frames and settles their records.
 
 - **Slots.** Each of the four stream types has a fixed pool of slots, each holding S38's buffers and credits, taken
-  from the injected allocator once. A slot's buffers (2026-11-24) come when it first holds a stream, 4 KiB each
-  (`kQuicStreamFirstBytes`, or the limit when smaller), and double as its data needs up to `receive_bytes` and
+  from the injected allocator once. A slot's buffers (2026-11-24) come when it first holds a stream, `first_bytes`
+  each (4 KiB by default, or the limit when smaller), and double as its data needs up to `receive_bytes` and
   `send_bytes`: the receive buffer before it stores data the windows allowed, the send buffer before `write()` or
   `send_room()` would find no room. The slot keeps them for its later streams, so a steady load allocates nothing.
   What the receive buffers need at once is bounded by connection flow control (the sum of each stream's highest offset
@@ -637,8 +637,9 @@ credits and their frames. It knows nothing of packets: the connection asks it fo
   buffers make every slot's limits the worst case, which was the cost of every connection before. Room
   the windows granted that the allocator refuses closes the connection with INTERNAL_ERROR (as msquic and ngtcp2
   do); a send buffer that cannot grow takes less, and a slot refused its first buffers opens no stream (NoMemory, or
-  INTERNAL_ERROR for the peer's). `whole_buffers` takes every slot's buffers at their limits in `init()` for fixed
-  memory. `buffer_allocations()` and `buffer_bytes()` say what the buffers took. Measured: on the QUIC board a
+  INTERNAL_ERROR for the peer's). `first_bytes` at the limits gives a slot whole buffers with its first stream.
+  `buffer_allocations()` and `buffer_bytes()` say what the buffers took; `send_owed()` what a stream's send buffer
+  still holds (room no longer says it is empty). Measured: on the QUIC board a
   connection made its 1 MiB windows' buffers whole at connect, so its handshakes per CPU-second followed the window
   (915); grown on demand, 3,693 at 1 MiB and 3,626 at 64 KiB, bytes unchanged
   ([board](../bench/2026-11-24-net-path-stream-buffers.md)). Open streams of a type are kept in ID order (IDs open in rising order, so an
@@ -1013,7 +1014,7 @@ whole and marked no further than it came, and a rejection's reset.
   with what the ingress proved and the datagram. A full pool or a connection that refuses to start is answered with
   CONNECTION_REFUSED in the INVALID_TOKEN close's form (`Ingress::refuse`, one writer for both, within the answer
   rate). Building the connection allocates its buffers from the injected allocator; nothing else does but its
-streams' buffers as they first hold streams and grow (S40).
+  streams' buffers as they first hold streams and grow (S40).
 - **0-RTT ahead of its Initial** (section 5.2.2). A ring in arrival order of `early_datagrams` slots of `receive_bytes`,
   at most `early_per_client` per Destination Connection ID and address, each kept `early_lifetime_ns` (100 ms), the
   oldest evicted when full; the admitted connection reads its own after its Initial. After a Retry the ID is the
@@ -1030,9 +1031,9 @@ streams' buffers as they first hold streams and grow (S40).
   connection used, and a match drains it unanswered.
 
 Evidence: `test_quic_server.cpp` (7 cases): 16 clients in both versions over clean, lossy (4%, 3% duplicated, 8 ms
-jitter) and busy-host paths, each echoed four streams and given a NEW_TOKEN token, no allocation while serving, and
-every route gone once they close; a resumed client's 0-RTT arriving 20 ms before its Initial held and read before the
-handshake completes in both versions, with and without a Retry-everything ingress, the NEW_TOKEN token proving the new
+jitter) and busy-host paths, each echoed four streams and given a NEW_TOKEN token, no allocation while serving but
+the streams' buffers (S40), and every route gone once they close; a resumed client's 0-RTT arriving 20 ms before its
+Initial held and read before the handshake completes in both versions, with and without a Retry-everything ingress, the NEW_TOKEN token proving the new
 port's address; a full pool's CONNECTION_REFUSED read by the client, the slot reused and the old handle stale; another
 address dropped, a late first Initial opening nothing, a client's stateless reset draining its connection unanswered
 and the same from another address answered by the ingress; the ring's share, eviction, size limit and expiry; every
@@ -1074,8 +1075,8 @@ configuration refusal and allocation refusal; and a client served over the host'
 
 Evidence: `test_quic_client.cpp` (8 cases): twelve connections over one socket to two servers in both versions over
 clean, lossy (4%, 3% duplicated, 8 ms jitter) and busy-host paths, echoed, given tokens, served with no allocation
-and closed with nothing routed; Version Negotiation followed into version 2, a second one and one listing nothing the
-client runs ending it; a Retry taken and its NEW_TOKEN token proving the next connection once in both versions;
+but the streams' buffers (S40) and closed with nothing routed; Version Negotiation followed into version 2, a second
+one and one listing nothing the client runs ending it; a Retry taken and its NEW_TOKEN token proving the next connection once in both versions;
 0-RTT written in the first service and accepted; the server's stateless reset honoured only from its address; another
 address dropped; the pool's bounds, stale handles, a TLS context per connection, every configuration and allocation
 refusal; and a client host on the host's loopback. `test_quic_server.cpp` runs unchanged on `QuicHost`;
@@ -1260,7 +1261,7 @@ lost (the peer's last stream bytes and its CONNECTION_CLOSE in one read). QUIC h
 
 Evidence: `test_qmux_host.cpp` (over pipes under a test clock: both directions past every window, the pool and rate refusals, every close path,
 back-pressure at 512-byte sockets with no busy turn, accept pauses, each share of a turn, deadlines bounding the wait, allocation refusal at every step,
-no allocation in an established turn; over real TCP: 8 clients with 16 KiB socket buffers, a refused port), `test_stream_poller.cpp` (epoll and `WSAPoll`
+no allocation in an established turn but the streams' buffers (S40); over real TCP: 8 clients with 16 KiB socket buffers, a refused port), `test_stream_poller.cpp` (epoll and `WSAPoll`
 on the loopback), `crd-fuzz-net-qmux-host` (any order of connects, resets, cuts, stalls, raw bytes, time, closes, stale handles and accept failures: every
 connection closed once, counts consistent, all memory back), held to source mutations ([session](../sessions/2026-11-09-4-2a-stream-host.md)).
 
@@ -1288,7 +1289,7 @@ carry over, on TLS early data in place of 0-RTT packets.
   before its handshake ends.
 
 Evidence: `test_qmux.cpp` `[qmux-early]` (accepted with every cut of the flights, refused three ways and all their combinations, a replayed flight, lowered and raised limits through a real TLS peer, a too-small allowance,
-parameters that no longer parse, a ticket with none, a record cut by the end of early data, the first-frame rule, the handshake timer, a close at 0.5-RTT, no allocation),
+parameters that no longer parse, a ticket with none, a record cut by the end of early data, the first-frame rule, the handshake timer, a close at 0.5-RTT, no allocation but the streams' buffers),
 `test_tls_early.cpp` (the ticket either side of the parameters, `send_half_rtt` in every state), `test_qmux_host.cpp` (over a host), `crd-fuzz-net-qmux-early` (either side
 under test against a real TLS peer: hostile early data, hostile answers at 0.5-RTT, refusals), held to source mutations ([session](../sessions/2026-11-09-4-2a-qmux-early.md)).
 
@@ -1551,7 +1552,7 @@ none and a peer's Close sent before it stopped reading was lost; STOP_SENDING no
 - **Refused openings.** A client tunnel that never opens is reported with its connection Closed for the reason: `UpgradeRefused` with the status, `Reset` with the stream's error, `Truncated`, or `HandshakeTimeout`.
 - **Serving.** A tunnel is served by its events alone, so every reason to serve one is an event: bytes arrived, bytes left (its streams have room again), a timer, or `QmuxHost::wake()` (`WebSocketTunnels::wake()`). While one waits for `poll()`, `next_deadline_ns()` is 0, so the host serves the bearer at once. HTTP/2 tells a writer Writable once per wake: one that blocks again in it waits for the next room or credit. Once close_notify is out, or the peer's came first, what still waits in HTTP/2 is dropped and nothing more is written.
 
-Evidence: `test_qmux_http2.cpp` `[qmux-h2]` (9 cases: ALPN dispatch on one server context, every configuration refusal, a request answered 404, a connection error's GOAWAY, an extended CONNECT in TLS 0-RTT answered 425 and the same request after the handshake opened, idling only without tunnels, two tunnels of 256 KiB each way as host connections with no allocation in an established turn and the order of their reports, a host with no slot left, a refused tunnel and the client's slot bound) and `crd-fuzz-net-qmux-host`, which now mixes QMux and HTTP/2 connections with tunnels ([session](../sessions/2026-11-10-4-2a-h2-bearer.md)). Interop over TLS with ALPN `h2` against the `h2` crate over rustls: `qmux_interop.py`'s `h2` transport, 44 cases both ways round on the host whose one server context lists QMux, http/1.1 and h2, each checking how the HTTP/2 connection ended; it found the five defects the bullet above closes ([session](../sessions/2026-11-10-4-2a-h2-tls-interop.md)).
+Evidence: `test_qmux_http2.cpp` `[qmux-h2]` (9 cases: ALPN dispatch on one server context, every configuration refusal, a request answered 404, a connection error's GOAWAY, an extended CONNECT in TLS 0-RTT answered 425 and the same request after the handshake opened, idling only without tunnels, two tunnels of 256 KiB each way as host connections with no allocation in an established turn but the streams' buffers and the order of their reports, a host with no slot left, a refused tunnel and the client's slot bound) and `crd-fuzz-net-qmux-host`, which now mixes QMux and HTTP/2 connections with tunnels ([session](../sessions/2026-11-10-4-2a-h2-bearer.md)). Interop over TLS with ALPN `h2` against the `h2` crate over rustls: `qmux_interop.py`'s `h2` transport, 44 cases both ways round on the host whose one server context lists QMux, http/1.1 and h2, each checking how the HTTP/2 connection ended; it found the five defects the bullet above closes ([session](../sessions/2026-11-10-4-2a-h2-tls-interop.md)).
 
 <a id="browsers"></a>
 ## Browser constraints

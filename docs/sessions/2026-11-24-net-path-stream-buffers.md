@@ -19,8 +19,11 @@ Nothing of this track failed: CI 45238977369 (f4da960a) had no failed job, CI 45
 - `QuicReceiveBuffer::grow` and `QuicSendBuffer::grow` move a buffer's contents into larger storage; a FIN or final
   size alone needs no room. `QuicStreamSet` gives a slot 4 KiB buffers when it first holds a stream and doubles them
   up to the limits as data needs; the slot keeps them. In-window data refused room closes with INTERNAL_ERROR, a send
-  buffer refused growth takes less, `open()` refused buffers is NoMemory (ChannelLink: Closed). `whole_buffers` keeps
-  fixed memory; `buffer_allocations()` and `buffer_bytes()` report the buffers.
+  buffer refused growth takes less, `open()` refused buffers is NoMemory (ChannelLink: Closed). `first_bytes` sets the
+  first size (4 KiB by default; the set and connection fuzzers start at 64 and 256 bytes so growth runs under them);
+  `buffer_allocations()` and `buffer_bytes()` report the buffers.
+- `send_owed()`: the interop driver waited for a reset stream's send buffer to empty by reading `send_room()` equal to
+  the limit, never true of a grown buffer, so `crd-net-qmux-interop-crate`'s reset cases outlasted their deadline.
 - The suites that asserted no allocation after init (QUIC connection, keyed, client, server, congestion, QMux, QMux
   host, WebSocket, tunnels, WebTransport, channels) now count the streams' buffers apart and keep `==`; the fuzz
   oracles on live or peak bytes subtract `buffer_bytes()` or compare `BudgetAllocator::allocations()` with
@@ -32,7 +35,10 @@ Nothing of this track failed: CI 45238977369 (f4da960a) had no failed job, CI 45
   CTests (seven under ASan). New: `grow` at all 128 read offsets into 128, 192 and 256 bytes; the send buffer grown at
   every offset chunk for chunk against a never-grown one; the set's growth, every refusal and a zero leak count; three
   slot reuses allocating nothing; `crd-fuzz-net-quic-stream` growing both buffers into scribbled-over other storage
-  (seed `grow`). clang-tidy 22.1.8 clean on every changed source, clang-format on the added lines, braces pass.
+  (seed `grow`). win-debug (MSVC): all `crd-net-tests` cases. The 19 `crd-no-*`/`crd-check*` guards pass; libFuzzer
+  150 s each on the stream, stream-set and connection targets found nothing. linux-gcc-public-checks: the ten net
+  interop CTests and `crd-net-quic-board-check` pass (the QMux crate's after `send_owed()`). clang-tidy 22.1.8 clean on every changed
+  source, clang-format on the added lines, braces pass.
 - Board: crd-net 3,693 handshakes per CPU-second at 1 MiB windows (915 before), 3,626 at 64 KiB; bytes unchanged.
 
 ## Next
