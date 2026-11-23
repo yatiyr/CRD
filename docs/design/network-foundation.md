@@ -260,7 +260,10 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   each one's last completion before the pages go. Anything the host refuses (no io_uring, a sandbox, a kernel before
   6.0, which refuses the multishot flag at once on the still unbound socket) and `CRD_NET_UDP_RING=0` keep `recvmmsg`;
   `crd-net-udp-recvmmsg` and `crd-net-router-namespace-recvmmsg` run every real-socket case again on that path
-  (and on `sendmmsg` alone). Zero-copy receive (`IORING_OP_RECV_ZC`) needs Linux 6.15 and a NIC that splits headers.
+  (and on `sendmmsg` alone). A socket that asked for a ring and has none says why (2026-11-24):
+  `SocketFeatures::ring_refusal` names the step (`Count`, `Off`, `Memory`, `Setup`, `Register`, `Arm`; Registered I/O
+  reports the same steps) and `ring_error` the host's errno or Windows error there, so a resource refusal (ENOMEM,
+  EMFILE) reads as the host's limits and a sandbox's (Setup, EPERM) as its policy. Zero-copy receive (`IORING_OP_RECV_ZC`) needs Linux 6.15 and a NIC that splits headers.
 - **Zero-copy send** (2026-11-21, NET-PATH; [udp_ring.cpp](../../engine/foundation/net/src/udp_ring.cpp)).
   `DatagramSocket::send_stable` is `send` from a caller that keeps each datagram's bytes unchanged until
   `sends_released()` passes its number (a socket numbers what it takes, `sends_taken()`); the default copies, so
