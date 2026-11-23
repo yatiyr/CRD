@@ -210,7 +210,8 @@ class Case:
             server_err = server.stderr.read()
             clients, servers = reports_of(client_out), reports_of(server_out[0])
             self.check(clients, servers, client.returncode, server.returncode, client_err, server_err)
-            self.check_paths(clients[-1], servers[-1], server_port, relay, f'client {clients}\nserver {servers}')
+            self.check_paths(clients[-1], servers[-1], server_port, relay,
+                             f'client {clients} {client_err}\nserver {servers} {server_err}')
             if relay is not None:
                 check_relay_sizes(relay, self.path, 'client' if self.cerid_is_client else 'server',
                                   self.receive_bytes or CERID_RECEIVE, f'client {clients}\nserver {servers}')

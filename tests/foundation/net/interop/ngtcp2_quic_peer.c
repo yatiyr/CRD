@@ -170,6 +170,7 @@ typedef struct
     uint64_t                bytes_received;
     uint64_t                bytes_sent;
     uint64_t                packets_since_update;
+    size_t                  burst_left; /* the packets this write round may still send (begin_burst) */
     uint64_t                key_updates;
     uint64_t                early_bytes;
     uint64_t                early_datagrams;
@@ -1060,6 +1061,27 @@ static int datagram_ready(const peer_t* peer)
     return peer->echo_count != 0U && ngtcp2_conn_get_handshake_completed2(peer->conn);
 }
 
+/* A write round sends one burst, ngtcp2's send quantum, as ngtcp2's own examples do; the pacer's next send time, which
+ * ngtcp2_conn_get_expiry2() includes, wakes the next round. A round that wrote the whole window at once would overrun
+ * the receiver's socket buffer on a loopback path and lose a datagram no relay chose to drop. */
+static void begin_burst(peer_t* peer)
+{
+    const size_t packets = ngtcp2_conn_get_send_quantum2(peer->conn) /
+                           ngtcp2_conn_get_path_max_tx_udp_payload_size2(peer->conn);
+    peer->burst_left = packets != 0U ? packets : 1U;
+}
+
+/* Whether this round's burst is spent: the pacer then learns what it sent and times the next round. */
+static int burst_spent(peer_t* peer, uint64_t now)
+{
+    if (peer->burst_left != 0U)
+    {
+        return 0;
+    }
+    ngtcp2_conn_update_pkt_tx_time(peer->conn, now);
+    return 1;
+}
+
 /* What goes after a packet is written, marked `ecn`: 1 to carry on, 0 to give up. */
 static int packet_written(peer_t* peer, const ngtcp2_path* path, const uint8_t* packet, size_t size, uint8_t ecn,
                           uint64_t now)
@@ -1068,6 +1090,7 @@ static int packet_written(peer_t* peer, const ngtcp2_path* path, const uint8_t* 
     {
         return 0;
     }
+    peer->burst_left -= peer->burst_left != 0U ? 1U : 0U;
     ++peer->ecn_sent[ecn & NGTCP2_ECN_MASK];
     peer->ecn_last = ecn & NGTCP2_ECN_MASK;
     ++peer->packets_since_update;
@@ -1150,9 +1173,14 @@ static int write_http3(peer_t* peer)
     ngtcp2_pkt_info     info = {0};
     ngtcp2_path_storage_zero(&storage);
     int held = 0;
+    begin_burst(peer);
     for (;;)
     {
         const uint64_t now = now_ns();
+        if (burst_spent(peer, now))
+        {
+            return 1;
+        }
         if (!held && datagram_ready(peer))
         {
             if (!write_one_datagram(peer, &storage, &info, datagram, &held, now))
@@ -1230,9 +1258,14 @@ static int write_streams(peer_t* peer)
     const int       tag  = peer->client ? 0 : 1;
     int             held = 0; /* no room for a datagram in this write round */
     ngtcp2_pkt_info info = {0};
+    begin_burst(peer);
     for (;;)
     {
         const uint64_t now = now_ns();
+        if (burst_spent(peer, now))
+        {
+            return 1;
+        }
         if (!held && datagram_ready(peer))
         {
             if (!write_one_datagram(peer, &storage, &info, datagram, &held, now))
