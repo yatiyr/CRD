@@ -193,7 +193,7 @@ enum class QuicPathChoice : u8
 };
 
 // How long a path left without data keeps its RTT unmeasured while another carries data (S78's scheduling;
-// QuicConnectionConfig::path_refresh_ns): then one PING measures it again, so that the path choice ranks paths by
+// QuicConnectionConfig::path_refresh_ns): then two PINGs measure it again, so that the path choice ranks paths by
 // what they are now.
 inline constexpr u64 kQuicPathRefreshNs = 1000000000U;
 
@@ -257,8 +257,9 @@ struct QuicConnectionConfig
     QuicPathChoice path_choice = QuicPathChoice::LowestRtt; // which path carries data; live: set_path_choice()
     // A data path (not the peer's backup while another is usable, RFC 10069 section 3.3) that has sent no
     // ack-eliciting packet for this long when another path sends STREAM or DATAGRAM frames, with nothing of its own in
-    // flight and no probe timeout pending, sends one PING (section 5.9: an idle path probed before it is switched to),
-    // whose sample renews its estimate: its RTT stays current for the path choice, and a path gone dark meanwhile is
+    // flight and no probe timeout pending, sends two PINGs in two packets (section 5.9: an idle path probed before it
+    // is switched to); the second draws an immediate acknowledgement (RFC 9000 section 13.2.2), whose sample, free of
+    // ACK delay, renews the estimate: its RTT stays current for the path choice, and a path gone dark meanwhile is
     // found by its probe timeout before data goes there. Only this side's data starts one, so an end that only
     // acknowledges sends none, and a connection without data idles out as it would without them. 0 for none, else at
     // least kQuicGranularityNs; live: set_path_refresh().
@@ -736,7 +737,7 @@ private:
         u8 probes = 0U;              // probe packets the space owes
         u32 ack_only = 0U;           // ACK-only packets sent since the last ack-eliciting one
         u64 eliciting_ns = 0U;       // when the space's last ack-eliciting packet left
-        bool refresh = false;        // a path slot's space owes a PING that measures its RTT (owe_refreshes())
+        u8 refresh = 0U;             // PINGs a path slot's space owes to measure its RTT (owe_refreshes())
     };
     static constexpr usize kNumberSpaces = kQuicSpaces - 1U + kQuicMaxPaths;
     [[nodiscard]] static constexpr usize number_space(QuicSpace space, usize slot) noexcept
@@ -971,12 +972,12 @@ private:
     // peer did not mark is usable, a data path with no probe timeout pending (section 3.3).
     [[nodiscard]] bool peer_backup(usize slot) const noexcept;
     [[nodiscard]] bool backup_held(usize slot) const noexcept;
-    // Whether `slot` may send a PING that measures its RTT again (QuicConnectionConfig::path_refresh_ns): a data path
-    // still sending, not backup_held(), with nothing in flight and no probe timeout pending; and whether it owes one.
+    // Whether `slot` may send the PINGs that measure its RTT again (QuicConnectionConfig::path_refresh_ns): a data
+    // path still sending, not backup_held(), with no probe timeout pending; and whether it owes one now.
     [[nodiscard]] bool refreshable(usize slot) const noexcept;
     [[nodiscard]] bool refresh_owed(usize slot) const noexcept;
-    // Data left on slot `from` at `now_ns`: every other refreshable slot whose last ack-eliciting packet is
-    // path_refresh_ns old owes its PING.
+    // Data left on slot `from` at `now_ns`: every other refreshable slot with nothing in flight whose last
+    // ack-eliciting packet is path_refresh_ns old owes kRefreshPackets PINGs.
     void owe_refreshes(usize from, u64 now_ns) noexcept;
     // Whether slot `a` goes before slot `b` under QuicPathChoice::LowestRtt: the lower smoothed RTT, then the lower
     // slot.

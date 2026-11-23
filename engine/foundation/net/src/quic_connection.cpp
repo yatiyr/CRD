@@ -39,6 +39,7 @@ constexpr usize kPullChunk = 512U;
 constexpr usize kKeyedHelloPrefix = 2U; // a keyed connection's parameters follow their two-byte length
 constexpr u64 kSkipMask = 63U;   // one 1-RTT packet number in 64 is skipped (section 21.4)
 constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries a PING
+constexpr u8 kRefreshPackets = 2U;           // the PINGs, each in a packet of its own, that measure an idle path's RTT
 constexpr u64 kNoSequence = kQuicNoSequence; // a path with no peer connection ID to send to
 
 // What a congestion controller sees of a packet counted in flight.
@@ -1885,26 +1886,29 @@ bool QuicConnection::backup_held(usize slot) const noexcept
 
 bool QuicConnection::refreshable(usize slot) const noexcept
 {
-    // Nothing in flight: a sample is not already on its way, and the PING fits any window. A backup path stays
-    // unused while another is usable (section 3.3).
-    return data_path(slot) && !stopped(slot) && !backup_held(slot) && m_recovery->bytes_in_flight(slot) == 0U &&
-           m_recovery->pto_count(slot) == 0U;
+    // A backup path stays unused while another is usable (section 3.3); a path with a probe timeout pending has its
+    // probes.
+    return data_path(slot) && !stopped(slot) && !backup_held(slot) && m_recovery->pto_count(slot) == 0U;
 }
 
 bool QuicConnection::refresh_owed(usize slot) const noexcept
 {
-    return m_numbers[number_space(QuicSpace::Application, slot)].refresh && refreshable(slot);
+    return m_numbers[number_space(QuicSpace::Application, slot)].refresh != 0U && refreshable(slot);
 }
 
 void QuicConnection::owe_refreshes(usize from, u64 now_ns) noexcept
 {
+    // Two PINGs in two packets: the second draws the peer's acknowledgement at once (RFC 9000 section 13.2.2), so the
+    // sample carries no ACK delay, which a sample under the path's minimum could not have taken off (RFC 9002
+    // section 5.3). Nothing in flight: no sample is on its way already, and both fit any window.
     for (usize slot = 0U; slot < kQuicMaxPaths && m_config.path_refresh_ns != 0U; ++slot)
     {
         Numbering& numbers = m_numbers[number_space(QuicSpace::Application, slot)];
-        if (slot != from && add_saturating(numbers.eliciting_ns, m_config.path_refresh_ns) <= now_ns &&
-            refreshable(slot))
+        if (slot != from && numbers.refresh == 0U &&
+            add_saturating(numbers.eliciting_ns, m_config.path_refresh_ns) <= now_ns &&
+            m_recovery->bytes_in_flight(slot) == 0U && refreshable(slot))
         {
-            numbers.refresh = true;
+            numbers.refresh = kRefreshPackets;
         }
     }
 }
@@ -2963,7 +2967,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         sent.in_flight = written.eliciting || floor != 0U;
         sent.path_probe = carry == Carry::Probe;
         sent.off_path = off_path;
-        sent.refresh = numbers.refresh && written.eliciting && !off_path;
+        sent.refresh = numbers.refresh != 0U && written.eliciting && !off_path;
         sent.handover = path.covered(now_ns);
         sent.ecn = m_marking;
         // Only a datagram that starts with this short header is one an ICMP message can quote and match.
@@ -2985,9 +2989,9 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         numbers.ack_only = written.eliciting ? 0U : numbers.ack_only + 1U;
         if (written.eliciting && !off_path) // a packet to another 4-tuple measures not this path's RTT
         {
-            m_counters.path_refreshes += numbers.refresh ? 1U : 0U;
+            m_counters.path_refreshes += (numbers.refresh == 1U) ? 1U : 0U;
             numbers.eliciting_ns = now_ns;
-            numbers.refresh = false;
+            numbers.refresh = (numbers.refresh != 0U) ? static_cast<u8>(numbers.refresh - 1U) : u8{0};
         }
         if (written.data && space == QuicSpace::Application && !off_path)
         {
