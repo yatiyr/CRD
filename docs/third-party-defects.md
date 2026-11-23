@@ -225,6 +225,19 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Retirement | When a pinned qmux release hands such a stream to `accept_uni()` (or `accept_bi()`) already reset, the sizing stays and this entry goes |
 | Row | [4.2a](ROADMAP.md#slice-4.2a); evidence [the RFC 8441 session](sessions/2026-11-10-4-2a-websocket-h2-interop.md) and [the RFC 9220 session](sessions/2026-11-10-4-2a-websocket-h3-interop.md) |
 
+<a id="tp-15"></a>
+## TP-15: picoquic drops a path status for a path ID it holds no path for yet
+
+| Field | Value |
+|---|---|
+| Component | picoquic 2026.11.08 (`cmake/pins.json` `picoquic`), the multipath peer of the congestion and multipath interoperability test |
+| Symptom | A PATH_STATUS_BACKUP or PATH_STATUS_AVAILABLE frame naming a path ID below the limit whose first packet has not arrived yet is ignored (`picoquic_decode_path_available_or_backup_frame`: "Ignore path ... frame with invalid ID"), though RFC 10069 section 4.3 lets a sender name every path ID below the maximum, "even if the path is not in active use yet". The status is lost for good: the sender's frame was acknowledged |
+| Reproduction outside Cerid | The decoder's own branch: `picoquic_find_path_by_unique_id` finds no path for the ID until a packet on it creates one, and the frame is then dropped with no stored state. Cerid's only part is sending the status when `add_path()` starts, which section 4.3 allows |
+| Affected | No hosted test fails: `crd-net-quic-interop-picoquic` on linux-gcc-public-checks ("multipath both backup", Cerid the client) sets the status once the path is validated, below |
+| Engine handling | `crd-quic-peer --backup-added` calls `set_path_status()` once the added path's validation counted (`path_validations` past its value when `add_path()` started). No Cerid source changes: crd-net sends and keeps a status for any open path ID, as section 4.3 allows |
+| Retirement | When a pinned picoquic stores a status for a path ID it has no path for yet, the peer sets it when `add_path()` starts again and this entry goes |
+| Row | [NET-PATH](ROADMAP.md#slice-net-path); evidence [the picoquic own-path session](sessions/2026-11-23-net-path-picoquic-own-path.md) |
+
 ## The registered-failure gate
 
 `scripts/check-registered-failures.py --lane <preset> --junit <ctest --output-junit file> --ctest-exit <code>` reads
