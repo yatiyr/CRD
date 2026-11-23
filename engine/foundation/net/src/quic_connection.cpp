@@ -2760,7 +2760,8 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
         // timeout's floor, datagram_limit). The ACK it carries along is not yet owed: it rides only with other frames,
         // or a datagram waiting for room would draw ACK-only packets, one after another.
         used = write_datagrams(frames, used, packet, now_ns, written);
-        if (ack_later && !early && (used != 0U || m_streams.has_frame(stream_route(m_data_open))))
+        const bool streams = m_frame_count < m_config.sent_frames && m_streams.has_frame(stream_route(m_data_open));
+        if (ack_later && !early && (used != 0U || streams))
         {
             put_ack();
         }
