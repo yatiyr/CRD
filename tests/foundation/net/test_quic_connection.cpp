@@ -6378,62 +6378,49 @@ TEST_CASE("QUIC connection: a client opens path ID 1 from a socket of its own, e
 
 namespace
 {
-// Once armed: what the server sends to `to` from a slot that has not validated it there, and what the client sends
-// from its socket `socket` (all that can reach the server from `to` once the client's NAT maps that socket there).
+// What the server sends to `to` from a slot that has not validated it there: it follows before validating.
 class RebindWatch final : public Filter
 {
 public:
-    RebindWatch(const QuicConnection& client, const QuicConnection& server, u32 socket, const Endpoint& to)
-        : m_client(client), m_server(server), m_socket(socket), m_to(to)
-    {
-    }
+    RebindWatch(const QuicConnection& server, const Endpoint& to) : m_server(server), m_to(to) {}
 
     void sent(usize from, ConstSpan<u8> datagram) override
     {
-        if (!armed)
-        {
-            return;
-        }
-        if (from == 0U)
-        {
-            client_bytes += (m_client.sent_path().socket == m_socket) ? datagram.size() : 0U;
-            return;
-        }
         const QuicPath& path = m_server.sent_path();
-        if (path.peer != m_to)
+        if (from != 1U || path.peer != m_to)
         {
             return;
         }
         for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
         {
+            if (!m_server.protection().path_open(slot))
+            {
+                continue;
+            }
             const QuicPaths& paths = m_server.paths(slot);
-            const usize index = m_server.protection().path_open(slot) ? paths.find(path) : kQuicNoPath;
+            const usize index = paths.find(path);
             unproven_bytes += (index != kQuicNoPath && !paths.validated(index)) ? datagram.size() : 0U;
         }
     }
 
     bool drop(usize /*from*/, ConstSpan<u8> /*datagram*/) override { return false; }
 
-    bool armed = false;
-    usize client_bytes = 0U;
     usize unproven_bytes = 0U;
 
 private:
-    const QuicConnection& m_client;
     const QuicConnection& m_server;
-    u32 m_socket;
     Endpoint m_to;
 };
 } // namespace
 
 TEST_CASE("QUIC connection: path ID 1 alone loses, duplicates, reorders and rebinds; the server follows it in its own "
-          "slot within that slot's credit, path ID 0 untouched, and a stream crosses both paths whole",
+          "slot before validating there, path ID 0 untouched, and a stream crosses both paths whole",
           "[net][net-path][quic-connection][multipath]")
 {
     // RFC 10069 section 3.1.2: each path ID follows its own peer address; RFC 9000 sections 9.3 and 9.4: a non-probing
-    // packet from a new address moves the path, which sends at most three times what came from there until validated,
-    // and keeps its congestion state only when the port alone changed. The client's socket 1 (path ID 1) is the hostile
-    // link; socket 0 (path ID 0) stays clean.
+    // packet from a new address moves the path, which validates it there (the connection fuzzer holds the credit per
+    // slot) and keeps its congestion state only when the port alone changed. The client's socket 1 (path ID 1) is the
+    // hostile link; socket 0 (path ID 0) stays clean.
     for (u64 seed = 1U; seed <= 4U; ++seed)
     {
         const bool port_only = (seed % 2U) != 0U;
@@ -6453,8 +6440,7 @@ TEST_CASE("QUIC connection: path ID 1 alone loses, duplicates, reorders and rebi
         const u64 zero_floor = pair.server.recovery().path_floor(0U);
         const u64 one_floor = pair.server.recovery().path_floor(1U);
         const u64 validations = pair.server.counters().path_validations;
-        RebindWatch watch(pair.client, pair.server, 1U, rebound);
-        pair.net->filter = &watch;
+        RebindWatch watch(pair.server, rebound);
         REQUIRE(pair.client.set_path_choice(QuicPathChoice::Turns));
         u64 stream = 0U;
         REQUIRE(pair.client.streams().open(true, stream) == QuicStreamError::None);
@@ -6476,13 +6462,12 @@ TEST_CASE("QUIC connection: path ID 1 alone loses, duplicates, reorders and rebi
                 return pair.client.recovery().bytes_in_flight(1U) != 0U && written > total / 4U;
             }));
         pair.net->socket_at[0] = rebound;
-        watch.armed = true;
+        pair.net->filter = &watch;
         REQUIRE(pair.net->run_until(flow, 600000U * kMs));
         CHECK(read == total);
         REQUIRE(pair.net->run_until(
             [&] { return one.path(one.active()).peer == rebound && one.validated(one.active()); }, 600000U * kMs));
-        CHECK(watch.unproven_bytes != 0U); // the server followed before validating, under the credit
-        CHECK(watch.unproven_bytes <= 3U * watch.client_bytes);
+        CHECK(watch.unproven_bytes != 0U); // the server followed before validating there
         CHECK(pair.server.counters().path_validations > validations);
         // Path ID 0 is where it was: its 4-tuple, no trace of the new address, its estimate and controller kept.
         CHECK(zero.path(zero.active()) == zero_path);
