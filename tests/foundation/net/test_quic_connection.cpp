@@ -8473,6 +8473,26 @@ TEST_CASE("QUIC connection: a pinned stream crosses only its path ID, the slower
             return read[1] == target;
         },
         5000U * kMs));
+    // Dark again, the application unpins the waiting stream: its data, settled lost by the probe timeout, goes on path
+    // ID 0 in that path's one way.
+    pair.net->down = 1U << 1U;
+    const u64 again = written[1] + 500U;
+    static_cast<void>(write_pattern(client.streams(), pinned, written[1], again, pinned, false));
+    REQUIRE(pair.net->run_until([&] { return client.recovery().pto_count(1U) != 0U; }));
+    pair.net->advance(pair.net->now + 400U * kMs);
+    static_cast<void>(drain(server.streams(), pinned, read[1], pinned));
+    CHECK(read[1] == target);
+    REQUIRE(client.streams().unpin(pinned) == QuicStreamError::None);
+    CHECK_FALSE(client.streams().pinned(pinned, pinned_path));
+    const u64 unpinned_ns = pair.net->now;
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(drain(server.streams(), pinned, read[1], pinned));
+            return read[1] == again;
+        }));
+    CHECK(pair.net->now - unpinned_ns <= 21U * kMs);
+    pair.net->down = 0U;
     CHECK(client.state() == QuicConnectionState::Established);
 }
 
