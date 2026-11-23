@@ -30,14 +30,15 @@ and a failed validation then closed the connection.
 ## Evidence
 
 - **Replays.** Both inputs, and their minimised forms (`-minimize_crash` on the pre-fix binary, 133 and 108 bytes),
-  fail before the fix and pass after it. The minimised forms are adopted: a9385bb9 and 8d4bdc2b. The host-check's
-  other two inputs (37984311, 678a9eca) pass both before and after.
+  fail before the fix and pass after it; adopted as a9385bb9 and 8d4bdc2b. Of the host-check's other two inputs,
+  678a9eca passes on both builds. 37984311 trips UBSan's null `Tuples` access (the harness defect the last batch
+  fixed) on the pre-fix sanitizer build and passes now; it is adopted as that fix's regression.
 - **New `[preferred-address]` cases, each failing with its half reverted.** One rebinds on the way there; the server
   shares the held ID and moves at once. The other rebinds while the server cannot validate there yet; its first
-  socket follows the client, and the server moves once the loss ends. The 108-byte input also fails without the
-  follow.
-- **Rejected alternatives.** Giving a superseded validating path's ID to the newest move had no input or case with
-  teeth. Dropping the superseded move eagerly would churn IDs against a peer whose ACKs alternate paths.
+  socket follows the client, and the server moves once the loss ends. Without the follow, 0736d765 and its 108-byte
+  form fail; 805dc37f needs only the shared ID.
+- **Rejected alternatives.** Giving a superseded path's ID to the newest move had no case with teeth; dropping the
+  superseded move eagerly would churn IDs against a peer whose ACKs alternate paths.
 - **Runs.** linux-gcc-debug: crd-net-tests 1157 cases (7 skipped), every net corpus and the `crd-no-|crd-check`
   guards pass. linux-gcc-release: 333 `[preferred-address],[net-path],[multipath]` cases pass. libFuzzer (`-fork` 2)
   ran 422 s, 45077 executions, no artifact. LLVM 22.1.8 tidy is clean, and clang-format is clean on the added lines.
