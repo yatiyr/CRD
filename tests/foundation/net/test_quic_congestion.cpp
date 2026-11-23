@@ -1708,6 +1708,114 @@ TEST_CASE("QUIC preferred address: a client that moves before reaching it valida
     CHECK(pair.client.state() == QuicConnectionState::Established);
 }
 
+TEST_CASE("QUIC preferred address: a client its NAT rebinds on its way there keeps its ID, which the server's path "
+          "from the new address shares, and the server validates that path and moves there",
+          "[net][net-path][quic-connection][preferred-address]")
+{
+    Hosted pair(0U, false, true, Preferred::Follow);
+    Net& net = *pair.net;
+    REQUIRE(net.run_until([&] { return pair.client.on_preferred_address(); }));
+    REQUIRE_FALSE(pair.server.on_preferred_address());
+    const QuicPaths& paths = pair.server.paths();
+    const usize first = paths.find(QuicPath{1U, net.client_at});
+    REQUIRE(first != kQuicNoPath);
+    const u64 held = paths.peer_sequence(first);
+    // The server holds two of the client's IDs (the default limit): its first socket's path's and this one's. The
+    // NAT maps the client elsewhere and forgets the old mapping; the client kept its ID, so the new path shares the
+    // one sent to the path it rebinds (RFC 9000 section 9.5), validates and takes the move at once.
+    net.client_at.port = 50001U;
+    const QuicPath rebound{1U, net.client_at};
+    pair.client.ping();
+    REQUIRE(net.run_until([&] { return paths.find(rebound) != kQuicNoPath; }));
+    CHECK(paths.peer_sequence(paths.find(rebound)) == held);
+    REQUIRE(net.run_until([&] { return pair.server.on_preferred_address(); }, 1000U * kMs));
+    CHECK(pair.server.path() == rebound);
+    CHECK(paths.validated(paths.active()));
+    u64 id = 0U;
+    REQUIRE(pair.client.streams().open(true, id) == QuicStreamError::None);
+    Bulk up{pair.client, pair.server, 1U << 18U};
+    REQUIRE(net.run_until([&] { return up.step(); }, 600000U * kMs));
+    CHECK(all_on(pair.server, 1U));
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
+namespace
+{
+// Loses what a server sends from its preferred socket while `armed`.
+class PreferredLoss final : public Filter
+{
+public:
+    explicit PreferredLoss(const QuicConnection& server) : m_server(server) {}
+
+    bool drop(usize from, ConstSpan<u8> /*datagram*/) override
+    {
+        return armed && from == 1U && m_server.sent_path().socket == 1U;
+    }
+
+    bool armed = false;
+
+private:
+    const QuicConnection& m_server;
+};
+} // namespace
+
+TEST_CASE("QUIC preferred address: until the server validated its client's path there, it sends from its first "
+          "socket to the address the client moved from, when validated there",
+          "[net][net-path][quic-connection][preferred-address]")
+{
+    Hosted pair(0U, false, true, Preferred::Manual);
+    Net& net = *pair.net;
+    PreferredLoss loss(pair.server);
+    net.filter = &loss;
+    pair.confirm();
+    const QuicPaths& paths = pair.server.paths();
+    const auto quiet = [&]
+    {
+        bool validating = false;
+        for (usize index = 0U; index < kQuicMaxPaths; ++index)
+        {
+            validating = validating || (paths.used(index) && paths.validating(index));
+        }
+        return !validating;
+    };
+    // The NAT maps the client from a to b and back, each mapping standing: the server's first socket validates both
+    // and is back at a.
+    const Endpoint a = net.client_at;
+    const Endpoint b{a.address, 50001U};
+    for (const Endpoint& to : {b, a})
+    {
+        net.also_at = net.client_at;
+        net.client_at = to;
+        pair.client.ping();
+        REQUIRE(net.run_until([&] { return pair.server.path().peer == to && quiet(); }, 5000U * kMs));
+    }
+    const usize at_b = paths.find(QuicPath{0U, b});
+    REQUIRE(at_b != kQuicNoPath);
+    REQUIRE(paths.validated(at_b));
+    // The client proves the preferred address from a.
+    const QuicPath preferred{0U, kPreferredAt};
+    REQUIRE(pair.client.probe_path(preferred, net.now) == QuicMigration::Started);
+    REQUIRE(net.run_until([&] { return pair.client.paths().proven(pair.client.paths().find(preferred)); }));
+    // Then to b for good while the client moves to the preferred address, whose path from b the server cannot
+    // validate yet: its first socket follows the client to b meanwhile (section 9.6.2), and it moves once it can.
+    net.client_at = b;
+    net.also_at = Endpoint{};
+    loss.armed = true;
+    REQUIRE(pair.client.migrate(preferred, net.now) == QuicMigration::Started);
+    REQUIRE(pair.client.on_preferred_address());
+    REQUIRE(paths.find(QuicPath{1U, b}) == kQuicNoPath);
+    REQUIRE(net.run_until([&] { return paths.find(QuicPath{1U, b}) != kQuicNoPath; }, 1000U * kMs));
+    CHECK(pair.server.path() == QuicPath{0U, b});
+    CHECK_FALSE(pair.server.on_preferred_address());
+    loss.armed = false;
+    REQUIRE(net.run_until([&] { return pair.server.on_preferred_address(); }, 5000U * kMs));
+    CHECK(pair.server.path() == QuicPath{1U, b});
+    Bulk up{pair.client, pair.server, 1U << 18U};
+    REQUIRE(net.run_until([&] { return up.step(); }, 600000U * kMs));
+    CHECK(all_on(pair.server, 1U));
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
 TEST_CASE("QUIC preferred address: the move carries transfers both ways over paths that lose, duplicate and reorder",
           "[net][net-path][quic-connection][preferred-address]")
 {
