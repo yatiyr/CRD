@@ -3975,9 +3975,10 @@ void QuicConnection::decided(u64 now_ns) noexcept
     m_deciding = false;
     const usize drop = m_drop_after;
     m_drop_after = kQuicNoPath;
-    if (drop != kQuicNoPath)
+    // Nothing when the packet moved the connection there or started its validation (a move to a preferred socket).
+    if (drop != kQuicNoPath && !tuples(m_receive_slot).validating(drop))
     {
-        drop_path(m_receive_slot, drop, now_ns); // nothing when the packet moved the connection there
+        drop_path(m_receive_slot, drop, now_ns);
     }
 }
 

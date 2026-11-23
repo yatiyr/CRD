@@ -856,9 +856,10 @@ private:
     }
     [[nodiscard]] bool stopped_ack_due(u64 now_ns) const noexcept;
     // Forgets a path that is not the active one, retiring its peer ID unless another path sends to it; the path of
-    // the packet being read is forgotten once that packet chose its path (decided()), unless it chose that one.
+    // the packet being read is forgotten once that packet chose its path (decided()).
     void drop_path(usize slot, usize index, u64 now_ns) noexcept;
-    // The packet being read chose its path: the drop its frames asked of that path happens now, unless chosen.
+    // The packet being read chose its path: the drop its frames asked of that path happens now, unless the packet
+    // moved the connection there or validates it.
     void decided(u64 now_ns) noexcept;
     // The peer ID a path sends to (its sequence), whether the peer's ID of a sequence is held, and whether a path has
     // the room and an ID to send a datagram now.

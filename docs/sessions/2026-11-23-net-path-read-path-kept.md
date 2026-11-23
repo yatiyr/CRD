@@ -22,7 +22,8 @@ follow oracle caught that on committed input ddaef1b3.
 ## What landed
 
 - `drop_path()`: from the packet's admission until `follow_packet()` chose its path (`m_deciding`), a drop of the packet's
-  own path waits in `m_drop_after`. `decided()` then does it, and does nothing when the packet moved the connection there.
+  own path waits in `m_drop_after`. `decided()` then does it, but not when the packet moved the connection there or
+  started that path's validation: S75 never gives up a path under validation, and its check's end gives the ID up.
   This covers `address_paths()` at admission, on NEW_CONNECTION_ID and on PATH_RESPONSE, and a client's fallback.
 - A path forgotten after that leaves the rest of its datagram (held packets) from a path not known, so the next 1-RTT
   packet admits it again.
@@ -39,10 +40,12 @@ follow oracle caught that on committed input ddaef1b3.
   passes with the fix. The 46 committed inputs replay clean.
 - Teeth: deferral removed (the new case fails, and so does ddaef1b3); deferred drop never done (the new case fails);
   pre-fix engine (the new case and 1ac9ab1b fail).
-- Not caught by any test: dropping the `m_receive_path` reset in `drop_path()`. It only matters for held packets read
-  after a deferred drop.
+- Not caught by any test (mutated and rerun): dropping the `m_receive_path` reset in `drop_path()`, which matters only
+  for held packets read after a deferred drop; and the validation skip in `decided()`, reachable only from a kept
+  revert's path probed while a path waits (the preferred-socket branch takes a validated, held path at once).
 - linux-gcc-debug: 53 CTests pass (`crd-net`, `crd-check*`, `crd-no-*`, `crd-fuzz-net*`) and `[net-path]` 294 cases.
-  linux-gcc-asan (with UBSan): `[quic-connection],[net-path]` pass, and every other net case passes too.
+  linux-gcc-asan (with UBSan): `[quic-connection],[net-path]` pass, and every other net case passes too;
+  linux-gcc-release `[net-path]` passes.
 - libFuzzer, 280 s each, no artifact: 26403 runs from the committed corpus, and 25032 runs from the 23 over-paths
   inputs with 0xF3. LLVM 22.1.8 tidy is clean on the three touched sources; the added lines need no clang-format change.
 
