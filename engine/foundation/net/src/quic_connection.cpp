@@ -3590,10 +3590,19 @@ void QuicConnection::admit_path(usize slot, usize datagram_bytes, u64 now_ns) no
     const usize active = paths.active();
     const u64 local = m_packet_local.found() ? m_packet_local.sequence : paths.local_sequence(active);
     paths.set_local_sequence(index, local);
-    // A peer that kept its connection ID did not choose to move (a NAT rebinding): this side may keep its own. One
-    // that changed it gets an ID this side has not used, never one another path sends to (section 9.5).
-    const bool kept = local == paths.local_sequence(active);
-    paths.set_peer_sequence(index, kept ? path_sequence(slot, active) : kNoSequence);
+    // A peer that kept its connection ID did not choose to move (a NAT rebinding): this side may keep its own, the
+    // active path's (section 9.5). One that changed it gets an ID this side has not used, never one another path
+    // sends to. On a server's preferred socket before it moved there, the client's paths are its one move there: a
+    // new address with the ID a path there was sent to is that path rebound, and keeps that path's ID.
+    usize rebound = (local == paths.local_sequence(active)) ? active : kQuicNoPath;
+    const bool elsewhere = follows_peer() && m_candidate.socket != paths.path(active).socket;
+    for (usize other = 0U; other < kQuicMaxPaths && elsewhere && rebound == kQuicNoPath; ++other)
+    {
+        const bool same = other != index && paths.used(other) && paths.path(other).socket == m_candidate.socket &&
+                          paths.local_sequence(other) == local && peer_held(slot, path_sequence(slot, other));
+        rebound = same ? other : kQuicNoPath;
+    }
+    paths.set_peer_sequence(index, (rebound != kQuicNoPath) ? path_sequence(slot, rebound) : kNoSequence);
     address_paths(slot, now_ns);
 }
 
@@ -3829,6 +3838,14 @@ void QuicConnection::follow_packet(usize slot, u64 number, bool probing, u64 now
             }
             m_deferred_move = path;
             validate_path(slot, path, now_ns, validation_timeout_ns());
+            // Until then they leave the original socket, to the client's address when that socket's path there is
+            // validated and addressed: a client rebound on its way there is followed (section 9.3).
+            const usize here = paths.find(QuicPath{paths.path(paths.active()).socket, paths.path(path).peer});
+            if (here != kQuicNoPath && here != paths.active() && paths.validated(here) &&
+                peer_held(slot, path_sequence(slot, here)))
+            {
+                follow_peer(slot, here, now_ns);
+            }
             return;
         }
         if (path != paths.active() && follows_peer())
