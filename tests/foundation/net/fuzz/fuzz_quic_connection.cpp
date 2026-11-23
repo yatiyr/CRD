@@ -58,7 +58,8 @@
 // end twice (RFC 10069 section 2.4, its nonce); add_path() and abandon_path() answer as the limits, the paths still
 // sending and the earlier abandonments say, and nothing refused changes a counter; each end's limit rises by one per
 // path ID closed, which its peer learns. A confirmed pair keeps the client's lowest open path ID once the stream
-// arrived, abandoning its others, and the server follows the client on it.
+// arrived, abandoning its others, and the server follows the client on it (that a server not following saw a
+// validation fail is exact only without further paths: a failure on another one counts too).
 // 0-RTT: an offer ends Accepted or Rejected on both ends alike; accepted, the server reads the early stream
 // whole and unchanged, never marking more bytes replayable than came; rejected, the client's streams were reset and
 // the server opened none of them.
@@ -2108,10 +2109,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                            0xF4U, 0x24U, 0x02U, 0x07U, 0xF4U, 0x02U, 0x00U, 0x07U, 0x00U, 0x00U};
     sink.add("script-path-status", statuses, sizeof(statuses));
     // Path IDs over paths (RFC 10069): opened on sockets 1 and 2, the first abandoned by the client with too large a
-    // code and then the largest, and by the server, then path ID 0 by the client while path ID 2 sends.
+    // code and then the largest, and by the server, then path ID 0 by the client while path ID 2 sends; once both
+    // closed, socket 1 opens path ID 3, never path ID 1 again.
     PathScript opened;
     opened.ops({0xF2U, 0x01U}).steps(2).ops({0xF2U, 0x02U}).steps(2).ops({0xF0U, 0x32U, 0xF0U, 0x22U}).steps(1);
-    opened.ops({0xF0U, 0x03U}).steps(1).ops({0xF0U, 0x00U}).steps(1);
+    opened.ops({0xF0U, 0x03U}).steps(1).ops({0xF0U, 0x00U}).steps(32).ops({0xF2U, 0x01U}).steps(2);
     sink.add("script-path-ids", opened.bytes, opened.size);
     // Path ID 0 abandoned once path ID 1 sends, its slot reclaimed after three PTOs by path ID 2 on socket 0, and
     // path ID 3 to the preferred address from socket 2.
