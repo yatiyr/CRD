@@ -43,3 +43,13 @@ nothing back. Two causes in `quic_connection.cpp`:
   (the PING is no probe; its probe timeout makes room, as for 20207cdb). The follow check's escape now reads
   `can_send_data`, what a PING needs; with it the input reaches the follow. It replays clean on c4fae3b7, whose
   extra PING from the old challenge changed the run. Both inputs join `corpus-quic-connection`.
+- linux-gcc-public-checks: `crd-net-quic-interop-picoquic` and `crd-net-qmux-interop-crate` pass. In
+  `crd-net-quic-interop-ngtcp2`, "ngtcp2 client ... moves at 524288" fails intermittently ("the client ended on another
+  socket": ngtcp2's client back on its first socket). It fails as often on c4fae3b7's crd-quic-peer (4 of 12 runs)
+  as on this change (2 of 7), so it predates this batch; it is the next work. The `crd-no-*`/`crd-check*` guards, the
+  30 net fuzz corpus CTests and the new case pass on linux-gcc-debug; LLVM 22 tidy is clean on the changed sources.
+- libFuzzer on the final source from the corpus (seed 8403): 23,983 runs in 541 s, no find.
+
+## Next
+
+- The ngtcp2 client's move that ends back on its first socket (above), then picoquic multipath past the first path.
