@@ -6086,16 +6086,16 @@ struct MultipathPair
     std::unique_ptr<Net> net;
 
     // `sent_frames` sizes each end's frame ledger; `datagrams` offers DATAGRAM frames, with their outcomes unless
-    // `outcomes` is false, and `redundant` that many redundant ones followed at once.
+    // `outcomes` is false, and `redundant` that many redundant ones followed at once; `streams` sizes both ends'.
     explicit MultipathPair(u64 client_limit = 2U, u64 server_limit = 2U, bool disable_migration = false,
                            bool server_offers = true, u32 sent_frames = 1024U, bool datagrams = false,
-                           u32 redundant = 0U, bool outcomes = true)
+                           u32 redundant = 0U, bool outcomes = true, const QuicStreamLimits& streams = stream_limits())
         : client_host(allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid))),
           server_host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid))),
           client(allocator, made(QuicSide::Client, client_limit, true, false, client_host, sent_frames, datagrams,
-                                 redundant, outcomes)),
+                                 redundant, outcomes, streams)),
           server(allocator, made(QuicSide::Server, server_limit, server_offers, disable_migration, server_host,
-                                 sent_frames, datagrams, redundant, outcomes))
+                                 sent_frames, datagrams, redundant, outcomes, streams))
     {
         REQUIRE(client.ready());
         REQUIRE(server.ready());
@@ -6111,11 +6111,12 @@ struct MultipathPair
     }
 
     QuicConnectionConfig made(QuicSide side, u64 limit, bool offers, bool disable_migration, Host& host,
-                              u32 sent_frames, bool datagrams, u32 redundant = 0U, bool outcomes = true) const
+                              u32 sent_frames, bool datagrams, u32 redundant, bool outcomes,
+                              const QuicStreamLimits& streams) const
     {
         const usize seed = (side == QuicSide::Server) ? 1U : 0U;
         QuicConnectionConfig config = hosted(config_for(side, identity, QuicVersion::V1, seed), host, 4U);
-        config.streams = stream_limits();
+        config.streams = streams;
         config.sent_frames = sent_frames;
         if (datagrams)
         {
@@ -6674,7 +6675,8 @@ TEST_CASE("QUIC connection: by the lowest RTT data rides the faster path while i
     // trip, then path ID 0 is.
     MultipathPair pair;
     Host spare(pair.allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid)));
-    QuicConnectionConfig refused = pair.made(QuicSide::Client, 2U, true, false, spare, 1024U, false);
+    QuicConnectionConfig refused =
+        pair.made(QuicSide::Client, 2U, true, false, spare, 1024U, false, 0U, true, stream_limits());
     refused.path_choice = static_cast<QuicPathChoice>(2U);
     CHECK_FALSE(QuicConnection(pair.allocator, refused).ready());
     pair.net->socket_delay_ns[1] = 30U * kMs;
@@ -8380,6 +8382,243 @@ TEST_CASE("QUIC connection: a pinned datagram crosses only its path ID, the slow
     CHECK(at_server.each(12U, 15U, 0U));
     CHECK(lost == 3U);
     CHECK(client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: a pinned stream crosses only its path ID, the slower one yielding its data or marked "
+          "backup, from either end, and waits while its path is dark without holding other streams back",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // S78's scheduling: a stream kept on one path. Path ID 1 is 30 ms slower each way (50 ms against 20 ms), so under
+    // LowestRtt it carries no data of its own, yet its window and pacer send the stream data pinned to it.
+    MultipathPair pair;
+    pair.net->socket_delay_ns[1] = 30U * kMs;
+    pair.open_second();
+    QuicConnection& client = pair.client;
+    QuicConnection& server = pair.server;
+    u64 plain = 0U;
+    u64 pinned = 0U;
+    REQUIRE(open_uni(pair, plain));
+    REQUIRE(open_uni(pair, pinned));
+    CHECK(client.streams().pin(pinned, 2U) == QuicStreamError::NoPath); // open in no slot
+    REQUIRE(client.streams().pin(pinned, 1U) == QuicStreamError::None);
+    u64 server_stream = 0U;
+    REQUIRE(server.streams().open(false, server_stream) == QuicStreamError::None);
+    REQUIRE(server.streams().pin(server_stream, 1U) == QuicStreamError::None);
+    u64 written[3] = {};
+    u64 read[3] = {};
+    // 500 more bytes of stream `index` from `from`, 20 ms apart: the time until `to` read them all.
+    const auto chunk = [&](QuicConnection& from, QuicConnection& to, u64 id, usize index)
+    {
+        const u64 start = pair.net->now;
+        const u64 target = written[index] + 500U;
+        static_cast<void>(write_pattern(from.streams(), id, written[index], target, id, false));
+        REQUIRE(written[index] == target);
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                if (to.streams().recv_state(id) != QuicRecvState::None)
+                {
+                    static_cast<void>(drain(to.streams(), id, read[index], id));
+                }
+                return read[index] == target;
+            }));
+        const u64 took = pair.net->now - start;
+        pair.net->advance(start + 20U * kMs);
+        return took;
+    };
+    for (usize round = 0U; round < 8U; ++round)
+    {
+        INFO("round " << round);
+        const u64 fast = chunk(client, server, plain, 0U);
+        CHECK(fast <= 21U * kMs);
+        const u64 slow = chunk(client, server, pinned, 1U);
+        CHECK(slow >= 50U * kMs);
+        CHECK(slow <= 51U * kMs);
+        const u64 back = chunk(server, client, server_stream, 2U);
+        CHECK(back >= 50U * kMs);
+        CHECK(back <= 51U * kMs);
+    }
+    // The server marks path ID 1 backup (RFC 10069 section 3.3): the client's pinned stream still takes it.
+    REQUIRE(server.set_path_status(1U, true) == QuicPathStatusChange::Set);
+    REQUIRE(pair.net->run_until([&] { return client.peer_path_status(1U) == QuicPathStatus::Backup; }));
+    for (usize round = 0U; round < 4U; ++round)
+    {
+        INFO("backup round " << round);
+        CHECK(chunk(client, server, plain, 0U) <= 21U * kMs);
+        const u64 slow = chunk(client, server, pinned, 1U);
+        CHECK(slow >= 50U * kMs);
+        CHECK(slow <= 51U * kMs);
+    }
+    // Path ID 1 goes dark: the plain stream still arrives in path ID 0's one way, and the pinned one waits for its
+    // path (the application chose it), never taking path ID 0, until the path carries again.
+    pair.net->down = 1U << 1U;
+    const u64 target = written[1] + 500U;
+    static_cast<void>(write_pattern(client.streams(), pinned, written[1], target, pinned, false));
+    for (usize round = 0U; round < 6U; ++round)
+    {
+        CHECK(chunk(client, server, plain, 0U) <= 21U * kMs);
+    }
+    REQUIRE(pair.net->run_until([&] { return client.recovery().pto_count(1U) != 0U; }));
+    pair.net->advance(pair.net->now + 400U * kMs);
+    static_cast<void>(drain(server.streams(), pinned, read[1], pinned));
+    CHECK(read[1] == target - 500U);
+    u64 pinned_path = 0U;
+    REQUIRE(client.streams().pinned(pinned, pinned_path));
+    CHECK(pinned_path == 1U);
+    pair.net->down = 0U;
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(drain(server.streams(), pinned, read[1], pinned));
+            return read[1] == target;
+        },
+        5000U * kMs));
+    CHECK(client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: a stream backlog pinned to a path that yields its data grows that path's window, held "
+          "by the window and pacer as data, and the other path is application-limited once only it waits",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // Path ID 0 becomes 30 ms slower each way, so under LowestRtt it yields its data to path ID 1. First a datagram
+    // backlog fills path ID 1's window. Then a stream kept full pinned to path ID 0, its credit wider than the window,
+    // makes that path's window and pacer the limit, which keeps growing (RFC 9002 section 7.8), its delivery rate
+    // unmarked application-limited while flow control is far from holding it; once the last datagram left, only data
+    // pinned to path ID 0 waits, which leaves path ID 1's window the application's limit.
+    QuicStreamLimits wide = stream_limits();
+    wide.receive_bytes = 256U * 1024U;
+    wide.send_bytes = 256U * 1024U;
+    wide.stream_window = 128U * 1024U;
+    wide.connection_window = 256U * 1024U;
+    wide.connection_max_window = 1024U * 1024U;
+    MultipathPair pair(2U, 2U, false, true, 1024U, true, 0U, false, wide);
+    pair.open_second();
+    pair.net->socket_delay_ns[0] = 30U * kMs;
+    QuicConnection& client = pair.client;
+    QuicConnection& server = pair.server;
+    const QuicPathControl& fast = *client.path_control(1U);
+    const QuicPathControl& slow = *client.path_control(0U);
+    u64 id = 0U;
+    REQUIRE(client.streams().open(true, id) == QuicStreamError::None);
+    REQUIRE(client.streams().pin(id, 0U) == QuicStreamError::None);
+    u64 written = 0U;
+    u64 read = 0U;
+    usize received = 0U;
+    const auto flow = [&](bool datagrams, bool streams)
+    {
+        u8 payload[1000] = {};
+        u64 queued = 0U;
+        while (datagrams && client.datagrams().queue(ConstSpan<u8>(payload, sizeof(payload)), pair.net->now, queued) ==
+                                QuicDatagramError::None)
+        {
+        }
+        ConstSpan<u8> held;
+        while (server.datagrams().peek(held))
+        {
+            ++received;
+            server.datagrams().pop();
+        }
+        if (streams)
+        {
+            static_cast<void>(write_pattern(client.streams(), id, written, written + 65536U, id, false));
+        }
+        if (server.streams().recv_state(id) != QuicRecvState::None)
+        {
+            static_cast<void>(drain(server.streams(), id, read, id));
+        }
+    };
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            flow(true, false);
+            return received >= 64U && !fast.delivery().app_limited() &&
+                   client.recovery().rtt(0U).smoothed_ns > client.recovery().rtt(1U).smoothed_ns;
+        }));
+    const u64 initial = slow.congestion().window();
+    bool slow_marked = false; // path ID 0's marked after its first round trip of data with under 64 KiB in flight
+    bool fast_idle = false;   // path ID 1's marked once only the pinned stream waits, `idle_ns` after the start
+    const u64 start_ns = pair.net->now;
+    const u64 fast_packets = client.next_packet_number(QuicSpace::Application, 1U);
+    u64 idle_ns = 0U;
+    const bool grown = pair.net->run_until(
+        [&]
+        {
+            slow_marked = slow_marked || (pair.net->now > start_ns + 150U * kMs && slow.delivery().app_limited() &&
+                                          client.recovery().bytes_in_flight(0U) < 64U * 1024U);
+            fast_idle = fast_idle || (client.datagrams().queued() == 0U && fast.delivery().app_limited());
+            idle_ns = (idle_ns == 0U && fast_idle) ? pair.net->now - start_ns : idle_ns;
+            flow(false, true);
+            return pair.net->now >= start_ns + 1000U * kMs;
+        },
+        2000U * kMs);
+    INFO("window " << slow.congestion().window() << " from " << initial);
+    CHECK(grown);
+    CHECK(slow.congestion().window() >= 2U * initial);
+    CHECK_FALSE(slow_marked);
+    CHECK(fast_idle);
+    // At once, and with no packet of nothing sent for the data it cannot carry: 2 ms and 37 packets here, where a
+    // slot counting another's pinned data as its own took 360 ms and sent 3222.
+    CHECK(idle_ns <= 50U * kMs);
+    CHECK(client.next_packet_number(QuicSpace::Application, 1U) - fast_packets <= 100U);
+    CHECK(read != 0U);
+    CHECK(client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: a stream pinned to path ID 1 over links that lose, duplicate and jitter resends there "
+          "while it is open, and once either end abandons it every byte, lost or unsent, completes on path ID 0",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // S78: a pinned stream's data is reliable, so once its path stops it goes on any path.
+    for (u64 seed = 1U; seed <= 4U; ++seed)
+    {
+        const bool by_client = (seed % 2U) != 0U;
+        INFO("seed " << seed << (by_client ? ", the client abandons" : ", the server abandons"));
+        MultipathPair pair;
+        pair.net->rng.state = seed;
+        for (Path& path : pair.net->path)
+        {
+            path.loss = 40U;
+            path.duplicate = 30U;
+            path.jitter_ns = 4U * kMs;
+        }
+        pair.net->socket_delay_ns[1] = 30U * kMs;
+        pair.open_second();
+        QuicConnection& client = pair.client;
+        u64 stream = 0U;
+        REQUIRE(open_uni(pair, stream));
+        REQUIRE(client.streams().pin(stream, 1U) == QuicStreamError::None);
+        // Full-size datagrams of path ID 0 carry none of it while path ID 1 is open (DataWatch).
+        DataWatch watch(client, 0U, pair.net->now);
+        pair.net->filter = &watch;
+        constexpr u64 total = 160U * 1024U;
+        u64 written = 0U;
+        u64 read = 0U;
+        const auto flow = [&]
+        {
+            static_cast<void>(write_pattern(client.streams(), stream, written, total, stream));
+            return pair.server.streams().recv_state(stream) != QuicRecvState::None &&
+                   drain(pair.server.streams(), stream, read, stream);
+        };
+        const usize dropped = pair.net->dropped[0]; // the client's datagrams the links lost
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                static_cast<void>(flow());
+                return read >= total / 2U && pair.net->dropped[0] > dropped;
+            }));
+        CHECK(watch.data(0U) == 0U);
+        CHECK(watch.data(1U) != 0U);
+        QuicConnection& abandoning = by_client ? client : pair.server;
+        REQUIRE(abandoning.abandon_path(1U, code(QuicTransportError::ApplicationAbandonPath), pair.net->now) ==
+                QuicAbandon::Abandoned);
+        REQUIRE(pair.net->run_until([&] { return flow(); }, 20000U * kMs));
+        CHECK(read == total);
+        u64 pinned_path = 0U;
+        CHECK_FALSE(client.streams().pinned(stream, pinned_path));
+        CHECK(watch.data(0U) != 0U);
+        CHECK(client.state() == QuicConnectionState::Established);
+        pair.net->filter = nullptr;
+    }
 }
 
 TEST_CASE("QUIC connection: a backlog pinned to a path that yields its data grows that path's window, held by the "

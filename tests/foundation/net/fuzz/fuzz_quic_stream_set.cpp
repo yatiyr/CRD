@@ -4,16 +4,18 @@
 //
 // Input: limits for the two ends (stream slots, windows), then operations, each an operation byte and the parameter
 // bytes it reads (0 past the end), on a client's and a server's stream sets: opens, writes with and without a FIN,
-// reads, resets (reliable ones too), STOP_SENDING, urgencies and polls by either application; packets taken from
-// either end into a
-// bounded flight, delivered in any order and any number of times, acknowledged or declared lost; and any frame bytes
-// injected into either end as if from its peer.
+// reads, resets (reliable ones too), STOP_SENDING, urgencies and polls by either application; path slots opened and
+// stopped and streams pinned to their path IDs and unpinned (S78); packets taken from either end into a bounded
+// flight, for a path slot that carries data or only what is pinned to it, delivered in any order and any number of
+// times, acknowledged or declared lost; and any frame bytes injected into either end as if from its peer.
 //
-// Oracles. has_frame() is exact: next_frame() gives a frame exactly when it said so, so a connection never spins on
-// work it cannot do. Every frame given fits its room, is what write_quic_frame writes and reads back. Frames an end
-// wrote never make its peer close (unless that peer was given injected frames), every byte read is the byte its
-// writer wrote at that offset, the receiver never counts more than the sender sent, open streams stay within the
-// slots, and nothing allocates after init().
+// Oracles. has_frame() is exact on every route: next_frame() gives a frame exactly when it said so, so a connection
+// never spins on work it cannot do. A stream's data goes only on the route its pin allows (its own slot; any slot
+// carrying data once unpinned or its path stopped), and a route carrying no data gets nothing else; pin() refuses
+// exactly the path IDs open in no slot, and a stream is pinned exactly as the model says. Every frame given fits its
+// room, is what write_quic_frame writes and reads back. Frames an end wrote never make its peer close (unless that peer
+// was given injected frames), every byte read is the byte its writer wrote at that offset, the receiver never counts
+// more than the sender sent, open streams stay within the slots, and nothing allocates after init().
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/quic_stream_set.hpp>
@@ -62,8 +64,24 @@ struct Packet
     usize from = 0U;
 };
 
+constexpr u8 kNoPin = static_cast<u8>(kQuicNoPath);
+
 struct World
 {
+    World()
+    {
+        for (auto& side : pins)
+        {
+            for (auto& type : side)
+            {
+                for (u8& pin : type)
+                {
+                    pin = kNoPin;
+                }
+            }
+        }
+    }
+
     crd::fuzz::BudgetAllocator allocator;
     QuicStreamSet end[2];
     Packet flight[kFlight];
@@ -74,7 +92,23 @@ struct World
     bool closed[2] = {};
     u32 slots[2] = {};
     u64 now = 1000000000U;
+    u8 pins[2][4][kIds] = {};            // per end, type and index: the path slot pinned to, kNoPin for none
+    u64 path_ids[2][kQuicMaxPaths] = {}; // per end: each open slot's path ID
+    u8 open[2] = {1U, 1U};               // per end: the open slots, a bit each (slot 0 holds path ID 0 from init())
 };
+
+// The open slot holding `path_id` at `side`, kQuicNoPath for none.
+usize slot_of(const World& w, usize side, u64 path_id)
+{
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        if ((w.open[side] & (1U << slot)) != 0U && w.path_ids[side][slot] == path_id)
+        {
+            return slot;
+        }
+    }
+    return kQuicNoPath;
+}
 
 // A stream ID of either initiator and kind among the indices the oracle follows.
 u64 id_of(u8 pick)
@@ -82,23 +116,30 @@ u64 id_of(u8 pick)
     return (u64{static_cast<u8>(pick >> 2U) % kIds} << 2U) | (pick & 3U);
 }
 
-void take(World& w, usize from, usize room)
+void take(World& w, usize from, usize room, const QuicStreamRoute& route)
 {
     if (w.closed[from] || w.in_flight == kFlight)
     {
         return;
     }
     QuicStreamSet& set = w.end[from];
-    const bool has = set.has_frame();
+    const bool has = set.has_frame(route);
     Packet& packet = w.flight[w.in_flight];
     packet = Packet{};
     packet.from = from;
     QuicFrame frame;
     QuicStreamRecord record;
     bool first = true;
-    while (packet.count < kRecords && set.next_frame(room - packet.size, w.now, kRttNs, frame, record))
+    while (packet.count < kRecords && set.next_frame(room - packet.size, w.now, kRttNs, frame, record, route))
     {
         first = false;
+        // The route: a stream's data on its pinned slot or, unpinned, on a slot carrying data; nothing else there.
+        CRD_FUZZ_REQUIRE(route.any || frame.kind == QuicFrameKind::Stream);
+        if (frame.kind == QuicFrameKind::Stream && (frame.stream_id >> 2U) < kIds)
+        {
+            const u8 pin = w.pins[from][frame.stream_id & 3U][frame.stream_id >> 2U];
+            CRD_FUZZ_REQUIRE((pin == kNoPin) ? route.any : pin == route.slot);
+        }
         const usize bytes = write_quic_frame(frame, Span<u8>(packet.bytes + packet.size, room - packet.size));
         CRD_FUZZ_REQUIRE(bytes != 0U && bytes == quic_frame_bytes(frame));
         WireReader back(ConstSpan<u8>(packet.bytes + packet.size, bytes));
@@ -161,6 +202,71 @@ void settle(World& w, Input& in, bool acked)
         }
     }
     w.flight[index] = w.flight[--w.in_flight];
+}
+
+// The set holds stream `id` of `side` pinned exactly as the model says (a stream it no longer holds is pinned nowhere).
+void check_pin(const World& w, usize side, u64 id)
+{
+    const u8 pin = w.pins[side][id & 3U][id >> 2U];
+    u64 path_id = 0U;
+    const bool pinned = w.end[side].pinned(id, path_id);
+    CRD_FUZZ_REQUIRE(!pinned || (pin != kNoPin && w.path_ids[side][pin] == path_id));
+    CRD_FUZZ_REQUIRE(pinned || pin == kNoPin || w.end[side].send_state(id) == QuicSendState::None);
+}
+
+// Path slots and pins (S78): 0x1F opens a closed slot under a path ID no open slot holds, 0x2F stops an open one
+// (unpinning its streams), 0x3F pins a stream to a path ID and 0x4F unpins one; bit 7 picks the end.
+void path_op(World& w, Input& in, usize side, u8 op)
+{
+    QuicStreamSet& set = w.end[side];
+    const u8 kind = static_cast<u8>((op >> 4U) & 7U);
+    if (kind == 1U || kind == 2U)
+    {
+        const usize slot = in.byte() % kQuicMaxPaths;
+        const u64 path_id = in.byte() % 8U;
+        const bool open = (w.open[side] & (1U << slot)) != 0U;
+        if (kind == 1U && !open && slot_of(w, side, path_id) == kQuicNoPath)
+        {
+            set.open_path(slot, path_id);
+            w.path_ids[side][slot] = path_id;
+            w.open[side] = static_cast<u8>(w.open[side] | (1U << slot));
+        }
+        else if (kind == 2U && open)
+        {
+            set.stop_path(slot);
+            w.open[side] = static_cast<u8>(w.open[side] & ~(1U << slot));
+            for (auto& type : w.pins[side])
+            {
+                for (u8& pin : type)
+                {
+                    pin = (pin == slot) ? kNoPin : pin;
+                }
+            }
+            for (u64 id = 0U; id < 4U * kIds; ++id)
+            {
+                check_pin(w, side, id);
+            }
+        }
+        return;
+    }
+    const u64 id = id_of(in.byte());
+    u8& pin = w.pins[side][id & 3U][id >> 2U];
+    if (kind == 3U)
+    {
+        const u64 path_id = in.byte() % 8U;
+        const usize slot = slot_of(w, side, path_id);
+        const QuicStreamError error = set.pin(id, path_id);
+        CRD_FUZZ_REQUIRE(error != QuicStreamError::NoPath || slot == kQuicNoPath);
+        CRD_FUZZ_REQUIRE(error != QuicStreamError::None || slot != kQuicNoPath);
+        CRD_FUZZ_REQUIRE(error == QuicStreamError::None || error == QuicStreamError::NoPath ||
+                         error == QuicStreamError::Unknown || error == QuicStreamError::Ended);
+        pin = (error == QuicStreamError::None) ? static_cast<u8>(slot) : pin;
+    }
+    else if (kind == 4U && set.unpin(id) == QuicStreamError::None)
+    {
+        pin = kNoPin;
+    }
+    check_pin(w, side, id);
 }
 
 void write(World& w, Input& in, usize side)
@@ -342,8 +448,14 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
                 break;
             case 9U:
             case 10U:
-                take(w, side, (op & 1U) != 0U ? kRoom : 8U + (in.byte() * 4U) % kRoom);
+            {
+                // Bits 4 and 5 the path slot writing, bit 6 a slot that carries only what is pinned to it.
+                QuicStreamRoute route;
+                route.slot = (op >> 4U) & 3U;
+                route.any = (op & 0x40U) == 0U;
+                take(w, side, (op & 1U) != 0U ? kRoom : 8U + (in.byte() * 4U) % kRoom, route);
                 break;
+            }
             case 11U:
                 if (w.in_flight != 0U)
                 {
@@ -360,7 +472,14 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
                 inject(w, in, side);
                 break;
             default:
-                w.now += u64{in.byte()} * 1000000U;
+                if ((op & 0x70U) == 0U || (op & 0x70U) > 0x40U)
+                {
+                    w.now += u64{in.byte()} * 1000000U;
+                }
+                else
+                {
+                    path_op(w, in, side, op);
+                }
                 break;
         }
         check(w);
@@ -425,4 +544,20 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         reliable[sizeof(limits) + at] = resets[at];
     }
     sink.add("reliable-resets", reliable, sizeof(reliable));
+    // Pins: the client opens slot 1 under path ID 5, pins its first stream there and writes two streams; slot 0 and
+    // then slot 1 (only what is pinned) take packets, slot 1's is lost and resent there; slot 1 stops and the pinned
+    // stream's data goes on slot 0.
+    u8 pins[sizeof(limits) + 36U];
+    for (usize at = 0U; at < sizeof(limits); ++at)
+    {
+        pins[at] = limits[at];
+    }
+    const u8 pinned[] = {0x00U, 0x00U, 0x1FU, 0x01U, 0x05U, 0x3FU, 0x00U, 0x05U, 0x02U, 0x00U, 0x40U, 0x00U,
+                         0x02U, 0x04U, 0x40U, 0x00U, 0x09U, 0x59U, 0x0BU, 0x00U, 0x0BU, 0x01U, 0x0DU, 0x01U,
+                         0x59U, 0x2FU, 0x01U, 0x00U, 0x09U, 0x0BU, 0x00U, 0x0CU, 0x00U, 0x89U, 0x0BU, 0x00U};
+    for (usize at = 0U; at < sizeof(pinned); ++at)
+    {
+        pins[sizeof(limits) + at] = pinned[at];
+    }
+    sink.add("pins", pins, sizeof(pins));
 }

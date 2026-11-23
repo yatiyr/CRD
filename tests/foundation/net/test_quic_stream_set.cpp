@@ -2,7 +2,8 @@
 // parameters, opening within the peer's grant with STREAMS_BLOCKED once per limit, every error RFC 9000 names for a
 // stream frame, a peer's frame opening every lower stream through each frame kind, both credits with their blocked
 // frames and updates, MAX_STREAMS granted as slots free, resets and STOP_SENDING with section 13.3's retransmissions,
-// urgencies with round robin, and many streams carried both ways over an exchange that loses, reorders and duplicates.
+// urgencies with round robin, streams pinned to a path slot, and many streams carried both ways over an exchange that
+// loses, reorders and duplicates.
 // Every frame crosses as bytes: written by write_quic_frame and read back by read_quic_frame.
 
 #include "ingress_fixture.hpp"
@@ -92,14 +93,14 @@ public:
     QuicStreamSet end[2];
     u64 now = 1000U * kMs;
 
-    // The frames `from` has now, up to `room` bytes, round tripped through the codec.
-    Packet take(usize from, usize room = kRoom)
+    // The frames `from` has now for `route`, up to `room` bytes, round tripped through the codec.
+    Packet take(usize from, usize room = kRoom, const QuicStreamRoute& route = QuicStreamRoute{})
     {
         Packet packet;
         packet.from = from;
         QuicFrame frame;
         QuicStreamRecord record;
-        while (packet.count < kMaxRecords && end[from].next_frame(room - packet.size, now, kRtt, frame, record))
+        while (packet.count < kMaxRecords && end[from].next_frame(room - packet.size, now, kRtt, frame, record, route))
         {
             const usize bytes = write_quic_frame(frame, Span<u8>(packet.bytes + packet.size, room - packet.size));
             REQUIRE(bytes != 0U);
@@ -884,6 +885,160 @@ TEST_CASE("QUIC stream set: urgencies go first and streams of one urgency take t
     }
     CHECK(order[5] != order[6]);
     CHECK(order[6] != order[7]);
+}
+
+namespace
+{
+QuicStreamRoute route_of(usize slot, bool any)
+{
+    QuicStreamRoute route;
+    route.slot = slot;
+    route.any = any;
+    return route;
+}
+
+// Whether `packet` carries data of stream `id`.
+bool carries(const Packet& packet, u64 id)
+{
+    for (usize index = 0U; index < packet.count; ++index)
+    {
+        if (packet.records[index].kind == QuicFrameKind::Stream && packet.records[index].stream_id == id)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+} // namespace
+
+TEST_CASE("QUIC stream set: a pinned stream's data goes only on its path slot, its control frames on any",
+          "[net][net-path][multipath][quic-stream-set]")
+{
+    QuicStreamLimits wide = limits(4U, 1U, 8192U);
+    wide.connection_window = 65536U;
+    Pair pair(wide, wide);
+    QuicStreamSet& c = pair.end[0];
+    u64 plain = 0U;
+    u64 pinned = 0U;
+    u64 path_id = 0U;
+    REQUIRE(c.open(true, plain) == QuicStreamError::None);
+    REQUIRE(c.open(true, pinned) == QuicStreamError::None);
+
+    SECTION("refusals")
+    {
+        // A stream not open, a peer's unidirectional one (no sending part), a path ID open in no slot.
+        CHECK(c.pin(40U, 0U) == QuicStreamError::Unknown);
+        CHECK(c.unpin(40U) == QuicStreamError::Unknown);
+        REQUIRE(frame_to(c, QuicFrameKind::Stream, 3U) == QuicTransportError::NoError);
+        CHECK(c.pin(3U, 0U) == QuicStreamError::Unknown);
+        CHECK(c.pin(pinned, 1U) == QuicStreamError::NoPath);
+        CHECK_FALSE(c.pinned(pinned, path_id));
+        // A sending part with nothing left to deliver.
+        REQUIRE(c.reset(plain, 9U) == QuicStreamError::None);
+        CHECK(c.pin(plain, 0U) == QuicStreamError::Ended);
+        // Slot 0 holds path ID 0 from init().
+        REQUIRE(c.pin(pinned, 0U) == QuicStreamError::None);
+        REQUIRE(c.pinned(pinned, path_id));
+        CHECK(path_id == 0U);
+        REQUIRE(c.unpin(pinned) == QuicStreamError::None);
+        CHECK_FALSE(c.pinned(pinned, path_id));
+    }
+
+    SECTION("routes")
+    {
+        c.open_path(1U, 7U);
+        REQUIRE(c.pin(pinned, 7U) == QuicStreamError::None);
+        REQUIRE(c.set_urgency(pinned, 0U) == QuicStreamError::None); // ahead of the plain one: skipped, not a wall
+        REQUIRE(c.pinned(pinned, path_id));
+        CHECK(path_id == 7U);
+        u64 written[2] = {};
+        static_cast<void>(write_pattern(c, pinned, written[0], 3000U, pinned));
+        // Slot 0 carries nothing of the pinned stream; with no other data it has no frame.
+        CHECK_FALSE(c.has_frame(route_of(0U, true)));
+        CHECK(pair.take(0U, kRoom, route_of(0U, true)).count == 0U);
+        static_cast<void>(write_pattern(c, plain, written[1], 3000U, plain));
+        Packet first = pair.take(0U, kRoom, route_of(0U, true));
+        CHECK(carries(first, plain));
+        CHECK_FALSE(carries(first, pinned));
+        // Slot 1 carrying no other data writes the pinned stream's data alone.
+        REQUIRE(c.has_frame(route_of(1U, false)));
+        Packet second = pair.take(0U, kRoom, route_of(1U, false));
+        CHECK(carries(second, pinned));
+        CHECK_FALSE(carries(second, plain));
+        REQUIRE(pair.deliver(first) == QuicTransportError::NoError);
+        REQUIRE(pair.deliver(second) == QuicTransportError::NoError);
+        pair.acked(first);
+        // Lost while its path is open, the data goes on that path again.
+        pair.lost(second);
+        CHECK_FALSE(carries(pair.take(0U, kRoom, route_of(2U, true)), pinned));
+        Packet again = pair.take(0U, kRoom, route_of(1U, true));
+        CHECK(carries(again, pinned));
+        pair.acked(again);
+        // A STREAM_DATA_BLOCKED of the pinned stream is a control frame: never on a slot that carries no data.
+        QuicStreamLimits narrow = limits(4U, 1U, 1024U);
+        Pair tight(narrow, narrow);
+        QuicStreamSet& t = tight.end[0];
+        u64 id = 0U;
+        REQUIRE(t.open(true, id) == QuicStreamError::None);
+        t.open_path(1U, 7U);
+        REQUIRE(t.pin(id, 7U) == QuicStreamError::None);
+        u64 sent = 0U;
+        static_cast<void>(write_pattern(t, id, sent, 2048U, id));
+        Packet own = tight.take(0U, kRoom, route_of(1U, false));
+        CHECK(carries(own, id));
+        CHECK_FALSE(has_kind(own, QuicFrameKind::StreamDataBlocked));
+        CHECK_FALSE(t.has_frame(route_of(1U, false)));
+        REQUIRE(t.has_frame(route_of(0U, true)));
+        Packet control = tight.take(0U, kRoom, route_of(0U, true));
+        CHECK(has_kind(control, QuicFrameKind::StreamDataBlocked));
+        CHECK_FALSE(carries(control, id));
+    }
+
+    SECTION("a stopped path unpins its streams, and its slot opens under a new path ID without them")
+    {
+        c.open_path(1U, 7U);
+        REQUIRE(c.pin(pinned, 7U) == QuicStreamError::None);
+        u64 written = 0U;
+        static_cast<void>(write_pattern(c, pinned, written, 3000U, pinned));
+        Packet sent = pair.take(0U, 1000U, route_of(1U, false)); // part of it, lost below
+        REQUIRE(carries(sent, pinned));
+        c.stop_path(1U);
+        CHECK_FALSE(c.pinned(pinned, path_id));
+        CHECK(c.pin(pinned, 7U) == QuicStreamError::NoPath);
+        pair.lost(sent);
+        // The lost bytes and the rest go on any slot carrying data, and on none that carries none.
+        CHECK_FALSE(c.has_frame(route_of(1U, false)));
+        u64 delivered = 0U;
+        for (Packet packet = pair.take(0U); packet.count != 0U; packet = pair.take(0U))
+        {
+            REQUIRE(pair.deliver(packet) == QuicTransportError::NoError);
+            pair.acked(packet);
+            delivered += packet.count;
+        }
+        CHECK(delivered != 0U);
+        u64 read = 0U;
+        CHECK(drain(pair.end[1], pinned, read, pinned));
+        CHECK(read == 3000U);
+        c.open_path(1U, 9U);
+        CHECK_FALSE(c.pinned(pinned, path_id));
+        REQUIRE(c.pin(plain, 9U) == QuicStreamError::None);
+        REQUIRE(c.pinned(plain, path_id));
+        CHECK(path_id == 9U);
+    }
+
+    SECTION("a 0-RTT rejection forgets the pins, not the open paths")
+    {
+        c.open_path(1U, 7U);
+        REQUIRE(c.pin(pinned, 7U) == QuicStreamError::None);
+        c.reset_all();
+        QuicTransportParameters server;
+        pair.end[1].fill_parameters(server);
+        c.set_peer_parameters(server);
+        u64 id = 0U;
+        REQUIRE(c.open(true, id) == QuicStreamError::None);
+        CHECK_FALSE(c.pinned(id, path_id));
+        CHECK(c.pin(id, 7U) == QuicStreamError::None);
+    }
 }
 
 TEST_CASE("QUIC stream set: many streams cross both ways over an exchange that loses, reorders and duplicates",
