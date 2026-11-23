@@ -10,9 +10,9 @@ bullet of "The QUIC connection" in [network-foundation.md](../design/network-fou
 ## What landed
 
 - **The follow check, tightened.** With `heard` made unconditional, only f370db2c and 9976136a fail. In both, the client
-  could not record a packet: it had 62 ACK-only and 10 eliciting entries in f370db2c, and 71 eliciting entries from
-  before its move in 9976136a. The clause is sound, and now a pinged client may stay unheard only while
-  `can_send` is false.
+  could not record a packet. In f370db2c it held 62 ACK-only and 10 eliciting entries. In 9976136a it held 71
+  outstanding eliciting entries, but its slot counted 0 bytes in flight and no probe timeout. It sent at its next timer,
+  0.77 s later, and the server then followed. A pinged client may now stay unheard only while `can_send` is false.
 - **Engine defect 1 (f370db2c).** Behind a dark return path, ACK-only entries filled the storage, so even a PING waited
   for a backed-off probe timeout. Now `on_sent` gives the oldest outstanding ACK-only entry to the next packet, keeps
   the order, and reports the discard as an event. `can_send` and `can_send_data` count those entries as room, through
@@ -40,9 +40,14 @@ bullet of "The QUIC connection" in [network-foundation.md](../design/network-fou
   passes. linux-gcc-release with LTO: the touched suites, both corpora and the fuzz replays pass.
 - libFuzzer, connection fuzzer: runs of 374 s and 487 s found nothing. A 500 s run before the ledger fix found only
   the slow unit, now fixed. Recovery fuzzer: 241 s and 301 s, no artifact.
-- clang-format is clean on the added lines, and the brace check passes.
+- clang-format is clean on the added lines, and the brace check passes. The win-tidy build of crd-net-tests (every touched engine source and test) has no warning.
 
 ## Next
 
-- CI first: read host-check 45173760052 and the first finished CI run with this batch.
+- CI first: host-check 45187161054 (5871744e) and the first finished CI run with this batch. A `drained` failure is
+  either a storm or a legitimate 64-datagram burst; classify it first.
+- 9976136a: is the 0.77 s timer the probe timeout of packets from before the path floor (storage as window), or
+  a fourth defect? Check the client's `pto_count` across it, the timeout kind and the entries against `path_floor`.
+- A direct `[quic-datagram]` case for a datagram over a probe timeout's floor. Today only the hostile datagram
+  case's flight bound catches it.
 - Then picoquic interop for NET-PATH.
