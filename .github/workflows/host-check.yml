@@ -512,7 +512,7 @@ jobs:
   udp-ring:
     # NET-PATH: CI 45238977369's linux-gcc-asan refused a ring of 32768 whole-datagram buffers that 1024 opened, a
     # case that passed on the same lane before. The leg records the machine's limits, then the ring case alone and
-    # beside the net label's other cases under -s, so every open prints the step and errno a refusal reports
+    # beside whole crd-net-tests runs on every CPU under -s, so every open prints the step and errno a refusal reports
     # (SocketFeatures::ring_refusal, ring_error); it fails only where the case fails.
     name: Host check (UDP ring refusals)
     if: inputs.experiment == 'all' || inputs.experiment == 'udp-ring'
@@ -593,16 +593,23 @@ jobs:
           done
           echo "alone, 20 rounds:" | tee -a "$evidence/refusals.txt"
           refusals "$evidence"/alone-*.log | tee -a "$evidence/refusals.txt"
-          # Beside load: the net label's other cases on every CPU while the ring case repeats.
-          (cd build/linux-gcc-asan && timeout 2400 ctest --preset linux-gcc-asan -L net -j "$(nproc)"             > "$evidence/net-label.log" 2>&1) &
-          load=$!
+          # Beside load: a whole crd-net-tests run on every CPU, again and again (its rings, sockets and threads, as
+          # the lane's parallel CTest ran them), while the ring case repeats for 25 minutes or 300 rounds.
+          load=()
+          for _ in $(seq 1 "$(nproc)"); do
+            bash -c 'while :; do "$1" "~[.netns]" > /dev/null 2>&1; done' _ "$tests" &
+            load+=("$!")
+          done
           round=0
-          while kill -0 "$load" 2> /dev/null && [ "$round" -lt 200 ]; do
+          start=$SECONDS
+          while [ $((SECONDS - start)) -lt 1500 ] && [ "$round" -lt 300 ]; do
             round=$((round + 1))
             "$tests" -s "$case" > "$evidence/loaded-$round.log" 2>&1 || status=1
           done
-          wait "$load" || true
-          echo "beside the net label, $round rounds:" | tee -a "$evidence/refusals.txt"
+          kill "${load[@]}" 2> /dev/null || true
+          pkill -x crd-net-tests || true
+          wait || true
+          echo "beside $(nproc) whole crd-net-tests runs, $round rounds:" | tee -a "$evidence/refusals.txt"
           refusals "$evidence"/loaded-*.log | tee -a "$evidence/refusals.txt"
           grep -l -E 'FAILED' "$evidence"/alone-*.log "$evidence"/loaded-*.log | head -n 5 | while read -r log; do
             grep -B 2 -A 12 'FAILED' "$log"

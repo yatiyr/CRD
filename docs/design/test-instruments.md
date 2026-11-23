@@ -322,7 +322,7 @@ or the image's default `g++` runs clean without them, the trigger that retires t
 The UDP ring leg (NET-PATH, [session](../sessions/2026-11-24-net-path-ring-refusals.md)) builds `crd-net-tests` on
 linux-gcc-asan, records the machine's limits (kernel, `ulimit -a`, capabilities, overcommit and io_uring sysctls, the
 cgroup's memory limits, `/proc/meminfo`, `/proc/buddyinfo`) and runs the io_uring ring case 20 times alone and then
-beside the net label's other cases under `-s`, so every open prints the step and errno a refused ring reports
+beside a whole `crd-net-tests` run on every CPU under `-s`, so every open prints the step and errno a refused ring reports
 (`SocketFeatures::ring_refusal`, `ring_error`); the summary tallies them, and the leg fails only where the case fails.
 
 The Vulkan SDK installer legs (REPO.3, [session](../sessions/2026-11-01-repo-3-vulkan-installer-options.md)) ask
