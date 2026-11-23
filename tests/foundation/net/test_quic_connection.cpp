@@ -443,6 +443,38 @@ TEST_CASE("QUIC connection: an application close before the handshake travels as
     CHECK(net->client_initials_padded);
 }
 
+TEST_CASE("QUIC connection: a client closing as its handshake completes, before its Finished leaves, closes its "
+          "server in the Handshake space",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    QuicConnection client(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1));
+    QuicConnection server(allocator, config_for(QuicSide::Server, identity, QuicVersion::V1, 1U));
+    connect(client);
+    auto net = std::make_unique<Net>(client, server);
+    REQUIRE(net->run_until([&] { return net->sent[0] != 0U; }));
+    net->held[0] = 1U; // the client's answer to the server's flight waits on its socket
+    REQUIRE(net->run_until([&] { return client.state() == QuicConnectionState::Established; }));
+    constexpr u8 bye[] = {'b', 'y', 'e'};
+    client.close(0x42U, ConstSpan<u8>(bye, sizeof(bye)), net->now);
+    net->held[0] = 0U;
+    REQUIRE(net->run_until([&] { return server.state() != QuicConnectionState::Handshaking; }));
+    CHECK(server.state() == QuicConnectionState::Draining);
+    const u64 drained = net->now;
+    // The server never read the client's Finished, so the 1-RTT copy of the close is not for it: the Handshake copy
+    // closes it, the application's close sent there as APPLICATION_ERROR without its reason (RFC 9000 10.2.3).
+    CHECK_FALSE(server.close_info().application);
+    CHECK_FALSE(server.close_info().local);
+    CHECK(server.close_info().error_code == static_cast<u64>(QuicTransportError::ApplicationError));
+    CHECK(server.close_reason().empty());
+    REQUIRE(net->run_until([&] { return server.state() == QuicConnectionState::Closed; }));
+    // Nothing the server sent was acknowledged, so it drains for three of its longest PTOs at the initial RTT, 3 x
+    // (333 ms + 4 x 166.5 ms + the 25 ms max_ack_delay): the 3 s the QUIC board saw (RFC 9002 section 6.2.2).
+    CHECK(net->now - drained == 3U * ((3U * kQuicInitialRttNs) + (kQuicDefaultMaxAckDelay * kMs)));
+    REQUIRE(net->run_until([&] { return client.state() == QuicConnectionState::Closed; }));
+}
+
 TEST_CASE("QUIC connection: an alert closes with CRYPTO_ERROR at its level and the lower ones",
           "[net][4.2a][quic-connection]")
 {
