@@ -4394,7 +4394,7 @@ QuicPathAbandon* QuicConnection::begin_abandon(u64 path_id, u64 error_code, u64 
     // A slot still sending is never the last one here (abandon_path() and peer_abandon() close or refuse that), and
     // a second one opens only after confirmation, so path ID 0's handshake spaces are gone by then.
     const usize slot = slot_of(path_id);
-    const bool sending = slot != kQuicNoPath && m_controls[slot] != nullptr;
+    QuicPathControl* const sending = (slot != kQuicNoPath) ? m_controls[slot] : nullptr;
     if (entry == nullptr || !m_cids.abandon(path_id))
     {
         return nullptr;
@@ -4406,12 +4406,15 @@ QuicPathAbandon* QuicConnection::begin_abandon(u64 path_id, u64 error_code, u64 
     entry->owed = true;
     m_cids_blocked = (m_cids_blocked == path_id) ? 0U : m_cids_blocked;
     ++m_counters.paths_abandoned;
-    if (sending)
+    if (sending != nullptr)
     {
         m_event_ns = now_ns;
         static_cast<void>(m_recovery->stop_path(slot, now_ns, m_events));
-        control(slot).stop();
-        m_controls[slot] = nullptr;
+        sending->stop();
+        for (QuicPathControl*& held : m_controls) // by its control: GCC's LTO cannot bound `slot` here (-Warray-bounds)
+        {
+            held = (held == sending) ? nullptr : held;
+        }
         m_datagrams.stop_path(slot);
         m_streams.stop_path(slot); // pinned streams' data, lost or unsent, goes on any path
         follow_datagram_size();
