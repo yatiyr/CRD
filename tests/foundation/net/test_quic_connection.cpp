@@ -6909,6 +6909,78 @@ TEST_CASE("QUIC connection: a peer's backup path carries no data while another o
     CHECK(pair.client.state() == QuicConnectionState::Established);
 }
 
+TEST_CASE("QUIC connection: a path left without data is measured again each second while another carries data, so "
+          "the lowest RTT follows it once it is faster; never a backup path, never without data",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // S78's scheduling (RFC 10069 section 5.9: an idle path probed before it is switched to). Path ID 1 is 60 ms
+    // slower each round trip, then 60 ms faster than path ID 0; a trickle never fills path ID 0's window, so path ID 1
+    // learns it only from its refreshes.
+    MultipathPair pair;
+    Host spare(pair.allocator, 0U, ConstSpan<u8>(kClientCid, sizeof(kClientCid)));
+    QuicConnectionConfig config =
+        pair.made(QuicSide::Client, 2U, true, false, spare, 1024U, false, 0U, true, stream_limits());
+    config.path_refresh_ns = kQuicGranularityNs - 1U;
+    CHECK_FALSE(QuicConnection(pair.allocator, config).ready());
+    config.path_refresh_ns = 0U;
+    CHECK(QuicConnection(pair.allocator, config).ready());
+    CHECK(pair.client.path_refresh_ns() == kQuicPathRefreshNs);
+    pair.net->socket_delay_ns[1] = 30U * kMs;
+    pair.open_second();
+    const QuicRecovery& recovery = pair.client.recovery();
+    DataWatch watch(pair.client, 0U, pair.net->now);
+    pair.net->filter = &watch;
+    trickle(pair, 100U); // two seconds
+    CHECK(watch.data(1U) == 0U);
+    CHECK(pair.client.counters().path_refreshes >= 1U);
+    CHECK(pair.client.counters().path_refreshes <= 2U);
+    CHECK(recovery.rtt(0U).smoothed_ns < recovery.rtt(1U).smoothed_ns);
+    pair.net->socket_delay_ns[0] = 30U * kMs;
+    pair.net->socket_delay_ns[1] = 0U;
+    watch.reset();
+    trickle(pair, 150U);
+    CHECK(recovery.rtt(1U).smoothed_ns < recovery.rtt(0U).smoothed_ns);
+    CHECK(watch.data(1U) >= 90U);
+    CHECK(watch.kept());
+    // Without refreshes, live: path ID 0 is the faster again, 20 ms each round trip, but its last measure is the
+    // slower and the trickle never learns it; with them it does.
+    CHECK_FALSE(pair.client.set_path_refresh(kQuicGranularityNs - 1U));
+    CHECK(pair.client.path_refresh_ns() == kQuicPathRefreshNs);
+    REQUIRE(pair.client.set_path_refresh(0U));
+    pair.net->socket_delay_ns[0] = 0U;
+    pair.net->socket_delay_ns[1] = 10U * kMs;
+    u64 refreshes = pair.client.counters().path_refreshes;
+    watch.reset();
+    trickle(pair, 150U);
+    CHECK(watch.data(0U) == 0U);
+    CHECK(pair.client.counters().path_refreshes == refreshes);
+    REQUIRE(pair.client.set_path_refresh(kQuicPathRefreshNs));
+    watch.reset();
+    trickle(pair, 150U);
+    CHECK(watch.data(0U) >= 90U);
+    CHECK(pair.client.counters().path_refreshes > refreshes);
+    // A peer's backup path is not used while another is usable (section 3.3), not even to measure it.
+    REQUIRE(pair.server.set_path_status(0U, true) == QuicPathStatusChange::Set);
+    REQUIRE(pair.net->run_until([&] { return pair.client.peer_path_status(0U) == QuicPathStatus::Backup; }));
+    refreshes = pair.client.counters().path_refreshes;
+    trickle(pair, 150U);
+    CHECK(pair.client.counters().path_refreshes == refreshes);
+    // Without data no path is refreshed: a connection left idle sends nothing more, so it idles out as without them.
+    REQUIRE(pair.server.set_path_status(0U, false) == QuicPathStatusChange::Set);
+    REQUIRE(pair.net->run_until([&] { return pair.client.peer_path_status(0U) == QuicPathStatus::Available; }));
+    pair.net->advance(pair.net->now + 500U * kMs);
+    const u64 client_sent = pair.client.counters().datagrams_sent;
+    const u64 server_sent = pair.server.counters().datagrams_sent;
+    pair.net->advance(pair.net->now + 5000U * kMs);
+    CHECK(pair.client.counters().datagrams_sent == client_sent);
+    CHECK(pair.server.counters().datagrams_sent == server_sent);
+    CHECK(pair.client.counters().path_refreshes == refreshes);
+    CHECK(pair.server.counters().path_refreshes == 0U); // it acknowledged and granted credit, and sent no data
+    pair.net->filter = nullptr;
+    CHECK(pair.client.counters().path_failures == 0U);
+    CHECK(pair.client.state() == QuicConnectionState::Established);
+}
+
 TEST_CASE("QUIC connection: this side's PATH_STATUS frames are numbered per path ID, go again when lost only while "
           "newest, and are refused, changing nothing, outside an open path ID",
           "[net][net-path][quic-connection][multipath]")

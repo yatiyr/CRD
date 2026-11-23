@@ -375,6 +375,19 @@ TEST_CASE("quic recovery: the RTT estimator follows RFC 9002 section 5", "[net][
     CHECK(capped.min_ns == 100U * kMs);
     capped.sample(80U * kMs, 0U, true, kMaxAckDelay, 10U);
     CHECK(capped.min_ns == 80U * kMs);
+
+    // A renewing sample (a path's RTT refresh) replaces the stale estimate as a first sample does, with its delay
+    // taken off and the minimum kept; one under the minimum takes it, its delay then kept.
+    QuicRtt renewed = rtt;
+    renewed.sample(160U * kMs, 20U * kMs, true, kMaxAckDelay, 11U, true);
+    CHECK(renewed.smoothed_ns == 140U * kMs);
+    CHECK(renewed.variance_ns == 70U * kMs);
+    CHECK(renewed.min_ns == 100U * kMs);
+    CHECK(renewed.first_sample_ns == 7U);
+    renewed.sample(60U * kMs, 20U * kMs, true, kMaxAckDelay, 12U, true);
+    CHECK(renewed.min_ns == 60U * kMs);
+    CHECK(renewed.smoothed_ns == 60U * kMs);
+    CHECK(renewed.variance_ns == 30U * kMs);
 }
 
 TEST_CASE("quic recovery: an RTT sample needs the largest newly acknowledged and an ack-eliciting packet",

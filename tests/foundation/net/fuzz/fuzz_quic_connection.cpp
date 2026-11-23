@@ -1232,8 +1232,9 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         {
             // One end's path choice and its status for a path ID from the next byte (RFC 10069 sections 3.3 and
             // 4.3): bit 0 the end, bit 1 backup, bits 2 and 3 the path ID (kMaxPathId + 1 is above both limits), bits
-            // 4 and 5 the choice (2 and 3 are none). No path ID opens or closes here, so every ID space up to the
-            // end's limit is open. Anything refused changes nothing.
+            // 4 and 5 the choice (2 and 3 are none), bits 6 and 7 its RTT refresh (0 kept, 1 none, 2 the shortest,
+            // 3 below it: refused). No path ID opens or closes here, so every ID space up to the end's limit is open.
+            // Anything refused changes nothing.
             const u8 shape = script[++at];
             QuicConnection& end = ((shape & 1U) == 0U) ? pair.client : pair.server;
             const bool backup = (shape & 2U) != 0U;
@@ -1243,6 +1244,14 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
             const bool valid = choice <= QuicPathChoice::Turns;
             CRD_FUZZ_REQUIRE(end.set_path_choice(choice) == valid);
             CRD_FUZZ_REQUIRE(end.path_choice() == (valid ? choice : was));
+            const u32 refresh = shape >> 6U;
+            if (refresh != 0U)
+            {
+                const u64 refresh_ns = (refresh == 1U) ? 0U : kQuicGranularityNs - (refresh - 2U);
+                const u64 kept = end.path_refresh_ns();
+                CRD_FUZZ_REQUIRE(end.set_path_refresh(refresh_ns) == (refresh != 3U));
+                CRD_FUZZ_REQUIRE(end.path_refresh_ns() == ((refresh != 3U) ? refresh_ns : kept));
+            }
             QuicPathStatusChange expected = QuicPathStatusChange::Set;
             if (end.state() != QuicConnectionState::Established)
             {
