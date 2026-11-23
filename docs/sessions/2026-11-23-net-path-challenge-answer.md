@@ -17,7 +17,8 @@ nothing back. Two causes in `quic_connection.cpp`:
 - Path ID 1 was the shorter, so the client's path ID 0 carried neither data nor ACKs (they rode path ID 1), and its
   packet took the closed-window branch of `write_frames()`, which never added the PING.
 - Where the PING was added, it went only when the packet was not ack-eliciting; a PATH_RESPONSE is eliciting but
-  probing. The owed PING was also taken by whichever slot sent next, so path ID 1's packet could spend it.
+  probing. The owed PING could also be taken by whichever slot sent next, though only path ID 0's packet steers
+  path ID 0.
 
 ## The fix
 
@@ -31,7 +32,14 @@ nothing back. Two causes in `quic_connection.cpp`:
 
 - `ebb520e9` replays clean on the fixed fuzzer and joins `corpus-quic-connection`.
 - New case "a challenge on path ID 0's active path is answered there by a packet that is not probing ..." (two
-  variants: path ID 0 yields its data, or keeps a pinned stream with nothing to send): an attacker's copy moves the
-  server, which is back within 200 ms with no validation failure.
+  variants: path ID 1 carries the stream on, or path ID 0 keeps a pinned stream with nothing to send): an attacker's
+  copy moves the server, which is back within 200 ms with no validation failure.
 - Mutants: without the closed-window `put_answer(false)` both variants fail (the server stays at the attacker's
-  address); without the open-window `put_answer(true)` 11 [net-path] cases fail (the answer is never spent).
+  address); without the open-window `put_answer(true)` 11 [net-path] cases fail (the answer is never spent). Letting
+  any slot spend the answer fails nothing: the slots' turns give path ID 0 the first send after the challenge in
+  these runs, so no case yet separates that restriction.
+- The 9-minute libFuzzer run from the corpus then found `d57f5de5`: a pinged client, its slot 0 storage down to the
+  entries kept for ACK-only packets and probes (`can_send` true, `can_send_data` false), held its PING, as designed
+  (the PING is no probe; its probe timeout makes room, as for 20207cdb). The follow check's escape now reads
+  `can_send_data`, what a PING needs; with it the input reaches the follow. It replays clean on c4fae3b7, whose
+  extra PING from the old challenge changed the run. Both inputs join `corpus-quic-connection`.
