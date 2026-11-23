@@ -27,6 +27,7 @@ namespace
             return ChannelError::Invalid;
         case QuicStreamError::Unknown:
         case QuicStreamError::Ended:
+        case QuicStreamError::NoPath: // a channel pins no stream to a path
             break;
     }
     return ChannelError::Closed;

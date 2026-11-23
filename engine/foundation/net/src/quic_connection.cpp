@@ -1987,8 +1987,7 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
     {
         return true;
     }
-    return (data_allowed(space) && has_data(space, now_ns)) ||
-           (copies_allowed(space) && datagram_ready(now_ns, datagram_paths(true)));
+    return (data_allowed(space) && has_data(space, now_ns)) || (own_allowed(space) && own_ready(now_ns));
 }
 
 bool QuicConnection::data_allowed(QuicSpace space) const noexcept
@@ -2003,11 +2002,25 @@ bool QuicConnection::data_allowed(QuicSpace space) const noexcept
            m_recovery->can_send_data(space, (space == QuicSpace::Application) ? slot : 0U);
 }
 
-bool QuicConnection::copies_allowed(QuicSpace space) const noexcept
+bool QuicConnection::own_allowed(QuicSpace space) const noexcept
 {
     const usize slot = send_slot();
-    return space == QuicSpace::Application && m_copies_open && carries_data(slot, m_send_path) && !held_dark(slot) &&
+    return space == QuicSpace::Application && m_own_open && carries_data(slot, m_send_path) && !held_dark(slot) &&
            m_recovery->can_send_data(space, slot);
+}
+
+bool QuicConnection::own_ready(u64 now_ns) const noexcept
+{
+    return datagram_ready(now_ns, datagram_paths(true)) ||
+           (m_frame_count < m_config.sent_frames && m_streams.has_frame(stream_route(false)));
+}
+
+QuicStreamRoute QuicConnection::stream_route(bool any) const noexcept
+{
+    QuicStreamRoute route;
+    route.slot = send_slot();
+    route.any = any;
+    return route;
 }
 
 u32 QuicConnection::copy_paths() const noexcept
@@ -2038,7 +2051,7 @@ bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
     }
     return m_handshake_done_owed || m_ping_owed || m_probe_fill || m_cids.retirement_owed() ||
            (m_frame_count < m_config.sent_frames &&
-            (m_streams.has_frame() || m_cids.local_owed() || m_new_token_owed || m_max_path_id_owed ||
+            (m_streams.has_frame(stream_route(true)) || m_cids.local_owed() || m_new_token_owed || m_max_path_id_owed ||
              m_paths_blocked_owed || m_cids_blocked != 0U || abandon_owed || status_owed())) ||
            datagram_ready(now_ns, datagram_paths(false));
 }
@@ -2049,7 +2062,7 @@ void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 
     QuicPathControl& path = control(slot);
     path.disarm_pace();
     m_probe_fill = false;
-    m_copies_open = false;
+    m_own_open = false;
     // This slot's own probes alone: another path's owed probe opens neither this window nor this pacer.
     const auto owes = [&](QuicSpace space)
     {
@@ -2074,24 +2087,24 @@ void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 
     if (yields_data(slot, out_bytes, now_ns, held_sockets))
     {
         // Another path takes the data (S78's scheduling). Copies of redundant datagrams the other path sent and the
-        // datagrams pinned here still go, in this window and pacer, which hold them back as they hold data; with
-        // none waiting the window waits unused by the application's choice, so a rate sample here shows the
-        // application's rate.
+        // datagrams and stream data pinned here still go, in this window and pacer, which hold them back as they
+        // hold data; with none waiting the window waits unused by the application's choice, so a rate sample here
+        // shows the application's rate.
         m_data_open = false;
         const u64 release = path.release_ns(now_ns, m_recovery->rtt(slot));
-        m_copies_open = room && release <= now_ns;
+        m_own_open = room && release <= now_ns;
         if (!sendable)
         {
             return;
         }
-        if (!datagram_ready(now_ns, datagram_paths(true)))
+        if (!own_ready(now_ns))
         {
             if (room)
             {
                 path.on_app_limited(in_flight);
             }
         }
-        else if (!m_copies_open)
+        else if (!m_own_open)
         {
             path.on_limited(!room, now_ns);
             if (room)
@@ -2106,7 +2119,7 @@ void QuicConnection::gate_data(usize datagram, usize out_bytes, u64 now_ns, u32 
     m_probe_fill = m_data_open && probe_wants; // a probe's fill is data: the window and the pacer hold it as any
     if (m_data_open)
     {
-        if (sendable && !has_data(application, now_ns) && !m_streams.has_frame())
+        if (sendable && !has_data(application, now_ns) && !m_streams.has_frame(stream_route(true)))
         {
             // The window and the pacer allow sending and nothing waits: until what is in flight is delivered, a rate
             // sample shows the application's rate, not the path's (draft-ietf-ccwg-bbr-07 section 4.1.2.4).
@@ -2450,9 +2463,10 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     }
     if (!data_allowed(space))
     {
-        if (copies_allowed(space))
+        if (own_allowed(space))
         {
             used = write_datagrams(frames, used, packet, now_ns, written);
+            used = write_streams(frames, used, packet, now_ns, written);
         }
         if (ack_later && !early)
         {
@@ -2652,20 +2666,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
         {
             put_ack();
         }
-        // The stream set's frames after the connection's own; each fits the room it was offered.
-        const u64 rtt_ns = m_recovery->rtt(slot).smoothed_ns;
-        QuicFrame frame;
-        QuicStreamRecord taken;
-        while (m_frame_count < m_config.sent_frames &&
-               m_streams.next_frame(frames.size() - used, now_ns, rtt_ns, frame, taken))
-        {
-            if (!put(frame))
-            {
-                m_streams.on_lost(taken); // owed again (a frame next_frame sized never fails to fit)
-                break;
-            }
-            static_cast<void>(record(space, packet, kRecordStream, taken, written));
-        }
+        used = write_streams(frames, used, packet, now_ns, written);
     }
     if (space == QuicSpace::Application && (m_ping_owed || m_probe_fill))
     {
@@ -2680,6 +2681,31 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
         written.fill = m_probe_fill && written.eliciting;
     }
     put_owed_ping();
+    return used;
+}
+
+usize QuicConnection::write_streams(cont::Span<u8> frames, usize used, u64 packet, u64 now_ns,
+                                    Written& written) noexcept
+{
+    // The stream set's frames after the connection's own; each fits the room it was offered. A slot yielding its
+    // data writes only the stream data pinned to it (S78).
+    const QuicStreamRoute route = stream_route(m_data_open);
+    const u64 rtt_ns = m_recovery->rtt(route.slot).smoothed_ns;
+    QuicFrame frame;
+    QuicStreamRecord taken;
+    while (m_frame_count < m_config.sent_frames &&
+           m_streams.next_frame(frames.size() - used, now_ns, rtt_ns, frame, taken, route))
+    {
+        const usize bytes = write_quic_frame(frame, frames.subspan(used));
+        if (bytes == 0U)
+        {
+            m_streams.on_lost(taken); // owed again (a frame next_frame sized never fails to fit)
+            break;
+        }
+        used += bytes;
+        written.eliciting = written.eliciting || quic_frame_ack_eliciting(frame.kind);
+        static_cast<void>(record(QuicSpace::Application, packet, kRecordStream, taken, written));
+    }
     return used;
 }
 
@@ -4242,6 +4268,7 @@ void QuicConnection::commit_path(usize slot, u64 now_ns) noexcept
     control.limit(peer_ceiling());
     m_controls[slot] = &control;
     m_datagrams.open_path(slot, m_protection.path_id(slot));
+    m_streams.open_path(slot, m_protection.path_id(slot));
     follow_datagram_size();
     // A server validates the client's address before any data goes there, a client its server's (section 3.1).
     validate_path(slot, paths.active(), now_ns, validation_timeout_ns());
@@ -4315,6 +4342,7 @@ QuicPathAbandon* QuicConnection::begin_abandon(u64 path_id, u64 error_code, u64 
         control(slot).stop();
         m_controls[slot] = nullptr;
         m_datagrams.stop_path(slot);
+        m_streams.stop_path(slot); // pinned streams' data, lost or unsent, goes on any path
         follow_datagram_size();
         // Path ID 0's own moves end with it: a move it deferred and its pending ones (S75) wait for nothing more.
         m_deferred_move = handshake_slot(slot) ? kQuicNoPath : m_deferred_move;

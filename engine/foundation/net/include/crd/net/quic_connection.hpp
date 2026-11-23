@@ -919,9 +919,14 @@ private:
     // Whether `space` may carry data now: its storage has room and, in the Application space, congestion control lets
     // data go (m_data_open).
     [[nodiscard]] bool data_allowed(QuicSpace space) const noexcept;
-    // Whether the Application space may carry copies of redundant datagrams another path sent while this slot yields
-    // its data (m_copies_open): inside its own window and pacer, as data.
-    [[nodiscard]] bool copies_allowed(QuicSpace space) const noexcept;
+    // Whether the Application space may carry this slot's own work while it yields its data (m_own_open): copies of
+    // redundant datagrams another path sent and the datagrams and stream data pinned here, inside its own window and
+    // pacer, as data.
+    [[nodiscard]] bool own_allowed(QuicSpace space) const noexcept;
+    // Whether such work waits (own_ready), and the stream set's route for the slot writing (`any` while its data is
+    // open).
+    [[nodiscard]] bool own_ready(u64 now_ns) const noexcept;
+    [[nodiscard]] QuicStreamRoute stream_route(bool any) const noexcept;
     // The path slots carrying data now, a bit each: data paths neither held dark nor held for backup. A redundant
     // datagram goes once on each.
     [[nodiscard]] u32 copy_paths() const noexcept;
@@ -959,6 +964,8 @@ private:
     [[nodiscard]] bool datagram_ready(u64 now_ns, const QuicDatagramPaths& paths) const noexcept;
     // Writes what datagram_ready() allows into `frames` from `used`, recording each one passed on; returns `used`.
     usize write_datagrams(cont::Span<u8> frames, usize used, u64 packet, u64 now_ns, Written& written) noexcept;
+    // The same for the stream set's frames on stream_route(m_data_open).
+    usize write_streams(cont::Span<u8> frames, usize used, u64 packet, u64 now_ns, Written& written) noexcept;
     // `pad`: the datagram reaches 1200 bytes (section 14.1), by this packet when it is the `last` or when what it
     // leaves is too small for another.
     [[nodiscard]] usize write_packet(QuicSpace space, cont::Span<u8> room, usize datagram_used, bool pad, bool last,
@@ -1066,7 +1073,7 @@ private:
     QuicPeerReceiveTimes m_peer_times;     // the receive times of the ACK frame being processed
     Ecn m_marking = Ecn::NotEct;      // the codepoint of the datagram being written, then of the last one
     bool m_data_open = true;          // congestion control lets data go in the datagram being written
-    bool m_copies_open = false;       // the slot yields its data, and its window and pacer let datagram copies go
+    bool m_own_open = false;          // the slot yields its data, and its window and pacer let its own work go
     bool m_probe_fill = false;        // the controller's bandwidth probe wants bytes: 1-RTT packets fill the datagram
     u64 m_event_ns = 0U;              // the time recovery's events happen at (they carry none)
     QuicStreamSet m_streams;

@@ -26,6 +26,11 @@
 //   sending    next_frame() hands the connection one frame that fits its room, with the record that settles it:
 //              connection credit frames first, then each listed stream's owed control frames and data, by urgency
 //              (0 first) and round robin within one, so no stream at an urgency starves another.
+//   paths      a stream pinned to a path ID open in a path slot (open_path(); slot 0 holds path ID 0 from init())
+//              gives its data only to that slot's calls, which write it even while they carry no other data (the
+//              path yields its data to another or is the peer's backup: QuicStreamRoute::any false); its control and
+//              credit frames, and every other stream's data, go on any slot carrying data. A slot that stops
+//              (stop_path()) unpins its streams, so their data, lost or unsent, goes on any path (S78).
 //   0-RTT      a client's streams run first on the parameters it remembers and then on its server's, which only raise
 //              them (streams already open included); a rejection returns every stream and credit to init()'s state
 //              (RFC 9001 section 4.6.2). A server marks the bytes that came in 0-RTT packets: they are replayable.
@@ -82,6 +87,15 @@ enum class QuicStreamError : u8
     Unknown, // no open stream of that ID, or it has no part for this call (a peer's unidirectional stream to write)
     Ended,   // the part already ended: finished or reset
     Invalid, // an argument out of range: an urgency, more bytes to consume than peek() gave
+    NoPath,  // pin(): the path ID is open in no path slot (not yet opened, or stopped)
+};
+
+// Which frames a next_frame() or has_frame() call is for: the path slot writing, and whether that slot carries data.
+// With `any` false (it yields its data or is held for backup) only the data of streams pinned to it goes.
+struct QuicStreamRoute
+{
+    usize slot = 0U;
+    bool any = true;
 };
 
 // RFC 9000 section 3.1's sending part; None for a stream without one.
@@ -186,18 +200,25 @@ public:
     // with. `early` for a frame of a 0-RTT packet: its STREAM data is marked replayable.
     [[nodiscard]] QuicTransportError on_frame(const QuicFrame& frame, bool early = false) noexcept;
 
-    // Whether next_frame() would give a frame now: a credit or control frame owed, or data within both credits.
-    [[nodiscard]] bool has_frame() const noexcept;
-    // The next frame, at most `room` bytes, and its record; false when none fits. `rtt_ns` (the smoothed RTT) tunes
-    // the windows. The frame is taken as sent: the caller writes it (it fits) and keeps the record.
-    [[nodiscard]] bool next_frame(usize room, u64 now_ns, u64 rtt_ns, QuicFrame& frame,
-                                  QuicStreamRecord& record) noexcept;
+    // Whether next_frame() on `route` would give a frame now: a credit or control frame owed, or data within both
+    // credits.
+    [[nodiscard]] bool has_frame(const QuicStreamRoute& route = QuicStreamRoute{}) const noexcept;
+    // The next frame on `route`, at most `room` bytes, and its record; false when none fits. `rtt_ns` (the smoothed
+    // RTT) tunes the windows. The frame is taken as sent: the caller writes it (it fits) and keeps the record.
+    [[nodiscard]] bool next_frame(usize room, u64 now_ns, u64 rtt_ns, QuicFrame& frame, QuicStreamRecord& record,
+                                  const QuicStreamRoute& route = QuicStreamRoute{}) noexcept;
     // A packet carrying a recorded frame was acknowledged or declared lost.
     void on_acked(const QuicStreamRecord& record) noexcept;
     void on_lost(const QuicStreamRecord& record) noexcept;
     // Everything sent so far was delivered: for a transport that acknowledges by taking a frame (QMux), whose 0-RTT
     // frames count only once its server accepted them.
     void on_all_acked() noexcept;
+    // Path slot `slot` now holds path ID `path_id`: pin() keeps streams to it. A slot opens again only after
+    // stop_path().
+    void open_path(usize slot, u64 path_id) noexcept;
+    // The path in `slot` stopped sending: every stream pinned to it is unpinned, its data going on any path, and
+    // pin() refuses its path ID.
+    void stop_path(usize slot) noexcept;
 
     // The application's side. IDs are RFC 9000 section 2.1's.
     [[nodiscard]] QuicStreamError open(bool bidirectional, u64& id) noexcept;
@@ -214,6 +235,12 @@ public:
     [[nodiscard]] QuicStreamError stop_sending(u64 id, u64 error) noexcept;
     // The stream's urgency, 0 (most urgent) to kQuicStreamUrgencies - 1; new streams take kQuicDefaultUrgency.
     [[nodiscard]] QuicStreamError set_urgency(u64 id, u8 urgency) noexcept;
+    // Keeps the stream's data on path ID `path_id` while that path is open (NoPath for one open in no slot; Ended for
+    // a sending part with nothing left to deliver); unpin() lets it go on any path again. New streams are unpinned.
+    [[nodiscard]] QuicStreamError pin(u64 id, u64 path_id) noexcept;
+    [[nodiscard]] QuicStreamError unpin(u64 id) noexcept;
+    // Whether the stream is pinned, and to which path ID.
+    [[nodiscard]] bool pinned(u64 id, u64& path_id) const noexcept;
     [[nodiscard]] QuicStreamRead peek(u64 id) const noexcept;
     // Copies into `out` the bytes that arrived without a gap, from `skip` bytes past the read offset, across the wrap
     // peek() stops at; `ends` is true when they reach the end of what can ever be read: the stream's final size, or a
@@ -260,6 +287,7 @@ public:
 
 private:
     static constexpr u32 kNone = ~u32{0};
+    static constexpr u8 kNoPin = static_cast<u8>(kQuicNoPath);
 
     struct Slot
     {
@@ -284,6 +312,7 @@ private:
         QuicRecvState recv = QuicRecvState::None;
         u8 events = 0U;
         u8 urgency = kQuicDefaultUrgency;
+        u8 pin = kNoPin; // the path slot its data goes on; kNoPin for any
         bool active = false;
         bool listed = false;
         bool reset_owed = false;
@@ -369,8 +398,18 @@ private:
     [[nodiscard]] bool pending(const Slot& slot) const noexcept;
     [[nodiscard]] bool data_waiting_on_connection() const noexcept;
     [[nodiscard]] bool grant_owed(const Type& type) const noexcept;
-    [[nodiscard]] bool slot_frame(Slot& slot, usize room, u64 now_ns, u64 rtt_ns, QuicFrame& frame,
-                                  QuicStreamRecord& record) noexcept;
+    // A stream's owed control frame, then its data; each writes `frame` and `record` and is false when none fits.
+    [[nodiscard]] bool control_frame(Slot& slot, usize room, u64 now_ns, u64 rtt_ns, QuicFrame& frame,
+                                     QuicStreamRecord& record) noexcept;
+    [[nodiscard]] bool data_frame(Slot& slot, usize room, QuicFrame& frame, QuicStreamRecord& record) noexcept;
+    // MAX_DATA, MAX_STREAMS, STREAMS_BLOCKED or DATA_BLOCKED when owed.
+    [[nodiscard]] bool connection_frame(usize room, u64 now_ns, u64 rtt_ns, QuicFrame& frame,
+                                        QuicStreamRecord& record) noexcept;
+    // Whether `route` takes the stream's data.
+    [[nodiscard]] static bool routes(const Slot& slot, const QuicStreamRoute& route) noexcept
+    {
+        return (slot.pin == kNoPin) ? route.any : slot.pin == route.slot;
+    }
 
     memory::IAllocator* m_allocator = nullptr;
     Slot* m_slots = nullptr;
@@ -392,6 +431,8 @@ private:
     u64 m_sent = 0U;            // every stream's fresh bytes sent
     u64 m_received = 0U;        // every stream's highest offset received (a reset's final size)
     u64 m_consumed = 0U;        // every stream's bytes read, dropped or reset away
+    u64 m_path_ids[kQuicMaxPaths] = {}; // each open path slot's path ID
+    u8 m_open_paths = 1U;               // the path slots holding a path ID, a bit each
     bool m_peer_resets_at = false;
 };
 

@@ -665,7 +665,7 @@ void QuicStreamSet::reset_send(Slot& slot, u64 error, u64 reliable_size) noexcep
 {
     slot.send = QuicSendState::ResetSent;
     slot.reset_error = error;
-    slot.reset_final = slot.out.sent_end(); // the credit consumed (section 4.5); slot_frame adds what follows
+    slot.reset_final = slot.out.sent_end(); // the credit consumed (section 4.5); control_frame adds what follows
     slot.reset_owed = true;
     slot.want_writable = false;
     if (reliable_size != 0U)
@@ -865,15 +865,15 @@ bool QuicStreamSet::grant_owed(const Type& type) const noexcept
     return type.peer_blocked || (candidate - type.limit) * 2U >= type.capacity;
 }
 
-bool QuicStreamSet::has_frame() const noexcept
+bool QuicStreamSet::has_frame(const QuicStreamRoute& route) const noexcept
 {
-    if (m_window.update_owed())
+    if (route.any && m_window.update_owed())
     {
         return true;
     }
     for (const Type& type : m_types)
     {
-        if (grant_owed(type) || type.blocked_owed)
+        if (route.any && (grant_owed(type) || type.blocked_owed))
         {
             return true;
         }
@@ -883,17 +883,18 @@ bool QuicStreamSet::has_frame() const noexcept
         u32 at = m_heads[urgency];
         for (u32 walked = 0U; walked < m_listed[urgency]; ++walked, at = m_slots[at].send_next)
         {
-            if (control_owed(m_slots[at]) || data_ready(m_slots[at]))
+            const Slot& slot = m_slots[at];
+            if ((route.any && control_owed(slot)) || (routes(slot, route) && data_ready(slot)))
             {
                 return true;
             }
         }
     }
-    return m_credit.blocked_owed(m_sent, data_waiting_on_connection());
+    return route.any && m_credit.blocked_owed(m_sent, data_waiting_on_connection());
 }
 
-bool QuicStreamSet::slot_frame(Slot& slot, usize room, u64 now_ns, u64 rtt_ns, QuicFrame& frame,
-                               QuicStreamRecord& record) noexcept
+bool QuicStreamSet::control_frame(Slot& slot, usize room, u64 now_ns, u64 rtt_ns, QuicFrame& frame,
+                                  QuicStreamRecord& record) noexcept
 {
     frame = QuicFrame{};
     frame.stream_id = slot.id;
@@ -951,6 +952,15 @@ bool QuicStreamSet::slot_frame(Slot& slot, usize room, u64 now_ns, u64 rtt_ns, Q
             return true;
         }
     }
+    return false;
+}
+
+bool QuicStreamSet::data_frame(Slot& slot, usize room, QuicFrame& frame, QuicStreamRecord& record) noexcept
+{
+    frame = QuicFrame{};
+    frame.stream_id = slot.id;
+    record = QuicStreamRecord{};
+    record.stream_id = slot.id;
     if (!delivering(slot.send, slot.reset_at))
     {
         return false;
@@ -998,10 +1008,47 @@ bool QuicStreamSet::slot_frame(Slot& slot, usize room, u64 now_ns, u64 rtt_ns, Q
     return true;
 }
 
-bool QuicStreamSet::next_frame(usize room, u64 now_ns, u64 rtt_ns, QuicFrame& frame, QuicStreamRecord& record) noexcept
+bool QuicStreamSet::next_frame(usize room, u64 now_ns, u64 rtt_ns, QuicFrame& frame, QuicStreamRecord& record,
+                               const QuicStreamRoute& route) noexcept
 {
     frame = QuicFrame{};
     record = QuicStreamRecord{};
+    if (route.any && connection_frame(room, now_ns, rtt_ns, frame, record))
+    {
+        return true;
+    }
+    for (u32 urgency = 0U; urgency < kQuicStreamUrgencies; ++urgency)
+    {
+        const u32 listed = m_listed[urgency];
+        u32 at = m_heads[urgency];
+        for (u32 walked = 0U; walked < listed && at != kNone; ++walked)
+        {
+            Slot& slot = m_slots[at];
+            const u32 next = slot.send_next;
+            if (!pending(slot))
+            {
+                unlist(slot);
+            }
+            else if ((route.any && control_frame(slot, room, now_ns, rtt_ns, frame, record)) ||
+                     (routes(slot, route) && data_frame(slot, room, frame, record)))
+            {
+                if (frame.kind == QuicFrameKind::Stream && slot.listed)
+                {
+                    m_heads[urgency] = slot.send_next; // round robin: the next stream at this urgency goes first
+                }
+                return true;
+            }
+            at = (m_heads[urgency] == kNone) ? kNone : next;
+        }
+    }
+    frame = QuicFrame{};
+    record = QuicStreamRecord{};
+    return false;
+}
+
+bool QuicStreamSet::connection_frame(usize room, u64 now_ns, u64 rtt_ns, QuicFrame& frame,
+                                     QuicStreamRecord& record) noexcept
+{
     if (m_window.update_owed() && room >= kCreditBytes)
     {
         frame.kind = QuicFrameKind::MaxData;
@@ -1055,31 +1102,6 @@ bool QuicStreamSet::next_frame(usize room, u64 now_ns, u64 rtt_ns, QuicFrame& fr
         }
         frame = QuicFrame{};
     }
-    for (u32 urgency = 0U; urgency < kQuicStreamUrgencies; ++urgency)
-    {
-        const u32 listed = m_listed[urgency];
-        u32 at = m_heads[urgency];
-        for (u32 walked = 0U; walked < listed && at != kNone; ++walked)
-        {
-            Slot& slot = m_slots[at];
-            const u32 next = slot.send_next;
-            if (!pending(slot))
-            {
-                unlist(slot);
-            }
-            else if (slot_frame(slot, room, now_ns, rtt_ns, frame, record))
-            {
-                if (frame.kind == QuicFrameKind::Stream && slot.listed)
-                {
-                    m_heads[urgency] = slot.send_next; // round robin: the next stream at this urgency goes first
-                }
-                return true;
-            }
-            at = (m_heads[urgency] == kNone) ? kNone : next;
-        }
-    }
-    frame = QuicFrame{};
-    record = QuicStreamRecord{};
     return false;
 }
 
@@ -1188,7 +1210,7 @@ void QuicStreamSet::on_lost(const QuicStreamRecord& record) noexcept
     switch (record.kind)
     {
         case QuicFrameKind::Stream:
-            // Marked for resending; slot_frame sends data only while the part is sending, and after a reset only
+            // Marked for resending; data_frame sends data only while the part is sending, and after a reset only
             // what a RESET_STREAM_AT keeps, the rest being gone from the buffer.
             slot->out.on_lost(record.value, record.length, record.fin);
             break;
@@ -1338,6 +1360,73 @@ QuicStreamError QuicStreamSet::set_urgency(u64 id, u8 urgency) noexcept
     slot->urgency = urgency;
     relist(*slot);
     return QuicStreamError::None;
+}
+
+void QuicStreamSet::open_path(usize slot, u64 path_id) noexcept
+{
+    if (slot < kQuicMaxPaths)
+    {
+        m_path_ids[slot] = path_id;
+        m_open_paths = static_cast<u8>(m_open_paths | (1U << slot));
+    }
+}
+
+void QuicStreamSet::stop_path(usize slot) noexcept
+{
+    if (slot >= kQuicMaxPaths)
+    {
+        return;
+    }
+    m_open_paths = static_cast<u8>(m_open_paths & ~(1U << slot));
+    for (u32 index = 0U; index < m_total_slots; ++index)
+    {
+        Slot& held = m_slots[index];
+        held.pin = (held.pin == slot) ? kNoPin : held.pin;
+    }
+}
+
+QuicStreamError QuicStreamSet::pin(u64 id, u64 path_id) noexcept
+{
+    Slot* const slot = find(id);
+    if (slot == nullptr || slot->send == QuicSendState::None)
+    {
+        return QuicStreamError::Unknown;
+    }
+    if (!delivering(slot->send, slot->reset_at))
+    {
+        return QuicStreamError::Ended;
+    }
+    for (usize path = 0U; path < kQuicMaxPaths; ++path)
+    {
+        if ((m_open_paths & (1U << path)) != 0U && m_path_ids[path] == path_id)
+        {
+            slot->pin = static_cast<u8>(path);
+            return QuicStreamError::None;
+        }
+    }
+    return QuicStreamError::NoPath;
+}
+
+QuicStreamError QuicStreamSet::unpin(u64 id) noexcept
+{
+    Slot* const slot = find(id);
+    if (slot == nullptr || slot->send == QuicSendState::None)
+    {
+        return QuicStreamError::Unknown;
+    }
+    slot->pin = kNoPin;
+    return QuicStreamError::None;
+}
+
+bool QuicStreamSet::pinned(u64 id, u64& path_id) const noexcept
+{
+    const Slot* const slot = find(id);
+    if (slot == nullptr || slot->pin == kNoPin)
+    {
+        return false;
+    }
+    path_id = m_path_ids[slot->pin];
+    return true;
 }
 
 QuicStreamRead QuicStreamSet::peek(u64 id) const noexcept
