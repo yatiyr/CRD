@@ -385,6 +385,7 @@ QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnecti
     config.streams.local_uni = 1U;
     config.streams.receive_bytes = 2048U;
     config.streams.send_bytes = 2048U;
+    config.streams.first_bytes = 256U; // the buffers grow under every script
     config.streams.stream_window = 1024U;
     config.streams.connection_window = 2048U;
     config.streams.connection_max_window = 8192U;

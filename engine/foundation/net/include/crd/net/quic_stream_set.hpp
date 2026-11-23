@@ -37,12 +37,11 @@
 //   events     a per-slot mask of what happened (opened, readable, writable, reset, stop asked, all sent) in a queue
 //              of slots: at most one entry per slot, so it never fills.
 //   memory     the slots come from the injected allocator at init(). A slot's buffers come from it when the slot
-//              first holds a stream, kQuicStreamFirstBytes each (or the limit when smaller), and double as its data
-//              needs them up to receive_bytes and send_bytes: a receive buffer before it stores data the windows
+//              first holds a stream, first_bytes each (or the limit when smaller), and double as its data needs them
+//              up to receive_bytes and send_bytes: a receive buffer before it stores data the windows
 //              allow, a send buffer before write() or send_room() would find no room. A slot keeps its buffers for
 //              the streams it holds later, so a steady load allocates nothing. Room the windows granted that the
 //              allocator refuses closes the connection (INTERNAL_ERROR); a send buffer that cannot grow takes less.
-//              With whole_buffers, init() takes every slot's buffers at their limits and nothing allocates after it.
 //   threads    a stream set belongs to its connection's thread.
 
 #include <crd/containers/span.hpp>
@@ -61,7 +60,7 @@ namespace crd::net
 {
 inline constexpr u32 kQuicMaxStreamSlots = 4096U;      // per stream type
 inline constexpr u32 kQuicMaxStreamBuffer = 1U << 24U; // a stream buffer's bytes at most
-inline constexpr u32 kQuicStreamFirstBytes = 4096U;    // a stream buffer's first size, doubled as its data needs
+inline constexpr u32 kQuicStreamFirstBytes = 4096U;    // QuicStreamLimits::first_bytes by default
 inline constexpr u8 kQuicStreamUrgencies = 8U;         // RFC 9218's urgencies, 0 the most urgent
 inline constexpr u8 kQuicDefaultUrgency = 3U;          // RFC 9218 section 4.1
 inline constexpr u32 kQuicNoStreamSlot = ~u32{0};
@@ -78,9 +77,9 @@ struct QuicStreamLimits
     // buffers grow to them as the stream's data needs.
     u32 receive_bytes = 0U;
     u32 send_bytes = 0U;
-    // Every slot's buffers taken at their limits by init(): nothing allocates after it, for fixed memory at the
-    // price of every slot's full buffers at connect.
-    bool whole_buffers = false;
+    // A stream buffer's first size (the limit when smaller), doubled as its data needs: a multiple of
+    // kQuicStreamChunk, at most kQuicMaxStreamBuffer. At the limits, a slot's buffers come whole with its first stream.
+    u32 first_bytes = kQuicStreamFirstBytes;
     u32 stream_window = 0U;         // the window first granted on each stream: 1 to receive_bytes
     u64 connection_window = 0U;     // initial_max_data
     u64 connection_max_window = 0U; // the connection window's auto-tuned maximum: at least connection_window
@@ -268,15 +267,16 @@ public:
     [[nodiscard]] QuicStreamError give_up_reliable(u64 id) noexcept;
     // The next stream with events, its mask cleared; false when none has any.
     [[nodiscard]] bool poll(QuicStreamEvent& event) noexcept;
-    // The bytes write() takes now; below `wanted`, a Writable event is owed once more room comes. 0 for a stream that
-    // cannot send.
+    // The bytes write() takes now, the send buffer first grown toward holding `wanted` more (as far as its limit and
+    // the allocator let it); below `wanted`, a Writable event is owed once more room comes. 0 for a stream that cannot
+    // send.
     [[nodiscard]] usize send_room(u64 id, usize wanted) noexcept;
     // An index below slots() that stays the stream's while it is open, for a layer keeping per-stream state beside the
     // set's; kQuicNoStreamSlot for a stream not open.
     [[nodiscard]] u32 slot_of(u64 id) const noexcept;
     [[nodiscard]] u32 slots() const noexcept { return m_total_slots; }
-    // The buffers this set has taken from its allocator: each slot's first ones and each growth (with whole_buffers,
-    // all of them in init()). Nothing else it does after init() allocates.
+    // The buffers this set has taken from its allocator: each slot's first ones and each growth. Nothing else it does
+    // after init() allocates.
     [[nodiscard]] u32 buffer_allocations() const noexcept { return m_buffer_allocations; }
     // The bytes the slots' buffers hold now, their bitmaps included: what the streams cost beyond the set's tables.
     [[nodiscard]] usize buffer_bytes() const noexcept;
@@ -289,6 +289,9 @@ public:
     [[nodiscard]] u64 received_end(u64 id) const noexcept;
     // The final size of this side's reset of a stream: what the peer's flow control counts, 0 for one not reset.
     [[nodiscard]] u64 reset_size(u64 id) const noexcept;
+    // The bytes written to a stream and not yet acknowledged (on QMux: not yet handed to the path), 0 once its send
+    // buffer is empty and for a stream not sending.
+    [[nodiscard]] u64 send_owed(u64 id) const noexcept;
     // Whether a stream existed and has gone: unlike a stream not yet opened, it never comes back.
     [[nodiscard]] bool stream_closed(u64 id) const noexcept;
     // Streams open, of every type.
@@ -391,9 +394,9 @@ private:
     [[nodiscard]] Slot* open_slot(Type& type) noexcept;
     // Returns everything to the allocator and forgets it.
     void release() noexcept;
-    // Gives a slot of `type` the buffers it lacks: at their limits when `whole`, else kQuicStreamFirstBytes (the limit
-    // when smaller). False when the allocator refused one.
-    [[nodiscard]] bool give_buffers(Store& store, const Type& type, bool whole) noexcept;
+    // Gives a slot of `type` the buffers it lacks, first_bytes each (the limit when smaller): false when the allocator
+    // refused one.
+    [[nodiscard]] bool give_buffers(Store& store, const Type& type) noexcept;
     // A block of `bytes` bytes and `maps` bitmaps for them; nullptr when the allocator refuses.
     [[nodiscard]] u64* take_block(usize bytes, usize maps) noexcept;
     // The receive buffer holds data up to `end` (at most its limit), grown when needed: false when the allocator

@@ -102,8 +102,8 @@ bool QuicStreamSet::limits_valid(const QuicStreamLimits& limits) noexcept
     return counts && !(l.in_order && l.reset_stream_at) &&
            (!receives ||
             (chunk_bytes_ok(l.receive_bytes) && l.stream_window != 0U && l.stream_window <= l.receive_bytes)) &&
-           (!sends || chunk_bytes_ok(l.send_bytes)) && l.connection_window <= l.connection_max_window &&
-           l.connection_max_window <= kQuicMaxVarint;
+           (!sends || chunk_bytes_ok(l.send_bytes)) && (!(receives || sends) || chunk_bytes_ok(l.first_bytes)) &&
+           l.connection_window <= l.connection_max_window && l.connection_max_window <= kQuicMaxVarint;
 }
 
 u32 QuicStreamSet::type_index(bool local, bool bidirectional) const noexcept
@@ -160,14 +160,6 @@ bool QuicStreamSet::init(memory::IAllocator& allocator, const QuicStreamLimits& 
     {
         type.order = m_indices + (2U * usize{type.first});
         type.free = type.order + type.capacity;
-        for (u32 at = 0U; limits.whole_buffers && at < type.capacity; ++at)
-        {
-            if (!give_buffers(m_stores[type.first + at], type, true))
-            {
-                release();
-                return false;
-            }
-        }
     }
     reset_state();
     return true;
@@ -309,7 +301,7 @@ QuicStreamSet::Slot* QuicStreamSet::open_slot(Type& type) noexcept
     }
     const u32 index = type.free[type.free_count - 1U];
     Store& store = m_stores[index];
-    if (!give_buffers(store, type, false)) // a slot's first stream gives it its buffers, which it keeps
+    if (!give_buffers(store, type)) // a slot's first stream gives it its buffers, which it keeps
     {
         return nullptr;
     }
@@ -340,16 +332,16 @@ QuicStreamSet::Slot* QuicStreamSet::open_slot(Type& type) noexcept
     return &slot;
 }
 
-bool QuicStreamSet::give_buffers(Store& store, const Type& type, bool whole) noexcept
+bool QuicStreamSet::give_buffers(Store& store, const Type& type) noexcept
 {
     if (type.receives && store.in == nullptr)
     {
-        store.in_bytes = whole ? m_limits.receive_bytes : min_u32(kQuicStreamFirstBytes, m_limits.receive_bytes);
+        store.in_bytes = min_u32(m_limits.first_bytes, m_limits.receive_bytes);
         store.in = take_block(store.in_bytes, 1U);
     }
     if (type.sends && store.out == nullptr)
     {
-        store.out_bytes = whole ? m_limits.send_bytes : min_u32(kQuicStreamFirstBytes, m_limits.send_bytes);
+        store.out_bytes = min_u32(m_limits.first_bytes, m_limits.send_bytes);
         store.out = take_block(store.out_bytes, 2U);
     }
     return (!type.receives || store.in != nullptr) && (!type.sends || store.out != nullptr);
@@ -1699,6 +1691,13 @@ u64 QuicStreamSet::reset_size(u64 id) const noexcept
 {
     const Slot* const slot = find(id);
     return (slot != nullptr) ? max_u64(slot->reset_final, slot->reset_reliable) : 0U;
+}
+
+u64 QuicStreamSet::send_owed(u64 id) const noexcept
+{
+    const Slot* const slot = find(id);
+    return (slot != nullptr && slot->send != QuicSendState::None) ? slot->out.written_end() - slot->out.acked_end()
+                                                                   : 0U;
 }
 
 bool QuicStreamSet::stream_closed(u64 id) const noexcept

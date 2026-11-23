@@ -267,6 +267,13 @@ TEST_CASE("QUIC stream set: limits are checked and fill this side's parameters",
     bad.send_bytes = 0U;
     CHECK_FALSE(QuicStreamSet::limits_valid(bad));
     bad = limits();
+    bad.first_bytes = 100U; // not a multiple of the chunk
+    CHECK_FALSE(QuicStreamSet::limits_valid(bad));
+    bad.first_bytes = 0U;
+    CHECK_FALSE(QuicStreamSet::limits_valid(bad));
+    bad.first_bytes = kQuicMaxStreamBuffer + kQuicStreamChunk;
+    CHECK_FALSE(QuicStreamSet::limits_valid(bad));
+    bad = limits();
     bad.peer_bidi = kQuicMaxStreamSlots + 1U;
     CHECK_FALSE(QuicStreamSet::limits_valid(bad));
     bad = limits();
@@ -1152,8 +1159,10 @@ TEST_CASE("QUIC stream set: many streams cross both ways over an exchange that l
             pair->now += kMs;
         }
         CHECK(finished == kEchoStreams);
-        // Each slot's buffers came once and grew at most once (4096 to 8192 bytes), whatever streams it held.
-        CHECK(pair->allocator.calls() <= allocations + (4U * usize{c.slots() + s.slots()}));
+        // Nothing but the streams' buffers allocated, each slot's came once and grew at most once (4096 to 8192
+        // bytes) whatever streams it held, and each growth returned what it replaced.
+        CHECK(pair->allocator.calls() == allocations + c.buffer_allocations() + s.buffer_allocations());
+        CHECK(c.buffer_allocations() + s.buffer_allocations() <= 4U * (c.slots() + s.slots()));
         CHECK(pair->allocator.live() <= allocations + (2U * usize{c.slots() + s.slots()}));
         CHECK(c.connection_sent() == s.connection_window().received());
         CHECK(s.connection_sent() == c.connection_window().received());
@@ -1414,6 +1423,8 @@ TEST_CASE("QUIC stream set: buffers come as streams need them, double up to thei
         usize taken = 0U;
         REQUIRE(server.write(id, ConstSpan<u8>(bytes, 10000U), false, taken) == QuicStreamError::None);
         CHECK(taken == kQuicStreamFirstBytes);
+        CHECK(server.send_owed(id) == kQuicStreamFirstBytes);
+        CHECK(server.send_owed(99U) == 0U); // no such stream
         CHECK(server.send_room(id, 1U) == 0U);
         allocator.refuse_after(~usize{0});
         CHECK(server.send_room(id, 6000U) == 16384U - kQuicStreamFirstBytes); // grown to the limit, which holds it
@@ -1423,6 +1434,30 @@ TEST_CASE("QUIC stream set: buffers come as streams need them, double up to thei
         CHECK(allocator.live() > built);
     }
     CHECK(allocator.live() == 0U);
+
+    // first_bytes sets the first size: the smallest chunk, or the limits (whole buffers with the first stream).
+    for (const u32 first : {u32{64}, u32{16384}})
+    {
+        QuicStreamLimits l = limits(1U, 0U, 16384U);
+        l.receive_bytes = 16384U;
+        l.send_bytes = 16384U;
+        l.first_bytes = first;
+        Pair pair(l, l);
+        u64 id = 0U;
+        REQUIRE(pair.end[0].open(true, id) == QuicStreamError::None);
+        // A bidirectional stream's two buffers and their bitmaps: one for the receive buffer, two for the send one.
+        CHECK(pair.end[0].buffer_bytes() == (2U * first) + (3U * quic_stream_bitmap_words(first) * 8U));
+        CHECK(pair.end[0].buffer_allocations() == 2U);
+        u64 offset = 0U;
+        REQUIRE(write_pattern(pair.end[0], id, offset, 12000U, 7U));
+        pair.settle();
+        offset = 0U;
+        REQUIRE(drain(pair.end[1], id, offset, 7U));
+        // Its send buffer grew to the limit, its receive buffer stayed as it came; whole buffers never grew.
+        const usize send_whole = 16384U + (2U * quic_stream_bitmap_words(16384U) * 8U);
+        CHECK(pair.end[0].buffer_bytes() == send_whole + first + (quic_stream_bitmap_words(first) * 8U));
+        CHECK((pair.end[0].buffer_allocations() > 2U) == (first == 64U));
+    }
 }
 
 TEST_CASE("QUIC stream set: a slot keeps its grown buffers, so the streams that follow allocate nothing",
@@ -1440,7 +1475,9 @@ TEST_CASE("QUIC stream set: a slot keeps its grown buffers, so the streams that 
         CHECK(id == round * 4U);
         u64 offset = 0U;
         REQUIRE(write_pattern(pair.end[0], id, offset, 12000U, round));
+        CHECK(pair.end[0].send_owed(id) == 12000U);
         pair.settle();
+        CHECK(pair.end[0].send_owed(id) == 0U); // every byte acknowledged
         offset = 0U;
         REQUIRE(drain(pair.end[1], id, offset, round));
         CHECK(offset == 12000U);

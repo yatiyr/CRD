@@ -357,6 +357,7 @@ QuicStreamLimits limits_from(Input& in)
     l.local_uni = in.byte() % 3U;
     l.receive_bytes = 64U * (1U + (in.byte() % 8U));
     l.send_bytes = 64U * (1U + (in.byte() % 8U));
+    l.first_bytes = 64U; // the buffers start at one chunk and grow under every operation
     l.stream_window = 1U + (in.byte() % l.receive_bytes);
     l.connection_window = 64U * in.byte();
     l.connection_max_window = l.connection_window * (1U + (in.byte() % 4U));

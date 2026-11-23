@@ -499,7 +499,7 @@ private:
         {
             // The reset waits until its bytes have left (QMux) or been acknowledged (QUIC), its send buffer empty
             // again: a stream whose first frame is its RESET_STREAM may never reach the peer's application.
-            const bool left = stream.sent == kResetStreamBytes && set.send_room(id, 0U) == set.limits().send_bytes;
+            const bool left = stream.sent == kResetStreamBytes && set.send_owed(id) == 0U;
             if (left && set.reset(id, kInteropResetCode) == crd::net::QuicStreamError::None)
             {
                 stream.out_end = true;
