@@ -309,6 +309,9 @@ public:
         }
     }
 
+    // The carrier's stream buffers: none, HTTP/2's are fixed at init.
+    [[nodiscard]] usize carrier_buffer_allocations() const { return 0U; }
+
     CountingAllocator allocator;
     Policy policy;
     Http2Connection conn[2];
@@ -449,6 +452,9 @@ public:
             end[kServer].tunnels.flush(now);
         }
     }
+
+    // The carrier's stream buffers: the HTTP/3 connections' stream sets.
+    [[nodiscard]] usize carrier_buffer_allocations() const { return wire->buffer_allocations(); }
 
     CountingAllocator allocator;
     Policy policy;
@@ -682,7 +688,13 @@ TEMPLATE_TEST_CASE("WebSocket tunnels: a tunnel opens and carries streams and da
     static_cast<void>(write_pattern(client->streams(), id, client_written, total, 3U));
     rig.flush();
     rig.settle();
-    const usize allocations = rig.allocator.calls();
+    // Nothing allocates once a tunnel is open but stream buffers, the tunnels' and the carrier's, as they grow.
+    const auto others = [&]
+    {
+        return rig.allocator.calls() - client->streams().buffer_allocations() - server->streams().buffer_allocations() -
+               rig.carrier_buffer_allocations();
+    };
+    const usize allocations = others();
     bool client_done = false;
     bool server_done = false;
     for (usize turn = 0U; turn < 20000U && !(client_done && server_done); ++turn)
@@ -696,7 +708,7 @@ TEMPLATE_TEST_CASE("WebSocket tunnels: a tunnel opens and carries streams and da
     }
     CHECK(client_read == total);
     CHECK(server_read == total);
-    CHECK(rig.allocator.calls() == allocations); // nothing allocates once a tunnel is open
+    CHECK(others() == allocations);
     CHECK(rig.end[kServer].services != 0U);
 
     const usize limit = client->datagrams().max_payload();

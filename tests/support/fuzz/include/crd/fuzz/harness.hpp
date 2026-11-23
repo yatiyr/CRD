@@ -137,6 +137,7 @@ public:
         header->size        = size;
         header->magic       = kMagic;
         m_live += size;
+        ++m_allocations;
         if (m_live > m_peak)
         {
             m_peak = m_live;
@@ -174,6 +175,7 @@ public:
 
     [[nodiscard]] usize live_bytes() const noexcept { return m_live; }
     [[nodiscard]] usize peak_bytes() const noexcept { return m_peak; }
+    [[nodiscard]] usize allocations() const noexcept { return m_allocations; } // the blocks ever given
     [[nodiscard]] usize budget_bytes() const noexcept { return m_budget; }
 
 private:
@@ -200,6 +202,7 @@ private:
     usize                   m_budget;
     usize                   m_live = 0U;
     usize                   m_peak = 0U;
+    usize                   m_allocations = 0U;
 };
 
 // Every harness failure ends the process the way a sanitizer report does (abort, which libFuzzer records as a

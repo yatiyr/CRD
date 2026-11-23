@@ -3,12 +3,14 @@
 // docs/design/test-instruments.md).
 //
 // Input: operations, each an operation byte and the parameter bytes it reads (0 past the end), on one receive buffer
-// and one send buffer of 256 bytes and one receive window: frames inserted at any offset (below the read offset,
-// past the window, with a FIN, with a changed byte), reads, writes, FINs, chunks sent under a flow-control limit,
-// acknowledgements and losses of any sent chunk in any order and any number of times, and window operations.
+// and one send buffer of 64 bytes, grown at any point into other storage of any larger multiple of 64 up to 256 bytes
+// (or the same size), and one receive window: frames inserted at any offset (below the read offset, past the window,
+// with a FIN, with a changed byte), reads, writes, FINs, chunks sent under a flow-control limit, acknowledgements and
+// losses of any sent chunk in any order and any number of times, and window operations.
 //
-// Oracles, against models that keep one record per stream byte. The receive buffer's verdict is the model's rule
-// (final size, then window, then other bytes at a held offset), a refusal changes nothing, and the contiguous end,
+// Oracles, against models that keep one record per stream byte and each buffer's capacity. The receive buffer's
+// verdict is the model's rule (final size, then a window only data needs, then other bytes at a held offset), a refusal
+// changes nothing, a growth keeps every byte and state (the storage it left is scribbled over), and the contiguous end,
 // the received end, the final size and the readable bytes are the model's. The send buffer's next chunk is the
 // model's (the lowest lost run, else the data never sent within the limit, never wrapping, the FIN with the last
 // byte or alone), its bytes are what was written, and the acknowledged end, the lost bytes, the room and the FIN's
@@ -18,6 +20,7 @@
 #include <crd/net/quic_header.hpp>
 #include <crd/net/quic_stream.hpp>
 
+#include <cstring>
 #include <new>
 
 namespace
@@ -29,7 +32,8 @@ using crd::containers::ConstSpan;
 using crd::containers::Span;
 using namespace crd::net;
 
-constexpr usize kCapacity   = 256U;
+constexpr usize kCapacity   = 256U; // the most a buffer grows to
+constexpr usize kFirst      = 64U;  // and its first capacity
 constexpr usize kWords      = quic_stream_bitmap_words(kCapacity);
 constexpr u64   kModelBytes = 16384U;
 constexpr usize kPackets    = 64U;
@@ -62,11 +66,12 @@ struct ReceiveModel
     u64  received    = 0U;
     u64  final_size  = 0U;
     bool final_known = false;
+    u64  capacity    = kFirst;
 
     [[nodiscard]] u64 contiguous() const
     {
         u64 at = read;
-        while (at < kModelBytes && at < read + kCapacity && held[at])
+        while (at < kModelBytes && at < read + capacity && held[at])
         {
             ++at;
         }
@@ -84,6 +89,7 @@ struct SendModel
     bool fin_sent  = false;
     bool fin_lost  = false;
     bool fin_acked = false;
+    u64  capacity  = kFirst;
 
     [[nodiscard]] u64 acked_end() const
     {
@@ -118,7 +124,7 @@ struct SendModel
         if (start < sent)
         {
             u64 end = start;
-            while (end < sent && lost[end] && end - start < max_bytes && (end == start || end % kCapacity != 0U))
+            while (end < sent && lost[end] && end - start < max_bytes && (end == start || end % capacity != 0U))
             {
                 ++end;
             }
@@ -131,7 +137,7 @@ struct SendModel
         if (sent < top)
         {
             u64 end = sent;
-            while (end < top && end - sent < max_bytes && (end == sent || end % kCapacity != 0U))
+            while (end < top && end - sent < max_bytes && (end == sent || end % capacity != 0U))
             {
                 ++end;
             }
@@ -154,11 +160,13 @@ struct SendModel
 
 struct World
 {
-    u8                receive_bytes[kCapacity] = {};
-    u64               receive_bits[kWords]     = {};
-    u8                send_bytes[kCapacity]    = {};
-    u64               acked_bits[kWords]       = {};
-    u64               lost_bits[kWords]        = {};
+    // Two banks of storage: a growth moves both buffers into the other one.
+    u8                receive_bytes[2][kCapacity] = {};
+    u64               receive_bits[2][kWords]     = {};
+    u8                send_bytes[2][kCapacity]    = {};
+    u64               acked_bits[2][kWords]       = {};
+    u64               lost_bits[2][kWords]        = {};
+    usize             bank = 0U;
     QuicReceiveBuffer receive;
     QuicSendBuffer    send;
     QuicReceiveWindow window;
@@ -173,6 +181,7 @@ void check_receive(World& w)
 {
     const ReceiveModel& model = w.receive_model;
     const u64           contiguous = model.contiguous();
+    CRD_FUZZ_REQUIRE(w.receive.capacity() == model.capacity);
     CRD_FUZZ_REQUIRE(w.receive.read_offset() == model.read);
     CRD_FUZZ_REQUIRE(w.receive.contiguous_end() == contiguous);
     CRD_FUZZ_REQUIRE(w.receive.received_end() == model.received);
@@ -180,7 +189,7 @@ void check_receive(World& w)
     CRD_FUZZ_REQUIRE(!model.final_known || w.receive.final_size() == model.final_size);
     CRD_FUZZ_REQUIRE(w.receive.complete() == (model.final_known && model.read == model.final_size));
     const ConstSpan<u8> view = w.receive.readable();
-    const u64           wrap = kCapacity - model.read % kCapacity;
+    const u64           wrap = model.capacity - model.read % model.capacity;
     const u64           want = (contiguous - model.read < wrap) ? contiguous - model.read : wrap;
     CRD_FUZZ_REQUIRE(view.size() == want);
     for (usize i = 0U; i < view.size(); ++i)
@@ -221,7 +230,7 @@ void insert(World& w, Input& in, u8 op)
     {
         expected = QuicReceiveResult::FinalSize;
     }
-    else if (end > model.read && end - model.read > kCapacity)
+    else if (length != 0U && end > model.read && end - model.read > model.capacity)
     {
         expected = QuicReceiveResult::BeyondWindow;
     }
@@ -276,7 +285,8 @@ void check_send(World& w)
     CRD_FUZZ_REQUIRE(w.send.sent_end() == model.sent);
     CRD_FUZZ_REQUIRE(w.send.acked_end() == model.acked_end());
     CRD_FUZZ_REQUIRE(w.send.lost_bytes() == model.lost_count());
-    CRD_FUZZ_REQUIRE(w.send.room() == kCapacity - (model.written - model.acked_end()));
+    CRD_FUZZ_REQUIRE(w.send.capacity() == model.capacity);
+    CRD_FUZZ_REQUIRE(w.send.room() == model.capacity - (model.written - model.acked_end()));
     CRD_FUZZ_REQUIRE(w.send.finished() == model.finished);
     CRD_FUZZ_REQUIRE(w.send.all_acked() == (model.fin_acked && model.acked_end() == model.written));
     CRD_FUZZ_REQUIRE(w.send.pending() == (model.lost_count() > 0U || model.sent < model.written || model.fin_owed()));
@@ -295,7 +305,7 @@ void write(World& w, Input& in)
     {
         data[i] = send_pattern(model.written + i);
     }
-    const u64 room     = model.finished ? 0U : kCapacity - (model.written - model.acked_end());
+    const u64 room     = model.finished ? 0U : model.capacity - (model.written - model.acked_end());
     const u64 expected = (count < room) ? count : room;
     CRD_FUZZ_REQUIRE(w.send.write(ConstSpan<u8>(data, static_cast<usize>(count))) == expected);
     model.written += expected;
@@ -380,6 +390,54 @@ void settle(World& w, Input& in, bool acked)
     check_send(w);
 }
 
+// The capacity `steps` chunks above `capacity`, at most kCapacity.
+usize grown(u64 capacity, usize steps)
+{
+    const u64 size = capacity + (steps * kFirst);
+    return static_cast<usize>((size < kCapacity) ? size : kCapacity);
+}
+
+// Both buffers move into the other bank, each at its own larger capacity (or the same): every oracle holds after it,
+// and the storage left is scribbled over, so nothing still reads it. A smaller storage is refused.
+void grow(World& w, Input& in)
+{
+    const u8    pick         = in.byte();
+    const usize bank         = 1U - w.bank;
+    const usize receive_size = grown(w.receive_model.capacity, pick & 0x07U);
+    const usize send_size    = grown(w.send_model.capacity, (pick >> 3U) & 0x07U);
+    if (w.receive_model.capacity > kFirst)
+    {
+        CRD_FUZZ_REQUIRE(!w.receive.grow(Span<u8>(w.receive_bytes[bank], kFirst),
+                                         Span<u64>(w.receive_bits[bank], quic_stream_bitmap_words(kFirst))));
+    }
+    if (w.send_model.capacity > kFirst)
+    {
+        const usize words = quic_stream_bitmap_words(kFirst);
+        CRD_FUZZ_REQUIRE(!w.send.grow(Span<u8>(w.send_bytes[bank], kFirst), Span<u64>(w.acked_bits[bank], words),
+                                      Span<u64>(w.lost_bits[bank], words)));
+    }
+    const usize receive_words = quic_stream_bitmap_words(receive_size);
+    const usize send_words    = quic_stream_bitmap_words(send_size);
+    std::memset(w.receive_bits[bank], 0xFF, sizeof(w.receive_bits[bank])); // grow() must clear what it takes
+    std::memset(w.acked_bits[bank], 0xFF, sizeof(w.acked_bits[bank]));
+    std::memset(w.lost_bits[bank], 0xFF, sizeof(w.lost_bits[bank]));
+    CRD_FUZZ_REQUIRE(w.receive.grow(Span<u8>(w.receive_bytes[bank], receive_size),
+                                    Span<u64>(w.receive_bits[bank], receive_words)));
+    CRD_FUZZ_REQUIRE(w.send.grow(Span<u8>(w.send_bytes[bank], send_size), Span<u64>(w.acked_bits[bank], send_words),
+                                 Span<u64>(w.lost_bits[bank], send_words)));
+    const usize old = w.bank;
+    std::memset(w.receive_bytes[old], 0xA5, sizeof(w.receive_bytes[old]));
+    std::memset(w.receive_bits[old], 0xFF, sizeof(w.receive_bits[old]));
+    std::memset(w.send_bytes[old], 0xA5, sizeof(w.send_bytes[old]));
+    std::memset(w.acked_bits[old], 0xFF, sizeof(w.acked_bits[old]));
+    std::memset(w.lost_bits[old], 0xFF, sizeof(w.lost_bits[old]));
+    w.bank                   = bank;
+    w.receive_model.capacity = receive_size;
+    w.send_model.capacity    = send_size;
+    check_receive(w);
+    check_send(w);
+}
+
 void window_op(World& w, Input& in)
 {
     QuicReceiveWindow& window = w.window;
@@ -436,9 +494,11 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     }
     held     = new (storage) World;
     World* w = held;
-    CRD_FUZZ_REQUIRE(w->receive.init(Span<u8>(w->receive_bytes, kCapacity), Span<u64>(w->receive_bits, kWords)));
-    CRD_FUZZ_REQUIRE(w->send.init(Span<u8>(w->send_bytes, kCapacity), Span<u64>(w->acked_bits, kWords),
-                                  Span<u64>(w->lost_bits, kWords)));
+    constexpr usize first_words = quic_stream_bitmap_words(kFirst);
+    CRD_FUZZ_REQUIRE(
+        w->receive.init(Span<u8>(w->receive_bytes[0], kFirst), Span<u64>(w->receive_bits[0], first_words)));
+    CRD_FUZZ_REQUIRE(w->send.init(Span<u8>(w->send_bytes[0], kFirst), Span<u64>(w->acked_bits[0], first_words),
+                                  Span<u64>(w->lost_bits[0], first_words)));
     Input in{data, size};
     w->window_max = 64U + in.byte() * 4U;
     w->window.reset(32U + in.byte(), w->window_max);
@@ -471,6 +531,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         case 6U:
             settle(*w, in, false);
             break;
+        case 8U:
+            grow(*w, in);
+            break;
         default:
             window_op(*w, in);
             break;
@@ -498,4 +561,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                          0x01U, 0x40U, 0x07U, 0x03U, 0x02U, 0x07U, 0x04U, 0x01U, 0x07U, 0x03U, 0x03U, 0x07U,
                          0x02U, 0x00U, 0x07U, 0x01U, 0x01U, 0x07U, 0x03U, 0x04U, 0x07U, 0x00U, 0xFFU};
     sink.add("window", window, sizeof(window));
+    // Both buffers grown while data is held with gaps, owed, lost and acknowledged across the storage's end, then
+    // grown again, past a FIN known ahead of the window.
+    const u8 growth[] = {0x10U, 0x40U, 0x02U, 0x40U, 0x04U, 0x30U, 0xFFU, 0x06U, 0x00U, 0x05U, 0x01U, 0x00U,
+                         0x10U, 0x30U, 0x00U, 0x00U, 0x20U, 0x01U, 0x20U, 0x08U, 0x09U, 0x02U, 0x60U, 0x04U,
+                         0xFFU, 0xFFU, 0x00U, 0x30U, 0x40U, 0x10U, 0xF0U, 0x00U, 0x08U, 0x3FU, 0x00U, 0x00U,
+                         0x60U, 0x05U, 0x00U, 0x01U, 0xFFU, 0x06U, 0x01U, 0x05U, 0x02U};
+    sink.add("grow", growth, sizeof(growth));
 }

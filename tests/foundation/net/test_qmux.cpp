@@ -1061,7 +1061,7 @@ TEST_CASE("QMux: resumption on the stream path uses its own tickets", "[net][qmu
     }
 }
 
-TEST_CASE("QMux: nothing allocates after init", "[net][qmux]")
+TEST_CASE("QMux: nothing allocates after init but the streams' buffers", "[net][qmux]")
 {
     Pair pair;
     const usize calls = pair.allocator.calls();
@@ -1073,7 +1073,10 @@ TEST_CASE("QMux: nothing allocates after init", "[net][qmux]")
     pump(pair.client, pair.server, kNow);
     pair.client.close(0U, {}, kNow);
     pump(pair.client, pair.server, kNow);
-    CHECK(pair.allocator.calls() == calls);
+    // Each end's stream slot took its two buffers and grew them toward 8192 bytes; nothing else allocated.
+    CHECK(pair.allocator.calls() ==
+          calls + pair.client.streams().buffer_allocations() + pair.server.streams().buffer_allocations());
+    CHECK(pair.client.streams().buffer_allocations() != 0U);
 }
 
 // What waits on one direction of a byte path of seeded chunks and stalls: TCP's only hostility is timing.
@@ -2039,7 +2042,7 @@ TEST_CASE("QMux 0-RTT: configurations are held to where early data is accepted",
     CHECK_FALSE(plain.init(early.allocator, config));
 }
 
-TEST_CASE("QMux 0-RTT: nothing allocates after init", "[net][qmux][qmux-early]")
+TEST_CASE("QMux 0-RTT: nothing allocates after init but the streams' buffers", "[net][qmux][qmux-early]")
 {
     Early early;
     early.first_connection();
@@ -2056,5 +2059,8 @@ TEST_CASE("QMux 0-RTT: nothing allocates after init", "[net][qmux][qmux-early]")
     REQUIRE(write_pattern(client.streams(), id, written, 2000U, 3U));
     pump(client, server, kNow);
     CHECK(client.handshake().early_data() == TlsEarlyData::Accepted);
-    CHECK(early.allocator.calls() - calls <= 2U); // the ticket cache's copy of the new ticket, and nothing else
+    // The ticket cache's copy of the new ticket, the streams' buffers, and nothing else.
+    CHECK(early.allocator.calls() - calls - client.streams().buffer_allocations() -
+              server.streams().buffer_allocations() <=
+          2U);
 }

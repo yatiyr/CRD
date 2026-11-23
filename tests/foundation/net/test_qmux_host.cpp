@@ -917,7 +917,7 @@ TEST_CASE("QmuxHost: a connection that cannot be built is reset", "[net][qmux-ho
     CHECK(hosts.server_poller.resets == 1U);
 }
 
-TEST_CASE("QmuxHost: an established connection's turns allocate nothing", "[net][qmux-host]")
+TEST_CASE("QmuxHost: an established connection's turns allocate nothing but its streams' buffers", "[net][qmux-host]")
 {
     Hosts hosts;
     hosts.start();
@@ -925,14 +925,25 @@ TEST_CASE("QmuxHost: an established connection's turns allocate nothing", "[net]
     hosts.server_events.transfer = 256U * 1024U;
     const QuicHandle handle = hosts.connect();
     hosts.establish(handle);
-    const usize calls = hosts.allocator.calls();
+    REQUIRE(hosts.server_events.accepted_count == 1U);
+    // The streams' buffers, which grow as the transfer needs, are all the turns may allocate.
+    const auto others = [&]
+    {
+        const QmuxConnection* const client = hosts.client->connection(handle);
+        const QmuxConnection* const server = hosts.server->connection(hosts.server_events.accepted[0]);
+        REQUIRE(client != nullptr);
+        REQUIRE(server != nullptr);
+        return hosts.allocator.calls() - client->streams().buffer_allocations() -
+               server->streams().buffer_allocations();
+    };
+    const usize calls = others();
     for (usize turn = 0U; turn < 20000U && !(hosts.client_events.done(handle.slot) && hosts.server_events.done(0U));
          ++turn)
     {
         hosts.turns(1U);
     }
     CHECK(hosts.client_events.done(handle.slot));
-    CHECK(hosts.allocator.calls() == calls);
+    CHECK(others() == calls);
 }
 
 // ---- The host's TCP ----

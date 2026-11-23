@@ -27,7 +27,8 @@ namespace
             return ChannelError::Invalid;
         case QuicStreamError::Unknown:
         case QuicStreamError::Ended:
-        case QuicStreamError::NoPath: // a channel pins no stream to a path
+        case QuicStreamError::NoPath:   // a channel pins no stream to a path
+        case QuicStreamError::NoMemory: // the allocator refused the stream its buffers: no event will free them
             break;
     }
     return ChannelError::Closed;

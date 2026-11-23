@@ -78,9 +78,27 @@ public:
                     write_pattern(set, stream, state.echoed[index], state.read[index], stream + 1U, ended));
             }
         }
+        state.buffers = set.buffer_allocations();
     }
 
-    void on_closed(QuicHandle, const QuicConnection&) noexcept override { ++closed; }
+    void on_closed(QuicHandle handle, const QuicConnection& connection) noexcept override
+    {
+        ++closed;
+        retired_buffers += connection.streams().buffer_allocations();
+        m_state[handle.slot].buffers = 0U;
+    }
+
+    // The stream buffers the connections served have taken (QuicStreamSet::buffer_allocations): all serving
+    // allocates.
+    [[nodiscard]] usize buffer_allocations() const
+    {
+        usize total = retired_buffers;
+        for (const State& state : m_state)
+        {
+            total += state.buffers;
+        }
+        return total;
+    }
 
     usize accepted = 0U;
     usize services = 0U;
@@ -89,12 +107,14 @@ public:
     u64 bytes_read = 0U;
     bool read_handshaking = false;
     QuicHandle last;
+    usize retired_buffers = 0U; // those of the connections closed
 
 private:
     struct State
     {
         u64 read[kStreams] = {};
         u64 echoed[kStreams] = {};
+        usize buffers = 0U; // its connection's stream buffers when last served
     };
     State m_state[kMaxSlots];
 };

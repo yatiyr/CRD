@@ -247,7 +247,12 @@ TEST_CASE("channels: a reliable ordered channel keeps its order on one stream an
     Rig test(path);
     test.rig.wire->max_frame_room = room;
     const u32 before = test.rig.wire->streams[kH3Client].open_streams();
-    const u32 allocations = test.allocator.total;
+    // Nothing allocates after init but the streams' buffers, as slots first hold streams and grow.
+    const auto others = [&]
+    {
+        return usize{test.allocator.total} - test.rig.wire->buffer_allocations();
+    };
+    const usize allocations = others();
     for (u8 at = 0U; at < 20U; ++at)
     {
         test.send(kH3Client, kLinkControl, kLinkHello, pattern(100U + at, at));
@@ -262,7 +267,7 @@ TEST_CASE("channels: a reliable ordered channel keeps its order on one stream an
         CHECK(got.body == pattern(100U + at, at));
         CHECK_FALSE(got.reassembled);
     }
-    CHECK(test.allocator.total == allocations); // nothing allocates after init
+    CHECK(others() == allocations);
     CHECK(test.link(kH3Server).streams_held() == 1U);
 
     // And the other way, on the server's own stream.

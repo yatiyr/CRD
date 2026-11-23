@@ -403,7 +403,12 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     w.end[1].fill_parameters(parameters[1]);
     w.end[0].set_peer_parameters(parameters[1]);
     w.end[1].set_peer_parameters(parameters[0]);
-    const usize live = w.allocator.live_bytes();
+    // Nothing allocates after init but the slots' buffers (QuicStreamSet's memory contract).
+    const auto others = [&]
+    {
+        return w.allocator.live_bytes() - w.end[0].buffer_bytes() - w.end[1].buffer_bytes();
+    };
+    const usize live = others();
     while (in.more())
     {
         const u8 op = in.byte();
@@ -483,8 +488,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
                 break;
         }
         check(w);
+        CRD_FUZZ_REQUIRE(others() == live);
     }
-    CRD_FUZZ_REQUIRE(w.allocator.live_bytes() == live);
     return 0;
 }
 

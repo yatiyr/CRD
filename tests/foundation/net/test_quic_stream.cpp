@@ -412,6 +412,137 @@ TEST_CASE("quic send buffer: the FIN is sent, lost, resent alone and acknowledge
     CHECK(only.offset == 0U);
 }
 
+TEST_CASE("quic receive buffer: grown storage keeps what arrived and what was read, at every wrap position",
+          "[net][quic][stream]")
+{
+    const Pattern data;
+    for (u64 base = 0U; base < 128U; ++base)
+    {
+        for (const usize size : {usize{128}, usize{192}, usize{256}})
+        {
+            Receiver<128U> receiver;
+            QuicReceiveBuffer& buffer = receiver.buffer;
+            REQUIRE(receiver.put(0U, data.at(0U, static_cast<usize>(base))) == QuicReceiveResult::Accepted);
+            REQUIRE(drain(receiver) == base);
+            // Gaps at the read offset and inside the window, which ends full and wraps the storage.
+            REQUIRE(receiver.put(base + 5U, data.at(static_cast<usize>(base) + 5U, 35U)) ==
+                    QuicReceiveResult::Accepted);
+            REQUIRE(receiver.put(base + 50U, data.at(static_cast<usize>(base) + 50U, 78U)) ==
+                    QuicReceiveResult::Accepted);
+
+            u8 bytes[256] = {};
+            u64 bits[4] = {};
+            CHECK_FALSE(buffer.grow(Span<u8>(bytes, 64U), Span<u64>(bits, 1U)));  // smaller
+            CHECK_FALSE(buffer.grow(Span<u8>(bytes, size), Span<u64>(bits, 1U))); // bitmap not sized for it
+            CHECK(buffer.capacity() == 128U);
+            REQUIRE(buffer.grow(Span<u8>(bytes, size), Span<u64>(bits, quic_stream_bitmap_words(size))));
+            CHECK(buffer.capacity() == size);
+            CHECK(buffer.read_offset() == base);
+            CHECK(buffer.contiguous_end() == base);
+            CHECK(buffer.received_end() == base + 128U);
+            // What arrived moved with its bits: other bytes there are still refused, the gaps still open.
+            u8 changed = static_cast<u8>(pattern(base + 127U) ^ 1U);
+            CHECK(receiver.put(base + 127U, ConstSpan<u8>(&changed, 1U)) == QuicReceiveResult::Changed);
+            changed = static_cast<u8>(pattern(base + 5U) ^ 0x80U);
+            CHECK(receiver.put(base + 5U, ConstSpan<u8>(&changed, 1U)) == QuicReceiveResult::Changed);
+            const QuicReceiveResult beyond = receiver.put(base + 128U, data.at(static_cast<usize>(base) + 128U, 1U));
+            CHECK(beyond == ((size > 128U) ? QuicReceiveResult::Accepted : QuicReceiveResult::BeyondWindow));
+            REQUIRE(receiver.put(base + 40U, data.at(static_cast<usize>(base) + 40U, 10U)) ==
+                    QuicReceiveResult::Accepted);
+            CHECK(buffer.contiguous_end() == base);
+            REQUIRE(receiver.put(base, data.at(static_cast<usize>(base), 5U)) == QuicReceiveResult::Accepted);
+            CHECK(buffer.contiguous_end() == base + ((size > 128U) ? 129U : 128U));
+            CHECK(drain(receiver) == ((size > 128U) ? 129U : 128U));
+        }
+    }
+
+    QuicReceiveBuffer unusable;
+    u8 bytes[128] = {};
+    u64 bits[2] = {};
+    CHECK_FALSE(unusable.grow(Span<u8>(bytes, 128U), Span<u64>(bits, 2U)));
+}
+
+TEST_CASE("quic receive buffer: a FIN or final size alone needs no room", "[net][quic][stream]")
+{
+    const Pattern data;
+    Receiver<128U> receiver;
+    QuicReceiveBuffer& buffer = receiver.buffer;
+    CHECK(receiver.put(1000U, {}, true) == QuicReceiveResult::Accepted); // a RESET_STREAM's final size
+    CHECK(buffer.final_size() == 1000U);
+    CHECK(receiver.put(500U, {}) == QuicReceiveResult::Accepted);
+    CHECK(receiver.put(872U, data.at(872U, 128U)) == QuicReceiveResult::BeyondWindow); // data still does
+    CHECK(receiver.put(0U, data.at(0U, 128U)) == QuicReceiveResult::Accepted);
+    u8 bytes[1024] = {};
+    u64 bits[16] = {};
+    REQUIRE(buffer.grow(Span<u8>(bytes, 1024U), Span<u64>(bits, 16U)));
+    CHECK(receiver.put(128U, data.at(128U, 872U)) == QuicReceiveResult::Accepted);
+    CHECK(drain(receiver) == 1000U);
+    CHECK(buffer.complete());
+}
+
+TEST_CASE("quic send buffer: grown storage keeps what is owed, acknowledged and lost, at every wrap position",
+          "[net][quic][stream]")
+{
+    const Pattern data;
+    for (u64 base = 0U; base < 128U; ++base)
+    {
+        Sender<128U> sender;    // grown into 256 bytes
+        Sender<256U> reference; // the same history, never grown
+        QuicSendBuffer& buffer = sender.buffer;
+        const auto both = [&](auto&& step)
+        {
+            step(buffer);
+            step(reference.buffer);
+        };
+        both([&](QuicSendBuffer& b) { REQUIRE(b.write(data.at(0U, static_cast<usize>(base))) == base); });
+        both([&](QuicSendBuffer& b) { b.on_sent(QuicSendChunk{0U, static_cast<usize>(base), false}); });
+        both([&](QuicSendBuffer& b) { b.on_acked(0U, static_cast<usize>(base), false); });
+        both([&](QuicSendBuffer& b) { REQUIRE(b.write(data.at(static_cast<usize>(base), 128U)) == 128U); });
+        both([&](QuicSendBuffer& b) { b.finish(); });
+        both([&](QuicSendBuffer& b) { b.on_sent(QuicSendChunk{base, 100U, false}); });
+        both([&](QuicSendBuffer& b) { b.on_acked(base + 10U, 20U, false); });
+        both([&](QuicSendBuffer& b) { b.on_lost(base, 60U, false); }); // the acknowledged 20 stay acknowledged
+        both([&](QuicSendBuffer& b) { b.on_acked(base + 70U, 5U, false); });
+        CHECK(buffer.room() == 0U);
+
+        u8 bytes[256] = {};
+        u64 acked[4] = {};
+        u64 lost[4] = {};
+        CHECK_FALSE(buffer.grow(Span<u8>(bytes, 256U), Span<u64>(acked, 4U), Span<u64>(lost, 3U)));
+        CHECK_FALSE(buffer.grow(Span<u8>(bytes, 64U), Span<u64>(acked, 1U), Span<u64>(lost, 1U)));
+        REQUIRE(buffer.grow(Span<u8>(bytes, 256U), Span<u64>(acked, 4U), Span<u64>(lost, 4U)));
+        CHECK(buffer.capacity() == 256U);
+        CHECK(buffer.room() == reference.buffer.room());
+        CHECK(buffer.acked_end() == reference.buffer.acked_end());
+        CHECK(buffer.sent_end() == reference.buffer.sent_end());
+        CHECK(buffer.written_end() == reference.buffer.written_end());
+        CHECK(buffer.lost_bytes() == reference.buffer.lost_bytes());
+
+        // Both send the same lost data, then the same fresh data and FIN, with the same bytes, chunk for chunk.
+        for (usize guard = 0U; guard < 16U; ++guard)
+        {
+            const QuicSendChunk grown = buffer.next(1000U, kQuicMaxVarint);
+            const QuicSendChunk kept = reference.buffer.next(1000U, kQuicMaxVarint);
+            REQUIRE(grown.offset == kept.offset);
+            REQUIRE(grown.length == kept.length);
+            REQUIRE(grown.fin == kept.fin);
+            if (grown.empty())
+            {
+                break;
+            }
+            const ConstSpan<u8> view = buffer.bytes_of(grown);
+            for (usize i = 0U; i < view.size(); ++i)
+            {
+                REQUIRE(view[i] == pattern(grown.offset + i));
+            }
+            both([&](QuicSendBuffer& b) { b.on_sent(grown); });
+        }
+        both([&](QuicSendBuffer& b) { b.on_acked(base, 128U, true); });
+        CHECK(buffer.all_acked());
+        CHECK(buffer.room() == 256U);
+    }
+}
+
 TEST_CASE("quic send credit: the limit only rises and a blocked frame is owed once per limit", "[net][quic][stream]")
 {
     QuicSendCredit credit;

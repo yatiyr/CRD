@@ -57,18 +57,25 @@ public:
             return nullptr;
         }
         ++m_calls;
+        ++m_live;
         return std::malloc(size == 0U ? 1U : size);
     }
 
-    void deallocate(void* pointer) noexcept override { std::free(pointer); }
+    void deallocate(void* pointer) noexcept override
+    {
+        m_live -= (pointer != nullptr) ? 1U : 0U;
+        std::free(pointer);
+    }
 
     [[nodiscard]] bool owns(const void*) const noexcept override { return true; }
 
     [[nodiscard]] usize calls() const noexcept { return m_calls; }
+    [[nodiscard]] usize live() const noexcept { return m_live; } // blocks given and not yet returned
     void refuse_after(usize calls) noexcept { m_refuse_after = calls; }
 
 private:
     usize m_calls = 0U;
+    usize m_live = 0U;
     usize m_refuse_after = ~usize{0};
 };
 

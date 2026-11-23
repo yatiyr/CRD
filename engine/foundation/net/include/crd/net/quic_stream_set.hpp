@@ -36,7 +36,13 @@
 //              (RFC 9001 section 4.6.2). A server marks the bytes that came in 0-RTT packets: they are replayable.
 //   events     a per-slot mask of what happened (opened, readable, writable, reset, stop asked, all sent) in a queue
 //              of slots: at most one entry per slot, so it never fills.
-//   memory     everything comes from the injected allocator at init(); nothing allocates after it.
+//   memory     the slots come from the injected allocator at init(). A slot's buffers come from it when the slot
+//              first holds a stream, kQuicStreamFirstBytes each (or the limit when smaller), and double as its data
+//              needs them up to receive_bytes and send_bytes: a receive buffer before it stores data the windows
+//              allow, a send buffer before write() or send_room() would find no room. A slot keeps its buffers for
+//              the streams it holds later, so a steady load allocates nothing. Room the windows granted that the
+//              allocator refuses closes the connection (INTERNAL_ERROR); a send buffer that cannot grow takes less.
+//              With whole_buffers, init() takes every slot's buffers at their limits and nothing allocates after it.
 //   threads    a stream set belongs to its connection's thread.
 
 #include <crd/containers/span.hpp>
@@ -55,6 +61,7 @@ namespace crd::net
 {
 inline constexpr u32 kQuicMaxStreamSlots = 4096U;      // per stream type
 inline constexpr u32 kQuicMaxStreamBuffer = 1U << 24U; // a stream buffer's bytes at most
+inline constexpr u32 kQuicStreamFirstBytes = 4096U;    // a stream buffer's first size, doubled as its data needs
 inline constexpr u8 kQuicStreamUrgencies = 8U;         // RFC 9218's urgencies, 0 the most urgent
 inline constexpr u8 kQuicDefaultUrgency = 3U;          // RFC 9218 section 4.1
 inline constexpr u32 kQuicNoStreamSlot = ~u32{0};
@@ -66,10 +73,14 @@ struct QuicStreamLimits
     u32 peer_uni = 0U;   // unidirectional ones: initial_max_streams_uni
     u32 local_bidi = 0U; // streams of each kind this side may have open at once (within the peer's grant)
     u32 local_uni = 0U;
-    // Per stream: the receive buffer, which is its window's maximum, and the send buffer; multiples of
-    // kQuicStreamChunk, at most kQuicMaxStreamBuffer, needed when a stream of a type that uses them is allowed.
+    // Per stream: the receive buffer's limit, which is its window's maximum, and the send buffer's; multiples of
+    // kQuicStreamChunk, at most kQuicMaxStreamBuffer, needed when a stream of a type that uses them is allowed. The
+    // buffers grow to them as the stream's data needs.
     u32 receive_bytes = 0U;
     u32 send_bytes = 0U;
+    // Every slot's buffers taken at their limits by init(): nothing allocates after it, for fixed memory at the
+    // price of every slot's full buffers at connect.
+    bool whole_buffers = false;
     u32 stream_window = 0U;         // the window first granted on each stream: 1 to receive_bytes
     u64 connection_window = 0U;     // initial_max_data
     u64 connection_max_window = 0U; // the connection window's auto-tuned maximum: at least connection_window
@@ -88,6 +99,7 @@ enum class QuicStreamError : u8
     Ended,   // the part already ended: finished or reset
     Invalid, // an argument out of range: an urgency, more bytes to consume than peek() gave
     NoPath,  // pin(): the path ID is open in no path slot (not yet opened, or stopped)
+    NoMemory, // open(): the allocator refused a free slot its first buffers
 };
 
 // Which frames a next_frame() or has_frame() call is for: the path slot writing, and whether that slot carries data.
@@ -263,6 +275,11 @@ public:
     // set's; kQuicNoStreamSlot for a stream not open.
     [[nodiscard]] u32 slot_of(u64 id) const noexcept;
     [[nodiscard]] u32 slots() const noexcept { return m_total_slots; }
+    // The buffers this set has taken from its allocator: each slot's first ones and each growth (with whole_buffers,
+    // all of them in init()). Nothing else it does after init() allocates.
+    [[nodiscard]] u32 buffer_allocations() const noexcept { return m_buffer_allocations; }
+    // The bytes the slots' buffers hold now, their bitmaps included: what the streams cost beyond the set's tables.
+    [[nodiscard]] usize buffer_bytes() const noexcept;
     [[nodiscard]] const QuicStreamLimits& limits() const noexcept { return m_limits; }
 
     // The parts' states of a stream (None for a stream not open).
@@ -330,10 +347,6 @@ private:
         u32 first = 0U;       // its slots: [first, first + capacity) of m_slots
         u32* order = nullptr; // open slots, ascending by stream ID
         u32* free = nullptr;  // a stack of free slots
-        u8* bytes = nullptr;  // its slots' buffers, `stride` bytes and `words` bitmap words each
-        u64* bits = nullptr;
-        usize stride = 0U;
-        usize words = 0U;
         u32 capacity = 0U;
         u32 open = 0U;
         u32 free_count = 0U;
@@ -352,6 +365,15 @@ private:
         bool receives = false;
     };
 
+    // A slot's buffers, kept for the streams it holds later: each block is its bitmap words, then its bytes.
+    struct Store
+    {
+        u64* in = nullptr;
+        u64* out = nullptr;
+        u32 in_bytes = 0U;
+        u32 out_bytes = 0U;
+    };
+
     enum class Lookup : u8
     {
         Found,
@@ -367,6 +389,18 @@ private:
     [[nodiscard]] const Slot* find(u64 id) const noexcept;
     [[nodiscard]] Lookup reach(u64 id, Slot*& slot, QuicTransportError& error) noexcept;
     [[nodiscard]] Slot* open_slot(Type& type) noexcept;
+    // Returns everything to the allocator and forgets it.
+    void release() noexcept;
+    // Gives a slot of `type` the buffers it lacks: at their limits when `whole`, else kQuicStreamFirstBytes (the limit
+    // when smaller). False when the allocator refused one.
+    [[nodiscard]] bool give_buffers(Store& store, const Type& type, bool whole) noexcept;
+    // A block of `bytes` bytes and `maps` bitmaps for them; nullptr when the allocator refuses.
+    [[nodiscard]] u64* take_block(usize bytes, usize maps) noexcept;
+    // The receive buffer holds data up to `end` (at most its limit), grown when needed: false when the allocator
+    // refused.
+    [[nodiscard]] bool hold_in(Slot& slot, u64 end) noexcept;
+    // The send buffer grows, as far as its limit and the allocator let it, so `more` bytes fit after those owed.
+    void hold_out(Slot& slot, usize more) noexcept;
     // Every slot free, every type's counters and both credits as init() leaves them.
     void reset_state() noexcept;
     void try_free(Slot& slot) noexcept;
@@ -414,10 +448,8 @@ private:
     memory::IAllocator* m_allocator = nullptr;
     Slot* m_slots = nullptr;
     u32* m_indices = nullptr; // each type's order and free stack
-    u8* m_bytes = nullptr;
-    u64* m_bits = nullptr;
-    usize m_byte_count = 0U;
-    usize m_word_count = 0U;
+    Store* m_stores = nullptr; // each slot's buffers
+    u32 m_buffer_allocations = 0U;
     QuicStreamLimits m_limits;
     crypto::QuicSide m_side = crypto::QuicSide::Client;
     Type m_types[4];

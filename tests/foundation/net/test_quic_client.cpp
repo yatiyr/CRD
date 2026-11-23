@@ -702,8 +702,19 @@ TEST_CASE("QUIC client: many connections over one socket reach two servers in bo
                 REQUIRE(handles[index].valid());
             }
             CHECK(network->client.live() == kConnections);
-            // Serving allocates nothing: every buffer was taken by connect().
-            const usize allocations = network->client_allocator.calls();
+            // Serving allocates nothing but stream buffers, as each connection's slots first hold streams and grow:
+            // every other buffer was taken by connect().
+            const auto others = [&]
+            {
+                usize calls = network->client_allocator.calls();
+                for (const QuicHandle handle : handles)
+                {
+                    const QuicConnection* const connection = network->client.connection(handle);
+                    calls -= (connection != nullptr) ? connection->streams().buffer_allocations() : 0U;
+                }
+                return calls;
+            };
+            const usize allocations = others();
             REQUIRE(network->run_until(
                 [&]
                 {
@@ -718,7 +729,7 @@ TEST_CASE("QUIC client: many connections over one socket reach two servers in bo
                     return !network->client.token_for(server_at(0U), version).empty() &&
                            !network->client.token_for(server_at(1U), version).empty();
                 }));
-            CHECK(network->client_allocator.calls() == allocations);
+            CHECK(others() == allocations);
             CHECK(network->server(0U).server.live() == kConnections / 2U);
             CHECK(network->server(1U).server.live() == kConnections / 2U);
             for (const QuicHandle handle : handles)

@@ -140,6 +140,45 @@ void zero(cont::Span<u64> bits) noexcept
 {
     std::memset(bits.data(), 0, bits.size_bytes());
 }
+
+// Calls `move(from_pos, to_pos, count)` for each run of [base, base + count) that wraps neither ring.
+template <typename Move> void each_run(const Ring& from, const Ring& to, u64 base, u64 count, Move move) noexcept
+{
+    for (u64 at = base; at < base + count;)
+    {
+        const usize source = from.at(at);
+        const usize target = to.at(at);
+        const u64   run    = min_u64(min_u64(base + count - at, from.capacity - source), to.capacity - target);
+        move(source, target, static_cast<usize>(run));
+        at += run;
+    }
+}
+
+// Puts the bits of every offset in [base, base + from.capacity) of `old` at its place in `fresh` (zero before). Both
+// rings' capacities are multiples of the word, so an offset keeps its bit within a word.
+void move_bits(const Ring& from, const Ring& to, cont::ConstSpan<u64> old, cont::Span<u64> fresh, u64 base) noexcept
+{
+    each_run(from, to, base, from.capacity,
+             [&](usize source, usize target, usize count)
+             {
+                 while (count > 0U)
+                 {
+                     const usize bit  = source % kWordBits;
+                     const usize take = (count < kWordBits - bit) ? count : kWordBits - bit;
+                     fresh[target / kWordBits] |= old[source / kWordBits] & bit_mask(bit, take);
+                     source += take;
+                     target += take;
+                     count -= take;
+                 }
+             });
+}
+
+void move_bytes(const Ring& from, const Ring& to, cont::ConstSpan<u8> old, cont::Span<u8> fresh, u64 base,
+                u64 count) noexcept
+{
+    each_run(from, to, base, count, [&](usize source, usize target, usize run)
+             { std::memcpy(fresh.data() + target, old.data() + source, run); });
+}
 } // namespace
 
 // ---- QuicReceiveBuffer ----
@@ -173,7 +212,7 @@ QuicReceiveResult QuicReceiveBuffer::insert(u64 offset, cont::ConstSpan<u8> data
     {
         return QuicReceiveResult::FinalSize;
     }
-    if (end > m_read && end - m_read > capacity())
+    if (length != 0U && end > m_read && end - m_read > capacity())
     {
         return QuicReceiveResult::BeyondWindow;
     }
@@ -211,6 +250,23 @@ QuicReceiveResult QuicReceiveBuffer::insert(u64 offset, cont::ConstSpan<u8> data
         m_final       = end;
     }
     return QuicReceiveResult::Accepted;
+}
+
+bool QuicReceiveBuffer::grow(cont::Span<u8> bytes, cont::Span<u64> bits) noexcept
+{
+    if (m_bytes.empty() || !storage_valid(bytes.size(), bits.size()) || bytes.size() < capacity())
+    {
+        return false;
+    }
+    const Ring from{capacity()};
+    const Ring to{bytes.size()};
+    zero(bits);
+    move_bits(from, to, m_bits, bits, m_read);
+    // Data lies below read_offset() + capacity(); a final size alone may lie past it.
+    move_bytes(from, to, m_bytes, bytes, m_read, min_u64(m_received - min_u64(m_received, m_read), capacity()));
+    m_bytes = bytes;
+    m_bits  = bits;
+    return true;
 }
 
 cont::ConstSpan<u8> QuicReceiveBuffer::readable() const noexcept
@@ -291,6 +347,26 @@ usize QuicSendBuffer::write(cont::ConstSpan<u8> data) noexcept
     copy_in(Ring{capacity()}, m_bytes, m_written, data.data(), taken);
     m_written += taken;
     return taken;
+}
+
+bool QuicSendBuffer::grow(cont::Span<u8> bytes, cont::Span<u64> acked, cont::Span<u64> lost) noexcept
+{
+    if (m_bytes.empty() || !storage_valid(bytes.size(), acked.size()) || lost.size() != acked.size() ||
+        bytes.size() < capacity())
+    {
+        return false;
+    }
+    const Ring from{capacity()};
+    const Ring to{bytes.size()};
+    zero(acked);
+    zero(lost);
+    move_bits(from, to, m_acked_bits, acked, m_acked);
+    move_bits(from, to, m_lost_bits, lost, m_acked);
+    move_bytes(from, to, m_bytes, bytes, m_acked, m_written - m_acked);
+    m_bytes      = bytes;
+    m_acked_bits = acked;
+    m_lost_bits  = lost;
+    return true;
 }
 
 void QuicSendBuffer::finish() noexcept

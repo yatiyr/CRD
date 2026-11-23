@@ -106,13 +106,14 @@ public:
         CRD_FUZZ_REQUIRE(m_peer.init(identity().client) == TlsError::None);
         flush();
         CRD_FUZZ_REQUIRE(m_server.state() == QmuxState::Established && m_peer.state() == TlsState::Established);
-        const usize live = m_allocator.live_bytes();
+        // Nothing allocates after start but the streams' buffers (QuicStreamSet's memory contract).
+        const usize live = m_allocator.live_bytes() - m_server.streams().buffer_bytes();
         while (input.more())
         {
             step(input);
             CRD_FUZZ_REQUIRE(static_cast<u8>(m_server.state()) >= m_state_floor);
             m_state_floor = static_cast<u8>(m_server.state());
-            CRD_FUZZ_REQUIRE(m_allocator.live_bytes() == live);
+            CRD_FUZZ_REQUIRE(m_allocator.live_bytes() - m_server.streams().buffer_bytes() == live);
         }
         flush();
         if (m_server.state() == QmuxState::Closing || m_server.state() == QmuxState::Closed)

@@ -17,7 +17,8 @@
 //               doubled up to its maximum when updates come within two round trips (the window keeps pace with the
 //               path's bandwidth-delay product), the latest value resent when a frame carrying it is lost (13.3).
 //   storage     nothing allocates: each buffer's capacity is a multiple of kQuicStreamChunk, and its bitmaps are
-//               quic_stream_bitmap_words(capacity) words each, all the caller's.
+//               quic_stream_bitmap_words(capacity) words each, all the caller's. grow() moves what a buffer holds into
+//               larger storage the caller gives: a stream's buffers start small and grow as its data needs them.
 //   threads     each object belongs to its connection's thread.
 
 #include <crd/containers/span.hpp>
@@ -54,8 +55,14 @@ public:
     bool init(cont::Span<u8> bytes, cont::Span<u64> bits) noexcept;
 
     // The data of a STREAM or CRYPTO frame at `offset`, `fin` for a STREAM frame with FIN; a RESET_STREAM's final
-    // size is insert(final_size, {}, true). Data below read_offset() is not compared. A refusal changes nothing.
+    // size is insert(final_size, {}, true). Data below read_offset() is not compared, and only data needs room: a
+    // FIN or final size alone may lie past the window. A refusal changes nothing.
     [[nodiscard]] QuicReceiveResult insert(u64 offset, cont::ConstSpan<u8> data, bool fin) noexcept;
+
+    // Moves everything held into `bytes` and `bits`, sized as init() takes them and at least as large, and uses them
+    // from now on (the old storage is the caller's again, and spans readable() gave are stale); false, changing
+    // nothing, for other sizes or an unusable buffer.
+    bool grow(cont::Span<u8> bytes, cont::Span<u64> bits) noexcept;
 
     // The bytes from read_offset() that have arrived without a gap, up to the end of the storage: after consume(),
     // a second call gives the rest when they wrap.
@@ -110,6 +117,10 @@ public:
 
     // Appends as much of `data` as there is room for and returns the bytes taken: none after finish().
     [[nodiscard]] usize write(cont::ConstSpan<u8> data) noexcept;
+    // Moves everything held into `bytes`, `acked` and `lost`, sized as init() takes them and at least as large, and
+    // uses them from now on (the old storage is the caller's again); false, changing nothing, for other sizes or an
+    // unusable buffer.
+    bool grow(cont::Span<u8> bytes, cont::Span<u64> acked, cont::Span<u64> lost) noexcept;
     // The stream ends after what was written (a FIN to send).
     void finish() noexcept;
     // Only the first `reliable` bytes (at most written_end()) are still owed, and no FIN: what lies above is never sent

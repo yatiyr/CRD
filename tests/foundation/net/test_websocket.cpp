@@ -1158,7 +1158,13 @@ TEST_CASE("WebSocket: two connections open, name their subprotocol and carry str
     pump(pair.client, pair.server, kNow, chunk); // the server's side of the stream exists from here
     u64 client_read = 0U;
     u64 server_read = 0U;
-    const usize allocations = pair.allocator.calls();
+    // Nothing allocates after init but the streams' buffers, as they grow.
+    const auto others = [&]
+    {
+        return pair.allocator.calls() - pair.client.streams().buffer_allocations() -
+               pair.server.streams().buffer_allocations();
+    };
+    const usize allocations = others();
     bool client_done = false;
     bool server_done = false;
     for (usize turn = 0U; turn < 100000U && !(client_done && server_done); ++turn)
@@ -1171,7 +1177,7 @@ TEST_CASE("WebSocket: two connections open, name their subprotocol and carry str
     }
     CHECK(client_read == total);
     CHECK(server_read == total);
-    CHECK(pair.allocator.calls() == allocations); // nothing allocates after init
+    CHECK(others() == allocations);
 }
 
 TEST_CASE("WebSocket: datagrams at the peer's limit cross both ways", "[net][websocket]")

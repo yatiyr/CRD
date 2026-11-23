@@ -261,7 +261,8 @@ TEST_CASE("Raw UDP path: both ends are up at once and carry streams and datagram
     exchange_datagrams(*net, client, server);
     exchange_datagrams(*net, server, client);
     CHECK(net->amplification_kept);
-    CHECK(allocator.calls() == before);
+    // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
+    CHECK(allocator.calls() == before + client.streams().buffer_allocations() + server.streams().buffer_allocations());
 }
 
 TEST_CASE("Raw UDP path: paths that lose, duplicate and reorder carry everything, within the amplification limit",

@@ -551,7 +551,10 @@ it in order; `take` consumes the handshake's copy, so the sent bytes stay here u
   path's bandwidth-delay product without a configured guess; a stream's maximum is its buffer's capacity. An update
   owed only because the latest was lost goes again unchanged and tunes nothing (a loss says nothing of the reader).
 - **Storage.** Capacities are multiples of 64 bytes; the bitmaps are 1/8 of the receive capacity and 1/4 of the send
-  capacity, the caller's. Nothing allocates or reads a clock.
+  capacity, the caller's. Nothing allocates or reads a clock. `grow()` (2026-11-24) moves what a buffer holds into
+  larger storage the caller gives: every offset keeps its residue modulo 64 in both rings, so bytes move in at most
+  three runs and bitmaps a word at a time, and a FIN or final size alone needs no room (a RESET_STREAM's final size
+  past the buffer allocates nothing).
 
 Evidence: `test_quic_stream.cpp` (13 cases: storage, order, gaps, duplicates, changed bytes, the window and its wrap,
 the final size's three refusals, any order of 50 overlapping streams, room, flow-controlled fresh data, lost data
@@ -625,7 +628,18 @@ is the one owner of a connection's streams (RFC 9000 sections 2 to 4, 13.3 and 1
 credits and their frames. It knows nothing of packets: the connection asks it for frames and settles their records.
 
 - **Slots.** Each of the four stream types has a fixed pool of slots, each holding S38's buffers and credits, taken
-  from the injected allocator once. Open streams of a type are kept in ID order (IDs open in rising order, so an
+  from the injected allocator once. A slot's buffers (2026-11-24) come when it first holds a stream, 4 KiB each
+  (`kQuicStreamFirstBytes`, or the limit when smaller), and double as its data needs up to `receive_bytes` and
+  `send_bytes`: the receive buffer before it stores data the windows allowed, the send buffer before `write()` or
+  `send_room()` would find no room. The slot keeps them for its later streams, so a steady load allocates nothing.
+  What the receive buffers need at once is bounded by connection flow control (the sum of each stream's highest offset
+  less what was read is at most the connection window), so they hold under twice it plus 4 KiB per open stream; kept
+  buffers make every slot's limits the worst case, which was the cost of every connection before. Room
+  the windows granted that the allocator refuses closes the connection with INTERNAL_ERROR (as msquic and ngtcp2
+  do); a send buffer that cannot grow takes less, and a slot refused its first buffers opens no stream (NoMemory, or
+  INTERNAL_ERROR for the peer's). `whole_buffers` takes every slot's buffers at their limits in `init()` for fixed
+  memory. `buffer_allocations()` and `buffer_bytes()` say what the buffers took. Measured: on the QUIC board a
+  connection made its 1 MiB windows' buffers whole at connect, so its handshakes per CPU-second followed the window. Open streams of a type are kept in ID order (IDs open in rising order, so an
   append keeps it) and found by binary search; a free stack hands out slots. A peer's frame for a higher stream of
   its own opens every lower one (section 3.2); a frame for a stream already freed is ignored; a stream this side
   never opened is STREAM_STATE_ERROR, as is a frame for the part a unidirectional stream lacks, and one past this
@@ -680,7 +694,8 @@ end and consumption bounds; urgencies with round robin; each kind of stream on i
 readable events only when room or data is at the front; DATA_BLOCKED only when the connection holds data back; a
 blocked peer's grant at once; 24 streams echoed both ways over 12 seeded exchanges that lose 15%, duplicate 8% and
 reorder), `test_quic_connection.cpp` (streams echoed both ways over 16 seeded paths in both versions that lose 10%,
-duplicate 5% and reorder, nothing allocated after construction; a 12-record ledger under the same load), 35 source
+duplicate 5% and reorder, nothing allocated after construction but the streams' buffers; a 12-record ledger under
+the same load), 35 source
 mutations of which 34 are caught (the survivor is the recovery of a sized frame that fails to fit, unreachable by
 `next_frame`'s contract; two conditions the first pass showed redundant were removed),
 `crd-fuzz-net-quic-stream-set` (two ends under any application calls, deliveries, losses and injected frames:
@@ -995,7 +1010,8 @@ whole and marked no further than it came, and a rejection's reset.
   dropped there instead of opening a second connection), the connection built in the Initial's version, `accept()`
   with what the ingress proved and the datagram. A full pool or a connection that refuses to start is answered with
   CONNECTION_REFUSED in the INVALID_TOKEN close's form (`Ingress::refuse`, one writer for both, within the answer
-  rate). Building the connection allocates its buffers from the injected allocator; nothing else does.
+  rate). Building the connection allocates its buffers from the injected allocator; nothing else does but its
+streams' buffers as they first hold streams and grow (S40).
 - **0-RTT ahead of its Initial** (section 5.2.2). A ring in arrival order of `early_datagrams` slots of `receive_bytes`,
   at most `early_per_client` per Destination Connection ID and address, each kept `early_lifetime_ns` (100 ms), the
   oldest evicted when full; the admitted connection reads its own after its Initial. After a Retry the ID is the

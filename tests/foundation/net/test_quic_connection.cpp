@@ -103,7 +103,9 @@ TEST_CASE("QUIC connection: the handshake reaches confirmation in both versions 
         CHECK(same(server.peer_cid(), ConstSpan<u8>(kClientCid, sizeof(kClientCid))));
         CHECK(net->client_initials_padded);
         CHECK(net->amplification_kept);
-        CHECK(allocator.calls() == allocations); // nothing allocated after construction
+        // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
+        CHECK(allocator.calls() ==
+              allocations + client.streams().buffer_allocations() + server.streams().buffer_allocations());
         CHECK(client.recovery().rtt().sampled());
         // Quiet once settled (the delayed ACKs sent): the next timer is the idle timeout.
         net->advance(net->now + 500U * kMs);
@@ -2952,7 +2954,9 @@ TEST_CASE("QUIC connection: streams carry data both ways over paths that lose, d
             CHECK(client.streams().connection_sent() == echo.total());
             CHECK(server.streams().connection_sent() == echo.total());
             CHECK(client.streams().peer_limit(true) >= Echo::kStreams); // MAX_STREAMS followed the freed slots
-            CHECK(allocator.calls() == allocations);
+            // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
+            CHECK(allocator.calls() ==
+                  allocations + client.streams().buffer_allocations() + server.streams().buffer_allocations());
         }
     }
 }
@@ -3224,7 +3228,9 @@ TEST_CASE("QUIC connection: datagrams cross both ways beside streams over hostil
             CHECK(client.state() == QuicConnectionState::Established);
             CHECK(server.state() == QuicConnectionState::Established);
             CHECK(client.streams().connection_sent() == echo.total());
-            CHECK(allocator.calls() == allocations);
+            // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
+            CHECK(allocator.calls() ==
+                  allocations + client.streams().buffer_allocations() + server.streams().buffer_allocations());
         }
     }
     CHECK(lost != 0U); // the paths' losses were reported, and reordering before the thresholds rose
@@ -4341,7 +4347,9 @@ TEST_CASE("QUIC connection: a resumed client's stream and datagram go in 0-RTT p
         CHECK(server.protection().can_open(QuicPacketType::ZeroRtt));
         net->advance(net->now + 3000U * kMs);
         CHECK_FALSE(server.protection().can_open(QuicPacketType::ZeroRtt));
-        CHECK(allocator.calls() == allocations);
+        // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
+        CHECK(allocator.calls() ==
+              allocations + client.streams().buffer_allocations() + server.streams().buffer_allocations());
     }
 }
 
@@ -4386,7 +4394,9 @@ TEST_CASE("QUIC connection: 0-RTT over paths that lose, duplicate and reorder de
             CHECK(early <= kEarlyBytes);
             CHECK(net->client_initials_padded);
             CHECK(net->amplification_kept);
-            CHECK(allocator.calls() == allocations);
+            // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
+            CHECK(allocator.calls() ==
+                  allocations + client.streams().buffer_allocations() + server.streams().buffer_allocations());
             held += client.counters().packets_held + server.counters().packets_held;
             early_total += early;
         }

@@ -178,7 +178,7 @@ private:
         peer_to_side();
         m_quiet = (input.byte() & 1U) == 0U;
         flush();
-        const usize live = m_allocator.live_bytes();
+        const usize live = m_allocator.live_bytes() - m_side.streams().buffer_bytes();
         while (input.more())
         {
             server_step(input);
@@ -243,7 +243,7 @@ private:
         CRD_FUZZ_REQUIRE(m_side.init(m_allocator, config));
         CRD_FUZZ_REQUIRE(m_side.start(m_now));
         CRD_FUZZ_REQUIRE(m_peer.init(context, nullptr, {}, early_context) == TlsError::None);
-        const usize live = m_allocator.live_bytes();
+        const usize live = m_allocator.live_bytes() - m_side.streams().buffer_bytes();
         while (input.more())
         {
             client_step(input);
@@ -433,7 +433,8 @@ private:
     {
         CRD_FUZZ_REQUIRE(static_cast<u8>(m_side.state()) >= m_state_floor);
         m_state_floor = static_cast<u8>(m_side.state());
-        CRD_FUZZ_REQUIRE(m_allocator.live_bytes() == live);
+        // Nothing allocates after start but the streams' buffers (QuicStreamSet's memory contract).
+        CRD_FUZZ_REQUIRE(m_allocator.live_bytes() - m_side.streams().buffer_bytes() == live);
     }
 
     void flush()

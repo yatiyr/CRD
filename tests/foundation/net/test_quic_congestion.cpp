@@ -132,6 +132,12 @@ struct Pair
     CountingAllocator allocator;
     QuicConnection client;
     QuicConnection server;
+
+    // The allocations of everything but the streams' buffers, which grow as a transfer needs them.
+    [[nodiscard]] usize others() const
+    {
+        return allocator.calls() - client.streams().buffer_allocations() - server.streams().buffer_allocations();
+    }
     std::unique_ptr<Net> net;
 
     // `client_times` and `server_times`: the receive timestamps each end asks for (0: none).
@@ -333,9 +339,9 @@ TEST_CASE("QUIC congestion: bytes in flight stay inside a growing window, and a 
     CHECK(pair.client.congestion().window() == half.window);
     CHECK(pair.client.congestion().state().slow_start_threshold == half.slow_start_threshold);
 
-    const usize allocations = pair.allocator.calls();
+    const usize allocations = pair.others();
     REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
-    CHECK(pair.allocator.calls() == allocations); // nothing allocated on the way
+    CHECK(pair.others() == allocations); // nothing allocated on the way but the streams' buffers, as they grew
     CHECK_FALSE(watch.over);
     CHECK(watch.peak > 12000U);
     CHECK(pair.client.congestion().state().reductions == 0U);
@@ -574,9 +580,9 @@ TEST_CASE("QUIC BBR: a transfer over a bottleneck finds its rate and round trip,
     CHECK(pair.client.congestion().window() == half.window);
     CHECK(pair.client.delivery().delivered() > bulk.total / 2U);
 
-    const usize allocations = pair.allocator.calls();
+    const usize allocations = pair.others();
     REQUIRE(pair.net->run_until([&] { return bulk.step(); }));
-    CHECK(pair.allocator.calls() == allocations); // nothing allocated on the way
+    CHECK(pair.others() == allocations); // nothing allocated on the way but the streams' buffers, as they grew
     CHECK_FALSE(watch.over);
     const u64 elapsed = pair.net->now - start;
     CHECK(bulk.total * 1000U * kMs / elapsed >= kRate * 85U / 100U); // the whole transfer, Startup included

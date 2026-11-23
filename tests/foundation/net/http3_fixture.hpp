@@ -258,6 +258,11 @@ public:
     memory::IAllocator& allocator;
     bool ok = false;
     QuicStreamSet streams[2];
+    // What both stream sets' buffers took from the allocator: all a rig allocates after init.
+    [[nodiscard]] usize buffer_allocations() const
+    {
+        return usize{streams[kH3Client].buffer_allocations()} + streams[kH3Server].buffer_allocations();
+    }
     QuicDatagrams datagrams[2];
     Http3Connection h3[2];
     bool active[2] = {};

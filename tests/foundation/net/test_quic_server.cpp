@@ -375,10 +375,11 @@ TEST_CASE("QUIC server: many clients in both versions are echoed over hostile pa
         {
             CHECK(fleet->client(index).connection->version() == kVersions[index % 2U]);
         }
-        // Serving allocates nothing: the echo runs within what admission took.
-        const usize allocations = fleet->allocator.calls();
+        // Serving allocates nothing but stream buffers, as each connection's slots first hold streams and grow: the
+        // echo runs within what admission took.
+        const usize allocations = fleet->allocator.calls() - fleet->app.buffer_allocations();
         REQUIRE(fleet->run_until([&] { return all_echoed(*fleet) && all_tokened(*fleet); }));
-        CHECK(fleet->allocator.calls() == allocations);
+        CHECK(fleet->allocator.calls() - fleet->app.buffer_allocations() == allocations);
         CHECK(fleet->server.counters().new_tokens == clients);
         CHECK(fleet->server.counters().foreign_path == 0U);
         u64 total = 0U;

@@ -403,7 +403,7 @@ TEST_CASE("webtransport sessions: a session, its streams and datagrams, end to e
 {
     Rig rig;
     rig.make(true, true);
-    const usize allocations = rig.allocator.calls();
+    const usize allocations = rig.allocator.calls() - rig.base->buffer_allocations();
     const u64 id = rig.session();
     const Seen* const request = rig.find(kH3Server, WtEventKind::SessionRequest);
     REQUIRE(request != nullptr);
@@ -439,7 +439,8 @@ TEST_CASE("webtransport sessions: a session, its streams and datagrams, end to e
     REQUIRE(datagram != nullptr);
     CHECK(datagram->bytes == "dg");
     CHECK(datagram->event.session == id);
-    CHECK(rig.allocator.calls() == allocations); // nothing allocates after init
+    // Nothing allocates after init but the streams' buffers, as slots first hold streams and grow.
+    CHECK(rig.allocator.calls() - rig.base->buffer_allocations() == allocations);
 }
 
 TEST_CASE("webtransport sessions: other requests pass through untouched", "[webtransport]")
