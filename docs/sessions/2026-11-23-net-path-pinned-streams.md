@@ -7,7 +7,7 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Design: [S78](../design/network-f
 and Proof bullets, [S40](../design/network-foundation.md#quic-stream-set)'s Sending bullet, S75's Proof bullet.
 
 CI first: nothing to fix. CI 45084440222 (b119357b) is pending; fuzz host-check 45084570688 dispatched on b119357b
-(its fixed matrix has no net-quic-datagram leg).
+(its fixed matrix has no net-quic-datagram leg); host-check dispatched on a05a51b6 for this batch.
 
 ## What landed
 
@@ -26,7 +26,7 @@ CI first: nothing to fix. CI 45084440222 (b119357b) is pending; fuzz host-check 
 
 - `test_quic_connection.cpp`, three `[multipath]` cases: chunks pinned to the slower path ID 1 read in 50 to 51 ms from
   both ends and with it backup, plain ones in 21 ms; path ID 1 dark: the plain stream unaffected, the pinned one waits
-  and completes once it carries; a pinned backlog grows the slower path's window, and the faster path is marked
+  and completes once it carries, or, unpinned while dark, crosses path ID 0 within 21 ms; a pinned backlog grows the slower path's window, and the faster path is marked
   application-limited within 2 ms (37 packets in a second, where an unrouted query took 360 ms and sent 3222); 160 KiB
   over lossy, duplicating, jittering links stays on path ID 1 until either end abandons it, then completes (4 seeds).
 - `test_quic_stream_set.cpp`: refusals, routes, control frames never on a no-data route, lost data resent on its
@@ -34,9 +34,10 @@ CI first: nothing to fix. CI 45084440222 (b119357b) is pending; fuzz host-check 
 - `crd-fuzz-net-quic-stream-set`: slots opened and stopped, pins, routed takes with the routing and exactness oracles,
   every pin checked after a stop; libFuzzer 300 s and 241 s (3.15 M and 2.26 M executions), no artifact; a `pins` seed.
   `crd-fuzz-net-quic-connection` 300 s (37876 executions) clean; the committed corpus replays clean.
-- Twelve source mutations, each rebuilt alone and caught (route ignoring the pin, control frames on a no-data route,
+- Thirteen source mutations, each rebuilt alone and caught (route ignoring the pin, control frames on a no-data route,
   has_frame unrouted, stop keeping pins, own_ready without streams, the yield branch not writing them, abandon or
-  commit not telling the set, has_data and gate_data unrouted, the yield branch's mark, pin of an ended stream).
+  commit not telling the set, has_data and gate_data unrouted, the yield branch's mark, pin of an ended stream,
+  unpin keeping the pin).
 - linux-gcc-debug: 53 CTests pass (`crd-net`, every `crd-check|crd-no-|crd-fuzz-net` guard); linux-gcc-asan and
   linux-gcc-release `[quic-stream-set],[multipath]` pass (116 cases). LLVM 22.1.8 tidy clean on the seven touched
   sources; clang-format applied to added lines only.
