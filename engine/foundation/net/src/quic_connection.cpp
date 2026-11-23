@@ -25,6 +25,7 @@ constexpr u8 kRecordPathCidsBlocked = 10U; // a PATH_CIDS_BLOCKED frame: value i
 constexpr u8 kRecordPathAbandon = 11U;     // a PATH_ABANDON frame: stream_id is its path ID
 constexpr u8 kRecordMaxPathId = 12U;       // a MAX_PATH_ID frame: value is its Maximum Path Identifier
 constexpr u8 kRecordPathStatus = 13U;      // a PATH_STATUS frame: value is its sequence, stream_id its path ID
+constexpr u8 kRecordPathAck = 14U;         // another slot's ACK frame: value is its largest, stream_id its path ID
 constexpr u32 kNoRecord = ~u32{0};
 constexpr u64 kNsPerMs = 1000000U;
 constexpr u64 kCryptoFrameType = 0x06U;
@@ -40,6 +41,9 @@ constexpr usize kKeyedHelloPrefix = 2U; // a keyed connection's parameters follo
 constexpr u64 kSkipMask = 63U;   // one 1-RTT packet number in 64 is skipped (section 21.4)
 constexpr u32 kAckOnlyRun = 16U; // ACK-only packets in a row before one carries a PING
 constexpr u8 kRefreshPackets = 2U;           // the PINGs, each in a packet of its own, that measure an idle path's RTT
+// The PATH_ACKs move to a shorter path only once its smoothed RTT is this fraction (a right shift) below the current
+// carrier's, so estimates crossing under jitter move nothing (RFC 10069 section 5.5: a stable strategy converges).
+constexpr u32 kAckMoveShift = 3U;
 constexpr u64 kNoSequence = kQuicNoSequence; // a path with no peer connection ID to send to
 
 // What a congestion controller sees of a packet counted in flight.
@@ -1135,6 +1139,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
 
     cont::WireReader in(opened.payload);
     bool eliciting = false;
+    bool beyond_ping = false; // an ack-eliciting frame other than PING
     bool probing = true; // only PATH_CHALLENGE, PATH_RESPONSE, NEW_CONNECTION_ID and PADDING (section 9.1)
     while (!in.done())
     {
@@ -1151,6 +1156,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
             return true;
         }
         eliciting = eliciting || quic_frame_ack_eliciting(read.kind);
+        beyond_ping = beyond_ping || (read.kind != QuicFrameKind::Ping && quic_frame_ack_eliciting(read.kind));
         probing = probing && quic_frame_probing(read.kind);
         if (!on_frame(read, space, now_ns))
         {
@@ -1165,6 +1171,8 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
     if (!m_space_gone[quic_space_index(space)])
     {
         static_cast<void>(m_recovery->on_received(space, opened.number, eliciting, ecn, now_ns, m_receive_slot));
+        const bool wanted = space == QuicSpace::Application && beyond_ping && m_receive_slot < kQuicMaxPaths;
+        m_beyond_ping |= wanted ? static_cast<u8>(1U << m_receive_slot) : u8{0};
     }
     if (opened.key_update)
     {
@@ -2015,8 +2023,10 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
     const bool path_owed =
         space == QuicSpace::Application && send_type(space) == QuicPacketType::OneRtt &&
         (paths.response_owed(active) || paths.challenge_due(active, now_ns) || observation_due(active));
-    if (m_recovery->ack_deadline_ns(space, slot) <= now_ns || m_numbers[number_space(space, slot)].probes > 0U ||
-        path_owed || (space == QuicSpace::Application && (stopped_ack_due(now_ns) || refresh_owed(slot))))
+    const u64 ack_ns =
+        (space == QuicSpace::Application) ? carried_ack_ns(slot) : m_recovery->ack_deadline_ns(space, slot);
+    if (ack_ns <= now_ns || m_numbers[number_space(space, slot)].probes > 0U || path_owed ||
+        (space == QuicSpace::Application && refresh_owed(slot)))
     {
         return true;
     }
@@ -2399,6 +2409,16 @@ void QuicConnection::settle_frame(SentFrame& frame, Settle how) noexcept
             m_cids.local_settled(frame.frame.stream_id, frame.frame.value, how == Settle::Acked);
         }
     }
+    else if (frame.kind == kRecordPathAck)
+    {
+        // Another slot's acknowledgement that rode this packet: its ranges up to it are retired, unless its path ID
+        // left the slot meanwhile.
+        const usize of = slot_of(frame.frame.stream_id);
+        if (how == Settle::Acked && of != kQuicNoPath)
+        {
+            m_recovery->on_ack_acknowledged(of, frame.frame.value);
+        }
+    }
     else if (frame.kind == kRecordObserved)
     {
         // Resent only on its own path (draft-ietf-quic-address-discovery-01 section 4.1).
@@ -2434,8 +2454,8 @@ void QuicConnection::release_frames(usize slot) noexcept
         SentFrame& frame = m_frames[at];
         if (frame.kind != 0U && frame.space == application && frame.path == slot)
         {
+            m_counters.pto_resends += (frame.kind != kRecordPathAck) ? 1U : 0U; // an acknowledgement goes afresh
             settle_frame(frame, Settle::Lost);
-            ++m_counters.pto_resends;
         }
     }
     free_settled_frames();
@@ -2458,42 +2478,71 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     // largest size fits the next packet while every packet carries an ACK.
     const auto put_ack = [&]
     {
-        // Each slot acknowledges its own space, path ID 0's in an ACK frame and the others' in PATH_ACK frames
-        // (RFC 10069 section 2.3), so a carried acknowledgement is always settled in the slot that sent it.
+        // Path ID 0's acknowledgement is an ACK frame, the others' PATH_ACK frames (RFC 10069 section 2.3). The
+        // slot's own goes in every packet, settled by the packet's carried_ack, unless it rides another slot.
         const auto ack_form = [this](usize of)
         {
             const u64 path_id = m_protection.path_id(of); // a reclaimed slot 0's later path ID takes PATH_ACK
             return (path_id == 0U) ? kQuicAckFrame : path_id;
         };
-        if (!m_recovery->received(space, slot).ranges().empty())
+        const bool application = space == QuicSpace::Application;
+        if ((!application || ack_carrier(slot) == slot) && !m_recovery->received(space, slot).ranges().empty())
         {
             const QuicAckWrite ack = m_recovery->write_ack(space, frames.subspan(used), now_ns, slot, ack_form(slot));
             used += ack.bytes;
             written.carried_ack = (ack.bytes != 0U) ? ack.largest : kQuicNoPacket;
-        }
-        // An abandoned path's stragglers, path ID 0's too, are acknowledged at once on this one (section 3.4.3).
-        for (usize other = 0U; space == QuicSpace::Application && other < kQuicMaxPaths; ++other)
-        {
-            if (other != slot && stopped(other) && m_recovery->ack_deadline_ns(space, other) != kNeverNs)
+            if (application && ack.bytes != 0U)
             {
-                used += m_recovery->write_ack(space, frames.subspan(used), now_ns, other, ack_form(other)).bytes;
+                m_beyond_ping &= static_cast<u8>(~(1U << slot));
+            }
+        }
+        // Others' while they owe one: an abandoned path's stragglers, path ID 0's too, at once on any path (section
+        // 3.4.3), and those riding this slot in its packets to its active 4-tuple. A record settles each, so an
+        // acknowledged one retires the ranges it reported (RFC 9000 section 13.2.4); a full ledger holds back none.
+        const bool active = m_send_path == tuples(slot).active();
+        for (usize other = 0U; application && other < kQuicMaxPaths; ++other)
+        {
+            const bool carried = stopped(other) || (active && ack_carrier(other) == slot);
+            if (other == slot || !carried || m_recovery->ack_deadline_ns(space, other) == kNeverNs)
+            {
+                continue;
+            }
+            const QuicAckWrite ack = m_recovery->write_ack(space, frames.subspan(used), now_ns, other, ack_form(other));
+            used += ack.bytes;
+            if (ack.bytes != 0U)
+            {
+                const auto bit = static_cast<u8>(1U << other);
+                written.carried_other = written.carried_other || (m_beyond_ping & bit) != 0U;
+                m_beyond_ping &= static_cast<u8>(~bit);
+                QuicStreamRecord reported;
+                reported.value = ack.largest;
+                reported.stream_id = m_protection.path_id(other);
+                static_cast<void>(record(space, packet, kRecordPathAck, reported, written));
             }
         }
     };
     // A 0-RTT packet carries no ACK, CRYPTO, HANDSHAKE_DONE, NEW_TOKEN or PATH_RESPONSE frame (RFC 9000 section
     // 12.4, table 3), and no RETIRE_CONNECTION_ID either: nothing is retired before the server's IDs arrive.
-    const bool ack_later = space == QuicSpace::Application && m_recovery->ack_deadline_ns(space, slot) > now_ns &&
+    const bool ack_later = space == QuicSpace::Application && carried_ack_ns(slot) > now_ns &&
                            datagram_ready(now_ns, datagram_paths(!m_data_open));
     if (!ack_later && !early)
     {
         put_ack();
     }
     // A probe owes an ack-eliciting packet, and so does a run of ACK-only packets: those are never acknowledged
-    // by themselves, so a PING lets the peer's ACK free their storage (RFC 9000 section 13.2.4).
+    // by themselves, so a PING lets the peer's ACK free their storage (RFC 9000 section 13.2.4). A packet carrying
+    // other paths' acknowledgements of more than PINGs is ack-eliciting a round trip after the path's last
+    // ack-eliciting packet when none is in flight (the same section's PING per round trip, one outstanding, so that
+    // its probe timeout is never pushed back): a path whose return goes dark meets that timeout while the peer sends,
+    // and the acknowledgements riding it go elsewhere. Those of PINGs alone never elicit, so two ends whose shortest
+    // paths differ never trade PINGs while idle.
     const auto put_owed_ping = [&]
     {
         const Numbering& numbers = m_numbers[number_space(space, slot)];
-        if (!written.eliciting && (numbers.probes > 0U || numbers.ack_only >= kAckOnlyRun || refresh_owed(slot)))
+        const bool round = written.carried_other && m_recovery->bytes_in_flight(slot) == 0U &&
+                           add_saturating(numbers.eliciting_ns, m_recovery->rtt(slot).smoothed_ns) <= now_ns;
+        if (!written.eliciting &&
+            (numbers.probes > 0U || numbers.ack_only >= kAckOnlyRun || refresh_owed(slot) || round))
         {
             QuicFrame ping;
             ping.kind = QuicFrameKind::Ping;
@@ -3061,6 +3110,7 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
     }
     pull_crypto();
     issue_local_ids();
+    choose_ack_slot();
     // Each open slot once, counted from the last writer; the writer of this call moves only m_send_slot.
     const usize last = m_send_slot;
     for (usize turn = 1U; turn <= kQuicMaxPaths; ++turn)
@@ -3261,7 +3311,8 @@ usize QuicConnection::send_path_probe(cont::Span<u8> out, u64 now_ns) noexcept
     {
         const QuicSpace space = static_cast<QuicSpace>(index);
         const usize owner = (space == application) ? slot : 0U;
-        if (can_acknowledge(space, owner) && m_recovery->ack_deadline_ns(space, owner) != kNeverNs)
+        const u64 ack_ns = (space == application) ? carried_ack_ns(slot) : m_recovery->ack_deadline_ns(space, 0U);
+        if (can_acknowledge(space, owner) && ack_ns != kNeverNs)
         {
             return 0U; // an ACK the probe would not carry goes first; the probe takes the next datagram
         }
@@ -3350,11 +3401,12 @@ u64 QuicConnection::next_timer_ns() const noexcept
     for (usize index = 0U; index < kQuicSpaces; ++index)
     {
         const QuicSpace space = static_cast<QuicSpace>(index);
-        // The Application space's owed ACKs are each open slot's.
+        // The Application space's owed ACKs are each open slot's, due when the slot carrying them can send them.
         const usize slots = (space == QuicSpace::Application) ? kQuicMaxPaths : 1U;
         for (usize slot = 0U; slot < slots; ++slot)
         {
-            if (m_protection.path_open(slot) && can_acknowledge(space, slot))
+            const usize carrier = (space == QuicSpace::Application) ? ack_carrier(slot) : slot;
+            if (m_protection.path_open(slot) && can_acknowledge(space, carrier))
             {
                 next = min_u64(next, m_recovery->ack_deadline_ns(space, slot));
             }
@@ -4343,6 +4395,7 @@ void QuicConnection::commit_path(usize slot, u64 now_ns) noexcept
     static_cast<void>(control.start(config, from, entropy(), &m_coupling));
     // Free in the recovery (free_slot), with storage of its own.
     static_cast<void>(m_recovery->open_path(slot, recovery, cont::Span<QuicSentEntry>(entries, per_space)));
+    m_beyond_ping &= static_cast<u8>(~(1U << slot)); // nothing of the path ID the slot held before
     control.limit(peer_ceiling());
     m_controls[slot] = &control;
     m_datagrams.open_path(slot, m_protection.path_id(slot));
@@ -4551,16 +4604,62 @@ void QuicConnection::close_abandoned(u64 now_ns) noexcept
     }
 }
 
-bool QuicConnection::stopped_ack_due(u64 now_ns) const noexcept
+bool QuicConnection::carries_acks(usize slot) const noexcept
 {
+    return refreshable(slot) && can_acknowledge(QuicSpace::Application, slot);
+}
+
+void QuicConnection::choose_ack_slot() noexcept
+{
+    if (m_config.path_choice != QuicPathChoice::LowestRtt)
+    {
+        return; // m_ack_slot is kept for a return to LowestRtt
+    }
+    usize best = kQuicNoPath;
     for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
     {
-        if (stopped(slot) && m_recovery->ack_deadline_ns(QuicSpace::Application, slot) <= now_ns)
+        if (carries_acks(slot) && (best == kQuicNoPath || ranks_before(slot, best)))
         {
-            return true;
+            best = slot;
         }
     }
-    return false;
+    const usize current = m_ack_slot;
+    if (best == current || best == kQuicNoPath)
+    {
+        return; // a carrier that cannot send now keeps its place: ack_carrier() leaves each path its own meanwhile
+    }
+    if (current != kQuicNoPath && carries_acks(current))
+    {
+        const u64 kept = m_recovery->rtt(current).smoothed_ns;
+        if (m_recovery->rtt(best).smoothed_ns >= kept - (kept >> kAckMoveShift))
+        {
+            return;
+        }
+    }
+    m_counters.ack_path_moves += (current != kQuicNoPath) ? 1U : 0U;
+    m_ack_slot = best;
+}
+
+usize QuicConnection::ack_carrier(usize of) const noexcept
+{
+    const usize carrier = m_ack_slot;
+    const bool rides = m_config.path_choice == QuicPathChoice::LowestRtt && carrier != kQuicNoPath && carrier != of &&
+                       carries_acks(carrier);
+    return rides ? carrier : of;
+}
+
+u64 QuicConnection::carried_ack_ns(usize slot) const noexcept
+{
+    u64 due = kNeverNs;
+    for (usize of = 0U; of < kQuicMaxPaths; ++of)
+    {
+        const bool carried = (ack_carrier(of) == slot) || (of != slot && stopped(of));
+        if (m_recovery->path_open(of) && carried)
+        {
+            due = min_u64(due, m_recovery->ack_deadline_ns(QuicSpace::Application, of));
+        }
+    }
+    return due;
 }
 
 usize QuicConnection::lead_slot() const noexcept

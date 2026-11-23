@@ -89,9 +89,10 @@
 //              and IDs are issued in those up to the peer's (section 3.2.1). A server opens a path ID's number space
 //              in a path slot of its own at the first packet sent to one of that path ID's IDs that authenticates,
 //              validates the 4-tuple it came from and sends no data there before (section 3.1); every packet of a
-//              path ID is read, acknowledged in PATH_ACK frames and answered in its slot. The peer's frames are read
-//              under this side's limit: a path ID above it is PROTOCOL_VIOLATION (section 4), as is a PATH_ACK of a
-//              path ID whose number space never opened; one whose state is gone is ignored. The peer's MAX_PATH_ID
+//              path ID is read, acknowledged in PATH_ACK frames (placed by the path choice) and answered in its slot.
+//              The peer's frames are read under this side's limit: a path ID above it is PROTOCOL_VIOLATION
+//              (section 4), as is a PATH_ACK of a path ID whose number space never opened; one whose state is gone is
+//              ignored. The peer's MAX_PATH_ID
 //              raises its limit; this side's (local_max_path_id()) rises by one as each path ID closes, the closed
 //              one's ID space opening the next and a MAX_PATH_ID owed (sections 3.2.1 and 4.6), so that 1 +
 //              initial_max_path_id path IDs stay open for good. PATH_STATUS keeps the newest status
@@ -181,15 +182,20 @@ struct QuicKeyedStart
 
 // Which open path carries the next data (S78's scheduling; RFC 10069 section 5.5 leaves it to the implementation).
 // Under either choice a peer's backup path carries none while one of its other paths is usable (section 3.3), and a
-// path with a probe timeout pending none while another has fewer (section 5.7). Acknowledgements, path frames and
-// probes go on their own path whatever the choice, a redundant datagram (QuicDatagramSend) once on every path that
-// carries data, each copy inside its own path's window and pacer, and a pinned one on its own path alone, inside that
-// path's window and pacer even while it yields its data or is a backup path.
+// path with a probe timeout pending none while another has fewer (section 5.7). Path frames and probes go on their
+// own path whatever the choice, a redundant datagram (QuicDatagramSend) once on every path that carries data, each
+// copy inside its own path's window and pacer, and a pinned one on its own path alone, inside that path's window and
+// pacer even while it yields its data or is a backup path. The choice places acknowledgements too (sections 5.4 and
+// 5.5): see each value.
 enum class QuicPathChoice : u8
 {
-    LowestRtt, // the path with the lowest smoothed RTT whose window and pacer let a datagram go now, the next one
-               // while they hold it: latency first, every path's capacity used
-    Turns,     // each path as its own window and pacer allow, in turn
+    // The path with the lowest smoothed RTT whose window and pacer let a datagram go now, the next one while they
+    // hold it: latency first, every path's capacity used. Every path's PATH_ACKs ride the shortest usable path,
+    // kept until another is an eighth shorter: the peer's estimate of each path is then its delay toward this side
+    // plus one return, so the peer's own choice ranks paths by their delay its way, and a path left without data
+    // sends nothing.
+    LowestRtt,
+    Turns, // each path as its own window and pacer allow, in turn, and acknowledged on itself: each RTT its own
 };
 
 // How long a path left without data keeps its RTT unmeasured while another carries data (S78's scheduling;
@@ -428,6 +434,7 @@ struct QuicConnectionCounters
     u64 paths_blocked = 0U;      // PATHS_BLOCKED and PATH_CIDS_BLOCKED frames taken (RFC 10069 section 4.7)
     u64 pto_resends = 0U;        // frames a probe timeout of a dark path sent again on a live one (section 5.7)
     u64 path_refreshes = 0U;     // idle paths' RTTs measured again while another path carried data (path_refresh_ns)
+    u64 ack_path_moves = 0U;     // moves of the PATH_ACKs to another shortest path (QuicPathChoice::LowestRtt)
     u64 foreign_datagrams = 0U;  // datagrams from a path this side takes nothing from (a client's unknown server)
     u64 handover_losses = 0U;    // losses of packets a scheduled handover may have taken, kept from congestion control
     u64 handover_locks = 0U;     // learned schedules put in force where none was
@@ -755,6 +762,7 @@ private:
         bool path_challenge = false; // its data is m_challenge
         bool fill = false; // the packet fills its datagram for a bandwidth probe
         bool data = false; // a STREAM or DATAGRAM frame: what the path choice places
+        bool carried_other = false; // another slot's acknowledgement of more than PINGs (m_beyond_ping)
     };
 
     // A packet held until its keys come; its bytes are a max_datagram_bytes slot of m_held_bytes.
@@ -870,13 +878,23 @@ private:
     [[nodiscard]] u64 retention_end_ns(u64 path_id, u64 now_ns) const noexcept;
     // The abandoned path IDs whose retention ended: their slots, ID spaces and peer statuses close.
     void close_abandoned(u64 now_ns) noexcept;
-    // Whether slot `slot` is open but stopped (its path ID abandoned), and whether one owes its PATH_ACK now, which
-    // another slot's packet carries (section 3.4.3).
+    // Whether slot `slot` is open but stopped (its path ID abandoned): its PATH_ACK rides another slot's packets
+    // (section 3.4.3).
     [[nodiscard]] bool stopped(usize slot) const noexcept
     {
         return m_recovery->path_open(slot) && !m_recovery->path_sending(slot);
     }
-    [[nodiscard]] bool stopped_ack_due(u64 now_ns) const noexcept;
+    // Acknowledgements under QuicPathChoice::LowestRtt (sections 5.4 and 5.5). Whether `slot` can carry other slots'
+    // PATH_ACKs: refreshable() (a data path still sending, not backup_held(), no probe timeout pending) and able to
+    // acknowledge now. choose_ack_slot() keeps m_ack_slot, the shortest such slot, until another ranks an eighth
+    // shorter, so the peer's estimates stay stable. ack_carrier() is the slot whose packets carry slot `of`'s own
+    // acknowledgement: m_ack_slot while it can carry them, else `of`. carried_ack_ns() is the earliest deadline among
+    // the acknowledgements `slot` carries: its own unless they ride another slot, those riding it, and every stopped
+    // slot's.
+    [[nodiscard]] bool carries_acks(usize slot) const noexcept;
+    void choose_ack_slot() noexcept;
+    [[nodiscard]] usize ack_carrier(usize of) const noexcept;
+    [[nodiscard]] u64 carried_ack_ns(usize slot) const noexcept;
     // Forgets a path that is not the active one, retiring its peer ID unless another path sends to it; the path of
     // the packet being read is forgotten once that packet chose its path (decided()).
     void drop_path(usize slot, usize index, u64 now_ns) noexcept;
@@ -1220,6 +1238,8 @@ private:
     usize m_drop_after = kQuicNoPath;
     usize m_send_slot = 0U;    // the path slot of the datagram being written, then of the last one
     usize m_send_path = 0U;    // the 4-tuple of the datagram being written, then of the last one, in send_slot()'s
+    usize m_ack_slot = kQuicNoPath; // the slot carrying the PATH_ACKs (choose_ack_slot())
+    u8 m_beyond_ping = 0U; // a bit per slot whose owed acknowledgement covers an ack-eliciting frame other than PING
     // The path datagrams move to once validated (section 9.6.2): a client's to the preferred address, a server's
     // where its client's highest-numbered non-probing packet reached the preferred socket. kQuicNoPath for none.
     usize m_deferred_move = kQuicNoPath;
