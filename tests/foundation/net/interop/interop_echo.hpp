@@ -266,6 +266,7 @@ struct EchoTurn
     crd::crypto::TlsEarlyData early_data{};
     u64 now_ns = 0U;
     u64 pin_path = kPinWait; // the path ID EchoOptions::pin_last's stream goes on, or kPinWait while it has none
+    bool close_held = false; // the closing end keeps the connection open past everything done
 };
 
 // A connection's application, either end's.
@@ -336,7 +337,7 @@ public:
         {
             m_complete_ns = turn.now_ns;
         }
-        if (turn.now_ns - m_complete_ns < m_options.hold_ns)
+        if (turn.close_held || turn.now_ns - m_complete_ns < m_options.hold_ns)
         {
             return false;
         }
@@ -352,6 +353,11 @@ public:
     // and its FIN were acknowledged.
     [[nodiscard]] bool pinned() const noexcept { return m_pin == crd::net::QuicStreamError::None; }
     [[nodiscard]] bool pin_kept() const noexcept { return pinned() && m_pin_kept; }
+    // Whether that stream's every byte and its FIN are acknowledged, once pin() was asked for it.
+    [[nodiscard]] bool pin_finished() const noexcept
+    {
+        return m_pin_asked && m_streams[m_options.streams - 1U].finished;
+    }
 
     // For another application over the connection, which reports through this one.
     void note_established(bool established) noexcept { m_established = m_established || established; }

@@ -30,12 +30,16 @@ provide, receive or both), an end that asked and whose peer offered ends holding
 (127.0.0.1 and its socket's port), and every other end holds none: picoquic is the one pinned peer that implements
 the draft (its address_discovery_mode).
 
-Multipath (RFC 10069, design S78): with both ends offering it, the connection negotiates it; a Cerid client opens path
-ID 1 from a second socket once it has read a quarter of its echo, holding its last stream back until then, and pins
-that stream to path ID 1 before its first byte (QuicStreamSet::pin). It stays pinned until every byte is acknowledged,
-so picoquic's server, which holds that path and answers on it while the echo completes, reads at least the whole
-stream on it. With one end offering it, neither negotiates it and the Cerid client's
-add_path() answers no-multipath.
+Multipath (RFC 10069, design S78): with both ends offering it, the connection negotiates it; the client, either one,
+opens path ID 1 from a second socket once it has read a quarter of its echo, holding its last stream back until then,
+and sends that stream there whole: a Cerid client pins it before its first byte (QuicStreamSet::pin) until every byte
+is acknowledged, so picoquic's server reads at least the whole stream there; a picoquic client gives it its affinity
+to the path once picoquic reports it available, and Cerid's server acknowledges at least the whole stream there. With
+the client offering it alone, neither negotiates it and its add-path answers no-multipath. In the status cases the
+client marks path ID 1 backup and the server reads PATH_STATUS_BACKUP for it; in the abandon cases the client abandons
+path ID 1 once its pinned stream is acknowledged (a Cerid client) or every echo has ended (a picoquic client) and
+closes once its own end is done with it: each end reads the other's PATH_ABANDON, a Cerid client's space for it
+closes and a picoquic client deletes it.
 """
 import argparse
 import subprocess
@@ -67,7 +71,7 @@ WANTS = ('receive', 'both')
 
 class Case:
     def __init__(self, cerid, picoquic, cerid_is_client, version=1, streams=4, size=256 << 10, path=None,
-                 peer_cc='prague', discovery=None, multipath=None):
+                 peer_cc='prague', discovery=None, multipath=None, steps=()):
         self.cerid = cerid
         self.picoquic = picoquic
         self.cerid_is_client = cerid_is_client
@@ -78,6 +82,7 @@ class Case:
         self.peer_cc = peer_cc  # picoquic's controller
         self.discovery = discovery  # (Cerid's, picoquic's) address discovery offers; None: neither sends one
         self.multipath = multipath  # (Cerid offers, picoquic offers); None: neither
+        self.steps = steps  # the client's steps on path ID 1: 'backup', 'abandon'
 
     def command(self, program, role, port):
         common = ['--role', role, '--port', str(port), '--seed', SEED, '--version', str(self.version), '--streams',
@@ -86,8 +91,9 @@ class Case:
             common += ['--address-discovery', self.discovery[0 if program == self.cerid else 1]]
         if self.multipath is not None and self.multipath[0 if program == self.cerid else 1]:
             common += ['--multipath', '2' if program == self.cerid else '1']
-            if program == self.cerid and role == 'client':
+            if role == 'client':
                 common += ['--add-path-at', str(self.streams * self.size // 4), '--pin-added', '1']
+                common += [argument for step in self.steps for argument in (f'--{step}-added', '1')]
         if program == self.cerid:
             return [program] + common + ['--group', 'x25519', '--cipher', 'aes128', '--closer', 'client',
                                          '--max-streams', '16', '--congestion', 'prague']
@@ -101,6 +107,7 @@ class Case:
         discovery = '' if self.discovery is None else f' address discovery {self.discovery[0]}/{self.discovery[1]}'
         offers = {(True, True): 'both', (True, False): 'cerid', (False, True): 'picoquic'}
         multipath = '' if self.multipath is None else f' multipath {offers[self.multipath]}'
+        multipath += ''.join(f' {step}' for step in self.steps)
         return ('cerid client' if self.cerid_is_client else 'picoquic client') + \
             f' v{self.version} {self.streams}x{self.size} picoquic {self.peer_cc} {path}{discovery}{multipath}'
 
@@ -193,27 +200,55 @@ class Case:
         expect(picoquic.get('observed') == expected, f'picoquic holds another report than {expected}: {detail}')
 
     def check_multipath(self, cerid, picoquic, detail):
-        """Negotiated exactly when both ends offer it; then a Cerid client's path ID 1 opens on both ends, picoquic's
-        server holds it, and the stream pinned there reaches picoquic on it, every byte."""
+        """Negotiated exactly when both ends offer it; then the client's path ID 1 opens on both ends and its pinned
+        stream crosses it whole, the client's status reaches the server, and an abandoned path ID ends at both."""
         negotiated = self.multipath == (True, True)
         expect(cerid.get('multipath') == str(int(negotiated)) and picoquic.get('multipath') == str(int(negotiated)),
                f'multipath negotiated otherwise: {detail}')
-        if self.multipath is None or not self.cerid_is_client or not self.multipath[0]:
-            expect(cerid.get('add_path') == 'none', f'Cerid asked for a path: {detail}')
+        client = cerid if self.cerid_is_client else picoquic
+        if self.multipath is None or not self.multipath[0 if self.cerid_is_client else 1]:
+            expect(client.get('add_path') == 'none', f'the client asked for a path: {detail}')
             return
         if not negotiated:
-            expect(cerid.get('add_path') == 'no-multipath' and cerid.get('paths_opened') == '0',
-                   f'Cerid opened a path without multipath: {detail}')
+            expect(client.get('add_path') == 'no-multipath' and cerid.get('paths_opened') == '0',
+                   f'a path opened without multipath: {detail}')
             return
-        expect(cerid.get('add_path') == 'started' and cerid.get('added_path_id') == '1',
-               f'Cerid did not open path ID 1: {detail}')
+        expect(client.get('add_path') == 'started' and client.get('added_path_id') == '1',
+               f'the client did not open path ID 1: {detail}')
         expect(int(cerid.get('paths_opened', '0')) >= 1, f'path ID 1 opened no number space at Cerid: {detail}')
         expect(int(picoquic.get('paths', '0')) >= 2 and int(picoquic.get('largest_path_id', '0')) >= 1,
                f'picoquic never held path ID 1: {detail}')
-        expect(cerid.get('pinned') == '1' and cerid.get('pin_kept') == '1',
-               f'the last stream was not pinned to path ID 1 until acknowledged: {detail}')
-        expect(int(picoquic.get('other_path_received', '0')) >= self.size,
-               f'picoquic read less than the pinned stream on path ID 1: {detail}')
+        if self.cerid_is_client:
+            expect(cerid.get('pinned') == '1' and cerid.get('pin_kept') == '1',
+                   f'the last stream was not pinned to path ID 1 until acknowledged: {detail}')
+            expect(int(picoquic.get('other_path_received', '0')) >= self.size,
+                   f'picoquic read less than the pinned stream on path ID 1: {detail}')
+        else:
+            expect(picoquic.get('pinned') == '1', f'picoquic did not pin the last stream to path ID 1: {detail}')
+            expect(int(picoquic.get('other_path_delivered', '0')) >= self.size,
+                   f'Cerid acknowledged less than the pinned stream on path ID 1: {detail}')
+        # Path ID 1 is bit 1 of the masks.
+        server_backup = int(picoquic.get('backup_seen', '0')) if self.cerid_is_client else int(cerid['peer_backup'])
+        if 'backup' in self.steps:
+            expect(not self.cerid_is_client or cerid.get('backup') == 'set', f'Cerid set no status: {detail}')
+            expect(server_backup & 2, f'the server never read path ID 1 as backup: {detail}')
+        else:
+            expect(cerid.get('backup') == 'none' and server_backup == 0, f'a status nobody set: {detail}')
+        if 'abandon' in self.steps:
+            expect(client.get('abandon') == 'abandoned', f'the client did not abandon path ID 1: {detail}')
+            expect(int(cerid.get('paths_abandoned', '0')) >= 1, f'Cerid never abandoned path ID 1: {detail}')
+            # Each end's PATH_ABANDON reaches the other, the first one or its answer (section 3.4).
+            expect(int(cerid['abandon_answered']) & 2 and int(picoquic['abandon_received']) & 2,
+                   f'a PATH_ABANDON for path ID 1 never arrived: {detail}')
+            # The client holds its close until its own end is done: a Cerid client's space for path ID 1 closes
+            # (three PTOs) and a picoquic client deletes the path.
+            if self.cerid_is_client:
+                expect(int(cerid.get('paths_closed', '0')) >= 1, f'path ID 1 never closed at Cerid: {detail}')
+            else:
+                expect(int(picoquic.get('paths_deleted', '0')) >= 1, f'picoquic never deleted path ID 1: {detail}')
+        else:
+            expect(client.get('abandon') == 'none' and cerid.get('paths_abandoned') == '0',
+                   f'a path abandoned unasked: {detail}')
 
     def check_relay(self, relay, cerid, picoquic, detail):
         """The AQM's marks against both ends' counts, and Prague's state, queue and rate through it. A Cerid client
@@ -291,6 +326,8 @@ def cases(cerid, picoquic):
         for multipath in ((True, True), (True, False), (False, True)):
             for version in (1, 2):
                 yield case(version=version, multipath=multipath)
+        for steps in (('backup',), ('abandon',)):
+            yield case(multipath=(True, True), steps=steps)
         for version in (1, 2):
             yield case(version=version, size=BULK, path=L4S_STEP)
         yield case(size=BULK, path=L4S_RAMP)

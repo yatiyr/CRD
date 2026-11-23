@@ -7,7 +7,7 @@
 //                      [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N]
 //                      [--receive-bytes N] [--congestion newreno|cubic|bbr|prague] [--migrate-at N]
 //                      [--preferred 1] [--follow-preferred 0] [--disable-migration 1] [--multipath N]
-//                      [--add-path-at N [--pin-added 1]]
+//                      [--add-path-at N [--pin-added 1 [--abandon-added 1]] [--backup-added 1]]
 //                      [--http3 1 ...] [--webtransport legacy|h3 ...] [--transport h3 --alpn NAME ...]
 //
 //   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
@@ -44,6 +44,11 @@
 //   pin-added    that client writes its last stream only once add_path() has answered, pinned (QuicStreamSet::pin)
 //                before its first byte to the path ID it opened, so all of it goes there, or to path ID 0 when it
 //                answered otherwise
+//   backup-added that client marks the path ID add_path() opened backup (set_path_status) once that path is
+//                validated: RFC 10069 section 4.3 lets it do so at once, but picoquic drops a status for a path ID it
+//                holds no path for yet (docs/third-party-defects.md TP-15)
+//   abandon-added  that client abandons that path ID (NO_ERROR) once every byte of its pinned stream is acknowledged,
+//                and closes only once the path ID's space has closed or kAbandonHoldNs has passed
 //   address-discovery  off (the default), provide, receive or both: draft-ietf-quic-address-discovery-01's parameter
 //   http3        HTTP/3 over Http3Connection instead of the echo: http_exchange.h has its options, ALPN `h3` instead
 //   webtransport WebTransport sessions instead, `legacy` or `h3`: interop_webtransport.hpp has its options
@@ -70,8 +75,11 @@
 // (`observed`, `none` before any report), whether multipath was negotiated (`multipath`), the path IDs that opened a
 // number space of their own (`paths_opened`), a client's last add_path() answer (`add_path`: none, started, ...),
 // the path ID it opened (`added_path_id`), and with pin-added whether pin() took the last stream (`pinned`) and it
-// stayed on that path until every byte of it was acknowledged (`pin_kept`). The application is `cerid-interop`, a
-// private ALPN.
+// stayed on that path until every byte of it was acknowledged (`pin_kept`), set_path_status()'s answer with
+// backup-added and abandon_path()'s with abandon-added (`backup`, `abandon`: none when not asked), the path IDs the
+// peer marked backup at any turn and those whose PATH_ABANDON from the peer arrived, a bit each (`peer_backup`,
+// `abandon_answered`), and the path IDs abandoned by either end and those whose space closed (`paths_abandoned`,
+// `paths_closed`). The application is `cerid-interop`, a private ALPN.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -149,6 +157,8 @@ struct Options : QmuxOptions
     bool disable_migration = false;
     u64 multipath = 0U; // initial_max_path_id, 0 for none
     u64 add_path_at = 0U;
+    bool backup_added = false;
+    bool abandon_added = false;
     QuicAddressDiscovery discovery = QuicAddressDiscovery::Off;
     httpx_options_t http3;
     WtOptions wt;
@@ -263,6 +273,63 @@ const char* g_add_path = nullptr;
 u64 g_added_path_id = 0U;
 // Where a pin-added client's last stream goes: the path add_path() opened, or path ID 0 once it answered otherwise.
 u64 g_pin_path = kPinWait;
+// The paths validated when add_path() started: one more means the added path is.
+u64 g_validations_at_add = 0U;
+// A client's set_path_status() and abandon_path() answers for that path ID (null: not asked), when it abandoned it,
+// and the path IDs the peer marked backup or whose PATH_ABANDON from the peer arrived at any turn, a bit each.
+const char* g_backup = nullptr;
+const char* g_abandon = nullptr;
+u64 g_abandon_ns = 0U;
+u64 g_peer_backup = 0U;
+u64 g_abandon_answered = 0U;
+// How long an abandon-added client keeps its connection open past the echo for the path ID's space to close (three
+// probe periods after the abandon, RFC 10069 section 3.4).
+constexpr u64 kAbandonHoldNs = 2'000'000'000U;
+
+// QuicPathStatusChange and QuicAbandon as the report names them, in the enumerations' order.
+constexpr const char* kStatusChanges[] = {"set", "not-established", "no-multipath", "not-open"};
+static_assert(sizeof(kStatusChanges) / sizeof(kStatusChanges[0]) ==
+              static_cast<unsigned>(QuicPathStatusChange::NotOpen) + 1U);
+constexpr const char* kAbandons[] = {"abandoned", "not-established", "no-multipath",
+                                     "last-path", "not-open",        "bad-error"};
+static_assert(sizeof(kAbandons) / sizeof(kAbandons[0]) == static_cast<unsigned>(QuicAbandon::BadError) + 1U);
+
+// A client's steps on the path ID add_path() opened: marked backup once validated, abandoned once its pinned stream
+// is acknowledged. Every end records the path IDs its peer marks backup or abandons. True while the close waits for the
+// abandoned path ID's space to close.
+bool steer_added(QuicConnection& connection, const Echo& echo, u64 now_ns) noexcept
+{
+    for (u64 path_id = 0U; path_id < 64U; ++path_id)
+    {
+        const QuicPathAbandon* const abandon = connection.abandon_of(path_id);
+        g_peer_backup |= (connection.peer_path_status(path_id) == QuicPathStatus::Backup) ? u64{1} << path_id : 0U;
+        g_abandon_answered |= (abandon != nullptr && abandon->answered) ? u64{1} << path_id : 0U;
+    }
+    if (g_added_path_id == 0U)
+    {
+        return false;
+    }
+    if (g_options->backup_added && g_backup == nullptr && connection.counters().path_validations > g_validations_at_add)
+    {
+        g_backup = kStatusChanges[static_cast<unsigned>(connection.set_path_status(g_added_path_id, true))];
+    }
+    if (!g_options->abandon_added)
+    {
+        return false;
+    }
+    if (g_abandon == nullptr)
+    {
+        if (!echo.pin_finished())
+        {
+            return true;
+        }
+        const QuicAbandon abandon = connection.abandon_path(g_added_path_id, 0U, now_ns);
+        g_abandon = kAbandons[static_cast<unsigned>(abandon)];
+        g_abandon_ns = now_ns;
+    }
+    return g_abandon == kAbandons[0] && connection.counters().paths_closed == 0U &&
+           now_ns - g_abandon_ns < kAbandonHoldNs;
+}
 
 // One turn of WebTransport on a connection.
 void serve_webtransport(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, const EchoTurn& turn) noexcept
@@ -319,6 +386,7 @@ void serve(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, u64 no
     turn.can_open = turn.established || turn.early_data == TlsEarlyData::Offered;
     turn.now_ns = now_ns;
     turn.pin_path = g_pin_path;
+    turn.close_held = steer_added(connection, *echo, now_ns);
     if (g_tunnels != nullptr)
     {
         bool done = false;
@@ -485,6 +553,12 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
                 static_cast<unsigned long long>(connection.counters().paths_opened),
                 g_add_path != nullptr ? g_add_path : "none", static_cast<unsigned long long>(g_added_path_id));
     std::printf("pinned=%d\npin_kept=%d\n", echo->pinned() ? 1 : 0, echo->pin_kept() ? 1 : 0);
+    std::printf("backup=%s\nabandon=%s\npeer_backup=%llu\nabandon_answered=%llu\npaths_abandoned=%llu\n"
+                "paths_closed=%llu\n",
+                g_backup != nullptr ? g_backup : "none", g_abandon != nullptr ? g_abandon : "none",
+                static_cast<unsigned long long>(g_peer_backup), static_cast<unsigned long long>(g_abandon_answered),
+                static_cast<unsigned long long>(connection.counters().paths_abandoned),
+                static_cast<unsigned long long>(connection.counters().paths_closed));
     std::fflush(stdout);
     peer.ended(handle);
 }
@@ -778,6 +852,8 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
         }
         if (adding && echo != nullptr && echo->received() >= options.add_path_at)
         {
+            const QuicConnection* const connection = client.connection(handle);
+            g_validations_at_add = (connection != nullptr) ? connection->counters().path_validations : 0U;
             const QuicMigration added = client.add_path(handle, 1U, now_ns, g_added_path_id);
             g_add_path = migration_name(added);
             adding = added == QuicMigration::NotConfirmed || added == QuicMigration::NoConnectionId;
@@ -807,7 +883,7 @@ int usage()
                "[--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] "
                "[--progress-at N] [--receive-bytes N] [--congestion newreno|cubic|bbr|prague] [--migrate-at N] "
                "[--preferred 1] [--follow-preferred 0] [--disable-migration 1] [--multipath N] "
-               "[--add-path-at N [--pin-added 1]] "
+               "[--add-path-at N [--pin-added 1 [--abandon-added 1]] [--backup-added 1]] "
                "[--address-discovery off|provide|receive|both] [--http3 1 ...] "
                "[--webtransport legacy|h3 ...] "
                "[--transport h3 --alpn NAME [--idle-ms N] [--keepalive-ms N]]\n",
@@ -890,6 +966,14 @@ int main(int argc, char** argv)
         {
             options.pin_last = std::strcmp(value, "0") != 0;
         }
+        else if (std::strcmp(name, "--backup-added") == 0)
+        {
+            options.backup_added = std::strcmp(value, "0") != 0;
+        }
+        else if (std::strcmp(name, "--abandon-added") == 0)
+        {
+            options.abandon_added = std::strcmp(value, "0") != 0;
+        }
         else if (std::strcmp(name, "--congestion") == 0)
         {
             if (!congestion_named(value, options.congestion))
@@ -914,6 +998,7 @@ int main(int argc, char** argv)
         (options.version != 1U && options.version != 2U) || options.multipath >= kQuicMaxPaths ||
         (options.add_path_at != 0U && (options.multipath == 0U || !options.client)) ||
         (options.pin_last && (options.add_path_at == 0U || options.streams < 2U)) ||
+        (options.backup_added && options.add_path_at == 0U) || (options.abandon_added && !options.pin_last) ||
         httpx_options_valid(&options.http3) == 0 || options.tunnels == options.alpn.empty() ||
         (options.tunnels && other_http3))
     {
