@@ -25,7 +25,8 @@
 // 2 at addresses of their own: 0xFA moves it to its next socket (migrate()) and 0xF9 probes that one (probe_path()),
 // and 0xF8 steps which of its three sockets its host holds back (send()'s held sockets, every mask in turn; none on
 // the clean path). The server offers a preferred address on its socket 1 (RFC 9000 section 9.6), which 0xF7 moves the
-// client to (migrate(): once validated). In any script 0xF6 sets both ends' handover schedule (S76) from the next
+// client to (migrate(): once validated). The server holds two of its client's IDs, the fewest allowed, so a move
+// may wait for one (section 9.5). In any script 0xF6 sets both ends' handover schedule (S76) from the next
 // byte: an event every second from now, its guards from the byte, a refused schedule changing nothing; 0xF5 has
 // both learn the phase instead (a period and guards from the next byte), the learned schedule held to the learning.
 //
@@ -308,6 +309,21 @@ bool& extensions()
     return on;
 }
 
+// Whether this input's script runs over paths (byte 0's bit 7).
+bool& over_paths()
+{
+    static bool paths = false;
+    return paths;
+}
+
+// Each end's active_connection_id_limit: the IDs of its peer's it holds. Over paths a server holds the fewest RFC 9000
+// allows (section 18.2), so a move of its client's may find none unused (section 9.5): the edge S75's kept revert and
+// waiting move serve.
+u64 id_limit(QuicSide side)
+{
+    return (over_paths() && side == QuicSide::Server) ? 2U : 4U;
+}
+
 // With `switching` the client lists its version first and the server the other one; with `tickets` both ends run
 // the contexts that take 0-RTT, the client keeping and offering its tickets there; `keyed` is for the raw UDP path.
 QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnectionIds* ids, bool switching = false,
@@ -321,7 +337,7 @@ QuicConnectionConfig config_for(QuicSide side, QuicVersion version, QuicConnecti
         config.versions = first ? ConstSpan<u32>(kV1First, 2U) : ConstSpan<u32>(kV2First, 2U);
     }
     config.ids = ids;
-    config.parameters.active_connection_id_limit = 4U;
+    config.parameters.active_connection_id_limit = id_limit(side);
     config.parameters.max_receive_timestamps_per_ack = extensions() ? 4U : 0U;
     config.parameters.address_discovery = extensions() ? QuicAddressDiscovery::Both : QuicAddressDiscovery::Off;
     // RFC 10069 (design S78): ID spaces for path IDs 1 and 2, whose frames the peer may name, and a server's path
@@ -401,13 +417,6 @@ const QuicPath kClientPaths[kClientAddresses] = {
 };
 const Endpoint kServerAddress{IpAddress::v4(192, 0, 2, 1), 443U};
 const Endpoint kPreferredAddress{IpAddress::v4(192, 0, 2, 80), 4433U}; // the server's socket 1 (RFC 9000 section 9.6)
-
-// Whether this input's script runs over paths (byte 0's bit 7).
-bool& over_paths()
-{
-    static bool paths = false;
-    return paths;
-}
 
 // Over paths the client's first path names its server's address, which its own sockets' paths keep, and moves to
 // the server's preferred address only when the script says (0xF7); a server with a handshake offers that address on
@@ -814,7 +823,8 @@ void check_observations(const Pair& pair)
         for (u64 path_id = 1U; path_id <= kMaxPathId; ++path_id)
         {
             CRD_FUZZ_REQUIRE(end->multipath() || end->local_cid_count(path_id) == 0U);
-            CRD_FUZZ_REQUIRE(end->local_cid_count(path_id) <= 4U); // config_for's active_connection_id_limit
+            const QuicSide peer = (end == &pair.client) ? QuicSide::Server : QuicSide::Client;
+            CRD_FUZZ_REQUIRE(end->local_cid_count(path_id) <= id_limit(peer));
         }
     }
 }
