@@ -72,8 +72,9 @@ public:
     [[nodiscard]] usize find(const QuicPath& path) const noexcept;
     // `path`'s slot, a free one taken when it has none; kQuicNoPath when the table is full.
     [[nodiscard]] usize admit(const QuicPath& path, u64 now_ns) noexcept;
-    // The least recently used path neither active nor the fallback, the one to give up for a new one.
-    [[nodiscard]] usize least_recent() const noexcept;
+    // The least recently used path neither active, the fallback nor `kept`, the one to give up for a new one (a full
+    // table always has one).
+    [[nodiscard]] usize least_recent(usize kept = kQuicNoPath) const noexcept;
     // Forgets the path (not the active one): its challenges answer nothing from now on.
     void drop(usize index) noexcept;
     // The unbound active path takes the address of the first packet that opens.

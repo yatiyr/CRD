@@ -63,12 +63,12 @@ usize QuicPaths::admit(const QuicPath& path, u64 now_ns) noexcept
     return kQuicNoPath;
 }
 
-usize QuicPaths::least_recent() const noexcept
+usize QuicPaths::least_recent(usize kept) const noexcept
 {
     usize chosen = kQuicNoPath;
     for (usize index = 0U; index < kQuicMaxPaths; ++index)
     {
-        const bool spare = m_slots[index].used && index != m_active && index != m_fallback;
+        const bool spare = m_slots[index].used && index != m_active && index != m_fallback && index != kept;
         if (spare && (chosen == kQuicNoPath || m_slots[index].last_ns < m_slots[chosen].last_ns))
         {
             chosen = index;

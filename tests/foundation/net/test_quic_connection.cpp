@@ -5112,6 +5112,47 @@ TEST_CASE("QUIC paths: a client's move with no ID of its own unused waits, valid
     }
 }
 
+TEST_CASE("QUIC paths: a move waiting for an ID keeps its path while probes from new addresses overflow the table, "
+          "and happens when the ID arrives",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    Host host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+    RawRun run(identity, 2048U, {}, &host);
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath b = client_at(8U, 50000U);
+    const QuicPath last = client_at(11U, 50000U);
+    run.from = a;
+    run.handshake();
+    run.drain();
+    // The client moves to b with the server's sequence 1 before it gave a second ID of its own: the move waits.
+    std::memcpy(run.raw.dcid, run.raw.issued[1], run.raw.issued_bytes[1]);
+    run.from = b;
+    run.pad_to = kQuicMinInitialDatagram;
+    send_frame(run, QuicFrameKind::Ping);
+    const usize waiting = run.server.paths().find(b);
+    REQUIRE(waiting != kQuicNoPath);
+    // Probes from three more addresses at once: two take the free slots and the last gives one up. b is the least
+    // recently used (the lowest slot of a tie), yet stays.
+    constexpr u8 data[kQuicPathDataBytes] = {0x5AU};
+    for (const u8 address : {u8{9U}, u8{10U}, u8{11U}})
+    {
+        run.from = client_at(address, 50000U);
+        send_frame(run, QuicFrameKind::PathChallenge, ConstSpan<u8>(data));
+    }
+    CHECK(run.server.paths().find(last) != kQuicNoPath);
+    CHECK(run.server.paths().find(b) == waiting);
+    CHECK(run.server.paths().validating(waiting));
+    CHECK(run.server.counters().path_failures == 0U);
+    CHECK(run.server.path() == a);
+    run.from = a;
+    issue_second_id(run);
+    CHECK(run.server.path() == b);
+    CHECK(run.server.counters().migrations == 1U);
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
 TEST_CASE("QUIC paths: a path whose check ends in its own packet gives its ID to the path that waits only once that "
           "packet chose its path: a probe gives it up, a non-probing packet moves there and keeps it",
           "[net][net-path][quic-connection]")

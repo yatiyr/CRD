@@ -47,6 +47,7 @@ TEST_CASE("QUIC paths: admission takes free slots, a full table names its least 
     CHECK(paths.admit(at(2, 1000), 40U) == b); // known: the same slot
     CHECK(paths.admit(at(5, 1000), 40U) == kQuicNoPath);
     CHECK(paths.least_recent() == b);
+    CHECK(paths.least_recent(b) == c); // a path a move waits on is kept
     paths.on_received(b, 100U, 50U);
     CHECK(paths.least_recent() == c);
 

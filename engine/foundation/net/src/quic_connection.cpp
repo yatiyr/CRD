@@ -3592,7 +3592,10 @@ usize QuicConnection::take_path(usize slot, const QuicPath& path, u64 now_ns) no
     usize index = paths.admit(path, now_ns);
     if (index == kQuicNoPath)
     {
-        drop_path(slot, paths.least_recent(), now_ns);
+        // A path a move waits on stays, ended by its validation or its peer ID alone (sections 9.5 and 9.6.2): a
+        // newcomer gives up another.
+        const bool deferred = handshake_slot(slot) && m_deferred_move != kQuicNoPath;
+        drop_path(slot, paths.least_recent(deferred ? m_deferred_move : m_tuples[slot]->waiting), now_ns);
         index = paths.admit(path, now_ns);
     }
     return index;
