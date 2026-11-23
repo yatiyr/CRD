@@ -19,14 +19,9 @@
  * `bytes_received`, `bytes_sent` (those msquic's send completions confirm), whether every byte held its pattern
  * (`verified`), the close (`close`: local, application, transport or idle; `close_code`), whether a client's pin held
  * (`pin`) and the application protocol (`alpn`, the private `cerid-interop`). */
-#define QUIC_API_ENABLE_PREVIEW_FEATURES 1 /* QUIC_VERSION_SETTINGS */
 #include "http_exchange.h"
-#include "openssl_self_signed.h"
+#include "msquic_common.h"
 
-#include <msquic.h>
-#include <openssl/pkcs12.h>
-
-#include <arpa/inet.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -38,10 +33,6 @@
 #define RUN_SECONDS 60
 #define QUIC_V2 0x6b3343cfU
 #define IDLE_MS 30000U
-#define PKCS12_PASSWORD "cerid-interop"
-
-static const char ALPN[]        = "cerid-interop";
-static const char SERVER_NAME[] = "cerid.test";
 
 typedef struct peer peer_t;
 
@@ -216,21 +207,6 @@ static stream_t* new_stream(peer_t* peer)
     return stream;
 }
 
-/* A client's pin: the leaf's raw Ed25519 public key is the one the seed gives. */
-static int pin_holds(const peer_t* peer, const QUIC_BUFFER* der)
-{
-    const unsigned char* bytes = der != NULL ? der->Buffer : NULL;
-    X509*                leaf  = bytes != NULL ? d2i_X509(NULL, &bytes, (long)der->Length) : NULL;
-    EVP_PKEY*            key   = leaf != NULL ? X509_get_pubkey(leaf) : NULL;
-    unsigned char        found[32];
-    size_t               size = sizeof(found);
-    const int held = key != NULL && EVP_PKEY_get_raw_public_key(key, found, &size) == 1 && size == sizeof(found) &&
-                     memcmp(found, peer->pin_key, sizeof(found)) == 0;
-    EVP_PKEY_free(key);
-    X509_free(leaf);
-    return held;
-}
-
 static QUIC_STATUS QUIC_API on_connection(HQUIC handle, void* context, QUIC_CONNECTION_EVENT* event)
 {
     peer_t* peer = context;
@@ -263,7 +239,8 @@ static QUIC_STATUS QUIC_API on_connection(HQUIC handle, void* context, QUIC_CONN
         break;
     }
     case QUIC_CONNECTION_EVENT_PEER_CERTIFICATE_RECEIVED:
-        peer->pinned = pin_holds(peer, (const QUIC_BUFFER*)event->PEER_CERTIFICATE_RECEIVED.Certificate);
+        peer->pinned =
+            msquic_pin_holds(peer->pin_key, (const QUIC_BUFFER*)event->PEER_CERTIFICATE_RECEIVED.Certificate);
         return peer->pinned ? QUIC_STATUS_SUCCESS : QUIC_STATUS_BAD_CERTIFICATE;
     case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED:
     {
@@ -307,8 +284,8 @@ static QUIC_STATUS QUIC_API on_listener(HQUIC handle, void* context, QUIC_LISTEN
         return QUIC_STATUS_SUCCESS;
     }
     const QUIC_NEW_CONNECTION_INFO* info = event->NEW_CONNECTION.Info;
-    if (peer->accepted || info->ServerName == NULL || info->ServerNameLength != strlen(SERVER_NAME) ||
-        memcmp(info->ServerName, SERVER_NAME, info->ServerNameLength) != 0)
+    if (peer->accepted || info->ServerName == NULL || info->ServerNameLength != strlen(MSQUIC_SERVER_NAME) ||
+        memcmp(info->ServerName, MSQUIC_SERVER_NAME, info->ServerNameLength) != 0)
     {
         return QUIC_STATUS_CONNECTION_REFUSED;
     }
@@ -317,34 +294,9 @@ static QUIC_STATUS QUIC_API on_listener(HQUIC handle, void* context, QUIC_LISTEN
     return peer->api->ConnectionSetConfiguration(event->NEW_CONNECTION.Connection, peer->configuration);
 }
 
-/* The server's credential as msquic reads it from memory: the seed's key and its self-signed certificate as PKCS #12. */
-static int load_server_credential(peer_t* peer, EVP_PKEY* key)
-{
-    X509*          certificate = self_signed(key, SERVER_NAME);
-    PKCS12*        bundle      = certificate != NULL ? PKCS12_create(PKCS12_PASSWORD, NULL, key, certificate, NULL, 0,
-                                                                     0, 0, 0, 0)
-                                                     : NULL;
-    unsigned char* der         = NULL;
-    const int      size        = bundle != NULL ? i2d_PKCS12(bundle, &der) : -1;
-    int            loaded      = 0;
-    if (size > 0)
-    {
-        QUIC_CERTIFICATE_PKCS12 pkcs12 = {der, (uint32_t)size, PKCS12_PASSWORD};
-        QUIC_CREDENTIAL_CONFIG  config;
-        memset(&config, 0, sizeof(config));
-        config.Type              = QUIC_CREDENTIAL_TYPE_CERTIFICATE_PKCS12;
-        config.CertificatePkcs12 = &pkcs12;
-        loaded = QUIC_SUCCEEDED(peer->api->ConfigurationLoadCredential(peer->configuration, &config));
-    }
-    OPENSSL_free(der);
-    PKCS12_free(bundle);
-    X509_free(certificate);
-    return loaded;
-}
-
 static int open_configuration(peer_t* peer, HQUIC registration, EVP_PKEY* key)
 {
-    const QUIC_BUFFER alpn = {(uint32_t)strlen(ALPN), (uint8_t*)ALPN};
+    const QUIC_BUFFER alpn = {(uint32_t)strlen(MSQUIC_ALPN), (uint8_t*)MSQUIC_ALPN};
     QUIC_SETTINGS     settings;
     memset(&settings, 0, sizeof(settings));
     settings.IdleTimeoutMs                = IDLE_MS;
@@ -356,35 +308,18 @@ static int open_configuration(peer_t* peer, HQUIC registration, EVP_PKEY* key)
     {
         return 0;
     }
-    const uint32_t        versions[1] = {peer->version};
-    QUIC_VERSION_SETTINGS offered     = {versions, versions, versions, 1U, 1U, 1U};
-    if (QUIC_FAILED(peer->api->SetParam(peer->configuration, QUIC_PARAM_CONFIGURATION_VERSION_SETTINGS,
-                                        sizeof(offered), &offered)))
-    {
-        return 0;
-    }
-    if (!peer->client)
-    {
-        return load_server_credential(peer, key);
-    }
     QUIC_CREDENTIAL_CONFIG config;
     memset(&config, 0, sizeof(config));
-    config.Type  = QUIC_CREDENTIAL_TYPE_NONE;
-    config.Flags = QUIC_CREDENTIAL_FLAG_CLIENT | QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION |
-                   QUIC_CREDENTIAL_FLAG_INDICATE_CERTIFICATE_RECEIVED |
-                   QUIC_CREDENTIAL_FLAG_USE_PORTABLE_CERTIFICATES;
-    return QUIC_SUCCEEDED(peer->api->ConfigurationLoadCredential(peer->configuration, &config));
+    return msquic_offer_version(peer->api, peer->configuration, peer->version) &&
+           msquic_load_credential(peer->api, peer->configuration, peer->client, key, &config);
 }
 
-/* A server listens on 127.0.0.1:`port` and prints the port it bound; a client connects there, naming SERVER_NAME. */
+/* A server listens on 127.0.0.1:`port` and prints the port it bound; a client connects there, naming
+ * MSQUIC_SERVER_NAME. */
 static int start(peer_t* peer, HQUIC registration, unsigned long port, HQUIC* listener, HQUIC* connection)
 {
-    QUIC_ADDR address;
-    memset(&address, 0, sizeof(address));
-    QuicAddrSetFamily(&address, QUIC_ADDRESS_FAMILY_INET);
-    address.Ipv4.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    QuicAddrSetPort(&address, (uint16_t)port);
-    const QUIC_BUFFER alpn = {(uint32_t)strlen(ALPN), (uint8_t*)ALPN};
+    QUIC_ADDR         address = msquic_loopback(port);
+    const QUIC_BUFFER alpn    = {(uint32_t)strlen(MSQUIC_ALPN), (uint8_t*)MSQUIC_ALPN};
     if (!peer->client)
     {
         uint32_t size = sizeof(address);
@@ -406,7 +341,7 @@ static int start(peer_t* peer, HQUIC registration, unsigned long port, HQUIC* li
     return QUIC_SUCCEEDED(peer->api->SetParam(*connection, QUIC_PARAM_CONN_REMOTE_ADDRESS, sizeof(address),
                                               &address)) &&
            QUIC_SUCCEEDED(peer->api->ConnectionStart(*connection, peer->configuration, QUIC_ADDRESS_FAMILY_INET,
-                                                     SERVER_NAME, (uint16_t)port));
+                                                     MSQUIC_SERVER_NAME, (uint16_t)port));
 }
 
 /* Whether the connection shut down within RUN_SECONDS. */

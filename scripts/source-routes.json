@@ -238,10 +238,11 @@
     },
     {
       "paths": [
-        "tests/foundation/net/interop/msquic_quic_peer.c"
+        "tests/foundation/net/interop/msquic_quic_peer.c",
+        "tests/foundation/net/interop/msquic_quic_board.c"
       ],
       "built_when": {"option": "CRD_BUILD_QUIC_VS_MSQUIC", "platform": "Linux"},
-      "why": "The QUIC interoperability test against msquic (the crd-net-quic-interop-msquic CTest): crd-msquic-quic-peer over the pinned msquic (cmake/pins.json msquic) and OpenSSL 4.0, built by the tree that turns the option on."
+      "why": "The QUIC interoperability test and transport budget board against msquic (the crd-net-quic-interop-msquic and crd-net-quic-board-check CTests): crd-msquic-quic-peer and crd-msquic-quic-board over the pinned msquic (cmake/pins.json msquic) and OpenSSL 4.0, built by the tree that turns the option on."
     },
     {
       "paths": [

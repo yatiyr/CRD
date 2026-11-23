@@ -89,47 +89,67 @@ inline u8 pattern(u64 tag, u64 stream, u64 offset)
     return httpx_pattern(tag, stream, offset);
 }
 
-inline bool parse_group(const char* name, crd::crypto::AlgorithmId& out)
+// The key exchange groups and AEADs the programs name, the same names in their reports (group_name, cipher_name).
+struct AlgorithmName
 {
-    using crd::crypto::AlgorithmId;
-    static constexpr struct
+    const char* name;
+    crd::crypto::AlgorithmId id;
+};
+
+inline constexpr AlgorithmName kGroupNames[] = {{"x25519mlkem768", crd::crypto::AlgorithmId::X25519Mlkem768},
+                                                {"secp256r1mlkem768", crd::crypto::AlgorithmId::Secp256r1Mlkem768},
+                                                {"secp384r1mlkem1024", crd::crypto::AlgorithmId::Secp384r1Mlkem1024},
+                                                {"x25519", crd::crypto::AlgorithmId::X25519},
+                                                {"secp256r1", crd::crypto::AlgorithmId::Secp256r1}};
+inline constexpr AlgorithmName kCipherNames[] = {{"aes128", crd::crypto::AlgorithmId::Aes128Gcm},
+                                                 {"aes256", crd::crypto::AlgorithmId::Aes256Gcm},
+                                                 {"chacha20", crd::crypto::AlgorithmId::Chacha20Poly1305}};
+
+template <usize Count>
+bool parse_named(const AlgorithmName (&table)[Count], const char* name, crd::crypto::AlgorithmId& out)
+{
+    for (const AlgorithmName& entry : table)
     {
-        const char* name;
-        AlgorithmId id;
-    } kGroups[] = {{"x25519mlkem768", AlgorithmId::X25519Mlkem768},
-                   {"secp256r1mlkem768", AlgorithmId::Secp256r1Mlkem768},
-                   {"secp384r1mlkem1024", AlgorithmId::Secp384r1Mlkem1024},
-                   {"x25519", AlgorithmId::X25519}};
-    for (const auto& group : kGroups)
-    {
-        if (std::strcmp(group.name, name) == 0)
+        if (std::strcmp(entry.name, name) == 0)
         {
-            out = group.id;
+            out = entry.id;
             return true;
         }
     }
     return false;
 }
 
+template <usize Count>
+const char* name_of(const AlgorithmName (&table)[Count], crd::crypto::AlgorithmId id)
+{
+    for (const AlgorithmName& entry : table)
+    {
+        if (entry.id == id)
+        {
+            return entry.name;
+        }
+    }
+    return "other";
+}
+
+inline bool parse_group(const char* name, crd::crypto::AlgorithmId& out)
+{
+    return parse_named(kGroupNames, name, out);
+}
+
 inline bool parse_cipher(const char* name, crd::crypto::AlgorithmId& out)
 {
-    using crd::crypto::AlgorithmId;
-    if (std::strcmp(name, "aes128") == 0)
-    {
-        out = AlgorithmId::Aes128Gcm;
-        return true;
-    }
-    if (std::strcmp(name, "aes256") == 0)
-    {
-        out = AlgorithmId::Aes256Gcm;
-        return true;
-    }
-    if (std::strcmp(name, "chacha20") == 0)
-    {
-        out = AlgorithmId::Chacha20Poly1305;
-        return true;
-    }
-    return false;
+    return parse_named(kCipherNames, name, out);
+}
+
+inline const char* group_name(crd::crypto::AlgorithmId id)
+{
+    return name_of(kGroupNames, id);
+}
+
+inline const char* cipher_name(crd::crypto::AlgorithmId id)
+{
+    return name_of(kCipherNames, id);
 }
 
 [[nodiscard]] inline int hex_digit(char digit)

@@ -136,6 +136,9 @@ if(CRD_BUILD_QUIC_VS_NGTCP2 OR CRD_BUILD_QUIC_VS_PICOQUIC OR CRD_BUILD_QUIC_VS_M
    CRD_BUILD_WEBTRANSPORT_VS_QUINN OR CRD_BUILD_QMUX_VS_CRATE)
     add_executable(crd-quic-peer interop/cerid_quic_peer.cpp)
     target_link_libraries(crd-quic-peer PRIVATE crd-core crd-containers crd-crypto crd-memory crd-net)
+    # crd-net's end of the transport budget board (quic_board.py), beside the peers it is measured against.
+    add_executable(crd-quic-board interop/cerid_quic_board.cpp)
+    target_link_libraries(crd-quic-board PRIVATE crd-core crd-containers crd-crypto crd-memory crd-net)
 endif()
 
 # The QUIC and HTTP/3 interoperability tests against ngtcp2 and nghttp3 (CRD_BUILD_QUIC_VS_NGTCP2): crd-ngtcp2-quic-peer
@@ -276,6 +279,9 @@ endif()
 if(CRD_BUILD_QUIC_VS_MSQUIC)
     include(ExternalProject)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # What CRD_OPENSSL_PEER_LINK names: a tree with this option alone has no other block that finds them.
+    find_package(Threads REQUIRED)
+    find_package(ZLIB REQUIRED)
     cmake_host_system_information(RESULT msquic_jobs QUERY NUMBER_OF_LOGICAL_CORES)
     crd_pin(msquic_version packages msquic version)
     set(msquic_prefix "${CMAKE_BINARY_DIR}/_deps/msquic-peer-${msquic_version}")
@@ -301,20 +307,30 @@ if(CRD_BUILD_QUIC_VS_MSQUIC)
     # msquic is NUMA-aware where libnuma and its header are found (its own CMake looks for both), and needs libatomic.
     find_library(CRD_MSQUIC_NUMA NAMES numa libnuma.so.1)
     find_library(CRD_MSQUIC_ATOMIC NAMES atomic libatomic.so.1 REQUIRED)
-    add_executable(crd-msquic-quic-peer interop/msquic_quic_peer.c)
-    add_dependencies(crd-msquic-quic-peer crd-msquic-build crd-openssl-peer-build)
-    target_include_directories(crd-msquic-quic-peer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../crypto/interop")
-    target_include_directories(crd-msquic-quic-peer SYSTEM PRIVATE "${msquic_SOURCE_DIR}/src/inc"
-                                                                    "${CRD_OPENSSL_PEER_ROOT}/include")
-    target_link_libraries(crd-msquic-quic-peer PRIVATE "${msquic_library}" ${CRD_OPENSSL_PEER_LINK}
-                                                       "${CRD_MSQUIC_ATOMIC}"
-                                                       "$<$<BOOL:${CRD_MSQUIC_NUMA}>:${CRD_MSQUIC_NUMA}>")
-    set_target_properties(crd-msquic-quic-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    # And msquic's end of the transport budget board (quic_board.py).
+    foreach(msquic_program IN ITEMS crd-msquic-quic-peer crd-msquic-quic-board)
+        string(REPLACE "crd-" "" msquic_source "${msquic_program}")
+        string(REPLACE "-" "_" msquic_source "${msquic_source}")
+        add_executable(${msquic_program} "interop/${msquic_source}.c")
+        add_dependencies(${msquic_program} crd-msquic-build crd-openssl-peer-build)
+        target_include_directories(${msquic_program} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../crypto/interop")
+        target_include_directories(${msquic_program} SYSTEM PRIVATE "${msquic_SOURCE_DIR}/src/inc"
+                                                                     "${CRD_OPENSSL_PEER_ROOT}/include")
+        target_link_libraries(${msquic_program} PRIVATE "${msquic_library}" ${CRD_OPENSSL_PEER_LINK}
+                                                        "${CRD_MSQUIC_ATOMIC}"
+                                                        "$<$<BOOL:${CRD_MSQUIC_NUMA}>:${CRD_MSQUIC_NUMA}>")
+        set_target_properties(${msquic_program} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    endforeach()
 
     add_test(NAME crd-net-quic-interop-msquic
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/msquic_interop.py"
                      --cerid "$<TARGET_FILE:crd-quic-peer>" --msquic "$<TARGET_FILE:crd-msquic-quic-peer>")
     set_tests_properties(crd-net-quic-interop-msquic PROPERTIES TIMEOUT 600 LABELS "net;quic-interop")
+    # The board's short round: every arm completes with equal parameters; the numbers are a release tree's (docs/bench).
+    add_test(NAME crd-net-quic-board-check
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/quic_board.py" --check
+                     --cerid "$<TARGET_FILE:crd-quic-board>" --msquic "$<TARGET_FILE:crd-msquic-quic-board>")
+    set_tests_properties(crd-net-quic-board-check PROPERTIES TIMEOUT 300 LABELS "net;quic-interop")
     message(STATUS "[quic-vs-msquic] QUIC interoperability against msquic ${msquic_version}")
 endif()
 
