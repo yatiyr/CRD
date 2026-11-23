@@ -7,7 +7,7 @@
 //                      [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N]
 //                      [--receive-bytes N] [--congestion newreno|cubic|bbr|prague] [--migrate-at N]
 //                      [--preferred 1] [--follow-preferred 0] [--disable-migration 1] [--multipath N]
-//                      [--add-path-at N]
+//                      [--add-path-at N [--pin-added 1]]
 //                      [--http3 1 ...] [--webtransport legacy|h3 ...] [--transport h3 --alpn NAME ...]
 //
 //   port         a server's to bind (0: any, printed as `port=N`), a client's to reach
@@ -41,6 +41,9 @@
 //   add-path-at  a client opens a further path from a second socket of its own once it has read this many stream
 //                bytes (RFC 10069 section 3.1), asking again while the connection answers NotConfirmed or
 //                NoConnectionId
+//   pin-added    that client writes its last stream only once add_path() has answered, pinned (QuicStreamSet::pin)
+//                before its first byte to the path ID it opened, so all of it goes there, or to path ID 0 when it
+//                answered otherwise
 //   address-discovery  off (the default), provide, receive or both: draft-ietf-quic-address-discovery-01's parameter
 //   http3        HTTP/3 over Http3Connection instead of the echo: http_exchange.h has its options, ALPN `h3` instead
 //   webtransport WebTransport sessions instead, `legacy` or `h3`: interop_webtransport.hpp has its options
@@ -65,8 +68,10 @@
 // client's last migrate() answer (`migration`: none, started, disabled, ...), a server's preferred port
 // (`preferred_port`, 0 for none), and the address the peer last reported seeing this end at on that path
 // (`observed`, `none` before any report), whether multipath was negotiated (`multipath`), the path IDs that opened a
-// number space of their own (`paths_opened`), a client's last add_path() answer (`add_path`: none, started, ...) and
-// the path ID it opened (`added_path_id`). The application is `cerid-interop`, a private ALPN.
+// number space of their own (`paths_opened`), a client's last add_path() answer (`add_path`: none, started, ...),
+// the path ID it opened (`added_path_id`), and with pin-added whether pin() took the last stream (`pinned`) and it
+// stayed on that path until every byte of it was acknowledged (`pin_kept`). The application is `cerid-interop`, a
+// private ALPN.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -256,6 +261,8 @@ const char* g_migration = nullptr;
 // A client's last add_path() answer (null: none asked) and the path ID it opened.
 const char* g_add_path = nullptr;
 u64 g_added_path_id = 0U;
+// Where a pin-added client's last stream goes: the path add_path() opened, or path ID 0 once it answered otherwise.
+u64 g_pin_path = kPinWait;
 
 // One turn of WebTransport on a connection.
 void serve_webtransport(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, const EchoTurn& turn) noexcept
@@ -311,6 +318,7 @@ void serve(EchoPeer& peer, QuicHandle handle, QuicConnection& connection, u64 no
     turn.early_data = connection.handshake().early_data();
     turn.can_open = turn.established || turn.early_data == TlsEarlyData::Offered;
     turn.now_ns = now_ns;
+    turn.pin_path = g_pin_path;
     if (g_tunnels != nullptr)
     {
         bool done = false;
@@ -476,6 +484,7 @@ void report(EchoPeer& peer, QuicHandle handle, const QuicConnection& connection)
     std::printf("multipath=%d\npaths_opened=%llu\nadd_path=%s\nadded_path_id=%llu\n", connection.multipath() ? 1 : 0,
                 static_cast<unsigned long long>(connection.counters().paths_opened),
                 g_add_path != nullptr ? g_add_path : "none", static_cast<unsigned long long>(g_added_path_id));
+    std::printf("pinned=%d\npin_kept=%d\n", echo->pinned() ? 1 : 0, echo->pin_kept() ? 1 : 0);
     std::fflush(stdout);
     peer.ended(handle);
 }
@@ -772,6 +781,7 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
             const QuicMigration added = client.add_path(handle, 1U, now_ns, g_added_path_id);
             g_add_path = migration_name(added);
             adding = added == QuicMigration::NotConfirmed || added == QuicMigration::NoConnectionId;
+            g_pin_path = adding ? kPinWait : g_added_path_id;
         }
         if (!peer.idle() || peer.count() >= options.connections)
         {
@@ -796,7 +806,8 @@ int usage()
                "[--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] "
                "[--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] "
                "[--progress-at N] [--receive-bytes N] [--congestion newreno|cubic|bbr|prague] [--migrate-at N] "
-               "[--preferred 1] [--follow-preferred 0] [--disable-migration 1] [--multipath N] [--add-path-at N] "
+               "[--preferred 1] [--follow-preferred 0] [--disable-migration 1] [--multipath N] "
+               "[--add-path-at N [--pin-added 1]] "
                "[--address-discovery off|provide|receive|both] [--http3 1 ...] "
                "[--webtransport legacy|h3 ...] "
                "[--transport h3 --alpn NAME [--idle-ms N] [--keepalive-ms N]]\n",
@@ -875,6 +886,10 @@ int main(int argc, char** argv)
         {
             options.add_path_at = std::strtoull(value, nullptr, 10);
         }
+        else if (std::strcmp(name, "--pin-added") == 0)
+        {
+            options.pin_last = std::strcmp(value, "0") != 0;
+        }
         else if (std::strcmp(name, "--congestion") == 0)
         {
             if (!congestion_named(value, options.congestion))
@@ -898,6 +913,7 @@ int main(int argc, char** argv)
     if (argc % 2 == 0 || required != kRequiredEchoOptions || !echo_options_valid(options) ||
         (options.version != 1U && options.version != 2U) || options.multipath >= kQuicMaxPaths ||
         (options.add_path_at != 0U && (options.multipath == 0U || !options.client)) ||
+        (options.pin_last && (options.add_path_at == 0U || options.streams < 2U)) ||
         httpx_options_valid(&options.http3) == 0 || options.tunnels == options.alpn.empty() ||
         (options.tunnels && other_http3))
     {

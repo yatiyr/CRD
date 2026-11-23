@@ -50,6 +50,7 @@ inline constexpr u32 kServerSlots = 4U;
 inline constexpr u64 kInteropResetCode = 7U;
 inline constexpr u64 kInteropStopCode = 9U;
 inline constexpr u64 kResetStreamBytes = 4096U;
+inline constexpr u64 kPinWait = ~u64{0}; // EchoTurn::pin_path before the path is known
 
 struct EchoOptions
 {
@@ -74,6 +75,8 @@ struct EchoOptions
     u64 progress_at = 0U;
     u64 hold_ns = 0U; // this long after everything is done before the closing end closes
     bool timed_service = false; // the application is served on the timer whatever else happens
+    // A client writes its last stream only once it is pinned to EchoTurn::pin_path.
+    bool pin_last = false;
     crd::crypto::AlgorithmId group{};
     crd::crypto::AlgorithmId cipher{};
     u8 seed[32] = {};
@@ -262,6 +265,7 @@ struct EchoTurn
     bool can_open = false;    // a client's streams may be written now (established, or under 0-RTT)
     crd::crypto::TlsEarlyData early_data{};
     u64 now_ns = 0U;
+    u64 pin_path = kPinWait; // the path ID EchoOptions::pin_last's stream goes on, or kPinWait while it has none
 };
 
 // A connection's application, either end's.
@@ -306,7 +310,8 @@ public:
             EchoStream& stream = m_streams[index];
             read(set, id, stream);
             const u64 goal = m_options.client ? m_options.bytes : stream.received;
-            if (!stream.out_end)
+            const bool hold = held(set, index, stream, turn.pin_path);
+            if (!stream.out_end && !hold)
             {
                 write(set, id, stream, m_options.client ? 0U : 1U, goal, m_options.client || stream.in_end);
             }
@@ -342,6 +347,11 @@ public:
     [[nodiscard]] const crd::net::TicketCache* tickets() const noexcept { return m_tickets; }
     // The stream bytes read so far.
     [[nodiscard]] u64 received() const noexcept { return m_received; }
+
+    // EchoOptions::pin_last's stream: pin() took it before its first byte, and it stayed on that path until every byte
+    // and its FIN were acknowledged.
+    [[nodiscard]] bool pinned() const noexcept { return m_pin == crd::net::QuicStreamError::None; }
+    [[nodiscard]] bool pin_kept() const noexcept { return pinned() && m_pin_kept; }
 
     // For another application over the connection, which reports through this one.
     void note_established(bool established) noexcept { m_established = m_established || established; }
@@ -648,6 +658,31 @@ private:
         return m_datagrams_received >= m_options.datagrams || now_ns - since >= kDatagramSettleNs;
     }
 
+    // Whether a client's last stream still waits (EchoOptions::pin_last). Once a path ID comes, pin() is asked once,
+    // before any byte of it is written, whatever it answers; the stream is then watched staying pinned.
+    [[nodiscard]] bool held(crd::net::QuicStreamSet& set, u64 index, const EchoStream& stream, u64 path_id) noexcept
+    {
+        if (!m_options.pin_last || !m_options.client || index + 1U != m_options.streams)
+        {
+            return false;
+        }
+        const u64 id = index * 4U;
+        if (!m_pin_asked)
+        {
+            if (path_id == kPinWait)
+            {
+                return true;
+            }
+            m_pin_asked = true;
+            m_pin_path = path_id;
+            m_pin = set.pin(id, path_id);
+            return false;
+        }
+        u64 pinned_to = 0U;
+        m_pin_kept = m_pin_kept && (stream.finished || (set.pinned(id, pinned_to) && pinned_to == m_pin_path));
+        return false;
+    }
+
     void open_streams(crd::net::QuicStreamSet& set) noexcept
     {
         while (m_opened < m_options.streams)
@@ -796,6 +831,8 @@ private:
     u64 m_first_service_ns = 0U;
     u64 m_last_datagram_ns = 0U;
     u64 m_complete_ns = 0U;
+    u64 m_pin_path = 0U;
+    crd::net::QuicStreamError m_pin = crd::net::QuicStreamError::Unknown; // pin()'s answer; Unknown before it is asked
     u8 m_datagrams_seen[kMaxDatagrams / 8U] = {};
     bool m_established = false;
     bool m_verified = true;
@@ -805,6 +842,8 @@ private:
     bool m_forgot_early = false;
     bool m_progressed = false;
     bool m_closing = false;
+    bool m_pin_asked = false;
+    bool m_pin_kept = true;
 };
 
 // A run's connections, in the order they started.

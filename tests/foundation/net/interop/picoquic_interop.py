@@ -31,8 +31,10 @@ provide, receive or both), an end that asked and whose peer offered ends holding
 the draft (its address_discovery_mode).
 
 Multipath (RFC 10069, design S78): with both ends offering it, the connection negotiates it; a Cerid client opens path
-ID 1 from a second socket once it has read a quarter of its echo, and picoquic's server holds that path, reads bytes on
-it and answers on it while the echo completes. With one end offering it, neither negotiates it and the Cerid client's
+ID 1 from a second socket once it has read a quarter of its echo, holding its last stream back until then, and pins
+that stream to path ID 1 before its first byte (QuicStreamSet::pin). It stays pinned until every byte is acknowledged,
+so picoquic's server, which holds that path and answers on it while the echo completes, reads at least the whole
+stream on it. With one end offering it, neither negotiates it and the Cerid client's
 add_path() answers no-multipath.
 """
 import argparse
@@ -85,7 +87,7 @@ class Case:
         if self.multipath is not None and self.multipath[0 if program == self.cerid else 1]:
             common += ['--multipath', '2' if program == self.cerid else '1']
             if program == self.cerid and role == 'client':
-                common += ['--add-path-at', str(self.streams * self.size // 4)]
+                common += ['--add-path-at', str(self.streams * self.size // 4), '--pin-added', '1']
         if program == self.cerid:
             return [program] + common + ['--group', 'x25519', '--cipher', 'aes128', '--closer', 'client',
                                          '--max-streams', '16', '--congestion', 'prague']
@@ -191,8 +193,8 @@ class Case:
         expect(picoquic.get('observed') == expected, f'picoquic holds another report than {expected}: {detail}')
 
     def check_multipath(self, cerid, picoquic, detail):
-        """Negotiated exactly when both ends offer it; then a Cerid client's path ID 1 opens on both ends and carries
-        its share of the echo, and picoquic's server holds it."""
+        """Negotiated exactly when both ends offer it; then a Cerid client's path ID 1 opens on both ends, picoquic's
+        server holds it, and the stream pinned there reaches picoquic on it, every byte."""
         negotiated = self.multipath == (True, True)
         expect(cerid.get('multipath') == str(int(negotiated)) and picoquic.get('multipath') == str(int(negotiated)),
                f'multipath negotiated otherwise: {detail}')
@@ -208,7 +210,10 @@ class Case:
         expect(int(cerid.get('paths_opened', '0')) >= 1, f'path ID 1 opened no number space at Cerid: {detail}')
         expect(int(picoquic.get('paths', '0')) >= 2 and int(picoquic.get('largest_path_id', '0')) >= 1,
                f'picoquic never held path ID 1: {detail}')
-        expect(int(picoquic.get('other_path_received', '0')) > 0, f'picoquic read nothing on path ID 1: {detail}')
+        expect(cerid.get('pinned') == '1' and cerid.get('pin_kept') == '1',
+               f'the last stream was not pinned to path ID 1 until acknowledged: {detail}')
+        expect(int(picoquic.get('other_path_received', '0')) >= self.size,
+               f'picoquic read less than the pinned stream on path ID 1: {detail}')
 
     def check_relay(self, relay, cerid, picoquic, detail):
         """The AQM's marks against both ends' counts, and Prague's state, queue and rate through it. A Cerid client
