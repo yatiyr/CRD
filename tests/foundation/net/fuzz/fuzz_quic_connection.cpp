@@ -54,12 +54,13 @@
 // asked; no client datagram leaves by a held socket, and a send() held back changes no counter or packet number; a
 // server on its preferred socket moved there after its client, once it validated the path there, and keeps no path
 // on its first socket; a client there sends to that address alone. These path checks read path ID 0's slots while
-// it is open; the server's credit holds per address over every slot. Multipath: no path ID opens in a slot of either
-// end twice (RFC 10069 section 2.4, its nonce); add_path() and abandon_path() answer as the limits, the paths still
-// sending and the earlier abandonments say, and nothing refused changes a counter; each end's limit rises by one per
-// path ID closed, which its peer learns. A confirmed pair keeps the client's lowest open path ID once the stream
-// arrived, abandoning its others, and the server follows the client on it (that a server not following saw a
-// validation fail is exact only without further paths: a failure on another one counts too).
+// it is open; the server's credit holds per slot, a datagram counted by the slot that reads it, at every step and on
+// every send. Multipath: no path ID opens in a slot of either end twice (RFC 10069 section 2.4, its nonce); add_path()
+// and abandon_path() answer as the limits, the paths still sending and the earlier abandonments say, and nothing
+// refused changes a counter; each end's limit rises by one per path ID closed, which its peer learns. A confirmed pair
+// keeps the client's lowest open path ID once the stream arrived, abandoning its others, and the server follows the
+// client on it (that a server not following saw a validation fail is exact only without further paths: a failure on
+// another one counts too).
 // 0-RTT: an offer ends Accepted or Rejected on both ends alike; accepted, the server reads the early stream
 // whole and unchanged, never marking more bytes replayable than came; rejected, the client's streams were reset and
 // the server opened none of them.
@@ -418,6 +419,8 @@ struct Flight
     Ecn ecn = Ecn::NotEct; // as the sender marked it, or as the path rewrote it
     usize path = 0U;       // the client's address (kClientPaths) a datagram left or was sent to
     u32 server_socket = 0U; // the server's socket it reaches or left: 1 at the preferred address
+    u64 path_id = 0U;       // the client's path ID it left on (0 for a datagram of no 1-RTT packet)
+    u64 epoch = 0U;         // the client's epoch when it left (Pair::opened_from)
 };
 
 // The client's addresses over paths (byte 0's bit 7): its socket 0's (a NAT rebinding of the first, another address,
@@ -435,6 +438,15 @@ const QuicPath kClientPaths[kClientAddresses] = {
 };
 const Endpoint kServerAddress{IpAddress::v4(192, 0, 2, 1), 443U};
 const Endpoint kPreferredAddress{IpAddress::v4(192, 0, 2, 80), 4433U}; // the server's socket 1 (RFC 9000 section 9.6)
+
+// The server's credit in one path slot (RFC 9000 section 8, RFC 10069 section 7.2): the bytes each 4-tuple (a socket
+// and a kClientPaths address) gave the slot since it last did not hold it, and what went there while unproven there.
+struct SlotCredit
+{
+    u64 path_id = kNoPathId;
+    u64 received[2][kClientAddresses] = {};
+    u64 sent[2][kClientAddresses] = {};
+};
 
 // Over paths the client's first path names its server's address, which its own sockets' paths keep, and moves to
 // the server's preferred address only when the script says (0xF7); a server with a handshake offers that address on
@@ -473,18 +485,6 @@ usize slot_of(const QuicConnection& end, u64 path_id)
     return kQuicNoPath;
 }
 
-// Whether a slot of `end`'s knows the 4-tuple `path` (validated, with `validated`).
-bool knows(const QuicConnection& end, const QuicPath& path, bool validated = false)
-{
-    bool found = false;
-    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
-    {
-        const usize index = end.protection().path_open(slot) ? end.paths(slot).find(path) : kQuicNoPath;
-        found = found || (index != kQuicNoPath && (!validated || end.paths(slot).validated(index)));
-    }
-    return found;
-}
-
 // The bit of a path ID below 64 in a mask of path IDs (0 above: the scripts name none).
 u64 id_bit(u64 path_id)
 {
@@ -521,11 +521,14 @@ struct Pair
     bool keyed = false; // the raw UDP path: no handshake to confirm, so it stands once both ends read the other's hello
     bool retry_sent = false;
     usize client_path = 0U; // socket 0's address now (over paths)
-    // Bytes the server was given from each address at each of its sockets since no slot of its knew that path, and
-    // sent there while no slot had proven it.
-    u64 path_received[2][kClientAddresses] = {};
-    u64 path_sent[2][kClientAddresses] = {};
-    u64 unbound_bytes = 0U;    // given to the server's first path before it was bound
+    SlotCredit credits[kQuicMaxPaths]; // the server's, per slot: no slot spends another's
+    // The client's path IDs below 64 of which the server opened a packet from each address, sent in the client's
+    // epoch: since its NAT last mapped its socket 0 elsewhere and it last moved. An older packet moves nothing (RFC
+    // 9000 section 9.3: only the newest non-probing one does).
+    u64 opened_from[kClientAddresses] = {};
+    u64 epoch = 0U;
+    u64 client_moves = 0U;  // the client's migrations counted when its epoch began
+    u64 unbound_bytes = 0U; // given to the server's first path before it was bound
     // The client's sockets its host holds back (over paths).
     u32 held = 0U;
     bool server_preferred = false; // the server moved to its preferred socket (over paths)
@@ -626,15 +629,75 @@ struct Pair
         const u32 socket = server.sent_path().socket;
         if (from == 1U && to < kClientAddresses)
         {
-            // What goes to an address no slot has proven is at most three times what came from it over every slot
-            // (RFC 9000 section 8; each slot holds its own credit, which the sum bounds).
+            // What a slot sends to a 4-tuple it has not proven is at most three times what that slot was given from
+            // there, whatever another slot proved or was given (RFC 10069 section 7.2).
             CRD_FUZZ_REQUIRE(socket < 2U);
             const usize index = server.paths(slot).find(server.sent_path());
             CRD_FUZZ_REQUIRE(index != kQuicNoPath);
-            if (!server.paths(slot).validated(index) && !knows(server, server.sent_path(), true))
+            if (!server.paths(slot).validated(index))
             {
-                path_sent[socket][to] += datagram.size();
-                CRD_FUZZ_REQUIRE(path_sent[socket][to] <= 3U * path_received[socket][to]);
+                SlotCredit& credit = credit_of(slot);
+                credit.sent[socket][to] += datagram.size();
+                CRD_FUZZ_REQUIRE(credit.sent[socket][to] <= 3U * credit.received[socket][to]);
+            }
+            check_credit();
+        }
+    }
+
+    // Slot `slot`'s credit, started again once the slot holds another path ID.
+    SlotCredit& credit_of(usize slot)
+    {
+        SlotCredit& credit = credits[slot];
+        const u64 path_id = server.protection().path_id(slot);
+        if (credit.path_id != path_id)
+        {
+            credit = SlotCredit{};
+            credit.path_id = path_id;
+        }
+        return credit;
+    }
+
+    // The server's slot a client datagram counts toward, as it reads one (datagram_slot()): the slot of its first
+    // packet's path ID; the leading slot for a long header or an ID the server no longer routes; kQuicNoPath while
+    // that path ID is open in no slot (it may open on this datagram).
+    [[nodiscard]] usize receiving_slot(const Flight& flight) const
+    {
+        const usize id_bytes = keyed ? kKeyedIdBytes : sizeof(kServerCid); // the server's IDs, all of one length
+        const bool routed = flight.size > id_bytes && (flight.bytes[0] & 0x80U) == 0U &&
+                            server_host.routes.find(ConstSpan<u8>(flight.bytes + 1U, id_bytes)) != kNoConnection;
+        if (routed)
+        {
+            return slot_of(server, flight.path_id);
+        }
+        usize lead = 0U; // slot 0's 4-tuples are always there; a further slot's only while open
+        for (usize slot = 1U; slot < kQuicMaxPaths; ++slot)
+        {
+            lead = (server.protection().path_open(slot) && &server.paths(slot) == &server.paths()) ? slot : lead;
+        }
+        return lead;
+    }
+
+    // Each open slot of the server's holds no more credit for a 4-tuple it has not proven than three times what that
+    // slot was given from there, less what it sent there.
+    void check_credit()
+    {
+        for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+        {
+            if (!server.protection().path_open(slot))
+            {
+                continue;
+            }
+            const QuicPaths& paths = server.paths(slot);
+            for (usize index = 0U; index < kQuicMaxPaths; ++index)
+            {
+                const usize address = paths.used(index) ? path_of(paths.path(index)) : kClientAddresses;
+                const u32 socket = paths.path(index).socket;
+                if (address < kClientAddresses && socket < 2U && !paths.validated(index))
+                {
+                    const SlotCredit& credit = credit_of(slot);
+                    CRD_FUZZ_REQUIRE(paths.credit(index) + credit.sent[socket][address] <=
+                                     3U * credit.received[socket][address]);
+                }
             }
         }
     }
@@ -658,6 +721,25 @@ struct Pair
         return (socket == 0U) ? client_path : kSocketZeroPaths + socket - 1U;
     }
 
+    // A rebinding or a move of the client's begins an epoch.
+    void next_epoch()
+    {
+        ++epoch;
+        for (u64& ids : opened_from)
+        {
+            ids = 0U;
+        }
+    }
+
+    void follow_moves()
+    {
+        if (client.counters().migrations != client_moves)
+        {
+            client_moves = client.counters().migrations;
+            next_epoch();
+        }
+    }
+
     void flush()
     {
         QuicConnection* const ends[2] = {&client, &server};
@@ -678,12 +760,16 @@ struct Pair
                 {
                     slot_numbers[slot] = end.next_packet_number(QuicSpace::Application, slot);
                 }
+                follow_moves();
                 const usize size = end.send(Span<u8>(out, sizeof(out)), now, (from == 0U) ? held : 0U);
+                follow_moves();
                 usize sent_slot = 0U; // the handshake's, for a datagram of no 1-RTT packet
+                u64 sent_id = 0U;
                 for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
                 {
                     const bool moved = end.next_packet_number(QuicSpace::Application, slot) != slot_numbers[slot];
                     sent_slot = moved ? slot : sent_slot;
+                    sent_id = moved ? end.protection().path_id(slot) : sent_id;
                 }
                 if (size == 0U)
                 {
@@ -712,6 +798,8 @@ struct Pair
                     flights[count].to = 1U - from;
                     flights[count].ecn = ends[from]->marking();
                     flights[count].path = address;
+                    flights[count].path_id = sent_id;
+                    flights[count].epoch = epoch;
                     const bool preferred = client.sent_path().peer == kPreferredAddress;
                     flights[count].server_socket =
                         (from == 0U) ? static_cast<u32>(preferred) : server.sent_path().socket;
@@ -723,6 +811,7 @@ struct Pair
 
     void deliver(usize index)
     {
+        follow_moves();
         Flight& flight = flights[index];
         QuicConnection& to = (flight.to == 0U) ? client : server;
         if (flight.to == 1U && to.state() == QuicConnectionState::Idle)
@@ -749,22 +838,33 @@ struct Pair
         {
             const u32 socket = flight.server_socket;
             const QuicPath from{socket, kClientPaths[flight.path].peer};
-            // A path no slot of the server's knows starts its count again. Its unbound first path counts every
-            // datagram until one opens, and then belongs to that one's address (S55).
+            // The slot that reads it counts it; a 4-tuple that slot did not hold starts its count again. The unbound
+            // first path counts every datagram until one opens, and then belongs to that one's address (S55).
             const bool unbound = server.path().peer.port == 0U;
-            if (!unbound && !knows(server, from))
-            {
-                path_received[socket][flight.path] = 0U;
-                path_sent[socket][flight.path] = 0U;
-            }
+            const usize before = receiving_slot(flight);
+            const bool held_before = before != kQuicNoPath && server.paths(before).find(from) != kQuicNoPath;
             unbound_bytes += unbound ? flight.size : 0U;
-            path_received[socket][flight.path] += unbound ? 0U : flight.size;
+            const u64 opened = server.counters().packets_opened;
             to.receive(from, Span<u8>(flight.bytes, flight.size), flight.ecn, now);
+            const bool current = flight.epoch == epoch && server.counters().packets_opened != opened;
+            opened_from[flight.path] |= current ? id_bit(flight.path_id) : 0U;
+            const usize reading = (before != kQuicNoPath) ? before : slot_of(server, flight.path_id);
+            if (!unbound && reading != kQuicNoPath && server.protection().path_open(reading))
+            {
+                SlotCredit& credit = credit_of(reading);
+                if (!held_before)
+                {
+                    credit.received[socket][flight.path] = 0U;
+                    credit.sent[socket][flight.path] = 0U;
+                }
+                credit.received[socket][flight.path] += flight.size;
+            }
             const usize bound = path_of(server.path());
             if (unbound && bound < 4U)
             {
-                path_received[server.path().socket][bound] = unbound_bytes;
+                credit_of(0U).received[server.path().socket][bound] = unbound_bytes;
             }
+            check_credit();
             // The server's datagrams move to its preferred socket only once it validated the path there, after its
             // client moved there, and leave every other socket's path for good (section 9.6.2); there it follows its
             // client as anywhere. These are path ID 0's 4-tuples, while it is open (a further path ID keeps its own,
@@ -1322,6 +1422,7 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         if (op == 0xFCU && over_paths())
         {
             pair.client_path = (pair.client_path + 1U) % 4U;
+            pair.next_epoch();
             continue;
         }
         if ((op == 0xFAU || op == 0xF9U) && over_paths())
@@ -1670,11 +1771,14 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
                 const usize slot = slot_of(end, kept);
                 return (slot != kQuicNoPath) ? &end.paths(slot) : nullptr;
             };
-            const auto client_at = [&]
+            const auto client_address = [&]
             {
                 const QuicPaths* const paths = tuples(pair.client);
-                const u32 socket = (paths != nullptr) ? paths->path(paths->active()).socket : 0U;
-                return kClientPaths[pair.address_of(socket)].peer;
+                return pair.address_of((paths != nullptr) ? paths->path(paths->active()).socket : 0U);
+            };
+            const auto client_at = [&]
+            {
+                return kClientPaths[client_address()].peer;
             };
             const auto follows = [&]
             {
@@ -1707,8 +1811,12 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
                                   {
                                       if (!follows() && !ended() && !proving(false))
                                       {
+                                          // A server that opened none of the kept path ID's packets from there since
+                                          // the client's NAT mapped it (a path ID that carried nothing since, its
+                                          // packets lost, waiting for its probe timeout) learns it from the next one.
                                           const QuicConnectionCounters& counters = pair.server.counters();
-                                          CRD_FUZZ_REQUIRE(counters.path_failures != 0U);
+                                          const bool heard = (pair.opened_from[client_address()] & id_bit(kept)) != 0U;
+                                          CRD_FUZZ_REQUIRE(!heard || counters.path_failures != 0U);
                                           // Again only after another validation failed, or when nothing opened.
                                           CRD_FUZZ_REQUIRE(!pinged || counters.path_failures > failures ||
                                                            counters.packets_opened == opened);

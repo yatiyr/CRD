@@ -299,6 +299,11 @@ public:
     Endpoint socket_at[3];
     // An extra delay each way for datagrams from or to the client's socket 0 to 3: paths of different RTTs (S78).
     u64 socket_delay_ns[4] = {};
+    // Beside `path`'s, losses and copies (per mille) and a uniform extra delay of those datagrams alone: one path ID's
+    // link hostile while the others stay clean (S78).
+    u32 socket_loss[4] = {};
+    u32 socket_duplicate[4] = {};
+    u64 socket_jitter_ns[4] = {};
     // Each end's sockets whose send would block (send()'s held_sockets, a bit per QuicPath::socket).
     u32 held[2] = {};
     u32 down = 0U;
@@ -368,6 +373,7 @@ public:
                     too_big_matched[from] += matched ? 1U : 0U;
                 }
                 const bool lost = oversize || rng.chance(path[from].loss) ||
+                                  (socket < 4U && socket_loss[socket] != 0U && rng.chance(socket_loss[socket])) ||
                                   (filter != nullptr && filter->drop(from, ConstSpan<u8>(out, size))) ||
                                   (path[from].ecn == EcnPath::DropMarked && ecn != Ecn::NotEct);
                 if (lost)
@@ -377,7 +383,8 @@ public:
                 }
                 ecn = on_path(from, ecn);
                 enqueue(from, ConstSpan<u8>(out, size), ecn, socket, server_socket);
-                if (rng.chance(path[from].duplicate))
+                if (rng.chance(path[from].duplicate) ||
+                    (socket < 4U && socket_duplicate[socket] != 0U && rng.chance(socket_duplicate[socket])))
                 {
                     enqueue(from, ConstSpan<u8>(out, size), ecn, socket, server_socket);
                 }
@@ -585,7 +592,8 @@ private:
         Flight& flight = m_flights[m_count++];
         std::memcpy(flight.bytes, datagram.data(), datagram.size());
         flight.size = datagram.size();
-        const u64 jitter = (path[from].jitter_ns == 0U) ? 0U : rng.next() % path[from].jitter_ns;
+        u64 jitter = (path[from].jitter_ns == 0U) ? 0U : rng.next() % path[from].jitter_ns;
+        jitter += (socket < 4U && socket_jitter_ns[socket] != 0U) ? rng.next() % socket_jitter_ns[socket] : 0U;
         flight.at = departs + path[from].delay_ns + jitter + ((socket < 4U) ? socket_delay_ns[socket] : 0U);
         flight.to = 1U - from;
         flight.ecn = ecn;

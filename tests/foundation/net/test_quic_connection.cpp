@@ -6378,6 +6378,131 @@ TEST_CASE("QUIC connection: a client opens path ID 1 from a socket of its own, e
 
 namespace
 {
+// Once armed: what the server sends to `to` from a slot that has not validated it there, and what the client sends
+// from its socket `socket` (all that can reach the server from `to` once the client's NAT maps that socket there).
+class RebindWatch final : public Filter
+{
+public:
+    RebindWatch(const QuicConnection& client, const QuicConnection& server, u32 socket, const Endpoint& to)
+        : m_client(client), m_server(server), m_socket(socket), m_to(to)
+    {
+    }
+
+    void sent(usize from, ConstSpan<u8> datagram) override
+    {
+        if (!armed)
+        {
+            return;
+        }
+        if (from == 0U)
+        {
+            client_bytes += (m_client.sent_path().socket == m_socket) ? datagram.size() : 0U;
+            return;
+        }
+        const QuicPath& path = m_server.sent_path();
+        if (path.peer != m_to)
+        {
+            return;
+        }
+        for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+        {
+            const QuicPaths& paths = m_server.paths(slot);
+            const usize index = m_server.protection().path_open(slot) ? paths.find(path) : kQuicNoPath;
+            unproven_bytes += (index != kQuicNoPath && !paths.validated(index)) ? datagram.size() : 0U;
+        }
+    }
+
+    bool drop(usize /*from*/, ConstSpan<u8> /*datagram*/) override { return false; }
+
+    bool armed = false;
+    usize client_bytes = 0U;
+    usize unproven_bytes = 0U;
+
+private:
+    const QuicConnection& m_client;
+    const QuicConnection& m_server;
+    u32 m_socket;
+    Endpoint m_to;
+};
+} // namespace
+
+TEST_CASE("QUIC connection: path ID 1 alone loses, duplicates, reorders and rebinds; the server follows it in its own "
+          "slot within that slot's credit, path ID 0 untouched, and a stream crosses both paths whole",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 section 3.1.2: each path ID follows its own peer address; RFC 9000 sections 9.3 and 9.4: a non-probing
+    // packet from a new address moves the path, which sends at most three times what came from there until validated,
+    // and keeps its congestion state only when the port alone changed. The client's socket 1 (path ID 1) is the hostile
+    // link; socket 0 (path ID 0) stays clean.
+    for (u64 seed = 1U; seed <= 4U; ++seed)
+    {
+        const bool port_only = (seed % 2U) != 0U;
+        INFO("seed " << seed << (port_only ? ", a NAT rebinding of the port" : ", a new address"));
+        MultipathPair pair;
+        pair.net->rng.state = seed;
+        pair.net->socket_loss[1] = 80U;
+        pair.net->socket_duplicate[1] = 60U;
+        pair.net->socket_jitter_ns[1] = 12U * kMs;
+        pair.open_second();
+        const Endpoint rebound = port_only ? Endpoint{kSecondAt.address, 41001U} // kSecondAt's address, the next port
+                                           : Endpoint{IpAddress::v4(203, 0, 113, 77), 47000U};
+        const QuicPaths& zero = pair.server.paths(0U);
+        const QuicPaths& one = pair.server.paths(1U);
+        REQUIRE(one.path(one.active()).peer == kSecondAt);
+        const QuicPath zero_path = zero.path(zero.active());
+        const u64 zero_floor = pair.server.recovery().path_floor(0U);
+        const u64 one_floor = pair.server.recovery().path_floor(1U);
+        const u64 validations = pair.server.counters().path_validations;
+        RebindWatch watch(pair.client, pair.server, 1U, rebound);
+        pair.net->filter = &watch;
+        REQUIRE(pair.client.set_path_choice(QuicPathChoice::Turns));
+        u64 stream = 0U;
+        REQUIRE(pair.client.streams().open(true, stream) == QuicStreamError::None);
+        constexpr u64 total = 192U * 1024U;
+        u64 written = 0U;
+        u64 read = 0U;
+        const auto flow = [&]
+        {
+            static_cast<void>(write_pattern(pair.client.streams(), stream, written, total, stream));
+            return pair.server.streams().recv_state(stream) != QuicRecvState::None &&
+                   drain(pair.server.streams(), stream, read, stream);
+        };
+        // The NAT maps the socket elsewhere while path ID 1 has data in flight; what left before still arrives from
+        // the old address, late and reordered.
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                static_cast<void>(flow());
+                return pair.client.recovery().bytes_in_flight(1U) != 0U && written > total / 4U;
+            }));
+        pair.net->socket_at[0] = rebound;
+        watch.armed = true;
+        REQUIRE(pair.net->run_until(flow, 600000U * kMs));
+        CHECK(read == total);
+        REQUIRE(pair.net->run_until(
+            [&] { return one.path(one.active()).peer == rebound && one.validated(one.active()); }, 600000U * kMs));
+        CHECK(watch.unproven_bytes != 0U); // the server followed before validating, under the credit
+        CHECK(watch.unproven_bytes <= 3U * watch.client_bytes);
+        CHECK(pair.server.counters().path_validations > validations);
+        // Path ID 0 is where it was: its 4-tuple, no trace of the new address, its estimate and controller kept.
+        CHECK(zero.path(zero.active()) == zero_path);
+        CHECK(zero.find(QuicPath{0U, rebound}) == kQuicNoPath);
+        CHECK(pair.server.recovery().path_floor(0U) == zero_floor);
+        // Path ID 1 restarted its estimate only for a new address (section 9.4).
+        CHECK((pair.server.recovery().path_floor(1U) == one_floor) == port_only);
+        CHECK(pair.server.path_control(1U)->path().peer == rebound);
+        // The move cost the client no validation and either end no path.
+        CHECK(pair.client.counters().path_failures == 0U);
+        CHECK(pair.server.counters().paths_closed == 0U);
+        CHECK(pair.client.state() == QuicConnectionState::Established);
+        CHECK(pair.server.state() == QuicConnectionState::Established);
+        pair.net->filter = nullptr;
+        pair.stream_to_server(32U * 1024U);
+    }
+}
+
+namespace
+{
 // At each datagram of the sender's `slot` that carries more than acknowledgements, that slot's bytes in flight are
 // within its window unless it owes its own probe: another path's owed probe opens neither its window nor its pacer.
 class WindowWatch final : public Filter
