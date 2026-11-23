@@ -481,9 +481,14 @@ versions, HANDSHAKE_DONE confirming it) and `crd-fuzz-net-quic-packet` (received
   acknowledged, the ranges up to its largest are retired, the largest received number always kept (13.2.4).
 - **Sending.** Each space's sent packets sit in number order in caller storage, which bounds what a connection
   holds in flight (`can_send`; a full space refuses, and data stops eight entries short so that ACK-only packets and
-  probes can always free the peer's: `can_send_data`). Numbers rise and may leave gaps: a sender skips numbers from
-  entropy, and an ACK naming any number it never sent, above the last or in a gap at or above the oldest entry, is
-  `AckOfUnsent` (PROTOCOL_VIOLATION, sections 13.1 and 21.4) and changes nothing.
+  probes can always free the peer's: `can_send_data`). An outstanding ACK-only packet (neither ack-eliciting nor in
+  flight) holds its entry only until another packet needs one: nothing acknowledges it by itself, so behind a dark
+  return path a storage full of them held even a PING back until a backed-off probe timeout. `on_sent` gives the
+  oldest one's entry to the new packet (its discard is an event, so a PATH_ACK record settles) and keeps the order.
+  Numbers rise and may leave gaps: a sender skips numbers from entropy, and each entry keeps the run skipped just
+  before it (`unsent_from`), so the entry of a packet after a skip is never given up. An ACK naming a number never
+  sent, above the last or in a held run, is `AckOfUnsent` (PROTOCOL_VIOLATION, sections 13.1 and 21.4) and changes
+  nothing; a given-up number was sent and reports nothing.
 - **Recovery is RFC 9002 appendix A in code.** RTT samples only when the largest acknowledged is newly acknowledged
   and an ack-eliciting packet is among them; min_rtt ignores the delay, the delay is capped at max_ack_delay only
   after confirmation, ignored in Initial, and never takes a sample below min_rtt. Loss by three packets or 9/8 of
@@ -580,9 +585,12 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   in a bounded ring that `QuicSentPacket::token` points into; recovery's events settle them (acknowledged, lost:
   resent, discarded: dropped). A full ring holds those frames back; ACKs and probes still go. A probe sends its
   space's unacknowledged CRYPTO data again, else a PING (RFC 9002 section 6.2.4), and the 16th ACK-only packet in a
-  row carries a PING, because a peer need not acknowledge ACK-only packets and they would fill the space's storage
-  (RFC 9000 section 13.2.4). An owed ACK counts toward `next_timer_ns()` only where `send()` can write it (keys held,
-  space kept, storage free), so a caller's loop never spins on a timer nothing serves.
+  row carries a PING, because a peer need not acknowledge ACK-only packets and only an acknowledged one retires the
+  ranges it reported (RFC 9000 section 13.2.4). An owed ACK counts toward `next_timer_ns()` only where `send()` can
+  write it (keys held, space kept, storage free), so a caller's loop never spins on a timer nothing serves. A frame
+  that settles through a record counts as content only while the ring has room, and an ACK not yet owed rides only
+  with other frames: a waiting frame or datagram that cannot go (a full ring, a datagram over a probe timeout's
+  floor) never draws packet after packet of nothing but an ACK.
 - **Frames.** Every type is dispatched. Stream and flow-control frames go to S40's stream set, whose frames follow the
   connection's own in 1-RTT packets as records in the same ledger; DATAGRAM frames go to S41's datagrams. The peer's
   connection IDs are held to this side's active_connection_id_limit with Retire Prior
