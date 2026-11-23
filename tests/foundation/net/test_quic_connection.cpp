@@ -3411,6 +3411,61 @@ TEST_CASE("QUIC connection: a datagram of the largest size takes the first packe
     }
 }
 
+TEST_CASE("QUIC connection: a datagram over a probe timeout's floor waits, and the ACK it would carry never leaves "
+          "alone",
+          "[net][4.2a][quic-connection][quic-datagram]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    QuicConnectionConfig client_config = datagram_config(QuicSide::Client, identity, QuicVersion::V1, 0U, true);
+    QuicConnectionConfig server_config = datagram_config(QuicSide::Server, identity, QuicVersion::V1, 1U, false);
+    client_config.max_datagram_bytes = 1400U;
+    server_config.parameters.max_udp_payload_size = 1400U;
+    server_config.datagrams.max_frame_bytes = 1400U;
+    QuicConnection client(allocator, client_config);
+    QuicConnection server(allocator, server_config);
+    connect(client);
+    auto net = std::make_unique<Net>(client, server);
+    REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+    REQUIRE(net->run_until([&] { return client.path_mtu().state() == QuicPmtuState::SearchComplete; }));
+    REQUIRE(client.path_mtu().size() == 1400U);
+    net->advance(net->now + 1000U * kMs); // every packet acknowledged, nothing owed
+    // The client's PING is lost and its probe timeout fires: until an acknowledgement, its packets keep to the floor.
+    u8 out[kDatagram];
+    client.ping();
+    REQUIRE(client.send(Span<u8>(out, sizeof(out)), net->now) != 0U);
+    net->now = client.next_timer_ns();
+    client.on_timeout(net->now);
+    usize probes = 0U;
+    while (probes < 8U && client.send(Span<u8>(out, sizeof(out)), net->now) != 0U)
+    {
+        ++probes;
+    }
+    REQUIRE(probes != 0U); // lost as well
+    REQUIRE(probes < 8U);
+    REQUIRE(client.recovery().pto_count() == 1U);
+    // One ack-eliciting packet from the server: the client's ACK may wait (section 13.2.2), carried by what goes next.
+    server.ping();
+    const usize size = server.send(Span<u8>(out, sizeof(out)), net->now);
+    REQUIRE(size != 0U);
+    client.receive(Span<u8>(out, size), Ecn::NotEct, net->now);
+    REQUIRE(client.recovery().ack_deadline_ns(QuicSpace::Application) > net->now);
+    // A datagram of the path's size cannot go at the floor: no packet leaves for it, not even one ACK after another.
+    u8 payload[kDatagram] = {};
+    const usize largest = client.datagrams().max_payload();
+    REQUIRE(largest + kQuicShortPacketOverhead + 3U > kQuicPmtuFloor);
+    u64 id = 0U;
+    REQUIRE(client.datagrams().queue(ConstSpan<u8>(payload, largest), net->now, id) == QuicDatagramError::None);
+    CHECK(client.send(Span<u8>(out, sizeof(out)), net->now) == 0U);
+    CHECK(client.datagrams().sendable());
+    // The owed ACK goes at its deadline; the server's acknowledgement ends the floor and the datagram follows.
+    REQUIRE(net->run_until([&] { return server.datagrams().held() == 1U; }));
+    ConstSpan<u8> held;
+    REQUIRE(server.datagrams().peek(held));
+    CHECK(held.size() == largest);
+    CHECK(client.recovery().pto_count() == 0U);
+}
+
 // ---- This side's connection IDs and stateless reset ----
 
 namespace
