@@ -1308,7 +1308,8 @@ QuicPacketType type_of(QuicLevel level)
     return (level == QuicLevel::Handshake) ? QuicPacketType::Handshake : QuicPacketType::OneRtt;
 }
 
-// The raw peers' server: room for the thousand packets a skipped number takes to appear.
+// The raw peers' server: room for the thousand packets a skipped number takes to appear. Its paths take turns, so each
+// path's acknowledgements go on that path (QuicPathChoice::Turns), which RawClient's reader holds it to.
 QuicConnectionConfig server_config(const Identity& identity, crd::u32 sent_packets, const QuicDatagramLimits& datagrams,
                                    QuicConnectionIds* ids, ConstSpan<u32> versions, u64 receive_timestamps,
                                    QuicAddressDiscovery discovery, bool multipath, u64 max_path_id)
@@ -1318,6 +1319,7 @@ QuicConnectionConfig server_config(const Identity& identity, crd::u32 sent_packe
     config.parameters.address_discovery = discovery;
     config.parameters.has_initial_max_path_id = multipath;
     config.parameters.initial_max_path_id = max_path_id;
+    config.path_choice = QuicPathChoice::Turns;
     config.versions = versions;
     config.ids = ids;
     config.sent_packets = sent_packets;
@@ -1782,7 +1784,7 @@ private:
                 }
                 break;
             case QuicFrameKind::PathAck:
-                // Each path ID's PATH_ACK goes on that path ID's own packets (the server's policy, section 3.1), an
+                // Each path ID's PATH_ACK goes on that path ID's own packets (the server's Turns, section 5.5), an
                 // abandoned one's on path ID 0's (section 3.4.3).
                 CHECK((m_further == (frame.path_id != 0U) || (!m_further && raw.abandons != 0U)));
                 ++raw.path_acks;
@@ -6381,7 +6383,11 @@ namespace
 class WindowWatch final : public Filter
 {
 public:
-    WindowWatch(const QuicConnection& sender, usize from, usize slot) : m_sender(sender), m_from(from), m_slot(slot) {}
+    // From the slot's next packet: what it put in flight before is not this watch's.
+    WindowWatch(const QuicConnection& sender, usize from, usize slot)
+        : m_sender(sender), m_from(from), m_slot(slot), m_next(sender.next_packet_number(QuicSpace::Application, slot))
+    {
+    }
 
     bool drop(usize from, ConstSpan<u8> datagram) override
     {
@@ -6425,6 +6431,9 @@ TEST_CASE("QUIC connection: a path that goes dark holds no data back: its probe 
         MultipathPair pair(2U, 2U, false, true, 64U, true);
         QuicConnection& sender = by_client ? pair.client : pair.server;
         QuicConnection& receiver = by_client ? pair.server : pair.client;
+        // Each path acknowledged on itself, so the dark path's loss is the sender's alone (shortest-path PATH_ACKs
+        // that share its fate: the PATH_ACK placement cases).
+        REQUIRE(receiver.set_path_choice(QuicPathChoice::Turns));
         // Path ID 1 opens with a window of two datagrams, so the live path waits on its window as the dark one probes.
         CongestionPolicy policy;
         policy.algorithm = CongestionAlgorithm::NewReno;
@@ -6572,6 +6581,7 @@ TEST_CASE("QUIC connection: a path whose acknowledgements go dark has its frames
     // client's probe timeout sends their frames again on path ID 0, and the PATH_ACKs that come once the path returns
     // acknowledge packets whose records were settled. Every datagram is reported once, the stream is acknowledged.
     MultipathPair pair(2U, 2U, false, true, 64U, true);
+    REQUIRE(pair.server.set_path_choice(QuicPathChoice::Turns)); // each path acknowledged on itself
     pair.open_second();
     QuicConnection& client = pair.client;
     const QuicRecovery& recovery = client.recovery();
@@ -7060,6 +7070,256 @@ TEST_CASE("QUIC connection: an idle path gone dark is found by its refresh's pro
         CHECK(pair.client.counters().path_failures == 0U);
         CHECK(pair.client.state() == QuicConnectionState::Established);
     }
+}
+
+namespace
+{
+// Reads what arrived of `stream` at `to`.
+void read_some(QuicConnection& to, u64 stream, u64& read)
+{
+    if (to.streams().recv_state(stream) != QuicRecvState::None)
+    {
+        static_cast<void>(drain(to.streams(), stream, read, stream));
+    }
+}
+
+// Streams `chunks` of 500 bytes of `stream`, one every 20 ms, from `from` to `to`, each read as it arrives.
+void chunks_over(MultipathPair& pair, QuicConnection& from, QuicConnection& to, u64 stream, usize chunks, u64& written,
+                 u64& read)
+{
+    for (usize chunk = 0U; chunk < chunks; ++chunk)
+    {
+        static_cast<void>(write_pattern(from.streams(), stream, written, written + 500U, stream, false));
+        pair.net->advance(pair.net->now + 20U * kMs);
+        read_some(to, stream, read);
+    }
+}
+} // namespace
+
+TEST_CASE("QUIC connection: by the lowest RTT an end's PATH_ACKs for a slower path ride its faster one, so its peer "
+          "measures that path's delay toward it plus the shorter return, and their ranges retire; taking turns, each "
+          "path acknowledges itself",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 sections 5.4 and 5.5. Path ID 1 is 30 ms slower each way (50 ms against 20 ms) and carries the
+    // client's stream pinned to it; the server, which only acknowledges, places the PATH_ACKs by its path choice.
+    for (const QuicPathChoice choice : {QuicPathChoice::LowestRtt, QuicPathChoice::Turns})
+    {
+        const bool shortest = choice == QuicPathChoice::LowestRtt;
+        INFO((shortest ? "LowestRtt" : "Turns"));
+        MultipathPair pair;
+        pair.net->socket_delay_ns[1] = 30U * kMs;
+        pair.open_second();
+        pair.net->advance(pair.net->now + 3000U * kMs); // the path MTU searches end
+        REQUIRE(pair.server.set_path_choice(choice)); // live: Turns takes the PATH_ACKs back to their own paths
+        u64 stream = 0U;
+        REQUIRE(open_uni(pair, stream));
+        REQUIRE(pair.client.streams().pin(stream, 1U) == QuicStreamError::None);
+        const u64 server_sent = pair.server.next_packet_number(QuicSpace::Application, 1U);
+        u64 written = 0U;
+        u64 read = 0U;
+        chunks_over(pair, pair.client, pair.server, stream, 100U, written, read); // two seconds
+        CHECK(read + 1500U >= written); // 50 ms on the way
+        const u64 smoothed = pair.client.recovery().rtt(1U).smoothed_ns;
+        CHECK(smoothed >= (shortest ? 70U : 95U) * kMs); // switched live, Turns' estimate still converging
+        CHECK(smoothed <= (shortest ? 75U : 105U) * kMs);
+        CHECK((pair.server.next_packet_number(QuicSpace::Application, 1U) == server_sent) == shortest);
+        // Acknowledged on path ID 0, the PATH_ACKs retire path ID 1's ranges (RFC 9000 section 13.2.4).
+        const ConstSpan<QuicAckRange> ranges = pair.server.recovery().received(QuicSpace::Application, 1U).ranges();
+        REQUIRE(ranges.size() == 1U);
+        CHECK(ranges[0].smallest + 32U >= ranges[0].largest);
+        CHECK(pair.server.counters().ack_path_moves == 0U);
+        if (shortest)
+        {
+            // The client marks path ID 0 backup (section 3.3): the server's PATH_ACKs leave it, once.
+            REQUIRE(pair.client.set_path_status(0U, true) == QuicPathStatusChange::Set);
+            REQUIRE(pair.net->run_until([&] { return pair.server.peer_path_status(0U) == QuicPathStatus::Backup; }));
+            chunks_over(pair, pair.client, pair.server, stream, 100U, written, read);
+            CHECK(pair.client.recovery().rtt(1U).smoothed_ns >= 95U * kMs);
+            CHECK(pair.server.next_packet_number(QuicSpace::Application, 1U) > server_sent);
+            CHECK(pair.server.counters().ack_path_moves == 1U);
+        }
+        CHECK(pair.client.counters().path_failures == 0U);
+        CHECK(pair.server.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC connection: an end whose shortest path stops carrying its packets, one way or both, under a flood, a "
+          "trickle or datagrams pinned to the other path, finds it by the PING it sends there each round trip, and its "
+          "PATH_ACKs return to their own paths until it carries again",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // ACK-only packets arm no probe timeout. The server, which only acknowledges, carries both paths' PATH_ACKs on path
+    // ID 0, the shorter; then path ID 0 stops carrying anything to the client, or anything at all. Its PING once a
+    // round trip (RFC 9000 section 13.2.4) times out, so path ID 1 acknowledges itself, and path ID 0's packets too
+    // while they still arrive: the client's acknowledgements wait one probe timeout of the server's, not kAckOnlyRun
+    // ACK-only packets. Datagrams pinned to path ID 1 draw no credit frame, so there the PING alone finds it.
+    for (usize run = 0U; run < 5U; ++run)
+    {
+        const bool both_ways = (run & 1U) != 0U;
+        const bool trickle = run >= 2U;
+        const bool pinned = run == 4U;
+        INFO((both_ways ? "both ways" : "toward the client")
+             << (pinned ? ", pinned datagrams" : (trickle ? ", a trickle" : ", a flood")));
+        MultipathPair pair(2U, 2U, false, true, 1024U, true);
+        pair.net->socket_delay_ns[1] = 10U * kMs;
+        pair.open_second();
+        QuicConnection& client = pair.client;
+        QuicConnection& server = pair.server;
+        u64 stream = 0U;
+        REQUIRE(open_uni(pair, stream));
+        u64 written = 0U;
+        u64 read = 0U;
+        u64 dark_ns = kNeverNs;
+        u64 moved_ns = kNeverNs;
+        usize queued = 0U;
+        usize arrived = 0U;
+        // One unit 20 ms apart: 500 bytes of the stream, or a datagram pinned to path ID 1.
+        const auto unit = [&]
+        {
+            if (!pinned)
+            {
+                chunks_over(pair, client, server, stream, 1U, written, read);
+                return;
+            }
+            QuicDatagramSend how;
+            how.pinned = true;
+            how.path_id = 1U;
+            const u8 payload[200] = {};
+            u64 number = 0U;
+            REQUIRE(client.datagrams().queue(ConstSpan<u8>(payload, sizeof(payload)), pair.net->now, number, how) ==
+                    QuicDatagramError::None);
+            ++queued;
+            pair.net->advance(pair.net->now + 20U * kMs);
+        };
+        // What arrived: the stream read, the datagrams counted and their outcomes taken.
+        const auto take = [&]
+        {
+            read_some(server, stream, read);
+            ConstSpan<u8> held;
+            for (; server.datagrams().peek(held); server.datagrams().pop())
+            {
+                ++arrived;
+            }
+            QuicDatagramReport report;
+            while (client.datagrams().poll(report))
+            {
+            }
+        };
+        const auto watch = [&]
+        {
+            moved_ns = (moved_ns == kNeverNs && server.counters().ack_path_moves != 0U) ? pair.net->now : moved_ns;
+        };
+        if (trickle)
+        {
+            for (usize count = 0U; count < 50U; ++count) // a second
+            {
+                unit();
+                take();
+            }
+            (both_ways ? pair.net->down : pair.net->down_in) = 1U << 0U; // the client's socket 0
+            dark_ns = pair.net->now;
+            for (usize count = 0U; count < 25U; ++count)
+            {
+                unit();
+                take();
+                watch();
+            }
+        }
+        else
+        {
+            constexpr u64 total = 1024U * 1024U;
+            REQUIRE(pair.net->run_until(
+                [&]
+                {
+                    static_cast<void>(write_pattern(client.streams(), stream, written, total, stream, false));
+                    if (server.streams().recv_state(stream) != QuicRecvState::None)
+                    {
+                        static_cast<void>(drain(server.streams(), stream, read, stream));
+                    }
+                    if (dark_ns == kNeverNs && written > total / 4U)
+                    {
+                        (both_ways ? pair.net->down : pair.net->down_in) = 1U << 0U;
+                        dark_ns = pair.net->now;
+                    }
+                    watch();
+                    return read == total;
+                },
+                20000U * kMs));
+            CHECK(pair.net->now - dark_ns < 4000U * kMs);
+        }
+        // Everything sent arrives while path ID 0 still carries nothing back.
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                take();
+                return read == written && arrived == queued;
+            },
+            4000U * kMs));
+        REQUIRE(moved_ns != kNeverNs);
+        INFO("moved after " << (moved_ns - dark_ns) / kMs << " ms");
+        CHECK(moved_ns - dark_ns < (trickle ? 250U : 400U) * kMs);
+        CHECK(server.recovery().pto_count(0U) != 0U);
+        // Path ID 0 carries again: the server's probe there is acknowledged and, with data to acknowledge, its
+        // PATH_ACKs go back, path ID 0 being an eighth shorter.
+        pair.net->down = 0U;
+        pair.net->down_in = 0U;
+        for (usize count = 0U; count < 250U; ++count) // five seconds
+        {
+            unit();
+            take();
+        }
+        REQUIRE(pair.net->run_until(
+            [&]
+            {
+                take();
+                return read == written && arrived == queued;
+            }));
+        CHECK(server.recovery().pto_count(0U) == 0U);
+        CHECK(server.counters().ack_path_moves == 2U);
+        CHECK(client.counters().path_failures == 0U);
+        CHECK(client.state() == QuicConnectionState::Established);
+        CHECK(server.state() == QuicConnectionState::Established);
+    }
+}
+
+TEST_CASE("QUIC connection: PATH_ACKs stay on one of two paths of the same RTT under jitter while data floods both "
+          "ways",
+          "[net][net-path][quic-connection][multipath]")
+{
+    // RFC 10069 section 5.5: "The estimates will converge faster if the scheduling strategy of PATH_ACK frames is
+    // stable". Both ends send and place acknowledgements; their estimates of the two paths cross all the time.
+    MultipathPair pair;
+    for (Path& path : pair.net->path)
+    {
+        path.jitter_ns = 6U * kMs;
+    }
+    pair.open_second();
+    QuicConnection& client = pair.client;
+    QuicConnection& server = pair.server;
+    u64 up = 0U;
+    u64 down = 0U;
+    REQUIRE(client.streams().open(false, up) == QuicStreamError::None);
+    REQUIRE(server.streams().open(false, down) == QuicStreamError::None);
+    constexpr u64 total = 4U * 1024U * 1024U;
+    u64 written[2] = {};
+    u64 read[2] = {};
+    REQUIRE(pair.net->run_until(
+        [&]
+        {
+            static_cast<void>(write_pattern(client.streams(), up, written[0], total, up));
+            static_cast<void>(write_pattern(server.streams(), down, written[1], total, down));
+            const bool up_read =
+                server.streams().recv_state(up) != QuicRecvState::None && drain(server.streams(), up, read[0], up);
+            const bool down_read = client.streams().recv_state(down) != QuicRecvState::None &&
+                                   drain(client.streams(), down, read[1], down);
+            return up_read && down_read;
+        },
+        60000U * kMs));
+    INFO("moves " << client.counters().ack_path_moves << " and " << server.counters().ack_path_moves);
+    CHECK(client.counters().ack_path_moves <= 1U);
+    CHECK(server.counters().ack_path_moves <= 1U);
+    CHECK(client.state() == QuicConnectionState::Established);
 }
 
 TEST_CASE("QUIC connection: this side's PATH_STATUS frames are numbered per path ID, go again when lost only while "
