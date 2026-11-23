@@ -7,10 +7,10 @@
 //             simulation, a test's own in a test. Nothing in the transport reads a host clock.
 //   sockets   a loop serves the sockets of a SocketSet (udp.hpp): each turn reads every socket in order, each datagram
 //             naming the one it arrived on (ReceivedDatagram::socket), and a stateless answer leaves by that socket.
-//   executor  poll() is one bounded turn that never blocks: S0's batched receive (at most `batches_per_poll` batches
-//             per socket, so timers run under a flood), S1 to S3 through the Ingress, routed, admitted and early
-//             datagrams and short headers for no connection to the handler, the stateless answers sent, the handler's
-//             timers. It returns when it next needs to run. Who calls it is the executor: run() on a thread of its own
+//   executor  poll() is one bounded turn that never blocks: S0's batched receive (per socket, `batches_per_poll`
+//             batches' worth of datagrams, a coalescing socket's trains counted by datagram, so timers run under a
+//             flood), S1 to S3 through the Ingress, routed, admitted and early datagrams and short headers for no
+//             connection to the handler, the stateless answers sent, the handler's timers. It returns when it next needs to run. Who calls it is the executor: run() on a thread of its own
 //             (waiting in SocketSet::wait_readable until that time or a datagram), a game's frame, a job, or NET-SIM
 //             stepping virtual time. The transport takes no job system and starts no thread.
 //   memory    receive slots and the answer queue (a SendQueue) come from the injected allocator at construction; a
@@ -198,7 +198,7 @@ struct IoLoopConfig
     u32 batch = 32U;                // datagrams per receive
     u32 slot_bytes = 1500U;         // the largest datagram read whole; a longer one is truncated and dropped
     u32 train_slots = 4U;           // trains per receive of a coalescing socket, kMaxTrainBytes each
-    u32 batches_per_poll = 4U;      // receives per turn at most
+    u32 batches_per_poll = 4U;      // per socket a turn: batch * batches_per_poll datagrams handed on at most
     u32 queued_answers = 64U;       // answers waiting for the host at most
     u64 max_wait_ns = 100000000U;   // the longest run() waits without a turn (100 ms)
 };

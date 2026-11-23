@@ -340,9 +340,14 @@ u64 IoLoop::poll() noexcept
     const u64 now = m_clock.monotonic_ns();
     const u64 unix_seconds = m_clock.unix_seconds();
     flush_answers();
+    // Each socket is read until it has handed on batches_per_poll plain batches of datagrams this turn, however they
+    // arrive (the receive that reaches the bound may end inside a train): a train slot holds one datagram from a peer
+    // that does not segment, so counting receives would cut a coalescing socket's turn to train_slots datagrams each.
+    const u64 budget = u64{m_config.batch} * m_config.batches_per_poll;
     for (u32 socket = 0U; socket < m_sockets.size(); ++socket)
     {
-        for (u32 batch = 0U; batch < m_config.batches_per_poll; ++batch)
+        const u64 start = m_counters.received;
+        while (m_counters.received - start < budget)
         {
             BatchResult result;
             const bool full = receive_batch(socket, now, unix_seconds, result);

@@ -63,7 +63,7 @@ header states no limit; it does not mean any value works.
 |---|---|---|---|---|
 | `batch` | Datagrams read by one receive call (Linux reads them with one `recvmmsg`) | datagrams | 32 | no bound stated |
 | `slot_bytes` | Size of each receive slot; a longer datagram is marked truncated and dropped | bytes | 1500 | no bound stated |
-| `batches_per_poll` | Receive calls in one turn of `poll()`, so timers still run under a flood | calls | 4 | no bound stated |
+| `batches_per_poll` | Batches' worth of datagrams each socket hands on in one turn of `poll()` (a train counted by datagram), so timers still run under a flood | batches | 4 | no bound stated |
 | `queued_answers` | Stateless answers (Retry, Version Negotiation, reset) waiting while the socket is busy | datagrams | 64 | no bound stated |
 | `max_wait_ns` | The longest `run()` sleeps without a turn | ns | 100 ms | no bound stated |
 

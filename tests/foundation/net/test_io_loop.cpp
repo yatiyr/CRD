@@ -343,6 +343,65 @@ TEST_CASE("A turn reads at most batches_per_poll batches, so timers run under a 
     CHECK(rig.loop.counters().receive_errors == 1U);
 }
 
+TEST_CASE("A coalescing socket's turn is bounded in datagrams, so a peer that does not segment fills it as plain "
+          "slots would",
+          "[net][io-loop]")
+{
+    CountingAllocator allocator;
+    ConnectionIdTable routes(allocator, 64U, ConstSpan<u8>(kKey));
+    HandshakeBuckets buckets(allocator, HandshakeRules{}, ConstSpan<u8>(kKey));
+    Ingress ingress(IngressConfig{}, routes, buckets, nullptr, nullptr);
+    TestClock clock;
+    RecordingHandler handler(routes);
+    VirtualSocket coalescing;
+    coalescing.offers.coalesced_receive = true;
+    DatagramSocket* const sockets[] = {&coalescing};
+    IoLoopConfig config;
+    config.batch = 8U;
+    config.batches_per_poll = 4U;
+    config.train_slots = 2U;
+    IoLoop loop(allocator, SocketSet(ConstSpan<DatagramSocket*>(sockets)), clock, ingress, handler, config);
+    REQUIRE(loop.ready());
+    const u8 routed[16] = {0x2A, 0x2B, 0x2C};
+    REQUIRE(routes.insert(view_of(routed, 16U), 7U) == RouteError::None);
+
+    // One datagram a slot, two a receive: sixteen receives make the turn's 32, not batches_per_poll's eight.
+    for (usize index = 0U; index < 70U; ++index)
+    {
+        coalescing.deliver(short_packet(view_of(routed, 16U), 1200U), kClient);
+    }
+    const usize calls = allocator.calls();
+    (void)loop.poll();
+    CHECK(allocator.calls() == calls);
+    CHECK(loop.counters().received == 32U);
+    CHECK(handler.routes == 32U);
+    CHECK(handler.timer_calls == 1U);
+    (void)loop.poll();
+    CHECK(loop.counters().received == 64U);
+    (void)loop.poll(); // a receive short of its slots ends the turn: the socket holds no more
+    CHECK(loop.counters().received == 70U);
+    CHECK(coalescing.pending() == 0U);
+    CHECK(handler.timer_calls == 3U);
+
+    // A train counts each of its datagrams: six in the first receive's slot, one beside it, then two a receive until
+    // the bound, which the receive reaching it passes by one.
+    static u8 train[6U * 1200U];
+    for (usize index = 0U; index < 6U; ++index)
+    {
+        const Datagram packet = short_packet(view_of(routed, 16U), 1200U);
+        std::memcpy(train + (1200U * index), packet.bytes, packet.size);
+    }
+    coalescing.deliver_train(ConstSpan<u8>(train), 1200U, kClient);
+    for (usize index = 0U; index < 40U; ++index)
+    {
+        coalescing.deliver(short_packet(view_of(routed, 16U), 1200U), kClient);
+    }
+    (void)loop.poll();
+    CHECK(loop.counters().trains == 1U);
+    CHECK(loop.counters().received == 70U + 33U);
+    CHECK(coalescing.pending() == 40U - 27U);
+}
+
 TEST_CASE("A Retry token that does not validate is answered with an INVALID_TOKEN close", "[net][io-loop]")
 {
     Rig rig;

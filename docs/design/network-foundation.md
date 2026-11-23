@@ -366,8 +366,9 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
 
 - **Two seams.** The loop reads time only through `TransportClock`: monotonic nanoseconds for timers and rates, Unix
   seconds for address validation tokens (`HostClock` maps crd-time's `TickClock` and `WallClock`). Its work is
-  `poll()`, one bounded turn that never blocks: at most `batches_per_poll` receive batches, so timers run under a
-  flood, then the queued answers and the handler's timers; it returns when it next needs to run. Whoever calls it is
+  `poll()`, one bounded turn that never blocks: per socket, `batches_per_poll` batches' worth of datagrams (a
+  coalescing socket's trains counted by datagram, so a peer that does not segment, one datagram a train slot, gets
+  the turn a plain socket gives it), so timers run under a flood, then the queued answers and the handler's timers; it returns when it next needs to run. Whoever calls it is
   the executor: `run()` on a thread of its own, waiting in `wait_readable` until then, a frame, a job, or NET-SIM
   stepping virtual time. crd-net takes no job system: crd-jobs would tie Layer 1 to the engine's scheduler (ADR-0035).
 - **S1** reads the first packet's form, version, connection IDs, an Initial's token and the packet's extent, nothing
