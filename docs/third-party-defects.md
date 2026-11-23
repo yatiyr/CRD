@@ -238,6 +238,19 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Retirement | When a pinned picoquic stores a status for a path ID it has no path for yet, the peer sets it when `add_path()` starts again and this entry goes |
 | Row | [NET-PATH](ROADMAP.md#slice-net-path); evidence [the picoquic own-path session](sessions/2026-11-23-net-path-picoquic-own-path.md) |
 
+<a id="tp-16"></a>
+## TP-16: msquic's self-signing helper does not compile against OpenSSL 4 under its own -Werror
+
+| Field | Value |
+|---|---|
+| Component | msquic 2.6.4 (`cmake/pins.json` `msquic`), the peer of the msquic interoperability test, over the peers' OpenSSL 4.0.3 |
+| Symptom | `src/platform/selfsign_openssl.c` assigns `X509_get_subject_name()`, which OpenSSL 4 returns as `const X509_NAME*`, to a non-const pointer; msquic's own `-Werror` fails its build (GCC `-Wdiscarded-qualifiers`) |
+| Reproduction outside Cerid | msquic's own CMake build of the pinned archive with `QUIC_TLS_LIB=openssl` and `QUIC_USE_EXTERNAL_OPENSSL=ON` over OpenSSL 4.0.3 alone, no Cerid code (2026-11-23) |
+| Affected | No test fails: the build of `crd-msquic-build` on linux-gcc-public-checks |
+| Engine handling | `tests/foundation/net/CMakeLists.txt` keeps that one diagnostic a warning for msquic's build (`-Wno-error=discarded-qualifiers`, Clang's `incompatible-pointer-types-discards-qualifiers`). The peer never self-signs through msquic: its credential is the seed's key and `openssl_self_signed.h`'s certificate, as PKCS #12 |
+| Retirement | When a pinned msquic builds clean over OpenSSL 4, the flag and this entry go |
+| Row | [NET-PATH](ROADMAP.md#slice-net-path); evidence [the msquic interop session](sessions/2026-11-23-net-path-msquic-interop.md) |
+
 ## The registered-failure gate
 
 `scripts/check-registered-failures.py --lane <preset> --junit <ctest --output-junit file> --ctest-exit <code>` reads

@@ -1791,24 +1791,6 @@ static int next_connection(peer_t* peer)
     return make_session(peer);
 }
 
-static int parse_seed(const char* text, unsigned char* out)
-{
-    if (strlen(text) != 64U)
-    {
-        return 0;
-    }
-    for (size_t at = 0; at < 32U; ++at)
-    {
-        unsigned value = 0U;
-        if (sscanf(text + (at * 2U), "%2x", &value) != 1)
-        {
-            return 0;
-        }
-        out[at] = (unsigned char)value;
-    }
-    return 1;
-}
-
 static int usage(void)
 {
     fputs("usage: crd-ngtcp2-quic-peer --role client|server --port N --seed HEX --group NAME --cipher NAME "

@@ -132,7 +132,7 @@ endif()
 add_subdirectory(fuzz)
 
 # crd-net's end of the QUIC and HTTP/3 interoperability tests, whichever peers this configuration builds.
-if(CRD_BUILD_QUIC_VS_NGTCP2 OR CRD_BUILD_QUIC_VS_PICOQUIC OR CRD_BUILD_HTTP3_VS_QUICHE OR
+if(CRD_BUILD_QUIC_VS_NGTCP2 OR CRD_BUILD_QUIC_VS_PICOQUIC OR CRD_BUILD_QUIC_VS_MSQUIC OR CRD_BUILD_HTTP3_VS_QUICHE OR
    CRD_BUILD_WEBTRANSPORT_VS_QUINN OR CRD_BUILD_QMUX_VS_CRATE)
     add_executable(crd-quic-peer interop/cerid_quic_peer.cpp)
     target_link_libraries(crd-quic-peer PRIVATE crd-core crd-containers crd-crypto crd-memory crd-net)
@@ -265,6 +265,57 @@ if(CRD_BUILD_QUIC_VS_PICOQUIC)
     set_tests_properties(crd-net-quic-interop-picoquic PROPERTIES TIMEOUT 1200 LABELS "net;quic-interop")
     message(STATUS "[quic-vs-picoquic] congestion control against picoquic ${picoquic_version} over picotls "
                    "${picotls_version}")
+endif()
+
+# QUIC against msquic (CRD_BUILD_QUIC_VS_MSQUIC): crd-msquic-quic-peer links msquic's static library, which carries
+# the peers' OpenSSL it was built over (QUIC_TLS_LIB openssl, an external OpenSSL 3.5 or later), and
+# msquic_interop.py runs it against crd-quic-peer. msquic builds by its own CMake from its commit archive, which leaves
+# its submodules empty: none is needed with an external OpenSSL and no logging. msquic compiles its own code with
+# -Werror, and OpenSSL 4 returns a certificate's names const where its self-signing helper keeps them non-const
+# (third-party-defects.md TP-16), so that one diagnostic stays a warning.
+if(CRD_BUILD_QUIC_VS_MSQUIC)
+    include(ExternalProject)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    cmake_host_system_information(RESULT msquic_jobs QUERY NUMBER_OF_LOGICAL_CORES)
+    crd_pin(msquic_version packages msquic version)
+    set(msquic_prefix "${CMAKE_BINARY_DIR}/_deps/msquic-peer-${msquic_version}")
+    set(msquic_library "${msquic_prefix}/build/bin/Release/libmsquic.a")
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        set(msquic_const_names "-Wno-error=discarded-qualifiers")
+    else()
+        set(msquic_const_names "-Wno-error=incompatible-pointer-types-discards-qualifiers")
+    endif()
+    ExternalProject_Add(crd-msquic-build
+        SOURCE_DIR "${msquic_SOURCE_DIR}"
+        PREFIX "${msquic_prefix}"
+        BINARY_DIR "${msquic_prefix}/build"
+        CMAKE_ARGS "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+                   -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_FLAGS=${msquic_const_names}" -DQUIC_TLS_LIB=openssl
+                   -DQUIC_USE_EXTERNAL_OPENSSL=ON "-DQUIC_OPENSSL_ROOT_DIR=${CRD_OPENSSL_PEER_ROOT}"
+                   -DQUIC_BUILD_SHARED=OFF -DQUIC_ENABLE_LOGGING=OFF -DQUIC_EMBED_GIT_HASH=OFF -DQUIC_BUILD_TOOLS=OFF
+                   -DQUIC_BUILD_TEST=OFF -DQUIC_BUILD_PERF=OFF
+        BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel ${msquic_jobs} --target msquic_lib
+        INSTALL_COMMAND ""
+        DEPENDS crd-openssl-peer-build
+        BUILD_BYPRODUCTS "${msquic_library}")
+    # msquic is NUMA-aware where libnuma and its header are found (its own CMake looks for both), and needs libatomic.
+    find_library(CRD_MSQUIC_NUMA NAMES numa libnuma.so.1)
+    find_library(CRD_MSQUIC_ATOMIC NAMES atomic libatomic.so.1 REQUIRED)
+    add_executable(crd-msquic-quic-peer interop/msquic_quic_peer.c)
+    add_dependencies(crd-msquic-quic-peer crd-msquic-build crd-openssl-peer-build)
+    target_include_directories(crd-msquic-quic-peer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../crypto/interop")
+    target_include_directories(crd-msquic-quic-peer SYSTEM PRIVATE "${msquic_SOURCE_DIR}/src/inc"
+                                                                    "${CRD_OPENSSL_PEER_ROOT}/include")
+    target_link_libraries(crd-msquic-quic-peer PRIVATE "${msquic_library}" ${CRD_OPENSSL_PEER_LINK}
+                                                       "${CRD_MSQUIC_ATOMIC}"
+                                                       "$<$<BOOL:${CRD_MSQUIC_NUMA}>:${CRD_MSQUIC_NUMA}>")
+    set_target_properties(crd-msquic-quic-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+
+    add_test(NAME crd-net-quic-interop-msquic
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/msquic_interop.py"
+                     --cerid "$<TARGET_FILE:crd-quic-peer>" --msquic "$<TARGET_FILE:crd-msquic-quic-peer>")
+    set_tests_properties(crd-net-quic-interop-msquic PROPERTIES TIMEOUT 600 LABELS "net;quic-interop")
+    message(STATUS "[quic-vs-msquic] QUIC interoperability against msquic ${msquic_version}")
 endif()
 
 # The HTTP/3 interoperability test against quiche (CRD_BUILD_HTTP3_VS_QUICHE): crd-quiche-peer is a Cargo package over

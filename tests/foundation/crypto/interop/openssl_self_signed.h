@@ -10,6 +10,25 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The 32-byte Ed25519 private key a peer's `--seed` gives in 64 hexadecimal digits; 0 for any other text. */
+static inline int parse_seed(const char* text, unsigned char* out)
+{
+    if (text == NULL || strlen(text) != 64U)
+    {
+        return 0;
+    }
+    for (size_t at = 0; at < 32U; ++at)
+    {
+        unsigned value = 0U;
+        if (sscanf(text + (at * 2U), "%2x", &value) != 1)
+        {
+            return 0;
+        }
+        out[at] = (unsigned char)value;
+    }
+    return 1;
+}
+
 /* The name is the subject's common name when it fits (64 characters, RFC 5280's ub-common-name) and the
  * subjectAltName's always, critical when the subject is empty, as on a Cerid credential. */
 static inline X509* self_signed(EVP_PKEY* key, const char* name)

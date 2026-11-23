@@ -141,7 +141,7 @@ add_subdirectory(fuzz)
 # boards link OpenSSL beside crd-crypto's prefixed AWS-LC (decision P5). crd-net's QUIC peers link it too, from
 # CRD_OPENSSL_PEER_ROOT and CRD_OPENSSL_PEER_LINK.
 if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP OR CRD_BUILD_CRYPTO_VS_PEERS OR CRD_BUILD_QUIC_VS_NGTCP2 OR
-   CRD_BUILD_QUIC_VS_PICOQUIC)
+   CRD_BUILD_QUIC_VS_PICOQUIC OR CRD_BUILD_QUIC_VS_MSQUIC)
     include(ExternalProject)
     find_package(Perl REQUIRED)
     find_program(CRD_MAKE_PROGRAM NAMES make gmake REQUIRED)

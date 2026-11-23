@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **51** · tools: **52** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
+- packages: **52** · tools: **52** · workflow actions: **6** · runner images: **6** · unpinned apt packages: **24**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -32,6 +32,7 @@
 | picotls | e446233b | MIT | h2o/picotls (e446233b4100) | `picotls-e446233b.tar.gz` |
 | picotest | a99858e0 | MIT | h2o/picotest (a99858e0c33b) | `picotest-a99858e0.tar.gz` |
 | picoquic | 2026.11.08.77fa502 | MIT | private-octopus/picoquic @ `v2026.11.08.77fa502` (77fa50201a28) | `picoquic-77fa5020.tar.gz` |
+| msquic | 2.6.4 | MIT | microsoft/msquic @ `v2.6.4` (4504c5356494) | `msquic-4504c535.tar.gz` |
 | qifs | da52cd93 | MIT | qpackers/qifs (da52cd936b3e) | `qifs-da52cd93.tar.gz` |
 | hpack_test_case | 8a1406e7 | MIT | http2jp/hpack-test-case (8a1406e7d14b) | `hpack-test-case-8a1406e7.tar.gz` |
 | mlspp | 0.1.0-fc724c31 | BSD-2-Clause AND BSL-1.0 | cisco/mlspp @ `main` (fc724c3100ce) | `mlspp-fc724c31.tar.gz` |

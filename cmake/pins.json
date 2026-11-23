@@ -231,6 +231,20 @@
       "provenance": "https://github.com/private-octopus/picoquic/releases/tag/v2026.11.08.77fa502 (the tag names commit 77fa5020; downloaded and hashed 2026-11-10)",
       "note": "picoquic, an independent C implementation of QUIC with its own Prague (prague.c, ECT(1) and the L4S reaction), CUBIC, NewReno and BBR, and crd-net's second congestion-control peer (NET-PATH). Built by its own CMake as a separate project over the pinned picotls, libraries only (picoquic-core)."
     },
+    "msquic": {
+      "version": "2.6.4",
+      "repository": "microsoft/msquic",
+      "ref": "v2.6.4",
+      "commit": "4504c53564948c8075d6854a08c77e574c5cd3f9",
+      "url": "https://github.com/microsoft/msquic/archive/4504c53564948c8075d6854a08c77e574c5cd3f9.tar.gz",
+      "file": "msquic-4504c535.tar.gz",
+      "sha256": "83a76b8d3c552bfe3cc84780b2ac6ac322ab1d18a26ca87871b61ac531068c67",
+      "size": 8316124,
+      "license": "MIT",
+      "gated": "CRD_BUILD_QUIC_VS_MSQUIC",
+      "provenance": "https://github.com/microsoft/msquic/releases/tag/v2.6.4 (the tag names commit 4504c535; downloaded and hashed 2026-11-23). The commit archive leaves the submodules (googletest, quictls, openssl, clog, xdp-for-windows) empty; none is built with an external OpenSSL and logging off",
+      "note": "msquic, Microsoft's C implementation of QUIC, and crd-net's interoperability and transport-board peer (NET-PATH): its static library built by its own CMake as a separate project with its TLS on the peers' OpenSSL 4.0 (QUIC_TLS_LIB openssl), no logging, tools or tests."
+    },
     "qifs": {
       "version": "da52cd93",
       "repository": "qpackers/qifs",

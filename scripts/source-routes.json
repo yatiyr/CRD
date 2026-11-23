@@ -238,6 +238,13 @@
     },
     {
       "paths": [
+        "tests/foundation/net/interop/msquic_quic_peer.c"
+      ],
+      "built_when": {"option": "CRD_BUILD_QUIC_VS_MSQUIC", "platform": "Linux"},
+      "why": "The QUIC interoperability test against msquic (the crd-net-quic-interop-msquic CTest): crd-msquic-quic-peer over the pinned msquic (cmake/pins.json msquic) and OpenSSL 4.0, built by the tree that turns the option on."
+    },
+    {
+      "paths": [
         "tests/foundation/crypto/android/"
       ],
       "built_when": {"option": "CRD_BUILD_ANDROID_KEYSTORE_APP"},
