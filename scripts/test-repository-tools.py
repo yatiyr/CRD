@@ -1614,6 +1614,26 @@ class PinnedInputs(unittest.TestCase):
                 self.assertIn(url, log.getvalue())
                 self.assertIn('Retry-After: None, X-RateLimit-Remaining: None', log.getvalue())
             self.assertEqual(waits, [])
+            # A bare 403 from GitHub's release downloads, the asset URL or a host it redirects to, is retried; the same
+            # 403 from GitHub outside a release download is not.
+            release = 'https://github.com/ninja-build/ninja/releases/download/v1.11.1/ninja-linux.zip'
+            asset = 'https://release-assets.githubusercontent.com/github-production-release-asset/1/ninja-linux.zip'
+            for start, bare in ((release, urllib.error.HTTPError(release, 403, 'Forbidden', {}, None)),
+                                (asset, urllib.error.HTTPError(asset, 403, 'Forbidden', {}, None))):
+                responses = [bare, io.BytesIO(good)]
+                with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=responses), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(pins_registry.download(start, target, digest, 'a', sleep=waits.append), target)
+                target.unlink()
+            self.assertEqual(waits, list(pins_registry.RETRY_WAITS[:1]) * 2)
+            waits.clear()
+            page = 'https://github.com/ninja-build/ninja/archive/refs/tags/v1.11.1.zip'
+            refused = urllib.error.HTTPError(page, 403, 'Forbidden', {}, None)
+            with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=[refused]), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(urllib.error.HTTPError):
+                    pins_registry.download(page, target, digest, 'a', sleep=waits.append)
+            self.assertEqual(waits, [])
             stalls = [TimeoutError('read timed out')] * (len(pins_registry.RETRY_WAITS) + 1)
             with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=stalls), \
                     contextlib.redirect_stderr(io.StringIO()):

@@ -21,6 +21,7 @@ import sys
 import tarfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -65,21 +66,33 @@ def verify(path, expected, label):
 
 
 # A transfer that fails in the network (a stalled read, a reset or refused connection, a truncated body, a server-side
-# HTTP status, a 403 that says it throttles) is tried again after these waits in seconds; any other client-side HTTP
-# status and a checksum mismatch never are.
+# HTTP status, a 403 that says it throttles, any 403 from GitHub's release download hosts) is tried again after these
+# waits in seconds; any other client-side HTTP status and a checksum mismatch never are.
 # The last two outlast a release host's gateway outage: on 2026-11-08 GitHub answered 504 for over a minute and every
 # job of two runs lost its tools to it.
 RETRY_WAITS = (5, 15, 45, 120, 300)
 THROTTLE_HEADERS = ('Retry-After', 'X-RateLimit-Remaining')
+# A release asset's URL and the hosts it redirects to. GitHub answers them with a bare 403, no throttle header, while
+# other jobs of the same run fetch the same file (2026-11-22, and 2026-11-24 in host-check 45229585649's Ninja download
+# with Retry-After and X-RateLimit-Remaining both absent), so such a 403 is a refusal of the moment, not of the file.
+GITHUB_ASSET_HOSTS = ('objects.githubusercontent.com', 'release-assets.githubusercontent.com')
 
 
-def transient(error):
+def github_release(url):
+    parsed = urllib.parse.urlsplit(url or '')
+    host = (parsed.hostname or '').lower()
+    return host in GITHUB_ASSET_HOSTS or (host == 'github.com' and '/releases/download/' in parsed.path)
+
+
+def transient(error, url=None):
     if isinstance(error, urllib.error.HTTPError):
-        # GitHub answers a secondary rate limit with 403 or 429 and names the wait or the spent limit in its headers
-        # (seen 2026-11-22: a release download's 403 failed one job of a run whose siblings fetched the same file).
+        # GitHub answers a secondary rate limit with 403 or 429 and names the wait or the spent limit in its headers;
+        # its release download hosts also answer a bare 403 of the moment (GITHUB_ASSET_HOSTS above). The checksum
+        # still decides what a retried download is.
         headers = error.headers or {}
         throttled = error.code == 403 and (
-            headers.get(THROTTLE_HEADERS[0]) is not None or headers.get(THROTTLE_HEADERS[1]) == '0')
+            headers.get(THROTTLE_HEADERS[0]) is not None or headers.get(THROTTLE_HEADERS[1]) == '0'
+            or github_release(url) or github_release(getattr(error, 'url', None)))
         return error.code >= 500 or error.code in (408, 429) or throttled
     return isinstance(error, (TimeoutError, ConnectionError, http.client.HTTPException, urllib.error.URLError))
 
@@ -97,7 +110,7 @@ def download(url, destination, expected, label, sleep=time.sleep):
             break
         except (OSError, http.client.HTTPException) as error:
             partial.unlink(missing_ok=True)
-            if attempt == len(RETRY_WAITS) or not transient(error):
+            if attempt == len(RETRY_WAITS) or not transient(error, url):
                 headers = getattr(error, 'headers', None) or {}
                 throttle = ', '.join(f'{name}: {headers.get(name)}' for name in THROTTLE_HEADERS)
                 print(f'{label}: download of {url} failed ({error!r}; {throttle})', file=sys.stderr)
