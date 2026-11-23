@@ -1455,7 +1455,7 @@ TEST_CASE("QUIC client migration: after a rebinding whose old mapping stands, a 
     Bulk up{pair.client, pair.server, total};
     REQUIRE(net.run_until([&] { return up.step() || up.read >= total / 8U; }, 600000U * kMs));
     // A NAT rebinding: the server follows on the same ID and checks the old mapping, which still answers.
-    net.also_at = net.client_at;
+    net.also_at[0] = net.client_at;
     net.client_at.port = 50001U;
     const auto quiet = [&]
     {
@@ -1468,7 +1468,7 @@ TEST_CASE("QUIC client migration: after a rebinding whose old mapping stands, a 
     };
     REQUIRE(net.run_until([&] { return up.step() || (pair.server.path().peer == net.client_at && quiet()); },
                           600000U * kMs));
-    REQUIRE(pair.server.paths().find(QuicPath{0U, net.also_at}) != kQuicNoPath);
+    REQUIRE(pair.server.paths().find(QuicPath{0U, net.also_at[0]}) != kQuicNoPath);
     for (const u32 socket : {1U, 2U})
     {
         INFO("socket " << socket);
@@ -1487,7 +1487,7 @@ TEST_CASE("QUIC client migration: after a rebinding whose old mapping stands, a 
         CHECK(pair.server.path().peer == net.socket_at[socket - 1U]);
     }
     // The two paths of the rebinding held one ID: both are forgotten so that it retires.
-    CHECK(pair.server.paths().find(QuicPath{0U, net.also_at}) == kQuicNoPath);
+    CHECK(pair.server.paths().find(QuicPath{0U, net.also_at[0]}) == kQuicNoPath);
     CHECK(pair.server.paths().find(QuicPath{0U, net.client_at}) == kQuicNoPath);
     REQUIRE(net.run_until([&] { return up.step(); }, 600000U * kMs));
     CHECK(pair.client.counters().path_failures == 0U);
@@ -1784,7 +1784,7 @@ TEST_CASE("QUIC preferred address: until the server validated its client's path 
     const Endpoint b{a.address, 50001U};
     for (const Endpoint& to : {b, a})
     {
-        net.also_at = net.client_at;
+        net.also_at[0] = net.client_at;
         net.client_at = to;
         pair.client.ping();
         REQUIRE(net.run_until([&] { return pair.server.path().peer == to && quiet(); }, 5000U * kMs));
@@ -1799,7 +1799,7 @@ TEST_CASE("QUIC preferred address: until the server validated its client's path 
     // Then to b for good while the client moves to the preferred address, whose path from b the server cannot
     // validate yet: its first socket follows the client to b meanwhile (section 9.6.2), and it moves once it can.
     net.client_at = b;
-    net.also_at = Endpoint{};
+    net.also_at[0] = Endpoint{};
     loss.armed = true;
     REQUIRE(pair.client.migrate(preferred, net.now) == QuicMigration::Started);
     REQUIRE(pair.client.on_preferred_address());

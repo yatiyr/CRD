@@ -1239,11 +1239,12 @@ bool QuicConnection::on_frame(const QuicFrame& frame, QuicSpace space, u64 now_n
             return new_connection_id(frame, now_ns);
         case QuicFrameKind::PathChallenge:
             tuples(m_receive_slot).on_challenge(m_receive_path, frame.data);
-            // A challenge on the active path is answered with a non-probing packet as well (section 9.3.3), on that
-            // path: another slot's packet moves nothing here. On a further slot the response rides with that slot's
-            // PATH_ACK, which is not probing either.
-            m_answer_owed = m_answer_owed ||
-                            (handshake_slot(m_receive_slot) && !stopped(0U) && m_receive_path == tuples(0U).active());
+            // A challenge on a slot's active path is answered with a non-probing packet as well (section 9.3.3), on
+            // that path: each path ID moves its own 4-tuples (RFC 10069 section 3.1.2), so another slot's packet moves
+            // nothing here, and the slot's PATH_ACK may ride another slot's packets.
+            m_answer_owed |= (!stopped(m_receive_slot) && m_receive_path == tuples(m_receive_slot).active())
+                                 ? static_cast<u8>(1U << m_receive_slot)
+                                 : u8{0};
             return true;
         case QuicFrameKind::ObservedAddress:
             return observed_address_frame(frame, now_ns);
@@ -2095,7 +2096,7 @@ bool QuicConnection::has_data(QuicSpace space, u64 now_ns) const noexcept
     {
         abandon_owed = abandon_owed || (entry.owed && slot_of(entry.path_id) != send_slot());
     }
-    return m_ping_owed || m_probe_fill || (m_answer_owed && handshake_slot(send_slot())) ||
+    return m_ping_owed || m_probe_fill || ((m_answer_owed >> send_slot()) & 1U) != 0U ||
            (ledger && (m_handshake_done_owed || m_cids.retirement_owed() || m_streams.has_frame(stream_route(true)) ||
                        m_cids.local_owed() || m_new_token_owed || m_max_path_id_owed || m_paths_blocked_owed ||
                        m_cids_blocked != 0U || abandon_owed || status_owed())) ||
@@ -2556,12 +2557,13 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
             static_cast<void>(put(ping));
         }
     };
-    // A challenge on the handshake slot's active path is answered there by a packet that is not probing (section
-    // 9.3.3): its PATH_RESPONSE alone, eliciting as it is, moves no peer back. One that steers already answers it; a
-    // PING makes an eliciting one steer at no cost to the window, and goes alone only where data may.
+    // A challenge on a slot's active path is answered there by a packet that is not probing (section 9.3.3): its
+    // PATH_RESPONSE alone, eliciting as it is, moves no peer back. One that steers already answers it; a PING makes an
+    // eliciting one steer at no cost to the window, and goes alone only where data may.
     const auto put_answer = [&](bool alone)
     {
-        if (space != QuicSpace::Application || !m_answer_owed || !handshake_slot(slot))
+        const u8 bit = static_cast<u8>(1U << slot);
+        if (space != QuicSpace::Application || (m_answer_owed & bit) == 0U)
         {
             return;
         }
@@ -2571,7 +2573,7 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
             ping.kind = QuicFrameKind::Ping;
             static_cast<void>(put(ping));
         }
-        m_answer_owed = !written.steers;
+        m_answer_owed &= written.steers ? static_cast<u8>(~bit) : u8{0xFF};
     };
     // The active path's PATH_RESPONSE and PATH_CHALLENGE, never held for data: a peer validating its path waits.
     if (space == QuicSpace::Application && !early)
@@ -4532,6 +4534,8 @@ QuicPathAbandon* QuicConnection::begin_abandon(u64 path_id, u64 error_code, u64 
         }
         m_datagrams.stop_path(slot);
         m_streams.stop_path(slot); // pinned streams' data, lost or unsent, goes on any path
+        // No packet of its own answers a challenge there any more.
+        m_answer_owed &= static_cast<u8>(~(1U << slot));
         follow_datagram_size();
         // Path ID 0's own moves end with it: a move it deferred and its pending ones (S75) wait for nothing more.
         m_deferred_move = handshake_slot(slot) ? kQuicNoPath : m_deferred_move;
@@ -4631,7 +4635,6 @@ void QuicConnection::close_abandoned(u64 now_ns) noexcept
                 // the server's address it sent to.
                 m_zero_server = server_address();
                 m_zero_closed = true;
-                m_answer_owed = false;
             }
             *m_tuples[slot] = Tuples{};
             m_numbers[number_space(QuicSpace::Application, slot)] = Numbering{};

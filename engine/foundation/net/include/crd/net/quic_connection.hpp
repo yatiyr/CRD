@@ -1251,8 +1251,8 @@ private:
     u8 m_challenge[kQuicPathDataBytes] = {};   // the PATH_CHALLENGE data of the packet being written
     u64 m_observation_next = 0U;               // the next OBSERVED_ADDRESS sequence (rising on every path)
     bool m_ping_owed = false;
-    // A challenge came on the handshake slot's active path: that slot's next packet is not probing (section 9.3.3).
-    bool m_answer_owed = false;
+    // A bit per slot on whose active path a challenge came: that slot's next packet is not probing (section 9.3.3).
+    u8 m_answer_owed = 0U;
     bool m_confirmed = false;
     bool m_held_back = false; // the last send() skipped a path whose socket was held back
     bool m_peer_greases = false;

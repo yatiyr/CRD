@@ -289,13 +289,14 @@ public:
     const QuicTokenKeys* tokens = nullptr;
     usize answers = 0U; // the ingress's answers sent toward the client
     // Paths (design S75): with `paths` set the server takes each client datagram as arriving from `client_at` when it
-    // left, and a server datagram reaches the client only when sent to `client_at` or to `also_at` (an address whose
-    // NAT mapping still stands; port 0 for none). The client sees its server at one address. Its sockets 1 to 3
-    // (QuicPath::socket) are at `socket_at` (port 0: none); a datagram to or from a socket of `down` (a bit each) is
-    // lost, its network gone, and one to a socket of `down_in` too (a path that carries one way).
+    // left, and a server datagram reaches the client only when sent to `client_at`. The client sees its server at one
+    // address. Its sockets 1 to 3 (QuicPath::socket) are at `socket_at` (port 0: none). A server datagram to
+    // `also_at[s]` reaches socket s too: an address whose NAT mapping still stands (port 0 for none). A datagram to or
+    // from a socket of `down` (a bit each) is lost, its network gone, and one to a socket of `down_in` too (a path
+    // that carries one way).
     bool paths = false;
     Endpoint client_at{IpAddress::v4(198, 51, 100, 7), 50000U};
-    Endpoint also_at;
+    Endpoint also_at[4];
     Endpoint socket_at[3];
     // An extra delay each way for datagrams from or to the client's socket 0 to 3: paths of different RTTs (S78).
     u64 socket_delay_ns[4] = {};
@@ -499,15 +500,12 @@ private:
     // The client's socket a server datagram to `to` reaches; kNoSocket for none.
     [[nodiscard]] u32 socket_of(const Endpoint& to) const
     {
-        if (to == client_at || (also_at.port != 0U && to == also_at))
+        for (u32 socket = 0U; socket < 4U; ++socket)
         {
-            return 0U;
-        }
-        for (u32 index = 0U; index < 3U; ++index)
-        {
-            if (socket_at[index].port != 0U && to == socket_at[index])
+            const Endpoint& at = (socket == 0U) ? client_at : socket_at[socket - 1U];
+            if ((at.port != 0U && to == at) || (also_at[socket].port != 0U && to == also_at[socket]))
             {
-                return index + 1U;
+                return socket;
             }
         }
         return kNoSocket;
