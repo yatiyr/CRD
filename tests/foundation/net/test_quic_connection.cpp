@@ -7400,7 +7400,7 @@ TEST_CASE("QUIC connection: a challenge on path ID 0's active path is answered t
     // challenge goes on path ID 0 itself, with the response (its window closed to data) or after it.
     for (const bool pinned : {false, true})
     {
-        INFO((pinned ? "path ID 0 keeps the stream, with nothing to send" : "path ID 0 yields its data"));
+        INFO((pinned ? "path ID 0 keeps the stream, with nothing to send" : "path ID 1 carries the stream on"));
         MultipathPair pair;
         pair.net->socket_delay_ns[0] = 30U * kMs;
         pair.open_second();
@@ -7430,13 +7430,18 @@ TEST_CASE("QUIC connection: a challenge on path ID 0's active path is answered t
         CHECK(theirs.path(theirs.active()).peer == attacker);
         pair.net->client_at = client_at;
         pair.net->also_at = Endpoint{};
-        if (!pinned)
+        // Within two round trips of path ID 0, far inside the attacker address's validation, the server is back: the
+        // stream's chunks on path ID 1 meanwhile, whose packets are not probing either, leave the answer owed there.
+        const u64 sent_on_zero = pair.client.next_packet_number(QuicSpace::Application, 0U);
+        if (pinned)
+        {
+            pair.net->advance(pair.net->now + 200U * kMs);
+        }
+        else
         {
             REQUIRE(pair.client.streams().pin(stream, 1U) == QuicStreamError::None);
+            chunks_over(pair, pair.client, pair.server, stream, 10U, written, read);
         }
-        // Within two round trips of path ID 0, far inside the attacker address's validation, the server is back.
-        const u64 sent_on_zero = pair.client.next_packet_number(QuicSpace::Application, 0U);
-        pair.net->advance(pair.net->now + 200U * kMs);
         CHECK(pair.client.next_packet_number(QuicSpace::Application, 0U) > sent_on_zero);
         CHECK(theirs.path(theirs.active()).peer == client_at);
         CHECK(pair.server.counters().migrations == moves + 2U);

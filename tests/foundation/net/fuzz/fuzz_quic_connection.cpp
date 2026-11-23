@@ -1826,7 +1826,7 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
                                           const usize own = slot_of(pair.client, kept);
                                           CRD_FUZZ_REQUIRE(
                                               heard || !pinged || own == kQuicNoPath ||
-                                              !pair.client.recovery().can_send(QuicSpace::Application, own));
+                                              !pair.client.recovery().can_send_data(QuicSpace::Application, own));
                                           // Again only after another validation failed, or when nothing opened.
                                           CRD_FUZZ_REQUIRE(!pinged || counters.path_failures > failures ||
                                                            counters.packets_opened == opened);
