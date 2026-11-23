@@ -10,14 +10,15 @@ name: Host check
 # time the cases linux-gcc-arm64-asan runs far slower than linux-clang-arm64-asan under each sanitizer and runtime
 # option, on both compilers. The x64 stack-alignment leg runs TP-7's control under Intel SDE. The Vulkan SDK installer
 # legs (REPO.3) run the pinned Windows installer under candidate options, one fresh machine per arm, and judge them;
-# the emitter leg runs it under the debugger to name the caller of its QFont warning.
+# the emitter leg runs it under the debugger to name the caller of its QFont warning. The UDP ring leg (NET-PATH)
+# records the step and errno at which a hosted linux-gcc-asan machine refuses an io_uring receive ring, and its limits.
 on:
   workflow_dispatch:
     inputs:
       experiment:
         description: 'which experiment to run'
         type: choice
-        options: [all, fuzz, tsan, arm64-sanitizer-cost, x64-asan-stack-alignment, vulkan-sdk-installer,
+        options: [all, fuzz, tsan, arm64-sanitizer-cost, x64-asan-stack-alignment, udp-ring, vulkan-sdk-installer,
                   vulkan-sdk-installer-emitter]
         default: all
       seconds:
@@ -505,6 +506,120 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: host-check-x64-asan-stack-alignment
+          path: ${{ runner.temp }}/host-check/evidence
+          if-no-files-found: warn
+
+  udp-ring:
+    # NET-PATH: CI 45238977369's linux-gcc-asan refused a ring of 32768 whole-datagram buffers that 1024 opened, a
+    # case that passed on the same lane before. The leg records the machine's limits, then the ring case alone and
+    # beside the net label's other cases under -s, so every open prints the step and errno a refusal reports
+    # (SocketFeatures::ring_refusal, ring_error); it fails only where the case fails.
+    name: Host check (UDP ring refusals)
+    if: inputs.experiment == 'all' || inputs.experiment == 'udp-ring'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+      CRD_PLATFORM_HEADLESS: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned Ninja 1.11.1
+        shell: bash
+        run: python scripts/install-ninja.py --destination "$RUNNER_TEMP/ninja" --github-path "$GITHUB_PATH"
+
+      - name: Install system dependencies
+        timeout-minutes: 60
+        run: |
+          python scripts/install-apt-packages.py --update             libvulkan-dev             glslang-tools             libshaderc-dev             libwayland-dev             wayland-protocols             libxkbcommon-dev             libx11-dev             libxrandr-dev             libxinerama-dev             libxcursor-dev             libxi-dev             mesa-common-dev             zlib1g-dev
+
+      - name: Install pinned Vulkan headers and SPIRV-Reflect
+        run: |
+          python3 scripts/install-vulkan-headers.py --destination /tmp/vulkan-sdk --download-dir "$RUNNER_TEMP/vulkan-headers"
+          echo "VULKAN_SDK=/tmp/vulkan-sdk" >> "$GITHUB_ENV"
+
+      - name: Cache CPM downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: cpm-${{ runner.os }}-linux-gcc-asan-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
+          restore-keys: |
+            cpm-${{ runner.os }}-linux-gcc-asan-
+            cpm-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake --preset linux-gcc-asan
+
+      - name: Build the net tests
+        run: cmake --build --preset linux-gcc-asan --target crd-net-tests
+
+      - name: Limits and ring refusals
+        run: |
+          evidence="$RUNNER_TEMP/host-check/evidence"
+          mkdir -p "$evidence"
+          {
+            uname -a
+            id
+            ulimit -a
+            grep -E '^Cap(Eff|Prm)' /proc/self/status
+            for knob in vm/overcommit_memory vm/overcommit_ratio vm/max_map_count kernel/io_uring_disabled                 kernel/io_uring_group; do
+              echo "$knob: $(cat "/proc/sys/$knob" 2> /dev/null || echo absent)"
+            done
+            echo "cgroup: $(cat /proc/self/cgroup)"
+            cgroup="/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)"
+            for limit in memory.max memory.high memory.current memory.swap.max; do
+              echo "$limit: $(cat "$cgroup/$limit" 2> /dev/null || echo absent)"
+            done
+            head -n 20 /proc/meminfo
+            cat /proc/buddyinfo
+          } 2>&1 | tee "$evidence/limits.txt"
+          tests="$PWD/build/linux-gcc-asan/tests/net/crd-net-tests"
+          case='a UDP socket receives through io_uring exactly where the host runs it\, and through recvmmsg elsewhere'
+          refusals() {
+            grep -h -o -E '[0-9]+ buffers, refused at step [0-9]+, error -?[0-9]+' "$@" | sort | uniq -c
+          }
+          status=0
+          for round in $(seq 1 20); do
+            "$tests" -s "$case" > "$evidence/alone-$round.log" 2>&1 || status=1
+          done
+          echo "alone, 20 rounds:" | tee -a "$evidence/refusals.txt"
+          refusals "$evidence"/alone-*.log | tee -a "$evidence/refusals.txt"
+          # Beside load: the net label's other cases on every CPU while the ring case repeats.
+          (cd build/linux-gcc-asan && timeout 2400 ctest --preset linux-gcc-asan -L net -j "$(nproc)"             > "$evidence/net-label.log" 2>&1) &
+          load=$!
+          round=0
+          while kill -0 "$load" 2> /dev/null && [ "$round" -lt 200 ]; do
+            round=$((round + 1))
+            "$tests" -s "$case" > "$evidence/loaded-$round.log" 2>&1 || status=1
+          done
+          wait "$load" || true
+          echo "beside the net label, $round rounds:" | tee -a "$evidence/refusals.txt"
+          refusals "$evidence"/loaded-*.log | tee -a "$evidence/refusals.txt"
+          grep -l -E 'FAILED' "$evidence"/alone-*.log "$evidence"/loaded-*.log | head -n 5 | while read -r log; do
+            grep -B 2 -A 12 'FAILED' "$log"
+          done
+          {
+            echo '### UDP ring refusals'
+            echo '```'
+            cat "$evidence/refusals.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Preserve results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-check-udp-ring
           path: ${{ runner.temp }}/host-check/evidence
           if-no-files-found: warn
 

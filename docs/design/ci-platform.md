@@ -619,6 +619,16 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `host-check/x64-asan-stack-alignment` | Install pinned Intel SDE | `experiment-x64-asan-stack-alignment` | open (CI-4): not yet carried |
 | `host-check/x64-asan-stack-alignment` | Stack-alignment control | `experiment-x64-asan-stack-alignment` | open (CI-4): not yet carried |
 | `host-check/x64-asan-stack-alignment` | Preserve results | `experiment-x64-asan-stack-alignment` | open (CI-4): not yet carried |
+| `host-check/udp-ring` | Checkout | `experiment-udp-ring` | open (CI-4): not yet carried |
+| `host-check/udp-ring` | Setup Python 3.12 | `experiment-udp-ring` | open (CI-4): not yet carried |
+| `host-check/udp-ring` | Install pinned Ninja 1.11.1 | `experiment-udp-ring` | open (CI-4): not yet carried |
+| `host-check/udp-ring` | Install system dependencies | `experiment-udp-ring` | open (CI-4): not yet carried |
+| `host-check/udp-ring` | Install pinned Vulkan headers and SPIRV-Reflect | `experiment-udp-ring` | open (CI-4): not yet carried |
+| `host-check/udp-ring` | Cache CPM downloads | `experiment-udp-ring` | open (CI-4): not yet carried |
+| `host-check/udp-ring` | Configure | `experiment-udp-ring` | open (CI-4): not yet carried |
+| `host-check/udp-ring` | Build the net tests | `experiment-udp-ring` | open (CI-4): not yet carried |
+| `host-check/udp-ring` | Limits and ring refusals | `experiment-udp-ring` | open (CI-4): not yet carried |
+| `host-check/udp-ring` | Preserve results | `experiment-udp-ring` | open (CI-4): not yet carried |
 | `host-check/vulkan-sdk-installer` | Checkout | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
 | `host-check/vulkan-sdk-installer` | Setup Python 3.12 | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
 | `host-check/vulkan-sdk-installer` | Installer arm | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |

@@ -308,7 +308,7 @@ control is a jobs defect, an event in the plain control anywhere is that machine
 faults put the fault on this host.
 
 The `experiment` input picks the legs (`all`, `fuzz`, `tsan`, `arm64-sanitizer-cost`, `x64-asan-stack-alignment`,
-`vulkan-sdk-installer`). The ARM64 sanitizer-cost legs
+`udp-ring`, `vulkan-sdk-installer`). The ARM64 sanitizer-cost legs
 (SIMD-DISPATCH, [session](../sessions/2026-10-29-simd-dispatch-arm64-asan-cost.md)) ask why linux-gcc-arm64-asan runs
 cases up to a thousand times slower than its debug lane, where linux-clang-arm64-asan and x64 GCC ASan stay within
 tens. One leg per ARM64 ASan preset (`ubuntu-24.04-arm`) builds the preset and a copy without UBSan, then times five
@@ -318,6 +318,12 @@ give the seconds of every arm, and the leg records one `verbosity=1` start of th
 The x64 stack-alignment leg runs [TP-7](../third-party-defects.md#tp-7)'s Cerid-free control under the pinned
 Intel SDE with every compiler of the image, with and without GCC's width caps; it fails when a capped build faults
 or the image's default `g++` runs clean without them, the trigger that retires the caps.
+
+The UDP ring leg (NET-PATH, [session](../sessions/2026-11-24-net-path-ring-refusals.md)) builds `crd-net-tests` on
+linux-gcc-asan, records the machine's limits (kernel, `ulimit -a`, capabilities, overcommit and io_uring sysctls, the
+cgroup's memory limits, `/proc/meminfo`, `/proc/buddyinfo`) and runs the io_uring ring case 20 times alone and then
+beside the net label's other cases under `-s`, so every open prints the step and errno a refused ring reports
+(`SocketFeatures::ring_refusal`, `ring_error`); the summary tallies them, and the leg fails only where the case fails.
 
 The Vulkan SDK installer legs (REPO.3, [session](../sessions/2026-11-01-repo-3-vulkan-installer-options.md)) ask
 which options of the Qt Installer Framework remove the two findings of the cold Windows lane's pinned installer run,
