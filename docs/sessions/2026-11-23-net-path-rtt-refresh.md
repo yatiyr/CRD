@@ -21,6 +21,10 @@ Scheduling and Proof bullets. RFC 10069 sections 3.3, 5.4, 5.5 and 5.9 read agai
   held dark before data goes there. A connection with one path is unchanged (no other slot is refreshable).
 - `QuicConnectionCounters::path_refreshes`; the connection fuzzer's 0xF4 sets the refresh (bits 6 and 7).
 
+## CI fix
+
+CI 45100344604 (b8422b3b): linux-gcc-release, -relwithdebinfo and -shipping failed to link `crd-fuzz-net-quic-connection` on GCC 13's LTO `-Warray-bounds` in `begin_abandon` (slot 4 of `m_controls`, a path its guard excludes). Reproduced on linux-gcc-release; the stopped control is now cleared by pointer, and the whole lane then links every network target (its only other errors are HESAP benchmarks outside this track).
+
 ## Evidence
 
 - New `[multipath]` case in `test_quic_connection.cpp`; `QuicRtt` renewal checks in `test_quic_recovery.cpp`.
