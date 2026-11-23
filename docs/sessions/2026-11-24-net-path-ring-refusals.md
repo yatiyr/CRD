@@ -31,7 +31,8 @@ rings of 4, 8 and 1024 buffers opened in the same case. The same case had passed
 - **New `udp-ring` host-check leg** ([host-check.yml](../../.github/workflows/host-check.yml)). It builds
   `crd-net-tests` on linux-gcc-asan and records the machine's limits: kernel, ulimits, capabilities, overcommit and
   io_uring sysctls, cgroup memory, meminfo and buddyinfo. It then runs the ring case 20 times alone and then beside
-  the net label's other cases, under `-s`, and tallies every step and errno.
+  a whole `crd-net-tests` run on every CPU, under `-s`, and tallies every step and errno. A short local dry run did
+  119 loaded rounds beside 32 runs and found no refusal (WSL, kernel 6.6).
 
 ## Evidence
 
@@ -39,13 +40,15 @@ rings of 4, 8 and 1024 buffers opened in the same case. The same case had passed
   runs matched `io_uring|ring|recvmmsg`, which includes `crd-net-udp-recvmmsg`.
 - Teeth: with `Setup` reported as `Register` and the Memory errno forced to 0, the new case failed 3 assertions. With
   the source restored it passes.
+- linux-clang-tsan: every ring CTest passes, and the new case passes all 36 of its assertions.
 - win-debug: the `[#test_udp_rio]` and `[#test_udp_ring]` cases pass (14 cases, 370 assertions), including the
   Registered I/O `Count` reports.
 - LLVM 22 tidy is clean on Windows and on Linux. All the repository validators pass.
 
 ## Next
 
-- Dispatch host-check `udp-ring` on this commit, then read which step and errno that host refuses and its limits.
+- Read host-check `udp-ring` runs 45289266249 (load fixed) and 45288424193 (its alone arm only). Find which step and
+  errno that host refuses, and its limits.
 - Fix the ring's sizing at that cause. The hypotheses are the CQ ring of `2 * buffers` entries (1 MiB of kernel
   memory, possibly accounted to `RLIMIT_MEMLOCK` on newer kernels), the pinned 512 KiB buffer ring, and the 2.3 GiB
   buffer region made writable by `mprotect`.
