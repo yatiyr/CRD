@@ -40,7 +40,8 @@ bullet of "The QUIC connection" in [network-foundation.md](../design/network-fou
   passes. linux-gcc-release with LTO: the touched suites, both corpora and the fuzz replays pass.
 - libFuzzer, connection fuzzer: runs of 374 s and 487 s found nothing. A 500 s run before the ledger fix found only
   the slow unit, now fixed. Recovery fuzzer: 241 s and 301 s, no artifact.
-- clang-format is clean on the added lines, and the brace check passes. The win-tidy build of crd-net-tests (every touched engine source and test) has no warning.
+- clang-format is clean on the added lines, and the brace check passes. The win-tidy build of crd-net-tests (every
+  touched engine source and test) has no warning.
 
 ## Next
 
