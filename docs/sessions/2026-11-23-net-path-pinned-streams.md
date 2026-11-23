@@ -13,8 +13,10 @@ CI first: nothing to fix. CI 45084440222 (b119357b) is pending; fuzz host-check 
 
 - The operator's follow-up first: over paths the connection fuzzer's server holds two of its client's IDs (RFC 9000's
   minimum), so a move may find none unused. With the waiting move mutated away, the stricter follow check fails 9 of
-  83 libFuzzer finds and the committed input 8cfce1bc; with the kept revert mutated away too, the same (the waiting
-  move covers that one alone). One find, ddaef1b3, joins `corpus-quic-connection`. The fixed code ran 50741 times clean.
+  83 libFuzzer finds and the committed input 8cfce1bc, also with the kept revert mutated away too. The kept revert
+  alone mutated away trips nothing (0 of 83, 0 of 44): the waiting move covers it, so only batch 11's unit cases hold
+  it. Whether the finds follow the recipe's exact path (move, lost challenges, revert, return) was not traced. One
+  find, ddaef1b3, joins `corpus-quic-connection`. The fixed code ran 50741 times clean.
 - `QuicStreamSet::pin()`, `unpin()`, `pinned()`, `open_path()`, `stop_path()` and `QuicStreamRoute`: a pinned
   stream's data goes only on its path ID's slot, also while that slot yields its data or is a backup; its control and
   credit frames go on any slot carrying data. A stopped path unpins its streams: lost and unsent data goes anywhere.
@@ -26,8 +28,8 @@ CI first: nothing to fix. CI 45084440222 (b119357b) is pending; fuzz host-check 
 
 - `test_quic_connection.cpp`, three `[multipath]` cases: chunks pinned to the slower path ID 1 read in 50 to 51 ms from
   both ends and with it backup, plain ones in 21 ms; path ID 1 dark: the plain stream unaffected, the pinned one waits
-  and completes once it carries, or, unpinned while dark, crosses path ID 0 within 21 ms; a pinned backlog grows the slower path's window, and the faster path is marked
-  application-limited within 2 ms (37 packets in a second, where an unrouted query took 360 ms and sent 3222); 160 KiB
+  and completes once it carries, or, unpinned while dark, crosses path ID 0 within 21 ms; a pinned backlog grows
+  the slower path's window, and the faster path is marked application-limited within 2 ms (37 packets in a second, where an unrouted query took 360 ms and sent 3222); 160 KiB
   over lossy, duplicating, jittering links stays on path ID 1 until either end abandons it, then completes (4 seeds).
 - `test_quic_stream_set.cpp`: refusals, routes, control frames never on a no-data route, lost data resent on its
   slot, a stop unpinning, the slot reopened, a 0-RTT rejection keeping open paths.
