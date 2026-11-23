@@ -5112,6 +5112,110 @@ TEST_CASE("QUIC paths: a client's move with no ID of its own unused waits, valid
     }
 }
 
+TEST_CASE("QUIC paths: a path whose check ends in its own packet gives its ID to the path that waits only once that "
+          "packet chose its path: a probe gives it up, a non-probing packet moves there and keeps it",
+          "[net][net-path][quic-connection]")
+{
+    Identity identity;
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath r = client_at(8U, 50000U);
+    const QuicPath w = client_at(9U, 50000U);
+    const QuicPath z = client_at(10U, 50000U);
+    static constexpr u8 kThird[sizeof(kClientCid)] = {0xE0U, 0xE1U, 0xE2U, 0xE3U, 0xE4U, 0xE5U, 0xE6U, 0xE7U};
+    static constexpr u8 kToken[kQuicResetTokenBytes] = {0x7BU};
+    constexpr u8 data[kQuicPathDataBytes] = {0x5AU};
+    for (const bool moves : {false, true})
+    {
+        CAPTURE(moves);
+        CountingAllocator allocator;
+        Host host(allocator, 1U, ConstSpan<u8>(kServerCid, sizeof(kServerCid)));
+        RawRun run(identity, 2048U, {}, &host);
+        run.from = a;
+        run.handshake();
+        run.drain();
+        REQUIRE(run.raw.issued_bytes[1] == sizeof(kServerCid));
+        issue_second_id(run);
+        REQUIRE(run.server.peer_cid_count() == 2U);
+        u8 first[sizeof(run.raw.dcid)] = {};
+        std::memcpy(first, run.raw.dcid, sizeof(first));
+        // r probes with the server's sequence 1 and takes the client's; w probes with it too and finds none unused.
+        std::memcpy(run.raw.dcid, run.raw.issued[1], run.raw.issued_bytes[1]);
+        run.pad_to = kQuicMinInitialDatagram;
+        run.from = r;
+        send_frame(run, QuicFrameKind::PathChallenge, ConstSpan<u8>(data));
+        const usize held = run.server.paths().find(r);
+        REQUIRE(held != kQuicNoPath);
+        REQUIRE(run.server.paths().validating(held));
+        run.from = w;
+        send_frame(run, QuicFrameKind::PathChallenge, ConstSpan<u8>(data));
+        REQUIRE(run.server.paths().find(w) != kQuicNoPath);
+        REQUIRE(challenges_on(run, w) == 0U); // its challenge waits for an ID (section 9.5)
+        // From r, the answer to r's check; moving, a challenge and a PING with it.
+        const usize challenge = latest_challenge(run, r);
+        REQUIRE(challenge < 32U);
+        QuicFrame response;
+        response.kind = QuicFrameKind::PathResponse;
+        response.data = ConstSpan<u8>(run.raw.challenge[challenge], kQuicPathDataBytes);
+        QuicFrame probe;
+        probe.kind = QuicFrameKind::PathChallenge;
+        probe.data = ConstSpan<u8>(data);
+        QuicFrame ping;
+        ping.kind = QuicFrameKind::Ping;
+        run.from = r;
+        run.raw.path_response_seen = false;
+        const usize sent = run.raw.datagrams;
+        run.send(QuicPacketType::OneRtt,
+                 [&](Span<u8> out)
+                 {
+                     usize at = write_quic_frame(response, out);
+                     if (moves)
+                     {
+                         at += write_quic_frame(probe, out.subspan(at));
+                         at += write_quic_frame(ping, out.subspan(at));
+                     }
+                     return at;
+                 });
+        CHECK(run.server.path() == (moves ? r : a));
+        CHECK(run.server.counters().migrations == (moves ? 1U : 0U));
+        CHECK((run.server.paths().find(r) == kQuicNoPath) == !moves);
+        CHECK(run.raw.retire_seen == !moves); // the ID r gave up, for the peer's replacement
+        CHECK(run.raw.path_response_seen == moves);
+        CHECK((bytes_to(run, r, sent) != 0U) == moves); // answered on r, where it came (section 8.2.2)
+        CHECK(challenges_on(run, w) == 0U);
+        // z probes with the ID a uses: a probe, which moves nothing (section 9.1), in r's place when r is forgotten.
+        std::memcpy(run.raw.dcid, first, sizeof(first));
+        run.from = z;
+        send_frame(run, QuicFrameKind::PathChallenge, ConstSpan<u8>(data));
+        const usize probed = run.server.paths().find(z);
+        REQUIRE(probed != kQuicNoPath);
+        CHECK((probed == held) == !moves);
+        CHECK(run.server.path() == (moves ? r : a));
+        CHECK(run.server.counters().migrations == (moves ? 1U : 0U));
+        CHECK(run.server.paths().validating(probed));
+        CHECK(challenges_on(run, z) == (moves ? 0U : 1U)); // on r, z's local ID is not r's: it waits for one too
+        CHECK(run.server.state() == QuicConnectionState::Established);
+        if (moves)
+        {
+            continue; // the server holds the client's two IDs, both in use
+        }
+        // The client's next ID goes to w, whose challenge leaves on it; the server stays on a.
+        QuicFrame issue;
+        issue.kind = QuicFrameKind::NewConnectionId;
+        issue.sequence = 2U;
+        issue.data = ConstSpan<u8>(kThird);
+        issue.reset_token = ConstSpan<u8>(kToken);
+        std::memcpy(run.raw.dcid, first, sizeof(first));
+        run.from = a;
+        run.pad_to = 0U;
+        run.send(QuicPacketType::OneRtt, [&](Span<u8> out) { return write_quic_frame(issue, out); });
+        REQUIRE(latest_challenge(run, w) < 32U);
+        CHECK(run.raw.challenge_dcid[latest_challenge(run, w)] == 0xE0U);
+        CHECK(run.server.path() == a);
+        CHECK(run.server.counters().migrations == 0U);
+        CHECK(run.server.state() == QuicConnectionState::Established);
+    }
+}
+
 TEST_CASE("QUIC paths: before confirmation a server takes nothing from another path",
           "[net][net-path][quic-connection]")
 {

@@ -26,9 +26,10 @@
 // and 0xF8 steps which of its three sockets its host holds back (send()'s held sockets, every mask in turn; none on
 // the clean path). The server offers a preferred address on its socket 1 (RFC 9000 section 9.6), which 0xF7 moves the
 // client to (migrate(): once validated). The server holds two of its client's IDs, the fewest allowed, so a move
-// may wait for one (section 9.5). In any script 0xF6 sets both ends' handover schedule (S76) from the next
-// byte: an event every second from now, its guards from the byte, a refused schedule changing nothing; 0xF5 has
-// both learn the phase instead (a period and guards from the next byte), the learned schedule held to the learning.
+// may wait for one (section 9.5), or four after a leading 0xF3. In any script 0xF6 sets both ends' handover schedule
+// (S76) from the next byte: an event every second from now, its guards from the byte, a refused schedule changing
+// nothing; 0xF5 has both learn the phase instead (a period and guards from the next byte), the learned schedule held
+// to the learning.
 //
 // Oracles. Always: a server sends at most three times what it received before the address is proven, and on paths
 // at most three times what arrived from each address it has not validated since it last knew it; every client
@@ -316,12 +317,19 @@ bool& over_paths()
     return paths;
 }
 
-// Each end's active_connection_id_limit: the IDs of its peer's it holds. Over paths a server holds the fewest RFC 9000
-// allows (section 18.2), so a move of its client's may find none unused (section 9.5): the edge S75's kept revert and
-// waiting move serve.
+// The IDs of its client's a server holds over paths: the fewest RFC 9000 allows (section 18.2), so a move of its
+// client's may find none unused (section 9.5), the edge S75's kept revert and waiting move serve; or four, as
+// elsewhere, for a script opening with 0xF3, so that paths left behind keep IDs to give up.
+u64& server_ids()
+{
+    static u64 ids = 2U;
+    return ids;
+}
+
+// Each end's active_connection_id_limit: the IDs of its peer's it holds.
 u64 id_limit(QuicSide side)
 {
-    return (over_paths() && side == QuicSide::Server) ? 2U : 4U;
+    return (over_paths() && side == QuicSide::Server) ? server_ids() : 4U;
 }
 
 // With `switching` the client lists its version first and the server the other one; with `tickets` both ends run
@@ -1692,10 +1700,13 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         return 0;
     }
     const QuicVersion version = ((data[0] & 4U) != 0U) ? QuicVersion::V2 : QuicVersion::V1;
-    const ConstSpan<u8> rest(data + 1U, size - 1U);
     const bool keyed = (data[0] & 32U) != 0U;
     extensions() = (data[0] & 64U) != 0U;
     over_paths() = (data[0] & 128U) != 0U;
+    const bool four = over_paths() && (data[0] & 3U) == 0U && size > 1U && data[1] == 0xF3U;
+    server_ids() = four ? 4U : 2U;
+    const usize skip = four ? 2U : 1U;
+    const ConstSpan<u8> rest(data + skip, size - skip);
     switch (data[0] & 3U)
     {
         case 0U:

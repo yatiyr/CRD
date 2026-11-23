@@ -855,8 +855,11 @@ private:
         return m_recovery->path_open(slot) && !m_recovery->path_sending(slot);
     }
     [[nodiscard]] bool stopped_ack_due(u64 now_ns) const noexcept;
-    // Forgets a path that is not the active one, retiring its peer ID unless another path sends to it.
+    // Forgets a path that is not the active one, retiring its peer ID unless another path sends to it; the path of
+    // the packet being read is forgotten once that packet chose its path (decided()), unless it chose that one.
     void drop_path(usize slot, usize index, u64 now_ns) noexcept;
+    // The packet being read chose its path: the drop its frames asked of that path happens now, unless chosen.
+    void decided(u64 now_ns) noexcept;
     // The peer ID a path sends to (its sequence), whether the peer's ID of a sequence is held, and whether a path has
     // the room and an ID to send a datagram now.
     [[nodiscard]] u64 path_sequence(usize slot, usize index) const noexcept;
@@ -1181,6 +1184,10 @@ private:
     usize m_tentative_slot = kQuicNoPath;    // begin_path()'s, until commit_path() or undo_path()
     QuicPath m_candidate;      // the path of a datagram being read from no known path
     usize m_receive_path = 0U; // the 4-tuple of the datagram being read, in m_receive_slot's (kQuicNoPath: m_candidate)
+    // From a packet's admission to the choice of its path (follow_packet()) its path is not forgotten: the drop asked
+    // for meanwhile waits in m_drop_after. A packet that fails the connection leaves both: a closing one moves no path.
+    bool m_deciding = false;
+    usize m_drop_after = kQuicNoPath;
     usize m_send_slot = 0U;    // the path slot of the datagram being written, then of the last one
     usize m_send_path = 0U;    // the 4-tuple of the datagram being written, then of the last one, in send_slot()'s
     // The path datagrams move to once validated (section 9.6.2): a client's to the preferred address, a server's

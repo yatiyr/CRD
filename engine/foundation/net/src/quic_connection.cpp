@@ -1078,6 +1078,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
     }
     ++m_counters.packets_opened;
     QuicPaths& paths = tuples(m_receive_slot);
+    m_deciding = true;
     if (m_receive_path == kQuicNoPath)
     {
         admit_path(m_receive_slot, datagram_bytes, now_ns);
@@ -1158,6 +1159,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
     {
         follow_packet(m_receive_slot, opened.number, probing, now_ns); // its path ID's 4-tuples (S75)
     }
+    decided(now_ns);
     if (!m_space_gone[quic_space_index(space)])
     {
         static_cast<void>(m_recovery->on_received(space, opened.number, eliciting, ecn, now_ns, m_receive_slot));
@@ -3968,6 +3970,17 @@ void QuicConnection::expire_paths(u64 now_ns) noexcept
     }
 }
 
+void QuicConnection::decided(u64 now_ns) noexcept
+{
+    m_deciding = false;
+    const usize drop = m_drop_after;
+    m_drop_after = kQuicNoPath;
+    if (drop != kQuicNoPath)
+    {
+        drop_path(m_receive_slot, drop, now_ns); // nothing when the packet moved the connection there
+    }
+}
+
 void QuicConnection::drop_path(usize slot, usize index, u64 now_ns) noexcept
 {
     QuicPaths& paths = tuples(slot);
@@ -3975,8 +3988,15 @@ void QuicConnection::drop_path(usize slot, usize index, u64 now_ns) noexcept
     {
         return;
     }
+    if (m_deciding && slot == m_receive_slot && index == m_receive_path)
+    {
+        m_drop_after = index; // the packet read from it chooses its path first (decided())
+        return;
+    }
     m_deferred_move = (handshake_slot(slot) && m_deferred_move == index) ? kQuicNoPath : m_deferred_move;
     m_tuples[slot]->waiting = (m_tuples[slot]->waiting == index) ? kQuicNoPath : m_tuples[slot]->waiting;
+    // The rest of a datagram read from it is from a path not known, which its next 1-RTT packet admits again.
+    m_receive_path = (slot == m_receive_slot && m_receive_path == index) ? kQuicNoPath : m_receive_path;
     const u64 sequence = paths.peer_sequence(index);
     bool shared = sequence == kNoSequence;
     for (usize other = 0U; other < kQuicMaxPaths; ++other)
