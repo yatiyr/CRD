@@ -4,6 +4,7 @@
  *
  * Usage: crd-picoquic-quic-peer --role client|server --port N --seed HEX --version 1|2 --streams N --bytes N
  *                               --code N [--cc prague|cubic|newreno|bbr] [--address-discovery off|provide|receive|both]
+ *                               [--multipath 1]
  *
  *   port     a server's to bind on 127.0.0.1 (0: any, printed as `port=N`), a client's to reach
  *   seed     the 32-byte Ed25519 private key of the server's self-signed credential; a client pins its public key and
@@ -17,6 +18,7 @@
  *            picoquic's own packet loop does (sockloop.c)
  *   address-discovery  what this end offers of draft-ietf-quic-address-discovery-01 (off by default): reports of the
  *            addresses it sees, reports of its own, or both (picoquic's address_discovery_mode 1, 2 and 3)
+ *   multipath  this end offers RFC 10069 (picoquic's multipath option 1: initial_max_path_id 2)
  *
  * The loop is picoquic's API over its own socket helpers (picosocks.h: ECN and the destination address read from
  * each datagram's control data), driven here so that a server binds port 0 and reports it and each end stops when its
@@ -27,8 +29,10 @@
  * `_ect1`, `_ce`) and those the peer's ACK frames reported of this end's (`ecn_acked_ect0`, `_ect1`, `_ce`), the
  * window when the connection ended (`cwin`), the packets declared lost (`losses`), the path MTU picoquic's search
  * reached (`pmtu`), the peer's max_udp_payload_size (`peer_max_udp_payload`), this end's port (`local_port`) and the
- * address its peer last reported seeing it at (`observed`, `none` before any report). The application is
- * `cerid-interop`, a private ALPN. */
+ * address its peer last reported seeing it at (`observed`, `none` before any report), whether multipath was negotiated
+ * (`multipath`), the most paths the connection held at once (`paths`), the largest path ID it used (`largest_path_id`)
+ * and the bytes received on path IDs other than 0 (`other_path_received`, the most counted at once). The application
+ * is `cerid-interop`, a private ALPN. */
 #define _GNU_SOURCE /* ppoll */
 #include "openssl_self_signed.h"
 #include "http_exchange.h"
@@ -87,6 +91,10 @@ typedef struct
     uint64_t pmtu;
     uint64_t peer_max_udp_payload;
     char     observed[64]; /* "a.b.c.d:port", or "none" */
+    int      multipath;
+    int      paths;               /* the most the connection held at once */
+    uint64_t largest_path_id;     /* of those it held */
+    uint64_t other_path_received; /* the bytes received on path IDs other than 0, the most counted at once */
 } snapshot_t;
 
 typedef struct
@@ -350,18 +358,55 @@ static void take_snapshot(peer_t* peer, picoquic_cnx_t* cnx)
     (void)snprintf(out->alpn, sizeof(out->alpn), "%s", alpn != NULL ? alpn : "");
     (void)snprintf(out->congestion, sizeof(out->congestion), "%s",
                    cnx->congestion_alg != NULL ? cnx->congestion_alg->congestion_algorithm_id : "none");
-    const picoquic_ack_context_t*    acks    = &cnx->ack_ctx[picoquic_packet_context_application];
-    const picoquic_packet_context_t* packets = &cnx->pkt_ctx[picoquic_packet_context_application];
-    out->ecn_received[0] = acks->ecn_ect0_total_local;
-    out->ecn_received[1] = acks->ecn_ect1_total_local;
-    out->ecn_received[2] = acks->ecn_ce_total_local;
-    out->ecn_acked[0]    = packets->ecn_ect0_total_remote;
-    out->ecn_acked[1]    = packets->ecn_ect1_total_remote;
-    out->ecn_acked[2]    = packets->ecn_ce_total_remote;
+    /* With multipath each path ID keeps its own Application space and counts (RFC 10069 section 4.1): the sum over the
+     * paths held, never below what an earlier turn counted before a path was deleted. */
+    const int paths = cnx->is_multipath_enabled ? cnx->nb_paths : 1;
+    uint64_t  received[3] = {0U, 0U, 0U};
+    uint64_t  acked[3]    = {0U, 0U, 0U};
+    for (int index = 0; index < paths; ++index)
+    {
+        const picoquic_ack_context_t*    acks    = cnx->is_multipath_enabled
+                                                       ? &cnx->path[index]->ack_ctx
+                                                       : &cnx->ack_ctx[picoquic_packet_context_application];
+        const picoquic_packet_context_t* packets = cnx->is_multipath_enabled
+                                                       ? &cnx->path[index]->pkt_ctx
+                                                       : &cnx->pkt_ctx[picoquic_packet_context_application];
+        received[0] += acks->ecn_ect0_total_local;
+        received[1] += acks->ecn_ect1_total_local;
+        received[2] += acks->ecn_ce_total_local;
+        acked[0] += packets->ecn_ect0_total_remote;
+        acked[1] += packets->ecn_ect1_total_remote;
+        acked[2] += packets->ecn_ce_total_remote;
+    }
+    for (int codepoint = 0; codepoint < 3; ++codepoint)
+    {
+        if (received[codepoint] > out->ecn_received[codepoint])
+        {
+            out->ecn_received[codepoint] = received[codepoint];
+        }
+        if (acked[codepoint] > out->ecn_acked[codepoint])
+        {
+            out->ecn_acked[codepoint] = acked[codepoint];
+        }
+    }
     out->cwin            = cnx->path[0]->cwin;
     out->losses          = cnx->nb_retransmission_total;
     out->pmtu            = cnx->path[0]->send_mtu;
     out->peer_max_udp_payload = cnx->remote_parameters_received ? cnx->remote_parameters.max_packet_size : 0U;
+    /* Paths come and go (an abandoned one is deleted): the counts keep the most seen. */
+    out->multipath = cnx->is_multipath_enabled;
+    out->paths     = cnx->nb_paths > out->paths ? cnx->nb_paths : out->paths;
+    uint64_t other = 0U;
+    for (int index = 0; index < cnx->nb_paths; ++index)
+    {
+        const picoquic_path_t* path = cnx->path[index];
+        if (path->unique_path_id > out->largest_path_id)
+        {
+            out->largest_path_id = path->unique_path_id;
+        }
+        other += path->unique_path_id != 0U ? path->received : 0U;
+    }
+    out->other_path_received = other > out->other_path_received ? other : out->other_path_received;
     struct sockaddr_storage observed;
     memset(&observed, 0, sizeof(observed));
     const struct sockaddr_in* v4 = (const struct sockaddr_in*)&observed;
@@ -396,6 +441,8 @@ static void report(const peer_t* peer, uint16_t local_port)
     printf("cwin=%llu\nlosses=%llu\npmtu=%llu\npeer_max_udp_payload=%llu\n", (unsigned long long)s->cwin,
            (unsigned long long)s->losses, (unsigned long long)s->pmtu, (unsigned long long)s->peer_max_udp_payload);
     printf("local_port=%u\nobserved=%s\n", (unsigned)local_port, s->observed[0] != '\0' ? s->observed : "none");
+    printf("multipath=%d\npaths=%d\nlargest_path_id=%llu\nother_path_received=%llu\n", s->multipath, s->paths,
+           (unsigned long long)s->largest_path_id, (unsigned long long)s->other_path_received);
     fflush(stdout);
 }
 
@@ -503,7 +550,7 @@ static int parse_seed(const char* text, unsigned char* out)
 static int usage(void)
 {
     fputs("usage: crd-picoquic-quic-peer --role client|server --port N --seed HEX --version 1|2 --streams N --bytes N "
-          "--code N [--cc prague|cubic|newreno|bbr] [--address-discovery off|provide|receive|both]\n",
+          "--code N [--cc prague|cubic|newreno|bbr] [--address-discovery off|provide|receive|both] [--multipath 1]\n",
           stderr);
     return 2;
 }
@@ -517,6 +564,7 @@ int main(int argc, char** argv)
     unsigned long port    = 0UL;
     unsigned long version = 1UL;
     int           discovery = 0;
+    int           multipath = 0;
     for (int at = 1; at + 1 < argc; at += 2)
     {
         const char* name  = argv[at];
@@ -552,6 +600,10 @@ int main(int argc, char** argv)
         else if (strcmp(name, "--cc") == 0)
         {
             cc = value;
+        }
+        else if (strcmp(name, "--multipath") == 0)
+        {
+            multipath = strcmp(value, "0") != 0;
         }
         else if (strcmp(name, "--address-discovery") == 0)
         {
@@ -600,6 +652,7 @@ int main(int argc, char** argv)
         return 1;
     }
     picoquic_set_default_address_discovery_mode(quic, discovery);
+    picoquic_set_default_multipath_option(quic, multipath);
     if (peer.client)
     {
         peer.pin.super.cb    = verify_certificate;

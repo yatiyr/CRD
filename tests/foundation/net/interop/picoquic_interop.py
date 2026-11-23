@@ -29,6 +29,11 @@ Address discovery (draft-ietf-quic-address-discovery-01, design S77): with each 
 provide, receive or both), an end that asked and whose peer offered ends holding its own address as the peer saw it
 (127.0.0.1 and its socket's port), and every other end holds none: picoquic is the one pinned peer that implements
 the draft (its address_discovery_mode).
+
+Multipath (RFC 10069, design S78): with both ends offering it, the connection negotiates it; a Cerid client opens path
+ID 1 from a second socket once it has read a quarter of its echo, and picoquic's server holds that path, reads bytes on
+it and answers on it while the echo completes. With one end offering it, neither negotiates it and the Cerid client's
+add_path() answers no-multipath.
 """
 import argparse
 import subprocess
@@ -60,7 +65,7 @@ WANTS = ('receive', 'both')
 
 class Case:
     def __init__(self, cerid, picoquic, cerid_is_client, version=1, streams=4, size=256 << 10, path=None,
-                 peer_cc='prague', discovery=None):
+                 peer_cc='prague', discovery=None, multipath=None):
         self.cerid = cerid
         self.picoquic = picoquic
         self.cerid_is_client = cerid_is_client
@@ -70,12 +75,17 @@ class Case:
         self.path = path  # a Relay's settings, as a dictionary; None: the loopback
         self.peer_cc = peer_cc  # picoquic's controller
         self.discovery = discovery  # (Cerid's, picoquic's) address discovery offers; None: neither sends one
+        self.multipath = multipath  # (Cerid offers, picoquic offers); None: neither
 
     def command(self, program, role, port):
         common = ['--role', role, '--port', str(port), '--seed', SEED, '--version', str(self.version), '--streams',
                   str(self.streams), '--bytes', str(self.size), '--code', str(CODE)]
         if self.discovery is not None:
             common += ['--address-discovery', self.discovery[0 if program == self.cerid else 1]]
+        if self.multipath is not None and self.multipath[0 if program == self.cerid else 1]:
+            common += ['--multipath', '2' if program == self.cerid else '1']
+            if program == self.cerid and role == 'client':
+                common += ['--add-path-at', str(self.streams * self.size // 4)]
         if program == self.cerid:
             return [program] + common + ['--group', 'x25519', '--cipher', 'aes128', '--closer', 'client',
                                          '--max-streams', '16', '--congestion', 'prague']
@@ -87,8 +97,10 @@ class Case:
             path = ' '.join(f'{name} {self.path[name]}' for name in ('step', 'ramp', 'classic', 'loss')
                             if name in self.path) or 'bottleneck'
         discovery = '' if self.discovery is None else f' address discovery {self.discovery[0]}/{self.discovery[1]}'
+        offers = {(True, True): 'both', (True, False): 'cerid', (False, True): 'picoquic'}
+        multipath = '' if self.multipath is None else f' multipath {offers[self.multipath]}'
         return ('cerid client' if self.cerid_is_client else 'picoquic client') + \
-            f' v{self.version} {self.streams}x{self.size} picoquic {self.peer_cc} {path}{discovery}'
+            f' v{self.version} {self.streams}x{self.size} picoquic {self.peer_cc} {path}{discovery}{multipath}'
 
     def run(self):
         server_program, client_program = self.picoquic, self.cerid
@@ -125,6 +137,7 @@ class Case:
             self.check_connection(clients[0], servers[0], detail)
             self.check_ecn(cerid, picoquic, detail)
             self.check_discovery(cerid, picoquic, detail)
+            self.check_multipath(cerid, picoquic, detail)
             if relay is not None:
                 self.check_relay(relay, cerid, picoquic, detail)
         finally:
@@ -176,6 +189,26 @@ class Case:
         expect(cerid.get('observed') == expected, f'Cerid holds another report than {expected}: {detail}')
         expected = peer_at if peer_mode in WANTS and cerid_mode in PROVIDES else 'none'
         expect(picoquic.get('observed') == expected, f'picoquic holds another report than {expected}: {detail}')
+
+    def check_multipath(self, cerid, picoquic, detail):
+        """Negotiated exactly when both ends offer it; then a Cerid client's path ID 1 opens on both ends and carries
+        its share of the echo, and picoquic's server holds it."""
+        negotiated = self.multipath == (True, True)
+        expect(cerid.get('multipath') == str(int(negotiated)) and picoquic.get('multipath') == str(int(negotiated)),
+               f'multipath negotiated otherwise: {detail}')
+        if self.multipath is None or not self.cerid_is_client or not self.multipath[0]:
+            expect(cerid.get('add_path') == 'none', f'Cerid asked for a path: {detail}')
+            return
+        if not negotiated:
+            expect(cerid.get('add_path') == 'no-multipath' and cerid.get('paths_opened') == '0',
+                   f'Cerid opened a path without multipath: {detail}')
+            return
+        expect(cerid.get('add_path') == 'started' and cerid.get('added_path_id') == '1',
+               f'Cerid did not open path ID 1: {detail}')
+        expect(int(cerid.get('paths_opened', '0')) >= 1, f'path ID 1 opened no number space at Cerid: {detail}')
+        expect(int(picoquic.get('paths', '0')) >= 2 and int(picoquic.get('largest_path_id', '0')) >= 1,
+               f'picoquic never held path ID 1: {detail}')
+        expect(int(picoquic.get('other_path_received', '0')) > 0, f'picoquic read nothing on path ID 1: {detail}')
 
     def check_relay(self, relay, cerid, picoquic, detail):
         """The AQM's marks against both ends' counts, and Prague's state, queue and rate through it. A Cerid client
@@ -250,6 +283,9 @@ def cases(cerid, picoquic):
             yield case(discovery=discovery)
         for peer_cc in ('cubic', 'bbr'):
             yield case(peer_cc=peer_cc)
+        for multipath in ((True, True), (True, False), (False, True)):
+            for version in (1, 2):
+                yield case(version=version, multipath=multipath)
         for version in (1, 2):
             yield case(version=version, size=BULK, path=L4S_STEP)
         yield case(size=BULK, path=L4S_RAMP)
