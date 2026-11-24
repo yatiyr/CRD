@@ -46,6 +46,36 @@ constexpr u64 kSimulatedSliceNs = 1000000U; // a set the host cannot wait on who
     }
     return (asked == 0U || asked > kMaxUdpPayloadV6) ? static_cast<u32>(kMaxUdpPayloadV6) : asked;
 }
+
+// Whether a ring the host refused may fit with half its buffers: memory, a quota or kernel resources ran short where
+// the ring takes them. A descriptor limit (EMFILE) or a policy (EPERM) refuses any count alike.
+[[nodiscard]] bool smaller_ring_may_fit(RingRefusal step, int error) noexcept
+{
+    if (step != RingRefusal::Memory && step != RingRefusal::Setup && step != RingRefusal::Register)
+    {
+        return false;
+    }
+#if CRD_OS_WINDOWS
+    switch (error)
+    {
+        case ERROR_NOT_ENOUGH_MEMORY:
+        case ERROR_OUTOFMEMORY:
+        case ERROR_NO_SYSTEM_RESOURCES:
+        case ERROR_NONPAGED_SYSTEM_RESOURCES:
+        case ERROR_PAGED_SYSTEM_RESOURCES:
+        case ERROR_WORKING_SET_QUOTA:
+        case ERROR_PAGEFILE_QUOTA:
+        case ERROR_COMMITMENT_LIMIT:
+        case ERROR_NOT_ENOUGH_QUOTA:
+        case WSAENOBUFS:
+            return true;
+        default:
+            return false;
+    }
+#else
+    return error == ENOMEM || error == ENOBUFS || error == EAGAIN;
+#endif
+}
 #endif
 
 #if CRD_OS_LINUX
@@ -693,16 +723,21 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
                                                     : nullptr;
         if (socket.m_rio == nullptr)
         {
+            // A socket the host refused once takes no second request queue: the next one, with half the buffers
+            // where the host's resources ran short or else a plain one, opens in its place and reports this refusal.
             socket.close();
-            UdpOptions plain = options;
-            plain.registered_io = false;
-            UdpSocket fallback = open(plain, error);
+            UdpOptions next = options;
+            const bool halve = smaller_ring_may_fit(refusal, refusal_error) && options.ring_buffers > kRioMinBuffers;
+            next.ring_buffers = halve ? options.ring_buffers / 2U : options.ring_buffers;
+            next.registered_io = halve;
+            UdpSocket fallback = open(next, error);
             fallback.m_features.ring_refusal = refusal;
             fallback.m_features.ring_error = refusal_error;
             return fallback;
         }
         static_cast<void>(rio_watch(*socket.m_rio));
         socket.m_features.lent_receive = true;
+        socket.m_features.ring_buffers = options.ring_buffers;
         socket.m_features.receive_bytes = datagram_bytes;
         socket.m_features.send_bytes = datagram_bytes;
     }
@@ -715,10 +750,22 @@ UdpSocket UdpSocket::open(const UdpOptions& options, SocketError& error) noexcep
     else if (error == SocketError::None && options.ring_buffers != 0U)
     {
         const u32 datagram_bytes = ring_datagram_bytes(options, socket.m_features.coalesced_receive);
-        socket.m_ring = ring_open(handle, options.ring_buffers, datagram_bytes, static_cast<u32>(kControlBytes),
-                                  socket.m_features.ring_refusal, socket.m_features.ring_error);
-        socket.m_features.lent_receive = socket.m_ring != nullptr;
-        socket.m_features.receive_bytes = (socket.m_ring != nullptr) ? datagram_bytes : 0U;
+        SocketFeatures& features = socket.m_features;
+        u32 buffers = options.ring_buffers;
+        socket.m_ring = ring_open(handle, buffers, datagram_bytes, static_cast<u32>(kControlBytes),
+                                  features.ring_refusal, features.ring_error);
+        // Where the host's resources ran short, half the buffers again down to the fewest; the first refusal stays.
+        RingRefusal refusal = features.ring_refusal;
+        int refusal_error = features.ring_error;
+        while (socket.m_ring == nullptr && buffers > kRingMinBuffers && smaller_ring_may_fit(refusal, refusal_error))
+        {
+            buffers /= 2U;
+            socket.m_ring =
+                ring_open(handle, buffers, datagram_bytes, static_cast<u32>(kControlBytes), refusal, refusal_error);
+        }
+        features.lent_receive = socket.m_ring != nullptr;
+        features.receive_bytes = (socket.m_ring != nullptr) ? datagram_bytes : 0U;
+        features.ring_buffers = (socket.m_ring != nullptr) ? buffers : 0U;
     }
 #elif !CRD_OS_WINDOWS
     if (error == SocketError::None && options.ring_buffers != 0U)

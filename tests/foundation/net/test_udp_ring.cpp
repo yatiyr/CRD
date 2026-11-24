@@ -259,6 +259,22 @@ bool resource_refusal(const SocketFeatures& features)
            (code == ENOMEM || code == EMFILE || code == ENFILE || code == EAGAIN);
 }
 
+// The ring a socket that asked for `asked` buffers holds: all of them with no refusal, or after a resource refusal
+// a power of two from 4 below them, with that first refusal named; none, with no count, where it has no ring.
+bool holds_granted_ring(const SocketFeatures& features, u32 asked)
+{
+    const u32 granted = features.ring_buffers;
+    if (!features.lent_receive)
+    {
+        return granted == 0U;
+    }
+    if (granted == asked)
+    {
+        return features.ring_refusal == RingRefusal::None;
+    }
+    return granted >= 4U && granted < asked && (granted & (granted - 1U)) == 0U && resource_refusal(features);
+}
+
 } // namespace
 
 TEST_CASE("a UDP socket receives through io_uring exactly where the host runs it, and through recvmmsg elsewhere",
@@ -271,6 +287,7 @@ TEST_CASE("a UDP socket receives through io_uring exactly where the host runs it
     CHECK(socket.features().lent_receive == ring);
     CHECK(socket.features().receive_bytes == (ring ? crd::net::kMaxUdpPayloadV6 : 0U));
     CHECK((ring ? socket.features().ring_refusal == RingRefusal::None : reports_no_ring(socket.features())));
+    CHECK(socket.features().ring_buffers == (ring ? 64U : 0U));
 
     // A power of two from 4 to 32768 buffers; any other count keeps recvmmsg and says so.
     for (const u32 buffers : {0U, 1U, 2U, 3U, 5U, 48U, 65536U})
@@ -282,9 +299,11 @@ TEST_CASE("a UDP socket receives through io_uring exactly where the host runs it
         CHECK_FALSE(plain.features().lent_receive);
         CHECK(plain.features().ring_refusal == count_refusal(buffers));
         CHECK(plain.features().ring_error == 0);
+        CHECK(plain.features().ring_buffers == 0U);
     }
-    // A valid count lends where the host runs the ring, or reports the host's limits refusing it (the largest asks
-    // for 32768 buffers of a whole datagram each); nothing else stops it.
+    // A valid count lends where the host runs the ring, with fewer buffers where the host's limits refuse it that
+    // many (the largest asks for 32768 buffers of a whole datagram each), naming the first refusal; nothing else
+    // stops it.
     for (const u32 buffers : {4U, 8U, 1024U, 32768U})
     {
         UdpOptions options;
@@ -292,11 +311,11 @@ TEST_CASE("a UDP socket receives through io_uring exactly where the host runs it
         const UdpSocket opened = open_with(options);
         const SocketFeatures features = opened.features();
         INFO(buffers << " buffers, refused at step " << static_cast<int>(features.ring_refusal) << ", error "
-                     << features.ring_error);
+                     << features.ring_error << ", granted " << features.ring_buffers);
+        CHECK(holds_granted_ring(features, buffers));
         if (ring)
         {
-            CHECK((features.ring_refusal == RingRefusal::None) == features.lent_receive);
-            CHECK((features.lent_receive || (buffers > 1024U && resource_refusal(features))));
+            CHECK((features.lent_receive || resource_refusal(features)));
         }
         else
         {
@@ -373,8 +392,8 @@ UdpSocket open_bare(SocketError& error, u32 buffers = 64U)
     return UdpSocket::open(options, error);
 }
 
-// The refused socket still receives, through recvmmsg into the slot's own storage.
-void receives_plainly(UdpSocket& socket)
+// The refused socket still receives into the slot's own storage: copied from its smaller ring, or through recvmmsg.
+void receives_one(UdpSocket& socket)
 {
     UdpSocket sender = open_with(UdpOptions{});
     REQUIRE(send_burst(sender, socket.local_endpoint(), 1U));
@@ -390,7 +409,7 @@ void receives_plainly(UdpSocket& socket)
 }
 } // namespace
 
-TEST_CASE("a ring the host refuses names the step and its errno, and the socket receives through recvmmsg",
+TEST_CASE("a ring the host refuses names the step and its errno, and the socket receives on fewer buffers or none",
           "[net][udp][net-path]")
 {
     if (!host_runs_ring())
@@ -414,13 +433,14 @@ TEST_CASE("a ring the host refuses names the step and its errno, and the socket 
         CHECK_FALSE(socket.features().lent_receive);
         CHECK(socket.features().ring_refusal == RingRefusal::Setup);
         CHECK(socket.features().ring_error == EPERM);
+        CHECK(socket.features().ring_buffers == 0U); // a policy refuses any count: no smaller ring is asked for
         CHECK_FALSE(resource_refusal(socket.features()));
-        receives_plainly(socket);
+        receives_one(socket);
     }
-    SECTION("the buffers' pages pass the address space left: Memory, ENOMEM")
+    // The largest ring asks for 32768 buffers of a whole datagram's pages each, over 2 GiB, and the fewest for four,
+    // about 370 KiB with the ring's own pages; the address space left past the process's size takes some or none.
+    const auto open_with_room = [](rlim_t room, SocketError& error)
     {
-        // The largest ring asks for 32768 buffers of a whole datagram's pages each, over 2 GiB; 256 MiB past the
-        // process's address space holds none of it and leaves the sanitizers' runtimes their room.
         char line[128] = {};
         std::FILE* const statm = std::fopen("/proc/self/statm", "r");
         REQUIRE(statm != nullptr);
@@ -431,22 +451,43 @@ TEST_CASE("a ring the host refuses names the step and its errno, and the socket 
         errno = 0;
         const unsigned long long pages = std::strtoull(line, &end, 10); // the first field: the whole size in pages
         REQUIRE((errno == 0 && end != line && pages != 0U));
-        const rlim_t room = (static_cast<rlim_t>(pages) * static_cast<rlim_t>(::sysconf(_SC_PAGESIZE))) + (256U << 20U);
-        SocketError error = SocketError::Failed;
+        const rlim_t size = static_cast<rlim_t>(pages) * static_cast<rlim_t>(::sysconf(_SC_PAGESIZE));
         UdpSocket socket;
         bool lowered = false;
         {
-            const LoweredLimit limit(RLIMIT_AS, room);
+            const LoweredLimit limit(RLIMIT_AS, size + room);
             lowered = limit.lowered();
             socket = lowered ? open_bare(error, 32768U) : UdpSocket{};
         }
         REQUIRE(lowered);
+        return socket;
+    };
+    SECTION("the buffers' pages pass the address space left: Memory, ENOMEM, and half the buffers until they fit")
+    {
+        // 256 MiB holds a ring of 2048 buffers at most and leaves the sanitizers' runtimes their room.
+        SocketError error = SocketError::Failed;
+        UdpSocket socket = open_with_room(256U << 20U, error);
+        REQUIRE(error == SocketError::None);
+        const u32 granted = socket.features().ring_buffers;
+        INFO("granted " << granted);
+        CHECK(socket.features().lent_receive);
+        CHECK(holds_granted_ring(socket.features(), 32768U));
+        CHECK(granted <= 2048U);
+        CHECK(socket.features().ring_refusal == RingRefusal::Memory);
+        CHECK(socket.features().ring_error == ENOMEM);
+        receives_one(socket);
+    }
+    SECTION("not even the fewest buffers fit: the first refusal, Memory and ENOMEM, and recvmmsg")
+    {
+        SocketError error = SocketError::Failed;
+        UdpSocket socket = open_with_room(192U << 10U, error);
         REQUIRE(error == SocketError::None);
         CHECK_FALSE(socket.features().lent_receive);
+        CHECK(socket.features().ring_buffers == 0U);
         CHECK(socket.features().ring_refusal == RingRefusal::Memory);
         CHECK(socket.features().ring_error == ENOMEM);
         CHECK(resource_refusal(socket.features()));
-        receives_plainly(socket);
+        receives_one(socket);
     }
     // Each limit given back, the same open lends again.
     SocketError error = SocketError::Failed;
@@ -454,6 +495,7 @@ TEST_CASE("a ring the host refuses names the step and its errno, and the socket 
     REQUIRE(error == SocketError::None);
     CHECK(again.features().lent_receive);
     CHECK(again.features().ring_refusal == RingRefusal::None);
+    CHECK(again.features().ring_buffers == 64U);
 }
 #endif
 

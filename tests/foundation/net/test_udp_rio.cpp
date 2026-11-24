@@ -19,6 +19,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+// windows.h first: psapi.h uses its types; PSAPI_VERSION 2 resolves its call to kernel32's K32GetProcessMemoryInfo.
+#include <psapi.h>
 #endif
 
 namespace
@@ -187,13 +189,18 @@ TEST_CASE("a UDP socket goes through Registered I/O exactly where asked, with bu
         CHECK(plain.features().send_bytes == 0U);
         CHECK(plain.features().ring_refusal == ((buffers == 0U) ? RingRefusal::None : RingRefusal::Count));
         CHECK(plain.features().ring_error == 0);
+        CHECK(plain.features().ring_buffers == 0U);
     }
-    for (const u32 buffers : {4U, 1024U})
+    // Every valid count lends; the host's limits may give the largest fewer buffers, naming why.
+    for (const u32 buffers : {4U, 1024U, 32768U})
     {
-        INFO(buffers << " buffers");
         const UdpSocket ring = open_with(registered(buffers));
+        const u32 granted = ring.features().ring_buffers;
+        INFO(buffers << " buffers, refused at step " << static_cast<int>(ring.features().ring_refusal) << ", error "
+                     << ring.features().ring_error << ", granted " << granted);
         CHECK(ring.features().lent_receive);
-        CHECK(ring.features().ring_refusal == RingRefusal::None);
+        CHECK((ring.features().ring_refusal == RingRefusal::None) == (granted == buffers));
+        CHECK((granted == buffers || (buffers > 1024U && granted >= 4U && (granted & (granted - 1U)) == 0U)));
     }
     const UdpSocket sized = open_with(registered(64U, 1500U));
     CHECK(sized.features().receive_bytes == 1500U);
@@ -205,6 +212,103 @@ TEST_CASE("a UDP socket goes through Registered I/O exactly where asked, with bu
     {
         CHECK(coalescing.features().receive_bytes == crd::net::kMaxTrainBytes);
     }
+}
+
+#if CRD_OS_WINDOWS
+namespace
+{
+// This process's commit limited to its commit now and `room` past it for one scope, through a job of its own (one
+// nested in any job it runs in), and unlimited again after, whatever the scope throws.
+class CommitRoom
+{
+public:
+    explicit CommitRoom(usize room)
+    {
+        PROCESS_MEMORY_COUNTERS counters{};
+        REQUIRE(::GetProcessMemoryInfo(::GetCurrentProcess(), &counters, sizeof(counters)) != FALSE);
+        m_job = ::CreateJobObjectW(nullptr, nullptr);
+        REQUIRE(m_job != nullptr);
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limit{};
+        limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        limit.ProcessMemoryLimit = counters.PagefileUsage + room;
+        m_limited = ::SetInformationJobObject(m_job, JobObjectExtendedLimitInformation, &limit, sizeof(limit)) &&
+                    ::AssignProcessToJobObject(m_job, ::GetCurrentProcess());
+    }
+    ~CommitRoom()
+    {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION none{};
+        static_cast<void>(::SetInformationJobObject(m_job, JobObjectExtendedLimitInformation, &none, sizeof(none)));
+        static_cast<void>(::CloseHandle(m_job)); // the process stays in it, unlimited, until it ends
+    }
+    CommitRoom(const CommitRoom&) = delete;
+    CommitRoom& operator=(const CommitRoom&) = delete;
+    CommitRoom(CommitRoom&&) = delete;
+    CommitRoom& operator=(CommitRoom&&) = delete;
+
+    [[nodiscard]] bool limited() const noexcept
+    {
+        return m_limited;
+    }
+
+private:
+    HANDLE m_job = nullptr;
+    bool m_limited = false;
+};
+
+// A socket asking for 32768 Registered I/O buffers of a whole datagram, over 2 GiB with its 72 send slots, opened
+// with `room` bytes of commit left.
+UdpSocket open_with_commit_room(usize room)
+{
+    UdpSocket socket;
+    bool limited = false;
+    {
+        const CommitRoom limit(room);
+        limited = limit.limited();
+        socket = limited ? open_with(registered(32768U, 0U)) : UdpSocket{};
+    }
+    REQUIRE(limited);
+    return socket;
+}
+} // namespace
+#endif
+
+TEST_CASE("a Registered I/O ring past the commit left is asked again with half its buffers, down to 4, or refused",
+          "[net][udp][net-path]")
+{
+    static_cast<void>(open_rio());
+#if CRD_OS_WINDOWS
+    UdpSocket sender = open_with(UdpOptions{});
+    SECTION("256 MiB holds 2048 buffers of a whole datagram: Memory, then half the buffers until they fit")
+    {
+        UdpSocket socket = open_with_commit_room(usize{256U} << 20U);
+        const u32 granted = socket.features().ring_buffers;
+        INFO("refused at step " << static_cast<int>(socket.features().ring_refusal) << ", error "
+                                << socket.features().ring_error << ", granted " << granted);
+        CHECK(socket.features().lent_receive);
+        CHECK(socket.features().ring_refusal == RingRefusal::Memory);
+        CHECK(socket.features().ring_error != 0);
+        CHECK((granted >= 4U && granted <= 2048U && (granted & (granted - 1U)) == 0U));
+        REQUIRE(send_burst(sender, socket.local_endpoint(), 8U));
+        CHECK(take(socket, sender.local_endpoint(), 8U, 8U, true) == 8U);
+    }
+    SECTION("1 MiB holds not even 4 buffers and the send slots: the first refusal, Memory, and the plain path")
+    {
+        UdpSocket socket = open_with_commit_room(usize{1U} << 20U);
+        INFO("refused at step " << static_cast<int>(socket.features().ring_refusal) << ", error "
+                                << socket.features().ring_error);
+        CHECK_FALSE(socket.features().lent_receive);
+        CHECK(socket.features().ring_buffers == 0U);
+        CHECK(socket.features().send_bytes == 0U);
+        CHECK(socket.features().ring_refusal == RingRefusal::Memory);
+        CHECK(socket.features().ring_error != 0);
+        REQUIRE(send_burst(sender, socket.local_endpoint(), 8U));
+        CHECK(take(socket, sender.local_endpoint(), 8U, 8U, false) == 8U);
+    }
+    // The limit gone, the same count lends whole.
+    const UdpSocket again = open_with(registered(1024U));
+    CHECK(again.features().ring_buffers == 1024U);
+    CHECK(again.features().ring_refusal == RingRefusal::None);
+#endif
 }
 
 TEST_CASE("a Registered I/O socket lends its buffers to empty slots and copies into full ones, in order and whole",

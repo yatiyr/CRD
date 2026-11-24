@@ -585,7 +585,7 @@ jobs:
           tests="$PWD/build/linux-gcc-asan/tests/net/crd-net-tests"
           case='a UDP socket receives through io_uring exactly where the host runs it\, and through recvmmsg elsewhere'
           refusals() {
-            grep -h -o -E '[0-9]+ buffers, refused at step [0-9]+, error -?[0-9]+' "$@" | sort | uniq -c
+            grep -h -o -E '[0-9]+ buffers, refused at step [0-9]+, error -?[0-9]+(, granted [0-9]+)?' "$@" | sort | uniq -c
           }
           status=0
           for round in $(seq 1 20); do

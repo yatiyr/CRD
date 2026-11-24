@@ -44,11 +44,12 @@ enum class SocketError : u8
 inline constexpr usize kMaxUdpPayloadV4 = 65507U;
 inline constexpr usize kMaxUdpPayloadV6 = 65527U;
 
-// The step at which the host refused the ring UdpOptions::ring_buffers asked for (SocketFeatures::ring_refusal); the
-// socket then receives through its plain path.
+// The step at which the host refused the ring UdpOptions::ring_buffers asked for (SocketFeatures::ring_refusal). A
+// refusal of its memory or resources is asked again with half the buffers, down to 4; a socket that ends with no
+// ring receives through its plain path.
 enum class RingRefusal : u8
 {
-    None,     // the socket lends, or asked for no ring (ring_buffers 0; Windows without registered_io)
+    None,     // the socket lends all it asked for, or asked for no ring (ring_buffers 0; Windows without registered_io)
     Count,    // ring_buffers is not a power of two from 4 to 32768
     Off,      // CRD_NET_UDP_RING=0, or a host with neither io_uring nor Registered I/O
     Memory,   // the pages of its buffers
@@ -83,8 +84,9 @@ struct UdpOptions
     // Linux's io_uring receive (SocketFeatures::lent_receive) where the host has it, and with registered_io Windows'
     // Registered I/O: `ring_buffers` buffers the host fills ahead of receive(), a power of two from 4 to 32768, each
     // holding a datagram of ring_datagram_bytes. Linux backs their pages as the host first writes them, so the memory
-    // a ring holds follows the datagrams that arrive. Any other count, or CRD_NET_UDP_RING=0 in the environment, keeps
-    // the recvmmsg or WSARecvMsg path.
+    // a ring holds follows the datagrams that arrive. A host short of memory for them gives fewer
+    // (SocketFeatures::ring_buffers). Any other count, or CRD_NET_UDP_RING=0 in the environment, keeps the recvmmsg or
+    // WSARecvMsg path.
     u32 ring_buffers = 64U;
     // The longest datagram a ring buffer (and a Windows send slot) holds whole: 0, or anything over kMaxUdpPayloadV6,
     // holds any; coalesce_receive's buffers hold kMaxTrainBytes whatever it says. A host that sends no datagram
@@ -156,8 +158,11 @@ struct SocketFeatures
     // an empty slot; also the socket's own. Nonzero, the longest datagram one of them holds whole, whatever the slot.
     bool lent_receive = false;
     u32 receive_bytes = 0U;
-    // Where a ring was asked for and none lends, the step the host refused and its error code there (errno, or
-    // Windows' error), for an operator to read why: a resource refusal (ENOMEM, EMFILE) is the host's limits.
+    // The buffers the ring holds: UdpOptions::ring_buffers, or fewer where the host refused that many; 0 with none.
+    u32 ring_buffers = 0U;
+    // Where a ring was asked for and none lends, or one with fewer buffers, the step the host refused first and its
+    // error code there (errno, or Windows' error), for an operator to read why: a resource refusal (ENOMEM, EMFILE)
+    // is the host's limits.
     RingRefusal ring_refusal = RingRefusal::None;
     int ring_error = 0;
     // Nonzero, the longest datagram a send takes (Windows' Registered I/O slots); a longer one fails with
