@@ -26,11 +26,16 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). CI first: fuzz host-check 4534265
   or taken) leaves only time to change the pair, so it goes to the next timer instead of 5 s at most; the 5 s cap
   stays for every round that moved. The bound is rounds, as `settle()`'s is events.
 - Input 55415b3c joins `corpus-quic-connection`; it fails the oracle without the change.
+- Operator item (1), CI 45284160004's `crd-net-http2-interop` client-cancel case (server saw no abort): its stream
+  window (1 MiB) held the whole response, so a fast server ended the stream before the RST_STREAM came, which RFC
+  9113 section 5.1 has it ignore. The case's window is now 64 KiB, so the cancel always meets the response open.
 
 ## Evidence
 
 - linux-clang-fuzz: the input passes; the 77-input corpus replays clean; libFuzzer seeds 8403 and 8404, 480 s each,
-  34,247 runs, no find. linux-gcc-debug: `crd-fuzz-net-quic-connection` corpus CTest passes.
+  34,247 runs, no find. linux-gcc-debug: `crd-fuzz-net-quic-connection` corpus CTest passes. The corpus and 400
+  of the campaign's inputs replayed under both rules: only 55415b3c and one sibling differ (failed, now closed).
+- linux-gcc-public-checks: `crd-net-http2-interop` 30 of 30 on HEAD before the change and 30 of 30 after.
 
 ## Next
 
