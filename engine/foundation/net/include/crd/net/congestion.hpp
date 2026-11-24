@@ -208,7 +208,7 @@ struct CongestionState
     u64 queue_delay_ns = 0U;
     u64 queue_delay_target_ns = 0U;
     // NewReno and CUBIC: the longest train their send quantum may be, which the path's losses teach (from the initial
-    // window to 64 KiB); 0 for any other controller.
+    // window to 64 KiB); 0 for any other controller and before version 8.
     u64 train_cap = 0U;
     CongestionPhase phase = CongestionPhase::SlowStart;
     bool limited = false; // the window or the pacer held sending back this round (RFC 9002 section 7.8)

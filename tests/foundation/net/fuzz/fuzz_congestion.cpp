@@ -295,12 +295,12 @@ void check(const World& w)
     {
         // A window controller's burst: the initial window, or while its flight is held back outside a recovery
         // period a millisecond of its rate, the initial window at least and its train cap at most. The cap stays
-        // within that window and 64 KiB (or is that window, when larger), and before version 8 is that window.
+        // within that window and 64 KiB (or is that window, when larger); before version 8 none is kept.
         const u64 quantum = w.ctl->pacing_rate(rtt) / 1000U;
         const u64 initial = congestion_initial_window(w.policy, w.datagram);
-        const u64 cap = state.train_cap;
+        const u64 cap = (w.policy.version >= 8U) ? state.train_cap : initial;
         CRD_FUZZ_REQUIRE(cap >= initial && (cap <= 65536U || cap == initial));
-        CRD_FUZZ_REQUIRE(w.policy.version >= 8U || cap == initial);
+        CRD_FUZZ_REQUIRE(w.policy.version >= 8U || state.train_cap == 0U);
         const u64 capped = (quantum < cap) ? quantum : cap;
         const u64 most = (capped > initial) ? capped : initial;
         const u64 burst = w.ctl->burst(rtt);

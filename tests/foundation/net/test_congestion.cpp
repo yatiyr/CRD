@@ -437,14 +437,14 @@ TEST_CASE("congestion: the train cap grows from proven trains by one probe train
         seeded->reset(0U);
         CHECK(seeded->state().train_cap == 12000U);
 
-        // Before version 8 nothing is learned: the burst is the initial window, and every loss reduces.
+        // Before version 8 no train cap is kept: the burst is the initial window, and every loss reduces.
         CongestionPolicy seven = policy_of(algorithm);
         seven.version = 7U;
         const Controller old(seven, kMss, &grown);
         Trains t{old};
         t.round(12000U);
         t.round(12000U);
-        CHECK(old->state().train_cap == 12000U);
+        CHECK(old->state().train_cap == 0U);
         first = t.train(24000U);
         t.lose(first + 15U);
         CHECK(old->state().reductions == 1U);

@@ -91,7 +91,9 @@ constexpr u32 kTrainDrainRounds = 2U; // a proven probe's length sent throughout
 class WindowController : public CongestionController
 {
 public:
-    WindowController(const CongestionPolicy& policy, u64 max_datagram) noexcept : m_policy(policy)
+    // Prague bursts 250 us of its own rate and keeps no train cap (teach_train); before version 8 nothing does.
+    WindowController(const CongestionPolicy& policy, u64 max_datagram) noexcept
+        : m_policy(policy), m_trains(policy.version >= 8U && policy.algorithm != CongestionAlgorithm::Prague)
     {
         size_windows(max_datagram);
         restart();
@@ -99,7 +101,7 @@ public:
 
     void seed(const CongestionState& from) noexcept
     {
-        if (from.train_cap != 0U && m_policy.version >= 8U)
+        if (from.train_cap != 0U && m_trains)
         {
             m_train_cap = max_u64(min_u64(from.train_cap, kSendQuantumMax), m_initial);
             m_train_proven = m_train_cap;
@@ -321,7 +323,7 @@ public:
         out.undone = m_undone;
         out.phase = m_phase;
         out.limited = m_limited || m_limited_before;
-        out.train_cap = m_train_cap;
+        out.train_cap = m_trains ? m_train_cap : 0U;
         return out;
     }
 
@@ -448,7 +450,7 @@ private:
     // teaches nothing. True for a loss of the probe's.
     [[nodiscard]] bool teach_train(const CongestionPacket& packet, u64 now_ns) noexcept
     {
-        if (packet.train < m_initial || m_policy.version < 8U)
+        if (packet.train < m_initial || !m_trains)
         {
             return false;
         }
@@ -495,7 +497,7 @@ private:
         m_probe_sent_before = m_probe_sent;
         m_probe_sent = false;
         m_train_lost = false;
-        if (m_policy.version < 8U || lost)
+        if (!m_trains || lost)
         {
             return;
         }
@@ -613,6 +615,7 @@ private:
     bool m_restarted = false;      // the flight started from nothing in flight and nothing has held it back since
 
     // The train cap (teach_train).
+    bool m_trains = false; // kept at all
     u64 m_train_cap = 0U;
     u64 m_train_proven = 0U;             // the longest train that went clean, the initial window at least
     u64 m_train_ceiling = 0U;            // what was proven before a fuller queue lowered it, 0 for none
