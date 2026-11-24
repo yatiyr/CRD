@@ -228,7 +228,7 @@ TEST_CASE("SCReAM: the reference window's start, its room in flight, and the tar
     CHECK(d.ctl->window() == 3U * 12000U); // REF_WND_OVERHEAD_MAX while the delay is steady
     CHECK(start.target_rate == expected_target(12000U, kQuicInitialRttNs));
     CHECK(d.ctl->pacing_rate(QuicRtt{}) == start.target_rate * 3U / 2U);
-    CHECK(d.ctl->burst() == 12000U); // before a round trip is known, the initial window
+    CHECK(d.ctl->burst(QuicRtt{}) == 12000U); // before a round trip is known, the initial window
 
     // A short window still keeps two datagrams in flight, and MIN_REF_WND holds against a smaller policy minimum.
     CongestionPolicy small = scream_policy();
@@ -245,7 +245,7 @@ TEST_CASE("SCReAM: the reference window's start, its room in flight, and the tar
     CHECK(grown.queue_delay_ns == 0U);
     CHECK(grown.target_rate == expected_target(grown.window, d.rtt.smoothed_ns));
     CHECK(d.ctl->pacing_rate(d.rtt) == grown.target_rate * 3U / 2U);
-    CHECK(d.ctl->burst() >= 2U * kMss);
+    CHECK(d.ctl->burst(QuicRtt{}) >= 2U * kMss);
 }
 
 TEST_CASE("SCReAM: growth stays within the flight's headroom and stops at the maximum rate, where pacing relaxes",

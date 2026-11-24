@@ -211,7 +211,7 @@ private:
         {
             return kNeverNs;
         }
-        const u64 release = m_pacer.release_ns(now, ctl->pacing_rate(rtt), ctl->burst());
+        const u64 release = m_pacer.release_ns(now, ctl->pacing_rate(rtt), ctl->burst(rtt));
         if (release > now)
         {
             ctl->on_limited(false, now);
@@ -241,7 +241,7 @@ private:
         padding_bytes += data ? 0U : kBottleneckMss;
         f.packet.delivery = delivery.on_sent(kBottleneckMss, in_flight, now);
         ctl->on_sent(f.packet, in_flight, now);
-        m_pacer.on_sent(kBottleneckMss, now, ctl->pacing_rate(rtt), ctl->burst());
+        m_pacer.on_sent(kBottleneckMss, now, ctl->pacing_rate(rtt), ctl->burst(rtt));
         const u64 queue = queue_bytes();
         max_queue = (queue > max_queue) ? queue : max_queue;
         m_seed = m_seed * 6364136223846793005U + 1442695040888963407U;

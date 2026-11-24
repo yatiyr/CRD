@@ -46,6 +46,10 @@ constexpr u64 kCubicKScale = (kCubicCDenominator << (3U * kCubicTimeShift)) / kC
 static_assert(kCubicKScale * kCubicCNumerator == (kCubicCDenominator << (3U * kCubicTimeShift)));
 static_assert(kCongestionMaxWindow <= ~u64{0} / kCubicKScale);
 
+// A send quantum (draft-ietf-ccwg-bbr section 5.6.3): a millisecond of the pacing rate, at most one 64 KiB train.
+constexpr u64 kSendQuantumMax = 65536U;
+constexpr u64 kSendQuantumNs = 1000000U;
+
 [[nodiscard]] constexpr u64 min_u64(u64 a, u64 b) noexcept
 {
     return (a < b) ? a : b;
@@ -110,9 +114,13 @@ public:
                 m_window_end = packet.number;
             }
         }
+        // A flight that starts from nothing in flight (after idle, or the first) bursts the initial window until the
+        // window or the pacer holds it back.
+        m_restarted = m_restarted || in_flight <= packet.bytes;
         if (in_flight + m_datagram > m_window)
         {
             m_limited = true;
+            m_restarted = false;
         }
         sent(packet, in_flight, now_ns);
     }
@@ -120,6 +128,7 @@ public:
     void on_limited(bool /*window*/, u64 /*now_ns*/) noexcept override
     {
         m_limited = true; // section 7.8: the window or the pacer
+        m_restarted = false;
     }
 
     void on_acked(const CongestionPacket& packet, u64 /*now_ns*/) noexcept override
@@ -253,7 +262,22 @@ public:
         return m_window * m_policy.pacing_gain * (kNanosPerSecond / kPercent) / rtt.smoothed_ns;
     }
 
-    [[nodiscard]] u64 burst() const noexcept override { return m_initial; }
+    // RFC 9002 section 7.7 limits bursts to the initial window, and lets a sender use more on a path it knows absorbs
+    // it. While the window or the pacer holds an ACK-clocked flight back (this round or the last, and not since it
+    // restarted from nothing in flight), the burst is a send quantum: a millisecond of the pacing rate, one 64 KiB
+    // train at most and that window at least, as Linux's TCP sizes its segmentation bursts under every controller. A
+    // fast short path's packets then leave in trains the host segments whole instead of ten datagrams a train, and a
+    // slow or long path, an application-limited sender and a restart after idle (whose stale window would put a
+    // whole quantum into a shallow queue at once) keep the initial window, as does a policy before version 8.
+    [[nodiscard]] u64 burst(const QuicRtt& rtt) const noexcept override
+    {
+        if (m_policy.version < 8U || m_restarted || !(m_limited || m_limited_before))
+        {
+            return m_initial;
+        }
+        const u64 quantum = multiply_divide(pacing_rate(rtt), kSendQuantumNs, kNanosPerSecond);
+        return max_u64(min_u64(quantum, kSendQuantumMax), m_initial);
+    }
 
     [[nodiscard]] CongestionState state() const noexcept override
     {
@@ -435,6 +459,7 @@ private:
     bool m_round_ended = false;
     bool m_limited = false;        // this round
     bool m_limited_before = false; // the round before
+    bool m_restarted = false;      // the flight started from nothing in flight and nothing has held it back since
 
     // HyStart++.
     u64 m_round_min_ns = kNeverNs;
@@ -682,8 +707,6 @@ constexpr u64 kBbrProbeWaitBaseNs = 2U * kNanosPerSecond;
 constexpr u64 kBbrProbeWaitRandomNs = kNanosPerSecond;
 constexpr u64 kBbrRenoRoundsBound = 63U;
 constexpr u32 kBbrMaxProbeUpRounds = 30U;
-constexpr u64 kBbrSendQuantumMax = 65536U;
-constexpr u64 kBbrSendQuantumNs = 1000000U;  // the pacing rate's 1 ms
 constexpr u64 kBbrUnsampledRttNs = 1000000U; // InitPacingRate's round trip before any sample
 
 // `x` times `gain` percent; infinite stays infinite, and the product saturates.
@@ -867,7 +890,7 @@ public:
         return (m_pacing_rate != 0U) ? m_pacing_rate : initial_pacing_rate(rtt);
     }
 
-    [[nodiscard]] u64 burst() const noexcept override { return m_send_quantum; }
+    [[nodiscard]] u64 burst(const QuicRtt& /*rtt*/) const noexcept override { return m_send_quantum; }
 
     [[nodiscard]] CongestionState state() const noexcept override
     {
@@ -905,7 +928,7 @@ private:
     {
         m_cwnd = m_initial;
         m_pacing_rate = 0U;
-        m_send_quantum = min_u64(max_u64(m_initial, 2U * m_datagram), kBbrSendQuantumMax);
+        m_send_quantum = min_u64(max_u64(m_initial, 2U * m_datagram), kSendQuantumMax);
         m_max_bw_filter = WindowedMax<u64>(kBbrMaxBwFilterCycles);
         m_max_bw = 0U;
         m_bw = 0U;
@@ -1545,8 +1568,8 @@ private:
 
     void set_send_quantum() noexcept
     {
-        const u64 quantum = multiply_divide(m_pacing_rate, kBbrSendQuantumNs, kNanosPerSecond);
-        m_send_quantum = max_u64(min_u64(quantum, kBbrSendQuantumMax), 2U * m_datagram);
+        const u64 quantum = multiply_divide(m_pacing_rate, kSendQuantumNs, kNanosPerSecond);
+        m_send_quantum = max_u64(min_u64(quantum, kSendQuantumMax), 2U * m_datagram);
     }
 
     [[nodiscard]] u64 bdp() const noexcept
@@ -1785,11 +1808,12 @@ public:
 
     [[nodiscard]] u64 pacing_rate(const QuicRtt& rtt) const noexcept override { return rate(rtt.smoothed_ns); }
 
-    [[nodiscard]] u64 burst() const noexcept override
+    [[nodiscard]] u64 burst(const QuicRtt& /*rtt*/) const noexcept override
     {
         if (m_srtt_ns == 0U)
         {
-            return WindowController::burst(); // the initial window, before a round trip is known (section 3.1.1)
+            // The initial window, before a round trip is known (section 3.1.1).
+            return congestion_initial_window(m_policy, m_datagram);
         }
         return max_u64(multiply_divide(rate(m_srtt_ns), kPragueBurstNs, kNanosPerSecond), m_datagram);
     }
@@ -2133,7 +2157,7 @@ public:
         return multiply_divide(pace, kQ16, max_u64(kQ16 - relaxed, kScreamRelaxedPacingFloor));
     }
 
-    [[nodiscard]] u64 burst() const noexcept override
+    [[nodiscard]] u64 burst(const QuicRtt& /*rtt*/) const noexcept override
     {
         if (!m_sampled)
         {
@@ -3374,7 +3398,7 @@ public:
     }
 
     // A probe leaves one datagram at a time, each when its rate allows (BitrateProber's next probe time).
-    [[nodiscard]] u64 burst() const noexcept override
+    [[nodiscard]] u64 burst(const QuicRtt& /*rtt*/) const noexcept override
     {
         if (m_probing.active() != nullptr)
         {

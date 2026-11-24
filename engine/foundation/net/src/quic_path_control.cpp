@@ -225,7 +225,7 @@ Ecn QuicPathControl::marking(u64 now_ns, u64 testing_ns) noexcept
 
 u64 QuicPathControl::release_ns(u64 now_ns, const QuicRtt& rtt) const noexcept
 {
-    return m_pacer.release_ns(now_ns, m_controller->pacing_rate(rtt), m_controller->burst());
+    return m_pacer.release_ns(now_ns, m_controller->pacing_rate(rtt), m_controller->burst(rtt));
 }
 
 void QuicPathControl::arm_pace(u64 release_ns) noexcept
@@ -245,7 +245,7 @@ void QuicPathControl::on_sent(QuicSpace space, const QuicSentPacket& packet, boo
     if (controlled)
     {
         m_controller->on_sent(congestion_packet(space, packet), in_flight, now_ns);
-        m_pacer.on_sent(packet.bytes, now_ns, m_controller->pacing_rate(rtt), m_controller->burst());
+        m_pacer.on_sent(packet.bytes, now_ns, m_controller->pacing_rate(rtt), m_controller->burst(rtt));
     }
 }
 

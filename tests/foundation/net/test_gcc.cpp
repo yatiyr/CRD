@@ -203,10 +203,10 @@ TEST_CASE("GCC: the policy rules, its codepoint, and the start rate, window and 
     CHECK(start.phase == CongestionPhase::Avoidance);
     CHECK(start.reductions == 0U);
     CHECK(d.ctl->pacing_rate(d.rtt) == kStartRate * 250U / 100U); // 2.5 times before any feedback
-    CHECK(d.ctl->burst() == 12000U);
+    CHECK(d.ctl->burst(d.rtt) == 12000U);
     d.frame({});
     CHECK(d.ctl->pacing_rate(d.rtt) == d.state().target_rate * 110U / 100U); // 1.1 times after
-    CHECK(d.ctl->burst() >= 2U * kMss);
+    CHECK(d.ctl->burst(d.rtt) >= 2U * kMss);
 
     // The policy's bounds hold the target: the start rate is raised to the minimum and growth stops at the maximum.
     policy = gcc_policy();

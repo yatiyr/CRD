@@ -382,7 +382,7 @@ TEST_CASE("QUIC congestion: the pacer holds a window with room, and its release 
     pair.net->advance(pair.net->now + 1000U * kMs);
     REQUIRE(pair.client.recovery().bytes_in_flight() == 0U);
     const u64 window = pair.client.congestion().window();
-    const u64 burst = pair.client.congestion().burst();
+    const u64 burst = pair.client.congestion().burst(pair.client.recovery().rtt());
     REQUIRE(window > 4U * burst);
     bulk.total += 1U << 17U;
     static_cast<void>(write_pattern(pair.client.streams(), kStream, bulk.written, bulk.total, kStream, false));

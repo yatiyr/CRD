@@ -4,7 +4,11 @@
 // 7.8), HyStart++ (RFC 9406) into and out of its conservative phase and on to avoidance, CUBIC (RFC 9438) against its
 // curve worked in floating point, its Reno-friendly region, fast convergence and idle periods, the undo of a period
 // whose every loss proved spurious and never of a mark, a live swap carrying the window and the recovery period, a
-// Retry's reset, and the pacer's exact credit, burst, debt and release times.
+// Retry's reset, the window controllers' send quantum (a held flight's burst; a restart after idle into a shallow
+// queue on a fast short path loses no more than the initial window's burst would), and the pacer's exact credit,
+// burst, debt and release times.
+
+#include "bottleneck_fixture.hpp"
 
 #include <crd/net/congestion.hpp>
 
@@ -121,7 +125,7 @@ TEST_CASE("congestion: policies out of range are refused and the initial window 
     CHECK(Controller(many)->window() == 38400U);
     const Controller fresh(CongestionPolicy{});
     CHECK(fresh->algorithm() == CongestionAlgorithm::Cubic);
-    CHECK(fresh->burst() == 12000U);
+    CHECK(fresh->burst(QuicRtt{}) == 12000U);
     CHECK(fresh->state().phase == CongestionPhase::SlowStart);
     CHECK(fresh->state().slow_start_threshold == kCongestionMaxWindow);
     CHECK(fresh->state().recovery_start_ns == kNeverNs);
@@ -138,7 +142,7 @@ TEST_CASE("congestion: a new datagram size resizes the initial and minimum windo
         REQUIRE(fresh->window() == 12000U);
         fresh->set_max_datagram(1472U);
         CHECK(fresh->window() == 14720U);
-        CHECK(fresh->burst() == 14720U);
+        CHECK(fresh->burst(QuicRtt{}) == 14720U);
         fresh->set_max_datagram(9000U);
         CHECK(fresh->window() == 18000U); // min(10 * 9000, max(14720, 2 * 9000))
         fresh->set_max_datagram(1U);      // below QUIC's floor: the floor
@@ -185,6 +189,91 @@ TEST_CASE("congestion: the pacing rate is the gain times the window per smoothed
     const Controller big(fastest, kMss, &huge);
     CHECK(big->window() == kCongestionMaxWindow);
     CHECK(big->pacing_rate(rtt_of(1U, 1U)) == kCongestionMaxWindow * 4U * 1000000000U);
+}
+
+TEST_CASE("congestion: a held flight's burst is a millisecond of its pacing rate, from the initial window to 64 KiB, "
+          "and a restarted or application-limited one bursts the initial window",
+          "[net][net-path][congestion]")
+{
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        INFO("algorithm " << static_cast<int>(algorithm));
+        // A grown window whose flight the window or the pacer held back: 1.25 * 400000 bytes / 10 ms is 50 MB a
+        // second, 50000 bytes a millisecond.
+        CongestionState grown;
+        grown.window = 400000U;
+        grown.limited = true;
+        const Controller fast(policy_of(algorithm), kMss, &grown);
+        CHECK(fast->burst(rtt_of(10U * kMs, 10U * kMs)) == 50000U);
+        CHECK(fast->burst(rtt_of(20U * kMs, 20U * kMs)) == 25000U);
+        // Faster still: one 64 KiB train at most. A slow or long path: the initial window (RFC 9002 section 7.7), as
+        // with no round trip or no pacing.
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == 65536U);
+        CHECK(fast->burst(rtt_of(1U, 1U)) == 65536U);
+        CHECK(fast->burst(rtt_of(10U * kSecond, 10U * kSecond)) == 12000U);
+        CHECK(fast->burst(rtt_of(0U, 0U)) == 12000U);
+        const Controller unpaced(policy_of(algorithm, false, false), kMss, &grown);
+        CHECK(unpaced->burst(rtt_of(kMs, kMs)) == 12000U);
+        // A policy of version 7, before the quantum: the initial window.
+        CongestionPolicy seven = policy_of(algorithm);
+        seven.version = 7U;
+        CHECK(Controller(seven, kMss, &grown)->burst(rtt_of(kMs, kMs)) == 12000U);
+
+        // A flight that starts from nothing in flight bursts the initial window until the pacer holds it back; one
+        // that finds packets in flight keeps the quantum.
+        fast.send(0U, 0U, kMs);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == 12000U);
+        fast.send(1U, 4U, kMs, kMss);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == 12000U);
+        fast->on_limited(false, kMs);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == 65536U);
+        fast.send(5U, 5U, kMs, 5U * kMss);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == 65536U);
+        // So does a flight the window itself holds: its next packet would not fit.
+        fast.send(6U, 6U, 2U * kMs);
+        REQUIRE(fast->burst(rtt_of(kMs, kMs)) == 12000U);
+        fast.send(7U, 7U, 2U * kMs, fast->window() - kMss);
+        CHECK(fast->burst(rtt_of(kMs, kMs)) == 65536U);
+
+        // Nothing held back this round or the last (an application-limited sender): the initial window.
+        const Controller limited(policy_of(algorithm), kMss, &grown);
+        grown.limited = false;
+        const Controller idle(policy_of(algorithm), kMss, &grown);
+        CHECK(limited->burst(rtt_of(kMs, kMs)) == 65536U);
+        CHECK(idle->burst(rtt_of(kMs, kMs)) == 12000U);
+
+        // An initial window past the cap (datagrams of 65000 bytes, two of them) is still the floor.
+        const Controller jumbo(policy_of(algorithm), 65000U);
+        REQUIRE(jumbo->window() == 130000U);
+        jumbo->on_limited(false, 0U);
+        CHECK(jumbo->burst(rtt_of(kMs, kMs)) == 130000U);
+    }
+}
+
+TEST_CASE("congestion: bursts after idle on a fast short path into a shallow queue are the initial window's",
+          "[net][net-path][congestion]")
+{
+    // 1 Gbit/s, a 2 ms round trip and a 32 KiB drop-tail queue: twenty times a MiB, then a second idle. A whole
+    // quantum (64 KiB) out of a full pacer at each restart overflows the queue every time: 114 to 157 drops and 17
+    // to 20 reductions in this run, against 1 to 5 and 1 with the initial window's burst.
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        INFO("algorithm " << static_cast<int>(algorithm));
+        crd::net::testing::Flow path(policy_of(algorithm, true), 125000000U, kMs, 32768U);
+        path.set_data(8U << 20U);
+        path.run(2U * kSecond);
+        const u64 dropped = path.dropped;
+        const u64 reductions = path.ctl->state().reductions;
+        for (u64 cycle = 1U; cycle <= 20U; ++cycle)
+        {
+            path.add_data(1U << 20U);
+            path.run((2U + cycle) * kSecond);
+        }
+        CHECK(path.acked_bytes + path.lost_bytes == path.sent_bytes); // all written, less a datagram's remainder
+        CHECK(path.sent_bytes + kMss > (28U << 20U));
+        CHECK(path.dropped - dropped <= 5U);
+        CHECK(path.ctl->state().reductions - reductions <= 2U);
+    }
 }
 
 TEST_CASE("congestion: NewReno grows by what is acknowledged, then by a datagram per window, and only when the window "

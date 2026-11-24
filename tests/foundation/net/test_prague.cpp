@@ -164,7 +164,7 @@ TEST_CASE("Prague: the policy rules, ECT(1) and alpha starting at one", "[net][n
     QuicRtt rtt;
     rtt.smoothed_ns = 10U * kMs;
     CHECK(d.ctl->pacing_rate(rtt) == 2U * 10U * kMss * 100U);
-    CHECK(d.ctl->burst() == 10U * kMss);
+    CHECK(d.ctl->burst(rtt) == 10U * kMss);
 }
 
 TEST_CASE(

@@ -151,7 +151,7 @@ TEST_CASE("GCC probes: the start's clusters at 3 and 6 times the start rate, one
     CHECK(s.pacing() == kStartRate * 250U / 100U);
     s.send(0U);
     CHECK(s.pacing() == kFirst);
-    CHECK(s.ctl->burst() == kMss);
+    CHECK(s.ctl->burst(QuicRtt{}) == kMss);
     CHECK(s.ctl->probe_bytes() == 4U * kMss); // five packets: its 1621 bytes of 15 ms are fewer
     CHECK(s.ctl->window() == 12000U + 5U * kMss);
     CHECK(s.state().window == 12000U);
@@ -162,7 +162,7 @@ TEST_CASE("GCC probes: the start's clusters at 3 and 6 times the start rate, one
     CHECK(s.ctl->probe_bytes() == 0U);
     CHECK(s.pacing() == kStartRate * 250U / 100U);
     CHECK(s.ctl->window() == 12000U);
-    CHECK(s.ctl->burst() == 12000U);
+    CHECK(s.ctl->burst(QuicRtt{}) == 12000U);
 
     // Packets of another space are no probe and start none.
     Sender handshake;

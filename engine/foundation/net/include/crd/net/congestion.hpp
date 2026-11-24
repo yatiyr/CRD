@@ -61,8 +61,10 @@
 //               scaling), computed exactly in integers at every ACK frame; one member alone is NewReno to the byte.
 //   pacing      Pacer spreads packets at the controller's rate (RFC 9002 section 7.7: 1.25 window per smoothed RTT
 //               for the window controllers, BBR's own gains of its bandwidth, Prague's window per smoothed RTT, doubled
-//               in early slow start) with a burst of the initial window (BBR:
-//               its send quantum, Prague: 250 us of its rate), in exact integer credit.
+//               in early slow start) with a burst of a millisecond of that rate for the window controllers, at least
+//               the initial window (section 7.7's limit, which binds a slow or long path) and at most 64 KiB unless
+//               that window is larger, as BBR's send quantum and Linux's segmentation bursts are sized (BBR: its send
+//               quantum, Prague: 250 us of its rate), in exact integer credit.
 //   time        every call takes the time in nanoseconds; nothing reads a clock.
 //   threads     a controller and a pacer belong to their connection's thread.
 
@@ -76,9 +78,10 @@ namespace crd::net
 {
 // 2 added BBRv3 and the delivery rate samples; 3 added Prague and the ECN feedback's extent (on_ecn); 4 added SCReAM
 // v2 and the source's target rate; 5 added GCC and the peer's receive time of a packet; 6 added GCC's probing and
-// probe_bytes(); 7 added coupling (RFC 6356). A policy of an earlier version still runs (a GCC of version 5 does not
-// probe, a NewReno of version 6 is not coupled).
-inline constexpr u32 kCongestionInterfaceVersion = 7U;
+// probe_bytes(); 7 added coupling (RFC 6356); 8 added the window controllers' send quantum, a held flight's burst.
+// A policy of an earlier version still runs (a GCC of version 5 does not probe, a NewReno of version 6 is not
+// coupled, a CUBIC of version 7 bursts its initial window).
+inline constexpr u32 kCongestionInterfaceVersion = 8U;
 inline constexpr u64 kCongestionMaxWindow = u64{1} << 32U; // bytes: past 100 Gbit/s over 300 ms
 inline constexpr u32 kCongestionMaxInitialPackets = 64U;
 inline constexpr u32 kCongestionMinPacingGain = 100U; // percent of window per smoothed RTT
@@ -263,8 +266,8 @@ public:
     [[nodiscard]] virtual u64 window() const noexcept = 0;
     // Bytes per second to pace at with `rtt`; 0 sends unpaced.
     [[nodiscard]] virtual u64 pacing_rate(const QuicRtt& rtt) const noexcept = 0;
-    // The burst the pacer allows after an idle period.
-    [[nodiscard]] virtual u64 burst() const noexcept = 0;
+    // The most the pacer lets leave at once with `rtt`: its credit's cap, which an idle period refills.
+    [[nodiscard]] virtual u64 burst(const QuicRtt& rtt) const noexcept = 0;
     // Bytes a bandwidth probe still wants sent at the pacing rate: a sender whose application has too little fills
     // them with ack-eliciting padding, held by the window and the pacer as any packet (QuicConnection pads its 1-RTT
     // packets to the datagram). 0 for none, and always for every controller but GCC.

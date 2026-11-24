@@ -72,7 +72,7 @@ TEST_CASE("BBR: the policy rules, the initial window and pacing before any sampl
     CHECK(path.ctl->pacing_rate(rtt) == 10U * kMss * 1000U * 277U / 100U);
     rtt.sample(100U * kMs, 0U, true, 0U, 0U);
     CHECK(path.ctl->pacing_rate(rtt) == 10U * kMss * 10U * 277U / 100U);
-    CHECK(path.ctl->burst() == 10U * kMss);
+    CHECK(path.ctl->burst(rtt) == 10U * kMss);
 }
 
 TEST_CASE("BBR: Startup finds the bottleneck and the round trip, Drain empties its queue, ProbeBW cycles",

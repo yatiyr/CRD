@@ -31,10 +31,12 @@
 // rate stays within the policy's bounds (its 5 kbit/s floor included) and under its delay-based estimate, and it paces
 // at 1.1 or 2.5 times that target; while a probe wants bytes it paces at the probe's rate, at most the policy's
 // maximum or 5 Mbit/s, one datagram at a time, with the probe's bytes over its window (less at the largest window),
-// and no other controller ever wants any. The sampler's delivered bytes are what was acknowledged. The pacer's
-// release time is never before now, its credit stays within one burst above zero and the last send's burst below, and
-// is positive at its release time. A coupled NewReno is its coupling's one member until a swap, and a twin uncoupled
-// NewReno fed every same event keeps its state, window and pacing rate to the byte (RFC 6356: one path is Reno).
+// and no other controller ever wants any. A window controller's burst is its initial window or, while its flight is
+// held back, a millisecond of its pacing rate, at most 64 KiB and at least that window. The sampler's delivered bytes
+// are what was acknowledged. The pacer's release time is never before now, its credit stays within one burst above
+// zero and the last send's burst below, and is positive at its release time. A coupled NewReno is its coupling's one
+// member until a swap, and a twin uncoupled NewReno fed every same event keeps its state, window and pacing rate to the
+// byte (RFC 6356: one path is Reno).
 #include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/congestion.hpp>
@@ -195,7 +197,7 @@ void check_scream(const World& w, const CongestionState& state)
     CRD_FUZZ_REQUIRE(state.alpha <= kCongestionAlphaOne && state.classic == 0U);
     QuicRtt rtt;
     rtt.smoothed_ns = 1U + (w.now % (500U * kMs));
-    CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) >= kScreamMinPacingRate * 3U / 2U && w.ctl->burst() >= w.datagram);
+    CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) >= kScreamMinPacingRate * 3U / 2U && w.ctl->burst(rtt) >= w.datagram);
 }
 
 // GCC's own bounds: its window, its target rate under its estimate and within the policy's bounds, its pacing, and
@@ -217,14 +219,14 @@ void check_gcc(const World& w, const CongestionState& state)
     {
         CRD_FUZZ_REQUIRE(state.window == w.ctl->window());
         CRD_FUZZ_REQUIRE(pace == state.target_rate * 110U / 100U || pace == state.target_rate * 250U / 100U);
-        CRD_FUZZ_REQUIRE(w.ctl->burst() >= 2U * w.datagram);
+        CRD_FUZZ_REQUIRE(w.ctl->burst(QuicRtt{}) >= 2U * w.datagram);
         return;
     }
     CRD_FUZZ_REQUIRE(w.policy.probe);
     const u64 ceiling = (w.policy.target_rate_max != 0U) ? w.policy.target_rate_max : 625000U;
     const u64 longest = ceiling / 10U; // 100 ms of it, a repeated initial probe's
     const u64 room = (longest > 5U * w.datagram) ? longest : 5U * w.datagram;
-    CRD_FUZZ_REQUIRE(pace != 0U && pace <= ceiling && w.ctl->burst() == w.datagram);
+    CRD_FUZZ_REQUIRE(pace != 0U && pace <= ceiling && w.ctl->burst(QuicRtt{}) == w.datagram);
     // The probe's room past the window, short only where the window is at its most.
     const bool full = w.ctl->window() == kCongestionMaxWindow;
     CRD_FUZZ_REQUIRE((w.ctl->window() > state.window || full) && w.ctl->window() <= state.window + room);
@@ -244,7 +246,8 @@ void check(const World& w)
                          state.reductions == alone.reductions && state.undone == alone.undone &&
                          state.limited == alone.limited);
         QuicRtt rtt;
-        CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) == w.twin->pacing_rate(rtt) && w.ctl->burst() == w.twin->burst());
+        CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) == w.twin->pacing_rate(rtt) &&
+                         w.ctl->burst(rtt) == w.twin->burst(rtt));
     }
     if (is_scream(w))
     {
@@ -271,7 +274,7 @@ void check(const World& w)
     CRD_FUZZ_REQUIRE(w.policy.pacing || w.ctl->pacing_rate(rtt) == 0U);
     if (is_bbr(w))
     {
-        CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) != 0U && w.ctl->burst() >= 2U * w.datagram);
+        CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) != 0U && w.ctl->burst(rtt) >= 2U * w.datagram);
         CRD_FUZZ_REQUIRE(state.bandwidth <= w.max_rate);
     }
     else if (!is_gcc(w))
@@ -280,12 +283,23 @@ void check(const World& w)
     }
     if (is_prague(w))
     {
-        CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) != 0U && w.ctl->burst() >= w.datagram);
+        CRD_FUZZ_REQUIRE(w.ctl->pacing_rate(rtt) != 0U && w.ctl->burst(rtt) >= w.datagram);
         CRD_FUZZ_REQUIRE(state.alpha <= kCongestionAlphaOne && state.classic <= (crd::u32{1} << 16U));
     }
     else if (!is_scream(w))
     {
         CRD_FUZZ_REQUIRE(state.alpha == 0U && state.classic == 0U);
+    }
+    if (!is_bbr(w) && !is_prague(w) && !is_scream(w) && !is_gcc(w))
+    {
+        // A window controller's burst: the initial window, or while its flight is held back a millisecond of its
+        // rate, at most 64 KiB and the initial window at least.
+        const u64 quantum = w.ctl->pacing_rate(rtt) / 1000U;
+        const u64 capped = (quantum < 65536U) ? quantum : 65536U;
+        const u64 initial = congestion_initial_window(w.policy, w.datagram);
+        const u64 burst = w.ctl->burst(rtt);
+        CRD_FUZZ_REQUIRE(burst == initial || (state.limited && burst == ((capped > initial) ? capped : initial)));
+        CRD_FUZZ_REQUIRE(state.limited || burst == initial);
     }
 }
 
@@ -527,7 +541,7 @@ void run(World& w, u8 op, u8 parameter)
             QuicRtt rtt;
             rtt.smoothed_ns = (1U + parameter) * kMs;
             const u64 rate = w.ctl->pacing_rate(rtt);
-            const u64 burst = w.ctl->burst();
+            const u64 burst = w.ctl->burst(rtt);
             const u64 release = w.pacer.release_ns(w.now, rate, burst);
             CRD_FUZZ_REQUIRE(release >= w.now);
             // Debt is bounded by the burst of the send that ran it up: BBR's send quantum moves with its rate.
