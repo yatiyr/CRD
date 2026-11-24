@@ -650,7 +650,10 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   connection takes none, and a refused block refuses the start. The TLS provider (2026-11-24) frees its handshake
   configuration when the handshake ends (`SSL_set_shed_handshake_config`: every later reader was listed, and the
   one that read it, the receive limit, is kept by `QuicHandshake` from `init()`), and a level's outgoing CRYPTO buffer
-  exists only while data waits there. What the provider still holds for an established connection (its connection
+  exists only while data waits there. A context's TLS settings (2026-11-25: pins, names, ALPN list, ticket keys)
+  live once in its provider context, which each connection holds, so a session keeps only what it narrows (84 bytes);
+  the connection's own transport parameters are its stored configuration's, filled in place, and a client's 0-RTT
+  parameters are read again from the handshake's ticket bytes when needed. What the provider still holds for an established connection (its connection
   and handshake state, the 1-RTT placeholder AEAD contexts and the established session, 2.9 KiB on the board where 5.4 were before) has no
   release short of freeing the connection, which the exporter (`export_keying_material`, WebTransport's and the
   capability bindings') and a client's later tickets still need. Each path slot's congestion controller (2026-11-24)
