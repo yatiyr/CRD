@@ -34,6 +34,24 @@ TEST_CASE("Wire bytes: integers are written most significant byte first", "[cont
     }
 }
 
+TEST_CASE("Wire bytes: a byte range fills the span exactly, and an empty one writes nothing",
+          "[containers][wire-bytes]")
+{
+    u8         out[8] = {};
+    WireWriter writer(Span<u8>(out, sizeof(out)));
+    writer.put_u8(0xA0U);
+    const u8 body[] = {1U, 2U, 3U, 4U, 5U, 6U, 7U};
+    writer.put_bytes(ConstSpan<u8>(body));
+    REQUIRE(writer.written() == sizeof(out));
+    writer.put_bytes(ConstSpan<u8>()); // at the end: no room needed, nothing written
+    CHECK(writer.written() == sizeof(out));
+    CHECK(out[0] == 0xA0U);
+    for (usize i = 1U; i < sizeof(out); ++i)
+    {
+        CHECK(out[i] == i);
+    }
+}
+
 TEST_CASE("Wire bytes: every width round-trips at its bounds", "[containers][wire-bytes]")
 {
     u8         bytes[2U * (1U + 2U + 4U + 8U)] = {};

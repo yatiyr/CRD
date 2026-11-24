@@ -15,6 +15,8 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 
+#include <cstring>
+
 namespace crd::containers
 {
 // The big-endian integer of sizeof(T) bytes at byte `at` of `bytes`.
@@ -79,11 +81,17 @@ public:
         put_u32(static_cast<u32>(value & 0xFFFFFFFFU));
     }
 
+    // One bounds check and one copy: a range past the span writes nothing before the fatal.
     void put_bytes(ConstSpan<u8> data) noexcept
     {
-        for (const u8 byte : data)
+        if (data.size() > m_out.size() - m_at)
         {
-            put_u8(byte);
+            CRD_FATAL("WireWriter: a write past the span its layout sized");
+        }
+        if (!data.empty())
+        {
+            std::memcpy(m_out.data() + m_at, data.data(), data.size());
+            m_at += data.size();
         }
     }
 

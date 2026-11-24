@@ -13,6 +13,7 @@
 //   spsc-queue-refused     SpscQueue construction on a refusing allocator
 //   atomic-array-refused   AtomicArray construction on a refusing allocator
 //   concurrent-queue-refused  ConcurrentQueue construction on a refusing allocator
+//   wire-writer-overrun    WireWriter::put_bytes of a range one byte longer than the span's room
 
 #define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no sanitizer involved: this is an engine-fatal control
 
@@ -26,6 +27,7 @@
 #include <crd/containers/ring_buffer.hpp>
 #include <crd/containers/spsc_queue.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/containers/wire_bytes.hpp>
 #include <crd/memory/allocator.hpp>
 
 #include <cstring>
@@ -112,6 +114,16 @@ public:
         crd_diag_fatal::arm(mode, "ConcurrentQueue: out of memory");
         cont::ConcurrentQueue<crd::u64> q(8U, &refusing);
         return q.capacity() != 0U;
+    }
+    if (is(mode, "wire-writer-overrun"))
+    {
+        crd_diag_fatal::arm(mode, "WireWriter: a write past the span its layout sized");
+        crd::u8          out[4] = {};
+        const crd::u8    body[4] = {1U, 2U, 3U, 4U};
+        cont::WireWriter writer(cont::Span<crd::u8>(out, sizeof(out)));
+        writer.put_u8(0U);
+        writer.put_bytes(cont::ConstSpan<crd::u8>(body)); // 4 bytes into 3 of room
+        return writer.written() != 0U;
     }
     return false;
 }
