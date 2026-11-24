@@ -26,6 +26,7 @@
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/crypto/quic.hpp>
+#include <crd/memory/allocator.hpp>
 #include <crd/net/quic_frame.hpp>
 #include <crd/net/quic_header.hpp>
 
@@ -218,7 +219,9 @@ struct QuicOpened
     bool key_update = false; // this packet moved the receive key phase: the previous key is now held
 };
 
-// A connection's packet protection: its keys per level and the receive windows of its packet number spaces. With
+// A connection's packet protection: its keys per level and the receive windows of its packet number spaces. The keys
+// of the Initial, Handshake and Early levels live in one block from its allocator, taken by start() and wiped and freed
+// once all three levels are discarded, so a confirmed connection holds only its 1-RTT keys. With
 // multipath (RFC 10069) each open path has its own 1-RTT number space: a slot of kQuicMaxPaths, named by the
 // connection as QuicRecovery's slots are, holds the path's ID (in every 1-RTT nonce), its replay window and the packet
 // numbers its key phases are checked against. Slot 0 is path ID 0, the handshake's path, open from start(); 0-RTT
@@ -231,7 +234,8 @@ struct QuicOpened
 class QuicPacketProtection
 {
 public:
-    QuicPacketProtection() noexcept = default;
+    QuicPacketProtection() noexcept; // on memory::default_allocator()
+    explicit QuicPacketProtection(memory::IAllocator& allocator) noexcept : m_allocator(&allocator) {}
     ~QuicPacketProtection() noexcept;
     QuicPacketProtection(const QuicPacketProtection&) = delete;
     QuicPacketProtection& operator=(const QuicPacketProtection&) = delete;
@@ -239,13 +243,14 @@ public:
     QuicPacketProtection& operator=(QuicPacketProtection&&) = delete;
 
     // Starts a connection of `side` in `version` (its original version): its Initial keys for `client_dcid` (the
-    // client's first Destination Connection ID), every other key and window cleared. rekey_initial() after a Retry
+    // client's first Destination Connection ID), every other key and window cleared; ProviderFailure when the
+    // allocator refuses the handshake levels' block. rekey_initial() after a Retry
     // re-derives the Initial keys, the other version's receive key too, for the Retry's ID and keeps the rest.
     [[nodiscard]] crypto::CryptoError start(crypto::QuicSide side, crypto::QuicVersion version,
                                             cont::ConstSpan<u8> client_dcid) noexcept;
     [[nodiscard]] crypto::CryptoError rekey_initial(cont::ConstSpan<u8> client_dcid) noexcept;
     // Starts a keyed connection (the raw UDP path) of `side` in `version`: every key and window cleared and only 1-RTT
-    // keys ever to come, through install() at the Application level.
+    // keys ever to come, through install() at the Application level; it holds no handshake levels' block.
     void start_keyed(crypto::QuicSide side, crypto::QuicVersion version) noexcept;
 
     // Compatible version negotiation (RFC 9368 section 2.3, RFC 9369 section 4.1). A client that offers `version`
@@ -286,6 +291,10 @@ public:
     // Discards the keys of `level` (both directions): the Early level's when a server's 0-RTT timer ends (RFC 9001
     // section 4.9.3) or the server refused 0-RTT; Initial and Handshake keys go by themselves.
     void discard(crypto::QuicLevel level) noexcept;
+    // Whether the handshake levels' block is held: from start() until the Initial, Handshake and Early levels are gone.
+    [[nodiscard]] bool holds_handshake_keys() const noexcept { return m_levels != nullptr; }
+    // The blocks start() has taken from the allocator.
+    [[nodiscard]] u32 allocations() const noexcept { return m_allocations; }
     // The handshake is confirmed (RFC 9001 section 4.1.2): the Handshake keys are discarded and key updates allowed.
     void confirm() noexcept;
     [[nodiscard]] bool confirmed() const noexcept { return m_confirmed; }
@@ -387,20 +396,30 @@ private:
         return key.update_due() ||
                (m_update_interval != 0U && key.sealed() >= m_update_interval - (m_update_interval / 4U));
     }
+    // The keys of the Initial, Handshake and Early levels. initial: [send, receive, receive], the receive key of
+    // m_version at m_initial_receive, the other one m_other's (expect_version, change_version); handshake: [send,
+    // receive]; early: a client's to send, a server's to open.
+    struct LevelKeys
+    {
+        QuicKeys initial[3];
+        QuicKeys handshake[2];
+        QuicKeys early;
+    };
+
     void rotate_receive(u64 number, PathSpace& space) noexcept;
     void start_send_phase(u64 phase) noexcept; // no packet of `phase` sealed or acknowledged on any path yet
-    [[nodiscard]] QuicKeys& initial_receive() noexcept { return m_initial[m_initial_receive]; }
-    [[nodiscard]] const QuicKeys& initial_receive() const noexcept { return m_initial[m_initial_receive]; }
-    [[nodiscard]] QuicKeys& initial_other() noexcept { return m_initial[3U - m_initial_receive]; }
-    [[nodiscard]] const QuicKeys& initial_other() const noexcept { return m_initial[3U - m_initial_receive]; }
+    // A level's keys are read only while the level is not gone, which keeps the block (m_levels) held.
+    [[nodiscard]] QuicKeys& initial_receive() noexcept { return m_levels->initial[m_initial_receive]; }
+    [[nodiscard]] const QuicKeys& initial_receive() const noexcept { return m_levels->initial[m_initial_receive]; }
+    [[nodiscard]] QuicKeys& initial_other() noexcept { return m_levels->initial[3U - m_initial_receive]; }
+    [[nodiscard]] const QuicKeys& initial_other() const noexcept { return m_levels->initial[3U - m_initial_receive]; }
     void clear_all() noexcept;
+    void release_levels() noexcept; // wipes and frees the block once every handshake level is gone
 
-    // [send, receive, receive]: the receive key of m_version at m_initial_receive, the other one m_other's
-    // (expect_version, change_version).
-    QuicKeys m_initial[3];
+    memory::IAllocator* m_allocator = nullptr;
+    LevelKeys* m_levels = nullptr;
+    u32 m_allocations = 0U;
     usize m_initial_receive = 1U;
-    QuicKeys m_handshake[2]; // [send, receive]
-    QuicKeys m_early;        // a client's to send, a server's to open
 
     // 1-RTT: the send key of the current phase (indexed by the phase's bit) and, during an update, its successor; one
     // header key per direction; three receive keys rotating as previous, current and next.

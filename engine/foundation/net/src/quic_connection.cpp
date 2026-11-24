@@ -276,7 +276,8 @@ void QuicConnection::Events::on_discarded(QuicSpace space, const QuicSentPacket&
 // ---- Construction ----
 
 QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnectionConfig& config) noexcept
-    : m_allocator(allocator), m_config(config), m_events(*this), m_hello(*this), m_cids(config.ids)
+    : m_allocator(allocator), m_config(config), m_events(*this), m_hello(*this), m_protection(allocator),
+      m_cids(config.ids)
 {
     if (!config_valid(config))
     {
@@ -394,7 +395,7 @@ QuicConnection::~QuicConnection() noexcept
 
 u32 QuicConnection::buffer_allocations() const noexcept
 {
-    return m_streams.buffer_allocations() + m_crypto_allocations + m_table_allocations;
+    return m_streams.buffer_allocations() + m_crypto_allocations + m_table_allocations + m_protection.allocations();
 }
 
 usize QuicConnection::buffer_bytes() const noexcept

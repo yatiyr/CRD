@@ -95,6 +95,7 @@ TEST_CASE("QUIC connection: the handshake reaches confirmation in both versions 
             CHECK_FALSE(end->protection().can_send(QuicPacketType::Initial));
             CHECK_FALSE(end->protection().can_send(QuicPacketType::Handshake));
             CHECK(end->protection().can_send(QuicPacketType::OneRtt));
+            CHECK_FALSE(end->protection().holds_handshake_keys()); // freed once its levels are gone
             CHECK(end->peer_parameters().grease_quic_bit);
             CHECK(end->peer_parameters().version_information.chosen == static_cast<u32>(version));
         }
@@ -103,9 +104,11 @@ TEST_CASE("QUIC connection: the handshake reaches confirmation in both versions 
         CHECK(same(server.peer_cid(), ConstSpan<u8>(kClientCid, sizeof(kClientCid))));
         CHECK(net->client_initials_padded);
         CHECK(net->amplification_kept);
-        // Nothing allocates after construction but the stream and CRYPTO buffers, as their data needs them.
-        CHECK(allocator.calls() ==
-              allocations + client.buffer_allocations() + server.buffer_allocations());
+        // Nothing allocates after construction but each end's handshake keys at its start and the stream and CRYPTO
+        // buffers, as their data needs them.
+        CHECK(client.protection().allocations() == 1U);
+        CHECK(server.protection().allocations() == 1U);
+        CHECK(allocator.calls() == allocations + client.buffer_allocations() + server.buffer_allocations());
         CHECK(client.recovery().rtt().sampled());
         // Quiet once settled (the delayed ACKs sent): the next timer is the idle timeout.
         net->advance(net->now + 500U * kMs);
@@ -9763,7 +9766,7 @@ TEST_CASE("QUIC connection: CRYPTO buffers take storage as the handshake needs i
         CHECK(client.state() == QuicConnectionState::Closing);
         CHECK(client.close_info().local);
         CHECK(client.close_info().error_code == code(QuicTransportError::InternalError));
-        CHECK(client.buffer_allocations() == 0U);
+        CHECK(client.buffer_allocations() == client.protection().allocations()); // its handshake keys alone
     }
     {
         // A server refused room for a CRYPTO frame within the limit closes with INTERNAL_ERROR.
@@ -9772,13 +9775,26 @@ TEST_CASE("QUIC connection: CRYPTO buffers take storage as the handshake needs i
         QuicConnection client(client_allocator, config_for(QuicSide::Client, identity, QuicVersion::V1, 0U));
         QuicConnection server(server_allocator, config_for(QuicSide::Server, identity, QuicVersion::V1, 1U));
         REQUIRE(server.ready());
-        server_allocator.refuse_after(server_allocator.calls());
+        server_allocator.refuse_after(server_allocator.calls() + 1U); // its handshake keys, then nothing
         connect(client);
         auto net = std::make_unique<Net>(client, server);
         REQUIRE(net->run_until([&] { return server.state() == QuicConnectionState::Closing; }));
         CHECK(server.close_info().local);
         CHECK(server.close_info().error_code == code(QuicTransportError::InternalError));
         CHECK(server.buffer_bytes() == 0U);
+    }
+    {
+        // Refused handshake keys refuse the start: the connection is never started, and nothing is left held.
+        CountingAllocator allocator;
+        QuicConnection client(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1, 0U));
+        REQUIRE(client.ready());
+        allocator.refuse_after(allocator.calls());
+        CHECK_FALSE(client.connect(ConstSpan<u8>(kClientCid, sizeof(kClientCid)),
+                                   ConstSpan<u8>(kInitialDcid, sizeof(kInitialDcid)), kStartNs));
+        CHECK_FALSE(client.protection().holds_handshake_keys());
+        CHECK(client.buffer_allocations() == 0U);
+        u8 datagram[kQuicDefaultMaxDatagram] = {};
+        CHECK(client.send(Span<u8>(datagram, sizeof(datagram)), kStartNs) == 0U);
     }
 }
 

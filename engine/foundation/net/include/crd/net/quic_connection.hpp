@@ -125,7 +125,8 @@
 //              storage from it as their data needs and give it back as S38 says (buffer_allocations()); a level's
 //              goes back once it holds nothing, and at once when its keys are discarded (RFC 9001 section 4.9). The
 //              sent-packet storages and the frame ledger grow with the flight and shrink once it is over; the
-//              held-packet ring is taken only while a packet waits for its keys (table_bytes()).
+//              held-packet ring is taken only while a packet waits for its keys (table_bytes()). The Initial,
+//              Handshake and Early levels' keys are one block, taken at the start and freed with the last of them.
 //   threads    a connection belongs to its loop's thread.
 
 #include <crd/containers/span.hpp>
@@ -588,7 +589,8 @@ public:
     [[nodiscard]] QuicStreamSet& streams() noexcept { return m_streams; }
     [[nodiscard]] const QuicStreamSet& streams() const noexcept { return m_streams; }
     // What the connection has taken from its allocator after construction: its streams' buffers (QuicStreamSet::
-    // buffer_allocations), its CRYPTO levels' and its growing tables' (table_bytes). Nothing else allocates then.
+    // buffer_allocations), its CRYPTO levels', its growing tables' (table_bytes) and its handshake levels' keys
+    // (QuicPacketProtection::allocations). Nothing else allocates then.
     [[nodiscard]] u32 buffer_allocations() const noexcept;
     // The bytes the stream and CRYPTO buffers hold now, their bitmaps included.
     [[nodiscard]] usize buffer_bytes() const noexcept;

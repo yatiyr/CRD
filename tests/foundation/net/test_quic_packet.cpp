@@ -711,6 +711,102 @@ TEST_CASE("QUIC packets: Initial, Handshake and 0-RTT keys are discarded at RFC 
     }
 }
 
+TEST_CASE("QUIC packets: the handshake levels' keys live in one block, freed once the last of those levels goes",
+          "[net][4.2a][quic-packet]")
+{
+    const ConstSpan<u8> dcid(kDcid, kCid);
+    CountingAllocator allocator;
+    SECTION("each level's discard keeps the block until Initial, Handshake and Early are all gone, in any order")
+    {
+        const QuicLevel orders[3][3] = {{QuicLevel::Initial, QuicLevel::Handshake, QuicLevel::Early},
+                                        {QuicLevel::Early, QuicLevel::Initial, QuicLevel::Handshake},
+                                        {QuicLevel::Handshake, QuicLevel::Early, QuicLevel::Initial}};
+        for (const auto& order : orders)
+        {
+            QuicPacketProtection server(allocator);
+            CHECK_FALSE(server.holds_handshake_keys());
+            REQUIRE(server.start(QuicSide::Server, QuicVersion::V1, dcid) == CryptoError::None);
+            REQUIRE(server.install(QuicLevel::Handshake, true, AlgorithmId::Aes128Gcm, secret(1U)) ==
+                    CryptoError::None);
+            REQUIRE(server.install(QuicLevel::Early, false, AlgorithmId::Aes128Gcm, secret(0U)) == CryptoError::None);
+            REQUIRE(server.install(QuicLevel::Application, true, AlgorithmId::Aes128Gcm, secret(3U)) ==
+                    CryptoError::None);
+            CHECK(allocator.live() == 1U);
+            server.discard(order[0]);
+            server.discard(order[1]);
+            CHECK(server.holds_handshake_keys());
+            CHECK(allocator.live() == 1U);
+            server.discard(order[2]);
+            CHECK_FALSE(server.holds_handshake_keys());
+            CHECK(allocator.live() == 0U);
+            for (const QuicPacketType type : {QuicPacketType::Initial, QuicPacketType::Handshake,
+                                              QuicPacketType::ZeroRtt})
+            {
+                CHECK_FALSE(server.can_send(type));
+                CHECK_FALSE(server.can_open(type));
+                CHECK_FALSE(server.keys_pending(type));
+            }
+            CHECK_FALSE(server.opens_initial(static_cast<crd::u32>(QuicVersion::V1)));
+            CHECK(server.can_send(QuicPacketType::OneRtt));
+            CHECK(server.install(QuicLevel::Handshake, true, AlgorithmId::Aes128Gcm, secret(1U)) ==
+                  CryptoError::NotReady);
+            CHECK(server.install(QuicLevel::Early, false, AlgorithmId::Aes128Gcm, secret(0U)) == CryptoError::NotReady);
+            CHECK(server.rekey_initial(dcid) == CryptoError::NotReady);
+            CHECK(server.change_version(QuicVersion::V2, dcid) == CryptoError::NotReady);
+            Buffer datagram;
+            QuicPacketWriter writer;
+            REQUIRE(writer.begin(spec_of(QuicPacketType::Handshake, 0U), datagram.rest()));
+            usize written = 0U;
+            CHECK(server.seal(writer, 0U, {}, written) == QuicPacketError::NoKeys);
+            // A restart takes a new block.
+            REQUIRE(server.start(QuicSide::Server, QuicVersion::V1, dcid) == CryptoError::None);
+            CHECK(server.holds_handshake_keys());
+            CHECK(server.can_open(QuicPacketType::Initial));
+            CHECK(allocator.live() == 1U);
+        }
+        CHECK(allocator.live() == 0U); // the destructor frees a held block
+    }
+    SECTION("a client's first Handshake packet, its 1-RTT keys and confirmation free it as a connection does")
+    {
+        QuicPacketProtection client(allocator);
+        QuicPacketProtection server(allocator);
+        REQUIRE(client.start(QuicSide::Client, QuicVersion::V1, dcid) == CryptoError::None);
+        REQUIRE(server.start(QuicSide::Server, QuicVersion::V1, dcid) == CryptoError::None);
+        REQUIRE(client.install(QuicLevel::Handshake, true, AlgorithmId::Aes128Gcm, secret(0U)) == CryptoError::None);
+        REQUIRE(server.install(QuicLevel::Handshake, false, AlgorithmId::Aes128Gcm, secret(0U)) == CryptoError::None);
+        REQUIRE(client.install(QuicLevel::Application, true, AlgorithmId::Aes128Gcm, secret(2U)) == CryptoError::None);
+        Buffer datagram;
+        REQUIRE(append(client, datagram, spec_of(QuicPacketType::Handshake, 0U), kPing) == QuicPacketError::None);
+        CHECK(deliver(server, datagram) == QuicPacketError::None);
+        CHECK(client.holds_handshake_keys()); // Handshake keys stay until confirmation
+        server.discard(QuicLevel::Early);     // a server that took no 0-RTT
+        client.confirm();
+        server.confirm();
+        CHECK_FALSE(client.holds_handshake_keys());
+        CHECK_FALSE(server.holds_handshake_keys());
+        CHECK(allocator.live() == 0U);
+    }
+    SECTION("a keyed connection holds no block, and a refused block refuses the start")
+    {
+        QuicPacketProtection keyed(allocator);
+        REQUIRE(keyed.start(QuicSide::Client, QuicVersion::V1, dcid) == CryptoError::None);
+        keyed.start_keyed(QuicSide::Client, QuicVersion::V1);
+        CHECK_FALSE(keyed.holds_handshake_keys());
+        CHECK(allocator.live() == 0U);
+        allocator.refuse_after(allocator.calls());
+        QuicPacketProtection refused(allocator);
+        CHECK(refused.start(QuicSide::Server, QuicVersion::V1, dcid) == CryptoError::ProviderFailure);
+        CHECK_FALSE(refused.holds_handshake_keys());
+        CHECK_FALSE(refused.can_open(QuicPacketType::Initial));
+        CHECK_FALSE(refused.can_send(QuicPacketType::Initial));
+        CHECK_FALSE(refused.keys_pending(QuicPacketType::Handshake));
+        CHECK(refused.rekey_initial(dcid) == CryptoError::NotReady);
+        CHECK(refused.install(QuicLevel::Handshake, true, AlgorithmId::Aes128Gcm, secret(0U)) ==
+              CryptoError::NotReady);
+        CHECK(allocator.live() == 0U);
+    }
+}
+
 TEST_CASE("QUIC packets: nothing read under protection is trusted before the AEAD opens", "[net][4.2a][quic-packet]")
 {
     Pair pair;
