@@ -1,8 +1,9 @@
 // crd-net transport budget board (NET-PATH) -- crd-net's end of quic_board.py: QuicServer and QuicClient over real UDP
-// on the loopback, each against itself, the workloads every board peer runs alike (msquic_quic_board.c is msquic's).
+// on the loopback, each against itself, the workloads every board peer runs alike (msquic_quic_board.c is msquic's)
+// and crd-net's own bursts apart.
 //
 // Usage: crd-quic-board --role client|server --port N --seed HEX --group NAME --connections N [--parallel N]
-//                       [--bytes N] [--window N] [--offload 0|1] [--hold 0|1]
+//                       [--bytes N] [--window N] [--offload 0|1] [--hold 0|1] [--bursts N --gap MS]
 //
 //   port         a server's to bind on 127.0.0.1 (0: any, printed as `port=N`), a client's to reach
 //   seed         the 32-byte Ed25519 private key of the server's self-signed credential; a client pins its public key
@@ -19,12 +20,18 @@
 //                where the host has them); 0: one datagram a call each way, as on a NIC without either
 //   hold         1: a client keeps each connection open, idle, once its work is done, and closes them all once every
 //                one's is, so all `connections` are live at once (the memory workload); a server needs no switch
+//   bursts, gap  a client's one connection does its work `bursts` times, each on a new stream opened `gap`
+//                milliseconds after the last one's answer came (the idle trim's workload; a server answers each
+//                stream as it comes and needs no switch)
 //
 // The report, one `name=value` per line on standard output once the run has ended: `connections` that closed,
-// `established` among them, `bytes_received` and `bytes_sent` on the streams, and what every established connection
-// negotiated (`group`, `cipher`, `version`; `mixed` when two differed), `peak_live`, the most connections live at
-// once (a client's started, a server's accepted, and not yet closed), a server's Initials it `refused`, and what
-// the socket handed the host and took from it: `datagrams_sent` and `send_messages`, `datagrams_received` and
+// `established` among them, `bytes_received` and `bytes_sent` on the streams, the `exchanges` done (a client's answers
+// read, a server's streams answered), the `allocations` the closed connections took once their second exchange had
+// ended (QuicConnection::buffer_allocations: a buffer or table retaken after an idle trim counts; the first exchange's
+// turn may still write the server's session ticket, which takes its CRYPTO buffer once), what every established
+// connection negotiated (`group`, `cipher`, `version`; `mixed` when two differed), `peak_live`, the most connections
+// live at once (a client's started, a server's accepted, and not yet closed), a server's Initials it `refused`, and
+// what the socket handed the host and took from it: `datagrams_sent` and `send_messages`, `datagrams_received` and
 // `receive_messages`, a message being one datagram or one segmented or coalesced train (one buffer the host's stack
 // carries whole on Linux), and the loop's `waits` for its next event, the `wait_timeouts` among them that no datagram
 // ended, and the time they asked for (`wait_asked_ns`) and took (`wait_ns`): an end idle while the other works. Why a
@@ -58,6 +65,7 @@ using namespace crd_net_interop;
 
 constexpr u64 kRunNs = 300000000000U;
 constexpr u64 kMaxWaitNs = 10000000U;
+constexpr u64 kMaxGapMs = 10000U; // a third of the idle timeout
 // Live connections at most, closing ones included: a full server refuses a new one (CONNECTION_REFUSED), and each
 // closing one holds its slot for three PTOs (RFC 9000 section 10.2), about a tenth of a second at the board's rates.
 constexpr u32 kSlots = 4096U;
@@ -84,18 +92,24 @@ struct Options
     u64 window = 1U << 20U;
     bool offload = true;
     bool hold = false;
+    u64 bursts = 1U;
+    u64 gap_ns = 0U;
 };
 
 // One live connection's place in the work, by its slot.
 struct Work
 {
     QuicHandle handle;
-    bool opened = false; // a client's stream is open
+    u64 stream = 0U;     // the stream of the exchange under way: client-initiated bidirectional, 0 first
+    bool opened = false; // a client opened it, a server saw it
     bool fin_read = false;
     bool fin_sent = false;
     bool done = false; // its work is done: closing, or held open
     bool closing = false;
     u64 sent = 0U;
+    u64 exchanges = 0U;
+    u64 due_ns = 0U;      // a client opens the next exchange's stream from then on
+    u32 allocations = 0U; // the connection's buffer_allocations() when its second exchange ended
 };
 
 class Board final : public QuicServerEvents, public QuicClientEvents
@@ -114,12 +128,16 @@ public:
             return;
         }
         QuicStreamSet& set = connection.streams();
-        if (m_options.client && !work.opened)
+        if (m_options.client && !work.opened && !work.done && now_ns >= work.due_ns)
         {
-            u64 id = 0U;
-            work.opened = set.open(true, id) == QuicStreamError::None;
+            // Refused while the server's MAX_STREAMS has not come back; its arrival serves the connection again.
+            work.opened = set.open(true, work.stream) == QuicStreamError::None;
         }
-        if (m_options.client || set.recv_state(0U) != QuicRecvState::None)
+        else if (!m_options.client)
+        {
+            work.opened = work.opened || set.recv_state(work.stream) != QuicRecvState::None;
+        }
+        if (work.opened)
         {
             serve(work, set);
         }
@@ -128,21 +146,23 @@ public:
         while (set.poll(event))
         {
         }
-        if (m_options.client && work.fin_read)
+        if (!work.done && (m_options.client ? work.fin_read : work.fin_sent))
         {
-            finish(work);
-            if (!m_options.hold || m_released)
-            {
-                work.closing = true;
-                connection.close(0U, {}, now_ns);
-            }
+            next_exchange(handle, connection, work, now_ns);
+        }
+        if (m_options.client && work.done && (!m_options.hold || m_released) && !work.closing)
+        {
+            work.closing = true;
+            connection.close(0U, {}, now_ns);
         }
     }
 
     void on_closed(QuicHandle handle, const QuicConnection& connection) noexcept override
     {
         count(connection);
-        finish(m_work[handle.slot]);
+        Work& work = m_work[handle.slot];
+        m_allocations += work.exchanges >= 2U ? connection.buffer_allocations() - work.allocations : 0U;
+        finish(work);
         ++m_closed;
         m_work[handle.slot] = {};
     }
@@ -167,6 +187,18 @@ public:
         ++m_started;
         open(handle);
     }
+    // When a client's next exchange is due (kNeverNs for none); take_due() hands its connection to wake once.
+    [[nodiscard]] u64 due_ns() const noexcept { return m_due_ns; }
+    [[nodiscard]] bool take_due(u64 now_ns, QuicHandle& handle) noexcept
+    {
+        if (now_ns < m_due_ns)
+        {
+            return false;
+        }
+        handle = m_due;
+        m_due_ns = kNeverNs;
+        return true;
+    }
     // A holding client closes its connections: each is served in the host's next turn, and closes there.
     void release(QuicHost& host) noexcept
     {
@@ -189,6 +221,8 @@ public:
         std::printf("group=%s\ncipher=%s\nversion=%s\npeak_live=%llu\n", m_mixed ? "mixed" : group_name(m_group),
                     m_mixed ? "mixed" : cipher_name(m_cipher), m_mixed ? "mixed" : version,
                     static_cast<unsigned long long>(m_peak_live));
+        std::printf("exchanges=%llu\nallocations=%llu\n", static_cast<unsigned long long>(m_exchanges),
+                    static_cast<unsigned long long>(m_allocations));
         std::fflush(stdout);
     }
 
@@ -240,14 +274,40 @@ private:
         work.done = true;
     }
 
-    // Reads stream 0 to its end, counting; a client writes its bytes and FIN, a server its FIN once the client's came.
+    // An exchange ended (a client's answer read, a server's stream answered): a client is done after `bursts` of them
+    // or opens the next one's stream `gap` later, which the loop wakes it for; a server waits for the next stream.
+    void next_exchange(QuicHandle handle, const QuicConnection& connection, Work& work, u64 now_ns) noexcept
+    {
+        work.allocations = work.exchanges == 1U ? connection.buffer_allocations() : work.allocations;
+        ++work.exchanges;
+        ++m_exchanges;
+        if (m_options.client && work.exchanges >= m_options.bursts)
+        {
+            finish(work);
+            return;
+        }
+        work.stream += 4U; // the next client-initiated bidirectional stream (RFC 9000 section 2.1)
+        work.opened = false;
+        work.fin_read = false;
+        work.fin_sent = false;
+        work.sent = 0U;
+        if (m_options.client)
+        {
+            work.due_ns = now_ns + m_options.gap_ns;
+            m_due_ns = work.due_ns;
+            m_due = handle;
+        }
+    }
+
+    // Reads the exchange's stream to its end, counting; a client writes its bytes and FIN, a server its FIN once the
+    // client's came.
     void serve(Work& work, QuicStreamSet& set) noexcept
     {
         while (!work.fin_read)
         {
-            const QuicStreamRead piece = set.peek(0U);
+            const QuicStreamRead piece = set.peek(work.stream);
             const usize size = piece.data.size();
-            if ((size == 0U && !piece.fin) || set.consume(0U, size) != QuicStreamError::None)
+            if ((size == 0U && !piece.fin) || set.consume(work.stream, size) != QuicStreamError::None)
             {
                 break;
             }
@@ -261,7 +321,7 @@ private:
             const u64 left = goal - work.sent;
             const usize want = left < kChunkBytes ? static_cast<usize>(left) : kChunkBytes;
             usize taken = 0U;
-            if (set.write(0U, ConstSpan<u8>(kFill, want), want == left, taken) != QuicStreamError::None)
+            if (set.write(work.stream, ConstSpan<u8>(kFill, want), want == left, taken) != QuicStreamError::None)
             {
                 break;
             }
@@ -285,6 +345,10 @@ private:
     u64 m_established = 0U;
     u64 m_received = 0U;
     u64 m_sent = 0U;
+    u64 m_exchanges = 0U;
+    u64 m_allocations = 0U;
+    u64 m_due_ns = kNeverNs;
+    QuicHandle m_due;
     AlgorithmId m_group{};
     AlgorithmId m_cipher{};
     u32 m_version = 0U;
@@ -332,7 +396,8 @@ int drive(const HostClock& clock, const SocketSet& sockets, IoLoop& loop, const 
         {
             return 1;
         }
-        const u64 next = loop.poll();
+        const u64 polled = loop.poll();
+        const u64 next = polled < board.due_ns() ? polled : board.due_ns();
         const u64 now = clock.monotonic_ns();
         if (now >= deadline)
         {
@@ -473,6 +538,11 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
         {
             board.release(client);
         }
+        QuicHandle due;
+        if (board.take_due(now_ns, due))
+        {
+            client.wake(due);
+        }
         return true;
     };
     Waits waits;
@@ -485,7 +555,7 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
 int usage()
 {
     std::fputs("usage: crd-quic-board --role client|server --port N --seed HEX --group NAME --connections N "
-               "[--parallel N] [--bytes N] [--window N] [--offload 0|1] [--hold 0|1]\n",
+               "[--parallel N] [--bytes N] [--window N] [--offload 0|1] [--hold 0|1] [--bursts N --gap MS]\n",
                stderr);
     return 2;
 }
@@ -543,6 +613,14 @@ bool parse(int argc, char** argv, Options& options)
         {
             options.hold = number != 0U;
         }
+        else if (std::strcmp(name, "--bursts") == 0)
+        {
+            options.bursts = number;
+        }
+        else if (std::strcmp(name, "--gap") == 0)
+        {
+            options.gap_ns = number <= kMaxGapMs ? number * 1000000U : kRunNs;
+        }
         else
         {
             return false;
@@ -550,7 +628,8 @@ bool parse(int argc, char** argv, Options& options)
     }
     return argc % 2 == 1 && role && seed && options.port <= 65535U && options.connections != 0U &&
            options.parallel != 0U && options.parallel <= kSlots && (!options.hold || options.connections <= kSlots) &&
-           options.window >= 4096U && options.window <= (u64{1} << 26U) && (!options.client || options.port != 0U);
+           options.window >= 4096U && options.window <= (u64{1} << 26U) && (!options.client || options.port != 0U) &&
+           options.bursts != 0U && (options.bursts == 1U || options.connections == 1U) && options.gap_ns < kRunNs;
 }
 } // namespace
 
