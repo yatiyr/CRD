@@ -34,18 +34,26 @@ GitHub's main is at c6963151, behind GitLab; left as it is.
   `crd-no-*`/`crd-check*` guards, 49 of 49. libFuzzer (linux-clang-fuzz): net-congestion, seed 8406, 301 s, 697,700
   runs; net-quic-connection, seed 8407, two jobs, 361 s, 26,602 runs; no find.
 
-## Host-check 45321264762, seed 8702 (open)
+## Host-check 45321264762, seed 8702 (fixed)
 
-Input 3e9670d4 fails the follow check (`follows() || (ended() && !proving(true))`) on HEAD too. Cause, traced: the
-client's path table dropped its fallback tuple (`QuicPaths::drop`) and kept none, though its first tuple was still
-validated; the active tuple's revalidation then expired and the client closed with `path_lost` (RFC 9000 section
-9.3.2 lets it revert). Refilling the fallback from the validated tuples left fixes the input but fails two others
-in a 360 s run (07785c27, 2400d9c3: the preferred-address check `client.on_preferred_address()`), which pass
-without it; not landed.
+- Input 3e9670d4 failed the follow check (`follows() || (ended() && !proving(true))`) on HEAD too. Traced: the
+  client dropped its fallback tuple (`QuicPaths::drop`) and kept none, though its first tuple, active before, was
+  still validated; the active tuple's revalidation expired and the client closed
+  with `path_lost`. RFC 9000 section 9.3.2 lets it revert.
+- `QuicPaths::revert_target`: the fallback, or with none the validated tuple that was active before (a new
+  `carried` flag) and was heard from last, for a client only to the server address it uses (section 9.6.1);
+  `expire_paths` reverts there. The dead `clear_fallback()` is gone.
+- Two wider rules failed the fuzzer first: refilling the fallback itself (07785c27, 2400d9c3: a revert onto the
+  preferred address's validated path bypassed `take_preferred`), then any carried tuple for a client (98842298,
+  d9e3735b: a revert to the server's original address after the move). All five inputs join the connection corpus.
+- Tests: a `[quic-path]` case (the fallback first, recency, never-active and other-address tuples excluded). Teeth:
+  with `fallback()` back in `expire_paths` the corpus replay of 3e9670d4 fails. linux-gcc-debug: 1,184 cases
+  (1,176 passed, 8 skipped), corpus and guards 49 of 49. libFuzzer net-quic-connection, two jobs: seed 8410, 421 s,
+  29,024 runs; seed 8411, 421 s, 29,213 runs; no find.
 
 ## Next
 
-Host-check seed 8702 first (above). Then (b) the simulator rows below version 7, with version 7's exact-timer
+(b) the simulator rows below version 7, with version 7's exact-timer
 number on each row to show whether its 95.1% at 1 ms turns is the turn's rate cap; CUBIC over a 12 KB queue at
 1 Gbit/s and 2 ms restarts 2.5 ms slower than version 7 (47.7 against 45.2 ms, from a smaller window); (c) the
 recovery-period rule on deep 20 ms rows. The coarse-turn (train-cap) table was not re-measured; its committed
