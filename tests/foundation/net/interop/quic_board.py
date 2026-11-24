@@ -19,8 +19,11 @@ on the loopback the receiver's kernel work is billed to whichever process runs, 
 Each end also reports its datagrams and the messages that carried them each way (a message is one datagram or one
 segmented or coalesced train, which the host's stack carries as one buffer): the bulk table gives them per MiB, from
 the same slope, so the kernel's share of a byte's cost reads as datagrams per message and datagrams per acknowledgement
-(the server sends almost nothing but ACKs). The arms run interleaved, `rounds` times, and the board keeps each arm's
-best round and its median. Every run must
+(the server sends almost nothing but ACKs). crd-net's ends also report their loop's waits for the next event (how
+many, those their timeout ended, the time asked and taken), per MiB in a third table: an end idle while the other works
+is wall time the CPU columns do not show. `--baseline` adds another build's crd-quic-board as its own offload arm, for
+a before and after on one host; `--workload` runs one workload alone. The arms run interleaved, `rounds` times, and
+the board keeps each arm's best round and its median. Every run must
 report every connection established, every byte delivered, and AES-128-GCM and version 1 on every connection; crd-net
 also reports its group (msquic's handshake information leaves the group out; its OpenSSL list puts secp256r1 first).
 """
@@ -38,6 +41,7 @@ RUN_SECONDS = 600
 GROUP = 'secp256r1'
 MIB = 1 << 20
 COUNTS = ('datagrams_sent', 'send_messages', 'datagrams_received', 'receive_messages')
+WAITS = ('waits', 'wait_timeouts', 'wait_asked_ns', 'wait_ns')  # crd-net's loop only
 
 
 class Arm:
@@ -99,8 +103,8 @@ def run(arm, connections, parallel, size, window):
             detail += f'{name}: {stream.read().decode(errors="replace").strip()} '
         reports = (report_of(client_out), report_of(server_out))
         check(arm, (client_status, server_status), reports, connections, size, detail)
-        counts = {(role, key): int(report[key]) for role, report in zip(('client', 'server'), reports)
-                  for key in COUNTS}
+        counts = {(role, key): int(report.get(key, 0)) for role, report in zip(('client', 'server'), reports)
+                  for key in COUNTS + WAITS}
         return cpu_of(client_usage), cpu_of(server_usage), wall, counts
 
 
@@ -115,7 +119,7 @@ def check(arm, statuses, reports, connections, size, detail):
         for key, want in (('cipher', 'aes128'), ('version', '1'), ('group', GROUP if arm.group else 'unreported')):
             if report.get(key) != want:
                 raise AssertionError(f'{arm.name}: the {name} negotiated {key}={report.get(key)}, not {want}')
-        for key in COUNTS:
+        for key in COUNTS + (WAITS if arm.offload is not None else ()):
             if not report.get(key, '').isdigit():
                 raise AssertionError(f'{arm.name}: the {name} reported {key}={report.get(key)}')
     if server.get('refused', '0') != '0':
@@ -200,6 +204,18 @@ def table(arms, results, sizes):
                          f'{acks:,.0f} | {per(data, acks)} | '
                          f'{per(counts[("server", "datagrams_received")], counts[("server", "receive_messages")])} | '
                          f'{per(counts[("client", "datagrams_received")], counts[("client", "receive_messages")])} |')
+        lines += ['', '| arm (best round), per MiB | client waits | timed out | asked us | took us | server waits | '
+                  'timed out | asked us | took us |', '|---|---|---|---|---|---|---|---|---|']
+        for arm in arms:
+            if arm.offload is None:
+                continue
+            counts = min(results[(arm.name, 'bytes')], key=lambda r: r[0])[4]
+            cells = []
+            for role in ('client', 'server'):
+                cells += [f'{counts[(role, "waits")] * MIB:,.0f}', f'{counts[(role, "wait_timeouts")] * MIB:,.0f}',
+                          f'{counts[(role, "wait_asked_ns")] * MIB / 1000:,.0f}',
+                          f'{counts[(role, "wait_ns")] * MIB / 1000:,.0f}']
+            lines.append(f'| {arm.name} | ' + ' | '.join(cells) + ' |')
     return '\n'.join(lines)
 
 
@@ -214,6 +230,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--cerid', required=True, help='crd-quic-board')
     parser.add_argument('--msquic', help='crd-msquic-quic-board')
+    parser.add_argument('--baseline', help="another build's crd-quic-board, run interleaved as its own offload arm")
+    parser.add_argument('--workload', choices=('both', 'handshakes', 'bytes'), default='both')
     parser.add_argument('--rounds', type=int, default=5)
     parser.add_argument('--handshakes', type=pair, default=(200, 2000), help='connections at the two sizes')
     parser.add_argument('--bytes', type=pair, default=(64 * MIB, 1024 * MIB), help='bytes at the two sizes')
@@ -225,9 +243,12 @@ def main():
     if arguments.check:
         arguments.rounds, arguments.handshakes, arguments.bytes = 1, (8, 24), (MIB, 4 * MIB)
     arms = [Arm('crd-net', arguments.cerid, offload=True), Arm('crd-net, no offload', arguments.cerid, offload=False)]
+    if arguments.baseline:
+        arms.insert(1, Arm('crd-net baseline', arguments.baseline, offload=True))
     if arguments.msquic:
         arms.append(Arm('msquic', arguments.msquic, group=False))
-    sizes = {'handshakes': arguments.handshakes, 'bytes': arguments.bytes}
+    sizes = {workload: getattr(arguments, workload) for workload in ('handshakes', 'bytes')
+             if arguments.workload in ('both', workload)}
     try:
         results = board(arms, arguments.rounds, sizes, arguments.parallel, arguments.window)
     except AssertionError as error:

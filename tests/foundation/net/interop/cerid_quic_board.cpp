@@ -23,8 +23,9 @@
 // negotiated (`group`, `cipher`, `version`; `mixed` when two differed), a server's Initials it `refused`, and what
 // the socket handed the host and took from it: `datagrams_sent` and `send_messages`, `datagrams_received` and
 // `receive_messages`, a message being one datagram or one segmented or coalesced train (one buffer the host's stack
-// carries whole on Linux). Why a connection ended unestablished goes to standard error. The CPU time and memory are
-// the driver's to measure.
+// carries whole on Linux), and the loop's `waits` for its next event, the `wait_timeouts` among them that no datagram
+// ended, and the time they asked for (`wait_asked_ns`) and took (`wait_ns`): an end idle while the other works. Why a
+// connection ended unestablished goes to standard error. The CPU time and memory are the driver's to measure.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -259,10 +260,20 @@ QuicConnectionConfig connection_config(const Options& options, const TlsContext&
     return config;
 }
 
+// The loop's waits for its next event: how many, how many its timeout ended, the time they asked for and took.
+struct Waits
+{
+    u64 count = 0U;
+    u64 timeouts = 0U;
+    u64 asked_ns = 0U;
+    u64 taken_ns = 0U;
+};
+
 // Turns the loop until the board is done, starting a client's connections as earlier ones finish: a turn that freed a
 // place starts the next connection before any wait.
 template <typename Start>
-int drive(const HostClock& clock, const SocketSet& sockets, IoLoop& loop, const Board& board, const Start& start)
+int drive(const HostClock& clock, const SocketSet& sockets, IoLoop& loop, const Board& board, const Start& start,
+          Waits& waits)
 {
     const u64 deadline = clock.monotonic_ns() + kRunNs;
     while (!board.done())
@@ -280,15 +291,23 @@ int drive(const HostClock& clock, const SocketSet& sockets, IoLoop& loop, const 
         }
         if (next > now && !board.may_start())
         {
-            static_cast<void>(sockets.wait_readable(next - now < kMaxWaitNs ? next - now : kMaxWaitNs));
+            const u64 asked = next - now < kMaxWaitNs ? next - now : kMaxWaitNs;
+            const bool readable = sockets.wait_readable(asked);
+            ++waits.count;
+            waits.timeouts += readable ? 0U : 1U;
+            waits.asked_ns += asked;
+            waits.taken_ns += clock.monotonic_ns() - now;
         }
     }
     return 0;
 }
 
-// The socket's datagrams and messages each way: a train counts as one message of its datagrams.
-void report_datagrams(const UdpSocket& socket, const IoLoop& loop) noexcept
+// The loop's waits, then the socket's datagrams and messages each way: a train counts as one message of its datagrams.
+void report_loop(const UdpSocket& socket, const IoLoop& loop, const Waits& waits) noexcept
 {
+    std::printf("waits=%llu\nwait_timeouts=%llu\nwait_asked_ns=%llu\nwait_ns=%llu\n",
+                static_cast<unsigned long long>(waits.count), static_cast<unsigned long long>(waits.timeouts),
+                static_cast<unsigned long long>(waits.asked_ns), static_cast<unsigned long long>(waits.taken_ns));
     const OffloadCounters& offloads = socket.offload_counters();
     const u64 sent = socket.sends_taken();
     const u64 received = loop.counters().received;
@@ -349,10 +368,11 @@ int run_server(crd::memory::IAllocator& allocator, const Options& options, const
     }
     std::printf("port=%u\n", static_cast<unsigned>(socket.local_endpoint().port));
     std::fflush(stdout);
-    const int result = drive(clock, sockets, loop, board, [](u64) { return true; });
+    Waits waits;
+    const int result = drive(clock, sockets, loop, board, [](u64) { return true; }, waits);
     board.report();
     std::printf("refused=%llu\n", static_cast<unsigned long long>(server.counters().refused));
-    report_datagrams(socket, loop);
+    report_loop(socket, loop, waits);
     return result;
 }
 
@@ -401,9 +421,10 @@ int run_client(crd::memory::IAllocator& allocator, const Options& options, const
         }
         return true;
     };
-    const int result = drive(clock, sockets, loop, board, start);
+    Waits waits;
+    const int result = drive(clock, sockets, loop, board, start, waits);
     board.report();
-    report_datagrams(socket, loop);
+    report_loop(socket, loop, waits);
     return result;
 }
 
