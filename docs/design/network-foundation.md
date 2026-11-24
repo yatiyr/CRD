@@ -4164,7 +4164,10 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
   9.6.1; never from a path that names no server address); `migrate()` to it waits for the validation; a client
   that moves socket first validates it again from there and never returns to the socket it left (section 9.6.3);
   once there, paths to the server's first address are forgotten and refused (`OtherServer`), and
-  disable_active_migration closes the handshake address alone (section 18.2).
+  disable_active_migration closes the handshake address alone (section 18.2). A PATH_CHALLENGE's packet carries the
+  local IDs owed (2026-11-24; NEW_CONNECTION_ID is probing, section 9.1): a peer answers a new path only with an ID
+  unused elsewhere (section 9.5) and ngtcp2 drops a challenge it has none for, while a client issues its IDs in the
+  send that carries its first challenge there, so those on the active path could be read after it.
 - **A client rebound on its way there** (2026-11-23). Until the server moved there, the client's paths to its
   preferred socket are its one move there: a new address that carries the ID a path there was sent to is that path
   rebound and shares its peer ID (section 9.5), as one with the active path's ID does anywhere. Before, it waited
@@ -4175,7 +4178,8 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
 - **Proof (preferred address).** `test_quic_congestion.cpp` `[preferred-address]`: the move (the client's
   PATH_RESPONSE lost, so the server sees the client there before its validation ends), a dropped first-socket
   datagram, an unreachable preferred socket, the manual moves and refusals, a pending move following the client to
-  a new socket, a move before reaching it as the first network goes, a rebinding on the way there (the shared ID)
+  a new socket, a move before reaching it as the first network goes, the IDs riding the challenge (a server that
+  reads nothing else after confirmation answers there), a rebinding on the way there (the shared ID)
   and a rebinding while the server cannot yet validate there (its first socket following), three hostile seeds both
   ways, and the
   configurations, families and forms. `test_quic_client.cpp`: a client host follows its server to the server
