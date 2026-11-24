@@ -69,7 +69,7 @@
 //               of records, each level's secrets turned into QuicPacketKey and QuicHeaderKey, the transport parameters
 //               carried both ways and an application protocol required.
 //   threads     a context is read-only after init() and serves sessions on any thread; a session is used by one
-//               thread at a time. Sessions copy what they need, so a context may be cleared while they live.
+//               thread at a time. Sessions hold what they read, so a context may be cleared while they live.
 //   allocation  contexts, credentials and sessions allocate inside the provider at init() and while records flow.
 
 #include <crd/containers/array.hpp>
@@ -438,13 +438,22 @@ struct TlsConfig
     PolicyScope        policy_scope = PolicyScope::Everywhere; // CeridServices for a Cerid service's sessions
 };
 
-// The settings a session copies from its context.
+// What a session narrows or changes of its context's settings, copied when it starts.
+struct TlsSessionSettings
+{
+    AlgorithmId signatures[kTlsMaxSignatures]{}; // the peer's; a session keeps those its policy snapshot allows
+    u32         signature_count = 0U;
+    TlsBinding  binding;                          // a QUIC handshake's is its version's
+    u8          early_context[kSha256Bytes] = {}; // a records server session's early data context's SHA-256
+};
+
+// The settings a context's sessions share. The provider context owns them, and a session holds the provider context
+// while it lives, so a context may be cleared or initialized again while its sessions live.
 struct TlsSettings
 {
-    TlsRole     role = TlsRole::Client;
-    AlgorithmId signatures[kTlsMaxSignatures]{};
-    u32         signature_count = 0U;
-    AlgorithmId groups[kTlsMaxGroups]{}; // as configured; a session keeps those its policy snapshot allows
+    TlsRole            role = TlsRole::Client;
+    TlsSessionSettings session; // what each session starts from (its early data context is none)
+    AlgorithmId groups[kTlsMaxGroups]{}; // as configured; a session offers those its policy snapshot allows
     u32         group_count = 0U;
     AlgorithmId aeads[kTlsMaxAeads]{};
     u32         aead_count = 0U;
@@ -459,18 +468,19 @@ struct TlsSettings
     u32         protocol_bytes = 0U;
     u64         key_update_records = 0U;
     u64         max_key_updates    = kTlsMaxKeyUpdates;
-    TlsBinding  binding;
     u8          ticket_keys[2][kTlsTicketKeyBytes] = {}; // a server's: the sealing key, then the previous one
     u8          ticket_names[2][16]                = {}; // the keys' public names, which lead their tickets
     u32         ticket_key_count                   = 0U;
     ReplayFilter* early_filter                     = nullptr; // a server's, when it accepts early data
-    u8          early_context[kSha256Bytes]        = {}; // a records server session's early data context's SHA-256
     bool        early_data                         = false;
     bool        ech_grease                         = false;
     TlsKeyLogSink key_log                          = nullptr;
     void*         key_log_user                     = nullptr;
     bool          key_log_exporters                = false;
 };
+
+// What a context without a provider context and a session without a connection read: the defaults.
+inline constexpr TlsSettings kTlsNoSettings{};
 
 namespace detail
 {
@@ -503,16 +513,16 @@ public:
     void                   clear() noexcept;
 
     [[nodiscard]] bool    ready() const noexcept { return m_context != nullptr; }
-    [[nodiscard]] TlsRole role() const noexcept { return m_settings.role; }
+    [[nodiscard]] TlsRole role() const noexcept { return m_settings->role; }
     // Whether it configures early data: a client's sessions offer it, a server's accept it and name an early data
     // context at init().
-    [[nodiscard]] bool early_data() const noexcept { return m_settings.early_data; }
+    [[nodiscard]] bool early_data() const noexcept { return m_settings->early_data; }
 
 private:
     friend struct TlsCallbacks;
 
-    ProviderTlsContext* m_context = nullptr;
-    TlsSettings         m_settings;
+    ProviderTlsContext* m_context  = nullptr;
+    const TlsSettings*  m_settings = &kTlsNoSettings; // m_context's
 };
 
 // An alert as the session saw it: `description` is its RFC 9846 code when `present`.
@@ -524,8 +534,8 @@ struct TlsAlert
 
 namespace detail
 {
-// What a stream session and a QUIC handshake share: the provider's connection, the settings copied from the context
-// and what the provider's callbacks learn about the handshake (tls.cpp's TlsCallbacks write it).
+// What a stream session and a QUIC handshake share: the provider's connection, the context's settings, what the session
+// narrows of them and what the provider's callbacks learn about the handshake (tls.cpp's TlsCallbacks write it).
 class TlsHandshakeState
 {
 public:
@@ -606,7 +616,8 @@ protected:
     ProviderTlsTicket*  m_held_ticket = nullptr; // a client's newest ticket that waits for remember_parameters()
     cont::Array<u8>     m_remembered;            // a client's: the server's parameters of the ticket it offered; over
                                                  // records, those its tickets carry once remember_parameters() ran
-    TlsSettings         m_settings;
+    const TlsSettings*  m_settings = &kTlsNoSettings; // the provider context's, which m_session holds
+    TlsSessionSettings  m_own;
     TlsState            m_state = TlsState::Idle;
     AlgorithmId         m_group{};
     AlgorithmId         m_aead{};
@@ -910,7 +921,6 @@ private:
     Secret          m_secrets[3][2]; // [Handshake, Application, Early][Client, Server]
     QuicLevel       m_alert_level = QuicLevel::Initial;
     QuicVersion     m_version     = QuicVersion::V1;
-    TlsBinding      m_context_binding; // the context's, which the QUIC binding of m_version derives from
     QuicHelloAnswer* m_hello_answer = nullptr;
 };
 } // namespace crd::crypto

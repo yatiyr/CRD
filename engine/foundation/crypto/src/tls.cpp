@@ -897,6 +897,25 @@ void free_compressed_certificates(void*, void* pointer, CRYPTO_EX_DATA*, int, lo
     OPENSSL_free(certificates);
 }
 
+// A context's settings live in its provider context's ex_data, as long as the provider context its sessions hold.
+void free_settings(void*, void* pointer, CRYPTO_EX_DATA*, int, long, void*) noexcept
+{
+    auto* settings = static_cast<TlsSettings*>(pointer);
+    if (settings == nullptr)
+    {
+        return;
+    }
+    zero_ticket_keys(*settings);
+    settings->~TlsSettings();
+    OPENSSL_free(settings);
+}
+
+int settings_slot() noexcept
+{
+    static const int kSlot = SSL_CTX_get_ex_new_index(0, nullptr, nullptr, nullptr, &free_settings);
+    return kSlot;
+}
+
 // The provider context's slot for its compressed Certificate, freed with the provider context.
 int context_slot() noexcept
 {
@@ -1023,9 +1042,9 @@ struct TlsCallbacks
                                                  ? certificate_key(sk_CRYPTO_BUFFER_value(chain, 0U))
                                                  : nullptr);
         const AlgorithmId algorithm = pkey ? provider_internal::signature_algorithm_of(pkey.get()) : AlgorithmId{};
-        const TlsSettings& settings = session.m_settings;
-        const AlgorithmId* accepted_end = settings.signatures + settings.signature_count;
-        if (algorithm == AlgorithmId{} || std::find(settings.signatures, accepted_end, algorithm) == accepted_end)
+        const TlsSessionSettings& own = session.m_own;
+        const AlgorithmId* accepted_end = own.signatures + own.signature_count;
+        if (algorithm == AlgorithmId{} || std::find(own.signatures, accepted_end, algorithm) == accepted_end)
         {
             return false;
         }
@@ -1038,8 +1057,9 @@ struct TlsCallbacks
         const KeyId  key      = key_id_of(bytes);
         // A loop, not std::find: MSVC's STL routes a trivially comparable 32-byte element to its vectorized find,
         // which static_asserts on the size under clang-cl.
-        const KeyId* pins_end = settings.pinned + settings.pin_count;
-        bool         pinned   = false;
+        const TlsSettings& settings = *session.m_settings;
+        const KeyId*       pins_end = settings.pinned + settings.pin_count;
+        bool               pinned   = false;
         for (const KeyId* pin = settings.pinned; pin != pins_end; ++pin)
         {
             if (*pin == key)
@@ -1071,7 +1091,7 @@ struct TlsCallbacks
         {
             // A server does not tell an unauthenticated client whether a key is pinned (the TLS 1.3 profile).
             return refuse(*session, out_alert,
-                          session->m_settings.role == TlsRole::Server ? kTlsAlertGeneralError : kBadCertificate);
+                          session->m_settings->role == TlsRole::Server ? kTlsAlertGeneralError : kBadCertificate);
         }
         return ssl_verify_ok;
     }
@@ -1097,7 +1117,7 @@ struct TlsCallbacks
             *out_alert = SSL_AD_INTERNAL_ERROR;
             return SSL_TLSEXT_ERR_ALERT_FATAL;
         }
-        const TlsSettings& settings = session->m_settings;
+        const TlsSettings& settings = *session->m_settings;
         if (settings.protocol_bytes != 0U && !session->m_protocol_offered)
         {
             session->m_refused = true;
@@ -1191,7 +1211,7 @@ struct TlsCallbacks
             record[6] = static_cast<u8>(parameter_bytes);
             std::copy(parameters, parameters + parameter_bytes, record + kTicketRecordHeader);
             std::copy(state, state + state_bytes, record + kTicketRecordHeader + parameter_bytes);
-            session.m_tickets->keep(session.m_settings.binding, cont::ConstSpan<u8>(record, size));
+            session.m_tickets->keep(session.m_own.binding, cont::ConstSpan<u8>(record, size));
             secure_zero(cont::Span<u8>(record, size));
             OPENSSL_free(record);
         }
@@ -1212,12 +1232,12 @@ struct TlsCallbacks
                            size_t in_len) noexcept
     {
         const detail::TlsHandshakeState* session = session_of(ssl);
-        if (session == nullptr || session->m_settings.ticket_key_count == 0U || max_out_len < kTicketOverhead ||
+        if (session == nullptr || session->m_settings->ticket_key_count == 0U || max_out_len < kTicketOverhead ||
             in_len > max_out_len - kTicketOverhead)
         {
             return 0;
         }
-        const TlsSettings&        settings = session->m_settings;
+        const TlsSettings&        settings = *session->m_settings;
         u8* const                 body     = out + kTicketHeaderBytes;
         const usize sealed = kTicketSealedHead + in_len;
         const cont::ConstSpan<u8> salt(out + kTicketNameBytes, kTicketSaltBytes);
@@ -1227,7 +1247,7 @@ struct TlsCallbacks
         {
             body[i] = static_cast<u8>(issued >> (56U - 8U * i));
         }
-        std::memcpy(body + kTicketIssuedBytes, settings.early_context, kTicketContextBytes);
+        std::memcpy(body + kTicketIssuedBytes, session->m_own.early_context, kTicketContextBytes);
         std::memcpy(out, settings.ticket_names[0], kTicketNameBytes);
         AeadKey key;
         u8      nonce[kAeadNonceBytes];
@@ -1256,7 +1276,7 @@ struct TlsCallbacks
         {
             return ssl_ticket_aead_error;
         }
-        const TlsSettings& settings = session->m_settings;
+        const TlsSettings& settings = *session->m_settings;
         if (in_len < kTicketOverhead || max_out_len < in_len - kTicketHeaderBytes)
         {
             return ssl_ticket_aead_ignore_ticket;
@@ -1303,7 +1323,7 @@ struct TlsCallbacks
         const usize state = sealed - kAeadTagBytes - kTicketSealedHead;
         std::memmove(out, out + kTicketSealedHead, state);
         *out_len = state;
-        if (settings.early_data && !constant_time_equal(context, settings.early_context))
+        if (settings.early_data && !constant_time_equal(context, session->m_own.early_context))
         {
             SSL_set_early_data_enabled(ssl, 0);
             return ssl_ticket_aead_success;
@@ -1387,11 +1407,11 @@ struct TlsCallbacks
     static void log_key(const SSL* ssl, const char* line) noexcept
     {
         const detail::TlsHandshakeState* session = session_of(ssl);
-        if (session == nullptr || session->m_settings.key_log == nullptr)
+        if (session == nullptr || session->m_settings->key_log == nullptr)
         {
             return;
         }
-        const TlsSettings&     settings = session->m_settings;
+        const TlsSettings&     settings = *session->m_settings;
         const cont::StringView text(line, std::strlen(line));
         if (!settings.key_log_exporters &&
             (text.starts_with("EXPORTER_SECRET ") || text.starts_with("EARLY_EXPORTER_SECRET ")))
@@ -1525,7 +1545,7 @@ struct TlsCallbacks
         {
             return SSL_TLSEXT_ERR_ALERT_FATAL;
         }
-        const TlsSettings&        settings = session->m_settings;
+        const TlsSettings&        settings = *session->m_settings;
         const cont::ConstSpan<u8> client(offered, offered_length);
         for (usize at = 0U; at < settings.protocol_bytes; at += 1U + settings.protocols[at])
         {
@@ -1555,7 +1575,7 @@ struct TlsCallbacks
         {
             return TlsError::NotReady;
         }
-        const TlsSettings& settings = context.m_settings;
+        const TlsSettings& settings = *context.m_settings;
         bool               current  = false;
         // A server that accepts early data names the context its tickets' 0-RTT depends on; nothing else names one.
         const bool early_server = settings.role == TlsRole::Server && settings.early_data;
@@ -1572,7 +1592,8 @@ struct TlsCallbacks
         {
             return TlsError::ProviderFailure;
         }
-        state.m_settings            = settings;
+        state.m_settings            = &settings;
+        state.m_own                 = settings.session;
         const EchContext*   ech     = ech_of(ssl.get());
         cont::ConstSpan<u8> configs = retry;
         if (configs.empty() && ech != nullptr)
@@ -1589,7 +1610,7 @@ struct TlsCallbacks
         {
             if (early_server && !quic)
             {
-                sha256(early_data_context, cont::Span<u8, kSha256Bytes>(state.m_settings.early_context, kSha256Bytes));
+                sha256(early_data_context, cont::Span<u8, kSha256Bytes>(state.m_own.early_context, kSha256Bytes));
             }
             SSL_set_accept_state(ssl.get());
             return TlsError::None;
@@ -1603,7 +1624,7 @@ struct TlsCallbacks
         {
             return TlsError::BadConfig;
         }
-        return SSL_set_tlsext_host_name(ssl.get(), state.m_settings.server_name) == 1 ? TlsError::None
+        return SSL_set_tlsext_host_name(ssl.get(), state.m_settings->server_name) == 1 ? TlsError::None
                                                                                       : TlsError::ProviderFailure;
     }
 
@@ -1615,7 +1636,8 @@ struct TlsCallbacks
     static TlsError restrict_to_policy(SSL* ssl, detail::TlsHandshakeState& state, const EchContext* ech,
                                        cont::ConstSpan<u8>& configs, cont::Span<u8> allowed) noexcept
     {
-        TlsSettings& settings = state.m_settings;
+        const TlsSettings&  settings = *state.m_settings;
+        TlsSessionSettings& own      = state.m_own;
         if (settings.policy == nullptr)
         {
             return TlsError::None;
@@ -1623,7 +1645,7 @@ struct TlsCallbacks
         const PolicySnapshot snapshot = settings.policy->snapshot();
         const u64            now      = unix_now();
         const PolicyScope    scope    = settings.policy_scope;
-        const bool           pinned   = settings.signature_count != 0U;
+        const bool           pinned   = own.signature_count != 0U;
         state.m_policy_generation     = snapshot.generation();
         state.m_base_policy_generation = snapshot.base_generation();
         if (settings.credential_algorithm != AlgorithmId{} &&
@@ -1631,10 +1653,15 @@ struct TlsCallbacks
         {
             return TlsError::PolicyRefused;
         }
-        settings.group_count     = keep_allowed(snapshot, now, scope, settings.groups, settings.group_count);
-        settings.aead_count      = keep_allowed(snapshot, now, scope, settings.aeads, settings.aead_count);
-        settings.signature_count = keep_allowed(snapshot, now, scope, settings.signatures, settings.signature_count);
-        if (settings.group_count == 0U || settings.aead_count == 0U || (pinned && settings.signature_count == 0U))
+        // The groups and AEADs go to the provider's connection; the verify callback reads the signatures.
+        AlgorithmId allowed_groups[kTlsMaxGroups];
+        AlgorithmId allowed_aeads[kTlsMaxAeads];
+        std::copy(settings.groups, settings.groups + settings.group_count, allowed_groups);
+        std::copy(settings.aeads, settings.aeads + settings.aead_count, allowed_aeads);
+        const u32 group_count = keep_allowed(snapshot, now, scope, allowed_groups, settings.group_count);
+        const u32 aead_count  = keep_allowed(snapshot, now, scope, allowed_aeads, settings.aead_count);
+        own.signature_count   = keep_allowed(snapshot, now, scope, own.signatures, own.signature_count);
+        if (group_count == 0U || aead_count == 0U || (pinned && own.signature_count == 0U))
         {
             return TlsError::PolicyRefused;
         }
@@ -1653,19 +1680,19 @@ struct TlsCallbacks
             configs = cont::ConstSpan<u8>(allowed.data(), length);
         }
         u16 groups[kTlsMaxGroups];
-        for (u32 i = 0U; i < settings.group_count; ++i)
+        for (u32 i = 0U; i < group_count; ++i)
         {
-            groups[i] = tls_group_codepoint(settings.groups[i]);
+            groups[i] = tls_group_codepoint(allowed_groups[i]);
         }
         u16 schemes[kTlsMaxSignatures];
-        for (u32 i = 0U; i < settings.signature_count; ++i)
+        for (u32 i = 0U; i < own.signature_count; ++i)
         {
-            schemes[i] = tls_signature_codepoint(settings.signatures[i]);
+            schemes[i] = tls_signature_codepoint(own.signatures[i]);
         }
         SuiteList suites;
-        if (!suite_list_of(settings.aeads, settings.aead_count, suites) ||
-            !SSL_set1_group_ids(ssl, groups, settings.group_count) || !SSL_set_ciphersuites(ssl, suites.text) ||
-            (pinned && !SSL_set_verify_algorithm_prefs(ssl, schemes, settings.signature_count)))
+        if (!suite_list_of(allowed_aeads, aead_count, suites) || !SSL_set1_group_ids(ssl, groups, group_count) ||
+            !SSL_set_ciphersuites(ssl, suites.text) ||
+            (pinned && !SSL_set_verify_algorithm_prefs(ssl, schemes, own.signature_count)))
         {
             return TlsError::ProviderFailure;
         }
@@ -1685,7 +1712,7 @@ struct TlsCallbacks
     // disabled, or, on a connection that already retried, refused.
     static bool ech_rejected(SSL* ssl, detail::TlsHandshakeState& state) noexcept
     {
-        if (state.m_settings.role != TlsRole::Client || !state.m_alert_sent.present ||
+        if (state.m_settings->role != TlsRole::Client || !state.m_alert_sent.present ||
             state.m_alert_sent.description != iana::kTlsAlertEchRequired)
         {
             return false;
@@ -1712,7 +1739,7 @@ struct TlsCallbacks
     {
         TicketRecord offered;
         if (state.m_tickets != nullptr &&
-            !offer_ticket(ssl, state.m_settings.binding, state.m_tickets->take(state.m_settings.binding), offered))
+            !offer_ticket(ssl, state.m_own.binding, state.m_tickets->take(state.m_own.binding), offered))
         {
             return false;
         }
@@ -1726,7 +1753,7 @@ struct TlsCallbacks
     // offer, its own ReplayFilter's refusal and the provider's reason.
     static void settle_early(SSL* ssl, detail::TlsHandshakeState& state) noexcept
     {
-        if (state.m_settings.role == TlsRole::Client)
+        if (state.m_settings->role == TlsRole::Client)
         {
             if (state.m_early == TlsEarlyData::Offered)
             {
@@ -1736,7 +1763,7 @@ struct TlsCallbacks
         }
         // A ticket of another early data context turned early data off for its handshake (open_ticket): the decision
         // is made, so the connection's own tickets follow the context again.
-        SSL_set_early_data_enabled(ssl, state.m_settings.early_data ? 1 : 0);
+        SSL_set_early_data_enabled(ssl, state.m_settings->early_data ? 1 : 0);
         if (!state.m_early_offered)
         {
             state.m_early = TlsEarlyData::None;
@@ -1787,14 +1814,14 @@ struct TlsCallbacks
         // A resumed handshake verified no certificate: the peer key is the one the ticket's handshake proved, which
         // the binding (the same pins) keeps pinned.
         state.m_resumed = SSL_session_reused(ssl) == 1;
-        if (state.m_resumed && state.m_settings.pin_count != 0U && !pinned_peer(ssl, state))
+        if (state.m_resumed && state.m_settings->pin_count != 0U && !pinned_peer(ssl, state))
         {
             return TlsError::PeerRefused;
         }
         const uint8_t* protocol = nullptr;
         unsigned       length   = 0U;
         SSL_get0_alpn_selected(ssl, &protocol, &length);
-        if (state.m_settings.protocol_bytes != 0U && length == 0U)
+        if (state.m_settings->protocol_bytes != 0U && length == 0U)
         {
             state.m_refused = true;
             (void)SSL_send_fatal_alert(ssl, kTlsAlertNoApplicationProtocol);
@@ -1823,7 +1850,7 @@ struct TlsCallbacks
         {
             return 0;
         }
-        const bool client = (handshake->m_settings.role == TlsRole::Client) == own;
+        const bool client = (handshake->m_settings->role == TlsRole::Client) == own;
         QuicLevel  quic   = QuicLevel::Initial;
         switch (level)
         {
@@ -2561,9 +2588,8 @@ TlsContext::~TlsContext() noexcept
 void TlsContext::clear() noexcept
 {
     SSL_CTX_free(ctx_of(m_context));
-    m_context = nullptr;
-    zero_ticket_keys(m_settings);
-    m_settings = TlsSettings{};
+    m_context  = nullptr;
+    m_settings = &kTlsNoSettings;
 }
 
 TlsError TlsContext::init(const TlsConfig& config) noexcept
@@ -2600,8 +2626,8 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
 
     TlsSettings settings;
     settings.role = config.role;
-    std::copy(config.signatures.begin(), config.signatures.end(), settings.signatures);
-    settings.signature_count = static_cast<u32>(config.signatures.size());
+    std::copy(config.signatures.begin(), config.signatures.end(), settings.session.signatures);
+    settings.session.signature_count = static_cast<u32>(config.signatures.size());
     std::copy(config.groups.begin(), config.groups.end(), settings.groups);
     settings.group_count = static_cast<u32>(config.groups.size());
     std::copy(config.aeads.begin(), config.aeads.end(), settings.aeads);
@@ -2621,7 +2647,8 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     settings.key_log           = config.key_log;
     settings.key_log_user      = config.key_log_user;
     settings.key_log_exporters = config.key_log_exporters;
-    settings.binding = binding_of(config, config.credential != nullptr ? config.credential->key_id() : KeyId{});
+    settings.session.binding =
+        binding_of(config, config.credential != nullptr ? config.credential->key_id() : KeyId{});
     if (!protocols_of(config.application_protocols, settings))
     {
         return TlsError::BadConfig;
@@ -2668,7 +2695,8 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     // timeout); a client reports each ticket to keep_ticket. The binding is the session ID context, which both ends
     // check before resuming.
     SSL_CTX_set_session_cache_mode(context.get(), server ? SSL_SESS_CACHE_NO_INTERNAL : SSL_SESS_CACHE_CLIENT);
-    if (!SSL_CTX_set_session_id_context(context.get(), settings.binding.bytes, sizeof(settings.binding.bytes)))
+    const TlsBinding& binding = settings.session.binding;
+    if (!SSL_CTX_set_session_id_context(context.get(), binding.bytes, sizeof(binding.bytes)))
     {
         return TlsError::ProviderFailure;
     }
@@ -2821,8 +2849,16 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     {
         return TlsError::ProviderFailure;
     }
+    // The ex_data slot owns the shared settings from here on: the provider context frees them, however init() ends.
+    void* storage = OPENSSL_malloc(sizeof(TlsSettings));
+    auto* shared  = storage != nullptr ? new (storage) TlsSettings(settings) : nullptr;
+    if (shared == nullptr || !SSL_CTX_set_ex_data(context.get(), settings_slot(), shared))
+    {
+        free_settings(nullptr, shared, nullptr, 0, 0, nullptr);
+        return TlsError::ProviderFailure;
+    }
     m_context  = reinterpret_cast<ProviderTlsContext*>(context.release());
-    m_settings = settings;
+    m_settings = shared;
     return TlsError::None;
 }
 
@@ -2838,8 +2874,8 @@ void detail::TlsHandshakeState::release() noexcept
     m_held_ticket = nullptr;
     m_held_ticket_early = 0U;
     m_remembered.clear();
-    zero_ticket_keys(m_settings);
-    m_settings                = TlsSettings{};
+    m_settings                = &kTlsNoSettings;
+    m_own                     = TlsSessionSettings{};
     m_state                   = TlsState::Idle;
     m_group                   = AlgorithmId{};
     m_aead                    = AlgorithmId{};
@@ -2882,17 +2918,17 @@ TlsError detail::TlsHandshakeState::check_policy() const noexcept
     {
         return TlsError::NotReady;
     }
-    if (m_settings.policy == nullptr)
+    if (m_settings->policy == nullptr)
     {
         return TlsError::None;
     }
-    const PolicySnapshot snapshot  = m_settings.policy->snapshot();
+    const PolicySnapshot snapshot  = m_settings->policy->snapshot();
     const u64            now       = unix_now();
-    const AlgorithmId    running[] = {m_group, m_aead, m_peer_algorithm, m_settings.credential_algorithm};
+    const AlgorithmId    running[] = {m_group, m_aead, m_peer_algorithm, m_settings->credential_algorithm};
     for (const AlgorithmId algorithm : running)
     {
         if (algorithm != AlgorithmId{} &&
-            snapshot.status(algorithm, now, m_settings.policy_scope) == AlgorithmStatus::Refused)
+            snapshot.status(algorithm, now, m_settings->policy_scope) == AlgorithmStatus::Refused)
         {
             return TlsError::PolicyRefused;
         }
@@ -2989,7 +3025,7 @@ TlsError TlsSession::init(const TlsContext& context, TlsTicketStore* tickets, co
     std::copy(parameters.begin(), parameters.end(), m_remembered.data());
     m_session = reinterpret_cast<ProviderTlsSession*>(ssl.release());
     m_state   = TlsState::Handshaking;
-    if (m_settings.role == TlsRole::Server)
+    if (m_settings->role == TlsRole::Server)
     {
         return TlsError::None;
     }
@@ -3005,7 +3041,7 @@ TlsError TlsSession::advance() noexcept
 {
     SSL*      ssl    = ssl_of(m_session);
     const int result = SSL_do_handshake(ssl);
-    if (m_settings.role == TlsRole::Server)
+    if (m_settings->role == TlsRole::Server)
     {
         TlsCallbacks::settle_early(ssl, *this);
     }
@@ -3018,7 +3054,7 @@ TlsError TlsSession::advance() noexcept
         // A client sent its ClientHello with early data allowed (send_early until its server answers); a server took
         // its client's early data, after the checks of a finished handshake (its pins hold before a byte reaches the
         // caller), and the handshake goes on through read_early().
-        if (m_settings.role == TlsRole::Client)
+        if (m_settings->role == TlsRole::Client)
         {
             m_early = TlsEarlyData::Offered;
             return TlsError::None;
@@ -3059,11 +3095,11 @@ TlsError TlsSession::established() noexcept
     }
     TlsCallbacks::settle_early(ssl, *this);
     const u64 limit = tls_key_usage_limit(m_aead);
-    const u64 configured = m_settings.key_update_records;
+    const u64 configured = m_settings->key_update_records;
     m_key_update_records = configured != 0U && configured < limit ? configured : limit;
     m_state = TlsState::Established;
     // A server's ticket waits in the provider until the server writes: it goes out with the handshake instead.
-    if (m_settings.role == TlsRole::Server)
+    if (m_settings->role == TlsRole::Server)
     {
         flush();
     }
@@ -3093,7 +3129,7 @@ TlsError TlsSession::receive(cont::ConstSpan<u8> bytes) noexcept
     }
     // A server reading its client's early data goes on through read_early(): the provider's handshake returns at once
     // while early bytes wait.
-    const bool early_reading = m_settings.role == TlsRole::Server && m_early == TlsEarlyData::Accepted;
+    const bool early_reading = m_settings->role == TlsRole::Server && m_early == TlsEarlyData::Accepted;
     if (m_state == TlsState::Handshaking && !early_reading)
     {
         return advance();
@@ -3169,7 +3205,7 @@ TlsError TlsSession::send(cont::ConstSpan<u8> plaintext) noexcept
         return TlsError::Full;
     }
     ErrorScope errors;
-    if (updates != 0U && m_updates_sent + updates >= m_settings.max_key_updates)
+    if (updates != 0U && m_updates_sent + updates >= m_settings->max_key_updates)
     {
         return close_at_bound();
     }
@@ -3199,7 +3235,7 @@ TlsError TlsSession::send(cont::ConstSpan<u8> plaintext) noexcept
 
 TlsError TlsSession::send_early(cont::ConstSpan<u8> plaintext) noexcept
 {
-    if (m_settings.role != TlsRole::Client || m_state != TlsState::Handshaking || m_early != TlsEarlyData::Offered)
+    if (m_settings->role != TlsRole::Client || m_state != TlsState::Handshaking || m_early != TlsEarlyData::Offered)
     {
         return TlsError::NotReady;
     }
@@ -3225,13 +3261,13 @@ TlsError TlsSession::send_early(cont::ConstSpan<u8> plaintext) noexcept
 
 u32 TlsSession::early_data_room() const noexcept
 {
-    return m_settings.role == TlsRole::Client && m_early == TlsEarlyData::Offered ? m_early_allowance - m_early_sent
+    return m_settings->role == TlsRole::Client && m_early == TlsEarlyData::Offered ? m_early_allowance - m_early_sent
                                                                                   : 0U;
 }
 
 TlsError TlsSession::send_half_rtt(cont::ConstSpan<u8> plaintext) noexcept
 {
-    if (m_settings.role != TlsRole::Server || m_state != TlsState::Handshaking ||
+    if (m_settings->role != TlsRole::Server || m_state != TlsState::Handshaking ||
         SSL_in_early_data(ssl_of(m_session)) == 0)
     {
         return TlsError::NotReady;
@@ -3264,7 +3300,7 @@ cont::ConstSpan<u8> TlsSession::remembered_parameters() const noexcept
 
 void TlsSession::hold_tickets() noexcept
 {
-    m_hold_tickets = m_settings.role == TlsRole::Client && m_tickets != nullptr;
+    m_hold_tickets = m_settings->role == TlsRole::Client && m_tickets != nullptr;
 }
 
 void TlsSession::remember_parameters(cont::ConstSpan<u8> parameters) noexcept
@@ -3282,7 +3318,7 @@ void TlsSession::remember_parameters(cont::ConstSpan<u8> parameters) noexcept
 TlsError TlsSession::read_early(cont::Span<u8> out, usize& written) noexcept
 {
     written = 0U;
-    if (m_settings.role != TlsRole::Server || m_early != TlsEarlyData::Accepted)
+    if (m_settings->role != TlsRole::Server || m_early != TlsEarlyData::Accepted)
     {
         return TlsError::NotReady;
     }
@@ -3351,7 +3387,7 @@ bool TlsSession::flush_key_update() noexcept
 
 TlsError TlsSession::rekey(bool request_peer) noexcept
 {
-    if (m_updates_sent + 1U >= m_settings.max_key_updates)
+    if (m_updates_sent + 1U >= m_settings->max_key_updates)
     {
         return close_at_bound();
     }
@@ -3451,7 +3487,7 @@ TlsError TlsSession::read(cont::Span<u8> out, usize& written) noexcept
         m_state = TlsState::Closed;
         return TlsError::Closed;
     }
-    if (m_updates_sent >= m_settings.max_key_updates)
+    if (m_updates_sent >= m_settings->max_key_updates)
     {
         const TlsError closed = close_at_bound();
         return written != 0U && closed == TlsError::Closed ? TlsError::None : closed;
@@ -3498,12 +3534,12 @@ TlsError QuicHandshake::set_version(QuicVersion version) noexcept
     // provider's configuration, which holds the session ID context, is gone once it ended.
     if (m_session != nullptr && version != m_version && m_state == TlsState::Handshaking)
     {
-        const TlsBinding binding = quic_binding_of(m_context_binding, version);
+        const TlsBinding binding = quic_binding_of(m_settings->session.binding, version);
         if (!SSL_set_session_id_context(ssl_of(m_session), binding.bytes, sizeof(binding.bytes)))
         {
             return TlsError::ProviderFailure;
         }
-        m_settings.binding = binding;
+        m_own.binding = binding;
     }
     m_version = version;
     return TlsError::None;
@@ -3566,13 +3602,12 @@ TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> tran
     }
     // Tickets and the session ID context under the QUIC binding; the provider takes the quic_transport_parameters
     // extension's standard codepoint (57), never the drafts' 0xffa5.
-    m_context_binding  = m_settings.binding;
-    m_settings.binding = quic_binding_of(m_context_binding, m_version);
+    m_own.binding = quic_binding_of(m_settings->session.binding, m_version);
     m_quic             = true;
     cont::ConstSpan<u8> remembered;
     if (!SSL_set_quic_method(ssl.get(), &kQuicMethod) ||
         !SSL_set_quic_transport_params(ssl.get(), transport_parameters.data(), transport_parameters.size()) ||
-        !SSL_set_session_id_context(ssl.get(), m_settings.binding.bytes, sizeof(m_settings.binding.bytes)) ||
+        !SSL_set_session_id_context(ssl.get(), m_own.binding.bytes, sizeof(m_own.binding.bytes)) ||
         (!early_data_context.empty() &&
          !SSL_set_quic_early_data_context(ssl.get(), early_data_context.data(), early_data_context.size())) ||
         !TlsCallbacks::offer(ssl.get(), *this, remembered))
@@ -3592,7 +3627,7 @@ TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> tran
     }
     m_session = reinterpret_cast<ProviderTlsSession*>(ssl.release());
     m_state   = TlsState::Handshaking;
-    if (m_settings.role == TlsRole::Server)
+    if (m_settings->role == TlsRole::Server)
     {
         return TlsError::None;
     }
@@ -3608,7 +3643,7 @@ TlsError QuicHandshake::advance() noexcept
 {
     SSL*      ssl    = ssl_of(m_session);
     const int result = SSL_do_handshake(ssl);
-    if (m_settings.role == TlsRole::Server)
+    if (m_settings->role == TlsRole::Server)
     {
         TlsCallbacks::settle_early(ssl, *this);
     }
@@ -3617,7 +3652,7 @@ TlsError QuicHandshake::advance() noexcept
         // Early data: a client sent its ClientHello with its 0-RTT keys ready; a server accepted its client's early
         // data after the checks of a finished handshake. Either way the handshake goes on.
         const bool early = SSL_in_early_data(ssl) == 1;
-        if (early && m_settings.role == TlsRole::Client)
+        if (early && m_settings->role == TlsRole::Client)
         {
             m_early = TlsEarlyData::Offered;
             return TlsError::None;

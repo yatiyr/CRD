@@ -2874,6 +2874,48 @@ TEST_CASE("TLS: credentials carry their key in a self-signed certificate that ou
     CHECK(first.key_id() == KeyId{});
 }
 
+TEST_CASE("TLS: a session keeps its context's settings while the context is initialized again and cleared",
+          "[crypto][tls][net-2]")
+{
+    // The sessions hold the provider context and the settings it owns: the server's live session seals its ticket
+    // under the key it started with after its context took another key and both contexts were cleared.
+    u8 first_key[kTlsTicketKeyBytes];
+    u8 second_key[kTlsTicketKeyBytes];
+    fill_key(first_key, 0x21U);
+    fill_key(second_key, 0x22U);
+    Store    store;
+    Endpoint client;
+    Endpoint server;
+    Options  options;
+    options.client_tickets = &store;
+    options.ticket_key     = first_key;
+    setup(client, server, options);
+    TlsConfig rotated;
+    rotated.role        = TlsRole::Server;
+    rotated.groups      = kAllGroups;
+    rotated.aeads       = kAllAeads;
+    rotated.credential  = &server.credential;
+    rotated.server_name = kServerName;
+    rotated.ticket_key  = second_key;
+    REQUIRE(server.context.init(rotated) == TlsError::None);
+    server.context.clear();
+    client.context.clear();
+    CHECK(server.context.role() == TlsRole::Client); // a cleared context reads the defaults
+    CHECK_FALSE(server.context.early_data());
+    establish(client, server);
+    CHECK(client.session.peer_key() == server.credential.key_id());
+    read_tickets(client.session);
+    REQUIRE(store.size() == 1U);
+
+    // A server under the first key resumes that ticket.
+    Endpoint again_client;
+    Endpoint again_server;
+    setup(again_client, again_server, options);
+    establish(again_client, again_server);
+    CHECK(again_client.session.resumed());
+    CHECK(again_server.session.resumed());
+}
+
 TEST_CASE("TLS: one server context serves sessions on several threads", "[crypto][tls][net-2]")
 {
     Endpoint server;
