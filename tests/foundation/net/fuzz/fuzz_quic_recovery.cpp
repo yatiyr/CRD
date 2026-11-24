@@ -44,6 +44,7 @@
 // path MTU and pacer too; the window stays above its floor and the datagram size is the search's after every operation.
 #include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
+#include <crd/memory/allocator.hpp>
 #include <crd/net/quic_path_control.hpp>
 #include <crd/net/quic_recovery.hpp>
 
@@ -225,6 +226,12 @@ struct World
         log.recovery = &recovery;
         log.controls = controls;
         log.now = &now;
+        for (QuicPathControl& control : controls)
+        {
+            // Each slot's storage, as a connection reserves it at construction: a slot that reopens allocates nothing.
+            CRD_FUZZ_REQUIRE(
+                control.reserve(*crd::memory::default_allocator(), CongestionPolicy{}, HandoverLearning{}));
+        }
         CRD_FUZZ_REQUIRE(controls[0].start(QuicPathControlConfig{}, QuicPath{}, 1U));
         for (usize& via : last_via)
         {

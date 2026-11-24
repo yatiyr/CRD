@@ -15,13 +15,15 @@
 //
 //   paths       built for a validated path (its 4-tuple, path()); a move to another address starts it over and the
 //               schedule, which was the old link's, ends, while a new port alone keeps it (RFC 9000 section 9.4).
-//   ownership   the controller is built in the control's own storage and reads its sampler, so a control is never
-//               copied or moved; slot 0's lives in the connection, the others are allocated with their slot.
-//   allocation  none.
+//   ownership   the controller is built in the control's storage and reads its sampler, so a control is never copied
+//               or moved; slot 0's lives in the connection, the others are allocated with their slot.
+//   allocation  reserve() takes what is built, sized to it: the controller's storage (congestion_bytes(), so a CUBIC
+//               or BBR path holds about a quarter of the slot GCC needs) and a learner only for a path that learns,
+//               kept until the control ends. start() and restart() allocate nothing; set_congestion() to a larger
+//               controller and set_handover_learning() on a control without a learner take storage themselves.
 //   threads     a connection's, on its loop's thread.
 //   time        the caller's clock, in nanoseconds.
 
-#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/net/congestion.hpp>
 #include <crd/net/delivery_rate.hpp>
@@ -31,6 +33,16 @@
 #include <crd/net/quic_path.hpp>
 #include <crd/net/quic_pmtu.hpp>
 #include <crd/net/quic_recovery.hpp>
+
+namespace crd::hesap::net
+{
+class HandoverPhaseLearner;
+} // namespace crd::hesap::net
+
+namespace crd::memory
+{
+class IAllocator;
+} // namespace crd::memory
 
 namespace crd::net
 {
@@ -55,11 +67,6 @@ struct QuicPathSignals
     bool ecn_signal = false;    // a rise of the peer's CE counts taken as congestion
 };
 
-// (MSVC C4324: the controller's storage is 16-byte aligned, so the members before it are padded.)
-#if CRD_COMPILER_MSVC
-#pragma warning(push)
-#pragma warning(disable : 4324)
-#endif
 static_assert(kCongestionCouplingMembers >= kQuicMaxPaths, "a coupling holds one controller of every path slot");
 
 class QuicPathControl
@@ -72,8 +79,23 @@ public:
     QuicPathControl(QuicPathControl&&) = delete;
     QuicPathControl& operator=(QuicPathControl&&) = delete;
 
+    // Makes start() with `policy` and `learning`, and set_congestion() with `policy`, allocate nothing: takes the
+    // controller's storage when the control holds less than congestion_bytes(policy) (a started control's new
+    // storage waits beside its controller for set_congestion(), or unreserve()), and a learner when `learning` learns
+    // and the control holds none. False on a refusal (what it took before that stays) or a policy
+    // congestion_policy_valid() refuses. Every call names the allocator of the first.
+    [[nodiscard]] bool reserve(memory::IAllocator& allocator, const CongestionPolicy& policy,
+                               const HandoverLearning& learning) noexcept;
+    // Gives back storage reserve() took for a started control that no set_congestion() used.
+    void unreserve() noexcept;
+    // The blocks the control has taken from its allocator.
+    [[nodiscard]] u32 allocations() const noexcept { return m_allocations; }
+    // The bytes it holds: its controller's storage, any waiting for set_congestion() and its learner.
+    [[nodiscard]] usize held_bytes() const noexcept;
+
     // Builds the path's state for `path` from `config`, discarding any it held: false, building nothing, for a
-    // policy or a size make_congestion() refuses. `entropy` seeds the controller's randomised probing. A coupled
+    // policy or a size make_congestion() refuses, or storage reserve() did not take for `config`. `entropy` seeds the
+    // controller's randomised probing. A coupled
     // policy's controllers join `coupling` when given: the connection's, which outlives the control and which at most
     // kQuicMaxPaths controls share, so a join never finds it full.
     [[nodiscard]] bool start(const QuicPathControlConfig& config, const QuicPath& path, u64 entropy,
@@ -101,14 +123,16 @@ public:
     [[nodiscard]] u32 datagram_bytes() const noexcept { return m_datagram_bytes; }
 
     // Replaces the policy live: the new controller starts from the current window, slow start threshold and recovery
-    // period, and ECN validation takes its codepoint. False, changing nothing, for one congestion_policy_valid()
-    // refuses.
+    // period, and ECN validation takes its codepoint. A larger controller takes new storage (reserve()'s when it
+    // waits) and the old storage goes back. False, changing nothing, for one congestion_policy_valid() refuses or
+    // storage the allocator refused.
     [[nodiscard]] bool set_congestion(const CongestionPolicy& policy, u64 entropy) noexcept;
     // The peer's max_udp_payload_size, capped: the search's ceiling, kept across a move.
     void limit(u32 ceiling) noexcept;
 
     // The schedule in force, authored or learned; set_handover() ends learning and set_handover_learning() clears
-    // the schedule. False, changing nothing, for one handover_schedule_valid() or handover_learning_valid() refuses.
+    // the schedule, taking a learner the first time one learns. False, changing nothing, for one
+    // handover_schedule_valid() or handover_learning_valid() refuses, or a learner the allocator refused.
     [[nodiscard]] bool set_handover(const HandoverSchedule& schedule) noexcept;
     [[nodiscard]] bool set_handover_learning(const HandoverLearning& learning) noexcept;
     [[nodiscard]] const HandoverSchedule& handover() const noexcept { return m_handover; }
@@ -166,12 +190,9 @@ public:
     void end_detection(const QuicLoss& lost, u64 now_ns) noexcept;
 
 private:
-    // crd-hesap-net's handover phase learner (handover_phase.hpp), which no public header of crd-net includes.
-    struct LearnerSlot
-    {
-        alignas(8) u8 bytes[1488U];
-    };
-
+    // Storage of `bytes` for a controller: null on a refusal.
+    [[nodiscard]] u8* take_storage(usize bytes) noexcept;
+    void free_storage(u8*& storage, usize& bytes) noexcept;
     [[nodiscard]] Ecn codepoint() const noexcept;
     void build(u64 entropy) noexcept;
     void follow_ecn() noexcept;
@@ -181,8 +202,13 @@ private:
 
     QuicPathControlConfig m_config;
     QuicPath m_path;
-    CongestionController* m_controller = nullptr; // built in m_controller_slot
-    CongestionSlot m_controller_slot;
+    memory::IAllocator* m_allocator = nullptr;    // reserve()'s
+    CongestionController* m_controller = nullptr; // built in m_storage
+    u8* m_storage = nullptr;
+    usize m_storage_bytes = 0U;
+    u8* m_spare = nullptr; // reserve()'s for a started control, until set_congestion() or unreserve()
+    usize m_spare_bytes = 0U;
+    u32 m_allocations = 0U;
     CongestionCoupling* m_coupling = nullptr;
     DeliveryRateSampler m_delivery; // every controller's delivery rate samples, stamped on each packet in flight
     Pacer m_pacer;
@@ -195,10 +221,7 @@ private:
     bool m_ecn_unavailable = false; // the controller heard that the path carries no ECN
     HandoverSchedule m_handover;
     HandoverLearning m_learning;
-    LearnerSlot m_learner;
+    hesap::net::HandoverPhaseLearner* m_learner = nullptr; // crd-hesap-net's (handover_phase.hpp); kept once taken
     u32 m_learner_revision = 0U; // the learner's estimate in force
 };
-#if CRD_COMPILER_MSVC
-#pragma warning(pop)
-#endif
 } // namespace crd::net

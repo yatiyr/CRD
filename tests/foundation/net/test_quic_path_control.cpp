@@ -3,8 +3,11 @@
 // signal, a spurious loss's data was delivered), the trains its pacer counts and a train probe's loss that reduces
 // nothing, a burst bounded by half the flight that last ran out of data, ECN validation and CE, the PMTU search's
 // size reaching the controller, persistent congestion, a rebinding that keeps the state and a restart, a live policy
-// swap, the handover schedule and learning, the pacer's timer, a Retry's reset, and two paths' controls never
-// touching each other.
+// swap, the handover schedule and learning, the pacer's timer, a Retry's reset, two paths' controls never touching
+// each other, and the storage reserve() takes: sized to the controller built, a learner only for a path that learns,
+// a larger controller's swap and every refusal changing nothing.
+
+#include "ingress_fixture.hpp"
 
 #include <crd/net/quic_path_control.hpp>
 
@@ -16,6 +19,7 @@ using crd::u32;
 using crd::u64;
 using crd::u8;
 using namespace crd::net;
+using crd::net::testing::CountingAllocator;
 
 constexpr u64 kMs = 1000000U;
 constexpr u64 kSecond = 1000U * kMs;
@@ -75,6 +79,14 @@ QuicAckOutcome outcome_of(u64 ect0, u64 newest_sent_ns)
     return outcome;
 }
 
+// Reserves `config`'s storage on `control` from the default allocator, then starts it, as the connection does.
+bool begin(QuicPathControl& control, const QuicPathControlConfig& config, const QuicPath& path, u64 entropy,
+           CongestionCoupling* coupling = nullptr)
+{
+    return control.reserve(*crd::memory::default_allocator(), config.congestion, config.handover_learning) &&
+           control.start(config, path, entropy, coupling);
+}
+
 // Sends `packet` on `control` as the connection does: stamped, then counted in flight.
 void send(QuicPathControl& control, QuicSentPacket& sent, u64 in_flight, u64 now_ns)
 {
@@ -89,8 +101,8 @@ struct Two
 
     explicit Two(const QuicPathControlConfig& config = QuicPathControlConfig{})
     {
-        REQUIRE(a.start(config, path_v4(1), 1U));
-        REQUIRE(b.start(config, path_v4(2), 2U));
+        REQUIRE(begin(a, config, path_v4(1), 1U));
+        REQUIRE(begin(b, config, path_v4(2), 2U));
     }
 };
 } // namespace
@@ -101,21 +113,21 @@ TEST_CASE("A path control starts from its configuration and refuses what it cann
     CHECK_FALSE(control.started());
     QuicPathControlConfig invalid;
     invalid.congestion.minimum_packets = 0U;
-    CHECK_FALSE(control.start(invalid, path_v4(1), 1U));
+    CHECK_FALSE(begin(control, invalid, path_v4(1), 1U));
     QuicPathControlConfig small;
     small.base_datagram_bytes = 1100U;
-    CHECK_FALSE(control.start(small, path_v4(1), 1U));
+    CHECK_FALSE(begin(control, small, path_v4(1), 1U));
     QuicPathControlConfig inverted;
     inverted.base_datagram_bytes = 1400U;
     inverted.max_datagram_bytes = 1300U;
-    CHECK_FALSE(control.start(inverted, path_v4(1), 1U));
+    CHECK_FALSE(begin(control, inverted, path_v4(1), 1U));
     CHECK_FALSE(control.started());
 
     QuicPathControlConfig config;
     config.congestion.algorithm = CongestionAlgorithm::Prague;
     config.base_datagram_bytes = kQuicIpv6BaseDatagram;
     config.handover = HandoverSchedule{15U * kSecond, 12U * kSecond, 100U * kMs, 100U * kMs};
-    REQUIRE(control.start(config, path_v4(1), 1U));
+    REQUIRE(begin(control, config, path_v4(1), 1U));
     CHECK(control.started());
     CHECK(control.path() == path_v4(1));
     CHECK(control.datagram_bytes() == kQuicPmtuFloor); // the base is confirmed by a probe first (RFC 8899)
@@ -130,7 +142,7 @@ TEST_CASE("A path control starts from its configuration and refuses what it cann
     // Started again: the old state goes, the new configuration's comes.
     QuicPathControlConfig plain;
     plain.ecn = false;
-    REQUIRE(control.start(plain, path_v4(3), 1U));
+    REQUIRE(begin(control, plain, path_v4(3), 1U));
     CHECK(control.congestion().algorithm() == CongestionAlgorithm::Cubic);
     CHECK(control.marking(0U, 300U * kMs) == Ecn::NotEct);
     CHECK(control.ecn().state() == QuicEcnState::Off);
@@ -148,11 +160,11 @@ TEST_CASE("A path control's coupled controller is its coupling's member through 
     {
         QuicPathControl first;
         QuicPathControl second;
-        REQUIRE(first.start(config, path_v4(1), 1U, &coupling));
+        REQUIRE(begin(first, config, path_v4(1), 1U, &coupling));
         CHECK(coupling.members() == 1U);
-        REQUIRE(second.start(config, path_v4(2), 2U, &coupling));
+        REQUIRE(begin(second, config, path_v4(2), 2U, &coupling));
         CHECK(coupling.members() == 2U);
-        REQUIRE(first.start(config, path_v4(1), 3U, &coupling)); // started again: the old controller left
+        REQUIRE(begin(first, config, path_v4(1), 3U, &coupling)); // started again: the old controller left
         CHECK(coupling.members() == 2U);
 
         CongestionPolicy cubic;
@@ -166,7 +178,7 @@ TEST_CASE("A path control's coupled controller is its coupling's member through 
         CHECK(coupling.members() == 2U);
 
         QuicPathControl alone; // no coupling: the same policy builds a lone controller
-        REQUIRE(alone.start(config, path_v4(3), 7U));
+        REQUIRE(begin(alone, config, path_v4(3), 7U));
         CHECK(coupling.members() == 2U);
     }
     CHECK(coupling.members() == 0U); // each control's destruction took its controller out
@@ -237,7 +249,7 @@ TEST_CASE("A path's trains are what leaves at one instant, and a train probe's l
           "[path_control][net-path]")
 {
     QuicPathControl control;
-    REQUIRE(control.start(QuicPathControlConfig{}, path_v4(1), 1U));
+    REQUIRE(begin(control, QuicPathControlConfig{}, path_v4(1), 1U));
     const u64 initial = control.congestion().window();
     REQUIRE(initial == 12000U);
     // Eleven datagrams in one turn record 0, 1200, ... 12000 bytes before them, as QuicConnection records them; a
@@ -275,7 +287,7 @@ TEST_CASE("A path's burst past the initial window is at most half the flight tha
     config.congestion.algorithm = CongestionAlgorithm::Prague; // its burst is 250 us of its rate from the first RTT
     config.ecn = false;
     QuicPathControl control;
-    REQUIRE(control.start(config, path_v4(1), 1U));
+    REQUIRE(begin(control, config, path_v4(1), 1U));
     const u64 initial = control.congestion().window();
     const QuicRtt rtt = rtt_of(50000U);
     // Sent as send() does, at this RTT.
@@ -355,7 +367,7 @@ TEST_CASE("A path's burst past the initial window is at most half the flight tha
     CHECK(control.burst(rtt) == control.congestion().burst(rtt));
     QuicPathControlConfig seven = config;
     seven.congestion.version = 7U;
-    REQUIRE(control.start(seven, path_v4(3), 3U)); // and so does a path started under one
+    REQUIRE(begin(control, seven, path_v4(3), 3U)); // and so does a path started under one
     QuicSentPacket old = packet(0U, 50U * kMs);
     go(old, 0U, 50U * kMs);
     sample(50U * kMs + 50000U);
@@ -440,7 +452,7 @@ TEST_CASE("A rebinding keeps a path's state and a restart starts every part over
     QuicPathControlConfig config;
     config.handover = HandoverSchedule{15U * kSecond, 12U * kSecond, 100U * kMs, 100U * kMs};
     QuicPathControl control;
-    REQUIRE(control.start(config, path_v4(1), 1U));
+    REQUIRE(begin(control, config, path_v4(1), 1U));
     const u64 initial = control.congestion().window();
     QuicSentPacket sent = packet(0U, 10U * kMs);
     send(control, sent, 0U, 10U * kMs);
@@ -468,7 +480,7 @@ TEST_CASE("A rebinding keeps a path's state and a restart starts every part over
 TEST_CASE("A path's policy swaps live and its ECN codepoint follows", "[path_control]")
 {
     QuicPathControl control;
-    REQUIRE(control.start(QuicPathControlConfig{}, path_v4(1), 1U));
+    REQUIRE(begin(control, QuicPathControlConfig{}, path_v4(1), 1U));
     QuicSentPacket sent = packet(0U, 10U * kMs);
     send(control, sent, 0U, 10U * kMs);
     static_cast<void>(control.on_lost(QuicSpace::Application, sent, 100U * kMs));
@@ -493,7 +505,7 @@ TEST_CASE("A path's policy swaps live and its ECN codepoint follows", "[path_con
 TEST_CASE("A path's handover schedule and learning exclude each other", "[path_control]")
 {
     QuicPathControl control;
-    REQUIRE(control.start(QuicPathControlConfig{}, path_v4(1), 1U));
+    REQUIRE(begin(control, QuicPathControlConfig{}, path_v4(1), 1U));
     CHECK_FALSE(control.set_handover(HandoverSchedule{kHandoverMinPeriodNs / 2U, 0U, 0U, 0U}));
     CHECK_FALSE(control.set_handover_learning(HandoverLearning{15U * kSecond, 15U * kSecond, 0U}));
     const HandoverSchedule schedule{15U * kSecond, 12U * kSecond, 100U * kMs, 100U * kMs};
@@ -512,7 +524,7 @@ TEST_CASE("A path's handover schedule and learning exclude each other", "[path_c
 TEST_CASE("A path's pacer timer keeps the earliest release, and an uncounted packet leaves the pacer", "[path_control]")
 {
     QuicPathControl control;
-    REQUIRE(control.start(QuicPathControlConfig{}, path_v4(1), 1U));
+    REQUIRE(begin(control, QuicPathControlConfig{}, path_v4(1), 1U));
     control.arm_pace(300U);
     control.arm_pace(500U);
     CHECK(control.pace_timer_ns() == 300U);
@@ -537,4 +549,84 @@ TEST_CASE("A path's pacer timer keeps the earliest release, and an uncounted pac
         in_flight += sent.bytes;
     }
     CHECK(control.release_ns(now, rtt) > now); // the burst spent, the pacer holds the next
+}
+
+TEST_CASE("A path's storage is the controller it builds, a learner only while one is asked for, and every refusal "
+          "changes nothing", "[path_control][memory]")
+{
+    CountingAllocator allocator;
+    const QuicPathControlConfig config; // CUBIC, no learning
+    {
+        QuicPathControl control;
+        CHECK_FALSE(control.start(config, path_v4(1), 1U)); // nothing reserved: start() never allocates
+        CongestionPolicy invalid;
+        invalid.minimum_packets = 0U;
+        CHECK_FALSE(control.reserve(allocator, invalid, HandoverLearning{}));
+        CHECK(allocator.calls() == 0U);
+        allocator.refuse_after(0U);
+        CHECK_FALSE(control.reserve(allocator, config.congestion, HandoverLearning{}));
+        allocator.refuse_after(~crd::usize{0});
+        REQUIRE(control.reserve(allocator, config.congestion, HandoverLearning{}));
+        CHECK(control.held_bytes() == congestion_bytes(config.congestion));
+        CHECK(congestion_bytes(config.congestion) * 3U < kCongestionSlotBytes); // CUBIC holds under a third of GCC's
+        QuicPathControlConfig learning = config;
+        learning.handover_learning = HandoverLearning{15U * kSecond, 100U * kMs, 100U * kMs};
+        CHECK_FALSE(control.start(learning, path_v4(1), 1U)); // a learning path needs its learner reserved
+        const crd::usize calls = allocator.calls();
+        REQUIRE(control.start(config, path_v4(1), 1U));
+        CHECK(allocator.calls() == calls);
+
+        // A swap to GCC takes a block of its size and frees CUBIC's; a refused one keeps the controller as it was.
+        CongestionPolicy gcc;
+        gcc.algorithm = CongestionAlgorithm::Gcc;
+        gcc.version = kCongestionInterfaceVersion;
+        const u64 window = control.congestion().window();
+        allocator.refuse_after(allocator.calls());
+        CHECK_FALSE(control.set_congestion(gcc, 2U));
+        CHECK(control.congestion().algorithm() == CongestionAlgorithm::Cubic);
+        CHECK(control.congestion().window() == window);
+        CHECK(control.held_bytes() == congestion_bytes(config.congestion));
+        allocator.refuse_after(~crd::usize{0});
+        REQUIRE(control.set_congestion(gcc, 2U));
+        CHECK(control.congestion().algorithm() == CongestionAlgorithm::Gcc);
+        CHECK(control.held_bytes() == congestion_bytes(gcc));
+        CHECK(allocator.live() == 1U);
+        // Back to CUBIC: built in GCC's storage, which it fits.
+        const crd::usize before_cubic = allocator.calls();
+        REQUIRE(control.set_congestion(config.congestion, 3U));
+        CHECK(allocator.calls() == before_cubic);
+        CHECK(control.congestion().algorithm() == CongestionAlgorithm::Cubic);
+
+        // A larger controller's storage reserved beside a started one waits for the swap, or goes with unreserve().
+        CongestionPolicy scream;
+        scream.algorithm = CongestionAlgorithm::Scream;
+        scream.version = kCongestionInterfaceVersion;
+        QuicPathControl small;
+        REQUIRE(small.reserve(allocator, config.congestion, HandoverLearning{}));
+        REQUIRE(small.start(config, path_v4(2), 4U));
+        REQUIRE(small.reserve(allocator, scream, HandoverLearning{}));
+        CHECK(small.held_bytes() == congestion_bytes(config.congestion) + congestion_bytes(scream));
+        small.unreserve();
+        CHECK(small.held_bytes() == congestion_bytes(config.congestion));
+        REQUIRE(small.reserve(allocator, scream, HandoverLearning{}));
+        const crd::usize before_swap = allocator.calls();
+        REQUIRE(small.set_congestion(scream, 5U));
+        CHECK(allocator.calls() == before_swap); // the waiting block was used
+        CHECK(small.held_bytes() == congestion_bytes(scream));
+
+        // The learner: taken the first time one learns (a refusal learns nothing), then kept.
+        const HandoverLearning learn{15U * kSecond, 100U * kMs, 100U * kMs};
+        allocator.refuse_after(allocator.calls());
+        CHECK_FALSE(control.set_handover_learning(learn));
+        CHECK(control.handover_learning().period_ns == 0U);
+        allocator.refuse_after(~crd::usize{0});
+        REQUIRE(control.set_handover_learning(learn));
+        CHECK(control.held_bytes() > congestion_bytes(gcc));
+        const crd::usize learned = allocator.calls();
+        REQUIRE(control.set_handover(HandoverSchedule{}));
+        REQUIRE(control.set_handover_learning(learn));
+        CHECK(allocator.calls() == learned);
+        CHECK(control.allocations() == 3U); // CUBIC's, GCC's and the learner's; a refusal counts nothing
+    }
+    CHECK(allocator.live() == 0U);
 }

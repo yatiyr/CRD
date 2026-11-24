@@ -127,6 +127,8 @@
 //              sent-packet storages and the frame ledger grow with the flight and shrink once it is over; the
 //              held-packet ring is taken only while a packet waits for its keys (table_bytes()). The Initial,
 //              Handshake and Early levels' keys are one block, taken at the start and freed with the last of them.
+//              Each path slot's controller storage is its policy's size (congestion_bytes()), taken at construction
+//              with a handover learner only where the connection learns (QuicPathControl::reserve).
 //   threads    a connection belongs to its loop's thread.
 
 #include <crd/containers/span.hpp>
@@ -589,8 +591,9 @@ public:
     [[nodiscard]] QuicStreamSet& streams() noexcept { return m_streams; }
     [[nodiscard]] const QuicStreamSet& streams() const noexcept { return m_streams; }
     // What the connection has taken from its allocator after construction: its streams' buffers (QuicStreamSet::
-    // buffer_allocations), its CRYPTO levels', its growing tables' (table_bytes) and its handshake levels' keys
-    // (QuicPacketProtection::allocations). Nothing else allocates then.
+    // buffer_allocations), its CRYPTO levels', its growing tables' (table_bytes), its handshake levels' keys
+    // (QuicPacketProtection::allocations) and the controllers' and learners' storage a live set_congestion() or
+    // set_handover_learning() took (QuicPathControl::allocations). Nothing else allocates then.
     [[nodiscard]] u32 buffer_allocations() const noexcept;
     // The bytes the stream and CRYPTO buffers hold now, their bitmaps included.
     [[nodiscard]] usize buffer_bytes() const noexcept;
@@ -621,7 +624,8 @@ public:
     [[nodiscard]] const QuicEcnValidator& ecn() const noexcept { return path_control().ecn(); }
     [[nodiscard]] const QuicPathMtu& path_mtu() const noexcept { return path_control().path_mtu(); }
     // Replaces the congestion policy live on every path: each new controller starts from its path's window, slow start
-    // threshold and recovery period. False, changing nothing, for a policy congestion_policy_valid() refuses.
+    // threshold and recovery period. A larger controller takes storage for every path slot first. False, changing
+    // nothing, for a policy congestion_policy_valid() refuses or storage the allocator refused.
     [[nodiscard]] bool set_congestion(const CongestionPolicy& policy) noexcept;
     // Replaces the leading path's handover schedule live (QuicConnectionConfig::handover), for packets sent from
     // now; none clears it. False, changing nothing, for a schedule handover_schedule_valid() refuses.
@@ -629,7 +633,7 @@ public:
     [[nodiscard]] const HandoverSchedule& handover() const noexcept { return path_control().handover(); }
     // Learns the handover phase of `learning`'s link from now (QuicConnectionConfig::handover_learning), clearing the
     // schedule in force; none ends learning and clears it. False, changing nothing, for one handover_learning_valid()
-    // refuses.
+    // refuses or a learner the allocator refused (the first time the path learns).
     [[nodiscard]] bool set_handover_learning(const HandoverLearning& learning) noexcept;
     [[nodiscard]] const HandoverLearning& handover_learning() const noexcept
     {
@@ -826,6 +830,9 @@ private:
     // A path slot no path ID holds in the protection or the recovery (slot 0 once path ID 0 closed); kQuicNoPath for
     // none.
     [[nodiscard]] usize free_slot() const noexcept;
+    // Slot `slot`'s path control, open or not: null for a further slot of a connection without them.
+    [[nodiscard]] QuicPathControl* control_at(usize slot) noexcept;
+    [[nodiscard]] u32 control_allocations() const noexcept;
     // Opens `path_id`'s number space in free slot `slot` and its 4-tuples on `from`, a client's own one trusted (no
     // amplification limit: the server's address is what it proves). False, changing nothing, when the protection
     // refuses it.
@@ -1221,6 +1228,7 @@ private:
     Held* m_held = nullptr;
     u32 m_held_count = 0U;
     u32 m_table_allocations = 0U; // the held ring's, sent-packet storages' and ledger's taken after construction
+    u32 m_control_reserved = 0U;  // the path controls' blocks taken at construction
 
     QuicConnectionState m_state = QuicConnectionState::Idle;
     QuicTransportParameters m_local;

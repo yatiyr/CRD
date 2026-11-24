@@ -9,6 +9,7 @@
 #include <crd/hesap/net/rate.hpp>
 #include <crd/hesap/stats/philox.hpp>
 
+#include <cstdint>
 #include <new>
 
 namespace crd::net
@@ -4095,12 +4096,12 @@ private:
     bool m_recovered = false;      // the detector came back to Normal from Underusing in this frame
 };
 
-static_assert(sizeof(NewReno) <= kCongestionSlotBytes && alignof(NewReno) <= alignof(CongestionSlot));
-static_assert(sizeof(Cubic) <= kCongestionSlotBytes && alignof(Cubic) <= alignof(CongestionSlot));
-static_assert(sizeof(Bbr) <= kCongestionSlotBytes && alignof(Bbr) <= alignof(CongestionSlot));
-static_assert(sizeof(Prague) <= kCongestionSlotBytes && alignof(Prague) <= alignof(CongestionSlot));
-static_assert(sizeof(Scream) <= kCongestionSlotBytes && alignof(Scream) <= alignof(CongestionSlot));
-static_assert(sizeof(Gcc) <= kCongestionSlotBytes && alignof(Gcc) <= alignof(CongestionSlot));
+static_assert(sizeof(NewReno) <= kCongestionSlotBytes && alignof(NewReno) <= kCongestionAlign);
+static_assert(sizeof(Cubic) <= kCongestionSlotBytes && alignof(Cubic) <= kCongestionAlign);
+static_assert(sizeof(Bbr) <= kCongestionSlotBytes && alignof(Bbr) <= kCongestionAlign);
+static_assert(sizeof(Prague) <= kCongestionSlotBytes && alignof(Prague) <= kCongestionAlign);
+static_assert(sizeof(Scream) <= kCongestionSlotBytes && alignof(Scream) <= kCongestionAlign);
+static_assert(sizeof(Gcc) <= kCongestionSlotBytes && alignof(Gcc) <= kCongestionAlign);
 
 [[nodiscard]] i64 scaled_bytes(u64 bytes) noexcept
 {
@@ -4135,17 +4136,45 @@ bool congestion_policy_valid(const CongestionPolicy& policy) noexcept
            policy.pacing_gain >= kCongestionMinPacingGain && policy.pacing_gain <= kCongestionMaxPacingGain;
 }
 
+usize congestion_bytes(const CongestionPolicy& policy) noexcept
+{
+    if (!congestion_policy_valid(policy))
+    {
+        return 0U;
+    }
+    switch (policy.algorithm)
+    {
+    case CongestionAlgorithm::NewReno:
+        return sizeof(NewReno);
+    case CongestionAlgorithm::Bbr:
+        return sizeof(Bbr);
+    case CongestionAlgorithm::Prague:
+        return sizeof(Prague);
+    case CongestionAlgorithm::Scream:
+        return sizeof(Scream);
+    case CongestionAlgorithm::Gcc:
+        return sizeof(Gcc);
+    case CongestionAlgorithm::Cubic:
+        break;
+    }
+    return sizeof(Cubic);
+}
+
 CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_datagram, const CongestionState* seed,
-                                      CongestionSlot& slot, DeliveryRateSampler& delivery, u64 entropy,
+                                      cont::Span<u8> storage, DeliveryRateSampler& delivery, u64 entropy,
                                       CongestionCoupling* coupling) noexcept
 {
-    if (!congestion_policy_valid(policy) || max_datagram < kQuicMinInitialDatagram || max_datagram > kMaxDatagram)
+    const usize bytes = congestion_bytes(policy);
+    const bool aligned = reinterpret_cast<std::uintptr_t>(storage.data()) % kCongestionAlign == 0U;
+    if (bytes == 0U || storage.size() < bytes || !aligned || max_datagram < kQuicMinInitialDatagram ||
+        max_datagram > kMaxDatagram)
     {
         return nullptr;
     }
+    u8* const at = storage.data();
     if (policy.algorithm == CongestionAlgorithm::Bbr)
     {
-        Bbr* const bbr = new (slot.bytes) Bbr(policy, max_datagram, delivery, entropy);
+        Bbr* const bbr = new (at) Bbr(policy, max_datagram, delivery, entropy);
         if (seed != nullptr)
         {
             bbr->seed(*seed);
@@ -4154,7 +4183,7 @@ CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_da
     }
     if (policy.algorithm == CongestionAlgorithm::Scream)
     {
-        Scream* const scream = new (slot.bytes) Scream(policy, max_datagram, delivery);
+        Scream* const scream = new (at) Scream(policy, max_datagram, delivery);
         if (seed != nullptr)
         {
             scream->seed(*seed);
@@ -4163,7 +4192,7 @@ CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_da
     }
     if (policy.algorithm == CongestionAlgorithm::Gcc)
     {
-        Gcc* const gcc = new (slot.bytes) Gcc(policy, max_datagram);
+        Gcc* const gcc = new (at) Gcc(policy, max_datagram);
         if (seed != nullptr)
         {
             gcc->seed(*seed);
@@ -4173,7 +4202,7 @@ CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_da
     WindowController* made = nullptr;
     if (policy.algorithm == CongestionAlgorithm::NewReno)
     {
-        NewReno* const reno = new (slot.bytes) NewReno(policy, max_datagram);
+        NewReno* const reno = new (at) NewReno(policy, max_datagram);
         if (policy.version >= 7U && policy.coupled && coupling != nullptr && !reno->couple(*coupling))
         {
             reno->~NewReno();
@@ -4183,11 +4212,11 @@ CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_da
     }
     else if (policy.algorithm == CongestionAlgorithm::Prague)
     {
-        made = new (slot.bytes) Prague(policy, max_datagram);
+        made = new (at) Prague(policy, max_datagram);
     }
     else
     {
-        made = new (slot.bytes) Cubic(policy, max_datagram);
+        made = new (at) Cubic(policy, max_datagram);
     }
     if (seed != nullptr)
     {

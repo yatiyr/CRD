@@ -1,22 +1,15 @@
 // crd-net -- what one QUIC path controls of its sending (NET-PATH; contract:
 // docs/design/network-foundation.md#multipath).
 #include <crd/hesap/net/handover_phase.hpp>
+#include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp>
 #include <crd/net/quic_path_control.hpp>
-
-#include <new>
-#include <type_traits>
 
 namespace crd::net
 {
 namespace
 {
 using HandoverLearner = hesap::net::HandoverPhaseLearner;
-
-// The learner built in a control's slot (its constructor builds it first).
-[[nodiscard]] HandoverLearner& learner_in(u8* bytes) noexcept
-{
-    return *std::launder(reinterpret_cast<HandoverLearner*>(bytes));
-}
 
 // Starts `learner` on `learning` (handover_learning_valid, so it takes it), or stops it for none.
 void learn(HandoverLearner& learner, const HandoverLearning& learning) noexcept
@@ -48,26 +41,93 @@ void learn(HandoverLearner& learner, const HandoverLearning& learning) noexcept
 }
 } // namespace
 
-QuicPathControl::QuicPathControl() noexcept
-{
-    static_assert(sizeof(HandoverLearner) <= sizeof(m_learner.bytes) && alignof(HandoverLearner) <= 8U);
-    static_assert(std::is_trivially_destructible_v<HandoverLearner>); // the slot is never destroyed
-    new (m_learner.bytes) HandoverLearner();
-}
+QuicPathControl::QuicPathControl() noexcept = default;
 
 QuicPathControl::~QuicPathControl() noexcept
 {
-    if (m_controller != nullptr)
+    stop();
+    free_storage(m_storage, m_storage_bytes);
+    unreserve();
+    if (m_learner != nullptr)
     {
-        m_controller->~CongestionController();
+        memory::destroy_array(*m_allocator, m_learner, 1U);
     }
+}
+
+u8* QuicPathControl::take_storage(usize bytes) noexcept
+{
+    u8* const storage = static_cast<u8*>(m_allocator->try_allocate(bytes, kCongestionAlign));
+    m_allocations += (storage != nullptr) ? 1U : 0U;
+    return storage;
+}
+
+void QuicPathControl::free_storage(u8*& storage, usize& bytes) noexcept
+{
+    if (storage != nullptr)
+    {
+        m_allocator->deallocate(storage);
+    }
+    storage = nullptr;
+    bytes = 0U;
+}
+
+bool QuicPathControl::reserve(memory::IAllocator& allocator, const CongestionPolicy& policy,
+                              const HandoverLearning& learning) noexcept
+{
+    const usize bytes = congestion_bytes(policy);
+    if (bytes == 0U)
+    {
+        return false;
+    }
+    m_allocator = &allocator;
+    if (m_storage_bytes < bytes && m_controller == nullptr)
+    {
+        u8* const storage = take_storage(bytes);
+        if (storage == nullptr)
+        {
+            return false;
+        }
+        free_storage(m_storage, m_storage_bytes);
+        m_storage = storage;
+        m_storage_bytes = bytes;
+    }
+    else if (m_storage_bytes < bytes && m_spare_bytes < bytes)
+    {
+        u8* const spare = take_storage(bytes);
+        if (spare == nullptr)
+        {
+            return false;
+        }
+        unreserve();
+        m_spare = spare;
+        m_spare_bytes = bytes;
+    }
+    if (learning.period_ns != 0U && m_learner == nullptr)
+    {
+        m_learner = memory::try_construct_array<HandoverLearner>(allocator, 1U);
+        m_allocations += (m_learner != nullptr) ? 1U : 0U;
+        return m_learner != nullptr;
+    }
+    return true;
+}
+
+void QuicPathControl::unreserve() noexcept
+{
+    free_storage(m_spare, m_spare_bytes);
+}
+
+usize QuicPathControl::held_bytes() const noexcept
+{
+    return m_storage_bytes + m_spare_bytes + ((m_learner != nullptr) ? sizeof(HandoverLearner) : 0U);
 }
 
 bool QuicPathControl::start(const QuicPathControlConfig& config, const QuicPath& path, u64 entropy,
                             CongestionCoupling* coupling) noexcept
 {
     if (!congestion_policy_valid(config.congestion) || config.max_datagram_bytes < kQuicMinInitialDatagram ||
-        config.base_datagram_bytes < kQuicPmtuFloor || config.base_datagram_bytes > config.max_datagram_bytes)
+        config.base_datagram_bytes < kQuicPmtuFloor || config.base_datagram_bytes > config.max_datagram_bytes ||
+        m_storage_bytes < congestion_bytes(config.congestion) ||
+        (config.handover_learning.period_ns != 0U && m_learner == nullptr))
     {
         return false;
     }
@@ -77,9 +137,11 @@ bool QuicPathControl::start(const QuicPathControlConfig& config, const QuicPath&
     m_ceiling = 0U;
     m_handover = config.handover;
     m_learning = config.handover_learning;
-    HandoverLearner& learner = learner_in(m_learner.bytes);
-    learn(learner, m_learning);
-    m_learner_revision = learner.revision();
+    if (m_learner != nullptr)
+    {
+        learn(*m_learner, m_learning);
+        m_learner_revision = m_learner->revision();
+    }
     m_pmtu.start(config.base_datagram_bytes, config.max_datagram_bytes, config.path_mtu_discovery);
     m_datagram_bytes = m_pmtu.size();
     m_ecn.start(codepoint());
@@ -113,8 +175,8 @@ void QuicPathControl::build(u64 entropy) noexcept
     m_pace_timer_ns = kNeverNs;
     m_dry_flight = ~u64{0};
     // The policy and the size were checked (start).
-    m_controller = make_congestion(m_config.congestion, m_datagram_bytes, nullptr, m_controller_slot, m_delivery,
-                                   entropy, m_coupling);
+    m_controller = make_congestion(m_config.congestion, m_datagram_bytes, nullptr,
+                                   cont::Span<u8>(m_storage, m_storage_bytes), m_delivery, entropy, m_coupling);
     m_ecn_unavailable = false;
     follow_ecn();
 }
@@ -123,12 +185,11 @@ void QuicPathControl::restart(const QuicPath& path, u32 base_datagram_bytes, u64
 {
     m_path = path;
     m_handover = HandoverSchedule{}; // the schedule was the old link's, and so was what the learner learned
-    HandoverLearner& learner = learner_in(m_learner.bytes);
-    if (learner.learning())
+    if (m_learner != nullptr && m_learner->learning())
     {
-        learner.restart();
+        m_learner->restart();
+        m_learner_revision = m_learner->revision();
     }
-    m_learner_revision = learner.revision();
     const u32 base =
         (base_datagram_bytes < m_config.max_datagram_bytes) ? base_datagram_bytes : m_config.max_datagram_bytes;
     m_pmtu.start(base, m_config.max_datagram_bytes, m_config.path_mtu_discovery);
@@ -151,13 +212,23 @@ void QuicPathControl::reset(u64 now_ns) noexcept
 
 bool QuicPathControl::set_congestion(const CongestionPolicy& policy, u64 entropy) noexcept
 {
-    if (!congestion_policy_valid(policy))
+    if (!reserve(*m_allocator, policy, HandoverLearning{}))
     {
         return false;
     }
     const CongestionState held = m_controller->state();
-    m_controller->~CongestionController();
-    m_controller = make_congestion(policy, m_datagram_bytes, &held, m_controller_slot, m_delivery, entropy, m_coupling);
+    m_controller->~CongestionController(); // first: it leaves the coupling the new one joins
+    if (m_storage_bytes < congestion_bytes(policy))
+    {
+        free_storage(m_storage, m_storage_bytes);
+        m_storage = m_spare;
+        m_storage_bytes = m_spare_bytes;
+        m_spare = nullptr;
+        m_spare_bytes = 0U;
+    }
+    unreserve();
+    m_controller = make_congestion(policy, m_datagram_bytes, &held, cont::Span<u8>(m_storage, m_storage_bytes),
+                                   m_delivery, entropy, m_coupling);
     m_config.congestion = policy;
     m_ecn.set_codepoint(congestion_codepoint(policy));
     m_ecn_unavailable = false;
@@ -180,35 +251,39 @@ bool QuicPathControl::set_handover(const HandoverSchedule& schedule) noexcept
     }
     m_handover = schedule;
     m_learning = HandoverLearning{}; // an authored schedule ends learning
-    HandoverLearner& learner = learner_in(m_learner.bytes);
-    learner.stop();
-    m_learner_revision = learner.revision();
+    if (m_learner != nullptr)
+    {
+        m_learner->stop();
+        m_learner_revision = m_learner->revision();
+    }
     return true;
 }
 
 bool QuicPathControl::set_handover_learning(const HandoverLearning& learning) noexcept
 {
-    if (!handover_learning_valid(learning))
+    if (!handover_learning_valid(learning) || m_allocator == nullptr ||
+        !reserve(*m_allocator, m_config.congestion, learning))
     {
         return false;
     }
     m_learning = learning;
     m_handover = HandoverSchedule{};
-    HandoverLearner& learner = learner_in(m_learner.bytes);
-    learn(learner, learning);
-    m_learner_revision = learner.revision();
+    if (m_learner != nullptr)
+    {
+        learn(*m_learner, learning);
+        m_learner_revision = m_learner->revision();
+    }
     return true;
 }
 
 bool QuicPathControl::follow_learner() noexcept
 {
-    const HandoverLearner& learner = learner_in(m_learner.bytes);
-    if (!learner.learning() || learner.revision() == m_learner_revision)
+    if (m_learner == nullptr || !m_learner->learning() || m_learner->revision() == m_learner_revision)
     {
         return false;
     }
-    m_learner_revision = learner.revision();
-    const hesap::net::HandoverPhase& phase = learner.phase();
+    m_learner_revision = m_learner->revision();
+    const hesap::net::HandoverPhase& phase = m_learner->phase();
     HandoverSchedule schedule;
     if (phase.locked)
     {
@@ -303,8 +378,11 @@ QuicPathSignals QuicPathControl::on_lost(QuicSpace space, const QuicSentPacket& 
     if (packet.in_flight)
     {
         // Covered or not: a learned schedule must keep seeing what the handovers do.
-        learner_in(m_learner.bytes).on_loss(packet.sent_ns);
-        signals.handover_lock = follow_learner();
+        if (m_learner != nullptr)
+        {
+            m_learner->on_loss(packet.sent_ns);
+            signals.handover_lock = follow_learner();
+        }
     }
     if (packet.handover)
     {
@@ -366,8 +444,11 @@ QuicPathSignals QuicPathControl::on_ack_end(QuicSpace space, const QuicAck& ack,
     if (outcome.rtt_sampled)
     {
         // The sample is the newest packet's: the learner keys it by that packet's send time.
-        learner_in(m_learner.bytes).on_rtt(outcome.newest_sent_ns, rtt.adjusted_ns);
-        signals.handover_lock = follow_learner();
+        if (m_learner != nullptr)
+        {
+            m_learner->on_rtt(outcome.newest_sent_ns, rtt.adjusted_ns);
+            signals.handover_lock = follow_learner();
+        }
     }
     // An RTT a scheduled handover may have lengthened is the estimate's, never a delay signal.
     m_controller->on_ack_end(rtt, outcome.rtt_sampled && !outcome.rtt_handover, in_flight, now_ns);

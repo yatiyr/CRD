@@ -648,8 +648,13 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   exists only while data waits there. What the provider still holds for an established connection (its connection
   and handshake state, the 1-RTT placeholder AEAD contexts and the established session, 2.9 KiB on the board where 5.4 were before) has no
   release short of freeing the connection, which the exporter (`export_keying_material`, WebTransport's and the
-  capability bindings') and a client's later tickets still need. Counting: `buffer_allocations()` (every allocation
-  after construction), `buffer_bytes()` (stream and CRYPTO buffers) and `table_bytes()`.
+  capability bindings') and a client's later tickets still need. Each path slot's congestion controller (2026-11-24)
+  lives in storage of its policy's size (`congestion_bytes()`: CUBIC 576 bytes, BBR 680, GCC 2,216 on Linux GCC),
+  which `QuicPathControl::reserve` takes for every slot at construction, with a handover learner (1,488 bytes) only
+  where the connection learns, so opening a path allocates nothing. A live `set_congestion()` to a larger controller
+  reserves every slot first and changes no path on a refusal; a path's first `set_handover_learning()` takes its
+  learner, which stays with the control. Counting: `buffer_allocations()` (every allocation after construction),
+  `buffer_bytes()` (stream and CRYPTO buffers) and `table_bytes()`.
 
 Evidence: `test_quic_connection.cpp` (22 cases: both versions to confirmation, nothing allocated after construction;
 40 seeded paths that lose 20%, duplicate 10% and reorder; a server held to three times what it received and silent

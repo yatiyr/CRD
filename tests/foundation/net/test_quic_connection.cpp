@@ -6055,7 +6055,8 @@ TEST_CASE("QUIC connection: a multipath limit allocates the path slots up front,
         REQUIRE(whole.ready());
     }
     const usize total = allocator.calls() - start;
-    CHECK(total == without + kQuicMaxPaths); // the slots, and each further slot's first sent-packet storage
+    // The slots, and each further slot's first sent-packet storage and controller storage.
+    CHECK(total == without + kQuicMaxPaths + (kQuicMaxPaths - 1U));
     for (usize allowed = 0U; allowed < total; ++allowed)
     {
         INFO("allocations allowed " << allowed);
@@ -10315,4 +10316,56 @@ TEST_CASE("QUIC connection: CRYPTO data of a discarded level never reaches its b
             CHECK(run.server.buffer_bytes() == held);
         });
     CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: a live swap to a larger controller reserves every path slot or changes nothing, a path "
+          "opened after it allocates nothing, and a path's learner is taken the first time it learns",
+          "[net][quic-connection][multipath][memory]")
+{
+    CongestionPolicy gcc;
+    gcc.algorithm = CongestionAlgorithm::Gcc;
+    // Slot 0's storage waits beside its controller and slots 1 to 3 grow in place: a refusal at any of the four
+    // leaves every path's controller as it was and gives back what waited.
+    for (usize allowed = 0U; allowed < kQuicMaxPaths; ++allowed)
+    {
+        INFO("allocations allowed " << allowed);
+        MultipathPair pair;
+        const usize live = pair.allocator.live();
+        pair.allocator.refuse_after(pair.allocator.calls() + allowed);
+        CHECK_FALSE(pair.client.set_congestion(gcc));
+        pair.allocator.refuse_after(~usize{0});
+        CHECK(pair.client.congestion().algorithm() == CongestionAlgorithm::Cubic);
+        CHECK(pair.client.path_control(0U)->held_bytes() == congestion_bytes(CongestionPolicy{}));
+        CHECK(pair.allocator.live() == live);
+    }
+
+    MultipathPair pair;
+    pair.confirm();
+    const u32 taken = pair.client.buffer_allocations();
+    REQUIRE(pair.client.set_congestion(gcc));
+    CHECK(pair.client.buffer_allocations() == taken + kQuicMaxPaths);
+    CHECK(pair.client.congestion().algorithm() == CongestionAlgorithm::Gcc);
+    CHECK(pair.client.path_control(0U)->held_bytes() == congestion_bytes(gcc)); // CUBIC's storage went back
+    REQUIRE(pair.net->run_until([&] { return pair.client.peer_cid_count(1U) != 0U; }));
+    u64 path_id = 0U;
+    REQUIRE(pair.client.add_path(QuicPath{1U, kServerAt}, pair.net->now, path_id) == QuicMigration::Started);
+    REQUIRE(pair.net->run_until([&] { return pair.open_both(1U); }));
+    const QuicPathControl* const opened = pair.client.path_control(1U);
+    REQUIRE(opened != nullptr);
+    CHECK(opened->congestion().algorithm() == CongestionAlgorithm::Gcc);
+    CHECK(opened->allocations() == 2U); // CUBIC's at construction and GCC's at the swap: opening took nothing
+    CHECK(pair.server.path_control(1U)->held_bytes() == congestion_bytes(CongestionPolicy{}));
+
+    const HandoverLearning learning{15000U * kMs, 100U * kMs, 100U * kMs};
+    const u32 before = pair.client.buffer_allocations();
+    pair.allocator.refuse_after(pair.allocator.calls());
+    CHECK_FALSE(pair.client.set_handover_learning(learning));
+    pair.allocator.refuse_after(~usize{0});
+    CHECK(pair.client.handover_learning().period_ns == 0U);
+    REQUIRE(pair.client.set_handover_learning(learning));
+    CHECK(pair.client.handover_learning() == learning);
+    CHECK(pair.client.buffer_allocations() == before + 1U);
+    REQUIRE(pair.client.set_handover(HandoverSchedule{}));
+    REQUIRE(pair.client.set_handover_learning(learning));
+    CHECK(pair.client.buffer_allocations() == before + 1U); // kept
 }

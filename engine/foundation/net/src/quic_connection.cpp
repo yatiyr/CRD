@@ -323,9 +323,18 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     const usize early_bytes = early_context_bytes(config);
     u8* const early = (early_bytes != 0U) ? memory::try_construct_array<u8>(allocator, early_bytes) : nullptr;
     PathSlot* const slots = further ? memory::try_construct_array<PathSlot>(allocator, kFurtherSlots) : nullptr;
+    // Every slot's controller storage for the policy, and a learner where the connection learns: opening a path
+    // allocates nothing.
+    const QuicPathControlConfig control_config = path_config(config);
+    bool controlled = m_first_control.reserve(allocator, control_config.congestion, control_config.handover_learning);
+    for (usize slot = 0U; slots != nullptr && slot < kFurtherSlots; ++slot)
+    {
+        controlled = controlled && slots[slot].control.reserve(allocator, control_config.congestion,
+                                                               control_config.handover_learning);
+    }
     void* const recovery = allocator.try_allocate(sizeof(QuicRecovery), alignof(QuicRecovery));
     if (seeded != crypto::CryptoError::None || !stored || frames == nullptr || recovery == nullptr || !streams ||
-        !datagrams || (early_bytes != 0U && early == nullptr) || (further && slots == nullptr))
+        !datagrams || (early_bytes != 0U && early == nullptr) || (further && slots == nullptr) || !controlled)
     {
         for (QuicSentEntry* space : entries)
         {
@@ -357,8 +366,8 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     m_recovery = new (recovery) QuicRecovery(recovery_config, cont::Span<QuicSentEntry>(entries[0], first),
                                              cont::Span<QuicSentEntry>(entries[1], first),
                                              cont::Span<QuicSentEntry>(entries[2], first));
-    // The policy, the sizes and the handover were checked (config_valid).
-    static_cast<void>(m_first_control.start(path_config(config), config.path, entropy(), &m_coupling));
+    // The policy, the sizes and the handover were checked (config_valid), and the storage reserved.
+    static_cast<void>(m_first_control.start(control_config, config.path, entropy(), &m_coupling));
     m_datagram_bytes = m_first_control.datagram_bytes();
     m_first_paths.paths.open(config.path, false, 0U);
     m_slots = slots;
@@ -368,6 +377,7 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     }
     m_frames = frames;
     m_frame_size = ledger;
+    m_control_reserved = control_allocations();
 }
 
 QuicConnection::~QuicConnection() noexcept
@@ -395,7 +405,27 @@ QuicConnection::~QuicConnection() noexcept
 
 u32 QuicConnection::buffer_allocations() const noexcept
 {
-    return m_streams.buffer_allocations() + m_crypto_allocations + m_table_allocations + m_protection.allocations();
+    return m_streams.buffer_allocations() + m_crypto_allocations + m_table_allocations + m_protection.allocations() +
+           (control_allocations() - m_control_reserved);
+}
+
+QuicPathControl* QuicConnection::control_at(usize slot) noexcept
+{
+    if (slot == 0U)
+    {
+        return &m_first_control;
+    }
+    return (m_slots != nullptr && slot < kQuicMaxPaths) ? &m_slots[slot - 1U].control : nullptr;
+}
+
+u32 QuicConnection::control_allocations() const noexcept
+{
+    u32 taken = m_first_control.allocations();
+    for (usize slot = 0U; m_slots != nullptr && slot < kFurtherSlots; ++slot)
+    {
+        taken += m_slots[slot].control.allocations();
+    }
+    return taken;
 }
 
 usize QuicConnection::buffer_bytes() const noexcept
@@ -2302,14 +2332,28 @@ bool QuicConnection::set_congestion(const CongestionPolicy& policy) noexcept
     {
         return false;
     }
+    // Every slot's storage first, open or not (the paths opened from now start on the policy), so a refusal changes
+    // no path's controller.
+    for (usize slot = 0U; slot < kQuicMaxPaths; ++slot)
+    {
+        QuicPathControl* const control = control_at(slot);
+        if (control != nullptr && !control->reserve(m_allocator, policy, HandoverLearning{}))
+        {
+            for (usize taken = 0U; taken <= slot; ++taken)
+            {
+                control_at(taken)->unreserve();
+            }
+            return false;
+        }
+    }
     for (QuicPathControl* const path : m_controls)
     {
         if (path != nullptr)
         {
-            static_cast<void>(path->set_congestion(policy, entropy()));
+            static_cast<void>(path->set_congestion(policy, entropy())); // reserved: allocates nothing
         }
     }
-    m_config.congestion = policy; // the policy paths opened from now start on
+    m_config.congestion = policy;
     return true;
 }
 
@@ -4734,7 +4778,8 @@ void QuicConnection::commit_path(usize slot, u64 now_ns) noexcept
     QuicPathControlConfig config = path_config(m_config);
     config.handover = HandoverSchedule{};
     config.base_datagram_bytes = family_base(from, m_config.max_datagram_bytes);
-    // The policy and sizes were checked (config_valid, family_base); the controller is built in place.
+    // The policy and sizes were checked (config_valid, family_base); the controller is built in the slot's storage,
+    // reserved for the policy at construction and by set_congestion().
     static_cast<void>(control.start(config, from, entropy(), &m_coupling));
     // Free in the recovery (free_slot), with storage of its own.
     static_cast<void>(m_recovery->open_path(slot, recovery, cont::Span<QuicSentEntry>(store.entries, store.size)));

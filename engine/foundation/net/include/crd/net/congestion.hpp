@@ -13,8 +13,9 @@
 //               are not held by it (RFC 9002 sections 6.2.4 and 7). Each controller reads the connection's
 //               DeliveryRateSampler (delivery_rate.hpp), whose stamps every packet carries.
 //   policy      CongestionPolicy is authored data, versioned by kCongestionInterfaceVersion, chosen per connection
-//               and swappable live: make_congestion() builds a controller into a CongestionSlot, seeded from the one
-//               it replaces (its window and slow start threshold), so a swap never restarts from the initial window.
+//               and swappable live: make_congestion() builds a controller into storage of congestion_bytes() (a
+//               CongestionSlot holds any), seeded from the one it replaces (its window and slow start threshold), so a
+//               swap never restarts from the initial window.
 //   window      both controllers of this version share RFC 9002's skeleton: slow start under HyStart++ (RFC 9406)
 //               with its conservative phase, one reduction per recovery period, persistent congestion to the minimum
 //               window, no growth while the window was not what held sending back (section 7.8), and an undo when
@@ -70,6 +71,7 @@
 //   time        every call takes the time in nanoseconds; nothing reads a clock.
 //   threads     a controller and a pacer belong to their connection's thread.
 
+#include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/net/delivery_rate.hpp>
 #include <crd/net/ecn.hpp>
@@ -305,12 +307,17 @@ protected:
     CongestionController() = default;
 };
 
-// Room for any controller of this build.
+// Room for any controller of this build, and the alignment every controller's storage takes.
 inline constexpr usize kCongestionSlotBytes = 2240U; // GCC, its delay trend's window and probes, is the largest
+inline constexpr usize kCongestionAlign = 16U;
 struct CongestionSlot
 {
-    alignas(16) u8 bytes[kCongestionSlotBytes];
+    alignas(kCongestionAlign) u8 bytes[kCongestionSlotBytes];
 };
+
+// The bytes `policy`'s controller takes (its class's size, at most kCongestionSlotBytes): a CUBIC or BBR controller
+// needs about a quarter of a slot. 0 for a policy congestion_policy_valid() refuses.
+[[nodiscard]] usize congestion_bytes(const CongestionPolicy& policy) noexcept;
 
 class CongestionCoupling;
 
@@ -319,12 +326,21 @@ class CongestionCoupling;
 // the connection's sampler, which outlives it, and BBR may mark it application limited (ProbeRTT); `entropy` seeds
 // BBR's randomised probing. A coupled policy's controller joins `coupling` when given (a lone path without one) and
 // leaves it in its destructor. Null, building nothing, for a policy congestion_policy_valid() refuses, a datagram size
-// under kQuicMinInitialDatagram or a full coupling. The caller destroys the controller (its destructor) before
-// building another in the slot.
+// under kQuicMinInitialDatagram, `storage` under congestion_bytes() or not aligned to kCongestionAlign, or a full
+// coupling. The caller destroys the controller (its destructor) before building another in the storage.
 [[nodiscard]] CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_datagram,
-                                                    const CongestionState* seed, CongestionSlot& slot,
+                                                    const CongestionState* seed, cont::Span<u8> storage,
                                                     DeliveryRateSampler& delivery, u64 entropy,
                                                     CongestionCoupling* coupling = nullptr) noexcept;
+// The same in a slot, which holds any controller.
+[[nodiscard]] inline CongestionController* make_congestion(const CongestionPolicy& policy, u64 max_datagram,
+                                                           const CongestionState* seed, CongestionSlot& slot,
+                                                           DeliveryRateSampler& delivery, u64 entropy,
+                                                           CongestionCoupling* coupling = nullptr) noexcept
+{
+    return make_congestion(policy, max_datagram, seed, cont::Span<u8>(slot.bytes, kCongestionSlotBytes), delivery,
+                           entropy, coupling);
+}
 
 // The paths of one connection whose coupled controllers grow together (RFC 6356). A member counts with min(cwnd_i,
 // flight_size_i) (section 3: an application-limited or idle path counts what it has in flight; after a reduction the
