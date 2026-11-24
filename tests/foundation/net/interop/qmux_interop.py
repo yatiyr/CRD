@@ -345,13 +345,14 @@ def websocket_cases(case, transport):
     yield case(streams=1, size=16 << 20, transport=transport)
     yield case(streams=8, size=4 << 20, closer='server', code=1, transport=transport)
     yield case(streams=64, size=32 << 10, max_streams=8, transport=transport)
-    # The crate's close abandons a write its WebSocket has not finished (`transmit_or_teardown`), so the closing end
-    # holds a second after its streams are done, as the reset cases do.
+    # The crate's close abandons a write its WebSocket has not finished (`transmit_or_teardown`), so in every case with
+    # unidirectional streams, resets or stops the closing end holds a second after its streams are done (the mixed
+    # case without it: the Cerid client read 2 of the crate server's 4 unidirectional streams, CI 45322193716).
     yield case(streams=0, uni=8, uni_size=1 << 20, hold_ms=1000, transport=transport)
     yield case(streams=0, resets=4, hold_ms=1000, transport=transport)
     yield case(streams=0, stops=4, hold_ms=1000, transport=transport)
     yield case(streams=2, size=64 << 10, uni=4, uni_size=64 << 10, resets=2, stops=2, closer='server', code=3,
-               transport=transport)
+               hold_ms=1000, transport=transport)
     yield case(streams=0, datagrams=128, transport=transport)
     yield case(streams=4, datagrams=128, transport=transport)
     yield case(streams=0, datagrams=16, datagram_bytes=597, datagram_limit=600, transport=transport)
