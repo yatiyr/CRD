@@ -4,10 +4,13 @@
 // its blocked frames (section 4.1), the window this side grants with its updates, auto-tuning and lost updates
 // (sections 4.2 and 13.3), and a stream carried end to end over a path that loses, reorders and duplicates.
 
+#include <crd/memory/allocator.hpp>
 #include <crd/net/quic_header.hpp>
 #include <crd/net/quic_stream.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <cstdlib>
 
 namespace
 {
@@ -112,11 +115,14 @@ TEST_CASE("quic receive buffer: storage is a multiple of a bitmap word", "[net][
     u8                bytes[128] = {};
     u64               bits[2]    = {};
     QuicReceiveBuffer buffer;
-    CHECK(buffer.insert(0U, {}, false) == QuicReceiveResult::Unusable);
+    // Without storage the buffer takes only what needs no room.
+    CHECK(buffer.capacity() == 0U);
+    CHECK(buffer.insert(0U, {}, false) == QuicReceiveResult::Accepted);
     CHECK_FALSE(buffer.init(Span<u8>(bytes, 0U), Span<u64>(bits, 0U)));
     CHECK_FALSE(buffer.init(Span<u8>(bytes, 100U), Span<u64>(bits, 1U)));
     CHECK_FALSE(buffer.init(Span<u8>(bytes, 128U), Span<u64>(bits, 1U)));
-    CHECK(buffer.insert(0U, ConstSpan<u8>(bytes, 1U), false) == QuicReceiveResult::Unusable);
+    CHECK(buffer.insert(0U, ConstSpan<u8>(bytes, 1U), false) == QuicReceiveResult::BeyondWindow);
+    CHECK(buffer.received_end() == 0U);
     CHECK(buffer.readable().empty());
     buffer.consume(1U);
     bits[0] = ~u64{0};
@@ -308,8 +314,19 @@ TEST_CASE("quic send buffer: storage, writing and room", "[net][quic][stream]")
     CHECK(buffer.next(10U, kQuicMaxVarint).empty());
     CHECK_FALSE(buffer.init(Span<u8>(bytes, 128U), Span<u64>(acked, 2U), Span<u64>(lost, 1U)));
     CHECK_FALSE(buffer.init(Span<u8>(bytes, 96U), Span<u64>(acked, 1U), Span<u64>(lost, 1U)));
+    // Without storage the buffer takes no data, but the FIN alone needs no room.
     buffer.finish();
-    CHECK_FALSE(buffer.finished());
+    CHECK(buffer.finished());
+    const QuicSendChunk fin = buffer.next(10U, kQuicMaxVarint);
+    CHECK(fin.fin);
+    CHECK(fin.offset == 0U);
+    CHECK(fin.length == 0U);
+    buffer.on_sent(fin);
+    CHECK_FALSE(buffer.pending());
+    buffer.on_lost(0U, 0U, true);
+    CHECK(buffer.pending());
+    buffer.on_acked(0U, 0U, true);
+    CHECK(buffer.all_acked());
 
     const Pattern data;
     Sender<128U>  sender;
@@ -535,10 +552,48 @@ TEST_CASE("quic receive buffer: grown storage keeps what arrived and what was re
         }
     }
 
-    QuicReceiveBuffer unusable;
+    // A buffer never given storage grows into its first.
+    QuicReceiveBuffer bare;
     u8 bytes[128] = {};
-    u64 bits[2] = {};
-    CHECK_FALSE(unusable.grow(Span<u8>(bytes, 128U), Span<u64>(bits, 2U)));
+    u64 bits[2] = {~u64{0}, ~u64{0}};
+    CHECK_FALSE(bare.grow(Span<u8>(bytes, 128U), Span<u64>(bits, 1U)));
+    REQUIRE(bare.grow(Span<u8>(bytes, 128U), Span<u64>(bits, 2U)));
+    CHECK(bits[0] == 0U);
+    CHECK(bits[1] == 0U);
+    CHECK(bare.capacity() == 128U);
+    CHECK(bare.insert(0U, data.at(0U, 128U), false) == QuicReceiveResult::Accepted);
+    CHECK(bare.readable().size() == 128U);
+}
+
+TEST_CASE("quic receive buffer: released storage keeps the offsets, and comes back grown", "[net][quic][stream]")
+{
+    const Pattern data;
+    Receiver<128U> receiver;
+    QuicReceiveBuffer& buffer = receiver.buffer;
+    REQUIRE(receiver.put(0U, data.at(0U, 40U)) == QuicReceiveResult::Accepted);
+    REQUIRE(receiver.put(60U, data.at(60U, 10U)) == QuicReceiveResult::Accepted);
+    CHECK_FALSE(buffer.release()); // data held
+    REQUIRE(drain(receiver) == 40U);
+    CHECK_FALSE(buffer.release()); // data past a gap held
+    REQUIRE(receiver.put(40U, data.at(40U, 20U)) == QuicReceiveResult::Accepted);
+    REQUIRE(drain(receiver) == 30U);
+    REQUIRE(buffer.release());
+    CHECK(buffer.capacity() == 0U);
+    CHECK(buffer.read_offset() == 70U);
+    CHECK(buffer.contiguous_end() == 70U);
+    CHECK(buffer.received_end() == 70U);
+    CHECK(buffer.readable().empty());
+    // What was read is accepted again and changes nothing; new data needs storage.
+    CHECK(receiver.put(0U, data.at(0U, 70U)) == QuicReceiveResult::Accepted);
+    CHECK(receiver.put(65U, data.at(65U, 10U)) == QuicReceiveResult::BeyondWindow);
+    CHECK(buffer.received_end() == 70U);
+    u8 bytes[256] = {};
+    u64 bits[4] = {};
+    REQUIRE(buffer.grow(Span<u8>(bytes, 256U), Span<u64>(bits, 4U)));
+    // Offsets wrap the new storage where the old one left them.
+    REQUIRE(receiver.put(65U, data.at(65U, 250U)) == QuicReceiveResult::Accepted);
+    CHECK(drain(receiver) == 245U);
+    CHECK(buffer.read_offset() == 315U);
 }
 
 TEST_CASE("quic receive buffer: a FIN or final size alone needs no room", "[net][quic][stream]")
@@ -620,6 +675,140 @@ TEST_CASE("quic send buffer: grown storage keeps what is owed, acknowledged and 
         CHECK(buffer.all_acked());
         CHECK(buffer.room() == 256U);
     }
+}
+
+TEST_CASE("quic send buffer: released storage keeps the offsets, and comes back grown", "[net][quic][stream]")
+{
+    const Pattern data;
+    Sender<128U> sender;
+    QuicSendBuffer& buffer = sender.buffer;
+    REQUIRE(buffer.write(data.at(0U, 100U)) == 100U);
+    CHECK_FALSE(buffer.release()); // nothing sent
+    const QuicSendChunk chunk = sender.send(100U);
+    REQUIRE(chunk.length == 100U);
+    CHECK_FALSE(buffer.release()); // sent, not acknowledged
+    buffer.on_lost(0U, 50U, false);
+    buffer.on_acked(50U, 50U, false);
+    CHECK_FALSE(buffer.release()); // lost data owed
+    const QuicSendChunk again = sender.send(100U);
+    REQUIRE(again.length == 50U);
+    buffer.on_acked(0U, 50U, false);
+    REQUIRE(buffer.release());
+    CHECK(buffer.capacity() == 0U);
+    CHECK(buffer.room() == 0U);
+    CHECK(buffer.written_end() == 100U);
+    CHECK(buffer.acked_end() == 100U);
+    CHECK_FALSE(buffer.pending());
+    CHECK(buffer.write(data.at(100U, 1U)) == 0U);
+    CHECK(buffer.next(1000U, kQuicMaxVarint).empty());
+    buffer.on_acked(0U, 100U, false); // a late copy's acknowledgement changes nothing
+    buffer.on_lost(0U, 100U, false);
+    CHECK_FALSE(buffer.pending());
+    u8 bytes[64] = {};
+    u64 acked[1] = {~u64{0}};
+    u64 lost[1] = {~u64{0}};
+    REQUIRE(buffer.grow(Span<u8>(bytes, 64U), Span<u64>(acked, 1U), Span<u64>(lost, 1U)));
+    CHECK(acked[0] == 0U);
+    CHECK(lost[0] == 0U);
+    REQUIRE(buffer.write(data.at(100U, 64U)) == 64U);
+    const QuicSendChunk first = buffer.next(1000U, kQuicMaxVarint);
+    CHECK(first.offset == 100U);
+    CHECK(first.length == 28U); // to the end of the storage, where offset 128 wraps
+    const ConstSpan<u8> view = buffer.bytes_of(first);
+    for (usize i = 0U; i < view.size(); ++i)
+    {
+        REQUIRE(view[i] == pattern(100U + i));
+    }
+}
+
+// Counts the blocks it gives and refuses after `limit` of them.
+class BlockAllocator final : public crd::memory::IAllocator
+{
+public:
+    void* allocate(usize size, usize) override
+    {
+        if (given >= limit)
+        {
+            return nullptr;
+        }
+        ++given;
+        ++live;
+        return std::malloc(size);
+    }
+
+    void deallocate(void* pointer) noexcept override
+    {
+        live -= (pointer != nullptr) ? 1U : 0U;
+        std::free(pointer);
+    }
+
+    [[nodiscard]] bool owns(const void*) const noexcept override { return true; }
+
+    usize given = 0U;
+    usize live = 0U;
+    usize limit = ~usize{0};
+};
+
+TEST_CASE("quic buffer store: buffers grow from no storage by doubling to the limit, and refusals change nothing",
+          "[net][quic][stream]")
+{
+    const Pattern data;
+    BlockAllocator allocator;
+    crd::u32 taken = 0U;
+    {
+        QuicReceiveBuffer buffer;
+        QuicBufferStore store;
+        CHECK(quic_hold(allocator, buffer, store, 0U, 4096U, taken)); // nothing to hold
+        CHECK(store.block == nullptr);
+        REQUIRE(quic_hold(allocator, buffer, store, 10U, 4096U, taken));
+        CHECK(buffer.capacity() == 64U); // one chunk
+        CHECK(store.bytes == 64U);
+        CHECK(quic_store_bytes(store, 1U) == 64U + 8U);
+        REQUIRE(buffer.insert(0U, data.at(0U, 10U), false) == QuicReceiveResult::Accepted);
+        REQUIRE(quic_hold(allocator, buffer, store, 1000U, 4096U, taken));
+        CHECK(buffer.capacity() == 1024U);
+        CHECK(taken == 2U);
+        CHECK(allocator.live == 1U); // the old block went back
+        CHECK(buffer.readable().size() == 10U);
+        CHECK(quic_hold(allocator, buffer, store, 9000U, 3072U, taken)); // past the limit: the buffer refuses it
+        CHECK(buffer.capacity() == 1024U);
+        CHECK(taken == 2U);
+        REQUIRE(quic_hold(allocator, buffer, store, 3000U, 3072U, taken));
+        CHECK(buffer.capacity() == 3072U); // the limit, not a power of two
+        CHECK(taken == 3U);
+        allocator.limit = allocator.given;
+        const QuicBufferStore before = store;
+        CHECK_FALSE(quic_hold(allocator, buffer, store, 4000U, 8192U, taken));
+        CHECK(store.block == before.block);
+        CHECK(buffer.capacity() == 3072U);
+        CHECK(taken == 3U);
+        CHECK(buffer.readable().size() == 10U);
+        allocator.deallocate(store.block);
+    }
+    allocator.limit = ~usize{0};
+    {
+        QuicSendBuffer buffer;
+        QuicBufferStore store;
+        REQUIRE(quic_hold(allocator, buffer, store, 300U, 16384U, taken));
+        CHECK(buffer.capacity() == 512U);
+        CHECK(quic_store_bytes(store, 2U) == 512U + 16U * 8U);
+        REQUIRE(buffer.write(data.at(0U, 300U)) == 300U);
+        // `more` counts past what is owed: 300 owed and 300 more need 1024.
+        REQUIRE(quic_hold(allocator, buffer, store, 300U, 16384U, taken));
+        CHECK(buffer.capacity() == 1024U);
+        REQUIRE(buffer.write(data.at(300U, 300U)) == 300U);
+        const QuicSendChunk chunk = buffer.next(2000U, kQuicMaxVarint);
+        REQUIRE(chunk.length == 600U);
+        for (usize i = 0U; i < chunk.length; ++i)
+        {
+            REQUIRE(buffer.bytes_of(chunk)[i] == pattern(i));
+        }
+        allocator.limit = allocator.given;
+        CHECK_FALSE(quic_hold(allocator, buffer, store, 1000U, 16384U, taken));
+        CHECK(buffer.capacity() == 1024U);
+        allocator.deallocate(store.block);
+    }
+    CHECK(allocator.live == 0U);
 }
 
 TEST_CASE("quic send credit: the limit only rises and a blocked frame is owed once per limit", "[net][quic][stream]")

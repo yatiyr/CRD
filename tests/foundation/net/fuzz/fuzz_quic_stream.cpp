@@ -4,13 +4,15 @@
 //
 // Input: operations, each an operation byte and the parameter bytes it reads (0 past the end), on one receive buffer
 // and one send buffer of 64 bytes, grown at any point into other storage of any larger multiple of 64 up to 256 bytes
-// (or the same size), and one receive window: frames inserted at any offset (below the read offset, past the window,
-// with a FIN, with a changed byte), reads, writes, FINs, chunks sent under a flow-control limit, acknowledgements and
-// losses of any sent chunk in any order and any number of times, and window operations.
+// (or the same size), released at any point (given up when it holds nothing), and one receive window: frames
+// inserted at any offset (below the read offset, past the window, with a FIN, with a changed byte), reads, writes,
+// FINs, chunks sent under a flow-control limit, acknowledgements and losses of any sent chunk in any order and any
+// number of times, and window operations.
 //
 // Oracles, against models that keep one record per stream byte and each buffer's capacity. The receive buffer's
 // verdict is the model's rule (final size, then a window only data needs, then other bytes at a held offset), a refusal
-// changes nothing, a growth keeps every byte and state (the storage it left is scribbled over), and the contiguous end,
+// changes nothing, a growth keeps every byte and state (the storage it left is scribbled over), a release succeeds
+// exactly when nothing is held and keeps every offset (the storage is scribbled over), and the contiguous end,
 // the received end, the final size and the readable bytes are the model's. The send buffer's next chunk is the
 // model's (the lowest lost run, else the data never sent within the limit, never wrapping, the FIN with the last
 // byte or alone), its bytes are what was written, and the acknowledged end, the lost bytes, the room and the FIN's
@@ -189,7 +191,7 @@ void check_receive(World& w)
     CRD_FUZZ_REQUIRE(!model.final_known || w.receive.final_size() == model.final_size);
     CRD_FUZZ_REQUIRE(w.receive.complete() == (model.final_known && model.read == model.final_size));
     const ConstSpan<u8> view = w.receive.readable();
-    const u64           wrap = model.capacity - model.read % model.capacity;
+    const u64           wrap = (model.capacity != 0U) ? model.capacity - model.read % model.capacity : 0U;
     const u64           want = (contiguous - model.read < wrap) ? contiguous - model.read : wrap;
     CRD_FUZZ_REQUIRE(view.size() == want);
     for (usize i = 0U; i < view.size(); ++i)
@@ -390,10 +392,14 @@ void settle(World& w, Input& in, bool acked)
     check_send(w);
 }
 
-// The capacity `steps` chunks above `capacity`, at most kCapacity.
+// The capacity `steps` chunks above `capacity`, at least one chunk and at most kCapacity.
 usize grown(u64 capacity, usize steps)
 {
     const u64 size = capacity + (steps * kFirst);
+    if (size < kFirst)
+    {
+        return kFirst;
+    }
     return static_cast<usize>((size < kCapacity) ? size : kCapacity);
 }
 
@@ -434,6 +440,40 @@ void grow(World& w, Input& in)
     w.bank                   = bank;
     w.receive_model.capacity = receive_size;
     w.send_model.capacity    = send_size;
+    check_receive(w);
+    check_send(w);
+}
+
+// Either buffer gives its storage up, which it does exactly when it holds nothing: everything that arrived read, or
+// everything written acknowledged. The storage is scribbled over, and every offset stays.
+void release(World& w, Input& in)
+{
+    const u8 pick = in.byte();
+    if ((pick & 0x01U) != 0U)
+    {
+        ReceiveModel& model = w.receive_model;
+        const bool empty = model.read == model.received;
+        CRD_FUZZ_REQUIRE(w.receive.release() == empty);
+        if (empty)
+        {
+            std::memset(w.receive_bytes[w.bank], 0xA5, sizeof(w.receive_bytes[w.bank]));
+            std::memset(w.receive_bits[w.bank], 0xFF, sizeof(w.receive_bits[w.bank]));
+            model.capacity = 0U;
+        }
+    }
+    if ((pick & 0x02U) != 0U)
+    {
+        SendModel& model = w.send_model;
+        const bool empty = model.acked_end() == model.written;
+        CRD_FUZZ_REQUIRE(w.send.release() == empty);
+        if (empty)
+        {
+            std::memset(w.send_bytes[w.bank], 0xA5, sizeof(w.send_bytes[w.bank]));
+            std::memset(w.acked_bits[w.bank], 0xFF, sizeof(w.acked_bits[w.bank]));
+            std::memset(w.lost_bits[w.bank], 0xFF, sizeof(w.lost_bits[w.bank]));
+            model.capacity = 0U;
+        }
+    }
     check_receive(w);
     check_send(w);
 }
@@ -534,6 +574,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         case 8U:
             grow(*w, in);
             break;
+        case 15U:
+            release(*w, in);
+            break;
         default:
             window_op(*w, in);
             break;
@@ -568,4 +611,14 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                          0xFFU, 0xFFU, 0x00U, 0x30U, 0x40U, 0x10U, 0xF0U, 0x00U, 0x08U, 0x3FU, 0x00U, 0x00U,
                          0x60U, 0x05U, 0x00U, 0x01U, 0xFFU, 0x06U, 0x01U, 0x05U, 0x02U};
     sink.add("grow", growth, sizeof(growth));
+    // Both buffers refused a release while they hold data, released once read and acknowledged, offered data past the
+    // window and a write without storage, grown again from none, carrying on at their offsets, and released again
+    // after the FIN.
+    const u8 released[] = {0x10U, 0x40U, 0x00U, 0x00U, 0x20U, 0x00U, 0x28U, 0x08U, 0x02U, 0x30U, 0x0FU, 0x03U,
+                           0x01U, 0x40U, 0x0FU, 0x01U, 0x00U, 0x20U, 0x08U, 0x01U, 0x40U, 0x04U, 0xFFU, 0xFFU,
+                           0x0FU, 0x02U, 0x05U, 0x00U, 0x0FU, 0x03U, 0x00U, 0x20U, 0x10U, 0x00U, 0x00U, 0x10U,
+                           0x02U, 0x10U, 0x08U, 0x09U, 0x00U, 0x20U, 0x20U, 0x01U, 0x40U, 0x02U, 0x20U, 0x04U,
+                           0xFFU, 0xFFU, 0x04U, 0xFFU, 0xFFU, 0x05U, 0x02U, 0x05U, 0x01U, 0x03U, 0x04U, 0xFFU,
+                           0xFFU, 0x05U, 0x03U, 0x0FU, 0x03U};
+    sink.add("release", released, sizeof(released));
 }

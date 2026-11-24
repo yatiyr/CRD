@@ -710,7 +710,7 @@ TEST_CASE("QUIC client: many connections over one socket reach two servers in bo
                 for (const QuicHandle handle : handles)
                 {
                     const QuicConnection* const connection = network->client.connection(handle);
-                    calls -= (connection != nullptr) ? connection->streams().buffer_allocations() : 0U;
+                    calls -= (connection != nullptr) ? connection->buffer_allocations() : 0U;
                 }
                 return calls;
             };

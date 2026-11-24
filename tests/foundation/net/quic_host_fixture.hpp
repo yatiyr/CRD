@@ -42,10 +42,11 @@ inline QuicStreamLimits limits()
 class EchoApp final : public QuicServerEvents
 {
 public:
-    void on_accept(QuicHandle handle, QuicConnection&, const Endpoint&) noexcept override
+    void on_accept(QuicHandle handle, QuicConnection& connection, const Endpoint&) noexcept override
     {
         ++accepted;
         m_state[handle.slot] = State{};
+        m_state[handle.slot].connection = &connection;
         last = handle;
     }
 
@@ -78,24 +79,23 @@ public:
                     write_pattern(set, stream, state.echoed[index], state.read[index], stream + 1U, ended));
             }
         }
-        state.buffers = set.buffer_allocations();
     }
 
     void on_closed(QuicHandle handle, const QuicConnection& connection) noexcept override
     {
         ++closed;
-        retired_buffers += connection.streams().buffer_allocations();
-        m_state[handle.slot].buffers = 0U;
+        retired_buffers += connection.buffer_allocations();
+        m_state[handle.slot].connection = nullptr;
     }
 
-    // The stream buffers the connections served have taken (QuicStreamSet::buffer_allocations): all serving
+    // The buffers the connections served have taken (QuicConnection::buffer_allocations): all serving
     // allocates.
     [[nodiscard]] usize buffer_allocations() const
     {
         usize total = retired_buffers;
         for (const State& state : m_state)
         {
-            total += state.buffers;
+            total += (state.connection != nullptr) ? state.connection->buffer_allocations() : 0U;
         }
         return total;
     }
@@ -114,7 +114,7 @@ private:
     {
         u64 read[kStreams] = {};
         u64 echoed[kStreams] = {};
-        usize buffers = 0U; // its connection's stream buffers when last served
+        const QuicConnection* connection = nullptr; // while it is live
     };
     State m_state[kMaxSlots];
 };

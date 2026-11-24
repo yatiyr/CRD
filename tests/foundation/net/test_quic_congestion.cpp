@@ -133,10 +133,10 @@ struct Pair
     QuicConnection client;
     QuicConnection server;
 
-    // The allocations of everything but the streams' buffers, which grow as a transfer needs them.
+    // The allocations of everything but the stream and CRYPTO buffers, which grow as their data needs them.
     [[nodiscard]] usize others() const
     {
-        return allocator.calls() - client.streams().buffer_allocations() - server.streams().buffer_allocations();
+        return allocator.calls() - client.buffer_allocations() - server.buffer_allocations();
     }
     std::unique_ptr<Net> net;
 

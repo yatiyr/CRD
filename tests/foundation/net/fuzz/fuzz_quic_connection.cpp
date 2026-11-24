@@ -1855,9 +1855,9 @@ void run_script(QuicVersion version, bool switching, bool early, bool keyed, Con
         exchange_datagrams(pair, offered ? 1U : 0U);
         stateless_reset(pair);
     }
-    // Nothing allocates after construction but the streams' buffers (QuicStreamSet's memory contract).
+    // Nothing allocates after construction but the stream and CRYPTO buffers (the connection's memory contract).
     CRD_FUZZ_REQUIRE(pair.allocator.allocations() - allocations ==
-                     usize{pair.client.streams().buffer_allocations()} + pair.server.streams().buffer_allocations());
+                     usize{pair.client.buffer_allocations()} + pair.server.buffer_allocations());
 }
 
 // ---- Modes 1 and 2: frames from a raw peer ----
@@ -2118,8 +2118,8 @@ void run_frames(QuicVersion version, ConstSpan<u8> input, bool initial, bool key
             raw.drain();
         }
     }
-    // Nothing allocates after construction but the streams' buffers (QuicStreamSet's memory contract).
-    CRD_FUZZ_REQUIRE(raw.allocator.allocations() - allocations == raw.server.streams().buffer_allocations());
+    // Nothing allocates after construction but the stream and CRYPTO buffers (the connection's memory contract).
+    CRD_FUZZ_REQUIRE(raw.allocator.allocations() - allocations == raw.server.buffer_allocations());
 }
 
 // A seed script over paths with multipath (byte 0's bits 6 and 7) that confirms first; each of steps() moves 250 ms

@@ -47,16 +47,6 @@ constexpr usize kCreditBytes = 9U; // a MAX_DATA or MAX_STREAMS frame at most: i
 }
 
 // The size a buffer of `capacity` bytes doubles to, up to `limit`, until it holds `needed` (at most `limit`).
-[[nodiscard]] u32 grown_size(u32 capacity, u64 needed, u32 limit) noexcept
-{
-    u32 size = capacity;
-    while (size < needed)
-    {
-        size = (size > limit / 2U) ? limit : size * 2U;
-    }
-    return size;
-}
-
 [[nodiscard]] bool fits(const QuicFrame& frame, usize room) noexcept
 {
     const usize bytes = quic_frame_bytes(frame);
@@ -79,8 +69,8 @@ void QuicStreamSet::release() noexcept
     }
     for (u32 index = 0U; m_stores != nullptr && index < m_total_slots; ++index)
     {
-        memory::deallocate_array(*m_allocator, m_stores[index].in);
-        memory::deallocate_array(*m_allocator, m_stores[index].out);
+        memory::deallocate_array(*m_allocator, m_stores[index].in.block);
+        memory::deallocate_array(*m_allocator, m_stores[index].out.block);
     }
     memory::destroy_array(*m_allocator, m_slots, m_total_slots);
     memory::destroy_array(*m_allocator, m_indices, 2U * usize{m_total_slots});
@@ -312,18 +302,18 @@ QuicStreamSet::Slot* QuicStreamSet::open_slot(Type& type) noexcept
     slot.active = true;
     if (type.receives)
     {
-        const usize words = quic_stream_bitmap_words(store.in_bytes);
-        static_cast<void>(slot.in.init(cont::Span<u8>(reinterpret_cast<u8*>(store.in + words), store.in_bytes),
-                                       cont::Span<u64>(store.in, words)));
+        const usize words = quic_stream_bitmap_words(store.in.bytes);
+        static_cast<void>(slot.in.init(cont::Span<u8>(reinterpret_cast<u8*>(store.in.block + words), store.in.bytes),
+                                       cont::Span<u64>(store.in.block, words)));
         slot.window.reset(m_limits.stream_window, m_limits.receive_bytes);
         slot.recv = QuicRecvState::Recv;
     }
     if (type.sends)
     {
-        const usize words = quic_stream_bitmap_words(store.out_bytes);
-        static_cast<void>(
-            slot.out.init(cont::Span<u8>(reinterpret_cast<u8*>(store.out + (2U * words)), store.out_bytes),
-                          cont::Span<u64>(store.out, words), cont::Span<u64>(store.out + words, words)));
+        const usize words = quic_stream_bitmap_words(store.out.bytes);
+        u64* const block = store.out.block;
+        static_cast<void>(slot.out.init(cont::Span<u8>(reinterpret_cast<u8*>(block + (2U * words)), store.out.bytes),
+                                        cont::Span<u64>(block, words), cont::Span<u64>(block + words, words)));
         slot.credit.reset(type.send_credit);
         slot.send = QuicSendState::Ready;
     }
@@ -334,17 +324,11 @@ QuicStreamSet::Slot* QuicStreamSet::open_slot(Type& type) noexcept
 
 bool QuicStreamSet::give_buffers(Store& store, const Type& type) noexcept
 {
-    if (type.receives && store.in == nullptr)
-    {
-        store.in_bytes = min_u32(m_limits.first_bytes, m_limits.receive_bytes);
-        store.in = take_block(store.in_bytes, 1U);
-    }
-    if (type.sends && store.out == nullptr)
-    {
-        store.out_bytes = min_u32(m_limits.first_bytes, m_limits.send_bytes);
-        store.out = take_block(store.out_bytes, 2U);
-    }
-    return (!type.receives || store.in != nullptr) && (!type.sends || store.out != nullptr);
+    const bool in = !type.receives || store.in.block != nullptr ||
+                    take_block(store.in, min_u32(m_limits.first_bytes, m_limits.receive_bytes), 1U);
+    const bool out = !type.sends || store.out.block != nullptr ||
+                     take_block(store.out, min_u32(m_limits.first_bytes, m_limits.send_bytes), 2U);
+    return in && out;
 }
 
 usize QuicStreamSet::buffer_bytes() const noexcept
@@ -352,68 +336,30 @@ usize QuicStreamSet::buffer_bytes() const noexcept
     usize total = 0U;
     for (u32 index = 0U; index < m_total_slots; ++index)
     {
-        const Store& store = m_stores[index];
-        total += (store.in != nullptr) ? usize{store.in_bytes} + (quic_stream_bitmap_words(store.in_bytes) * 8U) : 0U;
-        total +=
-            (store.out != nullptr) ? usize{store.out_bytes} + (quic_stream_bitmap_words(store.out_bytes) * 16U) : 0U;
+        total += quic_store_bytes(m_stores[index].in, 1U) + quic_store_bytes(m_stores[index].out, 2U);
     }
     return total;
 }
 
-u64* QuicStreamSet::take_block(usize bytes, usize maps) noexcept
+bool QuicStreamSet::take_block(QuicBufferStore& store, u32 bytes, usize maps) noexcept
 {
-    // A buffer's bytes are a multiple of kQuicStreamChunk, so of the word: they follow the bitmaps aligned.
-    u64* const block =
-        memory::try_allocate_array<u64>(*m_allocator, (maps * quic_stream_bitmap_words(bytes)) + (bytes / 8U));
-    m_buffer_allocations += (block != nullptr) ? 1U : 0U;
-    return block;
+    store.block = quic_buffer_block(*m_allocator, bytes, maps);
+    store.bytes = (store.block != nullptr) ? bytes : 0U;
+    m_buffer_allocations += (store.block != nullptr) ? 1U : 0U;
+    return store.block != nullptr;
 }
 
 bool QuicStreamSet::hold_in(Slot& slot, u64 end) noexcept
 {
-    const u64 read = slot.in.read_offset();
-    const u64 needed = min_u64((end > read) ? end - read : 0U, m_limits.receive_bytes);
-    if (needed <= slot.in.capacity())
-    {
-        return true; // data past the limit the buffer refuses
-    }
-    Store& store = m_stores[index_of(slot)];
-    const u32 size = grown_size(store.in_bytes, needed, m_limits.receive_bytes);
-    u64* const block = take_block(size, 1U);
-    if (block == nullptr)
-    {
-        return false;
-    }
-    const usize words = quic_stream_bitmap_words(size);
-    static_cast<void>(
-        slot.in.grow(cont::Span<u8>(reinterpret_cast<u8*>(block + words), size), cont::Span<u64>(block, words)));
-    memory::deallocate_array(*m_allocator, store.in);
-    store.in = block;
-    store.in_bytes = size;
-    return true;
+    return quic_hold(*m_allocator, slot.in, m_stores[index_of(slot)].in, end, m_limits.receive_bytes,
+                     m_buffer_allocations);
 }
 
 void QuicStreamSet::hold_out(Slot& slot, usize more) noexcept
 {
-    const u64 owed = slot.out.written_end() - slot.out.acked_end();
-    const u64 needed = min_u64(owed + more, m_limits.send_bytes);
-    if (needed <= slot.out.capacity())
-    {
-        return;
-    }
-    Store& store = m_stores[index_of(slot)];
-    const u32 size = grown_size(store.out_bytes, needed, m_limits.send_bytes);
-    u64* const block = take_block(size, 2U);
-    if (block == nullptr)
-    {
-        return; // the buffer takes what fits
-    }
-    const usize words = quic_stream_bitmap_words(size);
-    static_cast<void>(slot.out.grow(cont::Span<u8>(reinterpret_cast<u8*>(block + (2U * words)), size),
-                                    cont::Span<u64>(block, words), cont::Span<u64>(block + words, words)));
-    memory::deallocate_array(*m_allocator, store.out);
-    store.out = block;
-    store.out_bytes = size;
+    // Refused, the buffer takes what fits.
+    static_cast<void>(quic_hold(*m_allocator, slot.out, m_stores[index_of(slot)].out, more, m_limits.send_bytes,
+                                m_buffer_allocations));
 }
 
 QuicStreamSet::Lookup QuicStreamSet::reach(u64 id, Slot*& slot, QuicTransportError& error) noexcept
@@ -670,8 +616,6 @@ QuicTransportError QuicStreamSet::on_stream(const QuicFrame& frame, Slot& slot, 
             return QuicTransportError::FinalSizeError;
         case QuicReceiveResult::Changed:
             return QuicTransportError::ProtocolViolation;
-        case QuicReceiveResult::Unusable:
-            return QuicTransportError::InternalError;
     }
     after_receive(slot, contiguous);
     return QuicTransportError::NoError;
@@ -691,11 +635,9 @@ QuicTransportError QuicStreamSet::take_final_size(Slot& slot, u64 final_size) no
             return QuicTransportError::FlowControlError;
         case QuicReceiveResult::FinalSize:
         case QuicReceiveResult::Changed:
-            return QuicTransportError::FinalSizeError;
-        case QuicReceiveResult::Unusable:
             break;
     }
-    return QuicTransportError::InternalError;
+    return QuicTransportError::FinalSizeError;
 }
 
 QuicTransportError QuicStreamSet::on_reset(const QuicFrame& frame, Slot& slot) noexcept

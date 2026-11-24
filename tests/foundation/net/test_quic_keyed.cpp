@@ -241,6 +241,7 @@ TEST_CASE("Raw UDP path: both ends are up at once and carry streams and datagram
     CountingAllocator allocator;
     QuicConnection client(allocator, keyed_config(QuicSide::Client, version, 0U));
     QuicConnection server(allocator, keyed_config(QuicSide::Server, version, 1U));
+    const usize before = allocator.calls();
     open_pair(client, server, aead, ids);
     CHECK(client.state() == QuicConnectionState::Established);
     CHECK(server.state() == QuicConnectionState::Established);
@@ -250,7 +251,6 @@ TEST_CASE("Raw UDP path: both ends are up at once and carry streams and datagram
     CHECK_FALSE(client.protection().can_send(QuicPacketType::Initial));
     CHECK_FALSE(client.protection().can_send(QuicPacketType::Handshake));
 
-    const usize before = allocator.calls();
     auto net = std::make_unique<Net>(client, server);
     REQUIRE(net->run_until([&] { return parameters_known(client, server); }));
     CHECK(net->now - kStartNs <= 2U * 10U * kMs); // the two 10 ms paths: one round trip
@@ -261,8 +261,12 @@ TEST_CASE("Raw UDP path: both ends are up at once and carry streams and datagram
     exchange_datagrams(*net, client, server);
     exchange_datagrams(*net, server, client);
     CHECK(net->amplification_kept);
-    // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
-    CHECK(allocator.calls() == before + client.streams().buffer_allocations() + server.streams().buffer_allocations());
+    // Nothing allocates after construction but the stream and CRYPTO buffers, as their data needs them; each end's
+    // parameters were read and acknowledged, so its CRYPTO storage went back.
+    CHECK(allocator.calls() == before + client.buffer_allocations() + server.buffer_allocations());
+    CHECK(client.buffer_allocations() > client.streams().buffer_allocations());
+    CHECK(client.buffer_bytes() == client.streams().buffer_bytes());
+    CHECK(server.buffer_bytes() == server.streams().buffer_bytes());
 }
 
 TEST_CASE("Raw UDP path: paths that lose, duplicate and reorder carry everything, within the amplification limit",

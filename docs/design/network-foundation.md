@@ -561,7 +561,12 @@ it in order; `take` consumes the handshake's copy, so the sent bytes stay here u
   capacity, the caller's. Nothing allocates or reads a clock. `grow()` (2026-11-24) moves what a buffer holds into
   larger storage the caller gives: every offset keeps its residue modulo 64 in both rings, so bytes move in at most
   three runs and bitmaps a word at a time, and a FIN or final size alone needs no room (a RESET_STREAM's final size
-  past the buffer allocates nothing).
+  past the buffer allocates nothing). `release()` (2026-11-24) gives the storage up once a buffer holds nothing
+  (everything that arrived read, everything written acknowledged), keeping its offsets; a buffer without storage
+  takes only what needs no room, and `grow()` gives it storage again. `QuicBufferStore` and `quic_hold()` are the one
+  owner of taking that storage from an allocator, for the stream set and the connection's CRYPTO levels: one block
+  per buffer, doubled from one chunk up to the limit as the data needs, and no block for data that ends past the
+  limit (the buffer refuses it).
 
 Evidence: `test_quic_stream.cpp` (13 cases: storage, order, gaps, duplicates, changed bytes, the window and its wrap,
 the final size's three refusals, any order of 50 overlapping streams, room, flow-controlled fresh data, lost data
@@ -615,7 +620,13 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   PTOs, restarted by an opened packet and by the first ack-eliciting packet sent after one (section 10.1); `ping()` is
   the keep-alive. A client's Version Negotiation packet that lists its version is ignored, and one that does not ends
   the connection naming the version to retry in.
-- **Memory.** Everything comes from the injected allocator at construction; receiving and sending allocate nothing.
+- **Memory.** Every table comes from the injected allocator at construction. Each level's CRYPTO buffers
+  (2026-11-24) take storage through `quic_hold()` as its data needs, up to `crypto_bytes`, give it back once they hold
+  nothing, and at once when the level's keys are discarded (RFC 9001 section 4.9); a discarded level's CRYPTO frames
+  are ignored, since its data was all read. Refused storage closes with INTERNAL_ERROR: on receipt, for data within
+  the limit, and on sending, for a level owing nothing (no acknowledgement would ever make room). An established
+  connection holds no CRYPTO storage. `buffer_allocations()` and `buffer_bytes()` count the stream and CRYPTO buffers,
+  the only allocations after construction.
 
 Evidence: `test_quic_connection.cpp` (22 cases: both versions to confirmation, nothing allocated after construction;
 40 seeded paths that lose 20%, duplicate 10% and reorder; a server held to three times what it received and silent

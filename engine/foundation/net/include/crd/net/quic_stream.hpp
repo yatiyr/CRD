@@ -18,13 +18,21 @@
 //               grants, checked on every frame (FLOW_CONTROL_ERROR), updated once half the window was read and
 //               doubled up to its maximum when updates come within two round trips (the window keeps pace with the
 //               path's bandwidth-delay product), the latest value resent when a frame carrying it is lost (13.3).
-//   storage     nothing allocates: each buffer's capacity is a multiple of kQuicStreamChunk, and its bitmaps are
-//               quic_stream_bitmap_words(capacity) words each, all the caller's. grow() moves what a buffer holds into
-//               larger storage the caller gives: a stream's buffers start small and grow as its data needs them.
+//   storage     the buffers allocate nothing: each buffer's capacity is a multiple of kQuicStreamChunk, and its
+//               bitmaps are quic_stream_bitmap_words(capacity) words each, all the caller's. grow() moves what a
+//               buffer holds into larger storage the caller gives, and release() gives the storage up once the buffer
+//               holds nothing, keeping its offsets: a buffer without storage (released, or never given any) takes
+//               only what needs no room. QuicBufferStore and quic_hold() take that storage from an allocator, one
+//               block per buffer doubled as its data needs: a stream's and a CRYPTO level's buffers start small.
 //   threads     each object belongs to its connection's thread.
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+
+namespace crd::memory
+{
+class IAllocator;
+}
 
 namespace crd::net
 {
@@ -45,7 +53,6 @@ enum class QuicReceiveResult : u8
     BeyondWindow, // ends past the window: FLOW_CONTROL_ERROR for a stream, CRYPTO_BUFFER_EXCEEDED for CRYPTO data
     FinalSize,    // FINAL_SIZE_ERROR (section 4.5)
     Changed,      // other bytes at an offset already held: PROTOCOL_VIOLATION (section 2.2)
-    Unusable,     // init() did not succeed
 };
 
 // One stream's received data, or one encryption level's CRYPTO data, put back in order.
@@ -53,7 +60,7 @@ class QuicReceiveBuffer
 {
 public:
     // Uses `bytes` (a non-zero multiple of kQuicStreamChunk) and `bits` (quic_stream_bitmap_words(bytes.size())
-    // words) and forgets everything; false, leaving the buffer unusable, for other sizes.
+    // words) and forgets everything; false, leaving the buffer without storage, for other sizes.
     bool init(cont::Span<u8> bytes, cont::Span<u64> bits) noexcept;
 
     // The data of a STREAM or CRYPTO frame at `offset`, `fin` for a STREAM frame with FIN; a RESET_STREAM's final
@@ -63,8 +70,11 @@ public:
 
     // Moves everything held into `bytes` and `bits`, sized as init() takes them and at least as large, and uses them
     // from now on (the old storage is the caller's again, and spans readable() gave are stale); false, changing
-    // nothing, for other sizes or an unusable buffer.
+    // nothing, for other sizes.
     bool grow(cont::Span<u8> bytes, cont::Span<u64> bits) noexcept;
+    // Gives the storage up (the caller's again) once every byte that arrived was read, keeping the offsets: grow()
+    // gives it storage again. False, changing nothing, while data is held.
+    [[nodiscard]] bool release() noexcept;
 
     // The bytes from read_offset() that have arrived without a gap, up to the end of the storage: after consume(),
     // a second call gives the rest when they wrap.
@@ -115,15 +125,17 @@ class QuicSendBuffer
 {
 public:
     // Uses `bytes` (a non-zero multiple of kQuicStreamChunk), `acked` and `lost` (quic_stream_bitmap_words(
-    // bytes.size()) words each) and forgets everything; false, leaving the buffer unusable, for other sizes.
+    // bytes.size()) words each) and forgets everything; false, leaving the buffer without storage, for other sizes.
     bool init(cont::Span<u8> bytes, cont::Span<u64> acked, cont::Span<u64> lost) noexcept;
 
     // Appends as much of `data` as there is room for and returns the bytes taken: none after finish().
     [[nodiscard]] usize write(cont::ConstSpan<u8> data) noexcept;
     // Moves everything held into `bytes`, `acked` and `lost`, sized as init() takes them and at least as large, and
-    // uses them from now on (the old storage is the caller's again); false, changing nothing, for other sizes or an
-    // unusable buffer.
+    // uses them from now on (the old storage is the caller's again); false, changing nothing, for other sizes.
     bool grow(cont::Span<u8> bytes, cont::Span<u64> acked, cont::Span<u64> lost) noexcept;
+    // Gives the storage up (the caller's again) once everything written was acknowledged, keeping the offsets: grow()
+    // gives it storage again. False, changing nothing, while data is owed.
+    [[nodiscard]] bool release() noexcept;
     // The stream ends after what was written (a FIN to send).
     void finish() noexcept;
     // Only the first `reliable` bytes (at most written_end()) are still owed, and no FIN: what lies above is never sent
@@ -178,6 +190,34 @@ private:
     bool            m_fin_lost   = false;
     bool            m_fin_acked  = false;
 };
+
+// One buffer's storage from an allocator: a block of its bitmaps, then its `bytes`; no block for a buffer without
+// storage.
+struct QuicBufferStore
+{
+    u64* block = nullptr;
+    u32  bytes = 0U;
+};
+
+// The bytes a store holds for a buffer with `maps` bitmaps (1 receiving, 2 sending).
+[[nodiscard]] constexpr usize quic_store_bytes(const QuicBufferStore& store, usize maps) noexcept
+{
+    return (store.block != nullptr) ? usize{store.bytes} + (quic_stream_bitmap_words(store.bytes) * 8U * maps) : 0U;
+}
+
+// A block for a buffer of `bytes` (a multiple of kQuicStreamChunk) with `maps` bitmaps, or null when the allocator
+// refuses it.
+[[nodiscard]] u64* quic_buffer_block(memory::IAllocator& allocator, usize bytes, usize maps) noexcept;
+
+// Room in `buffer` for the data to `end` when that is at most `limit` bytes past its read offset (data ending further
+// is left for the buffer to refuse, and takes nothing): lacking the room, the buffer moves into a new block of
+// `store`'s, its capacity doubled until it fits (from one chunk without storage) and at most `limit`, and the old
+// block goes back. `taken` counts the blocks taken. False, changing nothing, when the allocator refuses.
+[[nodiscard]] bool quic_hold(memory::IAllocator& allocator, QuicReceiveBuffer& buffer, QuicBufferStore& store, u64 end,
+                             u32 limit, u32& taken) noexcept;
+// The same for `more` bytes to write past what `buffer` still owes, at most `limit` in all.
+[[nodiscard]] bool quic_hold(memory::IAllocator& allocator, QuicSendBuffer& buffer, QuicBufferStore& store, u64 more,
+                             u32 limit, u32& taken) noexcept;
 
 // The flow-control limit a peer granted this side: a stream's (initial_max_stream_data_* then MAX_STREAM_DATA) or
 // the connection's (initial_max_data then MAX_DATA).

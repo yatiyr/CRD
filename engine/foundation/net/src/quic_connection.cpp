@@ -287,12 +287,8 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     m_config.entropy_seed = {};
 
     const usize per_space = usize{config.sent_packets} + kSentPacketReserve;
-    const usize crypto = config.crypto_bytes;
-    const usize words = quic_stream_bitmap_words(crypto);
     QuicSentEntry* const entries = memory::try_construct_array<QuicSentEntry>(allocator, kQuicSpaces * per_space);
     SentFrame* const frames = memory::try_construct_array<SentFrame>(allocator, config.sent_frames);
-    u8* const bytes = memory::try_construct_array<u8>(allocator, kQuicSpaces * 2U * crypto);
-    u64* const bits = memory::try_construct_array<u64>(allocator, kQuicSpaces * 3U * words);
     const bool streams = m_streams.init(allocator, config.streams, config.side);
     const bool datagrams = m_datagrams.init(allocator, config.datagrams);
     const usize early_bytes = early_context_bytes(config);
@@ -307,15 +303,13 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     QuicSentEntry* const slot_entries =
         further ? memory::try_construct_array<QuicSentEntry>(allocator, kFurtherSlots * per_space) : nullptr;
     void* const recovery = allocator.try_allocate(sizeof(QuicRecovery), alignof(QuicRecovery));
-    if (seeded != crypto::CryptoError::None || entries == nullptr || frames == nullptr || bytes == nullptr ||
-        bits == nullptr || recovery == nullptr || !streams || !datagrams || (early_bytes != 0U && early == nullptr) ||
+    if (seeded != crypto::CryptoError::None || entries == nullptr || frames == nullptr || recovery == nullptr ||
+        !streams || !datagrams || (early_bytes != 0U && early == nullptr) ||
         (held_bytes != 0U && (held == nullptr || held_entries == nullptr)) ||
         (further && (slots == nullptr || slot_entries == nullptr)))
     {
         memory::destroy_array(allocator, entries, kQuicSpaces * per_space);
         memory::destroy_array(allocator, frames, config.sent_frames);
-        memory::destroy_array(allocator, bytes, kQuicSpaces * 2U * crypto);
-        memory::destroy_array(allocator, bits, kQuicSpaces * 3U * words);
         memory::destroy_array(allocator, static_cast<u8*>(recovery), sizeof(QuicRecovery));
         memory::destroy_array(allocator, early, early_bytes);
         memory::destroy_array(allocator, held, held_bytes);
@@ -333,16 +327,6 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
     m_early_context_bytes = early_bytes;
     m_held_bytes = held;
     m_held = held_entries;
-    for (usize index = 0U; index < kQuicSpaces; ++index)
-    {
-        u8* const level_bytes = bytes + (index * 2U * crypto);
-        u64* const level_bits = bits + (index * 3U * words);
-        static_cast<void>(
-            m_levels[index].in.init(cont::Span<u8>(level_bytes, crypto), cont::Span<u64>(level_bits, words)));
-        static_cast<void>(m_levels[index].out.init(cont::Span<u8>(level_bytes + crypto, crypto),
-                                                   cont::Span<u64>(level_bits + words, words),
-                                                   cont::Span<u64>(level_bits + (2U * words), words)));
-    }
     QuicRecoveryConfig recovery_config;
     recovery_config.side = config.side;
     recovery_config.initial_rtt_ns = config.initial_rtt_ns;
@@ -363,8 +347,6 @@ QuicConnection::QuicConnection(memory::IAllocator& allocator, const QuicConnecti
         m_tuples[slot] = &m_slots[slot - 1U].tuples;
     }
     m_frames = frames;
-    m_crypto_bytes = bytes;
-    m_crypto_bits = bits;
     m_storage = entries;
 }
 
@@ -376,17 +358,52 @@ QuicConnection::~QuicConnection() noexcept
         m_recovery->~QuicRecovery();
         m_allocator.deallocate(m_recovery);
     }
-    const usize crypto = m_config.crypto_bytes;
+    for (Level& level : m_levels)
+    {
+        release_crypto(level, true);
+    }
     memory::destroy_array(m_allocator, m_storage, kQuicSpaces * (usize{m_config.sent_packets} + kSentPacketReserve));
     memory::destroy_array(m_allocator, m_frames, m_config.sent_frames);
-    memory::destroy_array(m_allocator, m_crypto_bytes, kQuicSpaces * 2U * crypto);
-    memory::destroy_array(m_allocator, m_crypto_bits, kQuicSpaces * 3U * quic_stream_bitmap_words(crypto));
     memory::destroy_array(m_allocator, m_early_context, m_early_context_bytes);
     memory::destroy_array(m_allocator, m_held_bytes, usize{m_config.held_packets} * m_config.max_datagram_bytes);
     memory::destroy_array(m_allocator, m_held, m_config.held_packets);
     const usize further = (m_slots != nullptr) ? kFurtherSlots : 0U;
     memory::destroy_array(m_allocator, m_slots, further);
     memory::destroy_array(m_allocator, m_slot_entries, further * (usize{m_config.sent_packets} + kSentPacketReserve));
+}
+
+u32 QuicConnection::buffer_allocations() const noexcept
+{
+    return m_streams.buffer_allocations() + m_crypto_allocations;
+}
+
+usize QuicConnection::buffer_bytes() const noexcept
+{
+    usize total = m_streams.buffer_bytes();
+    for (const Level& level : m_levels)
+    {
+        total += quic_store_bytes(level.in_store, 1U) + quic_store_bytes(level.out_store, 2U);
+    }
+    return total;
+}
+
+void QuicConnection::release_crypto(Level& level, bool discarded) noexcept
+{
+    if (discarded)
+    {
+        level.in = QuicReceiveBuffer{};
+        level.out = QuicSendBuffer{};
+    }
+    if (level.in_store.block != nullptr && (discarded || level.in.release()))
+    {
+        memory::deallocate_array(m_allocator, level.in_store.block);
+        level.in_store = {};
+    }
+    if (level.out_store.block != nullptr && (discarded || level.out.release()))
+    {
+        memory::deallocate_array(m_allocator, level.out_store.block);
+        level.out_store = {};
+    }
 }
 
 u64 QuicConnection::entropy() noexcept
@@ -625,8 +642,10 @@ bool QuicConnection::start_keyed(const QuicKeyedStart& start, u64 now_ns) noexce
     hello[0] = static_cast<u8>(bytes >> 8U);
     hello[1] = static_cast<u8>(bytes);
     const usize whole = kKeyedHelloPrefix + bytes;
+    Level& level = m_levels[quic_space_index(QuicSpace::Application)];
     if (bytes == 0U ||
-        m_levels[quic_space_index(QuicSpace::Application)].out.write(cont::ConstSpan<u8>(hello, whole)) != whole)
+        !quic_hold(m_allocator, level.out, level.out_store, whole, m_config.crypto_bytes, m_crypto_allocations) ||
+        level.out.write(cont::ConstSpan<u8>(hello, whole)) != whole)
     {
         return false;
     }
@@ -1465,7 +1484,17 @@ bool QuicConnection::crypto_frame(const QuicFrame& frame, QuicSpace space, u64 n
         }
         m_version_settled = true;
     }
+    if (m_space_gone[quic_space_index(space)])
+    {
+        return true; // a discarded level's data was all read, and its buffers are gone (RFC 9001 section 4.9)
+    }
     Level& level = m_levels[quic_space_index(space)];
+    if (!frame.data.empty() && !quic_hold(m_allocator, level.in, level.in_store, frame.offset + frame.data.size(),
+                                          m_config.crypto_bytes, m_crypto_allocations))
+    {
+        fail(QuicTransportError::InternalError, kCryptoFrameType, now_ns); // the allocator refused room under the limit
+        return false;
+    }
     switch (level.in.insert(frame.offset, frame.data, false))
     {
         case QuicReceiveResult::Accepted:
@@ -1475,13 +1504,14 @@ bool QuicConnection::crypto_frame(const QuicFrame& frame, QuicSpace space, u64 n
             return false;
         case QuicReceiveResult::FinalSize:
         case QuicReceiveResult::Changed:
-        case QuicReceiveResult::Unusable:
             fail(QuicTransportError::ProtocolViolation, kCryptoFrameType, now_ns);
             return false;
     }
     if (m_keyed)
     {
-        return read_keyed_hello(level, now_ns);
+        const bool read = read_keyed_hello(level, now_ns);
+        release_crypto(level, false);
+        return read;
     }
     for (cont::ConstSpan<u8> readable = level.in.readable(); !readable.empty(); readable = level.in.readable())
     {
@@ -1507,6 +1537,7 @@ bool QuicConnection::crypto_frame(const QuicFrame& frame, QuicSpace space, u64 n
         }
         level.in.consume(readable.size());
     }
+    release_crypto(level, false);
     return advance_handshake(now_ns);
 }
 
@@ -1818,6 +1849,7 @@ void QuicConnection::discard_space(QuicSpace space, u64 now_ns) noexcept
     m_space_gone[index] = true;
     m_numbers[number_space(space, 0U)].probes = 0U; // never the Application space, which is never discarded
     static_cast<void>(m_recovery->discard(space, now_ns, m_events));
+    release_crypto(m_levels[index], true); // nothing of the level is sent or read again (RFC 9001 section 4.9)
 }
 
 void QuicConnection::confirm(u64 now_ns) noexcept
@@ -1975,12 +2007,23 @@ usize QuicConnection::amplification_credit(usize slot) const noexcept
     return paths.credit(paths.active());
 }
 
-void QuicConnection::pull_crypto() noexcept
+void QuicConnection::pull_crypto(u64 now_ns) noexcept
 {
     for (usize index = 0U; index < kQuicSpaces; ++index)
     {
         const crypto::QuicLevel level = level_of(static_cast<QuicSpace>(index));
-        QuicSendBuffer& out = m_levels[index].out;
+        Level& stored = m_levels[index];
+        QuicSendBuffer& out = stored.out;
+        if (m_handshake.pending(level) > 0U &&
+            !quic_hold(m_allocator, out, stored.out_store, m_handshake.pending(level), m_config.crypto_bytes,
+                       m_crypto_allocations) &&
+            out.capacity() == 0U)
+        {
+            // Refused with nothing owed, no acknowledgement would ever make room. Refused with data owed, the buffer
+            // takes what fits and the rest waits for the room acknowledgements free.
+            fail(QuicTransportError::InternalError, 0U, now_ns);
+            return;
+        }
         while (m_handshake.pending(level) > 0U && out.room() > 0U)
         {
             u8 chunk[kPullChunk];
@@ -2328,14 +2371,15 @@ void QuicConnection::settle_frame(SentFrame& frame, Settle how) noexcept
 {
     if (frame.kind == kRecordCrypto)
     {
-        QuicSendBuffer& out = m_levels[frame.space].out;
+        Level& level = m_levels[frame.space];
         if (how == Settle::Acked)
         {
-            out.on_acked(frame.frame.value, frame.frame.length, false);
+            level.out.on_acked(frame.frame.value, frame.frame.length, false);
+            release_crypto(level, false);
         }
         else if (how == Settle::Lost)
         {
-            out.on_lost(frame.frame.value, frame.frame.length, false);
+            level.out.on_lost(frame.frame.value, frame.frame.length, false);
         }
     }
     else if (frame.kind == kRecordStream)
@@ -3139,6 +3183,10 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
         m_send_path = tuples(send_slot()).active();
         return 0U;
     }
+    if (m_state != QuicConnectionState::Closing)
+    {
+        pull_crypto(now_ns); // a failure there begins the close
+    }
     // The close goes on the leading slot alone. Otherwise the open slots take turns, starting after the one that
     // wrote the last datagram, so one slot's data never starves another's owed frames (S78's scheduling).
     if (m_state == QuicConnectionState::Closing)
@@ -3146,7 +3194,6 @@ usize QuicConnection::send(cont::Span<u8> out, u64 now_ns, u32 held_sockets) noe
         m_send_slot = lead_slot();
         return send_on_slot(out, now_ns, held_sockets);
     }
-    pull_crypto();
     issue_local_ids();
     // A send held back moves nothing, the PATH_ACKs' carrier neither: the next send chooses it again.
     const usize carrier = m_ack_slot;

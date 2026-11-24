@@ -121,8 +121,10 @@
 //              transport parameters travel in CRYPTO frames of 1-RTT packets (a two-byte length, then the same
 //              encoding, grease and version_information as over TLS), and a server stays under the 3x limit until its
 //              client acknowledges one of its packets. Everything after is this connection's ordinary 1-RTT life.
-//   memory     every buffer comes from the injected allocator at construction; receiving and sending allocate
-//              nothing.
+//   memory     every table comes from the injected allocator at construction. The streams' and the CRYPTO levels'
+//              buffers take storage from it as their data needs and give it back as S38 says (buffer_allocations());
+//              a level's goes back once it holds nothing, and at once when its keys are discarded (RFC 9001 section
+//              4.9). Nothing else allocates after construction.
 //   threads    a connection belongs to its loop's thread.
 
 #include <crd/containers/span.hpp>
@@ -248,7 +250,10 @@ struct QuicConnectionConfig
     // The frames of those packets settled on acknowledgement or loss (CRYPTO, stream and credit frames, ...): eight
     // per packet, so a packet carrying several streams' frames still fits; a full ledger holds frames back.
     u32 sent_frames = 1024U;
-    u32 crypto_bytes = 16384U; // per level, each direction: a multiple of kQuicStreamChunk, at least 4096
+    // The CRYPTO data each level holds at most in each direction: a multiple of kQuicStreamChunk, at least 4096 (RFC
+    // 9000 section 7.5). Its buffers take storage as the data needs it and give it back once they hold nothing, and a
+    // discarded level's at once.
+    u32 crypto_bytes = 16384U;
     // What this side sends at most: the ceiling of the path MTU search, and each held packet's slot.
     u32 max_datagram_bytes = kQuicDefaultMaxDatagram;
     // What the path is known to carry (kQuicIpv6BaseDatagram on an IPv6 path, which QuicHost sets), 1200 to
@@ -581,6 +586,11 @@ public:
     // The connection's streams: opened, written, read and polled by the application, their frames sent by send().
     [[nodiscard]] QuicStreamSet& streams() noexcept { return m_streams; }
     [[nodiscard]] const QuicStreamSet& streams() const noexcept { return m_streams; }
+    // The buffers the connection has taken from its allocator after construction: its streams' (QuicStreamSet::
+    // buffer_allocations) and its CRYPTO levels'. Nothing else it does after construction allocates.
+    [[nodiscard]] u32 buffer_allocations() const noexcept;
+    // The bytes those buffers hold now, their bitmaps included.
+    [[nodiscard]] usize buffer_bytes() const noexcept;
     // The connection's datagrams: queued, read and polled by the application, their frames sent by send().
     [[nodiscard]] QuicDatagrams& datagrams() noexcept { return m_datagrams; }
     [[nodiscard]] const QuicDatagrams& datagrams() const noexcept { return m_datagrams; }
@@ -718,10 +728,13 @@ private:
         QuicConnection& m_connection;
     };
 
+    // One level's CRYPTO data and the storage its buffers took.
     struct Level
     {
         QuicReceiveBuffer in;
         QuicSendBuffer out;
+        QuicBufferStore in_store;
+        QuicBufferStore out_store;
     };
 
     // A frame a sent packet carried that is settled when the packet is acknowledged, lost or discarded. A packet's
@@ -1082,7 +1095,11 @@ private:
     // Whether `slot` has a probe timeout pending while another path has fewer: it then carries no data, only its
     // probes, acknowledgements and path frames, so a path gone dark holds nothing back (section 5.7).
     [[nodiscard]] bool held_dark(usize slot) const noexcept;
-    void pull_crypto() noexcept;
+    // Moves the handshake's output into the levels' CRYPTO buffers: INTERNAL_ERROR when a level owing nothing is
+    // refused the storage for it.
+    void pull_crypto(u64 now_ns) noexcept;
+    // Gives back a level's storage once its buffers hold nothing; all of it, whatever they hold, when `discarded`.
+    void release_crypto(Level& level, bool discarded) noexcept;
     // What path slot `slot`'s active 4-tuple may still carry under its amplification limit (RFC 10069 section 7.2).
     [[nodiscard]] usize amplification_credit(usize slot = 0U) const noexcept;
     // Whether `slot` is the handshake's: slot 0 while it holds path ID 0, which only it carries (with the Initial and
@@ -1117,8 +1134,6 @@ private:
     QuicConnectionConfig m_config; // its spans are copied below and cleared
     QuicSentEntry* m_storage = nullptr;
     SentFrame* m_frames = nullptr;
-    u8* m_crypto_bytes = nullptr;
-    u64* m_crypto_bits = nullptr;
     QuicRecovery* m_recovery = nullptr;
     // Each open path slot's sending state: slot 0's is m_first_control (path ID 0's, then a reclaimed slot's), the
     // others' are allocated with their slot.
@@ -1139,6 +1154,7 @@ private:
     HelloAnswer m_hello;
     u32 m_frame_head = 0U;
     u32 m_frame_count = 0U;
+    u32 m_crypto_allocations = 0U; // the CRYPTO levels' blocks taken
     Level m_levels[kQuicSpaces];
     crypto::QuicHandshake m_handshake;
     QuicPacketProtection m_protection;

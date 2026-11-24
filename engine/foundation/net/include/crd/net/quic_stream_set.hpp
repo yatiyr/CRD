@@ -368,13 +368,11 @@ private:
         bool receives = false;
     };
 
-    // A slot's buffers, kept for the streams it holds later: each block is its bitmap words, then its bytes.
+    // A slot's buffers, kept for the streams it holds later.
     struct Store
     {
-        u64* in = nullptr;
-        u64* out = nullptr;
-        u32 in_bytes = 0U;
-        u32 out_bytes = 0U;
+        QuicBufferStore in;
+        QuicBufferStore out;
     };
 
     enum class Lookup : u8
@@ -397,8 +395,8 @@ private:
     // Gives a slot of `type` the buffers it lacks, first_bytes each (the limit when smaller): false when the allocator
     // refused one.
     [[nodiscard]] bool give_buffers(Store& store, const Type& type) noexcept;
-    // A block of `bytes` bytes and `maps` bitmaps for them; nullptr when the allocator refuses.
-    [[nodiscard]] u64* take_block(usize bytes, usize maps) noexcept;
+    // A first block of `bytes` bytes and `maps` bitmaps for them: false when the allocator refuses.
+    [[nodiscard]] bool take_block(QuicBufferStore& store, u32 bytes, usize maps) noexcept;
     // The receive buffer holds data up to `end` (at most its limit), grown when needed: false when the allocator
     // refused.
     [[nodiscard]] bool hold_in(Slot& slot, u64 end) noexcept;

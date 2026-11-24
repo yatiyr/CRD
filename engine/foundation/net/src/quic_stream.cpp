@@ -1,6 +1,7 @@
 // crd-net -- QUIC byte streams and flow control (4.2a; contract: docs/design/network-foundation.md#quic-streams).
 #include <crd/net/quic_stream.hpp>
 
+#include <crd/memory/construct.hpp>
 #include <crd/net/quic_header.hpp>
 
 #include <bit>
@@ -215,10 +216,6 @@ bool QuicReceiveBuffer::init(cont::Span<u8> bytes, cont::Span<u64> bits) noexcep
 
 QuicReceiveResult QuicReceiveBuffer::insert(u64 offset, cont::ConstSpan<u8> data, bool fin) noexcept
 {
-    if (m_bytes.empty())
-    {
-        return QuicReceiveResult::Unusable;
-    }
     const u64 length = data.size();
     if (offset > kQuicMaxVarint || length > kQuicMaxVarint - offset)
     {
@@ -231,7 +228,7 @@ QuicReceiveResult QuicReceiveBuffer::insert(u64 offset, cont::ConstSpan<u8> data
     }
     if (length != 0U && end > m_read && end - m_read > capacity())
     {
-        return QuicReceiveResult::BeyondWindow;
+        return QuicReceiveResult::BeyondWindow; // without storage, every byte not yet read
     }
 
     // Data below the read offset was read already and is not compared (nothing holds it). Below the contiguous end
@@ -288,7 +285,7 @@ QuicReceiveResult QuicReceiveBuffer::insert(u64 offset, cont::ConstSpan<u8> data
 
 bool QuicReceiveBuffer::grow(cont::Span<u8> bytes, cont::Span<u64> bits) noexcept
 {
-    if (m_bytes.empty() || !storage_valid(bytes.size(), bits.size()) || bytes.size() < capacity())
+    if (!storage_valid(bytes.size(), bits.size()) || bytes.size() < capacity())
     {
         return false;
     }
@@ -300,6 +297,17 @@ bool QuicReceiveBuffer::grow(cont::Span<u8> bytes, cont::Span<u64> bits) noexcep
     move_bytes(from, to, m_bytes, bytes, m_read, min_u64(m_received - min_u64(m_received, m_read), capacity()));
     m_bytes = bytes;
     m_bits  = bits;
+    return true;
+}
+
+bool QuicReceiveBuffer::release() noexcept
+{
+    if (m_read != m_received)
+    {
+        return false;
+    }
+    m_bytes = {};
+    m_bits  = {};
     return true;
 }
 
@@ -371,7 +379,7 @@ usize QuicSendBuffer::room() const noexcept
 
 usize QuicSendBuffer::write(cont::ConstSpan<u8> data) noexcept
 {
-    if (m_bytes.empty() || m_finished)
+    if (m_finished)
     {
         return 0U;
     }
@@ -388,8 +396,7 @@ usize QuicSendBuffer::write(cont::ConstSpan<u8> data) noexcept
 
 bool QuicSendBuffer::grow(cont::Span<u8> bytes, cont::Span<u64> acked, cont::Span<u64> lost) noexcept
 {
-    if (m_bytes.empty() || !storage_valid(bytes.size(), acked.size()) || lost.size() != acked.size() ||
-        bytes.size() < capacity())
+    if (!storage_valid(bytes.size(), acked.size()) || lost.size() != acked.size() || bytes.size() < capacity())
     {
         return false;
     }
@@ -406,20 +413,25 @@ bool QuicSendBuffer::grow(cont::Span<u8> bytes, cont::Span<u64> acked, cont::Spa
     return true;
 }
 
+bool QuicSendBuffer::release() noexcept
+{
+    if (m_acked != m_written)
+    {
+        return false; // lost data and data not yet sent lie below what was written
+    }
+    m_bytes      = {};
+    m_acked_bits = {};
+    m_lost_bits  = {};
+    return true;
+}
+
 void QuicSendBuffer::finish() noexcept
 {
-    if (!m_bytes.empty())
-    {
-        m_finished = true;
-    }
+    m_finished = true; // the FIN needs no room
 }
 
 void QuicSendBuffer::truncate(u64 reliable) noexcept
 {
-    if (m_bytes.empty())
-    {
-        return;
-    }
     // Bytes acknowledged beyond the size stay acknowledged, so the invariant m_acked <= m_sent <= m_written holds.
     const u64 end = max_u64(min_u64(reliable, m_written), m_acked);
     if (m_sent > end)
@@ -447,10 +459,6 @@ bool QuicSendBuffer::pending() const noexcept
 QuicSendChunk QuicSendBuffer::next(usize max_bytes, u64 fresh_limit) const noexcept
 {
     QuicSendChunk chunk;
-    if (m_bytes.empty())
-    {
-        return chunk;
-    }
     const Ring ring{capacity()};
     if (m_lost_bytes > 0U)
     {
@@ -494,10 +502,6 @@ cont::ConstSpan<u8> QuicSendBuffer::bytes_of(const QuicSendChunk& chunk) const n
 
 void QuicSendBuffer::on_sent(const QuicSendChunk& chunk) noexcept
 {
-    if (m_bytes.empty())
-    {
-        return;
-    }
     const u64 end = chunk.offset + chunk.length;
     const u64 low = max_u64(chunk.offset, m_acked);
     const u64 high = min_u64(end, m_sent);
@@ -518,7 +522,7 @@ void QuicSendBuffer::on_sent(const QuicSendChunk& chunk) noexcept
 
 void QuicSendBuffer::on_acked(u64 offset, usize length, bool fin) noexcept
 {
-    if (m_bytes.empty() || offset > kQuicMaxVarint)
+    if (offset > kQuicMaxVarint)
     {
         return;
     }
@@ -563,7 +567,7 @@ void QuicSendBuffer::on_acked(u64 offset, usize length, bool fin) noexcept
 
 void QuicSendBuffer::on_lost(u64 offset, usize length, bool fin) noexcept
 {
-    if (m_bytes.empty() || offset > kQuicMaxVarint)
+    if (offset > kQuicMaxVarint)
     {
         return;
     }
@@ -584,6 +588,75 @@ void QuicSendBuffer::on_lost(u64 offset, usize length, bool fin) noexcept
     {
         m_fin_lost = true;
     }
+}
+
+// ---- Storage from an allocator ----
+
+namespace
+{
+// The capacity holding `needed` bytes (at most `limit`): `capacity` doubled, from one chunk when it is none.
+[[nodiscard]] u32 grown_capacity(u32 capacity, u64 needed, u32 limit) noexcept
+{
+    u32 size = (capacity != 0U) ? capacity : static_cast<u32>(kQuicStreamChunk);
+    while (size < needed)
+    {
+        size = (size > limit / 2U) ? limit : size * 2U;
+    }
+    return size;
+}
+
+// Moves a buffer into a new block of `size` bytes through `grow` and gives the old one back.
+template <typename Grow>
+[[nodiscard]] bool regrow(memory::IAllocator& allocator, QuicBufferStore& store, u32 size, usize maps, u32& taken,
+                          Grow grow) noexcept
+{
+    u64* const block = quic_buffer_block(allocator, size, maps);
+    if (block == nullptr)
+    {
+        return false;
+    }
+    const usize words = quic_stream_bitmap_words(size);
+    static_cast<void>(grow(cont::Span<u8>(reinterpret_cast<u8*>(block + (maps * words)), size), block, words));
+    memory::deallocate_array(allocator, store.block);
+    store.block = block;
+    store.bytes = size;
+    ++taken;
+    return true;
+}
+} // namespace
+
+u64* quic_buffer_block(memory::IAllocator& allocator, usize bytes, usize maps) noexcept
+{
+    // A buffer's bytes are a multiple of kQuicStreamChunk, so of the word: they follow the bitmaps aligned.
+    return memory::try_allocate_array<u64>(allocator, (maps * quic_stream_bitmap_words(bytes)) + (bytes / 8U));
+}
+
+bool quic_hold(memory::IAllocator& allocator, QuicReceiveBuffer& buffer, QuicBufferStore& store, u64 end, u32 limit,
+               u32& taken) noexcept
+{
+    const u64 read = buffer.read_offset();
+    const u64 needed = (end > read) ? end - read : 0U;
+    if (needed <= buffer.capacity() || needed > limit)
+    {
+        return true; // held, or refused by the buffer without a block taken for it
+    }
+    return regrow(allocator, store, grown_capacity(static_cast<u32>(buffer.capacity()), needed, limit), 1U, taken,
+                  [&](cont::Span<u8> bytes, u64* block, usize words)
+                  { return buffer.grow(bytes, cont::Span<u64>(block, words)); });
+}
+
+bool quic_hold(memory::IAllocator& allocator, QuicSendBuffer& buffer, QuicBufferStore& store, u64 more, u32 limit,
+               u32& taken) noexcept
+{
+    const u64 owed = buffer.written_end() - buffer.acked_end();
+    const u64 needed = min_u64(owed + more, limit);
+    if (needed <= buffer.capacity())
+    {
+        return true;
+    }
+    return regrow(allocator, store, grown_capacity(static_cast<u32>(buffer.capacity()), needed, limit), 2U, taken,
+                  [&](cont::Span<u8> bytes, u64* block, usize words)
+                  { return buffer.grow(bytes, cont::Span<u64>(block, words), cont::Span<u64>(block + words, words)); });
 }
 
 // ---- QuicSendCredit ----

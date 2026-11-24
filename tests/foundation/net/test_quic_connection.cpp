@@ -103,9 +103,9 @@ TEST_CASE("QUIC connection: the handshake reaches confirmation in both versions 
         CHECK(same(server.peer_cid(), ConstSpan<u8>(kClientCid, sizeof(kClientCid))));
         CHECK(net->client_initials_padded);
         CHECK(net->amplification_kept);
-        // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
+        // Nothing allocates after construction but the stream and CRYPTO buffers, as their data needs them.
         CHECK(allocator.calls() ==
-              allocations + client.streams().buffer_allocations() + server.streams().buffer_allocations());
+              allocations + client.buffer_allocations() + server.buffer_allocations());
         CHECK(client.recovery().rtt().sampled());
         // Quiet once settled (the delayed ACKs sent): the next timer is the idle timeout.
         net->advance(net->now + 500U * kMs);
@@ -2954,9 +2954,9 @@ TEST_CASE("QUIC connection: streams carry data both ways over paths that lose, d
             CHECK(client.streams().connection_sent() == echo.total());
             CHECK(server.streams().connection_sent() == echo.total());
             CHECK(client.streams().peer_limit(true) >= Echo::kStreams); // MAX_STREAMS followed the freed slots
-            // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
+            // Nothing allocates after construction but the stream and CRYPTO buffers, as their data needs them.
             CHECK(allocator.calls() ==
-                  allocations + client.streams().buffer_allocations() + server.streams().buffer_allocations());
+                  allocations + client.buffer_allocations() + server.buffer_allocations());
         }
     }
 }
@@ -3228,9 +3228,9 @@ TEST_CASE("QUIC connection: datagrams cross both ways beside streams over hostil
             CHECK(client.state() == QuicConnectionState::Established);
             CHECK(server.state() == QuicConnectionState::Established);
             CHECK(client.streams().connection_sent() == echo.total());
-            // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
+            // Nothing allocates after construction but the stream and CRYPTO buffers, as their data needs them.
             CHECK(allocator.calls() ==
-                  allocations + client.streams().buffer_allocations() + server.streams().buffer_allocations());
+                  allocations + client.buffer_allocations() + server.buffer_allocations());
         }
     }
     CHECK(lost != 0U); // the paths' losses were reported, and reordering before the thresholds rose
@@ -4347,9 +4347,9 @@ TEST_CASE("QUIC connection: a resumed client's stream and datagram go in 0-RTT p
         CHECK(server.protection().can_open(QuicPacketType::ZeroRtt));
         net->advance(net->now + 3000U * kMs);
         CHECK_FALSE(server.protection().can_open(QuicPacketType::ZeroRtt));
-        // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
+        // Nothing allocates after construction but the stream and CRYPTO buffers, as their data needs them.
         CHECK(allocator.calls() ==
-              allocations + client.streams().buffer_allocations() + server.streams().buffer_allocations());
+              allocations + client.buffer_allocations() + server.buffer_allocations());
     }
 }
 
@@ -4394,9 +4394,9 @@ TEST_CASE("QUIC connection: 0-RTT over paths that lose, duplicate and reorder de
             CHECK(early <= kEarlyBytes);
             CHECK(net->client_initials_padded);
             CHECK(net->amplification_kept);
-            // Nothing allocates after construction but the streams' buffers, as slots first hold streams and grow.
+            // Nothing allocates after construction but the stream and CRYPTO buffers, as their data needs them.
             CHECK(allocator.calls() ==
-                  allocations + client.streams().buffer_allocations() + server.streams().buffer_allocations());
+                  allocations + client.buffer_allocations() + server.buffer_allocations());
             held += client.counters().packets_held + server.counters().packets_held;
             early_total += early;
         }
@@ -9690,4 +9690,61 @@ TEST_CASE("QUIC connection: a datagram pinned to a dark path gives way once what
     CHECK(arrivals.each(0U, 2U, 0U));
     CHECK(arrivals.each(2U, send_count + 8U, 1U));
     CHECK(client.state() == QuicConnectionState::Established);
+}
+
+TEST_CASE("QUIC connection: CRYPTO buffers take storage as the handshake needs it and give it all back",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    for (const QuicVersion version : kVersions)
+    {
+        CountingAllocator allocator;
+        {
+            QuicConnection client(allocator, config_for(QuicSide::Client, identity, version, 0U));
+            QuicConnection server(allocator, config_for(QuicSide::Server, identity, version, 1U));
+            REQUIRE(server.ready());
+            CHECK(client.buffer_bytes() == 0U);
+            CHECK(server.buffer_bytes() == 0U);
+            connect(client);
+            auto net = std::make_unique<Net>(client, server);
+            REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+            net->advance(net->now + 500U * kMs);
+            REQUIRE(net->in_flight() == 0U);
+            for (QuicConnection* end : {&client, &server})
+            {
+                // Initial's and Handshake's went back at discard and 1-RTT's once drained: the streams' are left.
+                CHECK(end->buffer_allocations() > end->streams().buffer_allocations());
+                CHECK(end->buffer_bytes() == end->streams().buffer_bytes());
+            }
+        }
+        CHECK(allocator.live() == 0U);
+    }
+    {
+        // A level owing nothing and refused storage closes at once, not at its idle timeout.
+        CountingAllocator allocator;
+        QuicConnection client(allocator, config_for(QuicSide::Client, identity, QuicVersion::V1, 0U));
+        connect(client);
+        allocator.refuse_after(allocator.calls());
+        u8 datagram[kQuicDefaultMaxDatagram] = {};
+        CHECK(client.send(Span<u8>(datagram, sizeof(datagram)), kStartNs) != 0U); // its close
+        CHECK(client.state() == QuicConnectionState::Closing);
+        CHECK(client.close_info().local);
+        CHECK(client.close_info().error_code == code(QuicTransportError::InternalError));
+        CHECK(client.buffer_allocations() == 0U);
+    }
+    {
+        // A server refused room for a CRYPTO frame within the limit closes with INTERNAL_ERROR.
+        CountingAllocator client_allocator;
+        CountingAllocator server_allocator;
+        QuicConnection client(client_allocator, config_for(QuicSide::Client, identity, QuicVersion::V1, 0U));
+        QuicConnection server(server_allocator, config_for(QuicSide::Server, identity, QuicVersion::V1, 1U));
+        REQUIRE(server.ready());
+        server_allocator.refuse_after(server_allocator.calls());
+        connect(client);
+        auto net = std::make_unique<Net>(client, server);
+        REQUIRE(net->run_until([&] { return server.state() == QuicConnectionState::Closing; }));
+        CHECK(server.close_info().local);
+        CHECK(server.close_info().error_code == code(QuicTransportError::InternalError));
+        CHECK(server.buffer_bytes() == 0U);
+    }
 }
