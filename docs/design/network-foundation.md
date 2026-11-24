@@ -1159,11 +1159,15 @@ stream, and a seeded relay with 2% loss, 1% duplication and reordering jitter. T
 ([quic_board.py](../../tests/foundation/net/interop/quic_board.py); 2026-11-23) runs each implementation against
 itself, settings checked where both ends report them: `crd-quic-board` and `crd-msquic-quic-board` (`msquic_common.h` holds what both
 msquic programs set up), handshakes and bytes per CPU-second of both ends as the slope between two sizes, crd-net with
-and without segmentation and coalescing; `crd-net-quic-board-check` runs its short round. Each board connection ends
+and without segmentation and coalescing; `crd-net-quic-board-check` runs its short round. Each end also reports
+its datagrams and the messages that carried them each way (msquic's from its global performance counters), which the
+board gives per MiB: datagrams per segmented train, ACKs per MiB and data datagrams per ACK, the kernel's share of a
+byte's cost. Each board connection ends
 with one empty exchange, so both ends finish the handshake before the close (a client closing as its handshake
 completes closes its server in the Handshake space, which then drains three PTOs at the initial RTT, 3.07 s). First
 board: [2026-11-23](../bench/2026-11-23-net-path-quic-board.md); with stream buffers grown on demand:
-[2026-11-24](../bench/2026-11-24-net-path-stream-buffers.md).
+[2026-11-24](../bench/2026-11-24-net-path-stream-buffers.md); with a send quantum as the window controllers' burst:
+[2026-11-24](../bench/2026-11-24-net-path-send-quantum.md).
 
 <a id="admission"></a>
 ## Bounded admission
@@ -3957,7 +3961,7 @@ sequences against a model of the composition), `test_tls_policy.cpp` (a session 
   - HyStart++ (RFC 9406) in the first slow start only: rounds by Application packet numbers, eight samples, the conservative phase growing by a quarter, and avoidance after five CSS rounds;
   - an undo when every loss of the period proves spurious (RFC 9438 section 4.9). An ECN mark and persistent congestion are never undone.
 - **CUBIC in integers.** W_max, K and the curve are computed in bytes with time in 2^-10 s steps (an exact integer cube root and 128-bit products). Every platform computes the same window, which NET-SIM's replays need. Within one byte, the curve agrees with RFC 9438's floating-point formula. Also implemented: the Reno-friendly estimate (alpha 9/17, then 1 once past the window before the reduction), fast convergence (W_max to 0.85 of the window) and idle periods taken off the epoch.
-- **Pacing.** `Pacer` holds exact credit in byte-nanoseconds per second. It refills at the controller's rate (1.25 windows per smoothed RTT, RFC 9002 section 7.7) up to a burst of the initial window. A packet goes while any credit is left and may run it into debt, which is capped at one burst. The release time is a timer of `next_timer_ns()`.
+- **Pacing.** `Pacer` holds exact credit in byte-nanoseconds per second. It refills at the controller's rate (1.25 windows per smoothed RTT, RFC 9002 section 7.7) up to a burst. A window controller's burst (interface version 8) is the initial window (section 7.7's limit) except while the window or the pacer holds an ACK-clocked flight back (this round or the last, and not since the flight restarted from nothing in flight): then it is a send quantum, a millisecond of that rate, one 64 KiB train at most and the initial window at least, as Linux's TCP sizes its segmentation bursts under every controller. On a fast short path the packets of one turn then leave as one train the host segments whole: on the loopback board (2026-11-24) the trains grew from 10 to 22 datagrams and the ACKs fell from 54 to 16 per MiB at 1 MiB windows. A slow or long path, an application-limited sender and a restart after idle keep the initial window: a whole quantum out of a full pacer after idle put 114 to 157 drops and 17 to 20 reductions into a 32 KiB queue at 1 Gbit/s and 2 ms where the initial window's burst put 1 to 5 and 1 (`test_congestion.cpp`). A packet goes while any credit is left and may run it into debt, which is capped at one burst. The release time is a timer of `next_timer_ns()`.
 - **What the connection holds back.** Data goes only when the window has room for a whole datagram. A smaller room let only ACK frames through, packet after packet; the first connection test that showed this sent 128 ACK-only datagrams in one instant.
 - **What is never held back.** ACK-only packets and probes (sections 6.2.4 and 7.5), and the Initial and Handshake CRYPTO data, still count in bytes in flight but are not held by the window. A peer still handshaking reads no 1-RTT packet, so 1-RTT data filling the window is never acknowledged or declared lost. No probe timer serves the Application space before confirmation (appendix A.8). A lost Handshake flight held behind that data wedged both ends until idle: the twelve-connection client test over hostile paths found it. The handshake's size is bounded by the crypto buffers and, on a server, by the amplification limit. DATAGRAM frames are congestion controlled (RFC 9221 section 5.4).
 - **Proof.**
