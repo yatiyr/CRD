@@ -1555,6 +1555,16 @@ public:
     template <typename Write> void send(QuicPacketType type, Write write)
     {
         u8 datagram[kDatagram] = {};
+        const usize size = seal(type, write, datagram);
+        std::memcpy(last, datagram, size);
+        last_bytes = size;
+        server.receive(from, Span<u8>(datagram, size), Ecn::NotEct, now);
+        drain();
+    }
+
+    // The same packet sealed into `datagram` and not sent: its size.
+    template <typename Write> usize seal(QuicPacketType type, Write write, u8 (&datagram)[kDatagram])
+    {
         QuicPacketWriter writer;
         QuicPacketSpec spec;
         spec.type = type;
@@ -1567,10 +1577,7 @@ public:
         floor = (type == QuicPacketType::Initial && pad_initial) ? kQuicMinInitialDatagram : floor;
         usize size = 0U;
         REQUIRE(raw.protection.seal(writer, used, {floor, 0U}, size) == QuicPacketError::None);
-        std::memcpy(last, datagram, size);
-        last_bytes = size;
-        server.receive(from, Span<u8>(datagram, size), Ecn::NotEct, now);
-        drain();
+        return size;
     }
 
     // One 1-RTT packet in the raw client's path slot (raw.path_slot, path ID 1) to `dcid` from `path`, padded to
@@ -9747,4 +9754,48 @@ TEST_CASE("QUIC connection: CRYPTO buffers take storage as the handshake needs i
         CHECK(server.close_info().error_code == code(QuicTransportError::InternalError));
         CHECK(server.buffer_bytes() == 0U);
     }
+}
+
+TEST_CASE("QUIC connection: CRYPTO data of a discarded level never reaches its buffers", "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    RawRun run(identity);
+    run.handshake(
+        [&]
+        {
+            // Initial packets sealed while the client still holds Initial keys, which its first Handshake packet ends,
+            // as it ends the server's Initial level: a copy of what was read, and data far past the limit.
+            u8 datagrams[2][kDatagram] = {};
+            usize sizes[2] = {};
+            const u64 offsets[2] = {0U, u64{1} << 20U};
+            for (usize index = 0U; index < 2U; ++index)
+            {
+                constexpr u8 hello[4] = {0x01U, 0x00U, 0x00U, 0x10U};
+                QuicFrame frame;
+                frame.kind = QuicFrameKind::Crypto;
+                frame.offset = offsets[index];
+                frame.data = hello;
+                sizes[index] = run.seal(
+                    QuicPacketType::Initial, [&](Span<u8> out) { return write_quic_frame(frame, out); },
+                    datagrams[index]);
+            }
+            QuicFrame ping;
+            ping.kind = QuicFrameKind::Ping;
+            run.send(QuicPacketType::Handshake, [&](Span<u8> out) { return write_quic_frame(ping, out); });
+            const u32 taken = run.server.buffer_allocations();
+            const usize held = run.server.buffer_bytes();
+            const u64 opened = run.server.counters().packets_opened;
+            // Their keys went with the level: a fresh buffer would take storage for the one and close with
+            // CRYPTO_BUFFER_EXCEEDED for the other.
+            for (usize index = 0U; index < 2U; ++index)
+            {
+                run.server.receive(run.from, Span<u8>(datagrams[index], sizes[index]), Ecn::NotEct, run.now);
+                run.drain();
+                CHECK(run.server.state() == QuicConnectionState::Handshaking);
+            }
+            CHECK(run.server.counters().packets_opened == opened);
+            CHECK(run.server.buffer_allocations() == taken);
+            CHECK(run.server.buffer_bytes() == held);
+        });
+    CHECK(run.server.state() == QuicConnectionState::Established);
 }

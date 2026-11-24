@@ -19,7 +19,7 @@ Nothing to fix. Fuzz host-check 45355889672 (554b6f2d) passed. Fuzz host-check 4
   uses them, and its own copies of the growth code are removed. Data that ends past the limit takes no block.
 - Each CRYPTO level starts without storage and grows as its data needs, up to `crypto_bytes`. A level gives its storage
   back once it holds nothing, and at once when its keys are discarded (RFC 9001 section 4.9). A discarded level's
-  CRYPTO frames are ignored.
+  packets no longer open, so its data never reaches the freed buffers; a raw-peer case proves this.
 - Refused storage closes with INTERNAL_ERROR: on receipt, for data within the limit, and on sending, for a level that
   owes nothing (no acknowledgement would ever make room).
 - `QuicConnection::buffer_allocations()` and `buffer_bytes()` count the stream and CRYPTO buffers. The QUIC suites and

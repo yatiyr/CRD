@@ -1484,10 +1484,7 @@ bool QuicConnection::crypto_frame(const QuicFrame& frame, QuicSpace space, u64 n
         }
         m_version_settled = true;
     }
-    if (m_space_gone[quic_space_index(space)])
-    {
-        return true; // a discarded level's data was all read, and its buffers are gone (RFC 9001 section 4.9)
-    }
+    // A discarded level's buffers are gone, and so are its keys: none of its packets opens again.
     Level& level = m_levels[quic_space_index(space)];
     if (!frame.data.empty() && !quic_hold(m_allocator, level.in, level.in_store, frame.offset + frame.data.size(),
                                           m_config.crypto_bytes, m_crypto_allocations))

@@ -622,8 +622,8 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   the connection naming the version to retry in.
 - **Memory.** Every table comes from the injected allocator at construction. Each level's CRYPTO buffers
   (2026-11-24) take storage through `quic_hold()` as its data needs, up to `crypto_bytes`, give it back once they hold
-  nothing, and at once when the level's keys are discarded (RFC 9001 section 4.9); a discarded level's CRYPTO frames
-  are ignored, since its data was all read. Refused storage closes with INTERNAL_ERROR: on receipt, for data within
+  nothing, and at once when the level's keys are discarded (RFC 9001 section 4.9), which happens exactly when its
+  packets stop opening. Refused storage closes with INTERNAL_ERROR: on receipt, for data within
   the limit, and on sending, for a level owing nothing (no acknowledgement would ever make room). An established
   connection holds no CRYPTO storage. `buffer_allocations()` and `buffer_bytes()` count the stream and CRYPTO buffers,
   the only allocations after construction.

@@ -196,7 +196,7 @@ private:
 struct QuicBufferStore
 {
     u64* block = nullptr;
-    u32  bytes = 0U;
+    u32 bytes = 0U;
 };
 
 // The bytes a store holds for a buffer with `maps` bitmaps (1 receiving, 2 sending).

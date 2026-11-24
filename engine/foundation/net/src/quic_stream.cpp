@@ -307,7 +307,7 @@ bool QuicReceiveBuffer::release() noexcept
         return false;
     }
     m_bytes = {};
-    m_bits  = {};
+    m_bits = {};
     return true;
 }
 
@@ -419,9 +419,9 @@ bool QuicSendBuffer::release() noexcept
     {
         return false; // lost data and data not yet sent lie below what was written
     }
-    m_bytes      = {};
+    m_bytes = {};
     m_acked_bits = {};
-    m_lost_bits  = {};
+    m_lost_bits = {};
     return true;
 }
 
