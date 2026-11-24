@@ -382,8 +382,11 @@ async fn run_datagrams(session: Session, options: Arc<Options>, counters: Arc<Co
         let index = check_datagram(&payload, tag, &options, &mut seen, &counters);
         received += 1;
         if !options.client {
+            // The crate sheds a datagram its full send lane cannot take, and a burst of received datagrams resolves
+            // every receive at once: yield to its writer after each echo, as the client's sends do.
             session.send_datagram(datagram_of(index, 3, options.datagram_bytes))?;
             counters.datagrams_sent.fetch_add(1, Ordering::Relaxed);
+            tokio::task::yield_now().await;
         }
     }
     Ok(())
