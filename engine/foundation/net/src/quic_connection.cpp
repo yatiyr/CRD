@@ -2703,7 +2703,8 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
             return (path_id == 0U) ? kQuicAckFrame : path_id;
         };
         const bool application = space == QuicSpace::Application;
-        if ((!application || ack_carrier(slot) == slot) && !m_recovery->received(space, slot).ranges().empty())
+        const usize rider = application ? ack_rider() : kQuicNoPath;
+        if ((!application || ack_carrier(rider, slot) == slot) && !m_recovery->received(space, slot).ranges().empty())
         {
             const QuicAckWrite ack = m_recovery->write_ack(space, frames.subspan(used), now_ns, slot, ack_form(slot));
             used += ack.bytes;
@@ -2720,8 +2721,8 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
         const bool active = m_send_path == tuples(slot).active();
         for (usize other = 0U; application && other < kQuicMaxPaths; ++other)
         {
-            const bool carried = stopped(other) || (active && ack_carrier(other) == slot);
-            if (other == slot || !carried || m_recovery->ack_deadline_ns(space, other) == kNeverNs)
+            if (other == slot || !(stopped(other) || (active && ack_carrier(rider, other) == slot)) ||
+                m_recovery->ack_deadline_ns(space, other) == kNeverNs)
             {
                 continue;
             }
@@ -2742,8 +2743,8 @@ usize QuicConnection::write_frames(QuicSpace space, bool early, cont::Span<u8> f
     };
     // A 0-RTT packet carries no ACK, CRYPTO, HANDSHAKE_DONE, NEW_TOKEN or PATH_RESPONSE frame (RFC 9000 section
     // 12.4, table 3), and no RETIRE_CONNECTION_ID either: nothing is retired before the server's IDs arrive.
-    const bool ack_later = space == QuicSpace::Application && carried_ack_ns(slot) > now_ns &&
-                           datagram_ready(now_ns, datagram_paths(!m_data_open));
+    const bool ack_later = space == QuicSpace::Application && datagram_ready(now_ns, datagram_paths(!m_data_open)) &&
+                           carried_ack_ns(slot) > now_ns;
     if (!ack_later && !early)
     {
         put_ack();
@@ -3802,6 +3803,7 @@ u64 QuicConnection::next_timer_ns() const noexcept
             next = min_u64(next, path->pace_timer_ns());
         }
     }
+    const usize rider = ack_rider();
     for (usize index = 0U; index < kQuicSpaces; ++index)
     {
         const QuicSpace space = static_cast<QuicSpace>(index);
@@ -3809,7 +3811,7 @@ u64 QuicConnection::next_timer_ns() const noexcept
         const usize slots = (space == QuicSpace::Application) ? kQuicMaxPaths : 1U;
         for (usize slot = 0U; slot < slots; ++slot)
         {
-            const usize carrier = (space == QuicSpace::Application) ? ack_carrier(slot) : slot;
+            const usize carrier = (space == QuicSpace::Application) ? ack_carrier(rider, slot) : slot;
             if (m_protection.path_open(slot) && can_acknowledge(space, carrier))
             {
                 next = min_u64(next, m_recovery->ack_deadline_ns(space, slot));
@@ -5079,21 +5081,21 @@ void QuicConnection::choose_ack_slot() noexcept
     m_ack_slot = best;
 }
 
-usize QuicConnection::ack_carrier(usize of) const noexcept
+usize QuicConnection::ack_rider() const noexcept
 {
     const usize carrier = m_ack_slot;
-    const bool rides = m_config.path_choice == QuicPathChoice::LowestRtt && carrier != kQuicNoPath && carrier != of &&
-                       carries_acks(carrier);
-    return rides ? carrier : of;
+    const bool rides =
+        m_config.path_choice == QuicPathChoice::LowestRtt && carrier != kQuicNoPath && carries_acks(carrier);
+    return rides ? carrier : kQuicNoPath;
 }
 
 u64 QuicConnection::carried_ack_ns(usize slot) const noexcept
 {
+    const usize rider = ack_rider();
     u64 due = kNeverNs;
     for (usize of = 0U; of < kQuicMaxPaths; ++of)
     {
-        const bool carried = (ack_carrier(of) == slot) || (of != slot && stopped(of));
-        if (m_recovery->path_open(of) && carried)
+        if (m_recovery->path_open(of) && (ack_carrier(rider, of) == slot || (of != slot && stopped(of))))
         {
             due = min_u64(due, m_recovery->ack_deadline_ns(QuicSpace::Application, of));
         }

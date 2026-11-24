@@ -50,6 +50,12 @@ static_assert(kCongestionMaxWindow <= ~u64{0} / kCubicKScale);
 // A send quantum (draft-ietf-ccwg-bbr section 5.6.3): a millisecond of the pacing rate, at most one 64 KiB train.
 constexpr u64 kSendQuantumMax = 65536U;
 constexpr u64 kSendQuantumNs = 1000000U;
+static_assert(kNanosPerSecond % kSendQuantumNs == 0U);
+// A send quantum of `rate` (bytes a second): rate * kSendQuantumNs / kNanosPerSecond exactly, by a constant divisor.
+[[nodiscard]] constexpr u64 quantum_bytes(u64 rate) noexcept
+{
+    return rate / (kNanosPerSecond / kSendQuantumNs);
+}
 // The window controllers' train cap: clean rounds it waits after a train lost a packet before it grows again, and
 // the most that wait doubles to while each growth loses again at once (a probe past what the path holds).
 constexpr u32 kTrainHoldRounds = 8U;
@@ -329,7 +335,7 @@ public:
         {
             return m_initial;
         }
-        const u64 quantum = multiply_divide(pacing_rate(rtt), kSendQuantumNs, kNanosPerSecond);
+        const u64 quantum = quantum_bytes(pacing_rate(rtt));
         const bool proven = m_probe_out || m_phase == CongestionPhase::Recovery;
         return max_u64(min_u64(quantum, proven ? m_train_proven : m_train_cap), m_initial);
     }
@@ -1770,7 +1776,7 @@ private:
 
     void set_send_quantum() noexcept
     {
-        const u64 quantum = multiply_divide(m_pacing_rate, kSendQuantumNs, kNanosPerSecond);
+        const u64 quantum = quantum_bytes(m_pacing_rate);
         m_send_quantum = max_u64(min_u64(quantum, kSendQuantumMax), 2U * m_datagram);
     }
 

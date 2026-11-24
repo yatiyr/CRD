@@ -919,13 +919,18 @@ private:
     // Acknowledgements under QuicPathChoice::LowestRtt (sections 5.4 and 5.5). Whether `slot` can carry other slots'
     // PATH_ACKs: refreshable() (a data path still sending, not backup_held(), no probe timeout pending) and able to
     // acknowledge now. choose_ack_slot() keeps m_ack_slot, the shortest such slot, until another ranks an eighth
-    // shorter, so the peer's estimates stay stable. ack_carrier() is the slot whose packets carry slot `of`'s own
-    // acknowledgement: m_ack_slot while it can carry them, else `of`. carried_ack_ns() is the earliest deadline among
-    // the acknowledgements `slot` carries: its own unless they ride another slot, those riding it, and every stopped
-    // slot's.
+    // shorter, so the peer's estimates stay stable. ack_rider() is m_ack_slot while it can carry them, else
+    // kQuicNoPath: one answer for every slot, asked once by a walk over the slots. ack_carrier() is the slot whose
+    // packets carry slot `of`'s own acknowledgement: the rider, else `of`. carried_ack_ns() is the earliest deadline
+    // among the acknowledgements `slot` carries: its own unless they ride another slot, those riding it, and every
+    // stopped slot's.
     [[nodiscard]] bool carries_acks(usize slot) const noexcept;
     void choose_ack_slot() noexcept;
-    [[nodiscard]] usize ack_carrier(usize of) const noexcept;
+    [[nodiscard]] usize ack_rider() const noexcept;
+    [[nodiscard]] static constexpr usize ack_carrier(usize rider, usize of) noexcept
+    {
+        return (rider != kQuicNoPath) ? rider : of;
+    }
     [[nodiscard]] u64 carried_ack_ns(usize slot) const noexcept;
     // Forgets a path that is not the active one, retiring its peer ID unless another path sends to it; the path of
     // the packet being read is forgotten once that packet chose its path (decided()).
