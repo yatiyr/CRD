@@ -13,7 +13,8 @@
 //               is never accepted twice (13.2.3).
 //   sending     each space's sent packets sit in number order in the caller's QuicSentEntry storage, which bounds
 //               the packets a connection holds in flight: a full space refuses the next packet (can_send), and data
-//               stops short of the last entries, which ACK-only packets and probes keep for themselves. An
+//               stops short of the last entries, which ACK-only packets and probes keep for themselves; a path
+//               validation's packet that finds none declares the oldest outstanding one lost for its entry (evict). An
 //               acknowledgement of a number this side never sent (above the largest sent, or a gap it left in its
 //               numbering, which is how a sender skips numbers against optimistic acknowledgement, RFC 9000 section
 //               21.4) is AckOfUnsent, PROTOCOL_VIOLATION (section 13.1), and changes nothing.
@@ -458,6 +459,14 @@ public:
     // Whether it can record one that is neither ACK-only nor a probe. Two ends full of each other's unacknowledged
     // data must still be able to acknowledge it, or neither ever frees a slot.
     [[nodiscard]] bool can_send_data(QuicSpace space, usize path = 0U) const noexcept;
+    // Whether evict() can give `space` of slot `path` an entry when can_send() does not hold: the space is open,
+    // sending and not discarded.
+    [[nodiscard]] bool can_evict(QuicSpace space, usize path = 0U) const noexcept;
+    // A full storage's room for a packet that may not wait for a probe timeout's (RFC 9000 section 8.2.2: only
+    // congestion control delays a PATH_RESPONSE): the oldest outstanding packet is declared lost, as the probe timeout
+    // declares them for its probes (section 6.2.4), and the loss detection timer is armed again. Nothing while
+    // can_send() holds or can_evict() does not.
+    [[nodiscard]] QuicLoss evict(QuicSpace space, usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept;
     // Records `packet`, sent now (its sent_ns) on its slot (its path): numbers rise within a space and may leave gaps
     // (skipped numbers). In a full storage it takes the oldest ACK-only packet's entry, whose discard `events` hears;
     // a packet after skipped numbers keeps its entry, the record that they were never sent.

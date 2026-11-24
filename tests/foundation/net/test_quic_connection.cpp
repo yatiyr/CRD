@@ -4827,6 +4827,73 @@ TEST_CASE("QUIC paths: a probing packet from a new path is answered there with a
     CHECK(run.server.state() == QuicConnectionState::Established);
 }
 
+TEST_CASE("QUIC paths: a storage full of unacknowledged packets holds back no PATH_RESPONSE or challenge",
+          "[net][net-path][quic-connection]")
+{
+    // RFC 9000 section 8.2.2: only congestion control delays a PATH_RESPONSE, and a challenge held back fails its
+    // validation at the deadline (section 8.2.4). The raw client acknowledges nothing, so the server's PINGs fill its
+    // data entries and its answers the reserve; each further path frame declares the oldest packet lost for its entry,
+    // once per packet, and every timer reported due is one send() serves.
+    Identity identity;
+    RawRun run(identity, 8U);
+    const QuicPath a = client_at(7U, 50000U);
+    const QuicPath b = client_at(8U, 50000U);
+    run.from = a;
+    run.pad_to = kQuicMinInitialDatagram;
+    run.handshake();
+    for (usize round = 0U; round < 32U && run.server.recovery().can_send_data(QuicSpace::Application); ++round)
+    {
+        run.server.ping();
+        run.drain();
+        run.now += kMs;
+    }
+    REQUIRE_FALSE(run.server.recovery().can_send_data(QuicSpace::Application));
+    const QuicConnectionCounters& counters = run.server.counters();
+    usize full_rounds = 0U;
+    for (u8 round = 0U; round < 16U; ++round)
+    {
+        const bool full = !run.server.recovery().can_send(QuicSpace::Application);
+        full_rounds += full ? 1U : 0U;
+        const u64 evictions = counters.path_evictions;
+        const u8 data[kQuicPathDataBytes] = {round, 1U, 2U, 3U, 4U, 5U, 6U, 7U};
+        run.raw.path_response_seen = false;
+        send_frame(run, QuicFrameKind::PathChallenge, ConstSpan<u8>(data));
+        REQUIRE(run.raw.path_response_seen);
+        CHECK(std::memcmp(run.raw.path_response, data, sizeof(data)) == 0);
+        CHECK(counters.path_evictions == evictions + (full ? 1U : 0U));
+    }
+    CHECK(full_rounds >= 8U); // the reserve ran out half way
+    REQUIRE_FALSE(run.server.recovery().can_send(QuicSpace::Application));
+    // The client's non-probing packet from `b` moves the server, whose challenges there and on `a` (section 9.3.3)
+    // go at once, an entry each, and b's again on its timer, with nothing arriving between.
+    const u64 evictions = counters.path_evictions;
+    const usize on_a = challenges_on(run, a);
+    run.from = b;
+    send_frame(run, QuicFrameKind::Ping);
+    REQUIRE(run.server.path() == b);
+    REQUIRE(challenges_on(run, b) == 1U);
+    CHECK(challenges_on(run, a) == on_a + 1U);
+    CHECK(counters.path_evictions == evictions + 2U);
+    for (usize guard = 0U; guard < 64U && challenges_on(run, b) < 2U; ++guard)
+    {
+        const u64 next = run.server.next_timer_ns();
+        REQUIRE(next != kNeverNs);
+        run.now = (next > run.now) ? next : run.now;
+        run.server.on_timeout(run.now);
+        run.drain();
+        CHECK(run.server.next_timer_ns() > run.now);
+    }
+    REQUIRE(challenges_on(run, b) == 2U);
+    CHECK(counters.path_failures == 0U);
+    answer(run, b);
+    const usize b_slot = run.server.paths().find(b);
+    REQUIRE(b_slot != kQuicNoPath);
+    CHECK(run.server.paths().validated(b_slot));
+    CHECK(run.server.path() == b);
+    CHECK(counters.path_failures == 0U);
+    CHECK(run.server.state() == QuicConnectionState::Established);
+}
+
 TEST_CASE("QUIC paths: a PATH_RESPONSE that answers no challenge is ignored, and a challenge on the active path is "
           "answered with a non-probing packet",
           "[net][net-path][quic-connection]")

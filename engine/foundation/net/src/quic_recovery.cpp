@@ -942,6 +942,22 @@ bool QuicRecovery::can_send_data(QuicSpace id, usize path) const noexcept
             space.count - space.spares + m_reserved_entries < space.entries.size());
 }
 
+bool QuicRecovery::can_evict(QuicSpace id, usize path) const noexcept
+{
+    return usable(id, path) && !stopped(id, path) && !space_of(id, path).discarded;
+}
+
+QuicLoss QuicRecovery::evict(QuicSpace id, usize path, u64 now_ns, QuicRecoveryEvents& events) noexcept
+{
+    if (can_send(id, path) || !can_evict(id, path))
+    {
+        return QuicLoss{};
+    }
+    const QuicLoss loss = make_room(id, path, 1U, now_ns, events);
+    arm(now_ns);
+    return loss;
+}
+
 QuicRecoveryError QuicRecovery::on_sent(QuicSpace id, const QuicSentPacket& packet, QuicRecoveryEvents& events) noexcept
 {
     const usize path = packet.path;

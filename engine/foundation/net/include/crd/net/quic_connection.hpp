@@ -429,6 +429,7 @@ struct QuicConnectionCounters
     u64 path_validations = 0U;   // paths a PATH_RESPONSE validated
     u64 paths_opened = 0U;       // path IDs whose number space opened in a slot of their own (RFC 10069)
     u64 path_failures = 0U;      // validations abandoned on their timeout
+    u64 path_evictions = 0U;     // packets declared lost for a path frame's entry in a full storage (make_path_room)
     u64 paths_abandoned = 0U;    // path IDs abandoned by either end (RFC 10069 section 3.4)
     u64 paths_closed = 0U;       // abandoned path IDs whose slot and ID space closed
     u64 paths_blocked = 0U;      // PATHS_BLOCKED and PATH_CIDS_BLOCKED frames taken (RFC 10069 section 4.7)
@@ -903,13 +904,17 @@ private:
     // moved the connection there or validates it.
     void decided(u64 now_ns) noexcept;
     // The peer ID a path sends to (its sequence), whether the peer's ID of a sequence is held, and whether a path has
-    // the room and an ID to send a datagram now.
+    // the room and an ID to send its path frames now: a full storage holds none back (make_path_room()).
     [[nodiscard]] u64 path_sequence(usize slot, usize index) const noexcept;
     [[nodiscard]] bool peer_held(usize slot, u64 sequence) const noexcept
     {
         return m_cids.peer(m_protection.path_id(slot), sequence) != nullptr;
     }
     [[nodiscard]] bool path_sendable(usize slot, usize index) const noexcept;
+    // Slot `slot`'s entry for a packet of path frames in a full storage (QuicRecovery::evict): only congestion control
+    // delays a PATH_RESPONSE (RFC 9000 section 8.2.2), and a challenge held back fails its validation's deadline
+    // (section 8.2.4), which can end the connection. Nothing while the storage has room.
+    void make_path_room(usize slot, u64 now_ns) noexcept;
     // Whether path `index`'s socket is one of `held_sockets`.
     [[nodiscard]] bool path_held(usize slot, usize index, u32 held_sockets) const noexcept;
     [[nodiscard]] u64 validation_timeout_ns() const noexcept;

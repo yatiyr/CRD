@@ -2012,18 +2012,23 @@ bool QuicConnection::has_content(QuicSpace space, u64 now_ns) const noexcept
 {
     const usize index = quic_space_index(space);
     const usize slot = (space == QuicSpace::Application) ? send_slot() : 0U;
-    if (m_space_gone[index] || !m_protection.can_send(send_type(space)) || !m_recovery->can_send(space, slot))
+    if (m_space_gone[index] || !m_protection.can_send(send_type(space)))
     {
         return false;
     }
     // The active path's PATH_RESPONSE, PATH_CHALLENGE and OBSERVED_ADDRESS go as ACKs do, never held by the window or
-    // the pacer. On another path an OBSERVED_ADDRESS only rides with the others: packets replayed from spoofed
-    // addresses then draw no more datagrams than they did (the draft's section 6.2).
+    // the pacer, and the first two by no full storage either (make_path_room()). On another path an OBSERVED_ADDRESS
+    // only rides with the others: packets replayed from spoofed addresses then draw no more datagrams than they did
+    // (the draft's section 6.2).
     const QuicPaths& paths = tuples(send_slot());
     const usize active = paths.active();
-    const bool path_owed =
-        space == QuicSpace::Application && send_type(space) == QuicPacketType::OneRtt &&
-        (paths.response_owed(active) || paths.challenge_due(active, now_ns) || observation_due(active));
+    const bool one_rtt = space == QuicSpace::Application && send_type(space) == QuicPacketType::OneRtt;
+    const bool validation = one_rtt && (paths.response_owed(active) || paths.challenge_due(active, now_ns));
+    if (!m_recovery->can_send(space, slot))
+    {
+        return validation && m_recovery->can_evict(space, slot);
+    }
+    const bool path_owed = validation || (one_rtt && observation_due(active));
     const u64 ack_ns =
         (space == QuicSpace::Application) ? carried_ack_ns(slot) : m_recovery->ack_deadline_ns(space, slot);
     if (ack_ns <= now_ns || m_numbers[number_space(space, slot)].probes > 0U || path_owed ||
@@ -3255,6 +3260,10 @@ usize QuicConnection::send_on_slot(cont::Span<u8> out, u64 now_ns, u32 held_sock
             const QuicSpace space = static_cast<QuicSpace>(index);
             if (content[index])
             {
+                if (space == QuicSpace::Application)
+                {
+                    make_path_room(slot, now_ns); // its content is a validation's when the storage is full
+                }
                 used += write_packet(space, room.subspan(used), used, pad, space == last, Carry::Frames, now_ns);
             }
         }
@@ -3320,6 +3329,7 @@ usize QuicConnection::send_path_frames(cont::Span<u8> out, u64 now_ns, u32 held_
         const Ecn marking = m_marking;
         m_marking = Ecn::NotEct;
         const usize room = min_u64(min_u64(out.size(), kQuicMinInitialDatagram), paths.credit(index));
+        make_path_room(slot, now_ns);
         const usize bytes = write_packet(QuicSpace::Application, out.first(room), 0U, true, true, Carry::Path, now_ns);
         if (bytes != 0U)
         {
@@ -4200,8 +4210,22 @@ bool QuicConnection::path_sendable(usize slot, usize index) const noexcept
     const QuicPaths& paths = tuples(slot);
     const usize application = quic_space_index(QuicSpace::Application);
     return m_state == QuicConnectionState::Established && m_confirmed && !m_space_gone[application] &&
-           m_protection.can_send(QuicPacketType::OneRtt) && m_recovery->can_send(QuicSpace::Application, slot) &&
+           m_protection.can_send(QuicPacketType::OneRtt) && m_recovery->can_evict(QuicSpace::Application, slot) &&
            paths.credit(index) >= kMinUsefulPacket && peer_held(slot, path_sequence(slot, index));
+}
+
+void QuicConnection::make_path_room(usize slot, u64 now_ns) noexcept
+{
+    const QuicSpace application = QuicSpace::Application;
+    if (m_recovery->can_send(application, slot))
+    {
+        return;
+    }
+    m_event_ns = now_ns;
+    const QuicLoss lost = m_recovery->evict(application, slot, now_ns, m_events);
+    control(slot).end_detection(lost, now_ns);
+    follow_datagram_size();
+    ++m_counters.path_evictions;
 }
 
 bool QuicConnection::path_held(usize slot, usize index, u32 held_sockets) const noexcept
