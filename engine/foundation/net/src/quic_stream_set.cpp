@@ -15,11 +15,6 @@ constexpr usize kCreditBytes = 9U; // a MAX_DATA or MAX_STREAMS frame at most: i
     return (a < b) ? a : b;
 }
 
-[[nodiscard]] constexpr u32 min_u32(u32 a, u32 b) noexcept
-{
-    return (a < b) ? a : b;
-}
-
 [[nodiscard]] constexpr u64 max_u64(u64 a, u64 b) noexcept
 {
     return (a > b) ? a : b;
