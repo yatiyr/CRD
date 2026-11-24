@@ -5,7 +5,7 @@
  *                             --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1]
  *                             [--retry 1] [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N]
  *                             [--datagram-probe 1]] [--connections 2 [--early 1] [--reject-early 1]]
- *                             [--only-version 1] [--progress-at N] [--resets 1] [--cc reno|cubic|bbr]
+ *                             [--only-version 1] [--progress-at N] [--resets 1] [--cc reno|cubic|bbr] [--hold-ms N]
  *                             [--migrate-at N] [--preferred 1] [--follow-preferred 0] [--disable-migration 1]
  *                             [--http3 1 ...]
  *
@@ -15,6 +15,8 @@
  *   streams      bidirectional streams a client opens, each carrying `bytes` bytes and a FIN; a server echoes as many
  *                bytes as it reads and its FIN after the client's. Both ends check every byte (the pattern below)
  *   closer       the end that closes once every stream is done, with the application error `code`
+ *   hold-ms      this long after every stream is done before the closer closes, so that a search on timers (path MTU
+ *                discovery's probes) ends inside the connection however fast its transfer was
  *   max-streams  the bidirectional streams this end lets its peer have open at once
  *   compat       compatible version negotiation (RFC 9368): a client offers versions 1 and 2, a server prefers 2
  *   retry        a server answers a client Initial without a token with a Retry
@@ -144,6 +146,7 @@ typedef struct
     uint64_t                connections;
     uint64_t                number;           /* this connection's, from 1 */
     uint64_t                progress_at;
+    uint64_t                hold_ns;          /* after everything is done, before the closer closes */
     uint32_t                original_version; /* a client's first attempt, after Version Negotiation */
     uint32_t                offered_version;  /* what Version Negotiation's list chooses */
     int                     compat;
@@ -166,6 +169,7 @@ typedef struct
     /* One connection's, cleared between connections from here on (next_connection). */
     uint64_t                opened;
     uint64_t                done;
+    uint64_t                done_ns; /* when every stream was done, 0 before */
     uint64_t                cursor;
     uint64_t                bytes_received;
     uint64_t                bytes_sent;
@@ -1732,6 +1736,9 @@ static int run(peer_t* peer)
             wait                  = expiry <= now ? 0U : (expiry - now < wait ? expiry - now : wait);
             /* A datagram that never comes tells ngtcp2 nothing: the wait for it is this program's, and HTTP/3's turns. */
             wait = ((peer->datagrams != 0U || peer->app != NULL) && wait > DATAGRAM_WAKE_NS) ? DATAGRAM_WAKE_NS : wait;
+            /* A hold ends on this program's clock alone. */
+            const uint64_t release = peer->done_ns + peer->hold_ns;
+            wait = (peer->done_ns != 0U && release > now && release - now < wait) ? release - now : wait;
         }
         struct pollfd   entries[2] = {{peer->fd[0], POLLIN, 0}, {peer->fd[1], POLLIN, 0}};
         struct timespec timeout    = {(time_t)(wait / NGTCP2_SECONDS), (long)(wait % NGTCP2_SECONDS)};
@@ -1763,8 +1770,12 @@ static int run(peer_t* peer)
         }
         if (peer->closer == peer->client && all_done(peer))
         {
-            close_connection(peer, peer->code);
-            return peer->established;
+            peer->done_ns = peer->done_ns != 0U ? peer->done_ns : current;
+            if (current - peer->done_ns >= peer->hold_ns)
+            {
+                close_connection(peer, peer->code);
+                return peer->established;
+            }
         }
     }
 }
@@ -1797,7 +1808,8 @@ static int usage(void)
           "--version 1|2 --streams N --bytes N --closer client|server --code N --max-streams N [--compat 1] [--retry 1]"
           " [--key-update N] [--datagrams N --datagram-bytes N [--datagram-limit N] [--datagram-probe 1]]"
           " [--connections 2 [--early 1] [--reject-early 1]] [--only-version 1] [--progress-at N] [--resets 1]"
-          " [--cc reno|cubic|bbr] [--migrate-at N] [--preferred 1] [--follow-preferred 0] [--disable-migration 1]"
+          " [--cc reno|cubic|bbr] [--hold-ms N] [--migrate-at N] [--preferred 1] [--follow-preferred 0]"
+          " [--disable-migration 1]"
           " [--http3 1 ...]\n",
           stderr);
     return 2;
@@ -1918,6 +1930,10 @@ int main(int argc, char** argv)
         else if (strcmp(argv[at], "--progress-at") == 0)
         {
             peer.progress_at = strtoull(value, NULL, 10);
+        }
+        else if (strcmp(argv[at], "--hold-ms") == 0)
+        {
+            peer.hold_ns = strtoull(value, NULL, 10) * NGTCP2_MILLISECONDS;
         }
         else if (strcmp(argv[at], "--resets") == 0)
         {

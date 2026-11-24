@@ -28,7 +28,9 @@ other's max_udp_payload_size, which Cerid sets to its loop's receive slot. Over 
 bytes, Cerid's search finds that size to the byte and ngtcp2's settles on the largest of its four fixed probe sizes the
 path carries; a Cerid end with a smaller receive slot holds ngtcp2's probes under it; a path toward the peer that falls
 in the middle of a transfer, which nothing reports, is found by Cerid's black hole detection and searched again; and
-over a lossy path both still find a size the path carries.
+over a lossy path both still find a size the path carries. A search runs on timers, not bytes: ngtcp2 gives a size up
+after three probes over five PTOs, so a transfer that ends sooner would end its search with it, and the closing end of
+every bulk transfer holds the connection open long enough for both searches to end.
 
 Congestion control: each end runs the controller a case names (CUBIC by default; ngtcp2's own BBR, Reno or CUBIC on
 its side), and Cerid reports its own. Cerid's BBRv3 runs on the loopback, over the impaired relays above, and through
@@ -69,7 +71,10 @@ RUN_SECONDS = 70
 PROGRESS_SECONDS = 20
 RESET_STREAM_BYTES = 32 << 20
 PROGRESS_BYTES = 1 << 20
-PMTU_SEARCH_BYTES = 4 << 20  # a transfer long enough for both searches to end before it does
+PMTU_SEARCH_BYTES = 4 << 20  # a bulk transfer, whose closer holds the connection until both searches have ended
+# The closer's hold after a bulk transfer. ngtcp2's longest search here gives up two sizes, each after three probes over
+# five PTOs (ngtcp2_pmtud.c), before the third: 0.27 s on the loopback, past a 4x4 MiB echo's 0.24 s.
+PMTU_HOLD_MS = 1000
 ECN_TESTING_PACKETS = 10  # NGTCP2_ECN_MAX_NUM_VALIDATION_PKTS: ngtcp2 marks no more until its path is validated
 ECN_VERDICT_BYTES = 64 << 10  # enough each way for ngtcp2 to test, validate and go on marking
 NGTCP2_MAX_TX = 1452  # ngtcp2_settings_default's max_tx_udp_payload_size, which caps its probes
@@ -124,6 +129,8 @@ class Case:
                    '--cipher', self.cipher if cerid else OPENSSL_CIPHERS[self.cipher],
                    '--version', str(self.version), '--streams', str(self.streams), '--bytes', str(self.size),
                    '--closer', self.closer, '--code', str(self.code), '--max-streams', str(self.max_streams)]
+        if self.searches() and role == self.closer:
+            command += ['--hold-ms', str(PMTU_HOLD_MS)]
         if self.compat:
             command += ['--compat', '1']
         if self.retry and role == 'server':
@@ -164,6 +171,10 @@ class Case:
             command += ['--progress-at', str(PROGRESS_BYTES)]
             command += [] if cerid else ['--resets', '1']
         return command
+
+    def searches(self):
+        """A bulk transfer, held open until both ends' path MTU searches have ended."""
+        return self.datagrams == 0 and not self.reset and self.streams * self.size >= PMTU_SEARCH_BYTES
 
     def describe(self):
         extra = (' compat' if self.compat else '') + (' retry' if self.retry else '') + \
@@ -418,7 +429,7 @@ class Case:
 
     def check_pmtu(self, client, server, detail):
         cerid, ngtcp2 = (client, server) if self.cerid_is_client else (server, client)
-        settled = self.datagrams == 0 and self.streams * self.size >= PMTU_SEARCH_BYTES
+        settled = self.searches()
         check_cerid_pmtu(cerid, self.path, 'server' if self.cerid_is_client else 'client', settled, detail,
                          NGTCP2_ADVERTISED)
         receive = self.receive_bytes or CERID_RECEIVE
