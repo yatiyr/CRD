@@ -44,6 +44,11 @@ that 80411130 already removed.
   - server 28.2 to 28.6 KiB (median 28.3) against 32.3 to 32.6;
   - client 28.7 to 29.0 against 32.7 to 33.0;
   - msquic's server end 38.0 to 68.3 in the same rounds.
+- Board at this engine against 8bdfea79's, 5 interleaved rounds, medians: bulk 578 against 556 MiB per CPU-second at
+  1 MiB windows and 424 against 423 at 64 KiB; handshakes 4,101 against 4,124 per CPU-second (0.6% lower, inside the
+  2% rule). `quic_board.py --check` passes; the 19 guard CTests pass on linux-gcc-debug.
+- Not proven here: the `Provider` close (no provider failure can be injected), MSVC (not built locally; clang-tidy ran
+  on its compile database).
 
 ## Next
 

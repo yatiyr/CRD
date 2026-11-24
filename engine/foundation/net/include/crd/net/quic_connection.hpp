@@ -128,7 +128,9 @@
 //              held-packet ring is taken only while a packet waits for its keys (table_bytes()). The Initial,
 //              Handshake and Early levels' keys are one block, taken at the start and freed with the last of them.
 //              Each path slot's controller storage is its policy's size (congestion_bytes()), taken at construction
-//              with a handover learner only where the connection learns (QuicPathControl::reserve).
+//              with a handover learner only where the connection learns (QuicPathControl::reserve). A client's
+//              Initial token (its configuration's, then a Retry's) and the NEW_TOKEN token take storage of their
+//              size; the Initial token goes with the Initial keys.
 //   threads    a connection belongs to its loop's thread.
 
 #include <crd/containers/span.hpp>

@@ -641,7 +641,10 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   holds what it keeps, else to twice that, the stream slots no open stream holds give their buffers back
   (`QuicStreamSet::trim`, 2026-11-24), and `next_timer_ns()` names that time; it names none while no table grew and no
   stream closed holding buffers since the last trim. The held-packet ring is taken
-  only when a packet waits for its keys and goes back once it holds none; a refusal drops that packet. The Initial,
+  only when a packet waits for its keys and goes back once it holds none; a refusal drops that packet. Tokens
+  (2026-11-24) take storage of exactly their size: a client's Initial token (configured, or a Retry's, whose Retry is
+  dropped when the storage is refused) goes with its Initial keys, and the NEW_TOKEN token stays until a later one
+  replaces it (a client refused the storage keeps none; a server's `give_new_token` refuses). The Initial,
   Handshake and 0-RTT keys (2026-11-24, 5.6 KiB) are one block `QuicPacketProtection` takes at its start and wipes
   and frees once all three levels are discarded, so a confirmed connection holds only its 1-RTT keys; a keyed
   connection takes none, and a refused block refuses the start. The TLS provider (2026-11-24) frees its handshake
