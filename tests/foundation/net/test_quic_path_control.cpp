@@ -1,9 +1,10 @@
 // crd-net -- a QUIC path's sending state (NET-PATH; docs/design/network-foundation.md#multipath): what start()
 // builds and refuses, each recovery event's meaning (a lost PMTU probe and a handover's loss are no congestion
 // signal, a spurious loss's data was delivered), the trains its pacer counts and a train probe's loss that reduces
-// nothing, ECN validation and CE, the PMTU search's size reaching the
-// controller, persistent congestion, a rebinding that keeps the state and a restart, a live policy swap, the handover
-// schedule and learning, the pacer's timer, a Retry's reset, and two paths' controls never touching each other.
+// nothing, a burst bounded by half the flight that last ran out of data, ECN validation and CE, the PMTU search's
+// size reaching the controller, persistent congestion, a rebinding that keeps the state and a restart, a live policy
+// swap, the handover schedule and learning, the pacer's timer, a Retry's reset, and two paths' controls never
+// touching each other.
 
 #include <crd/net/quic_path_control.hpp>
 
@@ -265,6 +266,102 @@ TEST_CASE("A path's trains are what leaves at one instant, and a train probe's l
     static_cast<void>(control.on_lost(QuicSpace::Application, sent[4], 61U * kMs));
     CHECK(control.congestion().state().reductions == 1U);
     CHECK(control.congestion().window() < initial);
+}
+
+TEST_CASE("A path's burst past the initial window is at most half the flight that last ran out of data",
+          "[path_control][net-path]")
+{
+    QuicPathControlConfig config;
+    config.congestion.algorithm = CongestionAlgorithm::Prague; // its burst is 250 us of its rate from the first RTT
+    config.ecn = false;
+    QuicPathControl control;
+    REQUIRE(control.start(config, path_v4(1), 1U));
+    const u64 initial = control.congestion().window();
+    const QuicRtt rtt = rtt_of(50000U);
+    // Sent as send() does, at this RTT.
+    const auto go = [&](QuicSentPacket& sent, u64 in_flight, u64 now_ns)
+    {
+        sent.delivery = control.stamp(sent.bytes, in_flight + sent.bytes, now_ns);
+        control.on_sent(QuicSpace::Application, sent, true, in_flight + sent.bytes, rtt, now_ns);
+    };
+    const auto sample = [&](u64 now_ns)
+    {
+        control.on_ack_begin();
+        QuicAck ack;
+        ack.largest = 0U;
+        static_cast<void>(control.on_ack_end(QuicSpace::Application, ack, outcome_of(1U, kMs), rtt, 0U, now_ns));
+    };
+    QuicSentPacket first = packet(0U, kMs);
+    go(first, 0U, kMs);
+    sample(kMs + 50000U);
+    const u64 full = control.congestion().burst(rtt);
+    REQUIRE(full > 8U * initial);
+    CHECK(control.burst(rtt) == full); // no flight has run out of data yet
+
+    // The flight ran out of data at four initial windows: two trains of two.
+    control.on_app_limited(4U * initial);
+    CHECK(control.burst(rtt) == 2U * initial);
+    // The pacer holds a turn to it: a full pacer lets 2 initial windows go at one instant, the last into debt.
+    u64 now = 10U * kMs;
+    u64 turn = 0U;
+    for (u64 number = 1U; control.release_ns(now, rtt) <= now; ++number)
+    {
+        QuicSentPacket sent = packet(number, now);
+        go(sent, 0U, now);
+        turn += sent.bytes;
+        REQUIRE(turn <= 4U * initial);
+    }
+    CHECK(turn >= 2U * initial);
+    CHECK(turn < 2U * initial + 1200U);
+    // A flight under two initial windows bursts the initial window; a larger one sent since raises the bound.
+    control.on_app_limited(initial);
+    CHECK(control.burst(rtt) == initial);
+    QuicSentPacket larger = packet(100U, 20U * kMs);
+    go(larger, 6U * initial - 1200U, 20U * kMs);
+    CHECK(control.burst(rtt) == 3U * initial);
+    QuicSentPacket largest = packet(101U, 20U * kMs);
+    go(largest, 2U * full, 20U * kMs);
+    CHECK(control.burst(rtt) == control.congestion().burst(rtt));
+
+    // A live swap keeps the flight; a policy before version 8 keeps the controller's burst.
+    control.on_app_limited(4U * initial);
+    REQUIRE(control.burst(rtt) == 2U * initial);
+    REQUIRE(control.set_congestion(config.congestion, 5U));
+    sample(25U * kMs);
+    REQUIRE(control.congestion().burst(rtt) > 8U * initial);
+    CHECK(control.burst(rtt) == 2U * initial);
+    CongestionPolicy before_eight = config.congestion;
+    before_eight.version = 7U;
+    REQUIRE(control.set_congestion(before_eight, 6U));
+    sample(26U * kMs);
+    REQUIRE(control.congestion().burst(rtt) > 8U * initial);
+    CHECK(control.burst(rtt) == control.congestion().burst(rtt));
+    REQUIRE(control.set_congestion(config.congestion, 7U));
+    sample(27U * kMs);
+    CHECK(control.burst(rtt) == 2U * initial);
+
+    // A reset forgets the flight, as a restart does.
+    control.reset(30U * kMs);
+    QuicSentPacket again = packet(0U, 31U * kMs);
+    go(again, 0U, 31U * kMs);
+    sample(31U * kMs + 50000U);
+    CHECK(control.burst(rtt) == control.congestion().burst(rtt));
+    CHECK(control.burst(rtt) > 8U * initial);
+    control.on_app_limited(4U * initial);
+    control.restart(path_v4(2), kQuicPmtuFloor, 2U);
+    QuicSentPacket moved = packet(0U, 40U * kMs);
+    go(moved, 0U, 40U * kMs);
+    sample(40U * kMs + 50000U);
+    CHECK(control.burst(rtt) == control.congestion().burst(rtt));
+    QuicPathControlConfig seven = config;
+    seven.congestion.version = 7U;
+    REQUIRE(control.start(seven, path_v4(3), 3U)); // and so does a path started under one
+    QuicSentPacket old = packet(0U, 50U * kMs);
+    go(old, 0U, 50U * kMs);
+    sample(50U * kMs + 50000U);
+    control.on_app_limited(4U * initial);
+    REQUIRE(control.congestion().burst(rtt) > 8U * initial);
+    CHECK(control.burst(rtt) == control.congestion().burst(rtt));
 }
 
 TEST_CASE("A path's ECN validation and CE are its own", "[path_control][multipath]")

@@ -8,8 +8,8 @@
 // queue on a fast short path loses no more than the initial window's burst would) and its train cap (grown from
 // proven trains one probe at a time, a probe's loss teaching it without a congestion event, a fuller queue's loss
 // with one, the cap coming back from an undone period; under coarse host turns no worse than the initial window's
-// burst on a shallow queue and filling a deep one's link, beside a version 7 flow too), and the pacer's exact
-// credit, burst, debt and release times.
+// burst on a shallow queue and filling a deep one's link, beside a version 7 flow too), a burst bounded by half a
+// flight that ran out of data, and the pacer's exact credit, burst, debt and release times.
 
 #include "bottleneck_fixture.hpp"
 
@@ -320,6 +320,30 @@ TEST_CASE("congestion: a held flight's burst is a millisecond of its pacing rate
         jumbo->on_limited(false, 0U);
         CHECK(jumbo->burst(rtt_of(kMs, kMs)) == 130000U);
     }
+}
+
+TEST_CASE("congestion: a burst past the initial window is at most half a flight that ran out of data, never below that "
+          "window",
+          "[net][net-path][congestion]")
+{
+    // No flight known (the largest count): the burst as it is, as for any burst within the initial window.
+    CHECK(congestion_flight_burst(65536U, 12000U, ~u64{0}) == 65536U);
+    CHECK(congestion_flight_burst(12000U, 12000U, 0U) == 12000U);
+    CHECK(congestion_flight_burst(9000U, 12000U, 0U) == 9000U); // a smaller burst (Prague's 250 us) is never raised
+    // A 64 KiB flight: two trains of 32 KiB; one of 200000 bytes keeps the whole 64 KiB burst, as does one of 131072.
+    CHECK(congestion_flight_burst(65536U, 12000U, 65536U) == 32768U);
+    CHECK(congestion_flight_burst(65536U, 12000U, 65537U) == 32768U);
+    CHECK(congestion_flight_burst(65536U, 12000U, 131071U) == 65535U);
+    CHECK(congestion_flight_burst(65536U, 12000U, 131072U) == 65536U);
+    CHECK(congestion_flight_burst(65536U, 12000U, 200000U) == 65536U);
+    // A flight under two initial windows (an application's small writes, a restart from nothing): the initial window.
+    CHECK(congestion_flight_burst(65536U, 12000U, 24001U) == 12000U);
+    CHECK(congestion_flight_burst(65536U, 12000U, 23999U) == 12000U);
+    CHECK(congestion_flight_burst(65536U, 12000U, 0U) == 12000U);
+    CHECK(congestion_flight_burst(12001U, 12000U, 0U) == 12000U);
+    // The largest counts do not wrap.
+    CHECK(congestion_flight_burst(~u64{0}, 12000U, ~u64{0} - 1U) == ~u64{0} / 2U);
+    static_assert(congestion_flight_burst(65536U, 14720U, 40000U) == 20000U);
 }
 
 TEST_CASE("congestion: the train cap grows from proven trains by one probe train at a time, and only a probe's loss "
@@ -958,16 +982,16 @@ TEST_CASE("congestion: under coarse host turns the train cap meets the initial w
         flow.run(5U * kSecond);
         return Run{flow.acked_bytes, flow.dropped, flow.ctl->state().reductions};
     };
-    constexpr u64 kGigabit = 125000000U;
-    constexpr u64 kHundred = 12500000U;
+    constexpr u64 gigabit = 125000000U;
+    constexpr u64 hundred_megabit = 12500000U;
     for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
     {
         INFO("algorithm " << static_cast<int>(algorithm));
-        const Path shallows[] = {{kGigabit, 250000U, 12000U, kMs, 0U},
-                                 {kGigabit, 250000U, 12000U, 10U * kMs, 0U},
-                                 {kGigabit, kMs, 12000U, kMs, 0U},
-                                 {kHundred, kMs, 12000U, kMs, 0U},
-                                 {kHundred, kMs, 12000U, 10U * kMs, 0U}};
+        const Path shallows[] = {{gigabit, 250000U, 12000U, kMs, 0U},
+                                 {gigabit, 250000U, 12000U, 10U * kMs, 0U},
+                                 {gigabit, kMs, 12000U, kMs, 0U},
+                                 {hundred_megabit, kMs, 12000U, kMs, 0U},
+                                 {hundred_megabit, kMs, 12000U, 10U * kMs, 0U}};
         for (const Path& shallow : shallows)
         {
             INFO("rate " << shallow.rate << " turn " << shallow.turn_ns << " one way " << shallow.one_way_ns);
@@ -981,10 +1005,10 @@ TEST_CASE("congestion: under coarse host turns the train cap meets the initial w
         }
         // Deeper queues: 2.6, 2.5 and 5.4 times version 7's at 1 Gbit/s; at 100 Mbit/s, where 12000 bytes a turn
         // were 96% of the link, the link.
-        const Path deep[] = {{kGigabit, 250000U, 32768U, kMs, 0U},
-                             {kGigabit, 250000U, 65536U, 10U * kMs, 0U},
-                             {kGigabit, kMs, 65536U, kMs, 0U},
-                             {kHundred, kMs, 65536U, kMs, 0U}};
+        const Path deep[] = {{gigabit, 250000U, 32768U, kMs, 0U},
+                             {gigabit, 250000U, 65536U, 10U * kMs, 0U},
+                             {gigabit, kMs, 65536U, kMs, 0U},
+                             {hundred_megabit, kMs, 65536U, kMs, 0U}};
         const u64 times[] = {25U, 25U, 50U, 10U}; // tenths
         for (usize index = 0U; index < 4U; ++index)
         {
@@ -995,7 +1019,7 @@ TEST_CASE("congestion: under coarse host turns the train cap meets the initial w
             CHECK(eight.acked >= seven.acked);
         }
         // Random loss (0.1%) teaches the cap nothing it keeps: no worse than version 7.
-        const Path lossy{kGigabit, 250000U, 32768U, kMs, 1U};
+        const Path lossy{gigabit, 250000U, 32768U, kMs, 1U};
         CHECK(run(algorithm, 8U, lossy).acked >= run(algorithm, 7U, lossy).acked);
 
         // Beside a version 7 flow on a deep queue's link, a version 8 one takes the capacity the other's pacer leaves
@@ -1003,7 +1027,7 @@ TEST_CASE("congestion: under coarse host turns the train cap meets the initial w
         for (const u32 version : {7U, 8U})
         {
             INFO("beside version " << version);
-            crd::net::testing::Link link{kGigabit, 65536U};
+            crd::net::testing::Link link{gigabit, 65536U};
             CongestionPolicy seven = policy_of(algorithm, true);
             seven.version = 7U;
             CongestionPolicy other = policy_of(algorithm, true);

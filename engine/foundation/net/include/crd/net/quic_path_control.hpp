@@ -120,14 +120,22 @@ public:
     [[nodiscard]] Ecn marking(u64 now_ns, u64 testing_ns) noexcept;
     // When the pacer lets a packet go at the controller's rate for `rtt`.
     [[nodiscard]] u64 release_ns(u64 now_ns, const QuicRtt& rtt) const noexcept;
+    // The pacer's burst: the controller's, under a policy of version 8 or later at most half the flight that last ran
+    // out of data or any larger one since (congestion_flight_burst).
+    [[nodiscard]] u64 burst(const QuicRtt& rtt) const noexcept;
     // The pacer's timer: the earliest release a held datagram waits for (kNeverNs for none).
     [[nodiscard]] u64 pace_timer_ns() const noexcept { return m_pace_timer_ns; }
     void arm_pace(u64 release_ns) noexcept;
     void disarm_pace() noexcept { m_pace_timer_ns = kNeverNs; }
     // Data waits: the window (`by_window`) or the pacer holds it (RFC 9002 section 7.8).
     void on_limited(bool by_window, u64 now_ns) noexcept { m_controller->on_limited(by_window, now_ns); }
-    // Nothing waits while the window and the pacer would let it go: rate samples show the application's rate.
-    void on_app_limited(u64 in_flight) noexcept { m_delivery.on_app_limited(in_flight); }
+    // Nothing waits while the window and the pacer would let it go: rate samples show the application's rate, and
+    // the flight of `in_flight` bytes bounds the burst.
+    void on_app_limited(u64 in_flight) noexcept
+    {
+        m_delivery.on_app_limited(in_flight);
+        m_dry_flight = in_flight;
+    }
     // A packet of `bytes` in flight leaving with `in_flight` bytes in flight after it: its delivery stamp.
     [[nodiscard]] DeliveryStamp stamp(u64 bytes, u64 in_flight, u64 now_ns) noexcept;
     // Bytes of the train a packet in flight leaving at `now_ns` joins (Pacer::train).
@@ -179,6 +187,7 @@ private:
     DeliveryRateSampler m_delivery; // every controller's delivery rate samples, stamped on each packet in flight
     Pacer m_pacer;
     u64 m_pace_timer_ns = kNeverNs;
+    u64 m_dry_flight = ~u64{0}; // the flight that last ran out of data, raised by larger ones since; none before
     QuicEcnValidator m_ecn;
     QuicPathMtu m_pmtu;
     u32 m_ceiling = 0U; // the peer's, 0 until known

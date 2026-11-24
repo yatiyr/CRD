@@ -159,6 +159,27 @@ struct CongestionPolicy
     return (initial > minimum) ? initial : minimum;
 }
 
+// A burst of more than the initial window bounded by a flight that ran out of data with room in the window (what the
+// application wrote, the peer's flow control or the send buffer held it): at most half that flight, so two trains are
+// in it and the acknowledgement of the first comes back while the second is on its way. Linux's TCP applies the same
+// reasoning to its congestion window (tcp_cwnd_test sends at most half of it at once, "at least 2 GSO packets in
+// flight"); this is that rule for a flight something else bounds. Without it a 64 KiB stream window left in two
+// trains, the receiver read both in one turn and acknowledged them once, and each end waited for the other (the QUIC
+// board, 2026-11-24). Never below the initial window (RFC 9002 section 7.7) and never above `burst`.
+[[nodiscard]] constexpr u64 congestion_flight_burst(u64 burst, u64 initial, u64 flight) noexcept
+{
+    if (burst <= initial)
+    {
+        return burst;
+    }
+    const u64 half = flight / 2U;
+    if (half >= burst)
+    {
+        return burst;
+    }
+    return (half > initial) ? half : initial;
+}
+
 // The codepoint `policy`'s packets carry on a path that carries ECN: ECT(1) for a scalable controller (RFC 9331
 // section 4.1: Prague, and SCReAM v2 in L4S mode), ECT(0) for every classic one (RFC 9000 section 13.4.2).
 [[nodiscard]] constexpr Ecn congestion_codepoint(const CongestionPolicy& policy) noexcept

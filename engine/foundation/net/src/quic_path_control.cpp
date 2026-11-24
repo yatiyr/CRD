@@ -111,6 +111,7 @@ void QuicPathControl::build(u64 entropy) noexcept
     m_delivery.reset();
     m_pacer = Pacer{};
     m_pace_timer_ns = kNeverNs;
+    m_dry_flight = ~u64{0};
     // The policy and the size were checked (start).
     m_controller = make_congestion(m_config.congestion, m_datagram_bytes, nullptr, m_controller_slot, m_delivery,
                                    entropy, m_coupling);
@@ -145,6 +146,7 @@ void QuicPathControl::reset(u64 now_ns) noexcept
     m_delivery.reset();
     m_controller->reset(now_ns); // RFC 9002 section 6.3: congestion control starts over with recovery
     m_pacer = Pacer{};
+    m_dry_flight = ~u64{0};
 }
 
 bool QuicPathControl::set_congestion(const CongestionPolicy& policy, u64 entropy) noexcept
@@ -226,7 +228,18 @@ Ecn QuicPathControl::marking(u64 now_ns, u64 testing_ns) noexcept
 
 u64 QuicPathControl::release_ns(u64 now_ns, const QuicRtt& rtt) const noexcept
 {
-    return m_pacer.release_ns(now_ns, m_controller->pacing_rate(rtt), m_controller->burst(rtt));
+    return m_pacer.release_ns(now_ns, m_controller->pacing_rate(rtt), burst(rtt));
+}
+
+u64 QuicPathControl::burst(const QuicRtt& rtt) const noexcept
+{
+    const u64 controller = m_controller->burst(rtt);
+    if (m_config.congestion.version < 8U)
+    {
+        return controller;
+    }
+    return congestion_flight_burst(controller, congestion_initial_window(m_config.congestion, m_datagram_bytes),
+                                   m_dry_flight);
 }
 
 void QuicPathControl::arm_pace(u64 release_ns) noexcept
@@ -246,7 +259,8 @@ void QuicPathControl::on_sent(QuicSpace space, const QuicSentPacket& packet, boo
     if (controlled)
     {
         m_controller->on_sent(congestion_packet(space, packet), in_flight, now_ns);
-        m_pacer.on_sent(packet.bytes, now_ns, m_controller->pacing_rate(rtt), m_controller->burst(rtt));
+        m_dry_flight = (in_flight > m_dry_flight) ? in_flight : m_dry_flight;
+        m_pacer.on_sent(packet.bytes, now_ns, m_controller->pacing_rate(rtt), burst(rtt));
     }
 }
 
