@@ -384,12 +384,13 @@ crypto::CryptoError QuicPacketProtection::start(crypto::QuicSide side, crypto::Q
     m_original = version;
     if (m_levels == nullptr)
     {
-        m_levels = memory::construct<LevelKeys>(*m_allocator);
-        if (m_levels == nullptr)
+        void* const block = m_allocator->try_allocate(sizeof(LevelKeys), alignof(LevelKeys)); // refused, not fatal
+        if (block == nullptr)
         {
             m_started = false;
             return crypto::CryptoError::ProviderFailure;
         }
+        m_levels = ::new (block) LevelKeys();
         ++m_allocations;
     }
     m_started = true;

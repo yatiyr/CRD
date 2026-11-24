@@ -739,8 +739,8 @@ TEST_CASE("QUIC packets: the handshake levels' keys live in one block, freed onc
             server.discard(order[2]);
             CHECK_FALSE(server.holds_handshake_keys());
             CHECK(allocator.live() == 0U);
-            for (const QuicPacketType type : {QuicPacketType::Initial, QuicPacketType::Handshake,
-                                              QuicPacketType::ZeroRtt})
+            for (const QuicPacketType type :
+                 {QuicPacketType::Initial, QuicPacketType::Handshake, QuicPacketType::ZeroRtt})
             {
                 CHECK_FALSE(server.can_send(type));
                 CHECK_FALSE(server.can_open(type));
@@ -801,8 +801,7 @@ TEST_CASE("QUIC packets: the handshake levels' keys live in one block, freed onc
         CHECK_FALSE(refused.can_send(QuicPacketType::Initial));
         CHECK_FALSE(refused.keys_pending(QuicPacketType::Handshake));
         CHECK(refused.rekey_initial(dcid) == CryptoError::NotReady);
-        CHECK(refused.install(QuicLevel::Handshake, true, AlgorithmId::Aes128Gcm, secret(0U)) ==
-              CryptoError::NotReady);
+        CHECK(refused.install(QuicLevel::Handshake, true, AlgorithmId::Aes128Gcm, secret(0U)) == CryptoError::NotReady);
         CHECK(allocator.live() == 0U);
     }
 }

@@ -469,6 +469,56 @@ TEST_CASE("QUIC server: 0-RTT ahead of its Initial is held and read by the conne
     }
 }
 
+TEST_CASE("QUIC server: an Initial refused any allocation, its handshake keys included, leaves the slot free and "
+          "nothing held",
+          "[net][4.2a][quic-server]")
+{
+    Identity identity;
+    Setup setup;
+    setup.connections = 1U;
+    QuicConnectionConfig config = config_for(QuicSide::Client, identity, QuicVersion::V1, 1U);
+    config.streams = limits();
+    const auto initial_of = [&](QuicConnection& client, u8 tag, u64 now, Datagram& out)
+    {
+        const u8 local[8] = {0xC0, tag, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7};
+        const u8 dcid[8] = {0xD0, tag, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7};
+        REQUIRE(client.connect(ConstSpan<u8>(local), ConstSpan<u8>(dcid), now));
+        out.size = client.send(Span<u8>(out.bytes, sizeof(out.bytes)), now);
+        REQUIRE(out.size >= kQuicMinInitialDatagram);
+    };
+    // Each allocation the accept makes, refused in turn, until one Initial is accepted whole.
+    bool accepted = false;
+    usize refusals = 0U;
+    for (usize allowed = 0U; !accepted && allowed < 64U; ++allowed)
+    {
+        ServerStack stack(identity, setup);
+        CountingAllocator client_allocator;
+        QuicConnection client(client_allocator, config);
+        Datagram initial;
+        initial_of(client, 1U, stack.clock.now, initial);
+        const usize held = stack.allocator.live();
+        stack.allocator.refuse_call(stack.allocator.calls() + allowed);
+        stack.socket.deliver(initial, client_peer(0U));
+        (void)stack.loop.poll();
+        accepted = stack.server.live() == 1U;
+        if (accepted)
+        {
+            break;
+        }
+        ++refusals;
+        CHECK(stack.allocator.live() == held);
+        // The slot is free and nothing of the refused connection is routed: another client is accepted.
+        QuicConnection next(client_allocator, config);
+        Datagram second;
+        initial_of(next, 2U, stack.clock.now, second);
+        stack.socket.deliver(second, client_peer(1U));
+        (void)stack.loop.poll();
+        CHECK(stack.server.live() == 1U);
+    }
+    CHECK(accepted);
+    CHECK(refusals > 2U); // the connection's handshake keys among them
+}
+
 TEST_CASE("QUIC server: a refusal leaves by the socket its Initial reached", "[net][net-path][quic-server]")
 {
     Identity identity;

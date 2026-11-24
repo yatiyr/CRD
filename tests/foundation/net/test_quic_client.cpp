@@ -1282,6 +1282,29 @@ TEST_CASE("QUIC client: the pool's bounds, stale handles, a TLS context per conn
         CHECK_FALSE(network->client.connect(request, network->now).valid());
         CHECK(network->client.counters().refused == 3U);
 
+        // A connect refused any allocation, its handshake keys included, takes no slot and holds nothing: each call
+        // refused in turn until one connects.
+        request.token = {};
+        CountingAllocator& allocator = network->client_allocator;
+        bool connected = false;
+        usize refusals = 0U;
+        for (usize allowed = 0U; !connected && allowed < 64U; ++allowed)
+        {
+            const usize held = allocator.live();
+            allocator.refuse_call(allocator.calls() + allowed);
+            connected = network->client.connect(request, network->now).valid();
+            allocator.refuse_call(~usize{0});
+            if (!connected)
+            {
+                ++refusals;
+                CHECK(allocator.live() == held);
+                CHECK(network->client.live() == 1U);
+            }
+        }
+        CHECK(connected);
+        CHECK(refusals != 0U);
+        CHECK(network->client.live() == 2U);
+
         // A client's ingress produces no admission and no early datagram; were one handed over, it is dropped.
         network->client.on_admit(IngressDecision{}, ReceivedDatagram{}, network->now);
         network->client.on_early(IngressDecision{}, ReceivedDatagram{}, network->now);

@@ -297,9 +297,9 @@ QuicStreamSet::Slot& QuicStreamSet::open_slot(Type& type) noexcept
         if (store.in.block != nullptr)
         {
             const usize words = quic_stream_bitmap_words(store.in.bytes);
-            static_cast<void>(slot.in.init(
-                cont::Span<u8>(reinterpret_cast<u8*>(store.in.block + words), store.in.bytes),
-                cont::Span<u64>(store.in.block, words)));
+            static_cast<void>(
+                slot.in.init(cont::Span<u8>(reinterpret_cast<u8*>(store.in.block + words), store.in.bytes),
+                             cont::Span<u64>(store.in.block, words)));
         }
         slot.window.reset(m_limits.stream_window, m_limits.receive_bytes);
         slot.recv = QuicRecvState::Recv;
@@ -310,9 +310,9 @@ QuicStreamSet::Slot& QuicStreamSet::open_slot(Type& type) noexcept
         {
             const usize words = quic_stream_bitmap_words(store.out.bytes);
             u64* const block = store.out.block;
-            static_cast<void>(slot.out.init(
-                cont::Span<u8>(reinterpret_cast<u8*>(block + (2U * words)), store.out.bytes),
-                cont::Span<u64>(block, words), cont::Span<u64>(block + words, words)));
+            static_cast<void>(
+                slot.out.init(cont::Span<u8>(reinterpret_cast<u8*>(block + (2U * words)), store.out.bytes),
+                              cont::Span<u64>(block, words), cont::Span<u64>(block + words, words)));
         }
         slot.credit.reset(type.send_credit);
         slot.send = QuicSendState::Ready;

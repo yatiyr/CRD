@@ -4364,8 +4364,11 @@ TEST_CASE("QUIC connection: a resumed client's stream and datagram go in 0-RTT p
         CHECK(marked == 0U);
         // The server's 0-RTT keys go three PTOs after its first 1-RTT packet (RFC 9001 section 4.9.3).
         CHECK(server.protection().can_open(QuicPacketType::ZeroRtt));
+        CHECK(server.protection().holds_handshake_keys()); // the 0-RTT keys keep the handshake levels' block
+        CHECK_FALSE(client.protection().holds_handshake_keys());
         net->advance(net->now + 3000U * kMs);
         CHECK_FALSE(server.protection().can_open(QuicPacketType::ZeroRtt));
+        CHECK_FALSE(server.protection().holds_handshake_keys());
         // Nothing allocates after construction but the stream and CRYPTO buffers, as their data needs them.
         CHECK(allocator.calls() ==
               allocations + client.buffer_allocations() + server.buffer_allocations());

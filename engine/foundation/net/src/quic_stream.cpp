@@ -645,8 +645,8 @@ bool quic_hold(memory::IAllocator& allocator, QuicReceiveBuffer& buffer, QuicBuf
     {
         return true; // held, or refused by the buffer without a block taken for it
     }
-    return regrow(allocator, store, grown_capacity(static_cast<u32>(buffer.capacity()), needed, limit, first), 1U, taken,
-                  [&](cont::Span<u8> bytes, u64* block, usize words)
+    return regrow(allocator, store, grown_capacity(static_cast<u32>(buffer.capacity()), needed, limit, first), 1U,
+                  taken, [&](cont::Span<u8> bytes, u64* block, usize words)
                   { return buffer.grow(bytes, cont::Span<u64>(block, words)); });
 }
 
@@ -659,8 +659,8 @@ bool quic_hold(memory::IAllocator& allocator, QuicSendBuffer& buffer, QuicBuffer
     {
         return true;
     }
-    return regrow(allocator, store, grown_capacity(static_cast<u32>(buffer.capacity()), needed, limit, first), 2U, taken,
-                  [&](cont::Span<u8> bytes, u64* block, usize words)
+    return regrow(allocator, store, grown_capacity(static_cast<u32>(buffer.capacity()), needed, limit, first), 2U,
+                  taken, [&](cont::Span<u8> bytes, u64* block, usize words)
                   { return buffer.grow(bytes, cont::Span<u64>(block, words), cont::Span<u64>(block + words, words)); });
 }
 
