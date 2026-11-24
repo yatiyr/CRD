@@ -38,9 +38,9 @@ GitHub's main is one commit behind GitLab's (1b6e5bc8 against b986769c), left as
   datagrams and with no reduction, deep rows 2.5 to 5.4 times v7, 0.1% random loss, beside a v7 flow that keeps all
   it had); a path control's trains and a probe's loss reducing nothing. The idle-restart case now swaps from a v7
   history: with v8's own slow start (one reduction, not two) its window is larger and restarts overflow at the
-  pacing rate (32 drops), whatever the burst.
-- linux-gcc-debug: all 1,179 `crd-net-tests` cases (8 skips) and the 19 `crd-no-*`/`crd-check*` guards pass; the
-  congestion corpus replays. libFuzzer congestion, 150 s: 345,873 runs, no find.
+  pacing rate (32 drops against 5); v7 from that window is untested.
+- linux-gcc-debug on 3c859371's code: all 1,179 `crd-net-tests` cases (8 skips), the 30 `crd-fuzz-net-*-corpus`
+  replays and the 19 `crd-no-*`/`crd-check*` guards pass. libFuzzer congestion, 150 s: 345,873 runs, no find.
 - Board, crd-net arm: 587 MiB per CPU-second at 1 MiB windows (534 at 65610837; trains 22.1, ACKs 16 per MiB: kept).
   At 64 KiB 416 per CPU-second and 493 per wall second: the wall rate is still under 34e72e21's 596.
 

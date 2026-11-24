@@ -11,7 +11,7 @@ Row: [NET-PATH](../ROADMAP.md#slice-net-path). Session: [train cap](../sessions/
 of the turn, ACKs first), one flow of 1200-byte datagrams, HyStart++ on, bulk for 10 s, `linux-gcc-release` on WSL2
 (i9-14900K). "Link" is acknowledged bytes over the link's capacity. v7 is a version 7 policy (the initial window's
 burst, 34e72e21's rule); "65610837" is the send quantum without a cap (that commit's `burst`, rebuilt for the run
-and not committed); "this batch" is 3c859371. Exact timers (no turn) for two rows as the reference. 100 Mbit/s at
+and not committed); "this batch" is 6184d737's rule (3c859371 changes only Prague, version 7 seeds and the undo, which no row reaches). Exact timers (no turn) for two rows as the reference. 100 Mbit/s at
 250 us turns is the same in all three (the quantum never exceeds the initial window there) and is left out.
 
 ## Results

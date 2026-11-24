@@ -483,7 +483,7 @@ TEST_CASE("congestion: bursts after idle on a fast short path into a shallow que
     // quantum (64 KiB) out of a full pacer at each restart overflows the queue every time: 114 to 157 drops and 17
     // to 20 reductions in this run, against 1 to 5 and 1 with the initial window's burst. The first 8 MiB run under
     // version 7 and the controller is swapped live, so each version restarts from the same window (one that a
-    // slow start left larger overflows at the pacing rate whatever the burst).
+    // slow start left larger overflows at the pacing rate).
     for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
     {
         INFO("algorithm " << static_cast<int>(algorithm));
@@ -998,8 +998,8 @@ TEST_CASE("congestion: under coarse host turns the train cap meets the initial w
         const Path lossy{kGigabit, 250000U, 32768U, kMs, 1U};
         CHECK(run(algorithm, 8U, lossy).acked >= run(algorithm, 7U, lossy).acked);
 
-        // Beside a version 7 flow on a deep queue's link, a version 8 one takes the capacity the other leaves and
-        // none of what it gets.
+        // Beside a version 7 flow on a deep queue's link, a version 8 one takes the capacity the other's pacer leaves
+        // and none of what it gets.
         for (const u32 version : {7U, 8U})
         {
             INFO("beside version " << version);
