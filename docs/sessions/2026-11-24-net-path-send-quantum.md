@@ -35,9 +35,14 @@ queued).
   quic-connection (6,795); the congestion corpus replays. No find. clang-tidy 22.1.8 clean on congestion.cpp/.hpp,
   quic_path_control.cpp and the three changed tests; `cerid_quic_board.cpp` is UNGATED there (no Windows unit
   compiles it), built with -Werror on Linux. Format on added lines; braces pass.
+- Coarse turns (temporary fixture change, every event rounded to 250 us or 1 ms; numbers in the board note): the
+  quantum fills 73-93% of 1 Gbit/s where the initial window fills 38% (9% at 1 ms turns), but under a burst-sized
+  queue it loses: 12 KB at 1 Gbit/s 6-13% against 38%, and at 100 Mbit/s with 1 ms turns 65-69% and 216 drops
+  against 96% and none. Unproven until bounded.
 
 ## Next
 
-- Trains stop at 22 with the quantum and at 32 with pacing off; msquic sends 40. Look for the limit (`kBatchChunk`
-  and `IoLoopConfig::batch` are 32, the host's per-turn sends, the stream writes of 64 KiB).
-- The wall-rate drop at 64 KiB windows. Then ACK_FREQUENCY (`quic.ack-frequency`, watch) where a board shows it wins.
+- Bound the quantum by what the path's losses teach (a loss in a burst lowers the cap toward the initial window; it
+  grows back while bursts go clean), with a turn period in `bottleneck_fixture.hpp` and the coarse-turn cases as tests.
+- The wall-rate drop at 64 KiB windows (MAX_STREAM_DATA updates per MiB, time blocked on flow control, before and
+  after). Then the 22-datagram train limit (`kBatchChunk`, `IoLoopConfig::batch`, the per-turn sends).

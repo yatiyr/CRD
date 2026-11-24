@@ -35,9 +35,16 @@ train, 8 to 10 ACKs per MiB and 76.9 to 87.8 data datagrams per ACK. Its lead wi
 - Both stacks ACK about once per two trains (crd-net 46 / 22, msquic 87 / 40), so the train length accounts for the
   ACK gap. msquic does not pace below a 1 ms RTT (`QUIC_MIN_PACING_RTT`), so its trains are its send batches.
 - At 64 KiB the landed rule gains less than plain quantum (ACKs 30 per MiB against 17), as expected where the stream
-  window drains between flow-control updates and flights restart from nothing in flight (not traced). crd-net's wall rate at 64 KiB fell from 596 to 473
-  MiB per second while its CPU rate rose; the cause is open.
+  window drains between flow-control updates and flights restart from nothing in flight (not traced). crd-net's
+  wall rate at 64 KiB fell from 596 to 473 MiB per second while its CPU rate rose; the cause is open.
 - Idle restarts, simulated (`bottleneck_fixture.hpp`, 1 Gbit/s, 2 ms RTT, 32 KiB queue, twenty 1 MiB writes a second
   apart): plain quantum 114 to 157 drops and 17 to 20 reductions, the landed rule and the initial window 1 to 5 and 1.
   Steady bulk with even the plain quantum, over 12-256 KiB queues, 2-40 ms RTTs and 0-1% loss, matched the initial
-  window within two reductions.
+  window within two reductions, but only because the fixture's sender wakes exactly at each release time, so no
+  quantum ever left mid-flight.
+- Coarse turns (a temporary fixture change, not committed: every event rounded up to 250 us or 1 ms, CUBIC, version 7
+  against 8, 10 s of bulk). Version 7 cannot fill a fast link, at one initial window a turn: 38% of 1 Gbit/s at
+  250 us turns, 9% at 1 ms. Version 8 fills 73-93% at 250 us over 32-64 KiB queues (2-64 drops), 17-36% at 1 ms.
+  It loses where the queue is under a burst: a 12 KB queue at 1 Gbit/s falls to 6-13% (v7 38%), and at 100 Mbit/s
+  with 1 ms turns to 65-69% with 216 drops where v7 fills 96% with none. The quantum needs a bound the path's losses
+  teach; until then shallow-queue paths under coarse turns are worse than before.
