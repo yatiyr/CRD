@@ -332,6 +332,21 @@ usize QuicStreamSet::buffer_bytes() const noexcept
     return total;
 }
 
+void QuicStreamSet::trim() noexcept
+{
+    for (u32 index = 0U; index < m_total_slots; ++index)
+    {
+        if (!m_slots[index].active)
+        {
+            Store& store = m_stores[index];
+            memory::deallocate_array(*m_allocator, store.in.block);
+            memory::deallocate_array(*m_allocator, store.out.block);
+            store = Store{};
+        }
+    }
+    m_closed_buffers = false;
+}
+
 bool QuicStreamSet::hold_in(Slot& slot, u64 end) noexcept
 {
     return quic_hold(*m_allocator, slot.in, m_stores[index_of(slot)].in, end, m_limits.receive_bytes,
@@ -483,6 +498,7 @@ void QuicStreamSet::try_free(Slot& slot) noexcept
     --type.open;
     type.free[type.free_count++] = index;
     slot.active = false;
+    m_closed_buffers = m_closed_buffers || m_stores[index].in.block != nullptr || m_stores[index].out.block != nullptr;
     if (!type.local)
     {
         ++type.freed;

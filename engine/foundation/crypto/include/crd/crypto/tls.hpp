@@ -878,7 +878,9 @@ public:
     // session ID context). Version 1 until set; kept by init() and clear(). Set before init() to the version a
     // connection starts in; a client sets it again when its server switches versions compatibly (RFC 9368 section
     // 2.3), before providing the server's first CRYPTO data; a server's follows its QuicHelloAnswer. BadConfig for a
-    // version quic_version_supported() refuses, ProviderFailure when the provider refuses the new context.
+    // version quic_version_supported() refuses, ProviderFailure when the provider refuses the new context. Once the
+    // handshake ended or failed it sets only the next init()'s version: the ended handshake's tickets keep the
+    // version it ran.
     [[nodiscard]] TlsError    set_version(QuicVersion version) noexcept;
     [[nodiscard]] QuicVersion version() const noexcept { return m_version; }
     // A server's answer to its client's transport parameters (null: init()'s go unchanged); kept by init() and clear().
@@ -903,7 +905,8 @@ private:
     [[nodiscard]] static usize secret_level(QuicLevel level, QuicSide side) noexcept;
     static void                forget(Secret& secret) noexcept;
 
-    ProviderBuffer* m_outgoing[kQuicLevels] = {};
+    ProviderBuffer* m_outgoing[kQuicLevels] = {}; // each level's waiting CRYPTO data, none while nothing waits
+    u32             m_receive_limits[kQuicLevels] = {}; // receive_limit()'s, fixed at init()
     Secret          m_secrets[3][2]; // [Handshake, Application, Early][Client, Server]
     QuicLevel       m_alert_level = QuicLevel::Initial;
     QuicVersion     m_version     = QuicVersion::V1;

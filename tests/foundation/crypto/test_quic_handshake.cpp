@@ -1267,6 +1267,81 @@ TEST_CASE("QUIC handshake: refusals before and outside the handshake", "[crypto]
     check_all_keys(client, server, QuicVersion::V2);
 }
 
+TEST_CASE("QUIC handshake: an ended handshake holds no drained CRYPTO buffer and answers every later reader without "
+          "the provider's configuration",
+          "[crypto][quic-handshake][net-2][4.2a]")
+{
+    u8 ticket_key[kTlsTicketKeyBytes];
+    for (usize i = 0U; i < sizeof(ticket_key); ++i)
+    {
+        ticket_key[i] = static_cast<u8>(i + 11U);
+    }
+    for (const bool mutual : {false, true})
+    {
+        INFO("mutual authentication " << mutual);
+        End client;
+        End server;
+        Store tickets;
+        Options options;
+        options.ticket_key = ConstSpan<u8>(ticket_key);
+        if (mutual)
+        {
+            options.client_key = AlgorithmId::Ed25519;
+            options.server_pins_client = true;
+        }
+        configure(client, server, options);
+        start(client, server, &tickets);
+        usize limits[2][kQuicLevels] = {};
+        for (usize level = 0U; level < kQuicLevels; ++level)
+        {
+            limits[0][level] = client.handshake.receive_limit(static_cast<QuicLevel>(level));
+            limits[1][level] = server.handshake.receive_limit(static_cast<QuicLevel>(level));
+            CHECK(limits[0][level] >= 4096U);
+            CHECK(limits[1][level] >= 4096U);
+        }
+        establish(client, server);
+        // The client read its ticket after its handshake ended, the provider's configuration gone by then.
+        CHECK(tickets.kept == 1U);
+        usize written = 1U;
+        u8 out[8];
+        for (QuicHandshake* end : {&client.handshake, &server.handshake})
+        {
+            const usize side = (end == &client.handshake) ? 0U : 1U;
+            for (const QuicLevel level : kLevels)
+            {
+                // A drained level holds no buffer: nothing to take, and the limits are the handshake's.
+                CHECK(end->pending(level) == 0U);
+                CHECK(end->take(level, Span<u8>(out), written) == TlsError::None);
+                CHECK(written == 0U);
+                CHECK(end->receive_limit(level) == limits[side][static_cast<usize>(level)]);
+            }
+            CHECK(end->application_protocol() == kGame[0]);
+            CHECK(end->check_policy() == TlsError::None);
+            // Another version is the next init()'s, without the provider's configuration.
+            CHECK(end->set_version(QuicVersion::V2) == TlsError::None);
+            CHECK(end->version() == QuicVersion::V2);
+            CHECK(end->set_version(QuicVersion::V1) == TlsError::None);
+        }
+        CHECK(equal(server.handshake.peer_transport_parameters(), ConstSpan<u8>(kClientParameters)));
+        CHECK(equal(client.handshake.peer_transport_parameters(), ConstSpan<u8>(kServerParameters)));
+        u8 client_secret[32] = {};
+        u8 server_secret[32] = {};
+        REQUIRE(client.handshake.export_keying_material("EXPERIMENTAL test", {}, client_secret) == TlsError::None);
+        REQUIRE(server.handshake.export_keying_material("EXPERIMENTAL test", {}, server_secret) == TlsError::None);
+        CHECK(equal(client_secret, server_secret));
+        // Handshake data after the handshake is a level not read now: refused without an alert, the server's
+        // configuration (which a client's Certificate there would read) never consulted.
+        constexpr u8 finished[] = {20U, 0U, 0U, 1U, 0U};
+        CHECK(server.handshake.provide(QuicLevel::Handshake, ConstSpan<u8>(finished)) == TlsError::Failed);
+        CHECK_FALSE(server.handshake.alert_sent().present);
+        // A later handshake on the same object takes its buffers again.
+        start(client, server, &tickets);
+        establish(client, server);
+        CHECK(client.handshake.resumed());
+        CHECK(tickets.kept == 2U);
+    }
+}
+
 TEST_CASE("QUIC handshake: no common group fails with handshake_failure at the Initial level",
           "[crypto][quic-handshake][net-2]")
 {

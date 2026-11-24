@@ -9801,6 +9801,122 @@ TEST_CASE("QUIC connection: CRYPTO buffers take storage as the handshake needs i
     }
 }
 
+TEST_CASE("QUIC connection: a closed stream's buffers go back once the connection is idle both ways, and steady "
+          "reuse keeps them",
+          "[net][4.2a][quic-connection]")
+{
+    Identity identity;
+    CountingAllocator allocator;
+    {
+        QuicConnectionConfig client_config = config_for(QuicSide::Client, identity, QuicVersion::V1, 0U);
+        QuicConnectionConfig server_config = config_for(QuicSide::Server, identity, QuicVersion::V1, 1U);
+        // Credit wide enough that the receiving server sends no MAX_DATA or MAX_STREAMS while the streams go.
+        for (QuicConnectionConfig* config : {&client_config, &server_config})
+        {
+            config->streams = stream_limits();
+            config->streams.peer_uni = 64U;
+            config->streams.connection_window = 1U << 20U;
+            config->streams.connection_max_window = 1U << 21U;
+        }
+        QuicConnection client(allocator, client_config);
+        QuicConnection server(allocator, server_config);
+        REQUIRE(server.ready());
+        connect(client);
+        auto net = std::make_unique<Net>(client, server);
+        for (Path& path : net->path)
+        {
+            path.delay_ns = 20U * kMs;
+        }
+        REQUIRE(net->run_until([&] { return both_confirmed(client, server); }));
+        net->advance(net->now + 500U * kMs);
+        const auto settle = [&]
+        {
+            QuicStreamEvent event;
+            while (client.streams().poll(event) || server.streams().poll(event))
+            {
+            }
+        };
+        // A client stream of 4000 bytes and its FIN, which the server reads: the server only receives, and both ends'
+        // slots close.
+        const auto send_one = [&](u64 pattern_id)
+        {
+            u64 stream = 0U;
+            REQUIRE(client.streams().open(false, stream) == QuicStreamError::None);
+            u64 written = 0U;
+            u64 read = 0U;
+            bool finished = false;
+            REQUIRE(net->run_until(
+                [&]
+                {
+                    static_cast<void>(write_pattern(client.streams(), stream, written, 4000U, pattern_id));
+                    finished = finished || (server.streams().recv_state(stream) != QuicRecvState::None &&
+                                            drain(server.streams(), stream, read, pattern_id));
+                    settle();
+                    return finished && client.streams().open_streams() == 0U && server.streams().open_streams() == 0U;
+                }));
+            CHECK(read == 4000U);
+        };
+        send_one(1U);
+        const u32 client_taken = client.streams().buffer_allocations();
+        const u32 server_taken = server.streams().buffer_allocations();
+        CHECK(client.streams().buffer_bytes() > 0U);
+        CHECK(server.streams().buffer_bytes() > 0U);
+        // Streams one after another for far longer than three PTOs: each reuses the closed slot's buffers, at the
+        // receiving end too, whose own last ack-eliciting packet grows ever older.
+        const u64 steady_from = net->now;
+        for (u64 pattern_id = 2U; net->now < steady_from + 3000U * kMs; ++pattern_id)
+        {
+            send_one(pattern_id);
+            CHECK(client.streams().buffer_allocations() == client_taken);
+            CHECK(server.streams().buffer_allocations() == server_taken);
+        }
+        // Idle both ways for three PTOs: every closed slot's buffers went back, and no timer is left for them.
+        const usize calls = allocator.calls();
+        net->advance(net->now + 2000U * kMs);
+        CHECK(net->in_flight() == 0U);
+        CHECK(client.streams().buffer_bytes() == 0U);
+        CHECK(server.streams().buffer_bytes() == 0U);
+        CHECK(client.next_timer_ns() >= net->now + 1000U * kMs);
+        CHECK(server.next_timer_ns() >= net->now + 1000U * kMs);
+        CHECK(allocator.calls() == calls); // the trim takes nothing
+        // A stream after the trim takes its buffers again.
+        send_one(100U);
+        CHECK(client.streams().buffer_allocations() > client_taken);
+        CHECK(server.streams().buffer_allocations() > server_taken);
+        // An open stream keeps its buffers at both ends, the server's holding bytes it has not read.
+        u64 stream = 0U;
+        REQUIRE(client.streams().open(false, stream) == QuicStreamError::None);
+        u64 written = 0U;
+        REQUIRE(write_pattern(client.streams(), stream, written, 3000U, 200U, false));
+        REQUIRE(net->run_until([&] { return server.streams().recv_state(stream) != QuicRecvState::None; }));
+        net->advance(net->now + 2000U * kMs);
+        CHECK(net->in_flight() == 0U);
+        CHECK(server.streams().buffer_bytes() > 0U);
+        CHECK(client.streams().buffer_bytes() > 0U);
+        u64 read = 0U;
+        CHECK_FALSE(drain(server.streams(), stream, read, 200U));
+        CHECK(read == 3000U);
+        // Closed after that trim, the stream's buffers go at the next one.
+        REQUIRE(write_pattern(client.streams(), stream, written, 3000U, 200U));
+        bool finished = false;
+        REQUIRE(net->run_until(
+            [&]
+            {
+                finished = finished || drain(server.streams(), stream, read, 200U);
+                settle();
+                return finished && client.streams().open_streams() == 0U && server.streams().open_streams() == 0U;
+            }));
+        net->advance(net->now + 2000U * kMs);
+        CHECK(client.streams().buffer_bytes() == 0U);
+        CHECK(server.streams().buffer_bytes() == 0U);
+        CHECK(client.next_timer_ns() >= net->now + 1000U * kMs);
+        CHECK(server.next_timer_ns() >= net->now + 1000U * kMs);
+        CHECK(client.state() == QuicConnectionState::Established);
+        CHECK(server.state() == QuicConnectionState::Established);
+    }
+    CHECK(allocator.live() == 0U);
+}
+
 namespace
 {
 constexpr u64 kBulkBytes = u64{1} << 21U;

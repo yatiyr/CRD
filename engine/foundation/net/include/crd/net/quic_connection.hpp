@@ -1124,8 +1124,9 @@ private:
     [[nodiscard]] bool resize_ledger(u32 size) noexcept;
     // The slot of the record `at` past the oldest (fewer than the ledger's size).
     [[nodiscard]] u32 frame_slot(u64 at) const noexcept;
-    // When a grown table may shrink: kNeverNs while none grew since the last trim, or while ack-eliciting packets are
-    // in flight.
+    // When grown tables and the stream buffers no open stream holds go back: three PTOs after the last ack-eliciting
+    // packet either way; kNeverNs while no table grew and no stream closed holding buffers since the last trim, or
+    // while ack-eliciting packets are in flight.
     [[nodiscard]] u64 trim_ns() const noexcept;
     void trim_tables(u64 now_ns) noexcept;
     // Whether another slot sends, carries data on its active 4-tuple and has fewer than `timeouts` probe timeouts
@@ -1184,6 +1185,7 @@ private:
     u32 m_frame_at = 0U;       // and its slot
     u32 m_frame_count = 0U;
     bool m_tables_grown = false;   // a storage or the ledger grew since the last trim
+    u64 m_received_eliciting_ns = 0U; // when the last ack-eliciting packet arrived
     bool m_ledger_refused = false; // a record was refused the ledger's growth: write_packet closes
     QuicRecovery* m_recovery = nullptr;
     // Each open path slot's sending state: slot 0's is m_first_control (path ID 0's, then a reclaimed slot's), the

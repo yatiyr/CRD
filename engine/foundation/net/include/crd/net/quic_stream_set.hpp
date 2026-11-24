@@ -280,6 +280,11 @@ public:
     [[nodiscard]] u32 buffer_allocations() const noexcept { return m_buffer_allocations; }
     // The bytes the slots' buffers hold now, their bitmaps included: what the streams cost beyond the set's tables.
     [[nodiscard]] usize buffer_bytes() const noexcept;
+    // Gives back the buffers of the slots no open stream holds, which a stream opened later would reuse: the
+    // connection's trim once it has been idle (a held connection keeps none), after which a stream takes its first
+    // ones again. closed_buffers(): a stream closed holding buffers since the last trim.
+    void trim() noexcept;
+    [[nodiscard]] bool closed_buffers() const noexcept { return m_closed_buffers; }
     [[nodiscard]] const QuicStreamLimits& limits() const noexcept { return m_limits; }
 
     // The parts' states of a stream (None for a stream not open).
@@ -446,6 +451,7 @@ private:
     u32* m_indices = nullptr; // each type's order and free stack
     Store* m_stores = nullptr; // each slot's buffers
     u32 m_buffer_allocations = 0U;
+    bool m_closed_buffers = false; // closed_buffers()
     QuicStreamLimits m_limits;
     crypto::QuicSide m_side = crypto::QuicSide::Client;
     Type m_types[4];

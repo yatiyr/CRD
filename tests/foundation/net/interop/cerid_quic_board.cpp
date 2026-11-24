@@ -123,6 +123,11 @@ public:
         {
             serve(work, set);
         }
+        // serve() reads and writes by state; the events are taken so an ended stream's slot closes.
+        QuicStreamEvent event;
+        while (set.poll(event))
+        {
+        }
         if (m_options.client && work.fin_read)
         {
             finish(work);

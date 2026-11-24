@@ -1254,6 +1254,7 @@ bool QuicConnection::receive_packet(const QuicHeader& header, cont::Span<u8> pac
     if (!m_space_gone[quic_space_index(space)])
     {
         static_cast<void>(m_recovery->on_received(space, opened.number, eliciting, ecn, now_ns, m_receive_slot));
+        m_received_eliciting_ns = eliciting ? now_ns : m_received_eliciting_ns;
         const bool wanted = space == QuicSpace::Application && beyond_ping && m_receive_slot < kQuicMaxPaths;
         m_beyond_ping |= wanted ? static_cast<u8>(1U << m_receive_slot) : u8{0};
     }
@@ -3638,11 +3639,12 @@ bool QuicConnection::resize_ledger(u32 size) noexcept
 u64 QuicConnection::trim_ns() const noexcept
 {
     // Never during a flight: with an ack-eliciting packet in flight the loss detection timer is armed.
-    if (!m_tables_grown || m_recovery->loss_timer_ns() != kNeverNs)
+    if ((!m_tables_grown && !m_streams.closed_buffers()) || m_recovery->loss_timer_ns() != kNeverNs)
     {
         return kNeverNs;
     }
-    u64 last_ns = 0U;
+    // Idle both ways: a receiving end reusing its streams' buffers keeps them.
+    u64 last_ns = m_received_eliciting_ns;
     for (const Numbering& numbers : m_numbers)
     {
         last_ns = max_u64(last_ns, numbers.eliciting_ns);
@@ -3657,6 +3659,7 @@ void QuicConnection::trim_tables(u64 now_ns) noexcept
         return;
     }
     m_tables_grown = false;
+    m_streams.trim();
     const usize first = first_storage(m_config.sent_packets);
     for (usize index = 0U; index < kNumberSpaces; ++index)
     {

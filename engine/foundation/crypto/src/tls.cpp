@@ -1863,7 +1863,8 @@ struct TlsCallbacks
         return keep_secret(ssl, level, cipher, secret, length, true);
     }
 
-    // Queues CRYPTO data at its level; more than kTlsMaxBufferedBytes waiting across the levels fails the handshake.
+    // Queues CRYPTO data at its level, in the level's buffer, taken here when none waits (take() frees a drained
+    // one); more than kTlsMaxBufferedBytes waiting across the levels fails the handshake.
     static int add_handshake_data(SSL* ssl, ssl_encryption_level_t level, const uint8_t* data, size_t length) noexcept
     {
         QuicHandshake* handshake = quic_of(ssl);
@@ -1877,9 +1878,17 @@ struct TlsCallbacks
         {
             waiting += handshake->pending(static_cast<QuicLevel>(i));
         }
-        BIO* outgoing = bio_of(handshake->m_outgoing[index]);
-        return waiting + length <= kTlsMaxBufferedBytes &&
-                       BIO_write(outgoing, data, static_cast<int>(length)) == static_cast<int>(length)
+        ProviderBuffer*& outgoing = handshake->m_outgoing[index];
+        if (waiting + length > kTlsMaxBufferedBytes)
+        {
+            return 0;
+        }
+        if (outgoing == nullptr)
+        {
+            outgoing = reinterpret_cast<ProviderBuffer*>(BIO_new(BIO_s_mem()));
+        }
+        return outgoing != nullptr &&
+                       BIO_write(bio_of(outgoing), data, static_cast<int>(length)) == static_cast<int>(length)
                    ? 1
                    : 0;
     }
@@ -3485,7 +3494,9 @@ TlsError QuicHandshake::set_version(QuicVersion version) noexcept
     {
         return TlsError::BadConfig;
     }
-    if (m_session != nullptr && version != m_version)
+    // An ended (or failed) handshake keeps its binding, so its later tickets belong to the version it ran; the
+    // provider's configuration, which holds the session ID context, is gone once it ended.
+    if (m_session != nullptr && version != m_version && m_state == TlsState::Handshaking)
     {
         const TlsBinding binding = quic_binding_of(m_context_binding, version);
         if (!SSL_set_session_id_context(ssl_of(m_session), binding.bytes, sizeof(binding.bytes)))
@@ -3553,18 +3564,13 @@ TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> tran
         clear();
         return begun != TlsError::None ? begun : TlsError::BadConfig;
     }
-    for (ProviderBuffer*& outgoing : m_outgoing)
-    {
-        outgoing = reinterpret_cast<ProviderBuffer*>(BIO_new(BIO_s_mem()));
-    }
     // Tickets and the session ID context under the QUIC binding; the provider takes the quic_transport_parameters
     // extension's standard codepoint (57), never the drafts' 0xffa5.
     m_context_binding  = m_settings.binding;
     m_settings.binding = quic_binding_of(m_context_binding, m_version);
     m_quic             = true;
     cont::ConstSpan<u8> remembered;
-    if (m_outgoing[0] == nullptr || m_outgoing[1] == nullptr || m_outgoing[2] == nullptr ||
-        !SSL_set_quic_method(ssl.get(), &kQuicMethod) ||
+    if (!SSL_set_quic_method(ssl.get(), &kQuicMethod) ||
         !SSL_set_quic_transport_params(ssl.get(), transport_parameters.data(), transport_parameters.size()) ||
         !SSL_set_session_id_context(ssl.get(), m_settings.binding.bytes, sizeof(m_settings.binding.bytes)) ||
         (!early_data_context.empty() &&
@@ -3576,6 +3582,14 @@ TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> tran
     }
     m_remembered.resize(remembered.size());
     std::copy(remembered.begin(), remembered.end(), m_remembered.data());
+    // The provider frees its configuration once the handshake ends (its handshake state goes then too): nothing read
+    // after it names any. The limits, which read it, are fixed for the connection and kept here.
+    SSL_set_shed_handshake_config(ssl.get(), 1);
+    for (usize index = 0U; index < kQuicLevels; ++index)
+    {
+        m_receive_limits[index] = static_cast<u32>(
+            SSL_quic_max_handshake_flight_len(ssl.get(), encryption_level_of(static_cast<QuicLevel>(index))));
+    }
     m_session = reinterpret_cast<ProviderTlsSession*>(ssl.release());
     m_state   = TlsState::Handshaking;
     if (m_settings.role == TlsRole::Server)
@@ -3687,7 +3701,7 @@ TlsError QuicHandshake::take(QuicLevel level, cont::Span<u8> out, usize& written
     {
         return TlsError::BadConfig;
     }
-    if (m_outgoing[index] == nullptr)
+    if (m_session == nullptr)
     {
         return TlsError::NotReady;
     }
@@ -3696,19 +3710,25 @@ TlsError QuicHandshake::take(QuicLevel level, cont::Span<u8> out, usize& written
     {
         return TlsError::None;
     }
-    if (BIO_read(bio_of(m_outgoing[index]), out.data(), static_cast<int>(count)) != static_cast<int>(count))
+    BIO* const outgoing = bio_of(m_outgoing[index]);
+    if (BIO_read(outgoing, out.data(), static_cast<int>(count)) != static_cast<int>(count))
     {
         return TlsError::ProviderFailure;
     }
     written = count;
+    if (BIO_pending(outgoing) == 0U)
+    {
+        // A drained level's buffer goes: a held connection keeps none, and a later flight takes one again.
+        BIO_free(outgoing);
+        m_outgoing[index] = nullptr;
+    }
     return TlsError::None;
 }
 
 usize QuicHandshake::receive_limit(QuicLevel level) const noexcept
 {
-    return m_session != nullptr && static_cast<usize>(level) < kQuicLevels
-               ? SSL_quic_max_handshake_flight_len(ssl_of(m_session), encryption_level_of(level))
-               : 0U;
+    return m_session != nullptr && static_cast<usize>(level) < kQuicLevels ? m_receive_limits[static_cast<usize>(level)]
+                                                                           : 0U;
 }
 
 bool QuicHandshake::has_keys(QuicLevel level, QuicSide side) const noexcept
