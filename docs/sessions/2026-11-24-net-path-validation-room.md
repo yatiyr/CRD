@@ -6,8 +6,8 @@
 Row: [NET-PATH](../ROADMAP.md#slice-net-path). Operator order: fuzz host-check 45296064704 (04440292) first. Its leg
 net-quic-connection, seed 8403, input `afb01010`, failed the follow check `follows() || (ended() && !proving(true))`,
 and it also failed on HEAD 4be4728e. CI: host-checks 45307860762 (fuzz, 1b6e5bc8) and 45299047960 (udp-ring) passed.
-The udp-ring run was on an Azure host (kernel 7.0.0-1017-azure), and all 1,280 ring opens got every buffer they
-asked for, 32768 included. CI 45317055228 (4be4728e) is pending. GitHub's main equals GitLab's (4be4728e).
+The udp-ring run was on an Azure host (kernel 7.0.0-1017-azure), and all 2,560 ring opens (640 per size) got every
+buffer they asked for, 32768 included. CI 45317055228 (4be4728e) is pending. GitHub's main equals GitLab's (4be4728e).
 
 ## The defect
 
@@ -44,3 +44,6 @@ congestion control delay a PATH_RESPONSE. The engine was wrong; the oracle was r
 ## Next
 
 The 65610837 regressions (a) to (d), starting with (a), crd-net's 64 KiB wall rate against 4fb61ff3's tree.
+Then the input's storage: 33 PMTU probes of 1472 bytes left at one instant, one per validated own-socket move.
+Each move restarts the search and empties bytes in flight, so the window gate on a probe cannot hold one back. A
+case is needed to decide whether one probe per new path at one instant is right (RFC 8899 section 5).
