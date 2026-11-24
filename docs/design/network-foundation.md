@@ -634,12 +634,21 @@ sans-I/O (`receive`, `send` until 0, `next_timer_ns`, `on_timeout`), so NET-SIM 
   and a closed slot's returns to the first size. The frame ledger starts at 64 records and doubles up to
   `sent_frames` when a record finds it full; a packet's token is its first record's number (modulo 2^31), so it still
   names the records after a move, and a refused growth closes with INTERNAL_ERROR (the frame is in the packet
-  already). Once nothing ack-eliciting is in flight, three PTOs after the last one sent, a grown table shrinks
-  to its first size when that holds what it keeps, else to twice that, and `next_timer_ns()` names that time. The held-packet ring is taken
+  already). Once nothing ack-eliciting is in flight, three PTOs after the last ack-eliciting packet either way (a
+  receiving end that keeps reusing its streams' buffers keeps them), a grown table shrinks to its first size when that
+  holds what it keeps, else to twice that, the stream slots no open stream holds give their buffers back
+  (`QuicStreamSet::trim`, 2026-11-24), and `next_timer_ns()` names that time; it names none while no table grew and no
+  stream closed holding buffers since the last trim. The held-packet ring is taken
   only when a packet waits for its keys and goes back once it holds none; a refusal drops that packet. The Initial,
   Handshake and 0-RTT keys (2026-11-24, 5.6 KiB) are one block `QuicPacketProtection` takes at its start and wipes
   and frees once all three levels are discarded, so a confirmed connection holds only its 1-RTT keys; a keyed
-  connection takes none, and a refused block refuses the start. Counting: `buffer_allocations()` (every allocation
+  connection takes none, and a refused block refuses the start. The TLS provider (2026-11-24) frees its handshake
+  configuration when the handshake ends (`SSL_set_shed_handshake_config`: every later reader was listed, and the
+  one that read it, the receive limit, is kept by `QuicHandshake` from `init()`), and a level's outgoing CRYPTO buffer
+  exists only while data waits there. What the provider still holds for an established connection (its connection
+  and handshake state, the 1-RTT placeholder AEAD contexts and the established session, 2.9 KiB on the board where 5.4 were before) has no
+  release short of freeing the connection, which the exporter (`export_keying_material`, WebTransport's and the
+  capability bindings') and a client's later tickets still need. Counting: `buffer_allocations()` (every allocation
   after construction), `buffer_bytes()` (stream and CRYPTO buffers) and `table_bytes()`.
 
 Evidence: `test_quic_connection.cpp` (22 cases: both versions to confirmation, nothing allocated after construction;
@@ -664,7 +673,9 @@ credits and their frames. It knows nothing of packets: the connection asks it fo
   (a stream carrying only a FIN or a reset takes none), `first_bytes`
   each (4 KiB by default, or the limit when smaller), and double as its data needs up to `receive_bytes` and
   `send_bytes`: the receive buffer before it stores data the windows allowed, the send buffer before `write()` or
-  `send_room()` would find no room. The slot keeps them for its later streams, so a steady load allocates nothing.
+  `send_room()` would find no room. The slot keeps them for its later streams, so a steady load allocates nothing,
+  until the connection is idle both ways for three PTOs: `trim()` then gives back the buffers of every slot no open
+  stream holds (an open stream keeps its own), as msquic frees a stream's when it closes.
   What the receive buffers need at once is bounded by connection flow control (the sum of each stream's highest offset
   less what was read is at most the connection window), so they hold under twice it plus 4 KiB per open stream; kept
   buffers make every slot's limits the worst case, which was the cost of every connection before. Room
