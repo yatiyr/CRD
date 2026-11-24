@@ -32,11 +32,12 @@
 // at 1.1 or 2.5 times that target; while a probe wants bytes it paces at the probe's rate, at most the policy's
 // maximum or 5 Mbit/s, one datagram at a time, with the probe's bytes over its window (less at the largest window),
 // and no other controller ever wants any. A window controller's burst is its initial window or, while its flight is
-// held back, a millisecond of its pacing rate, at most 64 KiB and at least that window. The sampler's delivered bytes
-// are what was acknowledged. The pacer's release time is never before now, its credit stays within one burst above
-// zero and the last send's burst below, and is positive at its release time. A coupled NewReno is its coupling's one
-// member until a swap, and a twin uncoupled NewReno fed every same event keeps its state, window and pacing rate to the
-// byte (RFC 6356: one path is Reno).
+// held back outside a recovery period, a millisecond of its pacing rate, at most its train cap and at least that
+// window, and the cap stays within that window and 64 KiB (packets carry the train offsets the input picks). The
+// sampler's delivered bytes are what was acknowledged. The pacer's release time is never before now, its credit stays
+// within one burst above zero and the last send's burst below, and is positive at its release time. A coupled NewReno
+// is its coupling's one member until a swap, and a twin uncoupled NewReno fed every same event keeps its state, window
+// and pacing rate to the byte (RFC 6356: one path is Reno).
 #include <crd/core/platform.hpp>
 #include <crd/fuzz/harness.hpp>
 #include <crd/net/congestion.hpp>
@@ -292,14 +293,24 @@ void check(const World& w)
     }
     if (!is_bbr(w) && !is_prague(w) && !is_scream(w) && !is_gcc(w))
     {
-        // A window controller's burst: the initial window, or while its flight is held back a millisecond of its
-        // rate, at most 64 KiB and the initial window at least.
+        // A window controller's burst: the initial window, or while its flight is held back outside a recovery
+        // period a millisecond of its rate, the initial window at least and its train cap at most. The cap stays
+        // within that window and 64 KiB (or is that window, when larger), and before version 8 is that window.
         const u64 quantum = w.ctl->pacing_rate(rtt) / 1000U;
-        const u64 capped = (quantum < 65536U) ? quantum : 65536U;
         const u64 initial = congestion_initial_window(w.policy, w.datagram);
+        const u64 cap = state.train_cap;
+        CRD_FUZZ_REQUIRE(cap >= initial && (cap <= 65536U || cap == initial));
+        CRD_FUZZ_REQUIRE(w.policy.version >= 8U || cap == initial);
+        const u64 capped = (quantum < cap) ? quantum : cap;
+        const u64 most = (capped > initial) ? capped : initial;
         const u64 burst = w.ctl->burst(rtt);
-        CRD_FUZZ_REQUIRE(burst == initial || (state.limited && burst == ((capped > initial) ? capped : initial)));
+        CRD_FUZZ_REQUIRE(burst == initial || (state.limited && state.phase != CongestionPhase::Recovery &&
+                                              burst > initial && burst <= most));
         CRD_FUZZ_REQUIRE(state.limited || burst == initial);
+    }
+    else
+    {
+        CRD_FUZZ_REQUIRE(state.train_cap == 0U);
     }
 }
 
@@ -358,6 +369,8 @@ void run(World& w, u8 op, u8 parameter)
             p.sent.bytes = w.datagram - (parameter % 64U);
             p.sent.number = w.number++;
             p.sent.sent_ns = w.now;
+            // The bytes of its train before it.
+            p.sent.train = ((parameter & 0x40U) != 0U) ? (parameter % 64U) * w.datagram : 0U;
             p.sent.space = (parameter & 0x80U) != 0U ? QuicSpace::Handshake : QuicSpace::Application;
             w.in_flight += p.sent.bytes;
             w.max_in_flight = (w.in_flight > w.max_in_flight) ? w.in_flight : w.max_in_flight;

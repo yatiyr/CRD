@@ -49,6 +49,11 @@ static_assert(kCongestionMaxWindow <= ~u64{0} / kCubicKScale);
 // A send quantum (draft-ietf-ccwg-bbr section 5.6.3): a millisecond of the pacing rate, at most one 64 KiB train.
 constexpr u64 kSendQuantumMax = 65536U;
 constexpr u64 kSendQuantumNs = 1000000U;
+// The window controllers' train cap: clean rounds it waits after a train lost a packet before it grows again, and
+// the most that wait doubles to while each growth loses again at once (a probe past what the path holds).
+constexpr u32 kTrainHoldRounds = 8U;
+constexpr u32 kTrainHoldMaxRounds = 1024U;
+constexpr u32 kTrainDrainRounds = 2U; // a proven probe's length sent throughout, and the round that judges it
 
 [[nodiscard]] constexpr u64 min_u64(u64 a, u64 b) noexcept
 {
@@ -94,6 +99,13 @@ public:
 
     void seed(const CongestionState& from) noexcept
     {
+        if (from.train_cap != 0U && m_policy.version >= 8U)
+        {
+            m_train_cap = max_u64(min_u64(from.train_cap, kSendQuantumMax), m_initial);
+            m_train_proven = m_train_cap;
+            m_train_before = m_train_cap;
+            m_train_taught = true; // what another window controller learned grows on from it a datagram a round
+        }
         m_window = min_u64(max_u64(from.window, m_minimum), kCongestionMaxWindow);
         m_threshold = max_u64(from.slow_start_threshold, m_minimum);
         m_recovery_start_ns = from.recovery_start_ns;
@@ -121,6 +133,17 @@ public:
         {
             m_limited = true;
             m_restarted = false;
+        }
+        // A packet at or past the proven bytes of its train probes the path (teach_train), one train at a time.
+        m_train_longest = max_u64(m_train_longest, packet.train + packet.bytes);
+        if (packet.train >= m_train_proven)
+        {
+            m_probe_sent = true;
+            m_probe_since_ns = min_u64(m_probe_since_ns, packet.sent_ns);
+        }
+        else if (packet.train == 0U && (m_probe_sent || m_probe_sent_before))
+        {
+            m_probe_out = true;
         }
         sent(packet, in_flight, now_ns);
     }
@@ -170,6 +193,7 @@ public:
             m_samples = 0U;
             m_limited_before = m_limited;
             m_limited = false;
+            grow_train(now_ns);
             if (m_phase == CongestionPhase::ConservativeSlowStart && ++m_css_rounds >= kHystartCssRounds)
             {
                 m_threshold = m_window; // RFC 9406: CSS_ROUNDS rounds in CSS end slow start
@@ -181,9 +205,10 @@ public:
 
     void on_lost(const CongestionPacket& packet, u64 now_ns) noexcept override
     {
-        if (in_recovery(packet.sent_ns))
+        // A train probe's loss is no congestion event; with any period's losses, it only holds that period's undo.
+        if (teach_train(packet, now_ns) || in_recovery(packet.sent_ns))
         {
-            m_episode_lost += packet.bytes;
+            m_episode_lost += (m_recovery_start_ns != kNeverNs) ? packet.bytes : 0U;
             return;
         }
         reduce_window(now_ns, true);
@@ -231,6 +256,10 @@ public:
         m_threshold = m_prior.slow_start_threshold;
         m_recovery_start_ns = m_prior.recovery_start_ns;
         m_phase = (m_prior.phase == CongestionPhase::Recovery) ? CongestionPhase::Recovery : grown_phase();
+        // What the period's losses took from the train cap comes back with it.
+        m_train_cap = max_u64(m_train_cap, m_train_ceiling);
+        m_train_proven = max_u64(m_train_proven, m_train_ceiling);
+        m_train_ceiling = 0U;
         m_undoable = false;
         ++m_undone;
         restore();
@@ -264,19 +293,22 @@ public:
 
     // RFC 9002 section 7.7 limits bursts to the initial window, and lets a sender use more on a path it knows absorbs
     // it. While the window or the pacer holds an ACK-clocked flight back (this round or the last, and not since it
-    // restarted from nothing in flight), the burst is a send quantum: a millisecond of the pacing rate, one 64 KiB
-    // train at most and that window at least, as Linux's TCP sizes its segmentation bursts under every controller. A
-    // fast short path's packets then leave in trains the host segments whole instead of ten datagrams a train, and a
-    // slow or long path, an application-limited sender and a restart after idle (whose stale window would put a
-    // whole quantum into a shallow queue at once) keep the initial window, as does a policy before version 8.
+    // restarted from nothing in flight), the burst is a send quantum: a millisecond of the pacing rate, as Linux's
+    // TCP sizes its segmentation bursts under every controller, the initial window at least and at most the train
+    // cap, the longest train the path is known to take (teach_train). A fast short path's packets then leave in
+    // trains the host segments whole instead of ten datagrams a train, a host that wakes once a millisecond fills its
+    // link, and a slow or long path, an application-limited sender and a restart after idle (whose stale window
+    // would put a whole quantum into a shallow queue at once) keep the initial window, as does a policy before
+    // version 8.
     [[nodiscard]] u64 burst(const QuicRtt& rtt) const noexcept override
     {
-        if (m_policy.version < 8U || m_restarted || !(m_limited || m_limited_before))
+        if (m_policy.version < 8U || m_restarted || !(m_limited || m_limited_before) ||
+            m_phase == CongestionPhase::Recovery)
         {
             return m_initial;
         }
         const u64 quantum = multiply_divide(pacing_rate(rtt), kSendQuantumNs, kNanosPerSecond);
-        return max_u64(min_u64(quantum, kSendQuantumMax), m_initial);
+        return max_u64(min_u64(quantum, m_probe_out ? m_train_proven : m_train_cap), m_initial);
     }
 
     [[nodiscard]] CongestionState state() const noexcept override
@@ -289,6 +321,7 @@ public:
         out.undone = m_undone;
         out.phase = m_phase;
         out.limited = m_limited || m_limited_before;
+        out.train_cap = m_train_cap;
         return out;
     }
 
@@ -379,6 +412,124 @@ private:
         m_css_rounds = 0U;
         m_css_carry = 0U;
         m_undoable = false;
+        m_train_cap = m_initial;
+        m_train_proven = m_initial;
+        m_train_ceiling = 0U;
+        m_train_before = m_initial;
+        m_train_drain = 0U;
+        m_probe_since_ns = kNeverNs;
+        m_taught_since_ns = kNeverNs;
+        m_taught_until_ns = 0U;
+        m_train_longest = 0U;
+        m_train_longest_before = 0U;
+        m_train_hold = kTrainHoldRounds;
+        m_train_wait = 0U;
+        m_train_taught = false;
+        m_train_lost = false;
+        m_probe_sent = false;
+        m_probe_sent_before = false;
+        m_probe_out = false;
+    }
+
+    // The train cap is what the path's losses teach (RFC 9002 section 7.7: a sender may burst past the initial
+    // window on a path it knows absorbs it). It starts at the initial window, which is proven, and grows only from a
+    // proven cap: it doubles, to 64 KiB, until a loss teaches it, then grows a datagram once kTrainHoldRounds rounds
+    // have gone clean at it. A growth is a probe of the path in two steps. First its depth, one train long: the first
+    // train at or past the proven bytes is the probe, every later one keeps to the proven bytes until the round after
+    // the probe's ends, and that round proves the probe's length unless it lost a packet past the initial window of
+    // its train. Then its drain: the next round sends every train at that length, judged by the round after. A loss
+    // past the initial window of a train that the probe sent (at or past the proven bytes, or any while the drain is
+    // judged) teaches the cap the bytes before it, or the length before the growth when the drain failed. As a PMTU
+    // probe's loss (RFC 9000 section 14.4), it and every such loss of a packet the probe's period sent before it
+    // start no congestion event, and the next growth waits twice as long, to kTrainHoldMaxRounds. Any other loss
+    // past the initial window's bytes shows the queue fuller than it was: the cap falls to the bytes before it, a
+    // congestion event follows as for any loss, the wait starts short again, and the cap doubles back to the length
+    // proven before as soon as a round proves it. A loss within the initial window's bytes, or before version 8,
+    // teaches nothing. True for a loss of the probe's.
+    [[nodiscard]] bool teach_train(const CongestionPacket& packet, u64 now_ns) noexcept
+    {
+        if (packet.train < m_initial || m_policy.version < 8U)
+        {
+            return false;
+        }
+        if (packet.sent_ns >= m_taught_since_ns && packet.sent_ns <= m_taught_until_ns)
+        {
+            return true; // the period of a probe whose loss already taught the cap
+        }
+        const bool drained = m_train_drain != 0U && packet.sent_ns >= m_probe_since_ns;
+        const bool probe = drained || packet.train >= m_train_proven;
+        m_train_ceiling = probe ? 0U : max_u64(m_train_ceiling, m_train_proven);
+        m_train_cap = drained ? m_train_before : max_u64(min_u64(m_train_cap, packet.train), m_initial);
+        m_train_proven = m_train_cap;
+        if (probe)
+        {
+            m_taught_since_ns = min_u64(m_probe_since_ns, packet.sent_ns);
+            m_taught_until_ns = now_ns;
+        }
+        m_probe_since_ns = kNeverNs;
+        m_train_drain = 0U;
+        m_probe_sent = false;
+        m_probe_sent_before = false;
+        m_probe_out = false;
+        if (!m_train_lost)
+        {
+            m_train_lost = true; // one hold a round
+            const u32 doubled = (m_train_hold < kTrainHoldMaxRounds / 2U) ? 2U * m_train_hold : kTrainHoldMaxRounds;
+            m_train_hold = (probe && m_train_taught) ? doubled : kTrainHoldRounds;
+            m_train_wait = m_train_hold;
+            m_train_taught = true;
+        }
+        return probe;
+    }
+
+    // A round ended at `now_ns`. The trains of the round before, which this one acknowledged, prove their length
+    // unless this round lost a packet past the initial window of its train; a probe among them is then decided, and a
+    // proven cap grows once its wait is over.
+    void grow_train(u64 now_ns) noexcept
+    {
+        const u64 longest = min_u64(m_train_longest_before, m_train_cap);
+        const bool probed = m_probe_sent_before;
+        const bool lost = m_train_lost;
+        m_train_longest_before = m_train_longest;
+        m_train_longest = 0U;
+        m_probe_sent_before = m_probe_sent;
+        m_probe_sent = false;
+        m_train_lost = false;
+        if (m_policy.version < 8U || lost)
+        {
+            return;
+        }
+        const u64 proven = m_train_proven;
+        m_train_proven = max_u64(proven, longest);
+        m_train_ceiling = (m_train_proven < m_train_ceiling) ? m_train_ceiling : 0U;
+        m_train_drain -= (m_train_drain != 0U) ? 1U : 0U;
+        if (probed && m_train_proven > proven)
+        {
+            m_train_drain = kTrainDrainRounds;
+            m_probe_since_ns = min_u64(m_probe_since_ns, now_ns);
+        }
+        m_probe_out = m_probe_out && !probed;
+        if (m_train_drain == 0U && !m_probe_out && !m_probe_sent_before)
+        {
+            m_probe_since_ns = kNeverNs; // no probe is out: its period ends
+        }
+        if (m_train_drain != 0U || m_probe_out || m_probe_sent_before || m_train_proven + m_datagram <= m_train_cap ||
+            m_train_cap >= kSendQuantumMax)
+        {
+            return; // a probe is out or being judged, the cap is unproven (a probe goes again), or it is whole
+        }
+        m_train_before = m_train_cap;
+        if (m_train_cap < m_train_ceiling)
+        {
+            m_train_cap = min_u64(2U * m_train_cap, m_train_ceiling); // back to a length proven before, at once
+            return;
+        }
+        if (m_train_wait != 0U)
+        {
+            m_train_wait -= (longest + m_datagram > m_train_proven) ? 1U : 0U; // a round whose trains reached it
+            return;
+        }
+        m_train_cap = min_u64(m_train_taught ? m_train_cap + m_datagram : 2U * m_train_cap, kSendQuantumMax);
     }
 
     void reduce_window(u64 now_ns, bool undoable) noexcept
@@ -460,6 +611,25 @@ private:
     bool m_limited = false;        // this round
     bool m_limited_before = false; // the round before
     bool m_restarted = false;      // the flight started from nothing in flight and nothing has held it back since
+
+    // The train cap (teach_train).
+    u64 m_train_cap = 0U;
+    u64 m_train_proven = 0U;             // the longest train that went clean, the initial window at least
+    u64 m_train_ceiling = 0U;            // what was proven before a fuller queue lowered it, 0 for none
+    u64 m_train_before = 0U;             // the cap before its last growth
+    u64 m_train_longest = 0U;            // this round's longest train
+    u64 m_train_longest_before = 0U;     // the round before's
+    u32 m_train_hold = kTrainHoldRounds; // rounds at the cap a growth waits after the last loss
+    u32 m_train_wait = 0U;               // what is left of it
+    u32 m_train_drain = 0U;              // rounds left until a proven probe's drain is judged
+    u64 m_probe_since_ns = kNeverNs;     // when the probe out began, kNeverNs for none
+    u64 m_taught_since_ns = kNeverNs;    // the last probe whose loss taught the cap, from when it began
+    u64 m_taught_until_ns = 0U;          // to that loss
+    bool m_train_taught = false;         // a loss has taught it: it grows a datagram at a time
+    bool m_train_lost = false;           // a packet past the initial window of its train was lost this round
+    bool m_probe_sent = false;           // a probe train left this round
+    bool m_probe_sent_before = false;    // the round before
+    bool m_probe_out = false;            // it ended, and the trains after it keep to the proven bytes
 
     // HyStart++.
     u64 m_round_min_ns = kNeverNs;
@@ -4127,6 +4297,7 @@ void Pacer::on_sent(u64 bytes, u64 now_ns, u64 rate, u64 burst) noexcept
     const i64 full = scaled_bytes(burst);
     const i64 left = credit_scaled(now_ns, rate, burst) - scaled_bytes(bytes);
     m_credit = (left < -full) ? -full : left;
+    m_train = train(now_ns) + bytes;
     m_stamp_ns = max_u64(m_stamp_ns, now_ns);
     m_started = true;
 }

@@ -5,7 +5,8 @@
 // them, over a link of a rate, a drop-tail buffer and a step-marking queue that one flow owns or several share, each
 // flow with its own propagation delay and random loss, sending bulk data or a media source's frames (#scream), its
 // packets' receive times reported as QUIC receive timestamps would report them (#gcc) unless turned off, and padding
-// when the controller's bandwidth probe wants bytes the source has not written (CongestionController::probe_bytes).
+// when the controller's bandwidth probe wants bytes the source has not written (CongestionController::probe_bytes),
+// its sender woken at exact times or, as an event loop on a coarse timer, once a host turn.
 
 #include <crd/net/congestion.hpp>
 
@@ -82,6 +83,9 @@ public:
     }
     // The link's step-marking threshold (Link::ce_queue); 0 marks nothing and turns ECN off.
     void set_ce_queue(u64 bytes) { m_link->ce_queue = bytes; }
+    // The host's turn: from now each ACK and each send waits for the next multiple of `period_ns` (an event loop
+    // that a timer of that resolution wakes), and a turn settles every ACK due before it sends; 0 for exact times.
+    void set_turn(u64 period_ns) { m_turn_ns = period_ns; }
     // Bytes the application has written so far; kInfiniteData for a bulk transfer.
     void set_data(u64 bytes) { m_data = bytes; }
     void add_data(u64 bytes) { m_data += bytes; }
@@ -140,8 +144,8 @@ public:
     // When this flow's next event comes, an ACK frame or a send; kNeverNs for none. It reads the controller now.
     [[nodiscard]] u64 next_event_ns()
     {
-        m_ack_ns = (m_head != m_tail) ? event_ns(m_flight[m_head % kFlight]) : kNeverNs;
-        m_send_ns = next_send_ns();
+        m_ack_ns = turn((m_head != m_tail) ? event_ns(m_flight[m_head % kFlight]) : kNeverNs);
+        m_send_ns = turn(next_send_ns());
         const u64 first = (m_ack_ns < m_send_ns) ? m_ack_ns : m_send_ns;
         return (m_frame_period_ns != 0U && m_frame_ns < first) ? m_frame_ns : first;
     }
@@ -194,6 +198,16 @@ private:
         return f.ack_ns + 3U * rtt.smoothed_ns / 2U;
     }
 
+    // The host turn `at_ns` waits for.
+    [[nodiscard]] u64 turn(u64 at_ns) const
+    {
+        if (m_turn_ns == 0U || at_ns >= kNeverNs - m_turn_ns)
+        {
+            return at_ns;
+        }
+        return (at_ns + m_turn_ns - 1U) / m_turn_ns * m_turn_ns;
+    }
+
     [[nodiscard]] u64 next_send_ns()
     {
         const bool data = sent_bytes + kBottleneckMss <= m_data || m_data == kInfiniteData;
@@ -234,6 +248,7 @@ private:
         f.packet.bytes = kBottleneckMss;
         f.packet.number = m_number++;
         f.packet.sent_ns = now;
+        f.packet.train = m_pacer.train(now);
         f.packet.space = QuicSpace::Application;
         in_flight += kBottleneckMss;
         const bool data = sent_bytes + kBottleneckMss <= m_data || m_data == kInfiniteData;
@@ -300,6 +315,7 @@ private:
     u32 m_loss = 0U;
     bool m_timestamps = true;
     u64 m_clock_offset_ns = 0U;
+    u64 m_turn_ns = 0U;
     u64 m_seed = 0x853C49E6748FEA9BU;
     u64 m_ack_ns = kNeverNs;
     u64 m_send_ns = kNeverNs;

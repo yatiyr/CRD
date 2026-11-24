@@ -1,6 +1,7 @@
 // crd-net -- a QUIC path's sending state (NET-PATH; docs/design/network-foundation.md#multipath): what start()
 // builds and refuses, each recovery event's meaning (a lost PMTU probe and a handover's loss are no congestion
-// signal, a spurious loss's data was delivered), ECN validation and CE, the PMTU search's size reaching the
+// signal, a spurious loss's data was delivered), the trains its pacer counts and a train probe's loss that reduces
+// nothing, ECN validation and CE, the PMTU search's size reaching the
 // controller, persistent congestion, a rebinding that keeps the state and a restart, a live policy swap, the handover
 // schedule and learning, the pacer's timer, a Retry's reset, and two paths' controls never touching each other.
 
@@ -229,6 +230,41 @@ TEST_CASE("A lost PMTU probe and a handover's loss are no congestion signal", "[
     CHECK(lost_covered.handover_loss);
     CHECK(two.b.congestion().window() == initial);
     CHECK(two.b.delivery().lost() == 0U);
+}
+
+TEST_CASE("A path's trains are what leaves at one instant, and a train probe's loss reduces nothing",
+          "[path_control][net-path]")
+{
+    QuicPathControl control;
+    REQUIRE(control.start(QuicPathControlConfig{}, path_v4(1), 1U));
+    const u64 initial = control.congestion().window();
+    REQUIRE(initial == 12000U);
+    // Eleven datagrams in one turn record 0, 1200, ... 12000 bytes before them, as QuicConnection records them; a
+    // datagram of a later turn starts a train.
+    QuicSentPacket sent[12];
+    for (u64 n = 0U; n < 11U; ++n)
+    {
+        sent[n] = packet(n, kMs);
+        sent[n].train = static_cast<u32>(control.train(kMs));
+        CHECK(sent[n].train == n * 1200U);
+        send(control, sent[n], n * 1200U, kMs);
+    }
+    CHECK(control.train(kMs) == 13200U);
+    CHECK(control.train(2U * kMs) == 0U);
+    sent[11] = packet(11U, 2U * kMs);
+    sent[11].train = static_cast<u32>(control.train(2U * kMs));
+    send(control, sent[11], 13200U, 2U * kMs);
+    CHECK(control.train(2U * kMs) == 1200U);
+
+    // The eleventh left past the proven train (the initial window's 12000 bytes): its loss is a probe's, which
+    // starts no congestion event and teaches the train cap; one within the initial window reduces the window.
+    static_cast<void>(control.on_lost(QuicSpace::Application, sent[10], 60U * kMs));
+    CHECK(control.congestion().window() == initial);
+    CHECK(control.congestion().state().reductions == 0U);
+    CHECK(control.congestion().state().train_cap == initial);
+    static_cast<void>(control.on_lost(QuicSpace::Application, sent[4], 61U * kMs));
+    CHECK(control.congestion().state().reductions == 1U);
+    CHECK(control.congestion().window() < initial);
 }
 
 TEST_CASE("A path's ECN validation and CE are its own", "[path_control][multipath]")

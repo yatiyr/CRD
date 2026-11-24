@@ -34,6 +34,7 @@ void learn(HandoverLearner& learner, const HandoverLearning& learning) noexcept
     out.bytes = packet.bytes;
     out.number = packet.number;
     out.sent_ns = packet.sent_ns;
+    out.train = packet.train;
     out.received_ns = received_ns;
     out.space = space;
     out.delivery = packet.delivery;

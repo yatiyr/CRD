@@ -5,8 +5,11 @@
 // curve worked in floating point, its Reno-friendly region, fast convergence and idle periods, the undo of a period
 // whose every loss proved spurious and never of a mark, a live swap carrying the window and the recovery period, a
 // Retry's reset, the window controllers' send quantum (a held flight's burst; a restart after idle into a shallow
-// queue on a fast short path loses no more than the initial window's burst would), and the pacer's exact credit,
-// burst, debt and release times.
+// queue on a fast short path loses no more than the initial window's burst would) and its train cap (grown from
+// proven trains one probe at a time, a probe's loss teaching it without a congestion event, a fuller queue's loss
+// with one, the cap coming back from an undone period; under coarse host turns no worse than the initial window's
+// burst on a shallow queue and filling a deep one's link, beside a version 7 flow too), and the pacer's exact
+// credit, burst, debt and release times.
 
 #include "bottleneck_fixture.hpp"
 
@@ -18,6 +21,7 @@ namespace
 {
 using crd::u32;
 using crd::u64;
+using crd::usize;
 using namespace crd::net;
 
 constexpr u64 kMs = 1000000U;
@@ -84,6 +88,71 @@ struct Controller
     {
         ctl->on_acked(packet(number, sent_ns), now);
         ctl->on_ack_end(rtt_of(latest_ns, smoothed_ns), true, 0U, now);
+    }
+};
+
+// Trains on one controller as a host's turns send them: each train's packets leave at one instant, the bytes before
+// each recorded, with over 100 kB in flight (no restart from nothing) and the pacer holding the rest; one ACK frame
+// acknowledges every packet outstanding and not lost, ending a round.
+struct Trains
+{
+    static constexpr u64 kKept = 1024U;
+
+    const Controller& c;
+    u64 next = 0U;
+    u64 acked = 0U;
+    u64 now = 0U;
+    u64 sent[kKept] = {};
+    u64 offset[kKept] = {};
+    bool lost[kKept] = {};
+
+    // A train of `bytes` a millisecond on; its first packet's number.
+    u64 train(u64 bytes)
+    {
+        now += kMs;
+        const u64 first = next;
+        for (u64 before = 0U; before < bytes; before += kMss)
+        {
+            CongestionPacket out = packet(next, now);
+            out.train = before;
+            sent[next % kKept] = now;
+            offset[next % kKept] = before;
+            lost[next % kKept] = false;
+            c->on_sent(out, 100000U + before + kMss, now);
+            ++next;
+        }
+        c->on_limited(false, now);
+        return first;
+    }
+
+    [[nodiscard]] u64 sent_ns(u64 number) const { return sent[number % kKept]; }
+
+    void lose(u64 number)
+    {
+        now += kMs / 10U;
+        lost[number % kKept] = true;
+        CongestionPacket out = packet(number, sent_ns(number));
+        out.train = offset[number % kKept];
+        c->on_lost(out, now);
+    }
+
+    void ack_all()
+    {
+        now += kMs;
+        for (; acked < next; ++acked)
+        {
+            if (!lost[acked % kKept])
+            {
+                c->on_acked(packet(acked, sent_ns(acked)), now);
+            }
+        }
+        c->on_ack_end(rtt_of(kMs, kMs), true, 100000U, now);
+    }
+
+    void round(u64 bytes)
+    {
+        static_cast<void>(train(bytes));
+        ack_all();
     }
 };
 
@@ -191,18 +260,21 @@ TEST_CASE("congestion: the pacing rate is the gain times the window per smoothed
     CHECK(big->pacing_rate(rtt_of(1U, 1U)) == kCongestionMaxWindow * 4U * 1000000000U);
 }
 
-TEST_CASE("congestion: a held flight's burst is a millisecond of its pacing rate, from the initial window to 64 KiB, "
-          "and a restarted or application-limited one bursts the initial window",
+TEST_CASE("congestion: a held flight's burst is a millisecond of its pacing rate, from the initial window to the train "
+          "cap, and a restarted or application-limited one bursts the initial window",
           "[net][net-path][congestion]")
 {
     for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
     {
         INFO("algorithm " << static_cast<int>(algorithm));
-        // A grown window whose flight the window or the pacer held back: 1.25 * 400000 bytes / 10 ms is 50 MB a
-        // second, 50000 bytes a millisecond.
+        // A grown window whose flight the window or the pacer held back, on a path whose trains of 64 KiB went
+        // clean (the train cap): 1.25 * 400000 bytes / 10 ms is 50 MB a second, 50000 bytes a millisecond. Without
+        // that cap, what no train has proven, the burst is the initial window.
         CongestionState grown;
         grown.window = 400000U;
         grown.limited = true;
+        CHECK(Controller(policy_of(algorithm), kMss, &grown)->burst(rtt_of(10U * kMs, 10U * kMs)) == 12000U);
+        grown.train_cap = 65536U;
         const Controller fast(policy_of(algorithm), kMss, &grown);
         CHECK(fast->burst(rtt_of(10U * kMs, 10U * kMs)) == 50000U);
         CHECK(fast->burst(rtt_of(20U * kMs, 20U * kMs)) == 25000U);
@@ -250,18 +322,177 @@ TEST_CASE("congestion: a held flight's burst is a millisecond of its pacing rate
     }
 }
 
+TEST_CASE("congestion: the train cap grows from proven trains by one probe train at a time, and only a probe's loss "
+          "teaches it without a congestion event",
+          "[net][net-path][congestion]")
+{
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        INFO("algorithm " << static_cast<int>(algorithm));
+        // A window whose rate's millisecond passes 64 KiB (500 MB a second at a 1 ms round trip), so the cap alone
+        // sizes the burst.
+        CongestionState grown;
+        grown.window = 400000U;
+        grown.limited = true;
+        const Controller c(policy_of(algorithm), kMss, &grown);
+        Trains s{c};
+        const QuicRtt rtt = rtt_of(kMs, kMs);
+        CHECK(c->state().train_cap == 12000U);
+        CHECK(c->burst(rtt) == 12000U);
+
+        // Trains that reached the proven initial window, judged clean by the round after: the cap doubles.
+        s.round(12000U);
+        s.round(12000U);
+        CHECK(c->state().train_cap == 24000U);
+        CHECK(c->burst(rtt) == 24000U);
+        // The probe is one train past the proven 12000 bytes; the trains after it keep to them until the round
+        // after the probe's proves it. Then a round sends every train at that length, judged by the next.
+        s.train(24000U);
+        s.train(12000U);
+        CHECK(c->burst(rtt) == 12000U);
+        s.ack_all();
+        s.round(12000U);
+        CHECK(c->state().train_cap == 24000U);
+        CHECK(c->burst(rtt) == 24000U);
+        s.round(24000U);
+        CHECK(c->state().train_cap == 24000U);
+        s.round(24000U);
+        CHECK(c->state().train_cap == 48000U);
+
+        // A probe that loses a packet past the proven 24000 bytes: no congestion event, and the cap is the bytes
+        // before it, a datagram's growth away once kTrainHoldRounds rounds have gone clean at it.
+        u64 window = c->window();
+        u64 first = s.train(48000U);
+        s.lose(first + 30U);
+        CHECK(c->state().reductions == 0U);
+        CHECK(c->window() == window);
+        CHECK(c->state().train_cap == 36000U);
+        s.ack_all();
+        for (u32 round = 0U; round < 9U; ++round)
+        {
+            CHECK(c->state().train_cap == 36000U);
+            s.round(36000U);
+        }
+        CHECK(c->state().train_cap == 37200U);
+        // That growth loses at once: a probe again, and the next waits twice as long.
+        first = s.train(37200U);
+        s.lose(first + 30U);
+        CHECK(c->state().reductions == 0U);
+        CHECK(c->state().train_cap == 36000U);
+        s.ack_all();
+        for (u32 round = 0U; round < 17U; ++round)
+        {
+            CHECK(c->state().train_cap == 36000U);
+            s.round(36000U);
+        }
+        CHECK(c->state().train_cap == 37200U);
+
+        // A probe proven deep enough whose drain fails: a loss past the initial window of a train its drain round
+        // sent, and another of that period found after it, start no congestion event; the cap is the length before.
+        s.train(37200U);
+        s.train(36000U);
+        s.ack_all();
+        s.round(36000U);
+        REQUIRE(c->burst(rtt) == 37200U);
+        first = s.train(37200U);
+        const u64 second = s.train(37200U);
+        window = c->window();
+        s.lose(second + 16U);
+        s.lose(first + 12U);
+        CHECK(c->state().reductions == 0U);
+        CHECK(c->window() == window);
+        CHECK(c->state().train_cap == 36000U);
+        s.ack_all();
+
+        // A loss past the initial window's bytes of a train within the proven length, outside any probe: the queue
+        // is fuller than it was, a congestion event, the cap the bytes before it; it doubles back to the length
+        // proven before once a round proves it.
+        first = s.train(36000U);
+        s.lose(first + 11U);
+        CHECK(c->state().reductions == 1U);
+        CHECK(c->state().train_cap == 13200U);
+        CHECK(c->state().phase == CongestionPhase::Recovery);
+        CHECK(c->burst(rtt) == 12000U); // a recovery period bursts the initial window
+        s.ack_all();
+        s.round(13200U);
+        s.round(13200U);
+        CHECK(c->state().train_cap == 26400U);
+        for (u32 round = 0U; round < 4U; ++round)
+        {
+            s.round(26400U); // the probe, the round that proves it, its drain and the round that judges it
+        }
+        CHECK(c->state().train_cap == 36000U);
+        // A loss within the initial window's bytes teaches nothing and is the congestion event it always was.
+        first = s.train(36000U);
+        s.lose(first + 5U);
+        CHECK(c->state().reductions == 2U);
+        CHECK(c->state().train_cap == 36000U);
+
+        // A seed carries the cap from another window controller, and a reset forgets it.
+        CongestionState taught = grown;
+        taught.train_cap = 30000U;
+        const Controller seeded(policy_of(algorithm), kMss, &taught);
+        CHECK(seeded->state().train_cap == 30000U);
+        CHECK(seeded->burst(rtt) == 30000U);
+        seeded->reset(0U);
+        CHECK(seeded->state().train_cap == 12000U);
+
+        // Before version 8 nothing is learned: the burst is the initial window, and every loss reduces.
+        CongestionPolicy seven = policy_of(algorithm);
+        seven.version = 7U;
+        const Controller old(seven, kMss, &grown);
+        Trains t{old};
+        t.round(12000U);
+        t.round(12000U);
+        CHECK(old->state().train_cap == 12000U);
+        first = t.train(24000U);
+        t.lose(first + 15U);
+        CHECK(old->state().reductions == 1U);
+        CHECK(old->burst(rtt) == 12000U);
+    }
+}
+
+TEST_CASE("congestion: a period whose train loss proved spurious gives the train cap back",
+          "[net][net-path][congestion]")
+{
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        CongestionState grown;
+        grown.window = 400000U;
+        grown.limited = true;
+        grown.train_cap = 36000U;
+        const Controller c(policy_of(algorithm), kMss, &grown);
+        Trains s{c};
+        const u64 first = s.train(36000U);
+        s.lose(first + 20U);
+        REQUIRE(c->state().reductions == 1U);
+        REQUIRE(c->state().train_cap == 24000U);
+        CongestionPacket late = packet(first + 20U, s.sent_ns(first + 20U));
+        late.train = 24000U;
+        c->on_spurious(late, s.now, s.now + kMs);
+        CHECK(c->state().undone == 1U);
+        CHECK(c->state().train_cap == 36000U);
+        CHECK(c->burst(rtt_of(kMs, kMs)) == 36000U);
+    }
+}
+
 TEST_CASE("congestion: bursts after idle on a fast short path into a shallow queue are the initial window's",
           "[net][net-path][congestion]")
 {
     // 1 Gbit/s, a 2 ms round trip and a 32 KiB drop-tail queue: twenty times a MiB, then a second idle. A whole
     // quantum (64 KiB) out of a full pacer at each restart overflows the queue every time: 114 to 157 drops and 17
-    // to 20 reductions in this run, against 1 to 5 and 1 with the initial window's burst.
+    // to 20 reductions in this run, against 1 to 5 and 1 with the initial window's burst. The first 8 MiB run under
+    // version 7 and the controller is swapped live, so each version restarts from the same window (one that a
+    // slow start left larger overflows at the pacing rate whatever the burst).
     for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
     {
         INFO("algorithm " << static_cast<int>(algorithm));
-        crd::net::testing::Flow path(policy_of(algorithm, true), 125000000U, kMs, 32768U);
+        CongestionPolicy seven = policy_of(algorithm, true);
+        seven.version = 7U;
+        crd::net::testing::Flow path(seven, 125000000U, kMs, 32768U);
         path.set_data(8U << 20U);
         path.run(2U * kSecond);
+        path.swap(policy_of(algorithm, true));
         const u64 dropped = path.dropped;
         const u64 reductions = path.ctl->state().reductions;
         for (u64 cycle = 1U; cycle <= 20U; ++cycle)
@@ -693,4 +924,98 @@ TEST_CASE("pacer: credit accrues exactly at the rate up to the burst, a packet m
     pacer.on_sent(kMss, 2000000U, kRate, kBurst);
     CHECK(pacer.credit(2000000U, kRate, kBurst) == static_cast<crd::i64>(kBurst - kMss));
     CHECK(pacer.credit(2000000U, kRate, 2400U) == 2400);
+}
+
+TEST_CASE("congestion: under coarse host turns the train cap meets the initial window's burst on a shallow queue and "
+          "fills the link of a deep one",
+          "[net][net-path][congestion]")
+{
+    // A sender woken once a turn (an event loop on a coarse timer) bursts at most the burst a turn. Version 7's,
+    // the initial window, fills 12000 bytes a turn whatever the path: 38% of 1 Gbit/s at 250 us turns. A shallow
+    // queue (12000 bytes) takes no longer train, so version 8 must lose nothing to it: the probe that finds that out
+    // costs a few datagrams and no congestion event. A deeper one takes trains the link drains in a turn.
+    struct Path
+    {
+        u64 rate;
+        u64 turn_ns;
+        u64 queue;
+        u64 one_way_ns;
+        u32 loss;
+    };
+    struct Run
+    {
+        u64 acked = 0U;
+        u64 dropped = 0U;
+        u64 reductions = 0U;
+    };
+    const auto run = [](CongestionAlgorithm algorithm, u32 version, const Path& path)
+    {
+        CongestionPolicy policy = policy_of(algorithm, true);
+        policy.version = version;
+        crd::net::testing::Flow flow(policy, path.rate, path.one_way_ns, path.queue);
+        flow.set_turn(path.turn_ns);
+        flow.set_loss(path.loss);
+        flow.run(5U * kSecond);
+        return Run{flow.acked_bytes, flow.dropped, flow.ctl->state().reductions};
+    };
+    constexpr u64 kGigabit = 125000000U;
+    constexpr u64 kHundred = 12500000U;
+    for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+    {
+        INFO("algorithm " << static_cast<int>(algorithm));
+        const Path shallows[] = {{kGigabit, 250000U, 12000U, kMs, 0U},
+                                 {kGigabit, 250000U, 12000U, 10U * kMs, 0U},
+                                 {kGigabit, kMs, 12000U, kMs, 0U},
+                                 {kHundred, kMs, 12000U, kMs, 0U},
+                                 {kHundred, kMs, 12000U, 10U * kMs, 0U}};
+        for (const Path& shallow : shallows)
+        {
+            INFO("rate " << shallow.rate << " turn " << shallow.turn_ns << " one way " << shallow.one_way_ns);
+            const Run seven = run(algorithm, 7U, shallow);
+            const Run eight = run(algorithm, 8U, shallow);
+            CHECK(seven.dropped == 0U);
+            CHECK(seven.reductions == 0U);
+            CHECK(eight.reductions == 0U);
+            CHECK(eight.dropped <= 16U);
+            CHECK(eight.acked + eight.dropped * kMss >= seven.acked); // all but the probes' datagrams
+        }
+        // Deeper queues: 2.6, 2.5 and 5.4 times version 7's at 1 Gbit/s; at 100 Mbit/s, where 12000 bytes a turn
+        // were 96% of the link, the link.
+        const Path deep[] = {{kGigabit, 250000U, 32768U, kMs, 0U},
+                             {kGigabit, 250000U, 65536U, 10U * kMs, 0U},
+                             {kGigabit, kMs, 65536U, kMs, 0U},
+                             {kHundred, kMs, 65536U, kMs, 0U}};
+        const u64 times[] = {25U, 25U, 50U, 10U}; // tenths
+        for (usize index = 0U; index < 4U; ++index)
+        {
+            INFO("deep path " << index);
+            const Run seven = run(algorithm, 7U, deep[index]);
+            const Run eight = run(algorithm, 8U, deep[index]);
+            CHECK(eight.acked * 10U >= seven.acked * times[index]);
+            CHECK(eight.acked >= seven.acked);
+        }
+        // Random loss (0.1%) teaches the cap nothing it keeps: no worse than version 7.
+        const Path lossy{kGigabit, 250000U, 32768U, kMs, 1U};
+        CHECK(run(algorithm, 8U, lossy).acked >= run(algorithm, 7U, lossy).acked);
+
+        // Beside a version 7 flow on a deep queue's link, a version 8 one takes the capacity the other leaves and
+        // none of what it gets.
+        for (const u32 version : {7U, 8U})
+        {
+            INFO("beside version " << version);
+            crd::net::testing::Link link{kGigabit, 65536U};
+            CongestionPolicy seven = policy_of(algorithm, true);
+            seven.version = 7U;
+            CongestionPolicy other = policy_of(algorithm, true);
+            other.version = version;
+            crd::net::testing::Flow old(seven, link, kMs, 7U);
+            crd::net::testing::Flow next(other, link, kMs, 11U);
+            old.set_turn(250000U);
+            next.set_turn(250000U);
+            crd::net::testing::run_flows({&old, &next}, 5U * kSecond, [] {});
+            CHECK(old.acked_bytes == 239640000U); // its 12000 bytes a turn
+            CHECK(old.dropped == 0U);
+            CHECK(next.acked_bytes >= old.acked_bytes);
+        }
+    }
 }

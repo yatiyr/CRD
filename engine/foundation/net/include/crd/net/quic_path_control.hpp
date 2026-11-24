@@ -130,6 +130,8 @@ public:
     void on_app_limited(u64 in_flight) noexcept { m_delivery.on_app_limited(in_flight); }
     // A packet of `bytes` in flight leaving with `in_flight` bytes in flight after it: its delivery stamp.
     [[nodiscard]] DeliveryStamp stamp(u64 bytes, u64 in_flight, u64 now_ns) noexcept;
+    // Bytes of the train a packet in flight leaving at `now_ns` joins (Pacer::train).
+    [[nodiscard]] u64 train(u64 now_ns) const noexcept { return m_pacer.train(now_ns); }
     // `packet` left (recovery recorded it): `controlled` when it is in flight on this path, which the controller and
     // the pacer then count, with `in_flight` bytes in flight and `rtt` the path's estimate.
     void on_sent(QuicSpace space, const QuicSentPacket& packet, bool controlled, u64 in_flight, const QuicRtt& rtt,

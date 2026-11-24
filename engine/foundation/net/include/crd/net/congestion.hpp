@@ -62,9 +62,10 @@
 //   pacing      Pacer spreads packets at the controller's rate (RFC 9002 section 7.7: 1.25 window per smoothed RTT
 //               for the window controllers, BBR's own gains of its bandwidth, Prague's window per smoothed RTT, doubled
 //               in early slow start) with a burst of a millisecond of that rate for the window controllers, at least
-//               the initial window (section 7.7's limit, which binds a slow or long path) and at most 64 KiB unless
-//               that window is larger, as BBR's send quantum and Linux's segmentation bursts are sized (BBR: its send
-//               quantum, Prague: 250 us of its rate), in exact integer credit.
+//               the initial window (section 7.7's limit, which binds a slow or long path) and at most the train cap
+//               unless that window is larger: the longest train the path's losses show it takes, from that window to
+//               64 KiB, as BBR's send quantum and Linux's segmentation bursts are sized (BBR: its send quantum,
+//               Prague: 250 us of its rate), in exact integer credit.
 //   time        every call takes the time in nanoseconds; nothing reads a clock.
 //   threads     a controller and a pacer belong to their connection's thread.
 
@@ -206,6 +207,9 @@ struct CongestionState
     u64 target_rate = 0U;
     u64 queue_delay_ns = 0U;
     u64 queue_delay_target_ns = 0U;
+    // NewReno and CUBIC: the longest train their send quantum may be, which the path's losses teach (from the initial
+    // window to 64 KiB); 0 for any other controller.
+    u64 train_cap = 0U;
     CongestionPhase phase = CongestionPhase::SlowStart;
     bool limited = false; // the window or the pacer held sending back this round (RFC 9002 section 7.8)
 };
@@ -216,6 +220,7 @@ struct CongestionPacket
     u64 bytes = 0U;
     u64 number = 0U;
     u64 sent_ns = 0U;
+    u64 train = 0U; // bytes of its train before it (Pacer::train)
     QuicSpace space = QuicSpace::Initial;
     DeliveryStamp delivery; // the sampler's stamp from when it left
     // When the peer received it, on the peer's clock (a QUIC receive timestamp); kNeverNs when it did not say, or
@@ -353,12 +358,16 @@ public:
     void on_sent(u64 bytes, u64 now_ns, u64 rate, u64 burst) noexcept;
     // Credit in bytes (negative: debt).
     [[nodiscard]] i64 credit(u64 now_ns, u64 rate, u64 burst) const noexcept;
+    // Bytes of the train a packet leaving at `now_ns` joins: what left paced at that same instant before it (one
+    // host turn's sends, which reach the path back to back); 0 for the first.
+    [[nodiscard]] u64 train(u64 now_ns) const noexcept { return (m_started && now_ns == m_stamp_ns) ? m_train : 0U; }
 
 private:
     [[nodiscard]] i64 credit_scaled(u64 now_ns, u64 rate, u64 burst) const noexcept;
 
     i64 m_credit = 0; // byte-nanoseconds per second, as of m_stamp_ns
     u64 m_stamp_ns = 0U;
+    u64 m_train = 0U;       // bytes that left at m_stamp_ns
     bool m_started = false; // before the first packet the burst is whole
 };
 

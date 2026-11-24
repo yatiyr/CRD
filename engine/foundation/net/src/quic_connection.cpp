@@ -3059,6 +3059,7 @@ usize QuicConnection::write_packet(QuicSpace space, cont::Span<u8> room, usize d
         if (controlled)
         {
             sent.delivery = path.stamp(bytes, m_recovery->bytes_in_flight(slot) + bytes, now_ns);
+            sent.train = static_cast<u32>(min_u64(path.train(now_ns), ~u32{0}));
         }
         static_cast<void>(m_recovery->on_sent(space, sent, m_events)); // can_send held and numbers rise
         path.on_sent(space, sent, controlled, m_recovery->bytes_in_flight(slot), m_recovery->rtt(slot), now_ns);

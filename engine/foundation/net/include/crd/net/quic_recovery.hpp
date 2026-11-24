@@ -198,6 +198,7 @@ struct QuicSentPacket
     // Never 0 for a datagram of one 1-RTT packet: what an ICMP message quoting it must repeat (quic_pmtu.hpp's hints);
     // 0 for any other packet.
     u32 tag = 0U;
+    u32 train = 0U;         // bytes of its path's train before it, a packet counted in flight (Pacer::train)
     DeliveryStamp delivery; // the connection's delivery when a packet counted in flight left (delivery_rate.hpp)
 };
 
