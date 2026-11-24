@@ -500,23 +500,23 @@ TEST_CASE("congestion: a period whose train loss proved spurious gives the train
     }
 }
 
-TEST_CASE("congestion: bursts after idle on a fast short path into a shallow queue are the initial window's",
+TEST_CASE("congestion: restarts after idle on a fast short path into a shallow queue burst the initial window and pace "
+          "their first round at one window per smoothed RTT",
           "[net][net-path][congestion]")
 {
-    // 1 Gbit/s, a 2 ms round trip and a 32 KiB drop-tail queue: twenty times a MiB, then a second idle. A whole
-    // quantum (64 KiB) out of a full pacer at each restart overflows the queue every time: 114 to 157 drops and 17
-    // to 20 reductions in this run, against 1 to 5 and 1 with the initial window's burst. The first 8 MiB run under
-    // version 7 and the controller is swapped live, so each version restarts from the same window (one that a
-    // slow start left larger overflows at the pacing rate).
+    // 1 Gbit/s, a 2 ms round trip and a 32 KiB drop-tail queue, version 8 from the first byte: 8 MiB, then twenty
+    // times a MiB a second apart. A whole quantum (64 KiB) out of a full pacer at each restart overflowed the queue
+    // every time (114 to 157 drops, 17 to 20 reductions). With the initial window's burst, a restart's first round at
+    // the pacing gain still put a fifth of the window the slow start left (NewReno 277,781 bytes, the path's
+    // bandwidth-delay product and its queue) into the queue: 32 drops and 2 reductions, and a version 7 restart from
+    // that window the same. Paced at one window per smoothed RTT, the round its ACK clock last ran at: NewReno 1 drop
+    // and 1 reduction, CUBIC none, and each MiB delivered 12.4 and 11.5 ms after its write (14.4 and 12.9 before).
     for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
     {
         INFO("algorithm " << static_cast<int>(algorithm));
-        CongestionPolicy seven = policy_of(algorithm, true);
-        seven.version = 7U;
-        crd::net::testing::Flow path(seven, 125000000U, kMs, 32768U);
+        crd::net::testing::Flow path(policy_of(algorithm, true), 125000000U, kMs, 32768U);
         path.set_data(8U << 20U);
         path.run(2U * kSecond);
-        path.swap(policy_of(algorithm, true));
         const u64 dropped = path.dropped;
         const u64 reductions = path.ctl->state().reductions;
         for (u64 cycle = 1U; cycle <= 20U; ++cycle)
@@ -526,9 +526,53 @@ TEST_CASE("congestion: bursts after idle on a fast short path into a shallow que
         }
         CHECK(path.acked_bytes + path.lost_bytes == path.sent_bytes); // all written, less a datagram's remainder
         CHECK(path.sent_bytes + kMss > (28U << 20U));
-        CHECK(path.dropped - dropped <= 5U);
-        CHECK(path.ctl->state().reductions - reductions <= 2U);
+        CHECK(path.dropped - dropped <= 2U);
+        CHECK(path.ctl->state().reductions - reductions <= (algorithm == CongestionAlgorithm::NewReno ? 1U : 0U));
     }
+}
+
+TEST_CASE("congestion: a flight restarted from nothing in flight paces at one window per smoothed RTT until its first "
+          "acknowledgement",
+          "[net][net-path][congestion]")
+{
+    const QuicRtt rtt = rtt_of(10U * kMs, 10U * kMs);
+    CongestionState grown;
+    grown.window = 100U * kMss;
+    grown.slow_start_threshold = 50U * kMss;
+    grown.limited = true;
+    for (const u32 version : {7U, 8U})
+    {
+        for (const CongestionAlgorithm algorithm : {CongestionAlgorithm::NewReno, CongestionAlgorithm::Cubic})
+        {
+            INFO("version " << version << " algorithm " << static_cast<int>(algorithm));
+            CongestionPolicy policy = policy_of(algorithm);
+            policy.version = version;
+            const Controller c(policy, kMss, &grown);
+            const auto at = [&](u64 gain)
+            {
+                return c->window() * gain * (kNanosPerSecond / 100U) / rtt.smoothed_ns;
+            };
+            const u64 restarted = (version >= 8U) ? 100U : 125U;
+            CHECK(c->pacing_rate(rtt) == at(125U)); // nothing sent yet: no flight restarted
+            c.send(0U, 9U, 0U);                     // from nothing in flight
+            CHECK(c->pacing_rate(rtt) == at(restarted));
+            c->on_limited(false, 0U); // the pacer holding it back ends the restart's burst, not its round
+            CHECK(c->pacing_rate(rtt) == at(restarted));
+            c.ack(0U, 0U, 10U * kMs, 10U * kMs, 10U * kMs); // its first acknowledgement: the ACK clock runs again
+            CHECK(c->pacing_rate(rtt) == at(125U));
+            c.send(10U, 19U, 10U * kMs, 9U * kMss); // a send with packets in flight restarts nothing
+            CHECK(c->pacing_rate(rtt) == at(125U));
+            c.send(20U, 20U, 20U * kMs); // in flight drained to nothing: a restart again
+            CHECK(c->pacing_rate(rtt) == at(restarted));
+            c.ack(20U, 20U * kMs, 30U * kMs, 10U * kMs, 10U * kMs);
+            CHECK(c->pacing_rate(rtt) == at(125U));
+        }
+    }
+    // Prague paces at its own rate, which a restart does not change.
+    const Controller prague(policy_of(CongestionAlgorithm::Prague), kMss, &grown);
+    const u64 rate = prague->pacing_rate(rtt);
+    prague.send(0U, 0U, 0U);
+    CHECK(prague->pacing_rate(rtt) == rate);
 }
 
 TEST_CASE("congestion: NewReno grows by what is acknowledged, then by a datagram per window, and only when the window "

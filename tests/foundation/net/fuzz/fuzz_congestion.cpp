@@ -307,6 +307,15 @@ void check(const World& w)
         CRD_FUZZ_REQUIRE(burst == initial || (state.limited && state.phase != CongestionPhase::Recovery &&
                                               burst > initial && burst <= most));
         CRD_FUZZ_REQUIRE(state.limited || burst == initial);
+        // Its rate: the window per smoothed RTT at the policy's gain, or from version 8 at one while a flight
+        // restarted from nothing in flight waits for its first acknowledgement.
+        const auto paced = [&](u64 gain)
+        {
+            return state.window * gain * (kNanosPerSecond / 100U) / rtt.smoothed_ns;
+        };
+        const u64 rate = w.ctl->pacing_rate(rtt);
+        CRD_FUZZ_REQUIRE(!w.policy.pacing || rate == paced(w.policy.pacing_gain) ||
+                         (w.policy.version >= 8U && rate == paced(100U)));
     }
     else
     {

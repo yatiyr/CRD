@@ -131,6 +131,7 @@ public:
         // A flight that starts from nothing in flight (after idle, or the first) bursts the initial window until the
         // window or the pacer holds it back.
         m_restarted = m_restarted || in_flight <= packet.bytes;
+        m_restart_round = m_restart_round || in_flight <= packet.bytes;
         if (in_flight + m_datagram > m_window)
         {
             m_limited = true;
@@ -158,6 +159,7 @@ public:
 
     void on_acked(const CongestionPacket& packet, u64 /*now_ns*/) noexcept override
     {
+        m_restart_round = false; // the restarted flight's ACK clock runs again
         if (packet.space == QuicSpace::Application && m_rounds && packet.number >= m_window_end)
         {
             m_round_ended = true;
@@ -284,13 +286,21 @@ public:
 
     [[nodiscard]] u64 window() const noexcept override { return m_window; }
 
+    // RFC 9002 section 7.7's rate, the window over the smoothed RTT at the policy's gain. The gain above one keeps
+    // an ACK-clocked flight from going slower than its window, which the acknowledgements already pace. A flight that
+    // restarts from nothing in flight has no ACK clock until its first acknowledgement, and at that gain a window the
+    // path filled (its bandwidth-delay product and the queue) arrives faster than the link drains it and overflows a
+    // shallow queue by a fifth of the window: from version 8 its first round paces at one window per smoothed RTT,
+    // the rate its ACK clock last ran at, as BBR paces a restart from idle at its bandwidth (draft-ietf-ccwg-bbr
+    // section 5.4; restart_from_idle here).
     [[nodiscard]] u64 pacing_rate(const QuicRtt& rtt) const noexcept override
     {
         if (!m_policy.pacing || rtt.smoothed_ns == 0U)
         {
             return 0U;
         }
-        return m_window * m_policy.pacing_gain * (kNanosPerSecond / kPercent) / rtt.smoothed_ns;
+        const u64 gain = (m_restart_round && m_policy.version >= 8U) ? kPercent : m_policy.pacing_gain;
+        return m_window * gain * (kNanosPerSecond / kPercent) / rtt.smoothed_ns;
     }
 
     // RFC 9002 section 7.7 limits bursts to the initial window, and lets a sender use more on a path it knows absorbs
@@ -613,6 +623,7 @@ private:
     bool m_limited = false;        // this round
     bool m_limited_before = false; // the round before
     bool m_restarted = false;      // the flight started from nothing in flight and nothing has held it back since
+    bool m_restart_round = false;  // the flight started from nothing in flight and nothing of it is acknowledged yet
 
     // The train cap (teach_train).
     bool m_trains = false; // kept at all
