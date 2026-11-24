@@ -263,7 +263,10 @@ byte budgets, replay semantics (idempotent or not) and padding policy. Channel c
   (and on `sendmmsg` alone). A socket that asked for a ring and has none says why (2026-11-24):
   `SocketFeatures::ring_refusal` names the step (`Count`, `Off`, `Memory`, `Setup`, `Register`, `Arm`; Registered I/O
   reports the same steps) and `ring_error` the host's errno or Windows error there, so a resource refusal (ENOMEM,
-  EMFILE) reads as the host's limits and a sandbox's (Setup, EPERM) as its policy. Zero-copy receive (`IORING_OP_RECV_ZC`) needs Linux 6.15 and a NIC that splits headers.
+  EMFILE) reads as the host's limits and a sandbox's (Setup, EPERM) as its policy. A refusal of memory or kernel
+  resources (ENOMEM, ENOBUFS, EAGAIN; Windows' memory, quota and WSAENOBUFS codes) at Memory, Setup or Register is
+  asked again with half the buffers, down to 4 (2026-11-24): `SocketFeatures::ring_buffers` reports the count held and
+  the first refusal stays named. A descriptor limit or a policy refuses any count, so it ends the ring at once. Zero-copy receive (`IORING_OP_RECV_ZC`) needs Linux 6.15 and a NIC that splits headers.
 - **Zero-copy send** (2026-11-21, NET-PATH; [udp_ring.cpp](../../engine/foundation/net/src/udp_ring.cpp)).
   `DatagramSocket::send_stable` is `send` from a caller that keeps each datagram's bytes unchanged until
   `sends_released()` passes its number (a socket numbers what it takes, `sends_taken()`); the default copies, so
