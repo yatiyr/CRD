@@ -41,7 +41,8 @@ struct Ring
 };
 
 // Sets bits [pos, pos + count) of `bits` (no wrap) to `value` where `keep` (when given) is clear; returns how many
-// changed.
+// changed when `Count` (a caller that only sets or clears skips the count).
+template <bool Count>
 u64 mark_linear(cont::Span<u64> bits, const u64* keep, usize pos, usize count, bool value) noexcept
 {
     u64 changed = 0U;
@@ -57,7 +58,10 @@ u64 mark_linear(cont::Span<u64> bits, const u64* keep, usize pos, usize count, b
         }
         const u64 before = bits[word];
         const u64 after  = value ? (before | mask) : (before & ~mask);
-        changed += static_cast<u64>(std::popcount(before ^ after));
+        if constexpr (Count)
+        {
+            changed += static_cast<u64>(std::popcount(before ^ after));
+        }
         bits[word] = after;
         pos += take;
         count -= take;
@@ -65,12 +69,25 @@ u64 mark_linear(cont::Span<u64> bits, const u64* keep, usize pos, usize count, b
     return changed;
 }
 
-u64 mark(const Ring& ring, cont::Span<u64> bits, const u64* keep, u64 offset, u64 count, bool value) noexcept
+template <bool Count>
+u64 mark_ring(const Ring& ring, cont::Span<u64> bits, const u64* keep, u64 offset, u64 count, bool value) noexcept
 {
     const usize pos   = ring.at(offset);
     const usize total = static_cast<usize>(count);
     const usize first = (total < ring.capacity - pos) ? total : ring.capacity - pos;
-    return mark_linear(bits, keep, pos, first, value) + mark_linear(bits, keep, 0U, total - first, value);
+    return mark_linear<Count>(bits, keep, pos, first, value) + mark_linear<Count>(bits, keep, 0U, total - first, value);
+}
+
+// The bits of [offset, offset + count) set to `value` where `keep` (when given) is clear; returns how many changed.
+u64 mark(const Ring& ring, cont::Span<u64> bits, const u64* keep, u64 offset, u64 count, bool value) noexcept
+{
+    return mark_ring<true>(ring, bits, keep, offset, count, value);
+}
+
+// The bits of [offset, offset + count) set to `value`, uncounted.
+void fill(const Ring& ring, cont::Span<u64> bits, u64 offset, u64 count, bool value) noexcept
+{
+    static_cast<void>(mark_ring<false>(ring, bits, nullptr, offset, count, value));
 }
 
 // The length of the run of bits equal to `value` from `pos` (no wrap), at most `count`.
@@ -217,19 +234,27 @@ QuicReceiveResult QuicReceiveBuffer::insert(u64 offset, cont::ConstSpan<u8> data
         return QuicReceiveResult::BeyondWindow;
     }
 
-    // Data below the read offset was read already and is not compared (nothing holds it).
+    // Data below the read offset was read already and is not compared (nothing holds it). Below the contiguous end
+    // every byte is held; past it a byte is held exactly when its bit is set, and no bit is set at m_marked or above.
     const u64 from = max_u64(offset, m_read);
     if (from < end)
     {
         const Ring ring{capacity()};
-        for (u64 at = from; at < end;)
+        const u64  whole = min_u64(end, m_contiguous);
+        if (from < whole &&
+            !equal(ring, m_bytes, from, data.data() + (from - offset), static_cast<usize>(whole - from)))
         {
-            at += run(ring, m_bits, at, end - at, false);
-            if (at >= end)
+            return QuicReceiveResult::Changed;
+        }
+        const u64 marked_end = min_u64(end, m_marked);
+        for (u64 at = max_u64(from, m_contiguous); at < marked_end;)
+        {
+            at += run(ring, m_bits, at, marked_end - at, false);
+            if (at >= marked_end)
             {
                 break;
             }
-            const u64 held = run(ring, m_bits, at, end - at, true);
+            const u64 held = run(ring, m_bits, at, marked_end - at, true);
             if (!equal(ring, m_bytes, at, data.data() + (at - offset), static_cast<usize>(held)))
             {
                 return QuicReceiveResult::Changed;
@@ -237,10 +262,19 @@ QuicReceiveResult QuicReceiveBuffer::insert(u64 offset, cont::ConstSpan<u8> data
             at += held;
         }
         copy_in(ring, m_bytes, from, data.data() + (from - offset), static_cast<usize>(end - from));
-        static_cast<void>(mark(ring, m_bits, nullptr, from, end - from, true));
-        if (from <= m_contiguous && end > m_contiguous)
+        if (from > m_contiguous)
         {
-            m_contiguous += run(ring, m_bits, m_contiguous, m_read + capacity() - m_contiguous, true);
+            fill(ring, m_bits, from, end - from, true); // past a gap: held by its bits
+            m_marked = max_u64(m_marked, end);
+        }
+        else if (end > m_contiguous)
+        {
+            // In order: everything to `end` is held without its bits, and a run that arrived early continues it.
+            m_contiguous = end;
+            if (m_marked > end)
+            {
+                m_contiguous += run(ring, m_bits, end, m_read + capacity() - end, true);
+            }
         }
     }
     m_received = max_u64(m_received, end);
@@ -306,7 +340,10 @@ void QuicReceiveBuffer::consume(u64 count) noexcept
     {
         return;
     }
-    static_cast<void>(mark(Ring{capacity()}, m_bits, nullptr, m_read, taken, false));
+    if (m_marked > m_read)
+    {
+        fill(Ring{capacity()}, m_bits, m_read, taken, false); // a wrapped offset finds its bit clear
+    }
     m_read += taken;
 }
 
@@ -392,7 +429,7 @@ void QuicSendBuffer::truncate(u64 reliable) noexcept
         {
             m_lost_bytes -= mark(ring, m_lost_bits, nullptr, end, m_sent - end, false);
         }
-        static_cast<void>(mark(ring, m_acked_bits, nullptr, end, m_sent - end, false));
+        fill(ring, m_acked_bits, end, m_sent - end, false);
         m_sent = end;
     }
     m_written   = end;
@@ -491,16 +528,29 @@ void QuicSendBuffer::on_acked(u64 offset, usize length, bool fin) noexcept
     const u64  high = min_u64(end, m_sent);
     if (low < high)
     {
-        static_cast<void>(mark(ring, m_acked_bits, nullptr, low, high - low, true));
         if (m_lost_bytes > 0U)
         {
             m_lost_bytes -= mark(ring, m_lost_bits, nullptr, low, high - low, false);
         }
-        if (low == m_acked)
+        if (low != m_acked)
         {
-            const u64 contiguous = run(ring, m_acked_bits, m_acked, m_sent - m_acked, true);
-            static_cast<void>(mark(ring, m_acked_bits, nullptr, m_acked, contiguous, false));
-            m_acked += contiguous;
+            fill(ring, m_acked_bits, low, high - low, true); // past a gap: acknowledged by its bits
+            m_acked_marked = max_u64(m_acked_marked, high);
+        }
+        else
+        {
+            // In order: everything to `high` is acknowledged without its bits, and a run acknowledged early continues
+            // it. Bits below the acknowledged end are cleared, as a wrapped offset needs them.
+            u64 to = high;
+            if (m_acked_marked > high)
+            {
+                to += run(ring, m_acked_bits, high, m_sent - high, true);
+            }
+            if (m_acked_marked > low)
+            {
+                fill(ring, m_acked_bits, low, to - low, false);
+            }
+            m_acked    = to;
             m_lost_low = max_u64(m_lost_low, m_acked);
         }
     }

@@ -4,12 +4,14 @@
 // Sources: RFC 9000 sections 2.2, 4.1, 4.2, 4.5, 7.5, 13.3, 19.6 and 19.8, and RFC 9002 section 5.
 //
 //   receiving   QuicReceiveBuffer reassembles one stream's or one level's CRYPTO data by offset into the caller's
-//               storage, a window of its capacity from the first byte not yet read, with one bit per byte saying
-//               what arrived: memory is fixed and exact whatever the peer's frames overlap, leave out or repeat.
+//               storage, a window of its capacity from the first byte not yet read, with one bit per byte past the
+//               contiguous end saying what arrived (data in order sets none): memory is fixed and exact whatever
+//               the peer's frames overlap, leave out or repeat.
 //               Data past the window, a final size contradicted (section 4.5) and different bytes at an offset
 //               already held (section 2.2) are refused, changing nothing.
 //   sending     QuicSendBuffer holds what the application wrote until the peer acknowledged it, with one bit per byte
-//               for acknowledged and one for lost data: lost data goes again first, lowest offset first, then data
+//               for data acknowledged past the acknowledged end (acknowledgements in order set none) and one for
+//               lost data: lost data goes again first, lowest offset first, then data
 //               never sent within the flow-control limit, and the FIN rides with the last byte (or alone).
 //   credit      QuicSendCredit is the limit a peer's MAX_DATA or MAX_STREAM_DATA granted, which only rises, and the
 //               DATA_BLOCKED or STREAM_DATA_BLOCKED owed once per limit; QuicReceiveWindow is the limit this side
@@ -91,6 +93,7 @@ private:
     cont::Span<u64> m_bits;
     u64             m_read       = 0U;
     u64             m_contiguous = 0U;
+    u64             m_marked     = 0U; // no bit is set at or above it: data in order sets none
     u64             m_received   = 0U;
     u64             m_final      = 0U;
     bool            m_final_known = false;
@@ -167,6 +170,7 @@ private:
     u64             m_written    = 0U;
     u64             m_sent       = 0U;
     u64             m_acked      = 0U;
+    u64             m_acked_marked = 0U; // no acknowledged bit is set at or above it: in-order acks set none
     u64             m_lost_bytes = 0U;
     u64             m_lost_low   = 0U; // no lost byte lies below it
     bool            m_finished   = false;

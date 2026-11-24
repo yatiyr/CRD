@@ -225,6 +225,46 @@ TEST_CASE("quic receive buffer: the final size", "[net][quic][stream]")
     CHECK(buffer.complete());
 }
 
+TEST_CASE("quic receive buffer: data in order sets no bit, and early data's bits are gone once read",
+          "[net][quic][stream]")
+{
+    const Pattern data;
+    Receiver<64U> receiver;
+    QuicReceiveBuffer& buffer = receiver.buffer;
+    // An early run is joined when the gap before it fills, and a filling piece that overlaps it is compared.
+    REQUIRE(receiver.put(32U, data.at(32U, 32U)) == QuicReceiveResult::Accepted);
+    u8 changed[40] = {};
+    for (usize i = 0U; i < sizeof(changed); ++i)
+    {
+        changed[i] = pattern(i);
+    }
+    changed[36] ^= 0x01U; // held by its bit
+    CHECK(receiver.put(0U, ConstSpan<u8>(changed, 40U)) == QuicReceiveResult::Changed);
+    CHECK(buffer.contiguous_end() == 0U);
+    REQUIRE(receiver.put(0U, data.at(0U, 32U)) == QuicReceiveResult::Accepted);
+    CHECK(buffer.contiguous_end() == 64U);
+    changed[36] ^= 0x01U;
+    changed[20] ^= 0x01U; // held below the contiguous end, by no bit
+    CHECK(receiver.put(0U, ConstSpan<u8>(changed, 40U)) == QuicReceiveResult::Changed);
+    buffer.consume(64U);
+
+    // A wrapped offset finds the bits of the bytes read clear: 96 to 111 share the bits of 32 to 47.
+    REQUIRE(receiver.put(112U, data.at(112U, 8U)) == QuicReceiveResult::Accepted);
+    REQUIRE(receiver.put(64U, data.at(64U, 32U)) == QuicReceiveResult::Accepted);
+    CHECK(buffer.contiguous_end() == 96U);
+    REQUIRE(receiver.put(96U, data.at(96U, 16U)) == QuicReceiveResult::Accepted);
+    CHECK(buffer.contiguous_end() == 120U);
+    CHECK(drain(receiver) == 56U);
+
+    // In order again: each piece moves the contiguous end and a read frees its room.
+    for (u64 at = 120U; at < 120U + 640U; at += 40U)
+    {
+        REQUIRE(receiver.put(at, data.at(static_cast<usize>(at), 40U)) == QuicReceiveResult::Accepted);
+        CHECK(buffer.contiguous_end() == at + 40U);
+        CHECK(drain(receiver) == 40U);
+    }
+}
+
 TEST_CASE("quic receive buffer: any order of overlapping pieces rebuilds the stream", "[net][quic][stream]")
 {
     const Pattern data;
@@ -371,6 +411,45 @@ TEST_CASE("quic send buffer: lost data goes first, lowest first, and acknowledge
     sender.buffer.on_acked(400U, 100U, false);
     CHECK(sender.buffer.acked_end() == 500U);
     CHECK(sender.buffer.lost_bytes() == 0U);
+}
+
+TEST_CASE("quic send buffer: acknowledgements in order set no bit, and early ones' bits are gone once joined",
+          "[net][quic][stream]")
+{
+    const Pattern data;
+    Sender<64U>   sender;
+    REQUIRE(sender.buffer.write(data.at(0U, 64U)) == 64U);
+    REQUIRE(sender.send(64U).length == 64U);
+    sender.buffer.on_acked(32U, 32U, false); // early
+    CHECK(sender.buffer.acked_end() == 0U);
+    sender.buffer.on_acked(0U, 16U, false);
+    CHECK(sender.buffer.acked_end() == 16U);
+    sender.buffer.on_acked(16U, 16U, false); // joins the early run
+    CHECK(sender.buffer.acked_end() == 64U);
+
+    // A wrapped offset finds the bits of the bytes acknowledged clear: 96 to 111 share the bits of 32 to 47.
+    REQUIRE(sender.buffer.write(data.at(64U, 64U)) == 64U);
+    REQUIRE(sender.send(64U).length == 64U);
+    sender.buffer.on_acked(112U, 8U, false);
+    sender.buffer.on_acked(64U, 32U, false);
+    CHECK(sender.buffer.acked_end() == 96U);
+    sender.buffer.on_lost(96U, 32U, false); // 112 to 119 stay acknowledged
+    CHECK(sender.buffer.lost_bytes() == 24U);
+    sender.buffer.on_acked(96U, 16U, false);
+    CHECK(sender.buffer.acked_end() == 120U);
+    CHECK(sender.buffer.lost_bytes() == 8U);
+    sender.buffer.on_acked(120U, 8U, false);
+    CHECK(sender.buffer.acked_end() == 128U);
+    CHECK(sender.buffer.lost_bytes() == 0U);
+
+    // In order again, round after round of the storage.
+    for (u64 at = 128U; at < 128U + 640U; at += 32U)
+    {
+        REQUIRE(sender.buffer.write(data.at(static_cast<usize>(at), 32U)) == 32U);
+        REQUIRE(sender.send(32U).offset == at);
+        sender.buffer.on_acked(at, 32U, false);
+        CHECK(sender.buffer.acked_end() == at + 32U);
+    }
 }
 
 TEST_CASE("quic send buffer: the FIN is sent, lost, resent alone and acknowledged", "[net][quic][stream]")
